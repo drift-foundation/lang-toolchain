@@ -1,0 +1,33 @@
+module main;
+
+pub struct Box {
+	v: Int
+}
+
+implement Box {
+	// Concrete overload — returns v + 100 for String args.
+	pub fn pick(self: &Box, k: &String) nothrow -> Int {
+		return self.v + 100;
+	}
+
+	// Generic fallback — returns v + 200 for anything else.
+	pub fn pick<T>(self: &Box, k: T) nothrow -> Int {
+		return self.v + 200;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Box(v = 10);
+
+	// Concrete-typed argument (String literal) — must dispatch to the
+	// concrete &String overload, not the generic fallback.
+	if b.pick("hello") != 110 { return 1; }
+	if b.pick(&"world") != 110 { return 2; }
+
+	// Argument that doesn't match the concrete overload — must
+	// dispatch to the generic fallback.
+	if b.pick(42) != 210 { return 3; }
+	if b.pick(true) != 210 { return 4; }
+
+	return 0;
+}

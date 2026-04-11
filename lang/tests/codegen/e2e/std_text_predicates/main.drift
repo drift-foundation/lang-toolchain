@@ -13,7 +13,7 @@ fn main() nothrow -> Int {
 
 	// ── is_empty ────────────────────────────────────────────────
 	if !text.is_empty(&empty) { return 1; }
-	if text.is_empty(&"x") { return 2; }
+	if text.is_empty("x") { return 2; }
 
 	// ── is_blank ────────────────────────────────────────────────
 	if !text.is_blank(&empty) { return 10; }

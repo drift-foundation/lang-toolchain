@@ -305,3 +305,27 @@ def test_bundle_docs_produces_stdlib_docs() -> None:
 		text_doc = (stdlib_doc / "std_text.md").read_text()
 		assert "contains" in text_doc
 		assert "split" in text_doc
+
+		# `effective-drift.md` is the canonical idiom guide and must ship
+		# under `doc/` so consumers can read it after deployment.  It is
+		# the home for user-facing language-feature documentation that is
+		# not part of any stdlib module's API surface.
+		effective_md = dist / "doc" / "effective-drift.md"
+		assert effective_md.exists(), "doc/effective-drift.md should ship in the toolchain"
+		effective = effective_md.read_text()
+		# Method overload resolution by parameter type — new compiler feature.
+		assert "Method overload resolution by parameter type" in effective
+		assert "concrete overload plus a generic fallback" in effective
+		assert "no matching overload" in effective
+		# Call-site auto-borrow style guidance.
+		assert "Call-site auto-borrow" in effective
+		# Cheap String.clone() ARC semantics.
+		assert "Cheap `String` clone" in effective
+		assert "drift_string_retain" in effective
+
+		# std_json.md must show both `get_path` overloads (the dotted-string
+		# overload and the segment-array overload) — the new method overload
+		# resolution feature is what makes this possible.
+		json_doc = (stdlib_doc / "std_json.md").read_text()
+		assert "get_path(self: &JsonNode, path: &String)" in json_doc
+		assert "get_path(self: &JsonNode, path: &Array<String>)" in json_doc

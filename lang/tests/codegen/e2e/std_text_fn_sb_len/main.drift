@@ -19,9 +19,9 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 fn main() nothrow -> Int {
 	var sb = text.string_builder(16);
 	if text.sb_len(&sb) != 0 { return 1; }
-	text.sb_append_string(&mut sb, &"abc");
+	text.sb_append_string(&mut sb, "abc");
 	if text.sb_len(&sb) != 3 { return 2; }
-	text.sb_append_string(&mut sb, &"de");
+	text.sb_append_string(&mut sb, "de");
 	if text.sb_len(&sb) != 5 { return 3; }
 
 	return 0;

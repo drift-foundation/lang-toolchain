@@ -17,15 +17,15 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	val r = text.remove(&"hello world", &"o");
+	val r = text.remove("hello world", "o");
 	val e = "hell wrld";
 	if !str_eq(&r, &e) { return 1; }
 	// Not found → unchanged
-	val r2 = text.remove(&"hello", &"xyz");
+	val r2 = text.remove("hello", "xyz");
 	val e2 = "hello";
 	if !str_eq(&r2, &e2) { return 2; }
 	// Remove all
-	val r3 = text.remove(&"aaa", &"a");
+	val r3 = text.remove("aaa", "a");
 	val e3 = "";
 	if !str_eq(&r3, &e3) { return 3; }
 

@@ -17,15 +17,15 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	if text.last_index_of(&"abcabc", &"abc") != 3 { return 1; }
-	if text.last_index_of(&"hello", &"xyz") != 0 - 1 { return 2; }
+	if text.last_index_of("abcabc", "abc") != 3 { return 1; }
+	if text.last_index_of("hello", "xyz") != 0 - 1 { return 2; }
 	// Empty needle → byte_length
-	if text.last_index_of(&"hello", &"") != 5 { return 3; }
-	if text.last_index_of(&"", &"") != 0 { return 4; }
+	if text.last_index_of("hello", "") != 5 { return 3; }
+	if text.last_index_of("", "") != 0 { return 4; }
 	// Single occurrence
-	if text.last_index_of(&"hello", &"ell") != 1 { return 5; }
+	if text.last_index_of("hello", "ell") != 1 { return 5; }
 	// Last of multiple 'o'
-	if text.last_index_of(&"hello world", &"o") != 7 { return 6; }
+	if text.last_index_of("hello world", "o") != 7 { return 6; }
 
 	return 0;
 }

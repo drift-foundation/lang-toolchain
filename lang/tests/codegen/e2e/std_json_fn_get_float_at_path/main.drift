@@ -1,0 +1,45 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn main() nothrow -> Int {
+	val text = "{\"cfg\":{\"ratio\":1.5,\"count\":42,\"name\":\"x\"}}";
+
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 100; },
+		core.Result::Ok(root) => {
+			match root.get_float_at_path("cfg.ratio") {
+				Optional::Some(v) => {
+					// 1.5 parses to 1.5 exactly in binary float
+					if v < 1.5 { return 1; }
+					if v > 1.5 { return 2; }
+				},
+				Optional::None() => { return 3; }
+			}
+
+			// Integer-shaped Number parses as Float too (42.0)
+			match root.get_float_at_path("cfg.count") {
+				Optional::Some(v) => {
+					if v < 42.0 { return 10; }
+					if v > 42.0 { return 11; }
+				},
+				Optional::None() => { return 12; }
+			}
+
+			// Missing segment
+			match root.get_float_at_path("cfg.missing") {
+				Optional::Some(_) => { return 20; },
+				Optional::None() => { }
+			}
+
+			// Type mismatch (String)
+			match root.get_float_at_path("cfg.name") {
+				Optional::Some(_) => { return 30; },
+				Optional::None() => { }
+			}
+		}
+	}
+
+	return 0;
+}

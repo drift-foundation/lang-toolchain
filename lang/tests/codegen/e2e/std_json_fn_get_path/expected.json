@@ -1,0 +1,4 @@
+{
+  "description": "JsonNode.get_path (dotted string) — object traversal, missing segments, type mismatch, empty path, array-rejection",
+  "exit_code": 0
+}

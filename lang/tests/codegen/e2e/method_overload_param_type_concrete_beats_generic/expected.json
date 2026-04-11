@@ -1,0 +1,4 @@
+{
+  "description": "Method overload resolution: a concrete overload (e.g. pick(&String)) must beat a generic fallback overload (e.g. pick<T>(T)) when called with a concrete-typed argument that matches the concrete overload exactly. The generic candidate is a tentative match that should yield to a more specific concrete match.",
+  "exit_code": 0
+}

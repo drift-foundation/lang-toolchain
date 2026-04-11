@@ -1,0 +1,23 @@
+module main;
+
+pub struct Bag {
+	v: Int
+}
+
+implement Bag {
+	pub fn tag(self: &Bag, k: &String) nothrow -> Int {
+		return self.v + 1;
+	}
+
+	pub fn tag(self: &Bag, k: &Array<String>) nothrow -> Int {
+		return self.v + k.len;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Bag(v = 0);
+	// Neither overload matches Float — this should fail with "no matching
+	// method", not "ambiguous method".
+	val x = b.tag(1.5);
+	return x;
+}

@@ -1,0 +1,5 @@
+{
+  "description": "Cross-module method overload: a struct with two same-name overloads (different parameter types) is defined in module acme.lib and called from main with both overloads. Verifies that wrapper synthesis, symbol mangling, and cross-module dispatch all handle distinct overload ordinals correctly.",
+  "exit_code": 0,
+  "module_paths": ["."]
+}

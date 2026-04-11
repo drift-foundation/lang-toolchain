@@ -17,15 +17,15 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	if !text.contains(&"hello world", &"world") { return 1; }
-	if !text.contains(&"hello", &"hello") { return 2; }
-	if text.contains(&"hello", &"xyz") { return 3; }
+	if !text.contains("hello world", "world") { return 1; }
+	if !text.contains("hello", "hello") { return 2; }
+	if text.contains("hello", "xyz") { return 3; }
 	// Empty needle → true
-	if !text.contains(&"hello", &"") { return 4; }
+	if !text.contains("hello", "") { return 4; }
 	// Empty haystack, non-empty needle → false
-	if text.contains(&"", &"x") { return 5; }
+	if text.contains("", "x") { return 5; }
 	// Both empty → true
-	if !text.contains(&"", &"") { return 6; }
+	if !text.contains("", "") { return 6; }
 
 	return 0;
 }

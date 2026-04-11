@@ -1,0 +1,115 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"count\":42,\"ratio\":1.5,\"on\":true}},\"items\":[1,2]}";
+
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 100; },
+		core.Result::Ok(root) => {
+
+			// ── Chained .field traversal to String leaf ─────────────
+			val want_ok = "ok";
+			match root.select().field("meta").field("callback").field("status").as_string() {
+				Optional::Some(s) => { if !str_eq(&s, &want_ok) { return 1; } },
+				Optional::None() => { return 2; }
+			}
+
+			// ── Chained .field traversal to Int leaf ────────────────
+			match root.select().field("meta").field("callback").field("count").as_int() {
+				Optional::Some(v) => { if v != 42 { return 10; } },
+				Optional::None() => { return 11; }
+			}
+
+			// ── Chained .field traversal to Float leaf ──────────────
+			match root.select().field("meta").field("callback").field("ratio").as_float() {
+				Optional::Some(v) => {
+					if v < 1.5 { return 20; }
+					if v > 1.5 { return 21; }
+				},
+				Optional::None() => { return 22; }
+			}
+
+			// ── Chained .field traversal to Bool leaf ───────────────
+			match root.select().field("meta").field("callback").field("on").as_bool() {
+				Optional::Some(v) => { if !v { return 30; } },
+				Optional::None() => { return 31; }
+			}
+
+			// ── Missing-segment propagation: "nope" at middle ───────
+			val missing = root.select().field("meta").field("nope").field("status");
+			if missing.exists() { return 40; }
+			match missing.as_string() {
+				Optional::Some(_) => { return 41; },
+				Optional::None() => { }
+			}
+
+			// ── Terminal defaults: as_string_or returns fallback on miss ──
+			val fb_str = "fallback";
+			val got_str = root.select().field("meta").field("nope").as_string_or(&fb_str);
+			if !str_eq(&got_str, &fb_str) { return 50; }
+
+			// Terminal default on success: returns the actual value
+			val got_ok = root.select().field("meta").field("callback").field("status").as_string_or(&fb_str);
+			if !str_eq(&got_ok, &want_ok) { return 51; }
+
+			val got_int = root.select().field("meta").field("nope").as_int_or(0 - 1);
+			if got_int != 0 - 1 { return 60; }
+
+			val got_int_ok = root.select().field("meta").field("callback").field("count").as_int_or(0 - 1);
+			if got_int_ok != 42 { return 61; }
+
+			val got_bool = root.select().field("meta").field("nope").as_bool_or(false);
+			if got_bool { return 70; }
+
+			val got_bool_ok = root.select().field("meta").field("callback").field("on").as_bool_or(false);
+			if !got_bool_ok { return 71; }
+
+			val got_float = root.select().field("meta").field("nope").as_float_or(0.0 - 1.0);
+			if got_float > 0.0 - 0.5 { return 80; }
+			if got_float < 0.0 - 1.5 { return 81; }
+
+			val got_float_ok = root.select().field("meta").field("callback").field("ratio").as_float_or(0.0);
+			if got_float_ok < 1.5 { return 82; }
+			if got_float_ok > 1.5 { return 83; }
+
+			// ── Walk-through-non-object (.field on a Bool) returns none ─
+			val after_bool = root.select().field("meta").field("callback").field("on").field("x");
+			if after_bool.exists() { return 90; }
+
+			// ── Array traversal is not supported: .field on an array → none ─
+			val after_array = root.select().field("items").field("0");
+			if after_array.exists() { return 91; }
+
+			// ── Empty root: select() + as_string on a non-string fails cleanly ─
+			match root.select().as_string() {
+				Optional::Some(_) => { return 100; },
+				Optional::None() => { }
+			}
+
+			// ── .exists() true at each surviving level ──────────────
+			val c1 = root.select();
+			if !c1.exists() { return 110; }
+			val c2 = c1.field("meta");
+			if !c2.exists() { return 111; }
+			val c3 = c2.field("callback");
+			if !c3.exists() { return 112; }
+		}
+	}
+
+	return 0;
+}

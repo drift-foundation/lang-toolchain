@@ -616,3 +616,103 @@ fn install(bus: &mut EventBus, cfg: Config) -> Void {
 ```
 
 It’s slightly more verbose up front, but it scales well as the program grows.
+
+## Method overload resolution by parameter type
+
+A struct or builtin type can declare multiple methods with the same name but
+different non-receiver parameter types. The compiler picks the right overload
+based on the call’s argument types.
+
+```drift
+pub struct Box {
+    v: Int
+}
+
+implement Box {
+    pub fn pick(self: &Box, k: &String) nothrow -> Int {
+        return self.v + 100;
+    }
+    pub fn pick(self: &Box, k: &Array<String>) nothrow -> Int {
+        return self.v + 200 + k.len;
+    }
+    pub fn pick(self: &Box, k: Int) nothrow -> Int {
+        return self.v + 300 + k;
+    }
+}
+
+fn main() nothrow -> Int {
+    val b = Box(v = 10);
+    val a = b.pick("hello");           // → 110 (String overload)
+    val segs: Array<String> = ["x", "y"];
+    val c = b.pick(segs);              // → 212 (Array<String> overload)
+    val d = b.pick(42);                // → 352 (Int overload)
+    return 0;
+}
+```
+
+A common pattern is a concrete overload plus a generic fallback. The concrete
+one wins for arguments it can match exactly; the generic one catches everything
+else.
+
+```drift
+implement Box {
+    pub fn pick(self: &Box, k: &String) -> Int { return 100; }
+    pub fn pick<T>(self: &Box, k: T) -> Int { return 999; }
+}
+b.pick("hello")  // → 100 (concrete &String overload)
+b.pick(42)       // → 999 (generic fallback)
+```
+
+Resolution rules (v1):
+
+1. Filter by arity.
+2. Filter by receiver compatibility (`self` mode, with optional auto-borrow).
+3. Prefer exact non-receiver parameter matches over arity-only matches.
+4. Within exact matches, prefer methods *without* their own type parameters
+   over method-level generic fallbacks.
+5. Multiple exact matches → `ambiguous method` error.
+6. No exact match across multiple candidates → `no matching overload for
+   method '…'` error (the diagnostic includes the call’s argument types).
+
+Limitations:
+
+- Impl-block specificity is not ranked. `implement<T> Box<T>` and
+  `implement Box<Int>` declaring the same method are ambiguous, not
+  most-specific-wins.
+- Method-level generics with their own `<T>` type parameters fall back to the
+  existing generic dispatch path; trait-bound disambiguation
+  (`require T is Trait`) still works there.
+
+## Call-site auto-borrow for `&T` parameters
+
+When a function or method parameter is declared `&T` (a shared borrow), the
+call site does not need an explicit `&` prefix. Both forms compile, and the
+bare form is the preferred style:
+
+```drift
+fn greet(name: &String) nothrow -> Void { ... }
+
+greet("alice")     // preferred — auto-borrow
+greet(&"alice")    // also valid — explicit borrow
+
+b.pick("hello")    // preferred
+b.pick(&"hello")   // also valid
+```
+
+This applies only to shared borrows. `&mut T` parameters still need an
+explicit `&mut` at the call site so mutation is visible at the use site.
+
+## Cheap `String` clone
+
+`String` is ARC-backed. To produce an owned `String` from a borrowed
+`&String`, call `clone()`:
+
+```drift
+fn extract(borrowed: &String) nothrow -> String {
+    return borrowed.clone();
+}
+```
+
+`clone()` is an O(1) refcount increment (`drift_string_retain`), not a
+byte-by-byte copy. Don’t write manual byte-rebuild helpers — they allocate
+a new buffer for no benefit.

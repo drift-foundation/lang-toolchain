@@ -1,0 +1,23 @@
+module main;
+
+pub struct Bag {
+	v: Int
+}
+
+implement Bag {
+	// Two methods with IDENTICAL signatures are not overloads — they're
+	// duplicates. The registry must reject this.
+	pub fn tag(self: &Bag, k: &String) nothrow -> Int {
+		return self.v + 1;
+	}
+
+	pub fn tag(self: &Bag, k: &String) nothrow -> Int {
+		return self.v + 2;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Bag(v = 0);
+	val x = b.tag("x");
+	return x;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "JsonCursor — chained .field/.as_* traversal, missing-segment propagation, terminal defaults, scalar narrowings",
+  "exit_code": 0
+}

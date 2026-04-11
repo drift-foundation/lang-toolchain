@@ -1,0 +1,86 @@
+module main;
+
+import std.core as core;
+
+// Custom exception with one String attribute.  The String value passed
+// at the throw site is a heap allocation built from `+` (drift_string_concat),
+// not a static literal — this is the trigger condition for the
+// language bug.
+pub exception PathErr(payload: String, idx: Int);
+
+// Builds a fresh heap String via concatenation.  The result is NOT a
+// static literal — it goes through drift_string_concat and gets a
+// fresh refcounted allocation.
+fn build_payload(prefix: &String, leaf: &String) nothrow -> String {
+	val sep = ".";
+	return *prefix + sep + *leaf;
+}
+
+// First throw site: payload built from concat.
+fn first_thrower() -> Int {
+	val a = "meta";
+	val b = "callback";
+	throw PathErr(payload = build_payload(&a, &b), idx = 1);
+}
+
+// Second throw site: same shape, different payload.
+fn second_thrower() -> Int {
+	val a = "items";
+	val b = "0";
+	throw PathErr(payload = build_payload(&a, &b), idx = 2);
+}
+
+// Two sequential try/catch blocks against PathErr.  Both inspect the
+// same String-typed attribute via e.attrs["payload"].as_string().
+//
+// Pre-fix: heap corruption (tcache_thread_shutdown unaligned chunk),
+// because the second exception's attribute storage aliases the first's
+// already-released String (or the construction-time retain on the
+// String attr is missing, so two separately-thrown PathErrs share one
+// +1 reference).
+//
+// Post-fix: both extractions return the correct concat'd value, the
+// program exits 0, and Valgrind reports no invalid reads or leaks.
+fn run() -> Int {
+	// First catch — extract and verify payload.
+	try {
+		val _v = first_thrower();
+		return 10;
+	} catch PathErr(e) {
+		val dv = e.attrs["payload"];
+		match dv.as_string() {
+			Some(s) => { if s != "meta.callback" { return 11; } },
+			default => { return 12; }
+		}
+		val di = e.attrs["idx"];
+		match di.as_int() {
+			Some(v) => { if v != 1 { return 13; } },
+			default => { return 14; }
+		}
+	}
+
+	// Second catch — extract and verify a different payload.  This is
+	// where the heap corruption surfaces if the runtime mishandles
+	// String-typed exception attributes built via concat.
+	try {
+		val _v = second_thrower();
+		return 20;
+	} catch PathErr(e) {
+		val dv = e.attrs["payload"];
+		match dv.as_string() {
+			Some(s) => { if s != "items.0" { return 21; } },
+			default => { return 22; }
+		}
+		val di = e.attrs["idx"];
+		match di.as_int() {
+			Some(v) => { if v != 2 { return 23; } },
+			default => { return 24; }
+		}
+	}
+
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

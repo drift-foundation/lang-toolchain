@@ -1,0 +1,40 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn main() nothrow -> Int {
+	val text = "{\"cfg\":{\"count\":42,\"name\":\"x\",\"ratio\":1.5}}";
+
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 100; },
+		core.Result::Ok(root) => {
+			// Happy path
+			match root.get_int_at_path("cfg.count") {
+				Optional::Some(v) => { if v != 42 { return 1; } },
+				Optional::None() => { return 2; }
+			}
+
+			// Missing segment
+			match root.get_int_at_path("cfg.missing") {
+				Optional::Some(_) => { return 10; },
+				Optional::None() => { }
+			}
+
+			// Type mismatch (String)
+			match root.get_int_at_path("cfg.name") {
+				Optional::Some(_) => { return 20; },
+				Optional::None() => { }
+			}
+
+			// Non-integer Number (1.5 does not parse as Int).  as_int uses
+			// parse_int so a Float-shaped Number returns None.
+			match root.get_int_at_path("cfg.ratio") {
+				Optional::Some(_) => { return 30; },
+				Optional::None() => { }
+			}
+		}
+	}
+
+	return 0;
+}

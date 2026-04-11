@@ -1,0 +1,32 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn main() nothrow -> Int {
+	val text = "{\"flags\":{\"on\":true,\"off\":false,\"name\":\"x\"}}";
+
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 100; },
+		core.Result::Ok(root) => {
+			match root.get_bool_at_path("flags.on") {
+				Optional::Some(v) => { if !v { return 1; } },
+				Optional::None() => { return 2; }
+			}
+			match root.get_bool_at_path("flags.off") {
+				Optional::Some(v) => { if v { return 3; } },
+				Optional::None() => { return 4; }
+			}
+			match root.get_bool_at_path("flags.missing") {
+				Optional::Some(_) => { return 10; },
+				Optional::None() => { }
+			}
+			match root.get_bool_at_path("flags.name") {
+				Optional::Some(_) => { return 20; },
+				Optional::None() => { }
+			}
+		}
+	}
+
+	return 0;
+}

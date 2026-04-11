@@ -18,14 +18,14 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 fn main() nothrow -> Int {
 	var sb = text.string_builder(16);
-	text.sb_append_string(&mut sb, &"hello");
-	text.sb_append_string(&mut sb, &" ");
-	text.sb_append_string(&mut sb, &"world");
+	text.sb_append_string(&mut sb, "hello");
+	text.sb_append_string(&mut sb, " ");
+	text.sb_append_string(&mut sb, "world");
 	val s = text.sb_build(&mut sb);
 	val e = "hello world";
 	if !str_eq(&s, &e) { return 1; }
 	// Append empty string is no-op
-	text.sb_append_string(&mut sb, &"");
+	text.sb_append_string(&mut sb, "");
 	if text.sb_len(&sb) != 11 { return 2; }
 
 	return 0;

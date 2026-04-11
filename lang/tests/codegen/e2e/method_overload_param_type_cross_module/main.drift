@@ -1,0 +1,23 @@
+module main;
+
+import acme.lib as lib;
+
+fn main() nothrow -> Int {
+	val b = lib.make_bag(10);
+
+	// String overload (auto-borrow form)
+	if b.tag("hello") != 110 { return 1; }
+	// String overload (explicit form)
+	if b.tag(&"world") != 110 { return 2; }
+
+	// Array<String> overload
+	val segs: Array<String> = ["a", "b"];
+	if b.tag(segs) != 212 { return 3; }
+	if b.tag(&segs) != 212 { return 4; }
+
+	// Int overload
+	if b.tag(7) != 317 { return 5; }
+	if b.tag(0) != 310 { return 6; }
+
+	return 0;
+}

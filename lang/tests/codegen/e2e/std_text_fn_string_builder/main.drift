@@ -21,7 +21,7 @@ fn main() nothrow -> Int {
 	// Builder starts empty
 	if text.sb_len(&sb) != 0 { return 1; }
 	// Minimum capacity is 16 even if requested less
-	text.sb_append_string(&mut sb, &"hello");
+	text.sb_append_string(&mut sb, "hello");
 	if text.sb_len(&sb) != 5 { return 2; }
 	val s = text.sb_build(&mut sb);
 	val e = "hello";

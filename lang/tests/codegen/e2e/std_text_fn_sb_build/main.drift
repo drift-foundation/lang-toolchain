@@ -23,7 +23,7 @@ fn main() nothrow -> Int {
 	val e1 = "";
 	if !str_eq(&empty, &e1) { return 1; }
 	// Build after append
-	text.sb_append_string(&mut sb, &"test");
+	text.sb_append_string(&mut sb, "test");
 	val s = text.sb_build(&mut sb);
 	val e2 = "test";
 	if !str_eq(&s, &e2) { return 2; }

@@ -1,0 +1,25 @@
+module acme.lib;
+
+export { Bag, make_bag };
+
+pub struct Bag {
+	pub v: Int
+}
+
+pub fn make_bag(v: Int) nothrow -> Bag {
+	return Bag(v = v);
+}
+
+implement Bag {
+	pub fn tag(self: &Bag, k: &String) nothrow -> Int {
+		return self.v + 100;
+	}
+
+	pub fn tag(self: &Bag, k: &Array<String>) nothrow -> Int {
+		return self.v + 200 + k.len;
+	}
+
+	pub fn tag(self: &Bag, k: Int) nothrow -> Int {
+		return self.v + 300 + k;
+	}
+}

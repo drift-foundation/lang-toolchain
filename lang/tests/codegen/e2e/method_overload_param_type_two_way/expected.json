@@ -1,0 +1,4 @@
+{
+  "description": "Method overload resolution: two methods on the same receiver with the same name and arity but different non-receiver parameter types must dispatch to the matching overload by argument type.",
+  "exit_code": 0
+}

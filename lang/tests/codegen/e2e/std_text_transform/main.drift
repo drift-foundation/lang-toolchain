@@ -17,62 +17,62 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 fn main() nothrow -> Int {
 	// ── repeat ──────────────────────────────────────────────────
-	val rp1 = text.repeat(&"ab", 3);
+	val rp1 = text.repeat("ab", 3);
 	val e1 = "ababab";
 	if !str_eq(&rp1, &e1) { return 1; }
 
-	val rp2 = text.repeat(&"x", 0);
+	val rp2 = text.repeat("x", 0);
 	val e2 = "";
 	if !str_eq(&rp2, &e2) { return 2; }
 
-	val rp3 = text.repeat(&"", 5);
+	val rp3 = text.repeat("", 5);
 	val e3 = "";
 	if !str_eq(&rp3, &e3) { return 3; }
 
-	val rp4 = text.repeat(&"a", 1);
+	val rp4 = text.repeat("a", 1);
 	val e4 = "a";
 	if !str_eq(&rp4, &e4) { return 4; }
 
 	// ── reverse ─────────────────────────────────────────────────
-	val rv1 = text.reverse(&"hello");
+	val rv1 = text.reverse("hello");
 	val ev1 = "olleh";
 	if !str_eq(&rv1, &ev1) { return 10; }
 
-	val rv2 = text.reverse(&"a");
+	val rv2 = text.reverse("a");
 	val ev2 = "a";
 	if !str_eq(&rv2, &ev2) { return 11; }
 
-	val rv3 = text.reverse(&"");
+	val rv3 = text.reverse("");
 	val ev3 = "";
 	if !str_eq(&rv3, &ev3) { return 12; }
 
 	// ── pad_start ───────────────────────────────────────────────
-	val ps1 = text.pad_start(&"42", 5, cast<Byte>(48));
+	val ps1 = text.pad_start("42", 5, cast<Byte>(48));
 	val eps1 = "00042";
 	if !str_eq(&ps1, &eps1) { return 20; }
 
 	// already wide enough
-	val ps2 = text.pad_start(&"hello", 3, cast<Byte>(48));
+	val ps2 = text.pad_start("hello", 3, cast<Byte>(48));
 	val eps2 = "hello";
 	if !str_eq(&ps2, &eps2) { return 21; }
 
 	// exact width
-	val ps3 = text.pad_start(&"hi", 2, cast<Byte>(48));
+	val ps3 = text.pad_start("hi", 2, cast<Byte>(48));
 	val eps3 = "hi";
 	if !str_eq(&ps3, &eps3) { return 22; }
 
 	// ── pad_end ─────────────────────────────────────────────────
-	val pe1 = text.pad_end(&"hi", 5, cast<Byte>(46));
+	val pe1 = text.pad_end("hi", 5, cast<Byte>(46));
 	val epe1 = "hi...";
 	if !str_eq(&pe1, &epe1) { return 30; }
 
 	// already wide enough
-	val pe2 = text.pad_end(&"hello", 3, cast<Byte>(46));
+	val pe2 = text.pad_end("hello", 3, cast<Byte>(46));
 	val epe2 = "hello";
 	if !str_eq(&pe2, &epe2) { return 31; }
 
 	// ── char_at ─────────────────────────────────────────────────
-	match text.char_at(&"hello", 0) {
+	match text.char_at("hello", 0) {
 		core.Result::Ok(v) => {
 			val eh = "h";
 			if !str_eq(&v, &eh) { return 40; }
@@ -80,7 +80,7 @@ fn main() nothrow -> Int {
 		core.Result::Err(_) => { return 41; }
 	}
 
-	match text.char_at(&"hello", 4) {
+	match text.char_at("hello", 4) {
 		core.Result::Ok(v) => {
 			val eo = "o";
 			if !str_eq(&v, &eo) { return 42; }
@@ -89,13 +89,13 @@ fn main() nothrow -> Int {
 	}
 
 	// out of bounds
-	match text.char_at(&"hello", 5) {
+	match text.char_at("hello", 5) {
 		core.Result::Ok(_) => { return 44; },
 		core.Result::Err(_) => { }
 	}
 
 	// negative
-	match text.char_at(&"hello", 0 - 1) {
+	match text.char_at("hello", 0 - 1) {
 		core.Result::Ok(_) => { return 45; },
 		core.Result::Err(_) => { }
 	}
@@ -105,25 +105,25 @@ fn main() nothrow -> Int {
 	parts.push("a");
 	parts.push("b");
 	parts.push("c");
-	val j1 = text.join(&parts, &", ");
+	val j1 = text.join(&parts, ", ");
 	val ej1 = "a, b, c";
 	if !str_eq(&j1, &ej1) { return 50; }
 
 	// single element
 	var one: Array<String> = [];
 	one.push("only");
-	val j2 = text.join(&one, &",");
+	val j2 = text.join(&one, ",");
 	val ej2 = "only";
 	if !str_eq(&j2, &ej2) { return 51; }
 
 	// empty array
 	var none: Array<String> = [];
-	val j3 = text.join(&none, &",");
+	val j3 = text.join(&none, ",");
 	val ej3 = "";
 	if !str_eq(&j3, &ej3) { return 52; }
 
 	// empty separator
-	val j4 = text.join(&parts, &"");
+	val j4 = text.join(&parts, "");
 	val ej4 = "abc";
 	if !str_eq(&j4, &ej4) { return 53; }
 

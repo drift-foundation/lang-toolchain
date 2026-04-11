@@ -1,0 +1,40 @@
+module main;
+
+pub struct Box {
+	v: Int
+}
+
+implement Box {
+	// Overload by parameter type — `pick(&String)` returns v + 100.
+	pub fn pick(self: &Box, k: &String) nothrow -> Int {
+		return self.v + 100;
+	}
+
+	// Overload by parameter type — `pick(&Array<String>)` returns v + 200 + array length.
+	pub fn pick(self: &Box, k: &Array<String>) nothrow -> Int {
+		return self.v + 200 + k.len;
+	}
+}
+
+fn main() nothrow -> Int {
+	val b = Box(v = 10);
+
+	// String overload — explicit & form.
+	val by_str_explicit = b.pick(&"hello");
+	if by_str_explicit != 110 { return 1; }
+
+	// String overload — auto-borrow form (preferred style).
+	val by_str_auto = b.pick("world");
+	if by_str_auto != 110 { return 2; }
+
+	// Array<String> overload — explicit & form.
+	val segs: Array<String> = ["a", "b", "c"];
+	val by_arr_explicit = b.pick(&segs);
+	if by_arr_explicit != 213 { return 3; }
+
+	// Array<String> overload — auto-borrow form on a local var.
+	val by_arr_auto = b.pick(segs);
+	if by_arr_auto != 213 { return 4; }
+
+	return 0;
+}

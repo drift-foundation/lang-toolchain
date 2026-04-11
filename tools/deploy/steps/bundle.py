@@ -121,13 +121,21 @@ def bundle_docs_and_examples(dist: Path) -> None:
 	doc_dir.mkdir(parents=True, exist_ok=True)
 	(doc_dir / "README.md").write_text(_README_TEXT, encoding="utf-8")
 
+	# Ship docs/effective-drift.md (idiom guide) into the toolchain
+	# distribution so consumers can read it after deployment.
+	_ROOT = Path(__file__).resolve().parents[3]
+	effective_src = _ROOT / "docs" / "effective-drift.md"
+	if effective_src.is_file():
+		(doc_dir / "effective-drift.md").write_text(
+			effective_src.read_text(encoding="utf-8"), encoding="utf-8"
+		)
+
 	examples_dir = dist / "examples"
 	examples_dir.mkdir(parents=True, exist_ok=True)
 	(examples_dir / "hello.drift").write_text(_HELLO_DRIFT, encoding="utf-8")
 	(examples_dir / "README.md").write_text(_EXAMPLES_README, encoding="utf-8")
 
 	# Generate stdlib API reference from source.
-	_ROOT = Path(__file__).resolve().parents[3]
 	stdlib_src = _ROOT / "stdlib" / "std"
 	if stdlib_src.is_dir():
 		from tools.drift_doc.drift_doc import generate_docs
@@ -260,6 +268,16 @@ If any step fails, deploy exits non-zero and does not publish a partial install.
 On first invocation, the scie executable extracts its embedded Python
 interpreter to a per-user cache (`~/.cache/nce/` by default).  Subsequent
 runs reuse the cache.  Override the cache location with `SCIE_BASE`.
+
+## See also
+
+- `doc/effective-drift.md` — idiom guide covering common Drift
+  patterns (Arc+Mutex shared state, runtime registry, JSON API,
+  graceful shutdown, MPSC queues, atomic ordering, method overload
+  resolution, call-site auto-borrow, `String.clone()`, and more).
+- `doc/stdlib/index.md` — generated stdlib API reference.
+- `doc/stdlib/authoring.md` — how to write `///` doc comments that
+  the `drift doc` tool picks up.
 """
 
 _HELLO_DRIFT = """\

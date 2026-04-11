@@ -17,15 +17,15 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	if text.count(&"aabaaab", &"aa") != 2 { return 1; }
-	if text.count(&"hello", &"l") != 2 { return 2; }
-	if text.count(&"hello", &"xyz") != 0 { return 3; }
+	if text.count("aabaaab", "aa") != 2 { return 1; }
+	if text.count("hello", "l") != 2 { return 2; }
+	if text.count("hello", "xyz") != 0 { return 3; }
 	// Empty needle → 0
-	if text.count(&"hello", &"") != 0 { return 4; }
+	if text.count("hello", "") != 0 { return 4; }
 	// Empty haystack → 0
-	if text.count(&"", &"x") != 0 { return 5; }
+	if text.count("", "x") != 0 { return 5; }
 	// Full string match → 1
-	if text.count(&"abc", &"abc") != 1 { return 6; }
+	if text.count("abc", "abc") != 1 { return 6; }
 
 	return 0;
 }

@@ -4,13 +4,13 @@ import std.core as core;
 import std.text as text;
 
 fn main() nothrow -> Int {
-	if !text.equals_ignore_case(&"hello", &"HELLO") { return 1; }
-	if !text.equals_ignore_case(&"Hello", &"hELLO") { return 2; }
-	if text.equals_ignore_case(&"hello", &"world") { return 3; }
-	if text.equals_ignore_case(&"hello", &"hell") { return 4; }
-	if !text.equals_ignore_case(&"", &"") { return 5; }
-	if text.equals_ignore_case(&"a", &"") { return 6; }
-	if !text.equals_ignore_case(&"abc123", &"ABC123") { return 7; }
+	if !text.equals_ignore_case("hello", "HELLO") { return 1; }
+	if !text.equals_ignore_case("Hello", "hELLO") { return 2; }
+	if text.equals_ignore_case("hello", "world") { return 3; }
+	if text.equals_ignore_case("hello", "hell") { return 4; }
+	if !text.equals_ignore_case("", "") { return 5; }
+	if text.equals_ignore_case("a", "") { return 6; }
+	if !text.equals_ignore_case("abc123", "ABC123") { return 7; }
 
 	return 0;
 }

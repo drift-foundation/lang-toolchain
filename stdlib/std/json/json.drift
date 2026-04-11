@@ -5,6 +5,7 @@ import std.containers as containers;
 import std.core.hash as hash;
 import std.parse as parse_std;
 import std.iter as iter;
+import std.io as io;
 import std.mem as mem;
 import std.concurrent as concurrent;
 
@@ -12,10 +13,13 @@ use trait iter.SinglePassIterator;
 
 export {
 	JsonNode,
+	JsonCursor,
+	StrictJsonCursor,
 	JsonArray,
 	JsonObject,
 	JsonErrorData,
 	JsonError,
+	JsonPathError,
 	JsonKeyOrder,
 	JsonConfig,
 	JsonConfigBuilder,
@@ -33,6 +37,29 @@ export {
 };
 
 pub exception JsonError(tag: String, offset: Int, line: Int, col: Int, path: String, key: String);
+
+/// Structured exception thrown by `StrictJsonCursor` traversal failures.
+///
+/// All fields carry stable, machine-readable values.  No English prose.
+/// `reason` is restricted to the following stable token set:
+///
+/// - `"missing-segment"` — the parent object did not contain `segment`.
+/// - `"not-object"` — the parent at this position is not a JSON object
+///   (could be array, scalar, or null) and cannot be traversed.
+/// - `"type-mismatch-string"` — terminal `.string()` called on a node
+///   that is not a JSON String.
+/// - `"type-mismatch-int"` — terminal `.int()` called on a node that
+///   is not an integer-shaped JSON Number.
+/// - `"type-mismatch-bool"` — terminal `.bool()` called on a node that
+///   is not a JSON Bool.
+/// - `"type-mismatch-float"` — terminal `.float()` called on a node
+///   that is not a float-shaped JSON Number.
+///
+/// `path` is the dotted path to the parent of the failing position.
+/// `segment` is the failing key (empty for terminal type-mismatch
+/// failures since the failure is at the current node, not a child).
+/// `index` is the zero-based depth at which the failure occurred.
+pub exception JsonPathError(path: String, segment: String, index: Int, reason: String);
 
 pub struct JsonErrorData {
 	pub tag: String,
@@ -247,8 +274,89 @@ implement JsonNode {
 		}
 	}
 
+	/// Walks a pre-split path (array of key segments) through nested
+	/// JSON objects.
+	///
+	/// This is the segment-array overload.  For convenience, you can
+	/// also call `get_path` with a dotted `&String` (see below).
+	///
+	/// Returns `None` if any segment is missing, if the path walks
+	/// through a non-object at any step, or if the path traverses an
+	/// array (arrays are not traversable in v1).  Empty segment array
+	/// returns `Some(self)`.
+	///
+	/// Use this overload when keys contain a literal `.`, since the
+	/// dotted-string overload cannot represent such keys.
 	pub fn get_path(self: &JsonNode, path: &Array<String>) nothrow -> Optional<&JsonNode> {
 		return _get_path_at(self, path, 0);
+	}
+
+	/// Walks a dotted path through nested JSON objects.
+	///
+	/// Example: `root.get_path("meta.callback.status")`
+	///
+	/// Returns `None` if any segment is missing, if the path walks
+	/// through a non-object at any step, or if the path traverses an
+	/// array (arrays are not traversable in v1).  An empty path
+	/// (`""`) returns `Some(self)`.
+	///
+	/// ## Notes
+	///
+	/// - This is the dotted-string overload.  When keys contain a
+	///   literal `.`, use the segment-array overload
+	///   `get_path(&Array<String>)` instead.
+	/// - Array index syntax (e.g. `"items.0"`) is not supported in v1;
+	///   the segment `"0"` is looked up as an object key and returns
+	///   `None` when the parent is an array.
+	pub fn get_path(self: &JsonNode, path: &String) nothrow -> Optional<&JsonNode> {
+		val segments = _split_dotted_path(path);
+		return _get_path_at(self, &segments, 0);
+	}
+
+	/// Dotted-path traversal narrowed to `String`.
+	///
+	/// Shorthand for `get_path(path).as_string()` with the two match
+	/// levels collapsed.  Returns `None` if the path is missing or the
+	/// final node is not a JSON String.  The returned String is an
+	/// owned ARC-retained copy.
+	pub fn get_string_at_path(self: &JsonNode, path: &String) nothrow -> Optional<String> {
+		match self.get_path(path) {
+			Optional::Some(node) => { return node.as_string(); },
+			Optional::None() => { return Optional<String>::None(); }
+		}
+	}
+
+	/// Dotted-path traversal narrowed to `Int`.
+	///
+	/// Returns `None` if the path is missing, the final node is not a
+	/// JSON Number, or the Number does not parse as an integer.
+	pub fn get_int_at_path(self: &JsonNode, path: &String) nothrow -> Optional<Int> {
+		match self.get_path(path) {
+			Optional::Some(node) => { return node.as_int(); },
+			Optional::None() => { return Optional<Int>::None(); }
+		}
+	}
+
+	/// Dotted-path traversal narrowed to `Bool`.
+	///
+	/// Returns `None` if the path is missing or the final node is not a
+	/// JSON Bool.
+	pub fn get_bool_at_path(self: &JsonNode, path: &String) nothrow -> Optional<Bool> {
+		match self.get_path(path) {
+			Optional::Some(node) => { return node.as_bool(); },
+			Optional::None() => { return Optional<Bool>::None(); }
+		}
+	}
+
+	/// Dotted-path traversal narrowed to `Float`.
+	///
+	/// Returns `None` if the path is missing, the final node is not a
+	/// JSON Number, or the Number does not parse as a float.
+	pub fn get_float_at_path(self: &JsonNode, path: &String) nothrow -> Optional<Float> {
+		match self.get_path(path) {
+			Optional::Some(node) => { return node.as_float(); },
+			Optional::None() => { return Optional<Float>::None(); }
+		}
 	}
 
 	pub fn entries(self: &JsonNode) nothrow -> JsonEntriesIter {
@@ -366,6 +474,297 @@ implement JsonNode {
 	pub fn clone_deep(self: &JsonNode) nothrow -> JsonNode {
 		return _clone_deep_impl(self);
 	}
+
+	/// Returns a chainable `JsonCursor` positioned at this node.
+	///
+	/// The cursor borrows from `self`; it does not clone the subtree.
+	/// All subsequent `.field(...)` calls follow object keys starting
+	/// from here.  Use at the root or any intermediate `&JsonNode` to
+	/// start a traversal chain.
+	pub fn select(self: &JsonNode) nothrow -> JsonCursor {
+		return JsonCursor(node = Optional::Some(self));
+	}
+}
+
+/// A chainable, borrow-only cursor over a `JsonNode` subtree.
+///
+/// Created by `JsonNode.select()`.  Every `.field(key)` call returns a
+/// new cursor pointing at the child (if the current node is an object
+/// containing that key) or a "none" cursor that propagates through the
+/// rest of the chain.  Narrowing methods such as `.as_string()` return
+/// `Optional<T>` at the end of the chain.
+///
+/// Cursors are the ergonomic alternative to nested `match` or dotted
+/// path strings.  Example:
+///
+/// ```drift
+/// val status = root.select()
+///                  .field("meta")
+///                  .field("callback")
+///                  .field("status")
+///                  .as_string_or("");
+/// ```
+pub struct JsonCursor {
+	node: Optional<&JsonNode>
+}
+
+implement JsonCursor {
+	/// Descends one level into an object field.  If the current cursor
+	/// is already "none", or if the current node is not an object, or
+	/// if the key is absent, the returned cursor is "none".
+	pub fn field(self: &JsonCursor, key: &String) nothrow -> JsonCursor {
+		match self.node {
+			Optional::Some(n) => {
+				match n.get(key) {
+					Optional::Some(child) => {
+						return JsonCursor(node = Optional::Some(child));
+					},
+					Optional::None() => {
+						return JsonCursor(node = Optional<&JsonNode>::None());
+					}
+				}
+			},
+			Optional::None() => {
+				return JsonCursor(node = Optional<&JsonNode>::None());
+			}
+		}
+	}
+
+	/// Returns `true` if the cursor still points at a node.
+	pub fn exists(self: &JsonCursor) nothrow -> Bool {
+		match self.node {
+			Optional::Some(_) => { return true; },
+			Optional::None() => { return false; }
+		}
+	}
+
+	/// Narrows the cursor to a `String`.  Returns `None` if the cursor
+	/// is not positioned at a JSON String (or is "none").
+	pub fn as_string(self: &JsonCursor) nothrow -> Optional<String> {
+		match self.node {
+			Optional::Some(n) => { return n.as_string(); },
+			Optional::None() => { return Optional<String>::None(); }
+		}
+	}
+
+	/// Narrows to `String`, returning `fallback` on miss or type
+	/// mismatch.  Useful as the terminal of a cursor chain when a
+	/// default is safe.
+	pub fn as_string_or(self: &JsonCursor, fallback: &String) nothrow -> String {
+		match self.as_string() {
+			Optional::Some(s) => { return s; },
+			Optional::None() => { return *fallback; }
+		}
+	}
+
+	/// Narrows the cursor to an `Int`.
+	pub fn as_int(self: &JsonCursor) nothrow -> Optional<Int> {
+		match self.node {
+			Optional::Some(n) => { return n.as_int(); },
+			Optional::None() => { return Optional<Int>::None(); }
+		}
+	}
+
+	/// Narrows to `Int`, returning `fallback` on miss or type mismatch.
+	pub fn as_int_or(self: &JsonCursor, fallback: Int) nothrow -> Int {
+		match self.as_int() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => { return fallback; }
+		}
+	}
+
+	/// Narrows the cursor to a `Bool`.
+	pub fn as_bool(self: &JsonCursor) nothrow -> Optional<Bool> {
+		match self.node {
+			Optional::Some(n) => { return n.as_bool(); },
+			Optional::None() => { return Optional<Bool>::None(); }
+		}
+	}
+
+	/// Narrows to `Bool`, returning `fallback` on miss or type mismatch.
+	pub fn as_bool_or(self: &JsonCursor, fallback: Bool) nothrow -> Bool {
+		match self.as_bool() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => { return fallback; }
+		}
+	}
+
+	/// Narrows the cursor to a `Float`.
+	pub fn as_float(self: &JsonCursor) nothrow -> Optional<Float> {
+		match self.node {
+			Optional::Some(n) => { return n.as_float(); },
+			Optional::None() => { return Optional<Float>::None(); }
+		}
+	}
+
+	/// Narrows to `Float`, returning `fallback` on miss or type mismatch.
+	pub fn as_float_or(self: &JsonCursor, fallback: Float) nothrow -> Float {
+		match self.as_float() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => { return fallback; }
+		}
+	}
+
+}
+
+/// A strict, throwing chainable cursor over a `JsonNode` subtree.
+///
+/// Created by `JsonNode.expect()`.  Every `.field(key)` call throws
+/// `JsonPathError` if the current position is not an object or if the
+/// key is absent.  Terminal `.string()`, `.int()`, `.bool()`, `.float()`
+/// calls throw `JsonPathError` with reason `type-mismatch-*` if the
+/// position is not the expected type.
+///
+/// Used for extracting required fields from a JSON contract where a
+/// missing or wrong-typed field is a programmer error rather than
+/// expected optional data.  Exceptions propagate naturally through the
+/// chain and up to the caller.
+///
+/// ```drift
+/// fn extract_status(root: &JsonNode) -> String {
+///     return root.expect()
+///                .field("meta")
+///                .field("callback")
+///                .field("status")
+///                .string();
+/// }
+/// ```
+///
+/// For optional/null-propagating traversal, use `JsonNode.select()`
+/// and the `JsonCursor.field(...).as_string_or(...)` family instead.
+pub struct StrictJsonCursor {
+	node: &JsonNode,
+	path: String,
+	depth: Int
+}
+
+implement StrictJsonCursor {
+	/// Descends one level into an object field.  Throws `JsonPathError`
+	/// with `reason = "not-object"` if the current position is not a
+	/// JSON object, or `reason = "missing-segment"` if the key is
+	/// absent.
+	pub fn field(self: &StrictJsonCursor, key: &String) -> StrictJsonCursor {
+		match self.node.as_object() {
+			Optional::Some(_) => {
+				match self.node.get(key) {
+					Optional::Some(child) => {
+						return StrictJsonCursor(
+							node = child,
+							path = _join_dotted(&self.path, key),
+							depth = self.depth + 1
+						);
+					},
+					Optional::None() => {
+						throw JsonPathError(
+							path = self.path,
+							segment = *key,
+							index = self.depth,
+							reason = "missing-segment"
+						);
+					}
+				}
+			},
+			Optional::None() => {
+				throw JsonPathError(
+					path = self.path,
+					segment = *key,
+					index = self.depth,
+					reason = "not-object"
+				);
+			}
+		}
+	}
+
+	/// Narrows the cursor to a required `String`.  Throws
+	/// `JsonPathError` with `reason = "type-mismatch-string"` on
+	/// mismatch.
+	pub fn string(self: &StrictJsonCursor) -> String {
+		match self.node.as_string() {
+			Optional::Some(s) => { return s; },
+			Optional::None() => {
+				throw JsonPathError(
+					path = self.path,
+					segment = "",
+					index = self.depth,
+					reason = "type-mismatch-string"
+				);
+			}
+		}
+	}
+
+	/// Narrows the cursor to a required `Int`.  Throws
+	/// `JsonPathError` with `reason = "type-mismatch-int"` on mismatch
+	/// (including non-integer-shaped Numbers).
+	pub fn int(self: &StrictJsonCursor) -> Int {
+		match self.node.as_int() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => {
+				throw JsonPathError(
+					path = self.path,
+					segment = "",
+					index = self.depth,
+					reason = "type-mismatch-int"
+				);
+			}
+		}
+	}
+
+	/// Narrows the cursor to a required `Bool`.  Throws
+	/// `JsonPathError` with `reason = "type-mismatch-bool"` on
+	/// mismatch.
+	pub fn bool(self: &StrictJsonCursor) -> Bool {
+		match self.node.as_bool() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => {
+				throw JsonPathError(
+					path = self.path,
+					segment = "",
+					index = self.depth,
+					reason = "type-mismatch-bool"
+				);
+			}
+		}
+	}
+
+	/// Narrows the cursor to a required `Float`.  Throws
+	/// `JsonPathError` with `reason = "type-mismatch-float"` on
+	/// mismatch.
+	pub fn float(self: &StrictJsonCursor) -> Float {
+		match self.node.as_float() {
+			Optional::Some(v) => { return v; },
+			Optional::None() => {
+				throw JsonPathError(
+					path = self.path,
+					segment = "",
+					index = self.depth,
+					reason = "type-mismatch-float"
+				);
+			}
+		}
+	}
+}
+
+implement JsonNode {
+	/// Begins a strict (throwing) cursor chain at this node.
+	///
+	/// All subsequent `.field(...)` and `.string()` / `.int()` /
+	/// `.bool()` / `.float()` calls throw `JsonPathError` on miss or
+	/// type mismatch.  Use this for required JSON contract extraction.
+	/// For optional traversal, use `select()` instead.
+	pub fn expect(self: &JsonNode) nothrow -> StrictJsonCursor {
+		return StrictJsonCursor(node = self, path = "", depth = 0);
+	}
+}
+
+// Joins two dotted-path segments.  An empty `prefix` returns `key` as
+// the new path; otherwise the result is `prefix + "." + key`.  Used by
+// StrictJsonCursor.field to accumulate the path for error context.
+fn _join_dotted(prefix: &String, key: &String) nothrow -> String {
+	if prefix.byte_length() == 0 {
+		return *key;
+	}
+	val dot = ".";
+	return *prefix + dot + *key;
 }
 
 implement JsonArray {
@@ -435,6 +834,51 @@ fn _get_path_at(node: &JsonNode, path: &Array<String>, idx: Int) nothrow -> Opti
 		},
 		default => { return Optional<&JsonNode>::None(); }
 	}
+}
+
+// Split a dotted path like "meta.callback.status" into its key
+// segments.  Empty input returns an empty array (which _get_path_at
+// treats as "return self").  A trailing or leading "." produces an
+// empty-string segment, which will never match an object key and so
+// results in None — this is the intended behavior for malformed
+// paths in v1.  Keys containing literal "." are not supported and
+// will be split incorrectly; users who need that must call the
+// segment-array overload `get_path(&Array<String>)` with a pre-split
+// segment array.
+fn _split_dotted_path(path: &String) nothrow -> Array<String> {
+	var segments: Array<String> = [];
+	val n = path.byte_length();
+	if n == 0 {
+		return move segments;
+	}
+	var start = 0;
+	var i = 0;
+	while i < n {
+		if core.string_byte_at(path, i) == cast<Byte>(46) {  // '.'
+			segments.push(_slice_bytes(path, start, i));
+			start = i + 1;
+		}
+		i = i + 1;
+	}
+	segments.push(_slice_bytes(path, start, n));
+	return move segments;
+}
+
+// Extract bytes [start, end) from a String as a new String.  Local
+// helper to keep std.json self-contained (std.text.substring would
+// introduce a cross-module dependency and returns a Result).
+fn _slice_bytes(s: &String, start: Int, end: Int) nothrow -> String {
+	val len = end - start;
+	if len <= 0 {
+		return "";
+	}
+	var buf = io.buffer(len);
+	var i = 0;
+	while i < len {
+		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&buf), len);
 }
 
 fn _err_parse_line_col(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void {

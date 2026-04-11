@@ -4,12 +4,12 @@ import std.core as core;
 import std.text as text;
 
 fn main() nothrow -> Int {
-	if !text.is_alphanumeric(&"abc123") { return 1; }
-	if !text.is_alphanumeric(&"ABC") { return 2; }
-	if !text.is_alphanumeric(&"999") { return 3; }
-	if text.is_alphanumeric(&"") { return 4; }
-	if text.is_alphanumeric(&"abc!") { return 5; }
-	if text.is_alphanumeric(&"hello world") { return 6; }
+	if !text.is_alphanumeric("abc123") { return 1; }
+	if !text.is_alphanumeric("ABC") { return 2; }
+	if !text.is_alphanumeric("999") { return 3; }
+	if text.is_alphanumeric("") { return 4; }
+	if text.is_alphanumeric("abc!") { return 5; }
+	if text.is_alphanumeric("hello world") { return 6; }
 
 	return 0;
 }

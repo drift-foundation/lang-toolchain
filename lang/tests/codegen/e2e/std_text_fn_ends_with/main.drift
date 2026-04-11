@@ -17,13 +17,13 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	if !text.ends_with(&"hello world", &"world") { return 1; }
-	if text.ends_with(&"hello", &"world") { return 2; }
-	if !text.ends_with(&"hello", &"") { return 3; }
-	if !text.ends_with(&"", &"") { return 4; }
-	if text.ends_with(&"", &"x") { return 5; }
-	if !text.ends_with(&"abc", &"abc") { return 6; }
-	if text.ends_with(&"bc", &"abc") { return 7; }
+	if !text.ends_with("hello world", "world") { return 1; }
+	if text.ends_with("hello", "world") { return 2; }
+	if !text.ends_with("hello", "") { return 3; }
+	if !text.ends_with("", "") { return 4; }
+	if text.ends_with("", "x") { return 5; }
+	if !text.ends_with("abc", "abc") { return 6; }
+	if text.ends_with("bc", "abc") { return 7; }
 
 	return 0;
 }

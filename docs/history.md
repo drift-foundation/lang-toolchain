@@ -1,5 +1,87 @@
 # Drift development history
 
+## 2026-04-11
+- **Method overload resolution by parameter type (0.27.181, ABI 8)**:
+  Two methods on the same receiver type with the same name and arity but
+  different non-receiver parameter types previously reported a false
+  `ambiguous method` error. The free-function overload resolver in
+  `lang/driftc/method_resolver.py` already supported parameter-type
+  disambiguation; the inherent-method dispatch in
+  `lang/driftc/checker/call_resolver.py` filtered candidates only by
+  arity + receiver compatibility.
+  - Fix:
+    - candidate filter now records an `exact_param_match` flag computed
+      as `arg_types[i] == param_type_ids[1+i]` OR
+      `unwrap_ref(param_type_ids[1+i]) == arg_types[i]` (the second
+      case handles call-site auto-borrow for `T` → `&T`)
+    - method-level generic methods (`pub fn pick<T>(self, x: T)`) are
+      tentatively flagged exact and downstream-filtered by a "concrete
+      beats method-level generic" preference
+    - impl-block-level genericity (`implement<T> Box<T>` vs
+      `implement Box<Int>`) follows the v1 spec: no specificity ranking
+    - when multiple candidates share name/arity/receiver but no exact
+      match exists, diagnostic is `no matching overload for method 'X'
+      on receiver Y with args [...]` instead of false `ambiguous method`
+  - Regression coverage: 6 new e2e tests under
+    `lang/tests/codegen/e2e/method_overload_param_type_*` covering
+    two-way, three-way, no-match, duplicate-signature,
+    cross-module, and concrete-vs-generic disambiguation. All 50
+    pre-existing method-resolution / trait-method / impl-matching
+    unit tests still pass.
+- **LANGUAGE_BUG fix: exception attribute aliasing for refcounted
+  DiagnosticValue fields (0.27.181, ABI 8)**:
+  Heap corruption when a `pub exception` carried a heap-built `String`
+  field and the same exception type was thrown more than once across
+  sequential `try ... catch Ex(e) { e.attrs[k].as_string() }` blocks.
+  Surfaced as `tcache_thread_shutdown(): unaligned tcache chunk
+  detected` and valgrind invalid-read in `drift_string_release`.
+  - Root cause (`lang/compiler_infra/error_dummy.c`):
+    `__exc_attrs_get_dv` and `__exc_captures_get_dv` returned the
+    matched `DriftDiagnosticValue` via shallow C struct copy. For a
+    `DV_STRING`, this aliased the exception's attribute storage with
+    no refcount bump.
+  - Fix: both runtime functions now call `drift_dv_clone(val)` to
+    return an independently-owned DV.
+  - Regression test:
+    `lang/tests/codegen/e2e/exception_string_attr_concat_double_catch_no_corruption/`
+    reproduces the bug with a custom exception (no `std.json`
+    involvement) and passes under both normal and `DRIFT_MEMCHECK=1`.
+- **`std.text` expansion (0.27.181)**:
+  28 new string utility functions (`contains`, `starts_with`,
+  `ends_with`, `index_of`, `last_index_of`, `count`, `lower`, `upper`,
+  `trim`, `trim_start`, `trim_end`, `strip`, `char_at`, `split`,
+  `split_limit`, `replace`, `replace_first`, `remove`, `repeat`,
+  `reverse`, `pad_start`, `pad_end`, `join`, `is_empty`, `is_blank`,
+  `is_numeric`, `is_alphanumeric`, `is_lowercase`, `is_uppercase`,
+  `equals_ignore_case`, `compare_ignore_case`). All `nothrow`,
+  byte-oriented ASCII semantics. 39 per-function direct e2e tests +
+  8 grouped suites, all green under normal mode and memcheck.
+- **`std.json` cursor + dotted-path API (0.27.181)**:
+  Optional cursor (`select`, `field`, `as_string`/`as_int`/`as_bool`/
+  `as_float`, `as_string_or`/`as_int_or`/`as_bool_or`/`as_float_or`,
+  `exists`); strict cursor (`expect`, `field`, `string`/`int`/`bool`/
+  `float`); structured `JsonPathError(path, segment, index, reason)`
+  with stable machine-readable reason tokens (`missing-segment`,
+  `not-object`, `type-mismatch-string/int/bool/float`); dotted-path
+  methods (`get_path(&String)`, `get_string_at_path`, `get_int_at_path`,
+  `get_bool_at_path`, `get_float_at_path`). The pre-existing
+  `get_path(&Array<String>)` segment-array form is now an overload of
+  `get_path` rather than a separately-named primitive (enabled by the
+  method overload fix above).
+- **`String.clone()` (0.27.181)**:
+  ARC clone method on `String`. O(1) refcount increment via
+  `*self`, not a byte copy. Documented and pinned by an e2e test
+  that confirms the emitted IR uses `drift_string_retain`, not
+  `drift_string_from_utf8_bytes`.
+- **`drift doc` user-facing API documentation generator (0.27.181)**:
+  New `tools/drift_doc/` package shipped via the `drift` PEX.
+  Extracts module/function/struct/variant/interface/exception/constant
+  declarations from `.drift` source using the compiler parser, combines
+  with declaration-adjacent `///` Markdown doc comments, and emits
+  per-module Markdown reference. Bundled into the toolchain
+  distribution under `doc/stdlib/`. Deploy pipeline regenerates on
+  every build.
+
 ## 2026-04-10
 - **Same `package_id@version` across multiple package roots now deduplicates deterministically
   (0.27.180, ABI 8)**:

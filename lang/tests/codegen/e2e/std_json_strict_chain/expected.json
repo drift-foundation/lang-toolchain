@@ -1,0 +1,4 @@
+{
+  "description": "JsonNode.expect() strict cursor — chained traversal, JsonPathError shape, stable reason tokens, full path/segment/index inspection across multiple sequential catches.",
+  "exit_code": 0
+}

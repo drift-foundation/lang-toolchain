@@ -123,7 +123,13 @@ void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftErro
     if (!val) {
         return;
     }
-	*out = *val;
+    // The returned DriftDiagnosticValue must be an INDEPENDENT owner
+    // of any inner refcounted storage (e.g. DV_STRING).  A shallow
+    // `*out = *val` aliases the exception's attribute storage and
+    // double-releases when both the user-side DV and the exception
+    // tear down — heap corruption when the same exception type is
+    // thrown more than once with heap-built String fields.
+    *out = drift_dv_clone(val);
 }
 
 void __exc_captures_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString frame, struct DriftString key) {
@@ -148,7 +154,10 @@ void __exc_captures_get_dv(struct DriftDiagnosticValue* out, const struct DriftE
             if (key.len != 0 && memcmp(loc->key.data, key.data, key.len) != 0) {
                 continue;
             }
-            *out = loc->value;
+            // Same ownership-clone requirement as __exc_attrs_get_dv —
+            // the user-side DV must independently own any refcounted
+            // inner storage to avoid double-release on teardown.
+            *out = drift_dv_clone(&loc->value);
             return;
         }
         return;

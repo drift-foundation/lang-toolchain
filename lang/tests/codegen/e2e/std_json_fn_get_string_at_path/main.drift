@@ -1,0 +1,76 @@
+module main;
+
+import std.core as core;
+import std.json as json;
+
+fn str_eq(a: &String, b: &String) nothrow -> Bool {
+	val an = a.byte_length();
+	val bn = b.byte_length();
+	if an != bn { return false; }
+	var i = 0;
+	while i < an {
+		if core.string_byte_at(a, i) != core.string_byte_at(b, i) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	val text = "{\"meta\":{\"name\":\"alice\",\"count\":7,\"ok\":true},\"items\":[1,2]}";
+
+	match json.parse(&text) {
+		core.Result::Err(_) => { return 100; },
+		core.Result::Ok(root) => {
+
+			// Happy path: leaf is a String.
+			match root.get_string_at_path("meta.name") {
+				Optional::Some(s) => {
+					val want = "alice";
+					if !str_eq(&s, &want) { return 1; }
+				},
+				Optional::None() => { return 2; }
+			}
+
+			// Missing segment → None.
+			match root.get_string_at_path("meta.missing") {
+				Optional::Some(_) => { return 10; },
+				Optional::None() => { }
+			}
+
+			// Type mismatch (Int field) → None.
+			match root.get_string_at_path("meta.count") {
+				Optional::Some(_) => { return 20; },
+				Optional::None() => { }
+			}
+
+			// Type mismatch (Bool field) → None.
+			match root.get_string_at_path("meta.ok") {
+				Optional::Some(_) => { return 21; },
+				Optional::None() => { }
+			}
+
+			// Intermediate walks through array → None.
+			match root.get_string_at_path("items.name") {
+				Optional::Some(_) => { return 30; },
+				Optional::None() => { }
+			}
+
+			// Single-segment happy path.
+			val text2 = "{\"who\":\"bob\"}";
+			match json.parse(&text2) {
+				core.Result::Err(_) => { return 101; },
+				core.Result::Ok(root2) => {
+					match root2.get_string_at_path("who") {
+						Optional::Some(s) => {
+							val want = "bob";
+							if !str_eq(&s, &want) { return 40; }
+						},
+						Optional::None() => { return 41; }
+					}
+				}
+			}
+		}
+	}
+
+	return 0;
+}

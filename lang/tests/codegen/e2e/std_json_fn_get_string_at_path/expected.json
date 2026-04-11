@@ -1,0 +1,4 @@
+{
+  "description": "JsonNode.get_string_at_path — narrows to String, returns None on missing path or type mismatch",
+  "exit_code": 0
+}

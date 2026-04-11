@@ -17,14 +17,14 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	if text.index_of(&"hello world", &"world") != 6 { return 1; }
-	if text.index_of(&"hello", &"hello") != 0 { return 2; }
-	if text.index_of(&"hello", &"xyz") != 0 - 1 { return 3; }
+	if text.index_of("hello world", "world") != 6 { return 1; }
+	if text.index_of("hello", "hello") != 0 { return 2; }
+	if text.index_of("hello", "xyz") != 0 - 1 { return 3; }
 	// Empty needle → 0
-	if text.index_of(&"hello", &"") != 0 { return 4; }
-	if text.index_of(&"", &"x") != 0 - 1 { return 5; }
+	if text.index_of("hello", "") != 0 { return 4; }
+	if text.index_of("", "x") != 0 - 1 { return 5; }
 	// Finds first occurrence
-	if text.index_of(&"abcabc", &"abc") != 0 { return 6; }
+	if text.index_of("abcabc", "abc") != 0 { return 6; }
 
 	return 0;
 }

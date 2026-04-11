@@ -1,0 +1,4 @@
+{
+  "description": "Three-way method overload: same name, three different parameter types — String, Int, Array<String>. Each call site dispatches to the matching overload.",
+  "exit_code": 0
+}

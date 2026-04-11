@@ -963,7 +963,7 @@ pub fn replace_first(s: &String, old: &String, repl: &String) nothrow -> String 
 
 /// Returns a copy of `s` with all occurrences of `target` removed.
 ///
-/// Equivalent to `replace(s, target, &"")`.
+/// Equivalent to `replace(s, target, "")`.
 pub fn remove(s: &String, target: &String) nothrow -> String {
 	val empty = "";
 	return replace(s, target, &empty);

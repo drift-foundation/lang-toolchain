@@ -4,12 +4,12 @@ import std.core as core;
 import std.text as text;
 
 fn main() nothrow -> Int {
-	if !text.is_uppercase(&"HELLO") { return 1; }
-	if text.is_uppercase(&"Hello") { return 2; }
-	if text.is_uppercase(&"hello") { return 3; }
-	if text.is_uppercase(&"") { return 4; }
+	if !text.is_uppercase("HELLO") { return 1; }
+	if text.is_uppercase("Hello") { return 2; }
+	if text.is_uppercase("hello") { return 3; }
+	if text.is_uppercase("") { return 4; }
 	// Digits only — no lowercase letters → true
-	if !text.is_uppercase(&"123") { return 5; }
+	if !text.is_uppercase("123") { return 5; }
 
 	return 0;
 }

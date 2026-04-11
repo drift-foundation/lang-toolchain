@@ -17,19 +17,19 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	val r = text.reverse(&"hello");
+	val r = text.reverse("hello");
 	val e = "olleh";
 	if !str_eq(&r, &e) { return 1; }
 	// Single char
-	val r2 = text.reverse(&"a");
+	val r2 = text.reverse("a");
 	val e2 = "a";
 	if !str_eq(&r2, &e2) { return 2; }
 	// Empty
-	val r3 = text.reverse(&"");
+	val r3 = text.reverse("");
 	val e3 = "";
 	if !str_eq(&r3, &e3) { return 3; }
 	// Palindrome
-	val r4 = text.reverse(&"aba");
+	val r4 = text.reverse("aba");
 	val e4 = "aba";
 	if !str_eq(&r4, &e4) { return 4; }
 

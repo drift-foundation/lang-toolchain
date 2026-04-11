@@ -17,14 +17,14 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 
 fn main() nothrow -> Int {
-	match text.char_at(&"hello", 0) {
+	match text.char_at("hello", 0) {
 		core.Result::Ok(v) => {
 			val e = "h";
 			if !str_eq(&v, &e) { return 1; }
 		},
 		core.Result::Err(_) => { return 2; }
 	}
-	match text.char_at(&"hello", 4) {
+	match text.char_at("hello", 4) {
 		core.Result::Ok(v) => {
 			val e = "o";
 			if !str_eq(&v, &e) { return 3; }
@@ -32,12 +32,12 @@ fn main() nothrow -> Int {
 		core.Result::Err(_) => { return 4; }
 	}
 	// Out of bounds
-	match text.char_at(&"hello", 5) {
+	match text.char_at("hello", 5) {
 		core.Result::Ok(_) => { return 5; },
 		core.Result::Err(_) => { }
 	}
 	// Negative
-	match text.char_at(&"hello", 0 - 1) {
+	match text.char_at("hello", 0 - 1) {
 		core.Result::Ok(_) => { return 6; },
 		core.Result::Err(_) => { }
 	}

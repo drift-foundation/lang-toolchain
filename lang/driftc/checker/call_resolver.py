@@ -2522,7 +2522,17 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if subst_for_receiver is not None:
 					param_type_ids = [apply_subst(p, subst_for_receiver, ctx.type_table) for p in param_type_ids]
 				param_types_for_receiver.append((cand, sig, param_type_ids, impl_subst))
-			receiver_candidates: list[tuple[CallableDecl, CallableSignature, list[TypeId], bool, bool, int, Subst | None]] = []
+			# Tuple shape:
+			#   0: cand                          (CallableDecl)
+			#   1: sig                           (CallableSignature)
+			#   2: param_type_ids                (list[TypeId], post-impl-subst)
+			#   3: needs_autoborrow              (SelfMode | None)
+			#   4: wants_mut_ref                 (bool)
+			#   5: pref                          (int — receiver-preference rank)
+			#   6: impl_subst                    (Subst | None)
+			#   7: exact_param_match             (bool — non-receiver param-type match for the call's args)
+			#   8: method_has_own_type_params    (bool — method-level <T>, not impl-block-level)
+			receiver_candidates: list[tuple[CallableDecl, CallableSignature, list[TypeId], Optional[SelfMode], bool, int, Subst | None, bool, bool]] = []
 			had_autoborrow_place_error = False
 			saw_typed_nongeneric_with_type_args = False
 			type_arg_counts: set[int] = set()
@@ -2561,7 +2571,62 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				pref = _receiver_preference(self_mode, receiver_is_lvalue=receiver_is_lvalue, receiver_can_mut_borrow=receiver_can_mut_borrow, autoborrow=needs_autoborrow)
 				if pref is None:
 					continue
-				receiver_candidates.append((cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, pref, impl_subst))
+				# Parameter-type overload disambiguation: an exact-match overload
+				# is preferred over one that only matches by arity + receiver
+				# compatibility.  This lets methods on the same receiver share a
+				# name and disambiguate by argument types, the same way the
+				# free-function overload resolver in lang/driftc/method_resolver.py
+				# does.  See receiver_candidates[][7] consumer below.
+				#
+				# A non-receiver argument matches a parameter when either:
+				#   (a) arg_type == param_type, OR
+				#   (b) param_type is `&T` and arg_type == T (call-site auto-borrow).
+				# Both forms count as "exact" for overload selection — what
+				# matters is that the user-supplied argument unambiguously
+				# identifies one overload regardless of whether they wrote `&x`
+				# or `x`.
+				#
+				# Method-level generic methods (those with their OWN type
+				# parameters, e.g. `pub fn pick<T>(self, x: T)`) are treated
+				# as automatically passing the exact-match check, because
+				# their parameter types contain unresolved type variables at
+				# this point.  The downstream "concrete beats generic" filter
+				# (see receiver_candidates[][7] consumer) will pick a more
+				# specific concrete overload over the generic fallback when
+				# both exist.  Impl-block-level generics (e.g.
+				# `implement<T> Box<T> { fn poke(self, n: Int) }`) are NOT
+				# treated as method-level generic — by this point param_type_ids
+				# has already had impl_subst applied (line 2521), so the
+				# regular exact-match check works on concrete types.
+				#
+				# Method-level type parameters live on the richer fn_sig from
+				# ctx.signatures_by_id, not on the simple CallableSignature in
+				# `sig` (which only has param_types/result_type).  We look up
+				# fn_sig the same way the type_arg_ids block above does.
+				def _arg_matches_param(_param_ty: TypeId, _arg_ty: TypeId) -> bool:
+					if _param_ty == _arg_ty:
+						return True
+					_param_unwrapped = ctx.unwrap_ref_type(_param_ty)
+					return _param_unwrapped == _arg_ty
+				_fn_sig_for_overload = (
+					ctx.signatures_by_id.get(cand.fn_id)
+					if cand.fn_id is not None and ctx.signatures_by_id is not None
+					else None
+				)
+				if _fn_sig_for_overload is None:
+					_fn_sig_for_overload = _sig_from_decl_template(ctx, cand, current_module_name)
+				method_has_own_type_params = bool(
+					_fn_sig_for_overload is not None
+					and (getattr(_fn_sig_for_overload, "type_params", None) or [])
+				)
+				if method_has_own_type_params:
+					exact_param_match = True
+				else:
+					exact_param_match = all(
+						_arg_matches_param(param_type_ids[1 + _i], arg_types[_i])
+						for _i in range(len(arg_types))
+					)
+				receiver_candidates.append((cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, pref, impl_subst, exact_param_match, method_has_own_type_params))
 			if not receiver_candidates:
 				if getattr(expr, "origin", None) == "for_iter" and ctx.signatures_by_id is not None:
 					array_base_id = ctx.type_table.array_base_id()
@@ -2694,6 +2759,66 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				return MethodCallResult(ctx.unknown_ty, None)
 			max_pref = max(item[5] for item in receiver_candidates)
 			pref_candidates = [item for item in receiver_candidates if item[5] == max_pref]
+			# Parameter-type overload disambiguation: if any surviving
+			# candidate has an exact match on its non-receiver parameter
+			# types, drop the candidates that only matched on arity +
+			# receiver compatibility.  Receiver auto-borrow is silent
+			# ergonomics; argument type at the call site is the stronger
+			# expression of user intent, so param-type exact match
+			# dominates.
+			#
+			# Among exact-match candidates, a method WITHOUT its own
+			# type parameters always beats a METHOD-level generic
+			# fallback.  Method-level generic candidates are flagged as
+			# "tentatively exact" upstream (since their parameter types
+			# contain unresolved type variables at this point), but the
+			# user's concrete-typed argument is stronger evidence than
+			# a tentative type-parameter binding.  This makes the
+			# canonical "concrete + generic fallback" pattern resolve
+			# correctly:
+			#
+			#     pub fn pick(self: &Box, k: &String) -> Int { ... }
+			#     pub fn pick<T>(self: &Box, k: T) -> Int { ... }
+			#     b.pick("hello")  // → concrete &String overload
+			#     b.pick(42)       // → generic fallback
+			#
+			# Note: this preference uses METHOD-level type params only
+			# (`sig.type_params`), not impl-block-level type params
+			# (`sig.impl_type_params`).  Impl-block specificity (e.g.
+			# `implement<T> Box<T>` vs `implement Box<Int>`) follows the
+			# v1 spec: no ranking, ambiguous if both apply.  By the time
+			# we reach this code, impl-block substitution has already
+			# been applied to param_type_ids (see line ~2521), so the
+			# regular exact-match check works correctly for impl-block
+			# generics whose method bodies have concrete parameters.
+			#
+			# When all exact-match candidates are method-level generic,
+			# the existing generic dispatch (type inference +
+			# trait-bound checking) at the bottom of the function picks
+			# among them.
+			#
+			# If multiple candidates have the same name/arity/receiver but
+			# none has an exact parameter-type match for the call's args,
+			# the user has called an overloaded method with arguments that
+			# match no overload — that's "no matching overload", not
+			# ambiguity.  Single-candidate cases fall through to existing
+			# behavior unchanged.
+			# item[7] = exact_param_match, item[8] = method_has_own_type_params
+			exact_match_candidates = [item for item in pref_candidates if item[7]]
+			if exact_match_candidates:
+				method_concrete_exacts = [item for item in exact_match_candidates if not item[8]]
+				if method_concrete_exacts:
+					pref_candidates = method_concrete_exacts
+				else:
+					pref_candidates = exact_match_candidates
+			elif len(pref_candidates) > 1:
+				arg_label = ", ".join(_label_typeid(t) for t in arg_types)
+				diagnostics.append(_tc_diag(
+					message=f"no matching overload for method '{expr.method_name}' on receiver {_label_typeid(recv_ty)} with args [{arg_label}]",
+					severity="error",
+					span=getattr(expr, "loc", Span()),
+				))
+				return MethodCallResult(ctx.unknown_ty, None)
 			if len(pref_candidates) > 1:
 				wants_mut = [item for item in pref_candidates if item[4]]
 				if wants_mut and len(wants_mut) != len(pref_candidates):
@@ -2704,7 +2829,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if len(keys) > 1:
 					trait_labels: list[str] = []
 					if ctx.trait_impl_index is not None or trait_impl_fn_id_to_trait:
-						for cand, _sig, _param_type_ids, _needs_autoborrow, _wants_mut_ref, _pref, _impl_subst in pref_candidates:
+						for cand, _sig, _param_type_ids, _needs_autoborrow, _wants_mut_ref, _pref, _impl_subst, _exact_match, _method_tps in pref_candidates:
 							trait_key = None
 							if cand.fn_id is not None and hasattr(ctx.trait_impl_index, "trait_key_for_fn_id"):
 								trait_key = ctx.trait_impl_index.trait_key_for_fn_id(cand.fn_id)
@@ -2727,7 +2852,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					notes: list[str] = []
 					note_by_name: dict[str, str] = {}
 					visibility_provenance = getattr(ctx, "visibility_provenance", None)
-					for cand, _sig, _param_type_ids, _needs_autoborrow, _wants_mut_ref, _pref, _impl_subst in pref_candidates:
+					for cand, _sig, _param_type_ids, _needs_autoborrow, _wants_mut_ref, _pref, _impl_subst, _exact_match, _method_tps in pref_candidates:
 						mod_name = None
 						if cand.fn_id is not None and getattr(cand.fn_id, "module", None):
 							mod_name = cand.fn_id.module
@@ -2774,7 +2899,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						msg = f"ambiguous method '{expr.method_name}' for receiver {_label_typeid(recv_ty)}"
 					diagnostics.append(_tc_diag(message=msg, severity="error", span=getattr(expr, "loc", Span()), notes=notes))
 					return MethodCallResult(ctx.unknown_ty, None)
-			cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, _pref, impl_subst = pref_candidates[0]
+			cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, _pref, impl_subst, _exact_match, _method_tps = pref_candidates[0]
 			ret_id = sig.result_type or ctx.unknown_ty
 			fn_sig = ctx.signatures_by_id.get(cand.fn_id) if cand.fn_id is not None and ctx.signatures_by_id is not None else None
 			if fn_sig is None:
