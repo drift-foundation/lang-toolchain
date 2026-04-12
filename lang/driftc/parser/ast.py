@@ -234,11 +234,24 @@ class FunctionDef:
 	orig_name: str
 	type_params: List[str]
 	params: Sequence[Param]
-	return_type: TypeExpr
+	# `return_type` is `Optional[TypeExpr]` to accommodate the new bare
+	# terminal `throws` form (Phase 1 of the terminal-`throws` work) which has
+	# no return type. For all other forms (`-> T`, `nothrow -> T`,
+	# `throws -> T`) this stays a populated TypeExpr.
+	return_type: Optional[TypeExpr]
 	body: Block
 	loc: Located
 	declared_nothrow: bool = False
+	# `declared_throws` retains its existing meaning: the function was declared
+	# with the value-returning auto-try form `fn f(...) throws -> T`. Body-wide
+	# implicit `Try::into_try` wrapping for `Result<X, E>` expressions in `X`
+	# context applies. See `lang/driftc/type_checker.py:_should_auto_try`.
 	declared_throws: bool = False
+	# `declared_terminal_throws` is the NEW Phase 1 flag for the bare terminal
+	# `throws` form: function never returns normally, every CFG path must end
+	# in `throw` or a tail-call to another terminal-throws function. Phase 2
+	# will enforce body-flow rules keyed on this flag (NOT on declared_throws).
+	declared_terminal_throws: bool = False
 	is_unsafe: bool = False
 	is_pub: bool = False
 	test_build_only: bool = False
@@ -640,12 +653,17 @@ class VariantDef:
 class TraitMethodSig:
 	name: str
 	params: Sequence[Param]
-	return_type: TypeExpr
+	# `return_type` is `Optional[TypeExpr]` to accommodate the bare terminal
+	# `throws` form on trait methods. See `FunctionDef.return_type` above.
+	return_type: Optional[TypeExpr]
 	loc: Located
 	type_params: List[str] = field(default_factory=list)
 	type_param_locs: List[Located] = field(default_factory=list)
 	declared_nothrow: bool = False
+	# Auto-try value-returning `throws -> T` form (existing behavior).
 	declared_throws: bool = False
+	# NEW Phase 1: bare terminal `throws` form. See `FunctionDef` above.
+	declared_terminal_throws: bool = False
 	is_unsafe: bool = False
 
 
@@ -665,12 +683,17 @@ class TraitDef:
 class InterfaceMethodSig:
 	name: str
 	params: Sequence[Param]
-	return_type: TypeExpr
+	# `return_type` is `Optional[TypeExpr]` to accommodate the bare terminal
+	# `throws` form on interface methods. See `FunctionDef.return_type` above.
+	return_type: Optional[TypeExpr]
 	loc: Located
 	type_params: List[str] = field(default_factory=list)
 	type_param_locs: List[Located] = field(default_factory=list)
 	declared_nothrow: bool = False
+	# Auto-try value-returning `throws -> T` form (existing behavior).
 	declared_throws: bool = False
+	# NEW Phase 1: bare terminal `throws` form. See `FunctionDef` above.
+	declared_terminal_throws: bool = False
 	is_unsafe: bool = False
 
 

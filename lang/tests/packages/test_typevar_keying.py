@@ -39,6 +39,10 @@ def test_typevar_identity_ignores_display_name() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["typevar", "pkgA", ["owner", "m", "Box", 0], 0],
+			"2": ["typevar", "pkgA", ["owner", "m", "Box", 0], 0],
+		},
 	}
 	maps = import_type_tables_and_build_typeid_maps([pkg], host)
 	type_map = maps[0]

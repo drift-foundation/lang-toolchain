@@ -47,6 +47,12 @@ implement core.Diagnostic for RegexError {
 	}
 }
 
+implement core.Throw for RegexError {
+	pub fn throw_self(self: RegexError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Public match result
 // ---------------------------------------------------------------------------

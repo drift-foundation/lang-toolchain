@@ -191,6 +191,7 @@ def repair_named_hcall_callinfo(
 			user_ret_type=getattr(sig, "return_type_id"),
 			can_throw=bool(getattr(sig, "declared_can_throw", False)),
 			includes_callee=bool(getattr(info.sig, "includes_callee", False)),
+			declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False)),
 		)
 	return CallInfo(target=CallTarget.direct(fn_id), sig=repaired_sig)
 

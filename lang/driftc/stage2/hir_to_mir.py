@@ -5264,7 +5264,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type, is_terminal_throws=self._is_call_terminal_throws(info))
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call_with_info(stmt.expr, info)
@@ -5279,7 +5279,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type, is_terminal_throws=self._is_call_terminal_throws(info))
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call(expr=stmt.expr)
@@ -5294,7 +5294,7 @@ class HIRToMIR:
 					def emit_call() -> M.ValueId:
 						return fnres_val
 
-					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
+					self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type, is_terminal_throws=self._is_call_terminal_throws(info))
 					return
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_invoke(expr=stmt.expr)
@@ -5318,7 +5318,7 @@ class HIRToMIR:
 				def emit_call() -> M.ValueId:
 					return fnres_val
 
-				self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type)
+				self._lower_can_throw_call_stmt(emit_call=emit_call, ok_ty=info.sig.user_ret_type, is_terminal_throws=self._is_call_terminal_throws(info))
 				return
 			if self._type_table.is_void(info.sig.user_ret_type):
 				self._lower_method_call(expr=stmt.expr)
@@ -6966,20 +6966,69 @@ class HIRToMIR:
 		self._local_types[dest] = ok_ty
 		return dest
 
+	def _is_call_terminal_throws(self, info: "CallInfo") -> bool:
+		"""True if the callee is a terminal-throws function (never returns)."""
+		from lang.driftc.stage1.call_info import CallTargetKind
+		# TRAIT calls carry the flag on CallSig (Phase 3.5).
+		if bool(getattr(info.sig, "declared_terminal_throws", False)):
+			return True
+		# DIRECT calls: look up the callee's FnSignature.
+		if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
+			sig = self._signatures_by_id.get(info.target.symbol)
+			if sig is not None and bool(getattr(sig, "declared_terminal_throws", False)):
+				return True
+		return False
+
 	def _lower_can_throw_call_stmt(
 		self,
 		*,
 		emit_call: callable,
 		ok_ty: TypeId,
+		is_terminal_throws: bool = False,
 	) -> None:
 		"""
 		Lower a can-throw call in a try context as a statement (ignores ok value).
 
 		We still must check for Err and route it to the current try dispatch.
+
+		When `is_terminal_throws` is True, the callee never returns normally —
+		every invocation exits via exception. The ok path is unreachable, so we
+		skip the ok block and join block entirely. Control after the call is
+		dead code; subsequent statements in the enclosing block are not lowered
+		(the caller must handle this, or the checker must have already validated
+		that no live code follows the terminal call).
 		"""
 		fnres_val = emit_call()
 		is_err = self.b.new_temp()
 		self.b.emit(M.ResultIsErr(dest=is_err, result=fnres_val))
+
+		if is_terminal_throws:
+			# Terminal-throws: the callee always throws, so the ok path is
+			# unreachable. Route err to try/propagate; emit an unreachable
+			# ok block so the MIR graph is well-formed.
+			ok_block = self.b.new_block("call_ok_unreachable")
+			err_block = self.b.new_block("call_err")
+
+			self.b.set_terminator(
+				M.IfTerminator(cond=is_err, then_target=err_block.name, else_target=ok_block.name)
+			)
+
+			self.b.set_block(err_block)
+			err_val = self.b.new_temp()
+			self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
+			if self._try_stack:
+				ctx = self._try_stack[-1]
+				self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+				self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
+			else:
+				self._propagate_error(err_val)
+
+			# Unreachable ok block: the callee always throws, so this
+			# block is dead. Mark it unreachable.
+			self.b.set_block(ok_block)
+			self.b.set_terminator(M.Unreachable())
+			# Do NOT set a join block — control is dead after the terminal call.
+			return
 
 		ok_block = self.b.new_block("call_ok")
 		err_block = self.b.new_block("call_err")

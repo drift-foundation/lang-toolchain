@@ -115,7 +115,16 @@ class FnSignature:
 	param_type_ids: Optional[list[TypeId]] = None
 	return_type_id: Optional[TypeId] = None
 	declared_can_throw: Optional[bool] = None
+	# Auto-try value-returning `throws -> T` form (existing behavior). Body-wide
+	# implicit `Try::into_try` wrapping for `Result<X, E>` expressions in `X`
+	# context applies. See `lang/driftc/type_checker.py:_should_auto_try`.
 	declared_throws: bool = False
+	# NEW Phase 1: bare terminal `throws` form. Function never returns normally;
+	# every CFG path must terminate via `throw` or tail-call to another terminal
+	# `throws` function. Phase 2 will introduce body-flow enforcement keyed on
+	# this flag (NOT on declared_throws). Phase 0's missing-return checker
+	# already skips functions where this flag is set.
+	declared_terminal_throws: bool = False
 	declared_unsafe: Optional[bool] = None
 	is_extern: bool = False
 	is_extern_c: bool = False
@@ -550,7 +559,9 @@ class Checker:
 
 				return_type_id = sig.return_type_id
 				error_type_id = sig.error_type_id
-				if return_type_id is None or sig.param_type_ids is None:
+				# Terminal-throws functions have no return type; allow None.
+				_missing_ret = return_type_id is None and not bool(getattr(sig, "declared_terminal_throws", False))
+				if _missing_ret or sig.param_type_ids is None:
 					diagnostics.append(
 						_chk_diag(
 							message=f"typecheck contract failure: signature for '{sig.name}' is missing TypeIds",
@@ -804,18 +815,45 @@ class Checker:
 					)
 				)
 
-		# Terminal-flow check (Phase 0 of the terminal-`throws` work):
-		# every non-Void function must terminate on all paths via `return`,
-		# `throw`, or `rethrow`. Closes the long-standing hole where missing
-		# returns slipped past the checker and crashed MIR lowering with an
-		# AssertionError.
-		for fn_id, hir_block in self._hir_blocks_by_id.items():
-			info = fn_infos.get(fn_id)
-			if info is None:
-				continue
-			if fn_id in skip_validation:
-				continue
-			self._check_terminal_returns(fn_id, hir_block, info, diagnostics)
+		# Terminal-flow checks (Phase 0 + Phase 2 of the terminal-`throws` work).
+		# Phase 0: every non-Void value-returning function must terminate on
+		#   all paths via `return`, `throw`, or `rethrow`.
+		# Phase 2: every bare terminal `throws` function must terminate on all
+		#   paths via `throw`/`rethrow` or a tail call to another terminal
+		#   `throws` function, AND must contain no `return` statements.
+		# Both checks share the same `_is_terminal_block` walker; Phase 2's
+		# extension recognizes calls to terminal-`throws` functions as
+		# terminators, which benefits Phase 0's match-arm/branch analysis as
+		# well (an arm whose only stmt is `fail();` where `fail` is terminal
+		# now counts as terminal for missing-return analysis).
+		#
+		# The walker reads `self._term_call_info` (the per-function call_info
+		# map) and `self._term_fn_infos` (for resolved-callee signature
+		# lookups). Set them per-function before invoking the checks; clear
+		# afterward to avoid leaking state into other validators.
+		try:
+			self._term_fn_infos = fn_infos
+			for fn_id, hir_block in self._hir_blocks_by_id.items():
+				info = fn_infos.get(fn_id)
+				if info is None:
+					continue
+				if fn_id in skip_validation:
+					continue
+				self._term_call_info = self._call_info_by_callsite_id.get(fn_id) or {}
+				# Phase 2 value-position rejection runs FIRST so its clean
+				# diagnostic ("call to terminal `throws` function `<callee>`
+				# cannot be used as a value") takes precedence over the
+				# downstream Unknown-Copy cascade that the same shape would
+				# otherwise produce. Caught by code review of the v1 Phase 2
+				# patch — the user's repro `return fail();` passed typecheck
+				# under v1 and crashed MIR validation with `unresolved layout
+				# type Unknown in MoveOut`.
+				self._check_terminal_throws_value_position(fn_id, hir_block, diagnostics)
+				self._check_terminal_returns(fn_id, hir_block, info, diagnostics)
+				self._check_terminal_throws_body(fn_id, hir_block, info, diagnostics)
+		finally:
+			self._term_call_info = None
+			self._term_fn_infos = None
 
 		# Best-effort call arity/type checks based on FnSignature TypeIds. This
 		# only visits HCall with a plain HVar callee; arg types are unknown here
@@ -3455,14 +3493,19 @@ class Checker:
 	def _is_terminal_block(self, block: "H.HBlock") -> bool:
 		"""
 		Terminal-flow analysis: True iff every CFG path through this block ends in
-		a function-exiting statement (`return`, `throw`, `rethrow`) or recursively
-		in a fully-terminal control-flow construct.
+		a function-exiting statement (`return`, `throw`, `rethrow`, or — Phase 2 —
+		a call to a terminal-`throws` function) or recursively in a fully-terminal
+		control-flow construct.
 
 		A block is terminal as soon as one of its statements is a terminator —
 		statements after that point are unreachable and don't affect the answer.
 
-		Phase 0 scope: explicit `return`/`throw`/`rethrow` only. Phase 2 will extend
-		this to recognize tail calls of `throws`-terminal functions.
+		Phase 2 extension: a statement-position call to a function declared with
+		the bare terminal `throws` form (`declared_terminal_throws=True`) is
+		itself terminal — control never returns from it. The per-function context
+		needed for call resolution is stored on `self._term_call_info` and
+		`self._term_fn_infos` by `_run_terminal_flow_passes` before each function
+		is walked.
 		"""
 		from lang.driftc import stage1 as H
 
@@ -3470,6 +3513,50 @@ class Checker:
 			if self._is_terminal_stmt(stmt):
 				return True
 		return False
+
+	def _is_terminal_throws_call_expr(self, expr: "H.HExpr") -> bool:
+		"""
+		Phase 2/3.5: True iff `expr` is a call (HCall or HMethodCall) whose
+		resolved callee is declared with `declared_terminal_throws=True`.
+
+		Resolution paths:
+		  DIRECT: expr.callsite_id → CallInfo → fn_id
+		    → fn_infos[fn_id].signature.declared_terminal_throws
+		  TRAIT: expr.callsite_id → CallInfo → CallSig.declared_terminal_throws
+		    (populated from the trait method declaration at call resolution time)
+
+		Returns False for INDIRECT/INTRINSIC/CONSTRUCTOR call kinds.
+		"""
+		from lang.driftc import stage1 as H
+
+		if not isinstance(expr, (H.HCall, H.HMethodCall)):
+			return False
+		call_info_map = getattr(self, "_term_call_info", None)
+		if call_info_map is None:
+			return False
+		callsite_id = getattr(expr, "callsite_id", None)
+		if callsite_id is None:
+			return False
+		info = call_info_map.get(callsite_id)
+		if info is None:
+			return False
+		# Phase 3.5: TRAIT and INDIRECT (interface) calls carry
+		# declared_terminal_throws on CallSig, populated from the
+		# trait/interface method declaration at call resolution time.
+		if info.target.kind in (CallTargetKind.TRAIT, CallTargetKind.INDIRECT):
+			return bool(getattr(info.sig, "declared_terminal_throws", False))
+		if info.target.kind is not CallTargetKind.DIRECT:
+			return False
+		callee_fn_id = info.target.symbol
+		if callee_fn_id is None:
+			return False
+		fn_infos_map = getattr(self, "_term_fn_infos", None)
+		if fn_infos_map is None:
+			return False
+		callee_info = fn_infos_map.get(callee_fn_id)
+		if callee_info is None or callee_info.signature is None:
+			return False
+		return bool(getattr(callee_info.signature, "declared_terminal_throws", False))
 
 	def _is_terminal_stmt(self, stmt: "H.HStmt") -> bool:
 		"""See `_is_terminal_block` for the contract."""
@@ -3532,8 +3619,14 @@ class Checker:
 			# loop bodies.
 			return not self._block_contains_reachable_break(stmt.body)
 		if isinstance(stmt, H.HExprStmt):
-			# Match-as-statement is the load-bearing case here: an HMatchExpr at
-			# statement position is terminal iff every arm's block is terminal.
+			# Phase 2: a statement-position call to a terminal-`throws` function
+			# is itself terminal — control never returns from it. This is the
+			# load-bearing case for the user's example
+			# `Err(err) => { (move err).throw_self(); }` arm.
+			if self._is_terminal_throws_call_expr(stmt.expr):
+				return True
+			# Match-as-statement: an HMatchExpr at statement position is
+			# terminal iff every arm's block is terminal.
 			return self._is_terminal_expr(stmt.expr)
 		# HLet, HLocalConst, HAssign, HAugAssign, HBreak, HContinue, HAssert,
 		# and any other statement form do not terminate the function in Phase 0.
@@ -3541,16 +3634,23 @@ class Checker:
 
 	def _is_terminal_expr(self, expr: "H.HExpr") -> bool:
 		"""
-		Phase 0 only recognizes `match` as a terminal-by-arms expression at
-		statement position. Other expressions (calls, ternaries, etc.) are not
-		terminal in Phase 0; Phase 2 will extend this for `throws`-terminal calls.
+		Phase 2 recognizes `match` as a terminal-by-arms expression at
+		statement position. Each arm is terminal iff its block is terminal —
+		the arm's `result` expression is NOT considered for the terminal
+		decision because if a terminal-throws call appeared there, it would
+		be in value position (the match's result type would inherit it),
+		which is rejected by `_check_terminal_throws_value_position`. Users
+		who want a tail-call-throws arm must use the block form
+		`B => { fail(); }` rather than `B => fail()`.
+
+		The terminal-throws-call extension to `_is_terminal_stmt`
+		(via `_is_terminal_throws_call_expr`) handles statement-position
+		calls separately, including the load-bearing
+		`Err(err) => { (move err).throw_self(); }` shape.
 		"""
 		from lang.driftc import stage1 as H
 
 		if isinstance(expr, H.HMatchExpr):
-			# Every arm's block must be terminal. The arm's `result` expression,
-			# if present, runs *after* the block, so it is only reached when the
-			# block is non-terminal. We require the block itself to be terminal.
 			for arm in expr.arms:
 				if not self._is_terminal_block(arm.block):
 					return False
@@ -3662,6 +3762,19 @@ class Checker:
 		# Bodyless declarations have no CFG to analyze.
 		if sig.is_intrinsic or sig.is_extern or sig.is_extern_c:
 			return
+		# Phase 1 v3 of terminal-`throws`: only the BARE TERMINAL form
+		# (`fn f() throws`) is exempt from Phase 0's missing-value-return
+		# check — those functions have no return type at all and Phase 2
+		# will introduce a separate body-flow check requiring every path to
+		# `throw` or tail-call another terminal-throws function.
+		#
+		# The auto-try value-returning form (`fn f() throws -> T`) is NOT
+		# exempt: it still returns T, the missing-return contract still
+		# applies, and the body-wide auto-try only changes how Result-typed
+		# expressions lower (it does NOT change the function's return
+		# obligation).
+		if getattr(sig, "declared_terminal_throws", False):
+			return
 		ret_tid = sig.return_type_id
 		if ret_tid is None:
 			return
@@ -3679,6 +3792,418 @@ class Checker:
 				span=Span.from_loc(getattr(sig, "loc", None)),
 			)
 		)
+
+	def _collect_return_statements(self, block: "H.HBlock") -> list["H.HReturn"]:
+		"""
+		Phase 2 helper: walk an HBlock recursively and return every `HReturn`
+		statement found anywhere in the body, including inside nested blocks,
+		if/else branches, match arms, try/catch arms, loops, and unsafe blocks.
+
+		Used by `_check_terminal_throws_body` to flag every `return` statement
+		inside a bare terminal `throws` function. The user's contract:
+		`return`, `return value`, and fallthrough are checker errors in
+		terminal-throws bodies.
+		"""
+		from lang.driftc import stage1 as H
+
+		out: list[H.HReturn] = []
+
+		def walk_stmt(stmt: "H.HStmt") -> None:
+			if isinstance(stmt, H.HReturn):
+				out.append(stmt)
+				return
+			if isinstance(stmt, (H.HThrow, H.HRethrow, H.HBreak, H.HContinue)):
+				return
+			if isinstance(stmt, H.HBlock):
+				for s in stmt.statements:
+					walk_stmt(s)
+				return
+			if isinstance(stmt, H.HUnsafeBlock):
+				for s in stmt.block.statements:
+					walk_stmt(s)
+				return
+			if isinstance(stmt, H.HIf):
+				for s in stmt.then_block.statements:
+					walk_stmt(s)
+				if stmt.else_block is not None:
+					for s in stmt.else_block.statements:
+						walk_stmt(s)
+				return
+			if isinstance(stmt, H.HLoop):
+				for s in stmt.body.statements:
+					walk_stmt(s)
+				return
+			if isinstance(stmt, H.HTry):
+				for s in stmt.body.statements:
+					walk_stmt(s)
+				for arm in stmt.catches:
+					for s in arm.block.statements:
+						walk_stmt(s)
+				return
+			if isinstance(stmt, H.HExprStmt) and isinstance(stmt.expr, H.HMatchExpr):
+				for arm in stmt.expr.arms:
+					for s in arm.block.statements:
+						walk_stmt(s)
+				return
+			# HLet, HLocalConst, HAssign, HAugAssign, HAssert, HExprStmt
+			# (non-match): expression evaluation cannot syntactically contain a
+			# `return` statement in Drift v1.
+
+		for s in block.statements:
+			walk_stmt(s)
+		return out
+
+	def _check_terminal_throws_value_position(
+		self,
+		fn_id: FunctionId,
+		hir_block: "H.HBlock",
+		diagnostics: list[Diagnostic],  # type: ignore[name-defined]
+	) -> None:
+		"""
+		Phase 2: reject any direct call to a terminal-`throws` function that
+		appears in value position (anywhere other than the immediate
+		expression of an `HExprStmt`). Terminal-throws functions have no
+		return type, so a value-position use lowers as `Unknown` and either
+		crashes MIR validation (`unresolved layout type Unknown in MoveOut`)
+		or produces a cascade of confusing `cannot copy 'x': type 'Unknown'`
+		errors. Closing the hole at the checker level gives users a clean,
+		intentional diagnostic instead of an internal compiler bug.
+
+		Allowed:
+		  - `fail();` at statement position (`HExprStmt(HCall(fail))`)
+		  - inside a block-form arm: `B => { fail(); }`
+		  - inside a block-form branch: `else { fail(); }`
+
+		Rejected:
+		  - `return fail();`
+		  - `val x = fail();`
+		  - `f(fail(), other_arg)`
+		  - `1 + fail()`
+		  - `B => fail()` (bare-expression-form arm — must use block form)
+		  - `let x = match c { A => 1, B => fail() };` (value-position match)
+		  - any other expression-position use
+
+		Algorithm: single-pass recursive walker over the function body. Each
+		expression visit carries an `in_discard` flag — True iff the
+		expression is the immediate child of an `HExprStmt` (the only
+		legitimate discard position) OR the result expression of an
+		HUnsafeExpr/HTryExpr at statement position. False otherwise. When
+		the walker encounters a terminal-throws call expression with
+		`in_discard=False`, it emits the rejection diagnostic.
+
+		The walker MUST NOT recurse into nested closures (`HLambda`) —
+		those are independent functions and their own bodies will be
+		checked when the per-function loop reaches them.
+		"""
+		from lang.driftc import stage1 as H
+
+		def visit_stmt(stmt: "H.HStmt") -> None:
+			if isinstance(stmt, H.HReturn):
+				if stmt.value is not None:
+					visit_expr(stmt.value, in_discard=False)
+				return
+			if isinstance(stmt, H.HThrow):
+				# `throw <expr>` — the expr is the exception constructor.
+				# It is not a discard position for the call detection
+				# (terminal-throws calls there would be value-position).
+				visit_expr(stmt.value, in_discard=False)
+				return
+			if isinstance(stmt, H.HRethrow):
+				return
+			if isinstance(stmt, H.HExprStmt):
+				# The statement-position immediate child IS in discard
+				# position; this is the only legitimate position for a
+				# terminal-throws call.
+				visit_expr(stmt.expr, in_discard=True)
+				return
+			if isinstance(stmt, H.HLet):
+				visit_expr(stmt.value, in_discard=False)
+				return
+			if isinstance(stmt, H.HLocalConst):
+				visit_expr(stmt.value, in_discard=False)
+				return
+			if isinstance(stmt, H.HAssign):
+				visit_expr(stmt.value, in_discard=False)
+				visit_expr(stmt.target, in_discard=False)
+				return
+			if isinstance(stmt, H.HAugAssign):
+				visit_expr(stmt.value, in_discard=False)
+				visit_expr(stmt.target, in_discard=False)
+				return
+			if isinstance(stmt, H.HIf):
+				visit_expr(stmt.cond, in_discard=False)
+				for s in stmt.then_block.statements:
+					visit_stmt(s)
+				if stmt.else_block is not None:
+					for s in stmt.else_block.statements:
+						visit_stmt(s)
+				return
+			if isinstance(stmt, H.HLoop):
+				for s in stmt.body.statements:
+					visit_stmt(s)
+				return
+			if isinstance(stmt, H.HTry):
+				for s in stmt.body.statements:
+					visit_stmt(s)
+				for arm in stmt.catches:
+					for s in arm.block.statements:
+						visit_stmt(s)
+				return
+			if isinstance(stmt, H.HBlock):
+				for s in stmt.statements:
+					visit_stmt(s)
+				return
+			if isinstance(stmt, H.HUnsafeBlock):
+				for s in stmt.block.statements:
+					visit_stmt(s)
+				return
+			if isinstance(stmt, H.HAssert):
+				visit_expr(stmt.cond, in_discard=False)
+				if stmt.msg is not None:
+					visit_expr(stmt.msg, in_discard=False)
+				return
+			# HBreak, HContinue: leaf statements with no expression slots.
+
+		def visit_expr(expr: "H.HExpr", *, in_discard: bool) -> None:
+			if expr is None:
+				return
+			# Check this expression: if it is a terminal-throws call and is
+			# NOT at a discard position, reject it.
+			if self._is_terminal_throws_call_expr(expr) and not in_discard:
+				callee_name = self._terminal_throws_callee_name(expr)
+				diagnostics.append(
+					_chk_diag(
+						message=(
+							f"call to terminal `throws` function "
+							f"`{callee_name}` cannot be used as a value "
+							f"(it never returns); use it as a statement "
+							f"like `{callee_name}();` instead"
+						),
+						severity="error",
+						span=getattr(expr, "loc", Span()) or Span(),
+					)
+				)
+				# Don't recurse into a rejected call's args; the error is
+				# already reported and arg recursion may produce noisy
+				# duplicates. Continue checking siblings via the caller.
+				return
+			# Recurse into sub-expressions. Sub-expressions are NEVER in
+			# discard position (the discard flag only applies to the
+			# immediate child of an HExprStmt).
+			if isinstance(expr, H.HCall):
+				visit_expr(expr.fn, in_discard=False)
+				for a in expr.args:
+					visit_expr(a, in_discard=False)
+				for kw in getattr(expr, "kwargs", []) or []:
+					visit_expr(kw.value, in_discard=False)
+				return
+			if isinstance(expr, H.HMethodCall):
+				visit_expr(expr.receiver, in_discard=False)
+				for a in expr.args:
+					visit_expr(a, in_discard=False)
+				for kw in getattr(expr, "kwargs", []) or []:
+					visit_expr(kw.value, in_discard=False)
+				return
+			if isinstance(expr, H.HInvoke):
+				visit_expr(expr.callee, in_discard=False)
+				for a in expr.args:
+					visit_expr(a, in_discard=False)
+				for kw in getattr(expr, "kwargs", []) or []:
+					visit_expr(kw.value, in_discard=False)
+				return
+			if isinstance(expr, H.HBinary):
+				visit_expr(expr.left, in_discard=False)
+				visit_expr(expr.right, in_discard=False)
+				return
+			if isinstance(expr, H.HUnary):
+				visit_expr(expr.expr, in_discard=False)
+				return
+			if isinstance(expr, H.HTernary):
+				visit_expr(expr.cond, in_discard=False)
+				visit_expr(expr.then_expr, in_discard=False)
+				visit_expr(expr.else_expr, in_discard=False)
+				return
+			if isinstance(expr, H.HMatchExpr):
+				visit_expr(expr.scrutinee, in_discard=False)
+				# Each arm: walk block statements as statements (HExprStmt
+				# children there are in discard position via visit_stmt),
+				# then walk arm.result as a value-position expression
+				# (since it contributes to the match's result type, even
+				# if the match itself is at statement position — there is
+				# no propagation of the outer in_discard down to arm.result
+				# because Drift's match-as-expression always produces a
+				# typed value).
+				for arm in expr.arms:
+					for s in arm.block.statements:
+						visit_stmt(s)
+					if arm.result is not None:
+						visit_expr(arm.result, in_discard=False)
+				return
+			if isinstance(expr, H.HField):
+				visit_expr(expr.subject, in_discard=False)
+				return
+			if isinstance(expr, H.HIndex):
+				visit_expr(expr.subject, in_discard=False)
+				visit_expr(expr.index, in_discard=False)
+				return
+			if isinstance(expr, H.HBorrow):
+				visit_expr(expr.subject, in_discard=False)
+				return
+			if isinstance(expr, H.HMove):
+				visit_expr(expr.subject, in_discard=False)
+				return
+			if isinstance(expr, H.HCopy):
+				visit_expr(expr.subject, in_discard=False)
+				return
+			if isinstance(expr, H.HCast):
+				visit_expr(expr.value, in_discard=False)
+				return
+			if isinstance(expr, H.HUnsafeExpr):
+				for s in expr.body.statements:
+					visit_stmt(s)
+				visit_expr(expr.result, in_discard=False)
+				return
+			if isinstance(expr, H.HArrayLiteral):
+				for el in expr.elements:
+					visit_expr(el, in_discard=False)
+				return
+			if isinstance(expr, H.HMapLiteral):
+				for entry in expr.entries:
+					visit_expr(entry.key, in_discard=False)
+					visit_expr(entry.value, in_discard=False)
+				return
+			if isinstance(expr, H.HExceptionInit):
+				for a in expr.pos_args:
+					visit_expr(a, in_discard=False)
+				for kw in expr.kw_args:
+					visit_expr(kw.value, in_discard=False)
+				return
+			if isinstance(expr, H.HResultOk):
+				visit_expr(expr.value, in_discard=False)
+				return
+			if isinstance(expr, H.HFString):
+				for hole in expr.holes:
+					visit_expr(hole.expr, in_discard=False)
+				return
+			if isinstance(expr, H.HTryExpr):
+				visit_expr(expr.attempt, in_discard=False)
+				for arm in expr.arms:
+					for s in arm.block.statements:
+						visit_stmt(s)
+					if arm.result is not None:
+						visit_expr(arm.result, in_discard=False)
+				return
+			if isinstance(expr, H.HPlaceExpr):
+				visit_expr(expr.base, in_discard=False)
+				for proj in expr.projections:
+					if isinstance(proj, H.HPlaceIndex):
+						visit_expr(proj.index, in_discard=False)
+				return
+			# HLambda: do NOT recurse — its body is an independent function
+			# checked separately by the per-function loop.
+			# HVar, HSelfRef, HLiteral*, HQualifiedMember, HFnPtrConst,
+			# HTypeApp, HDVInit: leaf nodes or cannot syntactically contain
+			# a call expression at user level.
+
+		for s in hir_block.statements:
+			visit_stmt(s)
+
+	def _terminal_throws_callee_name(self, expr: "H.HExpr") -> str:
+		"""Best-effort callee display name for diagnostic messages on the
+		value-position rejection. Returns the bare symbol name (no
+		backticks; the caller wraps in backticks where needed). Falls back
+		to a generic placeholder if the callee can't be resolved (which
+		shouldn't happen since `_is_terminal_throws_call_expr` already
+		verified the call is direct).
+		"""
+		from lang.driftc import stage1 as H
+
+		call_info_map = getattr(self, "_term_call_info", None)
+		if call_info_map is None:
+			return "<unknown>"
+		callsite_id = getattr(expr, "callsite_id", None)
+		if callsite_id is None:
+			return "<unknown>"
+		info = call_info_map.get(callsite_id)
+		if info is None or info.target.symbol is None:
+			return "<unknown>"
+		fn_infos_map = getattr(self, "_term_fn_infos", None)
+		if fn_infos_map is None:
+			return info.target.symbol.name
+		callee_info = fn_infos_map.get(info.target.symbol)
+		if callee_info is None or callee_info.signature is None:
+			return info.target.symbol.name
+		return callee_info.signature.name
+
+	def _check_terminal_throws_body(
+		self,
+		fn_id: FunctionId,
+		hir_block: "H.HBlock",
+		info: FnInfo,
+		diagnostics: list[Diagnostic],  # type: ignore[name-defined]
+	) -> None:
+		"""
+		Phase 2: enforce the body-flow contract for bare terminal `throws`
+		functions.
+
+		Two rules:
+		  1. The body must NOT contain any `return` statement (with or without
+		     value). `return`/`return v` are forbidden inside terminal-throws
+		     bodies; the function exits exclusively via `throw`/`rethrow` or by
+		     tail-calling another terminal-throws function.
+		  2. Every CFG path through the body must end in a terminator: `throw`,
+		     `rethrow`, or a call to another terminal-throws function. Falling
+		     off the end of the body is an error.
+
+		Skipped for: bodyless declarations (intrinsic, extern, extern C),
+		non-terminal functions (handled by Phase 0's `_check_terminal_returns`).
+
+		Per-function call resolution context (`self._term_call_info`,
+		`self._term_fn_infos`) must be set by the caller before invoking this
+		method, since the terminal-call detection in `_is_terminal_block` looks
+		callees up via the call_info map.
+		"""
+		sig = info.signature
+		if sig is None:
+			return
+		if not getattr(sig, "declared_terminal_throws", False):
+			return
+		# Bodyless declarations have no CFG to analyze. (Phase 1 v3 already
+		# rejects `@intrinsic + bare terminal throws` at the parser level, so
+		# this case is mostly defensive — extern declarations cannot use the
+		# bare terminal form because their grammar requires NOTHROW.)
+		if sig.is_intrinsic or sig.is_extern or sig.is_extern_c:
+			return
+
+		# Rule 1: no `return` statements anywhere in the body.
+		for ret_stmt in self._collect_return_statements(hir_block):
+			diagnostics.append(
+				_chk_diag(
+					message=(
+						f"terminal `throws` function {function_symbol(fn_id)} cannot use `return`; "
+						f"terminate via `throw` or a tail call to another terminal-`throws` function"
+					),
+					severity="error",
+					span=getattr(ret_stmt, "loc", Span()),
+				)
+			)
+
+		# Rule 2: every CFG path must terminate via throw/rethrow or a tail
+		# call to another terminal-throws function. The same `_is_terminal_block`
+		# helper Phase 0 uses applies — Phase 2 only adds the terminal-call
+		# branch to its dispatch.
+		if not self._is_terminal_block(hir_block):
+			diagnostics.append(
+				_chk_diag(
+					message=(
+						f"terminal `throws` function {function_symbol(fn_id)} must terminate every path "
+						f"via `throw` or a tail call to another terminal-`throws` function "
+						f"(some paths fall through without throwing)"
+					),
+					severity="error",
+					span=Span.from_loc(getattr(sig, "loc", None)),
+				)
+			)
 
 	def _void_rules_on_stmt(self, stmt: "H.HStmt", ctx: "_TypingContext") -> None:
 		"""
@@ -3982,7 +4507,10 @@ class Checker:
 				else:
 					fn_is_can_throw = bool(sig.declared_can_throw) if sig else False
 
-				if sig and sig.return_type_id is not None:
+				# Terminal-throws functions have no return type; treat as void.
+				if sig and bool(getattr(sig, "declared_terminal_throws", False)):
+					fn_is_void = True
+				elif sig and sig.return_type_id is not None:
 					# Surface return type is `T`. If the function is can-throw, the
 					# internal ABI return is `FnResult<T, Error>`.
 					fn_is_void = self._type_table.is_void(sig.return_type_id)

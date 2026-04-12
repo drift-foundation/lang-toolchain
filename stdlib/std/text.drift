@@ -95,6 +95,12 @@ implement core.Diagnostic for Utf8Error {
 	}
 }
 
+implement core.Throw for Utf8Error {
+	pub fn throw_self(self: Utf8Error) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 /// Error from text operations such as `substring` or `char_at`.
 pub struct TextError {
 	pub tag: String,
@@ -104,6 +110,12 @@ pub struct TextError {
 implement core.Diagnostic for TextError {
 	pub fn to_diag(self: &TextError) nothrow -> DiagnosticValue {
 		return DiagnosticValue::String(self.tag);
+	}
+}
+
+implement core.Throw for TextError {
+	pub fn throw_self(self: TextError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
 	}
 }
 

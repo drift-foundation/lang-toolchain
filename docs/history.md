@@ -1,7 +1,407 @@
 # Drift development history
 
+## 2026-04-12
+- **Terminal `throws` release completion, typed `Result.or_throw()`, and canonical test coverage (0.27.186, ABI 8)**:
+  This completes the terminal `throws` / typed `or_throw()` workstream
+  that started in 0.27.182.
+
+  Compiler updates:
+    - Trait and interface terminal method calls now preserve
+      `declared_terminal_throws` through `CallSig`, so checker terminal-flow
+      analysis and stage2 lowering see terminal calls consistently.
+    - Trait and interface impl validation now requires terminal shape to
+      match exactly and reports
+      `E_TRAIT_METHOD_TERMINAL_THROWS_MISMATCH` /
+      `E_INTERFACE_METHOD_TERMINAL_THROWS_MISMATCH`.
+    - Package-decoded terminal signatures with `return_type_id=None` are
+      accepted through impl validation and skip return comparison only after
+      terminal shape matches.
+    - `CallSig` retarget/rebuild paths now preserve
+      `declared_terminal_throws`, including generic instantiation rewrites,
+      indirect-to-direct method rewrites, boundary-adjusted method calls,
+      hidden-lambda repair, can-throw alignment, and call-contract repair.
+    - Stage2 lowers statement-position can-throw terminal calls with an
+      unreachable ok path instead of a live join block. LLVM lowering uses
+      `Void` as the `FnResult` ok type for terminal-throws functions.
+
+  Stdlib updates:
+    - Added `std.core.Throw` with `fn throw_self(self: Self) throws`.
+    - Rebound owned `Result<OkT, ErrT>` `Try<OkT>` from
+      `ErrT is Diagnostic` to `ErrT is Throw`.
+    - Removed borrowed `Try for &Result`; `.or_throw()` is intentionally
+      owned-only.
+    - Removed the free `core.or_throw(result)` helper; use the method form,
+      e.g. `(move r).or_throw()`.
+    - Added scalar `Throw` impls for `Int`, `Uint`, `Bool`, `Float`,
+      `String`, and `DiagnosticValue`, throwing `ResultError` as the stable
+      generic diagnostic fallback.
+    - `std.json.JsonErrorData` now throws typed `JsonError`; stdlib error
+      types without dedicated domain exceptions throw `ResultError` fallback.
+
+  Docs and tests:
+    - `docs/effective-drift.md` documents the two `throws` forms, terminal
+      calls as local terminators, typed `.or_throw()` through `Throw`, custom
+      `Throw` impls, and the owned-only result-unwrapping contract.
+    - `just test` now includes `lang/tests/packages` and `lang/tests/traits`.
+    - Added `lang-packages-test`, `lang-traits-test`, and
+      `test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary`.
+      The shard contract is now explicit:
+      `test-shard-1 + test-shard-2 + test-shard-3 == just test`.
+    - The new pytest targets inherit environment variables such as
+      `DRIFT_MEMCHECK`, `DRIFT_ASAN`, and `PYTEST_JOBS`; they do not
+      special-case or clear the environment.
+    - Stale package tests were updated for canonical keys, the current
+      `--package-root` / `--dep PKG@VERSION` contract, and current IR naming.
+    - The heavy deep-nested generic pipeline depth was reduced from 2000 to
+      1000 to remove a full-suite long-tail bottleneck while preserving the
+      recursion-safety check.
+
+  Validation note: focused reruns of the five timeout cases under memcheck
+  passed in parallel in roughly 20 seconds. The earlier failures occurred
+  during a full-suite `-n16` memcheck run and are currently classified as
+  resource contention, not a code regression. Do not describe that run as a
+  clean full-suite pass; use a lower job cap for full-suite memcheck lanes.
+
+  No ABI change: `DRIFT_RT_ABI_VERSION` stays at 8. `DRIFTC_VERSION` bumps
+  from 0.27.185 to 0.27.186.
+
 ## 2026-04-11
+- **Terminal `throws` Phase 3 — package metadata round-trip for declared_throws / declared_terminal_throws / declared_nothrow on trait methods (0.27.185, ABI 8)**:
+  Scope note: this is **internal compiler hardening only**, not a
+  downstream release candidate. Phase 3 closes the package
+  serialization gap for `declared_throws`, `declared_terminal_throws`,
+  and (incidentally co-located) `declared_nothrow` on trait methods.
+  Cross-package consumers now see the producer's full intent for
+  these flags. The web/app `or_throw()` thread is still not closed:
+  Phase 4 (`std.core.Throw` trait + `Try`/`or_throw` rebind +
+  stdlib error impls + framework regression) and Phase 5 (Effective
+  Drift docs) still need to land.
+
+  Hole shape: an audit of the package serialization layer found
+  that NEITHER `declared_throws` (auto-try value-returning form)
+  NOR `declared_terminal_throws` (bare terminal form) survived any
+  round-trip. Cross-package consumers always saw both flags as
+  False. The user's earlier "declared_throws is already
+  round-tripped" claim was inaccurate — the encoder writes
+  `declared_can_throw` (the boundary ABI flag, True iff non-nothrow)
+  but neither parser-level throws flag.
+
+  Affected sites (4 round-trip pairs + 1 trait method follow-up):
+    1. `FnSignature` encoder
+       (`provisional_dmir_v0.py:1057` area).
+    2. `FnSignature` decoder (`driftc.py:8120` area).
+    3. `InterfaceMethodSchema` encoder
+       (`provisional_dmir_v0.py:819` area).
+    4. `InterfaceMethodSchema` decoder
+       (`type_table_link_v0.py:355` area).
+    5. Trait method definition encoder/decoder (`driftc.py:1605`
+       encoder + `driftc.py:1837` decoder, in the iface payload).
+       This is technically a Phase 3 follow-up because the existing
+       trait/impl matching at `type_checker.py:1349` reads
+       `trait_method.declared_throws` AND
+       `trait_method.declared_nothrow` for compat checking — but
+       BOTH fields were silently dropped on the trait method
+       round-trip, meaning cross-package trait/impl matching was
+       already broken for the auto-try shape (a pre-existing bug
+       Phase 3 closes by adding all three flags to the trait
+       method encoder/decoder simultaneously).
+
+  All decoders default missing fields to False for forward
+  compatibility — old packages (pre-Phase-3) can still be loaded.
+
+  No `DRIFT_RT_ABI_VERSION` bump: package schema is purely additive.
+  Old consumers can still load Phase 3 packages and Phase 3
+  consumers can still load old packages. Runtime calling convention
+  is unchanged. `DRIFTC_VERSION` bumps from 0.27.184 to 0.27.185
+  per the "compiler version bump for behavior-changing fixes" rule
+  — cross-package matching outcomes can change for any trait/impl
+  pair where the flags previously defaulted to False.
+
+  Regression coverage
+  (`lang/tests/packages/test_throws_flags_round_trip_phase3.py`,
+  7 cases — written first, baseline confirmed against the Phase 2
+  working tree before Phase 3 enforcement landed):
+    - InterfaceMethodSchema round-trip (3): `declared_throws=True`
+      (auto-try), `declared_terminal_throws=True` (terminal, with
+      `return_type=None` invariant pinned), neither flag set.
+    - FnSignature round-trip via `encode_signatures` (3): same
+      three flag combinations. Asserts the encoded dict carries the
+      new fields with the right values.
+    - Forward compatibility (1): a payload with the new fields
+      stripped decodes with both flags defaulting to False.
+
+  Validated (in-memory plumbing — runtime auto-try semantic and
+  cross-package end-to-end behavior were NOT independently
+  re-verified by Phase 3 alone; same caveat as Phase 1 v3 / Phase 2):
+    - 7 new Phase 3 unit tests pass (run with `-n auto`).
+    - Full unfiltered driver/checker/parser/stage1/stage2/packages
+      slice passes.
+    - Full e2e codegen sweep passes (sequenced solo).
+    - Phase 0/1 v3/Phase 2 prior tests still green.
+
+  No ABI change: `DRIFT_RT_ABI_VERSION` stays at 8.
+  `DRIFTC_VERSION` bumps from 0.27.184 to 0.27.185.
+
+- **Terminal `throws` Phase 2 — body-flow enforcement and call-site terminator semantics (0.27.184, ABI 8)**:
+  Scope note: this is **internal compiler hardening only**, not a
+  downstream release candidate. Phase 2 adds the real semantics for
+  the bare terminal `throws` form (introduced as plumbing in Phase 1
+  v3 / 0.27.183). The web/app `or_throw()` thread is still not
+  closed: Phase 3 (package metadata round-trip) and Phase 4
+  (`std.core.Throw` trait + `Try`/`or_throw` rebind + stdlib error
+  impls + framework regression) still need to land.
+
+  Body-flow rules for `fn f(...) throws` functions
+  (`Checker._check_terminal_throws_body`):
+    1. No `return` statements anywhere in the body. Both `return;`
+       and `return value;` are checker errors. The function exits
+       exclusively via `throw`/`rethrow` or by tail-calling another
+       terminal-throws function.
+    2. Every CFG path must terminate via `throw`/`rethrow` or a tail
+       call to another terminal-throws function. Falling off the end
+       is a checker error.
+
+  Call-site terminator extension
+  (`_is_terminal_throws_call_expr` + extensions to `_is_terminal_stmt`
+  and `_is_terminal_expr`): a direct call to a terminal-`throws`
+  function is now treated as a terminator at the statement and
+  tail-position-expression level. Resolution:
+  `expr.callsite_id → CallInfo → DIRECT target → fn_id → signature.declared_terminal_throws`.
+  Returns False for INDIRECT/INTRINSIC/CONSTRUCTOR/TRAIT call kinds.
+
+  Shared between Phase 0 and Phase 2: the `_is_terminal_block` walker
+  is the same for both checks. Phase 2's call-site extension also
+  benefits Phase 0's missing-return analysis — a value-returning
+  function whose match arm or if-branch contains only a call to a
+  terminal-throws function now correctly counts as terminal.
+  Caveat: a `nothrow` caller cannot use this pattern because
+  terminal-throws functions may throw and would be rejected by the
+  nothrow checker first; the extension is for **may-throw**
+  value-returning callers.
+
+  Per-function call-resolution context: the `_check_program`
+  per-function loop sets `self._term_call_info` (per-function
+  call_info map) and `self._term_fn_infos` (global fn_infos) before
+  invoking the terminal-flow checks, then clears them in a `finally`
+  block. The walker reads them via `getattr` to stay safe.
+
+  Recursive return collector (`_collect_return_statements`): walks
+  the body finding every `HReturn` statement, including inside
+  nested blocks, if/else, match arms, try/catch, loops, unsafe
+  blocks. Used by Rule 1 to flag every return individually.
+
+  Value-position rejection
+  (`_check_terminal_throws_value_position`): a direct call to a
+  terminal-`throws` function may appear ONLY at statement position
+  (`HExprStmt(HCall)`, value discarded). Anywhere else
+  (`return fail()`, `val x = fail()`, `f(fail(), ...)`,
+  `1 + fail()`, `B => fail()`, value-position match) is a checker
+  error. Caught by code review of the v1 Phase 2 patch: the user's
+  repro `fn pick(b: Bool) -> Int { if b { return 1; } else { return fail(); } }`
+  passed typecheck under v1 (because `_is_terminal_stmt(HReturn)`
+  returns True unconditionally) and crashed MIR validation downstream
+  with `unresolved layout type Unknown in MoveOut for m::pick`.
+  Single-pass walker with an `in_discard` flag carried per expression
+  visit; only the immediate child of `HExprStmt` is in discard
+  position. Diagnostic: `call to terminal `throws` function `<callee>`
+  cannot be used as a value (it never returns); use it as a statement
+  like `<callee>();` instead`. Runs FIRST in the per-function pass
+  loop so its clean diagnostic takes precedence over the cascade of
+  `cannot copy 'x': type 'Unknown'` errors that downstream validators
+  would otherwise produce. Rolled back the v1 Phase 2 `_is_terminal_expr`
+  extension that accepted `arm.result = HCall(terminal)` — that shape
+  is value position by definition. Users must write `B => { fail(); }`
+  (block form) instead of `B => fail()`.
+
+  Regression coverage
+  (`lang/tests/driver/test_throws_terminal_body_flow_phase2.py`,
+  18 cases — written first, baseline confirmed against the Phase 1
+  v3 working tree before Phase 2 enforcement landed):
+    - Body-flow positives (4): throw, tail call to terminal-throws,
+      if/else with both throwing, match with all-terminal arms.
+    - Body-flow negatives (6): bare return, value return,
+      fallthrough, if-without-else, non-terminal match arm, call to
+      non-terminal function.
+    - Call-site terminator positives (2): may-throw match-arm and
+      if-branch shapes — both must compile cleanly under Phase 2.
+    - Value-position rejection negatives (5): `return fail()` (user's
+      repro), `val x = fail()`, `1 + fail()`, `f(fail(), ...)`,
+      `B => fail()` (arm.result form). Each pins the clean checker
+      diagnostic and that no MIR Unknown leak reaches the user.
+    - Value-position acceptance positive (1): `B => { fail(); }`
+      (block-form arm) must continue to compile cleanly.
+
+  Validated (compilation, parsing, in-memory plumbing only —
+  runtime auto-try semantic was NOT independently re-verified, same
+  caveat as Phase 1 v3):
+    - 18 new Phase 2 unit tests pass (12 body-flow + 6 value-position; run with `-n auto`).
+    - Full unfiltered driver/checker/parser/stage1/stage2 slice
+      passes.
+    - Full e2e codegen sweep passes.
+    - Phase 0 and Phase 1 v3 regression tests still pass.
+
+  No ABI change: `DRIFT_RT_ABI_VERSION` stays at 8.
+  `DRIFTC_VERSION` bumps from 0.27.183 to 0.27.184.
+
+- **Terminal `throws` Phase 1 — dual-form grammar/AST/signature plumbing (0.27.183, ABI 8)**:
+  Scope note: this is **internal compiler hardening only**, not a
+  downstream release candidate. Phase 1 wires the parser, AST, and
+  signature plumbing for the NEW bare terminal `throws` form
+  alongside the existing auto-try `throws -> T` form. It does NOT
+  yet enforce body terminality for the new form (Phase 2) or rebind
+  `Try::into_try` to the new `Throw` trait (Phase 4). The web/app
+  `or_throw()` thread is still not closed.
+
+  Design history: Phase 1 went through three drafts. v1/v2 attempted
+  to make `fn f() throws -> T` a parser-level error and treat
+  `throws` as a single new "terminal" keyword. That was wrong: an
+  existing language feature
+  (`lang/driftc/type_checker.py:_should_auto_try`) is keyed on the
+  parser's `declared_throws` flag and gives the `throws -> T` form
+  body-wide implicit `Try::into_try` wrapping. v1/v2 would have
+  broken that for ~18 source files including a downstream-relevant
+  e2e. v3 preserves the existing form and adds the new bare
+  terminal form alongside it.
+
+  The four legal signature shapes:
+
+      fn f(...) -> T              plain may-throw value return, no auto-try
+      fn f(...) nothrow -> T      non-throwing value return
+      fn f(...) throws -> T       value-returning may-throw WITH body-wide
+                                   auto-try (existing). Sets declared_throws=True.
+      fn f(...) throws            NEW: terminal throw-only. Sets
+                                   declared_terminal_throws=True. Phase 2 will
+                                   enforce body-flow termination on this form.
+
+  `nothrow` is mutually exclusive with both `throws` forms. The
+  keyword overload is justified because both forms live in the
+  "exception-capable control flow" domain — the only varying axis is
+  whether a value return type exists.
+
+  Phase 4 implication: once Phase 4 rebinds `Try::into_try` /
+  `or_throw` from `E is Diagnostic → ResultError` to
+  `E is Throw → typed exception`, the existing `throws -> T` form
+  becomes exactly the bulk-conversion shape the app/web teams asked
+  for. Every existing `fn handler() throws -> RestResponse { ... }`
+  automatically gains typed exception propagation through its body
+  with zero source change at the consumer. The dual-form design is
+  what makes this possible.
+
+  - Grammar (`lang/driftc/parser/grammar.lark`): rewrote `func_def`,
+    `trait_method_sig`, and `interface_method_sig` to
+    `((NOTHROW | THROWS)? return_sig | THROWS)`. The first
+    alternative covers nothrow/may-throw/auto-try value-returning
+    forms; the second alternative covers the new bare terminal form.
+  - Two distinct flags: `declared_throws` (existing, auto-try
+    value-returning form) and `declared_terminal_throws` (NEW, bare
+    terminal form). Added the new flag to `parser_ast.FunctionDef`,
+    `parser_ast.TraitMethodSig`, `parser_ast.InterfaceMethodSig`,
+    `_FrontendDecl`, `checker.FnSignature`, and
+    `core.types_core.InterfaceMethodSchema`. Phase 2 will enforce
+    body-flow termination keyed on `declared_terminal_throws`, NOT
+    on `declared_throws`. Do NOT overload one flag to mean both
+    forms — that was the v1/v2 confusion.
+  - `return_type` is now `Optional[TypeExpr]` (parser AST) and
+    `Optional[GenericTypeExpr]` (interface schema). The bare terminal
+    form has no return type and we faithfully record `None`, not a
+    synthesized Void. Readers that previously did unconditional
+    `fn.return_type.name` were audited and updated:
+    `_typeexpr_uses_internal_fnresult` early-returns False on None;
+    `validate_interface_schemas` skips the kind check for terminal
+    methods; `check_interface_impls` skips the return-type
+    comparison; `_call_interface_method` reports `unknown_ty` as
+    the call result (Phase 2 will model the call result properly).
+    The provisional dmir encoder/decoder gracefully writes/reads
+    `null` for terminal interface methods. Package round-trip of
+    `declared_terminal_throws` itself is Phase 3 territory.
+  - Parser builders (`lang/driftc/parser/parser.py`): `_build_function`,
+    `_build_trait_method_sig`, `_build_interface_method_sig` updated.
+    Parse optional NOTHROW or THROWS prefix; peek next child. If
+    return_sig Tree, value-returning form (declared_throws=True iff
+    THROWS prefix). If THROWS without return_sig, terminal form
+    (declared_terminal_throws=True, return_type=None).
+  - Phase 0 interaction
+    (`lang/driftc/checker/__init__.py:_check_terminal_returns`): the
+    early-out is now keyed on `declared_terminal_throws`, NOT on
+    `declared_throws`. The auto-try form `fn f() throws -> T` still
+    returns T, so Phase 0's missing-value-return check still applies
+    to it.
+  - Builder-level rejection `@intrinsic + bare terminal throws`: the
+    intrinsic marker is a prefix on `func_def`, so the grammar cannot
+    express the rejection. Added at the item-processing site in
+    `parser.py`, gated on `declared_terminal_throws` (NOT
+    declared_throws). Diagnostic explicitly mentions both
+    `intrinsic` and `throws`. Note: `@intrinsic fn f() throws -> T;`
+    (auto-try form on intrinsic) IS allowed — auto-try is a no-op on
+    bodyless declarations and removing support would regress
+    existing intrinsic declarations.
+  - `extern "C"` + `throws` already structurally rejected: the
+    existing `extern_fn` grammar requires `NOTHROW` (no THROWS slot
+    exists in either rule). Both forms fail at the parser level.
+  - Type resolver (`lang/driftc/type_resolver.py`): now also reads
+    `declared_terminal_throws` from the parser FunctionDef and
+    propagates it to the checker `FnSignature`.
+  - Regression coverage
+    (`lang/tests/driver/test_throws_signature_phase1.py`, 15 cases
+    — written first, baseline confirmed against the v3 grammar):
+    - Positive: plain `fn f() -> Int` (neither flag),
+      `fn f() nothrow -> Int` (nothrow flag, neither throws flag),
+      `fn f() throws -> Int` (declared_throws=True), bare
+      `fn f() throws` (declared_terminal_throws=True),
+      `pub fn f() throws { ... }`, `implement Foo { pub fn bust ...`
+      in both forms (covers v2 reviewer's `_FrontendDecl` flag-drop
+      fix for both flags), trait methods in both forms, interface
+      methods in both forms (including a pin that the schema's
+      `return_type` is `None` for the terminal form, no Void
+      synthesis).
+    - Negative (structural rejection): `fn f() nothrow throws`,
+      `fn f() nothrow throws -> Int`,
+      `@intrinsic fn boom() throws;`,
+      `extern "C" fn raise_signal() throws;`.
+    - Each positive test introspects the lowered FnSignature (or
+      InterfaceMethodSchema) via `parse_drift_workspace_to_hir` and
+      asserts the right flag combination. Asserting only `rc == 0`
+      would hide flag-drop bugs like the impl-block regression
+      caught in v2 review.
+  - Source scrubs from v2 are reverted. The 14 `.drift` files +
+    4 `.py` test files + `docs/effective-drift.md` instances of
+    `fn ... throws -> Int { ... }` are all RESTORED to their
+    original form. The auto-try semantic is preserved.
+  - Validated (compilation, parsing, in-memory plumbing only —
+    runtime auto-try semantic was NOT independently re-verified):
+    - 15 new Phase 1 v3 unit tests pass. Each positive test
+      introspects the lowered FnSignature/InterfaceMethodSchema
+      directly to assert the right flag combination.
+    - Full unfiltered driver/checker/parser/stage1/stage2 slices
+      pass. Full e2e codegen sweep passes (1124 cases, 0 failures).
+    - The previously broken `std_net_tcp_stress_connections_with_try`
+      compiles cleanly after the v3 rewrite and the e2e runner
+      reports `ok`. **Caution**: this proves the parser/checker no
+      longer regress on the source, but does NOT prove the runtime
+      auto-try semantic is end-to-end correct. The test does network
+      I/O and could pass for unrelated runtime reasons. A targeted
+      standalone auto-try regression test (smaller, no network)
+      would give cleaner evidence; follow-up before Phase 2.
+    - Phase 0's missing-return diagnostic still fires correctly on
+      `fn dangling() nothrow -> Int { val x = 1; }` (verified via
+      direct `--entry` binary build).
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 8. Phase 1 does
+    not change the lowered function signature or exception return
+    shape. `DRIFTC_VERSION` stays at 0.27.183 (the v1/v2 attempts
+    shared this version since they were never committed; v3 reuses
+    it).
+
 - **Missing-return checker hole closed — Phase 0 of terminal `throws` (0.27.182, ABI 8)**:
+  Scope note: this is **internal compiler hardening only**, not a
+  downstream release candidate. Phase 0 closes a real checker hole but
+  does NOT by itself ship the typed `or_throw()` contract the web/app
+  teams requested. That thread requires the full terminal `throws`
+  language feature (Phase 1+2), package metadata propagation
+  (Phase 3), the new `std.core.Throw` trait + `Try`-for-`Result`
+  rebind + per-stdlib-error `Throw` impls (Phase 4), and a downstream
+  framework regression proving typed catch arms (Phase 4d). Do not
+  advertise this version as "or_throw is fixed" to consumers.
+
   Closes a long-standing hole where a non-Void function whose body fell
   through without returning slipped past typechecking entirely and only
   surfaced as `AssertionError("missing return reached MIR lowering

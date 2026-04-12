@@ -50,6 +50,12 @@ implement core.Diagnostic for TimeParseError {
 	}
 }
 
+implement core.Throw for TimeParseError {
+	pub fn throw_self(self: TimeParseError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 pub fn now_monotonic() nothrow -> Instant {
 	return Instant(ticks_ms = thread.now_ms());
 }

@@ -24,6 +24,7 @@ def test_link_imports_module_scoped_scalar_nominal() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "SCALAR", "module_id": "m", "name": "Size"}],
+		"canonical_keys": {"1": ["nominal", "SCALAR", "pkgA", "m", "Size"]},
 	}
 	host = TypeTable()
 	import_type_tables_and_build_typeid_maps([obj], host)

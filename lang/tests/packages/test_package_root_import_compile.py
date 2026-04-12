@@ -68,6 +68,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--package-root",
 			str(tmp_path),
+			"--dep",
+			"lib@0.1.0",
 			"--allow-unsigned-from",
 			str(tmp_path),
 			str(tmp_path / "main.drift"),
@@ -77,4 +79,4 @@ fn main() nothrow -> Int{
 	) == 0
 
 	ir = ir_path.read_text(encoding="utf-8")
-	assert "lib::add__impl" in ir
+	assert "lib::add" in ir

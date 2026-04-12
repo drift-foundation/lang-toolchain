@@ -7543,6 +7543,14 @@ class _FuncBuilder:
 		case we extract `(ok, err)` from the signature's return type directly.
 		"""
 		fn = info or self.fn_info
+		# Terminal-throws functions (bare `throws`, no return type) never
+		# return a value — they always exit via exception. Use Void as the
+		# ok type so FnResult lowering produces a valid ABI carrier.
+		if fn.signature is not None and bool(getattr(fn.signature, "declared_terminal_throws", False)):
+			ok_tid = self.type_table.ensure_void() if self.type_table is not None else None
+			if ok_tid is not None:
+				err_tid = self.type_table.ensure_error()
+				return ok_tid, err_tid
 		ok_tid: TypeId | None = None
 		if fn.signature is not None and fn.signature.return_type_id is not None:
 			ok_tid = fn.signature.return_type_id

@@ -59,6 +59,11 @@ def test_linked_template_round_trips() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "STRUCT", "module_id": "m", "name": "Box"}],
+		"canonical_keys": {
+			"1": ["nominal", "STRUCT", "pkgA", "m", "Box"],
+			"2": ["typevar", "pkgA", ["owner", "m", "Box", 0], 0],
+			"3": ["inst", ["nominal", "STRUCT", "pkgA", "m", "Box"], [["typevar", "pkgA", ["owner", "m", "Box", 0], 0]]],
+		},
 	}
 	host = TypeTable()
 	maps = import_type_tables_and_build_typeid_maps([obj], host)

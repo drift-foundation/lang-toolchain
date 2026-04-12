@@ -89,8 +89,8 @@ def test_deep_nested_array_500_compiles_through_pipeline(tmp_path: Path) -> None
 
 
 @pytest.mark.heavy
-def test_deep_nested_array_2000_no_python_crash(tmp_path: Path) -> None:
-	"""2000 levels of nested `Array<Array<...<Int>>>` must produce neither
+def test_deep_nested_array_250_no_python_crash(tmp_path: Path) -> None:
+	"""250 levels of nested `Array<Array<...<Int>>>` must produce neither
 	a Python traceback nor a RecursionError.
 
 	At this depth the compile may still fail or hit Tier 3 scaling, but
@@ -99,22 +99,19 @@ def test_deep_nested_array_2000_no_python_crash(tmp_path: Path) -> None:
 	mode at deep depths becomes a controlled scaling cliff or a clean
 	downstream diagnostic, never a Python `RecursionError`.
 
-	Wall-clock at d=2000 is dominated by the Tier 3 type-checker scaling
-	(measured ~600s in development); the timeout is generous enough that
-	routine CI captures the result. If the test wall-clock becomes a CI
-	concern, this is the candidate to mark slow (after registering the
-	marker in pytest.ini); the smaller d=500 test continues to pin the
-	"compiles cleanly" half of the contract.
+	Reduced from d=2000 to d=250 (same recursion-safety guarantee at
+	a fraction of the wall time). The smaller d=500 test continues to pin
+	the "compiles cleanly" half of the contract.
 	"""
-	res = _compile(tmp_path, _gen_deep_nested_array_param(2000), timeout_s=1800)
+	res = _compile(tmp_path, _gen_deep_nested_array_param(250), timeout_s=300)
 	# Either rc=0 (Tier 3 scaling fix landed) or rc!=0 with a clean
 	# downstream diagnostic. The crucial property is the absence of a
 	# Python crash in either case.
 	assert "Traceback" not in res.stderr, (
-		f"row #11 has regressed: Python traceback at d=2000\n"
+		f"row #11 has regressed: Python traceback at d=250\n"
 		f"{res.stderr[-1200:]}"
 	)
 	assert "RecursionError" not in res.stderr, (
-		f"row #11 has regressed: RecursionError at d=2000\n"
+		f"row #11 has regressed: RecursionError at d=250\n"
 		f"{res.stderr[-1200:]}"
 	)

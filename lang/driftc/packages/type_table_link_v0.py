@@ -364,14 +364,28 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 					ret_expr = mobj.get("return_type")
 					declared_nothrow = bool(mobj.get("declared_nothrow", False))
 					is_unsafe = bool(mobj.get("is_unsafe", False))
+					# Phase 3 of terminal-`throws`: round-trip both flags. Old
+					# packages built before Phase 3 do not include these
+					# fields; default to False so consumers can still load
+					# them (forward compat).
+					declared_throws = bool(mobj.get("declared_throws", False))
+					declared_terminal_throws = bool(mobj.get("declared_terminal_throws", False))
+					# Phase 1 v3: a `null` return_type indicates the
+					# bare-terminal form. The decoded schema honestly carries
+					# `return_type=None` rather than synthesizing a Void.
+					decoded_return_type = (
+						_decode_generic_type_expr(ret_expr) if ret_expr is not None else None
+					)
 					methods.append(
 						InterfaceMethodSchema(
 							name=mname,
 							params=params,
-							return_type=_decode_generic_type_expr(ret_expr),
+							return_type=decoded_return_type,
 							type_params=m_type_params,
 							declared_nothrow=declared_nothrow,
 							is_unsafe=is_unsafe,
+							declared_throws=declared_throws,
+							declared_terminal_throws=declared_terminal_throws,
 						)
 					)
 			parents: list[GenericTypeExpr] = []

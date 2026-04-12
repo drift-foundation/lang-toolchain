@@ -26,6 +26,9 @@ def _pkg_with_util_struct(*, package_id: str) -> dict[str, object]:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "STRUCT", "module_id": "util", "name": "Foo"}],
+		"canonical_keys": {
+			"1": ["nominal", "STRUCT", package_id, "util", "Foo"],
+		},
 	}
 
 
@@ -55,6 +58,9 @@ def test_link_populates_host_module_packages() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "SCALAR", "module_id": "a.mod", "name": "SizeA"}],
+		"canonical_keys": {
+			"1": ["nominal", "SCALAR", "pkgA", "a.mod", "SizeA"],
+		},
 	}
 	pkg_b = {
 		"package_id": "pkgB",
@@ -74,6 +80,9 @@ def test_link_populates_host_module_packages() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "SCALAR", "module_id": "b.mod", "name": "SizeB"}],
+		"canonical_keys": {
+			"1": ["nominal", "SCALAR", "pkgB", "b.mod", "SizeB"],
+		},
 	}
 	host = TypeTable()
 	import_type_tables_and_build_typeid_maps([pkg_a, pkg_b], host)
@@ -114,6 +123,9 @@ def test_link_populates_host_module_packages_with_structs() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "STRUCT", "module_id": "a.mod", "name": "A"}],
+		"canonical_keys": {
+			"1": ["nominal", "STRUCT", "pkgA", "a.mod", "A"],
+		},
 	}
 	pkg_b = {
 		"package_id": "pkgB",
@@ -147,6 +159,9 @@ def test_link_populates_host_module_packages_with_structs() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "STRUCT", "module_id": "b.mod", "name": "B"}],
+		"canonical_keys": {
+			"1": ["nominal", "STRUCT", "pkgB", "b.mod", "B"],
+		},
 	}
 	host = TypeTable()
 	import_type_tables_and_build_typeid_maps([pkg_a, pkg_b], host)
@@ -169,6 +184,7 @@ def test_link_rejects_provided_nominals_without_matching_def() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "STRUCT", "module_id": "util", "name": "Foo"}],
+		"canonical_keys": {},
 	}
 	with pytest.raises(ValueError, match="provided_nominals"):
 		import_type_tables_and_build_typeid_maps([obj], TypeTable())
@@ -183,6 +199,7 @@ def test_link_rejects_provided_nominals_with_non_nominal_kind() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [{"kind": "FUNCTION", "module_id": "m", "name": "f"}],
+		"canonical_keys": {},
 	}
 	with pytest.raises(ValueError, match="provided_nominals"):
 		import_type_tables_and_build_typeid_maps([obj], TypeTable())

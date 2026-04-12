@@ -572,7 +572,7 @@ def resolve_nonvariant_qualified_static_call(
 		can_throw = True
 		if sig.declared_can_throw is not None:
 			can_throw = bool(sig.declared_can_throw)
-		info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(inst_params), user_ret_type=inst_return, can_throw=can_throw))
+		info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(inst_params), user_ret_type=inst_return, can_throw=can_throw, declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False))))
 		inferred_fn_args = tuple(getattr(getattr(inst_res, "subst", None), "args", []) or [])
 		return MethodCallResult(inst_return, info, {"inferred_fn_args": inferred_fn_args})
 	if receiver_required:
@@ -1387,11 +1387,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			call_type_args_span = Span.from_loc(first_loc)
 	type_arg_ids = [resolve_opaque_type(t, ctx.type_table, module_id=ctx.current_module_name, type_params=ctx.type_param_map) for t in call_type_args] if call_type_args else None
 
-	def _call_info(param_types: list[TypeId], return_type: TypeId, can_throw: bool, target: FunctionId) -> CallInfo:
-		return CallInfo(target=CallTarget.direct(target), sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw)))
+	def _call_info(param_types: list[TypeId], return_type: TypeId, can_throw: bool, target: FunctionId, declared_terminal_throws: bool = False) -> CallInfo:
+		return CallInfo(target=CallTarget.direct(target), sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw), declared_terminal_throws=declared_terminal_throws))
 
-	def _call_info_target(param_types: list[TypeId], return_type: TypeId, can_throw: bool, target: CallTarget) -> CallInfo:
-		return CallInfo(target=target, sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw)))
+	def _call_info_target(param_types: list[TypeId], return_type: TypeId, can_throw: bool, target: CallTarget, declared_terminal_throws: bool = False) -> CallInfo:
+		return CallInfo(target=target, sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw), declared_terminal_throws=declared_terminal_throws))
 
 	def _pick_most_specific_items(items: list[tuple], key_fn, require_info: dict[object, tuple[parser_ast.TraitExpr, dict[object, object], str, dict[TypeParamId, tuple[str, int]]]]) -> list[tuple]:
 		if ctx.require_env_local is None:
@@ -1590,7 +1590,15 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if param.name == "self":
 				continue
 			param_types.append(ctx.type_table._eval_generic_type_expr(param.type_expr, type_args, module_id=ctx.type_table.interface_bases.get(owner_id).module_id if ctx.type_table.interface_bases.get(owner_id) is not None else schema.module_id))
-		ret_ty = ctx.type_table._eval_generic_type_expr(method_schema.return_type, type_args, module_id=ctx.type_table.interface_bases.get(owner_id).module_id if ctx.type_table.interface_bases.get(owner_id) is not None else schema.module_id)
+		# Phase 1 v3 of terminal-`throws`: interface methods declared with the
+		# bare terminal form (`fn f() throws`) carry `return_type=None` on the
+		# schema. Phase 2 will model the call result as a non-returning
+		# (terminal) expression. For Phase 1 we report Unknown so the call
+		# checker doesn't crash, deferring real semantics to Phase 2.
+		if getattr(method_schema, "declared_terminal_throws", False) or method_schema.return_type is None:
+			ret_ty = ctx.unknown_ty
+		else:
+			ret_ty = ctx.type_table._eval_generic_type_expr(method_schema.return_type, type_args, module_id=ctx.type_table.interface_bases.get(owner_id).module_id if ctx.type_table.interface_bases.get(owner_id) is not None else schema.module_id)
 		if len(arg_types) != len(param_types):
 			diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} expects {len(param_types)} argument(s)", severity="error", span=getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
@@ -1606,7 +1614,8 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					continue
 				diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} argument {idx + 1} type mismatch", severity="error", span=getattr(expr.args[idx], "loc", getattr(expr, "loc", Span()))))
 				return MethodCallResult(ctx.unknown_ty, None)
-		info = _call_info_target(param_types, ret_ty, not bool(method_schema.declared_nothrow), CallTarget.indirect(getattr(expr, "node_id", None)))
+		_iface_terminal = bool(getattr(method_schema, "declared_terminal_throws", False))
+		info = CallInfo(target=CallTarget.indirect(getattr(expr, "node_id", None)), sig=CallSig(param_types=tuple(param_types), user_ret_type=ret_ty, can_throw=not bool(method_schema.declared_nothrow), declared_terminal_throws=_iface_terminal))
 		return MethodCallResult(ret_ty, info)
 
 	if expr.method_name == "dup" and not expr.args:
@@ -2119,7 +2128,9 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					diagnostics.append(_tc_diag(message=f"no implementation for method '{expr.method_name}' on receiver {_label_typeid(recv_ty)}", severity="error", span=getattr(expr, "loc", Span())))
 					return MethodCallResult(ctx.unknown_ty, None)
 			call_target = CallTarget.direct(direct_fn_id) if direct_fn_id is not None else CallTarget.trait(trait_key, expr.method_name)
-			info = _call_info_target(list(param_type_ids), ret_id, not bool(getattr(method_sig, "declared_nothrow", False)), call_target)
+			_call_can_throw = not bool(getattr(method_sig, "declared_nothrow", False))
+			_call_terminal = bool(getattr(method_sig, "declared_terminal_throws", False))
+			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=_call_can_throw, declared_terminal_throws=_call_terminal))
 			return MethodCallResult(ret_id, info)
 		else:
 			receiver_nominal_for_lookup = receiver_base if receiver_base is not None and receiver_args is not None else receiver_nominal
@@ -2678,7 +2689,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						can_throw = True
 						if sig.declared_can_throw is not None:
 							can_throw = bool(sig.declared_can_throw)
-						info = _call_info_target(list(param_type_ids), ret_id, can_throw, CallTarget.direct(target_fn_id))
+						info = _call_info_target(list(param_type_ids), ret_id, can_throw, CallTarget.direct(target_fn_id), declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False)))
 						return MethodCallResult(ret_id, info, None)
 				if had_autoborrow_place_error:
 					diagnostics.append(
@@ -3104,7 +3115,8 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if getattr(fn_sig, "is_pub", False) and fn_sig.declared_can_throw is False:
 						pass  # Option B: no boundary wrapper upgrade
 			call_target = CallTarget.direct(target_fn_id)
-			info = _call_info_target(list(coerced_params), ret_id, can_throw, call_target)
+			_cand_terminal = bool(getattr(fn_sig, "declared_terminal_throws", False)) if fn_sig is not None else bool(getattr(cand, "declared_terminal_throws", False))
+			info = _call_info_target(list(coerced_params), ret_id, can_throw, call_target, declared_terminal_throws=_cand_terminal)
 			expr.arg_type_ids = list(arg_types)
 			receiver_autoborrow = None
 			if needs_autoborrow:
@@ -3236,7 +3248,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				can_throw = True
 				if sig.declared_can_throw is not None:
 					can_throw = bool(sig.declared_can_throw)
-				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw))
+				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw, declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False))))
 				if ctx.record_instantiation is not None and receiver_args is not None:
 					impl_args = tuple(receiver_args)
 					if impl_args and not any(ctx.type_table.has_typevar(t) for t in impl_args):
@@ -3351,7 +3363,8 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 			call_can_throw = not bool(getattr(method_sig, "declared_nothrow", False))
 			if trait_method_declared_nothrow is not None:
 				call_can_throw = not trait_method_declared_nothrow
-			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw))
+			_call_terminal = bool(getattr(method_sig, "declared_terminal_throws", False))
+			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw, declared_terminal_throws=_call_terminal))
 			return MethodCallResult(ret_id, info)
 		param_type_ids: list[TypeId] = []
 		for param in list(getattr(method_sig, "params", []) or []):
@@ -3457,7 +3470,8 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 			target_sig = ctx.signatures_by_id.get(target_fn_id)
 			if target_sig is not None and target_sig.declared_can_throw is not None:
 				call_can_throw = bool(target_sig.declared_can_throw)
-		info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw))
+		_trait_terminal = bool(getattr(method_sig, "declared_terminal_throws", False))
+		info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=call_can_throw, declared_terminal_throws=_trait_terminal))
 		return MethodCallResult(ret_id, info)
 	class _TmpMethodCall:
 		def __init__(self, receiver: object, method_name: str, args: list[object], loc: Span, type_args: list[object] | None):
@@ -3552,7 +3566,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				can_throw = True
 				if sig.declared_can_throw is not None:
 					can_throw = bool(sig.declared_can_throw)
-				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw))
+				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw, declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False))))
 				if ctx.record_instantiation is not None and receiver_args is not None:
 					impl_args = tuple(receiver_args)
 					if impl_args and not any(ctx.type_table.has_typevar(t) for t in impl_args):
@@ -4749,6 +4763,7 @@ def resolve_call_expr(
 					if sig_for_throw.return_type_id is not None:
 						fallback_ret = sig_for_throw.return_type_id
 				fallback_can_throw = bool(getattr(sig_for_throw, "declared_can_throw", False)) if sig_for_throw is not None else False
+				fallback_terminal = bool(getattr(sig_for_throw, "declared_terminal_throws", False)) if sig_for_throw is not None else False
 				method_res = MethodCallResult(
 					method_res.return_type,
 					CallInfo(
@@ -4758,6 +4773,7 @@ def resolve_call_expr(
 							user_ret_type=fallback_ret,
 							can_throw=fallback_can_throw,
 							includes_callee=False,
+							declared_terminal_throws=fallback_terminal,
 						),
 					),
 					method_res.resolution,
@@ -4780,6 +4796,7 @@ def resolve_call_expr(
 							user_ret_type=method_res.call_info.sig.user_ret_type,
 							can_throw=bool(method_res.call_info.sig.can_throw),
 							includes_callee=method_res.call_info.sig.includes_callee,
+							declared_terminal_throws=bool(getattr(method_res.call_info.sig, "declared_terminal_throws", False)),
 						),
 					),
 					method_res.resolution,
@@ -4787,9 +4804,9 @@ def resolve_call_expr(
 		if method_res is not None and method_res.call_info is not None:
 			intent.arg_expected_types = _expected_arg_types_for_call(list(method_res.call_info.sig.param_types), len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)
-			setattr(expr, "_resolved_method_call_info", (list(method_res.call_info.sig.param_types), method_res.return_type, bool(method_res.call_info.sig.can_throw), method_res.call_info.target))
+			setattr(expr, "_resolved_method_call_info", (list(method_res.call_info.sig.param_types), method_res.return_type, bool(method_res.call_info.sig.can_throw), method_res.call_info.target, bool(getattr(method_res.call_info.sig, "declared_terminal_throws", False))))
 			setattr(expr, "_resolved_method_return", method_res.return_type)
-			record_call_info(expr, param_types=list(method_res.call_info.sig.param_types), return_type=method_res.return_type, can_throw=bool(method_res.call_info.sig.can_throw), target=method_res.call_info.target)
+			record_call_info(expr, param_types=list(method_res.call_info.sig.param_types), return_type=method_res.return_type, can_throw=bool(method_res.call_info.sig.can_throw), target=method_res.call_info.target, declared_terminal_throws=bool(getattr(method_res.call_info.sig, "declared_terminal_throws", False)))
 			if ctx.record_instantiation is not None and isinstance(getattr(method_res.call_info, "target", None), CallTarget):
 				target = method_res.call_info.target
 				target_fn_id = target.symbol if target.kind is CallTargetKind.DIRECT else None
@@ -4845,8 +4862,12 @@ def resolve_call_expr(
 			return record_expr(expr, ctor_return)
 		resolved_method_call = getattr(expr, "_resolved_method_call_info", None)
 		if resolved_method_call is not None:
-			param_types, ret_type, can_throw, target = resolved_method_call
-			record_call_info(expr, param_types=list(param_types), return_type=ret_type, can_throw=bool(can_throw), target=target)
+			if len(resolved_method_call) >= 5:
+				param_types, ret_type, can_throw, target, _terminal = resolved_method_call
+			else:
+				param_types, ret_type, can_throw, target = resolved_method_call
+				_terminal = False
+			record_call_info(expr, param_types=list(param_types), return_type=ret_type, can_throw=bool(can_throw), target=target, declared_terminal_throws=bool(_terminal))
 			return record_expr(expr, ret_type)
 		resolved_ctor_return = getattr(expr, "_resolved_ctor_return", None)
 		if resolved_ctor_return is not None:
@@ -5102,7 +5123,8 @@ def resolve_call_expr(
 						continue
 					# Substitute deferred-literal Unknown args with param types for matching.
 					_match_args = list(arg_types)
-					for _di, _da in enumerate(arg_exprs):
+					_local_arg_exprs = list(getattr(expr, "args", []) or [])
+					for _di, _da in enumerate(_local_arg_exprs):
 						if _di < len(_match_args) and _match_args[_di] == ctx.unknown_ty and getattr(_da, "defer_infer_diag", False) and _di < len(params):
 							_match_args[_di] = params[_di]
 					if _args_match_params(list(params), _match_args):

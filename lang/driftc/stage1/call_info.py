@@ -133,6 +133,7 @@ class CallSig:
 	user_ret_type: TypeId
 	can_throw: bool
 	includes_callee: bool = False
+	declared_terminal_throws: bool = False
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 import sys
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.core.function_id import FunctionId, function_symbol
@@ -182,10 +182,25 @@ class InterfaceMethodSchema:
 
 	name: str
 	params: list[InterfaceParamSchema]
-	return_type: GenericTypeExpr
+	# `return_type` is `Optional[GenericTypeExpr]`. It is `None` exactly when
+	# the interface method was declared with the bare terminal `throws` form
+	# (no return type). All other forms (`-> T`, `nothrow -> T`,
+	# `throws -> T`) populate it. Readers MUST check `declared_terminal_throws`
+	# (or guard on `return_type is None`) before reading this field.
+	return_type: Optional[GenericTypeExpr]
 	type_params: list[str]
 	declared_nothrow: bool = False
 	is_unsafe: bool = False
+	# Auto-try value-returning `throws -> T` form (existing behavior).
+	# Phase 4 will rebind body-wide auto-try to use the new `Throw` trait
+	# instead of `Diagnostic`/`ResultError`.
+	declared_throws: bool = False
+	# Phase 1 of terminal-`throws`: NEW bare terminal `throws` form. The
+	# interface method has no return type (return_type is None) and impl
+	# methods must match this shape exactly. Phase 2 will use this for
+	# impl/interface matching. Phase 1 plumbs the flag in-memory; Phase 3
+	# will round-trip it through package metadata serialization.
+	declared_terminal_throws: bool = False
 
 
 @dataclass(frozen=True)

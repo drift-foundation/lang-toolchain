@@ -118,6 +118,12 @@ implement core.Diagnostic for JsonErrorData {
 	}
 }
 
+implement core.Throw for JsonErrorData {
+	pub fn throw_self(self: JsonErrorData) throws {
+		throw JsonError(tag = self.tag, offset = self.offset, line = self.line, col = self.col, path = self.path, key = self.key);
+	}
+}
+
 pub fn config_builder() nothrow -> JsonConfigBuilder {
 	return JsonConfigBuilder(key_order = JsonKeyOrder::Unordered());
 }

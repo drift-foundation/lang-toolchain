@@ -5,6 +5,6 @@ import std.err as err;
 
 pub fn main() nothrow -> Int {
 	val r: core.Result<Int, Int> = core.Result::Err(1);
-val out = try core.or_throw(r) catch std.err:ResultError(_) { 7 } catch { 8 };
+val out = try (move r).or_throw() catch std.err:ResultError(_) { 7 } catch { 8 };
 	return out;
 }

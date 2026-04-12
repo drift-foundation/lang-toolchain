@@ -47,6 +47,12 @@ implement core.Diagnostic for CodecError {
 	}
 }
 
+implement core.Throw for CodecError {
+	pub fn throw_self(self: CodecError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 pub fn hex_decoder() nothrow -> HexDecoder {
 	return HexDecoder(allow_whitespace = false, allow_prefix_0x = false);
 }

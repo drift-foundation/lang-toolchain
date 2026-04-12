@@ -64,6 +64,11 @@ def test_link_allows_variant_template_instantiation() -> None:
 			}
 		},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["nominal", "VARIANT", "lang.core", "lang.core", "Optional"],
+			"2": ["typevar", "pkgA", ["owner", "m", "Opt", 0], 0],
+			"3": ["inst", ["nominal", "VARIANT", "lang.core", "lang.core", "Optional"], [["typevar", "pkgA", ["owner", "m", "Opt", 0], 0]]],
+		},
 	}
 	host = TypeTable()
 	maps = import_type_tables_and_build_typeid_maps([obj], host)

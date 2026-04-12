@@ -26,6 +26,12 @@ implement core.Diagnostic for ParseError {
 	}
 }
 
+implement core.Throw for ParseError {
+	pub fn throw_self(self: ParseError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 fn _is_digit(b: Byte) nothrow -> Bool {
 	return b >= cast<Byte>(48) and b <= cast<Byte>(57);
 }

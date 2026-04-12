@@ -290,6 +290,8 @@ fn main() nothrow -> Int{
 			str(tmp_path),
 			"--allow-unsigned-from",
 			str(tmp_path),
+			"--dep", "lib1@0.0.0",
+			"--dep", "lib2@0.0.0",
 			str(tmp_path / "main.drift"),
 			"--emit-ir",
 			str(tmp_path / "out.ll"),

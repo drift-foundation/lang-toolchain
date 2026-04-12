@@ -62,6 +62,11 @@ def test_link_variant_instantiation_round_trips() -> None:
 			}
 		},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["nominal", "VARIANT", "lang.core", "lang.core", "Optional"],
+			"2": ["builtin", "SCALAR", "Int"],
+			"3": ["inst", ["nominal", "VARIANT", "lang.core", "lang.core", "Optional"], [["builtin", "SCALAR", "Int"]]],
+		},
 	}
 	host = TypeTable()
 	maps = import_type_tables_and_build_typeid_maps([obj], host)

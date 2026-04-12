@@ -46,6 +46,9 @@ def _optional_type_table_obj(*, package_id: str, provided_nominals: list[dict[st
 			}
 		},
 		"provided_nominals": list(provided_nominals),
+		"canonical_keys": {
+			"1": ["nominal", "VARIANT", "lang.core", "lang.core", "Optional"],
+		},
 	}
 
 
@@ -103,6 +106,9 @@ def test_no_provider_inferred_from_foreign_nominals() -> None:
 		"exception_schemas": {},
 		"variant_schemas": {},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["nominal", "STRUCT", "pkgA", "other.mod", "Foo"],
+		},
 	}
 	host = TypeTable()
 	import_type_tables_and_build_typeid_maps([obj], host)

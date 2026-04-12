@@ -102,6 +102,18 @@ implement core.Diagnostic for ConcurrencyError {
 	}
 }
 
+implement core.Throw for ConcurrencyError {
+	pub fn throw_self(self: ConcurrencyError) throws {
+		match &self {
+			Timeout => { throw std.err:ResultError(dv = DiagnosticValue::Int(-1)); },
+			Cancelled => { throw std.err:ResultError(dv = DiagnosticValue::Int(-2)); },
+			Closed => { throw std.err:ResultError(dv = DiagnosticValue::Int(-3)); },
+			Busy => { throw std.err:ResultError(dv = DiagnosticValue::Int(-4)); },
+			Failed(_) => { throw std.err:ResultError(dv = DiagnosticValue::Int(-5)); },
+		}
+	}
+}
+
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
 	return atomic.atomic_bool(v);
 }

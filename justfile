@@ -23,17 +23,22 @@ git-reset BRANCH:
 	git --no-pager log -1 --pretty='format:%H%n%h %s%nAuthor: %an <%ae>%nDate: %ad'
 
 # Full staged compiler tests + package-consumer smoke + boundary regressions.
-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
+# Invariant: test-shard-1 + test-shard-2 + test-shard-3 == just test.
+test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
-test-shard-1: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-driver-test lang-gdb-test
+test-shard-1: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-gdb-test
 	@echo "lang test-shard-1: Success."
 
 # Shard 2: codegen e2e only.
 test-shard-2:
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
 	@echo "lang test-shard-2: Success."
+
+# Shard 3: deploy tooling + package-consumer e2e (signed package path).
+test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary
+	@echo "lang test-shard-3: Success."
 
 # Local build/release prep (no implicit full test run).
 build: runtime-libs dist-publish-stdlib
@@ -110,6 +115,32 @@ lang-core-test:
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/core; \
 	else \
 	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core; \
+	fi
+
+# Package linker/consumer unit tests.
+lang-packages-test:
+	# Ensure pytest is available in the venv
+	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
+	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
+	  exit 1; \
+	fi
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/packages; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/packages; \
+	fi
+
+# Trait resolution/overload tests.
+lang-traits-test:
+	# Ensure pytest is available in the venv
+	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
+	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
+	  exit 1; \
+	fi
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/traits; \
+	else \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/traits; \
 	fi
 
 # Type checker tests (typed HIR + resolution).

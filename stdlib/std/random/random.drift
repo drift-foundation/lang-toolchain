@@ -20,6 +20,12 @@ implement core.Diagnostic for RandomError {
 	}
 }
 
+implement core.Throw for RandomError {
+	pub fn throw_self(self: RandomError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+	}
+}
+
 pub fn random_secure_bytes(n: Int) nothrow -> core.Result<Array<Byte>, RandomError> {
 	if n < 0 {
 		return core.Result::Err(RandomError(tag = "invalid-length", errno = 0));

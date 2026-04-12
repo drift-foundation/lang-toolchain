@@ -811,9 +811,18 @@ def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict
 							{"name": p.name, "type_expr": _encode_generic_type_expr(p.type_expr)}
 							for p in m.params
 						],
-						"return_type": _encode_generic_type_expr(m.return_type),
+						# Phase 1 v3 of terminal-`throws`: bare-terminal interface
+						# methods (`fn f() throws`) carry `return_type=None` on the
+						# schema and encode as null.
+						"return_type": _encode_generic_type_expr(m.return_type) if m.return_type is not None else None,
 						"declared_nothrow": bool(m.declared_nothrow),
 						"is_unsafe": bool(m.is_unsafe),
+						# Phase 3 of terminal-`throws`: round-trip both flags so
+						# cross-package consumers see the same in-memory shape
+						# the producer had. The decoder defaults missing fields
+						# to False for forward compatibility with old packages.
+						"declared_throws": bool(getattr(m, "declared_throws", False)),
+						"declared_terminal_throws": bool(getattr(m, "declared_terminal_throws", False)),
 					}
 					for m in schema.methods
 				],
@@ -951,7 +960,11 @@ def encode_signatures(
 			param_types_obj = reconstructed
 
 		return_type_obj = None
-		if sig.return_type is not None:
+		# Terminal-throws functions have no return type — skip encoding.
+		_is_terminal_throws = bool(getattr(sig, "declared_terminal_throws", False))
+		if _is_terminal_throws:
+			pass  # return_type_obj stays None
+		elif sig.return_type is not None:
 			return_type_obj = encode_type_expr(
 				sig.return_type,
 				default_module=sig_module,
@@ -1051,6 +1064,12 @@ def encode_signatures(
 			"param_names": list(sig.param_names or []),
 			"param_mutable": list(sig.param_mutable or []),
 			"declared_can_throw": sig.declared_can_throw,
+			# Phase 3 of terminal-`throws`: round-trip both auto-try and
+			# bare-terminal flags so cross-package consumers see the same
+			# in-memory shape the producer had. The decoder defaults missing
+			# fields to False for forward compatibility with old packages.
+			"declared_throws": bool(getattr(sig, "declared_throws", False)),
+			"declared_terminal_throws": bool(getattr(sig, "declared_terminal_throws", False)),
 			"declared_unsafe": bool(getattr(sig, "declared_unsafe", False)),
 			"is_exported_entrypoint": bool(getattr(sig, "is_exported_entrypoint", False)),
 			"is_extern_c": bool(getattr(sig, "is_extern_c", False)),

@@ -5,6 +5,7 @@ import std.mem as mem;
 
 use trait hash.Hasher;
 use trait Diagnostic;
+use trait Throw;
 use trait Try;
 
 export {
@@ -13,6 +14,7 @@ export {
 	Diagnostic,
 	DiagnosticEntry,
 	diagnostic_entry,
+	Throw,
 	Try,
 	Result,
 	Fn0,
@@ -40,7 +42,6 @@ export {
 	callback_throw1,
 	callback_throw2,
 	type_id,
-	or_throw,
 	STRING_CONTAINER_ID,
 	string_byte_at,
 	string_from_utf8_bytes
@@ -64,6 +65,10 @@ pub struct DiagnosticEntry {
 
 pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
 	return DiagnosticEntry(key = move key, value = move value);
+}
+
+pub trait Throw {
+	fn throw_self(self: Self) throws;
 }
 
 pub trait Try<T> {
@@ -108,21 +113,11 @@ pub variant Result<T, E> {
 	@tombstone Tombstone
 }
 
-implement<OkT, ErrT> Try<OkT> for Result<OkT, ErrT> require ErrT is Diagnostic {
+implement<OkT, ErrT> Try<OkT> for Result<OkT, ErrT> require ErrT is Throw {
 	pub fn into_try(self: Result<OkT, ErrT>) -> OkT {
 		match self {
 			Ok(v) => { return move v; },
-			Err(err) => { throw std.err:ResultError(dv = err.to_diag()); },
-			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
-		}
-	}
-}
-
-implement<OkT, ErrT> Try<OkT> for &Result<OkT, ErrT> require OkT is Copy, ErrT is Diagnostic {
-	pub fn into_try(self: &Result<OkT, ErrT>) -> OkT {
-		match self {
-			Ok(v) => { return *v; },
-			Err(err) => { throw std.err:ResultError(dv = err.to_diag()); },
+			Err(err) => { Throw::throw_self(move err); },
 			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
 		}
 	}
@@ -149,10 +144,6 @@ implement<T> Optional<T> {
 			None => { return f.call(); }
 		}
 	}
-}
-
-pub fn or_throw<T, E>(r: Result<T, E>) -> T {
-	return (move r).into_try();
 }
 
 pub trait Fn0<R> {
@@ -285,6 +276,42 @@ implement Diagnostic for String {
 implement Diagnostic for DiagnosticValue {
 	pub fn to_diag(self: &DiagnosticValue) nothrow -> DiagnosticValue {
 		return *self;
+	}
+}
+
+implement Throw for Int {
+	pub fn throw_self(self: Int) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::Int(self));
+	}
+}
+
+implement Throw for Uint {
+	pub fn throw_self(self: Uint) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::Int(self));
+	}
+}
+
+implement Throw for Bool {
+	pub fn throw_self(self: Bool) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::Bool(self));
+	}
+}
+
+implement Throw for Float {
+	pub fn throw_self(self: Float) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::Float(self));
+	}
+}
+
+implement Throw for String {
+	pub fn throw_self(self: String) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::String(self));
+	}
+}
+
+implement Throw for DiagnosticValue {
+	pub fn throw_self(self: DiagnosticValue) throws {
+		throw std.err:ResultError(dv = self);
 	}
 }
 

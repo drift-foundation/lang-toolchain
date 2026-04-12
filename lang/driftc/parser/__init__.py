@@ -391,13 +391,29 @@ def _build_interface_method_schemas(
 					type_expr=_generic_type_expr_from_parser(p.type_expr, type_params=combined_type_params),
 				)
 			)
+		# Phase 1 v3 of terminal-`throws`: interface methods may use any of
+		# the four signature shapes (see grammar.lark:func_def comment). The
+		# parser-level InterfaceMethodSig sets declared_throws and/or
+		# declared_terminal_throws appropriately, and `m.return_type` is
+		# `None` exactly when the bare terminal form was used. The schema
+		# faithfully carries `None` for `return_type` in that case (no Void
+		# synthesis). Readers of `schema.return_type` MUST guard on
+		# `declared_terminal_throws` (or check for None) before consuming it.
+		# Package round-trip of declared_terminal_throws is Phase 3 territory.
+		method_declared_terminal_throws = bool(getattr(m, "declared_terminal_throws", False))
+		if method_declared_terminal_throws:
+			method_return_type: Optional[GenericTypeExpr] = None
+		else:
+			method_return_type = _generic_type_expr_from_parser(m.return_type, type_params=combined_type_params)
 		method_schema = InterfaceMethodSchema(
 			name=m.name,
 			params=method_param_schemas,
-			return_type=_generic_type_expr_from_parser(m.return_type, type_params=combined_type_params),
+			return_type=method_return_type,
 			type_params=list(method_type_params),
 			declared_nothrow=bool(getattr(m, "declared_nothrow", False)),
 			is_unsafe=bool(getattr(m, "is_unsafe", False)),
+			declared_throws=bool(getattr(m, "declared_throws", False)),
+			declared_terminal_throws=method_declared_terminal_throws,
 		)
 		methods.append(method_schema)
 	return methods
@@ -898,10 +914,11 @@ class _FrontendDecl:
 		type_params: list[str],
 		type_param_locs: list[parser_ast.Located],
 		params: list[_FrontendParam],
-		return_type: parser_ast.TypeExpr,
+		return_type: Optional[parser_ast.TypeExpr],
 		loc: Optional[parser_ast.Located],
 		declared_nothrow: bool = False,
 		declared_throws: bool = False,
+		declared_terminal_throws: bool = False,
 		is_unsafe: bool = False,
 		is_pub: bool = False,
 		is_method: bool = False,
@@ -920,7 +937,11 @@ class _FrontendDecl:
 		self.params = params
 		self.return_type = return_type
 		self.declared_nothrow = declared_nothrow
+		# Auto-try value-returning `throws -> T` form (existing behavior).
 		self.declared_throws = declared_throws
+		# NEW Phase 1: bare terminal `throws` form. Phase 2 body-flow check
+		# enforces termination only on this flag, NOT on declared_throws.
+		self.declared_terminal_throws = declared_terminal_throws
 		self.is_unsafe = is_unsafe
 		self.throws = ()
 		self.loc = loc
@@ -965,6 +986,11 @@ def _decl_from_parser_fn(
 		getattr(fn, "loc", None),
 		bool(getattr(fn, "declared_nothrow", False)),
 		bool(getattr(fn, "declared_throws", False)),
+		# Phase 1 v3: insert declared_terminal_throws between declared_throws
+		# and is_unsafe to match `_FrontendDecl.__init__` positional order.
+		# Using a keyword argument here would also work; the positional form
+		# is preserved for symmetry with the existing call shape.
+		bool(getattr(fn, "declared_terminal_throws", False)),
 		bool(getattr(fn, "is_unsafe", False)),
 		fn.is_pub,
 		fn.is_method,
@@ -1112,6 +1138,11 @@ def _typeexpr_uses_internal_fnresult(typ: parser_ast.TypeExpr) -> bool:
 	functions. It is not a surface type in the Drift language: user code should
 	write `-> T` and use exceptions/try/catch for control flow.
 	"""
+	# Phase 1 v3 of terminal-`throws`: a `None` return_type indicates the bare
+	# terminal `throws` form which has no annotated return type, so it
+	# trivially cannot mention FnResult.
+	if typ is None:
+		return False
 	if typ.name == "FnResult":
 		return True
 	for arg in getattr(typ, "args", []) or []:
@@ -4690,6 +4721,15 @@ def _lower_parsed_program_to_hir(
 					fn.return_type,
 					getattr(fn, "loc", None),
 					declared_nothrow,
+					# Phase 1 v2: previously dropped declared_throws because
+					# the impl-block path used positional args up through
+					# declared_nothrow and then jumped to keyword args.
+					bool(getattr(fn, "declared_throws", False)),
+					# Phase 1 v3: also pass declared_terminal_throws (the new
+					# bare terminal `throws` form). Without this the impl-block
+					# path would silently drop it and Phase 2's body-flow check
+					# would never trigger on impl-block terminal methods.
+					bool(getattr(fn, "declared_terminal_throws", False)),
 					is_unsafe=bool(getattr(fn, "is_unsafe", False)),
 					is_pub=bool(getattr(fn, "is_pub", False)),
 					is_method=bool(self_mode is not None),

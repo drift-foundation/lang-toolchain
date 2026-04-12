@@ -74,14 +74,16 @@ use trait core.Diagnostic;
 	assert diagnostics == []
 
 
-def test_try_trait_method_on_ref_succeeds_with_use_trait(tmp_path: Path) -> None:
+def test_try_trait_method_on_ref_rejected_no_borrowed_impl(tmp_path: Path) -> None:
+	"""Borrowed &Result does not implement Try — users must own the Result
+	before calling into_try()/or_throw(). This is intentional: the owned
+	Try impl uses Throw::throw_self which consumes the error value."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
 use trait core.Try;
-use trait core.Diagnostic;
 
 	fn main() -> Int {
 	val r: core.Result<Int, Int> = core.Result::Ok(1);
@@ -91,10 +93,13 @@ use trait core.Diagnostic;
 """,
 		tmp_path,
 	)
-	assert diagnostics == []
+	assert len(diagnostics) > 0, "borrowed &Result should not have a Try impl"
+	assert any("into_try" in d.message or "method" in d.message.lower() for d in diagnostics)
 
 
-def test_try_trait_requires_diagnostic_impl(tmp_path: Path) -> None:
+def test_try_trait_requires_throw_impl(tmp_path: Path) -> None:
+	"""Error type without Throw impl cannot use into_try/or_throw — even
+	if it implements Diagnostic. The Try constraint is ErrT is Throw."""
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -117,7 +122,7 @@ pub variant MyErr {
 		tmp_path,
 	)
 	assert diagnostics
-	assert any("into_try" in d.message or "Try" in d.message for d in diagnostics)
+	assert any("into_try" in d.message or "Try" in d.message or "Throw" in d.message for d in diagnostics)
 
 
 def test_try_trait_into_try_uses_err_type_for_result_variant(tmp_path: Path) -> None:
@@ -140,7 +145,10 @@ use trait core.Diagnostic;
 	)
 	assert diagnostics == []
 
-def test_try_trait_accepts_diagnostic_impl(tmp_path: Path) -> None:
+def test_try_trait_diagnostic_alone_not_sufficient(tmp_path: Path) -> None:
+	"""Diagnostic alone is NOT sufficient for into_try/or_throw — the
+	error type must implement Throw. This test pins that Diagnostic
+	without Throw is rejected."""
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -173,4 +181,5 @@ pub variant MyErr {
 """,
 		tmp_path,
 	)
-	assert diagnostics == []
+	assert diagnostics, "Diagnostic-only error type should not satisfy Try constraint (requires Throw)"
+	assert any("Throw" in d.message or "into_try" in d.message for d in diagnostics)

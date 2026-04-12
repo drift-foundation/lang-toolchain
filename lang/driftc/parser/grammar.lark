@@ -160,7 +160,21 @@ const_def: CONST NAME COLON type_expr EQUAL expr TERMINATOR
 local_const_stmt: CONST NAME COLON type_expr EQUAL expr
 type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 
-func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig require_clause? (block | TERMINATOR)
+// Function signature shape (Phase 1 of the terminal-`throws` work):
+//   1. `fn f(...) -> T`             plain may-throw value return, no auto-try
+//   2. `fn f(...) nothrow -> T`     non-throwing value return
+//   3. `fn f(...) throws -> T`      may-throw value return WITH body-wide
+//                                    auto-`Try::into_try` context (existing
+//                                    feature, preserved)
+//   4. `fn f(...) throws`           NEW: terminal throw-only form. Never
+//                                    returns normally; every path must end in
+//                                    `throw` or tail-call another terminal
+//                                    `throws` function.
+//
+// Mutual exclusion: `nothrow` cannot combine with either `throws` form. The
+// distinction between forms 3 and 4 is the presence/absence of a return
+// signature after `throws`.
+func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS) require_clause? (block | TERMINATOR)
 extern_fn: EXTERN STRING FN_KW ident "(" [params] ")" NOTHROW return_sig
 extern_block: EXTERN STRING "{" (extern_fn_item TERMINATOR?)* "}"
 extern_fn_item: FN_KW ident "(" [params] ")" NOTHROW return_sig
@@ -178,13 +192,13 @@ implement_item: test_build_only_marker? PUB func_def -> implement_func_pub
 trait_def: TRAIT NAME type_params? require_clause? trait_body
 trait_body: "{" (trait_item | TERMINATOR)* "}"
 trait_item: trait_method_sig TERMINATOR*
-trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig
+trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS)
 
 interface_def: INTERFACE NAME type_params? interface_parents? interface_body
 interface_parents: ":" type_expr ("," type_expr)*
 interface_body: "{" (interface_item | TERMINATOR)* "}"
 interface_item: interface_method_sig TERMINATOR*
-interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" (NOTHROW | THROWS)? return_sig
+interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS)
 
 type_expr: ref_type
          | fn_type

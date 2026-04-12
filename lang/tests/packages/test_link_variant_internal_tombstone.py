@@ -51,6 +51,10 @@ def test_link_non_generic_droppable_variant_synthesizes_internal_tombstone() -> 
 			}
 		},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["nominal", "VARIANT", "acme", "acme.choice", "Choice"],
+			"2": ["builtin", "SCALAR", "String"],
+		},
 	}
 	host = TypeTable()
 	maps = import_type_tables_and_build_typeid_maps([obj], host)
@@ -116,6 +120,11 @@ def test_link_generic_droppable_variant_concrete_inst_synthesizes_internal_tombs
 			}
 		},
 		"provided_nominals": [],
+		"canonical_keys": {
+			"1": ["nominal", "VARIANT", "acme", "acme.maybe", "Maybe"],
+			"2": ["builtin", "SCALAR", "String"],
+			"3": ["inst", ["nominal", "VARIANT", "acme", "acme.maybe", "Maybe"], [["builtin", "SCALAR", "String"]]],
+		},
 	}
 	host = TypeTable()
 	maps = import_type_tables_and_build_typeid_maps([obj], host)

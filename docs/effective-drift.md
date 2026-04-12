@@ -389,34 +389,117 @@ Loop ergonomics note:
 
 See also: **Result to throwing flow** below — `json.parse(&text)` returns
 `Result<JsonNode, JsonErrorData>`, and the recommended idiom is to convert
-it to throwing flow with `.or_throw()` (or `core.or_throw(...)`) and catch
-once at the `nothrow` boundary, rather than nesting `match` per call.
+it to throwing flow with `.or_throw()` and catch once at the `nothrow`
+boundary, rather than nesting `match` per call. `JsonErrorData` implements
+`core.Throw`, so `.or_throw()` throws a typed `json:JsonError` exception
+that the caller catches directly.
+
+## The `throws` keyword
+
+Drift has two distinct `throws` forms on function signatures. They share
+the keyword but select different semantics based on whether a return type
+is present.
+
+### Auto-try form: `throws -> T`
+
+A function declared `fn f(...) throws -> T` returns a value of type `T`
+and enables **body-wide implicit `Try::into_try` wrapping**. Inside the
+body, any `Result<X, E>` expression used where `X` is expected is
+automatically unwrapped via the `Try` trait — the `Ok` value passes
+through and the `Err` arm throws the appropriate exception.
+
+```drift
+fn extract_status(payload: &String) throws -> String {
+    val root = json.parse(payload).or_throw();
+    return root.expect()
+        .field("meta")
+        .field("callback")
+        .field("status")
+        .string();
+}
+```
+
+The function still has a return obligation — it must return `T` on at
+least one path. The `throws` marker is about the error-flow context
+inside the body, not about the return shape.
+
+### Terminal form: `throws` (no return type)
+
+A function declared `fn f(...) throws` (bare, no `-> T`) is a
+**terminal** function: it **never returns normally**. Every control-flow
+path must end in `throw` or a tail call to another terminal-`throws`
+function. The checker rejects `return` statements and fallthrough.
+
+```drift
+pub trait Throw {
+    fn throw_self(self: Self) throws;
+}
+
+exception ServiceDown(reason: String);
+
+implement Throw for ServiceDown {
+    pub fn throw_self(self: ServiceDown) throws {
+        throw self;
+    }
+}
+```
+
+Terminal-`throws` calls are **terminators** for missing-return analysis.
+A match arm or if-branch whose only statement is a call to a
+terminal-`throws` function counts as locally terminal, even inside a
+non-`throws` caller:
+
+```drift
+fn handle(r: Result<Int, ServiceDown>) -> Int {
+    match r {
+        Ok(v) => { return v; },
+        Err(e) => { Throw::throw_self(move e); },
+    }
+}
+```
+
+### Four legal signature shapes
+
+| Form | Meaning |
+|---|---|
+| `fn f(...) -> T` | Value-returning, may throw, no auto-try |
+| `fn f(...) nothrow -> T` | Value-returning, cannot throw |
+| `fn f(...) throws -> T` | Value-returning, body-wide auto-try |
+| `fn f(...) throws` | Terminal — never returns normally |
+
+`nothrow` is mutually exclusive with both `throws` forms.
 
 ## Result to throwing flow
 
 `Result<T, E>` is a value-level error type, but most app code is more readable
 when failures propagate as exceptions and are caught once at the `nothrow`
-boundary instead of being matched at every level of nesting. Drift’s
-`std.core` has a generic conversion built in.
+boundary instead of being matched at every level of nesting.
 
-### Generic form: `or_throw()`
+### Typed unwrap: `or_throw()` and the `Throw` trait
 
 `Result<T, E>` implements `core.Try<T>` whenever `E` implements
-`core.Diagnostic`. Both of these unwrap the `Ok` arm or convert `Err(e)`
-into a thrown `std.err:ResultError(dv = e.to_diag())`:
+`core.Throw`. The unwrap path is:
 
-- `result.or_throw()` — method form on the result value
-- `core.or_throw(result)` — free-function form
+1. `result.or_throw()` consumes the owned `Result` and calls
+   `Try::into_try`.
+2. The `Ok` arm returns the value.
+3. The `Err` arm calls `e.throw_self()` — a terminal-`throws` method
+   on the error type’s `Throw` impl — which throws a **typed exception**
+   chosen by the error type itself.
 
-Constraint: the `Result` error type **must** implement `core.Diagnostic`.
-All standard error payloads in the stdlib (e.g. `JsonErrorData`,
-`Utf8Error`, `TextError`, `IoError`) already do.
+`or_throw()` requires an owned `Result`, not a reference. If you have a
+`&Result`, own it first (e.g. via `move`). There is no `Try` impl for
+`&Result` — this keeps the semantics uniform: every `or_throw()` call
+throws the exception chosen by the error type’s `Throw` impl.
+
+Every stdlib error type implements `Throw`. Types with a natural domain
+exception throw it directly (e.g. `JsonErrorData` throws `JsonError`).
+Types without a domain exception throw `ResultError` as the stable
+generic diagnostic fallback — this is permanent, not a migration bridge.
+The caller catches whatever the error type throws:
 
 ```drift
-import std.core as core;
-import std.err as err;
 import std.json as json;
-use trait core.Try;
 
 fn extract_status(payload: &String) -> String {
     val root = json.parse(payload).or_throw();
@@ -431,7 +514,7 @@ fn extract_status(payload: &String) -> String {
 fn main() nothrow -> Int {
     val payload = "{\"meta\":{\"callback\":{\"status\":\"ok\"}}}";
 
-    val status = try extract_status(&payload) catch err:ResultError(e) {
+    val status = try extract_status(&payload) catch json:JsonError(e) {
         ""
     } catch json:JsonPathError(e) {
         ""
@@ -449,22 +532,54 @@ A few things to notice:
   the strict cursor’s `field/string/...`) propagate naturally through the
   call stack.
 - `main` is `nothrow` because it has a `try ... catch` boundary that
-  handles every exception kind that can reach it. The catch arms cover
-  the two domain exceptions (`err:ResultError` from a Result conversion,
-  `json:JsonPathError` from the strict cursor) plus a `catch { ... }`
-  fall-through to keep `main` total.
+  handles every exception kind that can reach it.
+- The catch arms match on **domain exceptions** (`json:JsonError`,
+  `json:JsonPathError`) — not the generic `err:ResultError`. Each error
+  type’s `Throw` impl controls what gets thrown.
 - One catch boundary instead of three nested `match` blocks.
 
-### Customized form: `Result.on_error(...)`
+### Implementing `Throw` for your own error types
 
-`or_throw()` is intentionally **not** customizable: it always throws
-`std.err:ResultError` with the original error’s diagnostic payload.
-When the caller needs a domain-specific exception type or wants to
-attach extra structured fields, use `Result.on_error(...)` and throw
-the desired exception from the callback:
+Any error type can implement `core.Throw` to participate in `or_throw()`:
 
 ```drift
 import std.core as core;
+
+pub exception ServiceDown(reason: String);
+
+struct ServiceError { reason: String }
+
+implement core.Throw for ServiceError {
+    pub fn throw_self(self: ServiceError) throws {
+        throw ServiceDown(reason = self.reason);
+    }
+}
+```
+
+Now `Result<T, ServiceError>.or_throw()` throws `ServiceDown` — the
+caller catches `ServiceDown`, not `ResultError`:
+
+```drift
+fn call_service() -> Response {
+    val r = internal_rpc();
+    return r.or_throw();
+}
+
+fn main() nothrow -> Int {
+    val resp = try call_service() catch ServiceDown(e) {
+        return 1;
+    };
+    return 0;
+}
+```
+
+### Customized form: `Result.on_error(...)`
+
+`on_error` gives the caller full control over what exception is thrown,
+without requiring a `Throw` impl on the error type. Use it when the
+error type is not yours or when you want to attach extra context:
+
+```drift
 import std.json as json;
 
 pub exception ParseFailed(tag: String, path: String);
@@ -489,7 +604,7 @@ fn main() nothrow -> Int {
 When to reach for `on_error` instead of `or_throw`:
 
 - the caller wants a domain-specific exception name (e.g. `ParseFailed`)
-  rather than the generic `ResultError`
+  rather than whatever the error type’s `Throw` impl throws
 - the caller wants to project a subset of the error payload into the
   exception (e.g. `tag` and `path` only) or rename fields
 - the caller wants to add extra context not present on the original

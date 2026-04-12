@@ -48,7 +48,7 @@ fn pull_string_as_float(root: &json.JsonNode) -> Float {
 fn run() -> Int {
 	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"count\":42,\"ratio\":1.5,\"on\":true}},\"items\":[1,2]}";
 	val parsed = json.parse(&text);
-	val root = core.or_throw(parsed);
+	val root = (move parsed).or_throw();
 
 	// ── Happy paths ───────────────────────────────────────────
 	if pull_status(&root) != "ok" { return 1; }

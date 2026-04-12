@@ -1618,6 +1618,15 @@ def _encode_trait_metadata_for_module(
 						type_param_names=method_type_params + trait_type_params,
 					),
 					"span": encode_span(getattr(method, "loc", None)),
+					# Phase 3 of terminal-`throws`: round-trip the throws
+					# flags so cross-package trait/impl matching at
+					# `type_checker.py:1349` sees the producer's intent.
+					# `declared_nothrow` was also previously missing from
+					# this encoder; closing both gaps in the same patch
+					# since the existing matching logic reads both fields.
+					"declared_nothrow": bool(getattr(method, "declared_nothrow", False)),
+					"declared_throws": bool(getattr(method, "declared_throws", False)),
+					"declared_terminal_throws": bool(getattr(method, "declared_terminal_throws", False)),
 				}
 			)
 		trait_name = getattr(trait_def, "name", "")
@@ -1841,6 +1850,14 @@ def _collect_external_trait_and_impl_metadata(
 								return_type=ret_type,
 								loc=decode_span(method.get("span")) or None,
 								type_params=type_params,
+								# Phase 3 of terminal-`throws`: read the
+								# throws flags from the encoded payload.
+								# Old packages (pre-Phase-3) lack these
+								# fields; default to False for forward
+								# compatibility.
+								declared_nothrow=bool(method.get("declared_nothrow", False)),
+								declared_throws=bool(method.get("declared_throws", False)),
+								declared_terminal_throws=bool(method.get("declared_terminal_throws", False)),
 							)
 						)
 					require = decode_trait_expr(entry.get("require"))
@@ -3678,7 +3695,7 @@ def compile_stubbed_funcs(
 		sig = info.sig
 		new_params = tuple(_apply_inst_subst(t, impl_subst, fn_subst) for t in sig.param_types)
 		new_ret = _apply_inst_subst(sig.user_ret_type, impl_subst, fn_subst)
-		new_sig = CallSig(param_types=new_params, user_ret_type=new_ret, can_throw=sig.can_throw, includes_callee=sig.includes_callee)
+		new_sig = CallSig(param_types=new_params, user_ret_type=new_ret, can_throw=sig.can_throw, includes_callee=sig.includes_callee, declared_terminal_throws=sig.declared_terminal_throws)
 		target = info.target
 		if target.kind is CallTargetKind.CONSTRUCTOR:
 			if target.variant_type_id is not None:
@@ -4103,6 +4120,7 @@ def compile_stubbed_funcs(
 						param_types=tuple(inst_sig.param_type_ids),
 						user_ret_type=inst_sig.return_type_id,
 						can_throw=_inst_can_throw(inst_sig),
+						declared_terminal_throws=bool(getattr(inst_sig, "declared_terminal_throws", False)),
 					),
 				)
 			_set_call_info(csid, new_info)
@@ -4280,6 +4298,7 @@ def compile_stubbed_funcs(
 							param_types=tuple(params),
 							user_ret_type=ret,
 							can_throw=bool(call_can_throw),
+							declared_terminal_throws=bool(getattr(sig_for_throw, "declared_terminal_throws", False)),
 						),
 					)
 
@@ -4709,6 +4728,7 @@ def compile_stubbed_funcs(
 						param_types=info.sig.param_types,
 						user_ret_type=info.sig.user_ret_type,
 						can_throw=bool(call_can_throw),
+						declared_terminal_throws=info.sig.declared_terminal_throws,
 					),
 				)
 			updated_callsite[csid] = info
@@ -5738,7 +5758,7 @@ def compile_stubbed_funcs(
 				if ret_def.kind is TypeKind.UNKNOWN:
 					continue
 				param_ids = target_sig.param_type_ids or sig.param_types
-				new_sig = CallSig(param_types=tuple(param_ids), user_ret_type=ret_id, can_throw=sig.can_throw, includes_callee=sig.includes_callee)
+				new_sig = CallSig(param_types=tuple(param_ids), user_ret_type=ret_id, can_throw=sig.can_throw, includes_callee=sig.includes_callee, declared_terminal_throws=sig.declared_terminal_throws)
 				call_info_map[csid] = CallInfo(target=target, sig=new_sig)
 		_patch_hidden_lambda_call_info_from_sigs()
 		type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
@@ -8127,6 +8147,12 @@ def main(argv: list[str] | None = None) -> int:
 						return_type_id=ret_tid,
 						error_type_id=err_tid,
 						declared_can_throw=sd.get("declared_can_throw"),
+						# Phase 3 of terminal-`throws`: round-trip both
+						# auto-try and bare-terminal flags. Old packages
+						# (pre-Phase-3) lack these fields; default to False
+						# for forward compatibility.
+						declared_throws=bool(sd.get("declared_throws", False)),
+						declared_terminal_throws=bool(sd.get("declared_terminal_throws", False)),
 						declared_unsafe=bool(sd.get("declared_unsafe", False)) or None,
 						is_intrinsic=is_intrinsic,
 						intrinsic_kind=intrinsic_kind,
@@ -9187,6 +9213,23 @@ def main(argv: list[str] | None = None) -> int:
 			visible_modules_by_name=visible_modules_by_name_set,
 		)
 	)
+	# Phase 3.5: validate trait impl terminal-throws compatibility in the
+	# CLI path. compile_stubbed_funcs has its own call; the CLI main()
+	# pipeline must do the same.
+	if isinstance(module_exports, dict) and global_trait_index is not None:
+		_cli_trait_impls: list[ImplMeta] = []
+		for _exp in module_exports.values():
+			if isinstance(_exp, dict):
+				for _impl in _exp.get("impls", []) or []:
+					if isinstance(_impl, ImplMeta):
+						_cli_trait_impls.append(_impl)
+		if _cli_trait_impls:
+			type_checker.validate_trait_impls(
+				_cli_trait_impls,
+				signatures_by_id=signatures_by_id,
+				trait_index=global_trait_index,
+				diagnostics=type_diags,
+			)
 
 	signatures_by_id_all = dict(signatures_by_id)
 	signatures_by_id_all.update(external_signatures_by_id)
@@ -9433,6 +9476,7 @@ def main(argv: list[str] | None = None) -> int:
 				param_types=info.sig.param_types,
 				user_ret_type=info.sig.user_ret_type,
 				can_throw=inferred,
+				declared_terminal_throws=info.sig.declared_terminal_throws,
 			)
 			call_info[csid] = CallInfo(target=info.target, sig=new_sig)
 

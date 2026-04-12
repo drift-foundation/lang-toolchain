@@ -935,16 +935,22 @@ class TypeChecker:
 								span=None,
 							)
 						)
-				ret_ty = self.type_table._eval_generic_type_expr(method.return_type, type_args, module_id=schema.module_id)
-				if self.type_table.get(ret_ty).kind is TypeKind.UNKNOWN:
-					diagnostics.append(
-						_tc_diag(
-							message=f"unknown return type in interface method '{method.name}'",
-							code="E_TYPE_UNKNOWN",
-							severity="error",
-							span=None,
+				# Phase 1 v3 of terminal-`throws`: bare-terminal interface
+				# methods (`fn f() throws`) carry `return_type=None` on the
+				# schema. They have no return type to validate; skip the
+				# return-type kind check. Phase 2 will introduce a separate
+				# terminal-form validation.
+				if not getattr(method, "declared_terminal_throws", False) and method.return_type is not None:
+					ret_ty = self.type_table._eval_generic_type_expr(method.return_type, type_args, module_id=schema.module_id)
+					if self.type_table.get(ret_ty).kind is TypeKind.UNKNOWN:
+						diagnostics.append(
+							_tc_diag(
+								message=f"unknown return type in interface method '{method.name}'",
+								code="E_TYPE_UNKNOWN",
+								severity="error",
+								span=None,
+							)
 						)
-					)
 			parent_ids = list(getattr(schema, "parent_base_ids", []) or [])
 			if len(parent_ids) != len(set(parent_ids)):
 				diagnostics.append(
@@ -1086,7 +1092,33 @@ class TypeChecker:
 					)
 					continue
 				sig = signatures_by_id.get(method.fn_id)
-				if sig is None or sig.param_type_ids is None or sig.return_type_id is None:
+				if sig is None or sig.param_type_ids is None:
+					continue
+				# Terminal-throws impls have return_type_id=None; allow that.
+				if sig.return_type_id is None and not bool(getattr(sig, "declared_terminal_throws", False)):
+					continue
+				# Terminal-throws compatibility check (before return-type comparison).
+				iface_terminal = bool(getattr(method_schema, "declared_terminal_throws", False))
+				impl_terminal = bool(getattr(sig, "declared_terminal_throws", False))
+				if iface_terminal != impl_terminal:
+					if iface_terminal:
+						_msg = (
+							f"interface impl method '{method.name}' must use bare terminal "
+							f"`throws` to match interface declaration (no return type allowed)"
+						)
+					else:
+						_msg = (
+							f"interface impl method '{method.name}' uses bare terminal "
+							f"`throws` but interface declaration expects a return type"
+						)
+					diagnostics.append(
+						_tc_diag(
+							message=_msg,
+							code="E_INTERFACE_METHOD_TERMINAL_THROWS_MISMATCH",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
 					continue
 				if len(sig.param_type_ids) != len(method_schema.params):
 					diagnostics.append(
@@ -1136,6 +1168,33 @@ class TypeChecker:
 						)
 				owner_schema = self.type_table.interface_bases.get(owner_id)
 				owner_module = owner_schema.module_id if owner_schema is not None else schema.module_id
+				# Terminal-throws compatibility: interface and impl must match
+				# exactly, same as trait methods (Phase 3.5).
+				iface_terminal = bool(getattr(method_schema, "declared_terminal_throws", False))
+				impl_terminal = bool(getattr(sig, "declared_terminal_throws", False))
+				if iface_terminal != impl_terminal:
+					if iface_terminal:
+						_msg = (
+							f"interface impl method '{method.name}' must use bare terminal "
+							f"`throws` to match interface declaration (no return type allowed)"
+						)
+					else:
+						_msg = (
+							f"interface impl method '{method.name}' uses bare terminal "
+							f"`throws` but interface declaration expects a return type"
+						)
+					diagnostics.append(
+						_tc_diag(
+							message=_msg,
+							code="E_INTERFACE_METHOD_TERMINAL_THROWS_MISMATCH",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
+					continue
+				# Terminal-throws methods have no return type to compare.
+				if iface_terminal:
+					continue
 				expected_ret = self.type_table._eval_generic_type_expr(
 					method_schema.return_type,
 					type_args,
@@ -1254,7 +1313,10 @@ class TypeChecker:
 				if trait_method is None:
 					continue
 				sig = signatures_by_id.get(method.fn_id)
-				if sig is None or sig.param_type_ids is None or sig.return_type_id is None:
+				if sig is None or sig.param_type_ids is None:
+					continue
+				# Terminal-throws impls have return_type_id=None; allow that.
+				if sig.return_type_id is None and not bool(getattr(sig, "declared_terminal_throws", False)):
 					continue
 				type_params: dict[str, TypeId] = {"Self": impl.target_type_id}
 				trait_param_names = list(getattr(trait_def, "type_params", []) or [])
@@ -1313,6 +1375,39 @@ class TypeChecker:
 						)
 						break
 				if param_mismatch:
+					continue
+				# Phase 3.5: terminal-throws compatibility check runs before
+				# the return type comparison. A terminal-throws mismatch (one
+				# side bare `throws`, the other `-> T`) produces a more specific
+				# diagnostic than the generic return-type mismatch, and the
+				# return-type difference is a consequence of the terminal shape
+				# difference. Check first, continue on mismatch.
+				trait_terminal = bool(getattr(trait_method, "declared_terminal_throws", False))
+				impl_terminal = bool(getattr(sig, "declared_terminal_throws", False))
+				if trait_terminal != impl_terminal:
+					if trait_terminal:
+						_msg = (
+							f"trait impl method '{method.name}' must use bare terminal "
+							f"`throws` to match trait declaration (no return type allowed)"
+						)
+					else:
+						_msg = (
+							f"trait impl method '{method.name}' uses bare terminal "
+							f"`throws` but trait declaration expects a return type"
+						)
+					diagnostics.append(
+						_tc_diag(
+							message=_msg,
+							code="E_TRAIT_METHOD_TERMINAL_THROWS_MISMATCH",
+							severity="error",
+							span=method.loc or impl.loc or Span(),
+						)
+					)
+					continue
+				# Both sides agree on terminal shape — if both are terminal
+				# throws, there is no return type to compare; skip straight
+				# to nothrow/throws checking.
+				if trait_terminal:
 					continue
 				expected_ret_cmp = _dealias_zero_param_type(expected_ret)
 				actual_ret_cmp = _dealias_zero_param_type(sig.return_type_id)
@@ -4929,6 +5024,7 @@ class TypeChecker:
 			return_type: TypeId,
 			can_throw: bool,
 			target: CallTarget,
+			declared_terminal_throws: bool = False,
 		) -> None:
 			if target.kind is CallTargetKind.DIRECT and target.symbol is not None and signatures_by_id is not None and getattr(expr, "loc", None) is not None:
 				sig = signatures_by_id.get(target.symbol)
@@ -4956,7 +5052,7 @@ class TypeChecker:
 					can_throw = True
 			info = CallInfo(
 				target=target,
-				sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw)),
+				sig=CallSig(param_types=tuple(param_types), user_ret_type=return_type, can_throw=bool(can_throw), declared_terminal_throws=declared_terminal_throws),
 			)
 			if self.type_table is not None and self.type_table.type_provenance_enabled():
 				span = getattr(expr, "loc", None)
@@ -5183,6 +5279,7 @@ class TypeChecker:
 							user_ret_type=info.sig.user_ret_type,
 							can_throw=bool(inst_can_throw),
 							includes_callee=info.sig.includes_callee,
+							declared_terminal_throws=info.sig.declared_terminal_throws,
 						),
 					)
 			elif isinstance(node_id, int):
@@ -7411,6 +7508,7 @@ class TypeChecker:
 							if sig_for_throw.return_type_id is not None:
 								fallback_ret = sig_for_throw.return_type_id
 						fallback_can_throw = bool(getattr(sig_for_throw, "declared_can_throw", False)) if sig_for_throw is not None else False
+						fallback_terminal = bool(getattr(sig_for_throw, "declared_terminal_throws", False)) if sig_for_throw is not None else False
 						method_res = MethodCallResult(
 							method_res.return_type,
 							CallInfo(
@@ -7420,6 +7518,7 @@ class TypeChecker:
 									user_ret_type=fallback_ret,
 									can_throw=fallback_can_throw,
 									includes_callee=False,
+									declared_terminal_throws=fallback_terminal,
 								),
 							),
 							method_res.resolution,
@@ -7441,6 +7540,7 @@ class TypeChecker:
 									user_ret_type=method_res.call_info.sig.user_ret_type,
 									can_throw=bool(method_res.call_info.sig.can_throw),
 									includes_callee=method_res.call_info.sig.includes_callee,
+									declared_terminal_throws=method_res.call_info.sig.declared_terminal_throws,
 								),
 							),
 							method_res.resolution,
@@ -7635,7 +7735,7 @@ class TypeChecker:
 							return record_expr(expr, self._unknown)
 						wrap_id, call_can_throw = boundary
 						if wrap_id != fn_id_local or call_can_throw != method_res.call_info.sig.can_throw:
-							method_res = MethodCallResult(method_res.return_type, CallInfo(target=CallTarget.direct(wrap_id), sig=CallSig(param_types=method_res.call_info.sig.param_types, user_ret_type=method_res.call_info.sig.user_ret_type, can_throw=bool(call_can_throw), includes_callee=method_res.call_info.sig.includes_callee)), method_res.resolution)
+							method_res = MethodCallResult(method_res.return_type, CallInfo(target=CallTarget.direct(wrap_id), sig=CallSig(param_types=method_res.call_info.sig.param_types, user_ret_type=method_res.call_info.sig.user_ret_type, can_throw=bool(call_can_throw), includes_callee=method_res.call_info.sig.includes_callee, declared_terminal_throws=method_res.call_info.sig.declared_terminal_throws)), method_res.resolution)
 				if method_res.resolution is not None:
 					call_resolutions[expr.node_id] = method_res.resolution
 				csid = getattr(expr, "callsite_id", None)
@@ -7686,6 +7786,7 @@ class TypeChecker:
 										user_ret_type=method_res.call_info.sig.user_ret_type,
 										can_throw=bool(inst_can_throw),
 										includes_callee=method_res.call_info.sig.includes_callee,
+										declared_terminal_throws=method_res.call_info.sig.declared_terminal_throws,
 									),
 								)
 					elif callable_registry is not None:
