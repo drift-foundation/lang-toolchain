@@ -677,6 +677,7 @@ Extend the framework error struct to carry a `fields` array and wrap it in
 
 ```drift
 import std.core as core;
+import std.mem as mem;
 
 pub exception RestBadRequest(tag: String, message: String, fields: DiagnosticValue);
 pub exception RestInternal(tag: String, message: String, fields: DiagnosticValue);
@@ -689,8 +690,10 @@ pub struct RestError {
 }
 
 implement core.Throw for RestError {
-    pub fn throw_self(self: RestError) throws {
-        val dv = DiagnosticValue::Object(move self.fields);
+    pub fn throw_self(var self: RestError) throws {
+        var empty: Array<core.DiagnosticEntry> = [];
+        val fields = mem.replace(&mut self.fields, move empty);
+        val dv = DiagnosticValue::Object(move fields);
         if self.status == 400 {
             throw RestBadRequest(tag = self.tag, message = self.message, fields = dv);
         }
@@ -698,6 +701,14 @@ implement core.Throw for RestError {
     }
 }
 ```
+
+**v1 note:** `Array<T>` is not Copy, so you cannot write `move self.fields`
+directly — v1 does not yet support moving a field out of an owned struct. Use
+`std.mem.replace(&mut self.fields, empty)` to swap the non-Copy field out and
+leave a valid empty value behind. `String` fields like `tag` and `message`
+work as plain reads because `String` is Copy (ARC-backed). Declare `var self`
+to make the receiver mutable; this is compatible with the trait's by-value
+`self: Self` signature.
 
 App code builds the error with plain `diagnostic_entry` calls:
 
