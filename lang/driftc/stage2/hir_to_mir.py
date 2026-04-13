@@ -2154,7 +2154,7 @@ class HIRToMIR:
 		self.b.emit(M.LoadLocal(dest=loaded, local=tmp_local))
 
 		transfer = self._classify_value_transfer(elem_ty, allow_unknown_typevar=True)
-		if transfer == "copy":
+		if transfer in ("copy", "move") and self._type_table.copy_status(elem_ty) is True:
 			copy_dest = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copy_dest, value=loaded, ty=elem_ty))
 			self._local_types[copy_dest] = elem_ty
@@ -2967,7 +2967,7 @@ class HIRToMIR:
 				else:
 					# Conservatively assume unknown method calls can throw, except for
 					# built-in, non-throwing intrinsics handled directly in lowering.
-					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
+					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "len", "entries", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
 						return True
 				if expr_can_throw(expr.receiver):
 					return True
@@ -3571,7 +3571,7 @@ class HIRToMIR:
 				self.b.emit(M.ResultErr(dest=dest, result=res_val))
 				self._local_types[dest] = self._type_table.ensure_error()
 				return dest
-		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get"):
+		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "len", "entries"):
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None:
 				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
@@ -3630,6 +3630,20 @@ class HIRToMIR:
 				key_val = self.lower_expr(expr.args[0])
 				self.b.emit(M.DVGetField(dest=dest, dv=dv_val, key=key_val))
 				self._local_types[dest] = self._optional_variant_type(self._dv_type)
+				return dest
+			if expr.method_name == "len":
+				self.b.emit(M.DVLen(dest=dest, dv=dv_val))
+				self._local_types[dest] = self._int_type
+				return dest
+			if expr.method_name == "entries":
+				self.b.emit(M.DVEntries(dest=dest, dv=dv_val))
+				# Resolve canonical std.core:DiagnosticEntry via public API.
+				# No fallback — this is a compiler invariant.
+				de_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="DiagnosticEntry")
+				if de_ty is None:
+					raise AssertionError("std.core:DiagnosticEntry not found in type table (compiler invariant)")
+				arr_ty = self._type_table.new_array(de_ty)
+				self._local_types[dest] = arr_ty
 				return dest
 		result, info = self._lower_method_call(expr)
 		if result is None:

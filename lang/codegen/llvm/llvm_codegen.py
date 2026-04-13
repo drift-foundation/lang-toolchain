@@ -149,6 +149,8 @@ from lang.driftc.stage2 import (
 	DVAsInt,
 	DVAsObject,
 	DVGetField,
+	DVLen,
+	DVEntries,
 	DVAsString,
 	ErrorAttrsGetDV,
 	ErrorCapturesGetDV,
@@ -1517,6 +1519,8 @@ class LlvmModuleBuilder:
 					f"declare i1 @drift_dv_as_string(ptr, ptr)",
 					f"declare i1 @drift_dv_as_object(ptr, ptr)",
 					f"declare i1 @drift_dv_get_field(ptr, {DRIFT_STRING_TYPE}, ptr)",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr)",
+					"declare void @drift_dv_entries(ptr, ptr)",
 					"",
 				]
 			)
@@ -3861,6 +3865,27 @@ class _FuncBuilder:
 					f"  {dest} = phi {variant_llty} [ {some_val}, {some_block} ], [ {none_val}, {none_block} ]"
 				)
 				self.value_types[dest] = variant_llty
+		elif isinstance(instr, DVLen):
+			self.module.needs_dv_runtime = True
+			dest = self._map_value(instr.dest)
+			dv_val = self._map_value(instr.dv)
+			tmp_ptr = self._fresh("dvarg")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
+			self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr {tmp_ptr})")
+			self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+		elif isinstance(instr, DVEntries):
+			self.module.needs_dv_runtime = True
+			dest = self._map_value(instr.dest)
+			dv_val = self._map_value(instr.dv)
+			tmp_ptr = self._fresh("dvarg")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
+			out_ptr = self._fresh("entries_out")
+			self.lines.append(f"  {out_ptr} = alloca %DriftArrayHeader")
+			self.lines.append(f"  call void @drift_dv_entries(ptr {tmp_ptr}, ptr {out_ptr})")
+			self.lines.append(f"  {dest} = load %DriftArrayHeader, ptr {out_ptr}")
+			self.value_types[dest] = "%DriftArrayHeader"
 		elif isinstance(instr, Phi):
 			# Already handled in _lower_phi.
 			return

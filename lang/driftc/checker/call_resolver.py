@@ -1497,6 +1497,46 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(ctx.unknown_ty, info)
 
+	# DiagnosticValue.len() and .entries() — checked separately because "len"
+	# is also a field-sugar name on Array/String. Only intercept when the
+	# receiver is actually DiagnosticValue.
+	if getattr(expr, "method_name", None) in ("len", "entries"):
+		_dv_recv_ty = type_expr(expr.receiver, used_as_value=False)
+		_dv_eff_ty = _dv_recv_ty
+		_dv_td = ctx.type_table.get(_dv_eff_ty)
+		while _dv_td.kind is TypeKind.REF and _dv_td.param_types:
+			_dv_eff_ty = _dv_td.param_types[0]
+			_dv_td = ctx.type_table.get(_dv_eff_ty)
+		if _dv_td.kind is TypeKind.DIAGNOSTICVALUE:
+			if expr.method_name == "len":
+				if getattr(expr, "args", None):
+					diagnostics.append(_tc_diag(message="DiagnosticValue.len takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None)
+				if call_kwargs_issues(f"DiagnosticValue.{expr.method_name}", getattr(expr, "kwargs", None)):
+					first = (getattr(expr, "kwargs", []) or [None])[0]
+					diagnostics.append(_tc_diag(message="DiagnosticValue.len takes no keyword arguments", severity="error", span=_best_effort_span(first, expr)))
+					return MethodCallResult(ctx.unknown_ty, None)
+				info = _call_info([_dv_recv_ty], ctx.int_ty, False, _intrinsic_method_fn_id("len"))
+				return MethodCallResult(ctx.int_ty, info)
+			if expr.method_name == "entries":
+				if getattr(expr, "args", None):
+					diagnostics.append(_tc_diag(message="DiagnosticValue.entries takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None)
+				if call_kwargs_issues(f"DiagnosticValue.{expr.method_name}", getattr(expr, "kwargs", None)):
+					first = (getattr(expr, "kwargs", []) or [None])[0]
+					diagnostics.append(_tc_diag(message="DiagnosticValue.entries takes no keyword arguments", severity="error", span=_best_effort_span(first, expr)))
+					return MethodCallResult(ctx.unknown_ty, None)
+				# Resolve canonical std.core:DiagnosticEntry via public API.
+				# No fallback — this intrinsic returns a fixed C layout that
+				# must match std.core's definition exactly.
+				de_ty = ctx.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="DiagnosticEntry")
+				if de_ty is None:
+					diagnostics.append(_tc_diag(message="internal: std.core:DiagnosticEntry not found in type table (compiler invariant violation)", severity="error", span=getattr(expr, "loc", Span())))
+					return MethodCallResult(ctx.unknown_ty, None)
+				arr_de_ty = ctx.type_table.new_array(de_ty)
+				info = _call_info([_dv_recv_ty], arr_de_ty, False, _intrinsic_method_fn_id("entries"))
+				return MethodCallResult(arr_de_ty, info)
+
 	if call_kwargs_issues("method calls", getattr(expr, "kwargs", None)):
 		first = (getattr(expr, "kwargs", []) or [None])[0]
 		diagnostics.append(_tc_diag(message="keyword arguments are not supported for method calls in v1", severity="error", span=_best_effort_span(first, expr)))

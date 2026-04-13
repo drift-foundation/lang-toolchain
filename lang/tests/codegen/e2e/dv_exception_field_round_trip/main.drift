@@ -1,0 +1,144 @@
+module m;
+
+import std.core as core;
+
+pub exception BadRequest(tag: String, message: String, fields: DiagnosticValue)
+
+fn make_fields() nothrow -> DiagnosticValue {
+	return DiagnosticValue::Object([
+		core.diagnostic_entry("email", DiagnosticValue::String("invalid-format")),
+		core.diagnostic_entry("age", DiagnosticValue::Int(42)),
+		core.diagnostic_entry("email", DiagnosticValue::String("updated"))
+	]);
+}
+
+fn throw_bad() throws -> Int {
+	val fields = make_fields();
+	throw BadRequest(tag = "validation", message = "invalid input", fields = fields);
+}
+
+pub fn main() nothrow -> Int {
+	try {
+		val _ = throw_bad();
+		return 99;
+	} catch BadRequest(e) {
+		// Verify tag attr round-trips
+		match e.attrs["tag"].as_string() {
+			Some(tag) => {
+				if tag != "validation" {
+					return 1;
+				}
+			},
+			None => {
+				return 2;
+			},
+		}
+		// Verify message attr round-trips
+		match e.attrs["message"].as_string() {
+			Some(msg) => {
+				if msg != "invalid input" {
+					return 3;
+				}
+			},
+			None => {
+				return 4;
+			},
+		}
+		// Verify DV Object field round-trips through attrs — keyed lookup
+		val fields_dv = e.attrs["fields"];
+		match fields_dv.get("email") {
+			Some(email_dv) => {
+				match email_dv.as_string() {
+					Some(reason) => {
+						if reason != "updated" {
+							return 5;
+						}
+					},
+					None => {
+						return 6;
+					},
+				}
+			},
+			None => {
+				return 7;
+			},
+		}
+		match fields_dv.get("age") {
+			Some(age_dv) => {
+				match age_dv.as_int() {
+					Some(age) => {
+						if age != 42 {
+							return 8;
+						}
+					},
+					None => {
+						return 9;
+					},
+				}
+			},
+			None => {
+				return 10;
+			},
+		}
+		// Verify entries() through exception attrs — enumeration round-trip
+		val entries = fields_dv.entries();
+		// Dedup: "email" appears twice, last-write-wins → 2 unique entries
+		if entries.len != 2 {
+			return 20;
+		}
+		// Survivors in order: [age(42), email(updated)]
+		val e0 = entries[0];
+		if e0.key != "age" {
+			return 21;
+		}
+		match e0.value.as_int() {
+			Some(v) => {
+				if v != 42 {
+					return 22;
+				}
+			},
+			None => {
+				return 23;
+			},
+		}
+		val e1 = entries[1];
+		if e1.key != "email" {
+			return 24;
+		}
+		match e1.value.as_string() {
+			Some(v) => {
+				if v != "updated" {
+					return 25;
+				}
+			},
+			None => {
+				return 26;
+			},
+		}
+		// len() on DV agrees with entries
+		if fields_dv.len() != 2 {
+			return 27;
+		}
+		// get() agrees with entries for each key
+		match fields_dv.get("age") {
+			Some(dv) => {
+				match dv.as_int() {
+					Some(v) => {
+						if v != 42 {
+							return 28;
+						}
+					},
+					None => {
+						return 29;
+					},
+				}
+			},
+			None => {
+				return 30;
+			},
+		}
+		return 0;
+	} catch {
+		return 98;
+	}
+}

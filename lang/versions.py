@@ -12,7 +12,7 @@
 # Do not bump for pure internal refactors with no boundary change.
 
 DRIFTC_VERSION: str = "0.27.186"
-DRIFT_RT_ABI_VERSION: int = 8
+DRIFT_RT_ABI_VERSION: int = 9
 
 # Build-time source commit stamp.  Empty in the source tree; populated by
 # the deploy bundle step so that deployed toolchains report the exact commit

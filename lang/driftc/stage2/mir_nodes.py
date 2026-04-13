@@ -1056,6 +1056,22 @@ class DVGetField(MInstr):
 	key: ValueId
 
 @dataclass
+class DVLen(MInstr):
+	"""dest = drift_dv_len(dv) (returns Int)."""
+
+	dest: ValueId
+	dv: ValueId
+
+
+@dataclass
+class DVEntries(MInstr):
+	"""dest = drift_dv_entries(dv) (returns Array<DiagnosticEntry>)."""
+
+	dest: ValueId
+	dv: ValueId
+
+
+@dataclass
 class ErrorEvent(MInstr):
 	"""
 	Project the event code from an Error value.
@@ -1305,6 +1321,8 @@ __all__ = [
 	"DVAsString",
 	"DVAsObject",
 	"DVGetField",
+	"DVLen",
+	"DVEntries",
 	"ErrorEvent",
 	"UnaryOpInstr",
 	"BinaryOpInstr",

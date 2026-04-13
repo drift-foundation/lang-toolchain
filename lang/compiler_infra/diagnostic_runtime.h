@@ -102,6 +102,30 @@ bool drift_dv_as_string(const struct DriftDiagnosticValue* dv, struct DriftStrin
 bool drift_dv_as_object(const struct DriftDiagnosticValue* dv, struct DriftDiagnosticValue* out);
 bool drift_dv_get_field(const struct DriftDiagnosticValue* dv, struct DriftString key, struct DriftDiagnosticValue* out);
 
+// Object/Array enumeration
+drift_isize drift_dv_len(const struct DriftDiagnosticValue* dv);
+
+// Build Array<DiagnosticEntry> from Object fields. Keys retained, values cloned.
+// Result written to out to avoid large-struct ABI issues.
+// DriftArrayHeader is defined in array_runtime.h; forward-declared here
+// so diagnostic_runtime.h can declare drift_dv_entries without pulling
+// in the full array runtime header.
+struct DriftArrayHeader;
+void drift_dv_entries(const struct DriftDiagnosticValue* dv, struct DriftArrayHeader* out);
+
+// Layout compatibility: DiagnosticEntry in Drift is {String, DiagnosticValue},
+// which must match DriftDiagnosticEntry {DriftString, DriftDiagnosticValue}.
+// drift_dv_entries writes directly into Array<DiagnosticEntry> storage, so
+// exact field offset agreement is boundary-critical.
+_Static_assert(sizeof(struct DriftDiagnosticEntry) == sizeof(struct DriftString) + sizeof(struct DriftDiagnosticValue),
+               "DriftDiagnosticEntry must be packed {String, DiagnosticValue}");
+_Static_assert(_Alignof(struct DriftDiagnosticEntry) == _Alignof(struct DriftString),
+               "DriftDiagnosticEntry alignment must match String alignment");
+_Static_assert(offsetof(struct DriftDiagnosticEntry, key) == 0,
+               "DriftDiagnosticEntry.key must be at offset 0");
+_Static_assert(offsetof(struct DriftDiagnosticEntry, value) == sizeof(struct DriftString),
+               "DriftDiagnosticEntry.value must follow key at sizeof(DriftString)");
+
 // Primitive to_diag helpers (runtime equivalents of Diagnostic for primitives)
 struct DriftDiagnosticValue drift_diag_from_bool(uint8_t value);
 struct DriftDiagnosticValue drift_diag_from_int(drift_isize value);

@@ -59,8 +59,8 @@ pub trait Diagnostic {
 }
 
 pub struct DiagnosticEntry {
-	key: String,
-	value: DiagnosticValue,
+	pub key: String,
+	pub value: DiagnosticValue,
 }
 
 pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {

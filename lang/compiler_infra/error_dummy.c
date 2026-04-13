@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
+extern struct DriftString drift_string_retain(struct DriftString s);
+extern void drift_string_release(struct DriftString s);
+
 struct DriftError* drift_error_new_dummy(drift_error_code_t code, struct DriftString event_fqn, struct DriftString key, struct DriftString payload) {
     struct DriftError* err = malloc(sizeof(struct DriftError));
     if (!err) {
@@ -28,8 +31,8 @@ void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, con
     if (!new_attrs) {
         abort();
     }
-    new_attrs[new_count - 1].key = key;
-    new_attrs[new_count - 1].value = *value;
+    new_attrs[new_count - 1].key = drift_string_retain(key);
+    new_attrs[new_count - 1].value = drift_dv_clone(value);
 #ifdef DEBUG_DIAGNOSTICS
     if (value) {
         fprintf(stderr, "[err_add_attr] count=%zu key=%.*s tag=%u len=%lld ptr=%p\n",
@@ -58,7 +61,7 @@ void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, 
         size_t new_count = err->frame_count + 1;
         struct DriftCtxFrame* new_frames = realloc(err->frames, new_count * sizeof(struct DriftCtxFrame));
         if (!new_frames) abort();
-        new_frames[new_count - 1].name = frame;
+        new_frames[new_count - 1].name = drift_string_retain(frame);
         new_frames[new_count - 1].locals = NULL;
         new_frames[new_count - 1].local_count = 0;
         err->frames = new_frames;
@@ -68,8 +71,8 @@ void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, 
     size_t new_lcount = tgt->local_count + 1;
     struct DriftErrorLocal* new_locals = realloc(tgt->locals, new_lcount * sizeof(struct DriftErrorLocal));
     if (!new_locals) abort();
-    new_locals[new_lcount - 1].key = key;
-    new_locals[new_lcount - 1].value = value ? *value : drift_dv_missing();
+    new_locals[new_lcount - 1].key = drift_string_retain(key);
+    new_locals[new_lcount - 1].value = value ? drift_dv_clone(value) : drift_dv_missing();
     tgt->locals = new_locals;
     tgt->local_count = new_lcount;
 }
@@ -187,16 +190,19 @@ void drift_error_release(struct DriftError* err) {
     for (size_t i = 0; i < err->frame_count; i++) {
         struct DriftCtxFrame* frame = &err->frames[i];
         for (size_t j = 0; j < frame->local_count; j++) {
+            drift_string_release(frame->locals[j].key);
             drift_dv_release(&frame->locals[j].value);
         }
         free(frame->locals);
         frame->locals = NULL;
         frame->local_count = 0;
+        drift_string_release(frame->name);
     }
     free(err->frames);
     err->frames = NULL;
     err->frame_count = 0;
     for (size_t i = 0; i < err->attr_count; i++) {
+        drift_string_release(err->attrs[i].key);
         drift_dv_release(&err->attrs[i].value);
     }
     free(err->attrs);

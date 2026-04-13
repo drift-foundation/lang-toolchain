@@ -1,11 +1,16 @@
 #include "diagnostic_runtime.h"
+#include "../language_runtime/array_runtime.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 
+// Forward declaration for dedup cleanup.
+static void drift_dv_release_impl(struct DriftDiagnosticValue* dv, int depth);
+
 // Array buffers are allocated via drift_alloc_array in generated code.
 // When consuming entry arrays into object storage, free the source buffer
 // through the matching runtime API.
+extern void* drift_alloc_array(size_t elem_size, size_t elem_align, drift_isize len, drift_isize cap);
 extern void drift_free_array(void* data);
 extern struct DriftString drift_string_retain(struct DriftString s);
 extern void drift_string_release(struct DriftString s);
@@ -85,6 +90,41 @@ struct DriftDiagnosticValue drift_dv_object_from_entries(void* entries_data, dri
     }
     // Entries are consumed by move into `fields`; free only backing storage.
     drift_free_array(entries_data);
+    // Deduplicate: last-write-wins. For each key, keep only the last
+    // occurrence. Reverse-scan marks earlier duplicates for removal.
+    // O(n^2) but exception attrs are small.
+    for (size_t i = 0; i < count; i++) {
+        if (fields[i].key.data == NULL && fields[i].key.len == -1) {
+            continue; // already marked
+        }
+        for (size_t j = i + 1; j < count; j++) {
+            if (fields[j].key.data == NULL && fields[j].key.len == -1) {
+                continue;
+            }
+            if (fields[i].key.len == fields[j].key.len &&
+                (fields[i].key.len == 0 ||
+                 memcmp(fields[i].key.data, fields[j].key.data, (size_t)fields[i].key.len) == 0)) {
+                // Duplicate: release the earlier entry, mark it
+                drift_string_release(fields[i].key);
+                drift_dv_release_impl(&fields[i].value, 0);
+                fields[i].key.data = NULL;
+                fields[i].key.len = -1;
+                break;
+            }
+        }
+    }
+    // Compact: remove marked entries, preserving order of survivors
+    size_t write = 0;
+    for (size_t read = 0; read < count; read++) {
+        if (fields[read].key.data == NULL && fields[read].key.len == -1) {
+            continue;
+        }
+        if (write != read) {
+            fields[write] = fields[read];
+        }
+        write++;
+    }
+    count = write;
     return drift_dv_object(fields, count);
 }
 
@@ -110,6 +150,20 @@ static struct DriftDiagnosticValue drift_dv_clone_impl(const struct DriftDiagnos
                 fields[i].value = drift_dv_clone_impl(&in_f->value, depth + 1);
             }
             return drift_dv_object(fields, count);
+        }
+        case DV_ARRAY: {
+            size_t count = src->data.array.len;
+            if (count == 0 || src->data.array.items == NULL) {
+                return drift_dv_array(NULL, 0);
+            }
+            struct DriftDiagnosticValue* items = (struct DriftDiagnosticValue*)calloc(count, sizeof(struct DriftDiagnosticValue));
+            if (!items) {
+                abort();
+            }
+            for (size_t i = 0; i < count; i++) {
+                items[i] = drift_dv_clone_impl(&src->data.array.items[i], depth + 1);
+            }
+            return drift_dv_array(items, count);
         }
         default:
             return *src;
@@ -138,6 +192,16 @@ static void drift_dv_release_impl(struct DriftDiagnosticValue* dv, int depth) {
             free(obj.fields);
             dv->data.object.fields = NULL;
             dv->data.object.len = 0;
+            break;
+        }
+        case DV_ARRAY: {
+            struct DriftDiagnosticArray arr = dv->data.array;
+            for (size_t i = 0; i < arr.len; i++) {
+                drift_dv_release_impl(&arr.items[i], depth + 1);
+            }
+            free(arr.items);
+            dv->data.array.items = NULL;
+            dv->data.array.len = 0;
             break;
         }
         default:
@@ -249,3 +313,36 @@ struct DriftDiagnosticValue drift_diag_from_bool(uint8_t value) { return drift_d
 struct DriftDiagnosticValue drift_diag_from_int(drift_isize value) { return drift_dv_int(value); }
 struct DriftDiagnosticValue drift_diag_from_float(double value) { return drift_dv_float(value); }
 struct DriftDiagnosticValue drift_diag_from_string(struct DriftString value) { return drift_dv_string(value); }
+
+drift_isize drift_dv_len(const struct DriftDiagnosticValue* dv) {
+    if (!dv) return 0;
+    if (dv->tag == DV_OBJECT) return (drift_isize)dv->data.object.len;
+    if (dv->tag == DV_ARRAY) return (drift_isize)dv->data.array.len;
+    return 0;
+}
+
+void drift_dv_entries(const struct DriftDiagnosticValue* dv, struct DriftArrayHeader* out) {
+    if (!out) return;
+    out->len = 0;
+    out->cap = 0;
+    out->gen = 0;
+    out->data = NULL;
+    if (!dv || dv->tag != DV_OBJECT || dv->data.object.len == 0) {
+        return;
+    }
+    size_t count = dv->data.object.len;
+    // Allocate via drift_alloc_array for Drift-managed Array<DiagnosticEntry>.
+    // DiagnosticEntry layout == DriftDiagnosticEntry == {DriftString, DriftDiagnosticValue}.
+    struct DriftDiagnosticEntry* data = (struct DriftDiagnosticEntry*)drift_alloc_array(
+        sizeof(struct DriftDiagnosticEntry), _Alignof(struct DriftDiagnosticEntry),
+        (drift_isize)count, (drift_isize)count);
+    for (size_t i = 0; i < count; i++) {
+        const struct DriftDiagnosticField* f = &dv->data.object.fields[i];
+        data[i].key = drift_string_retain(f->key);
+        data[i].value = drift_dv_clone(&f->value);
+    }
+    out->len = (drift_isize)count;
+    out->cap = (drift_isize)count;
+    out->gen = 0;
+    out->data = data;
+}
