@@ -306,12 +306,16 @@ def test_bundle_docs_produces_stdlib_docs() -> None:
 		assert "contains" in text_doc
 		assert "split" in text_doc
 
-		# `effective-drift.md` is the canonical idiom guide and must ship
-		# under `doc/` so consumers can read it after deployment.  It is
-		# the home for user-facing language-feature documentation that is
-		# not part of any stdlib module's API surface.
+		# Official checked-in docs must ship under `doc/` so consumers can
+		# read the idiom guide, language spec/design docs, history, and
+		# toolchain workflow docs after deployment.
 		effective_md = dist / "doc" / "effective-drift.md"
 		assert effective_md.exists(), "doc/effective-drift.md should ship in the toolchain"
+		assert (dist / "doc" / "history.md").exists(), "doc/history.md should ship in the toolchain"
+		assert (dist / "doc" / "toolchain-build-workflow.md").exists(), "toolchain workflow docs should ship in the toolchain"
+		assert (dist / "doc" / "design" / "drift-lang-spec.md").exists(), "language spec should ship in the toolchain"
+		assert (dist / "doc" / "design" / "drift-lang-abi.md").exists(), "ABI docs should ship in the toolchain"
+		assert (dist / "doc" / "articles" / "drift-compiler-architecture.md").exists(), "article docs should ship in the toolchain"
 		effective = effective_md.read_text()
 		# Method overload resolution by parameter type — new compiler feature.
 		assert "Method overload resolution by parameter type" in effective

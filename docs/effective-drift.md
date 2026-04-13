@@ -471,32 +471,236 @@ fn handle(r: Result<Int, ServiceDown>) -> Int {
 
 ## Result to throwing flow
 
-`Result<T, E>` is a value-level error type, but most app code is more readable
-when failures propagate as exceptions and are caught once at the `nothrow`
-boundary instead of being matched at every level of nesting.
+`Result<T, E>` is a value-level error type. Throwing flow is better when the
+caller is not going to recover locally and a framework or top-level boundary
+already knows how to map domain exceptions to user-facing outcomes.
 
-### Typed unwrap: `or_throw()` and the `Throw` trait
+Use this pattern for app and framework code that wants a straight-line happy
+path:
 
-`Result<T, E>` implements `core.Try<T>` whenever `E` implements
-`core.Throw`. The unwrap path is:
+```drift
+fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+    val id = rest.path_param(req, &"workOrderId").or_throw();
+    val order = repo.load_work_order(&id).or_throw();
 
-1. `result.or_throw()` consumes the owned `Result` and calls
-   `Try::into_try`.
+    return rest.json_response(200, order.to_json());
+}
+```
+
+The handler reads as: get the value or leave through the framework's exception
+path. The route body does not need nested `match` blocks for cases the framework
+already owns, such as missing path params, invalid request bodies, auth failures,
+or not-found responses.
+
+### The contract: `or_throw()` consumes a `Result`
+
+`Result<T, E>` implements `core.Try<T>` whenever `E` implements `core.Throw`.
+The unwrap path is:
+
+1. `result.or_throw()` consumes the owned `Result` and calls `Try::into_try`.
 2. The `Ok` arm returns the value.
-3. The `Err` arm calls `e.throw_self()` — a terminal-`throws` method
-   on the error type’s `Throw` impl — which throws a **typed exception**
-   chosen by the error type itself.
+3. The `Err` arm calls `e.throw_self()`.
+4. `throw_self` is a terminal-`throws` method, so it never returns normally.
 
-`or_throw()` requires an owned `Result`, not a reference. If you have a
-`&Result`, own it first (e.g. via `move`). There is no `Try` impl for
-`&Result` — this keeps the semantics uniform: every `or_throw()` call
-throws the exception chosen by the error type’s `Throw` impl.
+The supported API is the method form:
+
+```drift
+val value = result.or_throw();
+```
+
+The old free helper `core.or_throw(result)` is not the supported spelling.
+
+`or_throw()` is owned-only. Do not call it on `&Result`. A direct inline
+producer works because it returns an owned temporary:
+
+```drift
+val id = rest.path_param(req, &"workOrderId").or_throw();
+```
+
+A named local is also consumed by a by-value receiver:
+
+```drift
+val id_result = rest.path_param(req, &"workOrderId");
+val id = id_result.or_throw();
+```
+
+After that call, `id_result` has been moved. If you want to make the ownership
+transfer visually explicit, write the same operation with `move`:
+
+```drift
+val id_result = rest.path_param(req, &"workOrderId");
+val id = (move id_result).or_throw();
+```
+
+This is often useful in examples and refactors, but it is not required for the
+first consuming use of a named local.
+
+### The `Throw` trait
+
+An error type opts into typed throwing by implementing `core.Throw`:
+
+```drift
+pub trait Throw {
+    fn throw_self(self: Self) throws;
+}
+```
+
+The method takes `self: Self`, so it owns the error payload and can move fields
+into the exception. The bare `throws` return shape means `throw_self` is
+terminal: every path must throw or tail-call another terminal-`throws` function.
+
+Here is a minimal custom error:
+
+```drift
+import std.core as core;
+
+pub exception ServiceDown(service: String, reason: String);
+
+struct ServiceError {
+    service: String,
+    reason: String
+}
+
+implement core.Throw for ServiceError {
+    pub fn throw_self(self: ServiceError) throws {
+        throw ServiceDown(service = self.service, reason = self.reason);
+    }
+}
+```
+
+Now `Result<T, ServiceError>.or_throw()` throws `ServiceDown`. The caller catches
+the domain exception, not a generic wrapper:
+
+```drift
+fn call_service() -> Response {
+    return internal_rpc().or_throw();
+}
+
+fn main() nothrow -> Int {
+    val resp = try call_service() catch ServiceDown(e) {
+        return 1;
+    };
+
+    return 0;
+}
+```
+
+### Framework errors: map once, catch centrally
+
+Frameworks should implement `Throw` on their own error type and map each error
+variant to the exception the dispatcher already catches.
+
+```drift
+import std.core as core;
+
+pub exception RestBadRequest(tag: String, message: String);
+pub exception RestUnauthorized(tag: String, message: String);
+pub exception RestNotFound(tag: String, message: String);
+pub exception RestInternal(tag: String, message: String);
+
+struct RestError {
+    status: Int,
+    tag: String,
+    message: String
+}
+
+implement core.Throw for RestError {
+    pub fn throw_self(self: RestError) throws {
+        if self.status == 400 {
+            throw RestBadRequest(tag = self.tag, message = self.message);
+        }
+        if self.status == 401 {
+            throw RestUnauthorized(tag = self.tag, message = self.message);
+        }
+        if self.status == 404 {
+            throw RestNotFound(tag = self.tag, message = self.message);
+        }
+        throw RestInternal(tag = self.tag, message = self.message);
+    }
+}
+```
+
+Then app code stays small:
+
+```drift
+fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+    val id = rest.path_param(req, &"workOrderId").or_throw();
+    val order = rest.load_work_order(ctx, &id).or_throw();
+
+    return rest.json_response(200, order.to_json());
+}
+```
+
+The dispatcher catches the typed exception and maps it to the right transport
+response:
+
+```drift
+fn dispatch(req: &rest.Request, ctx: &mut rest.Context) nothrow -> rest.Response {
+    return try get_work_order(req, ctx) catch RestBadRequest(e) {
+        return rest.error_response(400, e.tag, e.message);
+    } catch RestUnauthorized(e) {
+        return rest.error_response(401, e.tag, e.message);
+    } catch RestNotFound(e) {
+        return rest.error_response(404, e.tag, e.message);
+    } catch RestInternal(e) {
+        return rest.error_response(500, e.tag, e.message);
+    };
+}
+```
+
+This is the important UX property: app authors use `.or_throw()` at the point
+where type information is still available, and framework catch arms receive the
+exception type they already understand. The framework does not parse diagnostic
+strings or guess from generic payloads.
+
+### Auto-try regions: `throws -> T`
+
+`fn f(...) throws -> T` is a body-wide auto-try region. Inside the function,
+`Result<X, E>` expressions can be converted through `Try::into_try` when the
+expected type is `X`. After the `Try` rebind, that means `E: Throw` controls the
+typed exception, just like `.or_throw()`.
+
+Use this for route handlers, request pipelines, and command handlers where most
+intermediate `Result` errors should leave through the same exception boundary.
+
+```drift
+fn create_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+    val body: CreateOrder = rest.json_body(req);
+    val account: Account = rest.require_account(ctx);
+    val order: Order = rest.create_order(ctx, &account, &body);
+
+    return rest.json_response(201, order.to_json());
+}
+```
+
+The explicit `.or_throw()` form is still useful when it makes the control-flow
+conversion clearer, especially in examples or mixed code:
+
+```drift
+fn create_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
+    val body = rest.json_body(req).or_throw();
+    val account = rest.require_account(ctx).or_throw();
+    val order = rest.create_order(ctx, &account, &body).or_throw();
+
+    return rest.json_response(201, order.to_json());
+}
+```
+
+Pick one style per function. Use auto-try for dense straight-line pipelines; use
+`.or_throw()` when readers benefit from seeing the conversion point.
+
+### Stdlib behavior
 
 Every stdlib error type implements `Throw`. Types with a natural domain
-exception throw it directly (e.g. `JsonErrorData` throws `JsonError`).
-Types without a domain exception throw `ResultError` as the stable
-generic diagnostic fallback — this is permanent, not a migration bridge.
-The caller catches whatever the error type throws:
+exception throw it directly. For example, `std.json.JsonErrorData` throws
+`json:JsonError`.
+
+Types without a dedicated domain exception throw `std.err:ResultError` with a
+diagnostic payload. This is the stable generic diagnostic fallback, not a
+temporary migration bridge. It is appropriate for low-level errors where callers
+usually only need "this failed" plus structured diagnostics.
+
+Example with JSON:
 
 ```drift
 import std.json as json;
@@ -528,72 +732,50 @@ fn main() nothrow -> Int {
 
 A few things to notice:
 
-- `extract_status` is **not** `nothrow`. Throwing methods (`or_throw`,
-  the strict cursor’s `field/string/...`) propagate naturally through the
-  call stack.
-- `main` is `nothrow` because it has a `try ... catch` boundary that
-  handles every exception kind that can reach it.
-- The catch arms match on **domain exceptions** (`json:JsonError`,
-  `json:JsonPathError`) — not the generic `err:ResultError`. Each error
-  type’s `Throw` impl controls what gets thrown.
-- One catch boundary instead of three nested `match` blocks.
+- `extract_status` is not `nothrow`. Throwing methods (`or_throw`, the strict
+  cursor’s `field/string/...`) propagate naturally through the call stack.
+- `main` is `nothrow` because it has a `try ... catch` boundary that handles
+  the exceptions it cares about and a catch-all for the rest.
+- The JSON parse catch arm matches `json:JsonError`, not
+  `std.err:ResultError`, because `JsonErrorData` has a domain `Throw` impl.
 
-### Implementing `Throw` for your own error types
+### Designing a good `Throw` impl
 
-Any error type can implement `core.Throw` to participate in `or_throw()`:
+Keep `Throw` impls boring and centralized. The impl is the module's default
+policy for converting an error value into exception flow.
 
-```drift
-import std.core as core;
-
-pub exception ServiceDown(reason: String);
-
-struct ServiceError { reason: String }
-
-implement core.Throw for ServiceError {
-    pub fn throw_self(self: ServiceError) throws {
-        throw ServiceDown(reason = self.reason);
-    }
-}
-```
-
-Now `Result<T, ServiceError>.or_throw()` throws `ServiceDown` — the
-caller catches `ServiceDown`, not `ResultError`:
-
-```drift
-fn call_service() -> Response {
-    val r = internal_rpc();
-    return r.or_throw();
-}
-
-fn main() nothrow -> Int {
-    val resp = try call_service() catch ServiceDown(e) {
-        return 1;
-    };
-    return 0;
-}
-```
+- Throw a domain exception when the caller can do something useful with the
+  exception type, such as selecting an HTTP status or retry policy.
+- Preserve stable machine-readable fields: tags, status codes, paths, service
+  names, operation names, and retryability flags.
+- Avoid parsing or generating prose as control flow. Human-readable `message`
+  fields are fine, but catch arms should not have to parse them.
+- Keep the mapping near the error type definition. Framework users should not
+  need to learn a separate helper API just to get typed exception behavior.
+- Do not add a `Throw` impl if the error has no sensible process-wide default.
+  Use explicit `match` or `on_error` at the call site instead.
 
 ### Customized form: `Result.on_error(...)`
 
-`on_error` gives the caller full control over what exception is thrown,
-without requiring a `Throw` impl on the error type. Use it when the
-error type is not yours or when you want to attach extra context:
+`on_error` gives the caller full control over what exception is thrown, without
+requiring a `Throw` impl on the error type. Use it when the error type is not
+yours or when this specific call needs extra context:
 
 ```drift
 import std.json as json;
 
-pub exception ParseFailed(tag: String, path: String);
+pub exception ParseFailed(tag: String, path: String, request_id: String);
 
-fn parse_required(payload: &String) -> json.JsonNode {
+fn parse_required(payload: &String, request_id: String) -> json.JsonNode {
     return json.parse(payload).on_error(|e: json.JsonErrorData| => {
-        throw ParseFailed(tag = e.tag, path = e.path);
+        throw ParseFailed(tag = e.tag, path = e.path, request_id = request_id);
     });
 }
 
 fn main() nothrow -> Int {
     val payload = "{...}";
 
-    val root = try parse_required(&payload) catch ParseFailed(e) {
+    val root = try parse_required(&payload, "req-123") catch ParseFailed(e) {
         return 1;
     };
 
@@ -601,31 +783,28 @@ fn main() nothrow -> Int {
 }
 ```
 
-When to reach for `on_error` instead of `or_throw`:
+Reach for `on_error` instead of `or_throw` when:
 
-- the caller wants a domain-specific exception name (e.g. `ParseFailed`)
-  rather than whatever the error type’s `Throw` impl throws
-- the caller wants to project a subset of the error payload into the
-  exception (e.g. `tag` and `path` only) or rename fields
-- the caller wants to add extra context not present on the original
-  error (e.g. an upstream request id)
-
-Keep exception payloads machine-readable. Pass stable kebab-case tags or
-structured fields, never English prose. The catch arm should be able to
-switch on field values without parsing strings.
+- the caller wants a different exception name than the error type’s default
+  `Throw` impl
+- the caller wants to add local context such as request id, tenant id, or input
+  source
+- the caller wants to project, rename, or redact fields before throwing
+- the error type belongs to another package and has no `Throw` impl
 
 ### When `match` is still the right answer
 
-- The error case has a useful non-error continuation (e.g. parse failure
-  falls back to a default config). Catch is overkill; a `match` with a
-  fallback in the `Err` arm is clearer.
-- The error needs to be returned as a Result to a caller that itself
-  uses Result-style flow.
-- The error is part of a larger sum type the caller is already matching
-  on for other reasons.
+Throwing flow is not the default for all `Result` values. Use `match` when the
+error is a normal branch in local logic:
 
-The `or_throw` / `on_error` idiom is for the common case where the user
-just wants the value and the failure should fail loudly at one
+- The error case has a useful non-error continuation, such as parse failure
+  falling back to a default config.
+- The caller must return `Result` to its own caller.
+- The error is part of a larger decision the function is already matching on.
+- The function is `nothrow` and should stay that way.
+
+The `or_throw` / `on_error` idiom is for the common app path where the user just
+wants the value and failure should leave through a well-defined exception
 boundary.
 
 ## Atomic ordering defaults (`std.sync`)

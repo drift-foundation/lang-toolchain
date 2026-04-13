@@ -42,6 +42,10 @@
     - `docs/effective-drift.md` documents the two `throws` forms, terminal
       calls as local terminators, typed `.or_throw()` through `Throw`, custom
       `Throw` impls, and the owned-only result-unwrapping contract.
+    - Certified toolchain distributions now ship checked-in official docs under
+      `doc/`, including `effective-drift.md`, `history.md`,
+      `toolchain-build-workflow.md`, `doc/design/`, and `doc/articles/`,
+      alongside the generated `doc/stdlib/` API reference.
     - `just test` now includes `lang/tests/packages` and `lang/tests/traits`.
     - Added `lang-packages-test`, `lang-traits-test`, and
       `test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary`.

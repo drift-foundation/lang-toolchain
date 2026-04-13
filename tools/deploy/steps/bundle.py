@@ -121,14 +121,18 @@ def bundle_docs_and_examples(dist: Path) -> None:
 	doc_dir.mkdir(parents=True, exist_ok=True)
 	(doc_dir / "README.md").write_text(_README_TEXT, encoding="utf-8")
 
-	# Ship docs/effective-drift.md (idiom guide) into the toolchain
-	# distribution so consumers can read it after deployment.
+	# Ship the checked-in official docs into the toolchain distribution so
+	# consumers can read the language guide, design/spec docs, and toolchain
+	# workflow docs after deployment.
 	_ROOT = Path(__file__).resolve().parents[3]
-	effective_src = _ROOT / "docs" / "effective-drift.md"
-	if effective_src.is_file():
-		(doc_dir / "effective-drift.md").write_text(
-			effective_src.read_text(encoding="utf-8"), encoding="utf-8"
-		)
+	docs_src = _ROOT / "docs"
+	if docs_src.is_dir():
+		for src in sorted(docs_src.rglob("*")):
+			if not src.is_file():
+				continue
+			dst = doc_dir / src.relative_to(docs_src)
+			dst.parent.mkdir(parents=True, exist_ok=True)
+			shutil.copy2(src, dst)
 
 	examples_dir = dist / "examples"
 	examples_dir.mkdir(parents=True, exist_ok=True)
@@ -275,6 +279,12 @@ runs reuse the cache.  Override the cache location with `SCIE_BASE`.
   patterns (Arc+Mutex shared state, runtime registry, JSON API,
   graceful shutdown, MPSC queues, atomic ordering, method overload
   resolution, call-site auto-borrow, `String.clone()`, and more).
+- `doc/design/` — language spec, grammar, ABI, stdlib, package, and
+  runtime design docs.
+- `doc/articles/` — architecture notes and deeper design articles.
+- `doc/toolchain-build-workflow.md` — certified toolchain build and
+  deployment workflow.
+- `doc/history.md` — development history for this toolchain.
 - `doc/stdlib/index.md` — generated stdlib API reference.
 - `doc/stdlib/authoring.md` — how to write `///` doc comments that
   the `drift doc` tool picks up.

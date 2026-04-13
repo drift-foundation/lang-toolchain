@@ -20,6 +20,7 @@
   - Stdlib error types without a dedicated domain exception currently implement `Throw` by throwing `ResultError` with a diagnostic payload. This is a stable generic fallback, not a temporary migration path.
 - **Docs**.
   - `docs/effective-drift.md` now documents the two `throws` forms, terminal calls as local terminators, typed `Result.or_throw()` through `Throw`, implementing `Throw` for application/framework errors, and the owned-only `.or_throw()` contract.
+  - Certified toolchain distributions now ship the checked-in official docs under `doc/`, including `effective-drift.md`, `history.md`, `toolchain-build-workflow.md`, `doc/design/`, and `doc/articles/`, alongside generated `doc/stdlib/` API reference.
 - **Test coverage / justfile**.
   - `just test` now includes `lang/tests/packages` and `lang/tests/traits`, closing the stale coverage gap where those suites were not part of the canonical test target.
   - Added `lang-packages-test` and `lang-traits-test` targets. They follow the existing pytest target pattern and inherit environment variables such as `DRIFT_MEMCHECK`, `DRIFT_ASAN`, and `PYTEST_JOBS`.
