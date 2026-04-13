@@ -15,6 +15,8 @@ import sys
 from hashlib import sha256
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 STDLIB_DIR = ROOT / "stdlib"
 STD_VERSION = "0.0.0-test"
@@ -49,7 +51,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		 "--package-target", "test-target",
 		 "--emit-package", str(std_pkg_path),
 		 "--test-build-only"],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	assert res.returncode == 0, f"stdlib build failed: {res.stderr[:500]}"
 

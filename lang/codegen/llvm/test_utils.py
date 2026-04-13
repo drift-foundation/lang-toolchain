@@ -39,6 +39,8 @@ def sanitizer_timeout(base: int) -> int:
 		multiplier *= 3
 	if os.environ.get("DRIFT_UBSAN") in ("1", "true", "True"):
 		multiplier *= 3
+	if os.environ.get("DRIFT_MEMCHECK") in ("1", "true", "True"):
+		multiplier *= 2
 	if os.environ.get("PYTEST_XDIST_WORKER"):
 		# Roughly accommodate 4-8x wall-clock slowdown under high
 		# parallel load. Compose multiplicatively with sanitizer mode.

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -35,11 +37,11 @@ def _build_and_compile_pkg_consumer(tmp_path: Path, source: str) -> tuple[int, s
 		 "--target-word-bits", "64",
 		 "--entry", "consumer::main",
 		 "-o", str(out_bin)],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	if res.returncode != 0:
 		return res.returncode, res.stderr
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return run.returncode, res.stderr
 
 

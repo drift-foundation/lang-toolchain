@@ -132,7 +132,7 @@ def test_drift_web_add_route_pattern(tmp_path: Path) -> None:
 		str(tmp_path / "test.drift"),
 		"-o", str(tmp_path / "out"),
 	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=120)
+	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
 	assert res.returncode == 0, (
 		f"drift-web add_route pattern must compile:\n{res.stderr[:500]}"
 	)

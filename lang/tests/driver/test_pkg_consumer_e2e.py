@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -65,7 +67,7 @@ def _compile_consumer(
 	)
 
 	res = subprocess.run(
-		cmd, cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 
 	if expect_failure:
@@ -81,7 +83,7 @@ def _compile_consumer(
 def _run_binary(binary: Path, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 	"""Run a compiled binary and return the result."""
 	return subprocess.run(
-		[str(binary)], capture_output=True, text=True, timeout=timeout,
+		[str(binary)], capture_output=True, text=True, timeout=sanitizer_timeout(timeout),
 	)
 
 

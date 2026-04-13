@@ -16,6 +16,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 from lang.driftc.parser import stdlib_root
 
@@ -75,7 +76,7 @@ def test_pkg_hidden_lambda_construct_iface_resolved(tmp_path: Path) -> None:
 		"--emit-package", str(pkg_path),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=120)
+	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
 	assert res.returncode == 0, f"library package build failed: {res.stderr[:500]}"
 
 	# Step 2: Sign with ephemeral key
@@ -133,7 +134,7 @@ def test_pkg_hidden_lambda_construct_iface_resolved(tmp_path: Path) -> None:
 		"--test-build-only",
 		"--json",
 	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=120)
+	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
 	stdout = res.stdout.strip()
 	if stdout:
 		try:
