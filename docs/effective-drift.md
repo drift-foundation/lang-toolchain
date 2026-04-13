@@ -653,6 +653,109 @@ where type information is still available, and framework catch arms receive the
 exception type they already understand. The framework does not parse diagnostic
 strings or guess from generic payloads.
 
+### Structured exception attrs with `DiagnosticEntry`
+
+When a framework exception needs to carry structured field-level detail (e.g.
+validation errors per input field), use `core.diagnostic_entry` to build an
+`Array<core.DiagnosticEntry>` and pass it through a `DiagnosticValue::Object`.
+
+Create entries with the helper function, not the struct constructor directly:
+
+```drift
+import std.core as core;
+
+val field = core.diagnostic_entry("email", DiagnosticValue::String("invalid-format"));
+```
+
+`core.diagnostic_entry(key, value)` returns a `core.DiagnosticEntry` with
+public fields `key: String` and `value: DiagnosticValue`.
+
+#### Throw side: building the fields array
+
+Extend the framework error struct to carry a `fields` array and wrap it in
+`DiagnosticValue::Object` when throwing:
+
+```drift
+import std.core as core;
+
+pub exception RestBadRequest(tag: String, message: String, fields: DiagnosticValue);
+pub exception RestInternal(tag: String, message: String, fields: DiagnosticValue);
+
+pub struct RestError {
+    pub status: Int,
+    pub tag: String,
+    pub message: String,
+    pub fields: Array<core.DiagnosticEntry>,
+}
+
+implement core.Throw for RestError {
+    pub fn throw_self(self: RestError) throws {
+        val dv = DiagnosticValue::Object(move self.fields);
+        if self.status == 400 {
+            throw RestBadRequest(tag = self.tag, message = self.message, fields = dv);
+        }
+        throw RestInternal(tag = self.tag, message = self.message, fields = dv);
+    }
+}
+```
+
+App code builds the error with plain `diagnostic_entry` calls:
+
+```drift
+fn validate_signup(body: &SignupRequest) -> Result<Account, RestError> {
+    var fields: Array<core.DiagnosticEntry> = [];
+
+    if !is_valid_email(&body.email) {
+        fields.push(core.diagnostic_entry("email", DiagnosticValue::String("invalid-format")));
+    }
+    if body.age < 0 {
+        fields.push(core.diagnostic_entry("age", DiagnosticValue::String("must-be-non-negative")));
+    }
+
+    if fields.len > 0 {
+        return Err(RestError(
+            status = 400, tag = "validation", message = "invalid input",
+            fields = move fields,
+        ));
+    }
+
+    return create_account(body);
+}
+```
+
+#### Catch side: reading entries back
+
+On the catch side, `e.attrs["fields"]` returns the `DiagnosticValue::Object`.
+Call `.entries()` to get an `Array<core.DiagnosticEntry>`, then read `entry.key`
+and `entry.value` directly:
+
+```drift
+fn dispatch(req: &rest.Request, ctx: &mut rest.Context) nothrow -> rest.Response {
+    return try handle_signup(req, ctx) catch RestBadRequest(e) {
+        val fields_dv = e.attrs["fields"];
+        val entries = fields_dv.entries();
+
+        // entries is Array<core.DiagnosticEntry>
+        // each entry has public .key (String) and .value (DiagnosticValue)
+        return rest.validation_response(400, e.tag, e.message, &entries);
+    } catch RestInternal(e) {
+        return rest.error_response(500, e.tag, e.message);
+    };
+}
+```
+
+The key methods on `DiagnosticValue`:
+
+- `.entries()` — returns `Array<core.DiagnosticEntry>` (empty array for
+  non-Object values)
+- `.get(key)` — returns `Optional<DiagnosticValue>` for keyed lookup
+- `.as_string()` / `.as_int()` — returns `Optional<String>` / `Optional<Int>`
+- `.len()` — number of entries in an Object
+
+This avoids parallel arrays, stringly-typed field maps, and guessing
+constructor syntax. `core.diagnostic_entry(key, value)` is the documented
+creation path; `entry.key` and `entry.value` are the documented read path.
+
 ### Auto-try regions: `throws -> T`
 
 `fn f(...) throws -> T` is a body-wide auto-try region. Inside the function,
