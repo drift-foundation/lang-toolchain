@@ -1696,6 +1696,25 @@ class _FuncBuilder:
 	# variant copy) update _current_effective_block so the mapping is correct.
 	_block_exit_names: Dict[str, str] = field(default_factory=dict)
 	_current_effective_block: str | None = None
+	# MIR value-ids produced by ConstructDV instructions. These are freshly
+	# constructed DVs whose ownership must be balanced after error construction
+	# (drift_error_add_attr_dv clones the input, leaving the caller's copy alive).
+	# Each entry is consumed (removed) on first drop to prevent double-release
+	# if the same SSA id ever reaches multiple clone sites.
+	_construct_dv_temps: set[str] = field(default_factory=set)
+
+	def _release_construct_dv_temp(self, mir_value: str, llvm_value: str) -> None:
+		"""Release a ConstructDV caller-owned temp after the runtime clones it.
+
+		Consumes the entry from _construct_dv_temps on first call so a second
+		clone site for the same SSA id does not double-release.
+		"""
+		if mir_value not in self._construct_dv_temps:
+			return
+		self._construct_dv_temps.discard(mir_value)
+		dv_drop = self._ensure_dv_drop_helper()
+		self.lines.append(f"  call void @{dv_drop}({DRIFT_DV_TYPE} {llvm_value})")
+
 	def lower(self) -> str:
 		self._assert_cfg_supported()
 		self._prime_type_ids()
@@ -3547,6 +3566,7 @@ class _FuncBuilder:
 		elif isinstance(instr, ConstructDV):
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = DRIFT_DV_TYPE
+			self._construct_dv_temps.add(instr.dest)
 			if not instr.args:
 				self.module.needs_dv_runtime = True
 				# DV_MISSING is a runtime-defined constant (tag=0); call helper to avoid
@@ -3626,6 +3646,7 @@ class _FuncBuilder:
 				self.lines.append(
 					f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE} {code}, {DRIFT_STRING_TYPE} {event_fqn}, {DRIFT_STRING_TYPE} {attr_key}, ptr {tmp_ptr})"
 				)
+				self._release_construct_dv_temp(instr.payload, payload)
 		elif isinstance(instr, ErrorAttrsGetDV):
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)
@@ -3663,6 +3684,7 @@ class _FuncBuilder:
 			self.lines.append(
 				f"  call void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val}, ptr {tmp_ptr})"
 			)
+			self._release_construct_dv_temp(instr.value, val)
 		elif isinstance(instr, ErrorAddLocalDV):
 			self.module.needs_error_runtime = True
 			self.module.needs_dv_runtime = True
@@ -3676,6 +3698,7 @@ class _FuncBuilder:
 			self.lines.append(
 				f"  call void @drift_error_add_local_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val}, ptr {tmp_ptr})"
 			)
+			self._release_construct_dv_temp(instr.value, val)
 		elif isinstance(instr, ErrorRaise):
 			self.module.needs_error_runtime = True
 			err_val = self._map_value(instr.error)

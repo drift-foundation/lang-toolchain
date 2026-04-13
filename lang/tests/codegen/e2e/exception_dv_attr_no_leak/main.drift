@@ -1,0 +1,45 @@
+module m;
+
+import std.core as core;
+
+// Regression: ConstructDV temps passed to error attrs must be released after
+// drift_error_add_attr_dv clones them. Without the fix, each DV::String attr
+// leaks one retain per throw.
+
+pub exception Info(tag: String, message: String)
+
+// Both attrs are inline DV::String from ConstructDV — fresh temps, not locals.
+fn throw_inline() throws -> Int {
+	throw Info(tag = "t1", message = "m1");
+}
+
+// DV::Object attr from a local — must not be double-freed.
+pub exception Detail(tag: String, fields: DiagnosticValue)
+
+fn make_fields() nothrow -> DiagnosticValue {
+	return DiagnosticValue::Object([
+		core.diagnostic_entry("email", DiagnosticValue::String("required"))
+	]);
+}
+
+fn throw_object_local() throws -> Int {
+	val obj = make_fields();
+	throw Detail(tag = "validation", fields = obj);
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = try throw_inline() catch { 1 };
+	if r1 != 1 { return 1; }
+
+	val r2 = try throw_object_local() catch { 2 };
+	if r2 != 2 { return 2; }
+
+	// Repeat to stress lifecycle — leak would accumulate.
+	val r3 = try throw_inline() catch { 3 };
+	if r3 != 3 { return 3; }
+
+	val r4 = try throw_object_local() catch { 4 };
+	if r4 != 4 { return 4; }
+
+	return 0;
+}

@@ -1,0 +1,41 @@
+module m;
+
+// Regression: ConstructDV temps for captured locals must be released after
+// drift_error_add_local_dv clones them. A heap-backed captured String leaks
+// the DV retain without the fix.
+
+exception E(code: Int)
+
+fn mk() nothrow -> String {
+	return "cap" + "tured";
+}
+
+fn fail(x: Int) -> Int {
+	val ^note: String as "pipeline.note" = mk();
+	throw E(code = x);
+}
+
+fn inspect(e: E) nothrow -> Int {
+	val dv = e.captures["m::fail"]["pipeline.note"];
+	match dv.as_string() {
+		Some(s) => {
+			if s != "captured" {
+				return 1;
+			}
+		},
+		None => { return 2; },
+		default => { return 3; }
+	}
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = try fail(1) catch E(e) { inspect(e) } catch { 9 };
+	if r1 != 0 { return 1; }
+
+	// Repeat: leak accumulates without fix.
+	val r2 = try fail(2) catch E(e) { inspect(e) } catch { 9 };
+	if r2 != 0 { return 2; }
+
+	return 0;
+}

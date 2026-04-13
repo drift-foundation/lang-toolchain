@@ -1,3 +1,16 @@
+## 2026-04-13 - 0.27.188: release caller-owned `DiagnosticValue` temps after exception attr cloning
+- **Runtime ownership/codegen fix**.
+  - Fixed a leak where inline `DiagnosticValue` temps used as exception attrs or captured diagnostic locals were cloned into the runtime error object but the caller-owned temp was never released.
+  - LLVM codegen now tracks fresh `ConstructDV` MIR values and releases them after clone-taking exception runtime calls: `drift_error_new_with_payload`, `drift_error_add_attr_dv`, and `drift_error_add_local_dv`.
+  - Locals and pre-existing `DiagnosticValue` values are not released at the clone site; they remain owned by their normal scope cleanup. The codegen helper consumes each tracked temp on first release to avoid double-dropping if the same MIR value reaches more than one clone site.
+- **Regression coverage**.
+  - Added `exception_dv_attr_no_leak` for inline `DiagnosticValue::String` exception attrs and local `DiagnosticValue::Object` attrs.
+  - Added `exception_capture_heap_string_no_leak` for heap-backed captured `String` values lowered through `ErrorAddLocalDV`.
+  - Re-ran the original failing cases `exception_heap_string_uaf`, `exception_string_attr_concat_double_catch_no_corruption`, `std_json_strict_chain`, and `throw_only_non_returning` under `DRIFT_MEMCHECK=1`.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.187 to 0.27.188.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 because this changes generated cleanup only, not the compiler/runtime boundary shape.
+
 ## 2026-04-13 - 0.27.187: structured `DiagnosticValue` exception attrs and `DiagnosticEntry` array tombstones
 - **Structured exception attrs**.
   - Added `DiagnosticValue.len()` and `DiagnosticValue.entries()` so frameworks can round-trip dynamic structured attrs through typed exceptions without hard-coding field names. `entries()` returns `Array<std.core.DiagnosticEntry>` with owned cloned values.
