@@ -1,0 +1,100 @@
+module m;
+
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var fields: Array<core.DiagnosticEntry> = [];
+	fields.push(core.diagnostic_entry("email", DiagnosticValue::String("required")));
+	fields.push(core.diagnostic_entry("age", DiagnosticValue::Int(42)));
+	fields.push(core.diagnostic_entry("name", DiagnosticValue::String("missing")));
+
+	// pop() exercises ArrayElemTake + tombstone for DiagnosticEntry
+	match fields.pop() {
+		Some(last) => {
+			if last.key != "name" {
+				return 1;
+			}
+			// Verify the DiagnosticValue payload survived the take
+			match last.value.as_string() {
+				Some(v) => {
+					if v != "missing" {
+						return 2;
+					}
+				},
+				None => { return 3; },
+			}
+		},
+		None => { return 4; },
+	}
+
+	if fields.len != 2 {
+		return 5;
+	}
+
+	// remove() exercises ArrayElemTake + element shift + tombstone
+	val removed = fields.remove(0);
+	if removed.key != "email" {
+		return 6;
+	}
+	// Verify the DiagnosticValue payload survived the take + shift
+	match removed.value.as_string() {
+		Some(v) => {
+			if v != "required" {
+				return 7;
+			}
+		},
+		None => { return 8; },
+	}
+
+	if fields.len != 1 {
+		return 9;
+	}
+
+	// Remaining element: verify both key and DV payload
+	if fields[0].key != "age" {
+		return 10;
+	}
+	match fields[0].value.as_int() {
+		Some(v) => {
+			if v != 42 {
+				return 11;
+			}
+		},
+		None => { return 12; },
+	}
+
+	// push after pop/remove: triggers grow_array with ArrayElemTake
+	var i = 0;
+	while i < 20 {
+		fields.push(core.diagnostic_entry("pad", DiagnosticValue::Int(i)));
+		i = i + 1;
+	}
+	if fields.len != 21 {
+		return 13;
+	}
+	// Verify DV payloads survived the growth reallocation
+	if fields[0].key != "age" {
+		return 14;
+	}
+	match fields[0].value.as_int() {
+		Some(v) => {
+			if v != 42 {
+				return 15;
+			}
+		},
+		None => { return 16; },
+	}
+	if fields[1].key != "pad" {
+		return 17;
+	}
+	match fields[1].value.as_int() {
+		Some(v) => {
+			if v != 0 {
+				return 18;
+			}
+		},
+		None => { return 19; },
+	}
+
+	return 0;
+}

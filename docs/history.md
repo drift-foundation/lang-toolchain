@@ -1,5 +1,36 @@
 # Drift development history
 
+## 2026-04-13
+- **Structured `DiagnosticValue` exception attrs and `DiagnosticEntry` array tombstones (0.27.187, ABI 9)**:
+  Added `DiagnosticValue.len()` and `DiagnosticValue.entries()` so frameworks can round-trip dynamic structured attrs through typed exceptions without hard-coding field names. `entries()` returns `Array<std.core.DiagnosticEntry>` with owned cloned values.
+
+  Stdlib/API updates:
+    - Made `std.core.DiagnosticEntry.key` and `.value` public.
+    - The documented construction path is `std.core.diagnostic_entry(key, value)`.
+    - `DiagnosticValue::Object` now canonicalizes duplicate keys with last-write-wins semantics, so `get()`, `len()`, and `entries()` agree.
+
+  Runtime ownership fixes:
+    - `drift_error_add_attr_dv` and `drift_error_add_local_dv` now retain keys/frame names and clone `DiagnosticValue` payloads instead of shallow-copying runtime-owned data into exception attrs/captures.
+    - `DiagnosticValue` array clone/release now handles runtime-level DV arrays without leaks or dangling aliases.
+
+  Compiler/codegen fixes:
+    - Array indexing/copy lowering now supports Copy structs with runtime-owned fields, including `Array<DiagnosticEntry>`.
+    - LLVM codegen now emits a `DiagnosticValue` tombstone for real `ArrayElemTake` paths, using zero-initialized `DV_MISSING`. This fixes `Array<DiagnosticEntry>` `pop()`, `remove()`, and push-triggered growth paths that move elements between array slots.
+
+  ABI and versioning:
+    - `DRIFT_RT_ABI_VERSION` bumps from 8 to 9 because generated code can now call new runtime helpers (`drift_dv_len`, `drift_dv_entries`) and depends on the `Array<DiagnosticEntry>` runtime boundary layout.
+    - `DRIFTC_VERSION` bumps from 0.27.186 to 0.27.187.
+
+  Regression coverage:
+    - `dv_exception_field_round_trip` and `dv_object_entries_len` cover object enumeration, duplicate-key canonicalization, and exception attr round-tripping.
+    - `test_dv_entries_negative.py` covers `len`/`entries` argument diagnostics and `DiagnosticEntry` shadowing.
+    - `diagnostic_entry_array_field_read` and `diagnostic_entry_array_take` cover the web-shaped `err.fields[0].key` / `.value` reads and real `ArrayElemTake<DiagnosticEntry>` paths.
+
+  Validation note: focused DV e2e cases were run under valgrind with zero
+  errors/leaks. Typed-catch runtime tests were run with `DRIFT_MEMCHECK=1`.
+  Checker-only throws tests and ABI tests were run normally because they do not
+  execute the new runtime paths.
+
 ## 2026-04-12
 - **Terminal `throws` release completion, typed `Result.or_throw()`, and canonical test coverage (0.27.186, ABI 8)**:
   This completes the terminal `throws` / typed `or_throw()` workstream

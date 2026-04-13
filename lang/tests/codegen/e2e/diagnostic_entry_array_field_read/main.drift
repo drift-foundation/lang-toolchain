@@ -1,0 +1,82 @@
+module m;
+
+import std.core as core;
+
+pub struct RestError {
+	pub status: Int,
+	pub tag: String,
+	pub message: String,
+	pub fields: Array<core.DiagnosticEntry>,
+}
+
+fn make_error() nothrow -> RestError {
+	var fields: Array<core.DiagnosticEntry> = [];
+	fields.push(core.diagnostic_entry("email", DiagnosticValue::String("required")));
+	fields.push(core.diagnostic_entry("age", DiagnosticValue::Int(42)));
+
+	return RestError(
+		status = 400,
+		tag = "validation",
+		message = "invalid input",
+		fields = move fields
+	);
+}
+
+pub fn main() nothrow -> Int {
+	val err = make_error();
+
+	// Direct field read through array index on struct field: err.fields[0].key
+	if err.fields[0].key != "email" {
+		return 1;
+	}
+
+	// .value read and as_string() from the indexed element
+	match err.fields[0].value.as_string() {
+		Some(v) => {
+			if v != "required" {
+				return 2;
+			}
+		},
+		None => {
+			return 3;
+		},
+	}
+
+	// Second element: .key and .value.as_int()
+	if err.fields[1].key != "age" {
+		return 4;
+	}
+	match err.fields[1].value.as_int() {
+		Some(v) => {
+			if v != 42 {
+				return 5;
+			}
+		},
+		None => {
+			return 6;
+		},
+	}
+
+	// Bind element to local first (separate code path)
+	val e0 = err.fields[0];
+	if e0.key != "email" {
+		return 7;
+	}
+	match e0.value.as_string() {
+		Some(v) => {
+			if v != "required" {
+				return 8;
+			}
+		},
+		None => {
+			return 9;
+		},
+	}
+
+	// Array length through struct field
+	if err.fields.len != 2 {
+		return 10;
+	}
+
+	return 0;
+}

@@ -1,3 +1,24 @@
+## 2026-04-13 - 0.27.187: structured `DiagnosticValue` exception attrs and `DiagnosticEntry` array tombstones
+- **Structured exception attrs**.
+  - Added `DiagnosticValue.len()` and `DiagnosticValue.entries()` so frameworks can round-trip dynamic structured attrs through typed exceptions without hard-coding field names. `entries()` returns `Array<std.core.DiagnosticEntry>` with owned cloned values.
+  - Made `std.core.DiagnosticEntry.key` and `.value` public. The documented construction path is `std.core.diagnostic_entry(key, value)`.
+  - `DiagnosticValue::Object` now canonicalizes duplicate keys with last-write-wins semantics, so `get()`, `len()`, and `entries()` agree.
+- **Runtime ownership fixes**.
+  - Fixed `drift_error_add_attr_dv` and `drift_error_add_local_dv` to retain keys/frame names and clone `DiagnosticValue` payloads instead of shallow-copying runtime-owned data into exception attrs/captures.
+  - Fixed `DiagnosticValue` array clone/release handling so nested runtime-level DV arrays do not leak or dangle.
+- **Compiler/codegen fixes**.
+  - Fixed array indexing/copy lowering for Copy structs with runtime-owned fields, including `Array<DiagnosticEntry>`.
+  - Added a `DiagnosticValue` tombstone value for real `ArrayElemTake` paths, using zero-initialized `DV_MISSING`. This fixes `Array<DiagnosticEntry>` `pop()`, `remove()`, and push-triggered growth paths that move elements between array slots.
+- **ABI**.
+  - `DRIFT_RT_ABI_VERSION` bumps from 8 to 9 because generated code can now call new runtime helpers (`drift_dv_len`, `drift_dv_entries`) and depends on the `Array<DiagnosticEntry>` runtime boundary layout.
+  - `DRIFTC_VERSION` bumps from 0.27.186 to 0.27.187.
+- **Regression coverage**.
+  - Added `dv_exception_field_round_trip` and `dv_object_entries_len` for object enumeration, duplicate-key canonicalization, and exception attr round-tripping.
+  - Added `test_dv_entries_negative.py` for `len`/`entries` argument diagnostics and `DiagnosticEntry` shadowing.
+  - Added `diagnostic_entry_array_field_read` and `diagnostic_entry_array_take` for the web-shaped `err.fields[0].key` / `.value` reads and real `ArrayElemTake<DiagnosticEntry>` paths.
+- **Validation note**.
+  - Focused DV e2e cases were run under valgrind with zero errors/leaks. Typed-catch runtime tests were run with `DRIFT_MEMCHECK=1`. Checker-only throws tests and ABI tests were run normally because they do not execute the new runtime paths.
+
 ## 2026-04-12 - 0.27.186: terminal `throws` release completion, typed `Result.or_throw()`, and canonical test coverage
 - **Scope note**: this is the release-completion entry for the terminal `throws` / typed `or_throw()` workstream that started in 0.27.182. It includes the Phase 3.5 trait/interface terminal-call fixes, Phase 4 stdlib `Throw`/`Try` rebind, Phase 5 docs, stage2/codegen terminal-call lowering fixes, and the justfile coverage corrections found during review.
 - **Compiler enhancement: terminal calls through traits and interfaces**.
