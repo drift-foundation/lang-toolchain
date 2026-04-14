@@ -1,0 +1,4 @@
+{
+  "description": "K28 review regression. Array<String>.extend(&src) with heap-allocated strings: source array must remain valid post-extend (copy semantics, not move) and both arrays must drop cleanly without UAF/double-free under DRIFT_MEMCHECK=1.",
+  "exit_code": 0
+}

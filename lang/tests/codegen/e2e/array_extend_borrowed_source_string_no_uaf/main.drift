@@ -1,0 +1,111 @@
+module m;
+
+import std.core as core;
+
+// K28 review regression — Array.extend(&src) with heap String elements.
+//
+// `extend(&src)` loads each source element via ArrayIndexLoad — the value
+// is BORROWED from the source array, which still owns it.  If the
+// element-copy helper unconditionally drops the source after CopyValue,
+// the loop decrements src's String refs once per element, leaving the
+// destination's clones over-retained relative to src's accounting and
+// causing a use-after-free or double-free when src drops at scope end.
+//
+// Heap-allocated strings make the bug observable under DRIFT_MEMCHECK=1
+// (string literals carry DRIFT_STRING_FLAG_STATIC and their release is
+// a no-op, masking the bug).
+
+fn heap_str(suffix: String) nothrow -> String {
+	return "k_" + suffix;
+}
+
+fn run_string_extend() nothrow -> Int {
+	var src: Array<String> = [];
+	src.push(heap_str("a"));
+	src.push(heap_str("b"));
+	src.push(heap_str("c"));
+
+	var dest: Array<String> = [];
+	dest.extend(&src);
+
+	// Source array must still be valid post-extend: extend(&src) is a
+	// COPY-only operation, never a move.
+	if src.len != 3 {
+		return 1;
+	}
+	if src[0] != "k_a" {
+		return 2;
+	}
+	if src[1] != "k_b" {
+		return 3;
+	}
+	if src[2] != "k_c" {
+		return 4;
+	}
+
+	// Destination array must contain independent owners of equivalent
+	// String values.
+	if dest.len != 3 {
+		return 5;
+	}
+	if dest[0] != "k_a" {
+		return 6;
+	}
+	if dest[1] != "k_b" {
+		return 7;
+	}
+	if dest[2] != "k_c" {
+		return 8;
+	}
+
+	// Both arrays drop at scope end.  Pre-fix (with unconditional
+	// DropValue in _ensure_array_elem_copy applied to extend), src's
+	// String refs would be prematurely decremented during the extend
+	// loop, then re-released on src drop → UAF / double-free.
+	return 0;
+}
+
+// Same shape with Array<core.DiagnosticEntry>: DiagnosticEntry is a
+// Copy non-bitcopy struct whose `key: String` lives on the heap when
+// built via concat.  The extend lowering must leave src holding valid
+// keys post-extend.
+fn run_diagnostic_entry_extend() nothrow -> Int {
+	var src: Array<core.DiagnosticEntry> = [];
+	src.push(core.diagnostic_entry(heap_str("x"), DiagnosticValue::String("vx")));
+	src.push(core.diagnostic_entry(heap_str("y"), DiagnosticValue::Int(42)));
+
+	var dest: Array<core.DiagnosticEntry> = [];
+	dest.extend(&src);
+
+	if src.len != 2 {
+		return 10;
+	}
+	if src[0].key != "k_x" {
+		return 11;
+	}
+	if src[1].key != "k_y" {
+		return 12;
+	}
+	if dest.len != 2 {
+		return 13;
+	}
+	if dest[0].key != "k_x" {
+		return 14;
+	}
+	if dest[1].key != "k_y" {
+		return 15;
+	}
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = run_string_extend();
+	if r1 != 0 {
+		return 100 + r1;
+	}
+	val r2 = run_diagnostic_entry_extend();
+	if r2 != 0 {
+		return 200 + r2;
+	}
+	return 0;
+}

@@ -1,5 +1,112 @@
 # Drift development history
 
+## 2026-04-14
+- **Owned-DV / DiagnosticEntry-array temp release on consumption (0.27.191, ABI 9)**:
+  *Review-iteration addendum (same 0.27.191):* narrowed the DV rvalue
+  allow-list after review found two safety issues:
+    - The unconditional `DropValue` after `CopyValue` in
+      `_ensure_array_elem_copy` applied to every call site including
+      `extend(&src)` — which the reviewer flagged as potentially unsafe
+      for a borrowed source.  Refactored the helper to take an explicit
+      `drop_source` kwarg (default `True` at push/insert/set/extend
+      because the MIR-level source values are all produced as owned
+      temps: `_lower_call_arg` for push/insert, `lower_expr` of rvalue
+      args for set, and `ArrayIndexLoad`'s built-in `_emit_copy_value`
+      retain for extend) — documented per call site.  Regressions:
+      `array_extend_borrowed_source_string_no_uaf` (both `Array<String>`
+      and `Array<DiagnosticEntry>` with heap keys; verifies src stays
+      valid post-extend and both drop cleanly under memcheck).
+    - The DV rvalue receiver allow-list treated `HDVInit` as rvalue.
+      `HDVInit` lowers to `M.ConstructDV`, which is already released at
+      ConstructError / ErrorAddAttrDV sites via `_construct_dv_temps`
+      (the 0.27.187/188 mechanism).  Adding a MIR `DropValue` on top
+      double-freed the payload — flaky SIGABRT in
+      `exception_string_attr_concat_double_catch_no_corruption` when
+      two sequential catches aliased the same freed String.  Fix
+      narrowed the double-release in TWO places, NOT symmetrically:
+      (a) the DV-method-receiver allow-list `_DV_RVALUE_RECV_HEXPRS`
+      keeps `HCall` / `HMethodCall` / `HIndex` / `HDVInit` — HDVInit
+      stays for receivers like `DV::Object(...).entries()` because
+      `DVEntries` / `DVLen` / `DV*` accessor ops never fire the
+      `_construct_dv_temps` release, so a MIR-level DropValue is
+      still required; (b) the exception-ctor path
+      (`_construct_error_from_exception_init`) explicitly sets
+      `dv_is_rvalue = False` for HDVInit (and the literal-promotion
+      branch) because those values DO reach ConstructError /
+      ErrorAddAttrDV, where `_construct_dv_temps` handles the release
+      and an extra DropValue double-frees.  Projected places
+      (`holder.dv.entries()`) also excluded from the receiver
+      allow-list — their `extractvalue` is a shallow alias of the
+      owning struct's storage.  Regressions:
+      `dv_projected_place_entries_no_double_free` (exercises
+      `holder.dv.entries()` / `.len()` / `.get()` with heap keys;
+      SIGSEGV pre-fix even in plain mode).
+  Fixed two K28-aftermath LANGUAGE_BUGs that surfaced when downstream
+  consumers exercised the typed `.or_throw()` flow with non-empty
+  `Array<DiagnosticEntry>` payloads under `DRIFT_MEMCHECK=1`.
+
+  Leak A — owned DV temp leaked through DV intrinsic methods +
+  exception-ctor consumption:
+    - DV intrinsic method calls (`as_int`, `as_bool`, `as_float`,
+      `as_string`, `as_object`, `get`, `len`, `entries`) read the receiver
+      via pointer in the runtime and do **not** consume it.  When the
+      receiver was an rvalue (e.g. `e.attrs["fields"].entries()`), the
+      lowering produced an owned DV temp with no other owner — its
+      refcounted payload (Object's `Array<DiagnosticEntry>`, Array's
+      items, String buffers) leaked.  Bound receivers
+      (`val dv = …; dv.entries()`) were already safe via local scope-drop.
+    - Exception-ctor lowering passed each field DV into
+      `ConstructError(payload=…)` / `ErrorAddAttrDV(value=…)`, both of
+      which clone the DV in the runtime.  The source temp (e.g. a
+      `make_obj()` rvalue) was likewise never released.
+    - Fix: `_dv_method_recv_is_rvalue` helper in
+      `lang/driftc/stage2/hir_to_mir.py`; emit `DropValue` on the rvalue
+      DV after each DV method op, and per-field after
+      `ConstructError`/`ErrorAddAttrDV` ONLY for field exprs whose DV
+      is NOT already released by `_construct_dv_temps` (i.e. only for
+      `HCall` / `HMethodCall` / `HIndex` returning DV; HDVInit and the
+      literal-promotion branch explicitly stay `dv_is_rvalue=False`
+      because their ConstructDV-backed temps are already released at
+      Construct*/ErrorAddAttr* sites via the 0.27.187/188 mechanism).
+      `HVar` and any `HPlaceExpr` (with or without projections)
+      receivers stay untouched and rely on local scope-drop.
+
+  Leak B — `Array<DiagnosticEntry>` element source-temp leaked on push:
+    - `_ensure_array_elem_copy` always emitted `CopyValue` for Copy
+      non-bitcopy element types (per the 0.27.39-dev MIR-validator
+      contract for array stores) but never released the source temp.
+      `CopyValue` deep-clones inner refcounted storage (String retain,
+      DV clone) into the array's element copy, leaving the source's
+      inner storage with the original refcount and no owner.
+      `Array<DiagnosticEntry>` with heap-allocated keys was the
+      observable case (string literals carry `DRIFT_STRING_FLAG_STATIC`
+      and their release is a no-op, masking the bug in existing tests).
+    - Fix: emit `DropValue(value=val, ty=elem_ty)` immediately after the
+      `CopyValue` in `_ensure_array_elem_copy` so the source temp's owned
+      substructure is released.  The cloned copy returned to the caller
+      remains the lone owner of the array element.
+
+  Regression coverage:
+    - `lang/tests/codegen/e2e/exception_dv_object_rvalue_entries_no_leak/`:
+      catches an exception carrying a non-empty `DV::Object` and exercises
+      both rvalue and bound receiver forms of `.entries()` with a
+      heap-allocated key.  Fails under `DRIFT_MEMCHECK=1` pre-fix;
+      passes post-fix.
+    - `lang/tests/codegen/e2e/diagnostic_entry_array_struct_drop_no_leak/`:
+      a struct owning `Array<DiagnosticEntry>` with heap-allocated keys,
+      dropped both as a bare local and inside `Result::Err`.  Same
+      pre-/post-fix profile.
+    - The seven adjacent regressions
+      (`dv_exception_field_round_trip`, `dv_object_entries_len`,
+      `diagnostic_entry_array_take`, `diagnostic_entry_array_field_read`,
+      `exception_dv_attr_no_leak`, plus the two new ones) all pass under
+      `DRIFT_MEMCHECK=1`.
+
+  Versioning:
+    - `DRIFTC_VERSION` bumps from 0.27.190 to 0.27.191.
+    - `DRIFT_RT_ABI_VERSION` stays at 9 — compiler-side lowering change
+      only, no compiler/runtime boundary change.
+
 ## 2026-04-13
 - **Prelude visibility for `std.core.Result` methods through package consumers (0.27.190, ABI 9)**:
   Fixed K28: consumers of signed packages that returned `Result<T, E>`

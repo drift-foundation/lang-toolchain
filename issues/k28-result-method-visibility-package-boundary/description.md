@@ -1,15 +1,41 @@
 # K28: Result method visibility through package boundary
 
-## Status (2026-04-13)
-**FIXED in 0.27.190.**  Prelude visibility for `std.core.Result`
-methods through package consumers.  Consumer-side checker change only;
-no ABI bump.  Regression: `test_ext_cross_package_or_throw` (now
-passing) plus `test_ext_std_core_non_prelude_still_hidden` (negative
-guard for the narrow exemption).
+## Status (2026-04-14)
+**FIXED in 0.27.190 (visibility) + 0.27.191 (memcheck cleanup).**
 
-`Optional` was considered but is already seeded under
-`module_id = "lang.core"` by the parser, so it already passes the
-existing prelude branch — no std.core allow-list entry needed.
+- 0.27.190: Prelude visibility for `std.core.Result` methods through
+  package consumers.  Consumer-side checker change only.
+- 0.27.191: Two K28-aftermath ownership LANGUAGE_BUGs surfaced when
+  downstream exercised the typed `.or_throw()` flow with non-empty
+  `Array<DiagnosticEntry>` payloads under `DRIFT_MEMCHECK=1`.  Both
+  are owned-temp release omissions in MIR lowering:
+    - **Leak A**: rvalue DV temps fed to DV intrinsic methods
+      (`as_int`/`as_bool`/`as_float`/`as_string`/`as_object`/`get`/`len`/
+      `entries`) and to exception-ctor consumption (`ConstructError`,
+      `ErrorAddAttrDV`).  Fixed in `_dv_method_recv_is_rvalue` +
+      DV-method/exception-ctor lowering in
+      `lang/driftc/stage2/hir_to_mir.py`.
+    - **Leak B**: `_ensure_array_elem_copy` retained inner refcounted
+      storage (String retain, DV clone) into the array's element copy
+      but never released the source temp.  Fixed by emitting a paired
+      `DropValue` after `CopyValue`.
+
+Regressions:
+- `test_ext_cross_package_or_throw` (passing on 0.27.190+).
+- `test_ext_std_core_non_prelude_still_hidden` (negative guard).
+- `lang/tests/codegen/e2e/exception_dv_object_rvalue_entries_no_leak/`
+  (rvalue + bound `.entries()` on a heap-keyed `DV::Object`; passes
+  under `DRIFT_MEMCHECK=1` on 0.27.191+).
+- `lang/tests/codegen/e2e/diagnostic_entry_array_struct_drop_no_leak/`
+  (struct- and `Result::Err`-owned `Array<DiagnosticEntry>` with heap
+  keys; passes under `DRIFT_MEMCHECK=1` on 0.27.191+).
+
+`Optional` was considered for the prelude allow-list but is already
+seeded under `module_id = "lang.core"` by the parser, so it already
+passes the existing prelude branch — no std.core allow-list entry
+needed.
+
+No ABI bump for either release.
 
 ## Pre-fix history (2026-04-13, after delta reduction)
 **Re-classified as a method-visibility issue, not a TypeId duplication.**

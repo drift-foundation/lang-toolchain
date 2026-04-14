@@ -3605,35 +3605,61 @@ class HIRToMIR:
 				if recv_def2.kind is TypeKind.REF:
 					deref = H.HUnary(op=H.UnaryOp.DEREF, expr=expr.receiver)
 					dv_val = self.lower_expr(deref)
+			# K28-aftermath Leak A: DV intrinsic methods (DVAs*, DVGetField,
+			# DVLen, DVEntries) read the receiver via pointer and do NOT
+			# consume it.  When the receiver is an rvalue (e.g.
+			# `e.attrs["fields"].entries()`), `dv_val` is an OWNED temp that
+			# nothing else releases — its inner refcounted payload (Object's
+			# Array<DiagnosticEntry>, Array's items, String buffers) leaks.
+			# Bound receivers (`val dv = …; dv.entries()`) are safe because
+			# the local's scope-drop releases the DV.  We detect "rvalue
+			# receiver" syntactically: HVar / HPlaceExpr (with no projections
+			# on the place itself, which would already have built an rvalue
+			# temp via lower_expr) are bound; everything else is rvalue.
+			drop_rvalue_dv = self._dv_method_recv_is_rvalue(expr.receiver)
 			dest = self.b.new_temp()
 			if expr.method_name == "as_int":
 				self.b.emit(M.DVAsInt(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._int_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "as_bool":
 				self.b.emit(M.DVAsBool(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._bool_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "as_float":
 				self.b.emit(M.DVAsFloat(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._float_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "as_string":
 				self.b.emit(M.DVAsString(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._string_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "as_object":
 				self.b.emit(M.DVAsObject(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._optional_variant_type(self._dv_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "get":
 				key_val = self.lower_expr(expr.args[0])
 				self.b.emit(M.DVGetField(dest=dest, dv=dv_val, key=key_val))
 				self._local_types[dest] = self._optional_variant_type(self._dv_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "len":
 				self.b.emit(M.DVLen(dest=dest, dv=dv_val))
 				self._local_types[dest] = self._int_type
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 			if expr.method_name == "entries":
 				self.b.emit(M.DVEntries(dest=dest, dv=dv_val))
@@ -3644,6 +3670,8 @@ class HIRToMIR:
 					raise AssertionError("std.core:DiagnosticEntry not found in type table (compiler invariant)")
 				arr_ty = self._type_table.new_array(de_ty)
 				self._local_types[dest] = arr_ty
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest
 		result, info = self._lower_method_call(expr)
 		if result is None:
@@ -3719,19 +3747,126 @@ class HIRToMIR:
 		self._local_types[dest] = elem_ty
 		return dest
 
-	def _ensure_array_elem_copy(self, val: M.ValueId, elem_ty: TypeId) -> M.ValueId:
+	# Allow-list of HExpr shapes that produce an OWNED, INDEPENDENT
+	# DiagnosticValue rvalue temp at a DV-intrinsic-method call site.
+	# Used by `_dv_method_recv_is_rvalue` to decide whether the lowering
+	# must emit a `DropValue` after a read-only DV op (DVAs*, DVGetField,
+	# DVLen, DVEntries) to avoid leaking the receiver's refcounted
+	# payload.
+	#
+	# In allow-list (return True):
+	# - `H.HCall`       — function call returning DV (e.g. `make_obj()`).
+	#                     The ConstructDV (if any) is inside the callee;
+	#                     the caller sees the return value which is NOT
+	#                     tracked in `_construct_dv_temps`.
+	# - `H.HMethodCall` — method call returning DV (same reasoning).
+	# - `H.HIndex`      — `e.attrs["fields"]`, `e.captures["fr"]["k"]` — both
+	#                     lower to ErrorAttrsGetDV / ErrorCapturesGetDV which
+	#                     call `drift_dv_clone` and hand back an owned DV
+	#                     (not a ConstructDV result).
+	# - `H.HDVInit`     — inline `DiagnosticValue::…` literal used AS A
+	#                     DV METHOD RECEIVER (e.g. `DV::Object(...).entries()`).
+	#                     HDVInit lowers to `M.ConstructDV`, whose dest is
+	#                     added to `_construct_dv_temps`.  That codegen-side
+	#                     release only fires at `ConstructError` /
+	#                     `ErrorAddAttrDV` sites (the 0.27.187/188 mechanism);
+	#                     `DVEntries` / `DVLen` / `DVAs*` / `DVGetField` do
+	#                     NOT fire it, so without a MIR-level DropValue the
+	#                     inline DV would leak.  This is the correct
+	#                     allow-list entry for DV-method receivers; the
+	#                     exception-ctor lowering handles HDVInit separately
+	#                     (explicitly sets `dv_is_rvalue=False` there —
+	#                     see `_construct_error_from_exception_init`) to
+	#                     avoid double-release when the DV DOES reach a
+	#                     ConstructError/ErrorAddAttrDV site.
+	#
+	# NOT in allow-list:
+	# - `H.HVar`, `H.HPlaceExpr` (with or without projections) — bound /
+	#                     aliased view of an owning struct field whose local
+	#                     scope-drop already accounts for the DV.  Dropping a
+	#                     projected-place DV double-frees the owning struct's
+	#                     storage at scope end (see regression
+	#                     `dv_projected_place_entries_no_double_free`).
+	_DV_RVALUE_RECV_HEXPRS: tuple = ()
+
+	def _dv_method_recv_is_rvalue(self, recv: H.HExpr) -> bool:
+		"""Decide whether a DV intrinsic method's receiver is an OWNED rvalue
+		temp (so the lowering must release it after the read-only DV op) or
+		a place expression whose owning local handles cleanup via scope-drop.
+
+		Conservative allow-list (see `_DV_RVALUE_RECV_HEXPRS` above): only
+		shapes known to allocate or clone a fresh, independently-owned DV are
+		treated as rvalue temps.  Place expressions (`H.HVar`, any
+		`H.HPlaceExpr` — including projected ones like `holder.dv.entries()`)
+		are NOT rvalue receivers: `extractvalue` from an owning struct yields
+		a shallow alias of its storage, and dropping that alias would
+		double-free the owning local at scope drop (see
+		`dv_projected_place_entries_no_double_free`).
+
+		See the K28-aftermath Leak A regression
+		(`exception_dv_object_rvalue_entries_no_leak`) for the rvalue
+		case this gate is meant to catch.
+		"""
+		# Build the tuple lazily so type lookups are deferred to first call
+		# (avoids hitting partially-loaded H module attributes at import).
+		shapes = type(self)._DV_RVALUE_RECV_HEXPRS
+		if not shapes:
+			candidates: list[type] = []
+			for attr_name in ("HCall", "HMethodCall", "HIndex", "HDVInit"):
+				cls = getattr(H, attr_name, None)
+				if isinstance(cls, type):
+					candidates.append(cls)
+			shapes = tuple(candidates)
+			type(self)._DV_RVALUE_RECV_HEXPRS = shapes
+		return isinstance(recv, shapes)
+
+	def _ensure_array_elem_copy(self, val: M.ValueId, elem_ty: TypeId, *, drop_source: bool) -> M.ValueId:
 		"""Wrap *val* in CopyValue when the element type is Copy but non-bitcopy.
 
 		Array store MIR instructions (ArrayElemInit*, ArrayIndexStore) require
 		that Copy non-bitcopy values are explicitly copied so the runtime can
 		perform the correct retain/refcount operation.  Bitcopy types and
 		non-Copy types do not need this wrapping.
+
+		Source-temp release (K28-aftermath Leak B):
+		`drop_source=True` means the caller guarantees `val` is an OWNED
+		MIR temp — either a direct rvalue owned by this function or a
+		semantically-copied view whose inner refcounted storage is
+		independent of the caller's original owner.  `CopyValue`
+		deep-clones inner refcounted storage (String retain, DV clone)
+		into the array's element copy, leaving `val`'s inner storage
+		untouched; without an explicit drop, those inner refs leak
+		(observed for `Array<DiagnosticEntry>` with heap-allocated keys).
+		A paired `DropValue(value=val)` is emitted so the source temp's
+		owned substructure is released and the returned clone is the
+		lone owner of the element storage.
+
+		`drop_source=False` is the escape hatch for a future lowering
+		path that hands in a still-borrowed view of a source whose
+		scope will drop independently (e.g. a direct `ArrayIndexLoad`
+		without the accompanying `_emit_copy_value` retain the current
+		LLVM lowering emits).  No such call site exists today; all
+		three callers (push/insert/set/extend) feed owned MIR temps,
+		so all pass `drop_source=True`.  In particular `extend(&src)`'s
+		element is NOT a borrowed view of src's storage at MIR level —
+		`_lower_array_index_load` (llvm_codegen.py) calls
+		`_emit_copy_value` on the loaded element so the MIR-level
+		`elem` is already an independent owned temp with its own retain
+		(for String) or its own deep-cloned fields (for struct/DV
+		elements).  See `array_extend_borrowed_source_string_no_uaf`
+		for the memcheck regression that pins this.
 		"""
 		copy_status = self._type_table.copy_status(elem_ty)
 		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):
 			copy_dest = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=elem_ty))
 			self._local_types[copy_dest] = elem_ty
+			if drop_source:
+				# K28-aftermath Leak B: release owned source-temp inner refs
+				# after clone.  `val` is always an owned MIR temp at the
+				# current call sites (push/insert/set/extend — see docstring);
+				# future borrowed-view paths must opt into drop_source=False.
+				self.b.emit(M.DropValue(value=val, ty=elem_ty))
 			return copy_dest
 		return val
 
@@ -4100,7 +4235,10 @@ class HIRToMIR:
 				raise AssertionError(_arr_issues[0].message)
 			val_arg = expr.args[-1]
 			val = self._lower_call_arg(val_arg, elem_ty)
-			val = self._ensure_array_elem_copy(val, elem_ty)
+			# `_lower_call_arg` returns an OWNED temp (MoveOut for HVar
+			# non-Copy paths or `lower_expr` for rvalues), so the source
+			# can be safely released after CopyValue.
+			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=True)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 			cap_val = self.b.new_temp()
@@ -4316,7 +4454,9 @@ class HIRToMIR:
 				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			val = self.lower_expr(expr.args[1], expected_type=elem_ty)
-			val = self._ensure_array_elem_copy(val, elem_ty)
+			# `lower_expr` for an rvalue returns an OWNED temp; the value
+			# parameter to `set` is consumed by the array store.
+			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=True)
 			self.b.emit(M.ArrayIndexStore(elem_ty=elem_ty, array=array_val, index=idx_val, value=val))
 			return True, None
 
@@ -4469,7 +4609,18 @@ class HIRToMIR:
 			elem = self.b.new_temp()
 			self.b.emit(M.ArrayIndexLoad(dest=elem, elem_ty=elem_ty, array=src_val, index=cur))
 			self._local_types[elem] = elem_ty
-			elem = self._ensure_array_elem_copy(elem, elem_ty)
+			# `extend(&src)`: at the MIR level `elem` looks like a borrowed
+			# load from src, but the LLVM lowering of `ArrayIndexLoad`
+			# (`_lower_array_index_load`) calls `_emit_copy_value` on the
+			# loaded element — for non-bitcopy types like String /
+			# `Array<DiagnosticEntry>` this performs the retain (or deep
+			# field clone) so the MIR-level `elem` is in fact an INDEPENDENT
+			# owned temp distinct from src's storage.  CopyValue then takes
+			# ANOTHER retain for the destination's element copy, leaving
+			# `elem`'s extra ref unbalanced unless we drop it.  See
+			# `array_extend_borrowed_source_string_no_uaf` (memcheck-clean
+			# only with the paired drop emitted here).
+			elem = self._ensure_array_elem_copy(elem, elem_ty, drop_source=True)
 			dest_idx = self.b.new_temp()
 			self.b.emit(M.BinaryOpInstr(dest=dest_idx, op=H.BinaryOp.ADD, left=len_val, right=cur))
 			self.b.emit(M.ArrayElemInitUnchecked(elem_ty=elem_ty, array=array_val2, index=dest_idx, value=elem))
@@ -4803,10 +4954,33 @@ class HIRToMIR:
 			)
 			return err_val
 
-		field_dvs: list[tuple[str, M.ValueId]] = []
+		# K28-aftermath Leak A (throw side): exception ctor lowers each field
+		# to a DV and consumes it via ConstructError(payload=…) /
+		# ErrorAddAttrDV(value=…), both of which clone the DV at runtime
+		# (drift_error_new_with_payload + drift_error_add_attr_dv both call
+		# drift_dv_clone).  The source DV temp must be released after
+		# consumption or its inner refcounted payload (Object's
+		# Array<DiagnosticEntry>, String buffers) leaks.
+		#
+		# Two ownership-release mechanisms coexist and must NOT overlap:
+		# (a) `_construct_dv_temps` / `_release_construct_dv_temp` in LLVM
+		#     codegen (added in 0.27.187/188) fires automatically when a
+		#     ConstructError / ErrorAddAttrDV site consumes a MIR value
+		#     that was produced by `M.ConstructDV` (HDVInit and the
+		#     literal-promotion branch below both go through ConstructDV).
+		# (b) MIR-level `DropValue` emitted here when the field expr is an
+		#     HCall / HMethodCall / HIndex returning DV — those produce an
+		#     owned temp across a function / runtime boundary and are NOT
+		#     tracked by (a).
+		# Emitting BOTH on the same value double-frees (see
+		# `exception_string_attr_concat_double_catch_no_corruption`), so
+		# `dv_is_rvalue` stays False whenever (a) already covers the value.
+		field_dvs: list[tuple[str, M.ValueId, bool]] = []
 		for name, field_expr in resolved:
 			if isinstance(field_expr, H.HDVInit):
+				# HDVInit lowers to M.ConstructDV — covered by _construct_dv_temps.
 				dv_val = self.lower_expr(field_expr)
+				dv_is_rvalue = False
 			elif isinstance(field_expr, (H.HLiteralInt, H.HLiteralBool, H.HLiteralString)):
 				inner_val = self.lower_expr(field_expr)
 				dv_val = self.b.new_temp()
@@ -4814,6 +4988,8 @@ class HIRToMIR:
 				if isinstance(field_expr, H.HLiteralString):
 					kind_name = "String"
 				self.b.emit(M.ConstructDV(dest=dv_val, dv_type_name=kind_name, args=[inner_val]))
+				# Literal-promoted ConstructDV — covered by _construct_dv_temps.
+				dv_is_rvalue = False
 			else:
 				dv_val = self.lower_expr(field_expr)
 				dv_ty = self._local_types.get(dv_val)
@@ -4821,9 +4997,13 @@ class HIRToMIR:
 					raise AssertionError(
 						f"exception field {name!r} must lower to DiagnosticValue (checker bug)"
 					)
-			field_dvs.append((name, dv_val))
+				# HCall / HMethodCall / HIndex returning DV are not tracked
+				# by _construct_dv_temps; MIR-level DropValue is needed.
+				# HVar / HPlaceExpr defer to local scope-drop.
+				dv_is_rvalue = self._dv_method_recv_is_rvalue(field_expr)
+			field_dvs.append((name, dv_val, dv_is_rvalue))
 
-		first_name, first_dv = field_dvs[0]
+		first_name, first_dv, first_is_rvalue = field_dvs[0]
 		first_key = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=first_key, value=first_name))
 		self.b.emit(
@@ -4835,10 +5015,14 @@ class HIRToMIR:
 				attr_key=first_key,
 			)
 		)
-		for name, dv in field_dvs[1:]:
+		if first_is_rvalue:
+			self.b.emit(M.DropValue(value=first_dv, ty=self._dv_type))
+		for name, dv, is_rvalue in field_dvs[1:]:
 			key = self.b.new_temp()
 			self.b.emit(M.ConstString(dest=key, value=name))
 			self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key, value=dv))
+			if is_rvalue:
+				self.b.emit(M.DropValue(value=dv, ty=self._dv_type))
 		return err_val
 
 	def _visit_expr_HResultOk(self, expr: H.HResultOk) -> M.ValueId:
