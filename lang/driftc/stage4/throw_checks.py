@@ -41,6 +41,7 @@ class FuncThrowInfo:
 	may_fail_sites: Set[tuple[str, int]]
 	declared_can_throw: bool
 	return_type_id: Optional[TypeId] = None
+	declared_terminal_throws: bool = False
 	declared_events: Optional[Set[str]] = None
 	inferred_may_throw: bool = False
 	has_explicit_throw_decl: bool = False
@@ -102,6 +103,14 @@ def build_func_throw_info(
 					explicit_decl = bool(getattr(sig, "throws_events", ())) or getattr(sig, "declared_can_throw", None) is not None
 				if getattr(fn_info, "declared_events", None) is not None:
 					decl_events = set(fn_info.declared_events)  # type: ignore[arg-type]
+		# K27: propagate declared_terminal_throws from the FnInfo's signature
+		# so that FnResult ok-type validation can be skipped — terminal-throws
+		# functions cannot normal-return, so there is no ok payload to validate.
+		_terminal = False
+		if fn_infos is not None:
+			_fti = fn_infos.get(fn_id)
+			if _fti is not None and getattr(_fti, "signature", None) is not None:
+				_terminal = bool(getattr(_fti.signature, "declared_terminal_throws", False))
 		out[fn_id] = FuncThrowInfo(
 			constructs_error=summary.constructs_error,
 			exception_types=set(summary.exception_types),
@@ -109,6 +118,7 @@ def build_func_throw_info(
 			# call_sites are currently informational only; invariants are value-based.
 			declared_can_throw=declared_can_throw.get(fn_id, False),
 			return_type_id=return_ty,
+			declared_terminal_throws=_terminal,
 			declared_events=decl_events,
 			inferred_may_throw=inferred,
 			has_explicit_throw_decl=explicit_decl,
@@ -291,7 +301,12 @@ def enforce_fnresult_returns_typeaware(
 		fn_type_error = None
 		decl_ok_err: tuple[TypeId, TypeId] | None = None
 		table = getattr(type_env, "_table", None)
-		if info.declared_can_throw and info.return_type_id is not None and table is not None:
+		# K27: Terminal-throws functions cannot normal-return, so there is no
+		# ok payload to validate.  Skip the ok-type identity check; the
+		# structural guard (is_fnresult) still runs so any returned value
+		# must be an FnResult.
+		_is_terminal = bool(getattr(info, "declared_terminal_throws", False))
+		if info.declared_can_throw and info.return_type_id is not None and table is not None and not _is_terminal:
 			decl_ok_err = (info.return_type_id, table.ensure_error())
 		# We assume SSA layer can expose returns; in this skeleton we scan MIR
 		# terminators in the underlying MIR function carried by SsaFunc.

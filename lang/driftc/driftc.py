@@ -1657,6 +1657,7 @@ def _encode_impl_headers_for_module(
 	module_id: str,
 	impls: list[object] | None,
 	package_id: str | None = None,
+	module_packages: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
 	if not impls:
 		return []
@@ -1682,18 +1683,23 @@ def _encode_impl_headers_for_module(
 					"module": trait_mod,
 					"name": trait_name,
 				}
-		# K26: For same-module trait impls, trait_key is None because the
-		# interface is already in the type table.  Fall back to trait_expr
-		# (the raw TypeExpr from the source) to preserve trait identity in
-		# the DMIR so consumers can build vtable indices.
+		# K26/K27: For same-module trait impls, trait_key is None because
+		# the interface is already in the type table.  Fall back to
+		# trait_expr (the raw TypeExpr from the source) to preserve trait
+		# identity in the DMIR so consumers can build vtable indices.
+		# K27: resolve the trait's owning package via module_packages
+		# instead of defaulting to the producer's package_id — a cross-
+		# package trait (e.g. core.Throw implemented in a user package)
+		# must retain the trait owner's package identity.
 		if trait_obj is None:
 			trait_expr_raw = getattr(impl, "trait_expr", None)
 			if trait_expr_raw is not None:
 				te_name = getattr(trait_expr_raw, "name", None)
 				te_mod = getattr(trait_expr_raw, "module_id", None) or module_id
 				if isinstance(te_name, str) and te_name:
+					te_pkg = (module_packages or {}).get(te_mod, package_id)
 					trait_obj = {
-						"package_id": package_id,
+						"package_id": te_pkg,
 						"module": te_mod,
 						"name": te_name,
 					}
@@ -7620,6 +7626,14 @@ def main(argv: list[str] | None = None) -> int:
 			for _path, _tid_map, _tt_obj in zip(_pkg_paths, _maps, _pkg_tt_objs):
 				pkg_typeid_maps[_path] = _tid_map
 				pkg_tid_universes[_path] = frozenset(decode_type_table_obj(_tt_obj).defs.keys())
+		# K27: Sync builtin TypeId caches on the pre-linked type table so
+		# that ensure_void() (and other ensure_* calls) in the parser and
+		# consumer signature normalization return the same TypeId that the
+		# linked packages use, avoiding duplicate Void/Error/etc entries.
+		if pre_linked_type_table is not None:
+			for _tid, _td in pre_linked_type_table._defs.items():
+				if _td.kind is TypeKind.VOID and getattr(pre_linked_type_table, "_void_type", None) is None:
+					pre_linked_type_table._void_type = _tid
 
 	# ── Create SemanticWorld ─────────────────────────────────────────
 	# The world carries all semantic stores through the pipeline.
@@ -8126,6 +8140,14 @@ def main(argv: list[str] | None = None) -> int:
 							_resolved_err_ext = resolve_opaque_type(et_expr, type_table, module_id=module_name, type_params=type_param_map)
 							if type_table.get(_resolved_err_ext).kind not in (TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 								err_tid = _resolved_err_ext
+
+					# K27: Terminal-throws signatures encode return_type=null in the
+					# package format (declared_terminal_throws is the source of truth).
+					# Normalize return_type_id to Void on the consumer side so call
+					# registration, method resolution, and FnResult plumbing have a
+					# valid TypeId.  The declared_terminal_throws flag is preserved.
+					if ret_tid is None and bool(sd.get("declared_terminal_throws", False)):
+						ret_tid = type_table.ensure_void()
 
 					intrinsic_kind = None
 					intrinsic_kind_raw = sd.get("intrinsic_kind")
@@ -8878,7 +8900,14 @@ def main(argv: list[str] | None = None) -> int:
 				continue
 			if getattr(sig, "is_wrapper", False):
 				continue
-			if sig.param_type_ids is None or sig.return_type_id is None:
+			# K27: Terminal-throws signatures from packages have return_type=null
+			# (declared_terminal_throws is the source of truth).  Normalize
+			# return_type_id to Void for registry/call-result purposes while
+			# preserving declared_terminal_throws=True on the signature.
+			_effective_return_type_id = sig.return_type_id
+			if _effective_return_type_id is None and bool(getattr(sig, "declared_terminal_throws", False)):
+				_effective_return_type_id = type_table.ensure_void()
+			if sig.param_type_ids is None or _effective_return_type_id is None:
 				continue
 			# K20: skip __inst__ monomorphized sigs when generic template exists.
 			# Only skip sigs that are themselves non-generic (true monomorphizations,
@@ -8928,7 +8957,7 @@ def main(argv: list[str] | None = None) -> int:
 					name=sig.method_name or sig.name,
 					module_id=module_id,
 					visibility=visibility,
-					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=_effective_return_type_id),
 					template_signature=_template_sig_for(sig),
 					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
 					template_impl_type_params=tuple(tp.name for tp in (getattr(sig, "impl_type_params", []) or [])),
@@ -8945,7 +8974,7 @@ def main(argv: list[str] | None = None) -> int:
 					name=fn_id.name,
 					module_id=module_id,
 					visibility=Visibility.public(),
-					signature=CallableSignature(param_types=param_types_tuple, result_type=sig.return_type_id),
+					signature=CallableSignature(param_types=param_types_tuple, result_type=_effective_return_type_id),
 					template_signature=_template_sig_for(sig),
 					template_type_params=tuple(tp.name for tp in (sig.type_params or [])),
 					fn_id=fn_id,
@@ -9903,6 +9932,7 @@ def main(argv: list[str] | None = None) -> int:
 				if isinstance(module_exports, dict)
 				else [],
 				package_id=package_id,
+				module_packages=getattr(type_table, "module_packages", None),
 			)
 			for hdr in impl_headers:
 				hdr["impl_id"] = pkg_next_impl_id

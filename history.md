@@ -1,3 +1,18 @@
+## 2026-04-13 - 0.27.189: cross-package terminal `Throw` impl visibility
+- **Package trait impl metadata fix**.
+  - Fixed cross-package trait identity encoding for package impl headers. When a producer package implements an imported trait such as `std.core.Throw`, the encoded impl header now preserves the trait owner's package (`std`) instead of incorrectly attributing the trait to the producer package.
+  - The fallback path that reconstructs trait identity from a raw `trait_expr` now resolves the owning package via `module_packages`, guarding the previously fragile `trait_key is None` path.
+- **Terminal `throws` package-consumer fix**.
+  - Package signatures intentionally encode bare terminal `throws` methods with `return_type=null` and `declared_terminal_throws=true`. Consumers now normalize those signatures to a synthetic `Void` return TypeId for callable registration and call-result plumbing while preserving `declared_terminal_throws=true` as the source of truth.
+  - Synced the pre-linked type table's cached builtin `Void` TypeId before consumer-side terminal-signature normalization so `ensure_void()` reuses the package-linked builtin instead of creating a duplicate.
+  - Stage4 FnResult validation now carries `declared_terminal_throws` and skips only the ok-payload identity check for terminal functions, because terminal `throws` has no normal ok payload to validate. The structural FnResult check still runs.
+- **Regression coverage**.
+  - Added package-consumer coverage for `implement std.core.Throw for ProducerError` defined in a signed external package. The tests assert the impl header trait identity is `std` / `std.core` / `Throw`, compile a consumer that directly calls `throw_self` through the package boundary, and run a stub-linked catch-all binary path.
+  - Added strict-xfail K28 coverage for the separate package-boundary `.or_throw()` failure: `Result<T, E>` values returned from packages can still miss inherent `Result` methods because package-linked and source-compiled `Result` base TypeIds are not unified. This remains open in `issues/k28-result-method-visibility-package-boundary/` and means the full web-facing `(move r).or_throw()` package-consumer flow is not fixed by 0.27.189.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.188 to 0.27.189.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 because this changes package metadata consumption and compiler signature normalization only, not the compiler/runtime boundary shape.
+
 ## 2026-04-13 - 0.27.188: release caller-owned `DiagnosticValue` temps after exception attr cloning
 - **Runtime ownership/codegen fix**.
   - Fixed a leak where inline `DiagnosticValue` temps used as exception attrs or captured diagnostic locals were cloned into the runtime error object but the caller-owned temp was never released.

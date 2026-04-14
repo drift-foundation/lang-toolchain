@@ -1,6 +1,46 @@
 # Drift development history
 
 ## 2026-04-13
+- **Cross-package terminal `Throw` impl visibility (0.27.189, ABI 9)**:
+  Fixed package-consumer visibility for terminal `Throw` impl methods defined
+  in external packages.
+
+  Package trait impl metadata:
+    - Impl headers now preserve the imported trait's owning package. For
+      example, `implement std.core.Throw for ProducerError` inside a producer
+      package encodes the trait as package `std`, module `std.core`, name
+      `Throw`, not as the producer package.
+    - The fallback path that reconstructs trait identity from raw `trait_expr`
+      now resolves the owner through `module_packages`.
+
+  Terminal signature normalization:
+    - Package signatures still encode bare terminal `throws` methods as
+      `return_type=null` with `declared_terminal_throws=true`.
+    - Consumers now normalize those signatures to a synthetic `Void` return
+      TypeId for callable registration and call-result plumbing while
+      preserving `declared_terminal_throws=true` as the source of truth.
+    - The pre-linked type table's builtin `Void` cache is synced before this
+      normalization so `ensure_void()` reuses the package-linked builtin.
+    - Stage4 FnResult validation now carries `declared_terminal_throws` and
+      skips only the ok-payload identity check for terminal functions, because
+      terminal `throws` has no normal ok payload to validate.
+
+  Regression coverage:
+    - Added signed package-consumer coverage for `implement std.core.Throw for
+      ProducerError`, including impl-header trait identity checks and a direct
+      `throw_self` consumer compile/run path.
+    - Added strict-xfail K28 coverage for the separate `.or_throw()` package
+      boundary bug. `Result<T, E>` values returned from packages can still miss
+      inherent `Result` methods when package-linked and source-compiled
+      `Result` base TypeIds are not unified. Tracked in
+      `issues/k28-result-method-visibility-package-boundary/`.
+
+  Versioning:
+    - `DRIFTC_VERSION` bumps from 0.27.188 to 0.27.189.
+    - `DRIFT_RT_ABI_VERSION` stays at 9 because this changes package metadata
+      consumption and compiler signature normalization only, not the
+      compiler/runtime boundary shape.
+
 - **Release caller-owned `DiagnosticValue` temps after exception attr cloning (0.27.188, ABI 9)**:
   Fixed a leak where inline `DiagnosticValue` temps used as exception attrs or
   captured diagnostic locals were cloned into the runtime error object but the
