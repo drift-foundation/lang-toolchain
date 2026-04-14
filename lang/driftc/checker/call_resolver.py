@@ -138,8 +138,30 @@ def _candidate_visible(cand: CallableDecl, *, visible_modules_set: set, current_
 # known stdlib implementation module).  This prevents user-defined
 # `implement String { … }` blocks from gaining unintended cross-module
 # visibility.
+#
+# Narrow std.core exemption (K28): `Result` is a conceptually-prelude
+# variant — values of `Result<T, E>` appear in every consumer that calls
+# a fallible package function — but it lives under module_id "std.core"
+# rather than the lang.core/builtin scope.  Without an exemption,
+# calling inherent methods on a package-returned `Result` requires the
+# consumer to `import std.core` redundantly.  We allow-list *only*
+# `Result` by name; do **not** broaden this to "all of std.core" —
+# that would globally expose every std.core type's methods (e.g.
+# `Cell.get`, `DiagnosticEntry`, `DefaultHasher`) to every consumer
+# regardless of import scope.
+#
+# Note: `Optional` is NOT in this set because the parser seeds it under
+# `module_id = "lang.core"` (see `ensure_optional_base` in
+# lang/driftc/parser/__init__.py), so it already passes the
+# `td.module_id in _PRELUDE_TYPE_MODULES` check above.  Add it here only
+# if a real `std.core.Optional` receiver path emerges.
+#
+# See issues/k28-result-method-visibility-package-boundary/description.md
+# and the regressions in lang/tests/driver/test_external_consumer.py
+# (test_ext_cross_package_or_throw, test_ext_std_core_non_prelude_still_hidden).
 _PRELUDE_TYPE_MODULES: frozenset[str | None] = frozenset({None, "lang.core"})
 _PRELUDE_METHOD_SOURCE_MODULES: frozenset[str] = frozenset({"std.core", "std.iter", "std.containers", "lang.core"})
+_PRELUDE_STD_CORE_TYPE_NAMES: frozenset[str] = frozenset({"Result"})
 
 def _is_prelude_type_method(cand: CallableDecl, type_table: object) -> bool:
 	if cand.impl_target_type_id is None or not cand.visibility.is_public:
@@ -154,7 +176,11 @@ def _is_prelude_type_method(cand: CallableDecl, type_table: object) -> bool:
 		td = type_table.get(cand.impl_target_type_id)
 	except (KeyError, IndexError):
 		return False
-	return td.module_id in _PRELUDE_TYPE_MODULES
+	if td.module_id in _PRELUDE_TYPE_MODULES:
+		return True
+	if td.module_id == "std.core" and getattr(td, "name", None) in _PRELUDE_STD_CORE_TYPE_NAMES:
+		return True
+	return False
 
 
 @dataclass(frozen=True)

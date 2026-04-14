@@ -1890,27 +1890,28 @@ pub fn main() nothrow -> Int {
 	)
 
 
-@pytest.mark.xfail(reason="K28: pre-existing Result base TypeId duplication — package-linked vs source-compiled", strict=True)
 def test_ext_cross_package_or_throw(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
 	"""K28: Result<T, ProducerError>.or_throw() through package boundary.
 
-	LANGUAGE_BUG (pre-existing, separate from K27): the generic
-	Try<Result<T,E>> / .or_throw() path fails with 'method or_throw exists
-	but is not visible here' when the Result instance's base TypeId comes
-	from package type-table linking and differs from the source-compiled
-	Result base.  This is a type-table linking gap for builtin variant base
-	TypeId unification, not a Throw impl visibility issue.
+	The consumer DOES NOT `import std.core`.  That is the bug surface.
+	Without the K28 fix, `.or_throw()` resolution fails with
+	"method 'or_throw' exists but is not visible here" because std.core is
+	not in the consumer's visible_modules_set and the prelude exemption
+	(`_is_prelude_type_method`) requires Result.module_id ∈
+	{None, "lang.core"} but it is "std.core".
 
-	Suspected subsystem: type_table_link_v0 / _seed_builtin_types interaction
-	— package-linked Result base TypeId is not unified with the source-compiled
-	Result base, causing callable_registry method lookup to miss inherent
-	Result methods.
+	The fix narrows the prelude exemption: `std.core.Result` is now
+	treated as a prelude variant for visibility purposes (but only
+	Result — see test_ext_std_core_non_prelude_still_hidden for the
+	negative).  Optional is already covered by the existing
+	`module_id in {None, "lang.core"}` branch because the parser
+	seeds it under lang.core.
 
-	This test is marked xfail until the Result base TypeId unification is
-	fixed.  When it passes, the web-reported .or_throw() failure is fully
-	resolved.
+	Both call forms are exercised here (chained-on-rvalue and
+	`(move r).or_throw()` on a bound local) because the visibility check
+	runs before either path diverges and both must succeed.
 	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -1934,7 +1935,40 @@ def test_ext_cross_package_or_throw(
 
 	consumer = tmp_path / "consumer"
 	main_src = consumer / "main.drift"
-	_write_file(main_src, """\
+
+	def _compile(source: str, *, label: str) -> None:
+		_write_file(main_src, source)
+		argv = [
+			"-M", str(consumer),
+			"--stdlib-root", str(stdlib_dir),
+			"--package-root", str(thrower_pkg.parent),
+			"--dep", "acme.thrower@0.0.0",
+			"--dev",
+			"--dev-core-trust-store", str(core_trust),
+			"--trust-store", str(trust),
+			"--entry", "main::main",
+			str(main_src),
+			"--emit-ir", str(tmp_path / f"out_{label}.ll"),
+			"--json",
+		]
+		rc = driftc_main(argv)
+		captured = capsys.readouterr()
+		payload = json.loads(captured.out) if captured.out.strip() else {}
+		diags = payload.get("diagnostics", [])
+		messages = " ".join(d.get("message", "") for d in diags)
+		assert rc == 0, (
+			f"K28 ({label}): .or_throw() through package boundary should compile; "
+			f"diagnostics: {messages}"
+		)
+		# Sanity: the source must NOT import std.core — that's the bug surface.
+		assert "import std.core" not in source, (
+			f"K28 ({label}): fixture must not import std.core; that import would "
+			"sidestep the bug instead of testing the fix"
+		)
+
+	# Local-binding form: receiver TypeId comes from the local variable's
+	# symbol-table entry written from the package-linked Result.
+	_compile("""\
 module main;
 
 import acme.thrower as thrower;
@@ -1951,13 +1985,127 @@ pub fn main() nothrow -> Int {
 		98
 	};
 }
-""")
+""", label="local_binding")
 
+	# Chained form: receiver TypeId comes directly from the callee's
+	# return-type expression resolved in the consumer.
+	_compile("""\
+module main;
+
+import acme.thrower as thrower;
+
+fn do_throw() throws -> Int {
+	return thrower.make_err().or_throw();
+}
+
+pub fn main() nothrow -> Int {
+	return try do_throw() catch std.err:ResultError(_) {
+		42
+	} catch {
+		98
+	};
+}
+""", label="chained")
+
+
+# ── K28 guard: std.core types other than Result/Optional stay hidden ──
+
+
+_ACME_CELL_SOURCE = """\
+module acme.cell;
+
+import std.core as core;
+
+export { make_cell };
+
+pub fn make_cell() nothrow -> core.Cell<Int> {
+	return core.cell(7);
+}
+"""
+
+
+def _build_signed_cell_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
+	"""Build a signed acme.cell package returning std.core.Cell<Int>."""
+	build = tmp_path / "cell_build"
+	mod_dir = build / "acme" / "cell"
+	_write_file(mod_dir / "cell.drift", _ACME_CELL_SOURCE)
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	pkg_path = tmp_path / "pkgs" / "acme.cell.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(stdlib_dir),
+		str(mod_dir / "cell.drift"),
+		*_emit_pkg_args("acme.cell"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.cell package fixture"
+
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(
+		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+	)
+	return pkg_path
+
+
+def test_ext_std_core_non_prelude_still_hidden(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""K28 guard: the narrow prelude exemption covers ONLY std.core.Result.
+	Inherent methods on other std.core types (here, std.core.Cell.get)
+	must still require an explicit `import std.core` in the consumer to
+	be visible.
+
+	If this test ever fails, the prelude exemption has been broadened
+	beyond Result and the visibility surface needs review — see
+	_PRELUDE_STD_CORE_TYPE_NAMES in lang/driftc/checker/call_resolver.py.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+	keys = _gen_keys()
+	cell_pkg = _build_signed_cell_pkg(tmp_path, keys)
+	_ = capsys.readouterr()
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	core_trust = tmp_path / "core_trust.json"
+	_write_trust_store(
+		core_trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
+	trust = tmp_path / "trust.json"
+	_write_trust_store(
+		trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["acme.*"],
+	)
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	# Consumer does NOT import std.core; calls Cell.get on the
+	# package-returned Cell value.  Must fail visibility (Cell is not in
+	# the K28 narrow exemption).
+	_write_file(main_src, """\
+module main;
+
+import acme.cell as cell;
+
+pub fn main() nothrow -> Int {
+	val c = cell.make_cell();
+	return (&c).get();
+}
+""")
 	argv = [
 		"-M", str(consumer),
 		"--stdlib-root", str(stdlib_dir),
-		"--package-root", str(thrower_pkg.parent),
-		"--dep", "acme.thrower@0.0.0",
+		"--package-root", str(cell_pkg.parent),
+		"--dep", "acme.cell@0.0.0",
 		"--dev",
 		"--dev-core-trust-store", str(core_trust),
 		"--trust-store", str(trust),
@@ -1971,7 +2119,10 @@ pub fn main() nothrow -> Int {
 	payload = json.loads(captured.out) if captured.out.strip() else {}
 	diags = payload.get("diagnostics", [])
 	messages = " ".join(d.get("message", "") for d in diags)
-	assert rc == 0, (
-		f"K28: .or_throw() through package boundary should compile; "
-		f"diagnostics: {messages}"
+	assert rc != 0, (
+		"K28 guard: Cell.get must NOT be visible without `import std.core`; "
+		"the narrow exemption covers only Result"
+	)
+	assert "exists but is not visible here" in messages, (
+		f"K28 guard: expected visibility diagnostic for Cell.get; got: {messages}"
 	)

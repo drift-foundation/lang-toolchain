@@ -1,3 +1,17 @@
+## 2026-04-13 - 0.27.190: prelude visibility for `std.core.Result` methods through package consumers
+- **Checker visibility fix (K28)**.
+  - Fixed `or_throw` / `on_error` / other inherent `Result` methods being rejected as "exists but is not visible here" when called on a `Result<T, E>` value returned by a signed package, in consumers that do not explicitly `import std.core`.
+  - The originally-suspected "package-linked vs source-compiled `Result` base TypeId duplication" was disproven by delta reduction (`work/k28-delta-reduction/`). There is exactly one `Result` base in the consumer; the failure is a visibility-gate gap.
+  - `_is_prelude_type_method` in `lang/driftc/checker/call_resolver.py` previously required the receiver's `module_id` to be in `{None, "lang.core"}`. `Result` lives at `std.core`, so the prelude exemption never fired.
+  - Narrow exemption added: types with `module_id = "std.core"` and `name == "Result"` are now treated as prelude receivers. Other `std.core` types (`Cell`, `DiagnosticEntry`, `DefaultHasher`, …) remain visibility-gated, by design.
+  - `Optional` was considered for the same allow-list but is already seeded by the parser under `module_id = "lang.core"` (see `ensure_optional_base`), so it already passes the existing `module_id ∈ {None, "lang.core"}` branch. Adding it to the std.core allow-list would be dead code; left out until a real `std.core.Optional` receiver path emerges.
+- **Regression coverage**.
+  - Converted `test_ext_cross_package_or_throw` from `xfail(strict=True)` to passing. Fixture intentionally omits `import std.core` — an inline assertion guards against accidentally adding the import and sidestepping the bug. Both `(move r).or_throw()` on a bound local and chained `pkgfn(...).or_throw()` on an rvalue are exercised.
+  - Added `test_ext_std_core_non_prelude_still_hidden`: a consumer calling `std.core.Cell.get` on a package-returned `Cell<Int>` value (no `import std.core`) must still emit the visibility diagnostic. Failure of this test signals the exemption was broadened beyond Result and the visibility surface needs review.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.189 to 0.27.190.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 because this is a consumer-side checker change only, not a compiler/runtime boundary shape change.
+
 ## 2026-04-13 - 0.27.189: cross-package terminal `Throw` impl visibility
 - **Package trait impl metadata fix**.
   - Fixed cross-package trait identity encoding for package impl headers. When a producer package implements an imported trait such as `std.core.Throw`, the encoded impl header now preserves the trait owner's package (`std`) instead of incorrectly attributing the trait to the producer package.

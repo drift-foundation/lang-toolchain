@@ -1,6 +1,55 @@
 # Drift development history
 
 ## 2026-04-13
+- **Prelude visibility for `std.core.Result` methods through package consumers (0.27.190, ABI 9)**:
+  Fixed K28: consumers of signed packages that returned `Result<T, E>`
+  could not call inherent `Result` methods (`or_throw`, `on_error`, etc.)
+  on the returned value without a redundant `import std.core`.
+
+  Root cause:
+    - `_is_prelude_type_method` in `lang/driftc/checker/call_resolver.py`
+      gated visibility on the receiver type's `module_id` being in
+      `{None, "lang.core"}`.  `Result` lives at `module_id = "std.core"`,
+      so the prelude exemption never fired and visibility fell back to
+      the consumer's `visible_modules_set`, which typically does not
+      contain `std.core`.
+    - The originally-suspected "package-linked vs source-compiled
+      `Result` base TypeId duplication" was disproven during delta
+      reduction (see `work/k28-delta-reduction/`).  There is exactly one
+      `Result` base TypeId in the consumer; the issue was visibility,
+      not identity.
+
+  Fix:
+    - Added a narrow exemption: types with `module_id = "std.core"` and
+      `name == "Result"` are now treated as prelude receivers for
+      visibility purposes.  Other `std.core` types (`Cell`,
+      `DiagnosticEntry`, `DefaultHasher`, …) remain hidden without an
+      explicit `import std.core`, by design.
+    - `Optional` was considered for the same allow-list but is already
+      seeded by the parser under `module_id = "lang.core"` (see
+      `ensure_optional_base`), so it already passes the existing
+      `module_id ∈ {None, "lang.core"}` branch.  Adding it to the
+      std.core allow-list would be dead code; left out until a real
+      `std.core.Optional` receiver path emerges.
+
+  Regression coverage:
+    - Converted `test_ext_cross_package_or_throw` from strict-xfail to
+      passing.  Fixture intentionally does NOT `import std.core`; an
+      inline assertion guards against accidentally adding the import.
+      Both call forms — `(move r).or_throw()` on a bound local and
+      chained `pkgfn(...).or_throw()` on an rvalue — are exercised.
+    - Added `test_ext_std_core_non_prelude_still_hidden`: a guard test
+      that compiles a consumer calling `Cell.get` on a package-returned
+      `std.core.Cell<Int>` and asserts the visibility diagnostic still
+      fires.  If this test ever passes, the prelude exemption has been
+      broadened beyond `Result` and the visibility surface needs
+      review.
+
+  Versioning:
+    - `DRIFTC_VERSION` bumps from 0.27.189 to 0.27.190.
+    - `DRIFT_RT_ABI_VERSION` stays at 9 — consumer-side checker change
+      only, no boundary shape change.
+
 - **Cross-package terminal `Throw` impl visibility (0.27.189, ABI 9)**:
   Fixed package-consumer visibility for terminal `Throw` impl methods defined
   in external packages.
