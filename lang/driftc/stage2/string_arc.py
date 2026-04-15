@@ -901,7 +901,33 @@ def insert_string_arc(
 			elif isinstance(instr, M.VariantGetField):
 				local_types[instr.dest] = instr.field_ty
 				if _is_string_tid(instr.field_ty):
-					owned_values.discard(instr.dest)
+					# `VariantGetField` for a String field is lowered in
+					# LLVM codegen as `load field + drift_string_retain`
+					# (copy-semantic transfer — see
+					# `_classify_payload_extract_transfer` in
+					# `llvm_codegen.py`).  The `dest` carries that +1
+					# reference, matching `CopyValue`'s ownership shape,
+					# NOT a borrowed view.  Treating it as borrowed
+					# caused the subsequent `StoreLocal(..., dest)` in
+					# the match-binder path to retain AGAIN via
+					# `_ensure_owned`, producing an extra +1 that never
+					# got released — observed as a 22-byte leak from
+					# `drift_string_concat` in
+					# `om_match_bind_string_heap_concat`'s
+					# `scenario_value_producing_match`.
+					#
+					# Only `owned_values.add` — NOT `move_only_values`.
+					# `_can_move_owned_once(val)` already checks
+					# `val in owned AND use_counts == 1`, so a single-
+					# consumer VariantGetField temp is moved without
+					# retain.  Multi-consumer shapes (if any arise)
+					# then go through the normal `_ensure_owned`
+					# retain-for-additional-consumers path, releasing
+					# the original +1 at the final use.  Adding to
+					# `move_only_values` would bypass the single-use
+					# guard and let the first consumer move the ref
+					# while later consumers observed a consumed value.
+					owned_values.add(instr.dest)
 			elif isinstance(instr, M.ArrayIndexLoad):
 				local_types[instr.dest] = instr.elem_ty
 				if _is_string_tid(instr.elem_ty):

@@ -123,6 +123,10 @@ TYPE_INFO = {
         # fn_arg / return_value sites that need an Int result code.
         "extract_int": lambda expr: f"({expr}).byte_length()",
         "expected_int": 5,
+        # `replacement()` yields a DIFFERENT value — used by
+        # match_bind's `reassignment_before_match` scenario.
+        # `replacement_expected_int` is `extract_int(replacement(...))`.
+        "replacement_expected_int": 6,   # "yBBBBB".byte_length() == 6
         "flavors": ["static", "heap_concat"],
         "is_bitcopy": False,
         "needs_import_core": False,
@@ -134,6 +138,7 @@ TYPE_INFO = {
         "assert_eq_heap": lambda expr: f'if ({expr}).key.byte_length() != 3 {{ return 1; }}',   # "key"
         "extract_int": lambda expr: f"({expr}).key.byte_length()",
         "expected_int": 3,
+        "replacement_expected_int": 5,   # "other".byte_length() == 5
         "flavors": [None],
         "is_bitcopy": False,
         "needs_import_core": True,
@@ -485,6 +490,13 @@ SITES = {
     "local_assign": site_local_assign,
     "for_loop_bind": site_for_loop_bind,
     "extend_source": site_extend_source,
+    # match_bind is a meta-site: its emitter is not called through the
+    # per-shape scenario loop in `render_fixture`.  Instead,
+    # `_render_fixture_match_bind` (Copy types) and the Token-path
+    # equivalent generate one scenario fn per MATCH_BIND_PATTERN.
+    # The SITES entry exists so the outer iteration in `emit_all` /
+    # `--check` covers this site like any other.
+    "match_bind": None,
 }
 
 
@@ -559,6 +571,564 @@ fn arr_lit_factory() nothrow -> Array<{decl_ty}> {{
 SITE_HELPERS["fn_arg"] = helpers_fn_arg
 SITE_HELPERS["return_value"] = helpers_return_value
 SITE_HELPERS["extend_source"] = helpers_extend_source
+
+
+# --------------------------------------------------------------------
+# MATCH-ARM BIND AXIS (`match_bind` site)
+# --------------------------------------------------------------------
+# Rationale: the existing variant_ctor / result_ok / result_err sites
+# exercise match binding INCIDENTALLY — the assert `{assert_eq_heap}`
+# runs inside a `Msg::Payload(inner)` arm and thus depends on both
+# variant construction and match extraction working correctly.  When
+# 0.27.197 surfaced multiple match-specific ownership bugs
+# (value-producing tombstone store, partial-move cleanup for subset
+# binds, generic variant re-finalization), the matrix caught some but
+# not all of them because it couldn't isolate payload EXTRACTION from
+# payload CONSTRUCTION.
+#
+# The match_bind site emits one fixture per (type, flavor) combo whose
+# INTERNAL scenarios are patterns of match binding, not value shapes.
+# Each pattern below targets a distinct binder-lifetime / arm-ownership
+# property the 0.27.197 cluster could have regressed.
+#
+# Patterns:
+#   - `named_bind`: baseline `Msg::Payload(v) => use v`.
+#   - `wildcard_ignore`: `Msg::Payload(_) => { }` — the ignored payload
+#     must drop exactly once, no leak on the wildcard discard path.
+#   - `arm_bind_vs_ignore`: `Pair::Left(v) => use v`,
+#     `Pair::Right(_) => discard`.  Both arms run (two separate
+#     scenarios within the same fn) so per-arm ownership divergence is
+#     exercised.
+#   - `reassignment_before_match`: `var r = old_value; r = new_value;
+#     match r { Payload(v) => ... }` — binder must reflect the NEW
+#     value; old value must be dropped by the `var`-reassignment path
+#     (exercises the `string_arc.py` MoveOut-discard hardening).
+#   - `nested_match`: outer arm binds inner variant; inner match
+#     destructures its own payload.  Verifies tombstone / partial-move
+#     propagation through two layers of match lowering.
+#   - `value_producing_match`:
+#     `val x = match r { Payload(v) => v, default => fallback }` —
+#     result takes ownership of the arm-bound payload.
+#     * For Copy / Copy-non-bitcopy (String, DiagnosticEntry):
+#       verifies that the bound `v` carries a retained / owned payload
+#       after the arm, and the scrutinee's scope-drop does NOT free it
+#       early.
+#     * For Token (non-Copy): verifies `sess.drops` does NOT increment
+#       until the returned Token's OWN scope ends, pinning the
+#       value-producing tombstone store from 0.27.197 against silent
+#       regression to "destroy fires at arm-end".
+#
+# The match_bind site's body is assembled by `_render_fixture_match_bind`
+# (Copy types) and `_render_fixture_token_match_bind` (Token), both of
+# which bypass the per-shape scenario loop used by other SITES.
+
+
+def _match_bind_build_heap(ty_info: dict, flavor: str | None) -> str:
+    return ty_info["build_heap"](flavor)
+
+
+def _match_bind_replacement(ty_info: dict, flavor: str | None) -> str:
+    """Different value of the same type for reassignment-before-match."""
+    return ty_info["replacement"](flavor)
+
+
+def _match_bind_pattern_named_bind(ty_info: dict, flavor: str | None) -> str:
+    decl_ty = ty_info["decl_ty"]
+    heap = _match_bind_build_heap(ty_info, flavor)
+    assert_v = ty_info["assert_eq_heap"]("v")
+    return f"""fn scenario_named_bind() nothrow -> Int {{
+	val r: Msg<{decl_ty}> = Msg::Payload(v = {heap});
+	match r {{
+		Msg::Payload(v) => {{ {assert_v} }},
+		default => {{ return 2; }}
+	}}
+	return 0;
+}}
+"""
+
+
+def _match_bind_pattern_wildcard_ignore(ty_info: dict, flavor: str | None) -> str:
+    # Wildcard binder `_` — payload must drop exactly once.  On plain
+    # mode, success is just exit 0; ASAN / memcheck catch the leak /
+    # double-free if cleanup goes wrong.
+    decl_ty = ty_info["decl_ty"]
+    heap = _match_bind_build_heap(ty_info, flavor)
+    return f"""fn scenario_wildcard_ignore() nothrow -> Int {{
+	val r: Msg<{decl_ty}> = Msg::Payload(v = {heap});
+	match r {{
+		Msg::Payload(_) => {{ /* payload discarded via wildcard; must drop exactly once */ }},
+		default => {{ return 2; }}
+	}}
+	return 0;
+}}
+"""
+
+
+def _match_bind_pattern_arm_bind_vs_ignore(ty_info: dict, flavor: str | None) -> str:
+    # Two-ctor `Pair<T>` variant; construct one of each and run both
+    # match shapes.  The binding arm and the wildcard arm must each
+    # handle ownership correctly without relying on the sibling arm's
+    # behavior.
+    decl_ty = ty_info["decl_ty"]
+    heap_l = _match_bind_build_heap(ty_info, flavor)
+    heap_r = _match_bind_build_heap(ty_info, flavor)
+    assert_v = ty_info["assert_eq_heap"]("v")
+    return f"""fn scenario_arm_bind_vs_ignore() nothrow -> Int {{
+	val left: Pair<{decl_ty}> = Pair::Left(v = {heap_l});
+	match left {{
+		Pair::Left(v) => {{ {assert_v} }},
+		Pair::Right(_) => {{ return 3; }}
+	}}
+	val right: Pair<{decl_ty}> = Pair::Right(v = {heap_r});
+	match right {{
+		Pair::Left(_) => {{ return 4; }},
+		Pair::Right(_) => {{ /* payload discarded via wildcard */ }}
+	}}
+	return 0;
+}}
+"""
+
+
+def _match_bind_pattern_reassignment_before_match(ty_info: dict, flavor: str | None) -> str:
+    # Exercises the MoveOut-then-reassign code path in string_arc.py
+    # that was hardened in 0.27.197.  The var holds `old`; the
+    # subsequent `= new` reassignment must drop `old` cleanly BEFORE
+    # the new value is committed.  Match then observes the NEW value.
+    decl_ty = ty_info["decl_ty"]
+    heap_old = _match_bind_build_heap(ty_info, flavor)
+    heap_new = _match_bind_replacement(ty_info, flavor)
+    # Assert against the replacement's expected projection; `replacement`
+    # is a different value from `build_heap`, so we can't reuse
+    # assert_eq_heap directly.  Use extract_int to get a concrete Int.
+    extract = ty_info["extract_int"]("v")
+    replacement_extract_expected = ty_info.get("replacement_expected_int")
+    if replacement_extract_expected is None:
+        # Fallback: compare against `expected_int` assuming replacement
+        # projects to the same int (true for types where replacement
+        # differs in content but not in projection length).  Overridden
+        # via TYPE_INFO["replacement_expected_int"] when the replacement
+        # yields a distinct Int.
+        replacement_extract_expected = ty_info["expected_int"]
+    return f"""fn scenario_reassignment_before_match() nothrow -> Int {{
+	var r: Msg<{decl_ty}> = Msg::Payload(v = {heap_old});
+	// Qualified ctor on the reassignment RHS: the checker cannot infer
+	// `T` from the bare `Msg::Payload(...)` call because there is no
+	// expected-type context at a `var` reassignment (E-QMEM-CANNOT-INFER).
+	r = Msg<{decl_ty}>::Payload(v = {heap_new});
+	match r {{
+		Msg::Payload(v) => {{
+			if {extract} != {replacement_extract_expected} {{ return 1; }}
+		}},
+		default => {{ return 2; }}
+	}}
+	return 0;
+}}
+"""
+
+
+def _match_bind_pattern_nested_match(ty_info: dict, flavor: str | None) -> str:
+    # Outer variant `Nest<T>::Wrap(inner: Msg<T>)` wraps the inner
+    # `Msg<T>::Payload(v)`.  Outer match binds `inner` (consumes
+    # ownership of the inner variant); inner match destructures its
+    # payload.  Each match layer's scrutinee must be cleaned up
+    # correctly — no scrutinee-scope-drop double-destroys the payload
+    # moved through two binder layers.
+    decl_ty = ty_info["decl_ty"]
+    heap = _match_bind_build_heap(ty_info, flavor)
+    assert_v = ty_info["assert_eq_heap"]("v")
+    return f"""fn scenario_nested_match() nothrow -> Int {{
+	val inner: Msg<{decl_ty}> = Msg::Payload(v = {heap});
+	val outer: Nest<{decl_ty}> = Nest::Wrap(inner = move inner);
+	match outer {{
+		Nest::Wrap(i) => {{
+			match i {{
+				Msg::Payload(v) => {{ {assert_v} }},
+				default => {{ return 3; }}
+			}}
+		}},
+		default => {{ return 4; }}
+	}}
+	return 0;
+}}
+"""
+
+
+def _match_bind_pattern_value_producing_match(ty_info: dict, flavor: str | None) -> str:
+    # Value-producing match: `val x = match r { Payload(v) => v,
+    # default => fallback }`.  For Copy / Copy-non-bitcopy types this
+    # verifies the result owns a valid retained/copied payload AFTER
+    # the arm completes — the scrutinee's scope-drop must not free the
+    # payload the result now holds.
+    #
+    # Ownership independence proof: build the scrutinee inside a helper
+    # fn and return the match result; the scrutinee goes out of scope
+    # at the helper's return boundary.  If the arm leaked an alias of
+    # the scrutinee's payload into the returned value, the caller's
+    # read after helper-return would UAF under ASAN / memcheck.
+    decl_ty = ty_info["decl_ty"]
+    heap = _match_bind_build_heap(ty_info, flavor)
+    fallback = _match_bind_build_heap(ty_info, flavor)
+    assert_x = ty_info["assert_eq_heap"]("x")
+    return f"""fn _vpm_helper() nothrow -> {decl_ty} {{
+	val r: Msg<{decl_ty}> = Msg::Payload(v = {heap});
+	// Scrutinee `r` goes out of scope at this fn's return boundary;
+	// if the arm produces an alias of r's payload, the caller's read
+	// below will UAF under ASAN.
+	return match r {{
+		Msg::Payload(v) => {{ v }},
+		default => {{ {fallback} }},
+	}};
+}}
+
+fn scenario_value_producing_match() nothrow -> Int {{
+	val x: {decl_ty} = _vpm_helper();
+	{assert_x}
+	return 0;
+}}
+"""
+
+
+MATCH_BIND_PATTERNS = {
+    "named_bind": _match_bind_pattern_named_bind,
+    "wildcard_ignore": _match_bind_pattern_wildcard_ignore,
+    "arm_bind_vs_ignore": _match_bind_pattern_arm_bind_vs_ignore,
+    "reassignment_before_match": _match_bind_pattern_reassignment_before_match,
+    "nested_match": _match_bind_pattern_nested_match,
+    "value_producing_match": _match_bind_pattern_value_producing_match,
+}
+
+
+_NEST_DECL = """\
+pub variant Nest<T> {
+	Wrap(inner: Msg<T>),
+	@tombstone NestTombstone,
+}
+"""
+
+
+_PAIR_DECL = """\
+pub variant Pair<T> {
+	Left(v: T),
+	Right(v: T),
+}
+"""
+
+
+_SHAPE_LINE_MATCH_BIND = (
+    "// Scenarios are MATCH-ARM BIND PATTERNS, not value shapes:\n"
+    "// named_bind, wildcard_ignore, arm_bind_vs_ignore,\n"
+    "// reassignment_before_match, nested_match, value_producing_match.\n"
+    "// Each isolates a distinct binder-lifetime / arm-ownership\n"
+    "// property that the existing variant_ctor / result_* sites\n"
+    "// exercise only incidentally.\n"
+    "//\n"
+)
+
+
+def _render_fixture_match_bind(ty_name: str, ty_info: dict, flavor: str | None) -> str:
+    """Dedicated renderer for the match_bind site on Copy types."""
+    lines: list[str] = []
+    lines.append(
+        _HEADER.format(
+            site="match_bind",
+            ty_name=ty_name,
+            flavor_line=_flavor_line(flavor),
+            shape_line=_SHAPE_LINE_MATCH_BIND,
+        )
+    )
+    if ty_info.get("needs_import_core") or ty_name == "string":
+        lines.append("import std.core as core;\n")
+    lines.append("\n")
+    lines.append(_MSG_DECL)
+    lines.append(_PAIR_DECL)
+    lines.append(_NEST_DECL)
+    lines.append("\n")
+    for pattern_name, pattern_emit in MATCH_BIND_PATTERNS.items():
+        lines.append(pattern_emit(ty_info, flavor))
+        lines.append("\n")
+    # Main dispatcher — one call per pattern, offset 100 * idx.
+    main_body = []
+    for idx, pattern_name in enumerate(MATCH_BIND_PATTERNS.keys(), start=1):
+        offset = idx * 100
+        main_body.append(
+            f"\tval r{idx} = scenario_{pattern_name}();\n"
+            f"\tif r{idx} != 0 {{ return {offset} + r{idx}; }}\n"
+        )
+    lines.append(
+        "pub fn main() nothrow -> Int {\n"
+        + "".join(main_body)
+        + "\treturn 0;\n"
+        + "}\n"
+    )
+    return "".join(lines)
+
+
+# Token match_bind patterns — explicit ownership model per the
+# reviewer's guidance: each pattern MUST assert `sess.drops` at
+# carefully-chosen observation points so the scenario exercises the
+# TOMBSTONE PATH (value-producing match tombstone store from 0.27.197)
+# rather than accidentally only proving arm-end drop.
+
+def _token_match_bind_named_bind() -> str:
+    # Bind `v` in the arm; `v` drops at arm-end → sess.drops == 1.
+    # Scrutinee `m` was consumed by the move; its scope-drop must be
+    # a tombstone-store no-op.
+    return """fn scenario_named_bind() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		match m {
+			TokenMsg::Payload(v) => {
+				// Inside arm: Token is live as `v`.
+				if sess.drops != 0 { return 1; }
+			},
+			default => { return 2; }
+		}
+		// Arm-end dropped `v` → sess.drops == 1.
+		if sess.drops != 1 { return 3; }
+	}
+	// Scrutinee scope-drop tombstone no-op; sess.drops stays 1.
+	if sess.drops != 1 { return 4; }
+	return 0;
+}
+"""
+
+
+def _token_match_bind_wildcard_ignore() -> str:
+    # Wildcard `_` discards the payload; it must still drop exactly
+    # once.  Unlike named_bind, there is no binder name to observe
+    # in-arm; the drop happens inside the arm as part of scrutinee
+    # consumption.  After the match, sess.drops == 1.
+    return """fn scenario_wildcard_ignore() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		match m {
+			TokenMsg::Payload(_) => {
+				// Wildcard: no binder.  Payload destructor fires
+				// as part of the match arm / scrutinee consumption.
+			},
+			default => { return 2; }
+		}
+		if sess.drops != 1 { return 3; }
+	}
+	if sess.drops != 1 { return 4; }
+	return 0;
+}
+"""
+
+
+def _token_match_bind_arm_bind_vs_ignore() -> str:
+    # Two ctors, two scenarios; each observes `sess.drops` per
+    # its own Token lifetime.  Both arms must drop exactly once
+    # regardless of which branch is taken.
+    return """fn scenario_arm_bind_vs_ignore() nothrow -> Int {
+	var sess_left: Session = Session(drops = 0);
+	var sess_right: Session = Session(drops = 0);
+	{
+		val left: TokenPair = TokenPair::Left(t = make_token(&mut sess_left));
+		match left {
+			TokenPair::Left(v) => {
+				if sess_left.drops != 0 { return 1; }
+			},
+			TokenPair::Right(_) => { return 3; }
+		}
+		if sess_left.drops != 1 { return 4; }
+	}
+	if sess_left.drops != 1 { return 5; }
+	{
+		val right: TokenPair = TokenPair::Right(t = make_token(&mut sess_right));
+		match right {
+			TokenPair::Left(_) => { return 6; },
+			TokenPair::Right(_) => {
+				// Wildcard discard; destructor fires as part of
+				// scrutinee consumption.
+			}
+		}
+		if sess_right.drops != 1 { return 7; }
+	}
+	if sess_right.drops != 1 { return 8; }
+	return 0;
+}
+"""
+
+
+def _token_match_bind_reassignment_before_match() -> str:
+    # `var r: TokenMsg = Msg::Payload(t_old); r = Msg::Payload(t_new);`
+    # The reassignment must drop `t_old` cleanly (sess_old.drops == 1)
+    # BEFORE committing t_new.  The match then observes t_new.
+    return """fn scenario_reassignment_before_match() nothrow -> Int {
+	var sess_old: Session = Session(drops = 0);
+	var sess_new: Session = Session(drops = 0);
+	{
+		var r: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess_old));
+		// Pre-reassignment: old token alive.
+		if sess_old.drops != 0 { return 1; }
+		r = TokenMsg::Payload(t = make_token(&mut sess_new));
+		// Post-reassignment: old token dropped (sess_old.drops == 1),
+		// new token alive (sess_new.drops == 0).  Exercises the
+		// MoveOut-zero-then-StoreLocal hardening in string_arc.py —
+		// the drop-before-overwrite must fire on the OLD value, not
+		// on the synthesized zero bytes.
+		if sess_old.drops != 1 { return 2; }
+		if sess_new.drops != 0 { return 3; }
+		match r {
+			TokenMsg::Payload(v) => {
+				if sess_new.drops != 0 { return 4; }
+			},
+			default => { return 5; }
+		}
+		// Arm-end dropped new-token binder.
+		if sess_new.drops != 1 { return 6; }
+	}
+	// Scrutinee tombstone no-op.
+	if sess_old.drops != 1 { return 7; }
+	if sess_new.drops != 1 { return 8; }
+	return 0;
+}
+"""
+
+
+def _token_match_bind_nested_match() -> str:
+    # Outer `TokenNest::Wrap(inner: TokenMsg)` wraps the inner
+    # `TokenMsg::Payload(t: Token)`.  Outer match binds `inner` —
+    # consuming the outer scrutinee and moving the inner variant
+    # into the outer arm's binder.  Inner match then destructures
+    # the Token payload out of the binder.  Both scrutinee layers
+    # must be cleaned up correctly without double-destroying the
+    # Token.
+    return """fn scenario_nested_match() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val inner: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val outer: TokenNest = TokenNest::Wrap(inner = move inner);
+		match outer {
+			TokenNest::Wrap(i) => {
+				match i {
+					TokenMsg::Payload(v) => {
+						if sess.drops != 0 { return 1; }
+					},
+					default => { return 3; }
+				}
+				// Inner match done; arm dropped `v` → sess.drops == 1.
+				if sess.drops != 1 { return 4; }
+			},
+			default => { return 5; }
+		}
+		// Outer match done; both scrutinee layers tombstoned.
+		if sess.drops != 1 { return 6; }
+	}
+	if sess.drops != 1 { return 7; }
+	return 0;
+}
+"""
+
+
+def _token_match_bind_value_producing_match() -> str:
+    # `val returned: Token = match m { Payload(v) => move v, default
+    # => make_token(&mut sess_fb) }`.  The Payload arm MOVES `v` out
+    # of the scrutinee and returns it as the match result → `returned`
+    # owns the Token.
+    #
+    # Key assertion: `sess.drops` stays 0 while `returned` is alive
+    # (i.e. destroy does NOT fire at arm-end, pinning the tombstone
+    # store from 0.27.197 against silent regression to "destructor
+    # fires when the binder `v` goes out of scope at arm-end").
+    # sess.drops increments to 1 only when `returned` ITSELF goes out
+    # of scope.  Fallback session guards against accidental default-
+    # arm dispatch.
+    return """fn scenario_value_producing_match() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	var sess_fb: Session = Session(drops = 0);
+	{
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		{
+			val returned: Token = match m {
+				TokenMsg::Payload(v) => { move v },
+				default => { make_token(&mut sess_fb) },
+			};
+			// Crucial assertion: the returned Token is live; destroy
+			// has NOT fired.  If the compiler incorrectly dropped `v`
+			// at arm-end (instead of moving it into `returned`), this
+			// would already read sess.drops == 1.
+			if sess.drops != 0 { return 1; }
+			// Default arm was not taken → fallback session untouched.
+			if sess_fb.drops != 0 { return 2; }
+		}
+		// `returned` scope-dropped here → destroy fires once.
+		if sess.drops != 1 { return 3; }
+		// Scrutinee `m` was consumed by the Payload arm's move; its
+		// scope-drop below reads the tombstone bytes and is a no-op.
+		if sess_fb.drops != 0 { return 4; }
+	}
+	// Post-scrutinee-scope: tombstone route means sess.drops stays 1.
+	if sess.drops != 1 { return 5; }
+	if sess_fb.drops != 0 { return 6; }
+	return 0;
+}
+"""
+
+
+TOKEN_MATCH_BIND_PATTERNS = {
+    "named_bind": _token_match_bind_named_bind,
+    "wildcard_ignore": _token_match_bind_wildcard_ignore,
+    "arm_bind_vs_ignore": _token_match_bind_arm_bind_vs_ignore,
+    "reassignment_before_match": _token_match_bind_reassignment_before_match,
+    "nested_match": _token_match_bind_nested_match,
+    "value_producing_match": _token_match_bind_value_producing_match,
+}
+
+
+_TOKEN_PAIR_DECL = """\
+pub variant TokenPair {
+	Left(t: Token),
+	Right(t: Token),
+}
+"""
+
+
+_TOKEN_NEST_DECL = """\
+pub variant TokenNest {
+	Wrap(inner: TokenMsg),
+	@tombstone TokenNestTombstone,
+}
+"""
+
+
+def _render_fixture_token_match_bind() -> str:
+    """Dedicated renderer for the match_bind site on Token."""
+    lines: list[str] = []
+    lines.append(
+        _HEADER.format(
+            site="match_bind",
+            ty_name="token",
+            flavor_line="",
+            shape_line=_SHAPE_LINE_MATCH_BIND,
+        )
+    )
+    lines.append("import std.core as core;\n")
+    lines.append(TOKEN_PREAMBLE)
+    lines.append(_TOKEN_MSG_DECL)
+    lines.append(_TOKEN_PAIR_DECL)
+    lines.append(_TOKEN_NEST_DECL)
+    lines.append("\n")
+    for pattern_name, pattern_emit in TOKEN_MATCH_BIND_PATTERNS.items():
+        lines.append(pattern_emit())
+        lines.append("\n")
+    main_body = []
+    for idx, pattern_name in enumerate(TOKEN_MATCH_BIND_PATTERNS.keys(), start=1):
+        offset = idx * 100
+        main_body.append(
+            f"\tval r{idx} = scenario_{pattern_name}();\n"
+            f"\tif r{idx} != 0 {{ return {offset} + r{idx}; }}\n"
+        )
+    lines.append(
+        "pub fn main() nothrow -> Int {\n"
+        + "".join(main_body)
+        + "\treturn 0;\n"
+        + "}\n"
+    )
+    return "".join(lines)
 
 
 # --------------------------------------------------------------------
@@ -753,6 +1323,11 @@ TOKEN_SITES: dict[str, "object"] = {
     "return_value": token_site_return_value,
     "local_assign": token_site_local_assign,
     "fn_arg": token_site_fn_arg,
+    # match_bind is routed through `_render_fixture_token_match_bind`,
+    # which does not go through the per-shape emitter loop.  The
+    # entry here keeps the outer site iteration (emit_all / --check)
+    # from skipping Token × match_bind.
+    "match_bind": None,
 }
 
 
@@ -895,6 +1470,8 @@ pub variant Msg<T> {
 def render_fixture(site: str, ty_name: str, ty_info: dict, flavor: str | None) -> str:
     if ty_name == "token":
         return _render_fixture_token(site, ty_info)
+    if site == "match_bind":
+        return _render_fixture_match_bind(ty_name, ty_info, flavor)
     lines: list[str] = []
     lines.append(
         _HEADER.format(
@@ -949,6 +1526,8 @@ def render_fixture(site: str, ty_name: str, ty_info: dict, flavor: str | None) -
 
 
 def _render_fixture_token(site: str, ty_info: dict) -> str:
+    if site == "match_bind":
+        return _render_fixture_token_match_bind()
     lines: list[str] = []
     lines.append(
         _HEADER.format(
@@ -1075,6 +1654,10 @@ def emit_all(root: Path) -> tuple[list[Path], list[tuple[str, str]]]:
             # result_err) are elided for Token.
             if ty_name == "token" and site not in TOKEN_SITES:
                 continue
+            # match_bind skips bitcopy types — Int has no ownership
+            # story to exercise (trivial drop, no retain/release path).
+            if site == "match_bind" and ty_info.get("is_bitcopy"):
+                continue
             for flavor in ty_info["flavors"]:
                 fname = fixture_name(site, ty_name, flavor)
                 dirpath = root / fname
@@ -1099,6 +1682,8 @@ def main(argv: list[str]) -> int:
                 if (site, ty_name) in KNOWN_SKIP_COMBOS:
                     continue
                 if ty_name == "token" and site not in TOKEN_SITES:
+                    continue
+                if site == "match_bind" and ty_info.get("is_bitcopy"):
                     continue
                 for flavor in ty_info["flavors"]:
                     fname = fixture_name(site, ty_name, flavor)

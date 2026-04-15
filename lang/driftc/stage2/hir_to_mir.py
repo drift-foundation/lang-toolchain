@@ -1315,7 +1315,30 @@ class HIRToMIR:
 							arm_ty = self._infer_expr_type(arm.result)
 							if arm_ty is not None:
 								self._local_types[result_local] = arm_ty
-						val = self.lower_expr(arm.result, expected_type=self._local_types.get(result_local))
+						# Value-producing match arm's result expression is an
+						# OWNING-CONSUMPTION boundary (ownership of the arm
+						# value transfers from wherever it lives INTO
+						# `result_local`).  Same family as
+						# `return <expr>` / `dst = <expr>` — for a
+						# move-classified HVar (arm binder local or any
+						# outer owning local), raw `lower_expr` emits a
+						# plain load that leaves the source live, which
+						# then (a) gets dropped at arm-end by
+						# `arm_drop_locals` for a binder, or (b) gets
+						# dropped at scope-exit for an outer local, and
+						# in either case the `result_local` now holds a
+						# dangling view of released storage.  Exposed by
+						# `om_match_bind_{diag_entry, string_heap_concat}`
+						# scenario_value_producing_match (ASAN UAF /
+						# memcheck leak respectively) when the arm result
+						# is the bound binder `v`.
+						#
+						# `_lower_owning_consume` is the canonical path:
+						# MoveOut for move-classified HVar / projection-
+						# free HPlaceExpr (and marks `_moved_locals` so
+						# `arm_drop_locals` cleanup below skips the
+						# consumed local); raw `lower_expr` otherwise.
+						val = self._lower_owning_consume(arm.result, self._local_types.get(result_local))
 						if self._local_types.get(result_local) is self._unknown_type:
 							val_ty = self._local_types.get(val)
 							if val_ty is not None:
