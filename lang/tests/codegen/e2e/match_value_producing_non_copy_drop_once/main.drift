@@ -1,0 +1,81 @@
+// Regression: value-producing `match` over an OWNED NAMED LOCAL whose
+// payload is a non-Copy `core.Destructible` type must drop the
+// payload EXACTLY ONCE.  Historical class (same family as the
+// statement-context case fixed in 0.27.197): after the arm moves the
+// payload out of the scrutinee's backing storage, the enclosing
+// scope-drop reads the moved-from variant and re-invokes the
+// payload destructor.
+//
+// Why this needs its OWN regression (not covered by
+// match_named_local_non_copy_drop_once/): the statement-context fix
+// marks the scrutinee local as moved via mark_source_moved=True at a
+// match-body site that guarantees EVERY arm consumes it.  Value-
+// producing match reaches `_ensure_arm_scrut_ptr` via the per-arm
+// address-binder path (mark_source_moved=False), so the scope-drop
+// of the scrutinee still fires — and currently READS the moved-from
+// storage rather than skipping it or finding it zeroed-safe.
+//
+// `UserMsg` is deliberately authored WITHOUT `@tombstone` and with
+// `Payload(Token)` as the FIRST (tag=0) ctor.  A moved-out variant
+// whose tag bytes are zero therefore re-enters `Payload`, and the
+// drop-path tries to destroy the (zeroed, null-session) Token.
+// Expected: with a correct fix, this program exits 0 with
+// sess.drops == 1.  Without the fix, destroy() runs a second time
+// on a null session → SEGV under plain/ASAN/memcheck.
+
+module m;
+
+import std.core as core;
+
+pub struct Session {
+	pub drops: Int,
+}
+
+pub struct Token {
+	pub session: &mut Session,
+}
+
+implement core.Destructible for Token {
+	pub fn destroy(self: Token) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn make_token(sess: &mut Session) nothrow -> Token {
+	return Token(session = sess);
+}
+
+// NOTE: deliberately NO `@tombstone` marker, and the first ctor
+// carries an owning Destructible payload — so zeroing the backing
+// storage does NOT produce a drop-safe state.
+pub variant UserMsg {
+	Payload(t: Token),
+	Other(n: Int),
+}
+
+fn main() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val r: UserMsg = UserMsg::Payload(t = make_token(&mut sess));
+		val n: Int = match r {
+			UserMsg::Payload(v) => {
+				// Token is still live — destructor has not fired yet.
+				if sess.drops != 0 { return 1; }
+				7
+			},
+			default => { 0 },
+		};
+		if n != 7 { return 2; }
+		// Arm binder `v` dropped at arm end → sess.drops == 1.
+		if sess.drops != 1 { return 3; }
+		// Block `}` below closes the scope of r.  r's storage was
+		// moved-from by the match arm's payload extract.  A correct
+		// fix tombstones (or otherwise neutralizes) the moved field
+		// so this scope-drop is a no-op on an already-destroyed
+		// payload.
+	}
+	// After r's scope exit: sess.drops must still be 1 (single
+	// destroy()), not 2 (double destroy) and not SEGV.
+	if sess.drops != 1 { return 4; }
+	return 0;
+}

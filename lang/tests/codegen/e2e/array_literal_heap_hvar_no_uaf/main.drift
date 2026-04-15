@@ -1,0 +1,65 @@
+module m;
+
+// Option A fixture 3: array literal `[s1, s2, s3]` where each element
+// is a HEAP-BACKED String HVar local.
+//
+// Array literal is a separate ownership-transfer path from
+// push/insert/set: `ArrayLit` in MIR builds the array from a list of
+// element SSA values.  If the array-literal lowering retains each
+// source without a matching balance (or vice versa), the same
+// refcount mismatch surfaces — but via a different code path than the
+// recently-fixed `_ensure_array_elem_copy`.
+//
+// After the literal is built, the source HVars are either re-assigned
+// (making the old buffer the array's sole owner) or scope-exit (which
+// MUST NOT invalidate the array's copies).
+
+fn heap_str(tag: String) nothrow -> String {
+	val p = "lit-";
+	return p + tag;
+}
+
+// --- val-local sources: array literal captures; source scope-exits ---
+fn literal_with_val_sources() nothrow -> Int {
+	val s1 = heap_str("alpha");
+	val s2 = heap_str("beta");
+	val s3 = heap_str("gamma");
+	val arr: Array<String> = [s1, s2, s3];
+	if arr.len != 3 { return 1; }
+	if arr[0].byte_length() != 9 { return 2; }  // "lit-alpha"
+	if arr[1].byte_length() != 8 { return 3; }  // "lit-beta"
+	if arr[2].byte_length() != 9 { return 4; }  // "lit-gamma"
+	// s1/s2/s3 scope-exit at function return; arr is returned/scope-
+	// dropped too.  Any mismatch in retain count surfaces here.
+	return 0;
+}
+
+// --- var-local sources + post-literal reassignment ---
+// After building the literal, overwrite each var with a fresh heap
+// String.  The old buffers were captured by the literal; reassigning
+// the source must not free them.
+fn literal_with_var_reassign() nothrow -> Int {
+	var s1 = heap_str("one");
+	var s2 = heap_str("two");
+	var s3 = heap_str("three");
+	val arr: Array<String> = [s1, s2, s3];
+	// Re-assign all three source HVars.
+	s1 = heap_str("REPLACED1");
+	s2 = heap_str("REPLACED2");
+	s3 = heap_str("REPLACED3");
+	// arr must still read the ORIGINAL strings, not the replaced ones
+	// (literal captured by value).
+	if arr.len != 3 { return 10; }
+	if arr[0].byte_length() != 7 { return 11; }  // "lit-one"
+	if arr[1].byte_length() != 7 { return 12; }  // "lit-two"
+	if arr[2].byte_length() != 9 { return 13; }  // "lit-three"
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = literal_with_val_sources();
+	if r1 != 0 { return 100 + r1; }
+	val r2 = literal_with_var_reassign();
+	if r2 != 0 { return 200 + r2; }
+	return 0;
+}

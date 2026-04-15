@@ -1,0 +1,4 @@
+{
+  "description": "Positive contract test for arr.set(index, value): index is Int, value is the element type. Compiles and runs cleanly.",
+  "exit_code": 0
+}

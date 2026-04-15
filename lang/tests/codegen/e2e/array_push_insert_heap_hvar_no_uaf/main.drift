@@ -1,0 +1,78 @@
+module m;
+
+// Option A fixture 1: Array<String>.push / .insert called with
+// HEAP-BACKED `String` HVar locals.  (`set` deliberately omitted —
+// the current `.set` surface has an arg-order inconsistency between
+// the checker and the MIR lowering that is orthogonal to this
+// ownership-transfer test; filed as a separate follow-up.)  String is COPY-classified
+// (copy_status=True, _needs_runtime_drop=False) so `_lower_call_arg`
+// does NOT emit MoveOut for the HVar path — it falls through to a
+// plain load, producing a shared/borrowed view of the source local.
+//
+// The pre-fix bug (drift-net-tls v0.3.14 cert UAF, fixed in 0.27.192)
+// surfaced specifically in this shape: an `_ensure_array_elem_copy`
+// with `drop_source=True` would release the shared refcount, and the
+// NEXT store into the source local (loop re-assignment OR scope-exit
+// drop) would free a buffer the array slot still referenced.
+//
+// This fixture exercises both push and insert at the same time with
+// heap-allocated strings (concat path, no DRIFT_STRING_FLAG_STATIC to
+// mask bad refcount arithmetic).  See header above for why .set is
+// deliberately omitted.
+
+fn heap_str() nothrow -> String {
+	// drift_string_concat always allocates a fresh non-static buffer.
+	val a = "h";
+	val b = "eap";
+	return a + b;
+}
+
+// --- push: re-assign source local between pushes ------------------
+fn exercise_push_with_reassign() nothrow -> Int {
+	var arr: Array<String> = [];
+	var name = heap_str();
+	arr.push(name);
+	// Re-assign `name` to a fresh heap string.  Pre-fix this triggered
+	// a release on the buffer the array slot still pointed at.
+	name = heap_str();
+	arr.push(name);
+	// Third push after another re-assignment.
+	name = heap_str();
+	arr.push(name);
+	if arr.len != 3 { return 1; }
+	// Every slot must still contain "heap".
+	var i = 0;
+	while i < arr.len {
+		val ref_i = &arr[i];
+		if ref_i.byte_length() != 4 { return 10 + i; }
+		i = i + 1;
+	}
+	return 0;
+}
+
+// --- insert: mix insert-at-0 with insert-at-end ------------------
+fn exercise_insert_with_reassign() nothrow -> Int {
+	var arr: Array<String> = [];
+	var name = heap_str();
+	arr.insert(0, name);
+	name = heap_str();
+	arr.insert(1, name);       // at end
+	name = heap_str();
+	arr.insert(0, name);       // at front; shifts the others
+	if arr.len != 3 { return 20; }
+	var i = 0;
+	while i < arr.len {
+		val ref_i = &arr[i];
+		if ref_i.byte_length() != 4 { return 30 + i; }
+		i = i + 1;
+	}
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = exercise_push_with_reassign();
+	if r1 != 0 { return 100 + r1; }
+	val r2 = exercise_insert_with_reassign();
+	if r2 != 0 { return 200 + r2; }
+	return 0;
+}

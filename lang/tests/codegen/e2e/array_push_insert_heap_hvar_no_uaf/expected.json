@@ -1,0 +1,4 @@
+{
+  "description": "Option A fixture 1: push/insert with heap-backed String HVar sources. Covers the exact ownership-transfer shape that drift-net-tls v0.3.14 tripped on (fixed in 0.27.192). Every scenario re-assigns the source local between operations so any spurious drop on the shared refcount surfaces as UAF on the next array read. (.set is deliberately omitted pending a separate checker/MIR arg-order reconciliation.)",
+  "exit_code": 0
+}

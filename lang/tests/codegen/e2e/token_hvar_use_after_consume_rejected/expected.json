@@ -1,0 +1,10 @@
+{
+  "description": "Negative contract: a non-Copy `core.Destructible` HVar (Token) consumed by a by-value call site must be flagged as 'use after move' on any subsequent read. Drift allows implicit move at last-use for non-Copy HVar, but the 'move exactly once' invariant is enforced by the borrow checker — locking this in for the Token axis means double-consume is rejected before MIR lowering. Companion to the positive om_fn_arg_token fixture.",
+  "diagnostics": [
+    {
+      "message_contains": "use after move of 'tok'",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

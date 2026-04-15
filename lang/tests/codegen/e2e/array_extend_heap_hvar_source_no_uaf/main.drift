@@ -1,0 +1,59 @@
+module m;
+
+// Option A fixture 2: extend(&src) where src's elements were
+// pushed from HEAP-BACKED HVar locals.
+//
+// Distinct from `array_extend_borrowed_source_string_no_uaf` (which
+// pushes via HCall-rvalue args — a different ownership path).  This
+// variant stresses the complete chain:
+//   1. heap String created via concat.
+//   2. bound to a local HVar.
+//   3. pushed into src (HVar push → Copy-classified → borrowed load).
+//   4. HVar re-assigned between pushes to force source-buffer churn.
+//   5. extend(&src) clones into dest.
+//   6. src and dest must both drop cleanly at scope end without
+//      double-freeing any element buffer.
+
+fn heap_str(tag: String) nothrow -> String {
+	// Concat of two operands keeps the heap path regardless of
+	// argument literals.
+	val prefix = "z-";
+	return prefix + tag;
+}
+
+pub fn main() nothrow -> Int {
+	var src: Array<String> = [];
+	var name = heap_str("alpha");
+	src.push(name);
+	name = heap_str("beta");
+	src.push(name);
+	name = heap_str("gamma");
+	src.push(name);
+
+	var dest: Array<String> = [];
+	dest.extend(&src);
+
+	// After extend: src must still own its three elements.
+	if src.len != 3 { return 1; }
+	if src[0].byte_length() != 7 { return 2; }  // "z-alpha"
+	if src[1].byte_length() != 6 { return 3; }  // "z-beta"
+	if src[2].byte_length() != 7 { return 4; }  // "z-gamma"
+
+	// dest must own independent clones of the same element data.
+	if dest.len != 3 { return 5; }
+	if dest[0].byte_length() != 7 { return 6; }
+	if dest[1].byte_length() != 6 { return 7; }
+	if dest[2].byte_length() != 7 { return 8; }
+
+	// Push MORE elements into src AFTER extend to verify src's internal
+	// state is intact (len/cap/data) and no slot was silently freed.
+	name = heap_str("delta");
+	src.push(name);
+	if src.len != 4 { return 9; }
+	if src[3].byte_length() != 7 { return 10; }  // "z-delta"
+
+	// Both arrays drop at scope end.  Pre-fix (unconditional
+	// drop_source=True at push) had src slots at ref 0 by now,
+	// triggering tcache on the drop chain.
+	return 0;
+}

@@ -1,0 +1,85 @@
+// Regression: match on an OWNED NAMED LOCAL whose payload is a
+// non-Copy `core.Destructible` type must drop the payload EXACTLY
+// ONCE.  Historical bug: both the arm binder (v) and the scrutinee
+// local (r) dropped the same Token at scope end, causing a double
+// destroy() call and a crash under sanitizers.
+//
+// Expected semantics: matching an owned named-local scrutinee with
+// an owning binder consumes the scrutinee — the binder takes
+// ownership of the variant payload; the original named local r is
+// post-match inert (no residual payload to drop).
+//
+// This regression is hand-authored (not generator output) so it
+// stands as the anchor failure independent of any matrix refactor.
+
+module m;
+
+import std.core as core;
+
+pub struct Session {
+	pub drops: Int,
+}
+
+pub struct Token {
+	pub session: &mut Session,
+}
+
+implement core.Destructible for Token {
+	pub fn destroy(self: Token) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn make_token(sess: &mut Session) nothrow -> Token {
+	return Token(session = sess);
+}
+
+// Case A: match on a Result<Token, Int> held in a NAMED LOCAL `r`.
+// The Ok(v) arm binds the payload; v drops at arm end.  After match,
+// r must NOT re-drop the same payload.
+fn case_result_ok_named_local() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));
+		match r {
+			core.Result::Err(_) => { return 10; },
+			core.Result::Ok(v) => {
+				// Token still live: destructor has not fired yet.
+				if sess.drops != 0 { return 11; }
+			},
+		}
+		// Arm binder v dropped at arm end → sess.drops == 1.
+		// Block `}` below closes the scope of r.  r must not re-drop.
+	}
+	if sess.drops != 1 { return 12; }
+	return 0;
+}
+
+// Case B: match on a user-defined variant held in a named local.
+pub variant TokenMsg {
+	Payload(t: Token),
+	@tombstone Tombstone,
+}
+
+fn case_variant_named_local() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		match m {
+			TokenMsg::Payload(inner) => {
+				if sess.drops != 0 { return 21; }
+			},
+			default => { return 20; },
+		}
+	}
+	if sess.drops != 1 { return 22; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = case_result_ok_named_local();
+	if a != 0 { return 100 + a; }
+	val b = case_variant_named_local();
+	if b != 0 { return 200 + b; }
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Option A fixture 3: array literal `[s1, s2, s3]` with heap-backed HVar sources (val-local scope-exit and var-local reassignment variants). Separate ownership-transfer path from push/insert/set; covers the ArrayLit MIR-lowering code path that was not audited in the recent push-side fix.",
+  "exit_code": 0
+}

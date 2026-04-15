@@ -1,0 +1,4 @@
+{
+  "description": "Regression: value-producing match on a named-local scrutinee whose type is a GENERIC VARIANT INSTANCE (`core.Result<Token, Int>`) must drop the non-Copy `core.Destructible` payload exactly once. Targets the cached-generic-instance path: if `finalize_variants` only rebuilds non-generic bases after destructor_fns install, `Result<Token, Int>` keeps stale `internal_tombstone_ctor = None` metadata and the scope-drop of the moved-from scrutinee either SEGVs (re-drops zeroed Token) or hits the variant drop default-block trap.",
+  "exit_code": 0
+}

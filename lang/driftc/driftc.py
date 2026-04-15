@@ -2867,6 +2867,18 @@ def compile_stubbed_funcs(
 		_pre_dfns = _scan_destructible_impls_by_name(module_exports, external_impl_metas)
 		if _pre_dfns:
 			shared_type_table.destructor_fns = _pre_dfns
+			# Re-finalize non-generic variants now that destructor_fns is
+			# authoritative.  The parser-phase `finalize_variants()` call
+			# computes each variant instance's `internal_tombstone_ctor`
+			# based on `has_drop(field_ty)`, which returns False for user
+			# structs whose `core.Destructible` impl has not yet been
+			# registered at parse time.  Without this second finalize,
+			# variants like `UserMsg { Payload(Token), Other(Int) }` miss
+			# their auto-injected internal tombstone — which later breaks
+			# any codegen site that needs to materialize a drop-safe
+			# tombstone (e.g. the match-scrutinee tombstone store in
+			# `_ensure_arm_scrut_ptr`).
+			shared_type_table.finalize_variants()
 
 	if pass1_state is not None:
 		linked_world = pass1_state.linked_world
@@ -9521,6 +9533,21 @@ def main(argv: list[str] | None = None) -> int:
 	# destructor_fns internally.
 	if linked_world is not None:
 		_install_destructor_fns(semantic_world.type_table, linked_world, module_exports, external_impl_metas=semantic_world.external_impl_metas)
+		# Re-finalize non-generic variants after destructor_fns are
+		# installed.  The parser-phase `finalize_variants()` call
+		# computes each variant instance's `internal_tombstone_ctor`
+		# based on `has_drop(field_ty)`, which returns False for user
+		# structs whose `core.Destructible` impl has not yet been
+		# registered.  That causes variants like
+		# `UserMsg { Payload(tok: Token), Other(n: Int) }` (Token
+		# implements Destructible) to be instantiated WITHOUT an
+		# internal tombstone, which later breaks any codegen site
+		# that needs to materialize a drop-safe tombstone for the
+		# variant (e.g. the match-scrutinee tombstone store in
+		# `_ensure_arm_scrut_ptr`).  Re-finalizing here clears the
+		# needs-drop cache and rebuilds tombstone metadata with the
+		# authoritative view of destructor_fns.
+		semantic_world.type_table.finalize_variants()
 	if linked_world is not None and require_env is not None:
 		used_types = collect_used_type_keys(typed_fns, semantic_world.type_table, signatures_by_id)
 		used_by_module: dict[str, set] = {}
@@ -10227,6 +10254,13 @@ def main(argv: list[str] | None = None) -> int:
 		# entirely, then K39 extends it.  Both must run before Pass1State and
 		# both must be skipped in CSF to avoid the replace clobbering K39 entries.
 		_install_destructor_fns(type_table, linked_world, combined_exports, external_impl_metas=external_impl_metas)
+		# Re-finalize non-generic variants now that destructor_fns is
+		# authoritative.  See the parallel invocation above (after the
+		# semantic_world install) for the full rationale — without this,
+		# variants whose droppability is derived from user Destructible
+		# impls (not from built-in types like String/Array) miss their
+		# auto-injected internal tombstone metadata.
+		type_table.finalize_variants()
 		# K42: construct Pass1State to eliminate duplicate resolution in
 		# compile_stubbed_funcs — reuse typed_fns + resolution infrastructure.
 		# Phase 6: precompute visibility_provenance_by_id so CSF doesn't need

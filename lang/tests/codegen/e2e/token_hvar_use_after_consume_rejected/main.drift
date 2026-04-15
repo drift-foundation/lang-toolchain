@@ -1,0 +1,43 @@
+// Negative contract companion to the Token axis of the ownership
+// matrix.  A non-Copy `core.Destructible` HVar consumed at a
+// transfer site (with or without an explicit `move`) must be
+// flagged as "use after move" on any subsequent reference.
+//
+// Drift permits IMPLICIT move at last-use for non-Copy HVar — no
+// keyword required at the call site.  What the borrow checker
+// DOES require is "move exactly once": once the HVar has been
+// transferred into a destination container / consumed by a
+// by-value call, any subsequent read must be rejected.  This
+// locks in that contract for Token as a non-Copy destructor-
+// bearing type.
+//
+// Positive matrix companion: om_fn_arg_token/ (the same `sink(tok)`
+// call — only there, the second use is absent so the program
+// compiles and runs).
+
+module m;
+
+import std.core as core;
+
+pub struct Session { pub drops: Int, }
+pub struct Token { pub session: &mut Session, }
+
+implement core.Destructible for Token {
+	pub fn destroy(self: Token) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn make_token(sess: &mut Session) nothrow -> Token {
+	return Token(session = sess);
+}
+
+fn sink(t: Token) nothrow -> Void { return; }
+
+fn main() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	val tok: Token = make_token(&mut sess);
+	sink(tok);   // first consume (implicit move) — legal.
+	sink(tok);   // second consume — must be rejected as use-after-move.
+	return 0;
+}

@@ -1,0 +1,92 @@
+module m;
+
+// Option A fixture 4: struct ctor transfers `Array<String>` built from
+// heap-backed HVar sources.  Both direct and nested shapes.
+//
+// Struct construction is a DISTINCT ownership-transfer path from the
+// recently-audited push/insert/set MIR lowering.  A source local
+// `names: Array<String>` flowed into `Session(names = names)` must
+// transfer ownership of the array (and its element refcounts) to the
+// struct field; the source local must not double-drop at scope exit.
+// Same story one level up: `Outer(session = Session(names = names))`.
+//
+// The drift-net-tls certification crash was at the consumer side of
+// this exact shape wrapped in Result::Ok; this fixture isolates the
+// struct-ctor transfer from the variant wrapper so any latent
+// struct-side ownership gap surfaces independently.
+
+pub struct Session {
+	pub names: Array<String>,
+}
+
+pub struct Outer {
+	pub session: Session,
+	pub tag: String,
+}
+
+fn heap_str(tag: String) nothrow -> String {
+	val p = "s-";
+	return p + tag;
+}
+
+fn build_heap_names() nothrow -> Array<String> {
+	var names: Array<String> = [];
+	var n = heap_str("alpha");
+	names.push(n);
+	n = heap_str("beta");
+	names.push(n);
+	n = heap_str("gamma");
+	names.push(n);
+	return move names;
+}
+
+// --- direct field transfer ---
+fn exercise_direct_field() nothrow -> Int {
+	val names = build_heap_names();
+	val session = Session(names = names);
+	// `names` local is now "moved" into session.names.  Reading
+	// session.names must see intact String payloads.
+	if session.names.len != 3 { return 1; }
+	if session.names[0].byte_length() != 7 { return 2; }   // "s-alpha"
+	if session.names[1].byte_length() != 6 { return 3; }   // "s-beta"
+	if session.names[2].byte_length() != 7 { return 4; }   // "s-gamma"
+	return 0;
+}
+
+// --- nested field transfer ---
+fn exercise_nested_field() nothrow -> Int {
+	val names = build_heap_names();
+	val tag = heap_str("outer-tag");
+	val outer = Outer(session = Session(names = names), tag = tag);
+	if outer.session.names.len != 3 { return 10; }
+	if outer.session.names[0].byte_length() != 7 { return 11; }
+	if outer.session.names[1].byte_length() != 6 { return 12; }
+	if outer.session.names[2].byte_length() != 7 { return 13; }
+	if outer.tag.byte_length() != 11 { return 14; }  // "s-outer-tag"
+	return 0;
+}
+
+// --- same as direct, but source `names` is a `var` that gets
+// --- reassigned after the struct ctor: the struct must retain its
+// --- independent ownership of the ORIGINAL names.
+fn exercise_direct_field_var_reassign() nothrow -> Int {
+	var names = build_heap_names();
+	val session = Session(names = names);
+	// Reassign the source var — struct field must keep the old array.
+	names = build_heap_names();
+	if session.names.len != 3 { return 20; }
+	if session.names[0].byte_length() != 7 { return 21; }
+	if session.names[1].byte_length() != 6 { return 22; }
+	if session.names[2].byte_length() != 7 { return 23; }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = exercise_direct_field();
+	if r1 != 0 { return 100 + r1; }
+	val r2 = exercise_nested_field();
+	if r2 != 0 { return 200 + r2; }
+	val r3 = exercise_direct_field_var_reassign();
+	if r3 != 0 { return 300 + r3; }
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Regression: match arm that binds only a subset of a multi-field ctor (positional wildcard `_` for the other fields) must drop the unbound droppable fields at arm end. Prior bug family: `arm_scrut_payload_moved=True` set by the bound moved field caused arm-local scrutinee cleanup to be entirely skipped, leaking the unbound Token in the PairMsg::Pair(Token, Token) shape. Dropping the whole variant is unsafe after a field was moved (would re-drop the moved field), so per-unbound-field drops are required.",
+  "exit_code": 0
+}

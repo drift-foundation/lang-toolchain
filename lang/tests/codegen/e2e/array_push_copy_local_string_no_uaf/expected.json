@@ -1,0 +1,4 @@
+{
+  "description": "K28-aftermath regression (drift-net-tls v0.3.14 UAF). `Array<String>.push(local_string)` with a heap-backed local and the resulting array wrapped in Result::Ok(Struct{...}) must not UAF at source-local overwrite. Pre-fix: SIGABRT from glibc tcache, heap-use-after-free under ASAN/Valgrind. Post-fix: exit 5 (byte_length of \"xAAAA\").",
+  "exit_code": 5
+}

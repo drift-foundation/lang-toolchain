@@ -982,8 +982,26 @@ class HIRToMIR:
 			arm_scrut_ptr: M.ValueId | None = None
 			arm_scrut_payload_moved = False
 			arm_drop_locals: list[str] = []
+			# Field indices whose storage in `arm_scrut_local` no longer
+			# carries an owning refcount to drop — either because the
+			# binder loop MoveOut'd the single +1 into the binder (so
+			# dropping the original slot would double-drop the moved
+			# value) or, for `@tombstone`-like synth patterns, the slot
+			# was neutralized in place.  Populated by the MOVE branch of
+			# the binder loop.  Used by PARTIAL-MOVE CLEANUP to decide
+			# which remaining fields STILL need their in-slot drop.
+			moved_field_indices: set[int] = set()
 			try:
-				def _ensure_arm_scrut_ptr() -> None:
+				def _ensure_arm_scrut_ptr(*, mark_source_moved: bool = False) -> None:
+					# When mark_source_moved is True, the caller guarantees
+					# that EVERY arm of this match will also call this
+					# helper (so `scrut_source_local` is moved on every CFG
+					# path out of the match).  Only then is it correct to
+					# globally record the source local as moved — otherwise
+					# arms that skip the helper would leave the scrutinee
+					# live on their CFG edge, and `_moved_locals`
+					# accounting would suppress a scope-drop that those
+					# paths legitimately need.
 					nonlocal arm_scrut_local, arm_scrut_ptr
 					if arm_scrut_ptr is not None:
 						return
@@ -1001,6 +1019,39 @@ class HIRToMIR:
 						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=source_local, ty=scrut_ty))
 						self._local_types[arm_scrut_moved_in] = scrut_ty
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=arm_scrut_moved_in))
+						if mark_source_moved:
+							# Record immediately (before any arm-body is
+							# lowered) so scope drops emitted during
+							# early return/throw inside the arm also skip
+							# the now-consumed named local.  Without this,
+							# a non-Copy named-local scrutinee would
+							# double-drop: once via the arm binder's
+							# payload move-out, once via the enclosing
+							# scope's MoveOut+DropValue on the
+							# already-consumed local.
+							self._moved_locals.add(source_local)
+						else:
+							# Value-producing match: we cannot globally
+							# mark `source_local` moved, because sibling
+							# arms that do not invoke this helper (e.g.
+							# `default` or bare-ctor arms) legitimately
+							# leave the scrutinee live on their CFG edges
+							# and rely on scope-drop for cleanup.
+							# Instead, write a DROP-SAFE TOMBSTONE back
+							# into the source local on THIS path — the
+							# same pattern `ArrayElemTake` uses for array
+							# slot cleanup.  At runtime the enclosing
+							# scope-drop reads tombstone bytes
+							# (reserved `__drift_internal_tombstone` tag
+							# or a user-declared `@tombstone` ctor) and
+							# becomes a provable no-op on this path,
+							# while untaken-arm paths leave the original
+							# storage intact.  Path-sensitive via
+							# runtime state, no `_moved_locals` mutation.
+							tomb = self.b.new_temp()
+							self.b.emit(M.TombstoneValue(dest=tomb, ty=scrut_ty))
+							self._local_types[tomb] = scrut_ty
+							self.b.emit(M.StoreLocal(local=source_local, value=tomb))
 					else:
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
 					arm_scrut_ptr = self.b.new_temp()
@@ -1008,7 +1059,13 @@ class HIRToMIR:
 					self._local_types[arm_scrut_ptr] = self._type_table.ensure_ref_mut(scrut_ty)
 
 				if not want_value and not scrut_is_ref:
-					_ensure_arm_scrut_ptr()
+					# Statement-context match: `_ensure_arm_scrut_ptr`
+					# is invoked unconditionally here, so EVERY arm moves
+					# the source local into its arm_scrut_local.  Safe
+					# to record the move globally — scope-drop at the
+					# enclosing block end correctly skips the already-
+					# consumed named local.
+					_ensure_arm_scrut_ptr(mark_source_moved=True)
 
 				if arm.ctor is not None:
 					arm_def = inst.arms_by_name[arm.ctor]
@@ -1081,6 +1138,27 @@ class HIRToMIR:
 									self._local_types[field_moved] = bty
 									payload_is_copy = self._should_copy_value(bty)
 									if payload_is_copy:
+										# Invariant relied on by PARTIAL-MOVE CLEANUP
+										# below: a Copy-classified payload never has
+										# runtime-drop semantics.
+										# `_classify_value_transfer` enforces this —
+										# `copy_status=True AND _needs_runtime_drop=True`
+										# degrades to "move".  So a Copy-bound binder
+										# cannot leave the variant's storage holding
+										# an owning ref that still needs release.
+										# This assertion forces any future Copy path
+										# for a runtime-drop type to be reviewed
+										# deliberately against PARTIAL-MOVE CLEANUP —
+										# it will NOT silently "still work" there.
+										if self._needs_runtime_drop(bty):
+											raise AssertionError(
+												f"internal: match binder '{bname}' for "
+												f"ctor '{arm.ctor}' field {fidx} classified "
+												f"as Copy but also requires runtime drop "
+												f"(typeid={bty}) — violates the "
+												f"_classify_value_transfer invariant that "
+												f"PARTIAL-MOVE CLEANUP relies on."
+											)
 										copy_dest = self.b.new_temp()
 										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
 										self._local_types[copy_dest] = bty
@@ -1095,6 +1173,7 @@ class HIRToMIR:
 										self._local_types[move_dest] = bty
 										field_moved = move_dest
 										arm_scrut_payload_moved = True
+										moved_field_indices.add(int(fidx))
 								else:
 									self.b.emit(
 										M.VariantGetField(
@@ -1119,6 +1198,86 @@ class HIRToMIR:
 				# Consume and drop by-value scrutinee before arm body so cleanup runs
 				# even when the arm terminates early (e.g., return/throw).
 				if arm_scrut_payload_moved:
+					# PARTIAL-MOVE CLEANUP: at least one droppable field of
+					# the matched ctor was moved out by the binder loop.
+					# Dropping the whole variant (via
+					# `DropValue(arm_scrut_local)`) would re-drop the moved
+					# field — unsafe.  Dropping nothing at all would leak
+					# every OTHER field whose storage-ref remained in the
+					# variant.
+					#
+					# Per-field cleanup rule: emit a per-slot drop for each
+					# ctor field that (a) still needs runtime drop and (b)
+					# was NOT moved by the binder loop into its binder
+					# temp.  The field's original storage inside
+					# `arm_scrut_local` still owns its +1 in that case;
+					# `__match_partial_drop_N` temps take ownership and
+					# fire at arm end / early return / throw.
+					#
+					# Cases the loop covers:
+					#  - Unbound droppable field (no binder): slot owns
+					#    its ref — MUST drop.  Closes the named-subset
+					#    bind leak (`Pair(a = moved_a)` omitting `b`),
+					#    pinned by
+					#    `match_subset_bind_leaves_unbound_fields_dropped/`.
+					#  - Bound MOVED field (non-Copy, e.g. Token): binder
+					#    consumed the sole +1 via MoveOut; slot holds
+					#    moved-from bytes — MUST NOT drop.  The binder
+					#    loop's MOVE branch records the field index in
+					#    `moved_field_indices`.
+					#
+					# A third logical case — "bound COPIED + droppable
+					# field" — is structurally IMPOSSIBLE in v1 by the
+					# invariant in `_classify_value_transfer`:
+					# `copy_status=True AND _needs_runtime_drop=True`
+					# degrades to "move", so the binder loop's COPY
+					# branch (see `_should_copy_value` call above) is
+					# only ever taken for trivially-drop-safe types
+					# (bitcopy).  An assertion inside that COPY branch
+					# pins the invariant.  Keying this cleanup on
+					# "moved" rather than "bound" is behaviorally
+					# equivalent to a `bound_field_indices` filter
+					# today, but names the ownership fact the cleanup
+					# actually depends on.  If future work adds a Copy
+					# path for a runtime-drop type, the assertion in
+					# the binder's COPY branch fires first and forces
+					# that change to be reviewed against PARTIAL-MOVE
+					# CLEANUP deliberately — it will NOT silently stay
+					# correct here.
+					if (
+						arm.ctor is not None
+						and not scrut_is_ref
+						and arm_scrut_ptr is not None
+					):
+						arm_def = inst.arms_by_name[arm.ctor]
+						for cleanup_fidx, cleanup_fty in enumerate(arm_def.field_types):
+							if cleanup_fidx in moved_field_indices:
+								continue
+							if not self._needs_runtime_drop(cleanup_fty):
+								continue
+							slot_addr = self.b.new_temp()
+							self.b.emit(
+								M.VariantGetFieldAddr(
+									dest=slot_addr,
+									variant_ref=arm_scrut_ptr,
+									variant_ty=scrut_ty,
+									ctor=arm.ctor,
+									field_index=int(cleanup_fidx),
+									field_ty=cleanup_fty,
+								)
+							)
+							self._local_types[slot_addr] = self._type_table.ensure_ref_mut(cleanup_fty)
+							slot_val = self.b.new_temp()
+							self.b.emit(M.LoadRef(dest=slot_val, ptr=slot_addr, inner_ty=cleanup_fty))
+							self._local_types[slot_val] = cleanup_fty
+							drop_tmp = f"__match_partial_drop_{self.b.new_temp()}"
+							self.b.ensure_local(drop_tmp)
+							self._local_types[drop_tmp] = cleanup_fty
+							self.b.emit(M.StoreLocal(local=drop_tmp, value=slot_val))
+							# Register for arm-end drop + scope drop (so early
+							# return/throw inside the arm body also cleans up).
+							arm_drop_locals.append(drop_tmp)
+							self._register_drop_local(drop_tmp, cleanup_fty)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
 					arm_scrut_moved_pre = self.b.new_temp()
@@ -2278,11 +2437,63 @@ class HIRToMIR:
 		for idx, elem_expr in enumerate(expr.elements):
 			val = self.lower_expr(elem_expr)
 			val_ty = self._infer_expr_type(elem_expr)
-			if val_ty is not None:
-				if self._should_copy_value(val_ty) and not isinstance(elem_expr, H.HMove):
+			if val_ty is not None and not isinstance(elem_expr, H.HMove):
+				# Step 1: deep-copy any ref-alias temp into an owned
+				# value at the ownership boundary.  `_copy_if_ref_alias`
+				# is the standard mechanism the rest of the lowering
+				# uses (call args, struct ctors, returns, var bindings)
+				# to upgrade a HField/HPlaceExpr-projection alias of an
+				# owning local's storage into an independent owned temp.
+				# Pre-fix the ArrayLit elem loop skipped this step, so
+				# downstream CopyValue saw an aliased struct value
+				# whose nested fields still belonged to the source
+				# local — releasing that alias later would UAF.
+				val = self._copy_if_ref_alias(val, val_ty)
+
+				# Step 2: K28-aftermath / drift-net-tls v0.3.14
+				# alignment.  ArrayLit's per-element store is subject
+				# to the same MIR contract as ArrayElemInit* /
+				# ArrayIndexStore at push/insert/set sites — Copy
+				# non-bitcopy values need explicit CopyValue (with a
+				# paired DropValue when the source is an OWNED rvalue
+				# temp).
+				#
+				# Pre-fix this branch only fired for `_should_copy_value`
+				# (= Copy AND no runtime-owned substructure), missing
+				# Copy non-bitcopy structs like core.DiagnosticEntry
+				# whose `_needs_runtime_drop` returns True (because
+				# they transitively contain DV) and so are classified
+				# as "move" rather than "copy".  That tripped the
+				# MIR-validate "must use CopyValue or MoveOut for Copy
+				# element type" invariant.  See
+				# issues/array_lit_copy_nonbitcopy_struct_mir_invariant/.
+				copy_status = self._type_table.copy_status(val_ty)
+				if copy_status is True and not self._type_table.is_bitcopy(val_ty):
 					copy_dest = self.b.new_temp()
 					self.b.emit(M.CopyValue(dest=copy_dest, value=val, ty=val_ty))
 					self._local_types[copy_dest] = val_ty
+					# Source-ownership classification, mirroring
+					# `_call_arg_yields_owned_temp`'s rules adapted for
+					# `lower_expr` (which handles HVar/HPlaceExpr as
+					# plain loads without a MoveOut wrapper):
+					# - `H.HVar` / projection-free `HPlaceExpr` → borrowed
+					#   view sharing refcount with the source local;
+					#   dropping it would UAF on the next store into
+					#   that local (the drift-net-tls Array<String>
+					#   regression family).
+					# - Everything else (HCall, HDVInit, HPlaceExpr with
+					#   projections after `_copy_if_ref_alias` upgraded
+					#   them to owned temps, …) → owned rvalue temp;
+					#   the paired DropValue releases its own ref so
+					#   the cloned `copy_dest` is the lone owner.
+					HPlaceExpr = getattr(H, "HPlaceExpr", None)
+					is_place = isinstance(elem_expr, H.HVar) or (
+						HPlaceExpr is not None
+						and isinstance(elem_expr, HPlaceExpr)
+						and not getattr(elem_expr, "projections", None)
+					)
+					if not is_place:
+						self.b.emit(M.DropValue(value=val, ty=val_ty))
 					val = copy_dest
 			idx_val = self.b.new_temp()
 			self.b.emit(M.ConstInt(dest=idx_val, value=idx))
@@ -3820,6 +4031,52 @@ class HIRToMIR:
 			type(self)._DV_RVALUE_RECV_HEXPRS = shapes
 		return isinstance(recv, shapes)
 
+	def _call_arg_yields_owned_temp(self, arg: H.HExpr, param_ty: TypeId | None) -> bool:
+		"""Mirror of `_lower_call_arg`'s ownership decision for use by
+		`_lower_array_intrinsic_method` at push/insert/set sites.
+
+		Returns True if `_lower_call_arg(arg, param_ty)` yields a MIR
+		value that OWNS its inner refcounted storage, False if it yields
+		a borrowed/shared view whose storage is still owned by a source
+		local.
+
+		The rules mirror `_lower_call_arg` exactly:
+		- HVar / projection-free HPlaceExpr with a MOVE-classified type
+		  → MoveOut → owned temp.
+		- HVar / projection-free HPlaceExpr with a COPY-classified type
+		  → plain load (borrowed view sharing refcount with the local).
+		- HPlaceExpr with projections → `lower_expr` deep-copy → owned.
+		- Anything else (HCall, HMethodCall, HDVInit, …) → `lower_expr`
+		  on an rvalue expression → owned temp.
+
+		This distinction matters for `_ensure_array_elem_copy`:
+		`drop_source=True` is only safe when `val` is an OWNED temp,
+		because the paired `DropValue` releases the inner refcounted
+		storage.  Releasing a shared view would decrement the refcount
+		out from under the source local (observed as heap-use-after-free
+		in `Array<String>.push(name)` where `name` is a local String
+		reporter: drift-net-tls v0.3.14 certification).
+		"""
+		is_place = isinstance(arg, H.HVar) or (hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr")))
+		if not is_place:
+			return True  # rvalue expressions lower to owned temps.
+		base = arg
+		if hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr")):
+			if getattr(arg, "projections", None):
+				return True  # projected reads lower through lower_expr.
+			base = arg.base
+		if not isinstance(base, H.HVar):
+			return True
+		arg_ty = self._infer_expr_type(base)
+		if param_ty is not None and not self._should_copy_value(param_ty):
+			arg_ty = param_ty
+		if arg_ty is None:
+			return True
+		# MOVE-classified → MoveOut path → owned.
+		# COPY-classified → fall-through to lower_expr, which for HVar
+		# produces a borrowed view.
+		return not self._should_copy_value(arg_ty)
+
 	def _ensure_array_elem_copy(self, val: M.ValueId, elem_ty: TypeId, *, drop_source: bool) -> M.ValueId:
 		"""Wrap *val* in CopyValue when the element type is Copy but non-bitcopy.
 
@@ -3841,20 +4098,24 @@ class HIRToMIR:
 		owned substructure is released and the returned clone is the
 		lone owner of the element storage.
 
-		`drop_source=False` is the escape hatch for a future lowering
-		path that hands in a still-borrowed view of a source whose
-		scope will drop independently (e.g. a direct `ArrayIndexLoad`
-		without the accompanying `_emit_copy_value` retain the current
-		LLVM lowering emits).  No such call site exists today; all
-		three callers (push/insert/set/extend) feed owned MIR temps,
-		so all pass `drop_source=True`.  In particular `extend(&src)`'s
-		element is NOT a borrowed view of src's storage at MIR level —
-		`_lower_array_index_load` (llvm_codegen.py) calls
-		`_emit_copy_value` on the loaded element so the MIR-level
-		`elem` is already an independent owned temp with its own retain
-		(for String) or its own deep-cloned fields (for struct/DV
-		elements).  See `array_extend_borrowed_source_string_no_uaf`
-		for the memcheck regression that pins this.
+		`drop_source=False` is REQUIRED when `val` is a borrowed / shared
+		view — typically a plain load from a COPY-classified local
+		(e.g. `Array<String>.push(local_string)` where `_lower_call_arg`
+		falls through to `lower_expr(HVar)` because String is
+		classified as "copy").  Releasing a shared view would decrement
+		the source local's refcount, leaving the array slot and the
+		local both pointing to data that's freed on the next store into
+		the local (drift-net-tls v0.3.14 certification UAF reporter).
+		Callers MUST determine ownership via `_call_arg_yields_owned_temp`
+		(or equivalent reasoning) and pass the correct value.
+
+		`extend(&src)`'s element is an owned temp despite the MIR shape
+		being `ArrayIndexLoad`: `_lower_array_index_load`
+		(llvm_codegen.py) calls `_emit_copy_value` on the loaded element
+		so the MIR-level `elem` is already an independent owned temp
+		with its own retain (for String) or its own deep-cloned fields
+		(for struct/DV elements).  See
+		`array_extend_borrowed_source_string_no_uaf`.
 		"""
 		copy_status = self._type_table.copy_status(elem_ty)
 		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):
@@ -3863,9 +4124,13 @@ class HIRToMIR:
 			self._local_types[copy_dest] = elem_ty
 			if drop_source:
 				# K28-aftermath Leak B: release owned source-temp inner refs
-				# after clone.  `val` is always an owned MIR temp at the
-				# current call sites (push/insert/set/extend — see docstring);
-				# future borrowed-view paths must opt into drop_source=False.
+				# after clone.  `drop_source=True` means the caller has
+				# proven `val` is owned — see the docstring and
+				# `_call_arg_yields_owned_temp` for the classification
+				# rules.  Passing `drop_source=True` when `val` is a
+				# borrowed view (COPY-classified HVar load) will UAF the
+				# source local; see
+				# `array_push_copy_local_string_no_uaf` for that shape.
 				self.b.emit(M.DropValue(value=val, ty=elem_ty))
 			return copy_dest
 		return val
@@ -4234,11 +4499,16 @@ class HIRToMIR:
 			if _arr_issues:
 				raise AssertionError(_arr_issues[0].message)
 			val_arg = expr.args[-1]
+			val_owned = self._call_arg_yields_owned_temp(val_arg, elem_ty)
 			val = self._lower_call_arg(val_arg, elem_ty)
-			# `_lower_call_arg` returns an OWNED temp (MoveOut for HVar
-			# non-Copy paths or `lower_expr` for rvalues), so the source
-			# can be safely released after CopyValue.
-			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=True)
+			# drop_source is only safe when `_lower_call_arg` yields an OWNED
+			# temp (MoveOut for move-classified HVar, or lower_expr for
+			# rvalues).  For COPY-classified HVar (e.g. `Array<String>.push(local)`)
+			# `_lower_call_arg` falls through to a plain `lower_expr` load —
+			# a borrowed view — and dropping it would decrement the source
+			# local's refcount, causing UAF at the next store into that
+			# local.  See drift-net-tls v0.3.14 certification regression.
+			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=val_owned)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
 			cap_val = self.b.new_temp()
@@ -4453,10 +4723,19 @@ class HIRToMIR:
 			if _arr_issues:
 				raise AssertionError(_arr_issues[0].message)
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
-			val = self.lower_expr(expr.args[1], expected_type=elem_ty)
-			# `lower_expr` for an rvalue returns an OWNED temp; the value
-			# parameter to `set` is consumed by the array store.
-			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=True)
+			# Same ownership reasoning AND the same lowering machinery
+			# as push/insert: route the value through `_lower_call_arg`
+			# (not raw `lower_expr`) so HVar / projection / rvalue all
+			# end up at the SSA ownership state that
+			# `_call_arg_yields_owned_temp` predicts.  Pre-fix `set`
+			# called `lower_expr` directly, which produced a different
+			# ownership state for move-classified HVars — combined with
+			# `drop_source=True` from the helper, that double-released
+			# the source local on scope drop (UAF in
+			# om_array_set_diag_entry hvar_local scenario).
+			val_owned = self._call_arg_yields_owned_temp(expr.args[1], elem_ty)
+			val = self._lower_call_arg(expr.args[1], elem_ty)
+			val = self._ensure_array_elem_copy(val, elem_ty, drop_source=val_owned)
 			self.b.emit(M.ArrayIndexStore(elem_ty=elem_ty, array=array_val, index=idx_val, value=val))
 			return True, None
 
@@ -5731,9 +6010,17 @@ class HIRToMIR:
 		self._current_stmt_span = prev_stmt_span
 
 	def _visit_stmt_HAssign(self, stmt: H.HAssign) -> None:
-		val = self.lower_expr(stmt.value)
-		# Deep-copy aliased ref-field temps before assignment.
+		# Use `_lower_owning_consume` so HVar / projection-free
+		# HPlaceExpr sources of move-classified types are MoveOut'd
+		# (marking the source local as moved) instead of being
+		# loaded.  Pre-fix `dst = src;` for `src: DiagnosticEntry`
+		# loaded src and StoreLocal'd into dst — both src and dst then
+		# held the same data ptr and double-released at scope drop
+		# (om_local_assign_diag_entry hvar_local UAF, same family as
+		# the return-value bug).
 		assign_ty = self._infer_expr_type(stmt.value)
+		val = self._lower_owning_consume(stmt.value, assign_ty)
+		# Deep-copy aliased ref-field temps before assignment.
 		if assign_ty is not None:
 			val = self._copy_if_ref_alias(val, assign_ty)
 		# Stage1 normalization must canonicalize assignment targets to `HPlaceExpr`.
@@ -5903,6 +6190,53 @@ class HIRToMIR:
 		self.b.emit(M.StoreRef(ptr=ptr, value=new, inner_ty=elem_ty))
 		return
 
+	def _lower_owning_consume(self, value_expr: H.HExpr, expected: TypeId | None) -> M.ValueId:
+		"""Lower an expression at an OWNING-CONSUMPTION boundary.
+
+		Used by `return <expr>;` and local-reassignment (`x = <expr>;`)
+		— both of which (1) consume the source value into the
+		destination, and (2) trigger downstream scope-drops that must
+		see the source local as MOVED if the value type is
+		move-classified.  Mirrors `_lower_call_arg`'s ownership
+		decision: HVar / projection-free HPlaceExpr of a
+		move-classified type → `MoveOut` (so scope-drops skip the
+		local); all other shapes → `lower_expr` (and the caller's
+		`_copy_if_ref_alias` upgrade for projection aliases).
+
+		Pre-fix both paths used raw `lower_expr` — for `return src;`
+		(or `dst = src;`) where `src` is an HVar of e.g.
+		`core.DiagnosticEntry`, the load left the local live; the
+		subsequent scope-drop / dst-drop sequence then double-released
+		the inner refcounted storage (caller saw a use-after-free in
+		`m::scenario_hvar_local` for both om_return_value_diag_entry
+		and om_local_assign_diag_entry).
+		"""
+		base = value_expr
+		HPlaceExpr = getattr(H, "HPlaceExpr", None)
+		if HPlaceExpr is not None and isinstance(value_expr, HPlaceExpr):
+			if getattr(value_expr, "projections", None):
+				return self.lower_expr(value_expr, expected_type=expected)
+			base = value_expr.base
+		if isinstance(base, H.HVar):
+			arg_ty = self._infer_expr_type(base)
+			if expected is not None and not self._should_copy_value(expected):
+				arg_ty = expected
+			if arg_ty is not None and not self._should_copy_value(arg_ty):
+				subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
+				self.b.ensure_local(subj_name)
+				moved_val = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
+				self._local_types[moved_val] = arg_ty
+				self._moved_locals.add(subj_name)
+				return moved_val
+		return self.lower_expr(value_expr, expected_type=expected)
+
+	def _lower_return_value(self, value_expr: H.HExpr) -> M.ValueId:
+		"""Backward-compatible shim around `_lower_owning_consume` for
+		return-statement use.  See `_lower_owning_consume` for details.
+		"""
+		return self._lower_owning_consume(value_expr, self._ret_type)
+
 	def _visit_stmt_HReturn(self, stmt: H.HReturn) -> None:
 		if self.b.block.terminator is not None:
 			return
@@ -5936,7 +6270,7 @@ class HIRToMIR:
 				return
 			if stmt.value is None:
 				raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
-			val = self.lower_expr(stmt.value, expected_type=self._ret_type)
+			val = self._lower_return_value(stmt.value)
 			if self._ret_type is not None:
 				val = self._copy_if_ref_alias(val, self._ret_type)
 				val_ty = self._local_types.get(val)
@@ -5983,7 +6317,7 @@ class HIRToMIR:
 			return
 		if stmt.value is None:
 			raise AssertionError("non-void bare return reached MIR lowering (checker bug)")
-		val = self.lower_expr(stmt.value, expected_type=self._ret_type)
+		val = self._lower_return_value(stmt.value)
 		if self._ret_type is not None:
 			val = self._copy_if_ref_alias(val, self._ret_type)
 			# Reject returning &T where owned T is expected.

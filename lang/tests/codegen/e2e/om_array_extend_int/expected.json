@@ -1,0 +1,4 @@
+{
+  "description": "Auto-generated ownership-transfer regression: site=array_extend, type=int. Value shapes vary the upstream setup (single push into src_arr) only \u2014 extend's transfer site is always `dest.extend(&src_arr)` with src_arr a borrowed local. Post-transfer integrity checked via byte_length / key.byte_length / value comparison. Must pass plain + ASAN; memcheck applies to heap-backed string subset and the diag_entry type.",
+  "exit_code": 0
+}

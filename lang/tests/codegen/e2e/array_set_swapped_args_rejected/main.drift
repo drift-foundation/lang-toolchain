@@ -1,0 +1,26 @@
+module m;
+
+// Negative contract test for `arr.set(value, index)`.
+//
+// The public API is `arr.set(index, value)` — args[0] is the Int
+// index, args[1] is the element value.  Passing them in the wrong
+// order must reject with a clean diagnostic so the API contract
+// stays unambiguous.
+//
+// Pre-fix the checker shared `push`'s validator with `set`, which
+// happened to treat args[0] as the value — that meant
+// `arr.set(name, 0)` was ACCEPTED with the wrong semantic and
+// `arr.set(0, name)` was REJECTED with a misleading
+// "Array element type mismatch (have Int, expected String)" pointing
+// at the value position.  Both behaviors were ambiguous.
+
+pub fn main() nothrow -> Int {
+	var arr: Array<String> = [];
+	arr.push("seed");
+
+	// Wrong order: value-then-index.  This must be rejected because
+	// args[0] is supposed to be the Int index.
+	arr.set("wrong", 0);
+
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Auto-generated ownership-transfer regression: site=extend_source, type=string, flavor=heap_concat. Shape axis varies the source-array expression at the extend call site: HVar local (`&src_arr`), HCall rvalue BOUND TO A LOCAL first then `&src_arr` (because direct borrow-of-rvalue is rejected by the borrow checker today), and projected field (`&bag.items`).  The projection case is the only scenario that varies the actual call-site borrow shape; HVar and HCall rvalue differ only in their upstream populate path. Post-transfer integrity checked via byte_length / key.byte_length / value comparison. Must pass plain + ASAN; memcheck applies to heap-backed string subset and the diag_entry type.",
+  "exit_code": 0
+}

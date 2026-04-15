@@ -843,6 +843,35 @@ def insert_string_arc(
 				new_instrs.append(M.StoreLocal(local=instr.local, value=zero))
 				local_types[zero] = instr.ty
 				moved_out_locals.add(instr.local)
+				# The local's storage is now zeroed (moved-out).  A
+				# subsequent StoreLocal must NOT emit a
+				# drop-before-overwrite for it — the "old value" is the
+				# synthesized zero, and dropping that zero can fire
+				# destructors on null payloads (e.g. variant with
+				# droppable first-ctor: tag=0 dispatches to the ctor's
+				# drop which reads zeroed reference fields → SEGV).
+				# Clear the "initialized" marker so the next real
+				# StoreLocal is treated as fresh initialization.
+				#
+				# Scope-of-effect: `initialized_destructibles` is
+				# seeded from `destructible_locals - nullsafe_destructible_locals`
+				# — i.e. it NEVER contains String or Array locals (those
+				# go through the nullsafe path at line 824-827, which
+				# always drops and re-adds regardless of prior state)
+				# and it NEVER contains non-destructible locals.  The
+				# only locals affected by this `discard` are the
+				# non-nullsafe destructibles (variants with drop-
+				# unsafe zero bytes, DVs, user-Destructible structs).
+				# For each of those, dropping the zero bytes emitted
+				# by the preceding ZeroValue is strictly unsafe — there
+				# is no legitimate use case where the caller WANTS the
+				# synthesized zero to be re-dropped.  Hence clearing
+				# the marker cannot reintroduce a leak: if the next
+				# StoreLocal is the last assignment, scope-exit drop
+				# still runs; if no further store occurs, the local is
+				# already moved-out and the zero bytes correctly stay
+				# unowned.
+				initialized_destructibles.discard(instr.local)
 				continue
 
 			if isinstance(instr, M.ConstString):

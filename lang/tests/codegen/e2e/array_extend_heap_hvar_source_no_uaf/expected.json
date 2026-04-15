@@ -1,0 +1,4 @@
+{
+  "description": "Option A fixture 2: extend(&src) where src is populated by pushing heap-backed String HVar locals (distinct from the HCall-sourced extend fixture). Verifies src remains valid AND extensible after extend, dest owns independent clones, and both arrays drop cleanly under memcheck.",
+  "exit_code": 0
+}

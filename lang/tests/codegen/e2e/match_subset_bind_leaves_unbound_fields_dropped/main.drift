@@ -1,0 +1,73 @@
+// Regression: match arm that binds a SUBSET of a multi-field ctor
+// via NAMED partial bind (`Pair(a = moved_a)` — omitting `b`
+// entirely) must still drop the unbound droppable field at arm end.
+//
+// Prior shape: the language explicitly supports named subset binds
+// (per hir_to_mir.py docstring at line ~824).  When only `a` is
+// named, the bound non-Copy move sets `arm_scrut_payload_moved=True`
+// and arm-local scrutinee cleanup is skipped.  Tombstone-storing
+// the source local makes the enclosing scope-drop a no-op.  But the
+// UNNAMED field `b` has no cleanup path — sess_b.drops stays 0,
+// leaking.  Dropping the whole variant is unsafe (would re-drop the
+// moved `a`), so the correct fix is per-unbound-droppable-field
+// drops.
+
+module m;
+
+import std.core as core;
+
+pub struct Session {
+	pub drops: Int,
+}
+
+pub struct Token {
+	pub session: &mut Session,
+}
+
+implement core.Destructible for Token {
+	pub fn destroy(self: Token) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn make_token(sess: &mut Session) nothrow -> Token {
+	return Token(session = sess);
+}
+
+pub variant PairMsg {
+	Pair(a: Token, b: Token),
+	Other,
+}
+
+fn case_named_subset_bind() nothrow -> Int {
+	var sess_a: Session = Session(drops = 0);
+	var sess_b: Session = Session(drops = 0);
+	{
+		val r: PairMsg = PairMsg::Pair(a = make_token(&mut sess_a), b = make_token(&mut sess_b));
+		val n: Int = match r {
+			// Named subset: bind `a`, OMIT `b` entirely.
+			PairMsg::Pair(a = moved_a) => {
+				if sess_a.drops != 0 { return 1; }
+				if sess_b.drops != 0 { return 2; }
+				7
+			},
+			default => { 0 },
+		};
+		if n != 7 { return 3; }
+		if sess_a.drops != 1 { return 4; }
+		// Unbound `b` must also have been dropped by arm cleanup.
+		if sess_b.drops != 1 { return 5; }
+	}
+	// Scope-drop of tombstoned `r` is a no-op — sess_b.drops must
+	// still be 1, not 2 (would indicate double-drop) and not 0
+	// (would indicate leak).
+	if sess_a.drops != 1 { return 6; }
+	if sess_b.drops != 1 { return 7; }
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = case_named_subset_bind();
+	if a != 0 { return 100 + a; }
+	return 0;
+}

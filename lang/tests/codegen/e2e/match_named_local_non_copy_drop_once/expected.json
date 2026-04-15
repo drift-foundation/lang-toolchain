@@ -1,0 +1,4 @@
+{
+  "description": "Regression: match on a NAMED LOCAL scrutinee whose variant payload is a non-Copy `core.Destructible` type (Token) must drop the payload exactly once.  Prior bug: both the arm binder and the scrutinee local tried to drop the same payload at scope end, firing destroy() twice — observable via an &mut Session.drops counter that incremented to 2, and a SIGSEGV on the double dereference of the moved session. Semantics: matching an owned named-local scrutinee with an owning binder consumes the scrutinee. Hand-authored (not generator output); companion to the generated ownership matrix.",
+  "exit_code": 0
+}

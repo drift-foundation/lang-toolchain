@@ -1402,6 +1402,43 @@ class TypeTable:
 		for base_id, schema in items:
 			self._define_variant_instance(base_id, base_id, [])
 
+		# Rebuild ALREADY-CACHED GENERIC VARIANT INSTANCES too.  Generic
+		# instances (e.g. `core.Result<Token, Int>`, user `Box<UserMsg>`)
+		# are created lazily via `ensure_instantiated` and cached in
+		# `self.variant_instances`.  If an instance was cached BEFORE
+		# destructor_fns were installed — which is common for `Result<_,
+		# _>` instances materialized during parsing — `_define_variant_instance`
+		# classified `has_drop(field_ty)` without seeing the user's
+		# `implement core.Destructible for Token` impl, and therefore
+		# wrote `internal_tombstone_ctor = None` into the cached instance.
+		# That stale metadata breaks any later codegen that needs to
+		# materialize a drop-safe tombstone for the generic instance
+		# (match-scrutinee tombstone store, ArrayElemTake on
+		# `Array<Result<Token, Int>>`, …).  Re-run `_define_variant_instance`
+		# for every cached instance so tombstone metadata is recomputed
+		# against the now-authoritative `has_drop` (which consults
+		# `destructor_fns` via `is_destructible`).  Deterministic order by
+		# (base module_id, base name, type_args) to keep TypeId assignment
+		# stable if the rebuild triggers nested instantiation of derived
+		# types.
+		cached_instances = [
+			(inst_id, inst.base_id, list(inst.type_args))
+			for inst_id, inst in self.variant_instances.items()
+			# Skip bases already handled above — their inst_id == base_id
+			# and type_args is empty.
+			if not (inst_id == inst.base_id and not inst.type_args)
+		]
+		def _sort_key(entry: tuple[int, int, list[int]]) -> tuple[str, str, tuple[int, ...]]:
+			_inst_id, base_id, type_args = entry
+			schema = self.variant_schemas.get(base_id)
+			mod = schema.module_id if schema is not None else ""
+			name = schema.name if schema is not None else ""
+			return (mod, name, tuple(type_args))
+		cached_instances.sort(key=_sort_key)
+		for inst_id, base_id, type_args in cached_instances:
+			if base_id in self.variant_schemas:
+				self._define_variant_instance(base_id, inst_id, type_args)
+
 	def get_variant_schema(self, ty: TypeId) -> VariantSchema | None:
 		"""Return the variant schema for a base or instantiated variant TypeId."""
 		td = self.get(ty)

@@ -1,0 +1,4 @@
+{
+  "description": "Option A fixture 5: variant ctor transfers containing heap-backed Array<String> / Session payloads. Four shapes: custom variant with Array<String>, custom variant with Session, core.Result::Ok(Session{...}) (drift-net-tls cert shape), core.Result::Err(Session{...}). Verifies payload integrity through match destructure.",
+  "exit_code": 0
+}

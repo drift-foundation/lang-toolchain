@@ -1,3 +1,106 @@
+## 2026-04-14 - 0.27.197: Token axis + full match-scrutinee ownership model (value-producing match, partial-move cleanup, generic variant tombstones)
+- **Matrix expansion (Token axis)**: non-Copy `core.Destructible` struct `Token { session: &mut Session }` added as the matrix's first destructor-bearing type.  Observable side channel: `sess.drops` counter incremented by `destroy()`.  Six non-array transfer sites covered (`struct_ctor`, `variant_ctor`, `result_ok`, `return_value`, `local_assign`, `fn_arg`); `Array<Token>` rejected by the type system (deferred).  Matrix grows 56 → 62.
+- **LANGUAGE_BUG exposed by `om_result_ok_token` / `om_variant_ctor_token` (statement-context)**: `match r { Ok(v) => … }` on a named-local scrutinee owning a variant with a non-Copy Destructible payload double-dropped the payload.  `_ensure_arm_scrut_ptr` moved out of the named local into the per-arm temp but did NOT add the source to `_moved_locals`, so `_emit_scope_drops` re-emitted `MoveOut + DropValue` on the already-moved-from local — firing the payload destructor a second time (SEGV when the Token's `&mut Session` field was zeroed).
+- **Fix, five linked pieces**:
+  1. **Statement-context match**: `_ensure_arm_scrut_ptr(*, mark_source_moved: bool = False)`; the unconditional statement-context callsite passes `True`, recording `source_local` in `_moved_locals` immediately after the MoveOut — correct because EVERY arm invokes the helper.
+  2. **Value-producing match** (`val n = match r { Payload(v) => …, default => … }`): `mark_source_moved=False` is unsafe for the sibling-arm case (`default` / bare-ctor arms legitimately leave the scrutinee live on their CFG edge).  Each consuming arm instead writes a DROP-SAFE TOMBSTONE into the source local — new MIR primitive `TombstoneValue(dest, ty) + StoreLocal(source_local, tomb)` — so the enclosing scope-drop is a runtime no-op on tombstone bytes while untaken arms leave storage intact.
+  3. **`TombstoneValue` safety contract**: drop-safe ONLY for variants with internal/user tombstone, String/Array null headers, iface/DV null fat-pointers, and plain aggregates of those.  NOT safe for structs registered in `type_table.destructor_fns` (user `core.Destructible` impls) — LLVM backend raises `AssertionError` at the MIR-instruction boundary for that case, making it a hard internal bug.  Enforcement scoped to the MIR instruction, not the shared `_emit_tombstone_value` helper (the `ArrayElemTake` slot-neutralize path intentionally lets user destructors run on tombstoned bytes).
+  4. **Variant drop helper**: `_ensure_array_drop_helper` adds `i8 <internal_tomb_tag>, label %done_block` to the drop-dispatch `switch` for variants with a synthesized `__drift_internal_tombstone` ctor — otherwise tombstoned variant storage hits the `default_block` trap on drop.
+  5. **Generic variant re-finalization**: cached generic `VariantInstance`s (e.g. `core.Result<Token, Int>`, `Box<UserMsg>`) created before `_install_destructor_fns` had `has_drop(field_ty)` return False for user Destructible structs, so `internal_tombstone_ctor` was stale-None.  `finalize_variants()` now runs a second pass over ALL cached `variant_instances` (deterministic sort by `(module_id, name, type_args)`) and re-runs `_define_variant_instance`.  Three `driftc.py` call sites after `_install_destructor_fns` invoke it.
+- **Partial-move cleanup for arm binders**: when any arm binder moves a droppable field out of the scrutinee, whole-variant drop would double-drop — so PARTIAL-MOVE CLEANUP emits per-slot drops for the REMAINING droppable fields via `__match_partial_drop_N` temps registered with `_register_drop_local` (so arm-end, early return, and throw all clean up).  Classifies on `moved_field_indices` rather than `bound_field_indices`: behaviorally equivalent under the `_classify_value_transfer` invariant (`copy_status=True AND _needs_runtime_drop=True` degrades to "move"), but names the ownership fact the cleanup depends on.  An assertion in the binder loop's COPY branch rejects any future Copy path for a runtime-drop type — such a change must be reviewed against PARTIAL-MOVE CLEANUP deliberately.
+- **MIR MoveOut expansion** (`string_arc.py`): after expanding `MoveOut → LoadLocal + ZeroValue + StoreLocal(zero)`, clear `initialized_destructibles` for the local so the next `StoreLocal` does not emit drop-before-overwrite on the synthesized zero bytes.  Set is seeded from `destructible_locals - nullsafe_destructible_locals`, so the discard affects ONLY types where re-dropping zero is strictly unsafe (non-nullsafe variants, user Destructible structs, DVs).  String / Array nullsafe path is unaffected.
+- **ArrayLit elem copy path alignment**: `_visit_expr_HArrayLit` now routes each element through `_copy_if_ref_alias` and emits `CopyValue` (paired with `DropValue` for owned rvalue temps) for Copy non-bitcopy types — same alignment as push/insert/set/extend.  Fixes the MIR-validate invariant failure "must use CopyValue or MoveOut for Copy element type" for `[core.DiagnosticEntry, …]` literals.
+- **Hand-authored regressions** (not matrix output):
+  - `match_named_local_non_copy_drop_once/` — statement-context anchor (Result<Token,Int> and `TokenMsg::Payload(Token)`).
+  - `match_value_producing_non_copy_drop_once/` — non-generic variant, value-producing match; pins tombstone-store model.
+  - `match_value_producing_generic_variant_token_drop_once/` — `core.Result<Token, Int>` value-producing match; pins generic instance re-finalization.
+  - `match_subset_bind_leaves_unbound_fields_dropped/` — named-subset bind (`Pair(a = moved_a)` omitting `b`); pins PARTIAL-MOVE CLEANUP.
+  - `token_hvar_use_after_consume_rejected/` — negative contract: second consume of a non-Copy HVar emits `use after move of 'tok'` (phase: borrowcheck, code: `E_USE_AFTER_MOVE`).
+- **New stage2 unit test**: `test_hir_to_mir_match_value_producing_tombstones_source.py` — MIR-level contract that a value-producing arm moving a non-Copy payload emits `MoveOut → StoreLocal(arm_scrut) → TombstoneValue → StoreLocal(source_local, tomb)` in that order.
+- **Coverage**: matrix plain 62/62, ASAN 62/62, memcheck 34/34 (Token axis memchecked alongside String-heap-concat and diag_entry).  Stage2 104/104.  Full e2e 1208 passed / 5 skipped / 0 failed.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.196 to 0.27.197.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — new MIR node is compiler-internal.
+
+## 2026-04-14 - 0.27.196: ownership matrix — for_loop_bind + true extend source-shape axis
+- **Matrix expansion**: two more SITES added to the ownership-transfer matrix generator:
+  - `for_loop_bind`: `for x in <iterable> { … }` — element binder gets `&T` per current for-loop semantics; iteration must NOT consume the iterable.  Each scenario asserts the binder reads intact data and the iterable is still owned post-loop.  Shape axis varies the iterable expression (HVar local, HCall rvalue, projected place).
+  - `extend_source`: TRUE source-array-shape axis for `dest.extend(&src)` — varies the iterable expression at the extend call site (HVar local array, HCall rvalue array bound to a local, projected `&bag.items`).  Complements the existing `array_extend` site (which honestly varies the upstream populate-via-push step instead of the extend call shape).
+- **Generator helpers**:
+  - `helpers_extend_source` emits `pub struct ArrBag<T>` + `make_one_element_array() -> Array<T>` + `arr_lit_factory() -> Array<T>` per fixture as needed.
+  - The HCall-rvalue extend variant binds the call result to a local first; borrow-of-rvalue is rejected by the borrow checker today, so the matrix exercises the bound shape and documents the rejection as the contract.
+  - The projection extend variant uses `move bag_items` to populate the struct (move-operand-must-be-an-addressable-place rule).
+- **Coverage**: matrix grows from 48 → 56 fixtures (8 new = 2 sites × 4 cells).  Plain mode: 56/56.  Memcheck high-risk subset: 28/28.  No regressions in the broader e2e suite (1190+ fixtures).
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.195 to 0.27.196.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — generator + new fixtures only.
+
+## 2026-04-14 - 0.27.195: matrix expansion (fn_arg / return_value / local_assign sites) + owning-consume MIR fix
+- **Compiler fix (LANGUAGE_BUG): return-value and local-reassignment dropped move-classified HVar locals before consuming them**.
+  - Exposed by the new matrix sites (`om_return_value_diag_entry` SIGABRT, `om_local_assign_diag_entry` UAF under memcheck).
+  - Root cause: `_visit_stmt_HReturn` and `_visit_stmt_HAssign` lowered `return src;` / `dst = src;` for HVar source via raw `lower_expr` — for move-classified types like `core.DiagnosticEntry` the load left the local live, then the subsequent `_emit_scope_drops(scope_index=0)` (return) or implicit dst-reassignment drop (assign) released the inner refcounted storage out from under the consumer.  Same family as the drift-net-tls Array<String> push regression: ownership boundary mishandled for move-classified HVars.
+  - Fix: new helper `_lower_owning_consume(value_expr, expected)` in `lang/driftc/stage2/hir_to_mir.py` mirrors `_lower_call_arg`'s ownership decision — HVar / projection-free HPlaceExpr of a move-classified type → `MoveOut` (so scope-drops skip the local); other shapes → `lower_expr` (with the caller's `_copy_if_ref_alias` upgrade for projection aliases as before).  `_visit_stmt_HReturn` (both throw and non-throw paths) and `_visit_stmt_HAssign` now route through the helper.
+  - Backward-compatible shim `_lower_return_value` retained for the existing return-site call sites.
+- **Matrix expansion**: three new SITES added to the ownership-transfer matrix generator (`lang/tests/codegen/e2e/__ownership_matrix__/_gen.py`):
+  - `fn_arg`: by-value function-call argument lowering.  Each fixture emits a per-type `sink(x: T) nothrow -> Int` helper at module scope (via the new `SITE_HELPERS` indirection in `render_fixture`); scenarios call `sink(<shape access>)` and assert.
+  - `return_value`: callee returns a value built per shape; helper emits three per-shape `produce_<shape>() nothrow -> T` functions; scenarios call them and assert.
+  - `local_assign`: `dst = source_expr;` where `dst` is a `var` previously bound to a placeholder; isolates the local-reassignment ownership-transfer step the drift-net-tls TLS regression depended on.
+  - Matrix grows from 36 → 48 fixtures (12 new = 3 sites × 4 type/flavor cells).
+  - Plain mode: 48/48 pass.  Memcheck high-risk subset: 24/24 pass.  Full e2e (`lang/tests/codegen/e2e/runner.py -j 16`): 1190 passed, 0 failed.
+- **TYPE_INFO additions**: each type now provides `extract_int(expr)` and `expected_int` for the new sites that need to project the value down to a Bool/Int return code.  `String` → `byte_length()` = 5; `core.DiagnosticEntry` → `key.byte_length()` = 3; `Int` → identity = 42.
+- **Followup doc updates**: `work/ownership-matrix-followups.md` had `fn_arg` / `return_value` / `local_assign` listed as deferred; those entries are now Done (moved to the "Landed" section in the next pass).
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.194 to 0.27.195.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — checker + MIR lowering only.
+
+## 2026-04-14 - 0.27.194: `.set` arg-order reconciliation + matrix coverage
+- **Public API contract**: `arr.set(index, value)`.  Reasons:
+  - Matches the existing MIR lowering (idx=args[0], val=args[1]).
+  - Matches `insert(index, value)` arity / order.
+  - Puts the ownership-transfer operand in a stable second-arg position for the matrix.
+- **Checker fix**: `lang/driftc/checker/call_resolver.py` no longer shares push's arg-type validator with set.  Pre-fix `set` was grouped with push under a single `if expr.method_name in ("push", "set"):` validator that compared `args[0]` against `elem_ty` — but for set, args[0] is the Int INDEX, not the value, so `arr.set(0, name)` was rejected as "Array element type mismatch (have Int, expected String)" while `arr.set(name, 0)` was accepted with the wrong semantic.  Set now has its own validator block (mirroring insert): args[0]=Int index, args[1]=elem_ty value.
+- **MIR lowering alignment**: `_lower_array_intrinsic_method`'s `set` branch now routes `args[1]` through `_lower_call_arg` (not raw `lower_expr`), matching push/insert and aligning with what `_call_arg_yields_owned_temp` predicts about ownership.  Pre-fix `set` called `lower_expr` directly, which produced a different SSA ownership state for move-classified HVars (e.g. `core.DiagnosticEntry`) — combined with `drop_source=True` from the helper, that double-released the source local on scope drop (UAF observable in the matrix's `om_array_set_diag_entry` hvar_local scenario).
+- **Contract regressions**:
+  - `lang/tests/codegen/e2e/array_set_index_value_contract_ok/`: positive — `arr.set(0, "replaced")` and `arr.set(0, heap_string)` accepted and run cleanly.
+  - `lang/tests/codegen/e2e/array_set_swapped_args_rejected/`: negative — `arr.set("wrong", 0)` rejected with the clean "array index must be an Int" diagnostic.
+- **Matrix coverage**: `array_set` re-added to the ownership-transfer matrix's `SITES` table.  4 new fixtures (`om_array_set_string_static`, `om_array_set_string_heap_concat`, `om_array_set_int`, `om_array_set_diag_entry`); each exercises HVar local / HCall rvalue / projected place value shapes; all pass plain + memcheck + ASAN.  Matrix grows from 32 → 36 fixtures.
+- **Followups doc**: `work/ownership-matrix-followups.md` consolidates 8 deferred axes captured during this hardening cycle (function-call by-value args, return-value transfer, for-loop binding, local assignment/reassignment, package-boundary, non-Copy destructor-bearing types, dedicated match-arm binding matrix, source-array-shape axis for extend, plus the dropped utf8_bytes String flavor).
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.193 to 0.27.194.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — checker + MIR lowering only.
+
+## 2026-04-14 - 0.27.193: ownership-matrix follow-up fixes (Array.insert checker + ArrayLit Copy-non-bitcopy lowering)
+- **Compiler fix (LANGUAGE_BUG): `Array<T>.insert(idx, val)` checker UnboundLocalError**.
+  - Pre-existing bug exposed by the new ownership-transfer matrix (`om_array_insert_diag_entry`).
+  - Root cause: `lang/driftc/checker/call_resolver.py` had two early-return branches on the OK path of `insert`'s arg-type validation that referenced an `info` symbol built only at the success exit (line 1833+), causing `UnboundLocalError` for `Array<DiagnosticEntry>.insert(idx, HVar)` shapes.
+  - Fix: replace both early-return-on-OK branches with `pass` (mirroring the `push`/`set` branch above), so control falls through to the unified `info`-building / return at the end of the array-intrinsic-method block.
+  - Regression: `lang/tests/codegen/e2e/om_array_insert_diag_entry/` now passes plain + memcheck (the matrix automatically re-enabled it after KNOWN_SKIP_COMBOS removal).
+- **Compiler fix (LANGUAGE_BUG): ArrayLit lowering for Copy non-bitcopy struct elements**.
+  - Pre-existing bug exposed by `om_array_literal_diag_entry`.
+  - Root cause: `_visit_expr_HArrayLiteral` in `lang/driftc/stage2/hir_to_mir.py` only emitted `CopyValue` when `_should_copy_value(val_ty)` was True, which excluded Copy non-bitcopy structs like `core.DiagnosticEntry` (those are classified as "move" by `_classify_value_transfer` because `_needs_runtime_drop` is True for types containing DV).  Without `CopyValue` the MIR validator rejected the array store with "must use CopyValue or MoveOut for Copy element type".
+  - Fix mirrors `_ensure_array_elem_copy`'s drop_source-aware reasoning, with two added steps inside the elem loop:
+    1. `_copy_if_ref_alias(val, val_ty)` upgrades any HField / HPlaceExpr-projection alias of an owning local's storage into an independent owned temp, before the CopyValue.  This is the standard ownership-boundary mechanism used elsewhere in the lowering (call args, struct ctors, returns, var bindings); the ArrayLit elem loop was the one ownership boundary that skipped it.  Without this, a downstream `DropValue` on a still-aliased value would UAF the owning local at scope-drop.
+    2. Use `copy_status is True and not is_bitcopy(val_ty)` (matching `_ensure_array_elem_copy`) instead of the narrower `_should_copy_value`, and pair the `CopyValue` with a `DropValue` only when the element source is an OWNED rvalue temp.  Source ownership classified by the same `is_place` rule as `_call_arg_yields_owned_temp` (HVar / projection-free HPlaceExpr → place; everything else → owned).
+  - Regression: `lang/tests/codegen/e2e/om_array_literal_diag_entry/` now passes plain + memcheck + ASAN (matrix re-enabled it).
+- **Ownership-transfer matrix expansion + maintenance**.
+  - Doc accuracy: dropped stale "ownership_matrix/_gen.py" path references (real path is `__ownership_matrix__/_gen.py`); honest accounting of `array_extend`'s value-shape axis (transfer site is always `dest.extend(&src_arr)` — value shapes only vary upstream setup); the hand-written push/insert canary header now matches the (set-omitted) reality.
+  - Five deferred axes captured in `work/ownership-matrix-followups.md`: function-call by-value args, return-value transfer, for-loop binding, local assignment/reassignment, package-boundary axis, non-Copy destructor-bearing type axis.  Plus the in-flight `array_set` reconciliation work.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.192 to 0.27.193.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — checker + lowering only.
+
+## 2026-04-14 - 0.27.192: Array.push source ownership for COPY-classified locals
+- **Compiler fix (LANGUAGE_BUG): heap-use-after-free on `Array<String>.push(local_string)` in 0.27.191**.
+  - Reported by drift-net-tls v0.3.14 certification: `SslSession.peer_verified_names: Array<String>` built by `_extract_peer_dns_sans()` and returned through `Result::Ok(Session{...})` crashed the caller's first read of `session.peer_verified_names[0]` with ASAN heap-use-after-free inside `drift_string_retain` and glibc `tcache_thread_shutdown(): unaligned tcache chunk`.
+  - Root cause: in 0.27.191, `_ensure_array_elem_copy` was passed `drop_source=True` unconditionally at push/insert/set sites on the (incorrect) assumption that `_lower_call_arg` always returns an owned temp. In fact, for COPY-classified Copy non-bitcopy types — `String` is the archetype; its `copy_status=True` and `_needs_runtime_drop=False` (because String carries its own release, not a separate drop impl) — `_lower_call_arg` does NOT emit `MoveOut`. It falls through to `lower_expr(HVar)` which produces a plain load (a borrowed view sharing refcount with the source local). The paired `DropValue` then decremented the shared refcount, and on the next assignment to that local, the load-old/release-old path freed the buffer that the array slot still pointed at.
+  - Fix: new helper `_call_arg_yields_owned_temp(arg, param_ty)` mirrors `_lower_call_arg`'s ownership decision — HVar / projection-free HPlaceExpr with a MOVE-classified type → MoveOut (owned); same shape with a COPY-classified type → borrowed load. The push/insert (line 4287) and set (line 4510) call sites now compute `drop_source` via this helper instead of hard-coding `True`. The extend call site (line 4672) stays `drop_source=True` because its source is `ArrayIndexLoad`, whose LLVM codegen (`_lower_array_index_load` → `_emit_copy_value`) retains the loaded element — the MIR-level `elem` is already an independent owned temp regardless of the "load" shape, so no helper-based check is needed.
+- **Regression coverage**.
+  - `lang/tests/codegen/e2e/array_push_copy_local_string_no_uaf/`: reproduces the exact drift-net-tls shape — `var name = make_name(i); if name.byte_length() > 0 { names.push(name); }` inside a helper whose returned `Array<String>` is wrapped in `Result::Ok(Struct{...})` and read after the outer match. Pre-fix SIGABRT/ASAN heap-use-after-free; post-fix exits with 5 (`"xAAAA".byte_length()`).
+  - Full K28/DV/array memcheck slice (11 fixtures): all pass.
+- **Versioning**.
+  - `DRIFTC_VERSION` bumps from 0.27.191 to 0.27.192.
+  - No ABI change: `DRIFT_RT_ABI_VERSION` stays at 9 — lowering change only.
+
 ## 2026-04-14 - 0.27.191: owned-DV / DiagnosticEntry-array temp release on consumption (rev 2, same version)
 - **Review-iteration addendum**.
   - **High (caught by review)**: the unconditional `DropValue` after `CopyValue` in `_ensure_array_elem_copy` applied to every call site including `extend(&src)`; reviewer flagged potential UAF on a borrowed source. Refactored the helper to take an explicit `drop_source` kwarg — documented per call site. Empirically safe on `extend(&src)` because `ArrayIndexLoad` codegen (`_lower_array_index_load`) ALREADY calls `_emit_copy_value` on the loaded element, making the MIR-level `elem` an independent owned temp (not a borrow). Added regression `array_extend_borrowed_source_string_no_uaf` covering both `Array<String>` and `Array<core.DiagnosticEntry>` with heap keys; verifies src stays valid post-extend and both arrays drop cleanly under memcheck.

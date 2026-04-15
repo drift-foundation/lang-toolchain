@@ -131,6 +131,7 @@ from lang.driftc.stage2 import (
 	ConstructIfaceValue,
 	IfaceUpcast,
 	ZeroValue,
+	TombstoneValue,
 	StringRetain,
 	StringRelease,
 	CopyValue,
@@ -2651,6 +2652,36 @@ class _FuncBuilder:
 				raise NotImplementedError("LLVM codegen v1: ZeroValue requires a TypeTable")
 			dest = self._map_value(instr.dest)
 			self._emit_zero_value(dest, instr.ty)
+		elif isinstance(instr, TombstoneValue):
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: TombstoneValue requires a TypeTable")
+			# Contract enforcement at the MIR instruction boundary: the
+			# MIR `TombstoneValue` node is reserved for callers that must
+			# produce a drop-SAFE byte pattern for the given type (see
+			# the MIR-node docstring).  A struct with a user
+			# `core.Destructible` impl has no universally drop-safe byte
+			# pattern — `DropValue` will invoke the user destructor on
+			# whatever bytes this produces, and zero/tombstone field
+			# bytes yield null-bearing receivers whose destructor reads
+			# null fields.  Fail loudly at this boundary, rather than
+			# inside the shared `_emit_tombstone_value` helper (which is
+			# also reached by the `ArrayElemTake` slot-neutralize path
+			# where per-element drop trusts the caller's destructor).
+			td_instr = self.type_table.get(instr.ty)
+			if td_instr.kind is TypeKind.STRUCT:
+				destructor_fns = getattr(self.type_table, "destructor_fns", None)
+				if isinstance(destructor_fns, dict) and destructor_fns.get(instr.ty) is not None:
+					td_name = td_instr.name if td_instr.name is not None else f"typeid={instr.ty}"
+					raise AssertionError(
+						f"TombstoneValue unsafe for struct '{td_name}' with a "
+						f"user Destructible impl: no byte pattern makes the "
+						f"user destructor a no-op.  Caller must not emit "
+						f"MIR TombstoneValue for custom Destructible structs."
+					)
+			tomb = self._emit_tombstone_value(instr.ty)
+			self.value_map[instr.dest] = tomb
+			if tomb in self.value_types:
+				self.value_types[self._map_value(instr.dest)] = self.value_types[tomb]
 		elif isinstance(instr, UnaryOpInstr):
 			self._lower_unary(instr)
 		elif isinstance(instr, WrappingAddU64):
@@ -9198,10 +9229,26 @@ class _FuncBuilder:
 				arm_blocks: list[tuple[str, _VariantArmLayout, str]] = []
 				for ctor_name, arm_layout in arms:
 					arm_blocks.append((fresh(f"drop_{ctor_name.lower()}"), arm_layout, ctor_name))
-				case_specs = " ".join(
+				case_entries = [
 					f"i8 {arm_layout.tag}, label {arm_block}"
 					for (arm_block, arm_layout, _ctor_name) in arm_blocks
-				)
+				]
+				# Synthesized internal-tombstone tag (when the variant has no
+				# user-declared `@tombstone` ctor but is droppable): route
+				# directly to `done_block` so a drop of a tombstoned variant
+				# is a provable no-op.  Without this, tombstoned storage
+				# (e.g. from ArrayElemTake or the match-scrutinee
+				# `TombstoneValue` store in `_ensure_arm_scrut_ptr`) would
+				# hit the `default_block` trap on subsequent DropValue.
+				internal_tomb_ctor = inst.internal_tombstone_ctor
+				internal_tomb_tag = inst.internal_tombstone_tag
+				if (
+					internal_tomb_ctor == "__drift_internal_tombstone"
+					and internal_tomb_tag is not None
+					and all(arm_layout.tag != internal_tomb_tag for _b, arm_layout, _c in arm_blocks)
+				):
+					case_entries.append(f"i8 {internal_tomb_tag}, label {done_block}")
+				case_specs = " ".join(case_entries)
 				lines.append(f"  switch i8 {tag_val}, label {default_block} [ {case_specs} ]")
 				for arm_block, arm_layout, ctor_name in arm_blocks:
 					lines.append(f"{arm_block[1:]}:")

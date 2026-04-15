@@ -1,0 +1,81 @@
+module m;
+
+import std.core as core;
+
+// K28-aftermath regression (drift-net-tls v0.3.14 certification UAF).
+//
+// `Array<String>.push(local_string)` where `local_string` is a `var`
+// local holding a heap String: `_lower_call_arg` classifies String as
+// "copy" (copy_status=True, _needs_runtime_drop=False since it has
+// its own release), so the HVar path does NOT emit MoveOut — it falls
+// through to `lower_expr(HVar)`, which produces a plain load (a
+// borrowed view sharing refcount with the source local).
+//
+// Pre-fix (0.27.191 before this repro landed), `_ensure_array_elem_copy`
+// was passed `drop_source=True` unconditionally.  The paired
+// `DropValue` released the shared refcount, so after push:
+//   - The array slot held the String at refcount 1.
+//   - The `local_string` local ALSO held the same data pointer at
+//     refcount 1 (the load never zeroed it, and no MoveOut fired).
+// On the next loop iteration, the local was reassigned to a new
+// `make_name(i)`, which triggered the assignment-drop on the old
+// value — decrementing the refcount to 0 and freeing the buffer that
+// the array slot was still referencing.  Reading any array element
+// after the loop triggered heap-use-after-free
+// (tcache_thread_shutdown / ASAN heap-use-after-free /
+// Valgrind Invalid read from drift_string_retain).
+//
+// The symptom surfaced in drift-net-tls `connect_tls` via
+// `SslSession::peer_verified_names: Array<String>` built by a helper
+// function and returned through `Result::Ok(Session{...})`.  The
+// minimal shape needs (a) a local-binding String, (b) pushed into an
+// Array<String>, (c) returned through a callee that wraps into
+// Result::Ok(Struct{...}), and (d) a reader that accesses the array
+// after the callee returns.
+
+pub struct Session {
+	pub names: Array<String>,
+}
+
+fn make_name() nothrow -> String {
+	// Heap String via concat (drift_string_concat always allocates a
+	// fresh non-static buffer, so the buffer has a live refcount and
+	// release is not a no-op — unlike a bare "xAAAA" literal which
+	// would carry DRIFT_STRING_FLAG_STATIC and mask the UAF).
+	val a = "x";
+	val b = "AAAA";
+	return a + b;
+}
+
+fn collect_names() nothrow -> Array<String> {
+	var names: Array<String> = [];
+	var i = 0;
+	while i < 3 {
+		var name = make_name();
+		if name.byte_length() > 0 {
+			names.push(name);
+		}
+		i = i + 1;
+	}
+	return move names;
+}
+
+fn build_session() nothrow -> core.Result<Session, Int> {
+	val names = collect_names();
+	return core.Result::Ok(Session(names = names));
+}
+
+pub fn main() nothrow -> Int {
+	match build_session() {
+		core.Result::Err(_) => { return 1; },
+		core.Result::Ok(session) => {
+			val names = session.names;
+			if names.len == 0 { return 2; }
+			// Exit code carries the first element's byte_length: 5 == "xAAAA".
+			// Pre-fix: SIGABRT from glibc tcache detection or ASAN
+			// heap-use-after-free inside drift_string_retain.
+			val first = &names[0];
+			return first.byte_length();
+		},
+	}
+}

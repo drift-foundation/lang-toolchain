@@ -1,0 +1,4 @@
+{
+  "description": "Option A fixture 4: struct ctor transfers Array<String> built from heap-HVar sources (direct field, nested field, and var-reassign-after-ctor variants). Isolates struct-ctor ownership transfer from variant wrapping.",
+  "exit_code": 0
+}

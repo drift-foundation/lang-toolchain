@@ -189,6 +189,73 @@ class ZeroValue(MInstr):
 
 
 @dataclass
+class TombstoneValue(MInstr):
+	"""
+	dest = DROP-SAFE TOMBSTONE VALUE for a storage slot of type `ty`.
+
+	Produces bytes whose subsequent `DropValue(dest, ty)` is a no-op
+	for the SPECIFIC TYPE CLASSES Drift currently has a tombstone
+	model for:
+
+	- **Variants** (droppable) — reserved `__drift_internal_tombstone`
+	  tag, or a user-declared `@tombstone` ctor.  The variant
+	  drop-dispatch switch routes that tag directly to `done_block`,
+	  skipping all payload destructors.  SAFE.
+	- **String / Array** — release-on-null is a runtime no-op; zero
+	  bytes represent an empty/released slot.  SAFE.
+	- **Interface / DiagnosticValue** — null fat-pointer drop is a
+	  runtime no-op.  SAFE.
+	- **Plain aggregates of the above** (structs containing only
+	  tombstone-safe fields) — composed of SAFE parts.  SAFE.
+
+	**NOT safe** for structs that dispatch to a USER
+	`core.Destructible` destroy fn — i.e. those registered in
+	`type_table.destructor_fns`.  Example: `struct Token { session:
+	&mut Session }` with a user `destroy(self: Token)` impl.  Zero
+	/ tombstone field bytes yield a null-bearing receiver, and the
+	user-authored destroy reads those nulls (e.g.
+	`self.session.drops = …`) → SEGV.  Drift has no per-slot drop
+	flags and no tombstone-tag for structs, so there is no byte
+	pattern that is universally drop-safe for every custom
+	Destructible struct.
+
+	Enforcement is narrow and explicit: the LLVM backend raises
+	`AssertionError` at the MIR-instruction boundary iff the
+	`TombstoneValue.ty` is a STRUCT whose `destructor_fns[ty]`
+	entry is set — i.e. drop would dispatch to USER code.
+	Structs with NO `destructor_fns` entry are accepted: their
+	drop falls through to the generic field-by-field path in
+	`_emit_drop_value`, which is safe on tombstoned bytes because
+	each field is itself tombstoned to a drop-safe pattern by the
+	recursion in `_emit_tombstone_value`.  Callers emitting MIR
+	`TombstoneValue` for registered-user-destructor structs is a
+	hard internal bug, not a silent unsafe emission.
+
+	Note: the shared `_emit_tombstone_value` helper is ALSO called
+	from the `ArrayElemTake` slot-neutralize path, where per-
+	element drop legitimately calls the user destructor on the
+	tombstoned bytes.  That path's safety is a contract of
+	`ArrayElemTake` (callers accept that user destroy runs on the
+	tombstoned slot), not of this MIR node — hence the enforcement
+	is at the MIR `TombstoneValue` boundary, not inside the shared
+	helper.
+
+	Intended use: store the result back into an owning storage slot
+	that has JUST been `MoveOut`'d so that any later scope-drop on
+	that slot is a provable no-op.  This is the `Array.pop` /
+	`Array.remove` pattern, generalized to match-scrutinee lowering
+	via `_ensure_arm_scrut_ptr`.
+
+	Codegen contract:
+	- LLVM backend MUST route this through `_emit_tombstone_value(ty)`
+	  (not `_emit_zero_value`), which consults the variant's
+	  `internal_tombstone_tag` / user `@tombstone` declaration.
+	"""
+	dest: ValueId
+	ty: TypeId
+
+
+@dataclass
 class StringRetain(MInstr):
 	"""dest = retain(value) (String only)."""
 	dest: ValueId

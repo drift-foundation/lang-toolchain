@@ -1,0 +1,4 @@
+{
+  "description": "Regression: value-producing match on a NAMED LOCAL scrutinee whose variant payload is a non-Copy `core.Destructible` type must drop the payload exactly once, even when the variant has no `@tombstone` ctor and no drop-safe zero-tag fallback. Companion to the statement-context `match_named_local_non_copy_drop_once/` fixture; covers the value-producing code path where `_ensure_arm_scrut_ptr` is invoked with `mark_source_moved=False` and the scope-drop of the scrutinee fires on moved-from storage.",
+  "exit_code": 0
+}

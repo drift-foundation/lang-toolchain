@@ -1764,7 +1764,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						return True
 				return False
 
-			if expr.method_name in ("push", "set"):
+			if expr.method_name == "push":
 				arg_ty = arg_types[0] if arg_types else None
 				if arg_ty is not None and arg_ty != elem_ty:
 					elem_def = ctx.type_table.get(elem_ty)
@@ -1779,7 +1779,21 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						elem_name = ctx.type_table.get(elem_ty).name if elem_ty is not None else "Unknown"
 						diagnostics.append(_tc_diag(message=f"Array element type mismatch (have {arg_name}, expected {elem_name})", severity="error", span=getattr(expr.args[0], "loc", getattr(expr, "loc", Span()))))
 						return MethodCallResult(ctx.unknown_ty, None)
-			if expr.method_name == "insert":
+			if expr.method_name == "set":
+				# Public API contract: `arr.set(index, value)`.
+				# Pre-fix the checker shared push's "args[0] is value"
+				# validator with set, but set's args[0] is actually the
+				# Int INDEX (the MIR lowering at
+				# `_lower_array_intrinsic_method` already enforces this
+				# order — args[0]=Int, args[1]=elem_ty).  Sharing the
+				# push validator made `arr.set(0, name)` reject with
+				# "Array element type mismatch (have Int, expected
+				# String)" because the checker compared the literal `0`
+				# against the element type.  Treat set like insert:
+				# args[0] = Int index, args[1] = element value.  See
+				# work/ownership-matrix-followups.md and the .set
+				# reconciliation work that landed array_set in the
+				# generated matrix.
 				if len(arg_types) == 2:
 					idx_ty, val_ty = arg_types
 					if idx_ty is not None:
@@ -1790,15 +1804,49 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if val_ty is not None and val_ty != elem_ty:
 						elem_def = ctx.type_table.get(elem_ty)
 						if val_ty == ctx.unknown_ty or ctx.type_table.has_typevar(val_ty) or ctx.type_table.has_typevar(elem_ty) or _has_unknown(val_ty) or _has_unknown(elem_ty) or elem_def.name in ctx.type_param_map:
-							return MethodCallResult(recv_nominal, info)
-						if ctx.normalize_type_key(type_key_from_typeid(ctx.type_table, val_ty)) == ctx.normalize_type_key(
+							pass
+						elif ctx.normalize_type_key(type_key_from_typeid(ctx.type_table, val_ty)) == ctx.normalize_type_key(
 							type_key_from_typeid(ctx.type_table, elem_ty)
 						):
-							return MethodCallResult(recv_nominal, info)
-						val_name = ctx.type_table.get(val_ty).name if val_ty is not None else "Unknown"
-						elem_name = ctx.type_table.get(elem_ty).name if elem_ty is not None else "Unknown"
-						diagnostics.append(_tc_diag(message=f"Array element type mismatch (have {val_name}, expected {elem_name})", severity="error", span=getattr(expr.args[1], "loc", getattr(expr, "loc", Span()))))
-						return MethodCallResult(ctx.unknown_ty, None)
+							pass
+						else:
+							val_name = ctx.type_table.get(val_ty).name if val_ty is not None else "Unknown"
+							elem_name = ctx.type_table.get(elem_ty).name if elem_ty is not None else "Unknown"
+							diagnostics.append(_tc_diag(message=f"Array element type mismatch (have {val_name}, expected {elem_name})", severity="error", span=getattr(expr.args[1], "loc", getattr(expr, "loc", Span()))))
+							return MethodCallResult(ctx.unknown_ty, None)
+			if expr.method_name == "insert":
+				if len(arg_types) == 2:
+					idx_ty, val_ty = arg_types
+					if idx_ty is not None:
+						td_idx = ctx.type_table.get(idx_ty)
+						if td_idx.kind is not TypeKind.TYPEVAR and idx_ty != ctx.int_ty:
+							diagnostics.append(_tc_diag(message="array index must be an Int", severity="error", span=getattr(expr.args[0], "loc", getattr(expr, "loc", Span()))))
+							return MethodCallResult(ctx.unknown_ty, None)
+					if val_ty is not None and val_ty != elem_ty:
+						elem_def = ctx.type_table.get(elem_ty)
+						# OK paths: type-var / unknown arg, or arg type
+						# normalizes equal to elem_ty.  Fall through to
+						# the unified info-building / return below
+						# (mirrors the `push`/`set` branch above which
+						# uses `pass` for these same conditions).
+						# Pre-fix this branch tried to `return
+						# MethodCallResult(recv_nominal, info)`, but
+						# `info` is built at line 1833 (now ~end of
+						# block), so the early return crashed with
+						# UnboundLocalError on the OK path for
+						# Array<DiagnosticEntry>.insert(idx, HVar) etc.
+						# See issues/array_insert_diag_entry_checker_unbound/.
+						if val_ty == ctx.unknown_ty or ctx.type_table.has_typevar(val_ty) or ctx.type_table.has_typevar(elem_ty) or _has_unknown(val_ty) or _has_unknown(elem_ty) or elem_def.name in ctx.type_param_map:
+							pass
+						elif ctx.normalize_type_key(type_key_from_typeid(ctx.type_table, val_ty)) == ctx.normalize_type_key(
+							type_key_from_typeid(ctx.type_table, elem_ty)
+						):
+							pass
+						else:
+							val_name = ctx.type_table.get(val_ty).name if val_ty is not None else "Unknown"
+							elem_name = ctx.type_table.get(elem_ty).name if elem_ty is not None else "Unknown"
+							diagnostics.append(_tc_diag(message=f"Array element type mismatch (have {val_name}, expected {elem_name})", severity="error", span=getattr(expr.args[1], "loc", getattr(expr, "loc", Span()))))
+							return MethodCallResult(ctx.unknown_ty, None)
 			if expr.method_name in ("remove", "swap_remove", "get"):
 				if arg_types:
 					idx_ty = arg_types[0]

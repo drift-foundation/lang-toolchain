@@ -1,0 +1,64 @@
+// Regression: value-producing `match` over a NAMED LOCAL scrutinee
+// whose type is a GENERIC VARIANT INSTANCE (`core.Result<Token, Int>`)
+// must drop the non-Copy `core.Destructible` payload exactly once.
+//
+// This targets the cached-generic-instance path specifically.
+// Generic variant instances are created lazily via
+// `ensure_instantiated(base, [Token, Int])`, typically during
+// parsing.  At that point, user `implement core.Destructible for Token`
+// may not yet be visible to `has_drop`, so the cached instance gets
+// `internal_tombstone_ctor = None`.  If metadata is not re-computed
+// after destructor discovery, value-producing match on `r:
+// Result<Token, Int>` fails to route the moved-scrutinee scope-drop
+// to the variant's drop-safe tombstone tag — the drop helper hits
+// the default-block trap or re-invokes the payload destructor.
+//
+// Companion to `match_value_producing_non_copy_drop_once/`, which
+// covers the non-generic variant case.
+
+module m;
+
+import std.core as core;
+
+pub struct Session {
+	pub drops: Int,
+}
+
+pub struct Token {
+	pub session: &mut Session,
+}
+
+implement core.Destructible for Token {
+	pub fn destroy(self: Token) nothrow -> Void {
+		self.session.drops = self.session.drops + 1;
+	}
+}
+
+fn make_token(sess: &mut Session) nothrow -> Token {
+	return Token(session = sess);
+}
+
+fn main() nothrow -> Int {
+	var sess: Session = Session(drops = 0);
+	{
+		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));
+		val n: Int = match r {
+			core.Result::Ok(v) => {
+				if sess.drops != 0 { return 1; }
+				7
+			},
+			core.Result::Err(_) => { 0 },
+		};
+		if n != 7 { return 2; }
+		// Arm binder `v` dropped at arm end → sess.drops == 1.
+		if sess.drops != 1 { return 3; }
+		// Block `}` below closes r's scope.  r's storage was moved-from
+		// by the Ok-arm's payload extract.  A correct generic-instance
+		// tombstone routes the scope-drop through the
+		// `__drift_internal_tombstone` tag to a no-op done_block; a
+		// stale-metadata compiler would re-enter the Ok-arm drop with
+		// a zeroed Token and SEGV (or leak via the default-block trap).
+	}
+	if sess.drops != 1 { return 4; }
+	return 0;
+}

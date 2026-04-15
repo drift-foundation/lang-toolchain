@@ -1,0 +1,127 @@
+module m;
+
+import std.core as core;
+
+// Option A fixture 5: variant ctor transfers containing heap-backed
+// Array<String> / Session payloads.
+//
+// Covers four distinct variant-wrapping shapes:
+//   (a) custom variant carrying `Array<String>` directly.
+//   (b) custom variant carrying a struct whose field is `Array<String>`.
+//   (c) core.Result::Ok(Session{...}) — the drift-net-tls v0.3.14
+//       certification crash shape.
+//   (d) core.Result::Err(Session{...}) — mirror of (c) on the Err arm.
+//
+// Each variant is consumed via `match`; the consumer reads the
+// payload AFTER the ctor and match destructure, which is where the
+// UAF surfaced for the Result::Ok(Session{Array<String>}) case.
+
+pub struct Session {
+	pub names: Array<String>,
+}
+
+pub variant Msg {
+	Names(list: Array<String>),
+	WithSession(s: Session),
+	@tombstone Tombstone,
+}
+
+fn heap_str(tag: String) nothrow -> String {
+	val p = "v-";
+	return p + tag;
+}
+
+fn build_heap_names() nothrow -> Array<String> {
+	var names: Array<String> = [];
+	var n = heap_str("a");
+	names.push(n);
+	n = heap_str("bb");
+	names.push(n);
+	n = heap_str("ccc");
+	names.push(n);
+	return move names;
+}
+
+// --- (a) custom variant carrying Array<String> directly ---
+fn exercise_variant_array() nothrow -> Int {
+	val names = build_heap_names();
+	val msg = Msg::Names(list = names);
+	match msg {
+		Msg::Names(list) => {
+			if list.len != 3 { return 1; }
+			if list[0].byte_length() != 3 { return 2; }  // "v-a"
+			if list[1].byte_length() != 4 { return 3; }  // "v-bb"
+			if list[2].byte_length() != 5 { return 4; }  // "v-ccc"
+		},
+		default => { return 5; },
+	}
+	return 0;
+}
+
+// --- (b) custom variant carrying Session { names: Array<String> } ---
+fn exercise_variant_session() nothrow -> Int {
+	val names = build_heap_names();
+	val msg = Msg::WithSession(s = Session(names = names));
+	match msg {
+		Msg::WithSession(s) => {
+			if s.names.len != 3 { return 10; }
+			if s.names[0].byte_length() != 3 { return 11; }
+			if s.names[1].byte_length() != 4 { return 12; }
+			if s.names[2].byte_length() != 5 { return 13; }
+		},
+		default => { return 14; },
+	}
+	return 0;
+}
+
+// --- (c) Result::Ok(Session{...}) — drift-net-tls cert shape ---
+fn build_session_ok() nothrow -> core.Result<Session, Int> {
+	val names = build_heap_names();
+	return core.Result::Ok(Session(names = names));
+}
+
+fn exercise_result_ok() nothrow -> Int {
+	match build_session_ok() {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(session) => {
+			val names = session.names;
+			if names.len != 3 { return 21; }
+			if names[0].byte_length() != 3 { return 22; }
+			if names[1].byte_length() != 4 { return 23; }
+			if names[2].byte_length() != 5 { return 24; }
+		},
+	}
+	return 0;
+}
+
+// --- (d) Result::Err(Session{...}) — Err arm mirror ---
+fn build_session_err() nothrow -> core.Result<Int, Session> {
+	val names = build_heap_names();
+	return core.Result::Err(Session(names = names));
+}
+
+fn exercise_result_err() nothrow -> Int {
+	match build_session_err() {
+		core.Result::Ok(_) => { return 30; },
+		core.Result::Err(session) => {
+			val names = session.names;
+			if names.len != 3 { return 31; }
+			if names[0].byte_length() != 3 { return 32; }
+			if names[1].byte_length() != 4 { return 33; }
+			if names[2].byte_length() != 5 { return 34; }
+		},
+	}
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = exercise_variant_array();
+	if r1 != 0 { return 100 + r1; }
+	val r2 = exercise_variant_session();
+	if r2 != 0 { return 200 + r2; }
+	val r3 = exercise_result_ok();
+	if r3 != 0 { return 300 + r3; }
+	val r4 = exercise_result_err();
+	if r4 != 0 { return 400 + r4; }
+	return 0;
+}

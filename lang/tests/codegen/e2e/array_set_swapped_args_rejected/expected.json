@@ -1,0 +1,10 @@
+{
+  "description": "Negative contract test: arr.set(value, index) must be rejected. The public API is arr.set(index, value); passing them swapped must produce a clean 'array index must be an Int' diagnostic so the API contract stays unambiguous.",
+  "diagnostics": [
+    {
+      "message_contains": "array index must be an Int"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

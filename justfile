@@ -24,7 +24,10 @@ git-reset BRANCH:
 
 # Full staged compiler tests + package-consumer smoke + boundary regressions.
 # Invariant: test-shard-1 + test-shard-2 + test-shard-3 == just test.
-test: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
+# `ownership-matrix-check` is listed here (and on test-shard-2) as a
+# direct top-level dep so the generator-freshness guard runs on the
+# full suite even though no top-level target calls a shard target.
+test: review-cleanup ownership-matrix-check lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
@@ -32,9 +35,43 @@ test-shard-1: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test 
 	@echo "lang test-shard-1: Success."
 
 # Shard 2: codegen e2e only.
-test-shard-2:
+# The ownership-matrix check runs first so stale/hand-edited generated
+# fixtures fail the shard before the long e2e sweep starts (fast, ~1s).
+# The generated fixtures themselves are part of the e2e sweep and
+# picked up by the normal shallow scan.
+test-shard-2: ownership-matrix-check
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
 	@echo "lang test-shard-2: Success."
+
+# Regenerate the ownership-transfer matrix fixtures from the compact
+# table in lang/tests/codegen/e2e/__ownership_matrix__/_gen.py.  Run
+# this whenever the generator's table changes; commit the produced
+# om_* fixture dirs alongside the generator edit.
+ownership-matrix-gen:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/__ownership_matrix__/_gen.py
+
+# Fail-fast guard that the on-disk om_* fixtures match what the
+# generator would produce today.  Catches hand-edits and stale
+# check-ins after a table change.
+ownership-matrix-check:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/__ownership_matrix__/_gen.py --check
+
+# Run the full ownership-transfer matrix under ASAN.  Reasonable to
+# keep in the inner loop: the matrix is small (~30 fixtures) and
+# ASAN overhead is much lower than valgrind.  Honors DRIFT_TEST_JOBS
+# via the shared e2e runner.
+ownership-matrix-asan:
+	@cases=$(ls lang/tests/codegen/e2e/ | grep '^om_' | tr '\n' ' '); \
+	DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize $cases
+
+# Run the HIGH-RISK subset under DRIFT_MEMCHECK (valgrind).
+# "High-risk" = heap-backed String + DiagnosticEntry combos, where
+# any missing retain/release shows up as a leak or UAF.  The full
+# matrix under memcheck is deferred to a nightly / cert lane; per-
+# shard memcheck budget would be too high.
+ownership-matrix-memcheck:
+	@cases=$(ls lang/tests/codegen/e2e/ | grep -E '^om_.*(string_heap_concat|diag_entry|token)$$' | tr '\n' ' '); \
+	DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize $cases
 
 # Shard 3: deploy tooling + package-consumer e2e (signed package path).
 test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary
@@ -204,6 +241,10 @@ lang-codegen-test:
 	# Run clang-based IR cases (per-case dirs under lang/codegen/ir_cases).
 	PYTHONPATH=. ./.venv/bin/python3 lang/codegen/ir_cases/e2e_runner.py
 	# Run Drift-source e2e cases (per-case dirs under lang/tests/codegen/e2e).
+	# Freshness of generated om_* fixtures is guarded by the
+	# `ownership-matrix-check` target, listed as a direct dep on both
+	# `test` and `test-shard-2` — `lang-codegen-test` itself stays
+	# focused on just running codegen tests.
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize
 
 # Run e2e codegen suite through a locally-staged PEX --scie eager artifact.
