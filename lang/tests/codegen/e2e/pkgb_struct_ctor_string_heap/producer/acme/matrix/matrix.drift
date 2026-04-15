@@ -1,0 +1,12 @@
+module acme.matrix;
+
+export { Bag };
+
+// Bag<T> — minimal generic struct with ONE ref-bearing field and a
+// nested Array<T> field.  Consumer will construct `Bag<String>` across
+// the package boundary, exercising imported struct field metadata
+// reconstruction for both a scalar String and an Array<String>.
+pub struct Bag<T> {
+	pub v: T,
+	pub items: Array<T>,
+}

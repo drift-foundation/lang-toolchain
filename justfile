@@ -27,7 +27,7 @@ git-reset BRANCH:
 # `ownership-matrix-check` is listed here (and on test-shard-2) as a
 # direct top-level dep so the generator-freshness guard runs on the
 # full suite even though no top-level target calls a shard target.
-test: review-cleanup ownership-matrix-check lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary
+test: review-cleanup ownership-matrix-check lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
@@ -73,8 +73,26 @@ ownership-matrix-memcheck:
 	@cases=$(ls lang/tests/codegen/e2e/ | grep -E '^om_.*(string_heap_concat|diag_entry|token)$$' | tr '\n' ' '); \
 	DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/runner.py --summarize $cases
 
-# Shard 3: deploy tooling + package-consumer e2e (signed package path).
-test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary
+# Run the package-boundary ownership matrix (pkgb_* fixtures).
+# Each fixture builds a signed producer .dmp from its `producer/`
+# subdir plus the signed stdlib, then compiles the consumer
+# `main.drift` against both.  Exercises ownership shapes that only
+# exist on the boundary: imported copy_status / is_bitcopy,
+# struct/variant field metadata reconstruction, generic variant
+# tombstone metadata after package linking, Result<T, E> identity /
+# visibility across boundary.
+ownership-matrix-pkgb:
+	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/__ownership_matrix__/pkgb_runner.py --summarize
+
+ownership-matrix-pkgb-asan:
+	DRIFT_ASAN=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/__ownership_matrix__/pkgb_runner.py --summarize
+
+ownership-matrix-pkgb-memcheck:
+	DRIFT_MEMCHECK=1 PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/__ownership_matrix__/pkgb_runner.py --summarize
+
+# Shard 3: deploy tooling + package-consumer e2e (signed package path)
+# + ownership-matrix package-boundary (per-fixture signed producer).
+test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
 	@echo "lang test-shard-3: Success."
 
 # Local build/release prep (no implicit full test run).

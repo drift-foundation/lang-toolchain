@@ -1,0 +1,5 @@
+{
+  "description": "Package-boundary ownership: construct + match `Msg<String>` (generic variant with `@tombstone` ctor) across a signed producer package boundary with heap-concat String payload.  Targets variant tombstone metadata reconstruction after package linking, arm field type round-trip, and match-scrutinee scope-drop tombstone no-op (0.27.197 family) through the boundary.",
+  "exit_code": 0,
+  "package_consumer_only": true
+}

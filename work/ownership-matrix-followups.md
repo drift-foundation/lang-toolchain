@@ -129,26 +129,43 @@ of several of these; the current matrix catches the specific shape
 that shipped, but a regression on a different site could still slip
 through.
 
-### Package-boundary / source-vs-package axis
-- Same ownership-transfer shapes, but with the producer code
-  compiled into a signed package and consumed across the package
-  boundary.
-- Distinct compiler machinery: package metadata/DMIR encode/decode,
-  type-table reconstruction, exported nominal identity, generic
-  instantiation through the boundary.
-- Original TLS report reproduced both source-mode AND
-  signed-package paths; source-mode coverage was sufficient for
-  THAT root cause, but other ownership bugs may depend on package
-  reconstruction.
-- Per-cell setup is expensive (producer + signed metadata + consumer
-  build), so a SMALL subset is appropriate:
-  - String heap, DiagnosticEntry, Array<String> inside exported
-    struct, Result::Ok and Result::Err, struct_ctor, variant_ctor.
-- Risks specific to package boundary:
-  - `copy_status` / `is_bitcopy` differ for imported types.
-  - Struct/variant field metadata reconstructed incompletely.
-  - Generic instantiations differ across package-linked type tables.
-  - Result<T, E> identity / visibility differs through linking.
+### Package-boundary / source-vs-package axis — LANDED (pkgb_* fixtures)
+- 6 hand-authored fixtures under `lang/tests/codegen/e2e/pkgb_*/`
+  with per-fixture `producer/` subdirs; dedicated runner at
+  `lang/tests/codegen/e2e/__ownership_matrix__/pkgb_runner.py`
+  builds a signed producer `.dmp` for each fixture and compiles
+  the consumer against the producer + stdlib packages.
+  - `pkgb_struct_ctor_string_heap` — imported generic struct
+    `Bag<String>` with heap-concat String field AND nested
+    `Array<String>` (exercises "Array<T> inside exported struct"
+    from the follow-up list).
+  - `pkgb_struct_ctor_diag_entry` — imported generic struct
+    `Bag<core.DiagnosticEntry>` with DV-bearing payload.
+  - `pkgb_variant_ctor_string_heap` — imported generic variant
+    `Msg<String>` with `@tombstone` ctor; consumer constructs and
+    matches.
+  - `pkgb_result_ok_string_heap` — producer returns
+    `core.Result<String, Int>`; consumer matches the Ok arm.
+  - `pkgb_result_err_diag_entry` — producer returns
+    `core.Result<Int, core.DiagnosticEntry>`; consumer matches
+    the Err arm.
+  - `pkgb_match_bind_value_producing_diag_entry` — imported
+    generic variant `Box<core.DiagnosticEntry>` consumed via
+    value-producing match whose arm result IS the bound binder.
+    Pins the 0.27.198 match-bind LANGUAGE_BUG fix family
+    (`_lower_owning_consume` for arm result +
+    `VariantGetField` owned-tracking in `string_arc.py`) against
+    regression when the scrutinee type is imported across a
+    signed package boundary.
+- Isolation: fixtures are marked `package_consumer_only: true` so
+  the standard e2e runner skips them, and the stdlib-only
+  `pkg_consumer_runner.py` skips any case with a `producer/`
+  subdir (matrix pkgb has its own runner).
+- Coverage: all 6 fixtures pass plain + ASAN + memcheck via
+  `just ownership-matrix-pkgb` / `-asan` / `-memcheck` targets.
+- Total elapsed: ~60s for the 6-fixture run (11s stdlib build +
+  ~9s per fixture = 6 × producer build + consumer compile + link
+  + run); acceptable for local dev and CI gates.
 
 ### Non-Copy destructor-bearing type axis — Array<Token> still deferred
 - Positive-path coverage landed in 0.27.197: 6 non-array Token

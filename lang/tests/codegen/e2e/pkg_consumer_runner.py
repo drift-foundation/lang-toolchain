@@ -378,6 +378,14 @@ def _run_case(
 		return case_name, True, "", "skipped (marked)"
 	if expected.get("use_driftc_json") is False:
 		return case_name, True, "", "skipped (use_driftc_json=false)"
+	# Ownership-matrix package-boundary fixtures ship a `producer/`
+	# subdir containing a producer package that must be built into
+	# its own signed .dmp BEFORE the consumer compiles.  The stdlib-
+	# only consumer runner (this one) has no producer-build step;
+	# those fixtures run via
+	# `lang/tests/codegen/e2e/__ownership_matrix__/pkgb_runner.py`.
+	if (case_dir / "producer").is_dir():
+		return case_name, True, "", "skipped (matrix pkgb, own runner)"
 	if expected.get("sandbox_blocks") and os.environ.get("DRIFT_SANDBOX"):
 		return case_name, True, "", "skipped (sandbox)"
 	# Dual-runtime workstream: narrow per-case lane requirement.  Mirrors

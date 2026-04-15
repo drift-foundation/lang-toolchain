@@ -1,0 +1,20 @@
+// Package-boundary ownership regression: construct `Bag<String>` across
+// a signed package boundary with heap-concat String + Array<String>.
+// Exercises imported struct field metadata reconstruction (Copy-non-
+// bitcopy String scalar AND Array<String> inside an exported struct)
+// and confirms copy_status / is_bitcopy / needs_drop classifications
+// survive package linking.
+
+module main;
+
+import acme.matrix as m;
+
+pub fn main() nothrow -> Int {
+	var items: Array<String> = [];
+	items.push("a" + "AAAA");
+	val bag: m.Bag<String> = m.Bag(v = "x" + "AAAA", items = move items);
+	if bag.v.byte_length() != 5 { return 1; }
+	if bag.items.len != 1 { return 2; }
+	if bag.items[0].byte_length() != 5 { return 3; }
+	return 0;
+}

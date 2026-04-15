@@ -1,0 +1,14 @@
+module acme.matrix;
+
+export { Bag };
+
+// Bag<T> carrying a DV-bearing struct (`core.DiagnosticEntry`) when
+// instantiated as `Bag<core.DiagnosticEntry>` by the consumer.  The
+// DE carries a `key: String + value: DiagnosticValue` inside, so the
+// package boundary must round-trip:
+//  - copy_status / is_bitcopy for the imported struct type
+//  - DV runtime-drop metadata transitively through the struct field
+//  - nested ARC refcount classification
+pub struct Bag<T> {
+	pub v: T,
+}

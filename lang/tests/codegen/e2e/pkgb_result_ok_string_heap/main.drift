@@ -1,0 +1,21 @@
+// Package-boundary ownership: consume `core.Result<String, Int>`
+// returned by a signed-producer fn and match its Ok arm.  Targets
+// Result<T, E> identity / visibility across the package boundary
+// plus Ok-arm payload ownership transfer from producer-linked
+// variant to consumer-side match binder.
+
+module main;
+
+import acme.matrix as m;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	val r: core.Result<String, Int> = m.produce_ok();
+	match r {
+		core.Result::Err(_) => { return 3; },
+		core.Result::Ok(v) => {
+			if v.byte_length() != 5 { return 1; }
+		},
+	}
+	return 0;
+}

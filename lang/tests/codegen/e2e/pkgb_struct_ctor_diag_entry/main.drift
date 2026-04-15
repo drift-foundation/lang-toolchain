@@ -1,0 +1,16 @@
+// Package-boundary ownership: construct `Bag<core.DiagnosticEntry>`
+// across a signed package boundary.  Exercises copy_status /
+// is_bitcopy / needs_drop for imported DiagnosticEntry and confirms
+// DV-bearing struct field metadata survives package linking.
+
+module main;
+
+import acme.matrix as m;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	val e: core.DiagnosticEntry = core.diagnostic_entry("k" + "ey", DiagnosticValue::String("v" + "alue"));
+	val bag: m.Bag<core.DiagnosticEntry> = m.Bag(v = e);
+	if bag.v.key.byte_length() != 3 { return 1; }
+	return 0;
+}

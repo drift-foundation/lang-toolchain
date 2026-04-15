@@ -1,0 +1,17 @@
+module acme.matrix;
+
+import std.core as core;
+
+export { produce_ok };
+
+// Producer function returning `core.Result<String, Int>` — the Ok
+// variant carries a heap-concat String.  Consumer consumes via a
+// match on the boundary-returned Result.  Targets:
+//   - Result<T, E> generic instantiation identity across boundary
+//   - terminal-throws sig normalization (0.27.189 family) for
+//     non-throwing producer fns
+//   - Ok-arm payload ownership transfer from producer-linked variant
+//     to consumer-side match binder
+pub fn produce_ok() nothrow -> core.Result<String, Int> {
+	return core.Result::Ok("x" + "AAAA");
+}

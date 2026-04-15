@@ -1,0 +1,35 @@
+// Package-boundary ownership: value-producing match on a
+// cross-boundary generic variant whose arm RESULT expression is the
+// bound binder (non-Copy-bitcopy payload type —
+// `core.DiagnosticEntry`).  Pins the 0.27.198 LANGUAGE_BUG fixes
+// against regression when the scrutinee type was imported from a
+// signed package:
+//
+//   - `hir_to_mir.py` value-producing arm result now routed through
+//     `_lower_owning_consume` so move-classified HVar binders
+//     MoveOut into the match result storage.
+//   - `string_arc.py` `VariantGetField` for String fields added to
+//     `owned_values` (no extra retain on the subsequent StoreLocal).
+//
+// The scrutinee lives inside a helper so its scope-drop fires BEFORE
+// the caller reads `x`; an alias leak would UAF under ASAN and leak
+// under memcheck.
+
+module main;
+
+import acme.matrix as m;
+import std.core as core;
+
+fn _vpm_helper() nothrow -> core.DiagnosticEntry {
+	val r: m.Box<core.DiagnosticEntry> = m.produce();
+	return match r {
+		m.Box::Payload(v) => { v },
+		default => { core.diagnostic_entry("o" + "ther", DiagnosticValue::String("q" + "quux")) },
+	};
+}
+
+pub fn main() nothrow -> Int {
+	val x: core.DiagnosticEntry = _vpm_helper();
+	if x.key.byte_length() != 3 { return 1; }
+	return 0;
+}

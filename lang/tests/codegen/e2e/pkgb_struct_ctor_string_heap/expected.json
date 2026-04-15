@@ -1,0 +1,5 @@
+{
+  "description": "Package-boundary ownership: construct `Bag<String>` (generic struct exported from a signed producer package) with heap-concat String + Array<String> inside.  Verifies that copy_status / is_bitcopy / needs_drop for imported String and Array<String> match source-mode classifications, and that struct field metadata survives package linking.",
+  "exit_code": 0,
+  "package_consumer_only": true
+}

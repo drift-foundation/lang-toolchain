@@ -1,0 +1,23 @@
+// Package-boundary ownership: construct and match `Msg<String>`
+// (generic variant with `@tombstone` ctor) across a signed package
+// boundary with heap-concat String payload.  Targets:
+//   - exported variant tombstone metadata after package linking
+//   - arm field type reconstruction across the boundary
+//   - statement-context match scrutinee ownership / scope-drop
+//     tombstone no-op (0.27.197 family) when scrutinee type was
+//     imported from a signed package
+
+module main;
+
+import acme.matrix as m;
+
+pub fn main() nothrow -> Int {
+	val r: m.Msg<String> = m.Msg::Payload(v = "x" + "AAAA");
+	match r {
+		m.Msg::Payload(v) => {
+			if v.byte_length() != 5 { return 1; }
+		},
+		default => { return 2; }
+	}
+	return 0;
+}
