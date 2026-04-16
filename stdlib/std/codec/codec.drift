@@ -21,21 +21,54 @@ export {
 	base32_decoder
 };
 
+/// Error returned by failable codec decoders.
+///
+/// `tag` is a stable machine-readable code (e.g. `"odd-length"`,
+/// `"invalid-char"`, `"bad-padding"`).  `offset` is the zero-based
+/// byte position in the input where the decoder gave up.
+///
+/// `CodecError` implements `core.Throw` and `core.Diagnostic`.
 pub struct CodecError {
 	pub tag: String,
 	pub offset: Int
 }
 
+/// Configurable hex (base-16) decoder.
+///
+/// Constructed via `hex_decoder()` with strict defaults
+/// (no whitespace, no `0x` prefix).  Use `.allow_whitespace(true)`
+/// to skip ASCII whitespace between hex digits and
+/// `.allow_prefix_0x(true)` to accept a leading `0x` / `0X`.  Call
+/// `.decode(s)` to decode.
+///
+/// **See also:** `hex_decoder`, `hex_encode`, `hex_decode`.
 pub struct HexDecoder {
 	allow_whitespace: Bool,
 	allow_prefix_0x: Bool
 }
 
+/// Configurable base64 decoder.
+///
+/// Strict defaults (no whitespace, standard alphabet only).  Use
+/// `.allow_whitespace(true)` to skip ASCII whitespace and
+/// `.allow_url_safe(true)` to accept the URL-safe alphabet
+/// (`-` and `_` in place of `+` and `/`).
+///
+/// **See also:** `base64_decoder`, `base64_encode`, `base64_decode`,
+/// `base64url_decode`.
 pub struct Base64Decoder {
 	allow_whitespace: Bool,
 	allow_url_safe: Bool
 }
 
+/// Configurable base32 decoder.
+///
+/// Strict defaults (no whitespace, uppercase RFC 4648 alphabet
+/// only).  Use `.allow_whitespace(true)` to skip ASCII whitespace
+/// and `.allow_lowercase(true)` to accept lowercase letters
+/// (mapped to their uppercase equivalents).
+///
+/// **See also:** `base32_decoder`, `base32_encode`, `base32_decode`.
 pub struct Base32Decoder {
 	allow_whitespace: Bool,
 	allow_lowercase: Bool
@@ -53,66 +86,94 @@ implement core.Throw for CodecError {
 	}
 }
 
+/// Constructs a strict-default `HexDecoder` (no whitespace, no `0x`
+/// prefix).
 pub fn hex_decoder() nothrow -> HexDecoder {
 	return HexDecoder(allow_whitespace = false, allow_prefix_0x = false);
 }
 
+/// Constructs a strict-default `Base64Decoder` (no whitespace,
+/// standard alphabet only).
 pub fn base64_decoder() nothrow -> Base64Decoder {
 	return Base64Decoder(allow_whitespace = false, allow_url_safe = false);
 }
 
+/// Constructs a strict-default `Base32Decoder` (no whitespace,
+/// uppercase only).
 pub fn base32_decoder() nothrow -> Base32Decoder {
 	return Base32Decoder(allow_whitespace = false, allow_lowercase = false);
 }
 
 implement HexDecoder {
+	/// Allows / disallows ASCII whitespace between hex digits.
 	pub fn allow_whitespace(self: &mut HexDecoder, flag: Bool) nothrow -> &mut HexDecoder {
 		self.allow_whitespace = flag;
 		return self;
 	}
 
+	/// Allows / disallows a leading `0x` or `0X` prefix on the input.
 	pub fn allow_prefix_0x(self: &mut HexDecoder, flag: Bool) nothrow -> &mut HexDecoder {
 		self.allow_prefix_0x = flag;
 		return self;
 	}
 
+	/// Decodes `s` to bytes per the configured rules.
+	///
+	/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+	/// invalid input.
 	pub fn decode(self: &HexDecoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 		return _hex_decode_impl(s, self.allow_whitespace, self.allow_prefix_0x);
 	}
 }
 
 implement Base64Decoder {
+	/// Allows / disallows ASCII whitespace in the input.
 	pub fn allow_whitespace(self: &mut Base64Decoder, flag: Bool) nothrow -> &mut Base64Decoder {
 		self.allow_whitespace = flag;
 		return self;
 	}
 
+	/// Allows / disallows the URL-safe alphabet (`-` / `_`).
 	pub fn allow_url_safe(self: &mut Base64Decoder, flag: Bool) nothrow -> &mut Base64Decoder {
 		self.allow_url_safe = flag;
 		return self;
 	}
 
+	/// Decodes `s` to bytes per the configured rules.
+	///
+	/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+	/// invalid input.
 	pub fn decode(self: &Base64Decoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 		return _base64_decode_impl(s, self.allow_whitespace, self.allow_url_safe);
 	}
 }
 
 implement Base32Decoder {
+	/// Allows / disallows ASCII whitespace in the input.
 	pub fn allow_whitespace(self: &mut Base32Decoder, flag: Bool) nothrow -> &mut Base32Decoder {
 		self.allow_whitespace = flag;
 		return self;
 	}
 
+	/// Allows / disallows lowercase letters (case-folded to
+	/// uppercase per RFC 4648).
 	pub fn allow_lowercase(self: &mut Base32Decoder, flag: Bool) nothrow -> &mut Base32Decoder {
 		self.allow_lowercase = flag;
 		return self;
 	}
 
+	/// Decodes `s` to bytes per the configured rules.
+	///
+	/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+	/// invalid input.
 	pub fn decode(self: &Base32Decoder, s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 		return _base32_decode_impl(s, self.allow_whitespace, self.allow_lowercase);
 	}
 }
 
+/// Encodes `bytes` to a lowercase hex string (no `0x` prefix).
+///
+/// **See also:** `hex_decode`, `HexDecoder`.
 pub fn hex_encode(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	if n <= 0 {
@@ -131,10 +192,22 @@ pub fn hex_encode(bytes: &Array<Byte>) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&out), n * 2);
 }
 
+/// Strict hex decode of `s` (no whitespace, no `0x` prefix).
+///
+/// Use `hex_decoder()` to obtain a decoder with relaxed
+/// configuration knobs.
+///
+/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+/// odd-length, invalid-character, or other malformed input.
+///
+/// **See also:** `HexDecoder`, `hex_encode`.
 pub fn hex_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 	return _hex_decode_impl(s, false, false);
 }
 
+/// Encodes `bytes` to a standard base64 string with `=` padding.
+///
+/// **See also:** `base64_decode`, `base64url_encode`.
 pub fn base64_encode(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	if n <= 0 {
@@ -177,10 +250,25 @@ pub fn base64_encode(bytes: &Array<Byte>) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
 }
 
+/// Strict base64 decode of `s` (no whitespace, standard alphabet
+/// only).
+///
+/// Use `base64_decoder()` to obtain a decoder with relaxed
+/// configuration knobs.
+///
+/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+/// invalid input.
+///
+/// **See also:** `Base64Decoder`, `base64_encode`,
+/// `base64url_decode`.
 pub fn base64_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 	return _base64_decode_impl(s, false, false);
 }
 
+/// Encodes `bytes` to an RFC 4648 base32 string with `=` padding
+/// and uppercase alphabet.
+///
+/// **See also:** `base32_decode`.
 pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	if n <= 0 {
@@ -260,10 +348,24 @@ pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
 }
 
+/// Strict base32 decode of `s` (no whitespace, uppercase only).
+///
+/// Use `base32_decoder()` for a decoder with relaxed knobs.
+///
+/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+/// invalid input.
+///
+/// **See also:** `Base32Decoder`, `base32_encode`.
 pub fn base32_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 	return _base32_decode_impl(s, false, false);
 }
 
+/// Encodes `bytes` to a URL-safe base64 string.
+///
+/// Uses the `-` / `_` alphabet (no `+` / `/`) and omits `=`
+/// padding — safe for use in URLs and filenames.
+///
+/// **See also:** `base64url_decode`, `base64_encode`.
 pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	if n <= 0 {
@@ -316,6 +418,15 @@ pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
 	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
 }
 
+/// Decodes a URL-safe base64 string `s` to bytes.
+///
+/// Accepts both the URL-safe (`-` / `_`) and standard (`+` / `/`)
+/// alphabets, and tolerates missing `=` padding.
+///
+/// **Returns:** `Ok(bytes)` on success; `Err(CodecError)` on
+/// invalid input.
+///
+/// **See also:** `base64url_encode`, `base64_decode`.
 pub fn base64url_decode(s: &String) nothrow -> core.Result<Array<Byte>, CodecError> {
 	val n = s.byte_length();
 	if n == 0 {

@@ -25,20 +25,55 @@ export {
 	utc_unix_millis
 };
 
+/// Opaque monotonic point in time, suitable for measuring durations.
+///
+/// `Instant` values are not comparable to wall-clock time; use them
+/// only to measure elapsed time between two points (`elapsed_ms`).
+/// Construct via `now_monotonic()`.
+///
+/// **See also:** `now_monotonic`, `elapsed_ms`, `UtcTimestamp`.
 pub struct Instant {
 	ticks_ms: Int
 }
 
+/// Wall-clock UTC timestamp expressed as Unix-epoch milliseconds.
+///
+/// Construct via `now_utc()` or `parse_iso8601_utc(s)`.  Project to
+/// seconds with `utc_unix_seconds(ts)`, to milliseconds with
+/// `utc_unix_millis(ts)`, or to ISO-8601 string form with
+/// `format_iso8601_utc(ts)`.
+///
+/// **See also:** `now_utc`, `format_iso8601_utc`, `parse_iso8601_utc`,
+/// `Instant`.
 pub struct UtcTimestamp {
 	epoch_ms: Int
 }
 
+/// Calendar date (year/month/day in proleptic Gregorian).
+///
+/// Fields are 1-based for `month` and `day` (e.g. `Date(year=2026,
+/// month=4, day=16)`).  Format with `format_iso8601_date`, parse
+/// from `"YYYY-MM-DD"` with `parse_iso8601_date`.  Validate with
+/// `is_valid_date(y, m, d)` before constructing trusted values.
+///
+/// **See also:** `format_iso8601_date`, `parse_iso8601_date`,
+/// `is_valid_date`, `is_leap_year`, `days_in_month`.
 pub struct Date {
 	pub year: Int,
 	pub month: Int,
 	pub day: Int
 }
 
+/// Error returned by ISO-8601 parsers (`parse_iso8601_utc`,
+/// `parse_iso8601_date`).
+///
+/// `tag` is a stable machine-readable code for the failure (e.g.
+/// `"bad-format"`, `"month-out-of-range"`).  `offset` is the
+/// zero-based byte position in the input where the parser gave up.
+///
+/// `TimeParseError` implements `core.Throw`.
+///
+/// **See also:** `parse_iso8601_utc`, `parse_iso8601_date`.
 pub struct TimeParseError {
 	pub tag: String,
 	pub offset: Int
@@ -56,10 +91,23 @@ implement core.Throw for TimeParseError {
 	}
 }
 
+/// Returns an `Instant` capturing the current monotonic clock
+/// reading.
+///
+/// Suitable for `elapsed_ms` measurements.  The returned value has
+/// no relationship to wall-clock time.
+///
+/// **See also:** `elapsed_ms`, `now_utc`.
 pub fn now_monotonic() nothrow -> Instant {
 	return Instant(ticks_ms = thread.now_ms());
 }
 
+/// Returns the number of milliseconds elapsed since `start`.
+///
+/// Clamps to `0` if the monotonic clock appears to have gone
+/// backward (which should not happen but is defended against).
+///
+/// **See also:** `now_monotonic`.
 pub fn elapsed_ms(start: &Instant) nothrow -> Int {
 	val now = thread.now_ms();
 	if now < start.ticks_ms {
@@ -68,26 +116,49 @@ pub fn elapsed_ms(start: &Instant) nothrow -> Int {
 	return now - start.ticks_ms;
 }
 
+/// Returns the current wall-clock UTC time.
+///
+/// Subject to system-clock adjustments; do not use for elapsed
+/// measurements (use `now_monotonic` + `elapsed_ms` instead).
+///
+/// **See also:** `UtcTimestamp`, `format_iso8601_utc`,
+/// `now_monotonic`.
 pub fn now_utc() nothrow -> UtcTimestamp {
 	return UtcTimestamp(epoch_ms = thread.now_utc_ms());
 }
 
+/// Returns `b - a` in milliseconds.
+///
+/// Negative when `b` precedes `a`.  Wraps on overflow per `Int`
+/// semantics.
 pub fn duration_ms_between(a: &UtcTimestamp, b: &UtcTimestamp) nothrow -> Int {
 	return b.epoch_ms - a.epoch_ms;
 }
 
+/// Returns the timestamp's Unix-epoch seconds (truncating
+/// milliseconds).
 pub fn utc_unix_seconds(ts: &UtcTimestamp) nothrow -> Int {
 	return ts.epoch_ms / 1000;
 }
 
+/// Convenience for `utc_unix_seconds(now_utc())` — current Unix-epoch
+/// seconds.
 pub fn utc_unix_seconds_now() nothrow -> Int {
 	return thread.now_utc_ms() / 1000;
 }
 
+/// Returns the timestamp's Unix-epoch milliseconds.
 pub fn utc_unix_millis(ts: &UtcTimestamp) nothrow -> Int {
 	return ts.epoch_ms;
 }
 
+/// Formats `ts` as an ISO-8601 UTC string with millisecond
+/// precision, e.g. `"2026-04-16T12:34:56.789Z"`.
+///
+/// Invariant inverse with `parse_iso8601_utc` for any timestamp
+/// representable in `Int`-millisecond range.
+///
+/// **See also:** `parse_iso8601_utc`, `format_iso8601_date`.
 pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
 	val day_ms = 86400000;
 	val sec_ms = 1000;
@@ -106,6 +177,16 @@ pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
 	return _pad4(date.year) + "-" + _pad2(date.month) + "-" + _pad2(date.day) + "T" + _pad2(hour) + ":" + _pad2(minute) + ":" + _pad2(second) + "." + _pad3(millis) + "Z";
 }
 
+/// Parses an ISO-8601 UTC string into a `UtcTimestamp`.
+///
+/// Accepts shapes like `"2026-04-16T12:34:56Z"` or
+/// `"2026-04-16T12:34:56.789Z"`.  Rejects non-UTC offsets, mixed
+/// timezone designators, and out-of-range fields.
+///
+/// **Returns:** `Ok(UtcTimestamp)` on a valid input;
+/// `Err(TimeParseError)` carrying the failure tag and offset.
+///
+/// **See also:** `format_iso8601_utc`, `TimeParseError`.
 pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimeParseError> {
 	val n = s.byte_length();
 	if n >= 6 {
@@ -185,10 +266,16 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 	return core.Result::Ok(UtcTimestamp(epoch_ms = epoch_ms));
 }
 
+/// Returns `true` if `year` is a leap year in the proleptic
+/// Gregorian calendar.
 pub fn is_leap_year(year: Int) nothrow -> Bool {
 	return _is_leap_year(year);
 }
 
+/// Returns the number of days in `month` (1-based) of `year`.
+///
+/// Returns `0` if `month` is outside `[1, 12]`.  Accounts for leap
+/// years on February.
 pub fn days_in_month(year: Int, month: Int) nothrow -> Int {
 	if month < 1 or month > 12 {
 		return 0;
@@ -196,6 +283,10 @@ pub fn days_in_month(year: Int, month: Int) nothrow -> Int {
 	return _days_in_month(year, month);
 }
 
+/// Returns `true` if `(year, month, day)` is a valid Gregorian date.
+///
+/// Rejects out-of-range months (`< 1` or `> 12`) and days that
+/// exceed `days_in_month(year, month)`.
 pub fn is_valid_date(year: Int, month: Int, day: Int) nothrow -> Bool {
 	if month < 1 or month > 12 {
 		return false;
@@ -210,10 +301,20 @@ pub fn is_valid_date(year: Int, month: Int, day: Int) nothrow -> Bool {
 	return false;
 }
 
+/// Formats `d` as an ISO-8601 date string `"YYYY-MM-DD"`.
+///
+/// **See also:** `parse_iso8601_date`.
 pub fn format_iso8601_date(d: &Date) nothrow -> String {
 	return _pad4(d.year) + "-" + _pad2(d.month) + "-" + _pad2(d.day);
 }
 
+/// Parses an ISO-8601 date string `"YYYY-MM-DD"` into a `Date`.
+///
+/// **Returns:** `Ok(Date)` on a valid input;
+/// `Err(TimeParseError)` carrying the failure tag and offset.
+///
+/// **See also:** `format_iso8601_date`, `is_valid_date`,
+/// `TimeParseError`.
 pub fn parse_iso8601_date(s: String) nothrow -> core.Result<Date, TimeParseError> {
 	val n = s.byte_length();
 	if n != 10 {

@@ -36,6 +36,15 @@ export {
 // Public error type
 // ---------------------------------------------------------------------------
 
+/// Error returned by `compile` when a pattern is malformed.
+///
+/// `tag` is a stable machine-readable code (e.g. `"unclosed-group"`,
+/// `"empty-class"`, `"trailing-backslash"`).  `offset` is the
+/// zero-based byte position in the pattern where the parser gave up.
+///
+/// `RegexError` implements `core.Throw` and `core.Diagnostic`.
+///
+/// **See also:** `compile`, `Regex`.
 pub struct RegexError {
 	pub tag: String,
 	pub offset: Int
@@ -57,6 +66,13 @@ implement core.Throw for RegexError {
 // Public match result
 // ---------------------------------------------------------------------------
 
+/// Byte-offset span of a successful match within an input string.
+///
+/// `start` is the zero-based index of the first matched byte; `end`
+/// is the exclusive end index.  The matched substring is bytes
+/// `[start, end)`.  `RegexMatch` is `Copy`.
+///
+/// **See also:** `find_first`.
 pub struct RegexMatch {
 	pub start: Int,
 	pub end: Int
@@ -100,6 +116,10 @@ implement core.Copy for RegexMatch {
 //     unexpected-paren, unexpected-char
 // ---------------------------------------------------------------------------
 
+/// Position-anchor kind in a `RegexNode::Anchor` AST node.
+///
+/// `Start` corresponds to `^` (beginning of input); `End`
+/// corresponds to `$` (end of input).
 pub variant AnchorKind {
 	Start,
 	End,
@@ -109,6 +129,9 @@ pub variant AnchorKind {
 implement core.Copy for AnchorKind {
 }
 
+/// Inclusive `[lo, hi]` byte range used inside a `CharClass`.
+///
+/// `Copy`.
 pub struct CharRange {
 	pub lo: Byte,
 	pub hi: Byte
@@ -117,11 +140,19 @@ pub struct CharRange {
 implement core.Copy for CharRange {
 }
 
+/// Character class (`[...]` or escape-derived class like `\d`,
+/// `\w`, `\s`) — a set of byte ranges with an optional negation.
+///
+/// `negated = true` matches any byte NOT in `ranges`.
 pub struct CharClass {
 	pub negated: Bool,
 	pub ranges: Array<CharRange>
 }
 
+/// Repetition quantifier kind in a `RegexNode::Repeat` AST node.
+///
+/// `Star` is `*` (zero or more); `Plus` is `+` (one or more);
+/// `Question` is `?` (zero or one).
 pub variant Quantifier {
 	Star,
 	Plus,
@@ -132,6 +163,19 @@ pub variant Quantifier {
 implement core.Copy for Quantifier {
 }
 
+/// Parsed regex AST node.  See the in-source "FROZEN CONTRACT"
+/// header above this declaration for invariants the NFA lowering
+/// depends on.
+///
+/// Cases:
+/// - `Literal(byte_val)` — match a single byte exactly.
+/// - `Dot` — match any single byte.
+/// - `Anchor(kind)` — `^` or `$` zero-width position match.
+/// - `Class(cls)` — match against a `CharClass`.
+/// - `Group(children)` — concatenation of child nodes (left to right).
+/// - `Alternation(branches)` — match the first successful branch.
+/// - `Repeat(child, quant)` — apply `quant` to a single child node
+///   (the `child` array always has length 1).
 pub variant RegexNode {
 	Literal(byte_val: Byte),
 	Dot,
@@ -143,6 +187,14 @@ pub variant RegexNode {
 	@tombstone Tombstone
 }
 
+/// Compiled regular expression, ready for matching.
+///
+/// Construct via `compile(pattern)`.  The `root` AST is exposed for
+/// inspection; `nfa` is the internal compiled program (do not
+/// modify).
+///
+/// **See also:** `compile`, `is_match`, `find_first`,
+/// `replace_first`, `replace_all`.
 pub struct Regex {
 	pub root: RegexNode,
 	nfa: _NfaProg
@@ -187,6 +239,19 @@ fn _err(tag: &String, offset: Int) nothrow -> core.Result<RegexNode, RegexError>
 // Top-level entry: parse alternation
 // ---------------------------------------------------------------------------
 
+/// Parses `pattern` and compiles it to a matchable `Regex`.
+///
+/// Supported syntax: literal bytes, `.` dot, `^` / `$` anchors,
+/// `[...]` character classes (with negation `[^...]` and ranges
+/// `a-z`), `*` / `+` / `?` quantifiers, alternation `a|b`,
+/// grouping `(...)`, and the standard escapes `\d` `\D` `\w` `\W`
+/// `\s` `\S` `\t` `\n` `\r`.  Backreferences and named groups are
+/// not supported.
+///
+/// **Returns:** `Ok(Regex)` on success.  `Err(RegexError)` carrying
+/// a stable failure tag and the byte offset where parsing failed.
+///
+/// **See also:** `Regex`, `RegexError`, `is_match`, `find_first`.
 pub fn compile(pattern: &String) nothrow -> core.Result<Regex, RegexError> {
 	var p = _new_parser(pattern);
 	match _parse_alternation(&mut p) {
@@ -586,6 +651,8 @@ fn _maybe_range(p: &mut Parser, lo: Byte, ranges: &mut Array<CharRange>) nothrow
 // NFA instruction set (private)
 // ---------------------------------------------------------------------------
 
+/// Internal NFA opcode.  Implementation detail of the regex engine —
+/// not user-facing API.
 pub variant _NfaOp {
 	ByteMatch(b: Byte),
 	AnyByte,
@@ -602,6 +669,8 @@ implement core.Copy for _NfaOp {
 }
 
 // NFA program: instruction array + side table of ranges for Ranges ops.
+/// Internal NFA program.  Implementation detail of the regex engine
+/// — not user-facing API.
 pub struct _NfaProg {
 	ops: Array<_NfaOp>,
 	ranges: Array<CharRange>
@@ -614,6 +683,7 @@ pub struct _NfaProg {
 // without backpatching.
 // ---------------------------------------------------------------------------
 
+/// Internal: NFA-program size estimator.
 pub fn _node_size(node: &RegexNode) nothrow -> Int {
 	match node {
 		Literal(_) => { return 1; },
@@ -657,6 +727,7 @@ pub fn _node_size(node: &RegexNode) nothrow -> Int {
 	return 0;
 }
 
+/// Internal: emits NFA opcodes for a single AST node.
 pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 	match node {
 		Literal(byte_val) => {
@@ -755,6 +826,7 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 	}
 }
 
+/// Internal: compiles a parsed AST into an NFA program.
 pub fn _nfa_compile(root: &RegexNode) nothrow -> _NfaProg {
 	var nfa = _NfaProg(
 		ops = Array<type _NfaOp>::with_capacity(_node_size(root) + 1),
@@ -772,6 +844,7 @@ pub fn _nfa_compile(root: &RegexNode) nothrow -> _NfaProg {
 // _try_match_at returns the longest match end from a fixed start, or -1.
 // ---------------------------------------------------------------------------
 
+/// Internal: NFA-state-tracking bitmap allocator.
 pub fn _make_bitmap(n: Int) nothrow -> Array<Bool> {
 	var a = Array<type Bool>::with_capacity(n);
 	var i = 0;
@@ -779,6 +852,7 @@ pub fn _make_bitmap(n: Int) nothrow -> Array<Bool> {
 	return move a;
 }
 
+/// Internal: bitmap reset between NFA iterations.
 pub fn _clear_bitmap(a: &mut Array<Bool>, n: Int) nothrow -> Void {
 	var i = 0;
 	while i < n { a[i] = false; i = i + 1; }
@@ -786,6 +860,7 @@ pub fn _clear_bitmap(a: &mut Array<Bool>, n: Int) nothrow -> Void {
 
 // Recursively follow epsilon transitions (Split, Jump, assertions) and
 // collect consuming instructions into clist.
+/// Internal: NFA state-set push (with epsilon-closure expansion).
 pub fn _add_state(nfa: &_NfaProg, bitmap: &mut Array<Bool>, clist: &mut Array<Int>, pc: Int, pos: Int, input_len: Int) nothrow -> Void {
 	if pc >= 0 and pc < nfa.ops.len and not bitmap[pc] {
 		bitmap[pc] = true;
@@ -817,6 +892,7 @@ pub fn _add_state(nfa: &_NfaProg, bitmap: &mut Array<Bool>, clist: &mut Array<In
 	}
 }
 
+/// Internal: byte-class match test for a given NFA opcode.
 pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
 	val op = nfa.ops[pc];
 	match op {
@@ -850,6 +926,8 @@ pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
 }
 
 // Run NFA from a fixed start position; return longest match end or -1.
+/// Internal: attempts a single anchored match starting at `start`,
+/// returning the matched byte-length or `-1` on no match.
 pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int {
 	val input_len = input.byte_length();
 	val prog_len = nfa.ops.len;
@@ -903,6 +981,12 @@ pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int 
 // find_first: returns leftmost match (greedy — longest at that start).
 // ---------------------------------------------------------------------------
 
+/// Returns `true` if `re` matches anywhere in `input`.
+///
+/// Equivalent to `find_first(re, input).is_some()` but skips
+/// allocating the `RegexMatch` value.
+///
+/// **See also:** `find_first`.
 pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 	val input_len = input.byte_length();
 	var start = 0;
@@ -915,11 +999,17 @@ pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 	return false;
 }
 
+/// Returns the leftmost match of `re` in `input`, or `None` if no
+/// match exists.
+///
+/// **See also:** `is_match`, `replace_first`, `RegexMatch`.
 pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
 	return _find_from(re, input, 0);
 }
 
 // Search for the first match starting at byte offset `from`.
+/// Internal: like `find_first` but starting search from `from`
+/// (used by `replace_all` to advance past previous matches).
 pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
 	val input_len = input.byte_length();
 	var start = from;
@@ -938,6 +1028,7 @@ pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<Reg
 // Returns "" when len == 0.  Uses io.buffer for byte-level copy.
 // ---------------------------------------------------------------------------
 
+/// Internal: byte-range substring helper used by replace operations.
 pub fn _substr(s: &String, start: Int, len: Int) nothrow -> String {
 	if len == 0 {
 		return "";
@@ -964,6 +1055,13 @@ pub fn _substr(s: &String, start: Int, len: Int) nothrow -> String {
 //   - Empty input + empty pattern: replace_all returns `repl` (one match).
 // ---------------------------------------------------------------------------
 
+/// Returns a new string with the leftmost match of `re` in `input`
+/// replaced by `repl`.
+///
+/// `repl` is a literal replacement — backreferences (`$1`, `\1`)
+/// are NOT interpreted.
+///
+/// **See also:** `replace_all`, `find_first`.
 pub fn replace_first(re: &Regex, input: &String, repl: &String) nothrow -> String {
 	match _find_from(re, input, 0) {
 		Optional::Some(m) => {
@@ -978,6 +1076,13 @@ pub fn replace_first(re: &Regex, input: &String, repl: &String) nothrow -> Strin
 	}
 }
 
+/// Returns a new string with every non-overlapping match of `re` in
+/// `input` replaced by `repl`.
+///
+/// `repl` is a literal replacement.  Empty matches are advanced
+/// past one byte at a time to avoid an infinite loop.
+///
+/// **See also:** `replace_first`.
 pub fn replace_all(re: &Regex, input: &String, repl: &String) nothrow -> String {
 	val input_len = input.byte_length();
 	var result = "";

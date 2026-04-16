@@ -59,6 +59,17 @@ fn _append_u32_be(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
 	out.push(cast<Byte>(v % cast<Uint>(256)));
 }
 
+/// Constant-time equality comparison of two byte arrays.
+///
+/// Always touches every byte of `a` and `b` to avoid leaking the
+/// position of the first differing byte through timing.  Use for MAC
+/// and tag comparisons where a timing side-channel would let an
+/// attacker forge values byte-by-byte.
+///
+/// **Returns:** `true` if the arrays have identical length and
+/// content; `false` otherwise.
+///
+/// **See also:** `hmac_sha256`, `chacha20_poly1305_decrypt`.
 pub fn constant_time_eq(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Bool {
 	if a.len != b.len {
 		return false;
@@ -91,6 +102,12 @@ const SHA256_K: Array<Uint> = [
 	2428436474u, 2756734187u, 3204031479u, 3329325298u
 ];
 
+/// Computes the SHA-256 hash of `bytes`.
+///
+/// Returns the 32-byte digest as an `Array<Byte>`.  Pure software
+/// implementation in stdlib (no hardware acceleration).
+///
+/// **See also:** `sha384`, `sha512`, `hmac_sha256`.
 pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
 	var i = 0;
@@ -195,6 +212,12 @@ pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	return move out;
 }
 
+/// Computes the HMAC-SHA-256 of `msg` under `key`.
+///
+/// Returns the 32-byte authentication tag.  Tag comparisons must use
+/// `constant_time_eq` to avoid timing side-channels.
+///
+/// **See also:** `sha256`, `constant_time_eq`, `hkdf_sha256`.
 pub fn hmac_sha256(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> {
 	var effective_key: Array<Byte> = [];
 	if key.len > 64 {
@@ -231,6 +254,13 @@ pub fn hmac_sha256(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> 
 	return sha256(&opad_prefix);
 }
 
+/// Computes the SHA-1 hash of `bytes`.
+///
+/// Returns the 20-byte digest as an `Array<Byte>`.  SHA-1 is broken
+/// for collision resistance — use `sha256` for new designs.  Provided
+/// for protocol compatibility (TLS handshakes, legacy formats).
+///
+/// **See also:** `sha256`, `md5`.
 pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
 	var i = 0;
@@ -332,6 +362,15 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	return move out;
 }
 
+/// Error returned by failable crypto operations
+/// (`hkdf_expand_sha256`, `hkdf_sha256`, AEAD encrypt/decrypt).
+///
+/// `tag` is a stable machine-readable identifier for the failure
+/// (e.g. `"length-out-of-range"`, `"auth-tag-mismatch"`).
+///
+/// `CryptoError` implements `core.Throw` and `core.Diagnostic`.
+///
+/// **See also:** `chacha20_poly1305_decrypt`, `hkdf_sha256`.
 pub struct CryptoError {
 	pub tag: String,
 	pub errno: Int
@@ -494,6 +533,11 @@ fn _sha512_core(bytes: &Array<Byte>, iv0: Uint64, iv1: Uint64, iv2: Uint64, iv3:
 	return move state;
 }
 
+/// Computes the SHA-512 hash of `bytes`.
+///
+/// Returns the 64-byte digest as an `Array<Byte>`.
+///
+/// **See also:** `sha256`, `sha384`.
 pub fn sha512(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	val state = _sha512_core(bytes, 7640891576956012808u64, 13503953896175478587u64, 4354685564936845355u64, 11912009170470909681u64, 5840696475078001361u64, 11170449401992604703u64, 2270897969802886507u64, 6620516959819538809u64);
 	var out = Array<type Byte>::with_capacity(64);
@@ -505,6 +549,12 @@ pub fn sha512(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	return move out;
 }
 
+/// Computes the SHA-384 hash of `bytes`.
+///
+/// Returns the 48-byte digest as an `Array<Byte>`.  Same algorithm
+/// family as SHA-512, truncated.
+///
+/// **See also:** `sha512`, `sha256`.
 pub fn sha384(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	val state = _sha512_core(bytes, 14680500436340154072u64, 7105036623409894663u64, 10473403895298186519u64, 1526699215303891257u64, 7436329637833083697u64, 10282925794625328401u64, 15784041429090275239u64, 5167115440072839076u64);
 	var out = Array<type Byte>::with_capacity(48);
@@ -516,6 +566,14 @@ pub fn sha384(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	return move out;
 }
 
+/// HKDF-Extract step (RFC 5869) using HMAC-SHA-256.
+///
+/// Combines `salt` and input keying material `ikm` into a 32-byte
+/// pseudorandom key (PRK) suitable for `hkdf_expand_sha256`.
+///
+/// **Returns:** the 32-byte PRK.
+///
+/// **See also:** `hkdf_expand_sha256`, `hkdf_sha256`.
 pub fn hkdf_extract_sha256(salt: &Array<Byte>, ikm: &Array<Byte>) nothrow -> Array<Byte> {
 	if salt.len == 0 {
 		var zero_salt = Array<type Byte>::with_capacity(32);
@@ -529,6 +587,22 @@ pub fn hkdf_extract_sha256(salt: &Array<Byte>, ikm: &Array<Byte>) nothrow -> Arr
 	return hmac_sha256(salt, ikm);
 }
 
+/// HKDF-Expand step (RFC 5869) using HMAC-SHA-256.
+///
+/// Stretches `prk` (the output of `hkdf_extract_sha256`) into `len`
+/// bytes of output keying material, using `info` as a context label
+/// to bind the output to a specific use.
+///
+/// **Parameters:**
+/// - `prk` — pseudorandom key from `hkdf_extract_sha256`.
+/// - `info` — context label (may be empty).
+/// - `len` — desired output length in bytes.  Capped at
+///   `255 * 32 = 8160`.
+///
+/// **Returns:** `Ok(Array<Byte>)` of length `len`.
+/// `Err(CryptoError)` if `len` is out of range.
+///
+/// **See also:** `hkdf_extract_sha256`, `hkdf_sha256`.
 pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothrow -> core.Result<Array<Byte>, CryptoError> {
 	if len < 0 or len > 8160 {
 		return core.Result::Err(CryptoError(tag = "invalid-output-length", errno = 0));
@@ -569,6 +643,21 @@ pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothr
 	return core.Result::Ok(move okm);
 }
 
+/// One-shot HKDF (RFC 5869) using HMAC-SHA-256: extract then expand.
+///
+/// Convenience for `hkdf_extract_sha256(salt, ikm)` followed by
+/// `hkdf_expand_sha256(prk, info, len)`.
+///
+/// **Parameters:**
+/// - `salt` — non-secret salt (may be empty for a zero-salt extract).
+/// - `ikm` — input keying material.
+/// - `info` — context label.
+/// - `len` — desired output length in bytes (capped at `8160`).
+///
+/// **Returns:** `Ok(Array<Byte>)` of length `len`;
+/// `Err(CryptoError)` if `len` is out of range.
+///
+/// **See also:** `hkdf_extract_sha256`, `hkdf_expand_sha256`.
 pub fn hkdf_sha256(salt: &Array<Byte>, ikm: &Array<Byte>, info: &Array<Byte>, len: Int) nothrow -> core.Result<Array<Byte>, CryptoError> {
 	val prk = hkdf_extract_sha256(salt, ikm);
 	return hkdf_expand_sha256(&prk, info, len);
@@ -862,6 +951,23 @@ fn _poly1305_construct_data(aad: &Array<Byte>, ciphertext: &Array<Byte>) nothrow
 	return move mac_data;
 }
 
+/// Authenticated encryption with associated data (AEAD) using
+/// ChaCha20-Poly1305 (RFC 8439).
+///
+/// **Parameters:**
+/// - `key` — 32-byte secret key.
+/// - `nonce` — 12-byte nonce; MUST be unique per `(key, message)`
+///   pair.  Reusing a nonce with the same key catastrophically
+///   breaks confidentiality and authenticity.
+/// - `aad` — associated data authenticated but not encrypted (may
+///   be empty).
+/// - `plaintext` — bytes to encrypt.
+///
+/// **Returns:** `Ok(ciphertext_and_tag)` — the ciphertext followed
+/// by a 16-byte authentication tag.  `Err(CryptoError)` if `key` or
+/// `nonce` is the wrong length.
+///
+/// **See also:** `chacha20_poly1305_decrypt`.
 pub fn chacha20_poly1305_encrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &Array<Byte>, plaintext: &Array<Byte>) nothrow -> core.Result<Array<Byte>, CryptoError> {
 	if key.len != 32 {
 		return core.Result::Err(CryptoError(tag = "invalid-key-length", errno = 0));
@@ -894,6 +1000,24 @@ pub fn chacha20_poly1305_encrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &A
 	return core.Result::Ok(move out);
 }
 
+/// AEAD decryption counterpart to `chacha20_poly1305_encrypt`.
+///
+/// Verifies the authentication tag in constant time before
+/// returning plaintext.  A mismatched tag returns
+/// `Err(CryptoError)` and the plaintext is not exposed.
+///
+/// **Parameters:**
+/// - `key` — 32-byte secret key.
+/// - `nonce` — 12-byte nonce matching the one used for encryption.
+/// - `aad` — associated data matching the encrypt-side input.
+/// - `ciphertext_and_tag` — the encryptor's output (ciphertext +
+///   16-byte tag).
+///
+/// **Returns:** `Ok(plaintext)` on a verified tag;
+/// `Err(CryptoError)` on length mismatch or tag-verification
+/// failure.
+///
+/// **See also:** `chacha20_poly1305_encrypt`, `constant_time_eq`.
 pub fn chacha20_poly1305_decrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &Array<Byte>, ciphertext_and_tag: &Array<Byte>) nothrow -> core.Result<Array<Byte>, CryptoError> {
 	if key.len != 32 {
 		return core.Result::Err(CryptoError(tag = "invalid-key-length", errno = 0));
@@ -972,6 +1096,14 @@ fn _append_u32_le(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
 	out.push(cast<Byte>((v >> cast<Uint>(24)) & cast<Uint>(255)));
 }
 
+/// Computes the MD5 hash of `data`.
+///
+/// Returns the 16-byte digest as an `Array<Byte>`.  MD5 is broken
+/// for collision resistance — use `sha256` for new designs.
+/// Provided for protocol compatibility (HTTP digest auth, legacy
+/// formats).
+///
+/// **See also:** `sha1`, `sha256`.
 pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
 	var msg = Array<type Byte>::with_capacity(data.len + 72);
 	var i = 0;

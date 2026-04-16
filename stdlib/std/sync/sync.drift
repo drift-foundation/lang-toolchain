@@ -40,40 +40,108 @@ export {
 	epoch_reclaimed
 };
 
+/// Re-export of `lang.atomic.MemoryOrder` — the memory-ordering tag
+/// passed to atomic load/store/RMW operations.  Standard values:
+/// `Relaxed`, `Acquire`, `Release`, `AcqRel`, `SeqCst` (see
+/// `lang.atomic` for the full set).
 pub type MemoryOrder = atomic.MemoryOrder;
 
+/// Atomic `Bool` cell.
+///
+/// Construct via `atomic_bool(v)`.  Operations: `load`, `store`,
+/// `exchange`, `compare_exchange`, `compare_exchange_observed`.
+/// Each takes one or two `MemoryOrder` arguments.
+///
+/// **See also:** `atomic_bool`, `AtomicInt`.
 pub struct AtomicBool {
 	inner: atomic.AtomicBool
 }
 
+/// Atomic `Int` cell.
+///
+/// Construct via `atomic_int(v)`.  In addition to the load/store/
+/// exchange/compare-exchange operations of `AtomicBool`, supports
+/// `fetch_add` / `fetch_sub` for arithmetic RMW.
+///
+/// **See also:** `atomic_int`, `AtomicUint`, `AtomicBool`.
 pub struct AtomicInt {
 	inner: atomic.AtomicInt
 }
 
+/// Atomic `Uint` cell.  Same operation set as `AtomicInt` but
+/// unsigned.
+///
+/// **See also:** `atomic_uint`, `AtomicInt`, `AtomicUint64`.
 pub struct AtomicUint {
 	inner: atomic.AtomicUint
 }
 
+/// Atomic 64-bit `Uint64` cell.  Same operation set as `AtomicUint`
+/// at 64-bit width.
+///
+/// **See also:** `atomic_uint64`, `AtomicUint`.
 pub struct AtomicUint64 {
 	inner: atomic.AtomicUint64
 }
 
+/// Type-erased opaque handle wrapping a `Uint` slot.
+///
+/// Used as the value type for atomic registries and the `MpscQueue`.
+/// The `T` type parameter is purely a phantom marker — the handle
+/// carries only the raw `Uint`, not a typed reference.  Convert via
+/// `to_uint()` and `is_null()`.
+///
+/// `Handle<T>` is `Copy`.  Construct via `handle<T>(raw)` or
+/// `null_handle<T>()`.
+///
+/// **See also:** `handle`, `null_handle`, `AtomicHandle`.
 pub struct Handle<T> {
 	raw: Uint
 }
 
+/// Atomic cell holding a `Handle<T>`.
+///
+/// Operations mirror `AtomicUint` but take/return `Handle<T>` for
+/// type discipline at the call site.  Construct via `atomic_handle(v)`.
+///
+/// **See also:** `atomic_handle`, `Handle`.
 pub struct AtomicHandle<T> {
 	inner: atomic.AtomicUint
 }
 
+/// Reference-counted token wrapping a `Handle<T>`.
+///
+/// Provides the same opaque-pointer shape as `Handle<T>` with a
+/// `RefToken` semantic intent at the type level — used by code paths
+/// that distinguish "raw handle" (just an integer) from "ref token"
+/// (a refcounted entry).  Currently shares the underlying layout
+/// with `Handle<T>`.
+///
+/// **See also:** `ref_token`, `null_ref_token`, `AtomicRef`.
 pub struct RefToken<T> {
 	inner: Handle<T>
 }
 
+/// Atomic cell holding a `RefToken<T>`.
+///
+/// Operations mirror `AtomicHandle` but in RefToken terms.
+///
+/// **See also:** `atomic_ref`, `RefToken`.
 pub struct AtomicRef<T> {
 	inner: AtomicHandle<T>
 }
 
+/// Multi-producer / single-consumer bounded queue of `Handle<T>`
+/// values.
+///
+/// Lock-free implementation backed by a slot array plus per-slot
+/// sequence numbers.  Construct via `mpsc_queue<T>(capacity)`;
+/// minimum capacity is 2 (smaller values are clamped up).  `push`
+/// is safe to call concurrently from multiple producers; `pop` is
+/// safe only from a single consumer.
+///
+/// **See also:** `mpsc_queue`, `MpscQueue.push`, `MpscQueue.pop`,
+/// `Handle`.
 pub struct MpscQueue<T> {
 	cap: Uint,
 	head: atomic.AtomicUint,
@@ -82,6 +150,24 @@ pub struct MpscQueue<T> {
 	states: Array<atomic.AtomicUint>
 }
 
+/// Epoch-based reclamation domain.
+///
+/// Coordinates safe memory reclamation in lock-free data structures
+/// by tracking a current epoch and the number of active readers.
+/// Used together with `EpochParticipant` per reader.  Reclamation
+/// proceeds when no participant is still reading at an older epoch.
+///
+/// Counters:
+/// - `current` — the latest epoch number.
+/// - `active` — count of participants currently inside a read region.
+/// - `pending` — count of retired-but-not-yet-reclaimed objects
+///   carried forward into the next advancement.
+/// - `reclaimed` — running total of objects actually reclaimed.
+///
+/// Construct via `epoch_domain()`.
+///
+/// **See also:** `EpochParticipant`, `epoch_domain`, `epoch_enter`,
+/// `epoch_leave`, `epoch_retire`, `epoch_try_advance`.
 pub struct EpochDomain {
 	current: atomic.AtomicUint,
 	active: atomic.AtomicUint,
@@ -89,55 +175,101 @@ pub struct EpochDomain {
 	reclaimed: atomic.AtomicUint
 }
 
+/// Per-thread participant in an `EpochDomain`'s reclamation
+/// protocol.
+///
+/// Tracks whether this participant is currently inside a read region
+/// (`active`) and, if so, what epoch it observed on entry.  Mutate
+/// via `epoch_enter` / `epoch_leave`.  Construct via
+/// `epoch_participant()`.
+///
+/// **See also:** `EpochDomain`, `epoch_participant`, `epoch_enter`,
+/// `epoch_leave`.
 pub struct EpochParticipant {
 	active: Bool,
 	epoch: Uint
 }
 
+/// Constructs an atomic `Bool` cell initialized to `v`.
+///
+/// **See also:** `AtomicBool`.
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
 	return AtomicBool(inner = atomic.atomic_bool(v));
 }
 
+/// Constructs an atomic `Int` cell initialized to `v`.
+///
+/// **See also:** `AtomicInt`.
 pub fn atomic_int(v: Int) nothrow -> AtomicInt {
 	return AtomicInt(inner = atomic.atomic_int(v));
 }
 
+/// Constructs an atomic `Uint` cell initialized to `v`.
+///
+/// **See also:** `AtomicUint`.
 pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
 	return AtomicUint(inner = atomic.atomic_uint(v));
 }
 
+/// Constructs an atomic `Uint64` cell initialized to `v`.
+///
+/// **See also:** `AtomicUint64`.
 pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 	return AtomicUint64(inner = atomic.atomic_uint64(v));
 }
 
+/// Constructs a `Handle<T>` wrapping the raw `Uint` slot.
+///
+/// **See also:** `null_handle`, `Handle`.
 pub fn handle<T>(raw: Uint) nothrow -> Handle<T> {
 	return Handle<type T>(raw = raw);
 }
 
+/// Constructs a null `Handle<T>` (raw value `0`).
+///
+/// **See also:** `handle`, `Handle.is_null`.
 pub fn null_handle<T>() nothrow -> Handle<T> {
 	return Handle<type T>(raw = cast<Uint>(0));
 }
 
+/// Constructs an `AtomicHandle<T>` initialized with `v`.
+///
+/// **See also:** `AtomicHandle`, `handle`.
 pub fn atomic_handle<T>(v: Handle<T>) nothrow -> AtomicHandle<T> {
 	val x = atomic.atomic_uint(v.raw);
 	return AtomicHandle<type T>(inner = x);
 }
 
+/// Constructs a `RefToken<T>` wrapping the raw `Uint` slot.
+///
+/// **See also:** `null_ref_token`, `RefToken`.
 pub fn ref_token<T>(raw: Uint) nothrow -> RefToken<T> {
 	val h = handle<type T>(raw);
 	return RefToken<type T>(inner = h);
 }
 
+/// Constructs a null `RefToken<T>` (raw value `0`).
+///
+/// **See also:** `ref_token`, `RefToken.is_null`.
 pub fn null_ref_token<T>() nothrow -> RefToken<T> {
 	val h = null_handle<type T>();
 	return RefToken<type T>(inner = h);
 }
 
+/// Constructs an `AtomicRef<T>` initialized with `v`.
+///
+/// **See also:** `AtomicRef`, `ref_token`.
 pub fn atomic_ref<T>(v: RefToken<T>) nothrow -> AtomicRef<T> {
 	val a = atomic_handle<type T>(v.inner);
 	return AtomicRef<type T>(inner = a);
 }
 
+/// Constructs an empty `MpscQueue<T>` with the given capacity.
+///
+/// **Parameters:**
+/// - `capacity` — slot count; values `< 2` are clamped to `2`.
+///
+/// **See also:** `MpscQueue`, `MpscQueue.push`, `MpscQueue.pop`.
 pub fn mpsc_queue<T>(capacity: Int) nothrow -> MpscQueue<T> {
 	var cap = capacity;
 	if cap < 2 {
@@ -156,11 +288,25 @@ pub fn mpsc_queue<T>(capacity: Int) nothrow -> MpscQueue<T> {
 	return MpscQueue(cast<Uint>(cap), atomic.atomic_uint(cast<Uint>(0)), atomic.atomic_uint(cast<Uint>(0)), move slots, move states);
 }
 
+/// Inserts a thread fence with the specified memory ordering.
+///
+/// Establishes happens-before edges between operations on either
+/// side of the fence across threads, without modifying any
+/// particular atomic cell.
+///
+/// **See also:** `signal_fence`, `MemoryOrder`.
 pub fn thread_fence(order: MemoryOrder) nothrow -> Void {
 	atomic.thread_fence(order);
 	return;
 }
 
+/// Inserts a compiler-only fence with the specified memory ordering.
+///
+/// Restricts the compiler's reorderings of memory operations on the
+/// current thread but emits no machine-level fence instruction.
+/// Useful for signal handlers and other intra-thread interleavings.
+///
+/// **See also:** `thread_fence`, `MemoryOrder`.
 pub fn signal_fence(order: MemoryOrder) nothrow -> Void {
 	atomic.signal_fence(order);
 	return;
@@ -171,14 +317,27 @@ fn _ord_acquire() nothrow -> Int { return 1; }
 fn _ord_release() nothrow -> Int { return 2; }
 fn _ord_acqrel() nothrow -> Int { return 3; }
 
+/// Constructs a fresh `EpochDomain` with all counters at zero.
+///
+/// **See also:** `EpochDomain`, `epoch_participant`.
 pub fn epoch_domain() nothrow -> EpochDomain {
 	return EpochDomain(current = atomic.atomic_uint(cast<Uint>(0)), active = atomic.atomic_uint(cast<Uint>(0)), pending = atomic.atomic_uint(cast<Uint>(0)), reclaimed = atomic.atomic_uint(cast<Uint>(0)));
 }
 
+/// Constructs a fresh inactive `EpochParticipant`.
+///
+/// **See also:** `EpochParticipant`, `epoch_enter`.
 pub fn epoch_participant() nothrow -> EpochParticipant {
 	return EpochParticipant(active = false, epoch = cast<Uint>(0));
 }
 
+/// Begins a read-side critical section in `d` for participant `p`.
+///
+/// Records the current epoch in `p.epoch` and increments `d.active`.
+/// No-op if `p` is already active.  Pair with `epoch_leave` on every
+/// exit path.
+///
+/// **See also:** `epoch_leave`, `epoch_retire`.
 pub fn epoch_enter(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 	if p.active {
 		return;
@@ -190,6 +349,12 @@ pub fn epoch_enter(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 	return;
 }
 
+/// Ends a read-side critical section.
+///
+/// Clears `p.active` and decrements `d.active`.  No-op if `p` is
+/// already inactive.
+///
+/// **See also:** `epoch_enter`.
 pub fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 	if not p.active {
 		return;
@@ -199,6 +364,13 @@ pub fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 	return;
 }
 
+/// Marks an object for reclamation in the next epoch advancement.
+///
+/// Increments `d.pending`.  If `p` is currently inside a newer epoch
+/// than the domain's current, the call is a no-op (the object will
+/// be retired by the next caller).
+///
+/// **See also:** `epoch_try_advance`, `epoch_pending`.
 pub fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) nothrow -> Void {
 	if p.active and p.epoch > atomic.atomic_load_uint(&d.current, _ord_acquire()) {
 		return;
@@ -207,6 +379,18 @@ pub fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) nothrow -> Void {
 	return;
 }
 
+/// Attempts to advance the domain's epoch and reclaim pending
+/// objects.
+///
+/// If `d.active` is non-zero (some participant still inside a read
+/// region), returns `0` immediately and does nothing.  Otherwise
+/// increments `d.current`, atomically swaps `d.pending` to zero,
+/// adds the swapped count to `d.reclaimed`, and returns the count.
+///
+/// **Returns:** number of objects reclaimed in this advancement
+/// (`0` if blocked by active readers).
+///
+/// **See also:** `epoch_retire`, `epoch_current`, `epoch_reclaimed`.
 pub fn epoch_try_advance(d: &EpochDomain) nothrow -> Int {
 	if atomic.atomic_load_uint(&d.active, _ord_acquire()) != cast<Uint>(0) {
 		return 0;
@@ -219,14 +403,19 @@ pub fn epoch_try_advance(d: &EpochDomain) nothrow -> Int {
 	return cast<Int>(reclaim);
 }
 
+/// Returns the domain's current epoch number.
 pub fn epoch_current(d: &EpochDomain) nothrow -> Uint {
 	return atomic.atomic_load_uint(&d.current, _ord_acquire());
 }
 
+/// Returns the count of objects pending reclamation (carried
+/// forward into the next `epoch_try_advance` call).
 pub fn epoch_pending(d: &EpochDomain) nothrow -> Uint {
 	return atomic.atomic_load_uint(&d.pending, _ord_acquire());
 }
 
+/// Returns the cumulative count of objects reclaimed across every
+/// successful epoch advancement on this domain.
 pub fn epoch_reclaimed(d: &EpochDomain) nothrow -> Uint {
 	return atomic.atomic_load_uint(&d.reclaimed, _ord_acquire());
 }
@@ -235,10 +424,13 @@ implement<T> core.Copy for Handle<T> {
 }
 
 implement<T> Handle<T> {
+	/// Returns the underlying raw `Uint` slot value.
 	pub fn to_uint(self: &Handle<T>) nothrow -> Uint {
 		return self.raw;
 	}
 
+	/// Returns `true` if the handle is the null sentinel (raw value
+	/// `0`).
 	pub fn is_null(self: &Handle<T>) nothrow -> Bool {
 		return self.raw == cast<Uint>(0);
 	}
@@ -248,151 +440,217 @@ implement<T> core.Copy for RefToken<T> {
 }
 
 implement<T> RefToken<T> {
+	/// Returns the underlying raw `Uint` slot value.
 	pub fn to_uint(self: &RefToken<T>) nothrow -> Uint {
 		return self.inner.raw;
 	}
 
+	/// Returns `true` if the token wraps the null sentinel.
 	pub fn is_null(self: &RefToken<T>) nothrow -> Bool {
 		return self.inner.is_null();
 	}
 }
 
 implement AtomicBool {
+	/// Atomically loads the current value with the given memory
+	/// ordering.
+	///
+	/// Typical orderings: `Acquire` for synchronizing with a
+	/// `Release` store; `Relaxed` for counters that don't need
+	/// happens-before edges.
+	///
+	/// **See also:** `AtomicBool.store`, `AtomicBool.exchange`.
 	pub fn load(self: &AtomicBool, order: MemoryOrder) nothrow -> Bool {
 		return self.inner.load(order);
 	}
 
+	/// Atomically stores `v` with the given memory ordering.
+	///
+	/// Typical ordering: `Release` to publish data to other threads.
 	pub fn store(self: &AtomicBool, v: Bool, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v, order);
 		return;
 	}
 
+	/// Atomically swaps the cell's value with `v` and returns the
+	/// previous value.
 	pub fn exchange(self: &AtomicBool, v: Bool, order: MemoryOrder) nothrow -> Bool {
 		return self.inner.exchange(v, order);
 	}
 
+	/// Atomic compare-and-swap.  If the cell currently holds
+	/// `expected`, replace it with `desired` and return `true`;
+	/// otherwise return `false` without modifying the cell.
+	///
+	/// **Parameters:**
+	/// - `expected` — value the cell must currently hold for the
+	///   swap to proceed.
+	/// - `desired` — value to write on success.
+	/// - `success_order` — memory ordering applied on a successful
+	///   swap.
+	/// - `failure_order` — memory ordering applied on the load when
+	///   the swap is rejected.
+	///
+	/// **Returns:** `true` if the swap succeeded, `false` otherwise.
+	///
+	/// **See also:** `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	/// Same as `compare_exchange` but returns the value the cell
+	/// actually held at the time of the attempt (useful for
+	/// retry-loops that need the observed value to recompute
+	/// `desired`).
 	pub fn compare_exchange_observed(self: &AtomicBool, expected: Bool, desired: Bool, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
 	}
 }
 
 implement AtomicInt {
+	/// `Int` form of `AtomicBool.load`.
 	pub fn load(self: &AtomicInt, order: MemoryOrder) nothrow -> Int {
 		return self.inner.load(order);
 	}
 
+	/// `Int` form of `AtomicBool.store`.
 	pub fn store(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v, order);
 		return;
 	}
 
+	/// `Int` form of `AtomicBool.exchange`.
 	pub fn exchange(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
 		return self.inner.exchange(v, order);
 	}
 
+	/// `Int` form of `AtomicBool.compare_exchange`.
 	pub fn compare_exchange(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	/// `Int` form of `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange_observed(self: &AtomicInt, expected: Int, desired: Int, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Int {
 		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
 	}
 
+	/// Atomically adds `v` to the cell and returns the previous
+	/// value.  Wraps on overflow per `Int` semantics.
+	///
+	/// **See also:** `AtomicInt.fetch_sub`.
 	pub fn fetch_add(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
 		return self.inner.fetch_add(v, order);
 	}
 
+	/// Atomically subtracts `v` from the cell and returns the
+	/// previous value.  Wraps on underflow per `Int` semantics.
 	pub fn fetch_sub(self: &AtomicInt, v: Int, order: MemoryOrder) nothrow -> Int {
 		return self.inner.fetch_sub(v, order);
 	}
 }
 
 implement AtomicUint {
+	/// `Uint` form of `AtomicBool.load`.
 	pub fn load(self: &AtomicUint, order: MemoryOrder) nothrow -> Uint {
 		return self.inner.load(order);
 	}
 
+	/// `Uint` form of `AtomicBool.store`.
 	pub fn store(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v, order);
 		return;
 	}
 
+	/// `Uint` form of `AtomicBool.exchange`.
 	pub fn exchange(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
 		return self.inner.exchange(v, order);
 	}
 
+	/// `Uint` form of `AtomicBool.compare_exchange`.
 	pub fn compare_exchange(self: &AtomicUint, expected: Uint, desired: Uint, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	/// `Uint` form of `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange_observed(self: &AtomicUint, expected: Uint, desired: Uint, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint {
 		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
 	}
 
+	/// `Uint` form of `AtomicInt.fetch_add`.  Wraps on overflow per
+	/// `Uint` semantics.
 	pub fn fetch_add(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
 		return self.inner.fetch_add(v, order);
 	}
 
+	/// `Uint` form of `AtomicInt.fetch_sub`.  Wraps on underflow.
 	pub fn fetch_sub(self: &AtomicUint, v: Uint, order: MemoryOrder) nothrow -> Uint {
 		return self.inner.fetch_sub(v, order);
 	}
 }
 
 implement AtomicUint64 {
+	/// `Uint64` form of `AtomicBool.load`.
 	pub fn load(self: &AtomicUint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.load(order);
 	}
 
+	/// `Uint64` form of `AtomicBool.store`.
 	pub fn store(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v, order);
 		return;
 	}
 
+	/// `Uint64` form of `AtomicBool.exchange`.
 	pub fn exchange(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.exchange(v, order);
 	}
 
+	/// `Uint64` form of `AtomicBool.compare_exchange`.
 	pub fn compare_exchange(self: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected, desired, success_order, failure_order);
 	}
 
+	/// `Uint64` form of `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange_observed(self: &AtomicUint64, expected: Uint64, desired: Uint64, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.compare_exchange_observed(expected, desired, success_order, failure_order);
 	}
 
+	/// `Uint64` form of `AtomicInt.fetch_add`.  Wraps on overflow.
 	pub fn fetch_add(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.fetch_add(v, order);
 	}
 
+	/// `Uint64` form of `AtomicInt.fetch_sub`.  Wraps on underflow.
 	pub fn fetch_sub(self: &AtomicUint64, v: Uint64, order: MemoryOrder) nothrow -> Uint64 {
 		return self.inner.fetch_sub(v, order);
 	}
 }
 
 implement<T> AtomicHandle<T> {
+	/// `Handle<T>` form of `AtomicBool.load`.
 	pub fn load(self: &AtomicHandle<T>, order: MemoryOrder) nothrow -> Handle<T> {
 		val raw = self.inner.load(order);
 		return Handle<type T>(raw = raw);
 	}
 
+	/// `Handle<T>` form of `AtomicBool.store`.
 	pub fn store(self: &AtomicHandle<T>, v: Handle<T>, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v.raw, order);
 		return;
 	}
 
+	/// `Handle<T>` form of `AtomicBool.exchange`.
 	pub fn exchange(self: &AtomicHandle<T>, v: Handle<T>, order: MemoryOrder) nothrow -> Handle<T> {
 		val raw = self.inner.exchange(v.raw, order);
 		return Handle<type T>(raw = raw);
 	}
 
+	/// `Handle<T>` form of `AtomicBool.compare_exchange`.
 	pub fn compare_exchange(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected.raw, desired.raw, success_order, failure_order);
 	}
 
+	/// `Handle<T>` form of `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange_observed(self: &AtomicHandle<T>, expected: Handle<T>, desired: Handle<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Handle<T> {
 		val raw = self.inner.compare_exchange_observed(expected.raw, desired.raw, success_order, failure_order);
 		return Handle<type T>(raw = raw);
@@ -400,10 +658,21 @@ implement<T> AtomicHandle<T> {
 }
 
 implement<T> MpscQueue<T> {
+	/// Returns the queue's slot capacity.
 	pub fn capacity(self: &MpscQueue<T>) nothrow -> Int {
 		return cast<Int>(self.cap);
 	}
 
+	/// Appends `v` to the queue.
+	///
+	/// Safe to call concurrently from multiple producer threads.
+	/// Uses bounded compare-exchange retries; never blocks.
+	///
+	/// **Returns:** `true` if the value was enqueued; `false` if the
+	/// queue was observed full at the time of the call (the consumer
+	/// is behind).
+	///
+	/// **See also:** `MpscQueue.pop`.
 	pub fn push(self: &MpscQueue<T>, v: Handle<T>) nothrow -> Bool {
 		var pos = atomic.atomic_load_uint(&self.tail, _ord_relaxed());
 		while true {
@@ -427,6 +696,12 @@ implement<T> MpscQueue<T> {
 		return false;
 	}
 
+	/// Removes and returns the next value from the queue.
+	///
+	/// Safe to call only from a single consumer thread.  Returns
+	/// `None` if the queue is empty.
+	///
+	/// **See also:** `MpscQueue.push`.
 	pub fn pop(self: &MpscQueue<T>) nothrow -> Optional<Handle<T>> {
 		var pos = atomic.atomic_load_uint(&self.head, _ord_relaxed());
 		while true {
@@ -453,25 +728,30 @@ implement<T> MpscQueue<T> {
 }
 
 implement<T> AtomicRef<T> {
+	/// `RefToken<T>` form of `AtomicBool.load`.
 	pub fn load(self: &AtomicRef<T>, order: MemoryOrder) nothrow -> RefToken<T> {
 		val h = self.inner.load(order);
 		return RefToken<type T>(inner = h);
 	}
 
+	/// `RefToken<T>` form of `AtomicBool.store`.
 	pub fn store(self: &AtomicRef<T>, v: RefToken<T>, order: MemoryOrder) nothrow -> Void {
 		self.inner.store(v.inner, order);
 		return;
 	}
 
+	/// `RefToken<T>` form of `AtomicBool.exchange`.
 	pub fn exchange(self: &AtomicRef<T>, v: RefToken<T>, order: MemoryOrder) nothrow -> RefToken<T> {
 		val h = self.inner.exchange(v.inner, order);
 		return RefToken<type T>(inner = h);
 	}
 
+	/// `RefToken<T>` form of `AtomicBool.compare_exchange`.
 	pub fn compare_exchange(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> Bool {
 		return self.inner.compare_exchange(expected.inner, desired.inner, success_order, failure_order);
 	}
 
+	/// `RefToken<T>` form of `AtomicBool.compare_exchange_observed`.
 	pub fn compare_exchange_observed(self: &AtomicRef<T>, expected: RefToken<T>, desired: RefToken<T>, success_order: MemoryOrder, failure_order: MemoryOrder) nothrow -> RefToken<T> {
 		val h = self.inner.compare_exchange_observed(expected.inner, desired.inner, success_order, failure_order);
 		return RefToken<type T>(inner = h);

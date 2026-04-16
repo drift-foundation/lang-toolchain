@@ -38,32 +38,86 @@ export {
 	macro_error
 };
 
+/// Severity level of a log event.
+///
+/// Total order: `Debug < Info < Error`.  A logger with `min_level =
+/// Info` accepts `Info` and `Error` events and silently drops `Debug`
+/// events at the call site.
+///
+/// **See also:** `LoggerConfigBuilder.min_level`, `Logger.min_level`.
 pub variant Level {
 	Debug,
 	Info,
 	Error
 }
 
+/// Policy controlling what the logger does when its in-memory queue
+/// is full.
+///
+/// `BlockWithTimeout` — submitter blocks up to `enqueue_timeout`
+/// before dropping the event silently.  `DropOldest` — evict the
+/// oldest queued event to make room.  `DropNewest` — discard the
+/// incoming event.  Note: under the current logging contract, the
+/// drop is not observable at the call site (logging methods return
+/// `Void`).
+///
+/// **See also:** `LoggerConfigBuilder.backpressure_policy`,
+/// `LoggerConfigBuilder.enqueue_timeout`.
 pub variant BackpressurePolicy {
 	BlockWithTimeout,
 	DropOldest,
 	DropNewest
 }
 
+/// Interface implemented by log destinations.
+///
+/// Implementations receive formatted records from the logger's drain
+/// thread.  The default `StdErrSink` writes to the process's
+/// standard-error fd through the runtime registry.  Custom sinks can
+/// route records elsewhere (file, network, ring buffer, etc.).
+///
+/// **See also:** `StdErrSink`, `Formatter`,
+/// `LoggerConfigBuilder.sink`.
 pub interface Sink {
 	fn write(self: &Self, rec: &LogRecord) nothrow -> Bool;
 	fn flush(self: &Self, timeout_ms: Int) nothrow -> Bool;
 }
 
+/// Default `Sink` implementation that writes to standard error.
+///
+/// Constructed via `stderr_sink()`.  Routes log lines through the
+/// process-wide `ProcessStderrCapability` installed by
+/// `io.install_process_stdio` (or auto-installed by `create_logger`).
+///
+/// **See also:** `stderr_sink`, `Sink`.
 pub struct StdErrSink {
 }
 
+/// Formatter selection for the logger's output encoding.
+///
+/// `JsonIso8601` — line-delimited JSON with ISO-8601 timestamps; the
+/// default and the only fully-supported format today.  `Custom(name)`
+/// — reserved for future pluggable formatters; `name` identifies the
+/// implementation by tag.
+///
+/// **See also:** `LoggerConfigBuilder.formatter`, `Formatter`.
 pub variant FormatterKind {
 	JsonIso8601,
 	Custom(name: String),
 	@tombstone Tombstone
 }
 
+/// Trait implemented by types that can appear as log-attribute
+/// values.
+///
+/// `to_debug` projects the value into a `DiagnosticValue` —
+/// machine-readable, format-agnostic.  `Int`, `Uint`, `Bool`,
+/// `Float`, `String`, and `DiagnosticValue` itself ship with default
+/// impls.  Implement for user types to log them as attribute values
+/// in the typed `info` / `debug` / `error` overloads.
+///
+/// **See also:** `Logger.info`, `Logger.debug`, `Logger.error`,
+/// `LogContext.put`.
 pub trait Debuggable {
 	fn to_debug(self: &Self) nothrow -> DiagnosticValue;
 }
@@ -104,10 +158,33 @@ implement Debuggable for DiagnosticValue {
 	}
 }
 
+/// Interface for custom log-record formatters.
+///
+/// Implementations turn a `LogRecord` into the bytes that the sink
+/// will emit.  Used together with `FormatterKind::Custom(name)` to
+/// register pluggable formatters.  Reserved for future use; the
+/// default `JsonIso8601` formatter is currently selected directly by
+/// the runtime.
+///
+/// **See also:** `FormatterKind`, `LogRecord`.
 pub trait Formatter {
 	fn format(self: &Self, rec: &LogRecord) nothrow -> String;
 }
 
+/// Single log record handed to a `Sink` (and optionally a
+/// `Formatter`).
+///
+/// `tm` is the ISO-8601 timestamp; `ev` is the event name; `level`
+/// is the severity; `logger` is the logger's name; `vtid` and `ptid`
+/// are virtual-thread and OS-thread identifiers; `attrs_count`
+/// reports the number of attribute key/value pairs in the record's
+/// payload.
+///
+/// Field naming matches the JSON wire format produced by the default
+/// formatter (`tm`, `ev`, `level`, `logger`, `vtid`, `ptid`,
+/// `attrs`).
+///
+/// **See also:** `Sink.write`, `Formatter.format`.
 pub struct LogRecord {
 	pub tm: String,
 	pub ev: String,
@@ -118,10 +195,31 @@ pub struct LogRecord {
 	pub attrs_count: Int
 }
 
+/// Mutable bag of attribute key/value pairs that can be attached to
+/// log calls via the `*_ctx` / `*_ctx_attrs` overloads.
+///
+/// Construct via `log_context()`.  Use `.put(key, value)` to
+/// accumulate attributes (any type implementing `Debuggable`) and
+/// pass `&ctx` to `Logger.info_ctx`, `Logger.debug_ctx`, etc.  When
+/// combined with attribute overrides via `*_ctx_attrs`, the override
+/// values take precedence over those carried by the context.
+///
+/// Typically pushed onto a `runtime.ScopedStack<LogContext>` so a
+/// scope can establish ambient attributes that nested calls inherit.
+///
+/// **See also:** `log_context`, `LogContext.put`, `Logger.info_ctx`,
+/// `Logger.info_ctx_attrs`.
 pub struct LogContext {
 	attrs: containers.HashMap<String, DiagnosticValue>
 }
 
+/// Frozen logger configuration produced by `LoggerConfigBuilder.build`.
+///
+/// Marked `Copy` so it can be reused across multiple `create_logger`
+/// calls.  All fields are public for inspection but configuration is
+/// expected to flow through the builder.
+///
+/// **See also:** `LoggerConfigBuilder`, `create_logger`.
 pub struct LoggerConfig {
 	pub sink: Sink,
 	pub min_level: Level,
@@ -132,6 +230,17 @@ pub struct LoggerConfig {
 	pub formatter: FormatterKind
 }
 
+/// Mutable builder for `LoggerConfig`.
+///
+/// Constructed via `config_builder()` with conservative defaults
+/// (stderr sink, info min level, 1024-deep queue, 1-second
+/// timeouts, block-with-timeout backpressure, JSON ISO-8601
+/// formatter).  Configurator methods mutate in place and return
+/// `&mut Self` for chaining.  Call `.build()` to freeze into a
+/// `LoggerConfig`.
+///
+/// **See also:** `config_builder`, `LoggerConfigBuilder.build`,
+/// `create_logger`.
 pub struct LoggerConfigBuilder {
 	sink: Sink,
 	min_level: Level,
@@ -142,6 +251,21 @@ pub struct LoggerConfigBuilder {
 	formatter: FormatterKind
 }
 
+/// Live logger handle.
+///
+/// Constructed via `create_logger(name, config)` (root logger) or
+/// `Logger.derive(name).build()` (sub-logger inheriting parent's
+/// runtime state).  Logging methods (`info` / `debug` / `error` and
+/// the `*_ctx` / `*_ctx_attrs` variants) are best-effort and return
+/// `Void` — see "Auto-try / propagation" in `docs/effective-drift.md`
+/// for the design rationale.
+///
+/// `Logger` implements `core.Destructible`; the destructor releases
+/// the underlying runtime-state allocation when the last clone goes
+/// out of scope.
+///
+/// **See also:** `create_logger`, `Logger.info`, `Logger.derive`,
+/// `Logger.with_min_level`, `Logger.flush`.
 pub struct Logger {
 	name: String,
 	min_level: Level,
@@ -166,6 +290,16 @@ struct LogEnvelope {
 	payload_json: String
 }
 
+/// Mutable builder for sub-`Logger`s derived from a parent.
+///
+/// Constructed via `Logger.derive(name)`.  A sub-logger inherits its
+/// parent's runtime state (sink, queue, formatter) but may override
+/// the minimum log level via `.min_level(level)` before the terminal
+/// `.build()`.  When no override is set, the sub-logger inherits the
+/// parent's level.
+///
+/// **See also:** `Logger.derive`, `LoggerBuilder.min_level`,
+/// `LoggerBuilder.build`.
 pub struct LoggerBuilder {
 	parent_state: sync.Handle<Byte>,
 	parent_min_level: Level,
@@ -202,10 +336,25 @@ implement Sink for StdErrSink {
 	}
 }
 
+/// Constructs a `StdErrSink` — the default sink that routes log
+/// records to the process's standard-error fd.
+///
+/// **See also:** `StdErrSink`, `LoggerConfigBuilder.sink`.
 pub fn stderr_sink() nothrow -> StdErrSink {
 	return StdErrSink();
 }
 
+/// Returns a fresh `LoggerConfigBuilder` with conservative defaults:
+/// stderr sink, `Info` minimum level, 1024-deep queue, 1-second
+/// write/enqueue timeouts, block-with-timeout backpressure, JSON
+/// ISO-8601 formatter.
+///
+/// Configure further before calling `.build()` to obtain a
+/// `LoggerConfig` for `create_logger`.
+///
+/// **See also:** `LoggerConfigBuilder`, `create_logger`.
+///
+/// **Example:** `examples/logging/basic_events.drift`.
 pub fn config_builder() nothrow -> LoggerConfigBuilder {
 	return LoggerConfigBuilder(
 		sink = stderr_sink(),
@@ -218,12 +367,30 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 	);
 }
 
+/// Constructs an empty `LogContext` for collecting attribute pairs.
+///
+/// Populate with `.put(key, value)`, then pass `&ctx` to a logger
+/// `*_ctx` overload.
+///
+/// **See also:** `LogContext`, `LogContext.put`, `Logger.info_ctx`.
 pub fn log_context() nothrow -> LogContext {
 	var attrs: containers.HashMap<String, DiagnosticValue> = {:};
 	return LogContext(attrs = move attrs);
 }
 
 implement LogContext {
+	/// Inserts (or replaces) an attribute pair.
+	///
+	/// `value` is projected to `DiagnosticValue` via the `Debuggable`
+	/// impl on `V`.  If `key` was already present, the old value is
+	/// dropped silently.
+	///
+	/// **Parameters:**
+	/// - `key` — attribute name (consumed by move).
+	/// - `value` — attribute value implementing `Debuggable`
+	///   (consumed by move).
+	///
+	/// **See also:** `Debuggable`, `LogContext.get`.
 	pub fn put<V>(self: &mut LogContext, key: String, value: V) nothrow -> Void require V is Debuggable {
 		val dv = Debuggable::to_debug(&value);
 		match self.attrs.insert(move key, dv) {
@@ -237,51 +404,76 @@ implement LogContext {
 		return;
 	}
 
+	/// Looks up the `DiagnosticValue` stored under `key`, or `None`
+	/// if absent.
 	pub fn get(self: &LogContext, key: &String) nothrow -> Optional<&DiagnosticValue> {
 		return self.attrs.get(key);
 	}
 
+	/// Removes every attribute from the context, keeping the
+	/// allocated storage on the underlying map.
 	pub fn clear(self: &mut LogContext) nothrow -> Void {
 		self.attrs.clear();
 	}
 }
 
 implement LoggerConfigBuilder {
+	/// Sets the destination sink (e.g. `stderr_sink()` or a custom
+	/// `Sink` implementation).
 	pub fn sink(self: &mut LoggerConfigBuilder, sink: Sink) nothrow -> &mut LoggerConfigBuilder {
 		self.sink = move sink;
 		return self;
 	}
 
+	/// Sets the minimum log level.  Events below this level are
+	/// dropped at the call site (no sink call, no record allocation).
 	pub fn min_level(self: &mut LoggerConfigBuilder, var v: Level) nothrow -> &mut LoggerConfigBuilder {
 		self.min_level = move v;
 		return self;
 	}
 
+	/// Sets the in-memory queue capacity (number of pending records
+	/// the producer side can buffer before backpressure kicks in).
+	///
+	/// **See also:** `LoggerConfigBuilder.backpressure_policy`,
+	/// `LoggerConfigBuilder.enqueue_timeout`.
 	pub fn queue_capacity(self: &mut LoggerConfigBuilder, v: Int) nothrow -> &mut LoggerConfigBuilder {
 		self.queue_capacity = v;
 		return self;
 	}
 
+	/// Sets the per-write timeout used by the drain side when
+	/// flushing records to the sink.
 	pub fn write_timeout(self: &mut LoggerConfigBuilder, v: conc.Duration) nothrow -> &mut LoggerConfigBuilder {
 		self.write_timeout = v;
 		return self;
 	}
 
+	/// Sets the per-enqueue timeout used when the queue is full and
+	/// the backpressure policy is `BlockWithTimeout`.
 	pub fn enqueue_timeout(self: &mut LoggerConfigBuilder, v: conc.Duration) nothrow -> &mut LoggerConfigBuilder {
 		self.enqueue_timeout = v;
 		return self;
 	}
 
+	/// Sets the backpressure policy — what to do when the queue is
+	/// full.
+	///
+	/// **See also:** `BackpressurePolicy`.
 	pub fn backpressure_policy(self: &mut LoggerConfigBuilder, var v: BackpressurePolicy) nothrow -> &mut LoggerConfigBuilder {
 		self.backpressure_policy = move v;
 		return self;
 	}
 
+	/// Sets the output formatter.  Defaults to
+	/// `FormatterKind::JsonIso8601()`.
 	pub fn formatter(self: &mut LoggerConfigBuilder, var v: FormatterKind) nothrow -> &mut LoggerConfigBuilder {
 		self.formatter = move v;
 		return self;
 	}
 
+	/// Materializes the builder into a `LoggerConfig` value
+	/// suitable for `create_logger`.
 	pub fn build(self: &LoggerConfigBuilder) nothrow -> LoggerConfig {
 		return LoggerConfig(
 			sink = self.sink,
@@ -295,6 +487,24 @@ implement LoggerConfigBuilder {
 	}
 }
 
+/// Constructs a root `Logger` with `name` and the supplied
+/// configuration.
+///
+/// As a side effect, ensures `io.install_process_stdio` has run on
+/// the global registry so the default stderr sink can resolve the
+/// `ProcessStderrCapability`.
+///
+/// **Parameters:**
+/// - `name` — logger name, surfaced as the `logger` field on every
+///   emitted record.
+/// - `config` — frozen `LoggerConfig` from
+///   `LoggerConfigBuilder.build`.
+///
+/// **Returns:** a `Logger` ready to receive log calls.
+///
+/// **See also:** `config_builder`, `Logger`, `Logger.derive`.
+///
+/// **Example:** `examples/logging/basic_events.drift`.
 pub fn create_logger(name: String, config: LoggerConfig) nothrow -> Logger {
 	val reg = runtime.global_registry();
 	val _ = io.install_process_stdio(reg);
@@ -739,14 +949,27 @@ fn _payload_json_ctx_attrs(logger: &Logger, ev: String, ctx: &LogContext, attrs:
 }
 
 implement Logger {
+	/// Returns the logger's name.
 	pub fn name(self: &Logger) nothrow -> String {
 		return self.name;
 	}
 
+	/// Returns the logger's current minimum log level.
 	pub fn min_level(self: &Logger) nothrow -> Level {
 		return self.min_level;
 	}
 
+	/// Returns a new `Logger` sharing this logger's runtime state but
+	/// with `level` as its minimum log level.
+	///
+	/// Useful for temporarily lowering the level inside a scope (e.g.
+	/// turn on debug logging for a single request).  The original
+	/// logger is unchanged.
+	///
+	/// **Parameters:**
+	/// - `level` — minimum level for the returned logger.
+	///
+	/// **See also:** `Logger.derive`, `Logger.min_level`.
 	pub fn with_min_level(self: &Logger, var level: Level) nothrow -> Logger {
 		match _runtime_state_from_handle(self.state) {
 			Some(st) => {
@@ -760,10 +983,30 @@ implement Logger {
 		}
 	}
 
+	/// Returns a `LoggerBuilder` for constructing a sub-logger that
+	/// inherits this logger's runtime state.
+	///
+	/// The sub-logger gets a fresh name (the supplied `name`); call
+	/// `.min_level(level)` on the builder to override the inherited
+	/// minimum log level, then `.build()` to materialize.
+	///
+	/// **See also:** `LoggerBuilder`, `Logger.with_min_level`.
 	pub fn derive(self: &Logger, name: String) nothrow -> LoggerBuilder {
 		return LoggerBuilder(parent_state = self.state, parent_min_level = self.min_level, name = name, min_level = Optional<Level>::None());
 	}
 
+	/// Drains the logger's queue to its sink and waits up to
+	/// `timeout` for the drain to complete.
+	///
+	/// Unlike the `info` / `debug` / `error` methods, `flush` returns
+	/// a `Bool` because the wait-for-drain semantic genuinely needs
+	/// to surface success vs. timeout to the caller.
+	///
+	/// **Parameters:**
+	/// - `timeout` — maximum time to wait for the drain to finish.
+	///
+	/// **Returns:** `true` if the drain completed within `timeout`,
+	/// `false` otherwise.
 	pub fn flush(self: &Logger, timeout: conc.Duration) nothrow -> Bool {
 		match _runtime_state_from_handle(self.state) {
 			Some(st) => {
@@ -775,66 +1018,140 @@ implement Logger {
 		return true;
 	}
 
-	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
-		val _ = _emit(self, Level::Debug(), ev, move attrs);
-	}
-
-	pub fn debug(self: &Logger, ev: String) nothrow -> Void {
-		val _ = _emit_no_attrs(self, Level::Debug(), ev);
-	}
-
-	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
-		val _ = _emit_ctx(self, Level::Debug(), ev, ctx);
-	}
-
-	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
-		val _ = _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
-	}
-
+	/// Emits an `info`-level event with a typed attribute map.
+	///
+	/// Best-effort, fire-and-continue: returns `Void` regardless of
+	/// queue acceptance.  Filtered out at the call site if the
+	/// logger's `min_level` is above `Info`.  See "Logging is
+	/// best-effort" in `docs/effective-drift.md` for the contract
+	/// rationale.
+	///
+	/// **Parameters:**
+	/// - `ev` — event name (machine-readable, stable identifier).
+	/// - `attrs` — map of attribute key/value pairs; values may be
+	///   any type implementing `Debuggable`.
+	///
+	/// **See also:** `Logger.info_ctx`, `Logger.info_ctx_attrs`,
+	/// `Debuggable`.
+	///
+	/// **Example:** `examples/logging/basic_events.drift`.
 	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
 		val _ = _emit(self, Level::Info(), ev, move attrs);
 	}
 
+	/// No-attrs overload of `Logger.info`.  Emits an event with no
+	/// attribute payload.
 	pub fn info(self: &Logger, ev: String) nothrow -> Void {
 		val _ = _emit_no_attrs(self, Level::Info(), ev);
 	}
 
+	/// Context-bearing overload of `Logger.info`.  Attaches every
+	/// attribute carried by `ctx` to the emitted event.
+	///
+	/// **Parameters:**
+	/// - `ev` — event name.
+	/// - `ctx` — borrowed `LogContext` whose attributes are merged
+	///   into the record.
+	///
+	/// **See also:** `LogContext`, `Logger.info_ctx_attrs`.
 	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
 		val _ = _emit_ctx(self, Level::Info(), ev, ctx);
 	}
 
+	/// Context-plus-overrides overload of `Logger.info`.  Merges
+	/// `ctx`'s attributes with `attrs`; the latter wins on key
+	/// collisions.
+	///
+	/// `attrs` here is a `HashMap<String, DiagnosticValue>` (already
+	/// projected) rather than a typed map, so the overrides can
+	/// carry mixed-type values.
+	///
+	/// **See also:** `Logger.info_ctx`, `LogContext`.
 	pub fn info_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
 		val _ = _emit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
 	}
 
+	/// Emits a `debug`-level event with a typed attribute map.
+	///
+	/// Same shape and contract as `Logger.info`, but at `Debug`
+	/// severity — typically filtered out by default since `Info` is
+	/// the default minimum level.
+	///
+	/// **See also:** `Logger.info`, `Logger.debug_ctx`,
+	/// `Logger.debug_ctx_attrs`.
+	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit(self, Level::Debug(), ev, move attrs);
+	}
+
+	/// No-attrs overload of `Logger.debug`.  See `Logger.debug` for
+	/// full semantics.
+	pub fn debug(self: &Logger, ev: String) nothrow -> Void {
+		val _ = _emit_no_attrs(self, Level::Debug(), ev);
+	}
+
+	/// Context-bearing overload of `Logger.debug`.  See
+	/// `Logger.info_ctx` for the context-merging semantics.
+	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_ctx(self, Level::Debug(), ev, ctx);
+	}
+
+	/// Context-plus-overrides overload of `Logger.debug`.  See
+	/// `Logger.info_ctx_attrs` for the override semantics.
+	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
+	}
+
+	/// Emits an `error`-level event with a typed attribute map.
+	///
+	/// Same shape and contract as `Logger.info`, but at `Error`
+	/// severity — passes through every default-configured logger.
+	///
+	/// **See also:** `Logger.info`, `Logger.error_ctx`,
+	/// `Logger.error_ctx_attrs`.
 	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
 		val _ = _emit(self, Level::Error(), ev, move attrs);
 	}
 
+	/// No-attrs overload of `Logger.error`.  See `Logger.error` for
+	/// full semantics.
 	pub fn error(self: &Logger, ev: String) nothrow -> Void {
 		val _ = _emit_no_attrs(self, Level::Error(), ev);
 	}
 
+	/// Context-bearing overload of `Logger.error`.  See
+	/// `Logger.info_ctx` for the context-merging semantics.
 	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
 		val _ = _emit_ctx(self, Level::Error(), ev, ctx);
 	}
 
+	/// Context-plus-overrides overload of `Logger.error`.  See
+	/// `Logger.info_ctx_attrs` for the override semantics.
 	pub fn error_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
 		val _ = _emit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
 	}
 }
 
 implement LoggerBuilder {
+	/// Overrides the sub-logger name initially set by `Logger.derive`.
 	pub fn name(self: &mut LoggerBuilder, name: String) nothrow -> &mut LoggerBuilder {
 		self.name = name;
 		return self;
 	}
 
+	/// Overrides the inherited minimum log level.
+	///
+	/// Without this call, the resulting sub-logger inherits its
+	/// parent's `min_level`.
 	pub fn min_level(self: &mut LoggerBuilder, var level: Level) nothrow -> &mut LoggerBuilder {
 		self.min_level = Optional::Some(move level);
 		return self;
 	}
 
+	/// Materializes the builder into a sub-`Logger` sharing the
+	/// parent's runtime state (sink, queue, formatter).
+	///
+	/// **Returns:** a `Logger` with the configured name and
+	/// effective minimum level.
 	pub fn build(self: &LoggerBuilder) nothrow -> Logger {
 		val min = match self.min_level {
 			Some(level) => {
@@ -992,61 +1309,92 @@ fn _dv_json(dv: &DiagnosticValue) nothrow -> String {
 	return "null";
 }
 
+/// Macro-target for `log.debug!(logger, ev)`.
+///
+/// Generated by the macro expander from `log.debug!(...)` syntax;
+/// captures the caller's source location via `src`.  Direct callers
+/// should prefer `Logger.debug` — the `macro_*` family exists so the
+/// expander can pass the implicit `src` argument.  See
+/// `lang/driftc/stage1/macro_expander.py` for the expansion rules.
+///
+/// **See also:** `Logger.debug`, `macro_info`, `macro_error`.
 pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.debug(ev);
 }
 
+/// Macro-target for `log.debug!(logger, ev, ctx)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.debug_ctx(ev, ctx);
 }
 
+/// Macro-target for `log.debug!(logger, ev, ctx, attrs)`.  See
+/// `macro_debug` (no-ctx) for the macro-target convention.
 pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.debug_ctx_attrs(ev, ctx, move attrs);
 }
 
+/// Macro-target for `log.debug!(logger, ev, attrs)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_debug<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
 	logger.debug(ev, move attrs);
 }
 
+/// Macro-target for `log.info!(logger, ev)`.  See `macro_debug` (no-ctx)
+/// for the macro-target convention.
 pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.info(ev);
 }
 
+/// Macro-target for `log.info!(logger, ev, ctx)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.info_ctx(ev, ctx);
 }
 
+/// Macro-target for `log.info!(logger, ev, ctx, attrs)`.  See
+/// `macro_debug` (no-ctx) for the macro-target convention.
 pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.info_ctx_attrs(ev, ctx, move attrs);
 }
 
+/// Macro-target for `log.info!(logger, ev, attrs)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_info<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
 	logger.info(ev, move attrs);
 }
 
+/// Macro-target for `log.error!(logger, ev)`.  See `macro_debug` (no-ctx)
+/// for the macro-target convention.
 pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.error(ev);
 }
 
+/// Macro-target for `log.error!(logger, ev, ctx)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.error_ctx(ev, ctx);
 }
 
+/// Macro-target for `log.error!(logger, ev, ctx, attrs)`.  See
+/// `macro_debug` (no-ctx) for the macro-target convention.
 pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.error_ctx_attrs(ev, ctx, move attrs);
 }
 
+/// Macro-target for `log.error!(logger, ev, attrs)`.  See `macro_debug`
+/// (no-ctx) for the macro-target convention.
 pub fn macro_error<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
 	logger.error(ev, move attrs);
