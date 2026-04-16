@@ -12,14 +12,10 @@ fn run() -> Int {
 	val cfg = cfg_builder.build();
 	val main_logger = log.create_logger("main", cfg);
 
-	if not main_logger.info("auth-failed", {"attempts": 3, "status": 401}) {
-		return 2;
-	}
+	main_logger.info("auth-failed", {"attempts": 3, "status": 401});
 
 	val lib_logger = main_logger.with_min_level(log.Level::Debug()).derive("auth").build();
-	if not lib_logger.debug("token-parse", {"attempts": 3, "status": 401}) {
-		return 3;
-	}
+	lib_logger.debug("token-parse", {"attempts": 3, "status": 401});
 
 	if not main_logger.flush(conc.Duration(millis = 10)) {
 		return 4;

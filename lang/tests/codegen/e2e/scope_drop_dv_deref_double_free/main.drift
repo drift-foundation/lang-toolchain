@@ -14,13 +14,13 @@ pub fn main() nothrow -> Int {
 	// a heap string in a map literal passed to logger.info().
 	// _attrs_json calls Debuggable::to_debug(&dv) which does *self —
 	// a raw LoadRef without clone.  Two owners, one string, double-free.
-	val _ = logger.info("ev", {
+	logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8080))
 	});
-	val _ = logger.info("ev", {
+	logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8081))
 	});
-	val _ = logger.info("ev", {
+	logger.info("ev", {
 		"port": DiagnosticValue::String(fmt.format_int(8082))
 	});
 	return 0;

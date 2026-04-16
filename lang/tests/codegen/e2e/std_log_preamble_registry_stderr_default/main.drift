@@ -12,9 +12,7 @@ fn main() nothrow -> Int {
 	}
 	var b = log.config_builder();
 	val lg = log.create_logger("main", b.build());
-	if not lg.info("preamble-sink", {"ok": 1}) {
-		return 2;
-	}
+	lg.info("preamble-sink", {"ok": 1});
 	val _ = lg.flush(conc.Duration(millis = 10));
 	return 0;
 }

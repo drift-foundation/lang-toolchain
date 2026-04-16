@@ -59,7 +59,7 @@ import std.log as log;
 fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val logger = log.create_logger("main", b.build());
-	val _ = log.info!(logger);
+	log.info!(logger);
 	return 0;
 }
 """
@@ -77,7 +77,7 @@ import std.log as log;
 fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val logger = log.create_logger("main", b.build());
-	val _ = log.info!(logger, "ev", attrs = {:});
+	log.info!(logger, "ev", attrs = {:});
 	return 0;
 }
 """

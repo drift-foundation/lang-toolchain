@@ -13,12 +13,8 @@ fn _with_ctx(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow
 	}
 	match st.peek() {
 		Some(top) => {
-			if not main.info_ctx("auth-start", top) {
-				return 3;
-			}
-			if not main.info_ctx_attrs("auth-failed", top, {"user": DiagnosticValue::String("u-override"), "code": DiagnosticValue::Int(401)}) {
-				return 4;
-			}
+			main.info_ctx("auth-start", top);
+			main.info_ctx_attrs("auth-failed", top, {"user": DiagnosticValue::String("u-override"), "code": DiagnosticValue::Int(401)});
 		},
 		None => {
 			return 5;
@@ -41,9 +37,7 @@ fn run() -> Int {
 	if st.depth() != 0 {
 		return 6;
 	}
-	if not main.info("auth-end", {"ok": true}) {
-		return 7;
-	}
+	main.info("auth-end", {"ok": true});
 	return 0;
 }
 

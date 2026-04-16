@@ -11,9 +11,7 @@ fn _inner(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow ->
 	val g2 = st.push(move inner);
 	match st.peek() {
 		Some(top) => {
-			if not main.info_ctx_attrs("inner", top, {"req": DiagnosticValue::String("r-override"), "code": DiagnosticValue::Int(500)}) {
-				return 31;
-			}
+			main.info_ctx_attrs("inner", top, {"req": DiagnosticValue::String("r-override"), "code": DiagnosticValue::Int(500)});
 		},
 		None => {
 			return 32;
@@ -29,9 +27,7 @@ fn _outer(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow ->
 	val g1 = st.push(move outer);
 	match st.peek() {
 		Some(top) => {
-			if not main.info_ctx("outer-before", top) {
-				return 21;
-			}
+			main.info_ctx("outer-before", top);
 		},
 		None => {
 			return 22;
@@ -43,9 +39,7 @@ fn _outer(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow ->
 	}
 	match st.peek() {
 		Some(top2) => {
-			if not main.info_ctx("outer-after", top2) {
-				return 23;
-			}
+			main.info_ctx("outer-after", top2);
 		},
 		None => {
 			return 24;
@@ -68,9 +62,7 @@ fn run() -> Int {
 	if st.depth() != 0 {
 		return 2;
 	}
-	if not main.info("after-all", {"ok": true}) {
-		return 3;
-	}
+	main.info("after-all", {"ok": true});
 	return 0;
 }
 

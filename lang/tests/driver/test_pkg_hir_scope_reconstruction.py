@@ -145,7 +145,7 @@ pub fn main() nothrow -> Int {
 	cb.min_level(log.Level::Debug());
 	val cfg = cb.build();
 	val logger = log.create_logger("test", cfg);
-	val _ = logger.info("test", {"k": fmt.format_int(1)});
+	logger.info("test", {"k": fmt.format_int(1)});
 	return 0;
 }
 """

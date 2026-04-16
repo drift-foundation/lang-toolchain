@@ -10,12 +10,8 @@ fn _with_ctx() -> Int {
 	val st = rt.expect<type applog.AppLoggerState>(rt.global_registry(), "missing-logger-state");
 	match applog.current_context() {
 		Some(ctx) => {
-			if not log.info!(&st.security, "auth-start", ctx) {
-				return 3;
-			}
-			if not log.info!(&st.security, "auth-failed", ctx, {"req": DiagnosticValue::String("r-2"), "code": DiagnosticValue::Int(401)}) {
-				return 4;
-			}
+			log.info!(&st.security, "auth-start", ctx);
+			log.info!(&st.security, "auth-failed", ctx, {"req": DiagnosticValue::String("r-2"), "code": DiagnosticValue::Int(401)});
 		},
 		None => {
 			return 5;
@@ -29,16 +25,12 @@ fn run() -> Int {
 		return 1;
 	}
 	val st = rt.expect<type applog.AppLoggerState>(rt.global_registry(), "missing-logger-state");
-	if not log.info!(&st.security, "startup") {
-		return 2;
-	}
+	log.info!(&st.security, "startup");
 	val rc = _with_ctx();
 	if rc != 0 {
 		return rc;
 	}
-	if not log.info!(&st.security, "after-scope") {
-		return 6;
-	}
+	log.info!(&st.security, "after-scope");
 	return 0;
 }
 

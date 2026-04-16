@@ -23,10 +23,10 @@ pub fn main() nothrow -> Int {
 \tcfgb.sink(log.stderr_sink());
 \tcfgb.min_level(log.Level::Debug());
 \tval logger = log.create_logger("test", cfgb.build());
-\tval _ = logger.debug("debug-ev");
-\tval _ = logger.info("info-ev");
-\tval _ = logger.error("error-ev");
-\tval _ = logger.info("with-attrs", {"k": "v"});
+\tlogger.debug("debug-ev");
+\tlogger.info("info-ev");
+\tlogger.error("error-ev");
+\tlogger.info("with-attrs", {"k": "v"});
 \treturn 0;
 }
 """

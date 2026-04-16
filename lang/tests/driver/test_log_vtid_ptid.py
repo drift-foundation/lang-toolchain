@@ -22,7 +22,7 @@ pub fn main() nothrow -> Int {
 \tcfgb.min_level(log.Level::Info());
 \tcfgb.formatter(log.FormatterKind::JsonIso8601());
 \tval logger = log.create_logger("test", cfgb.build());
-\tval _ = logger.info("ev");
+\tlogger.info("ev");
 \treturn 0;
 }
 """

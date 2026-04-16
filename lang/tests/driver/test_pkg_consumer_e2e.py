@@ -253,9 +253,7 @@ fn main() nothrow -> Int {
 \tcfg_builder.sink(log.stderr_sink());
 \tval cfg = cfg_builder.build();
 \tval logger = log.create_logger("test", cfg);
-\tif not logger.info("ev", {"k": 1}) {
-\t\treturn 1;
-\t}
+\tlogger.info("ev", {"k": 1});
 \treturn 0;
 }
 """

@@ -775,52 +775,52 @@ implement Logger {
 		return true;
 	}
 
-	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-		return _emit(self, Level::Debug(), ev, move attrs);
+	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit(self, Level::Debug(), ev, move attrs);
 	}
 
-	pub fn debug(self: &Logger, ev: String) nothrow -> Bool {
-		return _emit_no_attrs(self, Level::Debug(), ev);
+	pub fn debug(self: &Logger, ev: String) nothrow -> Void {
+		val _ = _emit_no_attrs(self, Level::Debug(), ev);
 	}
 
-	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
-		return _emit_ctx(self, Level::Debug(), ev, ctx);
+	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_ctx(self, Level::Debug(), ev, ctx);
 	}
 
-	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
-		return _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
+	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
 	}
 
-	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-		return _emit(self, Level::Info(), ev, move attrs);
+	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit(self, Level::Info(), ev, move attrs);
 	}
 
-	pub fn info(self: &Logger, ev: String) nothrow -> Bool {
-		return _emit_no_attrs(self, Level::Info(), ev);
+	pub fn info(self: &Logger, ev: String) nothrow -> Void {
+		val _ = _emit_no_attrs(self, Level::Info(), ev);
 	}
 
-	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
-		return _emit_ctx(self, Level::Info(), ev, ctx);
+	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_ctx(self, Level::Info(), ev, ctx);
 	}
 
-	pub fn info_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
-		return _emit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
+	pub fn info_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
 	}
 
-	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
-		return _emit(self, Level::Error(), ev, move attrs);
+	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit(self, Level::Error(), ev, move attrs);
 	}
 
-	pub fn error(self: &Logger, ev: String) nothrow -> Bool {
-		return _emit_no_attrs(self, Level::Error(), ev);
+	pub fn error(self: &Logger, ev: String) nothrow -> Void {
+		val _ = _emit_no_attrs(self, Level::Error(), ev);
 	}
 
-	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Bool {
-		return _emit_ctx(self, Level::Error(), ev, ctx);
+	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_ctx(self, Level::Error(), ev, ctx);
 	}
 
-	pub fn error_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
-		return _emit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
+	pub fn error_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
 	}
 }
 
@@ -992,62 +992,62 @@ fn _dv_json(dv: &DiagnosticValue) nothrow -> String {
 	return "null";
 }
 
-pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
+pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.debug(ev);
+	logger.debug(ev);
 }
 
-pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.debug_ctx(ev, ctx);
+	logger.debug_ctx(ev, ctx);
 }
 
-pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.debug_ctx_attrs(ev, ctx, move attrs);
+	logger.debug_ctx_attrs(ev, ctx, move attrs);
 }
 
-pub fn macro_debug<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+pub fn macro_debug<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
-	return logger.debug(ev, move attrs);
+	logger.debug(ev, move attrs);
 }
 
-pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
+pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.info(ev);
+	logger.info(ev);
 }
 
-pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.info_ctx(ev, ctx);
+	logger.info_ctx(ev, ctx);
 }
 
-pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.info_ctx_attrs(ev, ctx, move attrs);
+	logger.info_ctx_attrs(ev, ctx, move attrs);
 }
 
-pub fn macro_info<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+pub fn macro_info<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
-	return logger.info(ev, move attrs);
+	logger.info(ev, move attrs);
 }
 
-pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Bool {
+pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.error(ev);
+	logger.error(ev);
 }
 
-pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Bool {
+pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.error_ctx(ev, ctx);
+	logger.error_ctx(ev, ctx);
 }
 
-pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Bool {
+pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	return logger.error_ctx_attrs(ev, ctx, move attrs);
+	logger.error_ctx_attrs(ev, ctx, move attrs);
 }
 
-pub fn macro_error<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Bool require V is Debuggable {
+pub fn macro_error<V>(logger: &Logger, ev: String, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
 	val _ = move src;
-	return logger.error(ev, move attrs);
+	logger.error(ev, move attrs);
 }

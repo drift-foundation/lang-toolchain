@@ -69,7 +69,7 @@ def test_empty_map_generic_debuggable_param(tmp_path: Path) -> None:
 		"\tcfgb.sink(log.stderr_sink());\n"
 		"\tcfgb.min_level(log.Level::Error());\n"
 		"\tval logger = log.create_logger(\"test\", cfgb.build());\n"
-		"\tval _ = logger.info(\"event\", {:});\n"
+		"\tlogger.info(\"event\", {:});\n"
 		"\treturn 0;\n"
 		"}\n"
 	)
@@ -93,7 +93,7 @@ def test_nonempty_map_unchanged(tmp_path: Path) -> None:
 		"\tcfgb.sink(log.stderr_sink());\n"
 		"\tcfgb.min_level(log.Level::Error());\n"
 		"\tval logger = log.create_logger(\"test\", cfgb.build());\n"
-		"\tval _ = logger.info(\"event\", {\"k\": \"v\"});\n"
+		"\tlogger.info(\"event\", {\"k\": \"v\"});\n"
 		"\treturn 0;\n"
 		"}\n"
 	)

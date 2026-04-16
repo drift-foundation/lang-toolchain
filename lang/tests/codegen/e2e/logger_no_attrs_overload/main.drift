@@ -10,12 +10,12 @@ pub fn main() nothrow -> Int {
 	val logger = log.create_logger("test", cfgb.build());
 
 	// No-attrs overloads (the new API)
-	val _ = logger.debug("debug-event");
-	val _ = logger.info("info-event");
-	val _ = logger.error("error-event");
+	logger.debug("debug-event");
+	logger.info("info-event");
+	logger.error("error-event");
 
 	// Attrs overloads (must still work)
-	val _ = logger.info("with-attrs", {"k": "v"});
+	logger.info("with-attrs", {"k": "v"});
 
 	return 0;
 }

@@ -21,8 +21,8 @@ pub fn main() nothrow -> Int {
 	// The HashMap takes ownership of it.
 	// Logger::info receives the HashMap by value.
 	// When info() returns, the HashMap must be dropped, freeing the string.
-	val _ = logger.info("test-event", {"port": fmt.format_int(42)});
-	val _ = logger.info("test-multi", {"a": fmt.format_int(1), "b": fmt.format_int(2)});
+	logger.info("test-event", {"port": fmt.format_int(42)});
+	logger.info("test-multi", {"a": fmt.format_int(1), "b": fmt.format_int(2)});
 
 	return 0;
 }

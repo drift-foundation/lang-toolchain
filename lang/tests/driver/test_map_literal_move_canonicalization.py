@@ -55,7 +55,7 @@ fn main() nothrow -> Int {
 	val cfg = cfgb.build();
 	val lg = log.create_logger("main", cfg);
 	val doc = Document(name = "contract.pdf", size = 42);
-	val _ = lg.debug("document-indexed", {"doc": move doc});
+	lg.debug("document-indexed", {"doc": move doc});
 	return 0;
 }
 """.lstrip(),
