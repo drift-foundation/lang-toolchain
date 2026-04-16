@@ -120,8 +120,15 @@ def _extract_doc_comments(source: str) -> dict[int, str]:
 				block.append(raw[3:])
 			i += 1
 		if block:
-			# Skip blank lines between comment and declaration
-			while i < len(lines) and not lines[i].strip():
+			# Skip blank lines and `@annotation` lines between the comment
+			# and the declaration we're keying to.  Annotations like
+			# `@test_build_only` and `@intrinsic` sit on their own line
+			# above the `pub fn`/`pub struct`/etc. declaration; without
+			# this skip, the doc comment is keyed to the annotation line
+			# and the renderer never finds it.
+			while i < len(lines) and (
+				not lines[i].strip() or lines[i].lstrip().startswith("@")
+			):
 				i += 1
 			if i < len(lines):
 				# Map to 1-based line number
@@ -254,7 +261,12 @@ def extract_module_doc(source: str, filename: str = "<source>") -> tuple[str, li
 		if impl.trait is not None:
 			continue  # trait impls are internal
 		target_name = _format_type(impl.target) if impl.target else ""
-		if target_name not in exported and target_name not in _BUILTIN_TYPES:
+		# Strip generic parameters (`Arc<T>` -> `Arc`) when comparing
+		# against the export set, since exports list the bare type
+		# name.  Without this, generic impl blocks like
+		# `implement<T> Arc<T> { ... }` would be silently filtered out.
+		target_base = target_name.split("<", 1)[0] if "<" in target_name else target_name
+		if target_base not in exported and target_base not in _BUILTIN_TYPES:
 			continue
 		for m in impl.methods:
 			if not m.is_pub:
@@ -264,9 +276,11 @@ def extract_module_doc(source: str, filename: str = "<source>") -> tuple[str, li
 				continue
 			doc = doc_comments.get(m.loc.line, "")
 			sig = _format_fn_signature(m)
-			# Tag with target type for grouped rendering
+			# Tag with target type for grouped rendering — use the base
+			# name (without generic params) to keep section headings
+			# clean.
 			entry = DocEntry("method", m.name, sig, doc)
-			entry.kind = f"method:{target_name}"
+			entry.kind = f"method:{target_base}"
 			entries.append(entry)
 
 	return module_name, entries

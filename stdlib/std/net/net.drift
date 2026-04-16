@@ -23,16 +23,42 @@ export {
 	test_tcp_listener
 };
 
+/// IPv4 socket address (host + port).
+///
+/// Construct via `socket_addr(ip, port)`; `ip` is the dotted-quad
+/// IPv4 string (`"127.0.0.1"`, `"0.0.0.0"`, etc.).  Pass `port = 0`
+/// when binding to request an ephemeral port from the kernel.
+///
+/// **See also:** `socket_addr`, `SocketAddrV6`, `listen`, `connect`,
+/// `udp_bind`.
 pub struct SocketAddr {
 	pub ip: String,
 	pub port: Int
 }
 
+/// IPv6 socket address (host + port).
+///
+/// Construct via `socket_addr_v6(ip, port)`; `ip` is the colon-hex
+/// IPv6 string (`"::1"`, `"fe80::1"`, etc.).  Pass `port = 0` when
+/// binding to request an ephemeral port from the kernel.
+///
+/// **See also:** `socket_addr_v6`, `SocketAddr`, `udp_bind_v6`.
 pub struct SocketAddrV6 {
 	pub ip: String,
 	pub port: Int
 }
 
+/// Error type returned by `std.net` socket operations.
+///
+/// `Errno(code)` carries the kernel's errno from a failed syscall.
+/// `WouldBlock` indicates the operation's deadline elapsed before the
+/// kernel produced a result (distinct from `Errno(EAGAIN)`, which is
+/// retried internally).  `RequiresVirtualThread` is the synthetic case
+/// returned when a blocking operation is invoked from outside a
+/// virtual thread.
+///
+/// `NetError` implements `core.Throw`, so callers can use `or_throw`
+/// or rely on the auto-try convention inside `throws` functions.
 pub variant NetError {
 	Errno(code: Int),
 	WouldBlock,
@@ -65,20 +91,53 @@ implement core.Throw for NetError {
 	}
 }
 
+/// Connected TCP stream backed by a non-blocking file descriptor.
+///
+/// Obtained from `connect()` (client side) or `accept()` on a
+/// `TcpListener` (server side).  All read/write operations require a
+/// virtual thread and may return `NetError::WouldBlock` if the
+/// configured timeout elapses before the kernel can satisfy the call.
+///
+/// **See also:** `connect`, `accept`, `TcpStream.read`,
+/// `TcpStream.write`, `TcpStream.close`.
 pub struct TcpStream {
 	fd: Int
 }
 
+/// Listening TCP socket bound to an address.
+///
+/// Obtained from `listen(addr, timeout)`.  Use `accept` (or the
+/// `.accept` method) to receive incoming `TcpStream` connections.
+///
+/// **See also:** `listen`, `accept`, `TcpListener.local_port`.
 pub struct TcpListener {
 	fd: Int
 }
 
+/// Bound UDP socket.
+///
+/// Obtained from `udp_bind(addr)` or `udp_bind_v6(addr)`.  Use
+/// `.send_to` / `.recv_from` (and the `_v6` variants) for datagram
+/// I/O.  All blocking operations require a virtual thread.
+///
+/// **See also:** `udp_bind`, `udp_bind_v6`, `UdpSocket.send_to`,
+/// `UdpSocket.recv_from`, `UdpSocket.close`.
 pub struct UdpSocket {
 	fd: Int
 }
 
+/// Errno value for "interrupted system call" (`EINTR`).  Operations
+/// that hit this code retry internally and never surface it to callers.
 pub const NET_EINTR: Int = 4;
+
+/// Errno value for "resource temporarily unavailable" (`EAGAIN`).
+/// Operations that hit this code park on the reactor (in a virtual
+/// thread) or busy-wait (on the main thread) until the deadline
+/// elapses, then return `NetError::WouldBlock`.
 pub const NET_EAGAIN: Int = 11;
+
+/// Polling quantum (in milliseconds) used when a main-thread caller
+/// has to wait on I/O without a virtual thread to park.
 pub const MAIN_THREAD_IO_POLL_QUANTUM_MS: Int = 10;
 
 fn _deadline_from_timeout(timeout: conc.Duration) nothrow -> Int {
@@ -128,14 +187,45 @@ fn _park_main_thread_io(remaining: Int) nothrow -> Void {
 	thread.vt_park_until(slice);
 }
 
+/// Constructs an IPv4 `SocketAddr`.
+///
+/// **Parameters:**
+/// - `ip` — dotted-quad IPv4 string.
+/// - `port` — TCP/UDP port; pass `0` to request an ephemeral port.
+///
+/// **See also:** `SocketAddr`, `socket_addr_v6`.
+///
+/// **Example:** `examples/tcp_echo/main.drift`.
 pub fn socket_addr(ip: String, port: Int) nothrow -> SocketAddr {
 	return SocketAddr(ip = ip, port = port);
 }
 
+/// Constructs an IPv6 `SocketAddr`.
+///
+/// **Parameters:**
+/// - `ip` — colon-hex IPv6 string.
+/// - `port` — TCP/UDP port; pass `0` to request an ephemeral port.
+///
+/// **See also:** `SocketAddrV6`, `socket_addr`.
 pub fn socket_addr_v6(ip: String, port: Int) nothrow -> SocketAddrV6 {
 	return SocketAddrV6(ip = ip, port = port);
 }
 
+/// Binds a UDP socket to the given IPv4 address.
+///
+/// Synchronous and non-blocking — fails immediately with
+/// `Errno(code)` if the kernel rejects the bind.
+///
+/// **Parameters:**
+/// - `addr` — local address to bind to.  Pass `port = 0` to request
+///   an ephemeral port.
+///
+/// **Returns:** `Ok(UdpSocket)` on success; `Err(NetError)` on bind
+/// failure.
+///
+/// **See also:** `udp_bind_v6`, `UdpSocket`.
+///
+/// **Example:** `examples/udp_ping/main.drift`.
 pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
 	val fd = thread.net_udp_bind(&addr.ip, addr.port);
 	if fd < 0 {
@@ -144,6 +234,15 @@ pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
 	return core.Result::Ok(UdpSocket(fd = fd));
 }
 
+/// IPv6 form of `udp_bind`.
+///
+/// **Parameters:**
+/// - `addr` — local IPv6 address to bind to.
+///
+/// **Returns:** `Ok(UdpSocket)` on success; `Err(NetError)` on bind
+/// failure.
+///
+/// **See also:** `udp_bind`, `UdpSocket`.
 pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetError> {
 	val fd = thread.net_udp_bind_v6(&addr.ip, addr.port);
 	if fd < 0 {
@@ -152,6 +251,24 @@ pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetErr
 	return core.Result::Ok(UdpSocket(fd = fd));
 }
 
+/// Creates a listening TCP socket bound to `addr`.
+///
+/// Retries internally on `EINTR`.  If the kernel returns `EAGAIN`,
+/// busy-polls (on the main thread) until the deadline elapses, then
+/// returns `NetError::WouldBlock`.
+///
+/// **Parameters:**
+/// - `addr` — local address to bind to; `port = 0` requests an
+///   ephemeral port.
+/// - `timeout` — bound on retry duration when the kernel returns
+///   `EAGAIN`.
+///
+/// **Returns:** `Ok(TcpListener)` on success.  `Err(NetError)` on
+/// bind/listen failure or timeout.
+///
+/// **See also:** `accept`, `TcpListener.local_port`, `connect`.
+///
+/// **Example:** `examples/tcp_echo/main.drift`.
 pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpListener, NetError> {
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -179,6 +296,21 @@ pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+/// Accepts the next pending connection on the listener, blocking the
+/// calling virtual thread until one arrives or the timeout elapses.
+///
+/// Must be called from a virtual thread (`vt_current() != 0`);
+/// otherwise returns `Err(NetError::RequiresVirtualThread)`.
+///
+/// **Parameters:**
+/// - `timeout` — maximum time to wait for an incoming connection
+///   before returning `NetError::WouldBlock`.
+///
+/// **Returns:** `Ok(TcpStream)` for the accepted connection.
+/// `Err(NetError::WouldBlock)` if the timeout elapses with no pending
+/// connection.  `Err(NetError::Errno(code))` on accept failure.
+///
+/// **See also:** `accept`, `listen`, `TcpStream`.
 pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 	if thread.vt_current() == 0 {
 		return core.Result::Err(NetError::RequiresVirtualThread());
@@ -209,6 +341,24 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+/// Establishes a TCP connection to `addr`, blocking the calling
+/// virtual thread until the connection is established or the timeout
+/// elapses.
+///
+/// Must be called from a virtual thread; otherwise returns
+/// `Err(NetError::RequiresVirtualThread)`.
+///
+/// **Parameters:**
+/// - `addr` — remote address to connect to.
+/// - `timeout` — maximum time to wait for the connect to complete
+///   before returning `NetError::WouldBlock`.
+///
+/// **Returns:** `Ok(TcpStream)` on success.  `Err(NetError)` on
+/// connect failure (refused, unreachable, timed out, etc.).
+///
+/// **See also:** `listen`, `TcpStream`.
+///
+/// **Example:** `examples/tcp_client_server/client.drift`.
 pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 	if thread.vt_current() == 0 {
 		return core.Result::Err(NetError::RequiresVirtualThread());
@@ -239,12 +389,20 @@ pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+/// Test-only constructor that wraps an eventfd as a `TcpStream`.
+///
+/// Used by tests that need a `TcpStream` shape backed by a
+/// signalable file descriptor without setting up a real socket pair.
 @test_build_only
 pub fn test_tcp_stream() nothrow -> TcpStream {
 	val fd = thread.test_eventfd_create();
 	return TcpStream(fd = fd);
 }
 
+/// Test-only constructor that wraps an eventfd as a `TcpListener`.
+///
+/// Used by tests that need a `TcpListener` shape backed by a
+/// signalable file descriptor.
 @test_build_only
 pub fn test_tcp_listener() nothrow -> TcpListener {
 	val fd = thread.test_eventfd_create();
@@ -252,6 +410,21 @@ pub fn test_tcp_listener() nothrow -> TcpListener {
 }
 
 implement TcpStream {
+	/// Reads up to `buf.cap` bytes from the stream into `buf`.
+	///
+	/// On success, sets `buf.len` to the number of bytes read.  Blocks
+	/// the calling virtual thread until data arrives or the timeout
+	/// elapses.  Must be called from a virtual thread; otherwise
+	/// returns `Err(NetError::RequiresVirtualThread)`.
+	///
+	/// **Parameters:**
+	/// - `buf` — destination buffer.
+	/// - `timeout` — maximum time to wait for data.
+	///
+	/// **Returns:** `Ok(n)` bytes read.  `Err(NetError::WouldBlock)` on
+	/// timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	///
+	/// **See also:** `TcpStream.write`, `TcpStream.close`.
 	pub fn read(self: &TcpStream, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -286,6 +459,20 @@ implement TcpStream {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// Writes the first `buf.len` bytes from `buf` to the stream.
+	///
+	/// Blocks the calling virtual thread until the write is accepted
+	/// by the kernel or the timeout elapses.  Must be called from a
+	/// virtual thread.
+	///
+	/// **Parameters:**
+	/// - `buf` — source bytes (read but not modified).
+	/// - `timeout` — maximum time to wait for the kernel to accept.
+	///
+	/// **Returns:** `Ok(n)` bytes written.  `Err(NetError::WouldBlock)`
+	/// on timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	///
+	/// **See also:** `TcpStream.read`, `TcpStream.close`.
 	pub fn write(self: &TcpStream, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -319,6 +506,20 @@ implement TcpStream {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// Closes the underlying file descriptor.
+	///
+	/// Must be called from a virtual thread.  After a successful
+	/// close, further reads/writes on this `TcpStream` will fail with
+	/// `Errno`.
+	///
+	/// **Parameters:**
+	/// - `timeout` — bound on retry duration when the kernel returns
+	///   `EAGAIN`.
+	///
+	/// **Returns:** `Ok(void)` on success.  `Err(NetError)` on close
+	/// failure or timeout.
+	///
+	/// **See also:** `TcpStream.read`, `TcpStream.write`.
 	pub fn close(self: &TcpStream, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -349,10 +550,29 @@ implement TcpStream {
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+	/// Returns the underlying file descriptor without transferring
+	/// ownership.
+	///
+	/// Provided for interoperability with code that needs the raw fd
+	/// (for example, to register the stream with a custom reactor).
+	/// Do not close the returned fd directly; use `TcpStream.close`.
 	pub fn raw_fd(self: &TcpStream) nothrow -> Int {
 		return self.fd;
 	}
 
+	/// Enables or disables `TCP_NODELAY` (Nagle's algorithm).
+	///
+	/// `enabled = true` disables Nagle, sending small writes
+	/// immediately.  Useful for latency-sensitive protocols (RPC,
+	/// interactive shells).
+	///
+	/// **Parameters:**
+	/// - `enabled` — `true` to disable Nagle, `false` to enable.
+	///
+	/// **Returns:** `Ok(void)` on success.  `Err(NetError::Errno(code))`
+	/// if the setsockopt call fails.
+	///
+	/// **See also:** `TcpStream.nodelay`.
 	pub fn set_nodelay(self: &TcpStream, enabled: Bool) nothrow -> core.Result<Void, NetError> {
 		val flag = enabled ? 1 : 0;
 		val r = thread.net_set_nodelay(self.fd, flag);
@@ -363,6 +583,13 @@ implement TcpStream {
 		return core.Result::Ok(core.void_value());
 	}
 
+	/// Reads the current `TCP_NODELAY` setting on the stream.
+	///
+	/// **Returns:** `Ok(true)` if Nagle is disabled, `Ok(false)` if
+	/// enabled.  `Err(NetError::Errno(code))` if the getsockopt call
+	/// fails.
+	///
+	/// **See also:** `TcpStream.set_nodelay`.
 	pub fn nodelay(self: &TcpStream) nothrow -> core.Result<Bool, NetError> {
 		val r = thread.net_get_nodelay(self.fd);
 		if r < 0 {
@@ -372,6 +599,10 @@ implement TcpStream {
 		return core.Result::Ok(r != 0);
 	}
 
+	/// Test-only helper that writes `value` to the underlying eventfd.
+	///
+	/// Used by tests to wake a stream backed by a `test_tcp_stream`
+	/// fixture.  No effect on real sockets.
 	@test_build_only
 	pub fn test_signal(self: &TcpStream, value: Int) nothrow -> Void {
 		thread.test_eventfd_write(self.fd, value);
@@ -379,25 +610,53 @@ implement TcpStream {
 }
 
 implement TcpListener {
+	/// Method form of `accept`.  See that function for full semantics.
 	pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 		return accept(self, timeout);
 	}
 
+	/// Returns the local port the listener is bound to.
+	///
+	/// Useful when `listen()` was called with `port = 0` to request
+	/// an ephemeral port — call this afterwards to discover the actual
+	/// port the kernel assigned.
 	pub fn local_port(self: &TcpListener) nothrow -> Int {
 		return thread.net_listener_port(self.fd);
 	}
 
+	/// Test-only helper that writes `value` to the underlying eventfd.
+	///
+	/// Used by tests to wake a listener backed by a
+	/// `test_tcp_listener` fixture.
 	@test_build_only
 	pub fn test_signal(self: &TcpListener, value: Int) nothrow -> Void {
 		thread.test_eventfd_write(self.fd, value);
 	}
 
+	/// Test alias for `local_port` retained for symmetry with
+	/// `UdpSocket.test_local_port`.
 	pub fn test_local_port(self: &TcpListener) nothrow -> Int {
 		return self.local_port();
 	}
 }
 
 implement UdpSocket {
+	/// Sends a UDP datagram to the IPv4 address `addr`.
+	///
+	/// Sends `buf.len` bytes from `buf`.  Blocks the calling virtual
+	/// thread if the kernel's send buffer is full, until either the
+	/// send completes or the timeout elapses.  Must be called from a
+	/// virtual thread.
+	///
+	/// **Parameters:**
+	/// - `addr` — destination address.
+	/// - `buf` — datagram payload.
+	/// - `timeout` — maximum time to wait for the send to be accepted.
+	///
+	/// **Returns:** `Ok(n)` bytes sent.  `Err(NetError::WouldBlock)` on
+	/// timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	///
+	/// **See also:** `UdpSocket.send_to_v6`, `UdpSocket.recv_from`.
 	pub fn send_to(self: &UdpSocket, addr: &SocketAddr, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -430,6 +689,16 @@ implement UdpSocket {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// IPv6 form of `UdpSocket.send_to`.
+	///
+	/// **Parameters:**
+	/// - `addr` — destination IPv6 address.
+	/// - `buf` — datagram payload.
+	/// - `timeout` — maximum time to wait for the send to be accepted.
+	///
+	/// **Returns:** `Ok(n)` bytes sent; `Err(NetError)` on failure.
+	///
+	/// **See also:** `UdpSocket.send_to`, `UdpSocket.recv_from_v6`.
 	pub fn send_to_v6(self: &UdpSocket, addr: &SocketAddrV6, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -462,6 +731,24 @@ implement UdpSocket {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// Receives the next IPv4 UDP datagram into `buf`, recording the
+	/// sender's address in `addr_out`.
+	///
+	/// On success, sets `buf.len` to the number of bytes received and
+	/// populates `addr_out.ip` and `addr_out.port`.  Blocks the
+	/// calling virtual thread until a datagram arrives or the timeout
+	/// elapses.  Must be called from a virtual thread.
+	///
+	/// **Parameters:**
+	/// - `addr_out` — destination for the sender's address; mutated
+	///   in place.
+	/// - `buf` — destination buffer.
+	/// - `timeout` — maximum time to wait for a datagram.
+	///
+	/// **Returns:** `Ok(n)` bytes received.  `Err(NetError::WouldBlock)`
+	/// on timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	///
+	/// **See also:** `UdpSocket.recv_from_v6`, `UdpSocket.send_to`.
 	pub fn recv_from(self: &UdpSocket, addr_out: &mut SocketAddr, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -495,6 +782,17 @@ implement UdpSocket {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// IPv6 form of `UdpSocket.recv_from`.
+	///
+	/// **Parameters:**
+	/// - `addr_out` — destination for the sender's IPv6 address;
+	///   mutated in place.
+	/// - `buf` — destination buffer.
+	/// - `timeout` — maximum time to wait for a datagram.
+	///
+	/// **Returns:** `Ok(n)` bytes received; `Err(NetError)` on failure.
+	///
+	/// **See also:** `UdpSocket.recv_from`, `UdpSocket.send_to_v6`.
 	pub fn recv_from_v6(self: &UdpSocket, addr_out: &mut SocketAddrV6, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -528,6 +826,19 @@ implement UdpSocket {
 		return core.Result::Err(NetError::Errno(-1));
 	}
 
+	/// Closes the underlying file descriptor.
+	///
+	/// Must be called from a virtual thread.  After a successful
+	/// close, further sends/receives on this `UdpSocket` will fail.
+	///
+	/// **Parameters:**
+	/// - `timeout` — bound on retry duration when the kernel returns
+	///   `EAGAIN`.
+	///
+	/// **Returns:** `Ok(void)` on success; `Err(NetError)` on close
+	/// failure or timeout.
+	///
+	/// **See also:** `UdpSocket.send_to`, `UdpSocket.recv_from`.
 	pub fn close(self: &UdpSocket, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
 		if thread.vt_current() == 0 {
 			return core.Result::Err(NetError::RequiresVirtualThread());
@@ -558,10 +869,16 @@ implement UdpSocket {
 	return core.Result::Err(NetError::Errno(-1));
 }
 
+	/// Test alias for `UdpSocket.local_port` retained for symmetry
+	/// with `TcpListener.test_local_port`.
 	pub fn test_local_port(self: &UdpSocket) nothrow -> Int {
 		return self.local_port();
 	}
 
+	/// Returns the local port the UDP socket is bound to.
+	///
+	/// Useful when `udp_bind()` was called with `port = 0` to request
+	/// an ephemeral port.
 	pub fn local_port(self: &UdpSocket) nothrow -> Int {
 		return thread.net_udp_local_port(self.fd);
 	}

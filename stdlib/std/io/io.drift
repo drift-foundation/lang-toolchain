@@ -64,11 +64,24 @@ export {
 	FILE_MODE_DEFAULT
 };
 
+/// Tag selecting an I/O readiness condition (read-ready or write-ready)
+/// on a file descriptor.
+///
+/// **See also:** `InputStream`, `OutputStream`.
 pub variant IoInterest {
 	Read,
 	Write
 }
 
+/// Error type returned by I/O operations on `File`, `InputStream`,
+/// `OutputStream`, and the `Configured*` variants.
+///
+/// Wraps either a numeric errno (the kernel's error code, possibly
+/// translated via the `IO_ERR_*` constants) or a synthetic case
+/// indicating the call was made from outside a virtual thread.
+///
+/// **See also:** `io_error_code`, `is_would_block_error`,
+/// `is_eof_error`.
 pub variant IoError {
 	Errno(code: Int),
 	RequiresVirtualThread
@@ -96,11 +109,29 @@ implement core.Throw for IoError {
 	}
 }
 
+/// An open file descriptor with a tracking `closed` cell.
+///
+/// `File` is a low-level handle.  Most code should use the higher-level
+/// `ConfiguredFile` produced by `file_builder(path).build()`, which
+/// pairs the descriptor with a configured stream timeout.  Constructing
+/// a `File` directly from a raw fd is available via `file_from_fd` but
+/// is gated to test builds only.
+///
+/// **See also:** `ConfiguredFile`, `file_builder`, `file_from_fd`.
 pub struct File {
 	fd: Int,
 	closed: core.Cell<Bool>
 }
 
+/// Lazy builder for a `ConfiguredFile`.
+///
+/// Constructed via `file_builder(path)`.  Configurator methods
+/// (`.read`, `.write`, `.create`, `.truncate`, `.append`, `.mode`,
+/// `.timeout`) return new builders without performing any system calls;
+/// `.build` is the terminal step that opens the file descriptor.
+/// Configuration is value-copy; opening is explicit.
+///
+/// **See also:** `file_builder`, `FileBuilder.build`, `ConfiguredFile`.
 pub struct FileBuilder {
 	path: String,
 	opt_read: Bool,
@@ -112,49 +143,131 @@ pub struct FileBuilder {
 	timeout: conc.Duration
 }
 
+/// An open file paired with the timeout to use for reads and writes.
+///
+/// Produced by `FileBuilder.build`.  Use `configured_input_from_file`
+/// to wrap it in a `ConfiguredInputStream` for line-based reads.  The
+/// underlying file descriptor is closed when the inner `File` is
+/// dropped.
+///
+/// **See also:** `FileBuilder`, `configured_input_from_file`, `File`.
 pub struct ConfiguredFile {
 	inner: File,
 	timeout: conc.Duration
 }
 
+/// Cheap fd-only handle for non-blocking input.
+///
+/// `InputStream` carries no buffering, no timeout, and no max-line
+/// configuration; it is a pure file descriptor wrapper marked `Copy`.
+/// Use `InputStreamBuilder` (via `stdin_builder`) when you need a
+/// configured timeout or line-length cap.
+///
+/// **See also:** `stdin`, `InputStreamBuilder`, `ConfiguredInputStream`.
 pub struct InputStream {
 	fd: Int
 }
 
+/// Cheap fd-only handle for non-blocking output.
+///
+/// `OutputStream` carries no buffering and no timeout configuration;
+/// it is a pure file descriptor wrapper marked `Copy`.  Use
+/// `OutputStreamBuilder` (via `stdout_builder` / `stderr_builder`) when
+/// you need a configured stream timeout.
+///
+/// **See also:** `stdout`, `stderr`, `OutputStreamBuilder`,
+/// `ConfiguredOutputStream`.
 pub struct OutputStream {
 	fd: Int
 }
 
+/// Configurator for an `InputStream`.
+///
+/// Holds a file descriptor plus timeout and maximum-line-length
+/// settings.  Configure via the configurator methods, then call
+/// `.build` to produce a `ConfiguredInputStream`.
+///
+/// **See also:** `stdin_builder`, `ConfiguredInputStream`.
 pub struct InputStreamBuilder {
 	fd: Int,
 	timeout: conc.Duration,
 	max_line_bytes: Int
 }
 
+/// Configurator for an `OutputStream`.
+///
+/// Holds a file descriptor plus a timeout setting.  Configure via
+/// `.timeout`, then call `.build` to produce a
+/// `ConfiguredOutputStream`.
+///
+/// **See also:** `stdout_builder`, `stderr_builder`,
+/// `ConfiguredOutputStream`, `OutputStreamBuilder.build`.
 pub struct OutputStreamBuilder {
 	fd: Int,
 	timeout: conc.Duration
 }
 
+/// An input stream with a configured per-operation timeout and a cap
+/// on the maximum bytes accepted per line.
+///
+/// Produced by `InputStreamBuilder.build` or
+/// `configured_input_from_file`.  Reads block until data is available,
+/// the timeout elapses, or the line-length cap is reached.
+///
+/// **See also:** `InputStreamBuilder`, `configured_input_from_file`.
 pub struct ConfiguredInputStream {
 	fd: Int,
 	timeout: conc.Duration,
 	max_line_bytes: Int
 }
 
+/// An output stream with a configured per-operation timeout.
+///
+/// Produced by `OutputStreamBuilder.build`.  Writes block until the
+/// data is accepted by the kernel or the timeout elapses.
+///
+/// **See also:** `OutputStreamBuilder`.
 pub struct ConfiguredOutputStream {
 	fd: Int,
 	timeout: conc.Duration
 }
 
+/// Registry capability granting access to the process's standard
+/// input.
+///
+/// Stored in a `runtime.GlobalRegistry` by `install_process_stdio` /
+/// `install_process_preamble`.  Retrieved via
+/// `runtime.get<type ProcessStdinCapability>(reg)`.
+///
+/// **See also:** `install_process_stdio`, `install_process_preamble`.
 pub struct ProcessStdinCapability {
 	fd: Int
 }
 
+/// Registry capability granting access to the process's standard
+/// output.
+///
+/// Stored in a `runtime.GlobalRegistry` by `install_process_stdio` /
+/// `install_process_preamble`.  Retrieved via
+/// `runtime.get<type ProcessStdoutCapability>(reg)`.  Exposes
+/// `write_line(text)` for line-oriented stdout writes.
+///
+/// **See also:** `install_process_stdio`, `install_process_preamble`,
+/// `ProcessStdoutCapability.write_line`.
 pub struct ProcessStdoutCapability {
 	fd: Int
 }
 
+/// Registry capability granting access to the process's standard
+/// error.
+///
+/// Stored in a `runtime.GlobalRegistry` by `install_process_stdio` /
+/// `install_process_preamble`.  Retrieved via
+/// `runtime.get<type ProcessStderrCapability>(reg)`.  Exposes
+/// `write_line(text)` for line-oriented stderr writes.
+///
+/// **See also:** `install_process_stdio`, `install_process_preamble`,
+/// `ProcessStderrCapability.write_line`.
 pub struct ProcessStderrCapability {
 	fd: Int
 }
@@ -201,46 +314,153 @@ struct FileOpenOptions {
 	pub mode: Int
 }
 
+/// Test-only constructor that wraps an existing file descriptor in a
+/// `File` value.
+///
+/// Use the higher-level `file_builder(path).build()` for production
+/// code.  This entry exists for tests that need to construct a `File`
+/// without going through the builder pipeline.
+///
+/// **Parameters:**
+/// - `fd` — operating-system file descriptor to take ownership of.
+///
+/// **Returns:** a `File` wrapping `fd` with the closed-state cell
+/// initialized to `false`.
+///
+/// **See also:** `file_builder`, `File`.
 @test_build_only
 pub fn file_from_fd(fd: Int) nothrow -> File {
 	return File(fd = fd, closed = core.cell(false));
 }
 
+/// Test-only constructor that wraps a `ConfiguredFile` in a
+/// `ConfiguredInputStream`.
+///
+/// Production code should use `InputStreamBuilder.build` (or one of
+/// the `*_builder` helpers) to obtain a `ConfiguredInputStream`.
+///
+/// **Parameters:**
+/// - `max_line_bytes` — maximum line length the resulting stream
+///   accepts before returning `IO_ERR_LINE_TOO_LONG`.
+///
+/// **Returns:** a `ConfiguredInputStream` reading from the same fd as
+/// `self.inner`, with `self.timeout` and the supplied
+/// `max_line_bytes`.
 @test_build_only
 pub fn configured_input_from_file(self: &ConfiguredFile, max_line_bytes: Int) nothrow -> ConfiguredInputStream {
 	return ConfiguredInputStream(fd = self.inner.fd, timeout = self.timeout, max_line_bytes = max_line_bytes);
 }
 
+/// Returns a non-blocking input stream backed by the process's
+/// standard input (file descriptor 0).
+///
+/// The underlying file descriptor is set to non-blocking mode on the
+/// first call.  Use `stdin_builder` if you need to configure the
+/// timeout or maximum line length before constructing the stream.
+///
+/// **Returns:** an `InputStream` wrapping FD 0.
+///
+/// **See also:** `stdin_builder`, `InputStream`.
 pub fn stdin() nothrow -> InputStream {
 	val _ = thread.io_set_nonblocking(STDIN_FD);
 	return InputStream(fd = STDIN_FD);
 }
 
+/// Returns a non-blocking output stream backed by the process's
+/// standard output (file descriptor 1).
+///
+/// The underlying file descriptor is set to non-blocking mode on the
+/// first call.  Use `stdout_builder` if you need to configure the
+/// stream timeout before construction.
+///
+/// **Returns:** an `OutputStream` wrapping FD 1.
+///
+/// **See also:** `stdout_builder`, `stderr`, `OutputStream`.
 pub fn stdout() nothrow -> OutputStream {
 	val _ = thread.io_set_nonblocking(STDOUT_FD);
 	return OutputStream(fd = STDOUT_FD);
 }
 
+/// Returns a non-blocking output stream backed by the process's
+/// standard error (file descriptor 2).
+///
+/// The underlying file descriptor is set to non-blocking mode on the
+/// first call.  Use `stderr_builder` if you need to configure the
+/// stream timeout before construction.
+///
+/// **Returns:** an `OutputStream` wrapping FD 2.
+///
+/// **See also:** `stderr_builder`, `stdout`, `OutputStream`.
 pub fn stderr() nothrow -> OutputStream {
 	val _ = thread.io_set_nonblocking(STDERR_FD);
 	return OutputStream(fd = STDERR_FD);
 }
 
+/// Returns a builder for configuring an `InputStream` over standard
+/// input.
+///
+/// The builder starts with the default stream timeout
+/// (`STREAM_TIMEOUT_DEFAULT_MS`) and the default maximum line length
+/// (`STREAM_MAX_LINE_BYTES_DEFAULT`).  Configure further before
+/// calling the terminal `.build` method.  The underlying file
+/// descriptor is set to non-blocking mode on the first call.
+///
+/// **Returns:** an `InputStreamBuilder` wrapping FD 0.
+///
+/// **See also:** `stdin`, `InputStreamBuilder`.
 pub fn stdin_builder() nothrow -> InputStreamBuilder {
 	val _ = thread.io_set_nonblocking(STDIN_FD);
 	return InputStreamBuilder(fd = STDIN_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS), max_line_bytes = STREAM_MAX_LINE_BYTES_DEFAULT);
 }
 
+/// Returns a builder for configuring an `OutputStream` over standard
+/// output.
+///
+/// The builder starts with the default stream timeout
+/// (`STREAM_TIMEOUT_DEFAULT_MS`).  Configure further before calling
+/// the terminal `.build` method.  The underlying file descriptor is
+/// set to non-blocking mode on the first call.
+///
+/// **Returns:** an `OutputStreamBuilder` wrapping FD 1.
+///
+/// **See also:** `stdout`, `stderr_builder`, `OutputStreamBuilder`.
 pub fn stdout_builder() nothrow -> OutputStreamBuilder {
 	val _ = thread.io_set_nonblocking(STDOUT_FD);
 	return OutputStreamBuilder(fd = STDOUT_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
 }
 
+/// Returns a builder for configuring an `OutputStream` over standard
+/// error.
+///
+/// The builder starts with the default stream timeout
+/// (`STREAM_TIMEOUT_DEFAULT_MS`).  Configure further before calling
+/// the terminal `.build` method.  The underlying file descriptor is
+/// set to non-blocking mode on the first call.
+///
+/// **Returns:** an `OutputStreamBuilder` wrapping FD 2.
+///
+/// **See also:** `stderr`, `stdout_builder`, `OutputStreamBuilder`.
 pub fn stderr_builder() nothrow -> OutputStreamBuilder {
 	val _ = thread.io_set_nonblocking(STDERR_FD);
 	return OutputStreamBuilder(fd = STDERR_FD, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
 }
 
+/// Installs `stdin`, `stdout`, and `stderr` capabilities into `reg` as
+/// `ProcessStdinCapability`, `ProcessStdoutCapability`, and
+/// `ProcessStderrCapability` respectively.
+///
+/// Most callers should prefer `install_process_preamble`, which calls
+/// this against the global registry.
+///
+/// **Parameters:**
+/// - `reg` — registry to populate.
+///
+/// **Returns:** `true` if the install completed — either the
+/// capabilities were freshly inserted, or they were already present.
+/// `false` if a different value was already registered for one of the
+/// capability types and could not be replaced.
+///
+/// **See also:** `install_process_preamble`, `runtime.global_registry`.
 pub fn install_process_stdio(reg: &runtime.GlobalRegistry) nothrow -> Bool {
 	val stdin_cap = ProcessStdinCapability(fd = STDIN_FD);
 	if not reg.set<type ProcessStdinCapability>(stdin_cap) {
@@ -263,12 +483,34 @@ pub fn install_process_stdio(reg: &runtime.GlobalRegistry) nothrow -> Bool {
 	return true;
 }
 
+/// Convenience that calls `install_process_stdio` against the
+/// process-wide global registry.
+///
+/// Most application startup paths should call this once early in
+/// `main` to make `ProcessStdinCapability`, `ProcessStdoutCapability`,
+/// and `ProcessStderrCapability` available to downstream code via
+/// `runtime.global_registry`.
+///
+/// **Returns:** `true` on successful install (including the
+/// "already-installed" case).  `false` if a different value was
+/// already registered for one of the capability types.
+///
+/// **See also:** `install_process_stdio`, `runtime.global_registry`.
 pub fn install_process_preamble() nothrow -> Bool {
 	val reg = runtime.global_registry();
 	return install_process_stdio(reg);
 }
 
 implement ProcessStdoutCapability {
+	/// Writes `text` followed by a newline to the process's standard
+	/// output.
+	///
+	/// **Parameters:**
+	/// - `text` — line content; a trailing newline is appended.
+	///
+	/// **Returns:** always `true` in the current implementation.
+	/// Reserved as a `Bool`-returning shape so future implementations
+	/// can report write failures without an API break.
 	pub fn write_line(self: &ProcessStdoutCapability, text: String) nothrow -> Bool {
 		val _ = self.fd;
 		thread.console_writeln(text);
@@ -277,6 +519,15 @@ implement ProcessStdoutCapability {
 }
 
 implement ProcessStderrCapability {
+	/// Writes `text` followed by a newline to the process's standard
+	/// error.
+	///
+	/// **Parameters:**
+	/// - `text` — line content; a trailing newline is appended.
+	///
+	/// **Returns:** always `true` in the current implementation.
+	/// Reserved as a `Bool`-returning shape so future implementations
+	/// can report write failures without an API break.
 	pub fn write_line(self: &ProcessStderrCapability, text: String) nothrow -> Bool {
 		val _ = self.fd;
 		thread.console_eprintln(text);
@@ -284,10 +535,35 @@ implement ProcessStderrCapability {
 	}
 }
 
+/// Begins constructing a `File` handle for `path`.
+///
+/// The returned builder is lazy — no file descriptor is opened and no
+/// system call is made until `.build` is invoked.
+///
+/// **Parameters:**
+/// - `path` — filesystem path to open when `.build` is called.
+///
+/// **Returns:** a `FileBuilder` initialized with read-only access, no
+/// truncation, no append, no create, the default file mode
+/// (`FILE_MODE_DEFAULT`), and the default stream timeout
+/// (`STREAM_TIMEOUT_DEFAULT_MS`).
+///
+/// **See also:** `FileBuilder`, `FileBuilder.build`.
+///
+/// **Example:** `examples/file_io/read_file.drift`.
 pub fn file_builder(path: String) nothrow -> FileBuilder {
 	return FileBuilder(path = path, opt_read = true, opt_write = false, opt_create = false, opt_truncate = false, opt_append = false, opt_mode = FILE_MODE_DEFAULT, timeout = conc.Duration(millis = STREAM_TIMEOUT_DEFAULT_MS));
 }
 
+/// Owned byte buffer backed by a heap allocation.
+///
+/// `Buffer` owns its underlying storage and releases it on drop via
+/// `core.Destructible`.  Use `io.buffer(cap)` to construct a buffer of
+/// a given capacity.  `cap` is the storage capacity in bytes; `len` is
+/// the number of valid bytes written into the buffer (updated by read
+/// and write operations).
+///
+/// **See also:** `io.buffer`, `io.buffer_ptr`, `io.buffer_write`.
 pub struct Buffer {
 	buf: mem.RawBuffer<Byte>,
 	cap: Int,
@@ -321,6 +597,20 @@ pub const STDERR_FD: Int = 2;
 pub const STREAM_TIMEOUT_DEFAULT_MS: Int = 60000;
 pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
 
+/// Extracts the numeric error code from an `IoError`.
+///
+/// `Errno(code)` returns `code` directly.  `RequiresVirtualThread`
+/// returns `-2`, the synthetic code reserved for that case.
+///
+/// **Parameters:**
+/// - `e` — the `IoError` to project.
+///
+/// **Returns:** the numeric code as an `Int`.  Compare against the
+/// `IO_ERR_*` constants or use the `io_is_*` predicates for shape
+/// checks.
+///
+/// **See also:** `is_would_block_error`, `is_eof_error`,
+/// `is_line_too_long_error`.
 pub fn io_error_code(e: IoError) nothrow -> Int {
 	return match e {
 		Errno(code) => { code },
@@ -328,6 +618,16 @@ pub fn io_error_code(e: IoError) nothrow -> Int {
 	};
 }
 
+/// Returns `true` if `code` matches the would-block sentinel
+/// `IO_ERR_WOULD_BLOCK`.
+///
+/// Use `is_would_block_error` if you have an `IoError` value rather
+/// than a raw code.
+///
+/// **Parameters:**
+/// - `code` — numeric error code to test.
+///
+/// **See also:** `is_would_block_error`, `IO_ERR_WOULD_BLOCK`.
 pub fn io_is_would_block(code: Int) nothrow -> Bool {
 	if code == IO_ERR_WOULD_BLOCK {
 		return true;
@@ -335,6 +635,16 @@ pub fn io_is_would_block(code: Int) nothrow -> Bool {
 	return false;
 }
 
+/// Returns `true` if `code` matches the end-of-file sentinel
+/// `IO_ERR_EOF`.
+///
+/// Use `is_eof_error` if you have an `IoError` value rather than a raw
+/// code.
+///
+/// **Parameters:**
+/// - `code` — numeric error code to test.
+///
+/// **See also:** `is_eof_error`, `IO_ERR_EOF`.
 pub fn io_is_eof(code: Int) nothrow -> Bool {
 	if code == IO_ERR_EOF {
 		return true;
@@ -342,18 +652,49 @@ pub fn io_is_eof(code: Int) nothrow -> Bool {
 	return false;
 }
 
+/// Returns `true` if `e` is an `Errno` carrying the would-block
+/// sentinel.
+///
+/// **Parameters:**
+/// - `e` — the `IoError` to test.
+///
+/// **See also:** `io_is_would_block`, `IO_ERR_WOULD_BLOCK`.
 pub fn is_would_block_error(e: IoError) nothrow -> Bool {
 	return io_is_would_block(io_error_code(e));
 }
 
+/// Returns `true` if `e` is an `Errno` carrying the end-of-file
+/// sentinel.
+///
+/// **Parameters:**
+/// - `e` — the `IoError` to test.
+///
+/// **See also:** `io_is_eof`, `IO_ERR_EOF`.
 pub fn is_eof_error(e: IoError) nothrow -> Bool {
 	return io_is_eof(io_error_code(e));
 }
 
+/// Returns `true` if `e` is an `Errno` carrying the line-too-long
+/// sentinel.
+///
+/// **Parameters:**
+/// - `e` — the `IoError` to test.
+///
+/// **See also:** `io_is_line_too_long`, `IO_ERR_LINE_TOO_LONG`.
 pub fn is_line_too_long_error(e: IoError) nothrow -> Bool {
 	return io_is_line_too_long(io_error_code(e));
 }
 
+/// Returns `true` if `code` matches the line-too-long sentinel
+/// `IO_ERR_LINE_TOO_LONG`.
+///
+/// Use `is_line_too_long_error` if you have an `IoError` value rather
+/// than a raw code.
+///
+/// **Parameters:**
+/// - `code` — numeric error code to test.
+///
+/// **See also:** `is_line_too_long_error`, `IO_ERR_LINE_TOO_LONG`.
 pub fn io_is_line_too_long(code: Int) nothrow -> Bool {
 	if code == IO_ERR_LINE_TOO_LONG {
 		return true;
@@ -410,6 +751,19 @@ fn _park_main_thread_io(remaining: Int) nothrow -> Void {
 	thread.vt_park_until(slice);
 }
 
+/// Allocates a new owned `Buffer` with the given byte capacity.
+///
+/// The buffer's `len` is initialized to zero; populate it via the
+/// buffer-write helpers.  The underlying allocation is released when
+/// the `Buffer` is dropped.
+///
+/// **Parameters:**
+/// - `len` — byte capacity of the underlying allocation.
+///
+/// **Returns:** a fresh `Buffer` with `cap = len` and `len = 0`.
+///
+/// **See also:** `Buffer`, `buffer_write`, `buffer_write_bytes`,
+/// `buffer_write_string`.
 pub fn buffer(len: Int) nothrow -> Buffer {
 	unsafe {
 		var b = mem.alloc_uninit<type Byte>(len);
@@ -417,22 +771,42 @@ pub fn buffer(len: Int) nothrow -> Buffer {
 	}
 }
 
+/// Returns the byte capacity of the buffer's underlying allocation.
 pub fn buffer_capacity(self: &Buffer) nothrow -> Int {
 	return self.cap;
 }
 
+/// `&mut` form of `buffer_capacity`.  Equivalent semantics; exists for
+/// receiver-type compatibility in pipelines that already hold a
+/// `&mut Buffer`.
 pub fn buffer_capacity_mut(self: &mut Buffer) nothrow -> Int {
 	return self.cap;
 }
 
+/// Returns the number of valid bytes currently in the buffer.
+///
+/// `len` may be less than `cap`; the bytes between `len` and `cap` are
+/// unused storage.  Update via `buffer_set_len` or by calling the
+/// buffer-write helpers.
 pub fn buffer_len(self: &Buffer) nothrow -> Int {
 	return self.len;
 }
 
+/// `&mut` form of `buffer_len`.  Equivalent semantics; exists for
+/// receiver-type compatibility.
 pub fn buffer_len_mut(self: &mut Buffer) nothrow -> Int {
 	return self.len;
 }
 
+/// Sets the buffer's length to `len`, zero-filling any newly-exposed
+/// bytes between the previous length and the new length.
+///
+/// `len` is clamped to `[0, cap]`.  Use `buffer_commit_read` instead if
+/// the bytes between the old and new length were just written by a
+/// kernel read syscall (and therefore don't need zero-fill).
+///
+/// **Parameters:**
+/// - `len` — new length in bytes; clamped to `[0, cap]`.
 pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
 	var target = len;
 	if target < 0 {
@@ -456,6 +830,15 @@ pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
 // this does NOT zero-fill the region, because the bytes are already
 // populated by the kernel.  Callers: InputStream.input_read (inline),
 // TcpStream.read, UdpSocket.recv_from / recv_from_v6.
+/// Sets the buffer's length to `len` without zero-filling.
+///
+/// Used after a successful read syscall that already populated the
+/// region.  `len` is clamped to `[0, cap]`.
+///
+/// **Parameters:**
+/// - `len` — new length in bytes; clamped to `[0, cap]`.
+///
+/// **See also:** `buffer_set_len`.
 pub fn buffer_commit_read(self: &mut Buffer, len: Int) nothrow -> Void {
 	var target = len;
 	if target < 0 {
@@ -467,14 +850,32 @@ pub fn buffer_commit_read(self: &mut Buffer, len: Int) nothrow -> Void {
 	self.len = target;
 }
 
+/// Returns a raw pointer to the buffer's first byte.
+///
+/// The pointer is valid as long as the `Buffer` is alive and not
+/// mutated in a way that reallocates the underlying storage.  Do not
+/// deallocate the returned pointer; the `Buffer`'s destructor owns the
+/// allocation.
 pub fn buffer_ptr(self: &Buffer) nothrow -> mem.Ptr<Byte> {
 	return mem.rawbuffer_ptr<type Byte>(&self.buf);
 }
 
+/// `&mut` form of `buffer_ptr`.  Equivalent semantics; exists for
+/// receiver-type compatibility.
 pub fn buffer_ptr_mut(self: &mut Buffer) nothrow -> mem.Ptr<Byte> {
 	return mem.rawbuffer_ptr<type Byte>(&self.buf);
 }
 
+/// Writes byte `v` at index `i`.
+///
+/// If `i > self.len`, the gap between `self.len` and `i` is zero-filled
+/// before writing `v`.  After the write, `self.len` is extended to at
+/// least `i + 1`.  No bounds check against `cap` is performed; writing
+/// past capacity is undefined.
+///
+/// **Parameters:**
+/// - `i` — destination byte offset.
+/// - `v` — byte value to write.
 pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
 	if i > self.len {
 		var j = self.len;
@@ -490,10 +891,24 @@ pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
 	}
 }
 
+/// Reads the byte at index `i`.
+///
+/// No bounds check is performed; reading outside `[0, cap)` is
+/// undefined.
+///
+/// **Parameters:**
+/// - `i` — byte offset to read.
 pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
 	return mem.read<type Byte>(&mut self.buf, i);
 }
 
+/// Appends every byte of `src` to the end of the buffer.
+///
+/// `self.len` is advanced by `src.len`.  No bounds check against `cap`
+/// is performed; appending past capacity is undefined.
+///
+/// **Parameters:**
+/// - `src` — byte array to append.
 pub fn buffer_write_bytes(self: &mut Buffer, src: &Array<Byte>) nothrow -> Void {
 	val n = src.len;
 	var i = 0;
@@ -504,6 +919,14 @@ pub fn buffer_write_bytes(self: &mut Buffer, src: &Array<Byte>) nothrow -> Void 
 	self.len = self.len + n;
 }
 
+/// Appends the UTF-8 byte representation of `s` to the end of the
+/// buffer.
+///
+/// `self.len` is advanced by `s.byte_length()`.  No bounds check
+/// against `cap` is performed; appending past capacity is undefined.
+///
+/// **Parameters:**
+/// - `s` — string whose UTF-8 bytes are appended.
 pub fn buffer_write_string(self: &mut Buffer, s: &String) nothrow -> Void {
 	val n = s.byte_length();
 	var i = 0;
@@ -591,53 +1014,152 @@ fn _file_close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void,
 	return core.Result::Err(IoError::Errno(-1));
 }
 
+/// Pairs an open `File` with a per-operation timeout, producing a
+/// `ConfiguredFile`.
+///
+/// **Parameters:**
+/// - `timeout` — timeout to apply to subsequent reads and writes.
+///
+/// **Returns:** a fresh `ConfiguredFile` sharing `self`'s file
+/// descriptor and `closed` cell.
+///
+/// **See also:** `ConfiguredFile`, `FileBuilder.build`.
 pub fn configure_file(self: &File, timeout: conc.Duration) nothrow -> ConfiguredFile {
 	return ConfiguredFile(inner = File(fd = self.fd, closed = self.closed), timeout = timeout);
 }
 
 implement InputStreamBuilder {
+	/// Returns a new builder with the per-operation timeout set to
+	/// `timeout`.
+	///
+	/// **See also:** `InputStreamBuilder.max_line_bytes`,
+	/// `InputStreamBuilder.build`.
 	pub fn timeout(self: &InputStreamBuilder, timeout: conc.Duration) nothrow -> InputStreamBuilder {
 		return InputStreamBuilder(fd = self.fd, timeout = timeout, max_line_bytes = self.max_line_bytes);
 	}
 
+	/// Returns a new builder with the maximum line length set to
+	/// `max_line_bytes`.
+	///
+	/// Lines longer than this cap cause `read_line` to return
+	/// `Errno(IO_ERR_LINE_TOO_LONG)`.
+	///
+	/// **See also:** `InputStreamBuilder.timeout`,
+	/// `InputStreamBuilder.build`.
 	pub fn max_line_bytes(self: &InputStreamBuilder, max_line_bytes: Int) nothrow -> InputStreamBuilder {
 		return InputStreamBuilder(fd = self.fd, timeout = self.timeout, max_line_bytes = max_line_bytes);
 	}
 
+	/// Materializes the builder into a `ConfiguredInputStream`.
+	///
+	/// **Returns:** a `ConfiguredInputStream` carrying the configured
+	/// fd, timeout, and max-line cap.
+	///
+	/// **See also:** `ConfiguredInputStream`.
 	pub fn build(self: &InputStreamBuilder) nothrow -> ConfiguredInputStream {
 		return ConfiguredInputStream(fd = self.fd, timeout = self.timeout, max_line_bytes = self.max_line_bytes);
 	}
 }
 
 implement FileBuilder {
+	/// Returns a new `FileBuilder` with the read flag set to `read`.
+	///
+	/// The original builder is unchanged; configuration is done by
+	/// chaining the returned builder.
+	///
+	/// **Parameters:**
+	/// - `read` — `true` to allow reads, `false` to disable.
+	///
+	/// **See also:** `FileBuilder.write`, `FileBuilder.build`.
 	pub fn read(self: &FileBuilder, read: Bool) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the write flag set to `write`.
+	///
+	/// The original builder is unchanged; configuration is done by
+	/// chaining the returned builder.
+	///
+	/// **Parameters:**
+	/// - `write` — `true` to allow writes, `false` to disable.
+	///
+	/// **See also:** `FileBuilder.read`, `FileBuilder.create`,
+	/// `FileBuilder.truncate`, `FileBuilder.build`.
 	pub fn write(self: &FileBuilder, write: Bool) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the create flag set to
+	/// `create`.
+	///
+	/// When `true`, `.build` will create the file if it does not
+	/// already exist.
+	///
+	/// **See also:** `FileBuilder.write`, `FileBuilder.truncate`,
+	/// `FileBuilder.build`.
 	pub fn create(self: &FileBuilder, create: Bool) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the truncate flag set to
+	/// `truncate`.
+	///
+	/// When `true`, opening for write will truncate the existing file
+	/// to zero length.  No effect on read-only opens.
+	///
+	/// **See also:** `FileBuilder.write`, `FileBuilder.create`,
+	/// `FileBuilder.build`.
 	pub fn truncate(self: &FileBuilder, truncate: Bool) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the append flag set to
+	/// `append`.
+	///
+	/// When `true`, all writes will be positioned at end-of-file
+	/// regardless of the current file offset.
+	///
+	/// **See also:** `FileBuilder.write`, `FileBuilder.build`.
 	pub fn append(self: &FileBuilder, append: Bool) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = append, opt_mode = self.opt_mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the file mode (permission
+	/// bits) set to `mode`.
+	///
+	/// Used only when `.create` is also set; ignored otherwise.
+	/// Defaults to `FILE_MODE_DEFAULT` (octal 0644).
+	///
+	/// **Parameters:**
+	/// - `mode` — POSIX mode bits as an integer.
+	///
+	/// **See also:** `FileBuilder.create`, `FILE_MODE_DEFAULT`.
 	pub fn mode(self: &FileBuilder, mode: Int) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = mode, timeout = self.timeout);
 	}
 
+	/// Returns a new `FileBuilder` with the per-operation timeout set
+	/// to `timeout`.
+	///
+	/// **See also:** `FileBuilder.build`, `STREAM_TIMEOUT_DEFAULT_MS`.
 	pub fn timeout(self: &FileBuilder, timeout: conc.Duration) nothrow -> FileBuilder {
 		return FileBuilder(path = self.path, opt_read = self.opt_read, opt_write = self.opt_write, opt_create = self.opt_create, opt_truncate = self.opt_truncate, opt_append = self.opt_append, opt_mode = self.opt_mode, timeout = timeout);
 	}
 
+	/// Opens the file with the configured options.
+	///
+	/// Terminal step in the builder chain — the file descriptor is
+	/// opened here.  All preceding configurator calls only affect the
+	/// in-memory builder; no system calls are made until `.build`.
+	///
+	/// **Returns:** `Ok(ConfiguredFile)` carrying an open file
+	/// descriptor and the configured timeout.  `Err(IoError)` if the
+	/// kernel rejects the open call (for example, `Errno(2)` for "no
+	/// such file" or `Errno(13)` for "permission denied").
+	///
+	/// **See also:** `FileBuilder`, `ConfiguredFile`, `IoError`.
+	///
+	/// **Example:** `examples/file_io/read_file.drift`.
 	pub fn build(self: &FileBuilder) nothrow -> core.Result<ConfiguredFile, IoError> {
 		val opts = FileOpenOptions(read = self.opt_read, write = self.opt_write, create = self.opt_create, truncate = self.opt_truncate, append = self.opt_append, mode = self.opt_mode);
 		val opened = _file_open(self.path, &opts, self.timeout);
@@ -656,15 +1178,45 @@ implement FileBuilder {
 }
 
 implement OutputStreamBuilder {
+	/// Returns a new builder with the per-operation timeout set to
+	/// `timeout`.
+	///
+	/// **See also:** `OutputStreamBuilder.build`.
 	pub fn timeout(self: &OutputStreamBuilder, timeout: conc.Duration) nothrow -> OutputStreamBuilder {
 		return OutputStreamBuilder(fd = self.fd, timeout = timeout);
 	}
 
+	/// Materializes the builder into a `ConfiguredOutputStream`.
+	///
+	/// **Returns:** a `ConfiguredOutputStream` carrying the configured
+	/// fd and timeout.
+	///
+	/// **See also:** `ConfiguredOutputStream`.
 	pub fn build(self: &OutputStreamBuilder) nothrow -> ConfiguredOutputStream {
 		return ConfiguredOutputStream(fd = self.fd, timeout = self.timeout);
 	}
 }
 
+/// Reads up to `buf.cap` bytes from the input stream into `buf`.
+///
+/// On success, sets `buf.len` to the number of bytes read.  Blocks the
+/// calling virtual thread until data is available or the timeout
+/// elapses.  Must be called from a virtual thread (`vt_current() != 0`);
+/// otherwise returns `Err(IoError::RequiresVirtualThread)`.
+///
+/// **Parameters:**
+/// - `buf` — destination buffer; receives the bytes and has its `len`
+///   updated.
+/// - `timeout` — maximum time to wait for data before returning
+///   `Errno(IO_ERR_WOULD_BLOCK)`.
+///
+/// **Returns:** `Ok(n)` with the number of bytes read.  `Err(IoError)`
+/// on syscall failure or timeout.  `Errno(IO_ERR_WOULD_BLOCK)` is
+/// returned specifically when the deadline elapses with no data
+/// available.
+///
+/// **See also:** `InputStream.read`, `input_read_line`,
+/// `is_would_block_error`.
 pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError::RequiresVirtualThread());
@@ -699,6 +1251,22 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 	return core.Result::Err(IoError::Errno(-1));
 }
 
+/// Writes the first `buf.len` bytes of `buf` to the output stream.
+///
+/// Blocks the calling virtual thread until the write is accepted by
+/// the kernel or the timeout elapses.  Must be called from a virtual
+/// thread (`vt_current() != 0`); otherwise returns
+/// `Err(IoError::RequiresVirtualThread)`.
+///
+/// **Parameters:**
+/// - `buf` — source bytes; the buffer is read but not modified.
+/// - `timeout` — maximum time to wait for the kernel to accept the
+///   write before returning `Errno(IO_ERR_WOULD_BLOCK)`.
+///
+/// **Returns:** `Ok(n)` with the number of bytes written.
+/// `Err(IoError)` on syscall failure or timeout.
+///
+/// **See also:** `OutputStream.write`, `is_would_block_error`.
 pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError::RequiresVirtualThread());
@@ -732,57 +1300,125 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 	return core.Result::Err(IoError::Errno(-1));
 }
 
+/// Reads from the configured input stream using its bound timeout.
+///
+/// Equivalent to `input_read(self_as_inputstream, buf, self.timeout)`.
+/// See `input_read` for blocking semantics and error conditions.
+///
+/// **Parameters:**
+/// - `buf` — destination buffer; receives the bytes and has its `len`
+///   updated.
+///
+/// **Returns:** `Ok(n)` with the number of bytes read; `Err(IoError)`
+/// on failure.
+///
+/// **See also:** `input_read`, `ConfiguredInputStream.read`.
 pub fn configured_input_read(self: &ConfiguredInputStream, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
 	val stream = InputStream(fd = self.fd);
 	return input_read(&stream, buf, self.timeout);
 }
 
+/// Writes to the configured output stream using its bound timeout.
+///
+/// Equivalent to `output_write(self_as_outputstream, buf, self.timeout)`.
+/// See `output_write` for blocking semantics and error conditions.
+///
+/// **Parameters:**
+/// - `buf` — source bytes.
+///
+/// **Returns:** `Ok(n)` with the number of bytes written;
+/// `Err(IoError)` on failure.
+///
+/// **See also:** `output_write`, `ConfiguredOutputStream.write`.
 pub fn configured_output_write(self: &ConfiguredOutputStream, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
 	val stream = OutputStream(fd = self.fd);
 	return output_write(&stream, buf, self.timeout);
 }
 
 implement InputStream {
+	/// Method form of `input_read`.  See that function for full
+	/// semantics.
 	pub fn read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 		return input_read(self, buf, timeout);
 	}
 
+	/// Method form of `input_read_line`.  See that function for full
+	/// semantics.
 	pub fn read_line(self: &InputStream, timeout: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<String, IoError> {
 		return input_read_line(self, timeout, max_line_bytes);
 	}
 }
 
 implement OutputStream {
+	/// Method form of `output_write`.  See that function for full
+	/// semantics.
 	pub fn write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 		return output_write(self, buf, timeout);
 	}
 }
 
 implement ConfiguredInputStream {
+	/// Method form of `configured_input_read`.  See that function for
+	/// full semantics.
 	pub fn read(self: &ConfiguredInputStream, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
 		return configured_input_read(self, buf);
 	}
 
+	/// Method form of `configured_input_read_line`.  See that function
+	/// for full semantics.
 	pub fn read_line(self: &ConfiguredInputStream) nothrow -> core.Result<String, IoError> {
 		return configured_input_read_line(self);
 	}
 }
 
 implement ConfiguredOutputStream {
+	/// Method form of `configured_output_write`.  See that function
+	/// for full semantics.
 	pub fn write(self: &ConfiguredOutputStream, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
 		return configured_output_write(self, buf);
 	}
 }
 
 implement ConfiguredFile {
+	/// Reads up to `buf.cap` bytes from the file into `buf`.
+	///
+	/// On success, sets `buf.len` to the number of bytes read.  Uses
+	/// the timeout bound at construction time.  Must be called from a
+	/// virtual thread.
+	///
+	/// **Parameters:**
+	/// - `buf` — destination buffer.
+	///
+	/// **Returns:** `Ok(n)` bytes read; `Err(IoError)` on failure.
+	///
+	/// **See also:** `ConfiguredFile.write`, `ConfiguredFile.close`.
 	pub fn read(self: &ConfiguredFile, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
 		return _file_read(&self.inner, buf, self.timeout);
 	}
 
+	/// Writes `buf.len` bytes from `buf` to the file.
+	///
+	/// Uses the timeout bound at construction time.  Must be called
+	/// from a virtual thread.
+	///
+	/// **Parameters:**
+	/// - `buf` — source buffer.
+	///
+	/// **Returns:** `Ok(n)` bytes written; `Err(IoError)` on failure.
+	///
+	/// **See also:** `ConfiguredFile.read`, `ConfiguredFile.close`.
 	pub fn write(self: &ConfiguredFile, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
 		return _file_write(&self.inner, buf, self.timeout);
 	}
 
+	/// Closes the underlying file descriptor.
+	///
+	/// Idempotent: returns `Ok(void)` if the file is already closed.
+	/// The `Buffer` destructor does NOT close the fd; closing must be
+	/// done explicitly.
+	///
+	/// **Returns:** `Ok(void)` on success; `Err(IoError)` on close
+	/// failure.
 	pub fn close(self: &ConfiguredFile) nothrow -> core.Result<Void, IoError> {
 		return _file_close(&self.inner, self.timeout);
 	}
@@ -822,6 +1458,22 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 	return core.Result::Err(IoError::Errno(-1));
 }
 
+/// Reads a single line (terminated by `'\n'`) from the configured
+/// input stream.
+///
+/// Reads byte-by-byte until either a newline is observed (returned
+/// without the trailing `'\n'`), the maximum line length
+/// (`self.max_line_bytes`) is exceeded, the underlying stream returns
+/// EOF, or an error occurs.
+///
+/// **Returns:** `Ok(line)` with the line contents (excluding the
+/// newline).  `Err(Errno(IO_ERR_EOF))` if EOF is reached before any
+/// bytes are read.  `Err(Errno(IO_ERR_LINE_TOO_LONG))` if the line
+/// would exceed `self.max_line_bytes`.  `Err(IoError)` for other
+/// failures.
+///
+/// **See also:** `ConfiguredInputStream.read_line`, `is_eof_error`,
+/// `is_line_too_long_error`.
 pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.Result<String, IoError> {
 	if self.max_line_bytes <= 0 {
 		return core.Result::Err(IoError::Errno(IO_ERR_LINE_TOO_LONG));
@@ -865,6 +1517,23 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 	return core.Result::Err(IoError::Errno(-1));
 }
 
+/// Reads a single line from the input stream using the supplied
+/// timeout and maximum line length.
+///
+/// Wraps `self` in a temporary `ConfiguredInputStream` and delegates
+/// to `configured_input_read_line`.  See that function for newline,
+/// EOF, and line-length-overflow semantics.
+///
+/// **Parameters:**
+/// - `timeout` — per-byte read timeout.
+/// - `max_line_bytes` — maximum line length before returning
+///   `Errno(IO_ERR_LINE_TOO_LONG)`.
+///
+/// **Returns:** `Ok(line)` with the line contents (excluding the
+/// trailing newline); `Err(IoError)` on EOF, overflow, or syscall
+/// failure.
+///
+/// **See also:** `InputStream.read_line`, `configured_input_read_line`.
 pub fn input_read_line(self: &InputStream, timeout: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<String, IoError> {
 	val configured = ConfiguredInputStream(fd = self.fd, timeout = timeout, max_line_bytes = max_line_bytes);
 	return configured_input_read_line(&configured);

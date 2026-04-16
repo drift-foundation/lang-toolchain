@@ -401,26 +401,134 @@ is present.
 ### Auto-try form: `throws -> T`
 
 A function declared `fn f(...) throws -> T` returns a value of type `T`
-and enables **body-wide implicit auto-try**. Inside the body, any
-`Result<X, E>` expression used where `X` is expected is automatically
-unwrapped via `or_throw()` — the `Ok` value passes through and the `Err`
-arm throws the appropriate exception (provided `E: Throw`). Auto-try is
-compiler-owned and does not require any lexical trait import.
-
-```drift
-fn extract_status(payload: &String) throws -> String {
-    val root = json.parse(payload).or_throw();
-    return root.expect()
-        .field("meta")
-        .field("callback")
-        .field("status")
-        .string();
-}
-```
+and enables a **body-wide auto-try context**. The same context is
+opened by a `try { ... }` block in any function. The contract below
+applies inside both.
 
 The function still has a return obligation — it must return `T` on at
 least one path. The `throws` marker is about the error-flow context
 inside the body, not about the return shape.
+
+#### The auto-try contract
+
+Inside an auto-try context, a `Result<T, E>`-producing expression is
+**eagerly unwrapped to `T`** via compiler-synthesized `or_throw()`
+whenever possible. The four positions where this happens:
+
+1. **Unannotated local binding** — `val q = fallible();` binds `q` as
+   `T`, not as `Result<T, E>`.
+2. **Annotated local binding with a non-Result type** — `val q: T = fallible();`
+   also unwraps to `T`.
+3. **Return expression** — `return fallible();` unwraps to match the
+   declared return type.
+4. **Discarded expression statement** — `fallible();` (no binding) auto-
+   propagates the `Err` arm and throws away the `Ok` value.
+
+Auto-try is **compiler-owned**. It does not require any lexical trait
+import — `use trait core.Try;` is not part of the contract (and is no
+longer a valid spelling, see "Obsolete forms" below).
+
+```drift
+fn handle_request(req: &Request) throws -> Response {
+    val q = rest.require_query_param(req, &"q");
+    //  q has type String, not Result<String, RestError>.
+    val order = repo.load(&q);
+    //  order has type Order; the Result<Order, DbError> is unwrapped.
+    return rest.json_response(200, order.to_json());
+}
+```
+
+#### The opt-out: explicit `Result<T, E>` annotation
+
+If you need to keep the `Result` value — to pattern-match on it, pass
+it across a boundary, or call `.or_throw()` explicitly later — annotate
+the binding with the full `Result<T, E>` type. The annotation suppresses
+auto-try.
+
+```drift
+fn handle_request(req: &Request) throws -> Response {
+    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, &"q");
+    //  r has type core.Result<String, rest.RestError>.
+    match r {
+        core.Result::Ok(q) => { return repo.lookup(&q); },
+        core.Result::Err(_) => { return rest.json_response(400, ...); },
+    }
+}
+```
+
+`Result<T, E>` annotation is the *only* opt-out. There is no other way
+to keep the `Result` shape on a binding inside an auto-try context.
+
+#### The preferred explicit form
+
+When you don't need to name the `Result`, write the explicit unwrap
+inline on the rvalue. This is the cleanest spelling and works in any
+context (auto-try or not):
+
+```drift
+val q = rest.require_query_param(req, &"q").or_throw();
+```
+
+`or_throw()` is the single user-facing explicit-unwrap operation on
+`Result<T, E>`. It requires `E: Throw` and consumes `self` by value.
+
+#### Common pitfall: bound local + explicit `or_throw()`
+
+Code that worked under earlier auto-try semantics may now fail because
+the binding is unwrapped before the explicit call:
+
+```drift
+// PITFALL: this no longer compiles inside a throws function.
+fn handle(req: &Request) throws -> String {
+    val r = rest.require_query_param(req, &"q");
+    val q = (move r).or_throw();
+    //                ^^^^^^^^^^ error: no matching method 'or_throw'
+    //                           for receiver String
+    return q;
+}
+```
+
+`r` is bound as `String` (eager auto-unwrap), so the subsequent
+`.or_throw()` is being called on a `String`, not a `Result`. Two ways
+to fix it:
+
+```drift
+// Fix 1: drop the intermediate binding, use the inline explicit form.
+fn handle(req: &Request) throws -> String {
+    return rest.require_query_param(req, &"q").or_throw();
+}
+
+// Fix 2: opt out of auto-try with an explicit Result annotation.
+fn handle(req: &Request) throws -> String {
+    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, &"q");
+    return (move r).or_throw();
+}
+```
+
+Prefer Fix 1 unless you have a reason to keep `r` named (a separate
+match arm, passing the `Result` through a `&` boundary, etc.).
+
+#### Design rationale
+
+Inside `throws` and `try {}`, the **default** behavior is propagation
+with zero ceremony. The vast majority of `Result`-returning calls in a
+throws context want their `Ok` value used immediately — eager unwrap
+makes that the spelling without ceremony. Preserving the `Result`
+object is the less-common case, so the language requires a deliberate
+annotation to opt in.
+
+This matches Drift's broader "explicit over implicit" rule applied at a
+lower altitude: the explicit thing is *opting out* of the safe default,
+not opting *in* to it.
+
+#### Obsolete forms
+
+The `core.Try` trait and the `into_try()` method are removed from the
+language surface as of 0.27.199. Any source that contains
+`use trait core.Try;` will fail to resolve, and `r.into_try()` is
+rejected with "no matching method". Auto-try synthesizes `or_throw()`
+internally; the method itself does not exist as a user-callable
+operation.
 
 ### Terminal form: `throws` (no return type)
 

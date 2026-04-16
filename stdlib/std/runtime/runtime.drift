@@ -25,25 +25,79 @@ export {
 	expect_downcast
 };
 
+/// Process-wide type-keyed value registry.
+///
+/// Holds one value per type; lookup is by `core.type_id<T>()`.  Used
+/// for "well-known singletons" — capabilities, configuration handles,
+/// shared services — that downstream code retrieves without explicit
+/// argument-passing.
+///
+/// Obtained via `global_registry()`.  Operate on it through the
+/// generic free functions (`contains<T>`, `get<T>`, `get_mut<T>`,
+/// `expect<T>`, `expect_mut<T>`) and the `.set<T>(value)` method.
+///
+/// **See also:** `global_registry`, `set`, `get`, `expect`,
+/// `ThreadRegistry`.
 pub struct GlobalRegistry {
 	_opaque: Int
 }
 
+/// Per-thread type-keyed value registry.
+///
+/// Same shape as `GlobalRegistry`, but each virtual thread sees its
+/// own values.  Useful for thread-local context (e.g. per-request
+/// state in a server handler).  Obtained via `thread_registry()`.
+///
+/// **See also:** `thread_registry`, `GlobalRegistry`, `get`,
+/// `expect`.
 pub struct ThreadRegistry {
 	_opaque: Int
 }
 
+/// LIFO stack of `T` values backed by an `Array<T>`, paired with
+/// `ScopeGuard<T>` for RAII pop-on-drop semantics.
+///
+/// Constructed via `scoped_stack<T>()`.  Use `.push(v)` to append a
+/// value and receive a `ScopeGuard<T>` whose destructor pops the
+/// matching entry — a typical pattern for nested scoped state
+/// (debug-context frames, dynamic-extent capabilities).
+///
+/// **See also:** `scoped_stack`, `ScopedStack.push`, `ScopeGuard`.
 pub struct ScopedStack<T> {
 	items: Array<T>
 }
 
+/// RAII guard returned by `ScopedStack.push`.
+///
+/// On drop, pops the corresponding entry from the underlying stack.
+/// The guard holds a raw pointer back to the stack; the stack must
+/// outlive every outstanding guard.  Mark the guard inactive only
+/// via destruction — there is no explicit "release" method.
+///
+/// **See also:** `ScopedStack`, `ScopedStack.push`.
 pub struct ScopeGuard<T> {
 	stack_ptr: mem.Ptr<ScopedStack<T>>,
 	active: Bool
 }
 
+/// Thrown by strict registry-lookup helpers (`expect<T>`,
+/// `expect_mut<T>`) when the requested type is not registered.
+///
+/// `tag` is a stable, machine-readable identifier supplied at the
+/// `expect` call site (typically the type's friendly name) used by
+/// the catching code to distinguish causes.
+///
+/// **See also:** `expect`, `expect_mut`.
 pub exception RegistryError(tag: String);
 
+/// Returns a borrow of the process-wide `GlobalRegistry`.
+///
+/// The registry is owned by the runtime; the returned reference is
+/// valid for the lifetime of the process.
+///
+/// **See also:** `GlobalRegistry`, `thread_registry`.
+///
+/// **Example:** `examples/runtime_registry/global_singleton.drift`.
 pub fn global_registry() nothrow -> &GlobalRegistry {
 	unsafe {
 		val p = thread.runtime_global_registry_ptr();
@@ -52,6 +106,14 @@ pub fn global_registry() nothrow -> &GlobalRegistry {
 	}
 }
 
+/// Returns a borrow of the calling thread's `ThreadRegistry`.
+///
+/// The registry is owned by the runtime; the returned reference is
+/// valid for the lifetime of the calling virtual thread.
+///
+/// **See also:** `ThreadRegistry`, `global_registry`.
+///
+/// **Example:** `examples/runtime_registry/per_thread_slots.drift`.
 pub fn thread_registry() nothrow -> &ThreadRegistry {
 	unsafe {
 		val p = thread.runtime_thread_registry_ptr();
@@ -60,12 +122,27 @@ pub fn thread_registry() nothrow -> &ThreadRegistry {
 	}
 }
 
+/// Constructs an empty `ScopedStack<T>`.
+///
+/// Push values via `.push(v)` to receive a `ScopeGuard<T>`; the
+/// guard pops the value when it goes out of scope.
+///
+/// **See also:** `ScopedStack`, `ScopeGuard`.
 pub fn scoped_stack<T>() nothrow -> ScopedStack<T> {
 	var items: Array<T> = [];
 	return ScopedStack<type T>(items = move items);
 }
 
 implement<T> ScopedStack<T> {
+	/// Pushes `value` onto the stack and returns a `ScopeGuard<T>`
+	/// whose destructor will pop the matching entry.
+	///
+	/// The typical pattern: `var g = stack.push(frame);` — when `g`
+	/// goes out of scope, the `frame` is popped.  Multiple guards
+	/// must be dropped in LIFO order; otherwise pops will not match
+	/// the originally-pushed values.
+	///
+	/// **See also:** `ScopedStack.pop`, `ScopeGuard`.
 	pub fn push(self: &mut ScopedStack<T>, value: T) nothrow -> ScopeGuard<T> {
 		self.items.push(move value);
 		unsafe {
@@ -74,10 +151,17 @@ implement<T> ScopedStack<T> {
 		}
 	}
 
+	/// Pops the top value from the stack and returns it, or `None`
+	/// if empty.
+	///
+	/// Bypasses the guard mechanism — useful only when the caller is
+	/// explicitly draining the stack outside RAII.
 	pub fn pop(self: &mut ScopedStack<T>) nothrow -> Optional<T> {
 		return self.items.pop();
 	}
 
+	/// Returns a shared reference to the top value, or `None` if
+	/// empty.
 	pub fn peek(self: &ScopedStack<T>) nothrow -> Optional<&T> {
 		val n = self.items.len;
 		if n <= 0 {
@@ -86,6 +170,8 @@ implement<T> ScopedStack<T> {
 		return Optional<&T>::Some(&self.items[n - 1]);
 	}
 
+	/// Returns a mutable reference to the top value, or `None` if
+	/// empty.
 	pub fn peek_mut(self: &mut ScopedStack<T>) nothrow -> Optional<&mut T> {
 		val n = self.items.len;
 		if n <= 0 {
@@ -94,10 +180,13 @@ implement<T> ScopedStack<T> {
 		return Optional<&mut T>::Some(&mut self.items[n - 1]);
 	}
 
+	/// Returns the current stack depth (number of pushed items not
+	/// yet popped).
 	pub fn depth(self: &ScopedStack<T>) nothrow -> Int {
 		return self.items.len;
 	}
 
+	/// Returns `true` if the stack contains no items.
 	pub fn is_empty(self: &ScopedStack<T>) nothrow -> Bool {
 		return self.items.len == 0;
 	}
@@ -129,6 +218,21 @@ implement<T> core.Destructible for ScopeGuard<T> {
 }
 
 implement GlobalRegistry {
+	/// Stores `value` in the registry under `core.type_id<T>()`.
+	///
+	/// Refuses to overwrite an existing entry of the same type and
+	/// returns `false`; the supplied `value` is dropped in that
+	/// case.  Call `contains<T>(reg)` before `set` if you need to
+	/// distinguish the two outcomes deterministically.
+	///
+	/// **Parameters:**
+	/// - `value` — value to store (consumed by move on success;
+	///   dropped on `false` return).
+	///
+	/// **Returns:** `true` on successful insertion; `false` if a
+	/// value of type `T` was already registered.
+	///
+	/// **See also:** `contains`, `get`, `expect`.
 	pub fn set<T>(self: &GlobalRegistry, value: T) nothrow -> Bool {
 		val _ = self;
 		unsafe {
@@ -147,11 +251,22 @@ implement GlobalRegistry {
 		}
 	}
 
+	/// Low-level: returns `true` if the registry has an entry for
+	/// the raw `type_tag`.
+	///
+	/// Most code should use the generic `contains<T>(reg)` helper
+	/// instead, which computes `type_id<T>()` for the caller.
 	pub fn contains_type(self: &GlobalRegistry, type_tag: Uint64) nothrow -> Bool {
 		val _ = self;
 		return thread.runtime_registry_contains(type_tag) == 1;
 	}
 
+	/// Low-level: returns the raw byte pointer to the value stored
+	/// under `type_tag`, or null if absent.
+	///
+	/// Most code should use the generic `get<T>(reg)` /
+	/// `get_mut<T>(reg)` helpers instead, which return typed
+	/// `Optional<&T>` / `Optional<&mut T>`.
 	pub fn get_ptr(self: &GlobalRegistry, type_tag: Uint64) nothrow -> mem.Ptr<Byte> {
 		val _ = self;
 		return thread.runtime_registry_get(type_tag);
@@ -159,6 +274,17 @@ implement GlobalRegistry {
 }
 
 implement ThreadRegistry {
+	/// Stores `value` in the calling thread's registry under
+	/// `core.type_id<T>()`.
+	///
+	/// Refuses to overwrite; same contract as `GlobalRegistry.set`.
+	///
+	/// **Parameters:**
+	/// - `value` — value to store (consumed by move on success;
+	///   dropped on `false` return).
+	///
+	/// **Returns:** `true` on successful insertion; `false` if a
+	/// value of type `T` was already registered for this thread.
 	pub fn set<T>(self: &ThreadRegistry, value: T) nothrow -> Bool {
 		val _ = self;
 		unsafe {
@@ -177,25 +303,48 @@ implement ThreadRegistry {
 		}
 	}
 
+	/// Low-level: returns `true` if the thread registry has an entry
+	/// for the raw `type_tag`.  Prefer the generic `contains<T>` helper.
 	pub fn contains_type(self: &ThreadRegistry, type_tag: Uint64) nothrow -> Bool {
 		val _ = self;
 		return thread.runtime_thread_registry_contains(type_tag) == 1;
 	}
 
+	/// Low-level: returns the raw byte pointer to the value stored
+	/// under `type_tag`, or null if absent.  Prefer `get<T>` /
+	/// `get_mut<T>`.
 	pub fn get_ptr(self: &ThreadRegistry, type_tag: Uint64) nothrow -> mem.Ptr<Byte> {
 		val _ = self;
 		return thread.runtime_thread_registry_get(type_tag);
 	}
 }
 
+/// Returns `true` if `reg` contains an entry of type `T`.
+///
+/// Two overloads — one for `&GlobalRegistry`, one for
+/// `&ThreadRegistry`.  Both look up by `core.type_id<T>()`.
+///
+/// **See also:** `get`, `expect`, `GlobalRegistry`,
+/// `ThreadRegistry`.
 pub fn contains<T>(reg: &GlobalRegistry) nothrow -> Bool {
 	return reg.contains_type(core.type_id<type T>());
 }
 
+/// Thread-registry form of `contains<T>`.  See the `&GlobalRegistry`
+/// overload for full semantics.
 pub fn contains<T>(reg: &ThreadRegistry) nothrow -> Bool {
 	return reg.contains_type(core.type_id<type T>());
 }
 
+/// Looks up the entry of type `T` in `reg` and returns a shared
+/// reference, or `None` if absent.
+///
+/// Two overloads — one for `&GlobalRegistry`, one for
+/// `&ThreadRegistry`.
+///
+/// **See also:** `get_mut`, `expect`, `contains`.
+///
+/// **Example:** `examples/runtime_registry/global_singleton.drift`.
 pub fn get<T>(reg: &GlobalRegistry) nothrow -> Optional<&T> {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -207,6 +356,8 @@ pub fn get<T>(reg: &GlobalRegistry) nothrow -> Optional<&T> {
 	}
 }
 
+/// Thread-registry form of `get<T>`.  See the `&GlobalRegistry`
+/// overload for full semantics.
 pub fn get<T>(reg: &ThreadRegistry) nothrow -> Optional<&T> {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -218,6 +369,15 @@ pub fn get<T>(reg: &ThreadRegistry) nothrow -> Optional<&T> {
 	}
 }
 
+/// Looks up the entry of type `T` in `reg` and returns a mutable
+/// reference, or `None` if absent.
+///
+/// Mutable access through the global registry is **not**
+/// synchronized.  Wrap the stored value in
+/// `conc.Arc<conc.Mutex<T>>` (and store the `Arc<Mutex<T>>` instead
+/// of `T` itself) when sharing across virtual threads.
+///
+/// **See also:** `get`, `expect_mut`, `conc.Mutex`.
 pub fn get_mut<T>(reg: &GlobalRegistry) nothrow -> Optional<&mut T> {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -229,6 +389,9 @@ pub fn get_mut<T>(reg: &GlobalRegistry) nothrow -> Optional<&mut T> {
 	}
 }
 
+/// Thread-registry form of `get_mut<T>`.  See the `&GlobalRegistry`
+/// overload for full semantics.  Per-thread storage doesn't need
+/// the same `Arc<Mutex<T>>` wrapping recommendation.
 pub fn get_mut<T>(reg: &ThreadRegistry) nothrow -> Optional<&mut T> {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -240,6 +403,21 @@ pub fn get_mut<T>(reg: &ThreadRegistry) nothrow -> Optional<&mut T> {
 	}
 }
 
+/// Strict form of `get<T>` — throws `RegistryError(tag)` if the
+/// entry is not registered.
+///
+/// Use when missing-entry is a bug, not a recoverable condition.
+/// `tag` is a stable, machine-readable identifier (typically the
+/// type's friendly name) that surfaces in the thrown exception so
+/// catching code can distinguish causes.
+///
+/// **Parameters:**
+/// - `tag` — identifier carried in `RegistryError` if the entry is
+///   absent.
+///
+/// **Throws:** `RegistryError(tag)` if `T` is not registered.
+///
+/// **See also:** `get`, `expect_mut`, `RegistryError`.
 pub fn expect<T>(reg: &GlobalRegistry, tag: String) -> &T {
 	match get<type T>(reg) {
 		Some(v) => { return v; },
@@ -249,6 +427,8 @@ pub fn expect<T>(reg: &GlobalRegistry, tag: String) -> &T {
 	}
 }
 
+/// Thread-registry form of `expect<T>`.  See the `&GlobalRegistry`
+/// overload for full semantics.
 pub fn expect<T>(reg: &ThreadRegistry, tag: String) -> &T {
 	match get<type T>(reg) {
 		Some(v) => { return v; },
@@ -258,6 +438,15 @@ pub fn expect<T>(reg: &ThreadRegistry, tag: String) -> &T {
 	}
 }
 
+/// Strict mutable form of `get_mut<T>` — throws `RegistryError(tag)`
+/// if the entry is not registered.
+///
+/// Same synchronization caveats as `get_mut<T>`: mutable access
+/// through the global registry is not synchronized.
+///
+/// **Throws:** `RegistryError(tag)` if `T` is not registered.
+///
+/// **See also:** `get_mut`, `expect`, `RegistryError`.
 pub fn expect_mut<T>(reg: &GlobalRegistry, tag: String) -> &mut T {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -269,6 +458,8 @@ pub fn expect_mut<T>(reg: &GlobalRegistry, tag: String) -> &mut T {
 	}
 }
 
+/// Thread-registry form of `expect_mut<T>`.  See the
+/// `&GlobalRegistry` overload for full semantics.
 pub fn expect_mut<T>(reg: &ThreadRegistry, tag: String) -> &mut T {
 	unsafe {
 		val p = reg.get_ptr(core.type_id<type T>());
@@ -280,8 +471,23 @@ pub fn expect_mut<T>(reg: &ThreadRegistry, tag: String) -> &mut T {
 	}
 }
 
+/// Thrown by `expect_downcast<T>` when the box does not contain a
+/// `T`.
 pub exception TypeBoxError();
 
+/// Heterogeneous type-erased value carrier.
+///
+/// Wraps a value of any single type; the original type is recovered
+/// via `downcast<T>(&box)` (returns `Optional<&T>`) or the strict
+/// `expect_downcast<T>(&box, tag)` (throws on type mismatch).
+/// Internally stores the value's `core.type_id<T>()` plus a typed
+/// dropper closure so the destructor can release the value
+/// correctly even though the type is erased.
+///
+/// Construct via `type_box(value)`.
+///
+/// **See also:** `type_box`, `downcast`, `expect_downcast`,
+/// `TypeBox.type_id`.
 pub struct TypeBox {
 	tag: Uint64,
 	buf: mem.RawBuffer<Byte>,
@@ -298,6 +504,15 @@ fn _typebox_drop_impl<T>(p: mem.Ptr<Byte>) nothrow -> Void {
 	return;
 }
 
+/// Wraps `value` in a `TypeBox`, recording its type for later
+/// recovery via `downcast<T>` / `expect_downcast<T>`.
+///
+/// **Parameters:**
+/// - `value` — value to wrap (consumed by move).
+///
+/// **Returns:** a `TypeBox` carrying the value and its type tag.
+///
+/// **See also:** `TypeBox`, `downcast`, `expect_downcast`.
 pub fn type_box<T>(value: T) nothrow -> TypeBox {
 	unsafe {
 		var raw = mem.alloc_uninit<type T>(1);
@@ -310,6 +525,12 @@ pub fn type_box<T>(value: T) nothrow -> TypeBox {
 	}
 }
 
+/// Attempts to recover a `&T` from `self`.
+///
+/// **Returns:** `Some(&T)` if the box contains a `T`; `None` if the
+/// stored type tag doesn't match `core.type_id<T>()`.
+///
+/// **See also:** `expect_downcast`, `TypeBox.type_id`.
 pub fn downcast<T>(self: &TypeBox) nothrow -> Optional<&T> {
 	if self.tag != core.type_id<type T>() {
 		return Optional<&T>::None();
@@ -322,6 +543,17 @@ pub fn downcast<T>(self: &TypeBox) nothrow -> Optional<&T> {
 	}
 }
 
+/// Strict form of `downcast<T>` — throws `TypeBoxError` if the box
+/// does not contain a `T`.
+///
+/// `tag` is currently consumed by drop on the failure path; the
+/// thrown `TypeBoxError` does not expose it.  Reserved for future
+/// diagnostics that may carry the tag.
+///
+/// **Throws:** `TypeBoxError` if the stored type tag does not match
+/// `core.type_id<T>()`.
+///
+/// **See also:** `downcast`, `TypeBoxError`.
 pub fn expect_downcast<T>(self: &TypeBox, tag: String) -> &T {
 	match downcast<type T>(self) {
 		Some(v) => { return v; },
@@ -333,6 +565,12 @@ pub fn expect_downcast<T>(self: &TypeBox, tag: String) -> &T {
 }
 
 implement TypeBox {
+	/// Returns the `core.type_id<T>()` of the stored value.
+	///
+	/// Useful for switch-style dispatch when downcast attempts in
+	/// some other order would be wasteful.
+	///
+	/// **See also:** `core.type_id`.
 	pub fn type_id(self: &TypeBox) nothrow -> Uint64 {
 		return self.tag;
 	}

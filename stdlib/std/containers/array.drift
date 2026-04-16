@@ -53,31 +53,74 @@ export {
 	tree_set
 };
 
+/// Canonical container id for `Array<T>`, used in
+/// `std.err:IndexError.container_id` and iterator-invalidation
+/// diagnostics.
 pub const ARRAY_CONTAINER_ID: String = "std.containers:Array";
+
+/// Canonical container id for `Deque<T>`, used in
+/// `std.err:IndexError.container_id` and iterator-invalidation
+/// diagnostics.
 pub const DEQUE_CONTAINER_ID: String = "std.containers:Deque";
 
+/// Consuming iterator over an `Array<T>`.
+///
+/// Takes ownership of the array; `next` pops elements in order and
+/// yields them by move.  When the iterator is dropped, any remaining
+/// elements are dropped too.
+///
+/// **See also:** `ArrayBorrowIter`, `ArrayBorrowMutIter`.
 pub struct ArrayMoveIter<T> {
 	arr: Array<T>,
 	idx: Int
 }
 
+/// Non-consuming iterator borrowing an `Array<T>` immutably.
+///
+/// Records the array's generation snapshot on construction; mutation
+/// of the underlying array during iteration invalidates the iterator
+/// and causes the next call to abort with
+/// "iterator invalidated: array modified during iteration".
+///
+/// **See also:** `ArrayMoveIter`, `ArrayBorrowMutIter`, `ArrayRange`.
 pub struct ArrayBorrowIter<T> {
 	arr: &Array<T>,
 	idx: Int,
 	gen_snapshot: Int
 }
 
+/// Non-consuming iterator borrowing an `Array<T>` mutably.
+///
+/// Same invalidation contract as `ArrayBorrowIter`.  Yields `&mut T`
+/// so callers can mutate elements in place.
+///
+/// **See also:** `ArrayBorrowIter`, `ArrayRangeMut`.
 pub struct ArrayBorrowMutIter<T> {
 	arr: &mut Array<T>,
 	idx: Int,
 	gen_snapshot: Int
 }
 
+/// Random-access read-only view over an `Array<T>`.
+///
+/// Implements `iter.RandomAccessReadable` and — for the `Int`
+/// specialization — `algo.BinarySearchable`.  Construct via
+/// `array.range()`.  Tracks the array's generation to detect
+/// invalidation during use.
+///
+/// **See also:** `ArrayRangeMut`, `ArrayBorrowIter`.
 pub struct ArrayRange<T> {
 	arr: &Array<T>,
 	gen_snapshot: Int
 }
 
+/// Random-access read/write view over an `Array<T>`.
+///
+/// Implements `iter.RandomAccessReadable` and `RandomAccessPermutable`
+/// for the `Int` specialization.  Construct via `array.range_mut()`.
+/// Same invalidation contract as `ArrayRange`.
+///
+/// **See also:** `ArrayRange`, `ArrayBorrowMutIter`.
 pub struct ArrayRangeMut<T> {
 	arr: &mut Array<T>,
 	gen_snapshot: Int
@@ -129,6 +172,17 @@ implement<T> core.Destructible for Array<T> {
 }
 
 implement<T> Array<T> {
+	/// Constructs an empty `Array<T>` with capacity reserved for at
+	/// least `n` elements.
+	///
+	/// Useful when the final size is known up-front, to avoid the
+	/// repeated reallocations that `push` would otherwise trigger.
+	///
+	/// **Parameters:**
+	/// - `n` — minimum capacity to reserve; values `<= 0` produce a
+	///   zero-capacity array.
+	///
+	/// **Returns:** an empty `Array<T>` with `cap >= n` and `len = 0`.
 	pub fn with_capacity(n: Int) nothrow -> Array<T> {
 		var out: Array<T> = [];
 		if n > 0 {
@@ -270,6 +324,15 @@ implement iter.RandomAccessPermutable<Int> for ArrayRangeMut<Int> {
 	}
 }
 
+/// Double-ended queue backed by a contiguous ring buffer.
+///
+/// Supports O(1) amortized `push_back` / `push_front` and O(1)
+/// `pop_back` / `pop_front`.  Construct via `deque<T>()`.
+/// Mutating any push/pop call bumps an internal generation counter
+/// that invalidates outstanding `DequeRange` / `DequeRangeMut` views.
+///
+/// **See also:** `deque`, `Deque.push_back`, `Deque.pop_front`,
+/// `DequeRange`, `DequeRangeMut`.
 pub struct Deque<T> {
 	buf: mem.RawBuffer<T>,
 	head: Int,
@@ -277,11 +340,28 @@ pub struct Deque<T> {
 	gen: Int
 }
 
+/// Random-access read-only view over a `Deque<T>`.
+///
+/// Implements `iter.RandomAccessReadable` and — for the `Int`
+/// specialization — `algo.BinarySearchable`.  Construct via
+/// `deque.range()`.  Outlives `Deque` mutation only as long as the
+/// generation is unchanged; bypassing this triggers
+/// `err.throw_iterator_invalidated`.
+///
+/// **See also:** `DequeRangeMut`, `Deque.range`.
 pub struct DequeRange<T> {
 	dq: &Deque<T>,
 	gen_snapshot: Int
 }
 
+/// Random-access read/write view over a `Deque<T>`.
+///
+/// Implements `iter.RandomAccessReadable` and
+/// `RandomAccessPermutable` for the `Int` specialization.  Construct
+/// via `deque.range_mut()`.  Same invalidation contract as
+/// `DequeRange`.
+///
+/// **See also:** `DequeRange`, `Deque.range_mut`.
 pub struct DequeRangeMut<T> {
 	dq: &mut Deque<T>,
 	gen_snapshot: Int
@@ -294,6 +374,11 @@ implement DequeRangeMut<Int> {
 	}
 }
 
+/// Constructs an empty `Deque<T>` with zero capacity.
+///
+/// Capacity grows on demand as elements are pushed.
+///
+/// **See also:** `Deque`, `Deque.push_back`, `Deque.push_front`.
 pub fn deque<T>() nothrow -> Deque<T> {
 	unsafe {
 		var b = mem.alloc_uninit<type T>(0);
@@ -302,6 +387,7 @@ pub fn deque<T>() nothrow -> Deque<T> {
 }
 
 implement<T> Deque<T> {
+	/// Returns the number of elements currently in the deque.
 	pub fn len(self: &Deque<T>) nothrow -> Int {
 		return self.len;
 	}
@@ -340,6 +426,16 @@ implement<T> Deque<T> {
 		}
 	}
 
+	/// Appends `value` to the back of the deque.
+	///
+	/// Reallocates if capacity is exhausted (amortized O(1)).
+	/// Bumps the generation counter and invalidates any outstanding
+	/// `DequeRange` / `DequeRangeMut` views.
+	///
+	/// **Parameters:**
+	/// - `value` — element to append (consumed by move).
+	///
+	/// **See also:** `Deque.push_front`, `Deque.pop_back`.
 	pub fn push_back(self: &mut Deque<T>, var value: T) nothrow -> Void {
 		val needed = self.len + 1;
 		self.ensure_capacity(needed);
@@ -350,6 +446,14 @@ implement<T> Deque<T> {
 		self.gen = self.gen + 1;
 	}
 
+	/// Prepends `value` to the front of the deque.
+	///
+	/// Same allocation and invalidation contract as `push_back`.
+	///
+	/// **Parameters:**
+	/// - `value` — element to prepend (consumed by move).
+	///
+	/// **See also:** `Deque.push_back`, `Deque.pop_front`.
 	pub fn push_front(self: &mut Deque<T>, var value: T) nothrow -> Void {
 		val needed = self.len + 1;
 		self.ensure_capacity(needed);
@@ -360,6 +464,12 @@ implement<T> Deque<T> {
 		self.gen = self.gen + 1;
 	}
 
+	/// Removes and returns the last element, or `None` if empty.
+	///
+	/// Bumps the generation counter and invalidates any outstanding
+	/// range views.
+	///
+	/// **See also:** `Deque.pop_front`, `Deque.push_back`.
 	pub fn pop_back(self: &mut Deque<T>) nothrow -> Optional<T> {
 		if self.len == 0 {
 			return Optional::None();
@@ -378,6 +488,12 @@ implement<T> Deque<T> {
 		}
 	}
 
+	/// Removes and returns the first element, or `None` if empty.
+	///
+	/// Bumps the generation counter and invalidates any outstanding
+	/// range views.
+	///
+	/// **See also:** `Deque.pop_back`, `Deque.push_front`.
 	pub fn pop_front(self: &mut Deque<T>) nothrow -> Optional<T> {
 		if self.len == 0 {
 			return Optional::None();
@@ -395,15 +511,35 @@ implement<T> Deque<T> {
 		}
 	}
 
+	/// Returns a random-access read-only view bound to the deque's
+	/// current generation.
+	///
+	/// Any subsequent push/pop on the deque invalidates the view.
+	///
+	/// **See also:** `DequeRange`, `Deque.range_mut`.
 	pub fn range(self: &Deque<T>) nothrow -> DequeRange<T> {
 		return DequeRange<type T>(dq = self, gen_snapshot = self.gen);
 	}
 
+	/// Returns a random-access read/write view bound to the deque's
+	/// current generation.
+	///
+	/// Same invalidation contract as `range`.
+	///
+	/// **See also:** `DequeRangeMut`, `Deque.range`.
 	pub fn range_mut(self: &mut Deque<T>) nothrow -> DequeRangeMut<T> {
 		val gen = self.gen;
 		return DequeRangeMut<type T>(dq = self, gen_snapshot = gen);
 	}
 
+	/// Returns a shared reference to the element at logical index `i`.
+	///
+	/// **Parameters:**
+	/// - `i` — zero-based logical index from the front.
+	///
+	/// **Throws:** `std.err:IndexError` if `i` is out of range.
+	///
+	/// **See also:** `Deque.at_mut`, `Deque.len`.
 	pub fn at(self: &Deque<T>, i: Int) -> &T {
 		val len = self.len;
 		if i < 0 or i >= len {
@@ -414,6 +550,15 @@ implement<T> Deque<T> {
 		unsafe { return mem.ptr_at_ref<type T>(&self.buf, phys); }
 	}
 
+	/// Returns a mutable reference to the element at logical index
+	/// `i`.
+	///
+	/// **Parameters:**
+	/// - `i` — zero-based logical index from the front.
+	///
+	/// **Throws:** `std.err:IndexError` if `i` is out of range.
+	///
+	/// **See also:** `Deque.at`.
 	pub fn at_mut(self: &mut Deque<T>, i: Int) -> &mut T {
 		val len = self.len;
 		if i < 0 or i >= len {
@@ -424,6 +569,16 @@ implement<T> Deque<T> {
 		unsafe { return mem.ptr_at_mut<type T>(&mut self.buf, phys); }
 	}
 
+	/// Swaps the elements at logical indices `i` and `j` in place.
+	///
+	/// No-op if `i == j`.  Does NOT bump the generation counter
+	/// because element identity is preserved.
+	///
+	/// **Parameters:**
+	/// - `i`, `j` — zero-based logical indices from the front.
+	///
+	/// **Throws:** `std.err:IndexError` if either index is out of
+	/// range.
 	pub fn swap(self: &mut Deque<T>, i: Int, j: Int) -> Void {
 		val len = self.len;
 		if i < 0 or i >= len {
@@ -549,9 +704,18 @@ implement iter.RandomAccessPermutable<Int> for DequeRangeMut<Int> {
 	}
 }
 
+/// Canonical container id for `HashMap<K, V>` / `HashMapCore`, used
+/// in `IndexError.container_id` and iterator-invalidation
+/// diagnostics.
 pub const HASH_MAP_CONTAINER_ID: String = "std.containers:HashMap";
+
+/// Canonical container id for `HashSet<K>` / `HashSetCore`.
 pub const HASH_SET_CONTAINER_ID: String = "std.containers:HashSet";
+
+/// Canonical container id for `TreeMap<K, V>`.
 pub const TREE_MAP_CONTAINER_ID: String = "std.containers:TreeMap";
+
+/// Canonical container id for `TreeSet<K>`.
 pub const TREE_SET_CONTAINER_ID: String = "std.containers:TreeSet";
 const TREE_MAP_NONE: Int = -1;
 
@@ -559,11 +723,24 @@ const HASH_MAP_STATE_EMPTY: Int = 0;
 const HASH_MAP_STATE_FULL: Int = 1;
 const HASH_MAP_STATE_TOMB: Int = 2;
 
+/// View of a single (key, value) entry yielded by `HashMapIter`.
+///
+/// Both fields are borrowed references into the underlying map; the
+/// view is valid only as long as the iterator's generation snapshot
+/// matches the map.
 pub struct HashMapItemRef<K, V> {
 	pub key: &K,
 	pub value: &V
 }
 
+/// Iterator over `HashMapCore<K, V, B>` yielding `HashMapItemRef`
+/// values for each occupied slot.
+///
+/// Records the map's generation snapshot on construction; mutation
+/// of the underlying map during iteration aborts the next call with
+/// "iterator invalidated: hash map modified during iteration".
+///
+/// **See also:** `HashMapItemRef`, `HashMapCore.iter`.
 pub struct HashMapIter<K, V, B> {
 	map: &HashMapCore<K, V, B>,
 	idx: Int,
@@ -575,6 +752,21 @@ struct HashMapFindResult {
 	found: Bool
 }
 
+/// Open-addressed hash map keyed by `K`, valued by `V`, hashed by
+/// `B`.
+///
+/// Uses linear probing with tombstones.  `K` must implement
+/// `cmp.Equatable` and `hash.Hash<hash.DefaultHasher>` (for the
+/// default hasher); `B` must implement `hash.BuildHasher`.  Mutation
+/// bumps an internal generation counter that invalidates outstanding
+/// `HashMapIter` views.
+///
+/// Most call sites use the `HashMap<K, V>` type alias (defaulting
+/// `B` to `DefaultBuildHasher`) and the `hash_map<K, V>()`
+/// constructor.
+///
+/// **See also:** `HashMap`, `hash_map`, `hash_map_with_capacity`,
+/// `hash_map_with_builder`, `HashMapCore.insert`, `HashMapCore.iter`.
 pub struct HashMapCore<K, V, B> {
 	keys: mem.RawBuffer<mem.MaybeUninit<K>>,
 	values: mem.RawBuffer<mem.MaybeUninit<V>>,
@@ -584,12 +776,31 @@ pub struct HashMapCore<K, V, B> {
 	builder: B
 }
 
+/// Default-hasher specialization of `HashMapCore`.  The everyday
+/// `HashMap<K, V>` users instantiate via `hash_map<K, V>()`.
 pub type HashMap<K, V> = HashMapCore<K, V, hash.DefaultBuildHasher>;
 
+/// Constructs an empty `HashMap<K, V>` using
+/// `hash.DefaultBuildHasher`.
+///
+/// Use `hash_map_with_capacity` when the expected size is known
+/// up-front to avoid initial reallocations, or
+/// `hash_map_with_builder` to plug in a custom hasher (e.g.
+/// deterministic for tests).
+///
+/// **See also:** `HashMap`, `hash_map_with_capacity`,
+/// `hash_map_with_builder`.
 pub fn hash_map<K, V>() nothrow -> HashMap<K, V> {
 	return hash_map_with_builder<type K, V, hash.DefaultBuildHasher>(hash.default_build_hasher());
 }
 
+/// Constructs an empty `HashMap<K, V>` with capacity reserved for at
+/// least `cap` entries.
+///
+/// **Parameters:**
+/// - `cap` — minimum capacity to reserve.
+///
+/// **See also:** `hash_map`.
 pub fn hash_map_with_capacity<K, V>(cap: Int) nothrow -> HashMap<K, V>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher> {
 	var map = hash_map<type K, V>();
@@ -597,6 +808,14 @@ pub fn hash_map_with_capacity<K, V>(cap: Int) nothrow -> HashMap<K, V>
 	return move map;
 }
 
+/// Constructs an empty `HashMapCore<K, V, B>` using `builder` as the
+/// hash-builder.
+///
+/// **Parameters:**
+/// - `builder` — implementation of `hash.BuildHasher` used to
+///   produce a fresh hasher for each key.
+///
+/// **See also:** `hash_map`, `hash.BuildHasher`.
 pub fn hash_map_with_builder<K, V, B>(var builder: B) nothrow -> HashMapCore<K, V, B> require B is hash.BuildHasher {
 	unsafe {
 		var keys = mem.alloc_uninit<type mem.MaybeUninit<K>>(0);
@@ -608,10 +827,12 @@ pub fn hash_map_with_builder<K, V, B>(var builder: B) nothrow -> HashMapCore<K, 
 
 implement<K, V, B> HashMapCore<K, V, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
+	/// Returns the number of (key, value) entries in the map.
 	pub fn len(self: &HashMapCore<K, V, B>) nothrow -> Int {
 		return self.len;
 	}
 
+	/// Returns `true` if the map contains no entries.
 	pub fn is_empty(self: &HashMapCore<K, V, B>) nothrow -> Bool {
 		return self.len == 0;
 	}
@@ -828,6 +1049,13 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return true;
 	}
 
+	/// Removes every entry from the map, keeping the allocated
+	/// storage.
+	///
+	/// Bumps the generation counter and invalidates outstanding
+	/// iterators.
+	///
+	/// **See also:** `HashMapCore.remove`.
 	pub fn clear(self: &mut HashMapCore<K, V, B>) nothrow -> Void {
 		val cap = self.cap();
 		var i = 0;
@@ -844,11 +1072,18 @@ implement<K, V, B> HashMapCore<K, V, B>
 		self.gen = self.gen + 1;
 	}
 
+	/// Returns `true` if the map has an entry for `key`.
+	///
+	/// **See also:** `HashMapCore.get`, `HashMapCore.insert`.
 	pub fn contains_key(self: &HashMapCore<K, V, B>, key: &K) nothrow -> Bool {
 		val res = self.find_slot(key);
 		return res.found;
 	}
 
+	/// Looks up `key` and returns a shared reference to the value, or
+	/// `None` if absent.
+	///
+	/// **See also:** `HashMapCore.get_mut`, `HashMapCore.contains_key`.
 	pub fn get(self: &HashMapCore<K, V, B>, key: &K) nothrow -> Optional<&V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -857,6 +1092,10 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(self.value_ref(res.index));
 	}
 
+	/// Looks up `key` and returns a mutable reference to the value,
+	/// or `None` if absent.
+	///
+	/// **See also:** `HashMapCore.get`.
 	pub fn get_mut(self: &mut HashMapCore<K, V, B>, key: &K) nothrow -> Optional<&mut V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -865,6 +1104,21 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(self.value_mut(res.index));
 	}
 
+	/// Inserts `(key, value)` into the map.
+	///
+	/// If `key` already maps to a value, replaces the value and
+	/// returns the old one as `Some(old)`.  Otherwise inserts a new
+	/// entry and returns `None`.  May trigger reallocation; bumps the
+	/// generation counter and invalidates outstanding iterators.
+	///
+	/// **Parameters:**
+	/// - `key` — key to insert (consumed by move).
+	/// - `value` — value to associate with `key` (consumed by move).
+	///
+	/// **Returns:** `Some(old_value)` if `key` was already present;
+	/// `None` if it's a fresh insertion.
+	///
+	/// **See also:** `HashMapCore.remove`, `HashMapCore.get`.
 	pub fn insert(self: &mut HashMapCore<K, V, B>, var key: K, var value: V) nothrow -> Optional<V> {
 		val needed = self.len + 1;
 		if not self.ensure_capacity(needed) {
@@ -883,6 +1137,15 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::None();
 	}
 
+	/// Removes `key`'s entry from the map and returns its value.
+	///
+	/// Bumps the generation counter and invalidates outstanding
+	/// iterators.
+	///
+	/// **Returns:** `Some(value)` if the entry was present; `None`
+	/// otherwise.
+	///
+	/// **See also:** `HashMapCore.insert`, `HashMapCore.clear`.
 	pub fn remove(self: &mut HashMapCore<K, V, B>, key: &K) nothrow -> Optional<V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -896,6 +1159,13 @@ implement<K, V, B> HashMapCore<K, V, B>
 		return Optional::Some(move v);
 	}
 
+	/// Returns a `HashMapIter<K, V, B>` yielding `HashMapItemRef`
+	/// views over the occupied entries.
+	///
+	/// Iteration order is not specified.  Mutating the map during
+	/// iteration aborts the next call to `next`.
+	///
+	/// **See also:** `HashMapIter`, `HashMapItemRef`.
 	pub fn iter(self: &HashMapCore<K, V, B>) nothrow -> HashMapIter<K, V, B> {
 		return HashMapIter<type K, V, B>(map = self, idx = 0, gen_snapshot = self.gen);
 	}
@@ -938,26 +1208,56 @@ implement<K, V, B> iter.SinglePassIterator<HashMapItemRef<K, V>> for HashMapIter
 	}
 }
 
+/// Iterator over `HashSetCore<K, B>` yielding shared references to
+/// each contained key.
+///
+/// Same invalidation contract as `HashMapIter`.
+///
+/// **See also:** `HashSetCore.iter`.
 pub struct HashSetIter<K, B> {
 	inner: HashMapIter<K, Bool, B>
 }
 
+/// Hash set keyed by `K`, hashed by `B`.
+///
+/// Implemented internally as a `HashMapCore<K, Bool, B>`; values are
+/// always `true`.  `K` and `B` have the same trait requirements as
+/// `HashMapCore`.
+///
+/// Most call sites use the `HashSet<K>` type alias and the
+/// `hash_set<K>()` constructor.
+///
+/// **See also:** `HashSet`, `hash_set`, `hash_set_with_capacity`,
+/// `hash_set_with_builder`, `HashSetCore.insert`,
+/// `HashSetCore.iter`.
 pub struct HashSetCore<K, B> {
 	map: HashMapCore<K, Bool, B>
 }
 
 pub type HashSet<K> = HashSetCore<K, hash.DefaultBuildHasher>;
 
+/// Constructs an empty `HashSet<K>` using `hash.DefaultBuildHasher`.
+///
+/// **See also:** `HashSet`, `hash_set_with_capacity`,
+/// `hash_set_with_builder`.
 pub fn hash_set<K>() nothrow -> HashSet<K> {
 	return hash_set_with_builder<type K, hash.DefaultBuildHasher>(hash.default_build_hasher());
 }
 
+/// Constructs an empty `HashSet<K>` with capacity reserved for at
+/// least `cap` keys.
+///
+/// **See also:** `hash_set`.
 pub fn hash_set_with_capacity<K>(cap: Int) nothrow -> HashSet<K>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher> {
 	var map = hash_map_with_capacity<type K, Bool>(cap);
 	return HashSetCore<type K, hash.DefaultBuildHasher>(map = move map);
 }
 
+/// Constructs an empty `HashSetCore<K, B>` using `builder` as the
+/// hash-builder.
+///
+/// **See also:** `hash_set`, `hash.BuildHasher`.
 pub fn hash_set_with_builder<K, B>(builder: B) nothrow -> HashSetCore<K, B> require B is hash.BuildHasher {
 	var map = hash_map_with_builder<type K, Bool, B>(builder);
 	return HashSetCore<type K, B>(map = move map);
@@ -965,22 +1265,35 @@ pub fn hash_set_with_builder<K, B>(builder: B) nothrow -> HashSetCore<K, B> requ
 
 implement<K, B> HashSetCore<K, B>
 	require K is cmp.Equatable, K is hash.Hash<hash.DefaultHasher>, B is hash.BuildHasher {
+	/// Returns the number of keys currently in the set.
 	pub fn len(self: &HashSetCore<K, B>) nothrow -> Int {
 		return self.map.len();
 	}
 
+	/// Returns `true` if the set contains no keys.
 	pub fn is_empty(self: &HashSetCore<K, B>) nothrow -> Bool {
 		return self.map.is_empty();
 	}
 
+	/// Removes every key from the set, keeping the allocated storage.
+	///
+	/// Bumps the underlying map's generation counter and invalidates
+	/// outstanding iterators.
 	pub fn clear(self: &mut HashSetCore<K, B>) nothrow -> Void {
 		self.map.clear();
 	}
 
+	/// Returns `true` if the set contains `key`.
 	pub fn contains(self: &HashSetCore<K, B>, key: &K) nothrow -> Bool {
 		return self.map.contains_key(key);
 	}
 
+	/// Inserts `key` into the set.
+	///
+	/// **Returns:** `true` if the key was newly inserted; `false` if
+	/// it was already present.
+	///
+	/// **See also:** `HashSetCore.remove`.
 	pub fn insert(self: &mut HashSetCore<K, B>, key: K) nothrow -> Bool {
 		val res = self.map.insert(key, true);
 		return match res {
@@ -989,6 +1302,12 @@ implement<K, B> HashSetCore<K, B>
 		};
 	}
 
+	/// Removes `key` from the set.
+	///
+	/// **Returns:** `true` if the key was present (and removed);
+	/// `false` otherwise.
+	///
+	/// **See also:** `HashSetCore.insert`.
 	pub fn remove(self: &mut HashSetCore<K, B>, key: &K) nothrow -> Bool {
 		val res = self.map.remove(key);
 		return match res {
@@ -997,6 +1316,11 @@ implement<K, B> HashSetCore<K, B>
 		};
 	}
 
+	/// Returns a `HashSetIter<K, B>` yielding shared references to
+	/// each key.
+	///
+	/// Iteration order is not specified.  Same invalidation contract
+	/// as the underlying `HashMapIter`.
 	pub fn iter(self: &HashSetCore<K, B>) nothrow -> HashSetIter<K, B> {
 		val inner = self.map.iter();
 		return HashSetIter<type K, B>(inner = inner);
@@ -1034,11 +1358,24 @@ implement<K, B> iter.SinglePassIterator<&K> for HashSetIter<K, B>
 	}
 }
 
+/// View of a single (key, value) entry yielded by `TreeMapIter`.
+///
+/// Both fields are borrowed references into the underlying map; the
+/// view is valid only while the iterator's generation snapshot
+/// matches the map.
 pub struct TreeMapItemRef<K, V> {
 	pub key: &K,
 	pub value: &V
 }
 
+/// In-order iterator over a `TreeMap<K, V>` yielding
+/// `TreeMapItemRef` values in ascending key order.
+///
+/// Records the map's generation snapshot on construction; mutation
+/// of the underlying map during iteration aborts the next call to
+/// `next`.
+///
+/// **See also:** `TreeMap.iter`, `TreeMapItemRef`.
 pub struct TreeMapIter<K, V> {
 	map: &TreeMap<K, V>,
 	stack: Array<Int>,
@@ -1052,7 +1389,21 @@ struct TreeMapFindResult {
 	cmp: Int
 }
 
-// Entry mutation avoids returning references; caller passes key again for insert/or_insert.
+/// Entry-API handle for a single (potentially absent) slot in a
+/// `TreeMap<K, V>`.
+///
+/// Returned by `TreeMap.entry_mut(key)`.  Lets callers do "insert if
+/// absent" or "remove if present" patterns without re-walking the
+/// tree.  The handle holds a `&mut TreeMap` borrow, so the map is
+/// inaccessible while the entry is live.
+///
+/// Entry mutators consume the handle (`var self`) — caller passes
+/// the key again for `insert` / `or_insert` because the handle does
+/// not retain it.
+///
+/// **See also:** `TreeMap.entry_mut`, `TreeMapEntryMut.is_occupied`,
+/// `TreeMapEntryMut.insert`, `TreeMapEntryMut.or_insert`,
+/// `TreeMapEntryMut.remove`.
 pub struct TreeMapEntryMut<K, V> {
 	map: &mut TreeMap<K, V>,
 	found: Bool,
@@ -1061,6 +1412,16 @@ pub struct TreeMapEntryMut<K, V> {
 	cmp: Int
 }
 
+/// Ordered map keyed by `K`, valued by `V`, backed by a red-black
+/// tree.
+///
+/// `K` must implement `cmp.Comparable`.  Iteration via `.iter()`
+/// produces entries in ascending key order.  Mutation bumps an
+/// internal generation counter that invalidates outstanding
+/// `TreeMapIter` views.
+///
+/// **See also:** `tree_map`, `TreeMap.insert`, `TreeMap.iter`,
+/// `TreeMap.entry_mut`, `TreeMapEntryMut`.
 pub struct TreeMap<K, V> {
 	root: Int,
 	len: Int,
@@ -1075,6 +1436,13 @@ pub struct TreeMap<K, V> {
 	free_head: Int
 }
 
+/// Constructs an empty `TreeMap<K, V>`.
+///
+/// Capacity grows on demand as entries are inserted.  `K` must
+/// implement `cmp.Comparable` to be used with the resulting map's
+/// methods.
+///
+/// **See also:** `TreeMap`, `TreeMap.insert`.
 pub fn tree_map<K, V>() -> TreeMap<K, V> {
 	unsafe {
 		var keys = mem.alloc_uninit<type K>(0);
@@ -1699,14 +2067,21 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return removed;
 	}
 
+	/// Returns the number of (key, value) entries in the map.
 	pub fn len(self: &TreeMap<K, V>) -> Int {
 		return self.len;
 	}
 
+	/// Returns `true` if the map contains no entries.
 	pub fn is_empty(self: &TreeMap<K, V>) -> Bool {
 		return self.len == 0;
 	}
 
+	/// Removes every entry from the map, keeping the allocated
+	/// storage on the free list.
+	///
+	/// Bumps the generation counter and invalidates outstanding
+	/// iterators.
 	pub fn clear(self: &mut TreeMap<K, V>) nothrow -> Void {
 		var stack: Array<Int> = [];
 		if self.root >= 0 {
@@ -1743,11 +2118,14 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		self.gen = self.gen + 1;
 	}
 
+	/// Returns `true` if the map has an entry for `key`.
 	pub fn contains_key(self: &TreeMap<K, V>, key: &K) -> Bool {
 		val res = self.find_slot(key);
 		return res.found;
 	}
 
+	/// Looks up `key` and returns a shared reference to the value, or
+	/// `None` if absent.
 	pub fn get(self: &TreeMap<K, V>, key: &K) -> Optional<&V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -1757,6 +2135,8 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return Optional::Some(v);
 	}
 
+	/// Looks up `key` and returns a mutable reference to the value,
+	/// or `None` if absent.
 	pub fn get_mut(self: &mut TreeMap<K, V>, key: &K) -> Optional<&mut V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -1766,6 +2146,13 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return Optional::Some(v);
 	}
 
+	/// Returns a `TreeMapEntryMut` handle for `key`'s slot.
+	///
+	/// The handle records whether the slot is occupied and where in
+	/// the tree it sits, so subsequent `insert` / `or_insert` /
+	/// `remove` on the entry don't repeat the lookup.
+	///
+	/// **See also:** `TreeMapEntryMut`.
 	pub fn entry_mut(self: &mut TreeMap<K, V>, key: &K) -> TreeMapEntryMut<K, V> {
 		val res = self.find_slot(key);
 		return TreeMapEntryMut<type K, V>(
@@ -1777,6 +2164,17 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		);
 	}
 
+	/// Inserts `(key, value)` into the map.
+	///
+	/// If `key` already maps to a value, replaces the value and
+	/// returns the old one as `Some(old)`.  Otherwise inserts a new
+	/// entry and returns `None`.  Bumps the generation counter and
+	/// invalidates outstanding iterators.
+	///
+	/// **Returns:** `Some(old_value)` if `key` was already present;
+	/// `None` if it's a fresh insertion.
+	///
+	/// **See also:** `TreeMap.remove`, `TreeMap.entry_mut`.
 	pub fn insert(self: &mut TreeMap<K, V>, key: K, value: V) -> Optional<V> {
 		val res = self.find_slot(&key);
 		if res.found {
@@ -1788,6 +2186,13 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return Optional::None();
 	}
 
+	/// Removes `key`'s entry from the map and returns its value.
+	///
+	/// Bumps the generation counter and invalidates outstanding
+	/// iterators.
+	///
+	/// **Returns:** `Some(value)` if the entry was present; `None`
+	/// otherwise.
 	pub fn remove(self: &mut TreeMap<K, V>, key: &K) -> Optional<V> {
 		val res = self.find_slot(key);
 		if not res.found {
@@ -1797,6 +2202,13 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		return Optional::Some(v);
 	}
 
+	/// Returns a `TreeMapIter<K, V>` yielding `TreeMapItemRef` values
+	/// in ascending key order.
+	///
+	/// Mutating the map during iteration aborts the next call to
+	/// `next`.
+	///
+	/// **See also:** `TreeMapIter`, `TreeMapItemRef`.
 	pub fn iter(self: &TreeMap<K, V>) -> TreeMapIter<K, V> {
 		var stack: Array<Int> = [];
 		self.push_left_spine(&mut stack, self.root);
@@ -1806,10 +2218,20 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 }
 
 implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
+	/// Returns `true` if the slot was already occupied at the time
+	/// `entry_mut` was called.
 	pub fn is_occupied(self: &TreeMapEntryMut<K, V>) -> Bool {
 		return self.found;
 	}
 
+	/// Inserts `(key, value)` into the entry's slot.
+	///
+	/// If the slot was already occupied, replaces the value and
+	/// returns the old one.  Otherwise inserts a new entry into the
+	/// tree at the recorded position.  Consumes the entry handle.
+	///
+	/// **Returns:** `Some(old_value)` if the slot was occupied;
+	/// `None` if it's a fresh insertion.
 	pub fn insert(var self: TreeMapEntryMut<K, V>, key: K, value: V) -> Optional<V> {
 		if self.found {
 			val old = self.map.read_value(self.idx);
@@ -1820,6 +2242,12 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 		return Optional::None();
 	}
 
+	/// Inserts `(key, value)` only if the slot is not already
+	/// occupied; otherwise leaves the existing value alone.
+	/// Consumes the entry handle.
+	///
+	/// **Returns:** `true` if the insertion happened; `false` if the
+	/// slot was already occupied.
 	pub fn or_insert(var self: TreeMapEntryMut<K, V>, key: K, value: V) -> Bool {
 		if self.found {
 			return false;
@@ -1828,6 +2256,11 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 		return true;
 	}
 
+	/// Removes the entry's value if the slot is occupied.  Consumes
+	/// the entry handle.
+	///
+	/// **Returns:** `Some(value)` if the slot was occupied; `None`
+	/// otherwise.
 	pub fn remove(var self: TreeMapEntryMut<K, V>) -> Optional<V> {
 		if not self.found {
 			return Optional::None();
@@ -1890,36 +2323,67 @@ implement<K, V> iter.SinglePassIterator<TreeMapItemRef<K, V>> for TreeMapIter<K,
 	}
 }
 
+/// In-order iterator over a `TreeSet<K>` yielding shared references
+/// to each contained key in ascending order.
+///
+/// Same invalidation contract as `TreeMapIter`.
+///
+/// **See also:** `TreeSet.iter`.
 pub struct TreeSetIter<K> {
 	inner: TreeMapIter<K, Bool>
 }
 
+/// Ordered set keyed by `K`, backed internally by a
+/// `TreeMap<K, Bool>`.
+///
+/// `K` must implement `cmp.Comparable`.  Iteration via `.iter()`
+/// produces keys in ascending order.
+///
+/// **See also:** `tree_set`, `TreeSet.insert`, `TreeSet.iter`.
 pub struct TreeSet<K> {
 	map: TreeMap<K, Bool>
 }
 
+/// Constructs an empty `TreeSet<K>`.
+///
+/// Capacity grows on demand.  `K` must implement `cmp.Comparable`
+/// to be used with the resulting set's methods.
+///
+/// **See also:** `TreeSet`.
 pub fn tree_set<K>() -> TreeSet<K> {
 	var map = tree_map<type K, Bool>();
 	return TreeSet<type K>(map = move map);
 }
 
 implement<K> TreeSet<K> require K is cmp.Comparable {
+	/// Returns the number of keys currently in the set.
 	pub fn len(self: &TreeSet<K>) -> Int {
 		return self.map.len();
 	}
 
+	/// Returns `true` if the set contains no keys.
 	pub fn is_empty(self: &TreeSet<K>) -> Bool {
 		return self.map.is_empty();
 	}
 
+	/// Removes every key from the set, keeping the allocated storage
+	/// on the underlying tree's free list.
+	///
+	/// Bumps the underlying map's generation counter and invalidates
+	/// outstanding iterators.
 	pub fn clear(self: &mut TreeSet<K>) nothrow -> Void {
 		self.map.clear();
 	}
 
+	/// Returns `true` if the set contains `key`.
 	pub fn contains(self: &TreeSet<K>, key: &K) -> Bool {
 		return self.map.contains_key(key);
 	}
 
+	/// Inserts `key` into the set.
+	///
+	/// **Returns:** `true` if the key was newly inserted; `false` if
+	/// it was already present.
 	pub fn insert(self: &mut TreeSet<K>, key: K) -> Bool {
 		val res = self.map.insert(key, true);
 		match res {
@@ -1928,6 +2392,10 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 		}
 	}
 
+	/// Removes `key` from the set.
+	///
+	/// **Returns:** `true` if the key was present (and removed);
+	/// `false` otherwise.
 	pub fn remove(self: &mut TreeSet<K>, key: &K) -> Bool {
 		val res = self.map.remove(key);
 		match res {
@@ -1936,6 +2404,10 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 		}
 	}
 
+	/// Returns a `TreeSetIter<K>` yielding shared references to each
+	/// key in ascending order.
+	///
+	/// Same invalidation contract as `TreeMap.iter`.
 	pub fn iter(self: &TreeSet<K>) -> TreeSetIter<K> {
 		val inner = self.map.iter();
 		return TreeSetIter<type K>(inner = inner);

@@ -58,20 +58,57 @@ export {
 	await_signal
 };
 
+/// Span of time used by timeouts, sleeps, and join deadlines, measured
+/// in milliseconds.
+///
+/// Invariant: `millis >= 0`.  Negative values are rejected at runtime
+/// by the helpers that consume `Duration` (notably `sleep` and
+/// `VirtualThread.join_timeout`), which return
+/// `Err(ConcurrencyError::Failed(InvalidDuration(...)))`.  `Duration`
+/// is `Copy`, so it can be passed around freely.
+///
+/// **See also:** `sleep`, `VirtualThread.join_timeout`,
+/// `InvalidDuration`.
 pub struct Duration {
-	// Invariant: millis >= 0 (negative durations are invalid; runtime should assert).
 	pub millis: Int
 }
 
 implement core.Copy for Duration {
 }
 
+/// Re-export of `lang.atomic.MemoryOrder` — the memory ordering tag
+/// passed to atomic load/store/RMW operations.
 pub type MemoryOrder = atomic.MemoryOrder;
+
+/// Re-export of `lang.atomic.AtomicBool` — atomic `Bool` cell with
+/// load / store / compare-exchange operations.
 pub type AtomicBool = atomic.AtomicBool;
+
+/// Re-export of `lang.atomic.AtomicInt` — atomic `Int` cell with
+/// load / store / fetch-add / compare-exchange operations.
 pub type AtomicInt = atomic.AtomicInt;
+
+/// Re-export of `lang.atomic.AtomicUint` — atomic `Uint` cell.
 pub type AtomicUint = atomic.AtomicUint;
+
+/// Re-export of `lang.atomic.AtomicUint64` — atomic `Uint64` cell.
 pub type AtomicUint64 = atomic.AtomicUint64;
 
+/// Error type returned by `std.concurrent` operations that may fail
+/// or be canceled.
+///
+/// `Timeout` — the operation's deadline elapsed before a result was
+/// produced (`sleep`, `join_timeout`, `FutureGroup.join_any` on an
+/// empty group).  `Cancelled` — the target was canceled before it
+/// completed.  `Closed` — the handle has already been joined or
+/// otherwise consumed.  `Busy` — an executor or queue rejected the
+/// submission because of saturation.  `Failed(err)` — wraps a
+/// caller-defined exception (typically `ExecSubmitFailed` or
+/// `InvalidDuration`) when no other variant fits.
+///
+/// `ConcurrencyError` implements `core.Throw`, so callers can use
+/// `or_throw` or rely on the auto-try contract inside `throws`
+/// functions.
 pub variant ConcurrencyError {
 	Timeout,
 	Cancelled,
@@ -114,37 +151,84 @@ implement core.Throw for ConcurrencyError {
 	}
 }
 
+/// Constructs an atomic `Bool` cell initialized to `v`.
+///
+/// **See also:** `AtomicBool`, `atomic_int`.
 pub fn atomic_bool(v: Bool) nothrow -> AtomicBool {
 	return atomic.atomic_bool(v);
 }
 
+/// Constructs an atomic `Int` cell initialized to `v`.
+///
+/// **See also:** `AtomicInt`, `atomic_uint`.
 pub fn atomic_int(v: Int) nothrow -> AtomicInt {
 	return atomic.atomic_int(v);
 }
 
+/// Constructs an atomic `Uint` cell initialized to `v`.
+///
+/// **See also:** `AtomicUint`, `atomic_uint64`.
 pub fn atomic_uint(v: Uint) nothrow -> AtomicUint {
 	return atomic.atomic_uint(v);
 }
 
+/// Constructs an atomic `Uint64` cell initialized to `v`.
+///
+/// **See also:** `AtomicUint64`.
 pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 	return atomic.atomic_uint64(v);
 }
 
+/// Reserved exception type for "join produced no value" situations.
+/// Currently unused — retained for forward compatibility.
 pub exception VtResultNotAvailable();
+
+/// Carries the runtime submit-failure code wrapped by
+/// `ConcurrencyError::Failed` when an executor rejects a `spawn_on`
+/// submission for a reason other than saturation or timeout.
+///
+/// `code` is the platform-specific error code; the catching site
+/// typically maps it to a coarse `ConcurrencyError` variant.
 pub exception ExecSubmitFailed(code: Int);
+
+/// Carries the offending value when a `Duration`-taking helper is
+/// called with `millis < 0`.  Wrapped by
+/// `ConcurrencyError::Failed(InvalidDuration(...))`.
 pub exception InvalidDuration(millis: Int);
 
-// Process signal types delivered by await_signal().  Linux only.
+/// Process signal types delivered by `await_signal`.  Linux only.
+///
+/// `Interrupt` is `SIGINT` (typically `Ctrl-C`).  `Terminate` is
+/// `SIGTERM`.  No other signals are observable through this API.
+///
+/// **See also:** `await_signal`.
 pub variant ProcessSignal {
-	Interrupt,   // SIGINT (Ctrl-C)
-	Terminate,   // SIGTERM
+	Interrupt,
+	Terminate,
 }
 
+/// Policy controlling what an executor does when its task queue is
+/// saturated (full).
+///
+/// `Block` — the submitter blocks until queue space opens up or the
+/// executor's submit timeout elapses.  `ReturnBusy` — the submitter
+/// is rejected immediately with `ConcurrencyError::Busy`.
+///
+/// **See also:** `ExecutorPolicyBuilder.on_saturation`.
 pub variant SaturationPolicy {
 	Block,
 	ReturnBusy,
 }
 
+/// Frozen configuration for an `Executor`.
+///
+/// Built via `ExecutorPolicyBuilder` and consumed by `build_executor`.
+/// Marked `Copy` so it can be reused across multiple executor
+/// constructions.  The fields are private; configuration is via the
+/// builder.
+///
+/// **See also:** `ExecutorPolicyBuilder`, `build_executor`,
+/// `default_executor`.
 pub struct ExecutorPolicy {
 	min_threads: Int,
 	max_threads: Int,
@@ -157,6 +241,17 @@ pub struct ExecutorPolicy {
 implement core.Copy for ExecutorPolicy {
 }
 
+/// Mutable builder for `ExecutorPolicy`.
+///
+/// Constructed via `executor_policy_builder()` with conservative
+/// defaults (1 worker, no queue limit, immediate timeout, return-busy
+/// on saturation, 256 KiB stack).  Configurator methods mutate the
+/// builder in place and return `&mut Self` for chaining.  Call
+/// `.build()` to freeze into an `ExecutorPolicy`, or
+/// `.build_executor()` to construct the running `Executor` directly.
+///
+/// **See also:** `executor_policy_builder`,
+/// `ExecutorPolicyBuilder.build`, `ExecutorPolicyBuilder.build_executor`.
 pub struct ExecutorPolicyBuilder {
 	min_threads: Int,
 	max_threads: Int,
@@ -166,6 +261,15 @@ pub struct ExecutorPolicyBuilder {
 	stack_bytes: Int,
 }
 
+/// Handle to a running thread-pool executor.
+///
+/// Construct via `build_executor(policy)` or `default_executor()`.
+/// `Executor` is `Copy` — the underlying handle is shared, not owned
+/// by any particular value.  Pass to `spawn_on` / `spawn_future_on`
+/// to submit tasks against this executor instead of the default.
+///
+/// **See also:** `default_executor`, `build_executor`,
+/// `set_default_executor`, `spawn_on`.
 pub struct Executor {
 	policy: ExecutorPolicy,
 	handle: Int
@@ -174,6 +278,17 @@ pub struct Executor {
 implement core.Copy for Executor {
 }
 
+/// Handle to an in-flight virtual-thread task that produces a value
+/// of type `T`.
+///
+/// Construct via `spawn` (default executor), `spawn_cb`, or
+/// `spawn_on` (specific executor).  Use `.join` (blocking) or
+/// `.join_timeout(d)` (bounded) to wait for the result.  `.cancel()`
+/// requests cooperative cancellation.  The `Destructible` impl drops
+/// any unjoined handle and frees the result buffer.
+///
+/// **See also:** `spawn`, `Future`, `VirtualThread.join`,
+/// `VirtualThread.join_timeout`, `VirtualThread.cancel`.
 pub struct VirtualThread<T> {
 	joined: Bool,
 	handle: Int,
@@ -182,36 +297,105 @@ pub struct VirtualThread<T> {
 	submit_error: Int
 }
 
+/// Marker handle passed to the closure given to `scope`.
+///
+/// Currently empty — reserved as the ergonomic anchor for future
+/// scoped-spawn APIs.  The type's existence lets `scope` express its
+/// callback shape (`F is core.Fn1<Scope, Void>`).
+///
+/// **See also:** `scope`.
 pub struct Scope {
 }
 
+/// Future-style wrapper around a `VirtualThread<T>`.
+///
+/// Equivalent to a `VirtualThread<T>` for joining/cancelling, with
+/// the addition of `.is_done` for non-blocking readiness checks and
+/// the ability to be aggregated in a `FutureGroup<T>`.
+///
+/// Construct via `spawn_future` or `spawn_future_on`.
+///
+/// **See also:** `spawn_future`, `FutureGroup`, `Future.join`,
+/// `Future.is_done`.
 pub struct Future<T> {
 	vt: VirtualThread<T>
 }
 
+/// Collection of `Future<T>` values supporting batched join.
+///
+/// Construct via `future_group<T>()`, then add futures with `.add(f)`.
+/// `.join_all()` waits for every future and collects the results;
+/// `.join_any()` returns the first ready value.  Requires `T: Copy`
+/// because both terminators may move out of internal storage.
+///
+/// **See also:** `future_group`, `Future`, `FutureGroup.add`,
+/// `FutureGroup.join_all`, `FutureGroup.join_any`.
 pub struct FutureGroup<T> {
 	items: Array<Future<T>>
 }
 
+/// Reference-counted heap allocation backing an `Arc<T>`.
+///
+/// Internal layout — not normally constructed directly by user code.
 pub struct ArcBox<T> {
 	count: atomic.AtomicInt,
 	value: T
 }
 
+/// Atomically reference-counted shared owner of a `T`.
+///
+/// Construct via `arc(value)`.  Each `.clone()` increments the count;
+/// dropping an `Arc<T>` decrements and frees the storage when the
+/// last reference goes away.  Implements `core.Borrow<T>` and
+/// `core.BorrowMut<T>`, so it composes with code that takes
+/// `&T` / `&mut T` via UFCS resolution.
+///
+/// **See also:** `arc`, `Arc.clone`, `Arc.get`, `Arc.get_mut`,
+/// `Mutex`.
 pub struct Arc<T> {
 	buf: mem.RawBuffer<ArcBox<T>>
 }
 
+/// Mutual-exclusion lock around a `T`.
+///
+/// Construct via `mutex(value)`.  Acquire via `.lock()` (which
+/// returns a `MutexGuard<T>`) or the free `lock()` function.  The
+/// guard's `Destructible` impl releases the lock on scope exit, so
+/// the typical pattern is `var g = lock(&m); g.get_mut().method()`.
+///
+/// `Mutex` is built on `AtomicBool` + spin; it is **not** a parking
+/// or futex-based lock.  Hold it for short critical sections only.
+///
+/// **See also:** `mutex`, `lock`, `Mutex.lock`, `MutexGuard`, `Arc`.
 pub struct Mutex<T> {
 	locked: atomic.AtomicBool,
 	value: T
 }
 
+/// RAII guard returned by `Mutex.lock` / `lock(&m)`.
+///
+/// Holds the mutex until dropped, at which point the guard's
+/// `Destructible` impl releases the lock.  Use `.get_mut()` (or the
+/// free `mutex_guard_get_mut(&mut g)`) to access the protected value.
+/// Implements `core.BorrowMut<T>` so the guard composes with `&mut T`
+/// receivers via UFCS.
+///
+/// **See also:** `Mutex`, `MutexGuard.get_mut`, `mutex_guard_get_mut`.
 pub struct MutexGuard<T> {
 	mtx: &Mutex<T>,
 	value_ptr: mem.Ptr<T>
 }
 
+/// Constructs a fresh `Arc<T>` owning `value` with reference count 1.
+///
+/// **Parameters:**
+/// - `value` — the owned value to share.
+///
+/// **Returns:** an `Arc<T>` wrapping a new heap allocation.
+///
+/// **See also:** `Arc`, `Arc.clone`, `Arc.get`.
+///
+/// **Example:** `examples/runtime_registry/per_thread_slots.drift`.
 pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type ArcBox<T>>(1);
@@ -222,6 +406,12 @@ pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 }
 
 implement<T> Arc<T> {
+	/// Returns a new `Arc<T>` sharing the same underlying allocation.
+	///
+	/// Atomically increments the reference count.  Cheap — no heap
+	/// allocation, no value copy.
+	///
+	/// **See also:** `Arc.get`, `arc`.
 	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
 		unsafe {
 			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
@@ -232,6 +422,9 @@ implement<T> Arc<T> {
 		return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
 	}
 
+	/// Returns a shared reference to the contained value.
+	///
+	/// **See also:** `Arc.get_mut`.
 	pub fn get(self: &Arc<T>) nothrow -> &T {
 		unsafe {
 			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
@@ -239,6 +432,14 @@ implement<T> Arc<T> {
 		}
 	}
 
+	/// Returns a mutable reference to the contained value.
+	///
+	/// `&mut` access through `Arc<T>` is **not** synchronized.  When
+	/// the value is shared across virtual threads, wrap it in a
+	/// `Mutex<T>` (and store `Arc<Mutex<T>>`) to obtain a guarded
+	/// `&mut T`.
+	///
+	/// **See also:** `Arc.get`, `Mutex`.
 	pub fn get_mut(self: &mut Arc<T>) nothrow -> &mut T {
 		unsafe {
 			val slot = mem.ptr_at_mut<type ArcBox<T>>(&mut self.buf, 0);
@@ -288,10 +489,23 @@ implement<T> core.Destructible for Arc<T> {
 	}
 }
 
+/// Constructs a `Mutex<T>` wrapping `value`, initially unlocked.
+///
+/// **See also:** `Mutex`, `lock`, `Arc`.
 pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
 	return Mutex<type T>(locked = atomic_bool(false), value = value);
 }
 
+/// Acquires the mutex, spinning until it is uncontended.
+///
+/// Free-function form of `Mutex.lock`.  Returns a `MutexGuard<T>`
+/// that releases the lock when dropped.
+///
+/// **Parameters:**
+/// - `m` — the mutex to acquire.
+///
+/// **See also:** `Mutex.lock`, `MutexGuard`,
+/// `mutex_guard_get_mut`.
 pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
 	while not atomic.atomic_compare_exchange_bool(&m.locked, false, true, 1, 0) {
 	}
@@ -301,6 +515,13 @@ pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
 	}
 }
 
+/// Free-function form of `MutexGuard.get_mut`.  Returns a mutable
+/// reference to the protected value.
+///
+/// **Parameters:**
+/// - `g` — the held guard.
+///
+/// **See also:** `MutexGuard.get_mut`, `lock`.
 pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
 	unsafe {
 		return mem.ptr_as_mut_ref<type T>(g.value_ptr);
@@ -308,6 +529,7 @@ pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
 }
 
 implement<T> Mutex<T> {
+	/// Method form of `lock`.  See that function for full semantics.
 	pub fn lock(self: &Mutex<T>) nothrow -> MutexGuard<T> {
 		while not atomic.atomic_compare_exchange_bool(&self.locked, false, true, 1, 0) {
 		}
@@ -319,6 +541,12 @@ implement<T> Mutex<T> {
 }
 
 implement<T> MutexGuard<T> {
+	/// Returns a mutable reference to the value protected by the
+	/// underlying mutex.
+	///
+	/// The reference is valid until the guard is dropped.
+	///
+	/// **See also:** `mutex_guard_get_mut`, `Mutex.lock`.
 	pub fn get_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
 		unsafe {
 			return mem.ptr_as_mut_ref<type T>(self.value_ptr);
@@ -339,6 +567,11 @@ implement<T> core.Destructible for MutexGuard<T> {
 }
 
 
+/// Returns a fresh `ExecutorPolicyBuilder` with conservative defaults
+/// (1 worker thread, no queue limit, immediate timeout, return-busy on
+/// saturation, 256 KiB stack).
+///
+/// **See also:** `ExecutorPolicyBuilder`, `build_executor`.
 pub fn executor_policy_builder() nothrow -> ExecutorPolicyBuilder {
 	return ExecutorPolicyBuilder(
 		min_threads = 1,
@@ -351,36 +584,75 @@ pub fn executor_policy_builder() nothrow -> ExecutorPolicyBuilder {
 }
 
 implement ExecutorPolicyBuilder {
+	/// Sets the minimum number of worker threads kept alive.
+	///
+	/// **Parameters:**
+	/// - `v` — minimum thread count.
 	pub fn min_threads(self: &mut ExecutorPolicyBuilder, v: Int) nothrow -> &mut ExecutorPolicyBuilder {
 		self.min_threads = v;
 		return self;
 	}
 
+	/// Sets the maximum number of worker threads the executor may
+	/// spin up.
+	///
+	/// **Parameters:**
+	/// - `v` — maximum thread count.
 	pub fn max_threads(self: &mut ExecutorPolicyBuilder, v: Int) nothrow -> &mut ExecutorPolicyBuilder {
 		self.max_threads = v;
 		return self;
 	}
 
+	/// Sets the maximum number of pending tasks queued before
+	/// saturation policy applies.  `0` means unbounded.
+	///
+	/// **Parameters:**
+	/// - `v` — queue capacity (0 = unbounded).
+	///
+	/// **See also:** `ExecutorPolicyBuilder.on_saturation`.
 	pub fn queue_limit(self: &mut ExecutorPolicyBuilder, v: Int) nothrow -> &mut ExecutorPolicyBuilder {
 		self.queue_limit = v;
 		return self;
 	}
 
+	/// Sets the per-submit blocking timeout used when the queue is
+	/// full and the saturation policy is `Block`.
+	///
+	/// **Parameters:**
+	/// - `v` — submit-blocking timeout.
 	pub fn timeout(self: &mut ExecutorPolicyBuilder, v: Duration) nothrow -> &mut ExecutorPolicyBuilder {
 		self.timeout = v;
 		return self;
 	}
 
+	/// Sets the saturation policy — what to do when the queue is
+	/// full.
+	///
+	/// **Parameters:**
+	/// - `v` — `SaturationPolicy::Block` or `SaturationPolicy::ReturnBusy`.
+	///
+	/// **See also:** `SaturationPolicy`.
 	pub fn on_saturation(self: &mut ExecutorPolicyBuilder, var v: SaturationPolicy) nothrow -> &mut ExecutorPolicyBuilder {
 		self.on_saturation = move v;
 		return self;
 	}
 
+	/// Sets the per-virtual-thread stack size in bytes.
+	///
+	/// **Parameters:**
+	/// - `v` — stack size in bytes.
 	pub fn stack_bytes(self: &mut ExecutorPolicyBuilder, v: Int) nothrow -> &mut ExecutorPolicyBuilder {
 		self.stack_bytes = v;
 		return self;
 	}
 
+	/// Materializes the builder into an immutable `ExecutorPolicy`.
+	///
+	/// **Returns:** a `Copy` policy value suitable for passing to
+	/// `build_executor`.
+	///
+	/// **See also:** `ExecutorPolicyBuilder.build_executor`,
+	/// `build_executor`.
 	pub fn build(self: &ExecutorPolicyBuilder) nothrow -> ExecutorPolicy {
 		return ExecutorPolicy(
 			min_threads = self.min_threads,
@@ -392,6 +664,13 @@ implement ExecutorPolicyBuilder {
 		);
 	}
 
+	/// Convenience that calls `.build()` and immediately constructs
+	/// the running `Executor` from the resulting policy.
+	///
+	/// **Returns:** an `Executor` ready to receive `spawn_on`
+	/// submissions.
+	///
+	/// **See also:** `build_executor`.
 	pub fn build_executor(self: &ExecutorPolicyBuilder) nothrow -> Executor {
 		var policy = self.build();
 		var sat = 0;
@@ -411,6 +690,14 @@ implement ExecutorPolicyBuilder {
 	}
 }
 
+/// Returns the process-wide default `Executor`, lazily constructing
+/// one with default policy on the first call.
+///
+/// Subsequent calls return the same handle.  Override the default
+/// with `set_default_executor`.
+///
+/// **See also:** `set_default_executor`, `build_executor`,
+/// `executor_policy_builder`.
 pub fn default_executor() nothrow -> Executor {
 	var b = executor_policy_builder();
 	var h = thread.exec_default_get();
@@ -422,6 +709,14 @@ pub fn default_executor() nothrow -> Executor {
 	return Executor(policy = b.build(), handle = h);
 }
 
+/// Constructs a running `Executor` from `policy`.
+///
+/// **Parameters:**
+/// - `policy` — the executor configuration to apply.
+///
+/// **Returns:** an `Executor` ready to receive `spawn_on` submissions.
+///
+/// **See also:** `default_executor`, `executor_policy_builder`.
 pub fn build_executor(policy: ExecutorPolicy) nothrow -> Executor {
 	var sat = 0;
 	match policy.on_saturation {
@@ -439,11 +734,37 @@ pub fn build_executor(policy: ExecutorPolicy) nothrow -> Executor {
 	return Executor(policy = policy, handle = handle);
 }
 
+/// Replaces the process-wide default `Executor`.
+///
+/// Subsequent calls to `default_executor()` return the supplied
+/// handle.  Useful at startup to pin a specific policy globally.
+///
+/// **Parameters:**
+/// - `exec` — executor to install as the default.
+///
+/// **See also:** `default_executor`, `build_executor`.
 pub fn set_default_executor(exec: Executor) nothrow -> Void {
 	thread.exec_default_set(exec.handle);
 	return;
 }
 
+/// Spawns `cb` on the default executor and returns a
+/// `VirtualThread<T>` handle for joining the result.
+///
+/// **Parameters:**
+/// - `cb` — callback whose return value will become the joined
+///   result.
+///
+/// **Returns:** a `VirtualThread<T>` whose `submit_error` is non-zero
+/// if the executor refused submission (check via `.join` to surface
+/// the error as `ConcurrencyError::Failed(ExecSubmitFailed(code))`).
+/// Use `spawn_on` if you want the submit failure surfaced as a
+/// `Result` directly instead of being deferred to join.
+///
+/// **See also:** `spawn_on`, `spawn_future`, `default_executor`,
+/// `VirtualThread`.
+///
+/// **Example:** `examples/sync_mpsc_queue/main.drift`.
 pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	var exec = default_executor();
 	unsafe {
@@ -473,6 +794,10 @@ pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	}
 }
 
+/// Compatibility alias for `spawn`.  Identical behavior; retained for
+/// older callers that distinguished callback shapes.
+///
+/// **See also:** `spawn`.
 pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	var exec = default_executor();
 	unsafe {
@@ -502,6 +827,23 @@ pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	}
 }
 
+/// Spawns `cb` on the supplied executor and surfaces submission
+/// failure as a `Result`.
+///
+/// **Parameters:**
+/// - `exec` — executor to submit against.
+/// - `cb` — callback whose return value will become the joined
+///   result.
+///
+/// **Returns:** `Ok(VirtualThread<T>)` if the submit succeeded.
+/// `Err(ConcurrencyError::Busy)` if the executor is saturated and
+/// configured to return-busy.  `Err(ConcurrencyError::Timeout)` if
+/// the saturation policy is `Block` and the submit timeout elapsed.
+/// `Err(ConcurrencyError::Failed(ExecSubmitFailed(code)))` for
+/// other submit failures.
+///
+/// **See also:** `spawn`, `spawn_future_on`, `Executor`,
+/// `SaturationPolicy`.
 pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
 	unsafe {
 		var buf = mem.alloc_uninit<type T>(1);
@@ -540,11 +882,20 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 	}
 }
 
+/// `Future`-shaped form of `spawn`.  Wraps the resulting
+/// `VirtualThread<T>` in a `Future<T>` so it can be added to a
+/// `FutureGroup`.
+///
+/// **See also:** `spawn`, `Future`, `FutureGroup`.
 pub fn spawn_future<T>(var cb: core.Callback0<T>) nothrow -> Future<T> {
 	var vt = spawn<type T>(move cb);
 	return Future<type T>(move vt);
 }
 
+/// `Future`-shaped form of `spawn_on`.  Submission failures surface
+/// as `Err(ConcurrencyError)` (same shape as `spawn_on`).
+///
+/// **See also:** `spawn_on`, `Future`, `FutureGroup`.
 pub fn spawn_future_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Result<Future<T>, ConcurrencyError> {
 	var res = spawn_on<type T>(exec, move cb);
 	return match res {
@@ -554,6 +905,13 @@ pub fn spawn_future_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> 
 	};
 }
 
+/// Constructs an empty `FutureGroup<T>`.
+///
+/// Add futures with `.add(f)`, then call `.join_all()` or
+/// `.join_any()` to await them.  Requires `T: Copy` — see
+/// `FutureGroup` for why.
+///
+/// **See also:** `FutureGroup`, `spawn_future`.
 pub fn future_group<T>() nothrow -> FutureGroup<T> {
 	var items: Array<Future<T>> = [];
 	return FutureGroup<type T>(move items);
@@ -572,6 +930,21 @@ fn _check_duration(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 
 
 implement<T> VirtualThread<T> {
+	/// Blocks until the spawned task completes, then returns its
+	/// produced value.
+	///
+	/// Marks `self` as joined; further joins return
+	/// `Err(ConcurrencyError::Closed)`.  If the underlying executor
+	/// rejected the original submission, the deferred error surfaces
+	/// here as `Err(ConcurrencyError::Failed(ExecSubmitFailed(...)))`.
+	/// If the task was cancelled, returns `Err(Cancelled)` after the
+	/// internal cleanup completes.
+	///
+	/// **Returns:** `Ok(T)` with the task's produced value.
+	/// `Err(ConcurrencyError)` for closed/failed/cancelled cases.
+	///
+	/// **See also:** `VirtualThread.join_timeout`,
+	/// `VirtualThread.cancel`.
 	pub fn join(self: &mut VirtualThread<T>) nothrow -> core.Result<T, ConcurrencyError> {
 		if self.joined {
 			return core.Result::Err(ConcurrencyError::Closed());
@@ -611,6 +984,22 @@ implement<T> VirtualThread<T> {
 		}
 	}
 
+	/// Blocks until the spawned task completes or `d` elapses.
+	///
+	/// Same success/failure shape as `join`, plus
+	/// `Err(ConcurrencyError::Timeout)` when the deadline hits before
+	/// the task is done.  `d.millis < 0` is rejected as
+	/// `Err(Failed(InvalidDuration(...)))`; `d.millis == 0` returns
+	/// `Err(Timeout)` immediately if the task is not already
+	/// completed.
+	///
+	/// **Parameters:**
+	/// - `d` — maximum time to wait.
+	///
+	/// **Returns:** `Ok(T)` on completion within the deadline;
+	/// `Err(ConcurrencyError)` otherwise.
+	///
+	/// **See also:** `VirtualThread.join`, `VirtualThread.cancel`.
 	pub fn join_timeout(self: &mut VirtualThread<T>, d: Duration) nothrow -> core.Result<T, ConcurrencyError> {
 		var ok = _check_duration(d);
 		match ok {
@@ -675,6 +1064,14 @@ implement<T> VirtualThread<T> {
 		}
 	}
 
+	/// Requests cooperative cancellation of the spawned task.
+	///
+	/// No-op if the thread is already joined or if no live handle is
+	/// attached.  After a successful cancellation request, the next
+	/// `join`/`join_timeout` call returns
+	/// `Err(ConcurrencyError::Cancelled)`.
+	///
+	/// **See also:** `VirtualThread.join`, `VirtualThread.join_timeout`.
 	pub fn cancel(self: &mut VirtualThread<T>) nothrow -> Void {
 		if self.joined {
 			return;
@@ -708,30 +1105,59 @@ implement<T> core.Destructible for VirtualThread<T> {
 }
 
 implement<T> Future<T> {
+	/// Method form of the inner `VirtualThread.join`.  See that method
+	/// for full semantics.
 	pub fn join(self: &mut Future<T>) nothrow -> core.Result<T, ConcurrencyError> {
 		return self.vt.join();
 	}
 
+	/// Method form of the inner `VirtualThread.join_timeout`.  See
+	/// that method for full semantics.
 	pub fn join_timeout(self: &mut Future<T>, d: Duration) nothrow -> core.Result<T, ConcurrencyError> {
 		return self.vt.join_timeout(d);
 	}
 
+	/// Method form of the inner `VirtualThread.cancel`.  See that
+	/// method for full semantics.
 	pub fn cancel(self: &mut Future<T>) nothrow -> Void {
 		self.vt.cancel();
 		return;
 	}
 
+	/// Returns `true` if the future has already been joined.
+	///
+	/// Non-blocking — does not check the underlying task; only
+	/// reflects whether `.join` / `.join_timeout` has run to
+	/// completion on this `Future` value.
+	///
+	/// **See also:** `Future.join`, `Future.join_timeout`.
 	pub fn is_done(self: &Future<T>) nothrow -> Bool {
 		return self.vt.joined;
 	}
 }
 
 implement<T> FutureGroup<T> require T is core.Copy {
+	/// Adds `f` to the group.  Order of insertion is preserved by
+	/// `join_all`.
+	///
+	/// **Parameters:**
+	/// - `f` — future to take ownership of.
 	pub fn add(self: &mut FutureGroup<T>, var f: Future<T>) nothrow -> Void {
 		self.items.push(move f);
 		return;
 	}
 
+	/// Joins every future in the group sequentially and returns the
+	/// collected results in insertion order.
+	///
+	/// Stops at the first `Err` and returns it; futures after the
+	/// failing one are left un-joined (their destructors will drop
+	/// them on scope exit).
+	///
+	/// **Returns:** `Ok(Array<T>)` if every future produced a value;
+	/// `Err(ConcurrencyError)` from the first failing join.
+	///
+	/// **See also:** `FutureGroup.join_any`.
 	pub fn join_all(self: &mut FutureGroup<T>) nothrow -> core.Result<Array<T>, ConcurrencyError> {
 		var out: Array<T> = [];
 		var i: Int = 0;
@@ -747,6 +1173,21 @@ implement<T> FutureGroup<T> require T is core.Copy {
 		return core.Result::Ok(out);
 	}
 
+	/// Returns the result of the first ready future in the group,
+	/// polling each in turn and parking briefly between sweeps.
+	///
+	/// **Returns:** `Ok(T)` from the first ready future.
+	/// `Err(ConcurrencyError::Timeout)` if the group is empty.
+	/// `Err(ConcurrencyError::Closed)` if every future is already
+	/// joined and no value remains to be observed.
+	///
+	/// Note: the value returned by `join_any` is read out of the
+	/// future's internal storage but the future is **not** marked as
+	/// joined here; `join_all` may observe it again.  Callers that
+	/// need single-shot semantics should `add` each future to a fresh
+	/// group, or call `.join` directly.
+	///
+	/// **See also:** `FutureGroup.join_all`.
 	pub fn join_any(self: &mut FutureGroup<T>) nothrow -> core.Result<T, ConcurrencyError> {
 		if self.items.len == 0 {
 			return core.Result::Err(ConcurrencyError::Timeout());
@@ -784,12 +1225,42 @@ implement<T> FutureGroup<T> require T is core.Copy {
 	}
 }
 
+/// Runs `f` with a fresh `Scope` handle.
+///
+/// Currently a thin shape — invokes `f.call(scope)` once and returns
+/// `Ok(void)`.  Reserved as the entry point for scoped-spawn APIs
+/// that will guarantee all spawned tasks complete before `scope`
+/// returns.
+///
+/// **Parameters:**
+/// - `f` — callable with shape `Fn1<Scope, Void>`.
+///
+/// **Returns:** `Ok(void)` after `f` returns.  Currently never
+/// returns `Err`, but the result type is reserved for future
+/// scoped-spawn failure modes.
+///
+/// **See also:** `Scope`.
 pub fn scope<F>(f: F) -> core.Result<Void, ConcurrencyError> require F is core.Fn1<Scope, Void> {
 	var s = Scope();
 	f.call(move s);
 	return core.Result::Ok(core.void_value());
 }
 
+/// Suspends the calling virtual thread for `d`.
+///
+/// Off the virtual-thread runtime (e.g. on the main thread before any
+/// VT exists), this yields control for `d.millis` real milliseconds
+/// without registering a reactor timer.
+///
+/// **Parameters:**
+/// - `d` — duration to sleep.
+///
+/// **Returns:** `Ok(void)` on normal wake-up.
+/// `Err(Failed(InvalidDuration(...)))` if `d.millis < 0`.
+/// `Err(Timeout)` if `d.millis == 0` (zero-sleep is treated as an
+/// immediate timeout, not a no-op).
+///
+/// **See also:** `Duration`.
 pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	var ok = _check_duration(d);
 	match ok {
@@ -810,39 +1281,32 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	return core.Result::Ok(core.void_value());
 }
 
-// Block the calling virtual thread until a supported process signal is
-// delivered, then return which signal was received.
-//
-// Contract (normative):
-//
-//   Platform support
-//     Linux only. Other platforms are not supported and the runtime makes no
-//     guarantees about behavior off Linux.
-//
-//   Supported signals
-//     - SIGINT  -> ProcessSignal::Interrupt   (typically Ctrl-C)
-//     - SIGTERM -> ProcessSignal::Terminate
-//     No other signals are observable through this API. Signals outside this
-//     set continue to follow their default disposition and are not delivered
-//     to the waiter.
-//
-//   Single-waiter rule
-//     At most one virtual thread per process may be blocked in
-//     await_signal() at a time. The intended use is a single shutdown
-//     coordinator near main(). Calling await_signal() concurrently from a
-//     second VT while another is already waiting is a hard program error and
-//     aborts the process with a diagnostic; it is not a recoverable
-//     exception. After the in-flight call returns, a subsequent call from
-//     another VT is allowed.
-//
-//   Throw contract
-//     nothrow. The function returns a ProcessSignal on success and aborts on
-//     misuse; there is no error result type to inspect.
-//
-//   Delivery semantics
-//     The call blocks until exactly one supported signal is delivered, then
-//     returns. It does not coalesce or queue subsequent signals; to react to
-//     repeated signals, call await_signal() again.
+/// Blocks the calling virtual thread until a supported process
+/// signal (`SIGINT` or `SIGTERM`) is delivered, then returns which
+/// one.
+///
+/// **Platform:** Linux only.  Behavior off Linux is unsupported.
+///
+/// **Single-waiter rule:** at most one virtual thread per process may
+/// be blocked in `await_signal` at a time — the intended use is a
+/// single shutdown coordinator near `main`.  A second concurrent
+/// caller while one is already waiting is a hard program error and
+/// aborts the process with a diagnostic; it is **not** a recoverable
+/// exception.  Sequential reuse from a different VT after the
+/// in-flight call returns is allowed.
+///
+/// **Throw contract:** `nothrow`.  Misuse aborts; success returns a
+/// `ProcessSignal`.
+///
+/// **Delivery semantics:** the call blocks until exactly one
+/// supported signal is delivered, then returns.  Subsequent signals
+/// are not coalesced or queued — call `await_signal` again to react
+/// to another signal.
+///
+/// **Returns:** `ProcessSignal::Interrupt` for `SIGINT`,
+/// `ProcessSignal::Terminate` for `SIGTERM`.
+///
+/// **See also:** `ProcessSignal`.
 pub fn await_signal() nothrow -> ProcessSignal {
 	val signo = thread.signal_await();
 	if signo == 15 {
@@ -851,6 +1315,22 @@ pub fn await_signal() nothrow -> ProcessSignal {
 	return ProcessSignal::Interrupt();
 }
 
+/// Parks the calling virtual thread on the I/O reactor until `fd`
+/// becomes ready for the given interest, or until `deadline_ms`
+/// elapses.
+///
+/// Low-level primitive used by stdlib I/O modules to integrate
+/// blocking syscalls with the virtual-thread scheduler.  No-op on
+/// the main thread (`vt_current() == 0`).
+///
+/// **Parameters:**
+/// - `fd` — file descriptor to register with the reactor.
+/// - `interest` — readiness mask (1 = readable, 4 = writable;
+///   matches the values used by the runtime reactor).
+/// - `deadline_ms` — absolute wake-up time in milliseconds; `0`
+///   means park indefinitely.
+///
+/// **See also:** `sleep`.
 pub fn block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	var vt = thread.vt_current();
 	if vt == 0 {
