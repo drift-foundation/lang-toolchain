@@ -1,15 +1,11 @@
 module main;
 
 import std.concurrent as conc;
-import std.core as core;
 
 pub fn main() nothrow -> Int {
 	var x: Int = 42;
 	try {
-		val res = conc.scope(|_s: std.concurrent.Scope| captures(copy x) nothrow => { val y = x; return; });
-		match res {
-			core.Result::Ok(_) => { return 0; },
-			core.Result::Err(_) => { return 1; },
-		}
+		conc.scope(|_s: std.concurrent.Scope| captures(copy x) nothrow => { val y = x; return; });
+		return 0;
 	} catch e { return 2; }
 }
