@@ -75,8 +75,23 @@ export {
 	env_has_raw
 };
 
+/// **Internal stdlib infrastructure.**
+///
+/// `lang.thread` exposes the raw OS / runtime primitives that
+/// `std.io`, `std.net`, `std.concurrent`, `std.runtime`, and
+/// `std.env` wrap into safe, ergonomic APIs.  Application code
+/// should call the `std.*` wrappers — direct use of `lang.thread`
+/// bypasses the safety, timeout, and error-mapping contracts the
+/// wrappers enforce.
+///
+/// Opaque handle for a virtual-thread instance.
 pub type VtHandle = Int;
+
+/// Opaque handle for a thread-pool executor.  Internal — see
+/// `std.concurrent.Executor`.
 pub type ExecutorHandle = Int;
+
+/// Opaque handle for the I/O reactor.  Internal infrastructure.
 pub type ReactorHandle = Int;
 
 @intrinsic pub fn vt_spawn(entry: core.Callback0<Void>, exec: ExecutorHandle) nothrow -> VtHandle;

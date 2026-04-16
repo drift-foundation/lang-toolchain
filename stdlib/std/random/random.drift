@@ -9,6 +9,13 @@ export {
 	random_secure_bytes
 };
 
+/// Error returned by `random_secure_bytes` when the OS RNG fails.
+///
+/// `tag` is a stable machine-readable code (`"invalid-length"`,
+/// `"os-random-failed"`).  `errno` is the platform errno (positive
+/// integer) when the OS call returned an error code; `0` otherwise.
+///
+/// `RandomError` implements `core.Throw` and `core.Diagnostic`.
 pub struct RandomError {
 	pub tag: String,
 	pub errno: Int
@@ -26,6 +33,20 @@ implement core.Throw for RandomError {
 	}
 }
 
+/// Returns `n` cryptographically-secure random bytes.
+///
+/// Backed by the OS RNG (e.g. `getrandom(2)` on Linux).  Suitable
+/// for cryptographic key material, nonces, session tokens.  Blocks
+/// briefly if the OS pool is uninitialized (rare, only at very
+/// early boot).
+///
+/// **Parameters:**
+/// - `n` — number of bytes to generate.  Must be `>= 0`.
+///
+/// **Returns:** `Ok(Array<Byte>)` of length `n` on success.
+/// `Err(RandomError(tag = "invalid-length"))` if `n < 0`.
+/// `Err(RandomError(tag = "os-random-failed", errno = …))` if the
+/// OS RNG call fails.
 pub fn random_secure_bytes(n: Int) nothrow -> core.Result<Array<Byte>, RandomError> {
 	if n < 0 {
 		return core.Result::Err(RandomError(tag = "invalid-length", errno = 0));
