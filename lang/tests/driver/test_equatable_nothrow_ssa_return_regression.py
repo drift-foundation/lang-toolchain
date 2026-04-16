@@ -33,7 +33,6 @@ module main;
 
 import std.containers as containers;
 import std.core as core;
-use trait core.Try;
 
 fn main() nothrow -> Int {
 	return try run_main() catch { 1 };

@@ -1631,8 +1631,7 @@ def _build_function(tree: Tree, *, allow_missing_body: bool = False) -> Function
 	#   - `fn f(...) -> T`             plain may-throw value return
 	#   - `fn f(...) nothrow -> T`     non-throwing value return
 	#   - `fn f(...) throws -> T`      may-throw value return WITH body-wide
-	#                                  auto-`Try::into_try` context (existing
-	#                                  behavior, preserved)
+	#                                  auto-try context via `or_throw()`
 	#   - `fn f(...) throws`           NEW: terminal throw-only form
 	#
 	# Builder logic: parse optional NOTHROW or THROWS prefix, then peek at the

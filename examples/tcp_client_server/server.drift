@@ -3,7 +3,6 @@ import std.core as core;
 import std.io as io;
 import std.net as net;
 
-use trait core.Try;
 
 fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	var buf = io.buffer(1024);

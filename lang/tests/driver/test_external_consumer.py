@@ -1936,7 +1936,7 @@ def test_ext_cross_package_or_throw(
 	consumer = tmp_path / "consumer"
 	main_src = consumer / "main.drift"
 
-	def _compile(source: str, *, label: str) -> None:
+	def _compile(source: str, *, label: str, require_no_std_core: bool = True) -> None:
 		_write_file(main_src, source)
 		argv = [
 			"-M", str(consumer),
@@ -1960,21 +1960,43 @@ def test_ext_cross_package_or_throw(
 			f"K28 ({label}): .or_throw() through package boundary should compile; "
 			f"diagnostics: {messages}"
 		)
-		# Sanity: the source must NOT import std.core — that's the bug surface.
-		assert "import std.core" not in source, (
-			f"K28 ({label}): fixture must not import std.core; that import would "
-			"sidestep the bug instead of testing the fix"
-		)
+		if require_no_std_core:
+			# Sanity: the source must NOT import std.core — that's the bug surface.
+			assert "import std.core" not in source, (
+				f"K28 ({label}): fixture must not import std.core; that import would "
+				"sidestep the bug instead of testing the fix"
+			)
 
 	# Local-binding form: receiver TypeId comes from the local variable's
-	# symbol-table entry written from the package-linked Result.
+	# symbol-table entry written from the package-linked Result.  The
+	# explicit `core.Result<...>` annotation is the auto-try opt-out — we
+	# want this test to exercise method resolution on a bound Result local,
+	# not the eager auto-unwrap.
+	#
+	# COVERAGE CAVEAT: this fixture imports `std.core` to spell the
+	# annotation, which narrows the K28 regression surface for the
+	# local-binding shape.  The bound-local form of the original K28 bug
+	# (`val r = pkg.make_err(); r.or_throw()` with NO `import std.core`)
+	# is no longer expressible under eager auto-try, because preserving
+	# the Result through a val binding now requires an explicit type
+	# annotation, and unqualified `Result<...>` in annotation position
+	# currently resolves to a FORWARD_NOMINAL that does not equate with
+	# the package-linked Result instantiation (separate type-linker
+	# limitation).  If/when unqualified `Result` works as a type
+	# annotation via prelude aliasing, drop the `import std.core` here
+	# and flip `require_no_std_core=True`.
+	#
+	# The chained form below keeps the "no std.core import" regression
+	# for the primary bug surface (method resolution from a callee-return
+	# TypeId rather than a symbol-table entry).
 	_compile("""\
 module main;
 
+import std.core as core;
 import acme.thrower as thrower;
 
 fn do_throw() throws -> Int {
-	val r = thrower.make_err();
+	val r: core.Result<Int, thrower.ProducerError> = thrower.make_err();
 	return (move r).or_throw();
 }
 
@@ -1985,7 +2007,7 @@ pub fn main() nothrow -> Int {
 		98
 	};
 }
-""", label="local_binding")
+""", label="local_binding", require_no_std_core=False)
 
 	# Chained form: receiver TypeId comes directly from the callee's
 	# return-type expression resolved in the consumer.

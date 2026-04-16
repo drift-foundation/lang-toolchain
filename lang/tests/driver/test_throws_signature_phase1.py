@@ -5,8 +5,8 @@ Phase 1 v3 of the terminal-`throws` work: dual-form grammar/AST/signature plumbi
 CONTEXT: Phase 1 v1 and v2 attempted to make `fn f() throws -> T` a parser-level
 error and treat `throws` as a single new "terminal" keyword. That was wrong: the
 existing `throws -> T` form has real semantic load — it sets a body-wide
-auto-`Try::into_try` context for any `Result<X, E>` expression in the function
-body (see `lang/driftc/type_checker.py:_should_auto_try`). Removing that
+auto-try context for any `Result<X, E>` expression in the function body
+via `or_throw()` (see `lang/driftc/type_checker.py:_should_auto_try`). Removing that
 feature would break ~18 existing source files and contradict the user's
 ergonomics direction.
 
@@ -160,7 +160,7 @@ def test_auto_try_value_return_sets_declared_throws(tmp_path: Path, capsys) -> N
 	"""`fn f() throws -> Int { ... }` — the EXISTING auto-try value-returning
 	form. Sets `declared_throws=True` and leaves `declared_terminal_throws=False`.
 	The body-wide auto-try context is what makes Result-typed expressions
-	auto-unwrap via `Try::into_try`. This test pins that the flag flows through;
+	auto-unwrap via `or_throw()`. This test pins that the flag flows through;
 	the auto-try semantic itself is exercised by the existing
 	`std_net_tcp_stress_connections_with_try` e2e and the trait-impl tests
 	below.
@@ -169,7 +169,6 @@ def test_auto_try_value_return_sets_declared_throws(tmp_path: Path, capsys) -> N
 module m;
 
 import std.core as core;
-use trait core.Try;
 
 exception Boom()
 

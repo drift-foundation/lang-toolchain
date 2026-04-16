@@ -116,8 +116,8 @@ class FnSignature:
 	return_type_id: Optional[TypeId] = None
 	declared_can_throw: Optional[bool] = None
 	# Auto-try value-returning `throws -> T` form (existing behavior). Body-wide
-	# implicit `Try::into_try` wrapping for `Result<X, E>` expressions in `X`
-	# context applies. See `lang/driftc/type_checker.py:_should_auto_try`.
+	# implicit auto-try wrapping for `Result<X, E>` expressions via `or_throw()`
+	# applies. See `lang/driftc/type_checker.py:_should_auto_try`.
 	declared_throws: bool = False
 	# NEW Phase 1: bare terminal `throws` form. Function never returns normally;
 	# every CFG path must terminate via `throw` or tail-call to another terminal

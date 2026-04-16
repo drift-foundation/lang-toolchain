@@ -40,12 +40,11 @@ def test_ufcs_callinfo_preserved(tmp_path: Path) -> None:
 module main;
 
 import std.core as core;
-use trait core.Try;
 use trait core.Diagnostic;
 
 fn main() -> Int {
 	val r: core.Result<Int, Int> = core.Result::Ok(1);
-	val v = core.Try::into_try(r);
+	val v = r.or_throw();
 	return v;
 }
 """.lstrip()

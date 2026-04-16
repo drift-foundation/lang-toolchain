@@ -1,4 +1,11 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+"""
+Try-block auto-unwrap contract.
+
+Auto-try is compiler-owned: a `try {}` block auto-unwraps Result<T, E>
+expression statements via or_throw() without requiring any lexical
+trait import.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,7 +42,10 @@ def _compile_source(src: str, tmp_path: Path):
 	return checked.diagnostics
 
 
-def test_try_block_result_stmt_requires_try_trait(tmp_path: Path) -> None:
+def test_try_block_result_stmt_autounwraps(tmp_path: Path) -> None:
+	"""A Result-typed expression statement inside a try {} block is
+	auto-unwrapped via or_throw() — no trait import required, no
+	'value discarded' diagnostic."""
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -57,61 +67,15 @@ fn main() nothrow -> Int {
 """,
 		tmp_path,
 	)
-	assert diagnostics
-	assert any("Result value discarded in try-block" in d.message for d in diagnostics)
-
-
-def test_try_block_result_stmt_autounwrap_with_try_trait(tmp_path: Path) -> None:
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-use trait core.Try;
-
-fn ok() -> core.Result<Int, Int> {
-    return core.Result::Ok(1);
-}
-
-fn main() nothrow -> Int {
-    try {
-        ok();
-        return 0;
-    } catch {
-        return 1;
-    }
-}
-""",
-		tmp_path,
+	assert diagnostics == [], (
+		f"try-block auto-unwrap should fire without trait import; "
+		f"got {[d.message for d in diagnostics]}"
 	)
-	assert diagnostics == []
 
 
-def test_try_block_without_catch_autounwrap_with_try_trait(tmp_path: Path) -> None:
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-use trait core.Try;
-
-fn ok() -> core.Result<Int, Int> {
-    return core.Result::Ok(1);
-}
-
-fn main() -> Int {
-    try {
-        ok();
-        return 0;
-    }
-}
-""",
-		tmp_path,
-	)
-	assert diagnostics == []
-
-
-def test_try_block_without_catch_requires_try_trait(tmp_path: Path) -> None:
+def test_try_block_without_catch_autounwraps(tmp_path: Path) -> None:
+	"""Same as above, without the catch arm.  Auto-unwrap is
+	a property of the try-block, not the presence of catch."""
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -131,8 +95,10 @@ fn main() -> Int {
 """,
 		tmp_path,
 	)
-	assert diagnostics
-	assert any("Result value discarded in try-block" in d.message for d in diagnostics)
+	assert diagnostics == [], (
+		f"try-block auto-unwrap should fire without trait import; "
+		f"got {[d.message for d in diagnostics]}"
+	)
 
 
 def test_try_block_autounwrap_stmt_sets_callsite_id(tmp_path: Path) -> None:
@@ -141,7 +107,6 @@ def test_try_block_autounwrap_stmt_sets_callsite_id(tmp_path: Path) -> None:
 module main;
 
 import std.core as core;
-use trait core.Try;
 
 fn ok() -> core.Result<Int, Int> {
     return core.Result::Ok(1);

@@ -1,0 +1,46 @@
+module acme.matrix;
+
+import std.core as core;
+
+export { AcmeError, Widget, make_widget, configure, run_widget };
+
+pub variant AcmeError {
+	Failed(code: Int),
+	@tombstone None
+}
+
+implement core.Diagnostic for AcmeError {
+	pub fn to_diag(self: &AcmeError) nothrow -> DiagnosticValue {
+		return match self {
+			Failed(c) => { DiagnosticValue::Int(*c) },
+			default => { DiagnosticValue::Int(0) }
+		};
+	}
+}
+
+implement core.Throw for AcmeError {
+	pub fn throw_self(self: AcmeError) throws {
+		throw std.err:ResultError(dv = DiagnosticValue::Int(1));
+	}
+}
+
+pub struct Widget {
+	pub v: Int,
+}
+
+// Returns Result<Widget, AcmeError>.
+pub fn make_widget(n: Int) -> core.Result<Widget, AcmeError> {
+	return core.Result::Ok(Widget(v = n));
+}
+
+// Takes &mut Widget — if auto-try didn't unwrap the binding,
+// this overload resolution fails.
+pub fn configure(w: &mut Widget, extra: Int) -> core.Result<Int, AcmeError> {
+	w.v = w.v + extra;
+	return core.Result::Ok(w.v);
+}
+
+// Takes Widget by move.
+pub fn run_widget(w: Widget) -> core.Result<Int, AcmeError> {
+	return core.Result::Ok(w.v);
+}

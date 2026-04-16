@@ -1,4 +1,22 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+"""
+Auto-try contract tests.
+
+Auto-try is compiler-owned: inside a `throws` function or `try {}` block,
+Result<T, E> expressions eagerly auto-unwrap to T via or_throw() with no
+trait import required.  Explicit `Result<T, E>` type annotation is the
+opt-out — a binding annotated as Result preserves the Result object so
+the user can call `.or_throw()` / pattern match.
+
+Tests here pin:
+  - `throws` auto-unwraps inferred `val r = fallible();` to T (zero ceremony)
+  - explicit `Result<T, E>` annotation opts OUT of auto-unwrap
+  - `try {}` blocks also auto-unwrap without any trait import
+  - explicit `.or_throw()` is the supported explicit form (no trait import)
+  - explicit `.into_try()` is rejected (method removed)
+  - error types must implement Throw for or_throw to work
+  - borrowed &Result cannot use or_throw (ownership required)
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -35,109 +53,207 @@ def _compile_source(src: str, tmp_path: Path):
 	return checked.diagnostics
 
 
-def test_try_trait_method_requires_use_trait(tmp_path: Path) -> None:
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-
-	fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(1);
-	val v = r.into_try();
-	return v;
-}
-""",
-		tmp_path,
-	)
-	assert diagnostics
-	assert any("into_try" in d.message for d in diagnostics)
+# ---------------------------------------------------------------------------
+# Positive: auto-try works without any trait import
+# ---------------------------------------------------------------------------
 
 
-def test_try_trait_method_succeeds_with_use_trait(tmp_path: Path) -> None:
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-use trait core.Try;
-use trait core.Diagnostic;
-
-	fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(1);
-	val v = r.into_try();
-	return v;
-}
-""",
-		tmp_path,
-	)
-	assert diagnostics == []
-
-
-def test_try_trait_method_on_ref_rejected_no_borrowed_impl(tmp_path: Path) -> None:
-	"""Borrowed &Result does not implement Try — users must own the Result
-	before calling into_try()/or_throw(). This is intentional: the owned
-	Try impl uses Throw::throw_self which consumes the error value."""
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-use trait core.Try;
-
-	fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(1);
-	val v = (&r).into_try();
-	return v;
-}
-""",
-		tmp_path,
-	)
-	assert len(diagnostics) > 0, "borrowed &Result should not have a Try impl"
-	assert any("into_try" in d.message or "method" in d.message.lower() for d in diagnostics)
-
-
-def test_try_trait_requires_throw_impl(tmp_path: Path) -> None:
-	"""Error type without Throw impl cannot use into_try/or_throw — even
-	if it implements Diagnostic. The Try constraint is ErrT is Throw."""
-	diagnostics = _compile_source(
-		"""
-module main;
-
-import std.core as core;
-use trait core.Try;
-use trait core.Diagnostic;
-
-pub variant MyErr {
-	Msg(m: String),
-	@tombstone None
-}
-
-	fn main() -> Int {
-	val r: core.Result<Int, MyErr> = core.Result::Err(MyErr::Msg("oops"));
-	val v = r.into_try();
-	return v;
-}
-""",
-		tmp_path,
-	)
-	assert diagnostics
-	assert any("into_try" in d.message or "Try" in d.message or "Throw" in d.message for d in diagnostics)
-
-
-def test_try_trait_into_try_uses_err_type_for_result_variant(tmp_path: Path) -> None:
+def test_throws_auto_try_without_use_trait(tmp_path: Path) -> None:
+	"""A `throws` function auto-converts Result<T, E> without requiring
+	`use trait core.Try`.  The implicit propagation is compiler-owned."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
 import std.net as net;
-use trait core.Try;
-use trait core.Diagnostic;
 
-	fn main() -> Int {
+fn do_work() throws -> Int {
+	val addr = net.socket_addr("127.0.0.1", 9999);
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try do_work() catch { 99 };
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == [], (
+		f"throws auto-try should work without 'use trait core.Try'; "
+		f"got {[d.message for d in diagnostics]}"
+	)
+
+
+def test_throws_inferred_local_auto_unwraps(tmp_path: Path) -> None:
+	"""In a `throws` function, an unannotated `val r = fallible();` binding
+	eagerly auto-unwraps to T.  This is the primary ergonomic contract of
+	`throws` — zero ceremony for the common case.
+
+	Regression: downstream uses of `r` must see `T`, not `Result<T, E>`."""
+	src = """
+module main;
+
+import std.core as core;
+
+fn fallible() -> core.Result<Int, Int> {
+	return core.Result::Ok(42);
+}
+
+fn take_int(x: Int) nothrow -> Int {
+	return x;
+}
+
+fn do_work() throws -> Int {
+	val r = fallible();          // eager auto-unwrap → r: Int
+	return take_int(r);           // passes Int to a fn expecting Int
+}
+
+fn main() nothrow -> Int {
+	return try do_work() catch { 99 };
+}
+"""
+	diags = _compile_source(src, tmp_path)
+	assert diags == [], (
+		f"unannotated val binding in a throws fn should auto-unwrap Result; "
+		f"got {[d.message for d in diags]}"
+	)
+
+
+def test_throws_annotated_result_preserves_result(tmp_path: Path) -> None:
+	"""Explicit `Result<T, E>` type annotation is the auto-try OPT-OUT —
+	the binding preserves the Result object so the user can call
+	`.or_throw()` / pattern-match explicitly.
+
+	Regression for the K28 package-boundary local_binding shape:
+	`val r: Result<T, E> = producer_fn(); return (move r).or_throw();`
+	must compile and resolve `.or_throw()` on the Result local."""
+	src = """
+module main;
+
+import std.core as core;
+
+fn fallible() -> core.Result<Int, Int> {
+	return core.Result::Ok(42);
+}
+
+fn do_work() throws -> Int {
+	val r: core.Result<Int, Int> = fallible();
+	return (move r).or_throw();
+}
+
+fn main() nothrow -> Int {
+	return try do_work() catch { 99 };
+}
+"""
+	diags = _compile_source(src, tmp_path)
+	assert diags == [], (
+		f"explicit Result<T, E> annotation should opt out of auto-try; "
+		f"got {[d.message for d in diags]}"
+	)
+
+
+def test_throws_annotated_non_result_auto_unwraps(tmp_path: Path) -> None:
+	"""With a non-Result type annotation, auto-try still fires — this is
+	the same as inferred (eager) but with an explicit expected type."""
+	src = """
+module main;
+
+import std.core as core;
+
+fn fallible() -> core.Result<Int, Int> {
+	return core.Result::Ok(42);
+}
+
+fn do_work() throws -> Int {
+	val x: Int = fallible();
+	return x;
+}
+
+fn main() nothrow -> Int {
+	return try do_work() catch { 99 };
+}
+"""
+	diags = _compile_source(src, tmp_path)
+	assert diags == [], (
+		f"annotated val binding with non-Result type should auto-unwrap; "
+		f"got {[d.message for d in diags]}"
+	)
+
+
+def test_try_block_auto_try_without_use_trait(tmp_path: Path) -> None:
+	"""A bare `try {}` block (outside a throws function) auto-propagates a
+	discarded Result<T, E> expression statement via or_throw() — no trait
+	import required.  Auto-try is compiler-owned in all auto-try contexts."""
+	diagnostics = _compile_source(
+		"""
+module main;
+
+import std.core as core;
+
+fn fallible() -> core.Result<Int, Int> {
+	return core.Result::Ok(42);
+}
+
+fn main() nothrow -> Int {
+	var out = 0;
+	try {
+		fallible();      // discarded Result auto-propagates via or_throw
+		out = 1;
+	} catch {
+		out = 99;
+	}
+	return out;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == [], (
+		f"try-block auto-try should work without 'use trait core.Try'; "
+		f"got {[d.message for d in diagnostics]}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# Positive: explicit .or_throw() is the supported explicit form
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_or_throw_works_without_use_trait(tmp_path: Path) -> None:
+	"""Explicit `.or_throw()` is an inherent method on Result and must work
+	without any trait import.  This is the supported explicit form."""
+	diagnostics = _compile_source(
+		"""
+module main;
+
+import std.core as core;
+
+fn main() -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(42);
+	val v = r.or_throw();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics == [], (
+		f"explicit .or_throw() should work without 'use trait core.Try'; "
+		f"got {[d.message for d in diagnostics]}"
+	)
+
+
+def test_or_throw_with_net_error(tmp_path: Path) -> None:
+	"""or_throw works with stdlib error types that implement Throw."""
+	diagnostics = _compile_source(
+		"""
+module main;
+
+import std.core as core;
+import std.net as net;
+
+fn main() -> Int {
 	val r: core.Result<net.TcpListener, net.NetError> = Err(net.NetError::WouldBlock());
-	val _v = r.into_try();
+	val _v = r.or_throw();
 	return 0;
 }
 """,
@@ -145,17 +261,71 @@ use trait core.Diagnostic;
 	)
 	assert diagnostics == []
 
-def test_try_trait_diagnostic_alone_not_sufficient(tmp_path: Path) -> None:
-	"""Diagnostic alone is NOT sufficient for into_try/or_throw — the
-	error type must implement Throw. This test pins that Diagnostic
-	without Throw is rejected."""
+
+# ---------------------------------------------------------------------------
+# Negative: .into_try() is removed
+# ---------------------------------------------------------------------------
+
+
+def test_into_try_rejected(tmp_path: Path) -> None:
+	"""`.into_try()` is no longer a valid method — the Try trait has been
+	removed.  This pins the removal: a later change that accidentally
+	reintroduces Try/into_try would fail this test."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
-use trait core.Try;
-use trait core.Diagnostic;
+
+fn main() -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val v = r.into_try();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert diagnostics, (
+		"explicit .into_try() should be rejected — the Try trait has been removed"
+	)
+	assert any("into_try" in d.message or "method" in d.message.lower() for d in diagnostics)
+
+
+# ---------------------------------------------------------------------------
+# Negative: error type constraints still enforced
+# ---------------------------------------------------------------------------
+
+
+def test_or_throw_on_ref_rejected(tmp_path: Path) -> None:
+	"""Borrowed &Result cannot use or_throw — users must own the Result.
+	The owned or_throw impl calls Throw::throw_self which consumes the
+	error value."""
+	diagnostics = _compile_source(
+		"""
+module main;
+
+import std.core as core;
+
+fn main() -> Int {
+	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val v = (&r).or_throw();
+	return v;
+}
+""",
+		tmp_path,
+	)
+	assert len(diagnostics) > 0, "borrowed &Result should not have an or_throw impl"
+	assert any("or_throw" in d.message or "method" in d.message.lower() for d in diagnostics)
+
+
+def test_or_throw_requires_throw_impl(tmp_path: Path) -> None:
+	"""Error type without Throw impl cannot use or_throw — even if it
+	implements Diagnostic.  The or_throw body calls Throw::throw_self."""
+	diagnostics = _compile_source(
+		"""
+module main;
+
+import std.core as core;
 
 pub variant MyErr {
 	Msg(m: String),
@@ -175,11 +345,10 @@ pub variant MyErr {
 
 	fn main() -> Int {
 	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
-	val v = r.into_try();
+	val v = r.or_throw();
 	return v;
 }
 """,
 		tmp_path,
 	)
-	assert diagnostics, "Diagnostic-only error type should not satisfy Try constraint (requires Throw)"
-	assert any("Throw" in d.message or "into_try" in d.message for d in diagnostics)
+	assert diagnostics, "Diagnostic-only error type should not satisfy or_throw (requires Throw)"

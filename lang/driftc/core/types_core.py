@@ -191,9 +191,9 @@ class InterfaceMethodSchema:
 	type_params: list[str]
 	declared_nothrow: bool = False
 	is_unsafe: bool = False
-	# Auto-try value-returning `throws -> T` form (existing behavior).
-	# Phase 4 will rebind body-wide auto-try to use the new `Throw` trait
-	# instead of `Diagnostic`/`ResultError`.
+	# Auto-try value-returning `throws -> T` form.  Inside the body,
+	# `Result<T, E>` expressions are auto-unwrapped via compiler-owned
+	# `or_throw()` synthesis (requires `E: Throw`).
 	declared_throws: bool = False
 	# Phase 1 of terminal-`throws`: NEW bare terminal `throws` form. The
 	# interface method has no return type (return_type is None) and impl

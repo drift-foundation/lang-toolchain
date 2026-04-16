@@ -3260,7 +3260,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				fn_args = tuple(inst_subst_args or [])
 				if (impl_args or fn_args) and not any(ctx.type_table.has_typevar(t) for t in list(impl_args) + list(fn_args)):
 					csid = getattr(expr, "callsite_id", None)
-					if drift_debug.enabled("instantiate") and target_fn_id is not None and "into_try" in target_fn_id.name:
+					if drift_debug.enabled("instantiate") and target_fn_id is not None and "or_throw" in target_fn_id.name:
 						try:
 							import sys
 							print(f"[debug] inst {target_fn_id} impl_args={impl_args} fn_args={fn_args}", file=sys.stderr)

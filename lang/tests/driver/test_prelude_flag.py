@@ -268,7 +268,6 @@ module m_main;
 import std.io as io;
 import std.concurrent as conc;
 import std.core as core;
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };

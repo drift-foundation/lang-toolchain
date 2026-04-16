@@ -20,7 +20,6 @@ import std.concurrent as conc;
 import std.core as core;
 import std.err;
 
-use trait core.Try;
 
 fn use_timeout(t: conc.Duration) nothrow -> Int {
 	return t.millis;

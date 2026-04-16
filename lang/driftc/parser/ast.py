@@ -244,8 +244,8 @@ class FunctionDef:
 	declared_nothrow: bool = False
 	# `declared_throws` retains its existing meaning: the function was declared
 	# with the value-returning auto-try form `fn f(...) throws -> T`. Body-wide
-	# implicit `Try::into_try` wrapping for `Result<X, E>` expressions in `X`
-	# context applies. See `lang/driftc/type_checker.py:_should_auto_try`.
+	# implicit auto-try wrapping for `Result<X, E>` expressions via `or_throw()`
+	# applies. See `lang/driftc/type_checker.py:_should_auto_try`.
 	declared_throws: bool = False
 	# `declared_terminal_throws` is the NEW Phase 1 flag for the bare terminal
 	# `throws` form: function never returns normally, every CFG path must end

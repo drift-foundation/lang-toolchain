@@ -329,7 +329,8 @@ def test_bundle_docs_produces_stdlib_docs() -> None:
 		# Result-to-throwing-flow idiom — both generic and customized forms.
 		assert "Result to throwing flow" in effective
 		assert "or_throw()" in effective
-		assert "core.Try" in effective
+		# Auto-try is compiler-owned; the Try trait is no longer user-facing.
+		assert "compiler-owned" in effective
 		assert "ResultError" in effective
 		assert "on_error" in effective
 		# Cross-link from the JSON section to the Result idiom.

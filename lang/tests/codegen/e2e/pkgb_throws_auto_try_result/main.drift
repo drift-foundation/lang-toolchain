@@ -1,0 +1,29 @@
+// Package-boundary regression: throws auto-try must unwrap
+// Result<T, E> returned by a package function when E: Throw,
+// including when the unwrapped value is passed by &mut ref
+// to subsequent calls (the web-rest pattern) — with zero
+// trait import on the consumer side.
+
+module main;
+
+import acme.matrix as m;
+import std.core as core;
+
+fn do_work() throws -> Int {
+	// auto-try should unwrap Result<Widget, AcmeError> to Widget
+	var w = m.make_widget(42);
+	// If auto-try didn't fire, w is Result<Widget, AcmeError>
+	// and this &mut ref doesn't match &mut Widget
+	m.configure(&mut w, 10);
+	// move w must be Widget, not Result<Widget, AcmeError>
+	val result = m.run_widget(move w);
+	return result;
+}
+
+pub fn main() nothrow -> Int {
+	val r = try do_work() catch { 99 };
+	// make_widget(42) → Widget(v=42), configure adds 10 → 52,
+	// run_widget returns 52
+	if r != 52 { return 1; }
+	return 0;
+}

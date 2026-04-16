@@ -6,7 +6,6 @@ import std.mem as mem;
 use trait hash.Hasher;
 use trait Diagnostic;
 use trait Throw;
-use trait Try;
 
 export {
 	Copy,
@@ -15,7 +14,6 @@ export {
 	DiagnosticEntry,
 	diagnostic_entry,
 	Throw,
-	Try,
 	Result,
 	Fn0,
 	Fn1,
@@ -71,10 +69,6 @@ pub trait Throw {
 	fn throw_self(self: Self) throws;
 }
 
-pub trait Try<T> {
-	fn into_try(self: Self) -> T;
-}
-
 pub trait Borrow<T> {
 	fn borrow(self: &Self) nothrow -> &T;
 }
@@ -113,19 +107,13 @@ pub variant Result<T, E> {
 	@tombstone Tombstone
 }
 
-implement<OkT, ErrT> Try<OkT> for Result<OkT, ErrT> require ErrT is Throw {
-	pub fn into_try(self: Result<OkT, ErrT>) -> OkT {
+implement<T, E> Result<T, E> {
+pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 		match self {
 			Ok(v) => { return move v; },
 			Err(err) => { Throw::throw_self(move err); },
 			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
 		}
-	}
-}
-
-implement<T, E> Result<T, E> {
-pub fn or_throw(self: Result<T, E>) -> T {
-		return (move self).into_try();
 	}
 
 	pub fn on_error(self: Result<T, E>, f: CallbackThrow1<E, T>) -> T {

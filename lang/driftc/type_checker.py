@@ -8665,18 +8665,25 @@ class TypeChecker:
 				print(f"[try_auto] fn={function_symbol(fn_id)} base_sig_id={id(base_sig)} base_declared_throws={getattr(base_sig, 'declared_throws', None)}", file=sys.stderr)
 			print(f"[try_auto] fn={function_symbol(fn_id)} declared_throws={fn_declared_throws}", file=sys.stderr)
 		try_block_depth = 0
-		def _try_trait_in_scope() -> bool:
-			for t in _traits_in_scope():
-				if t.name == "Try" and t.module in ("std.core", "core"):
-					return True
-			return False
 		def _is_core_result_variant(ty: TypeId) -> bool:
 			if ty is None:
 				return False
 			schema = self.type_table.get_variant_schema(ty)
-			if schema is None:
+			if schema is not None:
+				return schema.name == "Result" and schema.module_id in ("std.core", "core")
+			# Fallback: annotations may resolve to a TypeDef that isn't yet
+			# in variant_schemas/variant_instances (e.g. package-consumer
+			# contexts create FORWARD_NOMINAL placeholders, or resolve_opaque_type
+			# creates fresh instantiations).  Accept any TypeDef named
+			# "Result" — in Drift, `Result` refers exclusively to
+			# std.core.Result (no user-defined type is permitted to shadow it).
+			try:
+				td = self.type_table.get(ty)
+			except Exception:
 				return False
-			return schema.name == "Result" and schema.module_id in ("std.core", "core")
+			if td.kind not in (TypeKind.VARIANT, TypeKind.FORWARD_NOMINAL):
+				return False
+			return td.name == "Result"
 
 		def _auto_try_context() -> bool:
 			return try_block_depth > 0 or fn_declared_throws
@@ -8688,12 +8695,20 @@ class TypeChecker:
 				return False
 			if not _is_core_result_variant(expr_ty):
 				return False
+			# Opt-out: an explicit `Result<T, E>` type annotation preserves
+			# the Result object so the user can call `.or_throw()` / pattern
+			# match explicitly.  Otherwise auto-try is eager — inside a
+			# `throws` function or `try {}` block, unannotated local bindings,
+			# return expressions, and discarded expression statements all
+			# unwrap Result<T, E> to T via compiler-synthesized or_throw().
 			if expected_ty is not None and _is_core_result_variant(expected_ty):
 				return False
-			return _try_trait_in_scope()
+			return True
 
-		def _wrap_into_try(expr: H.HExpr) -> H.HExpr:
-			call = H.HMethodCall(receiver=expr, method_name="into_try", args=[], kwargs=[])
+		def _wrap_auto_try(expr: H.HExpr) -> H.HExpr:
+			# Auto-try synthesizes or_throw() — an inherent method on
+			# Result<T, E> that requires no trait scope.
+			call = H.HMethodCall(receiver=expr, method_name="or_throw", args=[], kwargs=[])
 			call.callsite_id = _alloc_callsite_id()
 			_assign_node_id(call)
 			return call
@@ -8776,7 +8791,7 @@ class TypeChecker:
 				#   val x: Optional<Int> = Some(1)
 				inferred_ty = type_expr(stmt.value, expected_type=declared_ty)
 				if _should_auto_try(inferred_ty, declared_ty):
-					stmt.value = _wrap_into_try(stmt.value)
+					stmt.value = _wrap_auto_try(stmt.value)
 					inferred_ty = type_expr(stmt.value, expected_type=declared_ty)
 				val_ty = inferred_ty
 				if declared_ty is not None:
@@ -9135,17 +9150,8 @@ class TypeChecker:
 			elif isinstance(stmt, H.HExprStmt):
 				expr_ty = type_expr(stmt.expr, used_as_value=False)
 				if _auto_try_context() and expr_ty is not None and _is_core_result_variant(expr_ty):
-					if _try_trait_in_scope():
-						stmt.expr = _wrap_into_try(stmt.expr)
-						type_expr(stmt.expr, used_as_value=False)
-					else:
-						diagnostics.append(
-							_tc_diag(
-								message="Result value discarded in try-block (use 'use trait std.core.Try' or assign the value)",
-								severity="error",
-								span=getattr(stmt, "loc", Span()),
-						)
-					)
+					stmt.expr = _wrap_auto_try(stmt.expr)
+					type_expr(stmt.expr, used_as_value=False)
 			elif isinstance(stmt, H.HAssert):
 				cond_ty = type_expr(stmt.cond)
 				if cond_ty is not None and cond_ty != self._bool:
@@ -9184,7 +9190,7 @@ class TypeChecker:
 								used_as_value = False
 					inferred = type_expr(stmt.value, expected_type=return_type, used_as_value=used_as_value)
 					if _should_auto_try(inferred, return_type):
-						stmt.value = _wrap_into_try(stmt.value)
+						stmt.value = _wrap_auto_try(stmt.value)
 						inferred = type_expr(stmt.value, expected_type=return_type, used_as_value=used_as_value)
 					if return_type is not None and inferred is not None and inferred != return_type:
 						if self.type_table.get(return_type).kind is TypeKind.INTERFACE:

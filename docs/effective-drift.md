@@ -173,7 +173,6 @@ configured handle.
 import std.concurrent as conc;
 import std.core as core;
 import std.io as io;
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
@@ -199,7 +198,6 @@ semantics.
 import std.concurrent as conc;
 import std.core as core;
 import std.io as io;
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
@@ -403,10 +401,11 @@ is present.
 ### Auto-try form: `throws -> T`
 
 A function declared `fn f(...) throws -> T` returns a value of type `T`
-and enables **body-wide implicit `Try::into_try` wrapping**. Inside the
-body, any `Result<X, E>` expression used where `X` is expected is
-automatically unwrapped via the `Try` trait — the `Ok` value passes
-through and the `Err` arm throws the appropriate exception.
+and enables **body-wide implicit auto-try**. Inside the body, any
+`Result<X, E>` expression used where `X` is expected is automatically
+unwrapped via `or_throw()` — the `Ok` value passes through and the `Err`
+arm throws the appropriate exception (provided `E: Throw`). Auto-try is
+compiler-owned and does not require any lexical trait import.
 
 ```drift
 fn extract_status(payload: &String) throws -> String {
@@ -494,10 +493,10 @@ or not-found responses.
 
 ### The contract: `or_throw()` consumes a `Result`
 
-`Result<T, E>` implements `core.Try<T>` whenever `E` implements `core.Throw`.
-The unwrap path is:
+`or_throw()` is an inherent method on `Result<T, E>`.  It requires the
+error type `E` to implement `core.Throw`.  The unwrap path is:
 
-1. `result.or_throw()` consumes the owned `Result` and calls `Try::into_try`.
+1. `result.or_throw()` consumes the owned `Result`.
 2. The `Ok` arm returns the value.
 3. The `Err` arm calls `e.throw_self()`.
 4. `throw_self` is a terminal-`throws` method, so it never returns normally.
@@ -770,9 +769,10 @@ creation path; `entry.key` and `entry.value` are the documented read path.
 ### Auto-try regions: `throws -> T`
 
 `fn f(...) throws -> T` is a body-wide auto-try region. Inside the function,
-`Result<X, E>` expressions can be converted through `Try::into_try` when the
-expected type is `X`. After the `Try` rebind, that means `E: Throw` controls the
-typed exception, just like `.or_throw()`.
+`Result<X, E>` expressions where the expected type is `X` are auto-unwrapped
+via `or_throw()`. The error type constraint `E: Throw` is what controls
+typed exception propagation.  Auto-try is compiler-owned — no trait import
+required.
 
 Use this for route handlers, request pipelines, and command handlers where most
 intermediate `Result` errors should leave through the same exception boundary.
@@ -1005,7 +1005,6 @@ import std.concurrent as conc;
 import std.core as core;
 import std.io as io;
 import std.net as net;
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
@@ -1037,7 +1036,6 @@ import std.concurrent as conc;
 import std.core as core;
 import std.io as io;
 import std.net as net;
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };

@@ -49,7 +49,6 @@ def test_user_throw_impl_typed_catch_runtime(tmp_path: Path) -> None:
 module main;
 import std.core as core;
 import std.err as err;
-use trait core.Try;
 
 pub exception ServiceDown(reason: String)
 
@@ -99,7 +98,6 @@ def test_scalar_throw_impl_result_error_runtime(tmp_path: Path) -> None:
 module main;
 import std.core as core;
 import std.err as err;
-use trait core.Try;
 
 fn parse_number() -> core.Result<Int, String> {
 	return core.Result::Err("bad input");

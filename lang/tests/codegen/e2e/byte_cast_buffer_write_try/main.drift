@@ -2,7 +2,6 @@ module m;
 
 import std.io as io;
 import std.core as core;
-use trait core.Try;
 
 fn write_byte() throws -> Int {
 	var buf = io.buffer(1);

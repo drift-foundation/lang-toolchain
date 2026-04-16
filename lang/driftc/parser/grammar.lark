@@ -164,8 +164,7 @@ type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 //   1. `fn f(...) -> T`             plain may-throw value return, no auto-try
 //   2. `fn f(...) nothrow -> T`     non-throwing value return
 //   3. `fn f(...) throws -> T`      may-throw value return WITH body-wide
-//                                    auto-`Try::into_try` context (existing
-//                                    feature, preserved)
+//                                    auto-try context via `or_throw()`
 //   4. `fn f(...) throws`           NEW: terminal throw-only form. Never
 //                                    returns normally; every path must end in
 //                                    `throw` or tail-call another terminal

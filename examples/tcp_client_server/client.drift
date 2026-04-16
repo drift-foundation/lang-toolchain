@@ -3,7 +3,6 @@ import std.concurrent as conc;
 import std.io as io;
 import std.net as net;
 
-use trait core.Try;
 
 pub fn main(argv: Array<String>) nothrow -> Int {
 	var out = 0;

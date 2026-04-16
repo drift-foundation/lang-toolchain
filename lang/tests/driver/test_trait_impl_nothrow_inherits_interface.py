@@ -35,7 +35,6 @@ import std.containers as containers;
 import std.core as core;
 import std.core.cmp as cmp;
 import std.core.hash as hash;
-use trait core.Try;
 
 struct BadKey {
 	id: Int,

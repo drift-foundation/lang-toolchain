@@ -3,7 +3,6 @@ import std.core as core;
 import std.io as io;
 import std.net as net;
 
-use trait core.Try;
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
