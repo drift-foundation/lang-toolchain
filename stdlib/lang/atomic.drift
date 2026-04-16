@@ -42,6 +42,16 @@ export {
 	signal_fence
 };
 
+/// **Internal stdlib infrastructure.**
+///
+/// `lang.atomic` exposes raw atomic load/store/RMW primitives that
+/// `std.sync` and `std.concurrent` wrap into the user-facing
+/// `AtomicBool` / `AtomicInt` / `AtomicUint` / `AtomicUint64`
+/// methods.  Application code should call `std.sync.*` — direct
+/// use of `lang.atomic` is reserved for stdlib implementation.
+///
+/// Memory-ordering tag passed to atomic load/store/RMW operations.
+/// Standard C11/C++11 ordering set.
 pub variant MemoryOrder {
 	Relaxed,
 	Acquire,
