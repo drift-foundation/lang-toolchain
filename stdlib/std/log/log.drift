@@ -26,6 +26,7 @@ export {
 	Formatter,
 	LogRecord,
 	LogContext,
+	ContextResolver,
 	LoggerConfig,
 	LoggerConfigBuilder,
 	Logger,
@@ -196,21 +197,52 @@ pub struct LogRecord {
 }
 
 /// Mutable bag of attribute key/value pairs that can be attached to
-/// log calls via the `*_ctx` / `*_ctx_attrs` overloads.
+/// log calls.
 ///
 /// Construct via `log_context()`.  Use `.put(key, value)` to
 /// accumulate attributes (any type implementing `Debuggable`) and
-/// pass `&ctx` to `Logger.info_ctx`, `Logger.debug_ctx`, etc.  When
-/// combined with attribute overrides via `*_ctx_attrs`, the override
-/// values take precedence over those carried by the context.
+/// pass `&ctx` to `Logger.info(ev, ctx)` (or the `debug` / `error`
+/// counterparts).  Passing an explicit `&LogContext` suppresses the
+/// configured context resolver for that call; pass
+/// `&log.log_context()` (an empty context) to force "no context" on
+/// a single call.
+///
+/// When combined with attribute overrides via the three-arg
+/// `Logger.info(ev, ctx, attrs)` form, the override values take
+/// precedence over those carried by the context.
 ///
 /// Typically pushed onto a `runtime.ScopedStack<LogContext>` so a
 /// scope can establish ambient attributes that nested calls inherit.
 ///
-/// **See also:** `log_context`, `LogContext.put`, `Logger.info_ctx`,
-/// `Logger.info_ctx_attrs`.
+/// **See also:** `log_context`, `LogContext.put`,
+/// `Logger.info(ev, ctx)`, `LoggerConfigBuilder.context_resolver`.
 pub struct LogContext {
 	attrs: containers.HashMap<String, DiagnosticValue>
+}
+
+/// Application-supplied function pointer consulted by the logger to
+/// resolve ambient context at emit time.
+///
+/// `ContextResolver` wraps a `nothrow` function pointer returning
+/// `Optional<LogContext>`.  When installed via
+/// `LoggerConfigBuilder.context_resolver`, calls to `Logger.info(ev)`
+/// / `Logger.info(ev, attrs)` (and the `debug` / `error`
+/// counterparts) consult it per emit; if it returns `Some(ctx)`,
+/// `ctx`'s attributes are merged into the record.  Calls that pass
+/// an explicit `&LogContext` skip the resolver.
+///
+/// `std.log` deliberately knows nothing about how the resolver
+/// discovers context — VT-local registry, request state,
+/// thread-local — it is all app policy inside the function body.
+///
+/// **Note:** function pointers cannot capture state.  Per-Logger
+/// captures must be encoded into process- or thread-local state
+/// that the resolver looks up.
+///
+/// **See also:** `LoggerConfigBuilder.context_resolver`,
+/// `LogContext`, `Logger.info(ev)`.
+pub struct ContextResolver {
+	pub f: Fn() nothrow -> Optional<LogContext>
 }
 
 /// Frozen logger configuration produced by `LoggerConfigBuilder.build`.
@@ -219,7 +251,12 @@ pub struct LogContext {
 /// calls.  All fields are public for inspection but configuration is
 /// expected to flow through the builder.
 ///
-/// **See also:** `LoggerConfigBuilder`, `create_logger`.
+/// The optional `resolver` is consulted by `Logger.info` /
+/// `Logger.debug` / `Logger.error` when no explicit `&LogContext` is
+/// passed — see `LoggerConfigBuilder.context_resolver`.
+///
+/// **See also:** `LoggerConfigBuilder`, `create_logger`,
+/// `ContextResolver`.
 pub struct LoggerConfig {
 	pub sink: Sink,
 	pub min_level: Level,
@@ -227,7 +264,8 @@ pub struct LoggerConfig {
 	pub write_timeout: conc.Duration,
 	pub enqueue_timeout: conc.Duration,
 	pub backpressure_policy: BackpressurePolicy,
-	pub formatter: FormatterKind
+	pub formatter: FormatterKind,
+	pub resolver: Optional<ContextResolver>
 }
 
 /// Mutable builder for `LoggerConfig`.
@@ -248,7 +286,8 @@ pub struct LoggerConfigBuilder {
 	write_timeout: conc.Duration,
 	enqueue_timeout: conc.Duration,
 	backpressure_policy: BackpressurePolicy,
-	formatter: FormatterKind
+	formatter: FormatterKind,
+	resolver: Optional<ContextResolver>
 }
 
 /// Live logger handle.
@@ -256,9 +295,9 @@ pub struct LoggerConfigBuilder {
 /// Constructed via `create_logger(name, config)` (root logger) or
 /// `Logger.derive(name).build()` (sub-logger inheriting parent's
 /// runtime state).  Logging methods (`info` / `debug` / `error` and
-/// the `*_ctx` / `*_ctx_attrs` variants) are best-effort and return
-/// `Void` — see "Auto-try / propagation" in `docs/effective-drift.md`
-/// for the design rationale.
+/// their `(ev, &ctx)` and `(ev, &ctx, attrs)` overloads) are
+/// best-effort and return `Void` — see "Logging is best-effort" in
+/// `docs/effective-drift.md` for the design rationale.
 ///
 /// `Logger` implements `core.Destructible`; the destructor releases
 /// the underlying runtime-state allocation when the last clone goes
@@ -280,7 +319,8 @@ struct LoggerRuntimeState {
 	backpressure_policy: BackpressurePolicy,
 	stderr_cap: Optional<io.ProcessStderrCapability>,
 	queue: sync.MpscQueue<Byte>,
-	drain_lock: sync.AtomicBool
+	drain_lock: sync.AtomicBool,
+	resolver: Optional<ContextResolver>
 }
 
 struct LogEnvelope {
@@ -317,6 +357,9 @@ implement core.Copy for FormatterKind {
 }
 
 implement core.Copy for LoggerConfig {
+}
+
+implement core.Copy for ContextResolver {
 }
 
 implement core.Copy for StdErrSink {
@@ -363,16 +406,20 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 		write_timeout = conc.Duration(millis = 1000),
 		enqueue_timeout = conc.Duration(millis = 1000),
 		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
-		formatter = FormatterKind::JsonIso8601()
+		formatter = FormatterKind::JsonIso8601(),
+		resolver = Optional<ContextResolver>::None()
 	);
 }
 
 /// Constructs an empty `LogContext` for collecting attribute pairs.
 ///
-/// Populate with `.put(key, value)`, then pass `&ctx` to a logger
-/// `*_ctx` overload.
+/// Populate with `.put(key, value)`, then pass `&ctx` to
+/// `Logger.info(ev, &ctx)` (or the `debug` / `error` siblings).
+/// Passing `&log.log_context()` directly is the per-call opt-out
+/// from a configured ambient context resolver.
 ///
-/// **See also:** `LogContext`, `LogContext.put`, `Logger.info_ctx`.
+/// **See also:** `LogContext`, `LogContext.put`,
+/// `Logger.info(ev, ctx)`, `LoggerConfigBuilder.context_resolver`.
 pub fn log_context() nothrow -> LogContext {
 	var attrs: containers.HashMap<String, DiagnosticValue> = {:};
 	return LogContext(attrs = move attrs);
@@ -472,6 +519,31 @@ implement LoggerConfigBuilder {
 		return self;
 	}
 
+	/// Installs an ambient context resolver consulted at emit time
+	/// when a logging call passes no explicit `&LogContext`.
+	///
+	/// `f` is a `nothrow` function pointer returning
+	/// `Optional<LogContext>`.  When set, `Logger.info(ev)` /
+	/// `Logger.info(ev, attrs)` (and the `debug` / `error`
+	/// counterparts) call `f` per emit; if it returns `Some(ctx)`,
+	/// the returned context's attributes are merged into the record.
+	/// Calls that pass an explicit `&LogContext` suppress the
+	/// resolver — see `Logger.info(ev, ctx)`.
+	///
+	/// `std.log` deliberately knows nothing about how `f` discovers
+	/// context: VT-local registry, request state, thread-local — it
+	/// is all app policy inside `f`.
+	///
+	/// **Parameters:**
+	/// - `f` — `nothrow` function pointer returning
+	///   `Optional<LogContext>`.  Function pointers cannot capture
+	///   state; encode per-Logger context via process- or
+	///   thread-local state that `f` reads.
+	pub fn context_resolver(self: &mut LoggerConfigBuilder, f: Fn() nothrow -> Optional<LogContext>) nothrow -> &mut LoggerConfigBuilder {
+		self.resolver = Optional<ContextResolver>::Some(ContextResolver(f = f));
+		return self;
+	}
+
 	/// Materializes the builder into a `LoggerConfig` value
 	/// suitable for `create_logger`.
 	pub fn build(self: &LoggerConfigBuilder) nothrow -> LoggerConfig {
@@ -482,7 +554,8 @@ implement LoggerConfigBuilder {
 			write_timeout = self.write_timeout,
 			enqueue_timeout = self.enqueue_timeout,
 			backpressure_policy = self.backpressure_policy,
-			formatter = self.formatter
+			formatter = self.formatter,
+			resolver = self.resolver
 		);
 	}
 }
@@ -571,7 +644,8 @@ fn _runtime_state_from_cfg(cfg: &LoggerConfig, stderr_cap: Optional<io.ProcessSt
 		backpressure_policy = cfg.backpressure_policy,
 		stderr_cap = stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(cfg.queue_capacity),
-		drain_lock = sync.atomic_bool(false)
+		drain_lock = sync.atomic_bool(false),
+		resolver = cfg.resolver
 	);
 }
 
@@ -584,7 +658,8 @@ fn _clone_runtime_state(st: &LoggerRuntimeState, min_level: Level) nothrow -> Lo
 		backpressure_policy = st.backpressure_policy,
 		stderr_cap = st.stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(st.queue_capacity),
-		drain_lock = sync.atomic_bool(false)
+		drain_lock = sync.atomic_bool(false),
+		resolver = st.resolver
 	);
 }
 
@@ -755,17 +830,47 @@ fn _enqueue_with_policy(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow -
 	return false;
 }
 
+fn _resolve_ctx_from_state(st: &LoggerRuntimeState) nothrow -> Optional<LogContext> {
+	match st.resolver {
+		Some(cr) => {
+			val fp = cr.f;
+			return fp();
+		},
+		None => {
+			return Optional<LogContext>::None();
+		}
+	}
+}
+
 fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
 	if not _enabled(logger.min_level, level) {
 		core.drop_value(move attrs);
 		return false;
 	}
-	val ok = try _emit_throwing<type V>(logger, level, ev, &attrs) catch { false };
-	core.drop_value(move attrs);
-	return ok;
+	match _runtime_state_from_handle(logger.state) {
+		Some(st) => {
+			match _resolve_ctx_from_state(st) {
+				Some(ctx) => {
+					val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, &ctx, &attrs) catch { false };
+					core.drop_value<type LogContext>(move ctx);
+					core.drop_value(move attrs);
+					return ok;
+				},
+				None => {
+					val ok = try _emit_throwing<type V>(logger, level, ev, &attrs) catch { false };
+					core.drop_value(move attrs);
+					return ok;
+				}
+			}
+		},
+		None => {
+			core.drop_value(move attrs);
+			return false;
+		}
+	}
 }
 
-fn _emit_ctx(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) nothrow -> Bool {
+fn _emit_explicit_ctx(logger: &Logger, var level: Level, ev: String, ctx: &LogContext) nothrow -> Bool {
 	if not _enabled(logger.min_level, level) {
 		return false;
 	}
@@ -776,15 +881,41 @@ fn _emit_no_attrs(logger: &Logger, var level: Level, ev: String) nothrow -> Bool
 	if not _enabled(logger.min_level, level) {
 		return false;
 	}
-	return try _emit_no_attrs_throwing(logger, level, ev) catch { false };
+	match _runtime_state_from_handle(logger.state) {
+		Some(st) => {
+			match _resolve_ctx_from_state(st) {
+				Some(ctx) => {
+					val ok = try _emit_ctx_throwing(logger, level, ev, &ctx) catch { false };
+					core.drop_value<type LogContext>(move ctx);
+					return ok;
+				},
+				None => {
+					return try _emit_no_attrs_throwing(logger, level, ev) catch { false };
+				}
+			}
+		},
+		None => {
+			return false;
+		}
+	}
 }
 
-fn _emit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+fn _emit_explicit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
 	if not _enabled(logger.min_level, level) {
 		core.drop_value(move attrs);
 		return false;
 	}
 	val ok = try _emit_ctx_attrs_throwing(logger, level, ev, ctx, &attrs) catch { false };
+	core.drop_value(move attrs);
+	return ok;
+}
+
+fn _emit_explicit_ctx_attrs_typed<V>(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {
+	if not _enabled(logger.min_level, level) {
+		core.drop_value(move attrs);
+		return false;
+	}
+	val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, &attrs) catch { false };
 	core.drop_value(move attrs);
 	return ok;
 }
@@ -806,6 +937,11 @@ fn _emit_no_attrs_throwing(logger: &Logger, var level: Level, ev: String) -> Boo
 
 fn _emit_ctx_attrs_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> Bool {
 	val payload = _payload_json_ctx_attrs(logger, ev, ctx, attrs);
+	return _emit_payload_throwing(logger, level, payload);
+}
+
+fn _emit_ctx_attrs_throwing_typed<V>(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, V>) -> Bool require V is Debuggable {
+	val payload = _payload_json_ctx_attrs_typed<type V>(logger, ev, ctx, attrs);
 	return _emit_payload_throwing(logger, level, payload);
 }
 
@@ -948,6 +1084,59 @@ fn _payload_json_ctx_attrs(logger: &Logger, ev: String, ctx: &LogContext, attrs:
 	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
 }
 
+fn _payload_json_ctx_attrs_typed<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
+	val ev_json = _json_escape(ev);
+	val logger_json = _json_escape(logger.name);
+	val attrs_json = _ctx_attrs_json_merged_typed<type V>(ctx, attrs);
+	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
+}
+
+fn _ctx_attrs_json_merged_typed<V>(ctx: &LogContext, attrs: &containers.HashMap<String, V>) -> String require V is Debuggable {
+	var out = "{";
+	var first = true;
+	var it_ctx = ctx.attrs.iter();
+	while true {
+		val next = it_ctx.next();
+		match next {
+			Some(item) => {
+				if attrs.contains_key(item.key) {
+					continue;
+				}
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = _json_escape(*item.key);
+				val value_json = _dv_json(item.value);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	var it_attrs = attrs.iter();
+	while true {
+		val next = it_attrs.next();
+		match next {
+			Some(item) => {
+				if not first {
+					out = out + ",";
+				}
+				first = false;
+				val key = _json_escape(*item.key);
+				val dv = Debuggable::to_debug(item.value);
+				val value_json = _dv_json(&dv);
+				out = out + "\"" + key + "\":" + value_json;
+			},
+			None => {
+				break;
+			}
+		}
+	}
+	return out + "}";
+}
+
 implement Logger {
 	/// Returns the logger's name.
 	pub fn name(self: &Logger) nothrow -> String {
@@ -1026,49 +1215,73 @@ implement Logger {
 	/// best-effort" in `docs/effective-drift.md` for the contract
 	/// rationale.
 	///
+	/// If the logger is configured with a context resolver
+	/// (`LoggerConfigBuilder.context_resolver`) and no explicit
+	/// `&LogContext` is passed, the resolver is consulted at emit
+	/// time and any returned context's attributes are merged with
+	/// `attrs` (resolver attributes lose to caller-supplied keys on
+	/// collision).
+	///
 	/// **Parameters:**
 	/// - `ev` — event name (machine-readable, stable identifier).
 	/// - `attrs` — map of attribute key/value pairs; values may be
 	///   any type implementing `Debuggable`.
 	///
-	/// **See also:** `Logger.info_ctx`, `Logger.info_ctx_attrs`,
-	/// `Debuggable`.
+	/// **See also:** `Logger.info(ev, ctx)`,
+	/// `LoggerConfigBuilder.context_resolver`, `Debuggable`.
 	///
 	/// **Example:** `examples/logging/basic_events.drift`.
 	pub fn info<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
 		val _ = _emit(self, Level::Info(), ev, move attrs);
 	}
 
-	/// No-attrs overload of `Logger.info`.  Emits an event with no
-	/// attribute payload.
+	/// No-attrs overload of `Logger.info`.  Emits an event whose
+	/// attributes come solely from the configured context resolver
+	/// (or none, if no resolver is set).
 	pub fn info(self: &Logger, ev: String) nothrow -> Void {
 		val _ = _emit_no_attrs(self, Level::Info(), ev);
 	}
 
-	/// Context-bearing overload of `Logger.info`.  Attaches every
-	/// attribute carried by `ctx` to the emitted event.
+	/// Explicit-context overload of `Logger.info`.  Attaches every
+	/// attribute carried by `ctx` to the emitted event and **does
+	/// not** consult the configured context resolver.
+	///
+	/// To force "no context" on a single call when an ambient
+	/// resolver is configured, pass `&log.log_context()` (an empty
+	/// context).
 	///
 	/// **Parameters:**
 	/// - `ev` — event name.
 	/// - `ctx` — borrowed `LogContext` whose attributes are merged
 	///   into the record.
 	///
-	/// **See also:** `LogContext`, `Logger.info_ctx_attrs`.
-	pub fn info_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
-		val _ = _emit_ctx(self, Level::Info(), ev, ctx);
+	/// **See also:** `LogContext`, `Logger.info(ev, ctx, attrs)`.
+	pub fn info(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_explicit_ctx(self, Level::Info(), ev, ctx);
 	}
 
-	/// Context-plus-overrides overload of `Logger.info`.  Merges
-	/// `ctx`'s attributes with `attrs`; the latter wins on key
-	/// collisions.
+	/// Explicit-context-plus-typed-overrides overload of `Logger.info`.
+	/// Merges `ctx`'s attributes with `attrs`; the latter wins on
+	/// key collisions.  Suppresses the configured context resolver.
 	///
-	/// `attrs` here is a `HashMap<String, DiagnosticValue>` (already
-	/// projected) rather than a typed map, so the overrides can
-	/// carry mixed-type values.
+	/// Values may be any type implementing `Debuggable` — use this
+	/// form for the common single-type override case
+	/// (`{"size": 42}`).  When overrides carry mixed types, fall
+	/// back to the `DiagnosticValue` form: explicitly project each
+	/// value (`{"k": DiagnosticValue::String(...), ...}`).
 	///
-	/// **See also:** `Logger.info_ctx`, `LogContext`.
-	pub fn info_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
-		val _ = _emit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
+	/// **See also:** `Logger.info(ev, ctx)`, `LogContext`,
+	/// `Debuggable`.
+	pub fn info<V>(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Info(), ev, ctx, move attrs);
+	}
+
+	/// Explicit-context-plus-DV-overrides overload of `Logger.info`.
+	/// Same as the typed form but takes a pre-projected
+	/// `HashMap<String, DiagnosticValue>` so the overrides can carry
+	/// mixed-type values.
+	pub fn info(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_explicit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
 	}
 
 	/// Emits a `debug`-level event with a typed attribute map.
@@ -1077,8 +1290,7 @@ implement Logger {
 	/// severity — typically filtered out by default since `Info` is
 	/// the default minimum level.
 	///
-	/// **See also:** `Logger.info`, `Logger.debug_ctx`,
-	/// `Logger.debug_ctx_attrs`.
+	/// **See also:** `Logger.info`, `Logger.debug(ev, ctx)`.
 	pub fn debug<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
 		val _ = _emit(self, Level::Debug(), ev, move attrs);
 	}
@@ -1089,16 +1301,24 @@ implement Logger {
 		val _ = _emit_no_attrs(self, Level::Debug(), ev);
 	}
 
-	/// Context-bearing overload of `Logger.debug`.  See
-	/// `Logger.info_ctx` for the context-merging semantics.
-	pub fn debug_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
-		val _ = _emit_ctx(self, Level::Debug(), ev, ctx);
+	/// Explicit-context overload of `Logger.debug`.  See
+	/// `Logger.info(ev, ctx)` for the resolver-suppression semantics.
+	pub fn debug(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_explicit_ctx(self, Level::Debug(), ev, ctx);
 	}
 
-	/// Context-plus-overrides overload of `Logger.debug`.  See
-	/// `Logger.info_ctx_attrs` for the override semantics.
-	pub fn debug_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
-		val _ = _emit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
+	/// Explicit-context-plus-typed-overrides overload of
+	/// `Logger.debug`.  See `Logger.info(ev, ctx, attrs)` for the
+	/// override semantics.
+	pub fn debug<V>(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Debug(), ev, ctx, move attrs);
+	}
+
+	/// Explicit-context-plus-DV-overrides overload of `Logger.debug`.
+	/// See the typed `Logger.debug(ev, ctx, attrs)` overload above
+	/// for the common case.
+	pub fn debug(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_explicit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
 	}
 
 	/// Emits an `error`-level event with a typed attribute map.
@@ -1106,8 +1326,7 @@ implement Logger {
 	/// Same shape and contract as `Logger.info`, but at `Error`
 	/// severity — passes through every default-configured logger.
 	///
-	/// **See also:** `Logger.info`, `Logger.error_ctx`,
-	/// `Logger.error_ctx_attrs`.
+	/// **See also:** `Logger.info`, `Logger.error(ev, ctx)`.
 	pub fn error<V>(self: &Logger, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
 		val _ = _emit(self, Level::Error(), ev, move attrs);
 	}
@@ -1118,16 +1337,24 @@ implement Logger {
 		val _ = _emit_no_attrs(self, Level::Error(), ev);
 	}
 
-	/// Context-bearing overload of `Logger.error`.  See
-	/// `Logger.info_ctx` for the context-merging semantics.
-	pub fn error_ctx(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
-		val _ = _emit_ctx(self, Level::Error(), ev, ctx);
+	/// Explicit-context overload of `Logger.error`.  See
+	/// `Logger.info(ev, ctx)` for the resolver-suppression semantics.
+	pub fn error(self: &Logger, ev: String, ctx: &LogContext) nothrow -> Void {
+		val _ = _emit_explicit_ctx(self, Level::Error(), ev, ctx);
 	}
 
-	/// Context-plus-overrides overload of `Logger.error`.  See
-	/// `Logger.info_ctx_attrs` for the override semantics.
-	pub fn error_ctx_attrs(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
-		val _ = _emit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
+	/// Explicit-context-plus-typed-overrides overload of
+	/// `Logger.error`.  See `Logger.info(ev, ctx, attrs)` for the
+	/// override semantics.
+	pub fn error<V>(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>) nothrow -> Void require V is Debuggable {
+		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Error(), ev, ctx, move attrs);
+	}
+
+	/// Explicit-context-plus-DV-overrides overload of `Logger.error`.
+	/// See the typed `Logger.error(ev, ctx, attrs)` overload above
+	/// for the common case.
+	pub fn error(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+		val _ = _emit_explicit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
 	}
 }
 
@@ -1327,14 +1554,23 @@ pub fn macro_debug(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Voi
 /// (no-ctx) for the macro-target convention.
 pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.debug_ctx(ev, ctx);
+	logger.debug(ev, ctx);
 }
 
-/// Macro-target for `log.debug!(logger, ev, ctx, attrs)`.  See
-/// `macro_debug` (no-ctx) for the macro-target convention.
+/// Macro-target for `log.debug!(logger, ev, ctx, attrs)` with a
+/// typed `attrs` map.  See `macro_debug` (no-ctx) for the
+/// macro-target convention.
+pub fn macro_debug<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
+	val _ = move src;
+	logger.debug<type V>(ev, ctx, move attrs);
+}
+
+/// Macro-target for `log.debug!(logger, ev, ctx, attrs)` with a
+/// pre-projected `DiagnosticValue` map.  See the typed overload
+/// above for the common case.
 pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.debug_ctx_attrs(ev, ctx, move attrs);
+	logger.debug(ev, ctx, move attrs);
 }
 
 /// Macro-target for `log.debug!(logger, ev, attrs)`.  See `macro_debug`
@@ -1355,14 +1591,23 @@ pub fn macro_info(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Void
 /// (no-ctx) for the macro-target convention.
 pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.info_ctx(ev, ctx);
+	logger.info(ev, ctx);
 }
 
-/// Macro-target for `log.info!(logger, ev, ctx, attrs)`.  See
-/// `macro_debug` (no-ctx) for the macro-target convention.
+/// Macro-target for `log.info!(logger, ev, ctx, attrs)` with a
+/// typed `attrs` map.  See `macro_debug` (no-ctx) for the
+/// macro-target convention.
+pub fn macro_info<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
+	val _ = move src;
+	logger.info<type V>(ev, ctx, move attrs);
+}
+
+/// Macro-target for `log.info!(logger, ev, ctx, attrs)` with a
+/// pre-projected `DiagnosticValue` map.  See the typed overload
+/// above for the common case.
 pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.info_ctx_attrs(ev, ctx, move attrs);
+	logger.info(ev, ctx, move attrs);
 }
 
 /// Macro-target for `log.info!(logger, ev, attrs)`.  See `macro_debug`
@@ -1383,14 +1628,23 @@ pub fn macro_error(logger: &Logger, ev: String, src: meta.Caller) nothrow -> Voi
 /// (no-ctx) for the macro-target convention.
 pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.error_ctx(ev, ctx);
+	logger.error(ev, ctx);
 }
 
-/// Macro-target for `log.error!(logger, ev, ctx, attrs)`.  See
-/// `macro_debug` (no-ctx) for the macro-target convention.
+/// Macro-target for `log.error!(logger, ev, ctx, attrs)` with a
+/// typed `attrs` map.  See `macro_debug` (no-ctx) for the
+/// macro-target convention.
+pub fn macro_error<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, V>, src: meta.Caller) nothrow -> Void require V is Debuggable {
+	val _ = move src;
+	logger.error<type V>(ev, ctx, move attrs);
+}
+
+/// Macro-target for `log.error!(logger, ev, ctx, attrs)` with a
+/// pre-projected `DiagnosticValue` map.  See the typed overload
+/// above for the common case.
 pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
-	logger.error_ctx_attrs(ev, ctx, move attrs);
+	logger.error(ev, ctx, move attrs);
 }
 
 /// Macro-target for `log.error!(logger, ev, attrs)`.  See `macro_debug`

@@ -248,6 +248,59 @@ pub fn main() nothrow -> Int {
 
 For formatter customization, see `examples/logging/pluggable_formatter.drift`.
 
+### Ambient context via a resolver
+
+For request- or task-scoped attributes, install a context resolver on the
+builder once. Every bare `info(ev)` / `info(ev, attrs)` call (and the
+`debug` / `error` siblings) then consults the resolver at emit time and
+merges the returned context into the record. No app-side wrapper, no
+per-call `match current_context()` block.
+
+```drift
+import std.log as log;
+import std.runtime as rt;
+
+// App-supplied free function. Looks up VT-local request state and
+// builds a fresh LogContext (or None when no request is in scope).
+fn current_context() nothrow -> Optional<log.LogContext> {
+    val reg = rt.thread_registry();
+    match rt.get<type RequestState>(reg) {
+        Some(st) => {
+            var ctx = log.log_context();
+            ctx.put("request_id", st.request_id.clone());
+            return Optional<log.LogContext>::Some(move ctx);
+        },
+        None => { return Optional<log.LogContext>::None(); }
+    }
+}
+
+fn install_logger() nothrow -> log.Logger {
+    var b = log.config_builder();
+    b.context_resolver(current_context);
+    return log.create_logger("svc", b.build());
+}
+```
+
+At call sites the resolver is invisible:
+
+```drift
+logger.info("task-submitted");                                  // ambient ctx via resolver
+logger.info("task-submitted", {"size": 42});                    // ambient ctx + attrs (caller wins on key collision)
+logger.info("task-submitted", &caller_ctx);                     // explicit ctx — resolver SUPPRESSED
+logger.info("task-submitted", &caller_ctx, {"k": dv_value});    // explicit ctx + DV-typed override
+logger.info("task-submitted", &log.log_context());              // per-call opt-out: explicit empty context
+```
+
+The rule: passing an explicit `&LogContext` (even an empty one) suppresses
+the resolver. Use `&log.log_context()` when an event genuinely should
+carry no contextual attrs.
+
+`context_resolver` takes a function pointer (`Fn() nothrow -> Optional<log.LogContext>`),
+not a closure — so per-Logger captures live in process- or thread-local
+state that the function reads, not in the closure environment. The
+typical bookkeeper / web-handler pattern (VT-context lookup) fits
+this constraint naturally.
+
 ## Graceful shutdown on SIGINT/SIGTERM (`std.concurrent::await_signal`)
 
 Long-running services should handle SIGINT/SIGTERM cleanly: stop accepting new
@@ -1218,6 +1271,101 @@ fn update_user(db: &mut Db, id: Int, patch: Patch) -> Bool {
 ```
 
 The inner block makes it obvious when the borrow ends.
+
+## Moving a field out of a struct
+
+Drift does not have Rust-style partial-field moves. Writing `move s.field`
+is rejected at compile time:
+
+```text
+move of a projected place is not supported in v1;
+move a local/param or use swap/replace
+```
+
+You have two idiomatic patterns, depending on whether the field is
+*sometimes* taken or *always* swapped.
+
+### Pattern A — `Optional<T>` field with `take()` for "sometimes taken"
+
+Model fields that are conceptually take-once-then-empty as `Optional<T>`.
+Taking the value out leaves `Optional::None`; later code can branch on
+absence cleanly, and the struct's destructor still runs over a fully-formed
+field.
+
+```drift
+import std.core as core;
+import std.mem as mem;
+
+struct Token { /* ... */ }
+
+struct Session
+    require Self is core.Destructible
+{
+    token: core.Optional<Token>,
+    /* ... other fields ... */
+}
+
+implement Session {
+    pub fn take_token(self: &mut Session) -> core.Optional<Token> {
+        return mem.replace(&mut self.token, core.Optional::None);
+    }
+}
+
+implement core.Destructible for Session {
+    pub fn destroy(self) -> Void {
+        // Runs over a fully-formed Session. self.token is either Some(_) or
+        // None — both are valid; no special "this field was moved" branch.
+        return;
+    }
+}
+```
+
+This is what the diagnostic on a `Destructible` aggregate is steering you
+toward:
+
+```text
+cannot move field 'token' out of 'Session': Session has a custom destructor
+hint: store the field as Optional<Token> and use take()
+hint: or swap a replacement value in with std.mem.replace
+```
+
+### Pattern B — `mem.replace` for "always swapped" fields
+
+If the field always has a meaningful value and you just want to lift the
+old one out and put a fresh one in, call `std.mem.replace` directly. This
+works on any field type and has zero runtime overhead beyond the swap.
+
+```drift
+import std.mem as mem;
+
+fn rotate_buffer(s: &mut MySession, fresh: ByteBuffer) -> ByteBuffer {
+    return mem.replace(&mut s.buf, fresh);
+}
+```
+
+Use this when the field has no natural "absent" state and you don't want
+to pay for an `Optional` discriminant on every read.
+
+### When `Arc<T>` is *not* the answer
+
+`Arc<T>` solves shared ownership across multiple owners. It is **not** a
+workaround for "I want to move one field out of a locally-owned struct."
+For consume-self patterns (e.g. `throw_self`, builder finalizers), there is
+no second owner to share with — adding `Arc` only buys a heap allocation
+and a refcount on every field read.
+
+Reach for `Arc` when the field genuinely needs multiple live owners
+(e.g. shared configuration, registries, callbacks that outlive the
+constructing scope). For everything else, `Optional<T>` (Pattern A) or
+`mem.replace` (Pattern B) is the right tool.
+
+### Don't reason about "what's left in the field"
+
+After a swap or `take()`, the static state of the field is what it says:
+`None` for an `Optional`, the swapped-in value for `mem.replace`. Don't
+write code that assumes a moved-out slot holds any particular value —
+runtime neutralization is type-specific (see spec §4.13.4) and is
+implementation machinery, not API. Test for the values you put there.
 
 ## Prefer structs for product data; use variants to tag meaning
 

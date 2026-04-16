@@ -1,0 +1,52 @@
+module m;
+
+import std.log as log;
+
+fn _resolver() nothrow -> Optional<log.LogContext> {
+	var ctx = log.log_context();
+	ctx.put("user", "u-ambient");
+	ctx.put("req", "r-ambient");
+	return Optional<log.LogContext>::Some(move ctx);
+}
+
+fn run() -> Int {
+	var b = log.config_builder();
+	b.min_level(log.Level::Debug());
+	b.context_resolver(_resolver);
+	val main = log.create_logger("svc", b.build());
+
+	// Bare info: ambient ctx merged.
+	main.info("bare-info");
+
+	// Bare info + typed attrs: ambient ctx + attrs (caller wins on key collision).
+	main.info("bare-info-attrs", {"user": DiagnosticValue::String("u-caller-wins"), "code": DiagnosticValue::Int(200)});
+
+	// Explicit ctx: resolver suppressed; only explicit attrs surface.
+	var explicit = log.log_context();
+	explicit.put("scope", "explicit");
+	main.info("explicit-info", &explicit);
+
+	// Explicit ctx + DV attrs: merge with attrs winning.
+	main.info("explicit-info-attrs", &explicit, {"scope": DiagnosticValue::String("override")});
+
+	// Explicit ctx + typed (single-type) attrs: same merge semantics, no DV ceremony.
+	main.info("explicit-info-typed-attrs", &explicit, {"size": 42});
+
+	// Explicit empty ctx: per-call opt-out from resolver.
+	main.info("opt-out-info", &log.log_context());
+
+	// Same patterns at debug, including typed ctx+attrs.
+	main.debug("bare-debug");
+	main.debug("explicit-debug-typed-attrs", &explicit, {"size": 42});
+	main.debug("opt-out-debug", &log.log_context());
+
+	// Same patterns at error, including typed ctx+attrs.
+	main.error("bare-error");
+	main.error("explicit-error-typed-attrs", &explicit, {"size": 42});
+	main.error("opt-out-error", &log.log_context());
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

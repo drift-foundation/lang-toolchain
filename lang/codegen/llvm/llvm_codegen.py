@@ -982,10 +982,27 @@ class LlvmModuleBuilder:
 		return name
 
 	def _declare_fnresult_named_type(self, ok_key: str, ok_llty: str, name: str | None = None, *, ok_typeid: TypeId | None = None) -> str:
-		"""Declare and cache a named FnResult type for the given ok payload."""
+		"""Declare and cache a named FnResult type for the given ok payload.
+
+		Some callers (notably `_ensure_nothrow_wrap_thunk`) pass the raw
+		`type_table.type_key_string(...)` for generic ok payloads, which
+		contains `<`, `>`, `:`, `.` — characters illegal in LLVM type
+		identifiers.  Sanitize to `_` and append a hash suffix when
+		sanitization is non-identity, so distinct keys can't collide on
+		the same mangled name.
+		"""
 		if ok_key in self._fnresult_types_by_key:
 			return self._fnresult_types_by_key[ok_key]
-		type_name = name or f"%FnResult_{ok_key.lstrip('%')}_Error"
+		if name is None:
+			raw = ok_key.lstrip('%')
+			safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in raw)
+			if safe == raw:
+				type_name = f"%FnResult_{safe}_Error"
+			else:
+				suffix = f"{hash64(ok_key.encode()):016x}"
+				type_name = f"%FnResult_{safe}_{suffix}_Error"
+		else:
+			type_name = name
 		emit_ok_llty = self._llty(ok_llty)
 		self.type_decls.append(f"{type_name} = type {{ i8, {emit_ok_llty}, {DRIFT_ERROR_PTR} }}")
 		self._fnresult_types_by_key[ok_key] = type_name

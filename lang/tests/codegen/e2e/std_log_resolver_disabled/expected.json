@@ -1,0 +1,23 @@
+{
+  "exit_code": 0,
+  "stderr_jsonl": [
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "bare-no-ctx",
+      "logger": "svc",
+      "attrs": {},
+      "vtid": "__ANY__", "ptid": "__ANY__"
+    },
+    {
+      "tm": "__ANY__",
+      "level": "info",
+      "ev": "bare-attrs",
+      "logger": "svc",
+      "attrs": {
+        "k": "v"
+      },
+      "vtid": "__ANY__", "ptid": "__ANY__"
+    }
+  ]
+}

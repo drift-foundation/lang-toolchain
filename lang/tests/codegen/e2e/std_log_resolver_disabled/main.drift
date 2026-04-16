@@ -1,0 +1,15 @@
+module m;
+
+import std.log as log;
+
+fn run() -> Int {
+	var b = log.config_builder();
+	val main = log.create_logger("svc", b.build());
+	main.info("bare-no-ctx");
+	main.info("bare-attrs", {"k": "v"});
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

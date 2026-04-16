@@ -1,13 +1,10 @@
 {
+  "description": "Non-Debuggable struct passed as the typed-attrs value is rejected. Diagnostic shape is the compact 'no matching method' form because the post-0.27.201 Logger overload set has two 2-arg candidates (typed-attrs and explicit-ctx); overload resolution gives up before any single candidate's constraint failure can surface. The intent (rejection) is preserved; diagnostic quality is a known regression — see std_log_non_debuggable_attrs_rejected note in history.md.",
   "exit_code": 1,
   "diagnostics": [
     {
       "phase": "typecheck",
-      "message_contains": "std.log.Debuggable"
-    },
-    {
-      "phase": "typecheck",
-      "message_contains": "requirement not satisfied"
+      "message_contains": "no matching method 'info'"
     }
   ]
 }

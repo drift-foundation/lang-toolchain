@@ -704,6 +704,107 @@ take(jobs); // ❌ jobs invalid after move
 - No garbage collection — **destruction is deterministic** (RAII).
 
 ---
+
+### 4.13. Moved-out state and partial-field moves
+
+The "moved-out" state of a binding is **static ownership bookkeeping**, not a
+runtime value. The compiler tracks, per binding and per place, whether
+ownership has been transferred away; touching a moved-out place after the
+move is a compile-time error. The runtime representation of the storage
+behind a moved place is implementation-defined and depends on the type — see
+§4.13.4.
+
+#### 4.13.1. Move targets in v1
+
+In v1, `move x` only accepts an addressable local or parameter binding.
+Moving out of a projection — `move s.field`, `move arr[i]` — is **rejected at
+compile time**:
+
+```text
+move of a projected place is not supported in v1;
+move a local/param or use swap/replace
+```
+
+The canonical "move one field out" pattern is `std.mem.replace`, which
+swaps a fresh value into the slot and returns the old one as an owned value:
+
+```drift
+val old = mem.replace(&mut s.field, fresh_value);
+```
+
+This works for every aggregate, has zero runtime overhead beyond the swap,
+and keeps the field slot fully valid for any subsequent destructor.
+
+#### 4.13.2. Partial field moves on plain aggregates (post-v1, optional)
+
+For plain aggregates — structs that do **not** implement `Destructible`
+(§5.11) and whose field types do not require custom drop coordination — the
+language reserves the option to allow partial field moves in a future
+revision. The model would be per-field liveness tracking inside the
+aggregate's lifetime: each field independently transitions from *live* to
+*moved-out*, and the aggregate's normal end-of-scope drop releases only the
+fields that are still live.
+
+This is **reserved, not promised**. v1 programs must use `mem.replace` for
+the move-one-field-out pattern, and code reviews should not treat
+"partial field moves" as a near-term plan.
+
+#### 4.13.3. Aggregates with custom destructors reject partial moves
+
+A struct that implements `Destructible` (or contains a field that does)
+will **not** support partial field moves, in v1 or later. The reason is
+contractual, not implementation-driven:
+
+- `destroy(self)` runs as a single, indivisible action over the whole
+  aggregate. It expects every field to be in a fully-formed state.
+- A partial move would force `destroy` to inspect per-field liveness and
+  branch on it. That defeats the point of the trait — destructors must
+  remain simple and total.
+- It would also entangle ownership state with destructor source code:
+  adding a new "look at field X" line in `destroy` could retroactively
+  invalidate a partial move that compiled before.
+
+The corresponding diagnostic is shaped to point users at the supported
+patterns (see §11.5 and `effective-drift.md`):
+
+```text
+cannot move field 'token' out of 'Session': Session has a custom destructor
+hint: store the field as Optional<Token> and use take()
+hint: or swap a replacement value in with std.mem.replace
+```
+
+#### 4.13.4. Runtime neutralization is type-specific
+
+There is **no universal "tombstone" value** in Drift. After a move, the
+*static* state of the source place is "moved-out" (and any further use is
+rejected at compile time), but what the *runtime storage* contains is
+type-specific:
+
+- **`String`** — moved-out storage is left holding a null/empty header so
+  that the source's destructor (if it still runs by some path) is a no-op.
+- **`variant`** — moved-out variant slots are overwritten with an internal
+  tombstone tag (`__drift_internal_tombstone`) that the variant's drop
+  machinery recognizes and ignores. This is a compiler-internal arm and is
+  not user-visible in `match`.
+- **`Optional<T>`** — the user-visible "absence" form is `None`; the
+  compiler does not introduce a separate tombstone for `Optional`.
+- **`Array<T>`** — moved-out arrays are left in a zero-length state.
+- **Plain aggregates with no resources** — moved-out storage may simply be
+  left as garbage; the static ownership state guarantees it will not be
+  read.
+
+These neutralizations exist so that destructors which run on borderline
+paths (e.g., partial unwinding) stay sound. They are **implementation
+mechanics**, not part of the type's value space:
+
+- `Void` is **not** a tombstone. `Void` is the unit return type with one
+  inhabitant; it does not denote "moved-out" or "absence". Documentation,
+  diagnostics, and design notes must not describe `Void` as a tombstone.
+- User code must not test for tombstones, and must not rely on
+  moved-out storage producing any particular observable value. The static
+  use-after-move check is the contract; the runtime byte pattern is not.
+
+---
 ## 5. Traits and compile-time capabilities
 
 ### 5.1. Traits vs. interfaces
