@@ -2,67 +2,136 @@ module std.mem;
 
 export { Ptr, RawBuffer, MaybeUninit, alloc_uninit, dealloc, capacity, rawbuffer_ptr, rawbuffer_cap, rawbuffer_from_parts, ptr_at_ref, ptr_at_mut, write, read, ptr_from_ref, ptr_from_ref_mut, ptr_as_mut_ref, ptr_offset, ptr_read, ptr_write, ptr_is_null, replace, swap, maybe_uninit, maybe_write, maybe_assume_init_ref, maybe_assume_init_mut, maybe_assume_init_read };
 
+/// Owned heap allocation of `T`-typed cells.
+///
+/// `RawBuffer<T>` is the lowest-level container in stdlib — bare
+/// pointer + capacity, no length tracking, no destructor, no bounds
+/// checks.  Used to build higher-level data structures (`Array<T>`,
+/// `Buffer`, `HashMapCore`, `Deque`, `Mutex`, `Arc`, etc.).  Direct
+/// use is `unsafe`.
+///
+/// **See also:** `alloc_uninit`, `dealloc`, `rawbuffer_from_parts`,
+/// `MaybeUninit`.
 pub struct RawBuffer<T> {
 	ptr: Ptr<Byte>
 	cap: Int
 }
 
+/// Canonical container id for `RawBuffer<T>`, used in
+/// `IndexError.container_id` for low-level diagnostics.
 pub const RAW_BUFFER_CONTAINER_ID: String = "std.mem:RawBuffer";
 
+/// Possibly-uninitialized slot for a `T` value.
+///
+/// Used by container internals to defer initialization (e.g. hash
+/// table slots that may be empty/full/tombstone).  Reading a slot
+/// without prior initialization is undefined behavior — use the
+/// `maybe_assume_init_*` variants only when the caller can prove
+/// the slot has been written.
 pub struct MaybeUninit<T> { }
 
+/// Allocates a `RawBuffer<T>` with `cap` uninitialized slots.  Pair
+/// with `dealloc`.  Unsafe.
 @intrinsic pub unsafe fn alloc_uninit<T>(cap: Int) -> RawBuffer<T>;
 
+/// Frees a `RawBuffer<T>` previously returned by `alloc_uninit`.
+/// Calling on an aliased buffer (e.g. via `rawbuffer_from_parts`) is
+/// undefined.  Unsafe.
 @intrinsic pub unsafe fn dealloc<T>(buf: RawBuffer<T>) -> Void;
 
+/// Returns the buffer's capacity in elements.
 pub fn capacity<T>(buf: &RawBuffer<T>) nothrow -> Int {
 	return buf.cap;
 }
 
+/// Returns the buffer's underlying `Ptr<Byte>`.  Useful for
+/// rebuilding a `RawBuffer<U>` view of the same allocation via
+/// `rawbuffer_from_parts`.
 @intrinsic pub fn rawbuffer_ptr<T>(buf: &RawBuffer<T>) nothrow -> Ptr<Byte> {
 	return buf.ptr;
 }
 
+/// Returns the buffer's capacity (alias of `capacity`, exposed for
+/// generic-helper symmetry with `rawbuffer_ptr`).
 @intrinsic pub fn rawbuffer_cap<T>(buf: &RawBuffer<T>) nothrow -> Int {
 	return buf.cap;
 }
 
+/// Reconstructs a `RawBuffer<T>` from its raw pointer + capacity.
+///
+/// Does NOT allocate — used to pass existing storage between owners.
+/// The caller is responsible for ensuring the resulting buffer is
+/// not double-freed.
 @intrinsic pub fn rawbuffer_from_parts<T>(ptr: Ptr<Byte>, cap: Int) nothrow -> RawBuffer<T> {
 	return RawBuffer<type T>(ptr = ptr, cap = cap);
 }
 
+/// Returns a shared reference to the `i`th element.  No bounds
+/// check.  Unsafe.
 @intrinsic pub unsafe fn ptr_at_ref<T>(buf: &RawBuffer<T>, i: Int) -> &T;
 
+/// Returns a mutable reference to the `i`th element.  No bounds
+/// check.  Unsafe.
 @intrinsic pub unsafe fn ptr_at_mut<T>(buf: &mut RawBuffer<T>, i: Int) -> &mut T;
 
+/// Writes `v` into the `i`th slot, dropping any previous value.
+/// No bounds check.  Unsafe.
 @intrinsic pub unsafe fn write<T>(buf: &mut RawBuffer<T>, i: Int, v: T) -> Void;
 
+/// Moves the `i`th element out of the buffer.  Subsequent reads
+/// from that slot are undefined until rewritten.  Unsafe.
 @intrinsic pub unsafe fn read<T>(buf: &mut RawBuffer<T>, i: Int) -> T;
 
+/// Projects a `&T` reference to a raw `Ptr<T>`.  Unsafe.
 @intrinsic pub unsafe fn ptr_from_ref<T>(r: &T) -> Ptr<T>;
 
+/// Projects a `&mut T` reference to a raw `Ptr<T>`.  Unsafe.
 @intrinsic pub unsafe fn ptr_from_ref_mut<T>(r: &mut T) -> Ptr<T>;
 
+/// Adds `offset` (in element-sized strides, not bytes) to a raw
+/// pointer.  Unsafe.
 @intrinsic pub unsafe fn ptr_offset<T>(p: Ptr<T>, offset: Int) -> Ptr<T>;
 
+/// Reads the `T` value pointed to by `p`.  Unsafe.
 @intrinsic pub unsafe fn ptr_read<T>(p: Ptr<T>) -> T;
 
+/// Writes `v` to the address pointed to by `p`.  Drops any previous
+/// value at that address.  Unsafe.
 @intrinsic pub unsafe fn ptr_write<T>(p: Ptr<T>, v: T) -> Void;
 
+/// Returns `true` if `p` is the null pointer.
 @intrinsic pub unsafe fn ptr_is_null<T>(p: Ptr<T>) -> Bool;
 
+/// Reinterprets `Ptr<T>` as `&mut T`.  Caller is responsible for
+/// ensuring the pointer is valid for the resulting reference's
+/// lifetime.  Unsafe.
 @intrinsic pub unsafe fn ptr_as_mut_ref<T>(p: Ptr<T>) nothrow -> &mut T;
 
+/// Replaces `*ptr` with `v` and returns the previous value.
+///
+/// The canonical "move one field out of an owned struct" primitive
+/// per the Drift design (see `project_no_partial_moves` memory).
 @intrinsic pub fn replace<T>(ptr: &mut T, v: T) -> T;
 
+/// Swaps the values at `*a` and `*b` in place.
 @intrinsic pub fn swap<T>(a: &mut T, b: &mut T) -> Void;
 
+/// Constructs an uninitialized `MaybeUninit<T>` slot.  Unsafe.
 @intrinsic pub unsafe fn maybe_uninit<T>() -> MaybeUninit<T>;
 
+/// Writes `v` into `slot` and returns a `&mut T` to the contained
+/// value.  Unsafe.
 @intrinsic pub unsafe fn maybe_write<T>(slot: &mut MaybeUninit<T>, v: T) -> &mut T;
 
+/// Returns a shared reference to the value in `slot`, asserting
+/// (without checking) that the slot has been initialized.  Unsafe.
 @intrinsic pub unsafe fn maybe_assume_init_ref<T>(slot: &MaybeUninit<T>) -> &T;
 
+/// Returns a mutable reference to the value in `slot`, asserting
+/// (without checking) that the slot has been initialized.  Unsafe.
 @intrinsic pub unsafe fn maybe_assume_init_mut<T>(slot: &mut MaybeUninit<T>) -> &mut T;
 
+/// Moves the value out of `slot`, asserting (without checking) that
+/// the slot has been initialized.  After this call, the slot is
+/// uninitialized again.  Unsafe.
 @intrinsic pub unsafe fn maybe_assume_init_read<T>(slot: &mut MaybeUninit<T>) -> T;

@@ -5,10 +5,23 @@ export {
 	Comparable
 };
 
+/// Trait for types that support equality comparison.
+///
+/// Default impls: `Int`, `Uint`, `Uint64`, `Bool`, `Byte`, `String`.
+///
+/// **See also:** `Comparable`.
 pub trait Equatable {
 	fn eq(self: &Self, other: &Self) nothrow -> Bool;
 }
 
+/// Trait for types that support three-way ordering comparison.
+///
+/// `cmp(self, other)` returns negative if `self < other`, zero if
+/// equal, positive if `self > other`.  Required to also implement
+/// `Equatable`.  Default impls: `Int`, `Uint`.
+///
+/// **See also:** `Equatable`, `algo.binary_search`,
+/// `containers.TreeMap`.
 pub trait Comparable require Self is Equatable {
 	fn cmp(self: &Self, other: &Self) nothrow -> Int;
 }

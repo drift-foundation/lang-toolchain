@@ -12,6 +12,12 @@ export {
 	hash_value
 };
 
+/// Trait for stateful hash sinks.
+///
+/// Implementations accumulate hash state across `write_*` calls
+/// and produce a final 64-bit digest via `finish`.
+///
+/// **See also:** `Hash`, `BuildHasher`, `DefaultHasher`.
 pub trait Hasher {
 	fn write_u8(self: &mut Self, v: Byte) nothrow -> Void;
 	fn write_u64(self: &mut Self, v: Uint64) nothrow -> Void;
@@ -20,30 +26,52 @@ pub trait Hasher {
 	fn finish(self: &Self) nothrow -> Uint64;
 }
 
-// MVP: BuildHasher is a seed provider for DefaultHasher. It does not allow
-// swapping hash algorithms yet; that will require associated types later.
+/// Trait for hash-builder factories.
+///
+/// `build()` returns a fresh `DefaultHasher` initialized with this
+/// builder's seed.  Used by hash containers (e.g. `HashMapCore`) to
+/// produce a new hasher for each key.
+///
+/// MVP limitation: `build()` is hard-coded to return `DefaultHasher`;
+/// pluggable hash algorithms will require associated types.
 pub trait BuildHasher {
 	fn build(self: &Self) nothrow -> DefaultHasher;
 }
 
+/// Trait for types that can be hashed via a `Hasher`.
+///
+/// Generic over the hasher type `H`; implementations are typically
+/// written against `Hash<DefaultHasher>` for use with the standard
+/// hash containers.  Default impls: `Int`, `Uint`, `Uint64`, `Bool`,
+/// `Byte`, `String`.
 pub trait Hash<H> require H is Hasher {
 	fn hash(self: &Self, var h: &mut H) nothrow -> Void;
 }
 
+/// Default `Hasher` implementation — a simple FNV-style mix-and-add
+/// hasher.  Not cryptographically secure; suitable for hash tables
+/// only.
 pub struct DefaultHasher {
 	state: Uint64
 }
 
+/// Default `BuildHasher` — produces `DefaultHasher` instances seeded
+/// from a configurable `Uint64` seed.
 pub struct DefaultBuildHasher {
 	seed: Uint64
 }
 
+/// Default seed used by `default_build_hasher()`.  Zero — change
+/// only if you need deterministic hashing across runs to differ
+/// from the default.
 pub const DEFAULT_HASH_SEED: Uint64 = 0;
 
+/// Constructs a `DefaultBuildHasher` with `DEFAULT_HASH_SEED`.
 pub fn default_build_hasher() nothrow -> DefaultBuildHasher {
 	return DefaultBuildHasher(seed = DEFAULT_HASH_SEED);
 }
 
+/// FNV-1a-style mixing prime used by `DefaultHasher`.
 pub const HASH_PRIME: Uint64 = 1099511628211;
 
 fn _mix(state: Uint64, v: Uint64) nothrow -> Uint64 {
@@ -80,6 +108,10 @@ implement BuildHasher for DefaultBuildHasher {
 	}
 }
 
+/// Convenience: hashes a single value `v` to a `Uint64` digest using
+/// `DefaultHasher` seeded from `default_build_hasher()`.
+///
+/// **See also:** `Hash`, `Hasher`, `default_build_hasher`.
 pub fn hash_value<T>(v: &T) nothrow -> Uint64 require T is Hash<DefaultHasher> {
 	var b = default_build_hasher();
 	var h = BuildHasher::build(&b);

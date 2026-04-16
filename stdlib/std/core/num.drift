@@ -5,5 +5,8 @@ export {
 	wrapping_mul_u64
 };
 
+/// Computes `a + b` modulo 2⁶⁴ (silent wraparound on overflow).
 @intrinsic pub fn wrapping_add_u64(a: Uint64, b: Uint64) nothrow -> Uint64;
+
+/// Computes `a * b` modulo 2⁶⁴ (silent wraparound on overflow).
 @intrinsic pub fn wrapping_mul_u64(a: Uint64, b: Uint64) nothrow -> Uint64;

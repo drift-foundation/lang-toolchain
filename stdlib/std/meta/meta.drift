@@ -5,6 +5,15 @@ import std.text as text;
 
 export { Caller, caller, compiler_info, CompilerTag, compiler_info_pairs };
 
+/// Source-location record captured by the `caller()` intrinsic.
+///
+/// Carries the calling site's module id, source file path, and line
+/// number.  Used by macros (e.g. `log.info!`) that need to report
+/// "where was I invoked" without the user passing the location
+/// explicitly.
+///
+/// **See also:** `caller`, `Caller.module_id`, `Caller.file`,
+/// `Caller.line`.
 pub struct Caller {
 	module_id_v: String,
 	file_v: String,
@@ -12,46 +21,72 @@ pub struct Caller {
 }
 
 implement Caller {
+	/// Returns the calling site's module id (e.g. `"main"`,
+	/// `"acme.lib"`).
 	pub fn module_id(self: &Caller) nothrow -> &String {
 		return &self.module_id_v;
 	}
 
+	/// Returns the calling site's source file path.
 	pub fn file(self: &Caller) nothrow -> &String {
 		return &self.file_v;
 	}
 
+	/// Returns the calling site's 1-based line number.
 	pub fn line(self: &Caller) nothrow -> Int {
 		return self.line_v;
 	}
 
+	/// Returns the byte length of `module_id`.
 	pub fn module_id_len(self: &Caller) nothrow -> Int {
 		return byte_length(&self.module_id_v);
 	}
 
+	/// Returns the byte length of `file`.
 	pub fn file_len(self: &Caller) nothrow -> Int {
 		return byte_length(&self.file_v);
 	}
 }
 
+/// Returns a `Caller` describing the source location of the call
+/// site.
+///
+/// Compiler intrinsic — the returned `Caller` is computed at the
+/// invoking source position, not inside the helper.  Pass through
+/// macros so they can attach call-site metadata to their output.
 @intrinsic pub fn caller() nothrow -> Caller;
 
+/// Returns the compiler's identity string.
+///
+/// Format: space-separated `key value` pairs joined by ` | ` (e.g.
+/// `"name driftc | version 0.27.199 | abi 9 | git <sha>"`).  Use
+/// `compiler_info_pairs()` to parse into structured form.
 @intrinsic pub fn compiler_info() nothrow -> String;
 
+/// Single key/value pair from the parsed `compiler_info()` output.
 pub struct CompilerTag {
 	key_v: String,
 	value_v: String
 }
 
 implement CompilerTag {
+	/// Returns the tag's key (e.g. `"name"`, `"version"`).
 	pub fn key(self: &CompilerTag) nothrow -> &String {
 		return &self.key_v;
 	}
 
+	/// Returns the tag's value (e.g. `"driftc"`, `"0.27.199"`).
 	pub fn value(self: &CompilerTag) nothrow -> &String {
 		return &self.value_v;
 	}
 }
 
+/// Parses `compiler_info()` into a list of `CompilerTag` pairs.
+///
+/// Splits on the canonical ` | ` separator; each pair is
+/// `key SPACE value`.  Malformed segments are silently dropped.
+///
+/// **See also:** `compiler_info`, `CompilerTag`.
 pub fn compiler_info_pairs() nothrow -> Array<CompilerTag> {
 	val info = compiler_info();
 	val n = info.byte_length();

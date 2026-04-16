@@ -12,10 +12,29 @@ export {
 	sort_in_place
 };
 
+/// Trait extending `iter.RandomAccessReadable<T>` with key
+/// comparison.
+///
+/// `compare_key(i, key)` returns a three-way result comparing the
+/// `i`th element to `key` (negative if element is less, zero if
+/// equal, positive if greater).  Implemented by container ranges
+/// over comparable element types (e.g. `ArrayRange<Int>`,
+/// `DequeRange<Int>`).
+///
+/// **See also:** `binary_search`, `iter.RandomAccessReadable`.
 pub trait BinarySearchable<T> require Self is iter.RandomAccessReadable<T> {
 	fn compare_key(self: &Self, i: Int, key: &T) -> Int;
 }
 
+/// Sorts the random-access view `r` in place using heapsort.
+///
+/// O(n log n) worst-case time, O(1) extra space.  Stability is
+/// not guaranteed (heapsort is not a stable sort).
+///
+/// **Parameters:**
+/// - `r` — mutable view implementing `RandomAccessPermutable<T>`.
+///
+/// **See also:** `binary_search`, `iter.RandomAccessPermutable`.
 pub fn sort_in_place<R, T>(r: &mut R) -> Void
 	require R is iter.RandomAccessPermutable<T> {
 	val len = r.len();
@@ -80,6 +99,16 @@ pub fn sort_in_place<R, T>(r: &mut R) -> Void
 	}
 }
 
+/// Binary-searches the sorted view `r` for `key`.
+///
+/// Assumes `r` is sorted in ascending order per `compare_key`.
+/// Behavior on an unsorted view is unspecified.  O(log n) time.
+///
+/// **Returns:** `Some(index)` of a matching element if found;
+/// `None` otherwise.  When the key matches multiple elements, the
+/// returned index is unspecified (any valid match).
+///
+/// **See also:** `BinarySearchable`, `sort_in_place`.
 pub fn binary_search<R, T>(r: &R, key: &T) -> Optional<Int>
 	require (R is BinarySearchable<T> and T is cmp.Comparable) {
 	val len = r.len();

@@ -45,62 +45,142 @@ export {
 	string_from_utf8_bytes
 };
 
+/// Marker trait: types with bitwise-copyable semantics.
+///
+/// `Copy` types may be passed by value without moving — read-after-
+/// pass is permitted.  Default impls: `Int`, `Uint`, `Uint64`,
+/// `Bool`, `Float`, `Byte`, `String`, `DiagnosticValue`,
+/// `DiagnosticEntry`, `Void`, `&T` (for any `T`), `Optional<T>`
+/// when `T: Copy`, `mem.Ptr<T>`.
+///
+/// String is `Copy` because its representation is an ARC handle;
+/// copying bumps the refcount, no byte-level duplication.
 pub trait Copy {
 }
 
+/// Trait for types that need explicit destruction logic.
+///
+/// `destroy(self)` is invoked at the end of an owned value's
+/// lifetime to release backing resources (memory, file descriptors,
+/// locks, etc.).  Implementing `Destructible` is what makes a type
+/// non-`Copy` and triggers the compiler's drop-tracking.
+///
+/// **See also:** `Copy` (mutually exclusive in practice).
 pub trait Destructible {
 	fn destroy(self: Self) nothrow -> Void;
 }
 
+/// Trait for types that can produce a `DiagnosticValue` projection
+/// of themselves.
+///
+/// Used by error-reporting paths to render typed values in
+/// machine-readable diagnostic output.  Default impls: `Int`,
+/// `Uint`, `Bool`, `Float`, `String`, `DiagnosticValue`.
 pub trait Diagnostic {
 	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
 }
 
+/// Single key/value pair carried by structured diagnostics.
+///
+/// `key` is a stable identifier; `value` is the typed payload.
+/// `DiagnosticEntry` is `Copy` (both fields are `Copy`).
+///
+/// **See also:** `diagnostic_entry`, `DiagnosticValue`.
 pub struct DiagnosticEntry {
 	pub key: String,
 	pub value: DiagnosticValue,
 }
 
+/// Constructs a `DiagnosticEntry` from `key` and `value`.
 pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
 	return DiagnosticEntry(key = move key, value = move value);
 }
 
+/// Trait for error types that can raise themselves as a typed
+/// exception.
+///
+/// `throw_self(self)` is a terminal-`throws` method (never returns
+/// normally — must throw).  Required by `or_throw` (and the
+/// compiler-owned auto-try inside `throws` functions) so any
+/// `Result<T, E>` with `E: Throw` can be unwrapped.  Default impls:
+/// `Int`, `Uint`, `Bool`, `Float`, `String`, `DiagnosticValue`.
+///
+/// **See also:** `Result.or_throw`, the auto-try contract in
+/// `docs/effective-drift.md`.
 pub trait Throw {
 	fn throw_self(self: Self) throws;
 }
 
+/// Trait for owning wrappers that expose a `&T` view of their
+/// contents.
+///
+/// Implemented by `conc.Arc<T>`.  Allows generic code that takes
+/// `&T` to accept an `Arc<T>` via UFCS resolution.
 pub trait Borrow<T> {
 	fn borrow(self: &Self) nothrow -> &T;
 }
 
+/// `&mut` form of `Borrow<T>`.  Implemented by `conc.Arc<T>` and
+/// `conc.MutexGuard<T>`.
 pub trait BorrowMut<T> {
 	fn borrow_mut(self: &mut Self) nothrow -> &mut T;
 }
 
+/// Trait for zero-argument throwing callables.
+///
+/// `call(self)` may throw; the return type `R` is the success
+/// value.  Used as a constraint on closure-arg helpers.
+///
+/// **See also:** `callback_throw0`, `Fn0`.
 pub trait FnThrow0<R> {
 	fn call(self: &Self) -> R;
 }
 
+/// Trait for single-argument throwing callables.  See `FnThrow0`.
 pub trait FnThrow1<A, R> {
 	fn call(self: &Self, a: A) -> R;
 }
 
+/// Trait for two-argument throwing callables.  See `FnThrow0`.
 pub trait FnThrow2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) -> R;
 }
 
+/// Boxed throwing callable interface, zero arguments.
+///
+/// Construct via `callback_throw0(f)` from any `f` implementing
+/// `FnThrow0<R>`.  Stored representation; pass `CallbackThrow0<R>`
+/// values across boundaries that don't expose the original
+/// generic type.
 pub interface CallbackThrow0<R> {
 	fn call(self: &Self) -> R;
 }
 
+/// Boxed throwing callable interface, single argument.  See
+/// `CallbackThrow0`.
 pub interface CallbackThrow1<A, R> {
 	fn call(self: &Self, a: A) -> R;
 }
 
+/// Boxed throwing callable interface, two arguments.  See
+/// `CallbackThrow0`.
 pub interface CallbackThrow2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) -> R;
 }
 
+/// Discriminated success / error type — Drift's primary value-level
+/// error representation.
+///
+/// `Ok(value)` carries a successful `T`; `Err(err)` carries an
+/// error `E`.  The `@tombstone` arm is internal — it represents
+/// post-move state and should not appear in user code.
+///
+/// Use `match` to destructure, or `or_throw` (when `E: Throw`) to
+/// unwrap, or rely on the auto-try contract inside `throws`
+/// functions.
+///
+/// **See also:** `Result.or_throw`, `Result.on_error`, the auto-try
+/// contract in `docs/effective-drift.md`.
 pub variant Result<T, E> {
 	Ok(value: T),
 	Err(err: E),
@@ -108,6 +188,17 @@ pub variant Result<T, E> {
 }
 
 implement<T, E> Result<T, E> {
+/// Unwraps the Ok value or throws via `E.throw_self`.
+///
+/// The single user-facing explicit-unwrap operation on `Result`.
+/// Inside `throws` functions and `try {}` blocks, the compiler-owned
+/// auto-try contract synthesizes `or_throw()` automatically — see
+/// `docs/effective-drift.md`.
+///
+/// **Returns:** the `Ok` value.  Never returns on `Err` (control
+/// transfers to the nearest catch via `Throw::throw_self`).
+///
+/// **See also:** `Result`, `Throw`, `Result.on_error`.
 pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 		match self {
 			Ok(v) => { return move v; },
@@ -116,6 +207,12 @@ pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 		}
 	}
 
+	/// Unwraps the Ok value or invokes the recovery callback `f` on
+	/// the Err.
+	///
+	/// Use when the caller has a domain-specific recovery strategy
+	/// for `Err` that produces a fallback `T` (rather than throwing
+	/// or matching).
 	pub fn on_error(self: Result<T, E>, f: CallbackThrow1<E, T>) -> T {
 		match self {
 			Ok(v) => { return move v; },
@@ -126,6 +223,10 @@ pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 }
 
 implement<T> Optional<T> {
+	/// Unwraps the Some value or invokes the fallback callback `f`
+	/// on `None`.
+	///
+	/// Mirror of `Result.on_error` for `Optional`.
 	pub fn on_none(self: Optional<T>, f: CallbackThrow0<T>) -> T {
 		match self {
 			Some(v) => { return move v; },
@@ -134,35 +235,60 @@ implement<T> Optional<T> {
 	}
 }
 
+/// Trait for zero-argument non-throwing callables.  See `FnThrow0`.
 pub trait Fn0<R> {
 	fn call(self: &Self) nothrow -> R;
 }
 
+/// Trait for single-argument non-throwing callables.  See `Fn0`.
 pub trait Fn1<A, R> {
 	fn call(self: &Self, a: A) nothrow -> R;
 }
 
+/// Trait for two-argument non-throwing callables.  See `Fn0`.
 pub trait Fn2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) nothrow -> R;
 }
 
+/// Returns the unique `Void` value.
+///
+/// Useful for code that needs to construct a `Void`-typed
+/// expression explicitly (e.g. `core.Result::Ok(core.void_value())`
+/// for a `Result<Void, E>`).
 pub fn void_value() nothrow -> Void {
 	return;
 }
 
+/// Interior-mutability cell for a `T`.
+///
+/// `Cell<T>` lets a value be mutated through a `&Cell<T>` shared
+/// reference without `&mut`.  Used by single-threaded state-tracking
+/// internals (e.g. `io.File.closed`).  Not thread-safe — see
+/// `conc.AtomicBool` / `conc.Mutex` for cross-thread cells.
+///
+/// **See also:** `cell`, `Cell.get`, `Cell.set`.
 pub struct Cell<T> {
 	value: T
 }
 
+/// Constructs a `Cell<T>` wrapping `value`.
 pub fn cell<T>(var value: T) nothrow -> Cell<T> {
 	return Cell<type T>(value = move value);
 }
 
 implement<T> Cell<T> {
+	/// Returns a copy of the cell's current value.  Requires
+	/// `T: Copy`.
 	pub fn get(self: &Cell<T>) nothrow -> T require T is Copy {
 		return self.value;
 	}
 
+	/// Replaces the cell's value with `value` (drops the previous).
+	///
+	/// Note: takes `&Cell<T>` (shared ref), not `&mut` — interior
+	/// mutability is the whole point.  The previous value is
+	/// dropped via the raw pointer write (no destructor invocation
+	/// for the old value beyond what `ptr_write` does).
 	pub fn set(self: &Cell<T>, var value: T) nothrow -> Void {
 		unsafe {
 			val ptr = mem.ptr_from_ref<type T>(&self.value);
@@ -171,25 +297,60 @@ implement<T> Cell<T> {
 	}
 }
 
+/// Boxed non-throwing callable interface, zero arguments.
+///
+/// Construct via `callback0(f)` from any `f` implementing
+/// `Fn0<R>`.  Erases the original generic type so the callback can
+/// be stored in heterogeneous containers and crossed across module
+/// boundaries.
+///
+/// **See also:** `callback0`, `Fn0`, `CallbackThrow0`.
 pub interface Callback0<R> {
 	fn call(self: &Self) nothrow -> R;
 }
 
+/// Boxed non-throwing callable interface, single argument.  See
+/// `Callback0`.
 pub interface Callback1<A, R> {
 	fn call(self: &Self, a: A) nothrow -> R;
 }
 
+/// Boxed non-throwing callable interface, two arguments.  See
+/// `Callback0`.
 pub interface Callback2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) nothrow -> R;
 }
 
+/// Boxes a zero-argument non-throwing callable as a `Callback0<R>`.
 @intrinsic pub fn callback0<F, R>(f: F) nothrow -> Callback0<R> require F is Fn0<R>;
+
+/// Boxes a single-argument non-throwing callable as `Callback1<A, R>`.
 @intrinsic pub fn callback1<F, A, R>(f: F) nothrow -> Callback1<A, R> require F is Fn1<A, R>;
+
+/// Boxes a two-argument non-throwing callable as `Callback2<A, B, R>`.
 @intrinsic pub fn callback2<F, A, B, R>(f: F) nothrow -> Callback2<A, B, R> require F is Fn2<A, B, R>;
+
+/// Boxes a zero-argument throwing callable as `CallbackThrow0<R>`.
 @intrinsic pub fn callback_throw0<F, R>(f: F) nothrow -> CallbackThrow0<R> require F is FnThrow0<R>;
+
+/// Boxes a single-argument throwing callable as `CallbackThrow1<A, R>`.
 @intrinsic pub fn callback_throw1<F, A, R>(f: F) nothrow -> CallbackThrow1<A, R> require F is FnThrow1<A, R>;
+
+/// Boxes a two-argument throwing callable as `CallbackThrow2<A, B, R>`.
 @intrinsic pub fn callback_throw2<F, A, B, R>(f: F) nothrow -> CallbackThrow2<A, B, R> require F is FnThrow2<A, B, R>;
+
+/// Returns a stable `Uint64` type-id for `T`, used as the key by
+/// the registry / type-box machinery.
+///
+/// **See also:** `runtime.GlobalRegistry`, `runtime.TypeBox`.
 @intrinsic pub fn type_id<T>() nothrow -> Uint64;
+
+/// Drops `value`, invoking any `Destructible::destroy` impl.
+///
+/// Used by stdlib internals when a value needs to be released
+/// outside its natural scope (e.g. tombstone-write paths).  Most
+/// user code never needs this — normal scope exit triggers
+/// destruction automatically.
 @intrinsic pub fn drop_value<T>(value: T) nothrow -> Void;
 
 implement Copy for Int {
@@ -303,16 +464,29 @@ implement Throw for DiagnosticValue {
 	}
 }
 
+/// Canonical container id for `String`, used in
+/// `IndexError.container_id` when string operations bounds-check.
 pub const STRING_CONTAINER_ID: String = "std.core:String";
 
+/// Returns the byte at index `i`.  Throws `std.err:IndexError` on
+/// out-of-range access.
 @intrinsic pub fn string_byte_at(s: &String, i: Int) -> Byte;
+
+/// Constructs a `String` from `len` UTF-8 bytes starting at `ptr`.
+///
+/// Does NOT validate UTF-8 — caller is responsible for ensuring the
+/// bytes are valid UTF-8.  Use `text.utf8_from_bytes` for the
+/// validating, safe form.
 @intrinsic pub fn string_from_utf8_bytes(ptr: mem.Ptr<Byte>, len: Int) nothrow -> String;
 
 implement String {
+	/// Returns the string's length in bytes (not characters).
 	pub fn byte_length(self: &String) nothrow -> Int {
 		return byte_length(self);
 	}
 
+	/// Returns the byte at `index`.  Throws `std.err:IndexError` on
+	/// out-of-range access.
 	pub fn byte_at(self: &String, index: Int) nothrow -> Byte {
 		return string_byte_at(self, index);
 	}

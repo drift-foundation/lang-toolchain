@@ -7,18 +7,25 @@ export {
 	format_float
 };
 
+/// Formats `v` as a `String` (`"true"` or `"false"`).
 pub fn format_bool(v: Bool) nothrow -> String {
 	return f"{v}";
 }
 
+/// Formats `v` as a base-10 decimal `String`.  Negative values are
+/// prefixed with `-`.
 pub fn format_int(v: Int) nothrow -> String {
 	return f"{v}";
 }
 
+/// Formats `v` as a base-10 decimal `String` (always non-negative).
 pub fn format_uint(v: Uint) nothrow -> String {
 	return f"{v}";
 }
 
+/// Formats `v` as a `String` using the platform's default
+/// floating-point conversion (round-trip-safe shortest
+/// representation).
 pub fn format_float(v: Float) nothrow -> String {
 	return f"{v}";
 }

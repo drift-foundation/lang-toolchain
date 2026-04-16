@@ -11,7 +11,12 @@ export {
 	eprintln
 };
 
+/// Chunk size used by the console writers when slicing large
+/// payloads into multiple kernel writes.  4 KiB.
 pub const CONSOLE_CHUNK_BYTES: Int = 4096;
+
+/// Per-write timeout (milliseconds) used by the console writers.
+/// 60 seconds.
 pub const CONSOLE_TIMEOUT_MS: Int = 60000;
 
 fn _write_timeout() nothrow -> conc.Duration {
@@ -70,6 +75,13 @@ fn _write_all_stream(out: &io.ConfiguredOutputStream, text: String, with_newline
 	}
 }
 
+/// Writes `text` to standard output without a trailing newline.
+///
+/// Best-effort: write failures are swallowed silently per the
+/// console contract (no observable Result).  Use `io.stdout_builder`
+/// directly if you need write-result observability.
+///
+/// **See also:** `println`, `eprint`.
 pub fn print(text: String) nothrow -> Void {
 	val b = io.stdout_builder();
 	val b2 = b.timeout(_write_timeout());
@@ -78,6 +90,11 @@ pub fn print(text: String) nothrow -> Void {
 	return;
 }
 
+/// Writes `text` followed by `'\n'` to standard output.
+///
+/// Best-effort; same contract as `print`.
+///
+/// **See also:** `print`, `eprintln`.
 pub fn println(text: String) nothrow -> Void {
 	val b = io.stdout_builder();
 	val b2 = b.timeout(_write_timeout());
@@ -86,6 +103,11 @@ pub fn println(text: String) nothrow -> Void {
 	return;
 }
 
+/// Writes `text` to standard error without a trailing newline.
+///
+/// Best-effort; same contract as `print`.
+///
+/// **See also:** `eprintln`, `print`.
 pub fn eprint(text: String) nothrow -> Void {
 	val b = io.stderr_builder();
 	val b2 = b.timeout(_write_timeout());
@@ -94,6 +116,11 @@ pub fn eprint(text: String) nothrow -> Void {
 	return;
 }
 
+/// Writes `text` followed by `'\n'` to standard error.
+///
+/// Best-effort; same contract as `print`.
+///
+/// **See also:** `eprint`, `println`.
 pub fn eprintln(text: String) nothrow -> Void {
 	val b = io.stderr_builder();
 	val b2 = b.timeout(_write_timeout());

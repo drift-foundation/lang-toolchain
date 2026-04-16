@@ -12,6 +12,13 @@ export {
 	parse_uint_bytes
 };
 
+/// Error returned by failable string-to-number parsers.
+///
+/// `tag` is a stable machine-readable code (e.g. `"empty-input"`,
+/// `"invalid-char"`, `"out-of-range"`).  `offset` is the zero-based
+/// byte position in the input where the parser gave up.
+///
+/// `ParseError` implements `core.Throw` and `core.Diagnostic`.
 pub struct ParseError {
 	pub tag: String,
 	pub offset: Int
@@ -83,6 +90,11 @@ fn _eq_ascii_ci_slice(s: &String, start: Int, lit: String) nothrow -> Bool {
 	return true;
 }
 
+/// Parses `s` as a boolean literal, case-insensitive.
+///
+/// Recognizes `"true"`/`"false"`, `"yes"`/`"no"`, `"on"`/`"off"`,
+/// `"1"`/`"0"`.  Anything else returns `false`.  Total function —
+/// no error path.
 pub fn parse_bool(s: String) nothrow -> Bool {
 	if s == "1" {
 		return true;
@@ -118,6 +130,15 @@ pub fn parse_bool(s: String) nothrow -> Bool {
 	return false;
 }
 
+/// Parses `s` as a base-10 signed integer.
+///
+/// Accepts an optional leading `+` / `-` sign.  No whitespace or
+/// thousands separators.  Range-checked against `Int` bounds.
+///
+/// **Returns:** `Ok(Int)` on success; `Err(ParseError)` on empty
+/// input, invalid character, or out-of-range value.
+///
+/// **See also:** `parse_uint`, `parse_int_bytes`.
 pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
 	val len = s.byte_length();
 	if len == 0 {
@@ -160,6 +181,14 @@ pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
 	return core.Result::Ok(acc);
 }
 
+/// Parses `s` as a base-10 unsigned integer.
+///
+/// Rejects negative signs.  Range-checked against `Uint` bounds.
+///
+/// **Returns:** `Ok(Uint)` on success; `Err(ParseError)` on empty
+/// input, invalid character, or out-of-range value.
+///
+/// **See also:** `parse_int`, `parse_uint_bytes`.
 pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
 	val len = s.byte_length();
 	if len == 0 {
@@ -193,6 +222,14 @@ pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
 	return core.Result::Ok(acc);
 }
 
+/// Parses `s` as a `Float`.
+///
+/// Accepts standard decimal notation with optional sign, fractional
+/// part, and `e`/`E` exponent.  Special values (`"inf"`, `"nan"`)
+/// are NOT recognized — use `std.float.nan()` / `std.float.infinity()`.
+///
+/// **Returns:** `Ok(Float)` on success; `Err(ParseError)` on
+/// invalid input.
 pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 	val len = s.byte_length();
 	if len == 0 {
@@ -324,6 +361,15 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 	return core.Result::Ok(value);
 }
 
+/// Parses bytes `[start, end)` of `bytes` as a base-10 signed
+/// integer.
+///
+/// Same semantics as `parse_int` but operates on a byte-range view
+/// — useful when the input is part of a larger buffer (e.g. a JSON
+/// or HTTP parser).  `offset` in any returned `ParseError` is
+/// relative to `start`.
+///
+/// **See also:** `parse_int`.
 pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Int, ParseError> {
 	val len = end;
 	if start < 0 or end < start or end > bytes.len {
@@ -369,6 +415,10 @@ pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> cor
 	return core.Result::Ok(acc);
 }
 
+/// Parses bytes `[start, end)` of `bytes` as a base-10 unsigned
+/// integer.  Byte-range form of `parse_uint`.
+///
+/// **See also:** `parse_uint`.
 pub fn parse_uint_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Uint, ParseError> {
 	val len = end;
 	if start < 0 or end < start or end > bytes.len {

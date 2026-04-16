@@ -11,28 +11,42 @@ export {
 	is_finite
 };
 
+/// Returns the IEEE-754 NaN constant.  Use `is_nan(v)` to test for
+/// NaN — `v == nan()` always returns `false` per IEEE rules.
 pub fn nan() nothrow -> Float {
 	return 0.0 / 0.0;
 }
 
+/// Returns the IEEE-754 positive infinity constant.
 pub fn infinity() nothrow -> Float {
 	return 1.0 / 0.0;
 }
 
+/// Returns the IEEE-754 negative infinity constant.
 pub fn neg_infinity() nothrow -> Float {
 	return -infinity();
 }
 
+/// Returns `true` if `v` is NaN (any NaN payload).
+///
+/// Implemented via formatted-string comparison since IEEE inequality
+/// (`v != v`) is the standard test but Drift exposes NaN through
+/// platform formatting; this matches the formats produced across
+/// supported targets.
 pub fn is_nan(v: Float) nothrow -> Bool {
 	val s = format.format_float(v);
 	return s == "nan" or s == "-nan" or s == "NaN" or s == "-NaN" or s == "NAN" or s == "-NAN";
 }
 
+/// Returns `true` if `v` is positive or negative infinity.
 pub fn is_infinite(v: Float) nothrow -> Bool {
 	val s = format.format_float(v);
 	return s == "inf" or s == "-inf" or s == "Inf" or s == "-Inf" or s == "INF" or s == "-INF" or s == "infinity" or s == "-infinity" or s == "Infinity" or s == "-Infinity" or s == "INFINITY" or s == "-INFINITY";
 }
 
+/// Returns `true` if `v` is finite (neither NaN nor infinity).
+///
+/// Equivalent to `not is_nan(v) and not is_infinite(v)`.
 pub fn is_finite(v: Float) nothrow -> Bool {
 	return not is_nan(v) and not is_infinite(v);
 }

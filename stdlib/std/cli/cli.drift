@@ -11,6 +11,18 @@ export {
 	parser
 };
 
+/// Error returned by `ArgParser.parse` when argv is malformed.
+///
+/// `tag` is a stable machine-readable code (`"unknown-option"`,
+/// `"missing-value"`, `"invalid-int"`, `"missing-required"`,
+/// `"too-many-positional"`, `"cli-help-requested"`).  `arg` is the
+/// offending argv entry; `message` is a human-readable summary;
+/// `index` is the zero-based argv position where the parser gave
+/// up.
+///
+/// Note: the special tag `"cli-help-requested"` is returned when
+/// `--help` is encountered; callers typically treat it as "exit 0",
+/// not as an error.
 pub struct CliError {
 	pub tag: String,
 	pub arg: String,
@@ -18,6 +30,12 @@ pub struct CliError {
 	pub index: Int
 }
 
+/// Result of a successful `ArgParser.parse`.
+///
+/// Carries a compact representation of which flags/options were
+/// observed and what values they held.  Query via the accessor
+/// methods (`has_flag`, `get_string`, `get_int`, `positional_at`,
+/// `positional_len`) — never inspect the internal arrays directly.
 pub struct ParsedArgs {
 	flag_option_indices: Array<Int>,
 	option_value_indices: Array<Int>,
@@ -25,6 +43,14 @@ pub struct ParsedArgs {
 	positionals: Array<String>
 }
 
+/// CLI argument-parser builder.
+///
+/// Construct via `parser(app, version, about)` and register
+/// flags/options/positionals before calling `.parse(&argv)`.  The
+/// parser supports `--long` and `-s` short forms, `--help` /
+/// `-h`, and the `--name=value` syntax for options.
+///
+/// **See also:** `parser`, `ArgParser.parse`, `ParsedArgs`.
 pub struct ArgParser {
 	app: String,
 	version: String,
@@ -45,6 +71,17 @@ const OPTION_KIND_FLAG: Int = 0;
 const OPTION_KIND_STRING: Int = 1;
 const OPTION_KIND_INT: Int = 2;
 
+/// Constructs an empty `ArgParser` with the given app metadata.
+///
+/// **Parameters:**
+/// - `app` — application name (shown in `--help` output).
+/// - `version` — version string.
+/// - `about` — one-line description.
+///
+/// **See also:** `ArgParser`, `ArgParser.flag`,
+/// `ArgParser.option_string`, `ArgParser.parse`.
+///
+/// **Example:** `examples/cli/main.drift`.
 pub fn parser(app: String, version: String, about: String) nothrow -> ArgParser {
 	var option_longs: Array<String> = [];
 	var option_shorts: Array<String> = [];
@@ -208,6 +245,13 @@ fn _get_option_value(option_value_indices: &Array<Int>, option_values: &Array<St
 }
 
 implement ArgParser {
+	/// Registers a boolean flag (no value).
+	///
+	/// **Parameters:**
+	/// - `long` — long name without leading `--` (e.g. `"verbose"`).
+	/// - `short` — single-character short name without leading `-`
+	///   (e.g. `"v"`).  Empty string disables the short form.
+	/// - `help` — one-line help text shown by `--help`.
 	pub fn flag(self: &mut ArgParser, long: String, short: String, help: String) nothrow -> &mut ArgParser {
 		self.option_longs.push(move long);
 		self.option_shorts.push(move short);
@@ -218,6 +262,13 @@ implement ArgParser {
 		return self;
 	}
 
+	/// Registers a string-valued option.
+	///
+	/// **Parameters:**
+	/// - `long`, `short`, `help` — same shape as `flag`.
+	/// - `value_name` — placeholder shown in `--help` (e.g. `"PATH"`).
+	/// - `required` — when `true`, parsing fails if this option is
+	///   absent.
 	pub fn option_string(self: &mut ArgParser, long: String, short: String, value_name: String, help: String, required: Bool) nothrow -> &mut ArgParser {
 		self.option_longs.push(move long);
 		self.option_shorts.push(move short);
@@ -228,6 +279,9 @@ implement ArgParser {
 		return self;
 	}
 
+	/// Registers an integer-valued option.  Same shape as
+	/// `option_string` but the parser validates the value as an
+	/// `Int`; a non-integer value yields `CliError(tag = "invalid-int")`.
 	pub fn option_int(self: &mut ArgParser, long: String, short: String, value_name: String, help: String, required: Bool) nothrow -> &mut ArgParser {
 		self.option_longs.push(move long);
 		self.option_shorts.push(move short);
@@ -238,6 +292,16 @@ implement ArgParser {
 		return self;
 	}
 
+	/// Registers a positional argument.
+	///
+	/// **Parameters:**
+	/// - `name` — display name (shown in `--help`).
+	/// - `help` — one-line description.
+	/// - `required` — when `true`, parsing fails if this position
+	///   is absent.
+	/// - `multiple` — when `true`, this positional consumes all
+	///   remaining argv entries.  Only valid on the last
+	///   registered positional.
 	pub fn positional(self: &mut ArgParser, name: String, help: String, required: Bool, multiple: Bool) nothrow -> &mut ArgParser {
 		self.pos_names.push(move name);
 		self.pos_helps.push(move help);
@@ -246,6 +310,8 @@ implement ArgParser {
 		return self;
 	}
 
+	/// Generates a formatted help string for this parser, suitable
+	/// for printing on `--help`.
 	pub fn help_text(self: &ArgParser) nothrow -> String {
 		var out = "Usage: " + self.app;
 		if self.option_longs.len > 0 {
@@ -294,6 +360,18 @@ implement ArgParser {
 		return out;
 	}
 
+	/// Parses `argv` against the registered flags / options /
+	/// positionals.
+	///
+	/// argv[0] is treated as the program name and skipped — pass
+	/// `argv` unchanged from `main(argv)`.
+	///
+	/// **Returns:** `Ok(ParsedArgs)` on success.  `Err(CliError)`
+	/// on malformed input; the special tag `"cli-help-requested"`
+	/// is returned when `--help` / `-h` appears (callers usually
+	/// treat this as exit-zero, not an error).
+	///
+	/// **See also:** `ParsedArgs`, `CliError`.
 	pub fn parse(self: &ArgParser, argv: &Array<String>) nothrow -> core.Result<ParsedArgs, CliError> {
 		match _validate_schema(self) {
 			Some(e) => { return core.Result::Err(e); },
@@ -445,6 +523,10 @@ implement ArgParser {
 }
 
 implement ParsedArgs {
+	/// Returns `true` if the named flag was present in argv.
+	///
+	/// `parser` is the parser that produced these `ParsedArgs` —
+	/// needed to look up the flag by long name.
 	pub fn has_flag(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Bool {
 		val idx = _find_option_by_long(&parser.option_longs, &long);
 		if idx < 0 {
@@ -453,6 +535,8 @@ implement ParsedArgs {
 		return _contains_int(&self.flag_option_indices, idx);
 	}
 
+	/// Returns the value of a string-valued option, or `None` if
+	/// absent.
 	pub fn get_string(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Optional<&String> {
 		val idx = _find_option_by_long(&parser.option_longs, &long);
 		if idx < 0 {
@@ -461,6 +545,8 @@ implement ParsedArgs {
 		return _get_option_value(&self.option_value_indices, &self.option_values, idx);
 	}
 
+	/// Returns the value of an int-valued option, or `None` if
+	/// absent.  Already validated as `Int` during `parse`.
 	pub fn get_int(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Optional<Int> {
 		val idx = _find_option_by_long(&parser.option_longs, &long);
 		if idx < 0 {
@@ -477,6 +563,8 @@ implement ParsedArgs {
 		}
 	}
 
+	/// Returns the positional argument at index `idx` (0-based), or
+	/// `None` if `idx` is out of range.
 	pub fn positional_at(self: &ParsedArgs, idx: Int) nothrow -> Optional<&String> {
 		if idx < 0 or idx >= self.positionals.len {
 			return Optional<&String>::None();
@@ -484,6 +572,7 @@ implement ParsedArgs {
 		return Optional::Some(&self.positionals[idx]);
 	}
 
+	/// Returns the number of positional arguments observed.
 	pub fn positional_len(self: &ParsedArgs) nothrow -> Int {
 		return self.positionals.len;
 	}

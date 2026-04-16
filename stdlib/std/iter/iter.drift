@@ -12,30 +12,74 @@ export {
 	StringBytesIter
 };
 
+/// Trait for types that produce iterators over their contents.
+///
+/// `Src` is the source type (typically `&Container`); `Item` is the
+/// yielded element type; `Iter` is the produced iterator type, which
+/// must implement `SinglePassIterator<Item>`.
+///
+/// **See also:** `SinglePassIterator`.
 pub trait Iterable<Src, Item, Iter> require Iter is SinglePassIterator<Item> {
 	fn iter(src: Src) nothrow -> Iter;
 }
 
+/// Base iterator trait — produces values one at a time, with no
+/// guarantee of being restartable or rewindable.
+///
+/// `next()` returns `Some(value)` on each call until the source is
+/// exhausted, then `None` forever.
+///
+/// **See also:** `MultiPassIterator`, `BidirectionalIterator`.
 pub trait SinglePassIterator<T> {
 	fn next(self: &mut Self) nothrow -> Optional<T>;
 }
 
+/// Marker trait for iterators that can be cloned and re-iterated.
+///
+/// Requires `SinglePassIterator<T>` plus `core.Copy` so the iterator
+/// itself can be duplicated to produce two independent walks of the
+/// same source.
 pub trait MultiPassIterator<T> require Self is SinglePassIterator<T>, Self is core.Copy {
 }
 
+/// Iterator trait extending `MultiPassIterator<T>` with a backward
+/// step.
+///
+/// `prev()` returns the previously-yielded value (relative to the
+/// current position), or `None` if at the start.
 pub trait BidirectionalIterator<T> require Self is MultiPassIterator<T> {
 	fn prev(self: &mut Self) nothrow -> Optional<T>;
 }
 
+/// Random-access readable view over a sequence of elements.
+///
+/// `len()` returns the number of elements; `compare_at(i, j)`
+/// returns a `cmp.Comparable`-style three-way result for the
+/// elements at the two indices.  Used by sorting and binary-search
+/// algorithms.
+///
+/// **See also:** `RandomAccessPermutable`, `algo.BinarySearchable`.
 pub trait RandomAccessReadable<T> {
 	fn len(self: &Self) -> Int;
 	fn compare_at(self: &Self, i: Int, j: Int) -> Int;
 }
 
+/// Random-access view extending `RandomAccessReadable<T>` with
+/// in-place element swapping.
+///
+/// Implemented by mutable container ranges (e.g.
+/// `containers.ArrayRangeMut<Int>`); used by in-place sort
+/// algorithms.
 pub trait RandomAccessPermutable<T> require Self is RandomAccessReadable<T> {
 	fn swap(self: &mut Self, i: Int, j: Int) -> Void;
 }
 
+/// Single-pass iterator over the bytes of a `String`.
+///
+/// Construct via `s.bytes()` (where `s` is a `&String`).  Yields
+/// each byte in source order until exhausted.
+///
+/// **See also:** `String.bytes`.
 pub struct StringBytesIter {
 	s: String,
 	idx: Int,
@@ -43,6 +87,10 @@ pub struct StringBytesIter {
 }
 
 implement String {
+	/// Returns a `StringBytesIter` walking the string's bytes in
+	/// order.
+	///
+	/// **See also:** `StringBytesIter`.
 	pub fn bytes(self: &String) nothrow -> StringBytesIter {
 		val len = self.byte_length();
 		// MVP: struct fields cannot be references, so we store a String handle copy.
