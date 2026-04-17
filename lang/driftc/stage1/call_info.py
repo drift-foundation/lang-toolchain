@@ -68,6 +68,27 @@ class IntrinsicKind(Enum):
 	MAYBE_ASSUME_INIT_REF = "maybe_assume_init_ref"
 	MAYBE_ASSUME_INIT_MUT = "maybe_assume_init_mut"
 	MAYBE_ASSUME_INIT_READ = "maybe_assume_init_read"
+	# ---------------------------------------------------------------
+	# Arc runtime boundary — centralized Arc ownership primitives
+	# ---------------------------------------------------------------
+	#
+	# Drift's `std.concurrent.Arc<T>` is a compiler-known ownership
+	# primitive: its payload and control-block management cannot be
+	# expressed as ordinary Drift field access once `Arc<Interface>`
+	# has a representation distinct from `Arc<Concrete>` (see the
+	# representation-boundary comment block in types_core.py around
+	# `is_arc_interface_view`).  The four intrinsics below are the
+	# sole runtime seam for Arc — every Arc clone, borrow, drop, and
+	# interface-view coercion lowers through one of them, with per-
+	# intrinsic concrete-vs-interface dispatch handled in hir_to_mir
+	# and llvm_codegen.
+	#
+	# Adding new Arc semantics (e.g. weak Arcs) should extend this
+	# block rather than introducing scattered Arc-aware paths.
+	ARC_CLONE = "arc_clone"
+	ARC_GET = "arc_get"
+	ARC_DESTROY = "arc_destroy"
+	ARC_AS_INTERFACE = "arc_as_interface"
 
 
 

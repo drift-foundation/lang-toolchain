@@ -4710,37 +4710,43 @@ def _lower_parsed_program_to_hir(
 						if trait_method_declared_nothrow:
 							break
 			declared_nothrow = bool(getattr(fn, "declared_nothrow", False)) or trait_method_declared_nothrow
-			decls.append(
-				_FrontendDecl(
-					fn_id,
-					symbol_name,
-					fn.orig_name,
-					fn.type_params,
-					list(getattr(fn, "type_param_locs", []) or []),
-					params,
-					fn.return_type,
-					getattr(fn, "loc", None),
-					declared_nothrow,
-					# Phase 1 v2: previously dropped declared_throws because
-					# the impl-block path used positional args up through
-					# declared_nothrow and then jumped to keyword args.
-					bool(getattr(fn, "declared_throws", False)),
-					# Phase 1 v3: also pass declared_terminal_throws (the new
-					# bare terminal `throws` form). Without this the impl-block
-					# path would silently drop it and Phase 2's body-flow check
-					# would never trigger on impl-block terminal methods.
-					bool(getattr(fn, "declared_terminal_throws", False)),
-					is_unsafe=bool(getattr(fn, "is_unsafe", False)),
-					is_pub=bool(getattr(fn, "is_pub", False)),
-					is_method=bool(self_mode is not None),
-					self_mode=self_mode,
-					impl_target=impl.target,
-					impl_type_params=impl_type_params,
-					impl_type_param_locs=impl_type_param_locs,
-					impl_owner=impl_owner,
-					module=module_id,
-				)
+			impl_method_decl = _FrontendDecl(
+				fn_id,
+				symbol_name,
+				fn.orig_name,
+				fn.type_params,
+				list(getattr(fn, "type_param_locs", []) or []),
+				params,
+				fn.return_type,
+				getattr(fn, "loc", None),
+				declared_nothrow,
+				# Phase 1 v2: previously dropped declared_throws because
+				# the impl-block path used positional args up through
+				# declared_nothrow and then jumped to keyword args.
+				bool(getattr(fn, "declared_throws", False)),
+				# Phase 1 v3: also pass declared_terminal_throws (the new
+				# bare terminal `throws` form). Without this the impl-block
+				# path would silently drop it and Phase 2's body-flow check
+				# would never trigger on impl-block terminal methods.
+				bool(getattr(fn, "declared_terminal_throws", False)),
+				is_unsafe=bool(getattr(fn, "is_unsafe", False)),
+				is_pub=bool(getattr(fn, "is_pub", False)),
+				is_method=bool(self_mode is not None),
+				self_mode=self_mode,
+				impl_target=impl.target,
+				impl_type_params=impl_type_params,
+				impl_type_param_locs=impl_type_param_locs,
+				impl_owner=impl_owner,
+				module=module_id,
 			)
+			# Propagate the `@intrinsic` marker from the parser FunctionDef
+			# to the frontend decl for implement-block methods (the free-
+			# function path does the equivalent assignment in
+			# `_decl_from_parser_fn`).  Without this, intrinsic methods on
+			# Arc / std.concurrent would be treated as bodied functions
+			# and trip the "must return a value on all paths" check.
+			impl_method_decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
+			decls.append(impl_method_decl)
 			stmt_block = _convert_block(fn.body)
 			# Enable implicit `self` member lookup for method bodies (spec §3.9).
 			# Unknown identifiers may resolve to fields/methods on `self` after

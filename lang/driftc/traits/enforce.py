@@ -169,22 +169,36 @@ def _trait_label(key: TraitKey) -> str:
 	return base
 
 
-def _trait_expr_label(expr: parser_ast.TraitExpr, require_env: RequireEnv, *, default_module: str | None) -> str:
+def _trait_expr_label(
+	expr: parser_ast.TraitExpr,
+	require_env: RequireEnv,
+	*,
+	default_module: str | None,
+	type_param_subst: object | None = None,
+) -> str:
+	# Display-path helper.  When called from a site that has the
+	# call-site substitution map in scope, pass it through so a
+	# `require T is I` clause renders as `T is Face` rather than
+	# `T is <module>.I` on the diagnostic.  Call sites without a
+	# substitution map (e.g. when labeling the caller's DECLARED
+	# require at collection time) omit the argument; the helper
+	# falls back to declaration-local resolution.
 	if isinstance(expr, parser_ast.TraitIs):
 		trait_key = trait_key_from_expr(
 			expr.trait,
 			default_module=default_module,
 			default_package=require_env.default_package,
 			module_packages=require_env.module_packages,
+			type_param_subst=type_param_subst,
 		)
 		subj = _subject_key(expr.subject)
 		return f"{subj} is {_trait_label(trait_key)}"
 	if isinstance(expr, parser_ast.TraitAnd):
-		return f"{_trait_expr_label(expr.left, require_env, default_module=default_module)} and {_trait_expr_label(expr.right, require_env, default_module=default_module)}"
+		return f"{_trait_expr_label(expr.left, require_env, default_module=default_module, type_param_subst=type_param_subst)} and {_trait_expr_label(expr.right, require_env, default_module=default_module, type_param_subst=type_param_subst)}"
 	if isinstance(expr, parser_ast.TraitOr):
-		return f"{_trait_expr_label(expr.left, require_env, default_module=default_module)} or {_trait_expr_label(expr.right, require_env, default_module=default_module)}"
+		return f"{_trait_expr_label(expr.left, require_env, default_module=default_module, type_param_subst=type_param_subst)} or {_trait_expr_label(expr.right, require_env, default_module=default_module, type_param_subst=type_param_subst)}"
 	if isinstance(expr, parser_ast.TraitNot):
-		return f"not ({_trait_expr_label(expr.expr, require_env, default_module=default_module)})"
+		return f"not ({_trait_expr_label(expr.expr, require_env, default_module=default_module, type_param_subst=type_param_subst)})"
 	return "<unknown>"
 
 
@@ -541,7 +555,7 @@ def enforce_fn_requires(
 					code="E_REQUIREMENT_NOT_SATISFIED",
 					severity="error",
 					span=getattr(expr, "loc", Span()),
-					notes=[f"requirement_expr={_trait_expr_label(req, require_env, default_module=module_name)}"],
+					notes=[f"requirement_expr={_trait_expr_label(req, require_env, default_module=module_name, type_param_subst=subst)}"],
 				)
 			)
 	return TraitEnforceResult(diags)

@@ -51,6 +51,123 @@ Notes
 
 - This works with owned callbacks and does not rely on borrowed captures.
 
+## Shared service, multiple interface faces (`Arc.as_interface`)
+
+When a single service object needs to be handed to several subsystems under
+different interfaces — resolver here, emitter there, shutdown hook over
+there — put the service in one `Arc` and hand each subsystem an
+`Arc<Interface>` **view** over that same allocation. There is one service,
+one control block, one refcount. Each interface view dispatches through the
+appropriate `implement I for Service` block against the same underlying
+bytes.
+
+```drift
+import std.core as core;
+import std.concurrent as conc;
+import std.log as log;
+// Hypothetical subsystems on the same page as std.log.
+import app.metrics as metrics;
+import app.lifecycle as lifecycle;
+
+struct AppService {
+    req_counter: conc.AtomicInt,
+    last_event: conc.Mutex<String>,
+    // ...whatever state the service actually needs
+}
+
+implement log.ContextResolver for AppService {
+    pub fn resolve(self: &AppService) nothrow -> Optional<&log.LogContext> {
+        // consult internal state, return borrow or None
+    }
+}
+
+implement metrics.Emitter for AppService {
+    pub fn emit(self: &AppService, name: &String, v: Int) nothrow -> Void {
+        // increment counters via conc.AtomicInt, enqueue via an MPSC queue, etc.
+    }
+}
+
+implement lifecycle.ShutdownHook for AppService {
+    pub fn on_shutdown(self: &AppService) nothrow -> Void {
+        // drain queues, close files, signal workers
+    }
+}
+
+fn install(builder: &mut log.LoggerConfigBuilder,
+           reg: &metrics.Registry,
+           lc: &mut lifecycle.Runtime) nothrow -> Void {
+    val app = conc.arc(AppService(
+        req_counter = conc.atomic_int(0),
+        last_event  = conc.mutex(""),
+    ));
+
+    val log_face = app.as_interface<type log.ContextResolver>();
+    val metrics_face = app.as_interface<type metrics.Emitter>();
+    val shutdown_face = app.as_interface<type lifecycle.ShutdownHook>();
+
+    builder.context_resolver(log_face);
+    reg.register(metrics_face);
+    lc.on_shutdown(shutdown_face);
+}
+```
+
+The conversion is spelled as a method on `Arc<T>`. The user names only the
+target face (`<type log.ContextResolver>` etc.); the source concrete type
+(`T = AppService`) is inferred from the `Arc<T>` receiver. This matches
+the rule that users should spell only what the compiler can't infer — and
+it keeps the code scannable: a reader sees `as_interface<I>()` and knows
+exactly which face is being produced without parsing a two-type-argument
+form.
+
+What actually happens here:
+
+- **One `AppService` allocation, not three.** `conc.arc(AppService(...))`
+  performs the only heap allocation. `as_interface<...>()` does not
+  allocate — it bumps the existing control block's strong count and
+  returns a fat `Arc<Interface>` handle over the same allocation.
+- **Shared control block.** `app`, `log_face`, `metrics_face`, and
+  `shutdown_face` all reference the same strong count. Calling `.clone()`
+  on any of them increments that shared count; dropping any of them
+  decrements it. The refcount after `install` returns is exactly equal to
+  the number of handles still reachable (subsystems plus any retained
+  local).
+- **State changes observed across faces.** A `metrics.emit(...)` call
+  reaches a receiver that shares a single set of bytes with the receiver
+  inside `log_face.get().resolve(...)` — counters bumped through one face
+  are visible to the other. This is the point of the pattern.
+- **Destructor runs once.** When the last face drops (could be any of them
+  — order depends on which subsystem tears down last), the shared strong
+  count hits zero and `AppService`'s `Destructible::destroy` runs exactly
+  once. Individual interfaces do not have independent destructors for a
+  shared concrete; the concrete type owns destruction.
+- **Mutation requires interior mutability inside the service.** `Arc` —
+  including its interface views — is shared ownership, not unique mutable
+  access. Mutable fields in `AppService` must be protected with
+  `conc.Mutex`, `conc.AtomicInt` / `AtomicBool` / etc., or a lock-free
+  queue. Two subsystems holding different interface views over the same
+  allocation must not assume exclusive access to the service's bytes.
+- **Explicit and auditable.** The two-step pattern `val app = conc.arc(...);
+  val face = app.as_interface<type I>();` makes the ownership transfer
+  visible at every use site. There is no implicit `arc<I>(concrete)` magic —
+  if you see code that constructs an `Arc<Interface>`, it goes through
+  `as_interface` and the target face is named right there at the call.
+  Prefer this shape even when the coercion is immediately obvious.
+
+A pitfall to avoid: **do not allocate separate `Arc`s per interface.**
+
+```drift
+// Wrong — would be three independent allocations, three independent refcounts.
+// (And in fact disallowed: `conc.arc<T>(value)` rejects T that names an interface;
+// you must write `conc.arc(ConcreteType(...)).as_interface<type I>()`.)
+val log_face = conc.arc<type log.ContextResolver>(AppService(...));
+val metrics_face = conc.arc<type metrics.Emitter>(AppService(...));
+// Even if it compiled: state would not be shared; destructors would run per
+// allocation.
+```
+
+The whole point of `as_interface` is that there is one `AppService` with one
+refcount, no matter how many interface faces point at it.
+
 ## Runtime registry patterns (`std.runtime`)
 
 Use `global_registry()` for process-wide singletons. Reads are typed and safe via

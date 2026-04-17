@@ -120,6 +120,7 @@ def prove_expr(
 			default_module=env.default_module,
 			default_package=env.default_package,
 			module_packages=env.module_packages,
+			type_param_subst=subst,
 		)
 		trait_args = tuple(
 			_resolve_trait_arg(
@@ -187,6 +188,7 @@ def deny_expr(
 			default_module=env.default_module,
 			default_package=env.default_package,
 			module_packages=env.module_packages,
+			type_param_subst=subst,
 		)
 		trait_args = tuple(
 			_resolve_trait_arg(
@@ -376,6 +378,50 @@ def prove_is(
 				cache[cache_key] = res
 				return res
 	if trait_key not in world.traits:
+		# Interface-aware path: `require T is I` where I is an interface
+		# is proved by an `implement I for T` entry in the interface-
+		# impl index.  This is a generic-constraint-only query — we
+		# only need to know the impl exists; method-level machinery
+		# (vtable emission, coherence checks) is handled elsewhere by
+		# the interface-type-table path.
+		#
+		# Phase 1 deliberately proves ONLY for non-generic,
+		# non-conditional impls whose `target` equals the subject
+		# exactly.  Head-match-alone is unsound (a `Box<Int>` impl
+		# would otherwise satisfy `require T is I` for `T = Box<String>`
+		# and route dispatch through a vtable built against a
+		# different type instantiation).  Generic / conditional impls
+		# (`implement<T> I for Box<T>` or with a `require` clause) are
+		# refuted here because there is no impl-applicability solver
+		# for interfaces yet — a later phase will extend this path to
+		# bind impl type params and recursively prove the impl's
+		# require clause.  Until then, deferring is the safe default.
+		if trait_key in getattr(world, "interfaces", {}):
+			head = subject_ty.head()
+			iface_impls = getattr(world, "interface_impls_by_iface_target", {}).get((trait_key, head), [])
+			saw_generic = False
+			saw_conditional = False
+			for ref in iface_impls:
+				if getattr(ref, "type_params", ()):
+					saw_generic = True
+					continue
+				if getattr(ref, "require_expr", None) is not None:
+					saw_conditional = True
+					continue
+				if ref.target == subject_ty:
+					res = ProofResult(status=ProofStatus.PROVED, reasons=["interface impl"])
+					cache[cache_key] = res
+					return res
+			reasons: List[str] = []
+			if saw_generic:
+				reasons.append("generic interface impl not yet supported for require proving")
+			if saw_conditional:
+				reasons.append("conditional interface impl not yet supported for require proving")
+			if not reasons:
+				reasons.append("no interface impl")
+			res = ProofResult(status=ProofStatus.REFUTED, reasons=reasons)
+			cache[cache_key] = res
+			return res
 		res = ProofResult(status=ProofStatus.REFUTED, reasons=["unknown trait"])
 		cache[cache_key] = res
 		return res

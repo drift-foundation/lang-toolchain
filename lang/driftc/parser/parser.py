@@ -1738,6 +1738,13 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 		if not isinstance(item, Tree):
 			continue
 		item_test_only = _has_test_build_only_marker(item)
+		# `@intrinsic` marker: accepted on implement-block methods just
+		# as on free functions, so Arc.clone / Arc.get / Arc.destroy
+		# / Arc.as_interface can be declared as compiler-known
+		# intrinsics in stdlib while keeping their signatures as the
+		# documented API surface (see spec § 6.16 and the Arc runtime
+		# boundary comment in stage1/call_info.py).
+		item_intrinsic = _has_intrinsic_marker(item)
 		is_pub_from_marker = any(isinstance(c, Token) and c.type == "PUB" for c in getattr(item, "children", []) or [])
 		if item_test_only:
 			item = _strip_test_build_only_marker(item)
@@ -1754,11 +1761,12 @@ def _build_implement_def(tree: Tree) -> ImplementDef:
 				is_pub = True
 		if fn_node is None:
 			continue
-		fn = _build_function(fn_node)
+		fn = _build_function(fn_node, allow_missing_body=item_intrinsic)
 		if item_kind == "func_def":
 			is_pub = bool(getattr(fn, "is_pub", False)) or is_pub_from_marker
 		fn.is_pub = is_pub
 		fn.test_build_only = item_test_only
+		fn.is_intrinsic = item_intrinsic
 		fn.is_method = True
 		fn.impl_target = target
 		methods.append(fn)

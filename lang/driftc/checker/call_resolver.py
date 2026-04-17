@@ -5423,12 +5423,18 @@ def resolve_call_expr(
 					sig_local = _sig_from_decl_template(ctx, decl, current_module_name)
 				if sig_local and getattr(sig_local, "type_params", None) and inst_subst is not None:
 					type_params = list(getattr(sig_local, "type_params", []) or [])
+					# Bind every instantiated type parameter, not just
+					# those that appear as require-clause subjects.  A
+					# type parameter can also appear on the trait side
+					# of `T is I` (as a bound-to-caller interface), and
+					# the solver needs its binding in `subst` to
+					# substitute the trait key correctly via
+					# `trait_key_from_expr(..., type_param_subst=subst)`.
 					for idx, tp in enumerate(type_params):
-						if tp.id in subjects or tp.name in subjects:
-							if idx < len(inst_subst.args):
-								key = _normalize_type_key(type_key_from_typeid(ctx.type_table, inst_subst.args[idx]))
-								subst[tp.id] = key
-								subst[tp.name] = key
+						if idx < len(inst_subst.args):
+							key = _normalize_type_key(type_key_from_typeid(ctx.type_table, inst_subst.args[idx]))
+							subst[tp.id] = key
+							subst[tp.name] = key
 				if sig_local and getattr(sig_local, "type_params", None) and sig_local.param_type_ids:
 					type_params = list(getattr(sig_local, "type_params", []) or [])
 					type_param_ids = {tp.id for tp in type_params}

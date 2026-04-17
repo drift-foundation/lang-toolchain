@@ -334,12 +334,59 @@ pub struct FutureGroup<T> {
 	items: Array<Future<T>>
 }
 
+/// Fixed-layout control header prefix of every `ArcBox<T>` allocation.
+///
+/// The header's size and field offsets are constant regardless of `T`
+/// so that a fat `Arc<Interface>` view (introduced in Phase 2) can
+/// reach `strong` via a fixed offset from the allocation base without
+/// knowing the concrete `T`.
+///
+/// Fields:
+/// - `strong` — atomic strong-reference count; zero triggers destruction.
+/// - `weak`   — atomic weak-reference count; reserved, currently always 0.
+///              Leaving the slot present now avoids an ABI break when
+///              weak `Arc`s land in a later phase.
+/// - `drop_thunk` — raw erased function pointer
+///              (`Fn(mem.Ptr<Byte>) nothrow -> Void`) that runs `T`'s
+///              destructor on the value and deallocates the ArcBox.
+///              Captured at `arc<T>(value)` construction time from the
+///              per-`T`-monomorphized `_arc_drop_thunk_for<T>` symbol;
+///              invoked on last drop from any view (concrete or
+///              interface), so destruction never needs to recover `T`
+///              from the Arc handle.
+pub struct ArcHeader {
+	strong: atomic.AtomicInt,
+	weak: atomic.AtomicInt,
+	drop_thunk: Fn(mem.Ptr<Byte>) nothrow -> Void
+}
+
 /// Reference-counted heap allocation backing an `Arc<T>`.
 ///
 /// Internal layout — not normally constructed directly by user code.
+/// The `header` prefix has a constant size for every `T`; `value` lives
+/// at offset `sizeof(ArcHeader)`.  That invariant is what makes fat
+/// `Arc<Interface>` views possible without a second allocation.
 pub struct ArcBox<T> {
-	count: atomic.AtomicInt,
+	header: ArcHeader,
 	value: T
+}
+
+/// Per-`T` destroy-and-dealloc thunk. Monomorphized once per `T` the
+/// compiler sees in an `arc<T>(value)` call; the resulting function
+/// symbol's address is captured into `ArcHeader.drop_thunk`.
+///
+/// Invoked on last drop (from any view) with `ctrl` = allocation base
+/// pointer (the same address stored inside `Arc<T>.buf`).  Reads the
+/// complete `ArcBox<T>` back out, runs `Destructible::destroy` on the
+/// `value` via `drop_value`, and frees the allocation.
+fn _arc_drop_thunk_for<T>(ctrl: mem.Ptr<Byte>) nothrow -> Void {
+	unsafe {
+		var buf = mem.rawbuffer_from_parts<type ArcBox<T>>(ctrl, 1);
+		var inner = mem.read<type ArcBox<T>>(&mut buf, 0);
+		core.drop_value<type ArcBox<T>>(inner);
+		mem.dealloc<type ArcBox<T>>(buf);
+	}
+	return;
 }
 
 /// Atomically reference-counted shared owner of a `T`.
@@ -399,7 +446,12 @@ pub struct MutexGuard<T> {
 pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type ArcBox<T>>(1);
-		var box = ArcBox<type T>(count = atomic_int(1), value = move value);
+		var header = ArcHeader(
+			strong = atomic_int(1),
+			weak = atomic_int(0),
+			drop_thunk = _arc_drop_thunk_for<type T>
+		);
+		var box = ArcBox<type T>(header = move header, value = move value);
 		mem.write<type ArcBox<T>>(&mut buf, 0, move box);
 		return Arc<type T>(buf = move buf);
 	}
@@ -415,7 +467,7 @@ implement<T> Arc<T> {
 	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
 		unsafe {
 			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			val _ = atomic.atomic_fetch_add_int(&slot.count, 1, 0);
+			val _ = atomic.atomic_fetch_add_int(&slot.header.strong, 1, 0);
 		}
 		val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
 		val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
@@ -446,6 +498,22 @@ implement<T> Arc<T> {
 			return &mut slot.value;
 		}
 	}
+
+	/// Returns an `Arc<I>` interface view over the same allocation.
+	///
+	/// The new handle shares the control block / strong count with
+	/// `self` — calling `as_interface` does not allocate a second
+	/// `ArcBox` and does not move or copy the concrete payload.  It
+	/// atomically increments the strong count and returns a fat
+	/// handle carrying the `T`-as-`I` vtable over the same `ArcBox`.
+	///
+	/// Permitted only when `T` implements `I` (enforced via the
+	/// `require T is I` clause — a call on a `T` that does not
+	/// implement `I` is rejected at compile time with the standard
+	/// `E_REQUIREMENT_NOT_SATISFIED` diagnostic).
+	///
+	/// **See also:** `Arc`, `Arc.clone`, spec § 6.16.
+	@intrinsic pub fn as_interface<I>(self: &Arc<T>) nothrow -> Arc<I> require T is I;
 }
 
 implement<T> core.Borrow<T> for Arc<T> {
@@ -473,17 +541,24 @@ implement<T> core.Destructible for Arc<T> {
 		var prev = 0;
 		unsafe {
 			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			prev = atomic.atomic_fetch_sub_int(&slot.count, 1, 2);
+			prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
 		}
 		if prev == 1 {
+			// Route last-drop through the stored erased drop_thunk.  For
+			// Arc<T> we still have T at compile time and could drop the
+			// box directly, but going through the thunk (a) validates the
+			// mechanism before Phase 2 Arc<Interface> destruction depends
+			// on it, and (b) keeps all Arc destruction on a single code
+			// path regardless of view kind.
 			unsafe {
 				// Acquire barrier pairs with prior Release decrements before final destroy.
 				val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-				val _ = atomic.atomic_load_int(&slot.count, 1);
-				var buf = self.buf;
-				var inner = mem.read<type ArcBox<T>>(&mut buf, 0);
-				core.drop_value<type ArcBox<T>>(inner);
-				mem.dealloc<type ArcBox<T>>(buf);
+				val _ = atomic.atomic_load_int(&slot.header.strong, 1);
+				val thunk = slot.header.drop_thunk;
+				val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+				// slot becomes dangling after thunk() deallocates; do
+				// not touch it again.
+				thunk(ctrl_ptr);
 			}
 		}
 	}

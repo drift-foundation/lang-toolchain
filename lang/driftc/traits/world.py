@@ -144,7 +144,53 @@ class TraitWorld:
 	impls_by_trait_target: Dict[Tuple[TraitKey, TypeHeadKey], List[int]] = field(default_factory=dict)
 	requires_by_struct: Dict[TypeKey, parser_ast.TraitExpr] = field(default_factory=dict)
 	requires_by_fn: Dict[FunctionId, parser_ast.TraitExpr] = field(default_factory=dict)
+	# Interfaces participate in generic `require` constraints the same way
+	# traits do: `require T is SomeInterface` proves when `implement
+	# SomeInterface for T` exists.  These two side maps let the solver
+	# recognize such requirements without polluting the trait-impl
+	# registry (which is traversed by other machinery assuming pure
+	# trait semantics).
+	interfaces: Dict[TraitKey, "InterfaceDef"] = field(default_factory=dict)
+	interface_impls_by_iface_target: Dict[Tuple[TraitKey, TypeHeadKey], List["InterfaceImplRef"]] = field(default_factory=dict)
 	diagnostics: List[Diagnostic] = field(default_factory=list)
+
+
+@dataclass
+class InterfaceDef:
+	"""Minimal interface metadata for generic-constraint purposes.
+
+	Tracks only what the require-solver needs — identity + declaration
+	location.  Method signatures, vtable slot ordering, and dispatch
+	mechanics live in the interface type-table machinery, not here.
+	"""
+	key: TraitKey
+	name: str
+	loc: Optional[object] = None
+
+
+@dataclass(frozen=True)
+class InterfaceImplRef:
+	"""Lightweight `implement InterfaceName for Target` record for the
+	trait-require solver.
+
+	Carries enough metadata to gate generic/conditional impls in the
+	`require T is I` prover (Phase 1 rejects those; full applicability
+	checking is a later phase):
+
+	- `type_params`: impl-level type parameters (`implement<T> I for Box<T>`
+	  has `type_params = ("T",)`).
+	- `require_expr`: impl-level require clause, if any.
+
+	A non-generic, non-conditional impl has `type_params == ()` and
+	`require_expr is None`; those are the only impls the Phase 1 solver
+	will accept when proving an interface requirement.
+	"""
+	iface: TraitKey
+	target: TypeKey
+	target_head: TypeHeadKey
+	type_params: Tuple[str, ...] = ()
+	require_expr: Optional["parser_ast.TraitExpr"] = None
+	loc: Optional[object] = None
 
 
 def _qual_from_type_expr(typ: parser_ast.TypeExpr) -> Optional[str]:
@@ -293,7 +339,32 @@ def trait_key_from_expr(
 	default_module: Optional[str] = None,
 	default_package: Optional[str] = None,
 	module_packages: Mapping[str, str] | None = None,
+	type_param_subst: Mapping[object, "TypeKey"] | None = None,
 ) -> TraitKey:
+	# Method-/impl-level type-parameter substitution on the trait
+	# side of a `require T is I` clause: if `typ` is a bare
+	# unqualified name that matches a type parameter bound in
+	# `type_param_subst` (keyed by parameter name), the resolved
+	# TraitKey comes from the substituted TypeKey — not the
+	# declaration-local name.  This is what makes
+	# `fn check<I>(self: &Holder<T>) require T is I` prove
+	# correctly at `h.check<type Face>()` rather than refuting
+	# against a phantom `<module>.I` trait.
+	#
+	# Callers that don't pass `type_param_subst` get the original
+	# behavior (resolve `typ.name` in the declaration module).
+	if type_param_subst:
+		name = getattr(typ, "name", None)
+		has_args = bool(getattr(typ, "args", None))
+		explicit_module = _qual_from_type_expr(typ)
+		if name is not None and not has_args and explicit_module is None:
+			substituted = type_param_subst.get(name)
+			if isinstance(substituted, TypeKey):
+				return TraitKey(
+					package_id=substituted.package_id,
+					module=substituted.module,
+					name=substituted.name,
+				)
 	module = _qual_from_type_expr(typ)
 	if module is None:
 		module = default_module
@@ -394,6 +465,32 @@ def build_trait_world(
 		TraitKey(package_id=local_pkg, module=module_id, name=tr.name)
 		for tr in getattr(prog, "traits", []) or []
 	}
+
+	# Collect interface declarations.  Interfaces participate in
+	# generic `require T is I` constraints the same way traits do, so
+	# the require-clause validator below accepts either a local trait
+	# key or a local interface key as the named constraint.
+	local_interface_keys = {
+		TraitKey(package_id=local_pkg, module=module_id, name=iface.name)
+		for iface in getattr(prog, "interfaces", []) or []
+	}
+	for iface in getattr(prog, "interfaces", []) or []:
+		iface_key = TraitKey(package_id=local_pkg, module=module_id, name=iface.name)
+		if iface_key in world.interfaces:
+			continue
+		world.interfaces[iface_key] = InterfaceDef(
+			key=iface_key,
+			name=iface.name,
+			loc=getattr(iface, "loc", None),
+		)
+
+	def _is_known_local_constraint(k: TraitKey) -> bool:
+		# True if `k` is a locally-declared trait OR interface.
+		# For non-local keys (module != current), we leave the check
+		# unchanged — cross-module resolution is the caller's concern.
+		if k.module != module_id:
+			return True
+		return k in local_trait_keys or k in local_interface_keys
 	method_seen: Dict[Tuple[TraitKey, str], object | None] = {}
 	for tr in getattr(prog, "traits", []) or []:
 		key = TraitKey(package_id=local_pkg, module=module_id, name=tr.name)
@@ -437,7 +534,7 @@ def build_trait_world(
 					default_package=package_id,
 					module_packages=module_packages,
 				)
-				if trait_key not in local_trait_keys and trait_key.module == module_id:
+				if not _is_known_local_constraint(trait_key):
 					world.diagnostics.append(
 						diag(
 							f"unknown trait '{_trait_key_str(trait_key)}' in require clause",
@@ -468,13 +565,30 @@ def build_trait_world(
 			subj = atom.subject
 			subj_name = _subject_name(subj)
 			if subj_name == "Self" or (subj_name is not None and subj_name in type_param_names):
+				# Same accept-struct-type-param-as-trait rule as the
+				# function path below: `struct Holder<T, I> require
+				# T is I` names the method-/struct-level type
+				# parameter `I` as the required trait; it's bound to
+				# the caller's actual trait/interface at instantiation
+				# time, so it's valid at the declaration site.
+				trait_expr_name = getattr(atom.trait, "name", None)
+				trait_expr_has_args = bool(getattr(atom.trait, "args", None))
+				trait_expr_module = getattr(atom.trait, "module_id", None) or getattr(atom.trait, "module_alias", None)
+				trait_is_struct_type_param = (
+					trait_expr_name is not None
+					and not trait_expr_has_args
+					and trait_expr_module is None
+					and trait_expr_name in type_param_names
+				)
+				if trait_is_struct_type_param:
+					continue
 				trait_key = trait_key_from_expr(
 					atom.trait,
 					default_module=module_id,
 					default_package=package_id,
 					module_packages=module_packages,
 				)
-				if trait_key not in local_trait_keys and trait_key.module == module_id:
+				if not _is_known_local_constraint(trait_key):
 					world.diagnostics.append(
 						diag(
 							f"unknown trait '{_trait_key_str(trait_key)}' in require clause",
@@ -520,13 +634,33 @@ def build_trait_world(
 					)
 				)
 				continue
+			# The trait side of a `require` atom may name a function-
+			# level type parameter — e.g. `fn check<T, I>(x: T)
+			# require T is I`, where `I` is bound to the caller-
+			# supplied interface at call sites.  Such references are
+			# neither locally-declared traits nor locally-declared
+			# interfaces, so the standard `_is_known_local_constraint`
+			# check would reject them.  Accept them here; actual
+			# proof against the substituted trait happens at the call
+			# site (see `trait_key_from_expr(..., type_param_subst=)`).
+			trait_expr_name = getattr(atom.trait, "name", None)
+			trait_expr_has_args = bool(getattr(atom.trait, "args", None))
+			trait_expr_module = getattr(atom.trait, "module_id", None) or getattr(atom.trait, "module_alias", None)
+			trait_is_fn_type_param = (
+				trait_expr_name is not None
+				and not trait_expr_has_args
+				and trait_expr_module is None
+				and trait_expr_name in type_param_names
+			)
+			if trait_is_fn_type_param:
+				continue
 			trait_key = trait_key_from_expr(
 				atom.trait,
 				default_module=module_id,
 				default_package=package_id,
 				module_packages=module_packages,
 			)
-			if trait_key not in local_trait_keys and trait_key.module == module_id:
+			if not _is_known_local_constraint(trait_key):
 				world.diagnostics.append(
 					diag(
 						f"unknown trait '{_trait_key_str(trait_key)}' in require clause",
@@ -534,7 +668,13 @@ def build_trait_world(
 					)
 				)
 
-	# Collect impls (trait impls only).
+	# Collect impls (trait impls + interface impls).
+	#
+	# Interface impls are kept out of the trait-impl registry
+	# (`world.impls_by_trait_target`) because downstream trait machinery
+	# assumes pure trait semantics there.  Instead, we register them in
+	# `world.interface_impls_by_iface_target` — a parallel index the
+	# solver consults when proving `require T is InterfaceName`.
 	interface_names = {i.name for i in getattr(prog, "interfaces", []) or []}
 	for impl in getattr(prog, "implements", []) or []:
 		if getattr(impl, "trait", None) is None:
@@ -546,6 +686,25 @@ def build_trait_world(
 			module_packages=module_packages,
 		)
 		if trait_key.module == module_id and trait_key.name in interface_names:
+			iface_target_key = type_key_from_expr(
+				impl.target,
+				default_module=module_id,
+				default_package=package_id,
+				module_packages=module_packages,
+			)
+			iface_head_key = iface_target_key.head()
+			world.interface_impls_by_iface_target.setdefault(
+				(trait_key, iface_head_key), []
+			).append(
+				InterfaceImplRef(
+					iface=trait_key,
+					target=iface_target_key,
+					target_head=iface_head_key,
+					type_params=tuple(getattr(impl, "type_params", []) or ()),
+					require_expr=(impl.require.expr if getattr(impl, "require", None) is not None else None),
+					loc=getattr(impl, "loc", None),
+				)
+			)
 			continue
 		trait_args = tuple(
 			type_key_from_expr(
@@ -627,7 +786,7 @@ def build_trait_world(
 					default_package=package_id,
 					module_packages=module_packages,
 				)
-				if trait_dep not in local_trait_keys and trait_dep.module == module_id:
+				if not _is_known_local_constraint(trait_dep):
 					world.diagnostics.append(
 						diag(
 							f"unknown trait '{_trait_key_str(trait_dep)}' in require clause",

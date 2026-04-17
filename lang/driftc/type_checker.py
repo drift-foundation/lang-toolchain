@@ -3460,6 +3460,7 @@ class TypeChecker:
 					default_module=env.default_module,
 					default_package=env.default_package,
 					module_packages=env.module_packages,
+					type_param_subst=subst,
 				)
 				trait_args = tuple(
 					_resolve_trait_arg(a) for a in (getattr(atom.trait, "args", []) or [])
@@ -3632,6 +3633,7 @@ class TypeChecker:
 					default_module=env.default_module,
 					default_package=env.default_package,
 					module_packages=env.module_packages,
+					type_param_subst=subst,
 				)
 				def _resolve_trait_arg(arg: parser_ast.TypeExpr) -> TypeKey:
 					if not getattr(arg, "args", None):

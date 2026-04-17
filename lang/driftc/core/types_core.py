@@ -1155,6 +1155,79 @@ class TypeTable:
 		"""Return the concrete interface instance for an interface TypeId, if available."""
 		return self.interface_instances.get(ty)
 
+	# -------------------------------------------------------------------
+	# Arc<Interface> representation boundary
+	# -------------------------------------------------------------------
+	#
+	# `std.concurrent.Arc<T>` has two physical layouts, chosen by the
+	# compiler based on the *kind* of its type argument T:
+	#
+	#   * T is a concrete type (struct / variant / scalar / ...):
+	#       Arc<T> is THIN.  It carries exactly what the stdlib source
+	#       declares — `{ buf: RawBuffer<ArcBox<T>> }` — and the control
+	#       block plus payload live in one heap allocation.
+	#
+	#   * T is an interface:
+	#       Arc<T> is FAT.  The declared `{ buf: ... }` body is REPLACED
+	#       with `{ ctrl: Ptr<Byte>, data: Ptr<Byte>, vtable: Ptr<Byte> }`
+	#       where ctrl points at the ArcBox<ConcreteU>.header of some
+	#       originating `Arc<ConcreteU>`, data points at that allocation's
+	#       value field, and vtable carries the `ConcreteU`-as-T vtable.
+	#
+	# The two shapes share a single control block; multiple Arc<Interface>
+	# views derived via `arc.as_interface<type I>()` from one
+	# `Arc<ConcreteU>` increment the SAME strong count.  Destruction on
+	# last drop runs ConcreteU's destructor via the drop_thunk captured
+	# in the ArcBox header at `arc<T>(value)` construction time.
+	#
+	# Design rationale, contract, and the reasons we do NOT derive the
+	# data pointer from `ctrl + sizeof(ArcHeader)` are in the language
+	# spec under § 6.16 (Arc interface views) and `work/fat-arc-interface-
+	# views/phase1.md`.  ABI contract: `DRIFT_RT_ABI_VERSION` is bumped
+	# alongside any change to either shape here.
+	#
+	# `is_arc_interface_view(schema, type_args)` is the SINGLE predicate
+	# site for this specialization.  Every other compiler pass that needs
+	# to distinguish the two Arc shapes (codegen for clone/destroy/get,
+	# the `as_interface` intrinsic, rejection of `arc<T>(value)` when T
+	# is interface, field-access GEP paths) must route its decision
+	# through this predicate — no ad hoc `name == "Arc"` checks scattered
+	# across the compiler.
+	def is_arc_interface_view(self, schema: "StructSchema", type_args: list[TypeId]) -> bool:
+		if schema.name != "Arc":
+			return False
+		if schema.module_id != "std.concurrent":
+			return False
+		if len(type_args) != 1:
+			return False
+		t_def = self.get(type_args[0])
+		return t_def.kind is TypeKind.INTERFACE
+
+	def is_arc_interface_view_instance(self, ty_id: TypeId) -> bool:
+		"""Instance-level variant of `is_arc_interface_view`.
+
+		Given a struct TypeId, returns True iff it's an instance of
+		`std.concurrent.Arc<T>` where T is an interface.  Used by
+		compiler passes that have a TypeId in hand (LLVM codegen, MIR
+		lowering) rather than a schema + args pair.
+		"""
+		inst = self.get_struct_instance(ty_id)
+		if inst is None:
+			return False
+		schema = self.struct_bases.get(inst.base_id)
+		if schema is None:
+			return False
+		return self.is_arc_interface_view(schema, list(inst.type_args))
+
+	def _arc_interface_view_layout(self) -> tuple[list[str], list[TypeId]]:
+		"""Synthetic layout for `Arc<Interface>` — three Ptr<Byte> fields.
+
+		See the comment block above `is_arc_interface_view` for the
+		representation contract.
+		"""
+		ptr_byte = self.new_ptr(self.ensure_byte())
+		return (["ctrl", "data", "vtable"], [ptr_byte, ptr_byte, ptr_byte])
+
 	def ensure_struct_instantiated(self, base_id: TypeId, type_args: list[TypeId]) -> TypeId:
 		"""
 		Return a stable TypeId for a concrete instantiation of a generic struct.

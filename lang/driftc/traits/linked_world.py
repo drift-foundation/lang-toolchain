@@ -336,6 +336,42 @@ def merge_trait_worlds(worlds: Iterable[TraitWorld]) -> TraitWorld:
 			merged.impls_by_trait.setdefault(impl.trait, []).append(impl_id)
 			merged.impls_by_target_head.setdefault(impl.target_head, []).append(impl_id)
 			merged.impls_by_trait_target.setdefault((impl.trait, impl.target_head), []).append(impl_id)
+	# Merge interface declarations + impls so the solver can prove
+	# `require T is I` for interface `I` against the global/linked view.
+	for world in world_list:
+		for iface_key, iface_def in getattr(world, "interfaces", {}).items():
+			merged.interfaces.setdefault(iface_key, iface_def)
+		for key, refs in getattr(world, "interface_impls_by_iface_target", {}).items():
+			merged.interface_impls_by_iface_target.setdefault(key, []).extend(refs)
+	# Post-merge reclassification: per-module world building classified
+	# `implement X.I for T` as a trait impl whenever I is not a
+	# locally-declared interface (e.g. `implement log.ContextResolver for
+	# AppService` written in module `main`).  Now that all modules'
+	# interface declarations are visible in `merged.interfaces`, walk
+	# the accumulated trait-impl list and additionally register any impl
+	# whose trait key is actually a known interface into the interface-
+	# impl index.  The trait-impl list is left intact — downstream
+	# consumers still see impls where they were originally registered;
+	# the interface-impl index is additive.
+	from lang.driftc.traits.world import InterfaceImplRef as _InterfaceImplRef
+	for impl in merged.impls:
+		trait = getattr(impl, "trait", None)
+		if trait is None or trait not in merged.interfaces:
+			continue
+		target_head = getattr(impl, "target_head", None)
+		if target_head is None:
+			continue
+		ref = _InterfaceImplRef(
+			iface=trait,
+			target=impl.target,
+			target_head=target_head,
+			type_params=tuple(getattr(impl, "type_params", []) or ()),
+			require_expr=getattr(impl, "require", None),
+			loc=getattr(impl, "loc", None),
+		)
+		merged.interface_impls_by_iface_target.setdefault(
+			(trait, target_head), []
+		).append(ref)
 	return merged
 
 

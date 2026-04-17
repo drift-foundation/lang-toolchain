@@ -6702,6 +6702,53 @@ class _FuncBuilder:
 		self.module.iface_vtable_sizes[vtable_name] = slot_count
 		return vtable_name, slot_count
 
+	# -------------------------------------------------------------------
+	# emit_interface_view — canonical "concrete T as interface I" primitive
+	# -------------------------------------------------------------------
+	#
+	# Drift's canonical interface-view ABI is the pair `{data_ptr,
+	# vtable_ptr}`.  ANY pointer-like holder that wants to expose a
+	# concrete T as interface I should build its view through this
+	# primitive, not invent its own vtable-lookup path:
+	#
+	#   * `Arc<T>.as_interface<I>()`   — attaches the Arc's `ctrl_ptr`
+	#                                    to the view pair (Phase 1).
+	#   * `&T` → `&I` borrow coercion  — uses the pair unchanged.
+	#   * `Box<T>` → `Box<I>`          — uses the pair, box carries
+	#                                    ownership separately.
+	#
+	# Input:
+	#   data_ptr_llvm  — an LLVM value of type `ptr` that already
+	#                    points at the concrete T instance
+	#                    (Arc's `ctrl + sizeof(header)`, a struct
+	#                    field address, etc.)
+	#   iface_ty       — TypeId of the destination interface I
+	#   value_ty       — TypeId of the concrete source T
+	# Returns:
+	#   (data_ptr_llvm, vtable_sym_llvm) — two LLVM values ready to
+	#                                      be plugged into any fat
+	#                                      `{data, vtable}` slot.
+	#
+	# The vtable lookup is memoized in `_ensure_interface_vtable`
+	# (which also emits the T-as-I drop thunk if first use), so
+	# multiple callers sharing the same (T, I) pair share one
+	# vtable symbol.
+	#
+	# Phase 1 note: `as_interface<I>` is declared as `@intrinsic`
+	# and its MIR/LLVM lowering is landed in Stage 3.  This helper
+	# is in place now so Stage 3 has one call site to add.  Do NOT
+	# add Arc-specific logic here; per-holder concerns
+	# (refcount bump, borrow-lifetime tying, ownership transfer)
+	# belong at the caller.
+	def _emit_interface_view_fields(
+		self,
+		data_ptr_llvm: str,
+		iface_ty: TypeId,
+		value_ty: TypeId,
+	) -> tuple[str, str]:
+		vtable_name, _slot_count = self._ensure_interface_vtable(iface_ty, value_ty)
+		return data_ptr_llvm, f"@{vtable_name}"
+
 	def _lower_construct_iface(self, instr: ConstructIface) -> None:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: ConstructIface requires a TypeTable")

@@ -185,8 +185,8 @@ param: (VAR | VAL)? ident COLON type_expr
 # implement Trait for Type { fn ... }
 implement_def: "implement" type_params? type_expr ("for" type_expr)? require_clause? implement_body
 implement_body: "{" (implement_item | TERMINATOR)* "}"
-implement_item: test_build_only_marker? PUB func_def -> implement_func_pub
-             | test_build_only_marker? func_def      -> implement_func
+implement_item: test_build_only_marker? intrinsic_marker? PUB func_def -> implement_func_pub
+             | test_build_only_marker? intrinsic_marker? func_def      -> implement_func
 
 trait_def: TRAIT NAME type_params? require_clause? trait_body
 trait_body: "{" (trait_item | TERMINATOR)* "}"

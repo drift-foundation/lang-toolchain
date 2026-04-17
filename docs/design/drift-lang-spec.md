@@ -1761,6 +1761,122 @@ Together they form a flexible dual system:
 
 ---
 
+### 6.16. Arc interface views (shared interface ownership)
+
+An `Arc<T>` (reference-counted shared ownership; see `std.concurrent`) over a
+concrete `T` that implements one or more interfaces may be **viewed** as an
+`Arc<Interface>` for any interface `T` implements. This is the language-level
+shape of shared, multiply-viewed services: one concrete object implements
+several interfaces, one `Arc` owns it, and different subsystems each receive
+an `Arc<Interface>` face over the same allocation.
+
+The conversion is an explicit coercion expressed as a method on
+`Arc<T>`. The user names only the target interface face (`I`); the
+source concrete type (`T`) is inferred from the `Arc<T>` receiver:
+
+```drift
+val svc     = conc.arc(AppService(...));
+val logs    = svc.as_interface<type log.ContextResolver>();
+val metrics = svc.as_interface<type metrics.Emitter>();
+```
+
+All three handles (`svc`, `logs`, `metrics`) denote the **same allocation**
+and share the **same control block / strong count**. `Arc<Interface>` is an
+interface view over that allocation — **not** a boxed copy of an interface
+value and not a second owned control block.
+
+#### 6.16.1. Normative contract
+
+1. **Multi-interface implementability.** A single concrete type `T` may
+   implement any number of interfaces `I1, I2, …, Ik` through independent
+   `implement Ij for T` blocks. Interface implementations do not conflict
+   unless method signatures do.
+
+2. **Conversion is permitted iff `T` implements `I`.** The expression
+   `a.as_interface<type I>()` (where `a: Arc<T>`) is well-formed if and
+   only if `T` implements `I`. The compiler enforces this through the
+   `require T is I` clause on the method; a call where `T` does not
+   implement `I` is rejected at compile time with a `require`-unsatisfied
+   diagnostic. There is no runtime fallback.
+
+3. **No payload copy or move.** The concrete payload is not copied, moved,
+   or reconstructed by the conversion. The `Arc<Interface>` view reads and
+   dispatches against the same bytes as the originating `Arc<T>`.
+
+4. **No second control block.** The conversion does not allocate. It
+   operates purely on the existing control block: it observes the current
+   strong count, atomically increments it, and constructs a handle that
+   points at the same allocation with a different interface view.
+
+5. **Shared strong count.** All `Arc` handles over the same underlying
+   allocation — whether `Arc<T>` handles, `Arc<Ij>` handles for any `Ij`
+   that `T` implements, or clones of any of those — reference a single
+   strong count in the shared control block. Calling `.clone()` on any
+   handle atomically increments that count; dropping any handle atomically
+   decrements it.
+
+6. **Destructor runs exactly once.** When the final handle over the shared
+   allocation drops (strong count reaches zero), the concrete `T`'s
+   destructor runs exactly once. This is true regardless of which view
+   kind is the last to drop — the final view may be any `Arc<Ij>` or an
+   `Arc<T>`; destruction always runs `T`'s `Destructible::destroy`, not
+   any `Ij`'s drop slot. Implementations must not attempt to recover `T`
+   from the interface view at drop time; a conformant implementation
+   captures the `T`-typed destroy mechanism at `arc<T>(value)`
+   construction time.
+
+7. **Dispatch through `T`-as-`I` vtable.** Method calls on an
+   `Arc<I>` view dispatch through the `T`-as-`I` vtable — i.e., through
+   the `implement I for T` block's method bodies, with the concrete `T`
+   instance as the receiver. Each `Arc<Ij>` view carries the vtable for
+   its own `Ij`; views over the same allocation for different interfaces
+   use different vtables.
+
+8. **Object identity preserved across views.** Any two `Arc<Ij>` views
+   derived from the same underlying allocation address the same concrete
+   object. State mutated through one view is observable through another
+   view.
+
+9. **Mutation requires interior mutability.** `Arc` (including its
+   interface views) provides shared ownership, not unique mutable access.
+   Mutation of state reachable through `Arc<I>` method calls requires
+   standard interior-mutability patterns inside `T` — typically
+   `conc.Mutex<...>` fields, atomic fields, or lock-free message queues.
+   An `Arc<I>` view does not grant a `&mut I` or `&mut T`; if multiple
+   subsystems hold different interface views over the same allocation and
+   all may mutate, `T` must coordinate that mutation internally.
+
+10. **Arc<Interface> is a view, not a boxed interface value.** An
+    `Arc<Interface>` is a shared view over the allocation that holds a
+    concrete `T`. It is not an interface value (`{data_ptr, vtable}` fat
+    pointer on the stack) that happens to be inside an `Arc`. The
+    distinction matters: two `Arc<I>` views that trace back to the same
+    `arc<T>(value)` call share the control block; two independent
+    `arc<T1>(v1)` and `arc<T2>(v2)` calls — even if `T1 = T2` — do not.
+
+#### 6.16.2. Explicit construction
+
+Arc interface views are constructed only through an explicit conversion.
+The conversion is not implicit: assigning or passing an `Arc<T>` where
+an `Arc<I>` is expected does not silently coerce, even when `T`
+implements `I`. `a.as_interface<type I>()` (where `a: Arc<T>`) is the
+canonical form — the method's `<I>` type parameter names the target
+face; `T` is inferred from the receiver's `Arc<T>`. Implementations
+may offer ergonomic aliases; the explicit method form remains the
+language-level primitive.
+
+#### 6.16.3. Interaction with borrowed interface dispatch
+
+`Arc<Interface>.get()` returns an `&Interface` reference — a borrowed
+interface view whose lifetime is tied to the `Arc<Interface>` handle.
+Method calls on this `&Interface` reference use the same vtable the
+containing `Arc<Interface>` carries; dispatch cost is one indirect call
+through the vtable's method slot, with no refcount traffic on the per-call
+path. Cloning and dropping the `Arc<Interface>` handle itself remains the
+only operations that touch the refcount.
+
+---
+
 ## 7. Imports
 
 Drift uses explicit imports — no global or magic identifiers beyond the implicit
