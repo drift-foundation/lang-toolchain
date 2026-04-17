@@ -288,30 +288,59 @@ Strictly ordered because later steps depend on earlier:
    (signature-level tagging is metadata only — concrete Arc still
    runs through the Drift bodies).
 
-   **Stage 2 FINISH (open — Option A work items):**
-   1. Skip queuing/emission for @intrinsic generic methods in
-      `driftc.py::_queue_instantiations` and the Destructible
-      generic-impl scan (`driftc.py:3824-3832`). Both currently
-      queue by template fn_id regardless of is_intrinsic; both
-      need to bail when the template sig is intrinsic.
-   2. Pick one canonical method-resolution site for the intrinsic
-      target rewrite. `type_checker.py:7646+` and `call_resolver.py`
-      share a downstream `record_call_info`. If both sites reach
-      that path, rewrite at the common downstream; if structurally
-      distinct, assert they agree.
-   3. Remove `Arc.clone` / `Arc.get` / `Destructible::destroy`
-      bodies in stdlib. Mark `@intrinsic`. Move bodies to private
-      `_arc_clone_impl<T>` / `_arc_get_impl<T>` /
-      `_arc_destroy_impl<T>` helpers declared in the same module.
-   4. Concrete-T MIR lowering for ARC_CLONE / ARC_GET / ARC_DESTROY
-      in `_lower_method_call_with_info`: redirect to the private
-      helpers via the existing `_find_free_fn_id`.
-   5. ARC_AS_INTERFACE stays declared + require-gated; no MIR
-      lowering yet (positive calls still fail — fine until
-      Stage 3). Stage 1 negative test continues to pin.
-   6. **Stage 2 gate**: 35 tests pass + new focused concrete-Arc
-      tests (arc + clone + get dispatch, Arc<Mutex<T>> pattern,
-      destructor-once via scope exit). Review pause.
+   **Stage 2 FINISH (Option B — operational — landed).**
+   Concrete `Arc.clone` / `.get` / `Destructible::destroy` now
+   route through the compiler's `INTRINSIC(ARC_CLONE|ARC_GET|
+   ARC_DESTROY)` call target and lower as direct free-function
+   calls to the matching `_arc_*_impl__inst__<T>` helper.  The
+   bodyless `@intrinsic` Arc method templates are never
+   monomorphized; the helpers are.
+
+   Pieces of the bridge (all in place):
+
+   1. Method-resolution rewrite in `type_checker.py:7717+` turns
+      `DIRECT(@intrinsic Arc-method)` into
+      `INTRINSIC(ARC_CLONE|ARC_GET|ARC_DESTROY|ARC_AS_INTERFACE)`
+      with the template sig attached.  A central
+      `_write_call_info_respecting_intrinsic` helper and a
+      `driftc.py:4443` post-pass normalizer catch every other
+      DIRECT→template writer so the invariant is preserved.
+   2. `driftc.py:4443` also re-derives `sig.can_throw` from the
+      target sig's `declared_can_throw` at the INTRINSIC rewrite —
+      Arc methods are `nothrow`, so this preserves the nothrow
+      contract even when the upstream DIRECT had defaulted to
+      `can_throw=True`.
+   3. `driftc.py::_queue_instantiations`, given a callsite whose
+      template is `@intrinsic` and whose `intrinsic_kind` is an
+      Arc kind, requests instantiation of the matching
+      `_arc_*_impl<T>` helper (via
+      `_arc_helper_template_key_for_intrinsic`) and records
+      `(caller_fn_id, callsite_id) → helper_inst_fn_id` on
+      `type_table.arc_helper_inst_fn_by_callsite`.
+   4. `hir_to_mir._lower_method_call_with_info` (the INTRINSIC
+      branch) no longer continues through method-call lowering.
+      It dispatches to a new `_lower_arc_intrinsic_call`, looks
+      up the helper instantiation, lowers the receiver based on
+      the helper's first param type (auto-borrow when `&Arc<T>`,
+      by-value when owned `var self: Arc<T>`), and emits a
+      direct `M.Call` to `_arc_*_impl__inst__<hash>`.
+   5. ARC_AS_INTERFACE is recognized but explicitly rejected at
+      MIR lowering with a "Stage 3 not yet implemented" assertion.
+      Stage 1 negative test continues to pin the compile-time
+      gate (T does not implement I).
+   6. `_arc_destroy_impl` is also queued from the existing
+      Destructible-impl scan (`driftc.py:3824-3832`) for
+      compiler-emitted scope-exit drops (those don't go through
+      the method-call bridge).
+
+   **Stage 2 gate (Option B).** `lang/tests/driver/
+   test_arc_intrinsic_bridge.py` pins the bridge contract:
+   `arc.clone().get().field` returns the right value; back-to-back
+   `make_and_drop` reuses Arc cleanly (no leak, no crash); no
+   `Arc<T>::clone__inst__…` / `get__inst__…` / `destroy__inst__…`
+   symbols leak into codegen; no generic `_arc_*_impl` direct
+   call survives into IR (every callsite references the
+   monomorphized `_arc_*_impl__inst__<hash>`).  4/4 green.
 
 6. **Stage 3.** Type system specialization: `Arc<T>` struct layout
    emits fat shape `{ctrl, data, vtable}` when T is interface (wire

@@ -1799,6 +1799,42 @@ class TypeTable:
 			# Always use the canonical "std.mem" origin so the resulting
 			# TypeKind.RAW_PTR is identical to one produced via the Ptr path.
 			return self.new_ptr(inner, module_id="std.mem")
+		if name == "fn":
+			# `Fn(P0, P1, ...) [nothrow] -> Ret` as a struct field type.
+			# `GenericTypeExpr` encodes these with `args = [P0, P1, …, Ret]`
+			# — the last arg is the return type, everything prior is
+			# the parameter list — and the nothrow flag on
+			# `GenericTypeExpr.fn_throws` (True when the function may
+			# throw; False for `nothrow`).
+			#
+			# Missing this case was a LANGUAGE_BUG — struct fields with
+			# function-pointer types (e.g. `ArcHeader.drop_thunk`) were
+			# evaluated against the nominal-name fallback and
+			# degraded to Unknown on the package-consumer side, because
+			# `_eval_generic_type_expr` is the entry point used by
+			# `type_table_link_v0.import_type_tables_and_build_typeid_maps`
+			# when finalizing deserialized struct schemas.  The Fn
+			# shape is otherwise parallel to `Array` / `Ref` / `Ptr`
+			# handling above.  Mirror `resolve_opaque_type`'s "fn"
+			# branch (lang/driftc/core/type_resolve_common.py) to keep
+			# the source-parse and package-deserialize paths aligned —
+			# those two paths must produce identical host TypeIds for
+			# the same field schema, otherwise the subsequent
+			# `define_struct_fields` rebind check trips with the
+			# observed ValueError
+			# ("struct 'ArcHeader' fields already defined: [5, 5, 3] vs
+			# [5, 5, 1218]").
+			if not expr.args:
+				return self.ensure_unknown()
+			param_exprs = list(expr.args[:-1])
+			ret_expr = expr.args[-1]
+			param_ids = [
+				self._eval_generic_type_expr(p, type_args, module_id=module_id)
+				for p in param_exprs
+			]
+			ret_id = self._eval_generic_type_expr(ret_expr, type_args, module_id=module_id)
+			can_throw = bool(expr.fn_throws_raw() or False)
+			return self.ensure_function(param_ids, ret_id, can_throw=can_throw)
 		# Module-scoped type aliases may appear in schema-time expressions
 		# (for example, variant payload fields using `containers.HashMap<...>`).
 		# Expand aliases here so instantiations do not degrade to Unknown.

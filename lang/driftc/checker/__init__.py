@@ -2495,6 +2495,16 @@ class Checker:
 		info: CallInfo,
 		call_info_by_callsite_id: Mapping[int, CallInfo] | None,
 	) -> CallInfo:
+		# Arc runtime boundary: if the incoming info is already an
+		# INTRINSIC target (method-resolution rewrote it for
+		# `@intrinsic` generics like Arc.clone), skip the named-call
+		# repair — repairing would resolve against the bodyless
+		# template's sig and lose the intrinsic dispatch.  The
+		# intrinsic target stays, and hir_to_mir redirects to the
+		# `_arc_*_impl<T>` helper.
+		from lang.driftc.stage1.call_info import CallTargetKind as _CTK
+		if info.target.kind is _CTK.INTRINSIC:
+			return info
 		repaired = repair_named_hcall_callinfo(
 			expr,
 			info,

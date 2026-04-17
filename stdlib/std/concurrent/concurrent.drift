@@ -457,42 +457,98 @@ pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 	}
 }
 
+// ---------------------------------------------------------------------
+// Arc runtime boundary — Stage 2 implementation bridge
+// ---------------------------------------------------------------------
+//
+// These three `_arc_*_impl<T>` helpers carry the concrete-T
+// implementation of Arc's core operations.  The operational dispatch
+// for Arc<T>.clone / .get / Destructible::destroy on concrete T is:
+//
+//     compiler intrinsic (ARC_CLONE | ARC_GET | ARC_DESTROY)
+//       → call-site redirect to the matching `_arc_*_impl<T>`
+//
+// THIS IS A STAGE 2 IMPLEMENTATION BRIDGE, not the final Arc
+// abstraction boundary.  Stage 3 lands the fat-Arc representation and
+// the compiler takes over both concrete and interface branches
+// directly.  At that point these helpers either (a) get inlined into
+// the compiler's concrete-T lowering and deleted, or (b) stay as a
+// narrow concrete-branch implementation detail with explicit
+// "subject to elimination" scoping.  They are NEVER a substitute for
+// real compiler-owned fat-T lowering.
+//
+// User code never names these helpers; calls to Arc.clone / .get /
+// Destructible::destroy route through the compiler's intrinsic
+// dispatch which picks the right branch.
+//
+// See work/fat-arc-interface-views/phase1.md for the stage plan and
+// the Stage 3 cleanup contract.
+
+fn _arc_clone_impl<T>(self: &Arc<T>) nothrow -> Arc<T> {
+	unsafe {
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+		val _ = atomic.atomic_fetch_add_int(&slot.header.strong, 1, 0);
+	}
+	val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+	val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
+	return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
+}
+
+fn _arc_get_impl<T>(self: &Arc<T>) nothrow -> &T {
+	unsafe {
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+		return &slot.value;
+	}
+}
+
+fn _arc_destroy_impl<T>(var self: Arc<T>) nothrow -> Void {
+	unsafe {
+		// Moved-from Arc values are represented as zero/raw-null buffers.
+		// Dropping that sentinel must be a no-op.
+		val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+		if mem.ptr_is_null<type Byte>(ptr) {
+			return;
+		}
+	}
+	var prev = 0;
+	unsafe {
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+		prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
+	}
+	if prev == 1 {
+		// Route last-drop through the stored erased drop_thunk.
+		unsafe {
+			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+			val _ = atomic.atomic_load_int(&slot.header.strong, 1);
+			val thunk = slot.header.drop_thunk;
+			val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+			thunk(ctrl_ptr);
+		}
+	}
+}
+
 implement<T> Arc<T> {
 	/// Returns a new `Arc<T>` sharing the same underlying allocation.
 	///
 	/// Atomically increments the reference count.  Cheap — no heap
 	/// allocation, no value copy.
 	///
-	/// Tagged as an Arc runtime-boundary intrinsic at the compiler
-	/// level (`sig.intrinsic_kind = ARC_CLONE`) so Stage 3 can
-	/// branch on the receiver's T-kind for interface-T fat-handle
-	/// specialization.  The Drift body below remains the sole
-	/// concrete-T implementation; Stage 3 will shift to an
-	/// `@intrinsic` declaration once the interface-T lowering and
-	/// the coordinated monomorphization-path changes land.
+	/// Compiler-owned intrinsic (ARC_CLONE).  For concrete T the
+	/// lowering redirects to `_arc_clone_impl<T>` — the Stage 2
+	/// implementation bridge.  Stage 3 adds an interface-T branch
+	/// that builds a fat-handle view sharing the same control block.
 	///
 	/// **See also:** `Arc.get`, `arc`, spec § 6.16.
-	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
-		unsafe {
-			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			val _ = atomic.atomic_fetch_add_int(&slot.header.strong, 1, 0);
-		}
-		val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-		val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
-		return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
-	}
+	@intrinsic pub fn clone(self: &Arc<T>) nothrow -> Arc<T>;
 
 	/// Returns a shared reference to the contained value.
 	///
-	/// Tagged as an Arc runtime-boundary intrinsic; see `Arc.clone`.
+	/// Compiler-owned intrinsic (ARC_GET).  For concrete T the
+	/// lowering redirects to `_arc_get_impl<T>` — Stage 2
+	/// implementation bridge.  Stage 3 adds an interface-T branch.
 	///
 	/// **See also:** `Arc.get_mut`.
-	pub fn get(self: &Arc<T>) nothrow -> &T {
-		unsafe {
-			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			return &slot.value;
-		}
-	}
+	@intrinsic pub fn get(self: &Arc<T>) nothrow -> &T;
 
 	/// Returns a mutable reference to the contained value.
 	///
@@ -539,35 +595,10 @@ implement<T> core.BorrowMut<T> for Arc<T> {
 }
 
 implement<T> core.Destructible for Arc<T> {
-	/// Last-drop of `Arc<T>`.  Tagged as an Arc runtime-boundary
-	/// intrinsic at the compiler level (`sig.intrinsic_kind =
-	/// ARC_DESTROY`); see `Arc.clone`.
-	pub fn destroy(var self: Arc<T>) nothrow -> Void {
-		unsafe {
-			// Moved-from Arc values are represented as zero/raw-null buffers.
-			// Dropping that sentinel must be a no-op.
-			val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-			if mem.ptr_is_null<type Byte>(ptr) {
-				return;
-			}
-		}
-		var prev = 0;
-		unsafe {
-			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
-		}
-		if prev == 1 {
-			// Route last-drop through the stored erased drop_thunk.
-			unsafe {
-				// Acquire barrier pairs with prior Release decrements before final destroy.
-				val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-				val _ = atomic.atomic_load_int(&slot.header.strong, 1);
-				val thunk = slot.header.drop_thunk;
-				val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-				thunk(ctrl_ptr);
-			}
-		}
-	}
+	/// Compiler-owned intrinsic (ARC_DESTROY) — last-drop of
+	/// `Arc<T>`.  For concrete T the lowering redirects to
+	/// `_arc_destroy_impl<T>`; Stage 3 adds an interface-T branch.
+	@intrinsic pub fn destroy(var self: Arc<T>) nothrow -> Void;
 }
 
 /// Constructs a `Mutex<T>` wrapping `value`, initially unlocked.

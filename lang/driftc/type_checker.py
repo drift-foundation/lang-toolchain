@@ -1761,6 +1761,52 @@ class TypeChecker:
 				return None
 			return f"visible via: {_format_visibility_chain(chain)}"
 
+		# Arc runtime boundary — central helpers for intrinsic-aware
+		# call-info writes.
+		#
+		# Several sites in this file (plus `driftc.py::_rewrite_call_
+		# targets`) override `call_info_by_callsite_id[csid]` with a
+		# `CallTarget.direct(__inst__fn_id)` after monomorphization
+		# decides on a concrete template instance.  For `@intrinsic`
+		# generic methods (Arc.clone / Arc.get /
+		# Arc::Destructible::destroy / Arc.as_interface) the template
+		# has no body; their call sites must retain the INTRINSIC
+		# target set by method-resolution rewrite so hir_to_mir can
+		# redirect to the matching `_arc_*_impl<T>` helper.
+		#
+		# `_template_is_intrinsic_generic` is the single predicate
+		# every override site consults.  `_write_call_info_respecting_
+		# intrinsic` is the single writer: if the existing CallInfo
+		# already has an INTRINSIC target (or the template is known-
+		# intrinsic) it leaves the entry alone; otherwise it performs
+		# the override.
+		def _template_is_intrinsic_generic(template_key: "FunctionKey | None") -> bool:
+			if template_key is None or signatures_by_id is None:
+				return False
+			for _fid, _sig in signatures_by_id.items():
+				if _fid.module != template_key.module_path:
+					continue
+				if _fid.name != template_key.name:
+					continue
+				return bool(getattr(_sig, "is_intrinsic", False))
+			return False
+
+		def _write_call_info_respecting_intrinsic(
+			csid: int,
+			new_info: CallInfo,
+			*,
+			template_key: "FunctionKey | None" = None,
+		) -> None:
+			# Preserve intrinsic dispatch: if the method-resolution
+			# rewrite left an INTRINSIC target at this callsite, do
+			# NOT overwrite with a monomorphized Direct target.
+			existing = call_info_by_callsite_id.get(csid)
+			if existing is not None and existing.target.kind is CallTargetKind.INTRINSIC:
+				return
+			if _template_is_intrinsic_generic(template_key):
+				return
+			call_info_by_callsite_id[csid] = new_info
+
 		def _record_call_info(expr: H.HExpr, info: CallInfo) -> int:
 			csid = getattr(expr, "callsite_id", None)
 			if not isinstance(csid, int):
@@ -5315,18 +5361,39 @@ class TypeChecker:
 					key = getattr(inst, "target_key", None)
 					type_args = tuple(getattr(inst, "type_args", ()) or ())
 					if isinstance(key, FunctionKey) and type_args:
-						inst_key = build_instantiation_key(
-							key,
-							type_args,
-							type_table=self.type_table,
-							can_throw=bool(info.sig.can_throw),
-						)
-						inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
-						inst_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
-						call_info_by_callsite_id[csid] = CallInfo(
-							target=CallTarget.direct(inst_fn_id),
-							sig=info.sig,
-						)
+						# Arc runtime boundary: if the callee is an
+						# `@intrinsic` generic, keep the CallInfo at
+						# `CallTarget.intrinsic(...)` (set just above
+						# by the method-resolution intrinsic rewrite)
+						# — do NOT overwrite it with the inst
+						# Direct-target of a bodyless template.
+						# Monomorphization is skipped for intrinsic
+						# templates in driftc.py; the MIR lowering
+						# redirects intrinsic calls to the matching
+						# `_arc_*_impl<T>` helper.
+						_rec_intrinsic = False
+						if signatures_by_id is not None:
+							for _fid, _sig in signatures_by_id.items():
+								if _fid.module != key.module_path:
+									continue
+								if _fid.name != key.name:
+									continue
+								if bool(getattr(_sig, "is_intrinsic", False)):
+									_rec_intrinsic = True
+								break
+						if not _rec_intrinsic:
+							inst_key = build_instantiation_key(
+								key,
+								type_args,
+								type_table=self.type_table,
+								can_throw=bool(info.sig.can_throw),
+							)
+							inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
+							inst_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
+							call_info_by_callsite_id[csid] = CallInfo(
+								target=CallTarget.direct(inst_fn_id),
+								sig=info.sig,
+							)
 			elif callable_registry is not None:
 				diagnostics.append(
 					_tc_diag(
@@ -5370,15 +5437,19 @@ class TypeChecker:
 					)
 					inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
 					inst_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
-					call_info_by_callsite_id[callsite_id] = CallInfo(
-						target=CallTarget.direct(inst_fn_id),
-						sig=CallSig(
-							param_types=info.sig.param_types,
-							user_ret_type=info.sig.user_ret_type,
-							can_throw=bool(inst_can_throw),
-							includes_callee=info.sig.includes_callee,
-							declared_terminal_throws=info.sig.declared_terminal_throws,
+					_write_call_info_respecting_intrinsic(
+						callsite_id,
+						CallInfo(
+							target=CallTarget.direct(inst_fn_id),
+							sig=CallSig(
+								param_types=info.sig.param_types,
+								user_ret_type=info.sig.user_ret_type,
+								can_throw=bool(inst_can_throw),
+								includes_callee=info.sig.includes_callee,
+								declared_terminal_throws=info.sig.declared_terminal_throws,
+							),
 						),
+						template_key=key,
 					)
 			elif isinstance(node_id, int):
 				instantiations_by_node_id[node_id] = CallInstantiation(target_key=key, type_args=type_args)
@@ -7643,17 +7714,40 @@ class TypeChecker:
 							),
 							method_res.resolution,
 						)
-				# Arc runtime boundary (Stage 2) — if the resolved
-				# method is a compiler-known intrinsic (sig.is_intrinsic
-				# with sig.intrinsic_kind set — e.g. Arc.clone /
-				# Arc.get / Arc::Destructible::destroy /
-				# Arc.as_interface), rewrite the DIRECT target to an
-				# INTRINSIC target so `_lower_method_call_with_info`
-				# can redirect to the appropriate Stage 2 helper
-				# (`_arc_*_impl<T>`) or Stage 3 fat-handle lowering.
-				# Without this, the call would reference the bodyless
-				# intrinsic stub and produce an undefined-symbol link
-				# error.
+				# Arc runtime boundary (Stage 2) — method-resolution
+				# intrinsic target rewrite.
+				#
+				# When the resolved method is `@intrinsic` with
+				# `sig.intrinsic_kind` set (Arc.clone / Arc.get /
+				# Arc::Destructible::destroy / Arc.as_interface),
+				# the DIRECT target points at a bodyless template.
+				# Rewriting to INTRINSIC lets
+				# `_lower_method_call_with_info` redirect to the
+				# `_arc_*_impl<T>` helper (concrete T, Stage 2) or
+				# the fat-handle lowering (Stage 3).
+				#
+				# Must stay in sync with every `call_info_by_callsite_id`
+				# override site — see `_write_call_info_respecting_intrinsic`.
+				if (
+					method_res.call_info is not None
+					and method_res.resolution is not None
+					and getattr(method_res.resolution, "decl", None) is not None
+					and method_res.call_info.target.kind is CallTargetKind.DIRECT
+				):
+					_arc_decl = method_res.resolution.decl
+					_arc_fn_id = getattr(_arc_decl, "fn_id", None)
+					_arc_sig = signatures_by_id.get(_arc_fn_id) if _arc_fn_id is not None and signatures_by_id is not None else None
+					if _arc_sig is not None and bool(getattr(_arc_sig, "is_intrinsic", False)):
+						_arc_intrinsic_kind = getattr(_arc_sig, "intrinsic_kind", None)
+						if _arc_intrinsic_kind is not None:
+							method_res = MethodCallResult(
+								method_res.return_type,
+								CallInfo(
+									target=CallTarget.intrinsic(_arc_intrinsic_kind),
+									sig=method_res.call_info.sig,
+								),
+								method_res.resolution,
+							)
 				if method_res.call_info is not None:
 					if method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 						decl_self_mode = getattr(method_res.resolution.decl, "self_mode", None)
@@ -7880,24 +7974,43 @@ class TypeChecker:
 									type_table=self.type_table,
 									can_throw=bool(method_res.call_info.sig.can_throw),
 								)
-								inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
-								inst_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
-								inst_can_throw = method_res.call_info.sig.can_throw
-								if signatures_by_id is not None and method_res.resolution is not None:
-									base_fn_id = getattr(method_res.resolution.decl, "fn_id", None)
-									sig_for_throw = signatures_by_id.get(base_fn_id) if base_fn_id is not None else None
-									if sig_for_throw is not None and sig_for_throw.declared_can_throw is not None:
-										inst_can_throw = bool(sig_for_throw.declared_can_throw)
-								call_info_by_callsite_id[csid] = CallInfo(
-									target=CallTarget.direct(inst_fn_id),
-									sig=CallSig(
-										param_types=method_res.call_info.sig.param_types,
-										user_ret_type=method_res.call_info.sig.user_ret_type,
-										can_throw=bool(inst_can_throw),
-										includes_callee=method_res.call_info.sig.includes_callee,
-										declared_terminal_throws=method_res.call_info.sig.declared_terminal_throws,
-									),
-								)
+								# Arc runtime boundary: skip the
+								# Direct(inst_fn_id) overwrite when
+								# the template is `@intrinsic` —
+								# keeps the CallInfo at
+								# `CallTarget.intrinsic(...)` set
+								# by the method-resolution rewrite
+								# above.  Sibling to the same skip in
+								# the free-function record path.
+								_mth_rec_intrinsic = False
+								if signatures_by_id is not None:
+									for _fid2, _sig2 in signatures_by_id.items():
+										if _fid2.module != key.module_path:
+											continue
+										if _fid2.name != key.name:
+											continue
+										if bool(getattr(_sig2, "is_intrinsic", False)):
+											_mth_rec_intrinsic = True
+										break
+								if not _mth_rec_intrinsic:
+									inst_name = f"{key.name}__inst__{instantiation_key_hash(inst_key)}"
+									inst_fn_id = FunctionId(module=key.module_path, name=inst_name, ordinal=0)
+									inst_can_throw = method_res.call_info.sig.can_throw
+									if signatures_by_id is not None and method_res.resolution is not None:
+										base_fn_id = getattr(method_res.resolution.decl, "fn_id", None)
+										sig_for_throw = signatures_by_id.get(base_fn_id) if base_fn_id is not None else None
+										if sig_for_throw is not None and sig_for_throw.declared_can_throw is not None:
+											inst_can_throw = bool(sig_for_throw.declared_can_throw)
+									call_info_by_callsite_id[csid] = CallInfo(
+										target=CallTarget.direct(inst_fn_id),
+										sig=CallSig(
+											param_types=method_res.call_info.sig.param_types,
+											user_ret_type=method_res.call_info.sig.user_ret_type,
+											can_throw=bool(inst_can_throw),
+											includes_callee=method_res.call_info.sig.includes_callee,
+											declared_terminal_throws=method_res.call_info.sig.declared_terminal_throws,
+										),
+									)
 					elif callable_registry is not None:
 						diagnostics.append(_tc_diag(message="internal: missing callsite_id on method call node", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, method_res.return_type)

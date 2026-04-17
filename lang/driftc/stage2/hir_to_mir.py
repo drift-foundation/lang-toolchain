@@ -7397,6 +7397,105 @@ class HIRToMIR:
 			return fn_id
 		return None
 
+	def _lower_arc_intrinsic_call(
+		self,
+		expr: H.HMethodCall,
+		info: CallInfo,
+		kind: IntrinsicKind,
+	) -> M.ValueId | None:
+		"""Lower `INTRINSIC(ARC_CLONE|ARC_GET|ARC_DESTROY)` method call.
+
+		The Arc intrinsic method has no body.  Stage 2 ships the
+		concrete-T implementation in `_arc_*_impl<T>` free functions.
+		`compile_stubbed_funcs` queues a helper instantiation for each
+		concrete Arc<T> call site and publishes
+		`type_table.arc_helper_inst_fn_by_callsite[(caller_fn_id, csid)]`
+		→ the monomorphized helper's FunctionId.  We look that up here
+		and emit a plain `M.Call` with the receiver as arg[0], bypassing
+		the method-call self_mode flow (the helper is a free function,
+		not a method).
+
+		Receiver mode comes from the helper's instantiated first-param
+		type — a `Ref<Arc<T>>` triggers auto-borrow; an owned `Arc<T>`
+		triggers by-value lowering (ARC_DESTROY).  This keeps the
+		bridge honest: the runtime call shape matches the helper's
+		declared signature exactly.
+		"""
+		csid = getattr(expr, "callsite_id", None)
+		helper_map = getattr(self._type_table, "arc_helper_inst_fn_by_callsite", None) or {}
+		helper_fn_id = helper_map.get((self._current_fn_id, csid)) if csid is not None else None
+		if helper_fn_id is None:
+			raise AssertionError(
+				f"Arc intrinsic {kind} at callsite {csid} in "
+				f"{function_symbol(self._current_fn_id) if self._current_fn_id else '?'} "
+				f"has no helper instantiation recorded (Stage 2 bridge bug: "
+				f"`_queue_instantiations` did not see this call site's "
+				f"instantiation record, or the Arc method call resolution "
+				f"path did not invoke `record_instantiation`)"
+			)
+		helper_sig = self._signatures_by_id.get(helper_fn_id)
+		if helper_sig is None or helper_sig.param_type_ids is None or helper_sig.return_type_id is None:
+			raise AssertionError(
+				f"Arc intrinsic helper {function_symbol(helper_fn_id)} has no signature "
+				f"(instantiation drain bug)"
+			)
+		helper_param_types = list(helper_sig.param_type_ids)
+		if not helper_param_types:
+			raise AssertionError(
+				f"Arc intrinsic helper {function_symbol(helper_fn_id)} missing receiver parameter"
+			)
+		# Determine receiver mode from the helper's first param type.
+		recv_param_ty = helper_param_types[0]
+		recv_param_def = self._type_table.get(recv_param_ty)
+		wants_borrow = recv_param_def.kind is TypeKind.REF
+		is_mut_borrow = wants_borrow and recv_param_def.param_types and (
+			# ARC_CLONE/GET both take `&Arc<T>` (shared borrow).  If a
+			# future Arc intrinsic needs `&mut`, detect it via the Ref's
+			# mutability flag, which we do not track here in v1; keep
+			# borrows shared for now.
+			False
+		)
+		recv_val: M.ValueId
+		if not wants_borrow:
+			# By-value receiver (ARC_DESTROY).  Use the normal call-arg
+			# lowering so move semantics apply (the helper is declared
+			# `var self: Arc<T>` and takes ownership for drop).
+			recv_val = self._lower_call_arg(expr.receiver, recv_param_ty)
+		else:
+			# Borrowed receiver (ARC_CLONE/ARC_GET: `&Arc<T>`).
+			# If the HIR receiver is already a REF, pass directly;
+			# otherwise auto-borrow the receiver place.
+			recv_ty = self._infer_expr_type(expr.receiver)
+			recv_def = self._type_table.get(recv_ty) if recv_ty is not None else None
+			if recv_def is not None and recv_def.kind is TypeKind.REF:
+				recv_val = self.lower_expr(expr.receiver)
+			else:
+				place_expr = None
+				if hasattr(H, "HPlaceExpr") and isinstance(expr.receiver, getattr(H, "HPlaceExpr")):
+					place_expr = expr.receiver
+				elif isinstance(expr.receiver, H.HVar):
+					place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
+				if place_expr is None:
+					raise NotImplementedError(
+						"Arc intrinsic auto-borrow requires an lvalue receiver in v1"
+					)
+				recv_val, _inner = self._lower_addr_of_place(place_expr, is_mut=is_mut_borrow)
+		arg_vals: list[M.ValueId] = [recv_val]
+		for idx, arg in enumerate(expr.args):
+			param_ty = helper_param_types[idx + 1] if idx + 1 < len(helper_param_types) else None
+			arg_vals.append(self._lower_call_arg(arg, param_ty))
+		ret_ty = helper_sig.return_type_id
+		# All Arc intrinsic helpers are `nothrow`.  The helper's own
+		# `declared_can_throw` is False; asserting here would mask an
+		# unrelated bug, so trust the sig.
+		if self._type_table.is_void(ret_ty):
+			self.b.emit(M.Call(dest=None, fn_id=helper_fn_id, args=arg_vals, can_throw=False))
+			return None
+		dest = self.b.new_temp()
+		self.b.emit(M.Call(dest=dest, fn_id=helper_fn_id, args=arg_vals, can_throw=False))
+		self._local_types[dest] = ret_ty
+		return dest
+
 	def _lower_method_call_with_info(self, expr: H.HMethodCall, info: CallInfo) -> tuple[M.ValueId | None, CallInfo]:
 		"""
 		Lower a method call to a plain function call.
@@ -7432,6 +7531,51 @@ class HIRToMIR:
 					if inner_def.kind is TypeKind.INTERFACE:
 						return self._lower_iface_call(expr.receiver, expr.args, expr.method_name, info), info
 			return self._lower_indirect_call(expr.receiver, expr.args, info), info
+		# Arc runtime boundary — concrete-T method-call redirect.
+		#
+		# `Arc<T>.clone` / `.get` / `::Destructible::destroy` are
+		# `@intrinsic` methods in stdlib; the checker rewrites the
+		# call target from DIRECT(intrinsic-method-fn_id) to
+		# INTRINSIC(ARC_CLONE|ARC_GET|ARC_DESTROY).  Here we route
+		# each kind to its private `_arc_*_impl<T>` helper
+		# (stdlib/std/concurrent/concurrent.drift).  The helper
+		# carries the concrete-T implementation that Stage 3 will
+		# either inline into the compiler lowering or keep narrowly
+		# scoped — see work/fat-arc-interface-views/phase1.md.
+		#
+		# ARC_AS_INTERFACE is intentionally NOT redirected here —
+		# its runtime lowering ships in Stage 3.  Stage 2 only gates
+		# it at compile time via `require T is I`; positive calls
+		# would still hit the assert below (acceptable since no
+		# stdlib or test exercises a positive as_interface call).
+		if info.target.kind is CallTargetKind.INTRINSIC:
+			_arc_intrinsic = info.target.intrinsic
+			_ARC_HELPER_KINDS = (
+				IntrinsicKind.ARC_CLONE,
+				IntrinsicKind.ARC_GET,
+				IntrinsicKind.ARC_DESTROY,
+			)
+			if _arc_intrinsic in _ARC_HELPER_KINDS:
+				# Lower as a free-function call to the per-callsite
+				# monomorphized helper.  We bypass the method-call
+				# self_mode path because the helper is a free
+				# function; its first parameter's type (Ref<Arc<T>>
+				# for clone/get, Arc<T> for destroy) is the source
+				# of truth for how we pass the receiver.
+				return self._lower_arc_intrinsic_call(expr, info, _arc_intrinsic), info
+			if _arc_intrinsic is IntrinsicKind.ARC_AS_INTERFACE:
+				# Stage 3 lands the fat-handle lowering for
+				# `Arc<T>.as_interface<I>()`.  Reaching MIR with a
+				# positive call (T implements I) in Stage 2 means the
+				# program would dispatch through a not-yet-implemented
+				# path.  The `require T is I` clause stops negative
+				# cases at typecheck; positive cases hit this
+				# diagnostic until Stage 3 is in.
+				raise AssertionError(
+					f"Arc.as_interface<I>() runtime lowering is not yet "
+					f"implemented (Stage 3); callsite="
+					f"{getattr(expr, 'callsite_id', None)}"
+				)
 		if info.target.kind is not CallTargetKind.DIRECT or not info.target.symbol:
 			raise AssertionError(
 				"method call missing direct CallTarget (typecheck/call-info bug): "

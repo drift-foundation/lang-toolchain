@@ -989,6 +989,28 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> list[Diagnostic]:
 	return diags
 
 
+# Arc runtime-boundary intrinsic kinds whose CallInfo may legitimately
+# carry a template-level signature (typevar params / return type) after
+# typecheck.  Each of these kinds routes the runtime call through a
+# `_arc_*_impl<T>` helper instantiated per call site; the helper's OWN
+# monomorphization satisfies the generic-survived invariant, not the
+# intrinsic call site itself.
+#
+# Narrowly scoped on purpose: every OTHER intrinsic kind is still
+# subject to the generic-survived check, so an accidental template-sig
+# leak on a non-Arc intrinsic (e.g. a `RAW_PTR_AT_REF` callsite that
+# forgot to substitute) still surfaces `E_INTERNAL_GENERIC_CALLINFO`.
+# Do NOT generalize this exemption to `CallTargetKind.INTRINSIC is X`
+# — the invariant is "Arc bridge intrinsics may carry template sigs,"
+# not "all intrinsics may carry template sigs."
+_ARC_BRIDGE_INTRINSIC_KINDS: frozenset["IntrinsicKind"] = frozenset({
+	IntrinsicKind.ARC_CLONE,
+	IntrinsicKind.ARC_GET,
+	IntrinsicKind.ARC_DESTROY,
+	IntrinsicKind.ARC_AS_INTERFACE,
+})
+
+
 def _typevar_callinfo_diags(
 	typed_fn: "TypedFn",
 	type_table: "TypeTable | None",
@@ -1013,6 +1035,11 @@ def _typevar_callinfo_diags(
 	diags: list[Diagnostic] = []
 	for csid, info in call_info.items():
 		if not isinstance(csid, int):
+			continue
+		if (
+			info.target.kind is CallTargetKind.INTRINSIC
+			and info.target.intrinsic in _ARC_BRIDGE_INTRINSIC_KINDS
+		):
 			continue
 		if any(_has_typevar(tid) for tid in info.sig.param_types) or _has_typevar(info.sig.user_ret_type):
 			node_id = callsite_to_node.get(csid)
@@ -3813,6 +3840,32 @@ def compile_stubbed_funcs(
 						break
 				if method_fn_id is None:
 					continue
+				# Arc runtime boundary: when the destroy method is
+				# `@intrinsic` (e.g. Arc<T>::destroy with
+				# intrinsic_kind = ARC_DESTROY), redirect the
+				# monomorphization target to the matching
+				# `_arc_destroy_impl<T>` helper.  Without this the
+				# Destructible scan would queue the bodyless template
+				# and surface an undefined symbol at link time.
+				# Concrete-T destruction behavior is carried by the
+				# helper body; Stage 3 replaces this redirect with a
+				# direct compiler-emitted ARC_DESTROY lowering.
+				method_sig = signatures_by_id.get(method_fn_id) if signatures_by_id is not None else None
+				if method_sig is not None and bool(getattr(method_sig, "is_intrinsic", False)):
+					_helper_name = None
+					_intrinsic_kind = getattr(method_sig, "intrinsic_kind", None)
+					if _intrinsic_kind is not None and getattr(_intrinsic_kind, "value", None) == "arc_destroy":
+						_helper_name = "_arc_destroy_impl"
+					if _helper_name is None:
+						continue
+					helper_fn_id: FunctionId | None = None
+					for fid, sig in signatures_by_id.items():
+						if fid.module == "std.concurrent" and fid.name == _helper_name and not bool(getattr(sig, "is_method", False)):
+							helper_fn_id = fid
+							break
+					if helper_fn_id is None:
+						continue
+					method_fn_id = helper_fn_id
 				if shared_type_table.has_typevar(target_type_id):
 					base_id: TypeId | None = None
 					inst = shared_type_table.get_struct_instance(target_type_id)
@@ -3836,24 +3889,119 @@ def compile_stubbed_funcs(
 	if destructor_fns and shared_type_table is not None:
 		shared_type_table.destructor_fns = destructor_fns
 
-	def _queue_instantiations(typed_fn: object) -> None:
+	# Arc runtime boundary — shared intrinsic-template predicate.
+	# Used in `_queue_instantiations` and `_rewrite_call_targets`
+	# below to skip templates whose sig is `@intrinsic` (no body
+	# to monomorphize; call sites route through
+	# `_lower_method_call_with_info`'s helper-redirect for
+	# concrete T).
+	def _template_fn_id_for_key(template_key: "FunctionKey") -> "FunctionId | None":
+		if signatures_by_id is None:
+			return None
+		for _fid, _sig in signatures_by_id.items():
+			if _fid.module != template_key.module_path:
+				continue
+			if _fid.name != template_key.name:
+				continue
+			return _fid
+		return None
+
+	def _template_is_intrinsic_generic(template_key: "FunctionKey") -> bool:
+		_fid = _template_fn_id_for_key(template_key)
+		if _fid is None or signatures_by_id is None:
+			return False
+		_sig = signatures_by_id.get(_fid)
+		return _sig is not None and bool(getattr(_sig, "is_intrinsic", False))
+
+	# Arc runtime boundary (Stage 2) — helper-template mapping.
+	# Each `@intrinsic` Arc method (ARC_CLONE / ARC_GET / ARC_DESTROY)
+	# has a private generic helper carrying the concrete-T body.  When
+	# an intrinsic-template call site is instantiated with a concrete
+	# T, we redirect the instantiation to the helper template; the
+	# bodyless intrinsic template itself is never monomorphized.
+	_ARC_HELPER_NAME_BY_KIND_VALUE: dict[str, str] = {
+		"arc_clone": "_arc_clone_impl",
+		"arc_get": "_arc_get_impl",
+		"arc_destroy": "_arc_destroy_impl",
+	}
+
+	def _arc_helper_template_key_for_intrinsic(template_key: "FunctionKey") -> "FunctionKey | None":
+		_fid = _template_fn_id_for_key(template_key)
+		if _fid is None or signatures_by_id is None:
+			return None
+		_sig = signatures_by_id.get(_fid)
+		if _sig is None or not bool(getattr(_sig, "is_intrinsic", False)):
+			return None
+		_kind = getattr(_sig, "intrinsic_kind", None)
+		_kind_val = getattr(_kind, "value", None) if _kind is not None else None
+		_helper_name = _ARC_HELPER_NAME_BY_KIND_VALUE.get(_kind_val) if _kind_val is not None else None
+		if _helper_name is None:
+			return None
+		for _helper_fid, _helper_key in function_keys_by_fn_id.items():
+			if _helper_fid.module != "std.concurrent":
+				continue
+			if _helper_fid.name != _helper_name:
+				continue
+			return _helper_key
+		return None
+
+	# Arc runtime boundary — call-site → helper-instantiation map.
+	# Populated below during `_queue_instantiations` and consumed by
+	# `hir_to_mir._lower_method_call_with_info`'s INTRINSIC path so
+	# the lowering knows which concrete `_arc_*_impl__inst__<T>` to
+	# call without having to re-derive T itself.
+	arc_helper_inst_fn_by_callsite: dict[tuple[FunctionId, int], FunctionId] = {}
+
+	def _queue_instantiations(caller_fn_id: "FunctionId", typed_fn: object) -> None:
 		inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
 		if not isinstance(inst_map, dict):
 			inst_map = {}
 		inst_map_by_node = getattr(typed_fn, "instantiations_by_node_id", None)
 		if not isinstance(inst_map_by_node, dict):
 			inst_map_by_node = {}
-		for inst in list(inst_map.values()) + list(inst_map_by_node.values()):
+		# Callsite-keyed items route to the Arc helper map; node-keyed
+		# items (which include non-method sites without callsite_id)
+		# are only relevant to normal monomorphization.
+		for csid, inst in list(inst_map.items()):
 			type_args = tuple(getattr(inst, "type_args", ()) or ())
 			if not type_args:
 				continue
 			template_key = getattr(inst, "target_key", None)
 			if not isinstance(template_key, FunctionKey):
 				continue
+			if _template_is_intrinsic_generic(template_key):
+				# Arc runtime boundary: redirect to helper template.
+				# The bodyless intrinsic template itself is never
+				# monomorphized; the helper carries the concrete-T
+				# implementation.  Record the helper-inst fn_id so
+				# hir_to_mir can emit a direct call to it.
+				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
+				if _helper_key is not None:
+					_helper_handle = _request_instantiation(_helper_key, type_args)
+					if isinstance(csid, int):
+						arc_helper_inst_fn_by_callsite[(caller_fn_id, csid)] = _helper_handle.fn_id
+				continue
+			_request_instantiation(template_key, type_args)
+		for inst in list(inst_map_by_node.values()):
+			type_args = tuple(getattr(inst, "type_args", ()) or ())
+			if not type_args:
+				continue
+			template_key = getattr(inst, "target_key", None)
+			if not isinstance(template_key, FunctionKey):
+				continue
+			if _template_is_intrinsic_generic(template_key):
+				# Node-id path: also redirect (no callsite mapping to
+				# record — node-id records belong to non-method shapes
+				# which currently do not reach Arc intrinsics, but we
+				# still want the helper queued if one ever does).
+				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
+				if _helper_key is not None:
+					_request_instantiation(_helper_key, type_args)
+				continue
 			_request_instantiation(template_key, type_args)
 
 	for _fn_id, typed_fn in sorted(typed_fns_by_id.items(), key=lambda kv: function_symbol(kv[0])):
-		_queue_instantiations(typed_fn)
+		_queue_instantiations(_fn_id, typed_fn)
 
 	def _drain_instantiations() -> None:
 		while inst_queue:
@@ -4095,10 +4243,20 @@ def compile_stubbed_funcs(
 						type_diags.append(diag)
 						existing.add(key)
 			typed_fns_by_id[inst_fn_id] = inst_result.typed_fn
-			_queue_instantiations(inst_result.typed_fn)
+			_queue_instantiations(inst_fn_id, inst_result.typed_fn)
 			handle.status = "emitted"
 
 	_drain_instantiations()
+	# Arc runtime boundary — publish callsite → helper-instantiation map.
+	# `hir_to_mir._lower_method_call_with_info` reads
+	# `type_table.arc_helper_inst_fn_by_callsite` to lower
+	# `INTRINSIC(ARC_*)` call sites as direct calls to the appropriate
+	# monomorphized `_arc_*_impl__inst__<T>` helper.  The map is keyed
+	# by `(containing_fn_id, callsite_id)` so it survives template
+	# instantiation (each Arc<T> usage in a generic caller gets its
+	# own entry once the caller itself is monomorphized).
+	if shared_type_table is not None:
+		setattr(shared_type_table, "arc_helper_inst_fn_by_callsite", arc_helper_inst_fn_by_callsite)
 	def _rewrite_call_targets(typed_fn: object, block: H.HBlock) -> None:
 		call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
 		if not isinstance(call_info_map, dict):
@@ -4113,6 +4271,14 @@ def compile_stubbed_funcs(
 			template_key = getattr(inst, "target_key", None)
 			type_args = tuple(getattr(inst, "type_args", ()) or ())
 			if not isinstance(template_key, FunctionKey) or not type_args:
+				continue
+			# Arc runtime boundary: skip intrinsic templates — their
+			# call sites keep the `CallTarget.intrinsic(...)` target
+			# from method resolution, and `_lower_method_call_with_info`
+			# redirects to the `_arc_*_impl<T>` helper.  Forcing a
+			# Direct-target rewrite here would replace the intrinsic
+			# dispatch with a reference to a bodyless template.
+			if _template_is_intrinsic_generic(template_key):
 				continue
 			handle = inst_cache.get(_inst_key(template_key, type_args))
 			if handle is None:
@@ -4360,7 +4526,63 @@ def compile_stubbed_funcs(
 		typed_fn = typed_fns_by_id.get(fn_id)
 		call_info = getattr(typed_fn, "call_info_by_callsite_id", None) if typed_fn is not None else None
 		if isinstance(call_info, dict):
+			# Arc runtime boundary — post-pass normalization.
+			#
+			# Any DIRECT target pointing at an `@intrinsic` generic
+			# template (Arc.clone, Arc.get, Arc::Destructible::destroy,
+			# Arc.as_interface) gets rewritten to INTRINSIC here,
+			# regardless of which upstream writer produced it.
+			# Centralizes the invariant "intrinsic templates never
+			# appear as Direct call targets after typecheck" in a
+			# single pass so we don't have to patch every call-info
+			# writer.
+			for csid, info in list(call_info.items()):
+				if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
+					continue
+				_target_sig = signatures_by_id.get(info.target.symbol) if signatures_by_id is not None else None
+				if _target_sig is None or not bool(getattr(_target_sig, "is_intrinsic", False)):
+					continue
+				_intrinsic_kind = getattr(_target_sig, "intrinsic_kind", None)
+				if _intrinsic_kind is None:
+					continue
+				from lang.driftc.stage1.call_info import CallTarget as _CT, CallSig as _CS
+				# The DIRECT CallInfo came from a generic-template
+				# lookup; some writers default `can_throw=True` when
+				# `sig.declared_can_throw` wasn't threaded in.  For
+				# @intrinsic runtime-boundary methods
+				# (Arc.clone/get/destroy/as_interface), the target
+				# sig's `declared_can_throw` IS authoritative — all
+				# four are `nothrow`.  Re-derive here so the nothrow
+				# checker sees the correct `can_throw` when it walks
+				# the rewritten INTRINSIC call.
+				_declared = getattr(_target_sig, "declared_can_throw", None)
+				_can_throw = bool(info.sig.can_throw) if _declared is None else bool(_declared)
+				_sig = info.sig
+				if _can_throw != bool(info.sig.can_throw):
+					_sig = _CS(
+						param_types=info.sig.param_types,
+						user_ret_type=info.sig.user_ret_type,
+						can_throw=_can_throw,
+						includes_callee=info.sig.includes_callee,
+						declared_terminal_throws=info.sig.declared_terminal_throws,
+					)
+				call_info[csid] = CallInfo(
+					target=_CT.intrinsic(_intrinsic_kind),
+					sig=_sig,
+				)
 			for info in call_info.values():
+				# Arc bridge intrinsics intentionally carry the
+				# template-level sig (with typevar params/return);
+				# they lower via hir_to_mir's helper-redirect, not
+				# via monomorphization.  Every OTHER intrinsic kind
+				# must still pass the generic-survived check —
+				# narrowly scoped exemption, see
+				# `_typevar_callinfo_diags` at line ~1023.
+				if (
+					info.target.kind is CallTargetKind.INTRINSIC
+					and info.target.intrinsic in _ARC_BRIDGE_INTRINSIC_KINDS
+				):
+					continue
 				if any(_has_typevar(t) for t in info.sig.param_types) or _has_typevar(info.sig.user_ret_type):
 					type_diags.append(
 						Diagnostic(
