@@ -1257,35 +1257,118 @@ class TypeChecker:
 			resolved = resolve_opaque_type(alias_target, self.type_table, module_id=mod, type_params=None, allow_generic_base=True)
 			return _dealias_zero_param_type(resolved, _seen=seen | {alias_key})
 
-		def _is_structurally_copy(tid: TypeId, *, seen: set[TypeId]) -> bool:
+		# Collect the set of (module_id, name) pairs for types that have
+		# an explicit `implement Copy for T` in the current compilation.
+		# Struct fields whose type is a struct NOT in this set are
+		# non-Copy — even if their internal layout is raw-pointer-only
+		# (e.g. Arc wraps a RawBuffer of raw ptrs, but Arc itself is
+		# Destructible and must not be bit-copied).
+		_copy_declared: set[tuple[str | None, str]] = set()
+		for _impl in impls:
+			_tk = getattr(_impl, "trait_key", None)
+			if _tk is None:
+				continue
+			if getattr(_tk, "module", None) == "std.core" and getattr(_tk, "name", None) == "Copy":
+				_ttd = self.type_table.get(_impl.target_type_id)
+				_copy_declared.add((_ttd.module_id, _ttd.name))
+
+		# Compiler-known Copy types whose Copy semantics are not
+		# expressible by the structural prover (refcount-backed values
+		# behaving as O(1) bit-copyable at the source level).  These
+		# are the only types allowed to declare `implement Copy` without
+		# passing the field-level structural check.
+		_COMPILER_KNOWN_COPY_KINDS = {TypeKind.DIAGNOSTICVALUE}
+		_COMPILER_KNOWN_COPY_SCALARS = {"String"}
+
+		def _is_compiler_known_copy(tid: TypeId) -> bool:
 			td = self.type_table.get(tid)
+			if td.kind in _COMPILER_KNOWN_COPY_KINDS:
+				return True
+			if td.kind is TypeKind.SCALAR and td.name in _COMPILER_KNOWN_COPY_SCALARS:
+				return True
+			return False
+
+		def _is_structurally_copy(tid: TypeId, *, seen: set[TypeId], covered_tparams: frozenset[TypeParamId] = frozenset()) -> bool:
+			td = self.type_table.get(tid)
+			if _is_compiler_known_copy(tid):
+				return True
 			if td.kind is TypeKind.SCALAR:
 				return td.name != "String"
 			if td.kind in (TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION, TypeKind.VOID):
 				return True
-			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL, TypeKind.TYPEVAR):
+			if td.kind is TypeKind.TYPEVAR:
+				# A TYPEVAR T is treated as Copy only when the enclosing
+				# generic impl's `require T is Copy` clause covers it.
+				# This is the single gate that lets generic Copy impls
+				# pass the structural prover: no require clause → any T
+				# in a stored field flips this to non-Copy and rejects
+				# the impl, matching how concrete instantiations behave.
+				return td.type_param_id is not None and td.type_param_id in covered_tparams
+			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
+				return False
+			if td.kind is TypeKind.INTERFACE:
 				return False
 			if tid in seen:
 				return False
 			seen.add(tid)
 			try:
 				if td.kind is TypeKind.STRUCT:
+					# If this struct doesn't have its own Copy impl, it's
+					# non-Copy — don't look through its field layout.
+					if (td.module_id, td.name) not in _copy_declared:
+						return False
 					inst = self.type_table.get_struct_instance(tid)
 					if inst is None:
 						return False
-					return all(_is_structurally_copy(fty, seen=seen) for fty in inst.field_types)
+					return all(_is_structurally_copy(fty, seen=seen, covered_tparams=covered_tparams) for fty in inst.field_types)
 				if td.kind is TypeKind.VARIANT:
 					inst = self.type_table.get_variant_instance(tid)
 					if inst is None:
 						return False
 					for arm in inst.arms:
 						for fty in arm.field_types:
-							if not _is_structurally_copy(fty, seen=seen):
+							if not _is_structurally_copy(fty, seen=seen, covered_tparams=covered_tparams):
 								return False
 					return True
 				return False
 			finally:
 				seen.discard(tid)
+
+		_copy_validate_module_packages = getattr(self.type_table, "module_packages", None)
+		_copy_validate_default_package = getattr(self.type_table, "package_id", None)
+
+		def _collect_copy_covered_tparams(expr: object, *, default_module: str | None) -> frozenset[TypeParamId]:
+			# Walk conjunctive `require` facts to find `T is Copy` clauses
+			# whose trait resolves to std.core.Copy specifically.
+			# Name-only matching would let a shadowing local `trait Copy`
+			# in the impl's module satisfy a `require T is Copy` clause
+			# on a `core.Copy` impl — unsound.  Resolving via
+			# `trait_key_from_expr` anchors to the canonical trait key.
+			# Disjunctions and negations don't give us an unconditional
+			# Copy guarantee for any single subject, so ignore them.
+			covered: set[TypeParamId] = set()
+			def _walk(e: object) -> None:
+				if isinstance(e, parser_ast.TraitIs):
+					subj = e.subject
+					if not isinstance(subj, TypeParamId):
+						return
+					key = trait_key_from_expr(
+						e.trait,
+						default_module=default_module,
+						default_package=_copy_validate_default_package,
+						module_packages=_copy_validate_module_packages,
+					)
+					if key is None:
+						return
+					if getattr(key, "module", None) == "std.core" and getattr(key, "name", None) == "Copy":
+						covered.add(subj)
+					return
+				if isinstance(e, parser_ast.TraitAnd):
+					_walk(e.left)
+					_walk(e.right)
+			if expr is not None:
+				_walk(expr)
+			return frozenset(covered)
 
 		if trait_index is None:
 			return
@@ -1294,7 +1377,20 @@ class TypeChecker:
 			if trait_key is None:
 				continue
 			if getattr(trait_key, "module", None) == "std.core" and getattr(trait_key, "name", None) == "Copy":
-				if not str(getattr(impl, "def_module", "")).startswith(("std.", "lang.")) and not _is_structurally_copy(impl.target_type_id, seen=set()):
+				# Generic Copy impls (e.g. `implement<T> Copy for
+				# Optional<T> require T is Copy`) still go through the
+				# structural prover — the prover treats TYPEVARs
+				# covered by a `require T is Copy` clause as Copy, and
+				# rejects any stored-field TYPEVAR not so covered.
+				# Phantom generic structs (no stored T) pass with no
+				# require clause.  Structs with wrappers that don't
+				# propagate Copy-dep (RawPtr<T>, &T, fn ptrs) also
+				# pass without require clauses.
+				covered = _collect_copy_covered_tparams(
+					getattr(impl, "require_expr", None),
+					default_module=getattr(impl, "def_module", None),
+				)
+				if not _is_structurally_copy(impl.target_type_id, seen=set(), covered_tparams=covered):
 					diagnostics.append(
 						_tc_diag(
 							message="core.Copy impl target must be structurally Copy in v1",

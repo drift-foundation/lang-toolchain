@@ -1590,12 +1590,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			continue
 
 	recv_def = ctx.type_table.get(recv_ty)
-	if recv_def.kind is TypeKind.REF and recv_def.param_types:
-		inner = recv_def.param_types[0]
-		inner_def = ctx.type_table.get(inner)
-		if inner_def.kind is TypeKind.INTERFACE:
-			diagnostics.append(_tc_diag(message="interface method call requires a value receiver (remove '&')", severity="error", span=getattr(expr, "loc", Span())))
-			return MethodCallResult(ctx.unknown_ty, None)
+	# Borrowed interface receivers (&Interface, &mut Interface) are valid:
+	# the existing recv_nominal unwrap (a few lines below) routes them to
+	# the interface-dispatch branch.  HIR→MIR (`_lower_method_call_with_info`
+	# in stage2/hir_to_mir.py) recognises REF<INTERFACE> too and emits
+	# CallIface, which the LLVM `_lower_call_iface` lowering loads through.
 
 	recv_nominal = _unwrap_ref_type(recv_ty)
 	recv_nominal_def = ctx.type_table.get(recv_nominal)

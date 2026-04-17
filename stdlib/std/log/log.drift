@@ -27,6 +27,7 @@ export {
 	LogRecord,
 	LogContext,
 	ContextResolver,
+	NoContextResolver,
 	LoggerConfig,
 	LoggerConfigBuilder,
 	Logger,
@@ -220,40 +221,68 @@ pub struct LogContext {
 	attrs: containers.HashMap<String, DiagnosticValue>
 }
 
-/// Application-supplied function pointer consulted by the logger to
-/// resolve ambient context at emit time.
+/// Application-supplied service consulted by the logger to resolve
+/// ambient context at emit time.
 ///
-/// `ContextResolver` wraps a `nothrow` function pointer returning
-/// `Optional<LogContext>`.  When installed via
+/// `ContextResolver` is an interface with a single `nothrow` method
+/// `resolve(&self) -> Optional<LogContext>`.  When installed via
 /// `LoggerConfigBuilder.context_resolver`, calls to `Logger.info(ev)`
 /// / `Logger.info(ev, attrs)` (and the `debug` / `error`
-/// counterparts) consult it per emit; if it returns `Some(ctx)`,
-/// `ctx`'s attributes are merged into the record.  Calls that pass
-/// an explicit `&LogContext` skip the resolver.
+/// counterparts) dispatch through this interface per emit; if
+/// `resolve` returns `Some(ctx)`, `ctx`'s attributes are merged into
+/// the record.  Calls that pass an explicit `&LogContext` skip the
+/// resolver.
 ///
-/// `std.log` deliberately knows nothing about how the resolver
+/// `std.log` deliberately knows nothing about how a resolver
 /// discovers context — VT-local registry, request state,
-/// thread-local — it is all app policy inside the function body.
+/// thread-local — that is all app policy inside the implementation.
 ///
-/// **Note:** function pointers cannot capture state.  Per-Logger
-/// captures must be encoded into process- or thread-local state
-/// that the resolver looks up.
+/// The resolver is held inside an `conc.Arc` and the emit path
+/// borrows through the stored Arc on every call.  No retain/release
+/// happens per log event; the only Arc clones are at logger
+/// construction (`build`, `with_min_level`, `derive`) where one
+/// extra refcount is paid to share the resolver across the new
+/// runtime state.
 ///
 /// **See also:** `LoggerConfigBuilder.context_resolver`,
 /// `LogContext`, `Logger.info(ev)`.
-pub struct ContextResolver {
-	pub f: Fn() nothrow -> Optional<LogContext>
+pub interface ContextResolver {
+	fn resolve(self: &Self) nothrow -> Optional<LogContext>;
+}
+
+/// Default no-op resolver installed on every `LoggerConfig` until the
+/// caller swaps in their own via
+/// `LoggerConfigBuilder.context_resolver`.  Returns
+/// `Optional<LogContext>::None()` so bare `Logger.info(ev)` calls
+/// emit no contextual attributes.
+///
+/// Keeping a present-by-default resolver (rather than
+/// `Optional<Arc<ContextResolver>>`) avoids match-on-borrowed-Arc
+/// gymnastics in the emit hot path: the LLVM CallIface lowering
+/// always loads the fat pointer through the borrowed Arc and
+/// dispatches, regardless of whether a custom resolver was
+/// installed.  When this default is in effect the dispatch is one
+/// indirect call into a function that immediately returns `None` —
+/// negligible vs. the JSON-serialise + sink-write cost of a real log
+/// emit.
+pub struct NoContextResolver {
+}
+
+implement ContextResolver for NoContextResolver {
+	pub fn resolve(self: &NoContextResolver) nothrow -> Optional<LogContext> {
+		val _ = self;
+		return Optional<LogContext>::None();
+	}
 }
 
 /// Frozen logger configuration produced by `LoggerConfigBuilder.build`.
 ///
-/// Marked `Copy` so it can be reused across multiple `create_logger`
-/// calls.  All fields are public for inspection but configuration is
-/// expected to flow through the builder.
-///
-/// The optional `resolver` is consulted by `Logger.info` /
-/// `Logger.debug` / `Logger.error` when no explicit `&LogContext` is
-/// passed — see `LoggerConfigBuilder.context_resolver`.
+/// Move-only — pass directly into `create_logger` from the builder
+/// (`create_logger("name", b.build())`).  The `resolver` field is
+/// always set: a fresh `LoggerConfigBuilder` seeds it with
+/// `NoContextResolver` (returns `None` on every `resolve()`); call
+/// `LoggerConfigBuilder.context_resolver` to swap in your own
+/// implementation.
 ///
 /// **See also:** `LoggerConfigBuilder`, `create_logger`,
 /// `ContextResolver`.
@@ -265,7 +294,7 @@ pub struct LoggerConfig {
 	pub enqueue_timeout: conc.Duration,
 	pub backpressure_policy: BackpressurePolicy,
 	pub formatter: FormatterKind,
-	pub resolver: Optional<ContextResolver>
+	pub resolver: conc.Arc<ContextResolver>
 }
 
 /// Mutable builder for `LoggerConfig`.
@@ -287,7 +316,7 @@ pub struct LoggerConfigBuilder {
 	enqueue_timeout: conc.Duration,
 	backpressure_policy: BackpressurePolicy,
 	formatter: FormatterKind,
-	resolver: Optional<ContextResolver>
+	resolver: conc.Arc<ContextResolver>
 }
 
 /// Live logger handle.
@@ -320,7 +349,7 @@ struct LoggerRuntimeState {
 	stderr_cap: Optional<io.ProcessStderrCapability>,
 	queue: sync.MpscQueue<Byte>,
 	drain_lock: sync.AtomicBool,
-	resolver: Optional<ContextResolver>
+	resolver: conc.Arc<ContextResolver>
 }
 
 struct LogEnvelope {
@@ -354,12 +383,6 @@ implement core.Copy for BackpressurePolicy {
 }
 
 implement core.Copy for FormatterKind {
-}
-
-implement core.Copy for LoggerConfig {
-}
-
-implement core.Copy for ContextResolver {
 }
 
 implement core.Copy for StdErrSink {
@@ -399,6 +422,7 @@ pub fn stderr_sink() nothrow -> StdErrSink {
 ///
 /// **Example:** `examples/logging/basic_events.drift`.
 pub fn config_builder() nothrow -> LoggerConfigBuilder {
+	var noop: ContextResolver = NoContextResolver();
 	return LoggerConfigBuilder(
 		sink = stderr_sink(),
 		min_level = Level::Info(),
@@ -407,7 +431,7 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 		enqueue_timeout = conc.Duration(millis = 1000),
 		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
 		formatter = FormatterKind::JsonIso8601(),
-		resolver = Optional<ContextResolver>::None()
+		resolver = conc.arc<type ContextResolver>(move noop)
 	);
 }
 
@@ -522,25 +546,27 @@ implement LoggerConfigBuilder {
 	/// Installs an ambient context resolver consulted at emit time
 	/// when a logging call passes no explicit `&LogContext`.
 	///
-	/// `f` is a `nothrow` function pointer returning
-	/// `Optional<LogContext>`.  When set, `Logger.info(ev)` /
-	/// `Logger.info(ev, attrs)` (and the `debug` / `error`
-	/// counterparts) call `f` per emit; if it returns `Some(ctx)`,
-	/// the returned context's attributes are merged into the record.
-	/// Calls that pass an explicit `&LogContext` suppress the
-	/// resolver — see `Logger.info(ev, ctx)`.
+	/// `r` is any value implementing the `ContextResolver` interface.
+	/// When set, `Logger.info(ev)` / `Logger.info(ev, attrs)` (and
+	/// the `debug` / `error` counterparts) call `r.resolve()` per
+	/// emit; if it returns `Some(ctx)`, the returned context's
+	/// attributes are merged into the record.  Calls that pass an
+	/// explicit `&LogContext` suppress the resolver — see
+	/// `Logger.info(ev, ctx)`.
 	///
-	/// `std.log` deliberately knows nothing about how `f` discovers
-	/// context: VT-local registry, request state, thread-local — it
-	/// is all app policy inside `f`.
+	/// `std.log` deliberately knows nothing about how the resolver
+	/// discovers context: VT-local registry, request state,
+	/// thread-local — it is all app policy inside the implementation.
 	///
 	/// **Parameters:**
-	/// - `f` — `nothrow` function pointer returning
-	///   `Optional<LogContext>`.  Function pointers cannot capture
-	///   state; encode per-Logger context via process- or
-	///   thread-local state that `f` reads.
-	pub fn context_resolver(self: &mut LoggerConfigBuilder, f: Fn() nothrow -> Optional<LogContext>) nothrow -> &mut LoggerConfigBuilder {
-		self.resolver = Optional<ContextResolver>::Some(ContextResolver(f = f));
+	/// - `r` — any value implementing the `ContextResolver`
+	///   interface.  The value is moved into a fresh
+	///   `conc.Arc<ContextResolver>`; sub-loggers and re-builds clone
+	///   the Arc (one atomic refcount each).  The per-emit hot path
+	///   borrows through the stored Arc and dispatches `resolve()`
+	///   without touching the refcount.
+	pub fn context_resolver(self: &mut LoggerConfigBuilder, var r: ContextResolver) nothrow -> &mut LoggerConfigBuilder {
+		self.resolver = conc.arc<type ContextResolver>(move r);
 		return self;
 	}
 
@@ -555,7 +581,7 @@ implement LoggerConfigBuilder {
 			enqueue_timeout = self.enqueue_timeout,
 			backpressure_policy = self.backpressure_policy,
 			formatter = self.formatter,
-			resolver = self.resolver
+			resolver = self.resolver.clone()
 		);
 	}
 }
@@ -645,7 +671,7 @@ fn _runtime_state_from_cfg(cfg: &LoggerConfig, stderr_cap: Optional<io.ProcessSt
 		stderr_cap = stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(cfg.queue_capacity),
 		drain_lock = sync.atomic_bool(false),
-		resolver = cfg.resolver
+		resolver = cfg.resolver.clone()
 	);
 }
 
@@ -659,7 +685,7 @@ fn _clone_runtime_state(st: &LoggerRuntimeState, min_level: Level) nothrow -> Lo
 		stderr_cap = st.stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(st.queue_capacity),
 		drain_lock = sync.atomic_bool(false),
-		resolver = st.resolver
+		resolver = st.resolver.clone()
 	);
 }
 
@@ -831,15 +857,7 @@ fn _enqueue_with_policy(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow -
 }
 
 fn _resolve_ctx_from_state(st: &LoggerRuntimeState) nothrow -> Optional<LogContext> {
-	match st.resolver {
-		Some(cr) => {
-			val fp = cr.f;
-			return fp();
-		},
-		None => {
-			return Optional<LogContext>::None();
-		}
-	}
+	return st.resolver.get().resolve();
 }
 
 fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.HashMap<String, V>) nothrow -> Bool require V is Debuggable {

@@ -256,27 +256,36 @@ builder once. Every bare `info(ev)` / `info(ev, attrs)` call (and the
 merges the returned context into the record. No app-side wrapper, no
 per-call `match current_context()` block.
 
+A resolver is any value implementing the `log.ContextResolver` interface —
+typically an app struct that holds whatever lookup state it needs:
+
 ```drift
 import std.log as log;
 import std.runtime as rt;
 
-// App-supplied free function. Looks up VT-local request state and
-// builds a fresh LogContext (or None when no request is in scope).
-fn current_context() nothrow -> Optional<log.LogContext> {
-    val reg = rt.thread_registry();
-    match rt.get<type RequestState>(reg) {
-        Some(st) => {
-            var ctx = log.log_context();
-            ctx.put("request_id", st.request_id.clone());
-            return Optional<log.LogContext>::Some(move ctx);
-        },
-        None => { return Optional<log.LogContext>::None(); }
+// App-defined resolver service.  Holds whatever state it needs to
+// discover the current request's context (here, a thread-registry tag).
+pub struct AppResolver {
+    pub registry_tag: Uint64
+}
+
+implement log.ContextResolver for AppResolver {
+    pub fn resolve(self: &AppResolver) nothrow -> Optional<log.LogContext> {
+        val reg = rt.thread_registry();
+        match rt.get<type RequestState>(reg) {
+            Some(st) => {
+                var ctx = log.log_context();
+                ctx.put("request_id", st.request_id.clone());
+                return Optional<log.LogContext>::Some(move ctx);
+            },
+            None => { return Optional<log.LogContext>::None(); }
+        }
     }
 }
 
 fn install_logger() nothrow -> log.Logger {
     var b = log.config_builder();
-    b.context_resolver(current_context);
+    b.context_resolver(AppResolver(registry_tag = 0));
     return log.create_logger("svc", b.build());
 }
 ```
@@ -295,11 +304,12 @@ The rule: passing an explicit `&LogContext` (even an empty one) suppresses
 the resolver. Use `&log.log_context()` when an event genuinely should
 carry no contextual attrs.
 
-`context_resolver` takes a function pointer (`Fn() nothrow -> Optional<log.LogContext>`),
-not a closure — so per-Logger captures live in process- or thread-local
-state that the function reads, not in the closure environment. The
-typical bookkeeper / web-handler pattern (VT-context lookup) fits
-this constraint naturally.
+`context_resolver` takes any value implementing `log.ContextResolver` and
+wraps it in `conc.Arc<log.ContextResolver>` so sub-loggers (`derive`,
+`with_min_level`) can share the same resolver service cheaply (one
+atomic refcount per sub-logger creation, never per emit). Per-emit
+dispatch is a borrowed `&ContextResolver` vtable call — no Arc
+retain/release on the hot path.
 
 ## Graceful shutdown on SIGINT/SIGTERM (`std.concurrent::await_signal`)
 

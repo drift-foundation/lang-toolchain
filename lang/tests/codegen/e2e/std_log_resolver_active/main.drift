@@ -2,17 +2,27 @@ module m;
 
 import std.log as log;
 
-fn _resolver() nothrow -> Optional<log.LogContext> {
-	var ctx = log.log_context();
-	ctx.put("user", "u-ambient");
-	ctx.put("req", "r-ambient");
-	return Optional<log.LogContext>::Some(move ctx);
+// A stateful resolver: holds the constants used to populate context.
+// Demonstrates that resolvers may carry their own state (impossible
+// with the prior function-pointer-only API).
+pub struct StdResolver {
+	pub user_tag: String,
+	pub req_tag: String
+}
+
+implement log.ContextResolver for StdResolver {
+	pub fn resolve(self: &StdResolver) nothrow -> Optional<log.LogContext> {
+		var ctx = log.log_context();
+		ctx.put("user", self.user_tag.clone());
+		ctx.put("req", self.req_tag.clone());
+		return Optional<log.LogContext>::Some(move ctx);
+	}
 }
 
 fn run() -> Int {
 	var b = log.config_builder();
 	b.min_level(log.Level::Debug());
-	b.context_resolver(_resolver);
+	b.context_resolver(StdResolver(user_tag = "u-ambient", req_tag = "r-ambient"));
 	val main = log.create_logger("svc", b.build());
 
 	// Bare info: ambient ctx merged.

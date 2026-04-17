@@ -7310,7 +7310,15 @@ class HIRToMIR:
 		iface_ty = self._infer_expr_type(iface_expr)
 		if iface_ty is None:
 			raise AssertionError("interface call missing receiver type (checker bug)")
-		if self._type_table.get(iface_ty).kind is not TypeKind.INTERFACE:
+		# Borrowed interface receivers (&Interface, &mut Interface): unwrap
+		# to the inner INTERFACE for vtable / interface-instance lookup.
+		# The lowered iface_val is a pointer to the fat pointer; LLVM
+		# `_lower_call_iface` loads through it on the way to dispatch.
+		iface_ty_def = self._type_table.get(iface_ty)
+		if iface_ty_def.kind is TypeKind.REF and iface_ty_def.param_types:
+			iface_ty = iface_ty_def.param_types[0]
+			iface_ty_def = self._type_table.get(iface_ty)
+		if iface_ty_def.kind is not TypeKind.INTERFACE:
 			raise AssertionError("interface call expects interface receiver (checker bug)")
 		iface_inst = self._type_table.get_interface_instance(iface_ty)
 		iface_base = iface_inst.base_id if iface_inst is not None else iface_ty
@@ -7388,8 +7396,20 @@ class HIRToMIR:
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None and self._expr_types and getattr(expr.receiver, "node_id", None) is not None:
 				recv_ty = self._expr_types.get(expr.receiver.node_id)
-			if recv_ty is not None and self._type_table.get(recv_ty).kind is TypeKind.INTERFACE:
-				return self._lower_iface_call(expr.receiver, expr.args, expr.method_name, info), info
+			if recv_ty is not None:
+				recv_def = self._type_table.get(recv_ty)
+				if recv_def.kind is TypeKind.INTERFACE:
+					return self._lower_iface_call(expr.receiver, expr.args, expr.method_name, info), info
+				# Borrowed interface receiver (&Interface, &mut Interface):
+				# dispatch through the vtable of the inner interface; the
+				# CallIface lowering at lang/codegen/llvm/llvm_codegen.py
+				# (_lower_call_iface) detects the pointer-to-fat-pointer
+				# argument and loads the fat pointer through it before the
+				# vtable lookup.  No retain/release needed.
+				if recv_def.kind is TypeKind.REF and recv_def.param_types:
+					inner_def = self._type_table.get(recv_def.param_types[0])
+					if inner_def.kind is TypeKind.INTERFACE:
+						return self._lower_iface_call(expr.receiver, expr.args, expr.method_name, info), info
 			return self._lower_indirect_call(expr.receiver, expr.args, info), info
 		if info.target.kind is not CallTargetKind.DIRECT or not info.target.symbol:
 			raise AssertionError(

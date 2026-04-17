@@ -62,13 +62,20 @@ fn main() nothrow -> Int { return 0; }
 
 
 def test_copy_impl_on_noncopy_field_struct_is_rejected(tmp_path: Path) -> None:
+	# `Array<T>` is non-Copy (owning, heap-backed, not in the compiler-
+	# known-Copy allowlist and without an `implement Copy` declaration),
+	# so a struct that stores one cannot itself be Copy.  String used
+	# to serve as the non-Copy sentinel here but is now deliberately
+	# allowlisted as a compiler-known Copy type (refcount-backed
+	# immutable view, bit-copyable at the source level) — see
+	# `_COMPILER_KNOWN_COPY_SCALARS` in `type_checker.py`.
 	diagnostics = _compile(
 		tmp_path,
 		"""
 module main;
 import std.core as core;
 
-struct BadCopy { v: String }
+struct BadCopy { v: Array<Int> }
 
 implement core.Copy for BadCopy {
 }
