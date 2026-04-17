@@ -246,6 +246,13 @@ INTRINSIC_ARITY_TABLE: dict[IntrinsicKind, IntrinsicSpec] = {
 	IntrinsicKind.MAYBE_ASSUME_INIT_REF: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", label="maybe_assume_init_ref"),
 	IntrinsicKind.MAYBE_ASSUME_INIT_MUT: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", label="maybe_assume_init_mut"),
 	IntrinsicKind.MAYBE_ASSUME_INIT_READ: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_MAYBE_ASSUME_INIT", label="maybe_assume_init_read"),
+	# Arc runtime boundary — all four methods are called with no
+	# explicit args (receiver is implicit self).  See the Arc runtime
+	# boundary comment in stage1/call_info.py.
+	IntrinsicKind.ARC_CLONE: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_ARC", label="Arc.clone"),
+	IntrinsicKind.ARC_GET: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_ARC", label="Arc.get"),
+	IntrinsicKind.ARC_DESTROY: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_ARC", label="Arc.destroy"),
+	IntrinsicKind.ARC_AS_INTERFACE: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_ARC", label="Arc.as_interface"),
 }
 
 

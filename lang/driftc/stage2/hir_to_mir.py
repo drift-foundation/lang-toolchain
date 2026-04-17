@@ -7376,6 +7376,27 @@ class HIRToMIR:
 		self._local_types[dest] = info.sig.user_ret_type
 		return dest
 
+	def _find_free_fn_id(self, module_name: str, fn_name: str) -> "FunctionId | None":
+		"""Locate a free function's FunctionId by module + name.
+
+		Used by the Arc runtime boundary in
+		`_lower_method_call_with_info` to resolve the `_arc_*_impl<T>`
+		helpers the Stage 2 intrinsic redirect points at.  Linear scan
+		over the signatures table; the helpers are stable named
+		symbols so this runs at most once per intrinsic-method call
+		site and the result is not cached — if that becomes a
+		bottleneck, promote to a lazy-built name index.
+		"""
+		for fn_id, sig in self._signatures_by_id.items():
+			if fn_id.module != module_name:
+				continue
+			if fn_id.name != fn_name:
+				continue
+			if bool(getattr(sig, "is_method", False)):
+				continue
+			return fn_id
+		return None
+
 	def _lower_method_call_with_info(self, expr: H.HMethodCall, info: CallInfo) -> tuple[M.ValueId | None, CallInfo]:
 		"""
 		Lower a method call to a plain function call.

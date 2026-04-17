@@ -7643,6 +7643,17 @@ class TypeChecker:
 							),
 							method_res.resolution,
 						)
+				# Arc runtime boundary (Stage 2) — if the resolved
+				# method is a compiler-known intrinsic (sig.is_intrinsic
+				# with sig.intrinsic_kind set — e.g. Arc.clone /
+				# Arc.get / Arc::Destructible::destroy /
+				# Arc.as_interface), rewrite the DIRECT target to an
+				# INTRINSIC target so `_lower_method_call_with_info`
+				# can redirect to the appropriate Stage 2 helper
+				# (`_arc_*_impl<T>`) or Stage 3 fat-handle lowering.
+				# Without this, the call would reference the bodyless
+				# intrinsic stub and produce an undefined-symbol link
+				# error.
 				if method_res.call_info is not None:
 					if method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 						decl_self_mode = getattr(method_res.resolution.decl, "self_mode", None)

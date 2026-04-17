@@ -463,7 +463,15 @@ implement<T> Arc<T> {
 	/// Atomically increments the reference count.  Cheap — no heap
 	/// allocation, no value copy.
 	///
-	/// **See also:** `Arc.get`, `arc`.
+	/// Tagged as an Arc runtime-boundary intrinsic at the compiler
+	/// level (`sig.intrinsic_kind = ARC_CLONE`) so Stage 3 can
+	/// branch on the receiver's T-kind for interface-T fat-handle
+	/// specialization.  The Drift body below remains the sole
+	/// concrete-T implementation; Stage 3 will shift to an
+	/// `@intrinsic` declaration once the interface-T lowering and
+	/// the coordinated monomorphization-path changes land.
+	///
+	/// **See also:** `Arc.get`, `arc`, spec § 6.16.
 	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
 		unsafe {
 			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
@@ -475,6 +483,8 @@ implement<T> Arc<T> {
 	}
 
 	/// Returns a shared reference to the contained value.
+	///
+	/// Tagged as an Arc runtime-boundary intrinsic; see `Arc.clone`.
 	///
 	/// **See also:** `Arc.get_mut`.
 	pub fn get(self: &Arc<T>) nothrow -> &T {
@@ -529,6 +539,9 @@ implement<T> core.BorrowMut<T> for Arc<T> {
 }
 
 implement<T> core.Destructible for Arc<T> {
+	/// Last-drop of `Arc<T>`.  Tagged as an Arc runtime-boundary
+	/// intrinsic at the compiler level (`sig.intrinsic_kind =
+	/// ARC_DESTROY`); see `Arc.clone`.
 	pub fn destroy(var self: Arc<T>) nothrow -> Void {
 		unsafe {
 			// Moved-from Arc values are represented as zero/raw-null buffers.
@@ -544,20 +557,13 @@ implement<T> core.Destructible for Arc<T> {
 			prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
 		}
 		if prev == 1 {
-			// Route last-drop through the stored erased drop_thunk.  For
-			// Arc<T> we still have T at compile time and could drop the
-			// box directly, but going through the thunk (a) validates the
-			// mechanism before Phase 2 Arc<Interface> destruction depends
-			// on it, and (b) keeps all Arc destruction on a single code
-			// path regardless of view kind.
+			// Route last-drop through the stored erased drop_thunk.
 			unsafe {
 				// Acquire barrier pairs with prior Release decrements before final destroy.
 				val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
 				val _ = atomic.atomic_load_int(&slot.header.strong, 1);
 				val thunk = slot.header.drop_thunk;
 				val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-				// slot becomes dangling after thunk() deallocates; do
-				// not touch it again.
 				thunk(ctrl_ptr);
 			}
 		}

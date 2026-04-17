@@ -271,22 +271,96 @@ Strictly ordered because later steps depend on earlier:
 3. **Solver extension**: `require T is I` for interface `I`.
    Regression-first (separate driver test pinning Dog-accepted /
    Cat-rejected). Solver change. Extension landed before any Arc-view
-   work depends on it.
-4. Type system specialization: `Arc<T>` struct layout emits fat shape
-   `{ctrl, data, vtable}` when T is interface.
-5. LLVM codegen for the fat-Arc case: clone, get, destroy.
-6. `Arc<T>.as_interface<I>()` method + intrinsic: checker + HIR→MIR +
-   LLVM lowering. Reject `arc<T>` when T is interface.
-7. Update std.log `context_resolver` to take `conc.Arc<ContextResolver>`.
-8. ABI bump 9→10 + version bump.
-9. Regressions (test_fat_arc_interface_views.py — multi-face dispatch,
-   mutation visibility, drop-order, destructor-once, refcount, and
-   structural-IR pin against alloc-in-arc_as).
-10. Confirm existing std.log regressions pass against the new shape.
-11. Update docs (lang-spec 6.16 + effective-drift chapter) from the
-    current branch-local two-type-arg draft to the method-form API and
-    the interface-aware `require` semantics.
-12. history.md entry.
+   work depends on it. **Done** — covers local, imported, method-
+   level, free-fn-level, and struct-level type params on the trait
+   side of `is`; cross-module post-merge reclassification; generic/
+   conditional-impl deferral with dedicated refutation reasons.
+4. **Stage 1 (checker plumbing only, no runtime).** IntrinsicKind
+   extended with `ARC_CLONE`, `ARC_GET`, `ARC_DESTROY`,
+   `ARC_AS_INTERFACE`; `@intrinsic` accepted on implement-block
+   methods; `emit_interface_view_fields` helper skeleton;
+   `as_interface<I>() require T is I` declared in stdlib; negative-
+   case test landed. **Done.**
+5. **Stage 2 PREP (landed).** IntrinsicKind arity table entries;
+   parser tags Arc intrinsic methods with `sig.intrinsic_kind` at
+   decl construction; `_find_free_fn_id` helper available; method-
+   resolution rewrite infrastructure explored but not operational
+   (signature-level tagging is metadata only — concrete Arc still
+   runs through the Drift bodies).
+
+   **Stage 2 FINISH (open — Option A work items):**
+   1. Skip queuing/emission for @intrinsic generic methods in
+      `driftc.py::_queue_instantiations` and the Destructible
+      generic-impl scan (`driftc.py:3824-3832`). Both currently
+      queue by template fn_id regardless of is_intrinsic; both
+      need to bail when the template sig is intrinsic.
+   2. Pick one canonical method-resolution site for the intrinsic
+      target rewrite. `type_checker.py:7646+` and `call_resolver.py`
+      share a downstream `record_call_info`. If both sites reach
+      that path, rewrite at the common downstream; if structurally
+      distinct, assert they agree.
+   3. Remove `Arc.clone` / `Arc.get` / `Destructible::destroy`
+      bodies in stdlib. Mark `@intrinsic`. Move bodies to private
+      `_arc_clone_impl<T>` / `_arc_get_impl<T>` /
+      `_arc_destroy_impl<T>` helpers declared in the same module.
+   4. Concrete-T MIR lowering for ARC_CLONE / ARC_GET / ARC_DESTROY
+      in `_lower_method_call_with_info`: redirect to the private
+      helpers via the existing `_find_free_fn_id`.
+   5. ARC_AS_INTERFACE stays declared + require-gated; no MIR
+      lowering yet (positive calls still fail — fine until
+      Stage 3). Stage 1 negative test continues to pin.
+   6. **Stage 2 gate**: 35 tests pass + new focused concrete-Arc
+      tests (arc + clone + get dispatch, Arc<Mutex<T>> pattern,
+      destructor-once via scope exit). Review pause.
+
+6. **Stage 3.** Type system specialization: `Arc<T>` struct layout
+   emits fat shape `{ctrl, data, vtable}` when T is interface (wire
+   `is_arc_interface_view` → `ensure_struct_instantiated` — predicate
+   already exists dormant). LLVM codegen for the fat-Arc case:
+   clone, get, destroy, as_interface (the last via
+   `_emit_interface_view_fields` + ctrl_ptr attach). Reject
+   `conc.arc<T>(value)` when T is interface. ABI bump 9→10 +
+   version bump IN THIS STAGE (representation now physically real).
+7. Update std.log `context_resolver` to take
+   `conc.Arc<ContextResolver>` directly.
+8. Regressions (`test_fat_arc_interface_views.py` — multi-face
+   dispatch, mutation visibility, drop-order, destructor-once,
+   refcount, structural-IR pin against alloc-in-arc_as).
+9. Confirm existing std.log regressions pass against the new shape.
+10. Update docs (lang-spec § 6.16 + effective-drift chapter) from the
+    current branch-local draft to the method-form API and the
+    interface-aware `require` semantics.  Docs already use the
+    method-form API spelling; the "draft / representation-not-live"
+    caveat drops at Stage 3.
+11. history.md entry.
+
+## Current branch checkpoint (explicit)
+
+As of this checkpoint, the following are **operational**:
+
+- Solver: `require T is I` for interface I works uniformly across
+  local + imported + method + free-fn + struct requires.
+- Parser: `@intrinsic` accepted on implement-block methods.
+- Stdlib: `as_interface<I>() require T is I` declared on Arc<T>;
+  negative case (T does not implement I) rejected at compile time.
+- Type table: `is_arc_interface_view` predicate + fat-layout
+  helper (dormant).
+
+The following are **prep only, documented as such in source**:
+
+- Parser tags Arc.clone / .get / Destructible::destroy with
+  `sig.intrinsic_kind`.  Signature-level metadata **only**; the
+  operational path is still the Drift method body.  This is
+  intentionally documented in each method's docstring in
+  `stdlib/std/concurrent/concurrent.drift`.
+
+The following are **NOT yet real**:
+
+- Arc.clone/get/destroy as `@intrinsic` bodyless methods with
+  compiler-provided concrete-T lowering.
+- Arc<Interface> fat layout.
+- ARC_AS_INTERFACE positive lowering.
+- ABI bump (still 9).
 
 ## Non-obvious risks noted up front
 

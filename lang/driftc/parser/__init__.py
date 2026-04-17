@@ -18,6 +18,7 @@ from . import parser as _parser
 from . import ast as parser_ast
 from lang.driftc.stage0 import ast as s0
 from lang.driftc.stage1 import AstToHIR
+from lang.driftc.stage1.call_info import IntrinsicKind
 from lang.driftc import stage1 as H
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.diagnostics import Diagnostic
@@ -949,6 +950,7 @@ class _FrontendDecl:
 		self.is_extern = False
 		self.is_extern_c = False
 		self.is_intrinsic = False
+		self.intrinsic_kind: IntrinsicKind | None = None
 		self.is_method = is_method
 		self.self_mode = self_mode
 		self.impl_target = impl_target
@@ -4746,6 +4748,30 @@ def _lower_parsed_program_to_hir(
 			# Arc / std.concurrent would be treated as bodied functions
 			# and trip the "must return a value on all paths" check.
 			impl_method_decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
+			# Arc runtime boundary: when the @intrinsic method lives on
+			# `std.concurrent.Arc<T>`, tag the decl with the
+			# corresponding IntrinsicKind so downstream code (checker
+			# call-target, MIR lowering) dispatches through the Arc
+			# intrinsic machinery rather than trying to emit a call to
+			# a bodyless stub.  Dispatch is keyed on the impl target
+			# name + method name + declaration module — a narrow,
+			# centralized recognition point per the Stage 2 spec.
+			if impl_method_decl.is_intrinsic and module_id == "std.concurrent":
+				_target_name = getattr(getattr(impl, "target", None), "name", None)
+				if _target_name == "Arc":
+					_meth_name = fn.name
+					_trait_is_destructible = (
+						trait_lookup_key is not None
+						and getattr(trait_lookup_key, "name", None) == "Destructible"
+					)
+					if _meth_name == "clone" and getattr(impl, "trait", None) is None:
+						impl_method_decl.intrinsic_kind = IntrinsicKind.ARC_CLONE
+					elif _meth_name == "get" and getattr(impl, "trait", None) is None:
+						impl_method_decl.intrinsic_kind = IntrinsicKind.ARC_GET
+					elif _meth_name == "destroy" and _trait_is_destructible:
+						impl_method_decl.intrinsic_kind = IntrinsicKind.ARC_DESTROY
+					elif _meth_name == "as_interface" and getattr(impl, "trait", None) is None:
+						impl_method_decl.intrinsic_kind = IntrinsicKind.ARC_AS_INTERFACE
 			decls.append(impl_method_decl)
 			stmt_block = _convert_block(fn.body)
 			# Enable implicit `self` member lookup for method bodies (spec §3.9).
