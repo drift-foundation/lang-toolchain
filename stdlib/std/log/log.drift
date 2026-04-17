@@ -225,13 +225,25 @@ pub struct LogContext {
 /// ambient context at emit time.
 ///
 /// `ContextResolver` is an interface with a single `nothrow` method
-/// `resolve(&self) -> Optional<LogContext>`.  When installed via
+/// `resolve(&self) -> Optional<&LogContext>`.  When installed via
 /// `LoggerConfigBuilder.context_resolver`, calls to `Logger.info(ev)`
 /// / `Logger.info(ev, attrs)` (and the `debug` / `error`
 /// counterparts) dispatch through this interface per emit; if
 /// `resolve` returns `Some(ctx)`, `ctx`'s attributes are merged into
 /// the record.  Calls that pass an explicit `&LogContext` skip the
 /// resolver.
+///
+/// The return is borrowed.  The logger reads the borrowed context
+/// synchronously during record formatting, serializes its attrs into
+/// the owned `payload_json` string stored in the queued `LogEnvelope`,
+/// and does not retain the borrow after enqueue or after the emit
+/// call returns.  The queue never holds a `&LogContext`; by the time
+/// the drain worker consumes the envelope, the borrow's backing
+/// storage may be anywhere.  Resolvers hold the backing `LogContext`
+/// somewhere addressable from `&self` or from process/thread-global
+/// state (registry, scoped stack) and return a borrow into that
+/// storage.  No per-emit allocation is required; `LogContext.clone`
+/// is not needed for the resolver path.
 ///
 /// `std.log` deliberately knows nothing about how a resolver
 /// discovers context — VT-local registry, request state,
@@ -247,13 +259,13 @@ pub struct LogContext {
 /// **See also:** `LoggerConfigBuilder.context_resolver`,
 /// `LogContext`, `Logger.info(ev)`.
 pub interface ContextResolver {
-	fn resolve(self: &Self) nothrow -> Optional<LogContext>;
+	fn resolve(self: &Self) nothrow -> Optional<&LogContext>;
 }
 
 /// Default no-op resolver installed on every `LoggerConfig` until the
 /// caller swaps in their own via
 /// `LoggerConfigBuilder.context_resolver`.  Returns
-/// `Optional<LogContext>::None()` so bare `Logger.info(ev)` calls
+/// `Optional<&LogContext>::None()` so bare `Logger.info(ev)` calls
 /// emit no contextual attributes.
 ///
 /// Keeping a present-by-default resolver (rather than
@@ -269,9 +281,9 @@ pub struct NoContextResolver {
 }
 
 implement ContextResolver for NoContextResolver {
-	pub fn resolve(self: &NoContextResolver) nothrow -> Optional<LogContext> {
+	pub fn resolve(self: &NoContextResolver) nothrow -> Optional<&LogContext> {
 		val _ = self;
-		return Optional<LogContext>::None();
+		return Optional<&LogContext>::None();
 	}
 }
 
@@ -356,6 +368,15 @@ struct LogEnvelope {
 	level_rank: Int,
 	logger_min_rank: Int,
 	enqueue_timeout_ms: Int,
+	// Caller's virtual-thread and POSIX thread IDs captured
+	// synchronously at emit time, before the record is handed to the
+	// async drain path.  `_emit_envelope_handle` must format these
+	// stored values rather than calling `thread.vt_id()` /
+	// `thread.posix_thread_id()` itself — the drain worker is an
+	// implementation detail and its IDs are never the right answer
+	// for "which thread emitted this event".
+	vtid: Int,
+	ptid: Int,
 	payload_json: String
 }
 
@@ -715,10 +736,10 @@ fn _enabled(min_level: Level, event_level: Level) nothrow -> Bool {
 	return false;
 }
 
-fn _alloc_envelope(level_rank: Int, logger_min_rank: Int, enqueue_timeout_ms: Int, payload_json: String) -> sync.Handle<Byte> {
+fn _alloc_envelope(level_rank: Int, logger_min_rank: Int, enqueue_timeout_ms: Int, vtid: Int, ptid: Int, payload_json: String) -> sync.Handle<Byte> {
 	unsafe {
 		var raw = mem.alloc_uninit<type LogEnvelope>(1);
-		val env = LogEnvelope(level_rank = level_rank, logger_min_rank = logger_min_rank, enqueue_timeout_ms = enqueue_timeout_ms, payload_json = payload_json);
+		val env = LogEnvelope(level_rank = level_rank, logger_min_rank = logger_min_rank, enqueue_timeout_ms = enqueue_timeout_ms, vtid = vtid, ptid = ptid, payload_json = payload_json);
 		mem.write<type LogEnvelope>(&mut raw, 0, move env);
 		val p = mem.rawbuffer_ptr<type LogEnvelope>(&raw);
 		val u = cast<Uint>(p);
@@ -749,9 +770,11 @@ fn _emit_envelope_handle(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow 
 		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
 		val env = mem.read<type LogEnvelope>(&mut raw, 0);
 		val tm = time.format_iso8601_utc(&time.now_utc());
-		val vtid = thread.vt_id();
-		val ptid = thread.posix_thread_id();
-		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"vtid\":" + format.format_int(vtid) + ",\"ptid\":" + format.format_int(ptid) + "}";
+		// vtid/ptid were captured synchronously at emit time on the
+		// caller's thread — use the stored snapshot, never probe
+		// here (the drain path may be running on a completely
+		// different VT/OS thread than the emitter).
+		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"vtid\":" + format.format_int(env.vtid) + ",\"ptid\":" + format.format_int(env.ptid) + "}";
 		val _ = _sink_write_line(st, line);
 		core.drop_value(move env);
 		mem.dealloc<type LogEnvelope>(raw);
@@ -856,7 +879,7 @@ fn _enqueue_with_policy(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow -
 	return false;
 }
 
-fn _resolve_ctx_from_state(st: &LoggerRuntimeState) nothrow -> Optional<LogContext> {
+fn _resolve_ctx_from_state(st: &LoggerRuntimeState) nothrow -> Optional<&LogContext> {
 	return st.resolver.get().resolve();
 }
 
@@ -869,8 +892,7 @@ fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.Has
 		Some(st) => {
 			match _resolve_ctx_from_state(st) {
 				Some(ctx) => {
-					val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, &ctx, &attrs) catch { false };
-					core.drop_value<type LogContext>(move ctx);
+					val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, &attrs) catch { false };
 					core.drop_value(move attrs);
 					return ok;
 				},
@@ -903,9 +925,7 @@ fn _emit_no_attrs(logger: &Logger, var level: Level, ev: String) nothrow -> Bool
 		Some(st) => {
 			match _resolve_ctx_from_state(st) {
 				Some(ctx) => {
-					val ok = try _emit_ctx_throwing(logger, level, ev, &ctx) catch { false };
-					core.drop_value<type LogContext>(move ctx);
-					return ok;
+					return try _emit_ctx_throwing(logger, level, ev, ctx) catch { false };
 				},
 				None => {
 					return try _emit_no_attrs_throwing(logger, level, ev) catch { false };
@@ -966,7 +986,12 @@ fn _emit_ctx_attrs_throwing_typed<V>(logger: &Logger, var level: Level, ev: Stri
 fn _emit_payload_throwing(logger: &Logger, var level: Level, payload: String) -> Bool {
 	match _runtime_state_from_handle(logger.state) {
 		Some(st) => {
-			val h = _alloc_envelope(_level_rank(level), _level_rank(logger.min_level), st.enqueue_timeout_ms, payload);
+			// Snapshot the caller's thread identity BEFORE enqueue —
+			// the record must describe the event origin, not the
+			// drain worker that happens to dequeue it later.
+			val vtid = thread.vt_id();
+			val ptid = thread.posix_thread_id();
+			val h = _alloc_envelope(_level_rank(level), _level_rank(logger.min_level), st.enqueue_timeout_ms, vtid, ptid, payload);
 			if not _enqueue_with_policy(st, h) {
 				return false;
 			}

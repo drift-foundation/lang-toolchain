@@ -256,37 +256,68 @@ builder once. Every bare `info(ev)` / `info(ev, attrs)` call (and the
 merges the returned context into the record. No app-side wrapper, no
 per-call `match current_context()` block.
 
-A resolver is any value implementing the `log.ContextResolver` interface —
-typically an app struct that holds whatever lookup state it needs:
+A resolver is any value implementing the `log.ContextResolver` interface.
+`resolve` returns `Optional<&log.LogContext>` — a **borrow** into storage
+the resolver already holds, not a fresh owned context per emit. The
+logger reads the borrowed context synchronously during record formatting,
+serializes its attrs into the owned payload_json, and does not retain the
+borrow after the emit call returns. That contract makes the natural app
+pattern — request context in a `rt.ScopedStack<log.LogContext>` inside a
+thread-local registry — zero-copy:
 
 ```drift
 import std.log as log;
 import std.runtime as rt;
 
-// App-defined resolver service.  Holds whatever state it needs to
-// discover the current request's context (here, a thread-registry tag).
-pub struct AppResolver {
-    pub registry_tag: Uint64
+// App-defined request state: a scoped stack of LogContexts, installed
+// once per thread into the thread registry and pushed/popped around
+// each request.
+pub struct RequestContextState {
+    pub ctx: rt.ScopedStack<log.LogContext>
 }
 
+pub fn request_context_state() nothrow -> RequestContextState {
+    return RequestContextState(ctx = rt.scoped_stack<type log.LogContext>());
+}
+
+// App-defined resolver service.  Peeks the top of the scoped stack
+// out of the thread registry and hands the logger a borrow into it.
+pub struct AppResolver { }
+
 implement log.ContextResolver for AppResolver {
-    pub fn resolve(self: &AppResolver) nothrow -> Optional<log.LogContext> {
+    pub fn resolve(self: &AppResolver) nothrow -> Optional<&log.LogContext> {
+        val _ = self;
         val reg = rt.thread_registry();
-        match rt.get<type RequestState>(reg) {
-            Some(st) => {
-                var ctx = log.log_context();
-                ctx.put("request_id", st.request_id.clone());
-                return Optional<log.LogContext>::Some(move ctx);
-            },
-            None => { return Optional<log.LogContext>::None(); }
+        match rt.get<type RequestContextState>(reg) {
+            Some(st) => { return st.ctx.peek(); },
+            None     => { return Optional<&log.LogContext>::None(); }
         }
     }
 }
 
 fn install_logger() nothrow -> log.Logger {
+    val reg = rt.thread_registry();
+    val _ = reg.set<type RequestContextState>(request_context_state());
     var b = log.config_builder();
-    b.context_resolver(AppResolver(registry_tag = 0));
+    b.context_resolver(AppResolver());
     return log.create_logger("svc", b.build());
+}
+```
+
+Request scopes then just push/pop a `LogContext` onto the stack; the
+logger sees the top of the stack on every emit without an allocation:
+
+```drift
+match rt.get_mut<type RequestContextState>(rt.thread_registry()) {
+    Some(st) => {
+        var ctx = log.log_context();
+        ctx.put("request_id", req.id.clone());
+        val guard = st.ctx.push(move ctx);
+        // ... handle the request; logger.info(...) picks up request_id
+        //     via the resolver with no per-emit clone.
+        val _ = move guard;   // popped when the guard drops
+    },
+    None => { /* registry not installed */ }
 }
 ```
 
