@@ -1533,9 +1533,30 @@ def _synthesize_fat_arc_destructor_wrappers(
 	ptr_byte_ty = type_table.new_ptr(type_table.ensure_byte())
 	void_ty = type_table.ensure_void()
 	destructor_fns: dict[int, FunctionId] = dict(getattr(type_table, "destructor_fns", None) or {})
+	# Scope the synthesis to fat Arc<I> instances that actually need a
+	# destructor — the ones that appear as a `DropValue.ty` in some
+	# reachable MIR function.  Iterating all of `struct_instances` is
+	# too broad: the type-table picks up fat Arc<I> shapes from
+	# imported-but-unused stdlib surfaces (e.g. `LoggerConfig.resolver`
+	# when a consumer loads std.log signatures without touching the
+	# logger).  Synthesizing wrappers for those pulls
+	# `_arc_fat_drop_via_ctrl` and its callees into the consumer's
+	# reachable set, breaking minimal package-consumer builds that
+	# neither import `lang.atomic` nor do any Arc drop.
+	_fat_drop_targets: set[int] = set()
+	for _fn_id in list(reachable):
+		_fn = mir_pool.get(_fn_id)
+		if _fn is None:
+			continue
+		for _blk in _fn.blocks.values():
+			for _instr in _blk.instructions:
+				if isinstance(_instr, M.DropValue):
+					_fat_drop_targets.add(_instr.ty)
 	added = 0
 	for arc_inst_id in list(type_table.struct_instances.keys()):
 		if not type_table.is_arc_fat_layout_instance(arc_inst_id):
+			continue
+		if arc_inst_id not in _fat_drop_targets:
 			continue
 		if fat_drop_fn_id is None:
 			raise AssertionError(
@@ -1593,8 +1614,15 @@ def _synthesize_fat_arc_destructor_wrappers(
 			mir_pool[wrap_fn_id] = builder.func
 			ssa_pool[wrap_fn_id] = MirToSSA().run(builder.func)
 		reachable.add(wrap_fn_id)
-		if fat_drop_fn_id in mir_pool:
-			reachable.add(fat_drop_fn_id)
+		# Unconditionally mark the Slice 1 ctrl helper reachable.  It
+		# may live in the source MIR pool (single-module build where
+		# stdlib is compiled from source) OR only in
+		# `external_signatures_by_id` (package-consumer build where
+		# std.concurrent is a pre-linked dep).  Either way, the
+		# wrapper body calls it — downstream reachability/seeding must
+		# see it, and the initial guard above already verified it
+		# exists in one of those tables.
+		reachable.add(fat_drop_fn_id)
 		destructor_fns[arc_inst_id] = wrap_fn_id
 		added += 1
 	if added:
@@ -10166,7 +10194,7 @@ def main(argv: list[str] | None = None) -> int:
 				for d in checked_pkg.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 	
 		pkg_signatures_by_symbol: dict[str, FnSignature] = {
@@ -10769,7 +10797,7 @@ def main(argv: list[str] | None = None) -> int:
 				for d in checked_src.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
 		# Option B: all package functions compiled from HIR through
@@ -11009,7 +11037,7 @@ def main(argv: list[str] | None = None) -> int:
 				for d in _checked.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 		if args.emit_instantiation_index is not None and not args.emit_instantiation_index.exists():
 			compile_stubbed_funcs(

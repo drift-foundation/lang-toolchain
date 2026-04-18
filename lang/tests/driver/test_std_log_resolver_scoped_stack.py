@@ -79,6 +79,7 @@ module main;
 
 import std.log as log;
 import std.runtime as rt;
+import std.concurrent as conc;
 
 // The app's request-scoped state: a scoped stack of LogContexts.
 // Installed once per thread into the thread registry; the resolver
@@ -133,7 +134,7 @@ fn main() nothrow -> Int {
 	// Build logger with the app's resolver installed.
 	var b = log.config_builder();
 	b.min_level(log.Level::Debug());
-	b.context_resolver(AppLogResolver());
+	b.context_resolver(conc.arc(AppLogResolver()).as_interface<type log.ContextResolver>());
 	val logger = log.create_logger("svc", b.build());
 
 	// Bare emit with empty stack: resolver returns None; logger emits

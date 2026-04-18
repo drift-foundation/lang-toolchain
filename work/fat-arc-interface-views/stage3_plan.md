@@ -1,13 +1,13 @@
 # Stage 3 — fat Arc<Interface> representation boundary (plan)
 
-> **Status: LANDED (ABI 10, DRIFTC_VERSION 0.27.204).**
+> **Status: LANDED (ABI 10, DRIFTC_VERSION 0.28.0).**
 > The activation bundle is live on `feature/fat-arc-interface-views`:
 > `STAGE3_FAT_ARC_ACTIVE=True`, fat `{ctrl, data, vtable}` layout
 > for `Arc<I>`, `ArcAsInterface` + `ArcFatGet` MIR ops with LLVM
 > lowerings, per-I synthesized fat-destroy wrappers, std.log
 > migration, and direct `arc<T=iface>` rejection
 > (`E_ARC_OF_INTERFACE_DIRECT`).  Regressions below are now green
-> on the main branch (`test_fat_arc_interface_views.py` 8/8,
+> on the main branch (`test_fat_arc_interface_views.py` 9/9,
 > `test_arc_rejects_interface_t.py` 3/3, `test_arc_intrinsic_bridge.py`
 > 5/5 unchanged, `std_log_resolver_active` e2e ok).  The rest of
 > this file is preserved as landing context — **"fails today" /
@@ -307,7 +307,7 @@ Slice 3 gate:
 
 Small follow-up after Slice 3 is gate-green.
 `lang/versions.py`: `DRIFT_RT_ABI_VERSION: 9 → 10` and
-`DRIFTC_VERSION` patch bump.  Only boundary-exposed
+`DRIFTC_VERSION` minor release bump to `0.28.0`.  Only boundary-exposed
 `Arc<Interface>` today is
 `stdlib/std/log/log.drift::LoggerConfig.resolver`; no
 downstream packages published against the current tip, so no

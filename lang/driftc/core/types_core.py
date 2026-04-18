@@ -1243,15 +1243,14 @@ class TypeTable:
 		the fat `{ctrl, data, vtable}` shape.
 
 		Distinct from `is_arc_interface_view_instance`: the semantic
-		predicate reports the "Arc<I>" identity; THIS predicate
-		reports the live struct-instance layout.  Slice 2 of the
-		Stage 3 plan is a dormant-scaffolding stage where
-		`ensure_struct_instantiated` does NOT yet emit the fat
-		layout, so every `Arc<I>` instance still has the thin
-		`{buf}` shape and this predicate returns False everywhere —
-		keeping slice 2's fat MIR dispatch unreachable.  Slice 3
-		flips the layout branch and this predicate starts returning
-		True for any `Arc<Interface>`.
+		predicate reports the "Arc<I>" identity independent of
+		layout; THIS predicate reports the live struct-instance
+		layout.  With `STAGE3_FAT_ARC_ACTIVE=True` (landed in
+		`DRIFT_RT_ABI_VERSION=10`), every freshly-specialized
+		`Arc<Interface>` carries the fat layout and this returns
+		True; pre-ABI-10 package artifacts that still serialize
+		the thin `{buf}` shape are filtered out here at consumer
+		load time.
 		"""
 		if not self.is_arc_interface_view_instance(ty_id):
 			return False
