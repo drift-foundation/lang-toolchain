@@ -659,11 +659,13 @@ class LlvmModuleBuilder:
 	# no corresponding MIR `M.Call` / FnInfo path, so there is no
 	# natural place to attach the declare.  Set by
 	# `_lower_arc_as_interface` and consumed by the module-render pass
-	# to emit a `declare void ...(ptr)` for the symbol when its
-	# definition lives in a different LLVM module (the stdlib
-	# compilation unit) from the caller.  Harmless when definition
-	# and declare coexist in one module — LLVM accepts the matching
-	# prototype as a redundant forward declare.
+	# to emit a `declare void ...(ptr)` for the symbol ONLY when its
+	# definition is not present in this LLVM module (package-consumer
+	# build where std.concurrent lives in an upstream dep).  LLVM
+	# rejects a `declare` plus `define` for the same quoted Drift
+	# symbol in one module even when the prototype matches, so the
+	# render path must skip the declare in single-module / dev builds
+	# where stdlib compiles inline.
 	needs_arc_fat_bump_helper: bool = False
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
@@ -1606,6 +1608,18 @@ class LlvmModuleBuilder:
 			# build where stdlib compiles inline), skip the declare —
 			# LLVM rejects `declare` + `define` for the same symbol
 			# even with identical prototypes.
+			#
+			# Definition detection is a literal-prefix search over
+			# `self.funcs` (each entry is the full IR text of one
+			# emitted function).  This is safe today because
+			# `_arc_fat_bump_strong_via_ctrl` is a private non-generic
+			# Drift helper emitted without linkage decoration — the
+			# define line is exactly the prefix we search for.  If
+			# linkage / attributes are ever added (e.g. `linkonce_odr`,
+			# `comdat`), tighten this to a set-based
+			# `defined_symbols: set[str]` tracker populated by each
+			# `self.funcs.append(...)` site, rather than string
+			# matching on the serialized IR.
 			_bump_define_prefix = 'define void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"'
 			if not any(_bump_define_prefix in _fn_text for _fn_text in self.funcs):
 				lines.append('declare void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr)')
