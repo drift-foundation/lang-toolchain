@@ -654,6 +654,17 @@ class LlvmModuleBuilder:
 	needs_error_runtime: bool = False
 	needs_assert_runtime: bool = False
 	needs_llvm_trap: bool = False
+	# Stage 3 fat `Arc<Interface>` — `ArcAsInterface` lowering emits a
+	# direct call to the non-generic `std.concurrent` bump helper with
+	# no corresponding MIR `M.Call` / FnInfo path, so there is no
+	# natural place to attach the declare.  Set by
+	# `_lower_arc_as_interface` and consumed by the module-render pass
+	# to emit a `declare void ...(ptr)` for the symbol when its
+	# definition lives in a different LLVM module (the stdlib
+	# compilation unit) from the caller.  Harmless when definition
+	# and declare coexist in one module — LLVM accepts the matching
+	# prototype as a redundant forward declare.
+	needs_arc_fat_bump_helper: bool = False
 	array_string_type: Optional[str] = None
 	_fnresult_types_by_key: Dict[str, str] = field(default_factory=dict)
 	_fnresult_ok_llty_by_type: Dict[str, str] = field(default_factory=dict)
@@ -1582,6 +1593,23 @@ class LlvmModuleBuilder:
 		if self.needs_llvm_trap:
 			lines.append("declare void @llvm.trap()")
 			lines.append("")
+		if self.needs_arc_fat_bump_helper:
+			# Stage 3 fat `Arc<Interface>`: `ArcAsInterface` lowering
+			# emits a direct `call` to this non-generic stdlib helper
+			# (one symbol serves every `Arc<I>` — I is erased at
+			# refcount time).  The helper's body lives in
+			# `stdlib/std/concurrent/concurrent.drift`; when its
+			# definition is NOT in the current LLVM module (package-
+			# consumer build), emit a prototype so the call site has a
+			# matching signature for opaque-pointer verification.
+			# When the definition IS in this module (dev/source
+			# build where stdlib compiles inline), skip the declare —
+			# LLVM rejects `declare` + `define` for the same symbol
+			# even with identical prototypes.
+			_bump_define_prefix = 'define void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"'
+			if not any(_bump_define_prefix in _fn_text for _fn_text in self.funcs):
+				lines.append('declare void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr)')
+				lines.append("")
 		if self.debug_enabled and self.needs_dbg_intrinsics:
 			lines.extend(
 				[
@@ -6972,12 +7000,18 @@ class _FuncBuilder:
 		)
 		self.value_types[ctrl] = "ptr"
 
-		# Step 2: atomic strong-bump via the Slice 1 non-generic runtime
-		# helper.  Symbol name is stable — the helper is defined in
-		# `stdlib/std/concurrent/concurrent.drift`; with opaque
-		# pointers LLVM does not require an explicit declaration for
-		# cross-module calls (the symbol resolves at link time).
-		bump_sym = '@"std.concurrent::_arc_fat_bump_strong_via_ctrl"'
+		# Step 2: atomic strong-bump via the non-generic stdlib helper.
+		# The helper is a Drift symbol (module-qualified, quoted) — use
+		# the standard `_llvm_fn_sym` spelling rather than a raw
+		# literal so the same escaping rules as every other Drift
+		# symbol apply.  Flag the module as needing a declare: the
+		# helper's definition lives in `stdlib/std/concurrent/
+		# concurrent.drift`, and when the caller compiles in a
+		# different LLVM module (typical for user code), the
+		# module-render pass emits the matching `declare void
+		# @"..."(ptr)` so opaque-pointer verification has a prototype.
+		self.module.needs_arc_fat_bump_helper = True
+		bump_sym = _llvm_fn_sym("std.concurrent::_arc_fat_bump_strong_via_ctrl")
 		self.lines.append(f"  call void {bump_sym}(ptr {ctrl})")
 
 		# Step 3: data = GEP ArcBox<T>, ptr ctrl, i32 0, i32 1.

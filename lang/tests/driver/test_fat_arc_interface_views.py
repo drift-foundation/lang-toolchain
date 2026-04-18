@@ -614,12 +614,30 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	# `_arc_fat_drop_via_ctrl` must be defined AND called (the wrapper
 	# calls it).
 	assert '@"std.concurrent::_arc_fat_drop_via_ctrl"' in ir, (
-		"`_arc_fat_drop_via_ctrl` symbol missing from IR — the Slice 1 "
+		"`_arc_fat_drop_via_ctrl` symbol missing from IR — the ctrl-only "
 		"runtime helper is not linked"
 	)
 	assert 'call void @"std.concurrent::_arc_fat_drop_via_ctrl"(' in ir, (
 		"`_arc_fat_drop_via_ctrl` is defined but never called — the "
 		"wrapper is not forwarding through the ctrl-only drop path"
+	)
+
+	# `_arc_fat_bump_strong_via_ctrl` must have a prototype visible at
+	# the call site — either a `declare` (package-consumer build where
+	# the helper's body lives in an upstream module) OR a `define`
+	# (single-module / dev build where stdlib compiles inline; LLVM
+	# rejects both in one module even with identical prototypes).
+	# And the call MUST use the `_llvm_fn_sym` spelling — same
+	# escaping as every other Drift symbol.
+	_bump_declared = 'declare void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr)' in ir
+	_bump_defined = 'define void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(' in ir
+	assert _bump_declared or _bump_defined, (
+		"`_arc_fat_bump_strong_via_ctrl` has neither a declare nor a "
+		"define in IR — the Stage 3 fat-Arc bump helper is not linked"
+	)
+	assert 'call void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr' in ir, (
+		"`_arc_fat_bump_strong_via_ctrl` linked but never called — "
+		"`ArcAsInterface` lowering is not emitting the strong-bump call"
 	)
 
 	# Negative: for EVERY fat Arc<I> instance, no thin

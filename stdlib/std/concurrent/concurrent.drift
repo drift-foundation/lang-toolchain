@@ -406,18 +406,16 @@ fn _arc_drop_thunk_for<T>(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 //
 // These are non-generic — a single symbol serves every `Arc<I>`
 // instance — matching the design directive that I is erased at
-// refcount time.  **Slice 1 lands them as dormant scaffolding: no
-// production call site wires to them yet.**  Slice 3 of the Stage 3
-// plan activates them when layout specialization goes live for
-// `Arc<Interface>` and `ARC_AS_INTERFACE` lowering starts producing
-// fat handles.  See `work/fat-arc-interface-views/stage3_plan.md`.
+// refcount time.  Live as of ABI 10: `ARC_AS_INTERFACE` lowering
+// wires the bump helper, and the compiler-synthesized per-I fat
+// destructor wrapper wires the drop helper.
 //
 // `ctrl` contract: points at the base of an `ArcBox<T>` allocation.
 // `ArcBox<T>` layout is `{ header: ArcHeader, value: T }` with
 // `header.strong` at offset 0.  Both helpers treat the first
 // `sizeof(ArcHeader)` bytes as an `ArcHeader`.
 
-/// Stage 3 dormant primitive — atomic strong-count bump for fat Arc.
+/// Atomic strong-count bump for fat `Arc<Interface>` (ABI 10).
 ///
 /// Reinterprets the first `sizeof(ArcHeader)` bytes of the allocation
 /// at `ctrl` as `ArcHeader` and performs a relaxed atomic fetch-add
@@ -433,7 +431,7 @@ fn _arc_fat_bump_strong_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 	return;
 }
 
-/// Stage 3 dormant primitive — atomic strong-count decrement + drop.
+/// Atomic strong-count decrement + drop for fat `Arc<Interface>` (ABI 10).
 ///
 /// Null-check guards the moved-from Arc sentinel (matches
 /// `_arc_destroy_impl<T>`'s null guard).  Otherwise atomic-subtracts

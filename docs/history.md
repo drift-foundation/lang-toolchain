@@ -1,5 +1,170 @@
 # Drift development history
 
+## 2026-04-18
+- **Fat `Arc<Interface>` representation (0.28.0, ABI 10)**:
+  `Arc<I>` for interface `I` is now represented as a fat
+  `{ctrl, data, vtable}` triple sharing a single `ArcBox<T>`
+  allocation with the originating `Arc<T>`.  One concrete
+  service can expose itself under N interfaces via N
+  `as_interface<type I>()` calls, all pointing at the same
+  control block, sharing one strong refcount and one concrete
+  destructor — closing the design gap where each interface view
+  previously needed its own allocation.
+
+  **Construction path.**  `conc.arc(concrete).as_interface<type I>()`
+  is the single supported shape.  `conc.arc(concrete)` performs
+  the only heap allocation; `as_interface<I>()` bumps the shared
+  strong count and returns a fat `Arc<I>` handle over the same
+  allocation.  The direct `conc.arc<type Interface>(value)`
+  shape is rejected at typecheck with diagnostic code
+  `E_ARC_OF_INTERFACE_DIRECT`.
+
+  **Runtime model.**  The fat layout stores `ctrl` (base of
+  `ArcBox<T>`, used for atomic ops and `drop_thunk` lookup),
+  `data` (pointer into `ArcBox<T>.value`, i.e. the concrete
+  receiver), and `vtable` (T-as-I dispatch table, resolved
+  through the existing `_ensure_interface_vtable(I, T)` hook —
+  no Arc-specific vtable namespace).  `Arc<I>.clone()` bumps the
+  shared strong count and reuses `{data, vtable}` unchanged.
+  `Arc<I>.get()` returns a borrowed `&I = {data, vtable}` with
+  no refcount touch and no new vtable lookup.  Destruction goes
+  through a compiler-synthesized per-I wrapper
+  (`_arc_fat_destroy_wrapper__<inst>`) that extracts `ctrl` and
+  calls the non-generic `_arc_fat_drop_via_ctrl` — I is erased
+  at drop time, and the per-T `drop_thunk` captured at
+  `conc.arc(concrete)` time fires exactly once on last drop
+  regardless of which interface face held the final strong ref.
+
+  **New MIR ops:** `ArcAsInterface`, `ArcFatGet`, lowered
+  directly in `lang/codegen/llvm/llvm_codegen.py`.
+  `ArcAsInterface` emits five LLVM operations: `ctrl` extract
+  from `RawBuffer.ptr`, atomic strong-bump via
+  `_arc_fat_bump_strong_via_ctrl`, `data = getelementptr
+  inbounds ArcBox<T>, ptr ctrl, i32 0, i32 1`, vtable resolution
+  via `_emit_interface_view_fields(iface_ty, concrete_ty)`, and
+  `insertvalue` chain for the `{ctrl, data, vtable}` result.
+  `ArcFatGet` extracts `{data, vtable}` into a fresh entry-block
+  `DriftIface` alloca per call (no shared slot — lifetimes
+  persist past the emission site) and returns the alloca pointer
+  as the borrowed `&I`.
+
+  **Compiler internals:**
+  - `lang/driftc/core/types_core.py::ensure_struct_instantiated`
+    — `STAGE3_FAT_ARC_ACTIVE=True` gates the `Arc<I>` layout
+    branch.  Live instances carry field names exactly
+    `("ctrl", "data", "vtable")`; the `is_arc_fat_layout_instance`
+    predicate reports the live struct-instance shape, distinct
+    from the semantic `is_arc_interface_view_instance`.
+  - `lang/driftc/stage2/hir_to_mir.py::_lower_arc_fat_intrinsic_call`
+    and `_lower_arc_as_interface_op` — fat dispatch for
+    `ARC_CLONE`, `ARC_GET`, `ARC_DESTROY`, and the new
+    `ARC_AS_INTERFACE`.  Both entry points handle rvalue
+    receivers by materializing a `__borrow_tmp<N>` local and
+    taking its address, so `app.as_interface<I>().clone()` and
+    `app.as_interface<I>().get().method()` chained-rvalue shapes
+    work without lvalue gymnastics at the callsite.
+  - `lang/driftc/driftc.py::_synthesize_fat_arc_destructor_wrappers`
+    — scans reachable MIR for `DropValue.ty` values, emits one
+    wrapper per fat `Arc<I>` instance that is actually dropped,
+    installs it in `type_table.destructor_fns[inst_id]`.  The
+    scoping keeps minimal consumer builds from dragging
+    `_arc_fat_drop_via_ctrl` and its `lang.atomic` transitive
+    callees into the reachable set when no fat `Arc` is dropped.
+  - Scan-time skips for `is_arc_fat_layout_instance` in the
+    initial Destructible scan and K39 rescan prevent the thin
+    `_arc_destroy_impl<T>` template from being queued for fat
+    instances (whose `self.buf` field access would be
+    structurally invalid against `{ctrl, data, vtable}`).
+    `_queue_instantiations` carries the matching helper-skip for
+    `ARC_CLONE` / `ARC_GET` / `ARC_DESTROY` callsite
+    monomorphization.
+  - `lang/driftc/checker/call_resolver.py` — free-function
+    resolution of `conc.arc<T>(...)` checks whether the
+    instantiated `result_type` is an `is_arc_interface_view_instance`;
+    if yes, emits `E_ARC_OF_INTERFACE_DIRECT` directing the
+    caller to `conc.arc(concrete).as_interface<type I>()`.
+  - Cross-package interface-impl visibility: when
+    `external_impl_metas` merges into the trait world and the
+    trait key names a live `TypeKind.INTERFACE` nominal in the
+    consumer's type table, the impl is additionally registered
+    in `world.interfaces` and `world.interface_impls_by_iface_target`
+    so `require T is I` clauses (e.g. on `as_interface<I>()`)
+    prove across the package boundary.  The interface check is
+    nominal-type-driven, not keyed off
+    `external_missing_traits` alone, so genuine missing-trait
+    metadata bugs are not silently re-routed through the
+    interface solver.
+  - Package-consumer vtable reachability: the existing
+    `ConstructIfaceValue` impl-method seed loop now also walks
+    `ArcAsInterface.concrete_ty`, pulling the T-as-I vtable's
+    impl methods into the consumer's reachable set when no MIR
+    call reaches them (the vtable thunk is generated at codegen
+    time).
+
+  **Stdlib:** `std.log::config_builder` and
+  `LoggerConfigBuilder::context_resolver` migrate from
+  `conc.arc<type ContextResolver>(move r)` to
+  `conc.arc(concrete).as_interface<type ContextResolver>()`.
+  `context_resolver` now takes `conc.Arc<ContextResolver>`
+  directly — callers construct the fat handle and hand it in.
+
+  **Runtime primitives:** `std.concurrent::_arc_fat_bump_strong_via_ctrl`
+  and `_arc_fat_drop_via_ctrl` (non-generic, `ctrl`-only; one
+  symbol serves every `Arc<I>` instance — I is erased at
+  refcount and drop time).
+
+  **Diagnostics:** stderr diagnostic lines now carry a trailing
+  ` [CODE]` suffix when `diag.code` is present (10 printer sites
+  in `lang/driftc/driftc.py`).  JSON output is unchanged — the
+  `code` field was already emitted.
+
+  **ABI bump.**  `DRIFT_RT_ABI_VERSION 9 → 10`,
+  `DRIFTC_VERSION 0.27.203 → 0.28.0`.  Runtime library
+  `libdrift_rt_abi10.a` is built on first compile after the
+  version bump; `libdrift_rt_abi9.a` artifacts are not
+  forward-compatible.  No coordinated downstream consumer update
+  needed — the boundary shape is a stdlib-only change
+  (`LoggerConfig.resolver: conc.Arc<ContextResolver>`), and no
+  downstream package was published against 0.27.203 tip.
+
+  **Regression coverage:**
+  - `lang/tests/driver/test_fat_arc_interface_views.py` (9
+    tests) — happy path, shared mutation across faces, drop
+    order across three permutations, chained-rvalue as_interface
+    clone + get, clone-through-interface-view preserves
+    dispatch, std.log API-shape smoke, IR-shape pin (no thin
+    `_arc_destroy_impl__inst__<hash>` targets a fat Arc struct;
+    `_arc_fat_destroy_wrapper__<N>` is defined and called;
+    `_arc_fat_drop_via_ctrl` is defined and called).
+  - `lang/tests/driver/test_arc_rejects_interface_t.py` (3) —
+    direct `conc.arc(iface_value)` rejected with
+    `E_ARC_OF_INTERFACE_DIRECT`; concrete-struct `conc.arc(...)`
+    still compiles; `conc.arc(conc.arc(Inner))` nested generic
+    still compiles (rejection is specific to `T=interface`, not
+    `T=struct-that-happens-to-be-Arc`).
+  - `lang/tests/driver/test_arc_intrinsic_bridge.py` (5,
+    unchanged) — Stage 2 thin-Arc bridge remains green; the
+    narrow `_typevar_callinfo_diags` exemption stays as-is.
+  - `lang/tests/codegen/e2e/std_log_resolver_active/` — runtime
+    e2e exercising an active resolver through the new builder
+    shape.
+
+  **Design decisions locked:**
+  - Single non-generic fat destroy helper; I is irrelevant at
+    drop time, last-drop uses `drop_thunk` not the vtable.
+  - `ctrl` has ONE meaning: base address (`&ArcBox<T>`) used by
+    both atomic strong ops and `drop_thunk` lookup.  No parallel
+    "header-offset pre-applied" variant.
+  - `ARC_AS_INTERFACE` reuses the existing interface-vtable
+    symbol path (`_ensure_interface_vtable(I, T)`, shared with
+    `IfaceUpcast` / `CallIface`).  No Arc-only vtable
+    namespace.
+  - `offsetof(ArcBox<T>.value)` computed from actual concrete-T
+    struct layout at LLVM codegen time — alignment padding
+    varies per T, so a `getelementptr ArcBox<T>, ptr ctrl, i32
+    0, i32 1` path is used rather than a precomputed byte
+    offset.
+
 ## 2026-04-14
 - **Ownership matrix — non-Copy destructor (Token) axis + match-scrutinee ownership fix (0.27.197, ABI 9)**:
   Added the non-Copy destructor-bearing type axis to the ownership
