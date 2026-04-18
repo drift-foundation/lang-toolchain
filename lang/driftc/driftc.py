@@ -8152,7 +8152,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in parse_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	_required_modules_main: set[str] = {m for m in modules.keys() if isinstance(m, str)}
@@ -9843,7 +9844,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in type_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
 	# Compute non-retaining metadata for callable parameters before lambda validation.
@@ -9877,7 +9879,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in lambda_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# Checker (stub) enforces language-level rules (e.g., nothrow) after typecheck
@@ -9911,7 +9914,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in checked.diagnostics:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# Reconcile method call CallInfo with checker-inferred throw behavior.
@@ -10022,7 +10026,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in trait_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	intrinsic_diags: list[Diagnostic] = []
@@ -10040,7 +10045,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in intrinsic_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# Borrow check each typed function (mandatory stage).
@@ -10067,7 +10073,8 @@ def main(argv: list[str] | None = None) -> int:
 		else:
 			for d in borrow_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# Package emission mode (Milestone 4): produce an unsigned package artifact
@@ -10158,7 +10165,8 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				for d in checked_pkg.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 	
 		pkg_signatures_by_symbol: dict[str, FnSignature] = {
@@ -10760,7 +10768,8 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				for d in checked_src.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
 		# Option B: all package functions compiled from HIR through
@@ -10999,7 +11008,8 @@ def main(argv: list[str] | None = None) -> int:
 			else:
 				for d in _checked.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 		if args.emit_instantiation_index is not None and not args.emit_instantiation_index.exists():
 			compile_stubbed_funcs(

@@ -1,26 +1,22 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 1 Stage 3 regression: fat `Arc<Interface>` representation
-boundary.
+Phase 1 Stage 3 regressions — fat `Arc<Interface>` representation
+boundary.  Active as of ABI 10.
 
 A single `Arc<Concrete>` allocation must be shareable as multiple
 `Arc<Interface>` handles, where every handle holds the SAME
 control block (and therefore the same strong refcount) but carries
-a T-as-I vtable for dispatch.  The six tests below pin the
-invariants listed in
-`work/fat-arc-interface-views/phase1.md` — see the "Regression
-list" section.
+a T-as-I vtable for dispatch.  These tests pin the invariants
+listed in `work/fat-arc-interface-views/phase1.md` — see the
+"Regression list" section.
 
-**These tests pre-date the Stage 3 implementation.  Every test
-that calls `as_interface<I>()` is expected to fail today with the
-Stage 2 placeholder assertion:**
+The `STAGE3_FAT_ARC_ACTIVE` flag is on; every `Arc<I>` instance
+now uses the fat `{ctrl, data, vtable}` layout and is constructed
+via `conc.arc(concrete).as_interface<type I>()`.  These
+regressions must remain green on the main branch.
 
-    Arc.as_interface<I>() runtime lowering is not yet implemented
-    (Stage 3); callsite=<N>
-
-As Stage 3 lands — layout specialization + fat-T lowerings +
-ABI 10 — the tests flip to green one by one.  Test #4 (negative
-`require` case) already passes under Stage 1 compile-time gating.
+Companion negative control: `test_arc_rejects_interface_t.py`
+pins the compile-time rejection of direct `conc.arc<T=iface>(...)`.
 """
 from __future__ import annotations
 
@@ -538,4 +534,108 @@ fn main() nothrow -> Int {
 	assert rc == 0, (
 		f"std.log Arc<ContextResolver> integration failed: rc={rc}\n"
 		f"stdout={stdout!r} stderr={stderr!r}"
+	)
+
+
+def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
+	"""IR-level negative + positive pin for the fat Arc<I> destroy path.
+
+	After activation, fat `Arc<I>` destruction MUST route through the
+	per-I synthesized wrapper + non-generic ctrl helper, not through
+	the thin `_arc_destroy_impl<T>` template:
+
+	- **positive**: at least one `_arc_fat_destroy_wrapper__<N>` must
+	  be defined and referenced; `_arc_fat_drop_via_ctrl` must be
+	  both defined and called.
+	- **negative**: no `_arc_destroy_impl__inst__<hash>` function may
+	  take a FAT Arc struct (the `{ptr, ptr, ptr}` layout) as its
+	  parameter.  Thin concrete-T Arc instances keep their own thin
+	  helpers — the rule is specifically about fat-layout instances.
+
+	The fixture uses `_HAPPY_PATH_TWO_IFACES` because it produces
+	two fat `Arc<I>` instances (Greeter, Counter) plus one thin
+	`Arc<AppService>` — so both sides of the distinction appear in
+	one IR module and the negative check has real discriminating
+	power.
+	"""
+	mod_root = tmp_path / "mods"
+	main_src = mod_root / "main" / "main.drift"
+	_write_file(main_src, _HAPPY_PATH_TWO_IFACES)
+	exe = tmp_path / "out"
+	root = stdlib_root()
+	args = [
+		"-M", str(mod_root),
+		str(main_src),
+		"-o", str(exe),
+		"--dev",
+	]
+	if root:
+		args += ["--stdlib-root", str(root)]
+	rc = driftc_main(args)
+	assert rc == 0, "driftc compile failed — see captured stderr"
+
+	ir_path = exe.with_suffix(".ll")
+	assert ir_path.exists(), f"expected IR at {ir_path}"
+	ir = ir_path.read_text(encoding="utf-8")
+
+	# Extract fat Arc struct hashes — type lines matching
+	# `%Struct_std_2Econcurrent_Arc_<hash> = type { ptr, ptr, ptr }`.
+	fat_re = re.compile(
+		r"^%Struct_std_2Econcurrent_Arc_([0-9a-f]+) = type \{ ptr, ptr, ptr \}$",
+		re.MULTILINE,
+	)
+	fat_hashes = set(fat_re.findall(ir))
+	assert fat_hashes, (
+		"expected at least one fat Arc struct (`{ ptr, ptr, ptr }`) in "
+		"IR — fat layout activation appears to be off or unreachable"
+	)
+
+	# Positive: at least one synthesized fat-destroy wrapper must be
+	# defined.  Symbol name pattern is `_arc_fat_destroy_wrapper__<N>`
+	# where N is the fat Arc<I> inst TypeId (an integer).
+	wrapper_def_re = re.compile(
+		r'^define [^\n]*@"std\.concurrent::_arc_fat_destroy_wrapper__\d+"',
+		re.MULTILINE,
+	)
+	wrapper_defs = wrapper_def_re.findall(ir)
+	assert wrapper_defs, (
+		"no `_arc_fat_destroy_wrapper__<N>` definition in IR — the "
+		"fat Arc<I> destructor synthesis pass did not fire or did not "
+		"install the wrapper"
+	)
+	# And the wrapper must actually be called at some scope-drop site
+	# — otherwise the destructor is dead code and AppService::destroy
+	# would never run.
+	assert 'call void @"std.concurrent::_arc_fat_destroy_wrapper__' in ir, (
+		"no call to `_arc_fat_destroy_wrapper__<N>` in IR — scope-drop "
+		"of fat Arc<I> is not dispatching through the wrapper"
+	)
+
+	# `_arc_fat_drop_via_ctrl` must be defined AND called (the wrapper
+	# calls it).
+	assert '@"std.concurrent::_arc_fat_drop_via_ctrl"' in ir, (
+		"`_arc_fat_drop_via_ctrl` symbol missing from IR — the Slice 1 "
+		"runtime helper is not linked"
+	)
+	assert 'call void @"std.concurrent::_arc_fat_drop_via_ctrl"(' in ir, (
+		"`_arc_fat_drop_via_ctrl` is defined but never called — the "
+		"wrapper is not forwarding through the ctrl-only drop path"
+	)
+
+	# Negative: for EVERY fat Arc<I> instance, no thin
+	# `_arc_destroy_impl__inst__<hash>` function may take that Arc's
+	# struct as its parameter.  Pattern match the define line and
+	# pull the parameter struct name.
+	destroy_impl_re = re.compile(
+		r'^define [^\n]*@"std\.concurrent::_arc_destroy_impl__inst__'
+		r'[0-9a-f]+"\(%Struct_std_2Econcurrent_Arc_([0-9a-f]+) ',
+		re.MULTILINE,
+	)
+	destroy_impl_struct_hashes = set(destroy_impl_re.findall(ir))
+	leaked_fat = fat_hashes & destroy_impl_struct_hashes
+	assert not leaked_fat, (
+		f"thin `_arc_destroy_impl__inst__<hash>` leaked for {len(leaked_fat)} "
+		f"fat Arc<I> instance(s) ({sorted(leaked_fat)}) — the scan-time + "
+		f"helper-instantiation skips for `is_arc_fat_layout_instance` "
+		f"failed, and a structurally-invalid thin helper was emitted"
 	)

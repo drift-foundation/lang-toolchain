@@ -147,6 +147,11 @@ def test_arc_of_interface_is_rejected_at_typecheck(tmp_path: Path) -> None:
 		"rejection must fire at typecheck, not as an internal "
 		f"compiler error.\nstderr:\n{stderr}"
 	)
+	# Pin the diagnostic code — this is the user-facing contract.
+	assert "E_ARC_OF_INTERFACE_DIRECT" in stderr, (
+		"rejection diagnostic must carry the `E_ARC_OF_INTERFACE_DIRECT` "
+		f"code so downstream tooling can key off it.\nstderr:\n{stderr}"
+	)
 	# The diagnostic should point at the supported spelling so the
 	# user knows what to do.  Accept several natural phrasings.
 	directive_ok = (
