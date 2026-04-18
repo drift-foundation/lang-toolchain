@@ -247,10 +247,16 @@ Deferred to Phase 2 (documented, not implemented):
 
 ## ABI boundary audit
 
-`Arc<Interface>` layout changes from `{buf}` (thin, `RawBuffer<ArcBox<FatPtr>>`)
-to `{ctrl, vtable}` (fat, `{Ptr<Byte>, Ptr<Byte>}`). This is an ABI-visible
-change for any published package that exposes an `Arc<SomeInterface>` at its
-boundary.
+`Arc<Interface>` layout changes from `{buf}` (thin,
+`RawBuffer<ArcBox<FatPtr>>`) to the three-field fat shape
+`{ctrl, data, vtable}` (= `{mem.Ptr<Byte>, mem.Ptr<Byte>,
+mem.Ptr<Byte>}`) defined in the "Representation / Option 3
+representation" section above.  `data` is carried explicitly
+because `ArcBox<T>.value`'s offset is not guaranteed to be a
+constant across all `T` (struct alignment padding varies) — see
+that section for the soundness reasoning.  This is an ABI-visible
+change for any published package that exposes an
+`Arc<SomeInterface>` at its boundary.
 
 Current inventory of boundary-exposed `Arc<Interface>`:
 
