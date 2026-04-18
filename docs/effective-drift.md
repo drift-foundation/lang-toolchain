@@ -148,25 +148,14 @@ What actually happens here:
   allocation must not assume exclusive access to the service's bytes.
 - **Explicit and auditable.** The two-step pattern `val app = conc.arc(...);
   val face = app.as_interface<type I>();` makes the ownership transfer
-  visible at every use site. There is no implicit `arc<I>(concrete)` magic —
-  if you see code that constructs an `Arc<Interface>`, it goes through
-  `as_interface` and the target face is named right there at the call.
-  Prefer this shape even when the coercion is immediately obvious.
+  visible at every use site. A reader can see exactly which interface face
+  is being produced, named right at the call, without parsing a two-type-
+  argument form or inferring where the allocation lives.
 
-A pitfall to avoid: **do not allocate separate `Arc`s per interface.**
-
-```drift
-// Wrong — would be three independent allocations, three independent refcounts.
-// (And in fact disallowed: `conc.arc<T>(value)` rejects T that names an interface;
-// you must write `conc.arc(ConcreteType(...)).as_interface<type I>()`.)
-val log_face = conc.arc<type log.ContextResolver>(AppService(...));
-val metrics_face = conc.arc<type metrics.Emitter>(AppService(...));
-// Even if it compiled: state would not be shared; destructors would run per
-// allocation.
-```
-
-The whole point of `as_interface` is that there is one `AppService` with one
-refcount, no matter how many interface faces point at it.
+Use this pattern whenever a single service implements several interfaces
+and those interfaces need to be handed to different subsystems. One
+allocation, one refcount, one destructor — and each subsystem holds the
+face it needs, with the concrete type inferred from the `Arc<T>` receiver.
 
 ## Runtime registry patterns (`std.runtime`)
 
