@@ -7421,6 +7421,33 @@ class HIRToMIR:
 		bridge honest: the runtime call shape matches the helper's
 		declared signature exactly.
 		"""
+		# Stage 3 slice 2 — detect fat Arc<I> receiver and dispatch
+		# to fat lowering.  Detection uses the **layout** predicate
+		# `is_arc_fat_layout_instance` (NOT the semantic
+		# `is_arc_interface_view_instance`): the layout predicate
+		# reflects the live struct-instance shape, not the semantic
+		# "Arc<I>" identity.  Slice 2 keeps layout specialization OFF
+		# in `ensure_struct_instantiated`, so every live `Arc<I>`
+		# today still has the thin `{buf}` shape and this predicate
+		# returns False everywhere — the fat dispatch below is
+		# unreachable.  Slice 3 flips the layout branch and the fat
+		# path becomes live.  Reaching the fat lowering with a thin
+		# layout would try to extract `ctrl`/`data`/`vtable` fields
+		# from a struct that only has `buf`, which is the kind of
+		# coupling Stage 2's dormancy rule forbids.
+		_fat_dispatch_ty: TypeId | None = None
+		_recv_ty_probe = self._infer_expr_type(expr.receiver)
+		if _recv_ty_probe is not None:
+			_recv_def_probe = self._type_table.get(_recv_ty_probe)
+			_inner_recv_ty = (
+				_recv_def_probe.param_types[0]
+				if _recv_def_probe.kind is TypeKind.REF and _recv_def_probe.param_types
+				else _recv_ty_probe
+			)
+			if self._type_table.is_arc_fat_layout_instance(_inner_recv_ty):
+				_fat_dispatch_ty = _inner_recv_ty
+		if _fat_dispatch_ty is not None:
+			return self._lower_arc_fat_intrinsic_call(expr, info, kind, _fat_dispatch_ty)
 		csid = getattr(expr, "callsite_id", None)
 		helper_map = getattr(self._type_table, "arc_helper_inst_fn_by_callsite", None) or {}
 		helper_fn_id = helper_map.get((self._current_fn_id, csid)) if csid is not None else None
@@ -7495,6 +7522,176 @@ class HIRToMIR:
 		self.b.emit(M.Call(dest=dest, fn_id=helper_fn_id, args=arg_vals, can_throw=False))
 		self._local_types[dest] = ret_ty
 		return dest
+
+	def _lower_arc_fat_intrinsic_call(
+		self,
+		expr: H.HMethodCall,
+		info: CallInfo,
+		kind: IntrinsicKind,
+		arc_iface_ty: TypeId,
+	) -> M.ValueId | None:
+		"""Lower `INTRINSIC(ARC_CLONE|ARC_GET|ARC_DESTROY)` for a fat
+		`Arc<I>` receiver.
+
+		Fat `Arc<I>` layout is `{ctrl, data, vtable}` (all
+		`mem.Ptr<Byte>`).  Refcount and drop are I-erased — a single
+		pair of Slice 1 runtime helpers
+		(`_arc_fat_bump_strong_via_ctrl` and `_arc_fat_drop_via_ctrl`)
+		operating only on `ctrl` serves every `Arc<I>` instance.
+
+		**Dormancy contract (Slice 2):** this method is reached ONLY
+		when `is_arc_interface_view_instance(recv_ty)` returns True
+		for the receiver, which requires layout specialization to be
+		active in `ensure_struct_instantiated`.  Slice 2 does not
+		activate that specialization — every live `Arc<I>` today
+		still gets the thin `{buf}` layout, so this method is
+		unreachable at runtime.  Slice 3 flips the layout and this
+		path becomes live alongside `ARC_AS_INTERFACE` lowering.
+
+		**No Arc-specific vtable namespace.**  `.get()` constructs
+		the borrowed interface shape using the same runtime vtable
+		symbols the existing `IfaceUpcast` / `CallIface` machinery
+		already emits for `&Interface` references; no parallel
+		Arc-only vtable path is introduced.
+		"""
+		# Receiver borrow mode is determined by the intrinsic kind,
+		# not by any helper sig — the fat path does not dispatch
+		# through a per-T helper template.  ARC_CLONE and ARC_GET
+		# want `&Arc<I>`; ARC_DESTROY takes `Arc<I>` by value.
+		wants_borrow = kind in (IntrinsicKind.ARC_CLONE, IntrinsicKind.ARC_GET)
+		recv_val: M.ValueId
+		if wants_borrow:
+			recv_ty = self._infer_expr_type(expr.receiver)
+			recv_def = self._type_table.get(recv_ty) if recv_ty is not None else None
+			if recv_def is not None and recv_def.kind is TypeKind.REF:
+				recv_val = self.lower_expr(expr.receiver)
+			else:
+				place_expr = None
+				if hasattr(H, "HPlaceExpr") and isinstance(expr.receiver, getattr(H, "HPlaceExpr")):
+					place_expr = expr.receiver
+				elif isinstance(expr.receiver, H.HVar):
+					place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
+				if place_expr is None:
+					raise NotImplementedError(
+						"fat Arc intrinsic auto-borrow requires an lvalue receiver in v1"
+					)
+				recv_val, _inner = self._lower_addr_of_place(place_expr, is_mut=False)
+		else:
+			recv_val = self._lower_call_arg(expr.receiver, arc_iface_ty)
+
+		# Field indices into the fat {ctrl, data, vtable} layout.
+		# Must stay synchronized with
+		# `TypeTable._arc_interface_view_layout`.
+		_FAT_CTRL_IDX = 0
+		_FAT_DATA_IDX = 1
+		_FAT_VTABLE_IDX = 2
+		byte_ty = self._type_table.ensure_byte()
+		ptr_byte_ty = self._type_table.new_ptr(byte_ty)
+
+		def _extract_fat_field(owner_val: M.ValueId, field_idx: int) -> M.ValueId:
+			"""Load a fat Arc<I> field from either a by-value struct or a
+			borrowed struct pointer.  Emits `LoadRef(AddrOfField)` when
+			the receiver is a pointer; `StructGetField` when by-value."""
+			dest = self.b.new_temp()
+			if wants_borrow:
+				# owner_val is a pointer to the Arc<I> struct.
+				addr = self.b.new_temp()
+				self.b.emit(
+					M.AddrOfField(
+						dest=addr,
+						base_ptr=owner_val,
+						struct_ty=arc_iface_ty,
+						field_index=field_idx,
+						field_ty=ptr_byte_ty,
+					)
+				)
+				self._local_types[addr] = self._type_table.new_ptr(ptr_byte_ty)
+				self.b.emit(M.LoadRef(dest=dest, ptr=addr, inner_ty=ptr_byte_ty))
+			else:
+				self.b.emit(
+					M.StructGetField(
+						dest=dest,
+						subject=owner_val,
+						struct_ty=arc_iface_ty,
+						field_index=field_idx,
+						field_ty=ptr_byte_ty,
+					)
+				)
+			self._local_types[dest] = ptr_byte_ty
+			return dest
+
+		if kind is IntrinsicKind.ARC_CLONE:
+			# Extract all three fat fields so we can reconstruct the
+			# new Arc<I> with the identical triple.  Bumping the
+			# strong count via the Slice 1 helper is the only side
+			# effect.
+			ctrl_v = _extract_fat_field(recv_val, _FAT_CTRL_IDX)
+			data_v = _extract_fat_field(recv_val, _FAT_DATA_IDX)
+			vtbl_v = _extract_fat_field(recv_val, _FAT_VTABLE_IDX)
+			bump_fn = self._find_free_fn_id(
+				"std.concurrent", "_arc_fat_bump_strong_via_ctrl"
+			)
+			if bump_fn is None:
+				raise AssertionError(
+					"Slice 1 helper `_arc_fat_bump_strong_via_ctrl` not "
+					"found in signatures — the fat ARC_CLONE path requires "
+					"the non-generic refcount-bump helper declared in "
+					"stdlib/std/concurrent/concurrent.drift"
+				)
+			self.b.emit(M.Call(dest=None, fn_id=bump_fn, args=[ctrl_v], can_throw=False))
+			dest = self.b.new_temp()
+			self.b.emit(
+				M.ConstructStruct(
+					dest=dest,
+					struct_ty=arc_iface_ty,
+					args=[ctrl_v, data_v, vtbl_v],
+				)
+			)
+			self._local_types[dest] = arc_iface_ty
+			return dest
+
+		if kind is IntrinsicKind.ARC_DESTROY:
+			# By-value receiver; ctrl is the first field.  Drop via
+			# the Slice 1 helper — null-guarded atomic fetch-sub
+			# plus drop_thunk on last drop.
+			ctrl_v = _extract_fat_field(recv_val, _FAT_CTRL_IDX)
+			drop_fn = self._find_free_fn_id(
+				"std.concurrent", "_arc_fat_drop_via_ctrl"
+			)
+			if drop_fn is None:
+				raise AssertionError(
+					"Slice 1 helper `_arc_fat_drop_via_ctrl` not found "
+					"in signatures — the fat ARC_DESTROY path requires "
+					"the non-generic atomic-drop helper declared in "
+					"stdlib/std/concurrent/concurrent.drift"
+				)
+			self.b.emit(M.Call(dest=None, fn_id=drop_fn, args=[ctrl_v], can_throw=False))
+			return None
+
+		if kind is IntrinsicKind.ARC_GET:
+			# `.get()` returns `&I` — the borrowed interface fat
+			# reference `{data_ptr, vtable_ptr}`.  Slice 2 scaffolds
+			# the dispatch but defers the actual emission to Slice 3,
+			# where constructing the `&I` shape coordinates with the
+			# existing `IfaceUpcast` / `CallIface` vtable machinery
+			# and with layout activation.  No refcount touch.
+			raise NotImplementedError(
+				"Stage 3 slice 2 scaffolding: fat ARC_GET dispatch "
+				"detected, but the `&I = {data, vtable}` construction "
+				"emission lands in slice 3 alongside layout activation "
+				"and ARC_AS_INTERFACE.  This path is unreachable in "
+				"slice 2 because layout specialization for Arc<I> is "
+				"not yet active — arriving here means the predicate "
+				"`is_arc_interface_view_instance` fired against a "
+				"type that should not exist until slice 3."
+			)
+
+		raise AssertionError(
+			f"unexpected fat Arc intrinsic kind {kind} reached "
+			f"`_lower_arc_fat_intrinsic_call` — only ARC_CLONE, ARC_GET, "
+			f"and ARC_DESTROY route here; ARC_AS_INTERFACE has its own "
+			f"(thin-receiver) lowering slot"
+		)
 
 	def _lower_method_call_with_info(self, expr: H.HMethodCall, info: CallInfo) -> tuple[M.ValueId | None, CallInfo]:
 		"""

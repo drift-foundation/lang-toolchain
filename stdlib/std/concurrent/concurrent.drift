@@ -389,6 +389,87 @@ fn _arc_drop_thunk_for<T>(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 	return;
 }
 
+// ---------------------------------------------------------------------
+// Stage 3 fat-Arc primitives (DORMANT in slice 1)
+// ---------------------------------------------------------------------
+//
+// `Arc<I>` where I is an interface uses a fat `{ctrl, data, vtable}`
+// layout (all `mem.Ptr<Byte>`).  I is irrelevant at refcount and
+// destroy time — drop runs through the `drop_thunk` captured at
+// `arc<T=concrete>(value)` construction, and the strong count lives at
+// offset 0 of `ArcHeader` (which is at offset 0 of `ArcBox<T>`,
+// addressed by `ctrl`).  The two helpers below encapsulate that
+// `ctrl`-only view: one atomic-bumps the strong count (called by
+// `.clone()` on Arc<I> and by `.as_interface<I>()` when minting a
+// fresh fat handle), one atomic-decrements and runs `drop_thunk` on
+// last drop (called at scope exit on Arc<I>).
+//
+// These are non-generic — a single symbol serves every `Arc<I>`
+// instance — matching the design directive that I is erased at
+// refcount time.  **Slice 1 lands them as dormant scaffolding: no
+// production call site wires to them yet.**  Slice 3 of the Stage 3
+// plan activates them when layout specialization goes live for
+// `Arc<Interface>` and `ARC_AS_INTERFACE` lowering starts producing
+// fat handles.  See `work/fat-arc-interface-views/stage3_plan.md`.
+//
+// `ctrl` contract: points at the base of an `ArcBox<T>` allocation.
+// `ArcBox<T>` layout is `{ header: ArcHeader, value: T }` with
+// `header.strong` at offset 0.  Both helpers treat the first
+// `sizeof(ArcHeader)` bytes as an `ArcHeader`.
+
+/// Stage 3 dormant primitive — atomic strong-count bump for fat Arc.
+///
+/// Reinterprets the first `sizeof(ArcHeader)` bytes of the allocation
+/// at `ctrl` as `ArcHeader` and performs a relaxed atomic fetch-add
+/// (+1) on `header.strong`.  Matches the strong-bump side of
+/// `_arc_clone_impl<T>` but without needing T — a single symbol for
+/// every interface I.
+fn _arc_fat_bump_strong_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
+	unsafe {
+		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
+		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
+		val _ = atomic.atomic_fetch_add_int(&slot.strong, 1, 0);
+	}
+	return;
+}
+
+/// Stage 3 dormant primitive — atomic strong-count decrement + drop.
+///
+/// Null-check guards the moved-from Arc sentinel (matches
+/// `_arc_destroy_impl<T>`'s null guard).  Otherwise atomic-subtracts
+/// 1 from `header.strong`; when the previous value was 1, loads
+/// `header.drop_thunk` (the per-T destructor captured at
+/// `arc<T=concrete>(value)` time) and invokes it with `ctrl`.
+///
+/// The release/acquire ordering mirrors the thin path
+/// (`_arc_destroy_impl<T>`): release on the fetch-sub (so prior
+/// writes through THIS Arc<I> are visible to whichever handle wins
+/// last-drop), plus the acquire load before `drop_thunk` — the
+/// same sequence the thin helper emits.
+fn _arc_fat_drop_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
+	unsafe {
+		if mem.ptr_is_null<type Byte>(ctrl) {
+			return;
+		}
+	}
+	var prev = 0;
+	unsafe {
+		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
+		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
+		prev = atomic.atomic_fetch_sub_int(&slot.strong, 1, 2);
+	}
+	if prev == 1 {
+		unsafe {
+			val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
+			val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
+			val _ = atomic.atomic_load_int(&slot.strong, 1);
+			val thunk = slot.drop_thunk;
+			thunk(ctrl);
+		}
+	}
+	return;
+}
+
 /// Atomically reference-counted shared owner of a `T`.
 ///
 /// Construct via `arc(value)`.  Each `.clone()` increments the count;

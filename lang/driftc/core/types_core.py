@@ -1210,6 +1210,12 @@ class TypeTable:
 		`std.concurrent.Arc<T>` where T is an interface.  Used by
 		compiler passes that have a TypeId in hand (LLVM codegen, MIR
 		lowering) rather than a schema + args pair.
+
+		This is the **semantic** predicate — it reports "Arc<I> for
+		some interface I" independent of whether layout specialization
+		has been activated for this instance.  If you need the
+		**actual-layout** predicate (fat `{ctrl, data, vtable}` vs.
+		thin `{buf}`), use `is_arc_fat_layout_instance`.
 		"""
 		inst = self.get_struct_instance(ty_id)
 		if inst is None:
@@ -1218,6 +1224,29 @@ class TypeTable:
 		if schema is None:
 			return False
 		return self.is_arc_interface_view(schema, list(inst.type_args))
+
+	def is_arc_fat_layout_instance(self, ty_id: TypeId) -> bool:
+		"""Instance-level **layout** predicate — True iff `ty_id` is
+		an `Arc<I>` whose instance has actually been specialized to
+		the fat `{ctrl, data, vtable}` shape.
+
+		Distinct from `is_arc_interface_view_instance`: the semantic
+		predicate reports the "Arc<I>" identity; THIS predicate
+		reports the live struct-instance layout.  Slice 2 of the
+		Stage 3 plan is a dormant-scaffolding stage where
+		`ensure_struct_instantiated` does NOT yet emit the fat
+		layout, so every `Arc<I>` instance still has the thin
+		`{buf}` shape and this predicate returns False everywhere —
+		keeping slice 2's fat MIR dispatch unreachable.  Slice 3
+		flips the layout branch and this predicate starts returning
+		True for any `Arc<Interface>`.
+		"""
+		if not self.is_arc_interface_view_instance(ty_id):
+			return False
+		inst = self.get_struct_instance(ty_id)
+		if inst is None:
+			return False
+		return tuple(inst.field_names) == ("ctrl", "data", "vtable")
 
 	def _arc_interface_view_layout(self) -> tuple[list[str], list[TypeId]]:
 		"""Synthetic layout for `Arc<Interface>` — three Ptr<Byte> fields.
