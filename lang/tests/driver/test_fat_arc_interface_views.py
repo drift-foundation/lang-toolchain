@@ -108,6 +108,71 @@ fn main() nothrow -> Int {
 """.lstrip()
 
 
+_CHAINED_RVALUE_AS_INTERFACE_CLONE = """
+module main;
+
+import std.concurrent as conc;
+
+pub interface Face {
+	fn tag(self: &Self) nothrow -> Int;
+}
+
+pub struct App {
+	pub n: Int
+}
+
+implement Face for App {
+	pub fn tag(self: &App) nothrow -> Int {
+		return self.n;
+	}
+}
+
+fn main() nothrow -> Int {
+	val app = conc.arc(App(n = 42));
+	// Chained rvalue receiver: `.as_interface<type Face>()` returns
+	// a fresh `Arc<Face>` rvalue that is IMMEDIATELY the receiver
+	// of `.clone()`.  Thin Arc already supports this shape (see
+	// test_arc_clone_get_chained_rvalue_receiver).  Fat Arc must
+	// support it too — chained rvalues are the idiomatic call
+	// shape for `as_interface<I>()`.
+	val face2 = app.as_interface<type Face>().clone();
+	return face2.get().tag();
+}
+""".lstrip()
+
+
+_CHAINED_RVALUE_AS_INTERFACE_GET_METHOD = """
+module main;
+
+import std.concurrent as conc;
+
+pub interface Face {
+	fn tag(self: &Self) nothrow -> Int;
+}
+
+pub struct App {
+	pub n: Int
+}
+
+implement Face for App {
+	pub fn tag(self: &App) nothrow -> Int {
+		return self.n;
+	}
+}
+
+fn main() nothrow -> Int {
+	val app = conc.arc(App(n = 42));
+	// Chained rvalue: `.as_interface<type Face>()` returns a fresh
+	// `Arc<Face>` rvalue, `.get()` on that returns a borrowed
+	// `&Face` rvalue, and `.tag()` dispatches through the vtable.
+	// If the `.get()` path requires an lvalue receiver, this
+	// breaks — fat path must materialize the Arc<Face>
+	// temporary for the borrow.
+	return app.as_interface<type Face>().get().tag();
+}
+""".lstrip()
+
+
 _SHARED_MUTATION_VIA_MUTEX = """
 module main;
 
@@ -384,6 +449,34 @@ def test_as_interface_rejected_when_require_fails(tmp_path: Path) -> None:
 		args += ["--stdlib-root", str(root)]
 	rc = driftc_main(args)
 	assert rc != 0, "as_interface with unsatisfied require must be rejected"
+
+
+def test_as_interface_chained_rvalue_clone(tmp_path: Path) -> None:
+	"""Fat rvalue receiver — parallel to the thin-Arc regression
+	`test_arc_clone_get_chained_rvalue_receiver`.  The shape
+	`app.as_interface<type Face>().clone()` produces a chain where
+	the `.clone()` receiver is the immediate rvalue `Arc<Face>`
+	from `.as_interface<I>()`.  Slice 3 gate: this must compile
+	and run alongside layout activation, not as a post-activation
+	follow-up.  Returns 42 when wired correctly."""
+	rc, stdout, stderr = _compile_and_run(tmp_path, _CHAINED_RVALUE_AS_INTERFACE_CLONE)
+	assert rc == 42, (
+		f"chained rvalue .as_interface<I>().clone() did not dispatch: "
+		f"rc={rc} stdout={stdout!r} stderr={stderr!r}"
+	)
+
+
+def test_as_interface_chained_rvalue_get_method(tmp_path: Path) -> None:
+	"""Fat rvalue receiver — the hot-path shape for logger-style
+	use: `app.as_interface<type Face>().get().method()`.
+	The `.get()` receiver is an immediate rvalue `Arc<Face>`,
+	and the `.method()` receiver is a borrowed `&Face` rvalue.
+	Slice 3 gate: idiomatic user shape, must work on activation."""
+	rc, stdout, stderr = _compile_and_run(tmp_path, _CHAINED_RVALUE_AS_INTERFACE_GET_METHOD)
+	assert rc == 42, (
+		f"chained rvalue .as_interface<I>().get().method() did not "
+		f"dispatch: rc={rc} stdout={stdout!r} stderr={stderr!r}"
+	)
 
 
 def test_clone_through_interface_view_preserves_dispatch(tmp_path: Path) -> None:

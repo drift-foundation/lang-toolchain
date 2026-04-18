@@ -278,6 +278,18 @@ class TypeProvenanceEntry:
 	order: int = 0
 
 
+# Stage 3 activation flag — gates the `Arc<I>` layout specialization
+# in `TypeTable.ensure_struct_instantiated`.  Flipping False → True
+# is the cut-over moment for fat `Arc<Interface>` and must happen in
+# the same commit that lands `ARC_AS_INTERFACE` MIR lowering, fat
+# `ARC_GET` emission, and the `std.log` builder migration (those
+# three pieces are all coupled to the layout shape).  Keeping this
+# False preserves the thin `{buf}` shape for every `Arc<I>`
+# instance — identical to pre-Stage-3 behaviour.  See
+# `work/fat-arc-interface-views/stage3_plan.md` § Slice 3.
+STAGE3_FAT_ARC_ACTIVE: bool = False
+
+
 class TypeTable:
 	"""
 	Simple type table that owns TypeIds.
@@ -1281,6 +1293,44 @@ class TypeTable:
 		key = (base_id, tuple(type_args))
 		if key in self._struct_instantiation_cache:
 			return self._struct_instantiation_cache[key]
+		# Stage 3 slice 3 — layout specialization for `Arc<I>` where
+		# I is an interface.  Schema declared in
+		# `stdlib/std/concurrent/concurrent.drift` carries a thin
+		# `buf: RawBuffer<ArcBox<T>>` field valid only for concrete T.
+		# When T is an interface, swap in the fat
+		# `{ctrl, data, vtable}` layout from
+		# `_arc_interface_view_layout`.  See
+		# `work/fat-arc-interface-views/phase1.md` § Representation.
+		#
+		# **Activation flag.**  The fat-layout branch is gated on
+		# `STAGE3_FAT_ARC_ACTIVE`, which stays False until the
+		# coupled pieces (ARC_AS_INTERFACE MIR lowering, fat
+		# ARC_GET emission, std.log builder migration) land in
+		# coordination.  While False, every `Arc<I>` instance keeps
+		# the thin layout and all existing paths behave
+		# identically — see the explicit "no half-live public
+		# Arc<I> state" rule in
+		# `work/fat-arc-interface-views/stage3_plan.md`.  Flipping
+		# this to True is the atomic cut-over moment.
+		if STAGE3_FAT_ARC_ACTIVE and self.is_arc_interface_view(schema, type_args):
+			fat_names, fat_types = self._arc_interface_view_layout()
+			inst_id = self._add(
+				TypeKind.STRUCT,
+				schema.name,
+				[],
+				register_named=False,
+				module_id=schema.module_id,
+				field_names=fat_names,
+			)
+			self._struct_instantiation_cache[key] = inst_id
+			self._define_struct_instance(
+				base_id,
+				inst_id,
+				type_args=list(type_args),
+				field_names=fat_names,
+				field_types=fat_types,
+			)
+			return inst_id
 		inst_id = self._add(
 			TypeKind.STRUCT,
 			schema.name,

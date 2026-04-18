@@ -7540,13 +7540,19 @@ class HIRToMIR:
 		operating only on `ctrl` serves every `Arc<I>` instance.
 
 		**Dormancy contract (Slice 2):** this method is reached ONLY
-		when `is_arc_interface_view_instance(recv_ty)` returns True
-		for the receiver, which requires layout specialization to be
-		active in `ensure_struct_instantiated`.  Slice 2 does not
-		activate that specialization — every live `Arc<I>` today
-		still gets the thin `{buf}` layout, so this method is
-		unreachable at runtime.  Slice 3 flips the layout and this
-		path becomes live alongside `ARC_AS_INTERFACE` lowering.
+		when `is_arc_fat_layout_instance(recv_ty)` returns True for
+		the receiver — the **layout** predicate, which inspects the
+		live struct-instance shape (field names must be exactly
+		`("ctrl", "data", "vtable")`).  This is distinct from the
+		semantic `is_arc_interface_view_instance` predicate, which
+		only reports the "Arc<I>" identity and returns True
+		regardless of whether layout specialization has fired.
+		Slice 2 keeps the layout specialization branch in
+		`ensure_struct_instantiated` disabled, so every live
+		`Arc<I>` still has the thin `{buf}` shape, the layout
+		predicate returns False, and this method is unreachable at
+		runtime.  Slice 3 flips the layout branch and this path
+		becomes live alongside `ARC_AS_INTERFACE` lowering.
 
 		**No Arc-specific vtable namespace.**  `.get()` constructs
 		the borrowed interface shape using the same runtime vtable
@@ -7681,9 +7687,11 @@ class HIRToMIR:
 				"emission lands in slice 3 alongside layout activation "
 				"and ARC_AS_INTERFACE.  This path is unreachable in "
 				"slice 2 because layout specialization for Arc<I> is "
-				"not yet active — arriving here means the predicate "
-				"`is_arc_interface_view_instance` fired against a "
-				"type that should not exist until slice 3."
+				"not yet active — arriving here means the layout "
+				"predicate `is_arc_fat_layout_instance` fired against "
+				"an instance whose struct fields should still be thin "
+				"(`buf` only) until slice 3 flips the layout branch "
+				"in `ensure_struct_instantiated`."
 			)
 
 		raise AssertionError(

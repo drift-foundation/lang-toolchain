@@ -112,104 +112,199 @@ Prerequisite (already landed, not part of implementation sequence):
 expected on the Stage 2 `ARC_AS_INTERFACE` placeholder; test #4
 (negative require) passes via Stage 1 typecheck gate.
 
-Implementation steps — strictly sequential, each keeps the repo
-runnable:
+Implementation slices (user decision 2026-04-17, REVISED):
+activation-bundle-as-one-commit rule loosened.  Each slice is
+either (a) green and behaviour-preserving or (b) clearly dormant
+behind an inactive branch.  The strict invariant remains: no
+shippable broken intermediate state where public `Arc<I>`
+behaviour is half-enabled.
 
-### Step 1: the activation bundle.
+### Slice 1 — dormant runtime primitives.
 
-The earlier draft tried to split layout specialization, fat
-method lowerings, `ARC_AS_INTERFACE`, stdlib migration, and the
-`conc.arc<T>(iface)` rejection into separate steps.  A probe
-showed they cannot be separated without transient compiler
-scaffolding that gets deleted the moment the bundle completes.
-Specifically:
+`stdlib/std/concurrent/concurrent.drift` adds two non-generic
+private helpers that operate only on the erased `ctrl: Ptr<Byte>`
+(I-independent):
+- `_arc_fat_bump_strong_via_ctrl` — atomic strong-count +1.
+- `_arc_fat_drop_via_ctrl` — null guard + atomic strong-count
+  −1 + `drop_thunk` on last drop.
 
-- `fn arc<T>(value: T) -> Arc<T>` in
-  `stdlib/std/concurrent/concurrent.drift:446` has a body
-  (`return Arc<type T>(buf = rawbuffer_from_parts(...))`) that
-  is structurally valid **only** for the thin `{buf}` layout.
-- `_arc_clone_impl<T>`, `_arc_get_impl<T>`, `_arc_destroy_impl<T>`
-  read `self.buf` and are valid only for thin concrete T.
-- The moment `T=interface` implies the fat `{ctrl, data, vtable}`
-  layout, every instantiation of those bodies at `T=interface`
-  is structurally wrong — the monomorphizer generates code
-  against the thin schema against a struct with the fat schema.
-- The supported construction path for `Arc<Interface>` is
-  `arc(concrete).as_interface<I>()`, so `std.log` **must
-  migrate in the same commit** — it currently uses
-  `conc.arc<type ContextResolver>(move noop)` which is precisely
-  the banned shape.
-- Keeping `conc.arc<T=iface>` allowed after fat layout lands
-  would let user code request an impossible construction —
-  the rejection is not optional.
+Both mirror the thin-path ordering (`_arc_clone_impl<T>`,
+`_arc_destroy_impl<T>`) exactly.  No call sites.  Full driver
+stays at baseline.  **Landed, gate green.**
 
-So Step 1 is **"activate fat Arc<I>"** as one coherent commit:
+### Slice 2 — fat dispatch scaffolding (dormant).
 
-1a. **Layout specialization.**  `ensure_struct_instantiated` in
-   `lang/driftc/core/types_core.py` routes `Arc<T>` with
-   `is_arc_interface_view(schema, type_args)` to the fat
-   `{ctrl, data, vtable}` layout via
-   `_arc_interface_view_layout`.
+- New layout predicate `TypeTable.is_arc_fat_layout_instance`
+  (distinct from semantic `is_arc_interface_view_instance`):
+  returns True only when the struct-instance field names are
+  exactly `("ctrl", "data", "vtable")`.
+- `hir_to_mir.py::_lower_arc_intrinsic_call` detects fat
+  receivers via the layout predicate and dispatches to
+  `_lower_arc_fat_intrinsic_call`:
+  - `ARC_CLONE` — extracts ctrl/data/vtable, calls Slice 1
+    `_arc_fat_bump_strong_via_ctrl(ctrl)`, constructs a new
+    `Arc<I>{ctrl, data, vtable}`.
+  - `ARC_DESTROY` — extracts ctrl, calls Slice 1
+    `_arc_fat_drop_via_ctrl(ctrl)`.
+  - `ARC_GET` — scaffolded with an explicit slice-3
+    `NotImplementedError` (needs coordination with layout
+    activation and the existing `IfaceUpcast`/`CallIface`
+    vtable machinery; no Arc-specific vtable namespace
+    introduced).
 
-1b. **Fat `ARC_CLONE` / `ARC_GET` / `ARC_DESTROY`.**  In
-   `hir_to_mir.py::_lower_arc_intrinsic_call`, branch on
-   receiver fatness (`is_arc_interface_view_instance(
-   concrete_receiver_ty)`).  Fat side lowers via
-   compiler-emitted MIR ops / a single non-generic fat helper
-   in std.concurrent (I is irrelevant at these ops — all three
-   operate on the `{ctrl, data, vtable}` erased triple).
+Dormancy: `ensure_struct_instantiated` does NOT yet emit the
+fat layout, so the layout predicate returns False everywhere,
+and the entire fat dispatch is unreachable.  **Landed, gate
+green.**
 
-1c. **`ARC_AS_INTERFACE` lowering.**  Emitted at
+### Slice 3 — fat Arc<I> activation.
+
+This is the slice that flips public `Arc<I>` behaviour.  Every
+piece listed below must land TOGETHER in one commit — there is
+no intermediate world where the layout flip is live but one of
+these is missing without producing a half-broken state.
+
+**Why all in one commit (coupling rationale):**
+
+- Layout flip makes `Arc<I>` a fat `{ctrl, data, vtable}`
+  struct.  Any code path that still constructs `Arc<I>` as
+  thin `{buf = …}` — including `fn arc<T=I>` in
+  `stdlib/std/concurrent/concurrent.drift` — hard-fails to
+  typecheck ("struct 'Arc' constructor expects 3 args, got 1"
+  at `concurrent.drift:494`).  The ONLY call site in the
+  current tree that exercises that broken path is
+  `stdlib/std/log/log.drift:455` / `:590`, which constructs
+  `conc.arc<type ContextResolver>(move noop)` and triggers
+  the `fn arc<T=ContextResolver>` instantiation.  Without
+  slice 3 migrating those two sites, the stdlib itself stops
+  compiling and the entire driver gate blows up.
+- Direct `conc.arc<T=interface>` from user code fails after
+  activation too — same cryptic constructor error.  Adding
+  the typecheck rejection (`E_ARC_OF_INTERFACE_DIRECT`)
+  in the same commit gives users the proper diagnostic
+  from the moment layout activates; deferring it to a
+  follow-up leaves users with a confusing cryptic error in
+  the meantime.  No user-visible benefit to separating.
+- Fat `ARC_GET` emission and fat rvalue-receiver support
+  are load-bearing for every call chain through
+  `as_interface<I>().get()` / `.clone()` / `.destroy()`,
+  which is every fat Arc test's hot path.  Missing either
+  leaves the activation non-shippable.
+
+3a. **Layout specialization flag flip.**  Set
+   `STAGE3_FAT_ARC_ACTIVE = True` in
+   `lang/driftc/core/types_core.py` so
+   `ensure_struct_instantiated` routes `Arc<T>` where T is
+   an interface to the fat `{ctrl, data, vtable}` layout
+   (via `_arc_interface_view_layout` and the existing
+   `is_arc_interface_view` predicate).  Flipping the flag is
+   the atomic cut-over moment; this step must land in the
+   same commit as 3b–3g below.
+
+3b. **Fat `ARC_GET` emission.**  Replace the Slice 2
+   `NotImplementedError` in
+   `_lower_arc_fat_intrinsic_call` with the actual
+   `&I = {data, vtable}` construction.  Reuse the existing
+   `IfaceUpcast` / `CallIface` / `_ensure_interface_vtable(I, T)`
+   machinery — do not invent an Arc-specific vtable namespace.
+   The `data` and `vtable` fields of the fat Arc<I> ARE the
+   borrowed-interface shape; `.get()` just materializes that
+   pair as a `&I` value, no refcount touch.
+
+3c. **`ARC_AS_INTERFACE` lowering.**  Emit at
    `hir_to_mir.py` for the `&Arc<T=concrete>` → `Arc<I>`
-   transition: read `ctrl` via `rawbuffer_ptr<ArcBox<T>>(&self.buf)`,
-   `atomic_fetch_add(ctrl.strong, 1)`, compute `data = ctrl +
-   offsetof(ArcBox<T>, value)`, look up the T-as-I vtable
-   through the existing `_ensure_interface_vtable(I, T)` hook,
-   construct the fat `Arc<I>{ctrl, data, vtable}`.
+   transition:
+   - Read the thin `self.buf` and extract
+     `ctrl = rawbuffer_ptr<ArcBox<T>>(&self.buf)`.
+   - Call Slice 1 `_arc_fat_bump_strong_via_ctrl(ctrl)`.
+   - Compute `data = ctrl + offsetof(ArcBox<T>, value)` —
+     per-T compile-time constant.
+   - Look up T-as-I vtable via
+     `_ensure_interface_vtable(I, T)`.
+   - Construct fat `Arc<I>{ctrl, data, vtable}`.
 
-1d. **std.log migration.**  Rewrite the two call sites at
+3d. **Destructible-scan update.**  At `driftc.py:3824`, fat
+   `Arc<I>` instances must point `destructor_fns` at a
+   compiler-emitted fat wrapper (single non-generic shim that
+   extracts `ctrl` and calls `_arc_fat_drop_via_ctrl`) rather
+   than queuing the thin per-T `_arc_destroy_impl<T>` helper.
+
+3e. **Helper-instantiation update.**
+   `driftc.py::_queue_instantiations` and
+   `_arc_helper_template_key_for_intrinsic` must NOT queue
+   thin `_arc_*_impl<T>` helpers when the callsite receiver
+   type is fat `Arc<I>`.
+
+3f. **Fat rvalue-receiver support.**  Slice 2's
+   `_lower_arc_fat_intrinsic_call` reuses the Stage 2
+   by-borrow lvalue path; chained-rvalue receivers currently
+   hit `NotImplementedError`.  Slice 3 MUST cover the
+   idiomatic shapes as part of activation:
+
+       val face2 = app.as_interface<type Face>().clone();
+       val x     = app.as_interface<type Face>().get().method();
+
+   Regressions already pinned:
+   `test_as_interface_chained_rvalue_clone` and
+   `test_as_interface_chained_rvalue_get_method` in
+   `lang/tests/driver/test_fat_arc_interface_views.py`.
+
+3g. **std.log migration.**  Rewrite the two call sites at
    `stdlib/std/log/log.drift:455` and `:590`:
 
-       val concrete_noop = NoContextResolver();
-       // was: conc.arc<type ContextResolver>(move concrete_noop)
-       // now: conc.arc(move concrete_noop).as_interface<type ContextResolver>()
+       val concrete_noop = conc.arc(NoContextResolver());
+       // was: conc.arc<type ContextResolver>(move noop)
+       // now: concrete_noop.as_interface<type ContextResolver>()
 
-   Closes task #24.
+   And change the `context_resolver` builder method signature
+   from `var r: ContextResolver` to
+   `var r: conc.Arc<ContextResolver>` — caller now constructs
+   the Arc+coercion explicitly.  Update
+   `lang/tests/codegen/e2e/std_log_resolver_active/main.drift`
+   to the new builder shape.  Closes task #24.
 
-1e. **Typecheck rejection of `conc.arc<T=iface>`.**  In
+3h. **Typecheck rejection of `conc.arc<T=iface>`.**  In
    `lang/driftc/checker/call_resolver.py` at the generic
    free-call resolution: when `decl.fn_id` resolves to
    `std.concurrent::arc` AND
    `is_arc_interface_view_instance(sig_inst.result_type)`,
    emit `E_ARC_OF_INTERFACE_DIRECT` with a directive to
    `arc(concrete).as_interface<type I>()`.  Turns
-   `test_arc_rejects_interface_t.py` green.
+   `test_arc_rejects_interface_t.py` green.  Bundled into
+   Slice 3 alongside layout activation because after the
+   flip the `fn arc<T=iface>` body is structurally invalid —
+   a direct call either hits this rejection (clean
+   diagnostic) or the cryptic 3-args-vs-1-arg constructor
+   failure from inside the stdlib body (bad UX).  Users
+   deserve the clean diagnostic from the moment layout
+   activates; no reason to ship layout without it.
 
-Gate for the activation bundle:
-- `test_fat_arc_interface_views.py`: 6/0.
+Slice 3 gate:
+- `test_fat_arc_interface_views.py`: all tests green
+  (all 7 fat-Arc regressions flip, including the two
+  rvalue shapes).
 - `test_arc_rejects_interface_t.py`: 3/0.
-- `test_arc_intrinsic_bridge.py`: 5/0 (Stage 2 bridge unchanged).
+- `test_arc_intrinsic_bridge.py`: 5/0 (Stage 2 thin bridge
+  unchanged).
 - `std_log_resolver_active` e2e fixture: green (runtime pin).
-- Full driver suite: matches post-ArcHeader-fix count
-  (1035/0 or higher if the activation bundle unblocks tests
-  that were waiting on fat Arc).
+- Full driver: baseline (1038+) restored with activation live.
 
-### Step 2: ABI bump 9 → 10 + version bump.
+### Slice 4 — ABI bump 9 → 10 + version bump.
 
-Follow-up after the activation bundle is gate-green.
+Small follow-up after Slice 3 is gate-green.
 `lang/versions.py`: `DRIFT_RT_ABI_VERSION: 9 → 10` and
-`DRIFTC_VERSION` patch bump.  The only boundary-exposed
+`DRIFTC_VERSION` patch bump.  Only boundary-exposed
 `Arc<Interface>` today is
-`stdlib/std/log/log.drift::LoggerConfig.resolver`; no downstream
-packages are published against the current tip, so no external
-coordination required.
+`stdlib/std/log/log.drift::LoggerConfig.resolver`; no
+downstream packages published against the current tip, so no
+external coordination required.
 
-### Step 3: memory + docs.
+### Slice 5 — memory + docs.
 
-Mark task #22 + #26 completed.  Add a Stage 3 memory note with
-the fat layout fields and the ABI contract.  Update
+Mark task #22 + #26 completed.  Add a Stage 3 memory note
+with the fat layout fields and the ABI contract.  Update
 `project_fat_arc_stage2_bridge.md` to cross-reference the
-follow-up Stage 3 note.
+Stage 3 follow-up.
 
 ## Estimated surface
 
