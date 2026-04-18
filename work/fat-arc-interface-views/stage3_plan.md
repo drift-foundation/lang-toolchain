@@ -365,33 +365,39 @@ regressions.
 
 ---
 
-## Close of the landing session (2026-04-17)
+## Historical notes (superseded — slice structure above is authoritative)
 
-State on feature/fat-arc-interface-views:
+These notes are kept for context but do NOT drive the work.  If
+anything below conflicts with the slice structure above, the
+slice structure wins.
+
 - Stage 2 Option B bridge operational (4/4 pins green).
 - ArcHeader.drop_thunk Fn-field package serialization fixed
   (task #41, full driver suite 1035/0).
 - Stage 3 regressions landed
   (`lang/tests/driver/test_fat_arc_interface_views.py`,
-  5 expected failures on ARC_AS_INTERFACE, 1 Stage 1 pass;
-  `lang/tests/driver/test_arc_rejects_interface_t.py`,
-  1 expected failure pending Step 4, 2 negative controls green).
-- This plan doc landed as the Stage 3 implementation map.
+  5 expected failures on ARC_AS_INTERFACE + 2 rvalue pins,
+  1 Stage 1 pass; `lang/tests/driver/test_arc_rejects_interface_t.py`,
+  1 expected failure pending the later bundled activation step,
+  2 negative controls green).
 - An earlier draft of this plan put rejection of
-  `conc.arc<T>(iface)` first; the attempt uncovered a tight
-  coupling to `ARC_AS_INTERFACE` lowering (stdlib's std.log
-  uses the exact shape that rejection targets), so the checker
-  change was reverted.  The sequence above now bundles the
-  rejection + std.log migration into Step 4, after Step 3 makes
-  `as_interface<I>()` operational.
+  `conc.arc<T>(iface)` as a standalone first step; a probe
+  attempt uncovered a tight coupling to `ARC_AS_INTERFACE`
+  lowering (stdlib's std.log uses the exact shape that
+  rejection targets), so the checker change was reverted.  The
+  rejection is now bundled into the Slice 3 activation commit
+  alongside `ARC_AS_INTERFACE`, std.log migration, and the
+  layout flag flip.
+- An earlier draft also tried a "one-commit-or-nothing"
+  activation rule for Stage 3 as a whole.  The user loosened
+  that on 2026-04-17 to allow the 5-slice split above, with
+  Slices 1 and 2 landing as dormant scaffolding behind the
+  inactive `STAGE3_FAT_ARC_ACTIVE` flag, and Slice 3 being
+  the single atomic activation commit.
 
-Next session starts with **Step 1 — the activation bundle** as
-described above: layout specialization + fat
-`ARC_CLONE/GET/DESTROY` + `ARC_AS_INTERFACE` + std.log migration
-+ `conc.arc<T=iface>` rejection, landing as one coherent commit.
-A probe attempt (2026-04-17) showed the pieces cannot be
-separated without transient scaffolding that the bundle itself
-deletes — the earlier multi-step decomposition is preserved
-above as a structural index, but the commit granularity is the
-whole bundle.  ABI bump (Step 2) and docs/memory (Step 3) are
-separate follow-up commits after the bundle passes its gate.
+**Current state on feature/fat-arc-interface-views:**
+Slices 1 and 2 are landed (dormant scaffolding); Slice 3
+opener landed the `STAGE3_FAT_ARC_ACTIVE = False` flag and
+the two rvalue regression pins; the real Slice 3 activation
+commit (flag flip + all coupled pieces) is the next
+implementation step.

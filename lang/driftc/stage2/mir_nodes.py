@@ -171,6 +171,101 @@ class IfaceUpcast(MInstr):
 
 
 @dataclass
+class ArcAsInterface(MInstr):
+	"""Fat `Arc<I>` construction from a thin `&Arc<T=concrete>` and a
+	target interface `I`.
+
+	Semantics (ownership/view conversion, not plain struct construction):
+	- Read `self.buf` (`RawBuffer<ArcBox<T>>`) from the thin Arc<T>.
+	- Compute `ctrl = rawbuffer_ptr(&self.buf)` — the base of the
+	  ArcBox<T> allocation (strong count at offset 0).
+	- Atomic fetch-add +1 on `ctrl.strong` — one strong-count bump
+	  shared across every fat view deriving from this allocation.
+	- Compute `data = &(ArcBox<T>)ctrl.value` — concrete payload
+	  address computed from the *actual* ArcBox<T> struct layout
+	  for this T (alignment padding is T-dependent; do NOT assume
+	  `ctrl + sizeof(ArcHeader)`).
+	- Resolve `vtable` via the existing
+	  `_ensure_interface_vtable(I, T)` hook — no Arc-specific
+	  vtable namespace.
+	- Construct the fat `Arc<I>` struct `{ctrl, data, vtable}`.
+
+	The invariants this op encodes (documented here because they
+	drive LLVM lowering correctness):
+	- exactly ONE allocation / ONE control block;
+	- exactly ONE atomic strong bump per conversion;
+	- `data` points inside the concrete `ArcBox<T>` allocation, not
+	  a separate copy of the payload;
+	- last drop runs the concrete T's destructor via the
+	  `drop_thunk` captured at `arc<T=concrete>(value)` time,
+	  independent of which fat view holds the final strong
+	  reference.
+
+	See `work/fat-arc-interface-views/phase1.md` § Representation
+	for the full soundness argument.
+	"""
+
+	dest: ValueId
+	src_arc_ref: ValueId
+	"""Pointer to the thin `Arc<T>` struct (i.e. the receiver value
+	after auto-borrow)."""
+
+	src_arc_ty: TypeId
+	"""Thin `Arc<T>` concrete struct TypeId — carries the
+	`{buf: RawBuffer<ArcBox<T>>}` layout the op reads from."""
+
+	concrete_ty: TypeId
+	"""T — used to compute `ArcBox<T>` layout and the
+	`_ensure_interface_vtable(I, T)` lookup."""
+
+	iface_ty: TypeId
+	"""I — target interface TypeId for the vtable lookup and
+	for the result type's layout identity."""
+
+	result_ty: TypeId
+	"""Fat `Arc<I>` struct TypeId (fields: `{ctrl, data, vtable}`,
+	all `mem.Ptr<Byte>`) — what the op writes into `dest`."""
+
+
+@dataclass
+class ArcFatGet(MInstr):
+	"""Fat `Arc<I>.get()` lowering — borrowed interface reference
+	from a fat Arc's already-resolved `{data, vtable}` pair.
+
+	Semantics:
+	- Read `data` (field 1) and `vtable` (field 2) from the fat
+	  `Arc<I>`.
+	- Construct the standard borrowed-interface shape
+	  (`DRIFT_IFACE_TYPE` = `{data_ptr, vtable_ptr, inline_flag}`)
+	  directly from those pointers.
+	- No refcount touch.  No new vtable lookup — the vtable
+	  was resolved once at `ARC_AS_INTERFACE` time and has been
+	  carried in the fat handle ever since.
+	- Result is a borrowed `&I` reference; lifetime is tied to
+	  the fat Arc<I> receiver's borrow scope by the type checker.
+
+	Distinct from `ConstructIface` (fn-pointer callback shape)
+	and `ConstructIfaceValue` (boxed-value-interface shape) —
+	fat ARC_GET is the "borrowed interface from an existing
+	`{data, vtable}` pair" shape, which neither of those
+	expresses cleanly.
+	"""
+
+	dest: ValueId
+	src_arc_ref: ValueId
+	"""Pointer to the fat `Arc<I>` struct."""
+
+	src_arc_ty: TypeId
+	"""Fat `Arc<I>` struct TypeId (`{ctrl, data, vtable}`)."""
+
+	iface_ty: TypeId
+	"""I — the interface being borrowed."""
+
+	result_ref_ty: TypeId
+	"""`&I` reference TypeId."""
+
+
+@dataclass
 class ZeroValue(MInstr):
 	"""
 	dest = 0-value of a type (zero / null / zero-initialized aggregate).
