@@ -137,6 +137,7 @@ from lang.driftc.core.types_core import (
 	TypeKind,
 	VariantArmSchema,
 	VariantFieldSchema,
+	STAGE3_FAT_ARC_ACTIVE,
 )
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.core.function_id import (
@@ -1481,6 +1482,124 @@ def _discover_and_synthesize_wrappers(
 		# Also ensure the target is reachable.
 		if target_id in mir_pool and target_id not in reachable:
 			reachable.add(target_id)
+
+
+def _synthesize_fat_arc_destructor_wrappers(
+	*,
+	type_table: TypeTable,
+	mir_pool: dict[FunctionId, M.MirFunc],
+	ssa_pool: dict[FunctionId, MirToSSA.SsaFunc],
+	fn_infos: dict[FunctionId, FnInfo],
+	signatures_by_id: dict[FunctionId, FnSignature],
+	external_signatures_by_id: Mapping[FunctionId, FnSignature],
+	reachable: set[FunctionId],
+) -> int:
+	"""Stage 3 fat-Arc destructor synthesis (layout-gated, dormant pre-flip).
+
+	For each `Arc<I>` instance that has been specialized to the fat
+	`{ctrl, data, vtable}` layout (self-gated on
+	`STAGE3_FAT_ARC_ACTIVE`), mint a compiler-owned per-I wrapper:
+
+	    fn _arc_fat_destroy_wrapper__<inst>(var self: Arc<I>) nothrow -> Void {
+	        ctrl = self.ctrl         // StructGetField(field_index=0)
+	        _arc_fat_drop_via_ctrl(ctrl)
+	        return
+	    }
+
+	The wrapper's fn_id is written into `type_table.destructor_fns[ty_id]`,
+	superseding any entry from the initial Destructible scan (which skips
+	fat Arc<I> — see `is_arc_fat_layout_instance` guards in the scan +
+	K39 rescan).  The thin `_arc_destroy_impl<I>` template is never
+	queued, monomorphized, or referenced for fat receivers.
+
+	Returns the number of wrappers registered.  When the activation flag
+	is off, no instance carries the fat layout and this pass is a
+	no-op.
+	"""
+	# Resolve the Slice 1 non-generic drop primitive.  It lives under
+	# `std.concurrent` and is nothrow/free-function.  Check the main
+	# sig table first; fall back to external (package-consumer shape).
+	fat_drop_fn_id: FunctionId | None = None
+	for fid, sig in signatures_by_id.items():
+		if fid.module == "std.concurrent" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
+			fat_drop_fn_id = fid
+			break
+	if fat_drop_fn_id is None:
+		for fid, sig in external_signatures_by_id.items():
+			if fid.module == "std.concurrent" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
+				fat_drop_fn_id = fid
+				break
+
+	ptr_byte_ty = type_table.new_ptr(type_table.ensure_byte())
+	void_ty = type_table.ensure_void()
+	destructor_fns: dict[int, FunctionId] = dict(getattr(type_table, "destructor_fns", None) or {})
+	added = 0
+	for arc_inst_id in list(type_table.struct_instances.keys()):
+		if not type_table.is_arc_fat_layout_instance(arc_inst_id):
+			continue
+		if fat_drop_fn_id is None:
+			raise AssertionError(
+				"fat Arc<I> synthesis requires `std.concurrent._arc_fat_drop_via_ctrl` "
+				"(non-generic Slice 1 helper) but it was not found in the signature "
+				"tables — STAGE3_FAT_ARC_ACTIVE is on yet the stdlib primitive is "
+				"missing or mis-declared"
+			)
+		wrap_name = f"_arc_fat_destroy_wrapper__{arc_inst_id}"
+		wrap_fn_id = FunctionId(module="std.concurrent", name=wrap_name, ordinal=0)
+		# Invariant enforced by the scan skips: no thin
+		# `_arc_destroy_impl<I>` instantiation should have landed for
+		# this Arc<I> inst.  Detect a stray one early — the
+		# instantiated name carries the `_arc_destroy_impl__inst__<hash>`
+		# shape.
+		_prior = destructor_fns.get(arc_inst_id)
+		if _prior is not None and _prior.name.startswith("_arc_destroy_impl"):
+			raise AssertionError(
+				f"fat Arc<I> inst TypeId={arc_inst_id} has a thin "
+				f"`_arc_destroy_impl` entry in destructor_fns "
+				f"({function_symbol(_prior)}); the scan skip failed "
+				f"and an invalid thin helper was queued"
+			)
+		if wrap_fn_id not in mir_pool:
+			wrap_sig = FnSignature(
+				name=function_symbol(wrap_fn_id),
+				param_type_ids=[arc_inst_id],
+				return_type_id=void_ty,
+				declared_can_throw=False,
+				param_names=["self"],
+				param_mutable=[True],
+				module="std.concurrent",
+				is_mir_bound=True,
+			)
+			signatures_by_id[wrap_fn_id] = wrap_sig
+			fn_infos[wrap_fn_id] = make_fn_info(wrap_fn_id, wrap_sig, declared_can_throw=False)
+			builder = make_builder(wrap_fn_id)
+			builder.func.params = ["self"]
+			ctrl_tmp = builder.new_temp()
+			builder.emit(M.StructGetField(
+				dest=ctrl_tmp,
+				subject="self",
+				struct_ty=arc_inst_id,
+				field_index=0,
+				field_ty=ptr_byte_ty,
+			))
+			builder.emit(M.Call(
+				dest=None,
+				fn_id=fat_drop_fn_id,
+				args=[ctrl_tmp],
+				can_throw=False,
+			))
+			builder.set_terminator(M.Return(value=None))
+			builder.func.local_types = {"self": arc_inst_id, ctrl_tmp: ptr_byte_ty}
+			mir_pool[wrap_fn_id] = builder.func
+			ssa_pool[wrap_fn_id] = MirToSSA().run(builder.func)
+		reachable.add(wrap_fn_id)
+		if fat_drop_fn_id in mir_pool:
+			reachable.add(fat_drop_fn_id)
+		destructor_fns[arc_inst_id] = wrap_fn_id
+		added += 1
+	if added:
+		type_table.destructor_fns = destructor_fns
+	return added
 
 
 def _seed_destroy_type_graph(
@@ -3850,6 +3969,23 @@ def compile_stubbed_funcs(
 				# Concrete-T destruction behavior is carried by the
 				# helper body; Stage 3 replaces this redirect with a
 				# direct compiler-emitted ARC_DESTROY lowering.
+				#
+				# Stage 3 fat-layout split: fat `Arc<I>` instances
+				# (where `I` is an interface, layout specialized to
+				# `{ctrl, data, vtable}`) do NOT go through the thin
+				# `_arc_destroy_impl<T>` template.  The scan below
+				# **skips** each such instance via
+				# `is_arc_fat_layout_instance(inst_id)`, so no thin
+				# `destructor_fns[inst_id]` entry is ever written
+				# for a fat `Arc<I>`.  The per-I fat destructor
+				# wrapper is instead synthesized late by
+				# `_synthesize_fat_arc_destructor_wrappers` and is
+				# the sole `destructor_fns` entry for the fat
+				# instance.  The `is_arc_fat_layout_instance`
+				# predicate is self-gated on
+				# `STAGE3_FAT_ARC_ACTIVE`, so until the activation
+				# bundle lands every `Arc<I>` still looks thin and
+				# the skip is dormant.
 				method_sig = signatures_by_id.get(method_fn_id) if signatures_by_id is not None else None
 				if method_sig is not None and bool(getattr(method_sig, "is_intrinsic", False)):
 					_helper_name = None
@@ -3878,6 +4014,18 @@ def compile_stubbed_funcs(
 						if inst.base_id != base_id:
 							continue
 						if shared_type_table.has_typevar(inst_id):
+							continue
+						# Stage 3 fat-layout skip: fat Arc<I> instances
+						# get a compiler-synthesized per-I destructor
+						# wrapper installed by the late fat-Arc
+						# synthesis pass — queuing `_arc_destroy_impl<I>`
+						# here would instantiate a template whose body
+						# (`self.buf`) is structurally invalid against
+						# the `{ctrl, data, vtable}` layout.  The
+						# `is_arc_fat_layout_instance` predicate is
+						# self-gated on `STAGE3_FAT_ARC_ACTIVE`, so
+						# this skip is dormant until activation.
+						if shared_type_table.is_arc_fat_layout_instance(inst_id):
 							continue
 						key = function_keys_by_fn_id.get(method_fn_id)
 						if key is None:
@@ -3952,6 +4100,25 @@ def compile_stubbed_funcs(
 	# call without having to re-derive T itself.
 	arc_helper_inst_fn_by_callsite: dict[tuple[FunctionId, int], FunctionId] = {}
 
+	def _is_fat_arc_intrinsic_type_args(type_args: tuple[TypeId, ...]) -> bool:
+		"""Stage 3 fat-layout predicate for Arc intrinsic call sites.
+
+		Arc intrinsic templates (`arc_clone`/`arc_get`/`arc_destroy`)
+		have a single type parameter which at a concrete call site is
+		the `T` in `Arc<T>`.  Returns True when that T is an interface
+		AND the Stage 3 activation flag is on — which matches
+		hir_to_mir's `is_arc_fat_layout_instance` gate: on the fat
+		path, `_lower_arc_fat_intrinsic_call` emits direct MIR
+		(bump/drop via the Slice 1 non-generic helpers plus
+		`ArcFatGet`) with no generic `_arc_*_impl<I>` helper needed.
+		"""
+		if not STAGE3_FAT_ARC_ACTIVE:
+			return False
+		if shared_type_table is None or len(type_args) != 1:
+			return False
+		t_def = shared_type_table.get(type_args[0])
+		return t_def.kind is TypeKind.INTERFACE
+
 	def _queue_instantiations(caller_fn_id: "FunctionId", typed_fn: object) -> None:
 		inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
 		if not isinstance(inst_map, dict):
@@ -3977,6 +4144,16 @@ def compile_stubbed_funcs(
 				# hir_to_mir can emit a direct call to it.
 				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
 				if _helper_key is not None:
+					# Stage 3 fat-layout split — when receiver T is an
+					# interface and the activation flag is on, the
+					# fat lowering emits direct MIR and no thin
+					# `_arc_*_impl<I>` helper is needed or wanted.
+					# Skip the queue entirely — queuing it would
+					# attempt to monomorphize the thin helper body
+					# against a fat-layout Arc<I>, which would
+					# type-check fail on the `buf` field access.
+					if _is_fat_arc_intrinsic_type_args(type_args):
+						continue
 					_helper_handle = _request_instantiation(_helper_key, type_args)
 					if isinstance(csid, int):
 						arc_helper_inst_fn_by_callsite[(caller_fn_id, csid)] = _helper_handle.fn_id
@@ -3996,6 +4173,9 @@ def compile_stubbed_funcs(
 				# still want the helper queued if one ever does).
 				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
 				if _helper_key is not None:
+					# Mirror the callsite-keyed fat-Arc skip.
+					if _is_fat_arc_intrinsic_type_args(type_args):
+						continue
 					_request_instantiation(_helper_key, type_args)
 				continue
 			_request_instantiation(template_key, type_args)
@@ -4398,6 +4578,15 @@ def compile_stubbed_funcs(
 				if shared_type_table.has_typevar(inst_id):
 					continue
 				if inst_id in destructor_fns:
+					continue
+				# Stage 3 fat-layout skip — same rationale as the
+				# initial destructible scan: the thin
+				# `_arc_destroy_impl<I>` template is structurally
+				# invalid against the fat layout, and the late
+				# fat-Arc synthesizer installs these entries
+				# instead.  Predicate self-gated on
+				# `STAGE3_FAT_ARC_ACTIVE`.
+				if shared_type_table.is_arc_fat_layout_instance(inst_id):
 					continue
 				key = function_keys_by_fn_id.get(method_fn_id)
 				if key is None:
@@ -6767,6 +6956,23 @@ def compile_to_llvm_ir_for_tests(
 		rename_map[entry_id] = "drift_main"
 
 	fn_infos = dict(checked.fn_infos_by_id)
+	# Stage 3: synthesize per-I fat Arc destructor wrappers for the
+	# test/driver codegen path.  Mirrors the package-build call at
+	# `main()` — both paths must install destructor wrappers for fat
+	# `Arc<I>` instances before LLVM sees the MIR.  Self-gated on
+	# `STAGE3_FAT_ARC_ACTIVE` via `is_arc_fat_layout_instance`.
+	if checked.type_table is not None:
+		if ssa_funcs is None:
+			ssa_funcs = {}
+		_synthesize_fat_arc_destructor_wrappers(
+			type_table=checked.type_table,
+			mir_pool=mir_funcs,
+			ssa_pool=ssa_funcs,
+			fn_infos=fn_infos,
+			signatures_by_id=signatures_by_id,
+			external_signatures_by_id={},
+			reachable=set(mir_funcs.keys()),
+		)
 	try:
 		_validate_codegen_contract(
 			mir_funcs,
@@ -10685,6 +10891,18 @@ def main(argv: list[str] | None = None) -> int:
 			fn_infos=checked_src.fn_infos_by_id,
 			signatures_by_id=signatures_by_id_all,
 			type_table=type_table,
+		)
+		# Stage 3: synthesize per-I fat Arc destructor wrappers.
+		# Self-gated on `STAGE3_FAT_ARC_ACTIVE` via the layout
+		# predicate — no-op until activation.
+		_synthesize_fat_arc_destructor_wrappers(
+			type_table=type_table,
+			mir_pool=src_mir,
+			ssa_pool=ssa_src,
+			fn_infos=checked_src.fn_infos_by_id,
+			signatures_by_id=signatures_by_id_all,
+			external_signatures_by_id=external_signatures_by_id,
+			reachable=_reachable,
 		)
 		_reachable_mir = {fid: fn for fid, fn in src_mir.items() if fid in _reachable}
 		_reachable_ssa = {fid: fn for fid, fn in ssa_src.items() if fid in _reachable}

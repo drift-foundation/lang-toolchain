@@ -443,7 +443,6 @@ pub fn stderr_sink() nothrow -> StdErrSink {
 ///
 /// **Example:** `examples/logging/basic_events.drift`.
 pub fn config_builder() nothrow -> LoggerConfigBuilder {
-	var noop: ContextResolver = NoContextResolver();
 	return LoggerConfigBuilder(
 		sink = stderr_sink(),
 		min_level = Level::Info(),
@@ -452,7 +451,7 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 		enqueue_timeout = conc.Duration(millis = 1000),
 		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
 		formatter = FormatterKind::JsonIso8601(),
-		resolver = conc.arc<type ContextResolver>(move noop)
+		resolver = conc.arc(NoContextResolver()).as_interface<type ContextResolver>()
 	);
 }
 
@@ -567,27 +566,27 @@ implement LoggerConfigBuilder {
 	/// Installs an ambient context resolver consulted at emit time
 	/// when a logging call passes no explicit `&LogContext`.
 	///
-	/// `r` is any value implementing the `ContextResolver` interface.
+	/// The caller supplies the resolver already wrapped in a fat
+	/// `conc.Arc<ContextResolver>`, constructed via
+	/// `conc.arc(concrete).as_interface<type ContextResolver>()`.
 	/// When set, `Logger.info(ev)` / `Logger.info(ev, attrs)` (and
-	/// the `debug` / `error` counterparts) call `r.resolve()` per
-	/// emit; if it returns `Some(ctx)`, the returned context's
-	/// attributes are merged into the record.  Calls that pass an
-	/// explicit `&LogContext` suppress the resolver — see
-	/// `Logger.info(ev, ctx)`.
+	/// the `debug` / `error` counterparts) call
+	/// `resolver.get().resolve()` per emit; if it returns
+	/// `Some(ctx)`, the returned context's attributes are merged
+	/// into the record.  Calls that pass an explicit `&LogContext`
+	/// suppress the resolver — see `Logger.info(ev, ctx)`.
 	///
 	/// `std.log` deliberately knows nothing about how the resolver
 	/// discovers context: VT-local registry, request state,
 	/// thread-local — it is all app policy inside the implementation.
 	///
 	/// **Parameters:**
-	/// - `r` — any value implementing the `ContextResolver`
-	///   interface.  The value is moved into a fresh
-	///   `conc.Arc<ContextResolver>`; sub-loggers and re-builds clone
-	///   the Arc (one atomic refcount each).  The per-emit hot path
-	///   borrows through the stored Arc and dispatches `resolve()`
-	///   without touching the refcount.
-	pub fn context_resolver(self: &mut LoggerConfigBuilder, var r: ContextResolver) nothrow -> &mut LoggerConfigBuilder {
-		self.resolver = conc.arc<type ContextResolver>(move r);
+	/// - `r` — a `conc.Arc<ContextResolver>` fat handle.  Sub-loggers
+	///   and re-builds clone the Arc (one atomic refcount each); the
+	///   per-emit hot path borrows through the stored Arc and
+	///   dispatches `resolve()` without touching the refcount.
+	pub fn context_resolver(self: &mut LoggerConfigBuilder, var r: conc.Arc<ContextResolver>) nothrow -> &mut LoggerConfigBuilder {
+		self.resolver = move r;
 		return self;
 	}
 

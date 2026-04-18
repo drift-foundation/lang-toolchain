@@ -7568,8 +7568,13 @@ class HIRToMIR:
 		recv_val: M.ValueId
 		if wants_borrow:
 			recv_ty = self._infer_expr_type(expr.receiver)
-			recv_def = self._type_table.get(recv_ty) if recv_ty is not None else None
-			if recv_def is not None and recv_def.kind is TypeKind.REF:
+			if recv_ty is None:
+				raise AssertionError(
+					"fat Arc intrinsic receiver type unknown in MIR lowering "
+					"(typecheck/inference bug)"
+				)
+			recv_def = self._type_table.get(recv_ty)
+			if recv_def.kind is TypeKind.REF:
 				recv_val = self.lower_expr(expr.receiver)
 			else:
 				place_expr = None
@@ -7577,11 +7582,32 @@ class HIRToMIR:
 					place_expr = expr.receiver
 				elif isinstance(expr.receiver, H.HVar):
 					place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
-				if place_expr is None:
-					raise NotImplementedError(
-						"fat Arc intrinsic auto-borrow requires an lvalue receiver in v1"
-					)
-				recv_val, _inner = self._lower_addr_of_place(place_expr, is_mut=False)
+				if place_expr is not None:
+					recv_val, _inner = self._lower_addr_of_place(place_expr, is_mut=False)
+				else:
+					# Rvalue receiver (chained shape like
+					# `app.as_interface<I>().clone()` or
+					# `app.as_interface<I>().get().method()`) —
+					# materialize a `__borrow_tmp<N>` local of type
+					# `Arc<I>`, store the rvalue into it, take its
+					# address.  Mirrors `_visit_expr_HBorrow`'s
+					# shared-borrow rvalue materialization (the thin
+					# Arc chained-rvalue tests rely on that same
+					# pattern via `&` on the implicit receiver).  The
+					# destroy-vars pass will pick up the temp by
+					# local type and emit the correct end-of-scope
+					# destruction — for fat Arc<I> that routes
+					# through the synthesized per-I fat destructor
+					# wrapper; the materialization does not itself
+					# register destruction.
+					tmp_local = f"__borrow_tmp{self.b.new_temp()}"
+					self.b.ensure_local(tmp_local)
+					self._local_types[tmp_local] = recv_ty
+					val = self.lower_expr(expr.receiver)
+					self.b.emit(M.StoreLocal(local=tmp_local, value=val))
+					recv_val = self.b.new_temp()
+					self.b.emit(M.AddrOfLocal(dest=recv_val, local=tmp_local, is_mut=False))
+					self._local_types[recv_val] = self._type_table.new_ref(recv_ty, is_mut=False)
 		else:
 			recv_val = self._lower_call_arg(expr.receiver, arc_iface_ty)
 
@@ -7676,23 +7702,37 @@ class HIRToMIR:
 
 		if kind is IntrinsicKind.ARC_GET:
 			# `.get()` returns `&I` — the borrowed interface fat
-			# reference `{data_ptr, vtable_ptr}`.  Slice 2 scaffolds
-			# the dispatch but defers the actual emission to Slice 3,
-			# where constructing the `&I` shape coordinates with the
-			# existing `IfaceUpcast` / `CallIface` vtable machinery
-			# and with layout activation.  No refcount touch.
-			raise NotImplementedError(
-				"Stage 3 slice 2 scaffolding: fat ARC_GET dispatch "
-				"detected, but the `&I = {data, vtable}` construction "
-				"emission lands in slice 3 alongside layout activation "
-				"and ARC_AS_INTERFACE.  This path is unreachable in "
-				"slice 2 because layout specialization for Arc<I> is "
-				"not yet active — arriving here means the layout "
-				"predicate `is_arc_fat_layout_instance` fired against "
-				"an instance whose struct fields should still be thin "
-				"(`buf` only) until slice 3 flips the layout branch "
-				"in `ensure_struct_instantiated`."
+			# reference.  Recv is `&Arc<I>` (already a ptr to the
+			# fat struct).  Emit `M.ArcFatGet`; LLVM codegen extracts
+			# the {data, vtable} pair and writes it into a fresh
+			# alloca'd DRIFT_IFACE_TYPE slot, returning the alloca
+			# ptr as the borrowed `&I`.  No refcount touch; no new
+			# vtable lookup (vtable was resolved at
+			# ARC_AS_INTERFACE time and carried in the fat handle).
+			iface_ty = arc_iface_ty  # Arc<I>'s struct id is the
+			# receiver type; iface_ty for codegen is the single
+			# type arg of that Arc<I>.  Read it from the instance.
+			arc_inst = self._type_table.get_struct_instance(arc_iface_ty)
+			if arc_inst is None or not arc_inst.type_args:
+				raise AssertionError(
+					"fat ARC_GET: receiver is not an instantiated "
+					f"Arc<I> (got TypeId={arc_iface_ty})"
+				)
+			iface_ty = arc_inst.type_args[0]
+			# Result `&I` — REF to I.
+			result_ref_ty = self._type_table.new_ref(iface_ty, is_mut=False)
+			dest = self.b.new_temp()
+			self.b.emit(
+				M.ArcFatGet(
+					dest=dest,
+					src_arc_ref=recv_val,
+					src_arc_ty=arc_iface_ty,
+					iface_ty=iface_ty,
+					result_ref_ty=result_ref_ty,
+				)
 			)
+			self._local_types[dest] = result_ref_ty
+			return dest
 
 		raise AssertionError(
 			f"unexpected fat Arc intrinsic kind {kind} reached "
@@ -7700,6 +7740,102 @@ class HIRToMIR:
 			f"and ARC_DESTROY route here; ARC_AS_INTERFACE has its own "
 			f"(thin-receiver) lowering slot"
 		)
+
+	def _lower_arc_as_interface_op(
+		self, expr: H.HMethodCall, info: CallInfo
+	) -> M.ValueId:
+		"""Lower `INTRINSIC(ARC_AS_INTERFACE)` to the dedicated
+		`M.ArcAsInterface` MIR op.
+
+		The receiver is a thin `&Arc<T=concrete>` (auto-borrowed from
+		`Arc<T>` if needed).  Result is a fat `Arc<I>`.  LLVM codegen
+		in `_lower_arc_as_interface` does the ownership/view
+		conversion (one allocation, one atomic strong bump, data
+		pointer into concrete ArcBox<T>, vtable via
+		`_ensure_interface_vtable(I, T)`).
+
+		This lowering is the only site in Stage 3 where we need BOTH
+		the concrete T (to compute `ArcBox<T>` layout) and the
+		target I (to resolve the vtable).  Both come from the
+		receiver/result types inferred by the type checker: T is the
+		sole type arg of the receiver's `Arc<T>`, I is the sole type
+		arg of the result's `Arc<I>`.
+		"""
+		# Receiver: must be `&Arc<T>` (ptr to thin Arc<T>).  Borrow
+		# if the source is owned.
+		recv_ty = self._infer_expr_type(expr.receiver)
+		if recv_ty is None:
+			raise AssertionError(
+				"ARC_AS_INTERFACE: receiver type unknown in MIR lowering "
+				"(typecheck/inference bug)"
+			)
+		recv_def = self._type_table.get(recv_ty)
+		if recv_def.kind is TypeKind.REF and recv_def.param_types:
+			recv_val = self.lower_expr(expr.receiver)
+			src_arc_ty = recv_def.param_types[0]
+		else:
+			place_expr = None
+			if hasattr(H, "HPlaceExpr") and isinstance(expr.receiver, getattr(H, "HPlaceExpr")):
+				place_expr = expr.receiver
+			elif isinstance(expr.receiver, H.HVar):
+				place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
+			if place_expr is None:
+				# Rvalue receiver (chained shape like
+				# `arc(...).as_interface<I>()`) — materialize a
+				# borrowed temp.  Mirrors the `_visit_expr_HBorrow`
+				# rvalue-materialization pattern used elsewhere.
+				tmp_local = f"__borrow_tmp{self.b.new_temp()}"
+				self.b.ensure_local(tmp_local)
+				self._local_types[tmp_local] = recv_ty
+				val = self.lower_expr(expr.receiver)
+				self.b.emit(M.StoreLocal(local=tmp_local, value=val))
+				recv_val = self.b.new_temp()
+				self.b.emit(M.AddrOfLocal(dest=recv_val, local=tmp_local, is_mut=False))
+				self._local_types[recv_val] = self._type_table.new_ref(recv_ty, is_mut=False)
+				src_arc_ty = recv_ty
+			else:
+				recv_val, _inner = self._lower_addr_of_place(place_expr, is_mut=False)
+				src_arc_ty = recv_ty
+
+		# T = src Arc<T>'s single type argument.
+		src_arc_inst = self._type_table.get_struct_instance(src_arc_ty)
+		if src_arc_inst is None or not src_arc_inst.type_args:
+			raise AssertionError(
+				"ARC_AS_INTERFACE: receiver type is not an instantiated "
+				f"Arc<T> (got TypeId={src_arc_ty})"
+			)
+		concrete_ty = src_arc_inst.type_args[0]
+
+		# Result type: Arc<I> fat struct, read from the type checker's
+		# expression-type map (method call node carries the
+		# instantiated result type).
+		result_ty = self._expr_types.get(expr.node_id) if self._expr_types else None
+		if result_ty is None:
+			raise AssertionError(
+				"ARC_AS_INTERFACE: result type unknown — type checker did "
+				"not record an instantiated Arc<I> for this method call"
+			)
+		result_inst = self._type_table.get_struct_instance(result_ty)
+		if result_inst is None or not result_inst.type_args:
+			raise AssertionError(
+				"ARC_AS_INTERFACE: result type is not an instantiated "
+				f"Arc<I> (got TypeId={result_ty})"
+			)
+		iface_ty = result_inst.type_args[0]
+
+		dest = self.b.new_temp()
+		self.b.emit(
+			M.ArcAsInterface(
+				dest=dest,
+				src_arc_ref=recv_val,
+				src_arc_ty=src_arc_ty,
+				concrete_ty=concrete_ty,
+				iface_ty=iface_ty,
+				result_ty=result_ty,
+			)
+		)
+		self._local_types[dest] = result_ty
+		return dest
 
 	def _lower_method_call_with_info(self, expr: H.HMethodCall, info: CallInfo) -> tuple[M.ValueId | None, CallInfo]:
 		"""
@@ -7769,16 +7905,25 @@ class HIRToMIR:
 				# of truth for how we pass the receiver.
 				return self._lower_arc_intrinsic_call(expr, info, _arc_intrinsic), info
 			if _arc_intrinsic is IntrinsicKind.ARC_AS_INTERFACE:
-				# Stage 3 lands the fat-handle lowering for
-				# `Arc<T>.as_interface<I>()`.  Reaching MIR with a
-				# positive call (T implements I) in Stage 2 means the
-				# program would dispatch through a not-yet-implemented
-				# path.  The `require T is I` clause stops negative
-				# cases at typecheck; positive cases hit this
-				# diagnostic until Stage 3 is in.
+				# Stage 3 activation gate: emit the real
+				# `M.ArcAsInterface` lowering only once the fat
+				# `Arc<I>` layout has actually been flipped on in
+				# `types_core.STAGE3_FAT_ARC_ACTIVE`.  Without
+				# that flip, `Arc<I>` instances are still thin
+				# `{buf}` and constructing the `{ctrl, data,
+				# vtable}` triple would produce a value whose
+				# layout disagrees with the sink type — exactly
+				# the half-live hazard this gate forbids.  Until
+				# the Slice 3 commit lands the coupled flag flip
+				# + stdlib migration + rejection together, keep
+				# the Stage-2 placeholder assertion.
+				from lang.driftc.core.types_core import STAGE3_FAT_ARC_ACTIVE
+				if STAGE3_FAT_ARC_ACTIVE:
+					return self._lower_arc_as_interface_op(expr, info), info
 				raise AssertionError(
 					f"Arc.as_interface<I>() runtime lowering is not yet "
-					f"implemented (Stage 3); callsite="
+					f"activated (Stage 3 WIP; flag STAGE3_FAT_ARC_ACTIVE "
+					f"is False); callsite="
 					f"{getattr(expr, 'callsite_id', None)}"
 				)
 		if info.target.kind is not CallTargetKind.DIRECT or not info.target.symbol:

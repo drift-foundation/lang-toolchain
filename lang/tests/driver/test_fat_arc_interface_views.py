@@ -177,7 +177,7 @@ _SHARED_MUTATION_VIA_MUTEX = """
 module main;
 
 import std.concurrent as conc;
-import std.sync as sync;
+import lang.atomic as atomic;
 
 pub interface Incrementer {
 	fn inc(self: &Self) nothrow -> Void;
@@ -188,24 +188,24 @@ pub interface Reader {
 }
 
 pub struct Cell {
-	pub v: sync.AtomicInt
+	pub v: atomic.AtomicInt
 }
 
 implement Incrementer for Cell {
 	pub fn inc(self: &Cell) nothrow -> Void {
-		val _ = sync.atomic_fetch_add_int(&self.v, 1, 0);
+		val _ = atomic.atomic_fetch_add_int(&self.v, 1, 0);
 		return;
 	}
 }
 
 implement Reader for Cell {
 	pub fn read(self: &Cell) nothrow -> Int {
-		return sync.atomic_load_int(&self.v, 0);
+		return atomic.atomic_load_int(&self.v, 0);
 	}
 }
 
 fn main() nothrow -> Int {
-	val c = conc.arc(Cell(v = sync.atomic_int(10)));
+	val c = conc.arc(Cell(v = atomic.atomic_int(10)));
 	val inc_view = c.as_interface<type Incrementer>();
 	val read_view = c.as_interface<type Reader>();
 	inc_view.get().inc();
@@ -221,12 +221,13 @@ module main;
 
 import std.concurrent as conc;
 import std.core as core;
-import std.sync as sync;
+import lang.atomic as atomic;
 
-// Module-global destructor counter.  Incremented exactly once by
-// `AppService::destroy`.  `main` checks the counter after each
-// permutation has scope-exited.
-var DROP_COUNTER: sync.AtomicInt = sync.atomic_int(0);
+// Destructor counter shared across permutations via a
+// `conc.Arc<atomic.AtomicInt>`.  Each AppService carries its
+// own clone of the Arc so `Destructible::destroy` can touch
+// the counter without taking a borrow — borrows can't flow
+// through arc's retaining `value: T` param.
 
 pub interface I1 {
 	fn m1(self: &Self) nothrow -> Int;
@@ -237,7 +238,8 @@ pub interface I2 {
 }
 
 pub struct AppService {
-	pub n: Int
+	pub n: Int,
+	pub counter: conc.Arc<atomic.AtomicInt>
 }
 
 implement I1 for AppService {
@@ -250,17 +252,17 @@ implement I2 for AppService {
 
 implement core.Destructible for AppService {
 	pub fn destroy(var self: AppService) nothrow -> Void {
-		val _ = sync.atomic_fetch_add_int(&DROP_COUNTER, 1, 0);
+		val _ = atomic.atomic_fetch_add_int(self.counter.get(), 1, 0);
 		return;
 	}
 }
 
 // Permutation 1: bare scope — Drift drops locals in reverse
 // declaration order → v2, v1, arc.
-fn run_permutation_arc_v1_v2() nothrow -> Void {
-	val _ = sync.atomic_store_int(&DROP_COUNTER, 0, 0);
+fn run_permutation_arc_v1_v2(counter: &conc.Arc<atomic.AtomicInt>) nothrow -> Void {
+	val _ = atomic.atomic_store_int(counter.get(), 0, 0);
 	{
-		val arc = conc.arc(AppService(n = 7));
+		val arc = conc.arc(AppService(n = 7, counter = counter.clone()));
 		val v1 = arc.as_interface<type I1>();
 		val v2 = arc.as_interface<type I2>();
 		val _ = v1.get().m1();
@@ -272,10 +274,10 @@ fn run_permutation_arc_v1_v2() nothrow -> Void {
 // Permutation 2: nested scopes — v1 in inner scope drops before
 // v2 and arc drop at outer scope exit.  Different release order
 // through the ctrl strong count.
-fn run_permutation_nested_scopes() nothrow -> Void {
-	val _ = sync.atomic_store_int(&DROP_COUNTER, 0, 0);
+fn run_permutation_nested_scopes(counter: &conc.Arc<atomic.AtomicInt>) nothrow -> Void {
+	val _ = atomic.atomic_store_int(counter.get(), 0, 0);
 	{
-		val arc = conc.arc(AppService(n = 13));
+		val arc = conc.arc(AppService(n = 13, counter = counter.clone()));
 		val v2 = arc.as_interface<type I2>();
 		{
 			val v1 = arc.as_interface<type I1>();
@@ -287,34 +289,36 @@ fn run_permutation_nested_scopes() nothrow -> Void {
 	return;
 }
 
-// Permutation 3: last face is an interface view (arc dropped
-// first via early re-bind into an immediately-discarded temp),
-// proving that the drop_thunk fires from whatever face holds
-// the last strong count.
-fn run_permutation_last_face_is_interface() nothrow -> Void {
-	val _ = sync.atomic_store_int(&DROP_COUNTER, 0, 0);
-	val v1 = {
-		val arc = conc.arc(AppService(n = 21));
-		arc.as_interface<type I1>()
-	};
-	// `arc` is now out of scope; `v1` holds the ONLY strong
-	// reference to the ArcBox.  Dropping `v1` at the end of
-	// this function must run drop_thunk.
+// Permutation 3: last face is an interface view — `arc` is
+// constructed inside a helper that returns the fat `Arc<I1>`.
+// When the helper returns, its local `arc` drops (strong → 1),
+// so back in the caller `v1` is the ONLY strong ref; dropping
+// `v1` at the end of this function must run drop_thunk.
+fn _make_v1_from_svc(svc: AppService) nothrow -> conc.Arc<I1> {
+	val arc = conc.arc(move svc);
+	return arc.as_interface<type I1>();
+}
+
+fn run_permutation_last_face_is_interface(counter: &conc.Arc<atomic.AtomicInt>) nothrow -> Void {
+	val _ = atomic.atomic_store_int(counter.get(), 0, 0);
+	val v1 = _make_v1_from_svc(AppService(n = 21, counter = counter.clone()));
 	val _ = v1.get().m1();
 	return;
 }
 
 fn main() nothrow -> Int {
-	run_permutation_arc_v1_v2();
-	val p1 = sync.atomic_load_int(&DROP_COUNTER, 0);
+	val counter = conc.arc(atomic.atomic_int(0));
+
+	run_permutation_arc_v1_v2(&counter);
+	val p1 = atomic.atomic_load_int(counter.get(), 0);
 	if p1 != 1 { return 10 + p1; }
 
-	run_permutation_nested_scopes();
-	val p2 = sync.atomic_load_int(&DROP_COUNTER, 0);
+	run_permutation_nested_scopes(&counter);
+	val p2 = atomic.atomic_load_int(counter.get(), 0);
 	if p2 != 1 { return 20 + p2; }
 
-	run_permutation_last_face_is_interface();
-	val p3 = sync.atomic_load_int(&DROP_COUNTER, 0);
+	run_permutation_last_face_is_interface(&counter);
+	val p3 = atomic.atomic_load_int(counter.get(), 0);
 	if p3 != 1 { return 30 + p3; }
 
 	// All three permutations ran destructor exactly once.

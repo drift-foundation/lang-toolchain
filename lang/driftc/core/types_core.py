@@ -287,7 +287,7 @@ class TypeProvenanceEntry:
 # False preserves the thin `{buf}` shape for every `Arc<I>`
 # instance — identical to pre-Stage-3 behaviour.  See
 # `work/fat-arc-interface-views/stage3_plan.md` § Slice 3.
-STAGE3_FAT_ARC_ACTIVE: bool = False
+STAGE3_FAT_ARC_ACTIVE: bool = True
 
 
 class TypeTable:

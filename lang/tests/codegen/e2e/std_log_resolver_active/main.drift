@@ -1,6 +1,7 @@
 module m;
 
 import std.log as log;
+import std.concurrent as conc;
 
 // A stateful resolver: pre-builds the LogContext at construction
 // time and hands out a borrow into its own field on every
@@ -26,7 +27,10 @@ implement log.ContextResolver for StdResolver {
 fn run() -> Int {
 	var b = log.config_builder();
 	b.min_level(log.Level::Debug());
-	b.context_resolver(std_resolver("u-ambient", "r-ambient"));
+	b.context_resolver(
+		conc.arc(std_resolver("u-ambient", "r-ambient"))
+			.as_interface<type log.ContextResolver>()
+	);
 	val main = log.create_logger("svc", b.build());
 
 	// Bare info: ambient ctx merged.

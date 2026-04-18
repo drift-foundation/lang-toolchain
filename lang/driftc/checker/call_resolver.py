@@ -5662,6 +5662,38 @@ def resolve_call_expr(
 				return record_expr(expr, ctx.unknown_ty)
 		if require_error is not None:
 			diagnostics.append(_tc_diag(message=str(require_error), severity="error", span=getattr(expr, "loc", Span()), notes=list(getattr(require_error, "notes", []) or []), code=getattr(require_error, "code", None)))
+		# Stage 3 direct `conc.arc<T=Interface>(...)` rejection.  The
+		# stdlib `fn arc<T>(value: T) nothrow -> Arc<T>` body
+		# constructs a thin `{buf}` `ArcBox<T>` — structurally
+		# incompatible with the fat `{ctrl, data, vtable}` layout
+		# specialization that fires for `Arc<I>` once
+		# `STAGE3_FAT_ARC_ACTIVE` is on.  Let the thin construction
+		# through and the result would be a value whose runtime
+		# layout disagrees with the sink type.  Reject at call-site
+		# resolution and direct users to the correct shape:
+		# `arc(concrete).as_interface<type I>()`.
+		if sig_inst is not None and decl.fn_id is not None:
+			_fid = decl.fn_id
+			if (getattr(_fid, "module", None) == "std.concurrent"
+					and getattr(_fid, "name", None) == "arc"):
+				_ret_ty = getattr(sig_inst, "result_type", None)
+				if _ret_ty is not None and ctx.type_table.is_arc_interface_view_instance(_ret_ty):
+					_inst = ctx.type_table.get_struct_instance(_ret_ty)
+					_iface_ty = _inst.type_args[0] if (_inst is not None and _inst.type_args) else None
+					_iface_def = ctx.type_table.get(_iface_ty) if _iface_ty is not None else None
+					_iface_name = getattr(_iface_def, "name", None) or "<interface>"
+					diagnostics.append(_tc_diag(
+						message=(
+							f"`conc.arc<T>(value)` cannot be called with T = interface '{_iface_name}'. "
+							f"Use `conc.arc(concrete).as_interface<type {_iface_name}>()` instead — "
+							f"the two-step form is the only construction path for a fat "
+							f"`Arc<{_iface_name}>` handle."
+						),
+						code="E_ARC_OF_INTERFACE_DIRECT",
+						severity="error",
+						span=getattr(expr, "loc", Span()),
+					))
+					return record_expr(expr, ctx.unknown_ty)
 		if ctx.record_call_resolution is not None:
 			ctx.record_call_resolution(expr, decl)
 		if sig_inst is not None:

@@ -130,6 +130,8 @@ from lang.driftc.stage2 import (
 	ConstructIface,
 	ConstructIfaceValue,
 	IfaceUpcast,
+	ArcAsInterface,
+	ArcFatGet,
 	ZeroValue,
 	TombstoneValue,
 	StringRetain,
@@ -2315,6 +2317,27 @@ class _FuncBuilder:
 		self._iface_tmp_alloca = name
 		return name
 
+	def _fresh_iface_alloca(self) -> str:
+		"""Return a FRESH entry-block alloca for a DriftIface slot.
+
+		Unlike `_ensure_iface_tmp_alloca` (one shared slot per
+		function, safe only for fill-then-immediately-load
+		patterns), this returns a new alloca per call.  Used by
+		lowerings whose result is a POINTER into the alloca'd
+		slot and therefore must outlive the emission site
+		(e.g. `M.ArcFatGet`, which returns `ptr` as the borrowed
+		`&I` value; a caller in a loop would otherwise repeatedly
+		overwrite a shared slot).  Insertion point is the entry
+		block — stack growth from loop iterations is avoided
+		(each alloca runs once at function entry).
+		"""
+		assert self._entry_alloca_insert_index is not None
+		name = self._fresh("iface_alloca")
+		emit_ty = self._llty(DRIFT_IFACE_TYPE)
+		self.lines.insert(self._entry_alloca_insert_index, f"  {name} = alloca {emit_ty}")
+		self._entry_alloca_insert_index += 1
+		return name
+
 	def _dbg_keepalive_alloca_name(self, local: str) -> str:
 		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in local)
 		return f"__dbg_keepalive_{safe}__addr"
@@ -3139,6 +3162,10 @@ class _FuncBuilder:
 			self._lower_construct_iface_value(instr)
 		elif isinstance(instr, IfaceUpcast):
 			self._lower_iface_upcast(instr)
+		elif isinstance(instr, ArcAsInterface):
+			self._lower_arc_as_interface(instr)
+		elif isinstance(instr, ArcFatGet):
+			self._lower_arc_fat_get(instr)
 		elif isinstance(instr, ConstructStruct):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: ConstructStruct requires a TypeTable")
@@ -6874,6 +6901,187 @@ class _FuncBuilder:
 		self.lines.append(f"  store ptr {offset_i8}, ptr {vtable_slot}")
 		self.lines.append(f"  {dest} = load {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}")
 		self.value_types[dest] = DRIFT_IFACE_TYPE
+
+	def _lower_arc_as_interface(self, instr: ArcAsInterface) -> None:
+		"""Stage 3 fat `Arc<I>` construction from thin `&Arc<T=concrete>`.
+
+		Emits the five-step sequence documented on the MIR op:
+
+		1. Extract `ctrl = rawbuffer_ptr(&src.buf)` — the base of
+		   the `ArcBox<T>` allocation.  Layout invariant: `buf` is
+		   field 0 of the thin `Arc<T>` struct, and `RawBuffer<U>`
+		   has `ptr` at `RAWBUF_PTR_IDX = 0`.
+		2. Call `_arc_fat_bump_strong_via_ctrl(ctrl)` — the Slice 1
+		   non-generic runtime helper that does an atomic fetch-add
+		   on `ArcHeader.strong` at offset 0 of the allocation.
+		3. Compute `data = getelementptr ArcBox<T>, ptr ctrl, i32 0,
+		   i32 1` — concrete `value` payload address.  The T-dependent
+		   alignment padding is handled by LLVM's struct-layout GEP,
+		   not by us manually computing byte offsets.
+		4. Resolve `vtable` via `_ensure_interface_vtable(iface_ty,
+		   concrete_ty)` — reuses the existing T-as-I vtable machinery;
+		   no Arc-specific vtable namespace.
+		5. `insertvalue` chain into the fat `Arc<I>` result:
+		   `{ctrl, data, vtable}`.
+
+		Invariants encoded in the IR: exactly one strong bump, exactly
+		one allocation, `data` points inside the concrete ArcBox<T>
+		(same allocation as `ctrl`), `drop_thunk` is already captured
+		at `arc<T=concrete>(value)` time and carried in the ArcHeader
+		for last-drop.
+		"""
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: ArcAsInterface requires a TypeTable")
+
+		# Resolve the concrete-T `ArcBox<T>` TypeId via the thin
+		# Arc<T> struct's field 0, which is `RawBuffer<ArcBox<T>>`.
+		src_arc_inst = self.type_table.get_struct_instance(instr.src_arc_ty)
+		if src_arc_inst is None or not src_arc_inst.field_types:
+			raise AssertionError(
+				"ArcAsInterface: thin Arc<T> source has no struct instance "
+				"with fields — compiler bug or wrong src_arc_ty"
+			)
+		raw_buf_ty = src_arc_inst.field_types[0]
+		raw_buf_inst = self.type_table.get_struct_instance(raw_buf_ty)
+		if raw_buf_inst is None or not raw_buf_inst.type_args:
+			raise AssertionError(
+				"ArcAsInterface: thin Arc<T>.buf is not an instantiated "
+				"RawBuffer<ArcBox<T>> (compiler bug or layout changed)"
+			)
+		arc_box_ty = raw_buf_inst.type_args[0]
+
+		src_arc_llty = self._llvm_type_for_typeid(instr.src_arc_ty)
+		raw_buf_llty = self._llvm_type_for_typeid(raw_buf_ty)
+		arc_box_llty = self._llvm_type_for_typeid(arc_box_ty)
+		result_llty = self._llvm_type_for_typeid(instr.result_ty)
+
+		src = self._map_value(instr.src_arc_ref)
+
+		# Step 1: extract ctrl = rawbuffer_ptr from Arc<T>.buf.
+		buf_addr = self._fresh("arc_buf_addr")
+		self.lines.append(
+			f"  {buf_addr} = getelementptr inbounds {src_arc_llty}, ptr {src}, i32 0, i32 0"
+		)
+		self.value_types[buf_addr] = "ptr"
+		buf_val = self._fresh("arc_buf")
+		self.lines.append(f"  {buf_val} = load {raw_buf_llty}, ptr {buf_addr}")
+		self.value_types[buf_val] = raw_buf_llty
+		ctrl = self._fresh("arc_ctrl")
+		self.lines.append(
+			f"  {ctrl} = extractvalue {raw_buf_llty} {buf_val}, {RAWBUF_PTR_IDX}"
+		)
+		self.value_types[ctrl] = "ptr"
+
+		# Step 2: atomic strong-bump via the Slice 1 non-generic runtime
+		# helper.  Symbol name is stable — the helper is defined in
+		# `stdlib/std/concurrent/concurrent.drift`; with opaque
+		# pointers LLVM does not require an explicit declaration for
+		# cross-module calls (the symbol resolves at link time).
+		bump_sym = '@"std.concurrent::_arc_fat_bump_strong_via_ctrl"'
+		self.lines.append(f"  call void {bump_sym}(ptr {ctrl})")
+
+		# Step 3: data = GEP ArcBox<T>, ptr ctrl, i32 0, i32 1.
+		data = self._fresh("arc_data")
+		self.lines.append(
+			f"  {data} = getelementptr inbounds {arc_box_llty}, ptr {ctrl}, i32 0, i32 1"
+		)
+		self.value_types[data] = "ptr"
+
+		# Step 4: data + T-as-I vtable via the canonical interface-view
+		# primitive.  `_emit_interface_view_fields` is the shared
+		# "data ptr + existing T-as-I vtable symbol" emitter reused by
+		# every fat `{data, vtable}` slot — `&T→&I` borrow coercion,
+		# `Box<T>→Box<I>`, and now `arc_as<I>`.  Routing through it
+		# enforces the "no Arc-specific vtable path" rule at the
+		# type/code level rather than relying on convention.
+		data_out, vtable_sym = self._emit_interface_view_fields(
+			data_ptr_llvm=data,
+			iface_ty=instr.iface_ty,
+			value_ty=instr.concrete_ty,
+		)
+
+		# Step 5: insertvalue chain into {ctrl, data, vtable}.
+		dest = self._map_value(instr.dest)
+		tmp0 = self._fresh("fat_arc_tmp")
+		self.lines.append(
+			f"  {tmp0} = insertvalue {result_llty} zeroinitializer, ptr {ctrl}, 0"
+		)
+		tmp1 = self._fresh("fat_arc_tmp")
+		self.lines.append(
+			f"  {tmp1} = insertvalue {result_llty} {tmp0}, ptr {data_out}, 1"
+		)
+		self.lines.append(
+			f"  {dest} = insertvalue {result_llty} {tmp1}, ptr {vtable_sym}, 2"
+		)
+		self.value_types[dest] = result_llty
+
+	def _lower_arc_fat_get(self, instr: ArcFatGet) -> None:
+		"""Stage 3 fat `Arc<I>.get()` — borrowed `&I` from already-resolved
+		`{data, vtable}`.  No refcount touch, no new vtable lookup.
+
+		Emits:
+		- GEP fat `Arc<I>` field 1 → `data_addr`, load → `data_ptr`.
+		- GEP fat `Arc<I>` field 2 → `vtable_addr`, load → `vtable_ptr`.
+		- alloca a fresh `DRIFT_IFACE_TYPE` slot (fresh per call so
+		  successive `.get()`s don't alias).
+		- Store zeroinitializer + the `{data, vtable}` pair + flag=0.
+		- `dest = alloca_ptr` — the `&I` representation.
+
+		The returned `ptr` is a `REF` at the Drift type level; its
+		lifetime is tied to the receiver's borrow by typecheck.
+		"""
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: ArcFatGet requires a TypeTable")
+
+		src_arc_llty = self._llvm_type_for_typeid(instr.src_arc_ty)
+		src = self._map_value(instr.src_arc_ref)
+		emit_iface_llty = self._llty(DRIFT_IFACE_TYPE)
+
+		# Load data (field 1) and vtable (field 2) from the fat Arc<I>.
+		data_addr = self._fresh("fat_data_addr")
+		self.lines.append(
+			f"  {data_addr} = getelementptr inbounds {src_arc_llty}, ptr {src}, i32 0, i32 1"
+		)
+		data_val = self._fresh("fat_data_val")
+		self.lines.append(f"  {data_val} = load ptr, ptr {data_addr}")
+		self.value_types[data_val] = "ptr"
+
+		vtbl_addr = self._fresh("fat_vtbl_addr")
+		self.lines.append(
+			f"  {vtbl_addr} = getelementptr inbounds {src_arc_llty}, ptr {src}, i32 0, i32 2"
+		)
+		vtbl_val = self._fresh("fat_vtbl_val")
+		self.lines.append(f"  {vtbl_val} = load ptr, ptr {vtbl_addr}")
+		self.value_types[vtbl_val] = "ptr"
+
+		# Fresh entry-block alloca for the borrowed-iface slot (not
+		# the shared `_ensure_iface_tmp_alloca` — that one is a
+		# one-shot-then-load pattern; we need the ptr to stay live
+		# until the caller deref's it, and successive `.get()`
+		# results may coexist).  Inserting at entry keeps stack
+		# usage flat even when `.get()` appears inside a loop.
+		tmp_ptr = self._fresh_iface_alloca()
+		self.lines.append(f"  store {emit_iface_llty} zeroinitializer, ptr {tmp_ptr}")
+
+		data_slot = self._fresh("fat_get_data_slot")
+		self.lines.append(
+			f"  {data_slot} = getelementptr inbounds {emit_iface_llty}, ptr {tmp_ptr}, i32 0, i32 {DRIFT_IFACE_DATA_IDX}"
+		)
+		self.lines.append(f"  store ptr {data_val}, ptr {data_slot}")
+		vtbl_slot = self._fresh("fat_get_vtbl_slot")
+		self.lines.append(
+			f"  {vtbl_slot} = getelementptr inbounds {emit_iface_llty}, ptr {tmp_ptr}, i32 0, i32 {DRIFT_IFACE_VTABLE_IDX}"
+		)
+		self.lines.append(f"  store ptr {vtbl_val}, ptr {vtbl_slot}")
+		# inline storage stays zero from zeroinitializer; inline_flag
+		# is also already zero, signaling "out-of-line data pointer"
+		# which is the correct classification for Arc<I>.get()'s
+		# heap-backed data.
+
+		dest = self._map_value(instr.dest)
+		# `dest` IS the alloca pointer — the borrowed `&I`.
+		self.lines.append(f"  {dest} = bitcast ptr {tmp_ptr} to ptr")
+		self.value_types[dest] = "ptr"
 
 	def _ensure_nothrow_wrap_thunk(self, sym: str, call_sig) -> str:
 		"""Generate a can-throw wrapper thunk for a nothrow function pointer."""
