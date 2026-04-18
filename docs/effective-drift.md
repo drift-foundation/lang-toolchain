@@ -374,6 +374,7 @@ thread-local registry — zero-copy:
 ```drift
 import std.log as log;
 import std.runtime as rt;
+import std.concurrent as conc;
 
 // App-defined request state: a scoped stack of LogContexts, installed
 // once per thread into the thread registry and pushed/popped around
@@ -404,8 +405,15 @@ implement log.ContextResolver for AppResolver {
 fn install_logger() nothrow -> log.Logger {
     val reg = rt.thread_registry();
     val _ = reg.set<type RequestContextState>(request_context_state());
+
+    // Allocate the concrete resolver once, then create the
+    // `log.ContextResolver` face over the same allocation.  The fat
+    // `Arc<log.ContextResolver>` is what the builder takes.
+    val resolver = conc.arc(AppResolver())
+        .as_interface<type log.ContextResolver>();
+
     var b = log.config_builder();
-    b.context_resolver(AppResolver());
+    b.context_resolver(resolver);
     return log.create_logger("svc", b.build());
 }
 ```
@@ -441,12 +449,17 @@ The rule: passing an explicit `&LogContext` (even an empty one) suppresses
 the resolver. Use `&log.log_context()` when an event genuinely should
 carry no contextual attrs.
 
-`context_resolver` takes any value implementing `log.ContextResolver` and
-wraps it in `conc.Arc<log.ContextResolver>` so sub-loggers (`derive`,
-`with_min_level`) can share the same resolver service cheaply (one
-atomic refcount per sub-logger creation, never per emit). Per-emit
-dispatch is a borrowed `&ContextResolver` vtable call — no Arc
-retain/release on the hot path.
+`context_resolver` takes a `conc.Arc<log.ContextResolver>`. The app
+allocates the concrete resolver with `conc.arc(...)` and then creates
+the resolver face with `.as_interface<type log.ContextResolver>()`;
+both handles refer to the same allocation and the same strong count.
+Sub-loggers (`derive`, `with_min_level`) clone that Arc face to share
+the resolver service — one atomic refcount per sub-logger creation,
+never per emit. Per-emit dispatch borrows `&log.ContextResolver`
+through the stored Arc and calls `resolve()` via the vtable — no Arc
+retain/release on the hot path. Passing an explicit `&LogContext`
+still suppresses the resolver; `&log.log_context()` remains the
+explicit empty-context opt-out.
 
 ## Graceful shutdown on SIGINT/SIGTERM (`std.concurrent::await_signal`)
 
