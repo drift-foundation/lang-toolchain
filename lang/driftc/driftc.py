@@ -1494,11 +1494,11 @@ def _synthesize_fat_arc_destructor_wrappers(
 	external_signatures_by_id: Mapping[FunctionId, FnSignature],
 	reachable: set[FunctionId],
 ) -> int:
-	"""Stage 3 fat-Arc destructor synthesis (layout-gated, dormant pre-flip).
+	"""Stage 3 fat-Arc destructor synthesis (ABI 10).
 
-	For each `Arc<I>` instance that has been specialized to the fat
-	`{ctrl, data, vtable}` layout (self-gated on
-	`STAGE3_FAT_ARC_ACTIVE`), mint a compiler-owned per-I wrapper:
+	For each `Arc<I>` instance that appears as a `DropValue.ty` in
+	reachable MIR and has the fat `{ctrl, data, vtable}` layout, mint
+	a compiler-owned per-I wrapper:
 
 	    fn _arc_fat_destroy_wrapper__<inst>(var self: Arc<I>) nothrow -> Void {
 	        ctrl = self.ctrl         // StructGetField(field_index=0)
@@ -4009,11 +4009,7 @@ def compile_stubbed_funcs(
 				# wrapper is instead synthesized late by
 				# `_synthesize_fat_arc_destructor_wrappers` and is
 				# the sole `destructor_fns` entry for the fat
-				# instance.  The `is_arc_fat_layout_instance`
-				# predicate is self-gated on
-				# `STAGE3_FAT_ARC_ACTIVE`, so until the activation
-				# bundle lands every `Arc<I>` still looks thin and
-				# the skip is dormant.
+				# instance.
 				method_sig = signatures_by_id.get(method_fn_id) if signatures_by_id is not None else None
 				if method_sig is not None and bool(getattr(method_sig, "is_intrinsic", False)):
 					_helper_name = None
@@ -4043,16 +4039,13 @@ def compile_stubbed_funcs(
 							continue
 						if shared_type_table.has_typevar(inst_id):
 							continue
-						# Stage 3 fat-layout skip: fat Arc<I> instances
+						# Fat-layout skip (ABI 10): fat `Arc<I>` instances
 						# get a compiler-synthesized per-I destructor
 						# wrapper installed by the late fat-Arc
-						# synthesis pass — queuing `_arc_destroy_impl<I>`
+						# synthesis pass.  Queuing `_arc_destroy_impl<I>`
 						# here would instantiate a template whose body
 						# (`self.buf`) is structurally invalid against
-						# the `{ctrl, data, vtable}` layout.  The
-						# `is_arc_fat_layout_instance` predicate is
-						# self-gated on `STAGE3_FAT_ARC_ACTIVE`, so
-						# this skip is dormant until activation.
+						# the live `{ctrl, data, vtable}` layout.
 						if shared_type_table.is_arc_fat_layout_instance(inst_id):
 							continue
 						key = function_keys_by_fn_id.get(method_fn_id)
@@ -4607,13 +4600,11 @@ def compile_stubbed_funcs(
 					continue
 				if inst_id in destructor_fns:
 					continue
-				# Stage 3 fat-layout skip — same rationale as the
-				# initial destructible scan: the thin
-				# `_arc_destroy_impl<I>` template is structurally
-				# invalid against the fat layout, and the late
-				# fat-Arc synthesizer installs these entries
-				# instead.  Predicate self-gated on
-				# `STAGE3_FAT_ARC_ACTIVE`.
+				# Fat-layout skip — same rationale as the initial
+				# destructible scan: the thin `_arc_destroy_impl<I>`
+				# template is structurally invalid against the fat
+				# layout, and the late fat-Arc synthesizer installs
+				# these entries instead.
 				if shared_type_table.is_arc_fat_layout_instance(inst_id):
 					continue
 				key = function_keys_by_fn_id.get(method_fn_id)
@@ -8993,6 +8984,50 @@ def main(argv: list[str] | None = None) -> int:
 				world.impls_by_trait.setdefault(trait_key, []).append(impl_id)
 				world.impls_by_target_head.setdefault(head_key, []).append(impl_id)
 				world.impls_by_trait_target.setdefault((trait_key, head_key), []).append(impl_id)
+				# If `trait_key` names a real INTERFACE type (verified
+				# against the consumer's type table, not just inferred
+				# from absence of trait metadata), ALSO register the
+				# impl in the interface-impl index so `require T is I`
+				# queries in generic code (e.g.
+				# `Arc<T>.as_interface<I>()`'s clause) can prove it
+				# across the package boundary.  Without this,
+				# `merge_trait_worlds`'s post-merge reclassification
+				# misses external interface impls because
+				# `world.interfaces` is empty for packages.
+				#
+				# Gate: confirm via `type_table.get_nominal(INTERFACE,
+				# module, name)` — the type table registers interface
+				# nominals as `TypeKind.INTERFACE`.  A bare
+				# `trait_key in external_missing_traits` check would
+				# also fire for *actually-missing* traits (e.g. a
+				# genuine package-metadata gap), silently re-routing
+				# them through the interface solver and masking the
+				# underlying metadata bug.
+				_is_iface = type_table.get_nominal(
+					kind=TypeKind.INTERFACE,
+					module_id=trait_key.module,
+					name=trait_key.name,
+				) is not None
+				if _is_iface:
+					from lang.driftc.traits.world import InterfaceDef as _InterfaceDef, InterfaceImplRef as _InterfaceImplRef
+					if trait_key not in world.interfaces:
+						world.interfaces[trait_key] = _InterfaceDef(
+							key=trait_key,
+							name=trait_key.name,
+							loc=getattr(impl, "loc", None),
+						)
+					world.interface_impls_by_iface_target.setdefault(
+						(trait_key, head_key), []
+					).append(
+						_InterfaceImplRef(
+							iface=trait_key,
+							target=target_key,
+							target_head=head_key,
+							type_params=tuple(getattr(impl, "impl_type_params", []) or ()),
+							require_expr=getattr(impl, "require_expr", None),
+							loc=getattr(impl, "loc", None),
+						)
+					)
 			for fn_id, fn_key in external_template_keys_by_fn_id.items():
 				req_expr = external_template_requires_by_key.get(fn_key)
 				if req_expr is None:
@@ -10877,9 +10912,12 @@ def main(argv: list[str] | None = None) -> int:
 				fn_infos=checked_src.fn_infos_by_id,
 				pre_seeded_destroyers=_phase1_destroyers,
 			)
-		# Seed interface impl methods for ConstructIfaceValue boxing (K29).
-		# ConstructIfaceValue has no fn_ref — vtable thunks referencing
-		# impl methods are generated at codegen time.
+		# Seed interface impl methods for ConstructIfaceValue boxing (K29)
+		# and ArcAsInterface fat-handle construction (Stage 3).  Both ops
+		# carry a concrete T and emit a T-as-I vtable at codegen time
+		# that references `impl I for T` methods — the impl fns have no
+		# MIR call instruction, so BFS from the caller never reaches
+		# them.  Seed them here so the vtable symbols resolve at link.
 		_iface_value_tys: set[int] = set()
 		for _fid in list(_reachable):
 			_fn = src_mir.get(_fid)
@@ -10889,6 +10927,8 @@ def main(argv: list[str] | None = None) -> int:
 				for _instr in _blk.instructions:
 					if isinstance(_instr, M.ConstructIfaceValue):
 						_iface_value_tys.add(_instr.value_ty)
+					elif isinstance(_instr, M.ArcAsInterface):
+						_iface_value_tys.add(_instr.concrete_ty)
 		if _iface_value_tys and checked_src:
 			for _impl_fn_id, _impl_info in checked_src.fn_infos_by_id.items():
 				_impl_sig = _impl_info.signature
@@ -10929,9 +10969,10 @@ def main(argv: list[str] | None = None) -> int:
 			signatures_by_id=signatures_by_id_all,
 			type_table=type_table,
 		)
-		# Stage 3: synthesize per-I fat Arc destructor wrappers.
-		# Self-gated on `STAGE3_FAT_ARC_ACTIVE` via the layout
-		# predicate — no-op until activation.
+		# Synthesize per-I fat Arc destructor wrappers (ABI 10).
+		# Scoped to fat `Arc<I>` instances that actually appear as
+		# `DropValue.ty` in reachable MIR — see the filter inside
+		# the helper.
 		_synthesize_fat_arc_destructor_wrappers(
 			type_table=type_table,
 			mir_pool=src_mir,

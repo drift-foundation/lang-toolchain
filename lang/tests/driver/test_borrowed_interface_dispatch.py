@@ -136,8 +136,7 @@ fn read_via_arc(h: &Holder) nothrow -> Int {
 }
 
 fn main() nothrow -> Int {
-	var c: Counter = Cell(n = 42);
-	val arc = conc.arc(move c);
+	val arc = conc.arc(Cell(n = 42)).as_interface<type Counter>();
 	val h = Holder(arc = arc);
 	return read_via_arc(&h);
 }

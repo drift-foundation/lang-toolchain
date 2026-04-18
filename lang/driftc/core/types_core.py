@@ -1301,16 +1301,16 @@ class TypeTable:
 		# `_arc_interface_view_layout`.  See
 		# `work/fat-arc-interface-views/phase1.md` § Representation.
 		#
-		# **Activation flag.**  The fat-layout branch is gated on
-		# `STAGE3_FAT_ARC_ACTIVE`, which stays False until the
-		# coupled pieces (ARC_AS_INTERFACE MIR lowering, fat
-		# ARC_GET emission, std.log builder migration) land in
-		# coordination.  While False, every `Arc<I>` instance keeps
-		# the thin layout and all existing paths behave
-		# identically — see the explicit "no half-live public
-		# Arc<I> state" rule in
-		# `work/fat-arc-interface-views/stage3_plan.md`.  Flipping
-		# this to True is the atomic cut-over moment.
+		# **Activation flag.**  `STAGE3_FAT_ARC_ACTIVE` is True as of
+		# ABI 10 — fat `Arc<I>` is the live layout.  The flag remains
+		# a compile-time constant so package-consumer builds that
+		# replay upstream `.dmp` schema can still distinguish pre-
+		# ABI-10 thin `{buf}` artifacts from current fat instances
+		# and short-circuit the branch when reconstructing older
+		# shapes.  Historical note: the flag existed False through
+		# slices 1–2 while ARC_AS_INTERFACE lowering, fat ARC_GET
+		# emission, and the std.log builder migration were landing in
+		# coordination, per `work/fat-arc-interface-views/stage3_plan.md`.
 		if STAGE3_FAT_ARC_ACTIVE and self.is_arc_interface_view(schema, type_args):
 			fat_names, fat_types = self._arc_interface_view_layout()
 			inst_id = self._add(

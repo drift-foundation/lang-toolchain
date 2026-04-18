@@ -7426,15 +7426,12 @@ class HIRToMIR:
 		# `is_arc_fat_layout_instance` (NOT the semantic
 		# `is_arc_interface_view_instance`): the layout predicate
 		# reflects the live struct-instance shape, not the semantic
-		# "Arc<I>" identity.  Slice 2 keeps layout specialization OFF
-		# in `ensure_struct_instantiated`, so every live `Arc<I>`
-		# today still has the thin `{buf}` shape and this predicate
-		# returns False everywhere — the fat dispatch below is
-		# unreachable.  Slice 3 flips the layout branch and the fat
-		# path becomes live.  Reaching the fat lowering with a thin
-		# layout would try to extract `ctrl`/`data`/`vtable` fields
-		# from a struct that only has `buf`, which is the kind of
-		# coupling Stage 2's dormancy rule forbids.
+		# "Arc<I>" identity.  This distinction matters for
+		# package-consumer builds replaying pre-ABI-10 artifacts that
+		# still serialize the thin `{buf}` shape — the fat lowering
+		# extracts `ctrl`/`data`/`vtable` fields that only exist on
+		# the live ABI-10 layout; running it against a thin instance
+		# would probe fields that do not exist.
 		_fat_dispatch_ty: TypeId | None = None
 		_recv_ty_probe = self._infer_expr_type(expr.receiver)
 		if _recv_ty_probe is not None:

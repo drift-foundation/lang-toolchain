@@ -7078,10 +7078,14 @@ class _FuncBuilder:
 		# which is the correct classification for Arc<I>.get()'s
 		# heap-backed data.
 
-		dest = self._map_value(instr.dest)
-		# `dest` IS the alloca pointer — the borrowed `&I`.
-		self.lines.append(f"  {dest} = bitcast ptr {tmp_ptr} to ptr")
-		self.value_types[dest] = "ptr"
+		# `dest` IS the alloca pointer — the borrowed `&I`.  No
+		# bitcast emitted: with opaque pointers, `ptr` → `ptr` is a
+		# no-op and the opaque-pointer audit flags the instruction.
+		# Bind `dest`'s MIR id directly to the alloca's LLVM name
+		# via `value_map` so later `_map_value(instr.dest)` calls
+		# resolve straight to `%iface_alloca<N>`.
+		self.value_map[instr.dest] = tmp_ptr
+		self.value_types[tmp_ptr] = "ptr"
 
 	def _ensure_nothrow_wrap_thunk(self, sym: str, call_sig) -> str:
 		"""Generate a can-throw wrapper thunk for a nothrow function pointer."""
