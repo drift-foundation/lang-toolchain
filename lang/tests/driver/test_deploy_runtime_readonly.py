@@ -80,10 +80,19 @@ fn main() nothrow -> Int {
 		else:
 			path.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
+	# Isolate the deployed wrapper's runtime-cache seeding into a
+	# test-local directory.  Without this, `pex_entry.py` writes
+	# through to `~/.cache/drift/runtime/<variant>/` with the
+	# operator's real `$HOME`.  Historically that poisoned operator
+	# caches with the 0444 mode inherited from the read-only dist
+	# tree; even with the 0o664 fix in `pex_entry.py`, a test has no
+	# business touching the operator's real cache.
+	rt_cache = tmp_path / "rt_cache"
 	run_env = dict(os.environ)
 	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
 		run_env.pop(key, None)
 	run_env["SCIE_BASE"] = str(pex_scie_base)
+	run_env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(rt_cache)
 	result = subprocess.run(
 		[
 			str(dist / "bin" / "driftc"),
@@ -101,3 +110,130 @@ fn main() nothrow -> Int {
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out.exists()
 	assert not list(runtime_root.rglob(".build.lock"))
+
+	# Coverage pin: the seeded cache archive MUST be owner-writable.
+	# This is the exact shape the orch-team report caught — under
+	# the old `shutil.copy2` seeding, the archive inherited 0444
+	# from the read-only dist tree and every subsequent
+	# `ar` rebuild failed with "Permission denied".
+	assert rt_cache.is_dir(), (
+		f"expected deployed wrapper to seed runtime cache at {rt_cache}, "
+		f"but the directory does not exist — DRIFT_RUNTIME_LIB_CACHE_DIR "
+		f"handoff broken?"
+	)
+	_seeded_archives = list(rt_cache.rglob("libdrift_rt*.a"))
+	assert _seeded_archives, (
+		f"expected at least one runtime archive seeded into {rt_cache}; "
+		f"found none — cache-seeding loop in `pex_entry.py` may have "
+		f"skipped every variant (read-only install tree is the scenario "
+		f"this code exists to support)"
+	)
+	for _archive in _seeded_archives:
+		_mode = stat.S_IMODE(_archive.stat().st_mode)
+		assert _mode & stat.S_IWUSR, (
+			f"seeded runtime archive {_archive} has mode {oct(_mode)} — "
+			f"missing owner-write bit.  `pex_entry.py` must copy "
+			f"with content-only semantics and force 0o664, not "
+			f"`shutil.copy2` which preserves the read-only source "
+			f"mode of a 0444 install tree.  Next rebuild attempt "
+			f"through ar would fail with 'Permission denied' and "
+			f"poison the operator cache."
+		)
+
+
+@_skip_no_pex
+def test_deployed_wrapper_repairs_poisoned_runtime_cache(
+	tmp_path: Path, pex_scie_base: Path,
+) -> None:
+	"""Pin the poisoned-cache recovery path.
+
+	Operators who hit the pre-fix `shutil.copy2` bug now have a
+	0444 archive sitting in `~/.cache/drift/runtime/<variant>/`.
+	The corrected `pex_entry.py` must chmod those archives back to
+	0o664 on subsequent invocations so the user recovers without
+	manual `chmod u+w` / `rm` intervention.  This test pre-creates
+	a 0444 archive in the test-local cache, runs the deployed
+	wrapper, and asserts the archive is repaired to owner-writable.
+	"""
+	dist = tmp_path / "dist"
+	dist.mkdir(parents=True, exist_ok=True)
+	clang = shutil.which("clang")
+	assert clang, "clang not found"
+
+	key_path = tmp_path / "deploy.key"
+	key_path.write_text(base64.b64encode(os.urandom(32)).decode("ascii") + "\n", encoding="utf-8")
+	old_sign_key = os.environ.get("DRIFT_SIGN_KEY_FILE")
+	os.environ["DRIFT_SIGN_KEY_FILE"] = str(key_path)
+
+	try:
+		build_driftc_pex(ROOT, dist)
+		build_drift_pex(ROOT, dist)
+		bundle_compiler(ROOT, dist)
+		bundle_runtime_archives(ROOT, dist)
+		bundle_docs_and_examples(dist)
+		stage = tmp_path / "stage"
+		stage.mkdir(parents=True, exist_ok=True)
+		build_and_install_stdlib(ROOT, stage, dist, "0.0.0-test")
+	finally:
+		if old_sign_key is None:
+			os.environ.pop("DRIFT_SIGN_KEY_FILE", None)
+		else:
+			os.environ["DRIFT_SIGN_KEY_FILE"] = old_sign_key
+
+	src = tmp_path / "main.drift"
+	_write_file(src, "module main;\n\nfn main() nothrow -> Int { return 0; }\n")
+	out = tmp_path / "a.out"
+
+	# Pre-seed a poisoned cache: copy an archive from the dist tree
+	# into the test-local cache and chmod it to 0444 to simulate a
+	# pre-fix operator cache state.
+	runtime_root = dist / "lib" / "runtime"
+	rt_cache = tmp_path / "rt_cache"
+	_poisoned_archives: list[Path] = []
+	for _variant_dir in sorted(runtime_root.iterdir()):
+		if not _variant_dir.is_dir():
+			continue
+		for _ar in _variant_dir.glob("libdrift_rt*.a"):
+			_cache_variant = rt_cache / _variant_dir.name
+			_cache_variant.mkdir(parents=True, exist_ok=True)
+			_cache_ar = _cache_variant / _ar.name
+			shutil.copyfile(_ar, _cache_ar)
+			_cache_ar.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+			_poisoned_archives.append(_cache_ar)
+			break
+	assert _poisoned_archives, "precondition: at least one variant must seed a poisoned archive"
+
+	run_env = dict(os.environ)
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+		run_env.pop(key, None)
+	run_env["SCIE_BASE"] = str(pex_scie_base)
+	run_env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(rt_cache)
+	result = subprocess.run(
+		[
+			str(dist / "bin" / "driftc"),
+			"--target-word-bits", "64",
+			"-M", str(tmp_path),
+			str(src),
+			"-o", str(out),
+		],
+		text=True,
+		capture_output=True,
+		env=run_env,
+		cwd=tmp_path,
+		timeout=180,
+	)
+	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+	# Every pre-poisoned archive must now be owner-writable.  The
+	# repair path in `pex_entry.py` runs on every invocation when
+	# the cache archive already exists — this is the self-healing
+	# contract the orch-team report asked for.
+	for _archive in _poisoned_archives:
+		_mode = stat.S_IMODE(_archive.stat().st_mode)
+		assert _mode & stat.S_IWUSR, (
+			f"poisoned cache archive {_archive} still has mode "
+			f"{oct(_mode)} after deployed-wrapper invocation.  "
+			f"`pex_entry.py` must chmod to 0o664 even when the "
+			f"archive already exists, so operators recover from "
+			f"the pre-fix 0444 state automatically."
+		)

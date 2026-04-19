@@ -74,29 +74,57 @@ def main() -> None:
 	import shutil as _shutil
 	from lang.language_runtime import runtime_archive_name as _rt_ar_name
 	_install_runtime = dist_root / "lib" / "runtime"
-	if "DRIFT_RUNTIME_LIB_CACHE_DIR" not in os.environ:
+	# Resolve the cache path — operator-provided env var wins; default
+	# is the user-local `~/.cache` location.  Seed and permission-
+	# repair run against the resolved path regardless of whether the
+	# env var was pre-set: a poisoned archive is a poisoned archive
+	# wherever it lives, and the self-healing contract must not be
+	# conditional on the operator's invocation shape.
+	_env_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
+	if _env_cache:
+		_cache_runtime = Path(_env_cache)
+	else:
 		_cache_runtime = Path.home() / ".cache" / "drift" / "runtime"
-		_cache_runtime.mkdir(parents=True, exist_ok=True)
-		# Seed pre-built archives from the install tree.  Each variant subdir
-		# has a variant-specific archive filename — the debug variant carries
-		# the explicit `_debug` infix per the dual-runtime contract.
-		if _install_runtime.is_dir():
-			for _variant_dir in sorted(_install_runtime.iterdir()):
-				if not _variant_dir.is_dir():
-					continue
-				_ar_name = _rt_ar_name(_variant_dir.name)
-				_archive = _variant_dir / _ar_name
-				if not _archive.is_file():
-					continue
-				_cache_variant = _cache_runtime / _variant_dir.name
-				_cache_variant.mkdir(parents=True, exist_ok=True)
-				_cache_archive = _cache_variant / _ar_name
-				if not _cache_archive.is_file():
-					try:
-						_shutil.copy2(str(_archive), str(_cache_archive))
-					except OSError:
-						pass  # Best-effort; build will recreate if needed.
-		os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(_cache_runtime)
+	_cache_runtime.mkdir(parents=True, exist_ok=True)
+	# Seed pre-built archives from the install tree.  Each variant subdir
+	# has a variant-specific archive filename — the debug variant carries
+	# the explicit `_debug` infix per the dual-runtime contract.
+	if _install_runtime.is_dir():
+		for _variant_dir in sorted(_install_runtime.iterdir()):
+			if not _variant_dir.is_dir():
+				continue
+			_ar_name = _rt_ar_name(_variant_dir.name)
+			_archive = _variant_dir / _ar_name
+			if not _archive.is_file():
+				continue
+			_cache_variant = _cache_runtime / _variant_dir.name
+			_cache_variant.mkdir(parents=True, exist_ok=True)
+			_cache_archive = _cache_variant / _ar_name
+			# Seed the user-local cache with a WRITABLE copy of
+			# the install-tree archive.  `shutil.copy2` would
+			# preserve source mode — fine for writable installs
+			# but catastrophic for read-only installs (system-
+			# wide /usr/local deploys, 0444 dist trees), where
+			# the cache inherits 0444 and ar fails to rebuild
+			# the archive on the next cache miss.  Use
+			# `copyfile` (content only) and force 0o664
+			# explicitly.  Also repair a pre-existing
+			# poisoned cache archive: if the file is already
+			# present but read-only, chmod it back to 0o664
+			# so operators who hit the old bug recover on
+			# next invocation without manual intervention.
+			if not _cache_archive.is_file():
+				try:
+					_shutil.copyfile(str(_archive), str(_cache_archive))
+					_cache_archive.chmod(0o664)
+				except OSError:
+					pass  # Best-effort; build will recreate if needed.
+			else:
+				try:
+					_cache_archive.chmod(0o664)
+				except OSError:
+					pass
+	os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(_cache_runtime)
 
 	# Build driftc argument list.
 	args = list(sys.argv[1:])
