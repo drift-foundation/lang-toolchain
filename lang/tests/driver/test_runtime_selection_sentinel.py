@@ -206,7 +206,7 @@ def _write_consumer_manifest(consumer_dir: Path) -> Path:
 	manifest = consumer_dir / "drift" / "manifest.json"
 	manifest.write_text(
 		'{\n'
-		'  "schema_version": 1,\n'
+		'  "schema_version": 2,\n'
 		'  "project": {"name": "sentinel-test", "license": "MIT"},\n'
 		'  "artifacts": [\n'
 		'    {\n'
