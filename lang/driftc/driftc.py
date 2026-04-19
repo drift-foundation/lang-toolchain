@@ -7601,16 +7601,37 @@ def main(argv: list[str] | None = None) -> int:
 		_candidate_files: list[Path] = []
 		for _pf in package_files:
 			_peeked_id = peek_package_id(_pf)
+			# `.zdmp` is the authoritative published artifact.  A
+			# `.zdmp` that exists but cannot be peeked is a bad
+			# published package — corrupt compression, truncated
+			# header, pre-0.29 metadata, wrong magic, whatever the
+			# cause.  Fail loudly, naming the file, so the user
+			# reinstalls or republishes.  No fallback to a same-stem
+			# `.dmp` sibling (that masks bad deploys); no silent
+			# skip regardless of whether the `.zdmp` happens to sit
+			# inside an allowlisted dep directory (unrelated bad
+			# artifacts under a package root still indicate a broken
+			# publish and should not be quietly ignored).
 			if _peeked_id is None and _pf.suffix == ".zdmp":
-				# Corrupt .zdmp — try .dmp sibling (discover_package_files
-				# may have filtered it out during .zdmp dedup).
-				_dmp_sibling = _pf.with_suffix(".dmp")
-				if _dmp_sibling.exists():
-					_peeked_id = peek_package_id(_dmp_sibling)
-					if _peeked_id is not None:
-						_pf = _dmp_sibling  # use the .dmp for loading
+				msg = (
+					f"failed to load published package {_pf}: unreadable "
+					f"or invalid metadata.  The .zdmp is the authoritative "
+					f"published artifact and MUST load cleanly — no "
+					f"fallback to a same-stem .dmp sibling, no silent "
+					f"skip.  Reinstall or republish this package."
+				)
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(_pf), "line": None, "column": None}]}))
+				else:
+					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			# Plain `.dmp` under a package root can still be an
+			# unrelated/stray file; skip quietly.  When the user
+			# explicitly asked for a specific package via `--dep`,
+			# the later version-selection step surfaces a "not
+			# found under package roots" diagnostic.
 			if _peeked_id is None:
-				continue  # unreadable metadata — skip silently
+				continue
 			# Standard-layout identity enforcement: if the file sits in a
 			# directory named after a requested dep (<root>/<dep_id>/<ver>/),
 			# the manifest package_id MUST match.  A mismatch indicates
@@ -7721,6 +7742,72 @@ def main(argv: list[str] | None = None) -> int:
 
 			loaded_pkgs.append(_loaded)
 
+		# Determinism: package discovery order (filenames, rglob ordering, CLI
+		# `--package-root` ordering) must not affect compilation results. Sort loaded
+		# packages by the module ids they provide, which is a content-derived key and
+		# independent of filesystem paths.
+		loaded_pkgs.sort(key=lambda p: tuple(sorted(p.modules_by_id.keys())))
+
+		# ── Version selection on loaded (allowlisted) packages ────────
+		# Runs BEFORE the transitive sanity check: flat package roots
+		# can supply multiple versions for an allowlisted pkg id, and
+		# only the `--dep`-selected exact version can validly drive
+		# downstream semantic checks.  Sanity-checking `required_deps`
+		# on an unselected duplicate would falsely fail the compile
+		# when that unselected version happens to list an extra
+		# transitive — even though the selected version is perfectly
+		# consistent with the consumer's lock.
+		if loaded_pkgs:
+			_pkgs_by_id: dict[str, list] = {}
+			for _pkg in loaded_pkgs:
+				_pid = _pkg.manifest.get("package_id", "")
+				_pkgs_by_id.setdefault(_pid, []).append(_pkg)
+			_filtered: list = []
+			_used_pins: set[str] = set()
+			for _pid, _pkg_list in _pkgs_by_id.items():
+				if _pid in _version_pins:
+					_used_pins.add(_pid)
+					_want_ver = _version_pins[_pid]
+					_matched = [p for p in _pkg_list if p.manifest.get("package_version") == _want_ver]
+					if not _matched:
+						_available = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
+						msg = f"package '{_pid}' version '{_want_ver}' not found under package roots (available: {', '.join(_available)})"
+						if args.json:
+							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						else:
+							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+						return 1
+					_filtered.extend(_matched)
+				# else: package_id matched allowlist but wasn't in _version_pins
+				# — should not happen since _dep_allowlist == _version_pins.keys()
+			# Check for pins that didn't match any discovered package.
+			# Exclude self-package — it was intentionally filtered by self-exclusion.
+			_unmatched_pins = set(_version_pins.keys()) - _used_pins
+			if _self_pkg_id:
+				_unmatched_pins.discard(_self_pkg_id)
+			if _unmatched_pins:
+				for _upin in sorted(_unmatched_pins):
+					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+			loaded_pkgs = _filtered
+		else:
+			# No packages loaded — check for unmatched non-self pins.
+			_all_unmatched = set(_version_pins.keys())
+			if _self_pkg_id:
+				_all_unmatched.discard(_self_pkg_id)
+			if _all_unmatched:
+				for _upin in sorted(_all_unmatched):
+					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					else:
+						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
+				return 1
+
 		# ── Transitive dependency sanity check ────────────────────────
 		# driftc is an exact loader, not a resolver.  The consumer's
 		# `drift prepare` produced the full transitive graph as exact
@@ -7739,6 +7826,11 @@ def main(argv: list[str] | None = None) -> int:
 		#   `drift prepare`.  No auto-expansion from filesystem — that
 		#   would make driftc a second resolver.
 		# - Skip the self-pkg id (self-exclusion rule).
+		#
+		# Runs AFTER version selection — the sanity check only looks
+		# at the pin-selected exact version per pkg id, so unselected
+		# duplicate versions in flat package roots cannot falsely
+		# fail the compile (K Finding 3).
 		#
 		# Pre-cut `.dmp`s still carry the legacy `package_deps` key —
 		# the loader (`dmir_pkg_v0._parse_required_deps`) rejects
@@ -7791,64 +7883,6 @@ def main(argv: list[str] | None = None) -> int:
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
-
-		# Determinism: package discovery order (filenames, rglob ordering, CLI
-		# `--package-root` ordering) must not affect compilation results. Sort loaded
-		# packages by the module ids they provide, which is a content-derived key and
-		# independent of filesystem paths.
-		loaded_pkgs.sort(key=lambda p: tuple(sorted(p.modules_by_id.keys())))
-
-		# ── Version selection on loaded (allowlisted) packages ────────
-		if loaded_pkgs:
-			_pkgs_by_id: dict[str, list] = {}
-			for _pkg in loaded_pkgs:
-				_pid = _pkg.manifest.get("package_id", "")
-				_pkgs_by_id.setdefault(_pid, []).append(_pkg)
-			_filtered: list = []
-			_used_pins: set[str] = set()
-			for _pid, _pkg_list in _pkgs_by_id.items():
-				if _pid in _version_pins:
-					_used_pins.add(_pid)
-					_want_ver = _version_pins[_pid]
-					_matched = [p for p in _pkg_list if p.manifest.get("package_version") == _want_ver]
-					if not _matched:
-						_available = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
-						msg = f"package '{_pid}' version '{_want_ver}' not found under package roots (available: {', '.join(_available)})"
-						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-						else:
-							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-						return 1
-					_filtered.extend(_matched)
-				# else: package_id matched allowlist but wasn't in _version_pins
-				# — should not happen since _dep_allowlist == _version_pins.keys()
-			# Check for pins that didn't match any discovered package.
-			# Exclude self-package — it was intentionally filtered by self-exclusion.
-			_unmatched_pins = set(_version_pins.keys()) - _used_pins
-			if _self_pkg_id:
-				_unmatched_pins.discard(_self_pkg_id)
-			if _unmatched_pins:
-				for _upin in sorted(_unmatched_pins):
-					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
-					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-					else:
-						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-				return 1
-			loaded_pkgs = _filtered
-		else:
-			# No packages loaded — check for unmatched non-self pins.
-			_all_unmatched = set(_version_pins.keys())
-			if _self_pkg_id:
-				_all_unmatched.discard(_self_pkg_id)
-			if _all_unmatched:
-				for _upin in sorted(_all_unmatched):
-					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
-					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-					else:
-						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-				return 1
 
 		# Enforce "single version per package id per build" and deduplicate
 		# same-version packages discovered from multiple --package-root dirs.

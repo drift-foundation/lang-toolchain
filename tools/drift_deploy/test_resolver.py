@@ -539,6 +539,109 @@ class TestLockFile:
 		assert "on-disk" in errors[0]
 		assert "empty sha256" in errors[0]
 
+	def test_read_lock_rejects_unknown_dep_type(self) -> None:
+		"""K Finding 2 regression: a lock with a `dep_type` that is
+		not one of the three recognised values must be rejected at
+		load.  Unknown values cannot silently default to `direct` —
+		that would let a typo or forward-compat value from a future
+		schema slip past every downstream check."""
+		bad_lock = {
+			"schema_version": 3,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"dep.a": {
+							"version": "1.2.3",
+							"sha256": "aa",
+							"author_key": "ed25519:x",
+							"dep_type": "vendored",  # not recognised
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(bad_lock))
+			with pytest.raises(ValueError) as exc:
+				read_lock(lock_path)
+			msg = str(exc.value)
+			assert "vendored" in msg
+			assert "dep_type" in msg
+			assert "drift prepare" in msg
+
+	def test_verify_rejects_co_artifact_not_in_manifest(self) -> None:
+		"""K Finding 2 regression: a lock that marks an external
+		dependency as `dep_type: "co-artifact"` — attempting to
+		bypass sha/signer verification — must be rejected when the
+		caller passes an explicit `allowed_co_artifacts` set that
+		does NOT include that dep.
+
+		Without this guard, a hand-edited lock could strip the sha
+		and author_key of any external dep and escape the
+		strict-exact re-check by simply flipping the dep_type field.
+		"""
+		lock_deps = {
+			# Attacker-shaped lock entry: external dep claiming
+			# co-artifact status with empty sha/author_key.
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="", dep_type="co-artifact",
+				package_id="net.tls", author_key="",
+			),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.15",
+				sha="real-sha", author_key="ed25519:legit")],
+		}
+		# Manifest declares no co-artifacts by that name.
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			allowed_co_artifacts=set(),
+		)
+		assert len(errors) == 1
+		assert "net.tls" in errors[0]
+		assert "co-artifact" in errors[0]
+		assert "not a co-artifact in the current manifest" in errors[0]
+		assert "drift prepare" in errors[0]
+
+	def test_verify_accepts_legit_co_artifact_in_manifest(self) -> None:
+		"""Positive side of Finding 2: when the lock's co-artifact
+		entry IS named in `allowed_co_artifacts`, verification still
+		skips sha/signer re-check (because those are not yet known
+		at prepare time for same-manifest siblings)."""
+		lock_deps = {
+			"web.jwt": ResolvedDep(
+				version="0.2.0", sha256="", dep_type="co-artifact",
+				package_id="web.jwt", author_key="",
+			),
+		}
+		# web.jwt is not on disk — legit co-artifacts are built in
+		# this deploy run, so the index lookup should be skipped.
+		errors = verify_lock_compatibility(
+			{}, {},
+		)  # baseline: None allowlist preserves old trust-the-lock behaviour
+		errors2 = verify_lock_compatibility(
+			lock_deps, {},
+			allowed_co_artifacts={"web.jwt", "web.rest"},
+		)
+		assert errors == []
+		assert errors2 == []
+
+	def test_verify_none_allowlist_preserves_old_behaviour(self) -> None:
+		"""Passing `allowed_co_artifacts=None` keeps the historical
+		"trust the lock" behaviour — co-artifact entries are skipped
+		unconditionally.  Lets callers that don't yet know the
+		manifest context (or explicitly opt out) keep working,
+		while build / deploy pass the real allowlist."""
+		lock_deps = {
+			"anything": ResolvedDep(
+				version="0.1.0", sha256="", dep_type="co-artifact",
+				package_id="anything", author_key="",
+			),
+		}
+		errors = verify_lock_compatibility(lock_deps, {})
+		assert errors == []
+
 	def test_co_artifact_round_trip_serialization(self) -> None:
 		"""v3 co-artifact lock entry round-trips cleanly: written with
 		empty sha256 and empty author_key, read back preserves
@@ -774,9 +877,17 @@ class TestBuildPackageIndexDedup:
 			# Both files loaded (different physical paths), but second skipped by root priority.
 			assert call_count[0] == 2
 
-	def test_corrupt_zdmp_falls_back_to_dmp_sibling(self) -> None:
-		"""Corrupt .zdmp + valid .dmp sibling → resolver indexes from .dmp."""
-		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0, canonical_json_bytes
+	def test_corrupt_zdmp_fails_even_with_valid_dmp_sibling(self) -> None:
+		"""A `.zdmp` is the published compressed artifact.  If it
+		exists but fails to load, the resolver MUST fail loudly —
+		even when a perfectly valid `.dmp` with the same stem is
+		sitting right next to it.  The pre-0.29 behaviour of
+		silently falling back to the `.dmp` let a bad deploy
+		masquerade as good because the uncompressed local build
+		artifact was still usable while the published shape was
+		broken.  Fail early instead.
+		"""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 
 		with tempfile.TemporaryDirectory() as tmpdir:
 			root = Path(tmpdir)
@@ -799,15 +910,190 @@ class TestBuildPackageIndexDedup:
 			dmp = root / "lib.dmp"
 			write_dmir_pkg_v0(dmp, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
 
-			# Place a corrupt .zdmp with the same stem.
+			# Place a corrupt .zdmp with the same stem — this is the
+			# exact "bad published artifact" shape we want to catch.
 			zdmp = root / "lib.zdmp"
 			zdmp.write_bytes(b"NOT VALID ZSTD DATA")
 
-			# Default loader (no mock): exercises real zdmp fallback.
+			with pytest.raises(ResolutionError) as exc_info:
+				build_package_index([root])
+			msg = str(exc_info.value)
+			assert str(zdmp) in msg
+			assert ".zdmp" in msg
+			# Diagnostic must name the remediation explicitly.
+			assert "republish" in msg.lower() or "reinstall" in msg.lower()
+			# And state that the .dmp sibling is NOT used.
+			assert "fallback" in msg.lower() or "will NOT" in msg
+
+	def test_pre_029_zdmp_fails_with_republish_diagnostic_even_with_dmp_sibling(self) -> None:
+		"""A `.zdmp` carrying pre-0.29 metadata (legacy
+		`package_deps` key) with a valid `.dmp` sibling beside it
+		must still surface the metadata/republish diagnostic — the
+		`.dmp` is NOT used as a workaround.  Same principle as the
+		corrupt-zdmp case: bad published metadata is the user's
+		problem to fix by republishing, not something the resolver
+		routes around.
+		"""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+		from lang.driftc.packages.zdmp import compress_to_zdmp
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+
+			# Valid .dmp sibling (v3-shape metadata).
+			valid_manifest = {
+				"format": "dmir-pkg",
+				"format_version": 0,
+				"package_id": "legacy.lib",
+				"package_version": "1.0.0",
+				"target": "test-target",
+				"abi_fingerprint": "test",
+				"unsigned": True,
+				"unstable_format": True,
+				"payload_kind": "provisional-dmir",
+				"payload_version": 0,
+				"modules": [],
+				"blobs": {},
+			}
+			dmp = root / "lib.dmp"
+			write_dmir_pkg_v0(dmp, manifest_obj=valid_manifest, blobs={}, blob_types={}, blob_names={})
+
+			# Pre-0.29 .zdmp — same container format, but the manifest
+			# still carries the legacy `package_deps` key.  Build the
+			# raw .dmp first, then compress in place.
+			legacy_manifest = dict(valid_manifest)
+			legacy_manifest["package_deps"] = [{"name": "other.lib", "version": "0.3.14"}]
+			raw_dmp = root / "lib-legacy.raw.dmp"
+			write_dmir_pkg_v0(raw_dmp, manifest_obj=legacy_manifest, blobs={}, blob_types={}, blob_names={})
+			zdmp = root / "lib.zdmp"
+			zdmp.write_bytes(compress_to_zdmp(raw_dmp.read_bytes()))
+			raw_dmp.unlink()  # only the compressed form stays next to the .dmp
+
+			with pytest.raises(ResolutionError) as exc_info:
+				build_package_index([root])
+			msg = str(exc_info.value)
+			# Must name the bad .zdmp, not the healthy .dmp sibling.
+			assert str(zdmp) in msg
+			assert str(dmp) not in msg
+			# Must preserve the existing metadata/republish framing.
+			assert "legacy `package_deps`" in msg or "pre-0.29" in msg
+
+	def test_only_dmp_present_still_loads_normally(self) -> None:
+		"""Baseline: if only a `.dmp` exists (no `.zdmp` present),
+		normal package loading still works.  The strict `.zdmp`
+		rule only fires when a `.zdmp` IS present and fails — it
+		does not penalise the plain-`.dmp`-only workflow used by
+		local development and older test fixtures."""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+			manifest_obj = {
+				"format": "dmir-pkg",
+				"format_version": 0,
+				"package_id": "plain.lib",
+				"package_version": "2.0.0",
+				"target": "test-target",
+				"abi_fingerprint": "test",
+				"unsigned": True,
+				"unstable_format": True,
+				"payload_kind": "provisional-dmir",
+				"payload_version": 0,
+				"modules": [],
+				"blobs": {},
+			}
+			dmp = root / "lib.dmp"
+			write_dmir_pkg_v0(dmp, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+			# No .zdmp beside it.
+
 			idx = build_package_index([root])
-			assert "acme.lib" in idx
-			assert len(idx["acme.lib"]) == 1
-			assert idx["acme.lib"][0].version == parse_version("1.0.0")
+			assert "plain.lib" in idx
+			assert len(idx["plain.lib"]) == 1
+			assert idx["plain.lib"][0].version == parse_version("2.0.0")
+
+	def test_real_pre_cut_dmp_surfaces_republish_guidance(self) -> None:
+		"""K Finding 1 regression: a real .dmp carrying the legacy
+		`package_deps` metadata key must surface the "republish with
+		0.29" guidance via the real loader path — not be silently
+		swallowed as "unreadable".
+
+		Previous behaviour: the loader raised inside
+		`_parse_required_deps`, `build_package_index`'s broad
+		``except Exception`` swallowed it, and the user saw a
+		generic "dep not satisfied" downstream.  Now the loader
+		raises `PackageMetadataError`, which the index distinguishes
+		from true I/O / container corruption and re-raises as a
+		`ResolutionError` pointing at the pre-0.29 toolchain.
+		"""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+			# Construct a valid v0 container whose MANIFEST still
+			# carries the pre-0.29 `package_deps` key.
+			manifest_obj = {
+				"format": "dmir-pkg",
+				"format_version": 0,
+				"package_id": "legacy.lib",
+				"package_version": "1.0.0",
+				"target": "test-target",
+				"abi_fingerprint": "test",
+				"unsigned": True,
+				"unstable_format": True,
+				"payload_kind": "provisional-dmir",
+				"payload_version": 0,
+				"modules": [],
+				"blobs": {},
+				# THE offending key.  A 0.29+ container uses
+				# `required_deps`; `package_deps` is the pre-cut form.
+				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],
+			}
+			dmp = root / "legacy.dmp"
+			write_dmir_pkg_v0(dmp, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+
+			with pytest.raises(ResolutionError) as exc_info:
+				build_package_index([root])
+			msg = str(exc_info.value)
+			assert str(dmp) in msg
+			assert "legacy `package_deps`" in msg
+			assert "pre-0.29" in msg
+			assert "republished" in msg
+
+	def test_real_malformed_required_deps_surfaces_republish_guidance(self) -> None:
+		"""A real .dmp whose `required_deps` entry carries an invalid
+		version shape (exact `M.N.P`, which is not an owner-declared
+		range) must likewise surface a hard `ResolutionError` instead
+		of being silently skipped.  Ranges are the only valid
+		published-metadata shape — anything else is a malformed
+		producer and has to be republished."""
+		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+			manifest_obj = {
+				"format": "dmir-pkg",
+				"format_version": 0,
+				"package_id": "malformed.lib",
+				"package_version": "1.0.0",
+				"target": "test-target",
+				"abi_fingerprint": "test",
+				"unsigned": True,
+				"unstable_format": True,
+				"payload_kind": "provisional-dmir",
+				"payload_version": 0,
+				"modules": [],
+				"blobs": {},
+				# Invalid: required_deps entries must be "M" or "M.N".
+				"required_deps": [{"name": "dep-a", "version": "0.3.14"}],
+			}
+			dmp = root / "malformed.dmp"
+			write_dmir_pkg_v0(dmp, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+
+			with pytest.raises(ResolutionError) as exc_info:
+				build_package_index([root])
+			msg = str(exc_info.value)
+			assert str(dmp) in msg
+			assert "0.3.14" in msg
 
 
 # ── 0.29.0 two-layer model: required_deps ranges vs. producer lock pins ──

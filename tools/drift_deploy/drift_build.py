@@ -257,6 +257,8 @@ def _resolve_deps(
 	art: Artifact,
 	manifest_dir: Path,
 	package_roots: list[Path],
+	*,
+	co_artifact_names: set[str] | None = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Resolve dependencies for a build.
@@ -316,9 +318,18 @@ def _resolve_deps(
 	# non-co-artifact dep must have a single disk entry at the exact
 	# M.N.P, matching sha256, matching author_key.  Any deviation is a
 	# `drift prepare` problem.
+	#
+	# `co_artifact_names` names the manifest's library artifacts —
+	# only those IDs may legitimately carry `dep_type: "co-artifact"`
+	# in the lock (bypassing sha/signer re-check because they are
+	# built in this same run).  Anything else claiming co-artifact
+	# status is rejected as corruption.
 	if package_roots:
 		pkg_index = build_package_index(package_roots)
-		errors = verify_lock_compatibility(locked, pkg_index)
+		errors = verify_lock_compatibility(
+			locked, pkg_index,
+			allowed_co_artifacts=co_artifact_names or set(),
+		)
 		if errors:
 			raise BuildError(
 				f"artifact '{art.name}': lock compatibility check failed:\n"
@@ -390,8 +401,15 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Package roots (resolved before deps — needed for lock compatibility check).
 	package_roots = _resolve_package_roots(args.package_root, manifest_dir)
 
+	# Collect the set of library artifact names declared in THIS
+	# manifest — those are the IDs that may legitimately appear in
+	# the lock with `dep_type: "co-artifact"`.  Every other pkg_id
+	# claiming co-artifact status is rejected at lock-verify time.
+	co_artifact_names = {a.name for a in manifest.artifacts if a.kind == "library"}
+
 	# Resolve deps.
-	resolved = _resolve_deps(art, manifest_dir, package_roots)
+	resolved = _resolve_deps(art, manifest_dir, package_roots,
+		co_artifact_names=co_artifact_names)
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)

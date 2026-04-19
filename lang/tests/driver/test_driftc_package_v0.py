@@ -4943,12 +4943,18 @@ fn main() nothrow -> Int {
 	assert rc == 0, "signed .zdmp consumption must succeed"
 
 
-def test_dmp_not_shadowed_by_stale_zdmp_in_same_dir(tmp_path: Path) -> None:
-	"""Regression: stale .zdmp in the same directory silently shadows valid .dmp.
+def test_corrupt_zdmp_fails_loudly_even_with_valid_dmp_sibling(tmp_path: Path, capsys) -> None:
+	"""A corrupt `.zdmp` beside a valid same-stem `.dmp` MUST cause
+	the compile to fail, not silently fall through to the `.dmp`.
+	The published `.zdmp` is the authoritative artifact — a bad
+	published shape is the user's problem to fix by reinstalling
+	or republishing, not something driftc routes around.
 
-	discover_package_files dedup prefers .zdmp over .dmp when both share
-	a stem.  If the .zdmp is stale/corrupt, the loader falls back to the
-	.dmp sibling instead of crashing with ZstdError.
+	Pre-0.29 policy used the `.dmp` sibling as a fallback; that
+	let a bad deploy masquerade as a good one because the
+	uncompressed local build was still usable while the published
+	artifact was broken.  The strict rule: ANY failure loading a
+	`.zdmp` is a hard error that names the bad file.
 	"""
 	priv = Ed25519PrivateKey.generate()
 	pub_raw = _public_key_bytes(priv.public_key())
@@ -4982,8 +4988,6 @@ fn main() nothrow -> Int {
 }
 """.lstrip(),
 	)
-	# This should succeed: the valid .dmp should be consumable even when
-	# a stale .zdmp exists alongside it.
 	rc = driftc_main(
 		[
 			"-M",
@@ -5000,7 +5004,23 @@ fn main() nothrow -> Int {
 			str(tmp_path / "out.ll"),
 		]
 	)
-	assert rc == 0, "valid .dmp must not be shadowed by corrupt .zdmp"
+	assert rc != 0, (
+		"corrupt .zdmp must cause a hard compile failure even when "
+		"a valid .dmp sibling is present — no silent fallback"
+	)
+	err = capsys.readouterr().err
+	assert str(stale_zdmp) in err, (
+		f"diagnostic must name the bad .zdmp explicitly; got:\n{err}"
+	)
+	# Remediation vocabulary — exactly one of reinstall/republish/
+	# no fallback must appear so the user knows this is about the
+	# published artifact, not a code bug.
+	assert (
+		"reinstall" in err.lower()
+		or "republish" in err.lower()
+		or "no fallback" in err.lower()
+		or "no\n" in err  # allow "no fallback" with linebreak
+	)
 
 
 def test_valid_zdmp_not_shadowed_by_stale_dmp_in_same_dir(tmp_path: Path) -> None:
@@ -5296,10 +5316,21 @@ def test_package_root_without_dep_is_rejected(tmp_path: Path) -> None:
 	assert rc == 1, "--package-root without --dep should be rejected"
 
 
-def test_dep_allowlist_malformed_unrelated_package_ignored(tmp_path: Path) -> None:
-	"""Malformed/untrusted unrelated packages under the root do not affect
-	the build when not listed in --dep.  The compiler should never attempt
-	to load, decompress, or trust-verify them."""
+def test_dep_allowlist_malformed_unrelated_dmp_ignored(tmp_path: Path) -> None:
+	"""A malformed plain `.dmp` (no `.zdmp` sibling) sitting in a
+	package root next to a legitimate dep must not affect the
+	build when the bad file isn't listed in `--dep`.  Plain
+	`.dmp`s can legitimately show up as build intermediates or
+	stray files; the compiler should never attempt to load,
+	decompress, or trust-verify them when they aren't requested.
+
+	Scope is plain `.dmp` only.  Unrelated CORRUPT `.zdmp` files
+	are a different story: `.zdmp` is the published compressed
+	artifact, and any `.zdmp` that fails to load indicates a
+	broken publish that the user must fix — see the companion
+	`test_unrelated_corrupt_zdmp_fails_loudly` for the strict
+	`.zdmp` rule.
+	"""
 	pkgs = tmp_path / "pkgs"
 	pkgs.mkdir(parents=True, exist_ok=True)
 
@@ -5307,10 +5338,10 @@ def test_dep_allowlist_malformed_unrelated_package_ignored(tmp_path: Path) -> No
 	src_dep = tmp_path / "src_dep"
 	_emit_versioned_pkg(src_dep, pkgs / "net_tls.dmp", module_id="net.tls", version="0.3.3")
 
-	# Garbage file that looks like a package but is corrupt.
+	# Garbage plain `.dmp`.  No `.zdmp` sibling, so the strict
+	# `.zdmp` rule does not fire — the permissive "ignore stray
+	# unrelated .dmp" path applies.
 	(pkgs / "corrupted.dmp").write_bytes(b"NOT A VALID DMIR PACKAGE AT ALL")
-	# Another garbage .zdmp.
-	(pkgs / "broken.zdmp").write_bytes(b"\x00\x00\x00garbage zstd frame")
 
 	consumer_src = tmp_path / "consumer"
 	_write_file(
@@ -5334,10 +5365,65 @@ def test_dep_allowlist_malformed_unrelated_package_ignored(tmp_path: Path) -> No
 		]
 	)
 	assert rc == 0, (
-		"malformed unrelated packages in root must not affect "
-		"the build when not listed in --dep"
+		"malformed unrelated .dmp in root must not affect the build "
+		"when not listed in --dep"
 	)
 	assert ir_out.exists()
+
+
+def test_unrelated_corrupt_zdmp_fails_loudly(tmp_path: Path, capsys) -> None:
+	"""An unrelated corrupt `.zdmp` sitting in a package root must
+	fail the compile even when the user never requests it via
+	`--dep`.  A `.zdmp` is the authoritative published artifact;
+	a corrupt one indicates a broken publish, not "background
+	noise".  Silently ignoring it would let a bad deploy linger
+	unnoticed while downstream builds appear healthy.
+	"""
+	pkgs = tmp_path / "pkgs"
+	pkgs.mkdir(parents=True, exist_ok=True)
+
+	# Good dependency the consumer actually requests.
+	src_dep = tmp_path / "src_dep"
+	_emit_versioned_pkg(src_dep, pkgs / "net_tls.dmp", module_id="net.tls", version="0.3.3")
+
+	# Unrelated corrupt `.zdmp` — NOT pinned by any `--dep` below.
+	bad_zdmp = pkgs / "broken.zdmp"
+	bad_zdmp.write_bytes(b"\x00\x00\x00garbage zstd frame")
+
+	consumer_src = tmp_path / "consumer"
+	_write_file(
+		consumer_src / "main.drift",
+		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+	)
+	rc = driftc_main(
+		[
+			"-M",
+			str(consumer_src),
+			str(consumer_src / "main.drift"),
+			"--package-root",
+			str(pkgs),
+			"--allow-unsigned-from",
+			str(pkgs),
+			"--dep",
+			"net.tls@0.3.3",
+			"--emit-ir",
+			str(tmp_path / "out.ll"),
+		]
+	)
+	assert rc != 0, (
+		"unrelated corrupt .zdmp must still cause a hard compile "
+		"failure — the .zdmp is the published artifact and a "
+		"broken one masks a bad deploy"
+	)
+	err = capsys.readouterr().err
+	assert str(bad_zdmp) in err, (
+		f"diagnostic must name the bad .zdmp; got:\n{err}"
+	)
+	assert (
+		"reinstall" in err.lower()
+		or "republish" in err.lower()
+		or "no fallback" in err.lower()
+	)
 
 
 @pytest.mark.heavy

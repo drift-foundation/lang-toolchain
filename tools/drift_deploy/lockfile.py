@@ -43,6 +43,16 @@ LOCK_SCHEMA_VERSION = 3
 # at the loader means build/deploy never have to re-parse.
 _EXACT_MNP_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
+# v3 recognises exactly three `dep_type` values.  Anything else in a
+# lock file is either a typo, a hand-edit, or a forward-compat value
+# from a future schema we haven't cut yet — reject at load so the
+# downstream verifier never has to fall back to "unknown-type =
+# default direct" behaviour.  In particular, `co-artifact` carries
+# a strict structural meaning (same-manifest sibling, built in this
+# deploy run, sha/author_key not yet known) — if a lock marks some
+# OTHER dep kind as co-artifact we MUST surface that as corruption.
+_VALID_DEP_TYPES = frozenset(("direct", "transitive", "co-artifact"))
+
 
 def write_lock(
 	path: Path,
@@ -131,6 +141,13 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 					f"missing 'version' (exact M.N.P required in v3)"
 				)
 			dep_type = dep_data.get("dep_type", "direct")
+			if dep_type not in _VALID_DEP_TYPES:
+				raise ValueError(
+					f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
+					f"has invalid dep_type '{dep_type}' — v3 recognises "
+					f"only {sorted(_VALID_DEP_TYPES)}; run `drift prepare` "
+					f"to regenerate"
+				)
 			# v3 pins an exact `M.N.P` for every entry, including
 			# co-artifacts (their .dmp is built in the same deploy
 			# run but pinned at the manifest's exact release version).
@@ -176,6 +193,8 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 def verify_lock_compatibility(
 	lock_deps: dict[str, ResolvedDep],
 	package_index: dict[str, list],
+	*,
+	allowed_co_artifacts: set[str] | None = None,
 ) -> list[str]:
 	"""Verify a v3 lock against the current package index.
 
@@ -186,11 +205,41 @@ def verify_lock_compatibility(
 	moving the lock forward is `drift prepare`; this function NEVER
 	silently re-resolves.
 
+	`allowed_co_artifacts` names the library artifacts declared in
+	the caller's current manifest that MAY be marked `dep_type
+	"co-artifact"` in the lock (they are built in this same deploy
+	run, so their sha256 / author_key is intentionally not yet
+	known).  A lock entry whose `dep_type == "co-artifact"` but
+	whose `pkg_id` is NOT in this set is treated as a verification
+	bypass attempt (hand-edited or malformed lock) and rejected —
+	an external dependency cannot legitimately claim co-artifact
+	status to skip the sha/signer re-check.
+
+	Passing `None` preserves the historical "trust the lock"
+	behaviour.  New call sites in build / deploy pass the actual
+	allowlist.
+
 	Returns a list of error messages (empty = all good).
 	"""
 	errors: list[str] = []
 	for pkg_id, dep in lock_deps.items():
 		if dep.dep_type == "co-artifact":
+			# Fail-closed: the bypass only applies when the caller
+			# has named this package as a legitimate co-artifact.
+			# Anything else masquerading as a co-artifact is either
+			# a hand-edited lock or a `drift prepare` bug — treat as
+			# corruption, not "just skip".
+			if allowed_co_artifacts is not None and pkg_id not in allowed_co_artifacts:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' is "
+					f"marked `dep_type: \"co-artifact\"` but '{pkg_id}' "
+					f"is not a co-artifact in the current manifest.  "
+					f"Only same-manifest library artifacts may use the "
+					f"co-artifact dep_type (which skips sha/signer "
+					f"re-check because those are not yet known at "
+					f"prepare time).  Run `drift prepare` to "
+					f"regenerate the lock."
+				)
 			continue
 		entries = package_index.get(pkg_id, [])
 		if not entries:

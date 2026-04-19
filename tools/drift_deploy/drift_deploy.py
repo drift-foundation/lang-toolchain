@@ -281,12 +281,18 @@ def _resolve_artifact_deps(
 	package_roots: list[Path],
 	lock_path: Path,
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None,
+	co_artifact_names: set[str] | None = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Load locked dependencies for a single artifact.
 
 	Deploy is read-only with respect to drift/lock.json.  If the lock
 	is missing or stale, the user must run ``drift prepare`` first.
+
+	`co_artifact_names` names the library artifacts declared in the
+	current manifest.  Only those IDs may legitimately appear in the
+	lock with `dep_type: "co-artifact"` — anything else claiming
+	co-artifact status is treated as lock corruption and rejected.
 	"""
 	if not art.package_deps:
 		return {}
@@ -312,7 +318,10 @@ def _resolve_artifact_deps(
 				f"run 'drift prepare' to re-resolve"
 			)
 	pkg_index = build_package_index(package_roots)
-	errors = verify_lock_compatibility(locked, pkg_index)
+	errors = verify_lock_compatibility(
+		locked, pkg_index,
+		allowed_co_artifacts=co_artifact_names or set(),
+	)
 	if errors:
 		raise DeployError(
 			f"artifact '{art.name}': lock compatibility check failed:\n"
@@ -1312,6 +1321,13 @@ def _run_impl(args: argparse.Namespace) -> int:
 		except ValueError as e:
 			raise DeployError(f"failed to read {lock_path}: {e}")
 
+	# Library artifacts in this manifest are the ONLY packages whose
+	# lock entries may legitimately carry `dep_type: "co-artifact"`
+	# (bypassing the sha/signer re-check because they are built in
+	# this same deploy run).  Anything else claiming co-artifact
+	# status in the lock is rejected at verify time.
+	co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
+
 	resolved_map: dict[str, dict[str, ResolvedDep]] = {}
 
 	try:
@@ -1327,6 +1343,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				package_roots=[staged_pkg_root] + package_roots,
 				lock_path=lock_path,
 				existing_lock=existing_lock,
+				co_artifact_names=co_artifact_names,
 			)
 			resolved_map[art.name] = resolved
 			if resolved:

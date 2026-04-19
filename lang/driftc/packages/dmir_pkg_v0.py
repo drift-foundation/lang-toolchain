@@ -180,13 +180,29 @@ def _parse_native_deps(manifest: dict[str, Any]) -> list[NativeDepEntry]:
 	return result
 
 
+class PackageMetadataError(ValueError):
+	"""Raised when a `.dmp` container loads successfully but carries
+	metadata that violates the v3 contract.
+
+	Distinguished from generic `ValueError` (container corruption,
+	I/O errors, bad magic, etc.) so callers — notably
+	`tools/drift_deploy/resolver.py::build_package_index` — can
+	surface the "pre-cut / malformed required_deps" failures to the
+	user with the "republish with 0.29+" guidance instead of
+	silently skipping the package as unreadable.  The consumer-side
+	package index treats true corruption as "skip and continue" but
+	a metadata-contract violation as a hard ResolutionError.
+	"""
+	pass
+
+
 def _parse_required_deps(manifest: dict[str, Any]) -> list[RequiredDepEntry]:
 	"""Extract `required_deps` from a .dmp manifest.
 
 	Returns `[]` if the key is absent AND the package has no legacy
 	`package_deps` key either — the package has no dependencies.
 
-	Rejects:
+	Rejects (raises `PackageMetadataError`, a `ValueError` subclass):
 	- Pre-cut `.dmp`s: if the manifest still carries a legacy
 	  `package_deps` key, the package was published with a pre-0.29
 	  toolchain and must be republished.  No compatibility shim.
@@ -198,7 +214,7 @@ def _parse_required_deps(manifest: dict[str, Any]) -> list[RequiredDepEntry]:
 	  sees malformed data.
 	"""
 	if "package_deps" in manifest:
-		raise ValueError(
+		raise PackageMetadataError(
 			"package contains legacy `package_deps` metadata key — "
 			"this package was published with a pre-0.29 toolchain and "
 			"must be republished with toolchain >= 0.29.0.  v3 "
@@ -209,19 +225,19 @@ def _parse_required_deps(manifest: dict[str, Any]) -> list[RequiredDepEntry]:
 	if rd is None:
 		return []
 	if not isinstance(rd, list):
-		raise ValueError("required_deps must be an array")
+		raise PackageMetadataError("required_deps must be an array")
 	result: list[RequiredDepEntry] = []
 	for i, entry in enumerate(rd):
 		if not isinstance(entry, dict):
-			raise ValueError(f"required_deps[{i}] must be an object")
+			raise PackageMetadataError(f"required_deps[{i}] must be an object")
 		name = entry.get("name")
 		if not isinstance(name, str) or not name:
-			raise ValueError(f"required_deps[{i}].name must be a non-empty string")
+			raise PackageMetadataError(f"required_deps[{i}].name must be a non-empty string")
 		version = entry.get("version")
 		if not isinstance(version, str) or not version:
-			raise ValueError(f"required_deps[{i}].version must be a non-empty string")
+			raise PackageMetadataError(f"required_deps[{i}].version must be a non-empty string")
 		if not is_owner_declared_range(version):
-			raise ValueError(
+			raise PackageMetadataError(
 				f"required_deps[{i}] ('{name}') version '{version}' is not a "
 				f"valid owner-declared range — `.dmp` metadata must carry "
 				f"`\"M\"` (any M.x.x) or `\"M.N\"` (any M.N.x), drawn from "

@@ -319,3 +319,130 @@ def test_driftc_rejects_pin_outside_required_range(tmp_path: Path) -> None:
 			f"'{forbidden}' — driftc does not resolve.  Got:\n"
 			f"{res.stderr[:500]}"
 		)
+
+
+def test_sanity_check_runs_after_version_selection(tmp_path: Path) -> None:
+	"""K Finding 3 regression: when flat package roots contain
+	multiple versions of an allowlisted pkg, driftc's
+	`required_deps` sanity check must only look at the
+	`--dep`-selected version — NOT every discovered sibling.
+
+	Concrete shape that used to fail:
+
+	- ``deplib@0.1.0`` on disk, with empty ``required_deps``.
+	- ``deplib@0.2.0`` on disk, with ``required_deps: [phantom.lib=1.0]``
+	  (an extra transitive that the consumer never pins).
+	- Consumer compiles with only ``--dep deplib@0.1.0``.
+
+	Version selection picks deplib@0.1.0.  If the sanity pass ran
+	BEFORE that selection (pre-fix), it iterated every loaded
+	package — including the unselected deplib@0.2.0 — and
+	incorrectly reported "no --dep is pinned for 'phantom.lib'"
+	against a version that would then be discarded.  Post-fix, the
+	sanity pass runs AFTER version selection and only sees the
+	pin-selected deplib@0.1.0, whose ``required_deps`` is clean.
+	"""
+	stdlib = stdlib_root()
+	if stdlib is None:
+		pytest.skip("stdlib not available")
+
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+	from cryptography.hazmat.primitives import serialization
+	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+
+	priv = Ed25519PrivateKey.generate()
+	pub = priv.public_key()
+	pub_raw = pub.public_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PublicFormat.Raw,
+	)
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
+
+	pkg_root = tmp_path / "shared_root"
+	pkg_root.mkdir()
+	trust_path = tmp_path / "trust.json"
+	trust_path.write_text(json.dumps({
+		"format": "drift-trust", "version": 0,
+		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
+		"namespaces": {"deplib.*": [kid]},
+		"revoked": [],
+	}))
+
+	deplib_dir = tmp_path / "deplib_src"
+	deplib_dir.mkdir()
+	(deplib_dir / "deplib.drift").write_text(DEPLIB_SOURCE)
+
+	# deplib@0.1.0 — clean, no required_deps.
+	deplib_010 = tmp_path / "deplib_0.1.0.dmp"
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc",
+		 "-M", str(deplib_dir), str(deplib_dir / "deplib.drift"),
+		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
+		 "--package-id", "deplib", "--package-version", "0.1.0",
+		 "--package-target", "test-target",
+		 "--emit-package", str(deplib_010), "--test-build-only"],
+		cwd=ROOT, capture_output=True, text=True,
+		timeout=sanitizer_timeout(120),
+	)
+	assert res.returncode == 0, f"deplib@0.1.0 build failed: {res.stderr[:300]}"
+	_sign_package(deplib_010, pkg_root, "deplib", "0.1.0", priv, pub_raw, kid, pub_b64)
+
+	# deplib@0.2.0 — carries a phantom required_dep that the
+	# consumer never pins.  The producer's own emit-only build has
+	# no loaded packages, so its own sanity pass trivially passes.
+	deplib_020 = tmp_path / "deplib_0.2.0.dmp"
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc",
+		 "-M", str(deplib_dir), str(deplib_dir / "deplib.drift"),
+		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
+		 "--package-id", "deplib", "--package-version", "0.2.0",
+		 "--package-target", "test-target",
+		 "--package-dep", "phantom.lib=1.0",
+		 "--emit-package", str(deplib_020), "--test-build-only"],
+		cwd=ROOT, capture_output=True, text=True,
+		timeout=sanitizer_timeout(120),
+	)
+	assert res.returncode == 0, f"deplib@0.2.0 build failed: {res.stderr[:300]}"
+	_sign_package(deplib_020, pkg_root, "deplib", "0.2.0", priv, pub_raw, kid, pub_b64)
+
+	# Consumer pins only deplib@0.1.0.  Both versions are in the
+	# pkg root, so discover_package_files yields both.  The fix
+	# makes driftc version-select first and then sanity-check, so
+	# phantom.lib on the unselected 0.2.0 never trips anything.
+	consumer_dir = tmp_path / "consumer_src"
+	consumer_dir.mkdir()
+	(consumer_dir / "consumer.drift").write_text(
+		"module consumer;\n"
+		"import std.core as core;\n"
+		"import deplib;\n"
+		"pub fn main() nothrow -> Int {\n"
+		"\tval result = deplib.add_one(41);\n"
+		"\tif result != 42 { return 1; }\n"
+		"\treturn 0;\n"
+		"}\n"
+	)
+
+	out_bin = tmp_path / "consumer_bin"
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc",
+		 str(consumer_dir / "consumer.drift"),
+		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
+		 "--package-root", str(pkg_root),
+		 "--dep", "deplib@0.1.0",
+		 "--trust-store", str(trust_path),
+		 "--entry", "consumer::main",
+		 "-o", str(out_bin)],
+		cwd=ROOT, capture_output=True, text=True,
+		timeout=sanitizer_timeout(120),
+	)
+	assert res.returncode == 0, (
+		f"consumer compile should succeed — deplib@0.1.0 is pinned and "
+		f"has no required_deps.  If this fails with a 'no --dep is "
+		f"pinned for phantom.lib' diagnostic, the sanity pass regressed "
+		f"to iterating unselected duplicate versions.  stderr:\n"
+		f"{res.stderr[:500]}"
+	)
+	# Belt-and-suspenders: if the sanity pass DID leak, this would be
+	# the exact diagnostic text we'd see.
+	assert "phantom.lib" not in res.stderr

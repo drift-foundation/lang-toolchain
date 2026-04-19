@@ -125,6 +125,14 @@ def build_package_index(
 	`load_manifest` is a callable(Path) → dict that loads a .dmp manifest.
 	If None, uses the dmir_pkg_v0 loader.
 	"""
+	# `PackageMetadataError` is the loader's distinguished signal for
+	# "container loaded fine, but the metadata violates the v3
+	# contract" (pre-cut `package_deps` key, malformed `required_deps`
+	# shape).  Imported here so the ``except`` below can let it
+	# propagate while still swallowing true I/O / container-level
+	# corruption.
+	from lang.driftc.packages.dmir_pkg_v0 import PackageMetadataError
+
 	if load_manifest is None:
 		from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0, load_dmir_pkg_v0_from_bytes
 		def load_manifest(path: Path) -> dict[str, Any]:
@@ -176,20 +184,40 @@ def build_package_index(
 
 			try:
 				manifest = load_manifest(dmp_path)
-			except Exception:
-				# If a .zdmp failed, try .dmp sibling as fallback.
+			except PackageMetadataError as e:
+				# Container loaded but metadata is contract-invalid —
+				# pre-cut `package_deps` key, malformed `required_deps`
+				# entry, etc.  This is exactly the "republish with 0.29"
+				# case; surface it as a hard ResolutionError instead of
+				# silently skipping, so the user sees actionable
+				# guidance rather than a generic "dep not satisfied".
+				raise ResolutionError(
+					f"package at {dmp_path}: {e}"
+				)
+			except Exception as e:
+				# A `.zdmp` is the published compressed artifact — if
+				# the file exists but fails to load (decompression
+				# error, bad magic, truncated header, ...), the
+				# published package is bad and MUST NOT be silently
+				# routed around.  Previous builds fell back to a
+				# same-stem `.dmp` sibling when the `.zdmp` was
+				# corrupt; that let a bad deploy masquerade as "works
+				# locally" because the uncompressed build artifact was
+				# still usable while the published shape was broken.
+				# Fail loudly, name the bad file, and tell the user to
+				# republish / reinstall.  No fallback.
 				if dmp_path.suffix == ".zdmp":
-					dmp_sibling = dmp_path.with_suffix(".dmp")
-					if dmp_sibling.exists():
-						try:
-							manifest = load_manifest(dmp_sibling)
-							dmp_path = dmp_sibling
-						except Exception:
-							continue
-					else:
-						continue
-				else:
-					continue
+					raise ResolutionError(
+						f"failed to load published package {dmp_path}: "
+						f"{e}.  The .zdmp is the authoritative published "
+						f"artifact — a same-stem .dmp sibling will NOT "
+						f"be used as a fallback, because that masks bad "
+						f"deploys.  Republish or reinstall this package."
+					)
+				# Plain `.dmp` (no `.zdmp` present): keep the permissive
+				# behaviour.  A lone unreadable `.dmp` under a package
+				# root is treated as "not a package" and skipped.
+				continue
 			pkg_id = manifest.get("package_id")
 			pkg_ver_str = manifest.get("package_version")
 			if not isinstance(pkg_id, str) or not isinstance(pkg_ver_str, str):

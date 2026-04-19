@@ -132,8 +132,11 @@
   **Compiler diagnostics.**  `_pkg_exact_satisfies_range` is
   fail-closed — any malformed input (non-numeric segments,
   4-part versions, empty strings) returns `False` rather than
-  falling back to literal equality.  Same helper is used by the
-  transitive sanity pass and the emit-package validator.
+  falling back to literal equality.  Used by the transitive
+  sanity pass in driftc.  The emit-package side is a separate
+  concern — it validates the authored range shape via
+  `is_owner_declared_range`, not the exact-vs-range comparison
+  this helper implements.
 
   **Tooling files touched:**
   - `tools/drift_deploy/manifest.py` — schema v1 rejection with
