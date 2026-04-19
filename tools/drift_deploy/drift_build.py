@@ -67,17 +67,6 @@ def _env_true(name: str) -> bool:
 	return os.environ.get(name, "") in ("1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
 
 
-# ── Version constraint helpers ───────────────────────────────────────
-
-
-_RANGE_CHARS = frozenset("^~>=<*")
-
-
-def _is_exact_version(version: str) -> bool:
-	"""Return True if version looks like an exact pin (no range operators)."""
-	return not any(c in _RANGE_CHARS for c in version)
-
-
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -272,99 +261,74 @@ def _resolve_deps(
 	"""
 	Resolve dependencies for a build.
 
-	When a lockfile exists, returns the full locked graph (direct +
-	transitive) — not just direct deps.  Transitive pins are required
-	so driftc can resolve the exact version of every package in the
-	dependency tree, avoiding ambiguity errors when multiple versions
-	of a transitive dep exist under package roots.
+	Strict-exact contract (0.29+):
 
-	Lock contract mirrors deploy: if a lockfile exists, it must contain
-	the artifact and all its declared deps.  A stale or partial lock is
-	an error — run ``drift prepare`` to re-resolve.
-
-	Without a lockfile, only exact version pins are accepted.
+	- Any artifact that declares `package_deps` MUST have a v3
+	  `drift/lock.json` containing the full resolved graph (direct +
+	  transitive).  `drift build` never resolves ranges at build time;
+	  that is `drift prepare`'s sole responsibility.
+	- On-disk packages are verified by exact version, sha256, AND
+	  author_key via `verify_lock_compatibility`.  Any mismatch is a
+	  hard build error pointing back at `drift prepare`.
+	- The full locked graph is returned; driftc receives every
+	  transitive as an exact `--dep PKG@M.N.P` pin.
 	"""
 	if not art.package_deps:
 		return {}
 
 	lock_path = manifest_dir / "lock.json"
 
-	if lock_path.exists():
-		try:
-			lock_data = read_lock(lock_path)
-		except ValueError as e:
-			raise BuildError(f"failed to read {lock_path}: {e}")
+	if not lock_path.exists():
+		# Any declared dep requires a lock — no "exact pin in manifest"
+		# escape hatch.  v2 manifests only accept owner-declared ranges
+		# (`M` / `M.N`); even a hypothetical `M.N.P` would still need a
+		# lock to carry sha256 + author_key for the strict-exact
+		# re-verification below.
+		dep_list = ", ".join(f"{d.name}={d.version}" for d in art.package_deps)
+		raise BuildError(
+			f"artifact '{art.name}' declares package_deps [{dep_list}] "
+			f"but no {lock_path} exists.  Run `drift prepare` to resolve "
+			f"the full transitive graph and write the lock before building."
+		)
 
-		# Lock present → enforce the full contract (same as deploy).
-		if art.name not in lock_data:
+	try:
+		lock_data = read_lock(lock_path)
+	except ValueError as e:
+		# `read_lock` already emits the "run drift prepare" guidance
+		# for v1/v2/malformed locks; surface it verbatim.
+		raise BuildError(f"failed to read {lock_path}: {e}")
+
+	# Lock present → enforce the full contract (same as deploy).
+	if art.name not in lock_data:
+		raise BuildError(
+			f"artifact '{art.name}' not found in {lock_path}; "
+			f"run 'drift prepare' to re-resolve"
+		)
+	locked = lock_data[art.name]
+	for dep in art.package_deps:
+		if dep.name not in locked:
 			raise BuildError(
-				f"artifact '{art.name}' not found in {lock_path}; "
+				f"artifact '{art.name}': package_dep '{dep.name}' not in lock file; "
 				f"run 'drift prepare' to re-resolve"
 			)
-		locked = lock_data[art.name]
-		for dep in art.package_deps:
-			if dep.name not in locked:
-				raise BuildError(
-					f"artifact '{art.name}': package_dep '{dep.name}' not in lock file; "
-					f"run 'drift prepare' to re-resolve"
-				)
 
-		# Verify lock compatibility against package roots.
-		if package_roots:
-			pkg_index = build_package_index(package_roots)
-			errors = verify_lock_compatibility(locked, pkg_index)
-			if errors:
-				raise BuildError(
-					f"artifact '{art.name}': lock compatibility check failed:\n"
-					+ "\n".join(f"  {e}" for e in errors)
-				)
-			# Resolve locked minor ranges to exact versions from the index.
-			from tools.drift_deploy.resolver import version_compat_range
-			resolved_exact: dict[str, ResolvedDep] = {}
-			for pkg_id, dep in locked.items():
-				entries = pkg_index.get(pkg_id, [])
-				compatible = [
-					e for e in entries
-					if version_compat_range(str(e.version)) == dep.version
-				]
-				if compatible:
-					best = max(compatible, key=lambda e: e.version)
-					resolved_exact[pkg_id] = ResolvedDep(
-						version=str(best.version),
-						integrity="",
-						dep_type=dep.dep_type,
-						package_id=dep.package_id,
-						author_key=dep.author_key,
-					)
-				elif dep.dep_type == "co-artifact":
-					resolved_exact[pkg_id] = dep
-				else:
-					available = sorted({str(e.version) for e in entries})
-					raise BuildError(
-						f"artifact '{art.name}': locked dependency '{pkg_id}' "
-						f"requires version {dep.version}.* but no compatible version "
-						f"found under package roots (available: {', '.join(available) or 'none'})"
-					)
-			return resolved_exact
-
-		return locked
-
-	# No lockfile — only exact version pins accepted.
-	resolved: dict[str, ResolvedDep] = {}
-	for dep in art.package_deps:
-		if _is_exact_version(dep.version):
-			resolved[dep.name] = ResolvedDep(
-				version=dep.version,
-				integrity="",
-				dep_type="direct",
-			)
-		else:
+	# Verify lock compatibility against package roots.  Every
+	# non-co-artifact dep must have a single disk entry at the exact
+	# M.N.P, matching sha256, matching author_key.  Any deviation is a
+	# `drift prepare` problem.
+	if package_roots:
+		pkg_index = build_package_index(package_roots)
+		errors = verify_lock_compatibility(locked, pkg_index)
+		if errors:
 			raise BuildError(
-				f"dependency '{dep.name}' requires version range '{dep.version}' "
-				f"but no lockfile found; run 'drift prepare' first"
+				f"artifact '{art.name}': lock compatibility check failed:\n"
+				+ "\n".join(f"  {e}" for e in errors)
 			)
 
-	return resolved
+	# v3 lock: entries already carry exact version + sha256.  Pass the
+	# full transitive graph through unchanged — patch movement happens
+	# only in `drift prepare`.
+	return locked
 
 
 def _default_output_path(art: Artifact, build_dir: Path) -> Path:

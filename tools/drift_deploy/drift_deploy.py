@@ -318,38 +318,13 @@ def _resolve_artifact_deps(
 			f"artifact '{art.name}': lock compatibility check failed:\n"
 			+ "\n".join(f"  {e}" for e in errors)
 		)
-	# Resolve locked compatibility ranges to exact versions from the index.
-	# The lock stores major.minor; driftc --dep needs exact versions.
-	from tools.drift_deploy.resolver import version_compat_range
-	resolved_exact: dict[str, ResolvedDep] = {}
-	for pkg_id, dep in locked.items():
-		entries = pkg_index.get(pkg_id, [])
-		compatible = [
-			e for e in entries
-			if version_compat_range(str(e.version)) == dep.version
-		]
-		if compatible:
-			best = max(compatible, key=lambda e: e.version)
-			resolved_exact[pkg_id] = ResolvedDep(
-				version=str(best.version),
-				integrity="",
-				dep_type=dep.dep_type,
-				package_id=dep.package_id,
-				author_key=dep.author_key,
-			)
-		elif dep.dep_type == "co-artifact":
-			# Co-artifact not yet in the index (built later in the same
-			# deploy run).  Keep the lock range — it will be resolved when
-			# the co-artifact is actually staged.
-			resolved_exact[pkg_id] = dep
-		else:
-			available = sorted({str(e.version) for e in entries})
-			raise DeployError(
-				f"artifact '{art.name}': locked dependency '{pkg_id}' "
-				f"requires version {dep.version}.* but no compatible version "
-				f"found under package roots (available: {', '.join(available) or 'none'})"
-			)
-	return resolved_exact
+	# v3 lock: entries already carry exact version + sha256.  Pass
+	# them through unchanged — `verify_lock_compatibility` above
+	# has already checked version match, sha match, and signer
+	# match against the on-disk package index.  The v2-era "resolve
+	# locked range to exact at deploy time" step is gone; patch
+	# movement happens in `drift prepare`, not here.
+	return dict(locked)
 
 
 # ── Build ────────────────────────────────────────────────────────────
@@ -962,7 +937,7 @@ def _deploy_artifact(
 			dep = resolved[pkg_id]
 			resolved_deps_for_provenance[pkg_id] = {
 				"version": dep.version,
-				"integrity": dep.integrity,
+				"sha256": dep.sha256,
 			}
 		from tools.drift_deploy.provenance import detect_source_identity
 		source_id = detect_source_identity(manifest_dir)
@@ -1089,7 +1064,7 @@ def _deploy_artifact(
 			dep = resolved[pkg_id]
 			resolved_deps_for_provenance[pkg_id] = {
 				"version": dep.version,
-				"integrity": dep.integrity,
+				"sha256": dep.sha256,
 			}
 		from tools.drift_deploy.provenance import detect_source_identity
 		source_id = detect_source_identity(manifest_dir)

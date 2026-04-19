@@ -54,7 +54,7 @@ def _make_entry(
 		version=parse_version(version),
 		path=Path(f"/fake/{pkg_id}-{version}.dmp"),
 		sha256=sha,
-		package_deps=deps or [],
+		required_deps=deps or [],
 		author_key=author_key,
 	)
 
@@ -299,105 +299,310 @@ class TestResolverDeterminism:
 
 
 class TestLockFile:
-	def test_write_read_roundtrip(self) -> None:
+	"""Lock v3 (0.29.0+) — exact resolved artifact recording.
+
+	Each entry answers "what exact artifact did I build against?":
+	version M.N.P + sha256 + author_key + dep_type.  Verify is
+	strict: any mismatch against the on-disk package is a build-time
+	error, and `drift prepare` is the only sanctioned writer.  No
+	range field, no file-level integrity, no silent patch float.
+	"""
+
+	def test_write_read_roundtrip_v3_exact(self) -> None:
+		"""v3 round-trip preserves exact version, sha256, author_key,
+		and dep_type.  No range field, no file-level integrity, no
+		redundant `package_id` inside each entry."""
 		deps_a = {
-			"net.tls": ResolvedDep(version="0.3.2", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
-			"acme.crypto": ResolvedDep(version="0.9.0", integrity="", dep_type="transitive", package_id="acme.crypto", author_key="ed25519:def"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aabbccdd", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
+			"acme.crypto": ResolvedDep(
+				version="0.9.3", sha256="eeff0011", dep_type="transitive",
+				package_id="acme.crypto", author_key="ed25519:def",
+			),
 		}
 		deps_b = {
-			"util.log": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="util.log", author_key="ed25519:ghi"),
+			"util.log": ResolvedDep(
+				version="1.0.7", sha256="22334455", dep_type="direct",
+				package_id="util.log", author_key="ed25519:ghi",
+			),
 		}
 
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			write_lock(lock_path, {"app-a": deps_a, "app-b": deps_b})
+
+			# Inspect the serialized JSON shape directly — format
+			# is user-visible and part of the contract.
+			raw = json.loads(lock_path.read_text(encoding="utf-8"))
+			assert raw["schema_version"] == 3
+			# No file-level integrity field in v3.
+			assert "integrity" not in raw
+			tls_entry = raw["artifacts"]["app-a"]["resolved"]["net.tls"]
+			# Exact version stored, not a range.
+			assert tls_entry["version"] == "0.3.15"
+			assert tls_entry["sha256"] == "aabbccdd"
+			assert tls_entry["author_key"] == "ed25519:abc"
+			assert tls_entry["dep_type"] == "direct"
+			# No redundant `package_id` (map key already carries it)
+			# and no `range` field (range lives in the manifest).
+			assert "package_id" not in tls_entry
+			assert "range" not in tls_entry
+
 			result = read_lock(lock_path)
 
 		assert set(result.keys()) == {"app-a", "app-b"}
-		# Lock stores major.minor, not exact version.
-		assert result["app-a"]["net.tls"].version == "0.3"
+		# Round-trip preserves exact version + sha256.
+		assert result["app-a"]["net.tls"].version == "0.3.15"
+		assert result["app-a"]["net.tls"].sha256 == "aabbccdd"
 		assert result["app-a"]["net.tls"].dep_type == "direct"
 		assert result["app-a"]["net.tls"].author_key == "ed25519:abc"
-		assert result["app-a"]["acme.crypto"].version == "0.9"
+		assert result["app-a"]["acme.crypto"].version == "0.9.3"
 		assert result["app-a"]["acme.crypto"].dep_type == "transitive"
+		# Reader fills `package_id` from the map key for in-memory use.
 		assert result["app-b"]["util.log"].package_id == "util.log"
 
-	def test_expand_to_dep_flags(self) -> None:
+	def test_expand_to_dep_flags_exact(self) -> None:
+		"""Expanded --dep flags carry exact M.N.P.  driftc stays a flat
+		exact loader — ranges never reach it."""
 		resolved = {
-			"net.tls": ResolvedDep(version="0.3.2", integrity="", dep_type="direct", package_id="net.tls"),
-			"acme.crypto": ResolvedDep(version="0.9.0", integrity="", dep_type="transitive", package_id="acme.crypto"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aa", dep_type="direct",
+				package_id="net.tls",
+			),
+			"acme.crypto": ResolvedDep(
+				version="0.9.3", sha256="bb", dep_type="transitive",
+				package_id="acme.crypto",
+			),
 		}
 		flags = expand_to_dep_flags(resolved)
 		# Sorted by package_id → acme.crypto first.
 		assert flags == [
-			"--dep", "acme.crypto@0.9.0",
-			"--dep", "net.tls@0.3.2",
+			"--dep", "acme.crypto@0.9.3",
+			"--dep", "net.tls@0.3.15",
 		]
 
-	def test_verify_same_minor_different_patch_accepted(self) -> None:
-		"""Same signer, same minor, different patch → accepted."""
+	def test_verify_exact_match_accepted(self) -> None:
+		"""Exact version + exact sha256 + signer match → accepted."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aabbcc", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.14", sha="ff", author_key="ed25519:abc")],
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aabbcc", author_key="ed25519:abc")],
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
 
-	def test_verify_different_minor_rejected(self) -> None:
-		"""Same signer, different minor → rejected until prepare."""
+	def test_verify_patch_mismatch_rejected(self) -> None:
+		"""Same package, DIFFERENT patch on disk than locked → rejected.
+
+		Under v2 the lock stored a range and silently picked the
+		highest in range; under v3 the lock is exact and any patch
+		mismatch is a build-time error with a pointer to
+		`drift prepare`.  Patch movement happens ONLY in prepare.
+		"""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aa", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.4.0", sha="aa")],
+			"net.tls": [_make_entry("net.tls", "0.3.14", sha="xx", author_key="ed25519:abc")],
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert len(errors) == 1
-		assert "0.3.*" in errors[0]
+		assert "pins version '0.3.15'" in errors[0]
+		assert "0.3.14" in errors[0]
+		assert "drift prepare" in errors[0]
 
-	def test_verify_key_rotation_rejected(self) -> None:
-		"""Signer change → rejected with clear message."""
+	def test_verify_sha256_mismatch_rejected(self) -> None:
+		"""Same exact version on disk but different sha256 → rejected.
+
+		The lock records the exact sha of the .dmp the producer
+		signed off on; a different sha at the same version means the
+		artifact was rebuilt or replaced, which invalidates the lock.
+		Reproducibility is the whole point of the exact lock.
+		"""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:old_key"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="original_sha", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.14", sha="aa", author_key="ed25519:new_key")],
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="rebuilt_sha", author_key="ed25519:abc")],
+		}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "sha256 mismatch" in errors[0]
+		assert "original_sha" in errors[0]
+		assert "rebuilt_sha" in errors[0]
+		assert "drift prepare" in errors[0]
+
+	def test_verify_key_rotation_rejected(self) -> None:
+		"""Signer change at the same exact version → rejected with a
+		pointer to `drift prepare`.  Trust changes are not silent."""
+		lock_deps = {
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aa", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:old_key",
+			),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aa", author_key="ed25519:new_key")],
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert len(errors) == 1
 		assert "signing key changed" in errors[0]
 		assert "ed25519:old_key" in errors[0]
 		assert "ed25519:new_key" in errors[0]
-		assert "prepare" in errors[0]
+		assert "drift prepare" in errors[0]
 
-	def test_verify_same_minor_different_bytes_accepted(self) -> None:
-		"""Same version range, same signer, different artifact bytes → accepted.
-		Compiler rebuilds must not invalidate the lock."""
+	def test_verify_unsigned_opt_in_skips_key_check(self) -> None:
+		"""`author_key = "unsigned"` is the explicit dev opt-in: verify
+		skips the signer check (and --allow-unsigned-from must be
+		passed downstream).  Version and sha checks still apply."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
+			"dev.lib": ResolvedDep(
+				version="0.1.0", sha256="aa", dep_type="direct",
+				package_id="dev.lib", author_key="unsigned",
+			),
 		}
-		# Different sha (recompiled) but same minor + same author.
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.14", sha="completely_different_bytes", author_key="ed25519:abc")],
+			"dev.lib": [_make_entry("dev.lib", "0.1.0", sha="aa", author_key="")],
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
-		assert errors == [], "compiler rebuilds must not invalidate the lock"
+		assert errors == []
 
 	def test_verify_skips_co_artifact_deps(self) -> None:
-		"""Co-artifact deps have no published .dmp; compatibility check is skipped."""
+		"""Co-artifact deps have no published .dmp; verify skips them.
+		Their build comes from sibling sources in the same project."""
 		lock_deps = {
-			"net.tls": ResolvedDep(version="0.3", integrity="", dep_type="direct", package_id="net.tls", author_key="ed25519:abc"),
-			"web.jwt": ResolvedDep(version="0.2", integrity="", dep_type="co-artifact", package_id="web.jwt"),
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aa", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
+			"web.jwt": ResolvedDep(
+				version="0.2.0", sha256="", dep_type="co-artifact",
+				package_id="web.jwt",
+			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.0", sha="aa", author_key="ed25519:abc")],
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aa", author_key="ed25519:abc")],
 			# web.jwt NOT in index — would fail if not skipped.
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
 
+	def test_verify_empty_sha_in_lock_rejected_for_direct_dep(self) -> None:
+		"""An in-memory `ResolvedDep(sha256="")` for a non-co-artifact
+		dep must fail verify — the strict contract is "both sides
+		carry a real digest and they match".  Without this, a
+		programmatically-constructed lock could bypass the
+		reproducibility check entirely.
+		"""
+		lock_deps = {
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aa", author_key="ed25519:abc")],
+		}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "empty sha256 in the lock" in errors[0]
+		assert "drift prepare" in errors[0]
+
+	def test_verify_empty_sha_on_disk_rejected_for_direct_dep(self) -> None:
+		"""An on-disk `PackageEntry` with empty sha256 must fail
+		verify for non-co-artifact deps.  `build_package_index`
+		should always compute sha256; if it didn't, that's an
+		internal error and builds must not silently pass."""
+		lock_deps = {
+			"net.tls": ResolvedDep(
+				version="0.3.15", sha256="aa", dep_type="direct",
+				package_id="net.tls", author_key="ed25519:abc",
+			),
+		}
+		pkg_index = {
+			"net.tls": [_make_entry("net.tls", "0.3.15", sha="", author_key="ed25519:abc")],
+		}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "on-disk" in errors[0]
+		assert "empty sha256" in errors[0]
+
+	def test_co_artifact_round_trip_serialization(self) -> None:
+		"""v3 co-artifact lock entry round-trips cleanly: written with
+		empty sha256 and empty author_key, read back preserves
+		`dep_type="co-artifact"` and accepts the empty fields
+		without rejection.  Documents the intentional sentinel
+		shape for co-artifact deps (where the .dmp is built later
+		in the same deploy run, not yet hashable)."""
+		deps = {
+			"web.jwt": ResolvedDep(
+				version="0.2.0", sha256="", dep_type="co-artifact",
+				package_id="web.jwt", author_key="",
+			),
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			write_lock(lock_path, {"app": deps})
+
+			# On-disk shape: both sha256 and author_key present as
+			# empty strings, dep_type carries the co-artifact marker.
+			raw = json.loads(lock_path.read_text(encoding="utf-8"))
+			entry = raw["artifacts"]["app"]["resolved"]["web.jwt"]
+			assert entry["version"] == "0.2.0"
+			assert entry["sha256"] == ""
+			assert entry["author_key"] == ""
+			assert entry["dep_type"] == "co-artifact"
+
+			result = read_lock(lock_path)
+		# Round-trip preserves the co-artifact dep; reader does not
+		# reject empty sha / author_key for co-artifact entries.
+		assert result["app"]["web.jwt"].dep_type == "co-artifact"
+		assert result["app"]["web.jwt"].version == "0.2.0"
+		assert result["app"]["web.jwt"].sha256 == ""
+		assert result["app"]["web.jwt"].author_key == ""
+
+	def test_v2_lock_rejected_with_prepare_pointer(self) -> None:
+		"""v2 locks (range + author_key) must be rejected at load, not
+		silently reinterpreted as exact pins.  A v2 `"0.3"` range that
+		got treated as an exact `"0.3"` pin would never match any
+		disk entry and produce a misleading error."""
+		v2_lock = {
+			"schema_version": 2,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3",  # v2 range
+							"package_id": "net.tls",
+							"author_key": "ed25519:abc",
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v2_lock))
+			with pytest.raises(ValueError) as exc:
+				read_lock(lock_path)
+			msg = str(exc.value)
+			assert "schema v2" in msg
+			assert "drift prepare" in msg
+			# Must explain why: ranges can't be reinterpreted as exact pins.
+			assert "reinterpret" in msg.lower() or "safely" in msg.lower()
 
 	def test_v1_lock_rejected_with_clear_message(self) -> None:
 		"""Schema v1 lock must be rejected with a message to run prepare."""
@@ -418,21 +623,52 @@ class TestLockFile:
 				read_lock(lock_path)
 
 	def test_unsigned_lock_rejected(self) -> None:
-		"""Empty author_key is rejected — packages must be signed before locking."""
-		v2_lock = {
-			"schema_version": 2,
+		"""Empty author_key in a v3 lock entry is rejected — packages
+		must be signed before locking (or explicitly flagged
+		`"unsigned"` with --allow-unsigned-from downstream)."""
+		v3_lock = {
+			"schema_version": 3,
 			"artifacts": {
 				"app": {
 					"resolved": {
-						"net.tls": {"version": "0.3", "package_id": "net.tls", "author_key": "", "dep_type": "direct"},
+						"net.tls": {
+							"version": "0.3.15",
+							"sha256": "aabbcc",
+							"author_key": "",
+							"dep_type": "direct",
+						},
 					}
 				}
 			}
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
-			lock_path.write_text(json.dumps(v2_lock))
+			lock_path.write_text(json.dumps(v3_lock))
 			with pytest.raises(ValueError, match="author_key"):
+				read_lock(lock_path)
+
+	def test_missing_sha256_rejected(self) -> None:
+		"""v3 lock entries require sha256 for every non-co-artifact dep;
+		absence is a hard error pointing at `drift prepare`."""
+		v3_lock = {
+			"schema_version": 3,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3.15",
+							# sha256 omitted — v3 requires it
+							"author_key": "ed25519:abc",
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v3_lock))
+			with pytest.raises(ValueError, match="sha256"):
 				read_lock(lock_path)
 
 
@@ -473,7 +709,7 @@ class TestBuildPackageIndexDedup:
 				return {
 					"package_id": "net.tls",
 					"package_version": "0.2.0",
-					"package_deps": [],
+					"required_deps": [],
 				}
 
 			# Both roots index the same physical file.
@@ -503,7 +739,7 @@ class TestBuildPackageIndexDedup:
 				return {
 					"package_id": "net.tls",
 					"package_version": "0.2.0",
-					"package_deps": [],
+					"required_deps": [],
 				}
 
 			with pytest.raises(ResolutionError, match="duplicate package"):
@@ -530,7 +766,7 @@ class TestBuildPackageIndexDedup:
 				return {
 					"package_id": "net.tls",
 					"package_version": "0.2.0",
-					"package_deps": [],
+					"required_deps": [],
 				}
 
 			idx = build_package_index([root1, root2], load_manifest=fake_loader)
@@ -572,3 +808,209 @@ class TestBuildPackageIndexDedup:
 			assert "acme.lib" in idx
 			assert len(idx["acme.lib"]) == 1
 			assert idx["acme.lib"][0].version == parse_version("1.0.0")
+
+
+# ── 0.29.0 two-layer model: required_deps ranges vs. producer lock pins ──
+#
+# Core semantic shift: consumer resolution uses the PUBLISHED range
+# constraint from a package's metadata (`required_deps` drawn from the
+# producer's manifest), NOT the producer's local lock pin.  This lets
+# patch bumps flow silently through the graph without requiring every
+# intermediate library to republish.
+#
+# The in-memory `PackageEntry.required_deps` field carries range
+# strings (not exact pins), mirroring the `required_deps` semantics
+# in the v3 .dmp format.  These tests pin the scenario end-to-end
+# so a regression where someone wires the consumer resolver to a
+# producer's lock pin (instead of its published range) is caught.
+
+
+class TestTwoLayerVersioning:
+	"""0.29.0 regression: patch movement flows through producer
+	`required_deps` ranges, not producer lock pins."""
+
+	def test_transitive_patch_float_through_range(self) -> None:
+		"""**Downstream-constraint rule.**  For `app → pkg2 → pkg1`,
+		the constraint that crosses the package boundary is pkg2's
+		**manifest-declared acceptable range** for pkg1, NOT pkg2's
+		lock's exact pkg1 version.  Pkg2's lock pin is local to pkg2
+		and must not leak downstream.
+
+		Concrete example (the orch-team report shape):
+
+		- pkg2 (lib-2) manifest declares pkg1 (lib-1) acceptable
+		  range as "0.3".
+		- pkg2's own lock may carry pkg1 "0.3.14" — what pkg2 itself
+		  was prepared/tested against.  LOCAL.
+		- Package roots contain pkg1 0.3.14 AND pkg1 0.3.15.
+		- app depends on pkg2 "1.2".
+
+		app's prepare-time resolution MUST pick pkg1@0.3.15, the
+		highest version satisfying pkg2's exported "0.3" range.  The
+		older pkg2-local pin (0.3.14) does NOT restrict app.
+		Without this rule, exact pins leak down the graph and
+		recreate the patch-churn problem one level lower.
+		"""
+		idx = _index(
+			_make_entry("lib-1", "0.3.14", sha="a14"),
+			_make_entry("lib-1", "0.3.15", sha="a15"),
+			_make_entry(
+				"lib-2", "1.2.7", sha="b127",
+				# required_deps — range, not pin
+				deps=[("lib-1", "0.3")],
+			),
+		)
+		result = resolve_artifact(
+			"app",
+			[("lib-2", "1.2")],  # app's manifest range
+			idx,
+		)
+		# lib-1 picked at the highest version satisfying "0.3" —
+		# lib-2's internal lock pin (whatever it was) is irrelevant.
+		assert result["lib-1"].version == "0.3.15", (
+			f"expected app to pick lib-1@0.3.15 through lib-2's exported "
+			f"range; got {result['lib-1'].version}.  If this regresses, "
+			f"patch bumps no longer flow silently — every upstream bump "
+			f"forces manual manifest edits in every consumer."
+		)
+		assert result["lib-1"].dep_type == "transitive"
+		assert result["lib-2"].version == "1.2.7"
+		assert result["lib-2"].dep_type == "direct"
+
+	def test_patch_bump_flows_without_intermediate_republish(self) -> None:
+		"""
+		Bump scenario: lib-1 goes from 0.3.14-only to 0.3.14+0.3.15.
+		lib-2 is untouched (same version, same required_deps range).
+		app prepare picks up lib-1@0.3.15 automatically.
+
+		This is the anti-regression pin for the drift-web / net-tls
+		friction: a net-tls patch bump must not require drift-web to
+		edit its manifest nor require any intermediate library to
+		republish.
+		"""
+		# Before bump: only 0.3.14 on disk.
+		idx_before = _index(
+			_make_entry("lib-1", "0.3.14", sha="a14"),
+			_make_entry(
+				"lib-2", "1.2.7", sha="b127",
+				deps=[("lib-1", "0.3")],
+			),
+		)
+		before = resolve_artifact("app", [("lib-2", "1.2")], idx_before)
+		assert before["lib-1"].version == "0.3.14"
+
+		# After bump: 0.3.15 published; lib-2 and app unchanged.
+		idx_after = _index(
+			_make_entry("lib-1", "0.3.14", sha="a14"),
+			_make_entry("lib-1", "0.3.15", sha="a15"),
+			_make_entry(
+				"lib-2", "1.2.7", sha="b127",
+				deps=[("lib-1", "0.3")],  # unchanged
+			),
+		)
+		after = resolve_artifact("app", [("lib-2", "1.2")], idx_after)
+		assert after["lib-1"].version == "0.3.15", (
+			"lib-1 patch bump did NOT flow into app's resolution — this "
+			"regresses the two-layer model.  lib-2 must not need to "
+			"republish for its consumers to pick up upstream patches."
+		)
+		# lib-2 version unchanged — consumer graph picked up the
+		# upstream patch without any intermediate library moving.
+		assert after["lib-2"].version == before["lib-2"].version
+
+	def test_exported_range_honored_across_minor_boundary(self) -> None:
+		"""
+		Negative control: the range is `major.minor`, not `major`.
+		lib-2 exports lib-1 "0.3"; lib-1 0.4.0 must NOT satisfy it.
+		"""
+		idx = _index(
+			_make_entry("lib-1", "0.3.14", sha="a14"),
+			_make_entry("lib-1", "0.4.0", sha="a40"),
+			_make_entry(
+				"lib-2", "1.2.7", sha="b127",
+				deps=[("lib-1", "0.3")],
+			),
+		)
+		result = resolve_artifact("app", [("lib-2", "1.2")], idx)
+		# lib-1 must stay on the "0.3" line even though 0.4.0 exists.
+		assert result["lib-1"].version == "0.3.14"
+
+	def test_manifest_range_major_minor_only_model(self) -> None:
+		"""
+		Document expected semantics: the resolver accepts a
+		`"major.minor"` range directly for direct (manifest-level)
+		deps.  The caller (drift prepare) passes what the manifest
+		declares — `"0.3"` means any `0.3.x`.
+		"""
+		idx = _index(
+			_make_entry("lib-1", "0.3.14", sha="a14"),
+			_make_entry("lib-1", "0.3.15", sha="a15"),
+		)
+		result = resolve_artifact("app", [("lib-1", "0.3")], idx)
+		assert result["lib-1"].version == "0.3.15"
+
+	def test_major_only_range_accepts_any_minor_and_patch(self) -> None:
+		"""v2 manifest may declare `"1"` for any 1.x.x.  The owner is
+		saying "I accept any 1-series release" — resolver picks the
+		highest trusted `1.x.x` and leaves 2.x.x alone."""
+		idx = _index(
+			_make_entry("lib-a", "1.0.0", sha="a100"),
+			_make_entry("lib-a", "1.4.7", sha="a147"),
+			_make_entry("lib-a", "1.9.0", sha="a190"),
+			_make_entry("lib-a", "2.0.0", sha="a200"),
+		)
+		result = resolve_artifact("app", [("lib-a", "1")], idx)
+		# Highest satisfying — 1.9.0, not the 2.0.0 major bump.
+		assert result["lib-a"].version == "1.9.0"
+
+	def test_major_only_range_rejects_major_boundary(self) -> None:
+		"""`"1"` must NOT match any 2.x.x."""
+		idx = _index(
+			_make_entry("lib-a", "2.0.0", sha="a200"),
+			_make_entry("lib-a", "2.3.1", sha="a231"),
+		)
+		with pytest.raises(ResolutionError, match="not satisfied"):
+			resolve_artifact("app", [("lib-a", "1")], idx)
+
+	def test_two_root_packages_disagree_on_transitive_range(self) -> None:
+		"""Conflict at prepare/resolution time (the tooling layer, NOT
+		inside driftc): two directly-depended packages publish
+		disjoint owner-declared ranges for the same transitive, and no
+		transitive version satisfies both → `ResolutionError`.
+
+		Specifically mirrors the pre-0.29 driver-layer
+		"two roots disagree on deplib" fixture, restated in the
+		post-0.29 vocabulary:
+
+		- `liba.required_deps` → `deplib = "0.1"` (any 0.1.x).
+		- `libb.required_deps` → `deplib = "0.2"` (any 0.2.x).
+		- deplib 0.1.x and 0.2.x both present on disk; no one version
+		  lies in both `"0.1"` and `"0.2"` simultaneously.
+
+		Resolution must abort with a conflict diagnostic before a lock
+		is written — this is the same behaviour driftc relies on when
+		it insists on a complete, self-consistent `--dep` graph.
+		"""
+		idx = _index(
+			_make_entry("deplib", "0.1.0", sha="d010"),
+			_make_entry("deplib", "0.2.0", sha="d020"),
+			_make_entry(
+				"liba", "1.0.0", sha="la100",
+				deps=[("deplib", "0.1")],
+			),
+			_make_entry(
+				"libb", "1.0.0", sha="lb100",
+				deps=[("deplib", "0.2")],
+			),
+		)
+		with pytest.raises(ResolutionError) as exc_info:
+			resolve_artifact(
+				"app",
+				[("liba", "1.0"), ("libb", "1.0")],
+				idx,
+			)
+		err = str(exc_info.value)
+		assert "deplib" in err
+		# Diagnostic must surface both sides of the disagreement so
+		# the user can see which packages are in conflict.
+		assert "liba" in err or "libb" in err

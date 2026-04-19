@@ -5,17 +5,64 @@ drift/manifest.json manifest loading and validation.
 The manifest is the single authoritative source of truth for project
 identity, per-artifact configuration, build inputs, dependencies,
 and smoke configuration.
+
+Three dep-naming boundaries, distinct by role:
+
+- **manifest `package_deps`** — owner-authored source-of-truth
+  declarations.  Each entry is `{name, version}` where `version` is
+  the owner's declared acceptable range (`"M"` or `"M.N"`).  Lives
+  in this file.
+- **package `.dmp` `required_deps`** — published range requirements
+  copied from `package_deps` at publish time.  Downstream `drift
+  prepare` consumes `required_deps` to build the consumer's own
+  exact lock.  (Phase 4 wires this into the `.dmp` emitter.)
+- **lock `deps`** — exact resolved graph for this artifact: `M.N.P`
+  + sha256 + author_key + dep_type.  Local to the artifact that
+  owns the lock; never exported.
+
+"This package REQUIRES these deps" (package/consumer contract) vs.
+"this package LOCKS these deps" (local reproducibility answer) —
+the two must not be conflated in downstream code.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+
+# v2 `package_deps[].version` is the package owner's **declared
+# acceptable range** for that dependency.  Two forms are accepted:
+#
+#   "1"     → owner accepts any 1.x.x release
+#   "1.4"   → owner accepts any 1.4.x release
+#
+# Any `M.N.P` exact pin, `^M.N.P` / `~M.N.P` range operator, or any
+# other string is rejected at load time.  Exact versions live in
+# `drift/lock.json`, not in the authored manifest.
+#
+# Drift does not decide semantic compatibility — the owner does, by
+# choosing the range in this file.  The resolver only enforces that a
+# selected candidate's exact version satisfies this declared range.
+#
+# `parse_constraint` in `semver.py` keeps a broader parser vocabulary
+# (`^`/`~`/exact) for strictly internal, non-manifest use: lock-v3
+# exact entries and the v1→v2 manifest migration path.  Pre-cut
+# packages without v2 `required_deps` are clean-break rejected at
+# consume time (Phase 4); there is no compatibility-shim path from
+# `.dmp`-carried legacy metadata into the resolver.  The broader
+# parser vocabulary must not reach this authored-manifest validator.
+# Authored-manifest dep version shape is the same "owner-declared
+# acceptable range" contract as the published `.dmp` `required_deps`
+# field — delegate to the canonical validator in the package-format
+# module.  (Four surfaces, one regex; see the comment block at the
+# helper definition.)
+from lang.driftc.packages.dmir_pkg_v0 import is_owner_declared_range
 
 
 @dataclass(frozen=True)
@@ -97,6 +144,15 @@ def load_manifest(path: Path) -> Manifest:
 
 	# schema_version
 	sv = data.get("schema_version")
+	if sv == 1:
+		raise ManifestError(
+			f"manifest schema v1 is no longer supported at {path}; "
+			"run `drift manifest migrate` to convert to v2.  v2 dep "
+			"versions are the owner's declared acceptable range — "
+			"`\"0.3\"` accepts any 0.3.x, `\"1\"` accepts any 1.x.x.  "
+			"Exact resolved versions live in `drift/lock.json`, not in "
+			"the manifest."
+		)
 	if sv != MANIFEST_SCHEMA_VERSION:
 		raise ManifestError(f"unsupported schema_version: {sv} (expected {MANIFEST_SCHEMA_VERSION})")
 
@@ -194,6 +250,38 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 			raise ManifestError(f"{ctx}: package_deps[{j}] requires 'name'")
 		if not isinstance(dep_ver, str) or not dep_ver:
 			raise ManifestError(f"{ctx}: package_deps[{j}] requires 'version'")
+		if not is_owner_declared_range(dep_ver):
+			# Common stale shapes get targeted diagnostics; everything
+			# else falls through to the generic rejection.  v2 dep
+			# versions are owner-declared acceptable ranges — `"M"` or
+			# `"M.N"` — and nothing else.  Exact resolved versions
+			# live in `drift/lock.json`.
+			if re.match(r"^\d+\.\d+\.\d+$", dep_ver):
+				raise ManifestError(
+					f"{ctx}: package_deps[{j}] ('{dep_name}') uses exact "
+					f"version '{dep_ver}'; v2 manifest dep versions are "
+					f"the owner's declared acceptable range — `\"M\"` "
+					f"(any M.x.x) or `\"M.N\"` (any M.N.x).  Change to "
+					f"'{dep_ver.rsplit('.', 1)[0]}'; the exact resolved "
+					f"artifact is recorded in drift/lock.json."
+				)
+			if dep_ver.startswith("^") or dep_ver.startswith("~"):
+				inner = dep_ver[1:]
+				suggested = inner.rsplit(".", 1)[0] if "." in inner else inner
+				raise ManifestError(
+					f"{ctx}: package_deps[{j}] ('{dep_name}') uses range "
+					f"operator '{dep_ver[0]}' which is not accepted in v2 "
+					f"manifests.  Authored dep versions are `\"M\"` or "
+					f"`\"M.N\"` only — e.g. '{suggested}'.  The `^`/`~` "
+					f"vocabulary was removed in 0.29 to keep authored "
+					f"ranges single-form."
+				)
+			raise ManifestError(
+				f"{ctx}: package_deps[{j}] ('{dep_name}') has invalid "
+				f"version '{dep_ver}' — v2 dep versions are the owner's "
+				f"declared acceptable range: `\"M\"` (any M.x.x) or "
+				f"`\"M.N\"` (any M.N.x)."
+			)
 		package_deps.append(PackageDep(name=dep_name, version=dep_ver))
 
 	# native_deps (optional)

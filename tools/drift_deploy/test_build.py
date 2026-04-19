@@ -47,7 +47,7 @@ def _make_artifact(**overrides) -> Artifact:
 
 
 MINIMAL_MANIFEST = {
-	"schema_version": 1,
+	"schema_version": 2,
 	"project": {"name": "test-project", "license": "MIT"},
 	"artifacts": [
 		{
@@ -74,17 +74,24 @@ def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
 
 
 def _write_lock(tmp_path: Path, artifacts: dict, *, author_key: str = "ed25519:test") -> Path:
-	from tools.drift_deploy.resolver import version_compat_range
+	"""Write a v3 lock for tests.  `deps.items()` carries exact
+	`M.N.P` versions; this helper adds a deterministic fake sha256
+	per entry.  No range field, no file-level integrity, no
+	redundant `package_id` inside entries."""
+	import hashlib
 	drift_dir = tmp_path / "drift"
 	drift_dir.mkdir(exist_ok=True)
 	lock_path = drift_dir / "lock.json"
-	lock_obj = {"schema_version": 2, "artifacts": {}}
+	lock_obj = {"schema_version": 3, "artifacts": {}}
 	for art_name, deps in artifacts.items():
 		resolved = {}
 		for pkg_id, ver in deps.items():
+			# Deterministic fake sha so tests are stable; real
+			# builds derive this from the actual .dmp bytes.
+			fake_sha = hashlib.sha256(f"{pkg_id}@{ver}".encode()).hexdigest()
 			resolved[pkg_id] = {
-				"version": version_compat_range(ver),
-				"package_id": pkg_id,
+				"version": ver,
+				"sha256": fake_sha,
 				"author_key": author_key,
 				"dep_type": "direct",
 			}
@@ -151,7 +158,7 @@ class TestBuildPackageCmd:
 		art = _make_artifact(
 			package_deps=[PackageDep(name="dep-a", version="1.0.0")],
 		)
-		resolved = {"dep-a": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
+		resolved = {"dep-a": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
 		cmd = build_package_cmd(
 			art,
 			driftc=Path("/usr/bin/driftc"),
@@ -393,7 +400,7 @@ class TestDriftBuildRun:
 	def test_multi_artifact_no_name_error(self, tmp_path):
 		"""When manifest has multiple artifacts, name is required."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -426,7 +433,7 @@ class TestDriftBuildRun:
 	def test_debug_flag_sets_drift_debug_env(self, tmp_path):
 		"""`drift build --debug` sets DRIFT_DEBUG=1 in the driftc subprocess env."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -489,7 +496,7 @@ class TestDriftBuildRun:
 
 	def test_app_artifact_build(self, tmp_path):
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -518,7 +525,7 @@ class TestDriftBuildRun:
 
 	def test_lockfile_consumption(self, tmp_path):
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -529,7 +536,7 @@ class TestDriftBuildRun:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
+						{"name": "dep-a", "version": "1.0"},
 					],
 				}
 			],
@@ -552,7 +559,7 @@ class TestDriftBuildRun:
 	def test_lockfile_transitive_deps_forwarded(self, tmp_path):
 		"""Full locked graph (direct + transitive) must be passed to driftc."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -563,20 +570,21 @@ class TestDriftBuildRun:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
+						{"name": "dep-a", "version": "1.0"},
 					],
 				}
 			],
 		}
 		_write_manifest(tmp_path, manifest_data)
-		# Lock contains dep-a (direct) AND dep-b (transitive).
+		# Lock contains dep-a (direct) AND dep-b (transitive).  v3
+		# shape: exact version + sha256 per entry.
 		lock_obj = {
-			"schema_version": 2,
+			"schema_version": 3,
 			"artifacts": {
 				"my-pkg": {
 					"resolved": {
-						"dep-a": {"version": "1.2", "package_id": "dep-a", "author_key": "unsigned", "dep_type": "direct"},
-						"dep-b": {"version": "0.5", "package_id": "dep-b", "author_key": "unsigned", "dep_type": "transitive"},
+						"dep-a": {"version": "1.2.7", "sha256": "aa", "author_key": "unsigned", "dep_type": "direct"},
+						"dep-b": {"version": "0.5.3", "sha256": "bb", "author_key": "unsigned", "dep_type": "transitive"},
 					}
 				}
 			},
@@ -592,14 +600,14 @@ class TestDriftBuildRun:
 
 		assert result == 0
 		cmd_str = " ".join(mock_run.call_args[0][0])
-		# Both direct and transitive deps must appear as --dep flags.
-		assert "dep-a@1.2" in cmd_str
-		assert "dep-b@0.5" in cmd_str
+		# Both direct and transitive deps must appear as exact --dep flags.
+		assert "dep-a@1.2.7" in cmd_str
+		assert "dep-b@0.5.3" in cmd_str
 
 	def test_stale_lockfile_missing_artifact_errors(self, tmp_path):
 		"""Lock exists but has no entry for this artifact → error."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -629,7 +637,7 @@ class TestDriftBuildRun:
 	def test_stale_lockfile_missing_dep_errors(self, tmp_path):
 		"""Lock exists for artifact but is missing a declared dep → error."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -640,8 +648,8 @@ class TestDriftBuildRun:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
-						{"name": "dep-b", "version": "^2.0.0"},
+						{"name": "dep-a", "version": "1.0"},
+						{"name": "dep-b", "version": "2.0"},
 					],
 				}
 			],
@@ -657,10 +665,17 @@ class TestDriftBuildRun:
 
 		assert result == 1
 
-	def test_error_no_lockfile_range_dep(self, tmp_path):
-		"""Range dep without lockfile should error."""
+	def test_error_no_lockfile_range_dep(self, tmp_path, capsys):
+		"""No lock + any declared dep → hard fail pointing at `drift prepare`.
+
+		Pins the strict-exact build contract: `drift build` never
+		resolves owner-declared ranges itself.  Every artifact with
+		`package_deps` MUST have a v3 lock.  The diagnostic must name
+		the artifact, list the missing deps, and send the user to
+		`drift prepare`.
+		"""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -671,7 +686,7 @@ class TestDriftBuildRun:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
+						{"name": "dep-a", "version": "1.0"},
 					],
 				}
 			],
@@ -685,11 +700,27 @@ class TestDriftBuildRun:
 			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
 		assert result == 1
+		err = capsys.readouterr().err
+		assert "my-pkg" in err
+		assert "dep-a" in err
+		assert "drift prepare" in err, (
+			f"missing-lock diagnostic must point at drift prepare; got:\n{err}"
+		)
 
-	def test_exact_dep_without_lockfile(self, tmp_path):
-		"""Exact version dep without lockfile should succeed."""
+	def test_exact_pin_in_manifest_rejected_at_parse(self, tmp_path):
+		"""Exact 3-part pins are not valid v2 manifest dep versions.
+
+		Under the 0.29 two-layer model, the manifest carries the
+		owner's declared acceptable range (`"M"` or `"M.N"`); exact
+		resolved versions live in drift/lock.json.  A manifest
+		containing `"1.0.0"` as a dep version fails at parse time —
+		there is no "exact dep without lockfile" path, because the
+		exact pin itself is not accepted.  (Prior to 0.29 the parser
+		accepted exact pins and this test pinned the pre-lock-flow
+		build behavior; that shape is obsolete.)
+		"""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -709,14 +740,11 @@ class TestDriftBuildRun:
 
 		from tools.drift_deploy.drift_build import run
 
-		with mock.patch("subprocess.run") as mock_run, \
-			 mock.patch("shutil.which", return_value="/usr/bin/driftc"):
-			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
 
-		assert result == 0
-		cmd = mock_run.call_args[0][0]
-		assert "dep-a@1.0.0" in " ".join(cmd)
+		# Non-zero exit because manifest load fails at parse.
+		assert result != 0
 
 	def test_output_path_default_package(self, tmp_path):
 		_write_manifest(tmp_path)
@@ -736,7 +764,7 @@ class TestDriftBuildRun:
 
 	def test_output_path_default_app(self, tmp_path):
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -809,7 +837,7 @@ class TestDriftBuildRun:
 
 	def test_unsafe_artifact(self, tmp_path):
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -846,7 +874,7 @@ class TestDriftBuildRun:
 	def test_app_default_target_native(self, tmp_path):
 		"""App artifact with no --target defaults to native and emits --target-word-bits."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-app", "license": "MIT"},
 			"artifacts": [
 				{
@@ -878,7 +906,7 @@ class TestDriftBuildRun:
 	def test_app_explicit_target_native(self, tmp_path):
 		"""App with --target native emits --target-word-bits."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-app", "license": "MIT"},
 			"artifacts": [
 				{
@@ -910,7 +938,7 @@ class TestDriftBuildRun:
 	def test_app_unsupported_target_rejected(self, tmp_path):
 		"""App with unsupported --target produces clear error."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-app", "license": "MIT"},
 			"artifacts": [
 				{
@@ -935,7 +963,7 @@ class TestDriftBuildRun:
 
 	def test_named_artifact_selection(self, tmp_path):
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -977,12 +1005,20 @@ class TestDriftBuildRun:
 
 
 class TestPackageDepUsesResolvedVersions:
-	def test_package_dep_uses_resolved_not_manifest_range(self):
-		"""--package-dep must emit exact resolved version, not manifest range."""
+	def test_package_dep_emits_manifest_range_not_lock_exact(self):
+		"""--package-dep emits the manifest's owner-declared range,
+		NOT the lock's exact resolved version.  Published .dmp
+		metadata carries the PRODUCER's declared constraint so
+		downstream consumers can pick up patch bumps without the
+		producer republishing.
+
+		Under v3 the lock's exact pin stays local to the producer;
+		only --dep (compiler exact-loader input) uses it.
+		"""
 		art = _make_artifact(
-			package_deps=[PackageDep(name="dep-a", version="^1.0.0")],
+			package_deps=[PackageDep(name="dep-a", version="1.0")],
 		)
-		resolved = {"dep-a": ResolvedDep(version="1.2.3", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
+		resolved = {"dep-a": ResolvedDep(version="1.2.3", sha256="aabbcc", dep_type="direct", package_id="dep-a", author_key="ed25519:test")}
 		cmd = build_package_cmd(
 			art,
 			driftc=Path("/usr/bin/driftc"),
@@ -992,17 +1028,23 @@ class TestPackageDepUsesResolvedVersions:
 			manifest_dir=Path("/proj"),
 			package_roots=[],
 		)
-		# --package-dep should use the resolved 1.2.3, not the manifest ^1.0.0.
+		# --package-dep carries the manifest range "1.0".
 		dep_idx = cmd.index("--package-dep")
-		assert cmd[dep_idx + 1] == "dep-a=1.2.3"
-		# Manifest range should NOT appear anywhere in the command.
+		assert cmd[dep_idx + 1] == "dep-a=1.0"
 		joined = " ".join(cmd)
-		assert "^1.0.0" not in joined
+		# --dep separately carries the lock exact "1.2.3" for the compiler.
+		assert "dep-a@1.2.3" in joined
+		# Stale `^`/`~` vocabulary must never appear.
+		assert "^" not in joined
+		assert "~" not in joined
 
 	def test_package_dep_falls_back_to_manifest_version(self):
-		"""When dep is not in resolved_deps, manifest version is used."""
+		"""When dep is not in resolved_deps, manifest version is used.
+		Under v3, `--package-dep` always uses the manifest range —
+		this test pins that the fallback path (no resolved entry)
+		reaches the same emission."""
 		art = _make_artifact(
-			package_deps=[PackageDep(name="dep-a", version="1.0.0")],
+			package_deps=[PackageDep(name="dep-a", version="1.0")],
 		)
 		cmd = build_package_cmd(
 			art,
@@ -1014,16 +1056,19 @@ class TestPackageDepUsesResolvedVersions:
 			package_roots=[],
 		)
 		dep_idx = cmd.index("--package-dep")
-		assert cmd[dep_idx + 1] == "dep-a=1.0.0"
+		assert cmd[dep_idx + 1] == "dep-a=1.0"
 
 	def test_transitive_deps_excluded_from_package_dep(self):
-		"""--package-dep must only emit direct deps, not transitives."""
+		"""--package-dep emits only DIRECT manifest deps (with
+		manifest-range versions); transitive deps are excluded from
+		--package-dep and appear only via --dep (exact, from lock)
+		for compiler version selection."""
 		art = _make_artifact(
-			package_deps=[PackageDep(name="dep-a", version="^1.0.0")],
+			package_deps=[PackageDep(name="dep-a", version="1.0")],
 		)
 		resolved = {
-			"dep-a": ResolvedDep(version="1.2.3", integrity="", dep_type="direct", package_id="dep-a", author_key="ed25519:test"),
-			"dep-b": ResolvedDep(version="0.5.0", integrity="", dep_type="transitive", package_id="dep-b", author_key="ed25519:test"),
+			"dep-a": ResolvedDep(version="1.2.3", sha256="aabbcc", dep_type="direct", package_id="dep-a", author_key="ed25519:test"),
+			"dep-b": ResolvedDep(version="0.5.0", sha256="aabbcc", dep_type="transitive", package_id="dep-b", author_key="ed25519:test"),
 		}
 		cmd = build_package_cmd(
 			art,
@@ -1034,13 +1079,14 @@ class TestPackageDepUsesResolvedVersions:
 			manifest_dir=Path("/proj"),
 			package_roots=[],
 		)
-		# --package-dep should only have dep-a (direct), not dep-b (transitive).
+		# --package-dep contains only the direct dep, with the
+		# manifest's range (not the lock's exact).
 		package_dep_values = []
 		for i, flag in enumerate(cmd):
 			if flag == "--package-dep":
 				package_dep_values.append(cmd[i + 1])
-		assert package_dep_values == ["dep-a=1.2.3"]
-		# But --dep should have BOTH (compiler version selection).
+		assert package_dep_values == ["dep-a=1.0"]
+		# --dep contains BOTH direct and transitive, both exact.
 		dep_values = []
 		for i, flag in enumerate(cmd):
 			if flag == "--dep":
@@ -1048,10 +1094,22 @@ class TestPackageDepUsesResolvedVersions:
 		assert "dep-a@1.2.3" in dep_values
 		assert "dep-b@0.5.0" in dep_values
 
-	def test_lockfile_version_in_package_dep_metadata(self, tmp_path):
-		"""End-to-end: locked version appears in --package-dep, not manifest range."""
+	def test_manifest_range_in_package_dep_metadata(self, tmp_path):
+		"""--package-dep carries the MANIFEST's declared range (the
+		producer's exported constraint), NOT the lock's exact pin.
+		This is how consumers pick up patch bumps without requiring
+		intermediate libraries to republish.
+
+		Shape: manifest says dep-a "1.0" (owner accepts any 1.0.x);
+		lock pins dep-a to 1.2.3; published --package-dep declares
+		dep-a=1.0 (the manifest constraint), not 1.2.3 (the lock pin).
+
+		The lock's exact 1.2.3 still appears in --dep for driftc's
+		own exact-loader contract; this assertion is scoped to the
+		--package-dep metadata channel.
+		"""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -1062,12 +1120,13 @@ class TestPackageDepUsesResolvedVersions:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
+						{"name": "dep-a", "version": "1.0"},  # owner's declared range
 					],
 				}
 			],
 		}
 		_write_manifest(tmp_path, manifest_data)
+		# Lock pins dep-a exact at 1.2.3 (what prepare resolved).
 		_write_lock(tmp_path, {"my-pkg": {"dep-a": "1.2.3"}})
 
 		from tools.drift_deploy.drift_build import run
@@ -1080,9 +1139,14 @@ class TestPackageDepUsesResolvedVersions:
 		assert result == 0
 		cmd = mock_run.call_args[0][0]
 		dep_idx = cmd.index("--package-dep")
-		assert cmd[dep_idx + 1] == "dep-a=1.2"
+		# --package-dep carries the manifest's range, not the lock's pin.
+		assert cmd[dep_idx + 1] == "dep-a=1.0"
 		joined = " ".join(cmd)
-		assert "^1.0.0" not in joined
+		# --dep separately carries the lock's exact for the compiler.
+		assert "dep-a@1.2.3" in joined
+		# v1-style `^` / `~` vocabulary never appears in the emitted command.
+		assert "^" not in joined
+		assert "~" not in joined
 
 
 # ── Finding 2: subprocess env scrubbing ──────────────────────────────
@@ -1263,7 +1327,7 @@ class TestLockCompatibility:
 	def test_lock_compatibility_checked_against_package_roots(self, tmp_path):
 		"""Lock compatibility mismatch against package roots produces early error."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -1274,7 +1338,7 @@ class TestLockCompatibility:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^1.0.0"},
+						{"name": "dep-a", "version": "1.0"},
 					],
 				}
 			],
@@ -1296,10 +1360,13 @@ class TestLockCompatibility:
 
 		assert result == 1
 
-	def test_lock_range_resolved_to_exact_version(self, tmp_path):
-		"""v2 lock stores major.minor; build must resolve to exact version for --dep."""
+	def test_lock_exact_version_forwarded_to_driftc(self, tmp_path):
+		"""v3 lock stores exact M.N.P; build passes the exact version
+		straight through to driftc --dep.  The v2 "resolve lock range
+		to exact at build time" step is gone; patch movement happens
+		only in `drift prepare`."""
 		manifest_data = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
 			"artifacts": [
 				{
@@ -1310,7 +1377,7 @@ class TestLockCompatibility:
 					"entry_module": "src/lib.drift",
 					"modules": ["src/lib.drift"],
 					"package_deps": [
-						{"name": "dep-a", "version": "^0.1.0"},
+						{"name": "dep-a", "version": "0.1"},
 					],
 				}
 			],
@@ -1318,14 +1385,19 @@ class TestLockCompatibility:
 		_write_manifest(tmp_path, manifest_data)
 		(tmp_path / "src").mkdir(parents=True, exist_ok=True)
 		(tmp_path / "src" / "lib.drift").write_text("module my.pkg;\n")
-		# Lock stores major.minor range.
-		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
 
 		# Package root has exact version 0.1.3.
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
+		import hashlib
 		pkg_root = tmp_path / "pkg_root"
 		pkg_root.mkdir()
+
+		# v3 lock: exact version + sha256.  sha must match the
+		# fixture sha in the mocked package index (strict-exact
+		# verify re-checks all three against on-disk).
+		fixture_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
 
 		from tools.drift_deploy.drift_build import run
 
@@ -1338,8 +1410,8 @@ class TestLockCompatibility:
 						package_id="dep-a",
 						version=parse_version("0.1.3"),
 						path=pkg_root / "dep-a-0.1.3.dmp",
-						sha256="aabb",
-						package_deps=[],
+						sha256=fixture_sha,
+						required_deps=[],
 						author_key="ed25519:test",
 					),
 				],
@@ -1352,14 +1424,290 @@ class TestLockCompatibility:
 
 		assert result == 0
 		cmd_str = " ".join(mock_run.call_args[0][0])
-		# Must use exact version 0.1.3, not range 0.1.
+		# Lock's exact version flows straight through to --dep.
 		assert "dep-a@0.1.3" in cmd_str, (
-			f"build must resolve lock range 0.1 to exact version 0.1.3; "
+			f"build must forward lock's exact version 0.1.3 to driftc; "
 			f"got: {cmd_str}"
 		)
 		assert "dep-a@0.1 " not in cmd_str and not cmd_str.endswith("dep-a@0.1"), (
 			f"raw lock range must not reach driftc; got: {cmd_str}"
 		)
+
+	def test_build_rejects_non_mnp_lock_version(self, tmp_path, capsys):
+		"""Lock v3 must carry exact `M.N.P` for every entry.  A range
+		or constraint shape in the lock is treated as corruption — the
+		loader refuses to interpret it and redirects the user to
+		`drift prepare`."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		# Hand-write a corrupted lock (range in version field).
+		import hashlib
+		bad_sha = hashlib.sha256(b"dep-a@0.1").hexdigest()
+		lock_obj = {
+			"schema_version": 3,
+			"artifacts": {
+				"my-pkg": {
+					"resolved": {
+						"dep-a": {
+							"version": "0.1",  # range, not exact — corruption
+							"sha256": bad_sha,
+							"author_key": "ed25519:test",
+							"dep_type": "direct",
+						},
+					},
+				},
+			},
+		}
+		(tmp_path / "drift" / "lock.json").write_text(
+			json.dumps(lock_obj, indent=2), encoding="utf-8",
+		)
+
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run(["--manifest", str(tmp_path / "drift" / "manifest.json")])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "0.1" in err
+		assert "M.N.P" in err or "exact" in err.lower()
+		assert "drift prepare" in err, (
+			f"corrupt-lock diagnostic must point at drift prepare; got:\n{err}"
+		)
+
+	def test_build_rejects_missing_ondisk_package(self, tmp_path, capsys):
+		"""Lock pins an exact version, but the on-disk package at that
+		version is not present under the package roots → build fails
+		with a `drift prepare` pointer."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {}  # no dep-a on disk
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "dep-a" in err and "0.1.3" in err
+		assert "not found" in err
+		assert "drift prepare" in err, (
+			f"missing-package diagnostic must point at drift prepare; got:\n{err}"
+		)
+
+	def test_build_rejects_sha_mismatch(self, tmp_path, capsys):
+		"""Lock's sha256 differs from the sha of the on-disk `.dmp` at
+		the pinned version → build fails with a `drift prepare` pointer.
+
+		Pins the reproducibility re-check: a rebuild or replacement of
+		the package bytes invalidates the lock."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		# Lock records the deterministic helper sha.
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		locked_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+		ondisk_sha = hashlib.sha256(b"rebuilt-different-bytes").hexdigest()
+		assert locked_sha != ondisk_sha
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp", sha256=ondisk_sha,
+					required_deps=[], author_key="ed25519:test",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "dep-a" in err
+		assert "sha256 mismatch" in err or "sha256" in err
+		assert "drift prepare" in err, (
+			f"sha-mismatch diagnostic must point at drift prepare; got:\n{err}"
+		)
+
+	def test_build_rejects_author_key_mismatch(self, tmp_path, capsys):
+		"""Lock's author_key differs from the on-disk signer at the
+		pinned version → build fails with a `drift prepare` pointer.
+
+		Pins the signer re-check: a rotated or compromised signing
+		key forces explicit re-preparation; builds never silently
+		accept a different signer."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}},
+			author_key="ed25519:OLD_KEY")
+		locked_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			# Same bytes (sha matches), DIFFERENT signer.
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp", sha256=locked_sha,
+					required_deps=[], author_key="ed25519:NEW_KEY",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "dep-a" in err
+		# Signer-mismatch wording from verify_lock_compatibility.
+		assert "signing key changed" in err or "key" in err.lower()
+		assert "drift prepare" in err, (
+			f"author-key mismatch diagnostic must point at drift prepare; "
+			f"got:\n{err}"
+		)
+
+	def test_build_full_transitive_graph_reaches_driftc(self, tmp_path):
+		"""Direct + every transitive in the lock reaches driftc as an
+		exact `--dep PKG@M.N.P` flag.  Pins the "no resolution at build
+		time" contract from the consumer side: driftc sees a complete,
+		self-consistent exact graph and never has to expand anything."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "1.0"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		(tmp_path / "src").mkdir(parents=True, exist_ok=True)
+		(tmp_path / "src" / "lib.drift").write_text("module my.pkg;\n")
+
+		# Lock: one direct + two transitives, all exact.
+		direct_sha = hashlib.sha256(b"dep-a@1.2.7").hexdigest()
+		t1_sha = hashlib.sha256(b"dep-b@0.5.3").hexdigest()
+		t2_sha = hashlib.sha256(b"dep-c@2.0.1").hexdigest()
+		lock_obj = {
+			"schema_version": 3,
+			"artifacts": {
+				"my-pkg": {
+					"resolved": {
+						"dep-a": {"version": "1.2.7", "sha256": direct_sha,
+							"author_key": "ed25519:test", "dep_type": "direct"},
+						"dep-b": {"version": "0.5.3", "sha256": t1_sha,
+							"author_key": "ed25519:test", "dep_type": "transitive"},
+						"dep-c": {"version": "2.0.1", "sha256": t2_sha,
+							"author_key": "ed25519:test", "dep_type": "transitive"},
+					},
+				},
+			},
+		}
+		(tmp_path / "drift" / "lock.json").write_text(
+			json.dumps(lock_obj, indent=2), encoding="utf-8",
+		)
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(package_id="dep-a",
+					version=parse_version("1.2.7"),
+					path=pkg_root / "dep-a-1.2.7.dmp", sha256=direct_sha,
+					required_deps=[], author_key="ed25519:test")],
+				"dep-b": [PackageEntry(package_id="dep-b",
+					version=parse_version("0.5.3"),
+					path=pkg_root / "dep-b-0.5.3.dmp", sha256=t1_sha,
+					required_deps=[], author_key="ed25519:test")],
+				"dep-c": [PackageEntry(package_id="dep-c",
+					version=parse_version("2.0.1"),
+					path=pkg_root / "dep-c-2.0.1.dmp", sha256=t2_sha,
+					required_deps=[], author_key="ed25519:test")],
+			}
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 0
+		cmd_str = " ".join(mock_run.call_args[0][0])
+		# Every locked package, direct and transitive, forwarded as
+		# an exact M.N.P pin.
+		assert "dep-a@1.2.7" in cmd_str
+		assert "dep-b@0.5.3" in cmd_str
+		assert "dep-c@2.0.1" in cmd_str
 
 
 # ── CLI dispatch (toolchain integration) ─────────────────────────────
@@ -1697,7 +2045,7 @@ def _e2e_manifest(artifacts: list[dict], **project_extra) -> dict:
 	project = {"name": "e2e-test", "license": "MIT"}
 	project.update(project_extra)
 	return {
-		"schema_version": 1,
+		"schema_version": 2,
 		"project": project,
 		"artifacts": artifacts,
 	}
@@ -1903,20 +2251,21 @@ class TestE2E:
 		consumer_manifest = _e2e_manifest([
 			_pkg_artifact(
 				"test-consumer", "src/lib.drift", ["src/lib.drift"],
-				package_deps=[{"name": "test-dep", "version": "^0.1.0"}],
+				package_deps=[{"name": "test-dep", "version": "0.1"}],
 			),
 		])
 		_write_e2e_manifest(consumer_dir, consumer_manifest)
 
-		# Write lockfile with compatibility range from the built dep.
+		# Write v3 lockfile with exact resolved version + sha256.
+		dep_sha = hashlib.sha256(dep_dmp.read_bytes()).hexdigest()
 		_write_e2e_lock(consumer_dir, {
-			"schema_version": 2,
+			"schema_version": 3,
 			"artifacts": {
 				"test-consumer": {
 					"resolved": {
 						"test-dep": {
-							"version": "0.1",
-							"package_id": "test-dep",
+							"version": "0.1.0",
+							"sha256": dep_sha,
 							"author_key": "unsigned",
 							"dep_type": "direct",
 						},
@@ -1939,13 +2288,18 @@ class TestE2E:
 		consumer_dmp = consumer_dir / "build" / "test-consumer.dmp"
 		assert consumer_dmp.exists()
 
-		# Verify package metadata: test-dep is declared as a direct dep.
+		# Verify package metadata: test-dep appears as a direct dep
+		# with the manifest's declared range (not the lock's exact
+		# pin).  Published .dmp metadata exports the producer's
+		# authored constraint so downstream consumers can pick up
+		# patch bumps without the producer republishing.
 		from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
 		pkg = load_dmir_pkg_v0(consumer_dmp)
-		dep_names = [d.name for d in pkg.package_deps]
+		dep_names = [d.name for d in pkg.required_deps]
 		assert "test-dep" in dep_names
-		dep_entry = next(d for d in pkg.package_deps if d.name == "test-dep")
-		assert dep_entry.version == "0.1.0"
+		dep_entry = next(d for d in pkg.required_deps if d.name == "test-dep")
+		# Manifest declared "0.1"; that's what's exported.
+		assert dep_entry.version == "0.1"
 
 	def test_transitive_dep_in_lockfile(self, tmp_path):
 		"""
@@ -2000,14 +2354,15 @@ class TestE2E:
 		_write_e2e_manifest(dep_dir,
 			_e2e_manifest([_pkg_artifact(
 				"test-dep", "src/lib.drift", ["src/lib.drift"],
-				package_deps=[{"name": "test-leaf", "version": "0.1.0"}],
+				package_deps=[{"name": "test-leaf", "version": "0.1"}],
 			)]),
 		)
 		# test-dep needs a lockfile for its dep on test-leaf.
+		leaf_sha = hashlib.sha256(leaf_dmp.read_bytes()).hexdigest()
 		_write_e2e_lock(dep_dir, {
-			"schema_version": 2,
+			"schema_version": 3,
 			"artifacts": {"test-dep": {"resolved": {
-				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "dep_type": "direct"},
 			}}},
 		})
 
@@ -2045,15 +2400,15 @@ class TestE2E:
 		_write_e2e_manifest(consumer_dir,
 			_e2e_manifest([_pkg_artifact(
 				"test-consumer", "src/lib.drift", ["src/lib.drift"],
-				package_deps=[{"name": "test-dep", "version": "^0.1.0"}],
+				package_deps=[{"name": "test-dep", "version": "0.1"}],
 			)]),
 		)
 		# Lockfile: test-dep is direct, test-leaf is transitive.
 		_write_e2e_lock(consumer_dir, {
-			"schema_version": 2,
+			"schema_version": 3,
 			"artifacts": {"test-consumer": {"resolved": {
-				"test-dep": {"version": "0.1", "package_id": "test-dep", "author_key": "unsigned", "dep_type": "direct"},
-				"test-leaf": {"version": "0.1", "package_id": "test-leaf", "author_key": "unsigned", "dep_type": "transitive"},
+				"test-dep": {"version": "0.1.0", "sha256": dep_sha, "author_key": "unsigned", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "dep_type": "transitive"},
 			}}},
 		})
 
@@ -2071,7 +2426,7 @@ class TestE2E:
 		# ── Verify package metadata ──
 		from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
 		pkg = load_dmir_pkg_v0(consumer_dmp)
-		declared_dep_names = sorted(d.name for d in pkg.package_deps)
+		declared_dep_names = sorted(d.name for d in pkg.required_deps)
 		# Only the DIRECT dep should be in package metadata.
 		assert "test-dep" in declared_dep_names
 		# Transitive dep must NOT be declared as a package dep.
@@ -2088,7 +2443,7 @@ class TestE2E:
 		manifest = _e2e_manifest([
 			_pkg_artifact(
 				"test-pkg", "src/lib.drift", ["src/lib.drift"],
-				package_deps=[{"name": "some-dep", "version": "^1.0.0"}],
+				package_deps=[{"name": "some-dep", "version": "1.0"}],
 			),
 		])
 		_write_e2e_manifest(tmp_path, manifest)

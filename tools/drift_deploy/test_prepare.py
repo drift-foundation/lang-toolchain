@@ -73,12 +73,12 @@ class TestPrepareResolve:
 		"""drift prepare resolves deps and writes drift/lock.json."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+			"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -89,7 +89,7 @@ class TestPrepareResolve:
 					"entry_module": "my/pkg.drift",
 					"modules": ["my/pkg.drift"],
 					"module_namespace": "my.pkg",
-					"package_deps": [{"name": "ext.lib", "version": "^1.0.0"}],
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
 				}],
 			}
 			manifest_path.write_text(json.dumps(manifest))
@@ -104,14 +104,14 @@ class TestPrepareResolve:
 			lock = read_lock(lock_path)
 			assert "my.pkg" in lock
 			assert "ext.lib" in lock["my.pkg"]
-			assert lock["my.pkg"]["ext.lib"].version == "1.0"
+			assert lock["my.pkg"]["ext.lib"].version == "1.0.0"
 
 	def test_no_deps_is_noop(self) -> None:
 		"""drift prepare with no package_deps does nothing."""
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -142,12 +142,12 @@ class TestPrepareResolve:
 		"""Re-running prepare overwrites the existing lock."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="2.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+			"ext.lib": ResolvedDep(version="2.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -158,7 +158,7 @@ class TestPrepareResolve:
 					"entry_module": "my/pkg.drift",
 					"modules": ["my/pkg.drift"],
 					"module_namespace": "my.pkg",
-					"package_deps": [{"name": "ext.lib", "version": "^2.0.0"}],
+					"package_deps": [{"name": "ext.lib", "version": "2.0"}],
 				}],
 			}
 			manifest_path.write_text(json.dumps(manifest))
@@ -167,7 +167,7 @@ class TestPrepareResolve:
 			from tools.drift_deploy.lockfile import write_lock
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"my.pkg": {
-				"ext.lib": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+				"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -176,7 +176,7 @@ class TestPrepareResolve:
 			assert rc == 0
 
 			lock = read_lock(lock_path)
-			assert lock["my.pkg"]["ext.lib"].version == "2.0"
+			assert lock["my.pkg"]["ext.lib"].version == "2.0.0"
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
 	def test_resolution_error_raises_prepare_error(
@@ -187,7 +187,7 @@ class TestPrepareResolve:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "app",
@@ -198,7 +198,7 @@ class TestPrepareResolve:
 					"entry_module": "my/app.drift",
 					"modules": ["my/app.drift"],
 					"module_namespace": "my.app",
-					"package_deps": [{"name": "nonexistent.pkg", "version": "^1.0.0"}],
+					"package_deps": [{"name": "nonexistent.pkg", "version": "1.0"}],
 				}],
 			}
 			manifest_path.write_text(json.dumps(manifest))
@@ -207,6 +207,85 @@ class TestPrepareResolve:
 			args = p.parse_args(["--manifest", str(manifest_path)])
 			with pytest.raises(PrepareError, match="not satisfied"):
 				_run_impl(args)
+
+	def test_transitive_lock_narrows_to_highest_in_declared_range(self) -> None:
+		"""`drift prepare` resolves a transitive pulled in by a direct
+		dep's `required_deps` to the HIGHEST available version that
+		still satisfies the owner-declared range — never crossing the
+		range boundary.
+
+		Direct replacement for the pre-0.29 driver-layer
+		"narrows-to-declared" fixture:
+
+		- On-disk: deplib 0.2.0, 0.2.14, 0.3.0; mylib 1.0.0 with
+		  `required_deps: deplib = "0.2"`.
+		- App manifest: `package_deps: mylib = "1.0"`.
+
+		Expected lock: `deplib = 0.2.14` (highest in `"0.2"`), NOT
+		`0.3.0` (outside the declared range).  This is the resolver
+		contract that driftc relies on — driftc itself is an exact
+		loader and never picks versions; `drift prepare` owns that
+		decision.
+		"""
+		deplib_020 = PackageEntry(
+			package_id="deplib", version=parse_version("0.2.0"),
+			path=Path("/fake/deplib-0.2.0.dmp"), sha256="d020",
+			required_deps=[], author_key="ed25519:test",
+		)
+		deplib_0214 = PackageEntry(
+			package_id="deplib", version=parse_version("0.2.14"),
+			path=Path("/fake/deplib-0.2.14.dmp"), sha256="d0214",
+			required_deps=[], author_key="ed25519:test",
+		)
+		deplib_030 = PackageEntry(
+			package_id="deplib", version=parse_version("0.3.0"),
+			path=Path("/fake/deplib-0.3.0.dmp"), sha256="d030",
+			required_deps=[], author_key="ed25519:test",
+		)
+		mylib = PackageEntry(
+			package_id="mylib", version=parse_version("1.0.0"),
+			path=Path("/fake/mylib-1.0.0.dmp"), sha256="m100",
+			required_deps=[("deplib", "0.2")], author_key="ed25519:test",
+		)
+		index = {
+			"deplib": [deplib_020, deplib_0214, deplib_030],
+			"mylib": [mylib],
+		}
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest = {
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "app", "name": "my.app", "version": "0.1.0",
+					"description": "app", "license": "MIT",
+					"entry_module": "app.drift", "modules": ["app.drift"],
+					"module_namespace": "my.app",
+					"package_deps": [{"name": "mylib", "version": "1.0"}],
+				}],
+			}
+			manifest_path.write_text(json.dumps(manifest))
+
+			with patch("tools.drift_deploy.drift_prepare.build_package_index") as mock_idx:
+				mock_idx.return_value = index
+				p = build_arg_parser()
+				args = p.parse_args(["--manifest", str(manifest_path)])
+				rc = _run_impl(args)
+				assert rc == 0
+
+			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
+			assert "my.app" in lock
+			app_deps = lock["my.app"]
+			assert app_deps["deplib"].version == "0.2.14", (
+				f"expected deplib narrowed to 0.2.14 (highest in declared "
+				f"range \"0.2\"), got {app_deps['deplib'].version}.  If "
+				f"this regresses, either the resolver crossed the range "
+				f"boundary (picking 0.3.0) or failed to pick the highest "
+				f"in-range patch (picking 0.2.0)."
+			)
+			assert app_deps["deplib"].dep_type == "transitive"
+			assert app_deps["mylib"].version == "1.0.0"
 
 
 class TestFullPrepareReplace:
@@ -218,19 +297,19 @@ class TestFullPrepareReplace:
 		"""Prepare always replaces the full lock — stale entries are dropped."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"dep.a": ResolvedDep(version="1.0.0", integrity="", dep_type="direct", package_id="dep.a", author_key="ed25519:test"),
+			"dep.a": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.a", author_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package", "name": "pkg.a", "version": "0.1.0",
 					"description": "test", "license": "MIT",
 					"entry_module": "a.drift", "modules": ["a.drift"],
 					"module_namespace": "pkg.a",
-					"package_deps": [{"name": "dep.a", "version": "^1.0.0"}],
+					"package_deps": [{"name": "dep.a", "version": "1.0"}],
 				}],
 			}
 			manifest_path.write_text(json.dumps(manifest))
@@ -239,7 +318,7 @@ class TestFullPrepareReplace:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			from tools.drift_deploy.lockfile import write_lock
 			write_lock(lock_path, {"stale.pkg": {
-				"dep.x": ResolvedDep(version="9.0.0", integrity="", dep_type="direct", package_id="dep.x", author_key="ed25519:test"),
+				"dep.x": ResolvedDep(version="9.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.x", author_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -260,7 +339,7 @@ class TestCoArtifactResolution:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "drift-web", "license": "MIT"},
 				"artifacts": [
 					{
@@ -274,7 +353,7 @@ class TestCoArtifactResolution:
 						"description": "REST", "license": "MIT",
 						"entry_module": "web/rest.drift", "modules": ["web/rest.drift"],
 						"module_namespace": "web.rest",
-						"package_deps": [{"name": "web-jwt", "version": "^0.2.0"}],
+						"package_deps": [{"name": "web-jwt", "version": "0.2"}],
 					},
 				],
 			}
@@ -288,7 +367,7 @@ class TestCoArtifactResolution:
 			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
 			assert "web-rest" in lock
 			dep = lock["web-rest"]["web-jwt"]
-			assert dep.version == "0.2"
+			assert dep.version == "0.2.3"
 			assert dep.dep_type == "co-artifact"
 
 	def test_co_artifact_with_external_dep(self) -> None:
@@ -302,7 +381,7 @@ class TestCoArtifactResolution:
 
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [
 					{
@@ -317,8 +396,8 @@ class TestCoArtifactResolution:
 						"entry_module": "app.drift", "modules": ["app.drift"],
 						"module_namespace": "my.app",
 						"package_deps": [
-							{"name": "my.auth", "version": "^0.1.0"},
-							{"name": "ext.crypto", "version": "^1.0.0"},
+							{"name": "my.auth", "version": "0.1"},
+							{"name": "ext.crypto", "version": "1.0"},
 						],
 					},
 				],
@@ -328,7 +407,7 @@ class TestCoArtifactResolution:
 			# Mock external package resolution; co-artifact should be synthetic.
 			ext_entry = PackageEntry(
 				package_id="ext.crypto", version=parse_version("1.0.0"),
-				path=ext_dmp, sha256="aabbccdd", package_deps=[],
+				path=ext_dmp, sha256="aabbccdd", required_deps=[],
 				author_key="ed25519:test",
 			)
 			with patch("tools.drift_deploy.drift_prepare.build_package_index") as mock_idx:
@@ -344,18 +423,18 @@ class TestCoArtifactResolution:
 			# Co-artifact dep.
 			auth_dep = lock["my.app"]["my.auth"]
 			assert auth_dep.dep_type == "co-artifact"
-			assert auth_dep.version == "0.1"
+			assert auth_dep.version == "0.1.0"
 			# External dep.
 			crypto_dep = lock["my.app"]["ext.crypto"]
 			assert crypto_dep.dep_type == "direct"
-			assert crypto_dep.version == "1.0"
+			assert crypto_dep.version == "1.0.0"
 
 	def test_co_artifact_version_mismatch_errors(self) -> None:
 		"""Co-artifact exists but version doesn't satisfy constraint."""
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [
 					{
@@ -369,7 +448,7 @@ class TestCoArtifactResolution:
 						"description": "REST", "license": "MIT",
 						"entry_module": "rest.drift", "modules": ["rest.drift"],
 						"module_namespace": "web.rest",
-						"package_deps": [{"name": "web-jwt", "version": "^0.2.0"}],
+						"package_deps": [{"name": "web-jwt", "version": "0.2"}],
 					},
 				],
 			}
@@ -385,7 +464,7 @@ class TestCoArtifactResolution:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [
 					{
@@ -399,14 +478,14 @@ class TestCoArtifactResolution:
 						"description": "mid", "license": "MIT",
 						"entry_module": "mid.drift", "modules": ["mid.drift"],
 						"module_namespace": "my.mid",
-						"package_deps": [{"name": "my.base", "version": "^0.1.0"}],
+						"package_deps": [{"name": "my.base", "version": "0.1"}],
 					},
 					{
 						"kind": "app", "name": "my.app", "version": "0.1.0",
 						"description": "app", "license": "MIT",
 						"entry_module": "app.drift", "modules": ["app.drift"],
 						"module_namespace": "my.app",
-						"package_deps": [{"name": "my.mid", "version": "^0.1.0"}],
+						"package_deps": [{"name": "my.mid", "version": "0.1"}],
 					},
 				],
 			}
@@ -424,4 +503,115 @@ class TestCoArtifactResolution:
 			assert app_deps["my.mid"].dep_type == "co-artifact"
 			# Transitive co-artifact dep (my.mid depends on my.base).
 			assert app_deps["my.base"].dep_type == "co-artifact"
-			assert app_deps["my.base"].version == "0.1"
+			assert app_deps["my.base"].version == "0.1.0"
+
+
+class TestPrepareCheck:
+	"""`drift prepare --check` verifies the lock is up-to-date without
+	mutating the working tree.  Used by CI to catch stale locks."""
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_check_passes_when_lock_matches(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+	) -> None:
+		mock_index.return_value = {}
+		mock_resolve.return_value = {
+			"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="aabbcc", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:test",
+			),
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+				}],
+			}))
+			# First run writes the lock.
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			# --check re-runs: same inputs → same resolution → matching lock → exit 0.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 0
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_check_fails_when_lock_stale(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+	) -> None:
+		mock_index.return_value = {}
+		# Two different resolutions (e.g. after an upstream patch bump).
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:test")},
+			{"ext.lib": ResolvedDep(version="1.0.5", sha256="ddeeff", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:test")},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+				}],
+			}))
+			p = build_arg_parser()
+			# First run writes a lock at 1.0.0.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			# Second run (--check): resolution now says 1.0.5 → lock stale → exit 1.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1
+
+	def test_check_fails_when_lock_absent(self) -> None:
+		"""--check without a lock on disk is a hard error, not a
+		silent success.  The contract is "lock matches current
+		resolution"; "no lock" is not "matches"."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+				}],
+			}))
+			p = build_arg_parser()
+			# No package_deps, so no resolution needed — but the
+			# artifact also produced no lock, and --check is stricter:
+			# we want prepare's behavior to mirror what --check asserts.
+			# The no-deps path returns 0 without writing a lock, so
+			# --check on a no-deps manifest also returns 0 (both sides
+			# consistent).  Add a dep to force the lock-required path.
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+				}],
+			}))
+			with patch("tools.drift_deploy.drift_prepare.build_package_index") as mi, \
+				 patch("tools.drift_deploy.drift_prepare.resolve_artifact") as mr:
+				mi.return_value = {}
+				mr.return_value = {
+					"ext.lib": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct",
+						package_id="ext.lib", author_key="ed25519:test"),
+				}
+				assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1

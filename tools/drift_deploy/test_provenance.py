@@ -66,7 +66,7 @@ class TestBuildProvenance:
 			target="drift-dev",
 			compiler=CompilerInfo(version="0.27.92", abi=6, commit="abc1234"),
 			resolved_deps={
-				"web-jwt": {"version": "0.2.5", "integrity": "sha256:aabb"},
+				"web-jwt": {"version": "0.2.5", "sha256": "aabb"},
 			},
 		)
 
@@ -1185,7 +1185,7 @@ class TestAppProvenanceBundle:
 			artifact_sha256=app_sha,
 			target="drift-dev",
 			compiler=CompilerInfo(version="0.27.93", abi=6, commit="abc1234"),
-			resolved_deps={"net.tls": {"version": "0.3.8", "integrity": "sha256:deadbeef"}},
+			resolved_deps={"net.tls": {"version": "0.3.8", "sha256": "deadbeef"}},
 		)
 		obj = json.loads(prov_bytes)
 		assert obj["schema_version"] == 3

@@ -55,6 +55,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Package library root (used as default --package-root)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
 		help="Library root for resolving package_deps (repeatable; default: --dest)")
+	p.add_argument("--check", action="store_true",
+		help="Verify-only mode: exit 0 iff re-resolution produces the "
+		     "exact existing drift/lock.json; non-zero if the lock would "
+		     "change or is absent.  Does not write the lock file.  Use "
+		     "in CI to guard against stale locks.")
 	return p
 
 
@@ -115,8 +120,14 @@ def _run_impl(args: argparse.Namespace) -> int:
 				package_id=art.name,
 				version=parse_version(art.version),
 				path=Path("/dev/null"),  # no .dmp yet
-				sha256="co-artifact",
-				package_deps=pkg_deps,
+				# Co-artifact entries have no published sha256 —
+				# the .dmp is built later in the same deploy run.
+				# Use empty string; `verify_lock_compatibility`
+				# skips co-artifacts entirely and `read_lock`
+				# explicitly allows empty sha256 for
+				# dep_type="co-artifact".
+				sha256="",
+				required_deps=pkg_deps,
 			)
 			# Co-artifact takes priority over any externally-discovered
 			# entry with the same package_id.
@@ -136,21 +147,65 @@ def _run_impl(args: argparse.Namespace) -> int:
 		except ResolutionError as e:
 			raise PrepareError(str(e))
 
-		# Mark co-artifact deps: integrity is unknown at prepare time
-		# (the .dmp hasn't been built yet); deploy verifies at build time.
+		# Mark co-artifact deps: sha256 is unknown at prepare time
+		# (the .dmp hasn't been built yet).  Use an empty sha — the
+		# v3 reader accepts empty sha256 iff dep_type="co-artifact",
+		# and `verify_lock_compatibility` skips co-artifacts entirely.
+		# Deploy verifies the real sha at build time after the
+		# co-artifact is staged.
 		for pkg_id in list(resolved):
 			if pkg_id in co_artifact_names:
 				old = resolved[pkg_id]
 				resolved[pkg_id] = ResolvedDep(
 					version=old.version,
-					integrity="sha256:co-artifact",
+					sha256="",
 					dep_type="co-artifact",
 				)
 
 		resolved_map[art.name] = resolved
 
-	# Write lock file — full rewrite for the entire manifest.
 	lock_path = manifest_dir / "lock.json"
+
+	if getattr(args, "check", False):
+		# Verify-only mode: compare the freshly-resolved graph against
+		# the on-disk lock.  Used by CI to detect stale locks without
+		# mutating the working tree.  The lock MUST exist; absence is
+		# treated as drift (prepare-before-commit was skipped).
+		from tools.drift_deploy.lockfile import read_lock
+		if not lock_path.exists():
+			print(
+				f"drift prepare --check: {lock_path} does not exist; "
+				f"run `drift prepare` to generate it",
+				file=sys.stderr,
+			)
+			return 1
+		# A malformed or pre-v3 lock on disk is drift, not a crash.
+		# `read_lock` raises `ValueError` for v1/v2/shape errors and
+		# `json.JSONDecodeError` (a `ValueError` subclass) for
+		# broken JSON; `OSError` covers late read failures after the
+		# `exists()` check (races, permissions).  Treat every one of
+		# these as "regenerate the lock" and exit non-zero with a
+		# friendly diagnostic instead of a Python traceback.
+		try:
+			existing = read_lock(lock_path)
+		except (ValueError, OSError) as e:
+			print(
+				f"drift prepare --check: {lock_path} is unreadable "
+				f"({e}); run `drift prepare` to regenerate it",
+				file=sys.stderr,
+			)
+			return 1
+		if existing != resolved_map:
+			print(
+				f"drift prepare --check: {lock_path} is stale; "
+				f"run `drift prepare` to refresh",
+				file=sys.stderr,
+			)
+			return 1
+		print(f"drift prepare --check: {lock_path} is up-to-date")
+		return 0
+
+	# Write lock file — full rewrite for the entire manifest.
 	write_lock(lock_path, resolved_map)
 
 	# Summary.

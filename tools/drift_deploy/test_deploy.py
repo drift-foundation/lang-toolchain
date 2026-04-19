@@ -192,12 +192,12 @@ class TestResolutionLock:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"other.pkg": {
-				"dep.x": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+				"dep.x": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct"),
 			}})
 
 			art = _art("my.pkg", deps=[PackageDep("dep.x", "^1.0.0")])
 			existing_lock = {"other.pkg": {
-				"dep.x": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+				"dep.x": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct"),
 			}}
 
 			with pytest.raises(DeployError, match="drift prepare"):
@@ -215,7 +215,7 @@ class TestResolutionLock:
 			PackageDep("dep.b", "^2.0.0"),
 		])
 		existing_lock = {"my.pkg": {
-			"dep.a": ResolvedDep(version="1.0.0", integrity="sha256:aa", dep_type="direct"),
+			"dep.a": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct"),
 			# dep.b missing
 		}}
 		with tempfile.TemporaryDirectory() as tmpdir:
@@ -227,6 +227,117 @@ class TestResolutionLock:
 					lock_path=lock_path,
 					existing_lock=existing_lock,
 				)
+
+	def test_sha_mismatch_points_to_drift_prepare(self) -> None:
+		"""Lock-vs-disk sha256 mismatch at deploy time is a hard error
+		with a `drift prepare` pointer.  Pins the strict-exact deploy
+		contract: never silently accept a rebuilt/replaced artifact."""
+		from tools.drift_deploy.resolver import PackageEntry
+		import hashlib
+		art = _art("my.pkg", deps=[PackageDep("dep.a", "0.1")])
+		locked_sha = hashlib.sha256(b"dep.a@0.1.3 locked").hexdigest()
+		ondisk_sha = hashlib.sha256(b"rebuilt-different-bytes").hexdigest()
+		existing_lock = {"my.pkg": {
+			"dep.a": ResolvedDep(
+				version="0.1.3", sha256=locked_sha,
+				dep_type="direct", package_id="dep.a",
+				author_key="ed25519:test",
+			),
+		}}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
+			dmp = Path(tmpdir) / "dep.a-0.1.3.dmp"
+			dmp.write_bytes(b"fake")
+			with patch("tools.drift_deploy.drift_deploy.build_package_index") as mock_idx:
+				mock_idx.return_value = {
+					"dep.a": [PackageEntry(
+						package_id="dep.a", version=parse_version("0.1.3"),
+						path=dmp, sha256=ondisk_sha, required_deps=[],
+						author_key="ed25519:test",
+					)],
+				}
+				with pytest.raises(DeployError) as exc_info:
+					_resolve_artifact_deps(
+						art, package_roots=[Path(tmpdir)],
+						lock_path=lock_path, existing_lock=existing_lock,
+					)
+		err = str(exc_info.value)
+		assert "dep.a" in err
+		assert "sha256" in err
+		assert "drift prepare" in err, (
+			f"sha-mismatch deploy error must cite drift prepare; got:\n{err}"
+		)
+
+	def test_author_key_mismatch_points_to_drift_prepare(self) -> None:
+		"""Lock signer vs on-disk signer mismatch is a hard deploy
+		error with a `drift prepare` pointer.  Pins signer re-check
+		on the deploy path."""
+		from tools.drift_deploy.resolver import PackageEntry
+		import hashlib
+		art = _art("my.pkg", deps=[PackageDep("dep.a", "0.1")])
+		same_sha = hashlib.sha256(b"dep.a@0.1.3").hexdigest()
+		existing_lock = {"my.pkg": {
+			"dep.a": ResolvedDep(
+				version="0.1.3", sha256=same_sha,
+				dep_type="direct", package_id="dep.a",
+				author_key="ed25519:OLD_KEY",
+			),
+		}}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
+			dmp = Path(tmpdir) / "dep.a-0.1.3.dmp"
+			dmp.write_bytes(b"fake")
+			with patch("tools.drift_deploy.drift_deploy.build_package_index") as mock_idx:
+				mock_idx.return_value = {
+					"dep.a": [PackageEntry(
+						package_id="dep.a", version=parse_version("0.1.3"),
+						path=dmp, sha256=same_sha, required_deps=[],
+						author_key="ed25519:NEW_KEY",
+					)],
+				}
+				with pytest.raises(DeployError) as exc_info:
+					_resolve_artifact_deps(
+						art, package_roots=[Path(tmpdir)],
+						lock_path=lock_path, existing_lock=existing_lock,
+					)
+		err = str(exc_info.value)
+		assert "dep.a" in err
+		assert "key" in err.lower()
+		assert "drift prepare" in err, (
+			f"author-key mismatch deploy error must cite drift prepare; "
+			f"got:\n{err}"
+		)
+
+	def test_missing_ondisk_package_points_to_drift_prepare(self) -> None:
+		"""Lock pins a version that is absent from the package roots
+		(e.g., the user cleaned their cache between prepare and deploy)
+		→ hard error pointing at `drift prepare`."""
+		import hashlib
+		art = _art("my.pkg", deps=[PackageDep("dep.a", "0.1")])
+		existing_lock = {"my.pkg": {
+			"dep.a": ResolvedDep(
+				version="0.1.3",
+				sha256=hashlib.sha256(b"dep.a@0.1.3").hexdigest(),
+				dep_type="direct", package_id="dep.a",
+				author_key="ed25519:test",
+			),
+		}}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
+			with patch("tools.drift_deploy.drift_deploy.build_package_index") as mock_idx:
+				mock_idx.return_value = {}  # empty — dep.a not on disk
+				with pytest.raises(DeployError) as exc_info:
+					_resolve_artifact_deps(
+						art, package_roots=[Path(tmpdir)],
+						lock_path=lock_path, existing_lock=existing_lock,
+					)
+		err = str(exc_info.value)
+		assert "dep.a" in err and "0.1.3" in err
+		assert "not found" in err
+		assert "drift prepare" in err, (
+			f"missing-ondisk-package deploy error must cite drift prepare; "
+			f"got:\n{err}"
+		)
 
 
 # ── Provenance ───────────────────────────────────────────────────────
@@ -243,11 +354,11 @@ class TestProvenanceInDeploy:
 				artifact_name="myapp",
 				artifact_version="1.0.0",
 				artifact_kind="app",
-				artifact_sha256="sha256:0000000000000000000000000000000000000000000000000000000000000000",
+				artifact_sha256="0000000000000000000000000000000000000000000000000000000000000000",
 				target="x86_64-linux-gnu",
 				compiler=compiler,
 				resolved_deps={
-					"net.tls": {"version": "0.3.0", "integrity": "sha256:aa"},
+					"net.tls": {"version": "0.3.0", "sha256": "aa"},
 				},
 			)
 			write_provenance(path, prov_bytes)
@@ -369,7 +480,7 @@ class TestUnsafeField:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -387,7 +498,7 @@ class TestUnsafeField:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -408,7 +519,7 @@ class TestUnsafeField:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -591,7 +702,7 @@ class TestModuleNamespace:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -610,7 +721,7 @@ class TestModuleNamespace:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -630,7 +741,7 @@ class TestModuleNamespace:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -649,7 +760,7 @@ class TestModuleNamespace:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "test", "license": "MIT"},
 				"artifacts": [{
 					"kind": "package",
@@ -1831,7 +1942,7 @@ class TestIntraProjectDeps:
 						version=parse_version("0.1.0"),
 						path=dmp,
 						sha256=sha,
-						package_deps=[],
+						required_deps=[],
 						author_key="ed25519:test_key",
 					),
 				],
@@ -1840,13 +1951,17 @@ class TestIntraProjectDeps:
 				kind="package", name="net-tls", version="0.1.0",
 				description="", license="", entry_module="net.tls",
 				modules=["net.tls"], module_namespace="net.tls",
-				package_deps=[PackageDep(name="net-crypto", version="^0.1.0")],
+				package_deps=[PackageDep(name="net-crypto", version="0.1")],
 			)
+			# v3 lock pins the exact version AND sha256 — both must
+			# match the on-disk .dmp at verify time.  Use the real
+			# sha of the test fixture so `verify_lock_compatibility`
+			# accepts it.
 			existing_lock = {
 				"net-tls": {
 					"net-crypto": ResolvedDep(
-						version="0.1",
-						integrity="",
+						version="0.1.0",
+						sha256=sha,
 						dep_type="direct",
 						package_id="net-crypto",
 						author_key="ed25519:test_key",
@@ -1863,30 +1978,35 @@ class TestIntraProjectDeps:
 			assert resolved["net-crypto"].version == "0.1.0"
 
 
-# ── Lock range → exact version resolution ───────────────────────────
+# ── Lock-exact passthrough at deploy time ───────────────────────────
 
 
 class TestDeployLockRangeResolution:
-	"""Deploy must resolve v2 lock ranges to exact versions before --dep."""
+	"""Deploy consumes the lock's exact version as-is; v3 eliminates
+	the build-time range→exact step that v2 performed."""
 
 	@patch("tools.drift_deploy.drift_deploy.build_package_index")
-	def test_deploy_resolves_lock_range_to_exact_version(
+	def test_deploy_passes_lock_exact_version_through(
 		self, mock_index: MagicMock,
 	) -> None:
-		"""v2 lock stores 0.1; deploy must resolve to 0.1.3 from the index."""
+		"""v3 lock stores an exact version; deploy uses that exact
+		version directly (the old v2 "resolve the range to exact"
+		step is gone — patch movement is prepare-only)."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
+		import hashlib
 		with tempfile.TemporaryDirectory() as tmpdir:
 			dmp = Path(tmpdir) / "dep-a.dmp"
 			dmp.write_bytes(b"fake-dmp-content")
+			real_sha = hashlib.sha256(b"fake-dmp-content").hexdigest()
 			mock_index.return_value = {
 				"dep-a": [
 					PackageEntry(
 						package_id="dep-a",
 						version=parse_version("0.1.3"),
 						path=dmp,
-						sha256="aabb",
-						package_deps=[],
+						sha256=real_sha,
+						required_deps=[],
 						author_key="ed25519:test_key",
 					),
 				],
@@ -1895,13 +2015,14 @@ class TestDeployLockRangeResolution:
 				kind="package", name="my-pkg", version="0.1.0",
 				description="", license="", entry_module="my/pkg.drift",
 				modules=["my/pkg.drift"], module_namespace="my.pkg",
-				package_deps=[PackageDep(name="dep-a", version="^0.1.0")],
+				package_deps=[PackageDep(name="dep-a", version="0.1")],
 			)
+			# v3 lock: exact version + real sha256.
 			existing_lock = {
 				"my-pkg": {
 					"dep-a": ResolvedDep(
-						version="0.1",
-						integrity="",
+						version="0.1.3",
+						sha256=real_sha,
 						dep_type="direct",
 						package_id="dep-a",
 						author_key="ed25519:test_key",
@@ -1915,9 +2036,9 @@ class TestDeployLockRangeResolution:
 				existing_lock=existing_lock,
 			)
 			assert "dep-a" in resolved
-			# Must be exact version, not the lock range.
+			# Exact version passes through from lock to resolved output.
 			assert resolved["dep-a"].version == "0.1.3", (
-				f"deploy must resolve lock range 0.1 to exact 0.1.3; "
+				f"deploy must use lock's exact version 0.1.3; "
 				f"got {resolved['dep-a'].version}"
 			)
 
@@ -1980,8 +2101,8 @@ class TestSmokeDepPinning:
 			module_namespace="web_client",
 		)
 		resolved = {
-			"net-tls": ResolvedDep(version="0.3.1", integrity="sha256:aa", dep_type="direct"),
-			"acme.crypto": ResolvedDep(version="0.9.0", integrity="sha256:bb", dep_type="transitive"),
+			"net-tls": ResolvedDep(version="0.3.1", sha256="aa", dep_type="direct"),
+			"acme.crypto": ResolvedDep(version="0.9.0", sha256="bb", dep_type="transitive"),
 		}
 
 		calls: list[list[str]] = []
@@ -2148,7 +2269,7 @@ class TestAuthorProfilePublish:
 		if author_profile is not None:
 			project["author_profile"] = author_profile
 		manifest = {
-			"schema_version": 1,
+			"schema_version": 2,
 			"project": project,
 			"artifacts": [{
 				"kind": "package",

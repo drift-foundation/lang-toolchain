@@ -7187,6 +7187,52 @@ def _package_label() -> str:
 	return "<package>"
 
 
+def _pkg_exact_satisfies_range(exact_ver: str, range_ver: str) -> bool:
+	"""True iff an exact `M.N.P` version satisfies an owner-declared range.
+
+	**Input contract** — under v3, `range_ver` reaches this helper
+	only after the `.dmp` loader has validated it against
+	`dmir_pkg_v0::is_owner_declared_range`, so the only shapes that
+	can legitimately occur at runtime are:
+
+	- `range_ver == "M"` (single integer) → matches any `M.x.x`.
+	- `range_ver == "M.N"` (two-part) → matches any `M.N.x`.
+
+	`exact_ver` is similarly expected to be a well-formed `M.N.P`
+	from a consumer-supplied `--dep` pin.
+
+	**Fail-closed contract** — any malformed `range_ver` or
+	`exact_ver` returns `False` (the sanity check fails, the caller
+	emits a diagnostic, and the build aborts).  The helper
+	intentionally does NOT fall back to literal string equality: on
+	a clean-break format boundary, accepting a malformed shape by
+	string-compare would mask the upstream validation bug that let
+	it through.  Any `False` return due to malformed input is a bug
+	elsewhere (loader, in-memory manipulation, or a new caller that
+	skipped validation) and should be investigated rather than
+	silently permitted.
+
+	Kept inline in the compiler (rather than importing from
+	`tools/drift_deploy`) because the compiler's package-loading
+	layer must not depend on deploy tooling.  `driftc` still does
+	NOT resolve versions — it only cross-checks that a
+	consumer-supplied exact `--dep` pin is consistent with a
+	transitively-loaded package's declared range.
+	"""
+	ex_parts = exact_ver.split(".")
+	rg_parts = range_ver.split(".")
+	# Fail-closed on malformed shapes — see contract above.
+	if not all(p.isdigit() for p in ex_parts) or not all(p.isdigit() for p in rg_parts):
+		return False
+	if len(ex_parts) != 3:
+		return False  # exact_ver must be M.N.P
+	if len(rg_parts) == 1:
+		return ex_parts[0] == rg_parts[0]
+	if len(rg_parts) == 2:
+		return ex_parts[0] == rg_parts[0] and ex_parts[1] == rg_parts[1]
+	return False  # range_ver must be "M" or "M.N" — 3+ parts is malformed
+
+
 def _abi_fingerprint(target: str, *, word_bits: int) -> dict[str, object]:
 	inline_bytes = (word_bits // 8) * 4
 	return {
@@ -7675,141 +7721,76 @@ def main(argv: list[str] | None = None) -> int:
 
 			loaded_pkgs.append(_loaded)
 
-		# ── Transitive dependency expansion ───────────────────────────
-		# Loaded root packages declare their transitive deps via the
-		# package_deps manifest field.  Expand the allowlist + version
-		# pins from those declarations, then discover + load the
-		# transitive deps from the same package roots.  Repeat until
-		# the closure is complete.
-		_all_package_files = package_files  # full discovery from above
-		_pending_expansion = list(loaded_pkgs)
-		while _pending_expansion:
-			_new_deps: dict[str, str] = {}  # pkg_id -> version
-			for _exp_pkg in _pending_expansion:
-				_pdeps = _exp_pkg.manifest.get("package_deps")
-				if not isinstance(_pdeps, list):
-					continue
-				for _pd in _pdeps:
-					if not isinstance(_pd, dict):
-						continue
-					_pd_name = _pd.get("name", "")
-					_pd_ver = _pd.get("version", "")
-					if not _pd_name or not _pd_ver:
-						continue
-					if _pd_name in _dep_allowlist:
-						# Already selected — verify version consistency.
-						if _pd_name in _version_pins and _version_pins[_pd_name] != _pd_ver:
-							msg = (
-								f"transitive dependency version conflict for '{_pd_name}': "
-								f"'{_version_pins[_pd_name]}' (from --dep) vs '{_pd_ver}' "
-								f"(from package_deps of '{_exp_pkg.manifest.get('package_id')}')"
-							)
-							if args.json:
-								print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-							else:
-								print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-							return 1
-						continue
-					if _pd_name == _self_pkg_id:
-						continue  # self-exclusion
-					# Same-round conflict: two packages in this expansion
-					# wave declare different versions of the same transitive
-					# dep.  Reject rather than silently picking one.
-					_prev_new_ver = _new_deps.get(_pd_name)
-					if _prev_new_ver is not None and _prev_new_ver != _pd_ver:
-						msg = (
-							f"transitive dependency version conflict for '{_pd_name}': "
-							f"'{_prev_new_ver}' vs '{_pd_ver}' "
-							f"(declared by different packages in the same dependency layer)"
-						)
-						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-						else:
-							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-						return 1
-					_new_deps[_pd_name] = _pd_ver
-
-			if not _new_deps:
-				break  # closure complete
-
-			# Add transitive deps to allowlist + pins.
-			for _td_name, _td_ver in _new_deps.items():
-				_dep_allowlist.add(_td_name)
-				_version_pins[_td_name] = _td_ver
-
-			# Discover + load transitive deps from the same package roots.
-			_pending_expansion = []
-			for _pf in _all_package_files:
-				_peeked_id = peek_package_id(_pf)
-				if _peeked_id is None and _pf.suffix == ".zdmp":
-					_dmp_sibling = _pf.with_suffix(".dmp")
-					if _dmp_sibling.exists():
-						_peeked_id = peek_package_id(_dmp_sibling)
-						if _peeked_id is not None:
-							_pf = _dmp_sibling
-				if _peeked_id is None:
-					continue
-				if _peeked_id not in _new_deps:
-					continue  # not a newly discovered transitive dep
-				# Version prefilter (same logic as initial discovery).
-				_pinned_ver = _new_deps.get(_peeked_id)
-				if _pinned_ver:
-					_fs_grandparent = _pf.parent.parent.name
-					if _fs_grandparent == _peeked_id:
-						_fs_version = _pf.parent.name
-						if _fs_version != _pinned_ver:
-							continue  # wrong version directory
-				# Identity enforcement.
-				_fs_grandparent = _pf.parent.parent.name
-				if _fs_grandparent in _new_deps and _peeked_id != _fs_grandparent:
+		# ── Transitive dependency sanity check ────────────────────────
+		# driftc is an exact loader, not a resolver.  The consumer's
+		# `drift prepare` produced the full transitive graph as exact
+		# `--dep PKG@VERSION` pins; every `required_deps` entry a
+		# loaded package declares MUST already be in the allowlist.
+		# If it isn't, `drift prepare` / `drift build` skipped it,
+		# and driftc cannot invent an exact pin from the range
+		# metadata.
+		#
+		# For each `required_deps` entry on each loaded package:
+		# - If the name is in `_dep_allowlist`, verify the existing
+		#   exact pin satisfies the declared range.  Mismatch =
+		#   hard error.
+		# - If the name is NOT in `_dep_allowlist`, hard-fail with a
+		#   "missing exact --dep" diagnostic pointing at
+		#   `drift prepare`.  No auto-expansion from filesystem — that
+		#   would make driftc a second resolver.
+		# - Skip the self-pkg id (self-exclusion rule).
+		#
+		# Pre-cut `.dmp`s still carry the legacy `package_deps` key —
+		# the loader (`dmir_pkg_v0._parse_required_deps`) rejects
+		# those upstream.  Consume the typed
+		# `LoadedPackage.required_deps` list directly here rather than
+		# re-parsing the raw manifest JSON, so this pass never becomes
+		# a second parser with slightly different behaviour.
+		for _loaded_pkg in loaded_pkgs:
+			_loaded_pkg_id = _loaded_pkg.manifest.get("package_id", "")
+			for _pd in _loaded_pkg.required_deps:
+				_pd_name = _pd.name
+				_pd_ver = _pd.version
+				if _pd_name == _self_pkg_id:
+					continue  # self-exclusion
+				if _pd_name not in _dep_allowlist:
 					msg = (
-						f"package identity mismatch: artifact at "
-						f".../{_fs_grandparent}/{_pf.parent.name}/ claims package_id "
-						f"'{_peeked_id}' in manifest (expected '{_fs_grandparent}')"
+						f"package '{_loaded_pkg_id}' declares required_deps "
+						f"entry '{_pd_name}' ({_pd_ver}) but no --dep is "
+						f"pinned for it; driftc is an exact loader and "
+						f"cannot invent a version from a range.  Run "
+						f"`drift prepare` / `drift build` so the complete "
+						f"transitive graph reaches driftc as exact --dep pins."
 					)
 					if args.json:
 						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
-				# Pre-load version identity check.
-				if _fs_grandparent == _peeked_id:
-					from lang.driftc.packages.dmir_pkg_v0 import peek_package_id_and_version as _peek_id_ver
-					_peeked_full = _peek_id_ver(_pf)
-					if _peeked_full is not None:
-						_, _manifest_ver = _peeked_full
-						_fs_ver = _pf.parent.name
-						if _manifest_ver != _fs_ver:
-							msg = (
-								f"package identity mismatch: '{_peeked_id}' at path "
-								f".../{_fs_grandparent}/{_fs_ver}/ claims version "
-								f"'{_manifest_ver}' in manifest (expected '{_fs_ver}')"
-							)
-							if args.json:
-								print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-							else:
-								print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-							return 1
-				if _self_pkg_id and _peeked_id == _self_pkg_id:
-					continue
-				try:
-					_td_loaded = load_package_v0_with_policy(_pf, policy=policy)
-				except (ValueError, OSError) as err:
-					msg = str(err)
+				# In allowlist — verify the exact pin satisfies the
+				# declared range.  `--dep` carries the exact `M.N.P`
+				# from the consumer's v3 lock; `required_deps` carries
+				# the producer's manifest-level range (`M` or `M.N`).
+				# driftc only COMPARES the two here — it does not try
+				# to pick a different version from package roots.
+				# Resolution is `drift prepare`'s job.
+				_pin = _version_pins.get(_pd_name, "")
+				if _pin and not _pkg_exact_satisfies_range(_pin, _pd_ver):
+					msg = (
+						f"transitive dependency version conflict for "
+						f"'{_pd_name}': the --dep pin '{_pin}' does not "
+						f"satisfy the required_deps range '{_pd_ver}' "
+						f"declared by package '{_loaded_pkg_id}'.  "
+						f"driftc is an exact loader and will not pick a "
+						f"different version from the package roots — "
+						f"re-run `drift prepare` / `drift build` to "
+						f"regenerate a consistent lock."
+					)
 					if args.json:
 						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
-				except Exception as err:
-					msg = f"failed to load package '{_pf}': {err}"
-					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
-					else:
-						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
-					return 1
-				loaded_pkgs.append(_td_loaded)
-				_pending_expansion.append(_td_loaded)
 
 		# Determinism: package discovery order (filenames, rglob ordering, CLI
 		# `--package-root` ordering) must not affect compilation results. Sort loaded
@@ -10732,10 +10713,32 @@ def main(argv: list[str] | None = None) -> int:
 				"link_libs": [{"lib": lib} for lib in args.native_link_lib],
 			}
 
-		# Build package_deps manifest section from --package-dep flags.
-		_package_deps_list: list[dict[str, str]] | None = None
+		# Build required_deps manifest section from --package-dep flags.
+		#
+		# Name boundary (v3):
+		# - `--package-dep` is the CLI flag carrying the producer's
+		#   authored manifest range per dep (no lock pin leaks).
+		# - Serialized into the .dmp manifest as `required_deps` —
+		#   the published consumer-facing requirement.  Pre-0.29
+		#   packages used the key `package_deps` for the same role;
+		#   the rename reflects the semantic distinction between
+		#   manifest.json's `package_deps` (owner-authored source)
+		#   and the .dmp's `required_deps` (published requirement).
+		#   Consumers reject pre-cut `.dmp`s that still use the old
+		#   key — see `dmir_pkg_v0.py::_parse_required_deps`.
+		_required_deps_list: list[dict[str, str]] | None = None
 		if getattr(args, "package_dep", []):
-			_package_deps_list = []
+			# `required_deps[].version` is strictly the owner-declared
+			# acceptable range: `"M"` or `"M.N"`.  Validate at emit
+			# time so hand-driven `--package-dep` usage cannot write
+			# a `.dmp` that the new consumer-side loader would later
+			# reject.  Normal `drift build` already feeds validated
+			# manifest ranges through this path; this guard catches
+			# direct CLI misuse.  The shape validator is shared with
+			# the authored-manifest parser and the consumer-side
+			# resolver — see `dmir_pkg_v0::is_owner_declared_range`.
+			from lang.driftc.packages.dmir_pkg_v0 import is_owner_declared_range as _is_required_range
+			_required_deps_list = []
 			for dep_str in args.package_dep:
 				if "=" not in dep_str:
 					msg = f"--package-dep requires NAME=VERSION format, got: {dep_str}"
@@ -10745,7 +10748,21 @@ def main(argv: list[str] | None = None) -> int:
 						print(f"error: {msg}", file=sys.stderr)
 					return 1
 				dep_name, dep_ver = dep_str.split("=", 1)
-				_package_deps_list.append({"name": dep_name, "version": dep_ver})
+				if not _is_required_range(dep_ver):
+					msg = (
+						f"--package-dep '{dep_name}={dep_ver}': version must be "
+						f"the owner-declared acceptable range — `\"M\"` (any "
+						f"M.x.x) or `\"M.N\"` (any M.N.x).  Exact pins, `^`/`~` "
+						f"ranges, and other shapes are rejected at the .dmp "
+						f"metadata boundary (writing one would produce a "
+						f"package the consumer-side loader rejects)."
+					)
+					if args.json:
+						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				_required_deps_list.append({"name": dep_name, "version": dep_ver})
 
 		manifest_obj: dict[str, object] = {
 			"format": "dmir-pkg",
@@ -10764,8 +10781,8 @@ def main(argv: list[str] | None = None) -> int:
 		}
 		if _native_deps_section is not None:
 			manifest_obj["native_deps"] = _native_deps_section
-		if _package_deps_list is not None:
-			manifest_obj["package_deps"] = _package_deps_list
+		if _required_deps_list is not None:
+			manifest_obj["required_deps"] = _required_deps_list
 	
 		write_dmir_pkg_v0(
 			args.emit_package,

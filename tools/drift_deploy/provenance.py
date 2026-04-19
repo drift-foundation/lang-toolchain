@@ -95,7 +95,7 @@ def build_provenance(
 	artifact_sha256: str,  # "sha256:<hex>" — digest of the artifact bytes
 	target: str,
 	compiler: CompilerInfo,
-	resolved_deps: dict[str, dict[str, str]],  # {pkg_id: {"version": str, "integrity": str}}
+	resolved_deps: dict[str, dict[str, str]],  # {pkg_id: {"version": str, "sha256": str}}
 	source: SourceIdentity | None = None,
 ) -> bytes:
 	"""Build canonical deterministic provenance JSON bytes.

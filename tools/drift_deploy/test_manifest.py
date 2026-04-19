@@ -31,7 +31,7 @@ def _write_manifest(tmpdir: Path, obj: dict) -> Path:
 
 def _minimal_manifest(**overrides: object) -> dict:
 	base = {
-		"schema_version": 1,
+		"schema_version": 2,
 		"project": {"name": "test-project", "license": "MIT"},
 		"artifacts": [
 			{
@@ -53,7 +53,7 @@ class TestManifestValid:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _write_manifest(Path(tmpdir), _minimal_manifest())
 			m = load_manifest(path)
-			assert m.schema_version == 1
+			assert m.schema_version == 2
 			assert m.project.name == "test-project"
 			assert m.project.license == "MIT"
 			assert m.project.author_profile is None
@@ -119,7 +119,7 @@ class TestManifestValid:
 				"entry_module": "src/lib.drift",
 				"modules": ["src/net_tls/"],
 				"package_deps": [
-					{"name": "acme.crypto", "version": "^0.9.0"},
+					{"name": "acme.crypto", "version": "0.9"},
 				],
 				"native_deps": [
 					{"lib": "ssl"},
@@ -136,7 +136,7 @@ class TestManifestValid:
 			assert art.license == "Apache-2.0"  # overridden
 			assert len(art.package_deps) == 1
 			assert art.package_deps[0].name == "acme.crypto"
-			assert art.package_deps[0].version == "^0.9.0"
+			assert art.package_deps[0].version == "0.9"
 			assert len(art.native_deps) == 2
 			assert art.native_deps[0].lib == "ssl"
 			assert art.smoke_command == ["just", "smoke-net-tls"]
@@ -159,7 +159,7 @@ class TestManifestValid:
 				"description": "TLS CLI tool",
 				"entry_module": "src/main.drift",
 				"modules": ["src/"],
-				"package_deps": [{"name": "net.tls", "version": "^0.3.0"}],
+				"package_deps": [{"name": "net.tls", "version": "0.3"}],
 			},
 		]
 		with tempfile.TemporaryDirectory() as tmpdir:
@@ -224,7 +224,7 @@ class TestManifestInvalid:
 	def test_missing_project(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
-				"schema_version": 1,
+				"schema_version": 2,
 				"artifacts": [{"kind": "package", "name": "x", "version": "1.0.0",
 					"description": "x", "entry_module": "x.drift", "modules": ["x/"]}],
 			})
@@ -234,7 +234,7 @@ class TestManifestInvalid:
 	def test_empty_artifacts(self) -> None:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
-				"schema_version": 1,
+				"schema_version": 2,
 				"project": {"name": "x", "license": "MIT"},
 				"artifacts": [],
 			})
@@ -275,7 +275,7 @@ class TestManifestInvalid:
 				"description": "A package",
 				"entry_module": "lib.drift",
 				"modules": ["src/"],
-				"package_deps": [{"name": "my-app", "version": "^1.0.0"}],
+				"package_deps": [{"name": "my-app", "version": "1.0"}],
 			},
 		]
 		with tempfile.TemporaryDirectory() as tmpdir:
@@ -316,3 +316,140 @@ class TestManifestInvalid:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="module::fn"):
 				load_manifest(path)
+
+
+# ── 0.29.0 manifest v2: owner-declared acceptable range only ────────
+
+
+class TestManifestV2DepVersions:
+	"""v2 authored manifests accept the package owner's declared
+	acceptable range in dep versions, as either `"M"` (any M.x.x)
+	or `"M.N"` (any M.N.x).  Exact pins, `^`/`~` operators, and
+	other shapes are hard-rejected at load time.
+
+	The broader `parse_constraint` vocabulary in `semver.py` keeps
+	`^`/`~`/exact for strictly internal use (lock-v3 exact entries,
+	v1→v2 manifest migration, resolver unit tests).  That vocabulary
+	must NOT leak into v2 authored-manifest validation; pre-cut
+	packages without v2 `required_deps` are rejected at consume
+	time (Phase 4), not silently accepted via a legacy shim.  These
+	tests pin the authored-manifest boundary.
+	"""
+
+	def _manifest_with_dep_version(self, ver: str) -> dict:
+		manifest = _minimal_manifest()
+		manifest["artifacts"][0]["package_deps"] = [
+			{"name": "some.dep", "version": ver},
+		]
+		return manifest
+
+	def test_mn_range_accepted(self) -> None:
+		"""`"0.3"` (M.N range) loads cleanly."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3"))
+			m = load_manifest(path)
+			assert m.artifacts[0].package_deps[0].version == "0.3"
+
+	def test_major_only_range_accepted(self) -> None:
+		"""`"1"` (major-only range — any 1.x.x) loads cleanly."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("1"))
+			m = load_manifest(path)
+			assert m.artifacts[0].package_deps[0].version == "1"
+
+	def test_three_part_exact_pin_rejected(self) -> None:
+		"""`"0.3.14"` → targeted diagnostic pointing at `"0.3"`."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3.14"))
+			with pytest.raises(ManifestError) as exc:
+				load_manifest(path)
+			msg = str(exc.value)
+			assert "exact version '0.3.14'" in msg
+			assert "'0.3'" in msg  # suggested replacement
+			assert "drift/lock.json" in msg  # points at correct layer
+			assert "declared acceptable range" in msg  # positive framing
+
+	def test_caret_range_rejected(self) -> None:
+		"""`"^0.3.0"` → targeted diagnostic about `^` removal."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("^0.3.0"))
+			with pytest.raises(ManifestError) as exc:
+				load_manifest(path)
+			msg = str(exc.value)
+			assert "^" in msg
+			assert "0.3" in msg
+
+	def test_tilde_range_rejected(self) -> None:
+		"""`"~0.3.14"` → targeted diagnostic about `~` removal."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("~0.3.14"))
+			with pytest.raises(ManifestError) as exc:
+				load_manifest(path)
+			msg = str(exc.value)
+			assert "~" in msg
+
+	def test_garbage_version_rejected(self) -> None:
+		"""Non-matching string → generic rejection with guidance."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("latest"))
+			with pytest.raises(ManifestError, match="declared acceptable range"):
+				load_manifest(path)
+
+	def test_four_part_rejected(self) -> None:
+		"""`"0.3.14.1"` must be rejected."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3.14.1"))
+			with pytest.raises(ManifestError, match="declared acceptable range"):
+				load_manifest(path)
+
+	def test_dotted_zero_rejected(self) -> None:
+		"""`"0."` (trailing dot) must be rejected."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0."))
+			with pytest.raises(ManifestError, match="declared acceptable range"):
+				load_manifest(path)
+
+	def test_no_compatibility_framing_in_diagnostics(self) -> None:
+		"""Diagnostics must not imply Drift enforces compatibility.
+		Drift only enforces the owner's declared range; semantic
+		compatibility is the owner's choice.  Keep 'compatible' /
+		'compatibility' out of the authored-manifest error text."""
+		for ver in ("0.3.14", "^0.3.0", "latest"):
+			with tempfile.TemporaryDirectory() as tmpdir:
+				path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version(ver))
+				with pytest.raises(ManifestError) as exc:
+					load_manifest(path)
+				msg = str(exc.value).lower()
+				assert "compatible" not in msg, (
+					f"diagnostic for '{ver}' uses 'compatible' framing; "
+					f"Drift does not enforce compatibility — use 'declared "
+					f"range' / 'acceptable range' instead.\nmsg: {msg}"
+				)
+				assert "compatibility" not in msg, (
+					f"diagnostic for '{ver}' uses 'compatibility' framing; "
+					f"Drift does not enforce compatibility — use 'declared "
+					f"range' / 'acceptable range' instead.\nmsg: {msg}"
+				)
+
+
+class TestManifestV1Rejection:
+	"""v1 manifests are no longer directly loadable.  The `drift
+	manifest migrate` subcommand (Phase 7) is the only path that
+	accepts v1; normal `load_manifest` reads reject with a pointer
+	to that subcommand.  This prevents silent acceptance of the old
+	exact-pin form."""
+
+	def test_v1_schema_version_rejected_with_migrate_pointer(self) -> None:
+		with tempfile.TemporaryDirectory() as tmpdir:
+			path = _write_manifest(Path(tmpdir), {
+				"schema_version": 1,
+				"project": {"name": "x", "license": "MIT"},
+				"artifacts": [{"kind": "package", "name": "x", "version": "1.0.0",
+					"description": "x", "entry_module": "x.drift", "modules": ["x/"]}],
+			})
+			with pytest.raises(ManifestError) as exc:
+				load_manifest(path)
+			msg = str(exc.value)
+			assert "schema v1" in msg
+			assert "drift manifest migrate" in msg
+			assert "drift/lock.json" in msg

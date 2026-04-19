@@ -16,16 +16,24 @@ from pathlib import Path
 from typing import Any
 
 from tools.drift_deploy.semver import Constraint, SemVer, parse_constraint, parse_version
+from lang.driftc.packages.dmir_pkg_v0 import is_owner_declared_range
 
 
 @dataclass(frozen=True)
 class PackageEntry:
-	"""A discovered package in the package index."""
+	"""A discovered package in the package index.
+
+	`required_deps` is the producer's published consumer-facing
+	requirement (ranges, drawn from the producer's manifest
+	`package_deps` at publish time).  Consumers walk this
+	transitively to build their own exact lock.  Never carries
+	lock-exact pins.
+	"""
 	package_id: str
 	version: SemVer
 	path: Path
 	sha256: str
-	package_deps: list[tuple[str, str]]  # [(dep_name, constraint_string), ...]
+	required_deps: list[tuple[str, str]]  # [(dep_name, range_string), ...]
 	author_key: str = ""  # "ed25519:<kid>" from signature sidecar
 
 
@@ -38,14 +46,19 @@ class ConstraintEntry:
 
 @dataclass(frozen=True)
 class ResolvedDep:
-	"""A single resolved dependency.
+	"""A single resolved dependency entry as it appears in a lock v3.
 
-	v2 lock: version is major.minor compatibility range (e.g. "0.3"),
-	author_key is the signing key kid, integrity is unused.
-	v1 legacy: version is exact, integrity is sha256 of artifact bytes.
+	Under the 0.29 two-layer model the lock records the exact
+	resolved artifact, not a range: `version` is `M.N.P`, `sha256`
+	is the hex digest of the `.dmp` file, `author_key` is the
+	trusted signer kid, `dep_type` is `"direct"`, `"transitive"`, or
+	`"co-artifact"`.  Build/deploy re-check all three (version, sha,
+	key) against the on-disk package at load time; any mismatch is
+	rejected and `drift prepare` is the only sanctioned path to
+	refresh.
 	"""
-	version: str  # v2: "major.minor" range; v1: exact version
-	integrity: str  # v1: "sha256:<hex>"; v2: "" (unused)
+	version: str  # exact M.N.P under v3 lock; range string only in pre-resolution intermediate structures
+	sha256: str  # hex digest of the resolved .dmp file ("" for co-artifact deps)
 	dep_type: str  # "direct", "transitive", or "co-artifact"
 	package_id: str = ""  # package name
 	author_key: str = ""  # "ed25519:<kid>" of signer
@@ -212,16 +225,68 @@ def build_package_index(
 				continue  # later root, skip
 			seen[key] = _find_root(dmp_path, package_roots)
 
-			# Extract package_deps from manifest.
-			raw_deps = manifest.get("package_deps", [])
-			pkg_deps: list[tuple[str, str]] = []
-			if isinstance(raw_deps, list):
-				for dep in raw_deps:
-					if isinstance(dep, dict):
-						name = dep.get("name")
-						ver = dep.get("version")
-						if isinstance(name, str) and isinstance(ver, str):
-							pkg_deps.append((name, ver))
+			# Extract required_deps from .dmp manifest.  Under v3
+			# the field is `required_deps` (owner-declared range per
+			# dep, copied from the producer's manifest `package_deps`
+			# at publish time).  Pre-cut `.dmp`s still carry the
+			# legacy `package_deps` key — we reject those here with
+			# a clear republish-required diagnostic rather than
+			# silently reinterpreting the old field as the new
+			# (which would leak producer-side shapes through the
+			# consumer boundary).
+			if "package_deps" in manifest:
+				raise ResolutionError(
+					f"package at {dmp_path} contains legacy `package_deps` "
+					"metadata — this package was published with a pre-0.29 "
+					"toolchain and must be republished with toolchain >= "
+					"0.29.0.  v3 packages expose `required_deps` (owner-"
+					"declared ranges) instead of the legacy key"
+				)
+			# Strict validation: every entry must be a well-formed
+			# object with non-empty `name` and an `"M"` / `"M.N"`
+			# range in `version`.  The default `.dmp` loader already
+			# applies these rules via `_parse_required_deps`, but
+			# `build_package_index` accepts a caller-supplied
+			# `load_manifest` callable (custom loaders in tests).
+			# Applying the same rules here prevents a custom loader
+			# from smuggling malformed metadata past the resolver
+			# and into a lock that the strict consumer-side verifier
+			# would later reject.
+			raw_deps = manifest.get("required_deps", [])
+			req_deps: list[tuple[str, str]] = []
+			if raw_deps is None:
+				raw_deps = []
+			if not isinstance(raw_deps, list):
+				raise ResolutionError(
+					f"package at {dmp_path}: `required_deps` must be an array"
+				)
+			for i, dep in enumerate(raw_deps):
+				if not isinstance(dep, dict):
+					raise ResolutionError(
+						f"package at {dmp_path}: required_deps[{i}] must be an object"
+					)
+				name = dep.get("name")
+				ver = dep.get("version")
+				if not isinstance(name, str) or not name:
+					raise ResolutionError(
+						f"package at {dmp_path}: required_deps[{i}].name "
+						f"must be a non-empty string"
+					)
+				if not isinstance(ver, str) or not ver:
+					raise ResolutionError(
+						f"package at {dmp_path}: required_deps[{i}].version "
+						f"must be a non-empty string"
+					)
+				if not is_owner_declared_range(ver):
+					raise ResolutionError(
+						f"package at {dmp_path}: required_deps[{i}] "
+						f"('{name}') version '{ver}' is not a valid "
+						f"owner-declared range — `.dmp` metadata must "
+						f"carry `\"M\"` (any M.x.x) or `\"M.N\"` (any "
+						f"M.N.x).  Exact pins, `^`/`~` ranges, and other "
+						f"shapes are malformed"
+					)
+				req_deps.append((name, ver))
 
 			sha = _sha256_file(dmp_path)
 			# Extract author_key from adjacent .sig sidecar.
@@ -231,7 +296,7 @@ def build_package_index(
 				version=pkg_ver,
 				path=dmp_path,
 				sha256=sha,
-				package_deps=pkg_deps,
+				required_deps=req_deps,
 				author_key=ak,
 			)
 			index.setdefault(pkg_id, []).append(entry)
@@ -343,7 +408,7 @@ def resolve_artifact(
 		resolved[pkg_id] = (selected.version, selected)
 
 		# 3g: Load transitive deps.
-		for tdep_name, tdep_constraint_str in selected.package_deps:
+		for tdep_name, tdep_constraint_str in selected.required_deps:
 			try:
 				tc = parse_constraint(tdep_constraint_str)
 			except ValueError:
@@ -369,12 +434,15 @@ def resolve_artifact(
 			else:
 				work_queue.add(tdep_name)
 
-	# Step 4: Build result.
+	# Step 4: Build result.  Each resolved entry carries the exact
+	# `M.N.P` version of the picked candidate plus the candidate's
+	# sha256 — both are load-bearing at build time under the v3 lock
+	# contract (exact version + sha256 + author_key re-checked).
 	result: dict[str, ResolvedDep] = {}
 	for pkg_id, (ver, entry) in resolved.items():
 		result[pkg_id] = ResolvedDep(
 			version=str(ver),
-			integrity="",
+			sha256=entry.sha256,
 			dep_type="direct" if pkg_id in direct_set else "transitive",
 			package_id=pkg_id,
 			author_key=entry.author_key,

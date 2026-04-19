@@ -88,10 +88,75 @@ class NativeDepEntry:
 
 
 @dataclass(frozen=True)
-class PackageDepEntry:
-	"""A Drift package dependency declared by a package."""
+class RequiredDepEntry:
+	"""A dependency requirement published in a package's .dmp metadata.
+
+	Mirrors the producer's authored `manifest.json::package_deps`
+	entry; `version` is the owner's declared acceptable range
+	(`"M"` or `"M.N"`).  Exact pins and `^`/`~` operators are not
+	accepted — those are either internal lock-v3 shapes or
+	pre-cut artifacts.
+	"""
 	name: str
-	version: str  # semver constraint string
+	version: str  # owner-declared range: "M" or "M.N"
+
+
+# Back-compat alias — some existing code imports `PackageDepEntry`
+# from this module.  Remove once external callers are swept.
+PackageDepEntry = RequiredDepEntry
+
+
+# Owner-declared acceptable range shape — the single canonical
+# validator for the `"M"` / `"M.N"` vocabulary.  Used across four
+# surfaces that all share the same shape contract:
+#
+# - Authored manifest `package_deps[].version`
+#   (`tools/drift_deploy/manifest.py`).
+# - Producer-side `--package-dep NAME=VERSION` emit validation
+#   (`lang/driftc/driftc.py` before writing `required_deps` into a
+#   `.dmp`).
+# - Published `.dmp` `required_deps[].version` load validation
+#   (`_parse_required_deps` below).
+# - Consumer-side `build_package_index` manifest parse
+#   (`tools/drift_deploy/resolver.py`).
+#
+# Centralising the shape here avoids maintenance drift across the
+# four layers.  Import direction is tooling → compiler; the compiler
+# never imports from `tools/drift_deploy/`.
+#
+# Scope guardrail: this module defines the `.dmp` v0 container format
+# and the version-shape contracts the container's manifest carries.
+# `is_owner_declared_range` lives here *only* because the shape is
+# baked into the published `.dmp` manifest — every surface that reads
+# or writes a `.dmp` needs the same validator.  Do not expand this
+# file into a catch-all for resolver, deploy, CLI, or signing policy
+# just because compiler and tooling both import it.  If a second
+# cross-cutting helper appears (resolution algorithms, lock-schema
+# helpers, sidecar provenance rules, trust policy, etc.), extract it
+# to a neutral module — candidates: `lang/driftc/packages/ranges.py`
+# for pure shape validators, or a new `tools/drift_deploy/policy.py`
+# for tooling-only policy — rather than piling it on here.  Keeping
+# `dmir_pkg_v0.py` narrowly about the v0 container format preserves
+# the clean import direction (tooling → compiler, never the reverse)
+# and the clean boundary between "what is physically in a `.dmp`" and
+# "what the resolver/build/deploy pipeline does with that data".
+import re as _re_required
+_REQUIRED_DEP_RANGE_RE = _re_required.compile(r"^(\d+)(?:\.(\d+))?$")
+
+
+def is_owner_declared_range(version: str) -> bool:
+	"""True iff `version` is a valid owner-declared acceptable range.
+
+	Accepted shapes:
+	- `"M"` — any `M.x.x` release.
+	- `"M.N"` — any `M.N.x` release.
+
+	Everything else (exact `M.N.P` pins, `^M.N.P` / `~M.N.P` range
+	operators, empty string, garbage) returns False.  Callers that
+	accept the range typically follow up a False return with a
+	targeted diagnostic.
+	"""
+	return bool(_REQUIRED_DEP_RANGE_RE.match(version))
 
 
 def _parse_native_deps(manifest: dict[str, Any]) -> list[NativeDepEntry]:
@@ -115,30 +180,69 @@ def _parse_native_deps(manifest: dict[str, Any]) -> list[NativeDepEntry]:
 	return result
 
 
-def _parse_package_deps(manifest: dict[str, Any]) -> list[PackageDepEntry]:
-	"""Extract package_deps from a .dmp manifest.  Returns [] if absent; raises on malformed."""
-	pd = manifest.get("package_deps")
-	if pd is None:
+def _parse_required_deps(manifest: dict[str, Any]) -> list[RequiredDepEntry]:
+	"""Extract `required_deps` from a .dmp manifest.
+
+	Returns `[]` if the key is absent AND the package has no legacy
+	`package_deps` key either — the package has no dependencies.
+
+	Rejects:
+	- Pre-cut `.dmp`s: if the manifest still carries a legacy
+	  `package_deps` key, the package was published with a pre-0.29
+	  toolchain and must be republished.  No compatibility shim.
+	- Malformed entries: missing `name`/`version`, non-object
+	  entries, or `version` strings that are not `"M"` or `"M.N"`
+	  (the owner-declared acceptable-range shape).  Exact pins,
+	  `^`/`~` ranges, and garbage are rejected here so the
+	  compiler's `_pkg_exact_satisfies_range` sanity helper never
+	  sees malformed data.
+	"""
+	if "package_deps" in manifest:
+		raise ValueError(
+			"package contains legacy `package_deps` metadata key — "
+			"this package was published with a pre-0.29 toolchain and "
+			"must be republished with toolchain >= 0.29.0.  v3 "
+			"packages expose `required_deps` (owner-declared ranges) "
+			"instead of the legacy `package_deps` key"
+		)
+	rd = manifest.get("required_deps")
+	if rd is None:
 		return []
-	if not isinstance(pd, list):
-		raise ValueError("package_deps must be an array")
-	result: list[PackageDepEntry] = []
-	for i, entry in enumerate(pd):
+	if not isinstance(rd, list):
+		raise ValueError("required_deps must be an array")
+	result: list[RequiredDepEntry] = []
+	for i, entry in enumerate(rd):
 		if not isinstance(entry, dict):
-			raise ValueError(f"package_deps[{i}] must be an object")
+			raise ValueError(f"required_deps[{i}] must be an object")
 		name = entry.get("name")
 		if not isinstance(name, str) or not name:
-			raise ValueError(f"package_deps[{i}].name must be a non-empty string")
+			raise ValueError(f"required_deps[{i}].name must be a non-empty string")
 		version = entry.get("version")
 		if not isinstance(version, str) or not version:
-			raise ValueError(f"package_deps[{i}].version must be a non-empty string")
-		result.append(PackageDepEntry(name=name, version=version))
+			raise ValueError(f"required_deps[{i}].version must be a non-empty string")
+		if not is_owner_declared_range(version):
+			raise ValueError(
+				f"required_deps[{i}] ('{name}') version '{version}' is not a "
+				f"valid owner-declared range — `.dmp` metadata must carry "
+				f"`\"M\"` (any M.x.x) or `\"M.N\"` (any M.N.x), drawn from "
+				f"the producer's manifest package_deps.  Exact pins, "
+				f"`^`/`~` ranges, and other shapes are malformed"
+			)
+		result.append(RequiredDepEntry(name=name, version=version))
 	return result
 
 
 @dataclass(frozen=True)
 class LoadedPackage:
-	"""A fully verified, decoded package container."""
+	"""A fully verified, decoded package container.
+
+	`required_deps` carries the producer's published consumer-facing
+	dependency requirements (ranges from the producer's manifest
+	`package_deps`).  Distinct from:
+
+	- `manifest.py::Artifact.package_deps` — owner-authored source.
+	- lock `deps` — exact resolved graph for an artifact.
+	"""
 
 	path: Path
 	manifest: dict[str, Any]
@@ -146,7 +250,7 @@ class LoadedPackage:
 	modules_by_id: dict[str, PackageModule]
 	blobs_by_sha256: dict[str, bytes]
 	native_deps: list[NativeDepEntry]
-	package_deps: list[PackageDepEntry]
+	required_deps: list[RequiredDepEntry]
 
 
 def _encode_name_prefix(name: str) -> tuple[int, bytes]:
@@ -358,7 +462,7 @@ def _load_dmir_pkg_v0_impl(f, file_size: int, source_path: Path) -> LoadedPackag
 		modules_by_id=modules_by_id,
 		blobs_by_sha256=blobs_by_sha,
 		native_deps=_parse_native_deps(manifest_obj),
-		package_deps=_parse_package_deps(manifest_obj),
+		required_deps=_parse_required_deps(manifest_obj),
 	)
 
 

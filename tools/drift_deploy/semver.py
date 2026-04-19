@@ -2,10 +2,32 @@
 """
 Minimal semver parsing and constraint matching.
 
-Supports:
-- Exact: "1.2.3"
-- Caret: "^1.2.3" (>=1.2.3, <2.0.0)
-- Tilde: "~1.2.3" (>=1.2.3, <1.3.0)
+Constraint forms accepted by v2-manifest authors (the "declared
+acceptable range" the package owner chooses):
+
+- **`"major"`** — owner accepts any `major.x.x` release.
+  Example: `"1"` matches `1.0.0`, `1.4.7`, `1.99.0`.
+- **`"major.minor"`** — owner accepts any `major.minor.x` release.
+  Example: `"0.3"` matches `0.3.0`, `0.3.14`.
+
+Additional forms the parser accepts for **internal, non-manifest**
+use — explicitly NOT a compatibility shim for pre-cut packages,
+which are clean-break rejected at load time:
+
+- Exact: `"1.2.3"` — used by lock-v3 entries (exact resolved
+  artifacts) and by the v1→v2 manifest migration path.
+- Caret: `"^1.2.3"` — unit-test vocabulary in resolver/conflict
+  tests that exercise the matching algorithm.
+- Tilde: `"~1.2.3"` — same: unit-test vocabulary only.
+
+These forms have no path from `.dmp`-carried `required_deps` into
+the resolver — pre-cut packages without v2 `required_deps` are
+rejected at consume time (Phase 4).
+
+Drift's resolver does not decide semantic compatibility.  Given the
+owner-declared range, it simply picks the highest trusted candidate
+whose exact version satisfies the range.  The owner decides how
+permissive that range is.
 
 No pre-release or build metadata in MVP.
 """
@@ -18,6 +40,8 @@ from functools import total_ordering
 
 
 _VER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_RANGE_MN_RE = re.compile(r"^(\d+)\.(\d+)$")
+_RANGE_M_RE = re.compile(r"^(\d+)$")
 
 
 @total_ordering
@@ -53,15 +77,34 @@ def parse_version(s: str) -> SemVer:
 
 @dataclass(frozen=True)
 class Constraint:
-	"""A semver range constraint."""
+	"""A semver range: the set of concrete versions an owner-declared
+	range string accepts.
+
+	`kind` values:
+
+	- `"major_range"` — constraint string is `"M"`.  Satisfied by any
+	  `M.x.x`.  `base.minor` / `base.patch` are 0 but not used in
+	  matching; only `major` is consulted.
+	- `"minor_range"` — constraint string is `"M.N"`.  Satisfied by
+	  any `M.N.x`.  `base.patch` is 0 and unused.
+	- `"exact"`, `"caret"`, `"tilde"` — internal use only (lock-v3
+	  exact entries, v1→v2 manifest migration, resolver unit tests).
+	  Not accepted in authored v2 manifests; no path from `.dmp`
+	  `required_deps` into these forms (pre-cut packages are
+	  rejected at consume time).
+	"""
 	raw: str
-	kind: str  # "exact", "caret", "tilde"
+	kind: str  # "major_range", "minor_range", "exact", "caret", "tilde"
 	base: SemVer
 
 	def __str__(self) -> str:
 		return self.raw
 
 	def satisfies(self, ver: SemVer) -> bool:
+		if self.kind == "major_range":
+			return ver.major == self.base.major
+		if self.kind == "minor_range":
+			return ver.major == self.base.major and ver.minor == self.base.minor
 		if self.kind == "exact":
 			return ver == self.base
 		if self.kind == "caret":
@@ -86,5 +129,17 @@ def parse_constraint(s: str) -> Constraint:
 	if s.startswith("~"):
 		base = parse_version(s[1:])
 		return Constraint(raw=s, kind="tilde", base=base)
+	# Canonical v2-manifest forms: `"M"` → major_range, `"M.N"` →
+	# minor_range.  Prefer these matches over the 3-part exact form
+	# so `"0"` and `"0.3"` are unambiguously ranges, not attempts at
+	# exact semvers.
+	m_mn = _RANGE_MN_RE.match(s)
+	if m_mn:
+		base = SemVer(int(m_mn.group(1)), int(m_mn.group(2)), 0)
+		return Constraint(raw=s, kind="minor_range", base=base)
+	m_m = _RANGE_M_RE.match(s)
+	if m_m:
+		base = SemVer(int(m_m.group(1)), 0, 0)
+		return Constraint(raw=s, kind="major_range", base=base)
 	base = parse_version(s)
 	return Constraint(raw=s, kind="exact", base=base)

@@ -128,15 +128,16 @@ def build_package_cmd(
 	for nd in art.native_deps:
 		cmd.extend(["--native-link-lib", nd.lib])
 
-	# Package dep declarations: only DIRECT deps (from manifest), but
-	# using the exact resolved version — not the manifest's author-intent
-	# range.  Transitive deps are NOT declared as package deps; they only
-	# appear via --dep for compiler version selection.
+	# Package dep declarations: only DIRECT deps (from manifest), and
+	# they carry the **manifest's owner-declared range**, NOT the
+	# lock's exact version.  This is the published constraint a
+	# downstream consumer sees — shipping a producer's exact pin
+	# here would leak the producer's local lock into consumer
+	# resolution, forcing every intermediate library to republish on
+	# every upstream patch bump.  Transitive deps do NOT appear here;
+	# they flow to the compiler only via --dep (exact, from lock).
 	for pd in art.package_deps:
-		if pd.name in resolved_deps:
-			cmd.extend(["--package-dep", f"{pd.name}={resolved_deps[pd.name].version}"])
-		else:
-			cmd.extend(["--package-dep", f"{pd.name}={pd.version}"])
+		cmd.extend(["--package-dep", f"{pd.name}={pd.version}"])
 
 	# Exact resolved versions via --dep (compiler version selection).
 	cmd.extend(expand_to_dep_flags(resolved_deps))

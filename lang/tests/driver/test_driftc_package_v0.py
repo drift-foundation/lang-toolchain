@@ -4367,8 +4367,10 @@ def test_native_deps_absent_is_empty(tmp_path: Path) -> None:
 	assert loaded.native_deps == []
 
 
-def test_package_deps_manifest_roundtrip(tmp_path: Path) -> None:
-	"""Build a package with --package-dep, load it, verify package_deps in manifest."""
+def test_required_deps_manifest_roundtrip(tmp_path: Path) -> None:
+	"""Build a package with --package-dep, load it, verify `required_deps`
+	in the .dmp manifest carries the owner-declared range shape
+	(M or M.N) drawn from the CLI flag."""
 	pkg_path = tmp_path / "lib.dmp"
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
@@ -4382,24 +4384,29 @@ def test_package_deps_manifest_roundtrip(tmp_path: Path) -> None:
 			str(module_dir / "lib.drift"),
 			*_emit_pkg_args("acme.lib"),
 			"--package-dep",
-			"net.tls=^0.3.0",
+			"net.tls=0.3",
 			"--package-dep",
-			"acme.crypto=~1.0.0",
+			"acme.crypto=1.0",
 			"--emit-package",
 			str(pkg_path),
 		]
 	)
 	assert rc == 0, "emit-package with --package-dep should succeed"
 	loaded = load_package_v0(pkg_path)
-	assert len(loaded.package_deps) == 2
-	assert loaded.package_deps[0].name == "net.tls"
-	assert loaded.package_deps[0].version == "^0.3.0"
-	assert loaded.package_deps[1].name == "acme.crypto"
-	assert loaded.package_deps[1].version == "~1.0.0"
-	# Verify manifest structure
-	pd = loaded.manifest.get("package_deps")
-	assert isinstance(pd, list)
-	assert len(pd) == 2
+	# LoadedPackage.required_deps (v3 field name).
+	assert len(loaded.required_deps) == 2
+	assert loaded.required_deps[0].name == "net.tls"
+	assert loaded.required_deps[0].version == "0.3"
+	assert loaded.required_deps[1].name == "acme.crypto"
+	assert loaded.required_deps[1].version == "1.0"
+	# Manifest JSON carries the v3 `required_deps` key — NOT the
+	# legacy `package_deps` key that pre-cut toolchains emitted.
+	rd = loaded.manifest.get("required_deps")
+	assert isinstance(rd, list)
+	assert len(rd) == 2
+	assert loaded.manifest.get("package_deps") is None, (
+		"pre-cut `package_deps` key must not appear in v3 .dmp manifests"
+	)
 
 
 # ── Consumer auto-link behavior tests ────────────────────────────────────────
@@ -4537,11 +4544,11 @@ class TestConsumerAutoLink:
 		assert "acme.lib" in res.stderr, f"expected package id 'acme.lib' in diagnostic hint:\n{res.stderr}"
 
 
-def test_package_deps_absent_is_empty(tmp_path: Path) -> None:
-	"""Load a package without package_deps — defaults to empty list."""
+def test_required_deps_absent_is_empty(tmp_path: Path) -> None:
+	"""Load a package without required_deps — defaults to empty list."""
 	pkg_path = _emit_lib_pkg(tmp_path)
 	loaded = load_package_v0(pkg_path)
-	assert loaded.package_deps == []
+	assert loaded.required_deps == []
 
 
 def test_package_dep_bad_format_rejected(tmp_path: Path) -> None:
@@ -4566,8 +4573,8 @@ def test_package_dep_bad_format_rejected(tmp_path: Path) -> None:
 	assert rc == 1, "--package-dep without =VERSION should fail"
 
 
-def test_native_deps_and_package_deps_combined(tmp_path: Path) -> None:
-	"""Build a package with both native and package deps."""
+def test_native_deps_and_required_deps_combined(tmp_path: Path) -> None:
+	"""Build a package with both native and required deps."""
 	pkg_path = tmp_path / "lib.dmp"
 	module_dir = tmp_path / "acme" / "lib"
 	_write_file(
@@ -4583,7 +4590,7 @@ def test_native_deps_and_package_deps_combined(tmp_path: Path) -> None:
 			"--native-link-lib",
 			"ssl",
 			"--package-dep",
-			"net.tls=^0.3.0",
+			"net.tls=0.3",
 			"--emit-package",
 			str(pkg_path),
 		]
@@ -4592,8 +4599,9 @@ def test_native_deps_and_package_deps_combined(tmp_path: Path) -> None:
 	loaded = load_package_v0(pkg_path)
 	assert len(loaded.native_deps) == 1
 	assert loaded.native_deps[0].lib == "ssl"
-	assert len(loaded.package_deps) == 1
-	assert loaded.package_deps[0].name == "net.tls"
+	assert len(loaded.required_deps) == 1
+	assert loaded.required_deps[0].name == "net.tls"
+	assert loaded.required_deps[0].version == "0.3"
 
 
 # ── Version selection tests ──────────────────────────────────────────────────
@@ -5608,4 +5616,162 @@ def test_different_target_across_roots_reports_conflict(tmp_path: Path, capsys) 
 	assert "multiple versions/targets" in captured.err, (
 		"error should come from the dedup version/target check, "
 		"not from an earlier validation gate"
+	)
+
+
+def test_required_deps_legacy_package_deps_key_rejected(tmp_path: Path) -> None:
+	"""Pre-cut `.dmp`s that carry the legacy `package_deps` key
+	(instead of v3's `required_deps`) must be rejected at load
+	with a clear republish-required diagnostic.  No compatibility
+	shim — the producer's shape changed in 0.29 and consumers
+	depend on that boundary to prevent silent range/pin confusion.
+	"""
+	from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+	pkg_path = tmp_path / "legacy.dmp"
+	manifest_obj = {
+		"format": "dmir-pkg",
+		"format_version": 0,
+		"package_id": "legacy.pkg",
+		"package_version": "0.1.0",
+		"target": "test-target",
+		"abi_fingerprint": "test",
+		"unsigned": True,
+		"unstable_format": True,
+		"payload_kind": "provisional-dmir",
+		"payload_version": 0,
+		"modules": [],
+		"blobs": {},
+		# Legacy pre-cut key — producers running pre-0.29 toolchains
+		# emitted this.  v3 consumers must reject it.
+		"package_deps": [
+			{"name": "net.tls", "version": "0.3"},
+		],
+	}
+	write_dmir_pkg_v0(pkg_path, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+
+	with pytest.raises(ValueError) as exc:
+		load_package_v0(pkg_path)
+	msg = str(exc.value)
+	assert "legacy `package_deps`" in msg
+	assert "0.29.0" in msg
+	assert "republished" in msg
+
+
+def test_required_deps_malformed_range_rejected_at_load(tmp_path: Path) -> None:
+	"""Malformed `required_deps` metadata — exact pins, `^`/`~`
+	ranges, or garbage — must be rejected at package-load time,
+	before the compiler's `_pkg_exact_satisfies_range` sanity helper
+	sees it.  Consumers trust that post-load required_deps entries
+	carry well-formed owner-declared ranges (M or M.N).
+	"""
+	from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+	for bad_ver in ("0.3.14", "^0.3.0", "~0.3.14", "latest", "0.3.14.1"):
+		pkg_path = tmp_path / f"bad-{bad_ver.replace('.', '_').replace('^', 'c').replace('~', 't')}.dmp"
+		manifest_obj = {
+			"format": "dmir-pkg",
+			"format_version": 0,
+			"package_id": "bad.pkg",
+			"package_version": "0.1.0",
+			"target": "test-target",
+			"abi_fingerprint": "test",
+			"unsigned": True,
+			"unstable_format": True,
+			"payload_kind": "provisional-dmir",
+			"payload_version": 0,
+			"modules": [],
+			"blobs": {},
+			"required_deps": [
+				{"name": "net.tls", "version": bad_ver},
+			],
+		}
+		write_dmir_pkg_v0(pkg_path, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
+		with pytest.raises(ValueError) as exc:
+			load_package_v0(pkg_path)
+		msg = str(exc.value)
+		assert "required_deps" in msg, (
+			f"diagnostic for bad version '{bad_ver}' must mention "
+			f"required_deps; got: {msg}"
+		)
+		assert bad_ver in msg
+
+
+def test_package_dep_invalid_range_rejected_at_emit(tmp_path: Path) -> None:
+	"""Finding #2 regression: `--package-dep NAME=VERSION` emission
+	validates VERSION is `M` or `M.N` (the owner-declared range
+	shape).  Hand-driven CLI use cannot emit a .dmp with malformed
+	required_deps metadata.  The producer-side guard catches this
+	before writing the .dmp; otherwise a later consumer load would
+	reject it, which is too late — the artifact would already be on
+	disk."""
+	module_dir = tmp_path / "acme" / "lib"
+	_write_file(
+		module_dir / "lib.drift",
+		"module acme.lib;\n\nexport { add };\n\npub fn add(a: Int, b: Int) nothrow -> Int {\n\treturn a + b;\n}\n",
+	)
+	for bad_ver in ("0.3.14", "^0.3.0", "~0.3.14", "latest", ""):
+		rc = driftc_main(
+			[
+				"-M",
+				str(tmp_path),
+				str(module_dir / "lib.drift"),
+				*_emit_pkg_args("acme.lib"),
+				"--package-dep",
+				f"net.tls={bad_ver}",
+				"--emit-package",
+				str(tmp_path / f"bad-{bad_ver.replace('.', '_').replace('^', 'c').replace('~', 't') or 'empty'}.dmp"),
+			]
+		)
+		assert rc == 1, (
+			f"--package-dep 'net.tls={bad_ver}' should be rejected at emit"
+		)
+
+
+def test_driftc_rejects_missing_dep_pin_for_required_dep(tmp_path: Path) -> None:
+	"""Finding #1 regression: driftc does NOT auto-expand transitive
+	required_deps.  If a loaded package declares a required_deps
+	entry that the consumer did not pin via `--dep`, driftc must
+	hard-fail with a clear diagnostic pointing at `drift prepare`.
+	This preserves the invariant that driftc is an exact loader —
+	it never invents an exact version from a range.
+	"""
+	# Build a package 'dep.a' that declares a required_dep on 'dep.b'.
+	from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
+	pkg_root = tmp_path / "pkg_root"
+	pkg_root.mkdir()
+	dep_a_dir = pkg_root / "dep.a" / "1.0.0"
+	dep_a_dir.mkdir(parents=True)
+	dep_a_path = dep_a_dir / "dep.a.dmp"
+	write_dmir_pkg_v0(dep_a_path, manifest_obj={
+		"format": "dmir-pkg",
+		"format_version": 0,
+		"package_id": "dep.a",
+		"package_version": "1.0.0",
+		"target": "test-target",
+		"abi_fingerprint": "test",
+		"unsigned": True,
+		"unstable_format": True,
+		"payload_kind": "provisional-dmir",
+		"payload_version": 0,
+		"modules": [],
+		"blobs": {},
+		"required_deps": [
+			{"name": "dep.b", "version": "0.1"},
+		],
+	}, blobs={}, blob_types={}, blob_names={})
+
+	# Consumer compile: pin ONLY dep.a, not dep.b.
+	main_src = tmp_path / "main.drift"
+	_write_file(main_src, "module main;\n\nfn main() nothrow -> Int { return 0; }\n")
+	ir_out = tmp_path / "main.ll"
+	rc = driftc_main([
+		"-M", str(tmp_path), str(main_src),
+		"--package-root", str(pkg_root),
+		"--allow-unsigned-from", str(pkg_root),
+		"--dep", "dep.a@1.0.0",
+		# No --dep for dep.b — driftc must hard-fail.
+		"--emit-ir", str(ir_out),
+	])
+	assert rc == 1, (
+		"driftc should reject a compile where a loaded package's "
+		"required_deps entry has no matching --dep pin"
 	)
