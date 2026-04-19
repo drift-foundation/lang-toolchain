@@ -90,19 +90,6 @@ def _sha256_file(path: Path) -> str:
 	return h.hexdigest()
 
 
-def version_compat_range(version: str) -> str:
-	"""Extract the major.minor compatibility range from a version string.
-
-	"0.3.14" → "0.3"
-	"1.2.0" → "1.2"
-	"0.3" → "0.3"
-	"""
-	parts = version.split(".")
-	if len(parts) >= 2:
-		return f"{parts[0]}.{parts[1]}"
-	return version
-
-
 def _read_author_key(dmp_path: Path) -> str:
 	"""Extract the first signing key id from the .sig sidecar adjacent to a .dmp/.zdmp."""
 	for suffix in (".sig",):
