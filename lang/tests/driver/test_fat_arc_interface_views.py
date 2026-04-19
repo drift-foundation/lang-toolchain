@@ -657,3 +657,136 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 		f"helper-instantiation skips for `is_arc_fat_layout_instance` "
 		f"failed, and a structurally-invalid thin helper was emitted"
 	)
+
+
+def test_std_log_config_builder_no_leak_in_ir(tmp_path: Path) -> None:
+	"""Pin the `std.log::config_builder` leak shape that broke on the
+	initial 0.28.0 / ABI 10 cut (mariadb downstream valgrind report):
+	24 bytes definitely lost, stack attributed to
+	`std.log::config_builder → drift_alloc_array`.
+
+	**Root cause — nested fat-field wrapper synthesis.**
+	The fat `Arc<ContextResolver>` lives inside
+	`LoggerConfigBuilder.resolver` (and, once built,
+	`LoggerConfig.resolver`); it is dropped as a field of an outer
+	aggregate, never as a direct `DropValue.ty`.  The fat-Arc
+	destructor synthesizer's original scope filter was strict-direct
+	(matched only `DropValue.ty` roots), so the nested fat Arc<I>
+	had no wrapper in `destructor_fns`, LLVM codegen's field-drop
+	walk called nothing, and the ArcBox leaked.  Fix expanded
+	`_fat_drop_targets` via the same transitive type-graph walk that
+	`_seed_destroy_type_graph` uses — struct fields, variant arm
+	payloads, and container element types — so any fat Arc<I>
+	reachable from a reachable `DropValue.ty` via aggregate nesting
+	gets a wrapper.
+
+	Pinned by asserting (a) a `_arc_fat_destroy_wrapper__<N>` is
+	defined, (b) it is actually called (some outer struct drop
+	routes through it), and (c) `config_builder__impl` drops the
+	intermediate concrete `Arc<NoContextResolver>` via the thin
+	`_arc_destroy_impl__inst__<hash>` helper — confirming the
+	concrete-rvalue side of the expression is also dropped, not
+	just the fat handle in the returned builder.
+
+	The rvalue-temp `_register_drop_local` hardening added alongside
+	the synthesis fix (at `_lower_arc_as_interface_op` and
+	`_lower_arc_fat_intrinsic_call`) is defensive: upstream
+	normalization currently materializes these rvalues into
+	properly-registered locals before the fat-lowering's rvalue
+	branch fires, so that hardening is latent — verified by removing
+	either site and confirming valgrind stayed clean.  It remains
+	because `_local_types[...] = ty` without `_register_drop_local`
+	is a latent class of bug (locals recorded for typing but missing
+	from the scope's drop set) that future normalization changes
+	could expose.
+	"""
+	source = """
+module main;
+
+import std.log as log;
+
+fn main() nothrow -> Int {
+	val b = log.config_builder();
+	val _ = b.build();
+	return 0;
+}
+""".lstrip()
+	mod_root = tmp_path / "mods"
+	main_src = mod_root / "main" / "main.drift"
+	_write_file(main_src, source)
+	exe = tmp_path / "out"
+	root = stdlib_root()
+	args = [
+		"-M", str(mod_root),
+		str(main_src),
+		"-o", str(exe),
+		"--dev",
+	]
+	if root:
+		args += ["--stdlib-root", str(root)]
+	rc = driftc_main(args)
+	assert rc == 0, "driftc compile failed — see captured stderr"
+
+	ir_path = exe.with_suffix(".ll")
+	assert ir_path.exists(), f"expected IR at {ir_path}"
+	ir = ir_path.read_text(encoding="utf-8")
+
+	# ── Pin (a)+(b): fat destructor wrapper synthesis for the nested
+	# fat `Arc<ContextResolver>` field of LoggerConfig / builder.
+	wrapper_def_re = re.compile(
+		r'^define [^\n]*@"std\.concurrent::_arc_fat_destroy_wrapper__\d+"',
+		re.MULTILINE,
+	)
+	assert wrapper_def_re.search(ir), (
+		"no `_arc_fat_destroy_wrapper__<N>` definition in IR — the "
+		"fat-Arc destructor synthesizer did not produce a wrapper for "
+		"the `Arc<ContextResolver>` instance reachable only through "
+		"`LoggerConfigBuilder.resolver` / `LoggerConfig.resolver`.  "
+		"Check that `_fat_drop_targets` in `_synthesize_fat_arc_destructor_wrappers` "
+		"includes types transitively reachable from `DropValue.ty` via "
+		"struct fields — not only the direct `DropValue.ty` set."
+	)
+	assert 'call void @"std.concurrent::_arc_fat_destroy_wrapper__' in ir, (
+		"no call to `_arc_fat_destroy_wrapper__<N>` in IR — the "
+		"wrapper is defined but nothing drops the fat `Arc<I>` that "
+		"holds the std.log builder/config resolver; the outer struct "
+		"drop is walking the field without routing through the wrapper"
+	)
+
+	# ── Pin (c): the concrete side of the expression is also
+	# dropped.  `conc.arc(NoContextResolver()).as_interface<...>()`
+	# produces an intermediate concrete `Arc<NoContextResolver>`; its
+	# thin destroy (`_arc_destroy_impl__inst__<hash>`) must be
+	# emitted inside `config_builder__impl`.  Upstream normalization
+	# currently ensures this via standard rvalue-to-local lifting, so
+	# this pin guards against a future normalization change that
+	# stops covering the shape — in which case the fat-lowering's
+	# rvalue branch would become load-bearing and its
+	# `_register_drop_local` registration would be the only thing
+	# keeping this call in the IR.
+	impl_body_re = re.compile(
+		r'^define [^\n]*@"std\.log::config_builder__impl"[^\n]*\{\n(.*?)^\}$',
+		re.MULTILINE | re.DOTALL,
+	)
+	impl_match = impl_body_re.search(ir)
+	assert impl_match is not None, (
+		"could not locate `std.log::config_builder__impl` body in IR — "
+		"the test assumes the builder-construction helper is emitted "
+		"inline in this compile; if the emission symbol or structure "
+		"has changed, update the regex above."
+	)
+	impl_body = impl_match.group(1)
+	assert re.search(
+		r'call void @"std\.concurrent::_arc_destroy_impl__inst__[0-9a-f]+"',
+		impl_body,
+	), (
+		"no `_arc_destroy_impl__inst__<hash>` call in config_builder__impl "
+		"body — the concrete `Arc<NoContextResolver>` rvalue temp is "
+		"not being dropped at scope exit.  The `__borrow_tmp<N>` local "
+		"in `_lower_arc_as_interface_op` is missing its "
+		"`_register_drop_local(tmp_local, recv_ty)` registration, "
+		"leaving the temp out of the scope's drop set and leaving the "
+		"shared `ArcBox<NoContextResolver>` at strong=2 forever "
+		"(drop_thunk never fires; 24 bytes leaked per invocation).\n\n"
+		f"config_builder__impl body (first 2000 chars):\n{impl_body[:2000]}"
+	)

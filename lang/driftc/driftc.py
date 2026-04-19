@@ -1534,16 +1534,38 @@ def _synthesize_fat_arc_destructor_wrappers(
 	void_ty = type_table.ensure_void()
 	destructor_fns: dict[int, FunctionId] = dict(getattr(type_table, "destructor_fns", None) or {})
 	# Scope the synthesis to fat Arc<I> instances that actually need a
-	# destructor — the ones that appear as a `DropValue.ty` in some
-	# reachable MIR function.  Iterating all of `struct_instances` is
-	# too broad: the type-table picks up fat Arc<I> shapes from
-	# imported-but-unused stdlib surfaces (e.g. `LoggerConfig.resolver`
-	# when a consumer loads std.log signatures without touching the
-	# logger).  Synthesizing wrappers for those pulls
-	# `_arc_fat_drop_via_ctrl` and its callees into the consumer's
-	# reachable set, breaking minimal package-consumer builds that
-	# neither import `lang.atomic` nor do any Arc drop.
+	# destructor — the types reachable (directly or transitively via
+	# struct fields, variant arm payloads, or container element types)
+	# from any `DropValue.ty` in reachable MIR.  Iterating all of
+	# `struct_instances` is too broad: the type-table picks up fat
+	# Arc<I> shapes from imported-but-unused stdlib surfaces (e.g.
+	# `LoggerConfig.resolver` when a consumer loads std.log signatures
+	# without touching the logger).  Synthesizing wrappers for those
+	# pulls `_arc_fat_drop_via_ctrl` and its callees into the
+	# consumer's reachable set, breaking minimal package-consumer
+	# builds that neither import `lang.atomic` nor do any Arc drop.
+	#
+	# BUT: filtering strictly on direct `DropValue.ty` is too narrow
+	# — fat `Arc<I>` typically lives inside an aggregate that's
+	# dropped as a whole (LoggerConfig.resolver, LoggerConfigBuilder.
+	# resolver).  LLVM codegen walks struct fields recursively on
+	# drop, looking up `destructor_fns[field_ty]` per field; if the
+	# fat Arc<I> has no wrapper, the field drop is a no-op and the
+	# ArcBox leaks.  Expand the set via the same type-graph walk
+	# `_seed_destroy_type_graph` uses (struct fields + variant arm
+	# payloads + container element types).
+	#
+	# Known imprecision: the `param_types` leg of the walk follows
+	# every type parameter of every visited type, including those of
+	# non-owning containers (e.g. `Ref<T>`, `&T`).  That means we may
+	# synthesize a wrapper for a fat `Arc<I>` that appears only as a
+	# borrowed / referenced mention, not as an owned field.  This
+	# mirrors `_seed_destroy_type_graph`'s behaviour, so we match the
+	# existing precedent rather than introduce a stricter
+	# owning-only walk here; tightening is a follow-up that would
+	# have to coordinate with the other pass.
 	_fat_drop_targets: set[int] = set()
+	_tg_queue: list[int] = []
 	for _fn_id in list(reachable):
 		_fn = mir_pool.get(_fn_id)
 		if _fn is None:
@@ -1551,7 +1573,30 @@ def _synthesize_fat_arc_destructor_wrappers(
 		for _blk in _fn.blocks.values():
 			for _instr in _blk.instructions:
 				if isinstance(_instr, M.DropValue):
-					_fat_drop_targets.add(_instr.ty)
+					if _instr.ty not in _fat_drop_targets:
+						_fat_drop_targets.add(_instr.ty)
+						_tg_queue.append(_instr.ty)
+	while _tg_queue:
+		_ty = _tg_queue.pop()
+		_inst = type_table.get_struct_instance(_ty)
+		if _inst is not None:
+			for _field_ty in _inst.field_types:
+				if _field_ty not in _fat_drop_targets:
+					_fat_drop_targets.add(_field_ty)
+					_tg_queue.append(_field_ty)
+		_vinst = type_table.get_variant_instance(_ty)
+		if _vinst is not None:
+			for _arm in _vinst.arms:
+				for _field_ty in _arm.field_types:
+					if _field_ty not in _fat_drop_targets:
+						_fat_drop_targets.add(_field_ty)
+						_tg_queue.append(_field_ty)
+		_td = type_table.get(_ty)
+		if _td.param_types:
+			for _child_ty in _td.param_types:
+				if _child_ty not in _fat_drop_targets:
+					_fat_drop_targets.add(_child_ty)
+					_tg_queue.append(_child_ty)
 	added = 0
 	for arc_inst_id in list(type_table.struct_instances.keys()):
 		if not type_table.is_arc_fat_layout_instance(arc_inst_id):

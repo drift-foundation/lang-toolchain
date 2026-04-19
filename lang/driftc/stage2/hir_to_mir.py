@@ -7591,15 +7591,31 @@ class HIRToMIR:
 					# shared-borrow rvalue materialization (the thin
 					# Arc chained-rvalue tests rely on that same
 					# pattern via `&` on the implicit receiver).  The
-					# destroy-vars pass will pick up the temp by
-					# local type and emit the correct end-of-scope
-					# destruction — for fat Arc<I> that routes
-					# through the synthesized per-I fat destructor
-					# wrapper; the materialization does not itself
-					# register destruction.
+					# This branch handles fat `Arc<I>` receivers of
+					# `.clone()` / `.get()` (ARC_CLONE, ARC_GET) —
+					# e.g. `app.as_interface<type I>().clone()` or
+					# `app.as_interface<type I>().get().m()`, where
+					# the `.as_interface<I>()` result is a rvalue
+					# fat Arc<I>.  Call `_register_drop_local` as
+					# well as `_local_types[...] = ty`: the latter
+					# records typing only, the former adds the
+					# local to the scope's drop set that
+					# `_emit_scope_drops` iterates at scope exit.
+					# Today upstream normalization appears to
+					# materialize rvalue method receivers into
+					# proper locals before this branch is hit (the
+					# chained-rvalue tests stay green when this
+					# registration is removed), so this hardening
+					# is defensive.  It remains because relying on
+					# upstream normalization to cover every future
+					# shape is fragile — any normalization change
+					# that routes a fat-Arc rvalue through this
+					# branch would silently leak without the
+					# scope-drop registration.
 					tmp_local = f"__borrow_tmp{self.b.new_temp()}"
 					self.b.ensure_local(tmp_local)
 					self._local_types[tmp_local] = recv_ty
+					self._register_drop_local(tmp_local, recv_ty)
 					val = self.lower_expr(expr.receiver)
 					self.b.emit(M.StoreLocal(local=tmp_local, value=val))
 					recv_val = self.b.new_temp()
@@ -7777,13 +7793,26 @@ class HIRToMIR:
 			elif isinstance(expr.receiver, H.HVar):
 				place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
 			if place_expr is None:
-				# Rvalue receiver (chained shape like
-				# `arc(...).as_interface<I>()`) — materialize a
-				# borrowed temp.  Mirrors the `_visit_expr_HBorrow`
-				# rvalue-materialization pattern used elsewhere.
+				# Rvalue receiver (e.g. a chained shape like
+				# `arc(concrete).as_interface<I>()` when the
+				# `conc.arc(...)` call hasn't been normalized into
+				# a local upstream) — materialize a borrowed temp.
+				# Call both `_local_types[...] = ty` and
+				# `_register_drop_local`: typing alone does not add
+				# the local to the scope's drop set that
+				# `_emit_scope_drops` iterates.  Today upstream
+				# normalization appears to lift rvalue
+				# `conc.arc(...)` calls into proper locals before
+				# this branch fires (confirmed by removing this
+				# registration and seeing valgrind stay clean on
+				# the minimal std.log shape), so this is defensive
+				# hardening rather than a currently-load-bearing
+				# fix.  Kept to guard against future normalization
+				# changes that may stop covering every shape.
 				tmp_local = f"__borrow_tmp{self.b.new_temp()}"
 				self.b.ensure_local(tmp_local)
 				self._local_types[tmp_local] = recv_ty
+				self._register_drop_local(tmp_local, recv_ty)
 				val = self.lower_expr(expr.receiver)
 				self.b.emit(M.StoreLocal(local=tmp_local, value=val))
 				recv_val = self.b.new_temp()
