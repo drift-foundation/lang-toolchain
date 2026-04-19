@@ -453,3 +453,255 @@ class TestManifestV1Rejection:
 			assert "schema v1" in msg
 			assert "drift manifest migrate" in msg
 			assert "drift/lock.json" in msg
+
+
+class TestManifestMigrate:
+	"""Phase 7: explicit v1 → v2 migration via ``drift manifest migrate``.
+
+	Contract (pinned by these tests):
+
+	- migration is opt-in; normal reads never rewrite the file.
+	- per-dep rewrite: ``M.N.P`` → ``M.N``; ``M``/``M.N`` unchanged.
+	- unsupported shapes (``^``/``~``/garbage/4-part) fail all-or-nothing.
+	- running twice is a no-op.
+	- ``drift prepare`` does not silently migrate.
+	"""
+
+	def _v1(self, *, artifacts: list[dict]) -> dict:
+		return {
+			"schema_version": 1,
+			"project": {"name": "p", "license": "MIT"},
+			"artifacts": artifacts,
+		}
+
+	def _art(self, name: str, *, deps: list[dict] | None = None) -> dict:
+		out = {
+			"kind": "library", "name": name, "version": "1.0.0",
+			"description": name, "entry_module": f"{name}.drift",
+			"modules": [f"{name}/"],
+		}
+		if deps is not None:
+			out["package_deps"] = deps
+		return out
+
+	def test_v1_mnp_collapses_to_mn(self, tmp_path: Path) -> None:
+		"""Primary regression pin: `"net-tls": "0.3.14"` → `"0.3"`."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[{"name": "net-tls", "version": "0.3.14"}]),
+		]))
+		assert migrate(["--manifest", str(path)]) == 0
+		migrated = json.loads(path.read_text())
+		assert migrated["schema_version"] == 2
+		assert migrated["artifacts"][0]["package_deps"][0]["version"] == "0.3"
+		# Re-reading through the normal loader must now succeed.
+		manifest = load_manifest(path)
+		assert manifest.artifacts[0].package_deps[0].version == "0.3"
+
+	def test_v1_major_only_preserved(self, tmp_path: Path) -> None:
+		"""Already-valid owner-declared ranges survive migration byte-identical."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[
+				{"name": "dep-a", "version": "1"},       # owner range
+				{"name": "dep-b", "version": "2.7"},    # owner range
+				{"name": "dep-c", "version": "0.3.14"}, # v1 exact
+			]),
+		]))
+		assert migrate(["--manifest", str(path)]) == 0
+		deps = json.loads(path.read_text())["artifacts"][0]["package_deps"]
+		# M preserved; M.N preserved; M.N.P collapsed.
+		assert [d["version"] for d in deps] == ["1", "2.7", "0.3"]
+
+	def test_v2_exact_mnp_rejected_by_normal_reads(self, tmp_path: Path) -> None:
+		"""Migration writes the v2 shape; a manifest with a residual
+		`M.N.P` is still rejected by the normal loader — the migrator
+		is the ONLY path that rewrites exact pins.  Guards against
+		`load_manifest` silently accepting exact pins."""
+		path = _write_manifest(tmp_path, _minimal_manifest(artifacts=[
+			{
+				"kind": "library", "name": "p", "version": "1.0.0",
+				"description": "p", "entry_module": "p.drift",
+				"modules": ["p/"],
+				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],
+			},
+		]))
+		with pytest.raises(ManifestError) as exc:
+			load_manifest(path)
+		assert "0.3.14" in str(exc.value)
+		assert "0.3" in str(exc.value)  # suggestion
+
+	def test_drift_prepare_does_not_migrate(self, tmp_path: Path) -> None:
+		"""`drift prepare` must refuse a v1 manifest, not rewrite it.
+		Pins the "normal reads never mutate authored files" rule."""
+		from tools.drift_deploy.drift_prepare import run as prepare
+		from tools.drift_deploy.drift_prepare import PrepareError  # noqa: F401
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[{"name": "dep-a", "version": "0.3.14"}]),
+		]))
+		raw_before = path.read_text()
+		rc = prepare(["--manifest", str(path)])
+		assert rc == 1
+		# File unchanged byte-for-byte.
+		assert path.read_text() == raw_before
+
+	def test_migration_is_idempotent(self, tmp_path: Path) -> None:
+		"""Running migrate twice → second run is a no-op (exit 0, file
+		untouched)."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[{"name": "dep-a", "version": "0.3.14"}]),
+		]))
+		assert migrate(["--manifest", str(path)]) == 0
+		after_first = path.read_text()
+		mtime_first = path.stat().st_mtime_ns
+		# Small sleep not needed — we check byte-identity AND compare
+		# mtimes, which the migrator leaves alone on a no-op.
+		assert migrate(["--manifest", str(path)]) == 0
+		assert path.read_text() == after_first
+		assert path.stat().st_mtime_ns == mtime_first, (
+			"second migrate must not touch the file (mtime changed)"
+		)
+
+	def test_unsupported_version_aborts_without_rewrite(self, tmp_path: Path,
+	                                                    capsys) -> None:
+		"""An unsupported version in ANY dep aborts the whole
+		migration with a clear error.  The file must be byte-identical
+		after the failed run — the all-or-nothing rewrite guarantee."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[
+				{"name": "ok-1", "version": "0.3.14"},   # would convert
+				{"name": "bad",  "version": "^1.0.0"},  # forbidden
+				{"name": "ok-2", "version": "2.7"},     # already v2
+			]),
+		]))
+		raw_before = path.read_text()
+		rc = migrate(["--manifest", str(path)])
+		assert rc == 1
+		# File untouched — no partial rewrite.
+		assert path.read_text() == raw_before
+		err = capsys.readouterr().err
+		assert "bad" in err
+		assert "^1.0.0" in err
+		assert "not been modified" in err or "NOT been modified" in err
+
+	def test_dry_run_does_not_write(self, tmp_path: Path) -> None:
+		"""`--dry-run` prints the plan but must not touch the file."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, self._v1(artifacts=[
+			self._art("app", deps=[{"name": "dep-a", "version": "0.3.14"}]),
+		]))
+		raw_before = path.read_text()
+		assert migrate(["--manifest", str(path), "--dry-run"]) == 0
+		assert path.read_text() == raw_before
+
+	def test_v2_idempotent_no_op(self, tmp_path: Path) -> None:
+		"""Running migrate on an already-v2 manifest (no rewrites
+		needed) is exit-0 and leaves the file alone."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, _minimal_manifest())
+		raw_before = path.read_text()
+		mtime_before = path.stat().st_mtime_ns
+		assert migrate(["--manifest", str(path)]) == 0
+		assert path.read_text() == raw_before
+		assert path.stat().st_mtime_ns == mtime_before
+
+	def test_bogus_schema_version_rejected(self, tmp_path: Path) -> None:
+		"""Only v1 and v2 are accepted inputs to the migrator."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, {
+			"schema_version": 99,
+			"project": {"name": "p", "license": "MIT"},
+			"artifacts": [self._art("app")],
+		})
+		raw_before = path.read_text()
+		rc = migrate(["--manifest", str(path)])
+		assert rc == 1
+		assert path.read_text() == raw_before
+
+	def test_missing_manifest_errors(self, tmp_path: Path) -> None:
+		from tools.drift_deploy.drift_manifest import run as migrate
+		missing = tmp_path / "does-not-exist.json"
+		assert migrate(["--manifest", str(missing)]) == 1
+
+	def test_duplicate_artifact_names_do_not_cross_contaminate(
+		self, tmp_path: Path,
+	) -> None:
+		"""Regression pin for K Finding 1: a malformed v1 manifest
+		with two artifacts of the same name must NOT have rewrites
+		from one leak into the other.  Migration applies positionally
+		(by ``artifact_index``), not by artifact name — the name is
+		only ever used for diagnostics.
+
+		The normal manifest loader rejects duplicate names (separately
+		tested), but the migrator runs before that validation and must
+		not silently scramble a partly-duplicated file.  Each artifact
+		must see exactly its own rewrites.
+		"""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, {
+			"schema_version": 1,
+			"project": {"name": "p", "license": "MIT"},
+			"artifacts": [
+				# Same artifact name at positions [0] and [1], with
+				# DIFFERENT dep versions.  If the migrator keyed by
+				# name it would apply both rewrites to both slots —
+				# scrambling the second artifact's "0.5.7" into the
+				# first's "0.3.14" slot, or vice versa.
+				{
+					"kind": "library", "name": "twin", "version": "1.0.0",
+					"description": "a", "entry_module": "a.drift",
+					"modules": ["a/"],
+					"package_deps": [{"name": "dep", "version": "0.3.14"}],
+				},
+				{
+					"kind": "library", "name": "twin", "version": "2.0.0",
+					"description": "b", "entry_module": "b.drift",
+					"modules": ["b/"],
+					"package_deps": [{"name": "dep", "version": "0.5.7"}],
+				},
+			],
+		})
+		assert migrate(["--manifest", str(path)]) == 0
+		migrated = json.loads(path.read_text())
+		# Each artifact keeps its own rewrite; no cross-contamination.
+		assert migrated["artifacts"][0]["package_deps"][0]["version"] == "0.3"
+		assert migrated["artifacts"][1]["package_deps"][0]["version"] == "0.5"
+		# Version field of the artifacts themselves untouched — only
+		# `package_deps[].version` is rewritten.
+		assert migrated["artifacts"][0]["version"] == "1.0.0"
+		assert migrated["artifacts"][1]["version"] == "2.0.0"
+
+	def test_unrelated_fields_preserved(self, tmp_path: Path) -> None:
+		"""Non-dep fields survive the round-trip unchanged."""
+		from tools.drift_deploy.drift_manifest import run as migrate
+		path = _write_manifest(tmp_path, {
+			"schema_version": 1,
+			"project": {"name": "my-proj", "license": "Apache-2.0",
+				"author_profile": "profiles/me.author-profile"},
+			"artifacts": [{
+				"kind": "library", "name": "lib", "version": "1.2.3",
+				"description": "a thing", "entry_module": "lib.drift",
+				"modules": ["lib/", "lib/util/"],
+				"unsafe": False,
+				"module_namespace": "my_lib",
+				"assets": ["assets/logo.png"],
+				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],
+				"native_deps": [{"lib": "ssl"}],
+			}],
+		})
+		assert migrate(["--manifest", str(path)]) == 0
+		migrated = json.loads(path.read_text())
+		art = migrated["artifacts"][0]
+		assert migrated["project"]["name"] == "my-proj"
+		assert migrated["project"]["license"] == "Apache-2.0"
+		assert migrated["project"]["author_profile"] == "profiles/me.author-profile"
+		assert art["version"] == "1.2.3"
+		assert art["modules"] == ["lib/", "lib/util/"]
+		assert art["assets"] == ["assets/logo.png"]
+		assert art["native_deps"] == [{"lib": "ssl"}]
+		assert art["module_namespace"] == "my_lib"
+		# The only thing that changed: the dep version and schema_version.
+		assert art["package_deps"] == [{"name": "dep-a", "version": "0.3"}]
+		assert migrated["schema_version"] == 2

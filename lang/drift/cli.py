@@ -682,6 +682,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub.add_parser("build", help="Build Drift artifacts from drift/manifest.json (see: drift build --help)")
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
+	sub.add_parser("manifest", help="Manifest maintenance helpers: `drift manifest migrate` converts v1 → v2 (see: drift manifest --help)")
 	return p
 
 
@@ -735,6 +736,29 @@ def main(argv: list[str] | None = None) -> int:
 	if effective_argv and effective_argv[0] == "build":
 		from tools.drift_deploy.drift_build import run as build_run
 		return build_run(effective_argv[1:])
+
+	# `drift manifest <subcmd>` — authored manifest maintenance.
+	# Current subcommands: `migrate` (v1 → v2).  Nothing here reads
+	# drift/lock.json; lock regeneration stays in `drift prepare`.
+	if effective_argv and effective_argv[0] == "manifest":
+		rest = effective_argv[1:]
+		if not rest or rest[0] in ("-h", "--help"):
+			print(
+				"usage: drift manifest <subcommand> [options]\n\n"
+				"subcommands:\n"
+				"  migrate   Convert drift/manifest.json from v1 to v2 in place\n",
+				file=sys.stderr if not rest else sys.stdout,
+			)
+			return 0 if rest else 1
+		if rest[0] == "migrate":
+			from tools.drift_deploy.drift_manifest import run as migrate_run
+			return migrate_run(rest[1:])
+		print(
+			f"error: unknown `drift manifest` subcommand: {rest[0]!r}\n"
+			f"       known subcommands: migrate",
+			file=sys.stderr,
+		)
+		return 1
 
 	# Intercept "trust <file>.author-profile" — consumer trust flow.
 	# Known subcommands are dispatched normally; only .author-profile extension

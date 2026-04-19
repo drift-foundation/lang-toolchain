@@ -1,5 +1,214 @@
 # Drift development history
 
+## 2026-04-19
+- **Two-layer package versioning: manifest v2 + lock v3 +
+  `required_deps` + `drift manifest migrate` (0.29.0, ABI 10)**:
+  The manifest format now separates declared ranges from exact
+  locks.  Three boundary names, each with one job:
+
+  - `drift/manifest.json::package_deps[].version` — the package
+    owner's declared acceptable range for each dependency.  Two
+    shapes only: `"M"` (any `M.x.x` release) or `"M.N"` (any
+    `M.N.x` release).  Everything else is rejected at load time.
+  - `drift/lock.json::artifacts[].resolved[]` — the exact graph
+    resolved at `drift prepare` time: `M.N.P` + `sha256` +
+    `author_key` + `dep_type`.  Local to the artifact that owns
+    the lock.
+  - `.dmp::required_deps[]` — published consumer-facing
+    requirements, copied from the producer's manifest `package_deps`
+    at emit time.  Preserves the owner-declared-range vocabulary
+    all the way to the downstream consumer.
+
+  Patch and minor movement happens exclusively in `drift prepare`.
+  `drift build`, `drift deploy`, and `driftc` consume the lock
+  verbatim and refuse to resolve ranges themselves.
+
+  **Manifest v2 (`schema_version: 2`).**  `package_deps[].version`
+  is validated by the canonical
+  `lang/driftc/packages/dmir_pkg_v0::is_owner_declared_range`
+  regex (`^\\d+(?:\\.\\d+)?$`).  Pre-existing shapes get targeted
+  diagnostics: `M.N.P` → "authored versions are owner-declared
+  ranges; change to `M.N`"; `^`/`~` → "range operator not
+  accepted in v2 manifests".  The same regex validates the
+  producer-side `--package-dep` CLI flag and the published
+  `.dmp::required_deps[].version` on load — four surfaces, one
+  validator (intentionally consolidated to stop the regex-drift
+  pattern).
+
+  **Lock v3 (`schema_version: 3`).**  Per-artifact exact map.
+  Every non-co-artifact entry carries `version` (exact `M.N.P`,
+  shape-checked by `_EXACT_MNP_RE` at load), `sha256` (content
+  fingerprint of the signed `.dmp`), `author_key` (signer
+  identity, or the literal `"unsigned"` for dev-mode builds),
+  and `dep_type` (`direct` / `transitive` / `co-artifact`).
+  v1 and v2 locks are rejected with a pointer at `drift prepare`;
+  no silent reinterpretation of ranges as pins.
+  `verify_lock_compatibility` re-checks version + sha +
+  `author_key` against the on-disk package index before build /
+  deploy hands anything to `driftc` — a rebuilt or replaced
+  artifact invalidates the lock.
+
+  **`.dmp::required_deps[]`.**  Producer emits one entry per
+  authored `package_deps` entry, copying the owner-declared
+  range verbatim.  `lang/driftc/packages/dmir_pkg_v0::_parse_required_deps`
+  rejects malformed entries and the legacy `package_deps` key
+  (pre-cut `.dmp`s must be republished).  Consumer-side loader
+  exposes them as `LoadedPackage.required_deps: list[RequiredDepEntry]`
+  — typed data, not raw JSON, shared with the transitive sanity
+  check in `driftc.py` (Phase 4 + Finding 2).
+
+  **`drift prepare` as the sole resolver.**  Walks
+  `manifest.json::package_deps` + each loaded package's
+  `required_deps`, resolves the full transitive graph to the
+  highest-in-range candidate per package id, and writes
+  `drift/lock.json` v3.  Co-artifacts in the same manifest
+  satisfy each other's `package_deps` without being published
+  first (empty `sha256`, `dep_type: "co-artifact"`; deploy
+  verifies the real sha once the co-artifact is built).
+  `drift prepare --check` verifies the on-disk lock matches the
+  freshly-resolved graph without mutating the working tree — for
+  CI staleness gates.
+
+  **`drift build` / `drift deploy` as exact consumers.**  Both
+  refuse to run when an artifact declares `package_deps` without
+  a matching v3 lock, with a diagnostic naming the artifact, the
+  unresolved deps, and pointing at `drift prepare`.  The full
+  transitive graph reaches driftc as exact `--dep PKG@M.N.P`
+  flags — including transitives, sorted for determinism.
+  `_resolve_deps`' pre-0.29 "accept exact pin without a lock"
+  fallback was removed.
+
+  **`driftc` contract.**  Remains a strict exact loader.  Every
+  loaded package's `required_deps` entries must either (a) name
+  the self-package (self-exclusion), or (b) have an exact
+  `--dep` pin satisfying the declared range.  Missing pins and
+  out-of-range pins both fail with pointers to `drift prepare`.
+  The diagnostic body uses "the --dep pin 'X' does not satisfy
+  the required_deps range 'Y' declared by package 'Z'.  driftc
+  is an exact loader and will not pick a different version from
+  the package roots" — no "could not resolve" / "no matching
+  version" wording, to keep the non-resolution framing
+  unambiguous.  The transitive sanity pass consumes the typed
+  `LoadedPackage.required_deps` list directly (not a second
+  parser on raw manifest JSON).
+
+  **New command: `drift manifest migrate`.**  The explicit,
+  opt-in v1 → v2 migrator.  Two-pass: plan all per-dep
+  rewrites, report every unsupported version, then rewrite
+  positionally (by `artifact_index`) — a malformed v1 with
+  duplicate artifact names cannot cross-contaminate siblings.
+  Per-dep rules: `M.N.P` → `M.N`; `M`/`M.N` unchanged; anything
+  else aborts the whole run with no partial rewrite.  Idempotent
+  — a second run is a no-op that preserves file mtime.  Normal
+  reads still reject v1 with a pointer at this command; the
+  migrator is the ONLY path that rewrites authored metadata.
+  Dry-run mode prints the plan without touching the file.
+  CLI dispatched via `lang/drift/cli.py` as
+  `drift manifest migrate`.
+
+  **Clean break, no compatibility shim.**  Pre-0.29 `.dmp`s
+  carrying the legacy `package_deps` key are rejected at load
+  time (`_parse_required_deps` raises `ValueError` naming the
+  toolchain gate).  Downstream teams must re-publish packages
+  built on 0.29+.  `drift manifest migrate` is the one migration
+  on-ramp; there is no silent compatibility path.
+
+  **Diagnostics all point at `drift prepare`.**  Every Phase 6
+  failure mode — missing lock, v1/v2 schema, malformed JSON,
+  non-`M.N.P` version, missing exact package, sha mismatch,
+  signer mismatch — surfaces a diagnostic that cites
+  `drift prepare` by name.  `verify_lock_compatibility` also
+  names the pinned version in the "not found" message.
+
+  **Architectural guardrail.**  `lang/driftc/packages/dmir_pkg_v0.py`
+  was the natural home for `is_owner_declared_range` because the
+  regex is baked into the on-disk `.dmp` container.  A scope
+  comment warns against expanding that module into a catch-all
+  for resolver/deploy/CLI/signing policy — candidates for
+  extraction if a second cross-cutting helper appears:
+  `lang/driftc/packages/ranges.py` or
+  `tools/drift_deploy/policy.py`.
+
+  **Compiler diagnostics.**  `_pkg_exact_satisfies_range` is
+  fail-closed — any malformed input (non-numeric segments,
+  4-part versions, empty strings) returns `False` rather than
+  falling back to literal equality.  Same helper is used by the
+  transitive sanity pass and the emit-package validator.
+
+  **Tooling files touched:**
+  - `tools/drift_deploy/manifest.py` — schema v1 rejection with
+    `drift manifest migrate` pointer; v2 range validation
+    delegates to the canonical helper.
+  - `tools/drift_deploy/lockfile.py` — schema v3 write/read,
+    `_EXACT_MNP_RE` shape check, `verify_lock_compatibility`
+    re-check.
+  - `tools/drift_deploy/resolver.py` — `PackageEntry.required_deps`,
+    `required_deps` load validation in `build_package_index`,
+    resolution across owner-declared ranges.
+  - `tools/drift_deploy/drift_prepare.py` — full transitive
+    resolver, `--check` mode with try/except on `read_lock`
+    failures.
+  - `tools/drift_deploy/drift_build.py` — fail-closed on missing
+    lock with deps; `_is_exact_version` / `_EXACT_PIN_RE` /
+    `re` import removed (dead).
+  - `tools/drift_deploy/drift_deploy.py` — exact lock consumer;
+    v2-era range→exact build-time step removed.
+  - `tools/drift_deploy/build_cmd.py` — `--package-dep`
+    carries owner-declared range, not lock exact.
+  - `tools/drift_deploy/drift_manifest.py` — NEW; the migrator.
+  - `tools/drift_deploy/provenance.py` — sidecar `integrity` →
+    `sha256` in the resolved-deps schema.
+  - `lang/drift/cli.py` — `drift manifest` subcommand wired.
+  - `lang/driftc/driftc.py` — `--package-dep` range validation,
+    `required_deps` emit, transitive sanity pass consumes typed
+    `LoadedPackage.required_deps`, diagnostic wording
+    tightened.
+  - `lang/driftc/packages/dmir_pkg_v0.py` — `is_owner_declared_range`
+    (canonical validator), `RequiredDepEntry`,
+    `_parse_required_deps`, `LoadedPackage.required_deps`.
+
+  **Regression coverage:**
+  - `tools/drift_deploy/test_resolver.py::TestTwoLayerVersioning`
+    (7 tests): patch-float, manifest range semantics,
+    major-only / major-minor boundary, two-root conflict in M/M.N
+    vocabulary.
+  - `tools/drift_deploy/test_prepare.py` (15 tests): resolution
+    end-to-end, co-artifact pathways, `--check` mode, the
+    "narrows to highest in declared range" pin.
+  - `tools/drift_deploy/test_build.py::TestLockCompatibility`
+    (7 tests): exact-version forwarding, non-`M.N.P` rejection,
+    missing-ondisk / sha-mismatch / author-key-mismatch /
+    full-transitive-graph pins — every failure path asserts a
+    `drift prepare` pointer in stderr.
+  - `tools/drift_deploy/test_deploy.py::TestResolutionLock`
+    (7 tests): missing lock/entry/dep + sha / author-key /
+    ondisk-missing regression pins.
+  - `tools/drift_deploy/test_manifest.py::TestManifestMigrate`
+    (12 tests): `M.N.P → M.N` collapse, M/M.N preservation,
+    residual `M.N.P` rejected by normal reads, `drift prepare`
+    does not migrate, idempotent, all-or-nothing on unsupported
+    versions, duplicate-artifact-name positional apply,
+    unrelated-fields preserved.
+  - `tools/drift_deploy/test_manifest.py::TestManifestV1Rejection`:
+    v1 schema load rejected with migrate pointer.
+  - `tools/drift_deploy/test_build.py::TestCLIDispatch`:
+    `drift manifest migrate` wired, `drift manifest --help` lists
+    subcommands, unknown subcommand errors.
+  - `lang/tests/driver/test_pkg_transitive_dep_resolution.py`
+    (3 tests, full rewrite): driftc-as-exact-loader —
+    missing-transitive-pin fails, full-graph succeeds,
+    range-violating pin fails with non-resolver diagnostic
+    wording.
+  - `lang/tests/driver/test_driftc_package_v0.py`: `required_deps`
+    emit, load, owner-declared-range validation, M/M.N accepted
+    and exact/operators rejected at `--package-dep`.
+  - Downstream migration note: `work/manifest-package-ranges/migration.md`.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10; the
+  wire boundary between compiler and runtime is unaffected.
+  `DRIFTC_VERSION 0.28.0 → 0.29.0` is a toolchain-behavior
+  bump.
+
 ## 2026-04-18
 - **Fat `Arc<Interface>` representation (0.28.0, ABI 10)**:
   `Arc<I>` for interface `I` is now represented as a fat

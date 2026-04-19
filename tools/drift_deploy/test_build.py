@@ -1737,6 +1737,47 @@ class TestCLIDispatch:
 		assert callable(build_package_cmd)
 		assert callable(build_source_args)
 
+	def test_cli_manifest_migrate_dispatched(self, tmp_path: Path) -> None:
+		"""`drift manifest migrate` routes through the top-level CLI
+		to the migrator.  Pins the new subcommand wiring."""
+		from lang.drift.cli import main as cli_main
+		drift_dir = tmp_path / "drift"
+		drift_dir.mkdir()
+		path = drift_dir / "manifest.json"
+		path.write_text(json.dumps({
+			"schema_version": 1,
+			"project": {"name": "p", "license": "MIT"},
+			"artifacts": [{
+				"kind": "library", "name": "p", "version": "1.0.0",
+				"description": "p", "entry_module": "p.drift",
+				"modules": ["p/"],
+				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],
+			}],
+		}), encoding="utf-8")
+		rc = cli_main(["manifest", "migrate", "--manifest", str(path)])
+		assert rc == 0
+		data = json.loads(path.read_text())
+		assert data["schema_version"] == 2
+		assert data["artifacts"][0]["package_deps"][0]["version"] == "0.3"
+
+	def test_cli_manifest_help(self, capsys) -> None:
+		"""`drift manifest --help` lists the `migrate` subcommand."""
+		from lang.drift.cli import main as cli_main
+		rc = cli_main(["manifest", "--help"])
+		assert rc == 0
+		out = capsys.readouterr().out
+		assert "migrate" in out
+
+	def test_cli_manifest_unknown_subcommand_errors(self, capsys) -> None:
+		"""`drift manifest bogus` is a hard error naming the valid
+		subcommands, not a silent success."""
+		from lang.drift.cli import main as cli_main
+		rc = cli_main(["manifest", "bogus"])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "bogus" in err
+		assert "migrate" in err
+
 
 # ── driftc resolution ────────────────────────────────────────────────
 
