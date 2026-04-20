@@ -31,17 +31,30 @@ def env_true(name: str) -> bool:
 
 def source_rebuild_enabled(args) -> bool:
 	"""Source-rebuild lane selector: CLI flag OR
-	`DRIFT_SOURCE_REBUILD=1` env var.  Shared between `drift build`
-	and `drift deploy` so the two CLI surfaces cannot disagree on
-	what enables source-rebuild mode.  The env-var path is what
-	orch sets for source-from-commit certification runs so
-	repo-owned `just test` / `just stress` / `just perf` /
-	`just deploy` invocations pick up the lane without each
-	justfile threading `--source-rebuild` explicitly.  Mirrors the
-	`DRIFT_DEBUG=1` pattern.  Non-truthy env values (`0`,
-	`false`, empty) explicitly leave the mode off so ambient
-	shell-profile exports cannot silently flip humans into the
-	certification lane."""
+	`DRIFT_SOURCE_REBUILD=1` env var.  Shared between `drift build`,
+	`drift deploy`, and `drift prepare --check` so the three CLI
+	surfaces cannot disagree on what enables source-rebuild mode.
+	The env-var path is what orch sets for source-from-commit
+	certification runs so repo-owned `just test` / `just stress` /
+	`just perf` / `just deploy` invocations — including the
+	lock-check step that calls `drift prepare --check` — pick up
+	the lane without each justfile threading `--source-rebuild`
+	explicitly.  Mirrors the `DRIFT_DEBUG=1` pattern.  Non-truthy
+	env values (`0`, `false`, empty) explicitly leave the mode off
+	so ambient shell-profile exports cannot silently flip humans
+	into the certification lane.
+
+	Consumers treat the selector asymmetrically:
+	- `drift build` / `drift deploy`: the flag selects the
+	  verification mode for the lock vs. on-disk package index.
+	- `drift prepare --check`: the flag selects the comparator
+	  used to diff the on-disk lock against the re-resolved graph.
+	  Passing `--source-rebuild` to `drift prepare` WITHOUT
+	  `--check` is fail-fast at the CLI layer (the lock-writing
+	  path is always authoritative/strict by design); the env-var
+	  form is silently ignored on that write path so orch can set
+	  it globally for the whole certification environment without
+	  breaking write-mode invocations within that env."""
 	return getattr(args, "source_rebuild", False) or env_true("DRIFT_SOURCE_REBUILD")
 
 
