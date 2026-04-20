@@ -156,10 +156,20 @@ def _run_impl(args: argparse.Namespace) -> int:
 		for pkg_id in list(resolved):
 			if pkg_id in co_artifact_names:
 				old = resolved[pkg_id]
+				# Match the shape `read_lock` reconstructs from the
+				# on-disk JSON (see lockfile.read_lock): `package_id`
+				# is the map key, `author_key` is "" for co-artifacts
+				# (signing has not happened yet).  Without these the
+				# in-memory map and the freshly-read lock compare
+				# unequal even when they serialise identically, which
+				# made `drift prepare --check` falsely report stale on
+				# any manifest with a co-artifact dep.
 				resolved[pkg_id] = ResolvedDep(
 					version=old.version,
 					sha256="",
 					dep_type="co-artifact",
+					package_id=pkg_id,
+					author_key="",
 				)
 
 		resolved_map[art.name] = resolved

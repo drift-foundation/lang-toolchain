@@ -1,6 +1,44 @@
 # Drift development history
 
 ## 2026-04-19
+- **`drift prepare --check` co-artifact false-positive fix (0.29.1,
+  ABI 10)**:  `drift prepare --check` always reported the lock
+  stale on any manifest with a co-artifact dep — even immediately
+  after a `drift prepare` run that produced a bit-identical
+  `drift/lock.json`.  Reported by drift-web, who could not wire
+  `--check` into CI as the 0.29 migration email asked because the
+  `web-rest → web-jwt` co-artifact chain tripped it on every run.
+
+  **Cause.**  Asymmetric `ResolvedDep` construction between the two
+  halves of the comparison in
+  `tools/drift_deploy/drift_prepare.py::_run_impl`.  The co-artifact
+  override built `ResolvedDep(version=…, sha256="", dep_type="co-artifact")`
+  and let `package_id` and `author_key` default to `""`.  The
+  on-disk side of the comparison ran through
+  `lockfile.read_lock`, which reconstructs `ResolvedDep` with
+  `package_id=pkg_id` (the map key) and `author_key=""` (read from
+  the file).  The two dicts serialise to identical JSON but compare
+  unequal at the dataclass level — pkg_id is implicit in the map
+  key, so the divergence is invisible in the file.  Pure-external-dep
+  manifests dodged it because `resolve_artifact` already sets
+  `package_id` directly; only the co-artifact override path was
+  asymmetric.
+
+  **Fix.**  Pass `package_id=pkg_id` and `author_key=""` in the
+  co-artifact override so the in-memory shape matches what
+  `read_lock` reconstructs.  No schema, lock format, or wire
+  boundary touched — internal prepare/check comparison only.
+
+  **Test.**  `tools/drift_deploy/test_prepare.py::TestPrepareCheck::test_check_passes_with_co_artifact_after_fresh_prepare`
+  asserts both that `--check` exits 0 immediately after `drift
+  prepare`, and that the lock file bytes are unchanged by the
+  `--check` call.  Uses the reported `web-rest → web-jwt`
+  co-artifact shape.  Full `tools/drift_deploy/` suite: 339 passed.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.29.0 → 0.29.1` is a tooling behavior-fix
+  patch bump.
+
 - **Two-layer package versioning: manifest v2 + lock v3 +
   `required_deps` + `drift manifest migrate` (0.29.0, ABI 10)**:
   The manifest format now separates declared ranges from exact

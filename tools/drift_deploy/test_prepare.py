@@ -573,6 +573,47 @@ class TestPrepareCheck:
 			# Second run (--check): resolution now says 1.0.5 → lock stale → exit 1.
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1
 
+	def test_check_passes_with_co_artifact_after_fresh_prepare(self) -> None:
+		"""Regression: `--check` immediately after `drift prepare` on a
+		manifest with a co-artifact dep used to falsely report stale.
+		Cause was an asymmetric `ResolvedDep` construction — the
+		co-artifact override in `_run_impl` omitted `package_id`
+		(defaulting to ""), while `read_lock` reconstructed it with the
+		map key.  Two dicts that serialised identically compared
+		unequal.  drift-web hit this because its manifest has co-
+		artifacts (web-jwt is a co-artifact of web-rest, etc.), which
+		blocked them from wiring `drift prepare --check` into CI."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "drift-web", "license": "MIT"},
+				"artifacts": [
+					{
+						"kind": "package", "name": "web-jwt", "version": "0.2.3",
+						"description": "JWT", "license": "MIT",
+						"entry_module": "web/jwt.drift", "modules": ["web/jwt.drift"],
+						"module_namespace": "web.jwt",
+					},
+					{
+						"kind": "package", "name": "web-rest", "version": "0.2.3",
+						"description": "REST", "license": "MIT",
+						"entry_module": "web/rest.drift", "modules": ["web/rest.drift"],
+						"module_namespace": "web.rest",
+						"package_deps": [{"name": "web-jwt", "version": "0.2"}],
+					},
+				],
+			}))
+			p = build_arg_parser()
+			# Fresh prepare writes the lock.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			lock_before = (_drift_subdir(tmpdir) / "lock.json").read_bytes()
+			# --check must accept its own freshly-written lock.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 0
+			# And must not have touched the file.
+			lock_after = (_drift_subdir(tmpdir) / "lock.json").read_bytes()
+			assert lock_before == lock_after
+
 	def test_check_fails_when_lock_absent(self) -> None:
 		"""--check without a lock on disk is a hard error, not a
 		silent success.  The contract is "lock matches current
