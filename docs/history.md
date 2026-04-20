@@ -1,6 +1,58 @@
 # Drift development history
 
 ## 2026-04-20
+- **`DRIFT_SOURCE_REBUILD=1` env-var lane selector (0.30.1, ABI 10)**:
+  The `--source-rebuild` CLI flag added in 0.30.0 is sufficient for
+  orch-controlled `drift deploy` invocations, but orch cannot
+  reliably thread the flag through the repo-owned `just test` /
+  `just stress` / `just perf` / `just deploy` targets that
+  internally call `drift build` / `drift deploy` — each repo's
+  justfile would need to explicitly accept and forward the flag
+  (today they don't).  Without an environment-level lane selector,
+  a source-from-commit certification run would still hit default-
+  strict sha256 verification inside repo-owned gates and fail even
+  when the source attestation is valid — recreating the same bug
+  family the track was designed to close, just in a different
+  entry point.
+
+  Fix: both `drift build` and `drift deploy` now treat
+  `DRIFT_SOURCE_REBUILD=1` (or `true` / `yes` / `on` / `TRUE` / …,
+  matching the existing truthy-env idiom) as equivalent to the CLI
+  flag.  Orch sets the env var once for the whole certification
+  environment; every repo-owned gate inherits it.  The CLI flag
+  stays available and explicit.  Non-truthy values (`0`, `false`,
+  `""`) explicitly do NOT enable the lane, so an ambient
+  `DRIFT_SOURCE_REBUILD=0` in a developer's shell profile cannot
+  silently flip humans into source-rebuild mode.
+
+  **Hard-fail contract preserved** — the env-var path does not
+  loosen anything beyond the explicit byte-tolerance window:
+  missing source attestation is still a hard fail, source-identity
+  mismatch is still a hard fail, attestation-signer substitution
+  is still a hard fail, and `author_key == "unsigned"` is still
+  hard-incompatible with source-rebuild mode (no signed trust
+  root).  Byte drift is still reported to stdout as run evidence.
+
+  **Naming.**  `DRIFT_SOURCE_REBUILD` is workflow-named (the lane
+  it selects), not check-named — no `ALLOW_SHA_MISMATCH`.  The
+  mode selects a different verification contract (source identity
+  becomes the trust root, bytes become evidence), not a relaxed
+  variant of the strict contract.
+
+  Shared helper `_source_rebuild_enabled(args)` in both
+  `tools/drift_deploy/drift_build.py` and
+  `tools/drift_deploy/drift_deploy.py` centralises the "CLI flag
+  OR env var" composition so the two CLI surfaces cannot drift
+  apart.  Unit-pinned matrix in
+  `TestLockCompatibility::test_source_rebuild_helper_matrix` and
+  `TestDeploySourceRebuildEnvVar::test_helper_matrix`: every
+  truthy env value enables, every falsy value leaves strict, and
+  CLI flag always wins regardless of env.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.30.0 → 0.30.1` is a behavior-addition patch
+  bump — no format change, no lock schema bump.
+
 - **Source attestation + lock v4 + source-rebuild certification mode
   (0.30.0, ABI 10)**:  v4 splits dependency identity into two
   signed halves so source-rebuild workflows can validate "rebuilt
@@ -117,7 +169,13 @@
 
   **CLI surface.**  `drift build --source-rebuild` and
   `drift deploy --source-rebuild` thread the mode through to the
-  verifier.  Run-evidence is printed to stdout per-artifact:
+  verifier.  The same lane is also enabled by the
+  `DRIFT_SOURCE_REBUILD=1` environment variable (added in 0.30.1
+  so orch-controlled certification runs don't need to thread the
+  flag through every repo-owned justfile invocation — see the
+  0.30.1 entry above).  Contract: **CLI flag for manual/local
+  use; env var for certification lanes and repo-owned justfile
+  calls.**  Run-evidence is printed to stdout per-artifact:
 
   ```
   drift deploy --source-rebuild: artifact 'web-tls' accepted with

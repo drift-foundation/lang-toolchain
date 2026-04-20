@@ -24,6 +24,27 @@ def UserPath(s: str) -> Path:
 	return Path(s).expanduser()
 
 
+def env_true(name: str) -> bool:
+	"""Truthy check matching the rest of the toolchain's env-flag idiom."""
+	return os.environ.get(name, "") in ("1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
+
+
+def source_rebuild_enabled(args) -> bool:
+	"""Source-rebuild lane selector: CLI flag OR
+	`DRIFT_SOURCE_REBUILD=1` env var.  Shared between `drift build`
+	and `drift deploy` so the two CLI surfaces cannot disagree on
+	what enables source-rebuild mode.  The env-var path is what
+	orch sets for source-from-commit certification runs so
+	repo-owned `just test` / `just stress` / `just perf` /
+	`just deploy` invocations pick up the lane without each
+	justfile threading `--source-rebuild` explicitly.  Mirrors the
+	`DRIFT_DEBUG=1` pattern.  Non-truthy env values (`0`,
+	`false`, empty) explicitly leave the mode off so ambient
+	shell-profile exports cannot silently flip humans into the
+	certification lane."""
+	return getattr(args, "source_rebuild", False) or env_true("DRIFT_SOURCE_REBUILD")
+
+
 def resolve_driftc(explicit: Path | None = None) -> Path | None:
 	"""
 	Resolve the driftc binary path.

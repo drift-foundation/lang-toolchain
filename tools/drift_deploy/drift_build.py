@@ -62,9 +62,14 @@ def _clean_env() -> dict[str, str]:
 	return {k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_KEYS}
 
 
-def _env_true(name: str) -> bool:
-	"""Truthy check matching the rest of the toolchain's env-flag idiom."""
-	return os.environ.get(name, "") in ("1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
+# `_env_true` and `_source_rebuild_enabled` are re-exports so
+# existing imports (`from tools.drift_deploy.drift_build import
+# _env_true`) and existing tests keep working; the authoritative
+# implementations live in `build_cmd.py` to guarantee `drift build`
+# and `drift deploy` can never drift apart on what enables
+# source-rebuild mode.
+from tools.drift_deploy.build_cmd import env_true as _env_true
+from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
 # ── CLI ──────────────────────────────────────────────────────────────
@@ -105,7 +110,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"orchestrator source-from-commit certification).  "
 			"Missing source attestations and unsigned packages are "
 			"hard-failed in this mode — there is no silent fallback "
-			"to byte-only verification."
+			"to byte-only verification.  Also enabled by "
+			"`DRIFT_SOURCE_REBUILD=1` (the env-var path lets orch "
+			"set the lane once for the certification run without "
+			"threading the flag through every repo-owned `drift "
+			"build` invocation, mirroring the `DRIFT_DEBUG=1` "
+			"pattern)."
 		))
 	return p
 
@@ -447,10 +457,11 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# claiming co-artifact status is rejected at lock-verify time.
 	co_artifact_names = {a.name for a in manifest.artifacts if a.kind == "library"}
 
-	# Resolve deps.
+	# Resolve deps.  Source-rebuild lane selector is centralised in
+	# `_source_rebuild_enabled` (CLI flag OR env var).
 	resolved = _resolve_deps(art, manifest_dir, package_roots,
 		co_artifact_names=co_artifact_names,
-		source_rebuild=getattr(args, "source_rebuild", False))
+		source_rebuild=_source_rebuild_enabled(args))
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)

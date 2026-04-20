@@ -112,9 +112,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"orchestrator source-from-commit certification).  "
 			"Missing source attestations and unsigned packages are "
 			"hard-failed in this mode — there is no silent fallback "
-			"to byte-only verification."
+			"to byte-only verification.  Also enabled by "
+			"`DRIFT_SOURCE_REBUILD=1` (the env-var path lets orch "
+			"set the lane once for the certification run without "
+			"threading the flag through every repo-owned `drift "
+			"deploy` invocation, mirroring the `DRIFT_DEBUG=1` "
+			"pattern)."
 		))
 	return p
+
+
+# Re-export from the shared module so `drift build` and `drift deploy`
+# share a single source of truth for the source-rebuild lane selector.
+# Any future change to what enables source-rebuild mode touches ONE
+# function, not two that could drift apart silently.
+from tools.drift_deploy.build_cmd import env_true as _env_true
+from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
 def _resolve_driftc(args: argparse.Namespace) -> Path:
@@ -1465,14 +1478,16 @@ def _run_impl(args: argparse.Namespace) -> int:
 			print(f"{'='*60}")
 
 			# Resolve this artifact's deps now — staged_pkg_root contains
-			# .dmp files from earlier topo-sorted artifacts.
+			# .dmp files from earlier topo-sorted artifacts.  Source-
+			# rebuild lane selector is centralised in
+			# `_source_rebuild_enabled` (CLI flag OR env var).
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[staged_pkg_root] + package_roots,
 				lock_path=lock_path,
 				existing_lock=existing_lock,
 				co_artifact_names=co_artifact_names,
-				source_rebuild=getattr(args, "source_rebuild", False),
+				source_rebuild=_source_rebuild_enabled(args),
 			)
 			resolved_map[art.name] = resolved
 			if resolved:

@@ -1841,6 +1841,162 @@ class TestLockCompatibility:
 		err = capsys.readouterr().err
 		assert "sha256 mismatch" in err
 
+	def test_source_rebuild_via_env_var_only(self, tmp_path, capsys, monkeypatch):
+		"""Phase D.2: `DRIFT_SOURCE_REBUILD=1` enables source-rebuild
+		mode without the CLI flag.  Required because orch cannot
+		thread `--source-rebuild` through repo-owned `just test` /
+		`just stress` invocations that internally call `drift build`;
+		the env var is the lane selector orch sets once for the whole
+		certification run (mirrors `DRIFT_DEBUG=1`)."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		locked_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+		rebuilt_sha = hashlib.sha256(b"rebuilt-by-orch").hexdigest()
+		matching_scid = _fake_scid("dep-a", "0.1.3")
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=rebuilt_sha,
+					required_deps=[],
+					author_key="ed25519:rebuilder",
+					source_content_id=matching_scid,
+					source_attestation_key="ed25519:test",
+				)],
+			}
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			# NOTE: no --source-rebuild on the CLI; env var alone.
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 0, capsys.readouterr().err
+		out = capsys.readouterr().out
+		# Run-evidence emission proves source-rebuild lane was active.
+		assert "source-rebuild" in out
+		assert "byte-drift" in out
+		assert "dep-a" in out
+
+	def test_env_var_unset_means_default_strict_mode(self, tmp_path, capsys, monkeypatch):
+		"""Pin: `DRIFT_SOURCE_REBUILD` unset (or any non-truthy value)
+		leaves default strict mode in force.  Must not silently drift
+		on for general consumers."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		matching_scid = _fake_scid("dep-a", "0.1.3")
+		drift_sha = hashlib.sha256(b"different-bytes").hexdigest()
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		# Explicitly clear env in case ambient set.  And try a non-truthy
+		# value to confirm only "1"/"true"/etc enable the mode.
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=drift_sha,
+					required_deps=[],
+					author_key="ed25519:test",
+					source_content_id=matching_scid,
+					source_attestation_key="ed25519:test",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "sha256 mismatch" in err
+
+		# Non-truthy explicit value (e.g. "0") also stays in strict mode.
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=drift_sha,
+					required_deps=[],
+					author_key="ed25519:test",
+					source_content_id=matching_scid,
+					source_attestation_key="ed25519:test",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+		assert result == 1, "DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
+
+	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
+		"""Unit pin for `_source_rebuild_enabled`: CLI flag OR env var
+		enables the lane; neither → strict.  Non-truthy env values
+		leave the mode off so ambient `DRIFT_SOURCE_REBUILD=0` in a
+		shell profile doesn't silently enable source-rebuild for
+		humans running `drift build` interactively."""
+		import argparse as _ap
+		from tools.drift_deploy.drift_build import _source_rebuild_enabled
+		off = _ap.Namespace(source_rebuild=False)
+		on = _ap.Namespace(source_rebuild=True)
+
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(on) is True
+
+		for truthy in ("1", "true", "True", "TRUE", "yes", "YES", "on", "ON"):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
+			assert _source_rebuild_enabled(off) is True, f"env {truthy!r} should enable"
+
+		for falsy in ("0", "false", "False", "no", "NO", "off", ""):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
+			assert _source_rebuild_enabled(off) is False, f"env {falsy!r} must not enable"
+			# CLI flag alone still enables it, env is irrelevant.
+			assert _source_rebuild_enabled(on) is True
+
 	def test_build_rejects_author_key_mismatch(self, tmp_path, capsys):
 		"""Lock's author_key differs from the on-disk signer at the
 		pinned version → build fails with a `drift prepare` pointer.

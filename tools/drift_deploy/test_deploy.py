@@ -2174,6 +2174,197 @@ class TestDeploySourceRebuild:
 			assert "sha256 mismatch" in str(exc.value)
 
 
+class TestDeploySourceRebuildEnvVar:
+	"""Phase D.2: `DRIFT_SOURCE_REBUILD=1` enables source-rebuild mode
+	for `drift deploy` without the CLI flag, mirroring `DRIFT_DEBUG=1`.
+	Required because orch cannot thread `--source-rebuild` through
+	repo-owned `just deploy` / `just stage-packages` invocations that
+	internally call `drift deploy`; the env var is the lane selector
+	orch sets once for the whole certification run."""
+
+	def test_helper_matrix(self, monkeypatch) -> None:
+		"""Unit pin for `drift_deploy._source_rebuild_enabled`: CLI
+		flag OR env var enables; neither → strict.  Non-truthy env
+		values (`0`, `false`, empty) must NOT enable the mode so
+		ambient shell-profile exports don't silently shift humans
+		into source-rebuild lane."""
+		import argparse as _ap
+		from tools.drift_deploy.drift_deploy import _source_rebuild_enabled
+		off = _ap.Namespace(source_rebuild=False)
+		on = _ap.Namespace(source_rebuild=True)
+
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(on) is True
+
+		for truthy in ("1", "true", "True", "TRUE", "yes", "YES", "on", "ON"):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
+			assert _source_rebuild_enabled(off) is True, f"env {truthy!r} should enable"
+
+		for falsy in ("0", "false", "False", "no", "NO", "off", ""):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
+			assert _source_rebuild_enabled(off) is False, f"env {falsy!r} must not enable"
+			assert _source_rebuild_enabled(on) is True
+
+	def test_args_without_source_rebuild_attribute(self, monkeypatch) -> None:
+		"""Defensive: `getattr(args, 'source_rebuild', False)` must
+		tolerate args namespaces produced by older CLI parsers (or
+		synthetic test fixtures) that don't carry the attribute at
+		all."""
+		import argparse as _ap
+		from tools.drift_deploy.drift_deploy import _source_rebuild_enabled
+		bare = _ap.Namespace()  # no source_rebuild attribute
+
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		assert _source_rebuild_enabled(bare) is False
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		assert _source_rebuild_enabled(bare) is True
+
+	def test_env_var_reaches_resolve_artifact_deps_through_run(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""Integration pin: `DRIFT_SOURCE_REBUILD=1` set in the
+		environment must reach `_resolve_artifact_deps` via
+		`run()` → `_run_impl` WITHOUT the CLI flag on argv.  This is
+		the contract orch depends on: repo-owned `just deploy` calls
+		that do not thread `--source-rebuild` still pick up the
+		source-rebuild lane from the environment.
+
+		Patch `_resolve_artifact_deps` with a spy that captures its
+		`source_rebuild` kwarg and raises `DeployError` to short-
+		circuit the rest of the deploy; assert the captured value is
+		`True` when the env var is set and `False` when it's not."""
+		import base64
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_deploy import DeployError, run
+
+		# Minimum valid setup to reach _resolve_artifact_deps:
+		#   manifest w/ author_profile + package_deps, author_profile
+		#   file on disk, real base64 sign_key file, dest dir, stage
+		#   package root, v4 drift/lock.json.
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		manifest_path = manifest_dir / "manifest.json"
+		manifest_path.write_text(json.dumps({
+			"schema_version": 2,
+			"project": {
+				"name": "test-proj",
+				"license": "MIT",
+				"author_profile": "test.author-profile",
+			},
+			"artifacts": [{
+				"kind": "package", "name": "my.pkg", "version": "0.1.0",
+				"description": "test", "license": "MIT",
+				"entry_module": "lib.drift", "modules": ["lib.drift"],
+				"module_namespace": "my.pkg",
+				"package_deps": [{"name": "dep.a", "version": "0.1"}],
+			}],
+		}))
+
+		# Real author profile.
+		author_profile = manifest_dir / "test.author-profile"
+		fake_pub_raw = b"\x00" * 32
+		fake_pub = base64.b64encode(fake_pub_raw).decode()
+		import hashlib as _hl
+		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
+		author_profile.write_text(json.dumps({
+			"format": "author-profile", "version": 0,
+			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
+			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+			"namespaces": ["my.pkg.*"],
+		}))
+
+		# Real base64 sign key (decodes to 32-byte seed).
+		sign_key_path = tmp_path / "deploy.key"
+		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
+
+		# v4 lock with a matching entry so read_lock accepts the shape.
+		lock_path = manifest_dir / "lock.json"
+		lock_path.write_text(json.dumps({
+			"schema_version": 4,
+			"artifacts": {
+				"my.pkg": {
+					"resolved": {
+						"dep.a": {
+							"version": "0.1.3",
+							"sha256": "a" * 64,
+							"author_key": "ed25519:test",
+							"source_content_id": "sha256:" + "a" * 64,
+							"source_attestation_key": "ed25519:test",
+							"dep_type": "direct",
+						},
+					},
+				},
+			},
+		}))
+
+		dest = tmp_path / "dest"
+		dest.mkdir()
+
+		# Spy on _resolve_artifact_deps: capture source_rebuild and
+		# raise DeployError to short-circuit the rest of the deploy.
+		captured: dict = {}
+		def _spy(art, *, source_rebuild, **kwargs):
+			captured["source_rebuild"] = source_rebuild
+			raise DeployError("short-circuit from test spy")
+
+		# Also patch driftc resolution so the test doesn't depend on
+		# a driftc binary being present on $PATH.
+		fake_driftc = tmp_path / "fake-driftc"
+		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
+		fake_driftc.chmod(0o755)
+
+		# ── Env var set, no CLI flag — expect captured source_rebuild == True ──
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+			])
+		assert rc == 1, "DeployError from spy should produce exit 1"
+		assert captured.get("source_rebuild") is True, (
+			f"DRIFT_SOURCE_REBUILD=1 must thread through to "
+			f"_resolve_artifact_deps; got source_rebuild="
+			f"{captured.get('source_rebuild')!r}.  This is the orch "
+			f"contract — repo-owned `just deploy` invocations "
+			f"that don't pass --source-rebuild must still pick up "
+			f"the lane from the environment."
+		)
+
+		# ── Env var unset, no CLI flag — expect False (default strict) ──
+		captured.clear()
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+			])
+		assert rc == 1
+		assert captured.get("source_rebuild") is False, (
+			"Without DRIFT_SOURCE_REBUILD set and no --source-rebuild "
+			"flag, _resolve_artifact_deps must receive source_rebuild=False"
+		)
+
+		# ── Env var falsy, no CLI flag — must also default strict ──
+		captured.clear()
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
+		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+			])
+		assert rc == 1
+		assert captured.get("source_rebuild") is False, (
+			"DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
+		)
+
+
 # ── Lock-exact passthrough at deploy time ───────────────────────────
 
 
