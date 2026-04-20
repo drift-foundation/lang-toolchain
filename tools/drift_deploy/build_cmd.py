@@ -110,8 +110,16 @@ def build_package_cmd(
 	native_lib_paths: list[Path] | None = None,
 	trust_store: Path | None = None,
 	extra_flags: list[str] | None = None,
+	source_content_id: str | None = None,
 ) -> list[str]:
-	"""Build the driftc command for a package artifact."""
+	"""Build the driftc command for a package artifact.
+
+	If `source_content_id` is provided, it is stamped into the emitted
+	`.dmp` manifest via `--source-content-id`.  The id is computed
+	by drift_deploy from stable source inputs (see
+	`source_attestation.compute_artifact_source_content_id`); driftc
+	just records the value verbatim, it does not derive it.
+	"""
 	cmd = [
 		str(driftc),
 		"--emit-package", str(output_path),
@@ -119,6 +127,8 @@ def build_package_cmd(
 		"--package-version", art.version,
 		"--package-target", target,
 	]
+	if source_content_id is not None:
+		cmd.extend(["--source-content-id", source_content_id])
 
 	# Trust store for verifying co-artifact dependencies.
 	if trust_store is not None:

@@ -149,30 +149,80 @@ def _run_impl(args: argparse.Namespace) -> int:
 
 		# Mark co-artifact deps: sha256 is unknown at prepare time
 		# (the .dmp hasn't been built yet).  Use an empty sha — the
-		# v3 reader accepts empty sha256 iff dep_type="co-artifact",
+		# v4 reader accepts empty sha256 iff dep_type="co-artifact",
 		# and `verify_lock_compatibility` skips co-artifacts entirely.
 		# Deploy verifies the real sha at build time after the
-		# co-artifact is staged.
+		# co-artifact is staged.  Same skip applies to
+		# `source_content_id` and `source_attestation_key` — both are
+		# left "" until the co-artifact's `.source-attestation`
+		# sidecar is emitted later in the same deploy run.
 		for pkg_id in list(resolved):
 			if pkg_id in co_artifact_names:
 				old = resolved[pkg_id]
 				# Match the shape `read_lock` reconstructs from the
 				# on-disk JSON (see lockfile.read_lock): `package_id`
-				# is the map key, `author_key` is "" for co-artifacts
-				# (signing has not happened yet).  Without these the
-				# in-memory map and the freshly-read lock compare
-				# unequal even when they serialise identically, which
-				# made `drift prepare --check` falsely report stale on
-				# any manifest with a co-artifact dep.
+				# is the map key, `author_key` / `source_content_id` /
+				# `source_attestation_key` are "" for co-artifacts
+				# (signing and attestation have not happened yet —
+				# the .dmp + sidecars are built later in the same
+				# deploy run).  Without these the in-memory map and
+				# the freshly-read lock compare unequal even when
+				# they serialise identically, which broke `drift
+				# prepare --check` for any manifest with a co-
+				# artifact dep before the Phase 0 fix.
 				resolved[pkg_id] = ResolvedDep(
 					version=old.version,
 					sha256="",
 					dep_type="co-artifact",
 					package_id=pkg_id,
 					author_key="",
+					source_content_id="",
+					source_attestation_key="",
 				)
 
 		resolved_map[art.name] = resolved
+
+	# Phase B trust gate: every non-co-artifact resolved dep must
+	# carry a valid source identity (`source_content_id` +
+	# `source_attestation_key`) before the v4 lock is written.
+	# Empty fields here mean the package's `.source-attestation`
+	# sidecar was missing or failed cross-binding / signature
+	# verification at index time (see
+	# `resolver._read_source_attestation_meta` for the per-package
+	# warnings).  Writing such an entry would produce a v4 lock
+	# that `read_lock` rejects on the next consume; surfacing the
+	# error here gives the user a single, actionable diagnostic
+	# instead of "the lock you just wrote is corrupt."
+	missing_attestation: list[tuple[str, str, str]] = []  # [(artifact, pkg, version)]
+	for art_name, resolved in resolved_map.items():
+		for pkg_id, dep in resolved.items():
+			if dep.dep_type == "co-artifact":
+				continue
+			if not dep.source_content_id or not dep.source_attestation_key:
+				missing_attestation.append((art_name, pkg_id, dep.version))
+	if missing_attestation:
+		lines = [
+			"drift prepare: cannot write v4 lock — these resolved "
+			"dependencies have no valid source attestation:",
+		]
+		for art_name, pkg_id, ver in missing_attestation:
+			lines.append(f"  {art_name} -> {pkg_id}@{ver}")
+		lines.append(
+			"Republish each listed package with toolchain >= 0.30.0 "
+			"so its `.source-attestation` sidecar is emitted, then "
+			"re-run `drift prepare`.  Per-package stderr warnings "
+			"above (if any) name the specific failure mode for "
+			"sidecars that were present-but-rejected (mismatched "
+			"package_id/version/target_class/required_deps/"
+			"source_content_id, or signature verification failure); "
+			"a missing sidecar produces no warning — it just shows "
+			"up here.  The v4 lock format requires source identity "
+			"for every non-co-artifact dep so source-rebuild "
+			"certification has a signed source identity to verify "
+			"against — silently allowing empty fields would defeat "
+			"the trust boundary."
+		)
+		raise PrepareError("\n".join(lines))
 
 	lock_path = manifest_dir / "lock.json"
 

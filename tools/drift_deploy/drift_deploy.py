@@ -350,8 +350,16 @@ def _build_package(
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
 	trust_store: Path | None = None,
+	source_content_id: str | None = None,
 ) -> Path:
-	"""Build a package artifact. Returns path to staged .dmp."""
+	"""Build a package artifact. Returns path to staged .dmp.
+
+	`source_content_id`, if provided, is stamped verbatim into the
+	emitted .dmp manifest.  Computed by the caller from stable source
+	inputs (see `source_attestation.compute_artifact_source_content_id`)
+	so the same value can later be reused when emitting the
+	`.source-attestation` sidecar without re-walking the source tree.
+	"""
 	out_dmp = staged_install / f"{art.name}.dmp"
 	staged_install.mkdir(parents=True, exist_ok=True)
 
@@ -365,6 +373,7 @@ def _build_package(
 		package_roots=package_roots,
 		native_lib_paths=native_lib_paths,
 		trust_store=trust_store,
+		source_content_id=source_content_id,
 	)
 
 	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
@@ -888,7 +897,39 @@ def _deploy_artifact(
 		if not link.exists():
 			link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
 
+	source_content_id: str | None = None
 	if art.kind == "library":
+		from tools.drift_deploy.build_cmd import project_root_for
+		from tools.drift_deploy.source_attestation import (
+			compute_artifact_source_content_id,
+		)
+		# Phase A is additive: compute source_content_id from on-disk
+		# source/asset bytes when they all resolve, otherwise log and
+		# proceed without source-mode metadata (skipping the .source-
+		# attestation emission below).  Phase C will tighten this:
+		# once source-rebuild mode is enforced, missing source files
+		# become a hard error instead of a graceful skip.
+		try:
+			source_content_id = compute_artifact_source_content_id(
+				kind=art.kind,
+				package_id=art.name,
+				version=art.version,
+				module_namespace=art.module_namespace,
+				entry_module=art.entry_module,
+				module_paths=list(art.modules),
+				package_deps=[(d.name, d.version) for d in art.package_deps],
+				native_deps=[d.lib for d in art.native_deps],
+				unsafe=art.unsafe,
+				asset_paths=list(art.assets),
+				target_class=target,
+				source_root=project_root_for(manifest_dir),
+			)
+		except (FileNotFoundError, ValueError) as e:
+			print(
+				f"warning: source attestation skipped for '{art.name}': {e}",
+				file=sys.stderr,
+			)
+			source_content_id = None
 		dmp_path = _build_package(
 			art,
 			driftc=driftc,
@@ -899,6 +940,7 @@ def _deploy_artifact(
 			package_roots=[build_pkg_root],
 			native_lib_paths=native_lib_paths,
 			trust_store=build_trust_path,
+			source_content_id=source_content_id,
 		)
 	else:
 		bin_path = _build_app(
@@ -978,6 +1020,53 @@ def _deploy_artifact(
 			provenance_path=provenance_path,
 		)
 
+		# Source attestation sidecar — author-signed binding between
+		# (package_id, version) and the canonical source identity that
+		# produced these bytes.  Trust anchor for source-rebuild
+		# certification: a downstream rebuild can prove it built from
+		# the same source the owner attested without requiring byte
+		# equality on the rebuilt .dmp.  Signed with the same key as
+		# the artifact today (single signer); the lock records this
+		# key separately as `source_attestation_key` so the two roles
+		# can diverge later (e.g. long-lived org identity key signs
+		# source, ephemeral build key signs artifacts).
+		#
+		# Skipped silently when source_content_id could not be computed
+		# (Phase A graceful path; Phase C tightens to hard error in
+		# source-rebuild mode).
+		attestation_path: Path | None = None
+		if source_content_id is not None:
+			from tools.drift_deploy.source_attestation import (
+				SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
+				RequiredDepEntry,
+				SourceAttestationBody,
+				sign_attestation,
+				write_attestation_sidecar,
+			)
+			attestation_body = SourceAttestationBody(
+				schema_version=SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
+				package_id=art.name,
+				version=art.version,
+				source_content_id=source_content_id,
+				required_deps=[
+					RequiredDepEntry(name=d.name, version=d.version)
+					for d in art.package_deps
+				],
+				target_class=target,
+			)
+			from tools.drift_deploy.staged_trust import load_signing_key_seed
+			try:
+				_sign_seed = load_signing_key_seed(sign_key)
+			except ValueError as e:
+				raise DeployError(
+					f"--sign-key-file {sign_key}: {e}"
+				) from e
+			attestation_sidecar = sign_attestation(
+				attestation_body, signing_key_seed=_sign_seed,
+			)
+			attestation_path = staged_install / f"{art.name}.source-attestation"
+			write_attestation_sidecar(attestation_path, attestation_sidecar)
+
 		# Compress the signed .dmp → .zdmp for distribution.
 		# Signature covers the uncompressed bytes (already signed above).
 		from lang.driftc.packages.zdmp import compress_to_zdmp
@@ -1021,6 +1110,8 @@ def _deploy_artifact(
 			shutil.copy2(str(provenance_path), str(smoke_pkg_dir / provenance_path.name))
 		if staged_profile and staged_profile.exists():
 			shutil.copy2(str(staged_profile), str(smoke_pkg_dir / staged_profile.name))
+		if attestation_path is not None and attestation_path.exists():
+			shutil.copy2(str(attestation_path), str(smoke_pkg_dir / attestation_path.name))
 
 		# Build staged trust overlay.
 		from tools.drift_deploy.staged_trust import (

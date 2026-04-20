@@ -28,6 +28,7 @@ from tools.drift_deploy.resolver import (
 	PackageEntry,
 	ResolutionError,
 	ResolvedDep,
+	_read_source_attestation_meta,
 	build_package_index,
 	resolve_artifact,
 )
@@ -299,33 +300,46 @@ class TestResolverDeterminism:
 
 
 class TestLockFile:
-	"""Lock v3 (0.29.0+) — exact resolved artifact recording.
+	"""Lock v4 (0.30.0+) — exact resolved artifact + source identity.
 
-	Each entry answers "what exact artifact did I build against?":
-	version M.N.P + sha256 + author_key + dep_type.  Verify is
-	strict: any mismatch against the on-disk package is a build-time
-	error, and `drift prepare` is the only sanctioned writer.  No
-	range field, no file-level integrity, no silent patch float.
+	Each entry answers two questions: "what exact artifact did I
+	build against?" (version M.N.P + sha256 + author_key) AND
+	"what source did the owner attest produced this artifact?"
+	(source_content_id + source_attestation_key).  Verify is
+	strict: any mismatch against the on-disk package or its
+	`.source-attestation` sidecar is a build-time error, and
+	`drift prepare` is the only sanctioned writer.  No range field,
+	no file-level integrity, no silent patch float.
 	"""
 
-	def test_write_read_roundtrip_v3_exact(self) -> None:
-		"""v3 round-trip preserves exact version, sha256, author_key,
-		and dep_type.  No range field, no file-level integrity, no
-		redundant `package_id` inside each entry."""
+	def test_write_read_roundtrip_v4_exact(self) -> None:
+		"""v4 round-trip preserves exact version, sha256, author_key,
+		dep_type, AND the source-identity half (source_content_id +
+		source_attestation_key).  No range field, no file-level
+		integrity, no redundant `package_id` inside each entry."""
+		_scid_a = "sha256:" + "a" * 64
+		_scid_b = "sha256:" + "b" * 64
+		_scid_c = "sha256:" + "c" * 64
 		deps_a = {
 			"net.tls": ResolvedDep(
 				version="0.3.15", sha256="aabbccdd", dep_type="direct",
 				package_id="net.tls", author_key="ed25519:abc",
+				source_content_id=_scid_a,
+				source_attestation_key="ed25519:abc-src",
 			),
 			"acme.crypto": ResolvedDep(
 				version="0.9.3", sha256="eeff0011", dep_type="transitive",
 				package_id="acme.crypto", author_key="ed25519:def",
+				source_content_id=_scid_b,
+				source_attestation_key="ed25519:def-src",
 			),
 		}
 		deps_b = {
 			"util.log": ResolvedDep(
 				version="1.0.7", sha256="22334455", dep_type="direct",
 				package_id="util.log", author_key="ed25519:ghi",
+				source_content_id=_scid_c,
+				source_attestation_key="ed25519:ghi-src",
 			),
 		}
 
@@ -336,8 +350,8 @@ class TestLockFile:
 			# Inspect the serialized JSON shape directly — format
 			# is user-visible and part of the contract.
 			raw = json.loads(lock_path.read_text(encoding="utf-8"))
-			assert raw["schema_version"] == 3
-			# No file-level integrity field in v3.
+			assert raw["schema_version"] == 4
+			# No file-level integrity field in v4.
 			assert "integrity" not in raw
 			tls_entry = raw["artifacts"]["app-a"]["resolved"]["net.tls"]
 			# Exact version stored, not a range.
@@ -345,6 +359,9 @@ class TestLockFile:
 			assert tls_entry["sha256"] == "aabbccdd"
 			assert tls_entry["author_key"] == "ed25519:abc"
 			assert tls_entry["dep_type"] == "direct"
+			# v4 source-identity half emitted verbatim.
+			assert tls_entry["source_content_id"] == _scid_a
+			assert tls_entry["source_attestation_key"] == "ed25519:abc-src"
 			# No redundant `package_id` (map key already carries it)
 			# and no `range` field (range lives in the manifest).
 			assert "package_id" not in tls_entry
@@ -353,15 +370,19 @@ class TestLockFile:
 			result = read_lock(lock_path)
 
 		assert set(result.keys()) == {"app-a", "app-b"}
-		# Round-trip preserves exact version + sha256.
+		# Round-trip preserves both halves of the v4 identity.
 		assert result["app-a"]["net.tls"].version == "0.3.15"
 		assert result["app-a"]["net.tls"].sha256 == "aabbccdd"
 		assert result["app-a"]["net.tls"].dep_type == "direct"
 		assert result["app-a"]["net.tls"].author_key == "ed25519:abc"
+		assert result["app-a"]["net.tls"].source_content_id == _scid_a
+		assert result["app-a"]["net.tls"].source_attestation_key == "ed25519:abc-src"
 		assert result["app-a"]["acme.crypto"].version == "0.9.3"
 		assert result["app-a"]["acme.crypto"].dep_type == "transitive"
+		assert result["app-a"]["acme.crypto"].source_content_id == _scid_b
 		# Reader fills `package_id` from the map key for in-memory use.
 		assert result["app-b"]["util.log"].package_id == "util.log"
+		assert result["app-b"]["util.log"].source_content_id == _scid_c
 
 	def test_expand_to_dep_flags_exact(self) -> None:
 		"""Expanded --dep flags carry exact M.N.P.  driftc stays a flat
@@ -546,7 +567,7 @@ class TestLockFile:
 		that would let a typo or forward-compat value from a future
 		schema slip past every downstream check."""
 		bad_lock = {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {
 				"app": {
 					"resolved": {
@@ -554,6 +575,8 @@ class TestLockFile:
 							"version": "1.2.3",
 							"sha256": "aa",
 							"author_key": "ed25519:x",
+							"source_content_id": "sha256:" + "a"*64,
+							"source_attestation_key": "ed25519:x",
 							"dep_type": "vendored",  # not recognised
 						},
 					}
@@ -725,10 +748,12 @@ class TestLockFile:
 			with pytest.raises(ValueError, match="schema v1.*prepare"):
 				read_lock(lock_path)
 
-	def test_unsigned_lock_rejected(self) -> None:
-		"""Empty author_key in a v3 lock entry is rejected — packages
-		must be signed before locking (or explicitly flagged
-		`"unsigned"` with --allow-unsigned-from downstream)."""
+	def test_v3_lock_rejected_with_clear_message(self) -> None:
+		"""v3 locks (sha256+author_key only, no source identity) must be
+		rejected at load with a republish/regenerate diagnostic.
+		Silently treating a v3 lock as v4 would let source-rebuild
+		mode pass against a lock that never recorded a source identity
+		to verify against."""
 		v3_lock = {
 			"schema_version": 3,
 			"artifacts": {
@@ -737,30 +762,6 @@ class TestLockFile:
 						"net.tls": {
 							"version": "0.3.15",
 							"sha256": "aabbcc",
-							"author_key": "",
-							"dep_type": "direct",
-						},
-					}
-				}
-			}
-		}
-		with tempfile.TemporaryDirectory() as tmpdir:
-			lock_path = Path(tmpdir) / "lock.json"
-			lock_path.write_text(json.dumps(v3_lock))
-			with pytest.raises(ValueError, match="author_key"):
-				read_lock(lock_path)
-
-	def test_missing_sha256_rejected(self) -> None:
-		"""v3 lock entries require sha256 for every non-co-artifact dep;
-		absence is a hard error pointing at `drift prepare`."""
-		v3_lock = {
-			"schema_version": 3,
-			"artifacts": {
-				"app": {
-					"resolved": {
-						"net.tls": {
-							"version": "0.3.15",
-							# sha256 omitted — v3 requires it
 							"author_key": "ed25519:abc",
 							"dep_type": "direct",
 						},
@@ -771,6 +772,119 @@ class TestLockFile:
 		with tempfile.TemporaryDirectory() as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v3_lock))
+			with pytest.raises(ValueError) as exc:
+				read_lock(lock_path)
+			msg = str(exc.value)
+			assert "schema v3" in msg
+			assert "drift prepare" in msg
+			assert "source_content_id" in msg
+
+	def test_unsigned_lock_rejected(self) -> None:
+		"""Empty author_key in a v4 lock entry is rejected — packages
+		must be signed before locking (or explicitly flagged
+		`"unsigned"` with --allow-unsigned-from downstream)."""
+		v4_lock = {
+			"schema_version": 4,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3.15",
+							"sha256": "aabbcc",
+							"author_key": "",
+							"source_content_id": "sha256:" + "a"*64,
+							"source_attestation_key": "ed25519:abc",
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v4_lock))
+			with pytest.raises(ValueError, match="author_key"):
+				read_lock(lock_path)
+
+	def test_missing_source_content_id_rejected(self) -> None:
+		"""v4 lock entries require source_content_id for every non-co-
+		artifact dep; absence is a hard error with republish guidance.
+		Without it source-rebuild mode would have nothing to verify
+		the rebuilt artifact's source identity against."""
+		v4_lock = {
+			"schema_version": 4,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3.15",
+							"sha256": "aabbcc",
+							"author_key": "ed25519:abc",
+							# source_content_id omitted
+							"source_attestation_key": "ed25519:abc",
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v4_lock))
+			with pytest.raises(ValueError, match="source_content_id"):
+				read_lock(lock_path)
+
+	def test_missing_source_attestation_key_rejected(self) -> None:
+		"""v4 lock entries require source_attestation_key for every
+		non-co-artifact dep; absence collapses the source-rebuild
+		trust root to "trust the rebuilder", which is exactly what
+		source-mode exists to prevent."""
+		v4_lock = {
+			"schema_version": 4,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3.15",
+							"sha256": "aabbcc",
+							"author_key": "ed25519:abc",
+							"source_content_id": "sha256:" + "a"*64,
+							# source_attestation_key omitted
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v4_lock))
+			with pytest.raises(ValueError, match="source_attestation_key"):
+				read_lock(lock_path)
+
+	def test_missing_sha256_rejected(self) -> None:
+		"""v4 lock entries require sha256 for every non-co-artifact dep;
+		absence is a hard error pointing at `drift prepare`."""
+		v4_lock = {
+			"schema_version": 4,
+			"artifacts": {
+				"app": {
+					"resolved": {
+						"net.tls": {
+							"version": "0.3.15",
+							# sha256 omitted — v4 requires it
+							"author_key": "ed25519:abc",
+							"source_content_id": "sha256:" + "a"*64,
+							"source_attestation_key": "ed25519:abc",
+							"dep_type": "direct",
+						},
+					}
+				}
+			}
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			lock_path = Path(tmpdir) / "lock.json"
+			lock_path.write_text(json.dumps(v4_lock))
 			with pytest.raises(ValueError, match="sha256"):
 				read_lock(lock_path)
 
@@ -1300,3 +1414,232 @@ class TestTwoLayerVersioning:
 		# Diagnostic must surface both sides of the disagreement so
 		# the user can see which packages are in conflict.
 		assert "liba" in err or "libb" in err
+
+
+class TestReadSourceAttestationMeta:
+	"""Phase B.1 trust gate at the resolver layer.  Sidecars must:
+	1. structurally load (delegated to read_attestation_sidecar);
+	2. carry a verifying signature (verify_attestation);
+	3. cross-bind to the .dmp manifest they sit next to (package_id,
+	   version, target_class, required_deps, source_content_id stamp).
+
+	Any failure → empty result + stderr warning, so unrelated builds
+	can still discover other packages in the same root.  drift_prepare
+	turns the empty result into a fail-fast republish-required error
+	for resolved non-co-artifact deps."""
+
+	@staticmethod
+	def _make_dmp(tmpdir: Path, pkg_id: str = "net-tls", version: str = "0.4.0",
+			target: str = "linux-x86_64", required_deps: list | None = None,
+			source_content_id: str | None = None) -> tuple[Path, dict]:
+		"""Write a fake .dmp file (just placeholder bytes) and return
+		(path, manifest dict).  build_package_index passes the
+		manifest dict to _read_source_attestation_meta; we don't need
+		the .dmp to be parseable for these helper unit tests."""
+		dmp_path = tmpdir / f"{pkg_id}.dmp"
+		dmp_path.write_bytes(b"fake-dmp")
+		manifest = {
+			"package_id": pkg_id,
+			"package_version": version,
+			"target": target,
+			"required_deps": required_deps or [],
+		}
+		if source_content_id is not None:
+			manifest["source_content_id"] = source_content_id
+		return dmp_path, manifest
+
+	@staticmethod
+	def _write_sidecar(dmp_path: Path, body_overrides: dict | None = None,
+			signing_seed: bytes = bytes(range(32))) -> str:
+		"""Write a real .source-attestation sidecar next to dmp_path.
+		Returns the signer kid the sidecar was signed with."""
+		from tools.drift_deploy.source_attestation import (
+			RequiredDepEntry,
+			SourceAttestationBody,
+			SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
+			sign_attestation,
+			write_attestation_sidecar,
+			_ed25519_kid,
+		)
+		from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+		from cryptography.hazmat.primitives import serialization
+		body_defaults = {
+			"schema_version": SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
+			"package_id": "net-tls",
+			"version": "0.4.0",
+			"source_content_id": "sha256:" + "a"*64,
+			"required_deps": [],
+			"target_class": "linux-x86_64",
+		}
+		body_defaults.update(body_overrides or {})
+		body = SourceAttestationBody(**body_defaults)
+		sidecar = sign_attestation(body, signing_key_seed=signing_seed)
+		sidecar_path = dmp_path.with_suffix(".source-attestation")
+		write_attestation_sidecar(sidecar_path, sidecar)
+		# Compute the kid for assertion convenience.
+		priv = Ed25519PrivateKey.from_private_bytes(signing_seed)
+		pub = priv.public_key().public_bytes(
+			encoding=serialization.Encoding.Raw,
+			format=serialization.PublicFormat.Raw,
+		)
+		return _ed25519_kid(pub)
+
+	def test_absent_sidecar_returns_empty(self) -> None:
+		"""Legacy package with no sidecar at all → empty (drift prepare
+		surfaces this as fail-fast for non-co-artifact deps)."""
+		with tempfile.TemporaryDirectory() as tmp:
+			dmp_path, manifest = self._make_dmp(Path(tmp))
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+
+	def test_matching_sidecar_returns_scid_and_kid(self) -> None:
+		"""All cross-binding fields match → returns body's source_content_id
+		and the verified signer kid."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			scid_value = "sha256:" + "a"*64
+			dmp_path, manifest = self._make_dmp(tmp_p, source_content_id=scid_value)
+			expected_kid = self._write_sidecar(dmp_path)
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == scid_value
+			assert kid == expected_kid
+
+	def test_mismatched_package_id_returns_empty(self, capsys) -> None:
+		"""Sidecar body says it's for package-X, .dmp manifest says
+		package-Y → cross-binding fails, empty result, stderr warning."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(tmp_p, pkg_id="net-tls")
+			self._write_sidecar(dmp_path, body_overrides={"package_id": "other-pkg"})
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			err = capsys.readouterr().err
+			assert "package_id" in err
+
+	def test_mismatched_version_returns_empty(self, capsys) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(tmp_p, version="0.4.0")
+			self._write_sidecar(dmp_path, body_overrides={"version": "0.4.1"})
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "version" in capsys.readouterr().err
+
+	def test_mismatched_target_class_returns_empty(self, capsys) -> None:
+		"""Cross-target attestation substitution → caught."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(tmp_p, target="linux-x86_64")
+			self._write_sidecar(dmp_path, body_overrides={"target_class": "linux-aarch64"})
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "target_class" in capsys.readouterr().err
+
+	def test_mismatched_source_content_id_stamp_returns_empty(self, capsys) -> None:
+		"""When the .dmp manifest carries a source_content_id stamp
+		(Phase A producer wired), it must equal the sidecar body's
+		value — otherwise the producer was inconsistent."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(tmp_p, source_content_id="sha256:" + "a"*64)
+			self._write_sidecar(dmp_path, body_overrides={
+				"source_content_id": "sha256:" + "b"*64,
+			})
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "source_content_id" in capsys.readouterr().err
+
+	def test_mismatched_required_deps_returns_empty(self, capsys) -> None:
+		"""Sidecar attests one required_deps set, .dmp manifest declares
+		another → caught (one of the two is lying about what the
+		package depends on).  Note: stamp must be present (Phase B.2
+		requires it) for the helper to reach the required_deps check."""
+		from tools.drift_deploy.source_attestation import RequiredDepEntry
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(
+				tmp_p,
+				required_deps=[{"name": "drift-core", "version": "0.27"}],
+				source_content_id="sha256:" + "a"*64,  # matches sidecar default
+			)
+			self._write_sidecar(dmp_path, body_overrides={
+				"required_deps": [RequiredDepEntry(name="drift-net", version="0.4")],
+			})
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "required_deps" in capsys.readouterr().err
+
+	def test_missing_dmp_stamp_returns_empty_even_with_valid_sidecar(self, capsys) -> None:
+		"""Phase B.2 trust gate: an old `.dmp` lacking the v4
+		`source_content_id` stamp must NOT be retroactively upgraded
+		into source-mode by adjacency to a validly signed sidecar.
+		The artifact itself must declare its source identity for the
+		v4 contract to hold; otherwise an attacker (or a careless
+		operator) could ship a legacy package alongside a sidecar
+		stolen from another release and have it pass.
+
+		This is the asymmetric case: structural load passes, signature
+		verifies, all body fields cross-bind to the manifest fields
+		that DO exist — but the manifest has no source_content_id
+		stamp, so the helper rejects."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			# Note: NO source_content_id passed → manifest stamp absent.
+			dmp_path, manifest = self._make_dmp(tmp_p)
+			assert "source_content_id" not in manifest
+			self._write_sidecar(dmp_path)
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			err = capsys.readouterr().err
+			assert "source_content_id" in err
+			assert "republish" in err.lower()
+
+	def test_malformed_dmp_stamp_returns_empty(self, capsys) -> None:
+		"""A `.dmp` stamp present but malformed (uppercase hex, wrong
+		length, non-`sha256:` prefix, etc.) is also rejected — the
+		strict-shape validator at the trust boundary refuses to let
+		programmatic callers smuggle a non-canonical id into a
+		signed lock entry."""
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(
+				tmp_p,
+				source_content_id="sha256:" + "A"*64,  # uppercase → invalid
+			)
+			self._write_sidecar(dmp_path)
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "lowercase hex" in capsys.readouterr().err
+
+	def test_signature_verify_failure_returns_empty(self, capsys) -> None:
+		"""Sidecar that cannot signature-verify → empty result, no kid
+		recorded.  Edit the on-disk JSON to flip a body field AND its
+		body_sha256 (so the body_sha256 self-check passes) — the
+		signature verification then fails."""
+		from tools.drift_deploy.source_attestation import (
+			SOURCE_ATTESTATION_SIDECAR_FORMAT,
+			SOURCE_ATTESTATION_SIDECAR_VERSION,
+		)
+		import hashlib as _hl
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_p = Path(tmp)
+			dmp_path, manifest = self._make_dmp(tmp_p)
+			self._write_sidecar(dmp_path)
+			sidecar_path = dmp_path.with_suffix(".source-attestation")
+			obj = json.loads(sidecar_path.read_text(encoding="utf-8"))
+			# Flip a non-binding field (schema_version is bound, so use
+			# package_id and update both body and body_sha256 to keep
+			# the structural self-check happy).  Crucially leave
+			# package_id matching the manifest so we'd fall through
+			# to the signature check.
+			obj["body"]["package_id"] = "net-tls"  # still matches
+			# Replace the signature with garbage of correct length.
+			import base64 as _b64
+			obj["signatures"][0]["sig"] = _b64.b64encode(b"\x00" * 64).decode("ascii")
+			# Recompute body_sha256 in case body changed.
+			canon = json.dumps(obj["body"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+			obj["body_sha256"] = "sha256:" + _hl.sha256(canon).hexdigest()
+			sidecar_path.write_text(json.dumps(obj), encoding="utf-8")
+			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
+			assert scid == "" and kid == ""
+			assert "signature" in capsys.readouterr().err

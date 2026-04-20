@@ -73,7 +73,7 @@ class TestPrepareResolve:
 		"""drift prepare resolves deps and writes drift/lock.json."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+			"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
@@ -142,7 +142,7 @@ class TestPrepareResolve:
 		"""Re-running prepare overwrites the existing lock."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"ext.lib": ResolvedDep(version="2.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+			"ext.lib": ResolvedDep(version="2.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
@@ -167,7 +167,7 @@ class TestPrepareResolve:
 			from tools.drift_deploy.lockfile import write_lock
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"my.pkg": {
-				"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test"),
+				"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -227,25 +227,34 @@ class TestPrepareResolve:
 		loader and never picks versions; `drift prepare` owns that
 		decision.
 		"""
+		# v4 fixtures: every PackageEntry that flows through write_lock
+		# needs the source-identity half populated, otherwise read_lock
+		# rejects the resulting v4 lock entry.
+		_scid = "sha256:" + "a"*64
+		_sak = "ed25519:test"
 		deplib_020 = PackageEntry(
 			package_id="deplib", version=parse_version("0.2.0"),
 			path=Path("/fake/deplib-0.2.0.dmp"), sha256="d020",
 			required_deps=[], author_key="ed25519:test",
+			source_content_id=_scid, source_attestation_key=_sak,
 		)
 		deplib_0214 = PackageEntry(
 			package_id="deplib", version=parse_version("0.2.14"),
 			path=Path("/fake/deplib-0.2.14.dmp"), sha256="d0214",
 			required_deps=[], author_key="ed25519:test",
+			source_content_id=_scid, source_attestation_key=_sak,
 		)
 		deplib_030 = PackageEntry(
 			package_id="deplib", version=parse_version("0.3.0"),
 			path=Path("/fake/deplib-0.3.0.dmp"), sha256="d030",
 			required_deps=[], author_key="ed25519:test",
+			source_content_id=_scid, source_attestation_key=_sak,
 		)
 		mylib = PackageEntry(
 			package_id="mylib", version=parse_version("1.0.0"),
 			path=Path("/fake/mylib-1.0.0.dmp"), sha256="m100",
 			required_deps=[("deplib", "0.2")], author_key="ed25519:test",
+			source_content_id=_scid, source_attestation_key=_sak,
 		)
 		index = {
 			"deplib": [deplib_020, deplib_0214, deplib_030],
@@ -297,7 +306,7 @@ class TestFullPrepareReplace:
 		"""Prepare always replaces the full lock — stale entries are dropped."""
 		mock_index.return_value = {}
 		mock_resolve.return_value = {
-			"dep.a": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.a", author_key="ed25519:test"),
+			"dep.a": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.a", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
@@ -318,7 +327,7 @@ class TestFullPrepareReplace:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			from tools.drift_deploy.lockfile import write_lock
 			write_lock(lock_path, {"stale.pkg": {
-				"dep.x": ResolvedDep(version="9.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.x", author_key="ed25519:test"),
+				"dep.x": ResolvedDep(version="9.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.x", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 			}})
 
 			p = build_arg_parser()
@@ -409,6 +418,8 @@ class TestCoArtifactResolution:
 				package_id="ext.crypto", version=parse_version("1.0.0"),
 				path=ext_dmp, sha256="aabbccdd", required_deps=[],
 				author_key="ed25519:test",
+				source_content_id="sha256:" + "a"*64,
+				source_attestation_key="ed25519:test",
 			)
 			with patch("tools.drift_deploy.drift_prepare.build_package_index") as mock_idx:
 				mock_idx.return_value = {"ext.crypto": [ext_entry]}
@@ -520,6 +531,8 @@ class TestPrepareCheck:
 			"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="aabbcc", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:test",
+				source_content_id="sha256:" + "a"*64,
+				source_attestation_key="ed25519:test",
 			),
 		}
 		with tempfile.TemporaryDirectory() as tmpdir:
@@ -550,9 +563,11 @@ class TestPrepareCheck:
 		# Two different resolutions (e.g. after an upstream patch bump).
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct",
-				package_id="ext.lib", author_key="ed25519:test")},
+				package_id="ext.lib", author_key="ed25519:test",
+				source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test")},
 			{"ext.lib": ResolvedDep(version="1.0.5", sha256="ddeeff", dep_type="direct",
-				package_id="ext.lib", author_key="ed25519:test")},
+				package_id="ext.lib", author_key="ed25519:test",
+				source_content_id="sha256:" + "b"*64, source_attestation_key="ed25519:test")},
 		]
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
@@ -653,6 +668,123 @@ class TestPrepareCheck:
 				mi.return_value = {}
 				mr.return_value = {
 					"ext.lib": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct",
-						package_id="ext.lib", author_key="ed25519:test"),
+						package_id="ext.lib", author_key="ed25519:test",
+						source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 				}
 				assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1
+
+
+class TestPrepareSourceAttestationGate:
+	"""Phase B.1 trust gate: drift prepare must refuse to write a v4 lock
+	whose non-co-artifact resolved deps lack a valid source attestation
+	(missing sidecar, mismatched sidecar, or bad signature — all
+	collapse to empty source identity at the resolver layer).  Without
+	this fail-fast, drift prepare would emit a v4 lock that read_lock
+	rejects on the next consume — the user would see the failure two
+	steps removed from the cause."""
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_missing_attestation_for_direct_dep_fails_prepare(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+	) -> None:
+		"""Resolved direct dep with empty source identity → PrepareError
+		naming the package and pointing at republish."""
+		mock_index.return_value = {}
+		mock_resolve.return_value = {
+			"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="aabbcc", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:test",
+				source_content_id="",  # missing → fail
+				source_attestation_key="",
+			),
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+				}],
+			}))
+			p = build_arg_parser()
+			with pytest.raises(PrepareError) as exc:
+				_run_impl(p.parse_args(["--manifest", str(manifest_path)]))
+			msg = str(exc.value)
+			assert "my.pkg -> ext.lib@1.0.0" in msg
+			assert "republish" in msg.lower()
+			assert "0.30.0" in msg
+			# Lock file must NOT have been written.
+			assert not (_drift_subdir(tmpdir) / "lock.json").exists()
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_missing_attestation_only_signer_kid_fails_prepare(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+	) -> None:
+		"""Half-populated source identity (scid present, kid missing)
+		also fails — both are required to anchor the trust chain."""
+		mock_index.return_value = {}
+		mock_resolve.return_value = {
+			"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="aabbcc", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:test",
+				source_content_id="sha256:" + "a"*64,
+				source_attestation_key="",  # half-empty → fail
+			),
+		}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "test", "license": "MIT"},
+				"artifacts": [{
+					"kind": "package", "name": "my.pkg", "version": "0.1.0",
+					"description": "test", "license": "MIT",
+					"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+					"module_namespace": "my.pkg",
+					"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+				}],
+			}))
+			p = build_arg_parser()
+			with pytest.raises(PrepareError, match="ext.lib"):
+				_run_impl(p.parse_args(["--manifest", str(manifest_path)]))
+
+	def test_co_artifact_dep_does_not_require_attestation(self) -> None:
+		"""Co-artifacts legitimately have empty source identity at
+		prepare time (the .source-attestation hasn't been built yet —
+		it's emitted later in the same deploy run).  The fail-fast
+		gate must skip them by `dep_type == "co-artifact"`."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "drift-web", "license": "MIT"},
+				"artifacts": [
+					{
+						"kind": "package", "name": "web-jwt", "version": "0.2.3",
+						"description": "JWT", "license": "MIT",
+						"entry_module": "web/jwt.drift", "modules": ["web/jwt.drift"],
+						"module_namespace": "web.jwt",
+					},
+					{
+						"kind": "package", "name": "web-rest", "version": "0.2.3",
+						"description": "REST", "license": "MIT",
+						"entry_module": "web/rest.drift", "modules": ["web/rest.drift"],
+						"module_namespace": "web.rest",
+						"package_deps": [{"name": "web-jwt", "version": "0.2"}],
+					},
+				],
+			}))
+			p = build_arg_parser()
+			rc = _run_impl(p.parse_args(["--manifest", str(manifest_path)]))
+			assert rc == 0  # co-artifact deps with empty source identity OK
+			lock = read_lock(_drift_subdir(tmpdir) / "lock.json")
+			assert lock["web-rest"]["web-jwt"].dep_type == "co-artifact"
+			assert lock["web-rest"]["web-jwt"].source_content_id == ""
+			assert lock["web-rest"]["web-jwt"].source_attestation_key == ""

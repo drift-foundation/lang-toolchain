@@ -7331,6 +7331,19 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--package-id", type=str, help="Package identity (required with --emit-package)")
 	parser.add_argument("--package-version", type=str, help="Package version (SemVer; required with --emit-package)")
 	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
+	parser.add_argument(
+		"--source-content-id",
+		type=str,
+		default=None,
+		help=(
+			"Canonical source-content id for the artifact, computed by "
+			"drift_deploy from stable source inputs (see "
+			"tools.drift_deploy.source_attestation.compute_artifact_source_content_id). "
+			"Stamped verbatim into the .dmp manifest as 'source_content_id'. "
+			"Required for source-rebuild certification; optional for byte-only "
+			"consumption."
+		),
+	)
 	parser.add_argument("-g", "--debug-info", action="store_true", help="Emit debug info in generated LLVM (DWARF)")
 	parser.add_argument("--no-debug-info", action="store_true", help="Disable debug info emission")
 	parser.add_argument("--linker", choices=["ld", "gold"], default=None, help="Select linker (default: prefer gold if available)")
@@ -10817,7 +10830,27 @@ def main(argv: list[str] | None = None) -> int:
 			manifest_obj["native_deps"] = _native_deps_section
 		if _required_deps_list is not None:
 			manifest_obj["required_deps"] = _required_deps_list
-	
+		if args.source_content_id is not None:
+			scid = str(args.source_content_id)
+			# Strict shape validation: literal `sha256:` + exactly
+			# 64 lowercase hex chars.  Anything else (uppercase,
+			# non-hex, wrong length, trailing whitespace) is
+			# rejected at the trust boundary so a malformed id
+			# cannot be stamped into the .dmp manifest and later
+			# signed by a downstream attestation.
+			import re as _re
+			if not _re.fullmatch(r"sha256:[0-9a-f]{64}", scid):
+				msg = (
+					f"--source-content-id must match 'sha256:<64 lowercase hex>'; "
+					f"got {scid!r}"
+				)
+				if args.json:
+					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+				else:
+					print(f"error: {msg}", file=sys.stderr)
+				return 1
+			manifest_obj["source_content_id"] = scid
+
 		write_dmir_pkg_v0(
 			args.emit_package,
 			manifest_obj=manifest_obj,

@@ -74,25 +74,33 @@ def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
 
 
 def _write_lock(tmp_path: Path, artifacts: dict, *, author_key: str = "ed25519:test") -> Path:
-	"""Write a v3 lock for tests.  `deps.items()` carries exact
+	"""Write a v4 lock for tests.  `deps.items()` carries exact
 	`M.N.P` versions; this helper adds a deterministic fake sha256
-	per entry.  No range field, no file-level integrity, no
-	redundant `package_id` inside entries."""
+	+ source_content_id per entry, both derived from `(pkg_id,
+	version)` so re-running the same test produces byte-identical
+	locks.  No range field, no file-level integrity, no redundant
+	`package_id` inside entries."""
 	import hashlib
 	drift_dir = tmp_path / "drift"
 	drift_dir.mkdir(exist_ok=True)
 	lock_path = drift_dir / "lock.json"
-	lock_obj = {"schema_version": 3, "artifacts": {}}
+	lock_obj = {"schema_version": 4, "artifacts": {}}
 	for art_name, deps in artifacts.items():
 		resolved = {}
 		for pkg_id, ver in deps.items():
-			# Deterministic fake sha so tests are stable; real
-			# builds derive this from the actual .dmp bytes.
+			# Deterministic fake values so tests are stable; real
+			# builds derive these from the .dmp bytes / .source-
+			# attestation sidecar respectively.
 			fake_sha = hashlib.sha256(f"{pkg_id}@{ver}".encode()).hexdigest()
+			fake_scid = "sha256:" + hashlib.sha256(
+				f"src:{pkg_id}@{ver}".encode()
+			).hexdigest()
 			resolved[pkg_id] = {
 				"version": ver,
 				"sha256": fake_sha,
 				"author_key": author_key,
+				"source_content_id": fake_scid,
+				"source_attestation_key": author_key,
 				"dep_type": "direct",
 			}
 		lock_obj["artifacts"][art_name] = {"resolved": resolved}
@@ -175,6 +183,38 @@ class TestBuildPackageCmd:
 		dep_flag_idx = cmd.index("--dep")
 		assert cmd[dep_flag_idx + 1] == "dep-a@1.0.0"
 		assert "--package-root" in cmd
+
+	def test_package_cmd_with_source_content_id(self):
+		"""--source-content-id is plumbed through when caller supplies it."""
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-pkg.dmp"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+			source_content_id="sha256:" + "a" * 64,
+		)
+		assert "--source-content-id" in cmd
+		idx = cmd.index("--source-content-id")
+		assert cmd[idx + 1] == "sha256:" + "a" * 64
+
+	def test_package_cmd_omits_source_content_id_when_absent(self):
+		"""Default invocation does not emit --source-content-id (Phase A
+		keeps it optional; Phase C will require it for source-mode)."""
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-pkg.dmp"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+		)
+		assert "--source-content-id" not in cmd
 
 	def test_package_cmd_unsafe(self):
 		art = _make_artifact(unsafe=True)
@@ -576,15 +616,17 @@ class TestDriftBuildRun:
 			],
 		}
 		_write_manifest(tmp_path, manifest_data)
-		# Lock contains dep-a (direct) AND dep-b (transitive).  v3
-		# shape: exact version + sha256 per entry.
+		# Lock contains dep-a (direct) AND dep-b (transitive).  v4
+		# shape: exact version + sha256 + source identity per entry.
+		_scid_a = "sha256:" + "a"*64
+		_scid_b = "sha256:" + "b"*64
 		lock_obj = {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {
 				"my-pkg": {
 					"resolved": {
-						"dep-a": {"version": "1.2.7", "sha256": "aa", "author_key": "unsigned", "dep_type": "direct"},
-						"dep-b": {"version": "0.5.3", "sha256": "bb", "author_key": "unsigned", "dep_type": "transitive"},
+						"dep-a": {"version": "1.2.7", "sha256": "aa", "author_key": "unsigned", "source_content_id": _scid_a, "source_attestation_key": "ed25519:test", "dep_type": "direct"},
+						"dep-b": {"version": "0.5.3", "sha256": "bb", "author_key": "unsigned", "source_content_id": _scid_b, "source_attestation_key": "ed25519:test", "dep_type": "transitive"},
 					}
 				}
 			},
@@ -1453,7 +1495,7 @@ class TestLockCompatibility:
 		import hashlib
 		bad_sha = hashlib.sha256(b"dep-a@0.1").hexdigest()
 		lock_obj = {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {
 				"my-pkg": {
 					"resolved": {
@@ -1461,6 +1503,8 @@ class TestLockCompatibility:
 							"version": "0.1",  # range, not exact — corruption
 							"sha256": bad_sha,
 							"author_key": "ed25519:test",
+							"source_content_id": "sha256:" + "a"*64,
+							"source_attestation_key": "ed25519:test",
 							"dep_type": "direct",
 						},
 					},
@@ -1655,17 +1699,29 @@ class TestLockCompatibility:
 		direct_sha = hashlib.sha256(b"dep-a@1.2.7").hexdigest()
 		t1_sha = hashlib.sha256(b"dep-b@0.5.3").hexdigest()
 		t2_sha = hashlib.sha256(b"dep-c@2.0.1").hexdigest()
+		direct_scid = "sha256:" + hashlib.sha256(b"src:dep-a@1.2.7").hexdigest()
+		t1_scid = "sha256:" + hashlib.sha256(b"src:dep-b@0.5.3").hexdigest()
+		t2_scid = "sha256:" + hashlib.sha256(b"src:dep-c@2.0.1").hexdigest()
 		lock_obj = {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {
 				"my-pkg": {
 					"resolved": {
 						"dep-a": {"version": "1.2.7", "sha256": direct_sha,
-							"author_key": "ed25519:test", "dep_type": "direct"},
+							"author_key": "ed25519:test",
+							"source_content_id": direct_scid,
+							"source_attestation_key": "ed25519:test",
+							"dep_type": "direct"},
 						"dep-b": {"version": "0.5.3", "sha256": t1_sha,
-							"author_key": "ed25519:test", "dep_type": "transitive"},
+							"author_key": "ed25519:test",
+							"source_content_id": t1_scid,
+							"source_attestation_key": "ed25519:test",
+							"dep_type": "transitive"},
 						"dep-c": {"version": "2.0.1", "sha256": t2_sha,
-							"author_key": "ed25519:test", "dep_type": "transitive"},
+							"author_key": "ed25519:test",
+							"source_content_id": t2_scid,
+							"source_attestation_key": "ed25519:test",
+							"dep_type": "transitive"},
 					},
 				},
 			},
@@ -2297,10 +2353,11 @@ class TestE2E:
 		])
 		_write_e2e_manifest(consumer_dir, consumer_manifest)
 
-		# Write v3 lockfile with exact resolved version + sha256.
+		# Write v4 lockfile with exact resolved version + sha256 + source identity.
 		dep_sha = hashlib.sha256(dep_dmp.read_bytes()).hexdigest()
+		dep_scid = "sha256:" + hashlib.sha256(b"src:test-dep@0.1.0").hexdigest()
 		_write_e2e_lock(consumer_dir, {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {
 				"test-consumer": {
 					"resolved": {
@@ -2308,6 +2365,8 @@ class TestE2E:
 							"version": "0.1.0",
 							"sha256": dep_sha,
 							"author_key": "unsigned",
+							"source_content_id": dep_scid,
+							"source_attestation_key": "ed25519:test",
 							"dep_type": "direct",
 						},
 					},
@@ -2400,10 +2459,11 @@ class TestE2E:
 		)
 		# test-dep needs a lockfile for its dep on test-leaf.
 		leaf_sha = hashlib.sha256(leaf_dmp.read_bytes()).hexdigest()
+		leaf_scid = "sha256:" + hashlib.sha256(b"src:test-leaf@0.1.0").hexdigest()
 		_write_e2e_lock(dep_dir, {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {"test-dep": {"resolved": {
-				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "source_content_id": leaf_scid, "source_attestation_key": "ed25519:test", "dep_type": "direct"},
 			}}},
 		})
 
@@ -2445,11 +2505,12 @@ class TestE2E:
 			)]),
 		)
 		# Lockfile: test-dep is direct, test-leaf is transitive.
+		dep_scid = "sha256:" + hashlib.sha256(b"src:test-dep@0.1.0").hexdigest()
 		_write_e2e_lock(consumer_dir, {
-			"schema_version": 3,
+			"schema_version": 4,
 			"artifacts": {"test-consumer": {"resolved": {
-				"test-dep": {"version": "0.1.0", "sha256": dep_sha, "author_key": "unsigned", "dep_type": "direct"},
-				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "dep_type": "transitive"},
+				"test-dep": {"version": "0.1.0", "sha256": dep_sha, "author_key": "unsigned", "source_content_id": dep_scid, "source_attestation_key": "ed25519:test", "dep_type": "direct"},
+				"test-leaf": {"version": "0.1.0", "sha256": leaf_sha, "author_key": "unsigned", "source_content_id": leaf_scid, "source_attestation_key": "ed25519:test", "dep_type": "transitive"},
 			}}},
 		})
 

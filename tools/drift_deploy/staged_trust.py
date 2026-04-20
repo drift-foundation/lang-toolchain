@@ -102,6 +102,38 @@ def build_staged_trust(
 	)
 
 
+def load_signing_key_seed(key_seed_path: Path) -> bytes:
+	"""Load a 32-byte Ed25519 private seed from the canonical Drift
+	key-file format (base64 text, possibly trailing newline).
+
+	Decode goes through `lang.drift.crypto.b64_decode` so the strict
+	`validate=True` semantics are shared with every other signing
+	surface (artifact `.sig`, `.source-attestation`, smoke trust
+	extraction).  Without `validate=True`, Python's base64 decoder
+	silently ignores non-base64 characters — that would let a
+	corrupted key file decode "successfully" to a different seed
+	than the producer intended.
+
+	Raises `ValueError` on bad base64, embedded non-base64 chars,
+	wrong decoded length, or read failure so a single failure
+	surface covers all signers.
+	"""
+	from lang.drift.crypto import b64_decode
+	try:
+		seed_text = key_seed_path.read_text(encoding="utf-8").strip()
+	except OSError as err:
+		raise ValueError(f"signing key file unreadable: {err}") from err
+	try:
+		seed_bytes = b64_decode(seed_text)
+	except Exception as err:
+		raise ValueError(f"signing key file does not contain valid base64: {err}") from err
+	if len(seed_bytes) != 32:
+		raise ValueError(
+			f"signing key seed must decode to 32 bytes, got {len(seed_bytes)}"
+		)
+	return seed_bytes
+
+
 def extract_pubkey_from_seed(key_seed_path: Path) -> bytes:
 	"""
 	Extract the Ed25519 public key from a seed file.
@@ -110,10 +142,7 @@ def extract_pubkey_from_seed(key_seed_path: Path) -> bytes:
 	"""
 	from lang.drift.crypto import ed25519_sign_from_seed
 
-	seed_text = key_seed_path.read_text(encoding="utf-8").strip()
-	seed_bytes = base64.b64decode(seed_text)
-	if len(seed_bytes) != 32:
-		raise ValueError(f"signing key seed must be 32 bytes, got {len(seed_bytes)}")
+	seed_bytes = load_signing_key_seed(key_seed_path)
 	# Sign a dummy message to extract the public key.
 	_sig, pubkey = ed25519_sign_from_seed(priv_seed32=seed_bytes, message=b"")
 	return pubkey

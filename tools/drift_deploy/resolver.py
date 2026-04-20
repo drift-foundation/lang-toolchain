@@ -28,6 +28,15 @@ class PackageEntry:
 	`package_deps` at publish time).  Consumers walk this
 	transitively to build their own exact lock.  Never carries
 	lock-exact pins.
+
+	`source_content_id` and `source_attestation_key` are read from
+	the `.source-attestation` sidecar (or empty if no sidecar is
+	present — Phase B graceful path, Phase C tightens for source-
+	rebuild mode).  These together pin the package's *source*
+	identity and the key that attested it, decoupled from the
+	`.dmp` byte sha256 — required for source-rebuild certification
+	where rebuilt bytes are expected to differ from the author's
+	original artifact.
 	"""
 	package_id: str
 	version: SemVer
@@ -35,6 +44,8 @@ class PackageEntry:
 	sha256: str
 	required_deps: list[tuple[str, str]]  # [(dep_name, range_string), ...]
 	author_key: str = ""  # "ed25519:<kid>" from signature sidecar
+	source_content_id: str = ""  # "sha256:<hex>" from .source-attestation body
+	source_attestation_key: str = ""  # "ed25519:<kid>" of attestation signer
 
 
 @dataclass(frozen=True)
@@ -46,22 +57,43 @@ class ConstraintEntry:
 
 @dataclass(frozen=True)
 class ResolvedDep:
-	"""A single resolved dependency entry as it appears in a lock v3.
+	"""A single resolved dependency entry as it appears in a lock v4.
 
-	Under the 0.29 two-layer model the lock records the exact
-	resolved artifact, not a range: `version` is `M.N.P`, `sha256`
-	is the hex digest of the `.dmp` file, `author_key` is the
-	trusted signer kid, `dep_type` is `"direct"`, `"transitive"`, or
-	`"co-artifact"`.  Build/deploy re-check all three (version, sha,
-	key) against the on-disk package at load time; any mismatch is
-	rejected and `drift prepare` is the only sanctioned path to
-	refresh.
+	Under the 0.30 source-attestation model the lock records two
+	independent identities for each dep:
+	  - artifact identity: `sha256` (byte fingerprint of `.dmp`) +
+	    `author_key` (kid that signed the artifact).
+	  - source identity: `source_content_id` (canonical hash of the
+	    declared source/build inputs, see
+	    `tools/drift_deploy/source_attestation.compute_source_content_id`)
+	    + `source_attestation_key` (kid that signed the
+	    `.source-attestation` body).
+
+	Default-strict consumption (`drift build` / `drift deploy` with
+	no flags) requires ALL of `(version, sha256, author_key,
+	source_content_id, source_attestation_key)` to match the
+	on-disk package + its signed attestation sidecar — bytes AND
+	source identity, both anchored by signatures.
+
+	Source-rebuild mode (Phase D) tolerates `sha256` drift as long
+	as the source-identity half (`source_content_id` +
+	`source_attestation_key`) re-verifies; the trust root in that
+	mode is the source-attestation key, never the rebuilt artifact
+	signer.
+
+	Co-artifact entries leave `sha256`, `author_key`,
+	`source_content_id`, and `source_attestation_key` empty —
+	they're filled in at deploy time when the co-artifact is built.
+	The verifier skips co-artifact entries entirely (with a fail-
+	closed allowlist on the `package_id`).
 	"""
-	version: str  # exact M.N.P under v3 lock; range string only in pre-resolution intermediate structures
+	version: str  # exact M.N.P under v3+ lock; range string only in pre-resolution intermediate structures
 	sha256: str  # hex digest of the resolved .dmp file ("" for co-artifact deps)
 	dep_type: str  # "direct", "transitive", or "co-artifact"
 	package_id: str = ""  # package name
-	author_key: str = ""  # "ed25519:<kid>" of signer
+	author_key: str = ""  # "ed25519:<kid>" of artifact signer
+	source_content_id: str = ""  # "sha256:<hex>" — canonical source identity
+	source_attestation_key: str = ""  # "ed25519:<kid>" of source-attestation signer
 
 
 class ResolutionError(Exception):
@@ -110,6 +142,169 @@ def _read_author_key(dmp_path: Path) -> str:
 		except (json.JSONDecodeError, OSError, KeyError):
 			pass
 	return ""
+
+
+def _read_source_attestation_meta(
+	dmp_path: Path,
+	manifest: dict[str, Any],
+) -> tuple[str, str]:
+	"""Extract `(source_content_id, source_attestation_key)` from the
+	`.source-attestation` sidecar adjacent to a `.dmp` / `.zdmp`,
+	cross-bound to the package's own `.dmp` manifest and with the
+	signature verified.
+
+	Returns `("", "")` if any of the following:
+	  - sidecar is absent (legacy package; drift_prepare turns this
+	    into a fail-fast republish-required error for non-co-artifact
+	    deps when it sees the empty fields);
+	  - sidecar fails structural load (format/version/body shape/
+	    body_sha256 self-check);
+	  - sidecar signature does not verify with the carried pubkey;
+	  - sidecar body does not bind to the .dmp it sits next to:
+	    `package_id`, `version`, `target_class`, `required_deps`,
+	    or `source_content_id` (when the manifest carries a stamp)
+	    don't match.
+
+	Cross-binding is the load-bearing trust check.  A validly
+	signed attestation for some other package/version/target placed
+	next to a `.dmp` would otherwise get locked as that .dmp's
+	source identity, defeating the whole "rebuilder cannot sign as
+	the package owner" contract.  Mismatch → log on stderr (so the
+	user knows which package's sidecar is misbound) and return
+	empty so the caller can treat the package as un-attested.
+
+	Hard fail at prepare time (not here): drift_prepare iterates
+	resolved deps and refuses to write a v4 lock whose non-co-
+	artifact entries have empty source identity.  Doing the fail-
+	fast at the per-package index walk would block unrelated builds
+	on one corrupt sidecar; doing it at prepare time scopes the
+	error to packages the consumer actually needs.
+	"""
+	from tools.drift_deploy.source_attestation import (
+		read_attestation_sidecar,
+		verify_attestation,
+	)
+	import sys
+	# Adjacent to either .dmp or .zdmp; try both.
+	candidates = [
+		dmp_path.with_suffix(".source-attestation"),
+		dmp_path.with_suffix(".zdmp").with_suffix(".source-attestation"),
+	]
+	sidecar_path: Path | None = None
+	for path in candidates:
+		if path.exists():
+			sidecar_path = path
+			break
+	if sidecar_path is None:
+		return ("", "")
+
+	def _warn(reason: str) -> tuple[str, str]:
+		# stderr-warn instead of raising so a single corrupt
+		# sidecar in the package root doesn't take down the entire
+		# index walk for unrelated builds.  drift_prepare turns the
+		# empty result into a fail-fast republish-required error
+		# for any RESOLVED non-co-artifact dep — scoped to the
+		# packages the consumer actually needs.
+		print(
+			f"warning: source attestation at '{sidecar_path}' rejected: "
+			f"{reason} — package will be treated as un-attested.  "
+			f"`drift prepare` will fail if this package is a non-co-"
+			f"artifact dep; republish with toolchain >= 0.30.0.",
+			file=sys.stderr,
+		)
+		return ("", "")
+
+	try:
+		sidecar = read_attestation_sidecar(sidecar_path)
+	except (ValueError, OSError) as e:
+		return _warn(f"sidecar will not load ({e})")
+
+	if not sidecar.signatures:
+		return _warn("no signatures present")
+	kid = sidecar.signatures[0].kid
+
+	# Signature verification BEFORE recording the kid — otherwise
+	# the lock would carry a kid whose signature does not actually
+	# verify, and the strict verifier would have to re-validate
+	# every load.  Verifying once at index time, before the value
+	# is written into a lock, keeps the "lock entries are
+	# internally signed and coherent" invariant.
+	try:
+		verify_attestation(sidecar, expected_signer_kid=kid)
+	except ValueError as e:
+		return _warn(f"signature does not verify ({e})")
+
+	# Cross-binding: the sidecar body must describe THIS .dmp.
+	body = sidecar.body
+	manifest_pkg_id = manifest.get("package_id")
+	manifest_version = manifest.get("package_version")
+	manifest_target = manifest.get("target")
+	manifest_scid = manifest.get("source_content_id")  # Phase A stamp; may be None for legacy
+	manifest_required_deps = manifest.get("required_deps") or []
+
+	if body.package_id != manifest_pkg_id:
+		return _warn(
+			f"body.package_id {body.package_id!r} != "
+			f".dmp manifest['package_id'] {manifest_pkg_id!r}"
+		)
+	if body.version != manifest_version:
+		return _warn(
+			f"body.version {body.version!r} != "
+			f".dmp manifest['package_version'] {manifest_version!r}"
+		)
+	if body.target_class != manifest_target:
+		return _warn(
+			f"body.target_class {body.target_class!r} != "
+			f".dmp manifest['target'] {manifest_target!r}"
+		)
+	# Under v4 the .dmp manifest stamp is REQUIRED.  Republishing
+	# a package with toolchain >= 0.30.0 always emits the stamp;
+	# its absence means the package was published with an older
+	# toolchain and is not source-mode certifiable, full stop.
+	# Allowing a sidecar to substitute for a missing stamp would
+	# let an old package be retroactively "upgraded" into source-
+	# mode by dropping a sidecar next to it on disk — the artifact
+	# itself would never declare the source identity it was built
+	# from, and the trust chain would rest on adjacency alone.
+	from tools.drift_deploy.source_attestation import validate_sha256_hex_id
+	if not isinstance(manifest_scid, str) or not manifest_scid:
+		return _warn(
+			"`.dmp` manifest has no `source_content_id` stamp; the "
+			"package must be republished with toolchain >= 0.30.0 so "
+			"the artifact itself records the source identity it was "
+			"built from (a sidecar alone is not enough — that would "
+			"let an old package be 'upgraded' into source-mode by "
+			"adjacency)"
+		)
+	try:
+		validate_sha256_hex_id(
+			manifest_scid,
+			field="`.dmp` manifest['source_content_id'] stamp",
+		)
+	except ValueError as e:
+		return _warn(str(e))
+	if body.source_content_id != manifest_scid:
+		return _warn(
+			f"body.source_content_id {body.source_content_id!r} != "
+			f".dmp manifest['source_content_id'] {manifest_scid!r}"
+		)
+	# required_deps must match exactly (set-of-pairs comparison so
+	# ordering doesn't matter; the wire shape is a list).
+	body_rd = {(d.name, d.version) for d in body.required_deps}
+	manifest_rd: set[tuple[str, str]] = set()
+	for entry in manifest_required_deps:
+		if isinstance(entry, dict):
+			n = entry.get("name")
+			v = entry.get("version")
+			if isinstance(n, str) and isinstance(v, str):
+				manifest_rd.add((n, v))
+	if body_rd != manifest_rd:
+		return _warn(
+			f"body.required_deps {sorted(body_rd)} != "
+			f".dmp manifest['required_deps'] {sorted(manifest_rd)}"
+		)
+
+	return (body.source_content_id, kid)
 
 
 def build_package_index(
@@ -306,6 +501,15 @@ def build_package_index(
 			sha = _sha256_file(dmp_path)
 			# Extract author_key from adjacent .sig sidecar.
 			ak = _read_author_key(dmp_path)
+			# Extract source identity + attestation signer from
+			# the adjacent .source-attestation sidecar.  The helper
+			# cross-binds the sidecar body to the .dmp's own
+			# manifest fields and verifies the signature before
+			# returning a non-empty kid; absent or unbound sidecar
+			# yields ("", "") and `drift prepare` later refuses to
+			# write a v4 lock entry without source identity for any
+			# RESOLVED non-co-artifact dep.
+			scid, sak = _read_source_attestation_meta(dmp_path, manifest)
 			entry = PackageEntry(
 				package_id=pkg_id,
 				version=pkg_ver,
@@ -313,6 +517,8 @@ def build_package_index(
 				sha256=sha,
 				required_deps=req_deps,
 				author_key=ak,
+				source_content_id=scid,
+				source_attestation_key=sak,
 			)
 			index.setdefault(pkg_id, []).append(entry)
 
@@ -450,9 +656,12 @@ def resolve_artifact(
 				work_queue.add(tdep_name)
 
 	# Step 4: Build result.  Each resolved entry carries the exact
-	# `M.N.P` version of the picked candidate plus the candidate's
-	# sha256 — both are load-bearing at build time under the v3 lock
-	# contract (exact version + sha256 + author_key re-checked).
+	# `M.N.P` version of the picked candidate plus both halves of
+	# the v4 identity model: artifact half (`sha256` + `author_key`)
+	# and source half (`source_content_id` +
+	# `source_attestation_key`).  All five are re-checked at strict
+	# build/deploy time; source-rebuild mode (Phase D) tolerates
+	# `sha256` drift only after the source half re-verifies.
 	result: dict[str, ResolvedDep] = {}
 	for pkg_id, (ver, entry) in resolved.items():
 		result[pkg_id] = ResolvedDep(
@@ -461,5 +670,7 @@ def resolve_artifact(
 			dep_type="direct" if pkg_id in direct_set else "transitive",
 			package_id=pkg_id,
 			author_key=entry.author_key,
+			source_content_id=entry.source_content_id,
+			source_attestation_key=entry.source_attestation_key,
 		)
 	return result

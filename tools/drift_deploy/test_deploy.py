@@ -2405,3 +2405,338 @@ class TestDeployPexEntry:
 		assert mod_path.exists(), f"pex step module not found: {mod_path}"
 		from tools.deploy.steps.pex import build_drift_pex
 		assert callable(build_drift_pex)
+
+
+class TestLoadSigningKeySeed:
+	"""Pin the canonical 32-byte Ed25519 seed loader.  Decode goes
+	through `lang.drift.crypto.b64_decode` (validate=True), so
+	embedded non-base64 characters that Python's lax decoder would
+	silently drop must be rejected here too — otherwise a corrupted
+	key file would "decode" to a different seed than the producer
+	intended.
+	"""
+
+	def test_canonical_base64_seed_loads(self) -> None:
+		import base64
+		from tools.drift_deploy.staged_trust import load_signing_key_seed
+		with tempfile.TemporaryDirectory() as tmpdir:
+			p = Path(tmpdir) / "ok.key"
+			p.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
+			seed = load_signing_key_seed(p)
+			assert seed == bytes(range(32))
+
+	def test_raw_bytes_seed_rejected(self) -> None:
+		"""Raw 32 bytes (not base64 text) → invalid base64."""
+		from tools.drift_deploy.staged_trust import load_signing_key_seed
+		with tempfile.TemporaryDirectory() as tmpdir:
+			p = Path(tmpdir) / "raw.key"
+			p.write_bytes(bytes(range(32)))
+			with pytest.raises(ValueError, match="signing key"):
+				load_signing_key_seed(p)
+
+	def test_embedded_non_base64_chars_rejected(self) -> None:
+		"""Reviewer's regression: a key file with non-base64 garbage
+		mixed in must be rejected, not silently stripped.  Python's
+		default `base64.b64decode(text)` would accept and discard the
+		`!` characters, producing a different seed than the producer
+		intended.  `lang.drift.crypto.b64_decode` uses `validate=True`,
+		which our loader must inherit."""
+		from tools.drift_deploy.staged_trust import load_signing_key_seed
+		import base64
+		with tempfile.TemporaryDirectory() as tmpdir:
+			p = Path(tmpdir) / "mangled.key"
+			# Take a real base64-encoded 32-byte seed, then splice in
+			# `!` characters (not in the base64 alphabet).
+			real = base64.b64encode(bytes(range(32))).decode("ascii")
+			mangled = real[:8] + "!!!!" + real[8:]
+			p.write_text(mangled)
+			with pytest.raises(ValueError, match="signing key"):
+				load_signing_key_seed(p)
+
+	def test_wrong_decoded_length_rejected(self) -> None:
+		"""Valid base64 but wrong byte length (not 32)."""
+		from tools.drift_deploy.staged_trust import load_signing_key_seed
+		import base64
+		with tempfile.TemporaryDirectory() as tmpdir:
+			p = Path(tmpdir) / "short.key"
+			p.write_text(base64.b64encode(b"\x00" * 16).decode("ascii"))
+			with pytest.raises(ValueError, match="32 bytes"):
+				load_signing_key_seed(p)
+
+	def test_missing_file_rejected(self) -> None:
+		from tools.drift_deploy.staged_trust import load_signing_key_seed
+		with pytest.raises(ValueError, match="unreadable"):
+			load_signing_key_seed(Path("/nonexistent/key/path"))
+
+
+class TestSourceAttestationEmission:
+	"""Phase A.1 integration pin: a real signed library deploy emits the
+	`.source-attestation` sidecar alongside `.zdmp` + `.sig`, with the
+	body's `source_content_id` matching the value driftc was asked to
+	stamp into the .dmp manifest, and `required_deps` mirroring the
+	authored manifest `package_deps`.
+
+	This is the contract the orchestrator-side trust model rests on:
+	a downstream rebuild has a verifiable, author-signed source
+	identity to compare against, independent of the rebuilt .dmp's
+	exact bytes.
+
+	Findings 1 + 3 from Phase A review: validates that the canonical
+	base64-encoded ed25519 seed file format works end-to-end (the
+	previous implementation read raw bytes and would have rejected
+	every real deploy key), and that the integration contract
+	is verified — not just the pure attestation primitives.
+	"""
+
+	@staticmethod
+	def _fake_run_records_cmd(captured: list[list[str]]):
+		"""subprocess.run replacement that records each invocation's
+		argv (so the test can introspect the --source-content-id flag
+		driftc was asked to stamp) and creates the expected .dmp
+		output file."""
+		def _impl(args, **kwargs):
+			cmd = list(args) if isinstance(args, list) else [args]
+			captured.append(cmd)
+			for i, arg in enumerate(cmd):
+				if arg == "--emit-package" and i + 1 < len(cmd):
+					out_path = Path(cmd[i + 1])
+					out_path.parent.mkdir(parents=True, exist_ok=True)
+					out_path.write_bytes(b"fake-dmp")
+			import subprocess
+			return subprocess.CompletedProcess(cmd, 0, "", "")
+		return _impl
+
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed")
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_signed_library_deploy_emits_source_attestation(
+		self, _mock_trust: MagicMock,
+		mock_pubkey: MagicMock,
+		mock_sign: MagicMock,
+	) -> None:
+		"""End-to-end: real seed file (base64), real source files, real
+		attestation signing.  Asserts:
+		  - <name>.zdmp + <name>.sig + <name>.source-attestation all
+		    present in smoke staging.
+		  - sidecar.body.source_content_id == --source-content-id
+		    flag driftc was asked to stamp.
+		  - sidecar.body.required_deps == authored package_deps.
+		  - sidecar.body.target_class == build target.
+		  - sidecar signature verifies against the loaded seed's pubkey.
+		"""
+		import base64
+		from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+		from cryptography.hazmat.primitives import serialization
+
+		from tools.drift_deploy.source_attestation import (
+			read_attestation_sidecar,
+			verify_attestation,
+			_ed25519_kid,
+		)
+
+		# Real Ed25519 seed in canonical base64 file format (the format
+		# every existing Drift signing surface uses; finding 1 was that
+		# attestation signing read raw bytes and rejected this).
+		seed_raw = bytes(range(32))
+		priv = Ed25519PrivateKey.from_private_bytes(seed_raw)
+		pub = priv.public_key().public_bytes(
+			encoding=serialization.Encoding.Raw,
+			format=serialization.PublicFormat.Raw,
+		)
+		expected_kid = _ed25519_kid(pub)
+		mock_pubkey.return_value = pub
+
+		art = Artifact(
+			kind="package", name="net-tls", version="0.4.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift",
+			modules=["src/lib.drift", "src/handshake.drift"],
+			package_deps=[
+				PackageDep(name="drift-core", version="0.27"),
+				PackageDep(name="drift-net", version="0.4"),
+			],
+			module_namespace="net_tls",
+		)
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+
+			dest = tmpdir_p / "dest"
+			dest.mkdir()
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+
+			# Real source files at the paths declared in modules[].
+			# Without these, source_content_id computation would fail
+			# over to None (Phase A graceful path) and no attestation
+			# would be emitted — exactly what the test must rule out.
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+			(manifest_dir / "src" / "handshake.drift").write_text("module handshake;\n")
+
+			# Real base64 sign-key file (the format _sign_artifact and
+			# extract_pubkey_from_seed both expect; the previous Phase
+			# A wiring read raw bytes here and would have thrown on
+			# every real key file).
+			sign_key_path = tmpdir_p / "deploy.key"
+			sign_key_path.write_text(base64.b64encode(seed_raw).decode("ascii") + "\n")
+
+			# author-profile is required by the signing block.
+			author_profile = tmpdir_p / "test.author-profile"
+			fake_kid_for_profile = "ed25519:" + base64.b64encode(
+				__import__("hashlib").sha256(pub).digest()
+			).decode()
+			author_profile.write_text(json.dumps({
+				"format": "author-profile", "version": 0,
+				"key": {
+					"algo": "ed25519",
+					"kid": fake_kid_for_profile,
+					"pubkey": base64.b64encode(pub).decode(),
+				},
+				"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+				"namespaces": ["net_tls.*"],
+			}))
+
+			# _sign_artifact is mocked (artifact-byte signing is not
+			# under test here; attestation signing IS — and runs
+			# through the real seed loader).
+			fake_sig = stage_dir / "fake.sig"
+			fake_sig.parent.mkdir(parents=True, exist_ok=True)
+			fake_sig.write_bytes(b"fake-sig")
+			mock_sign.return_value = fake_sig
+
+			captured_cmds: list[list[str]] = []
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run",
+					side_effect=self._fake_run_records_cmd(captured_cmds)):
+				_deploy_artifact(
+					art,
+					driftc=Path("/fake/driftc"),
+					target="drift-dev",
+					resolved={},
+					stage_dir=stage_dir,
+					manifest_dir=manifest_dir,
+					package_roots=[staged_pkg_root, dest],
+					dest=dest,
+					app_dest=None,
+					sign_key=sign_key_path,
+					baseline_trust=None,
+					skip_smoke=True,  # don't need a real driftc smoke run
+					dry_run=True,
+					compiler_info=CompilerInfo(version="0.30.0", abi=10, commit="abc"),
+					staged_pkg_root=staged_pkg_root,
+					author_profile_path=author_profile,
+				)
+
+			# ── Cross-check 1: --source-content-id flag was passed to
+			# driftc with a strict-shape value (the .dmp manifest stamp).
+			build_cmd = captured_cmds[0]
+			assert "--source-content-id" in build_cmd, (
+				"driftc was not invoked with --source-content-id; the .dmp "
+				"manifest stamp would be missing"
+			)
+			scid_idx = build_cmd.index("--source-content-id")
+			stamped_scid = build_cmd[scid_idx + 1]
+			import re as _re
+			assert _re.fullmatch(r"sha256:[0-9a-f]{64}", stamped_scid), (
+				f"--source-content-id value is not strict-shape: {stamped_scid!r}"
+			)
+
+			# ── Cross-check 2: smoke staging contains all three files.
+			smoke_root = staged_pkg_root / "net-tls" / "0.4.0"
+			zdmp_path = smoke_root / "net-tls.zdmp"
+			sig_sidecar = smoke_root / "fake.sig"  # mocked sign returned this name
+			attestation_path = smoke_root / "net-tls.source-attestation"
+			assert zdmp_path.exists(), "smoke root missing .zdmp"
+			assert sig_sidecar.exists(), "smoke root missing .sig"
+			assert attestation_path.exists(), (
+				"smoke root missing .source-attestation — Phase A producer "
+				"contract regressed"
+			)
+
+			# ── Cross-check 3: sidecar body fields.
+			sidecar = read_attestation_sidecar(attestation_path)
+			assert sidecar.body.package_id == "net-tls"
+			assert sidecar.body.version == "0.4.0"
+			assert sidecar.body.target_class == "drift-dev"
+			assert sidecar.body.source_content_id == stamped_scid, (
+				f"sidecar source_content_id ({sidecar.body.source_content_id}) "
+				f"does not match .dmp stamp ({stamped_scid}) — orchestrator "
+				f"would not be able to bind rebuilt artifact to authored source"
+			)
+			# required_deps must mirror authored manifest package_deps.
+			assert {(d.name, d.version) for d in sidecar.body.required_deps} == {
+				("drift-core", "0.27"),
+				("drift-net", "0.4"),
+			}, "sidecar required_deps must equal authored package_deps verbatim"
+
+			# ── Cross-check 4: signature verifies against the seed's pubkey.
+			verify_attestation(sidecar, expected_signer_kid=expected_kid)
+
+	@patch("tools.drift_deploy.drift_deploy._sign_artifact")
+	@patch("tools.drift_deploy.staged_trust.extract_pubkey_from_seed", return_value=b"\x00" * 32)
+	@patch("tools.drift_deploy.staged_trust.build_staged_trust")
+	def test_raw_byte_keyfile_rejected_with_clear_diagnostic(
+		self, _mock_trust: MagicMock, _mock_pubkey: MagicMock, mock_sign: MagicMock,
+	) -> None:
+		"""Finding 1 regression: a raw-bytes (32-byte non-base64) key
+		file must produce a clear DeployError, not a silent skip or a
+		cryptography-internal traceback."""
+		art = Artifact(
+			kind="package", name="net-tls", version="0.4.0",
+			description="TLS", license="MIT",
+			entry_module="src/lib.drift",
+			modules=["src/lib.drift"],
+			module_namespace="net_tls",
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			tmpdir_p = Path(tmpdir)
+			dest = tmpdir_p / "dest"
+			dest.mkdir()
+			stage_dir = tmpdir_p / "staging"
+			staged_pkg_root = stage_dir / "_pkg_root"
+			staged_pkg_root.mkdir(parents=True)
+			manifest_dir = tmpdir_p / "src"
+			manifest_dir.mkdir()
+			(manifest_dir / "src").mkdir()
+			(manifest_dir / "src" / "lib.drift").write_text("module lib;\n")
+
+			# Raw 32-byte file (NOT base64) — the legacy buggy format
+			# Phase A briefly accepted.
+			bad_key = tmpdir_p / "raw.key"
+			bad_key.write_bytes(bytes(range(32)))
+
+			fake_sig = stage_dir / "fake.sig"
+			fake_sig.parent.mkdir(parents=True, exist_ok=True)
+			fake_sig.write_bytes(b"fake-sig")
+			mock_sign.return_value = fake_sig
+
+			def _fake_run(args, **kwargs):
+				cmd = list(args) if isinstance(args, list) else [args]
+				for i, a in enumerate(cmd):
+					if a == "--emit-package" and i + 1 < len(cmd):
+						Path(cmd[i + 1]).write_bytes(b"fake-dmp")
+				import subprocess
+				return subprocess.CompletedProcess(cmd, 0, "", "")
+
+			with patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run):
+				with pytest.raises(DeployError, match="signing key"):
+					_deploy_artifact(
+						art,
+						driftc=Path("/fake/driftc"),
+						target="drift-dev",
+						resolved={},
+						stage_dir=stage_dir,
+						manifest_dir=manifest_dir,
+						package_roots=[staged_pkg_root, dest],
+						dest=dest,
+						app_dest=None,
+						sign_key=bad_key,
+						baseline_trust=None,
+						skip_smoke=True,
+						dry_run=True,
+						compiler_info=CompilerInfo(version="0.30.0", abi=10, commit="abc"),
+						staged_pkg_root=staged_pkg_root,
+					)

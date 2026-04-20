@@ -1,27 +1,56 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-drift/lock.json read / write / verify (schema v3).
+drift/lock.json read / write / verify (schema v4).
 
 The lock records, per artifact, the **exact resolved artifact** for
-every dependency in the transitive graph: `M.N.P` version, sha256 of
-the `.dmp` file, signer `author_key`, and `dep_type`.  This answers
-the auditor question "what exactly did this library compile against?"
-without a range → disk-scan round trip.
+every dependency in the transitive graph.  Under the v4
+two-identity model each entry carries:
+
+  - artifact identity: `M.N.P` version + `sha256` of the `.dmp`
+    file + `author_key` (signer kid).  Load-bearing for default
+    byte-exact consumption.
+  - source identity: `source_content_id` (canonical hash of
+    declared source/build inputs, see
+    `tools.drift_deploy.source_attestation.compute_source_content_id`)
+    + `source_attestation_key` (kid that signed the
+    `.source-attestation` body).  Load-bearing for source-rebuild
+    certification, where the rebuilt `.dmp` bytes legitimately
+    differ from the author's original artifact but the source the
+    rebuild was made from must match what the owner attested.
 
 The authored manifest (drift/manifest.json) carries the owner's
 declared acceptable range; the lock is downstream of resolution.
-`drift prepare` is the only sanctioned writer.  Build / deploy
-strictly consume the exact pins and refuse any mismatch against the
-on-disk package (version, sha, signer).
+`drift prepare` is the only sanctioned writer.
+
+Verifier coverage by phase (this file currently lives at the end
+of Phase B):
+  - Phase B (here): write_lock and read_lock emit + accept the
+    full v4 shape; `verify_lock_compatibility` still re-checks
+    only `(version, sha256, author_key)` against the on-disk
+    package — the source-identity half is recorded in the lock
+    but not yet enforced at consume time.
+  - Phase C (next): `verify_lock_compatibility` extended to
+    re-check `source_content_id` and `source_attestation_key`
+    against the package's `.source-attestation` sidecar in
+    default mode, and to flip `sha256` to "tolerated when the
+    source half re-verifies" in source-rebuild mode.
+
+`drift prepare` already enforces source identity at write time:
+non-co-artifact resolved deps without a valid attestation cause
+a fail-fast `PrepareError` with republish-required guidance, so
+v4 locks on disk are guaranteed to carry signed, cross-bound
+source identity.
 
 Schema history:
 - v1 — exact version + `integrity: "sha256:<hex>"` (pre-0.27 era).
 - v2 — major.minor range + author_key; sha was discarded.
-- v3 — exact M.N.P + sha256 + author_key + dep_type (0.29.0+).
+- v3 — exact M.N.P + sha256 + author_key + dep_type (0.29.0).
+- v4 — v3 + source_content_id + source_attestation_key (0.30.0+).
 
-v1 and v2 locks are rejected at load; `drift prepare` regenerates as
-v3.  No silent migration — a stale lock must not quietly reinterpret
-a range entry as an exact pin.
+v1, v2, and v3 locks are rejected at load; `drift prepare`
+regenerates as v4.  No silent migration — a stale lock must not
+quietly reinterpret a range entry as an exact pin or pretend a
+byte-only-pinned entry has a verified source identity.
 """
 
 from __future__ import annotations
@@ -34,16 +63,18 @@ from typing import Any
 from tools.drift_deploy.resolver import ResolvedDep
 
 
-LOCK_SCHEMA_VERSION = 3
+LOCK_SCHEMA_VERSION = 4
 
-# Lock v3 pins every non-co-artifact entry to a fully-qualified
-# `M.N.P` version (exact resolved release).  Any other shape —
+# Lock v4 pins every non-co-artifact entry to a fully-qualified
+# `M.N.P` version (exact resolved release) — same exact-pin shape
+# that landed in v3 and is preserved by v4.  Any other shape —
 # a range (`M.N`), a constraint operator (`^0.3.0`), empty string,
 # or garbage — is a lock-corruption symptom.  Defensive shape check
 # at the loader means build/deploy never have to re-parse.
 _EXACT_MNP_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
-# v3 recognises exactly three `dep_type` values.  Anything else in a
+# v4 recognises exactly three `dep_type` values (unchanged from v3).
+# Anything else in a
 # lock file is either a typo, a hand-edit, or a forward-compat value
 # from a future schema we haven't cut yet — reject at load so the
 # downstream verifier never has to fall back to "unknown-type =
@@ -58,13 +89,20 @@ def write_lock(
 	path: Path,
 	artifacts: dict[str, dict[str, ResolvedDep]],
 ) -> None:
-	"""Write drift/lock.json (schema v3).
+	"""Write drift/lock.json (schema v4).
 
 	`artifacts` is {artifact_name → {package_id → ResolvedDep}}.
 	Each entry is emitted exactly: version M.N.P + sha256 +
-	author_key + dep_type.  No range field; no file-level
-	integrity.  The map key IS the package id; no redundant
-	`package_id` field inside the entry.
+	author_key + source_content_id + source_attestation_key +
+	dep_type.  No range field; no file-level integrity.  The map
+	key IS the package id; no redundant `package_id` field inside
+	the entry.
+
+	Co-artifact entries leave the on-disk-derived fields (`sha256`,
+	`author_key`, `source_content_id`, `source_attestation_key`)
+	empty; they're filled at deploy time when the co-artifact is
+	built.  `verify_lock_compatibility` skips co-artifact entries
+	with a fail-closed allowlist on `package_id`.
 	"""
 	obj: dict[str, Any] = {
 		"schema_version": LOCK_SCHEMA_VERSION,
@@ -79,6 +117,8 @@ def write_lock(
 				"version": dep.version,
 				"sha256": dep.sha256,
 				"author_key": dep.author_key,
+				"source_content_id": dep.source_content_id,
+				"source_attestation_key": dep.source_attestation_key,
 				"dep_type": dep.dep_type,
 			}
 			resolved_obj[pkg_id] = entry
@@ -91,14 +131,18 @@ def write_lock(
 
 
 def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
-	"""Read drift/lock.json (schema v3 only).
+	"""Read drift/lock.json (schema v4 only).
 
-	v1 and v2 locks are rejected with a pointer to `drift prepare`.
-	Under v3 the lock is downstream of resolution, authored only by
-	`drift prepare`, and load-bearing for build/deploy strict-exact
-	re-verification — accepting older shapes here would silently
-	reinterpret owner-declared ranges (v2) or pre-authorship pins
-	(v1) as exact pins and bypass the trust re-check.
+	v1, v2, and v3 locks are rejected with a pointer to `drift
+	prepare`.  Under v4 the lock is downstream of resolution,
+	authored only by `drift prepare`, and load-bearing for
+	build/deploy strict-exact re-verification across BOTH artifact
+	identity (sha256 + author_key) AND source identity
+	(source_content_id + source_attestation_key) — accepting older
+	shapes here would silently reinterpret owner-declared ranges
+	(v2), pre-authorship pins (v1), or byte-only pins (v3) as
+	having a verified source identity and bypass the source-rebuild
+	trust check.
 
 	Returns {artifact_name → {package_id → ResolvedDep}}.
 	"""
@@ -108,11 +152,23 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 	sv = data.get("schema_version")
 	if sv in (1, 2):
 		raise ValueError(
-			f"drift/lock.json uses schema v{sv}; v3 is required as of "
-			"0.29.0.  Run `drift prepare` to regenerate the lock with "
-			"exact resolved versions, sha256 digests, and signer keys. "
-			"Older schemas carried ranges (v2) or byte-only pins (v1) "
-			"and cannot be safely reinterpreted as v3 exact pins."
+			f"drift/lock.json uses schema v{sv}; v4 is required as of "
+			"0.30.0.  Run `drift prepare` to regenerate the lock with "
+			"exact resolved versions, sha256 digests, signer keys, and "
+			"source-attestation identity.  Older schemas carried ranges "
+			"(v2) or byte-only pins (v1) and cannot be safely "
+			"reinterpreted as v4 entries."
+		)
+	if sv == 3:
+		raise ValueError(
+			"drift/lock.json uses schema v3 (0.29.x); v4 is required as "
+			"of 0.30.0.  Run `drift prepare` to regenerate the lock — "
+			"v4 adds `source_content_id` and `source_attestation_key` "
+			"per dep so source-rebuild certification has a signed source "
+			"identity to verify against, independent of artifact-byte "
+			"sha256.  Silently treating a v3 lock as v4 would let a "
+			"rebuilt artifact pass the source-identity check despite "
+			"the lock having no recorded source identity to compare."
 		)
 	if sv != LOCK_SCHEMA_VERSION:
 		raise ValueError(
@@ -138,17 +194,17 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 			if not isinstance(version, str) or not version:
 				raise ValueError(
 					f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
-					f"missing 'version' (exact M.N.P required in v3)"
+					f"missing 'version' (exact M.N.P required in v4)"
 				)
 			dep_type = dep_data.get("dep_type", "direct")
 			if dep_type not in _VALID_DEP_TYPES:
 				raise ValueError(
 					f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
-					f"has invalid dep_type '{dep_type}' — v3 recognises "
+					f"has invalid dep_type '{dep_type}' — v4 recognises "
 					f"only {sorted(_VALID_DEP_TYPES)}; run `drift prepare` "
 					f"to regenerate"
 				)
-			# v3 pins an exact `M.N.P` for every entry, including
+			# v4 pins an exact `M.N.P` for every entry, including
 			# co-artifacts (their .dmp is built in the same deploy
 			# run but pinned at the manifest's exact release version).
 			# Reject any range shape or constraint operator here so
@@ -156,7 +212,7 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 			if not _EXACT_MNP_RE.match(version):
 				raise ValueError(
 					f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
-					f"version '{version}' is not an exact M.N.P pin — v3 "
+					f"version '{version}' is not an exact M.N.P pin — v4 "
 					f"only stores fully-resolved versions (a range or "
 					f"constraint here means the lock was hand-edited or "
 					f"left over from an older schema).  Run `drift "
@@ -164,11 +220,13 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 				)
 			dep_sha = dep_data.get("sha256", "")
 			dep_author_key = dep_data.get("author_key", "")
+			dep_scid = dep_data.get("source_content_id", "")
+			dep_sak = dep_data.get("source_attestation_key", "")
 			if dep_type != "co-artifact":
 				if not isinstance(dep_sha, str) or not dep_sha:
 					raise ValueError(
 						f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
-						f"missing 'sha256' — v3 requires exact artifact "
+						f"missing 'sha256' — v4 requires exact artifact "
 						f"digests for every non-co-artifact dep"
 					)
 				if not isinstance(dep_author_key, str) or not dep_author_key:
@@ -176,6 +234,41 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 						f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
 						f"missing 'author_key' — packages must be signed "
 						f"before locking; run `drift prepare` after signing"
+					)
+				# v4: source identity fields are required for non-co-
+				# artifact entries.  Empty values would let source-rebuild
+				# mode silently accept any rebuilt artifact at this
+				# `(name, version)` because there'd be nothing to verify
+				# against — the trust root would collapse to "trust the
+				# rebuilder," which is exactly what source-mode exists
+				# to prevent.  Re-`drift prepare` is the path to refresh
+				# a v3 lock or one whose attestation sidecars are
+				# missing on disk.
+				from tools.drift_deploy.source_attestation import (
+					validate_sha256_hex_id,
+				)
+				try:
+					validate_sha256_hex_id(
+						dep_scid,
+						field=f"drift/lock.json artifact '{art_name}' dep "
+						f"'{pkg_id}' source_content_id",
+					)
+				except ValueError as e:
+					raise ValueError(
+						f"{e}.  v4 lock requires a strict-shape source "
+						f"identity for every non-co-artifact dep; the "
+						f"package must be republished with toolchain "
+						f">= 0.30.0 (so its `.source-attestation` sidecar "
+						f"exists), then `drift prepare` re-run."
+					) from None
+				if not isinstance(dep_sak, str) or not dep_sak.startswith("ed25519:"):
+					raise ValueError(
+						f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
+						f"missing 'source_attestation_key' (expected "
+						f"'ed25519:<kid>') — v4 records the signer of the "
+						f"source attestation as the trust root for source-"
+						f"rebuild verification.  Republish the package "
+						f"with toolchain >= 0.30.0 and re-run `drift prepare`."
 					)
 				# "unsigned" is an explicit opt-in for development builds
 				# where packages are consumed via --allow-unsigned-from.
@@ -185,6 +278,8 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 				dep_type=dep_type,
 				package_id=pkg_id,
 				author_key=dep_author_key if isinstance(dep_author_key, str) else "",
+				source_content_id=dep_scid if isinstance(dep_scid, str) else "",
+				source_attestation_key=dep_sak if isinstance(dep_sak, str) else "",
 			)
 		result[art_name] = resolved
 	return result
@@ -196,7 +291,7 @@ def verify_lock_compatibility(
 	*,
 	allowed_co_artifacts: set[str] | None = None,
 ) -> list[str]:
-	"""Verify a v3 lock against the current package index.
+	"""Verify a v4 lock against the current package index.
 
 	Strict-exact contract: every non-co-artifact dep in the lock
 	must have a single disk entry at the exact `M.N.P` version with
@@ -327,7 +422,7 @@ def verify_lock_compatibility(
 
 
 def expand_to_dep_flags(resolved: dict[str, ResolvedDep]) -> list[str]:
-	"""Expand a v3-locked resolved graph into exact --dep flags for driftc.
+	"""Expand a v4-locked resolved graph into exact --dep flags for driftc.
 
 	Returns ["--dep", "net.tls@0.3.15", "--dep", "acme.crypto@0.9.0", ...].
 	Order is deterministic (sorted by package id).  `driftc` stays a
