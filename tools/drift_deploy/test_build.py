@@ -73,6 +73,14 @@ def _write_manifest(tmp_path: Path, data: dict | None = None) -> Path:
 	return manifest_path
 
 
+def _fake_scid(pkg_id: str, version: str) -> str:
+	"""Deterministic fake source_content_id for tests, matching the
+	formula `_write_lock` uses internally so a mocked PackageEntry
+	can declare a matching SCID without re-deriving the secret."""
+	import hashlib as _hl
+	return "sha256:" + _hl.sha256(f"src:{pkg_id}@{version}".encode()).hexdigest()
+
+
 def _write_lock(tmp_path: Path, artifacts: dict, *, author_key: str = "ed25519:test") -> Path:
 	"""Write a v4 lock for tests.  `deps.items()` carries exact
 	`M.N.P` versions; this helper adds a deterministic fake sha256
@@ -1435,10 +1443,12 @@ class TestLockCompatibility:
 		pkg_root = tmp_path / "pkg_root"
 		pkg_root.mkdir()
 
-		# v3 lock: exact version + sha256.  sha must match the
-		# fixture sha in the mocked package index (strict-exact
-		# verify re-checks all three against on-disk).
+		# v4 lock: exact version + sha256 + source identity.  sha
+		# AND source identity must match the fixture in the mocked
+		# package index (strict v4 verify re-checks both halves of
+		# the identity against on-disk).
 		fixture_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+		fixture_scid = _fake_scid("dep-a", "0.1.3")
 		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
 
 		from tools.drift_deploy.drift_build import run
@@ -1455,6 +1465,8 @@ class TestLockCompatibility:
 						sha256=fixture_sha,
 						required_deps=[],
 						author_key="ed25519:test",
+						source_content_id=fixture_scid,
+						source_attestation_key="ed25519:test",
 					),
 				],
 			}
@@ -1741,15 +1753,21 @@ class TestLockCompatibility:
 				"dep-a": [PackageEntry(package_id="dep-a",
 					version=parse_version("1.2.7"),
 					path=pkg_root / "dep-a-1.2.7.dmp", sha256=direct_sha,
-					required_deps=[], author_key="ed25519:test")],
+					required_deps=[], author_key="ed25519:test",
+					source_content_id=direct_scid,
+					source_attestation_key="ed25519:test")],
 				"dep-b": [PackageEntry(package_id="dep-b",
 					version=parse_version("0.5.3"),
 					path=pkg_root / "dep-b-0.5.3.dmp", sha256=t1_sha,
-					required_deps=[], author_key="ed25519:test")],
+					required_deps=[], author_key="ed25519:test",
+					source_content_id=t1_scid,
+					source_attestation_key="ed25519:test")],
 				"dep-c": [PackageEntry(package_id="dep-c",
 					version=parse_version("2.0.1"),
 					path=pkg_root / "dep-c-2.0.1.dmp", sha256=t2_sha,
-					required_deps=[], author_key="ed25519:test")],
+					required_deps=[], author_key="ed25519:test",
+					source_content_id=t2_scid,
+					source_attestation_key="ed25519:test")],
 			}
 			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			result = run([

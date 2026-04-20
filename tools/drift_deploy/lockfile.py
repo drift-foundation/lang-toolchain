@@ -22,20 +22,21 @@ The authored manifest (drift/manifest.json) carries the owner's
 declared acceptable range; the lock is downstream of resolution.
 `drift prepare` is the only sanctioned writer.
 
-Verifier coverage by phase (this file currently lives at the end
-of Phase B):
-  - Phase B (here): write_lock and read_lock emit + accept the
-    full v4 shape; `verify_lock_compatibility` still re-checks
-    only `(version, sha256, author_key)` against the on-disk
-    package — the source-identity half is recorded in the lock
-    but not yet enforced at consume time.
-  - Phase C (next): `verify_lock_compatibility` extended to
-    re-check `source_content_id` and `source_attestation_key`
-    against the package's `.source-attestation` sidecar in
-    default mode, and to flip `sha256` to "tolerated when the
-    source half re-verifies" in source-rebuild mode.
+Verifier modes (`verify_lock_compatibility`):
+  - **strict** (default): re-checks `(version, sha256, author_key,
+    source_content_id, source_attestation_key)` against the
+    on-disk package + its `.source-attestation` sidecar.  Both
+    halves of the v4 identity are enforced.
+  - **source_rebuild** (Phase D opt-in): re-checks `(version,
+    source_content_id, source_attestation_key)` only; tolerates
+    `sha256` and `author_key` drift because the rebuilt artifact
+    is expected to differ in bytes and may have been signed by
+    a different key.  Per-package sha drift is recorded as run
+    evidence (caller-supplied `sha_drift_log` list).  Missing
+    source attestation on disk is a hard fail with republish-
+    required guidance — no silent fallback to strict.
 
-`drift prepare` already enforces source identity at write time:
+`drift prepare` enforces source identity at write time as well:
 non-co-artifact resolved deps without a valid attestation cause
 a fail-fast `PrepareError` with republish-required guidance, so
 v4 locks on disk are guaranteed to carry signed, cross-bound
@@ -235,43 +236,50 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 						f"missing 'author_key' — packages must be signed "
 						f"before locking; run `drift prepare` after signing"
 					)
-				# v4: source identity fields are required for non-co-
-				# artifact entries.  Empty values would let source-rebuild
-				# mode silently accept any rebuilt artifact at this
-				# `(name, version)` because there'd be nothing to verify
-				# against — the trust root would collapse to "trust the
-				# rebuilder," which is exactly what source-mode exists
-				# to prevent.  Re-`drift prepare` is the path to refresh
-				# a v3 lock or one whose attestation sidecars are
-				# missing on disk.
-				from tools.drift_deploy.source_attestation import (
-					validate_sha256_hex_id,
-				)
-				try:
-					validate_sha256_hex_id(
-						dep_scid,
-						field=f"drift/lock.json artifact '{art_name}' dep "
-						f"'{pkg_id}' source_content_id",
+				# v4: source identity fields are required for SIGNED
+				# non-co-artifact entries.  The unsigned dev opt-in
+				# (`author_key == "unsigned"`) propagates: an unsigned
+				# package has no `.source-attestation` sidecar (signing
+				# infra governs both halves of the v4 identity), so
+				# both `source_content_id` and `source_attestation_key`
+				# are also allowed to be empty for those entries.  The
+				# verifier honors the same rule end-to-end.
+				#
+				# For SIGNED entries, empty source identity would let
+				# source-rebuild mode silently accept any rebuilt
+				# artifact at this `(name, version)` because there'd
+				# be nothing to verify against — the trust root would
+				# collapse to "trust the rebuilder," which is exactly
+				# what source-mode exists to prevent.  Re-`drift
+				# prepare` is the path to refresh a v3 lock or one
+				# whose attestation sidecars are missing on disk.
+				if dep_author_key != "unsigned":
+					from tools.drift_deploy.source_attestation import (
+						validate_sha256_hex_id,
 					)
-				except ValueError as e:
-					raise ValueError(
-						f"{e}.  v4 lock requires a strict-shape source "
-						f"identity for every non-co-artifact dep; the "
-						f"package must be republished with toolchain "
-						f">= 0.30.0 (so its `.source-attestation` sidecar "
-						f"exists), then `drift prepare` re-run."
-					) from None
-				if not isinstance(dep_sak, str) or not dep_sak.startswith("ed25519:"):
-					raise ValueError(
-						f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
-						f"missing 'source_attestation_key' (expected "
-						f"'ed25519:<kid>') — v4 records the signer of the "
-						f"source attestation as the trust root for source-"
-						f"rebuild verification.  Republish the package "
-						f"with toolchain >= 0.30.0 and re-run `drift prepare`."
-					)
-				# "unsigned" is an explicit opt-in for development builds
-				# where packages are consumed via --allow-unsigned-from.
+					try:
+						validate_sha256_hex_id(
+							dep_scid,
+							field=f"drift/lock.json artifact '{art_name}' dep "
+							f"'{pkg_id}' source_content_id",
+						)
+					except ValueError as e:
+						raise ValueError(
+							f"{e}.  v4 lock requires a strict-shape source "
+							f"identity for every signed non-co-artifact dep; "
+							f"the package must be republished with toolchain "
+							f">= 0.30.0 (so its `.source-attestation` sidecar "
+							f"exists), then `drift prepare` re-run."
+						) from None
+					if not isinstance(dep_sak, str) or not dep_sak.startswith("ed25519:"):
+						raise ValueError(
+							f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
+							f"missing 'source_attestation_key' (expected "
+							f"'ed25519:<kid>') — v4 records the signer of the "
+							f"source attestation as the trust root for source-"
+							f"rebuild verification.  Republish the package "
+							f"with toolchain >= 0.30.0 and re-run `drift prepare`."
+						)
 			resolved[pkg_id] = ResolvedDep(
 				version=version,
 				sha256=dep_sha if isinstance(dep_sha, str) else "",
@@ -285,30 +293,61 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 	return result
 
 
+VERIFY_MODE_STRICT = "strict"
+VERIFY_MODE_SOURCE_REBUILD = "source_rebuild"
+_VERIFY_MODES = frozenset((VERIFY_MODE_STRICT, VERIFY_MODE_SOURCE_REBUILD))
+
+
 def verify_lock_compatibility(
 	lock_deps: dict[str, ResolvedDep],
 	package_index: dict[str, list],
 	*,
 	allowed_co_artifacts: set[str] | None = None,
+	mode: str = VERIFY_MODE_STRICT,
+	sha_drift_log: list[tuple[str, str, str]] | None = None,
 ) -> list[str]:
 	"""Verify a v4 lock against the current package index.
 
-	Strict-exact contract: every non-co-artifact dep in the lock
-	must have a single disk entry at the exact `M.N.P` version with
-	matching sha256 and matching author_key.  Any deviation is a
-	build/deploy-time error.  The authoritative mechanism for
-	moving the lock forward is `drift prepare`; this function NEVER
-	silently re-resolves.
+	Two modes:
+
+	- **strict** (default; default-consumption contract): every
+	  non-co-artifact dep in the lock must have a single disk entry
+	  at the exact `M.N.P` version with matching `sha256`,
+	  `author_key`, `source_content_id`, AND `source_attestation_key`.
+	  Both halves of the v4 identity model are enforced: bytes
+	  AND source.
+
+	- **source_rebuild** (Phase D opt-in): the rebuilt artifact is
+	  expected to differ in `sha256` and may have been signed by
+	  a different key (the rebuilder's, not the original author's),
+	  so those two fields are NOT enforced — only `version` +
+	  `source_content_id` + `source_attestation_key` are required to
+	  match.  The trust root is the source-attestation key recorded
+	  in the lock; the rebuilt `.dmp`'s own signature is irrelevant
+	  to source-mode certification (the rebuilder cannot sign as the
+	  package owner).  Missing source identity (empty
+	  `source_content_id` or `source_attestation_key` on disk) is a
+	  hard fail with a republish-required diagnostic — silently
+	  falling back to strict mode would let an un-attested package
+	  pass under the source-mode banner, defeating the trust
+	  boundary.
+
+	  When `sha_drift_log` is provided, every per-package
+	  (locked_sha, disk_sha) pair where the values differ is
+	  appended as `(pkg_id, locked_sha, disk_sha)` for the caller
+	  to surface as run evidence.  This makes byte-divergence
+	  visible to humans (and to future reproducible-build work)
+	  without elevating it to a verification failure.
 
 	`allowed_co_artifacts` names the library artifacts declared in
 	the caller's current manifest that MAY be marked `dep_type
 	"co-artifact"` in the lock (they are built in this same deploy
-	run, so their sha256 / author_key is intentionally not yet
-	known).  A lock entry whose `dep_type == "co-artifact"` but
-	whose `pkg_id` is NOT in this set is treated as a verification
-	bypass attempt (hand-edited or malformed lock) and rejected —
-	an external dependency cannot legitimately claim co-artifact
-	status to skip the sha/signer re-check.
+	run, so their sha256 / author_key / source identity is
+	intentionally not yet known).  A lock entry whose `dep_type ==
+	"co-artifact"` but whose `pkg_id` is NOT in this set is treated
+	as a verification bypass attempt (hand-edited or malformed lock)
+	and rejected — an external dependency cannot legitimately claim
+	co-artifact status to skip the re-checks.
 
 	Passing `None` preserves the historical "trust the lock"
 	behaviour.  New call sites in build / deploy pass the actual
@@ -316,6 +355,11 @@ def verify_lock_compatibility(
 
 	Returns a list of error messages (empty = all good).
 	"""
+	if mode not in _VERIFY_MODES:
+		raise ValueError(
+			f"unknown verify_lock_compatibility mode {mode!r}; "
+			f"expected one of {sorted(_VERIFY_MODES)}"
+		)
 	errors: list[str] = []
 	for pkg_id, dep in lock_deps.items():
 		if dep.dep_type == "co-artifact":
@@ -362,62 +406,149 @@ def verify_lock_compatibility(
 			continue
 		# Multiple disk entries at the exact version would be a
 		# package-root duplicate issue resolved upstream by
-		# `build_package_index`; if we see >1 here, pick the first
-		# and still require the sha to match.
+		# `build_package_index`; if we see >1 here, pick the first.
 		disk = exact_matches[0]
-		# sha256 match — required for every non-co-artifact entry
-		# on both sides.  The lock's sha is the exact fingerprint of
-		# the `.dmp` the producer signed off on; a different sha
-		# means the artifact was rebuilt or replaced, which
-		# invalidates the lock.  Empty sha on EITHER side is a hard
-		# fail: without both digests, the load-bearing reproducibility
-		# check would silently pass and a programmatically-constructed
-		# `ResolvedDep` with `sha256=""` could bypass verification.
-		# (dep_type == "co-artifact" was already skipped above.)
-		if not dep.sha256:
+
+		# ── Unsigned dev opt-in incompatible with source-rebuild ──
+		# Source-rebuild mode REQUIRES a signed source attestation
+		# as its trust root.  Unsigned packages have neither a
+		# `.sig` NOR a `.source-attestation`, so there is nothing
+		# to verify against — hard fail.  This is the only place
+		# the unsigned opt-in is rejected outright.
+		if dep.author_key == "unsigned" and mode == VERIFY_MODE_SOURCE_REBUILD:
 			errors.append(
-				f"locked dependency '{pkg_id}@{dep.version}' has empty "
-				f"sha256 in the lock; run `drift prepare` to regenerate "
-				f"(non-co-artifact entries require a digest)"
+				f"locked dependency '{pkg_id}@{dep.version}' is marked "
+				f"`author_key: \"unsigned\"`, but source-rebuild mode "
+				f"requires a signed source attestation as the trust "
+				f"root.  Unsigned packages have no `.source-"
+				f"attestation` sidecar to verify against; sign and "
+				f"republish (toolchain >= 0.30.0) before using "
+				f"source-rebuild certification on this dep."
 			)
 			continue
-		if not disk.sha256:
-			errors.append(
-				f"locked dependency '{pkg_id}@{dep.version}' on-disk "
-				f"package has empty sha256 (package index did not "
-				f"compute a digest — check `build_package_index`); "
-				f"cannot verify artifact identity"
-			)
+
+		# ── Artifact-byte half ──
+		# Strict mode: sha256 is ENFORCED for every non-co-artifact
+		# entry, including unsigned.  The unsigned opt-in skips the
+		# artifact SIGNATURE / source ATTESTATION (no signing key,
+		# no sidecars), but it does NOT bypass byte identity — a
+		# stale or replaced unsigned package in a package root must
+		# still be caught.  Otherwise the "unsigned" escape hatch
+		# would become a general integrity bypass for byte identity.
+		# Source-rebuild mode: record the sha drift as run evidence
+		# and skip the comparison; the rebuilt artifact is expected
+		# to differ in bytes, and the trust root is the source-
+		# identity half checked below.
+		if mode == VERIFY_MODE_STRICT:
+			if not dep.sha256:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' has empty "
+					f"sha256 in the lock; run `drift prepare` to regenerate "
+					f"(non-co-artifact entries require a digest)"
+				)
+				continue
+			if not disk.sha256:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' on-disk "
+					f"package has empty sha256 (package index did not "
+					f"compute a digest — check `build_package_index`); "
+					f"cannot verify artifact identity"
+				)
+				continue
+			if dep.sha256 != disk.sha256:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' sha256 "
+					f"mismatch:\n"
+					f"  locked:   {dep.sha256}\n"
+					f"  on-disk:  {disk.sha256}\n"
+					f"  the artifact was rebuilt or replaced; run "
+					f"`drift prepare` to refresh the lock"
+				)
+				continue
+		else:
+			if dep.sha256 and disk.sha256 and dep.sha256 != disk.sha256:
+				if sha_drift_log is not None:
+					sha_drift_log.append((pkg_id, dep.sha256, disk.sha256))
+
+		# ── Artifact-signer + source-identity halves ──
+		# The unsigned dev opt-in skips both: unsigned packages have
+		# no `.sig` (so author_key on disk is empty) and no
+		# `.source-attestation` (so source identity is empty).  Byte
+		# identity (above) is still enforced; this branch governs
+		# the SIGNATURE-anchored checks only.
+		if dep.author_key == "unsigned":
 			continue
-		if dep.sha256 != disk.sha256:
+
+		# Strict mode: artifact-signer must match the lock.  Source-
+		# rebuild mode: skip — the rebuilt `.dmp` is expected to be
+		# signed by the rebuilder's key, not the original author's;
+		# trust comes from the source-attestation half, not the
+		# `.sig` signer.
+		if mode == VERIFY_MODE_STRICT:
+			if not disk.author_key:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' is "
+					f"unsigned in the current package root (lock expects "
+					f"signer {dep.author_key})"
+				)
+				continue
+			if dep.author_key != disk.author_key:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' signing "
+					f"key changed\n"
+					f"  locked:   {dep.author_key}\n"
+					f"  on-disk:  {disk.author_key}\n"
+					f"  run `drift prepare` to accept the new key"
+				)
+				continue
+
+		# Source-identity half — enforced in BOTH modes for signed
+		# packages.  Disk values come from
+		# `_read_source_attestation_meta`, which already signature-
+		# verified and cross-bound the body to the .dmp manifest
+		# at index time.
+		if not disk.source_content_id or not disk.source_attestation_key:
+			if mode == VERIFY_MODE_SOURCE_REBUILD:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' has no "
+					f"valid source attestation on disk — source-rebuild "
+					f"mode requires the `.source-attestation` sidecar to "
+					f"verify against the lock's recorded source identity. "
+					f"Republish the package with toolchain >= 0.30.0 (or "
+					f"reinstall, if the sidecar was lost), then re-run "
+					f"`drift prepare`.  Source-mode does NOT silently "
+					f"fall back to byte-only verification — that would "
+					f"defeat the trust boundary."
+				)
+			else:
+				errors.append(
+					f"locked dependency '{pkg_id}@{dep.version}' has no "
+					f"valid source attestation on disk (sidecar missing, "
+					f"unbound, or signature failed); run `drift prepare` "
+					f"to refresh against current packages or republish "
+					f"with toolchain >= 0.30.0"
+				)
+			continue
+		if dep.source_content_id != disk.source_content_id:
 			errors.append(
-				f"locked dependency '{pkg_id}@{dep.version}' sha256 "
+				f"locked dependency '{pkg_id}@{dep.version}' source_content_id "
 				f"mismatch:\n"
-				f"  locked:   {dep.sha256}\n"
-				f"  on-disk:  {disk.sha256}\n"
-				f"  the artifact was rebuilt or replaced; run "
+				f"  locked:   {dep.source_content_id}\n"
+				f"  on-disk:  {disk.source_content_id}\n"
+				f"  the package was rebuilt from different source; run "
 				f"`drift prepare` to refresh the lock"
 			)
 			continue
-		# Signer re-check.  "unsigned" is the explicit dev-mode
-		# opt-out (requires --allow-unsigned-from downstream).
-		if dep.author_key == "unsigned":
-			continue
-		if not disk.author_key:
+		if dep.source_attestation_key != disk.source_attestation_key:
 			errors.append(
-				f"locked dependency '{pkg_id}@{dep.version}' is "
-				f"unsigned in the current package root (lock expects "
-				f"signer {dep.author_key})"
+				f"locked dependency '{pkg_id}@{dep.version}' "
+				f"source_attestation_key changed\n"
+				f"  locked:   {dep.source_attestation_key}\n"
+				f"  on-disk:  {disk.source_attestation_key}\n"
+				f"  the source attestation was re-signed by a different key; "
+				f"run `drift prepare` to accept the new key"
 			)
 			continue
-		if dep.author_key != disk.author_key:
-			errors.append(
-				f"locked dependency '{pkg_id}@{dep.version}' signing "
-				f"key changed\n"
-				f"  locked:   {dep.author_key}\n"
-				f"  on-disk:  {disk.author_key}\n"
-				f"  run `drift prepare` to accept the new key"
-			)
 	return errors
 
 

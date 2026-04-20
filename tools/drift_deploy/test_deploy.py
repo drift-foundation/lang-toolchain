@@ -1957,6 +1957,9 @@ class TestIntraProjectDeps:
 			# match the on-disk .dmp at verify time.  Use the real
 			# sha of the test fixture so `verify_lock_compatibility`
 			# accepts it.
+			# Mark the lock entry unsigned so the v4 strict-mode
+			# verifier skips both halves (no .source-attestation
+			# sidecar exists for this synthetic on-disk fixture).
 			existing_lock = {
 				"net-tls": {
 					"net-crypto": ResolvedDep(
@@ -1964,7 +1967,7 @@ class TestIntraProjectDeps:
 						sha256=sha,
 						dep_type="direct",
 						package_id="net-crypto",
-						author_key="ed25519:test_key",
+						author_key="unsigned",
 					),
 				},
 			}
@@ -2017,7 +2020,11 @@ class TestDeployLockRangeResolution:
 				modules=["my/pkg.drift"], module_namespace="my.pkg",
 				package_deps=[PackageDep(name="dep-a", version="0.1")],
 			)
-			# v3 lock: exact version + real sha256.
+			# v4 lock: exact version + real sha256.  Mark unsigned
+			# so v4 strict-mode verifier skips both halves (the
+			# synthetic on-disk fixture has no `.source-attestation`
+			# sidecar — this test pins lock-passthrough semantics,
+			# not the trust-attestation pipeline).
 			existing_lock = {
 				"my-pkg": {
 					"dep-a": ResolvedDep(
@@ -2025,7 +2032,7 @@ class TestDeployLockRangeResolution:
 						sha256=real_sha,
 						dep_type="direct",
 						package_id="dep-a",
-						author_key="ed25519:test_key",
+						author_key="unsigned",
 					),
 				},
 			}

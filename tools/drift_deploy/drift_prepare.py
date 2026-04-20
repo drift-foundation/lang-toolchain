@@ -198,6 +198,14 @@ def _run_impl(args: argparse.Namespace) -> int:
 		for pkg_id, dep in resolved.items():
 			if dep.dep_type == "co-artifact":
 				continue
+			# Unsigned dev opt-in: if the package itself is unsigned
+			# (`author_key == "unsigned"`), its `.source-attestation`
+			# sidecar cannot exist either (signing infra governs both),
+			# so source identity is implicitly empty too.  Skip the
+			# gate for these — the unsigned escape hatch is preserved
+			# end-to-end across both halves of the v4 identity.
+			if dep.author_key == "unsigned":
+				continue
 			if not dep.source_content_id or not dep.source_attestation_key:
 				missing_attestation.append((art_name, pkg_id, dep.version))
 	if missing_attestation:

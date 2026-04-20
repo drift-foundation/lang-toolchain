@@ -49,7 +49,28 @@ def _make_entry(
 	sha: str = "aabbccdd",
 	deps: list[tuple[str, str]] | None = None,
 	author_key: str = "",
+	source_content_id: str | None = None,
+	source_attestation_key: str | None = None,
 ) -> PackageEntry:
+	"""Build a fake PackageEntry for verifier tests.
+
+	When `source_content_id` / `source_attestation_key` are not
+	overridden, derives stable defaults from `(pkg_id, version)`
+	so verifier strict-mode tests see non-empty source identity by
+	default (Phase C requires both halves of the v4 identity for
+	strict-mode passes).  Tests that specifically want to exercise
+	the missing-attestation rejection path pass `""` explicitly.
+	"""
+	import hashlib as _hl
+	if source_content_id is None:
+		source_content_id = "sha256:" + _hl.sha256(
+			f"src:{pkg_id}@{version}".encode()
+		).hexdigest()
+	if source_attestation_key is None:
+		# Default to the artifact author key when one is provided —
+		# matches the Phase A reality where a single signer signs
+		# both the .dmp and the .source-attestation.
+		source_attestation_key = author_key or "ed25519:test-attestation"
 	return PackageEntry(
 		package_id=pkg_id,
 		version=parse_version(version),
@@ -57,6 +78,8 @@ def _make_entry(
 		sha256=sha,
 		required_deps=deps or [],
 		author_key=author_key,
+		source_content_id=source_content_id,
+		source_attestation_key=source_attestation_key,
 	)
 
 
@@ -405,15 +428,21 @@ class TestLockFile:
 		]
 
 	def test_verify_exact_match_accepted(self) -> None:
-		"""Exact version + exact sha256 + signer match → accepted."""
+		"""Exact version + sha256 + signer + source identity match → accepted (strict mode)."""
+		_scid = "sha256:" + "a"*64
+		_sak = "ed25519:abc-src"
 		lock_deps = {
 			"net.tls": ResolvedDep(
 				version="0.3.15", sha256="aabbcc", dep_type="direct",
 				package_id="net.tls", author_key="ed25519:abc",
+				source_content_id=_scid, source_attestation_key=_sak,
 			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aabbcc", author_key="ed25519:abc")],
+			"net.tls": [_make_entry(
+				"net.tls", "0.3.15", sha="aabbcc", author_key="ed25519:abc",
+				source_content_id=_scid, source_attestation_key=_sak,
+			)],
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
@@ -503,10 +532,15 @@ class TestLockFile:
 	def test_verify_skips_co_artifact_deps(self) -> None:
 		"""Co-artifact deps have no published .dmp; verify skips them.
 		Their build comes from sibling sources in the same project."""
+		# Use the same SCID/SAK on both sides of the non-co-artifact
+		# dep so the strict v4 source-identity half passes.
+		_scid = "sha256:" + "c"*64
+		_sak = "ed25519:abc-src"
 		lock_deps = {
 			"net.tls": ResolvedDep(
 				version="0.3.15", sha256="aa", dep_type="direct",
 				package_id="net.tls", author_key="ed25519:abc",
+				source_content_id=_scid, source_attestation_key=_sak,
 			),
 			"web.jwt": ResolvedDep(
 				version="0.2.0", sha256="", dep_type="co-artifact",
@@ -514,7 +548,10 @@ class TestLockFile:
 			),
 		}
 		pkg_index = {
-			"net.tls": [_make_entry("net.tls", "0.3.15", sha="aa", author_key="ed25519:abc")],
+			"net.tls": [_make_entry(
+				"net.tls", "0.3.15", sha="aa", author_key="ed25519:abc",
+				source_content_id=_scid, source_attestation_key=_sak,
+			)],
 			# web.jwt NOT in index — would fail if not skipped.
 		}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
@@ -1414,6 +1451,256 @@ class TestTwoLayerVersioning:
 		# Diagnostic must surface both sides of the disagreement so
 		# the user can see which packages are in conflict.
 		assert "liba" in err or "libb" in err
+
+
+class TestVerifyV4SourceIdentityEnforcement:
+	"""Phase C verifier: strict mode enforces both halves of v4
+	identity (artifact + source); source-rebuild mode tolerates
+	`sha256` and `author_key` drift but enforces source identity
+	as the trust root.  Unsigned dev opt-in propagates: in strict
+	mode unsigned packages skip both halves; in source-rebuild
+	mode unsigned packages have no trust root and are rejected."""
+
+	def _signed_lock_dep(
+		self, *, scid: str = "sha256:" + "a"*64,
+		sak: str = "ed25519:src",
+		sha: str = "aabb",
+		author: str = "ed25519:art",
+	) -> ResolvedDep:
+		return ResolvedDep(
+			version="0.4.0", sha256=sha, dep_type="direct",
+			package_id="net.tls", author_key=author,
+			source_content_id=scid, source_attestation_key=sak,
+		)
+
+	# ── strict mode ────────────────────────────────────────────────
+
+	def test_strict_rejects_missing_disk_source_identity(self) -> None:
+		"""Lock has source identity; disk has none → strict rejects."""
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:art",
+			source_content_id="", source_attestation_key="",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "no valid source attestation" in errors[0]
+		assert "drift prepare" in errors[0]
+
+	def test_strict_rejects_source_content_id_mismatch(self) -> None:
+		lock_deps = {"net.tls": self._signed_lock_dep(scid="sha256:" + "a"*64)}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:art",
+			source_content_id="sha256:" + "b"*64,
+			source_attestation_key="ed25519:src",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "source_content_id mismatch" in errors[0]
+		assert "rebuilt from different source" in errors[0]
+
+	def test_strict_rejects_source_attestation_key_change(self) -> None:
+		lock_deps = {"net.tls": self._signed_lock_dep(sak="ed25519:old-src")}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:art",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:new-src",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "source_attestation_key changed" in errors[0]
+		assert "ed25519:old-src" in errors[0]
+		assert "ed25519:new-src" in errors[0]
+
+	def test_strict_accepts_full_match(self) -> None:
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:art",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:src",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert errors == []
+
+	# ── source_rebuild mode ────────────────────────────────────────
+
+	def test_source_rebuild_tolerates_sha_drift(self) -> None:
+		"""Different rebuilt bytes + matching source identity → accepted
+		in source-rebuild mode (and the drift recorded as evidence)."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(sha="original_sha")}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt_sha", author_key="ed25519:rebuilder",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:src",  # original author's source key
+		)]}
+		drift_log: list[tuple[str, str, str]] = []
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			sha_drift_log=drift_log,
+		)
+		assert errors == []
+		assert drift_log == [("net.tls", "original_sha", "rebuilt_sha")]
+
+	def test_source_rebuild_ignores_artifact_signer_change(self) -> None:
+		"""Rebuild signed by a different key (the rebuilder, not the
+		original author) must not fail — the rebuilder cannot sign as
+		the package owner; the trust root is the source-attestation
+		key, NOT the .dmp's signer."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(author="ed25519:original-author")}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:rebuilder-not-author",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:src",
+		)]}
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+		)
+		assert errors == []
+
+	def test_source_rebuild_rejects_source_content_id_mismatch(self) -> None:
+		"""Sha drift may be tolerated; SOURCE drift never is."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(scid="sha256:" + "a"*64)}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rebuilder",
+			source_content_id="sha256:" + "z"*64,  # different source!
+			source_attestation_key="ed25519:src",
+		)]}
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+		)
+		assert len(errors) == 1
+		assert "source_content_id mismatch" in errors[0]
+
+	def test_source_rebuild_rejects_source_attestation_key_substitution(self) -> None:
+		"""Trust-root substitution: orchestrator presents a sidecar
+		signed by their own key, not the original author's key.
+		Must be caught — otherwise source-mode collapses to "trust
+		whatever sidecar happens to be on disk."  This is the
+		critical pin from the user's earlier non-blocking note."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(sak="ed25519:original-author-src")}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rebuilder",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:rebuilder-attempted-substitution",
+		)]}
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+		)
+		assert len(errors) == 1
+		assert "source_attestation_key changed" in errors[0]
+
+	def test_source_rebuild_rejects_missing_source_attestation(self) -> None:
+		"""No on-disk source attestation in source-rebuild mode → hard
+		fail with republish guidance.  No silent fallback to
+		strict — would defeat the trust boundary."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rebuilder",
+			source_content_id="", source_attestation_key="",
+		)]}
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+		)
+		assert len(errors) == 1
+		assert "source-rebuild mode requires" in errors[0]
+		assert "republish" in errors[0].lower()
+
+	def test_source_rebuild_rejects_unsigned_package(self) -> None:
+		"""Unsigned package has no source attestation possible →
+		source-rebuild fails with a clear "incompatible" diagnostic."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"dev.lib": ResolvedDep(
+			version="0.1.0", sha256="aa", dep_type="direct",
+			package_id="dev.lib", author_key="unsigned",
+			source_content_id="", source_attestation_key="",
+		)}
+		pkg_index = {"dev.lib": [_make_entry(
+			"dev.lib", "0.1.0", sha="aa", author_key="",
+			source_content_id="", source_attestation_key="",
+		)]}
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+		)
+		assert len(errors) == 1
+		assert "unsigned" in errors[0]
+		assert "source-rebuild" in errors[0]
+
+	# ── unsigned dev opt-in (strict mode) ──────────────────────────
+
+	def test_strict_unsigned_still_enforces_sha256(self) -> None:
+		"""The unsigned dev opt-in skips signature/attestation
+		requirements only — it must NOT bypass artifact-byte
+		identity.  A stale or replaced unsigned package in a
+		package root still fails strict verification, so the
+		"unsigned" escape hatch cannot be used as a general byte-
+		integrity bypass."""
+		lock_deps = {"dev.lib": ResolvedDep(
+			version="0.1.0", sha256="locked_sha", dep_type="direct",
+			package_id="dev.lib", author_key="unsigned",
+			source_content_id="", source_attestation_key="",
+		)}
+		pkg_index = {"dev.lib": [_make_entry(
+			"dev.lib", "0.1.0", sha="different_disk_sha",
+			author_key="",
+			source_content_id="", source_attestation_key="",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert len(errors) == 1
+		assert "sha256 mismatch" in errors[0]
+		assert "locked_sha" in errors[0]
+		assert "different_disk_sha" in errors[0]
+
+	def test_strict_unsigned_passes_when_sha_matches(self) -> None:
+		"""Matching sha256 + unsigned author_key + empty source
+		identity → accepted.  Pins that the unsigned opt-in lets
+		the OTHER halves through unchecked but still requires byte
+		identity."""
+		lock_deps = {"dev.lib": ResolvedDep(
+			version="0.1.0", sha256="aa", dep_type="direct",
+			package_id="dev.lib", author_key="unsigned",
+			source_content_id="", source_attestation_key="",
+		)}
+		pkg_index = {"dev.lib": [_make_entry(
+			"dev.lib", "0.1.0", sha="aa",
+			author_key="",
+			source_content_id="", source_attestation_key="",
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert errors == []
+
+	def test_strict_unsigned_skips_signer_and_source_identity(self) -> None:
+		"""Sha matches but disk has no signer / attestation — strict
+		mode still passes for unsigned (signature/attestation halves
+		are exactly what the unsigned opt-in covers)."""
+		lock_deps = {"dev.lib": ResolvedDep(
+			version="0.1.0", sha256="aa", dep_type="direct",
+			package_id="dev.lib", author_key="unsigned",
+			source_content_id="", source_attestation_key="",
+		)}
+		pkg_index = {"dev.lib": [_make_entry(
+			"dev.lib", "0.1.0", sha="aa",
+			author_key="",  # no .sig
+			source_content_id="", source_attestation_key="",  # no .source-attestation
+		)]}
+		errors = verify_lock_compatibility(lock_deps, pkg_index)
+		assert errors == []
+
+	# ── unknown mode ───────────────────────────────────────────────
+
+	def test_unknown_mode_raises(self) -> None:
+		with pytest.raises(ValueError, match="unknown verify_lock_compatibility mode"):
+			verify_lock_compatibility({}, {}, mode="bogus")
 
 
 class TestReadSourceAttestationMeta:
