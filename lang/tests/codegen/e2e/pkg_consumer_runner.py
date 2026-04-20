@@ -370,8 +370,15 @@ def _run_case(
 	expected_path = case_dir / "expected.json"
 	main_path = case_dir / "main.drift"
 
-	if not expected_path.exists() or not main_path.exists():
-		return case_name, True, "", "skipped (missing files)"
+	# `expected.json` + `main.drift` presence is validated at discovery
+	# time in `main` (after `--only-cases` and the stdlib-import filter,
+	# so a directly-named target cannot bypass the check); reaching
+	# here without them means the filesystem was mutated between
+	# discovery and run.
+	assert expected_path.exists() and main_path.exists(), (
+		f"case '{case_name}' lost required fixture files between "
+		f"discovery and run"
+	)
 
 	expected = json.loads(expected_path.read_text())
 	if expected.get("skip"):
@@ -608,6 +615,33 @@ def main(argv: Iterable[str] | None = None) -> int:
 	elif not args.all_cases:
 		# Filter to stdlib-importing cases only
 		case_dirs = [d for d in case_dirs if _imports_stdlib(d)]
+
+	# Discovery-time fixture validation (matches runner.py).  Malformed
+	# case dirs fail loudly before any tests run instead of quietly
+	# emitting "skipped (missing files)" lines.  Only dirs the filter
+	# has kept as in-scope are validated — stdlib-non-importing dirs
+	# aren't this runner's responsibility.
+	malformed = [
+		d for d in case_dirs
+		if not (d / "expected.json").exists() or not (d / "main.drift").exists()
+	]
+	if malformed:
+		print(
+			"[pkg-consumer] error: case directories missing required "
+			"fixture files (expected.json and/or main.drift):",
+			file=sys.stderr,
+		)
+		for d in malformed:
+			missing = [
+				name for name in ("expected.json", "main.drift")
+				if not (d / name).exists()
+			]
+			print(f"  {d.name}  (missing: {', '.join(missing)})", file=sys.stderr)
+		print(
+			"Populate the fixture or remove the directory.",
+			file=sys.stderr,
+		)
+		return 1
 
 	if not case_dirs:
 		print("[pkg-consumer] no matching cases found", file=sys.stderr)

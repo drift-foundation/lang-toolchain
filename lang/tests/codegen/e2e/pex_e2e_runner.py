@@ -293,8 +293,14 @@ def _run_case(
 	expected_path = case_dir / "expected.json"
 	main_path = case_dir / "main.drift"
 
-	if not expected_path.exists() or not main_path.exists():
-		return case_name, "skipped (missing files)"
+	# `expected.json` + `main.drift` presence is validated at discovery
+	# time in `main` (after CLI filtering, so a directly-named `--cases`
+	# target cannot bypass the check); reaching here without them means
+	# the filesystem was mutated between discovery and run.
+	assert expected_path.exists() and main_path.exists(), (
+		f"case '{case_name}' lost required fixture files between "
+		f"discovery and run"
+	)
 	if case_name in CLI_KNOWN_SKIP:
 		return case_name, "skipped (cli-known-skip)"
 
@@ -597,6 +603,32 @@ def main(argv: Iterable[str] | None = None) -> int:
 	if args.cases:
 		names = set(args.cases)
 		case_dirs = [d for d in case_dirs if d.name in names]
+
+	# Discovery-time fixture validation (matches runner.py).  Empty /
+	# malformed case dirs used to produce "skipped (missing files)"
+	# lines indistinguishable from legitimate policy skips; now they
+	# fail loudly before any case runs.
+	malformed = [
+		d for d in case_dirs
+		if not (d / "expected.json").exists() or not (d / "main.drift").exists()
+	]
+	if malformed:
+		print(
+			"error: e2e case directories missing required fixture files "
+			"(expected.json and/or main.drift):",
+			file=sys.stderr,
+		)
+		for d in malformed:
+			missing = [
+				name for name in ("expected.json", "main.drift")
+				if not (d / name).exists()
+			]
+			print(f"  {d.name}  (missing: {', '.join(missing)})", file=sys.stderr)
+		print(
+			"Populate the fixture or remove the directory.",
+			file=sys.stderr,
+		)
+		return 1
 
 	failures: list[tuple[str, str]] = []
 	skipped = 0

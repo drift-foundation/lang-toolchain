@@ -500,8 +500,14 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 	expected_path = case_dir / "expected.json"
 	source_path = case_dir / "main.drift"
 	drift_files = sorted(case_dir.rglob("*.drift"))
-	if not expected_path.exists() or not source_path.exists():
-		return "skipped (missing expected.json or main.drift)"
+	# `expected.json` + `main.drift` presence is validated at discovery
+	# time in `main` (after CLI filtering, so `--cases` cannot bypass
+	# it); if we reach here without them, the filesystem was mutated
+	# between discovery and run.
+	assert expected_path.exists() and source_path.exists(), (
+		f"case '{case_dir.name}' lost required fixture files between "
+		f"discovery and run"
+	)
 	if not drift_files:
 		return "skipped (missing .drift sources)"
 
@@ -994,6 +1000,38 @@ def main(argv: Iterable[str] | None = None) -> int:
 	if args.cases:
 		names = set(args.cases)
 		case_dirs = [d for d in case_dirs if d.name in names]
+
+	# Discovery-time fixture validation: every discovered case dir must
+	# carry both `expected.json` and `main.drift`.  An empty case dir
+	# (e.g. a stray WIP stub) used to silently produce a
+	# "skipped (missing files)" line, which was indistinguishable from
+	# legitimate policy skips (skip_memcheck, package_consumer_only, …)
+	# and let structurally-broken fixtures pass review as "skipped".
+	# Fail loudly at discovery so the offenders are named before any
+	# tests run; the fix is to either populate the fixture or rmdir it.
+	malformed = [
+		d for d in case_dirs
+		if not (d / "expected.json").exists() or not (d / "main.drift").exists()
+	]
+	if malformed:
+		print(
+			"error: e2e case directories missing required fixture files "
+			"(expected.json and/or main.drift):",
+			file=sys.stderr,
+		)
+		for d in malformed:
+			missing = [
+				name for name in ("expected.json", "main.drift")
+				if not (d / name).exists()
+			]
+			print(f"  {d.name}  (missing: {', '.join(missing)})", file=sys.stderr)
+		print(
+			"Populate the fixture or remove the directory.  "
+			"The harness no longer treats structurally-malformed case "
+			"dirs as 'skipped' — they must be fixed or deleted.",
+			file=sys.stderr,
+		)
+		return 1
 
 	failures: list[tuple[Path, str]] = []
 	skipped: set[str] = set()
