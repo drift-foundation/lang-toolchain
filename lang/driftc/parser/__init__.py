@@ -707,11 +707,11 @@ def _convert_aug_assign(stmt: "parser_ast.AugAssignStmt") -> s0.Stmt:
 
 def _convert_if(stmt: parser_ast.IfStmt) -> s0.Stmt:
 	# Iteratively flatten else-if chains to avoid Python recursion overflow.
-	# The recursive shape was `_convert_if → _convert_block → _convert_stmt
-	# → _convert_if → ...`, ~4 frames per source `else if` level. Long
-	# chains (`if x==0 {} else if x==1 {} else if x==2 {} ...`) blew the
-	# row #4 recursion-limit bump (8192) at ~2000 source levels.
-	# See work/robustness/robustness-matrix.md row #5.
+	# The recursive shape was `_convert_if → _convert_block →
+	# _convert_stmt → _convert_if → ...`, ~4 frames per source
+	# `else if` level.  Long chains (`if x==0 {} else if x==1 {}
+	# else if x==2 {} ...`) blew the earlier recursion-limit bump
+	# (8192) at ~2000 source levels.
 	#
 	# Strategy: walk the chain iteratively from outer to inner, collecting
 	# `(cond, then_block, loc)` tuples. The chain ends when we hit a

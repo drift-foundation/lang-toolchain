@@ -2,7 +2,7 @@
 """Robustness regression: deeply long identifiers must emit a clean front-end
 diagnostic, not an opaque downstream clang error.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #12: a Drift source
+Surfaced by a robustness audit: a Drift source
 with a single identifier longer than ~1000 characters previously hit an
 opaque clang IR-parse error of the form
 `error: multiple definition of local value named '__dbg_keepalive_xxxx...'`,

@@ -560,8 +560,8 @@ pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 // Destructible::destroy route through the compiler's intrinsic
 // dispatch which picks the right branch.
 //
-// See work/fat-arc-interface-views/phase1.md for the stage plan and
-// the Stage 3 cleanup contract.
+// See `docs/history.md` 2026-04-18 (Fat `Arc<Interface>`, 0.28.0,
+// ABI 10) for the cutover details.
 
 fn _arc_clone_impl<T>(self: &Arc<T>) nothrow -> Arc<T> {
 	unsafe {

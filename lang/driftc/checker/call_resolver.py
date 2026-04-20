@@ -1789,10 +1789,9 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				# "Array element type mismatch (have Int, expected
 				# String)" because the checker compared the literal `0`
 				# against the element type.  Treat set like insert:
-				# args[0] = Int index, args[1] = element value.  See
-				# work/ownership-matrix-followups.md and the .set
-				# reconciliation work that landed array_set in the
-				# generated matrix.
+				# args[0] = Int index, args[1] = element value —
+				# mirroring the `.set` reconciliation that landed
+				# array_set in the ownership-transfer matrix.
 				if len(arg_types) == 2:
 					idx_ty, val_ty = arg_types
 					if idx_ty is not None:

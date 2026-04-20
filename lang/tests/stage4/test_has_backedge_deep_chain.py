@@ -2,7 +2,7 @@
 """Robustness regression: MirToSSA._has_backedge must not RecursionError on
 deep linear CFGs.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #6: a Drift source with
+Surfaced by a robustness audit: a Drift source with
 ~1000 match arms produces a CFG deep enough to overflow Python's recursion
 limit during stage4 SSA backedge detection.
 

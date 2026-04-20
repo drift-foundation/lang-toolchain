@@ -165,7 +165,7 @@ def places_overlap(a: Place, b: Place) -> bool:
 	This function is the single source of truth for "place overlap" used by
 	borrow checking and write-frozen rules.
 
-	MVP rules (pinned in `work/borrow-support/work-progress.md`):
+	MVP rules:
 	- Different bases never overlap.
 	- Prefix overlap counts: `x` overlaps `x.field` and `x[0]`.
 	- Field projections are disjoint when the field names differ.

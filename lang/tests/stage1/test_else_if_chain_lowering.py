@@ -2,11 +2,10 @@
 """Robustness regression: stage1 `_visit_stmt_IfStmt` must not RecursionError
 on long else-if chains.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #5: even after the
-parser-converter fix in `lang/driftc/parser/__init__.py::_convert_if`, the
-stage1 lowering visitor `_visit_stmt_IfStmt` was still recursive on
-`else_block` and crashed at depth ~2000 under the row #4 recursion-limit
-bump (8192).
+Surfaced by a robustness audit: even after the parser-converter fix in
+`lang/driftc/parser/__init__.py::_convert_if`, the stage1 lowering
+visitor `_visit_stmt_IfStmt` was still recursive on `else_block` and
+crashed at depth ~2000 under the earlier recursion-limit bump (8192).
 
 The fix is an iterative else-if chain flattener in `_visit_stmt_IfStmt`:
 walk the chain from outer to inner collecting `(cond, then_block, loc)`

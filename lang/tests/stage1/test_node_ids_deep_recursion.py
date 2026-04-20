@@ -2,7 +2,7 @@
 """Robustness regression: stage1 node-id walkers must not RecursionError on
 deeply nested HIR.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #2: ~200 levels of
+Surfaced by a robustness audit: ~200 levels of
 nested if-statements crashes driftc with Python `RecursionError` in
 `lang/driftc/stage1/node_ids.py` mutually-recursive `walk` / `walk_value`
 walkers (three independent pairs across `assign_node_ids`,

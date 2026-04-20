@@ -564,10 +564,10 @@ class AstToHIR:
 		# leftmost leaf outward, the depth becomes O(1).
 		#
 		# Right operands are still lowered with the regular recursive
-		# `lower_expr` because they are usually leaves; right-leaning chains
-		# (`1+(1+(1+...))`) are not exercised by row #4 and would need a
-		# separate iterative right-spine fix if they ever surface.
-		# See work/robustness/robustness-matrix.md row #4.
+		# `lower_expr` because they are usually leaves; right-leaning
+		# chains (`1+(1+(1+...))`) are not exercised by the pinned
+		# robustness regression and would need a separate iterative
+		# right-spine fix if they ever surface.
 		# Seed the spine with the entry expr itself — we know it is an
 		# `ast.Binary` with a supported op (we just looked `op` up in
 		# `op_map` above), so the first iteration is unconditional. Then
@@ -1061,10 +1061,9 @@ class AstToHIR:
 	def _visit_stmt_IfStmt(self, stmt: ast.IfStmt) -> H.HStmt:
 		# Iteratively flatten else-if chains. The recursive shape was
 		# `_visit_stmt_IfStmt → lower_block(else_block) → lower_stmt →
-		# _visit_stmt_IfStmt → ...`, ~4 frames per source `else if` level.
-		# Long chains blow Python's recursion stack at ~2000 levels even
-		# with the row #4 recursion-limit bump (8192).
-		# See work/robustness/robustness-matrix.md row #5.
+		# _visit_stmt_IfStmt → ...`, ~4 frames per source `else if`
+		# level.  Long chains blow Python's recursion stack at ~2000
+		# levels even with the earlier recursion-limit bump (8192).
 		#
 		# An else-if chain is detected as: an `else_block` list whose only
 		# statement is another `IfStmt`. The pure-else terminating block

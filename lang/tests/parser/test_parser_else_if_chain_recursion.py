@@ -2,7 +2,7 @@
 """Robustness regression: parser-AST → stage0-AST converter must not
 RecursionError on long else-if chains.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #5: a Drift source
+Surfaced by a robustness audit: a Drift source
 with thousands of `else if` clauses crashes driftc with Python
 `RecursionError` in `lang/driftc/parser/__init__.py::_convert_if`, which
 recursed via `_convert_block` → `_convert_stmt` → `_convert_if` (~4 frames

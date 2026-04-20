@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Robustness regression: deeply nested blocks must not crash the parser builder.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #1: deeply nested
+Surfaced by a robustness audit: deeply nested
 `{ { { ... } } }` block input crashes driftc with Python `RecursionError` in
 the parser AST builder (`_build_stmt` → `_build_block` → `_build_stmt` ...).
 

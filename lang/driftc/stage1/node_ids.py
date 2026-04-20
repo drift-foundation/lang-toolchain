@@ -57,13 +57,13 @@ def iter_hir_walk(
 	or HIR-module dataclass). The type checker passes a variant that also
 	skips `H.HLambda` so call collectors do not cross closure boundaries.
 
-	Exists because deeply nested HIR (e.g. ~200+ levels of nested if-stmts)
-	overflowed Python's recursion limit in three sequential walker pairs in
-	this file; see work/robustness/robustness-matrix.md row #2. Originally
-	a stage1-private helper named `_iter_hir_walk`; promoted to public
-	`iter_hir_walk` and parameterized so the four other local copies (in
-	`driftc.py` and `type_checker.py`) can call it instead of duplicating
-	the iterative pattern. See matrix row #15.
+	Exists because deeply nested HIR (e.g. ~200+ levels of nested
+	if-stmts) overflowed Python's recursion limit in three sequential
+	walker pairs in this file.  Originally a stage1-private helper
+	named `_iter_hir_walk`; promoted to public `iter_hir_walk` and
+	parameterized so the four other local copies (in `driftc.py` and
+	`type_checker.py`) can call it instead of duplicating the
+	iterative pattern.
 	"""
 	seen: set[int] = set()
 	stack: list[object] = [root]

@@ -5475,7 +5475,7 @@ class TypeChecker:
 
 		# Precompute constructor-name visibility for diagnostics.
 		#
-		# MVP constructor resolution rule (work/variant/work-progress.md):
+		# MVP constructor resolution rule:
 		# - Constructors are unqualified identifiers.
 		# - Constructor calls in expression position require an *expected variant type*.
 		# - Without an expected type, the compiler diagnoses instead of guessing.

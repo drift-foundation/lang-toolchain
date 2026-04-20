@@ -286,7 +286,8 @@ class TypeProvenanceEntry:
 # three pieces are all coupled to the layout shape).  Keeping this
 # False preserves the thin `{buf}` shape for every `Arc<I>`
 # instance — identical to pre-Stage-3 behaviour.  See
-# `work/fat-arc-interface-views/stage3_plan.md` § Slice 3.
+# `docs/history.md` 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10)
+# for the cutover details.
 STAGE3_FAT_ARC_ACTIVE: bool = True
 
 
@@ -1194,9 +1195,10 @@ class TypeTable:
 	#
 	# Design rationale, contract, and the reasons we do NOT derive the
 	# data pointer from `ctrl + sizeof(ArcHeader)` are in the language
-	# spec under § 6.16 (Arc interface views) and `work/fat-arc-interface-
-	# views/phase1.md`.  ABI contract: `DRIFT_RT_ABI_VERSION` is bumped
-	# alongside any change to either shape here.
+	# spec under § 6.16 (Arc interface views); see also `docs/history.md`
+	# 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10).  ABI contract:
+	# `DRIFT_RT_ABI_VERSION` is bumped alongside any change to either
+	# shape here.
 	#
 	# `is_arc_interface_view(schema, type_args)` is the SINGLE predicate
 	# site for this specialization.  Every other compiler pass that needs
@@ -1298,8 +1300,9 @@ class TypeTable:
 		# `buf: RawBuffer<ArcBox<T>>` field valid only for concrete T.
 		# When T is an interface, swap in the fat
 		# `{ctrl, data, vtable}` layout from
-		# `_arc_interface_view_layout`.  See
-		# `work/fat-arc-interface-views/phase1.md` § Representation.
+		# `_arc_interface_view_layout`.  See `docs/history.md`
+		# 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10) for the
+		# representation and soundness argument.
 		#
 		# **Activation flag.**  `STAGE3_FAT_ARC_ACTIVE` is True as of
 		# ABI 10 — fat `Arc<I>` is the live layout.  The flag remains
@@ -1309,8 +1312,8 @@ class TypeTable:
 		# and short-circuit the branch when reconstructing older
 		# shapes.  Historical note: the flag existed False through
 		# slices 1–2 while ARC_AS_INTERFACE lowering, fat ARC_GET
-		# emission, and the std.log builder migration were landing in
-		# coordination, per `work/fat-arc-interface-views/stage3_plan.md`.
+		# emission, and the std.log builder migration were landing
+		# in coordination.
 		if STAGE3_FAT_ARC_ACTIVE and self.is_arc_interface_view(schema, type_args):
 			fat_names, fat_types = self._arc_interface_view_layout()
 			inst_id = self._add(

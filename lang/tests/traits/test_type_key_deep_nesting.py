@@ -2,8 +2,7 @@
 """Robustness regression: TypeKey hash/eq must not RecursionError on deeply
 nested type keys.
 
-Surfaced by the row #11 cleanup pass on the robustness matrix
-(`work/robustness/robustness-matrix.md`): re-probing nested generic types
+Surfaced by a robustness-matrix re-probe cleanup pass: nested generic types
 in fn-parameter position revealed three sequential recursion sites in the
 type-key handling pipeline. After fixing `_type_expr_key`
 (`lang/driftc/parser/__init__.py`) and `type_key_from_typeid`

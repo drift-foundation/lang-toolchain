@@ -243,11 +243,11 @@ class MirToSSA:
 				succs[bname].add(term.else_target)
 
 		# Iterative DFS with an explicit work stack. The recursive form here
-		# (`def dfs(node)` with `dfs(s)` inside) overflowed Python's default
-		# recursion limit on deep linear CFGs (~1000 blocks). Linear chains
-		# arise from large match expressions and similar shapes; the depth is
-		# user-controlled, so the recursive form was unbounded in practice.
-		# See work/robustness/robustness-matrix.md row #6.
+		# (`def dfs(node)` with `dfs(s)` inside) overflowed Python's
+		# default recursion limit on deep linear CFGs (~1000 blocks).
+		# Linear chains arise from large match expressions and similar
+		# shapes; the depth is user-controlled, so the recursive form
+		# was unbounded in practice.
 		#
 		# The work stack holds (node, iterator-over-successors) pairs. When a
 		# node's successors are exhausted, it is popped from `on_path`; an
@@ -500,9 +500,9 @@ class MirToSSA:
 			# uses this to restore stacks in post-order.
 			return locals_defined
 
-		# Iterative pre/post-order walk of the dominator tree. The recursive
-		# form blew Python's recursion limit on deep linear CFGs (huge match,
-		# work/robustness/robustness-matrix.md row #6). Each work-stack entry
+		# Iterative pre/post-order walk of the dominator tree.  The
+		# recursive form blew Python's recursion limit on deep linear
+		# CFGs (huge match shapes).  Each work-stack entry
 		# is (block_name, expanded). On the first visit (`expanded == False`)
 		# we run the pre-order body (renaming) and schedule a deferred
 		# post-order entry plus children. On the second visit (`expanded ==
@@ -555,9 +555,8 @@ class MirToSSA:
 				targets.extend([block.terminator.then_target, block.terminator.else_target])
 			succs[name] = targets
 
-		# Iterative post-order DFS. Recursive form overflowed Python's
-		# recursion limit on deep linear CFGs (huge match), see
-		# work/robustness/robustness-matrix.md row #6.
+		# Iterative post-order DFS.  Recursive form overflowed Python's
+		# recursion limit on deep linear CFGs (huge match shapes).
 		#
 		# Determinism: a LIFO work stack visits successors in reverse order
 		# of how they were pushed. To preserve the *exact* visitation order

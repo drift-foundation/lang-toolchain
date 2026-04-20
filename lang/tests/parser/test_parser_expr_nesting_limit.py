@@ -2,7 +2,7 @@
 """Robustness regression: deeply nested parenthesized expressions must not
 crash the parser.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #3: deeply nested
+Surfaced by a robustness audit: deeply nested
 `(((((1)))))` expression input crashes driftc with Python `RecursionError`
 in the parser builder (`_build_postfix` → `_build_expr` → `_build_postfix`
 recursion, ~3 stack frames per source level).

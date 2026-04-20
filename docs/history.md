@@ -145,9 +145,7 @@
   **Migration.**  Downstream packages must be republished with
   toolchain ≥ 0.30.0 to be source-mode-certifiable; v3 locks are
   rejected at load and `drift prepare` re-run is required even
-  for byte-only consumption.  See
-  `work/source-attestation/migration.md` for the consumer-side
-  rollout note.
+  for byte-only consumption.
 
   **Test coverage.**  437 tests in `tools/drift_deploy/`,
   including: 52 in `test_source_attestation.py` (canonical id +
@@ -401,7 +399,6 @@
   - `lang/tests/driver/test_driftc_package_v0.py`: `required_deps`
     emit, load, owner-declared-range validation, M/M.N accepted
     and exact/operators rejected at `--package-dep`.
-  - Downstream migration note: `work/manifest-package-ranges/migration.md`.
 
   **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10; the
   wire boundary between compiler and runtime is unaffected.

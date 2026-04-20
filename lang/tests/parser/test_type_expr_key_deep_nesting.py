@@ -2,8 +2,7 @@
 """Robustness regression: `_type_expr_key` must not RecursionError on deep
 type nesting.
 
-Surfaced by the row #11 cleanup pass on the robustness matrix
-(`work/robustness/robustness-matrix.md`): re-probing nested generic types
+Surfaced by a robustness-matrix re-probe cleanup pass: nested generic types
 in fn-parameter position with the corrected source shape revealed a real
 recursion failure at d≥5000 in `lang/driftc/parser/__init__.py::_type_expr_key`,
 the recursive type-expression key builder used by the parser-to-HIR pipeline.

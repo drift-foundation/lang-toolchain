@@ -1166,13 +1166,12 @@ def _render_fixture_token_match_bind() -> str:
 # v1") because Token carries a `&mut Session` field.  Extending the
 # non-Copy axis to Array sites requires a different side-channel
 # design (e.g. a shared refcount `Int` cell instead of `&mut
-# Session`); tracked in work/ownership-matrix-followups.md.
+# Session`); deferred.
 #
 # Negative contract test for the "missing move" case
 # (`match tok { Token => ... }` or `sink(tok)` without `move`) is
-# deferred; tracked in work/ownership-matrix-followups.md.  The
-# generator's positive Token fixtures all use explicit `move` for
-# HVar scenarios.
+# also deferred.  The generator's positive Token fixtures all use
+# explicit `move` for HVar scenarios.
 
 
 TOKEN_PREAMBLE = """

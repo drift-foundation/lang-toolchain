@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Robustness regression: long binary-op chains must not crash stage1 lowering.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #4: a Drift source like
+Surfaced by a robustness audit: a Drift source like
 `return 1+1+1+...+1;` with hundreds of operands crashes driftc with Python
 `RecursionError` in `lang/driftc/stage1/ast_to_hir.py::_visit_expr_Binary`,
 which descends `expr.left` recursively for left-leaning chains.

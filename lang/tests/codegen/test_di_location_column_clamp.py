@@ -14,8 +14,8 @@ The fix clamps `column` to 65535 before both the cache key and the IR text
 emission, so the resulting debug info is lossy at the line's tail end but
 the compile succeeds.
 
-Surfaced by `work/robustness/robustness-matrix.md` row #5 triage walk;
-filed as `issues/llvm-debuginfo-column-overflow/`.
+Surfaced by a robustness-matrix triage walk; filed as
+`issues/llvm-debuginfo-column-overflow/`.
 """
 from __future__ import annotations
 

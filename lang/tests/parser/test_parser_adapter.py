@@ -78,7 +78,7 @@ def test_parse_float_literal(tmp_path: Path):
 )
 def test_invalid_float_literals_produce_diagnostics(tmp_path: Path, lit: str):
 	"""
-	Float literal MVP rules (see work/float-type/work-progress.md):
+	Float literal MVP rules:
 	- dot required with digits on both sides
 	- exponent requires dot form
 	- no underscores

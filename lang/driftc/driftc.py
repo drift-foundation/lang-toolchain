@@ -864,10 +864,9 @@ def _ensure_module_packages(
 
 
 def _collect_call_nodes_by_id(root: H.HNode) -> dict[int, H.HExpr]:
-	# Uses the shared iterative HIR walker from `stage1/node_ids.py`.
-	# See work/robustness/robustness-matrix.md row #15 for the dedup pass
-	# that consolidated this and three other local copies of the same
-	# pattern. The walker preserves declaration-order pre-order
+	# Uses the shared iterative HIR walker from `stage1/node_ids.py` —
+	# the dedup consolidated this and three other local copies of the
+	# same pattern.  The walker preserves declaration-order pre-order
 	# visitation and `id(obj)` dedup.
 	from lang.driftc.stage1.node_ids import iter_hir_walk
 	found: dict[int, H.HExpr] = {}

@@ -7,7 +7,7 @@ the ownership shapes defined there across a SIGNED PACKAGE BOUNDARY —
 producer source compiled and signed into a `.dmp`, consumer compiled
 against the producer via `--package-root` / `--dep`.
 
-Targeted risks (per work/ownership-matrix-followups.md):
+Targeted risks:
   - copy_status / is_bitcopy for imported types differs from source mode
   - struct / variant field metadata reconstructed incompletely
   - generic variant tombstone metadata differs after package linking
