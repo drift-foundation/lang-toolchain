@@ -1,6 +1,71 @@
 # Drift development history
 
 ## 2026-04-20
+- **`drift prepare --check` source-rebuild lane (0.30.3, ABI 10)**:
+  Third and final surface in the source-rebuild certification path:
+  `drift prepare --check` is a repo-owned gate (drift-web's `just
+  test` runs lock-check via `drift prepare --check` before any build
+  or deploy step), and until 0.30.3 the `--check` comparator
+  required byte-for-byte equality between the committed lock and
+  the re-resolved graph.  That meant a source-from-commit
+  certification run — where upstream `.dmp` bytes and signer keys
+  legitimately differ from the lock's recorded values — would fail
+  at the lock-check gate before reaching the `drift build` /
+  `drift deploy` surfaces that had already been taught the lane in
+  0.30.0 / 0.30.1.  The earlier fix closed the build/deploy gap but
+  missed the prepare-check gate entirely, so orch's certification
+  runs still failed downstream.
+
+  Fix: `drift prepare --check` now honours both `--source-rebuild`
+  and `DRIFT_SOURCE_REBUILD=1` (resolved via the same
+  `_source_rebuild_enabled` helper that `drift build` and `drift
+  deploy` share).  In the source-rebuild lane, `--check` enforces
+  {artifact set, per-artifact dep set, `version`, `dep_type`,
+  `source_content_id`, `source_attestation_key`} only; tolerates
+  `sha256` and `author_key` drift on the grounds that the on-disk
+  packages may be rebuilt artifacts whose bytes and signer
+  legitimately differ from the original author's; and reports per-
+  package byte/signer drift to stdout as run evidence.  Default
+  `--check` (no flag, no env) stays strict/exact — the relaxation
+  requires an explicit opt-in.
+
+  **Trust root preserved.**  The relaxed comparator still enforces
+  a signed source identity on every non-co-artifact dep: empty
+  `source_content_id`, empty `source_attestation_key`, or
+  `author_key == "unsigned"` on EITHER side of the comparison is
+  hard-rejected.  Without this gate, two symmetric empty-identity
+  entries would pass the dict-equality check and the unsigned opt-
+  in would become a general source-rebuild bypass — a trap review
+  caught before the patch landed.  Mirrors
+  `verify_lock_compatibility`'s strict/source-rebuild split for
+  build and deploy: source-rebuild mode CANNOT certify unsigned or
+  un-attested packages end-to-end.
+
+  **`--source-rebuild` without `--check` is fail-fast.**  The flag
+  is a verification-lane selector for `--check`; the lock-writing
+  path is always authoritative and strict by design.  Accepting
+  `--source-rebuild` on write would let orch or a human believe
+  they'd regenerated a "source-rebuild-aware" lock when the flag
+  was silently ignored — the exact ambiguity the track was meant
+  to close.  The env-var form `DRIFT_SOURCE_REBUILD=1` is silently
+  ignored on the write path (asymmetric by design: orch sets the
+  env var globally for the whole certification environment, and
+  `drift prepare` write-mode invocations within that env must still
+  no-op on the selector without requiring every justfile to unset
+  it locally).
+
+  **Release note applies to every environment running lock-check
+  via `drift prepare --check`** — `DRIFT_SOURCE_REBUILD=1` now
+  covers all three surfaces (`drift build`, `drift deploy`, `drift
+  prepare --check`).  The shared `_source_rebuild_enabled(args)`
+  helper in `tools/drift_deploy/build_cmd.py` is re-exported from
+  all three entry-point modules so they cannot drift apart on what
+  enables the lane.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.30.2 → 0.30.3` is a behavior-addition patch
+  bump — no format change, no lock schema bump.
+
 - **`DRIFT_SOURCE_REBUILD=1` env-var lane selector (0.30.1, ABI 10)**:
   The `--source-rebuild` CLI flag added in 0.30.0 is sufficient for
   orch-controlled `drift deploy` invocations, but orch cannot
@@ -39,15 +104,17 @@
   becomes the trust root, bytes become evidence), not a relaxed
   variant of the strict contract.
 
-  Shared helper `_source_rebuild_enabled(args)` in both
-  `tools/drift_deploy/drift_build.py` and
-  `tools/drift_deploy/drift_deploy.py` centralises the "CLI flag
-  OR env var" composition so the two CLI surfaces cannot drift
-  apart.  Unit-pinned matrix in
+  Shared helper `source_rebuild_enabled(args)` lives in
+  `tools/drift_deploy/build_cmd.py` and is re-exported by every
+  entry-point module that consumes it so the CLI surfaces cannot
+  drift apart on what enables the lane.  As of 0.30.1 the consumers
+  are `drift build` and `drift deploy`; 0.30.3 adds `drift prepare
+  --check` to the list.  Unit-pinned matrix in
   `TestLockCompatibility::test_source_rebuild_helper_matrix` and
-  `TestDeploySourceRebuildEnvVar::test_helper_matrix`: every
-  truthy env value enables, every falsy value leaves strict, and
-  CLI flag always wins regardless of env.
+  `TestDeploySourceRebuildEnvVar::test_helper_matrix` (and, from
+  0.30.3, `TestPrepareCheckSourceRebuild::test_source_rebuild_helper_matrix`):
+  every truthy env value enables, every falsy value leaves strict,
+  and CLI flag always wins regardless of env.
 
   **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
   `DRIFTC_VERSION 0.30.0 → 0.30.1` is a behavior-addition patch

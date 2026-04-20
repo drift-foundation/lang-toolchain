@@ -1147,6 +1147,259 @@ class TestPrepareCheckSourceRebuild:
 					"--manifest", str(manifest_path), "--check",
 				])) == 1
 
+	# ── Trust-root gate (fix for review finding #1) ──────────────────
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_unsigned_direct_dep(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""Pin: a direct dep with `author_key: "unsigned"` on BOTH
+		sides of the comparison must NOT pass `--check --source-
+		rebuild` — unsigned packages have no source attestation, so
+		there is no trust root.  Without this gate, two symmetric
+		empty-identity entries would pass the dict-equality check
+		and the unsigned-opt-in would become a general source-rebuild
+		bypass — the exact trap the review flagged."""
+		mock_index.return_value = {}
+		unsigned_dep = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="unsigned",
+			source_content_id="",
+			source_attestation_key="",
+		)
+		# Same on all three calls (write + --check strict + --check
+		# source-rebuild) — resolver is deterministic.
+		mock_resolve.return_value = {"ext.lib": unsigned_dep}
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			# Write path: unsigned opt-in still allowed (the prepare-
+			# time trust gate only fails on signed-but-empty identity).
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			# --check (strict) passes because the dicts match.
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check",
+			])) == 0
+			# --check --source-rebuild MUST reject — unsigned has no
+			# signed trust root.
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 1
+			err = capsys.readouterr().err
+			assert "unsigned" in err
+			assert "ext.lib" in err
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_empty_source_identity_both_sides(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""Pin: if a signed dep somehow has empty source identity on
+		BOTH sides (e.g. a hand-rolled test fixture, or a forward-compat
+		lock from a toolchain that predates sidecar emission that
+		slipped through), source-rebuild mode must reject — the trust
+		root is missing and equal-but-empty is not the same as equal-
+		and-attested."""
+		mock_index.return_value = {}
+		empty_identity_dep = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="ed25519:key-A",
+			source_content_id="",
+			source_attestation_key="",
+		)
+		# Bypass the write-path attestation gate by seeding the lock
+		# directly (the gate we're testing lives in --check, not in
+		# write; the scenario is a lock that slipped through some
+		# earlier looser gate and a re-resolve that also lacks the
+		# sidecar on disk).
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": empty_identity_dep},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			# First run writes a properly-attested lock.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			# Manually rewrite the lock to have empty source identity
+			# on the "existing" side.
+			lock_path = _drift_subdir(tmpdir) / "lock.json"
+			lock_json = json.loads(lock_path.read_text())
+			# v4 read_lock rejects signed entries with empty source
+			# identity, so this scenario can only arise post-read via
+			# in-memory tampering or a future-schema escape.  To
+			# exercise the _compare_locks_for_check gate directly,
+			# make BOTH sides empty and call the helper.
+			from tools.drift_deploy.drift_prepare import _compare_locks_for_check
+			drift_log: list = []
+			errors = _compare_locks_for_check(
+				{"my.pkg": {"ext.lib": empty_identity_dep}},
+				{"my.pkg": {"ext.lib": empty_identity_dep}},
+				source_rebuild=True,
+				byte_drift_log=drift_log,
+			)
+			assert any("no signed source identity" in e for e in errors), errors
+			# Strict mode lets equal-but-empty through (the existing
+			# behavior for strict is dict-equality; the write-time
+			# gate is what keeps empties out of real v4 locks).
+			strict_errors = _compare_locks_for_check(
+				{"my.pkg": {"ext.lib": empty_identity_dep}},
+				{"my.pkg": {"ext.lib": empty_identity_dep}},
+				source_rebuild=False,
+				byte_drift_log=drift_log,
+			)
+			assert strict_errors == []
+
+	def test_source_rebuild_rejects_empty_source_identity_helper_direct(self) -> None:
+		"""Unit pin on `_compare_locks_for_check` for the one-side
+		empty scenario (more realistic than both-sides-empty): the
+		lock has a valid signed identity but the re-resolved graph
+		lost it (e.g. sidecar was deleted/corrupted between prepare
+		and check).  Source-rebuild mode must reject."""
+		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
+		signed = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="ed25519:key-A",
+			source_content_id=self._SCID,
+			source_attestation_key="ed25519:attest-key",
+		)
+		empty = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="ed25519:key-A",
+			source_content_id="",
+			source_attestation_key="",
+		)
+		drift_log: list = []
+		errors = _compare_locks_for_check(
+			{"my.pkg": {"ext.lib": signed}},
+			{"my.pkg": {"ext.lib": empty}},
+			source_rebuild=True,
+			byte_drift_log=drift_log,
+		)
+		# Expect BOTH the scid/sak inequality error AND the
+		# trust-root gate error naming the resolved side.
+		assert any("source_content_id differs" in e for e in errors)
+		assert any("resolved entry has no signed source identity" in e for e in errors)
+
+	def test_source_rebuild_unsigned_helper_matrix(self) -> None:
+		"""Unit pin: `author_key == "unsigned"` on EITHER side of the
+		comparison triggers the trust-root rejection."""
+		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
+		signed = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="ed25519:key-A",
+			source_content_id=self._SCID,
+			source_attestation_key="ed25519:attest-key",
+		)
+		unsigned = ResolvedDep(
+			version="1.0.0", sha256="AAA", dep_type="direct",
+			package_id="ext.lib", author_key="unsigned",
+			source_content_id="",
+			source_attestation_key="",
+		)
+		for ed, rd, which in (
+			({"ext.lib": unsigned}, {"ext.lib": signed}, "locked"),
+			({"ext.lib": signed}, {"ext.lib": unsigned}, "resolved"),
+			({"ext.lib": unsigned}, {"ext.lib": unsigned}, "both"),
+		):
+			drift_log: list = []
+			errors = _compare_locks_for_check(
+				{"my.pkg": ed}, {"my.pkg": rd},
+				source_rebuild=True,
+				byte_drift_log=drift_log,
+			)
+			assert any("unsigned" in e for e in errors), (
+				f"{which}-unsigned case should surface an 'unsigned' "
+				f"trust-root error; got: {errors}"
+			)
+
+	def test_source_rebuild_co_artifact_exempt_from_trust_gate(self) -> None:
+		"""Regression pin: co-artifact entries legitimately carry
+		empty source identity and must NOT trip the trust-root gate.
+		Their `.dmp` + sidecars are built later in the same deploy
+		run; their structural emptiness at `--check` time is expected.
+		Without this exemption, drift-web's co-artifact-heavy
+		manifests would fail --check --source-rebuild."""
+		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
+		co = ResolvedDep(
+			version="0.2.3", sha256="", dep_type="co-artifact",
+			package_id="web-jwt", author_key="",
+			source_content_id="",
+			source_attestation_key="",
+		)
+		drift_log: list = []
+		errors = _compare_locks_for_check(
+			{"web-rest": {"web-jwt": co}},
+			{"web-rest": {"web-jwt": co}},
+			source_rebuild=True,
+			byte_drift_log=drift_log,
+		)
+		assert errors == [], (
+			f"co-artifact with empty source identity must not trip "
+			f"the trust-root gate; got: {errors}"
+		)
+
+	# ── --source-rebuild without --check is fail-fast (review #2) ────
+
+	def test_source_rebuild_without_check_fails_fast(self, capsys) -> None:
+		"""Pin: passing `--source-rebuild` to the lock-writing path
+		(no `--check`) is rejected fail-fast.  `--source-rebuild` is
+		a verification-lane selector; the lock is always authoritative
+		and strict.  Accepting it on write would let orch / humans
+		believe they'd regenerated a 'source-rebuild-aware' lock when
+		in fact the flag was silently ignored — review finding #2."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			# No --check.  Should raise PrepareError before doing any
+			# resolution — the lock file must NOT be written.
+			with pytest.raises(PrepareError) as exc:
+				_run_impl(p.parse_args([
+					"--manifest", str(manifest_path), "--source-rebuild",
+				]))
+			msg = str(exc.value)
+			assert "--check" in msg
+			assert "verification-lane" in msg or "lock-writing" in msg
+			assert not (_drift_subdir(tmpdir) / "lock.json").exists()
+
+	def test_source_rebuild_env_var_without_check_is_silent_noop(
+		self, monkeypatch,
+	) -> None:
+		"""Pin: the ENV-var form (`DRIFT_SOURCE_REBUILD=1`) on the
+		write path is silently ignored, NOT fail-fast.  Distinction
+		from the CLI-flag path: orch legitimately exports the env var
+		for the whole certification environment, and `drift prepare`
+		(write) may still be invoked in that env — erroring would
+		force every repo-owned `just release` / write-step invocation
+		to unset the var locally.  Only an explicit CLI flag is the
+		conscious-intent signal that deserves a fail-fast."""
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		with patch("tools.drift_deploy.drift_prepare.build_package_index") as mi, \
+			 patch("tools.drift_deploy.drift_prepare.resolve_artifact") as mr:
+			mi.return_value = {}
+			mr.return_value = {
+				"ext.lib": ResolvedDep(
+					version="1.0.0", sha256="AAA", dep_type="direct",
+					package_id="ext.lib", author_key="ed25519:key-A",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				),
+			}
+			with tempfile.TemporaryDirectory() as tmpdir:
+				manifest_path = self._write_manifest(tmpdir)
+				p = build_arg_parser()
+				# No --check, no --source-rebuild on CLI, env var set:
+				# write path succeeds (env var ignored here).
+				rc = _run_impl(p.parse_args(["--manifest", str(manifest_path)]))
+				assert rc == 0
+				assert (_drift_subdir(tmpdir) / "lock.json").exists()
+
 	def test_source_rebuild_co_artifact_symmetric_empty_identity(self) -> None:
 		"""Co-artifact entries carry "" for both sha256 and source
 		identity on BOTH sides of the --check comparison (they haven't

@@ -71,22 +71,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		     "in CI to guard against stale locks.")
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
-			"Source-rebuild equivalence mode for `--check` (no effect "
-			"on the lock-writing path).  Compares the on-disk lock to "
-			"the freshly-resolved graph on {dep set, version, dep_type, "
-			"source_content_id, source_attestation_key} only; tolerates "
-			"`sha256` and `author_key` drift because the on-disk "
-			"packages may be rebuilt artifacts whose bytes and signer "
-			"key legitimately differ from the original author's.  "
-			"Per-package byte/signer drift is printed to stdout as run "
-			"evidence so humans (and CI logs) can see the divergence. "
-			"Default `--check` remains strict/exact — this flag is the "
-			"only way to relax it.  Also enabled by "
-			"`DRIFT_SOURCE_REBUILD=1` so orch-driven `just test` / "
-			"lock-check invocations can select the lane without the "
-			"downstream justfile threading `--source-rebuild` through "
-			"every `drift prepare --check` call (mirrors the `drift "
-			"build` / `drift deploy` pattern)."
+			"Source-rebuild equivalence mode for `--check`.  MUST be "
+			"paired with `--check` — passing this flag without "
+			"`--check` is rejected fail-fast, since the lock-writing "
+			"path is authoritative/strict by design.  Compares the on-"
+			"disk lock to the freshly-resolved graph on {dep set, "
+			"version, dep_type, source_content_id, "
+			"source_attestation_key} only; tolerates `sha256` and "
+			"`author_key` drift because the on-disk packages may be "
+			"rebuilt artifacts whose bytes and signer key legitimately "
+			"differ from the original author's.  Per-package byte/"
+			"signer drift is printed to stdout as run evidence so "
+			"humans (and CI logs) can see the divergence.  Trust-root "
+			"enforcement is preserved: non-co-artifact deps with empty "
+			"source identity or `author_key == \"unsigned\"` on either "
+			"side of the comparison are hard-failed — no silent "
+			"fallback to byte-only verification.  Default `--check` "
+			"remains strict/exact — this flag is the only way to relax "
+			"it.  Also enabled by `DRIFT_SOURCE_REBUILD=1` so orch-"
+			"driven `just test` / lock-check invocations can select "
+			"the lane without the downstream justfile threading "
+			"`--source-rebuild` through every `drift prepare --check` "
+			"call; in that path the env var is silently ignored on the "
+			"lock-writing path (orch sets it globally for the "
+			"certification environment).  Mirrors the `drift build` / "
+			"`drift deploy` pattern."
 		))
 	return p
 
@@ -132,13 +141,17 @@ def _compare_locks_for_check(
 	Strict mode (default) is byte-for-byte: any disagreement on any
 	`ResolvedDep` field (via `ResolvedDep` equality) is drift.
 
-	Source-rebuild mode enforces only artifact set + per-artifact dep
+	Source-rebuild mode enforces artifact set + per-artifact dep
 	set + `(version, dep_type, source_content_id,
-	source_attestation_key)`.  Empty source-identity fields on BOTH
-	sides are tolerated (the co-artifact case, where the `.dmp` is
-	built later in the same deploy run and neither the lock nor the
-	re-resolved graph carries a signed identity yet — both are ""
-	symmetrically and compare equal naturally).
+	source_attestation_key)` AND a signed trust root on every
+	non-co-artifact dep: empty `source_content_id`, empty
+	`source_attestation_key`, or `author_key == "unsigned"` on EITHER
+	side is rejected — source-rebuild mode only certifies packages
+	with a signed source attestation, so an empty-identity entry
+	matching another empty-identity entry by dict equality is a trust
+	bypass.  Co-artifact entries are legitimately empty on both sides
+	(their `.dmp` + sidecars are built later in the same deploy run)
+	and are exempted from the trust-root check.
 	"""
 	errors: list[str] = []
 	if existing.keys() != resolved.keys():
@@ -172,6 +185,46 @@ def _compare_locks_for_check(
 							f"artifact '{art_name}' dep '{pkg_id}': "
 							f"{field} differs (locked {ev!r}, resolved {rv!r})"
 						)
+				# Trust-root gate: non-co-artifact deps MUST carry a
+				# signed source identity.  Empty `source_content_id`,
+				# empty `source_attestation_key`, or `author_key ==
+				# "unsigned"` on either side means there is nothing to
+				# verify the rebuild against — accepting would collapse
+				# trust to "trust the rebuilder," which is the exact
+				# bypass source-rebuild mode exists to prevent.  This
+				# mirrors `verify_lock_compatibility`'s unsigned-reject
+				# and missing-attestation-reject paths in the build /
+				# deploy lanes; without it, two empty-identity entries
+				# would pass the dict-equality check above and reach a
+				# `--check` pass under the source-rebuild banner.  The
+				# co-artifact dep_type is exempted because its empty
+				# identity is structural (built later, same deploy
+				# run), not a missing trust root.
+				if e.dep_type != "co-artifact" and r.dep_type != "co-artifact":
+					for side, dep in (("locked", e), ("resolved", r)):
+						if not dep.source_content_id or not dep.source_attestation_key:
+							errors.append(
+								f"artifact '{art_name}' dep '{pkg_id}': "
+								f"{side} entry has no signed source identity "
+								f"(source_content_id={dep.source_content_id!r}, "
+								f"source_attestation_key={dep.source_attestation_key!r}); "
+								f"source-rebuild mode requires a signed source "
+								f"attestation as the trust root.  Republish "
+								f"with toolchain >= 0.30.0 and re-run `drift "
+								f"prepare`, or drop `--source-rebuild` / "
+								f"`DRIFT_SOURCE_REBUILD` to use strict mode."
+							)
+						if dep.author_key == "unsigned":
+							errors.append(
+								f"artifact '{art_name}' dep '{pkg_id}': "
+								f"{side} entry is `author_key: \"unsigned\"`; "
+								f"unsigned packages have no `.source-"
+								f"attestation` sidecar so source-rebuild mode "
+								f"cannot certify them.  Sign and republish "
+								f"(toolchain >= 0.30.0) before using "
+								f"`--source-rebuild` / `DRIFT_SOURCE_REBUILD` "
+								f"on this dep."
+							)
 				# sha256 / author_key: record drift, not error.
 				# Only log when EITHER side has a non-empty value —
 				# co-artifact entries carry "" on both sides and are
@@ -219,6 +272,33 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def _run_impl(args: argparse.Namespace) -> int:
+	# `--source-rebuild` is strictly a verification-lane selector for
+	# `--check`; the lock-writing path is always authoritative/strict
+	# by design.  Accepting the CLI flag on the write path would let
+	# orch (or a human) believe they'd regenerated a "source-rebuild-
+	# aware" lock when in fact the flag was silently ignored — the
+	# exact ambiguity this flag was added to avoid.  Fail fast.  The
+	# env-var path (`DRIFT_SOURCE_REBUILD=1`) is NOT treated as an
+	# opt-in here because orch legitimately sets it for the whole
+	# certification environment and `drift prepare` (write) may still
+	# be invoked in that env as a no-op on the selector; the explicit
+	# CLI flag is the conscious-intent signal.
+	if getattr(args, "source_rebuild", False) and not getattr(args, "check", False):
+		raise PrepareError(
+			"--source-rebuild is a verification-lane selector for "
+			"`drift prepare --check`, not a lock-writing mode.  The "
+			"lock emitted by `drift prepare` is the authoritative, "
+			"byte-strict trust root downstream strict-mode consumers "
+			"verify against; a 'source-rebuild-aware' lock is a "
+			"category error.  Either pass `--check` (to verify an "
+			"existing lock under the relaxed source-rebuild "
+			"equivalence rule) or drop `--source-rebuild`.  The env-"
+			"var form `DRIFT_SOURCE_REBUILD=1` is silently ignored on "
+			"the write path so orch can set the lane once for the "
+			"whole certification environment; the explicit CLI flag "
+			"must be paired with `--check`."
+		)
+
 	manifest = load_manifest(args.manifest)
 	manifest_dir = args.manifest.resolve().parent
 
