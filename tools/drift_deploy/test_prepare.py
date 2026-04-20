@@ -788,3 +788,404 @@ class TestPrepareSourceAttestationGate:
 			assert lock["web-rest"]["web-jwt"].dep_type == "co-artifact"
 			assert lock["web-rest"]["web-jwt"].source_content_id == ""
 			assert lock["web-rest"]["web-jwt"].source_attestation_key == ""
+
+
+class TestPrepareCheckSourceRebuild:
+	"""`drift prepare --check --source-rebuild` (and the matching
+	`DRIFT_SOURCE_REBUILD=1` env var) relaxes the comparison so a
+	rebuilt-elsewhere artifact whose bytes/signer drifted but whose
+	source identity (and everything else) still matches the lock passes
+	check.  Needed because drift-web's `just test` runs lock-check via
+	`drift prepare --check` and the source-rebuild certification lane
+	legitimately produces new `.dmp` bytes + new `.sig` signer keys
+	on every rebuild.  Default `--check` stays strict/exact."""
+
+	_MANIFEST = {
+		"schema_version": 2,
+		"project": {"name": "test", "license": "MIT"},
+		"artifacts": [{
+			"kind": "package", "name": "my.pkg", "version": "0.1.0",
+			"description": "test", "license": "MIT",
+			"entry_module": "my/pkg.drift", "modules": ["my/pkg.drift"],
+			"module_namespace": "my.pkg",
+			"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+		}],
+	}
+
+	def _write_manifest(self, tmpdir) -> Path:
+		p = _drift_subdir(tmpdir) / "manifest.json"
+		p.write_text(json.dumps(self._MANIFEST))
+		return p
+
+	_SCID = "sha256:" + "a"*64
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_tolerates_sha_and_author_key_drift(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""The committed lock pins sha=AAA / author=key-A; the resolver
+		now sees a rebuilt artifact at sha=BBB / author=key-B but with
+		the SAME version / dep_type / source_content_id /
+		source_attestation_key — `--check --source-rebuild` passes and
+		logs the drift as evidence."""
+		mock_index.return_value = {}
+		# First call (lock write): original bytes + signer.
+		# Second call (--check): rebuilt bytes + different signer,
+		# same source identity.
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-B",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			# Write lock.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			# --check (strict) should FAIL because sha/author drifted.
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1
+			# Third call needed for the source-rebuild check run.
+			mock_resolve.side_effect = [
+				{"ext.lib": ResolvedDep(
+					version="1.0.0", sha256="BBB", dep_type="direct",
+					package_id="ext.lib", author_key="ed25519:key-B",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				)},
+			]
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 0
+			out = capsys.readouterr().out
+			assert "byte/signer drift" in out
+			assert "my.pkg -> ext.lib" in out
+			assert "sha256" in out
+			assert "'AAA'" in out and "'BBB'" in out
+			assert "author_key" in out
+			assert "up-to-date" in out
+			assert "source-rebuild" in out
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_source_content_id_drift(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""Source identity IS enforced even under --source-rebuild.  A
+		scid mismatch means the rebuild was NOT from the source the
+		owner attested — the trust root is gone, fail check."""
+		mock_index.return_value = {}
+		scid_a = "sha256:" + "a"*64
+		scid_b = "sha256:" + "b"*64
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=scid_a,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-B",
+				source_content_id=scid_b,  # <- drifted
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 1
+			err = capsys.readouterr().err
+			assert "source_content_id" in err
+			assert "ext.lib" in err
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_source_attestation_key_drift(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""source_attestation_key is the trust-root kid; if the on-disk
+		attestation was re-signed by a different key, source-rebuild
+		mode must reject — accepting would let an attacker republish
+		under a key the owner never authorised."""
+		mock_index.return_value = {}
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-A",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-B",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-B",  # <- drifted
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 1
+			err = capsys.readouterr().err
+			assert "source_attestation_key" in err
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_version_drift(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""Version drift is NOT tolerated even under source-rebuild —
+		a rebuilt 1.0.0 is not equivalent to 1.0.1.  Pin."""
+		mock_index.return_value = {}
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.1", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 1
+			err = capsys.readouterr().err
+			assert "version" in err
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_rejects_dep_set_change(
+		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	) -> None:
+		"""If a dep appears or disappears between lock and re-resolve,
+		source-rebuild mode must reject — the graph shape is wrong,
+		which is never equivalent regardless of byte drift."""
+		mock_index.return_value = {}
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{
+				"ext.lib": ResolvedDep(
+					version="1.0.0", sha256="AAA", dep_type="direct",
+					package_id="ext.lib", author_key="ed25519:key-A",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				),
+				"ext.extra": ResolvedDep(  # <- new transitive
+					version="0.5.0", sha256="CCC", dep_type="transitive",
+					package_id="ext.extra", author_key="ed25519:key-A",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				),
+			},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check", "--source-rebuild",
+			])) == 1
+			err = capsys.readouterr().err
+			assert "deps added" in err
+			assert "ext.extra" in err
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_via_env_var_only(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+		capsys, monkeypatch,
+	) -> None:
+		"""`DRIFT_SOURCE_REBUILD=1` alone (no `--source-rebuild` flag)
+		switches `--check` into source-rebuild mode.  This is the path
+		orch uses for source-from-commit certification runs so
+		downstream `just test` / lock-check doesn't need to thread the
+		flag through every `drift prepare --check` invocation."""
+		mock_index.return_value = {}
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-B",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+			# NOTE: no --source-rebuild on the CLI; env var alone.
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check",
+			])) == 0
+			out = capsys.readouterr().out
+			assert "source-rebuild" in out
+			assert "byte/signer drift" in out
+
+	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
+	def test_source_rebuild_env_var_non_truthy_stays_strict(
+		self, mock_resolve: MagicMock, mock_index: MagicMock,
+		capsys, monkeypatch,
+	) -> None:
+		"""Pin: `DRIFT_SOURCE_REBUILD=0` / `=false` / `=""` must NOT
+		flip `--check` into source-rebuild mode.  Protects against
+		ambient shell-profile exports silently relaxing the lock gate
+		for humans who never opted in."""
+		mock_index.return_value = {}
+		mock_resolve.side_effect = [
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="AAA", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-A",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = self._write_manifest(tmpdir)
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
+			assert _run_impl(p.parse_args([
+				"--manifest", str(manifest_path), "--check",
+			])) == 1, "DRIFT_SOURCE_REBUILD=0 must NOT relax --check"
+
+	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
+		"""Unit pin: `_source_rebuild_enabled(args)` honours CLI flag
+		OR `DRIFT_SOURCE_REBUILD` truthy env; non-truthy env values
+		leave the lane off.  Same helper used by drift build / drift
+		deploy — prepare must stay in lockstep."""
+		import argparse as _ap
+		from tools.drift_deploy.drift_prepare import _source_rebuild_enabled
+		off = _ap.Namespace(source_rebuild=False)
+		on = _ap.Namespace(source_rebuild=True)
+
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(on) is True
+
+		for truthy in ("1", "true", "True", "TRUE", "yes", "on"):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
+			assert _source_rebuild_enabled(off) is True, f"env {truthy!r} should enable"
+
+		for falsy in ("0", "false", "False", "no", "off", ""):
+			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
+			assert _source_rebuild_enabled(off) is False, f"env {falsy!r} must not enable"
+			# CLI flag still wins.
+			assert _source_rebuild_enabled(on) is True
+
+	def test_strict_check_still_catches_sha_drift_regression_pin(self) -> None:
+		"""Regression pin: default `--check` (no flag, no env) must
+		still catch sha256 drift.  Protects the default contract
+		from an accidental refactor that always routed through the
+		source-rebuild comparator."""
+		with patch("tools.drift_deploy.drift_prepare.build_package_index") as mi, \
+			 patch("tools.drift_deploy.drift_prepare.resolve_artifact") as mr:
+			mi.return_value = {}
+			mr.side_effect = [
+				{"ext.lib": ResolvedDep(
+					version="1.0.0", sha256="AAA", dep_type="direct",
+					package_id="ext.lib", author_key="ed25519:key-A",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				)},
+				{"ext.lib": ResolvedDep(
+					version="1.0.0", sha256="ZZZ",  # <- drifted
+					dep_type="direct",
+					package_id="ext.lib", author_key="ed25519:key-A",
+					source_content_id=self._SCID,
+					source_attestation_key="ed25519:attest-key",
+				)},
+			]
+			with tempfile.TemporaryDirectory() as tmpdir:
+				manifest_path = self._write_manifest(tmpdir)
+				p = build_arg_parser()
+				assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+				assert _run_impl(p.parse_args([
+					"--manifest", str(manifest_path), "--check",
+				])) == 1
+
+	def test_source_rebuild_co_artifact_symmetric_empty_identity(self) -> None:
+		"""Co-artifact entries carry "" for both sha256 and source
+		identity on BOTH sides of the --check comparison (they haven't
+		been built yet; the lock's entry is synthesised by
+		_run_impl's co-artifact override).  Source-rebuild mode must
+		not log spurious "drift" for these."""
+		with tempfile.TemporaryDirectory() as tmpdir:
+			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
+			manifest_path.write_text(json.dumps({
+				"schema_version": 2,
+				"project": {"name": "drift-web", "license": "MIT"},
+				"artifacts": [
+					{
+						"kind": "package", "name": "web-jwt", "version": "0.2.3",
+						"description": "JWT", "license": "MIT",
+						"entry_module": "web/jwt.drift", "modules": ["web/jwt.drift"],
+						"module_namespace": "web.jwt",
+					},
+					{
+						"kind": "package", "name": "web-rest", "version": "0.2.3",
+						"description": "REST", "license": "MIT",
+						"entry_module": "web/rest.drift", "modules": ["web/rest.drift"],
+						"module_namespace": "web.rest",
+						"package_deps": [{"name": "web-jwt", "version": "0.2"}],
+					},
+				],
+			}))
+			p = build_arg_parser()
+			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
+			import io, contextlib
+			buf = io.StringIO()
+			with contextlib.redirect_stdout(buf):
+				rc = _run_impl(p.parse_args([
+					"--manifest", str(manifest_path), "--check", "--source-rebuild",
+				]))
+			assert rc == 0
+			out = buf.getvalue()
+			assert "byte/signer drift" not in out, (
+				"co-artifact entries with symmetric empty sha/author_key "
+				"must not be flagged as drift evidence"
+			)
+			assert "up-to-date" in out

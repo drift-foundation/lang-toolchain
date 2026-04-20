@@ -35,6 +35,15 @@ from tools.drift_deploy.resolver import (
 )
 from tools.drift_deploy.semver import parse_version
 
+# Re-export from the shared module so `drift prepare`, `drift build`,
+# and `drift deploy` share ONE source of truth for the source-rebuild
+# lane selector — matching CLI flag OR `DRIFT_SOURCE_REBUILD=1` env
+# var.  The env-var path is what orch sets for source-from-commit
+# certification runs so repo-owned `just test` / lock-check
+# invocations pick up the lane without each justfile threading
+# `--source-rebuild` explicitly.
+from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
+
 
 class PrepareError(Exception):
 	"""Fatal prepare error."""
@@ -60,6 +69,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		     "exact existing drift/lock.json; non-zero if the lock would "
 		     "change or is absent.  Does not write the lock file.  Use "
 		     "in CI to guard against stale locks.")
+	p.add_argument("--source-rebuild", action="store_true",
+		help=(
+			"Source-rebuild equivalence mode for `--check` (no effect "
+			"on the lock-writing path).  Compares the on-disk lock to "
+			"the freshly-resolved graph on {dep set, version, dep_type, "
+			"source_content_id, source_attestation_key} only; tolerates "
+			"`sha256` and `author_key` drift because the on-disk "
+			"packages may be rebuilt artifacts whose bytes and signer "
+			"key legitimately differ from the original author's.  "
+			"Per-package byte/signer drift is printed to stdout as run "
+			"evidence so humans (and CI logs) can see the divergence. "
+			"Default `--check` remains strict/exact — this flag is the "
+			"only way to relax it.  Also enabled by "
+			"`DRIFT_SOURCE_REBUILD=1` so orch-driven `just test` / "
+			"lock-check invocations can select the lane without the "
+			"downstream justfile threading `--source-rebuild` through "
+			"every `drift prepare --check` call (mirrors the `drift "
+			"build` / `drift deploy` pattern)."
+		))
 	return p
 
 
@@ -67,6 +95,109 @@ def _topo_sort_artifacts(artifacts: list) -> list:
 	"""Topological sort: packages before apps that depend on them."""
 	from tools.drift_deploy.drift_deploy import _topo_sort_artifacts as _ts
 	return _ts(artifacts)
+
+
+# Fields the source-rebuild `--check` lane compares on.  sha256 and
+# author_key are intentionally absent — they're the artifact-byte /
+# artifact-signer half of the v4 identity and legitimately differ
+# when packages are rebuilt by a different hand.  Source identity
+# (`source_content_id` + `source_attestation_key`) IS compared because
+# that half is what the package owner attested, and the whole point
+# of source-rebuild mode is that the rebuild was made from the same
+# attested source.  `dep_type` is included so a co-artifact→direct
+# flip (or vice-versa) still surfaces as drift in either mode.
+_SOURCE_REBUILD_EQ_FIELDS = (
+	"version", "dep_type", "source_content_id", "source_attestation_key",
+)
+
+
+def _compare_locks_for_check(
+	existing: dict[str, dict[str, ResolvedDep]],
+	resolved: dict[str, dict[str, ResolvedDep]],
+	*,
+	source_rebuild: bool,
+	byte_drift_log: list[tuple[str, str, str, str, str, str]],
+) -> list[str]:
+	"""Compare an on-disk lock to a freshly-resolved graph for `--check`.
+
+	Returns a list of drift descriptions; empty = locks are equivalent
+	under the selected mode.  `byte_drift_log` is appended with
+	`(artifact, pkg_id, locked_sha, resolved_sha, locked_author_key,
+	resolved_author_key)` tuples for every per-dep sha256 OR author_key
+	disagreement encountered in source-rebuild mode — printed by the
+	caller as run evidence.  In strict mode `byte_drift_log` is
+	untouched; mismatches on those fields surface through the returned
+	drift list instead.
+
+	Strict mode (default) is byte-for-byte: any disagreement on any
+	`ResolvedDep` field (via `ResolvedDep` equality) is drift.
+
+	Source-rebuild mode enforces only artifact set + per-artifact dep
+	set + `(version, dep_type, source_content_id,
+	source_attestation_key)`.  Empty source-identity fields on BOTH
+	sides are tolerated (the co-artifact case, where the `.dmp` is
+	built later in the same deploy run and neither the lock nor the
+	re-resolved graph carries a signed identity yet — both are ""
+	symmetrically and compare equal naturally).
+	"""
+	errors: list[str] = []
+	if existing.keys() != resolved.keys():
+		added = sorted(resolved.keys() - existing.keys())
+		removed = sorted(existing.keys() - resolved.keys())
+		if added:
+			errors.append(f"artifacts added since prepare: {', '.join(added)}")
+		if removed:
+			errors.append(f"artifacts removed since prepare: {', '.join(removed)}")
+		# Dep-level diffs on shared artifacts are still useful signal;
+		# fall through to report them too.
+	for art_name in sorted(existing.keys() & resolved.keys()):
+		ed = existing[art_name]
+		rd = resolved[art_name]
+		if ed.keys() != rd.keys():
+			added = sorted(rd.keys() - ed.keys())
+			removed = sorted(ed.keys() - rd.keys())
+			if added:
+				errors.append(f"artifact '{art_name}': deps added: {', '.join(added)}")
+			if removed:
+				errors.append(f"artifact '{art_name}': deps removed: {', '.join(removed)}")
+		for pkg_id in sorted(ed.keys() & rd.keys()):
+			e = ed[pkg_id]
+			r = rd[pkg_id]
+			if source_rebuild:
+				for field in _SOURCE_REBUILD_EQ_FIELDS:
+					ev = getattr(e, field)
+					rv = getattr(r, field)
+					if ev != rv:
+						errors.append(
+							f"artifact '{art_name}' dep '{pkg_id}': "
+							f"{field} differs (locked {ev!r}, resolved {rv!r})"
+						)
+				# sha256 / author_key: record drift, not error.
+				# Only log when EITHER side has a non-empty value —
+				# co-artifact entries carry "" on both sides and are
+				# not drift.
+				if (e.sha256 or r.sha256) and e.sha256 != r.sha256:
+					byte_drift_log.append((
+						art_name, pkg_id,
+						e.sha256, r.sha256,
+						e.author_key, r.author_key,
+					))
+				elif (e.author_key or r.author_key) and e.author_key != r.author_key:
+					# author_key drifted even though sha matched (rare
+					# but possible: same bytes, different signer —
+					# e.g. cross-signed republish).  Still evidence.
+					byte_drift_log.append((
+						art_name, pkg_id,
+						e.sha256, r.sha256,
+						e.author_key, r.author_key,
+					))
+			else:
+				if e != r:
+					errors.append(
+						f"artifact '{art_name}' dep '{pkg_id}': "
+						f"locked {e!r} != resolved {r!r}"
+					)
+	return errors
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -240,6 +371,8 @@ def _run_impl(args: argparse.Namespace) -> int:
 		# mutating the working tree.  The lock MUST exist; absence is
 		# treated as drift (prepare-before-commit was skipped).
 		from tools.drift_deploy.lockfile import read_lock
+		source_rebuild = _source_rebuild_enabled(args)
+		mode_label = "source-rebuild" if source_rebuild else "strict"
 		if not lock_path.exists():
 			print(
 				f"drift prepare --check: {lock_path} does not exist; "
@@ -263,14 +396,38 @@ def _run_impl(args: argparse.Namespace) -> int:
 				file=sys.stderr,
 			)
 			return 1
-		if existing != resolved_map:
+		byte_drift_log: list[tuple[str, str, str, str, str, str]] = []
+		errors = _compare_locks_for_check(
+			existing, resolved_map,
+			source_rebuild=source_rebuild,
+			byte_drift_log=byte_drift_log,
+		)
+		# Always surface byte/signer drift as evidence when we saw any,
+		# even if the overall check passes.  In strict mode this list
+		# is always empty (differences become errors instead), so the
+		# branch is a no-op there.  Prints before the pass/fail verdict
+		# so the evidence sits next to the mode label in CI logs.
+		if byte_drift_log:
 			print(
-				f"drift prepare --check: {lock_path} is stale; "
-				f"run `drift prepare` to refresh",
+				f"drift prepare --check ({mode_label}): byte/signer drift "
+				f"vs. lock (tolerated under source-rebuild mode):"
+			)
+			for art_name, pkg_id, lsha, rsha, lak, rak in byte_drift_log:
+				print(f"  {art_name} -> {pkg_id}:")
+				if lsha != rsha:
+					print(f"    sha256      locked={lsha!r} resolved={rsha!r}")
+				if lak != rak:
+					print(f"    author_key  locked={lak!r} resolved={rak!r}")
+		if errors:
+			print(
+				f"drift prepare --check ({mode_label}): {lock_path} is "
+				f"stale; run `drift prepare` to refresh",
 				file=sys.stderr,
 			)
+			for err in errors:
+				print(f"  {err}", file=sys.stderr)
 			return 1
-		print(f"drift prepare --check: {lock_path} is up-to-date")
+		print(f"drift prepare --check ({mode_label}): {lock_path} is up-to-date")
 		return 0
 
 	# Write lock file — full rewrite for the entire manifest.
