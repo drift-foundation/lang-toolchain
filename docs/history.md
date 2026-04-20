@@ -1,5 +1,163 @@
 # Drift development history
 
+## 2026-04-20
+- **Source attestation + lock v4 + source-rebuild certification mode
+  (0.30.0, ABI 10)**:  v4 splits dependency identity into two
+  signed halves so source-rebuild workflows can validate "rebuilt
+  from the same source the author attested" without requiring the
+  rebuilt `.dmp` to be byte-identical.  Closes the orchestrator
+  certification gap that started this track: an upstream package
+  rebuilt from source (different bytes, possibly different
+  rebuilder signer) can now be accepted under a workflow-named
+  opt-in, while default consumption stays strict on bytes.
+
+  **Two identities per dep, one lock format.**  `ResolvedDep` (and
+  the on-wire lock entry) now carries:
+
+  - **artifact identity**: `version` (exact `M.N.P`) + `sha256`
+    (`.dmp` byte fingerprint) + `author_key` (kid that signed the
+    artifact).  Default-strict consumption re-checks all three
+    against the on-disk package.
+  - **source identity**: `source_content_id` (canonical hash of the
+    declared source/build inputs — kind, package_id, version,
+    module_namespace, entry_module, sorted module/asset paths +
+    sha256s, package_deps ranges, native_deps, unsafe flag,
+    target_class) + `source_attestation_key` (kid that signed
+    the `.source-attestation` body).  Re-checked against the
+    package's signed sidecar.
+
+  The split lets default mode keep its supply-chain claim ("these
+  exact bytes are what the author shipped") while source-rebuild
+  mode anchors trust on the source identity instead.  Source
+  identity is **signed by the package owner**; the rebuild's own
+  artifact signer is irrelevant to source-mode trust — the
+  rebuilder cannot sign as the package owner.
+
+  **Canonical `source_content_id`** is implemented in
+  `tools/drift_deploy/source_attestation.py::compute_source_content_id`.
+  All paths are project-relative, `/`-normalized, with absolute
+  paths and `..` segments rejected at the canonicalisation
+  boundary.  Per-module / per-asset sha256s are validated against
+  a strict `[0-9a-f]{64}` shape before they enter signed input.
+  Module/dep/asset orderings are normalised inside the function so
+  callers cannot accidentally produce two different ids from the
+  same source set.
+
+  **`SourceAttestation` sidecar.**  Author-signed JSON envelope at
+  `<package>.source-attestation` next to the `.dmp` / `.zdmp`,
+  pinned to the same Ed25519 + envelope shape as the existing
+  `.sig` sidecar.  Body fields: `schema_version`, `package_id`,
+  `version`, `source_content_id`, `required_deps[]`,
+  `target_class`.  Signature covers a small text envelope that
+  references the body by sha256, so verification is a fixed-shape
+  string regardless of body size.  Sign-time and load-time both
+  re-validate `source_content_id` strict shape so a programmatic
+  caller cannot smuggle a malformed id into a signed lock entry.
+
+  **Producer wiring.**  `drift deploy`'s library-build path
+  computes `source_content_id` from on-disk source/asset bytes
+  before invoking driftc, passes it via the new `--source-content-id`
+  flag (driftc stamps it into the `.dmp` manifest), then after
+  `_sign_artifact` emits `<name>.source-attestation` signed with
+  the same key as the `.dmp`.  The sidecar is staged into the
+  smoke pkg dir alongside the existing `.zdmp` / `.sig` /
+  `.provenance.zst` / `.author-profile`.  Signing key files are
+  loaded through the canonical `lang/drift/crypto.b64_decode`
+  (`validate=True`) — non-base64 characters in the key file are
+  rejected, not silently dropped.
+
+  **Lock v4 (`schema_version: 4`).**  `tools/drift_deploy/lockfile.py`
+  emits and accepts the new shape.  v3 locks are rejected at load
+  with a `republish-with-toolchain-≥-0.30.0`-and-`drift prepare`
+  diagnostic that explains *why* (silently treating v3 as v4
+  would let source-rebuild mode pass against a lock with no
+  recorded source identity).  Co-artifact entries leave the four
+  on-disk-derived fields (`sha256`, `author_key`,
+  `source_content_id`, `source_attestation_key`) empty; the
+  verifier skips them with the existing fail-closed allowlist on
+  `package_id`.
+
+  **Resolver-side trust gate** (`resolver._read_source_attestation_meta`).
+  Reads each package's `.source-attestation` sidecar, verifies the
+  signature against the carried pubkey, and cross-binds the body
+  to the .dmp manifest (package_id, version, target_class,
+  required_deps, source_content_id stamp).  Mismatch on any field
+  → stderr warning naming the offending field + return empty.  An
+  old `.dmp` lacking the v4 `source_content_id` stamp cannot be
+  retroactively upgraded into source-mode by adjacency to a
+  validly-signed sidecar — the artifact itself must declare its
+  source identity for v4 trust to apply.
+
+  **`drift prepare` write-time gate.**  Before writing the lock,
+  iterates resolved deps and refuses to write a v4 entry whose
+  non-co-artifact source identity is empty (`source_content_id`
+  AND `source_attestation_key`).  Failure mode: `PrepareError`
+  listing every offending `(artifact, package, version)` triple
+  with republish-required guidance.  Unsigned packages
+  (`author_key == "unsigned"`) propagate the existing dev opt-in:
+  source identity is also allowed to be empty for those entries
+  (signing infra governs both halves).
+
+  **Verifier modes** (`verify_lock_compatibility`):
+
+  - **strict** (default): re-checks `version`, `sha256`,
+    `author_key`, `source_content_id`, `source_attestation_key`.
+    Unsigned dev opt-in skips ONLY the artifact-signer + source-
+    attestation halves; `sha256` is still enforced (the unsigned
+    escape hatch is not a general byte-integrity bypass).
+  - **source_rebuild** (Phase D opt-in): re-checks `version`,
+    `source_content_id`, `source_attestation_key`.  Tolerates
+    `sha256` drift (rebuilt bytes legitimately differ) and
+    `author_key` change (rebuilder ≠ original author).  Per-package
+    `(pkg, locked_sha, disk_sha)` recorded in caller-supplied
+    `sha_drift_log` for run-evidence reporting.  Missing source
+    attestation = hard fail (no silent fallback to byte-only
+    verification).  Unsigned packages = hard fail (no signed
+    source identity → no trust root).
+
+  **CLI surface.**  `drift build --source-rebuild` and
+  `drift deploy --source-rebuild` thread the mode through to the
+  verifier.  Run-evidence is printed to stdout per-artifact:
+
+  ```
+  drift deploy --source-rebuild: artifact 'web-tls' accepted with
+  byte-drift in 2 dep(s) (source identity verified):
+    net-tls:    locked 99ef…  ->  rebuilt 54cd…
+    drift-net:  locked aabb…  ->  rebuilt eeff…
+  ```
+
+  No generic `--allow-sha-mismatch`: the mode is named after the
+  workflow it serves, not the check it relaxes.
+
+  **Trust-boundary preserved.**  In source-rebuild mode the
+  source-attestation key compared against the lock's recorded
+  `source_attestation_key` comes from the `.source-attestation`
+  sidecar — never from the rebuilt `.dmp`'s `.sig` signer.  An
+  orchestrator cannot substitute their own attestation key for
+  the original author's; the substitution shows up as
+  `source_attestation_key changed` and is rejected.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10; the
+  compiler↔runtime boundary is unaffected.  `DRIFTC_VERSION
+  0.29.1 → 0.30.0` is a behavior + on-disk-format bump (lock
+  v3 → v4, new package sidecar).
+
+  **Migration.**  Downstream packages must be republished with
+  toolchain ≥ 0.30.0 to be source-mode-certifiable; v3 locks are
+  rejected at load and `drift prepare` re-run is required even
+  for byte-only consumption.  See
+  `work/source-attestation/migration.md` for the consumer-side
+  rollout note.
+
+  **Test coverage.**  437 tests in `tools/drift_deploy/`,
+  including: 52 in `test_source_attestation.py` (canonical id +
+  sidecar), 16 in `test_prepare.py` (incl. fail-fast gate +
+  unsigned opt-in), 12 in `test_resolver.py::TestVerifyV4SourceIdentityEnforcement`
+  + 10 in `TestReadSourceAttestationMeta` (cross-binding +
+  signature verify), Phase D CLI tests in `test_build.py`, and
+  `TestDeploySourceRebuild` in `test_deploy.py` for the deploy
+  path (the orch workflow's actual entry point).
+
 ## 2026-04-19
 - **`drift prepare --check` co-artifact false-positive fix (0.29.1,
   ABI 10)**:  `drift prepare --check` always reported the lock
