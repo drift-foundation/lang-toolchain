@@ -1629,6 +1629,218 @@ class TestLockCompatibility:
 			f"sha-mismatch diagnostic must point at drift prepare; got:\n{err}"
 		)
 
+	def test_source_rebuild_accepts_sha_drift_when_source_identity_matches(self, tmp_path, capsys):
+		"""Phase D: `drift build --source-rebuild` accepts a rebuilt
+		`.dmp` with different bytes from the lock as long as the
+		source-attestation half (`source_content_id` +
+		`source_attestation_key`) re-verifies.  Per-package sha drift
+		reported to stdout as run evidence."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		locked_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
+		# orchestrator-rebuilt bytes — different sha but same source.
+		rebuilt_sha = hashlib.sha256(b"rebuilt-by-orch").hexdigest()
+		assert locked_sha != rebuilt_sha
+		# `_write_lock` derives source_content_id deterministically;
+		# replicate it exactly so the disk side matches the lock.
+		matching_scid = _fake_scid("dep-a", "0.1.3")
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("subprocess.run") as mock_run, \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=rebuilt_sha,  # ← drift!
+					required_deps=[],
+					author_key="ed25519:rebuilder-not-author",  # tolerated in source-rebuild
+					source_content_id=matching_scid,
+					source_attestation_key="ed25519:test",  # matches lock
+				)],
+			}
+			mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+				"--source-rebuild",
+			])
+
+		assert result == 0, capsys.readouterr().err
+		out = capsys.readouterr().out
+		# Run-evidence reporting: per-package locked → rebuilt sha pair
+		# must surface to stdout so the operator sees what diverged.
+		assert "source-rebuild" in out
+		assert "byte-drift" in out
+		assert "dep-a" in out
+		assert locked_sha in out
+		assert rebuilt_sha in out
+
+	def test_source_rebuild_rejects_source_identity_mismatch(self, tmp_path, capsys):
+		"""Phase D: source-rebuild mode REJECTS when source identity
+		differs (different source attested) — sha tolerance does not
+		extend to source identity, which is the trust root."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		rebuilt_sha = hashlib.sha256(b"rebuilt").hexdigest()
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=rebuilt_sha,
+					required_deps=[],
+					author_key="ed25519:rebuilder",
+					source_content_id="sha256:" + "9"*64,  # ← different source!
+					source_attestation_key="ed25519:test",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+				"--source-rebuild",
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "source_content_id mismatch" in err
+		assert "rebuilt from different source" in err
+
+	def test_source_rebuild_rejects_missing_source_attestation(self, tmp_path, capsys):
+		"""Phase D: source-rebuild mode hard-fails when on-disk has no
+		valid source attestation.  No silent fallback to byte-only
+		verification — that would defeat the whole trust boundary."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		rebuilt_sha = hashlib.sha256(b"rebuilt").hexdigest()
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=rebuilt_sha,
+					required_deps=[],
+					author_key="ed25519:rebuilder",
+					source_content_id="",  # missing sidecar on disk
+					source_attestation_key="",
+				)],
+			}
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+				"--source-rebuild",
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "source-rebuild mode requires" in err
+		assert "republish" in err.lower()
+
+	def test_default_strict_still_rejects_sha_drift_without_flag(self, tmp_path, capsys):
+		"""Phase D regression: WITHOUT `--source-rebuild`, the default
+		strict mode still rejects sha drift even when source identity
+		matches.  Source-mode is opt-in; it must not become the silent
+		default for regular package consumers."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		matching_scid = _fake_scid("dep-a", "0.1.3")
+		drift_sha = hashlib.sha256(b"different-bytes").hexdigest()
+
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			mock_idx.return_value = {
+				"dep-a": [PackageEntry(
+					package_id="dep-a", version=parse_version("0.1.3"),
+					path=pkg_root / "dep-a-0.1.3.dmp",
+					sha256=drift_sha,
+					required_deps=[],
+					author_key="ed25519:test",
+					source_content_id=matching_scid,
+					source_attestation_key="ed25519:test",
+				)],
+			}
+			# NOTE: no --source-rebuild flag.
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--package-root", str(pkg_root),
+			])
+
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "sha256 mismatch" in err
+
 	def test_build_rejects_author_key_mismatch(self, tmp_path, capsys):
 		"""Lock's author_key differs from the on-disk signer at the
 		pinned version → build fails with a `drift prepare` pointer.

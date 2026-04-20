@@ -99,6 +99,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Skip all smoke tests (CI escape hatch)")
 	p.add_argument("--dry-run", action="store_true",
 		help="Build + sign + smoke but do not publish")
+	p.add_argument("--source-rebuild", action="store_true",
+		help=(
+			"Source-rebuild certification mode: tolerate `.dmp` byte "
+			"sha256 drift between the lock and the on-disk package "
+			"as long as the lock's recorded source identity "
+			"(`source_content_id` + `source_attestation_key`) re-"
+			"verifies against the package's `.source-attestation` "
+			"sidecar.  Per-package sha drift is reported to stdout "
+			"as run evidence.  Use when an upstream `.dmp` was "
+			"rebuilt from the same source the author attested (e.g. "
+			"orchestrator source-from-commit certification).  "
+			"Missing source attestations and unsigned packages are "
+			"hard-failed in this mode — there is no silent fallback "
+			"to byte-only verification."
+		))
 	return p
 
 
@@ -282,6 +297,7 @@ def _resolve_artifact_deps(
 	lock_path: Path,
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None,
 	co_artifact_names: set[str] | None = None,
+	source_rebuild: bool = False,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Load locked dependencies for a single artifact.
@@ -318,21 +334,42 @@ def _resolve_artifact_deps(
 				f"run 'drift prepare' to re-resolve"
 			)
 	pkg_index = build_package_index(package_roots)
+	from tools.drift_deploy.lockfile import (
+		VERIFY_MODE_SOURCE_REBUILD,
+		VERIFY_MODE_STRICT,
+	)
+	mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
+	sha_drift_log: list[tuple[str, str, str]] = []
 	errors = verify_lock_compatibility(
 		locked, pkg_index,
 		allowed_co_artifacts=co_artifact_names or set(),
+		mode=mode,
+		sha_drift_log=sha_drift_log,
 	)
 	if errors:
 		raise DeployError(
 			f"artifact '{art.name}': lock compatibility check failed:\n"
 			+ "\n".join(f"  {e}" for e in errors)
 		)
-	# v3 lock: entries already carry exact version + sha256.  Pass
-	# them through unchanged — `verify_lock_compatibility` above
-	# has already checked version match, sha match, and signer
-	# match against the on-disk package index.  The v2-era "resolve
-	# locked range to exact at deploy time" step is gone; patch
-	# movement happens in `drift prepare`, not here.
+	if source_rebuild and sha_drift_log:
+		# Run evidence: per-package byte drift surfaced to stdout.
+		# Source identity already verified — these are the rebuilds
+		# whose bytes diverged from the author's original artifact.
+		print(
+			f"drift deploy --source-rebuild: artifact '{art.name}' "
+			f"accepted with byte-drift in {len(sha_drift_log)} dep(s) "
+			f"(source identity verified):"
+		)
+		for pkg_id, locked_sha, disk_sha in sha_drift_log:
+			print(f"  {pkg_id}:  locked {locked_sha}  ->  rebuilt {disk_sha}")
+	# v4 lock: entries already carry exact version + sha256 + source
+	# identity.  Pass them through unchanged — `verify_lock_compatibility`
+	# above has already checked version, sha (or sha-drift evidence in
+	# source-rebuild), artifact signer, source_content_id, and
+	# source_attestation_key against the on-disk package index +
+	# `.source-attestation` sidecars.  The v2-era "resolve locked range
+	# to exact at deploy time" step is gone; patch movement happens
+	# in `drift prepare`, not here.
 	return dict(locked)
 
 
@@ -1435,6 +1472,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				lock_path=lock_path,
 				existing_lock=existing_lock,
 				co_artifact_names=co_artifact_names,
+				source_rebuild=getattr(args, "source_rebuild", False),
 			)
 			resolved_map[art.name] = resolved
 			if resolved:

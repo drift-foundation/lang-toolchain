@@ -92,6 +92,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--debug", action="store_true",
 		help="Produce a debug-style build (links the `_debug` runtime variant; "
 		     "equivalent to setting DRIFT_DEBUG=1)")
+	p.add_argument("--source-rebuild", action="store_true",
+		help=(
+			"Source-rebuild certification mode: tolerate `.dmp` byte "
+			"sha256 drift between the lock and the on-disk package "
+			"as long as the lock's recorded source identity "
+			"(`source_content_id` + `source_attestation_key`) re-"
+			"verifies against the package's `.source-attestation` "
+			"sidecar.  Per-package sha drift is reported to stdout "
+			"as run evidence.  Use when an upstream `.dmp` was "
+			"rebuilt from the same source the author attested (e.g. "
+			"orchestrator source-from-commit certification).  "
+			"Missing source attestations and unsigned packages are "
+			"hard-failed in this mode — there is no silent fallback "
+			"to byte-only verification."
+		))
 	return p
 
 
@@ -259,6 +274,7 @@ def _resolve_deps(
 	package_roots: list[Path],
 	*,
 	co_artifact_names: set[str] | None = None,
+	source_rebuild: bool = False,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Resolve dependencies for a build.
@@ -326,19 +342,43 @@ def _resolve_deps(
 	# status is rejected as corruption.
 	if package_roots:
 		pkg_index = build_package_index(package_roots)
+		from tools.drift_deploy.lockfile import (
+			VERIFY_MODE_SOURCE_REBUILD,
+			VERIFY_MODE_STRICT,
+		)
+		mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
+		# Capture per-package sha drift for run-evidence reporting
+		# in source-rebuild mode.  Strict mode never produces
+		# entries here (sha mismatch is a hard error).
+		sha_drift_log: list[tuple[str, str, str]] = []
 		errors = verify_lock_compatibility(
 			locked, pkg_index,
 			allowed_co_artifacts=co_artifact_names or set(),
+			mode=mode,
+			sha_drift_log=sha_drift_log,
 		)
 		if errors:
 			raise BuildError(
 				f"artifact '{art.name}': lock compatibility check failed:\n"
 				+ "\n".join(f"  {e}" for e in errors)
 			)
+		if source_rebuild and sha_drift_log:
+			# Run evidence: surface every byte-divergent package so
+			# the human running the certification sees exactly which
+			# rebuilds aren't byte-stable.  This is informational —
+			# the verification already accepted them based on
+			# matching source identity.
+			print(
+				f"drift build --source-rebuild: artifact '{art.name}' "
+				f"accepted with byte-drift in {len(sha_drift_log)} "
+				f"dep(s) (source identity verified):"
+			)
+			for pkg_id, locked_sha, disk_sha in sha_drift_log:
+				print(f"  {pkg_id}:  locked {locked_sha}  ->  rebuilt {disk_sha}")
 
-	# v3 lock: entries already carry exact version + sha256.  Pass the
-	# full transitive graph through unchanged — patch movement happens
-	# only in `drift prepare`.
+	# v4 lock: entries already carry exact version + sha256 +
+	# source identity.  Pass the full transitive graph through
+	# unchanged — patch movement happens only in `drift prepare`.
 	return locked
 
 
@@ -409,7 +449,8 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 
 	# Resolve deps.
 	resolved = _resolve_deps(art, manifest_dir, package_roots,
-		co_artifact_names=co_artifact_names)
+		co_artifact_names=co_artifact_names,
+		source_rebuild=getattr(args, "source_rebuild", False))
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)

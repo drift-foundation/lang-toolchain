@@ -1981,6 +1981,199 @@ class TestIntraProjectDeps:
 			assert resolved["net-crypto"].version == "0.1.0"
 
 
+class TestDeploySourceRebuild:
+	"""Phase D pin for the deploy path.  The orch workflow that
+	started the source-rebuild track lives here, not in `drift build`:
+	deploy resolves per artifact, walks staged_pkg_root + extra
+	package roots, handles co-artifacts, and reports byte-drift
+	evidence inside `_resolve_artifact_deps`.  Build-only tests would
+	miss every regression in that surface."""
+
+	@patch("tools.drift_deploy.drift_deploy.build_package_index")
+	def test_deploy_source_rebuild_accepts_sha_drift_with_matching_source_identity(
+		self, mock_index: MagicMock, capsys,
+	) -> None:
+		"""Deploy-level happy path: lock sha != rebuilt sha, but
+		source_content_id + source_attestation_key match → accepted,
+		byte-drift surfaced to stdout as run evidence.  The rebuilt
+		artifact is ALSO signed by a different (rebuilder) key —
+		tolerated because the trust root is the source-attestation
+		key, not the rebuilt `.dmp`'s `.sig` signer."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+		with tempfile.TemporaryDirectory() as tmpdir:
+			dmp = Path(tmpdir) / "net-crypto.dmp"
+			dmp.write_bytes(b"orch-rebuilt-bytes")
+			rebuilt_sha = hashlib.sha256(b"orch-rebuilt-bytes").hexdigest()
+			locked_sha = hashlib.sha256(b"author-original-bytes").hexdigest()
+			assert locked_sha != rebuilt_sha
+			matching_scid = "sha256:" + "a"*64
+			matching_sak = "ed25519:original-author-src"
+			mock_index.return_value = {
+				"net-crypto": [PackageEntry(
+					package_id="net-crypto",
+					version=parse_version("0.1.0"),
+					path=dmp,
+					sha256=rebuilt_sha,
+					required_deps=[],
+					author_key="ed25519:rebuilder-not-author",  # tolerated
+					source_content_id=matching_scid,
+					source_attestation_key=matching_sak,
+				)],
+			}
+			art = Artifact(
+				kind="package", name="net-tls", version="0.1.0",
+				description="", license="", entry_module="net.tls",
+				modules=["net.tls"], module_namespace="net.tls",
+				package_deps=[PackageDep(name="net-crypto", version="0.1")],
+			)
+			existing_lock = {
+				"net-tls": {
+					"net-crypto": ResolvedDep(
+						version="0.1.0",
+						sha256=locked_sha,
+						dep_type="direct",
+						package_id="net-crypto",
+						author_key="ed25519:original-author-art",
+						source_content_id=matching_scid,
+						source_attestation_key=matching_sak,
+					),
+				},
+			}
+			resolved = _resolve_artifact_deps(
+				art,
+				package_roots=[Path(tmpdir)],
+				lock_path=_drift_subdir(tmpdir) / "lock.json",
+				existing_lock=existing_lock,
+				source_rebuild=True,
+			)
+			assert "net-crypto" in resolved
+			assert resolved["net-crypto"].version == "0.1.0"
+			out = capsys.readouterr().out
+			assert "drift deploy --source-rebuild" in out
+			assert "byte-drift" in out
+			assert "net-crypto" in out
+			assert locked_sha in out
+			assert rebuilt_sha in out
+
+	@patch("tools.drift_deploy.drift_deploy.build_package_index")
+	def test_deploy_source_rebuild_rejects_source_identity_mismatch(
+		self, mock_index: MagicMock,
+	) -> None:
+		"""Deploy-level: source-rebuild rejects different source even
+		when sha drift would otherwise be tolerated.  Sha tolerance
+		does not extend to source identity — that's the trust root."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+		with tempfile.TemporaryDirectory() as tmpdir:
+			dmp = Path(tmpdir) / "net-crypto.dmp"
+			dmp.write_bytes(b"rebuilt")
+			rebuilt_sha = hashlib.sha256(b"rebuilt").hexdigest()
+			locked_sha = hashlib.sha256(b"original").hexdigest()
+			mock_index.return_value = {
+				"net-crypto": [PackageEntry(
+					package_id="net-crypto",
+					version=parse_version("0.1.0"),
+					path=dmp,
+					sha256=rebuilt_sha,
+					required_deps=[],
+					author_key="ed25519:rebuilder",
+					source_content_id="sha256:" + "9"*64,  # ≠ lock
+					source_attestation_key="ed25519:original-author-src",
+				)],
+			}
+			art = Artifact(
+				kind="package", name="net-tls", version="0.1.0",
+				description="", license="", entry_module="net.tls",
+				modules=["net.tls"], module_namespace="net.tls",
+				package_deps=[PackageDep(name="net-crypto", version="0.1")],
+			)
+			existing_lock = {
+				"net-tls": {
+					"net-crypto": ResolvedDep(
+						version="0.1.0",
+						sha256=locked_sha,
+						dep_type="direct",
+						package_id="net-crypto",
+						author_key="ed25519:original-author-art",
+						source_content_id="sha256:" + "a"*64,
+						source_attestation_key="ed25519:original-author-src",
+					),
+				},
+			}
+			with pytest.raises(DeployError) as exc:
+				_resolve_artifact_deps(
+					art,
+					package_roots=[Path(tmpdir)],
+					lock_path=_drift_subdir(tmpdir) / "lock.json",
+					existing_lock=existing_lock,
+					source_rebuild=True,
+				)
+			msg = str(exc.value)
+			assert "source_content_id mismatch" in msg
+			assert "rebuilt from different source" in msg
+
+	@patch("tools.drift_deploy.drift_deploy.build_package_index")
+	def test_deploy_default_strict_still_rejects_sha_drift_without_flag(
+		self, mock_index: MagicMock,
+	) -> None:
+		"""Regression pin: deploy WITHOUT --source-rebuild must still
+		reject sha drift even when source identity matches.  The
+		certification opt-in does not become the silent default."""
+		from tools.drift_deploy.resolver import PackageEntry
+		from tools.drift_deploy.semver import parse_version
+		import hashlib
+		with tempfile.TemporaryDirectory() as tmpdir:
+			dmp = Path(tmpdir) / "net-crypto.dmp"
+			dmp.write_bytes(b"different-bytes")
+			drift_sha = hashlib.sha256(b"different-bytes").hexdigest()
+			locked_sha = hashlib.sha256(b"original").hexdigest()
+			matching_scid = "sha256:" + "a"*64
+			matching_sak = "ed25519:src"
+			mock_index.return_value = {
+				"net-crypto": [PackageEntry(
+					package_id="net-crypto",
+					version=parse_version("0.1.0"),
+					path=dmp,
+					sha256=drift_sha,
+					required_deps=[],
+					author_key="ed25519:author",
+					source_content_id=matching_scid,
+					source_attestation_key=matching_sak,
+				)],
+			}
+			art = Artifact(
+				kind="package", name="net-tls", version="0.1.0",
+				description="", license="", entry_module="net.tls",
+				modules=["net.tls"], module_namespace="net.tls",
+				package_deps=[PackageDep(name="net-crypto", version="0.1")],
+			)
+			existing_lock = {
+				"net-tls": {
+					"net-crypto": ResolvedDep(
+						version="0.1.0",
+						sha256=locked_sha,
+						dep_type="direct",
+						package_id="net-crypto",
+						author_key="ed25519:author",
+						source_content_id=matching_scid,
+						source_attestation_key=matching_sak,
+					),
+				},
+			}
+			with pytest.raises(DeployError) as exc:
+				# NOTE: source_rebuild defaults to False.
+				_resolve_artifact_deps(
+					art,
+					package_roots=[Path(tmpdir)],
+					lock_path=_drift_subdir(tmpdir) / "lock.json",
+					existing_lock=existing_lock,
+				)
+			assert "sha256 mismatch" in str(exc.value)
+
+
 # ── Lock-exact passthrough at deploy time ───────────────────────────
 
 
