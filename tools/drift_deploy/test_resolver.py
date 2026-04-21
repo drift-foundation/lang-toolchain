@@ -1984,6 +1984,187 @@ class TestVerifyV4SourceIdentityEnforcement:
 	# and `drift_deploy.py::_resolve_artifact_deps` for the
 	# fresh-resolve branch that produces source-rebuild's `locked`.
 
+	# ── `.__instantiations` skip (orch 2026-04-21 regression) ─────
+
+	def test_iter_trust_module_ids_skips_instantiations(self) -> None:
+		"""Shared predicate pin: module_ids ending in
+		`.__instantiations` are excluded from trust checks.  These
+		are compiler-generated monomorphisation sibling modules and
+		cannot be authored by a signer — including them would reject
+		every package that declares a generic.  Orch hit this with
+		`mariadb-wire-proto` on 2026-04-21: `.source-attestation`
+		signer verified for the authored namespace but the trust
+		gate tried to look up a signer for
+		`mariadb-wire-proto.__instantiations`, which no trust store
+		would ever carry.  Single-sourced here so the `.sig` and
+		`.source-attestation` gates can't drift on this skip rule.
+		"""
+		from lang.driftc.packages.signature_v0 import iter_trust_module_ids
+		manifest = {
+			"modules": [
+				{"module_id": "mariadb-wire-proto"},
+				{"module_id": "mariadb-wire-proto.__instantiations"},
+				{"module_id": "net_tls"},
+				{"module_id": "net_tls.__instantiations"},
+				# Edge cases: non-string id, missing id, non-dict entry.
+				{"module_id": 42},
+				{},
+				"not a dict",
+			],
+		}
+		ids = list(iter_trust_module_ids(manifest))
+		assert ids == ["mariadb-wire-proto", "net_tls"], ids
+
+	def test_iter_trust_module_ids_empty_modules(self) -> None:
+		"""Missing or non-list `modules` yields nothing (no error)."""
+		from lang.driftc.packages.signature_v0 import iter_trust_module_ids
+		assert list(iter_trust_module_ids({})) == []
+		assert list(iter_trust_module_ids({"modules": None})) == []
+		assert list(iter_trust_module_ids({"modules": "not a list"})) == []
+
+	def test_build_package_index_accepts_instantiations_sibling(self) -> None:
+		"""End-to-end regression (orch report 2026-04-21): calling
+		`build_package_index(trust_store=...)` on a package whose
+		manifest declares both an authored module AND its compiler-
+		generated `.__instantiations` sibling must succeed when the
+		trust store authorizes the authored namespace only.
+
+		Before the 2026-04-21 fix, `build_package_index`'s gate (c)
+		(source-attestation signer allowlist) iterated every
+		`module_id` — including `.__instantiations` — and raised
+		`ResolutionError` because no trust store allowlists the
+		compiler-generated namespace.  This test exercises the
+		resolver-level path end-to-end and would have failed before
+		the fix; the narrower unit test on
+		`iter_trust_module_ids` is a necessary but insufficient
+		pin (a caller could bypass the helper).
+
+		Gates (a) `.sig` exists and (b) `.sig` cryptographically
+		verifies are stubbed via patches so the test stays focused
+		on gate (c).  The patches cover the two places that reach
+		outside this function: `verify_package_signatures`
+		(cryptographic `.sig` check) and
+		`_read_source_attestation_meta` (sidecar signer extraction).
+		"""
+		from unittest.mock import patch
+		from lang.driftc.packages.trust_v0 import TrustStore
+		from tools.drift_deploy.resolver import build_package_index
+		sig_kid = "ed25519:orch-sig-kid"
+		sak_kid = "ed25519:orch-attest-kid"
+		trust = TrustStore(
+			keys_by_kid={},
+			allowed_kids_by_namespace={
+				# Authored-namespace allowlist only — NO entry for
+				# `mariadb-wire-proto.__instantiations.*`.  This is
+				# exactly what real trust stores look like; the orch
+				# bug was the resolver gate demanding an allowlist
+				# entry for the compiler-generated sibling.
+				"mariadb-wire-proto": {sig_kid, sak_kid},
+			},
+			revoked_kids=set(),
+		)
+		core_trust = TrustStore(
+			keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set(),
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			dmp = root / "mariadb-wire-proto-0.3.0.dmp"
+			dmp.write_bytes(b"fake-dmp-bytes")
+			# Placeholder .sig so `_read_author_key` returns sig_kid.
+			sig = root / "mariadb-wire-proto-0.3.0.sig"
+			sig.write_text(json.dumps({
+				"signatures": [{
+					"kid": sig_kid,
+					"algo": "ed25519",
+					"sig": "stubbed-not-checked-here",
+				}],
+			}))
+			manifest = {
+				"package_id": "mariadb-wire-proto",
+				"package_version": "0.3.0",
+				"modules": [
+					{"module_id": "mariadb-wire-proto"},
+					{"module_id": "mariadb-wire-proto.__instantiations"},
+				],
+				"required_deps": [],
+			}
+			with patch(
+				"lang.driftc.packages.signature_v0.verify_package_signatures"
+			) as _mock_vps, patch(
+				"tools.drift_deploy.resolver._read_source_attestation_meta",
+				return_value=("sha256:" + "a"*64, sak_kid),
+			):
+				idx = build_package_index(
+					[root],
+					load_manifest=lambda _p: manifest,
+					trust_store=trust,
+					core_trust_store=core_trust,
+				)
+		# Package must be in the index — not pruned by the trust
+		# gate and not raised as ResolutionError.
+		assert "mariadb-wire-proto" in idx
+		entries = idx["mariadb-wire-proto"]
+		assert len(entries) == 1
+		entry = entries[0]
+		# Both module_ids are retained on PackageEntry (the skip
+		# rule applies only to the TRUST check, not to the
+		# `module_ids` introspection field).
+		assert "mariadb-wire-proto" in entry.module_ids
+		assert "mariadb-wire-proto.__instantiations" in entry.module_ids
+		assert entry.author_key == sig_kid
+		assert entry.source_attestation_key == sak_kid
+
+	def test_build_package_index_still_rejects_untrusted_authored_namespace(self) -> None:
+		"""Negative pin: the skip only applies to `.__instantiations`.
+		The AUTHORED namespace must still be allowlist-checked, or
+		the source-attestation trust gate becomes a no-op.  A trust
+		store missing the authored namespace entirely must still
+		fail the build_package_index call."""
+		from unittest.mock import patch
+		from lang.driftc.packages.trust_v0 import TrustStore
+		from tools.drift_deploy.resolver import build_package_index
+		sig_kid = "ed25519:orch-sig-kid"
+		sak_kid = "ed25519:orch-attest-kid"
+		# Empty allowlist — trust store doesn't authorize anyone.
+		trust = TrustStore(
+			keys_by_kid={},
+			allowed_kids_by_namespace={},
+			revoked_kids=set(),
+		)
+		core_trust = TrustStore(
+			keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set(),
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			dmp = root / "mariadb-wire-proto-0.3.0.dmp"
+			dmp.write_bytes(b"fake-dmp-bytes")
+			sig = root / "mariadb-wire-proto-0.3.0.sig"
+			sig.write_text(json.dumps({
+				"signatures": [{"kid": sig_kid, "algo": "ed25519", "sig": "stub"}],
+			}))
+			manifest = {
+				"package_id": "mariadb-wire-proto",
+				"package_version": "0.3.0",
+				"modules": [
+					{"module_id": "mariadb-wire-proto"},
+					{"module_id": "mariadb-wire-proto.__instantiations"},
+				],
+				"required_deps": [],
+			}
+			with patch("lang.driftc.packages.signature_v0.verify_package_signatures"), \
+				 patch(
+					"tools.drift_deploy.resolver._read_source_attestation_meta",
+					return_value=("sha256:" + "a"*64, sak_kid),
+				), pytest.raises(ResolutionError, match="mariadb-wire-proto"):
+				build_package_index(
+					[root],
+					load_manifest=lambda _p: manifest,
+					trust_store=trust,
+					core_trust_store=core_trust,
+				)
+
 	# ── unknown mode ───────────────────────────────────────────────
 
 	def test_unknown_mode_raises(self) -> None:

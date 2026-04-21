@@ -33,7 +33,11 @@ from tools.drift_deploy.manifest import (
 	ManifestError,
 	load_manifest,
 )
-from tools.drift_deploy.resolver import ResolvedDep, build_package_index
+from tools.drift_deploy.resolver import (
+	ResolutionError,
+	ResolvedDep,
+	build_package_index,
+)
 
 
 # ── Errors ───────────────────────────────────────────────────────────
@@ -379,10 +383,19 @@ def _resolve_deps(
 		if source_rebuild:
 			from tools.drift_deploy.trust_loader import load_merged_trust_store
 			trust_store = load_merged_trust_store(manifest_dir)
-		pkg_index = build_package_index(
-			package_roots,
-			trust_store=trust_store,
-		)
+		try:
+			pkg_index = build_package_index(
+				package_roots,
+				trust_store=trust_store,
+			)
+		except ResolutionError as e:
+			# Surface index-time trust failures as a normal build
+			# error, not a Python traceback.  build_package_index
+			# raises ResolutionError for fail-fast trust gates
+			# (missing .sig, .sig crypto failure, allowlist miss,
+			# revoked kid) under source-rebuild — users want an
+			# actionable `error: ...` line, not a stack trace.
+			raise BuildError(str(e))
 		if source_rebuild:
 			# Fresh-resolve is authoritative.  Delegate to the
 			# single source-rebuild authority: builds a trust-

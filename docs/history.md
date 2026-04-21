@@ -1,6 +1,76 @@
 # Drift development history
 
 ## 2026-04-21
+- **Source-rebuild trust gate: skip `*.__instantiations` modules
+  (0.31.2, ABI unchanged at 10).** Branch `fix/source-rebuild-
+  trust-anchor` (cumulative with the 0.31.1 entry below).
+
+  The bug: orch's MariaDB rebuild failed immediately on 0.31.1
+  with `ResolutionError: ... .source-attestation signer ... is
+  not in the trust store's namespace allowlist for module
+  'mariadb-wire-proto.__instantiations'`.  The new source-
+  attestation signer gate in
+  `tools/drift_deploy/resolver.py::build_package_index` iterated
+  every `module_id` from the package manifest — including
+  compiler-generated `*.__instantiations` sibling modules for
+  monomorphised generic instantiations.  No human-edited trust
+  store allowlists those sibling namespaces, so any package that
+  declares a generic hit the gate.
+
+  The existing `.sig` signer gate in
+  `lang/driftc/packages/signature_v0.py::verify_package_
+  signatures` already had the correct skip rule:
+  ```python
+  if mid.endswith(".__instantiations"):
+      continue
+  ```
+  The 0.31.1 `.source-attestation` gate claimed to mirror that
+  logic but missed this predicate — a classic duplicated-policy
+  drift that shipped as a production-blocking bug on the first
+  orch run.
+
+  The fix is structural, not just a copy of the skip rule:
+
+  - **Shared predicate.** `signature_v0.iter_trust_module_ids
+    (pkg_manifest) -> Iterator[str]` is the single source of
+    truth for which `module_id`s participate in per-namespace
+    trust checks.  Skip rules: missing or non-list `modules`,
+    non-dict entries, non-string `module_id`, `module_id`
+    ending in `.__instantiations`.
+  - `verify_package_signatures` (`.sig` gate) rewired to use the
+    predicate.
+  - `build_package_index` (`.source-attestation` gate) uses the
+    same predicate.  The two gates now cannot drift on the skip
+    rules — any future skip-rule change lands in one place.
+  - `drift build` / `drift deploy` / `drift prepare --check`
+    wrap `ResolutionError` from `build_package_index` as
+    `BuildError` / `DeployError` / `PrepareError` — users see a
+    normal `error: ...` line, not a Python traceback.
+
+  **Tests:**
+  - `test_iter_trust_module_ids_skips_instantiations` — unit
+    pin on the shared predicate, covering
+    `mariadb-wire-proto` + `mariadb-wire-proto.__instantiations`
+    + non-string / missing / non-dict edge cases.
+  - `test_iter_trust_module_ids_empty_modules` — predicate is
+    silent on malformed `modules` field.
+  - `test_build_package_index_accepts_instantiations_sibling` —
+    resolver-level end-to-end pin: `build_package_index
+    (trust_store=...)` with a manifest declaring both authored
+    and `.__instantiations` modules and a trust store that
+    authorizes only the authored namespace, SUCCEEDS.  This
+    test would have failed pre-fix; the narrower predicate test
+    alone would not (a caller could have bypassed the helper).
+  - `test_build_package_index_still_rejects_untrusted_authored_
+    namespace` — negative pin: the skip applies ONLY to
+    `.__instantiations`; the authored namespace remains
+    allowlist-gated, so the skip cannot be used as a trust-
+    gate bypass.
+
+  **Version:** DRIFTC_VERSION 0.31.1 → 0.31.2.  ABI unchanged.
+  Trust-policy correction only.
+
+## 2026-04-21
 - **Source-rebuild trust anchor: disk-kid namespace gate replaces
   lock-kid equality (0.31.1, ABI unchanged at 10).** Branch
   `fix/source-rebuild-trust-anchor`.

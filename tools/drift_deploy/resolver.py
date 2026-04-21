@@ -611,6 +611,16 @@ def build_package_index(
 			# Package ids may contain characters (hyphens) that are
 			# never valid in module paths; never pass pkg_id to
 			# `TrustStore.allowed_kids_for_module`.
+			#
+			# Skip rules (non-string module_id, `*.__instantiations`)
+			# come from the shared
+			# `signature_v0.iter_trust_module_ids` predicate — same
+			# source of truth as the `.sig` signer trust gate, so
+			# the two cannot drift again.  PackageEntry retains
+			# ALL module_ids from the manifest (for caller
+			# introspection) but only the trust-participating subset
+			# is used for the source-attestation allowlist gate
+			# below.
 			mod_ids: list[str] = []
 			_modules = manifest.get("modules")
 			if isinstance(_modules, list):
@@ -619,6 +629,10 @@ def build_package_index(
 						_mid = _m.get("module_id")
 						if isinstance(_mid, str) and _mid:
 							mod_ids.append(_mid)
+			trust_mod_ids: list[str] = []
+			if _load_verifier is not None:
+				from lang.driftc.packages.signature_v0 import iter_trust_module_ids
+				trust_mod_ids = list(iter_trust_module_ids(manifest))
 			# Cryptographic trust gate when a trust store is wired
 			# in.  Failure is a HARD ERROR, not a silent prune —
 			# dropping the offending package from the index would
@@ -692,20 +706,18 @@ def build_package_index(
 				# Gate (c): source_attestation_key allowlist +
 				# revocation.  Applied per-module_id, matching the
 				# .sig-kid gate in signature_v0.verify_package_
-				# signatures.  `_read_source_attestation_meta`
-				# already returned ("", "") and warned on stderr
-				# if the sidecar failed structural load / cross-
-				# binding / self-signature; a non-empty sak here
-				# means "the sidecar self-verified," and we now
-				# check whether the signer is trusted for the
-				# namespace.  Empty sak on a signed package is a
-				# missing-sidecar regression; that case is caught
-				# by the structural trust gates on the caller
-				# side (source_rebuild.apply_structural_trust_
-				# gates) because the caller has the co-artifact
-				# namelist this function doesn't.
+				# signatures EXACTLY — the module-id iteration
+				# comes from the shared
+				# `signature_v0.iter_trust_module_ids` predicate
+				# (populated into `trust_mod_ids` above), so the
+				# skip rules (`.__instantiations`, non-string) are
+				# single-sourced and the two gates cannot drift.
+				# Missing this predicate in the original patch
+				# caused orch's MariaDB rebuild to fail on a
+				# package whose `.sig` verified cleanly (orch
+				# report 2026-04-21).
 				if sak:
-					for mid in mod_ids:
+					for mid in trust_mod_ids:
 						is_core = mid.startswith(("std.", "lang.", "drift."))
 						allowed_for_mid = (
 							core_trust_store.allowed_kids_for_module(mid)

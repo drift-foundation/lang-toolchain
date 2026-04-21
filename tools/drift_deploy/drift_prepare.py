@@ -232,10 +232,16 @@ def _run_impl(args: argparse.Namespace) -> int:
 	if getattr(args, "check", False) and _source_rebuild_enabled(args):
 		from tools.drift_deploy.trust_loader import load_merged_trust_store
 		_prepare_trust_store = load_merged_trust_store(manifest_dir)
-	pkg_index = build_package_index(
-		package_roots,
-		trust_store=_prepare_trust_store,
-	)
+	try:
+		pkg_index = build_package_index(
+			package_roots,
+			trust_store=_prepare_trust_store,
+		)
+	except ResolutionError as e:
+		# Surface index-time trust failures as a normal prepare
+		# error, not a Python traceback.  Matches drift_build /
+		# drift_deploy's ResolutionError wrap.
+		raise PrepareError(str(e))
 
 	# Inject co-artifact entries: package-kind artifacts in the same manifest
 	# can satisfy each other's package_deps without being published.

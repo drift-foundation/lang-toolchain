@@ -212,6 +212,43 @@ def verify_ed25519(*, pubkey_raw: bytes, message: bytes, signature_raw: bytes) -
 		return False
 
 
+def iter_trust_module_ids(pkg_manifest: dict[str, Any]):
+	"""Yield module_ids that participate in per-namespace trust checks.
+
+	Shared predicate used by `verify_package_signatures` (for the
+	`.sig` signer trust gate) and by
+	`tools.drift_deploy.resolver.build_package_index` (for the
+	`.source-attestation` signer trust gate) so the two gates cannot
+	drift on which modules count.
+
+	Skip rules:
+
+	- `pkg_manifest["modules"]` missing or non-list → no yield.
+	  (`verify_package_signatures` treats this as an error; the
+	  resolver-side caller treats it as "no trust gate applies.")
+	- non-dict entries → skipped.
+	- missing / non-string `module_id` → skipped.
+	- `module_id` ending in `.__instantiations` → skipped.  These are
+	  compiler-generated sibling modules for monomorphised generic
+	  instantiations; they are never authored by a signer and cannot
+	  appear in a human-edited trust store's allowlist.
+
+	Yields each surviving `module_id` string.
+	"""
+	modules = pkg_manifest.get("modules")
+	if not isinstance(modules, list):
+		return
+	for m in modules:
+		if not isinstance(m, dict):
+			continue
+		mid = m.get("module_id")
+		if not isinstance(mid, str):
+			continue
+		if mid.endswith(".__instantiations"):
+			continue
+		yield mid
+
+
 def verify_package_signatures(
 	*,
 	pkg_path: Path,
@@ -383,17 +420,9 @@ def verify_package_signatures(
 		raise ValueError("no valid signatures for package")
 
 	# Enforce per-module namespace trust policy.
-	modules = pkg_manifest.get("modules")
-	if not isinstance(modules, list):
+	if not isinstance(pkg_manifest.get("modules"), list):
 		raise ValueError("package manifest missing modules list")
-	for m in modules:
-		if not isinstance(m, dict):
-			continue
-		mid = m.get("module_id")
-		if not isinstance(mid, str):
-			continue
-		if mid.endswith(".__instantiations"):
-			continue
+	for mid in iter_trust_module_ids(pkg_manifest):
 		is_core = mid.startswith(("std.", "lang.", "drift."))
 		allowed = (
 			core_trust_store.allowed_kids_for_module(mid)

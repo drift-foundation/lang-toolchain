@@ -31,6 +31,7 @@ from tools.drift_deploy.manifest import (
 	load_manifest,
 )
 from tools.drift_deploy.resolver import (
+	ResolutionError,
 	ResolvedDep,
 	build_package_index,
 )
@@ -363,10 +364,16 @@ def _resolve_artifact_deps(
 	if source_rebuild:
 		from tools.drift_deploy.trust_loader import load_merged_trust_store
 		trust_store = load_merged_trust_store(lock_path.parent)
-	pkg_index = build_package_index(
-		package_roots,
-		trust_store=trust_store,
-	)
+	try:
+		pkg_index = build_package_index(
+			package_roots,
+			trust_store=trust_store,
+		)
+	except ResolutionError as e:
+		# Surface index-time trust failures as a normal deploy
+		# error, not a Python traceback.  Matches drift_build's
+		# ResolutionError→BuildError wrap.
+		raise DeployError(str(e))
 	if source_rebuild:
 		# Fresh-resolve is authoritative.  Delegate to the single
 		# source-rebuild authority (symmetric with drift_build).
