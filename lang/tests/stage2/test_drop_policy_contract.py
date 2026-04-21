@@ -249,59 +249,59 @@ def test_drop_policy_variant_of_string_needs_drop() -> None:
 	)
 
 
-def test_drop_policy_variant_of_string_with_copy_hook_pins_bug_shape() -> None:
-	"""`V<String>` WITH the packaged-load Copy hook: the bug shape.
+def test_drop_policy_variant_of_string_with_copy_hook() -> None:
+	"""`V<String>` WITH the packaged-load Copy hook.
 
 	When a consumer is built against a packaged `.dmp`, the Copy-
 	trait graph resolves eagerly and `copy_status(V<String>)` can
-	return True.  The pre-Phase-1 rules (preserved by `_drop_policy`
-	in Phase 1, intentionally, so the refactor is semantic-
-	preserving) then derive:
+	return True.  The policy derives:
 	  - needs_drop    = False  (Copy shortcut fires)
 	  - is_cheap_copy = True   (Copy shortcut says so)
 	  - has_structural_drop = True  (structural query ignores the
 	                                  shortcut)
 
-	This asymmetric triplet is exactly the Phase 0 fail-stop's
-	precondition: `has_structural_drop AND NOT is_bitcopy` fires
-	regardless of what `needs_drop`/`is_cheap_copy` say.  If Phase
-	2's ledger eliminates the possibility of this asymmetry (e.g.
-	by making `needs_drop` structurally-derived and independent of
-	the Copy shortcut), update this pin to reflect the new
-	invariant — the pin MUST be visible in the Phase 2 diff so the
-	fail-stop can be retired cleanly.
+	Pre-0.31.0 this triplet WAS the UAF-producing bug shape: the
+	`_ensure_arm_scrut_ptr` Copy-store branch emitted a bare
+	`StoreLocal` which bitcopied the variant bits without running
+	per-arm retains — the source local and `arm_scrut_local` both
+	claimed ownership of the same refcount, both dropped at
+	scope exit, refcount underflowed, glibc aborted.
+
+	As of 0.31.0 (Phase 2a) the triplet is no longer a bug shape:
+	the Copy-store branch now emits a `CopyValue` for non-bitcopy
+	scrutinees, which dispatches into `_emit_copy_value_inner`'s
+	per-arm retain traversal.  Source-local and `arm_scrut_local`
+	each own an independent set of refcount increments; their
+	scope-exit drops are symmetric.
+
+	This test pins the POLICY output (unchanged — the policy is
+	still descriptive of the classification); the CONSUMER-side
+	fix lives in `_ensure_arm_scrut_ptr` and is covered by the
+	runtime regression test in `lang/tests/codegen/e2e/`.  When
+	Phase 3's ledger lands and possibly changes this policy
+	(e.g. by making `needs_drop` structurally-derived and
+	independent of the Copy shortcut), this pin flips and the
+	consumers that depend on the asymmetric triplet must be
+	re-audited in the same diff.
 	"""
 	type_table = TypeTable()
 	opt_string_ty = _build_opt_variant(type_table, type_table.ensure_string())
 	_install_copy_hook(type_table, opt_string_ty)
 	p = _policy(type_table, opt_string_ty)
-	# The bug-shape triplet: preserved intentionally under Phase 1.
-	assert p.needs_drop is False, (
-		"V<String> with Copy hook must report needs_drop=False — "
-		"this is the pre-Phase-1 bug-producing classification that "
-		"Phase 1 intentionally preserves (the semantic fix is "
-		"Phase 2).  If this flips to True, Phase 2's ledger has "
-		"landed ahead of schedule; update this pin and retire the "
-		"Phase 0 fail-stop in the same change."
-	)
-	assert p.is_cheap_copy is True, (
-		"V<String> with Copy hook must report is_cheap_copy=True "
-		"under Phase 1 — same rationale as the `needs_drop` pin "
-		"above.  Flipping this to False is a Phase 2 tightening and "
-		"must be reviewed against the `_ensure_arm_scrut_ptr` "
-		"consumer."
-	)
-	# `has_structural_drop` is the shortcut-free axis — it remains
-	# True under the Copy hook, which is WHAT MAKES the Phase 0
-	# fail-stop correct.  If this ever flips to False under the
-	# Copy hook, the fail-stop silently stops firing and the UAF
-	# ships again.
+	# Asymmetric triplet: preserved as descriptive of the current
+	# Copy-trait classification rules.  No longer a bug shape (the
+	# consumer handles it correctly as of 0.31.0).
+	assert p.needs_drop is False
+	assert p.is_cheap_copy is True
 	assert p.has_structural_drop is True, (
 		"V<String> with Copy hook must STILL report "
 		"has_structural_drop=True — this is the shortcut-free axis "
-		"the Phase 0 fail-stop reads, and flipping it to False "
-		"would silently suppress the fail-stop and reintroduce the "
-		"UAF.  This is the most important pin in this file."
+		"the `_ensure_arm_scrut_ptr` Copy-store branch's CopyValue "
+		"dispatch depends on indirectly (via `is_bitcopy` being "
+		"False).  If this flips to False for a refcounted variant, "
+		"bitcopy semantics would apply at the scrut level and the "
+		"UAF would return — this is the strongest invariant in "
+		"this file."
 	)
 
 

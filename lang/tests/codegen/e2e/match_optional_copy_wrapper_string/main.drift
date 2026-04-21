@@ -1,0 +1,68 @@
+// Runtime semantic-correctness smoke-test for the Phase 2a ownership-
+// drop-ledger track (fix/ownership-drop-ledger, 0.31.0).  Companion
+// to the MIR-level emission pin in
+// `lang/tests/stage2/test_match_scrut_copy_store_emits_copyvalue.py`,
+// which is the authoritative regression gate for the
+// `match Optional<String>` double-drop UAF.
+//
+// This fixture exercises the full compile+run+drop pipeline for a
+// refcount-bearing variant match: `Optional<Wrapper>` where Wrapper
+// is a user struct with an explicit `impl core.Copy` over a String
+// field — the same type-shape the TLS team's `_base_port()` helper
+// created at runtime (via `std.env::get` under a packaged stdlib
+// load).  Verifying this fixture runs clean under valgrind-memcheck
+// proves that the binder-level field retains, the match-arm
+// scrut_tmp accounting, and the scope-exit drop symmetry are all
+// correct for the refcounted-payload case.
+//
+// Scope caveat (important for reviewers): in source-compile mode,
+// the Drift trait system resolves
+// `implement<T> Copy for Optional<T> require T is Copy` LESS eagerly
+// than the packaged-`.dmp`-load path.  As a result
+// `_should_copy_value(Optional<Wrapper>)` returns False here and the
+// scrut goes down the MoveOut branch of `_ensure_arm_scrut_ptr`, NOT
+// the Copy-store else-branch that was the original bug site.  So
+// this fixture does NOT strictly reproduce the UAF pre-Phase-2a — it
+// would pass even against a buggy compiler.  The companion stage2
+// unit test uses the packaged-load Copy-query hook to force the bug-
+// shape classification and pin the MIR emission directly, which IS
+// the strict regression gate.  The authoritative runtime proof is
+// the TLS team's downstream e2e run against a freshly-deployed
+// toolchain (Gate C in the 0.31.0 history entry).
+//
+// What this fixture catches: regressions in the MoveOut branch's
+// binder-level retain path, struct-field copy insertion, or scope-
+// exit drop ordering for a refcount-bearing payload — any of which
+// would surface as exit != 5 OR non-zero valgrind errors.
+//
+// The test asserts exit code 5 (length of "hello") and is verified under
+// valgrind-memcheck in the runner config (see
+// `test_run_gate_a_under_valgrind` — Phase 2c adds that harness).  If the
+// UAF returns, the native exit would be 134 (SIGABRT) or the binary
+// would print `tcache_thread_shutdown` to stderr on process exit.
+
+module main;
+
+import std.core as core;
+
+pub struct Wrapper {
+	pub inner: String
+}
+
+implement core.Copy for Wrapper {}
+
+fn _make() nothrow -> Optional<Wrapper> {
+	return Optional::Some(Wrapper(inner = "hello"));
+}
+
+fn main() nothrow -> Int {
+	val w = _make();
+	match w {
+		Optional::Some(x) => {
+			return x.inner.byte_length();
+		},
+		Optional::None() => {
+			return 0;
+		},
+	}
+}

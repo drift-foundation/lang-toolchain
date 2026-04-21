@@ -1328,168 +1328,113 @@ class HIRToMIR:
 							self._local_types[tomb] = scrut_ty
 							self.b.emit(M.StoreLocal(local=source_local, value=tomb))
 					else:
-						# Bug-shape gate (Phase 0 of the ownership-drop-ledger
-						# work — see fix/ownership-drop-ledger track).
-						#
-						# We only reach this branch when EITHER (a)
+						# Copy-store branch.  Reached when EITHER (a)
 						# `source_local is None` (the scrutinee is a
 						# transient SSA value with no named local to
-						# scope-drop, so the dual-ownership bug shape
-						# cannot arise) or (b) `_should_copy_value(scrut_ty)`
-						# is True (the type-system claim is "this scrutinee
-						# can be cheaply copied without losing ownership
-						# information").  Case (b) was the silent root
-						# cause of the `match Optional<String>` UAF that
-						# tipped the entire ownership track off: a
-						# refcount-bearing variant whose `copy_status`
-						# resolved to True (only fully evaluable when the
-						# callee is loaded from a packaged `.dmp`) takes
-						# THIS branch, which bitcopies the scrutinee into
-						# `arm_scrut_local` WITHOUT a MoveOut.  The source
-						# local stays live (never enters `_moved_locals`),
-						# the arm-end cleanup drops `arm_scrut_local`, and
-						# `string_arc._drop_all_destructibles` at the
-						# return terminator ALSO drops the source — two
-						# releases of the same refcount → free → second
-						# release → glibc tcache abort.
+						# scope-drop, so dual-ownership cannot arise)
+						# or (b) `_should_copy_value(scrut_ty)` is
+						# True (the type-system claim is "this
+						# scrutinee supports a cheap copy").
 						#
-						# The structural fix is the per-program-point
-						# ownership ledger (Phase 2).  Until that lands,
-						# the next-best protection is to refuse to compile
-						# any case that would silently emit the bug shape.
-						# A scrutinee whose type has `has_drop == True`
-						# AND is reached via a named source local AND ends
-						# up in this Copy-store branch is exactly the
-						# precondition for the UAF; trip a hard internal
-						# error so the failure is at compile time and
-						# carries enough context to be triaged, instead of
-						# shipping silent heap corruption.
+						# Phase 2 fix for the `match Optional<String>`
+						# double-drop UAF (fix/ownership-drop-ledger
+						# track, 0.31.0): case (b) was historically
+						# emitted as a bare `StoreLocal(arm_scrut_local,
+						# scrut_val)`.  For a POD scrutinee (bitcopy)
+						# that's correct — bits are self-contained,
+						# the source local and arm_scrut_local each
+						# own an independent value, per-drop is a
+						# no-op.  For a refcount-bearing scrutinee
+						# (e.g. `Optional<String>` under the packaged-
+						# load `copy_status = True` resolution), the
+						# bare StoreLocal is a bitcopy of the variant
+						# bits WITHOUT running the per-arm retain
+						# traversal — so both the source local and
+						# `arm_scrut_local` end up with pointers into
+						# the same refcount header, each claiming
+						# ownership.  When `string_arc` later emits
+						# scope-exit drops for both, the refcount is
+						# released twice → UAF.  Phase 0 landed a
+						# compile-time fail-stop on this shape;
+						# Phase 2 removes the fail-stop by emitting
+						# the semantically correct operation at this
+						# site.
 						#
-						# `is_bitcopy(scrut_ty)` is the explicit escape
-						# hatch — POD-shaped variants (e.g.
-						# `Optional<Int>`, plain enums) have
-						# `has_drop=False` and therefore never trip this
-						# gate.  Refcount-bearing variants must use the
-						# MoveOut branch above; if classification
-						# disagrees, the disagreement IS the bug we want
-						# to surface.
-						if source_local is not None:
-							# Phase 1 contract: read the ownership axes
-							# through the policy funnel.  CRITICAL
-							# distinction for this fail-stop: we query
-							# `has_structural_drop`, NOT `needs_drop`.
-							# `needs_drop` observes the `copy_status ⇒
-							# no drop` shortcut — which is exactly the
-							# bug-shape-producing shortcut this fail-stop
-							# is meant to catch.  Routing the fail-stop
-							# through `needs_drop` would silently
-							# suppress it under the same shortcut that
-							# causes the original UAF.
-							# `has_structural_drop` is the shortcut-free
-							# question: "does the type's structure
-							# contain a drop-bearing child?"  That is
-							# the correct invariant for any compiler
-							# fail-stop that must NOT be fooled by the
-							# packaged-load `copy_status` resolution.
-							# Phase 2 (the ledger) reconciles these so
-							# the distinction becomes unnecessary.
-							_scrut_policy = self._drop_policy(scrut_ty)
-							if _scrut_policy.has_structural_drop and not _scrut_policy.is_bitcopy:
-								scrut_td = self._type_table.get(scrut_ty)
-								_ty_label = (
-									f"{scrut_td.kind.name}:{scrut_td.name}"
-									if scrut_td.name is not None
-									else f"{scrut_td.kind.name}:typeid={scrut_ty}"
-								)
-								# User-facing opener is deliberately
-								# first.  Everything after the leading
-								# "compiler bug" sentence is triage
-								# context for whoever handles the
-								# report; the user who hits this needs
-								# to know THREE things up front, in
-								# this order: (1) it is not their
-								# fault, (2) how to work around it so
-								# they can keep shipping, (3) where to
-								# report.  All three must be in the
-								# opening sentences because Python
-								# tracebacks truncate aggressively in
-								# some terminals and we cannot rely on
-								# the full body being read.
-								raise AssertionError(
-									"compiler internal error (not a bug "
-									"in your source code): the Drift "
-									"compiler is about to emit a "
-									"double-drop of a refcount-bearing "
-									"`match` scrutinee and is failing "
-									"loudly instead of shipping that "
-									"corruption.  Workaround: if your "
-									f"match is of the shape `match x "
-									f"{{ ... {scrut_td.name or 'Ctor'}"
-									"(payload) => ... }}` on a value "
-									"returned from another module's "
-									"function (typically from a "
-									"packaged stdlib or third-party "
-									"library), rewrite the helper to "
-									"return a primitive (e.g. an `Int` "
-									"with a sentinel value, or use "
-									"`std.env::has` + a constant "
-									"instead of `match "
-									"std.env::get(...)`).  Please "
-									"report this at "
-									"github.com/drift-lang/drift with a "
-									"minimal reproducer (the Drift "
-									"source that triggered this error "
-									"plus the compiler version from "
-									"`driftc --version`); the Drift "
-									"team is tracking this class of "
-									"bug under the "
-									"`fix/ownership-drop-ledger` work "
-									"stream and your reproducer "
-									"directly accelerates the fix.\n\n"
-									"--- internal triage context "
-									"(for compiler maintainers) ---\n"
-									f"Match scrutinee type: "
-									f"'{_ty_label}' "
-									f"(source_local={source_local!r}).  "
-									f"Reached the Copy-store path of "
-									f"`_ensure_arm_scrut_ptr` despite "
-									f"the type having `has_drop=True` "
-									f"and `is_bitcopy=False`.  The "
-									f"Copy-store path bitcopies "
-									f"`scrut_val` into `arm_scrut_local` "
-									f"without a MoveOut, leaving the "
-									f"source local live; combined with "
-									f"the arm-end scrut_tmp drop and "
-									f"the return-site "
-									f"`_drop_all_destructibles` drop "
-									f"of the source, the inner "
-									f"refcount is released twice — "
-									f"runtime manifestation: glibc "
-									f"`tcache_thread_shutdown(): "
-									f"unaligned tcache chunk detected` "
-									f"inside `drift_string_release`.  "
-									f"The MoveOut branch above is the "
-									f"correct path for any "
-									f"refcount-bearing scrutinee; "
-									f"reaching this branch means "
-									f"`_should_copy_value(scrut_ty)` "
-									f"returned True for a "
-									f"drop-bearing type — most likely "
-									f"the package-load path resolved "
-									f"`copy_status` to True (it walks "
-									f"the transitive trait-impl graph "
-									f"eagerly) while `has_drop` "
-									f"correctly stays True.  The "
-									f"structural fix lives in the "
-									f"per-program-point ownership "
-									f"ledger (Phase 2 of the "
-									f"`fix/ownership-drop-ledger` "
-									f"track); this assertion is the "
-									f"Phase 0 fail-stop that prevents "
-									f"shipping silent heap corruption "
-									f"while the ledger is built."
-								)
-						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
+						# Dispatch — scoped to the DUAL-OWNER case:
+						#
+						#   dual_owner = (source_local is not None)
+						#                AND has_structural_drop
+						#
+						# Only dual-owner reaches `CopyValue`.  The
+						# other subcases of this else-branch (reached
+						# when `_should_copy_value(scrut_ty) == True`
+						# OR `source_local is None`) keep the bare
+						# `StoreLocal`.
+						#
+						# **Why the `source_local is not None` half of
+						# the guard is load-bearing.**  A transient
+						# rvalue scrutinee (`match make_opt() { ... }`
+						# where `make_opt()` returns an owning refcount-
+						# bearing Variant by value) has
+						# `source_local is None` — `scrut_val` is an
+						# SSA owning the freshly-produced refcount
+						# and has no named local tracking it.  Bare
+						# `StoreLocal(arm_scrut_local, scrut_val)`
+						# transfers that single refcount owner into
+						# the arm temp; the arm-end drop releases it;
+						# balanced.  If we instead emitted
+						# `CopyValue` here, we'd retain the
+						# refcount (+1), leaving the original
+						# `scrut_val` as a second owner — but with no
+						# named local to scope-drop, the original
+						# refcount leaks for the lifetime of the
+						# function.  Regression pinned by
+						# `test_match_scrut_copy_store_inline_rvalue_does_not_copy`
+						# in
+						# `test_match_scrut_copy_store_emits_copyvalue.py`.
+						#
+						# **Why the `has_structural_drop` half of the
+						# guard is load-bearing.**  A POD variant
+						# (`V<Int>`) with `has_structural_drop=False`
+						# has no refcount or shared-owner
+						# substructure; bitcopying into
+						# `arm_scrut_local` is semantically
+						# indistinguishable from a per-field copy.
+						# Running the per-arm `CopyValue` traversal
+						# here would be pure overhead without fixing
+						# any bug.
+						#
+						# **Why both halves together, exactly, are the
+						# Phase 2a fix.**  The original UAF shape
+						# (TLS's `_base_port()` under packaged
+						# stdlib) is specifically: named source
+						# local `opt`, refcount-bearing scrutinee,
+						# Copy-store branch reached.  That triplet
+						# IS the dual-owner condition.  Bare
+						# `StoreLocal` bitcopies the variant bits
+						# into `arm_scrut_local` without retaining;
+						# `opt` and `arm_scrut_local` each claim
+						# ownership of the same refcount; scope-exit
+						# drops on both produce the double-release.
+						# `CopyValue` fixes it by giving
+						# `arm_scrut_local` its own retained copy so
+						# each drop releases exactly one refcount.
+						# Transient rvalues and POD variants were
+						# never part of the bug; over-reaching the
+						# CopyValue to them is the Phase 2a review
+						# finding this guard responds to.
+						#
+						# `_drop_policy` is read once per scrut —
+						# Phase 1 funnel contract.
+						_scrut_policy = self._drop_policy(scrut_ty)
+						_dual_owner = (source_local is not None) and _scrut_policy.has_structural_drop
+						if _dual_owner:
+							copy_dest = self.b.new_temp()
+							self.b.emit(M.CopyValue(dest=copy_dest, value=scrut_val, ty=scrut_ty))
+							self._local_types[copy_dest] = scrut_ty
+							self.b.emit(M.StoreLocal(local=arm_scrut_local, value=copy_dest))
+						else:
+							self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
 					arm_scrut_ptr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=arm_scrut_ptr, local=arm_scrut_local, is_mut=True))
 					self._local_types[arm_scrut_ptr] = self._type_table.ensure_ref_mut(scrut_ty)

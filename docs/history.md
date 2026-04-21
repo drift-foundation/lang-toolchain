@@ -1,6 +1,98 @@
 # Drift development history
 
 ## 2026-04-20
+- **Phase 2a of `fix/ownership-drop-ledger`: actual fix for the
+  `match Optional<String>` double-drop UAF (0.31.0, ABI 10)**.
+
+  The bug: `_ensure_arm_scrut_ptr`'s Copy-store else-branch — reached
+  whenever `_should_copy_value(scrut_ty) == True`, which under the
+  packaged-`.dmp`-load path includes `Optional<String>` and any user
+  variant containing a refcount-bearing `Copy`-impl'd field — emitted
+  a bare `StoreLocal(arm_scrut_local, scrut_val)`.  That bitcopied
+  the variant bits into the per-arm scrut_tmp WITHOUT running the
+  per-arm retain traversal.  The source local and `arm_scrut_local`
+  each ended up claiming ownership of the same underlying refcount;
+  scope-exit drops ran on both; the second release read freed
+  `DriftStringHeader` bytes and glibc aborted with
+  `tcache_thread_shutdown(): unaligned tcache chunk detected`.
+
+  Phase 0 (0.30.4) landed a compile-time fail-stop on the bug
+  precondition.  Phase 1 (0.30.5) centralised the drop/copy
+  classification so the fix could be a one-function edit.  Phase 2a
+  now makes that edit: the Copy-store branch dispatches on
+  `_drop_policy(scrut_ty).has_structural_drop`:
+
+    - **False** (POD scalar, POD variant like `V<Int>`, nested structs
+      of PODs) — keep the bare `StoreLocal`.  Bits are self-contained;
+      the source local and `arm_scrut_local` each own independent
+      copies; drops are symmetric trivially.
+    - **True** (refcount-bearing scrutinee, including the bug shape)
+      — emit `CopyValue`, which the codegen dispatches into
+      `_emit_copy_value_inner`'s per-kind retain traversal (SCALAR
+      String → single `drift_string_retain`; VARIANT → tag switch +
+      per-arm recursive Copy; STRUCT → per-field recursive Copy;
+      ARRAY → element-wise dup).  `arm_scrut_local` now owns an
+      independent set of refcount increments; scope-exit drops on
+      the source and on the scrut_tmp balance.
+
+  Gating on `has_structural_drop` rather than `not is_bitcopy` keeps
+  the fast path for POD variants (which have `is_bitcopy = False`
+  because variants are never bitcopy-shaped per the compiler's rule,
+  but `has_structural_drop = False` because they contain no
+  drop-bearing children).  Using `is_bitcopy` would push every POD
+  variant through an unnecessary traversal without fixing any
+  additional bug.
+
+  **Fail-stop retired.**  The Phase 0 assertion and its regression
+  file (`test_match_scrut_copy_path_drop_bearing_assertion.py`) are
+  deleted.  The Copy-store branch now physically cannot emit the
+  bug shape, so the fail-stop's precondition is unreachable.  The
+  Phase 1 contract-test pin on the
+  `(needs_drop=False, is_cheap_copy=True, has_structural_drop=True)`
+  triplet is RETAINED as a descriptive characterisation of the
+  classification — the policy still reports the triplet under a
+  Copy hook, and the consumer (the Copy-store branch) now handles
+  it correctly.
+
+  **Regression gates, three-tier as defined in the 0.30.4 entry:**
+
+    - **Gate A (in-tree):** the strict MIR-level pin is
+      `lang/tests/stage2/test_match_scrut_copy_store_emits_copyvalue.py`.
+      It installs the Copy-query hook (same mechanism the packaged-
+      `.dmp` loader uses), drives `_lower_match` through
+      `HIRToMIR`, and asserts (a) a `CopyValue` is emitted whose
+      `ty` is the scrutinee variant type, (b) the `CopyValue`'s
+      dest lands in a `StoreLocal` into `__match_scrut_tmp*`, (c)
+      POD variants (`V<Int>`) still keep the fast-path bare
+      `StoreLocal`.  Companion runtime smoke-test at
+      `lang/tests/codegen/e2e/match_optional_copy_wrapper_string/`
+      — note the scope caveat in its docstring: source-compile
+      mode reaches the MoveOut branch, not the Copy-store branch,
+      so the e2e fixture is a MoveOut-path smoke-test, not the
+      strict Copy-store regression.  The MIR pin is the
+      authoritative in-tree gate.
+    - **Gate B (structural):** the Phase 0 fail-stop is physically
+      deleted (grep: `rg "compiler internal error .not a bug in"
+      lang/` returns empty), along with its regression test file.
+    - **Gate C (downstream):** TLS team restores `_base_port()` in
+      drift-net-tls, removes the hardcoded port workaround, deploys
+      the 0.31.0 toolchain, and runs `just test` + `DRIFT_MEMCHECK=1
+      tools/run-e2e-tests.sh` with zero errors on 10/10
+      invocations.  Out of this commit's scope; tracked as a
+      coordination point with the TLS team.
+
+  **Scope of the bug-class closure.**  Phase 2a closes the specific
+  UAF TLS reported.  It does NOT close the class of bugs where
+  multiple per-pass ownership analyses can disagree — that's what
+  the ledger work (still pending as follow-on Phase 2b/c/3) is for.
+  Until the ledger lands, the Phase 1 funnel + the contract pins
+  remain the regression gate against another variant of the same
+  class.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.30.5 → 0.31.0` is a minor bump (semantic fix
+  for a correctness bug, no format change, no ABI change).
+
 - **Phase 1 of `fix/ownership-drop-ledger`: single-source-of-truth
   drop/copy classifier `DropPolicy` (0.30.5, ABI 10)**.
 
