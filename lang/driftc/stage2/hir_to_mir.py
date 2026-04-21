@@ -177,6 +177,122 @@ class HiddenLambdaSpec:
 	is_callback_lambda: bool
 
 
+@dataclass(frozen=True, slots=True)
+class DropPolicy:
+	"""Single-source-of-truth drop/copy classification for a `TypeId`
+	at the `hir_to_mir` layer.
+
+	**Phase 1 contract** (part of the
+	`fix/ownership-drop-ledger` track): every ownership-question
+	consumer inside `HIRToMIR` — should a value be moved or copied at
+	a transfer boundary? does a local need a scope-exit drop? can a
+	type's bits be bitcopied freely? — reads `DropPolicy` via
+	`HIRToMIR._drop_policy(ty)` rather than calling the underlying
+	`TypeTable.copy_status` / `has_drop` / `is_bitcopy` /
+	`is_destructible` queries directly.  The five axes below
+	(`needs_drop`, `is_bitcopy`, `is_cheap_copy`, `is_destructible`,
+	`has_structural_drop`) are the *only* dimensions emission sites
+	are permitted to depend on; asking for anything finer than these
+	must be expressed as a derived predicate on `DropPolicy`, not a
+	bypass query to `TypeTable`.
+
+	Direct `copy_status` / `has_drop` / `is_bitcopy` /
+	`is_destructible` calls on `self._type_table` inside `HIRToMIR`
+	are a Phase 1 contract violation and are flagged in review, with
+	one explicit exception: a small set of **Phase 1 residuals** —
+	sites that combine the raw queries in ways the five current
+	`DropPolicy` axes don't express, and the typevar "unknown" branch
+	in `_classify_value_transfer` that has no concrete-type analogue
+	in `DropPolicy`.  Every residual site carries an inline comment
+	of the form `# PHASE 1 RESIDUAL (kind).` naming the residual
+	class — enumerate them with `rg "PHASE 1 RESIDUAL" lang/driftc/stage2/hir_to_mir.py`.
+	(Line numbers aren't included in this docstring on purpose; in
+	a file this long they rot on the next edit.)  Any NEW direct
+	call to the underlying queries that is NOT labelled with that
+	inline marker is a contract violation.  Phase 2 (per-program-
+	point ownership ledger) subsumes every residual — either by
+	adding a missing policy axis or by making the underlying query
+	unreachable through a ledger-driven rewrite.  The computation of
+	`_drop_policy` itself is NOT a residual (it IS the funnel) and
+	is the one site where raw queries are not just permitted but
+	required.
+
+	The current semantics intentionally mirror the pre-Phase-1
+	behaviour — this is a funnel, not a fix.  The actual semantic
+	fix for the `match Optional<String>` double-drop UAF lives in
+	Phase 2 (see Phase 0's fail-stop assertion in
+	`_ensure_arm_scrut_ptr` for the current guardrail).  Phase 1
+	buys: future tweaks (including Phase 2's) change one function,
+	and contract tests pin the policy output per canonical type so
+	those tweaks are loud instead of silent.
+	"""
+	# True iff scope-exit must emit a runtime drop operation for a
+	# local of this type.  POD types are False.  Refcounted scalar
+	# (`String`), structural-with-drop (`Optional<String>`,
+	# `Array<String>`, structs with droppable fields), and
+	# user-`Destructible` types are True.  `DiagnosticValue`-bearing
+	# types short-circuit to True regardless of `has_drop` (see
+	# `_contains_dv_transitive`).
+	needs_drop: bool
+	# True iff the value's bits are semantically an independent
+	# owner with no shared refcounts or pointers-to-shared.  POD
+	# types (`Int`, `Bool`, bitcopy structs of PODs) are True;
+	# refcounted and structural-with-drop types are False.  The
+	# compiler is allowed to bitcopy any value whose policy has
+	# `is_bitcopy=True` at any ownership-transfer boundary.
+	is_bitcopy: bool
+	# True iff the compiler can emit a cheap Copy for this type at
+	# an ownership-transfer boundary — a single bitcopy for POD
+	# types, or a single refcount retain for refcounted scalar
+	# types.  Structural-with-drop and user-Destructible types are
+	# False (a correct copy would require a per-field traversal
+	# that is not "cheap" in the Phase-1 sense).  This is the
+	# question that governs the `match` scrutinee MoveOut-vs-Copy
+	# decision in `_ensure_arm_scrut_ptr` and the binder path
+	# decision in the match-arm binder loop.
+	#
+	# NOTE (Phase 1 semantic-preserving note): today's computation
+	# faithfully mirrors the pre-Phase-1 `_should_copy_value` —
+	# i.e. "Copy trait marker is True AND the type does not need
+	# runtime drop."  That rule is what permitted the
+	# `match Optional<String>` UAF when a packaged callee resolved
+	# `copy_status` eagerly; the actual fix is Phase 2's ledger.
+	# Phase 1 documents the behaviour and pins it under test so
+	# Phase 2's tightening is visible as a diff here.
+	is_cheap_copy: bool
+	# True iff the type is `core.Destructible` (has a user
+	# `destroy(self)` impl) OR its drop model otherwise requires a
+	# Destructible-aware cleanup epilogue.  Governs
+	# `param_drop_status` assignment and the `_emit_scope_drops`
+	# cleanup path for locals that are destructible but may not
+	# need a "bare" runtime drop.  Distinct from `needs_drop` —
+	# some Destructible types are also `needs_drop`, but the
+	# `_emit_scope_drops` walk cleans up destructible-but-not-
+	# drop-needed locals via a dedicated branch.
+	is_destructible: bool
+	# True iff the type's STRUCTURE contains a drop-bearing child,
+	# independent of the Copy-trait shortcut that `needs_drop`
+	# observes.  Equivalent to `TypeTable.has_drop(ty)`: walks the
+	# variant/struct/array structure and returns True if any
+	# transitive field requires runtime drop (refcount release,
+	# destructor call, etc.).
+	#
+	# This axis exists specifically because the Phase 0 fail-stop
+	# in `_ensure_arm_scrut_ptr` must diverge from `needs_drop` on
+	# exactly the bug shape: a type can have
+	# `has_structural_drop=True` AND `needs_drop=False` when
+	# `copy_status=True` (the packaged-load miscalculation) — that
+	# is the precondition the fail-stop targets.  Routing the
+	# fail-stop through `needs_drop` would silently suppress it
+	# under the same shortcut that causes the original UAF, which
+	# is what this axis avoids.  Phase 2 (the ledger) will
+	# reconcile `needs_drop` with `has_structural_drop` so the
+	# divergence becomes impossible at the policy layer; until
+	# then, `has_structural_drop` is the correct query for any
+	# invariant that must NOT be fooled by the Copy-trait shortcut.
+	has_structural_drop: bool
+
+
 class HIRToMIR:
 	"""
 	Lower sugar-free HIR into MIR using per-node visitors.
@@ -315,22 +431,36 @@ class HIRToMIR:
 		)
 		if param_types:
 			for name, ty in param_types.items():
+				# Phase 1 contract: every axis read by the param-drop
+				# classifier goes through the policy funnel, including
+				# the `string_arc_managed` branch that previously read
+				# `TypeTable.has_drop` directly.  Compute once per
+				# param so the classification never sees two different
+				# snapshots of the underlying queries (the exact
+				# predicate-drift class the funnel was built to
+				# prevent).
+				param_policy = self._drop_policy(ty)
 				if _is_destroy_method and name == "self":
 					self._param_drop_locals.append(name)
 					self.b.func.param_drop_status[name] = "scope_exit_drop"
-				elif self._needs_runtime_drop(ty):
+				elif param_policy.needs_drop:
 					self._param_drop_locals.append(name)
 					self.b.func.param_drop_status[name] = "scope_exit_drop"
-				elif self._type_is_destructible(ty):
+				elif param_policy.is_destructible:
 					# Destructible types that are also Copy still need
 					# scope-exit drops so the codegen inside-destroy
 					# epilogue can drop their fields.
 					self._param_drop_locals.append(name)
 					self.b.func.param_drop_status[name] = "scope_exit_drop"
-				elif self._type_table.has_drop(ty):
-					# has_drop=True but not in _param_drop_locals — this
-					# type is handled by string_arc (e.g. String, Array,
-					# Error, DiagnosticValue, Interface).
+				elif param_policy.has_structural_drop:
+					# Structural drop needed but the generic path
+					# returned `needs_drop=False` — this type is
+					# handled by string_arc (e.g. String, Array,
+					# Error, DiagnosticValue, Interface) on a
+					# parallel track.  Use the shortcut-free axis so
+					# we classify correctly even under the packaged-
+					# load `copy_status` resolution that flips
+					# `needs_drop` to False.
 					self.b.func.param_drop_status[name] = "string_arc_managed"
 				else:
 					self.b.func.param_drop_status[name] = "no_drop"
@@ -384,27 +514,147 @@ class HIRToMIR:
 			if local_name not in self._local_types:
 				self._local_types[local_name] = ty
 
-	def _type_is_destructible(self, ty: TypeId) -> bool:
-		"""Check if the type implements Destructible (has a destroy())."""
+	def _drop_policy(self, ty: TypeId) -> DropPolicy:
+		"""Compute the Phase-1 single-source-of-truth drop/copy
+		policy for `ty` — see the `DropPolicy` docstring for the
+		contract.
+
+		This function is the canonical site for `TypeTable.copy_status`
+		/ `has_drop` / `is_bitcopy` / `is_destructible` queries inside
+		`HIRToMIR`.  Every plain policy-axis read must go through the
+		resulting `DropPolicy` via this function or the thin wrappers
+		(`_needs_runtime_drop`, `_should_copy_value`,
+		`_classify_value_transfer`, `_type_is_destructible`).
+
+		The class docstring enumerates a small set of **documented
+		Phase 1 residuals** — sites that still read the underlying
+		queries directly because they combine them in ways the five
+		current `DropPolicy` axes don't express (e.g. the "Copy but
+		non-bitcopy" predicate used in `ArrayElemTake`/`CopyValue`
+		dispatchers, and the typevar "unknown" branch in
+		`_classify_value_transfer`).  Enumerate the live residuals
+		with `rg "PHASE 1 RESIDUAL" lang/driftc/stage2/hir_to_mir.py`
+		— line numbers aren't quoted here because they rot on every
+		surrounding edit.  Residuals MUST carry an inline comment
+		naming them and MUST be subsumed by Phase 2 (the per-
+		program-point ownership ledger), either by adding the missing
+		policy axis or by making the underlying query unreachable
+		through a ledger-driven rewrite.  Any NEW direct call to
+		`copy_status` / `has_drop` / `is_bitcopy` /
+		`is_destructible` on `self._type_table` inside `HIRToMIR`
+		that is NOT on the documented-residuals list is a Phase 1
+		contract violation and is rejected at review.
+
+		Semantics are intentionally identical to the pre-Phase-1
+		behaviour.  The actual semantic fix for the
+		`match Optional<String>` double-drop is Phase 2 (the per-
+		program-point ownership ledger); Phase 1 just centralises
+		the computation so Phase 2's change is a one-function edit
+		and the pinned contract tests make the diff loud.
+		"""
+		# Query every underlying fact EXACTLY ONCE per call.  The
+		# whole point of the funnel is that one interpretation of
+		# the type-table snapshot drives every policy axis — querying
+		# `copy_status` twice (or `has_drop` twice) in the same
+		# function would re-open the predicate-drift class the funnel
+		# was built to close, even if the type-table is currently
+		# stable.  Each of the five axes below is a pure derivation
+		# from these four snapshots plus the `_unknown_type` check
+		# and the DV transitive walk.
+		if ty == self._unknown_type:
+			# Unknown-type short-circuit: no meaningful policy; return
+			# the safe-conservative baseline (no drop, move-transfer).
+			return DropPolicy(
+				needs_drop=False,
+				is_bitcopy=False,
+				is_cheap_copy=False,
+				is_destructible=False,
+				has_structural_drop=False,
+			)
+
 		try:
-			return bool(self._type_table.is_destructible(ty))
+			is_bitcopy = bool(self._type_table.is_bitcopy(ty))
 		except Exception:
-			return False
+			is_bitcopy = False
+		try:
+			copy_status = self._type_table.copy_status(ty)
+		except Exception:
+			copy_status = None
+		try:
+			raw_has_drop = bool(self._type_table.has_drop(ty))
+		except Exception:
+			raw_has_drop = False
+		try:
+			raw_is_destructible = bool(self._type_table.is_destructible(ty))
+		except Exception:
+			raw_is_destructible = False
+		contains_dv = self._contains_dv_transitive(ty, set())
+
+		# --- needs_drop ----------------------------------------
+		# Order mirrors the pre-Phase-1 `_needs_runtime_drop` body:
+		# DV-bearing → True (short-circuits the Copy shortcut because
+		# DV destructors have side effects not captured by Copy-trait
+		# metadata); Copy trait True → False (the pre-Phase-1
+		# shortcut — the bug shape Phase 2 is targeting, preserved
+		# here intentionally so Phase 1 is semantic-preserving);
+		# otherwise defer to raw `has_drop`.
+		if contains_dv:
+			needs_drop = True
+		elif copy_status is True:
+			needs_drop = False
+		else:
+			needs_drop = raw_has_drop
+
+		# --- is_cheap_copy -------------------------------------
+		# Pre-Phase-1 `_classify_value_transfer` returned "copy"
+		# iff `copy_status is True AND not needs_runtime_drop`.
+		# `is_cheap_copy` reifies that same predicate, derived from
+		# the single `copy_status` snapshot above.  Note the
+		# asymmetry with `needs_drop`: `copy_status=True AND
+		# raw_has_drop=True` (the `Optional<String>` bug shape under
+		# packaged loads) yields `is_cheap_copy=True` AND
+		# `needs_drop=False` — precisely the wrong combination
+		# Phase 2 will fix.  Pinned by the contract tests so the
+		# fix is loud.
+		is_cheap_copy = (copy_status is True) and not needs_drop
+
+		# --- is_destructible -----------------------------------
+		is_destructible = raw_is_destructible
+
+		# --- has_structural_drop -------------------------------
+		# Shortcut-free drop query: `raw_has_drop` direct, with the
+		# DV transitive walk honoured (a DV-bearing type structurally
+		# has drop — the DV destructor has side effects independent
+		# of Copy-trait claims).  The phase-0 fail-stop reads THIS
+		# axis, not `needs_drop`, because it must NOT be fooled by
+		# the Copy-trait shortcut that the UAF exploited.
+		has_structural_drop = contains_dv or raw_has_drop
+
+		return DropPolicy(
+			needs_drop=needs_drop,
+			is_bitcopy=is_bitcopy,
+			is_cheap_copy=is_cheap_copy,
+			is_destructible=is_destructible,
+			has_structural_drop=has_structural_drop,
+		)
+
+	def _type_is_destructible(self, ty: TypeId) -> bool:
+		"""Thin wrapper over `_drop_policy` — Phase 1 contract.
+
+		Kept as a named predicate so ~40 downstream call sites don't
+		all have to be rewritten in one change.  New code should
+		prefer `self._drop_policy(ty).is_destructible` directly when
+		the call site also inspects other axes.
+		"""
+		return self._drop_policy(ty).is_destructible
 
 	def _needs_runtime_drop(self, ty: TypeId) -> bool:
-		if ty == self._unknown_type:
-			return False
-		if self._contains_dv_transitive(ty, set()):
-			return True
-		try:
-			if self._type_table.copy_status(ty) is True:
-				return False
-		except Exception:
-			pass
-		try:
-			return bool(self._type_table.has_drop(ty))
-		except Exception:
-			return False
+		"""Thin wrapper over `_drop_policy` — Phase 1 contract.
+
+		See `DropPolicy` + `_drop_policy` for the semantics and the
+		Phase 1 funnel rationale.
+		"""
+		return self._drop_policy(ty).needs_drop
 
 	def _contains_dv_transitive(self, ty: TypeId, visited: set[TypeId]) -> bool:
 		if ty in visited:
@@ -436,7 +686,7 @@ class HIRToMIR:
 		"""Check whether a type's copy can be fully inlined at compile time.
 		Returns False for self-referential types that would require a
 		recursive runtime clone (which we don't yet support)."""
-		if self._type_table.is_bitcopy(ty):
+		if self._drop_policy(ty).is_bitcopy:
 			return True
 		if ty in visiting:
 			return False
@@ -465,31 +715,56 @@ class HIRToMIR:
 		return False
 
 	def _should_copy_value(self, ty: TypeId) -> bool:
-		return self._classify_value_transfer(ty) == "copy"
+		"""Thin wrapper over `_drop_policy` — Phase 1 contract.
+
+		Returns True iff the type supports a cheap-copy transfer
+		(POD bitcopy or refcount retain); False otherwise.  The
+		unresolved-typevar branch lives in
+		`_classify_value_transfer` — callers of `_should_copy_value`
+		treat typevar as "False (move-safe)" implicitly.
+		"""
+		return self._drop_policy(ty).is_cheap_copy
 
 	def _classify_value_transfer(self, ty: TypeId, *, allow_unknown_typevar: bool = False) -> str:
-		"""
-		Single-source ownership transfer decision for lowered values.
+		"""Single-source ownership transfer decision for lowered values.
 
 		Returns:
 		- "copy": value can be semantically copied at this boundary.
 		- "move": value must be moved (or consumed) to preserve ownership.
 		- "unknown": unresolved typevar (allowed only when explicitly requested).
+
+		Phase 1 note: the copy/move decision now flows through
+		`_drop_policy(ty).is_cheap_copy`; the "unknown" branch for
+		typevars remains out-of-band because `DropPolicy` is
+		intentionally a concrete-type answer.  If a future phase
+		needs typevar-aware policy, extend `DropPolicy` rather than
+		re-introducing a parallel classification path here.
 		"""
-		copy_status = self._type_table.copy_status(ty)
-		if copy_status is True:
-			# Copy is only safe as a transfer boundary when no runtime-owned
-			# substructure requires move/drop semantics.
-			return "copy" if not self._needs_runtime_drop(ty) else "move"
-		if copy_status is False:
-			return "move"
 		td = self._type_table.get(ty)
+		# Typevar handling stays outside the policy funnel — the
+		# policy answers for concrete types only; typevar classification
+		# is a call-site contract (the caller explicitly opts in to
+		# "unknown" via `allow_unknown_typevar`).
 		if td.kind is TypeKind.TYPEVAR and allow_unknown_typevar:
-			return "unknown"
-		# Keep transfer behavior safe when Copy status is unresolved for
-		# non-typevar nominal/alias paths: prefer move semantics over asserting.
-		# This avoids false internal failures while preserving ownership safety.
-		return "move"
+			# PHASE 1 RESIDUAL (typevar-unknown).  `DropPolicy` is a
+			# concrete-type answer; there is no axis that distinguishes
+			# "unknown because typevar unresolved" from "decided False".
+			# Preserve the pre-Phase-1 behaviour of returning "unknown"
+			# only when `copy_status` is itself None (i.e. the typevar
+			# is genuinely unresolved); a typevar whose `copy_status`
+			# is already decided by a proof falls through to the
+			# concrete branch.  Phase 2 subsumes this by either adding
+			# a typevar-unknown axis to `DropPolicy` or by ensuring the
+			# ledger-driven rewrite never asks classification for an
+			# unresolved typevar.
+			try:
+				cs = self._type_table.copy_status(ty)
+			except Exception:
+				cs = None
+			if cs is None:
+				return "unknown"
+		policy = self._drop_policy(ty)
+		return "copy" if policy.is_cheap_copy else "move"
 
 	def _copy_if_ref_alias(self, value: M.ValueId, ty: TypeId) -> M.ValueId:
 		"""If *value* is an aliased temp from a &T field read, emit a deep copy
@@ -499,7 +774,7 @@ class HIRToMIR:
 		if value not in self._ref_field_temps:
 			return value
 		self._ref_field_temps.discard(value)
-		if self._type_table.is_bitcopy(ty):
+		if self._drop_policy(ty).is_bitcopy:
 			return value
 		td = self._type_table.get(ty)
 		if td.kind is TypeKind.ARRAY and td.param_types:
@@ -1099,112 +1374,121 @@ class HIRToMIR:
 						# disagrees, the disagreement IS the bug we want
 						# to surface.
 						if source_local is not None:
-							scrut_has_drop = False
-							try:
-								scrut_has_drop = bool(self._type_table.has_drop(scrut_ty))
-							except Exception:
-								scrut_has_drop = False
-							if scrut_has_drop:
-								scrut_is_bitcopy = False
-								try:
-									scrut_is_bitcopy = bool(self._type_table.is_bitcopy(scrut_ty))
-								except Exception:
-									scrut_is_bitcopy = False
-								if not scrut_is_bitcopy:
-									scrut_td = self._type_table.get(scrut_ty)
-									_ty_label = (
-										f"{scrut_td.kind.name}:{scrut_td.name}"
-										if scrut_td.name is not None
-										else f"{scrut_td.kind.name}:typeid={scrut_ty}"
-									)
-									# User-facing opener is deliberately
-									# first.  Everything after the leading
-									# "compiler bug" sentence is triage
-									# context for whoever handles the
-									# report; the user who hits this needs
-									# to know THREE things up front, in
-									# this order: (1) it is not their
-									# fault, (2) how to work around it so
-									# they can keep shipping, (3) where to
-									# report.  All three must be in the
-									# opening sentences because Python
-									# tracebacks truncate aggressively in
-									# some terminals and we cannot rely on
-									# the full body being read.
-									raise AssertionError(
-										"compiler internal error (not a bug "
-										"in your source code): the Drift "
-										"compiler is about to emit a "
-										"double-drop of a refcount-bearing "
-										"`match` scrutinee and is failing "
-										"loudly instead of shipping that "
-										"corruption.  Workaround: if your "
-										f"match is of the shape `match x "
-										f"{{ ... {scrut_td.name or 'Ctor'}"
-										"(payload) => ... }}` on a value "
-										"returned from another module's "
-										"function (typically from a "
-										"packaged stdlib or third-party "
-										"library), rewrite the helper to "
-										"return a primitive (e.g. an `Int` "
-										"with a sentinel value, or use "
-										"`std.env::has` + a constant "
-										"instead of `match "
-										"std.env::get(...)`).  Please "
-										"report this at "
-										"github.com/drift-lang/drift with a "
-										"minimal reproducer (the Drift "
-										"source that triggered this error "
-										"plus the compiler version from "
-										"`driftc --version`); the Drift "
-										"team is tracking this class of "
-										"bug under the "
-										"`fix/ownership-drop-ledger` work "
-										"stream and your reproducer "
-										"directly accelerates the fix.\n\n"
-										"--- internal triage context "
-										"(for compiler maintainers) ---\n"
-										f"Match scrutinee type: "
-										f"'{_ty_label}' "
-										f"(source_local={source_local!r}).  "
-										f"Reached the Copy-store path of "
-										f"`_ensure_arm_scrut_ptr` despite "
-										f"the type having `has_drop=True` "
-										f"and `is_bitcopy=False`.  The "
-										f"Copy-store path bitcopies "
-										f"`scrut_val` into `arm_scrut_local` "
-										f"without a MoveOut, leaving the "
-										f"source local live; combined with "
-										f"the arm-end scrut_tmp drop and "
-										f"the return-site "
-										f"`_drop_all_destructibles` drop "
-										f"of the source, the inner "
-										f"refcount is released twice — "
-										f"runtime manifestation: glibc "
-										f"`tcache_thread_shutdown(): "
-										f"unaligned tcache chunk detected` "
-										f"inside `drift_string_release`.  "
-										f"The MoveOut branch above is the "
-										f"correct path for any "
-										f"refcount-bearing scrutinee; "
-										f"reaching this branch means "
-										f"`_should_copy_value(scrut_ty)` "
-										f"returned True for a "
-										f"drop-bearing type — most likely "
-										f"the package-load path resolved "
-										f"`copy_status` to True (it walks "
-										f"the transitive trait-impl graph "
-										f"eagerly) while `has_drop` "
-										f"correctly stays True.  The "
-										f"structural fix lives in the "
-										f"per-program-point ownership "
-										f"ledger (Phase 2 of the "
-										f"`fix/ownership-drop-ledger` "
-										f"track); this assertion is the "
-										f"Phase 0 fail-stop that prevents "
-										f"shipping silent heap corruption "
-										f"while the ledger is built."
-									)
+							# Phase 1 contract: read the ownership axes
+							# through the policy funnel.  CRITICAL
+							# distinction for this fail-stop: we query
+							# `has_structural_drop`, NOT `needs_drop`.
+							# `needs_drop` observes the `copy_status ⇒
+							# no drop` shortcut — which is exactly the
+							# bug-shape-producing shortcut this fail-stop
+							# is meant to catch.  Routing the fail-stop
+							# through `needs_drop` would silently
+							# suppress it under the same shortcut that
+							# causes the original UAF.
+							# `has_structural_drop` is the shortcut-free
+							# question: "does the type's structure
+							# contain a drop-bearing child?"  That is
+							# the correct invariant for any compiler
+							# fail-stop that must NOT be fooled by the
+							# packaged-load `copy_status` resolution.
+							# Phase 2 (the ledger) reconciles these so
+							# the distinction becomes unnecessary.
+							_scrut_policy = self._drop_policy(scrut_ty)
+							if _scrut_policy.has_structural_drop and not _scrut_policy.is_bitcopy:
+								scrut_td = self._type_table.get(scrut_ty)
+								_ty_label = (
+									f"{scrut_td.kind.name}:{scrut_td.name}"
+									if scrut_td.name is not None
+									else f"{scrut_td.kind.name}:typeid={scrut_ty}"
+								)
+								# User-facing opener is deliberately
+								# first.  Everything after the leading
+								# "compiler bug" sentence is triage
+								# context for whoever handles the
+								# report; the user who hits this needs
+								# to know THREE things up front, in
+								# this order: (1) it is not their
+								# fault, (2) how to work around it so
+								# they can keep shipping, (3) where to
+								# report.  All three must be in the
+								# opening sentences because Python
+								# tracebacks truncate aggressively in
+								# some terminals and we cannot rely on
+								# the full body being read.
+								raise AssertionError(
+									"compiler internal error (not a bug "
+									"in your source code): the Drift "
+									"compiler is about to emit a "
+									"double-drop of a refcount-bearing "
+									"`match` scrutinee and is failing "
+									"loudly instead of shipping that "
+									"corruption.  Workaround: if your "
+									f"match is of the shape `match x "
+									f"{{ ... {scrut_td.name or 'Ctor'}"
+									"(payload) => ... }}` on a value "
+									"returned from another module's "
+									"function (typically from a "
+									"packaged stdlib or third-party "
+									"library), rewrite the helper to "
+									"return a primitive (e.g. an `Int` "
+									"with a sentinel value, or use "
+									"`std.env::has` + a constant "
+									"instead of `match "
+									"std.env::get(...)`).  Please "
+									"report this at "
+									"github.com/drift-lang/drift with a "
+									"minimal reproducer (the Drift "
+									"source that triggered this error "
+									"plus the compiler version from "
+									"`driftc --version`); the Drift "
+									"team is tracking this class of "
+									"bug under the "
+									"`fix/ownership-drop-ledger` work "
+									"stream and your reproducer "
+									"directly accelerates the fix.\n\n"
+									"--- internal triage context "
+									"(for compiler maintainers) ---\n"
+									f"Match scrutinee type: "
+									f"'{_ty_label}' "
+									f"(source_local={source_local!r}).  "
+									f"Reached the Copy-store path of "
+									f"`_ensure_arm_scrut_ptr` despite "
+									f"the type having `has_drop=True` "
+									f"and `is_bitcopy=False`.  The "
+									f"Copy-store path bitcopies "
+									f"`scrut_val` into `arm_scrut_local` "
+									f"without a MoveOut, leaving the "
+									f"source local live; combined with "
+									f"the arm-end scrut_tmp drop and "
+									f"the return-site "
+									f"`_drop_all_destructibles` drop "
+									f"of the source, the inner "
+									f"refcount is released twice — "
+									f"runtime manifestation: glibc "
+									f"`tcache_thread_shutdown(): "
+									f"unaligned tcache chunk detected` "
+									f"inside `drift_string_release`.  "
+									f"The MoveOut branch above is the "
+									f"correct path for any "
+									f"refcount-bearing scrutinee; "
+									f"reaching this branch means "
+									f"`_should_copy_value(scrut_ty)` "
+									f"returned True for a "
+									f"drop-bearing type — most likely "
+									f"the package-load path resolved "
+									f"`copy_status` to True (it walks "
+									f"the transitive trait-impl graph "
+									f"eagerly) while `has_drop` "
+									f"correctly stays True.  The "
+									f"structural fix lives in the "
+									f"per-program-point ownership "
+									f"ledger (Phase 2 of the "
+									f"`fix/ownership-drop-ledger` "
+									f"track); this assertion is the "
+									f"Phase 0 fail-stop that prevents "
+									f"shipping silent heap corruption "
+									f"while the ledger is built."
+								)
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
 					arm_scrut_ptr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=arm_scrut_ptr, local=arm_scrut_local, is_mut=True))
@@ -2141,7 +2425,7 @@ class HIRToMIR:
 			# clone-on-read-from-ref (contains refcounted fields).
 			# _copy_if_ref_alias will emit CopyValue at ownership
 			# transfer boundaries (return, binding, call arg).
-			if not self._type_table.is_bitcopy(inner_ty):
+			if not self._drop_policy(inner_ty).is_bitcopy:
 				self._ref_field_temps.add(dest)
 			return dest
 		operand = self.lower_expr(expr.expr)
@@ -2344,7 +2628,7 @@ class HIRToMIR:
 		# construction, return, variable binding, call args) emit a copy.
 		# Transient uses (chained .len, comparisons) are safe without a
 		# copy and would otherwise leak the intermediate allocation.
-		if not self._type_table.is_bitcopy(field_ty):
+		if not self._drop_policy(field_ty).is_bitcopy:
 			subject_is_alias = loaded_from_ref or subject in self._ref_field_temps
 			if not subject_is_alias:
 				# Check if the subject was loaded from a local/param that
@@ -2488,6 +2772,17 @@ class HIRToMIR:
 		self.b.emit(M.LoadLocal(dest=loaded, local=tmp_local))
 
 		transfer = self._classify_value_transfer(elem_ty, allow_unknown_typevar=True)
+		# PHASE 1 RESIDUAL (Copy-trait-claim-with-transfer-disposition).
+		# The combined predicate "transfer is copy OR move AND the
+		# Copy-trait claim is decided True" isn't expressible as a
+		# pure `DropPolicy` axis — it straddles the policy (`transfer`)
+		# and the raw trait claim.  The "move AND copy_status=True"
+		# subcase is specifically the `Optional<String>`-shape where
+		# the Copy trait resolves True but the policy correctly
+		# classifies as move due to drop-bearing substructure.  Phase
+		# 2 subsumes this by adding a typevar-aware axis or by
+		# driving array-element classification from the ledger
+		# directly.
 		if transfer in ("copy", "move") and self._type_table.copy_status(elem_ty) is True:
 			copy_dest = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copy_dest, value=loaded, ty=elem_ty))
@@ -2497,6 +2792,13 @@ class HIRToMIR:
 			return loaded
 		td = self._type_table.get(elem_ty)
 		if td.kind is not TypeKind.TYPEVAR:
+			# PHASE 1 RESIDUAL (v1 array-read guard).  Dead-branch
+			# assertion: reached when the element is neither Copy
+			# nor typevar.  Kept as a `copy_status` direct query
+			# because it's an invariant check, not an ownership
+			# decision; Phase 2 replaces it with a ledger-driven
+			# classification once array-element policy becomes a
+			# first-class axis.
 			if self._type_table.copy_status(elem_ty) is True:
 				raise NotImplementedError("array index read requires trivially-copyable element type in v1")
 			raise NotImplementedError("array index read requires Copy element type; borrow not supported in v1")
@@ -2642,6 +2944,17 @@ class HIRToMIR:
 				# MIR-validate "must use CopyValue or MoveOut for Copy
 				# element type" invariant.  See
 				# issues/array_lit_copy_nonbitcopy_struct_mir_invariant/.
+				#
+				# PHASE 1 RESIDUAL (Copy-but-non-bitcopy).  This asks
+				# a predicate the five current `DropPolicy` axes don't
+				# express: "the Copy-trait claim is decided True for
+				# this type AND the bits are not self-contained."
+				# `is_cheap_copy` collapses to False for any
+				# `needs_drop=True` type (including DV-bearing
+				# structs like `core.DiagnosticEntry`), so it isn't
+				# the right axis here.  Phase 2 adds the missing axis
+				# (or retires this branch via a ledger-driven
+				# rewrite); until then the raw queries are intentional.
 				copy_status = self._type_table.copy_status(val_ty)
 				if copy_status is True and not self._type_table.is_bitcopy(val_ty):
 					copy_dest = self.b.new_temp()
@@ -4121,7 +4434,12 @@ class HIRToMIR:
 	def _array_index_load_value(self, *, elem_ty: TypeId, array: M.ValueId, index: M.ValueId) -> M.ValueId:
 		raw = self.b.new_temp()
 		self.b.emit(M.ArrayIndexLoad(dest=raw, elem_ty=elem_ty, array=array, index=index))
-		if self._should_copy_value(elem_ty) and not self._type_table.is_bitcopy(elem_ty):
+		# Snapshot both axes from one policy read — cheap-copy
+		# classification combined with bitcopy shape.  This is a
+		# pure policy-axis decision (no `copy_status is True AND
+		# ...` escape hatch); routed through the funnel.
+		elem_policy = self._drop_policy(elem_ty)
+		if elem_policy.is_cheap_copy and not elem_policy.is_bitcopy:
 			copied = self.b.new_temp()
 			self.b.emit(M.CopyValue(dest=copied, value=raw, ty=elem_ty))
 			return copied
@@ -4291,6 +4609,13 @@ class HIRToMIR:
 		with its own retain (for String) or its own deep-cloned fields
 		(for struct/DV elements).  See
 		`array_extend_borrowed_source_string_no_uaf`.
+
+		PHASE 1 RESIDUAL (Copy-but-non-bitcopy).  Same predicate shape
+		as the sibling residual in the `ArrayLit` element loop —
+		"Copy trait decided True AND bits not self-contained."  No
+		current `DropPolicy` axis expresses it; Phase 2 either adds
+		the axis or retires the branch.  Enumerate with
+		`rg "PHASE 1 RESIDUAL" lang/driftc/stage2/hir_to_mir.py`.
 		"""
 		copy_status = self._type_table.copy_status(elem_ty)
 		if copy_status is True and not self._type_table.is_bitcopy(elem_ty):

@@ -1,6 +1,93 @@
 # Drift development history
 
 ## 2026-04-20
+- **Phase 1 of `fix/ownership-drop-ledger`: single-source-of-truth
+  drop/copy classifier `DropPolicy` (0.30.5, ABI 10)**.
+
+  Pre-Phase-1, ~40 call sites across `HIRToMIR` asked ownership
+  questions (should this value be moved or copied? does this local
+  need a scope-exit drop? can this type be bitcopied?) and each one
+  derived the answer from its own combination of
+  `TypeTable.copy_status` / `has_drop` / `is_bitcopy` /
+  `is_destructible` queries.  The `match Optional<String>` double-
+  drop UAF (Phase 0, 0.30.4) was the consequence — one such
+  derivation applied a `copy_status=True ⇒ no drop` shortcut that
+  silently misclassified refcount-bearing variants as bitcopy-safe
+  on the packaged-load path.  Phase 1 collapses the ~40 sites onto a
+  single classifier `HIRToMIR._drop_policy(ty) -> DropPolicy`; the
+  existing wrapper predicates (`_needs_runtime_drop`,
+  `_should_copy_value`, `_classify_value_transfer`,
+  `_type_is_destructible`) become thin delegators.  No semantic
+  change — the Phase-0 fail-stop still fires on the same bug shape,
+  the ~40 consumer sites still emit the same MIR, and the TLS team
+  still keeps the `val base = 4433` workaround until Phase 2 lands
+  the actual fix.
+
+  **What Phase 1 buys.**  Three things, in descending
+  load-bearing-ness:
+
+  (1) *The fix for the UAF becomes a one-function edit.*  Phase 2
+  (the per-program-point ownership ledger) needs to tighten the
+  classification so refcount-bearing variants never reach the
+  `is_cheap_copy=True ∧ has_drop=True` asymmetric triplet that
+  Phase 0's fail-stop fires on.  With Phase 1's funnel, that
+  tightening is one edit in `_drop_policy`; without it, it's a
+  ~40-call-site audit with no structural guarantee that every site
+  agrees.
+
+  (2) *Contract tests pin the observed behaviour per canonical
+  type.*  `lang/tests/stage2/test_drop_policy_contract.py` pins
+  `DropPolicy` output for `Int` / `String` (with and without the
+  Copy hook) / `V<Int>` (POD variant) / `V<String>` (the
+  `Optional<String>` bug shape).  Crucially, the pinned behaviour
+  includes the pre-Phase-1 bug-producing asymmetric triplet for
+  `V<String>` with the Copy hook installed — the pin is what
+  forces Phase 2's fix to be visible in the diff: any change to
+  `_drop_policy` that fixes the UAF must also update the pins, and
+  the accompanying consumer-side changes get reviewed in the same
+  diff.
+
+  (3) *A fifth policy axis `has_structural_drop` exists for
+  invariants that must NOT be fooled by the Copy shortcut.*  This
+  is the correct query for any compiler fail-stop that asks "does
+  this type's structure contain a drop-bearing child?" — the
+  answer must be derived directly from the type-table structure,
+  ignoring trait-impl shortcuts.  The Phase 0 fail-stop migrated
+  to this axis (previously it read `has_drop` directly); routing
+  it through the policy funnel proves the funnel carries the same
+  answers end-to-end AND guarantees Phase 2's reconciliation of
+  `needs_drop` vs `has_structural_drop` happens in one visible
+  place.
+
+  **What Phase 1 does NOT buy.**  The actual UAF fix.  The
+  pre-Phase-1 Copy-trait shortcut (line `if copy_status(ty) is True:
+  return False`) is preserved verbatim inside `_drop_policy`,
+  intentionally: Phase 1 is a funnel, not a fix.  The shortcut is
+  the root cause the TLS team reported on 2026-04-20 (their
+  hardcoded-port workaround is still in place), and it's the
+  exact thing Phase 2 will remove — at which point
+  `test_drop_policy_variant_of_string_with_copy_hook_pins_bug_shape`
+  (the pin on the bug-shape triplet) will flip from "pre-Phase-1
+  preserved" to "Phase 2 eliminated," and the Phase-0 fail-stop
+  can be retired in the same change.
+
+  **Scope boundary.**  Phase 1 centralises only the ~40 ownership-
+  decision sites INSIDE `HIRToMIR`.  The other passes that own
+  drop decisions — `string_arc.py`'s `destructible_locals` +
+  `nullsafe_destructible_locals` filters, the LLVM codegen's
+  `_emit_copy_value` / `_emit_drop_value` dispatchers — still
+  consult `TypeTable` directly.  Phase 2 extends the funnel to
+  cover them (the ledger replaces the per-pass independent
+  analyses with a shared `LiveStateMap` that every consumer reads
+  without re-deriving).  Phase 3 fuses the tombstone machinery
+  (`MoveOut` + `ZeroValue` + `StoreLocal(zero)`) into a single
+  ledger-aware MIR node.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.30.4 → 0.30.5` is a refactor patch bump (no
+  codegen change, no behaviour change for any previously-correct
+  program).
+
 - **Phase 0 fail-stop for `match Optional<String>` UAF (0.30.4, ABI
   10)** — first landed step of the
   `fix/ownership-drop-ledger` track.
