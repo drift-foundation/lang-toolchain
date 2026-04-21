@@ -1920,8 +1920,12 @@ class TestLockCompatibility:
 	def test_cert_mode_unset_means_default_strict_mode(self, tmp_path, capsys, monkeypatch):
 		"""Pin: `DRIFT_CERT_MODE` unset leaves default strict mode in
 		force (plain local `drift build` behaviour — must not silently
-		drift into source-rebuild for general consumers).  Same for
-		`DRIFT_CERT_MODE=stage`, which is the orch producer phase."""
+		drift into source-rebuild for general consumers).
+
+		Under the refined 0.31.5 contract, `stage` ENGAGES source-
+		rebuild (see
+		`test_stage_mode_engages_source_rebuild_with_exemption` on
+		the deploy side).  Only `unset` means strict."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -1968,33 +1972,6 @@ class TestLockCompatibility:
 		assert result == 1
 		err = capsys.readouterr().err
 		assert "sha256 mismatch" in err
-
-		# DRIFT_CERT_MODE=stage — orch producer phase — same strict
-		# lock behaviour.  This is the regression for the shape that
-		# previously broke drift-net-tls `just test` → `drift build`.
-		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
-		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
-			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
-			mock_idx.return_value = {
-				"dep-a": [PackageEntry(
-					package_id="dep-a", version=parse_version("0.1.3"),
-					path=pkg_root / "dep-a-0.1.3.dmp",
-					sha256=drift_sha,
-					required_deps=[],
-					author_key="ed25519:test",
-					source_content_id=matching_scid,
-					source_attestation_key="ed25519:test",
-				)],
-			}
-			result = run([
-				"--manifest", str(tmp_path / "drift" / "manifest.json"),
-				"--package-root", str(pkg_root),
-			])
-		assert result == 1, (
-			"DRIFT_CERT_MODE=stage must NOT enable source-rebuild — "
-			"stage is the producer phase, the snapshot does not "
-			"exist yet, and producer builds must stay strict."
-		)
 
 	def test_source_rebuild_without_run_snapshot_hard_fails(self, tmp_path, capsys, monkeypatch):
 		"""CLI-path regression: explicit `drift build --source-rebuild`
@@ -2113,15 +2090,19 @@ class TestLockCompatibility:
 		assert "DRIFT_CERT_MODE" in err
 
 	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
-		"""Unit pin for the uniform selector (build side):
-		  - unset cert_mode, no flag → False
-		  - `stage`, no flag → False (producer phase)
-		  - `certify`, no flag → True (consumer phase)
+		"""Unit pin for the uniform selector (build side), refined
+		0.31.5 contract:
+		  - unset cert_mode, no flag → False (normal local)
+		  - `stage`, no flag → True (source-rebuild + exemption)
+		  - `certify`, no flag → True (source-rebuild, no exemption)
 		  - any cert_mode, --source-rebuild flag → True
 		  - invalid cert_mode → CertModeError
 		  - DRIFT_SOURCE_REBUILD set → CertModeError"""
 		import argparse as _ap
-		from tools.drift_deploy.build_cmd import CertModeError
+		from tools.drift_deploy.build_cmd import (
+			CertModeError,
+			producer_output_exemption_active,
+		)
 		from tools.drift_deploy.drift_build import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
@@ -2130,14 +2111,17 @@ class TestLockCompatibility:
 		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
-		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(off) is True
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is True
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 		assert _source_rebuild_enabled(off) is True
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
 		with pytest.raises(CertModeError):

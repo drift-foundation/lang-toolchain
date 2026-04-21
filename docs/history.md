@@ -1,6 +1,110 @@
 # Drift development history
 
 ## 2026-04-21
+- **Stage vs. certify semantic refinement: stage now engages
+  source-rebuild with producer-output exemption (0.31.5
+  cumulative, same-day refinement).**  Initial 0.31.5 treated
+  `DRIFT_CERT_MODE=stage` as behaviourally identical to unset
+  (strict lock).  That was wrong: an orch stage step is BOTH a
+  producer (of this repo's artifacts into the run libs) AND a
+  consumer (of upstream artifacts staged earlier in the same run).
+  Modelling only the producer side caused drift-web's
+  `stage_packages` to fail strict lock-vs-disk on `net-tls@0.4.1`
+  after orch legitimately rebuilt net-tls in the same run — the
+  exact sha float certification is supposed to allow when the
+  staged package is authorised by the run snapshot and within the
+  manifest range.
+
+  **Refined contract (both modes engage source-rebuild):**
+
+      DRIFT_CERT_MODE=stage:
+        - consume deps under certification semantics (fresh-resolve
+          against snapshot-gated index; lock is evidence, not gate)
+        - intra-manifest co-artifacts are producer outputs of THIS
+          deploy invocation — snapshot-exempt while still indexed
+        - the artifact being produced is NOT required in the snapshot
+
+      DRIFT_CERT_MODE=certify:
+        - consume deps under certification semantics (same as stage)
+        - no producer-output exemption — every package the index
+          discovers must be in the run snapshot
+
+  The single orthogonal question the helpers answer:
+
+      source_rebuild_enabled(args)          → engages source-rebuild
+      producer_output_exemption_active()    → stage-mode exemption
+
+  Both helpers are in `tools/drift_deploy/build_cmd.py`.
+  `source_rebuild_enabled` returns True for any cert mode (stage
+  OR certify) and for the `--source-rebuild` CLI flag.
+  `producer_output_exemption_active` returns True ONLY for stage.
+  Manual `--source-rebuild` (no `DRIFT_CERT_MODE`) behaves like
+  certify: source-rebuild on, no exemption — the flag is a
+  verification selector, not a producer-mode opt-in.
+
+  **Plumbing.**  `tools/drift_deploy/resolver.py::build_package_index`
+  accepts `snapshot_exempt_ids: Iterable[str] | None`.  Exempt
+  pkg_ids skip the run-snapshot gate at
+  `verify_disk_entry_against_snapshot` but still get indexed (the
+  resolver can use them as co-artifact overlay candidates).  The
+  three commands thread it through:
+
+    - `drift_deploy._run_impl`: computes
+      `exempt_ids = co_artifact_names if stage else None` and
+      passes to `_resolve_artifact_deps` → `build_package_index`.
+    - `drift_build._run_impl`: same pattern.
+    - `drift_prepare._run_impl`: same pattern, computed early so
+      both the pre-artifact `build_package_index` call and the
+      `--check` `resolve_source_rebuild` call receive the same
+      exempt set.
+    - `source_rebuild.resolve_source_rebuild`: accepts
+      `snapshot_exempt_ids` and forwards to `build_package_index`
+      when it builds its own index.
+
+  **Failure addressed.**  Orch's `drift-web.stage_packages` ran
+  `drift deploy --dest <libs>` under `DRIFT_CERT_MODE=stage`.
+  Artifact #1 (or-throw-probe) published to libs; artifact #2
+  (web-client) resolved its deps, and `build_package_index`
+  walked libs + the staging scratch and discovered or-throw-probe
+  there.  Under pre-refinement semantics stage didn't carry
+  source-rebuild at all, so the failure was on lock-vs-disk sha
+  drift for net-tls.  Under the refinement: stage engages
+  source-rebuild; net-tls passes the gate (snapshot-authorised);
+  or-throw-probe passes via the exemption (co-artifact of the
+  current manifest).  Both get indexed; web-client builds.
+
+  **Test coverage.**
+    - `test_resolver.py::
+      test_build_package_index_exempt_ids_full_matrix` — pins the
+      three-piece resolver shape: snapshot has A; package root has
+      A + B + C; exempt={B}; A and B accepted; C still fails.
+    - `test_deploy.py::TestDeployCertMode::
+      test_stage_multi_artifact_coartifact_bypasses_snapshot_gate`
+      — end-to-end: co-artifact on disk under stage mode passes;
+      same setup under certify fails with "not present in run
+      snapshot".
+    - `test_deploy.py::TestDeployCertMode::
+      test_manual_source_rebuild_flag_behaves_like_certify` —
+      pins that `--source-rebuild` without `DRIFT_CERT_MODE=stage`
+      does NOT carry the exemption.
+    - `test_deploy.py::TestDeployCertMode::
+      test_stage_mode_engages_source_rebuild_with_exemption` —
+      pins the env → helpers → `snapshot_exempt_ids` threading.
+    - `test_deploy.py::TestDeployCertMode::
+      test_stage_mode_without_snapshot_hard_fails` — stage still
+      requires a snapshot (empty is fine; orch writes one before
+      the first stage_packages).
+    - Helper-matrix tests across build/deploy/prepare updated to
+      assert `stage` returns True for `source_rebuild_enabled` and
+      True for `producer_output_exemption_active`.
+
+  **Orch contract addition.**  Orch must write an empty-but-valid
+  run snapshot (`{"format":"drift-run-snapshot","version":0,
+  "run_id":"…","packages":{}}`) BEFORE the first stage_packages
+  step, then refresh it cumulatively after each step.  Stage mode
+  requires a loaded snapshot — empty is acceptable for the first
+  step when libs is also empty.
+
 - **`DRIFT_SOURCE_REBUILD` retired; replaced by
   `DRIFT_CERT_MODE=stage|certify` (0.31.5, ABI unchanged at 10).**
   Second-pass redesign of the certification-run env signal after

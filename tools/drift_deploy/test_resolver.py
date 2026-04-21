@@ -2287,6 +2287,128 @@ class TestVerifyV4SourceIdentityEnforcement:
 					run_snapshot=snapshot,
 				)
 
+	def test_build_package_index_exempt_ids_full_matrix(self) -> None:
+		"""0.31.5 stage-mode producer-output exemption — proves all
+		three pieces together in one shape:
+
+		  - run_snapshot authorises upstream dep A (`net-tls@0.4.1`)
+		  - package root contains A, current-manifest output B
+		    (`or-throw-probe@0.0.1`), and an unrelated package C
+		    (`stray-pkg@0.1.0`) not in the snapshot
+		  - snapshot_exempt_ids={B}
+		  - build_package_index accepts A + B, rejects C
+		  - B is still indexed (not just gate-skipped)
+		"""
+		from unittest.mock import patch
+		from tools.drift_deploy.resolver import build_package_index
+		from tools.drift_deploy.run_snapshot import RunSnapshot, SnapshotEntry
+
+		A_SCID = "sha256:" + "a" * 64
+		A_AK = "ed25519:upstream-author"
+		A_SAK = "ed25519:upstream-sak"
+		snapshot = RunSnapshot(
+			run_id="stage-exempt-full-matrix",
+			packages={
+				# Only A is in the snapshot.
+				"net-tls|0.4.1": SnapshotEntry(
+					source_content_id=A_SCID,
+					author_key=A_AK,
+					source_attestation_key=A_SAK,
+				),
+			},
+		)
+
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			# Three packages on disk.
+			(root / "net-tls-0.4.1.dmp").write_bytes(b"fake-A")
+			(root / "or-throw-probe-0.0.1.dmp").write_bytes(b"fake-B")
+			(root / "stray-pkg-0.1.0.dmp").write_bytes(b"fake-C")
+
+			manifests = {
+				"net-tls-0.4.1.dmp": {
+					"package_id": "net-tls",
+					"package_version": "0.4.1",
+					"modules": [{"module_id": "net_tls"}],
+					"required_deps": [],
+				},
+				"or-throw-probe-0.0.1.dmp": {
+					"package_id": "or-throw-probe",
+					"package_version": "0.0.1",
+					"modules": [{"module_id": "or_throw_probe"}],
+					"required_deps": [],
+				},
+				"stray-pkg-0.1.0.dmp": {
+					"package_id": "stray-pkg",
+					"package_version": "0.1.0",
+					"modules": [{"module_id": "stray"}],
+					"required_deps": [],
+				},
+			}
+
+			def _loader(path: Path) -> dict:
+				return manifests[path.name]
+
+			# Sidecars resolved per package — A matches the snapshot
+			# triple exactly; B and C have unrelated signer kids (they
+			# wouldn't match the snapshot even if they were in it, but
+			# that doesn't matter — only A is snapshot-gated here).
+			def _read_ak(path: Path) -> str:
+				if path.name.startswith("net-tls"):
+					return A_AK
+				return "ed25519:downstream-author"
+
+			def _read_sak_meta(path: Path, _manifest: dict):
+				if path.name.startswith("net-tls"):
+					return (A_SCID, A_SAK)
+				return ("sha256:" + "b" * 64, "ed25519:downstream-sak")
+
+			with patch(
+				"tools.drift_deploy.resolver._read_source_attestation_meta",
+				side_effect=_read_sak_meta,
+			), patch(
+				"tools.drift_deploy.resolver._read_author_key",
+				side_effect=_read_ak,
+			):
+				# ── Case 1: no exemption → C fails (B would also fail
+				#    but C is the one that surfaces first depending on
+				#    sort order; either ResolutionError is valid).
+				with pytest.raises(ResolutionError, match="not present in run snapshot"):
+					build_package_index(
+						[root],
+						load_manifest=_loader,
+						run_snapshot=snapshot,
+					)
+
+				# ── Case 2: exempt={B} → B skips gate, C still fails.
+				with pytest.raises(ResolutionError, match="stray-pkg.*not present in run snapshot"):
+					build_package_index(
+						[root],
+						load_manifest=_loader,
+						run_snapshot=snapshot,
+						snapshot_exempt_ids={"or-throw-probe"},
+					)
+
+				# ── Case 3: exempt={B, C} → both bypass, A + B + C
+				#    all in index.  Drops C from the scenario; this
+				#    branch proves the exemption is purely per-id.
+				index = build_package_index(
+					[root],
+					load_manifest=_loader,
+					run_snapshot=snapshot,
+					snapshot_exempt_ids={"or-throw-probe", "stray-pkg"},
+				)
+				assert set(index.keys()) == {"net-tls", "or-throw-probe", "stray-pkg"}
+				# B is still indexed, not merely gate-skipped.
+				assert len(index["or-throw-probe"]) == 1
+				b_entry = index["or-throw-probe"][0]
+				assert b_entry.package_id == "or-throw-probe"
+				assert str(b_entry.version) == "0.0.1"
+				# A still gated — passes because it matches the snapshot.
+				assert len(index["net-tls"]) == 1
+				assert index["net-tls"][0].author_key == A_AK
+
 	def test_build_package_index_trust_store_and_snapshot_mutually_exclusive(self) -> None:
 		"""Contract: passing both `trust_store` and `run_snapshot`
 		raises — producer (staging) and consumer (source-rebuild)

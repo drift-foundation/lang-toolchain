@@ -2260,25 +2260,51 @@ class TestDeployCertMode:
 	across phase boundaries.
 
 	Semantics for `drift deploy`:
-	  - unset / `stage`: normal producer path.  No snapshot required.
-	    This is what TLS and any other team publishing locally see,
-	    and what orch's certification-staging phase does.
-	  - `certify`: orch certification lane (consumer).  Snapshot
-	    required via `--run-snapshot` or `DRIFT_RUN_SNAPSHOT`.
+	  - unset: normal local mode.  Strict lock semantics, no
+	    snapshot involved.  This is what TLS and any other team
+	    publishing locally sees.  Normal teams never set
+	    `DRIFT_CERT_MODE`.
+	  - `stage`: orch certification staging phase.  Engages source-
+	    rebuild for consumed deps (certified inputs: fresh-resolve
+	    against snapshot-gated index; lock is evidence, not gate)
+	    AND carries the producer-output exemption — intra-manifest
+	    co-artifacts are producer outputs of THIS deploy and skip
+	    the snapshot gate while still being indexed.  Requires a
+	    loaded run snapshot (empty is fine; orch writes an empty-
+	    but-valid snapshot before the first stage_packages step and
+	    refreshes it cumulatively after each step).
+	  - `certify`: orch certification lane (pure consumer).  Engages
+	    source-rebuild, NO producer-output exemption — every package
+	    the index discovers must be in the run snapshot.  Requires
+	    a snapshot (same as stage).
 
-	`--source-rebuild` CLI flag is a manual synonym for certify
-	mode (still requires a snapshot).  The retired
-	`DRIFT_SOURCE_REBUILD` env hard-errors with migration guidance."""
+	`--source-rebuild` CLI flag behaves like `certify` when
+	`DRIFT_CERT_MODE` is unset: engages source-rebuild, no
+	producer-output exemption.  The flag is a manual verification
+	selector; only explicit `DRIFT_CERT_MODE=stage` enables the
+	exemption.
+
+	The retired `DRIFT_SOURCE_REBUILD` env hard-errors with a
+	migration message pointing at `DRIFT_CERT_MODE`, regardless of
+	CLI flags."""
 
 	def test_helper_matrix_cert_mode(self, monkeypatch) -> None:
-		"""Unit pin for the uniform lane selector:
-		  - unset cert_mode, no flag → False
-		  - `stage`, no flag → False
-		  - `certify`, no flag → True
+		"""Unit pin for the uniform lane selector (refined 0.31.5
+		contract):
+		  - unset cert_mode, no flag → False  (normal local)
+		  - `stage`, no flag → True  (source-rebuild + producer-output exemption)
+		  - `certify`, no flag → True  (source-rebuild, no exemption)
 		  - any cert_mode, --source-rebuild flag → True
-		  - invalid cert_mode → CertModeError"""
+		  - invalid cert_mode → CertModeError
+
+		Both stage and certify engage source-rebuild; the difference
+		is whether intra-manifest co-artifacts skip the snapshot gate
+		(see `producer_output_exemption_active`)."""
 		import argparse as _ap
-		from tools.drift_deploy.build_cmd import CertModeError
+		from tools.drift_deploy.build_cmd import (
+			CertModeError,
+			producer_output_exemption_active,
+		)
 		from tools.drift_deploy.drift_deploy import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
@@ -2287,20 +2313,27 @@ class TestDeployCertMode:
 		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
-		assert _source_rebuild_enabled(off) is False, (
-			"DRIFT_CERT_MODE=stage is the producer phase; deploy must "
-			"not enter source-rebuild verification"
+		assert _source_rebuild_enabled(off) is True, (
+			"DRIFT_CERT_MODE=stage engages source-rebuild: orch's "
+			"producer phase consumes already-staged upstream deps "
+			"under snapshot/compatible-range semantics"
 		)
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is True, (
+			"stage mode → producer-output exemption active "
+			"(intra-manifest co-artifacts skip the snapshot gate)"
+		)
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
-		assert _source_rebuild_enabled(off) is True, (
-			"DRIFT_CERT_MODE=certify is the consumer phase; deploy must "
-			"enter source-rebuild verification"
-		)
+		assert _source_rebuild_enabled(off) is True
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False, (
+			"certify mode → no exemption; every consumed package "
+			"must be in the snapshot"
+		)
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
 		with pytest.raises(CertModeError) as exc:
@@ -2344,25 +2377,40 @@ class TestDeployCertMode:
 		assert "retired" in msg.lower() or "0.31.5" in msg
 		assert "DRIFT_CERT_MODE" in msg
 
-	def test_stage_mode_deploy_stays_producer(
+	def test_stage_mode_engages_source_rebuild_with_exemption(
 		self, monkeypatch, tmp_path,
 	) -> None:
-		"""Regression #2 from K's redesign: `drift deploy` under
-		`DRIFT_CERT_MODE=stage` with no snapshot MUST proceed into
-		normal producer mode and NOT fail at the snapshot-required
-		gate.  This is the orch stage_packages shape."""
+		"""Refined 0.31.5 contract: `drift deploy` under
+		`DRIFT_CERT_MODE=stage` engages source-rebuild (consuming
+		already-staged deps under snapshot semantics) AND passes
+		the manifest's library-artifact names as
+		`snapshot_exempt_ids` (producer-output exemption).
+
+		Orch writes an empty-but-valid run snapshot before the first
+		stage_packages step and refreshes it cumulatively after
+		each step — so by the time any stage deploy runs, a snapshot
+		is always present.  This test pins the threading: stage mode
+		reaches `_resolve_artifact_deps` with source_rebuild=True
+		and a non-None exempt set containing the manifest's library
+		artifacts."""
 		from unittest.mock import patch as _patch
 		from tools.drift_deploy.drift_deploy import DeployError, run
+		from tools.drift_deploy.run_snapshot import write_run_snapshot
 		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
 
+		# Empty-but-valid snapshot (orch's before-first-stage shape).
+		snap_path = tmp_path / "run-snapshot.json"
+		write_run_snapshot(snap_path, run_id="stage-test", entries={})
+
 		captured: dict = {}
-		def _spy(art, *, source_rebuild, run_snapshot, **kwargs):
+		def _spy(art, *, source_rebuild, run_snapshot, snapshot_exempt_ids, **kwargs):
 			captured["source_rebuild"] = source_rebuild
 			captured["run_snapshot"] = run_snapshot
+			captured["snapshot_exempt_ids"] = snapshot_exempt_ids
 			raise DeployError("short-circuit from test spy")
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
-		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap_path))
 		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
 			rc = run([
 				"--manifest", str(manifest_path),
@@ -2371,14 +2419,39 @@ class TestDeployCertMode:
 				"--driftc", str(fake_driftc),
 			])
 		assert rc == 1, "DeployError from spy should produce exit 1"
-		assert "source_rebuild" in captured, (
-			"deploy under DRIFT_CERT_MODE=stage must reach "
-			"_resolve_artifact_deps — NOT bail at the pre-resolve "
-			"snapshot-required gate.  stage is the producer phase; "
-			"the snapshot does not exist yet."
+		assert captured.get("source_rebuild") is True, (
+			"stage mode engages source-rebuild for dep resolution"
 		)
-		assert captured["source_rebuild"] is False
-		assert captured["run_snapshot"] is None
+		assert captured.get("run_snapshot") is not None
+		# Scaffold has one library artifact: my.pkg.  Exemption set
+		# must contain it so the snapshot gate lets producer outputs
+		# of THIS deploy through.
+		exempt = captured.get("snapshot_exempt_ids")
+		assert exempt is not None and "my.pkg" in exempt, (
+			f"stage mode must thread co-artifact names as "
+			f"snapshot_exempt_ids; got {exempt!r}"
+		)
+
+	def test_stage_mode_without_snapshot_hard_fails(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Stage mode still requires a snapshot (empty is OK).  Orch
+		must write one before the first stage_packages step; if it
+		doesn't, deploy fails cleanly at the snapshot-required gate."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
 
 	def test_certify_mode_without_snapshot_hard_fails(
 		self, monkeypatch, tmp_path, capsys,
@@ -2414,9 +2487,10 @@ class TestDeployCertMode:
 		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
 
 		captured: dict = {}
-		def _spy(art, *, source_rebuild, run_snapshot, **kwargs):
+		def _spy(art, *, source_rebuild, run_snapshot, snapshot_exempt_ids, **kwargs):
 			captured["source_rebuild"] = source_rebuild
 			captured["run_snapshot"] = run_snapshot
+			captured["snapshot_exempt_ids"] = snapshot_exempt_ids
 			raise DeployError("short-circuit from test spy")
 
 		# `permissive_run_snapshot` already sets DRIFT_RUN_SNAPSHOT
@@ -2437,6 +2511,10 @@ class TestDeployCertMode:
 			f"{captured.get('source_rebuild')!r}"
 		)
 		assert captured.get("run_snapshot") is not None
+		assert captured.get("snapshot_exempt_ids") is None, (
+			"certify mode must NOT pass a producer-output exemption; "
+			"every consumed package must be in the run snapshot"
+		)
 
 	def test_invalid_cert_mode_fails_clearly(
 		self, monkeypatch, tmp_path, capsys,
@@ -2531,6 +2609,337 @@ class TestDeployCertMode:
 		err = capsys.readouterr().err
 		assert "DRIFT_SOURCE_REBUILD" in err
 		assert "DRIFT_CERT_MODE" in err
+
+	def test_orch_first_stage_shape_empty_snapshot_empty_libs(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""Orch FIRST-STAGE regression: the canonical shape orch
+		runs before any package has been staged.
+
+		  - `DRIFT_CERT_MODE=stage`
+		  - `DRIFT_RUN_SNAPSHOT` points at an empty-but-valid run
+		    snapshot (orch writes one before invoking the first
+		    stage_packages step)
+		  - libs tree (`--dest`) is empty
+		  - manifest has a single leaf library artifact with NO
+		    `package_deps` (e.g. orch's net-tls at the start of the
+		    run)
+
+		Must get past the snapshot-load gate, past
+		`_resolve_artifact_deps` (empty deps → empty resolved), and
+		reach `_deploy_artifact` so the artifact actually gets built.
+
+		This test exists because the empty-snapshot-before-first-
+		stage requirement is an orch-side contract that is NOT
+		obvious from the CLI surface.  If anyone tightens the
+		snapshot loader to require non-empty `packages`, or makes
+		stage mode short-circuit when `packages == {}`, orch's very
+		first stage step on every certification run will break
+		immediately.  Named explicitly so the regression surfaces
+		with exactly the right description."""
+		import base64
+		import hashlib as _hl
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_deploy import DeployError, run
+		from tools.drift_deploy.run_snapshot import write_run_snapshot
+
+		# Fresh scaffold with ZERO package_deps — matches a leaf
+		# producer artifact (e.g. net-tls at the start of an orch
+		# certification run).
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		manifest_path = manifest_dir / "manifest.json"
+		manifest_path.write_text(json.dumps({
+			"schema_version": 2,
+			"project": {
+				"name": "net-tls",
+				"license": "MIT",
+				"author_profile": "net-tls.author-profile",
+			},
+			"artifacts": [{
+				"kind": "package", "name": "net-tls", "version": "0.4.1",
+				"description": "test", "license": "MIT",
+				"entry_module": "net_tls.drift", "modules": ["net_tls.drift"],
+				"module_namespace": "net_tls",
+				"package_deps": [],  # leaf — no orch-managed deps
+			}],
+		}))
+		author_profile = manifest_dir / "net-tls.author-profile"
+		fake_pub_raw = b"\x00" * 32
+		fake_pub = base64.b64encode(fake_pub_raw).decode()
+		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
+		author_profile.write_text(json.dumps({
+			"format": "author-profile", "version": 0,
+			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
+			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+			"namespaces": ["net_tls.*"],
+		}))
+		sign_key_path = tmp_path / "deploy.key"
+		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
+
+		# Empty libs tree (orch always starts with a fresh --dest).
+		dest = tmp_path / "libs"
+		dest.mkdir()
+
+		# The canonical empty snapshot orch writes before the first
+		# stage_packages step.  Round-tripped through the real
+		# writer so we're pinning the actual on-disk shape, not an
+		# invention.
+		snap_path = tmp_path / "run-snapshot.json"
+		write_run_snapshot(snap_path, run_id="orch-first-stage", entries={})
+
+		# Cheap fake driftc — not invoked on this path (we spy
+		# `_deploy_artifact` before it gets called).
+		fake_driftc = tmp_path / "fake-driftc"
+		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
+		fake_driftc.chmod(0o755)
+
+		# Spy on _deploy_artifact — we only need to prove execution
+		# reached past resolve.  Empty deps + empty snapshot must
+		# not fail any of: env validation, snapshot load, resolve,
+		# producer-output exemption computation.
+		captured: dict = {}
+		def _spy(art, **kwargs):
+			captured["called"] = True
+			captured["art_name"] = art.name
+			captured["resolved"] = kwargs.get("resolved")
+			raise DeployError("short-circuit from test spy")
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap_path))
+		with _patch(
+			"tools.drift_deploy.drift_deploy._deploy_artifact",
+			side_effect=_spy,
+		):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+			])
+		assert rc == 1, "spy raised DeployError → rc=1"
+		assert captured.get("called") is True, (
+			"orch first-stage shape (empty snapshot + empty libs + "
+			"leaf artifact under DRIFT_CERT_MODE=stage) must reach "
+			"_deploy_artifact.  If this regression fires, check: "
+			"(a) snapshot loader still accepts empty packages dict; "
+			"(b) stage mode doesn't short-circuit when the snapshot "
+			"is empty; (c) _resolve_artifact_deps handles "
+			"package_deps=[] under source-rebuild."
+		)
+		assert captured.get("art_name") == "net-tls"
+		assert captured.get("resolved") == {}, (
+			"leaf artifact with no package_deps must resolve to {}"
+		)
+
+	def test_stage_multi_artifact_coartifact_bypasses_snapshot_gate(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""End-to-end regression for the drift-web stage_packages
+		shape: two-library manifest, co-artifact A already on disk
+		(as if published by an earlier iteration of the same deploy
+		or an earlier stage step), snapshot contains ONLY the
+		upstream dep.  Under `DRIFT_CERT_MODE=stage` the resolve for
+		artifact B succeeds because A is snapshot-exempt (it's a
+		producer output of THIS deploy).  Under `DRIFT_CERT_MODE=
+		certify` the same shape fails because certify applies no
+		exemption."""
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_deploy import _resolve_artifact_deps
+		from tools.drift_deploy.manifest import Artifact, PackageDep
+		from tools.drift_deploy.resolver import ResolvedDep
+		from tools.drift_deploy.run_snapshot import (
+			RunSnapshot, SnapshotEntry,
+		)
+
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+
+		# Snapshot contains only the upstream dep.
+		UPSTREAM_SCID = "sha256:" + "a" * 64
+		UPSTREAM_AK = "ed25519:upstream-author"
+		UPSTREAM_SAK = "ed25519:upstream-sak"
+		snapshot = RunSnapshot(
+			run_id="stage-e2e",
+			packages={
+				"upstream|1.0.0": SnapshotEntry(
+					source_content_id=UPSTREAM_SCID,
+					author_key=UPSTREAM_AK,
+					source_attestation_key=UPSTREAM_SAK,
+				),
+			},
+		)
+
+		# Package root: upstream (in snapshot) + co-artifact A (NOT
+		# in snapshot — a producer output of this manifest).
+		pkg_root = tmp_path / "libs"
+		pkg_root.mkdir()
+		(pkg_root / "upstream").mkdir()
+		(pkg_root / "upstream" / "1.0.0").mkdir()
+		(pkg_root / "upstream" / "1.0.0" / "upstream.dmp").write_bytes(b"fake")
+		(pkg_root / "coart-a").mkdir()
+		(pkg_root / "coart-a" / "0.1.0").mkdir()
+		(pkg_root / "coart-a" / "0.1.0" / "coart-a.dmp").write_bytes(b"fake")
+
+		# Manifests returned by the loader mock.
+		manifests_by_name = {
+			"upstream.dmp": {
+				"package_id": "upstream",
+				"package_version": "1.0.0",
+				"modules": [{"module_id": "upstream"}],
+				"required_deps": [],
+			},
+			"coart-a.dmp": {
+				"package_id": "coart-a",
+				"package_version": "0.1.0",
+				"modules": [{"module_id": "coart_a"}],
+				"required_deps": [],
+			},
+		}
+
+		def _loader(path):
+			from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
+			# Return a stand-in with `.manifest`.
+			class _FakePkg:
+				pass
+			fake = _FakePkg()
+			fake.manifest = manifests_by_name[path.name]
+			return fake
+
+		def _read_ak(path):
+			if path.name.startswith("upstream"):
+				return UPSTREAM_AK
+			return "ed25519:coart-a-author"
+
+		def _read_sak_meta(path, _manifest):
+			if path.name.startswith("upstream"):
+				return (UPSTREAM_SCID, UPSTREAM_SAK)
+			return ("sha256:" + "b" * 64, "ed25519:coart-a-sak")
+
+		# Artifact B consumes the upstream dep only (not coart-a).
+		# coart-a is just visible in the package root — that's the
+		# whole point: it's discovered by build_package_index and
+		# gated against the snapshot, not consumed.
+		art_b = Artifact(
+			kind="library", name="coart-b", version="0.1.0",
+			description="", license="MIT",
+			entry_module="coart_b.drift", modules=["coart_b.drift"],
+			module_namespace="coart_b",
+			package_deps=[PackageDep(name="upstream", version="1.0")],
+		)
+		# Lock entry for coart-b's consumed dep.
+		existing_lock = {
+			"coart-b": {
+				"upstream": ResolvedDep(
+					version="1.0.0",
+					sha256="",
+					dep_type="direct",
+					package_id="upstream",
+					author_key=UPSTREAM_AK,
+					source_content_id=UPSTREAM_SCID,
+					source_attestation_key=UPSTREAM_SAK,
+				),
+			},
+		}
+
+		co_artifact_names = {"coart-a", "coart-b"}
+
+		# ── Case 1: stage mode simulation — exempt co-artifacts.
+		# Under the real orch flow this is what `_run_impl` computes
+		# when DRIFT_CERT_MODE=stage; here we call
+		# `_resolve_artifact_deps` directly to keep the test
+		# focused on the build_package_index integration.
+		with _patch(
+			"tools.drift_deploy.resolver._read_author_key",
+			side_effect=_read_ak,
+		), _patch(
+			"tools.drift_deploy.resolver._read_source_attestation_meta",
+			side_effect=_read_sak_meta,
+		), _patch(
+			"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+			side_effect=_loader,
+		):
+			# Success under stage (exempt).
+			resolved = _resolve_artifact_deps(
+				art_b,
+				package_roots=[pkg_root],
+				lock_path=manifest_dir / "lock.json",
+				existing_lock=existing_lock,
+				co_artifact_names=co_artifact_names,
+				source_rebuild=True,
+				run_snapshot=snapshot,
+				snapshot_exempt_ids=co_artifact_names,
+			)
+			assert "upstream" in resolved
+			assert resolved["upstream"].version == "1.0.0"
+
+		# ── Case 2: certify mode simulation — no exemption,
+		# co-artifact on disk causes hard fail.
+		with _patch(
+			"tools.drift_deploy.resolver._read_author_key",
+			side_effect=_read_ak,
+		), _patch(
+			"tools.drift_deploy.resolver._read_source_attestation_meta",
+			side_effect=_read_sak_meta,
+		), _patch(
+			"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+			side_effect=_loader,
+		):
+			from tools.drift_deploy.drift_deploy import DeployError
+			with pytest.raises(DeployError, match="coart-a.*not present in run snapshot"):
+				_resolve_artifact_deps(
+					art_b,
+					package_roots=[pkg_root],
+					lock_path=manifest_dir / "lock.json",
+					existing_lock=existing_lock,
+					co_artifact_names=co_artifact_names,
+					source_rebuild=True,
+					run_snapshot=snapshot,
+					snapshot_exempt_ids=None,  # certify: no exemption
+				)
+
+	def test_manual_source_rebuild_flag_behaves_like_certify(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""Manual `--source-rebuild` (CLI flag, no `DRIFT_CERT_MODE`)
+		engages source-rebuild but NOT the producer-output exemption.
+		The flag is a manual verification selector — it must not
+		silently permit missing snapshot entries.  Only explicit
+		`DRIFT_CERT_MODE=stage` carries the exemption."""
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_deploy import DeployError, run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+		from tools.drift_deploy.run_snapshot import write_run_snapshot
+		snap_path = tmp_path / "run-snapshot.json"
+		write_run_snapshot(snap_path, run_id="manual-flag-test", entries={})
+
+		captured: dict = {}
+		def _spy(art, *, source_rebuild, run_snapshot, snapshot_exempt_ids, **kwargs):
+			captured["source_rebuild"] = source_rebuild
+			captured["snapshot_exempt_ids"] = snapshot_exempt_ids
+			raise DeployError("short-circuit from test spy")
+
+		# CLI flag, no DRIFT_CERT_MODE env.
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+				"--source-rebuild",
+				"--run-snapshot", str(snap_path),
+			])
+		assert rc == 1
+		assert captured.get("source_rebuild") is True
+		assert captured.get("snapshot_exempt_ids") is None, (
+			"Manual --source-rebuild (no DRIFT_CERT_MODE=stage) must "
+			"NOT carry the producer-output exemption.  The flag is a "
+			"verification selector, behaviourally equivalent to "
+			"certify; only explicit DRIFT_CERT_MODE=stage enables the "
+			"exemption."
+		)
 
 	def test_cli_flag_plus_invalid_cert_mode_still_rejects(
 		self, monkeypatch, tmp_path, capsys,

@@ -74,6 +74,9 @@ def _clean_env() -> dict[str, str]:
 # semantics.  See `build_cmd.cert_mode_from_env`.
 from tools.drift_deploy.build_cmd import CertModeError
 from tools.drift_deploy.build_cmd import env_true as _env_true
+from tools.drift_deploy.build_cmd import (
+	producer_output_exemption_active as _producer_output_exemption_active,
+)
 from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
@@ -302,6 +305,7 @@ def _resolve_deps(
 	co_artifact_names: set[str] | None = None,
 	source_rebuild: bool = False,
 	run_snapshot: Any = None,
+	snapshot_exempt_ids: set[str] | None = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Resolve dependencies for a build.
@@ -396,6 +400,7 @@ def _resolve_deps(
 			pkg_index = build_package_index(
 				package_roots,
 				run_snapshot=run_snapshot if source_rebuild else None,
+				snapshot_exempt_ids=snapshot_exempt_ids if source_rebuild else None,
 			)
 		except ResolutionError as e:
 			# Surface index-time failures (snapshot mismatch,
@@ -420,6 +425,7 @@ def _resolve_deps(
 				co_artifact_names=co_artifact_names or set(),
 				pkg_index=pkg_index,
 				run_snapshot=run_snapshot,
+				snapshot_exempt_ids=snapshot_exempt_ids,
 			)
 			if rebuild.errors:
 				raise BuildError(
@@ -546,10 +552,19 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 			run_snap = load_run_snapshot(Path(snap_path))
 		except (ValueError, OSError) as e:
 			raise BuildError(f"run snapshot load failed: {e}")
+	# Stage-mode producer-output exemption: intra-manifest
+	# library-artifact peers skip the snapshot gate while still
+	# being indexed.  Certify / manual --source-rebuild: None.
+	exempt_ids = (
+		set(co_artifact_names)
+		if src_rebuild and _producer_output_exemption_active()
+		else None
+	)
 	resolved = _resolve_deps(art, manifest_dir, package_roots,
 		co_artifact_names=co_artifact_names,
 		source_rebuild=src_rebuild,
-		run_snapshot=run_snap)
+		run_snapshot=run_snap,
+		snapshot_exempt_ids=exempt_ids)
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)

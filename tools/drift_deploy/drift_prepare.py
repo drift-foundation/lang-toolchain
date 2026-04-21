@@ -48,6 +48,9 @@ from tools.drift_deploy.semver import parse_version
 # `drift prepare --check` (unset `DRIFT_CERT_MODE`) stays in strict
 # mode.
 from tools.drift_deploy.build_cmd import CertModeError
+from tools.drift_deploy.build_cmd import (
+	producer_output_exemption_active as _producer_output_exemption_active,
+)
 from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
@@ -254,10 +257,22 @@ def _run_impl(args: argparse.Namespace) -> int:
 			_prepare_run_snap = load_run_snapshot(Path(_snap_path))
 		except (ValueError, OSError) as e:
 			raise PrepareError(f"run snapshot load failed: {e}")
+	# Compute co-artifact names up front so they can be passed as
+	# `snapshot_exempt_ids` under stage-mode source-rebuild (the
+	# intra-manifest library-artifact peers are producer outputs of
+	# the stage deploy; they must not be gated against the snapshot
+	# here either, for consistency with `drift_deploy._run_impl`).
+	_early_co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
+	_prepare_exempt_ids: set[str] | None = (
+		set(_early_co_artifact_names)
+		if _prepare_run_snap is not None and _producer_output_exemption_active()
+		else None
+	)
 	try:
 		pkg_index = build_package_index(
 			package_roots,
 			run_snapshot=_prepare_run_snap,
+			snapshot_exempt_ids=_prepare_exempt_ids,
 		)
 	except ResolutionError as e:
 		# Surface index-time failures (snapshot mismatch, missing
@@ -470,6 +485,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 					co_artifact_names=co_artifact_names,
 					pkg_index=pkg_index,
 					run_snapshot=_prepare_run_snap,
+					snapshot_exempt_ids=_prepare_exempt_ids,
 				)
 				errors.extend(result.errors)
 				fresh_resolved[art.name] = result.resolved_graph

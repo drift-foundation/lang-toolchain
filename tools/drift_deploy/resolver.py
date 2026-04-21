@@ -323,6 +323,7 @@ def build_package_index(
 	trust_store: Any = None,
 	core_trust_store: Any = None,
 	run_snapshot: Any = None,
+	snapshot_exempt_ids: Any = None,
 ) -> dict[str, list[PackageEntry]]:
 	"""
 	Build a package index from package roots.
@@ -385,9 +386,29 @@ def build_package_index(
 	`drift/trust.json` is NOT consulted — the snapshot IS the
 	source-of-truth for what this run authorised.
 
+	`snapshot_exempt_ids` (run-snapshot mode only): an iterable of
+	`pkg_id` strings whose on-disk packages SKIP the snapshot-match
+	gate while still being discovered and added to the index.  This
+	exists for the `DRIFT_CERT_MODE=stage` producer-output case: a
+	multi-artifact `drift deploy` publishes artifact A (producer
+	output) then resolves artifact B against a package root that
+	now contains A.  Under stage semantics A is an output of THIS
+	deploy, not a consumed dep — the snapshot hasn't been refreshed
+	mid-deploy to include A yet, so gating A would fail a valid
+	producer run.  `DRIFT_CERT_MODE=certify` (pure consumer) must
+	pass `snapshot_exempt_ids=None` — certify's contract is "every
+	package consumed is already in the snapshot", and allowing
+	exemptions there would defeat the gate.  Only co-artifacts of
+	the manifest being deployed belong in this set; anything else
+	is a producer-output claim the caller can't legitimately make.
+
 	`trust_store` and `run_snapshot` are MUTUALLY EXCLUSIVE —
 	passing both raises `ValueError` (they represent different
 	verification contracts and must not silently overlay).
+	`snapshot_exempt_ids` is only meaningful under `run_snapshot`
+	mode; passing it with `trust_store` or without any verification
+	mode is silently ignored (no harm — exemption is a gate-skip,
+	and only the run-snapshot gate looks at it).
 	"""
 	if trust_store is not None and run_snapshot is not None:
 		raise ValueError(
@@ -778,7 +799,14 @@ def build_package_index(
 			# downstream's local trust.json is NOT consulted —
 			# author trust was verified by orch at staging time and
 			# attested through the snapshot.
-			if run_snapshot is not None:
+			#
+			# `snapshot_exempt_ids` skips the gate for callers that
+			# have declared a package as a producer output of the
+			# current deploy invocation (stage-mode co-artifacts).
+			# See the docstring for the full rule.
+			if run_snapshot is not None and (
+				snapshot_exempt_ids is None or pkg_id not in snapshot_exempt_ids
+			):
 				from tools.drift_deploy.run_snapshot import (
 					verify_disk_entry_against_snapshot,
 				)

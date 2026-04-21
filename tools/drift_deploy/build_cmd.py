@@ -118,17 +118,30 @@ def source_rebuild_enabled(args) -> bool:
 
 	Returns True iff EITHER:
 	  - explicit `--source-rebuild` CLI flag is set, OR
-	  - `DRIFT_CERT_MODE=certify` is in the environment.
+	  - `DRIFT_CERT_MODE` is set (stage OR certify).
 
-	`DRIFT_CERT_MODE=stage` is a producer phase and does NOT engage
-	source-rebuild verification; commands run in normal producer
-	mode.  Unset `DRIFT_CERT_MODE` behaves the same as stage (plain
-	local behaviour) — normal teams never set the env.
+	Both stage and certify phases consume dependencies under
+	source-rebuild semantics (fresh-resolve against the snapshot-
+	gated index; lock becomes evidence, not gate).  The difference
+	is WHICH packages must be in the snapshot:
 
-	Under the certify path, each command's `_run_impl` separately
+	- `stage`  — producer role.  Consumed deps must be in the
+	  snapshot, BUT the manifest's library-artifact peers (intra-
+	  manifest co-artifacts that this deploy is itself producing)
+	  are exempt.  See `producer_output_exemption_active`.
+	- `certify` — consumer role.  Every consumed package must be
+	  in the snapshot; no exemption.  `drift build` / `drift
+	  prepare --check` under certify use this mode; no
+	  producer-output exemption applies because those commands
+	  aren't publishing.
+
+	Under source-rebuild, each command's `_run_impl` separately
 	requires a run snapshot (via `--run-snapshot` or
 	`DRIFT_RUN_SNAPSHOT`) and hard-fails if none is supplied — the
 	snapshot is a gate, not a hint.
+
+	Unset `DRIFT_CERT_MODE` is normal local behaviour — strict lock
+	semantics, no snapshot involved.  Normal teams never set the env.
 
 	Env validation runs FIRST, unconditionally, before the CLI flag
 	is consulted.  The retired `DRIFT_SOURCE_REBUILD` env and any
@@ -139,7 +152,26 @@ def source_rebuild_enabled(args) -> bool:
 	exact drift the retirement is meant to catch.  Callers wrap
 	`CertModeError` into their native error type."""
 	mode = cert_mode_from_env()
-	return getattr(args, "source_rebuild", False) or mode == CERT_MODE_CERTIFY
+	return getattr(args, "source_rebuild", False) or mode in (CERT_MODE_STAGE, CERT_MODE_CERTIFY)
+
+
+def producer_output_exemption_active() -> bool:
+	"""True iff `DRIFT_CERT_MODE=stage`.
+
+	Callers (`drift_deploy._run_impl`) use this to decide whether
+	to thread their manifest's library-artifact names as
+	`snapshot_exempt_ids` into `build_package_index`.  Stage is the
+	only phase where intra-manifest co-artifacts legitimately
+	bypass the snapshot gate — because this deploy is PRODUCING
+	them.  Certify and manual `--source-rebuild` are pure consumer
+	paths: no exemption.
+
+	Separate from `source_rebuild_enabled` so the caller can ask
+	the two questions (is source-rebuild active? is the stage
+	producer-output exemption active?) without re-parsing the env.
+	Raises `CertModeError` on retired env / malformed mode, same
+	as the other helpers — env validation stays in one place."""
+	return cert_mode_from_env() == CERT_MODE_STAGE
 
 
 def resolve_driftc(explicit: Path | None = None) -> Path | None:

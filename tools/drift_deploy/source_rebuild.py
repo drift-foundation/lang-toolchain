@@ -178,6 +178,7 @@ def resolve_source_rebuild(
 	run_snapshot: Any,
 	pkg_index: dict[str, list[PackageEntry]] | None = None,
 	co_artifact_entries: dict[str, PackageEntry] | None = None,
+	snapshot_exempt_ids: set[str] | None = None,
 ) -> SourceRebuildResult:
 	"""Produce the source-rebuild run graph for one artifact.
 
@@ -200,7 +201,8 @@ def resolve_source_rebuild(
 	`pkg_index` may be supplied to amortize work across multiple
 	artifacts (e.g. `drift prepare --check` iterates the whole
 	manifest).  If `None`, this function builds it with the same
-	`run_snapshot` gate.
+	`run_snapshot` gate and the caller-supplied
+	`snapshot_exempt_ids`.
 
 	`co_artifact_entries` is an optional map of pkg_id →
 	PackageEntry overlays (co-artifacts of the current manifest
@@ -208,6 +210,17 @@ def resolve_source_rebuild(
 	externally-discovered entry with the same pkg_id — the
 	resolver will pin to the co-artifact's own version.  Matches
 	the pattern used in `drift_prepare.py::_run_impl`.
+
+	`snapshot_exempt_ids` (stage-mode producer-output exemption):
+	pkg_ids whose disk packages skip the run-snapshot gate while
+	still being indexed.  Only the caller that knows which
+	artifacts it is PRODUCING in this deploy invocation should
+	populate this (the `drift_deploy._run_impl` call site under
+	`DRIFT_CERT_MODE=stage` uses the current manifest's library-
+	artifact names).  `DRIFT_CERT_MODE=certify` (pure consumer)
+	must pass `None` — certify's contract requires every consumed
+	package to be in the snapshot, and allowing exemptions there
+	would defeat the gate.
 
 	`existing_lock_graph` is the lock's per-artifact map (or None
 	if no lock exists yet).  Used for evidence only; the lock is
@@ -227,6 +240,7 @@ def resolve_source_rebuild(
 		pkg_index = build_package_index(
 			package_roots,
 			run_snapshot=run_snapshot,
+			snapshot_exempt_ids=snapshot_exempt_ids,
 		)
 		# Layer in the caller-supplied co-artifact overlays AFTER
 		# the snapshot-gated index is built.  Co-artifacts come from

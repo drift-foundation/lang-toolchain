@@ -128,14 +128,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	return p
 
 
-# Uniform lane selector: `--source-rebuild` CLI flag OR
-# `DRIFT_CERT_MODE=certify`.  Orch's certification-staging phase
-# runs under `DRIFT_CERT_MODE=stage`, which is a producer role
-# (no source-rebuild verification, no snapshot required) — the
-# phase is named explicitly rather than inferred from command
-# semantics.  See `build_cmd.cert_mode_from_env`.
+# Uniform lane selector: `--source-rebuild` CLI flag OR any
+# `DRIFT_CERT_MODE` value.  Both stage and certify consume deps
+# under source-rebuild semantics (fresh-resolve against snapshot-
+# gated index; lock = evidence).  The difference is whether
+# intra-manifest co-artifacts (producer outputs of THIS deploy)
+# are exempt from the snapshot gate —
+# `producer_output_exemption_active` returns True iff stage.
 from tools.drift_deploy.build_cmd import CertModeError
 from tools.drift_deploy.build_cmd import env_true as _env_true
+from tools.drift_deploy.build_cmd import (
+	producer_output_exemption_active as _producer_output_exemption_active,
+)
 from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
@@ -321,6 +325,7 @@ def _resolve_artifact_deps(
 	co_artifact_names: set[str] | None = None,
 	source_rebuild: bool = False,
 	run_snapshot: Any = None,
+	snapshot_exempt_ids: set[str] | None = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Load locked dependencies for a single artifact.
@@ -332,6 +337,16 @@ def _resolve_artifact_deps(
 	current manifest.  Only those IDs may legitimately appear in the
 	lock with `dep_type: "co-artifact"` — anything else claiming
 	co-artifact status is treated as lock corruption and rejected.
+
+	`snapshot_exempt_ids` is threaded into the run-snapshot-gated
+	`build_package_index` call under source-rebuild.  Populated by
+	the caller (`_run_impl`) with the manifest's library-artifact
+	names when `DRIFT_CERT_MODE=stage` — intra-manifest co-artifacts
+	published earlier in this same deploy invocation skip the
+	snapshot gate because they are producer outputs of THIS run, not
+	consumed deps.  Under `DRIFT_CERT_MODE=certify` or manual
+	`--source-rebuild`, this is `None` and the gate fires on every
+	discovered package.
 	"""
 	if not art.package_deps:
 		return {}
@@ -372,6 +387,7 @@ def _resolve_artifact_deps(
 		pkg_index = build_package_index(
 			package_roots,
 			run_snapshot=run_snapshot if source_rebuild else None,
+			snapshot_exempt_ids=snapshot_exempt_ids if source_rebuild else None,
 		)
 	except ResolutionError as e:
 		raise DeployError(str(e))
@@ -390,6 +406,7 @@ def _resolve_artifact_deps(
 			co_artifact_names=co_artifact_names or set(),
 			pkg_index=pkg_index,
 			run_snapshot=run_snapshot,
+			snapshot_exempt_ids=snapshot_exempt_ids,
 		)
 		if rebuild.errors:
 			raise DeployError(
@@ -1505,15 +1522,22 @@ def _run_impl(args: argparse.Namespace) -> int:
 	co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
 
 	# Source-rebuild lane selector + orch run snapshot.  Deploy
-	# enters source-rebuild consumer mode via the explicit
-	# `--source-rebuild` CLI flag OR `DRIFT_CERT_MODE=certify`
-	# (orch's verification-phase signal).  `DRIFT_CERT_MODE=stage`
-	# and unset both leave deploy in normal producer mode —
-	# staging happens before the snapshot exists, so the producer
-	# path must not require the snapshot.  Under source-rebuild,
-	# the snapshot is REQUIRED — no fallback to local trust-store
-	# verification.
+	# enters source-rebuild mode under `DRIFT_CERT_MODE=stage`,
+	# `DRIFT_CERT_MODE=certify`, or explicit `--source-rebuild`.
+	# Unset leaves deploy in strict-lock producer mode (local
+	# publishing).  Under source-rebuild the snapshot is REQUIRED.
+	#
+	# The stage vs certify split is expressed as `snapshot_exempt_ids`:
+	# under stage, the manifest's library-artifact names are exempt
+	# from the snapshot gate (they are PRODUCER OUTPUTS of this
+	# deploy invocation, not consumed deps — and orch hasn't
+	# refreshed the snapshot mid-deploy to include them).  Under
+	# certify or manual `--source-rebuild`, no exemption: every
+	# package the index discovers must be in the snapshot.
 	_src_rebuild = _source_rebuild_enabled(args)
+	_exempt_ids: set[str] | None = (
+		set(co_artifact_names) if _src_rebuild and _producer_output_exemption_active() else None
+	)
 	_run_snap = None
 	if _src_rebuild:
 		from tools.drift_deploy.run_snapshot import load_run_snapshot
@@ -1555,6 +1579,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				co_artifact_names=co_artifact_names,
 				source_rebuild=_src_rebuild,
 				run_snapshot=_run_snap,
+				snapshot_exempt_ids=_exempt_ids,
 			)
 			resolved_map[art.name] = resolved
 			if resolved:

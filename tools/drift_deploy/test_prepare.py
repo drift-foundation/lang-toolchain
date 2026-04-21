@@ -1127,15 +1127,24 @@ class TestPrepareCheckSourceRebuild:
 			assert "drift vs. lock" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_cert_mode_stage_stays_strict(
-		self, mock_resolve: MagicMock, mock_index: MagicMock,
-		capsys, monkeypatch,
+	def test_cert_mode_stage_engages_source_rebuild_with_exemption(
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys, monkeypatch,
 	) -> None:
-		"""Regression #1: `DRIFT_CERT_MODE=stage` (orch producer
-		phase) must NOT flip `--check` into source-rebuild mode.
-		Stage is the producer phase — the snapshot does not exist
-		yet — so lock check stays strict.  Same for unset env."""
+		"""Refined 0.31.5 contract: `DRIFT_CERT_MODE=stage` engages
+		source-rebuild on --check (same as certify for consumed
+		deps) AND carries the producer-output exemption.  The
+		distinction between stage and certify is not whether
+		source-rebuild fires — it always does under any cert mode
+		— but whether intra-manifest co-artifacts skip the snapshot
+		gate.
+
+		Concrete check: --check under stage must accept the same
+		bytes/signer drift that --check under certify accepts (test
+		fixture feeds differing shas to each path and asserts the
+		source-rebuild path wins)."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -1144,9 +1153,11 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
+		]
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="BBB", dep_type="direct",
-				package_id="ext.lib", author_key="ed25519:key-A",
+				package_id="ext.lib", author_key="ed25519:key-B",
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
@@ -1158,21 +1169,28 @@ class TestPrepareCheckSourceRebuild:
 			monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check",
-			])) == 1, (
-				"DRIFT_CERT_MODE=stage must NOT relax --check — "
-				"stage is the producer phase, lock check stays strict"
+			])) == 0, (
+				"DRIFT_CERT_MODE=stage engages source-rebuild on --check: "
+				"the mock_sr_resolve path (bytes drifted) should succeed"
 			)
+			out = capsys.readouterr().out
+			assert "source-rebuild" in out
+			assert "drift vs. lock" in out
 
 	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
-		"""Unit pin for the uniform lane selector (prepare side):
-		  - unset cert_mode, no flag → False
-		  - `stage`, no flag → False
-		  - `certify`, no flag → True
+		"""Unit pin for the uniform lane selector (prepare side),
+		refined 0.31.5 contract:
+		  - unset cert_mode, no flag → False (normal local)
+		  - `stage`, no flag → True (source-rebuild + exemption)
+		  - `certify`, no flag → True (source-rebuild, no exemption)
 		  - CLI flag wins regardless of cert_mode
 		  - invalid cert_mode → CertModeError
 		  - DRIFT_SOURCE_REBUILD set → CertModeError"""
 		import argparse as _ap
-		from tools.drift_deploy.build_cmd import CertModeError
+		from tools.drift_deploy.build_cmd import (
+			CertModeError,
+			producer_output_exemption_active,
+		)
 		from tools.drift_deploy.drift_prepare import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
@@ -1181,14 +1199,17 @@ class TestPrepareCheckSourceRebuild:
 		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
-		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(off) is True
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is True
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 		assert _source_rebuild_enabled(off) is True
 		assert _source_rebuild_enabled(on) is True
+		assert producer_output_exemption_active() is False
 
 		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
 		with pytest.raises(CertModeError):
