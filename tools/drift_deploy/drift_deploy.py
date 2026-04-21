@@ -102,37 +102,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Build + sign + smoke but do not publish")
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
-			"Source-rebuild certification mode: verify each staged "
-			"dep against orch's run snapshot (see `--run-snapshot`), "
-			"not against lock equality or local trust-store "
-			"authorisation.  Requires `--run-snapshot` or "
-			"`DRIFT_RUN_SNAPSHOT`; no snapshot is a hard fail.  "
-			"Use when consuming packages that orch selected for a "
-			"source-from-commit certification run.  Also enabled "
-			"by `DRIFT_SOURCE_REBUILD=1` so orch can set the lane "
-			"once for the whole certification run."
+			"Source-rebuild certification mode (downstream consumer "
+			"role): verify each staged dep against orch's run "
+			"snapshot (see `--run-snapshot`), not against lock "
+			"equality or local trust-store authorisation.  Requires "
+			"`--run-snapshot` or `DRIFT_RUN_SNAPSHOT`; no snapshot "
+			"is a hard fail.  Use when consuming packages that "
+			"orch selected for a source-from-commit certification "
+			"run.  Explicit CLI flag only — ambient "
+			"`DRIFT_SOURCE_REBUILD=1` is intentionally IGNORED on "
+			"the deploy path so orch's producer/staging invocation "
+			"(which must run in normal mode, ahead of the "
+			"snapshot) is not misrouted into consumer mode."
 		))
 	p.add_argument("--run-snapshot", type=UserPath, default=None,
 		help=(
 			"Path to the orch-produced run snapshot "
 			"(`tools.drift_deploy.run_snapshot` JSON v0).  Required "
-			"under `--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`.  "
-			"Also honoured via `DRIFT_RUN_SNAPSHOT=<path>`; CLI "
-			"wins on conflict.  Pins source identity (scid + signer "
-			"kids) per package so downstream consumers verify they "
-			"are consuming the exact source graph orch certified "
-			"without carrying upstream author trust in local "
-			"`drift/trust.json`."
+			"under `--source-rebuild`.  Also honoured via "
+			"`DRIFT_RUN_SNAPSHOT=<path>`; CLI wins on conflict.  "
+			"Pins source identity (scid + signer kids) per package "
+			"so downstream consumers verify they are consuming the "
+			"exact source graph orch certified without carrying "
+			"upstream author trust in local `drift/trust.json`."
 		))
 	return p
 
 
-# Re-export from the shared module so `drift build` and `drift deploy`
-# share a single source of truth for the source-rebuild lane selector.
-# Any future change to what enables source-rebuild mode touches ONE
-# function, not two that could drift apart silently.
+# Deploy uses the CLI-only lane selector.  Ambient
+# `DRIFT_SOURCE_REBUILD=1` must NOT route deploy into source-rebuild
+# mode because orch's producer/staging step runs `drift deploy --dest
+# ...` BEFORE the run snapshot exists, under the same ambient env the
+# rest of the certification run (build / prepare --check) uses.  See
+# `build_cmd.source_rebuild_enabled_deploy` for the full rationale.
 from tools.drift_deploy.build_cmd import env_true as _env_true
-from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
+from tools.drift_deploy.build_cmd import source_rebuild_enabled_deploy as _source_rebuild_enabled
 
 
 def _resolve_driftc(args: argparse.Namespace) -> Path:
@@ -1497,11 +1501,15 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# status in the lock is rejected at verify time.
 	co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
 
-	# Source-rebuild lane selector + orch run snapshot.  The snapshot
-	# is loaded once here and shared across artifacts in this deploy
-	# run (a single run snapshot covers the whole orch-selected
-	# graph).  Under source-rebuild, the snapshot is REQUIRED — no
-	# fallback to local trust-store verification.
+	# Source-rebuild lane selector + orch run snapshot.  Deploy
+	# enters source-rebuild mode ONLY via the explicit
+	# `--source-rebuild` CLI flag; ambient `DRIFT_SOURCE_REBUILD=1`
+	# is intentionally ignored here (orch sets that env for the
+	# whole certification run but invokes `drift deploy` twice
+	# with different roles — producer/staging first, downstream
+	# consumer later — and only the latter should engage
+	# source-rebuild mode).  Under source-rebuild, the snapshot is
+	# REQUIRED — no fallback to local trust-store verification.
 	_src_rebuild = _source_rebuild_enabled(args)
 	_run_snap = None
 	if _src_rebuild:

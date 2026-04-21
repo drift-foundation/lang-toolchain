@@ -30,32 +30,73 @@ def env_true(name: str) -> bool:
 
 
 def source_rebuild_enabled(args) -> bool:
-	"""Source-rebuild lane selector: CLI flag OR
-	`DRIFT_SOURCE_REBUILD=1` env var.  Shared between `drift build`,
-	`drift deploy`, and `drift prepare --check` so the three CLI
-	surfaces cannot disagree on what enables source-rebuild mode.
-	The env-var path is what orch sets for source-from-commit
-	certification runs so repo-owned `just test` / `just stress` /
-	`just perf` / `just deploy` invocations — including the
-	lock-check step that calls `drift prepare --check` — pick up
-	the lane without each justfile threading `--source-rebuild`
-	explicitly.  Mirrors the `DRIFT_DEBUG=1` pattern.  Non-truthy
-	env values (`0`, `false`, empty) explicitly leave the mode off
-	so ambient shell-profile exports cannot silently flip humans
-	into the certification lane.
+	"""Source-rebuild lane selector for `drift build` and
+	`drift prepare --check`: CLI flag OR `DRIFT_SOURCE_REBUILD=1`
+	env var.  The env-var path is what orch sets for source-from-
+	commit certification runs so repo-owned `just test` /
+	`just stress` / `just perf` invocations — including the
+	lock-check step that calls `drift prepare --check` and the
+	repo-owned `drift build` step — pick up the lane without each
+	justfile threading `--source-rebuild` explicitly.  Mirrors the
+	`DRIFT_DEBUG=1` pattern.  Non-truthy env values (`0`, `false`,
+	empty) explicitly leave the mode off so ambient shell-profile
+	exports cannot silently flip humans into the certification lane.
 
-	Consumers treat the selector asymmetrically:
-	- `drift build` / `drift deploy`: the flag selects the
-	  verification mode for the lock vs. on-disk package index.
-	- `drift prepare --check`: the flag selects the comparator
-	  used to diff the on-disk lock against the re-resolved graph.
-	  Passing `--source-rebuild` to `drift prepare` WITHOUT
-	  `--check` is fail-fast at the CLI layer (the lock-writing
-	  path is always authoritative/strict by design); the env-var
-	  form is silently ignored on that write path so orch can set
-	  it globally for the whole certification environment without
-	  breaking write-mode invocations within that env."""
+	`drift deploy` DOES NOT use this helper.  Deploy runs in two
+	distinct roles — producer/staging (normal mode, ahead of the
+	run snapshot) and downstream source-rebuild consumer (requires
+	a snapshot that only exists AFTER staging) — and orch invokes
+	the staging role under the ambient `DRIFT_SOURCE_REBUILD=1`
+	it sets for the whole certification run.  Threading the env
+	var into deploy would misroute the producer/staging call into
+	snapshot-required mode and fail before staging can even emit
+	the snapshot.  Deploy therefore honours `--source-rebuild`
+	only as an explicit, opt-in CLI flag via
+	`source_rebuild_enabled_deploy` below.
+
+	Asymmetry summary:
+	- `drift build` / `drift prepare --check` (this helper): CLI
+	  flag OR `DRIFT_SOURCE_REBUILD=1` env var.  The flag selects
+	  the lock-vs-index verification mode (build) or the
+	  lock-vs-fresh comparator (prepare --check).  Passing
+	  `--source-rebuild` to `drift prepare` WITHOUT `--check` is
+	  fail-fast at the CLI layer (the lock-writing path is always
+	  authoritative/strict by design); the env-var form is
+	  silently ignored on that write path so orch can set it
+	  globally for the whole certification environment without
+	  breaking write-mode invocations within that env.
+	- `drift deploy` (separate helper below): CLI flag ONLY.
+	  Ambient `DRIFT_SOURCE_REBUILD=1` must NOT route deploy into
+	  source-rebuild mode; the staging invocation orch issues
+	  runs in normal producer mode and emits the snapshot."""
 	return getattr(args, "source_rebuild", False) or env_true("DRIFT_SOURCE_REBUILD")
+
+
+def source_rebuild_enabled_deploy(args) -> bool:
+	"""Source-rebuild lane selector for `drift deploy` ONLY: CLI
+	flag, never the env var.
+
+	Why:  orch runs `drift deploy --dest ...` as the producer/
+	staging step, BEFORE the run snapshot exists — the snapshot
+	is emitted after staging precisely so it can pin the source
+	identity that staging published.  Staging therefore MUST run
+	in normal producer mode.  Under the prior symmetric contract,
+	orch's ambient `DRIFT_SOURCE_REBUILD=1` (set once for the
+	whole certification run so `drift build` / `drift prepare
+	--check` picked up the lane automatically) misrouted the
+	staging `drift deploy` into snapshot-required consumer mode
+	and hard-failed with "run snapshot required" before staging
+	could emit the snapshot — the phase-order bug that motivated
+	this split.
+
+	How to apply:  an explicit `drift deploy --source-rebuild`
+	(manual, intentional, downstream-consumer role) still engages
+	source-rebuild mode and still requires `--run-snapshot` /
+	`DRIFT_RUN_SNAPSHOT`; ambient env-only never does.
+
+	See `source_rebuild_enabled` above for the build/prepare
+	helper that keeps the CLI-OR-env contract."""
+	return getattr(args, "source_rebuild", False)
 
 
 def resolve_driftc(explicit: Path | None = None) -> Path | None:

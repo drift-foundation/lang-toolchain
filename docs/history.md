@@ -1,6 +1,66 @@
 # Drift development history
 
 ## 2026-04-21
+- **`drift deploy` stops honouring ambient
+  `DRIFT_SOURCE_REBUILD=1` (0.31.4, ABI unchanged at 10).**
+  Phase-order fix on top of the same-day 0.31.3 run-snapshot
+  landing.
+
+  The bug: orch's `stage_packages` step invokes `drift deploy
+  --dest <libs>` as the producer/staging call.  Orch sets
+  `DRIFT_SOURCE_REBUILD=1` once for the whole certification
+  run so repo-owned `just test` / `just stress` / `just perf`
+  → `drift build` / `drift prepare --check` invocations pick
+  up the lane without each justfile threading the flag.  Under
+  the pre-0.31.4 symmetric contract, that same ambient env
+  routed the staging `drift deploy` into source-rebuild
+  consumer mode, which requires a run snapshot — but the
+  snapshot does not exist yet, because staging is what
+  produces it.  The deploy aborted with "run snapshot required"
+  before staging could emit the snapshot:
+
+      === [drift-mariadb-client] stage_packages ===
+      command: ['drift', 'deploy', '--dest', '<libs>']
+      output: error: source-rebuild mode requires a run snapshot.
+      exit: 1
+
+  The fix splits the lane selector in
+  `tools/drift_deploy/build_cmd.py`:
+
+    - `source_rebuild_enabled(args)` (unchanged contract):
+      CLI flag OR `DRIFT_SOURCE_REBUILD=1` env var.  Used by
+      `drift build` and `drift prepare --check` — both are
+      repo-owned justfile paths orch cannot rewrite.
+    - `source_rebuild_enabled_deploy(args)` (new, CLI-only):
+      honours the explicit `--source-rebuild` flag, never the
+      env var.  Wired into `drift_deploy._run_impl`.
+
+  An explicit `drift deploy --source-rebuild` (manual,
+  downstream-consumer role) still engages source-rebuild mode
+  and still requires `--run-snapshot` / `DRIFT_RUN_SNAPSHOT`;
+  only the ambient-env path is withdrawn.
+
+  Regression coverage in `test_deploy.py::
+  TestDeploySourceRebuildEnvVar`:
+    - `test_helper_matrix` pins the deploy helper: truthy env
+      values do NOT enable deploy mode; CLI flag does.
+    - `test_cli_flag_reaches_resolve_artifact_deps_through_run`
+      pins CLI-flag threading and confirms ambient env without
+      the flag leaves `source_rebuild=False`.
+    - `test_ambient_env_var_plus_no_snapshot_stays_producer_mode`
+      is the orch-shape regression: exact `drift deploy --dest
+      ...` invocation with `DRIFT_SOURCE_REBUILD=1` ambient and
+      no flag / no snapshot must reach `_resolve_artifact_deps`
+      in normal producer mode rather than fail at the pre-
+      resolve snapshot-required gate.
+    - `test_source_rebuild_without_run_snapshot_hard_fails` now
+      triggers via the CLI flag (the env-only trigger no longer
+      reaches the gate).
+
+  `drift build` / `drift prepare --check` env-var tests are
+  unchanged — their CLI-OR-env contract is still the correct
+  shape for the repo-owned justfile paths.
+
 - **Source-rebuild run-snapshot model replaces downstream trust-
   store consultation (0.31.3, ABI unchanged at 10).** Branch
   `fix/source-rebuild-trust-anchor` (fourth fix on the same
