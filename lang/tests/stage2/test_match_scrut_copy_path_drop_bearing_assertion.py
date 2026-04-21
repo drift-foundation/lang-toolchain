@@ -58,6 +58,7 @@ from lang.driftc.parser.ast import TypeExpr
 from lang.driftc.stage1 import assign_callsite_ids, assign_node_ids
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget
 from lang.driftc.stage2 import HIRToMIR, make_builder
+from lang.driftc.stage2 import mir_nodes as M
 
 
 def _collect_ctor_callinfo(hir: H.HBlock, type_table: TypeTable, var_tid: TypeId) -> dict[int, CallInfo]:
@@ -218,16 +219,27 @@ def test_copy_classified_drop_bearing_scrutinee_hard_errors_at_mir_build() -> No
 		).lower_block(hir)
 
 	msg = str(exc_info.value)
-	# The diagnostic must (a) identify the offending construct so the
-	# triage path is "search for this string in hir_to_mir.py", and
-	# (b) explain WHY the assertion fired so the next engineer doesn't
-	# have to re-derive the bug from first principles.  The exact
-	# wording can churn — keep the assertions on stable load-bearing
-	# fragments only.
-	assert "match scrutinee" in msg, msg
+	# The diagnostic is split into two contractual halves:
+	#   (A) a leading user-facing sentence that explicitly disclaims
+	#       user-code fault, offers a workaround, and points at an
+	#       issue-tracker URL — the user sees this first even on
+	#       terminals that truncate tracebacks aggressively;
+	#   (B) a trailing internal-triage context block for compiler
+	#       maintainers, naming the exact compiler-side function and
+	#       the bug shape so the triage path is "search for this
+	#       string in hir_to_mir.py".
+	# Both halves are contractually required: dropping (A) would
+	# mislead end users into thinking their source is wrong; dropping
+	# (B) would leave compiler maintainers without a triage anchor.
+	# Assert on stable load-bearing fragments in each.
+	assert "compiler internal error (not a bug in your source code)" in msg, msg
+	assert "Workaround" in msg, msg
+	assert "github.com/drift-lang/drift" in msg, msg
+	assert "internal triage context" in msg, msg
+	assert "Copy-store path of `_ensure_arm_scrut_ptr`" in msg, msg
 	assert "has_drop=True" in msg, msg
-	assert "ownership-drop-ledger" in msg, msg
-	assert "double-drop" in msg, msg
+	assert "fix/ownership-drop-ledger" in msg, msg
+	assert "double-drop" in msg or "released twice" in msg, msg
 
 
 def test_pod_variant_scrutinee_does_not_trip_assertion() -> None:
@@ -328,3 +340,54 @@ def test_pod_variant_scrutinee_does_not_trip_assertion() -> None:
 		type_table=type_table,
 		call_info_by_callsite_id=call_info_by_callsite_id,
 	).lower_block(hir)
+
+	# Strong-form post-condition: the Copy-store branch of
+	# `_ensure_arm_scrut_ptr` must have ACTUALLY BEEN REACHED for
+	# `V<Int>`, otherwise this test silently passes for the wrong
+	# reason (e.g. a future refactor that routes POD scrutinees
+	# through some optimised path that skips the branch entirely
+	# would leave the assertion under test unexercised by this
+	# negative pin).
+	#
+	# Evidence we require:
+	#   (1) No `MoveOut` instruction on the `opt` source local —
+	#       MoveOut would mean the MoveOut sibling branch was taken,
+	#       not the Copy-store branch.
+	#   (2) At least one `StoreLocal` into an `__match_scrut_tmp*`
+	#       local — the Copy-store branch's signature instruction,
+	#       emitting the bitcopy of `scrut_val` into the per-arm
+	#       scrut tmp.
+	# Satisfying BOTH proves the test exercised exactly the branch
+	# the assertion guards, confirming that assertion's precondition
+	# (has_drop=True + source_local + Copy-store branch) is
+	# independently load-bearing rather than folded into some upstream
+	# filter that already rules V<Int> out.
+	saw_moveout_of_opt = False
+	saw_scrut_tmp_store = False
+	for block in builder.func.blocks.values():
+		for instr in block.instructions:
+			if isinstance(instr, M.MoveOut) and getattr(instr, "local", None) == "opt":
+				saw_moveout_of_opt = True
+			if isinstance(instr, M.StoreLocal):
+				local_name = getattr(instr, "local", "")
+				if isinstance(local_name, str) and local_name.startswith("__match_scrut_tmp"):
+					saw_scrut_tmp_store = True
+	assert not saw_moveout_of_opt, (
+		"V<Int> scrutinee unexpectedly took the MoveOut path — the "
+		"negative pin no longer exercises the Copy-store branch the "
+		"assertion guards.  If this was an intentional classification "
+		"change (e.g. POD variants now always move), re-review the "
+		"assertion contract before deleting this test: the positive "
+		"pin still needs to force the original Copy-store bug shape, "
+		"and the negative pin needs to prove the gate is scoped, not "
+		"blanket-banned."
+	)
+	assert saw_scrut_tmp_store, (
+		"V<Int> scrutinee never stored into `__match_scrut_tmp*` — "
+		"the Copy-store branch was not actually reached, so this "
+		"test cannot prove the assertion's scope.  The lowering "
+		"likely skipped `_ensure_arm_scrut_ptr` entirely (e.g. via "
+		"an earlier specialisation).  Either adjust this test to "
+		"drive a shape that reaches the branch, or add a separate "
+		"test that does."
+	)
