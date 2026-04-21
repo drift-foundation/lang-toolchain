@@ -1,6 +1,76 @@
 # Drift development history
 
 ## 2026-04-20
+- **Phase 0 fail-stop for `match Optional<String>` UAF (0.30.4, ABI
+  10)** — first landed step of the
+  `fix/ownership-drop-ledger` track.
+
+  **Bug shape (reproduced end-to-end on the staged 0.30.3 toolchain
+  the same day, against `drift-net-tls`'s e2e suite):** any program
+  whose source contains `match opt { ... Some(s) => ..., None => ...
+  }` on a refcount-bearing variant (e.g. `Optional<String>`) returned
+  from a callee loaded from a packaged `.dmp` would emit IR with a
+  double-drop on the inner `String`'s refcount.  At runtime: glibc
+  `tcache_thread_shutdown(): unaligned tcache chunk detected`
+  followed by SIGABRT inside `drift_string_release`, ~80% repro rate
+  native, 100% under valgrind memcheck.  TLS team caught it via the
+  e2e gate; net.tls's `_base_port()` helper (`env.get` + `match
+  Optional<String>`) was the trigger.
+
+  **Root cause:** `_should_copy_value(scrut_ty)` returned True for
+  `Optional<String>` because `copy_status` resolved to True.  This
+  classification is only fully evaluable on the package-load path
+  (which eagerly walks the transitive trait-impl graph from the
+  packaged metadata); source-build paths often left `copy_status`
+  None and silently fell through to the correct branch — which is
+  why every existing source-driven test passed and the bug only
+  surfaced when a consumer was built against a precompiled stdlib
+  `.dmp`.  With the wrong classification,
+  `_ensure_arm_scrut_ptr` took its else-branch, bitcopying
+  `scrut_val` into `arm_scrut_local` WITHOUT a `MoveOut`.  The
+  source local stayed live (never entered `_moved_locals`), the
+  arm-end cleanup dropped `arm_scrut_local`, and
+  `string_arc._drop_all_destructibles` at the return terminator
+  ALSO dropped the source — two releases of the same refcount → the
+  second release read freed `DriftStringHeader` bytes → glibc
+  defense fired.
+
+  **What 0.30.4 ships:** a Phase 0 fail-stop assertion in the
+  `_ensure_arm_scrut_ptr` Copy-store branch.  When a match
+  scrutinee with a named source local has `has_drop=True` and is
+  NOT bitcopy, reaching that branch IS the bug shape — the
+  assertion now hard-errors at MIR build time with a diagnostic
+  that names the failure mode and points at the
+  `fix/ownership-drop-ledger` track.  This converts the active UAF
+  into a compile-time fail-stop so we don't ship more variants of
+  the same heap corruption while the structural fix is built.
+  Pinned by
+  `lang/tests/stage2/test_match_scrut_copy_path_drop_bearing_assertion.py`,
+  which forces the buggy classification via a mock Copy query
+  (matching the package-load miscalculation), drives the exact
+  `match opt { Some(s) => ..., None => ... }` shape, and asserts
+  the assertion fires.  A negative pin in the same file covers
+  `Optional<Int>` (drop-free, must compile).
+
+  **What 0.30.4 does NOT ship:** the actual fix.  The hardcoded
+  `val base = 4433` workaround in `drift-net-tls` stays in place
+  until Phase 1 (single-source-of-truth ownership policy) and
+  Phase 2 (per-program-point ownership ledger) land — see the
+  `fix/ownership-drop-ledger` track plan.  Tried a narrow fix in
+  `_needs_runtime_drop` that removed the `copy_status` shortcut;
+  the resulting reclassification rippled through the binder Move
+  path, which doesn't actually zero the scrut_tmp's field slot,
+  and broke `String` binders (e2e `env_get_set` returned 0 instead
+  of the byte length).  That ripple is exactly what the structural
+  Phase 1/2 work eliminates — one ownership query, one drop-
+  insertion pass, no per-site reinterpretation.  Phase 0 just
+  refuses to ship silent corruption while that work happens.
+
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 10.
+  `DRIFTC_VERSION 0.30.3 → 0.30.4` is a behavior-addition patch
+  bump (new compile-time fail-stop, no codegen change for
+  previously-correct programs).
+
 - **`drift prepare --check` source-rebuild lane (0.30.3, ABI 10)**:
   Third and final surface in the source-rebuild certification path:
   `drift prepare --check` is a repo-owned gate (drift-web's `just

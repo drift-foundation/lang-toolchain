@@ -1053,6 +1053,101 @@ class HIRToMIR:
 							self._local_types[tomb] = scrut_ty
 							self.b.emit(M.StoreLocal(local=source_local, value=tomb))
 					else:
+						# Bug-shape gate (Phase 0 of the ownership-drop-ledger
+						# work — see fix/ownership-drop-ledger track).
+						#
+						# We only reach this branch when EITHER (a)
+						# `source_local is None` (the scrutinee is a
+						# transient SSA value with no named local to
+						# scope-drop, so the dual-ownership bug shape
+						# cannot arise) or (b) `_should_copy_value(scrut_ty)`
+						# is True (the type-system claim is "this scrutinee
+						# can be cheaply copied without losing ownership
+						# information").  Case (b) was the silent root
+						# cause of the `match Optional<String>` UAF that
+						# tipped the entire ownership track off: a
+						# refcount-bearing variant whose `copy_status`
+						# resolved to True (only fully evaluable when the
+						# callee is loaded from a packaged `.dmp`) takes
+						# THIS branch, which bitcopies the scrutinee into
+						# `arm_scrut_local` WITHOUT a MoveOut.  The source
+						# local stays live (never enters `_moved_locals`),
+						# the arm-end cleanup drops `arm_scrut_local`, and
+						# `string_arc._drop_all_destructibles` at the
+						# return terminator ALSO drops the source — two
+						# releases of the same refcount → free → second
+						# release → glibc tcache abort.
+						#
+						# The structural fix is the per-program-point
+						# ownership ledger (Phase 2).  Until that lands,
+						# the next-best protection is to refuse to compile
+						# any case that would silently emit the bug shape.
+						# A scrutinee whose type has `has_drop == True`
+						# AND is reached via a named source local AND ends
+						# up in this Copy-store branch is exactly the
+						# precondition for the UAF; trip a hard internal
+						# error so the failure is at compile time and
+						# carries enough context to be triaged, instead of
+						# shipping silent heap corruption.
+						#
+						# `is_bitcopy(scrut_ty)` is the explicit escape
+						# hatch — POD-shaped variants (e.g.
+						# `Optional<Int>`, plain enums) have
+						# `has_drop=False` and therefore never trip this
+						# gate.  Refcount-bearing variants must use the
+						# MoveOut branch above; if classification
+						# disagrees, the disagreement IS the bug we want
+						# to surface.
+						if source_local is not None:
+							scrut_has_drop = False
+							try:
+								scrut_has_drop = bool(self._type_table.has_drop(scrut_ty))
+							except Exception:
+								scrut_has_drop = False
+							if scrut_has_drop:
+								scrut_is_bitcopy = False
+								try:
+									scrut_is_bitcopy = bool(self._type_table.is_bitcopy(scrut_ty))
+								except Exception:
+									scrut_is_bitcopy = False
+								if not scrut_is_bitcopy:
+									scrut_td = self._type_table.get(scrut_ty)
+									_ty_label = (
+										f"{scrut_td.kind.name}:{scrut_td.name}"
+										if scrut_td.name is not None
+										else f"{scrut_td.kind.name}:typeid={scrut_ty}"
+									)
+									raise AssertionError(
+										f"internal: match scrutinee '{_ty_label}' "
+										f"reached the Copy-store path of "
+										f"`_ensure_arm_scrut_ptr` (source_local="
+										f"{source_local!r}) but its type has "
+										f"`has_drop=True` and is not bitcopy.  "
+										f"This is the precondition for the "
+										f"`match Optional<String>` double-drop "
+										f"UAF (see fix/ownership-drop-ledger "
+										f"track).  The Copy-store path leaves "
+										f"the source local live; combined with "
+										f"the arm-end scrut_tmp drop and the "
+										f"return-site `_drop_all_destructibles` "
+										f"drop of the source, the inner "
+										f"refcount is released twice.  The "
+										f"MoveOut branch above is the correct "
+										f"path for any refcount-bearing "
+										f"scrutinee; reaching this branch "
+										f"means `_should_copy_value(scrut_ty)` "
+										f"returned True for a drop-bearing "
+										f"type — most likely the package-load "
+										f"path resolved `copy_status` to True "
+										f"while `has_drop` correctly stays "
+										f"True.  The structural fix lives in "
+										f"the per-program-point ownership "
+										f"ledger (Phase 2 of the same track); "
+										f"this assertion is the Phase 0 "
+										f"fail-stop that prevents shipping "
+										f"silent heap corruption while the "
+										f"ledger is built."
+									)
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=scrut_val))
 					arm_scrut_ptr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=arm_scrut_ptr, local=arm_scrut_local, is_mut=True))
