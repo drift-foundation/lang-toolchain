@@ -1856,13 +1856,14 @@ class TestLockCompatibility:
 		err = capsys.readouterr().err
 		assert "sha256 mismatch" in err
 
-	def test_source_rebuild_via_env_var_only(self, tmp_path, capsys, monkeypatch):
-		"""Phase D.2: `DRIFT_SOURCE_REBUILD=1` enables source-rebuild
-		mode without the CLI flag.  Required because orch cannot
-		thread `--source-rebuild` through repo-owned `just test` /
-		`just stress` invocations that internally call `drift build`;
-		the env var is the lane selector orch sets once for the whole
-		certification run (mirrors `DRIFT_DEBUG=1`)."""
+	def test_source_rebuild_via_cert_mode_certify(self, tmp_path, capsys, monkeypatch):
+		"""0.31.5: `DRIFT_CERT_MODE=certify` (paired with the snapshot
+		the permissive fixture sets) enables source-rebuild
+		verification without the CLI flag.  This is the orch
+		certification-verification shape: after staging emits the
+		snapshot, orch exports `DRIFT_CERT_MODE=certify` plus
+		`DRIFT_RUN_SNAPSHOT=<path>`, and repo-owned `just test` →
+		`drift build` picks up the lane automatically."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -1879,13 +1880,12 @@ class TestLockCompatibility:
 		}
 		_write_manifest(tmp_path, manifest_data)
 		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
-		locked_sha = hashlib.sha256(b"dep-a@0.1.3").hexdigest()
 		rebuilt_sha = hashlib.sha256(b"rebuilt-by-orch").hexdigest()
 		matching_scid = _fake_scid("dep-a", "0.1.3")
 
 		pkg_root = tmp_path / "pkg_root"
 		pkg_root.mkdir()
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 		from tools.drift_deploy.drift_build import run
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch("subprocess.run") as mock_run, \
@@ -1917,10 +1917,11 @@ class TestLockCompatibility:
 		assert "sha256" in out
 		assert "dep-a" in out
 
-	def test_env_var_unset_means_default_strict_mode(self, tmp_path, capsys, monkeypatch):
-		"""Pin: `DRIFT_SOURCE_REBUILD` unset (or any non-truthy value)
-		leaves default strict mode in force.  Must not silently drift
-		on for general consumers."""
+	def test_cert_mode_unset_means_default_strict_mode(self, tmp_path, capsys, monkeypatch):
+		"""Pin: `DRIFT_CERT_MODE` unset leaves default strict mode in
+		force (plain local `drift build` behaviour — must not silently
+		drift into source-rebuild for general consumers).  Same for
+		`DRIFT_CERT_MODE=stage`, which is the orch producer phase."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -1942,8 +1943,8 @@ class TestLockCompatibility:
 
 		pkg_root = tmp_path / "pkg_root"
 		pkg_root.mkdir()
-		# Explicitly clear env in case ambient set.  And try a non-truthy
-		# value to confirm only "1"/"true"/etc enable the mode.
+		# Explicitly clear both env vars in case ambient set.
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
 		from tools.drift_deploy.drift_build import run
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
@@ -1968,8 +1969,10 @@ class TestLockCompatibility:
 		err = capsys.readouterr().err
 		assert "sha256 mismatch" in err
 
-		# Non-truthy explicit value (e.g. "0") also stays in strict mode.
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
+		# DRIFT_CERT_MODE=stage — orch producer phase — same strict
+		# lock behaviour.  This is the regression for the shape that
+		# previously broke drift-net-tls `just test` → `drift build`.
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
 			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
 			mock_idx.return_value = {
@@ -1987,15 +1990,104 @@ class TestLockCompatibility:
 				"--manifest", str(tmp_path / "drift" / "manifest.json"),
 				"--package-root", str(pkg_root),
 			])
-		assert result == 1, "DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
+		assert result == 1, (
+			"DRIFT_CERT_MODE=stage must NOT enable source-rebuild — "
+			"stage is the producer phase, the snapshot does not "
+			"exist yet, and producer builds must stay strict."
+		)
 
 	def test_source_rebuild_without_run_snapshot_hard_fails(self, tmp_path, capsys, monkeypatch):
-		"""CLI-path regression (0.31.3): `DRIFT_SOURCE_REBUILD=1` on
-		`drift build` WITHOUT either `--run-snapshot` or
-		`DRIFT_RUN_SNAPSHOT` must fail cleanly — no silent fallback
-		to downstream trust-store verification, no cryptic
-		traceback.  Env-driven behaviour caused enough trouble on
-		this branch that this contract gets its own CLI-path pin."""
+		"""CLI-path regression: explicit `drift build --source-rebuild`
+		WITHOUT either `--run-snapshot` or `DRIFT_RUN_SNAPSHOT` must
+		fail cleanly — no silent fallback to downstream trust-store
+		verification, no cryptic traceback.  Triggered via the CLI
+		flag now (0.31.5: ambient env-only triggers are CertModeError
+		for DRIFT_SOURCE_REBUILD and no-op for DRIFT_CERT_MODE=stage)."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+				"--source-rebuild",
+			])
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
+		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
+
+	def test_cert_mode_certify_without_snapshot_hard_fails(self, tmp_path, capsys, monkeypatch):
+		"""Regression #4: `DRIFT_CERT_MODE=certify` with no snapshot
+		(neither `DRIFT_RUN_SNAPSHOT` nor `--run-snapshot`) fails
+		cleanly with snapshot-required."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+			])
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
+		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
+
+	def test_invalid_cert_mode_fails_clearly(self, tmp_path, capsys, monkeypatch):
+		"""Regression #5: an invalid `DRIFT_CERT_MODE` value surfaces
+		as a clean error with the allowed values listed.  Protects
+		against typos like `staging` / `verif` / `VERIFY`."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		monkeypatch.setenv("DRIFT_CERT_MODE", "verif")  # typo
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+			])
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "DRIFT_CERT_MODE" in err
+		assert "'verif'" in err
+		assert "stage" in err and "certify" in err
+
+	def test_retired_env_var_fails_clearly(self, tmp_path, capsys, monkeypatch):
+		"""`DRIFT_SOURCE_REBUILD=1` hard-errors on the build CLI path
+		with a migration message pointing at `DRIFT_CERT_MODE`."""
 		manifest_data = {
 			"schema_version": 2,
 			"project": {"name": "test-project", "license": "MIT"},
@@ -2009,7 +2101,7 @@ class TestLockCompatibility:
 		_write_manifest(tmp_path, manifest_data)
 		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
 		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
-		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		from tools.drift_deploy.drift_build import run
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
 			result = run([
@@ -2017,33 +2109,57 @@ class TestLockCompatibility:
 			])
 		assert result == 1
 		err = capsys.readouterr().err
-		assert "run snapshot" in err
-		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
+		assert "DRIFT_SOURCE_REBUILD" in err
+		assert "DRIFT_CERT_MODE" in err
 
 	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
-		"""Unit pin for `_source_rebuild_enabled`: CLI flag OR env var
-		enables the lane; neither → strict.  Non-truthy env values
-		leave the mode off so ambient `DRIFT_SOURCE_REBUILD=0` in a
-		shell profile doesn't silently enable source-rebuild for
-		humans running `drift build` interactively."""
+		"""Unit pin for the uniform selector (build side):
+		  - unset cert_mode, no flag → False
+		  - `stage`, no flag → False (producer phase)
+		  - `certify`, no flag → True (consumer phase)
+		  - any cert_mode, --source-rebuild flag → True
+		  - invalid cert_mode → CertModeError
+		  - DRIFT_SOURCE_REBUILD set → CertModeError"""
 		import argparse as _ap
+		from tools.drift_deploy.build_cmd import CertModeError
 		from tools.drift_deploy.drift_build import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
 
 		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
 
-		for truthy in ("1", "true", "True", "TRUE", "yes", "YES", "on", "ON"):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
-			assert _source_rebuild_enabled(off) is True, f"env {truthy!r} should enable"
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(on) is True
 
-		for falsy in ("0", "false", "False", "no", "NO", "off", ""):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
-			assert _source_rebuild_enabled(off) is False, f"env {falsy!r} must not enable"
-			# CLI flag alone still enables it, env is irrelevant.
-			assert _source_rebuild_enabled(on) is True
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		assert _source_rebuild_enabled(off) is True
+		assert _source_rebuild_enabled(on) is True
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
+		with pytest.raises(CertModeError):
+			_source_rebuild_enabled(off)
+
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(off)
+		assert "DRIFT_CERT_MODE" in str(exc.value)
+
+		# Env-validation order: CLI flag must NOT short-circuit env
+		# parsing — retired env and invalid cert mode still raise.
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "DRIFT_SOURCE_REBUILD" in str(exc.value)
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "verify")  # retired spelling
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "'verify'" in str(exc.value)
 
 	def test_build_rejects_author_key_mismatch(self, tmp_path, capsys):
 		"""Lock's author_key differs from the on-disk signer at the

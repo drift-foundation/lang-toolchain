@@ -29,74 +29,117 @@ def env_true(name: str) -> bool:
 	return os.environ.get(name, "") in ("1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON")
 
 
+# ── Certification-run role (DRIFT_CERT_MODE) ─────────────────────────
+#
+# Normal teams do NOT set `DRIFT_CERT_MODE`.  `just test` / `drift
+# build` / `drift deploy` run with the env unset and behave as plain
+# local commands (strict lock semantics, producer-side publish).
+#
+# `DRIFT_CERT_MODE` is an ORCH CERTIFICATION-RUN signal.  Orch sets
+# it for the whole run to name the PHASE explicitly, so command
+# behaviour tracks phase instead of guessing from command name /
+# flag presence:
+#
+#   stage    — orch certification staging phase.  Producer role.
+#              Build/deploy a package into the run's libs.  No run
+#              snapshot required (the snapshot does not exist yet;
+#              staging is what produces it).  Behaviourally
+#              equivalent to "unset" today; exists so orch can
+#              assert the phase without risking an accidental
+#              certify-mode trigger.
+#   certify  — orch certification verification phase.  Consumer
+#              role.  Consume the staged graph; lock is evidence
+#              only; resolver may float within declared compatible
+#              ranges; disk packages must match the run snapshot.
+#              Requires `DRIFT_RUN_SNAPSHOT=<path>` or
+#              `--run-snapshot <path>`.  The value is `certify`
+#              rather than `verify` because this is the orch
+#              certification lane (fresh staged graph, range float,
+#              lock drift as evidence), not generic verification.
+#   unset    — normal local behaviour (strict lock semantics).
+#
+# The legacy `DRIFT_SOURCE_REBUILD=1` env var (landed 0.31.1,
+# retired 0.31.5 after repeated phase-ordering bugs) is hard-
+# rejected with migration guidance — see `cert_mode_from_env`.
+
+CERT_MODE_STAGE = "stage"
+CERT_MODE_CERTIFY = "certify"
+_VALID_CERT_MODES: tuple[str, ...] = (CERT_MODE_STAGE, CERT_MODE_CERTIFY)
+
+
+class CertModeError(Exception):
+	"""Invalid `DRIFT_CERT_MODE` value, or use of a retired env var.
+
+	Raised by `cert_mode_from_env` so callers (drift build / drift
+	deploy / drift prepare) can convert to their native error type
+	in a single place."""
+	pass
+
+
+def cert_mode_from_env() -> str | None:
+	"""Parse `DRIFT_CERT_MODE`.
+
+	Returns `"stage"` / `"certify"` / `None`.  Unrecognised values
+	raise `CertModeError` so typos surface immediately.  The retired
+	`DRIFT_SOURCE_REBUILD` env also raises `CertModeError` with a
+	migration message pointing at `DRIFT_CERT_MODE`."""
+	legacy = os.environ.get("DRIFT_SOURCE_REBUILD", "").strip()
+	if legacy:
+		raise CertModeError(
+			"DRIFT_SOURCE_REBUILD was retired in 0.31.5.  The "
+			"certification-run role is now named explicitly via "
+			"DRIFT_CERT_MODE:\n"
+			"  - DRIFT_CERT_MODE=stage    (orch certification "
+			"staging; producer phase; no snapshot required)\n"
+			"  - DRIFT_CERT_MODE=certify  (orch certification "
+			"lane; consumer phase; requires DRIFT_RUN_SNAPSHOT or "
+			"--run-snapshot)\n"
+			"Normal local `just test` / `drift build` / `drift "
+			"deploy` do NOT set this env — leave it unset for "
+			"standard strict-lock behaviour.  See docs/history.md "
+			"entry 0.31.5 for the redesign rationale."
+		)
+	raw = os.environ.get("DRIFT_CERT_MODE", "").strip()
+	if not raw:
+		return None
+	if raw not in _VALID_CERT_MODES:
+		raise CertModeError(
+			f"DRIFT_CERT_MODE={raw!r} is not a valid value.  Expected "
+			f"one of {list(_VALID_CERT_MODES)!r} or unset.  Leave the "
+			f"env unset for normal local behaviour; only orch "
+			f"certification runs set this env."
+		)
+	return raw
+
+
 def source_rebuild_enabled(args) -> bool:
-	"""Source-rebuild lane selector for `drift build` and
-	`drift prepare --check`: CLI flag OR `DRIFT_SOURCE_REBUILD=1`
-	env var.  The env-var path is what orch sets for source-from-
-	commit certification runs so repo-owned `just test` /
-	`just stress` / `just perf` invocations — including the
-	lock-check step that calls `drift prepare --check` and the
-	repo-owned `drift build` step — pick up the lane without each
-	justfile threading `--source-rebuild` explicitly.  Mirrors the
-	`DRIFT_DEBUG=1` pattern.  Non-truthy env values (`0`, `false`,
-	empty) explicitly leave the mode off so ambient shell-profile
-	exports cannot silently flip humans into the certification lane.
+	"""Uniform source-rebuild selector for `drift build`,
+	`drift deploy`, and `drift prepare --check`.
 
-	`drift deploy` DOES NOT use this helper.  Deploy runs in two
-	distinct roles — producer/staging (normal mode, ahead of the
-	run snapshot) and downstream source-rebuild consumer (requires
-	a snapshot that only exists AFTER staging) — and orch invokes
-	the staging role under the ambient `DRIFT_SOURCE_REBUILD=1`
-	it sets for the whole certification run.  Threading the env
-	var into deploy would misroute the producer/staging call into
-	snapshot-required mode and fail before staging can even emit
-	the snapshot.  Deploy therefore honours `--source-rebuild`
-	only as an explicit, opt-in CLI flag via
-	`source_rebuild_enabled_deploy` below.
+	Returns True iff EITHER:
+	  - explicit `--source-rebuild` CLI flag is set, OR
+	  - `DRIFT_CERT_MODE=certify` is in the environment.
 
-	Asymmetry summary:
-	- `drift build` / `drift prepare --check` (this helper): CLI
-	  flag OR `DRIFT_SOURCE_REBUILD=1` env var.  The flag selects
-	  the lock-vs-index verification mode (build) or the
-	  lock-vs-fresh comparator (prepare --check).  Passing
-	  `--source-rebuild` to `drift prepare` WITHOUT `--check` is
-	  fail-fast at the CLI layer (the lock-writing path is always
-	  authoritative/strict by design); the env-var form is
-	  silently ignored on that write path so orch can set it
-	  globally for the whole certification environment without
-	  breaking write-mode invocations within that env.
-	- `drift deploy` (separate helper below): CLI flag ONLY.
-	  Ambient `DRIFT_SOURCE_REBUILD=1` must NOT route deploy into
-	  source-rebuild mode; the staging invocation orch issues
-	  runs in normal producer mode and emits the snapshot."""
-	return getattr(args, "source_rebuild", False) or env_true("DRIFT_SOURCE_REBUILD")
+	`DRIFT_CERT_MODE=stage` is a producer phase and does NOT engage
+	source-rebuild verification; commands run in normal producer
+	mode.  Unset `DRIFT_CERT_MODE` behaves the same as stage (plain
+	local behaviour) — normal teams never set the env.
 
+	Under the certify path, each command's `_run_impl` separately
+	requires a run snapshot (via `--run-snapshot` or
+	`DRIFT_RUN_SNAPSHOT`) and hard-fails if none is supplied — the
+	snapshot is a gate, not a hint.
 
-def source_rebuild_enabled_deploy(args) -> bool:
-	"""Source-rebuild lane selector for `drift deploy` ONLY: CLI
-	flag, never the env var.
-
-	Why:  orch runs `drift deploy --dest ...` as the producer/
-	staging step, BEFORE the run snapshot exists — the snapshot
-	is emitted after staging precisely so it can pin the source
-	identity that staging published.  Staging therefore MUST run
-	in normal producer mode.  Under the prior symmetric contract,
-	orch's ambient `DRIFT_SOURCE_REBUILD=1` (set once for the
-	whole certification run so `drift build` / `drift prepare
-	--check` picked up the lane automatically) misrouted the
-	staging `drift deploy` into snapshot-required consumer mode
-	and hard-failed with "run snapshot required" before staging
-	could emit the snapshot — the phase-order bug that motivated
-	this split.
-
-	How to apply:  an explicit `drift deploy --source-rebuild`
-	(manual, intentional, downstream-consumer role) still engages
-	source-rebuild mode and still requires `--run-snapshot` /
-	`DRIFT_RUN_SNAPSHOT`; ambient env-only never does.
-
-	See `source_rebuild_enabled` above for the build/prepare
-	helper that keeps the CLI-OR-env contract."""
-	return getattr(args, "source_rebuild", False)
+	Env validation runs FIRST, unconditionally, before the CLI flag
+	is consulted.  The retired `DRIFT_SOURCE_REBUILD` env and any
+	malformed `DRIFT_CERT_MODE` raise `CertModeError` even when
+	`--source-rebuild` is passed — a short-circuit on the flag
+	would let a stale env value sit silently in orch / CI shells
+	that happen to also pass the flag explicitly, which is the
+	exact drift the retirement is meant to catch.  Callers wrap
+	`CertModeError` into their native error type."""
+	mode = cert_mode_from_env()
+	return getattr(args, "source_rebuild", False) or mode == CERT_MODE_CERTIFY
 
 
 def resolve_driftc(explicit: Path | None = None) -> Path | None:

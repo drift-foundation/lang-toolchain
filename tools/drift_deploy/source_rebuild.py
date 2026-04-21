@@ -2,10 +2,11 @@
 """
 Single authority for the source-rebuild run graph (consumer side).
 
-Under `DRIFT_SOURCE_REBUILD=1`, `drift prepare --check`, `drift build`,
-and `drift deploy` all need to produce the SAME dependency graph and
-the SAME verdict.  Historically the three callers each had their own
-mixture of "consult the lock," "verify against the index," and
+Under `--source-rebuild` / `DRIFT_CERT_MODE=certify`, `drift prepare
+--check`, `drift build`, and `drift deploy` all need to produce the
+SAME dependency graph and the SAME verdict.  Historically the three
+callers each had their own mixture of "consult the lock," "verify
+against the index," and
 "substitute versions in place" — which let contradictions creep in
 (e.g. `--check` accepting a new transitive dep as evidence while
 `drift build` still compiled against the stale lock).  This module

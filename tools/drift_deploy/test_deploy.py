@@ -2186,350 +2186,174 @@ class TestDeploySourceRebuild:
 			assert "sha256 mismatch" in str(exc.value)
 
 
+def _deploy_scaffold(tmp_path):
+	"""Write the minimum set of files needed for `drift deploy` to
+	reach `_resolve_artifact_deps` so tests can pin selector /
+	phase behaviour without duplicating scaffolding.
+
+	Returns `(manifest_path, dest, sign_key_path, fake_driftc)`.
+	"""
+	import base64
+	import hashlib as _hl
+
+	manifest_dir = tmp_path / "drift"
+	manifest_dir.mkdir()
+	manifest_path = manifest_dir / "manifest.json"
+	manifest_path.write_text(json.dumps({
+		"schema_version": 2,
+		"project": {
+			"name": "test-proj",
+			"license": "MIT",
+			"author_profile": "test.author-profile",
+		},
+		"artifacts": [{
+			"kind": "package", "name": "my.pkg", "version": "0.1.0",
+			"description": "test", "license": "MIT",
+			"entry_module": "lib.drift", "modules": ["lib.drift"],
+			"module_namespace": "my.pkg",
+			"package_deps": [{"name": "dep.a", "version": "0.1"}],
+		}],
+	}))
+	author_profile = manifest_dir / "test.author-profile"
+	fake_pub_raw = b"\x00" * 32
+	fake_pub = base64.b64encode(fake_pub_raw).decode()
+	fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
+	author_profile.write_text(json.dumps({
+		"format": "author-profile", "version": 0,
+		"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
+		"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+		"namespaces": ["my.pkg.*"],
+	}))
+	sign_key_path = tmp_path / "deploy.key"
+	sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
+	lock_path = manifest_dir / "lock.json"
+	lock_path.write_text(json.dumps({
+		"schema_version": 4,
+		"artifacts": {
+			"my.pkg": {
+				"resolved": {
+					"dep.a": {
+						"version": "0.1.3",
+						"sha256": "a" * 64,
+						"author_key": "ed25519:test",
+						"source_content_id": "sha256:" + "a" * 64,
+						"source_attestation_key": "ed25519:test",
+						"dep_type": "direct",
+					},
+				},
+			},
+		},
+	}))
+	dest = tmp_path / "dest"
+	dest.mkdir()
+	fake_driftc = tmp_path / "fake-driftc"
+	fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
+	fake_driftc.chmod(0o755)
+	return manifest_path, dest, sign_key_path, fake_driftc
+
+
 @pytest.mark.usefixtures("permissive_run_snapshot")
-class TestDeploySourceRebuildEnvVar:
-	"""0.31.4 phase-order fix: `drift deploy` IGNORES ambient
-	`DRIFT_SOURCE_REBUILD=1` and enters source-rebuild mode only via
-	the explicit `--source-rebuild` CLI flag.
+class TestDeployCertMode:
+	"""0.31.5 redesign: orch certification phase is named explicitly
+	via `DRIFT_CERT_MODE=stage|certify`, replacing the brittle
+	`DRIFT_SOURCE_REBUILD=1` selector that kept misrouting commands
+	across phase boundaries.
 
-	Why:  orch's certification run sets `DRIFT_SOURCE_REBUILD=1`
-	once so repo-owned `just test` / `just stress` /
-	`just deploy` → `drift build` / `drift prepare --check`
-	invocations pick up the lane without each justfile threading
-	the flag.  Orch also calls `drift deploy --dest ...` as the
-	producer/staging step — BEFORE the run snapshot exists,
-	because the snapshot is emitted AFTER staging.  Under the
-	prior symmetric contract, that staging call saw ambient
-	`DRIFT_SOURCE_REBUILD=1`, entered source-rebuild consumer
-	mode, and hard-failed with "run snapshot required" before
-	staging could write the snapshot.  The fix splits the
-	selector: `drift build` / `drift prepare --check` keep CLI-
-	OR-env; `drift deploy` is CLI-only.
+	Semantics for `drift deploy`:
+	  - unset / `stage`: normal producer path.  No snapshot required.
+	    This is what TLS and any other team publishing locally see,
+	    and what orch's certification-staging phase does.
+	  - `certify`: orch certification lane (consumer).  Snapshot
+	    required via `--run-snapshot` or `DRIFT_RUN_SNAPSHOT`.
 
-	These tests pin the CLI-only contract for deploy."""
+	`--source-rebuild` CLI flag is a manual synonym for certify
+	mode (still requires a snapshot).  The retired
+	`DRIFT_SOURCE_REBUILD` env hard-errors with migration guidance."""
 
-	def test_helper_matrix(self, monkeypatch) -> None:
-		"""Unit pin for the deploy lane selector: CLI flag enables,
-		env var NEVER does.  Pins the 0.31.4 split — the shared
-		`source_rebuild_enabled` (used by build / prepare --check)
-		still honours the env var, but deploy's
-		`source_rebuild_enabled_deploy` does not."""
+	def test_helper_matrix_cert_mode(self, monkeypatch) -> None:
+		"""Unit pin for the uniform lane selector:
+		  - unset cert_mode, no flag → False
+		  - `stage`, no flag → False
+		  - `certify`, no flag → True
+		  - any cert_mode, --source-rebuild flag → True
+		  - invalid cert_mode → CertModeError"""
 		import argparse as _ap
+		from tools.drift_deploy.build_cmd import CertModeError
 		from tools.drift_deploy.drift_deploy import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
 
 		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
 
-		# Truthy env must NOT enable deploy mode — only the CLI
-		# flag does.  This is the 0.31.4 phase-order contract.
-		for truthy in ("1", "true", "True", "TRUE", "yes", "YES", "on", "ON"):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
-			assert _source_rebuild_enabled(off) is False, (
-				f"deploy must ignore ambient DRIFT_SOURCE_REBUILD={truthy!r}; "
-				f"orch's producer/staging invocation runs under ambient env "
-				f"and must stay in normal mode so it can emit the run snapshot"
-			)
-			assert _source_rebuild_enabled(on) is True, (
-				f"CLI --source-rebuild must still engage deploy mode regardless of env"
-			)
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		assert _source_rebuild_enabled(off) is False, (
+			"DRIFT_CERT_MODE=stage is the producer phase; deploy must "
+			"not enter source-rebuild verification"
+		)
+		assert _source_rebuild_enabled(on) is True
 
-		for falsy in ("0", "false", "False", "no", "NO", "off", ""):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
-			assert _source_rebuild_enabled(off) is False
-			assert _source_rebuild_enabled(on) is True
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		assert _source_rebuild_enabled(off) is True, (
+			"DRIFT_CERT_MODE=certify is the consumer phase; deploy must "
+			"enter source-rebuild verification"
+		)
+		assert _source_rebuild_enabled(on) is True
 
-	def test_args_without_source_rebuild_attribute(self, monkeypatch) -> None:
-		"""Defensive: `getattr(args, 'source_rebuild', False)` must
-		tolerate args namespaces produced by older CLI parsers (or
-		synthetic test fixtures) that don't carry the attribute at
-		all.  Still returns False under ambient
-		`DRIFT_SOURCE_REBUILD=1` (deploy CLI-only contract)."""
+		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(off)
+		assert "DRIFT_CERT_MODE" in str(exc.value)
+		assert "'stage'" in str(exc.value) or "stage" in str(exc.value)
+
+		# Env-validation order: the retired env and invalid
+		# `DRIFT_CERT_MODE` must raise even when `--source-rebuild`
+		# is also set.  A short-circuit on the flag would hide
+		# stale env values in orch / CI shells that happen to pass
+		# the flag explicitly, which is exactly the drift the
+		# retirement is meant to catch.
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "DRIFT_SOURCE_REBUILD" in str(exc.value)
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "verify")  # retired spelling
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "DRIFT_CERT_MODE" in str(exc.value)
+		assert "'verify'" in str(exc.value)
+
+	def test_legacy_env_var_rejected(self, monkeypatch) -> None:
+		"""`DRIFT_SOURCE_REBUILD` is retired in 0.31.5.  Any non-empty
+		value must raise with a migration message pointing at
+		`DRIFT_CERT_MODE`."""
 		import argparse as _ap
+		from tools.drift_deploy.build_cmd import CertModeError
 		from tools.drift_deploy.drift_deploy import _source_rebuild_enabled
-		bare = _ap.Namespace()  # no source_rebuild attribute
 
-		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
-		assert _source_rebuild_enabled(bare) is False
 		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
-		assert _source_rebuild_enabled(bare) is False, (
-			"deploy must ignore ambient DRIFT_SOURCE_REBUILD even "
-			"when the args namespace lacks the source_rebuild attribute"
-		)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(_ap.Namespace(source_rebuild=False))
+		msg = str(exc.value)
+		assert "DRIFT_SOURCE_REBUILD" in msg
+		assert "retired" in msg.lower() or "0.31.5" in msg
+		assert "DRIFT_CERT_MODE" in msg
 
-	def test_cli_flag_reaches_resolve_artifact_deps_through_run(
+	def test_stage_mode_deploy_stays_producer(
 		self, monkeypatch, tmp_path,
 	) -> None:
-		"""Integration pin: the explicit `--source-rebuild` CLI flag
-		reaches `_resolve_artifact_deps` via `run()` → `_run_impl`.
-		Ambient `DRIFT_SOURCE_REBUILD=1` without the flag does NOT —
-		that's the 0.31.4 phase-order contract so orch's
-		producer/staging `drift deploy --dest ...` invocation stays
-		in normal mode under the ambient env it shares with
-		`drift build` / `drift prepare --check`.
-
-		Patch `_resolve_artifact_deps` with a spy that captures its
-		`source_rebuild` kwarg and raises `DeployError` to short-
-		circuit the rest of the deploy; assert the captured value
-		tracks the CLI flag, not the env var."""
-		import base64
+		"""Regression #2 from K's redesign: `drift deploy` under
+		`DRIFT_CERT_MODE=stage` with no snapshot MUST proceed into
+		normal producer mode and NOT fail at the snapshot-required
+		gate.  This is the orch stage_packages shape."""
 		from unittest.mock import patch as _patch
 		from tools.drift_deploy.drift_deploy import DeployError, run
-
-		# Minimum valid setup to reach _resolve_artifact_deps:
-		#   manifest w/ author_profile + package_deps, author_profile
-		#   file on disk, real base64 sign_key file, dest dir, stage
-		#   package root, v4 drift/lock.json.
-		manifest_dir = tmp_path / "drift"
-		manifest_dir.mkdir()
-		manifest_path = manifest_dir / "manifest.json"
-		manifest_path.write_text(json.dumps({
-			"schema_version": 2,
-			"project": {
-				"name": "test-proj",
-				"license": "MIT",
-				"author_profile": "test.author-profile",
-			},
-			"artifacts": [{
-				"kind": "package", "name": "my.pkg", "version": "0.1.0",
-				"description": "test", "license": "MIT",
-				"entry_module": "lib.drift", "modules": ["lib.drift"],
-				"module_namespace": "my.pkg",
-				"package_deps": [{"name": "dep.a", "version": "0.1"}],
-			}],
-		}))
-
-		# Real author profile.
-		author_profile = manifest_dir / "test.author-profile"
-		fake_pub_raw = b"\x00" * 32
-		fake_pub = base64.b64encode(fake_pub_raw).decode()
-		import hashlib as _hl
-		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
-		author_profile.write_text(json.dumps({
-			"format": "author-profile", "version": 0,
-			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
-			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
-			"namespaces": ["my.pkg.*"],
-		}))
-
-		# Real base64 sign key (decodes to 32-byte seed).
-		sign_key_path = tmp_path / "deploy.key"
-		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
-
-		# v4 lock with a matching entry so read_lock accepts the shape.
-		lock_path = manifest_dir / "lock.json"
-		lock_path.write_text(json.dumps({
-			"schema_version": 4,
-			"artifacts": {
-				"my.pkg": {
-					"resolved": {
-						"dep.a": {
-							"version": "0.1.3",
-							"sha256": "a" * 64,
-							"author_key": "ed25519:test",
-							"source_content_id": "sha256:" + "a" * 64,
-							"source_attestation_key": "ed25519:test",
-							"dep_type": "direct",
-						},
-					},
-				},
-			},
-		}))
-
-		dest = tmp_path / "dest"
-		dest.mkdir()
-
-		# Spy on _resolve_artifact_deps: capture source_rebuild and
-		# raise DeployError to short-circuit the rest of the deploy.
-		captured: dict = {}
-		def _spy(art, *, source_rebuild, **kwargs):
-			captured["source_rebuild"] = source_rebuild
-			raise DeployError("short-circuit from test spy")
-
-		# Also patch driftc resolution so the test doesn't depend on
-		# a driftc binary being present on $PATH.
-		fake_driftc = tmp_path / "fake-driftc"
-		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
-		fake_driftc.chmod(0o755)
-
-		# ── Env var set, no CLI flag — expect captured source_rebuild == False ──
-		# This is the 0.31.4 phase-order contract: orch's ambient
-		# `DRIFT_SOURCE_REBUILD=1` (which build / prepare --check honour)
-		# must NOT route deploy into source-rebuild mode.  Staging runs
-		# ahead of the snapshot under this very env and needs to stay in
-		# normal producer mode.
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
-		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(sign_key_path),
-				"--driftc", str(fake_driftc),
-			])
-		assert rc == 1, "DeployError from spy should produce exit 1"
-		assert captured.get("source_rebuild") is False, (
-			f"ambient DRIFT_SOURCE_REBUILD=1 must NOT thread through to "
-			f"_resolve_artifact_deps on the deploy path; got source_rebuild="
-			f"{captured.get('source_rebuild')!r}.  Orch sets this env for "
-			f"the whole certification run but invokes `drift deploy` twice "
-			f"— the producer/staging call runs ahead of the run snapshot "
-			f"and must stay in normal mode so it can emit the snapshot."
-		)
-
-		# ── Env var unset, no CLI flag — expect False (default strict) ──
-		captured.clear()
-		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
-		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(sign_key_path),
-				"--driftc", str(fake_driftc),
-			])
-		assert rc == 1
-		assert captured.get("source_rebuild") is False, (
-			"Without DRIFT_SOURCE_REBUILD set and no --source-rebuild "
-			"flag, _resolve_artifact_deps must receive source_rebuild=False"
-		)
-
-		# ── Env var falsy, no CLI flag — must also default strict ──
-		captured.clear()
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
-		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(sign_key_path),
-				"--driftc", str(fake_driftc),
-			])
-		assert rc == 1
-		assert captured.get("source_rebuild") is False, (
-			"DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
-		)
-
-		# ── CLI flag, no env var — expect True (explicit opt-in) ──
-		# The 0.31.4 contract keeps the downstream-consumer role
-		# reachable via the explicit CLI flag.  An empty (but valid)
-		# v0 snapshot is enough because the spy short-circuits before
-		# per-artifact verification walks the snapshot.
-		from tools.drift_deploy.run_snapshot import write_run_snapshot
-		snap_path = tmp_path / "run-snapshot.json"
-		write_run_snapshot(snap_path, run_id="test-run", entries={})
-		captured.clear()
-		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
-		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(sign_key_path),
-				"--driftc", str(fake_driftc),
-				"--source-rebuild",
-				"--run-snapshot", str(snap_path),
-			])
-		assert rc == 1, "DeployError from spy should produce exit 1"
-		assert captured.get("source_rebuild") is True, (
-			f"Explicit --source-rebuild CLI flag must thread through to "
-			f"_resolve_artifact_deps; got source_rebuild="
-			f"{captured.get('source_rebuild')!r}"
-		)
-
-		# ── CLI flag AND env var — still True; CLI flag is authoritative ──
-		captured.clear()
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
-		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
-			rc = run([
-				"--manifest", str(manifest_path),
-				"--dest", str(dest),
-				"--sign-key-file", str(sign_key_path),
-				"--driftc", str(fake_driftc),
-				"--source-rebuild",
-				"--run-snapshot", str(snap_path),
-			])
-		assert rc == 1
-		assert captured.get("source_rebuild") is True
-
-	def test_ambient_env_var_plus_no_snapshot_stays_producer_mode(
-		self, monkeypatch, tmp_path,
-	) -> None:
-		"""Orch-shape regression (0.31.4 phase-order fix):
-		`drift deploy --dest ...` with ambient `DRIFT_SOURCE_REBUILD=1`
-		and no `--source-rebuild` CLI flag and no run snapshot MUST
-		proceed into normal producer/staging mode — NOT fail at
-		snapshot-required.
-
-		This is the exact shape orch's stage_packages step emits:
-
-		    command: ['drift', 'deploy', '--dest', '<libs>']
-		    env:     DRIFT_SOURCE_REBUILD=1 (set once for the run)
-
-		Under the pre-0.31.4 contract that invocation hard-failed with
-		"source-rebuild mode requires a run snapshot" before staging
-		could even emit the snapshot (which is produced AFTER staging,
-		by orch, using what staging just wrote to <libs>).  The fix
-		splits the lane selector: deploy's
-		`source_rebuild_enabled_deploy` ignores the env var so ambient
-		`DRIFT_SOURCE_REBUILD=1` no longer routes deploy into
-		snapshot-required consumer mode."""
-		import base64
-		from unittest.mock import patch as _patch
-		from tools.drift_deploy.drift_deploy import DeployError, run
-
-		manifest_dir = tmp_path / "drift"
-		manifest_dir.mkdir()
-		manifest_path = manifest_dir / "manifest.json"
-		manifest_path.write_text(json.dumps({
-			"schema_version": 2,
-			"project": {
-				"name": "test-proj",
-				"license": "MIT",
-				"author_profile": "test.author-profile",
-			},
-			"artifacts": [{
-				"kind": "package", "name": "my.pkg", "version": "0.1.0",
-				"description": "test", "license": "MIT",
-				"entry_module": "lib.drift", "modules": ["lib.drift"],
-				"module_namespace": "my.pkg",
-				"package_deps": [{"name": "dep.a", "version": "0.1"}],
-			}],
-		}))
-		author_profile = manifest_dir / "test.author-profile"
-		fake_pub_raw = b"\x00" * 32
-		fake_pub = base64.b64encode(fake_pub_raw).decode()
-		import hashlib as _hl
-		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
-		author_profile.write_text(json.dumps({
-			"format": "author-profile", "version": 0,
-			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
-			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
-			"namespaces": ["my.pkg.*"],
-		}))
-		sign_key_path = tmp_path / "deploy.key"
-		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
-		lock_path = manifest_dir / "lock.json"
-		lock_path.write_text(json.dumps({
-			"schema_version": 4,
-			"artifacts": {
-				"my.pkg": {
-					"resolved": {
-						"dep.a": {
-							"version": "0.1.3",
-							"sha256": "a" * 64,
-							"author_key": "ed25519:test",
-							"source_content_id": "sha256:" + "a" * 64,
-							"source_attestation_key": "ed25519:test",
-							"dep_type": "direct",
-						},
-					},
-				},
-			},
-		}))
-		dest = tmp_path / "dest"
-		dest.mkdir()
-		fake_driftc = tmp_path / "fake-driftc"
-		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
-		fake_driftc.chmod(0o755)
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
 
 		captured: dict = {}
 		def _spy(art, *, source_rebuild, run_snapshot, **kwargs):
@@ -2537,9 +2361,7 @@ class TestDeploySourceRebuildEnvVar:
 			captured["run_snapshot"] = run_snapshot
 			raise DeployError("short-circuit from test spy")
 
-		# Orch shape: ambient DRIFT_SOURCE_REBUILD=1, NO
-		# --source-rebuild flag, NO --run-snapshot / DRIFT_RUN_SNAPSHOT.
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
 		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
 		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
 			rc = run([
@@ -2548,105 +2370,127 @@ class TestDeploySourceRebuildEnvVar:
 				"--sign-key-file", str(sign_key_path),
 				"--driftc", str(fake_driftc),
 			])
-
-		# Must reach the resolve step in producer mode, not bail
-		# earlier at the snapshot-required check.  The spy raises
-		# DeployError (exit 1); if the snapshot gate had fired it
-		# would also be exit 1, so we verify by inspecting what the
-		# spy saw.
-		assert rc == 1
+		assert rc == 1, "DeployError from spy should produce exit 1"
 		assert "source_rebuild" in captured, (
-			"deploy must reach _resolve_artifact_deps under ambient "
-			"DRIFT_SOURCE_REBUILD=1 without --source-rebuild — it must "
-			"NOT fail at the pre-resolve snapshot-required gate.  This "
-			"is the orch stage_packages phase-order contract."
+			"deploy under DRIFT_CERT_MODE=stage must reach "
+			"_resolve_artifact_deps — NOT bail at the pre-resolve "
+			"snapshot-required gate.  stage is the producer phase; "
+			"the snapshot does not exist yet."
 		)
-		assert captured["source_rebuild"] is False, (
-			f"ambient DRIFT_SOURCE_REBUILD=1 without --source-rebuild "
-			f"must run deploy in normal producer mode; got source_rebuild="
-			f"{captured['source_rebuild']!r}"
-		)
-		assert captured["run_snapshot"] is None, (
-			f"no snapshot must be loaded in producer mode; got "
-			f"run_snapshot={captured['run_snapshot']!r}"
-		)
+		assert captured["source_rebuild"] is False
+		assert captured["run_snapshot"] is None
 
-	def test_source_rebuild_without_run_snapshot_hard_fails(
+	def test_certify_mode_without_snapshot_hard_fails(
 		self, monkeypatch, tmp_path, capsys,
 	) -> None:
-		"""CLI-path regression (0.31.4): `drift deploy --source-rebuild`
-		WITHOUT either `--run-snapshot` or `DRIFT_RUN_SNAPSHOT` must
-		fail cleanly.  Pins the contract: source-rebuild consumer
-		mode always requires a snapshot; no silent fallback to
-		downstream trust-store verification.
-
-		Triggered via the explicit CLI flag because ambient
-		`DRIFT_SOURCE_REBUILD=1` no longer routes deploy into
-		consumer mode (0.31.4 split; see
-		`test_ambient_env_var_plus_no_snapshot_stays_producer_mode`)."""
-		import base64
+		"""Regression #4: `DRIFT_CERT_MODE=certify` without a
+		snapshot (neither `DRIFT_RUN_SNAPSHOT` nor `--run-snapshot`)
+		fails cleanly with snapshot-required."""
 		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
 
-		# Minimum setup to reach the snapshot-required check —
-		# manifest w/ author_profile + package_deps, author
-		# profile file, sign key, v4 lock.  See the env-var thread-
-		# through test above for the same scaffolding.
-		manifest_dir = tmp_path / "drift"
-		manifest_dir.mkdir()
-		manifest_path = manifest_dir / "manifest.json"
-		manifest_path.write_text(json.dumps({
-			"schema_version": 2,
-			"project": {
-				"name": "test-proj",
-				"license": "MIT",
-				"author_profile": "test.author-profile",
-			},
-			"artifacts": [{
-				"kind": "package", "name": "my.pkg", "version": "0.1.0",
-				"description": "test", "license": "MIT",
-				"entry_module": "lib.drift", "modules": ["lib.drift"],
-				"module_namespace": "my.pkg",
-				"package_deps": [{"name": "dep.a", "version": "0.1"}],
-			}],
-		}))
-		author_profile = manifest_dir / "test.author-profile"
-		fake_pub_raw = b"\x00" * 32
-		fake_pub = base64.b64encode(fake_pub_raw).decode()
-		import hashlib as _hl
-		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
-		author_profile.write_text(json.dumps({
-			"format": "author-profile", "version": 0,
-			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
-			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
-			"namespaces": ["my.pkg.*"],
-		}))
-		sign_key_path = tmp_path / "deploy.key"
-		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
-		lock_path = manifest_dir / "lock.json"
-		lock_path.write_text(json.dumps({
-			"schema_version": 4,
-			"artifacts": {
-				"my.pkg": {
-					"resolved": {
-						"dep.a": {
-							"version": "0.1.3",
-							"sha256": "a" * 64,
-							"author_key": "ed25519:test",
-							"source_content_id": "sha256:" + "a" * 64,
-							"source_attestation_key": "ed25519:test",
-							"dep_type": "direct",
-						},
-					},
-				},
-			},
-		}))
-		dest = tmp_path / "dest"
-		dest.mkdir()
-		fake_driftc = tmp_path / "fake-driftc"
-		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
-		fake_driftc.chmod(0o755)
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
+		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
 
-		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+	def test_certify_mode_with_snapshot_enters_source_rebuild(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""Regression #3: `DRIFT_CERT_MODE=certify` +
+		`DRIFT_RUN_SNAPSHOT` (set by the `permissive_run_snapshot`
+		class fixture) engages source-rebuild verification via the
+		env form — no CLI flag needed."""
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_deploy import DeployError, run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		captured: dict = {}
+		def _spy(art, *, source_rebuild, run_snapshot, **kwargs):
+			captured["source_rebuild"] = source_rebuild
+			captured["run_snapshot"] = run_snapshot
+			raise DeployError("short-circuit from test spy")
+
+		# `permissive_run_snapshot` already sets DRIFT_RUN_SNAPSHOT
+		# to a sentinel and patches load_run_snapshot; we just add
+		# DRIFT_CERT_MODE=certify.
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		with _patch("tools.drift_deploy.drift_deploy._resolve_artifact_deps", side_effect=_spy):
+			rc = run([
+				"--manifest", str(manifest_path),
+				"--dest", str(dest),
+				"--sign-key-file", str(sign_key_path),
+				"--driftc", str(fake_driftc),
+			])
+		assert rc == 1
+		assert captured.get("source_rebuild") is True, (
+			f"DRIFT_CERT_MODE=certify + DRIFT_RUN_SNAPSHOT must thread "
+			f"source_rebuild=True to _resolve_artifact_deps; got "
+			f"{captured.get('source_rebuild')!r}"
+		)
+		assert captured.get("run_snapshot") is not None
+
+	def test_invalid_cert_mode_fails_clearly(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Regression #5: an invalid `DRIFT_CERT_MODE` value surfaces
+		as a clean error with the allowed values listed."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "staging")  # typo
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "DRIFT_CERT_MODE" in err
+		assert "'staging'" in err
+		assert "stage" in err and "certify" in err
+
+	def test_retired_env_var_fails_clearly(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""`DRIFT_SOURCE_REBUILD=1` now hard-errors from the CLI path
+		with a migration message pointing at `DRIFT_CERT_MODE`."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "DRIFT_SOURCE_REBUILD" in err
+		assert "DRIFT_CERT_MODE" in err
+
+	def test_cli_flag_without_snapshot_hard_fails(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Explicit `--source-rebuild` without a snapshot still
+		hard-fails (same contract whether triggered via flag or
+		env): source-rebuild consumer mode always requires a
+		snapshot; no silent fallback."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
 		rc = run([
 			"--manifest", str(manifest_path),
@@ -2659,6 +2503,58 @@ class TestDeploySourceRebuildEnvVar:
 		err = capsys.readouterr().err
 		assert "run snapshot" in err
 		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
+
+	def test_cli_flag_plus_retired_env_still_rejects(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Env-validation order regression: `--source-rebuild` must
+		NOT short-circuit env parsing.  When `DRIFT_SOURCE_REBUILD`
+		is set (retired) in the same shell that passes the CLI
+		flag, the retired env must still surface as
+		`CertModeError` with the migration message.  This catches
+		stale orch / CI envs that happen to also thread the flag
+		explicitly during the transition."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+			"--source-rebuild",
+			"--run-snapshot", "/nonexistent.json",
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "DRIFT_SOURCE_REBUILD" in err
+		assert "DRIFT_CERT_MODE" in err
+
+	def test_cli_flag_plus_invalid_cert_mode_still_rejects(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Env-validation order regression: an invalid
+		`DRIFT_CERT_MODE` (including the retired `verify` spelling)
+		must still raise when `--source-rebuild` is passed."""
+		from tools.drift_deploy.drift_deploy import run
+		manifest_path, dest, sign_key_path, fake_driftc = _deploy_scaffold(tmp_path)
+
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		monkeypatch.setenv("DRIFT_CERT_MODE", "verify")  # retired spelling
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+			"--source-rebuild",
+			"--run-snapshot", "/nonexistent.json",
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "DRIFT_CERT_MODE" in err
+		assert "'verify'" in err
 
 
 # ── Lock-exact passthrough at deploy time ───────────────────────────

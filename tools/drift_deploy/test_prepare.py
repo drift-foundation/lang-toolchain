@@ -793,7 +793,7 @@ class TestPrepareSourceAttestationGate:
 @pytest.mark.usefixtures("permissive_run_snapshot")
 class TestPrepareCheckSourceRebuild:
 	"""`drift prepare --check --source-rebuild` (and the matching
-	`DRIFT_SOURCE_REBUILD=1` env var) relaxes the comparison so a
+	`DRIFT_CERT_MODE=certify` env var) relaxes the comparison so a
 	rebuilt-elsewhere artifact whose bytes/signer drifted but whose
 	source identity (and everything else) still matches the lock passes
 	check.  Needed because drift-web's `just test` runs lock-check via
@@ -1085,15 +1085,16 @@ class TestPrepareCheckSourceRebuild:
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
 	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_via_env_var_only(
+	def test_source_rebuild_via_cert_mode_certify(
 		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
 		mock_index: MagicMock, capsys, monkeypatch,
 	) -> None:
-		"""`DRIFT_SOURCE_REBUILD=1` alone (no `--source-rebuild` flag)
-		switches `--check` into source-rebuild mode.  This is the path
-		orch uses for source-from-commit certification runs so
-		downstream `just test` / lock-check doesn't need to thread the
-		flag through every `drift prepare --check` invocation."""
+		"""`DRIFT_CERT_MODE=certify` (no `--source-rebuild` flag)
+		switches `--check` into source-rebuild mode.  Regression #3:
+		this is the path orch uses for source-from-commit
+		certification runs so downstream `just test` / lock-check
+		doesn't need to thread the flag through every
+		`drift prepare --check` invocation."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -1115,7 +1116,7 @@ class TestPrepareCheckSourceRebuild:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+			monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 			# NOTE: no --source-rebuild on the CLI; env var alone.
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check",
@@ -1127,14 +1128,14 @@ class TestPrepareCheckSourceRebuild:
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_env_var_non_truthy_stays_strict(
+	def test_cert_mode_stage_stays_strict(
 		self, mock_resolve: MagicMock, mock_index: MagicMock,
 		capsys, monkeypatch,
 	) -> None:
-		"""Pin: `DRIFT_SOURCE_REBUILD=0` / `=false` / `=""` must NOT
-		flip `--check` into source-rebuild mode.  Protects against
-		ambient shell-profile exports silently relaxing the lock gate
-		for humans who never opted in."""
+		"""Regression #1: `DRIFT_CERT_MODE=stage` (orch producer
+		phase) must NOT flip `--check` into source-rebuild mode.
+		Stage is the producer phase — the snapshot does not exist
+		yet — so lock check stays strict.  Same for unset env."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -1154,34 +1155,62 @@ class TestPrepareCheckSourceRebuild:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "0")
+			monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check",
-			])) == 1, "DRIFT_SOURCE_REBUILD=0 must NOT relax --check"
+			])) == 1, (
+				"DRIFT_CERT_MODE=stage must NOT relax --check — "
+				"stage is the producer phase, lock check stays strict"
+			)
 
 	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
-		"""Unit pin: `_source_rebuild_enabled(args)` honours CLI flag
-		OR `DRIFT_SOURCE_REBUILD` truthy env; non-truthy env values
-		leave the lane off.  Same helper used by drift build / drift
-		deploy — prepare must stay in lockstep."""
+		"""Unit pin for the uniform lane selector (prepare side):
+		  - unset cert_mode, no flag → False
+		  - `stage`, no flag → False
+		  - `certify`, no flag → True
+		  - CLI flag wins regardless of cert_mode
+		  - invalid cert_mode → CertModeError
+		  - DRIFT_SOURCE_REBUILD set → CertModeError"""
 		import argparse as _ap
+		from tools.drift_deploy.build_cmd import CertModeError
 		from tools.drift_deploy.drift_prepare import _source_rebuild_enabled
 		off = _ap.Namespace(source_rebuild=False)
 		on = _ap.Namespace(source_rebuild=True)
 
 		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
 		assert _source_rebuild_enabled(off) is False
 		assert _source_rebuild_enabled(on) is True
 
-		for truthy in ("1", "true", "True", "TRUE", "yes", "on"):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", truthy)
-			assert _source_rebuild_enabled(off) is True, f"env {truthy!r} should enable"
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		assert _source_rebuild_enabled(off) is False
+		assert _source_rebuild_enabled(on) is True
 
-		for falsy in ("0", "false", "False", "no", "off", ""):
-			monkeypatch.setenv("DRIFT_SOURCE_REBUILD", falsy)
-			assert _source_rebuild_enabled(off) is False, f"env {falsy!r} must not enable"
-			# CLI flag still wins.
-			assert _source_rebuild_enabled(on) is True
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		assert _source_rebuild_enabled(off) is True
+		assert _source_rebuild_enabled(on) is True
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus")
+		with pytest.raises(CertModeError):
+			_source_rebuild_enabled(off)
+
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(off)
+		assert "DRIFT_CERT_MODE" in str(exc.value)
+
+		# Env-validation order: CLI flag must NOT short-circuit env
+		# parsing — retired env and invalid cert mode still raise.
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "DRIFT_SOURCE_REBUILD" in str(exc.value)
+		monkeypatch.delenv("DRIFT_SOURCE_REBUILD", raising=False)
+
+		monkeypatch.setenv("DRIFT_CERT_MODE", "verify")  # retired spelling
+		with pytest.raises(CertModeError) as exc:
+			_source_rebuild_enabled(on)
+		assert "'verify'" in str(exc.value)
 
 	def test_strict_check_still_catches_sha_drift_regression_pin(self) -> None:
 		"""Regression pin: default `--check` (no flag, no env) must
@@ -1363,18 +1392,18 @@ class TestPrepareCheckSourceRebuild:
 			assert "verification-lane" in msg or "lock-writing" in msg
 			assert not (_drift_subdir(tmpdir) / "lock.json").exists()
 
-	def test_source_rebuild_env_var_without_check_is_silent_noop(
+	def test_cert_mode_certify_without_check_is_silent_noop(
 		self, monkeypatch,
 	) -> None:
-		"""Pin: the ENV-var form (`DRIFT_SOURCE_REBUILD=1`) on the
-		write path is silently ignored, NOT fail-fast.  Distinction
-		from the CLI-flag path: orch legitimately exports the env var
-		for the whole certification environment, and `drift prepare`
-		(write) may still be invoked in that env — erroring would
-		force every repo-owned `just release` / write-step invocation
-		to unset the var locally.  Only an explicit CLI flag is the
-		conscious-intent signal that deserves a fail-fast."""
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		"""Pin: `DRIFT_CERT_MODE=certify` on the write path is silently
+		ignored, NOT fail-fast.  Distinction from the CLI-flag path:
+		orch may legitimately export the env var for the whole
+		certification environment, and `drift prepare` (write) may
+		still be invoked in that env — erroring would force every
+		repo-owned `just release` / write-step invocation to unset
+		the var locally.  Only an explicit CLI flag is the conscious-
+		intent signal that deserves a fail-fast."""
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 		with patch("tools.drift_deploy.drift_prepare.build_package_index") as mi, \
 			 patch("tools.drift_deploy.drift_prepare.resolve_artifact") as mr:
 			mi.return_value = {}
@@ -1552,7 +1581,7 @@ class TestPrepareCheckSourceRebuildOrchEndToEnd:
 			},
 		)
 		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snapshot_path))
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 
 		# ── Stub the sidecar / manifest loaders so the fake .dmp
 		# reads cleanly.  `build_package_index`, the snapshot
@@ -1650,7 +1679,7 @@ class TestPrepareCheckSourceRebuildOrchEndToEnd:
 		snap_path = tmp_path / "snap.json"
 		write_run_snapshot(snap_path, run_id="empty-snap", entries={})
 		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap_path))
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 
 		disk_manifest = {
 			"package_id": "ext.lib",
@@ -1683,19 +1712,16 @@ class TestPrepareCheckSourceRebuildOrchEndToEnd:
 		assert "not present in run snapshot" in msg
 		assert "ext.lib" in msg
 
-	def test_source_rebuild_without_run_snapshot_hard_fails_check(
+	def test_cert_mode_certify_without_run_snapshot_hard_fails_check(
 		self, monkeypatch, tmp_path,
 	) -> None:
-		"""CLI-path regression pin: `DRIFT_SOURCE_REBUILD=1` on
+		"""Regression #4: `DRIFT_CERT_MODE=certify` on
 		`drift prepare --check` WITHOUT either `--run-snapshot` or
 		`DRIFT_RUN_SNAPSHOT` must fail cleanly — no silent fallback
 		to downstream trust-store verification, no cryptic
-		traceback.  Env-driven behaviour caused enough trouble on
-		this branch that this contract gets its own CLI-path pin
-		(unit tests cover `resolve_source_rebuild(run_snapshot=
-		None)` directly; this one proves the prepare CLI enforces
-		the same rule end-to-end through `_run_impl`).
-		"""
+		traceback.  Unit tests cover `resolve_source_rebuild(
+		run_snapshot=None)` directly; this one proves the prepare
+		CLI enforces the same rule end-to-end through `_run_impl`."""
 		from tools.drift_deploy.drift_prepare import (
 			_run_impl,
 			build_arg_parser,
@@ -1720,7 +1746,7 @@ class TestPrepareCheckSourceRebuildOrchEndToEnd:
 			"schema_version": 4,
 			"artifacts": {"my.pkg": {"resolved": {}}},
 		}))
-		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
 		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
 		parser = build_arg_parser()
 		with pytest.raises(PrepareError) as exc:

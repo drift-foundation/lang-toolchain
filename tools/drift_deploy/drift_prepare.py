@@ -42,13 +42,12 @@ from tools.drift_deploy.resolver import (
 )
 from tools.drift_deploy.semver import parse_version
 
-# Re-export from the shared module so `drift prepare`, `drift build`,
-# and `drift deploy` share ONE source of truth for the source-rebuild
-# lane selector — matching CLI flag OR `DRIFT_SOURCE_REBUILD=1` env
-# var.  The env-var path is what orch sets for source-from-commit
-# certification runs so repo-owned `just test` / lock-check
-# invocations pick up the lane without each justfile threading
-# `--source-rebuild` explicitly.
+# Uniform lane selector shared with `drift build` and `drift
+# deploy`: `--source-rebuild` CLI flag OR `DRIFT_CERT_MODE=certify`.
+# Orch's verification-phase signal is the env form; normal local
+# `drift prepare --check` (unset `DRIFT_CERT_MODE`) stays in strict
+# mode.
+from tools.drift_deploy.build_cmd import CertModeError
 from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
 
@@ -89,18 +88,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"Requires `--run-snapshot` or `DRIFT_RUN_SNAPSHOT`; no "
 			"snapshot is a hard fail.  Default `--check` remains "
 			"strict/exact — this flag is the only way to relax it.  "
-			"Also enabled by `DRIFT_SOURCE_REBUILD=1` (the env-var "
-			"path lets orch set the lane once for the certification "
-			"environment without threading the flag)."
+			"Manual synonym for the env-driven path "
+			"`DRIFT_CERT_MODE=certify`; orch's certification-run "
+			"verification phase uses the env form."
 		))
 	p.add_argument("--run-snapshot", type=UserPath, default=None,
 		help=(
 			"Path to the orch-produced run snapshot "
 			"(`tools.drift_deploy.run_snapshot` JSON v0).  Required "
-			"under `--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`.  "
+			"under `--source-rebuild` / `DRIFT_CERT_MODE=certify`.  "
 			"Also honoured via `DRIFT_RUN_SNAPSHOT=<path>`; CLI "
 			"wins on conflict.  Silently ignored on the lock-"
-			"writing path (no `--check`), matching the env-var "
+			"writing path (no `--check`), matching the "
 			"discipline for `--source-rebuild` itself."
 		))
 	return p
@@ -166,6 +165,9 @@ def run(argv: list[str] | None = None) -> int:
 	except PrepareError as e:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
+	except CertModeError as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
 	except ManifestError as e:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
@@ -181,7 +183,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# orch (or a human) believe they'd regenerated a "source-rebuild-
 	# aware" lock when in fact the flag was silently ignored — the
 	# exact ambiguity this flag was added to avoid.  Fail fast.  The
-	# env-var path (`DRIFT_SOURCE_REBUILD=1`) is NOT treated as an
+	# env-var path (`DRIFT_CERT_MODE=certify`) is NOT treated as an
 	# opt-in here because orch legitimately sets it for the whole
 	# certification environment and `drift prepare` (write) may still
 	# be invoked in that env as a no-op on the selector; the explicit
@@ -196,7 +198,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 			"category error.  Either pass `--check` (to verify an "
 			"existing lock under the relaxed source-rebuild "
 			"equivalence rule) or drop `--source-rebuild`.  The env-"
-			"var form `DRIFT_SOURCE_REBUILD=1` is silently ignored on "
+			"var form `DRIFT_CERT_MODE=certify` is silently ignored on "
 			"the write path so orch can set the lane once for the "
 			"whole certification environment; the explicit CLI flag "
 			"must be paired with `--check`."

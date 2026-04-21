@@ -67,12 +67,12 @@ def _clean_env() -> dict[str, str]:
 	return {k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_KEYS}
 
 
-# `_env_true` and `_source_rebuild_enabled` are re-exports so
-# existing imports (`from tools.drift_deploy.drift_build import
-# _env_true`) and existing tests keep working; the authoritative
-# implementations live in `build_cmd.py` to guarantee `drift build`
-# and `drift deploy` can never drift apart on what enables
-# source-rebuild mode.
+# Uniform lane selector: `--source-rebuild` CLI flag OR
+# `DRIFT_CERT_MODE=certify`.  Under `DRIFT_CERT_MODE=stage` (orch
+# staging phase) or unset (normal local builds), the build runs in
+# plain producer mode — no snapshot required, strict lock
+# semantics.  See `build_cmd.cert_mode_from_env`.
+from tools.drift_deploy.build_cmd import CertModeError
 from tools.drift_deploy.build_cmd import env_true as _env_true
 from tools.drift_deploy.build_cmd import source_rebuild_enabled as _source_rebuild_enabled
 
@@ -114,16 +114,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"key)` exactly.  Requires `--run-snapshot` or "
 			"`DRIFT_RUN_SNAPSHOT` — no snapshot is a hard fail (no "
 			"silent fallback to local trust-store verification).  "
-			"Also enabled by `DRIFT_SOURCE_REBUILD=1` so orch can "
-			"set the lane once for the certification run without "
-			"threading the flag through every repo-owned `drift "
-			"build`, mirroring the `DRIFT_DEBUG=1` pattern."
+			"Manual synonym for the env-driven path "
+			"`DRIFT_CERT_MODE=certify`; orch's certification-run "
+			"verification phase uses the env form.  Normal local "
+			"`drift build` does not set this flag and does not set "
+			"`DRIFT_CERT_MODE`."
 		))
 	p.add_argument("--run-snapshot", type=UserPath, default=None,
 		help=(
 			"Path to the orch-produced run snapshot "
 			"(`tools.drift_deploy.run_snapshot` JSON v0).  Required "
-			"under `--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`.  "
+			"under `--source-rebuild` / `DRIFT_CERT_MODE=certify`.  "
 			"Also honoured via `DRIFT_RUN_SNAPSHOT=<path>`; CLI "
 			"wins on conflict.  The snapshot pins source identity "
 			"(scid + signer kids) per package for the run, so "
@@ -480,6 +481,9 @@ def run(argv: list[str] | None = None) -> int:
 	try:
 		return _run_impl(args, extra_flags)
 	except BuildError as e:
+		print(f"error: {e}", file=sys.stderr)
+		return 1
+	except CertModeError as e:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
 	except ManifestError as e:

@@ -1,6 +1,130 @@
 # Drift development history
 
 ## 2026-04-21
+- **`DRIFT_SOURCE_REBUILD` retired; replaced by
+  `DRIFT_CERT_MODE=stage|certify` (0.31.5, ABI unchanged at 10).**
+  Second-pass redesign of the certification-run env signal after
+  `DRIFT_SOURCE_REBUILD=1` kept causing phase-ordering bugs (0.31.4
+  was a deploy-only split after the orch `stage_packages` failure;
+  the same shape re-surfaced same-day on `drift build` from
+  drift-net-tls `just test`).
+
+  **Root cause of the repeated breakage.**
+  `DRIFT_SOURCE_REBUILD=1` was trying to mean "verify against
+  rebuilt source graph," but orch sets one env once for the whole
+  certification run, and different commands at different points in
+  the run play different roles — some are PRODUCERS (before the
+  run snapshot exists) and some are CONSUMERS (after).  Inferring
+  role from command name / flag presence kept masking the actual
+  distinction, which is PHASE.
+
+  **New contract.**  The phase is named explicitly:
+
+      DRIFT_CERT_MODE=stage    — orch certification staging phase
+                                 (producer role; no snapshot
+                                 required; the snapshot does not
+                                 exist yet).
+      DRIFT_CERT_MODE=certify  — orch certification lane
+                                 (consumer role; fresh staged
+                                 graph, compatible-range float,
+                                 lock drift tolerated as evidence,
+                                 disk packages must match the run
+                                 snapshot).  Requires
+                                 DRIFT_RUN_SNAPSHOT=<path> or
+                                 --run-snapshot.
+      unset                    — normal local behaviour (strict
+                                 lock semantics).  Teams publishing
+                                 their own artefacts locally (TLS,
+                                 drift-web, etc.) do NOT set this.
+
+  `DRIFT_CERT_MODE` is an orch signal.  Normal `just test` /
+  `drift build` / `drift deploy` with the env unset behaves
+  identically to `stage`; `stage` exists so orch can assert the
+  phase without any risk of accidentally tripping certify mode
+  before the snapshot exists.  The value is `certify` rather than
+  the earlier `verify`: this is the orch certification lane with
+  fresh-graph + range-float + lock-as-evidence semantics, not
+  generic verification.
+
+  **Uniform selector.**  `drift build`, `drift deploy`, and
+  `drift prepare --check` all use the SAME helper:
+
+      source_rebuild_enabled(args):
+          mode = cert_mode_from_env()   # validates env first
+          return args.source_rebuild or mode == "certify"
+
+  Env validation runs FIRST, unconditionally.  A short-circuit on
+  `args.source_rebuild` (the 0.31.5-initial shape) would let a
+  stale `DRIFT_SOURCE_REBUILD` or a malformed `DRIFT_CERT_MODE`
+  sit silently in a shell that also threaded `--source-rebuild`
+  explicitly — the exact drift the retirement is meant to catch.
+
+  **Retired env.**  Any non-empty `DRIFT_SOURCE_REBUILD` raises
+  `CertModeError` with a migration message pointing at
+  `DRIFT_CERT_MODE`, even when `--source-rebuild` is passed.
+  Invalid `DRIFT_CERT_MODE` values (including the retired
+  `verify` spelling) raise the same error with the allowed
+  values listed, also regardless of the CLI flag.
+
+  **Files changed.**
+    - `tools/drift_deploy/build_cmd.py`:
+        `CERT_MODE_STAGE` / `CERT_MODE_CERTIFY` constants;
+        `cert_mode_from_env()` + `CertModeError`; uniform
+        `source_rebuild_enabled(args)` with env-first validation.
+        Retired the 0.31.4 deploy-specific
+        `source_rebuild_enabled_deploy`.
+    - `tools/drift_deploy/drift_deploy.py`,
+      `tools/drift_deploy/drift_build.py`,
+      `tools/drift_deploy/drift_prepare.py`: swap to the uniform
+        helper, catch `CertModeError` in each `run()`, rewrite
+        `--source-rebuild` / `--run-snapshot` help text to
+        reference `DRIFT_CERT_MODE=certify`.
+
+  **Test coverage — K's five regressions.**
+    1. stage build with no snapshot → stays producer
+       (`test_cert_mode_unset_means_default_strict_mode` covers
+       both unset and `stage`).
+    2. stage deploy with no snapshot → stays producer
+       (`test_stage_mode_deploy_stays_producer`).
+    3. certify prepare / build with snapshot → enters source-
+       rebuild
+       (`test_source_rebuild_via_cert_mode_certify` on build and
+       prepare;
+       `test_certify_mode_with_snapshot_enters_source_rebuild`
+       on deploy).
+    4. certify mode without snapshot → fails clearly
+       (`test_cert_mode_certify_without_run_snapshot_hard_fails*`
+       on all three commands;
+       `test_certify_mode_without_snapshot_hard_fails` on deploy).
+    5. invalid `DRIFT_CERT_MODE` → fails clearly
+       (`test_invalid_cert_mode_fails_clearly` on build and
+       deploy, plus unit coverage via
+       `test_source_rebuild_helper_matrix`).
+    Plus: `DRIFT_SOURCE_REBUILD` rejection
+       (`test_retired_env_var_fails_clearly` on build and
+       deploy, plus direct unit coverage).
+
+    **Env-order regressions (prevents the short-circuit
+    reintroducing itself).**
+      - `test_cli_flag_plus_retired_env_still_rejects`:
+        `--source-rebuild` + `DRIFT_SOURCE_REBUILD=1` still
+        surfaces `CertModeError`.
+      - `test_cli_flag_plus_invalid_cert_mode_still_rejects`:
+        `--source-rebuild` + `DRIFT_CERT_MODE=verify` (retired
+        spelling) still surfaces `CertModeError`.
+      - Helper-matrix blocks on all three commands extend the
+        unit coverage to the same flag+env combinations.
+
+  **Orch contract (what K needs to change in the orchestrator).**
+    - Replace `DRIFT_SOURCE_REBUILD=1` with `DRIFT_CERT_MODE=stage`
+      during the staging phase.
+    - Replace it with `DRIFT_CERT_MODE=certify` (plus the
+      already-exported `DRIFT_RUN_SNAPSHOT`) during the
+      certification-verification phase.
+    - Anything else leaking `DRIFT_SOURCE_REBUILD` into a Drift
+      CLI invocation now produces a clear migration error with
+      the new env name.
+
 - **`drift deploy` stops honouring ambient
   `DRIFT_SOURCE_REBUILD=1` (0.31.4, ABI unchanged at 10).**
   Phase-order fix on top of the same-day 0.31.3 run-snapshot
