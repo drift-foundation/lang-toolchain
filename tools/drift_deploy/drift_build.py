@@ -326,19 +326,31 @@ def _resolve_deps(
 		# for v1/v2/malformed locks; surface it verbatim.
 		raise BuildError(f"failed to read {lock_path}: {e}")
 
-	# Lock present → enforce the full contract (same as deploy).
-	if art.name not in lock_data:
-		raise BuildError(
-			f"artifact '{art.name}' not found in {lock_path}; "
-			f"run 'drift prepare' to re-resolve"
-		)
-	locked = lock_data[art.name]
-	for dep in art.package_deps:
-		if dep.name not in locked:
+	# Strict mode uses the lock as the authoritative graph; source-
+	# rebuild re-resolves against the trust-verified package index
+	# in the `package_roots` block below (the lock becomes evidence,
+	# not a pin).  The re-resolve path is required for coherence
+	# with `drift prepare --check --source-rebuild` — `--check` can
+	# legitimately accept dep-set drift, and `drift build` must
+	# compile against the same graph `--check` accepted.
+	if not source_rebuild:
+		if art.name not in lock_data:
 			raise BuildError(
-				f"artifact '{art.name}': package_dep '{dep.name}' not in lock file; "
+				f"artifact '{art.name}' not found in {lock_path}; "
 				f"run 'drift prepare' to re-resolve"
 			)
+		for dep in art.package_deps:
+			if dep.name not in lock_data[art.name]:
+				raise BuildError(
+					f"artifact '{art.name}': package_dep '{dep.name}' not in lock file; "
+					f"run 'drift prepare' to re-resolve"
+				)
+		locked: dict[str, ResolvedDep] = dict(lock_data[art.name])
+	else:
+		# Source-rebuild: fresh-resolve path runs inside the
+		# `package_roots` block (the index is needed to resolve).
+		# Initialize empty — the block below MUST populate it.
+		locked = {}
 
 	# Verify lock compatibility against package roots.  Every
 	# non-co-artifact dep must have a single disk entry at the exact
@@ -351,40 +363,72 @@ def _resolve_deps(
 	# built in this same run).  Anything else claiming co-artifact
 	# status is rejected as corruption.
 	if package_roots:
-		pkg_index = build_package_index(package_roots)
 		from tools.drift_deploy.lockfile import (
 			VERIFY_MODE_SOURCE_REBUILD,
 			VERIFY_MODE_STRICT,
 		)
 		mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
-		# Capture per-package sha drift for run-evidence reporting
-		# in source-rebuild mode.  Strict mode never produces
-		# entries here (sha mismatch is a hard error).
-		sha_drift_log: list[tuple[str, str, str]] = []
-		errors = verify_lock_compatibility(
-			locked, pkg_index,
-			allowed_co_artifacts=co_artifact_names or set(),
-			mode=mode,
-			sha_drift_log=sha_drift_log,
+		# Source-rebuild requires the trust store so the index
+		# builder can cryptographically verify each `.sig` (against
+		# trust-store pubkeys, per-module-namespace allowlist +
+		# non-revocation) and hard-fail on any forged / unauthorised
+		# packages BEFORE they reach the verifier.  Strict mode
+		# inherits the trust root through lock equality so no trust
+		# store is needed at index time.
+		trust_store = None
+		if source_rebuild:
+			from tools.drift_deploy.trust_loader import load_merged_trust_store
+			trust_store = load_merged_trust_store(manifest_dir)
+		pkg_index = build_package_index(
+			package_roots,
+			trust_store=trust_store,
 		)
-		if errors:
-			raise BuildError(
-				f"artifact '{art.name}': lock compatibility check failed:\n"
-				+ "\n".join(f"  {e}" for e in errors)
+		if source_rebuild:
+			# Fresh-resolve is authoritative.  Delegate to the
+			# single source-rebuild authority: builds a trust-
+			# verified index (already done above — reuse it),
+			# resolves against the consumer manifest, applies
+			# structural per-dep trust gates, and produces
+			# `(resolved_graph, evidence, errors)`.
+			from tools.drift_deploy.source_rebuild import (
+				print_evidence,
+				resolve_source_rebuild,
 			)
-		if source_rebuild and sha_drift_log:
-			# Run evidence: surface every byte-divergent package so
-			# the human running the certification sees exactly which
-			# rebuilds aren't byte-stable.  This is informational —
-			# the verification already accepted them based on
-			# matching source identity.
-			print(
-				f"drift build --source-rebuild: artifact '{art.name}' "
-				f"accepted with byte-drift in {len(sha_drift_log)} "
-				f"dep(s) (source identity verified):"
+			rebuild = resolve_source_rebuild(
+				artifact=art,
+				package_roots=package_roots,
+				manifest_dir=manifest_dir,
+				existing_lock_graph=lock_data.get(art.name, {}),
+				co_artifact_names=co_artifact_names or set(),
+				pkg_index=pkg_index,
+				trust_store=trust_store,
 			)
-			for pkg_id, locked_sha, disk_sha in sha_drift_log:
-				print(f"  {pkg_id}:  locked {locked_sha}  ->  rebuilt {disk_sha}")
+			if rebuild.errors:
+				raise BuildError(
+					f"artifact '{art.name}': source-rebuild resolve "
+					f"failed:\n" + "\n".join(f"  {e}" for e in rebuild.errors)
+				)
+			locked = rebuild.resolved_graph
+			print_evidence(
+				art_name=art.name,
+				channel="drift build",
+				evidence=rebuild.evidence,
+			)
+		# Strict-mode verification.  Source-rebuild's trust gates
+		# already ran inside `resolve_source_rebuild`, so we only
+		# need `verify_lock_compatibility` for strict (byte-exact
+		# lock vs. index check).
+		if not source_rebuild:
+			errors = verify_lock_compatibility(
+				locked, pkg_index,
+				allowed_co_artifacts=co_artifact_names or set(),
+				mode=mode,
+			)
+			if errors:
+				raise BuildError(
+					f"artifact '{art.name}': lock compatibility check failed:\n"
+					+ "\n".join(f"  {e}" for e in errors)
+				)
 
 	# v4 lock: entries already carry exact version + sha256 +
 	# source identity.  Pass the full transitive graph through

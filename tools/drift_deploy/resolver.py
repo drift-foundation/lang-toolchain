@@ -46,6 +46,15 @@ class PackageEntry:
 	author_key: str = ""  # "ed25519:<kid>" from signature sidecar
 	source_content_id: str = ""  # "sha256:<hex>" from .source-attestation body
 	source_attestation_key: str = ""  # "ed25519:<kid>" of attestation signer
+	# Module ids carried inside this `.dmp`'s manifest (the `modules[i]
+	# .module_id` list).  Load-bearing for trust verification: the trust
+	# store's namespace allowlist is keyed by MODULE namespace
+	# (`net_tls.*`, not the package id `net-tls`).  PackageEntry retains
+	# the module_ids so source-rebuild trust verification at verify /
+	# index time can call `TrustStore.allowed_kids_for_module(mid)`
+	# with the correct key.  Empty tuple for co-artifacts and for
+	# pre-0.31.1 index entries built without trust.
+	module_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -310,6 +319,9 @@ def _read_source_attestation_meta(
 def build_package_index(
 	package_roots: list[Path],
 	load_manifest: Any = None,
+	*,
+	trust_store: Any = None,
+	core_trust_store: Any = None,
 ) -> dict[str, list[PackageEntry]]:
 	"""
 	Build a package index from package roots.
@@ -319,7 +331,90 @@ def build_package_index(
 
 	`load_manifest` is a callable(Path) → dict that loads a .dmp manifest.
 	If None, uses the dmir_pkg_v0 loader.
+
+	`trust_store` (and paired `core_trust_store`), when provided,
+	trigger per-package cryptographic verification.  Failure is a
+	HARD ERROR — any discovered package that fails the trust gate
+	raises `ResolutionError` naming the offending file.  Silent
+	pruning is NOT an option: letting the resolver fall back to an
+	older trusted in-range version would mask the exact package
+	orch staged for certification.  The raise happens before the
+	entry is added to the index, so the verifier downstream never
+	sees partial / tampered state.
+
+	Three gates fire in order for each discovered `.dmp` / `.zdmp`
+	when `trust_store` is supplied:
+
+	1. **Missing `.sig` is fatal.**  An on-disk package with no
+	   `.sig` sidecar (empty `author_key`) raises `ResolutionError`.
+	   Unsigned packages have nothing for the trust gate to verify
+	   against — accepting them would bypass the owner-namespace
+	   trust root.  (The dev-opt-in `allow_unsigned_roots` path from
+	   `signature_v0.verify_package_signatures` is NOT applied here;
+	   source-rebuild callers never set it.)
+	2. **`.sig` cryptographic verify + per-module-namespace trust.**
+	   Delegated to `signature_v0.verify_package_signatures`, which
+	   (a) verifies the canonical envelope-over-sha256 Ed25519
+	   signature against the trust store's pubkey, and (b) enforces
+	   per-module namespace trust using each `module_id` from the
+	   manifest's `modules` list against
+	   `trust_store.allowed_kids_for_module(module_id)`.
+	   Namespaces follow MODULE ids (e.g. `net_tls.*`), NOT
+	   package ids (hyphenated ids like `net-tls` are never valid
+	   as a namespace key and are never passed to the lookup).
+	3. **`.source-attestation` signer allowlist + revocation.**
+	   `_read_source_attestation_meta` already verifies the sidecar
+	   body cross-binding and self-signature; this gate adds the
+	   per-module-namespace allowlist check on the sidecar's
+	   recorded signer kid AND the revocation check against BOTH
+	   trust layers (core trust store OR project trust store).  A
+	   signed artifact with an empty sidecar is accepted here and
+	   rejected later by
+	   `source_rebuild.apply_structural_trust_gates` — that split
+	   keeps co-artifact entries (which legitimately have empty
+	   sidecars at index time) from failing this function.
+
+	When `trust_store` is `None`, this function preserves the
+	pre-0.31.1 parse-only behaviour: `.sig` kids are read without
+	cryptographic verification.  Call sites that need the trust
+	root (`drift build --source-rebuild`, `drift deploy --source-
+	rebuild`, `drift prepare --check --source-rebuild`) MUST pass
+	a trust store.  Strict-mode callers inherit the trust root
+	through lock equality (the lock was authored by a `drift
+	prepare` that loaded its own trust store).
 	"""
+	_load_verifier = None  # deferred import; only wired if trust_store provided
+	if trust_store is not None:
+		from lang.driftc.packages.signature_v0 import verify_package_signatures as _vps
+		from lang.driftc.packages.trust_v0 import TrustStore as _TrustStore
+		import sys as _sys
+		# Callers that pass only a merged store can use it for both
+		# roles — `verify_package_signatures` differentiates the two
+		# only for reserved namespaces (`std.*`, `lang.*`, `drift.*`),
+		# which downstream deploy-side packages don't declare.
+		if core_trust_store is None:
+			core_trust_store = trust_store
+
+		def _load_verifier(path: Path, manifest: dict[str, Any]) -> str | None:  # type: ignore[misc]
+			"""Return None on success, an error message on failure."""
+			if path.suffix == ".zdmp":
+				from lang.driftc.packages.zdmp import decompress_zdmp
+				pkg_bytes = decompress_zdmp(path.read_bytes())
+			else:
+				pkg_bytes = path.read_bytes()
+			try:
+				_vps(
+					pkg_path=path,
+					pkg_bytes=pkg_bytes,
+					pkg_manifest=manifest,
+					trust=trust_store,
+					core_trust=core_trust_store,
+					require_signatures=True,
+					allow_unsigned_roots=[],  # no unsigned allowance in source-rebuild
+				)
+			except ValueError as e:
+				return str(e)
+			return None
 	# `PackageMetadataError` is the loader's distinguished signal for
 	# "container loaded fine, but the metadata violates the v3
 	# contract" (pre-cut `package_deps` key, malformed `required_deps`
@@ -510,6 +605,142 @@ def build_package_index(
 			# write a v4 lock entry without source identity for any
 			# RESOLVED non-co-artifact dep.
 			scid, sak = _read_source_attestation_meta(dmp_path, manifest)
+			# Extract module_ids (the canonical trust-namespace keys)
+			# from the manifest — trust allowlist is keyed by MODULE
+			# namespace (`net_tls.*`), not package id (`net-tls`).
+			# Package ids may contain characters (hyphens) that are
+			# never valid in module paths; never pass pkg_id to
+			# `TrustStore.allowed_kids_for_module`.
+			mod_ids: list[str] = []
+			_modules = manifest.get("modules")
+			if isinstance(_modules, list):
+				for _m in _modules:
+					if isinstance(_m, dict):
+						_mid = _m.get("module_id")
+						if isinstance(_mid, str) and _mid:
+							mod_ids.append(_mid)
+			# Cryptographic trust gate when a trust store is wired
+			# in.  Failure is a HARD ERROR, not a silent prune —
+			# dropping the offending package from the index would
+			# let the resolver fall back to an older trusted
+			# in-range version, silently masking the exact package
+			# orch staged.  Source-rebuild's contract is "verify
+			# what's on disk NOW against owner-namespace trust,"
+			# so any disk package that fails the trust check must
+			# surface as an error naming the file, not become
+			# invisible.
+			#
+			# Three gates run here when `trust_store` is supplied:
+			#   (a) `.sig` exists and `author_key` is non-empty.
+			#       Missing `.sig` in source-rebuild is a hard
+			#       error — the trust gate has nothing to verify
+			#       against an unsigned disk package.  Skipping
+			#       this would let a package with no `.sig` but
+			#       a seemingly-valid `.source-attestation` pass,
+			#       which violates the "installed artifact signer
+			#       must verify against the trust store" contract.
+			#   (b) `.sig` cryptographically verifies against the
+			#       trust store's pubkeys AND every module_id the
+			#       package declares maps to an allowlisted signer.
+			#       Delegated to `verify_package_signatures`.
+			#   (c) `source_attestation_key` is allowlisted for
+			#       every module namespace AND not revoked.
+			#       `_read_source_attestation_meta` already
+			#       verifies the sidecar's self-signature; this
+			#       step adds the namespace / revocation gate
+			#       the sidecar alone can't enforce.
+			if _load_verifier is not None:
+				# Gate (a): missing .sig in source-rebuild is a
+				# hard error for non-co-artifacts.  Co-artifacts
+				# are injected post-index by the prepare caller,
+				# not discovered here, so any .dmp reaching this
+				# point is either a published package (must be
+				# signed) or a dev-opt-in unsigned package (which
+				# source-rebuild rejects by contract).
+				if not ak:
+					raise ResolutionError(
+						f"package at '{dmp_path}' has no `.sig` "
+						f"sidecar (empty author_key) — source-"
+						f"rebuild requires every disk package to "
+						f"cryptographically verify against the "
+						f"trust store's namespace allowlist.  "
+						f"An unsigned package has nothing to "
+						f"verify; accepting it would bypass the "
+						f"owner-namespace trust root.  Sign and "
+						f"republish under a trusted kid before "
+						f"using source-rebuild on this package."
+					)
+				# Gate (b): .sig verification + .sig-kid allowlist.
+				err = _load_verifier(dmp_path, manifest)
+				if err is not None:
+					raise ResolutionError(
+						f"package at '{dmp_path}' failed source-"
+						f"rebuild trust verification: {err}.  The "
+						f"`.sig` did not cryptographically verify "
+						f"against the trust store's namespace "
+						f"allowlist for this package's modules.  "
+						f"Cannot silently fall back to an older "
+						f"trusted in-range version — that would "
+						f"mask the staged package orch intended to "
+						f"certify.  Fix: update `drift/trust.json` "
+						f"(or the user trust store) to authorise "
+						f"the kid for the package's module "
+						f"namespaces, or republish under an "
+						f"already-trusted kid, then re-run the "
+						f"source-rebuild pipeline."
+					)
+				# Gate (c): source_attestation_key allowlist +
+				# revocation.  Applied per-module_id, matching the
+				# .sig-kid gate in signature_v0.verify_package_
+				# signatures.  `_read_source_attestation_meta`
+				# already returned ("", "") and warned on stderr
+				# if the sidecar failed structural load / cross-
+				# binding / self-signature; a non-empty sak here
+				# means "the sidecar self-verified," and we now
+				# check whether the signer is trusted for the
+				# namespace.  Empty sak on a signed package is a
+				# missing-sidecar regression; that case is caught
+				# by the structural trust gates on the caller
+				# side (source_rebuild.apply_structural_trust_
+				# gates) because the caller has the co-artifact
+				# namelist this function doesn't.
+				if sak:
+					for mid in mod_ids:
+						is_core = mid.startswith(("std.", "lang.", "drift."))
+						allowed_for_mid = (
+							core_trust_store.allowed_kids_for_module(mid)
+							if is_core
+							else trust_store.allowed_kids_for_module(mid)
+						)
+						if sak not in allowed_for_mid:
+							raise ResolutionError(
+								f"package at '{dmp_path}' `.source-"
+								f"attestation` signer {sak!r} is not "
+								f"in the trust store's namespace "
+								f"allowlist for module '{mid}'.  "
+								f"Source-rebuild requires the "
+								f"attestation signer to be trusted "
+								f"for every module the package "
+								f"declares; update the trust store "
+								f"or republish the sidecar under an "
+								f"already-trusted kid."
+							)
+						# Revocation check against BOTH layers —
+						# a kid revoked in either core or project
+						# trust is treated as revoked.
+						if (
+							sak in core_trust_store.revoked_kids
+							or sak in trust_store.revoked_kids
+						):
+							raise ResolutionError(
+								f"package at '{dmp_path}' `.source-"
+								f"attestation` signer {sak!r} is "
+								f"REVOKED in the current trust "
+								f"store.  Republish the sidecar "
+								f"under a non-revoked kid before "
+								f"using source-rebuild on this "
+								f"package."
+							)
 			entry = PackageEntry(
 				package_id=pkg_id,
 				version=pkg_ver,
@@ -519,6 +750,7 @@ def build_package_index(
 				author_key=ak,
 				source_content_id=scid,
 				source_attestation_key=sak,
+				module_ids=tuple(mod_ids),
 			)
 			index.setdefault(pkg_id, []).append(entry)
 

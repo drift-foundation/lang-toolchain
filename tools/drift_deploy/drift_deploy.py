@@ -334,55 +334,79 @@ def _resolve_artifact_deps(
 			f"run 'drift prepare' first"
 		)
 
-	if art.name not in existing_lock:
-		raise DeployError(
-			f"artifact '{art.name}' not found in {lock_path}; "
-			f"run 'drift prepare' to re-resolve"
-		)
-	locked = existing_lock[art.name]
-	for dep_name, _dep_ver in direct_deps:
-		if dep_name not in locked:
+	# Strict: lock is authoritative.  Source-rebuild: lock is
+	# evidence; we re-resolve against the trust-verified index so
+	# build and --check consume the same graph.  See the symmetric
+	# block in `drift_build.py::_resolve_deps` for the full rationale.
+	if not source_rebuild:
+		if art.name not in existing_lock:
 			raise DeployError(
-				f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
+				f"artifact '{art.name}' not found in {lock_path}; "
 				f"run 'drift prepare' to re-resolve"
 			)
-	pkg_index = build_package_index(package_roots)
+		for dep_name, _dep_ver in direct_deps:
+			if dep_name not in existing_lock[art.name]:
+				raise DeployError(
+					f"artifact '{art.name}': package_dep '{dep_name}' not in lock file; "
+					f"run 'drift prepare' to re-resolve"
+				)
 	from tools.drift_deploy.lockfile import (
 		VERIFY_MODE_SOURCE_REBUILD,
 		VERIFY_MODE_STRICT,
 	)
 	mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
-	sha_drift_log: list[tuple[str, str, str]] = []
-	errors = verify_lock_compatibility(
-		locked, pkg_index,
-		allowed_co_artifacts=co_artifact_names or set(),
-		mode=mode,
-		sha_drift_log=sha_drift_log,
+	# Source-rebuild: trust store is used both at index time
+	# (cryptographic `.sig` verification + per-module-namespace
+	# allowlist enforcement in `build_package_index`, hard-fail on
+	# failure) and at verify time (defence-in-depth recheck).
+	trust_store = None
+	if source_rebuild:
+		from tools.drift_deploy.trust_loader import load_merged_trust_store
+		trust_store = load_merged_trust_store(lock_path.parent)
+	pkg_index = build_package_index(
+		package_roots,
+		trust_store=trust_store,
 	)
-	if errors:
-		raise DeployError(
-			f"artifact '{art.name}': lock compatibility check failed:\n"
-			+ "\n".join(f"  {e}" for e in errors)
+	if source_rebuild:
+		# Fresh-resolve is authoritative.  Delegate to the single
+		# source-rebuild authority (symmetric with drift_build).
+		from tools.drift_deploy.source_rebuild import (
+			print_evidence,
+			resolve_source_rebuild,
 		)
-	if source_rebuild and sha_drift_log:
-		# Run evidence: per-package byte drift surfaced to stdout.
-		# Source identity already verified — these are the rebuilds
-		# whose bytes diverged from the author's original artifact.
-		print(
-			f"drift deploy --source-rebuild: artifact '{art.name}' "
-			f"accepted with byte-drift in {len(sha_drift_log)} dep(s) "
-			f"(source identity verified):"
+		rebuild = resolve_source_rebuild(
+			artifact=art,
+			package_roots=package_roots,
+			manifest_dir=lock_path.parent,
+			existing_lock_graph=existing_lock.get(art.name, {}),
+			co_artifact_names=co_artifact_names or set(),
+			pkg_index=pkg_index,
+			trust_store=trust_store,
 		)
-		for pkg_id, locked_sha, disk_sha in sha_drift_log:
-			print(f"  {pkg_id}:  locked {locked_sha}  ->  rebuilt {disk_sha}")
-	# v4 lock: entries already carry exact version + sha256 + source
-	# identity.  Pass them through unchanged — `verify_lock_compatibility`
-	# above has already checked version, sha (or sha-drift evidence in
-	# source-rebuild), artifact signer, source_content_id, and
-	# source_attestation_key against the on-disk package index +
-	# `.source-attestation` sidecars.  The v2-era "resolve locked range
-	# to exact at deploy time" step is gone; patch movement happens
-	# in `drift prepare`, not here.
+		if rebuild.errors:
+			raise DeployError(
+				f"artifact '{art.name}': source-rebuild resolve "
+				f"failed:\n" + "\n".join(f"  {e}" for e in rebuild.errors)
+			)
+		locked = rebuild.resolved_graph
+		print_evidence(
+			art_name=art.name,
+			channel="drift deploy",
+			evidence=rebuild.evidence,
+		)
+	else:
+		locked = existing_lock[art.name]
+		# Strict-mode verification — byte-exact lock vs. package index.
+		errors = verify_lock_compatibility(
+			locked, pkg_index,
+			allowed_co_artifacts=co_artifact_names or set(),
+			mode=mode,
+		)
+		if errors:
+			raise DeployError(
+				f"artifact '{art.name}': lock compatibility check failed:\n"
+				+ "\n".join(f"  {e}" for e in errors)
+			)
 	return dict(locked)
 
 

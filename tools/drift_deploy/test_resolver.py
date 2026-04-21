@@ -38,6 +38,7 @@ from tools.drift_deploy.semver import (
 	parse_constraint,
 	parse_version,
 )
+from tools.drift_deploy._test_trust import PermissiveTrustStore
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1539,6 +1540,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
 			sha_drift_log=drift_log,
+			trust_store=PermissiveTrustStore(),
 		)
 		assert errors == []
 		assert drift_log == [("net.tls", "original_sha", "rebuilt_sha")]
@@ -1558,44 +1560,123 @@ class TestVerifyV4SourceIdentityEnforcement:
 		errors = verify_lock_compatibility(
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=PermissiveTrustStore(),
 		)
 		assert errors == []
 
-	def test_source_rebuild_rejects_source_content_id_mismatch(self) -> None:
-		"""Sha drift may be tolerated; SOURCE drift never is."""
+	def test_source_rebuild_accepts_source_content_id_drift_as_evidence(self) -> None:
+		"""Policy as of `fix/source-rebuild-trust-anchor` (0.31.1):
+		`source_content_id` drift is EVIDENCE in source-rebuild mode,
+		not a hard failure.
+
+		Pre-0.31.1, this axis was equality-pinned because the 0.30.0
+		source-rebuild implementation treated the downstream lock's
+		`source_content_id` as "the source orch must rebuild from."
+		That was wrong — orch selects source via its own pinning file
+		(`run-all-latest.json` or equivalent); the downstream lock is
+		just evidence of what the repo author last prepared against.
+		Requiring equality meant every compatible upstream patch
+		staled every downstream's lock, forcing re-prepare on every
+		consumer before orch could certify — exactly the churn lock
+		v2 was designed to eliminate.
+
+		Under the corrected policy, `source_content_id` drift is
+		reported via `signer_drift_log` and the verify passes.  Trust
+		comes from the namespace-allowlist check at package-index
+		time (see `signature_v0.py::verify_package_signatures`); any
+		package that reaches `verify_lock_compatibility` has already
+		satisfied that check.  See `docs/history.md` 2026-04-21 for
+		the full rationale."""
 		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
 		lock_deps = {"net.tls": self._signed_lock_dep(scid="sha256:" + "a"*64)}
 		pkg_index = {"net.tls": [_make_entry(
 			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rebuilder",
-			source_content_id="sha256:" + "z"*64,  # different source!
+			source_content_id="sha256:" + "z"*64,  # different source — orch picked a different commit
 			source_attestation_key="ed25519:src",
 		)]}
+		signer_drift: list[tuple[str, str, str, str]] = []
 		errors = verify_lock_compatibility(
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
+			signer_drift_log=signer_drift,
+			trust_store=PermissiveTrustStore(),
 		)
-		assert len(errors) == 1
-		assert "source_content_id mismatch" in errors[0]
+		assert errors == [], errors
+		scid_entries = [e for e in signer_drift if e[1] == "source_content_id"]
+		assert len(scid_entries) == 1, signer_drift
+		pkg, field, locked, disk = scid_entries[0]
+		assert pkg == "net.tls"
+		assert locked == "sha256:" + "a"*64
+		assert disk == "sha256:" + "z"*64
 
-	def test_source_rebuild_rejects_source_attestation_key_substitution(self) -> None:
-		"""Trust-root substitution: orchestrator presents a sidecar
-		signed by their own key, not the original author's key.
-		Must be caught — otherwise source-mode collapses to "trust
-		whatever sidecar happens to be on disk."  This is the
-		critical pin from the user's earlier non-blocking note."""
+	def test_source_rebuild_accepts_source_attestation_key_drift_as_evidence(self) -> None:
+		"""Policy as of `fix/source-rebuild-trust-anchor` (0.31.1):
+		`source_attestation_key` drift is EVIDENCE in source-rebuild
+		mode, not a hard failure.
+
+		Same rationale as the `source_content_id` test above.  Trust-
+		root substitution (a rebuilder signing the attestation with
+		their own key instead of the owner's) is NOT re-admitted by
+		this relaxation — the namespace-allowlist check at package-
+		index time rejects any signer kid not trusted for the
+		package's namespace.  A "rebuilder-signed" sidecar where the
+		rebuilder isn't in the namespace allowlist would fail at
+		index time and never reach this verifier.  This test
+		verifies only the lock-equality relaxation; trust-store
+		integration is covered by
+		`signature_v0.py::verify_package_signatures`'s own tests."""
 		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
 		lock_deps = {"net.tls": self._signed_lock_dep(sak="ed25519:original-author-src")}
 		pkg_index = {"net.tls": [_make_entry(
 			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rebuilder",
 			source_content_id="sha256:" + "a"*64,
-			source_attestation_key="ed25519:rebuilder-attempted-substitution",
+			source_attestation_key="ed25519:rotated-author-src",  # key rotation within owner
 		)]}
+		signer_drift: list[tuple[str, str, str, str]] = []
 		errors = verify_lock_compatibility(
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
+			signer_drift_log=signer_drift,
+			trust_store=PermissiveTrustStore(),
 		)
-		assert len(errors) == 1
-		assert "source_attestation_key changed" in errors[0]
+		assert errors == [], errors
+		sak_entries = [e for e in signer_drift if e[1] == "source_attestation_key"]
+		assert len(sak_entries) == 1, signer_drift
+		pkg, field, locked, disk = sak_entries[0]
+		assert locked == "ed25519:original-author-src"
+		assert disk == "ed25519:rotated-author-src"
+
+	def test_source_rebuild_accepts_author_key_drift_as_evidence(self) -> None:
+		"""Policy as of `fix/source-rebuild-trust-anchor` (0.31.1):
+		`author_key` drift is EVIDENCE in source-rebuild mode.
+
+		Artifact signer drift is expected when orch rebuilds from
+		source — the rebuilder's .sig signer legitimately differs
+		from the original author's.  The trust anchor is the trust
+		store's namespace allowlist (verified at package-index
+		time); the lock's recorded kid is just evidence of the prior
+		signer.  Key rotation within the same owner's namespace
+		should not stale downstream locks."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(author="ed25519:original-author")}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt", author_key="ed25519:rotated-author",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:src",
+		)]}
+		signer_drift: list[tuple[str, str, str, str]] = []
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			signer_drift_log=signer_drift,
+			trust_store=PermissiveTrustStore(),
+		)
+		assert errors == [], errors
+		ak_entries = [e for e in signer_drift if e[1] == "author_key"]
+		assert len(ak_entries) == 1, signer_drift
+		pkg, field, locked, disk = ak_entries[0]
+		assert locked == "ed25519:original-author"
+		assert disk == "ed25519:rotated-author"
 
 	def test_source_rebuild_rejects_missing_source_attestation(self) -> None:
 		"""No on-disk source attestation in source-rebuild mode → hard
@@ -1610,9 +1691,11 @@ class TestVerifyV4SourceIdentityEnforcement:
 		errors = verify_lock_compatibility(
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=PermissiveTrustStore(),
 		)
 		assert len(errors) == 1
-		assert "source-rebuild mode requires" in errors[0]
+		assert "source-rebuild mode requires" in errors[0] or \
+			"source-rebuild requires" in errors[0]
 		assert "republish" in errors[0].lower()
 
 	def test_source_rebuild_rejects_unsigned_package(self) -> None:
@@ -1631,6 +1714,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 		errors = verify_lock_compatibility(
 			lock_deps, pkg_index,
 			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=PermissiveTrustStore(),
 		)
 		assert len(errors) == 1
 		assert "unsigned" in errors[0]
@@ -1695,6 +1779,210 @@ class TestVerifyV4SourceIdentityEnforcement:
 		)]}
 		errors = verify_lock_compatibility(lock_deps, pkg_index)
 		assert errors == []
+
+	# ── trust-store gate (0.31.1 disk-side trust anchor) ──────────
+
+	def _trust_with(self, **kw_ns_kids) -> "TrustStore":
+		"""Build a real TrustStore allowlisting the given kids for the
+		given namespaces.  Usage:
+		`self._trust_with(**{"net.tls": ["ed25519:ok"]})`."""
+		from lang.driftc.packages.trust_v0 import TrustStore
+		return TrustStore(
+			keys_by_kid={},
+			allowed_kids_by_namespace={
+				ns: set(kids) for ns, kids in kw_ns_kids.items()
+			},
+			revoked_kids=set(),
+		)
+
+	def _trust_with_revocation(self, namespace: str, allowlist: list[str], revoked: list[str]) -> "TrustStore":
+		from lang.driftc.packages.trust_v0 import TrustStore
+		return TrustStore(
+			keys_by_kid={},
+			allowed_kids_by_namespace={namespace: set(allowlist)},
+			revoked_kids=set(revoked),
+		)
+
+	def test_source_rebuild_raises_when_trust_store_missing(self) -> None:
+		"""Contract: source-rebuild MUST refuse to run without a
+		caller-supplied trust store.  Fail fast — silently skipping
+		the disk-kid gate would defeat the whole trust anchor."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="aabb", author_key="ed25519:art",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:src",
+		)]}
+		with pytest.raises(ValueError, match="requires a `trust_store`"):
+			verify_lock_compatibility(
+				lock_deps, pkg_index,
+				mode=VERIFY_MODE_SOURCE_REBUILD,
+			)
+
+	def test_source_rebuild_rejects_untrusted_disk_author_key(self) -> None:
+		"""Pin: the on-disk artifact signer must be in the trust
+		store's namespace allowlist for the package.  If not, source-
+		rebuild rejects — any disk kid the trust store does not
+		authorise for this namespace is a trust-anchor violation."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:attacker",  # ← not in allowlist
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:owner-src",
+		)]}
+		trust = self._trust_with(**{"net.tls": ["ed25519:owner-art", "ed25519:owner-src"]})
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+		)
+		assert errors, "untrusted disk author_key must reject"
+		assert any("not in the trust store's namespace allowlist" in e for e in errors)
+		assert any("ed25519:attacker" in e for e in errors)
+
+	def test_source_rebuild_rejects_revoked_disk_author_key(self) -> None:
+		"""Pin: even if the disk kid is in the namespace allowlist,
+		if it's listed in `revoked_kids`, source-rebuild rejects.
+		Namespace allowlist + non-revocation is the full gate."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:compromised",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:owner-src",
+		)]}
+		trust = self._trust_with_revocation(
+			namespace="net.tls",
+			allowlist=["ed25519:compromised", "ed25519:owner-src"],
+			revoked=["ed25519:compromised"],
+		)
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+		)
+		assert errors, "revoked disk author_key must reject"
+		assert any("REVOKED" in e for e in errors)
+		assert any("ed25519:compromised" in e for e in errors)
+
+	def test_source_rebuild_rejects_untrusted_disk_source_attestation_key(self) -> None:
+		"""Pin: the on-disk source-attestation signer gets the same
+		namespace-allowlist + non-revocation check.  Both halves of
+		the v4 identity are gated."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:owner-art",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:attacker-src",  # ← not allowlisted
+		)]}
+		trust = self._trust_with(**{"net.tls": ["ed25519:owner-art", "ed25519:owner-src"]})
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+		)
+		assert errors, "untrusted disk source_attestation_key must reject"
+		assert any("source_attestation_key" in e for e in errors)
+		assert any("not in the trust store's namespace allowlist" in e for e in errors)
+
+	def test_source_rebuild_rejects_revoked_disk_source_attestation_key(self) -> None:
+		"""Pin: revoked source-attestation kid rejects even if
+		allowlisted.  Key-rotation after revocation is handled by
+		removing the kid from the allowlist AND / OR adding it to
+		the revocation set; either alone suffices to reject."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:owner-art",
+			source_content_id="sha256:" + "a"*64,
+			source_attestation_key="ed25519:compromised-src",
+		)]}
+		trust = self._trust_with_revocation(
+			namespace="net.tls",
+			allowlist=["ed25519:owner-art", "ed25519:compromised-src"],
+			revoked=["ed25519:compromised-src"],
+		)
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+		)
+		assert errors, "revoked disk source_attestation_key must reject"
+		assert any("REVOKED" in e for e in errors)
+		assert any("source_attestation_key" in e for e in errors)
+
+	def test_source_rebuild_accepts_when_both_disk_kids_trusted(self) -> None:
+		"""Positive-path pin: when both disk kids are in the namespace
+		allowlist and neither is revoked, source-rebuild passes even
+		though the lock's recorded kids differ (the whole point)."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep(
+			author="ed25519:original-art", sak="ed25519:original-src",
+		)}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:rotated-art",  # different, but allowlisted
+			source_content_id="sha256:" + "z"*64,
+			source_attestation_key="ed25519:rotated-src",  # different, but allowlisted
+		)]}
+		trust = self._trust_with(**{"net.tls": [
+			"ed25519:original-art", "ed25519:original-src",
+			"ed25519:rotated-art",  "ed25519:rotated-src",
+		]})
+		signer_drift: list[tuple[str, str, str, str]] = []
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+			signer_drift_log=signer_drift,
+		)
+		assert errors == [], errors
+		# Both author_key and source_attestation_key drift recorded
+		# as evidence, AND source_content_id drift recorded.
+		fields = sorted({e[1] for e in signer_drift})
+		assert fields == ["author_key", "source_attestation_key", "source_content_id"]
+
+	def test_source_rebuild_rejects_empty_disk_source_content_id_for_signed_dep(self) -> None:
+		"""Pin: empty `source_content_id` on disk for a signed non-
+		co-artifact is a missing trust root — the disk-side gate has
+		nothing to verify against.  Already covered by the "no valid
+		source attestation" branch, but this test isolates the
+		`source_content_id` emptiness specifically.  Reviewer gate #5."""
+		from tools.drift_deploy.lockfile import VERIFY_MODE_SOURCE_REBUILD
+		lock_deps = {"net.tls": self._signed_lock_dep()}
+		pkg_index = {"net.tls": [_make_entry(
+			"net.tls", "0.4.0", sha="rebuilt",
+			author_key="ed25519:owner-art",
+			source_content_id="",  # missing
+			source_attestation_key="ed25519:owner-src",
+		)]}
+		trust = self._trust_with(**{"net.tls": ["ed25519:owner-art", "ed25519:owner-src"]})
+		errors = verify_lock_compatibility(
+			lock_deps, pkg_index,
+			mode=VERIFY_MODE_SOURCE_REBUILD,
+			trust_store=trust,
+		)
+		assert errors, "empty disk source_content_id must reject"
+		assert any("source-rebuild mode requires" in e for e in errors) or \
+			any("source attestation" in e for e in errors)
+
+	# Note: H1 (version drift in range) is no longer a verifier-
+	# level concern.  The resolve-driven source-rebuild model means
+	# `verify_lock_compatibility` always receives a graph whose
+	# versions are already present in the `package_index` (by
+	# construction — the graph was produced by `resolve_artifact`
+	# against the same index).  Version-drift-in-range is the
+	# resolver's responsibility; at verify time, exact version
+	# match is expected.  See `drift_build.py::_resolve_deps`
+	# and `drift_deploy.py::_resolve_artifact_deps` for the
+	# fresh-resolve branch that produces source-rebuild's `locked`.
 
 	# ── unknown mode ───────────────────────────────────────────────
 

@@ -21,6 +21,12 @@ from pathlib import Path
 
 from tools.drift_deploy.build_cmd import UserPath
 from tools.drift_deploy.lockfile import write_lock
+
+# TYPE_CHECKING-style forward ref used in `_compare_locks_for_check`
+# signature.  Imported lazily at call time in `_run_impl` to avoid a
+# hard dependency at module load for CLI paths that never enter the
+# source-rebuild branch.
+from lang.driftc.packages.trust_v0 import TrustStore  # noqa: F401
 from tools.drift_deploy.manifest import (
 	Manifest,
 	ManifestError,
@@ -106,52 +112,20 @@ def _topo_sort_artifacts(artifacts: list) -> list:
 	return _ts(artifacts)
 
 
-# Fields the source-rebuild `--check` lane compares on.  sha256 and
-# author_key are intentionally absent — they're the artifact-byte /
-# artifact-signer half of the v4 identity and legitimately differ
-# when packages are rebuilt by a different hand.  Source identity
-# (`source_content_id` + `source_attestation_key`) IS compared because
-# that half is what the package owner attested, and the whole point
-# of source-rebuild mode is that the rebuild was made from the same
-# attested source.  `dep_type` is included so a co-artifact→direct
-# flip (or vice-versa) still surfaces as drift in either mode.
-_SOURCE_REBUILD_EQ_FIELDS = (
-	"version", "dep_type", "source_content_id", "source_attestation_key",
-)
-
-
 def _compare_locks_for_check(
 	existing: dict[str, dict[str, ResolvedDep]],
 	resolved: dict[str, dict[str, ResolvedDep]],
-	*,
-	source_rebuild: bool,
-	byte_drift_log: list[tuple[str, str, str, str, str, str]],
 ) -> list[str]:
-	"""Compare an on-disk lock to a freshly-resolved graph for `--check`.
+	"""Strict-mode byte-for-byte compare of the on-disk lock vs.
+	a freshly-resolved graph.
 
-	Returns a list of drift descriptions; empty = locks are equivalent
-	under the selected mode.  `byte_drift_log` is appended with
-	`(artifact, pkg_id, locked_sha, resolved_sha, locked_author_key,
-	resolved_author_key)` tuples for every per-dep sha256 OR author_key
-	disagreement encountered in source-rebuild mode — printed by the
-	caller as run evidence.  In strict mode `byte_drift_log` is
-	untouched; mismatches on those fields surface through the returned
-	drift list instead.
-
-	Strict mode (default) is byte-for-byte: any disagreement on any
-	`ResolvedDep` field (via `ResolvedDep` equality) is drift.
-
-	Source-rebuild mode enforces artifact set + per-artifact dep
-	set + `(version, dep_type, source_content_id,
-	source_attestation_key)` AND a signed trust root on every
-	non-co-artifact dep: empty `source_content_id`, empty
-	`source_attestation_key`, or `author_key == "unsigned"` on EITHER
-	side is rejected — source-rebuild mode only certifies packages
-	with a signed source attestation, so an empty-identity entry
-	matching another empty-identity entry by dict equality is a trust
-	bypass.  Co-artifact entries are legitimately empty on both sides
-	(their `.dmp` + sidecars are built later in the same deploy run)
-	and are exempted from the trust-root check.
+	Returns a list of drift descriptions; empty means the two graphs
+	are `ResolvedDep`-equal.  Used only by the strict `drift prepare
+	--check` path.  Source-rebuild `--check` goes through the
+	shared authority in `tools/drift_deploy/source_rebuild.py` —
+	`apply_structural_trust_gates` + `compare_lock_vs_fresh` + the
+	`print_evidence` helper — so there is exactly one executable
+	policy path for source-rebuild across prepare / build / deploy.
 	"""
 	errors: list[str] = []
 	if existing.keys() != resolved.keys():
@@ -161,8 +135,6 @@ def _compare_locks_for_check(
 			errors.append(f"artifacts added since prepare: {', '.join(added)}")
 		if removed:
 			errors.append(f"artifacts removed since prepare: {', '.join(removed)}")
-		# Dep-level diffs on shared artifacts are still useful signal;
-		# fall through to report them too.
 	for art_name in sorted(existing.keys() & resolved.keys()):
 		ed = existing[art_name]
 		rd = resolved[art_name]
@@ -176,80 +148,11 @@ def _compare_locks_for_check(
 		for pkg_id in sorted(ed.keys() & rd.keys()):
 			e = ed[pkg_id]
 			r = rd[pkg_id]
-			if source_rebuild:
-				for field in _SOURCE_REBUILD_EQ_FIELDS:
-					ev = getattr(e, field)
-					rv = getattr(r, field)
-					if ev != rv:
-						errors.append(
-							f"artifact '{art_name}' dep '{pkg_id}': "
-							f"{field} differs (locked {ev!r}, resolved {rv!r})"
-						)
-				# Trust-root gate: non-co-artifact deps MUST carry a
-				# signed source identity.  Empty `source_content_id`,
-				# empty `source_attestation_key`, or `author_key ==
-				# "unsigned"` on either side means there is nothing to
-				# verify the rebuild against — accepting would collapse
-				# trust to "trust the rebuilder," which is the exact
-				# bypass source-rebuild mode exists to prevent.  This
-				# mirrors `verify_lock_compatibility`'s unsigned-reject
-				# and missing-attestation-reject paths in the build /
-				# deploy lanes; without it, two empty-identity entries
-				# would pass the dict-equality check above and reach a
-				# `--check` pass under the source-rebuild banner.  The
-				# co-artifact dep_type is exempted because its empty
-				# identity is structural (built later, same deploy
-				# run), not a missing trust root.
-				if e.dep_type != "co-artifact" and r.dep_type != "co-artifact":
-					for side, dep in (("locked", e), ("resolved", r)):
-						if not dep.source_content_id or not dep.source_attestation_key:
-							errors.append(
-								f"artifact '{art_name}' dep '{pkg_id}': "
-								f"{side} entry has no signed source identity "
-								f"(source_content_id={dep.source_content_id!r}, "
-								f"source_attestation_key={dep.source_attestation_key!r}); "
-								f"source-rebuild mode requires a signed source "
-								f"attestation as the trust root.  Republish "
-								f"with toolchain >= 0.30.0 and re-run `drift "
-								f"prepare`, or drop `--source-rebuild` / "
-								f"`DRIFT_SOURCE_REBUILD` to use strict mode."
-							)
-						if dep.author_key == "unsigned":
-							errors.append(
-								f"artifact '{art_name}' dep '{pkg_id}': "
-								f"{side} entry is `author_key: \"unsigned\"`; "
-								f"unsigned packages have no `.source-"
-								f"attestation` sidecar so source-rebuild mode "
-								f"cannot certify them.  Sign and republish "
-								f"(toolchain >= 0.30.0) before using "
-								f"`--source-rebuild` / `DRIFT_SOURCE_REBUILD` "
-								f"on this dep."
-							)
-				# sha256 / author_key: record drift, not error.
-				# Only log when EITHER side has a non-empty value —
-				# co-artifact entries carry "" on both sides and are
-				# not drift.
-				if (e.sha256 or r.sha256) and e.sha256 != r.sha256:
-					byte_drift_log.append((
-						art_name, pkg_id,
-						e.sha256, r.sha256,
-						e.author_key, r.author_key,
-					))
-				elif (e.author_key or r.author_key) and e.author_key != r.author_key:
-					# author_key drifted even though sha matched (rare
-					# but possible: same bytes, different signer —
-					# e.g. cross-signed republish).  Still evidence.
-					byte_drift_log.append((
-						art_name, pkg_id,
-						e.sha256, r.sha256,
-						e.author_key, r.author_key,
-					))
-			else:
-				if e != r:
-					errors.append(
-						f"artifact '{art_name}' dep '{pkg_id}': "
-						f"locked {e!r} != resolved {r!r}"
-					)
+			if e != r:
+				errors.append(
+					f"artifact '{art_name}' dep '{pkg_id}': "
+					f"locked {e!r} != resolved {r!r}"
+				)
 	return errors
 
 
@@ -317,8 +220,22 @@ def _run_impl(args: argparse.Namespace) -> int:
 		print("drift prepare: no artifacts have package_deps; nothing to resolve")
 		return 0
 
-	# Build package index.
-	pkg_index = build_package_index(package_roots)
+	# Build package index.  When the run is a `--check --source-
+	# rebuild` verification, load the trust store once and thread it
+	# into `build_package_index` so the `.sig` cryptographic
+	# verification + per-module-namespace allowlist enforcement
+	# runs before any resolved dep reaches `_compare_locks_for_check`.
+	# The write path (no `--check`) does not take the flag and keeps
+	# the parse-only index — the lock-author's identity is the trust
+	# anchor there.
+	_prepare_trust_store = None
+	if getattr(args, "check", False) and _source_rebuild_enabled(args):
+		from tools.drift_deploy.trust_loader import load_merged_trust_store
+		_prepare_trust_store = load_merged_trust_store(manifest_dir)
+	pkg_index = build_package_index(
+		package_roots,
+		trust_store=_prepare_trust_store,
+	)
 
 	# Inject co-artifact entries: package-kind artifacts in the same manifest
 	# can satisfy each other's package_deps without being published.
@@ -345,57 +262,76 @@ def _run_impl(args: argparse.Namespace) -> int:
 			pkg_index[art.name] = [entry]
 
 	# Resolve each artifact.
+	#
+	# For `--check --source-rebuild`, the authoritative resolve is
+	# done below in the `--check` branch via
+	# `source_rebuild.resolve_source_rebuild` — the single source-
+	# rebuild authority that `drift build` / `drift deploy` also
+	# consume.  Doing it here too would double-resolve and split the
+	# trust-gate policy across two call sites.  Skip the main-loop
+	# resolve in that case; the authority will run its own resolve +
+	# per-dep structural trust gates + evidence collection.
+	_is_src_rebuild_check = (
+		getattr(args, "check", False) and _source_rebuild_enabled(args)
+	)
 	resolved_map: dict[str, dict[str, ResolvedDep]] = {}
-	for art in artifacts:
-		if not art.package_deps:
-			continue
-		direct_deps = [(dep.name, dep.version) for dep in art.package_deps]
-		try:
-			resolved = resolve_artifact(
-				art.name, direct_deps, pkg_index,
-				searched_roots=package_roots,
-			)
-		except ResolutionError as e:
-			raise PrepareError(str(e))
-
-		# Mark co-artifact deps: sha256 is unknown at prepare time
-		# (the .dmp hasn't been built yet).  Use an empty sha — the
-		# v4 reader accepts empty sha256 iff dep_type="co-artifact",
-		# and `verify_lock_compatibility` skips co-artifacts entirely.
-		# Deploy verifies the real sha at build time after the
-		# co-artifact is staged.  Same skip applies to
-		# `source_content_id` and `source_attestation_key` — both are
-		# left "" until the co-artifact's `.source-attestation`
-		# sidecar is emitted later in the same deploy run.
-		for pkg_id in list(resolved):
-			if pkg_id in co_artifact_names:
-				old = resolved[pkg_id]
-				# Match the shape `read_lock` reconstructs from the
-				# on-disk JSON (see lockfile.read_lock): `package_id`
-				# is the map key, `author_key` / `source_content_id` /
-				# `source_attestation_key` are "" for co-artifacts
-				# (signing and attestation have not happened yet —
-				# the .dmp + sidecars are built later in the same
-				# deploy run).  Without these the in-memory map and
-				# the freshly-read lock compare unequal even when
-				# they serialise identically, which broke `drift
-				# prepare --check` for any manifest with a co-
-				# artifact dep before the Phase 0 fix.
-				resolved[pkg_id] = ResolvedDep(
-					version=old.version,
-					sha256="",
-					dep_type="co-artifact",
-					package_id=pkg_id,
-					author_key="",
-					source_content_id="",
-					source_attestation_key="",
+	if not _is_src_rebuild_check:
+		for art in artifacts:
+			if not art.package_deps:
+				continue
+			direct_deps = [(dep.name, dep.version) for dep in art.package_deps]
+			try:
+				resolved = resolve_artifact(
+					art.name, direct_deps, pkg_index,
+					searched_roots=package_roots,
 				)
+			except ResolutionError as e:
+				raise PrepareError(str(e))
 
-		resolved_map[art.name] = resolved
+			# Mark co-artifact deps: sha256 is unknown at prepare time
+			# (the .dmp hasn't been built yet).  Use an empty sha —
+			# the v4 reader accepts empty sha256 iff dep_type="co-
+			# artifact", and `verify_lock_compatibility` skips co-
+			# artifacts entirely.  Deploy verifies the real sha at
+			# build time after the co-artifact is staged.  Same skip
+			# applies to `source_content_id` and
+			# `source_attestation_key` — both are left "" until the
+			# co-artifact's `.source-attestation` sidecar is emitted
+			# later in the same deploy run.
+			for pkg_id in list(resolved):
+				if pkg_id in co_artifact_names:
+					old = resolved[pkg_id]
+					# Match the shape `read_lock` reconstructs from
+					# the on-disk JSON (see lockfile.read_lock):
+					# `package_id` is the map key, `author_key` /
+					# `source_content_id` / `source_attestation_key`
+					# are "" for co-artifacts (signing and
+					# attestation have not happened yet — the .dmp +
+					# sidecars are built later in the same deploy
+					# run).  Without these the in-memory map and the
+					# freshly-read lock compare unequal even when
+					# they serialise identically, which broke `drift
+					# prepare --check` for any manifest with a co-
+					# artifact dep before the Phase 0 fix.
+					resolved[pkg_id] = ResolvedDep(
+						version=old.version,
+						sha256="",
+						dep_type="co-artifact",
+						package_id=pkg_id,
+						author_key="",
+						source_content_id="",
+						source_attestation_key="",
+					)
+
+			resolved_map[art.name] = resolved
 
 	# Phase B trust gate: every non-co-artifact resolved dep must
 	# carry a valid source identity (`source_content_id` +
 	# `source_attestation_key`) before the v4 lock is written.
+	# Skipped under `--check --source-rebuild` — `resolved_map` is
+	# empty there (the authoritative resolve lives in the `--check`
+	# branch via `resolve_source_rebuild`, whose
+	# `apply_structural_trust_gates` pass enforces the same gate).
 	# Empty fields here mean the package's `.source-attestation`
 	# sidecar was missing or failed cross-binding / signature
 	# verification at index time (see
@@ -476,38 +412,77 @@ def _run_impl(args: argparse.Namespace) -> int:
 				file=sys.stderr,
 			)
 			return 1
-		byte_drift_log: list[tuple[str, str, str, str, str, str]] = []
-		errors = _compare_locks_for_check(
-			existing, resolved_map,
-			source_rebuild=source_rebuild,
-			byte_drift_log=byte_drift_log,
-		)
-		# Always surface byte/signer drift as evidence when we saw any,
-		# even if the overall check passes.  In strict mode this list
-		# is always empty (differences become errors instead), so the
-		# branch is a no-op there.  Prints before the pass/fail verdict
-		# so the evidence sits next to the mode label in CI logs.
-		if byte_drift_log:
-			print(
-				f"drift prepare --check ({mode_label}): byte/signer drift "
-				f"vs. lock (tolerated under source-rebuild mode):"
+		if source_rebuild:
+			# Single source-rebuild authority: `resolve_source_
+			# rebuild` per artifact.  This is the SAME call path
+			# `drift build --source-rebuild` and `drift deploy
+			# --source-rebuild` take — one executable policy across
+			# prepare / build / deploy.  Returns a typed
+			# `SourceRebuildResult(resolved_graph, evidence, errors)`
+			# that prepare here aggregates across artifacts for the
+			# run-wide verdict.
+			from tools.drift_deploy.source_rebuild import (
+				print_evidence,
+				resolve_source_rebuild,
 			)
-			for art_name, pkg_id, lsha, rsha, lak, rak in byte_drift_log:
-				print(f"  {art_name} -> {pkg_id}:")
-				if lsha != rsha:
-					print(f"    sha256      locked={lsha!r} resolved={rsha!r}")
-				if lak != rak:
-					print(f"    author_key  locked={lak!r} resolved={rak!r}")
+			errors: list[str] = []
+			# Resolve every artifact with package_deps.  The
+			# trust-verified `pkg_index` (built above with
+			# `trust_store=_prepare_trust_store` and co-artifact
+			# overlays) is passed in so the authority reuses it
+			# instead of re-discovering packages.
+			fresh_resolved: dict[str, dict[str, ResolvedDep]] = {}
+			for art in artifacts:
+				if not art.package_deps:
+					continue
+				result = resolve_source_rebuild(
+					artifact=art,
+					package_roots=package_roots,
+					manifest_dir=manifest_dir,
+					existing_lock_graph=existing.get(art.name, {}),
+					co_artifact_names=co_artifact_names,
+					pkg_index=pkg_index,
+					trust_store=_prepare_trust_store,
+				)
+				errors.extend(result.errors)
+				fresh_resolved[art.name] = result.resolved_graph
+				print_evidence(
+					art_name=art.name,
+					channel="drift prepare --check",
+					evidence=result.evidence,
+				)
+			# Artifact-set drift is structural (the consumer's own
+			# manifest changed), not upstream movement — fail in
+			# source-rebuild mode too.
+			art_added = sorted(fresh_resolved.keys() - existing.keys())
+			art_removed = sorted(existing.keys() - fresh_resolved.keys())
+			if art_added:
+				errors.append(f"artifacts added since prepare: {', '.join(art_added)}")
+			if art_removed:
+				errors.append(f"artifacts removed since prepare: {', '.join(art_removed)}")
+			if errors:
+				print(
+					f"drift prepare --check (source-rebuild): {lock_path} is "
+					f"stale or trust-gated; run `drift prepare` to refresh",
+					file=sys.stderr,
+				)
+				for err in errors:
+					print(f"  {err}", file=sys.stderr)
+				return 1
+			print(f"drift prepare --check (source-rebuild): {lock_path} is up-to-date")
+			return 0
+		# Strict `--check`: byte-exact lock vs. fresh-resolve.
+		errors = _compare_locks_for_check(existing, resolved_map)
 		if errors:
 			print(
-				f"drift prepare --check ({mode_label}): {lock_path} is "
+				f"drift prepare --check (strict): {lock_path} is "
 				f"stale; run `drift prepare` to refresh",
 				file=sys.stderr,
 			)
 			for err in errors:
 				print(f"  {err}", file=sys.stderr)
 			return 1
-		print(f"drift prepare --check ({mode_label}): {lock_path} is up-to-date")
+		print(f"drift prepare --check (strict): {lock_path} is up-to-date")
 		return 0
 
 	# Write lock file — full rewrite for the entire manifest.

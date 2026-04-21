@@ -820,9 +820,11 @@ class TestPrepareCheckSourceRebuild:
 	_SCID = "sha256:" + "a"*64
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
 	def test_source_rebuild_tolerates_sha_and_author_key_drift(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
 		"""The committed lock pins sha=AAA / author=key-A; the resolver
 		now sees a rebuilt artifact at sha=BBB / author=key-B but with
@@ -830,9 +832,7 @@ class TestPrepareCheckSourceRebuild:
 		source_attestation_key — `--check --source-rebuild` passes and
 		logs the drift as evidence."""
 		mock_index.return_value = {}
-		# First call (lock write): original bytes + signer.
-		# Second call (--check): rebuilt bytes + different signer,
-		# same source identity.
+		# Write + strict --check use drift_prepare.resolve_artifact.
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="AAA", dep_type="direct",
@@ -840,6 +840,16 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
+			{"ext.lib": ResolvedDep(
+				version="1.0.0", sha256="BBB", dep_type="direct",
+				package_id="ext.lib", author_key="ed25519:key-B",
+				source_content_id=self._SCID,
+				source_attestation_key="ed25519:attest-key",
+			)},
+		]
+		# --check --source-rebuild uses source_rebuild.resolve_artifact
+		# (the single authority dispatches there).
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="BBB", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:key-B",
@@ -854,21 +864,14 @@ class TestPrepareCheckSourceRebuild:
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
 			# --check (strict) should FAIL because sha/author drifted.
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path), "--check"])) == 1
-			# Third call needed for the source-rebuild check run.
-			mock_resolve.side_effect = [
-				{"ext.lib": ResolvedDep(
-					version="1.0.0", sha256="BBB", dep_type="direct",
-					package_id="ext.lib", author_key="ed25519:key-B",
-					source_content_id=self._SCID,
-					source_attestation_key="ed25519:attest-key",
-				)},
-			]
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check", "--source-rebuild",
 			])) == 0
 			out = capsys.readouterr().out
-			assert "byte/signer drift" in out
-			assert "my.pkg -> ext.lib" in out
+			# 0.31.1 unified format: per-artifact evidence block
+			# produced by `source_rebuild.print_evidence`.
+			assert "drift vs. lock" in out
+			assert "my.pkg" in out and "ext.lib" in out
 			assert "sha256" in out
 			assert "'AAA'" in out and "'BBB'" in out
 			assert "author_key" in out
@@ -876,16 +879,28 @@ class TestPrepareCheckSourceRebuild:
 			assert "source-rebuild" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_rejects_source_content_id_drift(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	def test_source_rebuild_accepts_source_content_id_drift_as_evidence(
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
-		"""Source identity IS enforced even under --source-rebuild.  A
-		scid mismatch means the rebuild was NOT from the source the
-		owner attested — the trust root is gone, fail check."""
+		"""Source-rebuild mode logs `source_content_id` drift as
+		evidence and passes `--check`.  Rationale: orch's run-all-
+		latest.json selects source commits for every member of the
+		graph, so a compatible upstream patch landing in a dep
+		legitimately shifts its scid without the downstream having
+		touched its own lock.  The trust anchor for source-rebuild is
+		the trust store's namespace allowlist (owner-continuity),
+		which is verified at package-index time, NOT per-dep scid
+		equality with the downstream lock.  Re-introducing an scid
+		hard-gate here would stale every downstream lock on every
+		compatible upstream patch — the exact Lock-v2 contract
+		violation the 0.31.1 semantics fix reverses."""
 		mock_index.return_value = {}
 		scid_a = "sha256:" + "a"*64
 		scid_b = "sha256:" + "b"*64
+		# Write path: drift_prepare.resolve_artifact
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="AAA", dep_type="direct",
@@ -893,6 +908,9 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=scid_a,
 				source_attestation_key="ed25519:attest-key",
 			)},
+		]
+		# --check --source-rebuild: source_rebuild.resolve_artifact
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="BBB", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:key-B",
@@ -906,20 +924,30 @@ class TestPrepareCheckSourceRebuild:
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check", "--source-rebuild",
-			])) == 1
-			err = capsys.readouterr().err
-			assert "source_content_id" in err
-			assert "ext.lib" in err
+			])) == 0
+			out = capsys.readouterr().out
+			assert "source_content_id" in out
+			assert "ext.lib" in out
+			assert scid_a in out and scid_b in out
+			assert "up-to-date" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_rejects_source_attestation_key_drift(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	def test_source_rebuild_accepts_source_attestation_key_drift_as_evidence(
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
-		"""source_attestation_key is the trust-root kid; if the on-disk
-		attestation was re-signed by a different key, source-rebuild
-		mode must reject — accepting would let an attacker republish
-		under a key the owner never authorised."""
+		"""Source-rebuild mode logs `source_attestation_key` drift as
+		evidence and passes `--check`.  Trust-root substitution (an
+		unauthorised key re-signing a package) is caught at package-
+		index time by `signature_v0.py::verify_package_signatures`
+		against the trust store's namespace allowlist — NOT by
+		per-dep lock equality here.  Enforcing equality at the
+		downstream lock would mean every legitimate upstream rotation
+		(kid retirement with a still-allowlisted successor) stales
+		every downstream lock, violating the Lock-v2 compatible-patch
+		contract."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -928,6 +956,8 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-A",
 			)},
+		]
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="BBB", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:key-B",
@@ -941,17 +971,29 @@ class TestPrepareCheckSourceRebuild:
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check", "--source-rebuild",
-			])) == 1
-			err = capsys.readouterr().err
-			assert "source_attestation_key" in err
+			])) == 0
+			out = capsys.readouterr().out
+			assert "source_attestation_key" in out
+			assert "ed25519:attest-A" in out
+			assert "ed25519:attest-B" in out
+			assert "up-to-date" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_rejects_version_drift(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	def test_source_rebuild_accepts_version_drift_as_evidence(
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
-		"""Version drift is NOT tolerated even under source-rebuild —
-		a rebuilt 1.0.0 is not equivalent to 1.0.1.  Pin."""
+		"""Source-rebuild mode logs `version` drift as evidence and
+		passes `--check`.  Version is enforced-in-range at resolver
+		time (the resolver wouldn't produce a graph if the downstream
+		manifest's range didn't satisfy), so a shift from 1.0.0 to
+		1.0.1 inside the locked range is a compatible upstream patch
+		orch legitimately selected via run-all-latest.json.  The
+		Lock-v2 contract explicitly decouples the lock's exact-
+		version pin from artifact/source pinning for the source-
+		rebuild lane."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -960,6 +1002,8 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
+		]
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.1", sha256="AAA", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:key-A",
@@ -973,18 +1017,32 @@ class TestPrepareCheckSourceRebuild:
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check", "--source-rebuild",
-			])) == 1
-			err = capsys.readouterr().err
-			assert "version" in err
+			])) == 0
+			out = capsys.readouterr().out
+			# New format: `~ ext.lib: version 1.0.0 -> 1.0.1`
+			assert "version" in out
+			assert "1.0.0" in out and "1.0.1" in out
+			assert "up-to-date" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_rejects_dep_set_change(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+	def test_source_rebuild_accepts_transitive_dep_set_drift_as_evidence(
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
-		"""If a dep appears or disappears between lock and re-resolve,
-		source-rebuild mode must reject — the graph shape is wrong,
-		which is never equivalent regardless of byte drift."""
+		"""Policy as of 0.31.1 (reviewer gate #2): transitive dep-
+		set drift (new transitive dep appears, or old one disappears)
+		is EVIDENCE in source-rebuild mode, not a hard failure.  A
+		compatible upstream patch that adds / removes its transitive
+		deps legitimately shifts the downstream's graph; gating on
+		that would re-introduce the "every upstream patch stales
+		every downstream lock" churn the 0.31.1 alignment is
+		specifically meant to eliminate.  The resolver has already
+		enforced every selected version against consumer ranges
+		(direct deps) and producer `required_deps` (transitive), so
+		a dep-set change here is upstream graph movement permitted
+		by those ranges."""
 		mock_index.return_value = {}
 		mock_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
@@ -993,6 +1051,8 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
+		]
+		mock_sr_resolve.side_effect = [
 			{
 				"ext.lib": ResolvedDep(
 					version="1.0.0", sha256="AAA", dep_type="direct",
@@ -1014,16 +1074,19 @@ class TestPrepareCheckSourceRebuild:
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
 			assert _run_impl(p.parse_args([
 				"--manifest", str(manifest_path), "--check", "--source-rebuild",
-			])) == 1
-			err = capsys.readouterr().err
-			assert "deps added" in err
-			assert "ext.extra" in err
+			])) == 0
+			out = capsys.readouterr().out
+			# New format: `+ ext.extra@0.5.0 (new in resolved graph)`
+			assert "new in resolved graph" in out
+			assert "ext.extra" in out
+			assert "up-to-date" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
 	def test_source_rebuild_via_env_var_only(
-		self, mock_resolve: MagicMock, mock_index: MagicMock,
-		capsys, monkeypatch,
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys, monkeypatch,
 	) -> None:
 		"""`DRIFT_SOURCE_REBUILD=1` alone (no `--source-rebuild` flag)
 		switches `--check` into source-rebuild mode.  This is the path
@@ -1038,6 +1101,8 @@ class TestPrepareCheckSourceRebuild:
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
 			)},
+		]
+		mock_sr_resolve.side_effect = [
 			{"ext.lib": ResolvedDep(
 				version="1.0.0", sha256="BBB", dep_type="direct",
 				package_id="ext.lib", author_key="ed25519:key-B",
@@ -1056,7 +1121,8 @@ class TestPrepareCheckSourceRebuild:
 			])) == 0
 			out = capsys.readouterr().out
 			assert "source-rebuild" in out
-			assert "byte/signer drift" in out
+			# 0.31.1 unified format: per-artifact evidence block.
+			assert "drift vs. lock" in out
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
@@ -1150,9 +1216,11 @@ class TestPrepareCheckSourceRebuild:
 	# ── Trust-root gate (fix for review finding #1) ──────────────────
 
 	@patch("tools.drift_deploy.drift_prepare.build_package_index")
+	@patch("tools.drift_deploy.source_rebuild.resolve_artifact")
 	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
 	def test_source_rebuild_rejects_unsigned_direct_dep(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
+		self, mock_resolve: MagicMock, mock_sr_resolve: MagicMock,
+		mock_index: MagicMock, capsys,
 	) -> None:
 		"""Pin: a direct dep with `author_key: "unsigned"` on BOTH
 		sides of the comparison must NOT pass `--check --source-
@@ -1168,9 +1236,12 @@ class TestPrepareCheckSourceRebuild:
 			source_content_id="",
 			source_attestation_key="",
 		)
-		# Same on all three calls (write + --check strict + --check
-		# source-rebuild) — resolver is deterministic.
+		# Write + strict --check take drift_prepare.resolve_artifact;
+		# --check --source-rebuild takes source_rebuild.resolve_artifact.
+		# Both resolve to the same unsigned dep (resolver is
+		# deterministic).
 		mock_resolve.return_value = {"ext.lib": unsigned_dep}
+		mock_sr_resolve.return_value = {"ext.lib": unsigned_dep}
 		with tempfile.TemporaryDirectory() as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
@@ -1190,155 +1261,78 @@ class TestPrepareCheckSourceRebuild:
 			assert "unsigned" in err
 			assert "ext.lib" in err
 
-	@patch("tools.drift_deploy.drift_prepare.build_package_index")
-	@patch("tools.drift_deploy.drift_prepare.resolve_artifact")
-	def test_source_rebuild_rejects_empty_source_identity_both_sides(
-		self, mock_resolve: MagicMock, mock_index: MagicMock, capsys,
-	) -> None:
-		"""Pin: if a signed dep somehow has empty source identity on
-		BOTH sides (e.g. a hand-rolled test fixture, or a forward-compat
-		lock from a toolchain that predates sidecar emission that
-		slipped through), source-rebuild mode must reject — the trust
-		root is missing and equal-but-empty is not the same as equal-
-		and-attested."""
-		mock_index.return_value = {}
+	# ── source-rebuild structural trust gates (direct unit pins) ──
+	# Under the 0.31.1 resolve-driven model, `drift prepare --check
+	# --source-rebuild` delegates to `source_rebuild.apply_
+	# structural_trust_gates` for per-dep rejection logic.  These
+	# tests pin the helper directly (the unified entry point both
+	# --check and build/deploy share).  The helper's input is a
+	# resolved-side `dict[pkg_id, ResolvedDep]`; the lock is no
+	# longer consulted by these gates.
+
+	def test_source_rebuild_rejects_empty_disk_source_identity(self) -> None:
+		"""Policy: signed non-co-artifact deps must have non-empty
+		`source_content_id` AND `source_attestation_key` on the
+		RESOLVED (disk) side.  Empty identity means the disk
+		package has no attestation for the trust gate to verify —
+		a missing-sidecar regression, not legitimate drift."""
+		from tools.drift_deploy.source_rebuild import apply_structural_trust_gates
 		empty_identity_dep = ResolvedDep(
 			version="1.0.0", sha256="AAA", dep_type="direct",
 			package_id="ext.lib", author_key="ed25519:key-A",
 			source_content_id="",
 			source_attestation_key="",
 		)
-		# Bypass the write-path attestation gate by seeding the lock
-		# directly (the gate we're testing lives in --check, not in
-		# write; the scenario is a lock that slipped through some
-		# earlier looser gate and a re-resolve that also lacks the
-		# sidecar on disk).
-		mock_resolve.side_effect = [
-			{"ext.lib": ResolvedDep(
+		errors: list = []
+		apply_structural_trust_gates(
+			"my.pkg", {"ext.lib": empty_identity_dep},
+			co_artifact_names=set(), errors=errors,
+		)
+		assert errors, "empty disk source identity must hard-fail"
+		assert any("empty `source_content_id`" in e for e in errors), errors
+		assert any("empty `source_attestation_key`" in e for e in errors), errors
+
+	def test_source_rebuild_rejects_unsigned_resolved_dep(self) -> None:
+		"""Pin: `author_key == "unsigned"` OR empty author_key on the
+		resolved side triggers the trust-root rejection — unsigned
+		packages have no `.sig` for the owner-namespace gate to
+		verify against."""
+		from tools.drift_deploy.source_rebuild import apply_structural_trust_gates
+		for bad_kid in ("unsigned", ""):
+			unsigned_dep = ResolvedDep(
 				version="1.0.0", sha256="AAA", dep_type="direct",
-				package_id="ext.lib", author_key="ed25519:key-A",
+				package_id="ext.lib", author_key=bad_kid,
 				source_content_id=self._SCID,
 				source_attestation_key="ed25519:attest-key",
-			)},
-			{"ext.lib": empty_identity_dep},
-		]
-		with tempfile.TemporaryDirectory() as tmpdir:
-			manifest_path = self._write_manifest(tmpdir)
-			p = build_arg_parser()
-			# First run writes a properly-attested lock.
-			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
-			# Manually rewrite the lock to have empty source identity
-			# on the "existing" side.
-			lock_path = _drift_subdir(tmpdir) / "lock.json"
-			lock_json = json.loads(lock_path.read_text())
-			# v4 read_lock rejects signed entries with empty source
-			# identity, so this scenario can only arise post-read via
-			# in-memory tampering or a future-schema escape.  To
-			# exercise the _compare_locks_for_check gate directly,
-			# make BOTH sides empty and call the helper.
-			from tools.drift_deploy.drift_prepare import _compare_locks_for_check
-			drift_log: list = []
-			errors = _compare_locks_for_check(
-				{"my.pkg": {"ext.lib": empty_identity_dep}},
-				{"my.pkg": {"ext.lib": empty_identity_dep}},
-				source_rebuild=True,
-				byte_drift_log=drift_log,
 			)
-			assert any("no signed source identity" in e for e in errors), errors
-			# Strict mode lets equal-but-empty through (the existing
-			# behavior for strict is dict-equality; the write-time
-			# gate is what keeps empties out of real v4 locks).
-			strict_errors = _compare_locks_for_check(
-				{"my.pkg": {"ext.lib": empty_identity_dep}},
-				{"my.pkg": {"ext.lib": empty_identity_dep}},
-				source_rebuild=False,
-				byte_drift_log=drift_log,
+			errors: list = []
+			apply_structural_trust_gates(
+				"my.pkg", {"ext.lib": unsigned_dep},
+				co_artifact_names=set(), errors=errors,
 			)
-			assert strict_errors == []
-
-	def test_source_rebuild_rejects_empty_source_identity_helper_direct(self) -> None:
-		"""Unit pin on `_compare_locks_for_check` for the one-side
-		empty scenario (more realistic than both-sides-empty): the
-		lock has a valid signed identity but the re-resolved graph
-		lost it (e.g. sidecar was deleted/corrupted between prepare
-		and check).  Source-rebuild mode must reject."""
-		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
-		signed = ResolvedDep(
-			version="1.0.0", sha256="AAA", dep_type="direct",
-			package_id="ext.lib", author_key="ed25519:key-A",
-			source_content_id=self._SCID,
-			source_attestation_key="ed25519:attest-key",
-		)
-		empty = ResolvedDep(
-			version="1.0.0", sha256="AAA", dep_type="direct",
-			package_id="ext.lib", author_key="ed25519:key-A",
-			source_content_id="",
-			source_attestation_key="",
-		)
-		drift_log: list = []
-		errors = _compare_locks_for_check(
-			{"my.pkg": {"ext.lib": signed}},
-			{"my.pkg": {"ext.lib": empty}},
-			source_rebuild=True,
-			byte_drift_log=drift_log,
-		)
-		# Expect BOTH the scid/sak inequality error AND the
-		# trust-root gate error naming the resolved side.
-		assert any("source_content_id differs" in e for e in errors)
-		assert any("resolved entry has no signed source identity" in e for e in errors)
-
-	def test_source_rebuild_unsigned_helper_matrix(self) -> None:
-		"""Unit pin: `author_key == "unsigned"` on EITHER side of the
-		comparison triggers the trust-root rejection."""
-		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
-		signed = ResolvedDep(
-			version="1.0.0", sha256="AAA", dep_type="direct",
-			package_id="ext.lib", author_key="ed25519:key-A",
-			source_content_id=self._SCID,
-			source_attestation_key="ed25519:attest-key",
-		)
-		unsigned = ResolvedDep(
-			version="1.0.0", sha256="AAA", dep_type="direct",
-			package_id="ext.lib", author_key="unsigned",
-			source_content_id="",
-			source_attestation_key="",
-		)
-		for ed, rd, which in (
-			({"ext.lib": unsigned}, {"ext.lib": signed}, "locked"),
-			({"ext.lib": signed}, {"ext.lib": unsigned}, "resolved"),
-			({"ext.lib": unsigned}, {"ext.lib": unsigned}, "both"),
-		):
-			drift_log: list = []
-			errors = _compare_locks_for_check(
-				{"my.pkg": ed}, {"my.pkg": rd},
-				source_rebuild=True,
-				byte_drift_log=drift_log,
-			)
-			assert any("unsigned" in e for e in errors), (
-				f"{which}-unsigned case should surface an 'unsigned' "
-				f"trust-root error; got: {errors}"
+			assert errors, (
+				f"author_key={bad_kid!r} must trigger trust-root "
+				f"rejection; got: {errors}"
 			)
 
 	def test_source_rebuild_co_artifact_exempt_from_trust_gate(self) -> None:
 		"""Regression pin: co-artifact entries legitimately carry
-		empty source identity and must NOT trip the trust-root gate.
+		empty source identity and must NOT trip the trust gate.
 		Their `.dmp` + sidecars are built later in the same deploy
-		run; their structural emptiness at `--check` time is expected.
-		Without this exemption, drift-web's co-artifact-heavy
-		manifests would fail --check --source-rebuild."""
-		from tools.drift_deploy.drift_prepare import _compare_locks_for_check
+		run; their structural emptiness at `--check` time is
+		expected.  Without this exemption, drift-web's co-artifact-
+		heavy manifests would fail --check --source-rebuild."""
+		from tools.drift_deploy.source_rebuild import apply_structural_trust_gates
 		co = ResolvedDep(
 			version="0.2.3", sha256="", dep_type="co-artifact",
 			package_id="web-jwt", author_key="",
 			source_content_id="",
 			source_attestation_key="",
 		)
-		drift_log: list = []
-		errors = _compare_locks_for_check(
-			{"web-rest": {"web-jwt": co}},
-			{"web-rest": {"web-jwt": co}},
-			source_rebuild=True,
-			byte_drift_log=drift_log,
+		errors: list = []
+		apply_structural_trust_gates(
+			"web-rest", {"web-jwt": co},
+			co_artifact_names={"web-jwt"}, errors=errors,
 		)
 		assert errors == [], (
 			f"co-artifact with empty source identity must not trip "
@@ -1437,7 +1431,7 @@ class TestPrepareCheckSourceRebuild:
 				]))
 			assert rc == 0
 			out = buf.getvalue()
-			assert "byte/signer drift" not in out, (
+			assert "drift vs. lock" not in out, (
 				"co-artifact entries with symmetric empty sha/author_key "
 				"must not be flagged as drift evidence"
 			)

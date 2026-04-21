@@ -1687,16 +1687,25 @@ class TestLockCompatibility:
 		out = capsys.readouterr().out
 		# Run-evidence reporting: per-package locked → rebuilt sha pair
 		# must surface to stdout so the operator sees what diverged.
+		# 0.31.1 unified format: `drift vs. lock` + `sha256 'X' -> 'Y'`.
 		assert "source-rebuild" in out
-		assert "byte-drift" in out
+		assert "drift vs. lock" in out
+		assert "sha256" in out
 		assert "dep-a" in out
 		assert locked_sha in out
 		assert rebuilt_sha in out
 
-	def test_source_rebuild_rejects_source_identity_mismatch(self, tmp_path, capsys):
-		"""Phase D: source-rebuild mode REJECTS when source identity
-		differs (different source attested) — sha tolerance does not
-		extend to source identity, which is the trust root."""
+	def test_source_rebuild_accepts_source_identity_drift_as_evidence(self, tmp_path, capsys):
+		"""Policy as of `fix/source-rebuild-trust-anchor` (0.31.1):
+		source_content_id drift is EVIDENCE in source-rebuild mode,
+		not a hard failure.  Orch selects source via run-all-latest.
+		json; the downstream lock records what the repo author last
+		prepared against.  A compatible upstream patch legitimately
+		shifts the dep's scid without the downstream having touched
+		its own lock.  Trust comes from the namespace-allowlist check
+		at package-index time (`signature_v0.py::verify_package_
+		signatures`), not per-dep scid equality with the lock.  See
+		`docs/history.md` 2026-04-21 for the full rationale."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -1719,7 +1728,9 @@ class TestLockCompatibility:
 		pkg_root.mkdir()
 		from tools.drift_deploy.drift_build import run
 		with mock.patch("shutil.which", return_value="/usr/bin/driftc"), \
-			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx:
+			 mock.patch("tools.drift_deploy.drift_build.build_package_index") as mock_idx, \
+			 mock.patch("tools.drift_deploy.drift_build.subprocess.run") as mock_sub:
+			mock_sub.return_value = mock.Mock(returncode=0, stdout="", stderr="")
 			mock_idx.return_value = {
 				"dep-a": [PackageEntry(
 					package_id="dep-a", version=parse_version("0.1.3"),
@@ -1727,7 +1738,7 @@ class TestLockCompatibility:
 					sha256=rebuilt_sha,
 					required_deps=[],
 					author_key="ed25519:rebuilder",
-					source_content_id="sha256:" + "9"*64,  # ← different source!
+					source_content_id="sha256:" + "9"*64,  # ← drifted
 					source_attestation_key="ed25519:test",
 				)],
 			}
@@ -1737,10 +1748,13 @@ class TestLockCompatibility:
 				"--source-rebuild",
 			])
 
-		assert result == 1
-		err = capsys.readouterr().err
-		assert "source_content_id mismatch" in err
-		assert "rebuilt from different source" in err
+		# Source identity drift no longer fails the build.  The sha-
+		# drift evidence line is still printed; we don't assert on a
+		# per-field scid evidence line here because the build-time
+		# caller plumbs only sha_drift_log (signer evidence is an
+		# optional follow-up — `drift prepare --check` already surfaces
+		# version/source-identity drift on the certification path).
+		assert result == 0
 
 	def test_source_rebuild_rejects_missing_source_attestation(self, tmp_path, capsys):
 		"""Phase D: source-rebuild mode hard-fails when on-disk has no
@@ -1788,7 +1802,7 @@ class TestLockCompatibility:
 
 		assert result == 1
 		err = capsys.readouterr().err
-		assert "source-rebuild mode requires" in err
+		assert "source-rebuild requires" in err
 		assert "republish" in err.lower()
 
 	def test_default_strict_still_rejects_sha_drift_without_flag(self, tmp_path, capsys):
@@ -1896,8 +1910,10 @@ class TestLockCompatibility:
 		assert result == 0, capsys.readouterr().err
 		out = capsys.readouterr().out
 		# Run-evidence emission proves source-rebuild lane was active.
+		# 0.31.1 unified format: `drift vs. lock` + `sha256 'X' -> 'Y'`.
 		assert "source-rebuild" in out
-		assert "byte-drift" in out
+		assert "drift vs. lock" in out
+		assert "sha256" in out
 		assert "dep-a" in out
 
 	def test_env_var_unset_means_default_strict_mode(self, tmp_path, capsys, monkeypatch):

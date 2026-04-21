@@ -1,5 +1,173 @@
 # Drift development history
 
+## 2026-04-21
+- **Source-rebuild trust anchor: disk-kid namespace gate replaces
+  lock-kid equality (0.31.1, ABI unchanged at 10).** Branch
+  `fix/source-rebuild-trust-anchor`.
+
+  The bug: the 0.30.0 source-rebuild implementation treated the
+  downstream repo's lock as the source-selection authority —
+  `verify_lock_compatibility` required `source_content_id` equality
+  (plus `source_attestation_key` equality) between the on-disk
+  package and the downstream lock before accepting the rebuild.
+  That equality gate presumed "the downstream lock IS the source
+  graph orch wants to rebuild."  Orch actually selects source via
+  its own pinning file (`run-all-latest.json` or equivalent), so
+  every compatible upstream patch (even tooling-only commits) shifted
+  the upstream package's `source_content_id` away from what the
+  downstream lock recorded.  The operational consequence: every
+  upstream patch staled every downstream's lock, forcing every
+  consumer to re-`drift prepare` + commit + PR + bump the downstream
+  pin before orch could certify — the exact churn the Lock-v2
+  contract was designed to eliminate.
+
+  The fix has two halves:
+
+    - **Lock-side identity becomes evidence.** Source-rebuild no
+      longer gates on lock-vs-disk equality for `sha256`,
+      `author_key`, `source_content_id`, or `source_attestation_key`.
+      Drift on any of those axes is recorded in caller-supplied
+      `sha_drift_log` / `signer_drift_log` lists and printed by
+      `drift prepare --check` / `drift build` / `drift deploy` as
+      run evidence — the lock records what the repo author last
+      prepared against, not what orch is rebuilding from.
+
+    - **Disk-side trust gate replaces lock-kid equality as the
+      trust anchor.** Source-rebuild now enforces, for every signed
+      non-co-artifact dep:
+        * the on-disk `.source-attestation` sidecar is present
+          (`disk.source_content_id` and
+          `disk.source_attestation_key` both non-empty) — missing /
+          empty identity is a hard fail, not silent drift tolerance.
+        * each on-disk package's `.sig` is CRYPTOGRAPHICALLY
+          verified (not merely kid-parsed) against the trust
+          store's pubkeys — done at `build_package_index` time via
+          `signature_v0.verify_package_signatures`, which also
+          enforces the per-MODULE-NAMESPACE (`net_tls.*`, not the
+          package id `net-tls`) allowlist + non-revocation against
+          each `module_id` in the package's manifest.  Packages
+          that fail either check are dropped from the index with a
+          stderr warning; `verify_lock_compatibility` then treats
+          everything in the index as already trust-verified.
+        * `verify_lock_compatibility` in source-rebuild mode
+          REQUIRES a caller-supplied `TrustStore`; calling without
+          one raises `ValueError` at function top.  Defence-in-
+          depth allowlist / revocation re-check runs there when
+          `PackageEntry.module_ids` is populated by the trust-
+          aware index path.
+      `build_package_index` (pre-0.31.1) only read the raw `.sig`
+      and `.source-attestation` bytes and parsed kids without
+      cryptographic verification — a forged `.sig` naming an
+      allowlisted kid would pass.  The new trust-aware index path
+      closes that hole, and `verify_lock_compatibility`'s
+      docstring + module-level block explicitly document that
+      source-rebuild callers MUST pass `trust_store=` to
+      `build_package_index` as well.
+
+  Unsigned dev-opt-in remains rejected in source-rebuild (an
+  unsigned package has no `.source-attestation` for the trust gate
+  to check).  Co-artifact entries remain exempt from all three
+  disk-side gates — their sidecars are built later in the same
+  deploy run and are intentionally empty at verify time.
+
+  **Version drift and dep-set drift** (reviewer Highs #1 / #2):
+  Under the resolve-driven model the resolver picks each version
+  against consumer manifest ranges (direct) and producer required_
+  deps (transitive).  A compatible upstream patch that bumps a
+  direct dep (inside-range) or adds/removes a transitive dep
+  flows into the fresh graph automatically; the build compiles
+  against the fresh graph, not the lock.  Artifact-set changes
+  (the manifest's declared libraries/apps) remain hard-fail in
+  both modes — they come from the consumer's own manifest, not
+  upstream movement.  Trust gates are applied uniformly: unsigned
+  deps reject, missing `.source-attestation` rejects, untrusted /
+  revoked disk kids reject (cryptographic check at index time).
+
+  **Trust-verification fail-fast** (reviewer Medium #3): a
+  package whose `.sig` does not cryptographically verify against
+  the trust store's namespace allowlist is a HARD ERROR from
+  `build_package_index(trust_store=...)`, not a silent warn-and-
+  prune.  Silent pruning would let the resolver fall back to an
+  older trusted in-range version, masking the exact package orch
+  staged.  The error names the offending file and the
+  verification failure cause.
+
+  **Single source-rebuild authority.**  The three callers share
+  one policy module — `tools/drift_deploy/source_rebuild.py` —
+  that exposes `resolve_source_rebuild(...) -> SourceRebuildResult`
+  returning `(resolved_graph, evidence, errors)`.  The shared
+  pipeline is:
+
+    1. Load merged trust store (new helper
+       `tools/drift_deploy/trust_loader.py::load_merged_trust_store`).
+    2. `build_package_index(trust_store=...)` — cryptographic
+       `.sig` verification + per-module-namespace allowlist;
+       HARD FAIL on trust verification failure (no silent prune;
+       no fallback to older trusted in-range version, which
+       would mask orch's staged package).
+    3. `resolve_artifact` picks versions against consumer
+       manifest ranges (direct) and producer required_deps
+       (transitive) — the ordinary constraint solver.
+    4. Structural per-dep gates on the fresh graph: unsigned
+       reject, empty source identity reject.
+    5. Graph-shape comparison vs. the existing lock collected
+       as `SourceRebuildEvidence` (added / removed / version_
+       changed / sha_drift / signer_drift) — informational only.
+
+  `drift_build.py::_resolve_deps`, `drift_deploy.py::_resolve_
+  artifact_deps`, and `drift_prepare.py::_run_impl --check`
+  each call `resolve_source_rebuild` (or its lower-level
+  helpers `apply_structural_trust_gates` + `compare_lock_vs_fresh`
+  when the caller already produced a fresh resolve).  The
+  compile graph is ALWAYS `rebuild.resolved_graph` — the lock
+  is never consulted as the dependency graph source under
+  source-rebuild.  Version drift and dep-set drift are
+  structurally handled by the resolver; no per-caller
+  `version_substitutions` / `manifest_ranges` patching is
+  needed (removed as part of this landing).  Strict mode is
+  unchanged: the lock is authoritative, `verify_lock_
+  compatibility` enforces byte-exact equality.
+
+  **Module-doc update:** the "Two verify modes, one trust root"
+  block in `tools/drift_deploy/lockfile.py` now explicitly
+  documents that `verify_lock_compatibility` itself enforces the
+  namespace-allowlist + non-revocation check against disk kids
+  (not delegating to `signature_v0.py::verify_package_signatures`,
+  which only gates package admission at load time, not disk-
+  identity selection at lock-verify time).
+
+  **Tests:** new `TestVerifyV4SourceIdentityEnforcement` pins in
+  `test_resolver.py` cover (a) missing trust store in source-
+  rebuild raises, (b) untrusted disk `author_key` rejects, (c)
+  revoked disk `author_key` rejects, (d) same two gates for
+  `source_attestation_key`, (e) positive path: both disk kids
+  allowlisted → accept with signer drift evidence, (f) empty
+  disk `source_content_id` rejects for signed non-co-artifact.
+  Corresponding prepare-side pins updated in `test_prepare.py`:
+  the old "accept empty disk source identity as evidence" tests
+  are flipped to "reject empty disk source identity" (reviewer
+  gate #5).  A permissive trust-store shim
+  (`tools/drift_deploy/_test_trust.PermissiveTrustStore`) plus
+  autouse conftest fixture keep the existing ~450 CLI-path tests
+  going without per-test trust-store setup; direct-call tests
+  that pin trust-gate rejection build real `TrustStore` instances
+  with specific namespace allowlists / revocation sets.
+
+  **Version:** DRIFTC_VERSION 0.31.0 → 0.31.1.  ABI unchanged — the
+  boundary contract is intact; this is a trust-policy correction,
+  not a runtime-surface change.
+
+  **Consumer impact:** downstream repos do not re-`drift prepare`
+  to pick up this fix.  Their existing v4 locks continue to verify
+  under strict mode (no change).  Under source-rebuild mode
+  (`--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`), previously-
+  staling locks that now drift on upstream source/signer identity
+  will pass — provided the currently-installed disk kids remain
+  in the trust store's namespace allowlist for each package.
+  Orch teams may want to audit `drift/trust.json` to ensure
+  rotated signer kids are explicitly allowlisted before cutting
+  the next cert run.
+
 ## 2026-04-20
 - **Phase 2a of `fix/ownership-drop-ledger`: actual fix for the
   `match Optional<String>` double-drop UAF (0.31.0, ABI 10)**.

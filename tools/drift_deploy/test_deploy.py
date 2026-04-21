@@ -2051,19 +2051,28 @@ class TestDeploySourceRebuild:
 			assert "net-crypto" in resolved
 			assert resolved["net-crypto"].version == "0.1.0"
 			out = capsys.readouterr().out
+			# 0.31.1 unified format: one evidence block per artifact
+			# produced by `source_rebuild.print_evidence`; sha drift
+			# appears as `sha256 'X' -> 'Y'`.
 			assert "drift deploy --source-rebuild" in out
-			assert "byte-drift" in out
+			assert "drift vs. lock" in out
+			assert "sha256" in out
 			assert "net-crypto" in out
 			assert locked_sha in out
 			assert rebuilt_sha in out
 
 	@patch("tools.drift_deploy.drift_deploy.build_package_index")
-	def test_deploy_source_rebuild_rejects_source_identity_mismatch(
+	def test_deploy_source_rebuild_accepts_source_identity_drift_as_evidence(
 		self, mock_index: MagicMock,
 	) -> None:
-		"""Deploy-level: source-rebuild rejects different source even
-		when sha drift would otherwise be tolerated.  Sha tolerance
-		does not extend to source identity — that's the trust root."""
+		"""Policy as of `fix/source-rebuild-trust-anchor` (0.31.1):
+		deploy-time source-rebuild accepts source_content_id drift as
+		evidence, not a hard failure.  Orch selects source via run-
+		all-latest.json; the downstream lock is evidence, not a
+		rebuild pin.  Trust comes from the namespace-allowlist check
+		at package-index time — per-dep scid equality here would
+		stale every downstream lock on every compatible upstream
+		patch, violating the Lock-v2 contract."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -2080,7 +2089,7 @@ class TestDeploySourceRebuild:
 					sha256=rebuilt_sha,
 					required_deps=[],
 					author_key="ed25519:rebuilder",
-					source_content_id="sha256:" + "9"*64,  # ≠ lock
+					source_content_id="sha256:" + "9"*64,  # ≠ lock (drifted)
 					source_attestation_key="ed25519:original-author-src",
 				)],
 			}
@@ -2103,17 +2112,16 @@ class TestDeploySourceRebuild:
 					),
 				},
 			}
-			with pytest.raises(DeployError) as exc:
-				_resolve_artifact_deps(
-					art,
-					package_roots=[Path(tmpdir)],
-					lock_path=_drift_subdir(tmpdir) / "lock.json",
-					existing_lock=existing_lock,
-					source_rebuild=True,
-				)
-			msg = str(exc.value)
-			assert "source_content_id mismatch" in msg
-			assert "rebuilt from different source" in msg
+			# No longer raises — source identity drift is evidence.
+			resolved = _resolve_artifact_deps(
+				art,
+				package_roots=[Path(tmpdir)],
+				lock_path=_drift_subdir(tmpdir) / "lock.json",
+				existing_lock=existing_lock,
+				source_rebuild=True,
+			)
+			assert "net-crypto" in resolved
+			assert resolved["net-crypto"].version == "0.1.0"
 
 	@patch("tools.drift_deploy.drift_deploy.build_package_index")
 	def test_deploy_default_strict_still_rejects_sha_drift_without_flag(
