@@ -2165,6 +2165,169 @@ class TestVerifyV4SourceIdentityEnforcement:
 					core_trust_store=core_trust,
 				)
 
+	# ── run-snapshot mode (0.31.3 consumer source-rebuild path) ───
+
+	def test_build_package_index_accepts_disk_matching_snapshot(self) -> None:
+		"""Consumer source-rebuild pin (0.31.3): a disk package whose
+		(scid, author_key, sak) matches the run snapshot's entry for
+		(pkg_id, version) passes build_package_index(run_snapshot=...).
+		Downstream's local trust store is NOT consulted — orch
+		verified author trust at staging time and attested through
+		the snapshot."""
+		from unittest.mock import patch
+		from tools.drift_deploy.resolver import build_package_index
+		from tools.drift_deploy.run_snapshot import RunSnapshot, SnapshotEntry
+		snapshot = RunSnapshot(
+			run_id="test-run",
+			packages={
+				"net-tls|0.4.1": SnapshotEntry(
+					source_content_id="sha256:" + "a"*64,
+					author_key="ed25519:orch-sig",
+					source_attestation_key="ed25519:orch-sak",
+				),
+			},
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			dmp = root / "net-tls-0.4.1.dmp"
+			dmp.write_bytes(b"fake-dmp")
+			manifest = {
+				"package_id": "net-tls",
+				"package_version": "0.4.1",
+				"modules": [{"module_id": "net_tls"}],
+				"required_deps": [],
+			}
+			with patch(
+				"tools.drift_deploy.resolver._read_source_attestation_meta",
+				return_value=("sha256:" + "a"*64, "ed25519:orch-sak"),
+			), patch(
+				"tools.drift_deploy.resolver._read_author_key",
+				return_value="ed25519:orch-sig",
+			):
+				idx = build_package_index(
+					[root],
+					load_manifest=lambda _p: manifest,
+					run_snapshot=snapshot,
+				)
+		assert "net-tls" in idx
+		assert len(idx["net-tls"]) == 1
+		assert str(idx["net-tls"][0].version) == "0.4.1"
+
+	def test_build_package_index_rejects_scid_mismatch_vs_snapshot(self) -> None:
+		"""Same pkg@version but disk scid differs from snapshot →
+		hard fail.  Detects a same-version source swap / trojan
+		inside the certification run."""
+		from unittest.mock import patch
+		from tools.drift_deploy.resolver import build_package_index
+		from tools.drift_deploy.run_snapshot import RunSnapshot, SnapshotEntry
+		snapshot = RunSnapshot(
+			run_id="test-run",
+			packages={
+				"net-tls|0.4.1": SnapshotEntry(
+					source_content_id="sha256:" + "a"*64,  # snapshot scid
+					author_key="ed25519:orch-sig",
+					source_attestation_key="ed25519:orch-sak",
+				),
+			},
+		)
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			dmp = root / "net-tls-0.4.1.dmp"
+			dmp.write_bytes(b"fake-dmp")
+			manifest = {
+				"package_id": "net-tls",
+				"package_version": "0.4.1",
+				"modules": [{"module_id": "net_tls"}],
+				"required_deps": [],
+			}
+			with patch(
+				"tools.drift_deploy.resolver._read_source_attestation_meta",
+				# Disk scid differs from snapshot.
+				return_value=("sha256:" + "z"*64, "ed25519:orch-sak"),
+			), patch(
+				"tools.drift_deploy.resolver._read_author_key",
+				return_value="ed25519:orch-sig",
+			), pytest.raises(ResolutionError, match="source_content_id"):
+				build_package_index(
+					[root],
+					load_manifest=lambda _p: manifest,
+					run_snapshot=snapshot,
+				)
+
+	def test_build_package_index_rejects_missing_snapshot_entry(self) -> None:
+		"""Disk has net-tls@0.4.1 but the snapshot has no entry for
+		that (pkg_id, version) → hard fail.  A package not in the
+		snapshot was never authorised by orch for this run."""
+		from unittest.mock import patch
+		from tools.drift_deploy.resolver import build_package_index
+		from tools.drift_deploy.run_snapshot import RunSnapshot
+		snapshot = RunSnapshot(run_id="test-run", packages={})
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir) / "packages"
+			root.mkdir()
+			(root / "net-tls-0.4.1.dmp").write_bytes(b"fake-dmp")
+			manifest = {
+				"package_id": "net-tls",
+				"package_version": "0.4.1",
+				"modules": [{"module_id": "net_tls"}],
+				"required_deps": [],
+			}
+			with patch(
+				"tools.drift_deploy.resolver._read_source_attestation_meta",
+				return_value=("sha256:" + "a"*64, "ed25519:orch-sak"),
+			), patch(
+				"tools.drift_deploy.resolver._read_author_key",
+				return_value="ed25519:orch-sig",
+			), pytest.raises(ResolutionError, match="not present in run snapshot"):
+				build_package_index(
+					[root],
+					load_manifest=lambda _p: manifest,
+					run_snapshot=snapshot,
+				)
+
+	def test_build_package_index_trust_store_and_snapshot_mutually_exclusive(self) -> None:
+		"""Contract: passing both `trust_store` and `run_snapshot`
+		raises — producer (staging) and consumer (source-rebuild)
+		verification modes must not silently overlay."""
+		from lang.driftc.packages.trust_v0 import TrustStore
+		from tools.drift_deploy.resolver import build_package_index
+		from tools.drift_deploy.run_snapshot import RunSnapshot
+		trust = TrustStore(
+			keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set(),
+		)
+		snapshot = RunSnapshot(run_id="test-run", packages={})
+		with pytest.raises(ValueError, match="mutually exclusive"):
+			build_package_index(
+				[],
+				trust_store=trust,
+				run_snapshot=snapshot,
+			)
+
+	def test_resolve_source_rebuild_requires_snapshot(self) -> None:
+		"""Consumer-side contract: `resolve_source_rebuild` with
+		`run_snapshot=None` raises.  Source-rebuild has no fallback
+		to trust-store-based verification; the snapshot is
+		mandatory."""
+		from tools.drift_deploy.manifest import Artifact
+		from tools.drift_deploy.source_rebuild import resolve_source_rebuild
+		art = Artifact(
+			kind="library", name="my.pkg", version="0.1.0",
+			description="", license="MIT",
+			entry_module="my.drift", modules=["my.drift"],
+			module_namespace="my.pkg", package_deps=[],
+		)
+		with pytest.raises(ValueError, match="`run_snapshot` is required"):
+			resolve_source_rebuild(
+				artifact=art,
+				package_roots=[],
+				manifest_dir=Path("/tmp"),
+				existing_lock_graph=None,
+				co_artifact_names=set(),
+				run_snapshot=None,
+			)
+
 	# ── unknown mode ───────────────────────────────────────────────
 
 	def test_unknown_mode_raises(self) -> None:

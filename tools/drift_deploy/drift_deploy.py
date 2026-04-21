@@ -102,23 +102,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Build + sign + smoke but do not publish")
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
-			"Source-rebuild certification mode: tolerate `.dmp` byte "
-			"sha256 drift between the lock and the on-disk package "
-			"as long as the lock's recorded source identity "
-			"(`source_content_id` + `source_attestation_key`) re-"
-			"verifies against the package's `.source-attestation` "
-			"sidecar.  Per-package sha drift is reported to stdout "
-			"as run evidence.  Use when an upstream `.dmp` was "
-			"rebuilt from the same source the author attested (e.g. "
-			"orchestrator source-from-commit certification).  "
-			"Missing source attestations and unsigned packages are "
-			"hard-failed in this mode — there is no silent fallback "
-			"to byte-only verification.  Also enabled by "
-			"`DRIFT_SOURCE_REBUILD=1` (the env-var path lets orch "
-			"set the lane once for the certification run without "
-			"threading the flag through every repo-owned `drift "
-			"deploy` invocation, mirroring the `DRIFT_DEBUG=1` "
-			"pattern)."
+			"Source-rebuild certification mode: verify each staged "
+			"dep against orch's run snapshot (see `--run-snapshot`), "
+			"not against lock equality or local trust-store "
+			"authorisation.  Requires `--run-snapshot` or "
+			"`DRIFT_RUN_SNAPSHOT`; no snapshot is a hard fail.  "
+			"Use when consuming packages that orch selected for a "
+			"source-from-commit certification run.  Also enabled "
+			"by `DRIFT_SOURCE_REBUILD=1` so orch can set the lane "
+			"once for the whole certification run."
+		))
+	p.add_argument("--run-snapshot", type=UserPath, default=None,
+		help=(
+			"Path to the orch-produced run snapshot "
+			"(`tools.drift_deploy.run_snapshot` JSON v0).  Required "
+			"under `--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`.  "
+			"Also honoured via `DRIFT_RUN_SNAPSHOT=<path>`; CLI "
+			"wins on conflict.  Pins source identity (scid + signer "
+			"kids) per package so downstream consumers verify they "
+			"are consuming the exact source graph orch certified "
+			"without carrying upstream author trust in local "
+			"`drift/trust.json`."
 		))
 	return p
 
@@ -312,6 +316,7 @@ def _resolve_artifact_deps(
 	existing_lock: dict[str, dict[str, ResolvedDep]] | None,
 	co_artifact_names: set[str] | None = None,
 	source_rebuild: bool = False,
+	run_snapshot: Any = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Load locked dependencies for a single artifact.
@@ -356,23 +361,15 @@ def _resolve_artifact_deps(
 		VERIFY_MODE_STRICT,
 	)
 	mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
-	# Source-rebuild: trust store is used both at index time
-	# (cryptographic `.sig` verification + per-module-namespace
-	# allowlist enforcement in `build_package_index`, hard-fail on
-	# failure) and at verify time (defence-in-depth recheck).
-	trust_store = None
-	if source_rebuild:
-		from tools.drift_deploy.trust_loader import load_merged_trust_store
-		trust_store = load_merged_trust_store(lock_path.parent)
+	# Source-rebuild: the orch run snapshot (caller-supplied) is
+	# the trust authority at index time.  Strict mode inherits
+	# trust through lock equality.
 	try:
 		pkg_index = build_package_index(
 			package_roots,
-			trust_store=trust_store,
+			run_snapshot=run_snapshot if source_rebuild else None,
 		)
 	except ResolutionError as e:
-		# Surface index-time trust failures as a normal deploy
-		# error, not a Python traceback.  Matches drift_build's
-		# ResolutionError→BuildError wrap.
 		raise DeployError(str(e))
 	if source_rebuild:
 		# Fresh-resolve is authoritative.  Delegate to the single
@@ -388,7 +385,7 @@ def _resolve_artifact_deps(
 			existing_lock_graph=existing_lock.get(art.name, {}),
 			co_artifact_names=co_artifact_names or set(),
 			pkg_index=pkg_index,
-			trust_store=trust_store,
+			run_snapshot=run_snapshot,
 		)
 		if rebuild.errors:
 			raise DeployError(
@@ -1500,6 +1497,33 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# status in the lock is rejected at verify time.
 	co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
 
+	# Source-rebuild lane selector + orch run snapshot.  The snapshot
+	# is loaded once here and shared across artifacts in this deploy
+	# run (a single run snapshot covers the whole orch-selected
+	# graph).  Under source-rebuild, the snapshot is REQUIRED — no
+	# fallback to local trust-store verification.
+	_src_rebuild = _source_rebuild_enabled(args)
+	_run_snap = None
+	if _src_rebuild:
+		from tools.drift_deploy.run_snapshot import load_run_snapshot
+		_snap_path = getattr(args, "run_snapshot", None)
+		if _snap_path is None:
+			_env_path = os.environ.get("DRIFT_RUN_SNAPSHOT", "")
+			if _env_path:
+				_snap_path = Path(_env_path)
+		if _snap_path is None:
+			raise DeployError(
+				"source-rebuild mode requires a run snapshot.  Pass "
+				"`--run-snapshot <path>` or set `DRIFT_RUN_SNAPSHOT="
+				"<path>`.  The snapshot pins source identity per "
+				"certification run; downstream source-rebuild "
+				"consumers cannot verify without it."
+			)
+		try:
+			_run_snap = load_run_snapshot(Path(_snap_path))
+		except (ValueError, OSError) as e:
+			raise DeployError(f"run snapshot load failed: {e}")
+
 	resolved_map: dict[str, dict[str, ResolvedDep]] = {}
 
 	try:
@@ -1509,16 +1533,17 @@ def _run_impl(args: argparse.Namespace) -> int:
 			print(f"{'='*60}")
 
 			# Resolve this artifact's deps now — staged_pkg_root contains
-			# .dmp files from earlier topo-sorted artifacts.  Source-
-			# rebuild lane selector is centralised in
-			# `_source_rebuild_enabled` (CLI flag OR env var).
+			# .dmp files from earlier topo-sorted artifacts.  Under
+			# source-rebuild, orch's run snapshot (loaded above) pins
+			# source identity for every upstream dep.
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[staged_pkg_root] + package_roots,
 				lock_path=lock_path,
 				existing_lock=existing_lock,
 				co_artifact_names=co_artifact_names,
-				source_rebuild=_source_rebuild_enabled(args),
+				source_rebuild=_src_rebuild,
+				run_snapshot=_run_snap,
 			)
 			resolved_map[art.name] = resolved
 			if resolved:

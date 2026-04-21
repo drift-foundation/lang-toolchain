@@ -24,6 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import Any
 from pathlib import Path
 
 from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
@@ -103,23 +104,33 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		     "equivalent to setting DRIFT_DEBUG=1)")
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
-			"Source-rebuild certification mode: tolerate `.dmp` byte "
-			"sha256 drift between the lock and the on-disk package "
-			"as long as the lock's recorded source identity "
-			"(`source_content_id` + `source_attestation_key`) re-"
-			"verifies against the package's `.source-attestation` "
-			"sidecar.  Per-package sha drift is reported to stdout "
-			"as run evidence.  Use when an upstream `.dmp` was "
-			"rebuilt from the same source the author attested (e.g. "
-			"orchestrator source-from-commit certification).  "
-			"Missing source attestations and unsigned packages are "
-			"hard-failed in this mode — there is no silent fallback "
-			"to byte-only verification.  Also enabled by "
-			"`DRIFT_SOURCE_REBUILD=1` (the env-var path lets orch "
+			"Source-rebuild certification mode: compile against the "
+			"graph orch pinned in the run snapshot (see "
+			"`--run-snapshot`) rather than against lock equality.  "
+			"Tolerates `.dmp` byte / signer / source-content drift "
+			"between the committed lock and the on-disk package as "
+			"long as every resolved dep matches the snapshot's "
+			"`(source_content_id, author_key, source_attestation_"
+			"key)` exactly.  Requires `--run-snapshot` or "
+			"`DRIFT_RUN_SNAPSHOT` — no snapshot is a hard fail (no "
+			"silent fallback to local trust-store verification).  "
+			"Also enabled by `DRIFT_SOURCE_REBUILD=1` so orch can "
 			"set the lane once for the certification run without "
 			"threading the flag through every repo-owned `drift "
-			"build` invocation, mirroring the `DRIFT_DEBUG=1` "
-			"pattern)."
+			"build`, mirroring the `DRIFT_DEBUG=1` pattern."
+		))
+	p.add_argument("--run-snapshot", type=UserPath, default=None,
+		help=(
+			"Path to the orch-produced run snapshot "
+			"(`tools.drift_deploy.run_snapshot` JSON v0).  Required "
+			"under `--source-rebuild` / `DRIFT_SOURCE_REBUILD=1`.  "
+			"Also honoured via `DRIFT_RUN_SNAPSHOT=<path>`; CLI "
+			"wins on conflict.  The snapshot pins source identity "
+			"(scid + signer kids) per package for the run, so "
+			"downstream consumers can verify they are consuming the "
+			"exact source graph orch certified without carrying "
+			"upstream author trust in their local `drift/"
+			"trust.json`."
 		))
 	return p
 
@@ -289,6 +300,7 @@ def _resolve_deps(
 	*,
 	co_artifact_names: set[str] | None = None,
 	source_rebuild: bool = False,
+	run_snapshot: Any = None,
 ) -> dict[str, ResolvedDep]:
 	"""
 	Resolve dependencies for a build.
@@ -372,36 +384,28 @@ def _resolve_deps(
 			VERIFY_MODE_STRICT,
 		)
 		mode = VERIFY_MODE_SOURCE_REBUILD if source_rebuild else VERIFY_MODE_STRICT
-		# Source-rebuild requires the trust store so the index
-		# builder can cryptographically verify each `.sig` (against
-		# trust-store pubkeys, per-module-namespace allowlist +
-		# non-revocation) and hard-fail on any forged / unauthorised
-		# packages BEFORE they reach the verifier.  Strict mode
-		# inherits the trust root through lock equality so no trust
-		# store is needed at index time.
-		trust_store = None
-		if source_rebuild:
-			from tools.drift_deploy.trust_loader import load_merged_trust_store
-			trust_store = load_merged_trust_store(manifest_dir)
+		# Source-rebuild mode: the orch-produced run snapshot is
+		# the trust authority — caller must have loaded it and
+		# passed it in.  `build_package_index(run_snapshot=...)`
+		# verifies each discovered package's source identity
+		# (scid + author_key + sak) against the snapshot's entry
+		# for (pkg_id, version); mismatch is a hard error.
+		# Strict mode inherits trust through lock equality.
 		try:
 			pkg_index = build_package_index(
 				package_roots,
-				trust_store=trust_store,
+				run_snapshot=run_snapshot if source_rebuild else None,
 			)
 		except ResolutionError as e:
-			# Surface index-time trust failures as a normal build
-			# error, not a Python traceback.  build_package_index
-			# raises ResolutionError for fail-fast trust gates
-			# (missing .sig, .sig crypto failure, allowlist miss,
-			# revoked kid) under source-rebuild — users want an
-			# actionable `error: ...` line, not a stack trace.
+			# Surface index-time failures (snapshot mismatch,
+			# missing entry) as a normal build error, not a Python
+			# traceback.
 			raise BuildError(str(e))
 		if source_rebuild:
 			# Fresh-resolve is authoritative.  Delegate to the
-			# single source-rebuild authority: builds a trust-
-			# verified index (already done above — reuse it),
-			# resolves against the consumer manifest, applies
-			# structural per-dep trust gates, and produces
+			# single source-rebuild authority: resolves against the
+			# consumer manifest using the snapshot-gated index,
+			# applies structural per-dep gates, and produces
 			# `(resolved_graph, evidence, errors)`.
 			from tools.drift_deploy.source_rebuild import (
 				print_evidence,
@@ -414,7 +418,7 @@ def _resolve_deps(
 				existing_lock_graph=lock_data.get(art.name, {}),
 				co_artifact_names=co_artifact_names or set(),
 				pkg_index=pkg_index,
-				trust_store=trust_store,
+				run_snapshot=run_snapshot,
 			)
 			if rebuild.errors:
 				raise BuildError(
@@ -515,10 +519,33 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	co_artifact_names = {a.name for a in manifest.artifacts if a.kind == "library"}
 
 	# Resolve deps.  Source-rebuild lane selector is centralised in
-	# `_source_rebuild_enabled` (CLI flag OR env var).
+	# `_source_rebuild_enabled` (CLI flag OR env var).  Under that
+	# lane, load the orch run snapshot (required; no fallback).
+	src_rebuild = _source_rebuild_enabled(args)
+	run_snap = None
+	if src_rebuild:
+		from tools.drift_deploy.run_snapshot import load_run_snapshot
+		snap_path = getattr(args, "run_snapshot", None)
+		if snap_path is None:
+			env_path = os.environ.get("DRIFT_RUN_SNAPSHOT", "")
+			if env_path:
+				snap_path = Path(env_path)
+		if snap_path is None:
+			raise BuildError(
+				"source-rebuild mode requires a run snapshot.  Pass "
+				"`--run-snapshot <path>` or set `DRIFT_RUN_SNAPSHOT="
+				"<path>`.  The snapshot pins source identity per "
+				"certification run; downstream source-rebuild "
+				"consumers cannot verify without it."
+			)
+		try:
+			run_snap = load_run_snapshot(Path(snap_path))
+		except (ValueError, OSError) as e:
+			raise BuildError(f"run snapshot load failed: {e}")
 	resolved = _resolve_deps(art, manifest_dir, package_roots,
 		co_artifact_names=co_artifact_names,
-		source_rebuild=_source_rebuild_enabled(args))
+		source_rebuild=src_rebuild,
+		run_snapshot=run_snap)
 
 	# Native lib paths.
 	native_lib_paths = _resolve_native_lib_paths(args.native_lib_path, manifest_dir)

@@ -2041,12 +2041,14 @@ class TestDeploySourceRebuild:
 					),
 				},
 			}
+			from tools.drift_deploy.conftest import PermissiveRunSnapshot
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[Path(tmpdir)],
 				lock_path=_drift_subdir(tmpdir) / "lock.json",
 				existing_lock=existing_lock,
 				source_rebuild=True,
+				run_snapshot=PermissiveRunSnapshot(),
 			)
 			assert "net-crypto" in resolved
 			assert resolved["net-crypto"].version == "0.1.0"
@@ -2113,12 +2115,14 @@ class TestDeploySourceRebuild:
 				},
 			}
 			# No longer raises — source identity drift is evidence.
+			from tools.drift_deploy.conftest import PermissiveRunSnapshot
 			resolved = _resolve_artifact_deps(
 				art,
 				package_roots=[Path(tmpdir)],
 				lock_path=_drift_subdir(tmpdir) / "lock.json",
 				existing_lock=existing_lock,
 				source_rebuild=True,
+				run_snapshot=PermissiveRunSnapshot(),
 			)
 			assert "net-crypto" in resolved
 			assert resolved["net-crypto"].version == "0.1.0"
@@ -2182,13 +2186,25 @@ class TestDeploySourceRebuild:
 			assert "sha256 mismatch" in str(exc.value)
 
 
+@pytest.mark.usefixtures("permissive_run_snapshot")
 class TestDeploySourceRebuildEnvVar:
 	"""Phase D.2: `DRIFT_SOURCE_REBUILD=1` enables source-rebuild mode
 	for `drift deploy` without the CLI flag, mirroring `DRIFT_DEBUG=1`.
 	Required because orch cannot thread `--source-rebuild` through
 	repo-owned `just deploy` / `just stage-packages` invocations that
 	internally call `drift deploy`; the env var is the lane selector
-	orch sets once for the whole certification run."""
+	orch sets once for the whole certification run.
+
+	Orch staging itself (the producer `drift deploy --dest ...` step)
+	also needs source-rebuild because upstream compatible-patch
+	movement is exactly what orch is trying to certify — refusing
+	to honour the env var here would force every downstream repo to
+	re-prepare before orch could stage/certify, reintroducing the
+	churn Lock-v2 was designed to eliminate.  Trust authority for
+	source-rebuild staging comes from a layered trust store (see
+	`trust_loader.load_merged_trust_store` + future orch-passed run-
+	scoped trust path), NOT from the downstream repo's local
+	`drift/trust.json` alone."""
 
 	def test_helper_matrix(self, monkeypatch) -> None:
 		"""Unit pin for `drift_deploy._source_rebuild_enabled`: CLI
@@ -2371,6 +2387,90 @@ class TestDeploySourceRebuildEnvVar:
 		assert captured.get("source_rebuild") is False, (
 			"DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
 		)
+
+	def test_source_rebuild_without_run_snapshot_hard_fails(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""CLI-path regression (0.31.3): `drift deploy` under
+		`DRIFT_SOURCE_REBUILD=1` WITHOUT either `--run-snapshot` or
+		`DRIFT_RUN_SNAPSHOT` must fail cleanly.  Pins the orch
+		contract: source-rebuild consumers always require a
+		snapshot; no silent fallback to downstream trust-store
+		verification."""
+		import base64
+		from tools.drift_deploy.drift_deploy import run
+
+		# Minimum setup to reach the snapshot-required check —
+		# manifest w/ author_profile + package_deps, author
+		# profile file, sign key, v4 lock.  See the env-var thread-
+		# through test above for the same scaffolding.
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		manifest_path = manifest_dir / "manifest.json"
+		manifest_path.write_text(json.dumps({
+			"schema_version": 2,
+			"project": {
+				"name": "test-proj",
+				"license": "MIT",
+				"author_profile": "test.author-profile",
+			},
+			"artifacts": [{
+				"kind": "package", "name": "my.pkg", "version": "0.1.0",
+				"description": "test", "license": "MIT",
+				"entry_module": "lib.drift", "modules": ["lib.drift"],
+				"module_namespace": "my.pkg",
+				"package_deps": [{"name": "dep.a", "version": "0.1"}],
+			}],
+		}))
+		author_profile = manifest_dir / "test.author-profile"
+		fake_pub_raw = b"\x00" * 32
+		fake_pub = base64.b64encode(fake_pub_raw).decode()
+		import hashlib as _hl
+		fake_kid = "ed25519:" + base64.b64encode(_hl.sha256(fake_pub_raw).digest()).decode()
+		author_profile.write_text(json.dumps({
+			"format": "author-profile", "version": 0,
+			"key": {"algo": "ed25519", "kid": fake_kid, "pubkey": fake_pub},
+			"publisher": {"name": "t", "org": "t", "email": "t@t", "url": ""},
+			"namespaces": ["my.pkg.*"],
+		}))
+		sign_key_path = tmp_path / "deploy.key"
+		sign_key_path.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
+		lock_path = manifest_dir / "lock.json"
+		lock_path.write_text(json.dumps({
+			"schema_version": 4,
+			"artifacts": {
+				"my.pkg": {
+					"resolved": {
+						"dep.a": {
+							"version": "0.1.3",
+							"sha256": "a" * 64,
+							"author_key": "ed25519:test",
+							"source_content_id": "sha256:" + "a" * 64,
+							"source_attestation_key": "ed25519:test",
+							"dep_type": "direct",
+						},
+					},
+				},
+			},
+		}))
+		dest = tmp_path / "dest"
+		dest.mkdir()
+		fake_driftc = tmp_path / "fake-driftc"
+		fake_driftc.write_text("#!/bin/sh\necho 'driftc 0.30.1 | abi 10 | git test'\n")
+		fake_driftc.chmod(0o755)
+
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		rc = run([
+			"--manifest", str(manifest_path),
+			"--dest", str(dest),
+			"--sign-key-file", str(sign_key_path),
+			"--driftc", str(fake_driftc),
+		])
+		assert rc == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
+		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
 
 
 # ── Lock-exact passthrough at deploy time ───────────────────────────

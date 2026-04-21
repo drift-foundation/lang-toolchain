@@ -322,6 +322,7 @@ def build_package_index(
 	*,
 	trust_store: Any = None,
 	core_trust_store: Any = None,
+	run_snapshot: Any = None,
 ) -> dict[str, list[PackageEntry]]:
 	"""
 	Build a package index from package roots.
@@ -332,57 +333,71 @@ def build_package_index(
 	`load_manifest` is a callable(Path) → dict that loads a .dmp manifest.
 	If None, uses the dmir_pkg_v0 loader.
 
-	`trust_store` (and paired `core_trust_store`), when provided,
-	trigger per-package cryptographic verification.  Failure is a
-	HARD ERROR — any discovered package that fails the trust gate
-	raises `ResolutionError` naming the offending file.  Silent
-	pruning is NOT an option: letting the resolver fall back to an
-	older trusted in-range version would mask the exact package
-	orch staged for certification.  The raise happens before the
-	entry is added to the index, so the verifier downstream never
-	sees partial / tampered state.
+	Three mutually-exclusive verification modes:
+
+	**(1) Parse-only** (default): `trust_store=None`,
+	`run_snapshot=None`.  Read `.sig` / `.source-attestation`
+	fields without cryptographic verification; return whatever
+	discovery finds.  Used by strict mode (`drift build` /
+	`drift deploy` / `drift prepare` default), where the lock is
+	the authoritative trust root.
+
+	**(2) Trust-store (producer / staging)**: `trust_store=...`.
+	Per-package cryptographic verification against orch's own
+	trust store.  Used by ORCH when staging packages into the run
+	libs root.  Failure is a HARD ERROR (`ResolutionError`) — the
+	package is not silently pruned, because fallback to an older
+	trusted in-range version would mask the exact package orch
+	staged for certification.
 
 	Three gates fire in order for each discovered `.dmp` / `.zdmp`
-	when `trust_store` is supplied:
+	under this mode:
 
-	1. **Missing `.sig` is fatal.**  An on-disk package with no
-	   `.sig` sidecar (empty `author_key`) raises `ResolutionError`.
-	   Unsigned packages have nothing for the trust gate to verify
-	   against — accepting them would bypass the owner-namespace
-	   trust root.  (The dev-opt-in `allow_unsigned_roots` path from
-	   `signature_v0.verify_package_signatures` is NOT applied here;
-	   source-rebuild callers never set it.)
-	2. **`.sig` cryptographic verify + per-module-namespace trust.**
-	   Delegated to `signature_v0.verify_package_signatures`, which
-	   (a) verifies the canonical envelope-over-sha256 Ed25519
-	   signature against the trust store's pubkey, and (b) enforces
-	   per-module namespace trust using each `module_id` from the
-	   manifest's `modules` list against
-	   `trust_store.allowed_kids_for_module(module_id)`.
-	   Namespaces follow MODULE ids (e.g. `net_tls.*`), NOT
-	   package ids (hyphenated ids like `net-tls` are never valid
-	   as a namespace key and are never passed to the lookup).
-	3. **`.source-attestation` signer allowlist + revocation.**
-	   `_read_source_attestation_meta` already verifies the sidecar
-	   body cross-binding and self-signature; this gate adds the
-	   per-module-namespace allowlist check on the sidecar's
-	   recorded signer kid AND the revocation check against BOTH
-	   trust layers (core trust store OR project trust store).  A
-	   signed artifact with an empty sidecar is accepted here and
-	   rejected later by
-	   `source_rebuild.apply_structural_trust_gates` — that split
-	   keeps co-artifact entries (which legitimately have empty
-	   sidecars at index time) from failing this function.
+	  a. **Missing `.sig` is fatal.**  An on-disk package with no
+	     `.sig` sidecar (empty `author_key`) raises.  Unsigned
+	     packages have nothing for the trust gate to verify
+	     against.  (The dev-opt-in `allow_unsigned_roots` path
+	     from `signature_v0.verify_package_signatures` is NOT
+	     applied here; source-rebuild callers never set it.)
+	  b. **`.sig` cryptographic verify + per-module-namespace
+	     trust.**  Delegated to `verify_package_signatures`, which
+	     (a) verifies the canonical envelope-over-sha256 Ed25519
+	     signature against the trust store's pubkey, and (b)
+	     enforces per-module namespace trust using each
+	     `module_id` from the manifest's `modules` list against
+	     `trust_store.allowed_kids_for_module(module_id)`.
+	     Namespaces follow MODULE ids (e.g. `net_tls.*`), NOT
+	     package ids.
+	  c. **`.source-attestation` signer allowlist + revocation.**
+	     `_read_source_attestation_meta` verifies the sidecar body
+	     cross-binding and self-signature; this gate adds the
+	     per-module-namespace allowlist check on the sidecar's
+	     recorded signer kid AND the revocation check against BOTH
+	     trust layers.
 
-	When `trust_store` is `None`, this function preserves the
-	pre-0.31.1 parse-only behaviour: `.sig` kids are read without
-	cryptographic verification.  Call sites that need the trust
-	root (`drift build --source-rebuild`, `drift deploy --source-
-	rebuild`, `drift prepare --check --source-rebuild`) MUST pass
-	a trust store.  Strict-mode callers inherit the trust root
-	through lock equality (the lock was authored by a `drift
-	prepare` that loaded its own trust store).
+	**(3) Run-snapshot (downstream source-rebuild consumer)**:
+	`run_snapshot=...` (a loaded `RunSnapshot` from
+	`tools.drift_deploy.run_snapshot.load_run_snapshot`).  Each
+	discovered package is verified against the snapshot's entry
+	for `(pkg_id, version)`: missing entry → `ResolutionError`;
+	`source_content_id` / `author_key` / `source_attestation_key`
+	mismatch → `ResolutionError`.  The downstream's local
+	`drift/trust.json` is NOT consulted — the snapshot IS the
+	source-of-truth for what this run authorised.
+
+	`trust_store` and `run_snapshot` are MUTUALLY EXCLUSIVE —
+	passing both raises `ValueError` (they represent different
+	verification contracts and must not silently overlay).
 	"""
+	if trust_store is not None and run_snapshot is not None:
+		raise ValueError(
+			"build_package_index: `trust_store` and `run_snapshot` are "
+			"mutually exclusive.  `trust_store` is the producer-side "
+			"author-verification mode (used by orch staging); "
+			"`run_snapshot` is the consumer-side source-identity-pin "
+			"mode (used by downstream source-rebuild consumption).  A "
+			"single call cannot serve both roles."
+		)
 	_load_verifier = None  # deferred import; only wired if trust_store provided
 	if trust_store is not None:
 		from lang.driftc.packages.signature_v0 import verify_package_signatures as _vps
@@ -753,6 +768,33 @@ def build_package_index(
 								f"using source-rebuild on this "
 								f"package."
 							)
+			# Run-snapshot gate (mode 3: downstream source-rebuild
+			# consumer).  The snapshot pins `(pkg_id, version)` to
+			# an exact (source_content_id, author_key,
+			# source_attestation_key) triple; the disk package must
+			# match that triple or it's a same-version source swap,
+			# an unauthorised re-sign, or a package not staged by
+			# orch at all.  Hard fail on any mismatch.  The
+			# downstream's local trust.json is NOT consulted —
+			# author trust was verified by orch at staging time and
+			# attested through the snapshot.
+			if run_snapshot is not None:
+				from tools.drift_deploy.run_snapshot import (
+					verify_disk_entry_against_snapshot,
+				)
+				err = verify_disk_entry_against_snapshot(
+					run_snapshot,
+					pkg_id=pkg_id,
+					version=pkg_ver_str,
+					disk_source_content_id=scid,
+					disk_author_key=ak,
+					disk_source_attestation_key=sak,
+				)
+				if err is not None:
+					raise ResolutionError(
+						f"package at '{dmp_path}' does not match the "
+						f"run snapshot: {err}"
+					)
 			entry = PackageEntry(
 				package_id=pkg_id,
 				version=pkg_ver,

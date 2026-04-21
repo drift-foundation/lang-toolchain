@@ -790,6 +790,7 @@ class TestPrepareSourceAttestationGate:
 			assert lock["web-rest"]["web-jwt"].source_attestation_key == ""
 
 
+@pytest.mark.usefixtures("permissive_run_snapshot")
 class TestPrepareCheckSourceRebuild:
 	"""`drift prepare --check --source-rebuild` (and the matching
 	`DRIFT_SOURCE_REBUILD=1` env var) relaxes the comparison so a
@@ -1436,3 +1437,297 @@ class TestPrepareCheckSourceRebuild:
 				"must not be flagged as drift evidence"
 			)
 			assert "up-to-date" in out
+
+
+class TestPrepareCheckSourceRebuildOrchEndToEnd:
+	"""End-to-end orch-model regression pin (0.31.3).
+
+	Unlike `TestPrepareCheckSourceRebuild`, this class does NOT
+	apply the `permissive_run_snapshot` opt-in fixture — the
+	regression requires the REAL snapshot-loading path to run so
+	the downstream flow proves it consumes the snapshot the way
+	orch ships it.
+
+	The scenario mirrors orch's MariaDB failure case (2026-04-21)
+	in flipped form — exactly the shape the earlier unit tests and
+	mocked-CLI tests did NOT cover:
+
+	  * Downstream repo's `drift/lock.json` pins `ext.lib@1.0.0`.
+	  * Disk has `ext.lib@1.0.1` — a compatible upstream patch
+	    inside the consumer manifest's `"1.0"` range.
+	  * Orch's run snapshot authorises `ext.lib@1.0.1` with the
+	    `(scid, author_key, source_attestation_key)` triple
+	    orch verified at staging time.  It does NOT authorise
+	    `ext.lib@1.0.0`.
+	  * `drift prepare --check --source-rebuild` must succeed,
+	    compile against `1.0.1` (fresh graph), and log the
+	    version drift `1.0.0 → 1.0.1` as evidence vs. the lock.
+
+	This test exercises the WHOLE downstream CLI flow:
+	`build_package_index(run_snapshot=...)` runs for real and
+	hits the snapshot gate; the resolver picks the highest in-
+	range version; `--check` compares fresh vs. lock and logs
+	evidence.  The boundary helpers `_read_author_key`,
+	`_read_source_attestation_meta`, and the `.dmp` manifest
+	loader are stubbed because real signed artifacts aren't
+	available in a unit-test context — but `build_package_index`
+	itself, the snapshot gate, the resolver, and the prepare
+	comparator all run unpatched.
+	"""
+
+	def test_stale_lock_newer_compatible_snapshot_authorised(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		from types import SimpleNamespace
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_prepare import (
+			_run_impl,
+			build_arg_parser,
+		)
+		from tools.drift_deploy.run_snapshot import (
+			SnapshotEntry,
+			write_run_snapshot,
+		)
+
+		# ── Downstream manifest: range "1.0" accepts any 1.0.x ──
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		(manifest_dir / "manifest.json").write_text(json.dumps({
+			"schema_version": 2,
+			"project": {"name": "downstream", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my.pkg", "version": "0.1.0",
+				"description": "downstream", "license": "MIT",
+				"entry_module": "my.drift", "modules": ["my.drift"],
+				"module_namespace": "my.pkg",
+				"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+			}],
+		}))
+
+		# ── Stale lock: pins ext.lib@1.0.0 (old) ──
+		(manifest_dir / "lock.json").write_text(json.dumps({
+			"schema_version": 4,
+			"artifacts": {
+				"my.pkg": {
+					"resolved": {
+						"ext.lib": {
+							"version": "1.0.0",
+							"sha256": "old-bytes",
+							"author_key": "ed25519:orch-sig-kid",
+							"source_content_id": "sha256:" + "0"*64,  # old scid
+							"source_attestation_key": "ed25519:orch-sak-kid",
+							"dep_type": "direct",
+						},
+					},
+				},
+			},
+		}))
+
+		# ── Disk: ext.lib@1.0.1 (newer compatible) ──
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		new_dmp = pkg_root / "ext.lib-1.0.1.dmp"
+		new_dmp.write_bytes(b"fake-ext-lib-1.0.1")
+		# Placeholder .sig so `_read_author_key` can return non-empty
+		# (it's patched anyway; file just needs to exist for the
+		# parent directory walk to complete unambiguously).
+		(pkg_root / "ext.lib-1.0.1.sig").write_text("{}")
+
+		# ── Orch run snapshot: authorises ext.lib@1.0.1 ──
+		new_scid = "sha256:" + "a"*64
+		new_ak = "ed25519:orch-sig-kid"
+		new_sak = "ed25519:orch-sak-kid"
+		snapshot_path = tmp_path / "run-snapshot.json"
+		write_run_snapshot(
+			snapshot_path,
+			run_id="20260421-orch-regression",
+			entries={
+				("ext.lib", "1.0.1"): SnapshotEntry(
+					source_content_id=new_scid,
+					author_key=new_ak,
+					source_attestation_key=new_sak,
+				),
+				# NOTE: no entry for ext.lib@1.0.0 — orch only
+				# staged the newer version.
+			},
+		)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snapshot_path))
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+
+		# ── Stub the sidecar / manifest loaders so the fake .dmp
+		# reads cleanly.  `build_package_index`, the snapshot
+		# gate, and the resolver run unpatched.
+		disk_manifest = {
+			"package_id": "ext.lib",
+			"package_version": "1.0.1",
+			"modules": [{"module_id": "ext_lib"}],
+			"required_deps": [],
+		}
+		fake_pkg = SimpleNamespace(manifest=disk_manifest)
+		with _patch(
+			"tools.drift_deploy.resolver._read_author_key",
+			return_value=new_ak,
+		), _patch(
+			"tools.drift_deploy.resolver._read_source_attestation_meta",
+			return_value=(new_scid, new_sak),
+		), _patch(
+			"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+			return_value=fake_pkg,
+		):
+			parser = build_arg_parser()
+			rc = _run_impl(parser.parse_args([
+				"--manifest", str(manifest_dir / "manifest.json"),
+				"--package-root", str(pkg_root),
+				"--check",
+			]))
+
+		# ── Assertions ──
+		out = capsys.readouterr().out
+		assert rc == 0, (
+			f"stale lock + newer in-range + snapshot-authorised "
+			f"must succeed under --check --source-rebuild, got rc={rc}; "
+			f"stdout: {out!r}"
+		)
+		# Version drift must appear as evidence (NOT an error).
+		assert "ext.lib" in out
+		assert "1.0.0" in out and "1.0.1" in out
+		# Snapshot-gated run is up-to-date from the orch perspective
+		# — the lock is evidence, not a gate.
+		assert "up-to-date" in out
+
+	def test_stale_lock_but_snapshot_does_not_authorise_newer(
+		self, monkeypatch, tmp_path, capsys,
+	) -> None:
+		"""Negative pin: when the disk has a newer version but the
+		snapshot does NOT authorise it, the check fails.  Prevents
+		the in-range-resolver relaxation from silently accepting a
+		package orch never staged (same-version source swap risk,
+		but with version bump)."""
+		from types import SimpleNamespace
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_prepare import (
+			_run_impl,
+			build_arg_parser,
+		)
+		from tools.drift_deploy.run_snapshot import write_run_snapshot
+
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		(manifest_dir / "manifest.json").write_text(json.dumps({
+			"schema_version": 2,
+			"project": {"name": "downstream", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my.pkg", "version": "0.1.0",
+				"description": "downstream", "license": "MIT",
+				"entry_module": "my.drift", "modules": ["my.drift"],
+				"module_namespace": "my.pkg",
+				"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+			}],
+		}))
+		(manifest_dir / "lock.json").write_text(json.dumps({
+			"schema_version": 4,
+			"artifacts": {
+				"my.pkg": {
+					"resolved": {
+						"ext.lib": {
+							"version": "1.0.0",
+							"sha256": "old-bytes",
+							"author_key": "ed25519:orch-sig",
+							"source_content_id": "sha256:" + "0"*64,
+							"source_attestation_key": "ed25519:orch-sak",
+							"dep_type": "direct",
+						},
+					},
+				},
+			},
+		}))
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		(pkg_root / "ext.lib-1.0.1.dmp").write_bytes(b"fake")
+		(pkg_root / "ext.lib-1.0.1.sig").write_text("{}")
+
+		# Snapshot is EMPTY — no entry for ext.lib at any version.
+		snap_path = tmp_path / "snap.json"
+		write_run_snapshot(snap_path, run_id="empty-snap", entries={})
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap_path))
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+
+		disk_manifest = {
+			"package_id": "ext.lib",
+			"package_version": "1.0.1",
+			"modules": [{"module_id": "ext_lib"}],
+			"required_deps": [],
+		}
+		fake_pkg = SimpleNamespace(manifest=disk_manifest)
+		with _patch(
+			"tools.drift_deploy.resolver._read_author_key",
+			return_value="ed25519:orch-sig",
+		), _patch(
+			"tools.drift_deploy.resolver._read_source_attestation_meta",
+			return_value=("sha256:" + "a"*64, "ed25519:orch-sak"),
+		), _patch(
+			"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+			return_value=fake_pkg,
+		):
+			parser = build_arg_parser()
+			# Expect PrepareError: the disk package is not in the
+			# snapshot; build_package_index raises ResolutionError
+			# → wrapped as PrepareError.
+			with pytest.raises(PrepareError) as exc:
+				_run_impl(parser.parse_args([
+					"--manifest", str(manifest_dir / "manifest.json"),
+					"--package-root", str(pkg_root),
+					"--check",
+				]))
+		msg = str(exc.value)
+		assert "not present in run snapshot" in msg
+		assert "ext.lib" in msg
+
+	def test_source_rebuild_without_run_snapshot_hard_fails_check(
+		self, monkeypatch, tmp_path,
+	) -> None:
+		"""CLI-path regression pin: `DRIFT_SOURCE_REBUILD=1` on
+		`drift prepare --check` WITHOUT either `--run-snapshot` or
+		`DRIFT_RUN_SNAPSHOT` must fail cleanly — no silent fallback
+		to downstream trust-store verification, no cryptic
+		traceback.  Env-driven behaviour caused enough trouble on
+		this branch that this contract gets its own CLI-path pin
+		(unit tests cover `resolve_source_rebuild(run_snapshot=
+		None)` directly; this one proves the prepare CLI enforces
+		the same rule end-to-end through `_run_impl`).
+		"""
+		from tools.drift_deploy.drift_prepare import (
+			_run_impl,
+			build_arg_parser,
+		)
+		manifest_dir = tmp_path / "drift"
+		manifest_dir.mkdir()
+		(manifest_dir / "manifest.json").write_text(json.dumps({
+			"schema_version": 2,
+			"project": {"name": "downstream", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my.pkg", "version": "0.1.0",
+				"description": "downstream", "license": "MIT",
+				"entry_module": "my.drift", "modules": ["my.drift"],
+				"module_namespace": "my.pkg",
+				"package_deps": [{"name": "ext.lib", "version": "1.0"}],
+			}],
+		}))
+		# Lock exists so --check doesn't fail earlier on lock-
+		# absence; snapshot absence is the specific gate we're
+		# pinning.
+		(manifest_dir / "lock.json").write_text(json.dumps({
+			"schema_version": 4,
+			"artifacts": {"my.pkg": {"resolved": {}}},
+		}))
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		parser = build_arg_parser()
+		with pytest.raises(PrepareError) as exc:
+			_run_impl(parser.parse_args([
+				"--manifest", str(manifest_dir / "manifest.json"),
+				"--check",
+			]))
+		msg = str(exc.value)
+		assert "run snapshot" in msg
+		assert "DRIFT_RUN_SNAPSHOT" in msg or "--run-snapshot" in msg

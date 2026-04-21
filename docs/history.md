@@ -1,6 +1,114 @@
 # Drift development history
 
 ## 2026-04-21
+- **Source-rebuild run-snapshot model replaces downstream trust-
+  store consultation (0.31.3, ABI unchanged at 10).** Branch
+  `fix/source-rebuild-trust-anchor` (fourth fix on the same
+  branch / same day).
+
+  The bug: orch's MariaDB rebuild failed on 0.31.2 with `no
+  trusted keys configured for module namespace of 'net_tls'`.
+  Root cause was a category error in the 0.31.1/0.31.2 source-
+  rebuild design: author trust and source identity were being
+  conflated into the downstream's local `drift/trust.json`.
+  Under the staged-rebuild model orch exercises, upstream
+  packages routinely move to compatible patches faster than
+  downstream teams refresh their locks; demanding that every
+  downstream repo carry a trust-store entry for every upstream
+  namespace it might transitively consume re-introduces the
+  exact "every upstream patch churns every downstream repo"
+  loop the Lock-v2 contract is meant to prevent.
+
+  The 0.31.3 model separates the two concerns cleanly:
+
+  1. **Author trust** is orch's responsibility at STAGING time.
+     When orch runs `drift deploy` (producer mode) to stage an
+     upstream package into the run's libs root, Drift verifies
+     the `.sig` + `.source-attestation` signers against orch's
+     own `drift/trust.json`.  This is the existing
+     `build_package_index(trust_store=...)` path; unchanged.
+
+  2. **Source identity** is pinned per-run via an orch-produced
+     snapshot.  After staging, orch writes a `drift-run-snapshot`
+     JSON file recording `(source_content_id, author_key,
+     source_attestation_key)` for every `(pkg_id, version)` in
+     the run.  Downstream source-rebuild consumers (`drift
+     build --source-rebuild`, `drift deploy --source-rebuild`,
+     `drift prepare --check --source-rebuild`) verify each
+     resolved dep against the snapshot's entry.  No
+     downstream-local trust-store consultation for upstreams.
+
+  **New artifact.**  `tools/drift_deploy/run_snapshot.py`:
+    - `RunSnapshot`, `SnapshotEntry` dataclasses.
+    - `load_run_snapshot(path)` / `write_run_snapshot(path,
+      run_id=..., entries=...)`.
+    - `verify_disk_entry_against_snapshot(...)`.
+    - v0 JSON format (unsigned — run-local artifact; snapshot
+      signing deferred until snapshots leave the run boundary).
+
+  **New CLI surface.**  `--run-snapshot <path>` on `drift
+  build`, `drift deploy`, and `drift prepare`.  Also honoured
+  via `DRIFT_RUN_SNAPSHOT=<path>` env var (matching the
+  `DRIFT_SOURCE_REBUILD=1` pattern orch uses to thread global
+  config).  Source-rebuild mode hard-fails if neither is set —
+  no fallback to downstream trust-store verification.
+
+  **`build_package_index` now has three mutually-exclusive
+  verification modes:**
+    - parse-only (strict callers): pre-0.31.1 behaviour
+      preserved.
+    - `trust_store=...` (producer / orch staging): cryptographic
+      `.sig` verify + per-module-namespace allowlist + non-
+      revocation (0.31.1 work, retained).
+    - `run_snapshot=...` (downstream source-rebuild consumer):
+      exact-match on `(source_content_id, author_key,
+      source_attestation_key)` against the snapshot's entry
+      for `(pkg_id, version)`.  Missing entry → hard fail.
+      Passing both `trust_store` and `run_snapshot` is a
+      `ValueError` (the two verification contracts must not
+      silently overlay).
+
+  **`resolve_source_rebuild` signature change.**  The authority
+  function now takes a mandatory `run_snapshot` kwarg instead
+  of `trust_store`.  Passing `None` raises `ValueError` with
+  explicit guidance.
+
+  **Producer/staging unchanged.**  Orch's trust-store-driven
+  staging path continues to work via the `trust_store=...`
+  branch.  The `trust_loader.load_merged_trust_store` helper is
+  kept for that path; it's no longer invoked by consumer source-
+  rebuild.
+
+  **Tests** (all in `test_resolver.py::TestVerifyV4Source
+  IdentityEnforcement`):
+    - `test_build_package_index_accepts_disk_matching_snapshot`
+      — happy path.
+    - `test_build_package_index_rejects_scid_mismatch_vs_snapshot`
+      — same-version source swap rejection.
+    - `test_build_package_index_rejects_missing_snapshot_entry`
+      — package not authorised for the run.
+    - `test_build_package_index_trust_store_and_snapshot_mutually_
+      exclusive` — mode contract.
+    - `test_resolve_source_rebuild_requires_snapshot` —
+      authority-function contract.
+
+  **conftest.py** adds an autouse `permissive_run_snapshot`
+  fixture mirroring the existing `permissive_trust_store` shim:
+  CLI-path tests that don't care about snapshot-verification
+  semantics get a stand-in snapshot that matches any disk
+  entry.  Tests that pin rejection construct real `RunSnapshot`
+  instances (per the regression list above).
+
+  **Version:** DRIFTC_VERSION 0.31.2 → 0.31.3.  ABI unchanged.
+  New CLI surface (`--run-snapshot`) and a new required input
+  for source-rebuild consumers — downstream tooling that
+  invokes `drift build` / `drift deploy` / `drift prepare
+  --check` under `DRIFT_SOURCE_REBUILD=1` must now either set
+  `DRIFT_RUN_SNAPSHOT` or pass `--run-snapshot <path>`.  Orch
+  produces the snapshot after its staging step and threads the
+  path through to the whole certification environment.
+
+## 2026-04-21
 - **Source-rebuild trust gate: skip `*.__instantiations` modules
   (0.31.2, ABI unchanged at 10).** Branch `fix/source-rebuild-
   trust-anchor` (cumulative with the 0.31.1 entry below).

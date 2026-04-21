@@ -1373,6 +1373,7 @@ class TestConfigValidation:
 # ── Lock compatibility validation ────────────────────────────────────
 
 
+@pytest.mark.usefixtures("permissive_run_snapshot")
 class TestLockCompatibility:
 	def test_lock_compatibility_checked_against_package_roots(self, tmp_path):
 		"""Lock compatibility mismatch against package roots produces early error."""
@@ -1987,6 +1988,37 @@ class TestLockCompatibility:
 				"--package-root", str(pkg_root),
 			])
 		assert result == 1, "DRIFT_SOURCE_REBUILD=0 must NOT enable source-rebuild mode"
+
+	def test_source_rebuild_without_run_snapshot_hard_fails(self, tmp_path, capsys, monkeypatch):
+		"""CLI-path regression (0.31.3): `DRIFT_SOURCE_REBUILD=1` on
+		`drift build` WITHOUT either `--run-snapshot` or
+		`DRIFT_RUN_SNAPSHOT` must fail cleanly — no silent fallback
+		to downstream trust-store verification, no cryptic
+		traceback.  Env-driven behaviour caused enough trouble on
+		this branch that this contract gets its own CLI-path pin."""
+		manifest_data = {
+			"schema_version": 2,
+			"project": {"name": "test-project", "license": "MIT"},
+			"artifacts": [{
+				"kind": "package", "name": "my-pkg", "version": "0.1.0",
+				"description": "A test package",
+				"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
+				"package_deps": [{"name": "dep-a", "version": "0.1"}],
+			}],
+		}
+		_write_manifest(tmp_path, manifest_data)
+		_write_lock(tmp_path, {"my-pkg": {"dep-a": "0.1.3"}})
+		monkeypatch.setenv("DRIFT_SOURCE_REBUILD", "1")
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		from tools.drift_deploy.drift_build import run
+		with mock.patch("shutil.which", return_value="/usr/bin/driftc"):
+			result = run([
+				"--manifest", str(tmp_path / "drift" / "manifest.json"),
+			])
+		assert result == 1
+		err = capsys.readouterr().err
+		assert "run snapshot" in err
+		assert "DRIFT_RUN_SNAPSHOT" in err or "--run-snapshot" in err
 
 	def test_source_rebuild_helper_matrix(self, monkeypatch) -> None:
 		"""Unit pin for `_source_rebuild_enabled`: CLI flag OR env var

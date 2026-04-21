@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Single authority for the source-rebuild run graph.
+Single authority for the source-rebuild run graph (consumer side).
 
 Under `DRIFT_SOURCE_REBUILD=1`, `drift prepare --check`, `drift build`,
 and `drift deploy` all need to produce the SAME dependency graph and
@@ -8,54 +8,77 @@ the SAME verdict.  Historically the three callers each had their own
 mixture of "consult the lock," "verify against the index," and
 "substitute versions in place" — which let contradictions creep in
 (e.g. `--check` accepting a new transitive dep as evidence while
-`drift build` still compiled against the stale lock).
+`drift build` still compiled against the stale lock).  This module
+is the one place consumer source-rebuild semantics live.
 
-This module is the one place source-rebuild semantics live.
+Under the 0.31.3 run-snapshot model, source-rebuild consumers
+pin source identity per CERTIFICATION RUN via an orch-produced
+run snapshot (`tools.drift_deploy.run_snapshot`).  The consumer's
+local `drift/trust.json` is NOT consulted for upstream author
+verification — orch already verified author trust at staging time
+against orch's own trust store, and attested the result through
+the snapshot.
 
 Pipeline (identical for all three callers):
 
-    1. Load merged trust store (core + project + optional user).
-    2. Build the package index with `trust_store` wired in.
-       `build_package_index` cryptographically verifies each `.sig`
-       against the trust store's pubkeys AND enforces the per-module-
-       namespace allowlist (keyed by each `module_id` in the package
-       manifest, NOT the package id).  Any trust-verification failure
-       is a HARD ERROR — the bad package is not silently pruned,
-       because pruning would let the resolver fall back to an older
-       trusted in-range version and silently mask the artifact orch
-       intended to certify.
-    3. Re-resolve the artifact's direct-dep graph against that
-       trust-verified index using the ordinary `resolve_artifact`
-       constraint solver.  The resolver enforces consumer manifest
-       ranges (direct deps) and producer `required_deps` (transitive
-       deps) — the same rules that apply in strict mode.
+    1. Load the orch-produced run snapshot (passed in by the
+       caller via `run_snapshot=`).  Required; passing `None`
+       raises.  Upstream callers (drift_build / drift_deploy /
+       drift_prepare) get the path from `--run-snapshot <path>`
+       or `DRIFT_RUN_SNAPSHOT=<path>`.
+    2. Build the package index with `run_snapshot=` wired into
+       `build_package_index`.  The index builder gates every
+       discovered package against the snapshot's entry for
+       `(pkg_id, version)`: missing entry or
+       `(source_content_id, author_key, source_attestation_key)`
+       mismatch is a HARD ERROR (`ResolutionError`).  The bad
+       package is not silently pruned — pruning would let the
+       resolver fall back to an older snapshot-authorised version
+       and silently mask a same-version source swap orch DID NOT
+       stage.
+    3. Re-resolve the artifact's direct-dep graph against the
+       snapshot-gated index using the ordinary `resolve_artifact`
+       constraint solver.  The resolver enforces consumer
+       manifest ranges (direct deps) and producer `required_deps`
+       (transitive deps) — the same rules that apply in strict
+       mode.
     4. Structural per-dep gates on the fresh-resolved graph:
-       non-co-artifact deps must have `author_key != "unsigned"` AND
-       non-empty `source_content_id` / `source_attestation_key` on
-       disk.  These catch cases the index-time cryptographic check
-       cannot (unsigned packages have no `.sig` to verify; a missing
-       `.source-attestation` yields empty identity at index time).
+       non-co-artifact deps must have `author_key != "unsigned"`
+       AND non-empty `source_content_id` /
+       `source_attestation_key` on disk.  These catch cases the
+       snapshot gate cannot (unsigned packages have no `.sig`
+       and can't be snapshot-gated; a missing `.source-
+       attestation` yields empty identity at index time but
+       technically could match an all-empty snapshot entry, so
+       we reject empty identity structurally).
     5. Compare the fresh-resolved graph to the existing lock's
        per-artifact graph.  Any shape or per-field drift becomes
-       EVIDENCE (`SourceRebuildEvidence`), not an error.
+       EVIDENCE (`SourceRebuildEvidence`), not an error — the
+       lock is evidence in source-rebuild mode, not a gate.
     6. Return `SourceRebuildResult(resolved_graph, evidence, errors)`.
 
 The caller consumes:
 
-    - `resolved_graph` — the authoritative graph.  Compile (drift
-      build / drift deploy) and lock comparison (drift prepare
-      --check) use this as the dependency graph.  The lock is NEVER
-      consulted as the graph source under source-rebuild; it is
-      input only for evidence comparison.
+    - `resolved_graph` — the authoritative graph.  Compile
+      (drift build / drift deploy) and lock comparison (drift
+      prepare --check) use this as the dependency graph.  The
+      lock is NEVER consulted as the graph source under source-
+      rebuild; it is input only for evidence comparison.
     - `evidence` — informational.  Printed to stdout for CI log
       capture; does not stall any step.
     - `errors` — non-empty means the caller must abort the run.
-      These are "hard" failures (unsigned dep, missing attestation,
-      untrusted signer kid, revoked kid, resolver failure).
+      These are "hard" failures (unsigned dep, missing
+      attestation on disk, resolver failure).  Snapshot
+      mismatches surface through `ResolutionError` raised by
+      `build_package_index` and are caught by the caller.
 
-Strict mode is UNCHANGED: callers keep consulting the lock as the
-authoritative graph and call `verify_lock_compatibility` directly.
-This module is the source-rebuild-only authority.
+Strict mode is UNCHANGED: callers keep consulting the lock as
+the authoritative graph and call `verify_lock_compatibility`
+directly.  Orch's producer/staging path (a separate flow)
+continues to use `build_package_index(trust_store=...)` for
+author-trust verification; that path is NOT routed through this
+module.  This module is the consumer-only source-rebuild
+authority.
 """
 
 from __future__ import annotations
@@ -119,13 +142,22 @@ class SourceRebuildResult:
 	- `errors` — hard failures; non-empty means caller must abort.
 
 	Invariants (by construction — tests pin them):
-	  * Every entry in `resolved_graph` came from the trust-verified
-	    package index, so its `.sig` cryptographically verified and
-	    its signer kid is in the trust store's namespace allowlist
-	    for every module_id the package declares.
+	  * Every entry in `resolved_graph` came from the snapshot-
+	    gated package index.  Its `(source_content_id,
+	    author_key, source_attestation_key)` triple exact-matches
+	    the run snapshot's entry for `(pkg_id, version)`; missing
+	    entries and mismatches raise `ResolutionError` at index
+	    time (never reach this result).
+	  * Author trust is attested by the snapshot, not re-verified
+	    here: orch's producer/staging step validated `.sig` +
+	    `.source-attestation` signers against orch's own trust
+	    store before writing each snapshot entry.  The consumer
+	    DOES NOT re-run that verification, and the consumer's
+	    local `drift/trust.json` is NOT consulted.
 	  * Every non-co-artifact entry has non-empty
 	    `source_content_id` / `source_attestation_key` OR appears
-	    in `errors`.
+	    in `errors` (structural gate in
+	    `apply_structural_trust_gates`).
 	  * No unsigned non-co-artifact dep reaches `resolved_graph`
 	    without also appearing in `errors`.
 	"""
@@ -142,46 +174,67 @@ def resolve_source_rebuild(
 	manifest_dir: Path,
 	existing_lock_graph: dict[str, ResolvedDep] | None,
 	co_artifact_names: set[str],
+	run_snapshot: Any,
 	pkg_index: dict[str, list[PackageEntry]] | None = None,
-	trust_store: Any | None = None,
 	co_artifact_entries: dict[str, PackageEntry] | None = None,
 ) -> SourceRebuildResult:
 	"""Produce the source-rebuild run graph for one artifact.
 
-	`manifest_dir` is used to locate `drift/trust.json` if
-	`trust_store` is not supplied.  `package_roots` is the list
-	of directories to walk for `.dmp` / `.zdmp` discovery.
+	`package_roots` is the list of directories to walk for `.dmp`
+	/ `.zdmp` discovery.  `manifest_dir` is used only for
+	diagnostics.
 
-	`pkg_index` and `trust_store` may be supplied by the caller to
-	amortize work across multiple artifacts in the same run (e.g.
-	`drift prepare --check` iterates the whole manifest).  If
-	either is None this function loads / builds it.
+	`run_snapshot` is REQUIRED — the v0.31.3 model pins source
+	identity per certification run via an orch-produced snapshot
+	(see `tools.drift_deploy.run_snapshot`).  Source-rebuild
+	consumers MUST be invoked with a loaded `RunSnapshot`; passing
+	`None` raises.  The snapshot is the authoritative "what this
+	run is certifying" statement — every staged package's
+	`(source_content_id, author_key, source_attestation_key)` must
+	match its snapshot entry exactly.  The downstream's local
+	`drift/trust.json` is NOT consulted for upstream author trust
+	(orch already verified signers at staging time against orch's
+	own trust store; the result is attested through the snapshot).
 
-	`co_artifact_entries` is an optional map of pkg_id → PackageEntry
-	overlays (co-artifacts of the current manifest that haven't been
-	built yet).  These take priority over any externally-discovered
-	entry with the same pkg_id — the resolver will pin to the
-	co-artifact's own version.  Matches the pattern used in
-	`drift_prepare.py::_run_impl`.
+	`pkg_index` may be supplied to amortize work across multiple
+	artifacts (e.g. `drift prepare --check` iterates the whole
+	manifest).  If `None`, this function builds it with the same
+	`run_snapshot` gate.
 
-	`existing_lock_graph` is the lock's per-artifact map (or None if
-	no lock exists yet).  Used for evidence only; the lock is never
-	the graph authority under source-rebuild.
+	`co_artifact_entries` is an optional map of pkg_id →
+	PackageEntry overlays (co-artifacts of the current manifest
+	that haven't been built yet).  These take priority over any
+	externally-discovered entry with the same pkg_id — the
+	resolver will pin to the co-artifact's own version.  Matches
+	the pattern used in `drift_prepare.py::_run_impl`.
+
+	`existing_lock_graph` is the lock's per-artifact map (or None
+	if no lock exists yet).  Used for evidence only; the lock is
+	never the graph authority under source-rebuild.
 	"""
-	if trust_store is None:
-		from tools.drift_deploy.trust_loader import load_merged_trust_store
-		trust_store = load_merged_trust_store(manifest_dir)
+	if run_snapshot is None:
+		raise ValueError(
+			"resolve_source_rebuild: `run_snapshot` is required.  "
+			"Source-rebuild consumers pin source identity per run "
+			"via an orch-produced snapshot; callers must load it "
+			"first (tools.drift_deploy.run_snapshot.load_run_snapshot) "
+			"and pass the `RunSnapshot` here.  The snapshot replaces "
+			"the pre-0.31.3 downstream-trust-store path entirely for "
+			"upstream author verification."
+		)
 	if pkg_index is None:
 		pkg_index = build_package_index(
 			package_roots,
-			trust_store=trust_store,
+			run_snapshot=run_snapshot,
 		)
 		# Layer in the caller-supplied co-artifact overlays AFTER
-		# the trust-verified index is built.  Co-artifacts come from
+		# the snapshot-gated index is built.  Co-artifacts come from
 		# the current manifest's library artifacts; they haven't
 		# been signed yet (their `.dmp` is built later in the same
-		# deploy run), so they can't pass the trust gate and must
-		# be injected manually.
+		# deploy run), so they bypass the snapshot gate and must be
+		# injected manually.  The co-artifact's own eventual
+		# verification happens later in the same deploy run when
+		# its `.dmp` is produced.
 		if co_artifact_entries:
 			for pkg_id, entry in co_artifact_entries.items():
 				pkg_index[pkg_id] = [entry]
@@ -200,7 +253,7 @@ def resolve_source_rebuild(
 			evidence=SourceRebuildEvidence(),
 			errors=[
 				f"artifact '{artifact.name}': source-rebuild resolve "
-				f"against trust-verified package index failed: {e}"
+				f"against snapshot-gated package index failed: {e}"
 			],
 		)
 
@@ -225,20 +278,25 @@ def apply_structural_trust_gates(
 	co_artifact_names: set[str],
 	errors: list[str],
 ) -> None:
-	"""Per-dep source-rebuild gates the index-time crypto check can't catch.
+	"""Per-dep source-rebuild gates the snapshot check can't catch.
 
-	`build_package_index(trust_store=...)` enforces the cryptographic
-	`.sig` check + namespace allowlist for SIGNED packages.  It
-	cannot gate on:
+	`build_package_index(run_snapshot=...)` exact-matches each disk
+	package's `(source_content_id, author_key,
+	source_attestation_key)` against the snapshot entry for
+	`(pkg_id, version)`.  It cannot gate on:
 	  * `author_key == "unsigned"` — the unsigned dev-opt-in; there's
-	    no `.sig` for the crypto check to run against.  Rejected here
-	    for source-rebuild because the owner-continuity trust anchor
-	    has nothing to verify.
+	    no `.sig` on disk, and if the snapshot had somehow entered
+	    `"unsigned"` as its author_key it would nominally match.
+	    Rejected here because source-rebuild's contract requires
+	    real signed artifacts.
 	  * empty `source_content_id` / `source_attestation_key` — a
 	    missing `.source-attestation` sidecar yields empty identity
-	    at index time; the crypto check for the sidecar is triggered
-	    only when the sidecar exists.  Rejected here because source-
-	    rebuild's trust anchor requires a signed attestation.
+	    at index time.  A malformed snapshot with empty-string
+	    fields is rejected at snapshot load via strict field
+	    validation (`run_snapshot.load_run_snapshot`), but this
+	    structural check is defence-in-depth against any caller
+	    that bypasses the loader (e.g. tests that construct a
+	    snapshot programmatically).
 	Co-artifact entries (same-manifest libraries built later in the
 	same run) are exempt.
 	"""
@@ -246,24 +304,23 @@ def apply_structural_trust_gates(
 		if dep.dep_type == "co-artifact" or pkg_id in co_artifact_names:
 			continue
 		# Reject BOTH the dev-opt-in `"unsigned"` sentinel AND an
-		# empty `author_key` (no `.sig` sidecar).  An empty
-		# author_key on a non-co-artifact means the package has no
-		# `.sig` at all — the primary index-time gate in
-		# `build_package_index(trust_store=...)` hard-fails on this
-		# path too; this helper keeps a defence-in-depth check so
-		# callers that build the index without the trust store (or
-		# that inject mocked PackageEntry objects in tests) still
-		# trip the boundary.
+		# empty `author_key` (no `.sig` sidecar).  Defence-in-depth
+		# for callers that bypass the snapshot-gated index (tests
+		# injecting mocked `PackageEntry` objects, older producer
+		# paths).  Under the 0.31.3 model the snapshot gate is the
+		# primary check, but this secondary check keeps the
+		# invariant "no unsigned non-co-artifact reaches the
+		# resolved graph" intact even when the primary gate is
+		# bypassed.
 		if dep.author_key == "unsigned" or not dep.author_key:
 			errors.append(
 				f"artifact '{art_name}' dep '{pkg_id}': resolved "
 				f"entry has no verifiable signer "
 				f"(author_key={dep.author_key!r}); source-rebuild "
-				f"requires every disk package to cryptographically "
-				f"verify against the trust store's namespace "
-				f"allowlist.  Sign and republish (toolchain >= "
-				f"0.30.0) under a trusted kid before using source-"
-				f"rebuild on this dep."
+				f"requires every disk package to have a signed "
+				f"`.sig` sidecar AND a matching run-snapshot entry.  "
+				f"Sign and republish (toolchain >= 0.30.0) under a "
+				f"kid the snapshot authorises for this package."
 			)
 			continue
 		if not dep.source_content_id:
