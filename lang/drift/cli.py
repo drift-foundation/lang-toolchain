@@ -683,6 +683,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	sub.add_parser("manifest", help="Manifest maintenance helpers: `drift manifest migrate` converts v1 → v2 (see: drift manifest --help)")
+	sub.add_parser("lock", help="Lock inspection helpers: `drift lock emit` emits --dep flags for an artifact's resolved graph (see: drift lock --help)")
 	return p
 
 
@@ -756,6 +757,31 @@ def main(argv: list[str] | None = None) -> int:
 		print(
 			f"error: unknown `drift manifest` subcommand: {rest[0]!r}\n"
 			f"       known subcommands: migrate",
+			file=sys.stderr,
+		)
+		return 1
+
+	# `drift lock <subcmd>` — read-only lock inspection.  Landed
+	# 0.31.7 to give test runners a supported way to thread
+	# resolved `--dep` flags into `driftc` without parsing
+	# `drift/lock.json` on the bash side.  No write surface here;
+	# the lock is authored only by `drift prepare`.
+	if effective_argv and effective_argv[0] == "lock":
+		rest = effective_argv[1:]
+		if not rest or rest[0] in ("-h", "--help"):
+			print(
+				"usage: drift lock <subcommand> [options]\n\n"
+				"subcommands:\n"
+				"  emit      Emit `--dep PKG@M.N.P` flags for an artifact's resolved graph\n",
+				file=sys.stderr if not rest else sys.stdout,
+			)
+			return 0 if rest else 1
+		if rest[0] == "emit":
+			from tools.drift_deploy.drift_lock import run as lock_emit_run
+			return lock_emit_run(rest[1:])
+		print(
+			f"error: unknown `drift lock` subcommand: {rest[0]!r}\n"
+			f"       known subcommands: emit",
 			file=sys.stderr,
 		)
 		return 1

@@ -1,6 +1,93 @@
 # Drift development history
 
 ## 2026-04-22
+- **`drift lock emit` subcommand for external test runners
+  (0.31.7, ABI unchanged at 10).**  Requested by the singular
+  library team during their v1 → v2 manifest migration.
+
+  **Why it exists.**  Pre-0.29, a test runner wanting to thread
+  `--dep PKG@M.N.P` flags through to `driftc` could just read
+  `drift-manifest.json::package_deps[].version` directly — every
+  entry was an exact `M.N.P` pin.  The 0.29.0 manifest schema v2
+  overhaul moved exact versions out of the manifest entirely:
+  `package_deps[].version` is now an owner-declared range
+  (`"M"` or `"M.N"`), and the exact resolved graph lives only in
+  `drift/lock.json` (schema v4 as of 0.30.1).  Every library
+  with its own test harness — net-tls, mariadb-client, singular,
+  bookkeeper — independently re-hit "I need to parse the lock
+  JSON from bash now" and rolled a local solution.
+
+  **What it is.**  Read-only CLI on top of the existing
+  `tools.drift_deploy.lockfile::expand_to_dep_flags` helper that
+  `drift build` / `drift deploy` already use internally:
+
+      drift lock emit --artifact <name> [--format driftc] [--manifest <path>]
+
+  Emits sorted `--dep PKG@M.N.P` flags space-separated on
+  stdout.  Typical usage in a test runner:
+
+      DEP_FLAGS=$(drift lock emit --artifact singular)
+      driftc $DEP_FLAGS --package-root <libs> tests/foo.drift -o build/foo
+
+  Exit codes: `0` on success, `1` on missing lock / missing
+  manifest / unknown artifact / stale lock (manifest declares
+  artifact but lock doesn't) / v1–v3 lock — every error points
+  at `drift prepare`.  `2` reserved for argparse misuse.
+
+  **Format stability.**  The `driftc` output format (sorted
+  `--dep PKG@M.N.P` flags, one stdout line, trailing newline)
+  is stable across toolchain versions.  Future lock schema
+  migrations (v4 → vN) are absorbed inside this subcommand; the
+  output shape callers depend on stays fixed.  This is the
+  explicit supported surface — runners that hand-parse the lock
+  JSON directly are on their own across schema bumps.
+
+  **Co-artifact emission contract.**  `drift lock emit` emits
+  EVERY resolved entry, including entries with
+  `dep_type: "co-artifact"` (peer library artifacts in the same
+  manifest).  This matches the flag list `drift build` /
+  `drift deploy` pass to `driftc` internally — the emitted
+  flags are exactly what `drift build` would pass.  No
+  filtering, no `--exclude-co-artifacts` flag, no special
+  casing.  Caller responsibility: every pinned package must be
+  visible under the caller's `--package-root` — for
+  co-artifacts, the runner has to build or deploy them first.
+  Single-artifact libraries (the common test-runner case) never
+  have co-artifact entries.  Pinned by
+  `test_drift_lock.py::test_co_artifacts_are_emitted`; changing
+  this behaviour requires updating the module docstring, CLI
+  description, and this history entry in lockstep.
+
+  **Non-goals.**  No write surface (the lock is authored only by
+  `drift prepare`).  No structured JSON emitter yet (could add
+  `--format json` later if there's demand; for now, `driftc` is
+  the only format every test runner needs).  No `drift test`
+  wrapper — test runners already encode runner-specific policy
+  (optimiser level, sanitizers, timeouts, linker overrides)
+  that's better kept out of a unified command.
+
+  **Files.**
+    - `tools/drift_deploy/drift_lock.py` — new subcommand module
+      (~120 LOC).  Reuses `lockfile.read_lock` and
+      `lockfile.expand_to_dep_flags`.
+    - `lang/drift/cli.py` — dispatch wiring for `drift lock
+      <subcommand>`, mirroring the `drift manifest` pattern.
+      `drift lock` / `drift lock --help` lists known
+      subcommands; unknown subcommand prints clear error.
+    - `tools/drift_deploy/test_drift_lock.py` — 12 tests
+      covering: happy path sorted emit, multi-artifact isolation,
+      empty-graph leaf artifact, deterministic sort, missing
+      lock / manifest / artifact (3 error paths), stale lock
+      (artifact in manifest but not lock), old-schema lock
+      rejection, CLI dispatch via top-level `drift` binary,
+      bare `drift lock` help, unknown subcommand error.
+
+  **Orch-side impact.**  None.  Orch already threads `--dep`
+  flags via `drift build` / `drift deploy`, which use the same
+  internal helper.  This is purely a surface for ad-hoc
+  compile paths (test runners, experimental compile scripts,
+  `just foo` targets).
+
 - **Arc intrinsic inside a move-captured lambda body crashed
   `driftc` with a MIR lowering contract failure (0.31.6, ABI
   unchanged at 10).** Reported by pushcoin-bookkeeper during the
