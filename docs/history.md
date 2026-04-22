@@ -1,5 +1,85 @@
 # Drift development history
 
+## 2026-04-22
+- **Arc intrinsic inside a move-captured lambda body crashed
+  `driftc` with a MIR lowering contract failure (0.31.6, ABI
+  unchanged at 10).** Reported by pushcoin-bookkeeper during the
+  first real exercise of the 0.31.5 certified toolchain.
+
+  **Symptom.** Any code of the shape
+
+      val captured = app.clone();
+      val cb = core.callback_throw2(|req, ctx|
+          captures(move captured) => {
+              val a = captured.get();   // <-- ARC_GET inside lambda
+              return a.handle(req, ctx);
+          });
+
+  aborted with:
+
+      error: internal: MIR lowering contract failure
+      (Arc intrinsic IntrinsicKind.ARC_GET at callsite 0 in
+      __lambda_cb_<enclosing>_N_M has no helper instantiation
+      recorded (Stage 2 bridge bug: `_queue_instantiations` did
+      not see this call site's instantiation record, or the Arc
+      method call resolution path did not invoke
+      `record_instantiation`))
+
+  The compiler's self-diagnosis was right about the mechanism,
+  wrong about the direction: the type checker DID call
+  `record_instantiation` for the Arc method callsite, and the
+  record landed on the hidden-lambda's `typed_fn.instantiations_
+  by_callsite_id` with the correct csid and type args.  The hole
+  was `_queue_instantiations` never running against the hidden-
+  lambda typed_fn at all.
+
+  **Root cause.**  In `lang/driftc/driftc.py::compile_stubbed_
+  funcs`, the initial
+    ```python
+    for _fn_id, typed_fn in sorted(typed_fns_by_id.items(), ...):
+        _queue_instantiations(_fn_id, typed_fn)
+    ```
+  loop runs BEFORE the hidden-lambda-body pass.  Hidden lambda
+  typed_fns are built LATER (after their bodies get their own
+  type-check pass) and appended to `typed_fns_by_id` via
+  `typed_fns_by_id[spec.fn_id] = hidden_typed_fn`.  Nothing then
+  called `_queue_instantiations` on them, so
+  `arc_helper_inst_fn_by_callsite` had no `(lambda_fn_id, csid)`
+  entry when Stage 2 MIR lowering looked it up — and the lookup
+  at `stage2/hir_to_mir.py::_lower_arc_intrinsic_call` raised
+  the contract-failure assertion.
+
+  Why it wasn't caught earlier: existing callback/Arc tests use
+  free functions wrapped by `core.callback0(free_fn)` (no
+  lambda) or call `conc.lock(arc)` / `conc.mutex_guard` methods
+  inside lambdas (not the ARC_GET intrinsic specifically).  No
+  test covered `arc.get()` inside a move-captured lambda — the
+  documented per-route-callback idiom in `web.rest`.
+
+  **Fix.**  Single-line plumbing in
+  `lang/driftc/driftc.py::compile_stubbed_funcs`: right after
+  `typed_fns_by_id[spec.fn_id] = hidden_typed_fn`, call
+  `_queue_instantiations(spec.fn_id, hidden_typed_fn)`.  The
+  existing `_drain_instantiations()` call at the end of the
+  hidden-lambda loop processes any newly-queued helper
+  templates.  No signature changes, no new queue shape, no
+  broader refactor.
+
+  **Regression pin.**
+  `lang/tests/codegen/e2e/arc_get_in_move_capture_lambda/
+  main.drift` — minimal shape: single-artifact program wraps an
+  `Arc<App>.clone()` into a `Callback0<Int>` via
+  `captures(move)`, calls `.get()` inside, returns exit 0.
+  Compiles and runs under the fix; reproduces the exact
+  assertion without it.
+
+  **App-team impact.**  Unblocks pushcoin-bookkeeper and any
+  other consumer of the `web.rest` per-route-callback idiom.
+  0.31.6 binary will promote to `~/opt/drift/certified/`
+  through the next orch run once this fix clears the cert gate
+  along with the outstanding mariadb-client memcheck-compile
+  segfault (separate defect).
+
 ## 2026-04-21
 - **Stage vs. certify semantic refinement: stage now engages
   source-rebuild with producer-output exemption (0.31.5

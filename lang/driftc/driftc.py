@@ -6223,6 +6223,19 @@ def compile_stubbed_funcs(
 			continue
 		hidden_typed_fn = hidden_typed.typed_fn
 		typed_fns_by_id[spec.fn_id] = hidden_typed_fn
+		# Hidden lambda typed_fns are registered AFTER the initial
+		# `_queue_instantiations` loop at the top of this function.
+		# Their own `instantiations_by_callsite_id` (populated by the
+		# lambda-body type-check pass above) would otherwise never
+		# reach `_queue_instantiations` — leaving
+		# `arc_helper_inst_fn_by_callsite` without the (lambda_fn_id,
+		# csid) entry the Stage 2 MIR lowering looks up for Arc
+		# intrinsic callsites inside the lambda body.  Queue the
+		# hidden lambda's instantiations here so the downstream
+		# `_drain_instantiations()` call at the end of the hidden-
+		# lambda loop processes any newly-queued items (Arc helper
+		# templates, generic methods, etc).
+		_queue_instantiations(spec.fn_id, hidden_typed_fn)
 		_rewrite_call_targets(hidden_typed_fn, lambda_body)
 		def _patch_hidden_lambda_call_info_from_sigs() -> None:
 			call_info_map = getattr(hidden_typed_fn, "call_info_by_callsite_id", None)

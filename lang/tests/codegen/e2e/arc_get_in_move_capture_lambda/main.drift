@@ -1,0 +1,44 @@
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+// Regression for driftc 0.31.6: `Arc<T>.get()` called inside a
+// move-captured lambda body used to hit a Stage 2 bridge assertion
+// ("Arc intrinsic IntrinsicKind.ARC_GET at callsite 0 ... has no
+// helper instantiation recorded").  Root cause: the hidden-lambda
+// type-check pass DID record the Arc callsite on the hidden
+// lambda's `typed_fn.instantiations_by_callsite_id` with the
+// correct csid + type args, but `_queue_instantiations` in
+// `driftc.py` only ran against the typed_fns present at the start
+// of its loop.  Hidden lambdas get registered in `typed_fns_by_id`
+// AFTER that loop, so their instantiation records never reached
+// `arc_helper_inst_fn_by_callsite`, and the Stage 2 MIR lowering's
+// lookup for `(lambda_fn_id, csid)` missed.  Fix: call
+// `_queue_instantiations(spec.fn_id, hidden_typed_fn)` right after
+// the hidden lambda's typed_fn is assigned; the existing
+// `_drain_instantiations()` at the end of the hidden-lambda loop
+// processes any newly-queued helper templates.  Reported from
+// pushcoin-bookkeeper's `web.rest` per-route callback idiom.
+
+struct App {
+	v: Int
+}
+
+implement App {
+	pub fn read(self: &App) nothrow -> Int {
+		return self.v;
+	}
+}
+
+fn main() nothrow -> Int {
+	val app = conc.arc(App(v = 42));
+	val captured = app.clone();
+	val cb: core.Callback0<Int> = core.callback0(| | captures(move captured) => {
+		// `.get()` here is the ARC_GET intrinsic inside a
+		// move-captured lambda — the crash site.
+		val a = captured.get();
+		return a.read();
+	});
+	return cb.call() - 42;
+}
