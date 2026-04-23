@@ -6807,12 +6807,13 @@ def compile_stubbed_funcs(
 		for fn_id, func in mir_funcs_by_id.items():
 			ledger = _ol_build(func, drop_policy=lambda _t: None)
 			setattr(func, "_ownership_ledger", ledger)
-		# Phase 4 step 3c: site-2 per-field emission authority.  Site 2
-		# inside HIR→MIR already emitted per-field drop chains using
-		# its inline legacy decisions; the ledger now has veto power
-		# via `field_verdict_at` and removes drops it classifies
-		# `MUST_NOT_DROP`.  Today (post-3b disagreement=0) this is a
-		# no-op for real code.  See
+		# Phase 4 step 3c: site-2 per-field drop VETO via the ledger.
+		# Tier 2 split authority — the ledger does NOT author emission;
+		# site 2's inline legacy decisions still pick what to emit.
+		# The ledger's power here is limited to vetoing: drops the
+		# site emitted whose `field_verdict_at` returns `MUST_NOT_DROP`
+		# are excised.  Today (post-3b disagreement=0) this is a no-op
+		# for real code.  See
 		# `lang/driftc/stage2/ownership_ledger_trim.py`.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.ownership_ledger_trim import (

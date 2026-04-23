@@ -1,14 +1,20 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 4 step 3c — site-2 per-field emission authority via
+Phase 4 step 3c — site-2 per-field drop VETO via
 `LiveStateMap.field_verdict_at`.
 
-Site 2 (`match_cleanup`, inside HIR→MIR) emits per-field drop chains
-for partial-move match arms using its inline legacy decisions
-(`moved_field_indices` / `_needs_runtime_drop`).  It also populates a
-side table on the function — `func._match_cleanup_per_field_drops` —
-with one entry per emitted drop: (scrut_local, field_path,
-cleanup_point, drop_local, cleanup_fty).
+Authority model: Tier 2 split via veto, NOT ledger-authored emission.
+Site 2 (`match_cleanup`, inside HIR→MIR) still authors every per-field
+drop using its inline legacy decisions (`moved_field_indices` /
+`_needs_runtime_drop`).  The ledger cannot compel emission — if the
+site didn't emit a drop, this pass cannot create one.  What the
+ledger CAN do is veto: drops the site emitted whose `field_verdict_at`
+comes back `MUST_NOT_DROP` are excised from MIR here.
+
+Site 2 populates a side table on the function —
+`func._match_cleanup_per_field_drops` — with one entry per emitted
+drop: (scrut_local, field_path, cleanup_point, drop_local,
+cleanup_fty).
 
 After the ledger is built by the driver, `trim_match_cleanup_by_ledger`
 queries `field_verdict_at` at each recorded cleanup point.  When the

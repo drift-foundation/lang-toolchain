@@ -833,7 +833,6 @@ def insert_string_arc(
 				locals_used |= _collect_return_source_locals(prod.value, seen_vals)
 			return locals_used
 
-		initialized_destructibles: Set[str] = set(assigned_in.get(block.name, set())) & (destructible_locals - nullsafe_destructible_locals)
 		for _instr_idx, instr in enumerate(block.instructions):
 			if isinstance(instr, M.StoreLocal):
 				moved_out_locals.discard(instr.local)
@@ -847,71 +846,52 @@ def insert_string_arc(
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
-				# Phase 3B step 1 — `drop_before_overwrite` swap.
+				# Phase 4 (post-3c) — `drop_before_overwrite` promoted
+				# to **Tier 1: pure ledger authority.**  The legacy
+				# `initialized_destructibles` dataflow fallback is
+				# RETIRED.  Site 4 authors nothing of its own; the
+				# verdict comes from `_ledger.verdict_at(...)` with
+				# `_compute_drop_policy(type_table, ty).needs_drop` as
+				# the sole type-level needs_drop axis.
 				#
-				# Status: **ledger-authoritative for deterministic
-				# verdicts; legacy fallback retained for PathDependent /
-				# unavailable ledger.**  Site-local authority is NOT
-				# fully removed; that retirement is gated on either:
-				#   (a) the drop-before-overwrite site gaining its own
-				#       flag-guard pattern (so PathDependent verdicts
-				#       can be resolved here, not at scope-exit only), OR
-				#   (b) e2e observe demonstrating zero PathDependent
-				#       verdicts at this site across all real Drift
-				#       (today's data: 100 % verdict agreement at smoke
-				#       + e2e, so PathDependent is currently unreached
-				#       in practice — but the fallback is preserved
-				#       defensively until that condition is pinned).
+				# Proof obligation: the ledger MUST resolve every
+				# StoreLocal point here to either `MUST_DROP` or
+				# `MUST_NOT_DROP`.  `PathDependent` (lattice
+				# `MaybeUninit` at this point) is unreached at smoke
+				# + e2e today (100 % verdict agreement across 1031
+				# cases); if it ever appears, the `RuntimeError`
+				# below fires loudly so the regression is investigated
+				# before it silently reintroduces split authority.
+				# Same behavior if the ledger is unset — any caller
+				# that hits site 4 MUST attach a ledger first.
 				#
-				# Authoritative path:
-				#   - For MustDrop / MustNotDrop verdicts, the ledger
-				#     decides.  `compute_drop_policy(type_table, ty)
-				#     .needs_drop` provides the canonical needs_drop
-				#     axis — NOT the raw `TypeTable.has_drop` query
-				#     (the quarantined 3A reporter approximation).
-				#
-				# Fallback path:
-				#   - PathDependent verdict (lattice MaybeUninit at
-				#     this point) → fall back to legacy
-				#     `instr.local in initialized_destructibles`.
-				#   - Ledger unavailable (no `_ownership_ledger`
-				#     attached, e.g. ad-hoc test harness) → same
-				#     fallback.
-				#
-				# The legacy `initialized_destructibles` set is
-				# computed and preserved on every run for these two
-				# fallback paths.  It is retired only when (a) or (b)
-				# above holds, in a separate patch.
-				#
-				# Build-timing invariant: the ledger consulted here is
-				# the PRE-`drop_flags` ledger (driver builds it before
-				# the drop_flags pass runs).  Drop-before-overwrite
-				# decisions only depend on per-local state at
-				# StoreLocal points within the function body — none of
-				# those points are mutated by drop_flags (which only
-				# adds new blocks at Return terminators and inserts
-				# flag-set/clear ops adjacent to existing
-				# StoreLocal/MoveOut).  Pre-flag state is the correct
-				# input for site 4.  See
+				# Build-timing invariant: the ledger consulted here
+				# is the PRE-`drop_flags` ledger (driver builds it
+				# before the drop_flags pass runs).
+				# Drop-before-overwrite decisions only depend on
+				# per-local state at StoreLocal points within the
+				# function body — none of those points are mutated by
+				# drop_flags.  See
 				# `work/ownership-ledger/3b-invariants.md`.
+				if _ledger is None:
+					raise RuntimeError(
+						f"drop_before_overwrite invoked without an "
+						f"attached ownership ledger (fn={func.name}, "
+						f"block={block.name}, local={instr.local}); "
+						f"Tier-1 site requires `func._ownership_ledger` "
+						f"to be set by the driver before `string_arc`."
+					)
 				_local_ty = local_types.get(instr.local)
 				_needs_drop = (
 					bool(_compute_drop_policy(type_table, _local_ty).needs_drop)
 					if _local_ty is not None
 					else False
 				)
-				_verdict = (
-					_ledger.verdict_at(
-						(block.name, _instr_idx),
-						instr.local,
-						needs_drop=_needs_drop,
-					)
-					if _ledger is not None
-					else None
+				_verdict = _ledger.verdict_at(
+					(block.name, _instr_idx),
+					instr.local,
+					needs_drop=_needs_drop,
 				)
-				_should_drop: bool
-				_site_verdict_str: str
-				_site_reason: str
 				if _verdict is _DropVerdict.MUST_DROP:
 					_should_drop = True
 					_site_verdict_str = _ledger_events.VERDICT_MUST_DROP
@@ -921,19 +901,21 @@ def insert_string_arc(
 					_site_verdict_str = _ledger_events.VERDICT_MUST_NOT_DROP
 					_site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
 				else:
-					# PathDependent OR ledger unavailable → legacy fallback.
-					_should_drop = instr.local in initialized_destructibles
-					_site_verdict_str = (
-						_ledger_events.VERDICT_MUST_DROP
-						if _should_drop
-						else _ledger_events.VERDICT_MUST_NOT_DROP
+					# PathDependent — proof-obligation tripwire.  The
+					# observe re-run said the lattice never yields
+					# MaybeUninit at drop_before_overwrite points.  If
+					# it ever does, this raise signals the regression.
+					raise RuntimeError(
+						f"drop_before_overwrite: ledger returned "
+						f"PathDependent at (fn={func.name}, "
+						f"block={block.name}, idx={_instr_idx}, "
+						f"local={instr.local}).  Tier-1 promotion "
+						f"retired the `initialized_destructibles` "
+						f"fallback — if PathDependent is now reachable, "
+						f"either tighten the lattice or restore a "
+						f"flag-guarded path here before re-landing."
 					)
-					_site_reason = (
-						_ledger_events.REASON_NEEDS_DROP
-						if _should_drop
-						else _ledger_events.REASON_NOT_DROP_NEEDING
-					)
-				if _ledger is not None and drift_debug.enabled("ownership_ledger"):
+				if drift_debug.enabled("ownership_ledger"):
 					_ledger_reporter.check(
 						_ledger,
 						fn_name=func.name,
@@ -947,7 +929,6 @@ def insert_string_arc(
 					)
 				if _should_drop:
 					_drop_destructible_local(instr.local, new_instrs)
-				initialized_destructibles.add(instr.local)
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.MoveOut):
@@ -962,35 +943,14 @@ def insert_string_arc(
 				new_instrs.append(M.StoreLocal(local=instr.local, value=zero))
 				local_types[zero] = instr.ty
 				moved_out_locals.add(instr.local)
-				# The local's storage is now zeroed (moved-out).  A
-				# subsequent StoreLocal must NOT emit a
-				# drop-before-overwrite for it — the "old value" is the
-				# synthesized zero, and dropping that zero can fire
-				# destructors on null payloads (e.g. variant with
-				# droppable first-ctor: tag=0 dispatches to the ctor's
-				# drop which reads zeroed reference fields → SEGV).
-				# Clear the "initialized" marker so the next real
-				# StoreLocal is treated as fresh initialization.
-				#
-				# Scope-of-effect: `initialized_destructibles` is
-				# seeded from `destructible_locals - nullsafe_destructible_locals`
-				# — i.e. it NEVER contains String or Array locals (those
-				# go through the nullsafe path at line 824-827, which
-				# always drops and re-adds regardless of prior state)
-				# and it NEVER contains non-destructible locals.  The
-				# only locals affected by this `discard` are the
-				# non-nullsafe destructibles (variants with drop-
-				# unsafe zero bytes, DVs, user-Destructible structs).
-				# For each of those, dropping the zero bytes emitted
-				# by the preceding ZeroValue is strictly unsafe — there
-				# is no legitimate use case where the caller WANTS the
-				# synthesized zero to be re-dropped.  Hence clearing
-				# the marker cannot reintroduce a leak: if the next
-				# StoreLocal is the last assignment, scope-exit drop
-				# still runs; if no further store occurs, the local is
-				# already moved-out and the zero bytes correctly stay
-				# unowned.
-				initialized_destructibles.discard(instr.local)
+				# Post-MoveOut the storage is zeroed.  A subsequent
+				# StoreLocal must NOT re-drop the zero bytes (tag=0
+				# can dispatch to a ctor whose drop reads zeroed
+				# reference fields → SEGV).  Tier-1 site 4 handles
+				# this correctly via the ledger: the MoveOut
+				# transfers state to `MOVED_OUT`, so `verdict_at` at
+				# the next StoreLocal returns `MUST_NOT_DROP` and no
+				# drop-before-overwrite is emitted.
 				continue
 
 			if isinstance(instr, M.ConstString):

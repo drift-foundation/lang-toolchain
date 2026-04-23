@@ -10,11 +10,13 @@ StoreLocal-rewrite loop:
   `verdict_at` (with `needs_drop` from `compute_drop_policy` — the
   canonical `DropPolicy.needs_drop` axis, NOT raw `TypeTable.has_drop`).
 - For `MustDrop` / `MustNotDrop` verdicts, the ledger is authoritative.
-- For `PathDependent` (rare in current Drift; smoke + e2e observe both
-  showed 100 % verdict agreement at this site), the legacy
-  `initialized_destructibles` decision is the fallback until the
-  drop-before-overwrite site gains its own flag-guard pattern in a
-  follow-up.
+- For `PathDependent` (rare in current Drift; smoke + e2e observe
+  both showed 100 % verdict agreement at this site), site 4 now
+  RAISES instead of falling back — the `initialized_destructibles`
+  legacy state was retired in the Phase 4 Tier-1 promotion, and the
+  raise is the proof-obligation tripwire K required.  If this site
+  ever sees PathDependent in real code the raise triggers an
+  investigation before the regression reaches production.
 - The site continues to emit observe-mode telemetry records so that
   observe runs after the swap can confirm no new bucket-5/6 class is
   introduced.
@@ -276,3 +278,70 @@ def test_swap_emits_observe_records_when_flag_on(capfd) -> None:
 		"expected `drop_before_overwrite` site tag in the observe "
 		"records emitted by the swap"
 	)
+
+
+# -- Tier-1 proof-obligation tripwires (Phase 4 post-3c) ------------------
+
+
+def test_tier1_raises_when_ledger_unattached() -> None:
+	"""Post-promotion: the fallback `initialized_destructibles` state
+	is gone.  A caller that runs `insert_string_arc` without attaching
+	`func._ownership_ledger` first MUST fail loudly — silent wrong
+	behaviour here would reintroduce the split authority that the
+	Tier-1 promotion retired."""
+	import pytest
+	type_table = TypeTable()
+	drop_ty = _make_droppable_struct(type_table)
+	func = _make_func("ledger_missing", params=[], locals_=["x"], types={"x": drop_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.StoreLocal(local="x", value="t_new"))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	# Deliberately do NOT call `_attach_ledger(func)`.
+	with pytest.raises(RuntimeError, match="without an attached ownership ledger"):
+		insert_string_arc(func, type_table=type_table, fn_infos={})
+
+
+def test_tier1_raises_on_path_dependent_verdict() -> None:
+	"""Post-promotion: PathDependent at a drop_before_overwrite point
+	is the proof-obligation tripwire.  Today's lattice never produces
+	MaybeUninit at any real StoreLocal in observe (1031/1031 cases
+	clean); if a future change starts producing it, this raise fires
+	so we investigate before silently falling back to legacy.
+
+	CFG to force MaybeUninit at `join:0`:
+
+	    entry → (A stores x) → join
+	    entry → (B skips)    → join
+	    join:  StoreLocal(x, t_new)   ← site 4 queries here
+
+	`block_in[join][x]` joins `LIVE` (A) with `UNINIT` (B) →
+	`MAYBE_UNINIT` → `verdict_at(...)` returns `PATH_DEPENDENT`."""
+	import pytest
+	type_table = TypeTable()
+	drop_ty = _make_droppable_struct(type_table)
+	func = _make_func(
+		"path_dependent_raise",
+		params=["cond"],
+		locals_=["cond", "x"],
+		types={"cond": type_table.ensure_bool(), "x": drop_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="cond", then_target="a", else_target="b")
+	a = M.BasicBlock(name="a")
+	a.instructions.append(M.StoreLocal(local="x", value="t_a"))
+	a.terminator = M.Goto(target="join")
+	b = M.BasicBlock(name="b")
+	b.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	# Site 4 runs on this StoreLocal.  state_pre at `join:0` = MAYBE_UNINIT.
+	join.instructions.append(M.StoreLocal(local="x", value="t_new"))
+	join.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	func.blocks["a"] = a
+	func.blocks["b"] = b
+	func.blocks["join"] = join
+	_attach_ledger(func)
+	with pytest.raises(RuntimeError, match="returned PathDependent"):
+		insert_string_arc(func, type_table=type_table, fn_infos={})
