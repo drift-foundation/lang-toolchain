@@ -66,8 +66,10 @@ from lang.driftc.stage2.ownership_ledger import DropVerdict
 from lang.driftc.stage2.ownership_ledger_events import (
 	REASON_DESTRUCTIBLE,
 	REASON_MOVED,
+	REASON_MOVED_UNCONDITIONAL,
 	REASON_NEEDS_DROP,
 	REASON_NOT_DROP_NEEDING,
+	REASON_UNKNOWN_TYPE,
 )
 
 
@@ -105,30 +107,133 @@ def test_verdict_string_local_not_moved_is_must_drop() -> None:
 	assert reason == REASON_NEEDS_DROP
 
 
-def test_verdict_string_local_in_moved_set_is_path_dependent() -> None:
-	"""`String` local in `_moved_locals` → PathDependent + moved
-	reason.  The helper cannot distinguish unconditional vs
-	conditional moves from HIRToMIR state alone; both yield
-	PathDependent.  Site 1 defers either way (legacy skip for
-	unconditional; 3C flag-guarded drop for conditional)."""
+def test_verdict_string_local_moved_in_same_scope_is_must_not_drop_unconditional() -> None:
+	"""Phase 4 step 2 cleanup of K-flagged limitation #1: a local
+	moved in the same scope as its declaration is UNCONDITIONALLY
+	moved on the path reaching `_emit_scope_drops`.  Helper says
+	MustNotDrop with the distinct `REASON_MOVED_UNCONDITIONAL` tag
+	so observe triage can separate "definite-move legacy-correct
+	skip" from "potentially-conditional 3C-handled skip."
+
+	Pre-fix: helper returned PathDependent + REASON_MOVED for ANY
+	`_moved_locals` membership, conflating the two cases."""
 	type_table = TypeTable()
 	string_ty = type_table.ensure_string()
 	lower = _build_lowerer(type_table, param_types={"s": string_ty})
+	# Push a scope; declare s in it; record the move at the same
+	# scope depth.  Mirrors what HIRToMIR does for `var s = make();
+	# return move s;`.
+	lower._scope_stack.append(["s"])
+	lower._local_decl_scope_index["s"] = len(lower._scope_stack) - 1
 	lower._moved_locals.add("s")
+	lower._moved_at_scope_index["s"] = len(lower._scope_stack) - 1
+	verdict, reason = lower._scope_drop_verdict("s")
+	assert verdict is DropVerdict.MUST_NOT_DROP
+	assert reason == REASON_MOVED_UNCONDITIONAL
+
+
+def test_verdict_nested_move_first_then_unconditional_move_known_limitation() -> None:
+	"""K-flagged limitation pin (Phase 4 step 2 follow-up): the
+	`moved_unconditional` distinction is HISTORY-SENSITIVE, not
+	semantically path-sensitive.
+
+	`_mark_moved` uses `setdefault` on `_moved_at_scope_index`, so the
+	FIRST recorded move depth wins forever.  When a local is moved
+	first in a nested scope and LATER moved unconditionally in its
+	declaration scope, the helper still classifies it as
+	`PathDependent + REASON_MOVED` — even though the later
+	unconditional move makes the skip semantically correct on the
+	surviving path.
+
+	Pinned outcome: the helper returns `PathDependent + REASON_MOVED`
+	for this shape today.  Site 1 still skips emission (current
+	behaviour), so this is a TELEMETRY blind-spot, not an emission
+	bug.  But the `moved_unconditional` bucket should be read as a
+	BEST-EFFORT approximation, not a proof, until either:
+
+	  (a) `_mark_moved` switches to `min`-depth (catches K's
+	      scenario but stays wrong for "unconditional move first,
+	      then re-store, then nested move" — which would still
+	      report unconditional even though the re-stored value's
+	      drop is genuinely path-dependent), OR
+	  (b) Phase 4 grows real per-program-point analysis at HIR→MIR
+	      time (probably the right end-state but expensive).
+
+	Pin captures CURRENT behaviour so any future change to
+	`_mark_moved` flips the assertion and forces explicit
+	deliberation.
+	"""
+	type_table = TypeTable()
+	string_ty = type_table.ensure_string()
+	lower = _build_lowerer(type_table, param_types={"s": string_ty})
+	# Declare s in scope 0.
+	lower._scope_stack.append(["s"])
+	lower._local_decl_scope_index["s"] = 0
+	# First move: in nested scope (depth 1).  Recorded by _mark_moved
+	# via setdefault; this is the depth that sticks.
+	lower._scope_stack.append([])  # nested scope
+	lower._mark_moved("s")
+	# Pop nested scope; back at depth 0.
+	lower._scope_stack.pop()
+	# Second move: at decl scope (depth 0).  setdefault keeps the
+	# nested depth.
+	lower._mark_moved("s")
+	# Sanity: the recorded depth is the FIRST (nested) one.
+	assert lower._moved_at_scope_index["s"] == 1, (
+		"test setup: expected setdefault to keep the first (nested) "
+		"move's depth"
+	)
+	verdict, reason = lower._scope_drop_verdict("s")
+	# CURRENT BEHAVIOUR: PathDependent + REASON_MOVED.  If this
+	# assertion ever flips (someone changes `_mark_moved` to `min`-
+	# depth or to a path-sensitive analysis), update the design doc
+	# and confirm the new behaviour is sound for the
+	# "unconditional-then-restore-then-nested" shape too.
+	assert verdict is DropVerdict.PATH_DEPENDENT, (
+		"helper changed: nested-then-unconditional move now classified "
+		"as something other than PathDependent.  Re-derive the "
+		"semantics for the inverse shape (unconditional-then-restore-"
+		"then-nested) before relying on this new classification."
+	)
+	assert reason == REASON_MOVED
+
+
+def test_verdict_string_local_moved_in_nested_scope_is_path_dependent() -> None:
+	"""Phase 4 step 2 — conditional-move case: local declared at
+	scope D, moved at scope D+1 (a nested if-then etc.).  Helper
+	says PathDependent + REASON_MOVED — current behaviour matches the
+	bucket-6 carrier shape; 3C's flag-guarded drop is the authority
+	on the no-move path."""
+	type_table = TypeTable()
+	string_ty = type_table.ensure_string()
+	lower = _build_lowerer(type_table, param_types={"s": string_ty})
+	# Push outer scope (declaration), then nested scope (move).
+	lower._scope_stack.append(["s"])
+	lower._local_decl_scope_index["s"] = 0
+	lower._scope_stack.append([])  # nested scope
+	lower._moved_locals.add("s")
+	lower._moved_at_scope_index["s"] = 1
 	verdict, reason = lower._scope_drop_verdict("s")
 	assert verdict is DropVerdict.PATH_DEPENDENT
 	assert reason == REASON_MOVED
 
 
-def test_verdict_unknown_type_local_is_must_not_drop() -> None:
-	"""Defensive: a local with no recorded type → MustNotDrop (prior
-	code silently `continue`d; the helper preserves that under a
-	distinct verdict/reason so the observe path can see the case)."""
+def test_verdict_unknown_type_local_uses_distinct_unknown_type_reason() -> None:
+	"""Phase 4 step 2 cleanup of K-flagged limitation #2 (unknown-
+	type silent skip): a local with no recorded type still skips
+	emission (no behaviour change), but now records with the distinct
+	`REASON_UNKNOWN_TYPE` tag so observe triage can surface the case
+	for diagnosis instead of silently bucketing it as
+	not_drop_needing.
+
+	Pre-fix: helper returned MustNotDrop + REASON_NOT_DROP_NEEDING
+	for unknown-type and POD-type alike — indistinguishable in
+	observe records."""
 	type_table = TypeTable()
 	lower = _build_lowerer(type_table)
 	verdict, reason = lower._scope_drop_verdict("ghost")
 	assert verdict is DropVerdict.MUST_NOT_DROP
-	assert reason == REASON_NOT_DROP_NEEDING
+	assert reason == REASON_UNKNOWN_TYPE
 
 
 # -- emission shape through HIR→MIR lowering ------------------------------

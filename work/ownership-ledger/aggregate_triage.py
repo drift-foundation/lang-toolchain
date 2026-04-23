@@ -78,6 +78,22 @@ def bucket_for(rec: dict) -> str:
 	# Filtered first so it doesn't pollute bucket 5/6.
 	if site_reason == "drop_flag_owned":
 		return "drop_flag_owned"
+	# 0b. moved_unconditional — Phase 4 step 2 reason tag for the
+	# `_scope_drop_verdict` "move in same scope as declaration"
+	# branch.  Same emission semantics as the legacy "moved" case
+	# (skip), but distinct telemetry.  Filtered alongside
+	# drop_flag_owned so the agreement / bucket-2 / bucket-6
+	# accounting reflects the actual decision being made (skip,
+	# legacy-correct).
+	if site_reason == "moved_unconditional":
+		return "moved_unconditional"
+	# 0c. unknown_type — Phase 4 step 2 distinct tag for
+	# `_scope_drop_verdict`'s unknown-type silent skip.  Same
+	# emission semantics as not_drop_needing (skip), but the tag
+	# surfaces the case for diagnosis.  Filtered into its own bucket
+	# so it doesn't appear as bucket-2 noise.
+	if site_reason == "unknown_type":
+		return "unknown_type"
 	# 1. per_field_gap — site 2 partial-move records
 	if site == "match_cleanup" and site_reason in {"field_moved", "field_needs_drop", "field_not_drop_needing"}:
 		return "per_field_gap"
@@ -159,6 +175,8 @@ def main() -> int:
 	lines.append("| # | Bucket | Count | Notes |")
 	lines.append("|---|---|---|---|")
 	lines.append(f"| 0 | drop_flag_owned | {bucket_counts.get('drop_flag_owned', 0)} | Site defers to Phase 3C drop-flag ownership for this scope-exit |")
+	lines.append(f"| 0b | moved_unconditional | {bucket_counts.get('moved_unconditional', 0)} | Phase 4 step 2 — move in same scope as declaration; legacy-correct skip |")
+	lines.append(f"| 0c | unknown_type | {bucket_counts.get('unknown_type', 0)} | Phase 4 step 2 — local with no recorded type; silent skip surfaces here |")
 	lines.append(f"| 1 | per_field_gap | {bucket_counts.get('per_field_gap', 0)} | Defer to 3B (per-field tracking) |")
 	lines.append(f"| 2 | droppolicy_approximation | {bucket_counts.get('droppolicy_approximation', 0)} | Quarantined — 3B must NOT consume `has_drop` |")
 	lines.append(f"| 3 | path_dependent | {bucket_counts.get('path_dependent', 0)} | Direct input to 3C design |")
@@ -172,7 +190,7 @@ def main() -> int:
 	else:
 		lines.append(f"## Gate verdict: ❌ Bucket 6 has {gate_block} records — 3B is BLOCKED until each is resolved.")
 	lines.append("")
-	for b in ("drop_flag_owned", "per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
+	for b in ("drop_flag_owned", "moved_unconditional", "unknown_type", "per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
 		samples = bucket_samples.get(b, [])
 		if not samples:
 			continue

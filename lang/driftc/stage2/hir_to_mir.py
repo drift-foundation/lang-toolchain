@@ -350,6 +350,20 @@ class HIRToMIR:
 		# Stack of scopes; each scope stores locals that need drop at scope exit.
 		self._scope_stack: list[list[str]] = []
 		self._moved_locals: set[str] = set()
+		# Phase 4 step 2 — distinguish unconditional vs conditional
+		# moves in `_scope_drop_verdict`.  `_local_decl_scope_index`
+		# records the depth of `_scope_stack` at which each local was
+		# declared (via `_register_drop_local`).  `_moved_at_scope_index`
+		# records the depth of `_scope_stack` at which each move was
+		# lowered.  The verdict helper compares the two: equal depth
+		# means the move is in the same lexical scope as the
+		# declaration (definitely on this path, MustNotDrop with
+		# REASON_MOVED_UNCONDITIONAL); deeper means the move is in a
+		# nested scope (potentially path-dependent, PathDependent
+		# with REASON_MOVED — 3C's flag-guarded drop is the
+		# authority on the no-move arm).
+		self._local_decl_scope_index: dict[str, int] = {}
+		self._moved_at_scope_index: dict[str, int] = {}
 		# SSA temps produced by reading a non-bitcopy field from a &T
 		# (aliased pointers into the borrowed struct's memory).  These MUST
 		# be deep-copied before any ownership transfer (struct/variant
@@ -825,6 +839,21 @@ class HIRToMIR:
 			self._active_captured_locals.pop(int(bid), None)
 		self._scope_stack.pop()
 
+	def _mark_moved(self, local_name: str) -> None:
+		"""Add `local_name` to `_moved_locals` AND record the current
+		`_scope_stack` depth in `_moved_at_scope_index`.
+
+		Use in place of `self._moved_locals.add(...)` so the Phase 4
+		step-2 unconditional-vs-conditional-move distinction in
+		`_scope_drop_verdict` has the depth context it needs.  Uses
+		`setdefault`: if a local is moved at multiple points, the
+		first (typically shallowest) move wins — that's the most-
+		conservative answer for the verdict (deeper subsequent moves
+		don't make a path "more conditional")."""
+		self._moved_locals.add(local_name)
+		depth = max(0, len(self._scope_stack) - 1)
+		self._moved_at_scope_index.setdefault(local_name, depth)
+
 	def _register_drop_local(self, local_name: str, ty: TypeId) -> None:
 		if not self._scope_stack:
 			return
@@ -834,6 +863,11 @@ class HIRToMIR:
 		if local_name in scope:
 			return
 		scope.append(local_name)
+		# Record declaration depth for the Phase 4 step-2 unconditional-
+		# vs-conditional-move distinction in `_scope_drop_verdict`.  Use
+		# `setdefault` so that a re-registration in a deeper scope (rare)
+		# doesn't overwrite the original declaration depth.
+		self._local_decl_scope_index.setdefault(local_name, len(self._scope_stack) - 1)
 
 	def _register_captured_local(self, *, binding_id: int, local_name: str, source_name: str, capture_name: str) -> None:
 		if not self._capture_scope_stack:
@@ -925,6 +959,59 @@ class HIRToMIR:
 			reason=reason,
 		)
 
+	def _match_scrutinee_drop_verdict(
+		self,
+		*,
+		arm_scrut_local: str | None,
+		arm_scrut_payload_moved: bool,
+		scrut_ty: TypeId | None,
+	) -> tuple[_DropVerdict, str]:
+		"""Phase 3B step 4 match-cleanup drop-decision helper.
+
+		Mirrors the three-state shape of `_scope_drop_verdict` but
+		takes per-arm context (`arm_scrut_payload_moved`) that the
+		function-wide `_moved_locals` set cannot express.  Answers
+		"should the whole scrutinee-tmp be dropped at this arm's
+		cleanup boundary?" for the site-2 emission in
+		`_visit_expr_HMatchExpr`.
+
+		Step 4 is a NARROW alignment patch: the helper captures the
+		existing per-arm decision logic — there is no ledger-authoritative
+		path-dependent classification yet for match scrutinees because
+		the per-field gap (triage bucket 1, `per_field_gap`) blocks
+		per-local authority.  When/if per-field state lands in the
+		ledger, the `REASON_FIELD_MOVED` branch below evolves into a
+		proper `PATH_DEPENDENT` verdict with 3C-style flag-guard
+		support; until then, the site's per-field cleanup loop is the
+		sole authority on partial-move shapes.
+
+		Return shape matches `_scope_drop_verdict`: `(DropVerdict,
+		REASON_*)`.  The MIR emission at the site does NOT change as
+		a result of this refactor — the helper's verdict is used only
+		to drive the observe record; the drop (or per-field cleanup)
+		is still emitted by the existing site code.
+
+		Verdict mapping:
+		  - `arm_scrut_local is None` → `MustNotDrop` (no scrut tmp
+		    to drop; site's outer guard already filtered this).
+		  - `arm_scrut_payload_moved` → `MustNotDrop` with
+		    `REASON_FIELD_MOVED` (site's per-field cleanup runs
+		    instead of a whole-scrutinee drop).
+		  - `scrut_ty is None` or not drop-needing → `MustNotDrop`
+		    with `REASON_NOT_DROP_NEEDING` (shouldn't arise at this
+		    site today, but pinned for symmetry).
+		  - otherwise → `MustDrop` with `REASON_NEEDS_DROP`.
+		"""
+		if arm_scrut_local is None:
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+		if arm_scrut_payload_moved:
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_FIELD_MOVED)
+		if scrut_ty is None:
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+		if not self._needs_runtime_drop(scrut_ty):
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
+
 	def _scope_drop_verdict(self, local: str) -> tuple[_DropVerdict, str]:
 		"""Phase 3B step 3 shared drop-decision helper.
 
@@ -969,12 +1056,32 @@ class HIRToMIR:
 		"""
 		ty = self._local_types.get(local)
 		if ty is None:
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+			# Phase 4 step 2 cleanup of K-flagged limitation #2
+			# (unknown-type silent skip): preserve the skip behaviour
+			# but emit a distinct reason tag so observe triage can
+			# surface the case for diagnosis.
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_UNKNOWN_TYPE)
 		needs_drop = self._needs_runtime_drop(ty)
 		is_destructible = self._type_is_destructible(ty)
 		if not needs_drop and not is_destructible:
 			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
 		if local in self._moved_locals:
+			# Phase 4 step 2 cleanup of K-flagged limitation #1
+			# (unconditional vs conditional move conflation).  A move
+			# in the SAME scope as the local's declaration is
+			# unconditionally on the path that reaches `_emit_scope_drops`
+			# — legacy-correct skip with a distinct
+			# REASON_MOVED_UNCONDITIONAL tag.  A move in a DEEPER
+			# (nested) scope may not have executed and is the bucket-6
+			# conditional shape that 3C's flag-guarded drop handles —
+			# PathDependent with REASON_MOVED.  Missing-depth fallback
+			# (defensive: shouldn't fire after the `_mark_moved` /
+			# `_register_drop_local` sweep, but preserves prior
+			# behaviour if any code path remains untracked).
+			decl_depth = self._local_decl_scope_index.get(local)
+			move_depth = self._moved_at_scope_index.get(local)
+			if decl_depth is not None and move_depth is not None and move_depth <= decl_depth:
+				return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_MOVED_UNCONDITIONAL)
 			return (_DropVerdict.PATH_DEPENDENT, _ledger_events.REASON_MOVED)
 		if is_destructible and not needs_drop:
 			return (_DropVerdict.MUST_DROP, _ledger_events.REASON_DESTRUCTIBLE)
@@ -1433,7 +1540,7 @@ class HIRToMIR:
 							# payload move-out, once via the enclosing
 							# scope's MoveOut+DropValue on the
 							# already-consumed local.
-							self._moved_locals.add(source_local)
+							self._mark_moved(source_local)
 						else:
 							# Value-producing match: we cannot globally
 							# mark `source_local` moved, because sibling
@@ -1755,11 +1862,26 @@ class HIRToMIR:
 					# CLEANUP deliberately — it will NOT silently stay
 					# correct here.
 					if arm_scrut_local is not None:
+						# Step 4: route through the match-scrutinee
+						# verdict helper.  Verdict here is MustNotDrop
+						# (per-field cleanup runs instead); helper's
+						# reason tag matches the historical
+						# REASON_FIELD_MOVED.
+						_match_verdict, _match_reason = self._match_scrutinee_drop_verdict(
+							arm_scrut_local=arm_scrut_local,
+							arm_scrut_payload_moved=True,
+							scrut_ty=scrut_ty,
+						)
+						_match_verdict_str = (
+							_ledger_events.VERDICT_MUST_DROP
+							if _match_verdict is _DropVerdict.MUST_DROP
+							else _ledger_events.VERDICT_MUST_NOT_DROP
+						)
 						self._record_drop_decision(
 							site=_ledger_events.SITE_MATCH_CLEANUP,
 							local=arm_scrut_local,
-							verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-							reason=_ledger_events.REASON_FIELD_MOVED,
+							verdict=_match_verdict_str,
+							reason=_match_reason,
 						)
 					if (
 						arm.ctor is not None
@@ -1797,11 +1919,26 @@ class HIRToMIR:
 							self._register_drop_local(drop_tmp, cleanup_fty)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
+					# Step 4: route through the match-scrutinee verdict
+					# helper.  Verdict here is MustDrop (whole-scrutinee
+					# drop emitted); helper's reason tag matches the
+					# historical REASON_NEEDS_DROP.  Emission MIR shape
+					# is unchanged.
+					_match_verdict, _match_reason = self._match_scrutinee_drop_verdict(
+						arm_scrut_local=arm_scrut_local,
+						arm_scrut_payload_moved=False,
+						scrut_ty=scrut_ty,
+					)
+					_match_verdict_str = (
+						_ledger_events.VERDICT_MUST_DROP
+						if _match_verdict is _DropVerdict.MUST_DROP
+						else _ledger_events.VERDICT_MUST_NOT_DROP
+					)
 					self._record_drop_decision(
 						site=_ledger_events.SITE_MATCH_CLEANUP,
 						local=arm_scrut_local,
-						verdict=_ledger_events.VERDICT_MUST_DROP,
-						reason=_ledger_events.REASON_NEEDS_DROP,
+						verdict=_match_verdict_str,
+						reason=_match_reason,
 					)
 					arm_scrut_moved_pre = self.b.new_temp()
 					self.b.emit(M.MoveOut(dest=arm_scrut_moved_pre, local=arm_scrut_local, ty=scrut_ty))
@@ -2465,7 +2602,7 @@ class HIRToMIR:
 		moved_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 		self._local_types[moved_val] = inner_ty
-		self._moved_locals.add(subj_name)
+		self._mark_moved(subj_name)
 		return moved_val
 
 	def _move_from_callback_capture_slot(self, key: C.HCaptureKey) -> M.ValueId | None:
@@ -2488,7 +2625,7 @@ class HIRToMIR:
 		moved_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=moved_val, local=tmp_local, ty=inner_ty))
 		self._local_types[moved_val] = inner_ty
-		self._moved_locals.add(tmp_local)
+		self._mark_moved(tmp_local)
 		zero_val = self.b.new_temp()
 		self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
 		self._local_types[zero_val] = inner_ty
@@ -3145,7 +3282,7 @@ class HIRToMIR:
 
 		dest = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=dest, local=map_local, ty=map_ty))
-		self._moved_locals.add(map_local)
+		self._mark_moved(map_local)
 		self._local_types[dest] = map_ty
 		return dest
 
@@ -3940,7 +4077,7 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 						self._local_types[moved_val] = inner_ty
-						self._moved_locals.add(subj_name)
+						self._mark_moved(subj_name)
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
 				else:
@@ -4137,7 +4274,7 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 						self._local_types[moved_val] = inner_ty
-						self._moved_locals.add(subj_name)
+						self._mark_moved(subj_name)
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
 				else:
@@ -6099,7 +6236,7 @@ class HIRToMIR:
 			if arm.binder:
 				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
 				self._local_types[err_again] = error_ty
-				self._moved_locals.add(error_local)
+				self._mark_moved(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block, arm.result)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
@@ -6119,13 +6256,13 @@ class HIRToMIR:
 				err_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
 				self._local_types[err_done] = error_ty
-				self._moved_locals.add(error_local)
+				self._mark_moved(error_local)
 				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
 			if self.b.block.terminator is None and binder_local is not None:
 				binder_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
 				self._local_types[binder_done] = error_ty
-				self._moved_locals.add(binder_local)
+				self._mark_moved(binder_local)
 				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			self.b.emit(M.StoreLocal(local=temp_local, value=arm_val))
 			if self.b.block.terminator is None:
@@ -6207,7 +6344,7 @@ class HIRToMIR:
 				error_ty = self._type_table.ensure_error()
 				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
 				self._local_types[caught_drop] = error_ty
-				self._moved_locals.add(self._current_catch_error)
+				self._mark_moved(self._current_catch_error)
 				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
 		if not fn_is_void:
 			# Defensive invariant: the checker's terminal-flow pass
@@ -6308,9 +6445,9 @@ class HIRToMIR:
 					# Mark source local as consumed so scope drops skip it.
 					arg0 = stmt.expr.args[0]
 					if isinstance(arg0, H.HVar):
-						self._moved_locals.add(self._canonical_local(getattr(arg0, "binding_id", None), arg0.name))
+						self._mark_moved(self._canonical_local(getattr(arg0, "binding_id", None), arg0.name))
 					elif isinstance(arg0, H.HPlaceExpr) and not arg0.projections and isinstance(arg0.base, H.HVar):
-						self._moved_locals.add(self._canonical_local(getattr(arg0.base, "binding_id", None), arg0.base.name))
+						self._mark_moved(self._canonical_local(getattr(arg0.base, "binding_id", None), arg0.base.name))
 					return
 				self.lower_expr(stmt.expr)
 				return
@@ -6814,7 +6951,7 @@ class HIRToMIR:
 				moved_val = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
 				self._local_types[moved_val] = arg_ty
-				self._moved_locals.add(subj_name)
+				self._mark_moved(subj_name)
 				return moved_val
 		return self.lower_expr(value_expr, expected_type=expected)
 
@@ -7090,7 +7227,7 @@ class HIRToMIR:
 				error_ty = self._type_table.ensure_error()
 				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
 				self._local_types[caught_drop] = error_ty
-				self._moved_locals.add(self._current_catch_error)
+				self._mark_moved(self._current_catch_error)
 				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
 		self._emit_captured_locals(err_val)
 
@@ -7147,7 +7284,7 @@ class HIRToMIR:
 		err_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=err_val, local=self._current_catch_error, ty=error_ty))
 		self._local_types[err_val] = error_ty
-		self._moved_locals.add(self._current_catch_error)
+		self._mark_moved(self._current_catch_error)
 		self._propagate_error(err_val)
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
@@ -7281,7 +7418,7 @@ class HIRToMIR:
 			if arm.binder:
 				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
 				self._local_types[err_again] = error_ty
-				self._moved_locals.add(error_local)
+				self._mark_moved(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
@@ -7301,13 +7438,13 @@ class HIRToMIR:
 				err_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
 				self._local_types[err_done] = error_ty
-				self._moved_locals.add(error_local)
+				self._mark_moved(error_local)
 				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
 			if self.b.block.terminator is None and binder_local is not None:
 				binder_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
 				self._local_types[binder_done] = error_ty
-				self._moved_locals.add(binder_local)
+				self._mark_moved(binder_local)
 				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=cont_block.name))
@@ -7682,7 +7819,7 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
 						self._local_types[moved_val] = arg_ty
-						self._moved_locals.add(subj_name)
+						self._mark_moved(subj_name)
 						return moved_val
 		val = self.lower_expr(arg, expected_type=param_ty)
 		# If the arg was an aliased ref-field temp, deep-copy before passing
@@ -8661,7 +8798,7 @@ class HIRToMIR:
 			self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
 		else:
 			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))
-			self._moved_locals.add(ok_local)
+			self._mark_moved(ok_local)
 		self._local_types[dest] = ok_ty
 		return dest
 

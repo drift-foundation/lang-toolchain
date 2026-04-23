@@ -55,6 +55,23 @@ REASON_FIELD_NEEDS_DROP = "field_needs_drop"
 # missing site-3 emission would look like a regression in observe
 # triage).
 REASON_DROP_FLAG_OWNED = "drop_flag_owned"
+# Phase 4 step 2 — `_scope_drop_verdict` distinguishes unconditional
+# moves (the move was in the same scope as the local's declaration —
+# definitely on this path; existing scope-drop SHOULD skip) from
+# conditional moves (the move was in a nested scope — may not have
+# executed; site 1 defers, 3C's flag-guarded drop covers).  Old code
+# conflated both as `REASON_MOVED`.  The new tag lets observe triage
+# distinguish "definite move, legacy-correct skip" from "potentially
+# conditional move, 3C-handled skip."
+REASON_MOVED_UNCONDITIONAL = "moved_unconditional"
+# Phase 4 step 2 — replaces the silent fall-through that previously
+# returned `MustNotDrop + REASON_NOT_DROP_NEEDING` for locals whose
+# type is unknown to HIRToMIR (`local_types.get(L) is None`).  K
+# flagged this as a blind spot: such locals were skipped without
+# leaving a distinct trace.  The dedicated tag preserves the skip
+# (no behaviour change) but lets the observe stream surface the
+# case for follow-up diagnosis.
+REASON_UNKNOWN_TYPE = "unknown_type"
 
 
 @dataclass(frozen=True, slots=True)
