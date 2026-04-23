@@ -1,2 +1,0 @@
-<source>:14:15: error: E-QMEM-RECEIVER-REQUIRED: 'bump' on type 'Point<Int>' requires a receiver argument [E-QMEM-RECEIVER-REQUIRED]
-<source>:15:9: error: cannot copy 'x': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

@@ -1,2 +1,0 @@
-<source>:4:21: error: global byte_length(...) is not exposed; use s.byte_length() [E-AUTO-13b0fe35]
-<source>:5:9: error: cannot copy 'n': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

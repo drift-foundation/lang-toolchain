@@ -63,6 +63,7 @@ from lang.driftc.stage1.closures import sort_captures
 from lang.driftc.call_contract import call_contract_issues, repair_named_hcall_callinfo
 from . import mir_nodes as M
 from . import ownership_ledger_events as _ledger_events
+from .ownership_ledger import DropVerdict as _DropVerdict
 
 
 class MirBuilder:
@@ -924,6 +925,61 @@ class HIRToMIR:
 			reason=reason,
 		)
 
+	def _scope_drop_verdict(self, local: str) -> tuple[_DropVerdict, str]:
+		"""Phase 3B step 3 shared drop-decision helper.
+
+		Answers the three-state question "what should scope-drop do for
+		`local` at this site?" using information HIRToMIR has in hand —
+		`_local_types`, `_drop_policy`, `_moved_locals` — and nothing
+		that would require consulting a post-lowering ledger (which
+		does not exist yet at this point in the pipeline; trying to
+		rebuild it here would create circular authority between
+		HIRToMIR and the ledger builder).
+
+		Returns a `(verdict, reason_tag)` pair.  The `reason_tag` is a
+		stable `REASON_*` constant from `ownership_ledger_events` so
+		the observe-mode telemetry records a consistent rationale.
+
+		Verdict semantics at site 1 (scope-drop):
+		  - MustDrop: type is drop-needing AND the local is not in
+		    `_moved_locals` at this point.  Site emits the drop.
+		  - MustNotDrop: type does not need drop.  Site skips
+		    emission; no RAII effect.
+		  - PathDependent: type is drop-needing AND the local IS in
+		    `_moved_locals`.  This covers two sub-cases the function-
+		    wide set cannot distinguish:
+		      (a) truly unconditional move (legacy-correct skip), and
+		      (b) conditional move on some arms only (the bucket-6
+		          shape; Phase 3C's `drop_flags` pass has already
+		          inserted a flag-guarded drop at the real scope-exit
+		          point for these locals, so site 1 skipping is
+		          correct).
+		    Per the step-3 directive ("PathDependent must defer to the
+		    existing 3C / acceptance-tested behavior, not invent a new
+		    local policy"), site 1 skips emission for this verdict.
+		    3C owns the path-dependent drop.
+
+		Notes:
+		  - Returns `(MUST_NOT_DROP, "not_drop_needing")` when the
+		    local's type is unknown (defensive; prior code `continue`d
+		    silently in this case).
+		  - `_drop_policy` is consulted via the `_needs_runtime_drop`
+		    and `_type_is_destructible` wrappers (the DropPolicy
+		    contract surface) rather than raw type-table queries.
+		"""
+		ty = self._local_types.get(local)
+		if ty is None:
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+		needs_drop = self._needs_runtime_drop(ty)
+		is_destructible = self._type_is_destructible(ty)
+		if not needs_drop and not is_destructible:
+			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
+		if local in self._moved_locals:
+			return (_DropVerdict.PATH_DEPENDENT, _ledger_events.REASON_MOVED)
+		if is_destructible and not needs_drop:
+			return (_DropVerdict.MUST_DROP, _ledger_events.REASON_DESTRUCTIBLE)
+		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
+
 	def _emit_scope_drops(self, *, scope_index: int) -> None:
 		if not self._scope_stack:
 			return
@@ -931,35 +987,44 @@ class HIRToMIR:
 			scope_index = 0
 		for scope in reversed(self._scope_stack[scope_index:]):
 			for local in reversed(scope):
-				if local in self._moved_locals:
+				verdict, reason = self._scope_drop_verdict(local)
+				if verdict is _DropVerdict.MUST_NOT_DROP:
+					# Skip emission (and for the unknown-type case,
+					# also skip the event record — matches prior silent
+					# continue).
+					if self._local_types.get(local) is None:
+						continue
 					self._record_drop_decision(
 						site=_ledger_events.SITE_SCOPE_DROP,
 						local=local,
 						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-						reason=_ledger_events.REASON_MOVED,
+						reason=reason,
 					)
 					continue
-				ty = self._local_types.get(local)
-				if ty is None:
-					continue
-				if not self._needs_runtime_drop(ty) and not self._type_is_destructible(ty):
+				if verdict is _DropVerdict.PATH_DEPENDENT:
+					# Defer to Phase 3C's flag-guarded drop block (if
+					# the local was flagged); otherwise preserves the
+					# legacy `_moved_locals`-based skip behaviour.
+					# Observe record uses MustNotDrop as the site
+					# verdict (that IS what we emit) with the underlying
+					# reason tag, so observe triage can see the
+					# path-dependent class distinctly from the plain
+					# not-drop-needing case.
 					self._record_drop_decision(
 						site=_ledger_events.SITE_SCOPE_DROP,
 						local=local,
 						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-						reason=_ledger_events.REASON_NOT_DROP_NEEDING,
+						reason=reason,
 					)
 					continue
+				# MustDrop
 				self._record_drop_decision(
 					site=_ledger_events.SITE_SCOPE_DROP,
 					local=local,
 					verdict=_ledger_events.VERDICT_MUST_DROP,
-					reason=(
-						_ledger_events.REASON_DESTRUCTIBLE
-						if self._type_is_destructible(ty) and not self._needs_runtime_drop(ty)
-						else _ledger_events.REASON_NEEDS_DROP
-					),
+					reason=reason,
 				)
+				ty = self._local_types[local]  # verdict MustDrop guarantees presence
 				tmp = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))
 				self.b.emit(M.DropValue(value=tmp, ty=ty))

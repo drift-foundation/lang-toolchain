@@ -1,1 +1,0 @@
-<source>:49:27: error: module 'std.io' does not export symbol 'configured_input_from_file' [E-AUTO-8257d7da]

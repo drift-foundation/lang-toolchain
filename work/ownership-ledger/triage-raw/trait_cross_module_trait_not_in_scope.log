@@ -1,3 +1,0 @@
-<source>:None:None: error: field 'value' is private [E-PRIVATE-FIELD]
-<source>:None:None: error: field 'value' is private [E-PRIVATE-FIELD]
-<source>:9:15: error: no matching method 'show' for receiver __local__::m_box.Box [E-AUTO-447f7b43]

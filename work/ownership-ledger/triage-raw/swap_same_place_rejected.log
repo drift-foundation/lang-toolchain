@@ -1,2 +1,0 @@
-<source>:8:26: error: conflicting borrows in the same statement: cannot take &mut while borrowed [E-AUTO-0215fdfe]
-<source>:None:None: error: swap operands must be distinct non-overlapping places [E-AUTO-a47eb71b]

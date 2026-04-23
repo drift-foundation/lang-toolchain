@@ -1,1 +1,0 @@
-<source>:None:None: error: lambda capturing borrowed aggregate cannot escape through retaining parameter #0 of 'CALLBACK0' (generic/default-retaining boundary); require explicit non-retaining parameter [E-AUTO-38867bb9]

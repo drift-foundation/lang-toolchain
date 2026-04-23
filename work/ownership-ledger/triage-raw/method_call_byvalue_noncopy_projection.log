@@ -1,1 +1,0 @@
-<source>:22:16: error: move of a projected place is not supported in v1; move a local/param or use swap/replace [E_USE_AFTER_MOVE]

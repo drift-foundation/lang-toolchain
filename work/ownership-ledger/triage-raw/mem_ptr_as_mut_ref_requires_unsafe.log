@@ -1,3 +1,0 @@
-<source>:7:10: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
-<source>:None:None: error: unsafe call requires --allow-unsafe [E-AUTO-be40999d]
-<source>:None:None: error: no matching overload for function 'ptr_as_mut_ref' with provided type arguments [E-AUTO-ecd71c72]

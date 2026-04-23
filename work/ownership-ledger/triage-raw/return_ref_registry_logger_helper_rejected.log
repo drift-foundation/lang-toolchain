@@ -1,1 +1,0 @@
-<source>:19:2: error: reference return must be derived from a reference parameter (MVP escape rule) [E-AUTO-0059ef6f]

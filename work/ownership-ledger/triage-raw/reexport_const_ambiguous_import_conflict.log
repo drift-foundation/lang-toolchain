@@ -1,2 +1,0 @@
-<source>:4:10: error: exported const 'ANSWER' is ambiguous due to re-exports ('a' vs 'c') in module 'b' [E-AUTO-b0c05c7c]
-<source>:4:10: error: exported const 'ANSWER' is ambiguous due to re-exports ('a' vs 'c') in module 'b' [E-AUTO-b0c05c7c]

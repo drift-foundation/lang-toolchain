@@ -229,7 +229,59 @@ def insert_drop_flags(
 			flag_for=flag_for,
 			new_temp=_new_temp,
 		)
+	# Attach explicit metadata listing the source locals this pass
+	# chose to flag.  Phase 3B consumers (e.g. `string_arc_return` /
+	# site 3) consult this set via `is_flag_managed(func, L)` to
+	# decide "this local is 3C's responsibility — skip my own
+	# emission."  Name-parsing (`__drop_flag_<L>` prefix probe) is
+	# unsafe here: when `_allocate_flag_name` resolves a collision by
+	# suffixing `_1`, the resulting flag-local name is
+	# indistinguishable from "the canonical flag for a local named
+	# `<L>_1`."  Explicit metadata removes the ambiguity.
+	existing: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()
+	setattr(func, "_drop_flag_managed_locals", existing | set(flag_for.keys()))
 	return func
+
+
+def flag_local_name_for(local_name: str) -> str:
+	"""Canonical flag-local name for `local_name`.
+
+	`_allocate_flag_name` may emit this base name OR a `_<n>`-suffixed
+	variant when the base collides with an existing local in
+	`func.locals`.  The read-side helper `is_flag_managed` does NOT
+	reverse-parse either shape — name-parsing is unsafe under
+	collision (`__drop_flag_x_1` is indistinguishable as the canonical
+	flag for `x_1` vs the collision-suffixed flag for `x`).  Instead,
+	`insert_drop_flags` attaches an explicit
+	`func._drop_flag_managed_locals: set[str]` of SOURCE-local names
+	at the end of the pass, and `is_flag_managed` reads that set.
+	See the regression at
+	`test_string_arc_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`."""
+	return f"__drop_flag_{local_name}"
+
+
+def is_flag_managed(func: M.MirFunc, local_name: str) -> bool:
+	"""True iff Phase 3C `insert_drop_flags` allocated a flag for
+	`local_name` in this function.
+
+	Reads the explicit `func._drop_flag_managed_locals` set attached
+	by `insert_drop_flags`.  NAME-PARSING IS UNSAFE HERE: when
+	`_allocate_flag_name` resolves a collision by suffixing `_N`,
+	the resulting flag-local name collides with the canonical-flag
+	name of a hypothetical source local named `<original>_N`, and a
+	name-parsing helper cannot distinguish the two.  A regression
+	for this shape lives at
+	`test_string_arc_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`.
+
+	Returns False when the metadata set is missing (no-op pass run
+	or function that had no flag-managed locals) — the pre-3C
+	default assumption is "no local is flag-managed."
+
+	Phase 3B consumers (notably `string_arc_return` / site 3) call
+	this to decide "this local is 3C's responsibility — skip my own
+	emission for it at scope-exit.\""""
+	managed: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()
+	return local_name in managed
 
 
 def _has_user_moveout(func: M.MirFunc, local_name: str) -> bool:
@@ -321,8 +373,9 @@ def _has_maybe_uninit(ledger, local_name: str) -> bool:
 
 def _allocate_flag_name(local_name: str, taken: List[str]) -> str:
 	"""Generate a flag local name that does not collide with existing
-	function locals or other allocated flag names."""
-	base = f"__drop_flag_{local_name}"
+	function locals or other allocated flag names.  Suffix-handling
+	must stay in sync with `is_flag_managed` above."""
+	base = flag_local_name_for(local_name)
 	if base not in taken:
 		return base
 	i = 1

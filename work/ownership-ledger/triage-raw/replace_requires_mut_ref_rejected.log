@@ -1,2 +1,0 @@
-<source>:7:20: error: cannot take &mut through *p unless p is a mutable reference (&mut T) [E-AUTO-fdf04181]
-<source>:None:None: error: cannot write through *p unless p is a mutable reference [E-AUTO-5578cc8e]

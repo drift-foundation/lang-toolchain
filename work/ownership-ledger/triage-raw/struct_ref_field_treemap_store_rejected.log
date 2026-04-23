@@ -1,1 +1,0 @@
-<source>:12:22: error: borrowed aggregate argument cannot flow through retaining parameter 'value' of 'TreeMap<K, V>::insert' (generic/default-retaining boundary); require explicit non-retaining parameter [E-AUTO-f50ff89d]

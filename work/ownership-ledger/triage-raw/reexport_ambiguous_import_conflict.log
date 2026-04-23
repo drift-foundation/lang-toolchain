@@ -1,2 +1,0 @@
-<source>:4:10: error: exported name 'foo' is ambiguous due to re-exports ('a' vs 'c') in module 'b' [E-AUTO-c28db2c3]
-<source>:4:10: error: exported name 'foo' is ambiguous due to re-exports ('a' vs 'c') in module 'b' [E-AUTO-c28db2c3]

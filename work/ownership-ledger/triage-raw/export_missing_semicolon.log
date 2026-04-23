@@ -1,1 +1,0 @@
-<source>:5:1: error: expected ';' after statement (line 5, column 1); top-level statements like import, export, and const require a trailing semicolon (e.g. export { ... };) [E_EXPECTED_SEMICOLON]

@@ -1,1 +1,0 @@
-<source>:None:None: error: closure captures borrowed value which cannot be sent to a detached virtual thread [E_ESCAPE_THREAD]

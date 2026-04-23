@@ -6795,27 +6795,35 @@ def compile_stubbed_funcs(
 					for instr in block.instructions:
 						if isinstance(instr, M.Call):
 							print(f"[drift:debug][mir-pre-arc] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
+		# Phase 3B kickoff: build the ownership ledger on every lowered
+		# function unconditionally, attach to func.  Site consumers
+		# being swapped over (3B step 1: `drop_before_overwrite` in
+		# string_arc) read it as the authoritative drop verdict.  Build
+		# is cheap (worklist dataflow over MIR); cost is amortised
+		# across the consumers that read it.  Observe-mode telemetry
+		# (disagreement records to stderr) is still gated separately on
+		# `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'`.
+		from lang.driftc.stage2.ownership_ledger import build_ledger as _ol_build
+		for fn_id, func in mir_funcs_by_id.items():
+			ledger = _ol_build(func, drop_policy=lambda _t: None)
+			setattr(func, "_ownership_ledger", ledger)
 		if drift_debug.enabled("ownership_ledger"):
-			# Phase 3A observational: build the ledger on every lowered
-			# function, drain the decision events recorded by sites 1/2,
-			# and emit disagreement records to stderr.  The ledger is
-			# attached to the func so string_arc sites 3/4 can consult
-			# it prospectively without rebuilding.  Runs exactly once,
-			# between HIR→MIR completion and string_arc.
-			from lang.driftc.stage2.ownership_ledger import build_ledger as _ol_build
+			# Phase 3A observational: drain the decision events
+			# recorded by sites 1/2 during HIR→MIR and emit
+			# disagreement records to stderr.  Runs after ledger build,
+			# before string_arc.
 			from lang.driftc.stage2.ownership_ledger_reporter import (
 				compare_events as _ol_compare_events,
 				stderr_emit as _ol_stderr_emit,
 			)
 			for fn_id, func in mir_funcs_by_id.items():
-				ledger = _ol_build(func, drop_policy=lambda _t: None)
-				setattr(func, "_ownership_ledger", ledger)
 				log = getattr(func, "_drop_decision_log", None)
 				if log is None:
 					continue
 				events = log.drain()
 				if not events:
 					continue
+				ledger = getattr(func, "_ownership_ledger")
 				# QUARANTINED 3A APPROXIMATION — DO NOT REUSE IN 3B.
 				# This callable answers the ledger reporter's
 				# `needs_drop(local)` question with the raw

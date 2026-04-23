@@ -1,2 +1,0 @@
-<source>:None:None: error: cannot infer type arguments for 'replace': conflicting constraints [E-AUTO-640c1f63]
-<source>:7:9: error: cannot copy 'old': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

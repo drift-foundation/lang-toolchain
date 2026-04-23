@@ -1,2 +1,0 @@
-<source>:23:32: error: struct 'Holder' field 'inner' type mismatch (have Wrap, expected AtomicUint) [E-AUTO-b65288fe]
-<source>:23:15: error: keyword arguments are only supported for constructors in v1 [E-AUTO-ac02ff39]

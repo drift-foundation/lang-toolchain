@@ -1,2 +1,0 @@
-<source>:10:2: error: cannot write to 'w' while it is borrowed [E-AUTO-374b2331]
-<source>:9:2: note: borrow created here [I-AUTO-b4bb3b1a]

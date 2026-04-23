@@ -1,1 +1,0 @@
-<source>:7:9: error: rethrow is only valid inside a catch block [E-AUTO-369cd26d]

@@ -1,1 +1,0 @@
-<source>:3:1: error: entrypoint main has invalid signature; expected fn() or fn(argv: Array<String>) [E-AUTO-c1c8a2c2]

@@ -1,1 +1,0 @@
-<source>:5:16: error: cannot copy value of type 'Array<Int>': type is not Copy [E-AUTO-86a7eb8b]

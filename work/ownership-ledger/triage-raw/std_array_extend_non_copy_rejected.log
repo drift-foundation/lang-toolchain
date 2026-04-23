@@ -1,1 +1,0 @@
-<source>:17:10: error: Array<T>.extend() requires element type to be Copy [E-AUTO-e3bcac18]

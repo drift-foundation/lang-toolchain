@@ -1,1 +1,0 @@
-<source>:9:2: error: owning Array cannot contain borrowed aggregate element type in v1 [E-AUTO-2885956d]

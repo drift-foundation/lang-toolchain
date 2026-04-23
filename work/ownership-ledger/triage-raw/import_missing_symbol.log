@@ -1,1 +1,0 @@
-<source>:5:34: error: module 'lib' does not export symbol 'nope' [E-AUTO-3333bf2b]

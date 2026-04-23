@@ -1,2 +1,0 @@
-<source>:6:12: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
-<source>:None:None: error: unsafe call requires --allow-unsafe [E-AUTO-be40999d]

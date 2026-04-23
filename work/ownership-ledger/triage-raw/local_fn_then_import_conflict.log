@@ -1,6 +1,0 @@
-<source>:4:7: error: Unexpected token Token('DOT', '.') at line 4, column 7.
-Expected one of: 
-	* LT
-	* LPAR
-	* TYPE_LT
- [E-AUTO-b1419774]

@@ -1,1 +1,0 @@
-<source>:16:10: error: cannot copy value of type 'Entry' (use move <expr>) [E-AUTO-836fceb6]

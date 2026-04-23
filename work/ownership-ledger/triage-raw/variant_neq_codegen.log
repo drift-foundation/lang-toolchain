@@ -1,1 +1,0 @@
-<source>:12:5: error: ==/!= are only supported for Bool, Int, Float, String in v1 [E-AUTO-9b8c064d]

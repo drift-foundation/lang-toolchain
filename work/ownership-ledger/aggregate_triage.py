@@ -69,6 +69,15 @@ def bucket_for(rec: dict) -> str:
 	site = rec.get("site", "")
 	site_reason = rec.get("site_reason", "")
 	classification = rec.get("classification", "")
+	# 0. drop_flag_owned — site explicitly defers to Phase 3C drop-
+	# flag ownership for this scope-exit.  Not a disagreement; the
+	# site is documenting the responsibility split (3C is the sole
+	# authority on this local's scope-exit drop).  Any classification
+	# is irrelevant — if the ledger said MustDrop here, that drop IS
+	# being emitted, just by 3C's drop block, not by this site.
+	# Filtered first so it doesn't pollute bucket 5/6.
+	if site_reason == "drop_flag_owned":
+		return "drop_flag_owned"
 	# 1. per_field_gap — site 2 partial-move records
 	if site == "match_cleanup" and site_reason in {"field_moved", "field_needs_drop", "field_not_drop_needing"}:
 		return "per_field_gap"
@@ -149,6 +158,7 @@ def main() -> int:
 	lines.append("")
 	lines.append("| # | Bucket | Count | Notes |")
 	lines.append("|---|---|---|---|")
+	lines.append(f"| 0 | drop_flag_owned | {bucket_counts.get('drop_flag_owned', 0)} | Site defers to Phase 3C drop-flag ownership for this scope-exit |")
 	lines.append(f"| 1 | per_field_gap | {bucket_counts.get('per_field_gap', 0)} | Defer to 3B (per-field tracking) |")
 	lines.append(f"| 2 | droppolicy_approximation | {bucket_counts.get('droppolicy_approximation', 0)} | Quarantined — 3B must NOT consume `has_drop` |")
 	lines.append(f"| 3 | path_dependent | {bucket_counts.get('path_dependent', 0)} | Direct input to 3C design |")
@@ -162,7 +172,7 @@ def main() -> int:
 	else:
 		lines.append(f"## Gate verdict: ❌ Bucket 6 has {gate_block} records — 3B is BLOCKED until each is resolved.")
 	lines.append("")
-	for b in ("per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
+	for b in ("drop_flag_owned", "per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
 		samples = bucket_samples.get(b, [])
 		if not samples:
 			continue

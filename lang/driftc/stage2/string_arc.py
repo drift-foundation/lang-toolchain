@@ -19,6 +19,9 @@ from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import ownership_ledger_events as _ledger_events
 from . import ownership_ledger_reporter as _ledger_reporter
+from .ownership_ledger import DropVerdict as _DropVerdict
+from .drop_policy_compute import compute_drop_policy as _compute_drop_policy
+from .drop_flags import is_flag_managed as _is_flag_managed
 
 
 def insert_string_arc(
@@ -28,12 +31,13 @@ def insert_string_arc(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
 	is_destructor_method = "std.core.Destructible::destroy" in func.fn_id.name
-	# Phase 3A ownership-ledger observational hook.  The driver attaches
-	# a pre-built `LiveStateMap` to the func just before `insert_string_arc`
-	# runs — gated by `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'`.
-	# When off, `_ledger` is None and every `_ledger_check_*` helper
-	# short-circuits on the first attribute test.  The reporter is
-	# invoked prospectively at sites 3/4; no MIR emission changes.
+	# Phase 3B step 1 (`drop_before_overwrite` swap): the ledger is
+	# attached unconditionally by the driver and consulted as the
+	# authoritative drop verdict at site 4.  Site 3 (`string_arc_return`)
+	# remains observational pending its own swap.  Sites read the
+	# canonical `DropPolicy.needs_drop` via `_compute_drop_policy` —
+	# NOT the raw `TypeTable.has_drop` query that the 3A reporter
+	# uses (the quarantined approximation in driftc.py).
 	_ledger = getattr(func, "_ownership_ledger", None)
 	def _ledger_needs_drop(local: str) -> bool:
 		ty = local_types.get(local)
@@ -843,33 +847,106 @@ def insert_string_arc(
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
-				if instr.local in initialized_destructibles:
-					if _ledger is not None:
-						_ledger_reporter.check(
-							_ledger,
-							fn_name=func.name,
-							site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
-							point=(block.name, _instr_idx),
-							local=instr.local,
-							site_verdict=_ledger_events.VERDICT_MUST_DROP,
-							site_reason=_ledger_events.REASON_NEEDS_DROP,
-							needs_drop=_ledger_needs_drop,
-							emit=_ledger_reporter.stderr_emit,
-						)
-					_drop_destructible_local(instr.local, new_instrs)
+				# Phase 3B step 1 — `drop_before_overwrite` swap.
+				#
+				# Status: **ledger-authoritative for deterministic
+				# verdicts; legacy fallback retained for PathDependent /
+				# unavailable ledger.**  Site-local authority is NOT
+				# fully removed; that retirement is gated on either:
+				#   (a) the drop-before-overwrite site gaining its own
+				#       flag-guard pattern (so PathDependent verdicts
+				#       can be resolved here, not at scope-exit only), OR
+				#   (b) e2e observe demonstrating zero PathDependent
+				#       verdicts at this site across all real Drift
+				#       (today's data: 100 % verdict agreement at smoke
+				#       + e2e, so PathDependent is currently unreached
+				#       in practice — but the fallback is preserved
+				#       defensively until that condition is pinned).
+				#
+				# Authoritative path:
+				#   - For MustDrop / MustNotDrop verdicts, the ledger
+				#     decides.  `compute_drop_policy(type_table, ty)
+				#     .needs_drop` provides the canonical needs_drop
+				#     axis — NOT the raw `TypeTable.has_drop` query
+				#     (the quarantined 3A reporter approximation).
+				#
+				# Fallback path:
+				#   - PathDependent verdict (lattice MaybeUninit at
+				#     this point) → fall back to legacy
+				#     `instr.local in initialized_destructibles`.
+				#   - Ledger unavailable (no `_ownership_ledger`
+				#     attached, e.g. ad-hoc test harness) → same
+				#     fallback.
+				#
+				# The legacy `initialized_destructibles` set is
+				# computed and preserved on every run for these two
+				# fallback paths.  It is retired only when (a) or (b)
+				# above holds, in a separate patch.
+				#
+				# Build-timing invariant: the ledger consulted here is
+				# the PRE-`drop_flags` ledger (driver builds it before
+				# the drop_flags pass runs).  Drop-before-overwrite
+				# decisions only depend on per-local state at
+				# StoreLocal points within the function body — none of
+				# those points are mutated by drop_flags (which only
+				# adds new blocks at Return terminators and inserts
+				# flag-set/clear ops adjacent to existing
+				# StoreLocal/MoveOut).  Pre-flag state is the correct
+				# input for site 4.  See
+				# `work/ownership-ledger/3b-invariants.md`.
+				_local_ty = local_types.get(instr.local)
+				_needs_drop = (
+					bool(_compute_drop_policy(type_table, _local_ty).needs_drop)
+					if _local_ty is not None
+					else False
+				)
+				_verdict = (
+					_ledger.verdict_at(
+						(block.name, _instr_idx),
+						instr.local,
+						needs_drop=_needs_drop,
+					)
+					if _ledger is not None
+					else None
+				)
+				_should_drop: bool
+				_site_verdict_str: str
+				_site_reason: str
+				if _verdict is _DropVerdict.MUST_DROP:
+					_should_drop = True
+					_site_verdict_str = _ledger_events.VERDICT_MUST_DROP
+					_site_reason = _ledger_events.REASON_NEEDS_DROP
+				elif _verdict is _DropVerdict.MUST_NOT_DROP:
+					_should_drop = False
+					_site_verdict_str = _ledger_events.VERDICT_MUST_NOT_DROP
+					_site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
 				else:
-					if _ledger is not None:
-						_ledger_reporter.check(
-							_ledger,
-							fn_name=func.name,
-							site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
-							point=(block.name, _instr_idx),
-							local=instr.local,
-							site_verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-							site_reason=_ledger_events.REASON_NOT_DROP_NEEDING,
-							needs_drop=_ledger_needs_drop,
-							emit=_ledger_reporter.stderr_emit,
-						)
+					# PathDependent OR ledger unavailable → legacy fallback.
+					_should_drop = instr.local in initialized_destructibles
+					_site_verdict_str = (
+						_ledger_events.VERDICT_MUST_DROP
+						if _should_drop
+						else _ledger_events.VERDICT_MUST_NOT_DROP
+					)
+					_site_reason = (
+						_ledger_events.REASON_NEEDS_DROP
+						if _should_drop
+						else _ledger_events.REASON_NOT_DROP_NEEDING
+					)
+				if _ledger is not None and drift_debug.enabled("ownership_ledger"):
+					_ledger_reporter.check(
+						_ledger,
+						fn_name=func.name,
+						site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
+						point=(block.name, _instr_idx),
+						local=instr.local,
+						site_verdict=_site_verdict_str,
+						site_reason=_site_reason,
+						needs_drop=_ledger_needs_drop,
+						emit=_ledger_reporter.stderr_emit,
+					)
+				if _should_drop:
+					_drop_destructible_local(instr.local, new_instrs)
 				initialized_destructibles.add(instr.local)
 				new_instrs.append(instr)
 				continue
@@ -1380,17 +1457,57 @@ def insert_string_arc(
 						_vty = local_types.get(_vl)
 						if _vty is not None and type_table.get(_vty).kind is TypeKind.VARIANT:
 							initialized_at_return.add(_vl)
-			if _ledger is not None:
-				# Site 3 prospective check: per-destructible-local
-				# verdict at the return boundary.  Program point is
+			# Phase 3B step 2 — `string_arc_return` swap (option 2:
+			# site-3 skips locals managed by Phase 3C drop-flag
+			# plumbing).  3C is the sole authority on scope-exit drops
+			# for flagged locals: it has already inserted a
+			# flag-guarded `MoveOut+DropValue` block reachable via the
+			# original Return block's `IfTerminator(flag)`.  If site 3
+			# also emitted a drop here, the flagged local would be
+			# double-dropped on the path through 3C's drop block.
+			# Filter flagged locals out of site-3's cleanup universe by
+			# adding them to `skip_cleanup_locals`.
+			#
+			# Build-timing note (see `work/ownership-ledger/3b-invariants.md`):
+			# the ledger we consulted in observe mode was the PRE-
+			# `drop_flags` ledger, but the skip itself does not depend
+			# on the ledger — it depends on the post-`drop_flags`
+			# `func.locals` (where the `__drop_flag_<L>` markers
+			# appear).  Detection via `_is_flag_managed`, which encodes
+			# the flag-naming convention behind one helper rather than
+			# scattering string matches.
+			_flag_managed_at_return: Set[str] = {
+				_dl for _dl in destructible_locals if _is_flag_managed(func, _dl)
+			}
+			skip_cleanup_locals |= _flag_managed_at_return
+			if _ledger is not None and drift_debug.enabled("ownership_ledger"):
+				# Site 3 observation: per-destructible-local verdict
+				# at the return boundary.  Program point is
 				# (block, len(original_instructions)) — the index a
 				# hypothetical drop would land at if appended after the
 				# block's last original instruction; the ledger reads
-				# pre-state (post-state of that last instruction), which
-				# is what `_drop_all_destructibles` is implicitly
-				# deciding against.
+				# pre-state (post-state of that last instruction),
+				# which is what `_drop_all_destructibles` is implicitly
+				# deciding against.  Locals that 3C owns get a distinct
+				# `REASON_DROP_FLAG_OWNED` record so observe triage can
+				# see the responsibility split (without it, the missing
+				# site-3 emission would surface as a bucket-5/6
+				# regression in the next observe re-run).
 				_ledger_point = (block.name, len(block.instructions))
 				for _dl in sorted(destructible_locals):
+					if _dl in _flag_managed_at_return:
+						_ledger_reporter.check(
+							_ledger,
+							fn_name=func.name,
+							site=_ledger_events.SITE_STRING_ARC_RETURN,
+							point=_ledger_point,
+							local=_dl,
+							site_verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+							site_reason=_ledger_events.REASON_DROP_FLAG_OWNED,
+							needs_drop=_ledger_needs_drop,
+							emit=_ledger_reporter.stderr_emit,
+						)
+						continue
 					if _dl in skip_cleanup_locals:
 						continue
 					_dl_in_init = _dl in initialized_at_return

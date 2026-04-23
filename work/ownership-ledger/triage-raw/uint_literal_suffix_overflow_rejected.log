@@ -1,1 +1,0 @@
-<source>:3:1: error: const 'X' Uint literal out of range [0, 2^64-1] [E-AUTO-b77f1801]

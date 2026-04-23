@@ -1,1 +1,0 @@
-<source>:1:1: error: invalid module id 'foo__bar': underscores must not be leading/trailing or consecutive [E-AUTO-87ee7096]

@@ -1,1 +1,0 @@
-<source>:5:1: error: const 'X' initializer must be a compile-time literal in v1 (Int/Uint/Bool/String/Float, optionally with unary '+' or '-') [E-AUTO-f030201c]

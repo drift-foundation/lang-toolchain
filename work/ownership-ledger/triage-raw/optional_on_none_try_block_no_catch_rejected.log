@@ -1,1 +1,0 @@
-<source>:10:22: error: function m::main is declared nothrow but may throw [E-AUTO-65daa5ac]

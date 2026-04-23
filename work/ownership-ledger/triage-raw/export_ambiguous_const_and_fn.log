@@ -1,1 +1,0 @@
-<source>:7:10: error: exported name 'X' is ambiguous (defined as multiple kinds in module 'main') [E-AUTO-34497b6a]

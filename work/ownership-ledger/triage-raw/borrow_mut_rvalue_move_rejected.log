@@ -1,1 +1,0 @@
-<source>:5:16: error: cannot take &mut of an expression containing move; assign to a var first [E-AUTO-c5fb46e7]

@@ -1,3 +1,0 @@
-<source>:None:None: error: multiple catch-all arms are not allowed [E-AUTO-1d36789a]
-<source>:None:None: error: catch-all must be the last catch arm [E-AUTO-765b1f85]
-<source>:18:9: error: unknown name 'arm1_val' [E-UNKNOWN-NAME]

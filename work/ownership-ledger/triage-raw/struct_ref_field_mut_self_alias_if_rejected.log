@@ -1,3 +1,0 @@
-<source>:20:3: error: cannot take mutable borrow while borrow active on 'st' [E-AUTO-a9130d78]
-<source>:18:2: note: borrow created here [I-AUTO-b4bb3b1a]
-<source>:21:19: note: borrow considered live here because of use at (on some path) [I-AUTO-1411ce94]

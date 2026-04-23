@@ -1,1 +1,0 @@
-<source>:8:2: error: captured locals currently support Int/Uint/Bool/Float/String/DiagnosticValue only [E-AUTO-ea1c09ef]

@@ -48,6 +48,13 @@ REASON_NEEDS_DROP = "needs_drop"
 REASON_FIELD_MOVED = "field_moved"
 REASON_FIELD_NOT_DROP_NEEDING = "field_not_drop_needing"
 REASON_FIELD_NEEDS_DROP = "field_needs_drop"
+# Site 3 (`string_arc_return`) uses this reason when it skips emission
+# for a local managed by Phase 3C drop-flag plumbing.  3C is the sole
+# authority on those scope-exit drops; site 3 records the skip so the
+# observe stream documents the responsibility split (without it, the
+# missing site-3 emission would look like a regression in observe
+# triage).
+REASON_DROP_FLAG_OWNED = "drop_flag_owned"
 
 
 @dataclass(frozen=True, slots=True)
