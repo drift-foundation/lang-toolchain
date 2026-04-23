@@ -1,0 +1,1 @@
+<source>:3:1: error: import alias 'm' conflicts: cannot import both 'a' and 'b' as 'm' [E-AUTO-4b6d6c71]

@@ -1,0 +1,1 @@
+<source>:20:17: error: cannot copy value of type 'S<String>' (use move <expr>) [E-AUTO-e4213965]

@@ -1,0 +1,1 @@
+<source>:None:None: error: capturing lambdas cannot be coerced to function pointers [E-AUTO-cc25f8a8]

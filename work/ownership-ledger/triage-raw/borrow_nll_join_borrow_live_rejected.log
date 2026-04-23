@@ -1,0 +1,6 @@
+<source>:13:2: error: cannot write to 's' while it is borrowed [E-AUTO-ce90e324]
+<source>:11:3: note: borrow created here [I-AUTO-b4bb3b1a]
+<source>:14:11: note: borrow considered live here because of use at (on some path) [I-AUTO-1411ce94]
+<source>:13:2: error: cannot write to 's' while it is borrowed [E-AUTO-ce90e324]
+<source>:11:3: note: borrow created here [I-AUTO-b4bb3b1a]
+<source>:14:11: note: borrow considered live here because of use at (on some path) [I-AUTO-1411ce94]

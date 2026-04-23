@@ -1,0 +1,1 @@
+<source>:8:20: error: internal: missing CallInfo for callsite_id in 'main' (ids: [0]) [E-AUTO-7309bae2]

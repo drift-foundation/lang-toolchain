@@ -17,6 +17,8 @@ from lang.driftc.core.function_id import function_symbol
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
+from . import ownership_ledger_events as _ledger_events
+from . import ownership_ledger_reporter as _ledger_reporter
 
 
 def insert_string_arc(
@@ -26,6 +28,21 @@ def insert_string_arc(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
 	is_destructor_method = "std.core.Destructible::destroy" in func.fn_id.name
+	# Phase 3A ownership-ledger observational hook.  The driver attaches
+	# a pre-built `LiveStateMap` to the func just before `insert_string_arc`
+	# runs — gated by `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'`.
+	# When off, `_ledger` is None and every `_ledger_check_*` helper
+	# short-circuits on the first attribute test.  The reporter is
+	# invoked prospectively at sites 3/4; no MIR emission changes.
+	_ledger = getattr(func, "_ownership_ledger", None)
+	def _ledger_needs_drop(local: str) -> bool:
+		ty = local_types.get(local)
+		if ty is None:
+			return False
+		try:
+			return bool(type_table.has_drop(ty))
+		except Exception:
+			return False
 	string_ty = type_table.ensure_string()
 	local_types: Dict[str, TypeId] = func.local_types
 	string_locals: Set[str] = {
@@ -813,7 +830,7 @@ def insert_string_arc(
 			return locals_used
 
 		initialized_destructibles: Set[str] = set(assigned_in.get(block.name, set())) & (destructible_locals - nullsafe_destructible_locals)
-		for instr in block.instructions:
+		for _instr_idx, instr in enumerate(block.instructions):
 			if isinstance(instr, M.StoreLocal):
 				moved_out_locals.discard(instr.local)
 				explicitly_dropped_locals.discard(instr.local)
@@ -827,7 +844,32 @@ def insert_string_arc(
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
 				if instr.local in initialized_destructibles:
+					if _ledger is not None:
+						_ledger_reporter.check(
+							_ledger,
+							fn_name=func.name,
+							site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
+							point=(block.name, _instr_idx),
+							local=instr.local,
+							site_verdict=_ledger_events.VERDICT_MUST_DROP,
+							site_reason=_ledger_events.REASON_NEEDS_DROP,
+							needs_drop=_ledger_needs_drop,
+							emit=_ledger_reporter.stderr_emit,
+						)
 					_drop_destructible_local(instr.local, new_instrs)
+				else:
+					if _ledger is not None:
+						_ledger_reporter.check(
+							_ledger,
+							fn_name=func.name,
+							site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
+							point=(block.name, _instr_idx),
+							local=instr.local,
+							site_verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+							site_reason=_ledger_events.REASON_NOT_DROP_NEEDING,
+							needs_drop=_ledger_needs_drop,
+							emit=_ledger_reporter.stderr_emit,
+						)
 				initialized_destructibles.add(instr.local)
 				new_instrs.append(instr)
 				continue
@@ -1338,6 +1380,41 @@ def insert_string_arc(
 						_vty = local_types.get(_vl)
 						if _vty is not None and type_table.get(_vty).kind is TypeKind.VARIANT:
 							initialized_at_return.add(_vl)
+			if _ledger is not None:
+				# Site 3 prospective check: per-destructible-local
+				# verdict at the return boundary.  Program point is
+				# (block, len(original_instructions)) — the index a
+				# hypothetical drop would land at if appended after the
+				# block's last original instruction; the ledger reads
+				# pre-state (post-state of that last instruction), which
+				# is what `_drop_all_destructibles` is implicitly
+				# deciding against.
+				_ledger_point = (block.name, len(block.instructions))
+				for _dl in sorted(destructible_locals):
+					if _dl in skip_cleanup_locals:
+						continue
+					_dl_in_init = _dl in initialized_at_return
+					_dl_verdict = (
+						_ledger_events.VERDICT_MUST_DROP
+						if _dl_in_init
+						else _ledger_events.VERDICT_MUST_NOT_DROP
+					)
+					_dl_reason = (
+						_ledger_events.REASON_NEEDS_DROP
+						if _dl_in_init
+						else _ledger_events.REASON_NOT_DROP_NEEDING
+					)
+					_ledger_reporter.check(
+						_ledger,
+						fn_name=func.name,
+						site=_ledger_events.SITE_STRING_ARC_RETURN,
+						point=_ledger_point,
+						local=_dl,
+						site_verdict=_dl_verdict,
+						site_reason=_dl_reason,
+						needs_drop=_ledger_needs_drop,
+						emit=_ledger_reporter.stderr_emit,
+					)
 			_drop_all_destructibles(new_instrs, skip_locals=skip_cleanup_locals, only_locals=initialized_at_return)
 			new_term = M.Return(value=val)
 			if hasattr(term, "span"):

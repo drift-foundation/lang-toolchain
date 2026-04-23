@@ -1,0 +1,2 @@
+<source>:21:15: error: no matching overload for method 'tag' on receiver __local__::main.Bag with args [Float] [E-AUTO-d9f30b95]
+<source>:22:9: error: cannot copy 'x': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

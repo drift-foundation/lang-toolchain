@@ -1,0 +1,1 @@
+<source>:4:10: error: duplicate export of symbol 'add' in module 'main' [E-AUTO-fef6b3a4]

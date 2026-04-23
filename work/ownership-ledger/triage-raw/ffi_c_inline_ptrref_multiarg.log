@@ -1,0 +1,4 @@
+<source>:None:None: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:None:None: error: unsafe call requires --allow-unsafe [E-AUTO-be40999d]
+<source>:17:41: error: no matching overload for function 'takes_two_ptrs' with args [1, 236] [E-AUTO-d80de6d0]
+<source>:17:17: error: cannot cast expression of type Unknown to Int [E-AUTO-49dfe684]

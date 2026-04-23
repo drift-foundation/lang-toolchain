@@ -1,0 +1,2 @@
+<source>:8:15: error: E-QMEM-NO-MEMBER: member 'missing' not found on type 'Point<Int>' [E-QMEM-NO-MEMBER]
+<source>:9:9: error: cannot copy 'x': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

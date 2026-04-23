@@ -1,0 +1,1 @@
+<source>:2:1: error: import cycle detected: a -> b -> a [E-AUTO-20071e26]

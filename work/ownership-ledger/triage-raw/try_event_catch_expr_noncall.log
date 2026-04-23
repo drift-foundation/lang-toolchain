@@ -1,0 +1,1 @@
+<source>:None:None: error: 'try' applied to a nothrow expression (catch is unreachable) [E-AUTO-5b8fedf0]

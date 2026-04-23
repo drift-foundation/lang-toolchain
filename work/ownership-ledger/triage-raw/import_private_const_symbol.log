@@ -1,0 +1,1 @@
+<source>:5:34: error: module 'lib' does not export symbol 'SECRET' [E-AUTO-b6071b9f]

@@ -1,0 +1,1 @@
+<source>:9:15: error: E-QMEM-CANNOT-INFER: constructor 'None' needs an expected type to infer type parameters (underconstrained). Hint: qualify the constructor (e.g., `Optional<T>::None()` or `Optional::None<type T>()`). [E-QMEM-CANNOT-INFER]

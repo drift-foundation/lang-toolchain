@@ -1,0 +1,2 @@
+<source>:12:22: error: struct 'Op' field 'apply' type mismatch (have fn, expected fn) [E-AUTO-2117be28]
+<source>:12:13: error: keyword arguments are only supported for constructors in v1 [E-AUTO-ac02ff39]

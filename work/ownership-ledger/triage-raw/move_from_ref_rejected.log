@@ -1,0 +1,2 @@
+<source>:6:15: error: cannot move from a reference type; move requires owned storage [E-AUTO-578aa66a]
+<source>:7:9: error: cannot copy 'y': type 'Unknown' Copy is unknown (element type contains Unknown) [E-COPY-UNKNOWN]

@@ -1,0 +1,1 @@
+<source>:7:1: error: const 'T' initializer must be a compile-time literal in v1 (Int/Uint/Bool/String/Float, optionally with unary '+' or '-') [E-AUTO-6e72479c]

@@ -1,0 +1,1 @@
+<source>:None:None: error: closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported [E-AUTO-2f8a76b6]

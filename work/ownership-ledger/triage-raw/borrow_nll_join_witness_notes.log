@@ -1,0 +1,3 @@
+<source>:7:2: error: cannot write to 'x' while it is borrowed [E-AUTO-50bb3711]
+<source>:5:2: note: borrow created here [I-AUTO-b4bb3b1a]
+<source>:9:11: note: borrow considered live here because of use at (on some path) [I-AUTO-1411ce94]

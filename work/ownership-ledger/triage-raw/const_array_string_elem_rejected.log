@@ -1,0 +1,1 @@
+<source>:3:1: error: const 'T' const array element type must be a scalar (Int/Uint/Uint64/Byte/Float/Bool) [E-AUTO-ae2b2f27]

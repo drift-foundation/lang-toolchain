@@ -1,0 +1,1 @@
+<source>:2:1: error: imported module 'does_not_exist' not found; module discovery uses provided sources/module roots: pass -M <dir> and compile all module files, or use --package-root for packaged modules [E-AUTO-a4c58de6]

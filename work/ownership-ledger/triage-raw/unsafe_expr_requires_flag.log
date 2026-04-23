@@ -1,0 +1,2 @@
+<source>:6:12: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:None:None: error: raw buffer intrinsics are restricted to toolchain-trusted modules [E-AUTO-0f97fc67]

@@ -1,0 +1,1 @@
+<source>:11:10: error: module 'std.io' does not export symbol 'file_from_fd' [E-AUTO-c4a916e4]

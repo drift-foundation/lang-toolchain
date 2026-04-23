@@ -1,0 +1,1 @@
+<source>:7:9: error: bitwise operators require Uint or Uint64 operands [E-AUTO-7cf0957a]

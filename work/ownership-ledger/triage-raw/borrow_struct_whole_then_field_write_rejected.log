@@ -1,0 +1,2 @@
+<source>:8:2: error: cannot write to 'p' while it is borrowed [E-AUTO-9e54db89]
+<source>:7:2: note: borrow created here [I-AUTO-b4bb3b1a]

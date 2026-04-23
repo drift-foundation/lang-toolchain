@@ -1,0 +1,1 @@
+<source>:8:10: error: cannot cast expression of type Fn(Int) nothrow -> Int to Int [E-AUTO-140ed35c]

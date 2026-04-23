@@ -1,0 +1,2 @@
+<source>:6:19: error: arithmetic operators require matching Int/Uint/Uint64/Float operands (have Uint vs Uint64) [E-AUTO-de3bd352]
+<source>:6:9: error: cannot cast expression of type Unknown to Int [E-AUTO-49dfe684]

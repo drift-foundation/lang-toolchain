@@ -1,0 +1,2 @@
+<source>:7:16: error: cannot take &mut of an immutable binding; declare it with `var` [E-AUTO-f5e52c42]
+<source>:7:24: error: cannot take &mut of an immutable binding; declare it with `var` [E-AUTO-f5e52c42]

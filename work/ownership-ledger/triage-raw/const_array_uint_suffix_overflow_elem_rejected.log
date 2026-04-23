@@ -1,0 +1,1 @@
+<source>:3:1: error: const 'T' declared type does not match initializer value [E-AUTO-a6ab2a9f]

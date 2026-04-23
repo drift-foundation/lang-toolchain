@@ -1,0 +1,1 @@
+<source>:10:35: error: no overload of 'boom' matches function type Fn(Int) nothrow -> Int [E-AUTO-45b4be54]

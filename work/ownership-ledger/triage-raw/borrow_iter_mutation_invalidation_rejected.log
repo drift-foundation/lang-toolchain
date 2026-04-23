@@ -1,0 +1,2 @@
+<source>:6:2: error: cannot write to 'arr' while it is borrowed [E-AUTO-22a066bd]
+<source>:5:2: note: borrow created here [I-AUTO-b4bb3b1a]

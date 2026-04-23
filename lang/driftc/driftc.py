@@ -6795,6 +6795,83 @@ def compile_stubbed_funcs(
 					for instr in block.instructions:
 						if isinstance(instr, M.Call):
 							print(f"[drift:debug][mir-pre-arc] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
+		if drift_debug.enabled("ownership_ledger"):
+			# Phase 3A observational: build the ledger on every lowered
+			# function, drain the decision events recorded by sites 1/2,
+			# and emit disagreement records to stderr.  The ledger is
+			# attached to the func so string_arc sites 3/4 can consult
+			# it prospectively without rebuilding.  Runs exactly once,
+			# between HIR→MIR completion and string_arc.
+			from lang.driftc.stage2.ownership_ledger import build_ledger as _ol_build
+			from lang.driftc.stage2.ownership_ledger_reporter import (
+				compare_events as _ol_compare_events,
+				stderr_emit as _ol_stderr_emit,
+			)
+			for fn_id, func in mir_funcs_by_id.items():
+				ledger = _ol_build(func, drop_policy=lambda _t: None)
+				setattr(func, "_ownership_ledger", ledger)
+				log = getattr(func, "_drop_decision_log", None)
+				if log is None:
+					continue
+				events = log.drain()
+				if not events:
+					continue
+				# QUARANTINED 3A APPROXIMATION — DO NOT REUSE IN 3B.
+				# This callable answers the ledger reporter's
+				# `needs_drop(local)` question with the raw
+				# `TypeTable.has_drop` query rather than the canonical
+				# `DropPolicy.needs_drop` axis.  The two diverge on
+				# exactly two shapes that DropPolicy short-circuits:
+				#
+				#   1. `copy_status(ty) is True` — DropPolicy returns
+				#      False (the pre-Phase-1 Copy-trait shortcut, the
+				#      bug shape Phase 2a fixed); has_drop returns
+				#      whatever the structural walk says.
+				#   2. `_contains_dv_transitive(ty)` — DropPolicy
+				#      returns True (DV destructors short-circuit
+				#      Copy); has_drop may return False if the carrier
+				#      type is otherwise drop-free.
+				#
+				# These divergences will surface in 3A telemetry as
+				# `site_stricter` (case 1) and `ledger_stricter` (case
+				# 2) records.  Task #5 triage owns a dedicated
+				# "DropPolicy approximation noise" bucket for them; the
+				# pin in `test_ownership_ledger_three_quadrant_pin.py`
+				# uses the real DropPolicy callable so the gate is not
+				# vulnerable to this approximation.
+				#
+				# 3B MUST replace this with a per-function
+				# DropPolicy.needs_drop accessor (e.g. attached by
+				# HIRToMIR alongside `_drop_decision_log`) before any
+				# consumer is swapped onto the ledger.  Reusing
+				# `has_drop` in a non-observational pass would re-open
+				# the original Phase 2a UAF surface.
+				def _needs_drop(local: str, f: M.MirFunc = func) -> bool:
+					ty = f.local_types.get(local)
+					if ty is None:
+						return False
+					try:
+						return bool(shared_type_table.has_drop(ty))
+					except Exception:
+						return False
+				_ol_compare_events(
+					events,
+					ledger,
+					needs_drop=_needs_drop,
+					emit=_ol_stderr_emit,
+				)
+		# Phase 3C — runtime drop-flag insertion for path-dependent
+		# destructible locals.  Runs between HIR→MIR and string_arc.
+		with _timed("drop_flags"):
+			from lang.driftc.stage2.drop_flags import insert_drop_flags as _insert_drop_flags
+			from lang.driftc.stage2.drop_policy_compute import compute_drop_policy as _compute_drop_policy
+			_drop_policy_callable = lambda ty: _compute_drop_policy(shared_type_table, ty)
+			for fn_id, func in mir_funcs_by_id.items():
+				mir_funcs_by_id[fn_id] = _insert_drop_flags(
+					func,
+					type_table=shared_type_table,
+					drop_policy=_drop_policy_callable,
+				)
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				mir_funcs_by_id[fn_id] = insert_string_arc(

@@ -1,0 +1,2 @@
+<source>:6:10: error: cannot move 'x' while borrowed [E-AUTO-ce0c9ea4]
+<source>:5:2: note: borrow created here [I-AUTO-b4bb3b1a]

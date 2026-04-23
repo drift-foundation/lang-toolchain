@@ -1,0 +1,1 @@
+<source>:3:1: error: const 'A' Byte literal out of range [0, 255] [E-AUTO-5dd9200f]

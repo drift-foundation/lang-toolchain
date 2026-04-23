@@ -1,0 +1,1 @@
+<source>:4:18: error: unary negation is not supported on unsigned type Uint64 [E-NEG-UNSIGNED]

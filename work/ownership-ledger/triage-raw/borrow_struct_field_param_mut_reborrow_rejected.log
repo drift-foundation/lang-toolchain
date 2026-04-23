@@ -1,0 +1,1 @@
+<source>:6:18: error: cannot take &mut through *p unless p is a mutable reference (&mut T) [E-AUTO-fdf04181]

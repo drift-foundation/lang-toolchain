@@ -1,0 +1,2 @@
+<source>:1:1: error: cannot copy 'xs': type 'Array<Int>' is not Copy (use move xs) [E-AUTO-1a8601d6]
+<source>:7:19: error: E-FSTR-UNSUPPORTED-TYPE: f-string hole value is not formattable in v1 (have Array) [E-FSTR-UNSUPPORTED-TYPE]

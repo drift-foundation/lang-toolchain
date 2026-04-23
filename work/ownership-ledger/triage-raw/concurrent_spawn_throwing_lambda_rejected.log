@@ -1,0 +1,3 @@
+<source>:None:None: error: lambda can throw but is expected to be nothrow for Fn() nothrow -> Unknown [E-AUTO-17263932]
+<source>:None:None: error: callback0 expects a function value [E-AUTO-db991c9e]
+<source>:None:None: error: cannot infer type arguments for 'spawn': T [E-AUTO-74e1ee0c]

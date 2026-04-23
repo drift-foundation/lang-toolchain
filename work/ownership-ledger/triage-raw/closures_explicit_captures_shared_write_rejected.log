@@ -1,0 +1,1 @@
+<source>:5:32: error: capture 'x' is shared; capture &mut x to mutate [E-AUTO-1462c772]

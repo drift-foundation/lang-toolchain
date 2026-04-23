@@ -1,0 +1,1 @@
+<source>:8:11: error: cannot cast function 'add1' to Fn(Int) -> Int: no overload matches (expected params: Int, returns: Int, can-throw) [E-AUTO-7cd215f2]

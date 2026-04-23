@@ -1,0 +1,1 @@
+<source>:7:2: error: receiver type for method 'bad' must be 'Point' (or '&Point' / '&mut Point') [E-AUTO-a565235d]

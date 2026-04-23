@@ -1,0 +1,3 @@
+<source>:None:None: error: field 'value' is private [E-PRIVATE-FIELD]
+<source>:None:None: error: field 'value' is private [E-PRIVATE-FIELD]
+<source>:10:15: error: method 'show' exists but is not visible here (__local__::m_trait.Show@m_impl) [E-AUTO-f645e642]

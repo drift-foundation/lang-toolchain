@@ -1,0 +1,1 @@
+<source>:9:10: error: no matching method 'store' for receiver Ref<std::std.sync.AtomicRef<__local__::m.A>> [E-AUTO-f25281ed]

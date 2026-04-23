@@ -1,6 +1,106 @@
 # Drift development history
 
 ## 2026-04-22
+- **Phase 3C — runtime drop-flag insertion for path-dependent
+  destructible locals (0.31.8, ABI unchanged at 10).**  Closes the
+  bucket-6 LANGUAGE_BUG class surfaced by the Phase 3A observational
+  ownership ledger e2e triage (Task #5): function-wide
+  `_moved_locals` is path-insensitive, so once `move L` lowered
+  anywhere in a function, every subsequent `_emit_scope_drops`
+  skipped dropping `L` regardless of the runtime path — leaking the
+  HashMap on every malformed-JSON parse failure in
+  `std.json::_parse_object_throwing.fields`, and silently breaking
+  RAII for any conditionally-moved Mutex / file-handle / transaction
+  local.
+
+  **Language contract (locked).**  Implicit destruction is an
+  ordered source semantic: a destructor for a local runs at the
+  local's scope-exit / unwind cleanup point if the local is
+  initialized and not moved.  The compiler may omit or simplify
+  cleanup only when it proves the destructor has no observable
+  ordering effect, but it may not generally move cleanup earlier.
+  This rejects "non-observable after last use" because Drift
+  supports RAII; users will write code that depends on cleanup
+  happening at source scope-exit (Mutex unlock, transaction
+  rollback, file close, span end, etc.).
+
+  **Implementation strategy.**  Per-local runtime drop flag,
+  inserted by a new pass `lang/driftc/stage2/drop_flags.py` that
+  runs between HIR→MIR and `string_arc`.  Trigger criteria — a
+  destructible local (`DropPolicy.needs_drop = True`) gets a flag
+  iff BOTH (a) the function contains a USER `move L` expression
+  (a `MoveOut(_, L, _)` whose dest is consumed by something OTHER
+  than an immediately-following `DropValue`, distinguishing user
+  moves from compiler-internal scope-drop emissions), AND (b) the
+  3A ledger reports `Live` or `MaybeUninit` at the pre-terminator
+  point of at least one **Return** block (`Unreachable` excluded
+  as statically dead).  Compiler-internal `__`-prefixed locals are
+  also excluded (specialised handling in `string_arc`).  Under
+  current Drift's grammar (every `let`/`var` requires an
+  initializer, so destructible locals cannot be `Uninit` past
+  declaration), these criteria are equivalent to the design-level
+  "MaybeUninit raw state + needs_drop" criterion — see
+  `work/ownership-ledger/3c-design.md` for the equivalence
+  argument and the future-extension migration path.
+
+  Per qualified local: allocate a Bool flag (init `true` for params,
+  `false` for declared locals); after every `StoreLocal(L, _)`
+  insert flag-set-true; after every `MoveOut(_, L, _)` insert
+  flag-clear-false; at every **Return** terminator block whose
+  original instructions do not already drop L, insert a flag-
+  guarded drop sequence (`if flag { MoveOut+DropValue }` via
+  `IfTerminator` + drop-block + join-block).  **Cleanup runs at
+  the original source scope-exit point** — the flag governs
+  *whether*, not *when* — preserving RAII timing.
+
+  **Two failed prior attempts** (carried as historical context in
+  `work/ownership-ledger/3c-design.md`):
+    1. Set-intersection at HIf joins (snapshot before each arm,
+       intersect at join).  Cleared the bucket-6 leak shape but
+       reintroduced double-drop / UAF on the K-found sibling shape
+       where the moving arm reaches the join.
+    2. Strict fail-stop on disagreeing reaching arms.  Sound but
+       broke 8 stage2 tests because legitimate stdlib code in
+       `std.cli` (`inline_value`) and `std.containers` (`k`, `v`)
+       relies on user-level invariants the compiler cannot verify.
+  Both reverted.  The runtime-flag baseline is uniform: every
+  path-dependent destructible local gets the same flag plumbing,
+  no terminating-arm or same-arm-as-scope-exit special cases.
+  CFG-split is preserved as a future optimization gated on a
+  candidate `DropPolicy.is_reorder_safe` axis; NOT part of this
+  landing.
+
+  **Verification.**  Two `@pytest.mark.ledger_3c_acceptance`
+  carrier regressions in
+  `lang/tests/stage2/test_hir_to_mir_path_insensitive_moved_locals.py`
+  flip RED→GREEN with the new pass: the terminating-arm leak shape
+  (`if b { return move s; } return "fresh";`) now drops `s` on the
+  no-move path, and the non-terminating shape
+  (`if b { val t = move s; } return "fresh";`) drops `s` only when
+  `b` was false.  The marker is no longer deselect-by-default — the
+  tests join the standard suite (`pytest.ini` updated).  New unit
+  tests in `lang/tests/stage2/test_drop_flags.py` pin the flag
+  init/set/clear behavior, the RAII invariant (no early drops; no
+  cleanup pushed into predecessor arms), and the no-op invariant
+  (functions with no path-dependent destructible locals are
+  unchanged).  Full e2e observe re-run confirms bucket 6
+  (`real_disagreement`) clears 5 → 0 and no new disagreement class
+  is introduced.
+
+  **Standalone `compute_drop_policy`.**  New module
+  `lang/driftc/stage2/drop_policy_compute.py` mirrors
+  `HIRToMIR._drop_policy` exactly (same five axes, same shortcut
+  rules, same DV transitive walk) so post-HIR→MIR passes can call
+  the canonical policy without instantiating a full `HIRToMIR`
+  (which has heavy `__init__` side effects).  The two
+  implementations MUST stay in sync; future 3B consumer swaps will
+  use this module.
+
+  No ABI bump (no boundary-shape change).  See
+  `work/ownership-ledger/3c-design.md` for the full design and
+  `work/ownership-ledger/bucket6-known-bug.md` for the bug class
+  history.
+
 - **`drift lock emit` subcommand for external test runners
   (0.31.7, ABI unchanged at 10).**  Requested by the singular
   library team during their v1 → v2 manifest migration.

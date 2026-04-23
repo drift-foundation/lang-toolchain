@@ -62,6 +62,7 @@ from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.closures import sort_captures
 from lang.driftc.call_contract import call_contract_issues, repair_named_hcall_callinfo
 from . import mir_nodes as M
+from . import ownership_ledger_events as _ledger_events
 
 
 class MirBuilder:
@@ -502,6 +503,19 @@ class HIRToMIR:
 		self._lambda_counter = 0
 		# Names reserved for this function (params + locals).
 		self._reserved_names: set[str] = set(self.b.func.params)
+		# Phase 3A ownership-ledger observational recording.  Gated once
+		# per HIRToMIR instance: when disabled, `_drop_decision_log` is
+		# None and `_record_drop_decision` is a single-attribute-read
+		# no-op on the hot path.  When enabled, the log is shared by
+		# reference with `builder.func` so the driver can drain without
+		# holding a HIRToMIR handle.
+		if drift_debug.enabled("ownership_ledger"):
+			self._drop_decision_log: _ledger_events.DropDecisionLog | None = (
+				_ledger_events.DropDecisionLog(fn_name=self.b.func.name)
+			)
+			setattr(self.b.func, "_drop_decision_log", self._drop_decision_log)
+		else:
+			self._drop_decision_log = None
 		self._local_binding_ids: set[int] = set()
 		# Scope-aware set of `val ^x` captures active at the current throw site.
 		self._capture_scope_stack: list[list[int]] = []
@@ -882,6 +896,34 @@ class HIRToMIR:
 			self.b.emit(M.ConstString(dest=key_val, value=cap.capture_name))
 			self.b.emit(M.ErrorAddLocalDV(error=err_val, frame=frame_val, key=key_val, value=dv))
 
+	def _record_drop_decision(
+		self,
+		*,
+		site: str,
+		local: str,
+		verdict: str,
+		reason: str,
+	) -> None:
+		"""Phase 3A observational hook.  No-op when the ledger flag is off.
+
+		Program point is the current insertion cursor: `(block_name,
+		len(instructions))` — i.e. the index at which a drop emission
+		(if the site chose MustDrop) would land, or the "hypothetical
+		next instruction" the ledger reads pre-state for when the site
+		chose MustNotDrop.  The reporter queries `state_pre(point)`,
+		which for this cursor is `post_instr[(block, len-1)]` and
+		therefore reflects the local's state immediately before the
+		decision — not affected by the site's own subsequent emissions."""
+		if self._drop_decision_log is None:
+			return
+		self._drop_decision_log.record(
+			site=site,
+			program_point=(self.b.block.name, len(self.b.block.instructions)),
+			local=local,
+			verdict=verdict,
+			reason=reason,
+		)
+
 	def _emit_scope_drops(self, *, scope_index: int) -> None:
 		if not self._scope_stack:
 			return
@@ -890,12 +932,34 @@ class HIRToMIR:
 		for scope in reversed(self._scope_stack[scope_index:]):
 			for local in reversed(scope):
 				if local in self._moved_locals:
+					self._record_drop_decision(
+						site=_ledger_events.SITE_SCOPE_DROP,
+						local=local,
+						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+						reason=_ledger_events.REASON_MOVED,
+					)
 					continue
 				ty = self._local_types.get(local)
 				if ty is None:
 					continue
 				if not self._needs_runtime_drop(ty) and not self._type_is_destructible(ty):
+					self._record_drop_decision(
+						site=_ledger_events.SITE_SCOPE_DROP,
+						local=local,
+						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+						reason=_ledger_events.REASON_NOT_DROP_NEEDING,
+					)
 					continue
+				self._record_drop_decision(
+					site=_ledger_events.SITE_SCOPE_DROP,
+					local=local,
+					verdict=_ledger_events.VERDICT_MUST_DROP,
+					reason=(
+						_ledger_events.REASON_DESTRUCTIBLE
+						if self._type_is_destructible(ty) and not self._needs_runtime_drop(ty)
+						else _ledger_events.REASON_NEEDS_DROP
+					),
+				)
 				tmp = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))
 				self.b.emit(M.DropValue(value=tmp, ty=ty))
@@ -1625,6 +1689,13 @@ class HIRToMIR:
 					# that change to be reviewed against PARTIAL-MOVE
 					# CLEANUP deliberately — it will NOT silently stay
 					# correct here.
+					if arm_scrut_local is not None:
+						self._record_drop_decision(
+							site=_ledger_events.SITE_MATCH_CLEANUP,
+							local=arm_scrut_local,
+							verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+							reason=_ledger_events.REASON_FIELD_MOVED,
+						)
 					if (
 						arm.ctor is not None
 						and not scrut_is_ref
@@ -1661,6 +1732,12 @@ class HIRToMIR:
 							self._register_drop_local(drop_tmp, cleanup_fty)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
+					self._record_drop_decision(
+						site=_ledger_events.SITE_MATCH_CLEANUP,
+						local=arm_scrut_local,
+						verdict=_ledger_events.VERDICT_MUST_DROP,
+						reason=_ledger_events.REASON_NEEDS_DROP,
+					)
 					arm_scrut_moved_pre = self.b.new_temp()
 					self.b.emit(M.MoveOut(dest=arm_scrut_moved_pre, local=arm_scrut_local, ty=scrut_ty))
 					self._local_types[arm_scrut_moved_pre] = scrut_ty
@@ -6833,6 +6910,26 @@ class HIRToMIR:
 		self.b.set_terminator(
 			M.IfTerminator(cond=cond_val, then_target=then_target, else_target=else_target)
 		)
+
+		# KNOWN LANGUAGE_BUG (Phase 3A Task #5 bucket 6): `_moved_locals`
+		# is a function-wide set populated by every `HMove` lowering.
+		# Source `move` semantics are path-local, but this set is not
+		# — once `move s` lowers anywhere, every subsequent
+		# `_emit_scope_drops` skips dropping `s`, including on CFG arms
+		# that never executed the move.  Result: latent leaks on the
+		# no-move path (e.g. `std.json::_parse_object_throwing.fields`
+		# on malformed inputs).  See
+		# `work/ownership-ledger/bucket6-known-bug.md` for the full
+		# repro + analysis + carrier regressions.
+		#
+		# Mainline is intentionally NOT patched here.  Two attempted
+		# fixes (intersection-with-implicit-else; and a strict
+		# fail-stop on disagreeing reaching arms) were each unsound or
+		# blocked stdlib compilation respectively — the bug class
+		# requires explicit per-program-point representation that only
+		# Phase 3C drop-elaboration can provide.  The Phase 3A
+		# observational ledger already detects the disagreement; 3C
+		# replaces this scope-drop authority entirely.
 
 		# 4) Lower then block.
 		self.b.set_block(then_block)

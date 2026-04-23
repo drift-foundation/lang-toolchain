@@ -1,0 +1,1 @@
+<source>:10:14: error: E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1 [E-CTOR-EXPECTED-TYPE]

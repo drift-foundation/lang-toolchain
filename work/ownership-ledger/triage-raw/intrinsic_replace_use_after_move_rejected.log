@@ -1,0 +1,1 @@
+<source>:13:2: error: cannot borrow from moved or uninitialized 'b' [E-AUTO-2cc0f031]

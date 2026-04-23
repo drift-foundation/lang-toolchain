@@ -1,0 +1,6 @@
+<source>:8:22: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:8:38: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:11:24: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:11:40: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:14:22: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]
+<source>:14:41: error: unsafe block requires --allow-unsafe [E-AUTO-71c505f6]

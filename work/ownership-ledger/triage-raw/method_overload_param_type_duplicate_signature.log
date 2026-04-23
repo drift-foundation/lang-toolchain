@@ -1,0 +1,1 @@
+<source>:10:6: error: duplicate inherent method 'tag' for type 'main::Bag' in modules 'main' [E-AUTO-a486e3d2]
