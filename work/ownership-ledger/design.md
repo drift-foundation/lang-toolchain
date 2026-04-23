@@ -261,7 +261,7 @@ A shorthand CI convenience var is **not** introduced in 3A. If teams need it lat
 5. Decision-event recording at sites 1 and 2 (hir_to_mir.py — `_emit_scope_drops` and the match-arm cleanup loop). Each recording call short-circuits when the flag is off.
 6. Prospective `ledger.verdict_at(...)` call-sites at sites 3 and 4 (string_arc.py — `_drop_all_destructibles` iteration + StoreLocal rewrite loop), each behind the debug-flag guard.
 7. `lang/tests/stage2/test_ownership_ledger.py` — unit tests covering: straight-line flow, simple branch+join, `MoveOut` before scope exit, `StoreLocal` refines `MaybeUninit` back to `Live` (the K-refinement case), `MovedOut ∪ Tombstoned → MovedOut` (the K-classifier case), three-quadrant pin reproduction (dual-owner, POD variant, transient rvalue) — ledger must agree with current MIR for all three.
-8. `work/ownership-ledger/triage.md` — populated after the `-n16` e2e run with `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'` set; the input to the 3A→3B gate decision.
+8. `build/ownership-ledger/triage/triage.md` — populated after the `-n16` e2e run with `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'` set; the input to the 3A→3B gate decision.
 
 ## Timeline reset (calendar, not effort)
 

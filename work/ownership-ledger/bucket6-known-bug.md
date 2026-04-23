@@ -72,5 +72,5 @@ These three requirements are now first-class acceptance criteria for 3C, not nic
 
 - `work/ownership-ledger/3c-design.md` — the design note (must absorb the carrier shapes as concrete acceptance criteria).
 - `work/ownership-ledger/triage-findings.md` — the discovery context.
-- `work/ownership-ledger/triage.md` — auto-generated bucket counts (bucket 6 = 5 on mainline; will go to 0 once 3C lands and the ledger replaces `_emit_scope_drops`).
+- `build/ownership-ledger/triage/triage.md` — auto-generated bucket counts (bucket 6 = 5 on mainline; will go to 0 once 3C lands and the ledger replaces `_emit_scope_drops`).
 - `lang/tests/stage2/test_hir_to_mir_path_insensitive_moved_locals.py` — the carrier xfails.

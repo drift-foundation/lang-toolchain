@@ -6807,6 +6807,19 @@ def compile_stubbed_funcs(
 		for fn_id, func in mir_funcs_by_id.items():
 			ledger = _ol_build(func, drop_policy=lambda _t: None)
 			setattr(func, "_ownership_ledger", ledger)
+		# Phase 4 step 3c: site-2 per-field emission authority.  Site 2
+		# inside HIR→MIR already emitted per-field drop chains using
+		# its inline legacy decisions; the ledger now has veto power
+		# via `field_verdict_at` and removes drops it classifies
+		# `MUST_NOT_DROP`.  Today (post-3b disagreement=0) this is a
+		# no-op for real code.  See
+		# `lang/driftc/stage2/ownership_ledger_trim.py`.
+		if shared_type_table is not None:
+			from lang.driftc.stage2.ownership_ledger_trim import (
+				trim_match_cleanup_by_ledger as _ol_trim,
+			)
+			for fn_id, func in mir_funcs_by_id.items():
+				_ol_trim(func, type_table=shared_type_table)
 		if drift_debug.enabled("ownership_ledger"):
 			# Phase 3A observational: drain the decision events
 			# recorded by sites 1/2 during HIR→MIR and emit

@@ -9,3 +9,8 @@ staged
 test_all.sh
 run-all.sh
 work/ownership-ledger
+# Defense-in-depth: transient ownership-ledger scratch must live
+# under `build/ownership-ledger/triage/`, not under source trees.
+# The ignore rule below is a backstop in case a helper regresses —
+# the primary fix is to keep artifact paths out of `lang/tests/`.
+lang/tests/codegen/e2e/*/.triage_build

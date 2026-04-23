@@ -531,6 +531,19 @@ class HIRToMIR:
 			setattr(self.b.func, "_drop_decision_log", self._drop_decision_log)
 		else:
 			self._drop_decision_log = None
+		# Phase 4 step 3c: per-field match-cleanup side table.  One
+		# entry per emitted per-field drop at site 2's partial-move
+		# branch.  Consumed post-HIR→MIR by
+		# `ownership_ledger_trim.trim_match_cleanup_by_ledger` to gate
+		# emission on `field_verdict_at`: if the ledger says the field
+		# is already MovedOut (MustNotDrop) the drop chain is removed.
+		# Populated unconditionally — the trim pass is the emission
+		# authority, not observation.  Entry shape:
+		# (scrut_local, field_path, cleanup_point, drop_local, cleanup_fty)
+		self._match_cleanup_per_field_drops: list[
+			tuple[str, tuple[tuple[str, int], ...], tuple[str, int], str, "TypeId"]
+		] = []
+		setattr(self.b.func, "_match_cleanup_per_field_drops", self._match_cleanup_per_field_drops)
 		self._local_binding_ids: set[int] = set()
 		# Scope-aware set of `val ^x` captures active at the current throw site.
 		self._capture_scope_stack: list[list[int]] = []
@@ -1939,6 +1952,12 @@ class HIRToMIR:
 								reason=_ledger_events.REASON_FIELD_NEEDS_DROP,
 								field_path=_field_path,
 							)
+							# Phase 4 step 3c: capture the program point
+							# BEFORE the slot-drop chain is emitted — the
+							# trim pass reads `field_state_pre` at this
+							# point (same program point the observe
+							# telemetry used).
+							_cleanup_point: tuple[str, int] = (self.b.block.name, len(self.b.block.instructions))
 							slot_addr = self.b.new_temp()
 							self.b.emit(
 								M.VariantGetFieldAddr(
@@ -1962,6 +1981,21 @@ class HIRToMIR:
 							# return/throw inside the arm body also cleans up).
 							arm_drop_locals.append(drop_tmp)
 							self._register_drop_local(drop_tmp, cleanup_fty)
+							# Phase 4 step 3c: side-table entry so the
+							# post-ledger trim pass can veto this drop
+							# if `field_verdict_at` disagrees.  Entry
+							# shape matches the tuple declared at init:
+							# (scrut_local, field_path, cleanup_point,
+							#  drop_local, cleanup_fty).
+							self._match_cleanup_per_field_drops.append(
+								(
+									arm_scrut_local if arm_scrut_local is not None else "",
+									_field_path,
+									_cleanup_point,
+									drop_tmp,
+									cleanup_fty,
+								)
+							)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
 					# Step 4: route through the match-scrutinee verdict

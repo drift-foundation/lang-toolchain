@@ -13,7 +13,7 @@ Strategy:
   `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'` set.  --emit-ir
   forces the full pipeline so string_arc (sites 3/4) runs and HIR→MIR
   recording (sites 1/2) drains.
-- Capture stderr per case to work/ownership-ledger/triage-raw/<case>.log.
+- Capture stderr per case to build/ownership-ledger/triage/triage-raw/<case>.log.
 - Print a one-line progress event per case (for Monitor consumption).
 
 Aggregation is a separate script (`aggregate_triage.py`) that reads
@@ -31,7 +31,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 STDLIB = REPO / "stdlib"
 E2E_ROOT = REPO / "lang/tests/codegen/e2e"
-RAW_DIR = REPO / "work/ownership-ledger/triage-raw"
+# Policy: transient artifacts (IR, logs) live under `build/`, never in
+# `lang/` or `work/`.  The repo convention is: source tree = source;
+# `build/` = generated.
+BUILD_ROOT = REPO / "build/ownership-ledger/triage"
+RAW_DIR = BUILD_ROOT / "triage-raw"
 
 
 def collect_cases() -> list[Path]:
@@ -58,11 +62,14 @@ def compile_case(case_dir: Path) -> tuple[str, int, int, int]:
 	`(case_name, exit_code, stderr_bytes, ledger_record_count)`."""
 	name = case_dir.name
 	log_path = RAW_DIR / f"{name}.log"
-	build_dir = case_dir / ".triage_build"
-	build_dir.mkdir(exist_ok=True)
+	# Per-case build mirror under build/ — case path relative to REPO
+	# so cases from lang/tests/codegen/e2e/<case> land at
+	# build/ownership-ledger/triage/lang/tests/codegen/e2e/<case>/.
+	build_dir = BUILD_ROOT / case_dir.relative_to(REPO)
+	build_dir.mkdir(parents=True, exist_ok=True)
 	ir_path = build_dir / "out.ll"
 	# Find drift sources in the case dir (one or more .drift files).
-	drift_files = sorted(str(p) for p in case_dir.rglob("*.drift") if ".triage_build" not in p.parts)
+	drift_files = sorted(str(p) for p in case_dir.rglob("*.drift"))
 	# Prefer workspace mode with -M when the case has a module decl —
 	# matches what the e2e runner does for declared cases.
 	main_text = (case_dir / "main.drift").read_text(errors="replace")
@@ -96,6 +103,7 @@ def main() -> int:
 	ap.add_argument("--limit", type=int, default=0, help="Cap cases (0 = all)")
 	ap.add_argument("--workers", type=int, default=16)
 	args = ap.parse_args()
+	BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 	RAW_DIR.mkdir(parents=True, exist_ok=True)
 	cases = collect_cases()
 	if args.limit:

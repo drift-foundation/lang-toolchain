@@ -3,7 +3,7 @@
 """
 Phase 3A Task #5 triage aggregator.
 
-Reads per-case stderr logs from `work/ownership-ledger/triage-raw/`,
+Reads per-case stderr logs from `build/ownership-ledger/triage/triage-raw/`,
 parses the JSON records emitted with the `[drift:ownership_ledger] `
 prefix, deduplicates by (site, fn_name, program_point, local) so a
 record seen in N cases is counted once per unique decision, then
@@ -31,7 +31,7 @@ Order is critical (per K's directive): a record is classified by the
 FIRST bucket it matches, so a `match_cleanup` record that is also
 `path_dependent` lands in bucket 1.  Bucket 6 is the gate-blocker.
 
-Output: writes `work/ownership-ledger/triage.md` with the bucket sizes,
+Output: writes `build/ownership-ledger/triage/triage.md` with the bucket sizes,
 per-bucket samples, and a verdict on the gate.
 """
 from __future__ import annotations
@@ -41,8 +41,10 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-RAW_DIR = REPO / "work/ownership-ledger/triage-raw"
-OUT = REPO / "work/ownership-ledger/triage.md"
+# Policy: transient artifacts under `build/`, never in `work/` or `lang/`.
+_BUILD_ROOT = REPO / "build/ownership-ledger/triage"
+RAW_DIR = _BUILD_ROOT / "triage-raw"
+OUT = _BUILD_ROOT / "triage.md"
 PREFIX = "[drift:ownership_ledger] "
 
 
@@ -178,7 +180,7 @@ def main() -> int:
 	lines: list[str] = []
 	lines.append("# Phase 3A Task #5 Triage")
 	lines.append("")
-	lines.append(f"Source: `work/ownership-ledger/triage-raw/*.log`")
+	lines.append(f"Source: `build/ownership-ledger/triage/triage-raw/*.log`")
 	lines.append(f"Cases producing records: {len(cases_with_records)}")
 	lines.append(f"Total records (incl. duplicates across cases): {total}")
 	lines.append(f"Total UNIQUE decisions (deduped by site+fn+point+local): {sum(bucket_counts.values())}")
