@@ -77,6 +77,14 @@ class DisagreementRecord:
 	hypothetical emission).  Exposing raw state alongside the verdict
 	lets triage separate semantic-equivalence cases (Tombstoned drop) from
 	genuine leak-side disagreements without having to re-query the ledger.
+
+	`field_path` (Phase 4 step 3b): empty tuple `()` for whole-local
+	records (back-compat); non-empty tuple of `(ctor_name,
+	field_index)` projections for per-field records.  When non-empty,
+	the ledger comparison used `field_verdict_at` instead of
+	`verdict_at`.  Aggregator buckets per-field records into
+	`per_field_still_disagrees` (when classification != agree)
+	separately from whole-local `per_field_gap` records.
 	"""
 	fn_name: str
 	site: str
@@ -87,6 +95,7 @@ class DisagreementRecord:
 	ledger_verdict: str
 	raw_state: str
 	classification: str
+	field_path: Tuple[Tuple[str, int], ...] = ()
 
 
 def classify_verdicts(
@@ -148,6 +157,7 @@ def compare_events(
 			site_reason=event.reason,
 			ledger=ledger,
 			needs_drop=needs_drop,
+			field_path=event.field_path,
 		)
 		records.append(record)
 		if emit is not None:
@@ -166,6 +176,7 @@ def check(
 	site_reason: str,
 	needs_drop: NeedsDrop,
 	emit: Optional[Emit] = None,
+	field_path: Tuple[Tuple[str, int], ...] = (),
 ) -> DisagreementRecord:
 	"""
 	Prospective hook for sites 3 and 4.
@@ -175,6 +186,11 @@ def check(
 	time.  The returned record is classified identically to retrospective
 	events — so downstream triage aggregates both APIs through one
 	schema.
+
+	`field_path` (Phase 4 step 3b): empty for whole-local checks
+	(existing behaviour); non-empty tuple of `(ctor_name,
+	field_index)` projections to query `field_verdict_at` instead of
+	`verdict_at`.
 	"""
 	record = _compare_one(
 		fn_name=fn_name,
@@ -185,6 +201,7 @@ def check(
 		site_reason=site_reason,
 		ledger=ledger,
 		needs_drop=needs_drop,
+		field_path=field_path,
 	)
 	if emit is not None:
 		emit(record)
@@ -201,9 +218,23 @@ def _compare_one(
 	site_reason: str,
 	ledger: LiveStateMap,
 	needs_drop: NeedsDrop,
+	field_path: Tuple[Tuple[str, int], ...] = (),
 ) -> DisagreementRecord:
-	raw = ledger.state_pre(point, local)
-	ledger_verdict = ledger.verdict_at(point, local, needs_drop=needs_drop(local))
+	# Phase 4 step 3b: when `field_path` is non-empty, query
+	# `field_state_pre` / `field_verdict_at` on the per-field tracker
+	# instead of the whole-local one.  Records are otherwise shaped
+	# identically; the aggregator distinguishes per-field records by
+	# the non-empty `field_path` field.
+	if field_path:
+		raw = ledger.field_state_pre(point, local, field_path)
+		ledger_verdict = ledger.field_verdict_at(
+			point, local, field_path, needs_drop=needs_drop(local)
+		)
+	else:
+		raw = ledger.state_pre(point, local)
+		ledger_verdict = ledger.verdict_at(
+			point, local, needs_drop=needs_drop(local)
+		)
 	classification = classify_verdicts(
 		site_verdict=site_verdict,
 		ledger_verdict=ledger_verdict,
@@ -219,6 +250,7 @@ def _compare_one(
 		ledger_verdict=_verdict_to_str(ledger_verdict),
 		raw_state=raw.value,
 		classification=classification,
+		field_path=field_path,
 	)
 
 
@@ -229,6 +261,11 @@ def stderr_emit(record: DisagreementRecord) -> None:
 	"""
 	payload = dict(asdict(record))
 	payload["program_point"] = list(payload["program_point"])
+	# field_path is a tuple-of-tuples — `asdict` converts the outer
+	# tuple to list of tuples; serialize each inner pair as a 2-list
+	# so the JSON form is `[["Some", 0]]` (back-compat: empty for
+	# whole-local records).
+	payload["field_path"] = [list(p) for p in payload.get("field_path", ())]
 	sys.stderr.write("[drift:ownership_ledger] " + json.dumps(payload, sort_keys=True) + "\n")
 
 

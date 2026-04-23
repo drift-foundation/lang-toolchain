@@ -69,6 +69,7 @@ def bucket_for(rec: dict) -> str:
 	site = rec.get("site", "")
 	site_reason = rec.get("site_reason", "")
 	classification = rec.get("classification", "")
+	field_path = rec.get("field_path") or []
 	# 0. drop_flag_owned — site explicitly defers to Phase 3C drop-
 	# flag ownership for this scope-exit.  Not a disagreement; the
 	# site is documenting the responsibility split (3C is the sole
@@ -94,8 +95,20 @@ def bucket_for(rec: dict) -> str:
 	# so it doesn't appear as bucket-2 noise.
 	if site_reason == "unknown_type":
 		return "unknown_type"
-	# 1. per_field_gap — site 2 partial-move records
-	if site == "match_cleanup" and site_reason in {"field_moved", "field_needs_drop", "field_not_drop_needing"}:
+	# 0d. per_field_still_disagrees — Phase 4 step 3b.  Per-field
+	# record (non-empty `field_path`) where the per-field ledger
+	# verdict still disagrees with the site after both sides
+	# classify the field.  Distinct from `per_field_gap` (whole-
+	# local records where the ledger has no per-field opinion to
+	# compare).  Captures the residual K wants visible to gate 3c:
+	# if this bucket is dominated by VariantGetFieldAddr false
+	# positives, 3c needs chain-aware tightening before site-2
+	# emission authority changes.  If it's small, 3c can proceed.
+	if field_path and classification != "agree":
+		return "per_field_still_disagrees"
+	# 1. per_field_gap — site 2 partial-move records (whole-local
+	# only — per-field records take the bucket above first).
+	if site == "match_cleanup" and site_reason in {"field_moved", "field_needs_drop", "field_not_drop_needing"} and not field_path:
 		return "per_field_gap"
 	# Some site-2 records also use REASON_NEEDS_DROP / REASON_MOVED
 	# directly when they record the scrutinee whole-drop branch — those
@@ -177,6 +190,7 @@ def main() -> int:
 	lines.append(f"| 0 | drop_flag_owned | {bucket_counts.get('drop_flag_owned', 0)} | Site defers to Phase 3C drop-flag ownership for this scope-exit |")
 	lines.append(f"| 0b | moved_unconditional | {bucket_counts.get('moved_unconditional', 0)} | Phase 4 step 2 — move in same scope as declaration; legacy-correct skip |")
 	lines.append(f"| 0c | unknown_type | {bucket_counts.get('unknown_type', 0)} | Phase 4 step 2 — local with no recorded type; silent skip surfaces here |")
+	lines.append(f"| 0d | per_field_still_disagrees | {bucket_counts.get('per_field_still_disagrees', 0)} | Phase 4 step 3b — per-field record (non-empty field_path) where ledger and site disagree; gates 3c (chain-aware tightening required if dominated by VariantGetFieldAddr noise) |")
 	lines.append(f"| 1 | per_field_gap | {bucket_counts.get('per_field_gap', 0)} | Defer to 3B (per-field tracking) |")
 	lines.append(f"| 2 | droppolicy_approximation | {bucket_counts.get('droppolicy_approximation', 0)} | Quarantined — 3B must NOT consume `has_drop` |")
 	lines.append(f"| 3 | path_dependent | {bucket_counts.get('path_dependent', 0)} | Direct input to 3C design |")
@@ -190,7 +204,7 @@ def main() -> int:
 	else:
 		lines.append(f"## Gate verdict: ❌ Bucket 6 has {gate_block} records — 3B is BLOCKED until each is resolved.")
 	lines.append("")
-	for b in ("drop_flag_owned", "moved_unconditional", "unknown_type", "per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
+	for b in ("drop_flag_owned", "moved_unconditional", "unknown_type", "per_field_still_disagrees", "per_field_gap", "droppolicy_approximation", "path_dependent", "semantic_equivalent", "implicit_return_move_gap", "real_disagreement"):
 		samples = bucket_samples.get(b, [])
 		if not samples:
 			continue

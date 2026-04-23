@@ -212,7 +212,7 @@
 %Struct_std_2Emem_RawBuffer_da7fe2d88f7ba0fa = type { ptr, i64 }
 %Struct_std_2Econtainers_HashMapFindResult_bd8b3df714de62eb = type { i64, i8 }
 
-@__drift_compiler_build = internal constant [81 x i8] [i8 100, i8 114, i8 105, i8 102, i8 116, i8 99, i8 32, i8 48, i8 46, i8 51, i8 49, i8 46, i8 56, i8 32, i8 124, i8 32, i8 97, i8 98, i8 105, i8 32, i8 49, i8 48, i8 32, i8 124, i8 32, i8 119, i8 111, i8 114, i8 100, i8 32, i8 54, i8 52, i8 32, i8 124, i8 32, i8 103, i8 105, i8 116, i8 32, i8 57, i8 52, i8 97, i8 57, i8 99, i8 52, i8 52, i8 100, i8 32, i8 124, i8 32, i8 98, i8 117, i8 105, i8 108, i8 100, i8 95, i8 117, i8 116, i8 99, i8 32, i8 50, i8 48, i8 50, i8 54, i8 45, i8 48, i8 52, i8 45, i8 50, i8 51, i8 84, i8 49, i8 50, i8 58, i8 50, i8 50, i8 58, i8 53, i8 57, i8 90, i8 0], align 1
+@__drift_compiler_build = internal constant [81 x i8] [i8 100, i8 114, i8 105, i8 102, i8 116, i8 99, i8 32, i8 48, i8 46, i8 51, i8 49, i8 46, i8 56, i8 32, i8 124, i8 32, i8 97, i8 98, i8 105, i8 32, i8 49, i8 48, i8 32, i8 124, i8 32, i8 119, i8 111, i8 114, i8 100, i8 32, i8 54, i8 52, i8 32, i8 124, i8 32, i8 103, i8 105, i8 116, i8 32, i8 101, i8 97, i8 56, i8 49, i8 99, i8 51, i8 101, i8 102, i8 32, i8 124, i8 32, i8 98, i8 117, i8 105, i8 108, i8 100, i8 95, i8 117, i8 116, i8 99, i8 32, i8 50, i8 48, i8 50, i8 54, i8 45, i8 48, i8 52, i8 45, i8 50, i8 51, i8 84, i8 49, i8 52, i8 58, i8 49, i8 48, i8 58, i8 52, i8 48, i8 90, i8 0], align 1
 @.str1 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str2 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str3 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
@@ -1924,7 +1924,7 @@
 @.str1709 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str1710 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str1711 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
-@.str1712 = private unnamed_addr constant { i64, i64, [81 x i8] } { i64 1, i64 1, [81 x i8] c"driftc 0.31.8 | abi 10 | word 64 | git 94a9c44d | build_utc 2026-04-23T12:22:59Z\00" }
+@.str1712 = private unnamed_addr constant { i64, i64, [81 x i8] } { i64 1, i64 1, [81 x i8] c"driftc 0.31.8 | abi 10 | word 64 | git ea81c3ef | build_utc 2026-04-23T14:10:40Z\00" }
 @.str1713 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str1714 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
 @.str1715 = private unnamed_addr constant { i64, i64, [1 x i8] } { i64 1, i64 1, [1 x i8] c"\00" }
@@ -12943,8 +12943,8 @@ __bb_logic_rhs:
   %t11 = call i1 @"std.cli::_eq_byte"(ptr %s_1, i64 %t9, i8 %t10)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt6_3 = phi i1 [ %t7, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt6_3, label %__bb_logic_rhs1, label %__bb_logic_short1
+  %__logic_tmpt6_2 = phi i1 [ %t7, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt6_2, label %__bb_logic_rhs1, label %__bb_logic_short1
 __bb_logic_short1:
   %t14 = add i1 0, 0
   br label %__bb_logic_join1
@@ -12954,8 +12954,8 @@ __bb_logic_rhs1:
   %t18 = call i1 @"std.cli::_eq_byte"(ptr %s_1, i64 %t16, i8 %t17)
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt13_3 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
-  ret i1 %__logic_tmpt13_3
+  %__logic_tmpt13_1 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
+  ret i1 %__logic_tmpt13_1
 }
 define i1 @"std.cli::_starts_with_dash"(ptr %s_1) {
 __bb_entry:
@@ -12975,8 +12975,8 @@ __bb_logic_rhs:
   %t11 = call i1 @"std.cli::_eq_byte"(ptr %s_1, i64 %t9, i8 %t10)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt6_3 = phi i1 [ %t7, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt6_3
+  %__logic_tmpt6_2 = phi i1 [ %t7, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt6_2
 }
 define i64 @"std.cli::_find_byte"(ptr %s_1, i8 %want_1) {
 __bb_entry:
@@ -13111,7 +13111,7 @@ __bb_if_join:
   %__array_cap_arrt29_1 = insertvalue %DriftArrayHeader %zero_arr21, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt30_2 = phi i1 [ %__array_cap_grewt30_1, %__bb_if_join ], [ %__array_cap_grewt30_3, %__bb_if_join1 ]
+  %__array_cap_grewt30_2 = phi i1 [ %__array_cap_grewt30_1, %__bb_if_join ], [ %__array_cap_grewt30_4, %__bb_if_join1 ]
   %__array_cap_arrt29_2 = phi %DriftArrayHeader [ %__array_cap_arrt29_1, %__bb_if_join ], [ %__arc1, %__bb_if_join1 ]
   %i_2 = phi i64 [ %start_1, %__bb_if_join ], [ %t59, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -13271,17 +13271,17 @@ __bb_array_cap_ok:
   %t31 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt30_3 = phi i1 [ %t31, %__bb_array_cap_ok ], [ %t51, %__bb_array_copy_exit ]
-  %__array_cap_arrt29_3 = phi %DriftArrayHeader [ %t16, %__bb_array_cap_ok ], [ %arr_len58, %__bb_array_copy_exit ]
+  %__array_cap_grewt30_4 = phi i1 [ %t31, %__bb_array_cap_ok ], [ %t51, %__bb_array_copy_exit ]
+  %__array_cap_arrt29_4 = phi %DriftArrayHeader [ %t16, %__bb_array_cap_ok ], [ %arr_len58, %__bb_array_copy_exit ]
   %zero_arr70 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr71 = insertvalue %DriftArrayHeader %zero_arr70, i64 0, 1
   %zero_arr72 = insertvalue %DriftArrayHeader %zero_arr71, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr72, ptr null, 3
-  %data73 = extractvalue %DriftArrayHeader %__array_cap_arrt29_3, 3
+  %data73 = extractvalue %DriftArrayHeader %__array_cap_arrt29_4, 3
   %eltptr74 = getelementptr inbounds i8, ptr %data73, i64 %t21
   store i8 %t20, ptr %eltptr74
   %t54 = add i64 %t21, %t26
-  %arr_len75 = insertvalue %DriftArrayHeader %__array_cap_arrt29_3, i64 %t54, 0
+  %arr_len75 = insertvalue %DriftArrayHeader %__array_cap_arrt29_4, i64 %t54, 0
   %arr_gen76 = insertvalue %DriftArrayHeader %arr_len75, i64 %t25, 2
   store %DriftArrayHeader %arr_gen76, ptr %out__addr
   %t58 = add i64 0, 1
@@ -13495,8 +13495,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define i64 @"std.cli::_find_option_by_long"(ptr %option_longs, ptr %long_1) {
 __bb_entry:
@@ -13604,8 +13604,8 @@ __bb_entry:
 __bb_loop_header:
   %__logic_tmpt96_2 = phi i1 [ %__logic_tmpt96_1, %__bb_entry ], [ %__logic_tmpt96_3, %__bb_if_join ]
   %j_2 = phi i64 [ %j_1, %__bb_entry ], [ %j_4, %__bb_if_join ]
-  %__logic_tmpt42_2 = phi i1 [ %__logic_tmpt42_1, %__bb_entry ], [ %__logic_tmpt42_5, %__bb_if_join ]
-  %__logic_tmpt17_2 = phi i1 [ %__logic_tmpt17_1, %__bb_entry ], [ %__logic_tmpt17_5, %__bb_if_join ]
+  %__logic_tmpt42_2 = phi i1 [ %__logic_tmpt42_1, %__bb_entry ], [ %__logic_tmpt42_3, %__bb_if_join ]
+  %__logic_tmpt17_2 = phi i1 [ %__logic_tmpt17_1, %__bb_entry ], [ %__logic_tmpt17_4, %__bb_if_join ]
   %i_2 = phi i64 [ %t2, %__bb_entry ], [ %t123, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -13622,7 +13622,7 @@ __bb_loop_exit:
   %__logic_tmpt152_1 = add i1 0, 0
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %__logic_tmpt152_2 = phi i1 [ %__logic_tmpt152_1, %__bb_loop_exit ], [ %__logic_tmpt152_4, %__bb_if_join6 ]
+  %__logic_tmpt152_2 = phi i1 [ %__logic_tmpt152_1, %__bb_loop_exit ], [ %__logic_tmpt152_3, %__bb_if_join6 ]
   %k_2 = phi i64 [ %t124, %__bb_loop_exit ], [ %t171, %__bb_if_join6 ]
   br label %__bb_loop_body2
 __bb_loop_body2:
@@ -13669,8 +13669,8 @@ __bb_logic_rhs3:
   %t161 = icmp ne i64 %k_2, %t160
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt152_4 = phi i1 [ %t161, %__bb_logic_rhs3 ], [ %t153, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt152_4, label %__bb_if_then7, label %__bb_if_join7
+  %__logic_tmpt152_3 = phi i1 [ %t153, %__bb_logic_short3 ], [ %t161, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt152_3, label %__bb_if_then7, label %__bb_if_join7
 __bb_if_join7:
   %t170 = add i64 0, 1
   %t171 = add i64 %k_2, %t170
@@ -13763,8 +13763,8 @@ __bb_logic_short:
   %t18 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt17_5 = phi i1 [ %t18, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt17_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt17_4 = phi i1 [ %t18, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt17_4, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t35 = load ptr, ptr %p__addr
   %t36 = getelementptr inbounds %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %t35, i32 0, i32 4
@@ -13801,8 +13801,8 @@ __bb_logic_short1:
   %t43 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt42_5 = phi i1 [ %t51, %__bb_logic_rhs1 ], [ %t43, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt42_5, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt42_3 = phi i1 [ %t51, %__bb_logic_rhs1 ], [ %t43, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt42_3, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t60 = add i64 0, 1
   %t61 = add i64 %i_2, %t60
@@ -13893,7 +13893,7 @@ __bb_logic_rhs2:
   %t110 = call i1 @"std.cli::_string_eq_ref"(ptr %eltptr87, ptr %eltptr93)
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt96_4 = phi i1 [ %t97, %__bb_logic_short2 ], [ %t110, %__bb_logic_rhs2 ]
+  %__logic_tmpt96_4 = phi i1 [ %t110, %__bb_logic_rhs2 ], [ %t97, %__bb_logic_short2 ]
   br i1 %__logic_tmpt96_4, label %__bb_if_then5, label %__bb_if_join5
 __bb_if_join5:
   %t119 = add i64 0, 1
@@ -14184,17 +14184,17 @@ __bb_array_cap_ok:
   %t18 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt17_1 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
-  %__array_cap_arrt16_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
+  %__array_cap_grewt17_2 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
+  %__array_cap_arrt16_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_1, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_2, 3
   %eltptr27 = getelementptr inbounds %DriftString, ptr %data26, i64 %t8
   store %DriftString %t7, ptr %eltptr27
   %t41 = add i64 %t8, %t13
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_1, i64 %t41, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_2, i64 %t41, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t12, 2
   store %DriftArrayHeader %arr_gen29, ptr %t4
   %t45 = load ptr, ptr %self__addr
@@ -14275,17 +14275,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len36, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len36, %__bb_array_copy_exit1 ]
   %zero_arr50 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr51 = insertvalue %DriftArrayHeader %zero_arr50, i64 0, 1
   %zero_arr52 = insertvalue %DriftArrayHeader %zero_arr51, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr52, ptr null, 3
-  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr54 = getelementptr inbounds %DriftString, ptr %data53, i64 %t50
   store %DriftString %t49, ptr %eltptr54
   %t83 = add i64 %t50, %t55
-  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen56 = insertvalue %DriftArrayHeader %arr_len55, i64 %t54, 2
   store %DriftArrayHeader %arr_gen56, ptr %t46
   %t87 = load ptr, ptr %self__addr
@@ -14544,18 +14544,18 @@ __bb_array_cap_ok4:
   %t185 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt184_2 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt183_2 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len117, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt184_1 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt183_1 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len117, %__bb_array_copy_exit4 ]
   %zero_arr131 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr132 = insertvalue %DriftArrayHeader %zero_arr131, i64 0, 1
   %zero_arr133 = insertvalue %DriftArrayHeader %zero_arr132, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr133, ptr null, 3
-  %data134 = extractvalue %DriftArrayHeader %__array_cap_arrt183_2, 3
+  %data134 = extractvalue %DriftArrayHeader %__array_cap_arrt183_1, 3
   %eltptr135 = getelementptr inbounds i8, ptr %data134, i64 %t175
   %bool8136 = zext i1 %t174 to i8
   store i8 %bool8136, ptr %eltptr135
   %t208 = add i64 %t175, %t180
-  %arr_len137 = insertvalue %DriftArrayHeader %__array_cap_arrt183_2, i64 %t208, 0
+  %arr_len137 = insertvalue %DriftArrayHeader %__array_cap_arrt183_1, i64 %t208, 0
   %arr_gen138 = insertvalue %DriftArrayHeader %arr_len137, i64 %t179, 2
   store %DriftArrayHeader %arr_gen138, ptr %t172
   %t212 = load ptr, ptr %self__addr
@@ -14629,17 +14629,17 @@ __bb_array_cap_ok5:
   %t226 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt225_3 = phi i1 [ %t226, %__bb_array_cap_ok5 ], [ %t246, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt224_3 = phi %DriftArrayHeader [ %t214, %__bb_array_cap_ok5 ], [ %arr_len144, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt225_1 = phi i1 [ %t246, %__bb_array_copy_exit5 ], [ %t226, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt224_1 = phi %DriftArrayHeader [ %arr_len144, %__bb_array_copy_exit5 ], [ %t214, %__bb_array_cap_ok5 ]
   %zero_arr156 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr157 = insertvalue %DriftArrayHeader %zero_arr156, i64 0, 1
   %zero_arr158 = insertvalue %DriftArrayHeader %zero_arr157, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr158, ptr null, 3
-  %data159 = extractvalue %DriftArrayHeader %__array_cap_arrt224_3, 3
+  %data159 = extractvalue %DriftArrayHeader %__array_cap_arrt224_1, 3
   %eltptr160 = getelementptr inbounds i64, ptr %data159, i64 %t216
   store i64 %t215, ptr %eltptr160
   %t249 = add i64 %t216, %t221
-  %arr_len161 = insertvalue %DriftArrayHeader %__array_cap_arrt224_3, i64 %t249, 0
+  %arr_len161 = insertvalue %DriftArrayHeader %__array_cap_arrt224_1, i64 %t249, 0
   %arr_gen162 = insertvalue %DriftArrayHeader %arr_len161, i64 %t220, 2
   store %DriftArrayHeader %arr_gen162, ptr %t213
   %t252 = load ptr, ptr %self__addr
@@ -14753,17 +14753,17 @@ __bb_array_cap_ok:
   %t18 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt17_1 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
-  %__array_cap_arrt16_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
+  %__array_cap_grewt17_2 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
+  %__array_cap_arrt16_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_1, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_2, 3
   %eltptr27 = getelementptr inbounds %DriftString, ptr %data26, i64 %t8
   store %DriftString %t7, ptr %eltptr27
   %t41 = add i64 %t8, %t13
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_1, i64 %t41, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_2, i64 %t41, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t12, 2
   store %DriftArrayHeader %arr_gen29, ptr %t4
   %t45 = load ptr, ptr %self__addr
@@ -14844,17 +14844,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len36, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len36, %__bb_array_copy_exit1 ]
   %zero_arr50 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr51 = insertvalue %DriftArrayHeader %zero_arr50, i64 0, 1
   %zero_arr52 = insertvalue %DriftArrayHeader %zero_arr51, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr52, ptr null, 3
-  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr54 = getelementptr inbounds %DriftString, ptr %data53, i64 %t50
   store %DriftString %t49, ptr %eltptr54
   %t83 = add i64 %t50, %t55
-  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen56 = insertvalue %DriftArrayHeader %arr_len55, i64 %t54, 2
   store %DriftArrayHeader %arr_gen56, ptr %t46
   %t87 = load ptr, ptr %self__addr
@@ -15111,18 +15111,18 @@ __bb_array_cap_ok4:
   %t185 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt184_2 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt183_2 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len116, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt184_1 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt183_1 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len116, %__bb_array_copy_exit4 ]
   %zero_arr130 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr131 = insertvalue %DriftArrayHeader %zero_arr130, i64 0, 1
   %zero_arr132 = insertvalue %DriftArrayHeader %zero_arr131, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr132, ptr null, 3
-  %data133 = extractvalue %DriftArrayHeader %__array_cap_arrt183_2, 3
+  %data133 = extractvalue %DriftArrayHeader %__array_cap_arrt183_1, 3
   %eltptr134 = getelementptr inbounds i8, ptr %data133, i64 %t175
   %bool8135 = zext i1 %required_1 to i8
   store i8 %bool8135, ptr %eltptr134
   %t208 = add i64 %t175, %t180
-  %arr_len136 = insertvalue %DriftArrayHeader %__array_cap_arrt183_2, i64 %t208, 0
+  %arr_len136 = insertvalue %DriftArrayHeader %__array_cap_arrt183_1, i64 %t208, 0
   %arr_gen137 = insertvalue %DriftArrayHeader %arr_len136, i64 %t179, 2
   store %DriftArrayHeader %arr_gen137, ptr %t172
   %t212 = load ptr, ptr %self__addr
@@ -15196,17 +15196,17 @@ __bb_array_cap_ok5:
   %t226 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt225_3 = phi i1 [ %t226, %__bb_array_cap_ok5 ], [ %t246, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt224_3 = phi %DriftArrayHeader [ %t214, %__bb_array_cap_ok5 ], [ %arr_len143, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt225_1 = phi i1 [ %t246, %__bb_array_copy_exit5 ], [ %t226, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt224_1 = phi %DriftArrayHeader [ %arr_len143, %__bb_array_copy_exit5 ], [ %t214, %__bb_array_cap_ok5 ]
   %zero_arr155 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr156 = insertvalue %DriftArrayHeader %zero_arr155, i64 0, 1
   %zero_arr157 = insertvalue %DriftArrayHeader %zero_arr156, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr157, ptr null, 3
-  %data158 = extractvalue %DriftArrayHeader %__array_cap_arrt224_3, 3
+  %data158 = extractvalue %DriftArrayHeader %__array_cap_arrt224_1, 3
   %eltptr159 = getelementptr inbounds i64, ptr %data158, i64 %t216
   store i64 %t215, ptr %eltptr159
   %t249 = add i64 %t216, %t221
-  %arr_len160 = insertvalue %DriftArrayHeader %__array_cap_arrt224_3, i64 %t249, 0
+  %arr_len160 = insertvalue %DriftArrayHeader %__array_cap_arrt224_1, i64 %t249, 0
   %arr_gen161 = insertvalue %DriftArrayHeader %arr_len160, i64 %t220, 2
   store %DriftArrayHeader %arr_gen161, ptr %t213
   %t252 = load ptr, ptr %self__addr
@@ -15323,17 +15323,17 @@ __bb_array_cap_ok:
   %t18 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt17_1 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
-  %__array_cap_arrt16_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
+  %__array_cap_grewt17_2 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
+  %__array_cap_arrt16_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_1, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_2, 3
   %eltptr27 = getelementptr inbounds %DriftString, ptr %data26, i64 %t8
   store %DriftString %t7, ptr %eltptr27
   %t41 = add i64 %t8, %t13
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_1, i64 %t41, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_2, i64 %t41, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t12, 2
   store %DriftArrayHeader %arr_gen29, ptr %t4
   %t45 = load ptr, ptr %self__addr
@@ -15414,17 +15414,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len36, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len36, %__bb_array_copy_exit1 ]
   %zero_arr50 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr51 = insertvalue %DriftArrayHeader %zero_arr50, i64 0, 1
   %zero_arr52 = insertvalue %DriftArrayHeader %zero_arr51, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr52, ptr null, 3
-  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr54 = getelementptr inbounds %DriftString, ptr %data53, i64 %t50
   store %DriftString %t49, ptr %eltptr54
   %t83 = add i64 %t50, %t55
-  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen56 = insertvalue %DriftArrayHeader %arr_len55, i64 %t54, 2
   store %DriftArrayHeader %arr_gen56, ptr %t46
   %t87 = load ptr, ptr %self__addr
@@ -15681,18 +15681,18 @@ __bb_array_cap_ok4:
   %t185 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt184_2 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt183_2 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len116, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt184_1 = phi i1 [ %t185, %__bb_array_cap_ok4 ], [ %t205, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt183_1 = phi %DriftArrayHeader [ %t173, %__bb_array_cap_ok4 ], [ %arr_len116, %__bb_array_copy_exit4 ]
   %zero_arr130 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr131 = insertvalue %DriftArrayHeader %zero_arr130, i64 0, 1
   %zero_arr132 = insertvalue %DriftArrayHeader %zero_arr131, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr132, ptr null, 3
-  %data133 = extractvalue %DriftArrayHeader %__array_cap_arrt183_2, 3
+  %data133 = extractvalue %DriftArrayHeader %__array_cap_arrt183_1, 3
   %eltptr134 = getelementptr inbounds i8, ptr %data133, i64 %t175
   %bool8135 = zext i1 %required_1 to i8
   store i8 %bool8135, ptr %eltptr134
   %t208 = add i64 %t175, %t180
-  %arr_len136 = insertvalue %DriftArrayHeader %__array_cap_arrt183_2, i64 %t208, 0
+  %arr_len136 = insertvalue %DriftArrayHeader %__array_cap_arrt183_1, i64 %t208, 0
   %arr_gen137 = insertvalue %DriftArrayHeader %arr_len136, i64 %t179, 2
   store %DriftArrayHeader %arr_gen137, ptr %t172
   %t212 = load ptr, ptr %self__addr
@@ -15766,17 +15766,17 @@ __bb_array_cap_ok5:
   %t226 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt225_3 = phi i1 [ %t226, %__bb_array_cap_ok5 ], [ %t246, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt224_3 = phi %DriftArrayHeader [ %t214, %__bb_array_cap_ok5 ], [ %arr_len143, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt225_1 = phi i1 [ %t246, %__bb_array_copy_exit5 ], [ %t226, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt224_1 = phi %DriftArrayHeader [ %arr_len143, %__bb_array_copy_exit5 ], [ %t214, %__bb_array_cap_ok5 ]
   %zero_arr155 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr156 = insertvalue %DriftArrayHeader %zero_arr155, i64 0, 1
   %zero_arr157 = insertvalue %DriftArrayHeader %zero_arr156, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr157, ptr null, 3
-  %data158 = extractvalue %DriftArrayHeader %__array_cap_arrt224_3, 3
+  %data158 = extractvalue %DriftArrayHeader %__array_cap_arrt224_1, 3
   %eltptr159 = getelementptr inbounds i64, ptr %data158, i64 %t216
   store i64 %t215, ptr %eltptr159
   %t249 = add i64 %t216, %t221
-  %arr_len160 = insertvalue %DriftArrayHeader %__array_cap_arrt224_3, i64 %t249, 0
+  %arr_len160 = insertvalue %DriftArrayHeader %__array_cap_arrt224_1, i64 %t249, 0
   %arr_gen161 = insertvalue %DriftArrayHeader %arr_len160, i64 %t220, 2
   store %DriftArrayHeader %arr_gen161, ptr %t213
   %t252 = load ptr, ptr %self__addr
@@ -15889,17 +15889,17 @@ __bb_array_cap_ok:
   %t18 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt17_1 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
-  %__array_cap_arrt16_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
+  %__array_cap_grewt17_2 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
+  %__array_cap_arrt16_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len9, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_1, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt16_2, 3
   %eltptr27 = getelementptr inbounds %DriftString, ptr %data26, i64 %t8
   store %DriftString %t7, ptr %eltptr27
   %t41 = add i64 %t8, %t13
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_1, i64 %t41, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt16_2, i64 %t41, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t12, 2
   store %DriftArrayHeader %arr_gen29, ptr %t4
   %t45 = load ptr, ptr %self__addr
@@ -15980,17 +15980,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len36, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len36, %__bb_array_copy_exit1 ]
   %zero_arr50 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr51 = insertvalue %DriftArrayHeader %zero_arr50, i64 0, 1
   %zero_arr52 = insertvalue %DriftArrayHeader %zero_arr51, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr52, ptr null, 3
-  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data53 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr54 = getelementptr inbounds %DriftString, ptr %data53, i64 %t50
   store %DriftString %t49, ptr %eltptr54
   %t83 = add i64 %t50, %t55
-  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len55 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen56 = insertvalue %DriftArrayHeader %arr_len55, i64 %t54, 2
   store %DriftArrayHeader %arr_gen56, ptr %t46
   %t87 = load ptr, ptr %self__addr
@@ -16235,10 +16235,10 @@ __bb_if_join:
   br label %__bb_loop_header
 __bb_loop_header:
   %i_2 = phi i64 [ %t16, %__bb_if_join ], [ %t196, %__bb_if_join1 ]
-  %__idx_tmpt179_2 = phi %DriftString [ %__arc5, %__bb_if_join ], [ %__idx_tmpt179_6, %__bb_if_join1 ]
-  %__idx_tmpt152_2 = phi %DriftString [ %__arc4, %__bb_if_join ], [ %__idx_tmpt152_6, %__bb_if_join1 ]
-  %__idx_tmpt104_2 = phi %DriftString [ %__arc3, %__bb_if_join ], [ %__idx_tmpt104_3, %__bb_if_join1 ]
-  %__idx_tmpt77_2 = phi %DriftString [ %__arc2, %__bb_if_join ], [ %__idx_tmpt77_3, %__bb_if_join1 ]
+  %__idx_tmpt179_2 = phi %DriftString [ %__arc5, %__bb_if_join ], [ %__idx_tmpt179_3, %__bb_if_join1 ]
+  %__idx_tmpt152_2 = phi %DriftString [ %__arc4, %__bb_if_join ], [ %__idx_tmpt152_3, %__bb_if_join1 ]
+  %__idx_tmpt104_2 = phi %DriftString [ %__arc3, %__bb_if_join ], [ %__idx_tmpt104_6, %__bb_if_join1 ]
+  %__idx_tmpt77_2 = phi %DriftString [ %__arc2, %__bb_if_join ], [ %__idx_tmpt77_6, %__bb_if_join1 ]
   %out_5 = phi %DriftString [ %out_4, %__bb_if_join ], [ %out_11, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -16297,11 +16297,11 @@ __bb_loop_exit:
 __bb_loop_header1:
   %i_5 = phi i64 [ %t215, %__bb_loop_exit ], [ %t409, %__bb_if_join5 ]
   %__idx_tmpt365_2 = phi %DriftString [ %__arc11, %__bb_loop_exit ], [ %t374, %__bb_if_join5 ]
-  %__idx_tmpt338_2 = phi %DriftString [ %__arc10, %__bb_loop_exit ], [ %__idx_tmpt338_3, %__bb_if_join5 ]
+  %__idx_tmpt338_2 = phi %DriftString [ %__arc10, %__bb_loop_exit ], [ %__idx_tmpt338_6, %__bb_if_join5 ]
   %__idx_tmpt290_2 = phi %DriftString [ %__arc9, %__bb_loop_exit ], [ %t299, %__bb_if_join5 ]
-  %__idx_tmpt260_2 = phi %DriftString [ %__arc8, %__bb_loop_exit ], [ %__idx_tmpt260_3, %__bb_if_join5 ]
+  %__idx_tmpt260_2 = phi %DriftString [ %__arc8, %__bb_loop_exit ], [ %__idx_tmpt260_6, %__bb_if_join5 ]
   %__idx_tmpt232_2 = phi %DriftString [ %__arc7, %__bb_loop_exit ], [ %t241, %__bb_if_join5 ]
-  %line_2 = phi %DriftString [ %__arc6, %__bb_loop_exit ], [ %line_13, %__bb_if_join5 ]
+  %line_2 = phi %DriftString [ %__arc6, %__bb_loop_exit ], [ %line_16, %__bb_if_join5 ]
   %out_25 = phi %DriftString [ %t214, %__bb_loop_exit ], [ %t406, %__bb_if_join5 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
@@ -16431,12 +16431,12 @@ __bb_idx_join8:
   call void @drift_string_release(%DriftString %t222)
   br label %__bb_if_join6
 __bb_if_join6:
-  %__idx_tmpt260_3 = phi %DriftString [ %__idx_tmpt260_2, %__bb_if_else5 ], [ %str_retain63, %__bb_idx_join8 ]
-  %line_5 = phi %DriftString [ %t277, %__bb_if_else5 ], [ %t274, %__bb_idx_join8 ]
+  %__idx_tmpt260_6 = phi %DriftString [ %str_retain63, %__bb_idx_join8 ], [ %__idx_tmpt260_2, %__bb_if_else5 ]
+  %line_8 = phi %DriftString [ %t274, %__bb_idx_join8 ], [ %t277, %__bb_if_else5 ]
   %strptr68 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str154, i32 0, i32 2, i32 0
   %str069 = insertvalue %DriftString zeroinitializer, i64 2, 0
   %t279 = insertvalue %DriftString %str069, ptr %strptr68, 1
-  %t280 = call %DriftString @drift_string_concat(%DriftString %line_5, %DriftString %t279)
+  %t280 = call %DriftString @drift_string_concat(%DriftString %line_8, %DriftString %t279)
   call void @drift_string_release(%DriftString %t279)
   %t282 = load %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %self_1
   %t283 = extractvalue %Struct_std_2Ecli_ArgParser_06bccd975b777fba %t282, 3
@@ -16463,7 +16463,7 @@ __bb_idx_join9:
   call void @drift_string_release(%DriftString %t301)
   %zero_str75 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc29 = insertvalue %DriftString %zero_str75, ptr null, 1
-  call void @drift_string_release(%DriftString %line_5)
+  call void @drift_string_release(%DriftString %line_8)
   %t304 = load %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %self_1
   %t305 = extractvalue %Struct_std_2Ecli_ArgParser_06bccd975b777fba %t304, 8
   %t307 = extractvalue %DriftArrayHeader %t305, 0
@@ -16522,12 +16522,12 @@ __bb_idx_join11:
   call void @drift_string_release(%DriftString %t302)
   br label %__bb_if_join7
 __bb_if_join7:
-  %__idx_tmpt338_3 = phi %DriftString [ %__idx_tmpt338_2, %__bb_idx_join10 ], [ %str_retain84, %__bb_idx_join11 ]
-  %line_8 = phi %DriftString [ %t302, %__bb_idx_join10 ], [ %t352, %__bb_idx_join11 ]
+  %__idx_tmpt338_6 = phi %DriftString [ %__idx_tmpt338_2, %__bb_idx_join10 ], [ %str_retain84, %__bb_idx_join11 ]
+  %line_13 = phi %DriftString [ %t302, %__bb_idx_join10 ], [ %t352, %__bb_idx_join11 ]
   %strptr89 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str157, i32 0, i32 2, i32 0
   %str090 = insertvalue %DriftString zeroinitializer, i64 2, 0
   %t354 = insertvalue %DriftString %str090, ptr %strptr89, 1
-  %t355 = call %DriftString @drift_string_concat(%DriftString %line_8, %DriftString %t354)
+  %t355 = call %DriftString @drift_string_concat(%DriftString %line_13, %DriftString %t354)
   call void @drift_string_release(%DriftString %t354)
   %t357 = load %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %self_1
   %t358 = extractvalue %Struct_std_2Ecli_ArgParser_06bccd975b777fba %t357, 6
@@ -16554,7 +16554,7 @@ __bb_idx_join12:
   call void @drift_string_release(%DriftString %t376)
   %zero_str96 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc17 = insertvalue %DriftString %zero_str96, ptr null, 1
-  call void @drift_string_release(%DriftString %line_8)
+  call void @drift_string_release(%DriftString %line_13)
   %t379 = load %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %self_1
   %t380 = extractvalue %Struct_std_2Ecli_ArgParser_06bccd975b777fba %t379, 7
   %t382 = extractvalue %DriftArrayHeader %t380, 0
@@ -16583,8 +16583,8 @@ __bb_if_then8:
   call void @drift_string_release(%DriftString %t377)
   br label %__bb_if_join8
 __bb_if_join8:
-  %line_13 = phi %DriftString [ %t377, %__bb_idx_join13 ], [ %t401, %__bb_if_then8 ]
-  %t404 = call %DriftString @drift_string_concat(%DriftString %out_25, %DriftString %line_13)
+  %line_16 = phi %DriftString [ %t377, %__bb_idx_join13 ], [ %t401, %__bb_if_then8 ]
+  %t404 = call %DriftString @drift_string_concat(%DriftString %out_25, %DriftString %line_16)
   %strptr104 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str159, i32 0, i32 2, i32 0
   %str0105 = insertvalue %DriftString zeroinitializer, i64 1, 0
   %t405 = insertvalue %DriftString %str0105, ptr %strptr104, 1
@@ -16930,9 +16930,9 @@ __bb_idx_join5:
   call void @drift_string_release(%DriftString %out_5)
   br label %__bb_if_join4
 __bb_if_join4:
-  %__idx_tmpt179_3 = phi %DriftString [ %__idx_tmpt179_2, %__bb_idx_join5 ], [ %str_retain190, %__bb_idx_join6 ]
-  %__idx_tmpt152_5 = phi %DriftString [ %str_retain210, %__bb_idx_join5 ], [ %__idx_tmpt152_2, %__bb_idx_join6 ]
-  %out_8 = phi %DriftString [ %t166, %__bb_idx_join5 ], [ %t193, %__bb_idx_join6 ]
+  %__idx_tmpt179_4 = phi %DriftString [ %__idx_tmpt179_2, %__bb_idx_join5 ], [ %str_retain190, %__bb_idx_join6 ]
+  %__idx_tmpt152_6 = phi %DriftString [ %str_retain210, %__bb_idx_join5 ], [ %__idx_tmpt152_2, %__bb_idx_join6 ]
+  %out_14 = phi %DriftString [ %t166, %__bb_idx_join5 ], [ %t193, %__bb_idx_join6 ]
   br label %__bb_if_join2
 __bb_idx_err5:
   %t153 = add i64 0, 1726084857549659354
@@ -17112,16 +17112,16 @@ __bb_idx_join2:
   call void @drift_string_release(%DriftString %out_5)
   br label %__bb_if_join3
 __bb_if_join3:
-  %__idx_tmpt104_4 = phi %DriftString [ %str_retain244, %__bb_idx_join3 ], [ %__idx_tmpt104_2, %__bb_idx_join2 ]
-  %__idx_tmpt77_4 = phi %DriftString [ %__idx_tmpt77_2, %__bb_idx_join3 ], [ %str_retain264, %__bb_idx_join2 ]
-  %out_12 = phi %DriftString [ %t118, %__bb_idx_join3 ], [ %t91, %__bb_idx_join2 ]
+  %__idx_tmpt104_3 = phi %DriftString [ %__idx_tmpt104_2, %__bb_idx_join2 ], [ %str_retain244, %__bb_idx_join3 ]
+  %__idx_tmpt77_5 = phi %DriftString [ %str_retain264, %__bb_idx_join2 ], [ %__idx_tmpt77_2, %__bb_idx_join3 ]
+  %out_8 = phi %DriftString [ %t91, %__bb_idx_join2 ], [ %t118, %__bb_idx_join3 ]
   br label %__bb_if_join2
 __bb_if_join2:
-  %__idx_tmpt179_6 = phi %DriftString [ %__idx_tmpt179_3, %__bb_if_join4 ], [ %__idx_tmpt179_2, %__bb_if_join3 ]
-  %__idx_tmpt152_6 = phi %DriftString [ %__idx_tmpt152_5, %__bb_if_join4 ], [ %__idx_tmpt152_2, %__bb_if_join3 ]
-  %__idx_tmpt104_3 = phi %DriftString [ %__idx_tmpt104_2, %__bb_if_join4 ], [ %__idx_tmpt104_4, %__bb_if_join3 ]
-  %__idx_tmpt77_3 = phi %DriftString [ %__idx_tmpt77_2, %__bb_if_join4 ], [ %__idx_tmpt77_4, %__bb_if_join3 ]
-  %out_11 = phi %DriftString [ %out_8, %__bb_if_join4 ], [ %out_12, %__bb_if_join3 ]
+  %__idx_tmpt179_3 = phi %DriftString [ %__idx_tmpt179_2, %__bb_if_join3 ], [ %__idx_tmpt179_4, %__bb_if_join4 ]
+  %__idx_tmpt152_3 = phi %DriftString [ %__idx_tmpt152_2, %__bb_if_join3 ], [ %__idx_tmpt152_6, %__bb_if_join4 ]
+  %__idx_tmpt104_6 = phi %DriftString [ %__idx_tmpt104_3, %__bb_if_join3 ], [ %__idx_tmpt104_2, %__bb_if_join4 ]
+  %__idx_tmpt77_6 = phi %DriftString [ %__idx_tmpt77_5, %__bb_if_join3 ], [ %__idx_tmpt77_2, %__bb_if_join4 ]
+  %out_11 = phi %DriftString [ %out_8, %__bb_if_join3 ], [ %out_14, %__bb_if_join4 ]
   %t195 = add i64 0, 1
   %t196 = add i64 %i_2, %t195
   br label %__bb_if_join1
@@ -17526,36 +17526,36 @@ __bb_match_join:
   %__logic_tmpt58_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt780_2 = phi i1 [ %__array_cap_grewt780_1, %__bb_match_join ], [ %__array_cap_grewt780_2, %__bb_if_then1 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt780_3, %__bb_if_join ], [ %__array_cap_grewt780_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join22 ]
-  %__array_cap_arrt779_2 = phi %DriftArrayHeader [ %__array_cap_arrt779_1, %__bb_match_join ], [ %__array_cap_arrt779_2, %__bb_if_then1 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join23 ], [ %__arc9, %__bb_if_join ], [ %__array_cap_arrt779_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join22 ]
-  %__array_cap_grewt735_2 = phi i1 [ %__array_cap_grewt735_1, %__bb_match_join ], [ %__array_cap_grewt735_2, %__bb_if_then1 ], [ %__array_cap_grewt735_5, %__bb_array_cap_join25 ], [ %__array_cap_grewt735_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt735_2, %__bb_if_join ], [ %__array_cap_grewt735_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt735_2, %__bb_array_cap_join22 ]
-  %__array_cap_arrt734_2 = phi %DriftArrayHeader [ %__array_cap_arrt734_1, %__bb_match_join ], [ %__array_cap_arrt734_2, %__bb_if_then1 ], [ %__arc8, %__bb_array_cap_join25 ], [ %__array_cap_arrt734_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt734_2, %__bb_if_join ], [ %__array_cap_arrt734_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt734_2, %__bb_array_cap_join22 ]
-  %__array_cap_grewt695_2 = phi i1 [ %__array_cap_grewt695_1, %__bb_match_join ], [ %__array_cap_grewt695_2, %__bb_if_then1 ], [ %__array_cap_grewt695_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt695_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt695_2, %__bb_if_join ], [ %__array_cap_grewt695_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt695_2, %__bb_array_cap_join22 ]
-  %__array_cap_arrt694_2 = phi %DriftArrayHeader [ %__array_cap_arrt694_1, %__bb_match_join ], [ %__array_cap_arrt694_2, %__bb_if_then1 ], [ %__arc6, %__bb_array_cap_join25 ], [ %__array_cap_arrt694_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt694_2, %__bb_if_join ], [ %__array_cap_arrt694_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt694_2, %__bb_array_cap_join22 ]
-  %__array_cap_grewt558_2 = phi i1 [ %__array_cap_grewt558_1, %__bb_match_join ], [ %__array_cap_grewt558_2, %__bb_if_then1 ], [ %__array_cap_grewt558_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt558_3, %__bb_array_cap_join23 ], [ %__array_cap_grewt558_2, %__bb_if_join ], [ %__array_cap_grewt558_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt558_2, %__bb_array_cap_join22 ]
-  %__array_cap_arrt557_2 = phi %DriftArrayHeader [ %__array_cap_arrt557_1, %__bb_match_join ], [ %__array_cap_arrt557_2, %__bb_if_then1 ], [ %__array_cap_arrt557_2, %__bb_array_cap_join25 ], [ %__arc5, %__bb_array_cap_join23 ], [ %__array_cap_arrt557_2, %__bb_if_join ], [ %__array_cap_arrt557_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt557_2, %__bb_array_cap_join22 ]
-  %__logic_tmpt469_2 = phi i1 [ %__logic_tmpt469_1, %__bb_match_join ], [ %__logic_tmpt469_2, %__bb_if_then1 ], [ %__logic_tmpt469_3, %__bb_array_cap_join25 ], [ %__logic_tmpt469_3, %__bb_array_cap_join23 ], [ %__logic_tmpt469_3, %__bb_if_join ], [ %__logic_tmpt469_2, %__bb_array_cap_join2 ], [ %__logic_tmpt469_2, %__bb_array_cap_join22 ]
-  %__logic_tmpt464_2 = phi i1 [ %__logic_tmpt464_1, %__bb_match_join ], [ %__logic_tmpt464_2, %__bb_if_then1 ], [ %__logic_tmpt464_5, %__bb_array_cap_join25 ], [ %__logic_tmpt464_5, %__bb_array_cap_join23 ], [ %__logic_tmpt464_5, %__bb_if_join ], [ %__logic_tmpt464_2, %__bb_array_cap_join2 ], [ %__logic_tmpt464_2, %__bb_array_cap_join22 ]
-  %__array_cap_grewt432_2 = phi i1 [ %__array_cap_grewt432_1, %__bb_match_join ], [ %__array_cap_grewt432_2, %__bb_if_then1 ], [ %__array_cap_grewt432_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt432_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt432_2, %__bb_if_join ], [ %__array_cap_grewt432_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt432_4, %__bb_array_cap_join22 ]
-  %__array_cap_arrt431_2 = phi %DriftArrayHeader [ %__array_cap_arrt431_1, %__bb_match_join ], [ %__array_cap_arrt431_2, %__bb_if_then1 ], [ %__array_cap_arrt431_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt431_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt431_2, %__bb_if_join ], [ %__array_cap_arrt431_2, %__bb_array_cap_join2 ], [ %__arc4, %__bb_array_cap_join22 ]
-  %__array_cap_grewt392_2 = phi i1 [ %__array_cap_grewt392_1, %__bb_match_join ], [ %__array_cap_grewt392_2, %__bb_if_then1 ], [ %__array_cap_grewt392_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt392_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt392_2, %__bb_if_join ], [ %__array_cap_grewt392_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt392_5, %__bb_array_cap_join22 ]
-  %__array_cap_arrt391_2 = phi %DriftArrayHeader [ %__array_cap_arrt391_1, %__bb_match_join ], [ %__array_cap_arrt391_2, %__bb_if_then1 ], [ %__array_cap_arrt391_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt391_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt391_2, %__bb_if_join ], [ %__array_cap_arrt391_2, %__bb_array_cap_join2 ], [ %__arc2, %__bb_array_cap_join22 ]
-  %__array_cap_grewt251_2 = phi i1 [ %__array_cap_grewt251_1, %__bb_match_join ], [ %__array_cap_grewt251_2, %__bb_if_then1 ], [ %__array_cap_grewt251_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt251_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt251_2, %__bb_if_join ], [ %__array_cap_grewt251_3, %__bb_array_cap_join2 ], [ %__array_cap_grewt251_2, %__bb_array_cap_join22 ]
-  %__array_cap_arrt250_2 = phi %DriftArrayHeader [ %__array_cap_arrt250_1, %__bb_match_join ], [ %__array_cap_arrt250_2, %__bb_if_then1 ], [ %__array_cap_arrt250_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt250_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt250_2, %__bb_if_join ], [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt250_2, %__bb_array_cap_join22 ]
-  %has_inline_2 = phi i1 [ %has_inline_1, %__bb_match_join ], [ %has_inline_2, %__bb_if_then1 ], [ %has_inline_2, %__bb_array_cap_join25 ], [ %has_inline_2, %__bb_array_cap_join23 ], [ %has_inline_2, %__bb_if_join ], [ %has_inline_4, %__bb_array_cap_join2 ], [ %has_inline_4, %__bb_array_cap_join22 ]
-  %__logic_tmpt143_2 = phi i1 [ %__logic_tmpt143_1, %__bb_match_join ], [ %__logic_tmpt143_2, %__bb_if_then1 ], [ %__logic_tmpt143_5, %__bb_array_cap_join25 ], [ %__logic_tmpt143_5, %__bb_array_cap_join23 ], [ %__logic_tmpt143_5, %__bb_if_join ], [ %__logic_tmpt143_5, %__bb_array_cap_join2 ], [ %__logic_tmpt143_5, %__bb_array_cap_join22 ]
-  %__logic_tmpt138_2 = phi i1 [ %__logic_tmpt138_1, %__bb_match_join ], [ %__logic_tmpt138_2, %__bb_if_then1 ], [ %__logic_tmpt138_3, %__bb_array_cap_join25 ], [ %__logic_tmpt138_3, %__bb_array_cap_join23 ], [ %__logic_tmpt138_3, %__bb_if_join ], [ %__logic_tmpt138_3, %__bb_array_cap_join2 ], [ %__logic_tmpt138_3, %__bb_array_cap_join22 ]
-  %__logic_tmpt121_2 = phi i1 [ %__logic_tmpt121_1, %__bb_match_join ], [ %__logic_tmpt121_2, %__bb_if_then1 ], [ %__logic_tmpt121_3, %__bb_array_cap_join25 ], [ %__logic_tmpt121_3, %__bb_array_cap_join23 ], [ %__logic_tmpt121_3, %__bb_if_join ], [ %__logic_tmpt121_3, %__bb_array_cap_join2 ], [ %__logic_tmpt121_3, %__bb_array_cap_join22 ]
-  %__logic_tmpt104_2 = phi i1 [ %__logic_tmpt104_1, %__bb_match_join ], [ %__logic_tmpt104_2, %__bb_if_then1 ], [ %__logic_tmpt104_4, %__bb_array_cap_join25 ], [ %__logic_tmpt104_4, %__bb_array_cap_join23 ], [ %__logic_tmpt104_4, %__bb_if_join ], [ %__logic_tmpt104_4, %__bb_array_cap_join2 ], [ %__logic_tmpt104_4, %__bb_array_cap_join22 ]
-  %__logic_tmpt87_2 = phi i1 [ %__logic_tmpt87_1, %__bb_match_join ], [ %__logic_tmpt87_2, %__bb_if_then1 ], [ %__logic_tmpt87_3, %__bb_array_cap_join25 ], [ %__logic_tmpt87_3, %__bb_array_cap_join23 ], [ %__logic_tmpt87_3, %__bb_if_join ], [ %__logic_tmpt87_3, %__bb_array_cap_join2 ], [ %__logic_tmpt87_3, %__bb_array_cap_join22 ]
-  %__logic_tmpt70_2 = phi i1 [ %__logic_tmpt70_1, %__bb_match_join ], [ %__logic_tmpt70_2, %__bb_if_then1 ], [ %__logic_tmpt70_5, %__bb_array_cap_join25 ], [ %__logic_tmpt70_5, %__bb_array_cap_join23 ], [ %__logic_tmpt70_5, %__bb_if_join ], [ %__logic_tmpt70_5, %__bb_array_cap_join2 ], [ %__logic_tmpt70_5, %__bb_array_cap_join22 ]
-  %__logic_tmpt58_2 = phi i1 [ %__logic_tmpt58_1, %__bb_match_join ], [ %__logic_tmpt58_5, %__bb_if_then1 ], [ %__logic_tmpt58_5, %__bb_array_cap_join25 ], [ %__logic_tmpt58_5, %__bb_array_cap_join23 ], [ %__logic_tmpt58_5, %__bb_if_join ], [ %__logic_tmpt58_5, %__bb_array_cap_join2 ], [ %__logic_tmpt58_5, %__bb_array_cap_join22 ]
-  %positional_mode_2 = phi i1 [ %t45, %__bb_match_join ], [ %t64, %__bb_if_then1 ], [ %positional_mode_2, %__bb_array_cap_join25 ], [ %positional_mode_2, %__bb_array_cap_join23 ], [ %positional_mode_2, %__bb_if_join ], [ %positional_mode_2, %__bb_array_cap_join2 ], [ %positional_mode_2, %__bb_array_cap_join22 ]
-  %i_2 = phi i64 [ %t44, %__bb_match_join ], [ %t67, %__bb_if_then1 ], [ %t764, %__bb_array_cap_join25 ], [ %t587, %__bb_array_cap_join23 ], [ %t809, %__bb_if_join ], [ %t280, %__bb_array_cap_join2 ], [ %t461, %__bb_array_cap_join22 ]
-  %pos_2 = phi %DriftString [ %__arc15, %__bb_match_join ], [ %pos_2, %__bb_if_then1 ], [ %pos_2, %__bb_array_cap_join25 ], [ %pos_2, %__bb_array_cap_join23 ], [ %__arc29, %__bb_if_join ], [ %pos_2, %__bb_array_cap_join2 ], [ %pos_2, %__bb_array_cap_join22 ]
-  %value__b101_2 = phi %DriftString [ %__arc14, %__bb_match_join ], [ %value__b101_2, %__bb_if_then1 ], [ %__arc7, %__bb_array_cap_join25 ], [ %value__b101_2, %__bb_array_cap_join23 ], [ %value__b101_2, %__bb_if_join ], [ %value__b101_2, %__bb_array_cap_join2 ], [ %value__b101_2, %__bb_array_cap_join22 ]
-  %value_2 = phi %DriftString [ %__arc12, %__bb_match_join ], [ %value_2, %__bb_if_then1 ], [ %value_2, %__bb_array_cap_join25 ], [ %value_2, %__bb_array_cap_join23 ], [ %value_2, %__bb_if_join ], [ %value_2, %__bb_array_cap_join2 ], [ %__arc3, %__bb_array_cap_join22 ]
-  %inline_value_2 = phi %DriftString [ %__arc11, %__bb_match_join ], [ %inline_value_2, %__bb_if_then1 ], [ %inline_value_2, %__bb_array_cap_join25 ], [ %inline_value_2, %__bb_array_cap_join23 ], [ %inline_value_2, %__bb_if_join ], [ %inline_value_13, %__bb_array_cap_join2 ], [ %inline_value_19, %__bb_array_cap_join22 ]
+  %__array_cap_grewt780_2 = phi i1 [ %__array_cap_grewt780_1, %__bb_match_join ], [ %__array_cap_grewt780_2, %__bb_if_then1 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt780_5, %__bb_if_join ], [ %__array_cap_grewt780_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt780_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt779_2 = phi %DriftArrayHeader [ %__array_cap_arrt779_1, %__bb_match_join ], [ %__array_cap_arrt779_2, %__bb_if_then1 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join22 ], [ %__arc9, %__bb_if_join ], [ %__array_cap_arrt779_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt779_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt735_2 = phi i1 [ %__array_cap_grewt735_1, %__bb_match_join ], [ %__array_cap_grewt735_2, %__bb_if_then1 ], [ %__array_cap_grewt735_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt735_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt735_2, %__bb_if_join ], [ %__array_cap_grewt735_3, %__bb_array_cap_join25 ], [ %__array_cap_grewt735_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt734_2 = phi %DriftArrayHeader [ %__array_cap_arrt734_1, %__bb_match_join ], [ %__array_cap_arrt734_2, %__bb_if_then1 ], [ %__array_cap_arrt734_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt734_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt734_2, %__bb_if_join ], [ %__arc8, %__bb_array_cap_join25 ], [ %__array_cap_arrt734_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt695_2 = phi i1 [ %__array_cap_grewt695_1, %__bb_match_join ], [ %__array_cap_grewt695_2, %__bb_if_then1 ], [ %__array_cap_grewt695_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt695_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt695_2, %__bb_if_join ], [ %__array_cap_grewt695_3, %__bb_array_cap_join25 ], [ %__array_cap_grewt695_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt694_2 = phi %DriftArrayHeader [ %__array_cap_arrt694_1, %__bb_match_join ], [ %__array_cap_arrt694_2, %__bb_if_then1 ], [ %__array_cap_arrt694_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt694_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt694_2, %__bb_if_join ], [ %__arc6, %__bb_array_cap_join25 ], [ %__array_cap_arrt694_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt558_2 = phi i1 [ %__array_cap_grewt558_1, %__bb_match_join ], [ %__array_cap_grewt558_2, %__bb_if_then1 ], [ %__array_cap_grewt558_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt558_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt558_2, %__bb_if_join ], [ %__array_cap_grewt558_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt558_3, %__bb_array_cap_join23 ]
+  %__array_cap_arrt557_2 = phi %DriftArrayHeader [ %__array_cap_arrt557_1, %__bb_match_join ], [ %__array_cap_arrt557_2, %__bb_if_then1 ], [ %__array_cap_arrt557_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt557_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt557_2, %__bb_if_join ], [ %__array_cap_arrt557_2, %__bb_array_cap_join25 ], [ %__arc5, %__bb_array_cap_join23 ]
+  %__logic_tmpt469_2 = phi i1 [ %__logic_tmpt469_1, %__bb_match_join ], [ %__logic_tmpt469_2, %__bb_if_then1 ], [ %__logic_tmpt469_2, %__bb_array_cap_join2 ], [ %__logic_tmpt469_2, %__bb_array_cap_join22 ], [ %__logic_tmpt469_4, %__bb_if_join ], [ %__logic_tmpt469_4, %__bb_array_cap_join25 ], [ %__logic_tmpt469_4, %__bb_array_cap_join23 ]
+  %__logic_tmpt464_2 = phi i1 [ %__logic_tmpt464_1, %__bb_match_join ], [ %__logic_tmpt464_2, %__bb_if_then1 ], [ %__logic_tmpt464_2, %__bb_array_cap_join2 ], [ %__logic_tmpt464_2, %__bb_array_cap_join22 ], [ %__logic_tmpt464_5, %__bb_if_join ], [ %__logic_tmpt464_5, %__bb_array_cap_join25 ], [ %__logic_tmpt464_5, %__bb_array_cap_join23 ]
+  %__array_cap_grewt432_2 = phi i1 [ %__array_cap_grewt432_1, %__bb_match_join ], [ %__array_cap_grewt432_2, %__bb_if_then1 ], [ %__array_cap_grewt432_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt432_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt432_2, %__bb_if_join ], [ %__array_cap_grewt432_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt432_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt431_2 = phi %DriftArrayHeader [ %__array_cap_arrt431_1, %__bb_match_join ], [ %__array_cap_arrt431_2, %__bb_if_then1 ], [ %__array_cap_arrt431_2, %__bb_array_cap_join2 ], [ %__arc4, %__bb_array_cap_join22 ], [ %__array_cap_arrt431_2, %__bb_if_join ], [ %__array_cap_arrt431_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt431_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt392_2 = phi i1 [ %__array_cap_grewt392_1, %__bb_match_join ], [ %__array_cap_grewt392_2, %__bb_if_then1 ], [ %__array_cap_grewt392_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt392_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt392_2, %__bb_if_join ], [ %__array_cap_grewt392_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt392_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt391_2 = phi %DriftArrayHeader [ %__array_cap_arrt391_1, %__bb_match_join ], [ %__array_cap_arrt391_2, %__bb_if_then1 ], [ %__array_cap_arrt391_2, %__bb_array_cap_join2 ], [ %__arc2, %__bb_array_cap_join22 ], [ %__array_cap_arrt391_2, %__bb_if_join ], [ %__array_cap_arrt391_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt391_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt251_2 = phi i1 [ %__array_cap_grewt251_1, %__bb_match_join ], [ %__array_cap_grewt251_2, %__bb_if_then1 ], [ %__array_cap_grewt251_4, %__bb_array_cap_join2 ], [ %__array_cap_grewt251_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt251_2, %__bb_if_join ], [ %__array_cap_grewt251_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt251_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt250_2 = phi %DriftArrayHeader [ %__array_cap_arrt250_1, %__bb_match_join ], [ %__array_cap_arrt250_2, %__bb_if_then1 ], [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt250_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt250_2, %__bb_if_join ], [ %__array_cap_arrt250_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt250_2, %__bb_array_cap_join23 ]
+  %has_inline_2 = phi i1 [ %has_inline_1, %__bb_match_join ], [ %has_inline_2, %__bb_if_then1 ], [ %has_inline_5, %__bb_array_cap_join2 ], [ %has_inline_5, %__bb_array_cap_join22 ], [ %has_inline_2, %__bb_if_join ], [ %has_inline_2, %__bb_array_cap_join25 ], [ %has_inline_2, %__bb_array_cap_join23 ]
+  %__logic_tmpt143_2 = phi i1 [ %__logic_tmpt143_1, %__bb_match_join ], [ %__logic_tmpt143_2, %__bb_if_then1 ], [ %__logic_tmpt143_4, %__bb_array_cap_join2 ], [ %__logic_tmpt143_4, %__bb_array_cap_join22 ], [ %__logic_tmpt143_4, %__bb_if_join ], [ %__logic_tmpt143_4, %__bb_array_cap_join25 ], [ %__logic_tmpt143_4, %__bb_array_cap_join23 ]
+  %__logic_tmpt138_2 = phi i1 [ %__logic_tmpt138_1, %__bb_match_join ], [ %__logic_tmpt138_2, %__bb_if_then1 ], [ %__logic_tmpt138_4, %__bb_array_cap_join2 ], [ %__logic_tmpt138_4, %__bb_array_cap_join22 ], [ %__logic_tmpt138_4, %__bb_if_join ], [ %__logic_tmpt138_4, %__bb_array_cap_join25 ], [ %__logic_tmpt138_4, %__bb_array_cap_join23 ]
+  %__logic_tmpt121_2 = phi i1 [ %__logic_tmpt121_1, %__bb_match_join ], [ %__logic_tmpt121_2, %__bb_if_then1 ], [ %__logic_tmpt121_3, %__bb_array_cap_join2 ], [ %__logic_tmpt121_3, %__bb_array_cap_join22 ], [ %__logic_tmpt121_3, %__bb_if_join ], [ %__logic_tmpt121_3, %__bb_array_cap_join25 ], [ %__logic_tmpt121_3, %__bb_array_cap_join23 ]
+  %__logic_tmpt104_2 = phi i1 [ %__logic_tmpt104_1, %__bb_match_join ], [ %__logic_tmpt104_2, %__bb_if_then1 ], [ %__logic_tmpt104_3, %__bb_array_cap_join2 ], [ %__logic_tmpt104_3, %__bb_array_cap_join22 ], [ %__logic_tmpt104_3, %__bb_if_join ], [ %__logic_tmpt104_3, %__bb_array_cap_join25 ], [ %__logic_tmpt104_3, %__bb_array_cap_join23 ]
+  %__logic_tmpt87_2 = phi i1 [ %__logic_tmpt87_1, %__bb_match_join ], [ %__logic_tmpt87_2, %__bb_if_then1 ], [ %__logic_tmpt87_3, %__bb_array_cap_join2 ], [ %__logic_tmpt87_3, %__bb_array_cap_join22 ], [ %__logic_tmpt87_3, %__bb_if_join ], [ %__logic_tmpt87_3, %__bb_array_cap_join25 ], [ %__logic_tmpt87_3, %__bb_array_cap_join23 ]
+  %__logic_tmpt70_2 = phi i1 [ %__logic_tmpt70_1, %__bb_match_join ], [ %__logic_tmpt70_2, %__bb_if_then1 ], [ %__logic_tmpt70_3, %__bb_array_cap_join2 ], [ %__logic_tmpt70_3, %__bb_array_cap_join22 ], [ %__logic_tmpt70_3, %__bb_if_join ], [ %__logic_tmpt70_3, %__bb_array_cap_join25 ], [ %__logic_tmpt70_3, %__bb_array_cap_join23 ]
+  %__logic_tmpt58_2 = phi i1 [ %__logic_tmpt58_1, %__bb_match_join ], [ %__logic_tmpt58_4, %__bb_if_then1 ], [ %__logic_tmpt58_4, %__bb_array_cap_join2 ], [ %__logic_tmpt58_4, %__bb_array_cap_join22 ], [ %__logic_tmpt58_4, %__bb_if_join ], [ %__logic_tmpt58_4, %__bb_array_cap_join25 ], [ %__logic_tmpt58_4, %__bb_array_cap_join23 ]
+  %positional_mode_2 = phi i1 [ %t45, %__bb_match_join ], [ %t64, %__bb_if_then1 ], [ %positional_mode_2, %__bb_array_cap_join2 ], [ %positional_mode_2, %__bb_array_cap_join22 ], [ %positional_mode_2, %__bb_if_join ], [ %positional_mode_2, %__bb_array_cap_join25 ], [ %positional_mode_2, %__bb_array_cap_join23 ]
+  %i_2 = phi i64 [ %t44, %__bb_match_join ], [ %t67, %__bb_if_then1 ], [ %t280, %__bb_array_cap_join2 ], [ %t461, %__bb_array_cap_join22 ], [ %t809, %__bb_if_join ], [ %t764, %__bb_array_cap_join25 ], [ %t587, %__bb_array_cap_join23 ]
+  %pos_2 = phi %DriftString [ %__arc15, %__bb_match_join ], [ %pos_2, %__bb_if_then1 ], [ %pos_2, %__bb_array_cap_join2 ], [ %pos_2, %__bb_array_cap_join22 ], [ %__arc29, %__bb_if_join ], [ %pos_2, %__bb_array_cap_join25 ], [ %pos_2, %__bb_array_cap_join23 ]
+  %value__b101_2 = phi %DriftString [ %__arc14, %__bb_match_join ], [ %value__b101_2, %__bb_if_then1 ], [ %value__b101_2, %__bb_array_cap_join2 ], [ %value__b101_2, %__bb_array_cap_join22 ], [ %value__b101_2, %__bb_if_join ], [ %__arc7, %__bb_array_cap_join25 ], [ %value__b101_2, %__bb_array_cap_join23 ]
+  %value_2 = phi %DriftString [ %__arc12, %__bb_match_join ], [ %value_2, %__bb_if_then1 ], [ %value_2, %__bb_array_cap_join2 ], [ %__arc3, %__bb_array_cap_join22 ], [ %value_2, %__bb_if_join ], [ %value_2, %__bb_array_cap_join25 ], [ %value_2, %__bb_array_cap_join23 ]
+  %inline_value_2 = phi %DriftString [ %__arc11, %__bb_match_join ], [ %inline_value_2, %__bb_if_then1 ], [ %inline_value_10, %__bb_array_cap_join2 ], [ %inline_value_14, %__bb_array_cap_join22 ], [ %inline_value_2, %__bb_if_join ], [ %inline_value_2, %__bb_array_cap_join25 ], [ %inline_value_2, %__bb_array_cap_join23 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t47 = load ptr, ptr %argv__addr
@@ -17570,7 +17570,7 @@ __bb_loop_exit:
   %__logic_tmpt838_1 = add i1 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__logic_tmpt838_2 = phi i1 [ %__logic_tmpt838_1, %__bb_loop_exit ], [ %__logic_tmpt838_4, %__bb_if_join24 ]
+  %__logic_tmpt838_2 = phi i1 [ %__logic_tmpt838_1, %__bb_loop_exit ], [ %__logic_tmpt838_3, %__bb_if_join24 ]
   %i_12 = phi i64 [ %t810, %__bb_loop_exit ], [ %t859, %__bb_if_join24 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
@@ -17588,8 +17588,8 @@ __bb_loop_exit1:
   %__logic_tmpt888_1 = add i1 0, 0
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %__logic_tmpt929_2 = phi i1 [ %__logic_tmpt929_1, %__bb_loop_exit1 ], [ %__logic_tmpt929_3, %__bb_if_join26 ]
-  %__logic_tmpt888_2 = phi i1 [ %__logic_tmpt888_1, %__bb_loop_exit1 ], [ %__logic_tmpt888_4, %__bb_if_join26 ]
+  %__logic_tmpt929_2 = phi i1 [ %__logic_tmpt929_1, %__bb_loop_exit1 ], [ %__logic_tmpt929_5, %__bb_if_join26 ]
+  %__logic_tmpt888_2 = phi i1 [ %__logic_tmpt888_1, %__bb_loop_exit1 ], [ %__logic_tmpt888_3, %__bb_if_join26 ]
   %pi_2 = phi i64 [ %t860, %__bb_loop_exit1 ], [ %t949, %__bb_if_join26 ]
   br label %__bb_loop_body2
 __bb_loop_body2:
@@ -17616,7 +17616,7 @@ __bb_if_else5:
   %t1010 = icmp sgt i64 %t1008, %t1009
   br i1 %t1010, label %__bb_if_then31, label %__bb_if_join31
 __bb_if_join31:
-  %__logic_tmpt983_1 = add i1 0, 0
+  %__logic_tmpt983_5 = add i1 0, 0
   br label %__bb_if_join29
 __bb_if_then31:
   %strptr93 = getelementptr inbounds { i64, i64, [26 x i8] }, ptr @.str225, i32 0, i32 2, i32 0
@@ -17730,12 +17730,12 @@ __bb_logic_rhs12:
   %t991 = icmp sgt i64 %t986, %t990
   br label %__bb_logic_join12
 __bb_logic_join12:
-  %__logic_tmpt983_2 = phi i1 [ %t984, %__bb_logic_short12 ], [ %t991, %__bb_logic_rhs12 ]
-  br i1 %__logic_tmpt983_2, label %__bb_if_then30, label %__bb_if_join30
+  %__logic_tmpt983_4 = phi i1 [ %t984, %__bb_logic_short12 ], [ %t991, %__bb_logic_rhs12 ]
+  br i1 %__logic_tmpt983_4, label %__bb_if_then30, label %__bb_if_join30
 __bb_if_join30:
   br label %__bb_if_join29
 __bb_if_join29:
-  %__logic_tmpt983_5 = phi i1 [ %__logic_tmpt983_1, %__bb_if_join31 ], [ %__logic_tmpt983_2, %__bb_if_join30 ]
+  %__logic_tmpt983_1 = phi i1 [ %__logic_tmpt983_4, %__bb_if_join30 ], [ %__logic_tmpt983_5, %__bb_if_join31 ]
   %t1020 = load %DriftArrayHeader, ptr %flag_option_indices__addr
   %zero_arr129 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr130 = insertvalue %DriftArrayHeader %zero_arr129, i64 0, 1
@@ -17932,8 +17932,8 @@ __bb_logic_rhs10:
   %t897 = icmp ne i64 %pi_2, %t896
   br label %__bb_logic_join10
 __bb_logic_join10:
-  %__logic_tmpt888_4 = phi i1 [ %t897, %__bb_logic_rhs10 ], [ %t889, %__bb_logic_short10 ]
-  br i1 %__logic_tmpt888_4, label %__bb_if_then27, label %__bb_if_join27
+  %__logic_tmpt888_3 = phi i1 [ %t897, %__bb_logic_rhs10 ], [ %t889, %__bb_logic_short10 ]
+  br i1 %__logic_tmpt888_3, label %__bb_if_then27, label %__bb_if_join27
 __bb_if_join27:
   %t908 = load ptr, ptr %self__addr
   %t909 = load %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %t908
@@ -17962,8 +17962,8 @@ __bb_logic_rhs11:
   %t934 = icmp sle i64 %t932, %pi_2
   br label %__bb_logic_join11
 __bb_logic_join11:
-  %__logic_tmpt929_3 = phi i1 [ %t934, %__bb_logic_rhs11 ], [ %t930, %__bb_logic_short11 ]
-  br i1 %__logic_tmpt929_3, label %__bb_if_then28, label %__bb_if_join28
+  %__logic_tmpt929_5 = phi i1 [ %t930, %__bb_logic_short11 ], [ %t934, %__bb_logic_rhs11 ]
+  br i1 %__logic_tmpt929_5, label %__bb_if_then28, label %__bb_if_join28
 __bb_if_join28:
   %t948 = add i64 0, 1
   %t949 = add i64 %pi_2, %t948
@@ -18198,8 +18198,8 @@ __bb_logic_rhs9:
   %t844 = xor i1 %t843, true
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt838_4 = phi i1 [ %t844, %__bb_logic_rhs9 ], [ %t839, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt838_4, label %__bb_if_then25, label %__bb_if_join25
+  %__logic_tmpt838_3 = phi i1 [ %t844, %__bb_logic_rhs9 ], [ %t839, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt838_3, label %__bb_if_then25, label %__bb_if_join25
 __bb_if_join25:
   %t858 = add i64 0, 1
   %t859 = add i64 %i_12, %t858
@@ -18330,8 +18330,8 @@ __bb_logic_rhs:
   %t62 = call i1 @"std.cli::_string_eq_value"(ptr %eltptr339, %DriftString %t61)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt58_5 = phi i1 [ %t59, %__bb_logic_short ], [ %t62, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt58_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt58_4 = phi i1 [ %t59, %__bb_logic_short ], [ %t62, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt58_4, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t69 = xor i1 %positional_mode_2, true
   br i1 %t69, label %__bb_logic_rhs1, label %__bb_logic_short1
@@ -18345,8 +18345,8 @@ __bb_logic_rhs1:
   %t74 = call i1 @"std.cli::_string_eq_value"(ptr %eltptr339, %DriftString %t73)
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt70_5 = phi i1 [ %t74, %__bb_logic_rhs1 ], [ %t71, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt70_5, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt70_3 = phi i1 [ %t74, %__bb_logic_rhs1 ], [ %t71, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt70_3, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t86 = xor i1 %positional_mode_2, true
   br i1 %t86, label %__bb_logic_rhs2, label %__bb_logic_short2
@@ -18360,7 +18360,7 @@ __bb_logic_rhs2:
   %t91 = call i1 @"std.cli::_string_eq_value"(ptr %eltptr339, %DriftString %t90)
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt87_3 = phi i1 [ %t88, %__bb_logic_short2 ], [ %t91, %__bb_logic_rhs2 ]
+  %__logic_tmpt87_3 = phi i1 [ %t91, %__bb_logic_rhs2 ], [ %t88, %__bb_logic_short2 ]
   br i1 %__logic_tmpt87_3, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t103 = xor i1 %positional_mode_2, true
@@ -18375,8 +18375,8 @@ __bb_logic_rhs3:
   %t108 = call i1 @"std.cli::_string_eq_value"(ptr %eltptr339, %DriftString %t107)
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt104_4 = phi i1 [ %t108, %__bb_logic_rhs3 ], [ %t105, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt104_4, label %__bb_if_then4, label %__bb_if_join4
+  %__logic_tmpt104_3 = phi i1 [ %t105, %__bb_logic_short3 ], [ %t108, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt104_3, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_join4:
   %t120 = xor i1 %positional_mode_2, true
   br i1 %t120, label %__bb_logic_rhs4, label %__bb_logic_short4
@@ -18390,7 +18390,7 @@ __bb_logic_rhs4:
   %t125 = call i1 @"std.cli::_string_eq_value"(ptr %eltptr339, %DriftString %t124)
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt121_3 = phi i1 [ %t122, %__bb_logic_short4 ], [ %t125, %__bb_logic_rhs4 ]
+  %__logic_tmpt121_3 = phi i1 [ %t125, %__bb_logic_rhs4 ], [ %t122, %__bb_logic_short4 ]
   br i1 %__logic_tmpt121_3, label %__bb_if_then5, label %__bb_if_join5
 __bb_if_join5:
   %t137 = xor i1 %positional_mode_2, true
@@ -18402,8 +18402,8 @@ __bb_logic_rhs5:
   %t141 = call i1 @"std.cli::_starts_with_dash_dash"(ptr %eltptr339)
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt138_3 = phi i1 [ %t139, %__bb_logic_short5 ], [ %t141, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt138_3, label %__bb_logic_rhs6, label %__bb_logic_short6
+  %__logic_tmpt138_4 = phi i1 [ %t141, %__bb_logic_rhs5 ], [ %t139, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt138_4, label %__bb_logic_rhs6, label %__bb_logic_short6
 __bb_logic_short6:
   %t144 = add i1 0, 0
   br label %__bb_logic_join6
@@ -18413,8 +18413,8 @@ __bb_logic_rhs6:
   %t148 = icmp sgt i64 %t146, %t147
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt143_5 = phi i1 [ %t144, %__bb_logic_short6 ], [ %t148, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt143_5, label %__bb_if_then6, label %__bb_if_join6
+  %__logic_tmpt143_4 = phi i1 [ %t144, %__bb_logic_short6 ], [ %t148, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt143_4, label %__bb_if_then6, label %__bb_if_join6
 __bb_if_join6:
   %t463 = xor i1 %positional_mode_2, true
   br i1 %t463, label %__bb_logic_rhs7, label %__bb_logic_short7
@@ -18436,8 +18436,8 @@ __bb_logic_rhs8:
   %t474 = icmp sgt i64 %t472, %t473
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt469_3 = phi i1 [ %t470, %__bb_logic_short8 ], [ %t474, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt469_3, label %__bb_if_then16, label %__bb_if_join16
+  %__logic_tmpt469_4 = phi i1 [ %t470, %__bb_logic_short8 ], [ %t474, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt469_4, label %__bb_if_then16, label %__bb_if_join16
 __bb_if_join16:
   %t766 = call %DriftString @"std.cli::_dup_string"(ptr %eltptr339)
   %zero_str350 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -18519,17 +18519,17 @@ __bb_array_cap_ok6:
   %t781 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt780_3 = phi i1 [ %t801, %__bb_array_copy_exit6 ], [ %t781, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt779_3 = phi %DriftArrayHeader [ %arr_len357, %__bb_array_copy_exit6 ], [ %t768, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt780_5 = phi i1 [ %t801, %__bb_array_copy_exit6 ], [ %t781, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt779_5 = phi %DriftArrayHeader [ %arr_len357, %__bb_array_copy_exit6 ], [ %t768, %__bb_array_cap_ok6 ]
   %zero_arr371 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr372 = insertvalue %DriftArrayHeader %zero_arr371, i64 0, 1
   %zero_arr373 = insertvalue %DriftArrayHeader %zero_arr372, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr373, ptr null, 3
-  %data374 = extractvalue %DriftArrayHeader %__array_cap_arrt779_3, 3
+  %data374 = extractvalue %DriftArrayHeader %__array_cap_arrt779_5, 3
   %eltptr375 = getelementptr inbounds %DriftString, ptr %data374, i64 %t771
   store %DriftString %t770, ptr %eltptr375
   %t804 = add i64 %t771, %t776
-  %arr_len376 = insertvalue %DriftArrayHeader %__array_cap_arrt779_3, i64 %t804, 0
+  %arr_len376 = insertvalue %DriftArrayHeader %__array_cap_arrt779_5, i64 %t804, 0
   %arr_gen377 = insertvalue %DriftArrayHeader %arr_len376, i64 %t775, 2
   store %DriftArrayHeader %arr_gen377, ptr %positionals__addr
   %t808 = add i64 0, 1
@@ -18813,17 +18813,17 @@ __bb_array_cap_ok4:
   %t696 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt695_4 = phi i1 [ %t696, %__bb_array_cap_ok4 ], [ %t716, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt694_4 = phi %DriftArrayHeader [ %t684, %__bb_array_cap_ok4 ], [ %arr_len440, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt695_3 = phi i1 [ %t696, %__bb_array_cap_ok4 ], [ %t716, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt694_3 = phi %DriftArrayHeader [ %t684, %__bb_array_cap_ok4 ], [ %arr_len440, %__bb_array_copy_exit4 ]
   %zero_arr452 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr453 = insertvalue %DriftArrayHeader %zero_arr452, i64 0, 1
   %zero_arr454 = insertvalue %DriftArrayHeader %zero_arr453, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr454, ptr null, 3
-  %data455 = extractvalue %DriftArrayHeader %__array_cap_arrt694_4, 3
+  %data455 = extractvalue %DriftArrayHeader %__array_cap_arrt694_3, 3
   %eltptr456 = getelementptr inbounds i64, ptr %data455, i64 %t686
   store i64 %t497, ptr %eltptr456
   %t719 = add i64 %t686, %t691
-  %arr_len457 = insertvalue %DriftArrayHeader %__array_cap_arrt694_4, i64 %t719, 0
+  %arr_len457 = insertvalue %DriftArrayHeader %__array_cap_arrt694_3, i64 %t719, 0
   %arr_gen458 = insertvalue %DriftArrayHeader %arr_len457, i64 %t690, 2
   store %DriftArrayHeader %arr_gen458, ptr %option_value_indices__addr
   %t723 = load %DriftArrayHeader, ptr %option_values__addr
@@ -18902,17 +18902,17 @@ __bb_array_cap_ok5:
   %t736 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt735_5 = phi i1 [ %t736, %__bb_array_cap_ok5 ], [ %t756, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt734_5 = phi %DriftArrayHeader [ %t723, %__bb_array_cap_ok5 ], [ %arr_len465, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt735_3 = phi i1 [ %t756, %__bb_array_copy_exit5 ], [ %t736, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt734_3 = phi %DriftArrayHeader [ %arr_len465, %__bb_array_copy_exit5 ], [ %t723, %__bb_array_cap_ok5 ]
   %zero_arr479 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr480 = insertvalue %DriftArrayHeader %zero_arr479, i64 0, 1
   %zero_arr481 = insertvalue %DriftArrayHeader %zero_arr480, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr481, ptr null, 3
-  %data482 = extractvalue %DriftArrayHeader %__array_cap_arrt734_5, 3
+  %data482 = extractvalue %DriftArrayHeader %__array_cap_arrt734_3, 3
   %eltptr483 = getelementptr inbounds %DriftString, ptr %data482, i64 %t726
   store %DriftString %t725, ptr %eltptr483
   %t759 = add i64 %t726, %t731
-  %arr_len484 = insertvalue %DriftArrayHeader %__array_cap_arrt734_5, i64 %t759, 0
+  %arr_len484 = insertvalue %DriftArrayHeader %__array_cap_arrt734_3, i64 %t759, 0
   %arr_gen485 = insertvalue %DriftArrayHeader %arr_len484, i64 %t730, 2
   store %DriftArrayHeader %arr_gen485, ptr %option_values__addr
   %t763 = add i64 0, 2
@@ -19472,8 +19472,8 @@ __bb_if_then7:
   %t170 = add i1 0, 1
   br label %__bb_if_join7
 __bb_if_join7:
-  %has_inline_4 = phi i1 [ %t154, %__bb_if_else1 ], [ %t170, %__bb_if_then7 ]
-  %inline_value_13 = phi %DriftString [ %t155, %__bb_if_else1 ], [ %t169, %__bb_if_then7 ]
+  %has_inline_5 = phi i1 [ %t170, %__bb_if_then7 ], [ %t154, %__bb_if_else1 ]
+  %inline_value_10 = phi %DriftString [ %t169, %__bb_if_then7 ], [ %t155, %__bb_if_else1 ]
   %t177 = load ptr, ptr %self__addr
   %t178 = getelementptr inbounds %Struct_std_2Ecli_ArgParser_06bccd975b777fba, ptr %t177, i32 0, i32 3
   %t180 = call i64 @"std.cli::_find_option_by_long"(ptr %t178, ptr %long_name__addr)
@@ -19507,7 +19507,7 @@ __bb_if_join9:
   %zero_str704 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc51 = insertvalue %DriftString %zero_str704, ptr null, 1
   call void @drift_string_release(%DriftString %value_2)
-  br i1 %has_inline_4, label %__bb_if_then12, label %__bb_if_else2
+  br i1 %has_inline_5, label %__bb_if_then12, label %__bb_if_else2
 __bb_if_else2:
   %t285 = add i64 0, 1
   %t286 = add i64 %i_2, %t285
@@ -19586,7 +19586,7 @@ __bb_if_then13:
   call void @drift_free_array(ptr %data737)
   %zero_str738 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc92 = insertvalue %DriftString %zero_str738, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_13)
+  call void @drift_string_release(%DriftString %inline_value_10)
   %__arc93 = load %DriftString, ptr %long_name__addr
   %zero_str739 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc94 = insertvalue %DriftString %zero_str739, ptr null, 1
@@ -19615,9 +19615,9 @@ __bb_if_then12:
   call void @drift_string_release(%DriftString %t281)
   br label %__bb_if_join12
 __bb_if_join12:
-  %i_9 = phi i64 [ %i_2, %__bb_if_then12 ], [ %t310, %__bb_if_join13 ]
-  %value_21 = phi %DriftString [ %inline_value_13, %__bb_if_then12 ], [ %t307, %__bb_if_join13 ]
-  %inline_value_19 = phi %DriftString [ %__arc84, %__bb_if_then12 ], [ %inline_value_13, %__bb_if_join13 ]
+  %i_6 = phi i64 [ %t310, %__bb_if_join13 ], [ %i_2, %__bb_if_then12 ]
+  %value_13 = phi %DriftString [ %t307, %__bb_if_join13 ], [ %inline_value_10, %__bb_if_then12 ]
+  %inline_value_14 = phi %DriftString [ %inline_value_10, %__bb_if_join13 ], [ %__arc84, %__bb_if_then12 ]
   %t314 = call i1 @"std.cli::_is_seen"(ptr %flag_option_indices__addr, ptr %option_value_indices__addr, i64 %t180)
   br i1 %t314, label %__bb_if_then14, label %__bb_if_join14
 __bb_if_join14:
@@ -19641,7 +19641,7 @@ __bb_idx_join1:
   %t346 = icmp eq i64 %t342, %t345
   br i1 %t346, label %__bb_if_then15, label %__bb_if_join15
 __bb_if_then15:
-  %__arc119 = call %DriftString @drift_string_retain(%DriftString %value_21)
+  %__arc119 = call %DriftString @drift_string_retain(%DriftString %value_13)
   %t348 = call %Variant_std_2Ecore_Result_d919b65f67227073 @"std.parse::parse_int__impl"(%DriftString %__arc119)
   br label %__bb_match_dispatch1
 __bb_match_dispatch1:
@@ -19677,7 +19677,7 @@ __bb_match_arm_11:
   %strptr759 = getelementptr inbounds { i64, i64, [29 x i8] }, ptr @.str295, i32 0, i32 2, i32 0
   %str0760 = insertvalue %DriftString zeroinitializer, i64 28, 0
   %t372 = insertvalue %DriftString %str0760, ptr %strptr759, 1
-  %t374 = call %Variant_std_2Ecore_Result_0c3280520fd696d3 @"std.cli::_err"(%DriftString %t370, %DriftString %t371, %DriftString %t372, i64 %i_9)
+  %t374 = call %Variant_std_2Ecore_Result_0c3280520fd696d3 @"std.cli::_err"(%DriftString %t370, %DriftString %t371, %DriftString %t372, i64 %i_6)
   %zero_struct761 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString zeroinitializer, 0
   %__arc404 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %zero_struct761, i64 0, 1
   %drop_field762 = extractvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %t367, 0
@@ -19722,7 +19722,7 @@ __bb_match_arm_11:
   call void @drift_free_array(ptr %data782)
   %zero_str783 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc410 = insertvalue %DriftString %zero_str783, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_19)
+  call void @drift_string_release(%DriftString %inline_value_14)
   %__arc411 = load %DriftString, ptr %long_name__addr
   %zero_str784 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc412 = insertvalue %DriftString %zero_str784, ptr null, 1
@@ -19738,7 +19738,7 @@ __bb_match_arm_11:
   call void @drift_string_release(%DriftString %__arc415)
   %zero_str787 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc418 = insertvalue %DriftString %zero_str787, ptr null, 1
-  call void @drift_string_release(%DriftString %value_21)
+  call void @drift_string_release(%DriftString %value_13)
   %zero_str788 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc420 = insertvalue %DriftString %zero_str788, ptr null, 1
   call void @drift_string_release(%DriftString %value__b101_2)
@@ -19827,24 +19827,24 @@ __bb_array_cap_ok1:
   %t393 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt392_5 = phi i1 [ %t413, %__bb_array_copy_exit1 ], [ %t393, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt391_5 = phi %DriftArrayHeader [ %arr_len797, %__bb_array_copy_exit1 ], [ %t381, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt392_4 = phi i1 [ %t393, %__bb_array_cap_ok1 ], [ %t413, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt391_4 = phi %DriftArrayHeader [ %t381, %__bb_array_cap_ok1 ], [ %arr_len797, %__bb_array_copy_exit1 ]
   %zero_arr809 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr810 = insertvalue %DriftArrayHeader %zero_arr809, i64 0, 1
   %zero_arr811 = insertvalue %DriftArrayHeader %zero_arr810, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr811, ptr null, 3
-  %data812 = extractvalue %DriftArrayHeader %__array_cap_arrt391_5, 3
+  %data812 = extractvalue %DriftArrayHeader %__array_cap_arrt391_4, 3
   %eltptr813 = getelementptr inbounds i64, ptr %data812, i64 %t383
   store i64 %t180, ptr %eltptr813
   %t416 = add i64 %t383, %t388
-  %arr_len814 = insertvalue %DriftArrayHeader %__array_cap_arrt391_5, i64 %t416, 0
+  %arr_len814 = insertvalue %DriftArrayHeader %__array_cap_arrt391_4, i64 %t416, 0
   %arr_gen815 = insertvalue %DriftArrayHeader %arr_len814, i64 %t387, 2
   store %DriftArrayHeader %arr_gen815, ptr %option_value_indices__addr
   %t420 = load %DriftArrayHeader, ptr %option_values__addr
   %zero_str816 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc3 = insertvalue %DriftString %zero_str816, ptr null, 1
-  %t422 = call %DriftString @drift_string_retain(%DriftString %value_21)
-  call void @drift_string_release(%DriftString %value_21)
+  %t422 = call %DriftString @drift_string_retain(%DriftString %value_13)
+  call void @drift_string_release(%DriftString %value_13)
   %t423 = extractvalue %DriftArrayHeader %t420, 0
   %t424 = extractvalue %DriftArrayHeader %t420, 1
   %t425 = extractvalue %DriftArrayHeader %t420, 2
@@ -19930,7 +19930,7 @@ __bb_array_cap_join22:
   %arr_gen842 = insertvalue %DriftArrayHeader %arr_len841, i64 %t427, 2
   store %DriftArrayHeader %arr_gen842, ptr %option_values__addr
   %t460 = add i64 0, 1
-  %t461 = add i64 %i_9, %t460
+  %t461 = add i64 %i_6, %t460
   br label %__bb_loop_header
 __bb_idx_err1:
   %t334 = add i64 0, 1726084857549659354
@@ -19969,7 +19969,7 @@ __bb_if_then14:
   %strptr857 = getelementptr inbounds { i64, i64, [17 x i8] }, ptr @.str302, i32 0, i32 2, i32 0
   %str0858 = insertvalue %DriftString zeroinitializer, i64 16, 0
   %t317 = insertvalue %DriftString %str0858, ptr %strptr857, 1
-  %t319 = call %Variant_std_2Ecore_Result_0c3280520fd696d3 @"std.cli::_err"(%DriftString %t315, %DriftString %t316, %DriftString %t317, i64 %i_9)
+  %t319 = call %Variant_std_2Ecore_Result_0c3280520fd696d3 @"std.cli::_err"(%DriftString %t315, %DriftString %t316, %DriftString %t317, i64 %i_6)
   %t320 = load %DriftArrayHeader, ptr %positionals__addr
   %zero_arr859 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr860 = insertvalue %DriftArrayHeader %zero_arr859, i64 0, 1
@@ -20010,7 +20010,7 @@ __bb_if_then14:
   call void @drift_free_array(ptr %data878)
   %zero_str879 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc108 = insertvalue %DriftString %zero_str879, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_19)
+  call void @drift_string_release(%DriftString %inline_value_14)
   %__arc109 = load %DriftString, ptr %long_name__addr
   %zero_str880 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc110 = insertvalue %DriftString %zero_str880, ptr null, 1
@@ -20026,13 +20026,13 @@ __bb_if_then14:
   call void @drift_string_release(%DriftString %__arc113)
   %zero_str883 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc116 = insertvalue %DriftString %zero_str883, ptr null, 1
-  call void @drift_string_release(%DriftString %value_21)
+  call void @drift_string_release(%DriftString %value_13)
   %zero_str884 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc118 = insertvalue %DriftString %zero_str884, ptr null, 1
   call void @drift_string_release(%DriftString %value__b101_2)
   ret %Variant_std_2Ecore_Result_0c3280520fd696d3 %t319
 __bb_if_then9:
-  br i1 %has_inline_4, label %__bb_if_then10, label %__bb_if_join10
+  br i1 %has_inline_5, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   %t229 = call i1 @"std.cli::_is_seen"(ptr %flag_option_indices__addr, ptr %option_value_indices__addr, i64 %t180)
   br i1 %t229, label %__bb_if_then11, label %__bb_if_join11
@@ -20105,17 +20105,17 @@ __bb_array_cap_ok:
   %t252 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt251_3 = phi i1 [ %t252, %__bb_array_cap_ok ], [ %t272, %__bb_array_copy_exit ]
-  %__array_cap_arrt250_3 = phi %DriftArrayHeader [ %t240, %__bb_array_cap_ok ], [ %arr_len890, %__bb_array_copy_exit ]
+  %__array_cap_grewt251_4 = phi i1 [ %t252, %__bb_array_cap_ok ], [ %t272, %__bb_array_copy_exit ]
+  %__array_cap_arrt250_4 = phi %DriftArrayHeader [ %t240, %__bb_array_cap_ok ], [ %arr_len890, %__bb_array_copy_exit ]
   %zero_arr902 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr903 = insertvalue %DriftArrayHeader %zero_arr902, i64 0, 1
   %zero_arr904 = insertvalue %DriftArrayHeader %zero_arr903, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr904, ptr null, 3
-  %data905 = extractvalue %DriftArrayHeader %__array_cap_arrt250_3, 3
+  %data905 = extractvalue %DriftArrayHeader %__array_cap_arrt250_4, 3
   %eltptr906 = getelementptr inbounds i64, ptr %data905, i64 %t242
   store i64 %t180, ptr %eltptr906
   %t275 = add i64 %t242, %t247
-  %arr_len907 = insertvalue %DriftArrayHeader %__array_cap_arrt250_3, i64 %t275, 0
+  %arr_len907 = insertvalue %DriftArrayHeader %__array_cap_arrt250_4, i64 %t275, 0
   %arr_gen908 = insertvalue %DriftArrayHeader %arr_len907, i64 %t246, 2
   store %DriftArrayHeader %arr_gen908, ptr %flag_option_indices__addr
   %t279 = add i64 0, 1
@@ -20172,7 +20172,7 @@ __bb_if_then11:
   call void @drift_free_array(ptr %data934)
   %zero_str935 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc73 = insertvalue %DriftString %zero_str935, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_13)
+  call void @drift_string_release(%DriftString %inline_value_10)
   %__arc74 = load %DriftString, ptr %long_name__addr
   %zero_str936 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc75 = insertvalue %DriftString %zero_str936, ptr null, 1
@@ -20244,7 +20244,7 @@ __bb_if_then10:
   call void @drift_free_array(ptr %data966)
   %zero_str967 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc57 = insertvalue %DriftString %zero_str967, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_13)
+  call void @drift_string_release(%DriftString %inline_value_10)
   %__arc58 = load %DriftString, ptr %long_name__addr
   %zero_str968 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc59 = insertvalue %DriftString %zero_str968, ptr null, 1
@@ -20343,7 +20343,7 @@ __bb_if_then8:
   call void @drift_free_array(ptr %data1008)
   %zero_str1009 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc358 = insertvalue %DriftString %zero_str1009, ptr null, 1
-  call void @drift_string_release(%DriftString %inline_value_13)
+  call void @drift_string_release(%DriftString %inline_value_10)
   %__arc359 = load %DriftString, ptr %long_name__addr
   %zero_str1010 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc360 = insertvalue %DriftString %zero_str1010, ptr null, 1
@@ -20986,8 +20986,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t16 = load ptr, ptr %self__addr
   %t17 = getelementptr inbounds %Struct_std_2Ecli_ParsedArgs_1ba26474cf6c2cf1, ptr %t16, i32 0, i32 3
@@ -21206,8 +21206,8 @@ __bb_if_join:
   %b1_1 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %b2_2 = phi i64 [ %b2_1, %__bb_if_join ], [ %b2_4, %__bb_if_join1 ]
-  %b1_2 = phi i64 [ %b1_1, %__bb_if_join ], [ %b1_4, %__bb_if_join1 ]
+  %b2_2 = phi i64 [ %b2_1, %__bb_if_join ], [ %b2_5, %__bb_if_join1 ]
+  %b1_2 = phi i64 [ %b1_1, %__bb_if_join ], [ %b1_5, %__bb_if_join1 ]
   %o_2 = phi i64 [ %t19, %__bb_if_join ], [ %t171, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t18, %__bb_if_join ], [ %t168, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -21270,7 +21270,7 @@ __bb_idx_join1:
   %t72 = call i64 @"std.codec::_byte_u8"(i8 %t69)
   br label %__bb_if_join2
 __bb_if_join2:
-  %b1_4 = phi i64 [ %t43, %__bb_idx_join ], [ %t72, %__bb_idx_join1 ]
+  %b1_5 = phi i64 [ %t43, %__bb_idx_join ], [ %t72, %__bb_idx_join1 ]
   %t74 = add i64 0, 2
   %t75 = icmp sgt i64 %t47, %t74
   br i1 %t75, label %__bb_if_then3, label %__bb_if_join3
@@ -21295,7 +21295,7 @@ __bb_idx_join2:
   %t97 = call i64 @"std.codec::_byte_u8"(i8 %t94)
   br label %__bb_if_join3
 __bb_if_join3:
-  %b2_4 = phi i64 [ %t44, %__bb_if_join2 ], [ %t97, %__bb_idx_join2 ]
+  %b2_5 = phi i64 [ %t44, %__bb_if_join2 ], [ %t97, %__bb_idx_join2 ]
   %t99 = add i64 0, 4
   %t100 = sdiv i64 %t42, %t99
   %t101 = add i64 0, 64
@@ -21305,21 +21305,21 @@ __bb_if_join3:
   %t106 = add i64 0, 16
   %t107 = mul i64 %t105, %t106
   %t109 = add i64 0, 16
-  %t110 = sdiv i64 %b1_4, %t109
+  %t110 = sdiv i64 %b1_5, %t109
   %t111 = add i64 %t107, %t110
   %t112 = add i64 0, 64
   %t113 = srem i64 %t111, %t112
   %t115 = add i64 0, 16
-  %t116 = srem i64 %b1_4, %t115
+  %t116 = srem i64 %b1_5, %t115
   %t117 = add i64 0, 4
   %t118 = mul i64 %t116, %t117
   %t120 = add i64 0, 64
-  %t121 = sdiv i64 %b2_4, %t120
+  %t121 = sdiv i64 %b2_5, %t120
   %t122 = add i64 %t118, %t121
   %t123 = add i64 0, 64
   %t124 = srem i64 %t122, %t123
   %t126 = add i64 0, 64
-  %t127 = srem i64 %b2_4, %t126
+  %t127 = srem i64 %b2_5, %t126
   %t131 = call i8 @"std.codec::_b64_alphabet_byte"(i64 %t102)
   call void @"std.io::buffer_write__impl"(ptr %out__addr, i64 %o_2, i8 %t131)
   %t134 = add i64 0, 1
@@ -21491,10 +21491,10 @@ __bb_if_join:
   %b0_1 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %b4_2 = phi i64 [ %b4_1, %__bb_if_join ], [ %b4_5, %__bb_if_join1 ]
+  %b4_2 = phi i64 [ %b4_1, %__bb_if_join ], [ %b4_4, %__bb_if_join1 ]
   %b3_2 = phi i64 [ %b3_1, %__bb_if_join ], [ %b3_5, %__bb_if_join1 ]
-  %b2_2 = phi i64 [ %b2_1, %__bb_if_join ], [ %b2_4, %__bb_if_join1 ]
-  %b1_2 = phi i64 [ %b1_1, %__bb_if_join ], [ %b1_4, %__bb_if_join1 ]
+  %b2_2 = phi i64 [ %b2_1, %__bb_if_join ], [ %b2_5, %__bb_if_join1 ]
+  %b1_2 = phi i64 [ %b1_1, %__bb_if_join ], [ %b1_5, %__bb_if_join1 ]
   %b0_2 = phi i64 [ %b0_1, %__bb_if_join ], [ %t50, %__bb_if_join1 ]
   %o_2 = phi i64 [ %t19, %__bb_if_join ], [ %t406, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t18, %__bb_if_join ], [ %t403, %__bb_if_join1 ]
@@ -21561,7 +21561,7 @@ __bb_idx_join1:
   %t75 = call i64 @"std.codec::_byte_u8"(i8 %t72)
   br label %__bb_if_join2
 __bb_if_join2:
-  %b1_4 = phi i64 [ %t24, %__bb_idx_join ], [ %t75, %__bb_idx_join1 ]
+  %b1_5 = phi i64 [ %t24, %__bb_idx_join ], [ %t75, %__bb_idx_join1 ]
   %t77 = add i64 0, 2
   %t78 = icmp sgt i64 %t30, %t77
   br i1 %t78, label %__bb_if_then3, label %__bb_if_join3
@@ -21586,7 +21586,7 @@ __bb_idx_join2:
   %t100 = call i64 @"std.codec::_byte_u8"(i8 %t97)
   br label %__bb_if_join3
 __bb_if_join3:
-  %b2_4 = phi i64 [ %t25, %__bb_if_join2 ], [ %t100, %__bb_idx_join2 ]
+  %b2_5 = phi i64 [ %t25, %__bb_if_join2 ], [ %t100, %__bb_idx_join2 ]
   %t102 = add i64 0, 3
   %t103 = icmp sgt i64 %t30, %t102
   br i1 %t103, label %__bb_if_then4, label %__bb_if_join4
@@ -21636,7 +21636,7 @@ __bb_idx_join4:
   %t150 = call i64 @"std.codec::_byte_u8"(i8 %t147)
   br label %__bb_if_join5
 __bb_if_join5:
-  %b4_5 = phi i64 [ %t27, %__bb_if_join4 ], [ %t150, %__bb_idx_join4 ]
+  %b4_4 = phi i64 [ %t27, %__bb_if_join4 ], [ %t150, %__bb_idx_join4 ]
   %t152 = add i64 0, 8
   %t153 = sdiv i64 %t50, %t152
   %t154 = add i64 0, 32
@@ -21646,25 +21646,25 @@ __bb_if_join5:
   %t159 = add i64 0, 4
   %t160 = mul i64 %t158, %t159
   %t162 = add i64 0, 64
-  %t163 = sdiv i64 %b1_4, %t162
+  %t163 = sdiv i64 %b1_5, %t162
   %t164 = add i64 %t160, %t163
   %t165 = add i64 0, 32
   %t166 = srem i64 %t164, %t165
   %t168 = add i64 0, 2
-  %t169 = sdiv i64 %b1_4, %t168
+  %t169 = sdiv i64 %b1_5, %t168
   %t170 = add i64 0, 32
   %t171 = srem i64 %t169, %t170
   %t173 = add i64 0, 2
-  %t174 = srem i64 %b1_4, %t173
+  %t174 = srem i64 %b1_5, %t173
   %t175 = add i64 0, 16
   %t176 = mul i64 %t174, %t175
   %t178 = add i64 0, 16
-  %t179 = sdiv i64 %b2_4, %t178
+  %t179 = sdiv i64 %b2_5, %t178
   %t180 = add i64 %t176, %t179
   %t181 = add i64 0, 32
   %t182 = srem i64 %t180, %t181
   %t184 = add i64 0, 16
-  %t185 = srem i64 %b2_4, %t184
+  %t185 = srem i64 %b2_5, %t184
   %t186 = add i64 0, 2
   %t187 = mul i64 %t185, %t186
   %t189 = add i64 0, 128
@@ -21681,12 +21681,12 @@ __bb_if_join5:
   %t202 = add i64 0, 8
   %t203 = mul i64 %t201, %t202
   %t205 = add i64 0, 32
-  %t206 = sdiv i64 %b4_5, %t205
+  %t206 = sdiv i64 %b4_4, %t205
   %t207 = add i64 %t203, %t206
   %t208 = add i64 0, 32
   %t209 = srem i64 %t207, %t208
   %t211 = add i64 0, 32
-  %t212 = srem i64 %b4_5, %t211
+  %t212 = srem i64 %b4_4, %t211
   %t216 = call i8 @"std.codec::_b32_alphabet_byte"(i64 %t155)
   call void @"std.io::buffer_write__impl"(ptr %out__addr, i64 %o_2, i8 %t216)
   %t219 = add i64 0, 1
@@ -22038,8 +22038,8 @@ __bb_if_then2:
   %t29 = add i64 %out_len_3, %t28
   br label %__bb_if_join2
 __bb_if_join2:
-  %out_len_4 = phi i64 [ %out_len_3, %__bb_if_join1 ], [ %t29, %__bb_if_then2 ]
-  %t31 = call %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 @"std.io::buffer__impl"(i64 %out_len_4)
+  %out_len_5 = phi i64 [ %out_len_3, %__bb_if_join1 ], [ %t29, %__bb_if_then2 ]
+  %t31 = call %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 @"std.io::buffer__impl"(i64 %out_len_5)
   store %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 %t31, ptr %out__addr
   %t32 = add i64 0, 0
   %t33 = add i64 0, 0
@@ -22164,7 +22164,7 @@ __bb_idx_join5:
   br label %__bb_if_join5
 __bb_if_join5:
   %t291 = call ptr @"std.io::buffer_ptr__impl"(ptr %out__addr)
-  %t293 = call %DriftString @drift_string_from_utf8_bytes(ptr %t291, i64 %out_len_4)
+  %t293 = call %DriftString @drift_string_from_utf8_bytes(ptr %t291, i64 %out_len_5)
   %t294 = load %Struct_std_2Eio_Buffer_e76b5c24b140f2f4, ptr %out__addr
   %zero_struct18 = insertvalue %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 zeroinitializer, %Struct_std_2Emem_RawBuffer_10d8760b6c6b011c zeroinitializer, 0
   %zero_struct19 = insertvalue %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 %zero_struct18, i64 0, 1
@@ -22516,9 +22516,9 @@ __bb_if_join1:
 __bb_loop_header:
   %__array_cap_grewt270_2 = phi i1 [ %__array_cap_grewt270_1, %__bb_if_join1 ], [ %__array_cap_grewt270_4, %__bb_if_join2 ]
   %__array_cap_arrt269_2 = phi %DriftArrayHeader [ %__array_cap_arrt269_1, %__bb_if_join1 ], [ %__arc3, %__bb_if_join2 ]
-  %__array_cap_grewt230_2 = phi i1 [ %__array_cap_grewt230_1, %__bb_if_join1 ], [ %__array_cap_grewt230_5, %__bb_if_join2 ]
+  %__array_cap_grewt230_2 = phi i1 [ %__array_cap_grewt230_1, %__bb_if_join1 ], [ %__array_cap_grewt230_4, %__bb_if_join2 ]
   %__array_cap_arrt229_2 = phi %DriftArrayHeader [ %__array_cap_arrt229_1, %__bb_if_join1 ], [ %__arc2, %__bb_if_join2 ]
-  %__array_cap_grewt190_2 = phi i1 [ %__array_cap_grewt190_1, %__bb_if_join1 ], [ %__array_cap_grewt190_3, %__bb_if_join2 ]
+  %__array_cap_grewt190_2 = phi i1 [ %__array_cap_grewt190_1, %__bb_if_join1 ], [ %__array_cap_grewt190_4, %__bb_if_join2 ]
   %__array_cap_arrt189_2 = phi %DriftArrayHeader [ %__array_cap_arrt189_1, %__bb_if_join1 ], [ %__arc1, %__bb_if_join2 ]
   %i_2 = phi i64 [ %t28, %__bb_if_join1 ], [ %t299, %__bb_if_join2 ]
   br label %__bb_loop_body
@@ -22932,25 +22932,25 @@ __bb_array_cap_ok5:
   %t594 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt593_4 = phi i1 [ %t594, %__bb_array_cap_ok5 ], [ %t614, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt592_4 = phi %DriftArrayHeader [ %t581, %__bb_array_cap_ok5 ], [ %arr_len121, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt593_3 = phi i1 [ %t614, %__bb_array_copy_exit5 ], [ %t594, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt592_3 = phi %DriftArrayHeader [ %arr_len121, %__bb_array_copy_exit5 ], [ %t581, %__bb_array_cap_ok5 ]
   %zero_arr133 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr134 = insertvalue %DriftArrayHeader %zero_arr133, i64 0, 1
   %zero_arr135 = insertvalue %DriftArrayHeader %zero_arr134, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr135, ptr null, 3
-  %data136 = extractvalue %DriftArrayHeader %__array_cap_arrt592_4, 3
+  %data136 = extractvalue %DriftArrayHeader %__array_cap_arrt592_3, 3
   %eltptr137 = getelementptr inbounds i8, ptr %data136, i64 %t584
   store i8 %t583, ptr %eltptr137
   %t617 = add i64 %t584, %t589
-  %arr_len138 = insertvalue %DriftArrayHeader %__array_cap_arrt592_4, i64 %t617, 0
+  %arr_len138 = insertvalue %DriftArrayHeader %__array_cap_arrt592_3, i64 %t617, 0
   %arr_gen139 = insertvalue %DriftArrayHeader %arr_len138, i64 %t588, 2
   store %DriftArrayHeader %arr_gen139, ptr %out__addr
   br label %__bb_if_join17
 __bb_if_join17:
-  %__array_cap_grewt593_5 = phi i1 [ %__array_cap_grewt593_1, %__bb_if_join11 ], [ %__array_cap_grewt593_4, %__bb_array_cap_join25 ]
-  %__array_cap_arrt592_6 = phi %DriftArrayHeader [ %__array_cap_arrt592_1, %__bb_if_join11 ], [ %__arc6, %__bb_array_cap_join25 ]
-  %__array_cap_grewt553_5 = phi i1 [ %__array_cap_grewt553_1, %__bb_if_join11 ], [ %__array_cap_grewt553_3, %__bb_array_cap_join25 ]
-  %__array_cap_arrt552_6 = phi %DriftArrayHeader [ %__array_cap_arrt552_1, %__bb_if_join11 ], [ %__arc5, %__bb_array_cap_join25 ]
+  %__array_cap_grewt593_2 = phi i1 [ %__array_cap_grewt593_1, %__bb_if_join11 ], [ %__array_cap_grewt593_3, %__bb_array_cap_join25 ]
+  %__array_cap_arrt592_2 = phi %DriftArrayHeader [ %__array_cap_arrt592_1, %__bb_if_join11 ], [ %__arc6, %__bb_array_cap_join25 ]
+  %__array_cap_grewt553_2 = phi i1 [ %__array_cap_grewt553_1, %__bb_if_join11 ], [ %__array_cap_grewt553_3, %__bb_array_cap_join25 ]
+  %__array_cap_arrt552_2 = phi %DriftArrayHeader [ %__array_cap_arrt552_1, %__bb_if_join11 ], [ %__arc5, %__bb_array_cap_join25 ]
   %t620 = load %DriftArrayHeader, ptr %out__addr
   %zero_arr140 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr141 = insertvalue %DriftArrayHeader %zero_arr140, i64 0, 1
@@ -23540,17 +23540,17 @@ __bb_array_cap_ok:
   %t191 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt190_3 = phi i1 [ %t191, %__bb_array_cap_ok ], [ %t211, %__bb_array_copy_exit ]
-  %__array_cap_arrt189_3 = phi %DriftArrayHeader [ %t178, %__bb_array_cap_ok ], [ %arr_len385, %__bb_array_copy_exit ]
+  %__array_cap_grewt190_4 = phi i1 [ %t191, %__bb_array_cap_ok ], [ %t211, %__bb_array_copy_exit ]
+  %__array_cap_arrt189_4 = phi %DriftArrayHeader [ %t178, %__bb_array_cap_ok ], [ %arr_len385, %__bb_array_copy_exit ]
   %zero_arr397 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr398 = insertvalue %DriftArrayHeader %zero_arr397, i64 0, 1
   %zero_arr399 = insertvalue %DriftArrayHeader %zero_arr398, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr399, ptr null, 3
-  %data400 = extractvalue %DriftArrayHeader %__array_cap_arrt189_3, 3
+  %data400 = extractvalue %DriftArrayHeader %__array_cap_arrt189_4, 3
   %eltptr401 = getelementptr inbounds i8, ptr %data400, i64 %t181
   store i8 %t180, ptr %eltptr401
   %t214 = add i64 %t181, %t186
-  %arr_len402 = insertvalue %DriftArrayHeader %__array_cap_arrt189_3, i64 %t214, 0
+  %arr_len402 = insertvalue %DriftArrayHeader %__array_cap_arrt189_4, i64 %t214, 0
   %arr_gen403 = insertvalue %DriftArrayHeader %arr_len402, i64 %t185, 2
   store %DriftArrayHeader %arr_gen403, ptr %out__addr
   %t218 = load %DriftArrayHeader, ptr %out__addr
@@ -23622,17 +23622,17 @@ __bb_array_cap_ok1:
   %t231 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt230_5 = phi i1 [ %t251, %__bb_array_copy_exit1 ], [ %t231, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt229_5 = phi %DriftArrayHeader [ %arr_len409, %__bb_array_copy_exit1 ], [ %t218, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt230_4 = phi i1 [ %t231, %__bb_array_cap_ok1 ], [ %t251, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt229_4 = phi %DriftArrayHeader [ %t218, %__bb_array_cap_ok1 ], [ %arr_len409, %__bb_array_copy_exit1 ]
   %zero_arr421 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr422 = insertvalue %DriftArrayHeader %zero_arr421, i64 0, 1
   %zero_arr423 = insertvalue %DriftArrayHeader %zero_arr422, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr423, ptr null, 3
-  %data424 = extractvalue %DriftArrayHeader %__array_cap_arrt229_5, 3
+  %data424 = extractvalue %DriftArrayHeader %__array_cap_arrt229_4, 3
   %eltptr425 = getelementptr inbounds i8, ptr %data424, i64 %t221
   store i8 %t220, ptr %eltptr425
   %t254 = add i64 %t221, %t226
-  %arr_len426 = insertvalue %DriftArrayHeader %__array_cap_arrt229_5, i64 %t254, 0
+  %arr_len426 = insertvalue %DriftArrayHeader %__array_cap_arrt229_4, i64 %t254, 0
   %arr_gen427 = insertvalue %DriftArrayHeader %arr_len426, i64 %t225, 2
   store %DriftArrayHeader %arr_gen427, ptr %out__addr
   %t258 = load %DriftArrayHeader, ptr %out__addr
@@ -24094,10 +24094,10 @@ __bb_logic_rhs:
   %t10 = icmp sge i64 %t3, %t9
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt6_3 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
+  %__logic_tmpt6_2 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
   %__logic_tmpt28_1 = add i1 0, 0
   %__logic_tmpt23_1 = add i1 0, 0
-  br i1 %__logic_tmpt6_3, label %__bb_if_then, label %__bb_if_join
+  br i1 %__logic_tmpt6_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t13 = load %DriftString, ptr %s_1
   %t14 = add i64 0, 0
@@ -24137,12 +24137,12 @@ __bb_logic_short2:
   %t29 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt28_3 = phi i1 [ %t29, %__bb_logic_short2 ], [ %t32, %__bb_logic_rhs2 ]
+  %__logic_tmpt28_4 = phi i1 [ %t32, %__bb_logic_rhs2 ], [ %t29, %__bb_logic_short2 ]
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt28_6 = phi i1 [ %__logic_tmpt28_3, %__bb_logic_join2 ], [ %__logic_tmpt28_1, %__bb_logic_short1 ]
-  %__logic_tmpt23_5 = phi i1 [ %__logic_tmpt28_3, %__bb_logic_join2 ], [ %t24, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt23_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt28_3 = phi i1 [ %__logic_tmpt28_4, %__bb_logic_join2 ], [ %__logic_tmpt28_1, %__bb_logic_short1 ]
+  %__logic_tmpt23_3 = phi i1 [ %__logic_tmpt28_4, %__bb_logic_join2 ], [ %t24, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt23_3, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_then1:
   %t35 = add i64 0, 2
   br label %__bb_if_join1
@@ -24150,8 +24150,8 @@ __bb_if_join1:
   %start_4 = phi i64 [ %t4, %__bb_logic_join1 ], [ %t35, %__bb_if_then1 ]
   br label %__bb_if_join
 __bb_if_join:
-  %__logic_tmpt28_2 = phi i1 [ %__logic_tmpt28_1, %__bb_logic_join ], [ %__logic_tmpt28_6, %__bb_if_join1 ]
-  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_logic_join ], [ %__logic_tmpt23_5, %__bb_if_join1 ]
+  %__logic_tmpt28_2 = phi i1 [ %__logic_tmpt28_1, %__bb_logic_join ], [ %__logic_tmpt28_3, %__bb_if_join1 ]
+  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_logic_join ], [ %__logic_tmpt23_3, %__bb_if_join1 ]
   %start_2 = phi i64 [ %t4, %__bb_logic_join ], [ %start_4, %__bb_if_join1 ]
   %t37 = add i64 0, 0
   %t38 = add i64 0, 0
@@ -24206,12 +24206,12 @@ __bb_if_join:
   %__logic_tmpt55_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt114_2 = phi i1 [ %__array_cap_grewt114_1, %__bb_if_join ], [ %__array_cap_grewt114_5, %__bb_if_join2 ], [ %__array_cap_grewt114_2, %__bb_if_then3 ]
-  %__array_cap_arrt113_2 = phi %DriftArrayHeader [ %__array_cap_arrt113_1, %__bb_if_join ], [ %__arc2, %__bb_if_join2 ], [ %__array_cap_arrt113_2, %__bb_if_then3 ]
-  %__array_cap_grewt75_2 = phi i1 [ %__array_cap_grewt75_1, %__bb_if_join ], [ %__array_cap_grewt75_3, %__bb_if_join2 ], [ %__array_cap_grewt75_2, %__bb_if_then3 ]
-  %__array_cap_arrt74_2 = phi %DriftArrayHeader [ %__array_cap_arrt74_1, %__bb_if_join ], [ %__arc1, %__bb_if_join2 ], [ %__array_cap_arrt74_2, %__bb_if_then3 ]
-  %__logic_tmpt55_2 = phi i1 [ %__logic_tmpt55_1, %__bb_if_join ], [ %__logic_tmpt55_4, %__bb_if_join2 ], [ %__logic_tmpt55_4, %__bb_if_then3 ]
-  %i_2 = phi i64 [ %start_2, %__bb_if_join ], [ %t143, %__bb_if_join2 ], [ %t62, %__bb_if_then3 ]
+  %__array_cap_grewt114_2 = phi i1 [ %__array_cap_grewt114_1, %__bb_if_join ], [ %__array_cap_grewt114_2, %__bb_if_then3 ], [ %__array_cap_grewt114_4, %__bb_if_join2 ]
+  %__array_cap_arrt113_2 = phi %DriftArrayHeader [ %__array_cap_arrt113_1, %__bb_if_join ], [ %__array_cap_arrt113_2, %__bb_if_then3 ], [ %__arc2, %__bb_if_join2 ]
+  %__array_cap_grewt75_2 = phi i1 [ %__array_cap_grewt75_1, %__bb_if_join ], [ %__array_cap_grewt75_2, %__bb_if_then3 ], [ %__array_cap_grewt75_4, %__bb_if_join2 ]
+  %__array_cap_arrt74_2 = phi %DriftArrayHeader [ %__array_cap_arrt74_1, %__bb_if_join ], [ %__array_cap_arrt74_2, %__bb_if_then3 ], [ %__arc1, %__bb_if_join2 ]
+  %__logic_tmpt55_2 = phi i1 [ %__logic_tmpt55_1, %__bb_if_join ], [ %__logic_tmpt55_3, %__bb_if_then3 ], [ %__logic_tmpt55_3, %__bb_if_join2 ]
+  %i_2 = phi i64 [ %start_2, %__bb_if_join ], [ %t62, %__bb_if_then3 ], [ %t143, %__bb_if_join2 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t49 = icmp slt i64 %i_2, %t3
@@ -24713,8 +24713,8 @@ __bb_logic_rhs3:
   %t58 = call i1 @"std.codec::_is_ascii_whitespace"(i8 %t53)
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt55_4 = phi i1 [ %t58, %__bb_logic_rhs3 ], [ %t56, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt55_4, label %__bb_if_then3, label %__bb_if_join3
+  %__logic_tmpt55_3 = phi i1 [ %t56, %__bb_logic_short3 ], [ %t58, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt55_3, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t64 = load %DriftArrayHeader, ptr %clean__addr
   %t66 = extractvalue %DriftArrayHeader %t64, 0
@@ -24784,17 +24784,17 @@ __bb_array_cap_ok:
   %t76 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt75_3 = phi i1 [ %t76, %__bb_array_cap_ok ], [ %t96, %__bb_array_copy_exit ]
-  %__array_cap_arrt74_3 = phi %DriftArrayHeader [ %t64, %__bb_array_cap_ok ], [ %arr_len236, %__bb_array_copy_exit ]
+  %__array_cap_grewt75_4 = phi i1 [ %t76, %__bb_array_cap_ok ], [ %t96, %__bb_array_copy_exit ]
+  %__array_cap_arrt74_4 = phi %DriftArrayHeader [ %t64, %__bb_array_cap_ok ], [ %arr_len236, %__bb_array_copy_exit ]
   %zero_arr248 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr249 = insertvalue %DriftArrayHeader %zero_arr248, i64 0, 1
   %zero_arr250 = insertvalue %DriftArrayHeader %zero_arr249, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr250, ptr null, 3
-  %data251 = extractvalue %DriftArrayHeader %__array_cap_arrt74_3, 3
+  %data251 = extractvalue %DriftArrayHeader %__array_cap_arrt74_4, 3
   %eltptr252 = getelementptr inbounds i8, ptr %data251, i64 %t66
   store i8 %t53, ptr %eltptr252
   %t99 = add i64 %t66, %t71
-  %arr_len253 = insertvalue %DriftArrayHeader %__array_cap_arrt74_3, i64 %t99, 0
+  %arr_len253 = insertvalue %DriftArrayHeader %__array_cap_arrt74_4, i64 %t99, 0
   %arr_gen254 = insertvalue %DriftArrayHeader %arr_len253, i64 %t70, 2
   store %DriftArrayHeader %arr_gen254, ptr %clean__addr
   %t103 = load %DriftArrayHeader, ptr %pos__addr
@@ -24865,17 +24865,17 @@ __bb_array_cap_ok1:
   %t115 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt114_5 = phi i1 [ %t135, %__bb_array_copy_exit1 ], [ %t115, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt113_5 = phi %DriftArrayHeader [ %arr_len260, %__bb_array_copy_exit1 ], [ %t103, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt114_4 = phi i1 [ %t115, %__bb_array_cap_ok1 ], [ %t135, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt113_4 = phi %DriftArrayHeader [ %t103, %__bb_array_cap_ok1 ], [ %arr_len260, %__bb_array_copy_exit1 ]
   %zero_arr272 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr273 = insertvalue %DriftArrayHeader %zero_arr272, i64 0, 1
   %zero_arr274 = insertvalue %DriftArrayHeader %zero_arr273, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr274, ptr null, 3
-  %data275 = extractvalue %DriftArrayHeader %__array_cap_arrt113_5, 3
+  %data275 = extractvalue %DriftArrayHeader %__array_cap_arrt113_4, 3
   %eltptr276 = getelementptr inbounds i64, ptr %data275, i64 %t105
   store i64 %i_2, ptr %eltptr276
   %t138 = add i64 %t105, %t110
-  %arr_len277 = insertvalue %DriftArrayHeader %__array_cap_arrt113_5, i64 %t138, 0
+  %arr_len277 = insertvalue %DriftArrayHeader %__array_cap_arrt113_4, i64 %t138, 0
   %arr_gen278 = insertvalue %DriftArrayHeader %arr_len277, i64 %t109, 2
   store %DriftArrayHeader %arr_gen278, ptr %pos__addr
   %t142 = add i64 0, 1
@@ -24982,11 +24982,11 @@ __bb_entry:
   %__logic_tmpt23_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt82_2 = phi i1 [ %__array_cap_grewt82_1, %__bb_entry ], [ %__array_cap_grewt82_2, %__bb_if_then1 ], [ %__array_cap_grewt82_5, %__bb_if_join ]
+  %__array_cap_grewt82_2 = phi i1 [ %__array_cap_grewt82_1, %__bb_entry ], [ %__array_cap_grewt82_2, %__bb_if_then1 ], [ %__array_cap_grewt82_4, %__bb_if_join ]
   %__array_cap_arrt81_2 = phi %DriftArrayHeader [ %__array_cap_arrt81_1, %__bb_entry ], [ %__array_cap_arrt81_2, %__bb_if_then1 ], [ %__arc2, %__bb_if_join ]
-  %__array_cap_grewt43_2 = phi i1 [ %__array_cap_grewt43_1, %__bb_entry ], [ %__array_cap_grewt43_2, %__bb_if_then1 ], [ %__array_cap_grewt43_3, %__bb_if_join ]
+  %__array_cap_grewt43_2 = phi i1 [ %__array_cap_grewt43_1, %__bb_entry ], [ %__array_cap_grewt43_2, %__bb_if_then1 ], [ %__array_cap_grewt43_4, %__bb_if_join ]
   %__array_cap_arrt42_2 = phi %DriftArrayHeader [ %__array_cap_arrt42_1, %__bb_entry ], [ %__array_cap_arrt42_2, %__bb_if_then1 ], [ %__arc1, %__bb_if_join ]
-  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_entry ], [ %__logic_tmpt23_5, %__bb_if_then1 ], [ %__logic_tmpt23_5, %__bb_if_join ]
+  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_entry ], [ %__logic_tmpt23_4, %__bb_if_then1 ], [ %__logic_tmpt23_4, %__bb_if_join ]
   %i_2 = phi i64 [ %t14, %__bb_entry ], [ %t30, %__bb_if_then1 ], [ %t111, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -25056,19 +25056,19 @@ __bb_if_join2:
   %__array_cap_arrt499_1 = insertvalue %DriftArrayHeader %zero_arr68, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt792_2 = phi i1 [ %__array_cap_grewt792_1, %__bb_if_join2 ], [ %__array_cap_grewt792_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt792_3, %__bb_if_join3 ], [ %__array_cap_grewt792_2, %__bb_array_cap_join24 ]
-  %__array_cap_arrt791_2 = phi %DriftArrayHeader [ %__array_cap_arrt791_1, %__bb_if_join2 ], [ %__array_cap_arrt791_2, %__bb_array_cap_join22 ], [ %__arc8, %__bb_if_join3 ], [ %__array_cap_arrt791_2, %__bb_array_cap_join24 ]
-  %__array_cap_grewt752_2 = phi i1 [ %__array_cap_grewt752_1, %__bb_if_join2 ], [ %__array_cap_grewt752_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt752_3, %__bb_if_join3 ], [ %__array_cap_grewt752_2, %__bb_array_cap_join24 ]
-  %__array_cap_arrt751_2 = phi %DriftArrayHeader [ %__array_cap_arrt751_1, %__bb_if_join2 ], [ %__array_cap_arrt751_2, %__bb_array_cap_join22 ], [ %__arc7, %__bb_if_join3 ], [ %__array_cap_arrt751_2, %__bb_array_cap_join24 ]
-  %__array_cap_grewt712_2 = phi i1 [ %__array_cap_grewt712_1, %__bb_if_join2 ], [ %__array_cap_grewt712_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt712_5, %__bb_if_join3 ], [ %__array_cap_grewt712_2, %__bb_array_cap_join24 ]
-  %__array_cap_arrt711_2 = phi %DriftArrayHeader [ %__array_cap_arrt711_1, %__bb_if_join2 ], [ %__array_cap_arrt711_2, %__bb_array_cap_join22 ], [ %__arc6, %__bb_if_join3 ], [ %__array_cap_arrt711_2, %__bb_array_cap_join24 ]
-  %__array_cap_grewt640_2 = phi i1 [ %__array_cap_grewt640_1, %__bb_if_join2 ], [ %__array_cap_grewt640_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt640_2, %__bb_if_join3 ], [ %__array_cap_grewt640_4, %__bb_array_cap_join24 ]
-  %__array_cap_arrt639_2 = phi %DriftArrayHeader [ %__array_cap_arrt639_1, %__bb_if_join2 ], [ %__array_cap_arrt639_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt639_2, %__bb_if_join3 ], [ %__arc5, %__bb_array_cap_join24 ]
-  %__array_cap_grewt600_2 = phi i1 [ %__array_cap_grewt600_1, %__bb_if_join2 ], [ %__array_cap_grewt600_2, %__bb_array_cap_join22 ], [ %__array_cap_grewt600_2, %__bb_if_join3 ], [ %__array_cap_grewt600_3, %__bb_array_cap_join24 ]
-  %__array_cap_arrt599_2 = phi %DriftArrayHeader [ %__array_cap_arrt599_1, %__bb_if_join2 ], [ %__array_cap_arrt599_2, %__bb_array_cap_join22 ], [ %__array_cap_arrt599_2, %__bb_if_join3 ], [ %__arc4, %__bb_array_cap_join24 ]
-  %__array_cap_grewt500_2 = phi i1 [ %__array_cap_grewt500_1, %__bb_if_join2 ], [ %__array_cap_grewt500_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt500_2, %__bb_if_join3 ], [ %__array_cap_grewt500_2, %__bb_array_cap_join24 ]
-  %__array_cap_arrt499_2 = phi %DriftArrayHeader [ %__array_cap_arrt499_1, %__bb_if_join2 ], [ %__arc3, %__bb_array_cap_join22 ], [ %__array_cap_arrt499_2, %__bb_if_join3 ], [ %__array_cap_arrt499_2, %__bb_array_cap_join24 ]
-  %i_6 = phi i64 [ %t129, %__bb_if_join2 ], [ %t529, %__bb_array_cap_join22 ], [ %t821, %__bb_if_join3 ], [ %t669, %__bb_array_cap_join24 ]
+  %__array_cap_grewt792_2 = phi i1 [ %__array_cap_grewt792_1, %__bb_if_join2 ], [ %__array_cap_grewt792_3, %__bb_if_join3 ], [ %__array_cap_grewt792_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt792_2, %__bb_array_cap_join22 ]
+  %__array_cap_arrt791_2 = phi %DriftArrayHeader [ %__array_cap_arrt791_1, %__bb_if_join2 ], [ %__arc8, %__bb_if_join3 ], [ %__array_cap_arrt791_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt791_2, %__bb_array_cap_join22 ]
+  %__array_cap_grewt752_2 = phi i1 [ %__array_cap_grewt752_1, %__bb_if_join2 ], [ %__array_cap_grewt752_5, %__bb_if_join3 ], [ %__array_cap_grewt752_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt752_2, %__bb_array_cap_join22 ]
+  %__array_cap_arrt751_2 = phi %DriftArrayHeader [ %__array_cap_arrt751_1, %__bb_if_join2 ], [ %__arc7, %__bb_if_join3 ], [ %__array_cap_arrt751_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt751_2, %__bb_array_cap_join22 ]
+  %__array_cap_grewt712_2 = phi i1 [ %__array_cap_grewt712_1, %__bb_if_join2 ], [ %__array_cap_grewt712_3, %__bb_if_join3 ], [ %__array_cap_grewt712_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt712_2, %__bb_array_cap_join22 ]
+  %__array_cap_arrt711_2 = phi %DriftArrayHeader [ %__array_cap_arrt711_1, %__bb_if_join2 ], [ %__arc6, %__bb_if_join3 ], [ %__array_cap_arrt711_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt711_2, %__bb_array_cap_join22 ]
+  %__array_cap_grewt640_2 = phi i1 [ %__array_cap_grewt640_1, %__bb_if_join2 ], [ %__array_cap_grewt640_2, %__bb_if_join3 ], [ %__array_cap_grewt640_3, %__bb_array_cap_join24 ], [ %__array_cap_grewt640_2, %__bb_array_cap_join22 ]
+  %__array_cap_arrt639_2 = phi %DriftArrayHeader [ %__array_cap_arrt639_1, %__bb_if_join2 ], [ %__array_cap_arrt639_2, %__bb_if_join3 ], [ %__arc5, %__bb_array_cap_join24 ], [ %__array_cap_arrt639_2, %__bb_array_cap_join22 ]
+  %__array_cap_grewt600_2 = phi i1 [ %__array_cap_grewt600_1, %__bb_if_join2 ], [ %__array_cap_grewt600_2, %__bb_if_join3 ], [ %__array_cap_grewt600_3, %__bb_array_cap_join24 ], [ %__array_cap_grewt600_2, %__bb_array_cap_join22 ]
+  %__array_cap_arrt599_2 = phi %DriftArrayHeader [ %__array_cap_arrt599_1, %__bb_if_join2 ], [ %__array_cap_arrt599_2, %__bb_if_join3 ], [ %__arc4, %__bb_array_cap_join24 ], [ %__array_cap_arrt599_2, %__bb_array_cap_join22 ]
+  %__array_cap_grewt500_2 = phi i1 [ %__array_cap_grewt500_1, %__bb_if_join2 ], [ %__array_cap_grewt500_2, %__bb_if_join3 ], [ %__array_cap_grewt500_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt500_4, %__bb_array_cap_join22 ]
+  %__array_cap_arrt499_2 = phi %DriftArrayHeader [ %__array_cap_arrt499_1, %__bb_if_join2 ], [ %__array_cap_arrt499_2, %__bb_if_join3 ], [ %__array_cap_arrt499_2, %__bb_array_cap_join24 ], [ %__arc3, %__bb_array_cap_join22 ]
+  %i_6 = phi i64 [ %t129, %__bb_if_join2 ], [ %t821, %__bb_if_join3 ], [ %t669, %__bb_array_cap_join24 ], [ %t529, %__bb_array_cap_join22 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t131 = load %DriftArrayHeader, ptr %clean__addr
@@ -25310,17 +25310,17 @@ __bb_array_cap_ok5:
   %t713 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt712_5 = phi i1 [ %t713, %__bb_array_cap_ok5 ], [ %t733, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt711_5 = phi %DriftArrayHeader [ %t700, %__bb_array_cap_ok5 ], [ %arr_len103, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt712_3 = phi i1 [ %t733, %__bb_array_copy_exit5 ], [ %t713, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt711_3 = phi %DriftArrayHeader [ %arr_len103, %__bb_array_copy_exit5 ], [ %t700, %__bb_array_cap_ok5 ]
   %zero_arr115 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr116 = insertvalue %DriftArrayHeader %zero_arr115, i64 0, 1
   %zero_arr117 = insertvalue %DriftArrayHeader %zero_arr116, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr117, ptr null, 3
-  %data118 = extractvalue %DriftArrayHeader %__array_cap_arrt711_5, 3
+  %data118 = extractvalue %DriftArrayHeader %__array_cap_arrt711_3, 3
   %eltptr119 = getelementptr inbounds i8, ptr %data118, i64 %t703
   store i8 %t702, ptr %eltptr119
   %t736 = add i64 %t703, %t708
-  %arr_len120 = insertvalue %DriftArrayHeader %__array_cap_arrt711_5, i64 %t736, 0
+  %arr_len120 = insertvalue %DriftArrayHeader %__array_cap_arrt711_3, i64 %t736, 0
   %arr_gen121 = insertvalue %DriftArrayHeader %arr_len120, i64 %t707, 2
   store %DriftArrayHeader %arr_gen121, ptr %out__addr
   %t740 = load %DriftArrayHeader, ptr %out__addr
@@ -25392,17 +25392,17 @@ __bb_array_cap_ok6:
   %t753 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt752_3 = phi i1 [ %t773, %__bb_array_copy_exit6 ], [ %t753, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt751_3 = phi %DriftArrayHeader [ %arr_len127, %__bb_array_copy_exit6 ], [ %t740, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt752_5 = phi i1 [ %t773, %__bb_array_copy_exit6 ], [ %t753, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt751_5 = phi %DriftArrayHeader [ %arr_len127, %__bb_array_copy_exit6 ], [ %t740, %__bb_array_cap_ok6 ]
   %zero_arr139 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr140 = insertvalue %DriftArrayHeader %zero_arr139, i64 0, 1
   %zero_arr141 = insertvalue %DriftArrayHeader %zero_arr140, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr141, ptr null, 3
-  %data142 = extractvalue %DriftArrayHeader %__array_cap_arrt751_3, 3
+  %data142 = extractvalue %DriftArrayHeader %__array_cap_arrt751_5, 3
   %eltptr143 = getelementptr inbounds i8, ptr %data142, i64 %t743
   store i8 %t742, ptr %eltptr143
   %t776 = add i64 %t743, %t748
-  %arr_len144 = insertvalue %DriftArrayHeader %__array_cap_arrt751_3, i64 %t776, 0
+  %arr_len144 = insertvalue %DriftArrayHeader %__array_cap_arrt751_5, i64 %t776, 0
   %arr_gen145 = insertvalue %DriftArrayHeader %arr_len144, i64 %t747, 2
   store %DriftArrayHeader %arr_gen145, ptr %out__addr
   %t780 = load %DriftArrayHeader, ptr %out__addr
@@ -25474,8 +25474,8 @@ __bb_array_cap_ok7:
   %t793 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt792_3 = phi i1 [ %t813, %__bb_array_copy_exit7 ], [ %t793, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt791_3 = phi %DriftArrayHeader [ %arr_len151, %__bb_array_copy_exit7 ], [ %t780, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt792_3 = phi i1 [ %t793, %__bb_array_cap_ok7 ], [ %t813, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt791_3 = phi %DriftArrayHeader [ %t780, %__bb_array_cap_ok7 ], [ %arr_len151, %__bb_array_copy_exit7 ]
   %zero_arr163 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr164 = insertvalue %DriftArrayHeader %zero_arr163, i64 0, 1
   %zero_arr165 = insertvalue %DriftArrayHeader %zero_arr164, i64 0, 2
@@ -25667,17 +25667,17 @@ __bb_array_cap_ok4:
   %t641 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt640_4 = phi i1 [ %t641, %__bb_array_cap_ok4 ], [ %t661, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt639_4 = phi %DriftArrayHeader [ %t628, %__bb_array_cap_ok4 ], [ %arr_len199, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt640_3 = phi i1 [ %t641, %__bb_array_cap_ok4 ], [ %t661, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt639_3 = phi %DriftArrayHeader [ %t628, %__bb_array_cap_ok4 ], [ %arr_len199, %__bb_array_copy_exit4 ]
   %zero_arr211 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr212 = insertvalue %DriftArrayHeader %zero_arr211, i64 0, 1
   %zero_arr213 = insertvalue %DriftArrayHeader %zero_arr212, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr213, ptr null, 3
-  %data214 = extractvalue %DriftArrayHeader %__array_cap_arrt639_4, 3
+  %data214 = extractvalue %DriftArrayHeader %__array_cap_arrt639_3, 3
   %eltptr215 = getelementptr inbounds i8, ptr %data214, i64 %t631
   store i8 %t630, ptr %eltptr215
   %t664 = add i64 %t631, %t636
-  %arr_len216 = insertvalue %DriftArrayHeader %__array_cap_arrt639_4, i64 %t664, 0
+  %arr_len216 = insertvalue %DriftArrayHeader %__array_cap_arrt639_3, i64 %t664, 0
   %arr_gen217 = insertvalue %DriftArrayHeader %arr_len216, i64 %t635, 2
   store %DriftArrayHeader %arr_gen217, ptr %out__addr
   %t668 = add i64 0, 4
@@ -26717,8 +26717,8 @@ __bb_logic_rhs:
   %t26 = call i1 @"std.codec::_is_ascii_whitespace"(i8 %t21)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt23_5 = phi i1 [ %t24, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt23_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt23_4 = phi i1 [ %t24, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt23_4, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t32 = load %DriftArrayHeader, ptr %clean__addr
   %t34 = extractvalue %DriftArrayHeader %t32, 0
@@ -26788,17 +26788,17 @@ __bb_array_cap_ok:
   %t44 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt43_3 = phi i1 [ %t44, %__bb_array_cap_ok ], [ %t64, %__bb_array_copy_exit ]
-  %__array_cap_arrt42_3 = phi %DriftArrayHeader [ %t32, %__bb_array_cap_ok ], [ %arr_len630, %__bb_array_copy_exit ]
+  %__array_cap_grewt43_4 = phi i1 [ %t44, %__bb_array_cap_ok ], [ %t64, %__bb_array_copy_exit ]
+  %__array_cap_arrt42_4 = phi %DriftArrayHeader [ %t32, %__bb_array_cap_ok ], [ %arr_len630, %__bb_array_copy_exit ]
   %zero_arr642 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr643 = insertvalue %DriftArrayHeader %zero_arr642, i64 0, 1
   %zero_arr644 = insertvalue %DriftArrayHeader %zero_arr643, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr644, ptr null, 3
-  %data645 = extractvalue %DriftArrayHeader %__array_cap_arrt42_3, 3
+  %data645 = extractvalue %DriftArrayHeader %__array_cap_arrt42_4, 3
   %eltptr646 = getelementptr inbounds i8, ptr %data645, i64 %t34
   store i8 %t21, ptr %eltptr646
   %t67 = add i64 %t34, %t39
-  %arr_len647 = insertvalue %DriftArrayHeader %__array_cap_arrt42_3, i64 %t67, 0
+  %arr_len647 = insertvalue %DriftArrayHeader %__array_cap_arrt42_4, i64 %t67, 0
   %arr_gen648 = insertvalue %DriftArrayHeader %arr_len647, i64 %t38, 2
   store %DriftArrayHeader %arr_gen648, ptr %clean__addr
   %t71 = load %DriftArrayHeader, ptr %pos__addr
@@ -26869,17 +26869,17 @@ __bb_array_cap_ok1:
   %t83 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt82_5 = phi i1 [ %t103, %__bb_array_copy_exit1 ], [ %t83, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt81_5 = phi %DriftArrayHeader [ %arr_len654, %__bb_array_copy_exit1 ], [ %t71, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt82_4 = phi i1 [ %t83, %__bb_array_cap_ok1 ], [ %t103, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt81_4 = phi %DriftArrayHeader [ %t71, %__bb_array_cap_ok1 ], [ %arr_len654, %__bb_array_copy_exit1 ]
   %zero_arr666 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr667 = insertvalue %DriftArrayHeader %zero_arr666, i64 0, 1
   %zero_arr668 = insertvalue %DriftArrayHeader %zero_arr667, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr668, ptr null, 3
-  %data669 = extractvalue %DriftArrayHeader %__array_cap_arrt81_5, 3
+  %data669 = extractvalue %DriftArrayHeader %__array_cap_arrt81_4, 3
   %eltptr670 = getelementptr inbounds i64, ptr %data669, i64 %t73
   store i64 %i_2, ptr %eltptr670
   %t106 = add i64 %t73, %t78
-  %arr_len671 = insertvalue %DriftArrayHeader %__array_cap_arrt81_5, i64 %t106, 0
+  %arr_len671 = insertvalue %DriftArrayHeader %__array_cap_arrt81_4, i64 %t106, 0
   %arr_gen672 = insertvalue %DriftArrayHeader %arr_len671, i64 %t77, 2
   store %DriftArrayHeader %arr_gen672, ptr %pos__addr
   %t110 = add i64 0, 1
@@ -27012,11 +27012,11 @@ __bb_entry:
   %__logic_tmpt23_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt82_2 = phi i1 [ %__array_cap_grewt82_1, %__bb_entry ], [ %__array_cap_grewt82_2, %__bb_if_then1 ], [ %__array_cap_grewt82_5, %__bb_if_join ]
+  %__array_cap_grewt82_2 = phi i1 [ %__array_cap_grewt82_1, %__bb_entry ], [ %__array_cap_grewt82_2, %__bb_if_then1 ], [ %__array_cap_grewt82_4, %__bb_if_join ]
   %__array_cap_arrt81_2 = phi %DriftArrayHeader [ %__array_cap_arrt81_1, %__bb_entry ], [ %__array_cap_arrt81_2, %__bb_if_then1 ], [ %__arc2, %__bb_if_join ]
-  %__array_cap_grewt43_2 = phi i1 [ %__array_cap_grewt43_1, %__bb_entry ], [ %__array_cap_grewt43_2, %__bb_if_then1 ], [ %__array_cap_grewt43_3, %__bb_if_join ]
+  %__array_cap_grewt43_2 = phi i1 [ %__array_cap_grewt43_1, %__bb_entry ], [ %__array_cap_grewt43_2, %__bb_if_then1 ], [ %__array_cap_grewt43_4, %__bb_if_join ]
   %__array_cap_arrt42_2 = phi %DriftArrayHeader [ %__array_cap_arrt42_1, %__bb_entry ], [ %__array_cap_arrt42_2, %__bb_if_then1 ], [ %__arc1, %__bb_if_join ]
-  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_entry ], [ %__logic_tmpt23_5, %__bb_if_then1 ], [ %__logic_tmpt23_5, %__bb_if_join ]
+  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_entry ], [ %__logic_tmpt23_4, %__bb_if_then1 ], [ %__logic_tmpt23_4, %__bb_if_join ]
   %i_2 = phi i64 [ %t14, %__bb_entry ], [ %t30, %__bb_if_then1 ], [ %t111, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -27143,41 +27143,41 @@ __bb_if_join2:
   %j_1 = add i64 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt1226_2 = phi i1 [ %__array_cap_grewt1226_1, %__bb_if_join2 ], [ %__array_cap_grewt1226_9, %__bb_if_join3 ]
-  %__array_cap_arrt1225_2 = phi %DriftArrayHeader [ %__array_cap_arrt1225_1, %__bb_if_join2 ], [ %__array_cap_arrt1225_10, %__bb_if_join3 ]
-  %__array_cap_grewt1186_2 = phi i1 [ %__array_cap_grewt1186_1, %__bb_if_join2 ], [ %__array_cap_grewt1186_9, %__bb_if_join3 ]
-  %__array_cap_arrt1185_2 = phi %DriftArrayHeader [ %__array_cap_arrt1185_1, %__bb_if_join2 ], [ %__array_cap_arrt1185_10, %__bb_if_join3 ]
-  %__array_cap_grewt1146_2 = phi i1 [ %__array_cap_grewt1146_1, %__bb_if_join2 ], [ %__array_cap_grewt1146_9, %__bb_if_join3 ]
-  %__array_cap_arrt1145_2 = phi %DriftArrayHeader [ %__array_cap_arrt1145_1, %__bb_if_join2 ], [ %__array_cap_arrt1145_10, %__bb_if_join3 ]
-  %__array_cap_grewt1106_2 = phi i1 [ %__array_cap_grewt1106_1, %__bb_if_join2 ], [ %__array_cap_grewt1106_9, %__bb_if_join3 ]
-  %__array_cap_arrt1105_2 = phi %DriftArrayHeader [ %__array_cap_arrt1105_1, %__bb_if_join2 ], [ %__array_cap_arrt1105_10, %__bb_if_join3 ]
-  %__array_cap_grewt1066_2 = phi i1 [ %__array_cap_grewt1066_1, %__bb_if_join2 ], [ %__array_cap_grewt1066_9, %__bb_if_join3 ]
-  %__array_cap_arrt1065_2 = phi %DriftArrayHeader [ %__array_cap_arrt1065_1, %__bb_if_join2 ], [ %__array_cap_arrt1065_10, %__bb_if_join3 ]
-  %__array_cap_grewt1026_2 = phi i1 [ %__array_cap_grewt1026_1, %__bb_if_join2 ], [ %__array_cap_grewt1026_9, %__bb_if_join3 ]
-  %__array_cap_arrt1025_2 = phi %DriftArrayHeader [ %__array_cap_arrt1025_1, %__bb_if_join2 ], [ %__array_cap_arrt1025_10, %__bb_if_join3 ]
-  %__array_cap_grewt986_2 = phi i1 [ %__array_cap_grewt986_1, %__bb_if_join2 ], [ %__array_cap_grewt986_9, %__bb_if_join3 ]
-  %__array_cap_arrt985_2 = phi %DriftArrayHeader [ %__array_cap_arrt985_1, %__bb_if_join2 ], [ %__array_cap_arrt985_10, %__bb_if_join3 ]
-  %__array_cap_grewt946_2 = phi i1 [ %__array_cap_grewt946_1, %__bb_if_join2 ], [ %__array_cap_grewt946_9, %__bb_if_join3 ]
-  %__array_cap_arrt945_2 = phi %DriftArrayHeader [ %__array_cap_arrt945_1, %__bb_if_join2 ], [ %__array_cap_arrt945_10, %__bb_if_join3 ]
-  %__array_cap_grewt906_2 = phi i1 [ %__array_cap_grewt906_1, %__bb_if_join2 ], [ %__array_cap_grewt906_9, %__bb_if_join3 ]
-  %__array_cap_arrt905_2 = phi %DriftArrayHeader [ %__array_cap_arrt905_1, %__bb_if_join2 ], [ %__array_cap_arrt905_10, %__bb_if_join3 ]
-  %__array_cap_grewt863_2 = phi i1 [ %__array_cap_grewt863_1, %__bb_if_join2 ], [ %__array_cap_grewt863_8, %__bb_if_join3 ]
-  %__array_cap_arrt862_2 = phi %DriftArrayHeader [ %__array_cap_arrt862_1, %__bb_if_join2 ], [ %__array_cap_arrt862_9, %__bb_if_join3 ]
-  %__array_cap_grewt823_2 = phi i1 [ %__array_cap_grewt823_1, %__bb_if_join2 ], [ %__array_cap_grewt823_8, %__bb_if_join3 ]
-  %__array_cap_arrt822_2 = phi %DriftArrayHeader [ %__array_cap_arrt822_1, %__bb_if_join2 ], [ %__array_cap_arrt822_9, %__bb_if_join3 ]
-  %__array_cap_grewt783_2 = phi i1 [ %__array_cap_grewt783_1, %__bb_if_join2 ], [ %__array_cap_grewt783_8, %__bb_if_join3 ]
-  %__array_cap_arrt782_2 = phi %DriftArrayHeader [ %__array_cap_arrt782_1, %__bb_if_join2 ], [ %__array_cap_arrt782_9, %__bb_if_join3 ]
-  %__array_cap_grewt740_2 = phi i1 [ %__array_cap_grewt740_1, %__bb_if_join2 ], [ %__array_cap_grewt740_7, %__bb_if_join3 ]
-  %__array_cap_arrt739_2 = phi %DriftArrayHeader [ %__array_cap_arrt739_1, %__bb_if_join2 ], [ %__array_cap_arrt739_8, %__bb_if_join3 ]
-  %__array_cap_grewt700_2 = phi i1 [ %__array_cap_grewt700_1, %__bb_if_join2 ], [ %__array_cap_grewt700_7, %__bb_if_join3 ]
-  %__array_cap_arrt699_2 = phi %DriftArrayHeader [ %__array_cap_arrt699_1, %__bb_if_join2 ], [ %__array_cap_arrt699_8, %__bb_if_join3 ]
-  %__array_cap_grewt657_2 = phi i1 [ %__array_cap_grewt657_1, %__bb_if_join2 ], [ %__array_cap_grewt657_6, %__bb_if_join3 ]
-  %__array_cap_arrt656_2 = phi %DriftArrayHeader [ %__array_cap_arrt656_1, %__bb_if_join2 ], [ %__array_cap_arrt656_7, %__bb_if_join3 ]
-  %__logic_tmpt393_2 = phi i1 [ %__logic_tmpt393_1, %__bb_if_join2 ], [ %__logic_tmpt393_3, %__bb_if_join3 ]
+  %__array_cap_grewt1226_2 = phi i1 [ %__array_cap_grewt1226_1, %__bb_if_join2 ], [ %__array_cap_grewt1226_3, %__bb_if_join3 ]
+  %__array_cap_arrt1225_2 = phi %DriftArrayHeader [ %__array_cap_arrt1225_1, %__bb_if_join2 ], [ %__array_cap_arrt1225_3, %__bb_if_join3 ]
+  %__array_cap_grewt1186_2 = phi i1 [ %__array_cap_grewt1186_1, %__bb_if_join2 ], [ %__array_cap_grewt1186_3, %__bb_if_join3 ]
+  %__array_cap_arrt1185_2 = phi %DriftArrayHeader [ %__array_cap_arrt1185_1, %__bb_if_join2 ], [ %__array_cap_arrt1185_3, %__bb_if_join3 ]
+  %__array_cap_grewt1146_2 = phi i1 [ %__array_cap_grewt1146_1, %__bb_if_join2 ], [ %__array_cap_grewt1146_3, %__bb_if_join3 ]
+  %__array_cap_arrt1145_2 = phi %DriftArrayHeader [ %__array_cap_arrt1145_1, %__bb_if_join2 ], [ %__array_cap_arrt1145_3, %__bb_if_join3 ]
+  %__array_cap_grewt1106_2 = phi i1 [ %__array_cap_grewt1106_1, %__bb_if_join2 ], [ %__array_cap_grewt1106_3, %__bb_if_join3 ]
+  %__array_cap_arrt1105_2 = phi %DriftArrayHeader [ %__array_cap_arrt1105_1, %__bb_if_join2 ], [ %__array_cap_arrt1105_3, %__bb_if_join3 ]
+  %__array_cap_grewt1066_2 = phi i1 [ %__array_cap_grewt1066_1, %__bb_if_join2 ], [ %__array_cap_grewt1066_3, %__bb_if_join3 ]
+  %__array_cap_arrt1065_2 = phi %DriftArrayHeader [ %__array_cap_arrt1065_1, %__bb_if_join2 ], [ %__array_cap_arrt1065_3, %__bb_if_join3 ]
+  %__array_cap_grewt1026_2 = phi i1 [ %__array_cap_grewt1026_1, %__bb_if_join2 ], [ %__array_cap_grewt1026_3, %__bb_if_join3 ]
+  %__array_cap_arrt1025_2 = phi %DriftArrayHeader [ %__array_cap_arrt1025_1, %__bb_if_join2 ], [ %__array_cap_arrt1025_3, %__bb_if_join3 ]
+  %__array_cap_grewt986_2 = phi i1 [ %__array_cap_grewt986_1, %__bb_if_join2 ], [ %__array_cap_grewt986_3, %__bb_if_join3 ]
+  %__array_cap_arrt985_2 = phi %DriftArrayHeader [ %__array_cap_arrt985_1, %__bb_if_join2 ], [ %__array_cap_arrt985_3, %__bb_if_join3 ]
+  %__array_cap_grewt946_2 = phi i1 [ %__array_cap_grewt946_1, %__bb_if_join2 ], [ %__array_cap_grewt946_3, %__bb_if_join3 ]
+  %__array_cap_arrt945_2 = phi %DriftArrayHeader [ %__array_cap_arrt945_1, %__bb_if_join2 ], [ %__array_cap_arrt945_3, %__bb_if_join3 ]
+  %__array_cap_grewt906_2 = phi i1 [ %__array_cap_grewt906_1, %__bb_if_join2 ], [ %__array_cap_grewt906_3, %__bb_if_join3 ]
+  %__array_cap_arrt905_2 = phi %DriftArrayHeader [ %__array_cap_arrt905_1, %__bb_if_join2 ], [ %__array_cap_arrt905_3, %__bb_if_join3 ]
+  %__array_cap_grewt863_2 = phi i1 [ %__array_cap_grewt863_1, %__bb_if_join2 ], [ %__array_cap_grewt863_3, %__bb_if_join3 ]
+  %__array_cap_arrt862_2 = phi %DriftArrayHeader [ %__array_cap_arrt862_1, %__bb_if_join2 ], [ %__array_cap_arrt862_3, %__bb_if_join3 ]
+  %__array_cap_grewt823_2 = phi i1 [ %__array_cap_grewt823_1, %__bb_if_join2 ], [ %__array_cap_grewt823_3, %__bb_if_join3 ]
+  %__array_cap_arrt822_2 = phi %DriftArrayHeader [ %__array_cap_arrt822_1, %__bb_if_join2 ], [ %__array_cap_arrt822_3, %__bb_if_join3 ]
+  %__array_cap_grewt783_2 = phi i1 [ %__array_cap_grewt783_1, %__bb_if_join2 ], [ %__array_cap_grewt783_3, %__bb_if_join3 ]
+  %__array_cap_arrt782_2 = phi %DriftArrayHeader [ %__array_cap_arrt782_1, %__bb_if_join2 ], [ %__array_cap_arrt782_3, %__bb_if_join3 ]
+  %__array_cap_grewt740_2 = phi i1 [ %__array_cap_grewt740_1, %__bb_if_join2 ], [ %__array_cap_grewt740_3, %__bb_if_join3 ]
+  %__array_cap_arrt739_2 = phi %DriftArrayHeader [ %__array_cap_arrt739_1, %__bb_if_join2 ], [ %__array_cap_arrt739_3, %__bb_if_join3 ]
+  %__array_cap_grewt700_2 = phi i1 [ %__array_cap_grewt700_1, %__bb_if_join2 ], [ %__array_cap_grewt700_3, %__bb_if_join3 ]
+  %__array_cap_arrt699_2 = phi %DriftArrayHeader [ %__array_cap_arrt699_1, %__bb_if_join2 ], [ %__array_cap_arrt699_3, %__bb_if_join3 ]
+  %__array_cap_grewt657_2 = phi i1 [ %__array_cap_grewt657_1, %__bb_if_join2 ], [ %__array_cap_grewt657_3, %__bb_if_join3 ]
+  %__array_cap_arrt656_2 = phi %DriftArrayHeader [ %__array_cap_arrt656_1, %__bb_if_join2 ], [ %__array_cap_arrt656_3, %__bb_if_join3 ]
+  %__logic_tmpt393_2 = phi i1 [ %__logic_tmpt393_1, %__bb_if_join2 ], [ %__logic_tmpt393_4, %__bb_if_join3 ]
   %__logic_tmpt387_2 = phi i1 [ %__logic_tmpt387_1, %__bb_if_join2 ], [ %__logic_tmpt387_3, %__bb_if_join3 ]
-  %__logic_tmpt381_2 = phi i1 [ %__logic_tmpt381_1, %__bb_if_join2 ], [ %__logic_tmpt381_4, %__bb_if_join3 ]
+  %__logic_tmpt381_2 = phi i1 [ %__logic_tmpt381_1, %__bb_if_join2 ], [ %__logic_tmpt381_3, %__bb_if_join3 ]
   %__logic_tmpt375_2 = phi i1 [ %__logic_tmpt375_1, %__bb_if_join2 ], [ %__logic_tmpt375_3, %__bb_if_join3 ]
-  %__logic_tmpt335_2 = phi i1 [ %__logic_tmpt335_1, %__bb_if_join2 ], [ %__logic_tmpt335_5, %__bb_if_join3 ]
+  %__logic_tmpt335_2 = phi i1 [ %__logic_tmpt335_1, %__bb_if_join2 ], [ %__logic_tmpt335_3, %__bb_if_join3 ]
   %__array_cap_grewt210_2 = phi i1 [ %__array_cap_grewt210_1, %__bb_if_join2 ], [ %__array_cap_grewt210_3, %__bb_if_join3 ]
   %__array_cap_arrt209_2 = phi %DriftArrayHeader [ %__array_cap_arrt209_1, %__bb_if_join2 ], [ %__array_cap_arrt209_3, %__bb_if_join3 ]
   %pad_2 = phi i64 [ %pad_1, %__bb_if_join2 ], [ %pad_4, %__bb_if_join3 ]
@@ -27331,8 +27331,8 @@ __bb_logic_rhs1:
   %t342 = icmp ne i64 %t339, %t341
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt335_5 = phi i1 [ %t342, %__bb_logic_rhs1 ], [ %t336, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt335_5, label %__bb_if_then10, label %__bb_if_join10
+  %__logic_tmpt335_3 = phi i1 [ %t342, %__bb_logic_rhs1 ], [ %t336, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt335_3, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   %t373 = add i64 0, 0
   %t374 = icmp eq i64 %pad_4, %t373
@@ -27345,7 +27345,7 @@ __bb_logic_short2:
   %t376 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt375_3 = phi i1 [ %t376, %__bb_logic_short2 ], [ %t379, %__bb_logic_rhs2 ]
+  %__logic_tmpt375_3 = phi i1 [ %t379, %__bb_logic_rhs2 ], [ %t376, %__bb_logic_short2 ]
   br i1 %__logic_tmpt375_3, label %__bb_logic_short3, label %__bb_logic_rhs3
 __bb_logic_rhs3:
   %t384 = add i64 0, 3
@@ -27355,8 +27355,8 @@ __bb_logic_short3:
   %t382 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt381_4 = phi i1 [ %t385, %__bb_logic_rhs3 ], [ %t382, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt381_4, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt381_3 = phi i1 [ %t382, %__bb_logic_short3 ], [ %t385, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt381_3, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %t390 = add i64 0, 4
   %t391 = icmp eq i64 %pad_4, %t390
@@ -27365,7 +27365,7 @@ __bb_logic_short4:
   %t388 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt387_3 = phi i1 [ %t388, %__bb_logic_short4 ], [ %t391, %__bb_logic_rhs4 ]
+  %__logic_tmpt387_3 = phi i1 [ %t391, %__bb_logic_rhs4 ], [ %t388, %__bb_logic_short4 ]
   br i1 %__logic_tmpt387_3, label %__bb_logic_short5, label %__bb_logic_rhs5
 __bb_logic_rhs5:
   %t396 = add i64 0, 6
@@ -27375,8 +27375,8 @@ __bb_logic_short5:
   %t394 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt393_3 = phi i1 [ %t394, %__bb_logic_short5 ], [ %t397, %__bb_logic_rhs5 ]
-  %t399 = xor i1 %__logic_tmpt393_3, true
+  %__logic_tmpt393_4 = phi i1 [ %t397, %__bb_logic_rhs5 ], [ %t394, %__bb_logic_short5 ]
+  %t399 = xor i1 %__logic_tmpt393_4, true
   br i1 %t399, label %__bb_if_then11, label %__bb_if_join11
 __bb_if_join11:
   %t430 = load %DriftArrayHeader, ptr %vals__addr
@@ -27631,17 +27631,17 @@ __bb_array_cap_ok13:
   %t1067 = add i1 0, 0
   br label %__bb_array_cap_join213
 __bb_array_cap_join213:
-  %__array_cap_grewt1066_3 = phi i1 [ %t1067, %__bb_array_cap_ok13 ], [ %t1087, %__bb_array_copy_exit13 ]
-  %__array_cap_arrt1065_3 = phi %DriftArrayHeader [ %t1054, %__bb_array_cap_ok13 ], [ %arr_len167, %__bb_array_copy_exit13 ]
+  %__array_cap_grewt1066_6 = phi i1 [ %t1087, %__bb_array_copy_exit13 ], [ %t1067, %__bb_array_cap_ok13 ]
+  %__array_cap_arrt1065_6 = phi %DriftArrayHeader [ %arr_len167, %__bb_array_copy_exit13 ], [ %t1054, %__bb_array_cap_ok13 ]
   %zero_arr179 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr180 = insertvalue %DriftArrayHeader %zero_arr179, i64 0, 1
   %zero_arr181 = insertvalue %DriftArrayHeader %zero_arr180, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr181, ptr null, 3
-  %data182 = extractvalue %DriftArrayHeader %__array_cap_arrt1065_3, 3
+  %data182 = extractvalue %DriftArrayHeader %__array_cap_arrt1065_6, 3
   %eltptr183 = getelementptr inbounds i8, ptr %data182, i64 %t1057
   store i8 %t1056, ptr %eltptr183
   %t1090 = add i64 %t1057, %t1062
-  %arr_len184 = insertvalue %DriftArrayHeader %__array_cap_arrt1065_3, i64 %t1090, 0
+  %arr_len184 = insertvalue %DriftArrayHeader %__array_cap_arrt1065_6, i64 %t1090, 0
   %arr_gen185 = insertvalue %DriftArrayHeader %arr_len184, i64 %t1061, 2
   store %DriftArrayHeader %arr_gen185, ptr %out__addr
   %t1094 = load %DriftArrayHeader, ptr %out__addr
@@ -27713,17 +27713,17 @@ __bb_array_cap_ok14:
   %t1107 = add i1 0, 0
   br label %__bb_array_cap_join214
 __bb_array_cap_join214:
-  %__array_cap_grewt1106_4 = phi i1 [ %t1127, %__bb_array_copy_exit14 ], [ %t1107, %__bb_array_cap_ok14 ]
-  %__array_cap_arrt1105_4 = phi %DriftArrayHeader [ %arr_len191, %__bb_array_copy_exit14 ], [ %t1094, %__bb_array_cap_ok14 ]
+  %__array_cap_grewt1106_8 = phi i1 [ %t1107, %__bb_array_cap_ok14 ], [ %t1127, %__bb_array_copy_exit14 ]
+  %__array_cap_arrt1105_8 = phi %DriftArrayHeader [ %t1094, %__bb_array_cap_ok14 ], [ %arr_len191, %__bb_array_copy_exit14 ]
   %zero_arr203 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr204 = insertvalue %DriftArrayHeader %zero_arr203, i64 0, 1
   %zero_arr205 = insertvalue %DriftArrayHeader %zero_arr204, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr205, ptr null, 3
-  %data206 = extractvalue %DriftArrayHeader %__array_cap_arrt1105_4, 3
+  %data206 = extractvalue %DriftArrayHeader %__array_cap_arrt1105_8, 3
   %eltptr207 = getelementptr inbounds i8, ptr %data206, i64 %t1097
   store i8 %t1096, ptr %eltptr207
   %t1130 = add i64 %t1097, %t1102
-  %arr_len208 = insertvalue %DriftArrayHeader %__array_cap_arrt1105_4, i64 %t1130, 0
+  %arr_len208 = insertvalue %DriftArrayHeader %__array_cap_arrt1105_8, i64 %t1130, 0
   %arr_gen209 = insertvalue %DriftArrayHeader %arr_len208, i64 %t1101, 2
   store %DriftArrayHeader %arr_gen209, ptr %out__addr
   %t1134 = load %DriftArrayHeader, ptr %out__addr
@@ -27795,17 +27795,17 @@ __bb_array_cap_ok15:
   %t1147 = add i1 0, 0
   br label %__bb_array_cap_join215
 __bb_array_cap_join215:
-  %__array_cap_grewt1146_5 = phi i1 [ %t1147, %__bb_array_cap_ok15 ], [ %t1167, %__bb_array_copy_exit15 ]
-  %__array_cap_arrt1145_5 = phi %DriftArrayHeader [ %t1134, %__bb_array_cap_ok15 ], [ %arr_len215, %__bb_array_copy_exit15 ]
+  %__array_cap_grewt1146_8 = phi i1 [ %t1167, %__bb_array_copy_exit15 ], [ %t1147, %__bb_array_cap_ok15 ]
+  %__array_cap_arrt1145_8 = phi %DriftArrayHeader [ %arr_len215, %__bb_array_copy_exit15 ], [ %t1134, %__bb_array_cap_ok15 ]
   %zero_arr227 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr228 = insertvalue %DriftArrayHeader %zero_arr227, i64 0, 1
   %zero_arr229 = insertvalue %DriftArrayHeader %zero_arr228, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr229, ptr null, 3
-  %data230 = extractvalue %DriftArrayHeader %__array_cap_arrt1145_5, 3
+  %data230 = extractvalue %DriftArrayHeader %__array_cap_arrt1145_8, 3
   %eltptr231 = getelementptr inbounds i8, ptr %data230, i64 %t1137
   store i8 %t1136, ptr %eltptr231
   %t1170 = add i64 %t1137, %t1142
-  %arr_len232 = insertvalue %DriftArrayHeader %__array_cap_arrt1145_5, i64 %t1170, 0
+  %arr_len232 = insertvalue %DriftArrayHeader %__array_cap_arrt1145_8, i64 %t1170, 0
   %arr_gen233 = insertvalue %DriftArrayHeader %arr_len232, i64 %t1141, 2
   store %DriftArrayHeader %arr_gen233, ptr %out__addr
   %t1174 = load %DriftArrayHeader, ptr %out__addr
@@ -27877,17 +27877,17 @@ __bb_array_cap_ok16:
   %t1187 = add i1 0, 0
   br label %__bb_array_cap_join216
 __bb_array_cap_join216:
-  %__array_cap_grewt1186_4 = phi i1 [ %t1187, %__bb_array_cap_ok16 ], [ %t1207, %__bb_array_copy_exit16 ]
-  %__array_cap_arrt1185_4 = phi %DriftArrayHeader [ %t1174, %__bb_array_cap_ok16 ], [ %arr_len239, %__bb_array_copy_exit16 ]
+  %__array_cap_grewt1186_7 = phi i1 [ %t1207, %__bb_array_copy_exit16 ], [ %t1187, %__bb_array_cap_ok16 ]
+  %__array_cap_arrt1185_7 = phi %DriftArrayHeader [ %arr_len239, %__bb_array_copy_exit16 ], [ %t1174, %__bb_array_cap_ok16 ]
   %zero_arr251 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr252 = insertvalue %DriftArrayHeader %zero_arr251, i64 0, 1
   %zero_arr253 = insertvalue %DriftArrayHeader %zero_arr252, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr253, ptr null, 3
-  %data254 = extractvalue %DriftArrayHeader %__array_cap_arrt1185_4, 3
+  %data254 = extractvalue %DriftArrayHeader %__array_cap_arrt1185_7, 3
   %eltptr255 = getelementptr inbounds i8, ptr %data254, i64 %t1177
   store i8 %t1176, ptr %eltptr255
   %t1210 = add i64 %t1177, %t1182
-  %arr_len256 = insertvalue %DriftArrayHeader %__array_cap_arrt1185_4, i64 %t1210, 0
+  %arr_len256 = insertvalue %DriftArrayHeader %__array_cap_arrt1185_7, i64 %t1210, 0
   %arr_gen257 = insertvalue %DriftArrayHeader %arr_len256, i64 %t1181, 2
   store %DriftArrayHeader %arr_gen257, ptr %out__addr
   %t1214 = load %DriftArrayHeader, ptr %out__addr
@@ -27959,17 +27959,17 @@ __bb_array_cap_ok17:
   %t1227 = add i1 0, 0
   br label %__bb_array_cap_join217
 __bb_array_cap_join217:
-  %__array_cap_grewt1226_3 = phi i1 [ %t1227, %__bb_array_cap_ok17 ], [ %t1247, %__bb_array_copy_exit17 ]
-  %__array_cap_arrt1225_3 = phi %DriftArrayHeader [ %t1214, %__bb_array_cap_ok17 ], [ %arr_len263, %__bb_array_copy_exit17 ]
+  %__array_cap_grewt1226_8 = phi i1 [ %t1227, %__bb_array_cap_ok17 ], [ %t1247, %__bb_array_copy_exit17 ]
+  %__array_cap_arrt1225_8 = phi %DriftArrayHeader [ %t1214, %__bb_array_cap_ok17 ], [ %arr_len263, %__bb_array_copy_exit17 ]
   %zero_arr275 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr276 = insertvalue %DriftArrayHeader %zero_arr275, i64 0, 1
   %zero_arr277 = insertvalue %DriftArrayHeader %zero_arr276, i64 0, 2
   %__arc10 = insertvalue %DriftArrayHeader %zero_arr277, ptr null, 3
-  %data278 = extractvalue %DriftArrayHeader %__array_cap_arrt1225_3, 3
+  %data278 = extractvalue %DriftArrayHeader %__array_cap_arrt1225_8, 3
   %eltptr279 = getelementptr inbounds i8, ptr %data278, i64 %t1217
   store i8 %t1216, ptr %eltptr279
   %t1250 = add i64 %t1217, %t1222
-  %arr_len280 = insertvalue %DriftArrayHeader %__array_cap_arrt1225_3, i64 %t1250, 0
+  %arr_len280 = insertvalue %DriftArrayHeader %__array_cap_arrt1225_8, i64 %t1250, 0
   %arr_gen281 = insertvalue %DriftArrayHeader %arr_len280, i64 %t1221, 2
   store %DriftArrayHeader %arr_gen281, ptr %out__addr
   br label %__bb_if_join15
@@ -28043,17 +28043,17 @@ __bb_array_cap_ok9:
   %t907 = add i1 0, 0
   br label %__bb_array_cap_join29
 __bb_array_cap_join29:
-  %__array_cap_grewt906_4 = phi i1 [ %t907, %__bb_array_cap_ok9 ], [ %t927, %__bb_array_copy_exit9 ]
-  %__array_cap_arrt905_4 = phi %DriftArrayHeader [ %t894, %__bb_array_cap_ok9 ], [ %arr_len287, %__bb_array_copy_exit9 ]
+  %__array_cap_grewt906_8 = phi i1 [ %t907, %__bb_array_cap_ok9 ], [ %t927, %__bb_array_copy_exit9 ]
+  %__array_cap_arrt905_8 = phi %DriftArrayHeader [ %t894, %__bb_array_cap_ok9 ], [ %arr_len287, %__bb_array_copy_exit9 ]
   %zero_arr299 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr300 = insertvalue %DriftArrayHeader %zero_arr299, i64 0, 1
   %zero_arr301 = insertvalue %DriftArrayHeader %zero_arr300, i64 0, 2
   %__arc18 = insertvalue %DriftArrayHeader %zero_arr301, ptr null, 3
-  %data302 = extractvalue %DriftArrayHeader %__array_cap_arrt905_4, 3
+  %data302 = extractvalue %DriftArrayHeader %__array_cap_arrt905_8, 3
   %eltptr303 = getelementptr inbounds i8, ptr %data302, i64 %t897
   store i8 %t896, ptr %eltptr303
   %t930 = add i64 %t897, %t902
-  %arr_len304 = insertvalue %DriftArrayHeader %__array_cap_arrt905_4, i64 %t930, 0
+  %arr_len304 = insertvalue %DriftArrayHeader %__array_cap_arrt905_8, i64 %t930, 0
   %arr_gen305 = insertvalue %DriftArrayHeader %arr_len304, i64 %t901, 2
   store %DriftArrayHeader %arr_gen305, ptr %out__addr
   %t934 = load %DriftArrayHeader, ptr %out__addr
@@ -28125,17 +28125,17 @@ __bb_array_cap_ok10:
   %t947 = add i1 0, 0
   br label %__bb_array_cap_join210
 __bb_array_cap_join210:
-  %__array_cap_grewt946_5 = phi i1 [ %t967, %__bb_array_copy_exit10 ], [ %t947, %__bb_array_cap_ok10 ]
-  %__array_cap_arrt945_5 = phi %DriftArrayHeader [ %arr_len311, %__bb_array_copy_exit10 ], [ %t934, %__bb_array_cap_ok10 ]
+  %__array_cap_grewt946_7 = phi i1 [ %t967, %__bb_array_copy_exit10 ], [ %t947, %__bb_array_cap_ok10 ]
+  %__array_cap_arrt945_7 = phi %DriftArrayHeader [ %arr_len311, %__bb_array_copy_exit10 ], [ %t934, %__bb_array_cap_ok10 ]
   %zero_arr323 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr324 = insertvalue %DriftArrayHeader %zero_arr323, i64 0, 1
   %zero_arr325 = insertvalue %DriftArrayHeader %zero_arr324, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr325, ptr null, 3
-  %data326 = extractvalue %DriftArrayHeader %__array_cap_arrt945_5, 3
+  %data326 = extractvalue %DriftArrayHeader %__array_cap_arrt945_7, 3
   %eltptr327 = getelementptr inbounds i8, ptr %data326, i64 %t937
   store i8 %t936, ptr %eltptr327
   %t970 = add i64 %t937, %t942
-  %arr_len328 = insertvalue %DriftArrayHeader %__array_cap_arrt945_5, i64 %t970, 0
+  %arr_len328 = insertvalue %DriftArrayHeader %__array_cap_arrt945_7, i64 %t970, 0
   %arr_gen329 = insertvalue %DriftArrayHeader %arr_len328, i64 %t941, 2
   store %DriftArrayHeader %arr_gen329, ptr %out__addr
   %t974 = load %DriftArrayHeader, ptr %out__addr
@@ -28207,17 +28207,17 @@ __bb_array_cap_ok11:
   %t987 = add i1 0, 0
   br label %__bb_array_cap_join211
 __bb_array_cap_join211:
-  %__array_cap_grewt986_3 = phi i1 [ %t1007, %__bb_array_copy_exit11 ], [ %t987, %__bb_array_cap_ok11 ]
-  %__array_cap_arrt985_3 = phi %DriftArrayHeader [ %arr_len335, %__bb_array_copy_exit11 ], [ %t974, %__bb_array_cap_ok11 ]
+  %__array_cap_grewt986_6 = phi i1 [ %t1007, %__bb_array_copy_exit11 ], [ %t987, %__bb_array_cap_ok11 ]
+  %__array_cap_arrt985_6 = phi %DriftArrayHeader [ %arr_len335, %__bb_array_copy_exit11 ], [ %t974, %__bb_array_cap_ok11 ]
   %zero_arr347 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr348 = insertvalue %DriftArrayHeader %zero_arr347, i64 0, 1
   %zero_arr349 = insertvalue %DriftArrayHeader %zero_arr348, i64 0, 2
   %__arc4 = insertvalue %DriftArrayHeader %zero_arr349, ptr null, 3
-  %data350 = extractvalue %DriftArrayHeader %__array_cap_arrt985_3, 3
+  %data350 = extractvalue %DriftArrayHeader %__array_cap_arrt985_6, 3
   %eltptr351 = getelementptr inbounds i8, ptr %data350, i64 %t977
   store i8 %t976, ptr %eltptr351
   %t1010 = add i64 %t977, %t982
-  %arr_len352 = insertvalue %DriftArrayHeader %__array_cap_arrt985_3, i64 %t1010, 0
+  %arr_len352 = insertvalue %DriftArrayHeader %__array_cap_arrt985_6, i64 %t1010, 0
   %arr_gen353 = insertvalue %DriftArrayHeader %arr_len352, i64 %t981, 2
   store %DriftArrayHeader %arr_gen353, ptr %out__addr
   %t1014 = load %DriftArrayHeader, ptr %out__addr
@@ -28289,39 +28289,39 @@ __bb_array_cap_ok12:
   %t1027 = add i1 0, 0
   br label %__bb_array_cap_join212
 __bb_array_cap_join212:
-  %__array_cap_grewt1026_5 = phi i1 [ %t1027, %__bb_array_cap_ok12 ], [ %t1047, %__bb_array_copy_exit12 ]
-  %__array_cap_arrt1025_5 = phi %DriftArrayHeader [ %t1014, %__bb_array_cap_ok12 ], [ %arr_len359, %__bb_array_copy_exit12 ]
+  %__array_cap_grewt1026_6 = phi i1 [ %t1027, %__bb_array_cap_ok12 ], [ %t1047, %__bb_array_copy_exit12 ]
+  %__array_cap_arrt1025_6 = phi %DriftArrayHeader [ %t1014, %__bb_array_cap_ok12 ], [ %arr_len359, %__bb_array_copy_exit12 ]
   %zero_arr371 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr372 = insertvalue %DriftArrayHeader %zero_arr371, i64 0, 1
   %zero_arr373 = insertvalue %DriftArrayHeader %zero_arr372, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr373, ptr null, 3
-  %data374 = extractvalue %DriftArrayHeader %__array_cap_arrt1025_5, 3
+  %data374 = extractvalue %DriftArrayHeader %__array_cap_arrt1025_6, 3
   %eltptr375 = getelementptr inbounds i8, ptr %data374, i64 %t1017
   store i8 %t1016, ptr %eltptr375
   %t1050 = add i64 %t1017, %t1022
-  %arr_len376 = insertvalue %DriftArrayHeader %__array_cap_arrt1025_5, i64 %t1050, 0
+  %arr_len376 = insertvalue %DriftArrayHeader %__array_cap_arrt1025_6, i64 %t1050, 0
   %arr_gen377 = insertvalue %DriftArrayHeader %arr_len376, i64 %t1021, 2
   store %DriftArrayHeader %arr_gen377, ptr %out__addr
   br label %__bb_if_join15
 __bb_if_join15:
-  %__array_cap_grewt1226_6 = phi i1 [ %__array_cap_grewt1226_3, %__bb_array_cap_join217 ], [ %__array_cap_grewt1226_2, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1225_7 = phi %DriftArrayHeader [ %__arc10, %__bb_array_cap_join217 ], [ %__array_cap_arrt1225_2, %__bb_array_cap_join212 ]
-  %__array_cap_grewt1186_6 = phi i1 [ %__array_cap_grewt1186_4, %__bb_array_cap_join217 ], [ %__array_cap_grewt1186_2, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1185_7 = phi %DriftArrayHeader [ %__arc9, %__bb_array_cap_join217 ], [ %__array_cap_arrt1185_2, %__bb_array_cap_join212 ]
-  %__array_cap_grewt1146_6 = phi i1 [ %__array_cap_grewt1146_5, %__bb_array_cap_join217 ], [ %__array_cap_grewt1146_2, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1145_7 = phi %DriftArrayHeader [ %__arc8, %__bb_array_cap_join217 ], [ %__array_cap_arrt1145_2, %__bb_array_cap_join212 ]
-  %__array_cap_grewt1106_6 = phi i1 [ %__array_cap_grewt1106_4, %__bb_array_cap_join217 ], [ %__array_cap_grewt1106_2, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1105_7 = phi %DriftArrayHeader [ %__arc7, %__bb_array_cap_join217 ], [ %__array_cap_arrt1105_2, %__bb_array_cap_join212 ]
-  %__array_cap_grewt1066_6 = phi i1 [ %__array_cap_grewt1066_3, %__bb_array_cap_join217 ], [ %__array_cap_grewt1066_2, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1065_7 = phi %DriftArrayHeader [ %__arc6, %__bb_array_cap_join217 ], [ %__array_cap_arrt1065_2, %__bb_array_cap_join212 ]
-  %__array_cap_grewt1026_6 = phi i1 [ %__array_cap_grewt1026_2, %__bb_array_cap_join217 ], [ %__array_cap_grewt1026_5, %__bb_array_cap_join212 ]
-  %__array_cap_arrt1025_7 = phi %DriftArrayHeader [ %__array_cap_arrt1025_2, %__bb_array_cap_join217 ], [ %__arc5, %__bb_array_cap_join212 ]
-  %__array_cap_grewt986_6 = phi i1 [ %__array_cap_grewt986_2, %__bb_array_cap_join217 ], [ %__array_cap_grewt986_3, %__bb_array_cap_join212 ]
-  %__array_cap_arrt985_7 = phi %DriftArrayHeader [ %__array_cap_arrt985_2, %__bb_array_cap_join217 ], [ %__arc4, %__bb_array_cap_join212 ]
-  %__array_cap_grewt946_6 = phi i1 [ %__array_cap_grewt946_2, %__bb_array_cap_join217 ], [ %__array_cap_grewt946_5, %__bb_array_cap_join212 ]
-  %__array_cap_arrt945_7 = phi %DriftArrayHeader [ %__array_cap_arrt945_2, %__bb_array_cap_join217 ], [ %__arc3, %__bb_array_cap_join212 ]
-  %__array_cap_grewt906_6 = phi i1 [ %__array_cap_grewt906_2, %__bb_array_cap_join217 ], [ %__array_cap_grewt906_4, %__bb_array_cap_join212 ]
-  %__array_cap_arrt905_7 = phi %DriftArrayHeader [ %__array_cap_arrt905_2, %__bb_array_cap_join217 ], [ %__arc18, %__bb_array_cap_join212 ]
+  %__array_cap_grewt1226_5 = phi i1 [ %__array_cap_grewt1226_2, %__bb_array_cap_join212 ], [ %__array_cap_grewt1226_8, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1225_5 = phi %DriftArrayHeader [ %__array_cap_arrt1225_2, %__bb_array_cap_join212 ], [ %__arc10, %__bb_array_cap_join217 ]
+  %__array_cap_grewt1186_5 = phi i1 [ %__array_cap_grewt1186_2, %__bb_array_cap_join212 ], [ %__array_cap_grewt1186_7, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1185_5 = phi %DriftArrayHeader [ %__array_cap_arrt1185_2, %__bb_array_cap_join212 ], [ %__arc9, %__bb_array_cap_join217 ]
+  %__array_cap_grewt1146_5 = phi i1 [ %__array_cap_grewt1146_2, %__bb_array_cap_join212 ], [ %__array_cap_grewt1146_8, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1145_5 = phi %DriftArrayHeader [ %__array_cap_arrt1145_2, %__bb_array_cap_join212 ], [ %__arc8, %__bb_array_cap_join217 ]
+  %__array_cap_grewt1106_5 = phi i1 [ %__array_cap_grewt1106_2, %__bb_array_cap_join212 ], [ %__array_cap_grewt1106_8, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1105_5 = phi %DriftArrayHeader [ %__array_cap_arrt1105_2, %__bb_array_cap_join212 ], [ %__arc7, %__bb_array_cap_join217 ]
+  %__array_cap_grewt1066_5 = phi i1 [ %__array_cap_grewt1066_2, %__bb_array_cap_join212 ], [ %__array_cap_grewt1066_6, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1065_5 = phi %DriftArrayHeader [ %__array_cap_arrt1065_2, %__bb_array_cap_join212 ], [ %__arc6, %__bb_array_cap_join217 ]
+  %__array_cap_grewt1026_5 = phi i1 [ %__array_cap_grewt1026_6, %__bb_array_cap_join212 ], [ %__array_cap_grewt1026_2, %__bb_array_cap_join217 ]
+  %__array_cap_arrt1025_5 = phi %DriftArrayHeader [ %__arc5, %__bb_array_cap_join212 ], [ %__array_cap_arrt1025_2, %__bb_array_cap_join217 ]
+  %__array_cap_grewt986_5 = phi i1 [ %__array_cap_grewt986_6, %__bb_array_cap_join212 ], [ %__array_cap_grewt986_2, %__bb_array_cap_join217 ]
+  %__array_cap_arrt985_5 = phi %DriftArrayHeader [ %__arc4, %__bb_array_cap_join212 ], [ %__array_cap_arrt985_2, %__bb_array_cap_join217 ]
+  %__array_cap_grewt946_5 = phi i1 [ %__array_cap_grewt946_7, %__bb_array_cap_join212 ], [ %__array_cap_grewt946_2, %__bb_array_cap_join217 ]
+  %__array_cap_arrt945_5 = phi %DriftArrayHeader [ %__arc3, %__bb_array_cap_join212 ], [ %__array_cap_arrt945_2, %__bb_array_cap_join217 ]
+  %__array_cap_grewt906_5 = phi i1 [ %__array_cap_grewt906_8, %__bb_array_cap_join212 ], [ %__array_cap_grewt906_2, %__bb_array_cap_join217 ]
+  %__array_cap_arrt905_5 = phi %DriftArrayHeader [ %__arc18, %__bb_array_cap_join212 ], [ %__array_cap_arrt905_2, %__bb_array_cap_join217 ]
   br label %__bb_if_join14
 __bb_if_then14:
   %t771 = load %DriftArrayHeader, ptr %out__addr
@@ -28393,17 +28393,17 @@ __bb_array_cap_ok6:
   %t784 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt783_4 = phi i1 [ %t804, %__bb_array_copy_exit6 ], [ %t784, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt782_4 = phi %DriftArrayHeader [ %arr_len383, %__bb_array_copy_exit6 ], [ %t771, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt783_6 = phi i1 [ %t804, %__bb_array_copy_exit6 ], [ %t784, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt782_6 = phi %DriftArrayHeader [ %arr_len383, %__bb_array_copy_exit6 ], [ %t771, %__bb_array_cap_ok6 ]
   %zero_arr395 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr396 = insertvalue %DriftArrayHeader %zero_arr395, i64 0, 1
   %zero_arr397 = insertvalue %DriftArrayHeader %zero_arr396, i64 0, 2
   %__arc15 = insertvalue %DriftArrayHeader %zero_arr397, ptr null, 3
-  %data398 = extractvalue %DriftArrayHeader %__array_cap_arrt782_4, 3
+  %data398 = extractvalue %DriftArrayHeader %__array_cap_arrt782_6, 3
   %eltptr399 = getelementptr inbounds i8, ptr %data398, i64 %t774
   store i8 %t773, ptr %eltptr399
   %t807 = add i64 %t774, %t779
-  %arr_len400 = insertvalue %DriftArrayHeader %__array_cap_arrt782_4, i64 %t807, 0
+  %arr_len400 = insertvalue %DriftArrayHeader %__array_cap_arrt782_6, i64 %t807, 0
   %arr_gen401 = insertvalue %DriftArrayHeader %arr_len400, i64 %t778, 2
   store %DriftArrayHeader %arr_gen401, ptr %out__addr
   %t811 = load %DriftArrayHeader, ptr %out__addr
@@ -28475,8 +28475,8 @@ __bb_array_cap_ok7:
   %t824 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt823_4 = phi i1 [ %t844, %__bb_array_copy_exit7 ], [ %t824, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt822_4 = phi %DriftArrayHeader [ %arr_len407, %__bb_array_copy_exit7 ], [ %t811, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt823_4 = phi i1 [ %t824, %__bb_array_cap_ok7 ], [ %t844, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt822_4 = phi %DriftArrayHeader [ %t811, %__bb_array_cap_ok7 ], [ %arr_len407, %__bb_array_copy_exit7 ]
   %zero_arr419 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr420 = insertvalue %DriftArrayHeader %zero_arr419, i64 0, 1
   %zero_arr421 = insertvalue %DriftArrayHeader %zero_arr420, i64 0, 2
@@ -28572,30 +28572,30 @@ __bb_array_cap_join28:
   store %DriftArrayHeader %arr_gen449, ptr %out__addr
   br label %__bb_if_join14
 __bb_if_join14:
-  %__array_cap_grewt1226_7 = phi i1 [ %__array_cap_grewt1226_6, %__bb_if_join15 ], [ %__array_cap_grewt1226_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1225_8 = phi %DriftArrayHeader [ %__array_cap_arrt1225_7, %__bb_if_join15 ], [ %__array_cap_arrt1225_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt1186_7 = phi i1 [ %__array_cap_grewt1186_6, %__bb_if_join15 ], [ %__array_cap_grewt1186_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1185_8 = phi %DriftArrayHeader [ %__array_cap_arrt1185_7, %__bb_if_join15 ], [ %__array_cap_arrt1185_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt1146_7 = phi i1 [ %__array_cap_grewt1146_6, %__bb_if_join15 ], [ %__array_cap_grewt1146_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1145_8 = phi %DriftArrayHeader [ %__array_cap_arrt1145_7, %__bb_if_join15 ], [ %__array_cap_arrt1145_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt1106_7 = phi i1 [ %__array_cap_grewt1106_6, %__bb_if_join15 ], [ %__array_cap_grewt1106_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1105_8 = phi %DriftArrayHeader [ %__array_cap_arrt1105_7, %__bb_if_join15 ], [ %__array_cap_arrt1105_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt1066_7 = phi i1 [ %__array_cap_grewt1066_6, %__bb_if_join15 ], [ %__array_cap_grewt1066_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1065_8 = phi %DriftArrayHeader [ %__array_cap_arrt1065_7, %__bb_if_join15 ], [ %__array_cap_arrt1065_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt1026_7 = phi i1 [ %__array_cap_grewt1026_6, %__bb_if_join15 ], [ %__array_cap_grewt1026_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt1025_8 = phi %DriftArrayHeader [ %__array_cap_arrt1025_7, %__bb_if_join15 ], [ %__array_cap_arrt1025_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt986_7 = phi i1 [ %__array_cap_grewt986_6, %__bb_if_join15 ], [ %__array_cap_grewt986_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt985_8 = phi %DriftArrayHeader [ %__array_cap_arrt985_7, %__bb_if_join15 ], [ %__array_cap_arrt985_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt946_7 = phi i1 [ %__array_cap_grewt946_6, %__bb_if_join15 ], [ %__array_cap_grewt946_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt945_8 = phi %DriftArrayHeader [ %__array_cap_arrt945_7, %__bb_if_join15 ], [ %__array_cap_arrt945_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt906_7 = phi i1 [ %__array_cap_grewt906_6, %__bb_if_join15 ], [ %__array_cap_grewt906_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt905_8 = phi %DriftArrayHeader [ %__array_cap_arrt905_7, %__bb_if_join15 ], [ %__array_cap_arrt905_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt863_3 = phi i1 [ %__array_cap_grewt863_2, %__bb_if_join15 ], [ %__array_cap_grewt863_6, %__bb_array_cap_join28 ]
-  %__array_cap_arrt862_3 = phi %DriftArrayHeader [ %__array_cap_arrt862_2, %__bb_if_join15 ], [ %__arc17, %__bb_array_cap_join28 ]
-  %__array_cap_grewt823_3 = phi i1 [ %__array_cap_grewt823_2, %__bb_if_join15 ], [ %__array_cap_grewt823_4, %__bb_array_cap_join28 ]
-  %__array_cap_arrt822_3 = phi %DriftArrayHeader [ %__array_cap_arrt822_2, %__bb_if_join15 ], [ %__arc16, %__bb_array_cap_join28 ]
-  %__array_cap_grewt783_3 = phi i1 [ %__array_cap_grewt783_2, %__bb_if_join15 ], [ %__array_cap_grewt783_4, %__bb_array_cap_join28 ]
-  %__array_cap_arrt782_3 = phi %DriftArrayHeader [ %__array_cap_arrt782_2, %__bb_if_join15 ], [ %__arc15, %__bb_array_cap_join28 ]
+  %__array_cap_grewt1226_4 = phi i1 [ %__array_cap_grewt1226_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1226_5, %__bb_if_join15 ]
+  %__array_cap_arrt1225_4 = phi %DriftArrayHeader [ %__array_cap_arrt1225_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1225_5, %__bb_if_join15 ]
+  %__array_cap_grewt1186_4 = phi i1 [ %__array_cap_grewt1186_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1186_5, %__bb_if_join15 ]
+  %__array_cap_arrt1185_4 = phi %DriftArrayHeader [ %__array_cap_arrt1185_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1185_5, %__bb_if_join15 ]
+  %__array_cap_grewt1146_4 = phi i1 [ %__array_cap_grewt1146_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1146_5, %__bb_if_join15 ]
+  %__array_cap_arrt1145_4 = phi %DriftArrayHeader [ %__array_cap_arrt1145_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1145_5, %__bb_if_join15 ]
+  %__array_cap_grewt1106_4 = phi i1 [ %__array_cap_grewt1106_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1106_5, %__bb_if_join15 ]
+  %__array_cap_arrt1105_4 = phi %DriftArrayHeader [ %__array_cap_arrt1105_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1105_5, %__bb_if_join15 ]
+  %__array_cap_grewt1066_4 = phi i1 [ %__array_cap_grewt1066_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1066_5, %__bb_if_join15 ]
+  %__array_cap_arrt1065_4 = phi %DriftArrayHeader [ %__array_cap_arrt1065_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1065_5, %__bb_if_join15 ]
+  %__array_cap_grewt1026_4 = phi i1 [ %__array_cap_grewt1026_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt1026_5, %__bb_if_join15 ]
+  %__array_cap_arrt1025_4 = phi %DriftArrayHeader [ %__array_cap_arrt1025_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt1025_5, %__bb_if_join15 ]
+  %__array_cap_grewt986_4 = phi i1 [ %__array_cap_grewt986_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt986_5, %__bb_if_join15 ]
+  %__array_cap_arrt985_4 = phi %DriftArrayHeader [ %__array_cap_arrt985_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt985_5, %__bb_if_join15 ]
+  %__array_cap_grewt946_4 = phi i1 [ %__array_cap_grewt946_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt946_5, %__bb_if_join15 ]
+  %__array_cap_arrt945_4 = phi %DriftArrayHeader [ %__array_cap_arrt945_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt945_5, %__bb_if_join15 ]
+  %__array_cap_grewt906_4 = phi i1 [ %__array_cap_grewt906_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt906_5, %__bb_if_join15 ]
+  %__array_cap_arrt905_4 = phi %DriftArrayHeader [ %__array_cap_arrt905_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt905_5, %__bb_if_join15 ]
+  %__array_cap_grewt863_7 = phi i1 [ %__array_cap_grewt863_6, %__bb_array_cap_join28 ], [ %__array_cap_grewt863_2, %__bb_if_join15 ]
+  %__array_cap_arrt862_8 = phi %DriftArrayHeader [ %__arc17, %__bb_array_cap_join28 ], [ %__array_cap_arrt862_2, %__bb_if_join15 ]
+  %__array_cap_grewt823_7 = phi i1 [ %__array_cap_grewt823_4, %__bb_array_cap_join28 ], [ %__array_cap_grewt823_2, %__bb_if_join15 ]
+  %__array_cap_arrt822_8 = phi %DriftArrayHeader [ %__arc16, %__bb_array_cap_join28 ], [ %__array_cap_arrt822_2, %__bb_if_join15 ]
+  %__array_cap_grewt783_7 = phi i1 [ %__array_cap_grewt783_6, %__bb_array_cap_join28 ], [ %__array_cap_grewt783_2, %__bb_if_join15 ]
+  %__array_cap_arrt782_8 = phi %DriftArrayHeader [ %__arc15, %__bb_array_cap_join28 ], [ %__array_cap_arrt782_2, %__bb_if_join15 ]
   br label %__bb_if_join13
 __bb_if_then13:
   %t688 = load %DriftArrayHeader, ptr %out__addr
@@ -28749,49 +28749,49 @@ __bb_array_cap_ok5:
   %t741 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt740_6 = phi i1 [ %t741, %__bb_array_cap_ok5 ], [ %t761, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt739_6 = phi %DriftArrayHeader [ %t728, %__bb_array_cap_ok5 ], [ %arr_len479, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt740_5 = phi i1 [ %t761, %__bb_array_copy_exit5 ], [ %t741, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt739_5 = phi %DriftArrayHeader [ %arr_len479, %__bb_array_copy_exit5 ], [ %t728, %__bb_array_cap_ok5 ]
   %zero_arr491 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr492 = insertvalue %DriftArrayHeader %zero_arr491, i64 0, 1
   %zero_arr493 = insertvalue %DriftArrayHeader %zero_arr492, i64 0, 2
   %__arc14 = insertvalue %DriftArrayHeader %zero_arr493, ptr null, 3
-  %data494 = extractvalue %DriftArrayHeader %__array_cap_arrt739_6, 3
+  %data494 = extractvalue %DriftArrayHeader %__array_cap_arrt739_5, 3
   %eltptr495 = getelementptr inbounds i8, ptr %data494, i64 %t731
   store i8 %t730, ptr %eltptr495
   %t764 = add i64 %t731, %t736
-  %arr_len496 = insertvalue %DriftArrayHeader %__array_cap_arrt739_6, i64 %t764, 0
+  %arr_len496 = insertvalue %DriftArrayHeader %__array_cap_arrt739_5, i64 %t764, 0
   %arr_gen497 = insertvalue %DriftArrayHeader %arr_len496, i64 %t735, 2
   store %DriftArrayHeader %arr_gen497, ptr %out__addr
   br label %__bb_if_join13
 __bb_if_join13:
-  %__array_cap_grewt1226_8 = phi i1 [ %__array_cap_grewt1226_7, %__bb_if_join14 ], [ %__array_cap_grewt1226_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1225_9 = phi %DriftArrayHeader [ %__array_cap_arrt1225_8, %__bb_if_join14 ], [ %__array_cap_arrt1225_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt1186_8 = phi i1 [ %__array_cap_grewt1186_7, %__bb_if_join14 ], [ %__array_cap_grewt1186_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1185_9 = phi %DriftArrayHeader [ %__array_cap_arrt1185_8, %__bb_if_join14 ], [ %__array_cap_arrt1185_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt1146_8 = phi i1 [ %__array_cap_grewt1146_7, %__bb_if_join14 ], [ %__array_cap_grewt1146_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1145_9 = phi %DriftArrayHeader [ %__array_cap_arrt1145_8, %__bb_if_join14 ], [ %__array_cap_arrt1145_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt1106_8 = phi i1 [ %__array_cap_grewt1106_7, %__bb_if_join14 ], [ %__array_cap_grewt1106_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1105_9 = phi %DriftArrayHeader [ %__array_cap_arrt1105_8, %__bb_if_join14 ], [ %__array_cap_arrt1105_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt1066_8 = phi i1 [ %__array_cap_grewt1066_7, %__bb_if_join14 ], [ %__array_cap_grewt1066_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1065_9 = phi %DriftArrayHeader [ %__array_cap_arrt1065_8, %__bb_if_join14 ], [ %__array_cap_arrt1065_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt1026_8 = phi i1 [ %__array_cap_grewt1026_7, %__bb_if_join14 ], [ %__array_cap_grewt1026_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt1025_9 = phi %DriftArrayHeader [ %__array_cap_arrt1025_8, %__bb_if_join14 ], [ %__array_cap_arrt1025_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt986_8 = phi i1 [ %__array_cap_grewt986_7, %__bb_if_join14 ], [ %__array_cap_grewt986_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt985_9 = phi %DriftArrayHeader [ %__array_cap_arrt985_8, %__bb_if_join14 ], [ %__array_cap_arrt985_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt946_8 = phi i1 [ %__array_cap_grewt946_7, %__bb_if_join14 ], [ %__array_cap_grewt946_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt945_9 = phi %DriftArrayHeader [ %__array_cap_arrt945_8, %__bb_if_join14 ], [ %__array_cap_arrt945_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt906_8 = phi i1 [ %__array_cap_grewt906_7, %__bb_if_join14 ], [ %__array_cap_grewt906_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt905_9 = phi %DriftArrayHeader [ %__array_cap_arrt905_8, %__bb_if_join14 ], [ %__array_cap_arrt905_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt863_7 = phi i1 [ %__array_cap_grewt863_3, %__bb_if_join14 ], [ %__array_cap_grewt863_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt862_8 = phi %DriftArrayHeader [ %__array_cap_arrt862_3, %__bb_if_join14 ], [ %__array_cap_arrt862_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt823_7 = phi i1 [ %__array_cap_grewt823_3, %__bb_if_join14 ], [ %__array_cap_grewt823_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt822_8 = phi %DriftArrayHeader [ %__array_cap_arrt822_3, %__bb_if_join14 ], [ %__array_cap_arrt822_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt783_7 = phi i1 [ %__array_cap_grewt783_3, %__bb_if_join14 ], [ %__array_cap_grewt783_2, %__bb_array_cap_join25 ]
-  %__array_cap_arrt782_8 = phi %DriftArrayHeader [ %__array_cap_arrt782_3, %__bb_if_join14 ], [ %__array_cap_arrt782_2, %__bb_array_cap_join25 ]
-  %__array_cap_grewt740_3 = phi i1 [ %__array_cap_grewt740_2, %__bb_if_join14 ], [ %__array_cap_grewt740_6, %__bb_array_cap_join25 ]
-  %__array_cap_arrt739_3 = phi %DriftArrayHeader [ %__array_cap_arrt739_2, %__bb_if_join14 ], [ %__arc14, %__bb_array_cap_join25 ]
-  %__array_cap_grewt700_3 = phi i1 [ %__array_cap_grewt700_2, %__bb_if_join14 ], [ %__array_cap_grewt700_5, %__bb_array_cap_join25 ]
-  %__array_cap_arrt699_3 = phi %DriftArrayHeader [ %__array_cap_arrt699_2, %__bb_if_join14 ], [ %__arc13, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1226_9 = phi i1 [ %__array_cap_grewt1226_4, %__bb_if_join14 ], [ %__array_cap_grewt1226_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1225_10 = phi %DriftArrayHeader [ %__array_cap_arrt1225_4, %__bb_if_join14 ], [ %__array_cap_arrt1225_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1186_9 = phi i1 [ %__array_cap_grewt1186_4, %__bb_if_join14 ], [ %__array_cap_grewt1186_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1185_10 = phi %DriftArrayHeader [ %__array_cap_arrt1185_4, %__bb_if_join14 ], [ %__array_cap_arrt1185_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1146_9 = phi i1 [ %__array_cap_grewt1146_4, %__bb_if_join14 ], [ %__array_cap_grewt1146_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1145_10 = phi %DriftArrayHeader [ %__array_cap_arrt1145_4, %__bb_if_join14 ], [ %__array_cap_arrt1145_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1106_9 = phi i1 [ %__array_cap_grewt1106_4, %__bb_if_join14 ], [ %__array_cap_grewt1106_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1105_10 = phi %DriftArrayHeader [ %__array_cap_arrt1105_4, %__bb_if_join14 ], [ %__array_cap_arrt1105_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1066_9 = phi i1 [ %__array_cap_grewt1066_4, %__bb_if_join14 ], [ %__array_cap_grewt1066_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1065_10 = phi %DriftArrayHeader [ %__array_cap_arrt1065_4, %__bb_if_join14 ], [ %__array_cap_arrt1065_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt1026_9 = phi i1 [ %__array_cap_grewt1026_4, %__bb_if_join14 ], [ %__array_cap_grewt1026_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt1025_10 = phi %DriftArrayHeader [ %__array_cap_arrt1025_4, %__bb_if_join14 ], [ %__array_cap_arrt1025_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt986_9 = phi i1 [ %__array_cap_grewt986_4, %__bb_if_join14 ], [ %__array_cap_grewt986_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt985_10 = phi %DriftArrayHeader [ %__array_cap_arrt985_4, %__bb_if_join14 ], [ %__array_cap_arrt985_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt946_9 = phi i1 [ %__array_cap_grewt946_4, %__bb_if_join14 ], [ %__array_cap_grewt946_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt945_10 = phi %DriftArrayHeader [ %__array_cap_arrt945_4, %__bb_if_join14 ], [ %__array_cap_arrt945_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt906_9 = phi i1 [ %__array_cap_grewt906_4, %__bb_if_join14 ], [ %__array_cap_grewt906_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt905_10 = phi %DriftArrayHeader [ %__array_cap_arrt905_4, %__bb_if_join14 ], [ %__array_cap_arrt905_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt863_8 = phi i1 [ %__array_cap_grewt863_7, %__bb_if_join14 ], [ %__array_cap_grewt863_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt862_9 = phi %DriftArrayHeader [ %__array_cap_arrt862_8, %__bb_if_join14 ], [ %__array_cap_arrt862_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt823_8 = phi i1 [ %__array_cap_grewt823_7, %__bb_if_join14 ], [ %__array_cap_grewt823_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt822_9 = phi %DriftArrayHeader [ %__array_cap_arrt822_8, %__bb_if_join14 ], [ %__array_cap_arrt822_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt783_8 = phi i1 [ %__array_cap_grewt783_7, %__bb_if_join14 ], [ %__array_cap_grewt783_2, %__bb_array_cap_join25 ]
+  %__array_cap_arrt782_9 = phi %DriftArrayHeader [ %__array_cap_arrt782_8, %__bb_if_join14 ], [ %__array_cap_arrt782_2, %__bb_array_cap_join25 ]
+  %__array_cap_grewt740_4 = phi i1 [ %__array_cap_grewt740_2, %__bb_if_join14 ], [ %__array_cap_grewt740_5, %__bb_array_cap_join25 ]
+  %__array_cap_arrt739_4 = phi %DriftArrayHeader [ %__array_cap_arrt739_2, %__bb_if_join14 ], [ %__arc14, %__bb_array_cap_join25 ]
+  %__array_cap_grewt700_4 = phi i1 [ %__array_cap_grewt700_2, %__bb_if_join14 ], [ %__array_cap_grewt700_5, %__bb_array_cap_join25 ]
+  %__array_cap_arrt699_4 = phi %DriftArrayHeader [ %__array_cap_arrt699_2, %__bb_if_join14 ], [ %__arc13, %__bb_array_cap_join25 ]
   br label %__bb_if_join12
 __bb_if_then12:
   %t645 = load %DriftArrayHeader, ptr %out__addr
@@ -28863,51 +28863,51 @@ __bb_array_cap_ok3:
   %t658 = add i1 0, 0
   br label %__bb_array_cap_join23
 __bb_array_cap_join23:
-  %__array_cap_grewt657_3 = phi i1 [ %t678, %__bb_array_copy_exit3 ], [ %t658, %__bb_array_cap_ok3 ]
-  %__array_cap_arrt656_3 = phi %DriftArrayHeader [ %arr_len503, %__bb_array_copy_exit3 ], [ %t645, %__bb_array_cap_ok3 ]
+  %__array_cap_grewt657_4 = phi i1 [ %t678, %__bb_array_copy_exit3 ], [ %t658, %__bb_array_cap_ok3 ]
+  %__array_cap_arrt656_4 = phi %DriftArrayHeader [ %arr_len503, %__bb_array_copy_exit3 ], [ %t645, %__bb_array_cap_ok3 ]
   %zero_arr515 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr516 = insertvalue %DriftArrayHeader %zero_arr515, i64 0, 1
   %zero_arr517 = insertvalue %DriftArrayHeader %zero_arr516, i64 0, 2
   %__arc12 = insertvalue %DriftArrayHeader %zero_arr517, ptr null, 3
-  %data518 = extractvalue %DriftArrayHeader %__array_cap_arrt656_3, 3
+  %data518 = extractvalue %DriftArrayHeader %__array_cap_arrt656_4, 3
   %eltptr519 = getelementptr inbounds i8, ptr %data518, i64 %t648
   store i8 %t647, ptr %eltptr519
   %t681 = add i64 %t648, %t653
-  %arr_len520 = insertvalue %DriftArrayHeader %__array_cap_arrt656_3, i64 %t681, 0
+  %arr_len520 = insertvalue %DriftArrayHeader %__array_cap_arrt656_4, i64 %t681, 0
   %arr_gen521 = insertvalue %DriftArrayHeader %arr_len520, i64 %t652, 2
   store %DriftArrayHeader %arr_gen521, ptr %out__addr
   br label %__bb_if_join12
 __bb_if_join12:
-  %__array_cap_grewt1226_9 = phi i1 [ %__array_cap_grewt1226_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1226_8, %__bb_if_join13 ]
-  %__array_cap_arrt1225_10 = phi %DriftArrayHeader [ %__array_cap_arrt1225_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1225_9, %__bb_if_join13 ]
-  %__array_cap_grewt1186_9 = phi i1 [ %__array_cap_grewt1186_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1186_8, %__bb_if_join13 ]
-  %__array_cap_arrt1185_10 = phi %DriftArrayHeader [ %__array_cap_arrt1185_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1185_9, %__bb_if_join13 ]
-  %__array_cap_grewt1146_9 = phi i1 [ %__array_cap_grewt1146_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1146_8, %__bb_if_join13 ]
-  %__array_cap_arrt1145_10 = phi %DriftArrayHeader [ %__array_cap_arrt1145_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1145_9, %__bb_if_join13 ]
-  %__array_cap_grewt1106_9 = phi i1 [ %__array_cap_grewt1106_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1106_8, %__bb_if_join13 ]
-  %__array_cap_arrt1105_10 = phi %DriftArrayHeader [ %__array_cap_arrt1105_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1105_9, %__bb_if_join13 ]
-  %__array_cap_grewt1066_9 = phi i1 [ %__array_cap_grewt1066_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1066_8, %__bb_if_join13 ]
-  %__array_cap_arrt1065_10 = phi %DriftArrayHeader [ %__array_cap_arrt1065_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1065_9, %__bb_if_join13 ]
-  %__array_cap_grewt1026_9 = phi i1 [ %__array_cap_grewt1026_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt1026_8, %__bb_if_join13 ]
-  %__array_cap_arrt1025_10 = phi %DriftArrayHeader [ %__array_cap_arrt1025_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt1025_9, %__bb_if_join13 ]
-  %__array_cap_grewt986_9 = phi i1 [ %__array_cap_grewt986_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt986_8, %__bb_if_join13 ]
-  %__array_cap_arrt985_10 = phi %DriftArrayHeader [ %__array_cap_arrt985_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt985_9, %__bb_if_join13 ]
-  %__array_cap_grewt946_9 = phi i1 [ %__array_cap_grewt946_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt946_8, %__bb_if_join13 ]
-  %__array_cap_arrt945_10 = phi %DriftArrayHeader [ %__array_cap_arrt945_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt945_9, %__bb_if_join13 ]
-  %__array_cap_grewt906_9 = phi i1 [ %__array_cap_grewt906_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt906_8, %__bb_if_join13 ]
-  %__array_cap_arrt905_10 = phi %DriftArrayHeader [ %__array_cap_arrt905_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt905_9, %__bb_if_join13 ]
-  %__array_cap_grewt863_8 = phi i1 [ %__array_cap_grewt863_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt863_7, %__bb_if_join13 ]
-  %__array_cap_arrt862_9 = phi %DriftArrayHeader [ %__array_cap_arrt862_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt862_8, %__bb_if_join13 ]
-  %__array_cap_grewt823_8 = phi i1 [ %__array_cap_grewt823_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt823_7, %__bb_if_join13 ]
-  %__array_cap_arrt822_9 = phi %DriftArrayHeader [ %__array_cap_arrt822_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt822_8, %__bb_if_join13 ]
-  %__array_cap_grewt783_8 = phi i1 [ %__array_cap_grewt783_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt783_7, %__bb_if_join13 ]
-  %__array_cap_arrt782_9 = phi %DriftArrayHeader [ %__array_cap_arrt782_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt782_8, %__bb_if_join13 ]
-  %__array_cap_grewt740_7 = phi i1 [ %__array_cap_grewt740_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt740_3, %__bb_if_join13 ]
-  %__array_cap_arrt739_8 = phi %DriftArrayHeader [ %__array_cap_arrt739_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt739_3, %__bb_if_join13 ]
-  %__array_cap_grewt700_7 = phi i1 [ %__array_cap_grewt700_2, %__bb_array_cap_join23 ], [ %__array_cap_grewt700_3, %__bb_if_join13 ]
-  %__array_cap_arrt699_8 = phi %DriftArrayHeader [ %__array_cap_arrt699_2, %__bb_array_cap_join23 ], [ %__array_cap_arrt699_3, %__bb_if_join13 ]
-  %__array_cap_grewt657_6 = phi i1 [ %__array_cap_grewt657_3, %__bb_array_cap_join23 ], [ %__array_cap_grewt657_2, %__bb_if_join13 ]
-  %__array_cap_arrt656_7 = phi %DriftArrayHeader [ %__arc12, %__bb_array_cap_join23 ], [ %__array_cap_arrt656_2, %__bb_if_join13 ]
+  %__array_cap_grewt1226_3 = phi i1 [ %__array_cap_grewt1226_9, %__bb_if_join13 ], [ %__array_cap_grewt1226_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1225_3 = phi %DriftArrayHeader [ %__array_cap_arrt1225_10, %__bb_if_join13 ], [ %__array_cap_arrt1225_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt1186_3 = phi i1 [ %__array_cap_grewt1186_9, %__bb_if_join13 ], [ %__array_cap_grewt1186_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1185_3 = phi %DriftArrayHeader [ %__array_cap_arrt1185_10, %__bb_if_join13 ], [ %__array_cap_arrt1185_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt1146_3 = phi i1 [ %__array_cap_grewt1146_9, %__bb_if_join13 ], [ %__array_cap_grewt1146_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1145_3 = phi %DriftArrayHeader [ %__array_cap_arrt1145_10, %__bb_if_join13 ], [ %__array_cap_arrt1145_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt1106_3 = phi i1 [ %__array_cap_grewt1106_9, %__bb_if_join13 ], [ %__array_cap_grewt1106_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1105_3 = phi %DriftArrayHeader [ %__array_cap_arrt1105_10, %__bb_if_join13 ], [ %__array_cap_arrt1105_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt1066_3 = phi i1 [ %__array_cap_grewt1066_9, %__bb_if_join13 ], [ %__array_cap_grewt1066_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1065_3 = phi %DriftArrayHeader [ %__array_cap_arrt1065_10, %__bb_if_join13 ], [ %__array_cap_arrt1065_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt1026_3 = phi i1 [ %__array_cap_grewt1026_9, %__bb_if_join13 ], [ %__array_cap_grewt1026_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt1025_3 = phi %DriftArrayHeader [ %__array_cap_arrt1025_10, %__bb_if_join13 ], [ %__array_cap_arrt1025_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt986_3 = phi i1 [ %__array_cap_grewt986_9, %__bb_if_join13 ], [ %__array_cap_grewt986_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt985_3 = phi %DriftArrayHeader [ %__array_cap_arrt985_10, %__bb_if_join13 ], [ %__array_cap_arrt985_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt946_3 = phi i1 [ %__array_cap_grewt946_9, %__bb_if_join13 ], [ %__array_cap_grewt946_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt945_3 = phi %DriftArrayHeader [ %__array_cap_arrt945_10, %__bb_if_join13 ], [ %__array_cap_arrt945_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt906_3 = phi i1 [ %__array_cap_grewt906_9, %__bb_if_join13 ], [ %__array_cap_grewt906_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt905_3 = phi %DriftArrayHeader [ %__array_cap_arrt905_10, %__bb_if_join13 ], [ %__array_cap_arrt905_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt863_3 = phi i1 [ %__array_cap_grewt863_8, %__bb_if_join13 ], [ %__array_cap_grewt863_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt862_3 = phi %DriftArrayHeader [ %__array_cap_arrt862_9, %__bb_if_join13 ], [ %__array_cap_arrt862_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt823_3 = phi i1 [ %__array_cap_grewt823_8, %__bb_if_join13 ], [ %__array_cap_grewt823_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt822_3 = phi %DriftArrayHeader [ %__array_cap_arrt822_9, %__bb_if_join13 ], [ %__array_cap_arrt822_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt783_3 = phi i1 [ %__array_cap_grewt783_8, %__bb_if_join13 ], [ %__array_cap_grewt783_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt782_3 = phi %DriftArrayHeader [ %__array_cap_arrt782_9, %__bb_if_join13 ], [ %__array_cap_arrt782_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt740_3 = phi i1 [ %__array_cap_grewt740_4, %__bb_if_join13 ], [ %__array_cap_grewt740_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt739_3 = phi %DriftArrayHeader [ %__array_cap_arrt739_4, %__bb_if_join13 ], [ %__array_cap_arrt739_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt700_3 = phi i1 [ %__array_cap_grewt700_4, %__bb_if_join13 ], [ %__array_cap_grewt700_2, %__bb_array_cap_join23 ]
+  %__array_cap_arrt699_3 = phi %DriftArrayHeader [ %__array_cap_arrt699_4, %__bb_if_join13 ], [ %__array_cap_arrt699_2, %__bb_array_cap_join23 ]
+  %__array_cap_grewt657_3 = phi i1 [ %__array_cap_grewt657_2, %__bb_if_join13 ], [ %__array_cap_grewt657_4, %__bb_array_cap_join23 ]
+  %__array_cap_arrt656_3 = phi %DriftArrayHeader [ %__array_cap_arrt656_2, %__bb_if_join13 ], [ %__arc12, %__bb_array_cap_join23 ]
   %t1254 = add i64 0, 8
   %t1255 = add i64 %i_6, %t1254
   %t1256 = load %DriftArrayHeader, ptr %vals__addr
@@ -29802,8 +29802,8 @@ __bb_logic_rhs:
   %t26 = call i1 @"std.codec::_is_ascii_whitespace"(i8 %t21)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt23_5 = phi i1 [ %t24, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt23_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt23_4 = phi i1 [ %t24, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt23_4, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t32 = load %DriftArrayHeader, ptr %clean__addr
   %t34 = extractvalue %DriftArrayHeader %t32, 0
@@ -29873,17 +29873,17 @@ __bb_array_cap_ok:
   %t44 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt43_3 = phi i1 [ %t44, %__bb_array_cap_ok ], [ %t64, %__bb_array_copy_exit ]
-  %__array_cap_arrt42_3 = phi %DriftArrayHeader [ %t32, %__bb_array_cap_ok ], [ %arr_len865, %__bb_array_copy_exit ]
+  %__array_cap_grewt43_4 = phi i1 [ %t44, %__bb_array_cap_ok ], [ %t64, %__bb_array_copy_exit ]
+  %__array_cap_arrt42_4 = phi %DriftArrayHeader [ %t32, %__bb_array_cap_ok ], [ %arr_len865, %__bb_array_copy_exit ]
   %zero_arr877 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr878 = insertvalue %DriftArrayHeader %zero_arr877, i64 0, 1
   %zero_arr879 = insertvalue %DriftArrayHeader %zero_arr878, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr879, ptr null, 3
-  %data880 = extractvalue %DriftArrayHeader %__array_cap_arrt42_3, 3
+  %data880 = extractvalue %DriftArrayHeader %__array_cap_arrt42_4, 3
   %eltptr881 = getelementptr inbounds i8, ptr %data880, i64 %t34
   store i8 %t21, ptr %eltptr881
   %t67 = add i64 %t34, %t39
-  %arr_len882 = insertvalue %DriftArrayHeader %__array_cap_arrt42_3, i64 %t67, 0
+  %arr_len882 = insertvalue %DriftArrayHeader %__array_cap_arrt42_4, i64 %t67, 0
   %arr_gen883 = insertvalue %DriftArrayHeader %arr_len882, i64 %t38, 2
   store %DriftArrayHeader %arr_gen883, ptr %clean__addr
   %t71 = load %DriftArrayHeader, ptr %pos__addr
@@ -29954,17 +29954,17 @@ __bb_array_cap_ok1:
   %t83 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt82_5 = phi i1 [ %t103, %__bb_array_copy_exit1 ], [ %t83, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt81_5 = phi %DriftArrayHeader [ %arr_len889, %__bb_array_copy_exit1 ], [ %t71, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt82_4 = phi i1 [ %t83, %__bb_array_cap_ok1 ], [ %t103, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt81_4 = phi %DriftArrayHeader [ %t71, %__bb_array_cap_ok1 ], [ %arr_len889, %__bb_array_copy_exit1 ]
   %zero_arr901 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr902 = insertvalue %DriftArrayHeader %zero_arr901, i64 0, 1
   %zero_arr903 = insertvalue %DriftArrayHeader %zero_arr902, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr903, ptr null, 3
-  %data904 = extractvalue %DriftArrayHeader %__array_cap_arrt81_5, 3
+  %data904 = extractvalue %DriftArrayHeader %__array_cap_arrt81_4, 3
   %eltptr905 = getelementptr inbounds i64, ptr %data904, i64 %t73
   store i64 %i_2, ptr %eltptr905
   %t106 = add i64 %t73, %t78
-  %arr_len906 = insertvalue %DriftArrayHeader %__array_cap_arrt81_5, i64 %t106, 0
+  %arr_len906 = insertvalue %DriftArrayHeader %__array_cap_arrt81_4, i64 %t106, 0
   %arr_gen907 = insertvalue %DriftArrayHeader %arr_len906, i64 %t77, 2
   store %DriftArrayHeader %arr_gen907, ptr %pos__addr
   %t110 = add i64 0, 1
@@ -29993,8 +29993,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t14 = add i8 0, 10
   %t15 = icmp eq i8 %b_1, %t14
@@ -30003,8 +30003,8 @@ __bb_logic_short1:
   %t12 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt11_3 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt11_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt11_1 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt11_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t20 = add i8 0, 13
   %t21 = icmp eq i8 %b_1, %t20
@@ -30013,7 +30013,7 @@ __bb_logic_short2:
   %t18 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt17_1 = phi i1 [ %t18, %__bb_logic_short2 ], [ %t21, %__bb_logic_rhs2 ]
+  %__logic_tmpt17_1 = phi i1 [ %t21, %__bb_logic_rhs2 ], [ %t18, %__bb_logic_short2 ]
   ret i1 %__logic_tmpt17_1
 }
 define i64 @"std.codec::_hex_value"(i8 %b_1) {
@@ -30033,8 +30033,8 @@ __bb_logic_rhs:
   %t11 = icmp sle i64 %t3, %t10
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t17 = add i64 0, 65
   %t18 = icmp sge i64 %t3, %t17
@@ -30047,8 +30047,8 @@ __bb_logic_rhs1:
   %t23 = icmp sle i64 %t3, %t22
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt19_3 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt19_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt19_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t31 = add i64 0, 97
   %t32 = icmp sge i64 %t3, %t31
@@ -30061,7 +30061,7 @@ __bb_logic_rhs2:
   %t37 = icmp sle i64 %t3, %t36
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt33_1 = phi i1 [ %t34, %__bb_logic_short2 ], [ %t37, %__bb_logic_rhs2 ]
+  %__logic_tmpt33_1 = phi i1 [ %t37, %__bb_logic_rhs2 ], [ %t34, %__bb_logic_short2 ]
   br i1 %__logic_tmpt33_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t44 = add i64 0, 1
@@ -30100,8 +30100,8 @@ __bb_logic_rhs:
   %t9 = icmp sle i64 %v_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t15 = add i64 0, 97
   %t17 = add i64 0, 10
@@ -30167,8 +30167,8 @@ __bb_logic_rhs:
   %t11 = icmp sle i64 %t3, %t10
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t17 = add i64 0, 97
   %t18 = icmp sge i64 %t3, %t17
@@ -30181,8 +30181,8 @@ __bb_logic_rhs1:
   %t23 = icmp sle i64 %t3, %t22
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt19_3 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt19_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt19_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t31 = add i64 0, 48
   %t32 = icmp sge i64 %t3, %t31
@@ -30195,7 +30195,7 @@ __bb_logic_rhs2:
   %t37 = icmp sle i64 %t3, %t36
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt33_1 = phi i1 [ %t34, %__bb_logic_short2 ], [ %t37, %__bb_logic_rhs2 ]
+  %__logic_tmpt33_1 = phi i1 [ %t37, %__bb_logic_rhs2 ], [ %t34, %__bb_logic_short2 ]
   br i1 %__logic_tmpt33_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t45 = add i64 0, 43
@@ -30215,8 +30215,8 @@ __bb_logic_rhs3:
   %t57 = icmp eq i64 %t3, %t56
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt53_2 = phi i1 [ %t57, %__bb_logic_rhs3 ], [ %t54, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt53_2, label %__bb_if_then5, label %__bb_if_join5
+  %__logic_tmpt53_1 = phi i1 [ %t54, %__bb_logic_short3 ], [ %t57, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt53_1, label %__bb_if_then5, label %__bb_if_join5
 __bb_if_join5:
   br i1 %allow_url_safe_1, label %__bb_logic_rhs4, label %__bb_logic_short4
 __bb_logic_short4:
@@ -30227,7 +30227,7 @@ __bb_logic_rhs4:
   %t65 = icmp eq i64 %t3, %t64
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt61_1 = phi i1 [ %t62, %__bb_logic_short4 ], [ %t65, %__bb_logic_rhs4 ]
+  %__logic_tmpt61_1 = phi i1 [ %t65, %__bb_logic_rhs4 ], [ %t62, %__bb_logic_short4 ]
   br i1 %__logic_tmpt61_1, label %__bb_if_then6, label %__bb_if_join6
 __bb_if_join6:
   %t69 = add i64 0, 61
@@ -30322,8 +30322,8 @@ __bb_logic_rhs:
   %t11 = icmp sle i64 %t3, %t10
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t17 = add i64 0, 97
   %t18 = icmp sge i64 %t3, %t17
@@ -30336,8 +30336,8 @@ __bb_logic_rhs1:
   %t23 = icmp sle i64 %t3, %t22
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt19_3 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt19_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt19_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t31 = add i64 0, 48
   %t32 = icmp sge i64 %t3, %t31
@@ -30350,7 +30350,7 @@ __bb_logic_rhs2:
   %t37 = icmp sle i64 %t3, %t36
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt33_1 = phi i1 [ %t34, %__bb_logic_short2 ], [ %t37, %__bb_logic_rhs2 ]
+  %__logic_tmpt33_1 = phi i1 [ %t37, %__bb_logic_rhs2 ], [ %t34, %__bb_logic_short2 ]
   br i1 %__logic_tmpt33_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t45 = add i64 0, 45
@@ -30439,8 +30439,8 @@ __bb_logic_rhs:
   %t11 = icmp sle i64 %t3, %t10
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t17 = add i64 0, 50
   %t18 = icmp sge i64 %t3, %t17
@@ -30453,8 +30453,8 @@ __bb_logic_rhs1:
   %t23 = icmp sle i64 %t3, %t22
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt19_3 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt19_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs1 ], [ %t20, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt19_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   br i1 %allow_lowercase_1, label %__bb_logic_rhs2, label %__bb_logic_short2
 __bb_logic_short2:
@@ -30465,7 +30465,7 @@ __bb_logic_rhs2:
   %t35 = icmp sge i64 %t3, %t34
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt31_1 = phi i1 [ %t32, %__bb_logic_short2 ], [ %t35, %__bb_logic_rhs2 ]
+  %__logic_tmpt31_1 = phi i1 [ %t35, %__bb_logic_rhs2 ], [ %t32, %__bb_logic_short2 ]
   br i1 %__logic_tmpt31_1, label %__bb_logic_rhs3, label %__bb_logic_short3
 __bb_logic_short3:
   %t38 = add i1 0, 0
@@ -30475,8 +30475,8 @@ __bb_logic_rhs3:
   %t41 = icmp sle i64 %t3, %t40
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt37_2 = phi i1 [ %t41, %__bb_logic_rhs3 ], [ %t38, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt37_2, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt37_1 = phi i1 [ %t38, %__bb_logic_short3 ], [ %t41, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt37_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t47 = add i64 0, 61
   %t48 = icmp eq i64 %t3, %t47
@@ -30907,7 +30907,7 @@ __bb_match_arm_0:
   %t16 = add i64 0, 1
   br label %__bb_match_join
 __bb_match_join:
-  %sat_4 = phi i64 [ %t16, %__bb_match_arm_0 ], [ %t22, %__bb_match_arm_1 ]
+  %sat_4 = phi i64 [ %t22, %__bb_match_arm_1 ], [ %t16, %__bb_match_arm_0 ]
   %t23 = load %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7, ptr %policy__addr
   %t24 = extractvalue %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7 %t23, 0
   %t25 = load %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7, ptr %policy__addr
@@ -31323,7 +31323,7 @@ __bb_match_arm_0:
   %t17 = call %DriftDiagnosticValue @drift_dv_int(i64 %t16)
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_6 = phi %DriftDiagnosticValue [ %t17, %__bb_match_arm_0 ], [ %t20, %__bb_match_arm_1 ], [ %t23, %__bb_match_arm_2 ], [ %t26, %__bb_match_arm_3 ], [ %t30, %__bb_match_arm_4 ]
+  %__match_expr_tmpt3_6 = phi %DriftDiagnosticValue [ %t23, %__bb_match_arm_2 ], [ %t26, %__bb_match_arm_3 ], [ %t30, %__bb_match_arm_4 ], [ %t20, %__bb_match_arm_1 ], [ %t17, %__bb_match_arm_0 ]
   ret %DriftDiagnosticValue %__match_expr_tmpt3_6
 }
 define %FnResult_Void_Error @"std.concurrent::ConcurrencyError::std.core.Throw::throw_self"(%Variant_std_2Econcurrent_ConcurrencyError_c3f2359fd8966204 %self) {
@@ -31673,7 +31673,7 @@ __bb_match_arm_0:
   %t18 = add i64 0, 1
   br label %__bb_match_join
 __bb_match_join:
-  %sat_4 = phi i64 [ %t18, %__bb_match_arm_0 ], [ %t24, %__bb_match_arm_1 ]
+  %sat_4 = phi i64 [ %t24, %__bb_match_arm_1 ], [ %t18, %__bb_match_arm_0 ]
   %t25 = load %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7, ptr %policy__addr
   %t26 = extractvalue %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7 %t25, 0
   %t27 = load %Struct_std_2Econcurrent_ExecutorPolicy_d47ca96967314fb7, ptr %policy__addr
@@ -31745,8 +31745,8 @@ __bb_logic_rhs:
   %t26 = icmp eq i64 %t10, %total_len_1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt22_5 = phi i1 [ %t23, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt22_5, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt22_4 = phi i1 [ %t23, %__bb_logic_short ], [ %t26, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt22_4, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_then2:
   %t30 = add i8 0, 10
   call void @"std.io::buffer_write__impl"(ptr %dst_1, i64 %i_2, i8 %t30)
@@ -31766,7 +31766,7 @@ __bb_if_then1:
   call void @"std.io::buffer_write__impl"(ptr %dst_1, i64 %i_2, i8 %t17)
   br label %__bb_if_join1
 __bb_if_join1:
-  %__logic_tmpt22_6 = phi i1 [ %__logic_tmpt22_2, %__bb_if_then1 ], [ %__logic_tmpt22_5, %__bb_if_join2 ]
+  %__logic_tmpt22_6 = phi i1 [ %__logic_tmpt22_2, %__bb_if_then1 ], [ %__logic_tmpt22_4, %__bb_if_join2 ]
   %t31 = add i64 0, 1
   %t33 = add i64 %i_2, %t31
   br label %__bb_if_join
@@ -31794,8 +31794,8 @@ __bb_tern_then:
   %t6 = add i64 0, 1
   br label %__bb_tern_join
 __bb_tern_join:
-  %__tern_tmpt4_2 = phi i64 [ %t6, %__bb_tern_then ], [ %t7, %__bb_tern_else ]
-  %t11 = add i64 %t3, %__tern_tmpt4_2
+  %__tern_tmpt4_1 = phi i64 [ %t6, %__bb_tern_then ], [ %t7, %__bb_tern_else ]
+  %t11 = add i64 %t3, %__tern_tmpt4_1
   %t12 = add i64 0, 0
   %r_1 = select i1 1, %Variant_std_2Ecore_Result_91c2f7f96a418c4d zeroinitializer, %Variant_std_2Ecore_Result_91c2f7f96a418c4d zeroinitializer
   br label %__bb_loop_header
@@ -32128,8 +32128,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = add i64 0, 0
   %t43 = icmp slt i64 %j_1, %t42
@@ -32141,8 +32141,8 @@ __bb_logic_short1:
   %t45 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt44_3 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt44_3, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt44_1 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt44_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t61 = load ptr, ptr %self__addr
   %t62 = getelementptr inbounds %Struct_std_2Econtainers_ArrayRange_00acb0173d5da6da, ptr %t61, i32 0, i32 0
@@ -32282,8 +32282,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = load ptr, ptr %self__addr
   %t43 = getelementptr inbounds %Struct_std_2Econtainers_ArrayRange_00acb0173d5da6da, ptr %t42, i32 0, i32 0
@@ -32425,8 +32425,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = add i64 0, 0
   %t43 = icmp slt i64 %j_1, %t42
@@ -32438,8 +32438,8 @@ __bb_logic_short1:
   %t45 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt44_3 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt44_3, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt44_1 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt44_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t61 = load ptr, ptr %self__addr
   %t62 = getelementptr inbounds %Struct_std_2Econtainers_ArrayRangeMut_ecc43fac2b8c2118, ptr %t61, i32 0, i32 0
@@ -32574,8 +32574,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = add i64 0, 0
   %t43 = icmp slt i64 %j_1, %t42
@@ -32587,8 +32587,8 @@ __bb_logic_short1:
   %t45 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt44_3 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt44_3, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt44_1 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt44_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t61 = load %Struct_std_2Econtainers_ArrayRangeMut_ecc43fac2b8c2118, ptr %self_1
   %t62 = extractvalue %Struct_std_2Econtainers_ArrayRangeMut_ecc43fac2b8c2118 %t61, 0
@@ -32793,8 +32793,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = add i64 0, 0
   %t43 = icmp slt i64 %j_1, %t42
@@ -32806,8 +32806,8 @@ __bb_logic_short1:
   %t45 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt44_3 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt44_3, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt44_1 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt44_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t60 = load ptr, ptr %self__addr
   %t61 = load %Struct_std_2Econtainers_DequeRange_faa645625aa397ba, ptr %t60
@@ -32967,8 +32967,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t41 = load ptr, ptr %self__addr
   %t42 = load %Struct_std_2Econtainers_DequeRange_faa645625aa397ba, ptr %t41
@@ -33122,8 +33122,8 @@ __bb_logic_short:
   %t26 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt25_3 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt25_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt25_2 = phi i1 [ %t26, %__bb_logic_short ], [ %t29, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt25_2, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t42 = add i64 0, 0
   %t43 = icmp slt i64 %j_1, %t42
@@ -33135,8 +33135,8 @@ __bb_logic_short1:
   %t45 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt44_3 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt44_3, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt44_1 = phi i1 [ %t48, %__bb_logic_rhs1 ], [ %t45, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt44_1, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t60 = load ptr, ptr %self__addr
   %t61 = load %Struct_std_2Econtainers_DequeRangeMut_80eba1d47222ddcb, ptr %t60
@@ -33749,11 +33749,11 @@ __bb_tern_then:
   %t5 = add i64 %t4, 0
   br label %__bb_tern_join
 __bb_tern_join:
-  %__tern_tmpt2_2 = phi i64 [ %t5, %__bb_tern_then ], [ %t7, %__bb_tern_else ]
+  %__tern_tmpt2_1 = phi i64 [ %t5, %__bb_tern_then ], [ %t7, %__bb_tern_else ]
   %t9 = load ptr, ptr %self__addr
   %t10 = load %Struct_std_2Ecore_2Ehash_DefaultHasher_c760a4cd4bac4bbb, ptr %t9
   %t11 = extractvalue %Struct_std_2Ecore_2Ehash_DefaultHasher_c760a4cd4bac4bbb %t10, 0
-  %t13 = call i64 @"std.core.hash::_mix"(i64 %t11, i64 %__tern_tmpt2_2)
+  %t13 = call i64 @"std.core.hash::_mix"(i64 %t11, i64 %__tern_tmpt2_1)
   %t15 = load ptr, ptr %self__addr
   %t16 = getelementptr inbounds %Struct_std_2Ecore_2Ehash_DefaultHasher_c760a4cd4bac4bbb, ptr %t15, i32 0, i32 0
   store i64 %t13, ptr %t16
@@ -34010,17 +34010,17 @@ __bb_array_cap_ok:
   %t22 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt21_1 = phi i1 [ %t22, %__bb_array_cap_ok ], [ %t42, %__bb_array_copy_exit ]
-  %__array_cap_arrt20_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
+  %__array_cap_grewt21_2 = phi i1 [ %t22, %__bb_array_cap_ok ], [ %t42, %__bb_array_copy_exit ]
+  %__array_cap_arrt20_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
   %zero_arr20 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr21 = insertvalue %DriftArrayHeader %zero_arr20, i64 0, 1
   %zero_arr22 = insertvalue %DriftArrayHeader %zero_arr21, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
-  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt20_1, 3
+  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt20_2, 3
   %eltptr24 = getelementptr inbounds i8, ptr %data23, i64 %t12
   store i8 %t11, ptr %eltptr24
   %t45 = add i64 %t12, %t17
-  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt20_1, i64 %t45, 0
+  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt20_2, i64 %t45, 0
   %arr_gen26 = insertvalue %DriftArrayHeader %arr_len25, i64 %t16, 2
   store %DriftArrayHeader %arr_gen26, ptr %out_1
   %t49 = load %DriftArrayHeader, ptr %out_1
@@ -34096,17 +34096,17 @@ __bb_array_cap_ok1:
   %t66 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt65_3 = phi i1 [ %t86, %__bb_array_copy_exit1 ], [ %t66, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt64_3 = phi %DriftArrayHeader [ %arr_len32, %__bb_array_copy_exit1 ], [ %t49, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt65_2 = phi i1 [ %t66, %__bb_array_cap_ok1 ], [ %t86, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt64_2 = phi %DriftArrayHeader [ %t49, %__bb_array_cap_ok1 ], [ %arr_len32, %__bb_array_copy_exit1 ]
   %zero_arr44 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 1
   %zero_arr46 = insertvalue %DriftArrayHeader %zero_arr45, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
-  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt64_3, 3
+  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt64_2, 3
   %eltptr48 = getelementptr inbounds i8, ptr %data47, i64 %t56
   store i8 %t55, ptr %eltptr48
   %t89 = add i64 %t56, %t61
-  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt64_3, i64 %t89, 0
+  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt64_2, i64 %t89, 0
   %arr_gen50 = insertvalue %DriftArrayHeader %arr_len49, i64 %t60, 2
   store %DriftArrayHeader %arr_gen50, ptr %out_1
   %t93 = load %DriftArrayHeader, ptr %out_1
@@ -34463,7 +34463,7 @@ __bb_entry:
   %__array_cap_arrt43_1 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_3, %__bb_if_join ]
+  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_4, %__bb_if_join ]
   %__array_cap_arrt43_2 = phi %DriftArrayHeader [ %__array_cap_arrt43_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t8, %__bb_entry ], [ %t73, %__bb_if_join ]
   br label %__bb_loop_body
@@ -34549,17 +34549,17 @@ __bb_array_cap_ok1:
   %t93 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt92_3 = phi i1 [ %t113, %__bb_array_copy_exit1 ], [ %t93, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt91_3 = phi %DriftArrayHeader [ %arr_len25, %__bb_array_copy_exit1 ], [ %t81, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt92_2 = phi i1 [ %t93, %__bb_array_cap_ok1 ], [ %t113, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt91_2 = phi %DriftArrayHeader [ %t81, %__bb_array_cap_ok1 ], [ %arr_len25, %__bb_array_copy_exit1 ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_3, 3
+  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_2, 3
   %eltptr41 = getelementptr inbounds i8, ptr %data40, i64 %t83
   store i8 %t82, ptr %eltptr41
   %t116 = add i64 %t83, %t88
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_3, i64 %t116, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_2, i64 %t116, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t87, 2
   store %DriftArrayHeader %arr_gen43, ptr %msg__addr
   %__array_cap_grewt137_1 = add i1 0, 0
@@ -34624,7 +34624,7 @@ __bb_loop_header2:
   %a_2 = phi i64 [ %a_1, %__bb_loop_exit1 ], [ %a_4, %__bb_if_join2 ]
   %__array_cap_grewt205_2 = phi i1 [ %__array_cap_grewt205_1, %__bb_loop_exit1 ], [ %__array_cap_grewt205_3, %__bb_if_join2 ]
   %__array_cap_arrt204_2 = phi %DriftArrayHeader [ %__array_cap_arrt204_1, %__bb_loop_exit1 ], [ %__array_cap_arrt204_3, %__bb_if_join2 ]
-  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_13, %__bb_if_join2 ]
+  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_12, %__bb_if_join2 ]
   %chunk_2 = phi i64 [ %t182, %__bb_loop_exit1 ], [ %t705, %__bb_if_join2 ]
   %h7_2 = phi i64 [ %t181, %__bb_loop_exit1 ], [ %t702, %__bb_if_join2 ]
   %h6_2 = phi i64 [ %t180, %__bb_loop_exit1 ], [ %t698, %__bb_if_join2 ]
@@ -34750,11 +34750,11 @@ __bb_loop_header6:
   %c_4 = phi i64 [ %h2_2, %__bb_loop_exit5 ], [ %b_4, %__bb_if_join6 ]
   %b_4 = phi i64 [ %h1_2, %__bb_loop_exit5 ], [ %a_4, %__bb_if_join6 ]
   %a_4 = phi i64 [ %h0_2, %__bb_loop_exit5 ], [ %t667, %__bb_if_join6 ]
-  %t_13 = phi i64 [ %t558, %__bb_loop_exit5 ], [ %t670, %__bb_if_join6 ]
+  %t_12 = phi i64 [ %t558, %__bb_loop_exit5 ], [ %t670, %__bb_if_join6 ]
   br label %__bb_loop_body6
 __bb_loop_body6:
   %t560 = add i64 0, 64
-  %t561 = icmp slt i64 %t_13, %t560
+  %t561 = icmp slt i64 %t_12, %t560
   br i1 %t561, label %__bb_if_then6, label %__bb_if_else6
 __bb_if_else6:
   br label %__bb_loop_exit6
@@ -34811,14 +34811,14 @@ __bb_if_then6:
   %t587 = insertvalue %DriftArrayHeader %carh281, ptr @.carr788, 3
   %t589 = extractvalue %DriftArrayHeader %t587, 0
   %t590 = add i64 0, 0
-  %t591 = icmp slt i64 %t_13, %t590
-  %t592 = icmp sge i64 %t_13, %t589
+  %t591 = icmp slt i64 %t_12, %t590
+  %t592 = icmp sge i64 %t_12, %t589
   %t593 = or i1 %t591, %t592
   br i1 %t593, label %__bb_idx_err13, label %__bb_idx_ok13
 __bb_idx_ok13:
   %len82 = extractvalue %DriftArrayHeader %t587, 0
   %data83 = extractvalue %DriftArrayHeader %t587, 3
-  %eltptr84 = getelementptr i64, ptr %data83, i64 %t_13
+  %eltptr84 = getelementptr i64, ptr %data83, i64 %t_12
   %t603 = load i64, ptr %eltptr84
   br label %__bb_idx_join13
 __bb_idx_join13:
@@ -34826,14 +34826,14 @@ __bb_idx_join13:
   %t607 = load %DriftArrayHeader, ptr %w__addr
   %t609 = extractvalue %DriftArrayHeader %t607, 0
   %t610 = add i64 0, 0
-  %t611 = icmp slt i64 %t_13, %t610
-  %t612 = icmp sge i64 %t_13, %t609
+  %t611 = icmp slt i64 %t_12, %t610
+  %t612 = icmp sge i64 %t_12, %t609
   %t613 = or i1 %t611, %t612
   br i1 %t613, label %__bb_idx_err14, label %__bb_idx_ok14
 __bb_idx_ok14:
   %len85 = extractvalue %DriftArrayHeader %t607, 0
   %data86 = extractvalue %DriftArrayHeader %t607, 3
-  %eltptr87 = getelementptr i64, ptr %data86, i64 %t_13
+  %eltptr87 = getelementptr i64, ptr %data86, i64 %t_12
   %t623 = load i64, ptr %eltptr87
   br label %__bb_idx_join14
 __bb_idx_join14:
@@ -34859,7 +34859,7 @@ __bb_idx_join14:
   %t666 = add i64 %t627, %t653
   %t667 = call i64 @"std.crypto::_u32"(i64 %t666)
   %t669 = add i64 0, 1
-  %t670 = add i64 %t_13, %t669
+  %t670 = add i64 %t_12, %t669
   br label %__bb_if_join6
 __bb_if_join6:
   br label %__bb_loop_header6
@@ -34873,7 +34873,7 @@ __bb_idx_err14:
   %t617 = insertvalue %DriftString %str091, ptr %strptr90, 1
   %t618 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t617)
   call void @drift_string_release(%DriftString %t617)
-  %t619 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_13)
+  %t619 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_12)
   %strptr92 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str791, i32 0, i32 2, i32 0
   %str093 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t620 = insertvalue %DriftString %str093, ptr %strptr92, 1
@@ -34900,7 +34900,7 @@ __bb_idx_err13:
   %t597 = insertvalue %DriftString %str0101, ptr %strptr100, 1
   %t598 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t597)
   call void @drift_string_release(%DriftString %t597)
-  %t599 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_13)
+  %t599 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_12)
   %strptr102 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str795, i32 0, i32 2, i32 0
   %str0103 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t600 = insertvalue %DriftString %str0103, ptr %strptr102, 1
@@ -35756,17 +35756,17 @@ __bb_array_cap_ok:
   %t45 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt44_3 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
-  %__array_cap_arrt43_3 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len334, %__bb_array_copy_exit ]
+  %__array_cap_grewt44_4 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
+  %__array_cap_arrt43_4 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len334, %__bb_array_copy_exit ]
   %zero_arr346 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr347 = insertvalue %DriftArrayHeader %zero_arr346, i64 0, 1
   %zero_arr348 = insertvalue %DriftArrayHeader %zero_arr347, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr348, ptr null, 3
-  %data349 = extractvalue %DriftArrayHeader %__array_cap_arrt43_3, 3
+  %data349 = extractvalue %DriftArrayHeader %__array_cap_arrt43_4, 3
   %eltptr350 = getelementptr inbounds i8, ptr %data349, i64 %t35
   store i8 %t32, ptr %eltptr350
   %t68 = add i64 %t35, %t40
-  %arr_len351 = insertvalue %DriftArrayHeader %__array_cap_arrt43_3, i64 %t68, 0
+  %arr_len351 = insertvalue %DriftArrayHeader %__array_cap_arrt43_4, i64 %t68, 0
   %arr_gen352 = insertvalue %DriftArrayHeader %arr_len351, i64 %t39, 2
   store %DriftArrayHeader %arr_gen352, ptr %msg__addr
   %t72 = add i64 0, 1
@@ -35875,7 +35875,7 @@ __bb_if_else:
   %__array_cap_arrt49_3 = insertvalue %DriftArrayHeader %zero_arr28, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt50_4 = phi i1 [ %__array_cap_grewt50_3, %__bb_if_else ], [ %__array_cap_grewt50_5, %__bb_if_join1 ]
+  %__array_cap_grewt50_4 = phi i1 [ %__array_cap_grewt50_3, %__bb_if_else ], [ %__array_cap_grewt50_6, %__bb_if_join1 ]
   %__array_cap_arrt49_4 = phi %DriftArrayHeader [ %__array_cap_arrt49_3, %__bb_if_else ], [ %__arc1, %__bb_if_join1 ]
   %ki_4 = phi i64 [ %t14, %__bb_if_else ], [ %t79, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -35972,17 +35972,17 @@ __bb_array_cap_ok:
   %t51 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt50_5 = phi i1 [ %t51, %__bb_array_cap_ok ], [ %t71, %__bb_array_copy_exit ]
-  %__array_cap_arrt49_5 = phi %DriftArrayHeader [ %t21, %__bb_array_cap_ok ], [ %arr_len39, %__bb_array_copy_exit ]
+  %__array_cap_grewt50_6 = phi i1 [ %t51, %__bb_array_cap_ok ], [ %t71, %__bb_array_copy_exit ]
+  %__array_cap_arrt49_6 = phi %DriftArrayHeader [ %t21, %__bb_array_cap_ok ], [ %arr_len39, %__bb_array_copy_exit ]
   %zero_arr51 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr52 = insertvalue %DriftArrayHeader %zero_arr51, i64 0, 1
   %zero_arr53 = insertvalue %DriftArrayHeader %zero_arr52, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr53, ptr null, 3
-  %data54 = extractvalue %DriftArrayHeader %__array_cap_arrt49_5, 3
+  %data54 = extractvalue %DriftArrayHeader %__array_cap_arrt49_6, 3
   %eltptr55 = getelementptr inbounds i8, ptr %data54, i64 %t41
   store i8 %t38, ptr %eltptr55
   %t74 = add i64 %t41, %t46
-  %arr_len56 = insertvalue %DriftArrayHeader %__array_cap_arrt49_5, i64 %t74, 0
+  %arr_len56 = insertvalue %DriftArrayHeader %__array_cap_arrt49_6, i64 %t74, 0
   %arr_gen57 = insertvalue %DriftArrayHeader %arr_len56, i64 %t45, 2
   store %DriftArrayHeader %arr_gen57, ptr %effective_key__addr
   %t78 = add i64 0, 1
@@ -36047,7 +36047,7 @@ __bb_if_join:
   %__array_cap_arrt95_1 = insertvalue %DriftArrayHeader %zero_arr78, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt96_2 = phi i1 [ %__array_cap_grewt96_1, %__bb_if_join ], [ %__array_cap_grewt96_5, %__bb_if_join2 ]
+  %__array_cap_grewt96_2 = phi i1 [ %__array_cap_grewt96_1, %__bb_if_join ], [ %__array_cap_grewt96_4, %__bb_if_join2 ]
   %__array_cap_arrt95_2 = phi %DriftArrayHeader [ %__array_cap_arrt95_1, %__bb_if_join ], [ %__arc2, %__bb_if_join2 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
@@ -36122,7 +36122,7 @@ __bb_loop_exit2:
   %__array_cap_arrt297_1 = insertvalue %DriftArrayHeader %zero_arr97, ptr null, 3
   br label %__bb_loop_header3
 __bb_loop_header3:
-  %__array_cap_grewt298_2 = phi i1 [ %__array_cap_grewt298_1, %__bb_loop_exit2 ], [ %__array_cap_grewt298_4, %__bb_if_join4 ]
+  %__array_cap_grewt298_2 = phi i1 [ %__array_cap_grewt298_1, %__bb_loop_exit2 ], [ %__array_cap_grewt298_3, %__bb_if_join4 ]
   %__array_cap_arrt297_2 = phi %DriftArrayHeader [ %__array_cap_arrt297_1, %__bb_loop_exit2 ], [ %__arc5, %__bb_if_join4 ]
   %mi_2 = phi i64 [ %t262, %__bb_loop_exit2 ], [ %t327, %__bb_if_join4 ]
   br label %__bb_loop_body3
@@ -36150,7 +36150,7 @@ __bb_loop_exit3:
   %__array_cap_arrt364_1 = insertvalue %DriftArrayHeader %zero_arr105, ptr null, 3
   br label %__bb_loop_header4
 __bb_loop_header4:
-  %__array_cap_grewt365_2 = phi i1 [ %__array_cap_grewt365_1, %__bb_loop_exit3 ], [ %__array_cap_grewt365_5, %__bb_if_join5 ]
+  %__array_cap_grewt365_2 = phi i1 [ %__array_cap_grewt365_1, %__bb_loop_exit3 ], [ %__array_cap_grewt365_3, %__bb_if_join5 ]
   %__array_cap_arrt364_2 = phi %DriftArrayHeader [ %__array_cap_arrt364_1, %__bb_loop_exit3 ], [ %__arc6, %__bb_if_join5 ]
   %hi_2 = phi i64 [ %t330, %__bb_loop_exit3 ], [ %t394, %__bb_if_join5 ]
   br label %__bb_loop_body4
@@ -36279,17 +36279,17 @@ __bb_array_cap_ok5:
   %t366 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt365_5 = phi i1 [ %t366, %__bb_array_cap_ok5 ], [ %t386, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt364_5 = phi %DriftArrayHeader [ %t336, %__bb_array_cap_ok5 ], [ %arr_len134, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt365_3 = phi i1 [ %t386, %__bb_array_copy_exit5 ], [ %t366, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt364_3 = phi %DriftArrayHeader [ %arr_len134, %__bb_array_copy_exit5 ], [ %t336, %__bb_array_cap_ok5 ]
   %zero_arr146 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr147 = insertvalue %DriftArrayHeader %zero_arr146, i64 0, 1
   %zero_arr148 = insertvalue %DriftArrayHeader %zero_arr147, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr148, ptr null, 3
-  %data149 = extractvalue %DriftArrayHeader %__array_cap_arrt364_5, 3
+  %data149 = extractvalue %DriftArrayHeader %__array_cap_arrt364_3, 3
   %eltptr150 = getelementptr inbounds i8, ptr %data149, i64 %t356
   store i8 %t353, ptr %eltptr150
   %t389 = add i64 %t356, %t361
-  %arr_len151 = insertvalue %DriftArrayHeader %__array_cap_arrt364_5, i64 %t389, 0
+  %arr_len151 = insertvalue %DriftArrayHeader %__array_cap_arrt364_3, i64 %t389, 0
   %arr_gen152 = insertvalue %DriftArrayHeader %arr_len151, i64 %t360, 2
   store %DriftArrayHeader %arr_gen152, ptr %opad_prefix__addr
   %t393 = add i64 0, 1
@@ -36408,17 +36408,17 @@ __bb_array_cap_ok4:
   %t299 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt298_4 = phi i1 [ %t299, %__bb_array_cap_ok4 ], [ %t319, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt297_4 = phi %DriftArrayHeader [ %t269, %__bb_array_cap_ok4 ], [ %arr_len173, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt298_3 = phi i1 [ %t299, %__bb_array_cap_ok4 ], [ %t319, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt297_3 = phi %DriftArrayHeader [ %t269, %__bb_array_cap_ok4 ], [ %arr_len173, %__bb_array_copy_exit4 ]
   %zero_arr185 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr186 = insertvalue %DriftArrayHeader %zero_arr185, i64 0, 1
   %zero_arr187 = insertvalue %DriftArrayHeader %zero_arr186, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr187, ptr null, 3
-  %data188 = extractvalue %DriftArrayHeader %__array_cap_arrt297_4, 3
+  %data188 = extractvalue %DriftArrayHeader %__array_cap_arrt297_3, 3
   %eltptr189 = getelementptr inbounds i8, ptr %data188, i64 %t289
   store i8 %t286, ptr %eltptr189
   %t322 = add i64 %t289, %t294
-  %arr_len190 = insertvalue %DriftArrayHeader %__array_cap_arrt297_4, i64 %t322, 0
+  %arr_len190 = insertvalue %DriftArrayHeader %__array_cap_arrt297_3, i64 %t322, 0
   %arr_gen191 = insertvalue %DriftArrayHeader %arr_len190, i64 %t293, 2
   store %DriftArrayHeader %arr_gen191, ptr %ipad_msg__addr
   %t326 = add i64 0, 1
@@ -36781,17 +36781,17 @@ __bb_array_cap_ok1:
   %t97 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt96_5 = phi i1 [ %t117, %__bb_array_copy_exit1 ], [ %t97, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt95_5 = phi %DriftArrayHeader [ %arr_len281, %__bb_array_copy_exit1 ], [ %t85, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt96_4 = phi i1 [ %t97, %__bb_array_cap_ok1 ], [ %t117, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt95_4 = phi %DriftArrayHeader [ %t85, %__bb_array_cap_ok1 ], [ %arr_len281, %__bb_array_copy_exit1 ]
   %zero_arr293 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr294 = insertvalue %DriftArrayHeader %zero_arr293, i64 0, 1
   %zero_arr295 = insertvalue %DriftArrayHeader %zero_arr294, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr295, ptr null, 3
-  %data296 = extractvalue %DriftArrayHeader %__array_cap_arrt95_5, 3
+  %data296 = extractvalue %DriftArrayHeader %__array_cap_arrt95_4, 3
   %eltptr297 = getelementptr inbounds i8, ptr %data296, i64 %t87
   store i8 %t86, ptr %eltptr297
   %t120 = add i64 %t87, %t92
-  %arr_len298 = insertvalue %DriftArrayHeader %__array_cap_arrt95_5, i64 %t120, 0
+  %arr_len298 = insertvalue %DriftArrayHeader %__array_cap_arrt95_4, i64 %t120, 0
   %arr_gen299 = insertvalue %DriftArrayHeader %arr_len298, i64 %t91, 2
   store %DriftArrayHeader %arr_gen299, ptr %effective_key__addr
   br label %__bb_if_join2
@@ -36852,7 +36852,7 @@ __bb_entry:
   %__array_cap_arrt43_1 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_3, %__bb_if_join ]
+  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_4, %__bb_if_join ]
   %__array_cap_arrt43_2 = phi %DriftArrayHeader [ %__array_cap_arrt43_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t8, %__bb_entry ], [ %t73, %__bb_if_join ]
   br label %__bb_loop_body
@@ -36938,17 +36938,17 @@ __bb_array_cap_ok1:
   %t93 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt92_3 = phi i1 [ %t113, %__bb_array_copy_exit1 ], [ %t93, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt91_3 = phi %DriftArrayHeader [ %arr_len25, %__bb_array_copy_exit1 ], [ %t81, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt92_2 = phi i1 [ %t93, %__bb_array_cap_ok1 ], [ %t113, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt91_2 = phi %DriftArrayHeader [ %t81, %__bb_array_cap_ok1 ], [ %arr_len25, %__bb_array_copy_exit1 ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_3, 3
+  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_2, 3
   %eltptr41 = getelementptr inbounds i8, ptr %data40, i64 %t83
   store i8 %t82, ptr %eltptr41
   %t116 = add i64 %t83, %t88
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_3, i64 %t116, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_2, i64 %t116, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t87, 2
   store %DriftArrayHeader %arr_gen43, ptr %msg__addr
   %__array_cap_grewt137_1 = add i1 0, 0
@@ -37008,7 +37008,7 @@ __bb_loop_header2:
   %a_2 = phi i64 [ %a_1, %__bb_loop_exit1 ], [ %a_4, %__bb_if_join2 ]
   %__array_cap_grewt202_2 = phi i1 [ %__array_cap_grewt202_1, %__bb_loop_exit1 ], [ %__array_cap_grewt202_3, %__bb_if_join2 ]
   %__array_cap_arrt201_2 = phi %DriftArrayHeader [ %__array_cap_arrt201_1, %__bb_loop_exit1 ], [ %__array_cap_arrt201_3, %__bb_if_join2 ]
-  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_13, %__bb_if_join2 ]
+  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_12, %__bb_if_join2 ]
   %chunk_2 = phi i64 [ %t179, %__bb_loop_exit1 ], [ %t562, %__bb_if_join2 ]
   %h4_2 = phi i64 [ %t178, %__bb_loop_exit1 ], [ %t559, %__bb_if_join2 ]
   %h3_2 = phi i64 [ %t177, %__bb_loop_exit1 ], [ %t555, %__bb_if_join2 ]
@@ -37120,18 +37120,18 @@ __bb_loop_exit5:
   %t451 = add i64 0, 0
   br label %__bb_loop_header6
 __bb_loop_header6:
-  %k_3 = phi i64 [ %k_2, %__bb_loop_exit5 ], [ %k_10, %__bb_if_join6 ]
-  %f_3 = phi i64 [ %f_2, %__bb_loop_exit5 ], [ %f_10, %__bb_if_join6 ]
+  %k_3 = phi i64 [ %k_2, %__bb_loop_exit5 ], [ %k_11, %__bb_if_join6 ]
+  %f_3 = phi i64 [ %f_2, %__bb_loop_exit5 ], [ %f_11, %__bb_if_join6 ]
   %e_4 = phi i64 [ %h4_2, %__bb_loop_exit5 ], [ %d_4, %__bb_if_join6 ]
   %d_4 = phi i64 [ %h3_2, %__bb_loop_exit5 ], [ %c_4, %__bb_if_join6 ]
   %c_4 = phi i64 [ %h2_2, %__bb_loop_exit5 ], [ %t534, %__bb_if_join6 ]
   %b_4 = phi i64 [ %h1_2, %__bb_loop_exit5 ], [ %a_4, %__bb_if_join6 ]
   %a_4 = phi i64 [ %h0_2, %__bb_loop_exit5 ], [ %t529, %__bb_if_join6 ]
-  %t_13 = phi i64 [ %t451, %__bb_loop_exit5 ], [ %t539, %__bb_if_join6 ]
+  %t_12 = phi i64 [ %t451, %__bb_loop_exit5 ], [ %t539, %__bb_if_join6 ]
   br label %__bb_loop_body6
 __bb_loop_body6:
   %t453 = add i64 0, 80
-  %t454 = icmp slt i64 %t_13, %t453
+  %t454 = icmp slt i64 %t_12, %t453
   br i1 %t454, label %__bb_if_then6, label %__bb_if_else6
 __bb_if_else6:
   br label %__bb_loop_exit6
@@ -37164,15 +37164,15 @@ __bb_if_then6:
   %t455 = add i64 0, 0
   %t456 = add i64 0, 0
   %t458 = add i64 0, 20
-  %t459 = icmp slt i64 %t_13, %t458
+  %t459 = icmp slt i64 %t_12, %t458
   br i1 %t459, label %__bb_if_then7, label %__bb_if_else7
 __bb_if_else7:
   %t471 = add i64 0, 40
-  %t472 = icmp slt i64 %t_13, %t471
+  %t472 = icmp slt i64 %t_12, %t471
   br i1 %t472, label %__bb_if_then8, label %__bb_if_else8
 __bb_if_else8:
   %t480 = add i64 0, 60
-  %t481 = icmp slt i64 %t_13, %t480
+  %t481 = icmp slt i64 %t_12, %t480
   br i1 %t481, label %__bb_if_then9, label %__bb_if_else9
 __bb_if_else9:
   %t496 = xor i64 %b_4, %c_4
@@ -37188,8 +37188,8 @@ __bb_if_then9:
   %t493 = add i64 0, 2400959708
   br label %__bb_if_join9
 __bb_if_join9:
-  %k_7 = phi i64 [ %t499, %__bb_if_else9 ], [ %t493, %__bb_if_then9 ]
-  %f_7 = phi i64 [ %t498, %__bb_if_else9 ], [ %t492, %__bb_if_then9 ]
+  %k_8 = phi i64 [ %t493, %__bb_if_then9 ], [ %t499, %__bb_if_else9 ]
+  %f_8 = phi i64 [ %t492, %__bb_if_then9 ], [ %t498, %__bb_if_else9 ]
   br label %__bb_if_join8
 __bb_if_then8:
   %t475 = xor i64 %b_4, %c_4
@@ -37197,8 +37197,8 @@ __bb_if_then8:
   %t478 = add i64 0, 1859775393
   br label %__bb_if_join8
 __bb_if_join8:
-  %k_9 = phi i64 [ %k_7, %__bb_if_join9 ], [ %t478, %__bb_if_then8 ]
-  %f_9 = phi i64 [ %f_7, %__bb_if_join9 ], [ %t477, %__bb_if_then8 ]
+  %k_5 = phi i64 [ %t478, %__bb_if_then8 ], [ %k_8, %__bb_if_join9 ]
+  %f_5 = phi i64 [ %t477, %__bb_if_then8 ], [ %f_8, %__bb_if_join9 ]
   br label %__bb_if_join7
 __bb_if_then7:
   %t462 = and i64 %b_4, %c_4
@@ -37209,24 +37209,24 @@ __bb_if_then7:
   %t469 = add i64 0, 1518500249
   br label %__bb_if_join7
 __bb_if_join7:
-  %k_10 = phi i64 [ %k_9, %__bb_if_join8 ], [ %t469, %__bb_if_then7 ]
-  %f_10 = phi i64 [ %f_9, %__bb_if_join8 ], [ %t468, %__bb_if_then7 ]
+  %k_11 = phi i64 [ %k_5, %__bb_if_join8 ], [ %t469, %__bb_if_then7 ]
+  %f_11 = phi i64 [ %f_5, %__bb_if_join8 ], [ %t468, %__bb_if_then7 ]
   %t501 = add i64 0, 5
   %t502 = call i64 @"std.crypto::_rol32"(i64 %a_4, i64 %t501)
-  %t504 = add i64 %t502, %f_10
+  %t504 = add i64 %t502, %f_11
   %t506 = add i64 %t504, %e_4
-  %t508 = add i64 %t506, %k_10
+  %t508 = add i64 %t506, %k_11
   %t509 = load %DriftArrayHeader, ptr %w__addr
   %t511 = extractvalue %DriftArrayHeader %t509, 0
   %t512 = add i64 0, 0
-  %t513 = icmp slt i64 %t_13, %t512
-  %t514 = icmp sge i64 %t_13, %t511
+  %t513 = icmp slt i64 %t_12, %t512
+  %t514 = icmp sge i64 %t_12, %t511
   %t515 = or i1 %t513, %t514
   br i1 %t515, label %__bb_idx_err9, label %__bb_idx_ok9
 __bb_idx_ok9:
   %len78 = extractvalue %DriftArrayHeader %t509, 0
   %data79 = extractvalue %DriftArrayHeader %t509, 3
-  %eltptr80 = getelementptr i64, ptr %data79, i64 %t_13
+  %eltptr80 = getelementptr i64, ptr %data79, i64 %t_12
   %t525 = load i64, ptr %eltptr80
   br label %__bb_idx_join9
 __bb_idx_join9:
@@ -37235,7 +37235,7 @@ __bb_idx_join9:
   %t533 = add i64 0, 30
   %t534 = call i64 @"std.crypto::_rol32"(i64 %b_4, i64 %t533)
   %t538 = add i64 0, 1
-  %t539 = add i64 %t_13, %t538
+  %t539 = add i64 %t_12, %t538
   br label %__bb_if_join6
 __bb_if_join6:
   br label %__bb_loop_header6
@@ -37249,7 +37249,7 @@ __bb_idx_err9:
   %t519 = insertvalue %DriftString %str084, ptr %strptr83, 1
   %t520 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t519)
   call void @drift_string_release(%DriftString %t519)
-  %t521 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_13)
+  %t521 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_12)
   %strptr85 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str873, i32 0, i32 2, i32 0
   %str086 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t522 = insertvalue %DriftString %str086, ptr %strptr85, 1
@@ -37918,17 +37918,17 @@ __bb_array_cap_ok:
   %t45 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt44_3 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
-  %__array_cap_arrt43_3 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len265, %__bb_array_copy_exit ]
+  %__array_cap_grewt44_4 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
+  %__array_cap_arrt43_4 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len265, %__bb_array_copy_exit ]
   %zero_arr277 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr278 = insertvalue %DriftArrayHeader %zero_arr277, i64 0, 1
   %zero_arr279 = insertvalue %DriftArrayHeader %zero_arr278, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr279, ptr null, 3
-  %data280 = extractvalue %DriftArrayHeader %__array_cap_arrt43_3, 3
+  %data280 = extractvalue %DriftArrayHeader %__array_cap_arrt43_4, 3
   %eltptr281 = getelementptr inbounds i8, ptr %data280, i64 %t35
   store i8 %t32, ptr %eltptr281
   %t68 = add i64 %t35, %t40
-  %arr_len282 = insertvalue %DriftArrayHeader %__array_cap_arrt43_3, i64 %t68, 0
+  %arr_len282 = insertvalue %DriftArrayHeader %__array_cap_arrt43_4, i64 %t68, 0
   %arr_gen283 = insertvalue %DriftArrayHeader %arr_len282, i64 %t39, 2
   store %DriftArrayHeader %arr_gen283, ptr %msg__addr
   %t72 = add i64 0, 1
@@ -38072,17 +38072,17 @@ __bb_array_cap_ok:
   %t20 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt19_1 = phi i1 [ %t20, %__bb_array_cap_ok ], [ %t40, %__bb_array_copy_exit ]
-  %__array_cap_arrt18_1 = phi %DriftArrayHeader [ %t3, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
+  %__array_cap_grewt19_2 = phi i1 [ %t20, %__bb_array_cap_ok ], [ %t40, %__bb_array_copy_exit ]
+  %__array_cap_arrt18_2 = phi %DriftArrayHeader [ %t3, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
   %zero_arr20 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr21 = insertvalue %DriftArrayHeader %zero_arr20, i64 0, 1
   %zero_arr22 = insertvalue %DriftArrayHeader %zero_arr21, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
-  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt18_1, 3
+  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt18_2, 3
   %eltptr24 = getelementptr inbounds i8, ptr %data23, i64 %t10
   store i8 %t9, ptr %eltptr24
   %t43 = add i64 %t10, %t15
-  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt18_1, i64 %t43, 0
+  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt18_2, i64 %t43, 0
   %arr_gen26 = insertvalue %DriftArrayHeader %arr_len25, i64 %t14, 2
   store %DriftArrayHeader %arr_gen26, ptr %out_1
   %t47 = load %DriftArrayHeader, ptr %out_1
@@ -38158,17 +38158,17 @@ __bb_array_cap_ok1:
   %t64 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt63_3 = phi i1 [ %t84, %__bb_array_copy_exit1 ], [ %t64, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt62_3 = phi %DriftArrayHeader [ %arr_len32, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt63_2 = phi i1 [ %t64, %__bb_array_cap_ok1 ], [ %t84, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt62_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len32, %__bb_array_copy_exit1 ]
   %zero_arr44 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 1
   %zero_arr46 = insertvalue %DriftArrayHeader %zero_arr45, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
-  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt62_3, 3
+  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt62_2, 3
   %eltptr48 = getelementptr inbounds i8, ptr %data47, i64 %t54
   store i8 %t53, ptr %eltptr48
   %t87 = add i64 %t54, %t59
-  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt62_3, i64 %t87, 0
+  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt62_2, i64 %t87, 0
   %arr_gen50 = insertvalue %DriftArrayHeader %arr_len49, i64 %t58, 2
   store %DriftArrayHeader %arr_gen50, ptr %out_1
   %t91 = load %DriftArrayHeader, ptr %out_1
@@ -38416,17 +38416,17 @@ __bb_array_cap_ok4:
   %t196 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt195_2 = phi i1 [ %t196, %__bb_array_cap_ok4 ], [ %t216, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt194_2 = phi %DriftArrayHeader [ %t179, %__bb_array_cap_ok4 ], [ %arr_len104, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt195_1 = phi i1 [ %t196, %__bb_array_cap_ok4 ], [ %t216, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt194_1 = phi %DriftArrayHeader [ %t179, %__bb_array_cap_ok4 ], [ %arr_len104, %__bb_array_copy_exit4 ]
   %zero_arr116 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr117 = insertvalue %DriftArrayHeader %zero_arr116, i64 0, 1
   %zero_arr118 = insertvalue %DriftArrayHeader %zero_arr117, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr118, ptr null, 3
-  %data119 = extractvalue %DriftArrayHeader %__array_cap_arrt194_2, 3
+  %data119 = extractvalue %DriftArrayHeader %__array_cap_arrt194_1, 3
   %eltptr120 = getelementptr inbounds i8, ptr %data119, i64 %t186
   store i8 %t185, ptr %eltptr120
   %t219 = add i64 %t186, %t191
-  %arr_len121 = insertvalue %DriftArrayHeader %__array_cap_arrt194_2, i64 %t219, 0
+  %arr_len121 = insertvalue %DriftArrayHeader %__array_cap_arrt194_1, i64 %t219, 0
   %arr_gen122 = insertvalue %DriftArrayHeader %arr_len121, i64 %t190, 2
   store %DriftArrayHeader %arr_gen122, ptr %out_1
   %t223 = load %DriftArrayHeader, ptr %out_1
@@ -38502,17 +38502,17 @@ __bb_array_cap_ok5:
   %t240 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt239_3 = phi i1 [ %t240, %__bb_array_cap_ok5 ], [ %t260, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt238_3 = phi %DriftArrayHeader [ %t223, %__bb_array_cap_ok5 ], [ %arr_len128, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt239_1 = phi i1 [ %t260, %__bb_array_copy_exit5 ], [ %t240, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt238_1 = phi %DriftArrayHeader [ %arr_len128, %__bb_array_copy_exit5 ], [ %t223, %__bb_array_cap_ok5 ]
   %zero_arr140 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr141 = insertvalue %DriftArrayHeader %zero_arr140, i64 0, 1
   %zero_arr142 = insertvalue %DriftArrayHeader %zero_arr141, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr142, ptr null, 3
-  %data143 = extractvalue %DriftArrayHeader %__array_cap_arrt238_3, 3
+  %data143 = extractvalue %DriftArrayHeader %__array_cap_arrt238_1, 3
   %eltptr144 = getelementptr inbounds i8, ptr %data143, i64 %t230
   store i8 %t229, ptr %eltptr144
   %t263 = add i64 %t230, %t235
-  %arr_len145 = insertvalue %DriftArrayHeader %__array_cap_arrt238_3, i64 %t263, 0
+  %arr_len145 = insertvalue %DriftArrayHeader %__array_cap_arrt238_1, i64 %t263, 0
   %arr_gen146 = insertvalue %DriftArrayHeader %arr_len145, i64 %t234, 2
   store %DriftArrayHeader %arr_gen146, ptr %out_1
   %t267 = load %DriftArrayHeader, ptr %out_1
@@ -38588,17 +38588,17 @@ __bb_array_cap_ok6:
   %t284 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt283_1 = phi i1 [ %t304, %__bb_array_copy_exit6 ], [ %t284, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt282_1 = phi %DriftArrayHeader [ %arr_len152, %__bb_array_copy_exit6 ], [ %t267, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt283_3 = phi i1 [ %t304, %__bb_array_copy_exit6 ], [ %t284, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt282_3 = phi %DriftArrayHeader [ %arr_len152, %__bb_array_copy_exit6 ], [ %t267, %__bb_array_cap_ok6 ]
   %zero_arr164 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr165 = insertvalue %DriftArrayHeader %zero_arr164, i64 0, 1
   %zero_arr166 = insertvalue %DriftArrayHeader %zero_arr165, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr166, ptr null, 3
-  %data167 = extractvalue %DriftArrayHeader %__array_cap_arrt282_1, 3
+  %data167 = extractvalue %DriftArrayHeader %__array_cap_arrt282_3, 3
   %eltptr168 = getelementptr inbounds i8, ptr %data167, i64 %t274
   store i8 %t273, ptr %eltptr168
   %t307 = add i64 %t274, %t279
-  %arr_len169 = insertvalue %DriftArrayHeader %__array_cap_arrt282_1, i64 %t307, 0
+  %arr_len169 = insertvalue %DriftArrayHeader %__array_cap_arrt282_3, i64 %t307, 0
   %arr_gen170 = insertvalue %DriftArrayHeader %arr_len169, i64 %t278, 2
   store %DriftArrayHeader %arr_gen170, ptr %out_1
   %t311 = load %DriftArrayHeader, ptr %out_1
@@ -38672,8 +38672,8 @@ __bb_array_cap_ok7:
   %t326 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt325_1 = phi i1 [ %t346, %__bb_array_copy_exit7 ], [ %t326, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt324_1 = phi %DriftArrayHeader [ %arr_len176, %__bb_array_copy_exit7 ], [ %t311, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt325_1 = phi i1 [ %t326, %__bb_array_cap_ok7 ], [ %t346, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt324_1 = phi %DriftArrayHeader [ %t311, %__bb_array_cap_ok7 ], [ %arr_len176, %__bb_array_copy_exit7 ]
   %zero_arr188 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr189 = insertvalue %DriftArrayHeader %zero_arr188, i64 0, 1
   %zero_arr190 = insertvalue %DriftArrayHeader %zero_arr189, i64 0, 2
@@ -39143,7 +39143,7 @@ __bb_entry:
   %__array_cap_arrt43_1 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_3, %__bb_if_join ]
+  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_4, %__bb_if_join ]
   %__array_cap_arrt43_2 = phi %DriftArrayHeader [ %__array_cap_arrt43_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t8, %__bb_entry ], [ %t73, %__bb_if_join ]
   br label %__bb_loop_body
@@ -39229,17 +39229,17 @@ __bb_array_cap_ok1:
   %t93 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt92_3 = phi i1 [ %t113, %__bb_array_copy_exit1 ], [ %t93, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt91_3 = phi %DriftArrayHeader [ %arr_len25, %__bb_array_copy_exit1 ], [ %t81, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt92_2 = phi i1 [ %t93, %__bb_array_cap_ok1 ], [ %t113, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt91_2 = phi %DriftArrayHeader [ %t81, %__bb_array_cap_ok1 ], [ %arr_len25, %__bb_array_copy_exit1 ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_3, 3
+  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_2, 3
   %eltptr41 = getelementptr inbounds i8, ptr %data40, i64 %t83
   store i8 %t82, ptr %eltptr41
   %t116 = add i64 %t83, %t88
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_3, i64 %t116, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_2, i64 %t116, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t87, 2
   store %DriftArrayHeader %arr_gen43, ptr %msg__addr
   %__array_cap_grewt137_1 = add i1 0, 0
@@ -39293,7 +39293,7 @@ __bb_loop_header2:
   %a_2 = phi i64 [ %a_1, %__bb_loop_exit1 ], [ %a_4, %__bb_if_join2 ]
   %__array_cap_grewt199_2 = phi i1 [ %__array_cap_grewt199_1, %__bb_loop_exit1 ], [ %__array_cap_grewt199_3, %__bb_if_join2 ]
   %__array_cap_arrt198_2 = phi %DriftArrayHeader [ %__array_cap_arrt198_1, %__bb_loop_exit1 ], [ %__array_cap_arrt198_3, %__bb_if_join2 ]
-  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_13, %__bb_if_join2 ]
+  %t_2 = phi i64 [ %t_1, %__bb_loop_exit1 ], [ %t_12, %__bb_if_join2 ]
   %chunk_2 = phi i64 [ %t176, %__bb_loop_exit1 ], [ %t587, %__bb_if_join2 ]
   %h7_2 = phi i64 [ %iv7_1, %__bb_loop_exit1 ], [ %t584, %__bb_if_join2 ]
   %h6_2 = phi i64 [ %iv6_1, %__bb_loop_exit1 ], [ %t581, %__bb_if_join2 ]
@@ -39392,17 +39392,17 @@ __bb_array_cap_ok4:
   %t604 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt603_2 = phi i1 [ %t604, %__bb_array_cap_ok4 ], [ %t624, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt602_2 = phi %DriftArrayHeader [ %t592, %__bb_array_cap_ok4 ], [ %arr_len60, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt603_1 = phi i1 [ %t604, %__bb_array_cap_ok4 ], [ %t624, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt602_1 = phi %DriftArrayHeader [ %t592, %__bb_array_cap_ok4 ], [ %arr_len60, %__bb_array_copy_exit4 ]
   %zero_arr72 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr73 = insertvalue %DriftArrayHeader %zero_arr72, i64 0, 1
   %zero_arr74 = insertvalue %DriftArrayHeader %zero_arr73, i64 0, 2
   %__arc11 = insertvalue %DriftArrayHeader %zero_arr74, ptr null, 3
-  %data75 = extractvalue %DriftArrayHeader %__array_cap_arrt602_2, 3
+  %data75 = extractvalue %DriftArrayHeader %__array_cap_arrt602_1, 3
   %eltptr76 = getelementptr inbounds i64, ptr %data75, i64 %t594
   store i64 %h0_2, ptr %eltptr76
   %t627 = add i64 %t594, %t599
-  %arr_len77 = insertvalue %DriftArrayHeader %__array_cap_arrt602_2, i64 %t627, 0
+  %arr_len77 = insertvalue %DriftArrayHeader %__array_cap_arrt602_1, i64 %t627, 0
   %arr_gen78 = insertvalue %DriftArrayHeader %arr_len77, i64 %t598, 2
   store %DriftArrayHeader %arr_gen78, ptr %state__addr
   %t631 = load %DriftArrayHeader, ptr %state__addr
@@ -39473,17 +39473,17 @@ __bb_array_cap_ok5:
   %t643 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt642_3 = phi i1 [ %t643, %__bb_array_cap_ok5 ], [ %t663, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt641_3 = phi %DriftArrayHeader [ %t631, %__bb_array_cap_ok5 ], [ %arr_len84, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt642_1 = phi i1 [ %t663, %__bb_array_copy_exit5 ], [ %t643, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt641_1 = phi %DriftArrayHeader [ %arr_len84, %__bb_array_copy_exit5 ], [ %t631, %__bb_array_cap_ok5 ]
   %zero_arr96 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr97 = insertvalue %DriftArrayHeader %zero_arr96, i64 0, 1
   %zero_arr98 = insertvalue %DriftArrayHeader %zero_arr97, i64 0, 2
   %__arc12 = insertvalue %DriftArrayHeader %zero_arr98, ptr null, 3
-  %data99 = extractvalue %DriftArrayHeader %__array_cap_arrt641_3, 3
+  %data99 = extractvalue %DriftArrayHeader %__array_cap_arrt641_1, 3
   %eltptr100 = getelementptr inbounds i64, ptr %data99, i64 %t633
   store i64 %h1_2, ptr %eltptr100
   %t666 = add i64 %t633, %t638
-  %arr_len101 = insertvalue %DriftArrayHeader %__array_cap_arrt641_3, i64 %t666, 0
+  %arr_len101 = insertvalue %DriftArrayHeader %__array_cap_arrt641_1, i64 %t666, 0
   %arr_gen102 = insertvalue %DriftArrayHeader %arr_len101, i64 %t637, 2
   store %DriftArrayHeader %arr_gen102, ptr %state__addr
   %t670 = load %DriftArrayHeader, ptr %state__addr
@@ -39554,17 +39554,17 @@ __bb_array_cap_ok6:
   %t682 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt681_1 = phi i1 [ %t702, %__bb_array_copy_exit6 ], [ %t682, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt680_1 = phi %DriftArrayHeader [ %arr_len108, %__bb_array_copy_exit6 ], [ %t670, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt681_3 = phi i1 [ %t702, %__bb_array_copy_exit6 ], [ %t682, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt680_3 = phi %DriftArrayHeader [ %arr_len108, %__bb_array_copy_exit6 ], [ %t670, %__bb_array_cap_ok6 ]
   %zero_arr120 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr121 = insertvalue %DriftArrayHeader %zero_arr120, i64 0, 1
   %zero_arr122 = insertvalue %DriftArrayHeader %zero_arr121, i64 0, 2
   %__arc13 = insertvalue %DriftArrayHeader %zero_arr122, ptr null, 3
-  %data123 = extractvalue %DriftArrayHeader %__array_cap_arrt680_1, 3
+  %data123 = extractvalue %DriftArrayHeader %__array_cap_arrt680_3, 3
   %eltptr124 = getelementptr inbounds i64, ptr %data123, i64 %t672
   store i64 %h2_2, ptr %eltptr124
   %t705 = add i64 %t672, %t677
-  %arr_len125 = insertvalue %DriftArrayHeader %__array_cap_arrt680_1, i64 %t705, 0
+  %arr_len125 = insertvalue %DriftArrayHeader %__array_cap_arrt680_3, i64 %t705, 0
   %arr_gen126 = insertvalue %DriftArrayHeader %arr_len125, i64 %t676, 2
   store %DriftArrayHeader %arr_gen126, ptr %state__addr
   %t709 = load %DriftArrayHeader, ptr %state__addr
@@ -39635,8 +39635,8 @@ __bb_array_cap_ok7:
   %t721 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt720_1 = phi i1 [ %t741, %__bb_array_copy_exit7 ], [ %t721, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt719_1 = phi %DriftArrayHeader [ %arr_len132, %__bb_array_copy_exit7 ], [ %t709, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt720_1 = phi i1 [ %t721, %__bb_array_cap_ok7 ], [ %t741, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt719_1 = phi %DriftArrayHeader [ %t709, %__bb_array_cap_ok7 ], [ %arr_len132, %__bb_array_copy_exit7 ]
   %zero_arr144 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr145 = insertvalue %DriftArrayHeader %zero_arr144, i64 0, 1
   %zero_arr146 = insertvalue %DriftArrayHeader %zero_arr145, i64 0, 2
@@ -39797,17 +39797,17 @@ __bb_array_cap_ok9:
   %t799 = add i1 0, 0
   br label %__bb_array_cap_join29
 __bb_array_cap_join29:
-  %__array_cap_grewt798_2 = phi i1 [ %t799, %__bb_array_cap_ok9 ], [ %t819, %__bb_array_copy_exit9 ]
-  %__array_cap_arrt797_2 = phi %DriftArrayHeader [ %t787, %__bb_array_cap_ok9 ], [ %arr_len180, %__bb_array_copy_exit9 ]
+  %__array_cap_grewt798_3 = phi i1 [ %t799, %__bb_array_cap_ok9 ], [ %t819, %__bb_array_copy_exit9 ]
+  %__array_cap_arrt797_3 = phi %DriftArrayHeader [ %t787, %__bb_array_cap_ok9 ], [ %arr_len180, %__bb_array_copy_exit9 ]
   %zero_arr192 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr193 = insertvalue %DriftArrayHeader %zero_arr192, i64 0, 1
   %zero_arr194 = insertvalue %DriftArrayHeader %zero_arr193, i64 0, 2
   %__arc16 = insertvalue %DriftArrayHeader %zero_arr194, ptr null, 3
-  %data195 = extractvalue %DriftArrayHeader %__array_cap_arrt797_2, 3
+  %data195 = extractvalue %DriftArrayHeader %__array_cap_arrt797_3, 3
   %eltptr196 = getelementptr inbounds i64, ptr %data195, i64 %t789
   store i64 %h5_2, ptr %eltptr196
   %t822 = add i64 %t789, %t794
-  %arr_len197 = insertvalue %DriftArrayHeader %__array_cap_arrt797_2, i64 %t822, 0
+  %arr_len197 = insertvalue %DriftArrayHeader %__array_cap_arrt797_3, i64 %t822, 0
   %arr_gen198 = insertvalue %DriftArrayHeader %arr_len197, i64 %t793, 2
   store %DriftArrayHeader %arr_gen198, ptr %state__addr
   %t826 = load %DriftArrayHeader, ptr %state__addr
@@ -39878,17 +39878,17 @@ __bb_array_cap_ok10:
   %t838 = add i1 0, 0
   br label %__bb_array_cap_join210
 __bb_array_cap_join210:
-  %__array_cap_grewt837_3 = phi i1 [ %t858, %__bb_array_copy_exit10 ], [ %t838, %__bb_array_cap_ok10 ]
-  %__array_cap_arrt836_3 = phi %DriftArrayHeader [ %arr_len204, %__bb_array_copy_exit10 ], [ %t826, %__bb_array_cap_ok10 ]
+  %__array_cap_grewt837_2 = phi i1 [ %t858, %__bb_array_copy_exit10 ], [ %t838, %__bb_array_cap_ok10 ]
+  %__array_cap_arrt836_2 = phi %DriftArrayHeader [ %arr_len204, %__bb_array_copy_exit10 ], [ %t826, %__bb_array_cap_ok10 ]
   %zero_arr216 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr217 = insertvalue %DriftArrayHeader %zero_arr216, i64 0, 1
   %zero_arr218 = insertvalue %DriftArrayHeader %zero_arr217, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr218, ptr null, 3
-  %data219 = extractvalue %DriftArrayHeader %__array_cap_arrt836_3, 3
+  %data219 = extractvalue %DriftArrayHeader %__array_cap_arrt836_2, 3
   %eltptr220 = getelementptr inbounds i64, ptr %data219, i64 %t828
   store i64 %h6_2, ptr %eltptr220
   %t861 = add i64 %t828, %t833
-  %arr_len221 = insertvalue %DriftArrayHeader %__array_cap_arrt836_3, i64 %t861, 0
+  %arr_len221 = insertvalue %DriftArrayHeader %__array_cap_arrt836_2, i64 %t861, 0
   %arr_gen222 = insertvalue %DriftArrayHeader %arr_len221, i64 %t832, 2
   store %DriftArrayHeader %arr_gen222, ptr %state__addr
   %t865 = load %DriftArrayHeader, ptr %state__addr
@@ -40059,11 +40059,11 @@ __bb_loop_header6:
   %c_4 = phi i64 [ %h2_2, %__bb_loop_exit5 ], [ %b_4, %__bb_if_join6 ]
   %b_4 = phi i64 [ %h1_2, %__bb_loop_exit5 ], [ %a_4, %__bb_if_join6 ]
   %a_4 = phi i64 [ %h0_2, %__bb_loop_exit5 ], [ %t557, %__bb_if_join6 ]
-  %t_13 = phi i64 [ %t453, %__bb_loop_exit5 ], [ %t560, %__bb_if_join6 ]
+  %t_12 = phi i64 [ %t453, %__bb_loop_exit5 ], [ %t560, %__bb_if_join6 ]
   br label %__bb_loop_body6
 __bb_loop_body6:
   %t455 = add i64 0, 80
-  %t456 = icmp slt i64 %t_13, %t455
+  %t456 = icmp slt i64 %t_12, %t455
   br i1 %t456, label %__bb_if_then6, label %__bb_if_else6
 __bb_if_else6:
   br label %__bb_loop_exit6
@@ -40111,14 +40111,14 @@ __bb_if_then6:
   %t481 = insertvalue %DriftArrayHeader %carh2273, ptr @.carr947, 3
   %t483 = extractvalue %DriftArrayHeader %t481, 0
   %t484 = add i64 0, 0
-  %t485 = icmp slt i64 %t_13, %t484
-  %t486 = icmp sge i64 %t_13, %t483
+  %t485 = icmp slt i64 %t_12, %t484
+  %t486 = icmp sge i64 %t_12, %t483
   %t487 = or i1 %t485, %t486
   br i1 %t487, label %__bb_idx_err9, label %__bb_idx_ok9
 __bb_idx_ok9:
   %len274 = extractvalue %DriftArrayHeader %t481, 0
   %data275 = extractvalue %DriftArrayHeader %t481, 3
-  %eltptr276 = getelementptr i64, ptr %data275, i64 %t_13
+  %eltptr276 = getelementptr i64, ptr %data275, i64 %t_12
   %t497 = load i64, ptr %eltptr276
   br label %__bb_idx_join9
 __bb_idx_join9:
@@ -40126,14 +40126,14 @@ __bb_idx_join9:
   %t501 = load %DriftArrayHeader, ptr %w__addr
   %t503 = extractvalue %DriftArrayHeader %t501, 0
   %t504 = add i64 0, 0
-  %t505 = icmp slt i64 %t_13, %t504
-  %t506 = icmp sge i64 %t_13, %t503
+  %t505 = icmp slt i64 %t_12, %t504
+  %t506 = icmp sge i64 %t_12, %t503
   %t507 = or i1 %t505, %t506
   br i1 %t507, label %__bb_idx_err10, label %__bb_idx_ok10
 __bb_idx_ok10:
   %len277 = extractvalue %DriftArrayHeader %t501, 0
   %data278 = extractvalue %DriftArrayHeader %t501, 3
-  %eltptr279 = getelementptr i64, ptr %data278, i64 %t_13
+  %eltptr279 = getelementptr i64, ptr %data278, i64 %t_12
   %t517 = load i64, ptr %eltptr279
   br label %__bb_idx_join10
 __bb_idx_join10:
@@ -40155,7 +40155,7 @@ __bb_idx_join10:
   %t551 = add i64 %d_4, %t520
   %t557 = add i64 %t520, %t545
   %t559 = add i64 0, 1
-  %t560 = add i64 %t_13, %t559
+  %t560 = add i64 %t_12, %t559
   br label %__bb_if_join6
 __bb_if_join6:
   br label %__bb_loop_header6
@@ -40169,7 +40169,7 @@ __bb_idx_err10:
   %t511 = insertvalue %DriftString %str0283, ptr %strptr282, 1
   %t512 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t511)
   call void @drift_string_release(%DriftString %t511)
-  %t513 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_13)
+  %t513 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_12)
   %strptr284 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str950, i32 0, i32 2, i32 0
   %str0285 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t514 = insertvalue %DriftString %str0285, ptr %strptr284, 1
@@ -40196,7 +40196,7 @@ __bb_idx_err9:
   %t491 = insertvalue %DriftString %str0293, ptr %strptr292, 1
   %t492 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t491)
   call void @drift_string_release(%DriftString %t491)
-  %t493 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_13)
+  %t493 = call %DriftDiagnosticValue @drift_dv_int(i64 %t_12)
   %strptr294 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str954, i32 0, i32 2, i32 0
   %str0295 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t494 = insertvalue %DriftString %str0295, ptr %strptr294, 1
@@ -40868,17 +40868,17 @@ __bb_array_cap_ok:
   %t45 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt44_3 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
-  %__array_cap_arrt43_3 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len474, %__bb_array_copy_exit ]
+  %__array_cap_grewt44_4 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
+  %__array_cap_arrt43_4 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len474, %__bb_array_copy_exit ]
   %zero_arr486 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr487 = insertvalue %DriftArrayHeader %zero_arr486, i64 0, 1
   %zero_arr488 = insertvalue %DriftArrayHeader %zero_arr487, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr488, ptr null, 3
-  %data489 = extractvalue %DriftArrayHeader %__array_cap_arrt43_3, 3
+  %data489 = extractvalue %DriftArrayHeader %__array_cap_arrt43_4, 3
   %eltptr490 = getelementptr inbounds i8, ptr %data489, i64 %t35
   store i8 %t32, ptr %eltptr490
   %t68 = add i64 %t35, %t40
-  %arr_len491 = insertvalue %DriftArrayHeader %__array_cap_arrt43_3, i64 %t68, 0
+  %arr_len491 = insertvalue %DriftArrayHeader %__array_cap_arrt43_4, i64 %t68, 0
   %arr_gen492 = insertvalue %DriftArrayHeader %arr_len491, i64 %t39, 2
   store %DriftArrayHeader %arr_gen492, ptr %msg__addr
   %t72 = add i64 0, 1
@@ -41199,7 +41199,7 @@ __bb_if_then:
   %__array_cap_arrt24_1 = insertvalue %DriftArrayHeader %zero_arr18, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt25_2 = phi i1 [ %__array_cap_grewt25_1, %__bb_if_then ], [ %__array_cap_grewt25_3, %__bb_if_join1 ]
+  %__array_cap_grewt25_2 = phi i1 [ %__array_cap_grewt25_1, %__bb_if_then ], [ %__array_cap_grewt25_4, %__bb_if_join1 ]
   %__array_cap_arrt24_2 = phi %DriftArrayHeader [ %__array_cap_arrt24_1, %__bb_if_then ], [ %__arc1, %__bb_if_join1 ]
   %zi_2 = phi i64 [ %t9, %__bb_if_then ], [ %t54, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -41291,17 +41291,17 @@ __bb_array_cap_ok:
   %t26 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt25_3 = phi i1 [ %t26, %__bb_array_cap_ok ], [ %t46, %__bb_array_copy_exit ]
-  %__array_cap_arrt24_3 = phi %DriftArrayHeader [ %t14, %__bb_array_cap_ok ], [ %arr_len29, %__bb_array_copy_exit ]
+  %__array_cap_grewt25_4 = phi i1 [ %t26, %__bb_array_cap_ok ], [ %t46, %__bb_array_copy_exit ]
+  %__array_cap_arrt24_4 = phi %DriftArrayHeader [ %t14, %__bb_array_cap_ok ], [ %arr_len29, %__bb_array_copy_exit ]
   %zero_arr41 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr42 = insertvalue %DriftArrayHeader %zero_arr41, i64 0, 1
   %zero_arr43 = insertvalue %DriftArrayHeader %zero_arr42, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr43, ptr null, 3
-  %data44 = extractvalue %DriftArrayHeader %__array_cap_arrt24_3, 3
+  %data44 = extractvalue %DriftArrayHeader %__array_cap_arrt24_4, 3
   %eltptr45 = getelementptr inbounds i8, ptr %data44, i64 %t16
   store i8 %t15, ptr %eltptr45
   %t49 = add i64 %t16, %t21
-  %arr_len46 = insertvalue %DriftArrayHeader %__array_cap_arrt24_3, i64 %t49, 0
+  %arr_len46 = insertvalue %DriftArrayHeader %__array_cap_arrt24_4, i64 %t49, 0
   %arr_gen47 = insertvalue %DriftArrayHeader %arr_len46, i64 %t20, 2
   store %DriftArrayHeader %arr_gen47, ptr %zero_salt__addr
   %t53 = add i64 0, 1
@@ -41358,8 +41358,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t16 = add i64 0, 0
   %t17 = icmp eq i64 %len_1, %t16
@@ -41426,7 +41426,7 @@ __bb_if_join1:
 __bb_loop_header:
   %__array_cap_grewt267_2 = phi i1 [ %__array_cap_grewt267_1, %__bb_if_join1 ], [ %__array_cap_grewt267_3, %__bb_if_join2 ]
   %__array_cap_arrt266_2 = phi %DriftArrayHeader [ %__array_cap_arrt266_1, %__bb_if_join1 ], [ %__array_cap_arrt266_3, %__bb_if_join2 ]
-  %take_2 = phi i64 [ %take_1, %__bb_if_join1 ], [ %take_5, %__bb_if_join2 ]
+  %take_2 = phi i64 [ %take_1, %__bb_if_join1 ], [ %take_4, %__bb_if_join2 ]
   %bi_2 = phi i64 [ %bi_1, %__bb_if_join1 ], [ %bi_4, %__bb_if_join2 ]
   %__array_cap_grewt194_2 = phi i1 [ %__array_cap_grewt194_1, %__bb_if_join1 ], [ %__array_cap_grewt194_4, %__bb_if_join2 ]
   %__array_cap_arrt193_2 = phi %DriftArrayHeader [ %__array_cap_arrt193_1, %__bb_if_join1 ], [ %__arc3, %__bb_if_join2 ]
@@ -41512,7 +41512,7 @@ __bb_if_then2:
   %t50 = add i64 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt85_3 = phi i1 [ %__array_cap_grewt85_2, %__bb_if_then2 ], [ %__array_cap_grewt85_4, %__bb_if_join3 ]
+  %__array_cap_grewt85_3 = phi i1 [ %__array_cap_grewt85_2, %__bb_if_then2 ], [ %__array_cap_grewt85_5, %__bb_if_join3 ]
   %__array_cap_arrt84_3 = phi %DriftArrayHeader [ %__array_cap_arrt84_2, %__bb_if_then2 ], [ %__arc1, %__bb_if_join3 ]
   %pi_4 = phi i64 [ %t50, %__bb_if_then2 ], [ %t114, %__bb_if_join3 ]
   br label %__bb_loop_body1
@@ -41526,7 +41526,7 @@ __bb_loop_exit1:
   %t115 = add i64 0, 0
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %__array_cap_grewt151_3 = phi i1 [ %__array_cap_grewt151_2, %__bb_loop_exit1 ], [ %__array_cap_grewt151_6, %__bb_if_join4 ]
+  %__array_cap_grewt151_3 = phi i1 [ %__array_cap_grewt151_2, %__bb_loop_exit1 ], [ %__array_cap_grewt151_5, %__bb_if_join4 ]
   %__array_cap_arrt150_3 = phi %DriftArrayHeader [ %__array_cap_arrt150_2, %__bb_loop_exit1 ], [ %__arc2, %__bb_if_join4 ]
   %ii_4 = phi i64 [ %t115, %__bb_loop_exit1 ], [ %t180, %__bb_if_join4 ]
   br label %__bb_loop_body2
@@ -41639,7 +41639,7 @@ __bb_array_cap_join22:
 __bb_if_then5:
   br label %__bb_if_join5
 __bb_if_join5:
-  %take_5 = phi i64 [ %t229, %__bb_array_cap_join22 ], [ %t228, %__bb_if_then5 ]
+  %take_4 = phi i64 [ %t229, %__bb_array_cap_join22 ], [ %t228, %__bb_if_then5 ]
   br label %__bb_loop_header3
 __bb_loop_header3:
   %__array_cap_grewt267_3 = phi i1 [ %__array_cap_grewt267_2, %__bb_if_join5 ], [ %__array_cap_grewt267_4, %__bb_if_join6 ]
@@ -41647,7 +41647,7 @@ __bb_loop_header3:
   %bi_4 = phi i64 [ %t224, %__bb_if_join5 ], [ %t296, %__bb_if_join6 ]
   br label %__bb_loop_body3
 __bb_loop_body3:
-  %t236 = icmp slt i64 %bi_4, %take_5
+  %t236 = icmp slt i64 %bi_4, %take_4
   br i1 %t236, label %__bb_if_then6, label %__bb_if_else3
 __bb_if_else3:
   br label %__bb_loop_exit3
@@ -41888,17 +41888,17 @@ __bb_array_cap_ok1:
   %t152 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt151_6 = phi i1 [ %t172, %__bb_array_copy_exit1 ], [ %t152, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt150_6 = phi %DriftArrayHeader [ %arr_len167, %__bb_array_copy_exit1 ], [ %t122, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt151_5 = phi i1 [ %t152, %__bb_array_cap_ok1 ], [ %t172, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt150_5 = phi %DriftArrayHeader [ %t122, %__bb_array_cap_ok1 ], [ %arr_len167, %__bb_array_copy_exit1 ]
   %zero_arr179 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr180 = insertvalue %DriftArrayHeader %zero_arr179, i64 0, 1
   %zero_arr181 = insertvalue %DriftArrayHeader %zero_arr180, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr181, ptr null, 3
-  %data182 = extractvalue %DriftArrayHeader %__array_cap_arrt150_6, 3
+  %data182 = extractvalue %DriftArrayHeader %__array_cap_arrt150_5, 3
   %eltptr183 = getelementptr inbounds i8, ptr %data182, i64 %t142
   store i8 %t139, ptr %eltptr183
   %t175 = add i64 %t142, %t147
-  %arr_len184 = insertvalue %DriftArrayHeader %__array_cap_arrt150_6, i64 %t175, 0
+  %arr_len184 = insertvalue %DriftArrayHeader %__array_cap_arrt150_5, i64 %t175, 0
   %arr_gen185 = insertvalue %DriftArrayHeader %arr_len184, i64 %t146, 2
   store %DriftArrayHeader %arr_gen185, ptr %hmac_input__addr
   %t179 = add i64 0, 1
@@ -42015,17 +42015,17 @@ __bb_array_cap_ok:
   %t86 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt85_4 = phi i1 [ %t86, %__bb_array_cap_ok ], [ %t106, %__bb_array_copy_exit ]
-  %__array_cap_arrt84_4 = phi %DriftArrayHeader [ %t56, %__bb_array_cap_ok ], [ %arr_len204, %__bb_array_copy_exit ]
+  %__array_cap_grewt85_5 = phi i1 [ %t86, %__bb_array_cap_ok ], [ %t106, %__bb_array_copy_exit ]
+  %__array_cap_arrt84_5 = phi %DriftArrayHeader [ %t56, %__bb_array_cap_ok ], [ %arr_len204, %__bb_array_copy_exit ]
   %zero_arr216 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr217 = insertvalue %DriftArrayHeader %zero_arr216, i64 0, 1
   %zero_arr218 = insertvalue %DriftArrayHeader %zero_arr217, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr218, ptr null, 3
-  %data219 = extractvalue %DriftArrayHeader %__array_cap_arrt84_4, 3
+  %data219 = extractvalue %DriftArrayHeader %__array_cap_arrt84_5, 3
   %eltptr220 = getelementptr inbounds i8, ptr %data219, i64 %t76
   store i8 %t73, ptr %eltptr220
   %t109 = add i64 %t76, %t81
-  %arr_len221 = insertvalue %DriftArrayHeader %__array_cap_arrt84_4, i64 %t109, 0
+  %arr_len221 = insertvalue %DriftArrayHeader %__array_cap_arrt84_5, i64 %t109, 0
   %arr_gen222 = insertvalue %DriftArrayHeader %arr_len221, i64 %t80, 2
   store %DriftArrayHeader %arr_gen222, ptr %hmac_input__addr
   %t113 = add i64 0, 1
@@ -43336,17 +43336,17 @@ __bb_array_cap_ok:
   %t17 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt16_1 = phi i1 [ %t17, %__bb_array_cap_ok ], [ %t37, %__bb_array_copy_exit ]
-  %__array_cap_arrt15_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
+  %__array_cap_grewt16_2 = phi i1 [ %t17, %__bb_array_cap_ok ], [ %t37, %__bb_array_copy_exit ]
+  %__array_cap_arrt15_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
   %zero_arr34 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr35 = insertvalue %DriftArrayHeader %zero_arr34, i64 0, 1
   %zero_arr36 = insertvalue %DriftArrayHeader %zero_arr35, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr36, ptr null, 3
-  %data37 = extractvalue %DriftArrayHeader %__array_cap_arrt15_1, 3
+  %data37 = extractvalue %DriftArrayHeader %__array_cap_arrt15_2, 3
   %eltptr38 = getelementptr inbounds i64, ptr %data37, i64 %t7
   store i64 %t6, ptr %eltptr38
   %t40 = add i64 %t7, %t12
-  %arr_len39 = insertvalue %DriftArrayHeader %__array_cap_arrt15_1, i64 %t40, 0
+  %arr_len39 = insertvalue %DriftArrayHeader %__array_cap_arrt15_2, i64 %t40, 0
   %arr_gen40 = insertvalue %DriftArrayHeader %arr_len39, i64 %t11, 2
   store %DriftArrayHeader %arr_gen40, ptr %state__addr
   %t44 = load %DriftArrayHeader, ptr %state__addr
@@ -43418,17 +43418,17 @@ __bb_array_cap_ok1:
   %t56 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt55_3 = phi i1 [ %t76, %__bb_array_copy_exit1 ], [ %t56, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt54_3 = phi %DriftArrayHeader [ %arr_len46, %__bb_array_copy_exit1 ], [ %t44, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt55_2 = phi i1 [ %t56, %__bb_array_cap_ok1 ], [ %t76, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt54_2 = phi %DriftArrayHeader [ %t44, %__bb_array_cap_ok1 ], [ %arr_len46, %__bb_array_copy_exit1 ]
   %zero_arr58 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr59 = insertvalue %DriftArrayHeader %zero_arr58, i64 0, 1
   %zero_arr60 = insertvalue %DriftArrayHeader %zero_arr59, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr60, ptr null, 3
-  %data61 = extractvalue %DriftArrayHeader %__array_cap_arrt54_3, 3
+  %data61 = extractvalue %DriftArrayHeader %__array_cap_arrt54_2, 3
   %eltptr62 = getelementptr inbounds i64, ptr %data61, i64 %t46
   store i64 %t45, ptr %eltptr62
   %t79 = add i64 %t46, %t51
-  %arr_len63 = insertvalue %DriftArrayHeader %__array_cap_arrt54_3, i64 %t79, 0
+  %arr_len63 = insertvalue %DriftArrayHeader %__array_cap_arrt54_2, i64 %t79, 0
   %arr_gen64 = insertvalue %DriftArrayHeader %arr_len63, i64 %t50, 2
   store %DriftArrayHeader %arr_gen64, ptr %state__addr
   %t83 = load %DriftArrayHeader, ptr %state__addr
@@ -43603,7 +43603,7 @@ __bb_array_cap_join23:
   %__array_cap_arrt179_1 = insertvalue %DriftArrayHeader %zero_arr115, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt180_2 = phi i1 [ %__array_cap_grewt180_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt180_4, %__bb_if_join ]
+  %__array_cap_grewt180_2 = phi i1 [ %__array_cap_grewt180_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt180_3, %__bb_if_join ]
   %__array_cap_arrt179_2 = phi %DriftArrayHeader [ %__array_cap_arrt179_1, %__bb_array_cap_join23 ], [ %__arc9, %__bb_if_join ]
   %ki_2 = phi i64 [ %t160, %__bb_array_cap_join23 ], [ %t209, %__bb_if_join ]
   br label %__bb_loop_body
@@ -43682,17 +43682,17 @@ __bb_array_cap_ok5:
   %t223 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt222_3 = phi i1 [ %t223, %__bb_array_cap_ok5 ], [ %t243, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt221_3 = phi %DriftArrayHeader [ %t211, %__bb_array_cap_ok5 ], [ %arr_len121, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt222_1 = phi i1 [ %t243, %__bb_array_copy_exit5 ], [ %t223, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt221_1 = phi %DriftArrayHeader [ %arr_len121, %__bb_array_copy_exit5 ], [ %t211, %__bb_array_cap_ok5 ]
   %zero_arr133 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr134 = insertvalue %DriftArrayHeader %zero_arr133, i64 0, 1
   %zero_arr135 = insertvalue %DriftArrayHeader %zero_arr134, i64 0, 2
   %__arc10 = insertvalue %DriftArrayHeader %zero_arr135, ptr null, 3
-  %data136 = extractvalue %DriftArrayHeader %__array_cap_arrt221_3, 3
+  %data136 = extractvalue %DriftArrayHeader %__array_cap_arrt221_1, 3
   %eltptr137 = getelementptr inbounds i64, ptr %data136, i64 %t213
   store i64 %counter_1, ptr %eltptr137
   %t246 = add i64 %t213, %t218
-  %arr_len138 = insertvalue %DriftArrayHeader %__array_cap_arrt221_3, i64 %t246, 0
+  %arr_len138 = insertvalue %DriftArrayHeader %__array_cap_arrt221_1, i64 %t246, 0
   %arr_gen139 = insertvalue %DriftArrayHeader %arr_len138, i64 %t217, 2
   store %DriftArrayHeader %arr_gen139, ptr %state__addr
   %t250 = load %DriftArrayHeader, ptr %state__addr
@@ -43765,17 +43765,17 @@ __bb_array_cap_ok6:
   %t264 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt263_1 = phi i1 [ %t284, %__bb_array_copy_exit6 ], [ %t264, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt262_1 = phi %DriftArrayHeader [ %arr_len145, %__bb_array_copy_exit6 ], [ %t250, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt263_3 = phi i1 [ %t284, %__bb_array_copy_exit6 ], [ %t264, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt262_3 = phi %DriftArrayHeader [ %arr_len145, %__bb_array_copy_exit6 ], [ %t250, %__bb_array_cap_ok6 ]
   %zero_arr157 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr158 = insertvalue %DriftArrayHeader %zero_arr157, i64 0, 1
   %zero_arr159 = insertvalue %DriftArrayHeader %zero_arr158, i64 0, 2
   %__arc11 = insertvalue %DriftArrayHeader %zero_arr159, ptr null, 3
-  %data160 = extractvalue %DriftArrayHeader %__array_cap_arrt262_1, 3
+  %data160 = extractvalue %DriftArrayHeader %__array_cap_arrt262_3, 3
   %eltptr161 = getelementptr inbounds i64, ptr %data160, i64 %t254
   store i64 %t253, ptr %eltptr161
   %t287 = add i64 %t254, %t259
-  %arr_len162 = insertvalue %DriftArrayHeader %__array_cap_arrt262_1, i64 %t287, 0
+  %arr_len162 = insertvalue %DriftArrayHeader %__array_cap_arrt262_3, i64 %t287, 0
   %arr_gen163 = insertvalue %DriftArrayHeader %arr_len162, i64 %t258, 2
   store %DriftArrayHeader %arr_gen163, ptr %state__addr
   %t291 = load %DriftArrayHeader, ptr %state__addr
@@ -43848,8 +43848,8 @@ __bb_array_cap_ok7:
   %t305 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt304_1 = phi i1 [ %t325, %__bb_array_copy_exit7 ], [ %t305, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt303_1 = phi %DriftArrayHeader [ %arr_len169, %__bb_array_copy_exit7 ], [ %t291, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt304_1 = phi i1 [ %t305, %__bb_array_cap_ok7 ], [ %t325, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt303_1 = phi %DriftArrayHeader [ %t291, %__bb_array_cap_ok7 ], [ %arr_len169, %__bb_array_copy_exit7 ]
   %zero_arr181 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr182 = insertvalue %DriftArrayHeader %zero_arr181, i64 0, 1
   %zero_arr183 = insertvalue %DriftArrayHeader %zero_arr182, i64 0, 2
@@ -43964,7 +43964,7 @@ __bb_array_cap_join28:
   %__array_cap_arrt407_1 = insertvalue %DriftArrayHeader %zero_arr219, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt408_2 = phi i1 [ %__array_cap_grewt408_1, %__bb_array_cap_join28 ], [ %__array_cap_grewt408_4, %__bb_if_join1 ]
+  %__array_cap_grewt408_2 = phi i1 [ %__array_cap_grewt408_1, %__bb_array_cap_join28 ], [ %__array_cap_grewt408_5, %__bb_if_join1 ]
   %__array_cap_arrt407_2 = phi %DriftArrayHeader [ %__array_cap_arrt407_1, %__bb_array_cap_join28 ], [ %__arc16, %__bb_if_join1 ]
   %ci_2 = phi i64 [ %t374, %__bb_array_cap_join28 ], [ %t437, %__bb_if_join1 ]
   br label %__bb_loop_body1
@@ -44024,11 +44024,11 @@ __bb_loop_exit2:
 __bb_loop_header3:
   %__array_cap_grewt678_2 = phi i1 [ %__array_cap_grewt678_1, %__bb_loop_exit2 ], [ %__array_cap_grewt678_3, %__bb_if_join3 ]
   %__array_cap_arrt677_2 = phi %DriftArrayHeader [ %__array_cap_arrt677_1, %__bb_loop_exit2 ], [ %__arc6, %__bb_if_join3 ]
-  %__array_cap_grewt634_2 = phi i1 [ %__array_cap_grewt634_1, %__bb_loop_exit2 ], [ %__array_cap_grewt634_5, %__bb_if_join3 ]
+  %__array_cap_grewt634_2 = phi i1 [ %__array_cap_grewt634_1, %__bb_loop_exit2 ], [ %__array_cap_grewt634_3, %__bb_if_join3 ]
   %__array_cap_arrt633_2 = phi %DriftArrayHeader [ %__array_cap_arrt633_1, %__bb_loop_exit2 ], [ %__arc5, %__bb_if_join3 ]
   %__array_cap_grewt590_2 = phi i1 [ %__array_cap_grewt590_1, %__bb_loop_exit2 ], [ %__array_cap_grewt590_3, %__bb_if_join3 ]
   %__array_cap_arrt589_2 = phi %DriftArrayHeader [ %__array_cap_arrt589_1, %__bb_loop_exit2 ], [ %__arc4, %__bb_if_join3 ]
-  %__array_cap_grewt546_2 = phi i1 [ %__array_cap_grewt546_1, %__bb_loop_exit2 ], [ %__array_cap_grewt546_5, %__bb_if_join3 ]
+  %__array_cap_grewt546_2 = phi i1 [ %__array_cap_grewt546_1, %__bb_loop_exit2 ], [ %__array_cap_grewt546_4, %__bb_if_join3 ]
   %__array_cap_arrt545_2 = phi %DriftArrayHeader [ %__array_cap_arrt545_1, %__bb_loop_exit2 ], [ %__arc3, %__bb_if_join3 ]
   %oi_2 = phi i64 [ %t487, %__bb_loop_exit2 ], [ %t707, %__bb_if_join3 ]
   br label %__bb_loop_body3
@@ -44166,17 +44166,17 @@ __bb_array_cap_ok10:
   %t547 = add i1 0, 0
   br label %__bb_array_cap_join210
 __bb_array_cap_join210:
-  %__array_cap_grewt546_5 = phi i1 [ %t567, %__bb_array_copy_exit10 ], [ %t547, %__bb_array_cap_ok10 ]
-  %__array_cap_arrt545_5 = phi %DriftArrayHeader [ %arr_len261, %__bb_array_copy_exit10 ], [ %t532, %__bb_array_cap_ok10 ]
+  %__array_cap_grewt546_4 = phi i1 [ %t567, %__bb_array_copy_exit10 ], [ %t547, %__bb_array_cap_ok10 ]
+  %__array_cap_arrt545_4 = phi %DriftArrayHeader [ %arr_len261, %__bb_array_copy_exit10 ], [ %t532, %__bb_array_cap_ok10 ]
   %zero_arr273 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr274 = insertvalue %DriftArrayHeader %zero_arr273, i64 0, 1
   %zero_arr275 = insertvalue %DriftArrayHeader %zero_arr274, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr275, ptr null, 3
-  %data276 = extractvalue %DriftArrayHeader %__array_cap_arrt545_5, 3
+  %data276 = extractvalue %DriftArrayHeader %__array_cap_arrt545_4, 3
   %eltptr277 = getelementptr inbounds i8, ptr %data276, i64 %t537
   store i8 %t536, ptr %eltptr277
   %t570 = add i64 %t537, %t542
-  %arr_len278 = insertvalue %DriftArrayHeader %__array_cap_arrt545_5, i64 %t570, 0
+  %arr_len278 = insertvalue %DriftArrayHeader %__array_cap_arrt545_4, i64 %t570, 0
   %arr_gen279 = insertvalue %DriftArrayHeader %arr_len278, i64 %t541, 2
   store %DriftArrayHeader %arr_gen279, ptr %out__addr
   %t574 = load %DriftArrayHeader, ptr %out__addr
@@ -44338,17 +44338,17 @@ __bb_array_cap_ok12:
   %t635 = add i1 0, 0
   br label %__bb_array_cap_join212
 __bb_array_cap_join212:
-  %__array_cap_grewt634_5 = phi i1 [ %t635, %__bb_array_cap_ok12 ], [ %t655, %__bb_array_copy_exit12 ]
-  %__array_cap_arrt633_5 = phi %DriftArrayHeader [ %t618, %__bb_array_cap_ok12 ], [ %arr_len309, %__bb_array_copy_exit12 ]
+  %__array_cap_grewt634_3 = phi i1 [ %t635, %__bb_array_cap_ok12 ], [ %t655, %__bb_array_copy_exit12 ]
+  %__array_cap_arrt633_3 = phi %DriftArrayHeader [ %t618, %__bb_array_cap_ok12 ], [ %arr_len309, %__bb_array_copy_exit12 ]
   %zero_arr321 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr322 = insertvalue %DriftArrayHeader %zero_arr321, i64 0, 1
   %zero_arr323 = insertvalue %DriftArrayHeader %zero_arr322, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr323, ptr null, 3
-  %data324 = extractvalue %DriftArrayHeader %__array_cap_arrt633_5, 3
+  %data324 = extractvalue %DriftArrayHeader %__array_cap_arrt633_3, 3
   %eltptr325 = getelementptr inbounds i8, ptr %data324, i64 %t625
   store i8 %t624, ptr %eltptr325
   %t658 = add i64 %t625, %t630
-  %arr_len326 = insertvalue %DriftArrayHeader %__array_cap_arrt633_5, i64 %t658, 0
+  %arr_len326 = insertvalue %DriftArrayHeader %__array_cap_arrt633_3, i64 %t658, 0
   %arr_gen327 = insertvalue %DriftArrayHeader %arr_len326, i64 %t629, 2
   store %DriftArrayHeader %arr_gen327, ptr %out__addr
   %t662 = load %DriftArrayHeader, ptr %out__addr
@@ -44424,8 +44424,8 @@ __bb_array_cap_ok13:
   %t679 = add i1 0, 0
   br label %__bb_array_cap_join213
 __bb_array_cap_join213:
-  %__array_cap_grewt678_3 = phi i1 [ %t679, %__bb_array_cap_ok13 ], [ %t699, %__bb_array_copy_exit13 ]
-  %__array_cap_arrt677_3 = phi %DriftArrayHeader [ %t662, %__bb_array_cap_ok13 ], [ %arr_len333, %__bb_array_copy_exit13 ]
+  %__array_cap_grewt678_3 = phi i1 [ %t699, %__bb_array_copy_exit13 ], [ %t679, %__bb_array_cap_ok13 ]
+  %__array_cap_arrt677_3 = phi %DriftArrayHeader [ %arr_len333, %__bb_array_copy_exit13 ], [ %t662, %__bb_array_cap_ok13 ]
   %zero_arr345 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr346 = insertvalue %DriftArrayHeader %zero_arr345, i64 0, 1
   %zero_arr347 = insertvalue %DriftArrayHeader %zero_arr346, i64 0, 2
@@ -44625,17 +44625,17 @@ __bb_array_cap_ok9:
   %t409 = add i1 0, 0
   br label %__bb_array_cap_join29
 __bb_array_cap_join29:
-  %__array_cap_grewt408_4 = phi i1 [ %t409, %__bb_array_cap_ok9 ], [ %t429, %__bb_array_copy_exit9 ]
-  %__array_cap_arrt407_4 = phi %DriftArrayHeader [ %t379, %__bb_array_cap_ok9 ], [ %arr_len380, %__bb_array_copy_exit9 ]
+  %__array_cap_grewt408_5 = phi i1 [ %t409, %__bb_array_cap_ok9 ], [ %t429, %__bb_array_copy_exit9 ]
+  %__array_cap_arrt407_5 = phi %DriftArrayHeader [ %t379, %__bb_array_cap_ok9 ], [ %arr_len380, %__bb_array_copy_exit9 ]
   %zero_arr392 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr393 = insertvalue %DriftArrayHeader %zero_arr392, i64 0, 1
   %zero_arr394 = insertvalue %DriftArrayHeader %zero_arr393, i64 0, 2
   %__arc16 = insertvalue %DriftArrayHeader %zero_arr394, ptr null, 3
-  %data395 = extractvalue %DriftArrayHeader %__array_cap_arrt407_4, 3
+  %data395 = extractvalue %DriftArrayHeader %__array_cap_arrt407_5, 3
   %eltptr396 = getelementptr inbounds i64, ptr %data395, i64 %t399
   store i64 %t396, ptr %eltptr396
   %t432 = add i64 %t399, %t404
-  %arr_len397 = insertvalue %DriftArrayHeader %__array_cap_arrt407_4, i64 %t432, 0
+  %arr_len397 = insertvalue %DriftArrayHeader %__array_cap_arrt407_5, i64 %t432, 0
   %arr_gen398 = insertvalue %DriftArrayHeader %arr_len397, i64 %t403, 2
   store %DriftArrayHeader %arr_gen398, ptr %working__addr
   %t436 = add i64 0, 1
@@ -44742,17 +44742,17 @@ __bb_array_cap_ok4:
   %t181 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt180_4 = phi i1 [ %t181, %__bb_array_cap_ok4 ], [ %t201, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt179_4 = phi %DriftArrayHeader [ %t165, %__bb_array_cap_ok4 ], [ %arr_len414, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt180_3 = phi i1 [ %t181, %__bb_array_cap_ok4 ], [ %t201, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt179_3 = phi %DriftArrayHeader [ %t165, %__bb_array_cap_ok4 ], [ %arr_len414, %__bb_array_copy_exit4 ]
   %zero_arr426 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr427 = insertvalue %DriftArrayHeader %zero_arr426, i64 0, 1
   %zero_arr428 = insertvalue %DriftArrayHeader %zero_arr427, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr428, ptr null, 3
-  %data429 = extractvalue %DriftArrayHeader %__array_cap_arrt179_4, 3
+  %data429 = extractvalue %DriftArrayHeader %__array_cap_arrt179_3, 3
   %eltptr430 = getelementptr inbounds i64, ptr %data429, i64 %t171
   store i64 %t170, ptr %eltptr430
   %t204 = add i64 %t171, %t176
-  %arr_len431 = insertvalue %DriftArrayHeader %__array_cap_arrt179_4, i64 %t204, 0
+  %arr_len431 = insertvalue %DriftArrayHeader %__array_cap_arrt179_3, i64 %t204, 0
   %arr_gen432 = insertvalue %DriftArrayHeader %arr_len431, i64 %t175, 2
   store %DriftArrayHeader %arr_gen432, ptr %state__addr
   %t208 = add i64 0, 1
@@ -44803,7 +44803,7 @@ __bb_entry:
 __bb_loop_header:
   %__array_cap_grewt82_2 = phi i1 [ %__array_cap_grewt82_1, %__bb_entry ], [ %__array_cap_grewt82_3, %__bb_if_join ]
   %__array_cap_arrt81_2 = phi %DriftArrayHeader [ %__array_cap_arrt81_1, %__bb_entry ], [ %__array_cap_arrt81_3, %__bb_if_join ]
-  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_entry ], [ %__logic_tmpt21_6, %__bb_if_join ]
+  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_entry ], [ %__logic_tmpt21_5, %__bb_if_join ]
   %bi_2 = phi i64 [ %bi_1, %__bb_entry ], [ %bi_4, %__bb_if_join ]
   %counter_2 = phi i64 [ %initial_counter_1, %__bb_entry ], [ %t118, %__bb_if_join ]
   %pos_2 = phi i64 [ %t6, %__bb_entry ], [ %pos_3, %__bb_if_join ]
@@ -44843,9 +44843,9 @@ __bb_if_then:
   %t17 = add i64 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt82_3 = phi i1 [ %__array_cap_grewt82_2, %__bb_if_then ], [ %__array_cap_grewt82_4, %__bb_if_join1 ]
+  %__array_cap_grewt82_3 = phi i1 [ %__array_cap_grewt82_2, %__bb_if_then ], [ %__array_cap_grewt82_5, %__bb_if_join1 ]
   %__array_cap_arrt81_3 = phi %DriftArrayHeader [ %__array_cap_arrt81_2, %__bb_if_then ], [ %__arc1, %__bb_if_join1 ]
-  %__logic_tmpt21_3 = phi i1 [ %__logic_tmpt21_2, %__bb_if_then ], [ %__logic_tmpt21_6, %__bb_if_join1 ]
+  %__logic_tmpt21_3 = phi i1 [ %__logic_tmpt21_2, %__bb_if_then ], [ %__logic_tmpt21_5, %__bb_if_join1 ]
   %bi_4 = phi i64 [ %t17, %__bb_if_then ], [ %t111, %__bb_if_join1 ]
   %pos_3 = phi i64 [ %pos_2, %__bb_if_then ], [ %t114, %__bb_if_join1 ]
   br label %__bb_loop_body1
@@ -44862,8 +44862,8 @@ __bb_logic_rhs:
   %t27 = icmp slt i64 %pos_3, %t26
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt21_6 = phi i1 [ %t22, %__bb_logic_short ], [ %t27, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt21_6, label %__bb_if_then1, label %__bb_if_else1
+  %__logic_tmpt21_5 = phi i1 [ %t22, %__bb_logic_short ], [ %t27, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt21_5, label %__bb_if_then1, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit1
 __bb_loop_exit1:
@@ -44981,17 +44981,17 @@ __bb_array_cap_ok:
   %t83 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt82_4 = phi i1 [ %t83, %__bb_array_cap_ok ], [ %t103, %__bb_array_copy_exit ]
-  %__array_cap_arrt81_4 = phi %DriftArrayHeader [ %t30, %__bb_array_cap_ok ], [ %arr_len48, %__bb_array_copy_exit ]
+  %__array_cap_grewt82_5 = phi i1 [ %t83, %__bb_array_cap_ok ], [ %t103, %__bb_array_copy_exit ]
+  %__array_cap_arrt81_5 = phi %DriftArrayHeader [ %t30, %__bb_array_cap_ok ], [ %arr_len48, %__bb_array_copy_exit ]
   %zero_arr60 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr61 = insertvalue %DriftArrayHeader %zero_arr60, i64 0, 1
   %zero_arr62 = insertvalue %DriftArrayHeader %zero_arr61, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr62, ptr null, 3
-  %data63 = extractvalue %DriftArrayHeader %__array_cap_arrt81_4, 3
+  %data63 = extractvalue %DriftArrayHeader %__array_cap_arrt81_5, 3
   %eltptr64 = getelementptr inbounds i8, ptr %data63, i64 %t73
   store i8 %t72, ptr %eltptr64
   %t106 = add i64 %t73, %t78
-  %arr_len65 = insertvalue %DriftArrayHeader %__array_cap_arrt81_4, i64 %t106, 0
+  %arr_len65 = insertvalue %DriftArrayHeader %__array_cap_arrt81_5, i64 %t106, 0
   %arr_gen66 = insertvalue %DriftArrayHeader %arr_len65, i64 %t77, 2
   store %DriftArrayHeader %arr_gen66, ptr %out__addr
   %t110 = add i64 0, 1
@@ -45174,12 +45174,12 @@ __bb_entry:
   %block_len_1 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %hibit_2 = phi i64 [ %hibit_1, %__bb_entry ], [ %hibit_4, %__bb_if_join ]
+  %hibit_2 = phi i64 [ %hibit_1, %__bb_entry ], [ %hibit_5, %__bb_if_join ]
   %bi_2 = phi i64 [ %bi_1, %__bb_entry ], [ %bi_4, %__bb_if_join ]
-  %n3_2 = phi i64 [ %n3_1, %__bb_entry ], [ %n3_5, %__bb_if_join ]
-  %n2_2 = phi i64 [ %n2_1, %__bb_entry ], [ %n2_5, %__bb_if_join ]
-  %n1_2 = phi i64 [ %n1_1, %__bb_entry ], [ %n1_5, %__bb_if_join ]
-  %n0_2 = phi i64 [ %n0_1, %__bb_entry ], [ %n0_5, %__bb_if_join ]
+  %n3_2 = phi i64 [ %n3_1, %__bb_entry ], [ %n3_9, %__bb_if_join ]
+  %n2_2 = phi i64 [ %n2_1, %__bb_entry ], [ %n2_9, %__bb_if_join ]
+  %n1_2 = phi i64 [ %n1_1, %__bb_entry ], [ %n1_8, %__bb_if_join ]
+  %n0_2 = phi i64 [ %n0_1, %__bb_entry ], [ %n0_7, %__bb_if_join ]
   %block_len_2 = phi i64 [ %block_len_1, %__bb_entry ], [ %block_len_5, %__bb_if_join ]
   %pos_2 = phi i64 [ %t96, %__bb_entry ], [ %t453, %__bb_if_join ]
   %h4_2 = phi i64 [ %t95, %__bb_entry ], [ %t435, %__bb_if_join ]
@@ -45255,37 +45255,37 @@ __bb_if_then10:
   %t551 = and i64 %t539, %t550
   br label %__bb_if_join10
 __bb_if_join10:
-  %h4_8 = phi i64 [ %t486, %__bb_loop_exit ], [ %t551, %__bb_if_then10 ]
-  %h3_8 = phi i64 [ %t477, %__bb_loop_exit ], [ %t536, %__bb_if_then10 ]
-  %h2_8 = phi i64 [ %t468, %__bb_loop_exit ], [ %t527, %__bb_if_then10 ]
-  %h1_9 = phi i64 [ %t500, %__bb_loop_exit ], [ %t518, %__bb_if_then10 ]
-  %h0_10 = phi i64 [ %t497, %__bb_loop_exit ], [ %t509, %__bb_if_then10 ]
+  %h4_7 = phi i64 [ %t486, %__bb_loop_exit ], [ %t551, %__bb_if_then10 ]
+  %h3_7 = phi i64 [ %t477, %__bb_loop_exit ], [ %t536, %__bb_if_then10 ]
+  %h2_7 = phi i64 [ %t468, %__bb_loop_exit ], [ %t527, %__bb_if_then10 ]
+  %h1_8 = phi i64 [ %t500, %__bb_loop_exit ], [ %t518, %__bb_if_then10 ]
+  %h0_9 = phi i64 [ %t497, %__bb_loop_exit ], [ %t509, %__bb_if_then10 ]
   %t554 = add i64 0, 26
-  %t555 = shl i64 %h1_9, %t554
-  %t556 = or i64 %h0_10, %t555
+  %t555 = shl i64 %h1_8, %t554
+  %t556 = or i64 %h0_9, %t555
   %t557 = add i64 0, 4294967295
   %t558 = and i64 %t556, %t557
   %t559 = add i64 %t558, 0
   %t561 = add i64 0, 6
-  %t562 = lshr i64 %h1_9, %t561
+  %t562 = lshr i64 %h1_8, %t561
   %t564 = add i64 0, 20
-  %t565 = shl i64 %h2_8, %t564
+  %t565 = shl i64 %h2_7, %t564
   %t566 = or i64 %t562, %t565
   %t567 = add i64 0, 4294967295
   %t568 = and i64 %t566, %t567
   %t569 = add i64 %t568, 0
   %t571 = add i64 0, 12
-  %t572 = lshr i64 %h2_8, %t571
+  %t572 = lshr i64 %h2_7, %t571
   %t574 = add i64 0, 14
-  %t575 = shl i64 %h3_8, %t574
+  %t575 = shl i64 %h3_7, %t574
   %t576 = or i64 %t572, %t575
   %t577 = add i64 0, 4294967295
   %t578 = and i64 %t576, %t577
   %t579 = add i64 %t578, 0
   %t581 = add i64 0, 18
-  %t582 = lshr i64 %h3_8, %t581
+  %t582 = lshr i64 %h3_7, %t581
   %t584 = add i64 0, 8
-  %t585 = shl i64 %h4_8, %t584
+  %t585 = shl i64 %h4_7, %t584
   %t586 = or i64 %t582, %t585
   %t587 = add i64 0, 4294967295
   %t588 = and i64 %t586, %t587
@@ -45394,17 +45394,17 @@ __bb_array_cap_ok:
   %t643 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt642_1 = phi i1 [ %t643, %__bb_array_cap_ok ], [ %t663, %__bb_array_copy_exit ]
-  %__array_cap_arrt641_1 = phi %DriftArrayHeader [ %t628, %__bb_array_cap_ok ], [ %arr_len16, %__bb_array_copy_exit ]
+  %__array_cap_grewt642_2 = phi i1 [ %t643, %__bb_array_cap_ok ], [ %t663, %__bb_array_copy_exit ]
+  %__array_cap_arrt641_2 = phi %DriftArrayHeader [ %t628, %__bb_array_cap_ok ], [ %arr_len16, %__bb_array_copy_exit ]
   %zero_arr28 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr29 = insertvalue %DriftArrayHeader %zero_arr28, i64 0, 1
   %zero_arr30 = insertvalue %DriftArrayHeader %zero_arr29, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr30, ptr null, 3
-  %data31 = extractvalue %DriftArrayHeader %__array_cap_arrt641_1, 3
+  %data31 = extractvalue %DriftArrayHeader %__array_cap_arrt641_2, 3
   %eltptr32 = getelementptr inbounds i8, ptr %data31, i64 %t633
   store i8 %t632, ptr %eltptr32
   %t666 = add i64 %t633, %t638
-  %arr_len33 = insertvalue %DriftArrayHeader %__array_cap_arrt641_1, i64 %t666, 0
+  %arr_len33 = insertvalue %DriftArrayHeader %__array_cap_arrt641_2, i64 %t666, 0
   %arr_gen34 = insertvalue %DriftArrayHeader %arr_len33, i64 %t637, 2
   store %DriftArrayHeader %arr_gen34, ptr %tag__addr
   %t670 = load %DriftArrayHeader, ptr %tag__addr
@@ -45480,17 +45480,17 @@ __bb_array_cap_ok1:
   %t687 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt686_3 = phi i1 [ %t707, %__bb_array_copy_exit1 ], [ %t687, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt685_3 = phi %DriftArrayHeader [ %arr_len40, %__bb_array_copy_exit1 ], [ %t670, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt686_2 = phi i1 [ %t687, %__bb_array_cap_ok1 ], [ %t707, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt685_2 = phi %DriftArrayHeader [ %t670, %__bb_array_cap_ok1 ], [ %arr_len40, %__bb_array_copy_exit1 ]
   %zero_arr52 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr53 = insertvalue %DriftArrayHeader %zero_arr52, i64 0, 1
   %zero_arr54 = insertvalue %DriftArrayHeader %zero_arr53, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr54, ptr null, 3
-  %data55 = extractvalue %DriftArrayHeader %__array_cap_arrt685_3, 3
+  %data55 = extractvalue %DriftArrayHeader %__array_cap_arrt685_2, 3
   %eltptr56 = getelementptr inbounds i8, ptr %data55, i64 %t677
   store i8 %t676, ptr %eltptr56
   %t710 = add i64 %t677, %t682
-  %arr_len57 = insertvalue %DriftArrayHeader %__array_cap_arrt685_3, i64 %t710, 0
+  %arr_len57 = insertvalue %DriftArrayHeader %__array_cap_arrt685_2, i64 %t710, 0
   %arr_gen58 = insertvalue %DriftArrayHeader %arr_len57, i64 %t681, 2
   store %DriftArrayHeader %arr_gen58, ptr %tag__addr
   %t714 = load %DriftArrayHeader, ptr %tag__addr
@@ -45736,17 +45736,17 @@ __bb_array_cap_ok4:
   %t817 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt816_2 = phi i1 [ %t817, %__bb_array_cap_ok4 ], [ %t837, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt815_2 = phi %DriftArrayHeader [ %t802, %__bb_array_cap_ok4 ], [ %arr_len112, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt816_1 = phi i1 [ %t817, %__bb_array_cap_ok4 ], [ %t837, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt815_1 = phi %DriftArrayHeader [ %t802, %__bb_array_cap_ok4 ], [ %arr_len112, %__bb_array_copy_exit4 ]
   %zero_arr124 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr125 = insertvalue %DriftArrayHeader %zero_arr124, i64 0, 1
   %zero_arr126 = insertvalue %DriftArrayHeader %zero_arr125, i64 0, 2
   %__arc12 = insertvalue %DriftArrayHeader %zero_arr126, ptr null, 3
-  %data127 = extractvalue %DriftArrayHeader %__array_cap_arrt815_2, 3
+  %data127 = extractvalue %DriftArrayHeader %__array_cap_arrt815_1, 3
   %eltptr128 = getelementptr inbounds i8, ptr %data127, i64 %t807
   store i8 %t806, ptr %eltptr128
   %t840 = add i64 %t807, %t812
-  %arr_len129 = insertvalue %DriftArrayHeader %__array_cap_arrt815_2, i64 %t840, 0
+  %arr_len129 = insertvalue %DriftArrayHeader %__array_cap_arrt815_1, i64 %t840, 0
   %arr_gen130 = insertvalue %DriftArrayHeader %arr_len129, i64 %t811, 2
   store %DriftArrayHeader %arr_gen130, ptr %tag__addr
   %t844 = load %DriftArrayHeader, ptr %tag__addr
@@ -45822,17 +45822,17 @@ __bb_array_cap_ok5:
   %t861 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt860_3 = phi i1 [ %t861, %__bb_array_cap_ok5 ], [ %t881, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt859_3 = phi %DriftArrayHeader [ %t844, %__bb_array_cap_ok5 ], [ %arr_len136, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt860_1 = phi i1 [ %t881, %__bb_array_copy_exit5 ], [ %t861, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt859_1 = phi %DriftArrayHeader [ %arr_len136, %__bb_array_copy_exit5 ], [ %t844, %__bb_array_cap_ok5 ]
   %zero_arr148 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr149 = insertvalue %DriftArrayHeader %zero_arr148, i64 0, 1
   %zero_arr150 = insertvalue %DriftArrayHeader %zero_arr149, i64 0, 2
   %__arc13 = insertvalue %DriftArrayHeader %zero_arr150, ptr null, 3
-  %data151 = extractvalue %DriftArrayHeader %__array_cap_arrt859_3, 3
+  %data151 = extractvalue %DriftArrayHeader %__array_cap_arrt859_1, 3
   %eltptr152 = getelementptr inbounds i8, ptr %data151, i64 %t851
   store i8 %t850, ptr %eltptr152
   %t884 = add i64 %t851, %t856
-  %arr_len153 = insertvalue %DriftArrayHeader %__array_cap_arrt859_3, i64 %t884, 0
+  %arr_len153 = insertvalue %DriftArrayHeader %__array_cap_arrt859_1, i64 %t884, 0
   %arr_gen154 = insertvalue %DriftArrayHeader %arr_len153, i64 %t855, 2
   store %DriftArrayHeader %arr_gen154, ptr %tag__addr
   %t888 = load %DriftArrayHeader, ptr %tag__addr
@@ -45908,17 +45908,17 @@ __bb_array_cap_ok6:
   %t905 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt904_1 = phi i1 [ %t925, %__bb_array_copy_exit6 ], [ %t905, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt903_1 = phi %DriftArrayHeader [ %arr_len160, %__bb_array_copy_exit6 ], [ %t888, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt904_3 = phi i1 [ %t925, %__bb_array_copy_exit6 ], [ %t905, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt903_3 = phi %DriftArrayHeader [ %arr_len160, %__bb_array_copy_exit6 ], [ %t888, %__bb_array_cap_ok6 ]
   %zero_arr172 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr173 = insertvalue %DriftArrayHeader %zero_arr172, i64 0, 1
   %zero_arr174 = insertvalue %DriftArrayHeader %zero_arr173, i64 0, 2
   %__arc14 = insertvalue %DriftArrayHeader %zero_arr174, ptr null, 3
-  %data175 = extractvalue %DriftArrayHeader %__array_cap_arrt903_1, 3
+  %data175 = extractvalue %DriftArrayHeader %__array_cap_arrt903_3, 3
   %eltptr176 = getelementptr inbounds i8, ptr %data175, i64 %t895
   store i8 %t894, ptr %eltptr176
   %t928 = add i64 %t895, %t900
-  %arr_len177 = insertvalue %DriftArrayHeader %__array_cap_arrt903_1, i64 %t928, 0
+  %arr_len177 = insertvalue %DriftArrayHeader %__array_cap_arrt903_3, i64 %t928, 0
   %arr_gen178 = insertvalue %DriftArrayHeader %arr_len177, i64 %t899, 2
   store %DriftArrayHeader %arr_gen178, ptr %tag__addr
   %t932 = load %DriftArrayHeader, ptr %tag__addr
@@ -45994,8 +45994,8 @@ __bb_array_cap_ok7:
   %t949 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt948_1 = phi i1 [ %t969, %__bb_array_copy_exit7 ], [ %t949, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt947_1 = phi %DriftArrayHeader [ %arr_len184, %__bb_array_copy_exit7 ], [ %t932, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt948_1 = phi i1 [ %t949, %__bb_array_cap_ok7 ], [ %t969, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt947_1 = phi %DriftArrayHeader [ %t932, %__bb_array_cap_ok7 ], [ %arr_len184, %__bb_array_copy_exit7 ]
   %zero_arr196 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr197 = insertvalue %DriftArrayHeader %zero_arr196, i64 0, 1
   %zero_arr198 = insertvalue %DriftArrayHeader %zero_arr197, i64 0, 2
@@ -46164,17 +46164,17 @@ __bb_array_cap_ok9:
   %t1035 = add i1 0, 0
   br label %__bb_array_cap_join29
 __bb_array_cap_join29:
-  %__array_cap_grewt1034_2 = phi i1 [ %t1035, %__bb_array_cap_ok9 ], [ %t1055, %__bb_array_copy_exit9 ]
-  %__array_cap_arrt1033_2 = phi %DriftArrayHeader [ %t1018, %__bb_array_cap_ok9 ], [ %arr_len232, %__bb_array_copy_exit9 ]
+  %__array_cap_grewt1034_3 = phi i1 [ %t1035, %__bb_array_cap_ok9 ], [ %t1055, %__bb_array_copy_exit9 ]
+  %__array_cap_arrt1033_3 = phi %DriftArrayHeader [ %t1018, %__bb_array_cap_ok9 ], [ %arr_len232, %__bb_array_copy_exit9 ]
   %zero_arr244 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr245 = insertvalue %DriftArrayHeader %zero_arr244, i64 0, 1
   %zero_arr246 = insertvalue %DriftArrayHeader %zero_arr245, i64 0, 2
   %__arc17 = insertvalue %DriftArrayHeader %zero_arr246, ptr null, 3
-  %data247 = extractvalue %DriftArrayHeader %__array_cap_arrt1033_2, 3
+  %data247 = extractvalue %DriftArrayHeader %__array_cap_arrt1033_3, 3
   %eltptr248 = getelementptr inbounds i8, ptr %data247, i64 %t1025
   store i8 %t1024, ptr %eltptr248
   %t1058 = add i64 %t1025, %t1030
-  %arr_len249 = insertvalue %DriftArrayHeader %__array_cap_arrt1033_2, i64 %t1058, 0
+  %arr_len249 = insertvalue %DriftArrayHeader %__array_cap_arrt1033_3, i64 %t1058, 0
   %arr_gen250 = insertvalue %DriftArrayHeader %arr_len249, i64 %t1029, 2
   store %DriftArrayHeader %arr_gen250, ptr %tag__addr
   %t1062 = load %DriftArrayHeader, ptr %tag__addr
@@ -46250,17 +46250,17 @@ __bb_array_cap_ok10:
   %t1079 = add i1 0, 0
   br label %__bb_array_cap_join210
 __bb_array_cap_join210:
-  %__array_cap_grewt1078_3 = phi i1 [ %t1099, %__bb_array_copy_exit10 ], [ %t1079, %__bb_array_cap_ok10 ]
-  %__array_cap_arrt1077_3 = phi %DriftArrayHeader [ %arr_len256, %__bb_array_copy_exit10 ], [ %t1062, %__bb_array_cap_ok10 ]
+  %__array_cap_grewt1078_2 = phi i1 [ %t1099, %__bb_array_copy_exit10 ], [ %t1079, %__bb_array_cap_ok10 ]
+  %__array_cap_arrt1077_2 = phi %DriftArrayHeader [ %arr_len256, %__bb_array_copy_exit10 ], [ %t1062, %__bb_array_cap_ok10 ]
   %zero_arr268 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr269 = insertvalue %DriftArrayHeader %zero_arr268, i64 0, 1
   %zero_arr270 = insertvalue %DriftArrayHeader %zero_arr269, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr270, ptr null, 3
-  %data271 = extractvalue %DriftArrayHeader %__array_cap_arrt1077_3, 3
+  %data271 = extractvalue %DriftArrayHeader %__array_cap_arrt1077_2, 3
   %eltptr272 = getelementptr inbounds i8, ptr %data271, i64 %t1069
   store i8 %t1068, ptr %eltptr272
   %t1102 = add i64 %t1069, %t1074
-  %arr_len273 = insertvalue %DriftArrayHeader %__array_cap_arrt1077_3, i64 %t1102, 0
+  %arr_len273 = insertvalue %DriftArrayHeader %__array_cap_arrt1077_2, i64 %t1102, 0
   %arr_gen274 = insertvalue %DriftArrayHeader %arr_len273, i64 %t1073, 2
   store %DriftArrayHeader %arr_gen274, ptr %tag__addr
   %t1106 = load %DriftArrayHeader, ptr %tag__addr
@@ -46420,17 +46420,17 @@ __bb_array_cap_ok12:
   %t1165 = add i1 0, 0
   br label %__bb_array_cap_join212
 __bb_array_cap_join212:
-  %__array_cap_grewt1164_3 = phi i1 [ %t1165, %__bb_array_cap_ok12 ], [ %t1185, %__bb_array_copy_exit12 ]
-  %__array_cap_arrt1163_3 = phi %DriftArrayHeader [ %t1150, %__bb_array_cap_ok12 ], [ %arr_len304, %__bb_array_copy_exit12 ]
+  %__array_cap_grewt1164_1 = phi i1 [ %t1165, %__bb_array_cap_ok12 ], [ %t1185, %__bb_array_copy_exit12 ]
+  %__array_cap_arrt1163_1 = phi %DriftArrayHeader [ %t1150, %__bb_array_cap_ok12 ], [ %arr_len304, %__bb_array_copy_exit12 ]
   %zero_arr316 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr317 = insertvalue %DriftArrayHeader %zero_arr316, i64 0, 1
   %zero_arr318 = insertvalue %DriftArrayHeader %zero_arr317, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr318, ptr null, 3
-  %data319 = extractvalue %DriftArrayHeader %__array_cap_arrt1163_3, 3
+  %data319 = extractvalue %DriftArrayHeader %__array_cap_arrt1163_1, 3
   %eltptr320 = getelementptr inbounds i8, ptr %data319, i64 %t1155
   store i8 %t1154, ptr %eltptr320
   %t1188 = add i64 %t1155, %t1160
-  %arr_len321 = insertvalue %DriftArrayHeader %__array_cap_arrt1163_3, i64 %t1188, 0
+  %arr_len321 = insertvalue %DriftArrayHeader %__array_cap_arrt1163_1, i64 %t1188, 0
   %arr_gen322 = insertvalue %DriftArrayHeader %arr_len321, i64 %t1159, 2
   store %DriftArrayHeader %arr_gen322, ptr %tag__addr
   %t1192 = load %DriftArrayHeader, ptr %tag__addr
@@ -46506,8 +46506,8 @@ __bb_array_cap_ok13:
   %t1209 = add i1 0, 0
   br label %__bb_array_cap_join213
 __bb_array_cap_join213:
-  %__array_cap_grewt1208_1 = phi i1 [ %t1209, %__bb_array_cap_ok13 ], [ %t1229, %__bb_array_copy_exit13 ]
-  %__array_cap_arrt1207_1 = phi %DriftArrayHeader [ %t1192, %__bb_array_cap_ok13 ], [ %arr_len328, %__bb_array_copy_exit13 ]
+  %__array_cap_grewt1208_1 = phi i1 [ %t1229, %__bb_array_copy_exit13 ], [ %t1209, %__bb_array_cap_ok13 ]
+  %__array_cap_arrt1207_1 = phi %DriftArrayHeader [ %arr_len328, %__bb_array_copy_exit13 ], [ %t1192, %__bb_array_cap_ok13 ]
   %zero_arr340 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr341 = insertvalue %DriftArrayHeader %zero_arr340, i64 0, 1
   %zero_arr342 = insertvalue %DriftArrayHeader %zero_arr341, i64 0, 2
@@ -46592,17 +46592,17 @@ __bb_array_cap_ok14:
   %t1253 = add i1 0, 0
   br label %__bb_array_cap_join214
 __bb_array_cap_join214:
-  %__array_cap_grewt1252_2 = phi i1 [ %t1273, %__bb_array_copy_exit14 ], [ %t1253, %__bb_array_cap_ok14 ]
-  %__array_cap_arrt1251_2 = phi %DriftArrayHeader [ %arr_len352, %__bb_array_copy_exit14 ], [ %t1236, %__bb_array_cap_ok14 ]
+  %__array_cap_grewt1252_3 = phi i1 [ %t1253, %__bb_array_cap_ok14 ], [ %t1273, %__bb_array_copy_exit14 ]
+  %__array_cap_arrt1251_3 = phi %DriftArrayHeader [ %t1236, %__bb_array_cap_ok14 ], [ %arr_len352, %__bb_array_copy_exit14 ]
   %zero_arr364 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr365 = insertvalue %DriftArrayHeader %zero_arr364, i64 0, 1
   %zero_arr366 = insertvalue %DriftArrayHeader %zero_arr365, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr366, ptr null, 3
-  %data367 = extractvalue %DriftArrayHeader %__array_cap_arrt1251_2, 3
+  %data367 = extractvalue %DriftArrayHeader %__array_cap_arrt1251_3, 3
   %eltptr368 = getelementptr inbounds i8, ptr %data367, i64 %t1243
   store i8 %t1242, ptr %eltptr368
   %t1276 = add i64 %t1243, %t1248
-  %arr_len369 = insertvalue %DriftArrayHeader %__array_cap_arrt1251_2, i64 %t1276, 0
+  %arr_len369 = insertvalue %DriftArrayHeader %__array_cap_arrt1251_3, i64 %t1276, 0
   %arr_gen370 = insertvalue %DriftArrayHeader %arr_len369, i64 %t1247, 2
   store %DriftArrayHeader %arr_gen370, ptr %tag__addr
   %t1280 = load %DriftArrayHeader, ptr %tag__addr
@@ -46678,8 +46678,8 @@ __bb_array_cap_ok15:
   %t1297 = add i1 0, 0
   br label %__bb_array_cap_join215
 __bb_array_cap_join215:
-  %__array_cap_grewt1296_3 = phi i1 [ %t1297, %__bb_array_cap_ok15 ], [ %t1317, %__bb_array_copy_exit15 ]
-  %__array_cap_arrt1295_3 = phi %DriftArrayHeader [ %t1280, %__bb_array_cap_ok15 ], [ %arr_len376, %__bb_array_copy_exit15 ]
+  %__array_cap_grewt1296_3 = phi i1 [ %t1317, %__bb_array_copy_exit15 ], [ %t1297, %__bb_array_cap_ok15 ]
+  %__array_cap_arrt1295_3 = phi %DriftArrayHeader [ %arr_len376, %__bb_array_copy_exit15 ], [ %t1280, %__bb_array_cap_ok15 ]
   %zero_arr388 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr389 = insertvalue %DriftArrayHeader %zero_arr388, i64 0, 1
   %zero_arr390 = insertvalue %DriftArrayHeader %zero_arr389, i64 0, 2
@@ -46721,10 +46721,10 @@ __bb_if_join1:
   br label %__bb_loop_header1
 __bb_loop_header1:
   %bi_4 = phi i64 [ %t119, %__bb_if_join1 ], [ %t185, %__bb_if_join2 ]
-  %n3_4 = phi i64 [ %t118, %__bb_if_join1 ], [ %n3_10, %__bb_if_join2 ]
-  %n2_4 = phi i64 [ %t117, %__bb_if_join1 ], [ %n2_10, %__bb_if_join2 ]
-  %n1_4 = phi i64 [ %t116, %__bb_if_join1 ], [ %n1_9, %__bb_if_join2 ]
-  %n0_4 = phi i64 [ %t115, %__bb_if_join1 ], [ %n0_8, %__bb_if_join2 ]
+  %n3_4 = phi i64 [ %t118, %__bb_if_join1 ], [ %n3_5, %__bb_if_join2 ]
+  %n2_4 = phi i64 [ %t117, %__bb_if_join1 ], [ %n2_5, %__bb_if_join2 ]
+  %n1_4 = phi i64 [ %t116, %__bb_if_join1 ], [ %n1_5, %__bb_if_join2 ]
+  %n0_4 = phi i64 [ %t115, %__bb_if_join1 ], [ %n0_6, %__bb_if_join2 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t122 = icmp slt i64 %bi_4, %block_len_5
@@ -46766,8 +46766,8 @@ __bb_if_then9:
   %t223 = or i64 %n2_4, %t222
   br label %__bb_if_join9
 __bb_if_join9:
-  %n3_8 = phi i64 [ %t228, %__bb_if_else8 ], [ %n3_4, %__bb_if_then9 ]
-  %n2_8 = phi i64 [ %n2_4, %__bb_if_else8 ], [ %t223, %__bb_if_then9 ]
+  %n3_11 = phi i64 [ %n3_4, %__bb_if_then9 ], [ %t228, %__bb_if_else8 ]
+  %n2_12 = phi i64 [ %t223, %__bb_if_then9 ], [ %n2_4, %__bb_if_else8 ]
   br label %__bb_if_join8
 __bb_if_then8:
   %t212 = add i64 0, 1
@@ -46775,9 +46775,9 @@ __bb_if_then8:
   %t215 = or i64 %n1_4, %t214
   br label %__bb_if_join8
 __bb_if_join8:
-  %n3_9 = phi i64 [ %n3_8, %__bb_if_join9 ], [ %n3_4, %__bb_if_then8 ]
-  %n2_9 = phi i64 [ %n2_8, %__bb_if_join9 ], [ %n2_4, %__bb_if_then8 ]
-  %n1_8 = phi i64 [ %n1_4, %__bb_if_join9 ], [ %t215, %__bb_if_then8 ]
+  %n3_10 = phi i64 [ %n3_11, %__bb_if_join9 ], [ %n3_4, %__bb_if_then8 ]
+  %n2_10 = phi i64 [ %n2_12, %__bb_if_join9 ], [ %n2_4, %__bb_if_then8 ]
+  %n1_9 = phi i64 [ %n1_4, %__bb_if_join9 ], [ %t215, %__bb_if_then8 ]
   br label %__bb_if_join7
 __bb_if_then7:
   %t204 = add i64 0, 1
@@ -46785,59 +46785,59 @@ __bb_if_then7:
   %t207 = or i64 %n0_4, %t206
   br label %__bb_if_join7
 __bb_if_join7:
-  %n3_6 = phi i64 [ %n3_9, %__bb_if_join8 ], [ %n3_4, %__bb_if_then7 ]
-  %n2_6 = phi i64 [ %n2_9, %__bb_if_join8 ], [ %n2_4, %__bb_if_then7 ]
-  %n1_6 = phi i64 [ %n1_8, %__bb_if_join8 ], [ %n1_4, %__bb_if_then7 ]
-  %n0_6 = phi i64 [ %n0_4, %__bb_if_join8 ], [ %t207, %__bb_if_then7 ]
+  %n3_13 = phi i64 [ %n3_10, %__bb_if_join8 ], [ %n3_4, %__bb_if_then7 ]
+  %n2_13 = phi i64 [ %n2_10, %__bb_if_join8 ], [ %n2_4, %__bb_if_then7 ]
+  %n1_11 = phi i64 [ %n1_9, %__bb_if_join8 ], [ %n1_4, %__bb_if_then7 ]
+  %n0_9 = phi i64 [ %n0_4, %__bb_if_join8 ], [ %t207, %__bb_if_then7 ]
   br label %__bb_if_join6
 __bb_if_then6:
   %t190 = add i64 0, 1
   br label %__bb_if_join6
 __bb_if_join6:
-  %hibit_4 = phi i64 [ %t186, %__bb_if_join7 ], [ %t190, %__bb_if_then6 ]
-  %n3_5 = phi i64 [ %n3_6, %__bb_if_join7 ], [ %n3_4, %__bb_if_then6 ]
-  %n2_5 = phi i64 [ %n2_6, %__bb_if_join7 ], [ %n2_4, %__bb_if_then6 ]
-  %n1_5 = phi i64 [ %n1_6, %__bb_if_join7 ], [ %n1_4, %__bb_if_then6 ]
-  %n0_5 = phi i64 [ %n0_6, %__bb_if_join7 ], [ %n0_4, %__bb_if_then6 ]
-  %t231 = call i64 @"std.crypto::_u32"(i64 %n0_5)
+  %hibit_5 = phi i64 [ %t190, %__bb_if_then6 ], [ %t186, %__bb_if_join7 ]
+  %n3_9 = phi i64 [ %n3_4, %__bb_if_then6 ], [ %n3_13, %__bb_if_join7 ]
+  %n2_9 = phi i64 [ %n2_4, %__bb_if_then6 ], [ %n2_13, %__bb_if_join7 ]
+  %n1_8 = phi i64 [ %n1_4, %__bb_if_then6 ], [ %n1_11, %__bb_if_join7 ]
+  %n0_7 = phi i64 [ %n0_4, %__bb_if_then6 ], [ %n0_9, %__bb_if_join7 ]
+  %t231 = call i64 @"std.crypto::_u32"(i64 %n0_7)
   %t232 = add i64 0, 67108863
   %t233 = and i64 %t231, %t232
   %t234 = add i64 %h0_2, %t233
-  %t237 = call i64 @"std.crypto::_u32"(i64 %n0_5)
+  %t237 = call i64 @"std.crypto::_u32"(i64 %n0_7)
   %t238 = add i64 0, 26
   %t239 = lshr i64 %t237, %t238
-  %t241 = call i64 @"std.crypto::_u32"(i64 %n1_5)
+  %t241 = call i64 @"std.crypto::_u32"(i64 %n1_8)
   %t242 = add i64 0, 6
   %t243 = shl i64 %t241, %t242
   %t244 = or i64 %t239, %t243
   %t245 = add i64 0, 67108863
   %t246 = and i64 %t244, %t245
   %t247 = add i64 %h1_2, %t246
-  %t250 = call i64 @"std.crypto::_u32"(i64 %n1_5)
+  %t250 = call i64 @"std.crypto::_u32"(i64 %n1_8)
   %t251 = add i64 0, 20
   %t252 = lshr i64 %t250, %t251
-  %t254 = call i64 @"std.crypto::_u32"(i64 %n2_5)
+  %t254 = call i64 @"std.crypto::_u32"(i64 %n2_9)
   %t255 = add i64 0, 12
   %t256 = shl i64 %t254, %t255
   %t257 = or i64 %t252, %t256
   %t258 = add i64 0, 67108863
   %t259 = and i64 %t257, %t258
   %t260 = add i64 %h2_2, %t259
-  %t263 = call i64 @"std.crypto::_u32"(i64 %n2_5)
+  %t263 = call i64 @"std.crypto::_u32"(i64 %n2_9)
   %t264 = add i64 0, 14
   %t265 = lshr i64 %t263, %t264
-  %t267 = call i64 @"std.crypto::_u32"(i64 %n3_5)
+  %t267 = call i64 @"std.crypto::_u32"(i64 %n3_9)
   %t268 = add i64 0, 18
   %t269 = shl i64 %t267, %t268
   %t270 = or i64 %t265, %t269
   %t271 = add i64 0, 67108863
   %t272 = and i64 %t270, %t271
   %t273 = add i64 %h3_2, %t272
-  %t276 = call i64 @"std.crypto::_u32"(i64 %n3_5)
+  %t276 = call i64 @"std.crypto::_u32"(i64 %n3_9)
   %t277 = add i64 0, 8
   %t278 = lshr i64 %t276, %t277
   %t280 = add i64 0, 24
-  %t281 = shl i64 %hibit_4, %t280
+  %t281 = shl i64 %hibit_5, %t280
   %t282 = or i64 %t278, %t281
   %t283 = add i64 %h4_2, %t282
   %t285 = add i64 %t234, 0
@@ -46978,27 +46978,27 @@ __bb_if_then5:
   %t177 = or i64 %n2_4, %t176
   br label %__bb_if_join5
 __bb_if_join5:
-  %n3_12 = phi i64 [ %n3_4, %__bb_if_then5 ], [ %t182, %__bb_if_else4 ]
-  %n2_13 = phi i64 [ %t177, %__bb_if_then5 ], [ %n2_4, %__bb_if_else4 ]
+  %n3_7 = phi i64 [ %t182, %__bb_if_else4 ], [ %n3_4, %__bb_if_then5 ]
+  %n2_7 = phi i64 [ %n2_4, %__bb_if_else4 ], [ %t177, %__bb_if_then5 ]
   br label %__bb_if_join4
 __bb_if_then4:
   %t168 = shl i64 %t144, %t153
   %t169 = or i64 %n1_4, %t168
   br label %__bb_if_join4
 __bb_if_join4:
-  %n3_11 = phi i64 [ %n3_4, %__bb_if_then4 ], [ %n3_12, %__bb_if_join5 ]
-  %n2_11 = phi i64 [ %n2_4, %__bb_if_then4 ], [ %n2_13, %__bb_if_join5 ]
-  %n1_11 = phi i64 [ %t169, %__bb_if_then4 ], [ %n1_4, %__bb_if_join5 ]
+  %n3_6 = phi i64 [ %n3_4, %__bb_if_then4 ], [ %n3_7, %__bb_if_join5 ]
+  %n2_6 = phi i64 [ %n2_4, %__bb_if_then4 ], [ %n2_7, %__bb_if_join5 ]
+  %n1_7 = phi i64 [ %t169, %__bb_if_then4 ], [ %n1_4, %__bb_if_join5 ]
   br label %__bb_if_join3
 __bb_if_then3:
   %t160 = shl i64 %t144, %t153
   %t161 = or i64 %n0_4, %t160
   br label %__bb_if_join3
 __bb_if_join3:
-  %n3_10 = phi i64 [ %n3_11, %__bb_if_join4 ], [ %n3_4, %__bb_if_then3 ]
-  %n2_10 = phi i64 [ %n2_11, %__bb_if_join4 ], [ %n2_4, %__bb_if_then3 ]
-  %n1_9 = phi i64 [ %n1_11, %__bb_if_join4 ], [ %n1_4, %__bb_if_then3 ]
-  %n0_8 = phi i64 [ %n0_4, %__bb_if_join4 ], [ %t161, %__bb_if_then3 ]
+  %n3_5 = phi i64 [ %n3_4, %__bb_if_then3 ], [ %n3_6, %__bb_if_join4 ]
+  %n2_5 = phi i64 [ %n2_4, %__bb_if_then3 ], [ %n2_6, %__bb_if_join4 ]
+  %n1_5 = phi i64 [ %n1_4, %__bb_if_then3 ], [ %n1_7, %__bb_if_join4 ]
+  %n0_6 = phi i64 [ %t161, %__bb_if_then3 ], [ %n0_4, %__bb_if_join4 ]
   %t184 = add i64 0, 1
   %t185 = add i64 %bi_4, %t184
   br label %__bb_if_join2
@@ -47054,7 +47054,7 @@ __bb_if_then:
   %t8 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt26_3 = phi i1 [ %__array_cap_grewt26_1, %__bb_if_then ], [ %__array_cap_grewt26_4, %__bb_if_join1 ]
+  %__array_cap_grewt26_3 = phi i1 [ %__array_cap_grewt26_1, %__bb_if_then ], [ %__array_cap_grewt26_5, %__bb_if_join1 ]
   %__array_cap_arrt25_3 = phi %DriftArrayHeader [ %__array_cap_arrt25_1, %__bb_if_then ], [ %__arc1, %__bb_if_join1 ]
   %pi_4 = phi i64 [ %t8, %__bb_if_then ], [ %t55, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -47142,17 +47142,17 @@ __bb_array_cap_ok:
   %t27 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt26_4 = phi i1 [ %t27, %__bb_array_cap_ok ], [ %t47, %__bb_array_copy_exit ]
-  %__array_cap_arrt25_4 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len11, %__bb_array_copy_exit ]
+  %__array_cap_grewt26_5 = phi i1 [ %t27, %__bb_array_cap_ok ], [ %t47, %__bb_array_copy_exit ]
+  %__array_cap_arrt25_5 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len11, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt25_4, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt25_5, 3
   %eltptr27 = getelementptr inbounds i8, ptr %data26, i64 %t17
   store i8 %t16, ptr %eltptr27
   %t50 = add i64 %t17, %t22
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt25_4, i64 %t50, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt25_5, i64 %t50, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t21, 2
   store %DriftArrayHeader %arr_gen29, ptr %out_1
   %t54 = add i64 0, 1
@@ -47253,17 +47253,17 @@ __bb_array_cap_ok:
   %t18 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt17_1 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
-  %__array_cap_arrt16_1 = phi %DriftArrayHeader [ %t3, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
+  %__array_cap_grewt17_2 = phi i1 [ %t18, %__bb_array_cap_ok ], [ %t38, %__bb_array_copy_exit ]
+  %__array_cap_arrt16_2 = phi %DriftArrayHeader [ %t3, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
   %zero_arr20 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr21 = insertvalue %DriftArrayHeader %zero_arr20, i64 0, 1
   %zero_arr22 = insertvalue %DriftArrayHeader %zero_arr21, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
-  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt16_1, 3
+  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt16_2, 3
   %eltptr24 = getelementptr inbounds i8, ptr %data23, i64 %t8
   store i8 %t7, ptr %eltptr24
   %t41 = add i64 %t8, %t13
-  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt16_1, i64 %t41, 0
+  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt16_2, i64 %t41, 0
   %arr_gen26 = insertvalue %DriftArrayHeader %arr_len25, i64 %t12, 2
   store %DriftArrayHeader %arr_gen26, ptr %out_1
   %t45 = load %DriftArrayHeader, ptr %out_1
@@ -47339,17 +47339,17 @@ __bb_array_cap_ok1:
   %t62 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt61_3 = phi i1 [ %t82, %__bb_array_copy_exit1 ], [ %t62, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt60_3 = phi %DriftArrayHeader [ %arr_len32, %__bb_array_copy_exit1 ], [ %t45, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt61_2 = phi i1 [ %t62, %__bb_array_cap_ok1 ], [ %t82, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt60_2 = phi %DriftArrayHeader [ %t45, %__bb_array_cap_ok1 ], [ %arr_len32, %__bb_array_copy_exit1 ]
   %zero_arr44 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 1
   %zero_arr46 = insertvalue %DriftArrayHeader %zero_arr45, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
-  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt60_3, 3
+  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt60_2, 3
   %eltptr48 = getelementptr inbounds i8, ptr %data47, i64 %t52
   store i8 %t51, ptr %eltptr48
   %t85 = add i64 %t52, %t57
-  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt60_3, i64 %t85, 0
+  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt60_2, i64 %t85, 0
   %arr_gen50 = insertvalue %DriftArrayHeader %arr_len49, i64 %t56, 2
   store %DriftArrayHeader %arr_gen50, ptr %out_1
   %t89 = load %DriftArrayHeader, ptr %out_1
@@ -47597,17 +47597,17 @@ __bb_array_cap_ok4:
   %t194 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt193_2 = phi i1 [ %t194, %__bb_array_cap_ok4 ], [ %t214, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt192_2 = phi %DriftArrayHeader [ %t177, %__bb_array_cap_ok4 ], [ %arr_len104, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt193_1 = phi i1 [ %t194, %__bb_array_cap_ok4 ], [ %t214, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt192_1 = phi %DriftArrayHeader [ %t177, %__bb_array_cap_ok4 ], [ %arr_len104, %__bb_array_copy_exit4 ]
   %zero_arr116 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr117 = insertvalue %DriftArrayHeader %zero_arr116, i64 0, 1
   %zero_arr118 = insertvalue %DriftArrayHeader %zero_arr117, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr118, ptr null, 3
-  %data119 = extractvalue %DriftArrayHeader %__array_cap_arrt192_2, 3
+  %data119 = extractvalue %DriftArrayHeader %__array_cap_arrt192_1, 3
   %eltptr120 = getelementptr inbounds i8, ptr %data119, i64 %t184
   store i8 %t183, ptr %eltptr120
   %t217 = add i64 %t184, %t189
-  %arr_len121 = insertvalue %DriftArrayHeader %__array_cap_arrt192_2, i64 %t217, 0
+  %arr_len121 = insertvalue %DriftArrayHeader %__array_cap_arrt192_1, i64 %t217, 0
   %arr_gen122 = insertvalue %DriftArrayHeader %arr_len121, i64 %t188, 2
   store %DriftArrayHeader %arr_gen122, ptr %out_1
   %t221 = load %DriftArrayHeader, ptr %out_1
@@ -47683,17 +47683,17 @@ __bb_array_cap_ok5:
   %t238 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt237_3 = phi i1 [ %t238, %__bb_array_cap_ok5 ], [ %t258, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt236_3 = phi %DriftArrayHeader [ %t221, %__bb_array_cap_ok5 ], [ %arr_len128, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt237_1 = phi i1 [ %t258, %__bb_array_copy_exit5 ], [ %t238, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt236_1 = phi %DriftArrayHeader [ %arr_len128, %__bb_array_copy_exit5 ], [ %t221, %__bb_array_cap_ok5 ]
   %zero_arr140 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr141 = insertvalue %DriftArrayHeader %zero_arr140, i64 0, 1
   %zero_arr142 = insertvalue %DriftArrayHeader %zero_arr141, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr142, ptr null, 3
-  %data143 = extractvalue %DriftArrayHeader %__array_cap_arrt236_3, 3
+  %data143 = extractvalue %DriftArrayHeader %__array_cap_arrt236_1, 3
   %eltptr144 = getelementptr inbounds i8, ptr %data143, i64 %t228
   store i8 %t227, ptr %eltptr144
   %t261 = add i64 %t228, %t233
-  %arr_len145 = insertvalue %DriftArrayHeader %__array_cap_arrt236_3, i64 %t261, 0
+  %arr_len145 = insertvalue %DriftArrayHeader %__array_cap_arrt236_1, i64 %t261, 0
   %arr_gen146 = insertvalue %DriftArrayHeader %arr_len145, i64 %t232, 2
   store %DriftArrayHeader %arr_gen146, ptr %out_1
   %t265 = load %DriftArrayHeader, ptr %out_1
@@ -47769,17 +47769,17 @@ __bb_array_cap_ok6:
   %t282 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt281_1 = phi i1 [ %t302, %__bb_array_copy_exit6 ], [ %t282, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt280_1 = phi %DriftArrayHeader [ %arr_len152, %__bb_array_copy_exit6 ], [ %t265, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt281_3 = phi i1 [ %t302, %__bb_array_copy_exit6 ], [ %t282, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt280_3 = phi %DriftArrayHeader [ %arr_len152, %__bb_array_copy_exit6 ], [ %t265, %__bb_array_cap_ok6 ]
   %zero_arr164 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr165 = insertvalue %DriftArrayHeader %zero_arr164, i64 0, 1
   %zero_arr166 = insertvalue %DriftArrayHeader %zero_arr165, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr166, ptr null, 3
-  %data167 = extractvalue %DriftArrayHeader %__array_cap_arrt280_1, 3
+  %data167 = extractvalue %DriftArrayHeader %__array_cap_arrt280_3, 3
   %eltptr168 = getelementptr inbounds i8, ptr %data167, i64 %t272
   store i8 %t271, ptr %eltptr168
   %t305 = add i64 %t272, %t277
-  %arr_len169 = insertvalue %DriftArrayHeader %__array_cap_arrt280_1, i64 %t305, 0
+  %arr_len169 = insertvalue %DriftArrayHeader %__array_cap_arrt280_3, i64 %t305, 0
   %arr_gen170 = insertvalue %DriftArrayHeader %arr_len169, i64 %t276, 2
   store %DriftArrayHeader %arr_gen170, ptr %out_1
   %t309 = load %DriftArrayHeader, ptr %out_1
@@ -47855,8 +47855,8 @@ __bb_array_cap_ok7:
   %t326 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt325_1 = phi i1 [ %t346, %__bb_array_copy_exit7 ], [ %t326, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt324_1 = phi %DriftArrayHeader [ %arr_len176, %__bb_array_copy_exit7 ], [ %t309, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt325_1 = phi i1 [ %t326, %__bb_array_cap_ok7 ], [ %t346, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt324_1 = phi %DriftArrayHeader [ %t309, %__bb_array_cap_ok7 ], [ %arr_len176, %__bb_array_copy_exit7 ]
   %zero_arr188 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr189 = insertvalue %DriftArrayHeader %zero_arr188, i64 0, 1
   %zero_arr190 = insertvalue %DriftArrayHeader %zero_arr189, i64 0, 2
@@ -47915,7 +47915,7 @@ __bb_entry:
   %__array_cap_arrt51_1 = insertvalue %DriftArrayHeader %zero_arr13, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt52_2 = phi i1 [ %__array_cap_grewt52_1, %__bb_entry ], [ %__array_cap_grewt52_3, %__bb_if_join ]
+  %__array_cap_grewt52_2 = phi i1 [ %__array_cap_grewt52_1, %__bb_entry ], [ %__array_cap_grewt52_4, %__bb_if_join ]
   %__array_cap_arrt51_2 = phi %DriftArrayHeader [ %__array_cap_arrt51_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %ai_2 = phi i64 [ %t16, %__bb_entry ], [ %t81, %__bb_if_join ]
   br label %__bb_loop_body
@@ -47938,7 +47938,7 @@ __bb_loop_exit:
   %__array_cap_arrt121_1 = insertvalue %DriftArrayHeader %zero_arr16, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt122_2 = phi i1 [ %__array_cap_grewt122_1, %__bb_loop_exit ], [ %__array_cap_grewt122_5, %__bb_if_join1 ]
+  %__array_cap_grewt122_2 = phi i1 [ %__array_cap_grewt122_1, %__bb_loop_exit ], [ %__array_cap_grewt122_4, %__bb_if_join1 ]
   %__array_cap_arrt121_2 = phi %DriftArrayHeader [ %__array_cap_arrt121_1, %__bb_loop_exit ], [ %__arc2, %__bb_if_join1 ]
   %ci_2 = phi i64 [ %t86, %__bb_loop_exit ], [ %t151, %__bb_if_join1 ]
   br label %__bb_loop_body1
@@ -48052,17 +48052,17 @@ __bb_array_cap_ok1:
   %t123 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt122_5 = phi i1 [ %t143, %__bb_array_copy_exit1 ], [ %t123, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt121_5 = phi %DriftArrayHeader [ %arr_len30, %__bb_array_copy_exit1 ], [ %t93, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt122_4 = phi i1 [ %t123, %__bb_array_cap_ok1 ], [ %t143, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt121_4 = phi %DriftArrayHeader [ %t93, %__bb_array_cap_ok1 ], [ %arr_len30, %__bb_array_copy_exit1 ]
   %zero_arr42 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr43 = insertvalue %DriftArrayHeader %zero_arr42, i64 0, 1
   %zero_arr44 = insertvalue %DriftArrayHeader %zero_arr43, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr44, ptr null, 3
-  %data45 = extractvalue %DriftArrayHeader %__array_cap_arrt121_5, 3
+  %data45 = extractvalue %DriftArrayHeader %__array_cap_arrt121_4, 3
   %eltptr46 = getelementptr inbounds i8, ptr %data45, i64 %t113
   store i8 %t110, ptr %eltptr46
   %t146 = add i64 %t113, %t118
-  %arr_len47 = insertvalue %DriftArrayHeader %__array_cap_arrt121_5, i64 %t146, 0
+  %arr_len47 = insertvalue %DriftArrayHeader %__array_cap_arrt121_4, i64 %t146, 0
   %arr_gen48 = insertvalue %DriftArrayHeader %arr_len47, i64 %t117, 2
   store %DriftArrayHeader %arr_gen48, ptr %mac_data__addr
   %t150 = add i64 0, 1
@@ -48181,17 +48181,17 @@ __bb_array_cap_ok:
   %t53 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt52_3 = phi i1 [ %t53, %__bb_array_cap_ok ], [ %t73, %__bb_array_copy_exit ]
-  %__array_cap_arrt51_3 = phi %DriftArrayHeader [ %t23, %__bb_array_cap_ok ], [ %arr_len69, %__bb_array_copy_exit ]
+  %__array_cap_grewt52_4 = phi i1 [ %t53, %__bb_array_cap_ok ], [ %t73, %__bb_array_copy_exit ]
+  %__array_cap_arrt51_4 = phi %DriftArrayHeader [ %t23, %__bb_array_cap_ok ], [ %arr_len69, %__bb_array_copy_exit ]
   %zero_arr81 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr82 = insertvalue %DriftArrayHeader %zero_arr81, i64 0, 1
   %zero_arr83 = insertvalue %DriftArrayHeader %zero_arr82, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr83, ptr null, 3
-  %data84 = extractvalue %DriftArrayHeader %__array_cap_arrt51_3, 3
+  %data84 = extractvalue %DriftArrayHeader %__array_cap_arrt51_4, 3
   %eltptr85 = getelementptr inbounds i8, ptr %data84, i64 %t43
   store i8 %t40, ptr %eltptr85
   %t76 = add i64 %t43, %t48
-  %arr_len86 = insertvalue %DriftArrayHeader %__array_cap_arrt51_3, i64 %t76, 0
+  %arr_len86 = insertvalue %DriftArrayHeader %__array_cap_arrt51_4, i64 %t76, 0
   %arr_gen87 = insertvalue %DriftArrayHeader %arr_len86, i64 %t47, 2
   store %DriftArrayHeader %arr_gen87, ptr %mac_data__addr
   %t80 = add i64 0, 1
@@ -48311,7 +48311,7 @@ __bb_if_join1:
   %__array_cap_arrt59_1 = insertvalue %DriftArrayHeader %zero_arr33, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt60_2 = phi i1 [ %__array_cap_grewt60_1, %__bb_if_join1 ], [ %__array_cap_grewt60_3, %__bb_if_join2 ]
+  %__array_cap_grewt60_2 = phi i1 [ %__array_cap_grewt60_1, %__bb_if_join1 ], [ %__array_cap_grewt60_4, %__bb_if_join2 ]
   %__array_cap_arrt59_2 = phi %DriftArrayHeader [ %__array_cap_arrt59_1, %__bb_if_join1 ], [ %__arc1, %__bb_if_join2 ]
   %pki_2 = phi i64 [ %t26, %__bb_if_join1 ], [ %t89, %__bb_if_join2 ]
   br label %__bb_loop_body
@@ -48376,7 +48376,7 @@ __bb_loop_exit:
   %__array_cap_arrt140_1 = insertvalue %DriftArrayHeader %zero_arr56, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt141_2 = phi i1 [ %__array_cap_grewt141_1, %__bb_loop_exit ], [ %__array_cap_grewt141_5, %__bb_if_join3 ]
+  %__array_cap_grewt141_2 = phi i1 [ %__array_cap_grewt141_1, %__bb_loop_exit ], [ %__array_cap_grewt141_4, %__bb_if_join3 ]
   %__array_cap_arrt140_2 = phi %DriftArrayHeader [ %__array_cap_arrt140_1, %__bb_loop_exit ], [ %__arc2, %__bb_if_join3 ]
   %ci_2 = phi i64 [ %t106, %__bb_loop_exit ], [ %t170, %__bb_if_join3 ]
   br label %__bb_loop_body1
@@ -48673,17 +48673,17 @@ __bb_array_cap_ok1:
   %t142 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt141_5 = phi i1 [ %t162, %__bb_array_copy_exit1 ], [ %t142, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt140_5 = phi %DriftArrayHeader [ %arr_len137, %__bb_array_copy_exit1 ], [ %t112, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt141_4 = phi i1 [ %t142, %__bb_array_cap_ok1 ], [ %t162, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt140_4 = phi %DriftArrayHeader [ %t112, %__bb_array_cap_ok1 ], [ %arr_len137, %__bb_array_copy_exit1 ]
   %zero_arr149 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr150 = insertvalue %DriftArrayHeader %zero_arr149, i64 0, 1
   %zero_arr151 = insertvalue %DriftArrayHeader %zero_arr150, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr151, ptr null, 3
-  %data152 = extractvalue %DriftArrayHeader %__array_cap_arrt140_5, 3
+  %data152 = extractvalue %DriftArrayHeader %__array_cap_arrt140_4, 3
   %eltptr153 = getelementptr inbounds i8, ptr %data152, i64 %t132
   store i8 %t129, ptr %eltptr153
   %t165 = add i64 %t132, %t137
-  %arr_len154 = insertvalue %DriftArrayHeader %__array_cap_arrt140_5, i64 %t165, 0
+  %arr_len154 = insertvalue %DriftArrayHeader %__array_cap_arrt140_4, i64 %t165, 0
   %arr_gen155 = insertvalue %DriftArrayHeader %arr_len154, i64 %t136, 2
   store %DriftArrayHeader %arr_gen155, ptr %out__addr
   %t169 = add i64 0, 1
@@ -48800,17 +48800,17 @@ __bb_array_cap_ok:
   %t61 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt60_3 = phi i1 [ %t61, %__bb_array_cap_ok ], [ %t81, %__bb_array_copy_exit ]
-  %__array_cap_arrt59_3 = phi %DriftArrayHeader [ %t31, %__bb_array_cap_ok ], [ %arr_len174, %__bb_array_copy_exit ]
+  %__array_cap_grewt60_4 = phi i1 [ %t61, %__bb_array_cap_ok ], [ %t81, %__bb_array_copy_exit ]
+  %__array_cap_arrt59_4 = phi %DriftArrayHeader [ %t31, %__bb_array_cap_ok ], [ %arr_len174, %__bb_array_copy_exit ]
   %zero_arr186 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr187 = insertvalue %DriftArrayHeader %zero_arr186, i64 0, 1
   %zero_arr188 = insertvalue %DriftArrayHeader %zero_arr187, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr188, ptr null, 3
-  %data189 = extractvalue %DriftArrayHeader %__array_cap_arrt59_3, 3
+  %data189 = extractvalue %DriftArrayHeader %__array_cap_arrt59_4, 3
   %eltptr190 = getelementptr inbounds i8, ptr %data189, i64 %t51
   store i8 %t48, ptr %eltptr190
   %t84 = add i64 %t51, %t56
-  %arr_len191 = insertvalue %DriftArrayHeader %__array_cap_arrt59_3, i64 %t84, 0
+  %arr_len191 = insertvalue %DriftArrayHeader %__array_cap_arrt59_4, i64 %t84, 0
   %arr_gen192 = insertvalue %DriftArrayHeader %arr_len191, i64 %t55, 2
   store %DriftArrayHeader %arr_gen192, ptr %poly_key__addr
   %t88 = add i64 0, 1
@@ -49068,7 +49068,7 @@ __bb_if_join2:
   %__array_cap_arrt69_1 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt70_2 = phi i1 [ %__array_cap_grewt70_1, %__bb_if_join2 ], [ %__array_cap_grewt70_3, %__bb_if_join3 ]
+  %__array_cap_grewt70_2 = phi i1 [ %__array_cap_grewt70_1, %__bb_if_join2 ], [ %__array_cap_grewt70_4, %__bb_if_join3 ]
   %__array_cap_arrt69_2 = phi %DriftArrayHeader [ %__array_cap_arrt69_1, %__bb_if_join2 ], [ %__arc1, %__bb_if_join3 ]
   %ci_2 = phi i64 [ %t36, %__bb_if_join2 ], [ %t99, %__bb_if_join3 ]
   br label %__bb_loop_body
@@ -49098,7 +49098,7 @@ __bb_loop_exit:
   %__array_cap_arrt137_1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt138_2 = phi i1 [ %__array_cap_grewt138_1, %__bb_loop_exit ], [ %__array_cap_grewt138_5, %__bb_if_join4 ]
+  %__array_cap_grewt138_2 = phi i1 [ %__array_cap_grewt138_1, %__bb_loop_exit ], [ %__array_cap_grewt138_4, %__bb_if_join4 ]
   %__array_cap_arrt137_2 = phi %DriftArrayHeader [ %__array_cap_arrt137_1, %__bb_loop_exit ], [ %__arc2, %__bb_if_join4 ]
   %ri_2 = phi i64 [ %t102, %__bb_loop_exit ], [ %t167, %__bb_if_join4 ]
   br label %__bb_loop_body1
@@ -49536,17 +49536,17 @@ __bb_array_cap_ok1:
   %t139 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt138_5 = phi i1 [ %t159, %__bb_array_copy_exit1 ], [ %t139, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt137_5 = phi %DriftArrayHeader [ %arr_len194, %__bb_array_copy_exit1 ], [ %t107, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt138_4 = phi i1 [ %t139, %__bb_array_cap_ok1 ], [ %t159, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt137_4 = phi %DriftArrayHeader [ %t107, %__bb_array_cap_ok1 ], [ %arr_len194, %__bb_array_copy_exit1 ]
   %zero_arr206 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr207 = insertvalue %DriftArrayHeader %zero_arr206, i64 0, 1
   %zero_arr208 = insertvalue %DriftArrayHeader %zero_arr207, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr208, ptr null, 3
-  %data209 = extractvalue %DriftArrayHeader %__array_cap_arrt137_5, 3
+  %data209 = extractvalue %DriftArrayHeader %__array_cap_arrt137_4, 3
   %eltptr210 = getelementptr inbounds i8, ptr %data209, i64 %t129
   store i8 %t126, ptr %eltptr210
   %t162 = add i64 %t129, %t134
-  %arr_len211 = insertvalue %DriftArrayHeader %__array_cap_arrt137_5, i64 %t162, 0
+  %arr_len211 = insertvalue %DriftArrayHeader %__array_cap_arrt137_4, i64 %t162, 0
   %arr_gen212 = insertvalue %DriftArrayHeader %arr_len211, i64 %t133, 2
   store %DriftArrayHeader %arr_gen212, ptr %received_tag__addr
   %t166 = add i64 0, 1
@@ -49665,17 +49665,17 @@ __bb_array_cap_ok:
   %t71 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt70_3 = phi i1 [ %t71, %__bb_array_cap_ok ], [ %t91, %__bb_array_copy_exit ]
-  %__array_cap_arrt69_3 = phi %DriftArrayHeader [ %t41, %__bb_array_cap_ok ], [ %arr_len233, %__bb_array_copy_exit ]
+  %__array_cap_grewt70_4 = phi i1 [ %t71, %__bb_array_cap_ok ], [ %t91, %__bb_array_copy_exit ]
+  %__array_cap_arrt69_4 = phi %DriftArrayHeader [ %t41, %__bb_array_cap_ok ], [ %arr_len233, %__bb_array_copy_exit ]
   %zero_arr245 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr246 = insertvalue %DriftArrayHeader %zero_arr245, i64 0, 1
   %zero_arr247 = insertvalue %DriftArrayHeader %zero_arr246, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr247, ptr null, 3
-  %data248 = extractvalue %DriftArrayHeader %__array_cap_arrt69_3, 3
+  %data248 = extractvalue %DriftArrayHeader %__array_cap_arrt69_4, 3
   %eltptr249 = getelementptr inbounds i8, ptr %data248, i64 %t61
   store i8 %t58, ptr %eltptr249
   %t94 = add i64 %t61, %t66
-  %arr_len250 = insertvalue %DriftArrayHeader %__array_cap_arrt69_3, i64 %t94, 0
+  %arr_len250 = insertvalue %DriftArrayHeader %__array_cap_arrt69_4, i64 %t94, 0
   %arr_gen251 = insertvalue %DriftArrayHeader %arr_len250, i64 %t65, 2
   store %DriftArrayHeader %arr_gen251, ptr %ciphertext__addr
   %t98 = add i64 0, 1
@@ -50021,17 +50021,17 @@ __bb_array_cap_ok:
   %t20 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt19_1 = phi i1 [ %t20, %__bb_array_cap_ok ], [ %t40, %__bb_array_copy_exit ]
-  %__array_cap_arrt18_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
+  %__array_cap_grewt19_2 = phi i1 [ %t20, %__bb_array_cap_ok ], [ %t40, %__bb_array_copy_exit ]
+  %__array_cap_arrt18_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
   %zero_arr20 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr21 = insertvalue %DriftArrayHeader %zero_arr20, i64 0, 1
   %zero_arr22 = insertvalue %DriftArrayHeader %zero_arr21, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
-  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt18_1, 3
+  %data23 = extractvalue %DriftArrayHeader %__array_cap_arrt18_2, 3
   %eltptr24 = getelementptr inbounds i8, ptr %data23, i64 %t10
   store i8 %t9, ptr %eltptr24
   %t43 = add i64 %t10, %t15
-  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt18_1, i64 %t43, 0
+  %arr_len25 = insertvalue %DriftArrayHeader %__array_cap_arrt18_2, i64 %t43, 0
   %arr_gen26 = insertvalue %DriftArrayHeader %arr_len25, i64 %t14, 2
   store %DriftArrayHeader %arr_gen26, ptr %out_1
   %t47 = load %DriftArrayHeader, ptr %out_1
@@ -50107,17 +50107,17 @@ __bb_array_cap_ok1:
   %t64 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt63_3 = phi i1 [ %t84, %__bb_array_copy_exit1 ], [ %t64, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt62_3 = phi %DriftArrayHeader [ %arr_len32, %__bb_array_copy_exit1 ], [ %t47, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt63_2 = phi i1 [ %t64, %__bb_array_cap_ok1 ], [ %t84, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt62_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok1 ], [ %arr_len32, %__bb_array_copy_exit1 ]
   %zero_arr44 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 1
   %zero_arr46 = insertvalue %DriftArrayHeader %zero_arr45, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
-  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt62_3, 3
+  %data47 = extractvalue %DriftArrayHeader %__array_cap_arrt62_2, 3
   %eltptr48 = getelementptr inbounds i8, ptr %data47, i64 %t54
   store i8 %t53, ptr %eltptr48
   %t87 = add i64 %t54, %t59
-  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt62_3, i64 %t87, 0
+  %arr_len49 = insertvalue %DriftArrayHeader %__array_cap_arrt62_2, i64 %t87, 0
   %arr_gen50 = insertvalue %DriftArrayHeader %arr_len49, i64 %t58, 2
   store %DriftArrayHeader %arr_gen50, ptr %out_1
   %t91 = load %DriftArrayHeader, ptr %out_1
@@ -50350,7 +50350,7 @@ __bb_entry:
   %__array_cap_arrt43_1 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_3, %__bb_if_join ]
+  %__array_cap_grewt44_2 = phi i1 [ %__array_cap_grewt44_1, %__bb_entry ], [ %__array_cap_grewt44_4, %__bb_if_join ]
   %__array_cap_arrt43_2 = phi %DriftArrayHeader [ %__array_cap_arrt43_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t8, %__bb_entry ], [ %t73, %__bb_if_join ]
   br label %__bb_loop_body
@@ -50436,17 +50436,17 @@ __bb_array_cap_ok1:
   %t93 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt92_3 = phi i1 [ %t113, %__bb_array_copy_exit1 ], [ %t93, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt91_3 = phi %DriftArrayHeader [ %arr_len25, %__bb_array_copy_exit1 ], [ %t81, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt92_2 = phi i1 [ %t93, %__bb_array_cap_ok1 ], [ %t113, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt91_2 = phi %DriftArrayHeader [ %t81, %__bb_array_cap_ok1 ], [ %arr_len25, %__bb_array_copy_exit1 ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_3, 3
+  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt91_2, 3
   %eltptr41 = getelementptr inbounds i8, ptr %data40, i64 %t83
   store i8 %t82, ptr %eltptr41
   %t116 = add i64 %t83, %t88
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_3, i64 %t116, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt91_2, i64 %t116, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t87, 2
   store %DriftArrayHeader %arr_gen43, ptr %msg__addr
   %__array_cap_grewt137_1 = add i1 0, 0
@@ -50589,7 +50589,7 @@ __bb_if_then3:
   %t229 = add i64 0, 0
   br label %__bb_loop_header4
 __bb_loop_header4:
-  %__array_cap_grewt251_3 = phi i1 [ %__array_cap_grewt251_2, %__bb_if_then3 ], [ %__array_cap_grewt251_5, %__bb_if_join4 ]
+  %__array_cap_grewt251_3 = phi i1 [ %__array_cap_grewt251_2, %__bb_if_then3 ], [ %__array_cap_grewt251_4, %__bb_if_join4 ]
   %__array_cap_arrt250_3 = phi %DriftArrayHeader [ %__array_cap_arrt250_2, %__bb_if_then3 ], [ %__arc5, %__bb_if_join4 ]
   %mi_4 = phi i64 [ %t229, %__bb_if_then3 ], [ %t280, %__bb_if_join4 ]
   br label %__bb_loop_body4
@@ -50603,8 +50603,8 @@ __bb_loop_exit4:
   %t285 = add i64 0, 0
   br label %__bb_loop_header5
 __bb_loop_header5:
-  %g_3 = phi i64 [ %g_2, %__bb_loop_exit4 ], [ %g_5, %__bb_if_join5 ]
-  %f_3 = phi i64 [ %f_2, %__bb_loop_exit4 ], [ %f_5, %__bb_if_join5 ]
+  %g_3 = phi i64 [ %g_2, %__bb_loop_exit4 ], [ %g_11, %__bb_if_join5 ]
+  %f_3 = phi i64 [ %f_2, %__bb_loop_exit4 ], [ %f_11, %__bb_if_join5 ]
   %d_4 = phi i64 [ %d0_2, %__bb_loop_exit4 ], [ %c_4, %__bb_if_join5 ]
   %c_4 = phi i64 [ %c0_2, %__bb_loop_exit4 ], [ %b_4, %__bb_if_join5 ]
   %b_4 = phi i64 [ %b0_2, %__bb_loop_exit4 ], [ %t422, %__bb_if_join5 ]
@@ -50676,8 +50676,8 @@ __bb_if_then8:
   %t339 = srem i64 %t337, %t338
   br label %__bb_if_join8
 __bb_if_join8:
-  %g_8 = phi i64 [ %t352, %__bb_if_else8 ], [ %t339, %__bb_if_then8 ]
-  %f_8 = phi i64 [ %t347, %__bb_if_else8 ], [ %t332, %__bb_if_then8 ]
+  %g_5 = phi i64 [ %t339, %__bb_if_then8 ], [ %t352, %__bb_if_else8 ]
+  %f_5 = phi i64 [ %t332, %__bb_if_then8 ], [ %t347, %__bb_if_else8 ]
   br label %__bb_if_join7
 __bb_if_then7:
   %t310 = and i64 %d_4, %b_4
@@ -50694,8 +50694,8 @@ __bb_if_then7:
   %t324 = srem i64 %t322, %t323
   br label %__bb_if_join7
 __bb_if_join7:
-  %g_9 = phi i64 [ %g_8, %__bb_if_join8 ], [ %t324, %__bb_if_then7 ]
-  %f_9 = phi i64 [ %f_8, %__bb_if_join8 ], [ %t317, %__bb_if_then7 ]
+  %g_9 = phi i64 [ %g_5, %__bb_if_join8 ], [ %t324, %__bb_if_then7 ]
+  %f_9 = phi i64 [ %f_5, %__bb_if_join8 ], [ %t317, %__bb_if_then7 ]
   br label %__bb_if_join6
 __bb_if_then6:
   %t296 = and i64 %b_4, %c_4
@@ -50706,9 +50706,9 @@ __bb_if_then6:
   %t303 = or i64 %t296, %t302
   br label %__bb_if_join6
 __bb_if_join6:
-  %g_5 = phi i64 [ %g_9, %__bb_if_join7 ], [ %i_6, %__bb_if_then6 ]
-  %f_5 = phi i64 [ %f_9, %__bb_if_join7 ], [ %t303, %__bb_if_then6 ]
-  %t359 = add i64 %a_4, %f_5
+  %g_11 = phi i64 [ %g_9, %__bb_if_join7 ], [ %i_6, %__bb_if_then6 ]
+  %f_11 = phi i64 [ %f_9, %__bb_if_join7 ], [ %t303, %__bb_if_then6 ]
+  %t359 = add i64 %a_4, %f_11
   %carh082 = insertvalue %DriftArrayHeader zeroinitializer, i64 64, 0
   %carh183 = insertvalue %DriftArrayHeader %carh082, i64 64, 1
   %carh284 = insertvalue %DriftArrayHeader %carh183, i64 0, 2
@@ -50730,14 +50730,14 @@ __bb_idx_join1:
   %t380 = load %DriftArrayHeader, ptr %m__addr
   %t382 = extractvalue %DriftArrayHeader %t380, 0
   %t383 = add i64 0, 0
-  %t384 = icmp slt i64 %g_5, %t383
-  %t385 = icmp sge i64 %g_5, %t382
+  %t384 = icmp slt i64 %g_11, %t383
+  %t385 = icmp sge i64 %g_11, %t382
   %t386 = or i1 %t384, %t385
   br i1 %t386, label %__bb_idx_err2, label %__bb_idx_ok2
 __bb_idx_ok2:
   %len88 = extractvalue %DriftArrayHeader %t380, 0
   %data89 = extractvalue %DriftArrayHeader %t380, 3
-  %eltptr90 = getelementptr i64, ptr %data89, i64 %g_5
+  %eltptr90 = getelementptr i64, ptr %data89, i64 %g_11
   %t396 = load i64, ptr %eltptr90
   br label %__bb_idx_join2
 __bb_idx_join2:
@@ -50805,7 +50805,7 @@ __bb_idx_err2:
   %t390 = insertvalue %DriftString %str0111, ptr %strptr110, 1
   %t391 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t390)
   call void @drift_string_release(%DriftString %t390)
-  %t392 = call %DriftDiagnosticValue @drift_dv_int(i64 %g_5)
+  %t392 = call %DriftDiagnosticValue @drift_dv_int(i64 %g_11)
   %strptr112 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1180, i32 0, i32 2, i32 0
   %str0113 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t393 = insertvalue %DriftString %str0113, ptr %strptr112, 1
@@ -50922,17 +50922,17 @@ __bb_array_cap_ok4:
   %t252 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt251_5 = phi i1 [ %t252, %__bb_array_cap_ok4 ], [ %t272, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt250_5 = phi %DriftArrayHeader [ %t234, %__bb_array_cap_ok4 ], [ %arr_len133, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt251_4 = phi i1 [ %t252, %__bb_array_cap_ok4 ], [ %t272, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt250_4 = phi %DriftArrayHeader [ %t234, %__bb_array_cap_ok4 ], [ %arr_len133, %__bb_array_copy_exit4 ]
   %zero_arr145 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr146 = insertvalue %DriftArrayHeader %zero_arr145, i64 0, 1
   %zero_arr147 = insertvalue %DriftArrayHeader %zero_arr146, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr147, ptr null, 3
-  %data148 = extractvalue %DriftArrayHeader %__array_cap_arrt250_5, 3
+  %data148 = extractvalue %DriftArrayHeader %__array_cap_arrt250_4, 3
   %eltptr149 = getelementptr inbounds i64, ptr %data148, i64 %t242
   store i64 %t241, ptr %eltptr149
   %t275 = add i64 %t242, %t247
-  %arr_len150 = insertvalue %DriftArrayHeader %__array_cap_arrt250_5, i64 %t275, 0
+  %arr_len150 = insertvalue %DriftArrayHeader %__array_cap_arrt250_4, i64 %t275, 0
   %arr_gen151 = insertvalue %DriftArrayHeader %arr_len150, i64 %t246, 2
   store %DriftArrayHeader %arr_gen151, ptr %m__addr
   %t279 = add i64 0, 1
@@ -51204,17 +51204,17 @@ __bb_array_cap_ok:
   %t45 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt44_3 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
-  %__array_cap_arrt43_3 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len210, %__bb_array_copy_exit ]
+  %__array_cap_grewt44_4 = phi i1 [ %t45, %__bb_array_cap_ok ], [ %t65, %__bb_array_copy_exit ]
+  %__array_cap_arrt43_4 = phi %DriftArrayHeader [ %t15, %__bb_array_cap_ok ], [ %arr_len210, %__bb_array_copy_exit ]
   %zero_arr222 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr223 = insertvalue %DriftArrayHeader %zero_arr222, i64 0, 1
   %zero_arr224 = insertvalue %DriftArrayHeader %zero_arr223, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr224, ptr null, 3
-  %data225 = extractvalue %DriftArrayHeader %__array_cap_arrt43_3, 3
+  %data225 = extractvalue %DriftArrayHeader %__array_cap_arrt43_4, 3
   %eltptr226 = getelementptr inbounds i8, ptr %data225, i64 %t35
   store i8 %t32, ptr %eltptr226
   %t68 = add i64 %t35, %t40
-  %arr_len227 = insertvalue %DriftArrayHeader %__array_cap_arrt43_3, i64 %t68, 0
+  %arr_len227 = insertvalue %DriftArrayHeader %__array_cap_arrt43_4, i64 %t68, 0
   %arr_gen228 = insertvalue %DriftArrayHeader %arr_len227, i64 %t39, 2
   store %DriftArrayHeader %arr_gen228, ptr %msg__addr
   %t72 = add i64 0, 1
@@ -51428,7 +51428,7 @@ __bb_match_arm_0:
   %t18 = call %DriftDiagnosticValue @drift_dv_int(i64 %t17)
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_7 = phi %DriftDiagnosticValue [ %t18, %__bb_match_arm_0 ], [ %t20, %__bb_match_arm_1 ], [ %t22, %__bb_match_arm_2 ], [ %t24, %__bb_match_arm_3 ], [ %t28, %__bb_match_arm_5 ], [ %t26, %__bb_match_arm_4 ]
+  %__match_expr_tmpt3_7 = phi %DriftDiagnosticValue [ %t22, %__bb_match_arm_2 ], [ %t24, %__bb_match_arm_3 ], [ %t28, %__bb_match_arm_5 ], [ %t26, %__bb_match_arm_4 ], [ %t20, %__bb_match_arm_1 ], [ %t18, %__bb_match_arm_0 ]
   ret %DriftDiagnosticValue %__match_expr_tmpt3_7
 }
 define double @"std.float::nan__impl"() {
@@ -51488,8 +51488,8 @@ __bb_logic_short:
   %t8 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %strptr9 = getelementptr inbounds { i64, i64, [4 x i8] }, ptr @.str1207, i32 0, i32 2, i32 0
   %str010 = insertvalue %DriftString zeroinitializer, i64 3, 0
@@ -51501,8 +51501,8 @@ __bb_logic_short1:
   %t14 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt13_3 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt13_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt13_1 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt13_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %strptr11 = getelementptr inbounds { i64, i64, [5 x i8] }, ptr @.str1208, i32 0, i32 2, i32 0
   %str012 = insertvalue %DriftString zeroinitializer, i64 4, 0
@@ -51514,7 +51514,7 @@ __bb_logic_short2:
   %t20 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt19_1 = phi i1 [ %t20, %__bb_logic_short2 ], [ %t23, %__bb_logic_rhs2 ]
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs2 ], [ %t20, %__bb_logic_short2 ]
   br i1 %__logic_tmpt19_1, label %__bb_logic_short3, label %__bb_logic_rhs3
 __bb_logic_rhs3:
   %strptr13 = getelementptr inbounds { i64, i64, [4 x i8] }, ptr @.str1209, i32 0, i32 2, i32 0
@@ -51527,8 +51527,8 @@ __bb_logic_short3:
   %t26 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt25_2 = phi i1 [ %t29, %__bb_logic_rhs3 ], [ %t26, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt25_2, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt25_1 = phi i1 [ %t26, %__bb_logic_short3 ], [ %t29, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt25_1, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %strptr15 = getelementptr inbounds { i64, i64, [5 x i8] }, ptr @.str1210, i32 0, i32 2, i32 0
   %str016 = insertvalue %DriftString zeroinitializer, i64 4, 0
@@ -51540,7 +51540,7 @@ __bb_logic_short4:
   %t32 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt31_1 = phi i1 [ %t32, %__bb_logic_short4 ], [ %t35, %__bb_logic_rhs4 ]
+  %__logic_tmpt31_1 = phi i1 [ %t35, %__bb_logic_rhs4 ], [ %t32, %__bb_logic_short4 ]
   %zero_str17 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc5 = insertvalue %DriftString %zero_str17, ptr null, 1
   call void @drift_string_release(%DriftString %t3)
@@ -51574,8 +51574,8 @@ __bb_logic_short:
   %t8 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %strptr9 = getelementptr inbounds { i64, i64, [4 x i8] }, ptr @.str1214, i32 0, i32 2, i32 0
   %str010 = insertvalue %DriftString zeroinitializer, i64 3, 0
@@ -51587,8 +51587,8 @@ __bb_logic_short1:
   %t14 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt13_3 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt13_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt13_1 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt13_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %strptr11 = getelementptr inbounds { i64, i64, [5 x i8] }, ptr @.str1215, i32 0, i32 2, i32 0
   %str012 = insertvalue %DriftString zeroinitializer, i64 4, 0
@@ -51600,7 +51600,7 @@ __bb_logic_short2:
   %t20 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt19_1 = phi i1 [ %t20, %__bb_logic_short2 ], [ %t23, %__bb_logic_rhs2 ]
+  %__logic_tmpt19_1 = phi i1 [ %t23, %__bb_logic_rhs2 ], [ %t20, %__bb_logic_short2 ]
   br i1 %__logic_tmpt19_1, label %__bb_logic_short3, label %__bb_logic_rhs3
 __bb_logic_rhs3:
   %strptr13 = getelementptr inbounds { i64, i64, [4 x i8] }, ptr @.str1216, i32 0, i32 2, i32 0
@@ -51613,8 +51613,8 @@ __bb_logic_short3:
   %t26 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt25_2 = phi i1 [ %t29, %__bb_logic_rhs3 ], [ %t26, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt25_2, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt25_1 = phi i1 [ %t26, %__bb_logic_short3 ], [ %t29, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt25_1, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %strptr15 = getelementptr inbounds { i64, i64, [5 x i8] }, ptr @.str1217, i32 0, i32 2, i32 0
   %str016 = insertvalue %DriftString zeroinitializer, i64 4, 0
@@ -51626,7 +51626,7 @@ __bb_logic_short4:
   %t32 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt31_1 = phi i1 [ %t32, %__bb_logic_short4 ], [ %t35, %__bb_logic_rhs4 ]
+  %__logic_tmpt31_1 = phi i1 [ %t35, %__bb_logic_rhs4 ], [ %t32, %__bb_logic_short4 ]
   br i1 %__logic_tmpt31_1, label %__bb_logic_short5, label %__bb_logic_rhs5
 __bb_logic_rhs5:
   %strptr17 = getelementptr inbounds { i64, i64, [9 x i8] }, ptr @.str1218, i32 0, i32 2, i32 0
@@ -51639,8 +51639,8 @@ __bb_logic_short5:
   %t38 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt37_1 = phi i1 [ %t38, %__bb_logic_short5 ], [ %t41, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt37_1, label %__bb_logic_short6, label %__bb_logic_rhs6
+  %__logic_tmpt37_2 = phi i1 [ %t41, %__bb_logic_rhs5 ], [ %t38, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt37_2, label %__bb_logic_short6, label %__bb_logic_rhs6
 __bb_logic_rhs6:
   %strptr19 = getelementptr inbounds { i64, i64, [10 x i8] }, ptr @.str1219, i32 0, i32 2, i32 0
   %str020 = insertvalue %DriftString zeroinitializer, i64 9, 0
@@ -51652,8 +51652,8 @@ __bb_logic_short6:
   %t44 = add i1 0, 1
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt43_3 = phi i1 [ %t44, %__bb_logic_short6 ], [ %t47, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt43_3, label %__bb_logic_short7, label %__bb_logic_rhs7
+  %__logic_tmpt43_2 = phi i1 [ %t44, %__bb_logic_short6 ], [ %t47, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt43_2, label %__bb_logic_short7, label %__bb_logic_rhs7
 __bb_logic_rhs7:
   %strptr21 = getelementptr inbounds { i64, i64, [9 x i8] }, ptr @.str1220, i32 0, i32 2, i32 0
   %str022 = insertvalue %DriftString zeroinitializer, i64 8, 0
@@ -51678,8 +51678,8 @@ __bb_logic_short8:
   %t56 = add i1 0, 1
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt55_1 = phi i1 [ %t56, %__bb_logic_short8 ], [ %t59, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt55_1, label %__bb_logic_short9, label %__bb_logic_rhs9
+  %__logic_tmpt55_2 = phi i1 [ %t56, %__bb_logic_short8 ], [ %t59, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt55_2, label %__bb_logic_short9, label %__bb_logic_rhs9
 __bb_logic_rhs9:
   %strptr25 = getelementptr inbounds { i64, i64, [9 x i8] }, ptr @.str1222, i32 0, i32 2, i32 0
   %str026 = insertvalue %DriftString zeroinitializer, i64 8, 0
@@ -51691,8 +51691,8 @@ __bb_logic_short9:
   %t62 = add i1 0, 1
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt61_2 = phi i1 [ %t65, %__bb_logic_rhs9 ], [ %t62, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt61_2, label %__bb_logic_short10, label %__bb_logic_rhs10
+  %__logic_tmpt61_1 = phi i1 [ %t65, %__bb_logic_rhs9 ], [ %t62, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt61_1, label %__bb_logic_short10, label %__bb_logic_rhs10
 __bb_logic_rhs10:
   %strptr27 = getelementptr inbounds { i64, i64, [10 x i8] }, ptr @.str1223, i32 0, i32 2, i32 0
   %str028 = insertvalue %DriftString zeroinitializer, i64 9, 0
@@ -51704,11 +51704,11 @@ __bb_logic_short10:
   %t68 = add i1 0, 1
   br label %__bb_logic_join10
 __bb_logic_join10:
-  %__logic_tmpt67_2 = phi i1 [ %t71, %__bb_logic_rhs10 ], [ %t68, %__bb_logic_short10 ]
+  %__logic_tmpt67_1 = phi i1 [ %t71, %__bb_logic_rhs10 ], [ %t68, %__bb_logic_short10 ]
   %zero_str29 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc5 = insertvalue %DriftString %zero_str29, ptr null, 1
   call void @drift_string_release(%DriftString %t3)
-  ret i1 %__logic_tmpt67_2
+  ret i1 %__logic_tmpt67_1
 }
 define i1 @"std.float::is_finite__impl"(double %v_1) {
 __bb_entry:
@@ -51726,8 +51726,8 @@ __bb_logic_rhs:
   %t9 = xor i1 %t8, true
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define %DriftString @"std.format::format_bool__impl"(i1 %v) {
 __bb_entry:
@@ -51975,7 +51975,7 @@ __bb_match_arm_0:
   %t9 = load i64, ptr %fieldptr6
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi i64 [ %t9, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi i64 [ %t12, %__bb_match_arm_1 ], [ %t9, %__bb_match_arm_0 ]
   ret i64 %__match_expr_tmpt3_3
 }
 define i1 @"std.io::io_is_would_block__impl"(i64 %code_1) {
@@ -52233,17 +52233,17 @@ __bb_if_then2:
   %t22 = extractvalue %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 %t21, 2
   br label %__bb_loop_header
 __bb_loop_header:
-  %j_4 = phi i64 [ %t22, %__bb_if_then2 ], [ %t33, %__bb_if_join3 ]
+  %j_3 = phi i64 [ %t22, %__bb_if_then2 ], [ %t33, %__bb_if_join3 ]
   br label %__bb_loop_body
 __bb_loop_body:
-  %t25 = icmp slt i64 %j_4, %target_4
+  %t25 = icmp slt i64 %j_3, %target_4
   br i1 %t25, label %__bb_if_then3, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
   br label %__bb_if_join2
 __bb_if_join2:
-  %j_2 = phi i64 [ %j_1, %__bb_if_join1 ], [ %j_4, %__bb_loop_exit ]
+  %j_5 = phi i64 [ %j_1, %__bb_if_join1 ], [ %j_3, %__bb_loop_exit ]
   %t36 = load ptr, ptr %self__addr
   %t37 = getelementptr inbounds %Struct_std_2Eio_Buffer_e76b5c24b140f2f4, ptr %t36, i32 0, i32 2
   store i64 %target_4, ptr %t37
@@ -52258,11 +52258,11 @@ __bb_if_then3:
   %strptr6 = getelementptr inbounds { i64, i64, [18 x i8] }, ptr @.str609, i32 0, i32 2, i32 0
   %str07 = insertvalue %DriftString zeroinitializer, i64 17, 0
   %str8 = insertvalue %DriftString %str07, ptr %strptr6, 1
-  call void @drift_bounds_check(%DriftString %str8, i64 %j_4, i64 %rawcap5)
-  %rawgep9 = getelementptr i8, ptr %rawptr4, i64 %j_4
+  call void @drift_bounds_check(%DriftString %str8, i64 %j_3, i64 %rawcap5)
+  %rawgep9 = getelementptr i8, ptr %rawptr4, i64 %j_3
   store i8 %t30, ptr %rawgep9
   %t32 = add i64 0, 1
-  %t33 = add i64 %j_4, %t32
+  %t33 = add i64 %j_3, %t32
   br label %__bb_if_join3
 __bb_if_join3:
   br label %__bb_loop_header
@@ -52589,8 +52589,8 @@ __bb_logic_rhs:
   %t12 = icmp ne i8 %field84, 0
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_3 = phi i1 [ %t9, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_3, label %__bb_if_then, label %__bb_if_else
+  %__logic_tmpt8_2 = phi i1 [ %t9, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_2, label %__bb_if_then, label %__bb_if_else
 __bb_if_else:
   %t16 = load %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8, ptr %opts_1
   %field85 = extractvalue %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8 %t16, 1
@@ -52619,32 +52619,32 @@ __bb_if_then2:
   %t25 = add i64 %flags_2, %t24
   br label %__bb_if_join2
 __bb_if_join2:
-  %flags_3 = phi i64 [ %flags_2, %__bb_if_join ], [ %t25, %__bb_if_then2 ]
+  %flags_4 = phi i64 [ %flags_2, %__bb_if_join ], [ %t25, %__bb_if_then2 ]
   %t27 = load %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8, ptr %opts_1
   %field87 = extractvalue %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8 %t27, 3
   %t28 = icmp ne i8 %field87, 0
   br i1 %t28, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_then3:
   %t30 = add i64 0, 512
-  %t31 = add i64 %flags_3, %t30
+  %t31 = add i64 %flags_4, %t30
   br label %__bb_if_join3
 __bb_if_join3:
-  %flags_4 = phi i64 [ %flags_3, %__bb_if_join2 ], [ %t31, %__bb_if_then3 ]
+  %flags_6 = phi i64 [ %flags_4, %__bb_if_join2 ], [ %t31, %__bb_if_then3 ]
   %t33 = load %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8, ptr %opts_1
   %field88 = extractvalue %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8 %t33, 4
   %t34 = icmp ne i8 %field88, 0
   br i1 %t34, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_then4:
   %t36 = add i64 0, 1024
-  %t37 = add i64 %flags_4, %t36
+  %t37 = add i64 %flags_6, %t36
   br label %__bb_if_join4
 __bb_if_join4:
-  %flags_6 = phi i64 [ %flags_4, %__bb_if_join3 ], [ %t37, %__bb_if_then4 ]
+  %flags_8 = phi i64 [ %flags_6, %__bb_if_join3 ], [ %t37, %__bb_if_then4 ]
   br label %__bb_loop_header
 __bb_loop_header:
   br label %__bb_loop_body
 __bb_loop_body:
-  %t40 = add i64 %flags_6, 0
+  %t40 = add i64 %flags_8, 0
   %t42 = load %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8, ptr %opts_1
   %t43 = extractvalue %Struct_std_2Eio_FileOpenOptions_4fb9fcd199df79d8 %t42, 5
   %__arc9 = call %DriftString @drift_string_retain(%DriftString %path_1)
@@ -53910,7 +53910,7 @@ __bb_match_arm_0:
   %t12 = call %DriftDiagnosticValue @drift_dv_int(i64 %t11)
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi %DriftDiagnosticValue [ %t12, %__bb_match_arm_0 ], [ %t15, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi %DriftDiagnosticValue [ %t15, %__bb_match_arm_1 ], [ %t12, %__bb_match_arm_0 ]
   ret %DriftDiagnosticValue %__match_expr_tmpt3_3
 }
 define %FnResult_Void_Error @"std.io::IoError::std.core.Throw::throw_self"(%Variant_std_2Eio_IoError_7415ea6adc7a82aa %self) {
@@ -55166,10 +55166,10 @@ __bb_if_join:
   %__array_cap_arrt39_1 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt40_2 = phi i1 [ %__array_cap_grewt40_1, %__bb_if_join ], [ %__array_cap_grewt40_3, %__bb_if_join1 ]
-  %__array_cap_arrt39_2 = phi %DriftArrayHeader [ %__array_cap_arrt39_1, %__bb_if_join ], [ %__array_cap_arrt39_3, %__bb_if_join1 ]
+  %__array_cap_grewt40_2 = phi i1 [ %__array_cap_grewt40_1, %__bb_if_join ], [ %__array_cap_grewt40_6, %__bb_if_join1 ]
+  %__array_cap_arrt39_2 = phi %DriftArrayHeader [ %__array_cap_arrt39_1, %__bb_if_join ], [ %__array_cap_arrt39_7, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t14, %__bb_if_join ], [ %t72, %__bb_if_join1 ]
-  %start_2 = phi i64 [ %t13, %__bb_if_join ], [ %start_3, %__bb_if_join1 ]
+  %start_2 = phi i64 [ %t13, %__bb_if_join ], [ %start_4, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t17 = icmp slt i64 %i_2, %t8
@@ -55252,17 +55252,17 @@ __bb_array_cap_ok1:
   %t90 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt89_3 = phi i1 [ %t110, %__bb_array_copy_exit1 ], [ %t90, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt88_3 = phi %DriftArrayHeader [ %arr_len25, %__bb_array_copy_exit1 ], [ %t74, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt89_2 = phi i1 [ %t90, %__bb_array_cap_ok1 ], [ %t110, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt88_2 = phi %DriftArrayHeader [ %t74, %__bb_array_cap_ok1 ], [ %arr_len25, %__bb_array_copy_exit1 ]
   %zero_arr39 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr40 = insertvalue %DriftArrayHeader %zero_arr39, i64 0, 1
   %zero_arr41 = insertvalue %DriftArrayHeader %zero_arr40, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr41, ptr null, 3
-  %data42 = extractvalue %DriftArrayHeader %__array_cap_arrt88_3, 3
+  %data42 = extractvalue %DriftArrayHeader %__array_cap_arrt88_2, 3
   %eltptr43 = getelementptr inbounds %DriftString, ptr %data42, i64 %t80
   store %DriftString %t79, ptr %eltptr43
   %t113 = add i64 %t80, %t85
-  %arr_len44 = insertvalue %DriftArrayHeader %__array_cap_arrt88_3, i64 %t113, 0
+  %arr_len44 = insertvalue %DriftArrayHeader %__array_cap_arrt88_2, i64 %t113, 0
   %arr_gen45 = insertvalue %DriftArrayHeader %arr_len44, i64 %t84, 2
   store %DriftArrayHeader %arr_gen45, ptr %segments__addr
   %t116 = load %DriftArrayHeader, ptr %segments__addr
@@ -55378,9 +55378,9 @@ __bb_array_cap_join2:
   %t69 = add i64 %i_2, %t68
   br label %__bb_if_join2
 __bb_if_join2:
-  %__array_cap_grewt40_3 = phi i1 [ %__array_cap_grewt40_2, %__bb_if_then1 ], [ %__array_cap_grewt40_4, %__bb_array_cap_join2 ]
-  %__array_cap_arrt39_3 = phi %DriftArrayHeader [ %__array_cap_arrt39_2, %__bb_if_then1 ], [ %__arc1, %__bb_array_cap_join2 ]
-  %start_3 = phi i64 [ %start_2, %__bb_if_then1 ], [ %t69, %__bb_array_cap_join2 ]
+  %__array_cap_grewt40_6 = phi i1 [ %__array_cap_grewt40_2, %__bb_if_then1 ], [ %__array_cap_grewt40_4, %__bb_array_cap_join2 ]
+  %__array_cap_arrt39_7 = phi %DriftArrayHeader [ %__array_cap_arrt39_2, %__bb_if_then1 ], [ %__arc1, %__bb_array_cap_join2 ]
+  %start_4 = phi i64 [ %start_2, %__bb_if_then1 ], [ %t69, %__bb_array_cap_join2 ]
   %t71 = add i64 0, 1
   %t72 = add i64 %i_2, %t71
   br label %__bb_if_join1
@@ -55481,7 +55481,7 @@ __bb_if_join1:
   br label %__bb_loop_header
 __bb_loop_header:
   %cl_2 = phi i64 [ %t15, %__bb_if_join1 ], [ %cl_4, %__bb_if_join2 ]
-  %ln_2 = phi i64 [ %t14, %__bb_if_join1 ], [ %ln_3, %__bb_if_join2 ]
+  %ln_2 = phi i64 [ %t14, %__bb_if_join1 ], [ %ln_4, %__bb_if_join2 ]
   %i_2 = phi i64 [ %t13, %__bb_if_join1 ], [ %t35, %__bb_if_join2 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -55518,8 +55518,8 @@ __bb_if_then3:
   %t29 = add i64 0, 1
   br label %__bb_if_join3
 __bb_if_join3:
-  %cl_4 = phi i64 [ %t32, %__bb_if_else1 ], [ %t29, %__bb_if_then3 ]
-  %ln_3 = phi i64 [ %ln_2, %__bb_if_else1 ], [ %t28, %__bb_if_then3 ]
+  %cl_4 = phi i64 [ %t29, %__bb_if_then3 ], [ %t32, %__bb_if_else1 ]
+  %ln_4 = phi i64 [ %t28, %__bb_if_then3 ], [ %ln_2, %__bb_if_else1 ]
   %t34 = add i64 0, 1
   %t35 = add i64 %i_2, %t34
   br label %__bb_if_join2
@@ -55576,8 +55576,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t14 = add i8 0, 10
   %t15 = icmp eq i8 %b_1, %t14
@@ -55586,8 +55586,8 @@ __bb_logic_short1:
   %t12 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt11_3 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt11_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt11_1 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt11_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t20 = add i8 0, 13
   %t21 = icmp eq i8 %b_1, %t20
@@ -55596,7 +55596,7 @@ __bb_logic_short2:
   %t18 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt17_1 = phi i1 [ %t18, %__bb_logic_short2 ], [ %t21, %__bb_logic_rhs2 ]
+  %__logic_tmpt17_1 = phi i1 [ %t21, %__bb_logic_rhs2 ], [ %t18, %__bb_logic_short2 ]
   ret i1 %__logic_tmpt17_1
 }
 define i1 @"std.json::_is_digit"(i8 %b_1) {
@@ -55615,8 +55615,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define void @"std.json::_skip_ws"(ptr %text_1, ptr %idx) {
 __bb_entry:
@@ -55936,8 +55936,8 @@ __bb_logic_short:
   %t9 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_3 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt8_2 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t24 = load ptr, ptr %idx__addr
   %t25 = load i64, ptr %t24
@@ -55953,7 +55953,7 @@ __bb_if_join:
   call void @drift_string_release(%DriftString %__arc1)
   br label %__bb_loop_header
 __bb_loop_header:
-  %out_4 = phi %DriftString [ %t30, %__bb_if_join ], [ %t138, %__bb_if_join1 ], [ %out_31, %__bb_if_join5 ]
+  %out_4 = phi %DriftString [ %t30, %__bb_if_join ], [ %out_7, %__bb_if_join5 ], [ %t138, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t31 = load ptr, ptr %idx__addr
@@ -56125,7 +56125,7 @@ __bb_if_then10:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join10
 __bb_if_join10:
-  %out_20 = phi %DriftString [ %t110, %__bb_if_then10 ], [ %out_17, %__bb_if_join11 ]
+  %out_23 = phi %DriftString [ %out_17, %__bb_if_join11 ], [ %t110, %__bb_if_then10 ]
   br label %__bb_if_join9
 __bb_if_then9:
   %strptr49 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1355, i32 0, i32 2, i32 0
@@ -56138,7 +56138,7 @@ __bb_if_then9:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join9
 __bb_if_join9:
-  %out_23 = phi %DriftString [ %out_20, %__bb_if_join10 ], [ %t104, %__bb_if_then9 ]
+  %out_16 = phi %DriftString [ %t104, %__bb_if_then9 ], [ %out_23, %__bb_if_join10 ]
   br label %__bb_if_join8
 __bb_if_then8:
   %strptr52 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1356, i32 0, i32 2, i32 0
@@ -56151,7 +56151,7 @@ __bb_if_then8:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join8
 __bb_if_join8:
-  %out_26 = phi %DriftString [ %out_23, %__bb_if_join9 ], [ %t98, %__bb_if_then8 ]
+  %out_13 = phi %DriftString [ %out_16, %__bb_if_join9 ], [ %t98, %__bb_if_then8 ]
   br label %__bb_if_join7
 __bb_if_then7:
   %strptr55 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1357, i32 0, i32 2, i32 0
@@ -56164,7 +56164,7 @@ __bb_if_then7:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join7
 __bb_if_join7:
-  %out_11 = phi %DriftString [ %out_26, %__bb_if_join8 ], [ %t92, %__bb_if_then7 ]
+  %out_10 = phi %DriftString [ %t92, %__bb_if_then7 ], [ %out_13, %__bb_if_join8 ]
   br label %__bb_if_join6
 __bb_if_then6:
   %strptr58 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1358, i32 0, i32 2, i32 0
@@ -56177,7 +56177,7 @@ __bb_if_then6:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join6
 __bb_if_join6:
-  %out_10 = phi %DriftString [ %out_11, %__bb_if_join7 ], [ %t86, %__bb_if_then6 ]
+  %out_28 = phi %DriftString [ %t86, %__bb_if_then6 ], [ %out_10, %__bb_if_join7 ]
   br label %__bb_if_join5
 __bb_if_then5:
   %strptr61 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1359, i32 0, i32 2, i32 0
@@ -56190,7 +56190,7 @@ __bb_if_then5:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join5
 __bb_if_join5:
-  %out_31 = phi %DriftString [ %t80, %__bb_if_then5 ], [ %out_10, %__bb_if_join6 ]
+  %out_7 = phi %DriftString [ %out_28, %__bb_if_join6 ], [ %t80, %__bb_if_then5 ]
   %t129 = load ptr, ptr %idx__addr
   %t130 = load i64, ptr %t129
   %t131 = add i64 0, 1
@@ -56292,8 +56292,8 @@ __bb_logic_rhs:
   %t18 = icmp eq i8 %t16, %t17
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt10_3 = phi i1 [ %t11, %__bb_logic_short ], [ %t18, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt10_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt10_2 = phi i1 [ %t11, %__bb_logic_short ], [ %t18, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt10_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t20 = load ptr, ptr %idx__addr
   %t21 = load i64, ptr %t20
@@ -56326,8 +56326,8 @@ __bb_logic_short1:
   %t31 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt30_3 = phi i1 [ %t38, %__bb_logic_rhs1 ], [ %t31, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt30_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt30_1 = phi i1 [ %t38, %__bb_logic_rhs1 ], [ %t31, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt30_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %__logic_tmpt50_1 = add i1 0, 0
   br label %__bb_loop_header
@@ -56357,7 +56357,7 @@ __bb_logic_rhs2:
   %t57 = call i1 @"std.json::_is_digit"(i8 %t56)
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt50_3 = phi i1 [ %t51, %__bb_logic_short2 ], [ %t57, %__bb_logic_rhs2 ]
+  %__logic_tmpt50_3 = phi i1 [ %t57, %__bb_logic_rhs2 ], [ %t51, %__bb_logic_short2 ]
   br i1 %__logic_tmpt50_3, label %__bb_if_then2, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
@@ -56385,10 +56385,10 @@ __bb_logic_rhs3:
   %t77 = icmp eq i8 %t75, %t76
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt69_2 = phi i1 [ %t77, %__bb_logic_rhs3 ], [ %t70, %__bb_logic_short3 ]
+  %__logic_tmpt69_1 = phi i1 [ %t70, %__bb_logic_short3 ], [ %t77, %__bb_logic_rhs3 ]
   %__logic_tmpt109_1 = add i1 0, 0
   %__logic_tmpt89_1 = add i1 0, 0
-  br i1 %__logic_tmpt69_2, label %__bb_if_then3, label %__bb_if_join3
+  br i1 %__logic_tmpt69_1, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_then3:
   %t79 = load ptr, ptr %idx__addr
   %t80 = load i64, ptr %t79
@@ -56419,12 +56419,12 @@ __bb_logic_short4:
   %t90 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt89_3 = phi i1 [ %t90, %__bb_logic_short4 ], [ %t97, %__bb_logic_rhs4 ]
-  br i1 %__logic_tmpt89_3, label %__bb_if_then4, label %__bb_if_join4
+  %__logic_tmpt89_2 = phi i1 [ %t97, %__bb_logic_rhs4 ], [ %t90, %__bb_logic_short4 ]
+  br i1 %__logic_tmpt89_2, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_join4:
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__logic_tmpt109_3 = phi i1 [ %__logic_tmpt109_1, %__bb_if_join4 ], [ %__logic_tmpt109_4, %__bb_if_join5 ]
+  %__logic_tmpt109_2 = phi i1 [ %__logic_tmpt109_1, %__bb_if_join4 ], [ %__logic_tmpt109_4, %__bb_if_join5 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t105 = load ptr, ptr %idx__addr
@@ -56449,15 +56449,15 @@ __bb_logic_rhs5:
   %t116 = call i1 @"std.json::_is_digit"(i8 %t115)
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt109_4 = phi i1 [ %t110, %__bb_logic_short5 ], [ %t116, %__bb_logic_rhs5 ]
+  %__logic_tmpt109_4 = phi i1 [ %t116, %__bb_logic_rhs5 ], [ %t110, %__bb_logic_short5 ]
   br i1 %__logic_tmpt109_4, label %__bb_if_then5, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit1
 __bb_loop_exit1:
   br label %__bb_if_join3
 __bb_if_join3:
-  %__logic_tmpt109_2 = phi i1 [ %__logic_tmpt109_1, %__bb_logic_join3 ], [ %__logic_tmpt109_4, %__bb_loop_exit1 ]
-  %__logic_tmpt89_2 = phi i1 [ %__logic_tmpt89_1, %__bb_logic_join3 ], [ %__logic_tmpt89_3, %__bb_loop_exit1 ]
+  %__logic_tmpt109_6 = phi i1 [ %__logic_tmpt109_1, %__bb_logic_join3 ], [ %__logic_tmpt109_4, %__bb_loop_exit1 ]
+  %__logic_tmpt89_5 = phi i1 [ %__logic_tmpt89_1, %__bb_logic_join3 ], [ %__logic_tmpt89_2, %__bb_loop_exit1 ]
   %t124 = load ptr, ptr %idx__addr
   %t125 = load i64, ptr %t124
   %t127 = icmp slt i64 %t125, %t3
@@ -56489,8 +56489,8 @@ __bb_logic_short6:
   %t137 = add i1 0, 1
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt136_5 = phi i1 [ %t137, %__bb_logic_short6 ], [ %t140, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt136_5, label %__bb_if_then7, label %__bb_if_join7
+  %__logic_tmpt136_3 = phi i1 [ %t137, %__bb_logic_short6 ], [ %t140, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt136_3, label %__bb_if_then7, label %__bb_if_join7
 __bb_if_then7:
   %t142 = load ptr, ptr %idx__addr
   %t143 = load i64, ptr %t142
@@ -56525,8 +56525,8 @@ __bb_logic_short7:
   %t161 = add i1 0, 1
   br label %__bb_logic_join7
 __bb_logic_join7:
-  %__logic_tmpt160_6 = phi i1 [ %t164, %__bb_logic_rhs7 ], [ %t161, %__bb_logic_short7 ]
-  br i1 %__logic_tmpt160_6, label %__bb_if_then9, label %__bb_if_join9
+  %__logic_tmpt160_5 = phi i1 [ %t164, %__bb_logic_rhs7 ], [ %t161, %__bb_logic_short7 ]
+  br i1 %__logic_tmpt160_5, label %__bb_if_then9, label %__bb_if_join9
 __bb_if_then9:
   %t166 = load ptr, ptr %idx__addr
   %t167 = load i64, ptr %t166
@@ -56538,7 +56538,7 @@ __bb_if_then9:
 __bb_if_join9:
   br label %__bb_if_join8
 __bb_if_join8:
-  %__logic_tmpt160_7 = phi i1 [ %__logic_tmpt160_1, %__bb_if_then7 ], [ %__logic_tmpt160_6, %__bb_if_join9 ]
+  %__logic_tmpt160_2 = phi i1 [ %__logic_tmpt160_1, %__bb_if_then7 ], [ %__logic_tmpt160_5, %__bb_if_join9 ]
   %t172 = load ptr, ptr %idx__addr
   %t173 = load i64, ptr %t172
   %t175 = icmp sge i64 %t173, %t3
@@ -56562,12 +56562,12 @@ __bb_logic_short8:
   %t177 = add i1 0, 1
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt176_4 = phi i1 [ %t177, %__bb_logic_short8 ], [ %t184, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt176_4, label %__bb_if_then10, label %__bb_if_join10
+  %__logic_tmpt176_3 = phi i1 [ %t177, %__bb_logic_short8 ], [ %t184, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt176_3, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %__logic_tmpt196_4 = phi i1 [ %__logic_tmpt196_1, %__bb_if_join10 ], [ %__logic_tmpt196_6, %__bb_if_join11 ]
+  %__logic_tmpt196_2 = phi i1 [ %__logic_tmpt196_1, %__bb_if_join10 ], [ %__logic_tmpt196_3, %__bb_if_join11 ]
   br label %__bb_loop_body2
 __bb_loop_body2:
   %t192 = load ptr, ptr %idx__addr
@@ -56592,22 +56592,22 @@ __bb_logic_rhs9:
   %t203 = call i1 @"std.json::_is_digit"(i8 %t202)
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt196_6 = phi i1 [ %t203, %__bb_logic_rhs9 ], [ %t197, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt196_6, label %__bb_if_then11, label %__bb_if_else2
+  %__logic_tmpt196_3 = phi i1 [ %t203, %__bb_logic_rhs9 ], [ %t197, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt196_3, label %__bb_if_then11, label %__bb_if_else2
 __bb_if_else2:
   br label %__bb_loop_exit2
 __bb_loop_exit2:
   br label %__bb_if_join7
 __bb_if_join7:
-  %__logic_tmpt196_3 = phi i1 [ %__logic_tmpt196_1, %__bb_logic_join6 ], [ %__logic_tmpt196_6, %__bb_loop_exit2 ]
-  %__logic_tmpt176_3 = phi i1 [ %__logic_tmpt176_1, %__bb_logic_join6 ], [ %__logic_tmpt176_4, %__bb_loop_exit2 ]
-  %__logic_tmpt160_3 = phi i1 [ %__logic_tmpt160_1, %__bb_logic_join6 ], [ %__logic_tmpt160_7, %__bb_loop_exit2 ]
+  %__logic_tmpt196_6 = phi i1 [ %__logic_tmpt196_1, %__bb_logic_join6 ], [ %__logic_tmpt196_3, %__bb_loop_exit2 ]
+  %__logic_tmpt176_5 = phi i1 [ %__logic_tmpt176_1, %__bb_logic_join6 ], [ %__logic_tmpt176_3, %__bb_loop_exit2 ]
+  %__logic_tmpt160_6 = phi i1 [ %__logic_tmpt160_1, %__bb_logic_join6 ], [ %__logic_tmpt160_2, %__bb_loop_exit2 ]
   br label %__bb_if_join6
 __bb_if_join6:
-  %__logic_tmpt196_2 = phi i1 [ %__logic_tmpt196_1, %__bb_if_join3 ], [ %__logic_tmpt196_3, %__bb_if_join7 ]
-  %__logic_tmpt176_2 = phi i1 [ %__logic_tmpt176_1, %__bb_if_join3 ], [ %__logic_tmpt176_3, %__bb_if_join7 ]
-  %__logic_tmpt160_2 = phi i1 [ %__logic_tmpt160_1, %__bb_if_join3 ], [ %__logic_tmpt160_3, %__bb_if_join7 ]
-  %__logic_tmpt136_2 = phi i1 [ %__logic_tmpt136_1, %__bb_if_join3 ], [ %__logic_tmpt136_5, %__bb_if_join7 ]
+  %__logic_tmpt196_7 = phi i1 [ %__logic_tmpt196_1, %__bb_if_join3 ], [ %__logic_tmpt196_6, %__bb_if_join7 ]
+  %__logic_tmpt176_6 = phi i1 [ %__logic_tmpt176_1, %__bb_if_join3 ], [ %__logic_tmpt176_5, %__bb_if_join7 ]
+  %__logic_tmpt160_7 = phi i1 [ %__logic_tmpt160_1, %__bb_if_join3 ], [ %__logic_tmpt160_6, %__bb_if_join7 ]
+  %__logic_tmpt136_5 = phi i1 [ %__logic_tmpt136_1, %__bb_if_join3 ], [ %__logic_tmpt136_3, %__bb_if_join7 ]
   %t213 = load ptr, ptr %idx__addr
   %t214 = load i64, ptr %t213
   %t215 = call %DriftString @"std.json::_slice_string"(ptr %text_1, i64 %t5, i64 %t214)
@@ -56771,8 +56771,8 @@ __bb_logic_short:
   %t9 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_3 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt8_2 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t24 = load ptr, ptr %idx__addr
   %t25 = load i64, ptr %t24
@@ -56827,8 +56827,8 @@ __bb_logic_rhs1:
   %t49 = icmp eq i8 %t47, %t48
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt41_3 = phi i1 [ %t49, %__bb_logic_rhs1 ], [ %t42, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt41_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt41_1 = phi i1 [ %t49, %__bb_logic_rhs1 ], [ %t42, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt41_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %__array_cap_grewt98_1 = add i1 0, 0
   %zero_arr34 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
@@ -56837,7 +56837,7 @@ __bb_if_join1:
   %__array_cap_arrt97_1 = insertvalue %DriftArrayHeader %zero_arr36, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt98_2 = phi i1 [ %__array_cap_grewt98_1, %__bb_if_join1 ], [ %__array_cap_grewt98_3, %__bb_if_then3 ]
+  %__array_cap_grewt98_2 = phi i1 [ %__array_cap_grewt98_1, %__bb_if_join1 ], [ %__array_cap_grewt98_4, %__bb_if_then3 ]
   %__array_cap_arrt97_2 = phi %DriftArrayHeader [ %__array_cap_arrt97_1, %__bb_if_join1 ], [ %__arc1, %__bb_if_then3 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -56939,17 +56939,17 @@ __bb_array_cap_ok:
   %t99 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt98_3 = phi i1 [ %t99, %__bb_array_cap_ok ], [ %t119, %__bb_array_copy_exit ]
-  %__array_cap_arrt97_3 = phi %DriftArrayHeader [ %t87, %__bb_array_cap_ok ], [ %arr_len45, %__bb_array_copy_exit ]
+  %__array_cap_grewt98_4 = phi i1 [ %t99, %__bb_array_cap_ok ], [ %t119, %__bb_array_copy_exit ]
+  %__array_cap_arrt97_4 = phi %DriftArrayHeader [ %t87, %__bb_array_cap_ok ], [ %arr_len45, %__bb_array_copy_exit ]
   %zero_arr60 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr61 = insertvalue %DriftArrayHeader %zero_arr60, i64 0, 1
   %zero_arr62 = insertvalue %DriftArrayHeader %zero_arr61, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr62, ptr null, 3
-  %data63 = extractvalue %DriftArrayHeader %__array_cap_arrt97_3, 3
+  %data63 = extractvalue %DriftArrayHeader %__array_cap_arrt97_4, 3
   %eltptr64 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %data63, i64 %t89
   store %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae %t83, ptr %eltptr64
   %t122 = add i64 %t89, %t94
-  %arr_len65 = insertvalue %DriftArrayHeader %__array_cap_arrt97_3, i64 %t122, 0
+  %arr_len65 = insertvalue %DriftArrayHeader %__array_cap_arrt97_4, i64 %t122, 0
   %arr_gen66 = insertvalue %DriftArrayHeader %arr_len65, i64 %t93, 2
   store %DriftArrayHeader %arr_gen66, ptr %values__addr
   br label %__bb_match_join
@@ -57448,8 +57448,8 @@ __bb_logic_short:
   %t9 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_3 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt8_2 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t25 = load ptr, ptr %idx__addr
   %t26 = load i64, ptr %t25
@@ -57485,8 +57485,8 @@ __bb_logic_rhs1:
   %t46 = icmp eq i8 %t44, %t45
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt38_3 = phi i1 [ %t46, %__bb_logic_rhs1 ], [ %t39, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt38_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt38_1 = phi i1 [ %t46, %__bb_logic_rhs1 ], [ %t39, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt38_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %__logic_tmpt93_1 = add i1 0, 0
   br label %__bb_loop_header
@@ -57564,7 +57564,7 @@ __bb_logic_short2:
   %t94 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt93_3 = phi i1 [ %t94, %__bb_logic_short2 ], [ %t101, %__bb_logic_rhs2 ]
+  %__logic_tmpt93_3 = phi i1 [ %t101, %__bb_logic_rhs2 ], [ %t94, %__bb_logic_short2 ]
   br i1 %__logic_tmpt93_3, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t110 = load ptr, ptr %idx__addr
@@ -58137,8 +58137,8 @@ __bb_logic_short:
   %t93 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt92_3 = phi i1 [ %t93, %__bb_logic_short ], [ %t95, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt92_3, label %__bb_if_then7, label %__bb_if_join7
+  %__logic_tmpt92_2 = phi i1 [ %t93, %__bb_logic_short ], [ %t95, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt92_2, label %__bb_if_then7, label %__bb_if_join7
 __bb_if_join7:
   %strptr15 = getelementptr inbounds { i64, i64, [15 x i8] }, ptr @.str1379, i32 0, i32 2, i32 0
   %str016 = insertvalue %DriftString zeroinitializer, i64 14, 0
@@ -58441,7 +58441,7 @@ __bb_if_then8:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join8
 __bb_if_join8:
-  %out_21 = phi %DriftString [ %t67, %__bb_if_else8 ], [ %t63, %__bb_if_then8 ]
+  %out_16 = phi %DriftString [ %t63, %__bb_if_then8 ], [ %t67, %__bb_if_else8 ]
   br label %__bb_if_join7
 __bb_if_then7:
   %strptr21 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1388, i32 0, i32 2, i32 0
@@ -58454,7 +58454,7 @@ __bb_if_then7:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join7
 __bb_if_join7:
-  %out_22 = phi %DriftString [ %out_21, %__bb_if_join8 ], [ %t54, %__bb_if_then7 ]
+  %out_23 = phi %DriftString [ %out_16, %__bb_if_join8 ], [ %t54, %__bb_if_then7 ]
   br label %__bb_if_join6
 __bb_if_then6:
   %strptr24 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1389, i32 0, i32 2, i32 0
@@ -58467,7 +58467,7 @@ __bb_if_then6:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join6
 __bb_if_join6:
-  %out_16 = phi %DriftString [ %out_22, %__bb_if_join7 ], [ %t48, %__bb_if_then6 ]
+  %out_26 = phi %DriftString [ %out_23, %__bb_if_join7 ], [ %t48, %__bb_if_then6 ]
   br label %__bb_if_join5
 __bb_if_then5:
   %strptr27 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1390, i32 0, i32 2, i32 0
@@ -58480,7 +58480,7 @@ __bb_if_then5:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join5
 __bb_if_join5:
-  %out_27 = phi %DriftString [ %t42, %__bb_if_then5 ], [ %out_16, %__bb_if_join6 ]
+  %out_15 = phi %DriftString [ %out_26, %__bb_if_join6 ], [ %t42, %__bb_if_then5 ]
   br label %__bb_if_join4
 __bb_if_then4:
   %strptr30 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1391, i32 0, i32 2, i32 0
@@ -58493,7 +58493,7 @@ __bb_if_then4:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join4
 __bb_if_join4:
-  %out_13 = phi %DriftString [ %t36, %__bb_if_then4 ], [ %out_27, %__bb_if_join5 ]
+  %out_14 = phi %DriftString [ %t36, %__bb_if_then4 ], [ %out_15, %__bb_if_join5 ]
   br label %__bb_if_join3
 __bb_if_then3:
   %strptr33 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1392, i32 0, i32 2, i32 0
@@ -58506,7 +58506,7 @@ __bb_if_then3:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join3
 __bb_if_join3:
-  %out_8 = phi %DriftString [ %t30, %__bb_if_then3 ], [ %out_13, %__bb_if_join4 ]
+  %out_11 = phi %DriftString [ %t30, %__bb_if_then3 ], [ %out_14, %__bb_if_join4 ]
   br label %__bb_if_join2
 __bb_if_then2:
   %strptr36 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1393, i32 0, i32 2, i32 0
@@ -58519,7 +58519,7 @@ __bb_if_then2:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join2
 __bb_if_join2:
-  %out_7 = phi %DriftString [ %out_8, %__bb_if_join3 ], [ %t24, %__bb_if_then2 ]
+  %out_29 = phi %DriftString [ %t24, %__bb_if_then2 ], [ %out_11, %__bb_if_join3 ]
   br label %__bb_if_join1
 __bb_if_then1:
   %strptr39 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1394, i32 0, i32 2, i32 0
@@ -58532,7 +58532,7 @@ __bb_if_then1:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join1
 __bb_if_join1:
-  %out_30 = phi %DriftString [ %t18, %__bb_if_then1 ], [ %out_7, %__bb_if_join2 ]
+  %out_30 = phi %DriftString [ %t18, %__bb_if_then1 ], [ %out_29, %__bb_if_join2 ]
   %t69 = add i64 0, 1
   %t70 = add i64 %i_2, %t69
   br label %__bb_if_join
@@ -59159,12 +59159,12 @@ __bb_entry:
   %found_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt43_2 = phi i1 [ %__logic_tmpt43_1, %__bb_entry ], [ %__logic_tmpt43_3, %__bb_if_join ]
-  %__logic_tmpt33_2 = phi i1 [ %__logic_tmpt33_1, %__bb_entry ], [ %__logic_tmpt33_3, %__bb_if_join ]
-  %found_2 = phi i1 [ %found_1, %__bb_entry ], [ %found_4, %__bb_if_join ]
+  %__logic_tmpt43_2 = phi i1 [ %__logic_tmpt43_1, %__bb_entry ], [ %__logic_tmpt43_4, %__bb_if_join ]
+  %__logic_tmpt33_2 = phi i1 [ %__logic_tmpt33_1, %__bb_entry ], [ %__logic_tmpt33_4, %__bb_if_join ]
+  %found_2 = phi i1 [ %found_1, %__bb_entry ], [ %found_5, %__bb_if_join ]
   %has_prev_2 = phi i1 [ %t6, %__bb_entry ], [ %t104, %__bb_if_join ]
   %emitted_2 = phi i64 [ %t5, %__bb_entry ], [ %t107, %__bb_if_join ]
-  %out_4 = phi %DriftString [ %t2, %__bb_entry ], [ %out_10, %__bb_if_join ]
+  %out_4 = phi %DriftString [ %t2, %__bb_entry ], [ %out_11, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t10 = icmp slt i64 %emitted_2, %t4
@@ -59186,9 +59186,9 @@ __bb_if_then:
   store %Struct_std_2Econtainers_HashMapIter_0a1474a0f3b1f9e2 %t14, ptr %it__addr
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__logic_tmpt43_3 = phi i1 [ %__logic_tmpt43_2, %__bb_if_then ], [ %__logic_tmpt43_3, %__bb_if_then1 ], [ %__logic_tmpt43_6, %__bb_match_join ]
-  %__logic_tmpt33_3 = phi i1 [ %__logic_tmpt33_2, %__bb_if_then ], [ %__logic_tmpt33_6, %__bb_if_then1 ], [ %__logic_tmpt33_6, %__bb_match_join ]
-  %found_4 = phi i1 [ %t11, %__bb_if_then ], [ %found_4, %__bb_if_then1 ], [ %found_5, %__bb_match_join ]
+  %__logic_tmpt43_4 = phi i1 [ %__logic_tmpt43_2, %__bb_if_then ], [ %__logic_tmpt43_4, %__bb_if_then1 ], [ %__logic_tmpt43_5, %__bb_match_join ]
+  %__logic_tmpt33_4 = phi i1 [ %__logic_tmpt33_2, %__bb_if_then ], [ %__logic_tmpt33_6, %__bb_if_then1 ], [ %__logic_tmpt33_6, %__bb_match_join ]
+  %found_5 = phi i1 [ %t11, %__bb_if_then ], [ %found_5, %__bb_if_then1 ], [ %found_7, %__bb_match_join ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t16 = call %Variant_lang_2Ecore_Optional_448c2bdf97bb2bc3 @"std.containers::HashMapIter<K, V, B>::std.iter.SinglePassIterator<HashMapItemRef<K, V>>::next__inst__259b5174664fe71b"(ptr %it__addr)
@@ -59213,7 +59213,7 @@ __bb_match_arm_1:
   store %Variant_lang_2Ecore_Optional_448c2bdf97bb2bc3 %__arc27, ptr %__match_scrut_tmpt55__addr
   br label %__bb_loop_exit1
 __bb_loop_exit1:
-  %t61 = xor i1 %found_4, true
+  %t61 = xor i1 %found_5, true
   br i1 %t61, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t63 = add i64 0, 0
@@ -59230,7 +59230,7 @@ __bb_if_then4:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join4
 __bb_if_join4:
-  %out_7 = phi %DriftString [ %out_4, %__bb_if_join3 ], [ %t67, %__bb_if_then4 ]
+  %out_8 = phi %DriftString [ %out_4, %__bb_if_join3 ], [ %t67, %__bb_if_then4 ]
   %t72 = call %Variant_lang_2Ecore_Optional_385d1c810d32c2be @"std.containers::HashMapCore<K, V, B>::get__inst__baa50049b5bc6d03"(ptr %fields_1, ptr %best__addr)
   br label %__bb_match_dispatch1
 __bb_match_dispatch1:
@@ -59264,7 +59264,7 @@ __bb_match_arm_01:
   %t88 = load %DriftString, ptr %best__addr
   %t89 = call %DriftString @drift_string_retain(%DriftString %t88)
   %t90 = call %DriftString @"std.json::_encode_string"(%DriftString %t89)
-  %t91 = call %DriftString @drift_string_concat(%DriftString %out_7, %DriftString %t90)
+  %t91 = call %DriftString @drift_string_concat(%DriftString %out_8, %DriftString %t90)
   call void @drift_string_release(%DriftString %t90)
   %strptr22 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1433, i32 0, i32 2, i32 0
   %str023 = insertvalue %DriftString zeroinitializer, i64 1, 0
@@ -59278,10 +59278,10 @@ __bb_match_arm_01:
   call void @drift_string_release(%DriftString %t96)
   %zero_str24 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc25 = insertvalue %DriftString %zero_str24, ptr null, 1
-  call void @drift_string_release(%DriftString %out_7)
+  call void @drift_string_release(%DriftString %out_8)
   br label %__bb_match_join1
 __bb_match_join1:
-  %out_10 = phi %DriftString [ %t97, %__bb_match_arm_01 ], [ %out_7, %__bb_match_arm_11 ]
+  %out_11 = phi %DriftString [ %t97, %__bb_match_arm_01 ], [ %out_8, %__bb_match_arm_11 ]
   %t103 = load %DriftString, ptr %best__addr
   %__arc30 = load %DriftString, ptr %prev__addr
   %zero_str25 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -59299,9 +59299,9 @@ __bb_if_join:
 __bb_if_then3:
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %__logic_tmpt43_7 = phi i1 [ %__logic_tmpt43_3, %__bb_if_then3 ], [ %__logic_tmpt43_2, %__bb_if_else ]
-  %__logic_tmpt33_7 = phi i1 [ %__logic_tmpt33_3, %__bb_if_then3 ], [ %__logic_tmpt33_2, %__bb_if_else ]
-  %found_7 = phi i1 [ %found_4, %__bb_if_then3 ], [ %found_2, %__bb_if_else ]
+  %__logic_tmpt43_3 = phi i1 [ %__logic_tmpt43_4, %__bb_if_then3 ], [ %__logic_tmpt43_2, %__bb_if_else ]
+  %__logic_tmpt33_3 = phi i1 [ %__logic_tmpt33_4, %__bb_if_then3 ], [ %__logic_tmpt33_2, %__bb_if_else ]
+  %found_3 = phi i1 [ %found_5, %__bb_if_then3 ], [ %found_2, %__bb_if_else ]
   %strptr26 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1434, i32 0, i32 2, i32 0
   %str027 = insertvalue %DriftString zeroinitializer, i64 1, 0
   %t109 = insertvalue %DriftString %str027, ptr %strptr26, 1
@@ -59346,7 +59346,7 @@ __bb_logic_join:
   %__logic_tmpt33_6 = phi i1 [ %t34, %__bb_logic_short ], [ %t39, %__bb_logic_rhs ]
   br i1 %__logic_tmpt33_6, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
-  %t42 = xor i1 %found_4, true
+  %t42 = xor i1 %found_5, true
   br i1 %t42, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t47 = call i64 @"std.json::_string_lex_cmp"(ptr %t31, ptr %best__addr)
@@ -59357,8 +59357,8 @@ __bb_logic_short1:
   %t44 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt43_6 = phi i1 [ %t49, %__bb_logic_rhs1 ], [ %t44, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt43_6, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt43_5 = phi i1 [ %t49, %__bb_logic_rhs1 ], [ %t44, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt43_5, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_then2:
   %t52 = load %DriftString, ptr %t31
   %t53 = call %DriftString @drift_string_retain(%DriftString %t52)
@@ -59371,7 +59371,7 @@ __bb_if_then2:
   %t54 = add i1 0, 1
   br label %__bb_if_join2
 __bb_if_join2:
-  %found_5 = phi i1 [ %found_4, %__bb_logic_join1 ], [ %t54, %__bb_if_then2 ]
+  %found_7 = phi i1 [ %found_5, %__bb_logic_join1 ], [ %t54, %__bb_if_then2 ]
   br label %__bb_match_join
 __bb_match_join:
   br label %__bb_loop_header1
@@ -59476,13 +59476,13 @@ __bb_call_join:
   %__arc7 = call %DriftString @drift_string_retain(%DriftString %t19)
   br label %__bb_match_join
 __bb_match_join:
-  %__call_okt24_4 = phi %DriftString [ %t27, %__bb_call_join1 ], [ %__arc18, %__bb_call_join ]
-  %__call_okt16_4 = phi %DriftString [ %__arc17, %__bb_call_join1 ], [ %t19, %__bb_call_join ]
-  %__match_expr_tmpt9_6 = phi %DriftString [ %__arc10, %__bb_call_join1 ], [ %__arc7, %__bb_call_join ]
+  %__call_okt24_6 = phi %DriftString [ %t27, %__bb_call_join1 ], [ %__arc18, %__bb_call_join ]
+  %__call_okt16_6 = phi %DriftString [ %__arc17, %__bb_call_join1 ], [ %t19, %__bb_call_join ]
+  %__match_expr_tmpt9_8 = phi %DriftString [ %__arc10, %__bb_call_join1 ], [ %__arc7, %__bb_call_join ]
   %zero_str29 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc23 = insertvalue %DriftString %zero_str29, ptr null, 1
   call void @drift_string_release(%DriftString %__arc15)
-  %__arc24 = call %DriftString @drift_string_retain(%DriftString %__match_expr_tmpt9_6)
+  %__arc24 = call %DriftString @drift_string_retain(%DriftString %__match_expr_tmpt9_8)
   br label %__bb_tryexpr_join
 __bb_call_err:
   %t18 = extractvalue %FnResult_String_Error %t15, 2
@@ -59490,8 +59490,8 @@ __bb_call_err:
   call void @drift_error_release(ptr %t4)
   br label %__bb_tryexpr_dispatch
 __bb_tryexpr_dispatch:
-  %__try_errt3_8 = phi ptr [ %t26, %__bb_call_err1 ], [ %t18, %__bb_call_err ]
-  %err_val30 = load %DriftError, ptr %__try_errt3_8
+  %__try_errt3_10 = phi ptr [ %t26, %__bb_call_err1 ], [ %t18, %__bb_call_err ]
+  %err_val30 = load %DriftError, ptr %__try_errt3_10
   %t31 = extractvalue %DriftError %err_val30, 0
   br label %__bb_tryexpr_catch_0
 __bb_tryexpr_catch_0:
@@ -59499,29 +59499,29 @@ __bb_tryexpr_catch_0:
   %str032 = insertvalue %DriftString zeroinitializer, i64 2, 0
   %t33 = insertvalue %DriftString %str032, ptr %strptr31, 1
   %__arc25 = select i1 1, ptr null, ptr null
-  call void @drift_error_release(ptr %__try_errt3_8)
+  call void @drift_error_release(ptr %__try_errt3_10)
   %zero_str33 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc27 = insertvalue %DriftString %zero_str33, ptr null, 1
   call void @drift_string_release(%DriftString %__arc15)
   br label %__bb_tryexpr_join
 __bb_tryexpr_join:
-  %__try_errt3_10 = phi ptr [ %__arc25, %__bb_tryexpr_catch_0 ], [ %t4, %__bb_match_join ]
-  %__call_okt24_5 = phi %DriftString [ %__arc18, %__bb_tryexpr_catch_0 ], [ %__call_okt24_4, %__bb_match_join ]
-  %__call_okt16_5 = phi %DriftString [ %__arc17, %__bb_tryexpr_catch_0 ], [ %__call_okt16_4, %__bb_match_join ]
-  %__match_expr_tmpt9_7 = phi %DriftString [ %__arc16, %__bb_tryexpr_catch_0 ], [ %__match_expr_tmpt9_6, %__bb_match_join ]
-  %__try_expr_tmpt2_6 = phi %DriftString [ %t33, %__bb_tryexpr_catch_0 ], [ %__arc24, %__bb_match_join ]
+  %__try_errt3_4 = phi ptr [ %t4, %__bb_match_join ], [ %__arc25, %__bb_tryexpr_catch_0 ]
+  %__call_okt24_2 = phi %DriftString [ %__call_okt24_6, %__bb_match_join ], [ %__arc18, %__bb_tryexpr_catch_0 ]
+  %__call_okt16_2 = phi %DriftString [ %__call_okt16_6, %__bb_match_join ], [ %__arc17, %__bb_tryexpr_catch_0 ]
+  %__match_expr_tmpt9_2 = phi %DriftString [ %__match_expr_tmpt9_8, %__bb_match_join ], [ %__arc16, %__bb_tryexpr_catch_0 ]
+  %__try_expr_tmpt2_2 = phi %DriftString [ %__arc24, %__bb_match_join ], [ %t33, %__bb_tryexpr_catch_0 ]
   %zero_str34 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc29 = insertvalue %DriftString %zero_str34, ptr null, 1
-  call void @drift_string_release(%DriftString %__call_okt16_5)
+  call void @drift_string_release(%DriftString %__call_okt16_2)
   %zero_str35 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc31 = insertvalue %DriftString %zero_str35, ptr null, 1
-  call void @drift_string_release(%DriftString %__call_okt24_5)
+  call void @drift_string_release(%DriftString %__call_okt24_2)
   %zero_str36 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc33 = insertvalue %DriftString %zero_str36, ptr null, 1
-  call void @drift_string_release(%DriftString %__match_expr_tmpt9_7)
+  call void @drift_string_release(%DriftString %__match_expr_tmpt9_2)
   %__arc35 = select i1 1, ptr null, ptr null
-  call void @drift_error_release(ptr %__try_errt3_10)
-  ret %DriftString %__try_expr_tmpt2_6
+  call void @drift_error_release(ptr %__try_errt3_4)
+  ret %DriftString %__try_expr_tmpt2_2
 }
 define %DriftString @"std.json::_encode_node"(ptr %node_1, ptr %cfg_1) {
 __bb_entry:
@@ -59700,7 +59700,7 @@ __bb_match_arm_5:
   store %Struct_std_2Econtainers_HashMapIter_0a1474a0f3b1f9e2 %t96, ptr %it__addr
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %k_6 = phi %DriftString [ %__arc2, %__bb_match_arm_5 ], [ %__arc21, %__bb_match_join1 ]
+  %k_4 = phi %DriftString [ %__arc2, %__bb_match_arm_5 ], [ %__arc21, %__bb_match_join1 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t98 = call %Variant_lang_2Ecore_Optional_448c2bdf97bb2bc3 @"std.containers::HashMapIter<K, V, B>::std.iter.SinglePassIterator<HashMapItemRef<K, V>>::next__inst__259b5174664fe71b"(ptr %it__addr)
@@ -59753,7 +59753,7 @@ __bb_loop_exit1:
   call void @drift_free_array(ptr %data31)
   %zero_str32 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc12 = insertvalue %DriftString %zero_str32, ptr null, 1
-  call void @drift_string_release(%DriftString %k_6)
+  call void @drift_string_release(%DriftString %k_4)
   ret %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae %t131
 __bb_match_arm_01:
   %__arc17 = select i1 1, %Variant_lang_2Ecore_Optional_448c2bdf97bb2bc3 zeroinitializer, %Variant_lang_2Ecore_Optional_448c2bdf97bb2bc3 zeroinitializer
@@ -59768,7 +59768,7 @@ __bb_match_arm_01:
   %t115 = call %DriftString @drift_string_retain(%DriftString %t114)
   %zero_str36 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc20 = insertvalue %DriftString %zero_str36, ptr null, 1
-  call void @drift_string_release(%DriftString %k_6)
+  call void @drift_string_release(%DriftString %k_4)
   %t117 = extractvalue %Struct_std_2Econtainers_HashMapItemRef_110dbf17440c4586 %t109, 1
   %t118 = call %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae @"std.json::_clone_deep_impl"(ptr %t117)
   %zero_str37 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -59814,7 +59814,7 @@ __bb_match_arm_4:
   %__array_cap_arrt60_1 = insertvalue %DriftArrayHeader %zero_arr54, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt61_2 = phi i1 [ %__array_cap_grewt61_1, %__bb_match_arm_4 ], [ %__array_cap_grewt61_3, %__bb_if_join ]
+  %__array_cap_grewt61_2 = phi i1 [ %__array_cap_grewt61_1, %__bb_match_arm_4 ], [ %__array_cap_grewt61_4, %__bb_if_join ]
   %__array_cap_arrt60_2 = phi %DriftArrayHeader [ %__array_cap_arrt60_1, %__bb_match_arm_4 ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t37, %__bb_match_arm_4 ], [ %t90, %__bb_if_join ]
   br label %__bb_loop_body
@@ -59932,17 +59932,17 @@ __bb_array_cap_ok:
   %t62 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt61_3 = phi i1 [ %t62, %__bb_array_cap_ok ], [ %t82, %__bb_array_copy_exit ]
-  %__array_cap_arrt60_3 = phi %DriftArrayHeader [ %t50, %__bb_array_cap_ok ], [ %arr_len74, %__bb_array_copy_exit ]
+  %__array_cap_grewt61_4 = phi i1 [ %t62, %__bb_array_cap_ok ], [ %t82, %__bb_array_copy_exit ]
+  %__array_cap_arrt60_4 = phi %DriftArrayHeader [ %t50, %__bb_array_cap_ok ], [ %arr_len74, %__bb_array_copy_exit ]
   %zero_arr89 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr90 = insertvalue %DriftArrayHeader %zero_arr89, i64 0, 1
   %zero_arr91 = insertvalue %DriftArrayHeader %zero_arr90, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr91, ptr null, 3
-  %data92 = extractvalue %DriftArrayHeader %__array_cap_arrt60_3, 3
+  %data92 = extractvalue %DriftArrayHeader %__array_cap_arrt60_4, 3
   %eltptr93 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %data92, i64 %t52
   store %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae %t48, ptr %eltptr93
   %t85 = add i64 %t52, %t57
-  %arr_len94 = insertvalue %DriftArrayHeader %__array_cap_arrt60_3, i64 %t85, 0
+  %arr_len94 = insertvalue %DriftArrayHeader %__array_cap_arrt60_4, i64 %t85, 0
   %arr_gen95 = insertvalue %DriftArrayHeader %arr_len94, i64 %t56, 2
   store %DriftArrayHeader %arr_gen95, ptr %out__addr
   %t89 = add i64 0, 1
@@ -60215,7 +60215,7 @@ __bb_match_arm_0:
   %t7 = add i1 0, 1
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi i1 [ %t7, %__bb_match_arm_0 ], [ %t8, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi i1 [ %t8, %__bb_match_arm_1 ], [ %t7, %__bb_match_arm_0 ]
   ret i1 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_39780a3f65d76388 @"std.json::JsonNode::as_bool"(ptr %self_1) {
@@ -60252,7 +60252,7 @@ __bb_match_arm_0:
   %t10 = load %Variant_lang_2Ecore_Optional_39780a3f65d76388, ptr %variant8
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_39780a3f65d76388 [ %t10, %__bb_match_arm_0 ], [ %t11, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_39780a3f65d76388 [ %t11, %__bb_match_arm_1 ], [ %t10, %__bb_match_arm_0 ]
   ret %Variant_lang_2Ecore_Optional_39780a3f65d76388 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 @"std.json::JsonNode::as_int"(ptr %self_1) {
@@ -60272,7 +60272,7 @@ __bb_match_dispatch_next:
   br label %__bb_match_arm_1
 __bb_match_arm_1:
   %t21 = insertvalue %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 zeroinitializer, i8 0, 0
-  %__match_expr_tmpt12_4 = select i1 1, %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 zeroinitializer, %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 zeroinitializer
+  %__match_expr_tmpt12_1 = select i1 1, %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 zeroinitializer, %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 zeroinitializer
   br label %__bb_match_join
 __bb_match_arm_0:
   %payload_words5 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %self_1, i32 0, i32 2
@@ -60308,11 +60308,11 @@ __bb_match_arm_01:
   %t18 = load %Variant_lang_2Ecore_Optional_3fb4046c9c197af8, ptr %variant11
   br label %__bb_match_join1
 __bb_match_join1:
-  %__match_expr_tmpt12_2 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %t18, %__bb_match_arm_01 ], [ %t19, %__bb_match_arm_11 ]
+  %__match_expr_tmpt12_4 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %t19, %__bb_match_arm_11 ], [ %t18, %__bb_match_arm_01 ]
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %__match_expr_tmpt12_4, %__bb_match_arm_1 ]
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %t21, %__bb_match_arm_1 ]
+  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %__match_expr_tmpt12_1, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 [ %t21, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
   ret %Variant_lang_2Ecore_Optional_3fb4046c9c197af8 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 @"std.json::JsonNode::as_uint"(ptr %self_1) {
@@ -60332,7 +60332,7 @@ __bb_match_dispatch_next:
   br label %__bb_match_arm_1
 __bb_match_arm_1:
   %t21 = insertvalue %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 zeroinitializer, i8 0, 0
-  %__match_expr_tmpt12_4 = select i1 1, %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 zeroinitializer, %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 zeroinitializer
+  %__match_expr_tmpt12_1 = select i1 1, %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 zeroinitializer, %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 zeroinitializer
   br label %__bb_match_join
 __bb_match_arm_0:
   %payload_words5 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %self_1, i32 0, i32 2
@@ -60368,11 +60368,11 @@ __bb_match_arm_01:
   %t18 = load %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6, ptr %variant11
   br label %__bb_match_join1
 __bb_match_join1:
-  %__match_expr_tmpt12_2 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %t18, %__bb_match_arm_01 ], [ %t19, %__bb_match_arm_11 ]
+  %__match_expr_tmpt12_4 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %t19, %__bb_match_arm_11 ], [ %t18, %__bb_match_arm_01 ]
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %__match_expr_tmpt12_4, %__bb_match_arm_1 ]
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %t21, %__bb_match_arm_1 ]
+  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %__match_expr_tmpt12_1, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 [ %t21, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
   ret %Variant_lang_2Ecore_Optional_3f6d4dbdf28869e6 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_330e084b284238e6 @"std.json::JsonNode::as_float"(ptr %self_1) {
@@ -60392,7 +60392,7 @@ __bb_match_dispatch_next:
   br label %__bb_match_arm_1
 __bb_match_arm_1:
   %t21 = insertvalue %Variant_lang_2Ecore_Optional_330e084b284238e6 zeroinitializer, i8 0, 0
-  %__match_expr_tmpt12_4 = select i1 1, %Variant_lang_2Ecore_Optional_330e084b284238e6 zeroinitializer, %Variant_lang_2Ecore_Optional_330e084b284238e6 zeroinitializer
+  %__match_expr_tmpt12_1 = select i1 1, %Variant_lang_2Ecore_Optional_330e084b284238e6 zeroinitializer, %Variant_lang_2Ecore_Optional_330e084b284238e6 zeroinitializer
   br label %__bb_match_join
 __bb_match_arm_0:
   %payload_words5 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %self_1, i32 0, i32 2
@@ -60428,11 +60428,11 @@ __bb_match_arm_01:
   %t18 = load %Variant_lang_2Ecore_Optional_330e084b284238e6, ptr %variant11
   br label %__bb_match_join1
 __bb_match_join1:
-  %__match_expr_tmpt12_2 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %t18, %__bb_match_arm_01 ], [ %t19, %__bb_match_arm_11 ]
+  %__match_expr_tmpt12_4 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %t19, %__bb_match_arm_11 ], [ %t18, %__bb_match_arm_01 ]
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %__match_expr_tmpt12_4, %__bb_match_arm_1 ]
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %__match_expr_tmpt12_2, %__bb_match_join1 ], [ %t21, %__bb_match_arm_1 ]
+  %__match_expr_tmpt12_5 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %__match_expr_tmpt12_1, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_330e084b284238e6 [ %t21, %__bb_match_arm_1 ], [ %__match_expr_tmpt12_4, %__bb_match_join1 ]
   ret %Variant_lang_2Ecore_Optional_330e084b284238e6 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 @"std.json::JsonNode::as_string"(ptr %self_1) {
@@ -60468,7 +60468,7 @@ __bb_match_arm_0:
   %t11 = load %Variant_lang_2Ecore_Optional_8a7375d1cb631d64, ptr %variant7
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 [ %t11, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 [ %t12, %__bb_match_arm_1 ], [ %t11, %__bb_match_arm_0 ]
   ret %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 @"std.json::JsonNode::as_number_raw"(ptr %self_1) {
@@ -60504,7 +60504,7 @@ __bb_match_arm_0:
   %t11 = load %Variant_lang_2Ecore_Optional_8a7375d1cb631d64, ptr %variant7
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 [ %t11, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 [ %t12, %__bb_match_arm_1 ], [ %t11, %__bb_match_arm_0 ]
   ret %Variant_lang_2Ecore_Optional_8a7375d1cb631d64 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_a96014804e1ad676 @"std.json::JsonNode::as_array"(ptr %self_1) {
@@ -60538,7 +60538,7 @@ __bb_match_arm_0:
   %t9 = load %Variant_lang_2Ecore_Optional_a96014804e1ad676, ptr %variant7
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_a96014804e1ad676 [ %t9, %__bb_match_arm_0 ], [ %t10, %__bb_match_arm_1 ]
+  %__match_expr_tmpt3_3 = phi %Variant_lang_2Ecore_Optional_a96014804e1ad676 [ %t10, %__bb_match_arm_1 ], [ %t9, %__bb_match_arm_0 ]
   ret %Variant_lang_2Ecore_Optional_a96014804e1ad676 %__match_expr_tmpt3_3
 }
 define %Variant_lang_2Ecore_Optional_231d1f254dd91629 @"std.json::JsonNode::as_object"(ptr %self_1) {
@@ -63153,17 +63153,17 @@ __bb_array_cap_ok:
   %t17 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt16_1 = phi i1 [ %t17, %__bb_array_cap_ok ], [ %t37, %__bb_array_copy_exit ]
-  %__array_cap_arrt15_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
+  %__array_cap_grewt16_2 = phi i1 [ %t17, %__bb_array_cap_ok ], [ %t37, %__bb_array_copy_exit ]
+  %__array_cap_arrt15_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len8, %__bb_array_copy_exit ]
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt15_1, 3
+  %data26 = extractvalue %DriftArrayHeader %__array_cap_arrt15_2, 3
   %eltptr27 = getelementptr inbounds %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae, ptr %data26, i64 %t7
   store %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae %value_1, ptr %eltptr27
   %t40 = add i64 %t7, %t12
-  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt15_1, i64 %t40, 0
+  %arr_len28 = insertvalue %DriftArrayHeader %__array_cap_arrt15_2, i64 %t40, 0
   %arr_gen29 = insertvalue %DriftArrayHeader %arr_len28, i64 %t11, 2
   store %DriftArrayHeader %arr_gen29, ptr %t4
   ret void
@@ -63189,8 +63189,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t16 = load ptr, ptr %self__addr
   %t17 = getelementptr inbounds %Struct_std_2Ejson_JsonArray_00d57377a37db10f, ptr %t16, i32 0, i32 0
@@ -63894,7 +63894,7 @@ __bb_match_arm_0:
   %t11 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_4 = phi i64 [ %t11, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ], [ %t13, %__bb_match_arm_2 ]
+  %__match_expr_tmpt3_4 = phi i64 [ %t13, %__bb_match_arm_2 ], [ %t12, %__bb_match_arm_1 ], [ %t11, %__bb_match_arm_0 ]
   ret i64 %__match_expr_tmpt3_4
 }
 define %Variant_std_2Elog_Level_f9f4e0abee5a02d9 @"std.log::_level_from_rank"(i64 %rank_1) {
@@ -63951,7 +63951,7 @@ __bb_match_arm_0:
   %t11 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_4 = phi i64 [ %t11, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ], [ %t13, %__bb_match_arm_2 ]
+  %__match_expr_tmpt3_4 = phi i64 [ %t13, %__bb_match_arm_2 ], [ %t12, %__bb_match_arm_1 ], [ %t11, %__bb_match_arm_0 ]
   ret i64 %__match_expr_tmpt3_4
 }
 define %Variant_lang_2Ecore_Optional_4cb525d24471c3b1 @"std.log::_resolve_stderr_cap"(ptr %reg_1) {
@@ -64828,8 +64828,8 @@ __bb_if_then1:
   %t17 = add i1 0, 1
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %acquired_3 = phi i1 [ %t17, %__bb_if_then1 ], [ %t5, %__bb_if_else ]
-  br i1 %acquired_3, label %__bb_if_then2, label %__bb_if_join2
+  %acquired_2 = phi i1 [ %t17, %__bb_if_then1 ], [ %t5, %__bb_if_else ]
+  br i1 %acquired_2, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_then2:
   %t19 = load ptr, ptr %st__addr
   call void @"std.log::_drain_locked"(ptr %t19)
@@ -64963,7 +64963,7 @@ __bb_if_then4:
   %t94 = add i1 0, 1
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %pushed_3 = phi i1 [ %t82, %__bb_if_else ], [ %t94, %__bb_if_then4 ]
+  %pushed_3 = phi i1 [ %t94, %__bb_if_then4 ], [ %t82, %__bb_if_else ]
   %t97 = xor i1 %pushed_3, true
   br i1 %t97, label %__bb_if_then5, label %__bb_if_join5
 __bb_if_then5:
@@ -65317,14 +65317,14 @@ __bb_tryexpr_catch_01:
   call void @drift_error_release(ptr %t75)
   br label %__bb_tryexpr_join1
 __bb_tryexpr_join1:
-  %__try_expr_tmpt66_3 = phi i1 [ %t81, %__bb_tryexpr_catch_01 ], [ %t76, %__bb_call_join1 ]
-  %__try_errt67_7 = phi ptr [ %__arc26, %__bb_tryexpr_catch_01 ], [ %t68, %__bb_call_join1 ]
+  %__try_expr_tmpt66_1 = phi i1 [ %t81, %__bb_tryexpr_catch_01 ], [ %t76, %__bb_call_join1 ]
+  %__try_errt67_4 = phi ptr [ %__arc26, %__bb_tryexpr_catch_01 ], [ %t68, %__bb_call_join1 ]
   %zero_str31 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc32 = insertvalue %DriftString %zero_str31, ptr null, 1
   call void @drift_string_release(%DriftString %ev_1)
   %__arc34 = select i1 1, ptr null, ptr null
-  call void @drift_error_release(ptr %__try_errt67_7)
-  ret i1 %__try_expr_tmpt66_3
+  call void @drift_error_release(ptr %__try_errt67_4)
+  ret i1 %__try_expr_tmpt66_1
 __bb_match_arm_01:
   %__arc11 = select i1 1, %Variant_lang_2Ecore_Optional_ff7093c168beb390 zeroinitializer, %Variant_lang_2Ecore_Optional_ff7093c168beb390 zeroinitializer
   store %Variant_lang_2Ecore_Optional_ff7093c168beb390 %t28, ptr %__match_scrut_tmpt34__addr
@@ -66180,7 +66180,7 @@ __bb_if_then2:
   call void @drift_string_release(%DriftString %out_5)
   br label %__bb_if_join2
 __bb_if_join2:
-  %out_6 = phi %DriftString [ %out_5, %__bb_match_arm_01 ], [ %t77, %__bb_if_then2 ]
+  %out_8 = phi %DriftString [ %out_5, %__bb_match_arm_01 ], [ %t77, %__bb_if_then2 ]
   %t78 = add i1 0, 0
   %t80 = extractvalue %Struct_std_2Econtainers_HashMapItemRef_810d8452cafb34bf %t70, 0
   %t81 = load %DriftString, ptr %t80
@@ -66197,7 +66197,7 @@ __bb_if_join2:
   %strptr32 = getelementptr inbounds { i64, i64, [2 x i8] }, ptr @.str1618, i32 0, i32 2, i32 0
   %str033 = insertvalue %DriftString zeroinitializer, i64 1, 0
   %t88 = insertvalue %DriftString %str033, ptr %strptr32, 1
-  %t89 = call %DriftString @drift_string_concat(%DriftString %out_6, %DriftString %t88)
+  %t89 = call %DriftString @drift_string_concat(%DriftString %out_8, %DriftString %t88)
   call void @drift_string_release(%DriftString %t88)
   %t91 = call %DriftString @drift_string_concat(%DriftString %t89, %DriftString %t83)
   call void @drift_string_release(%DriftString %t89)
@@ -66211,7 +66211,7 @@ __bb_if_join2:
   call void @drift_string_release(%DriftString %t93)
   %zero_str36 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc20 = insertvalue %DriftString %zero_str36, ptr null, 1
-  call void @drift_string_release(%DriftString %out_6)
+  call void @drift_string_release(%DriftString %out_8)
   %zero_struct37 = insertvalue %Struct_std_2Econtainers_HashMapItemRef_810d8452cafb34bf zeroinitializer, ptr null, 0
   %__arc21 = insertvalue %Struct_std_2Econtainers_HashMapItemRef_810d8452cafb34bf %zero_struct37, ptr null, 1
   br label %__bb_match_join1
@@ -66591,7 +66591,7 @@ __bb_match_arm_0:
   call void @drift_string_release(%DriftString %__arc1)
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_8 = phi %DriftString [ %t11, %__bb_match_arm_0 ], [ %t12, %__bb_match_arm_1 ], [ %t13, %__bb_match_arm_2 ]
+  %__match_expr_tmpt3_8 = phi %DriftString [ %t13, %__bb_match_arm_2 ], [ %t12, %__bb_match_arm_1 ], [ %t11, %__bb_match_arm_0 ]
   ret %DriftString %__match_expr_tmpt3_8
 }
 define %DriftString @"std.log::_level_text_from_rank"(i64 %rank) {
@@ -66809,7 +66809,7 @@ __bb_if_then6:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join6
 __bb_if_join6:
-  %out_16 = phi %DriftString [ %t55, %__bb_if_else6 ], [ %t51, %__bb_if_then6 ]
+  %out_20 = phi %DriftString [ %t55, %__bb_if_else6 ], [ %t51, %__bb_if_then6 ]
   br label %__bb_if_join5
 __bb_if_then5:
   %strptr18 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1652, i32 0, i32 2, i32 0
@@ -66822,7 +66822,7 @@ __bb_if_then5:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join5
 __bb_if_join5:
-  %out_21 = phi %DriftString [ %t42, %__bb_if_then5 ], [ %out_16, %__bb_if_join6 ]
+  %out_15 = phi %DriftString [ %out_20, %__bb_if_join6 ], [ %t42, %__bb_if_then5 ]
   br label %__bb_if_join4
 __bb_if_then4:
   %strptr21 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1653, i32 0, i32 2, i32 0
@@ -66835,7 +66835,7 @@ __bb_if_then4:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join4
 __bb_if_join4:
-  %out_13 = phi %DriftString [ %t36, %__bb_if_then4 ], [ %out_21, %__bb_if_join5 ]
+  %out_14 = phi %DriftString [ %t36, %__bb_if_then4 ], [ %out_15, %__bb_if_join5 ]
   br label %__bb_if_join3
 __bb_if_then3:
   %strptr24 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1654, i32 0, i32 2, i32 0
@@ -66848,7 +66848,7 @@ __bb_if_then3:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join3
 __bb_if_join3:
-  %out_8 = phi %DriftString [ %t30, %__bb_if_then3 ], [ %out_13, %__bb_if_join4 ]
+  %out_11 = phi %DriftString [ %t30, %__bb_if_then3 ], [ %out_14, %__bb_if_join4 ]
   br label %__bb_if_join2
 __bb_if_then2:
   %strptr27 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1655, i32 0, i32 2, i32 0
@@ -66861,7 +66861,7 @@ __bb_if_then2:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join2
 __bb_if_join2:
-  %out_7 = phi %DriftString [ %out_8, %__bb_if_join3 ], [ %t24, %__bb_if_then2 ]
+  %out_23 = phi %DriftString [ %t24, %__bb_if_then2 ], [ %out_11, %__bb_if_join3 ]
   br label %__bb_if_join1
 __bb_if_then1:
   %strptr30 = getelementptr inbounds { i64, i64, [3 x i8] }, ptr @.str1656, i32 0, i32 2, i32 0
@@ -66874,7 +66874,7 @@ __bb_if_then1:
   call void @drift_string_release(%DriftString %out_4)
   br label %__bb_if_join1
 __bb_if_join1:
-  %out_24 = phi %DriftString [ %t18, %__bb_if_then1 ], [ %out_7, %__bb_if_join2 ]
+  %out_24 = phi %DriftString [ %t18, %__bb_if_then1 ], [ %out_23, %__bb_if_join2 ]
   %t57 = add i64 0, 1
   %t58 = add i64 %i_2, %t57
   br label %__bb_if_join
@@ -68584,7 +68584,7 @@ __bb_match_arm_0:
   %t12 = load %Variant_std_2Elog_Level_f9f4e0abee5a02d9, ptr %fieldptr59
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt6_3 = phi %Variant_std_2Elog_Level_f9f4e0abee5a02d9 [ %t12, %__bb_match_arm_0 ], [ %t16, %__bb_match_arm_1 ]
+  %__match_expr_tmpt6_3 = phi %Variant_std_2Elog_Level_f9f4e0abee5a02d9 [ %t16, %__bb_match_arm_1 ], [ %t12, %__bb_match_arm_0 ]
   %t19 = load %Struct_std_2Elog_LoggerBuilder_080d140a14e37e25, ptr %self_1
   %t20 = extractvalue %Struct_std_2Elog_LoggerBuilder_080d140a14e37e25 %t19, 0
   %t21 = call %Variant_lang_2Ecore_Optional_b76478c9d2075a5a @"std.log::_runtime_state_from_handle"(%Struct_std_2Esync_Handle_16374ff59a9b385e %t20)
@@ -68829,8 +68829,8 @@ __bb_entry:
   br label %__bb_loop_header
 __bb_loop_header:
   %at_delim_2 = phi i1 [ %at_delim_1, %__bb_entry ], [ %at_delim_8, %__bb_if_join ]
-  %i_2 = phi i64 [ %t8, %__bb_entry ], [ %i_5, %__bb_if_join ]
-  %seg_start_2 = phi i64 [ %t7, %__bb_entry ], [ %seg_start_4, %__bb_if_join ]
+  %i_2 = phi i64 [ %t8, %__bb_entry ], [ %i_3, %__bb_if_join ]
+  %seg_start_2 = phi i64 [ %t7, %__bb_entry ], [ %seg_start_3, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t11 = icmp slt i64 %i_2, %t4
@@ -68904,16 +68904,16 @@ __bb_if_then4:
   %t40 = add i1 0, 1
   br label %__bb_if_join4
 __bb_if_join4:
-  %at_delim_7 = phi i1 [ %t12, %__bb_if_then3 ], [ %t40, %__bb_if_then4 ]
+  %at_delim_5 = phi i1 [ %t12, %__bb_if_then3 ], [ %t40, %__bb_if_then4 ]
   br label %__bb_if_join3
 __bb_if_join3:
-  %at_delim_5 = phi i1 [ %t12, %__bb_if_then2 ], [ %at_delim_7, %__bb_if_join4 ]
+  %at_delim_6 = phi i1 [ %t12, %__bb_if_then2 ], [ %at_delim_5, %__bb_if_join4 ]
   br label %__bb_if_join2
 __bb_if_join2:
-  %at_delim_4 = phi i1 [ %t12, %__bb_if_then1 ], [ %at_delim_5, %__bb_if_join3 ]
+  %at_delim_7 = phi i1 [ %t12, %__bb_if_then1 ], [ %at_delim_6, %__bb_if_join3 ]
   br label %__bb_if_join1
 __bb_if_join1:
-  %at_delim_8 = phi i1 [ %t12, %__bb_if_then ], [ %at_delim_4, %__bb_if_join2 ]
+  %at_delim_8 = phi i1 [ %t12, %__bb_if_then ], [ %at_delim_7, %__bb_if_join2 ]
   br i1 %at_delim_8, label %__bb_if_then5, label %__bb_if_else1
 __bb_if_else1:
   %t53 = add i64 0, 1
@@ -68927,8 +68927,8 @@ __bb_if_then5:
   %t51 = add i64 %i_2, %t50
   br label %__bb_if_join5
 __bb_if_join5:
-  %i_5 = phi i64 [ %t51, %__bb_if_then5 ], [ %t54, %__bb_if_else1 ]
-  %seg_start_4 = phi i64 [ %t48, %__bb_if_then5 ], [ %seg_start_2, %__bb_if_else1 ]
+  %i_3 = phi i64 [ %t54, %__bb_if_else1 ], [ %t51, %__bb_if_then5 ]
+  %seg_start_3 = phi i64 [ %seg_start_2, %__bb_if_else1 ], [ %t48, %__bb_if_then5 ]
   br label %__bb_if_join
 __bb_if_join:
   br label %__bb_loop_header
@@ -69068,11 +69068,11 @@ __bb_match_arm_1:
   %__arc28 = insertvalue %Struct_std_2Etext_TextError_315caf2ee896f44c %zero_struct21, i64 0, 1
   %drop_field22 = extractvalue %Struct_std_2Etext_TextError_315caf2ee896f44c %t118, 0
   call void @drift_string_release(%DriftString %drop_field22)
-  %__array_cap_grewt77_7 = add i1 0, 0
+  %__array_cap_grewt77_1 = add i1 0, 0
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
-  %__array_cap_arrt76_8 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
+  %__array_cap_arrt76_1 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
   br label %__bb_match_join
 __bb_match_arm_0:
   %__arc14 = select i1 1, %Variant_std_2Ecore_Result_11e57eadc0e0101e zeroinitializer, %Variant_std_2Ecore_Result_11e57eadc0e0101e zeroinitializer
@@ -69095,11 +69095,11 @@ __bb_match_arm_0:
   %t42 = sub i64 %end_1, %t39
   %t44 = add i64 0, 0
   %t45 = icmp sgt i64 %t42, %t44
-  %__array_cap_grewt77_1 = add i1 0, 0
+  %__array_cap_grewt77_2 = add i1 0, 0
   %zero_arr30 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr31 = insertvalue %DriftArrayHeader %zero_arr30, i64 0, 1
   %zero_arr32 = insertvalue %DriftArrayHeader %zero_arr31, i64 0, 2
-  %__array_cap_arrt76_1 = insertvalue %DriftArrayHeader %zero_arr32, ptr null, 3
+  %__array_cap_arrt76_2 = insertvalue %DriftArrayHeader %zero_arr32, ptr null, 3
   br i1 %t45, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_then3:
   %t49 = call %Variant_std_2Ecore_Result_11e57eadc0e0101e @"std.text::substring__impl"(ptr %info_1, i64 %t39, i64 %t42)
@@ -69229,39 +69229,39 @@ __bb_array_cap_ok:
   %t78 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt77_3 = phi i1 [ %t78, %__bb_array_cap_ok ], [ %t98, %__bb_array_copy_exit ]
-  %__array_cap_arrt76_3 = phi %DriftArrayHeader [ %t64, %__bb_array_cap_ok ], [ %arr_len51, %__bb_array_copy_exit ]
+  %__array_cap_grewt77_4 = phi i1 [ %t78, %__bb_array_cap_ok ], [ %t98, %__bb_array_copy_exit ]
+  %__array_cap_arrt76_4 = phi %DriftArrayHeader [ %t64, %__bb_array_cap_ok ], [ %arr_len51, %__bb_array_copy_exit ]
   %zero_arr69 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr70 = insertvalue %DriftArrayHeader %zero_arr69, i64 0, 1
   %zero_arr71 = insertvalue %DriftArrayHeader %zero_arr70, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr71, ptr null, 3
-  %data72 = extractvalue %DriftArrayHeader %__array_cap_arrt76_3, 3
+  %data72 = extractvalue %DriftArrayHeader %__array_cap_arrt76_4, 3
   %eltptr73 = getelementptr inbounds %Struct_std_2Emeta_CompilerTag_4b98538b2d4284c4, ptr %data72, i64 %t68
   store %Struct_std_2Emeta_CompilerTag_4b98538b2d4284c4 %t67, ptr %eltptr73
   %t101 = add i64 %t68, %t73
-  %arr_len74 = insertvalue %DriftArrayHeader %__array_cap_arrt76_3, i64 %t101, 0
+  %arr_len74 = insertvalue %DriftArrayHeader %__array_cap_arrt76_4, i64 %t101, 0
   %arr_gen75 = insertvalue %DriftArrayHeader %arr_len74, i64 %t72, 2
   store %DriftArrayHeader %arr_gen75, ptr %out_1
   br label %__bb_match_join1
 __bb_match_join1:
-  %__array_cap_grewt77_6 = phi i1 [ %__array_cap_grewt77_3, %__bb_array_cap_join2 ], [ %__array_cap_grewt77_1, %__bb_match_arm_11 ]
-  %__array_cap_arrt76_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt76_1, %__bb_match_arm_11 ]
-  %__match_binder_3___3 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc4, %__bb_array_cap_join2 ], [ %__arc33, %__bb_match_arm_11 ]
-  %__match_binder_2_v_5 = phi %DriftString [ %t61, %__bb_array_cap_join2 ], [ %__arc3, %__bb_match_arm_11 ]
+  %__array_cap_grewt77_6 = phi i1 [ %__array_cap_grewt77_4, %__bb_array_cap_join2 ], [ %__array_cap_grewt77_2, %__bb_match_arm_11 ]
+  %__array_cap_arrt76_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt76_2, %__bb_match_arm_11 ]
+  %__match_binder_3___2 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc4, %__bb_array_cap_join2 ], [ %__arc33, %__bb_match_arm_11 ]
+  %__match_binder_2_v_4 = phi %DriftString [ %t61, %__bb_array_cap_join2 ], [ %__arc3, %__bb_match_arm_11 ]
   br label %__bb_if_join3
 __bb_if_join3:
-  %__array_cap_grewt77_2 = phi i1 [ %__array_cap_grewt77_1, %__bb_match_arm_0 ], [ %__array_cap_grewt77_6, %__bb_match_join1 ]
-  %__array_cap_arrt76_2 = phi %DriftArrayHeader [ %__array_cap_arrt76_1, %__bb_match_arm_0 ], [ %__array_cap_arrt76_7, %__bb_match_join1 ]
-  %__match_binder_3___2 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc4, %__bb_match_arm_0 ], [ %__match_binder_3___3, %__bb_match_join1 ]
-  %__match_binder_2_v_2 = phi %DriftString [ %__arc3, %__bb_match_arm_0 ], [ %__match_binder_2_v_5, %__bb_match_join1 ]
+  %__array_cap_grewt77_7 = phi i1 [ %__array_cap_grewt77_2, %__bb_match_arm_0 ], [ %__array_cap_grewt77_6, %__bb_match_join1 ]
+  %__array_cap_arrt76_8 = phi %DriftArrayHeader [ %__array_cap_arrt76_2, %__bb_match_arm_0 ], [ %__array_cap_arrt76_7, %__bb_match_join1 ]
+  %__match_binder_3___6 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc4, %__bb_match_arm_0 ], [ %__match_binder_3___2, %__bb_match_join1 ]
+  %__match_binder_2_v_5 = phi %DriftString [ %__arc3, %__bb_match_arm_0 ], [ %__match_binder_2_v_4, %__bb_match_join1 ]
   br label %__bb_match_join
 __bb_match_join:
-  %__array_cap_grewt77_8 = phi i1 [ %__array_cap_grewt77_2, %__bb_if_join3 ], [ %__array_cap_grewt77_7, %__bb_match_arm_1 ]
-  %__array_cap_arrt76_9 = phi %DriftArrayHeader [ %__array_cap_arrt76_2, %__bb_if_join3 ], [ %__array_cap_arrt76_8, %__bb_match_arm_1 ]
-  %__match_binder_4___5 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc5, %__bb_if_join3 ], [ %__arc28, %__bb_match_arm_1 ]
-  %__match_binder_3___7 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__match_binder_3___2, %__bb_if_join3 ], [ %__arc4, %__bb_match_arm_1 ]
-  %__match_binder_2_v_6 = phi %DriftString [ %__match_binder_2_v_2, %__bb_if_join3 ], [ %__arc3, %__bb_match_arm_1 ]
-  %__match_binder_1_k_4 = phi %DriftString [ %t35, %__bb_if_join3 ], [ %__arc2, %__bb_match_arm_1 ]
+  %__array_cap_grewt77_8 = phi i1 [ %__array_cap_grewt77_1, %__bb_match_arm_1 ], [ %__array_cap_grewt77_7, %__bb_if_join3 ]
+  %__array_cap_arrt76_9 = phi %DriftArrayHeader [ %__array_cap_arrt76_1, %__bb_match_arm_1 ], [ %__array_cap_arrt76_8, %__bb_if_join3 ]
+  %__match_binder_4___5 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc28, %__bb_match_arm_1 ], [ %__arc5, %__bb_if_join3 ]
+  %__match_binder_3___7 = phi %Struct_std_2Etext_TextError_315caf2ee896f44c [ %__arc4, %__bb_match_arm_1 ], [ %__match_binder_3___6, %__bb_if_join3 ]
+  %__match_binder_2_v_6 = phi %DriftString [ %__arc3, %__bb_match_arm_1 ], [ %__match_binder_2_v_5, %__bb_if_join3 ]
+  %__match_binder_1_k_4 = phi %DriftString [ %__arc2, %__bb_match_arm_1 ], [ %t35, %__bb_if_join3 ]
   %zero_str76 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc35 = insertvalue %DriftString %zero_str76, ptr null, 1
   call void @drift_string_release(%DriftString %__match_binder_1_k_4)
@@ -69926,7 +69926,7 @@ __bb_match_arm_0:
   %t14 = call %DriftDiagnosticValue @drift_dv_int(i64 %t13)
   br label %__bb_match_join
 __bb_match_join:
-  %__match_expr_tmpt3_4 = phi %DriftDiagnosticValue [ %t14, %__bb_match_arm_0 ], [ %t17, %__bb_match_arm_1 ], [ %t20, %__bb_match_arm_2 ]
+  %__match_expr_tmpt3_4 = phi %DriftDiagnosticValue [ %t20, %__bb_match_arm_2 ], [ %t17, %__bb_match_arm_1 ], [ %t14, %__bb_match_arm_0 ]
   ret %DriftDiagnosticValue %__match_expr_tmpt3_4
 }
 define %FnResult_Void_Error @"std.net::NetError::std.core.Throw::throw_self"(%Variant_std_2Enet_NetError_203564604ea2d3a4 %self) {
@@ -70377,10 +70377,10 @@ __bb_tern_then:
   %t4 = add i64 0, 1
   br label %__bb_tern_join
 __bb_tern_join:
-  %__tern_tmpt2_2 = phi i64 [ %t4, %__bb_tern_then ], [ %t5, %__bb_tern_else ]
+  %__tern_tmpt2_1 = phi i64 [ %t4, %__bb_tern_then ], [ %t5, %__bb_tern_else ]
   %t8 = load %Struct_std_2Enet_TcpStream_363317ef680a1400, ptr %self_1
   %t9 = extractvalue %Struct_std_2Enet_TcpStream_363317ef680a1400 %t8, 0
-  %t11 = call i64 @drift_net_set_nodelay(i64 %t9, i64 %__tern_tmpt2_2)
+  %t11 = call i64 @drift_net_set_nodelay(i64 %t9, i64 %__tern_tmpt2_1)
   %t13 = add i64 0, 0
   %t14 = icmp slt i64 %t11, %t13
   br i1 %t14, label %__bb_if_then, label %__bb_if_join
@@ -71103,8 +71103,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define i64 @"std.parse::_digit_to_int"(i8 %b) {
 __bb_entry:
@@ -71221,8 +71221,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   ret i8 %b_1
 __bb_if_then:
@@ -71253,8 +71253,8 @@ __bb_logic_short:
   %t10 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt9_3 = phi i1 [ %t10, %__bb_logic_short ], [ %t15, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt9_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt9_2 = phi i1 [ %t10, %__bb_logic_short ], [ %t15, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt9_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t18 = add i64 0, 0
   br label %__bb_loop_header
@@ -71745,7 +71745,7 @@ __bb_if_then2:
   %t25 = add i64 0, 1
   br label %__bb_if_join2
 __bb_if_join2:
-  %i_3 = phi i64 [ %t11, %__bb_if_else ], [ %t25, %__bb_if_then2 ]
+  %i_4 = phi i64 [ %t11, %__bb_if_else ], [ %t25, %__bb_if_then2 ]
   br label %__bb_if_join1
 __bb_if_then1:
   %t20 = add i1 0, 1
@@ -71753,14 +71753,14 @@ __bb_if_then1:
   br label %__bb_if_join1
 __bb_if_join1:
   %neg_3 = phi i1 [ %t20, %__bb_if_then1 ], [ %t12, %__bb_if_join2 ]
-  %i_5 = phi i64 [ %t21, %__bb_if_then1 ], [ %i_3, %__bb_if_join2 ]
+  %i_5 = phi i64 [ %t21, %__bb_if_then1 ], [ %i_4, %__bb_if_join2 ]
   %t28 = icmp sge i64 %i_5, %t3
   br i1 %t28, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t33 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %acc_2 = phi i64 [ %t33, %__bb_if_join3 ], [ %acc_3, %__bb_if_join4 ]
+  %acc_2 = phi i64 [ %t33, %__bb_if_join3 ], [ %acc_5, %__bb_if_join4 ]
   %i_6 = phi i64 [ %i_5, %__bb_if_join3 ], [ %t85, %__bb_if_join4 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -71844,7 +71844,7 @@ __bb_if_join7:
   %t66 = sub i64 %t64, %t49
   br label %__bb_if_join6
 __bb_if_join6:
-  %acc_3 = phi i64 [ %t82, %__bb_if_join8 ], [ %t66, %__bb_if_join7 ]
+  %acc_5 = phi i64 [ %t66, %__bb_if_join7 ], [ %t82, %__bb_if_join8 ]
   %t84 = add i64 0, 1
   %t85 = add i64 %i_6, %t84
   br label %__bb_if_join4
@@ -72166,7 +72166,7 @@ __bb_if_then2:
   %t25 = add i64 0, 1
   br label %__bb_if_join2
 __bb_if_join2:
-  %i_3 = phi i64 [ %t11, %__bb_if_else ], [ %t25, %__bb_if_then2 ]
+  %i_4 = phi i64 [ %t11, %__bb_if_else ], [ %t25, %__bb_if_then2 ]
   br label %__bb_if_join1
 __bb_if_then1:
   %t20 = add i1 0, 1
@@ -72174,7 +72174,7 @@ __bb_if_then1:
   br label %__bb_if_join1
 __bb_if_join1:
   %neg_3 = phi i1 [ %t20, %__bb_if_then1 ], [ %t12, %__bb_if_join2 ]
-  %i_5 = phi i64 [ %t21, %__bb_if_then1 ], [ %i_3, %__bb_if_join2 ]
+  %i_5 = phi i64 [ %t21, %__bb_if_then1 ], [ %i_4, %__bb_if_join2 ]
   %t28 = icmp sge i64 %i_5, %t3
   br i1 %t28, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
@@ -72199,8 +72199,8 @@ __bb_logic_short:
   %t50 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt49_3 = phi i1 [ %t50, %__bb_logic_short ], [ %t54, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt49_3, label %__bb_if_then6, label %__bb_if_join6
+  %__logic_tmpt49_2 = phi i1 [ %t50, %__bb_logic_short ], [ %t54, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt49_2, label %__bb_if_then6, label %__bb_if_join6
 __bb_if_join6:
   %t64 = add i1 0, 0
   %t65 = fadd double 0.0, 0.0
@@ -72269,13 +72269,13 @@ __bb_if_join12:
   %t106 = fadd double 0.0, 10.0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %div_4 = phi double [ %t106, %__bb_if_join12 ], [ %t126, %__bb_if_join13 ]
-  %saw_frac_digit_4 = phi i1 [ %t105, %__bb_if_join12 ], [ %t117, %__bb_if_join13 ]
-  %value_5 = phi double [ %value_2, %__bb_if_join12 ], [ %t123, %__bb_if_join13 ]
-  %i_10 = phi i64 [ %t97, %__bb_if_join12 ], [ %t129, %__bb_if_join13 ]
+  %div_5 = phi double [ %t106, %__bb_if_join12 ], [ %t126, %__bb_if_join13 ]
+  %saw_frac_digit_5 = phi i1 [ %t105, %__bb_if_join12 ], [ %t117, %__bb_if_join13 ]
+  %value_14 = phi double [ %value_2, %__bb_if_join12 ], [ %t123, %__bb_if_join13 ]
+  %i_19 = phi i64 [ %t97, %__bb_if_join12 ], [ %t129, %__bb_if_join13 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
-  %t109 = icmp slt i64 %i_10, %t3
+  %t109 = icmp slt i64 %i_19, %t3
   br i1 %t109, label %__bb_if_then13, label %__bb_if_else2
 __bb_if_else2:
   br label %__bb_loop_exit1
@@ -72286,8 +72286,8 @@ __bb_if_then13:
   %strptr29 = getelementptr inbounds { i64, i64, [16 x i8] }, ptr @.str36, i32 0, i32 2, i32 0
   %str030 = insertvalue %DriftString zeroinitializer, i64 15, 0
   %str31 = insertvalue %DriftString %str030, ptr %strptr29, 1
-  call void @drift_bounds_check(%DriftString %str31, i64 %i_10, i64 %len27)
-  %ptr32 = getelementptr i8, ptr %data28, i64 %i_10
+  call void @drift_bounds_check(%DriftString %str31, i64 %i_19, i64 %len27)
+  %ptr32 = getelementptr i8, ptr %data28, i64 %i_19
   %t113 = load i8, ptr %ptr32
   %t115 = call i1 @"std.parse::_is_digit"(i8 %t113)
   %t116 = xor i1 %t115, true
@@ -72295,34 +72295,34 @@ __bb_if_then13:
 __bb_if_join14:
   %t117 = add i1 0, 1
   %t120 = call double @"std.parse::_digit_to_float"(i8 %t113)
-  %t122 = fdiv double %t120, %div_4
-  %t123 = fadd double %value_5, %t122
+  %t122 = fdiv double %t120, %div_5
+  %t123 = fadd double %value_14, %t122
   %t125 = fadd double 0.0, 10.0
-  %t126 = fmul double %div_4, %t125
+  %t126 = fmul double %div_5, %t125
   %t128 = add i64 0, 1
-  %t129 = add i64 %i_10, %t128
+  %t129 = add i64 %i_19, %t128
   br label %__bb_if_join13
 __bb_if_join13:
   br label %__bb_loop_header1
 __bb_if_then14:
   br label %__bb_loop_exit1
 __bb_loop_exit1:
-  %t131 = xor i1 %saw_frac_digit_4, true
+  %t131 = xor i1 %saw_frac_digit_5, true
   br i1 %t131, label %__bb_if_then15, label %__bb_if_join15
 __bb_if_join15:
   br label %__bb_if_join11
 __bb_if_join11:
-  %div_2 = phi double [ %div_1, %__bb_if_then10 ], [ %div_4, %__bb_if_join15 ]
-  %saw_frac_digit_2 = phi i1 [ %saw_frac_digit_1, %__bb_if_then10 ], [ %saw_frac_digit_4, %__bb_if_join15 ]
-  %value_4 = phi double [ %value_2, %__bb_if_then10 ], [ %value_5, %__bb_if_join15 ]
-  %i_8 = phi i64 [ %i_6, %__bb_if_then10 ], [ %i_10, %__bb_if_join15 ]
+  %div_3 = phi double [ %div_1, %__bb_if_then10 ], [ %div_5, %__bb_if_join15 ]
+  %saw_frac_digit_3 = phi i1 [ %saw_frac_digit_1, %__bb_if_then10 ], [ %saw_frac_digit_5, %__bb_if_join15 ]
+  %value_13 = phi double [ %value_2, %__bb_if_then10 ], [ %value_14, %__bb_if_join15 ]
+  %i_17 = phi i64 [ %i_6, %__bb_if_then10 ], [ %i_19, %__bb_if_join15 ]
   br label %__bb_if_join10
 __bb_if_join10:
-  %div_6 = phi double [ %div_1, %__bb_loop_exit ], [ %div_2, %__bb_if_join11 ]
-  %saw_frac_digit_6 = phi i1 [ %saw_frac_digit_1, %__bb_loop_exit ], [ %saw_frac_digit_2, %__bb_if_join11 ]
-  %value_7 = phi double [ %value_2, %__bb_loop_exit ], [ %value_4, %__bb_if_join11 ]
-  %i_12 = phi i64 [ %i_6, %__bb_loop_exit ], [ %i_8, %__bb_if_join11 ]
-  %t138 = icmp slt i64 %i_12, %t3
+  %div_2 = phi double [ %div_1, %__bb_loop_exit ], [ %div_3, %__bb_if_join11 ]
+  %saw_frac_digit_2 = phi i1 [ %saw_frac_digit_1, %__bb_loop_exit ], [ %saw_frac_digit_3, %__bb_if_join11 ]
+  %value_3 = phi double [ %value_2, %__bb_loop_exit ], [ %value_13, %__bb_if_join11 ]
+  %i_7 = phi i64 [ %i_6, %__bb_loop_exit ], [ %i_17, %__bb_if_join11 ]
+  %t138 = icmp slt i64 %i_7, %t3
   %k_1 = add i64 0, 0
   %saw_exp_digit_1 = add i1 0, 0
   %exp_1 = add i64 0, 0
@@ -72336,8 +72336,8 @@ __bb_if_then16:
   %strptr35 = getelementptr inbounds { i64, i64, [16 x i8] }, ptr @.str36, i32 0, i32 2, i32 0
   %str036 = insertvalue %DriftString zeroinitializer, i64 15, 0
   %str37 = insertvalue %DriftString %str036, ptr %strptr35, 1
-  call void @drift_bounds_check(%DriftString %str37, i64 %i_12, i64 %len33)
-  %ptr38 = getelementptr i8, ptr %data34, i64 %i_12
+  call void @drift_bounds_check(%DriftString %str37, i64 %i_7, i64 %len33)
+  %ptr38 = getelementptr i8, ptr %data34, i64 %i_7
   %t142 = load i8, ptr %ptr38
   %t144 = add i8 0, 101
   %t145 = icmp eq i8 %t142, %t144
@@ -72350,11 +72350,11 @@ __bb_logic_short1:
   %t147 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt146_4 = phi i1 [ %t150, %__bb_logic_rhs1 ], [ %t147, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt146_4, label %__bb_if_then17, label %__bb_if_join17
+  %__logic_tmpt146_3 = phi i1 [ %t150, %__bb_logic_rhs1 ], [ %t147, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt146_3, label %__bb_if_then17, label %__bb_if_join17
 __bb_if_then17:
   %t153 = add i64 0, 1
-  %t154 = add i64 %i_12, %t153
+  %t154 = add i64 %i_7, %t153
   %t157 = icmp sge i64 %t154, %t3
   br i1 %t157, label %__bb_if_then18, label %__bb_if_join18
 __bb_if_join18:
@@ -72380,7 +72380,7 @@ __bb_if_then20:
   %t179 = add i64 %t154, %t178
   br label %__bb_if_join20
 __bb_if_join20:
-  %i_18 = phi i64 [ %t154, %__bb_if_else3 ], [ %t179, %__bb_if_then20 ]
+  %i_14 = phi i64 [ %t154, %__bb_if_else3 ], [ %t179, %__bb_if_then20 ]
   br label %__bb_if_join19
 __bb_if_then19:
   %t170 = add i1 0, 1
@@ -72388,38 +72388,38 @@ __bb_if_then19:
   %t173 = add i64 %t154, %t172
   br label %__bb_if_join19
 __bb_if_join19:
-  %exp_neg_3 = phi i1 [ %t170, %__bb_if_then19 ], [ %t162, %__bb_if_join20 ]
-  %i_14 = phi i64 [ %t173, %__bb_if_then19 ], [ %i_18, %__bb_if_join20 ]
-  %t182 = icmp sge i64 %i_14, %t3
+  %exp_neg_5 = phi i1 [ %t162, %__bb_if_join20 ], [ %t170, %__bb_if_then19 ]
+  %i_11 = phi i64 [ %i_14, %__bb_if_join20 ], [ %t173, %__bb_if_then19 ]
+  %t182 = icmp sge i64 %i_11, %t3
   br i1 %t182, label %__bb_if_then21, label %__bb_if_join21
 __bb_if_join21:
   %t187 = add i64 0, 0
   %t188 = add i1 0, 0
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %saw_exp_digit_3 = phi i1 [ %t188, %__bb_if_join21 ], [ %t203, %__bb_if_join22 ]
-  %exp_3 = phi i64 [ %t187, %__bb_if_join21 ], [ %t221, %__bb_if_join22 ]
-  %i_15 = phi i64 [ %i_14, %__bb_if_join21 ], [ %t224, %__bb_if_join22 ]
+  %saw_exp_digit_5 = phi i1 [ %t188, %__bb_if_join21 ], [ %t203, %__bb_if_join22 ]
+  %exp_5 = phi i64 [ %t187, %__bb_if_join21 ], [ %t221, %__bb_if_join22 ]
+  %i_12 = phi i64 [ %i_11, %__bb_if_join21 ], [ %t224, %__bb_if_join22 ]
   br label %__bb_loop_body2
 __bb_loop_body2:
-  %t191 = icmp slt i64 %i_15, %t3
+  %t191 = icmp slt i64 %i_12, %t3
   br i1 %t191, label %__bb_if_then22, label %__bb_if_else4
 __bb_if_else4:
   br label %__bb_loop_exit2
 __bb_loop_exit2:
-  %t226 = xor i1 %saw_exp_digit_3, true
+  %t226 = xor i1 %saw_exp_digit_5, true
   br i1 %t226, label %__bb_if_then25, label %__bb_if_join25
 __bb_if_join25:
   %t231 = add i64 0, 0
-  br i1 %exp_neg_3, label %__bb_if_then26, label %__bb_if_else5
+  br i1 %exp_neg_5, label %__bb_if_then26, label %__bb_if_else5
 __bb_if_else5:
   br label %__bb_loop_header4
 __bb_loop_header4:
-  %k_3 = phi i64 [ %t231, %__bb_if_else5 ], [ %t250, %__bb_if_join28 ]
-  %value_8 = phi double [ %value_7, %__bb_if_else5 ], [ %t247, %__bb_if_join28 ]
+  %k_6 = phi i64 [ %t231, %__bb_if_else5 ], [ %t250, %__bb_if_join28 ]
+  %value_9 = phi double [ %value_3, %__bb_if_else5 ], [ %t247, %__bb_if_join28 ]
   br label %__bb_loop_body4
 __bb_loop_body4:
-  %t244 = icmp slt i64 %k_3, %exp_3
+  %t244 = icmp slt i64 %k_6, %exp_5
   br i1 %t244, label %__bb_if_then28, label %__bb_if_else7
 __bb_if_else7:
   br label %__bb_loop_exit4
@@ -72427,64 +72427,64 @@ __bb_loop_exit4:
   br label %__bb_if_join26
 __bb_if_then28:
   %t246 = fadd double 0.0, 10.0
-  %t247 = fmul double %value_8, %t246
+  %t247 = fmul double %value_9, %t246
   %t249 = add i64 0, 1
-  %t250 = add i64 %k_3, %t249
+  %t250 = add i64 %k_6, %t249
   br label %__bb_if_join28
 __bb_if_join28:
   br label %__bb_loop_header4
 __bb_if_then26:
   br label %__bb_loop_header3
 __bb_loop_header3:
-  %k_5 = phi i64 [ %t231, %__bb_if_then26 ], [ %t241, %__bb_if_join27 ]
-  %value_10 = phi double [ %value_7, %__bb_if_then26 ], [ %t238, %__bb_if_join27 ]
+  %k_8 = phi i64 [ %t231, %__bb_if_then26 ], [ %t241, %__bb_if_join27 ]
+  %value_11 = phi double [ %value_3, %__bb_if_then26 ], [ %t238, %__bb_if_join27 ]
   br label %__bb_loop_body3
 __bb_loop_body3:
-  %t235 = icmp slt i64 %k_5, %exp_3
+  %t235 = icmp slt i64 %k_8, %exp_5
   br i1 %t235, label %__bb_if_then27, label %__bb_if_else6
 __bb_if_else6:
   br label %__bb_loop_exit3
 __bb_loop_exit3:
   br label %__bb_if_join26
 __bb_if_join26:
-  %k_7 = phi i64 [ %k_3, %__bb_loop_exit4 ], [ %k_5, %__bb_loop_exit3 ]
-  %value_12 = phi double [ %value_8, %__bb_loop_exit4 ], [ %value_10, %__bb_loop_exit3 ]
+  %k_5 = phi i64 [ %k_6, %__bb_loop_exit4 ], [ %k_8, %__bb_loop_exit3 ]
+  %value_8 = phi double [ %value_9, %__bb_loop_exit4 ], [ %value_11, %__bb_loop_exit3 ]
   br label %__bb_if_join17
 __bb_if_join17:
-  %k_8 = phi i64 [ %k_1, %__bb_logic_join1 ], [ %k_7, %__bb_if_join26 ]
-  %saw_exp_digit_5 = phi i1 [ %saw_exp_digit_1, %__bb_logic_join1 ], [ %saw_exp_digit_3, %__bb_if_join26 ]
-  %exp_5 = phi i64 [ %exp_1, %__bb_logic_join1 ], [ %exp_3, %__bb_if_join26 ]
-  %exp_neg_5 = phi i1 [ %exp_neg_1, %__bb_logic_join1 ], [ %exp_neg_3, %__bb_if_join26 ]
-  %value_13 = phi double [ %value_7, %__bb_logic_join1 ], [ %value_12, %__bb_if_join26 ]
-  %i_20 = phi i64 [ %i_12, %__bb_logic_join1 ], [ %i_15, %__bb_if_join26 ]
+  %k_3 = phi i64 [ %k_1, %__bb_logic_join1 ], [ %k_5, %__bb_if_join26 ]
+  %saw_exp_digit_3 = phi i1 [ %saw_exp_digit_1, %__bb_logic_join1 ], [ %saw_exp_digit_5, %__bb_if_join26 ]
+  %exp_3 = phi i64 [ %exp_1, %__bb_logic_join1 ], [ %exp_5, %__bb_if_join26 ]
+  %exp_neg_3 = phi i1 [ %exp_neg_1, %__bb_logic_join1 ], [ %exp_neg_5, %__bb_if_join26 ]
+  %value_7 = phi double [ %value_3, %__bb_logic_join1 ], [ %value_8, %__bb_if_join26 ]
+  %i_9 = phi i64 [ %i_7, %__bb_logic_join1 ], [ %i_12, %__bb_if_join26 ]
   br label %__bb_if_join16
 __bb_if_join16:
-  %k_9 = phi i64 [ %k_1, %__bb_if_join10 ], [ %k_8, %__bb_if_join17 ]
-  %saw_exp_digit_6 = phi i1 [ %saw_exp_digit_1, %__bb_if_join10 ], [ %saw_exp_digit_5, %__bb_if_join17 ]
-  %exp_6 = phi i64 [ %exp_1, %__bb_if_join10 ], [ %exp_5, %__bb_if_join17 ]
-  %exp_neg_6 = phi i1 [ %exp_neg_1, %__bb_if_join10 ], [ %exp_neg_5, %__bb_if_join17 ]
-  %__logic_tmpt146_5 = phi i1 [ %__logic_tmpt146_1, %__bb_if_join10 ], [ %__logic_tmpt146_4, %__bb_if_join17 ]
-  %value_14 = phi double [ %value_7, %__bb_if_join10 ], [ %value_13, %__bb_if_join17 ]
-  %i_21 = phi i64 [ %i_12, %__bb_if_join10 ], [ %i_20, %__bb_if_join17 ]
+  %k_2 = phi i64 [ %k_1, %__bb_if_join10 ], [ %k_3, %__bb_if_join17 ]
+  %saw_exp_digit_2 = phi i1 [ %saw_exp_digit_1, %__bb_if_join10 ], [ %saw_exp_digit_3, %__bb_if_join17 ]
+  %exp_2 = phi i64 [ %exp_1, %__bb_if_join10 ], [ %exp_3, %__bb_if_join17 ]
+  %exp_neg_2 = phi i1 [ %exp_neg_1, %__bb_if_join10 ], [ %exp_neg_3, %__bb_if_join17 ]
+  %__logic_tmpt146_2 = phi i1 [ %__logic_tmpt146_1, %__bb_if_join10 ], [ %__logic_tmpt146_3, %__bb_if_join17 ]
+  %value_4 = phi double [ %value_3, %__bb_if_join10 ], [ %value_7, %__bb_if_join17 ]
+  %i_8 = phi i64 [ %i_7, %__bb_if_join10 ], [ %i_9, %__bb_if_join17 ]
   %t252 = xor i1 %saw_int_digit_2, true
   br i1 %t252, label %__bb_if_then29, label %__bb_if_join29
 __bb_if_join29:
-  %t259 = icmp ne i64 %i_21, %t3
+  %t259 = icmp ne i64 %i_8, %t3
   br i1 %t259, label %__bb_if_then30, label %__bb_if_join30
 __bb_if_join30:
   br i1 %neg_3, label %__bb_if_then31, label %__bb_if_join31
 __bb_if_then31:
-  %t266 = fsub double 0.0, %value_14
+  %t266 = fsub double 0.0, %value_4
   br label %__bb_if_join31
 __bb_if_join31:
-  %value_15 = phi double [ %value_14, %__bb_if_join30 ], [ %t266, %__bb_if_then31 ]
+  %value_6 = phi double [ %value_4, %__bb_if_join30 ], [ %t266, %__bb_if_then31 ]
   %variant45 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant45
   %tagptr46 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant45, i32 0, i32 0
   store i8 0, ptr %tagptr46
   %payload_words47 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant45, i32 0, i32 2
   %fieldptr48 = getelementptr inbounds { double }, ptr %payload_words47, i32 0, i32 0
-  store double %value_15, ptr %fieldptr48
+  store double %value_6, ptr %fieldptr48
   %t268 = load %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant45
   %__arc1 = load %DriftString, ptr %s__addr
   %zero_str49 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -72497,7 +72497,7 @@ __bb_if_then30:
   %str051 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t260 = insertvalue %DriftString %str051, ptr %strptr50, 1
   %struct52 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t260, 0
-  %t262 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct52, i64 %i_21, 1
+  %t262 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct52, i64 %i_8, 1
   %variant53 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant53
   %tagptr54 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant53, i32 0, i32 0
@@ -72517,7 +72517,7 @@ __bb_if_then29:
   %str059 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t253 = insertvalue %DriftString %str059, ptr %strptr58, 1
   %struct60 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t253, 0
-  %t255 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct60, i64 %i_21, 1
+  %t255 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct60, i64 %i_8, 1
   %variant61 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant61
   %tagptr62 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant61, i32 0, i32 0
@@ -72534,9 +72534,9 @@ __bb_if_then29:
   ret %Variant_std_2Ecore_Result_c9b7009dab0f0a12 %t256
 __bb_if_then27:
   %t237 = fadd double 0.0, 10.0
-  %t238 = fdiv double %value_10, %t237
+  %t238 = fdiv double %value_11, %t237
   %t240 = add i64 0, 1
-  %t241 = add i64 %k_5, %t240
+  %t241 = add i64 %k_8, %t240
   br label %__bb_if_join27
 __bb_if_join27:
   br label %__bb_loop_header3
@@ -72545,7 +72545,7 @@ __bb_if_then25:
   %str067 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t227 = insertvalue %DriftString %str067, ptr %strptr66, 1
   %struct68 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t227, 0
-  %t229 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct68, i64 %i_15, 1
+  %t229 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct68, i64 %i_12, 1
   %variant69 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant69
   %tagptr70 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant69, i32 0, i32 0
@@ -72567,8 +72567,8 @@ __bb_if_then22:
   %strptr76 = getelementptr inbounds { i64, i64, [16 x i8] }, ptr @.str36, i32 0, i32 2, i32 0
   %str077 = insertvalue %DriftString zeroinitializer, i64 15, 0
   %str78 = insertvalue %DriftString %str077, ptr %strptr76, 1
-  call void @drift_bounds_check(%DriftString %str78, i64 %i_15, i64 %len74)
-  %ptr79 = getelementptr i8, ptr %data75, i64 %i_15
+  call void @drift_bounds_check(%DriftString %str78, i64 %i_12, i64 %len74)
+  %ptr79 = getelementptr i8, ptr %data75, i64 %i_12
   %t195 = load i8, ptr %ptr79
   %t197 = call i1 @"std.parse::_is_digit"(i8 %t195)
   %t198 = xor i1 %t197, true
@@ -72580,14 +72580,14 @@ __bb_if_join23:
   %t209 = sub i64 %t207, %t205
   %t210 = add i64 0, 10
   %t211 = sdiv i64 %t209, %t210
-  %t212 = icmp sgt i64 %exp_3, %t211
+  %t212 = icmp sgt i64 %exp_5, %t211
   br i1 %t212, label %__bb_if_then24, label %__bb_if_join24
 __bb_if_join24:
   %t218 = add i64 0, 10
-  %t219 = mul i64 %exp_3, %t218
+  %t219 = mul i64 %exp_5, %t218
   %t221 = add i64 %t219, %t205
   %t223 = add i64 0, 1
-  %t224 = add i64 %i_15, %t223
+  %t224 = add i64 %i_12, %t223
   br label %__bb_if_join22
 __bb_if_join22:
   br label %__bb_loop_header2
@@ -72596,7 +72596,7 @@ __bb_if_then24:
   %str081 = insertvalue %DriftString zeroinitializer, i64 8, 0
   %t213 = insertvalue %DriftString %str081, ptr %strptr80, 1
   %struct82 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t213, 0
-  %t215 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct82, i64 %i_15, 1
+  %t215 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct82, i64 %i_12, 1
   %variant83 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant83
   %tagptr84 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant83, i32 0, i32 0
@@ -72616,7 +72616,7 @@ __bb_if_then23:
   %str089 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t199 = insertvalue %DriftString %str089, ptr %strptr88, 1
   %struct90 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t199, 0
-  %t201 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct90, i64 %i_15, 1
+  %t201 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct90, i64 %i_12, 1
   %variant91 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant91
   %tagptr92 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant91, i32 0, i32 0
@@ -72636,7 +72636,7 @@ __bb_if_then21:
   %str097 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t183 = insertvalue %DriftString %str097, ptr %strptr96, 1
   %struct98 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t183, 0
-  %t185 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct98, i64 %i_14, 1
+  %t185 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct98, i64 %i_11, 1
   %variant99 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant99
   %tagptr100 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant99, i32 0, i32 0
@@ -72676,7 +72676,7 @@ __bb_if_then15:
   %str0113 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t132 = insertvalue %DriftString %str0113, ptr %strptr112, 1
   %struct114 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t132, 0
-  %t134 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct114, i64 %i_10, 1
+  %t134 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct114, i64 %i_19, 1
   %variant115 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant115
   %tagptr116 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant115, i32 0, i32 0
@@ -72720,14 +72720,14 @@ __bb_if_then7:
   %t61 = fsub double 0.0, %t58
   br label %__bb_if_join7
 __bb_if_join7:
-  %inf_2 = phi double [ %t58, %__bb_if_then6 ], [ %t61, %__bb_if_then7 ]
+  %inf_3 = phi double [ %t58, %__bb_if_then6 ], [ %t61, %__bb_if_then7 ]
   %variant128 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant128
   %tagptr129 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant128, i32 0, i32 0
   store i8 0, ptr %tagptr129
   %payload_words130 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant128, i32 0, i32 2
   %fieldptr131 = getelementptr inbounds { double }, ptr %payload_words130, i32 0, i32 0
-  store double %inf_2, ptr %fieldptr131
+  store double %inf_3, ptr %fieldptr131
   %t63 = load %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant128
   %__arc5 = load %DriftString, ptr %s__addr
   %zero_str132 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -72744,14 +72744,14 @@ __bb_if_then5:
   %t42 = fsub double 0.0, %t39
   br label %__bb_if_join5
 __bb_if_join5:
-  %nan_3 = phi double [ %t39, %__bb_if_then4 ], [ %t42, %__bb_if_then5 ]
+  %nan_2 = phi double [ %t39, %__bb_if_then4 ], [ %t42, %__bb_if_then5 ]
   %variant133 = alloca %Variant_std_2Ecore_Result_c9b7009dab0f0a12
   store %Variant_std_2Ecore_Result_c9b7009dab0f0a12 zeroinitializer, ptr %variant133
   %tagptr134 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant133, i32 0, i32 0
   store i8 0, ptr %tagptr134
   %payload_words135 = getelementptr inbounds %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant133, i32 0, i32 2
   %fieldptr136 = getelementptr inbounds { double }, ptr %payload_words135, i32 0, i32 0
-  store double %nan_3, ptr %fieldptr136
+  store double %nan_2, ptr %fieldptr136
   %t44 = load %Variant_std_2Ecore_Result_c9b7009dab0f0a12, ptr %variant133
   %__arc3 = load %DriftString, ptr %s__addr
   %zero_str137 = insertvalue %DriftString zeroinitializer, i64 0, 0
@@ -72816,8 +72816,8 @@ __bb_logic_short:
   %t7 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt6_3 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt6_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt6_2 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt6_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t16 = load %DriftArrayHeader, ptr %bytes_1
   %t17 = extractvalue %DriftArrayHeader %t16, 0
@@ -72827,8 +72827,8 @@ __bb_logic_short1:
   %t13 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt12_3 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t13, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt12_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt12_1 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t13, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt12_1, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t26 = icmp sge i64 %start_1, %end_1
   br i1 %t26, label %__bb_if_then1, label %__bb_if_join1
@@ -72861,7 +72861,7 @@ __bb_if_then3:
   %t64 = add i64 %start_1, %t63
   br label %__bb_if_join3
 __bb_if_join3:
-  %i_5 = phi i64 [ %start_1, %__bb_if_else ], [ %t64, %__bb_if_then3 ]
+  %i_4 = phi i64 [ %start_1, %__bb_if_else ], [ %t64, %__bb_if_then3 ]
   br label %__bb_if_join2
 __bb_if_then2:
   %t55 = add i1 0, 1
@@ -72869,19 +72869,19 @@ __bb_if_then2:
   %t58 = add i64 %start_1, %t57
   br label %__bb_if_join2
 __bb_if_join2:
-  %neg_2 = phi i1 [ %t32, %__bb_if_join3 ], [ %t55, %__bb_if_then2 ]
-  %i_2 = phi i64 [ %i_5, %__bb_if_join3 ], [ %t58, %__bb_if_then2 ]
-  %t67 = icmp sge i64 %i_2, %end_1
+  %neg_3 = phi i1 [ %t55, %__bb_if_then2 ], [ %t32, %__bb_if_join3 ]
+  %i_5 = phi i64 [ %t58, %__bb_if_then2 ], [ %i_4, %__bb_if_join3 ]
+  %t67 = icmp sge i64 %i_5, %end_1
   br i1 %t67, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_join4:
   %t72 = add i64 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %acc_2 = phi i64 [ %t72, %__bb_if_join4 ], [ %acc_3, %__bb_if_join5 ]
-  %i_3 = phi i64 [ %i_2, %__bb_if_join4 ], [ %t139, %__bb_if_join5 ]
+  %acc_2 = phi i64 [ %t72, %__bb_if_join4 ], [ %acc_5, %__bb_if_join5 ]
+  %i_6 = phi i64 [ %i_5, %__bb_if_join4 ], [ %t139, %__bb_if_join5 ]
   br label %__bb_loop_body
 __bb_loop_body:
-  %t75 = icmp slt i64 %i_3, %end_1
+  %t75 = icmp slt i64 %i_6, %end_1
   br i1 %t75, label %__bb_if_then5, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit
@@ -72899,15 +72899,15 @@ __bb_if_then5:
   %arrval12 = load %DriftArrayHeader, ptr %bytes_1
   %t78 = extractvalue %DriftArrayHeader %arrval12, 0
   %t79 = add i64 0, 0
-  %t80 = icmp slt i64 %i_3, %t79
-  %t81 = icmp sge i64 %i_3, %t78
+  %t80 = icmp slt i64 %i_6, %t79
+  %t81 = icmp sge i64 %i_6, %t78
   %t82 = or i1 %t80, %t81
   br i1 %t82, label %__bb_idx_err1, label %__bb_idx_ok1
 __bb_idx_ok1:
   %arrval13 = load %DriftArrayHeader, ptr %bytes_1
   %len14 = extractvalue %DriftArrayHeader %arrval13, 0
   %data15 = extractvalue %DriftArrayHeader %arrval13, 3
-  %eltptr16 = getelementptr i8, ptr %data15, i64 %i_3
+  %eltptr16 = getelementptr i8, ptr %data15, i64 %i_6
   %t92 = load i8, ptr %eltptr16
   br label %__bb_idx_join1
 __bb_idx_join1:
@@ -72916,7 +72916,7 @@ __bb_idx_join1:
   br i1 %t97, label %__bb_if_then6, label %__bb_if_join6
 __bb_if_join6:
   %t103 = call i64 @"std.parse::_digit_to_int"(i8 %t92)
-  br i1 %neg_2, label %__bb_if_then7, label %__bb_if_else2
+  br i1 %neg_3, label %__bb_if_then7, label %__bb_if_else2
 __bb_if_else2:
   %t122 = add i64 0, 9223372036854775807
   %t124 = sub i64 %t122, %t103
@@ -72934,7 +72934,7 @@ __bb_if_then9:
   %str018 = insertvalue %DriftString zeroinitializer, i64 8, 0
   %t128 = insertvalue %DriftString %str018, ptr %strptr17, 1
   %struct19 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t128, 0
-  %t130 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct19, i64 %i_3, 1
+  %t130 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct19, i64 %i_6, 1
   %variant20 = alloca %Variant_std_2Ecore_Result_d919b65f67227073
   store %Variant_std_2Ecore_Result_d919b65f67227073 zeroinitializer, ptr %variant20
   %tagptr21 = getelementptr inbounds %Variant_std_2Ecore_Result_d919b65f67227073, ptr %variant20, i32 0, i32 0
@@ -72957,9 +72957,9 @@ __bb_if_join8:
   %t120 = sub i64 %t118, %t103
   br label %__bb_if_join7
 __bb_if_join7:
-  %acc_3 = phi i64 [ %t136, %__bb_if_join9 ], [ %t120, %__bb_if_join8 ]
+  %acc_5 = phi i64 [ %t120, %__bb_if_join8 ], [ %t136, %__bb_if_join9 ]
   %t138 = add i64 0, 1
-  %t139 = add i64 %i_3, %t138
+  %t139 = add i64 %i_6, %t138
   br label %__bb_if_join5
 __bb_if_join5:
   br label %__bb_loop_header
@@ -72968,7 +72968,7 @@ __bb_if_then8:
   %str025 = insertvalue %DriftString zeroinitializer, i64 9, 0
   %t112 = insertvalue %DriftString %str025, ptr %strptr24, 1
   %struct26 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t112, 0
-  %t114 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct26, i64 %i_3, 1
+  %t114 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct26, i64 %i_6, 1
   %variant27 = alloca %Variant_std_2Ecore_Result_d919b65f67227073
   store %Variant_std_2Ecore_Result_d919b65f67227073 zeroinitializer, ptr %variant27
   %tagptr28 = getelementptr inbounds %Variant_std_2Ecore_Result_d919b65f67227073, ptr %variant27, i32 0, i32 0
@@ -72983,7 +72983,7 @@ __bb_if_then6:
   %str032 = insertvalue %DriftString zeroinitializer, i64 13, 0
   %t98 = insertvalue %DriftString %str032, ptr %strptr31, 1
   %struct33 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t98, 0
-  %t100 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct33, i64 %i_3, 1
+  %t100 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct33, i64 %i_6, 1
   %variant34 = alloca %Variant_std_2Ecore_Result_d919b65f67227073
   store %Variant_std_2Ecore_Result_d919b65f67227073 zeroinitializer, ptr %variant34
   %tagptr35 = getelementptr inbounds %Variant_std_2Ecore_Result_d919b65f67227073, ptr %variant34, i32 0, i32 0
@@ -73003,7 +73003,7 @@ __bb_idx_err1:
   %t86 = insertvalue %DriftString %str041, ptr %strptr40, 1
   %t87 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t86)
   call void @drift_string_release(%DriftString %t86)
-  %t88 = call %DriftDiagnosticValue @drift_dv_int(i64 %i_3)
+  %t88 = call %DriftDiagnosticValue @drift_dv_int(i64 %i_6)
   %strptr42 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1825, i32 0, i32 2, i32 0
   %str043 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t89 = insertvalue %DriftString %str043, ptr %strptr42, 1
@@ -73025,7 +73025,7 @@ __bb_if_then4:
   %str049 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t68 = insertvalue %DriftString %str049, ptr %strptr48, 1
   %struct50 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t68, 0
-  %t70 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct50, i64 %i_2, 1
+  %t70 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct50, i64 %i_5, 1
   %variant51 = alloca %Variant_std_2Ecore_Result_d919b65f67227073
   store %Variant_std_2Ecore_Result_d919b65f67227073 zeroinitializer, ptr %variant51
   %tagptr52 = getelementptr inbounds %Variant_std_2Ecore_Result_d919b65f67227073, ptr %variant51, i32 0, i32 0
@@ -73108,8 +73108,8 @@ __bb_logic_short:
   %t7 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt6_3 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt6_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt6_2 = phi i1 [ %t7, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt6_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t16 = load %DriftArrayHeader, ptr %bytes_1
   %t17 = extractvalue %DriftArrayHeader %t16, 0
@@ -73119,8 +73119,8 @@ __bb_logic_short1:
   %t13 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt12_3 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t13, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt12_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt12_1 = phi i1 [ %t18, %__bb_logic_rhs1 ], [ %t13, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt12_1, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t26 = icmp sge i64 %start_1, %end_1
   br i1 %t26, label %__bb_if_then1, label %__bb_if_join1
@@ -73148,8 +73148,8 @@ __bb_if_then2:
   %t56 = add i64 %start_1, %t55
   br label %__bb_if_join2
 __bb_if_join2:
-  %i_2 = phi i64 [ %start_1, %__bb_idx_join ], [ %t56, %__bb_if_then2 ]
-  %t59 = icmp sge i64 %i_2, %end_1
+  %i_3 = phi i64 [ %start_1, %__bb_idx_join ], [ %t56, %__bb_if_then2 ]
+  %t59 = icmp sge i64 %i_3, %end_1
   br i1 %t59, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t65 = add i8 0, 45
@@ -73161,10 +73161,10 @@ __bb_if_join4:
   br label %__bb_loop_header
 __bb_loop_header:
   %acc_2 = phi i64 [ %t72, %__bb_if_join4 ], [ %t119, %__bb_if_join5 ]
-  %i_3 = phi i64 [ %i_2, %__bb_if_join4 ], [ %t122, %__bb_if_join5 ]
+  %i_4 = phi i64 [ %i_3, %__bb_if_join4 ], [ %t122, %__bb_if_join5 ]
   br label %__bb_loop_body
 __bb_loop_body:
-  %t75 = icmp slt i64 %i_3, %end_1
+  %t75 = icmp slt i64 %i_4, %end_1
   br i1 %t75, label %__bb_if_then5, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
@@ -73182,15 +73182,15 @@ __bb_if_then5:
   %arrval12 = load %DriftArrayHeader, ptr %bytes_1
   %t78 = extractvalue %DriftArrayHeader %arrval12, 0
   %t79 = add i64 0, 0
-  %t80 = icmp slt i64 %i_3, %t79
-  %t81 = icmp sge i64 %i_3, %t78
+  %t80 = icmp slt i64 %i_4, %t79
+  %t81 = icmp sge i64 %i_4, %t78
   %t82 = or i1 %t80, %t81
   br i1 %t82, label %__bb_idx_err1, label %__bb_idx_ok1
 __bb_idx_ok1:
   %arrval13 = load %DriftArrayHeader, ptr %bytes_1
   %len14 = extractvalue %DriftArrayHeader %arrval13, 0
   %data15 = extractvalue %DriftArrayHeader %arrval13, 3
-  %eltptr16 = getelementptr i8, ptr %data15, i64 %i_3
+  %eltptr16 = getelementptr i8, ptr %data15, i64 %i_4
   %t92 = load i8, ptr %eltptr16
   br label %__bb_idx_join1
 __bb_idx_join1:
@@ -73209,7 +73209,7 @@ __bb_if_join7:
   %t117 = mul i64 %acc_2, %t116
   %t119 = add i64 %t117, %t103
   %t121 = add i64 0, 1
-  %t122 = add i64 %i_3, %t121
+  %t122 = add i64 %i_4, %t121
   br label %__bb_if_join5
 __bb_if_join5:
   br label %__bb_loop_header
@@ -73218,7 +73218,7 @@ __bb_if_then7:
   %str018 = insertvalue %DriftString zeroinitializer, i64 8, 0
   %t111 = insertvalue %DriftString %str018, ptr %strptr17, 1
   %struct19 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t111, 0
-  %t113 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct19, i64 %i_3, 1
+  %t113 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct19, i64 %i_4, 1
   %variant20 = alloca %Variant_std_2Ecore_Result_2e3d0b30bfcafefa
   store %Variant_std_2Ecore_Result_2e3d0b30bfcafefa zeroinitializer, ptr %variant20
   %tagptr21 = getelementptr inbounds %Variant_std_2Ecore_Result_2e3d0b30bfcafefa, ptr %variant20, i32 0, i32 0
@@ -73233,7 +73233,7 @@ __bb_if_then6:
   %str025 = insertvalue %DriftString zeroinitializer, i64 13, 0
   %t98 = insertvalue %DriftString %str025, ptr %strptr24, 1
   %struct26 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t98, 0
-  %t100 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct26, i64 %i_3, 1
+  %t100 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct26, i64 %i_4, 1
   %variant27 = alloca %Variant_std_2Ecore_Result_2e3d0b30bfcafefa
   store %Variant_std_2Ecore_Result_2e3d0b30bfcafefa zeroinitializer, ptr %variant27
   %tagptr28 = getelementptr inbounds %Variant_std_2Ecore_Result_2e3d0b30bfcafefa, ptr %variant27, i32 0, i32 0
@@ -73253,7 +73253,7 @@ __bb_idx_err1:
   %t86 = insertvalue %DriftString %str034, ptr %strptr33, 1
   %t87 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t86)
   call void @drift_string_release(%DriftString %t86)
-  %t88 = call %DriftDiagnosticValue @drift_dv_int(i64 %i_3)
+  %t88 = call %DriftDiagnosticValue @drift_dv_int(i64 %i_4)
   %strptr35 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1839, i32 0, i32 2, i32 0
   %str036 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t89 = insertvalue %DriftString %str036, ptr %strptr35, 1
@@ -73290,7 +73290,7 @@ __bb_if_then3:
   %str049 = insertvalue %DriftString zeroinitializer, i64 14, 0
   %t60 = insertvalue %DriftString %str049, ptr %strptr48, 1
   %struct50 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 zeroinitializer, %DriftString %t60, 0
-  %t62 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct50, i64 %i_2, 1
+  %t62 = insertvalue %Struct_std_2Eparse_ParseError_fe0e5e4f39929352 %struct50, i64 %i_3, 1
   %variant51 = alloca %Variant_std_2Ecore_Result_2e3d0b30bfcafefa
   store %Variant_std_2Ecore_Result_2e3d0b30bfcafefa zeroinitializer, ptr %variant51
   %tagptr52 = getelementptr inbounds %Variant_std_2Ecore_Result_2e3d0b30bfcafefa, ptr %variant51, i32 0, i32 0
@@ -74137,17 +74137,17 @@ __bb_array_cap_ok:
   %t48 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt47_1 = phi i1 [ %t48, %__bb_array_cap_ok ], [ %t68, %__bb_array_copy_exit ]
-  %__array_cap_arrt46_1 = phi %DriftArrayHeader [ %t36, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
+  %__array_cap_grewt47_2 = phi i1 [ %t48, %__bb_array_cap_ok ], [ %t68, %__bb_array_copy_exit ]
+  %__array_cap_arrt46_2 = phi %DriftArrayHeader [ %t36, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt46_1, 3
+  %data40 = extractvalue %DriftArrayHeader %__array_cap_arrt46_2, 3
   %eltptr41 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data40, i64 %t38
   store %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 %t24, ptr %eltptr41
   %t71 = add i64 %t38, %t43
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt46_1, i64 %t71, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt46_2, i64 %t71, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t42, 2
   store %DriftArrayHeader %arr_gen43, ptr %branches__addr
   %__array_cap_grewt124_1 = add i1 0, 0
@@ -74157,7 +74157,7 @@ __bb_array_cap_join2:
   %__array_cap_arrt123_1 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt124_2 = phi i1 [ %__array_cap_grewt124_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt124_5, %__bb_if_join1 ]
+  %__array_cap_grewt124_2 = phi i1 [ %__array_cap_grewt124_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt124_4, %__bb_if_join1 ]
   %__array_cap_arrt123_2 = phi %DriftArrayHeader [ %__array_cap_arrt123_1, %__bb_array_cap_join2 ], [ %__arc2, %__bb_if_join1 ]
   %__match_binder_6_branch_2 = phi %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 [ %__arc7, %__bb_array_cap_join2 ], [ %__arc36, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -74304,17 +74304,17 @@ __bb_array_cap_ok1:
   %t125 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt124_5 = phi i1 [ %t145, %__bb_array_copy_exit1 ], [ %t125, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt123_5 = phi %DriftArrayHeader [ %arr_len67, %__bb_array_copy_exit1 ], [ %t113, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt124_4 = phi i1 [ %t125, %__bb_array_cap_ok1 ], [ %t145, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt123_4 = phi %DriftArrayHeader [ %t113, %__bb_array_cap_ok1 ], [ %arr_len67, %__bb_array_copy_exit1 ]
   %zero_arr82 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr83 = insertvalue %DriftArrayHeader %zero_arr82, i64 0, 1
   %zero_arr84 = insertvalue %DriftArrayHeader %zero_arr83, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr84, ptr null, 3
-  %data85 = extractvalue %DriftArrayHeader %__array_cap_arrt123_5, 3
+  %data85 = extractvalue %DriftArrayHeader %__array_cap_arrt123_4, 3
   %eltptr86 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data85, i64 %t115
   store %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 %t109, ptr %eltptr86
   %t148 = add i64 %t115, %t120
-  %arr_len87 = insertvalue %DriftArrayHeader %__array_cap_arrt123_5, i64 %t148, 0
+  %arr_len87 = insertvalue %DriftArrayHeader %__array_cap_arrt123_4, i64 %t148, 0
   %arr_gen88 = insertvalue %DriftArrayHeader %arr_len87, i64 %t119, 2
   store %DriftArrayHeader %arr_gen88, ptr %branches__addr
   br label %__bb_match_join1
@@ -74551,7 +74551,7 @@ __bb_entry:
   %__logic_tmpt12_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt56_2 = phi i1 [ %__array_cap_grewt56_1, %__bb_entry ], [ %__array_cap_grewt56_3, %__bb_if_join ]
+  %__array_cap_grewt56_2 = phi i1 [ %__array_cap_grewt56_1, %__bb_entry ], [ %__array_cap_grewt56_4, %__bb_if_join ]
   %__array_cap_arrt55_2 = phi %DriftArrayHeader [ %__array_cap_arrt55_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %__logic_tmpt12_2 = phi i1 [ %__logic_tmpt12_1, %__bb_entry ], [ %__logic_tmpt12_5, %__bb_if_join ]
   %__match_binder_8_node_2 = phi %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 [ %__arc4, %__bb_entry ], [ %__arc25, %__bb_if_join ]
@@ -74679,17 +74679,17 @@ __bb_array_cap_ok:
   %t57 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt56_3 = phi i1 [ %t57, %__bb_array_cap_ok ], [ %t77, %__bb_array_copy_exit ]
-  %__array_cap_arrt55_3 = phi %DriftArrayHeader [ %t45, %__bb_array_cap_ok ], [ %arr_len24, %__bb_array_copy_exit ]
+  %__array_cap_grewt56_4 = phi i1 [ %t57, %__bb_array_cap_ok ], [ %t77, %__bb_array_copy_exit ]
+  %__array_cap_arrt55_4 = phi %DriftArrayHeader [ %t45, %__bb_array_cap_ok ], [ %arr_len24, %__bb_array_copy_exit ]
   %zero_arr39 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr40 = insertvalue %DriftArrayHeader %zero_arr39, i64 0, 1
   %zero_arr41 = insertvalue %DriftArrayHeader %zero_arr40, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr41, ptr null, 3
-  %data42 = extractvalue %DriftArrayHeader %__array_cap_arrt55_3, 3
+  %data42 = extractvalue %DriftArrayHeader %__array_cap_arrt55_4, 3
   %eltptr43 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data42, i64 %t47
   store %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 %t41, ptr %eltptr43
   %t80 = add i64 %t47, %t52
-  %arr_len44 = insertvalue %DriftArrayHeader %__array_cap_arrt55_3, i64 %t80, 0
+  %arr_len44 = insertvalue %DriftArrayHeader %__array_cap_arrt55_4, i64 %t80, 0
   %arr_gen45 = insertvalue %DriftArrayHeader %arr_len44, i64 %t51, 2
   store %DriftArrayHeader %arr_gen45, ptr %children__addr
   br label %__bb_match_join
@@ -74733,7 +74733,7 @@ __bb_match_arm_0:
 __bb_if_then1:
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %__logic_tmpt12_6 = phi i1 [ %__logic_tmpt12_5, %__bb_if_then1 ], [ %__logic_tmpt12_2, %__bb_if_else ]
+  %__logic_tmpt12_3 = phi i1 [ %__logic_tmpt12_5, %__bb_if_then1 ], [ %__logic_tmpt12_2, %__bb_if_else ]
   %t83 = load %DriftArrayHeader, ptr %children__addr
   %t84 = extractvalue %DriftArrayHeader %t83, 0
   %t85 = add i64 0, 1
@@ -74783,10 +74783,10 @@ __bb_array_pop_empty:
   %t93 = insertvalue %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer, i8 0, 0
   br label %__bb_array_pop_join
 __bb_array_pop_join:
-  %__array_pop_rest89_3 = phi %Variant_lang_2Ecore_Optional_1314014e5ddfc968 [ %t103, %__bb_array_pop_ok ], [ %t93, %__bb_array_pop_empty ]
+  %__array_pop_rest89_2 = phi %Variant_lang_2Ecore_Optional_1314014e5ddfc968 [ %t93, %__bb_array_pop_empty ], [ %t103, %__bb_array_pop_ok ]
   br label %__bb_match_dispatch1
 __bb_match_dispatch1:
-  %tag876 = extractvalue %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_3, 0
+  %tag876 = extractvalue %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_2, 0
   %t105 = zext i8 %tag876 to i64
   %t106 = add i64 0, 1
   %t107 = icmp eq i64 %t105, %t106
@@ -74799,7 +74799,7 @@ __bb_match_dispatch_next3:
   unreachable
 __bb_match_arm_11:
   %__arc26 = select i1 1, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer
-  store %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_3, ptr %__match_scrut_tmpt121__addr
+  store %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_2, ptr %__match_scrut_tmpt121__addr
   %t125 = load %Variant_lang_2Ecore_Optional_1314014e5ddfc968, ptr %__match_scrut_tmpt121__addr
   %__arc27 = select i1 1, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer
   store %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__arc27, ptr %__match_scrut_tmpt121__addr
@@ -74810,7 +74810,7 @@ __bb_match_arm_11:
 __bb_match_join1:
   br label %__bb_if_join2
 __bb_if_join2:
-  %__array_pop_rest89_2 = phi %Variant_lang_2Ecore_Optional_1314014e5ddfc968 [ %__array_pop_rest89_1, %__bb_loop_exit ], [ %__array_pop_rest89_3, %__bb_match_join1 ]
+  %__array_pop_rest89_5 = phi %Variant_lang_2Ecore_Optional_1314014e5ddfc968 [ %__array_pop_rest89_1, %__bb_loop_exit ], [ %__array_pop_rest89_2, %__bb_match_join1 ]
   %t126 = load %DriftArrayHeader, ptr %children__addr
   %zero_arr78 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr79 = insertvalue %DriftArrayHeader %zero_arr78, i64 0, 1
@@ -74836,7 +74836,7 @@ __bb_if_join2:
   ret %Variant_std_2Ecore_Result_a6b383380b1ccf90 %t128
 __bb_match_arm_01:
   %__arc15 = select i1 1, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer, %Variant_lang_2Ecore_Optional_1314014e5ddfc968 zeroinitializer
-  store %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_3, ptr %__match_scrut_tmpt110__addr
+  store %Variant_lang_2Ecore_Optional_1314014e5ddfc968 %__array_pop_rest89_2, ptr %__match_scrut_tmpt110__addr
   %payload_words89 = getelementptr inbounds %Variant_lang_2Ecore_Optional_1314014e5ddfc968, ptr %__match_scrut_tmpt110__addr, i32 0, i32 2
   %fieldptr90 = getelementptr inbounds { %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 }, ptr %payload_words89, i32 0, i32 0
   %t115 = load %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %fieldptr90
@@ -75241,17 +75241,17 @@ __bb_array_cap_ok1:
   %t115 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt114_3 = phi i1 [ %t135, %__bb_array_copy_exit1 ], [ %t115, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt113_3 = phi %DriftArrayHeader [ %arr_len100, %__bb_array_copy_exit1 ], [ %t103, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt114_2 = phi i1 [ %t115, %__bb_array_cap_ok1 ], [ %t135, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt113_2 = phi %DriftArrayHeader [ %t103, %__bb_array_cap_ok1 ], [ %arr_len100, %__bb_array_copy_exit1 ]
   %zero_arr115 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr116 = insertvalue %DriftArrayHeader %zero_arr115, i64 0, 1
   %zero_arr117 = insertvalue %DriftArrayHeader %zero_arr116, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr117, ptr null, 3
-  %data118 = extractvalue %DriftArrayHeader %__array_cap_arrt113_3, 3
+  %data118 = extractvalue %DriftArrayHeader %__array_cap_arrt113_2, 3
   %eltptr119 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data118, i64 %t105
   store %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 %t24, ptr %eltptr119
   %t138 = add i64 %t105, %t110
-  %arr_len120 = insertvalue %DriftArrayHeader %__array_cap_arrt113_3, i64 %t138, 0
+  %arr_len120 = insertvalue %DriftArrayHeader %__array_cap_arrt113_2, i64 %t138, 0
   %arr_gen121 = insertvalue %DriftArrayHeader %arr_len120, i64 %t109, 2
   store %DriftArrayHeader %arr_gen121, ptr %wrap__b20__addr
   %t141 = load %DriftArrayHeader, ptr %wrap__b20__addr
@@ -75398,17 +75398,17 @@ __bb_array_cap_ok:
   %t59 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt58_1 = phi i1 [ %t59, %__bb_array_cap_ok ], [ %t79, %__bb_array_copy_exit ]
-  %__array_cap_arrt57_1 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok ], [ %arr_len154, %__bb_array_copy_exit ]
+  %__array_cap_grewt58_2 = phi i1 [ %t59, %__bb_array_cap_ok ], [ %t79, %__bb_array_copy_exit ]
+  %__array_cap_arrt57_2 = phi %DriftArrayHeader [ %t47, %__bb_array_cap_ok ], [ %arr_len154, %__bb_array_copy_exit ]
   %zero_arr169 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr170 = insertvalue %DriftArrayHeader %zero_arr169, i64 0, 1
   %zero_arr171 = insertvalue %DriftArrayHeader %zero_arr170, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr171, ptr null, 3
-  %data172 = extractvalue %DriftArrayHeader %__array_cap_arrt57_1, 3
+  %data172 = extractvalue %DriftArrayHeader %__array_cap_arrt57_2, 3
   %eltptr173 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data172, i64 %t49
   store %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1 %t24, ptr %eltptr173
   %t82 = add i64 %t49, %t54
-  %arr_len174 = insertvalue %DriftArrayHeader %__array_cap_arrt57_1, i64 %t82, 0
+  %arr_len174 = insertvalue %DriftArrayHeader %__array_cap_arrt57_2, i64 %t82, 0
   %arr_gen175 = insertvalue %DriftArrayHeader %arr_len174, i64 %t53, 2
   store %DriftArrayHeader %arr_gen175, ptr %wrap__addr
   %t85 = load %DriftArrayHeader, ptr %wrap__addr
@@ -75620,8 +75620,8 @@ __bb_logic_short1:
   %t130 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt129_3 = phi i1 [ %t133, %__bb_logic_rhs1 ], [ %t130, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt129_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt129_1 = phi i1 [ %t133, %__bb_logic_rhs1 ], [ %t130, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt129_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t138 = add i64 0, 63
   %t139 = icmp eq i64 %t3, %t138
@@ -75630,7 +75630,7 @@ __bb_logic_short2:
   %t136 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt135_1 = phi i1 [ %t136, %__bb_logic_short2 ], [ %t139, %__bb_logic_rhs2 ]
+  %__logic_tmpt135_1 = phi i1 [ %t139, %__bb_logic_rhs2 ], [ %t136, %__bb_logic_short2 ]
   br i1 %__logic_tmpt135_1, label %__bb_if_then8, label %__bb_if_join8
 __bb_if_join8:
   %t147 = load ptr, ptr %p__addr
@@ -75813,8 +75813,8 @@ __bb_logic_short:
   %t84 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt83_3 = phi i1 [ %t84, %__bb_logic_short ], [ %t88, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt83_3, label %__bb_if_then4, label %__bb_if_join4
+  %__logic_tmpt83_2 = phi i1 [ %t84, %__bb_logic_short ], [ %t88, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt83_2, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_join4:
   %t97 = load ptr, ptr %p__addr
   %t98 = load %Struct_std_2Eregex_Parser_54abc472dc1add0a, ptr %t97
@@ -76122,8 +76122,8 @@ __bb_logic_short:
   %t80 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt79_3 = phi i1 [ %t80, %__bb_logic_short ], [ %t83, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt79_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt79_2 = phi i1 [ %t80, %__bb_logic_short ], [ %t83, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt79_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t88 = add i64 0, 36
   %t89 = icmp eq i64 %t21, %t88
@@ -76132,8 +76132,8 @@ __bb_logic_short1:
   %t86 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt85_3 = phi i1 [ %t89, %__bb_logic_rhs1 ], [ %t86, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt85_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt85_1 = phi i1 [ %t89, %__bb_logic_rhs1 ], [ %t86, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt85_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t94 = add i64 0, 40
   %t95 = icmp eq i64 %t21, %t94
@@ -76142,7 +76142,7 @@ __bb_logic_short2:
   %t92 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt91_1 = phi i1 [ %t92, %__bb_logic_short2 ], [ %t95, %__bb_logic_rhs2 ]
+  %__logic_tmpt91_1 = phi i1 [ %t95, %__bb_logic_rhs2 ], [ %t92, %__bb_logic_short2 ]
   br i1 %__logic_tmpt91_1, label %__bb_logic_short3, label %__bb_logic_rhs3
 __bb_logic_rhs3:
   %t100 = add i64 0, 41
@@ -76152,8 +76152,8 @@ __bb_logic_short3:
   %t98 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt97_2 = phi i1 [ %t101, %__bb_logic_rhs3 ], [ %t98, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt97_2, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt97_1 = phi i1 [ %t98, %__bb_logic_short3 ], [ %t101, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt97_1, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %t106 = add i64 0, 91
   %t107 = icmp eq i64 %t21, %t106
@@ -76162,7 +76162,7 @@ __bb_logic_short4:
   %t104 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt103_1 = phi i1 [ %t104, %__bb_logic_short4 ], [ %t107, %__bb_logic_rhs4 ]
+  %__logic_tmpt103_1 = phi i1 [ %t107, %__bb_logic_rhs4 ], [ %t104, %__bb_logic_short4 ]
   br i1 %__logic_tmpt103_1, label %__bb_logic_short5, label %__bb_logic_rhs5
 __bb_logic_rhs5:
   %t112 = add i64 0, 93
@@ -76172,8 +76172,8 @@ __bb_logic_short5:
   %t110 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt109_1 = phi i1 [ %t110, %__bb_logic_short5 ], [ %t113, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt109_1, label %__bb_logic_short6, label %__bb_logic_rhs6
+  %__logic_tmpt109_2 = phi i1 [ %t113, %__bb_logic_rhs5 ], [ %t110, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt109_2, label %__bb_logic_short6, label %__bb_logic_rhs6
 __bb_logic_rhs6:
   %t118 = add i64 0, 124
   %t119 = icmp eq i64 %t21, %t118
@@ -76182,8 +76182,8 @@ __bb_logic_short6:
   %t116 = add i1 0, 1
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt115_3 = phi i1 [ %t116, %__bb_logic_short6 ], [ %t119, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt115_3, label %__bb_logic_short7, label %__bb_logic_rhs7
+  %__logic_tmpt115_2 = phi i1 [ %t116, %__bb_logic_short6 ], [ %t119, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt115_2, label %__bb_logic_short7, label %__bb_logic_rhs7
 __bb_logic_rhs7:
   %t124 = add i64 0, 42
   %t125 = icmp eq i64 %t21, %t124
@@ -76202,8 +76202,8 @@ __bb_logic_short8:
   %t128 = add i1 0, 1
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt127_1 = phi i1 [ %t128, %__bb_logic_short8 ], [ %t131, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt127_1, label %__bb_logic_short9, label %__bb_logic_rhs9
+  %__logic_tmpt127_2 = phi i1 [ %t128, %__bb_logic_short8 ], [ %t131, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt127_2, label %__bb_logic_short9, label %__bb_logic_rhs9
 __bb_logic_rhs9:
   %t136 = add i64 0, 63
   %t137 = icmp eq i64 %t21, %t136
@@ -76212,8 +76212,8 @@ __bb_logic_short9:
   %t134 = add i1 0, 1
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt133_2 = phi i1 [ %t137, %__bb_logic_rhs9 ], [ %t134, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt133_2, label %__bb_logic_short10, label %__bb_logic_rhs10
+  %__logic_tmpt133_1 = phi i1 [ %t137, %__bb_logic_rhs9 ], [ %t134, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt133_1, label %__bb_logic_short10, label %__bb_logic_rhs10
 __bb_logic_rhs10:
   %t142 = add i64 0, 92
   %t143 = icmp eq i64 %t21, %t142
@@ -76222,8 +76222,8 @@ __bb_logic_short10:
   %t140 = add i1 0, 1
   br label %__bb_logic_join10
 __bb_logic_join10:
-  %__logic_tmpt139_2 = phi i1 [ %t143, %__bb_logic_rhs10 ], [ %t140, %__bb_logic_short10 ]
-  br i1 %__logic_tmpt139_2, label %__bb_if_then10, label %__bb_if_join10
+  %__logic_tmpt139_1 = phi i1 [ %t143, %__bb_logic_rhs10 ], [ %t140, %__bb_logic_short10 ]
+  br i1 %__logic_tmpt139_1, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   %strptr5 = getelementptr inbounds { i64, i64, [15 x i8] }, ptr @.str1875, i32 0, i32 2, i32 0
   %str06 = insertvalue %DriftString zeroinitializer, i64 14, 0
@@ -76614,17 +76614,17 @@ __bb_array_cap_ok:
   %t19 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt18_1 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
-  %__array_cap_arrt17_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
+  %__array_cap_grewt18_2 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
+  %__array_cap_arrt17_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
   %zero_arr29 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr30 = insertvalue %DriftArrayHeader %zero_arr29, i64 0, 1
   %zero_arr31 = insertvalue %DriftArrayHeader %zero_arr30, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
-  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_1, 3
+  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_2, 3
   %eltptr33 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data32, i64 %t9
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t8, ptr %eltptr33
   %t42 = add i64 %t9, %t14
-  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_1, i64 %t42, 0
+  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_2, i64 %t42, 0
   %arr_gen35 = insertvalue %DriftArrayHeader %arr_len34, i64 %t13, 2
   store %DriftArrayHeader %arr_gen35, ptr %ranges__addr
   %t46 = load %DriftArrayHeader, ptr %ranges__addr
@@ -76749,17 +76749,17 @@ __bb_array_cap_ok:
   %t19 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt18_1 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
-  %__array_cap_arrt17_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
+  %__array_cap_grewt18_2 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
+  %__array_cap_arrt17_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
   %zero_arr29 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr30 = insertvalue %DriftArrayHeader %zero_arr29, i64 0, 1
   %zero_arr31 = insertvalue %DriftArrayHeader %zero_arr30, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
-  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_1, 3
+  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_2, 3
   %eltptr33 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data32, i64 %t9
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t8, ptr %eltptr33
   %t42 = add i64 %t9, %t14
-  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_1, i64 %t42, 0
+  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_2, i64 %t42, 0
   %arr_gen35 = insertvalue %DriftArrayHeader %arr_len34, i64 %t13, 2
   store %DriftArrayHeader %arr_gen35, ptr %ranges__addr
   %t46 = load %DriftArrayHeader, ptr %ranges__addr
@@ -76834,17 +76834,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len42, %__bb_array_copy_exit1 ], [ %t46, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t46, %__bb_array_cap_ok1 ], [ %arr_len42, %__bb_array_copy_exit1 ]
   %zero_arr54 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr55 = insertvalue %DriftArrayHeader %zero_arr54, i64 0, 1
   %zero_arr56 = insertvalue %DriftArrayHeader %zero_arr55, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr56, ptr null, 3
-  %data57 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data57 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr58 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data57, i64 %t50
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t49, ptr %eltptr58
   %t83 = add i64 %t50, %t55
-  %arr_len59 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len59 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen60 = insertvalue %DriftArrayHeader %arr_len59, i64 %t54, 2
   store %DriftArrayHeader %arr_gen60, ptr %ranges__addr
   %t87 = load %DriftArrayHeader, ptr %ranges__addr
@@ -77139,17 +77139,17 @@ __bb_array_cap_ok:
   %t19 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt18_1 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
-  %__array_cap_arrt17_1 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
+  %__array_cap_grewt18_2 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
+  %__array_cap_arrt17_2 = phi %DriftArrayHeader [ %t5, %__bb_array_cap_ok ], [ %arr_len17, %__bb_array_copy_exit ]
   %zero_arr29 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr30 = insertvalue %DriftArrayHeader %zero_arr29, i64 0, 1
   %zero_arr31 = insertvalue %DriftArrayHeader %zero_arr30, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
-  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_1, 3
+  %data32 = extractvalue %DriftArrayHeader %__array_cap_arrt17_2, 3
   %eltptr33 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data32, i64 %t9
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t8, ptr %eltptr33
   %t42 = add i64 %t9, %t14
-  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_1, i64 %t42, 0
+  %arr_len34 = insertvalue %DriftArrayHeader %__array_cap_arrt17_2, i64 %t42, 0
   %arr_gen35 = insertvalue %DriftArrayHeader %arr_len34, i64 %t13, 2
   store %DriftArrayHeader %arr_gen35, ptr %ranges__addr
   %t46 = load %DriftArrayHeader, ptr %ranges__addr
@@ -77224,17 +77224,17 @@ __bb_array_cap_ok1:
   %t60 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt59_3 = phi i1 [ %t80, %__bb_array_copy_exit1 ], [ %t60, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt58_3 = phi %DriftArrayHeader [ %arr_len42, %__bb_array_copy_exit1 ], [ %t46, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt59_2 = phi i1 [ %t60, %__bb_array_cap_ok1 ], [ %t80, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt58_2 = phi %DriftArrayHeader [ %t46, %__bb_array_cap_ok1 ], [ %arr_len42, %__bb_array_copy_exit1 ]
   %zero_arr54 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr55 = insertvalue %DriftArrayHeader %zero_arr54, i64 0, 1
   %zero_arr56 = insertvalue %DriftArrayHeader %zero_arr55, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr56, ptr null, 3
-  %data57 = extractvalue %DriftArrayHeader %__array_cap_arrt58_3, 3
+  %data57 = extractvalue %DriftArrayHeader %__array_cap_arrt58_2, 3
   %eltptr58 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data57, i64 %t50
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t49, ptr %eltptr58
   %t83 = add i64 %t50, %t55
-  %arr_len59 = insertvalue %DriftArrayHeader %__array_cap_arrt58_3, i64 %t83, 0
+  %arr_len59 = insertvalue %DriftArrayHeader %__array_cap_arrt58_2, i64 %t83, 0
   %arr_gen60 = insertvalue %DriftArrayHeader %arr_len59, i64 %t54, 2
   store %DriftArrayHeader %arr_gen60, ptr %ranges__addr
   %t87 = load %DriftArrayHeader, ptr %ranges__addr
@@ -77563,8 +77563,8 @@ __bb_logic_rhs:
   %t22 = icmp eq i64 %t20, %t21
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt17_3 = phi i1 [ %t18, %__bb_logic_short ], [ %t22, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt17_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt17_2 = phi i1 [ %t18, %__bb_logic_short ], [ %t22, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt17_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t24 = add i1 0, 1
   %t25 = load ptr, ptr %p__addr
@@ -77643,30 +77643,30 @@ __bb_if_join:
   %__logic_tmpt39_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt564_2 = phi i1 [ %__logic_tmpt564_1, %__bb_if_join ], [ %__logic_tmpt564_2, %__bb_if_join1 ], [ %__logic_tmpt564_2, %__bb_array_cap_join2 ], [ %__logic_tmpt564_2, %__bb_array_cap_join24 ], [ %__logic_tmpt564_2, %__bb_match_arm_11 ], [ %__logic_tmpt564_2, %__bb_match_arm_12 ], [ %__logic_tmpt564_3, %__bb_match_arm_13 ], [ %__logic_tmpt564_2, %__bb_match_arm_1 ], [ %__logic_tmpt564_2, %__bb_array_cap_join28 ]
-  %__logic_tmpt558_2 = phi i1 [ %__logic_tmpt558_1, %__bb_if_join ], [ %__logic_tmpt558_2, %__bb_if_join1 ], [ %__logic_tmpt558_2, %__bb_array_cap_join2 ], [ %__logic_tmpt558_2, %__bb_array_cap_join24 ], [ %__logic_tmpt558_2, %__bb_match_arm_11 ], [ %__logic_tmpt558_2, %__bb_match_arm_12 ], [ %__logic_tmpt558_3, %__bb_match_arm_13 ], [ %__logic_tmpt558_2, %__bb_match_arm_1 ], [ %__logic_tmpt558_2, %__bb_array_cap_join28 ]
-  %__logic_tmpt552_2 = phi i1 [ %__logic_tmpt552_1, %__bb_if_join ], [ %__logic_tmpt552_2, %__bb_if_join1 ], [ %__logic_tmpt552_2, %__bb_array_cap_join2 ], [ %__logic_tmpt552_2, %__bb_array_cap_join24 ], [ %__logic_tmpt552_2, %__bb_match_arm_11 ], [ %__logic_tmpt552_2, %__bb_match_arm_12 ], [ %__logic_tmpt552_4, %__bb_match_arm_13 ], [ %__logic_tmpt552_2, %__bb_match_arm_1 ], [ %__logic_tmpt552_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt429_2 = phi i1 [ %__array_cap_grewt429_1, %__bb_if_join ], [ %__array_cap_grewt429_2, %__bb_if_join1 ], [ %__array_cap_grewt429_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt429_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt429_2, %__bb_match_arm_11 ], [ %__array_cap_grewt429_2, %__bb_match_arm_12 ], [ %__array_cap_grewt429_2, %__bb_match_arm_13 ], [ %__array_cap_grewt429_2, %__bb_match_arm_1 ], [ %__array_cap_grewt429_5, %__bb_array_cap_join28 ]
-  %__array_cap_arrt428_2 = phi %DriftArrayHeader [ %__array_cap_arrt428_1, %__bb_if_join ], [ %__array_cap_arrt428_2, %__bb_if_join1 ], [ %__array_cap_arrt428_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt428_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt428_2, %__bb_match_arm_11 ], [ %__array_cap_arrt428_2, %__bb_match_arm_12 ], [ %__array_cap_arrt428_2, %__bb_match_arm_13 ], [ %__array_cap_arrt428_2, %__bb_match_arm_1 ], [ %__arc9, %__bb_array_cap_join28 ]
-  %__array_cap_grewt388_2 = phi i1 [ %__array_cap_grewt388_1, %__bb_if_join ], [ %__array_cap_grewt388_2, %__bb_if_join1 ], [ %__array_cap_grewt388_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt388_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt388_2, %__bb_match_arm_11 ], [ %__array_cap_grewt388_2, %__bb_match_arm_12 ], [ %__array_cap_grewt388_2, %__bb_match_arm_13 ], [ %__array_cap_grewt388_2, %__bb_match_arm_1 ], [ %__array_cap_grewt388_3, %__bb_array_cap_join28 ]
-  %__array_cap_arrt387_2 = phi %DriftArrayHeader [ %__array_cap_arrt387_1, %__bb_if_join ], [ %__array_cap_arrt387_2, %__bb_if_join1 ], [ %__array_cap_arrt387_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt387_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt387_2, %__bb_match_arm_11 ], [ %__array_cap_arrt387_2, %__bb_match_arm_12 ], [ %__array_cap_arrt387_2, %__bb_match_arm_13 ], [ %__array_cap_arrt387_2, %__bb_match_arm_1 ], [ %__arc8, %__bb_array_cap_join28 ]
-  %__array_cap_grewt347_2 = phi i1 [ %__array_cap_grewt347_1, %__bb_if_join ], [ %__array_cap_grewt347_2, %__bb_if_join1 ], [ %__array_cap_grewt347_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt347_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt347_2, %__bb_match_arm_11 ], [ %__array_cap_grewt347_2, %__bb_match_arm_12 ], [ %__array_cap_grewt347_2, %__bb_match_arm_13 ], [ %__array_cap_grewt347_2, %__bb_match_arm_1 ], [ %__array_cap_grewt347_3, %__bb_array_cap_join28 ]
-  %__array_cap_arrt346_2 = phi %DriftArrayHeader [ %__array_cap_arrt346_1, %__bb_if_join ], [ %__array_cap_arrt346_2, %__bb_if_join1 ], [ %__array_cap_arrt346_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt346_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt346_2, %__bb_match_arm_11 ], [ %__array_cap_arrt346_2, %__bb_match_arm_12 ], [ %__array_cap_arrt346_2, %__bb_match_arm_13 ], [ %__array_cap_arrt346_2, %__bb_match_arm_1 ], [ %__arc7, %__bb_array_cap_join28 ]
-  %__array_cap_grewt306_2 = phi i1 [ %__array_cap_grewt306_1, %__bb_if_join ], [ %__array_cap_grewt306_2, %__bb_if_join1 ], [ %__array_cap_grewt306_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt306_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt306_2, %__bb_match_arm_11 ], [ %__array_cap_grewt306_2, %__bb_match_arm_12 ], [ %__array_cap_grewt306_2, %__bb_match_arm_13 ], [ %__array_cap_grewt306_2, %__bb_match_arm_1 ], [ %__array_cap_grewt306_5, %__bb_array_cap_join28 ]
-  %__array_cap_arrt305_2 = phi %DriftArrayHeader [ %__array_cap_arrt305_1, %__bb_if_join ], [ %__array_cap_arrt305_2, %__bb_if_join1 ], [ %__array_cap_arrt305_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt305_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt305_2, %__bb_match_arm_11 ], [ %__array_cap_arrt305_2, %__bb_match_arm_12 ], [ %__array_cap_arrt305_2, %__bb_match_arm_13 ], [ %__array_cap_arrt305_2, %__bb_match_arm_1 ], [ %__arc6, %__bb_array_cap_join28 ]
-  %__array_cap_grewt262_2 = phi i1 [ %__array_cap_grewt262_1, %__bb_if_join ], [ %__array_cap_grewt262_2, %__bb_if_join1 ], [ %__array_cap_grewt262_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt262_4, %__bb_array_cap_join24 ], [ %__array_cap_grewt262_2, %__bb_match_arm_11 ], [ %__array_cap_grewt262_2, %__bb_match_arm_12 ], [ %__array_cap_grewt262_2, %__bb_match_arm_13 ], [ %__array_cap_grewt262_2, %__bb_match_arm_1 ], [ %__array_cap_grewt262_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt261_2 = phi %DriftArrayHeader [ %__array_cap_arrt261_1, %__bb_if_join ], [ %__array_cap_arrt261_2, %__bb_if_join1 ], [ %__array_cap_arrt261_2, %__bb_array_cap_join2 ], [ %__arc5, %__bb_array_cap_join24 ], [ %__array_cap_arrt261_2, %__bb_match_arm_11 ], [ %__array_cap_arrt261_2, %__bb_match_arm_12 ], [ %__array_cap_arrt261_2, %__bb_match_arm_13 ], [ %__array_cap_arrt261_2, %__bb_match_arm_1 ], [ %__array_cap_arrt261_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt221_2 = phi i1 [ %__array_cap_grewt221_1, %__bb_if_join ], [ %__array_cap_grewt221_2, %__bb_if_join1 ], [ %__array_cap_grewt221_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt221_3, %__bb_array_cap_join24 ], [ %__array_cap_grewt221_2, %__bb_match_arm_11 ], [ %__array_cap_grewt221_2, %__bb_match_arm_12 ], [ %__array_cap_grewt221_2, %__bb_match_arm_13 ], [ %__array_cap_grewt221_2, %__bb_match_arm_1 ], [ %__array_cap_grewt221_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt220_2 = phi %DriftArrayHeader [ %__array_cap_arrt220_1, %__bb_if_join ], [ %__array_cap_arrt220_2, %__bb_if_join1 ], [ %__array_cap_arrt220_2, %__bb_array_cap_join2 ], [ %__arc4, %__bb_array_cap_join24 ], [ %__array_cap_arrt220_2, %__bb_match_arm_11 ], [ %__array_cap_arrt220_2, %__bb_match_arm_12 ], [ %__array_cap_arrt220_2, %__bb_match_arm_13 ], [ %__array_cap_arrt220_2, %__bb_match_arm_1 ], [ %__array_cap_arrt220_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt180_2 = phi i1 [ %__array_cap_grewt180_1, %__bb_if_join ], [ %__array_cap_grewt180_2, %__bb_if_join1 ], [ %__array_cap_grewt180_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt180_4, %__bb_array_cap_join24 ], [ %__array_cap_grewt180_2, %__bb_match_arm_11 ], [ %__array_cap_grewt180_2, %__bb_match_arm_12 ], [ %__array_cap_grewt180_2, %__bb_match_arm_13 ], [ %__array_cap_grewt180_2, %__bb_match_arm_1 ], [ %__array_cap_grewt180_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt179_2 = phi %DriftArrayHeader [ %__array_cap_arrt179_1, %__bb_if_join ], [ %__array_cap_arrt179_2, %__bb_if_join1 ], [ %__array_cap_arrt179_2, %__bb_array_cap_join2 ], [ %__arc3, %__bb_array_cap_join24 ], [ %__array_cap_arrt179_2, %__bb_match_arm_11 ], [ %__array_cap_arrt179_2, %__bb_match_arm_12 ], [ %__array_cap_arrt179_2, %__bb_match_arm_13 ], [ %__array_cap_arrt179_2, %__bb_match_arm_1 ], [ %__array_cap_arrt179_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt139_2 = phi i1 [ %__array_cap_grewt139_1, %__bb_if_join ], [ %__array_cap_grewt139_2, %__bb_if_join1 ], [ %__array_cap_grewt139_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt139_5, %__bb_array_cap_join24 ], [ %__array_cap_grewt139_2, %__bb_match_arm_11 ], [ %__array_cap_grewt139_2, %__bb_match_arm_12 ], [ %__array_cap_grewt139_2, %__bb_match_arm_13 ], [ %__array_cap_grewt139_2, %__bb_match_arm_1 ], [ %__array_cap_grewt139_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt138_2 = phi %DriftArrayHeader [ %__array_cap_arrt138_1, %__bb_if_join ], [ %__array_cap_arrt138_2, %__bb_if_join1 ], [ %__array_cap_arrt138_2, %__bb_array_cap_join2 ], [ %__arc2, %__bb_array_cap_join24 ], [ %__array_cap_arrt138_2, %__bb_match_arm_11 ], [ %__array_cap_arrt138_2, %__bb_match_arm_12 ], [ %__array_cap_arrt138_2, %__bb_match_arm_13 ], [ %__array_cap_arrt138_2, %__bb_match_arm_1 ], [ %__array_cap_arrt138_2, %__bb_array_cap_join28 ]
-  %__array_cap_grewt95_2 = phi i1 [ %__array_cap_grewt95_1, %__bb_if_join ], [ %__array_cap_grewt95_2, %__bb_if_join1 ], [ %__array_cap_grewt95_3, %__bb_array_cap_join2 ], [ %__array_cap_grewt95_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt95_2, %__bb_match_arm_11 ], [ %__array_cap_grewt95_2, %__bb_match_arm_12 ], [ %__array_cap_grewt95_2, %__bb_match_arm_13 ], [ %__array_cap_grewt95_2, %__bb_match_arm_1 ], [ %__array_cap_grewt95_2, %__bb_array_cap_join28 ]
-  %__array_cap_arrt94_2 = phi %DriftArrayHeader [ %__array_cap_arrt94_1, %__bb_if_join ], [ %__array_cap_arrt94_2, %__bb_if_join1 ], [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt94_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt94_2, %__bb_match_arm_11 ], [ %__array_cap_arrt94_2, %__bb_match_arm_12 ], [ %__array_cap_arrt94_2, %__bb_match_arm_13 ], [ %__array_cap_arrt94_2, %__bb_match_arm_1 ], [ %__array_cap_arrt94_2, %__bb_array_cap_join28 ]
-  %__logic_tmpt45_2 = phi i1 [ %__logic_tmpt45_1, %__bb_if_join ], [ %__logic_tmpt45_6, %__bb_if_join1 ], [ %__logic_tmpt45_6, %__bb_array_cap_join2 ], [ %__logic_tmpt45_6, %__bb_array_cap_join24 ], [ %__logic_tmpt45_6, %__bb_match_arm_11 ], [ %__logic_tmpt45_6, %__bb_match_arm_12 ], [ %__logic_tmpt45_6, %__bb_match_arm_13 ], [ %__logic_tmpt45_6, %__bb_match_arm_1 ], [ %__logic_tmpt45_6, %__bb_array_cap_join28 ]
-  %__logic_tmpt39_2 = phi i1 [ %__logic_tmpt39_1, %__bb_if_join ], [ %__logic_tmpt39_5, %__bb_if_join1 ], [ %__logic_tmpt39_5, %__bb_array_cap_join2 ], [ %__logic_tmpt39_5, %__bb_array_cap_join24 ], [ %__logic_tmpt39_5, %__bb_match_arm_11 ], [ %__logic_tmpt39_5, %__bb_match_arm_12 ], [ %__logic_tmpt39_5, %__bb_match_arm_13 ], [ %__logic_tmpt39_5, %__bb_match_arm_1 ], [ %__logic_tmpt39_5, %__bb_array_cap_join28 ]
-  %first_2 = phi i1 [ %t35, %__bb_if_join ], [ %t50, %__bb_if_join1 ], [ %t50, %__bb_array_cap_join2 ], [ %t50, %__bb_array_cap_join24 ], [ %t50, %__bb_match_arm_11 ], [ %t50, %__bb_match_arm_12 ], [ %t50, %__bb_match_arm_13 ], [ %t50, %__bb_match_arm_1 ], [ %t50, %__bb_array_cap_join28 ]
+  %__logic_tmpt564_2 = phi i1 [ %__logic_tmpt564_1, %__bb_if_join ], [ %__logic_tmpt564_2, %__bb_array_cap_join2 ], [ %__logic_tmpt564_2, %__bb_array_cap_join28 ], [ %__logic_tmpt564_2, %__bb_match_arm_1 ], [ %__logic_tmpt564_2, %__bb_match_arm_12 ], [ %__logic_tmpt564_4, %__bb_match_arm_13 ], [ %__logic_tmpt564_2, %__bb_match_arm_11 ], [ %__logic_tmpt564_2, %__bb_array_cap_join24 ], [ %__logic_tmpt564_2, %__bb_if_join1 ]
+  %__logic_tmpt558_2 = phi i1 [ %__logic_tmpt558_1, %__bb_if_join ], [ %__logic_tmpt558_2, %__bb_array_cap_join2 ], [ %__logic_tmpt558_2, %__bb_array_cap_join28 ], [ %__logic_tmpt558_2, %__bb_match_arm_1 ], [ %__logic_tmpt558_2, %__bb_match_arm_12 ], [ %__logic_tmpt558_3, %__bb_match_arm_13 ], [ %__logic_tmpt558_2, %__bb_match_arm_11 ], [ %__logic_tmpt558_2, %__bb_array_cap_join24 ], [ %__logic_tmpt558_2, %__bb_if_join1 ]
+  %__logic_tmpt552_2 = phi i1 [ %__logic_tmpt552_1, %__bb_if_join ], [ %__logic_tmpt552_2, %__bb_array_cap_join2 ], [ %__logic_tmpt552_2, %__bb_array_cap_join28 ], [ %__logic_tmpt552_2, %__bb_match_arm_1 ], [ %__logic_tmpt552_2, %__bb_match_arm_12 ], [ %__logic_tmpt552_3, %__bb_match_arm_13 ], [ %__logic_tmpt552_2, %__bb_match_arm_11 ], [ %__logic_tmpt552_2, %__bb_array_cap_join24 ], [ %__logic_tmpt552_2, %__bb_if_join1 ]
+  %__array_cap_grewt429_2 = phi i1 [ %__array_cap_grewt429_1, %__bb_if_join ], [ %__array_cap_grewt429_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt429_5, %__bb_array_cap_join28 ], [ %__array_cap_grewt429_2, %__bb_match_arm_1 ], [ %__array_cap_grewt429_2, %__bb_match_arm_12 ], [ %__array_cap_grewt429_2, %__bb_match_arm_13 ], [ %__array_cap_grewt429_2, %__bb_match_arm_11 ], [ %__array_cap_grewt429_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt429_2, %__bb_if_join1 ]
+  %__array_cap_arrt428_2 = phi %DriftArrayHeader [ %__array_cap_arrt428_1, %__bb_if_join ], [ %__array_cap_arrt428_2, %__bb_array_cap_join2 ], [ %__arc9, %__bb_array_cap_join28 ], [ %__array_cap_arrt428_2, %__bb_match_arm_1 ], [ %__array_cap_arrt428_2, %__bb_match_arm_12 ], [ %__array_cap_arrt428_2, %__bb_match_arm_13 ], [ %__array_cap_arrt428_2, %__bb_match_arm_11 ], [ %__array_cap_arrt428_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt428_2, %__bb_if_join1 ]
+  %__array_cap_grewt388_2 = phi i1 [ %__array_cap_grewt388_1, %__bb_if_join ], [ %__array_cap_grewt388_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt388_3, %__bb_array_cap_join28 ], [ %__array_cap_grewt388_2, %__bb_match_arm_1 ], [ %__array_cap_grewt388_2, %__bb_match_arm_12 ], [ %__array_cap_grewt388_2, %__bb_match_arm_13 ], [ %__array_cap_grewt388_2, %__bb_match_arm_11 ], [ %__array_cap_grewt388_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt388_2, %__bb_if_join1 ]
+  %__array_cap_arrt387_2 = phi %DriftArrayHeader [ %__array_cap_arrt387_1, %__bb_if_join ], [ %__array_cap_arrt387_2, %__bb_array_cap_join2 ], [ %__arc8, %__bb_array_cap_join28 ], [ %__array_cap_arrt387_2, %__bb_match_arm_1 ], [ %__array_cap_arrt387_2, %__bb_match_arm_12 ], [ %__array_cap_arrt387_2, %__bb_match_arm_13 ], [ %__array_cap_arrt387_2, %__bb_match_arm_11 ], [ %__array_cap_arrt387_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt387_2, %__bb_if_join1 ]
+  %__array_cap_grewt347_2 = phi i1 [ %__array_cap_grewt347_1, %__bb_if_join ], [ %__array_cap_grewt347_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt347_5, %__bb_array_cap_join28 ], [ %__array_cap_grewt347_2, %__bb_match_arm_1 ], [ %__array_cap_grewt347_2, %__bb_match_arm_12 ], [ %__array_cap_grewt347_2, %__bb_match_arm_13 ], [ %__array_cap_grewt347_2, %__bb_match_arm_11 ], [ %__array_cap_grewt347_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt347_2, %__bb_if_join1 ]
+  %__array_cap_arrt346_2 = phi %DriftArrayHeader [ %__array_cap_arrt346_1, %__bb_if_join ], [ %__array_cap_arrt346_2, %__bb_array_cap_join2 ], [ %__arc7, %__bb_array_cap_join28 ], [ %__array_cap_arrt346_2, %__bb_match_arm_1 ], [ %__array_cap_arrt346_2, %__bb_match_arm_12 ], [ %__array_cap_arrt346_2, %__bb_match_arm_13 ], [ %__array_cap_arrt346_2, %__bb_match_arm_11 ], [ %__array_cap_arrt346_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt346_2, %__bb_if_join1 ]
+  %__array_cap_grewt306_2 = phi i1 [ %__array_cap_grewt306_1, %__bb_if_join ], [ %__array_cap_grewt306_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt306_3, %__bb_array_cap_join28 ], [ %__array_cap_grewt306_2, %__bb_match_arm_1 ], [ %__array_cap_grewt306_2, %__bb_match_arm_12 ], [ %__array_cap_grewt306_2, %__bb_match_arm_13 ], [ %__array_cap_grewt306_2, %__bb_match_arm_11 ], [ %__array_cap_grewt306_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt306_2, %__bb_if_join1 ]
+  %__array_cap_arrt305_2 = phi %DriftArrayHeader [ %__array_cap_arrt305_1, %__bb_if_join ], [ %__array_cap_arrt305_2, %__bb_array_cap_join2 ], [ %__arc6, %__bb_array_cap_join28 ], [ %__array_cap_arrt305_2, %__bb_match_arm_1 ], [ %__array_cap_arrt305_2, %__bb_match_arm_12 ], [ %__array_cap_arrt305_2, %__bb_match_arm_13 ], [ %__array_cap_arrt305_2, %__bb_match_arm_11 ], [ %__array_cap_arrt305_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt305_2, %__bb_if_join1 ]
+  %__array_cap_grewt262_2 = phi i1 [ %__array_cap_grewt262_1, %__bb_if_join ], [ %__array_cap_grewt262_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt262_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt262_2, %__bb_match_arm_1 ], [ %__array_cap_grewt262_2, %__bb_match_arm_12 ], [ %__array_cap_grewt262_2, %__bb_match_arm_13 ], [ %__array_cap_grewt262_2, %__bb_match_arm_11 ], [ %__array_cap_grewt262_3, %__bb_array_cap_join24 ], [ %__array_cap_grewt262_2, %__bb_if_join1 ]
+  %__array_cap_arrt261_2 = phi %DriftArrayHeader [ %__array_cap_arrt261_1, %__bb_if_join ], [ %__array_cap_arrt261_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt261_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt261_2, %__bb_match_arm_1 ], [ %__array_cap_arrt261_2, %__bb_match_arm_12 ], [ %__array_cap_arrt261_2, %__bb_match_arm_13 ], [ %__array_cap_arrt261_2, %__bb_match_arm_11 ], [ %__arc5, %__bb_array_cap_join24 ], [ %__array_cap_arrt261_2, %__bb_if_join1 ]
+  %__array_cap_grewt221_2 = phi i1 [ %__array_cap_grewt221_1, %__bb_if_join ], [ %__array_cap_grewt221_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt221_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt221_2, %__bb_match_arm_1 ], [ %__array_cap_grewt221_2, %__bb_match_arm_12 ], [ %__array_cap_grewt221_2, %__bb_match_arm_13 ], [ %__array_cap_grewt221_2, %__bb_match_arm_11 ], [ %__array_cap_grewt221_3, %__bb_array_cap_join24 ], [ %__array_cap_grewt221_2, %__bb_if_join1 ]
+  %__array_cap_arrt220_2 = phi %DriftArrayHeader [ %__array_cap_arrt220_1, %__bb_if_join ], [ %__array_cap_arrt220_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt220_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt220_2, %__bb_match_arm_1 ], [ %__array_cap_arrt220_2, %__bb_match_arm_12 ], [ %__array_cap_arrt220_2, %__bb_match_arm_13 ], [ %__array_cap_arrt220_2, %__bb_match_arm_11 ], [ %__arc4, %__bb_array_cap_join24 ], [ %__array_cap_arrt220_2, %__bb_if_join1 ]
+  %__array_cap_grewt180_2 = phi i1 [ %__array_cap_grewt180_1, %__bb_if_join ], [ %__array_cap_grewt180_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt180_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt180_2, %__bb_match_arm_1 ], [ %__array_cap_grewt180_2, %__bb_match_arm_12 ], [ %__array_cap_grewt180_2, %__bb_match_arm_13 ], [ %__array_cap_grewt180_2, %__bb_match_arm_11 ], [ %__array_cap_grewt180_4, %__bb_array_cap_join24 ], [ %__array_cap_grewt180_2, %__bb_if_join1 ]
+  %__array_cap_arrt179_2 = phi %DriftArrayHeader [ %__array_cap_arrt179_1, %__bb_if_join ], [ %__array_cap_arrt179_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt179_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt179_2, %__bb_match_arm_1 ], [ %__array_cap_arrt179_2, %__bb_match_arm_12 ], [ %__array_cap_arrt179_2, %__bb_match_arm_13 ], [ %__array_cap_arrt179_2, %__bb_match_arm_11 ], [ %__arc3, %__bb_array_cap_join24 ], [ %__array_cap_arrt179_2, %__bb_if_join1 ]
+  %__array_cap_grewt139_2 = phi i1 [ %__array_cap_grewt139_1, %__bb_if_join ], [ %__array_cap_grewt139_2, %__bb_array_cap_join2 ], [ %__array_cap_grewt139_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt139_2, %__bb_match_arm_1 ], [ %__array_cap_grewt139_2, %__bb_match_arm_12 ], [ %__array_cap_grewt139_2, %__bb_match_arm_13 ], [ %__array_cap_grewt139_2, %__bb_match_arm_11 ], [ %__array_cap_grewt139_4, %__bb_array_cap_join24 ], [ %__array_cap_grewt139_2, %__bb_if_join1 ]
+  %__array_cap_arrt138_2 = phi %DriftArrayHeader [ %__array_cap_arrt138_1, %__bb_if_join ], [ %__array_cap_arrt138_2, %__bb_array_cap_join2 ], [ %__array_cap_arrt138_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt138_2, %__bb_match_arm_1 ], [ %__array_cap_arrt138_2, %__bb_match_arm_12 ], [ %__array_cap_arrt138_2, %__bb_match_arm_13 ], [ %__array_cap_arrt138_2, %__bb_match_arm_11 ], [ %__arc2, %__bb_array_cap_join24 ], [ %__array_cap_arrt138_2, %__bb_if_join1 ]
+  %__array_cap_grewt95_2 = phi i1 [ %__array_cap_grewt95_1, %__bb_if_join ], [ %__array_cap_grewt95_4, %__bb_array_cap_join2 ], [ %__array_cap_grewt95_2, %__bb_array_cap_join28 ], [ %__array_cap_grewt95_2, %__bb_match_arm_1 ], [ %__array_cap_grewt95_2, %__bb_match_arm_12 ], [ %__array_cap_grewt95_2, %__bb_match_arm_13 ], [ %__array_cap_grewt95_2, %__bb_match_arm_11 ], [ %__array_cap_grewt95_2, %__bb_array_cap_join24 ], [ %__array_cap_grewt95_2, %__bb_if_join1 ]
+  %__array_cap_arrt94_2 = phi %DriftArrayHeader [ %__array_cap_arrt94_1, %__bb_if_join ], [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt94_2, %__bb_array_cap_join28 ], [ %__array_cap_arrt94_2, %__bb_match_arm_1 ], [ %__array_cap_arrt94_2, %__bb_match_arm_12 ], [ %__array_cap_arrt94_2, %__bb_match_arm_13 ], [ %__array_cap_arrt94_2, %__bb_match_arm_11 ], [ %__array_cap_arrt94_2, %__bb_array_cap_join24 ], [ %__array_cap_arrt94_2, %__bb_if_join1 ]
+  %__logic_tmpt45_2 = phi i1 [ %__logic_tmpt45_1, %__bb_if_join ], [ %__logic_tmpt45_3, %__bb_array_cap_join2 ], [ %__logic_tmpt45_3, %__bb_array_cap_join28 ], [ %__logic_tmpt45_3, %__bb_match_arm_1 ], [ %__logic_tmpt45_3, %__bb_match_arm_12 ], [ %__logic_tmpt45_3, %__bb_match_arm_13 ], [ %__logic_tmpt45_3, %__bb_match_arm_11 ], [ %__logic_tmpt45_3, %__bb_array_cap_join24 ], [ %__logic_tmpt45_3, %__bb_if_join1 ]
+  %__logic_tmpt39_2 = phi i1 [ %__logic_tmpt39_1, %__bb_if_join ], [ %__logic_tmpt39_3, %__bb_array_cap_join2 ], [ %__logic_tmpt39_3, %__bb_array_cap_join28 ], [ %__logic_tmpt39_3, %__bb_match_arm_1 ], [ %__logic_tmpt39_3, %__bb_match_arm_12 ], [ %__logic_tmpt39_3, %__bb_match_arm_13 ], [ %__logic_tmpt39_3, %__bb_match_arm_11 ], [ %__logic_tmpt39_3, %__bb_array_cap_join24 ], [ %__logic_tmpt39_3, %__bb_if_join1 ]
+  %first_2 = phi i1 [ %t35, %__bb_if_join ], [ %t50, %__bb_array_cap_join2 ], [ %t50, %__bb_array_cap_join28 ], [ %t50, %__bb_match_arm_1 ], [ %t50, %__bb_match_arm_12 ], [ %t50, %__bb_match_arm_13 ], [ %t50, %__bb_match_arm_11 ], [ %t50, %__bb_array_cap_join24 ], [ %t50, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t36 = load ptr, ptr %p__addr
@@ -77688,12 +77688,12 @@ __bb_logic_short2:
   %t46 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt45_3 = phi i1 [ %t46, %__bb_logic_short2 ], [ %first_2, %__bb_logic_rhs2 ]
+  %__logic_tmpt45_4 = phi i1 [ %first_2, %__bb_logic_rhs2 ], [ %t46, %__bb_logic_short2 ]
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt45_6 = phi i1 [ %__logic_tmpt45_3, %__bb_logic_join2 ], [ %__logic_tmpt45_2, %__bb_logic_short1 ]
-  %__logic_tmpt39_5 = phi i1 [ %__logic_tmpt45_3, %__bb_logic_join2 ], [ %t40, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt39_5, label %__bb_if_then1, label %__bb_if_else
+  %__logic_tmpt45_3 = phi i1 [ %__logic_tmpt45_4, %__bb_logic_join2 ], [ %__logic_tmpt45_2, %__bb_logic_short1 ]
+  %__logic_tmpt39_3 = phi i1 [ %__logic_tmpt45_4, %__bb_logic_join2 ], [ %t40, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt39_3, label %__bb_if_then1, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -77988,8 +77988,8 @@ __bb_logic_short3:
   %t553 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt552_4 = phi i1 [ %t556, %__bb_logic_rhs3 ], [ %t553, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt552_4, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt552_3 = phi i1 [ %t553, %__bb_logic_short3 ], [ %t556, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt552_3, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %t561 = add i64 0, 94
   %t562 = icmp eq i64 %t77, %t561
@@ -77998,7 +77998,7 @@ __bb_logic_short4:
   %t559 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt558_3 = phi i1 [ %t559, %__bb_logic_short4 ], [ %t562, %__bb_logic_rhs4 ]
+  %__logic_tmpt558_3 = phi i1 [ %t562, %__bb_logic_rhs4 ], [ %t559, %__bb_logic_short4 ]
   br i1 %__logic_tmpt558_3, label %__bb_logic_short5, label %__bb_logic_rhs5
 __bb_logic_rhs5:
   %t567 = add i64 0, 45
@@ -78008,8 +78008,8 @@ __bb_logic_short5:
   %t565 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt564_3 = phi i1 [ %t565, %__bb_logic_short5 ], [ %t568, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt564_3, label %__bb_if_then10, label %__bb_if_join10
+  %__logic_tmpt564_4 = phi i1 [ %t568, %__bb_logic_rhs5 ], [ %t565, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt564_4, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   %strptr111 = getelementptr inbounds { i64, i64, [24 x i8] }, ptr @.str1883, i32 0, i32 2, i32 0
   %str0112 = insertvalue %DriftString zeroinitializer, i64 23, 0
@@ -78457,17 +78457,17 @@ __bb_array_cap_ok5:
   %t307 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt306_5 = phi i1 [ %t307, %__bb_array_cap_ok5 ], [ %t327, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt305_5 = phi %DriftArrayHeader [ %t293, %__bb_array_cap_ok5 ], [ %arr_len221, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt306_3 = phi i1 [ %t327, %__bb_array_copy_exit5 ], [ %t307, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt305_3 = phi %DriftArrayHeader [ %arr_len221, %__bb_array_copy_exit5 ], [ %t293, %__bb_array_cap_ok5 ]
   %zero_arr233 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr234 = insertvalue %DriftArrayHeader %zero_arr233, i64 0, 1
   %zero_arr235 = insertvalue %DriftArrayHeader %zero_arr234, i64 0, 2
   %__arc6 = insertvalue %DriftArrayHeader %zero_arr235, ptr null, 3
-  %data236 = extractvalue %DriftArrayHeader %__array_cap_arrt305_5, 3
+  %data236 = extractvalue %DriftArrayHeader %__array_cap_arrt305_3, 3
   %eltptr237 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data236, i64 %t297
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t296, ptr %eltptr237
   %t330 = add i64 %t297, %t302
-  %arr_len238 = insertvalue %DriftArrayHeader %__array_cap_arrt305_5, i64 %t330, 0
+  %arr_len238 = insertvalue %DriftArrayHeader %__array_cap_arrt305_3, i64 %t330, 0
   %arr_gen239 = insertvalue %DriftArrayHeader %arr_len238, i64 %t301, 2
   store %DriftArrayHeader %arr_gen239, ptr %ranges__addr
   %t334 = load %DriftArrayHeader, ptr %ranges__addr
@@ -78542,17 +78542,17 @@ __bb_array_cap_ok6:
   %t348 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt347_3 = phi i1 [ %t368, %__bb_array_copy_exit6 ], [ %t348, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt346_3 = phi %DriftArrayHeader [ %arr_len246, %__bb_array_copy_exit6 ], [ %t334, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt347_5 = phi i1 [ %t368, %__bb_array_copy_exit6 ], [ %t348, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt346_5 = phi %DriftArrayHeader [ %arr_len246, %__bb_array_copy_exit6 ], [ %t334, %__bb_array_cap_ok6 ]
   %zero_arr258 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr259 = insertvalue %DriftArrayHeader %zero_arr258, i64 0, 1
   %zero_arr260 = insertvalue %DriftArrayHeader %zero_arr259, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr260, ptr null, 3
-  %data261 = extractvalue %DriftArrayHeader %__array_cap_arrt346_3, 3
+  %data261 = extractvalue %DriftArrayHeader %__array_cap_arrt346_5, 3
   %eltptr262 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data261, i64 %t338
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t337, ptr %eltptr262
   %t371 = add i64 %t338, %t343
-  %arr_len263 = insertvalue %DriftArrayHeader %__array_cap_arrt346_3, i64 %t371, 0
+  %arr_len263 = insertvalue %DriftArrayHeader %__array_cap_arrt346_5, i64 %t371, 0
   %arr_gen264 = insertvalue %DriftArrayHeader %arr_len263, i64 %t342, 2
   store %DriftArrayHeader %arr_gen264, ptr %ranges__addr
   %t375 = load %DriftArrayHeader, ptr %ranges__addr
@@ -78627,8 +78627,8 @@ __bb_array_cap_ok7:
   %t389 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt388_3 = phi i1 [ %t409, %__bb_array_copy_exit7 ], [ %t389, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt387_3 = phi %DriftArrayHeader [ %arr_len271, %__bb_array_copy_exit7 ], [ %t375, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt388_3 = phi i1 [ %t389, %__bb_array_cap_ok7 ], [ %t409, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt387_3 = phi %DriftArrayHeader [ %t375, %__bb_array_cap_ok7 ], [ %arr_len271, %__bb_array_copy_exit7 ]
   %zero_arr283 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr284 = insertvalue %DriftArrayHeader %zero_arr283, i64 0, 1
   %zero_arr285 = insertvalue %DriftArrayHeader %zero_arr284, i64 0, 2
@@ -78799,17 +78799,17 @@ __bb_array_cap_ok1:
   %t140 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt139_5 = phi i1 [ %t160, %__bb_array_copy_exit1 ], [ %t140, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt138_5 = phi %DriftArrayHeader [ %arr_len321, %__bb_array_copy_exit1 ], [ %t126, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt139_4 = phi i1 [ %t140, %__bb_array_cap_ok1 ], [ %t160, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt138_4 = phi %DriftArrayHeader [ %t126, %__bb_array_cap_ok1 ], [ %arr_len321, %__bb_array_copy_exit1 ]
   %zero_arr333 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr334 = insertvalue %DriftArrayHeader %zero_arr333, i64 0, 1
   %zero_arr335 = insertvalue %DriftArrayHeader %zero_arr334, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr335, ptr null, 3
-  %data336 = extractvalue %DriftArrayHeader %__array_cap_arrt138_5, 3
+  %data336 = extractvalue %DriftArrayHeader %__array_cap_arrt138_4, 3
   %eltptr337 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data336, i64 %t130
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t129, ptr %eltptr337
   %t163 = add i64 %t130, %t135
-  %arr_len338 = insertvalue %DriftArrayHeader %__array_cap_arrt138_5, i64 %t163, 0
+  %arr_len338 = insertvalue %DriftArrayHeader %__array_cap_arrt138_4, i64 %t163, 0
   %arr_gen339 = insertvalue %DriftArrayHeader %arr_len338, i64 %t134, 2
   store %DriftArrayHeader %arr_gen339, ptr %ranges__addr
   %t167 = load %DriftArrayHeader, ptr %ranges__addr
@@ -79054,17 +79054,17 @@ __bb_array_cap_ok4:
   %t263 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt262_4 = phi i1 [ %t263, %__bb_array_cap_ok4 ], [ %t283, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt261_4 = phi %DriftArrayHeader [ %t249, %__bb_array_cap_ok4 ], [ %arr_len396, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt262_3 = phi i1 [ %t263, %__bb_array_cap_ok4 ], [ %t283, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt261_3 = phi %DriftArrayHeader [ %t249, %__bb_array_cap_ok4 ], [ %arr_len396, %__bb_array_copy_exit4 ]
   %zero_arr408 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr409 = insertvalue %DriftArrayHeader %zero_arr408, i64 0, 1
   %zero_arr410 = insertvalue %DriftArrayHeader %zero_arr409, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr410, ptr null, 3
-  %data411 = extractvalue %DriftArrayHeader %__array_cap_arrt261_4, 3
+  %data411 = extractvalue %DriftArrayHeader %__array_cap_arrt261_3, 3
   %eltptr412 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data411, i64 %t253
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t252, ptr %eltptr412
   %t286 = add i64 %t253, %t258
-  %arr_len413 = insertvalue %DriftArrayHeader %__array_cap_arrt261_4, i64 %t286, 0
+  %arr_len413 = insertvalue %DriftArrayHeader %__array_cap_arrt261_3, i64 %t286, 0
   %arr_gen414 = insertvalue %DriftArrayHeader %arr_len413, i64 %t257, 2
   store %DriftArrayHeader %arr_gen414, ptr %ranges__addr
   br label %__bb_loop_header
@@ -79141,17 +79141,17 @@ __bb_array_cap_ok:
   %t96 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt95_3 = phi i1 [ %t96, %__bb_array_cap_ok ], [ %t116, %__bb_array_copy_exit ]
-  %__array_cap_arrt94_3 = phi %DriftArrayHeader [ %t82, %__bb_array_cap_ok ], [ %arr_len421, %__bb_array_copy_exit ]
+  %__array_cap_grewt95_4 = phi i1 [ %t96, %__bb_array_cap_ok ], [ %t116, %__bb_array_copy_exit ]
+  %__array_cap_arrt94_4 = phi %DriftArrayHeader [ %t82, %__bb_array_cap_ok ], [ %arr_len421, %__bb_array_copy_exit ]
   %zero_arr433 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr434 = insertvalue %DriftArrayHeader %zero_arr433, i64 0, 1
   %zero_arr435 = insertvalue %DriftArrayHeader %zero_arr434, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr435, ptr null, 3
-  %data436 = extractvalue %DriftArrayHeader %__array_cap_arrt94_3, 3
+  %data436 = extractvalue %DriftArrayHeader %__array_cap_arrt94_4, 3
   %eltptr437 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data436, i64 %t86
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t85, ptr %eltptr437
   %t119 = add i64 %t86, %t91
-  %arr_len438 = insertvalue %DriftArrayHeader %__array_cap_arrt94_3, i64 %t119, 0
+  %arr_len438 = insertvalue %DriftArrayHeader %__array_cap_arrt94_4, i64 %t119, 0
   %arr_gen439 = insertvalue %DriftArrayHeader %arr_len438, i64 %t90, 2
   store %DriftArrayHeader %arr_gen439, ptr %ranges__addr
   br label %__bb_loop_header
@@ -79240,9 +79240,9 @@ __bb_logic_rhs:
   %t10 = icmp eq i64 %t8, %t9
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t10, %__bb_logic_rhs ]
   %__logic_tmpt21_1 = add i1 0, 0
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t12 = load ptr, ptr %p__addr
   %t13 = load %Struct_std_2Eregex_Parser_54abc472dc1add0a, ptr %t12
@@ -79287,12 +79287,12 @@ __bb_logic_rhs1:
   %t37 = icmp ne i64 %t35, %t36
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt21_5 = phi i1 [ %t37, %__bb_logic_rhs1 ], [ %t22, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt21_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt21_3 = phi i1 [ %t37, %__bb_logic_rhs1 ], [ %t22, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt21_3, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   br label %__bb_if_join
 __bb_if_join:
-  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_logic_join ], [ %__logic_tmpt21_5, %__bb_if_join1 ]
+  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_logic_join ], [ %__logic_tmpt21_3, %__bb_if_join1 ]
   %t188 = load %DriftArrayHeader, ptr %ranges_1
   %struct15 = insertvalue %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c zeroinitializer, i8 %lo_1, 0
   %t191 = insertvalue %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %struct15, i8 %lo_1, 1
@@ -79363,17 +79363,17 @@ __bb_array_cap_ok1:
   %t202 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt201_3 = phi i1 [ %t222, %__bb_array_copy_exit1 ], [ %t202, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt200_3 = phi %DriftArrayHeader [ %arr_len21, %__bb_array_copy_exit1 ], [ %t188, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt201_2 = phi i1 [ %t202, %__bb_array_cap_ok1 ], [ %t222, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt200_2 = phi %DriftArrayHeader [ %t188, %__bb_array_cap_ok1 ], [ %arr_len21, %__bb_array_copy_exit1 ]
   %zero_arr33 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr34 = insertvalue %DriftArrayHeader %zero_arr33, i64 0, 1
   %zero_arr35 = insertvalue %DriftArrayHeader %zero_arr34, i64 0, 2
   %__arc12 = insertvalue %DriftArrayHeader %zero_arr35, ptr null, 3
-  %data36 = extractvalue %DriftArrayHeader %__array_cap_arrt200_3, 3
+  %data36 = extractvalue %DriftArrayHeader %__array_cap_arrt200_2, 3
   %eltptr37 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data36, i64 %t192
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t191, ptr %eltptr37
   %t225 = add i64 %t192, %t197
-  %arr_len38 = insertvalue %DriftArrayHeader %__array_cap_arrt200_3, i64 %t225, 0
+  %arr_len38 = insertvalue %DriftArrayHeader %__array_cap_arrt200_2, i64 %t225, 0
   %arr_gen39 = insertvalue %DriftArrayHeader %arr_len38, i64 %t196, 2
   store %DriftArrayHeader %arr_gen39, ptr %ranges_1
   call void @"std.core::void_value__impl"()
@@ -79426,9 +79426,9 @@ __bb_if_join2:
 __bb_if_else:
   %t128 = load ptr, ptr %p__addr
   %t129 = call i8 @"std.regex::_advance"(ptr %t128)
-  %__logic_tmpt111_2 = add i1 0, 0
-  %__logic_tmpt105_2 = add i1 0, 0
-  %__logic_tmpt99_2 = add i1 0, 0
+  %__logic_tmpt111_11 = add i1 0, 0
+  %__logic_tmpt105_11 = add i1 0, 0
+  %__logic_tmpt99_11 = add i1 0, 0
   br label %__bb_if_join3
 __bb_if_then3:
   %t62 = load ptr, ptr %p__addr
@@ -79469,8 +79469,8 @@ __bb_logic_short2:
   %t100 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt99_6 = phi i1 [ %t100, %__bb_logic_short2 ], [ %t103, %__bb_logic_rhs2 ]
-  br i1 %__logic_tmpt99_6, label %__bb_logic_short3, label %__bb_logic_rhs3
+  %__logic_tmpt99_5 = phi i1 [ %t103, %__bb_logic_rhs2 ], [ %t100, %__bb_logic_short2 ]
+  br i1 %__logic_tmpt99_5, label %__bb_logic_short3, label %__bb_logic_rhs3
 __bb_logic_rhs3:
   %t108 = add i64 0, 94
   %t109 = icmp eq i64 %t83, %t108
@@ -79479,8 +79479,8 @@ __bb_logic_short3:
   %t106 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt105_7 = phi i1 [ %t109, %__bb_logic_rhs3 ], [ %t106, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt105_7, label %__bb_logic_short4, label %__bb_logic_rhs4
+  %__logic_tmpt105_5 = phi i1 [ %t106, %__bb_logic_short3 ], [ %t109, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt105_5, label %__bb_logic_short4, label %__bb_logic_rhs4
 __bb_logic_rhs4:
   %t114 = add i64 0, 45
   %t115 = icmp eq i64 %t83, %t114
@@ -79489,8 +79489,8 @@ __bb_logic_short4:
   %t112 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt111_6 = phi i1 [ %t112, %__bb_logic_short4 ], [ %t115, %__bb_logic_rhs4 ]
-  br i1 %__logic_tmpt111_6, label %__bb_if_then8, label %__bb_if_else4
+  %__logic_tmpt111_5 = phi i1 [ %t115, %__bb_logic_rhs4 ], [ %t112, %__bb_logic_short4 ]
+  br i1 %__logic_tmpt111_5, label %__bb_if_then8, label %__bb_if_else4
 __bb_if_else4:
   %strptr49 = getelementptr inbounds { i64, i64, [24 x i8] }, ptr @.str1886, i32 0, i32 2, i32 0
   %str050 = insertvalue %DriftString zeroinitializer, i64 23, 0
@@ -79539,53 +79539,53 @@ __bb_if_join8:
   br label %__bb_if_join7
 __bb_if_then7:
   %t95 = add i8 0, 13
-  %__logic_tmpt111_9 = add i1 0, 0
-  %__logic_tmpt105_9 = add i1 0, 0
-  %__logic_tmpt99_9 = add i1 0, 0
+  %__logic_tmpt111_4 = add i1 0, 0
+  %__logic_tmpt105_4 = add i1 0, 0
+  %__logic_tmpt99_4 = add i1 0, 0
   br label %__bb_if_join7
 __bb_if_join7:
-  %__logic_tmpt111_5 = phi i1 [ %__logic_tmpt111_6, %__bb_if_join8 ], [ %__logic_tmpt111_9, %__bb_if_then7 ]
-  %__logic_tmpt105_5 = phi i1 [ %__logic_tmpt105_7, %__bb_if_join8 ], [ %__logic_tmpt105_9, %__bb_if_then7 ]
-  %__logic_tmpt99_5 = phi i1 [ %__logic_tmpt99_6, %__bb_if_join8 ], [ %__logic_tmpt99_9, %__bb_if_then7 ]
-  %hi_6 = phi i8 [ %t118, %__bb_if_join8 ], [ %t95, %__bb_if_then7 ]
+  %__logic_tmpt111_3 = phi i1 [ %__logic_tmpt111_4, %__bb_if_then7 ], [ %__logic_tmpt111_5, %__bb_if_join8 ]
+  %__logic_tmpt105_3 = phi i1 [ %__logic_tmpt105_4, %__bb_if_then7 ], [ %__logic_tmpt105_5, %__bb_if_join8 ]
+  %__logic_tmpt99_3 = phi i1 [ %__logic_tmpt99_4, %__bb_if_then7 ], [ %__logic_tmpt99_5, %__bb_if_join8 ]
+  %hi_4 = phi i8 [ %t95, %__bb_if_then7 ], [ %t118, %__bb_if_join8 ]
   br label %__bb_if_join6
 __bb_if_then6:
   %t91 = add i8 0, 10
-  %__logic_tmpt111_10 = add i1 0, 0
-  %__logic_tmpt105_10 = add i1 0, 0
-  %__logic_tmpt99_10 = add i1 0, 0
+  %__logic_tmpt111_2 = add i1 0, 0
+  %__logic_tmpt105_2 = add i1 0, 0
+  %__logic_tmpt99_2 = add i1 0, 0
   br label %__bb_if_join6
 __bb_if_join6:
-  %__logic_tmpt111_4 = phi i1 [ %__logic_tmpt111_5, %__bb_if_join7 ], [ %__logic_tmpt111_10, %__bb_if_then6 ]
-  %__logic_tmpt105_4 = phi i1 [ %__logic_tmpt105_5, %__bb_if_join7 ], [ %__logic_tmpt105_10, %__bb_if_then6 ]
-  %__logic_tmpt99_4 = phi i1 [ %__logic_tmpt99_5, %__bb_if_join7 ], [ %__logic_tmpt99_10, %__bb_if_then6 ]
-  %hi_5 = phi i8 [ %hi_6, %__bb_if_join7 ], [ %t91, %__bb_if_then6 ]
+  %__logic_tmpt111_8 = phi i1 [ %__logic_tmpt111_2, %__bb_if_then6 ], [ %__logic_tmpt111_3, %__bb_if_join7 ]
+  %__logic_tmpt105_8 = phi i1 [ %__logic_tmpt105_2, %__bb_if_then6 ], [ %__logic_tmpt105_3, %__bb_if_join7 ]
+  %__logic_tmpt99_8 = phi i1 [ %__logic_tmpt99_2, %__bb_if_then6 ], [ %__logic_tmpt99_3, %__bb_if_join7 ]
+  %hi_7 = phi i8 [ %t91, %__bb_if_then6 ], [ %hi_4, %__bb_if_join7 ]
   br label %__bb_if_join5
 __bb_if_then5:
   %t87 = add i8 0, 9
-  %__logic_tmpt111_3 = add i1 0, 0
-  %__logic_tmpt105_3 = add i1 0, 0
-  %__logic_tmpt99_3 = add i1 0, 0
+  %__logic_tmpt111_9 = add i1 0, 0
+  %__logic_tmpt105_9 = add i1 0, 0
+  %__logic_tmpt99_9 = add i1 0, 0
   br label %__bb_if_join5
 __bb_if_join5:
-  %__logic_tmpt111_11 = phi i1 [ %__logic_tmpt111_3, %__bb_if_then5 ], [ %__logic_tmpt111_4, %__bb_if_join6 ]
-  %__logic_tmpt105_11 = phi i1 [ %__logic_tmpt105_3, %__bb_if_then5 ], [ %__logic_tmpt105_4, %__bb_if_join6 ]
-  %__logic_tmpt99_11 = phi i1 [ %__logic_tmpt99_3, %__bb_if_then5 ], [ %__logic_tmpt99_4, %__bb_if_join6 ]
-  %hi_10 = phi i8 [ %t87, %__bb_if_then5 ], [ %hi_5, %__bb_if_join6 ]
+  %__logic_tmpt111_1 = phi i1 [ %__logic_tmpt111_8, %__bb_if_join6 ], [ %__logic_tmpt111_9, %__bb_if_then5 ]
+  %__logic_tmpt105_1 = phi i1 [ %__logic_tmpt105_8, %__bb_if_join6 ], [ %__logic_tmpt105_9, %__bb_if_then5 ]
+  %__logic_tmpt99_1 = phi i1 [ %__logic_tmpt99_8, %__bb_if_join6 ], [ %__logic_tmpt99_9, %__bb_if_then5 ]
+  %hi_2 = phi i8 [ %hi_7, %__bb_if_join6 ], [ %t87, %__bb_if_then5 ]
   br label %__bb_if_join3
 __bb_if_join3:
-  %__logic_tmpt111_1 = phi i1 [ %__logic_tmpt111_2, %__bb_if_else ], [ %__logic_tmpt111_11, %__bb_if_join5 ]
-  %__logic_tmpt105_1 = phi i1 [ %__logic_tmpt105_2, %__bb_if_else ], [ %__logic_tmpt105_11, %__bb_if_join5 ]
-  %__logic_tmpt99_1 = phi i1 [ %__logic_tmpt99_2, %__bb_if_else ], [ %__logic_tmpt99_11, %__bb_if_join5 ]
-  %hi_2 = phi i8 [ %t129, %__bb_if_else ], [ %hi_10, %__bb_if_join5 ]
+  %__logic_tmpt111_10 = phi i1 [ %__logic_tmpt111_1, %__bb_if_join5 ], [ %__logic_tmpt111_11, %__bb_if_else ]
+  %__logic_tmpt105_10 = phi i1 [ %__logic_tmpt105_1, %__bb_if_join5 ], [ %__logic_tmpt105_11, %__bb_if_else ]
+  %__logic_tmpt99_10 = phi i1 [ %__logic_tmpt99_1, %__bb_if_join5 ], [ %__logic_tmpt99_11, %__bb_if_else ]
+  %hi_9 = phi i8 [ %hi_2, %__bb_if_join5 ], [ %t129, %__bb_if_else ]
   %t131 = zext i8 %lo_1 to i64
-  %t133 = zext i8 %hi_2 to i64
+  %t133 = zext i8 %hi_9 to i64
   %t134 = icmp sgt i64 %t131, %t133
   br i1 %t134, label %__bb_if_then9, label %__bb_if_join9
 __bb_if_join9:
   %t145 = load %DriftArrayHeader, ptr %ranges_1
   %struct62 = insertvalue %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c zeroinitializer, i8 %lo_1, 0
-  %t148 = insertvalue %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %struct62, i8 %hi_2, 1
+  %t148 = insertvalue %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %struct62, i8 %hi_9, 1
   %t149 = extractvalue %DriftArrayHeader %t145, 0
   %t150 = extractvalue %DriftArrayHeader %t145, 1
   %t151 = extractvalue %DriftArrayHeader %t145, 2
@@ -79653,17 +79653,17 @@ __bb_array_cap_ok:
   %t159 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt158_1 = phi i1 [ %t159, %__bb_array_cap_ok ], [ %t179, %__bb_array_copy_exit ]
-  %__array_cap_arrt157_1 = phi %DriftArrayHeader [ %t145, %__bb_array_cap_ok ], [ %arr_len68, %__bb_array_copy_exit ]
+  %__array_cap_grewt158_2 = phi i1 [ %t159, %__bb_array_cap_ok ], [ %t179, %__bb_array_copy_exit ]
+  %__array_cap_arrt157_2 = phi %DriftArrayHeader [ %t145, %__bb_array_cap_ok ], [ %arr_len68, %__bb_array_copy_exit ]
   %zero_arr80 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr81 = insertvalue %DriftArrayHeader %zero_arr80, i64 0, 1
   %zero_arr82 = insertvalue %DriftArrayHeader %zero_arr81, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr82, ptr null, 3
-  %data83 = extractvalue %DriftArrayHeader %__array_cap_arrt157_1, 3
+  %data83 = extractvalue %DriftArrayHeader %__array_cap_arrt157_2, 3
   %eltptr84 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data83, i64 %t149
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t148, ptr %eltptr84
   %t182 = add i64 %t149, %t154
-  %arr_len85 = insertvalue %DriftArrayHeader %__array_cap_arrt157_1, i64 %t182, 0
+  %arr_len85 = insertvalue %DriftArrayHeader %__array_cap_arrt157_2, i64 %t182, 0
   %arr_gen86 = insertvalue %DriftArrayHeader %arr_len85, i64 %t153, 2
   store %DriftArrayHeader %arr_gen86, ptr %ranges_1
   call void @"std.core::void_value__impl"()
@@ -79955,8 +79955,8 @@ __bb_if_then3:
   %t83 = add i64 %total__b64_2, %t82
   br label %__bb_if_join3
 __bb_if_join3:
-  %total__b64_3 = phi i64 [ %total__b64_2, %__bb_loop_exit1 ], [ %t83, %__bb_if_then3 ]
-  ret i64 %total__b64_3
+  %total__b64_5 = phi i64 [ %total__b64_2, %__bb_loop_exit1 ], [ %t83, %__bb_if_then3 ]
+  ret i64 %total__b64_5
 __bb_if_then2:
   %t61 = load ptr, ptr %__match_binder_28_branches__addr
   %t62 = load %DriftArrayHeader, ptr %t61
@@ -80111,76 +80111,76 @@ __bb_match_dispatch_next5:
 __bb_match_dispatch_next6:
   br label %__bb_match_arm_7
 __bb_match_arm_7:
-  %__array_cap_grewt795_12 = add i1 0, 0
+  %__array_cap_grewt795_11 = add i1 0, 0
   %zero_arr8 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr9 = insertvalue %DriftArrayHeader %zero_arr8, i64 0, 1
   %zero_arr10 = insertvalue %DriftArrayHeader %zero_arr9, i64 0, 2
-  %__array_cap_arrt794_13 = insertvalue %DriftArrayHeader %zero_arr10, ptr null, 3
-  %__array_cap_grewt742_12 = add i1 0, 0
+  %__array_cap_arrt794_12 = insertvalue %DriftArrayHeader %zero_arr10, ptr null, 3
+  %__array_cap_grewt742_11 = add i1 0, 0
   %zero_arr11 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr12 = insertvalue %DriftArrayHeader %zero_arr11, i64 0, 1
   %zero_arr13 = insertvalue %DriftArrayHeader %zero_arr12, i64 0, 2
-  %__array_cap_arrt741_13 = insertvalue %DriftArrayHeader %zero_arr13, ptr null, 3
-  %__array_cap_grewt682_12 = add i1 0, 0
+  %__array_cap_arrt741_12 = insertvalue %DriftArrayHeader %zero_arr13, ptr null, 3
+  %__array_cap_grewt682_11 = add i1 0, 0
   %zero_arr14 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr15 = insertvalue %DriftArrayHeader %zero_arr14, i64 0, 1
   %zero_arr16 = insertvalue %DriftArrayHeader %zero_arr15, i64 0, 2
-  %__array_cap_arrt681_13 = insertvalue %DriftArrayHeader %zero_arr16, ptr null, 3
-  %__array_cap_grewt633_12 = add i1 0, 0
+  %__array_cap_arrt681_12 = insertvalue %DriftArrayHeader %zero_arr16, ptr null, 3
+  %__array_cap_grewt633_11 = add i1 0, 0
   %zero_arr17 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr18 = insertvalue %DriftArrayHeader %zero_arr17, i64 0, 1
   %zero_arr19 = insertvalue %DriftArrayHeader %zero_arr18, i64 0, 2
-  %__array_cap_arrt632_13 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
-  %__array_cap_grewt549_6 = add i1 0, 0
+  %__array_cap_arrt632_12 = insertvalue %DriftArrayHeader %zero_arr19, ptr null, 3
+  %__array_cap_grewt549_13 = add i1 0, 0
   %zero_arr20 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr21 = insertvalue %DriftArrayHeader %zero_arr20, i64 0, 1
   %zero_arr22 = insertvalue %DriftArrayHeader %zero_arr21, i64 0, 2
-  %__array_cap_arrt548_6 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
-  %__array_cap_grewt500_6 = add i1 0, 0
+  %__array_cap_arrt548_14 = insertvalue %DriftArrayHeader %zero_arr22, ptr null, 3
+  %__array_cap_grewt500_13 = add i1 0, 0
   %zero_arr23 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 1
   %zero_arr25 = insertvalue %DriftArrayHeader %zero_arr24, i64 0, 2
-  %__array_cap_arrt499_6 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
-  %bi_6 = add i64 0, 0
-  %__array_cap_grewt376_6 = add i1 0, 0
+  %__array_cap_arrt499_14 = insertvalue %DriftArrayHeader %zero_arr25, ptr null, 3
+  %bi_11 = add i64 0, 0
+  %__array_cap_grewt376_13 = add i1 0, 0
   %zero_arr26 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr27 = insertvalue %DriftArrayHeader %zero_arr26, i64 0, 1
   %zero_arr28 = insertvalue %DriftArrayHeader %zero_arr27, i64 0, 2
-  %__array_cap_arrt375_6 = insertvalue %DriftArrayHeader %zero_arr28, ptr null, 3
-  %total_6 = add i64 0, 0
-  %si_6 = add i64 0, 0
-  %__array_cap_grewt294_8 = add i1 0, 0
+  %__array_cap_arrt375_14 = insertvalue %DriftArrayHeader %zero_arr28, ptr null, 3
+  %total_12 = add i64 0, 0
+  %si_14 = add i64 0, 0
+  %__array_cap_grewt294_7 = add i1 0, 0
   %zero_arr29 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr30 = insertvalue %DriftArrayHeader %zero_arr29, i64 0, 1
   %zero_arr31 = insertvalue %DriftArrayHeader %zero_arr30, i64 0, 2
-  %__array_cap_arrt293_9 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
-  %__array_cap_grewt241_10 = add i1 0, 0
+  %__array_cap_arrt293_8 = insertvalue %DriftArrayHeader %zero_arr31, ptr null, 3
+  %__array_cap_grewt241_9 = add i1 0, 0
   %zero_arr32 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr33 = insertvalue %DriftArrayHeader %zero_arr32, i64 0, 1
   %zero_arr34 = insertvalue %DriftArrayHeader %zero_arr33, i64 0, 2
-  %__array_cap_arrt240_11 = insertvalue %DriftArrayHeader %zero_arr34, ptr null, 3
-  %__array_cap_grewt168_11 = add i1 0, 0
+  %__array_cap_arrt240_10 = insertvalue %DriftArrayHeader %zero_arr34, ptr null, 3
+  %__array_cap_grewt168_10 = add i1 0, 0
   %zero_arr35 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr36 = insertvalue %DriftArrayHeader %zero_arr35, i64 0, 1
   %zero_arr37 = insertvalue %DriftArrayHeader %zero_arr36, i64 0, 2
-  %__array_cap_arrt167_12 = insertvalue %DriftArrayHeader %zero_arr37, ptr null, 3
-  %__array_cap_grewt126_11 = add i1 0, 0
+  %__array_cap_arrt167_11 = insertvalue %DriftArrayHeader %zero_arr37, ptr null, 3
+  %__array_cap_grewt126_10 = add i1 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 1
   %zero_arr40 = insertvalue %DriftArrayHeader %zero_arr39, i64 0, 2
-  %__array_cap_arrt125_12 = insertvalue %DriftArrayHeader %zero_arr40, ptr null, 3
-  %__array_cap_grewt77_8 = add i1 0, 0
+  %__array_cap_arrt125_11 = insertvalue %DriftArrayHeader %zero_arr40, ptr null, 3
+  %__array_cap_grewt77_5 = add i1 0, 0
   %zero_arr41 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr42 = insertvalue %DriftArrayHeader %zero_arr41, i64 0, 1
   %zero_arr43 = insertvalue %DriftArrayHeader %zero_arr42, i64 0, 2
-  %__array_cap_arrt76_9 = insertvalue %DriftArrayHeader %zero_arr43, ptr null, 3
-  %__array_cap_grewt35_8 = add i1 0, 0
+  %__array_cap_arrt76_5 = insertvalue %DriftArrayHeader %zero_arr43, ptr null, 3
+  %__array_cap_grewt35_5 = add i1 0, 0
   %zero_arr44 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 1
   %zero_arr46 = insertvalue %DriftArrayHeader %zero_arr45, i64 0, 2
-  %__array_cap_arrt34_9 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
-  %i_6 = add i64 0, 0
-  %ri_8 = add i64 0, 0
+  %__array_cap_arrt34_5 = insertvalue %DriftArrayHeader %zero_arr46, ptr null, 3
+  %i_5 = add i64 0, 0
+  %ri_7 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_arm_6:
   %payload_words47 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %node_1, i32 0, i32 2
@@ -80218,26 +80218,26 @@ __bb_match_dispatch_next10:
 __bb_match_dispatch_next11:
   br label %__bb_match_arm_31
 __bb_match_arm_31:
-  %__array_cap_grewt795_6 = add i1 0, 0
+  %__array_cap_grewt795_9 = add i1 0, 0
   %zero_arr59 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr60 = insertvalue %DriftArrayHeader %zero_arr59, i64 0, 1
   %zero_arr61 = insertvalue %DriftArrayHeader %zero_arr60, i64 0, 2
-  %__array_cap_arrt794_6 = insertvalue %DriftArrayHeader %zero_arr61, ptr null, 3
-  %__array_cap_grewt742_6 = add i1 0, 0
+  %__array_cap_arrt794_10 = insertvalue %DriftArrayHeader %zero_arr61, ptr null, 3
+  %__array_cap_grewt742_7 = add i1 0, 0
   %zero_arr62 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr63 = insertvalue %DriftArrayHeader %zero_arr62, i64 0, 1
   %zero_arr64 = insertvalue %DriftArrayHeader %zero_arr63, i64 0, 2
-  %__array_cap_arrt741_6 = insertvalue %DriftArrayHeader %zero_arr64, ptr null, 3
-  %__array_cap_grewt682_8 = add i1 0, 0
+  %__array_cap_arrt741_7 = insertvalue %DriftArrayHeader %zero_arr64, ptr null, 3
+  %__array_cap_grewt682_9 = add i1 0, 0
   %zero_arr65 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr66 = insertvalue %DriftArrayHeader %zero_arr65, i64 0, 1
   %zero_arr67 = insertvalue %DriftArrayHeader %zero_arr66, i64 0, 2
-  %__array_cap_arrt681_9 = insertvalue %DriftArrayHeader %zero_arr67, ptr null, 3
-  %__array_cap_grewt633_8 = add i1 0, 0
+  %__array_cap_arrt681_10 = insertvalue %DriftArrayHeader %zero_arr67, ptr null, 3
+  %__array_cap_grewt633_9 = add i1 0, 0
   %zero_arr68 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr69 = insertvalue %DriftArrayHeader %zero_arr68, i64 0, 1
   %zero_arr70 = insertvalue %DriftArrayHeader %zero_arr69, i64 0, 2
-  %__array_cap_arrt632_9 = insertvalue %DriftArrayHeader %zero_arr70, ptr null, 3
+  %__array_cap_arrt632_10 = insertvalue %DriftArrayHeader %zero_arr70, ptr null, 3
   br label %__bb_match_join2
 __bb_match_arm_22:
   %t769 = load ptr, ptr %nfa__addr
@@ -80463,17 +80463,17 @@ __bb_array_cap_ok12:
   %t796 = add i1 0, 0
   br label %__bb_array_cap_join212
 __bb_array_cap_join212:
-  %__array_cap_grewt795_9 = phi i1 [ %t796, %__bb_array_cap_ok12 ], [ %t816, %__bb_array_copy_exit12 ]
-  %__array_cap_arrt794_9 = phi %DriftArrayHeader [ %t781, %__bb_array_cap_ok12 ], [ %arr_len162, %__bb_array_copy_exit12 ]
+  %__array_cap_grewt795_6 = phi i1 [ %t796, %__bb_array_cap_ok12 ], [ %t816, %__bb_array_copy_exit12 ]
+  %__array_cap_arrt794_6 = phi %DriftArrayHeader [ %t781, %__bb_array_cap_ok12 ], [ %arr_len162, %__bb_array_copy_exit12 ]
   %zero_arr174 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr175 = insertvalue %DriftArrayHeader %zero_arr174, i64 0, 1
   %zero_arr176 = insertvalue %DriftArrayHeader %zero_arr175, i64 0, 2
   %__arc5 = insertvalue %DriftArrayHeader %zero_arr176, ptr null, 3
-  %data177 = extractvalue %DriftArrayHeader %__array_cap_arrt794_9, 3
+  %data177 = extractvalue %DriftArrayHeader %__array_cap_arrt794_6, 3
   %eltptr178 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data177, i64 %t786
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out156, ptr %eltptr178
   %t819 = add i64 %t786, %t791
-  %arr_len179 = insertvalue %DriftArrayHeader %__array_cap_arrt794_9, i64 %t819, 0
+  %arr_len179 = insertvalue %DriftArrayHeader %__array_cap_arrt794_6, i64 %t819, 0
   %arr_gen180 = insertvalue %DriftArrayHeader %arr_len179, i64 %t790, 2
   store %DriftArrayHeader %arr_gen180, ptr %t780
   %t823 = load ptr, ptr %__match_binder_36_child__addr
@@ -80488,21 +80488,21 @@ __bb_array_cap_join212:
   %eltptr186 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data182, i64 %t825
   %t827 = load ptr, ptr %nfa__addr
   call void @"std.regex::_emit_node__impl"(ptr %eltptr186, ptr %t827)
-  %__array_cap_grewt742_7 = add i1 0, 0
+  %__array_cap_grewt742_6 = add i1 0, 0
   %zero_arr187 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr188 = insertvalue %DriftArrayHeader %zero_arr187, i64 0, 1
   %zero_arr189 = insertvalue %DriftArrayHeader %zero_arr188, i64 0, 2
-  %__array_cap_arrt741_7 = insertvalue %DriftArrayHeader %zero_arr189, ptr null, 3
-  %__array_cap_grewt682_9 = add i1 0, 0
+  %__array_cap_arrt741_6 = insertvalue %DriftArrayHeader %zero_arr189, ptr null, 3
+  %__array_cap_grewt682_8 = add i1 0, 0
   %zero_arr190 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr191 = insertvalue %DriftArrayHeader %zero_arr190, i64 0, 1
   %zero_arr192 = insertvalue %DriftArrayHeader %zero_arr191, i64 0, 2
-  %__array_cap_arrt681_10 = insertvalue %DriftArrayHeader %zero_arr192, ptr null, 3
-  %__array_cap_grewt633_9 = add i1 0, 0
+  %__array_cap_arrt681_9 = insertvalue %DriftArrayHeader %zero_arr192, ptr null, 3
+  %__array_cap_grewt633_8 = add i1 0, 0
   %zero_arr193 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr194 = insertvalue %DriftArrayHeader %zero_arr193, i64 0, 1
   %zero_arr195 = insertvalue %DriftArrayHeader %zero_arr194, i64 0, 2
-  %__array_cap_arrt632_10 = insertvalue %DriftArrayHeader %zero_arr195, ptr null, 3
+  %__array_cap_arrt632_9 = insertvalue %DriftArrayHeader %zero_arr195, ptr null, 3
   br label %__bb_match_join2
 __bb_match_arm_12:
   %t709 = load ptr, ptr %nfa__addr
@@ -81237,89 +81237,89 @@ __bb_array_cap_ok10:
   %t683 = add i1 0, 0
   br label %__bb_array_cap_join210
 __bb_array_cap_join210:
-  %__array_cap_grewt682_7 = phi i1 [ %t703, %__bb_array_copy_exit10 ], [ %t683, %__bb_array_cap_ok10 ]
-  %__array_cap_arrt681_7 = phi %DriftArrayHeader [ %arr_len527, %__bb_array_copy_exit10 ], [ %t669, %__bb_array_cap_ok10 ]
+  %__array_cap_grewt682_5 = phi i1 [ %t703, %__bb_array_copy_exit10 ], [ %t683, %__bb_array_cap_ok10 ]
+  %__array_cap_arrt681_5 = phi %DriftArrayHeader [ %arr_len527, %__bb_array_copy_exit10 ], [ %t669, %__bb_array_cap_ok10 ]
   %zero_arr539 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr540 = insertvalue %DriftArrayHeader %zero_arr539, i64 0, 1
   %zero_arr541 = insertvalue %DriftArrayHeader %zero_arr540, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr541, ptr null, 3
-  %data542 = extractvalue %DriftArrayHeader %__array_cap_arrt681_7, 3
+  %data542 = extractvalue %DriftArrayHeader %__array_cap_arrt681_5, 3
   %eltptr543 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data542, i64 %t673
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out521, ptr %eltptr543
   %t706 = add i64 %t673, %t678
-  %arr_len544 = insertvalue %DriftArrayHeader %__array_cap_arrt681_7, i64 %t706, 0
+  %arr_len544 = insertvalue %DriftArrayHeader %__array_cap_arrt681_5, i64 %t706, 0
   %arr_gen545 = insertvalue %DriftArrayHeader %arr_len544, i64 %t677, 2
   store %DriftArrayHeader %arr_gen545, ptr %t668
-  %__array_cap_grewt795_5 = add i1 0, 0
+  %__array_cap_grewt795_4 = add i1 0, 0
   %zero_arr546 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr547 = insertvalue %DriftArrayHeader %zero_arr546, i64 0, 1
   %zero_arr548 = insertvalue %DriftArrayHeader %zero_arr547, i64 0, 2
-  %__array_cap_arrt794_5 = insertvalue %DriftArrayHeader %zero_arr548, ptr null, 3
-  %__array_cap_grewt742_5 = add i1 0, 0
+  %__array_cap_arrt794_4 = insertvalue %DriftArrayHeader %zero_arr548, ptr null, 3
+  %__array_cap_grewt742_4 = add i1 0, 0
   %zero_arr549 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr550 = insertvalue %DriftArrayHeader %zero_arr549, i64 0, 1
   %zero_arr551 = insertvalue %DriftArrayHeader %zero_arr550, i64 0, 2
-  %__array_cap_arrt741_5 = insertvalue %DriftArrayHeader %zero_arr551, ptr null, 3
+  %__array_cap_arrt741_4 = insertvalue %DriftArrayHeader %zero_arr551, ptr null, 3
   br label %__bb_match_join2
 __bb_match_join2:
-  %__array_cap_grewt795_11 = phi i1 [ %__array_cap_grewt795_5, %__bb_array_cap_join210 ], [ %__array_cap_grewt795_6, %__bb_match_arm_31 ], [ %__array_cap_grewt795_9, %__bb_array_cap_join212 ], [ %__array_cap_grewt795_10, %__bb_array_cap_join211 ]
-  %__array_cap_arrt794_12 = phi %DriftArrayHeader [ %__array_cap_arrt794_5, %__bb_array_cap_join210 ], [ %__array_cap_arrt794_6, %__bb_match_arm_31 ], [ %__arc5, %__bb_array_cap_join212 ], [ %__array_cap_arrt794_11, %__bb_array_cap_join211 ]
-  %__array_cap_grewt742_11 = phi i1 [ %__array_cap_grewt742_5, %__bb_array_cap_join210 ], [ %__array_cap_grewt742_6, %__bb_match_arm_31 ], [ %__array_cap_grewt742_7, %__bb_array_cap_join212 ], [ %__array_cap_grewt742_8, %__bb_array_cap_join211 ]
-  %__array_cap_arrt741_12 = phi %DriftArrayHeader [ %__array_cap_arrt741_5, %__bb_array_cap_join210 ], [ %__array_cap_arrt741_6, %__bb_match_arm_31 ], [ %__array_cap_arrt741_7, %__bb_array_cap_join212 ], [ %__arc4, %__bb_array_cap_join211 ]
-  %__array_cap_grewt682_11 = phi i1 [ %__array_cap_grewt682_7, %__bb_array_cap_join210 ], [ %__array_cap_grewt682_8, %__bb_match_arm_31 ], [ %__array_cap_grewt682_9, %__bb_array_cap_join212 ], [ %__array_cap_grewt682_10, %__bb_array_cap_join211 ]
-  %__array_cap_arrt681_12 = phi %DriftArrayHeader [ %__arc3, %__bb_array_cap_join210 ], [ %__array_cap_arrt681_9, %__bb_match_arm_31 ], [ %__array_cap_arrt681_10, %__bb_array_cap_join212 ], [ %__array_cap_arrt681_11, %__bb_array_cap_join211 ]
-  %__array_cap_grewt633_11 = phi i1 [ %__array_cap_grewt633_6, %__bb_array_cap_join210 ], [ %__array_cap_grewt633_8, %__bb_match_arm_31 ], [ %__array_cap_grewt633_9, %__bb_array_cap_join212 ], [ %__array_cap_grewt633_10, %__bb_array_cap_join211 ]
-  %__array_cap_arrt632_12 = phi %DriftArrayHeader [ %__arc13, %__bb_array_cap_join210 ], [ %__array_cap_arrt632_9, %__bb_match_arm_31 ], [ %__array_cap_arrt632_10, %__bb_array_cap_join212 ], [ %__array_cap_arrt632_11, %__bb_array_cap_join211 ]
-  %__array_cap_grewt549_5 = add i1 0, 0
+  %__array_cap_grewt795_5 = phi i1 [ %__array_cap_grewt795_4, %__bb_array_cap_join210 ], [ %__array_cap_grewt795_6, %__bb_array_cap_join212 ], [ %__array_cap_grewt795_9, %__bb_match_arm_31 ], [ %__array_cap_grewt795_10, %__bb_array_cap_join211 ]
+  %__array_cap_arrt794_5 = phi %DriftArrayHeader [ %__array_cap_arrt794_4, %__bb_array_cap_join210 ], [ %__arc5, %__bb_array_cap_join212 ], [ %__array_cap_arrt794_10, %__bb_match_arm_31 ], [ %__array_cap_arrt794_11, %__bb_array_cap_join211 ]
+  %__array_cap_grewt742_5 = phi i1 [ %__array_cap_grewt742_4, %__bb_array_cap_join210 ], [ %__array_cap_grewt742_6, %__bb_array_cap_join212 ], [ %__array_cap_grewt742_7, %__bb_match_arm_31 ], [ %__array_cap_grewt742_8, %__bb_array_cap_join211 ]
+  %__array_cap_arrt741_5 = phi %DriftArrayHeader [ %__array_cap_arrt741_4, %__bb_array_cap_join210 ], [ %__array_cap_arrt741_6, %__bb_array_cap_join212 ], [ %__array_cap_arrt741_7, %__bb_match_arm_31 ], [ %__arc4, %__bb_array_cap_join211 ]
+  %__array_cap_grewt682_7 = phi i1 [ %__array_cap_grewt682_5, %__bb_array_cap_join210 ], [ %__array_cap_grewt682_8, %__bb_array_cap_join212 ], [ %__array_cap_grewt682_9, %__bb_match_arm_31 ], [ %__array_cap_grewt682_10, %__bb_array_cap_join211 ]
+  %__array_cap_arrt681_8 = phi %DriftArrayHeader [ %__arc3, %__bb_array_cap_join210 ], [ %__array_cap_arrt681_9, %__bb_array_cap_join212 ], [ %__array_cap_arrt681_10, %__bb_match_arm_31 ], [ %__array_cap_arrt681_11, %__bb_array_cap_join211 ]
+  %__array_cap_grewt633_7 = phi i1 [ %__array_cap_grewt633_6, %__bb_array_cap_join210 ], [ %__array_cap_grewt633_8, %__bb_array_cap_join212 ], [ %__array_cap_grewt633_9, %__bb_match_arm_31 ], [ %__array_cap_grewt633_10, %__bb_array_cap_join211 ]
+  %__array_cap_arrt632_8 = phi %DriftArrayHeader [ %__arc13, %__bb_array_cap_join210 ], [ %__array_cap_arrt632_9, %__bb_array_cap_join212 ], [ %__array_cap_arrt632_10, %__bb_match_arm_31 ], [ %__array_cap_arrt632_11, %__bb_array_cap_join211 ]
+  %__array_cap_grewt549_12 = add i1 0, 0
   %zero_arr552 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr553 = insertvalue %DriftArrayHeader %zero_arr552, i64 0, 1
   %zero_arr554 = insertvalue %DriftArrayHeader %zero_arr553, i64 0, 2
-  %__array_cap_arrt548_5 = insertvalue %DriftArrayHeader %zero_arr554, ptr null, 3
-  %__array_cap_grewt500_5 = add i1 0, 0
+  %__array_cap_arrt548_13 = insertvalue %DriftArrayHeader %zero_arr554, ptr null, 3
+  %__array_cap_grewt500_12 = add i1 0, 0
   %zero_arr555 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr556 = insertvalue %DriftArrayHeader %zero_arr555, i64 0, 1
   %zero_arr557 = insertvalue %DriftArrayHeader %zero_arr556, i64 0, 2
-  %__array_cap_arrt499_5 = insertvalue %DriftArrayHeader %zero_arr557, ptr null, 3
-  %bi_5 = add i64 0, 0
-  %__array_cap_grewt376_5 = add i1 0, 0
+  %__array_cap_arrt499_13 = insertvalue %DriftArrayHeader %zero_arr557, ptr null, 3
+  %bi_10 = add i64 0, 0
+  %__array_cap_grewt376_12 = add i1 0, 0
   %zero_arr558 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr559 = insertvalue %DriftArrayHeader %zero_arr558, i64 0, 1
   %zero_arr560 = insertvalue %DriftArrayHeader %zero_arr559, i64 0, 2
-  %__array_cap_arrt375_5 = insertvalue %DriftArrayHeader %zero_arr560, ptr null, 3
-  %total_5 = add i64 0, 0
-  %si_5 = add i64 0, 0
-  %__array_cap_grewt294_7 = add i1 0, 0
+  %__array_cap_arrt375_13 = insertvalue %DriftArrayHeader %zero_arr560, ptr null, 3
+  %total_11 = add i64 0, 0
+  %si_13 = add i64 0, 0
+  %__array_cap_grewt294_6 = add i1 0, 0
   %zero_arr561 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr562 = insertvalue %DriftArrayHeader %zero_arr561, i64 0, 1
   %zero_arr563 = insertvalue %DriftArrayHeader %zero_arr562, i64 0, 2
-  %__array_cap_arrt293_8 = insertvalue %DriftArrayHeader %zero_arr563, ptr null, 3
-  %__array_cap_grewt241_9 = add i1 0, 0
+  %__array_cap_arrt293_7 = insertvalue %DriftArrayHeader %zero_arr563, ptr null, 3
+  %__array_cap_grewt241_8 = add i1 0, 0
   %zero_arr564 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr565 = insertvalue %DriftArrayHeader %zero_arr564, i64 0, 1
   %zero_arr566 = insertvalue %DriftArrayHeader %zero_arr565, i64 0, 2
-  %__array_cap_arrt240_10 = insertvalue %DriftArrayHeader %zero_arr566, ptr null, 3
-  %__array_cap_grewt168_10 = add i1 0, 0
+  %__array_cap_arrt240_9 = insertvalue %DriftArrayHeader %zero_arr566, ptr null, 3
+  %__array_cap_grewt168_9 = add i1 0, 0
   %zero_arr567 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr568 = insertvalue %DriftArrayHeader %zero_arr567, i64 0, 1
   %zero_arr569 = insertvalue %DriftArrayHeader %zero_arr568, i64 0, 2
-  %__array_cap_arrt167_11 = insertvalue %DriftArrayHeader %zero_arr569, ptr null, 3
-  %__array_cap_grewt126_10 = add i1 0, 0
+  %__array_cap_arrt167_10 = insertvalue %DriftArrayHeader %zero_arr569, ptr null, 3
+  %__array_cap_grewt126_9 = add i1 0, 0
   %zero_arr570 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr571 = insertvalue %DriftArrayHeader %zero_arr570, i64 0, 1
   %zero_arr572 = insertvalue %DriftArrayHeader %zero_arr571, i64 0, 2
-  %__array_cap_arrt125_11 = insertvalue %DriftArrayHeader %zero_arr572, ptr null, 3
-  %__array_cap_grewt77_7 = add i1 0, 0
+  %__array_cap_arrt125_10 = insertvalue %DriftArrayHeader %zero_arr572, ptr null, 3
+  %__array_cap_grewt77_4 = add i1 0, 0
   %zero_arr573 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr574 = insertvalue %DriftArrayHeader %zero_arr573, i64 0, 1
   %zero_arr575 = insertvalue %DriftArrayHeader %zero_arr574, i64 0, 2
-  %__array_cap_arrt76_8 = insertvalue %DriftArrayHeader %zero_arr575, ptr null, 3
-  %__array_cap_grewt35_7 = add i1 0, 0
+  %__array_cap_arrt76_4 = insertvalue %DriftArrayHeader %zero_arr575, ptr null, 3
+  %__array_cap_grewt35_4 = add i1 0, 0
   %zero_arr576 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr577 = insertvalue %DriftArrayHeader %zero_arr576, i64 0, 1
   %zero_arr578 = insertvalue %DriftArrayHeader %zero_arr577, i64 0, 2
-  %__array_cap_arrt34_8 = insertvalue %DriftArrayHeader %zero_arr578, ptr null, 3
-  %i_5 = add i64 0, 0
-  %ri_7 = add i64 0, 0
+  %__array_cap_arrt34_4 = insertvalue %DriftArrayHeader %zero_arr578, ptr null, 3
+  %i_4 = add i64 0, 0
+  %ri_6 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_arm_5:
   %payload_words579 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %node_1, i32 0, i32 2
@@ -81348,19 +81348,19 @@ __bb_if_else3:
   call void @drift_free_array(ptr %data585)
   store %DriftArrayHeader %t354, ptr %sizes__addr
   %t355 = add i64 0, 0
-  %__array_cap_grewt376_10 = add i1 0, 0
+  %__array_cap_grewt376_6 = add i1 0, 0
   %zero_arr586 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr587 = insertvalue %DriftArrayHeader %zero_arr586, i64 0, 1
   %zero_arr588 = insertvalue %DriftArrayHeader %zero_arr587, i64 0, 2
-  %__array_cap_arrt375_10 = insertvalue %DriftArrayHeader %zero_arr588, ptr null, 3
+  %__array_cap_arrt375_6 = insertvalue %DriftArrayHeader %zero_arr588, ptr null, 3
   br label %__bb_loop_header2
 __bb_loop_header2:
-  %__array_cap_grewt376_11 = phi i1 [ %__array_cap_grewt376_10, %__bb_if_else3 ], [ %__array_cap_grewt376_12, %__bb_if_join4 ]
-  %__array_cap_arrt375_11 = phi %DriftArrayHeader [ %__array_cap_arrt375_10, %__bb_if_else3 ], [ %__arc10, %__bb_if_join4 ]
-  %si_11 = phi i64 [ %t355, %__bb_if_else3 ], [ %t405, %__bb_if_join4 ]
+  %__array_cap_grewt376_7 = phi i1 [ %__array_cap_grewt376_6, %__bb_if_else3 ], [ %__array_cap_grewt376_10, %__bb_if_join4 ]
+  %__array_cap_arrt375_7 = phi %DriftArrayHeader [ %__array_cap_arrt375_6, %__bb_if_else3 ], [ %__arc10, %__bb_if_join4 ]
+  %si_7 = phi i64 [ %t355, %__bb_if_else3 ], [ %t405, %__bb_if_join4 ]
   br label %__bb_loop_body2
 __bb_loop_body2:
-  %t358 = icmp slt i64 %si_11, %t340
+  %t358 = icmp slt i64 %si_7, %t340
   br i1 %t358, label %__bb_if_then4, label %__bb_if_else4
 __bb_if_else4:
   br label %__bb_loop_exit2
@@ -81369,11 +81369,11 @@ __bb_loop_exit2:
   %t407 = add i64 0, 0
   br label %__bb_loop_header3
 __bb_loop_header3:
-  %total_11 = phi i64 [ %t406, %__bb_loop_exit2 ], [ %t431, %__bb_if_join5 ]
-  %si_14 = phi i64 [ %t407, %__bb_loop_exit2 ], [ %t434, %__bb_if_join5 ]
+  %total_7 = phi i64 [ %t406, %__bb_loop_exit2 ], [ %t431, %__bb_if_join5 ]
+  %si_10 = phi i64 [ %t407, %__bb_loop_exit2 ], [ %t434, %__bb_if_join5 ]
   br label %__bb_loop_body3
 __bb_loop_body3:
-  %t410 = icmp slt i64 %si_14, %t340
+  %t410 = icmp slt i64 %si_10, %t340
   br i1 %t410, label %__bb_if_then5, label %__bb_if_else5
 __bb_if_else5:
   br label %__bb_loop_exit3
@@ -81382,35 +81382,35 @@ __bb_loop_exit3:
   %t438 = add i64 0, 1
   %t439 = sub i64 %t340, %t438
   %t440 = mul i64 %t436, %t439
-  %t441 = add i64 %total_11, %t440
+  %t441 = add i64 %total_7, %t440
   %t442 = load ptr, ptr %nfa__addr
   %t443 = load %Struct_std_2Eregex__NfaProg_823f24afd67d1544, ptr %t442
   %t444 = extractvalue %Struct_std_2Eregex__NfaProg_823f24afd67d1544 %t443, 0
   %t445 = extractvalue %DriftArrayHeader %t444, 0
   %t447 = add i64 %t445, %t441
   %t448 = add i64 0, 0
-  %__array_cap_grewt549_10 = add i1 0, 0
+  %__array_cap_grewt549_6 = add i1 0, 0
   %zero_arr589 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr590 = insertvalue %DriftArrayHeader %zero_arr589, i64 0, 1
   %zero_arr591 = insertvalue %DriftArrayHeader %zero_arr590, i64 0, 2
-  %__array_cap_arrt548_10 = insertvalue %DriftArrayHeader %zero_arr591, ptr null, 3
-  %__array_cap_grewt500_10 = add i1 0, 0
+  %__array_cap_arrt548_6 = insertvalue %DriftArrayHeader %zero_arr591, ptr null, 3
+  %__array_cap_grewt500_6 = add i1 0, 0
   %zero_arr592 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr593 = insertvalue %DriftArrayHeader %zero_arr592, i64 0, 1
   %zero_arr594 = insertvalue %DriftArrayHeader %zero_arr593, i64 0, 2
-  %__array_cap_arrt499_10 = insertvalue %DriftArrayHeader %zero_arr594, ptr null, 3
+  %__array_cap_arrt499_6 = insertvalue %DriftArrayHeader %zero_arr594, ptr null, 3
   br label %__bb_loop_header4
 __bb_loop_header4:
-  %__array_cap_grewt549_11 = phi i1 [ %__array_cap_grewt549_10, %__bb_loop_exit3 ], [ %__array_cap_grewt549_14, %__bb_if_join6 ]
-  %__array_cap_arrt548_11 = phi %DriftArrayHeader [ %__array_cap_arrt548_10, %__bb_loop_exit3 ], [ %__arc12, %__bb_if_join6 ]
-  %__array_cap_grewt500_11 = phi i1 [ %__array_cap_grewt500_10, %__bb_loop_exit3 ], [ %__array_cap_grewt500_12, %__bb_if_join6 ]
-  %__array_cap_arrt499_11 = phi %DriftArrayHeader [ %__array_cap_arrt499_10, %__bb_loop_exit3 ], [ %__arc11, %__bb_if_join6 ]
-  %bi_11 = phi i64 [ %t448, %__bb_loop_exit3 ], [ %t578, %__bb_if_join6 ]
+  %__array_cap_grewt549_7 = phi i1 [ %__array_cap_grewt549_6, %__bb_loop_exit3 ], [ %__array_cap_grewt549_10, %__bb_if_join6 ]
+  %__array_cap_arrt548_7 = phi %DriftArrayHeader [ %__array_cap_arrt548_6, %__bb_loop_exit3 ], [ %__arc12, %__bb_if_join6 ]
+  %__array_cap_grewt500_7 = phi i1 [ %__array_cap_grewt500_6, %__bb_loop_exit3 ], [ %__array_cap_grewt500_8, %__bb_if_join6 ]
+  %__array_cap_arrt499_7 = phi %DriftArrayHeader [ %__array_cap_arrt499_6, %__bb_loop_exit3 ], [ %__arc11, %__bb_if_join6 ]
+  %bi_7 = phi i64 [ %t448, %__bb_loop_exit3 ], [ %t578, %__bb_if_join6 ]
   br label %__bb_loop_body4
 __bb_loop_body4:
   %t451 = add i64 0, 1
   %t452 = sub i64 %t340, %t451
-  %t453 = icmp slt i64 %bi_11, %t452
+  %t453 = icmp slt i64 %bi_7, %t452
   br i1 %t453, label %__bb_if_then6, label %__bb_if_else6
 __bb_if_else6:
   br label %__bb_loop_exit4
@@ -81448,14 +81448,14 @@ __bb_if_then6:
   %t461 = load %DriftArrayHeader, ptr %sizes__addr
   %t463 = extractvalue %DriftArrayHeader %t461, 0
   %t464 = add i64 0, 0
-  %t465 = icmp slt i64 %bi_11, %t464
-  %t466 = icmp sge i64 %bi_11, %t463
+  %t465 = icmp slt i64 %bi_7, %t464
+  %t466 = icmp sge i64 %bi_7, %t463
   %t467 = or i1 %t465, %t466
   br i1 %t467, label %__bb_idx_err2, label %__bb_idx_ok2
 __bb_idx_ok2:
   %len606 = extractvalue %DriftArrayHeader %t461, 0
   %data607 = extractvalue %DriftArrayHeader %t461, 3
-  %eltptr608 = getelementptr i64, ptr %data607, i64 %bi_11
+  %eltptr608 = getelementptr i64, ptr %data607, i64 %bi_7
   %t477 = load i64, ptr %eltptr608
   br label %__bb_idx_join2
 __bb_idx_join2:
@@ -81678,17 +81678,17 @@ __bb_array_cap_ok7:
   %t501 = add i1 0, 0
   br label %__bb_array_cap_join27
 __bb_array_cap_join27:
-  %__array_cap_grewt500_12 = phi i1 [ %t521, %__bb_array_copy_exit7 ], [ %t501, %__bb_array_cap_ok7 ]
-  %__array_cap_arrt499_12 = phi %DriftArrayHeader [ %arr_len700, %__bb_array_copy_exit7 ], [ %t486, %__bb_array_cap_ok7 ]
+  %__array_cap_grewt500_8 = phi i1 [ %t501, %__bb_array_cap_ok7 ], [ %t521, %__bb_array_copy_exit7 ]
+  %__array_cap_arrt499_8 = phi %DriftArrayHeader [ %t486, %__bb_array_cap_ok7 ], [ %arr_len700, %__bb_array_copy_exit7 ]
   %zero_arr712 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr713 = insertvalue %DriftArrayHeader %zero_arr712, i64 0, 1
   %zero_arr714 = insertvalue %DriftArrayHeader %zero_arr713, i64 0, 2
   %__arc11 = insertvalue %DriftArrayHeader %zero_arr714, ptr null, 3
-  %data715 = extractvalue %DriftArrayHeader %__array_cap_arrt499_12, 3
+  %data715 = extractvalue %DriftArrayHeader %__array_cap_arrt499_8, 3
   %eltptr716 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data715, i64 %t491
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out694, ptr %eltptr716
   %t524 = add i64 %t491, %t496
-  %arr_len717 = insertvalue %DriftArrayHeader %__array_cap_arrt499_12, i64 %t524, 0
+  %arr_len717 = insertvalue %DriftArrayHeader %__array_cap_arrt499_8, i64 %t524, 0
   %arr_gen718 = insertvalue %DriftArrayHeader %arr_len717, i64 %t495, 2
   store %DriftArrayHeader %arr_gen718, ptr %t485
   %t528 = load ptr, ptr %__match_binder_35_branches__addr
@@ -81698,8 +81698,8 @@ __bb_array_cap_join27:
   %strptr721 = getelementptr inbounds { i64, i64, [21 x i8] }, ptr @.str92, i32 0, i32 2, i32 0
   %str0722 = insertvalue %DriftString zeroinitializer, i64 20, 0
   %str723 = insertvalue %DriftString %str0722, ptr %strptr721, 1
-  call void @drift_bounds_check(%DriftString %str723, i64 %bi_11, i64 %len719)
-  %eltptr724 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data720, i64 %bi_11
+  call void @drift_bounds_check(%DriftString %str723, i64 %bi_7, i64 %len719)
+  %eltptr724 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data720, i64 %bi_7
   %t532 = load ptr, ptr %nfa__addr
   call void @"std.regex::_emit_node__impl"(ptr %eltptr724, ptr %t532)
   %t534 = load ptr, ptr %nfa__addr
@@ -81916,21 +81916,21 @@ __bb_array_cap_ok8:
   %t550 = add i1 0, 0
   br label %__bb_array_cap_join28
 __bb_array_cap_join28:
-  %__array_cap_grewt549_14 = phi i1 [ %t550, %__bb_array_cap_ok8 ], [ %t570, %__bb_array_copy_exit8 ]
-  %__array_cap_arrt548_14 = phi %DriftArrayHeader [ %t536, %__bb_array_cap_ok8 ], [ %arr_len815, %__bb_array_copy_exit8 ]
+  %__array_cap_grewt549_10 = phi i1 [ %t550, %__bb_array_cap_ok8 ], [ %t570, %__bb_array_copy_exit8 ]
+  %__array_cap_arrt548_10 = phi %DriftArrayHeader [ %t536, %__bb_array_cap_ok8 ], [ %arr_len815, %__bb_array_copy_exit8 ]
   %zero_arr827 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr828 = insertvalue %DriftArrayHeader %zero_arr827, i64 0, 1
   %zero_arr829 = insertvalue %DriftArrayHeader %zero_arr828, i64 0, 2
   %__arc12 = insertvalue %DriftArrayHeader %zero_arr829, ptr null, 3
-  %data830 = extractvalue %DriftArrayHeader %__array_cap_arrt548_14, 3
+  %data830 = extractvalue %DriftArrayHeader %__array_cap_arrt548_10, 3
   %eltptr831 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data830, i64 %t540
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out809, ptr %eltptr831
   %t573 = add i64 %t540, %t545
-  %arr_len832 = insertvalue %DriftArrayHeader %__array_cap_arrt548_14, i64 %t573, 0
+  %arr_len832 = insertvalue %DriftArrayHeader %__array_cap_arrt548_10, i64 %t573, 0
   %arr_gen833 = insertvalue %DriftArrayHeader %arr_len832, i64 %t544, 2
   store %DriftArrayHeader %arr_gen833, ptr %t535
   %t577 = add i64 0, 1
-  %t578 = add i64 %bi_11, %t577
+  %t578 = add i64 %bi_7, %t577
   br label %__bb_if_join6
 __bb_if_join6:
   br label %__bb_loop_header4
@@ -81944,7 +81944,7 @@ __bb_idx_err2:
   %t471 = insertvalue %DriftString %str0837, ptr %strptr836, 1
   %t472 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t471)
   call void @drift_string_release(%DriftString %t471)
-  %t473 = call %DriftDiagnosticValue @drift_dv_int(i64 %bi_11)
+  %t473 = call %DriftDiagnosticValue @drift_dv_int(i64 %bi_7)
   %strptr838 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1894, i32 0, i32 2, i32 0
   %str0839 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t474 = insertvalue %DriftString %str0839, ptr %strptr838, 1
@@ -81965,20 +81965,20 @@ __bb_if_then5:
   %t412 = load %DriftArrayHeader, ptr %sizes__addr
   %t414 = extractvalue %DriftArrayHeader %t412, 0
   %t415 = add i64 0, 0
-  %t416 = icmp slt i64 %si_14, %t415
-  %t417 = icmp sge i64 %si_14, %t414
+  %t416 = icmp slt i64 %si_10, %t415
+  %t417 = icmp sge i64 %si_10, %t414
   %t418 = or i1 %t416, %t417
   br i1 %t418, label %__bb_idx_err1, label %__bb_idx_ok1
 __bb_idx_ok1:
   %len844 = extractvalue %DriftArrayHeader %t412, 0
   %data845 = extractvalue %DriftArrayHeader %t412, 3
-  %eltptr846 = getelementptr i64, ptr %data845, i64 %si_14
+  %eltptr846 = getelementptr i64, ptr %data845, i64 %si_10
   %t428 = load i64, ptr %eltptr846
   br label %__bb_idx_join1
 __bb_idx_join1:
-  %t431 = add i64 %total_11, %t428
+  %t431 = add i64 %total_7, %t428
   %t433 = add i64 0, 1
-  %t434 = add i64 %si_14, %t433
+  %t434 = add i64 %si_10, %t433
   br label %__bb_if_join5
 __bb_if_join5:
   br label %__bb_loop_header3
@@ -81992,7 +81992,7 @@ __bb_idx_err1:
   %t422 = insertvalue %DriftString %str0850, ptr %strptr849, 1
   %t423 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t422)
   call void @drift_string_release(%DriftString %t422)
-  %t424 = call %DriftDiagnosticValue @drift_dv_int(i64 %si_14)
+  %t424 = call %DriftDiagnosticValue @drift_dv_int(i64 %si_10)
   %strptr851 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1898, i32 0, i32 2, i32 0
   %str0852 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t425 = insertvalue %DriftString %str0852, ptr %strptr851, 1
@@ -82018,8 +82018,8 @@ __bb_if_then4:
   %strptr859 = getelementptr inbounds { i64, i64, [21 x i8] }, ptr @.str92, i32 0, i32 2, i32 0
   %str0860 = insertvalue %DriftString zeroinitializer, i64 20, 0
   %str861 = insertvalue %DriftString %str0860, ptr %strptr859, 1
-  call void @drift_bounds_check(%DriftString %str861, i64 %si_11, i64 %len857)
-  %eltptr862 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data858, i64 %si_11
+  call void @drift_bounds_check(%DriftString %str861, i64 %si_7, i64 %len857)
+  %eltptr862 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data858, i64 %si_7
   %t366 = call i64 @"std.regex::_node_size__impl"(ptr %eltptr862)
   %t367 = extractvalue %DriftArrayHeader %t360, 0
   %t368 = extractvalue %DriftArrayHeader %t360, 1
@@ -82088,21 +82088,21 @@ __bb_array_cap_ok6:
   %t377 = add i1 0, 0
   br label %__bb_array_cap_join26
 __bb_array_cap_join26:
-  %__array_cap_grewt376_12 = phi i1 [ %t397, %__bb_array_copy_exit6 ], [ %t377, %__bb_array_cap_ok6 ]
-  %__array_cap_arrt375_12 = phi %DriftArrayHeader [ %arr_len868, %__bb_array_copy_exit6 ], [ %t360, %__bb_array_cap_ok6 ]
+  %__array_cap_grewt376_10 = phi i1 [ %t397, %__bb_array_copy_exit6 ], [ %t377, %__bb_array_cap_ok6 ]
+  %__array_cap_arrt375_10 = phi %DriftArrayHeader [ %arr_len868, %__bb_array_copy_exit6 ], [ %t360, %__bb_array_cap_ok6 ]
   %zero_arr880 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr881 = insertvalue %DriftArrayHeader %zero_arr880, i64 0, 1
   %zero_arr882 = insertvalue %DriftArrayHeader %zero_arr881, i64 0, 2
   %__arc10 = insertvalue %DriftArrayHeader %zero_arr882, ptr null, 3
-  %data883 = extractvalue %DriftArrayHeader %__array_cap_arrt375_12, 3
+  %data883 = extractvalue %DriftArrayHeader %__array_cap_arrt375_10, 3
   %eltptr884 = getelementptr inbounds i64, ptr %data883, i64 %t367
   store i64 %t366, ptr %eltptr884
   %t400 = add i64 %t367, %t372
-  %arr_len885 = insertvalue %DriftArrayHeader %__array_cap_arrt375_12, i64 %t400, 0
+  %arr_len885 = insertvalue %DriftArrayHeader %__array_cap_arrt375_10, i64 %t400, 0
   %arr_gen886 = insertvalue %DriftArrayHeader %arr_len885, i64 %t371, 2
   store %DriftArrayHeader %arr_gen886, ptr %sizes__addr
   %t404 = add i64 0, 1
-  %t405 = add i64 %si_11, %t404
+  %t405 = add i64 %si_7, %t404
   br label %__bb_if_join4
 __bb_if_join4:
   br label %__bb_loop_header2
@@ -82119,118 +82119,118 @@ __bb_if_then3:
   %eltptr892 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data888, i64 %t350
   %t352 = load ptr, ptr %nfa__addr
   call void @"std.regex::_emit_node__impl"(ptr %eltptr892, ptr %t352)
-  %__array_cap_grewt549_9 = add i1 0, 0
+  %__array_cap_grewt549_4 = add i1 0, 0
   %zero_arr893 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr894 = insertvalue %DriftArrayHeader %zero_arr893, i64 0, 1
   %zero_arr895 = insertvalue %DriftArrayHeader %zero_arr894, i64 0, 2
-  %__array_cap_arrt548_9 = insertvalue %DriftArrayHeader %zero_arr895, ptr null, 3
-  %__array_cap_grewt500_9 = add i1 0, 0
+  %__array_cap_arrt548_4 = insertvalue %DriftArrayHeader %zero_arr895, ptr null, 3
+  %__array_cap_grewt500_4 = add i1 0, 0
   %zero_arr896 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr897 = insertvalue %DriftArrayHeader %zero_arr896, i64 0, 1
   %zero_arr898 = insertvalue %DriftArrayHeader %zero_arr897, i64 0, 2
-  %__array_cap_arrt499_9 = insertvalue %DriftArrayHeader %zero_arr898, ptr null, 3
-  %bi_9 = add i64 0, 0
-  %__array_cap_grewt376_9 = add i1 0, 0
+  %__array_cap_arrt499_4 = insertvalue %DriftArrayHeader %zero_arr898, ptr null, 3
+  %bi_4 = add i64 0, 0
+  %__array_cap_grewt376_4 = add i1 0, 0
   %zero_arr899 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr900 = insertvalue %DriftArrayHeader %zero_arr899, i64 0, 1
   %zero_arr901 = insertvalue %DriftArrayHeader %zero_arr900, i64 0, 2
-  %__array_cap_arrt375_9 = insertvalue %DriftArrayHeader %zero_arr901, ptr null, 3
-  %total_9 = add i64 0, 0
-  %si_9 = add i64 0, 0
+  %__array_cap_arrt375_4 = insertvalue %DriftArrayHeader %zero_arr901, ptr null, 3
+  %total_4 = add i64 0, 0
+  %si_4 = add i64 0, 0
   br label %__bb_if_join3
 __bb_if_join3:
-  %__array_cap_grewt549_8 = phi i1 [ %__array_cap_grewt549_9, %__bb_if_then3 ], [ %__array_cap_grewt549_11, %__bb_loop_exit4 ]
-  %__array_cap_arrt548_8 = phi %DriftArrayHeader [ %__array_cap_arrt548_9, %__bb_if_then3 ], [ %__array_cap_arrt548_11, %__bb_loop_exit4 ]
-  %__array_cap_grewt500_8 = phi i1 [ %__array_cap_grewt500_9, %__bb_if_then3 ], [ %__array_cap_grewt500_11, %__bb_loop_exit4 ]
-  %__array_cap_arrt499_8 = phi %DriftArrayHeader [ %__array_cap_arrt499_9, %__bb_if_then3 ], [ %__array_cap_arrt499_11, %__bb_loop_exit4 ]
-  %bi_8 = phi i64 [ %bi_9, %__bb_if_then3 ], [ %bi_11, %__bb_loop_exit4 ]
-  %__array_cap_grewt376_8 = phi i1 [ %__array_cap_grewt376_9, %__bb_if_then3 ], [ %__array_cap_grewt376_11, %__bb_loop_exit4 ]
-  %__array_cap_arrt375_8 = phi %DriftArrayHeader [ %__array_cap_arrt375_9, %__bb_if_then3 ], [ %__array_cap_arrt375_11, %__bb_loop_exit4 ]
-  %total_8 = phi i64 [ %total_9, %__bb_if_then3 ], [ %t441, %__bb_loop_exit4 ]
-  %si_8 = phi i64 [ %si_9, %__bb_if_then3 ], [ %si_14, %__bb_loop_exit4 ]
+  %__array_cap_grewt549_5 = phi i1 [ %__array_cap_grewt549_4, %__bb_if_then3 ], [ %__array_cap_grewt549_7, %__bb_loop_exit4 ]
+  %__array_cap_arrt548_5 = phi %DriftArrayHeader [ %__array_cap_arrt548_4, %__bb_if_then3 ], [ %__array_cap_arrt548_7, %__bb_loop_exit4 ]
+  %__array_cap_grewt500_5 = phi i1 [ %__array_cap_grewt500_4, %__bb_if_then3 ], [ %__array_cap_grewt500_7, %__bb_loop_exit4 ]
+  %__array_cap_arrt499_5 = phi %DriftArrayHeader [ %__array_cap_arrt499_4, %__bb_if_then3 ], [ %__array_cap_arrt499_7, %__bb_loop_exit4 ]
+  %bi_5 = phi i64 [ %bi_4, %__bb_if_then3 ], [ %bi_7, %__bb_loop_exit4 ]
+  %__array_cap_grewt376_5 = phi i1 [ %__array_cap_grewt376_4, %__bb_if_then3 ], [ %__array_cap_grewt376_7, %__bb_loop_exit4 ]
+  %__array_cap_arrt375_5 = phi %DriftArrayHeader [ %__array_cap_arrt375_4, %__bb_if_then3 ], [ %__array_cap_arrt375_7, %__bb_loop_exit4 ]
+  %total_5 = phi i64 [ %total_4, %__bb_if_then3 ], [ %t441, %__bb_loop_exit4 ]
+  %si_5 = phi i64 [ %si_4, %__bb_if_then3 ], [ %si_10, %__bb_loop_exit4 ]
   br label %__bb_if_join2
 __bb_if_then2:
-  %__array_cap_grewt549_15 = add i1 0, 0
+  %__array_cap_grewt549_3 = add i1 0, 0
   %zero_arr902 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr903 = insertvalue %DriftArrayHeader %zero_arr902, i64 0, 1
   %zero_arr904 = insertvalue %DriftArrayHeader %zero_arr903, i64 0, 2
-  %__array_cap_arrt548_16 = insertvalue %DriftArrayHeader %zero_arr904, ptr null, 3
-  %__array_cap_grewt500_15 = add i1 0, 0
+  %__array_cap_arrt548_3 = insertvalue %DriftArrayHeader %zero_arr904, ptr null, 3
+  %__array_cap_grewt500_3 = add i1 0, 0
   %zero_arr905 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr906 = insertvalue %DriftArrayHeader %zero_arr905, i64 0, 1
   %zero_arr907 = insertvalue %DriftArrayHeader %zero_arr906, i64 0, 2
-  %__array_cap_arrt499_16 = insertvalue %DriftArrayHeader %zero_arr907, ptr null, 3
-  %bi_13 = add i64 0, 0
-  %__array_cap_grewt376_15 = add i1 0, 0
+  %__array_cap_arrt499_3 = insertvalue %DriftArrayHeader %zero_arr907, ptr null, 3
+  %bi_3 = add i64 0, 0
+  %__array_cap_grewt376_3 = add i1 0, 0
   %zero_arr908 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr909 = insertvalue %DriftArrayHeader %zero_arr908, i64 0, 1
   %zero_arr910 = insertvalue %DriftArrayHeader %zero_arr909, i64 0, 2
-  %__array_cap_arrt375_16 = insertvalue %DriftArrayHeader %zero_arr910, ptr null, 3
-  %total_14 = add i64 0, 0
-  %si_16 = add i64 0, 0
+  %__array_cap_arrt375_3 = insertvalue %DriftArrayHeader %zero_arr910, ptr null, 3
+  %total_3 = add i64 0, 0
+  %si_3 = add i64 0, 0
   br label %__bb_if_join2
 __bb_if_join2:
-  %__array_cap_grewt549_7 = phi i1 [ %__array_cap_grewt549_8, %__bb_if_join3 ], [ %__array_cap_grewt549_15, %__bb_if_then2 ]
-  %__array_cap_arrt548_7 = phi %DriftArrayHeader [ %__array_cap_arrt548_8, %__bb_if_join3 ], [ %__array_cap_arrt548_16, %__bb_if_then2 ]
-  %__array_cap_grewt500_7 = phi i1 [ %__array_cap_grewt500_8, %__bb_if_join3 ], [ %__array_cap_grewt500_15, %__bb_if_then2 ]
-  %__array_cap_arrt499_7 = phi %DriftArrayHeader [ %__array_cap_arrt499_8, %__bb_if_join3 ], [ %__array_cap_arrt499_16, %__bb_if_then2 ]
-  %bi_7 = phi i64 [ %bi_8, %__bb_if_join3 ], [ %bi_13, %__bb_if_then2 ]
-  %__array_cap_grewt376_7 = phi i1 [ %__array_cap_grewt376_8, %__bb_if_join3 ], [ %__array_cap_grewt376_15, %__bb_if_then2 ]
-  %__array_cap_arrt375_7 = phi %DriftArrayHeader [ %__array_cap_arrt375_8, %__bb_if_join3 ], [ %__array_cap_arrt375_16, %__bb_if_then2 ]
-  %total_7 = phi i64 [ %total_8, %__bb_if_join3 ], [ %total_14, %__bb_if_then2 ]
-  %si_7 = phi i64 [ %si_8, %__bb_if_join3 ], [ %si_16, %__bb_if_then2 ]
-  %__array_cap_grewt795_13 = add i1 0, 0
+  %__array_cap_grewt549_11 = phi i1 [ %__array_cap_grewt549_3, %__bb_if_then2 ], [ %__array_cap_grewt549_5, %__bb_if_join3 ]
+  %__array_cap_arrt548_12 = phi %DriftArrayHeader [ %__array_cap_arrt548_3, %__bb_if_then2 ], [ %__array_cap_arrt548_5, %__bb_if_join3 ]
+  %__array_cap_grewt500_11 = phi i1 [ %__array_cap_grewt500_3, %__bb_if_then2 ], [ %__array_cap_grewt500_5, %__bb_if_join3 ]
+  %__array_cap_arrt499_12 = phi %DriftArrayHeader [ %__array_cap_arrt499_3, %__bb_if_then2 ], [ %__array_cap_arrt499_5, %__bb_if_join3 ]
+  %bi_9 = phi i64 [ %bi_3, %__bb_if_then2 ], [ %bi_5, %__bb_if_join3 ]
+  %__array_cap_grewt376_11 = phi i1 [ %__array_cap_grewt376_3, %__bb_if_then2 ], [ %__array_cap_grewt376_5, %__bb_if_join3 ]
+  %__array_cap_arrt375_12 = phi %DriftArrayHeader [ %__array_cap_arrt375_3, %__bb_if_then2 ], [ %__array_cap_arrt375_5, %__bb_if_join3 ]
+  %total_10 = phi i64 [ %total_3, %__bb_if_then2 ], [ %total_5, %__bb_if_join3 ]
+  %si_12 = phi i64 [ %si_3, %__bb_if_then2 ], [ %si_5, %__bb_if_join3 ]
+  %__array_cap_grewt795_3 = add i1 0, 0
   %zero_arr911 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr912 = insertvalue %DriftArrayHeader %zero_arr911, i64 0, 1
   %zero_arr913 = insertvalue %DriftArrayHeader %zero_arr912, i64 0, 2
-  %__array_cap_arrt794_14 = insertvalue %DriftArrayHeader %zero_arr913, ptr null, 3
-  %__array_cap_grewt742_13 = add i1 0, 0
+  %__array_cap_arrt794_3 = insertvalue %DriftArrayHeader %zero_arr913, ptr null, 3
+  %__array_cap_grewt742_3 = add i1 0, 0
   %zero_arr914 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr915 = insertvalue %DriftArrayHeader %zero_arr914, i64 0, 1
   %zero_arr916 = insertvalue %DriftArrayHeader %zero_arr915, i64 0, 2
-  %__array_cap_arrt741_14 = insertvalue %DriftArrayHeader %zero_arr916, ptr null, 3
-  %__array_cap_grewt682_13 = add i1 0, 0
+  %__array_cap_arrt741_3 = insertvalue %DriftArrayHeader %zero_arr916, ptr null, 3
+  %__array_cap_grewt682_3 = add i1 0, 0
   %zero_arr917 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr918 = insertvalue %DriftArrayHeader %zero_arr917, i64 0, 1
   %zero_arr919 = insertvalue %DriftArrayHeader %zero_arr918, i64 0, 2
-  %__array_cap_arrt681_14 = insertvalue %DriftArrayHeader %zero_arr919, ptr null, 3
-  %__array_cap_grewt633_13 = add i1 0, 0
+  %__array_cap_arrt681_3 = insertvalue %DriftArrayHeader %zero_arr919, ptr null, 3
+  %__array_cap_grewt633_3 = add i1 0, 0
   %zero_arr920 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr921 = insertvalue %DriftArrayHeader %zero_arr920, i64 0, 1
   %zero_arr922 = insertvalue %DriftArrayHeader %zero_arr921, i64 0, 2
-  %__array_cap_arrt632_14 = insertvalue %DriftArrayHeader %zero_arr922, ptr null, 3
-  %__array_cap_grewt294_9 = add i1 0, 0
+  %__array_cap_arrt632_3 = insertvalue %DriftArrayHeader %zero_arr922, ptr null, 3
+  %__array_cap_grewt294_5 = add i1 0, 0
   %zero_arr923 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr924 = insertvalue %DriftArrayHeader %zero_arr923, i64 0, 1
   %zero_arr925 = insertvalue %DriftArrayHeader %zero_arr924, i64 0, 2
-  %__array_cap_arrt293_10 = insertvalue %DriftArrayHeader %zero_arr925, ptr null, 3
-  %__array_cap_grewt241_11 = add i1 0, 0
+  %__array_cap_arrt293_6 = insertvalue %DriftArrayHeader %zero_arr925, ptr null, 3
+  %__array_cap_grewt241_7 = add i1 0, 0
   %zero_arr926 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr927 = insertvalue %DriftArrayHeader %zero_arr926, i64 0, 1
   %zero_arr928 = insertvalue %DriftArrayHeader %zero_arr927, i64 0, 2
-  %__array_cap_arrt240_12 = insertvalue %DriftArrayHeader %zero_arr928, ptr null, 3
-  %__array_cap_grewt168_12 = add i1 0, 0
+  %__array_cap_arrt240_8 = insertvalue %DriftArrayHeader %zero_arr928, ptr null, 3
+  %__array_cap_grewt168_8 = add i1 0, 0
   %zero_arr929 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr930 = insertvalue %DriftArrayHeader %zero_arr929, i64 0, 1
   %zero_arr931 = insertvalue %DriftArrayHeader %zero_arr930, i64 0, 2
-  %__array_cap_arrt167_13 = insertvalue %DriftArrayHeader %zero_arr931, ptr null, 3
-  %__array_cap_grewt126_12 = add i1 0, 0
+  %__array_cap_arrt167_9 = insertvalue %DriftArrayHeader %zero_arr931, ptr null, 3
+  %__array_cap_grewt126_8 = add i1 0, 0
   %zero_arr932 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr933 = insertvalue %DriftArrayHeader %zero_arr932, i64 0, 1
   %zero_arr934 = insertvalue %DriftArrayHeader %zero_arr933, i64 0, 2
-  %__array_cap_arrt125_13 = insertvalue %DriftArrayHeader %zero_arr934, ptr null, 3
-  %__array_cap_grewt77_9 = add i1 0, 0
+  %__array_cap_arrt125_9 = insertvalue %DriftArrayHeader %zero_arr934, ptr null, 3
+  %__array_cap_grewt77_3 = add i1 0, 0
   %zero_arr935 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr936 = insertvalue %DriftArrayHeader %zero_arr935, i64 0, 1
   %zero_arr937 = insertvalue %DriftArrayHeader %zero_arr936, i64 0, 2
-  %__array_cap_arrt76_10 = insertvalue %DriftArrayHeader %zero_arr937, ptr null, 3
-  %__array_cap_grewt35_9 = add i1 0, 0
+  %__array_cap_arrt76_3 = insertvalue %DriftArrayHeader %zero_arr937, ptr null, 3
+  %__array_cap_grewt35_3 = add i1 0, 0
   %zero_arr938 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr939 = insertvalue %DriftArrayHeader %zero_arr938, i64 0, 1
   %zero_arr940 = insertvalue %DriftArrayHeader %zero_arr939, i64 0, 2
-  %__array_cap_arrt34_10 = insertvalue %DriftArrayHeader %zero_arr940, ptr null, 3
-  %i_7 = add i64 0, 0
-  %ri_9 = add i64 0, 0
+  %__array_cap_arrt34_3 = insertvalue %DriftArrayHeader %zero_arr940, ptr null, 3
+  %i_3 = add i64 0, 0
+  %ri_5 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_arm_4:
   %payload_words941 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %node_1, i32 0, i32 2
@@ -82239,86 +82239,86 @@ __bb_match_arm_4:
   %t322 = add i64 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %i_9 = phi i64 [ %t322, %__bb_match_arm_4 ], [ %t336, %__bb_if_join1 ]
+  %i_7 = phi i64 [ %t322, %__bb_match_arm_4 ], [ %t336, %__bb_if_join1 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
   %t324 = load ptr, ptr %__match_binder_34_children__addr
   %t325 = load %DriftArrayHeader, ptr %t324
   %t326 = extractvalue %DriftArrayHeader %t325, 0
-  %t327 = icmp slt i64 %i_9, %t326
+  %t327 = icmp slt i64 %i_7, %t326
   br i1 %t327, label %__bb_if_then1, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit1
 __bb_loop_exit1:
-  %__array_cap_grewt795_14 = add i1 0, 0
+  %__array_cap_grewt795_12 = add i1 0, 0
   %zero_arr943 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr944 = insertvalue %DriftArrayHeader %zero_arr943, i64 0, 1
   %zero_arr945 = insertvalue %DriftArrayHeader %zero_arr944, i64 0, 2
-  %__array_cap_arrt794_15 = insertvalue %DriftArrayHeader %zero_arr945, ptr null, 3
-  %__array_cap_grewt742_14 = add i1 0, 0
+  %__array_cap_arrt794_13 = insertvalue %DriftArrayHeader %zero_arr945, ptr null, 3
+  %__array_cap_grewt742_12 = add i1 0, 0
   %zero_arr946 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr947 = insertvalue %DriftArrayHeader %zero_arr946, i64 0, 1
   %zero_arr948 = insertvalue %DriftArrayHeader %zero_arr947, i64 0, 2
-  %__array_cap_arrt741_15 = insertvalue %DriftArrayHeader %zero_arr948, ptr null, 3
-  %__array_cap_grewt682_14 = add i1 0, 0
+  %__array_cap_arrt741_13 = insertvalue %DriftArrayHeader %zero_arr948, ptr null, 3
+  %__array_cap_grewt682_12 = add i1 0, 0
   %zero_arr949 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr950 = insertvalue %DriftArrayHeader %zero_arr949, i64 0, 1
   %zero_arr951 = insertvalue %DriftArrayHeader %zero_arr950, i64 0, 2
-  %__array_cap_arrt681_15 = insertvalue %DriftArrayHeader %zero_arr951, ptr null, 3
-  %__array_cap_grewt633_14 = add i1 0, 0
+  %__array_cap_arrt681_13 = insertvalue %DriftArrayHeader %zero_arr951, ptr null, 3
+  %__array_cap_grewt633_12 = add i1 0, 0
   %zero_arr952 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr953 = insertvalue %DriftArrayHeader %zero_arr952, i64 0, 1
   %zero_arr954 = insertvalue %DriftArrayHeader %zero_arr953, i64 0, 2
-  %__array_cap_arrt632_15 = insertvalue %DriftArrayHeader %zero_arr954, ptr null, 3
-  %__array_cap_grewt549_16 = add i1 0, 0
+  %__array_cap_arrt632_13 = insertvalue %DriftArrayHeader %zero_arr954, ptr null, 3
+  %__array_cap_grewt549_14 = add i1 0, 0
   %zero_arr955 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr956 = insertvalue %DriftArrayHeader %zero_arr955, i64 0, 1
   %zero_arr957 = insertvalue %DriftArrayHeader %zero_arr956, i64 0, 2
-  %__array_cap_arrt548_17 = insertvalue %DriftArrayHeader %zero_arr957, ptr null, 3
-  %__array_cap_grewt500_16 = add i1 0, 0
+  %__array_cap_arrt548_15 = insertvalue %DriftArrayHeader %zero_arr957, ptr null, 3
+  %__array_cap_grewt500_14 = add i1 0, 0
   %zero_arr958 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr959 = insertvalue %DriftArrayHeader %zero_arr958, i64 0, 1
   %zero_arr960 = insertvalue %DriftArrayHeader %zero_arr959, i64 0, 2
-  %__array_cap_arrt499_17 = insertvalue %DriftArrayHeader %zero_arr960, ptr null, 3
-  %bi_14 = add i64 0, 0
-  %__array_cap_grewt376_16 = add i1 0, 0
+  %__array_cap_arrt499_15 = insertvalue %DriftArrayHeader %zero_arr960, ptr null, 3
+  %bi_12 = add i64 0, 0
+  %__array_cap_grewt376_14 = add i1 0, 0
   %zero_arr961 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr962 = insertvalue %DriftArrayHeader %zero_arr961, i64 0, 1
   %zero_arr963 = insertvalue %DriftArrayHeader %zero_arr962, i64 0, 2
-  %__array_cap_arrt375_17 = insertvalue %DriftArrayHeader %zero_arr963, ptr null, 3
-  %total_15 = add i64 0, 0
-  %si_17 = add i64 0, 0
-  %__array_cap_grewt294_10 = add i1 0, 0
+  %__array_cap_arrt375_15 = insertvalue %DriftArrayHeader %zero_arr963, ptr null, 3
+  %total_13 = add i64 0, 0
+  %si_15 = add i64 0, 0
+  %__array_cap_grewt294_8 = add i1 0, 0
   %zero_arr964 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr965 = insertvalue %DriftArrayHeader %zero_arr964, i64 0, 1
   %zero_arr966 = insertvalue %DriftArrayHeader %zero_arr965, i64 0, 2
-  %__array_cap_arrt293_11 = insertvalue %DriftArrayHeader %zero_arr966, ptr null, 3
-  %__array_cap_grewt241_12 = add i1 0, 0
+  %__array_cap_arrt293_9 = insertvalue %DriftArrayHeader %zero_arr966, ptr null, 3
+  %__array_cap_grewt241_10 = add i1 0, 0
   %zero_arr967 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr968 = insertvalue %DriftArrayHeader %zero_arr967, i64 0, 1
   %zero_arr969 = insertvalue %DriftArrayHeader %zero_arr968, i64 0, 2
-  %__array_cap_arrt240_13 = insertvalue %DriftArrayHeader %zero_arr969, ptr null, 3
-  %__array_cap_grewt168_13 = add i1 0, 0
+  %__array_cap_arrt240_11 = insertvalue %DriftArrayHeader %zero_arr969, ptr null, 3
+  %__array_cap_grewt168_11 = add i1 0, 0
   %zero_arr970 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr971 = insertvalue %DriftArrayHeader %zero_arr970, i64 0, 1
   %zero_arr972 = insertvalue %DriftArrayHeader %zero_arr971, i64 0, 2
-  %__array_cap_arrt167_14 = insertvalue %DriftArrayHeader %zero_arr972, ptr null, 3
-  %__array_cap_grewt126_13 = add i1 0, 0
+  %__array_cap_arrt167_12 = insertvalue %DriftArrayHeader %zero_arr972, ptr null, 3
+  %__array_cap_grewt126_11 = add i1 0, 0
   %zero_arr973 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr974 = insertvalue %DriftArrayHeader %zero_arr973, i64 0, 1
   %zero_arr975 = insertvalue %DriftArrayHeader %zero_arr974, i64 0, 2
-  %__array_cap_arrt125_14 = insertvalue %DriftArrayHeader %zero_arr975, ptr null, 3
-  %__array_cap_grewt77_10 = add i1 0, 0
+  %__array_cap_arrt125_12 = insertvalue %DriftArrayHeader %zero_arr975, ptr null, 3
+  %__array_cap_grewt77_6 = add i1 0, 0
   %zero_arr976 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr977 = insertvalue %DriftArrayHeader %zero_arr976, i64 0, 1
   %zero_arr978 = insertvalue %DriftArrayHeader %zero_arr977, i64 0, 2
-  %__array_cap_arrt76_11 = insertvalue %DriftArrayHeader %zero_arr978, ptr null, 3
-  %__array_cap_grewt35_10 = add i1 0, 0
+  %__array_cap_arrt76_6 = insertvalue %DriftArrayHeader %zero_arr978, ptr null, 3
+  %__array_cap_grewt35_6 = add i1 0, 0
   %zero_arr979 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr980 = insertvalue %DriftArrayHeader %zero_arr979, i64 0, 1
   %zero_arr981 = insertvalue %DriftArrayHeader %zero_arr980, i64 0, 2
-  %__array_cap_arrt34_11 = insertvalue %DriftArrayHeader %zero_arr981, ptr null, 3
-  %ri_10 = add i64 0, 0
+  %__array_cap_arrt34_6 = insertvalue %DriftArrayHeader %zero_arr981, ptr null, 3
+  %ri_8 = add i64 0, 0
   br label %__bb_match_join
 __bb_if_then1:
   %t329 = load ptr, ptr %__match_binder_34_children__addr
@@ -82328,12 +82328,12 @@ __bb_if_then1:
   %strptr984 = getelementptr inbounds { i64, i64, [21 x i8] }, ptr @.str92, i32 0, i32 2, i32 0
   %str0985 = insertvalue %DriftString zeroinitializer, i64 20, 0
   %str986 = insertvalue %DriftString %str0985, ptr %strptr984, 1
-  call void @drift_bounds_check(%DriftString %str986, i64 %i_9, i64 %len982)
-  %eltptr987 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data983, i64 %i_9
+  call void @drift_bounds_check(%DriftString %str986, i64 %i_7, i64 %len982)
+  %eltptr987 = getelementptr %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %data983, i64 %i_7
   %t333 = load ptr, ptr %nfa__addr
   call void @"std.regex::_emit_node__impl"(ptr %eltptr987, ptr %t333)
   %t335 = add i64 0, 1
-  %t336 = add i64 %i_9, %t335
+  %t336 = add i64 %i_7, %t335
   br label %__bb_if_join1
 __bb_if_join1:
   br label %__bb_loop_header1
@@ -82345,22 +82345,22 @@ __bb_match_arm_3:
   %t198 = extractvalue %Struct_std_2Eregex__NfaProg_823f24afd67d1544 %t197, 1
   %t199 = extractvalue %DriftArrayHeader %t198, 0
   %t200 = add i64 0, 0
-  %__array_cap_grewt241_4 = add i1 0, 0
+  %__array_cap_grewt241_2 = add i1 0, 0
   %zero_arr990 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr991 = insertvalue %DriftArrayHeader %zero_arr990, i64 0, 1
   %zero_arr992 = insertvalue %DriftArrayHeader %zero_arr991, i64 0, 2
-  %__array_cap_arrt240_4 = insertvalue %DriftArrayHeader %zero_arr992, ptr null, 3
+  %__array_cap_arrt240_2 = insertvalue %DriftArrayHeader %zero_arr992, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt241_5 = phi i1 [ %__array_cap_grewt241_4, %__bb_match_arm_3 ], [ %__array_cap_grewt241_7, %__bb_if_join ]
-  %__array_cap_arrt240_5 = phi %DriftArrayHeader [ %__array_cap_arrt240_4, %__bb_match_arm_3 ], [ %__arc8, %__bb_if_join ]
-  %ri_5 = phi i64 [ %t200, %__bb_match_arm_3 ], [ %t270, %__bb_if_join ]
+  %__array_cap_grewt241_3 = phi i1 [ %__array_cap_grewt241_2, %__bb_match_arm_3 ], [ %__array_cap_grewt241_4, %__bb_if_join ]
+  %__array_cap_arrt240_3 = phi %DriftArrayHeader [ %__array_cap_arrt240_2, %__bb_match_arm_3 ], [ %__arc8, %__bb_if_join ]
+  %ri_3 = phi i64 [ %t200, %__bb_match_arm_3 ], [ %t270, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t203 = load %Struct_std_2Eregex_CharClass_6ec19b7cf5c81019, ptr %fieldptr989
   %t204 = extractvalue %Struct_std_2Eregex_CharClass_6ec19b7cf5c81019 %t203, 1
   %t205 = extractvalue %DriftArrayHeader %t204, 0
-  %t206 = icmp slt i64 %ri_5, %t205
+  %t206 = icmp slt i64 %ri_3, %t205
   br i1 %t206, label %__bb_if_then, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
@@ -82590,78 +82590,78 @@ __bb_array_cap_ok5:
   %t295 = add i1 0, 0
   br label %__bb_array_cap_join25
 __bb_array_cap_join25:
-  %__array_cap_grewt294_6 = phi i1 [ %t295, %__bb_array_cap_ok5 ], [ %t315, %__bb_array_copy_exit5 ]
-  %__array_cap_arrt293_6 = phi %DriftArrayHeader [ %t274, %__bb_array_cap_ok5 ], [ %arr_len1087, %__bb_array_copy_exit5 ]
+  %__array_cap_grewt294_2 = phi i1 [ %t315, %__bb_array_copy_exit5 ], [ %t295, %__bb_array_cap_ok5 ]
+  %__array_cap_arrt293_2 = phi %DriftArrayHeader [ %arr_len1087, %__bb_array_copy_exit5 ], [ %t274, %__bb_array_cap_ok5 ]
   %zero_arr1099 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1100 = insertvalue %DriftArrayHeader %zero_arr1099, i64 0, 1
   %zero_arr1101 = insertvalue %DriftArrayHeader %zero_arr1100, i64 0, 2
   %__arc9 = insertvalue %DriftArrayHeader %zero_arr1101, ptr null, 3
-  %data1102 = extractvalue %DriftArrayHeader %__array_cap_arrt293_6, 3
+  %data1102 = extractvalue %DriftArrayHeader %__array_cap_arrt293_2, 3
   %eltptr1103 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data1102, i64 %t285
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out1081, ptr %eltptr1103
   %t318 = add i64 %t285, %t290
-  %arr_len1104 = insertvalue %DriftArrayHeader %__array_cap_arrt293_6, i64 %t318, 0
+  %arr_len1104 = insertvalue %DriftArrayHeader %__array_cap_arrt293_2, i64 %t318, 0
   %arr_gen1105 = insertvalue %DriftArrayHeader %arr_len1104, i64 %t289, 2
   store %DriftArrayHeader %arr_gen1105, ptr %t273
-  %__array_cap_grewt795_4 = add i1 0, 0
+  %__array_cap_grewt795_2 = add i1 0, 0
   %zero_arr1106 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1107 = insertvalue %DriftArrayHeader %zero_arr1106, i64 0, 1
   %zero_arr1108 = insertvalue %DriftArrayHeader %zero_arr1107, i64 0, 2
-  %__array_cap_arrt794_4 = insertvalue %DriftArrayHeader %zero_arr1108, ptr null, 3
-  %__array_cap_grewt742_4 = add i1 0, 0
+  %__array_cap_arrt794_2 = insertvalue %DriftArrayHeader %zero_arr1108, ptr null, 3
+  %__array_cap_grewt742_2 = add i1 0, 0
   %zero_arr1109 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1110 = insertvalue %DriftArrayHeader %zero_arr1109, i64 0, 1
   %zero_arr1111 = insertvalue %DriftArrayHeader %zero_arr1110, i64 0, 2
-  %__array_cap_arrt741_4 = insertvalue %DriftArrayHeader %zero_arr1111, ptr null, 3
-  %__array_cap_grewt682_4 = add i1 0, 0
+  %__array_cap_arrt741_2 = insertvalue %DriftArrayHeader %zero_arr1111, ptr null, 3
+  %__array_cap_grewt682_2 = add i1 0, 0
   %zero_arr1112 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1113 = insertvalue %DriftArrayHeader %zero_arr1112, i64 0, 1
   %zero_arr1114 = insertvalue %DriftArrayHeader %zero_arr1113, i64 0, 2
-  %__array_cap_arrt681_4 = insertvalue %DriftArrayHeader %zero_arr1114, ptr null, 3
-  %__array_cap_grewt633_4 = add i1 0, 0
+  %__array_cap_arrt681_2 = insertvalue %DriftArrayHeader %zero_arr1114, ptr null, 3
+  %__array_cap_grewt633_2 = add i1 0, 0
   %zero_arr1115 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1116 = insertvalue %DriftArrayHeader %zero_arr1115, i64 0, 1
   %zero_arr1117 = insertvalue %DriftArrayHeader %zero_arr1116, i64 0, 2
-  %__array_cap_arrt632_4 = insertvalue %DriftArrayHeader %zero_arr1117, ptr null, 3
-  %__array_cap_grewt549_4 = add i1 0, 0
+  %__array_cap_arrt632_2 = insertvalue %DriftArrayHeader %zero_arr1117, ptr null, 3
+  %__array_cap_grewt549_2 = add i1 0, 0
   %zero_arr1118 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1119 = insertvalue %DriftArrayHeader %zero_arr1118, i64 0, 1
   %zero_arr1120 = insertvalue %DriftArrayHeader %zero_arr1119, i64 0, 2
-  %__array_cap_arrt548_4 = insertvalue %DriftArrayHeader %zero_arr1120, ptr null, 3
-  %__array_cap_grewt500_4 = add i1 0, 0
+  %__array_cap_arrt548_2 = insertvalue %DriftArrayHeader %zero_arr1120, ptr null, 3
+  %__array_cap_grewt500_2 = add i1 0, 0
   %zero_arr1121 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1122 = insertvalue %DriftArrayHeader %zero_arr1121, i64 0, 1
   %zero_arr1123 = insertvalue %DriftArrayHeader %zero_arr1122, i64 0, 2
-  %__array_cap_arrt499_4 = insertvalue %DriftArrayHeader %zero_arr1123, ptr null, 3
-  %bi_4 = add i64 0, 0
-  %__array_cap_grewt376_4 = add i1 0, 0
+  %__array_cap_arrt499_2 = insertvalue %DriftArrayHeader %zero_arr1123, ptr null, 3
+  %bi_2 = add i64 0, 0
+  %__array_cap_grewt376_2 = add i1 0, 0
   %zero_arr1124 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1125 = insertvalue %DriftArrayHeader %zero_arr1124, i64 0, 1
   %zero_arr1126 = insertvalue %DriftArrayHeader %zero_arr1125, i64 0, 2
-  %__array_cap_arrt375_4 = insertvalue %DriftArrayHeader %zero_arr1126, ptr null, 3
-  %total_4 = add i64 0, 0
-  %si_4 = add i64 0, 0
-  %__array_cap_grewt168_9 = add i1 0, 0
+  %__array_cap_arrt375_2 = insertvalue %DriftArrayHeader %zero_arr1126, ptr null, 3
+  %total_2 = add i64 0, 0
+  %si_2 = add i64 0, 0
+  %__array_cap_grewt168_7 = add i1 0, 0
   %zero_arr1127 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1128 = insertvalue %DriftArrayHeader %zero_arr1127, i64 0, 1
   %zero_arr1129 = insertvalue %DriftArrayHeader %zero_arr1128, i64 0, 2
-  %__array_cap_arrt167_10 = insertvalue %DriftArrayHeader %zero_arr1129, ptr null, 3
-  %__array_cap_grewt126_9 = add i1 0, 0
+  %__array_cap_arrt167_8 = insertvalue %DriftArrayHeader %zero_arr1129, ptr null, 3
+  %__array_cap_grewt126_7 = add i1 0, 0
   %zero_arr1130 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1131 = insertvalue %DriftArrayHeader %zero_arr1130, i64 0, 1
   %zero_arr1132 = insertvalue %DriftArrayHeader %zero_arr1131, i64 0, 2
-  %__array_cap_arrt125_10 = insertvalue %DriftArrayHeader %zero_arr1132, ptr null, 3
-  %__array_cap_grewt77_6 = add i1 0, 0
+  %__array_cap_arrt125_8 = insertvalue %DriftArrayHeader %zero_arr1132, ptr null, 3
+  %__array_cap_grewt77_2 = add i1 0, 0
   %zero_arr1133 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1134 = insertvalue %DriftArrayHeader %zero_arr1133, i64 0, 1
   %zero_arr1135 = insertvalue %DriftArrayHeader %zero_arr1134, i64 0, 2
-  %__array_cap_arrt76_7 = insertvalue %DriftArrayHeader %zero_arr1135, ptr null, 3
-  %__array_cap_grewt35_6 = add i1 0, 0
+  %__array_cap_arrt76_2 = insertvalue %DriftArrayHeader %zero_arr1135, ptr null, 3
+  %__array_cap_grewt35_2 = add i1 0, 0
   %zero_arr1136 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1137 = insertvalue %DriftArrayHeader %zero_arr1136, i64 0, 1
   %zero_arr1138 = insertvalue %DriftArrayHeader %zero_arr1137, i64 0, 2
-  %__array_cap_arrt34_7 = insertvalue %DriftArrayHeader %zero_arr1138, ptr null, 3
-  %i_4 = add i64 0, 0
+  %__array_cap_arrt34_2 = insertvalue %DriftArrayHeader %zero_arr1138, ptr null, 3
+  %i_2 = add i64 0, 0
   br label %__bb_match_join
 __bb_if_then:
   %t208 = load ptr, ptr %nfa__addr
@@ -82671,14 +82671,14 @@ __bb_if_then:
   %t213 = extractvalue %Struct_std_2Eregex_CharClass_6ec19b7cf5c81019 %t212, 1
   %t215 = extractvalue %DriftArrayHeader %t213, 0
   %t216 = add i64 0, 0
-  %t217 = icmp slt i64 %ri_5, %t216
-  %t218 = icmp sge i64 %ri_5, %t215
+  %t217 = icmp slt i64 %ri_3, %t216
+  %t218 = icmp sge i64 %ri_3, %t215
   %t219 = or i1 %t217, %t218
   br i1 %t219, label %__bb_idx_err, label %__bb_idx_ok
 __bb_idx_ok:
   %len1139 = extractvalue %DriftArrayHeader %t213, 0
   %data1140 = extractvalue %DriftArrayHeader %t213, 3
-  %eltptr1141 = getelementptr %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data1140, i64 %ri_5
+  %eltptr1141 = getelementptr %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data1140, i64 %ri_3
   %t229 = load %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %eltptr1141
   br label %__bb_idx_join
 __bb_idx_join:
@@ -82749,21 +82749,21 @@ __bb_array_cap_ok4:
   %t242 = add i1 0, 0
   br label %__bb_array_cap_join24
 __bb_array_cap_join24:
-  %__array_cap_grewt241_7 = phi i1 [ %t242, %__bb_array_cap_ok4 ], [ %t262, %__bb_array_copy_exit4 ]
-  %__array_cap_arrt240_7 = phi %DriftArrayHeader [ %t210, %__bb_array_cap_ok4 ], [ %arr_len1147, %__bb_array_copy_exit4 ]
+  %__array_cap_grewt241_4 = phi i1 [ %t242, %__bb_array_cap_ok4 ], [ %t262, %__bb_array_copy_exit4 ]
+  %__array_cap_arrt240_4 = phi %DriftArrayHeader [ %t210, %__bb_array_cap_ok4 ], [ %arr_len1147, %__bb_array_copy_exit4 ]
   %zero_arr1159 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1160 = insertvalue %DriftArrayHeader %zero_arr1159, i64 0, 1
   %zero_arr1161 = insertvalue %DriftArrayHeader %zero_arr1160, i64 0, 2
   %__arc8 = insertvalue %DriftArrayHeader %zero_arr1161, ptr null, 3
-  %data1162 = extractvalue %DriftArrayHeader %__array_cap_arrt240_7, 3
+  %data1162 = extractvalue %DriftArrayHeader %__array_cap_arrt240_4, 3
   %eltptr1163 = getelementptr inbounds %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c, ptr %data1162, i64 %t232
   store %Struct_std_2Eregex_CharRange_306eb16ef8d9d36c %t229, ptr %eltptr1163
   %t265 = add i64 %t232, %t237
-  %arr_len1164 = insertvalue %DriftArrayHeader %__array_cap_arrt240_7, i64 %t265, 0
+  %arr_len1164 = insertvalue %DriftArrayHeader %__array_cap_arrt240_4, i64 %t265, 0
   %arr_gen1165 = insertvalue %DriftArrayHeader %arr_len1164, i64 %t236, 2
   store %DriftArrayHeader %arr_gen1165, ptr %t209
   %t269 = add i64 0, 1
-  %t270 = add i64 %ri_5, %t269
+  %t270 = add i64 %ri_3, %t269
   br label %__bb_if_join
 __bb_if_join:
   br label %__bb_loop_header
@@ -82777,7 +82777,7 @@ __bb_idx_err:
   %t223 = insertvalue %DriftString %str01169, ptr %strptr1168, 1
   %t224 = call %DriftDiagnosticValue @drift_dv_string(%DriftString %t223)
   call void @drift_string_release(%DriftString %t223)
-  %t225 = call %DriftDiagnosticValue @drift_dv_int(i64 %ri_5)
+  %t225 = call %DriftDiagnosticValue @drift_dv_int(i64 %ri_3)
   %strptr1170 = getelementptr inbounds { i64, i64, [13 x i8] }, ptr @.str1902, i32 0, i32 2, i32 0
   %str01171 = insertvalue %DriftString zeroinitializer, i64 12, 0
   %t226 = insertvalue %DriftString %str01171, ptr %strptr1170, 1
@@ -82812,16 +82812,16 @@ __bb_match_dispatch_next7:
 __bb_match_dispatch_next8:
   br label %__bb_match_arm_21
 __bb_match_arm_21:
-  %__array_cap_grewt168_5 = add i1 0, 0
+  %__array_cap_grewt168_4 = add i1 0, 0
   %zero_arr1180 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1181 = insertvalue %DriftArrayHeader %zero_arr1180, i64 0, 1
   %zero_arr1182 = insertvalue %DriftArrayHeader %zero_arr1181, i64 0, 2
   %__array_cap_arrt167_5 = insertvalue %DriftArrayHeader %zero_arr1182, ptr null, 3
-  %__array_cap_grewt126_7 = add i1 0, 0
+  %__array_cap_grewt126_2 = add i1 0, 0
   %zero_arr1183 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1184 = insertvalue %DriftArrayHeader %zero_arr1183, i64 0, 1
   %zero_arr1185 = insertvalue %DriftArrayHeader %zero_arr1184, i64 0, 2
-  %__array_cap_arrt125_8 = insertvalue %DriftArrayHeader %zero_arr1185, ptr null, 3
+  %__array_cap_arrt125_2 = insertvalue %DriftArrayHeader %zero_arr1185, ptr null, 3
   br label %__bb_match_join1
 __bb_match_arm_11:
   %t154 = load ptr, ptr %nfa__addr
@@ -83031,24 +83031,24 @@ __bb_array_cap_ok3:
   %t169 = add i1 0, 0
   br label %__bb_array_cap_join23
 __bb_array_cap_join23:
-  %__array_cap_grewt168_6 = phi i1 [ %t189, %__bb_array_copy_exit3 ], [ %t169, %__bb_array_cap_ok3 ]
-  %__array_cap_arrt167_6 = phi %DriftArrayHeader [ %arr_len1272, %__bb_array_copy_exit3 ], [ %t156, %__bb_array_cap_ok3 ]
+  %__array_cap_grewt168_1 = phi i1 [ %t189, %__bb_array_copy_exit3 ], [ %t169, %__bb_array_cap_ok3 ]
+  %__array_cap_arrt167_1 = phi %DriftArrayHeader [ %arr_len1272, %__bb_array_copy_exit3 ], [ %t156, %__bb_array_cap_ok3 ]
   %zero_arr1284 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1285 = insertvalue %DriftArrayHeader %zero_arr1284, i64 0, 1
   %zero_arr1286 = insertvalue %DriftArrayHeader %zero_arr1285, i64 0, 2
   %__arc7 = insertvalue %DriftArrayHeader %zero_arr1286, ptr null, 3
-  %data1287 = extractvalue %DriftArrayHeader %__array_cap_arrt167_6, 3
+  %data1287 = extractvalue %DriftArrayHeader %__array_cap_arrt167_1, 3
   %eltptr1288 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data1287, i64 %t159
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out1266, ptr %eltptr1288
   %t192 = add i64 %t159, %t164
-  %arr_len1289 = insertvalue %DriftArrayHeader %__array_cap_arrt167_6, i64 %t192, 0
+  %arr_len1289 = insertvalue %DriftArrayHeader %__array_cap_arrt167_1, i64 %t192, 0
   %arr_gen1290 = insertvalue %DriftArrayHeader %arr_len1289, i64 %t163, 2
   store %DriftArrayHeader %arr_gen1290, ptr %t155
-  %__array_cap_grewt126_8 = add i1 0, 0
+  %__array_cap_grewt126_1 = add i1 0, 0
   %zero_arr1291 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1292 = insertvalue %DriftArrayHeader %zero_arr1291, i64 0, 1
   %zero_arr1293 = insertvalue %DriftArrayHeader %zero_arr1292, i64 0, 2
-  %__array_cap_arrt125_9 = insertvalue %DriftArrayHeader %zero_arr1293, ptr null, 3
+  %__array_cap_arrt125_1 = insertvalue %DriftArrayHeader %zero_arr1293, ptr null, 3
   br label %__bb_match_join1
 __bb_match_arm_01:
   %t112 = load ptr, ptr %nfa__addr
@@ -83271,77 +83271,77 @@ __bb_array_cap_join22:
   %arr_len1397 = insertvalue %DriftArrayHeader %__array_cap_arrt125_4, i64 %t150, 0
   %arr_gen1398 = insertvalue %DriftArrayHeader %arr_len1397, i64 %t121, 2
   store %DriftArrayHeader %arr_gen1398, ptr %t113
-  %__array_cap_grewt168_3 = add i1 0, 0
+  %__array_cap_grewt168_5 = add i1 0, 0
   %zero_arr1399 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1400 = insertvalue %DriftArrayHeader %zero_arr1399, i64 0, 1
   %zero_arr1401 = insertvalue %DriftArrayHeader %zero_arr1400, i64 0, 2
-  %__array_cap_arrt167_3 = insertvalue %DriftArrayHeader %zero_arr1401, ptr null, 3
+  %__array_cap_arrt167_6 = insertvalue %DriftArrayHeader %zero_arr1401, ptr null, 3
   br label %__bb_match_join1
 __bb_match_join1:
-  %__array_cap_grewt168_4 = phi i1 [ %__array_cap_grewt168_3, %__bb_array_cap_join22 ], [ %__array_cap_grewt168_5, %__bb_match_arm_21 ], [ %__array_cap_grewt168_6, %__bb_array_cap_join23 ]
-  %__array_cap_arrt167_4 = phi %DriftArrayHeader [ %__array_cap_arrt167_3, %__bb_array_cap_join22 ], [ %__array_cap_arrt167_5, %__bb_match_arm_21 ], [ %__arc7, %__bb_array_cap_join23 ]
-  %__array_cap_grewt126_6 = phi i1 [ %__array_cap_grewt126_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt126_7, %__bb_match_arm_21 ], [ %__array_cap_grewt126_8, %__bb_array_cap_join23 ]
-  %__array_cap_arrt125_7 = phi %DriftArrayHeader [ %__arc6, %__bb_array_cap_join22 ], [ %__array_cap_arrt125_8, %__bb_match_arm_21 ], [ %__array_cap_arrt125_9, %__bb_array_cap_join23 ]
-  %__array_cap_grewt795_3 = add i1 0, 0
+  %__array_cap_grewt168_6 = phi i1 [ %__array_cap_grewt168_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt168_4, %__bb_match_arm_21 ], [ %__array_cap_grewt168_5, %__bb_array_cap_join22 ]
+  %__array_cap_arrt167_7 = phi %DriftArrayHeader [ %__arc7, %__bb_array_cap_join23 ], [ %__array_cap_arrt167_5, %__bb_match_arm_21 ], [ %__array_cap_arrt167_6, %__bb_array_cap_join22 ]
+  %__array_cap_grewt126_6 = phi i1 [ %__array_cap_grewt126_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt126_2, %__bb_match_arm_21 ], [ %__array_cap_grewt126_4, %__bb_array_cap_join22 ]
+  %__array_cap_arrt125_7 = phi %DriftArrayHeader [ %__array_cap_arrt125_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt125_2, %__bb_match_arm_21 ], [ %__arc6, %__bb_array_cap_join22 ]
+  %__array_cap_grewt795_1 = add i1 0, 0
   %zero_arr1402 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1403 = insertvalue %DriftArrayHeader %zero_arr1402, i64 0, 1
   %zero_arr1404 = insertvalue %DriftArrayHeader %zero_arr1403, i64 0, 2
-  %__array_cap_arrt794_3 = insertvalue %DriftArrayHeader %zero_arr1404, ptr null, 3
-  %__array_cap_grewt742_3 = add i1 0, 0
+  %__array_cap_arrt794_1 = insertvalue %DriftArrayHeader %zero_arr1404, ptr null, 3
+  %__array_cap_grewt742_1 = add i1 0, 0
   %zero_arr1405 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1406 = insertvalue %DriftArrayHeader %zero_arr1405, i64 0, 1
   %zero_arr1407 = insertvalue %DriftArrayHeader %zero_arr1406, i64 0, 2
-  %__array_cap_arrt741_3 = insertvalue %DriftArrayHeader %zero_arr1407, ptr null, 3
-  %__array_cap_grewt682_3 = add i1 0, 0
+  %__array_cap_arrt741_1 = insertvalue %DriftArrayHeader %zero_arr1407, ptr null, 3
+  %__array_cap_grewt682_1 = add i1 0, 0
   %zero_arr1408 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1409 = insertvalue %DriftArrayHeader %zero_arr1408, i64 0, 1
   %zero_arr1410 = insertvalue %DriftArrayHeader %zero_arr1409, i64 0, 2
-  %__array_cap_arrt681_3 = insertvalue %DriftArrayHeader %zero_arr1410, ptr null, 3
-  %__array_cap_grewt633_3 = add i1 0, 0
+  %__array_cap_arrt681_1 = insertvalue %DriftArrayHeader %zero_arr1410, ptr null, 3
+  %__array_cap_grewt633_1 = add i1 0, 0
   %zero_arr1411 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1412 = insertvalue %DriftArrayHeader %zero_arr1411, i64 0, 1
   %zero_arr1413 = insertvalue %DriftArrayHeader %zero_arr1412, i64 0, 2
-  %__array_cap_arrt632_3 = insertvalue %DriftArrayHeader %zero_arr1413, ptr null, 3
-  %__array_cap_grewt549_3 = add i1 0, 0
+  %__array_cap_arrt632_1 = insertvalue %DriftArrayHeader %zero_arr1413, ptr null, 3
+  %__array_cap_grewt549_1 = add i1 0, 0
   %zero_arr1414 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1415 = insertvalue %DriftArrayHeader %zero_arr1414, i64 0, 1
   %zero_arr1416 = insertvalue %DriftArrayHeader %zero_arr1415, i64 0, 2
-  %__array_cap_arrt548_3 = insertvalue %DriftArrayHeader %zero_arr1416, ptr null, 3
-  %__array_cap_grewt500_3 = add i1 0, 0
+  %__array_cap_arrt548_1 = insertvalue %DriftArrayHeader %zero_arr1416, ptr null, 3
+  %__array_cap_grewt500_1 = add i1 0, 0
   %zero_arr1417 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1418 = insertvalue %DriftArrayHeader %zero_arr1417, i64 0, 1
   %zero_arr1419 = insertvalue %DriftArrayHeader %zero_arr1418, i64 0, 2
-  %__array_cap_arrt499_3 = insertvalue %DriftArrayHeader %zero_arr1419, ptr null, 3
-  %bi_3 = add i64 0, 0
-  %__array_cap_grewt376_3 = add i1 0, 0
+  %__array_cap_arrt499_1 = insertvalue %DriftArrayHeader %zero_arr1419, ptr null, 3
+  %bi_1 = add i64 0, 0
+  %__array_cap_grewt376_1 = add i1 0, 0
   %zero_arr1420 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1421 = insertvalue %DriftArrayHeader %zero_arr1420, i64 0, 1
   %zero_arr1422 = insertvalue %DriftArrayHeader %zero_arr1421, i64 0, 2
-  %__array_cap_arrt375_3 = insertvalue %DriftArrayHeader %zero_arr1422, ptr null, 3
-  %total_3 = add i64 0, 0
-  %si_3 = add i64 0, 0
-  %__array_cap_grewt294_3 = add i1 0, 0
+  %__array_cap_arrt375_1 = insertvalue %DriftArrayHeader %zero_arr1422, ptr null, 3
+  %total_1 = add i64 0, 0
+  %si_1 = add i64 0, 0
+  %__array_cap_grewt294_1 = add i1 0, 0
   %zero_arr1423 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1424 = insertvalue %DriftArrayHeader %zero_arr1423, i64 0, 1
   %zero_arr1425 = insertvalue %DriftArrayHeader %zero_arr1424, i64 0, 2
-  %__array_cap_arrt293_3 = insertvalue %DriftArrayHeader %zero_arr1425, ptr null, 3
-  %__array_cap_grewt241_3 = add i1 0, 0
+  %__array_cap_arrt293_1 = insertvalue %DriftArrayHeader %zero_arr1425, ptr null, 3
+  %__array_cap_grewt241_1 = add i1 0, 0
   %zero_arr1426 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1427 = insertvalue %DriftArrayHeader %zero_arr1426, i64 0, 1
   %zero_arr1428 = insertvalue %DriftArrayHeader %zero_arr1427, i64 0, 2
-  %__array_cap_arrt240_3 = insertvalue %DriftArrayHeader %zero_arr1428, ptr null, 3
-  %__array_cap_grewt77_5 = add i1 0, 0
+  %__array_cap_arrt240_1 = insertvalue %DriftArrayHeader %zero_arr1428, ptr null, 3
+  %__array_cap_grewt77_1 = add i1 0, 0
   %zero_arr1429 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1430 = insertvalue %DriftArrayHeader %zero_arr1429, i64 0, 1
   %zero_arr1431 = insertvalue %DriftArrayHeader %zero_arr1430, i64 0, 2
-  %__array_cap_arrt76_6 = insertvalue %DriftArrayHeader %zero_arr1431, ptr null, 3
-  %__array_cap_grewt35_5 = add i1 0, 0
+  %__array_cap_arrt76_1 = insertvalue %DriftArrayHeader %zero_arr1431, ptr null, 3
+  %__array_cap_grewt35_1 = add i1 0, 0
   %zero_arr1432 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1433 = insertvalue %DriftArrayHeader %zero_arr1432, i64 0, 1
   %zero_arr1434 = insertvalue %DriftArrayHeader %zero_arr1433, i64 0, 2
-  %__array_cap_arrt34_6 = insertvalue %DriftArrayHeader %zero_arr1434, ptr null, 3
-  %i_3 = add i64 0, 0
-  %ri_3 = add i64 0, 0
+  %__array_cap_arrt34_1 = insertvalue %DriftArrayHeader %zero_arr1434, ptr null, 3
+  %i_1 = add i64 0, 0
+  %ri_1 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_arm_1:
   %t63 = load ptr, ptr %nfa__addr
@@ -83551,84 +83551,84 @@ __bb_array_cap_ok1:
   %t78 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt77_4 = phi i1 [ %t98, %__bb_array_copy_exit1 ], [ %t78, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt76_4 = phi %DriftArrayHeader [ %arr_len1521, %__bb_array_copy_exit1 ], [ %t65, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt77_8 = phi i1 [ %t78, %__bb_array_cap_ok1 ], [ %t98, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt76_8 = phi %DriftArrayHeader [ %t65, %__bb_array_cap_ok1 ], [ %arr_len1521, %__bb_array_copy_exit1 ]
   %zero_arr1533 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1534 = insertvalue %DriftArrayHeader %zero_arr1533, i64 0, 1
   %zero_arr1535 = insertvalue %DriftArrayHeader %zero_arr1534, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr1535, ptr null, 3
-  %data1536 = extractvalue %DriftArrayHeader %__array_cap_arrt76_4, 3
+  %data1536 = extractvalue %DriftArrayHeader %__array_cap_arrt76_8, 3
   %eltptr1537 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data1536, i64 %t68
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out1515, ptr %eltptr1537
   %t101 = add i64 %t68, %t73
-  %arr_len1538 = insertvalue %DriftArrayHeader %__array_cap_arrt76_4, i64 %t101, 0
+  %arr_len1538 = insertvalue %DriftArrayHeader %__array_cap_arrt76_8, i64 %t101, 0
   %arr_gen1539 = insertvalue %DriftArrayHeader %arr_len1538, i64 %t72, 2
   store %DriftArrayHeader %arr_gen1539, ptr %t64
-  %__array_cap_grewt795_2 = add i1 0, 0
+  %__array_cap_grewt795_13 = add i1 0, 0
   %zero_arr1540 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1541 = insertvalue %DriftArrayHeader %zero_arr1540, i64 0, 1
   %zero_arr1542 = insertvalue %DriftArrayHeader %zero_arr1541, i64 0, 2
-  %__array_cap_arrt794_2 = insertvalue %DriftArrayHeader %zero_arr1542, ptr null, 3
-  %__array_cap_grewt742_2 = add i1 0, 0
+  %__array_cap_arrt794_14 = insertvalue %DriftArrayHeader %zero_arr1542, ptr null, 3
+  %__array_cap_grewt742_13 = add i1 0, 0
   %zero_arr1543 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1544 = insertvalue %DriftArrayHeader %zero_arr1543, i64 0, 1
   %zero_arr1545 = insertvalue %DriftArrayHeader %zero_arr1544, i64 0, 2
-  %__array_cap_arrt741_2 = insertvalue %DriftArrayHeader %zero_arr1545, ptr null, 3
-  %__array_cap_grewt682_2 = add i1 0, 0
+  %__array_cap_arrt741_14 = insertvalue %DriftArrayHeader %zero_arr1545, ptr null, 3
+  %__array_cap_grewt682_13 = add i1 0, 0
   %zero_arr1546 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1547 = insertvalue %DriftArrayHeader %zero_arr1546, i64 0, 1
   %zero_arr1548 = insertvalue %DriftArrayHeader %zero_arr1547, i64 0, 2
-  %__array_cap_arrt681_2 = insertvalue %DriftArrayHeader %zero_arr1548, ptr null, 3
-  %__array_cap_grewt633_2 = add i1 0, 0
+  %__array_cap_arrt681_14 = insertvalue %DriftArrayHeader %zero_arr1548, ptr null, 3
+  %__array_cap_grewt633_13 = add i1 0, 0
   %zero_arr1549 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1550 = insertvalue %DriftArrayHeader %zero_arr1549, i64 0, 1
   %zero_arr1551 = insertvalue %DriftArrayHeader %zero_arr1550, i64 0, 2
-  %__array_cap_arrt632_2 = insertvalue %DriftArrayHeader %zero_arr1551, ptr null, 3
-  %__array_cap_grewt549_2 = add i1 0, 0
+  %__array_cap_arrt632_14 = insertvalue %DriftArrayHeader %zero_arr1551, ptr null, 3
+  %__array_cap_grewt549_15 = add i1 0, 0
   %zero_arr1552 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1553 = insertvalue %DriftArrayHeader %zero_arr1552, i64 0, 1
   %zero_arr1554 = insertvalue %DriftArrayHeader %zero_arr1553, i64 0, 2
-  %__array_cap_arrt548_2 = insertvalue %DriftArrayHeader %zero_arr1554, ptr null, 3
-  %__array_cap_grewt500_2 = add i1 0, 0
+  %__array_cap_arrt548_16 = insertvalue %DriftArrayHeader %zero_arr1554, ptr null, 3
+  %__array_cap_grewt500_15 = add i1 0, 0
   %zero_arr1555 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1556 = insertvalue %DriftArrayHeader %zero_arr1555, i64 0, 1
   %zero_arr1557 = insertvalue %DriftArrayHeader %zero_arr1556, i64 0, 2
-  %__array_cap_arrt499_2 = insertvalue %DriftArrayHeader %zero_arr1557, ptr null, 3
-  %bi_2 = add i64 0, 0
-  %__array_cap_grewt376_2 = add i1 0, 0
+  %__array_cap_arrt499_16 = insertvalue %DriftArrayHeader %zero_arr1557, ptr null, 3
+  %bi_13 = add i64 0, 0
+  %__array_cap_grewt376_15 = add i1 0, 0
   %zero_arr1558 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1559 = insertvalue %DriftArrayHeader %zero_arr1558, i64 0, 1
   %zero_arr1560 = insertvalue %DriftArrayHeader %zero_arr1559, i64 0, 2
-  %__array_cap_arrt375_2 = insertvalue %DriftArrayHeader %zero_arr1560, ptr null, 3
-  %total_2 = add i64 0, 0
-  %si_2 = add i64 0, 0
-  %__array_cap_grewt294_2 = add i1 0, 0
+  %__array_cap_arrt375_16 = insertvalue %DriftArrayHeader %zero_arr1560, ptr null, 3
+  %total_14 = add i64 0, 0
+  %si_16 = add i64 0, 0
+  %__array_cap_grewt294_9 = add i1 0, 0
   %zero_arr1561 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1562 = insertvalue %DriftArrayHeader %zero_arr1561, i64 0, 1
   %zero_arr1563 = insertvalue %DriftArrayHeader %zero_arr1562, i64 0, 2
-  %__array_cap_arrt293_2 = insertvalue %DriftArrayHeader %zero_arr1563, ptr null, 3
-  %__array_cap_grewt241_2 = add i1 0, 0
+  %__array_cap_arrt293_10 = insertvalue %DriftArrayHeader %zero_arr1563, ptr null, 3
+  %__array_cap_grewt241_11 = add i1 0, 0
   %zero_arr1564 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1565 = insertvalue %DriftArrayHeader %zero_arr1564, i64 0, 1
   %zero_arr1566 = insertvalue %DriftArrayHeader %zero_arr1565, i64 0, 2
-  %__array_cap_arrt240_2 = insertvalue %DriftArrayHeader %zero_arr1566, ptr null, 3
-  %__array_cap_grewt168_2 = add i1 0, 0
+  %__array_cap_arrt240_12 = insertvalue %DriftArrayHeader %zero_arr1566, ptr null, 3
+  %__array_cap_grewt168_12 = add i1 0, 0
   %zero_arr1567 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1568 = insertvalue %DriftArrayHeader %zero_arr1567, i64 0, 1
   %zero_arr1569 = insertvalue %DriftArrayHeader %zero_arr1568, i64 0, 2
-  %__array_cap_arrt167_2 = insertvalue %DriftArrayHeader %zero_arr1569, ptr null, 3
-  %__array_cap_grewt126_2 = add i1 0, 0
+  %__array_cap_arrt167_13 = insertvalue %DriftArrayHeader %zero_arr1569, ptr null, 3
+  %__array_cap_grewt126_12 = add i1 0, 0
   %zero_arr1570 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1571 = insertvalue %DriftArrayHeader %zero_arr1570, i64 0, 1
   %zero_arr1572 = insertvalue %DriftArrayHeader %zero_arr1571, i64 0, 2
-  %__array_cap_arrt125_2 = insertvalue %DriftArrayHeader %zero_arr1572, ptr null, 3
-  %__array_cap_grewt35_4 = add i1 0, 0
+  %__array_cap_arrt125_13 = insertvalue %DriftArrayHeader %zero_arr1572, ptr null, 3
+  %__array_cap_grewt35_7 = add i1 0, 0
   %zero_arr1573 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1574 = insertvalue %DriftArrayHeader %zero_arr1573, i64 0, 1
   %zero_arr1575 = insertvalue %DriftArrayHeader %zero_arr1574, i64 0, 2
-  %__array_cap_arrt34_5 = insertvalue %DriftArrayHeader %zero_arr1575, ptr null, 3
-  %i_2 = add i64 0, 0
-  %ri_2 = add i64 0, 0
+  %__array_cap_arrt34_7 = insertvalue %DriftArrayHeader %zero_arr1575, ptr null, 3
+  %i_9 = add i64 0, 0
+  %ri_9 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_arm_0:
   %payload_words1576 = getelementptr inbounds %Variant_std_2Eregex_RegexNode_81641bae28dd8ff1, ptr %node_1, i32 0, i32 2
@@ -83848,117 +83848,117 @@ __bb_array_cap_ok:
   %t36 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt35_1 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
-  %__array_cap_arrt34_1 = phi %DriftArrayHeader [ %t22, %__bb_array_cap_ok ], [ %arr_len1669, %__bb_array_copy_exit ]
+  %__array_cap_grewt35_9 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
+  %__array_cap_arrt34_9 = phi %DriftArrayHeader [ %t22, %__bb_array_cap_ok ], [ %arr_len1669, %__bb_array_copy_exit ]
   %zero_arr1681 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1682 = insertvalue %DriftArrayHeader %zero_arr1681, i64 0, 1
   %zero_arr1683 = insertvalue %DriftArrayHeader %zero_arr1682, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr1683, ptr null, 3
-  %data1684 = extractvalue %DriftArrayHeader %__array_cap_arrt34_1, 3
+  %data1684 = extractvalue %DriftArrayHeader %__array_cap_arrt34_9, 3
   %eltptr1685 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data1684, i64 %t26
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out1663, ptr %eltptr1685
   %t59 = add i64 %t26, %t31
-  %arr_len1686 = insertvalue %DriftArrayHeader %__array_cap_arrt34_1, i64 %t59, 0
+  %arr_len1686 = insertvalue %DriftArrayHeader %__array_cap_arrt34_9, i64 %t59, 0
   %arr_gen1687 = insertvalue %DriftArrayHeader %arr_len1686, i64 %t30, 2
   store %DriftArrayHeader %arr_gen1687, ptr %t21
-  %__array_cap_grewt795_1 = add i1 0, 0
+  %__array_cap_grewt795_14 = add i1 0, 0
   %zero_arr1688 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1689 = insertvalue %DriftArrayHeader %zero_arr1688, i64 0, 1
   %zero_arr1690 = insertvalue %DriftArrayHeader %zero_arr1689, i64 0, 2
-  %__array_cap_arrt794_1 = insertvalue %DriftArrayHeader %zero_arr1690, ptr null, 3
-  %__array_cap_grewt742_1 = add i1 0, 0
+  %__array_cap_arrt794_15 = insertvalue %DriftArrayHeader %zero_arr1690, ptr null, 3
+  %__array_cap_grewt742_14 = add i1 0, 0
   %zero_arr1691 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1692 = insertvalue %DriftArrayHeader %zero_arr1691, i64 0, 1
   %zero_arr1693 = insertvalue %DriftArrayHeader %zero_arr1692, i64 0, 2
-  %__array_cap_arrt741_1 = insertvalue %DriftArrayHeader %zero_arr1693, ptr null, 3
-  %__array_cap_grewt682_1 = add i1 0, 0
+  %__array_cap_arrt741_15 = insertvalue %DriftArrayHeader %zero_arr1693, ptr null, 3
+  %__array_cap_grewt682_14 = add i1 0, 0
   %zero_arr1694 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1695 = insertvalue %DriftArrayHeader %zero_arr1694, i64 0, 1
   %zero_arr1696 = insertvalue %DriftArrayHeader %zero_arr1695, i64 0, 2
-  %__array_cap_arrt681_1 = insertvalue %DriftArrayHeader %zero_arr1696, ptr null, 3
-  %__array_cap_grewt633_1 = add i1 0, 0
+  %__array_cap_arrt681_15 = insertvalue %DriftArrayHeader %zero_arr1696, ptr null, 3
+  %__array_cap_grewt633_14 = add i1 0, 0
   %zero_arr1697 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1698 = insertvalue %DriftArrayHeader %zero_arr1697, i64 0, 1
   %zero_arr1699 = insertvalue %DriftArrayHeader %zero_arr1698, i64 0, 2
-  %__array_cap_arrt632_1 = insertvalue %DriftArrayHeader %zero_arr1699, ptr null, 3
-  %__array_cap_grewt549_1 = add i1 0, 0
+  %__array_cap_arrt632_15 = insertvalue %DriftArrayHeader %zero_arr1699, ptr null, 3
+  %__array_cap_grewt549_16 = add i1 0, 0
   %zero_arr1700 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1701 = insertvalue %DriftArrayHeader %zero_arr1700, i64 0, 1
   %zero_arr1702 = insertvalue %DriftArrayHeader %zero_arr1701, i64 0, 2
-  %__array_cap_arrt548_1 = insertvalue %DriftArrayHeader %zero_arr1702, ptr null, 3
-  %__array_cap_grewt500_1 = add i1 0, 0
+  %__array_cap_arrt548_17 = insertvalue %DriftArrayHeader %zero_arr1702, ptr null, 3
+  %__array_cap_grewt500_16 = add i1 0, 0
   %zero_arr1703 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1704 = insertvalue %DriftArrayHeader %zero_arr1703, i64 0, 1
   %zero_arr1705 = insertvalue %DriftArrayHeader %zero_arr1704, i64 0, 2
-  %__array_cap_arrt499_1 = insertvalue %DriftArrayHeader %zero_arr1705, ptr null, 3
-  %bi_1 = add i64 0, 0
-  %__array_cap_grewt376_1 = add i1 0, 0
+  %__array_cap_arrt499_17 = insertvalue %DriftArrayHeader %zero_arr1705, ptr null, 3
+  %bi_14 = add i64 0, 0
+  %__array_cap_grewt376_16 = add i1 0, 0
   %zero_arr1706 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1707 = insertvalue %DriftArrayHeader %zero_arr1706, i64 0, 1
   %zero_arr1708 = insertvalue %DriftArrayHeader %zero_arr1707, i64 0, 2
-  %__array_cap_arrt375_1 = insertvalue %DriftArrayHeader %zero_arr1708, ptr null, 3
-  %total_1 = add i64 0, 0
-  %si_1 = add i64 0, 0
-  %__array_cap_grewt294_1 = add i1 0, 0
+  %__array_cap_arrt375_17 = insertvalue %DriftArrayHeader %zero_arr1708, ptr null, 3
+  %total_15 = add i64 0, 0
+  %si_17 = add i64 0, 0
+  %__array_cap_grewt294_10 = add i1 0, 0
   %zero_arr1709 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1710 = insertvalue %DriftArrayHeader %zero_arr1709, i64 0, 1
   %zero_arr1711 = insertvalue %DriftArrayHeader %zero_arr1710, i64 0, 2
-  %__array_cap_arrt293_1 = insertvalue %DriftArrayHeader %zero_arr1711, ptr null, 3
-  %__array_cap_grewt241_1 = add i1 0, 0
+  %__array_cap_arrt293_11 = insertvalue %DriftArrayHeader %zero_arr1711, ptr null, 3
+  %__array_cap_grewt241_12 = add i1 0, 0
   %zero_arr1712 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1713 = insertvalue %DriftArrayHeader %zero_arr1712, i64 0, 1
   %zero_arr1714 = insertvalue %DriftArrayHeader %zero_arr1713, i64 0, 2
-  %__array_cap_arrt240_1 = insertvalue %DriftArrayHeader %zero_arr1714, ptr null, 3
-  %__array_cap_grewt168_1 = add i1 0, 0
+  %__array_cap_arrt240_13 = insertvalue %DriftArrayHeader %zero_arr1714, ptr null, 3
+  %__array_cap_grewt168_13 = add i1 0, 0
   %zero_arr1715 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1716 = insertvalue %DriftArrayHeader %zero_arr1715, i64 0, 1
   %zero_arr1717 = insertvalue %DriftArrayHeader %zero_arr1716, i64 0, 2
-  %__array_cap_arrt167_1 = insertvalue %DriftArrayHeader %zero_arr1717, ptr null, 3
-  %__array_cap_grewt126_1 = add i1 0, 0
+  %__array_cap_arrt167_14 = insertvalue %DriftArrayHeader %zero_arr1717, ptr null, 3
+  %__array_cap_grewt126_13 = add i1 0, 0
   %zero_arr1718 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1719 = insertvalue %DriftArrayHeader %zero_arr1718, i64 0, 1
   %zero_arr1720 = insertvalue %DriftArrayHeader %zero_arr1719, i64 0, 2
-  %__array_cap_arrt125_1 = insertvalue %DriftArrayHeader %zero_arr1720, ptr null, 3
-  %__array_cap_grewt77_1 = add i1 0, 0
+  %__array_cap_arrt125_14 = insertvalue %DriftArrayHeader %zero_arr1720, ptr null, 3
+  %__array_cap_grewt77_10 = add i1 0, 0
   %zero_arr1721 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1722 = insertvalue %DriftArrayHeader %zero_arr1721, i64 0, 1
   %zero_arr1723 = insertvalue %DriftArrayHeader %zero_arr1722, i64 0, 2
-  %__array_cap_arrt76_1 = insertvalue %DriftArrayHeader %zero_arr1723, ptr null, 3
-  %i_1 = add i64 0, 0
-  %ri_1 = add i64 0, 0
+  %__array_cap_arrt76_11 = insertvalue %DriftArrayHeader %zero_arr1723, ptr null, 3
+  %i_10 = add i64 0, 0
+  %ri_10 = add i64 0, 0
   br label %__bb_match_join
 __bb_match_join:
-  %__array_cap_grewt795_15 = phi i1 [ %__array_cap_grewt795_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt795_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt795_3, %__bb_match_join1 ], [ %__array_cap_grewt795_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt795_11, %__bb_match_join2 ], [ %__array_cap_grewt795_12, %__bb_match_arm_7 ], [ %__array_cap_grewt795_13, %__bb_if_join2 ], [ %__array_cap_grewt795_14, %__bb_loop_exit1 ]
-  %__array_cap_arrt794_16 = phi %DriftArrayHeader [ %__array_cap_arrt794_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt794_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt794_3, %__bb_match_join1 ], [ %__array_cap_arrt794_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt794_12, %__bb_match_join2 ], [ %__array_cap_arrt794_13, %__bb_match_arm_7 ], [ %__array_cap_arrt794_14, %__bb_if_join2 ], [ %__array_cap_arrt794_15, %__bb_loop_exit1 ]
-  %__array_cap_grewt742_15 = phi i1 [ %__array_cap_grewt742_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt742_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt742_3, %__bb_match_join1 ], [ %__array_cap_grewt742_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt742_11, %__bb_match_join2 ], [ %__array_cap_grewt742_12, %__bb_match_arm_7 ], [ %__array_cap_grewt742_13, %__bb_if_join2 ], [ %__array_cap_grewt742_14, %__bb_loop_exit1 ]
-  %__array_cap_arrt741_16 = phi %DriftArrayHeader [ %__array_cap_arrt741_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt741_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt741_3, %__bb_match_join1 ], [ %__array_cap_arrt741_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt741_12, %__bb_match_join2 ], [ %__array_cap_arrt741_13, %__bb_match_arm_7 ], [ %__array_cap_arrt741_14, %__bb_if_join2 ], [ %__array_cap_arrt741_15, %__bb_loop_exit1 ]
-  %__array_cap_grewt682_15 = phi i1 [ %__array_cap_grewt682_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt682_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt682_3, %__bb_match_join1 ], [ %__array_cap_grewt682_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt682_11, %__bb_match_join2 ], [ %__array_cap_grewt682_12, %__bb_match_arm_7 ], [ %__array_cap_grewt682_13, %__bb_if_join2 ], [ %__array_cap_grewt682_14, %__bb_loop_exit1 ]
-  %__array_cap_arrt681_16 = phi %DriftArrayHeader [ %__array_cap_arrt681_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt681_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt681_3, %__bb_match_join1 ], [ %__array_cap_arrt681_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt681_12, %__bb_match_join2 ], [ %__array_cap_arrt681_13, %__bb_match_arm_7 ], [ %__array_cap_arrt681_14, %__bb_if_join2 ], [ %__array_cap_arrt681_15, %__bb_loop_exit1 ]
-  %__array_cap_grewt633_15 = phi i1 [ %__array_cap_grewt633_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt633_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt633_3, %__bb_match_join1 ], [ %__array_cap_grewt633_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt633_11, %__bb_match_join2 ], [ %__array_cap_grewt633_12, %__bb_match_arm_7 ], [ %__array_cap_grewt633_13, %__bb_if_join2 ], [ %__array_cap_grewt633_14, %__bb_loop_exit1 ]
-  %__array_cap_arrt632_16 = phi %DriftArrayHeader [ %__array_cap_arrt632_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt632_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt632_3, %__bb_match_join1 ], [ %__array_cap_arrt632_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt632_12, %__bb_match_join2 ], [ %__array_cap_arrt632_13, %__bb_match_arm_7 ], [ %__array_cap_arrt632_14, %__bb_if_join2 ], [ %__array_cap_arrt632_15, %__bb_loop_exit1 ]
-  %__array_cap_grewt549_17 = phi i1 [ %__array_cap_grewt549_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt549_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt549_3, %__bb_match_join1 ], [ %__array_cap_grewt549_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt549_5, %__bb_match_join2 ], [ %__array_cap_grewt549_6, %__bb_match_arm_7 ], [ %__array_cap_grewt549_7, %__bb_if_join2 ], [ %__array_cap_grewt549_16, %__bb_loop_exit1 ]
-  %__array_cap_arrt548_18 = phi %DriftArrayHeader [ %__array_cap_arrt548_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt548_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt548_3, %__bb_match_join1 ], [ %__array_cap_arrt548_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt548_5, %__bb_match_join2 ], [ %__array_cap_arrt548_6, %__bb_match_arm_7 ], [ %__array_cap_arrt548_7, %__bb_if_join2 ], [ %__array_cap_arrt548_17, %__bb_loop_exit1 ]
-  %__array_cap_grewt500_17 = phi i1 [ %__array_cap_grewt500_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt500_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt500_3, %__bb_match_join1 ], [ %__array_cap_grewt500_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt500_5, %__bb_match_join2 ], [ %__array_cap_grewt500_6, %__bb_match_arm_7 ], [ %__array_cap_grewt500_7, %__bb_if_join2 ], [ %__array_cap_grewt500_16, %__bb_loop_exit1 ]
-  %__array_cap_arrt499_18 = phi %DriftArrayHeader [ %__array_cap_arrt499_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt499_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt499_3, %__bb_match_join1 ], [ %__array_cap_arrt499_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt499_5, %__bb_match_join2 ], [ %__array_cap_arrt499_6, %__bb_match_arm_7 ], [ %__array_cap_arrt499_7, %__bb_if_join2 ], [ %__array_cap_arrt499_17, %__bb_loop_exit1 ]
-  %bi_15 = phi i64 [ %bi_1, %__bb_array_cap_join2 ], [ %bi_2, %__bb_array_cap_join21 ], [ %bi_3, %__bb_match_join1 ], [ %bi_4, %__bb_array_cap_join25 ], [ %bi_5, %__bb_match_join2 ], [ %bi_6, %__bb_match_arm_7 ], [ %bi_7, %__bb_if_join2 ], [ %bi_14, %__bb_loop_exit1 ]
-  %__array_cap_grewt376_17 = phi i1 [ %__array_cap_grewt376_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt376_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt376_3, %__bb_match_join1 ], [ %__array_cap_grewt376_4, %__bb_array_cap_join25 ], [ %__array_cap_grewt376_5, %__bb_match_join2 ], [ %__array_cap_grewt376_6, %__bb_match_arm_7 ], [ %__array_cap_grewt376_7, %__bb_if_join2 ], [ %__array_cap_grewt376_16, %__bb_loop_exit1 ]
-  %__array_cap_arrt375_18 = phi %DriftArrayHeader [ %__array_cap_arrt375_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt375_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt375_3, %__bb_match_join1 ], [ %__array_cap_arrt375_4, %__bb_array_cap_join25 ], [ %__array_cap_arrt375_5, %__bb_match_join2 ], [ %__array_cap_arrt375_6, %__bb_match_arm_7 ], [ %__array_cap_arrt375_7, %__bb_if_join2 ], [ %__array_cap_arrt375_17, %__bb_loop_exit1 ]
-  %total_16 = phi i64 [ %total_1, %__bb_array_cap_join2 ], [ %total_2, %__bb_array_cap_join21 ], [ %total_3, %__bb_match_join1 ], [ %total_4, %__bb_array_cap_join25 ], [ %total_5, %__bb_match_join2 ], [ %total_6, %__bb_match_arm_7 ], [ %total_7, %__bb_if_join2 ], [ %total_15, %__bb_loop_exit1 ]
-  %si_18 = phi i64 [ %si_1, %__bb_array_cap_join2 ], [ %si_2, %__bb_array_cap_join21 ], [ %si_3, %__bb_match_join1 ], [ %si_4, %__bb_array_cap_join25 ], [ %si_5, %__bb_match_join2 ], [ %si_6, %__bb_match_arm_7 ], [ %si_7, %__bb_if_join2 ], [ %si_17, %__bb_loop_exit1 ]
-  %__array_cap_grewt294_11 = phi i1 [ %__array_cap_grewt294_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt294_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt294_3, %__bb_match_join1 ], [ %__array_cap_grewt294_6, %__bb_array_cap_join25 ], [ %__array_cap_grewt294_7, %__bb_match_join2 ], [ %__array_cap_grewt294_8, %__bb_match_arm_7 ], [ %__array_cap_grewt294_9, %__bb_if_join2 ], [ %__array_cap_grewt294_10, %__bb_loop_exit1 ]
-  %__array_cap_arrt293_12 = phi %DriftArrayHeader [ %__array_cap_arrt293_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt293_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt293_3, %__bb_match_join1 ], [ %__arc9, %__bb_array_cap_join25 ], [ %__array_cap_arrt293_8, %__bb_match_join2 ], [ %__array_cap_arrt293_9, %__bb_match_arm_7 ], [ %__array_cap_arrt293_10, %__bb_if_join2 ], [ %__array_cap_arrt293_11, %__bb_loop_exit1 ]
-  %__array_cap_grewt241_13 = phi i1 [ %__array_cap_grewt241_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt241_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt241_3, %__bb_match_join1 ], [ %__array_cap_grewt241_5, %__bb_array_cap_join25 ], [ %__array_cap_grewt241_9, %__bb_match_join2 ], [ %__array_cap_grewt241_10, %__bb_match_arm_7 ], [ %__array_cap_grewt241_11, %__bb_if_join2 ], [ %__array_cap_grewt241_12, %__bb_loop_exit1 ]
-  %__array_cap_arrt240_14 = phi %DriftArrayHeader [ %__array_cap_arrt240_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt240_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt240_3, %__bb_match_join1 ], [ %__array_cap_arrt240_5, %__bb_array_cap_join25 ], [ %__array_cap_arrt240_10, %__bb_match_join2 ], [ %__array_cap_arrt240_11, %__bb_match_arm_7 ], [ %__array_cap_arrt240_12, %__bb_if_join2 ], [ %__array_cap_arrt240_13, %__bb_loop_exit1 ]
-  %__array_cap_grewt168_14 = phi i1 [ %__array_cap_grewt168_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt168_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt168_4, %__bb_match_join1 ], [ %__array_cap_grewt168_9, %__bb_array_cap_join25 ], [ %__array_cap_grewt168_10, %__bb_match_join2 ], [ %__array_cap_grewt168_11, %__bb_match_arm_7 ], [ %__array_cap_grewt168_12, %__bb_if_join2 ], [ %__array_cap_grewt168_13, %__bb_loop_exit1 ]
-  %__array_cap_arrt167_15 = phi %DriftArrayHeader [ %__array_cap_arrt167_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt167_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt167_4, %__bb_match_join1 ], [ %__array_cap_arrt167_10, %__bb_array_cap_join25 ], [ %__array_cap_arrt167_11, %__bb_match_join2 ], [ %__array_cap_arrt167_12, %__bb_match_arm_7 ], [ %__array_cap_arrt167_13, %__bb_if_join2 ], [ %__array_cap_arrt167_14, %__bb_loop_exit1 ]
-  %__array_cap_grewt126_14 = phi i1 [ %__array_cap_grewt126_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt126_2, %__bb_array_cap_join21 ], [ %__array_cap_grewt126_6, %__bb_match_join1 ], [ %__array_cap_grewt126_9, %__bb_array_cap_join25 ], [ %__array_cap_grewt126_10, %__bb_match_join2 ], [ %__array_cap_grewt126_11, %__bb_match_arm_7 ], [ %__array_cap_grewt126_12, %__bb_if_join2 ], [ %__array_cap_grewt126_13, %__bb_loop_exit1 ]
-  %__array_cap_arrt125_15 = phi %DriftArrayHeader [ %__array_cap_arrt125_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt125_2, %__bb_array_cap_join21 ], [ %__array_cap_arrt125_7, %__bb_match_join1 ], [ %__array_cap_arrt125_10, %__bb_array_cap_join25 ], [ %__array_cap_arrt125_11, %__bb_match_join2 ], [ %__array_cap_arrt125_12, %__bb_match_arm_7 ], [ %__array_cap_arrt125_13, %__bb_if_join2 ], [ %__array_cap_arrt125_14, %__bb_loop_exit1 ]
-  %__array_cap_grewt77_11 = phi i1 [ %__array_cap_grewt77_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt77_4, %__bb_array_cap_join21 ], [ %__array_cap_grewt77_5, %__bb_match_join1 ], [ %__array_cap_grewt77_6, %__bb_array_cap_join25 ], [ %__array_cap_grewt77_7, %__bb_match_join2 ], [ %__array_cap_grewt77_8, %__bb_match_arm_7 ], [ %__array_cap_grewt77_9, %__bb_if_join2 ], [ %__array_cap_grewt77_10, %__bb_loop_exit1 ]
-  %__array_cap_arrt76_12 = phi %DriftArrayHeader [ %__array_cap_arrt76_1, %__bb_array_cap_join2 ], [ %__arc2, %__bb_array_cap_join21 ], [ %__array_cap_arrt76_6, %__bb_match_join1 ], [ %__array_cap_arrt76_7, %__bb_array_cap_join25 ], [ %__array_cap_arrt76_8, %__bb_match_join2 ], [ %__array_cap_arrt76_9, %__bb_match_arm_7 ], [ %__array_cap_arrt76_10, %__bb_if_join2 ], [ %__array_cap_arrt76_11, %__bb_loop_exit1 ]
-  %__array_cap_grewt35_11 = phi i1 [ %__array_cap_grewt35_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt35_4, %__bb_array_cap_join21 ], [ %__array_cap_grewt35_5, %__bb_match_join1 ], [ %__array_cap_grewt35_6, %__bb_array_cap_join25 ], [ %__array_cap_grewt35_7, %__bb_match_join2 ], [ %__array_cap_grewt35_8, %__bb_match_arm_7 ], [ %__array_cap_grewt35_9, %__bb_if_join2 ], [ %__array_cap_grewt35_10, %__bb_loop_exit1 ]
-  %__array_cap_arrt34_12 = phi %DriftArrayHeader [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt34_5, %__bb_array_cap_join21 ], [ %__array_cap_arrt34_6, %__bb_match_join1 ], [ %__array_cap_arrt34_7, %__bb_array_cap_join25 ], [ %__array_cap_arrt34_8, %__bb_match_join2 ], [ %__array_cap_arrt34_9, %__bb_match_arm_7 ], [ %__array_cap_arrt34_10, %__bb_if_join2 ], [ %__array_cap_arrt34_11, %__bb_loop_exit1 ]
-  %i_11 = phi i64 [ %i_1, %__bb_array_cap_join2 ], [ %i_2, %__bb_array_cap_join21 ], [ %i_3, %__bb_match_join1 ], [ %i_4, %__bb_array_cap_join25 ], [ %i_5, %__bb_match_join2 ], [ %i_6, %__bb_match_arm_7 ], [ %i_7, %__bb_if_join2 ], [ %i_9, %__bb_loop_exit1 ]
-  %ri_11 = phi i64 [ %ri_1, %__bb_array_cap_join2 ], [ %ri_2, %__bb_array_cap_join21 ], [ %ri_3, %__bb_match_join1 ], [ %ri_5, %__bb_array_cap_join25 ], [ %ri_7, %__bb_match_join2 ], [ %ri_8, %__bb_match_arm_7 ], [ %ri_9, %__bb_if_join2 ], [ %ri_10, %__bb_loop_exit1 ]
+  %__array_cap_grewt795_15 = phi i1 [ %__array_cap_grewt795_1, %__bb_match_join1 ], [ %__array_cap_grewt795_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt795_3, %__bb_if_join2 ], [ %__array_cap_grewt795_5, %__bb_match_join2 ], [ %__array_cap_grewt795_11, %__bb_match_arm_7 ], [ %__array_cap_grewt795_12, %__bb_loop_exit1 ], [ %__array_cap_grewt795_13, %__bb_array_cap_join21 ], [ %__array_cap_grewt795_14, %__bb_array_cap_join2 ]
+  %__array_cap_arrt794_16 = phi %DriftArrayHeader [ %__array_cap_arrt794_1, %__bb_match_join1 ], [ %__array_cap_arrt794_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt794_3, %__bb_if_join2 ], [ %__array_cap_arrt794_5, %__bb_match_join2 ], [ %__array_cap_arrt794_12, %__bb_match_arm_7 ], [ %__array_cap_arrt794_13, %__bb_loop_exit1 ], [ %__array_cap_arrt794_14, %__bb_array_cap_join21 ], [ %__array_cap_arrt794_15, %__bb_array_cap_join2 ]
+  %__array_cap_grewt742_15 = phi i1 [ %__array_cap_grewt742_1, %__bb_match_join1 ], [ %__array_cap_grewt742_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt742_3, %__bb_if_join2 ], [ %__array_cap_grewt742_5, %__bb_match_join2 ], [ %__array_cap_grewt742_11, %__bb_match_arm_7 ], [ %__array_cap_grewt742_12, %__bb_loop_exit1 ], [ %__array_cap_grewt742_13, %__bb_array_cap_join21 ], [ %__array_cap_grewt742_14, %__bb_array_cap_join2 ]
+  %__array_cap_arrt741_16 = phi %DriftArrayHeader [ %__array_cap_arrt741_1, %__bb_match_join1 ], [ %__array_cap_arrt741_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt741_3, %__bb_if_join2 ], [ %__array_cap_arrt741_5, %__bb_match_join2 ], [ %__array_cap_arrt741_12, %__bb_match_arm_7 ], [ %__array_cap_arrt741_13, %__bb_loop_exit1 ], [ %__array_cap_arrt741_14, %__bb_array_cap_join21 ], [ %__array_cap_arrt741_15, %__bb_array_cap_join2 ]
+  %__array_cap_grewt682_15 = phi i1 [ %__array_cap_grewt682_1, %__bb_match_join1 ], [ %__array_cap_grewt682_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt682_3, %__bb_if_join2 ], [ %__array_cap_grewt682_7, %__bb_match_join2 ], [ %__array_cap_grewt682_11, %__bb_match_arm_7 ], [ %__array_cap_grewt682_12, %__bb_loop_exit1 ], [ %__array_cap_grewt682_13, %__bb_array_cap_join21 ], [ %__array_cap_grewt682_14, %__bb_array_cap_join2 ]
+  %__array_cap_arrt681_16 = phi %DriftArrayHeader [ %__array_cap_arrt681_1, %__bb_match_join1 ], [ %__array_cap_arrt681_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt681_3, %__bb_if_join2 ], [ %__array_cap_arrt681_8, %__bb_match_join2 ], [ %__array_cap_arrt681_12, %__bb_match_arm_7 ], [ %__array_cap_arrt681_13, %__bb_loop_exit1 ], [ %__array_cap_arrt681_14, %__bb_array_cap_join21 ], [ %__array_cap_arrt681_15, %__bb_array_cap_join2 ]
+  %__array_cap_grewt633_15 = phi i1 [ %__array_cap_grewt633_1, %__bb_match_join1 ], [ %__array_cap_grewt633_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt633_3, %__bb_if_join2 ], [ %__array_cap_grewt633_7, %__bb_match_join2 ], [ %__array_cap_grewt633_11, %__bb_match_arm_7 ], [ %__array_cap_grewt633_12, %__bb_loop_exit1 ], [ %__array_cap_grewt633_13, %__bb_array_cap_join21 ], [ %__array_cap_grewt633_14, %__bb_array_cap_join2 ]
+  %__array_cap_arrt632_16 = phi %DriftArrayHeader [ %__array_cap_arrt632_1, %__bb_match_join1 ], [ %__array_cap_arrt632_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt632_3, %__bb_if_join2 ], [ %__array_cap_arrt632_8, %__bb_match_join2 ], [ %__array_cap_arrt632_12, %__bb_match_arm_7 ], [ %__array_cap_arrt632_13, %__bb_loop_exit1 ], [ %__array_cap_arrt632_14, %__bb_array_cap_join21 ], [ %__array_cap_arrt632_15, %__bb_array_cap_join2 ]
+  %__array_cap_grewt549_17 = phi i1 [ %__array_cap_grewt549_1, %__bb_match_join1 ], [ %__array_cap_grewt549_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt549_11, %__bb_if_join2 ], [ %__array_cap_grewt549_12, %__bb_match_join2 ], [ %__array_cap_grewt549_13, %__bb_match_arm_7 ], [ %__array_cap_grewt549_14, %__bb_loop_exit1 ], [ %__array_cap_grewt549_15, %__bb_array_cap_join21 ], [ %__array_cap_grewt549_16, %__bb_array_cap_join2 ]
+  %__array_cap_arrt548_18 = phi %DriftArrayHeader [ %__array_cap_arrt548_1, %__bb_match_join1 ], [ %__array_cap_arrt548_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt548_12, %__bb_if_join2 ], [ %__array_cap_arrt548_13, %__bb_match_join2 ], [ %__array_cap_arrt548_14, %__bb_match_arm_7 ], [ %__array_cap_arrt548_15, %__bb_loop_exit1 ], [ %__array_cap_arrt548_16, %__bb_array_cap_join21 ], [ %__array_cap_arrt548_17, %__bb_array_cap_join2 ]
+  %__array_cap_grewt500_17 = phi i1 [ %__array_cap_grewt500_1, %__bb_match_join1 ], [ %__array_cap_grewt500_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt500_11, %__bb_if_join2 ], [ %__array_cap_grewt500_12, %__bb_match_join2 ], [ %__array_cap_grewt500_13, %__bb_match_arm_7 ], [ %__array_cap_grewt500_14, %__bb_loop_exit1 ], [ %__array_cap_grewt500_15, %__bb_array_cap_join21 ], [ %__array_cap_grewt500_16, %__bb_array_cap_join2 ]
+  %__array_cap_arrt499_18 = phi %DriftArrayHeader [ %__array_cap_arrt499_1, %__bb_match_join1 ], [ %__array_cap_arrt499_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt499_12, %__bb_if_join2 ], [ %__array_cap_arrt499_13, %__bb_match_join2 ], [ %__array_cap_arrt499_14, %__bb_match_arm_7 ], [ %__array_cap_arrt499_15, %__bb_loop_exit1 ], [ %__array_cap_arrt499_16, %__bb_array_cap_join21 ], [ %__array_cap_arrt499_17, %__bb_array_cap_join2 ]
+  %bi_15 = phi i64 [ %bi_1, %__bb_match_join1 ], [ %bi_2, %__bb_array_cap_join25 ], [ %bi_9, %__bb_if_join2 ], [ %bi_10, %__bb_match_join2 ], [ %bi_11, %__bb_match_arm_7 ], [ %bi_12, %__bb_loop_exit1 ], [ %bi_13, %__bb_array_cap_join21 ], [ %bi_14, %__bb_array_cap_join2 ]
+  %__array_cap_grewt376_17 = phi i1 [ %__array_cap_grewt376_1, %__bb_match_join1 ], [ %__array_cap_grewt376_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt376_11, %__bb_if_join2 ], [ %__array_cap_grewt376_12, %__bb_match_join2 ], [ %__array_cap_grewt376_13, %__bb_match_arm_7 ], [ %__array_cap_grewt376_14, %__bb_loop_exit1 ], [ %__array_cap_grewt376_15, %__bb_array_cap_join21 ], [ %__array_cap_grewt376_16, %__bb_array_cap_join2 ]
+  %__array_cap_arrt375_18 = phi %DriftArrayHeader [ %__array_cap_arrt375_1, %__bb_match_join1 ], [ %__array_cap_arrt375_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt375_12, %__bb_if_join2 ], [ %__array_cap_arrt375_13, %__bb_match_join2 ], [ %__array_cap_arrt375_14, %__bb_match_arm_7 ], [ %__array_cap_arrt375_15, %__bb_loop_exit1 ], [ %__array_cap_arrt375_16, %__bb_array_cap_join21 ], [ %__array_cap_arrt375_17, %__bb_array_cap_join2 ]
+  %total_16 = phi i64 [ %total_1, %__bb_match_join1 ], [ %total_2, %__bb_array_cap_join25 ], [ %total_10, %__bb_if_join2 ], [ %total_11, %__bb_match_join2 ], [ %total_12, %__bb_match_arm_7 ], [ %total_13, %__bb_loop_exit1 ], [ %total_14, %__bb_array_cap_join21 ], [ %total_15, %__bb_array_cap_join2 ]
+  %si_18 = phi i64 [ %si_1, %__bb_match_join1 ], [ %si_2, %__bb_array_cap_join25 ], [ %si_12, %__bb_if_join2 ], [ %si_13, %__bb_match_join2 ], [ %si_14, %__bb_match_arm_7 ], [ %si_15, %__bb_loop_exit1 ], [ %si_16, %__bb_array_cap_join21 ], [ %si_17, %__bb_array_cap_join2 ]
+  %__array_cap_grewt294_11 = phi i1 [ %__array_cap_grewt294_1, %__bb_match_join1 ], [ %__array_cap_grewt294_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt294_5, %__bb_if_join2 ], [ %__array_cap_grewt294_6, %__bb_match_join2 ], [ %__array_cap_grewt294_7, %__bb_match_arm_7 ], [ %__array_cap_grewt294_8, %__bb_loop_exit1 ], [ %__array_cap_grewt294_9, %__bb_array_cap_join21 ], [ %__array_cap_grewt294_10, %__bb_array_cap_join2 ]
+  %__array_cap_arrt293_12 = phi %DriftArrayHeader [ %__array_cap_arrt293_1, %__bb_match_join1 ], [ %__arc9, %__bb_array_cap_join25 ], [ %__array_cap_arrt293_6, %__bb_if_join2 ], [ %__array_cap_arrt293_7, %__bb_match_join2 ], [ %__array_cap_arrt293_8, %__bb_match_arm_7 ], [ %__array_cap_arrt293_9, %__bb_loop_exit1 ], [ %__array_cap_arrt293_10, %__bb_array_cap_join21 ], [ %__array_cap_arrt293_11, %__bb_array_cap_join2 ]
+  %__array_cap_grewt241_13 = phi i1 [ %__array_cap_grewt241_1, %__bb_match_join1 ], [ %__array_cap_grewt241_3, %__bb_array_cap_join25 ], [ %__array_cap_grewt241_7, %__bb_if_join2 ], [ %__array_cap_grewt241_8, %__bb_match_join2 ], [ %__array_cap_grewt241_9, %__bb_match_arm_7 ], [ %__array_cap_grewt241_10, %__bb_loop_exit1 ], [ %__array_cap_grewt241_11, %__bb_array_cap_join21 ], [ %__array_cap_grewt241_12, %__bb_array_cap_join2 ]
+  %__array_cap_arrt240_14 = phi %DriftArrayHeader [ %__array_cap_arrt240_1, %__bb_match_join1 ], [ %__array_cap_arrt240_3, %__bb_array_cap_join25 ], [ %__array_cap_arrt240_8, %__bb_if_join2 ], [ %__array_cap_arrt240_9, %__bb_match_join2 ], [ %__array_cap_arrt240_10, %__bb_match_arm_7 ], [ %__array_cap_arrt240_11, %__bb_loop_exit1 ], [ %__array_cap_arrt240_12, %__bb_array_cap_join21 ], [ %__array_cap_arrt240_13, %__bb_array_cap_join2 ]
+  %__array_cap_grewt168_14 = phi i1 [ %__array_cap_grewt168_6, %__bb_match_join1 ], [ %__array_cap_grewt168_7, %__bb_array_cap_join25 ], [ %__array_cap_grewt168_8, %__bb_if_join2 ], [ %__array_cap_grewt168_9, %__bb_match_join2 ], [ %__array_cap_grewt168_10, %__bb_match_arm_7 ], [ %__array_cap_grewt168_11, %__bb_loop_exit1 ], [ %__array_cap_grewt168_12, %__bb_array_cap_join21 ], [ %__array_cap_grewt168_13, %__bb_array_cap_join2 ]
+  %__array_cap_arrt167_15 = phi %DriftArrayHeader [ %__array_cap_arrt167_7, %__bb_match_join1 ], [ %__array_cap_arrt167_8, %__bb_array_cap_join25 ], [ %__array_cap_arrt167_9, %__bb_if_join2 ], [ %__array_cap_arrt167_10, %__bb_match_join2 ], [ %__array_cap_arrt167_11, %__bb_match_arm_7 ], [ %__array_cap_arrt167_12, %__bb_loop_exit1 ], [ %__array_cap_arrt167_13, %__bb_array_cap_join21 ], [ %__array_cap_arrt167_14, %__bb_array_cap_join2 ]
+  %__array_cap_grewt126_14 = phi i1 [ %__array_cap_grewt126_6, %__bb_match_join1 ], [ %__array_cap_grewt126_7, %__bb_array_cap_join25 ], [ %__array_cap_grewt126_8, %__bb_if_join2 ], [ %__array_cap_grewt126_9, %__bb_match_join2 ], [ %__array_cap_grewt126_10, %__bb_match_arm_7 ], [ %__array_cap_grewt126_11, %__bb_loop_exit1 ], [ %__array_cap_grewt126_12, %__bb_array_cap_join21 ], [ %__array_cap_grewt126_13, %__bb_array_cap_join2 ]
+  %__array_cap_arrt125_15 = phi %DriftArrayHeader [ %__array_cap_arrt125_7, %__bb_match_join1 ], [ %__array_cap_arrt125_8, %__bb_array_cap_join25 ], [ %__array_cap_arrt125_9, %__bb_if_join2 ], [ %__array_cap_arrt125_10, %__bb_match_join2 ], [ %__array_cap_arrt125_11, %__bb_match_arm_7 ], [ %__array_cap_arrt125_12, %__bb_loop_exit1 ], [ %__array_cap_arrt125_13, %__bb_array_cap_join21 ], [ %__array_cap_arrt125_14, %__bb_array_cap_join2 ]
+  %__array_cap_grewt77_11 = phi i1 [ %__array_cap_grewt77_1, %__bb_match_join1 ], [ %__array_cap_grewt77_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt77_3, %__bb_if_join2 ], [ %__array_cap_grewt77_4, %__bb_match_join2 ], [ %__array_cap_grewt77_5, %__bb_match_arm_7 ], [ %__array_cap_grewt77_6, %__bb_loop_exit1 ], [ %__array_cap_grewt77_8, %__bb_array_cap_join21 ], [ %__array_cap_grewt77_10, %__bb_array_cap_join2 ]
+  %__array_cap_arrt76_12 = phi %DriftArrayHeader [ %__array_cap_arrt76_1, %__bb_match_join1 ], [ %__array_cap_arrt76_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt76_3, %__bb_if_join2 ], [ %__array_cap_arrt76_4, %__bb_match_join2 ], [ %__array_cap_arrt76_5, %__bb_match_arm_7 ], [ %__array_cap_arrt76_6, %__bb_loop_exit1 ], [ %__arc2, %__bb_array_cap_join21 ], [ %__array_cap_arrt76_11, %__bb_array_cap_join2 ]
+  %__array_cap_grewt35_11 = phi i1 [ %__array_cap_grewt35_1, %__bb_match_join1 ], [ %__array_cap_grewt35_2, %__bb_array_cap_join25 ], [ %__array_cap_grewt35_3, %__bb_if_join2 ], [ %__array_cap_grewt35_4, %__bb_match_join2 ], [ %__array_cap_grewt35_5, %__bb_match_arm_7 ], [ %__array_cap_grewt35_6, %__bb_loop_exit1 ], [ %__array_cap_grewt35_7, %__bb_array_cap_join21 ], [ %__array_cap_grewt35_9, %__bb_array_cap_join2 ]
+  %__array_cap_arrt34_12 = phi %DriftArrayHeader [ %__array_cap_arrt34_1, %__bb_match_join1 ], [ %__array_cap_arrt34_2, %__bb_array_cap_join25 ], [ %__array_cap_arrt34_3, %__bb_if_join2 ], [ %__array_cap_arrt34_4, %__bb_match_join2 ], [ %__array_cap_arrt34_5, %__bb_match_arm_7 ], [ %__array_cap_arrt34_6, %__bb_loop_exit1 ], [ %__array_cap_arrt34_7, %__bb_array_cap_join21 ], [ %__arc1, %__bb_array_cap_join2 ]
+  %i_11 = phi i64 [ %i_1, %__bb_match_join1 ], [ %i_2, %__bb_array_cap_join25 ], [ %i_3, %__bb_if_join2 ], [ %i_4, %__bb_match_join2 ], [ %i_5, %__bb_match_arm_7 ], [ %i_7, %__bb_loop_exit1 ], [ %i_9, %__bb_array_cap_join21 ], [ %i_10, %__bb_array_cap_join2 ]
+  %ri_11 = phi i64 [ %ri_1, %__bb_match_join1 ], [ %ri_3, %__bb_array_cap_join25 ], [ %ri_5, %__bb_if_join2 ], [ %ri_6, %__bb_match_join2 ], [ %ri_7, %__bb_match_arm_7 ], [ %ri_8, %__bb_loop_exit1 ], [ %ri_9, %__bb_array_cap_join21 ], [ %ri_10, %__bb_array_cap_join2 ]
   %__arc18 = load %DriftArrayHeader, ptr %sizes__addr
   %zero_arr1724 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr1725 = insertvalue %DriftArrayHeader %zero_arr1724, i64 0, 1
@@ -84209,17 +84209,17 @@ __bb_array_cap_ok:
   %t27 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt26_1 = phi i1 [ %t27, %__bb_array_cap_ok ], [ %t47, %__bb_array_copy_exit ]
-  %__array_cap_arrt25_1 = phi %DriftArrayHeader [ %t14, %__bb_array_cap_ok ], [ %arr_len98, %__bb_array_copy_exit ]
+  %__array_cap_grewt26_2 = phi i1 [ %t27, %__bb_array_cap_ok ], [ %t47, %__bb_array_copy_exit ]
+  %__array_cap_arrt25_2 = phi %DriftArrayHeader [ %t14, %__bb_array_cap_ok ], [ %arr_len98, %__bb_array_copy_exit ]
   %zero_arr110 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr111 = insertvalue %DriftArrayHeader %zero_arr110, i64 0, 1
   %zero_arr112 = insertvalue %DriftArrayHeader %zero_arr111, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr112, ptr null, 3
-  %data113 = extractvalue %DriftArrayHeader %__array_cap_arrt25_1, 3
+  %data113 = extractvalue %DriftArrayHeader %__array_cap_arrt25_2, 3
   %eltptr114 = getelementptr inbounds %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf, ptr %data113, i64 %t17
   store %Variant_std_2Eregex__NfaOp_702c9ceaabce4cbf %var_out92, ptr %eltptr114
   %t50 = add i64 %t17, %t22
-  %arr_len115 = insertvalue %DriftArrayHeader %__array_cap_arrt25_1, i64 %t50, 0
+  %arr_len115 = insertvalue %DriftArrayHeader %__array_cap_arrt25_2, i64 %t50, 0
   %arr_gen116 = insertvalue %DriftArrayHeader %arr_len115, i64 %t21, 2
   store %DriftArrayHeader %arr_gen116, ptr %t13
   %t53 = load %Struct_std_2Eregex__NfaProg_823f24afd67d1544, ptr %nfa__addr
@@ -84260,7 +84260,7 @@ __bb_entry:
   %__array_cap_arrt19_1 = insertvalue %DriftArrayHeader %zero_arr13, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt20_2 = phi i1 [ %__array_cap_grewt20_1, %__bb_entry ], [ %__array_cap_grewt20_3, %__bb_if_join ]
+  %__array_cap_grewt20_2 = phi i1 [ %__array_cap_grewt20_1, %__bb_entry ], [ %__array_cap_grewt20_4, %__bb_if_join ]
   %__array_cap_arrt19_2 = phi %DriftArrayHeader [ %__array_cap_arrt19_1, %__bb_entry ], [ %__arc1, %__bb_if_join ]
   %i_2 = phi i64 [ %t4, %__bb_entry ], [ %t49, %__bb_if_join ]
   br label %__bb_loop_body
@@ -84349,18 +84349,18 @@ __bb_array_cap_ok:
   %t21 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt20_3 = phi i1 [ %t21, %__bb_array_cap_ok ], [ %t41, %__bb_array_copy_exit ]
-  %__array_cap_arrt19_3 = phi %DriftArrayHeader [ %t9, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
+  %__array_cap_grewt20_4 = phi i1 [ %t21, %__bb_array_cap_ok ], [ %t41, %__bb_array_copy_exit ]
+  %__array_cap_arrt19_4 = phi %DriftArrayHeader [ %t9, %__bb_array_cap_ok ], [ %arr_len22, %__bb_array_copy_exit ]
   %zero_arr36 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr37 = insertvalue %DriftArrayHeader %zero_arr36, i64 0, 1
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr38, ptr null, 3
-  %data39 = extractvalue %DriftArrayHeader %__array_cap_arrt19_3, 3
+  %data39 = extractvalue %DriftArrayHeader %__array_cap_arrt19_4, 3
   %eltptr40 = getelementptr inbounds i8, ptr %data39, i64 %t11
   %bool841 = zext i1 %t10 to i8
   store i8 %bool841, ptr %eltptr40
   %t44 = add i64 %t11, %t16
-  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt19_3, i64 %t44, 0
+  %arr_len42 = insertvalue %DriftArrayHeader %__array_cap_arrt19_4, i64 %t44, 0
   %arr_gen43 = insertvalue %DriftArrayHeader %arr_len42, i64 %t15, 2
   store %DriftArrayHeader %arr_gen43, ptr %a__addr
   %t48 = add i64 0, 1
@@ -84444,8 +84444,8 @@ __bb_logic_rhs:
   %t12 = icmp slt i64 %pc_1, %t11
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_rhs1, label %__bb_logic_short1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_rhs1, label %__bb_logic_short1
 __bb_logic_short1:
   %t15 = add i1 0, 0
   br label %__bb_logic_join1
@@ -84470,7 +84470,7 @@ __bb_idx_join:
   %t35 = xor i1 %t32, true
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt14_3 = phi i1 [ %t35, %__bb_idx_join ], [ %t15, %__bb_logic_short1 ]
+  %__logic_tmpt14_1 = phi i1 [ %t35, %__bb_idx_join ], [ %t15, %__bb_logic_short1 ]
   %__array_cap_grewt296_1 = add i1 0, 0
   %zero_arr9 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr10 = insertvalue %DriftArrayHeader %zero_arr9, i64 0, 1
@@ -84491,7 +84491,7 @@ __bb_logic_join1:
   %zero_arr19 = insertvalue %DriftArrayHeader %zero_arr18, i64 0, 1
   %zero_arr20 = insertvalue %DriftArrayHeader %zero_arr19, i64 0, 2
   %__array_cap_arrt160_1 = insertvalue %DriftArrayHeader %zero_arr20, ptr null, 3
-  br i1 %__logic_tmpt14_3, label %__bb_if_then, label %__bb_if_join
+  br i1 %__logic_tmpt14_1, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t37 = add i1 0, 1
   %t39 = load ptr, ptr %bitmap__addr
@@ -85092,17 +85092,17 @@ __bb_array_cap_ok1:
   %t204 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt203_5 = phi i1 [ %t224, %__bb_array_copy_exit1 ], [ %t204, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt202_5 = phi %DriftArrayHeader [ %arr_len254, %__bb_array_copy_exit1 ], [ %t192, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt203_4 = phi i1 [ %t204, %__bb_array_cap_ok1 ], [ %t224, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt202_4 = phi %DriftArrayHeader [ %t192, %__bb_array_cap_ok1 ], [ %arr_len254, %__bb_array_copy_exit1 ]
   %zero_arr266 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr267 = insertvalue %DriftArrayHeader %zero_arr266, i64 0, 1
   %zero_arr268 = insertvalue %DriftArrayHeader %zero_arr267, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr268, ptr null, 3
-  %data269 = extractvalue %DriftArrayHeader %__array_cap_arrt202_5, 3
+  %data269 = extractvalue %DriftArrayHeader %__array_cap_arrt202_4, 3
   %eltptr270 = getelementptr inbounds i64, ptr %data269, i64 %t194
   store i64 %pc_1, ptr %eltptr270
   %t227 = add i64 %t194, %t199
-  %arr_len271 = insertvalue %DriftArrayHeader %__array_cap_arrt202_5, i64 %t227, 0
+  %arr_len271 = insertvalue %DriftArrayHeader %__array_cap_arrt202_4, i64 %t227, 0
   %arr_gen272 = insertvalue %DriftArrayHeader %arr_len271, i64 %t198, 2
   store %DriftArrayHeader %arr_gen272, ptr %clist_1
   br label %__bb_match_join
@@ -85182,17 +85182,17 @@ __bb_array_cap_ok:
   %t162 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt161_3 = phi i1 [ %t162, %__bb_array_cap_ok ], [ %t182, %__bb_array_copy_exit ]
-  %__array_cap_arrt160_3 = phi %DriftArrayHeader [ %t150, %__bb_array_cap_ok ], [ %arr_len280, %__bb_array_copy_exit ]
+  %__array_cap_grewt161_4 = phi i1 [ %t162, %__bb_array_cap_ok ], [ %t182, %__bb_array_copy_exit ]
+  %__array_cap_arrt160_4 = phi %DriftArrayHeader [ %t150, %__bb_array_cap_ok ], [ %arr_len280, %__bb_array_copy_exit ]
   %zero_arr292 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr293 = insertvalue %DriftArrayHeader %zero_arr292, i64 0, 1
   %zero_arr294 = insertvalue %DriftArrayHeader %zero_arr293, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr294, ptr null, 3
-  %data295 = extractvalue %DriftArrayHeader %__array_cap_arrt160_3, 3
+  %data295 = extractvalue %DriftArrayHeader %__array_cap_arrt160_4, 3
   %eltptr296 = getelementptr inbounds i64, ptr %data295, i64 %t152
   store i64 %pc_1, ptr %eltptr296
   %t185 = add i64 %t152, %t157
-  %arr_len297 = insertvalue %DriftArrayHeader %__array_cap_arrt160_3, i64 %t185, 0
+  %arr_len297 = insertvalue %DriftArrayHeader %__array_cap_arrt160_4, i64 %t185, 0
   %arr_gen298 = insertvalue %DriftArrayHeader %arr_len297, i64 %t156, 2
   store %DriftArrayHeader %arr_gen298, ptr %clist_1
   br label %__bb_match_join
@@ -85255,14 +85255,14 @@ __bb_match_arm_0:
   call void @"std.regex::_add_state__impl"(ptr %nfa_1, ptr %t98, ptr %clist_1, i64 %t88, i64 %pos_1, i64 %input_len_1)
   br label %__bb_match_join
 __bb_match_join:
-  %__array_cap_grewt296_6 = phi i1 [ %__array_cap_grewt296_1, %__bb_match_arm_0 ], [ %__array_cap_grewt296_1, %__bb_match_arm_1 ], [ %__array_cap_grewt296_1, %__bb_if_join1 ], [ %__array_cap_grewt296_1, %__bb_if_join2 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt296_3, %__bb_array_cap_join23 ], [ %__array_cap_grewt296_1, %__bb_match_arm_8 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join2 ]
-  %__array_cap_arrt295_7 = phi %DriftArrayHeader [ %__array_cap_arrt295_1, %__bb_match_arm_0 ], [ %__array_cap_arrt295_1, %__bb_match_arm_1 ], [ %__array_cap_arrt295_1, %__bb_if_join1 ], [ %__array_cap_arrt295_1, %__bb_if_join2 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join22 ], [ %__arc4, %__bb_array_cap_join23 ], [ %__array_cap_arrt295_1, %__bb_match_arm_8 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join21 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join2 ]
-  %__array_cap_grewt254_6 = phi i1 [ %__array_cap_grewt254_1, %__bb_match_arm_0 ], [ %__array_cap_grewt254_1, %__bb_match_arm_1 ], [ %__array_cap_grewt254_1, %__bb_if_join1 ], [ %__array_cap_grewt254_1, %__bb_if_join2 ], [ %__array_cap_grewt254_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt254_1, %__bb_match_arm_8 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join2 ]
-  %__array_cap_arrt253_7 = phi %DriftArrayHeader [ %__array_cap_arrt253_1, %__bb_match_arm_0 ], [ %__array_cap_arrt253_1, %__bb_match_arm_1 ], [ %__array_cap_arrt253_1, %__bb_if_join1 ], [ %__array_cap_arrt253_1, %__bb_if_join2 ], [ %__arc3, %__bb_array_cap_join22 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt253_1, %__bb_match_arm_8 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join21 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join2 ]
-  %__array_cap_grewt203_6 = phi i1 [ %__array_cap_grewt203_1, %__bb_match_arm_0 ], [ %__array_cap_grewt203_1, %__bb_match_arm_1 ], [ %__array_cap_grewt203_1, %__bb_if_join1 ], [ %__array_cap_grewt203_1, %__bb_if_join2 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt203_1, %__bb_match_arm_8 ], [ %__array_cap_grewt203_5, %__bb_array_cap_join21 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join2 ]
-  %__array_cap_arrt202_7 = phi %DriftArrayHeader [ %__array_cap_arrt202_1, %__bb_match_arm_0 ], [ %__array_cap_arrt202_1, %__bb_match_arm_1 ], [ %__array_cap_arrt202_1, %__bb_if_join1 ], [ %__array_cap_arrt202_1, %__bb_if_join2 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join22 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt202_1, %__bb_match_arm_8 ], [ %__arc2, %__bb_array_cap_join21 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join2 ]
-  %__array_cap_grewt161_6 = phi i1 [ %__array_cap_grewt161_1, %__bb_match_arm_0 ], [ %__array_cap_grewt161_1, %__bb_match_arm_1 ], [ %__array_cap_grewt161_1, %__bb_if_join1 ], [ %__array_cap_grewt161_1, %__bb_if_join2 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt161_1, %__bb_match_arm_8 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt161_3, %__bb_array_cap_join2 ]
-  %__array_cap_arrt160_7 = phi %DriftArrayHeader [ %__array_cap_arrt160_1, %__bb_match_arm_0 ], [ %__array_cap_arrt160_1, %__bb_match_arm_1 ], [ %__array_cap_arrt160_1, %__bb_if_join1 ], [ %__array_cap_arrt160_1, %__bb_if_join2 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join22 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt160_1, %__bb_match_arm_8 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join21 ], [ %__arc1, %__bb_array_cap_join2 ]
+  %__array_cap_grewt296_6 = phi i1 [ %__array_cap_grewt296_1, %__bb_if_join1 ], [ %__array_cap_grewt296_1, %__bb_if_join2 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt296_1, %__bb_match_arm_8 ], [ %__array_cap_grewt296_3, %__bb_array_cap_join23 ], [ %__array_cap_grewt296_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt296_1, %__bb_match_arm_1 ], [ %__array_cap_grewt296_1, %__bb_match_arm_0 ]
+  %__array_cap_arrt295_7 = phi %DriftArrayHeader [ %__array_cap_arrt295_1, %__bb_if_join1 ], [ %__array_cap_arrt295_1, %__bb_if_join2 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join21 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join22 ], [ %__array_cap_arrt295_1, %__bb_match_arm_8 ], [ %__arc4, %__bb_array_cap_join23 ], [ %__array_cap_arrt295_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt295_1, %__bb_match_arm_1 ], [ %__array_cap_arrt295_1, %__bb_match_arm_0 ]
+  %__array_cap_grewt254_6 = phi i1 [ %__array_cap_grewt254_1, %__bb_if_join1 ], [ %__array_cap_grewt254_1, %__bb_if_join2 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt254_4, %__bb_array_cap_join22 ], [ %__array_cap_grewt254_1, %__bb_match_arm_8 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt254_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt254_1, %__bb_match_arm_1 ], [ %__array_cap_grewt254_1, %__bb_match_arm_0 ]
+  %__array_cap_arrt253_7 = phi %DriftArrayHeader [ %__array_cap_arrt253_1, %__bb_if_join1 ], [ %__array_cap_arrt253_1, %__bb_if_join2 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join21 ], [ %__arc3, %__bb_array_cap_join22 ], [ %__array_cap_arrt253_1, %__bb_match_arm_8 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt253_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt253_1, %__bb_match_arm_1 ], [ %__array_cap_arrt253_1, %__bb_match_arm_0 ]
+  %__array_cap_grewt203_6 = phi i1 [ %__array_cap_grewt203_1, %__bb_if_join1 ], [ %__array_cap_grewt203_1, %__bb_if_join2 ], [ %__array_cap_grewt203_4, %__bb_array_cap_join21 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt203_1, %__bb_match_arm_8 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt203_1, %__bb_array_cap_join2 ], [ %__array_cap_grewt203_1, %__bb_match_arm_1 ], [ %__array_cap_grewt203_1, %__bb_match_arm_0 ]
+  %__array_cap_arrt202_7 = phi %DriftArrayHeader [ %__array_cap_arrt202_1, %__bb_if_join1 ], [ %__array_cap_arrt202_1, %__bb_if_join2 ], [ %__arc2, %__bb_array_cap_join21 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join22 ], [ %__array_cap_arrt202_1, %__bb_match_arm_8 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join23 ], [ %__array_cap_arrt202_1, %__bb_array_cap_join2 ], [ %__array_cap_arrt202_1, %__bb_match_arm_1 ], [ %__array_cap_arrt202_1, %__bb_match_arm_0 ]
+  %__array_cap_grewt161_6 = phi i1 [ %__array_cap_grewt161_1, %__bb_if_join1 ], [ %__array_cap_grewt161_1, %__bb_if_join2 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join21 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join22 ], [ %__array_cap_grewt161_1, %__bb_match_arm_8 ], [ %__array_cap_grewt161_1, %__bb_array_cap_join23 ], [ %__array_cap_grewt161_4, %__bb_array_cap_join2 ], [ %__array_cap_grewt161_1, %__bb_match_arm_1 ], [ %__array_cap_grewt161_1, %__bb_match_arm_0 ]
+  %__array_cap_arrt160_7 = phi %DriftArrayHeader [ %__array_cap_arrt160_1, %__bb_if_join1 ], [ %__array_cap_arrt160_1, %__bb_if_join2 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join21 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join22 ], [ %__array_cap_arrt160_1, %__bb_match_arm_8 ], [ %__array_cap_arrt160_1, %__bb_array_cap_join23 ], [ %__arc1, %__bb_array_cap_join2 ], [ %__array_cap_arrt160_1, %__bb_match_arm_1 ], [ %__array_cap_arrt160_1, %__bb_match_arm_0 ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt296_2 = phi i1 [ %__array_cap_grewt296_1, %__bb_logic_join1 ], [ %__array_cap_grewt296_6, %__bb_match_join ]
@@ -85786,13 +85786,13 @@ __bb_if_then1:
   %t105 = add i1 0, 1
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %__logic_tmpt98_6 = phi i1 [ %__logic_tmpt98_5, %__bb_if_then1 ], [ %__logic_tmpt98_2, %__bb_if_else ]
-  %found_3 = phi i1 [ %t105, %__bb_if_then1 ], [ %t66, %__bb_if_else ]
+  %__logic_tmpt98_3 = phi i1 [ %__logic_tmpt98_5, %__bb_if_then1 ], [ %__logic_tmpt98_2, %__bb_if_else ]
+  %found_2 = phi i1 [ %t105, %__bb_if_then1 ], [ %t66, %__bb_if_else ]
   br i1 %t63, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
-  ret i1 %found_3
+  ret i1 %found_2
 __bb_if_then2:
-  %t111 = xor i1 %found_3, true
+  %t111 = xor i1 %found_2, true
   ret i1 %t111
 __bb_idx_err1:
   %t83 = add i64 0, 1726084857549659354
@@ -85958,9 +85958,9 @@ __bb_loop_header:
   %__array_cap_arrt120_2 = phi %DriftArrayHeader [ %__array_cap_arrt120_1, %__bb_if_join ], [ %__array_cap_arrt120_3, %__bb_if_join1 ]
   %si_2 = phi i64 [ %si_1, %__bb_if_join ], [ %si_4, %__bb_if_join1 ]
   %ci_2 = phi i64 [ %ci_1, %__bb_if_join ], [ %ci_4, %__bb_if_join1 ]
-  %__logic_tmpt48_2 = phi i1 [ %__logic_tmpt48_1, %__bb_if_join ], [ %__logic_tmpt48_5, %__bb_if_join1 ]
+  %__logic_tmpt48_2 = phi i1 [ %__logic_tmpt48_1, %__bb_if_join ], [ %__logic_tmpt48_4, %__bb_if_join1 ]
   %pos_2 = phi i64 [ %start_1, %__bb_if_join ], [ %t213, %__bb_if_join1 ]
-  %best_end_3 = phi i64 [ %best_end_2, %__bb_if_join ], [ %best_end_5, %__bb_if_join1 ]
+  %best_end_3 = phi i64 [ %best_end_2, %__bb_if_join ], [ %best_end_4, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t47 = icmp slt i64 %pos_2, %t3
@@ -85975,8 +85975,8 @@ __bb_logic_rhs:
   %t53 = icmp sgt i64 %t51, %t52
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt48_5 = phi i1 [ %t49, %__bb_logic_short ], [ %t53, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt48_5, label %__bb_if_then1, label %__bb_if_else
+  %__logic_tmpt48_4 = phi i1 [ %t49, %__bb_logic_short ], [ %t53, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt48_4, label %__bb_if_then1, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -86034,8 +86034,8 @@ __bb_if_then1:
   %t62 = add i64 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__array_cap_grewt121_3 = phi i1 [ %__array_cap_grewt121_2, %__bb_if_then1 ], [ %__array_cap_grewt121_4, %__bb_if_join2 ]
-  %__array_cap_arrt120_3 = phi %DriftArrayHeader [ %__array_cap_arrt120_2, %__bb_if_then1 ], [ %__array_cap_arrt120_4, %__bb_if_join2 ]
+  %__array_cap_grewt121_3 = phi i1 [ %__array_cap_grewt121_2, %__bb_if_then1 ], [ %__array_cap_grewt121_7, %__bb_if_join2 ]
+  %__array_cap_arrt120_3 = phi %DriftArrayHeader [ %__array_cap_arrt120_2, %__bb_if_then1 ], [ %__array_cap_arrt120_8, %__bb_if_join2 ]
   %ci_4 = phi i64 [ %t62, %__bb_if_then1 ], [ %t150, %__bb_if_join2 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
@@ -86092,7 +86092,7 @@ __bb_if_then5:
   %t210 = add i64 %pos_2, %t209
   br label %__bb_if_join5
 __bb_if_join5:
-  %best_end_5 = phi i64 [ %best_end_3, %__bb_idx_join4 ], [ %t210, %__bb_if_then5 ]
+  %best_end_4 = phi i64 [ %best_end_3, %__bb_idx_join4 ], [ %t210, %__bb_if_then5 ]
   %t212 = add i64 0, 1
   %t213 = add i64 %pos_2, %t212
   %t214 = load %DriftArrayHeader, ptr %seeds__addr
@@ -86301,8 +86301,8 @@ __bb_array_cap_join2:
   store %DriftArrayHeader %arr_gen121, ptr %seeds__addr
   br label %__bb_if_join3
 __bb_if_join3:
-  %__array_cap_grewt121_4 = phi i1 [ %__array_cap_grewt121_3, %__bb_idx_join1 ], [ %__array_cap_grewt121_5, %__bb_array_cap_join2 ]
-  %__array_cap_arrt120_4 = phi %DriftArrayHeader [ %__array_cap_arrt120_3, %__bb_idx_join1 ], [ %__arc1, %__bb_array_cap_join2 ]
+  %__array_cap_grewt121_7 = phi i1 [ %__array_cap_grewt121_3, %__bb_idx_join1 ], [ %__array_cap_grewt121_5, %__bb_array_cap_join2 ]
+  %__array_cap_arrt120_8 = phi %DriftArrayHeader [ %__array_cap_arrt120_3, %__bb_idx_join1 ], [ %__arc1, %__bb_array_cap_join2 ]
   %t149 = add i64 0, 1
   %t150 = add i64 %ci_4, %t149
   br label %__bb_if_join2
@@ -86634,7 +86634,7 @@ __bb_entry:
   br label %__bb_loop_header
 __bb_loop_header:
   %cursor_2 = phi i64 [ %t5, %__bb_entry ], [ %cursor_4, %__bb_if_join ]
-  %result_4 = phi %DriftString [ %t4, %__bb_entry ], [ %result_13, %__bb_if_join ]
+  %result_4 = phi %DriftString [ %t4, %__bb_entry ], [ %result_17, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t8 = icmp sle i64 %cursor_2, %t3
@@ -86674,11 +86674,11 @@ __bb_if_then4:
   call void @drift_string_release(%DriftString %result_4)
   br label %__bb_if_join4
 __bb_if_join4:
-  %result_7 = phi %DriftString [ %result_4, %__bb_match_arm_1 ], [ %t77, %__bb_if_then4 ]
+  %result_8 = phi %DriftString [ %result_4, %__bb_match_arm_1 ], [ %t77, %__bb_if_then4 ]
   br label %__bb_loop_exit
 __bb_loop_exit:
-  %result_17 = phi %DriftString [ %result_7, %__bb_if_join4 ], [ %result_4, %__bb_if_else ]
-  ret %DriftString %result_17
+  %result_5 = phi %DriftString [ %result_8, %__bb_if_join4 ], [ %result_4, %__bb_if_else ]
+  ret %DriftString %result_5
 __bb_match_arm_0:
   %__arc12 = select i1 1, %Variant_lang_2Ecore_Optional_68e24cf7100bb25e zeroinitializer, %Variant_lang_2Ecore_Optional_68e24cf7100bb25e zeroinitializer
   store %Variant_lang_2Ecore_Optional_68e24cf7100bb25e %t12, ptr %__match_scrut_tmpt18__addr
@@ -86702,12 +86702,12 @@ __bb_if_then1:
   call void @drift_string_release(%DriftString %result_4)
   br label %__bb_if_join1
 __bb_if_join1:
-  %result_10 = phi %DriftString [ %result_4, %__bb_match_arm_0 ], [ %t38, %__bb_if_then1 ]
+  %result_11 = phi %DriftString [ %result_4, %__bb_match_arm_0 ], [ %t38, %__bb_if_then1 ]
   %t41 = load %DriftString, ptr %repl_1
-  %t42 = call %DriftString @drift_string_concat(%DriftString %result_10, %DriftString %t41)
+  %t42 = call %DriftString @drift_string_concat(%DriftString %result_11, %DriftString %t41)
   %zero_str12 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc5 = insertvalue %DriftString %zero_str12, ptr null, 1
-  call void @drift_string_release(%DriftString %result_10)
+  call void @drift_string_release(%DriftString %result_11)
   %t44 = extractvalue %Struct_std_2Eregex_RegexMatch_838a3a718e9a7987 %t23, 1
   %t46 = extractvalue %Struct_std_2Eregex_RegexMatch_838a3a718e9a7987 %t23, 0
   %t47 = icmp eq i64 %t44, %t46
@@ -86728,13 +86728,13 @@ __bb_if_then3:
   call void @drift_string_release(%DriftString %t42)
   br label %__bb_if_join3
 __bb_if_join3:
-  %result_14 = phi %DriftString [ %t42, %__bb_if_then2 ], [ %t56, %__bb_if_then3 ]
+  %result_16 = phi %DriftString [ %t42, %__bb_if_then2 ], [ %t56, %__bb_if_then3 ]
   %t58 = add i64 0, 1
   %t59 = add i64 %cursor_2, %t58
   br label %__bb_if_join2
 __bb_if_join2:
-  %cursor_4 = phi i64 [ %t61, %__bb_if_else1 ], [ %t59, %__bb_if_join3 ]
-  %result_13 = phi %DriftString [ %t42, %__bb_if_else1 ], [ %result_14, %__bb_if_join3 ]
+  %cursor_4 = phi i64 [ %t59, %__bb_if_join3 ], [ %t61, %__bb_if_else1 ]
+  %result_17 = phi %DriftString [ %result_16, %__bb_if_join3 ], [ %t42, %__bb_if_else1 ]
   br label %__bb_match_join
 __bb_match_join:
   br label %__bb_if_join
@@ -87126,8 +87126,8 @@ __bb_logic_rhs:
   %t15 = icmp ugt i64 %t9, %t14
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t15, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t15, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t18 = load ptr, ptr %d__addr
   %t19 = getelementptr inbounds %Struct_std_2Esync_EpochDomain_7a5327386828ef7d, ptr %t18, i32 0, i32 2
@@ -87571,8 +87571,8 @@ __bb_logic_rhs:
   %t9 = icmp sle i64 %v_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define i1 @"std.text::_need_bytes"(i64 %n, i64 %i, i64 %want) {
 __bb_entry:
@@ -87598,8 +87598,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t15 = load %DriftArrayHeader, ptr %bytes_1
   %t16 = extractvalue %DriftArrayHeader %t15, 0
@@ -87609,8 +87609,8 @@ __bb_logic_short1:
   %t12 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt11_3 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt11_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt11_1 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt11_1, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %__logic_tmpt792_1 = add i1 0, 0
   %__logic_tmpt590_1 = add i1 0, 0
@@ -87622,15 +87622,15 @@ __bb_if_join:
   %__logic_tmpt56_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt792_2 = phi i1 [ %__logic_tmpt792_1, %__bb_if_join ], [ %__logic_tmpt792_2, %__bb_if_join13 ], [ %__logic_tmpt792_2, %__bb_if_join26 ], [ %__logic_tmpt792_4, %__bb_if_join36 ], [ %__logic_tmpt792_2, %__bb_if_join31 ], [ %__logic_tmpt792_2, %__bb_if_join21 ], [ %__logic_tmpt792_2, %__bb_if_join17 ], [ %__logic_tmpt792_2, %__bb_if_join9 ], [ %__logic_tmpt792_2, %__bb_if_join5 ], [ %__logic_tmpt792_2, %__bb_if_then2 ]
-  %__logic_tmpt590_2 = phi i1 [ %__logic_tmpt590_1, %__bb_if_join ], [ %__logic_tmpt590_2, %__bb_if_join13 ], [ %__logic_tmpt590_2, %__bb_if_join26 ], [ %__logic_tmpt590_3, %__bb_if_join36 ], [ %__logic_tmpt590_3, %__bb_if_join31 ], [ %__logic_tmpt590_2, %__bb_if_join21 ], [ %__logic_tmpt590_2, %__bb_if_join17 ], [ %__logic_tmpt590_2, %__bb_if_join9 ], [ %__logic_tmpt590_2, %__bb_if_join5 ], [ %__logic_tmpt590_2, %__bb_if_then2 ]
-  %__logic_tmpt548_2 = phi i1 [ %__logic_tmpt548_1, %__bb_if_join ], [ %__logic_tmpt548_2, %__bb_if_join13 ], [ %__logic_tmpt548_5, %__bb_if_join26 ], [ %__logic_tmpt548_2, %__bb_if_join36 ], [ %__logic_tmpt548_2, %__bb_if_join31 ], [ %__logic_tmpt548_2, %__bb_if_join21 ], [ %__logic_tmpt548_2, %__bb_if_join17 ], [ %__logic_tmpt548_2, %__bb_if_join9 ], [ %__logic_tmpt548_2, %__bb_if_join5 ], [ %__logic_tmpt548_2, %__bb_if_then2 ]
-  %__logic_tmpt379_2 = phi i1 [ %__logic_tmpt379_1, %__bb_if_join ], [ %__logic_tmpt379_2, %__bb_if_join13 ], [ %__logic_tmpt379_5, %__bb_if_join26 ], [ %__logic_tmpt379_5, %__bb_if_join36 ], [ %__logic_tmpt379_5, %__bb_if_join31 ], [ %__logic_tmpt379_5, %__bb_if_join21 ], [ %__logic_tmpt379_2, %__bb_if_join17 ], [ %__logic_tmpt379_2, %__bb_if_join9 ], [ %__logic_tmpt379_2, %__bb_if_join5 ], [ %__logic_tmpt379_2, %__bb_if_then2 ]
-  %__logic_tmpt348_2 = phi i1 [ %__logic_tmpt348_1, %__bb_if_join ], [ %__logic_tmpt348_2, %__bb_if_join13 ], [ %__logic_tmpt348_2, %__bb_if_join26 ], [ %__logic_tmpt348_2, %__bb_if_join36 ], [ %__logic_tmpt348_2, %__bb_if_join31 ], [ %__logic_tmpt348_2, %__bb_if_join21 ], [ %__logic_tmpt348_3, %__bb_if_join17 ], [ %__logic_tmpt348_2, %__bb_if_join9 ], [ %__logic_tmpt348_2, %__bb_if_join5 ], [ %__logic_tmpt348_2, %__bb_if_then2 ]
-  %__logic_tmpt201_2 = phi i1 [ %__logic_tmpt201_1, %__bb_if_join ], [ %__logic_tmpt201_3, %__bb_if_join13 ], [ %__logic_tmpt201_3, %__bb_if_join26 ], [ %__logic_tmpt201_3, %__bb_if_join36 ], [ %__logic_tmpt201_3, %__bb_if_join31 ], [ %__logic_tmpt201_3, %__bb_if_join21 ], [ %__logic_tmpt201_3, %__bb_if_join17 ], [ %__logic_tmpt201_2, %__bb_if_join9 ], [ %__logic_tmpt201_2, %__bb_if_join5 ], [ %__logic_tmpt201_2, %__bb_if_then2 ]
-  %__logic_tmpt170_2 = phi i1 [ %__logic_tmpt170_1, %__bb_if_join ], [ %__logic_tmpt170_2, %__bb_if_join13 ], [ %__logic_tmpt170_2, %__bb_if_join26 ], [ %__logic_tmpt170_2, %__bb_if_join36 ], [ %__logic_tmpt170_2, %__bb_if_join31 ], [ %__logic_tmpt170_2, %__bb_if_join21 ], [ %__logic_tmpt170_2, %__bb_if_join17 ], [ %__logic_tmpt170_4, %__bb_if_join9 ], [ %__logic_tmpt170_2, %__bb_if_join5 ], [ %__logic_tmpt170_2, %__bb_if_then2 ]
-  %__logic_tmpt56_2 = phi i1 [ %__logic_tmpt56_1, %__bb_if_join ], [ %__logic_tmpt56_3, %__bb_if_join13 ], [ %__logic_tmpt56_3, %__bb_if_join26 ], [ %__logic_tmpt56_3, %__bb_if_join36 ], [ %__logic_tmpt56_3, %__bb_if_join31 ], [ %__logic_tmpt56_3, %__bb_if_join21 ], [ %__logic_tmpt56_3, %__bb_if_join17 ], [ %__logic_tmpt56_3, %__bb_if_join9 ], [ %__logic_tmpt56_3, %__bb_if_join5 ], [ %__logic_tmpt56_2, %__bb_if_then2 ]
-  %i_2 = phi i64 [ %start_1, %__bb_if_join ], [ %t286, %__bb_if_join13 ], [ %t586, %__bb_if_join26 ], [ %t830, %__bb_if_join36 ], [ %t708, %__bb_if_join31 ], [ %t464, %__bb_if_join21 ], [ %t375, %__bb_if_join17 ], [ %t197, %__bb_if_join9 ], [ %t108, %__bb_if_join5 ], [ %t52, %__bb_if_then2 ]
+  %__logic_tmpt792_2 = phi i1 [ %__logic_tmpt792_1, %__bb_if_join ], [ %__logic_tmpt792_2, %__bb_if_then2 ], [ %__logic_tmpt792_2, %__bb_if_join5 ], [ %__logic_tmpt792_2, %__bb_if_join9 ], [ %__logic_tmpt792_2, %__bb_if_join17 ], [ %__logic_tmpt792_2, %__bb_if_join21 ], [ %__logic_tmpt792_2, %__bb_if_join26 ], [ %__logic_tmpt792_3, %__bb_if_join36 ], [ %__logic_tmpt792_2, %__bb_if_join31 ], [ %__logic_tmpt792_2, %__bb_if_join13 ]
+  %__logic_tmpt590_2 = phi i1 [ %__logic_tmpt590_1, %__bb_if_join ], [ %__logic_tmpt590_2, %__bb_if_then2 ], [ %__logic_tmpt590_2, %__bb_if_join5 ], [ %__logic_tmpt590_2, %__bb_if_join9 ], [ %__logic_tmpt590_2, %__bb_if_join17 ], [ %__logic_tmpt590_2, %__bb_if_join21 ], [ %__logic_tmpt590_2, %__bb_if_join26 ], [ %__logic_tmpt590_4, %__bb_if_join36 ], [ %__logic_tmpt590_4, %__bb_if_join31 ], [ %__logic_tmpt590_2, %__bb_if_join13 ]
+  %__logic_tmpt548_2 = phi i1 [ %__logic_tmpt548_1, %__bb_if_join ], [ %__logic_tmpt548_2, %__bb_if_then2 ], [ %__logic_tmpt548_2, %__bb_if_join5 ], [ %__logic_tmpt548_2, %__bb_if_join9 ], [ %__logic_tmpt548_2, %__bb_if_join17 ], [ %__logic_tmpt548_2, %__bb_if_join21 ], [ %__logic_tmpt548_5, %__bb_if_join26 ], [ %__logic_tmpt548_2, %__bb_if_join36 ], [ %__logic_tmpt548_2, %__bb_if_join31 ], [ %__logic_tmpt548_2, %__bb_if_join13 ]
+  %__logic_tmpt379_2 = phi i1 [ %__logic_tmpt379_1, %__bb_if_join ], [ %__logic_tmpt379_2, %__bb_if_then2 ], [ %__logic_tmpt379_2, %__bb_if_join5 ], [ %__logic_tmpt379_2, %__bb_if_join9 ], [ %__logic_tmpt379_2, %__bb_if_join17 ], [ %__logic_tmpt379_4, %__bb_if_join21 ], [ %__logic_tmpt379_4, %__bb_if_join26 ], [ %__logic_tmpt379_4, %__bb_if_join36 ], [ %__logic_tmpt379_4, %__bb_if_join31 ], [ %__logic_tmpt379_2, %__bb_if_join13 ]
+  %__logic_tmpt348_2 = phi i1 [ %__logic_tmpt348_1, %__bb_if_join ], [ %__logic_tmpt348_2, %__bb_if_then2 ], [ %__logic_tmpt348_2, %__bb_if_join5 ], [ %__logic_tmpt348_2, %__bb_if_join9 ], [ %__logic_tmpt348_4, %__bb_if_join17 ], [ %__logic_tmpt348_2, %__bb_if_join21 ], [ %__logic_tmpt348_2, %__bb_if_join26 ], [ %__logic_tmpt348_2, %__bb_if_join36 ], [ %__logic_tmpt348_2, %__bb_if_join31 ], [ %__logic_tmpt348_2, %__bb_if_join13 ]
+  %__logic_tmpt201_2 = phi i1 [ %__logic_tmpt201_1, %__bb_if_join ], [ %__logic_tmpt201_2, %__bb_if_then2 ], [ %__logic_tmpt201_2, %__bb_if_join5 ], [ %__logic_tmpt201_2, %__bb_if_join9 ], [ %__logic_tmpt201_3, %__bb_if_join17 ], [ %__logic_tmpt201_3, %__bb_if_join21 ], [ %__logic_tmpt201_3, %__bb_if_join26 ], [ %__logic_tmpt201_3, %__bb_if_join36 ], [ %__logic_tmpt201_3, %__bb_if_join31 ], [ %__logic_tmpt201_3, %__bb_if_join13 ]
+  %__logic_tmpt170_2 = phi i1 [ %__logic_tmpt170_1, %__bb_if_join ], [ %__logic_tmpt170_2, %__bb_if_then2 ], [ %__logic_tmpt170_2, %__bb_if_join5 ], [ %__logic_tmpt170_3, %__bb_if_join9 ], [ %__logic_tmpt170_2, %__bb_if_join17 ], [ %__logic_tmpt170_2, %__bb_if_join21 ], [ %__logic_tmpt170_2, %__bb_if_join26 ], [ %__logic_tmpt170_2, %__bb_if_join36 ], [ %__logic_tmpt170_2, %__bb_if_join31 ], [ %__logic_tmpt170_2, %__bb_if_join13 ]
+  %__logic_tmpt56_2 = phi i1 [ %__logic_tmpt56_1, %__bb_if_join ], [ %__logic_tmpt56_2, %__bb_if_then2 ], [ %__logic_tmpt56_3, %__bb_if_join5 ], [ %__logic_tmpt56_3, %__bb_if_join9 ], [ %__logic_tmpt56_3, %__bb_if_join17 ], [ %__logic_tmpt56_3, %__bb_if_join21 ], [ %__logic_tmpt56_3, %__bb_if_join26 ], [ %__logic_tmpt56_3, %__bb_if_join36 ], [ %__logic_tmpt56_3, %__bb_if_join31 ], [ %__logic_tmpt56_3, %__bb_if_join13 ]
+  %i_2 = phi i64 [ %start_1, %__bb_if_join ], [ %t52, %__bb_if_then2 ], [ %t108, %__bb_if_join5 ], [ %t197, %__bb_if_join9 ], [ %t375, %__bb_if_join17 ], [ %t464, %__bb_if_join21 ], [ %t586, %__bb_if_join26 ], [ %t830, %__bb_if_join36 ], [ %t708, %__bb_if_join31 ], [ %t286, %__bb_if_join13 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t26 = icmp slt i64 %i_2, %end_1
@@ -87681,7 +87681,7 @@ __bb_logic_rhs2:
   %t60 = icmp sle i64 %t46, %t59
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt56_3 = phi i1 [ %t57, %__bb_logic_short2 ], [ %t60, %__bb_logic_rhs2 ]
+  %__logic_tmpt56_3 = phi i1 [ %t60, %__bb_logic_rhs2 ], [ %t57, %__bb_logic_short2 ]
   br i1 %__logic_tmpt56_3, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   %t110 = add i64 0, 224
@@ -87699,7 +87699,7 @@ __bb_logic_rhs4:
   %t205 = icmp sle i64 %t46, %t204
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt201_3 = phi i1 [ %t202, %__bb_logic_short4 ], [ %t205, %__bb_logic_rhs4 ]
+  %__logic_tmpt201_3 = phi i1 [ %t205, %__bb_logic_rhs4 ], [ %t202, %__bb_logic_short4 ]
   br i1 %__logic_tmpt201_3, label %__bb_if_then10, label %__bb_if_join10
 __bb_if_join10:
   %t288 = add i64 0, 237
@@ -87717,8 +87717,8 @@ __bb_logic_rhs6:
   %t383 = icmp sle i64 %t46, %t382
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt379_5 = phi i1 [ %t380, %__bb_logic_short6 ], [ %t383, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt379_5, label %__bb_if_then18, label %__bb_if_join18
+  %__logic_tmpt379_4 = phi i1 [ %t380, %__bb_logic_short6 ], [ %t383, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt379_4, label %__bb_if_then18, label %__bb_if_join18
 __bb_if_join18:
   %t466 = add i64 0, 240
   %t467 = icmp eq i64 %t46, %t466
@@ -87735,8 +87735,8 @@ __bb_logic_rhs8:
   %t594 = icmp sle i64 %t46, %t593
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt590_3 = phi i1 [ %t591, %__bb_logic_short8 ], [ %t594, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt590_3, label %__bb_if_then27, label %__bb_if_join27
+  %__logic_tmpt590_4 = phi i1 [ %t591, %__bb_logic_short8 ], [ %t594, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt590_4, label %__bb_if_then27, label %__bb_if_join27
 __bb_if_join27:
   %t710 = add i64 0, 244
   %t711 = icmp eq i64 %t46, %t710
@@ -87828,8 +87828,8 @@ __bb_logic_short9:
   %t793 = add i1 0, 1
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt792_4 = phi i1 [ %t796, %__bb_logic_rhs9 ], [ %t793, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt792_4, label %__bb_if_then34, label %__bb_if_join34
+  %__logic_tmpt792_3 = phi i1 [ %t796, %__bb_logic_rhs9 ], [ %t793, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt792_3, label %__bb_if_then34, label %__bb_if_join34
 __bb_if_join34:
   %t807 = call i1 @"std.text::_is_cont"(i64 %t766)
   %t808 = xor i1 %t807, true
@@ -88667,8 +88667,8 @@ __bb_logic_short5:
   %t349 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt348_3 = phi i1 [ %t349, %__bb_logic_short5 ], [ %t352, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt348_3, label %__bb_if_then16, label %__bb_if_join16
+  %__logic_tmpt348_4 = phi i1 [ %t352, %__bb_logic_rhs5 ], [ %t349, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt348_4, label %__bb_if_then16, label %__bb_if_join16
 __bb_if_join16:
   %t363 = call i1 @"std.text::_is_cont"(i64 %t344)
   %t364 = xor i1 %t363, true
@@ -88995,8 +88995,8 @@ __bb_logic_short3:
   %t171 = add i1 0, 1
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt170_4 = phi i1 [ %t174, %__bb_logic_rhs3 ], [ %t171, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt170_4, label %__bb_if_then8, label %__bb_if_join8
+  %__logic_tmpt170_3 = phi i1 [ %t171, %__bb_logic_short3 ], [ %t174, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt170_3, label %__bb_if_then8, label %__bb_if_join8
 __bb_if_join8:
   %t185 = call i1 @"std.text::_is_cont"(i64 %t166)
   %t186 = xor i1 %t185, true
@@ -89481,8 +89481,8 @@ __bb_logic_short:
   %t8 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t17 = icmp sgt i64 %start_1, %t3
   br label %__bb_logic_join1
@@ -89490,8 +89490,8 @@ __bb_logic_short1:
   %t14 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt13_3 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt13_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt13_1 = phi i1 [ %t17, %__bb_logic_rhs1 ], [ %t14, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt13_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t24 = sub i64 %t3, %start_1
   %t25 = icmp sgt i64 %len_1, %t24
@@ -89500,7 +89500,7 @@ __bb_logic_short2:
   %t20 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt19_1 = phi i1 [ %t20, %__bb_logic_short2 ], [ %t25, %__bb_logic_rhs2 ]
+  %__logic_tmpt19_1 = phi i1 [ %t25, %__bb_logic_rhs2 ], [ %t20, %__bb_logic_short2 ]
   br i1 %__logic_tmpt19_1, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t32 = add i64 0, 0
@@ -89599,8 +89599,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define i1 @"std.text::is_alpha__impl"(i8 %b_1) {
 __bb_entry:
@@ -89618,8 +89618,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t14 = add i8 0, 97
   %t15 = icmp uge i8 %b_1, %t14
@@ -89632,16 +89632,16 @@ __bb_logic_rhs2:
   %t20 = icmp ule i8 %b_1, %t19
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt16_1 = phi i1 [ %t17, %__bb_logic_short2 ], [ %t20, %__bb_logic_rhs2 ]
+  %__logic_tmpt16_2 = phi i1 [ %t20, %__bb_logic_rhs2 ], [ %t17, %__bb_logic_short2 ]
   br label %__bb_logic_join1
 __bb_logic_short1:
   %t12 = add i1 0, 1
-  %__logic_tmpt16_4 = add i1 0, 0
+  %__logic_tmpt16_5 = add i1 0, 0
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt16_5 = phi i1 [ %__logic_tmpt16_1, %__bb_logic_join2 ], [ %__logic_tmpt16_4, %__bb_logic_short1 ]
-  %__logic_tmpt11_3 = phi i1 [ %__logic_tmpt16_1, %__bb_logic_join2 ], [ %t12, %__bb_logic_short1 ]
-  ret i1 %__logic_tmpt11_3
+  %__logic_tmpt16_1 = phi i1 [ %__logic_tmpt16_2, %__bb_logic_join2 ], [ %__logic_tmpt16_5, %__bb_logic_short1 ]
+  %__logic_tmpt11_1 = phi i1 [ %__logic_tmpt16_2, %__bb_logic_join2 ], [ %t12, %__bb_logic_short1 ]
+  ret i1 %__logic_tmpt11_1
 }
 define i1 @"std.text::is_alnum__impl"(i8 %b_1) {
 __bb_entry:
@@ -89657,8 +89657,8 @@ __bb_logic_short:
   %t5 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt4_3 = phi i1 [ %t5, %__bb_logic_short ], [ %t7, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt4_3
+  %__logic_tmpt4_2 = phi i1 [ %t5, %__bb_logic_short ], [ %t7, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt4_2
 }
 define i1 @"std.text::is_space__impl"(i8 %b_1) {
 __bb_entry:
@@ -89676,8 +89676,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_logic_short1, label %__bb_logic_rhs1
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_logic_short1, label %__bb_logic_rhs1
 __bb_logic_rhs1:
   %t14 = add i8 0, 10
   %t15 = icmp eq i8 %b_1, %t14
@@ -89686,8 +89686,8 @@ __bb_logic_short1:
   %t12 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt11_3 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt11_3, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt11_1 = phi i1 [ %t15, %__bb_logic_rhs1 ], [ %t12, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt11_1, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t20 = add i8 0, 13
   %t21 = icmp eq i8 %b_1, %t20
@@ -89696,7 +89696,7 @@ __bb_logic_short2:
   %t18 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt17_1 = phi i1 [ %t18, %__bb_logic_short2 ], [ %t21, %__bb_logic_rhs2 ]
+  %__logic_tmpt17_1 = phi i1 [ %t21, %__bb_logic_rhs2 ], [ %t18, %__bb_logic_short2 ]
   ret i1 %__logic_tmpt17_1
 }
 define %Struct_std_2Etext_StringBuilder_80f79a08223ad8f3 @"std.text::string_builder__impl"(i64 %initial_cap_1) {
@@ -90434,8 +90434,8 @@ __bb_if_join1:
 __bb_loop_header:
   %j_2 = phi i64 [ %j_1, %__bb_if_join1 ], [ %j_4, %__bb_if_join2 ]
   %matched_2 = phi i1 [ %matched_1, %__bb_if_join1 ], [ %matched_4, %__bb_if_join2 ]
-  %i_2 = phi i64 [ %t15, %__bb_if_join1 ], [ %i_4, %__bb_if_join2 ]
-  %result_2 = phi i64 [ %t14, %__bb_if_join1 ], [ %result_4, %__bb_if_join2 ]
+  %i_2 = phi i64 [ %t15, %__bb_if_join1 ], [ %i_3, %__bb_if_join2 ]
+  %result_2 = phi i64 [ %t14, %__bb_if_join1 ], [ %result_3, %__bb_if_join2 ]
   br label %__bb_loop_body
 __bb_loop_body:
   %t21 = icmp sle i64 %i_2, %t18
@@ -90469,8 +90469,8 @@ __bb_if_then5:
   %t49 = add i64 %i_2, %t3
   br label %__bb_if_join5
 __bb_if_join5:
-  %i_4 = phi i64 [ %t49, %__bb_if_then5 ], [ %t52, %__bb_if_else3 ]
-  %result_4 = phi i64 [ %t46, %__bb_if_then5 ], [ %result_2, %__bb_if_else3 ]
+  %i_3 = phi i64 [ %t52, %__bb_if_else3 ], [ %t49, %__bb_if_then5 ]
+  %result_3 = phi i64 [ %result_2, %__bb_if_else3 ], [ %t46, %__bb_if_then5 ]
   br label %__bb_if_join2
 __bb_if_join2:
   br label %__bb_loop_header
@@ -90533,7 +90533,7 @@ __bb_if_join:
   %__logic_tmpt21_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_if_join ], [ %__logic_tmpt21_5, %__bb_if_join1 ]
+  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_if_join ], [ %__logic_tmpt21_4, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t10, %__bb_if_join ], [ %t39, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -90571,8 +90571,8 @@ __bb_logic_rhs:
   %t25 = icmp ule i8 %t17, %t24
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt21_5 = phi i1 [ %t22, %__bb_logic_short ], [ %t25, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt21_5, label %__bb_if_then2, label %__bb_if_else1
+  %__logic_tmpt21_4 = phi i1 [ %t22, %__bb_logic_short ], [ %t25, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt21_4, label %__bb_if_then2, label %__bb_if_else1
 __bb_if_else1:
   call void @"std.io::buffer_write__impl"(ptr %buf__addr, i64 %i_2, i8 %t17)
   br label %__bb_if_join2
@@ -90612,7 +90612,7 @@ __bb_if_join:
   %__logic_tmpt21_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_if_join ], [ %__logic_tmpt21_5, %__bb_if_join1 ]
+  %__logic_tmpt21_2 = phi i1 [ %__logic_tmpt21_1, %__bb_if_join ], [ %__logic_tmpt21_4, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t10, %__bb_if_join ], [ %t39, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -90650,8 +90650,8 @@ __bb_logic_rhs:
   %t25 = icmp ule i8 %t17, %t24
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt21_5 = phi i1 [ %t22, %__bb_logic_short ], [ %t25, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt21_5, label %__bb_if_then2, label %__bb_if_else1
+  %__logic_tmpt21_4 = phi i1 [ %t22, %__bb_logic_short ], [ %t25, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt21_4, label %__bb_if_then2, label %__bb_if_else1
 __bb_if_else1:
   call void @"std.io::buffer_write__impl"(ptr %buf__addr, i64 %i_2, i8 %t17)
   br label %__bb_if_join2
@@ -90685,7 +90685,7 @@ __bb_entry:
   %__logic_tmpt8_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_5, %__bb_if_join ]
+  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_4, %__bb_if_join ]
   %start_2 = phi i64 [ %t4, %__bb_entry ], [ %t18, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -90707,15 +90707,15 @@ __bb_logic_rhs:
   %t14 = call i1 @"std.text::is_space__impl"(i8 %t13)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_5 = phi i1 [ %t9, %__bb_logic_short ], [ %t14, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_5, label %__bb_if_then, label %__bb_if_else
+  %__logic_tmpt8_4 = phi i1 [ %t9, %__bb_logic_short ], [ %t14, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_4, label %__bb_if_then, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
   %__logic_tmpt23_1 = add i1 0, 0
   br label %__bb_loop_header1
 __bb_loop_header1:
-  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_loop_exit ], [ %__logic_tmpt23_5, %__bb_if_join1 ]
+  %__logic_tmpt23_2 = phi i1 [ %__logic_tmpt23_1, %__bb_loop_exit ], [ %__logic_tmpt23_3, %__bb_if_join1 ]
   %end_2 = phi i64 [ %t3, %__bb_loop_exit ], [ %t35, %__bb_if_join1 ]
   br label %__bb_loop_body1
 __bb_loop_body1:
@@ -90739,8 +90739,8 @@ __bb_logic_rhs1:
   %t31 = call i1 @"std.text::is_space__impl"(i8 %t30)
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt23_5 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t24, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt23_5, label %__bb_if_then1, label %__bb_if_else1
+  %__logic_tmpt23_3 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t24, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt23_3, label %__bb_if_then1, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit1
 __bb_loop_exit1:
@@ -90823,7 +90823,7 @@ __bb_entry:
   %__logic_tmpt8_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_5, %__bb_if_join ]
+  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_4, %__bb_if_join ]
   %start_2 = phi i64 [ %t4, %__bb_entry ], [ %t18, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -90845,8 +90845,8 @@ __bb_logic_rhs:
   %t14 = call i1 @"std.text::is_space__impl"(i8 %t13)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_5 = phi i1 [ %t9, %__bb_logic_short ], [ %t14, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_5, label %__bb_if_then, label %__bb_if_else
+  %__logic_tmpt8_4 = phi i1 [ %t9, %__bb_logic_short ], [ %t14, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_4, label %__bb_if_then, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -90923,7 +90923,7 @@ __bb_entry:
   %__logic_tmpt8_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_5, %__bb_if_join ]
+  %__logic_tmpt8_2 = phi i1 [ %__logic_tmpt8_1, %__bb_entry ], [ %__logic_tmpt8_4, %__bb_if_join ]
   %end_2 = phi i64 [ %t3, %__bb_entry ], [ %t20, %__bb_if_join ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -90948,8 +90948,8 @@ __bb_logic_rhs:
   %t16 = call i1 @"std.text::is_space__impl"(i8 %t15)
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_5 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_5, label %__bb_if_then, label %__bb_if_else
+  %__logic_tmpt8_4 = phi i1 [ %t9, %__bb_logic_short ], [ %t16, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_4, label %__bb_if_then, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -91032,14 +91032,14 @@ __bb_logic_short:
   %t10 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt9_3 = phi i1 [ %t10, %__bb_logic_short ], [ %t13, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt9_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt9_2 = phi i1 [ %t10, %__bb_logic_short ], [ %t13, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt9_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t18 = add i64 0, 0
   %__logic_tmpt22_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt22_2 = phi i1 [ %__logic_tmpt22_1, %__bb_if_join ], [ %__logic_tmpt22_5, %__bb_if_join1 ]
+  %__logic_tmpt22_2 = phi i1 [ %__logic_tmpt22_1, %__bb_if_join ], [ %__logic_tmpt22_3, %__bb_if_join1 ]
   %start_2 = phi i64 [ %t18, %__bb_if_join ], [ %t34, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -91061,8 +91061,8 @@ __bb_logic_rhs1:
   %t30 = call i1 @"std.text::_byte_in_set"(i8 %t27, ptr %chars_1, i64 %t5)
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt22_5 = phi i1 [ %t30, %__bb_logic_rhs1 ], [ %t23, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt22_5, label %__bb_if_then1, label %__bb_if_else
+  %__logic_tmpt22_3 = phi i1 [ %t30, %__bb_logic_rhs1 ], [ %t23, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt22_3, label %__bb_if_then1, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -91093,7 +91093,7 @@ __bb_logic_rhs2:
   %t49 = call i1 @"std.text::_byte_in_set"(i8 %t46, ptr %chars_1, i64 %t5)
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt39_3 = phi i1 [ %t40, %__bb_logic_short2 ], [ %t49, %__bb_logic_rhs2 ]
+  %__logic_tmpt39_3 = phi i1 [ %t49, %__bb_logic_rhs2 ], [ %t40, %__bb_logic_short2 ]
   br i1 %__logic_tmpt39_3, label %__bb_if_then2, label %__bb_if_else1
 __bb_if_else1:
   br label %__bb_loop_exit1
@@ -91227,8 +91227,8 @@ __bb_logic_short:
   %t8 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt7_3 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt7_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt7_2 = phi i1 [ %t8, %__bb_logic_short ], [ %t11, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt7_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t17 = add i64 0, 1
   %t18 = call %Struct_std_2Eio_Buffer_e76b5c24b140f2f4 @"std.io::buffer__impl"(i64 %t17)
@@ -91414,7 +91414,7 @@ __bb_if_then:
   %__array_cap_arrt40_1 = insertvalue %DriftArrayHeader %zero_arr49, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt41_2 = phi i1 [ %__array_cap_grewt41_1, %__bb_if_then ], [ %__array_cap_grewt41_3, %__bb_if_join1 ]
+  %__array_cap_grewt41_2 = phi i1 [ %__array_cap_grewt41_1, %__bb_if_then ], [ %__array_cap_grewt41_4, %__bb_if_join1 ]
   %__array_cap_arrt40_2 = phi %DriftArrayHeader [ %__array_cap_arrt40_1, %__bb_if_then ], [ %__arc1, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t14, %__bb_if_then ], [ %t70, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -91532,17 +91532,17 @@ __bb_array_cap_ok:
   %t42 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt41_3 = phi i1 [ %t42, %__bb_array_cap_ok ], [ %t62, %__bb_array_copy_exit ]
-  %__array_cap_arrt40_3 = phi %DriftArrayHeader [ %t27, %__bb_array_cap_ok ], [ %arr_len69, %__bb_array_copy_exit ]
+  %__array_cap_grewt41_4 = phi i1 [ %t42, %__bb_array_cap_ok ], [ %t62, %__bb_array_copy_exit ]
+  %__array_cap_arrt40_4 = phi %DriftArrayHeader [ %t27, %__bb_array_cap_ok ], [ %arr_len69, %__bb_array_copy_exit ]
   %zero_arr83 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr84 = insertvalue %DriftArrayHeader %zero_arr83, i64 0, 1
   %zero_arr85 = insertvalue %DriftArrayHeader %zero_arr84, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr85, ptr null, 3
-  %data86 = extractvalue %DriftArrayHeader %__array_cap_arrt40_3, 3
+  %data86 = extractvalue %DriftArrayHeader %__array_cap_arrt40_4, 3
   %eltptr87 = getelementptr inbounds %DriftString, ptr %data86, i64 %t32
   store %DriftString %t31, ptr %eltptr87
   %t65 = add i64 %t32, %t37
-  %arr_len88 = insertvalue %DriftArrayHeader %__array_cap_arrt40_3, i64 %t65, 0
+  %arr_len88 = insertvalue %DriftArrayHeader %__array_cap_arrt40_4, i64 %t65, 0
   %arr_gen89 = insertvalue %DriftArrayHeader %arr_len88, i64 %t36, 2
   store %DriftArrayHeader %arr_gen89, ptr %arr__addr
   %t69 = add i64 0, 1
@@ -91589,8 +91589,8 @@ __bb_logic_short:
   %t10 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt9_3 = phi i1 [ %t10, %__bb_logic_short ], [ %t13, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt9_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt9_2 = phi i1 [ %t10, %__bb_logic_short ], [ %t13, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt9_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t64 = add i64 0, 0
   %t65 = add i64 0, 0
@@ -91618,7 +91618,7 @@ __bb_if_join:
   %__logic_tmpt73_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt73_2 = phi i1 [ %__logic_tmpt73_1, %__bb_if_join ], [ %__logic_tmpt73_5, %__bb_if_join1 ]
+  %__logic_tmpt73_2 = phi i1 [ %__logic_tmpt73_1, %__bb_if_join ], [ %__logic_tmpt73_3, %__bb_if_join1 ]
   %splits_2 = phi i64 [ %t69, %__bb_if_join ], [ %t106, %__bb_if_join1 ]
   %start_2 = phi i64 [ %t68, %__bb_if_join ], [ %t103, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -91632,8 +91632,8 @@ __bb_logic_rhs1:
   %t77 = icmp slt i64 %splits_2, %max_1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt73_5 = phi i1 [ %t77, %__bb_logic_rhs1 ], [ %t74, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt73_5, label %__bb_if_then1, label %__bb_if_else
+  %__logic_tmpt73_3 = phi i1 [ %t77, %__bb_logic_rhs1 ], [ %t74, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt73_3, label %__bb_if_then1, label %__bb_if_else
 __bb_if_else:
   br label %__bb_loop_exit
 __bb_loop_exit:
@@ -91788,17 +91788,17 @@ __bb_array_cap_ok:
   %t36 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt35_1 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
-  %__array_cap_arrt34_1 = phi %DriftArrayHeader [ %t21, %__bb_array_cap_ok ], [ %arr_len52, %__bb_array_copy_exit ]
+  %__array_cap_grewt35_2 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
+  %__array_cap_arrt34_2 = phi %DriftArrayHeader [ %t21, %__bb_array_cap_ok ], [ %arr_len52, %__bb_array_copy_exit ]
   %zero_arr66 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr67 = insertvalue %DriftArrayHeader %zero_arr66, i64 0, 1
   %zero_arr68 = insertvalue %DriftArrayHeader %zero_arr67, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr68, ptr null, 3
-  %data69 = extractvalue %DriftArrayHeader %__array_cap_arrt34_1, 3
+  %data69 = extractvalue %DriftArrayHeader %__array_cap_arrt34_2, 3
   %eltptr70 = getelementptr inbounds %DriftString, ptr %data69, i64 %t26
   store %DriftString %t25, ptr %eltptr70
   %t59 = add i64 %t26, %t31
-  %arr_len71 = insertvalue %DriftArrayHeader %__array_cap_arrt34_1, i64 %t59, 0
+  %arr_len71 = insertvalue %DriftArrayHeader %__array_cap_arrt34_2, i64 %t59, 0
   %arr_gen72 = insertvalue %DriftArrayHeader %arr_len71, i64 %t30, 2
   store %DriftArrayHeader %arr_gen72, ptr %arr__addr
   %t62 = load %DriftArrayHeader, ptr %arr__addr
@@ -92019,17 +92019,17 @@ __bb_array_cap_ok1:
   %t78 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt77_3 = phi i1 [ %t98, %__bb_array_copy_exit1 ], [ %t78, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt76_3 = phi %DriftArrayHeader [ %arr_len8, %__bb_array_copy_exit1 ], [ %t63, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt77_2 = phi i1 [ %t78, %__bb_array_cap_ok1 ], [ %t98, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt76_2 = phi %DriftArrayHeader [ %t63, %__bb_array_cap_ok1 ], [ %arr_len8, %__bb_array_copy_exit1 ]
   %zero_arr22 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr23 = insertvalue %DriftArrayHeader %zero_arr22, i64 0, 1
   %zero_arr24 = insertvalue %DriftArrayHeader %zero_arr23, i64 0, 2
   %__arc2 = insertvalue %DriftArrayHeader %zero_arr24, ptr null, 3
-  %data25 = extractvalue %DriftArrayHeader %__array_cap_arrt76_3, 3
+  %data25 = extractvalue %DriftArrayHeader %__array_cap_arrt76_2, 3
   %eltptr26 = getelementptr inbounds %DriftString, ptr %data25, i64 %t68
   store %DriftString %t67, ptr %eltptr26
   %t101 = add i64 %t68, %t73
-  %arr_len27 = insertvalue %DriftArrayHeader %__array_cap_arrt76_3, i64 %t101, 0
+  %arr_len27 = insertvalue %DriftArrayHeader %__array_cap_arrt76_2, i64 %t101, 0
   %arr_gen28 = insertvalue %DriftArrayHeader %arr_len27, i64 %t72, 2
   store %DriftArrayHeader %arr_gen28, ptr %arr_1
   %t104 = load %Struct_std_2Eio_Buffer_e76b5c24b140f2f4, ptr %buf__addr
@@ -92134,17 +92134,17 @@ __bb_array_cap_ok:
   %t19 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt18_1 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
-  %__array_cap_arrt17_1 = phi %DriftArrayHeader [ %t6, %__bb_array_cap_ok ], [ %arr_len44, %__bb_array_copy_exit ]
+  %__array_cap_grewt18_2 = phi i1 [ %t19, %__bb_array_cap_ok ], [ %t39, %__bb_array_copy_exit ]
+  %__array_cap_arrt17_2 = phi %DriftArrayHeader [ %t6, %__bb_array_cap_ok ], [ %arr_len44, %__bb_array_copy_exit ]
   %zero_arr58 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr59 = insertvalue %DriftArrayHeader %zero_arr58, i64 0, 1
   %zero_arr60 = insertvalue %DriftArrayHeader %zero_arr59, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr60, ptr null, 3
-  %data61 = extractvalue %DriftArrayHeader %__array_cap_arrt17_1, 3
+  %data61 = extractvalue %DriftArrayHeader %__array_cap_arrt17_2, 3
   %eltptr62 = getelementptr inbounds %DriftString, ptr %data61, i64 %t9
   store %DriftString %t8, ptr %eltptr62
   %t42 = add i64 %t9, %t14
-  %arr_len63 = insertvalue %DriftArrayHeader %__array_cap_arrt17_1, i64 %t42, 0
+  %arr_len63 = insertvalue %DriftArrayHeader %__array_cap_arrt17_2, i64 %t42, 0
   %arr_gen64 = insertvalue %DriftArrayHeader %arr_len63, i64 %t13, 2
   store %DriftArrayHeader %arr_gen64, ptr %arr_1
   ret void
@@ -92867,7 +92867,7 @@ __bb_if_join:
   %__logic_tmpt19_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt19_2 = phi i1 [ %__logic_tmpt19_1, %__bb_if_join ], [ %__logic_tmpt19_5, %__bb_if_join1 ]
+  %__logic_tmpt19_2 = phi i1 [ %__logic_tmpt19_1, %__bb_if_join ], [ %__logic_tmpt19_4, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t8, %__bb_if_join ], [ %t28, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -92899,8 +92899,8 @@ __bb_logic_rhs:
   %t23 = icmp ule i8 %t15, %t22
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt19_5 = phi i1 [ %t20, %__bb_logic_short ], [ %t23, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt19_5, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt19_4 = phi i1 [ %t20, %__bb_logic_short ], [ %t23, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt19_4, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t27 = add i64 0, 1
   %t28 = add i64 %i_2, %t27
@@ -92928,7 +92928,7 @@ __bb_if_join:
   %__logic_tmpt19_1 = add i1 0, 0
   br label %__bb_loop_header
 __bb_loop_header:
-  %__logic_tmpt19_2 = phi i1 [ %__logic_tmpt19_1, %__bb_if_join ], [ %__logic_tmpt19_5, %__bb_if_join1 ]
+  %__logic_tmpt19_2 = phi i1 [ %__logic_tmpt19_1, %__bb_if_join ], [ %__logic_tmpt19_4, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t8, %__bb_if_join ], [ %t28, %__bb_if_join1 ]
   br label %__bb_loop_body
 __bb_loop_body:
@@ -92960,8 +92960,8 @@ __bb_logic_rhs:
   %t23 = icmp ule i8 %t15, %t22
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt19_5 = phi i1 [ %t20, %__bb_logic_short ], [ %t23, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt19_5, label %__bb_if_then2, label %__bb_if_join2
+  %__logic_tmpt19_4 = phi i1 [ %t20, %__bb_logic_short ], [ %t23, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt19_4, label %__bb_if_then2, label %__bb_if_join2
 __bb_if_join2:
   %t27 = add i64 0, 1
   %t28 = add i64 %i_2, %t27
@@ -93133,8 +93133,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   ret i8 %b_1
 __bb_if_then:
@@ -93473,8 +93473,8 @@ __bb_logic_short:
   %t17 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt16_5 = phi i1 [ %t17, %__bb_logic_short ], [ %t20, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt16_5, label %__bb_logic_rhs1, label %__bb_logic_short1
+  %__logic_tmpt16_4 = phi i1 [ %t17, %__bb_logic_short ], [ %t20, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt16_4, label %__bb_logic_rhs1, label %__bb_logic_short1
 __bb_logic_short1:
   %t23 = add i1 0, 0
   br label %__bb_logic_join1
@@ -93494,13 +93494,13 @@ __bb_logic_rhs1:
   %t31 = icmp eq i8 %t29, %t30
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt22_5 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t23, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt22_5, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt22_3 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t23, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt22_3, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   br label %__bb_if_join
 __bb_if_join:
-  %__logic_tmpt22_2 = phi i1 [ %__logic_tmpt22_1, %__bb_entry ], [ %__logic_tmpt22_5, %__bb_if_join1 ]
-  %__logic_tmpt16_2 = phi i1 [ %__logic_tmpt16_1, %__bb_entry ], [ %__logic_tmpt16_5, %__bb_if_join1 ]
+  %__logic_tmpt22_2 = phi i1 [ %__logic_tmpt22_1, %__bb_entry ], [ %__logic_tmpt22_3, %__bb_if_join1 ]
+  %__logic_tmpt16_2 = phi i1 [ %__logic_tmpt16_1, %__bb_entry ], [ %__logic_tmpt16_4, %__bb_if_join1 ]
   %t39 = add i64 0, 5
   %t40 = icmp sge i64 %t3, %t39
   %__logic_tmpt50_1 = add i1 0, 0
@@ -93528,12 +93528,12 @@ __bb_logic_short2:
   %t51 = add i1 0, 1
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt50_3 = phi i1 [ %t51, %__bb_logic_short2 ], [ %t54, %__bb_logic_rhs2 ]
-  br i1 %__logic_tmpt50_3, label %__bb_if_then3, label %__bb_if_join3
+  %__logic_tmpt50_2 = phi i1 [ %t54, %__bb_logic_rhs2 ], [ %t51, %__bb_logic_short2 ]
+  br i1 %__logic_tmpt50_2, label %__bb_if_then3, label %__bb_if_join3
 __bb_if_join3:
   br label %__bb_if_join2
 __bb_if_join2:
-  %__logic_tmpt50_2 = phi i1 [ %__logic_tmpt50_1, %__bb_if_join ], [ %__logic_tmpt50_3, %__bb_if_join3 ]
+  %__logic_tmpt50_5 = phi i1 [ %__logic_tmpt50_1, %__bb_if_join ], [ %__logic_tmpt50_2, %__bb_if_join3 ]
   %t62 = add i64 0, 20
   %t63 = icmp ne i64 %t3, %t62
   br i1 %t63, label %__bb_logic_rhs3, label %__bb_logic_short3
@@ -93545,8 +93545,8 @@ __bb_logic_rhs3:
   %t68 = icmp ne i64 %t3, %t67
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt64_2 = phi i1 [ %t68, %__bb_logic_rhs3 ], [ %t65, %__bb_logic_short3 ]
-  br i1 %__logic_tmpt64_2, label %__bb_if_then4, label %__bb_if_join4
+  %__logic_tmpt64_1 = phi i1 [ %t65, %__bb_logic_short3 ], [ %t68, %__bb_logic_rhs3 ]
+  br i1 %__logic_tmpt64_1, label %__bb_if_then4, label %__bb_if_join4
 __bb_if_join4:
   %t74 = load %DriftString, ptr %s__addr
   %t75 = add i64 0, 4
@@ -93648,9 +93648,9 @@ __bb_if_join12:
   %t143 = add i64 0, 23
   br label %__bb_if_join10
 __bb_if_join10:
-  %millis_3 = phi i64 [ %t119, %__bb_if_join9 ], [ %t135, %__bb_if_join12 ]
-  %tz_idx_3 = phi i64 [ %t118, %__bb_if_join9 ], [ %t143, %__bb_if_join12 ]
-  %t146 = icmp sge i64 %tz_idx_3, %t3
+  %millis_2 = phi i64 [ %t119, %__bb_if_join9 ], [ %t135, %__bb_if_join12 ]
+  %tz_idx_2 = phi i64 [ %t118, %__bb_if_join9 ], [ %t143, %__bb_if_join12 ]
+  %t146 = icmp sge i64 %tz_idx_2, %t3
   br i1 %t146, label %__bb_if_then13, label %__bb_if_join13
 __bb_if_join13:
   %t152 = load %DriftString, ptr %s__addr
@@ -93659,8 +93659,8 @@ __bb_if_join13:
   %strptr59 = getelementptr inbounds { i64, i64, [16 x i8] }, ptr @.str36, i32 0, i32 2, i32 0
   %str060 = insertvalue %DriftString zeroinitializer, i64 15, 0
   %str61 = insertvalue %DriftString %str060, ptr %strptr59, 1
-  call void @drift_bounds_check(%DriftString %str61, i64 %tz_idx_3, i64 %len57)
-  %ptr62 = getelementptr i8, ptr %data58, i64 %tz_idx_3
+  call void @drift_bounds_check(%DriftString %str61, i64 %tz_idx_2, i64 %len57)
+  %ptr62 = getelementptr i8, ptr %data58, i64 %tz_idx_2
   %t154 = load i8, ptr %ptr62
   %t156 = add i8 0, 43
   %t157 = icmp eq i8 %t154, %t156
@@ -93673,7 +93673,7 @@ __bb_logic_short4:
   %t159 = add i1 0, 1
   br label %__bb_logic_join4
 __bb_logic_join4:
-  %__logic_tmpt158_1 = phi i1 [ %t159, %__bb_logic_short4 ], [ %t162, %__bb_logic_rhs4 ]
+  %__logic_tmpt158_1 = phi i1 [ %t162, %__bb_logic_rhs4 ], [ %t159, %__bb_logic_short4 ]
   br i1 %__logic_tmpt158_1, label %__bb_if_then14, label %__bb_if_join14
 __bb_if_join14:
   %t168 = add i8 0, 90
@@ -93733,8 +93733,8 @@ __bb_logic_short5:
   %t237 = add i1 0, 1
   br label %__bb_logic_join5
 __bb_logic_join5:
-  %__logic_tmpt236_1 = phi i1 [ %t237, %__bb_logic_short5 ], [ %t240, %__bb_logic_rhs5 ]
-  br i1 %__logic_tmpt236_1, label %__bb_if_then22, label %__bb_if_join22
+  %__logic_tmpt236_2 = phi i1 [ %t240, %__bb_logic_rhs5 ], [ %t237, %__bb_logic_short5 ]
+  br i1 %__logic_tmpt236_2, label %__bb_if_then22, label %__bb_if_join22
 __bb_if_join22:
   %t247 = call i64 @"std.time::_days_in_month"(i64 %t176, i64 %t180)
   %t249 = add i64 0, 1
@@ -93747,8 +93747,8 @@ __bb_logic_short6:
   %t252 = add i1 0, 1
   br label %__bb_logic_join6
 __bb_logic_join6:
-  %__logic_tmpt251_3 = phi i1 [ %t252, %__bb_logic_short6 ], [ %t255, %__bb_logic_rhs6 ]
-  br i1 %__logic_tmpt251_3, label %__bb_if_then23, label %__bb_if_join23
+  %__logic_tmpt251_2 = phi i1 [ %t252, %__bb_logic_short6 ], [ %t255, %__bb_logic_rhs6 ]
+  br i1 %__logic_tmpt251_2, label %__bb_if_then23, label %__bb_if_join23
 __bb_if_join23:
   %t261 = add i64 0, 0
   %t262 = icmp slt i64 %t188, %t261
@@ -93775,8 +93775,8 @@ __bb_logic_short8:
   %t276 = add i1 0, 1
   br label %__bb_logic_join8
 __bb_logic_join8:
-  %__logic_tmpt275_1 = phi i1 [ %t276, %__bb_logic_short8 ], [ %t279, %__bb_logic_rhs8 ]
-  br i1 %__logic_tmpt275_1, label %__bb_if_then25, label %__bb_if_join25
+  %__logic_tmpt275_2 = phi i1 [ %t276, %__bb_logic_short8 ], [ %t279, %__bb_logic_rhs8 ]
+  br i1 %__logic_tmpt275_2, label %__bb_if_then25, label %__bb_if_join25
 __bb_if_join25:
   %t285 = add i64 0, 0
   %t286 = icmp slt i64 %t196, %t285
@@ -93789,8 +93789,8 @@ __bb_logic_short9:
   %t288 = add i1 0, 1
   br label %__bb_logic_join9
 __bb_logic_join9:
-  %__logic_tmpt287_2 = phi i1 [ %t291, %__bb_logic_rhs9 ], [ %t288, %__bb_logic_short9 ]
-  br i1 %__logic_tmpt287_2, label %__bb_if_then26, label %__bb_if_join26
+  %__logic_tmpt287_1 = phi i1 [ %t291, %__bb_logic_rhs9 ], [ %t288, %__bb_logic_short9 ]
+  br i1 %__logic_tmpt287_1, label %__bb_if_then26, label %__bb_if_join26
 __bb_if_join26:
   %t299 = call i64 @"std.time::_days_from_civil"(i64 %t176, i64 %t180, i64 %t184)
   %t301 = add i64 0, 3600
@@ -93804,7 +93804,7 @@ __bb_if_join26:
   %t313 = add i64 0, 1000
   %t314 = mul i64 %t308, %t313
   %t315 = add i64 %t311, %t314
-  %t317 = add i64 %t315, %millis_3
+  %t317 = add i64 %t315, %millis_2
   %t319 = insertvalue %Struct_std_2Etime_UtcTimestamp_12180c53744a78b9 zeroinitializer, i64 %t317, 0
   %variant63 = alloca %Variant_std_2Ecore_Result_dca89531f0edee49
   store %Variant_std_2Ecore_Result_dca89531f0edee49 zeroinitializer, ptr %variant63
@@ -93956,7 +93956,7 @@ __bb_if_then15:
   %strptr101 = getelementptr inbounds { i64, i64, [23 x i8] }, ptr @.str2230, i32 0, i32 2, i32 0
   %str0102 = insertvalue %DriftString zeroinitializer, i64 22, 0
   %t170 = insertvalue %DriftString %str0102, ptr %strptr101, 1
-  %t172 = call %Variant_std_2Ecore_Result_dca89531f0edee49 @"std.time::_err"(%DriftString %t170, i64 %tz_idx_3)
+  %t172 = call %Variant_std_2Ecore_Result_dca89531f0edee49 @"std.time::_err"(%DriftString %t170, i64 %tz_idx_2)
   %__arc13 = load %DriftString, ptr %s__addr
   %zero_str103 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc14 = insertvalue %DriftString %zero_str103, ptr null, 1
@@ -93967,7 +93967,7 @@ __bb_if_then14:
   %strptr104 = getelementptr inbounds { i64, i64, [19 x i8] }, ptr @.str2231, i32 0, i32 2, i32 0
   %str0105 = insertvalue %DriftString zeroinitializer, i64 18, 0
   %t164 = insertvalue %DriftString %str0105, ptr %strptr104, 1
-  %t166 = call %Variant_std_2Ecore_Result_dca89531f0edee49 @"std.time::_err"(%DriftString %t164, i64 %tz_idx_3)
+  %t166 = call %Variant_std_2Ecore_Result_dca89531f0edee49 @"std.time::_err"(%DriftString %t164, i64 %tz_idx_2)
   %__arc11 = load %DriftString, ptr %s__addr
   %zero_str106 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc12 = insertvalue %DriftString %zero_str106, ptr null, 1
@@ -94134,8 +94134,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t14 = call i64 @"std.time::_days_in_month"(i64 %year_1, i64 %month_1)
   ret i64 %t14
@@ -94159,8 +94159,8 @@ __bb_logic_short:
   %t6 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt5_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt5_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t13 = add i64 0, 1
   %t14 = icmp slt i64 %day_1, %t13
@@ -94289,8 +94289,8 @@ __bb_logic_short:
   %t62 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt61_3 = phi i1 [ %t62, %__bb_logic_short ], [ %t65, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt61_3, label %__bb_if_then6, label %__bb_if_join6
+  %__logic_tmpt61_2 = phi i1 [ %t62, %__bb_logic_short ], [ %t65, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt61_2, label %__bb_if_then6, label %__bb_if_join6
 __bb_if_join6:
   %t72 = call i64 @"std.time::_days_in_month"(i64 %t31, i64 %t35)
   %t74 = add i64 0, 1
@@ -94303,8 +94303,8 @@ __bb_logic_short1:
   %t77 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt76_3 = phi i1 [ %t80, %__bb_logic_rhs1 ], [ %t77, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt76_3, label %__bb_if_then7, label %__bb_if_join7
+  %__logic_tmpt76_1 = phi i1 [ %t80, %__bb_logic_rhs1 ], [ %t77, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt76_1, label %__bb_if_then7, label %__bb_if_join7
 __bb_if_join7:
   %struct15 = insertvalue %Struct_std_2Etime_Date_9376ddb24036a476 zeroinitializer, i64 %t31, 0
   %struct16 = insertvalue %Struct_std_2Etime_Date_9376ddb24036a476 %struct15, i64 %t35, 1
@@ -94478,8 +94478,8 @@ __bb_logic_rhs:
   %t9 = icmp ule i8 %b_1, %t8
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt5_3 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
-  ret i1 %__logic_tmpt5_3
+  %__logic_tmpt5_2 = phi i1 [ %t6, %__bb_logic_short ], [ %t9, %__bb_logic_rhs ]
+  ret i1 %__logic_tmpt5_2
 }
 define i64 @"std.time::_digit_to_int"(i8 %b) {
 __bb_entry:
@@ -94693,8 +94693,8 @@ __bb_logic_rhs1:
   %t20 = icmp slt i64 %b_1, %t19
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt16_4 = phi i1 [ %t20, %__bb_logic_rhs1 ], [ %t17, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt16_4, label %__bb_logic_short2, label %__bb_logic_rhs2
+  %__logic_tmpt16_3 = phi i1 [ %t20, %__bb_logic_rhs1 ], [ %t17, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt16_3, label %__bb_logic_short2, label %__bb_logic_rhs2
 __bb_logic_rhs2:
   %t25 = add i64 0, 0
   %t26 = icmp slt i64 %t7, %t25
@@ -94707,22 +94707,22 @@ __bb_logic_rhs3:
   %t31 = icmp sgt i64 %b_1, %t30
   br label %__bb_logic_join3
 __bb_logic_join3:
-  %__logic_tmpt27_5 = phi i1 [ %t31, %__bb_logic_rhs3 ], [ %t28, %__bb_logic_short3 ]
+  %__logic_tmpt27_4 = phi i1 [ %t28, %__bb_logic_short3 ], [ %t31, %__bb_logic_rhs3 ]
   br label %__bb_logic_join2
 __bb_logic_short2:
   %t23 = add i1 0, 1
-  %__logic_tmpt27_3 = add i1 0, 0
+  %__logic_tmpt27_7 = add i1 0, 0
   br label %__bb_logic_join2
 __bb_logic_join2:
-  %__logic_tmpt27_2 = phi i1 [ %__logic_tmpt27_3, %__bb_logic_short2 ], [ %__logic_tmpt27_5, %__bb_logic_join3 ]
-  %__logic_tmpt22_2 = phi i1 [ %t23, %__bb_logic_short2 ], [ %__logic_tmpt27_5, %__bb_logic_join3 ]
+  %__logic_tmpt27_3 = phi i1 [ %__logic_tmpt27_4, %__bb_logic_join3 ], [ %__logic_tmpt27_7, %__bb_logic_short2 ]
+  %__logic_tmpt22_3 = phi i1 [ %__logic_tmpt27_4, %__bb_logic_join3 ], [ %t23, %__bb_logic_short2 ]
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt27_7 = phi i1 [ %__logic_tmpt27_1, %__bb_logic_short ], [ %__logic_tmpt27_2, %__bb_logic_join2 ]
-  %__logic_tmpt22_5 = phi i1 [ %__logic_tmpt22_1, %__bb_logic_short ], [ %__logic_tmpt22_2, %__bb_logic_join2 ]
-  %__logic_tmpt16_5 = phi i1 [ %__logic_tmpt16_1, %__bb_logic_short ], [ %__logic_tmpt16_4, %__bb_logic_join2 ]
-  %__logic_tmpt11_3 = phi i1 [ %t12, %__bb_logic_short ], [ %__logic_tmpt22_2, %__bb_logic_join2 ]
-  br i1 %__logic_tmpt11_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt27_2 = phi i1 [ %__logic_tmpt27_1, %__bb_logic_short ], [ %__logic_tmpt27_3, %__bb_logic_join2 ]
+  %__logic_tmpt22_2 = phi i1 [ %__logic_tmpt22_1, %__bb_logic_short ], [ %__logic_tmpt22_3, %__bb_logic_join2 ]
+  %__logic_tmpt16_2 = phi i1 [ %__logic_tmpt16_1, %__bb_logic_short ], [ %__logic_tmpt16_3, %__bb_logic_join2 ]
+  %__logic_tmpt11_2 = phi i1 [ %t12, %__bb_logic_short ], [ %__logic_tmpt22_3, %__bb_logic_join2 ]
+  br i1 %__logic_tmpt11_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_then:
   %t36 = add i64 0, 1
   %t37 = sub i64 %t4, %t36
@@ -95409,8 +95409,8 @@ __bb_logic_short:
   %t9 = add i1 0, 1
   br label %__bb_logic_join
 __bb_logic_join:
-  %__logic_tmpt8_3 = phi i1 [ %t9, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
-  br i1 %__logic_tmpt8_3, label %__bb_if_then, label %__bb_if_join
+  %__logic_tmpt8_2 = phi i1 [ %t9, %__bb_logic_short ], [ %t12, %__bb_logic_rhs ]
+  br i1 %__logic_tmpt8_2, label %__bb_if_then, label %__bb_if_join
 __bb_if_join:
   %t25 = add i64 0, 0
   %t26 = icmp slt i64 %j_1, %t25
@@ -95422,8 +95422,8 @@ __bb_logic_short1:
   %t28 = add i1 0, 1
   br label %__bb_logic_join1
 __bb_logic_join1:
-  %__logic_tmpt27_3 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t28, %__bb_logic_short1 ]
-  br i1 %__logic_tmpt27_3, label %__bb_if_then1, label %__bb_if_join1
+  %__logic_tmpt27_1 = phi i1 [ %t31, %__bb_logic_rhs1 ], [ %t28, %__bb_logic_short1 ]
+  br i1 %__logic_tmpt27_1, label %__bb_if_then1, label %__bb_if_join1
 __bb_if_join1:
   %t45 = icmp eq i64 %i_1, %j_1
   br i1 %t45, label %__bb_if_then2, label %__bb_if_join2
@@ -95674,25 +95674,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -95818,25 +95818,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -95962,25 +95962,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -96893,9 +96893,9 @@ __bb_if_join:
   %__array_cap_arrt34_1 = insertvalue %DriftArrayHeader %zero_arr36, ptr null, 3
   br label %__bb_loop_header
 __bb_loop_header:
-  %__array_cap_grewt77_2 = phi i1 [ %__array_cap_grewt77_1, %__bb_if_join ], [ %__array_cap_grewt77_5, %__bb_if_join1 ]
+  %__array_cap_grewt77_2 = phi i1 [ %__array_cap_grewt77_1, %__bb_if_join ], [ %__array_cap_grewt77_4, %__bb_if_join1 ]
   %__array_cap_arrt76_2 = phi %DriftArrayHeader [ %__array_cap_arrt76_1, %__bb_if_join ], [ %__arc3, %__bb_if_join1 ]
-  %__array_cap_grewt35_2 = phi i1 [ %__array_cap_grewt35_1, %__bb_if_join ], [ %__array_cap_grewt35_3, %__bb_if_join1 ]
+  %__array_cap_grewt35_2 = phi i1 [ %__array_cap_grewt35_1, %__bb_if_join ], [ %__array_cap_grewt35_4, %__bb_if_join1 ]
   %__array_cap_arrt34_2 = phi %DriftArrayHeader [ %__array_cap_arrt34_1, %__bb_if_join ], [ %__arc1, %__bb_if_join1 ]
   %i_2 = phi i64 [ %t17, %__bb_if_join ], [ %t106, %__bb_if_join1 ]
   br label %__bb_loop_body
@@ -97000,17 +97000,17 @@ __bb_array_cap_ok:
   %t36 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt35_3 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
-  %__array_cap_arrt34_3 = phi %DriftArrayHeader [ %t24, %__bb_array_cap_ok ], [ %arr_len52, %__bb_array_copy_exit ]
+  %__array_cap_grewt35_4 = phi i1 [ %t36, %__bb_array_cap_ok ], [ %t56, %__bb_array_copy_exit ]
+  %__array_cap_arrt34_4 = phi %DriftArrayHeader [ %t24, %__bb_array_cap_ok ], [ %arr_len52, %__bb_array_copy_exit ]
   %zero_arr64 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr65 = insertvalue %DriftArrayHeader %zero_arr64, i64 0, 1
   %zero_arr66 = insertvalue %DriftArrayHeader %zero_arr65, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr66, ptr null, 3
-  %data67 = extractvalue %DriftArrayHeader %__array_cap_arrt34_3, 3
+  %data67 = extractvalue %DriftArrayHeader %__array_cap_arrt34_4, 3
   %eltptr68 = getelementptr inbounds %Struct_std_2Esync_AtomicHandle_3ba522baae4a9da2, ptr %data67, i64 %t26
   store %Struct_std_2Esync_AtomicHandle_3ba522baae4a9da2 %t22, ptr %eltptr68
   %t59 = add i64 %t26, %t31
-  %arr_len69 = insertvalue %DriftArrayHeader %__array_cap_arrt34_3, i64 %t59, 0
+  %arr_len69 = insertvalue %DriftArrayHeader %__array_cap_arrt34_4, i64 %t59, 0
   %arr_gen70 = insertvalue %DriftArrayHeader %arr_len69, i64 %t30, 2
   store %DriftArrayHeader %arr_gen70, ptr %slots__addr
   %t63 = add i64 %i_2, 0
@@ -97084,17 +97084,17 @@ __bb_array_cap_ok1:
   %t78 = add i1 0, 0
   br label %__bb_array_cap_join21
 __bb_array_cap_join21:
-  %__array_cap_grewt77_5 = phi i1 [ %t98, %__bb_array_copy_exit1 ], [ %t78, %__bb_array_cap_ok1 ]
-  %__array_cap_arrt76_5 = phi %DriftArrayHeader [ %arr_len76, %__bb_array_copy_exit1 ], [ %t66, %__bb_array_cap_ok1 ]
+  %__array_cap_grewt77_4 = phi i1 [ %t78, %__bb_array_cap_ok1 ], [ %t98, %__bb_array_copy_exit1 ]
+  %__array_cap_arrt76_4 = phi %DriftArrayHeader [ %t66, %__bb_array_cap_ok1 ], [ %arr_len76, %__bb_array_copy_exit1 ]
   %zero_arr88 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr89 = insertvalue %DriftArrayHeader %zero_arr88, i64 0, 1
   %zero_arr90 = insertvalue %DriftArrayHeader %zero_arr89, i64 0, 2
   %__arc3 = insertvalue %DriftArrayHeader %zero_arr90, ptr null, 3
-  %data91 = extractvalue %DriftArrayHeader %__array_cap_arrt76_5, 3
+  %data91 = extractvalue %DriftArrayHeader %__array_cap_arrt76_4, 3
   %eltptr92 = getelementptr inbounds %Struct_lang_2Eatomic_AtomicUint_8c8bd425e732016f, ptr %data91, i64 %t68
   store %Struct_lang_2Eatomic_AtomicUint_8c8bd425e732016f %t64, ptr %eltptr92
   %t101 = add i64 %t68, %t73
-  %arr_len93 = insertvalue %DriftArrayHeader %__array_cap_arrt76_5, i64 %t101, 0
+  %arr_len93 = insertvalue %DriftArrayHeader %__array_cap_arrt76_4, i64 %t101, 0
   %arr_gen94 = insertvalue %DriftArrayHeader %arr_len93, i64 %t72, 2
   store %DriftArrayHeader %arr_gen94, ptr %states__addr
   %t105 = add i64 0, 1
@@ -97628,25 +97628,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr43 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr44 = insertvalue %DriftArrayHeader %zero_arr43, i64 0, 1
   %zero_arr45 = insertvalue %DriftArrayHeader %zero_arr44, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr45, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen46 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen46 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen46, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -97772,25 +97772,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -97916,25 +97916,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -98062,25 +98062,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr39 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr40 = insertvalue %DriftArrayHeader %zero_arr39, i64 0, 1
   %zero_arr41 = insertvalue %DriftArrayHeader %zero_arr40, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr41, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen42 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen42 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen42, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -98206,25 +98206,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr37 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr38 = insertvalue %DriftArrayHeader %zero_arr37, i64 0, 1
   %zero_arr39 = insertvalue %DriftArrayHeader %zero_arr38, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr39, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen40 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen40, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -98358,25 +98358,25 @@ __bb_array_cap_ok:
   %t24 = add i1 0, 0
   br label %__bb_array_cap_join2
 __bb_array_cap_join2:
-  %__array_cap_grewt23_3 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
-  %__array_cap_arrt22_3 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
+  %__array_cap_grewt23_4 = phi i1 [ %t24, %__bb_array_cap_ok ], [ %t44, %__bb_array_copy_exit ]
+  %__array_cap_arrt22_4 = phi %DriftArrayHeader [ %t11, %__bb_array_cap_ok ], [ %arr_len25, %__bb_array_copy_exit ]
   %zero_arr40 = insertvalue %DriftArrayHeader zeroinitializer, i64 0, 0
   %zero_arr41 = insertvalue %DriftArrayHeader %zero_arr40, i64 0, 1
   %zero_arr42 = insertvalue %DriftArrayHeader %zero_arr41, i64 0, 2
   %__arc1 = insertvalue %DriftArrayHeader %zero_arr42, ptr null, 3
-  br i1 %__array_cap_grewt23_3, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
+  br i1 %__array_cap_grewt23_4, label %__bb_array_reserve_bump, label %__bb_array_reserve_store
 __bb_array_reserve_store:
-  store %DriftArrayHeader %__array_cap_arrt22_3, ptr %out__addr
+  store %DriftArrayHeader %__array_cap_arrt22_4, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_bump:
-  %arr_gen43 = insertvalue %DriftArrayHeader %__array_cap_arrt22_3, i64 %t18, 2
+  %arr_gen43 = insertvalue %DriftArrayHeader %__array_cap_arrt22_4, i64 %t18, 2
   store %DriftArrayHeader %arr_gen43, ptr %out__addr
   br label %__bb_array_reserve_join
 __bb_array_reserve_skip:
   br label %__bb_array_reserve_join
 __bb_array_reserve_join:
-  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ], [ %__array_cap_grewt23_3, %__bb_array_reserve_store ], [ %__array_cap_grewt23_3, %__bb_array_reserve_bump ]
-  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ], [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ]
+  %__array_cap_grewt23_6 = phi i1 [ %__array_cap_grewt23_4, %__bb_array_reserve_store ], [ %__array_cap_grewt23_4, %__bb_array_reserve_bump ], [ %__array_cap_grewt23_1, %__bb_array_reserve_skip ]
+  %__array_cap_arrt22_7 = phi %DriftArrayHeader [ %__arc1, %__bb_array_reserve_store ], [ %__arc1, %__bb_array_reserve_bump ], [ %__array_cap_arrt22_1, %__bb_array_reserve_skip ]
   br label %__bb_if_join
 __bb_if_join:
   %__array_cap_grewt23_2 = phi i1 [ %__array_cap_grewt23_1, %__bb_entry ], [ %__array_cap_grewt23_6, %__bb_array_reserve_join ]
@@ -98757,10 +98757,10 @@ __bb_if_then4:
 __bb_if_then5:
   br label %__bb_if_join5
 __bb_if_join5:
-  %first_tomb_4 = phi i64 [ %first_tomb_2, %__bb_if_then4 ], [ %idx_2, %__bb_if_then5 ]
+  %first_tomb_3 = phi i64 [ %first_tomb_2, %__bb_if_then4 ], [ %idx_2, %__bb_if_then5 ]
   br label %__bb_if_join4
 __bb_if_join4:
-  %first_tomb_5 = phi i64 [ %first_tomb_4, %__bb_if_join5 ], [ %first_tomb_2, %__bb_if_join6 ]
+  %first_tomb_5 = phi i64 [ %first_tomb_3, %__bb_if_join5 ], [ %first_tomb_2, %__bb_if_join6 ]
   %t55 = add i64 0, 1
   %t56 = add i64 %idx_2, %t55
   %t58 = srem i64 %t56, %t3
@@ -98925,17 +98925,17 @@ __bb_if_else4:
   call void @drift_free_array(ptr %rawptr18)
   %rawptr19 = extractvalue %Struct_std_2Emem_RawBuffer_d10426ae10844bad %t124, 0
   call void @drift_free_array(ptr %rawptr19)
-  %j_2 = add i64 0, 0
+  %j_4 = add i64 0, 0
   br label %__bb_if_join6
 __bb_if_then6:
   %t64 = add i64 0, 0
   br label %__bb_loop_header3
 __bb_loop_header3:
-  %j_4 = phi i64 [ %t64, %__bb_if_then6 ], [ %t92, %__bb_if_join7 ]
-  %k_5 = phi %DriftString [ %__arc1, %__bb_if_then6 ], [ %k_9, %__bb_if_join7 ]
+  %j_2 = phi i64 [ %t64, %__bb_if_then6 ], [ %t92, %__bb_if_join7 ]
+  %k_3 = phi %DriftString [ %__arc1, %__bb_if_then6 ], [ %k_4, %__bb_if_join7 ]
   br label %__bb_loop_body3
 __bb_loop_body3:
-  %t67 = icmp slt i64 %j_4, %t3
+  %t67 = icmp slt i64 %j_2, %t3
   br i1 %t67, label %__bb_if_then7, label %__bb_if_else5
 __bb_if_else5:
   br label %__bb_loop_exit3
@@ -98963,8 +98963,8 @@ __bb_loop_exit3:
   call void @drift_free_array(ptr %rawptr22)
   br label %__bb_if_join6
 __bb_if_join6:
-  %j_1 = phi i64 [ %j_2, %__bb_if_else4 ], [ %j_4, %__bb_loop_exit3 ]
-  %k_3 = phi %DriftString [ %__arc1, %__bb_if_else4 ], [ %k_5, %__bb_loop_exit3 ]
+  %j_5 = phi i64 [ %j_2, %__bb_loop_exit3 ], [ %j_4, %__bb_if_else4 ]
+  %k_8 = phi %DriftString [ %k_3, %__bb_loop_exit3 ], [ %__arc1, %__bb_if_else4 ]
   %t129 = load ptr, ptr %self__addr
   %t130 = load %Struct_std_2Econtainers_HashMapCore_5874754ecfa41549, ptr %t129
   %t131 = extractvalue %Struct_std_2Econtainers_HashMapCore_5874754ecfa41549 %t130, 4
@@ -98976,22 +98976,22 @@ __bb_if_join6:
   %t137 = add i1 0, 1
   %zero_str23 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc3 = insertvalue %DriftString %zero_str23, ptr null, 1
-  call void @drift_string_release(%DriftString %k_3)
+  call void @drift_string_release(%DriftString %k_8)
   ret i1 %t137
 __bb_if_then7:
   %t68 = load ptr, ptr %self__addr
-  %t70 = call i64 @"std.containers::HashMapCore<K, V, B>::state_at__inst__79881f6729d36ea6"(ptr %t68, i64 %j_4)
+  %t70 = call i64 @"std.containers::HashMapCore<K, V, B>::state_at__inst__79881f6729d36ea6"(ptr %t68, i64 %j_2)
   %t72 = add i64 0, 1
   %t73 = icmp eq i64 %t70, %t72
   br i1 %t73, label %__bb_if_then8, label %__bb_if_join8
 __bb_if_then8:
   %t74 = load ptr, ptr %self__addr
-  %t76 = call %DriftString @"std.containers::HashMapCore<K, V, B>::read_key__inst__20490ca331d4eeee"(ptr %t74, i64 %j_4)
+  %t76 = call %DriftString @"std.containers::HashMapCore<K, V, B>::read_key__inst__20490ca331d4eeee"(ptr %t74, i64 %j_2)
   %zero_str24 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc7 = insertvalue %DriftString %zero_str24, ptr null, 1
-  call void @drift_string_release(%DriftString %k_5)
+  call void @drift_string_release(%DriftString %k_3)
   %t77 = load ptr, ptr %self__addr
-  %t79 = call %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae @"std.containers::HashMapCore<K, V, B>::read_value__inst__22cc108ec215a970"(ptr %t77, i64 %j_4)
+  %t79 = call %Variant_std_2Ejson_JsonNode_758cffa9cfe625ae @"std.containers::HashMapCore<K, V, B>::read_value__inst__22cc108ec215a970"(ptr %t77, i64 %j_2)
   %t80 = load ptr, ptr %self__addr
   %zero_str25 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc8 = insertvalue %DriftString %zero_str25, ptr null, 1
@@ -99002,9 +99002,9 @@ __bb_if_then8:
 __bb_if_join9:
   br label %__bb_if_join8
 __bb_if_join8:
-  %k_9 = phi %DriftString [ %k_5, %__bb_if_then7 ], [ %__arc8, %__bb_if_join9 ]
+  %k_4 = phi %DriftString [ %k_3, %__bb_if_then7 ], [ %__arc8, %__bb_if_join9 ]
   %t91 = add i64 0, 1
-  %t92 = add i64 %j_4, %t91
+  %t92 = add i64 %j_2, %t91
   br label %__bb_if_join7
 __bb_if_join7:
   br label %__bb_loop_header3
@@ -99329,10 +99329,10 @@ __bb_if_then4:
 __bb_if_then5:
   br label %__bb_if_join5
 __bb_if_join5:
-  %first_tomb_4 = phi i64 [ %first_tomb_2, %__bb_if_then4 ], [ %idx_2, %__bb_if_then5 ]
+  %first_tomb_3 = phi i64 [ %first_tomb_2, %__bb_if_then4 ], [ %idx_2, %__bb_if_then5 ]
   br label %__bb_if_join4
 __bb_if_join4:
-  %first_tomb_5 = phi i64 [ %first_tomb_4, %__bb_if_join5 ], [ %first_tomb_2, %__bb_if_join6 ]
+  %first_tomb_5 = phi i64 [ %first_tomb_3, %__bb_if_join5 ], [ %first_tomb_2, %__bb_if_join6 ]
   %t55 = add i64 0, 1
   %t56 = add i64 %idx_2, %t55
   %t58 = srem i64 %t56, %t3
@@ -99516,17 +99516,17 @@ __bb_if_else4:
   call void @drift_free_array(ptr %rawptr18)
   %rawptr19 = extractvalue %Struct_std_2Emem_RawBuffer_d10426ae10844bad %t124, 0
   call void @drift_free_array(ptr %rawptr19)
-  %j_2 = add i64 0, 0
+  %j_4 = add i64 0, 0
   br label %__bb_if_join6
 __bb_if_then6:
   %t64 = add i64 0, 0
   br label %__bb_loop_header3
 __bb_loop_header3:
-  %j_4 = phi i64 [ %t64, %__bb_if_then6 ], [ %t92, %__bb_if_join7 ]
-  %k_5 = phi %DriftString [ %__arc1, %__bb_if_then6 ], [ %k_9, %__bb_if_join7 ]
+  %j_2 = phi i64 [ %t64, %__bb_if_then6 ], [ %t92, %__bb_if_join7 ]
+  %k_3 = phi %DriftString [ %__arc1, %__bb_if_then6 ], [ %k_4, %__bb_if_join7 ]
   br label %__bb_loop_body3
 __bb_loop_body3:
-  %t67 = icmp slt i64 %j_4, %t3
+  %t67 = icmp slt i64 %j_2, %t3
   br i1 %t67, label %__bb_if_then7, label %__bb_if_else5
 __bb_if_else5:
   br label %__bb_loop_exit3
@@ -99554,8 +99554,8 @@ __bb_loop_exit3:
   call void @drift_free_array(ptr %rawptr22)
   br label %__bb_if_join6
 __bb_if_join6:
-  %j_1 = phi i64 [ %j_2, %__bb_if_else4 ], [ %j_4, %__bb_loop_exit3 ]
-  %k_3 = phi %DriftString [ %__arc1, %__bb_if_else4 ], [ %k_5, %__bb_loop_exit3 ]
+  %j_5 = phi i64 [ %j_2, %__bb_loop_exit3 ], [ %j_4, %__bb_if_else4 ]
+  %k_8 = phi %DriftString [ %k_3, %__bb_loop_exit3 ], [ %__arc1, %__bb_if_else4 ]
   %t129 = load ptr, ptr %self__addr
   %t130 = load %Struct_std_2Econtainers_HashMapCore_54fcd320e6cd57a4, ptr %t129
   %t131 = extractvalue %Struct_std_2Econtainers_HashMapCore_54fcd320e6cd57a4 %t130, 4
@@ -99567,22 +99567,22 @@ __bb_if_join6:
   %t137 = add i1 0, 1
   %zero_str23 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc3 = insertvalue %DriftString %zero_str23, ptr null, 1
-  call void @drift_string_release(%DriftString %k_3)
+  call void @drift_string_release(%DriftString %k_8)
   ret i1 %t137
 __bb_if_then7:
   %t68 = load ptr, ptr %self__addr
-  %t70 = call i64 @"std.containers::HashMapCore<K, V, B>::state_at__inst__10051fc56ad54352"(ptr %t68, i64 %j_4)
+  %t70 = call i64 @"std.containers::HashMapCore<K, V, B>::state_at__inst__10051fc56ad54352"(ptr %t68, i64 %j_2)
   %t72 = add i64 0, 1
   %t73 = icmp eq i64 %t70, %t72
   br i1 %t73, label %__bb_if_then8, label %__bb_if_join8
 __bb_if_then8:
   %t74 = load ptr, ptr %self__addr
-  %t76 = call %DriftString @"std.containers::HashMapCore<K, V, B>::read_key__inst__6d6edba5146156a8"(ptr %t74, i64 %j_4)
+  %t76 = call %DriftString @"std.containers::HashMapCore<K, V, B>::read_key__inst__6d6edba5146156a8"(ptr %t74, i64 %j_2)
   %zero_str24 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc7 = insertvalue %DriftString %zero_str24, ptr null, 1
-  call void @drift_string_release(%DriftString %k_5)
+  call void @drift_string_release(%DriftString %k_3)
   %t77 = load ptr, ptr %self__addr
-  %t79 = call %DriftDiagnosticValue @"std.containers::HashMapCore<K, V, B>::read_value__inst__825dafa628588f0d"(ptr %t77, i64 %j_4)
+  %t79 = call %DriftDiagnosticValue @"std.containers::HashMapCore<K, V, B>::read_value__inst__825dafa628588f0d"(ptr %t77, i64 %j_2)
   %t80 = load ptr, ptr %self__addr
   %zero_str25 = insertvalue %DriftString zeroinitializer, i64 0, 0
   %__arc8 = insertvalue %DriftString %zero_str25, ptr null, 1
@@ -99593,9 +99593,9 @@ __bb_if_then8:
 __bb_if_join9:
   br label %__bb_if_join8
 __bb_if_join8:
-  %k_9 = phi %DriftString [ %k_5, %__bb_if_then7 ], [ %__arc8, %__bb_if_join9 ]
+  %k_4 = phi %DriftString [ %k_3, %__bb_if_then7 ], [ %__arc8, %__bb_if_join9 ]
   %t91 = add i64 0, 1
-  %t92 = add i64 %j_4, %t91
+  %t92 = add i64 %j_2, %t91
   br label %__bb_if_join7
 __bb_if_join7:
   br label %__bb_loop_header3

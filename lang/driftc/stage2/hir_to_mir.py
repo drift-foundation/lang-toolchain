@@ -938,6 +938,7 @@ class HIRToMIR:
 		local: str,
 		verdict: str,
 		reason: str,
+		field_path: tuple[tuple[str, int], ...] = (),
 	) -> None:
 		"""Phase 3A observational hook.  No-op when the ledger flag is off.
 
@@ -948,7 +949,13 @@ class HIRToMIR:
 		chose MustNotDrop.  The reporter queries `state_pre(point)`,
 		which for this cursor is `post_instr[(block, len-1)]` and
 		therefore reflects the local's state immediately before the
-		decision — not affected by the site's own subsequent emissions."""
+		decision — not affected by the site's own subsequent emissions.
+
+		`field_path` (Phase 4 step 3b): empty tuple `()` for whole-
+		local records (existing); non-empty tuple of `(ctor_name,
+		field_index)` projections for per-field records.  When non-
+		empty, the reporter compares against `field_verdict_at`
+		instead of `verdict_at`."""
 		if self._drop_decision_log is None:
 			return
 		self._drop_decision_log.record(
@@ -957,6 +964,7 @@ class HIRToMIR:
 			local=local,
 			verdict=verdict,
 			reason=reason,
+			field_path=field_path,
 		)
 
 	def _match_scrutinee_drop_verdict(
@@ -1861,28 +1869,20 @@ class HIRToMIR:
 					# that change to be reviewed against PARTIAL-MOVE
 					# CLEANUP deliberately — it will NOT silently stay
 					# correct here.
-					if arm_scrut_local is not None:
-						# Step 4: route through the match-scrutinee
-						# verdict helper.  Verdict here is MustNotDrop
-						# (per-field cleanup runs instead); helper's
-						# reason tag matches the historical
-						# REASON_FIELD_MOVED.
-						_match_verdict, _match_reason = self._match_scrutinee_drop_verdict(
-							arm_scrut_local=arm_scrut_local,
-							arm_scrut_payload_moved=True,
-							scrut_ty=scrut_ty,
-						)
-						_match_verdict_str = (
-							_ledger_events.VERDICT_MUST_DROP
-							if _match_verdict is _DropVerdict.MUST_DROP
-							else _ledger_events.VERDICT_MUST_NOT_DROP
-						)
-						self._record_drop_decision(
-							site=_ledger_events.SITE_MATCH_CLEANUP,
-							local=arm_scrut_local,
-							verdict=_match_verdict_str,
-							reason=_match_reason,
-						)
+					# Phase 4 step 3b: replace the single whole-scrutinee
+					# REASON_FIELD_MOVED record with per-field records
+					# emitted inside the cleanup loop below.  The
+					# whole-scrutinee record was always a summary of
+					# "some field was moved"; per-field records carry
+					# the same information at finer grain and let the
+					# aggregator distinguish per_field_still_disagrees
+					# (per-field comparison failed) from per_field_gap
+					# (ledger could not classify; whole-local-only
+					# records fall here).  Removing the summary lets
+					# bucket 1 drop materially as the per-field
+					# records flow into agree (most cases) or
+					# per_field_still_disagrees (the residual K wants
+					# visible).
 					if (
 						arm.ctor is not None
 						and not scrut_is_ref
@@ -1890,10 +1890,55 @@ class HIRToMIR:
 					):
 						arm_def = inst.arms_by_name[arm.ctor]
 						for cleanup_fidx, cleanup_fty in enumerate(arm_def.field_types):
+							_field_path = ((arm.ctor, int(cleanup_fidx)),)
 							if cleanup_fidx in moved_field_indices:
+								# Site decision: field was moved by
+								# binder; slot drop is skipped to
+								# avoid double-drop.  Ledger should
+								# agree (per-field state MovedOut from
+								# VariantGetFieldAddr in the binder
+								# loop).
+								self._record_drop_decision(
+									site=_ledger_events.SITE_MATCH_CLEANUP,
+									local=arm_scrut_local if arm_scrut_local is not None else "",
+									verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+									reason=_ledger_events.REASON_FIELD_MOVED,
+									field_path=_field_path,
+								)
 								continue
 							if not self._needs_runtime_drop(cleanup_fty):
+								# Site decision: field's type doesn't
+								# need drop; skip.  Ledger should
+								# agree (POD short-circuit in
+								# `classify` — needs_drop=False
+								# returns MustNotDrop regardless of
+								# raw state, even if 3a's
+								# conservative VariantGetFieldAddr
+								# over-reported the field as
+								# MovedOut).
+								self._record_drop_decision(
+									site=_ledger_events.SITE_MATCH_CLEANUP,
+									local=arm_scrut_local if arm_scrut_local is not None else "",
+									verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+									reason=_ledger_events.REASON_FIELD_NOT_DROP_NEEDING,
+									field_path=_field_path,
+								)
 								continue
+							# Site decision: emit the slot drop.  Field
+							# still owns its +1 inside the variant.
+							# Ledger should agree (state Live, needs
+							# drop) UNLESS 3a's conservative
+							# VariantGetFieldAddr over-reporting
+							# triggered MovedOut for this field —
+							# that lands in per_field_still_disagrees
+							# and is the residual K wants visible.
+							self._record_drop_decision(
+								site=_ledger_events.SITE_MATCH_CLEANUP,
+								local=arm_scrut_local if arm_scrut_local is not None else "",
+								verdict=_ledger_events.VERDICT_MUST_DROP,
+								reason=_ledger_events.REASON_FIELD_NEEDS_DROP,
+								field_path=_field_path,
+							)
 							slot_addr = self.b.new_temp()
 							self.b.emit(
 								M.VariantGetFieldAddr(

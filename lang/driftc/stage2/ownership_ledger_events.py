@@ -84,10 +84,14 @@ class DropDecisionEvent:
 	drop would land if emitted — the reporter queries ledger state
 	immediately *before* that point (see `LiveStateMap.verdict_at`).
 
-	`local` is the named local under consideration.  Field-move decisions
-	use the synthesized binder local name (e.g. the `__match_binder_*`
-	form) rather than an abstract "scrutinee.field" path, because the
-	ledger tracks named locals only.
+	`local` is the named local under consideration.
+
+	`field_path` (Phase 4 step 3b): optional sequence of
+	`(ctor_name, field_index)` projections from `local` for per-field
+	records.  Empty tuple `()` = whole-local record (existing
+	behaviour, preserved for back-compat).  Non-empty = per-field
+	record; the reporter compares against
+	`LiveStateMap.field_verdict_at`.
 	"""
 	site: str
 	fn_name: str
@@ -95,6 +99,7 @@ class DropDecisionEvent:
 	local: str
 	verdict: str
 	reason: str
+	field_path: Tuple[Tuple[str, int], ...] = ()
 
 
 @dataclass
@@ -118,6 +123,7 @@ class DropDecisionLog:
 		local: str,
 		verdict: str,
 		reason: str,
+		field_path: Tuple[Tuple[str, int], ...] = (),
 	) -> None:
 		self.events.append(
 			DropDecisionEvent(
@@ -127,6 +133,7 @@ class DropDecisionLog:
 				local=local,
 				verdict=verdict,
 				reason=reason,
+				field_path=field_path,
 			)
 		)
 
