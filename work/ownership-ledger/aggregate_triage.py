@@ -13,16 +13,31 @@ buckets every record into exactly ONE of:
   2. droppolicy_approximation — driver-side has_drop divergence cases
   3. path_dependent           — `classification == "path_dependent"`
   4. semantic_equivalent      — `classification == "semantic_equivalent"`
-  5. implicit_return_move_gap — site marks local moved (HIR knew about
-                                ownership leaving via return) but MIR
-                                only emitted LoadLocal+Return so the
-                                ledger sees the local as still Live.
-                                NOT a site leak and NOT a ledger
-                                lattice bug — it is a missing explicit
-                                ownership edge in MIR.  3B/3C input:
-                                either widen the ledger transfer
-                                function for return-of-owned-local, or
-                                make MIR's return ownership explicit.
+  5. moved_locals_return_path — site 1 (scope_drop) says "local
+                                moved" at a scope-drop cursor on a
+                                path where the ledger sees the local
+                                still Live.
+                                Original diagnosis (bucket name
+                                "implicit_return_move_gap", retained
+                                as a legacy alias in the filter below)
+                                suspected a missing MIR ownership edge
+                                for LoadLocal+Return.  The Phase 4
+                                Return-as-move lattice enhancement
+                                closed that theoretical gap and its
+                                unit-tested carrier shapes — but the
+                                residual records observed in practice
+                                are a different disagreement class:
+                                HIR's `_moved_locals` is function-wide
+                                / path-insensitive, so site 1 reports
+                                "moved" on paths where the local is
+                                actually still Live (typically error
+                                arms that return an error value, not
+                                the owned local).  3C drop-flag
+                                insertion cured the RUNTIME leak; the
+                                TELEMETRY disagreement persists until
+                                site 1 queries the ledger instead of
+                                `_moved_locals`.  NOT a site leak and
+                                NOT a ledger lattice bug.
   6. real_disagreement        — true site-vs-ledger disagreement after
                                 buckets 1–5 are stripped.  Must be
                                 empty before 3B begins.
@@ -139,12 +154,18 @@ def bucket_for(rec: dict) -> str:
 		marker in rec.get("local", "") for marker in ("__dv", "Diagnostic", "DiagnosticValue")
 	):
 		return "droppolicy_approximation"
-	# 5. implicit_return_move_gap — HIR-marked move that MIR represents
-	#    as LoadLocal+Return (no MoveOut), so the ledger cannot infer
-	#    the ownership transfer.  Detection: site says no drop with
-	#    reason "moved", ledger sees the local as Live.  This is a
-	#    missing explicit ownership edge in MIR, not a site leak; do
-	#    not let it pollute bucket 6.
+	# 5. moved_locals_return_path (filter key kept as
+	#    "implicit_return_move_gap" for stability — the legacy name
+	#    reflected the original diagnosis).  Detection: site 1 says no
+	#    drop with reason "moved", ledger sees the local as Live.
+	#    Post-Phase-4-Return-as-move, the LoadLocal+Return theoretical
+	#    gap is closed and the residual records come from a different
+	#    class: HIR's `_moved_locals` over-reports "moved" on paths
+	#    where the local is still Live (typically error arms that
+	#    return an error value, not the owned local).  Not a site leak,
+	#    not a ledger lattice bug; cured at runtime by 3C drop flags;
+	#    telemetry clears only when site 1 consults the ledger instead
+	#    of `_moved_locals`.  Do not let it pollute bucket 6.
 	if (
 		classification == "ledger_stricter"
 		and site_reason == "moved"
@@ -197,7 +218,7 @@ def main() -> int:
 	lines.append(f"| 2 | droppolicy_approximation | {bucket_counts.get('droppolicy_approximation', 0)} | Quarantined — 3B must NOT consume `has_drop` |")
 	lines.append(f"| 3 | path_dependent | {bucket_counts.get('path_dependent', 0)} | Direct input to 3C design |")
 	lines.append(f"| 4 | semantic_equivalent | {bucket_counts.get('semantic_equivalent', 0)} | Tolerated (Tombstoned drop = no-op) |")
-	lines.append(f"| 5 | implicit_return_move_gap | {bucket_counts.get('implicit_return_move_gap', 0)} | Missing MIR ownership edge for LoadLocal+Return; 3B/3C input, NOT a site leak |")
+	lines.append(f"| 5 | implicit_return_move_gap | {bucket_counts.get('implicit_return_move_gap', 0)} | Site 1 over-reports `moved` on paths where ledger sees Live.  Name is legacy — the original LoadLocal+Return gap is closed (Phase 4 Return-as-move); residual is path-insensitive `_moved_locals` over-reports, 3C-handled at runtime.  NOT a site leak. |")
 	lines.append(f"| 6 | real_disagreement | **{gate_block}** | Gate-blocking: must be empty before 3B |")
 	lines.append(f"|   | (agree)          | {bucket_counts.get('agree', 0)} | — |")
 	lines.append("")

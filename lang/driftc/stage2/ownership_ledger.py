@@ -443,6 +443,27 @@ def _walk_block(
 	`VariantGetField` (by-value extraction) and `VariantGetFieldAddr`
 	followed by the binder LoadRef/StoreLocal/MoveOut chain.  See
 	`_apply_field_state` for the exact MIR-shape detection rules.
+
+	Phase 4 (Return-as-move): a pre-scan identifies the index of a
+	`LoadLocal(_, X)` whose dest transitively feeds the block's
+	`Return` terminator (and is not consumed by any other instruction
+	in the block).  At that index the ledger transitions X →
+	`MOVED_OUT` as if a `MoveOut(_, X, _)` had been emitted.
+	Transition lands AT the LoadLocal index so per-instruction
+	snapshots at any cursor emitted afterward (notably site 1's
+	scope-drop cursor, which runs AFTER `_lower_return_value`) read
+	the consumption via `state_pre`, not just `block_out`.  See
+	`_identify_return_consumed_load` for the trace + uniqueness rule.
+
+	Scope note: this closes the modeled `LoadLocal+Return` gap and
+	its unit-tested carrier shapes.  It does NOT eliminate the
+	observed bucket-5 residual today — those records come from a
+	different disagreement class (site 1 over-reports "moved" on
+	paths where the local is still Live, due to HIR's path-
+	insensitive `_moved_locals`).  The Return-as-move enhancement
+	is prerequisite groundwork, not a direct observe-bucket
+	reduction.  See `work/ownership-ledger/aggregate_triage.py`
+	bucket-5 comment for the updated characterisation.
 	"""
 	state = dict(in_state)
 	field_state: Dict[Tuple[str, FieldPath], LiveState] = dict(field_in_state)
@@ -450,6 +471,7 @@ def _walk_block(
 	field_per_instr: List[Tuple[int, Dict[Tuple[str, FieldPath], LiveState]]] = []
 	zero_values: Set[str] = set()
 	field_addr_dests: Dict[str, Tuple[str, str, int]] = {}
+	return_consumed = _identify_return_consumed_load(block, tracked)
 	for idx, ins in enumerate(block.instructions):
 		_apply(ins, state, tracked, zero_values)
 		_apply_field_state(
@@ -460,9 +482,109 @@ def _walk_block(
 			addr_of_dest_to_local,
 			field_addr_dests,
 		)
+		if return_consumed is not None and return_consumed[0] == idx:
+			# Phase 4: this LoadLocal feeds the block's Return
+			# terminator and has no other consumers — treat as a
+			# `MoveOut`-equivalent.  Transition lands AT the
+			# LoadLocal index so any later cursor in the same block
+			# (e.g. site 1's scope-drop emitted after the return-
+			# value lowering) reads `MOVED_OUT` via `state_pre`.
+			state[return_consumed[1]] = LiveState.MOVED_OUT
+			_clear_local_field_state(field_state, return_consumed[1])
 		per_instr.append((idx, dict(state)))
 		field_per_instr.append((idx, dict(field_state)))
 	return state, per_instr, field_state, field_per_instr
+
+
+def _identify_return_consumed_load(
+	block: M.BasicBlock,
+	tracked: Set[str],
+) -> Optional[Tuple[int, str]]:
+	"""Return `(loadlocal_index, source_local)` if the block's
+	`Return` terminator consumes its operand from a `LoadLocal(_, X)`
+	in this block (transitively through `AssignSSA` chains) AND
+	nothing outside the alias chain reads any value in the chain.
+	Otherwise `None`.
+
+	Single-block analysis only — alias propagation across blocks
+	would need phi/predecessor reasoning; deferred until a real
+	carrier shape requires it.
+
+	The "no external use" rule is what enforces K's "non-return
+	uses must not count as transfer."  A `LoadLocal` whose dest is
+	stored into another local, copied, or otherwise read outside the
+	chain is left alone.
+	"""
+	term = getattr(block, "terminator", None)
+	if not isinstance(term, M.Return):
+		return None
+	val = term.value
+	if val is None:
+		return None
+	chain_aliases: Set[str] = {val}
+	alias = val
+	while True:
+		moved = False
+		for prev in reversed(block.instructions):
+			if isinstance(prev, M.AssignSSA) and prev.dest == alias:
+				alias = prev.src
+				chain_aliases.add(alias)
+				moved = True
+				break
+		if not moved:
+			break
+	loadlocal_idx: Optional[int] = None
+	source_local: Optional[str] = None
+	for idx in range(len(block.instructions) - 1, -1, -1):
+		ins = block.instructions[idx]
+		if isinstance(ins, M.LoadLocal) and ins.dest == alias:
+			if ins.local in tracked:
+				loadlocal_idx = idx
+				source_local = ins.local
+			break
+	if loadlocal_idx is None or source_local is None:
+		return None
+	# External-use check: any non-AssignSSA-on-the-chain instruction
+	# (other than the LoadLocal itself) that reads any alias in the
+	# chain disqualifies the consumption.
+	for j, other in enumerate(block.instructions):
+		if j == loadlocal_idx:
+			continue
+		if isinstance(other, M.AssignSSA) and other.dest in chain_aliases:
+			# Chain link — its read of `src` is part of the chain.
+			continue
+		for v in _iter_value_uses(other):
+			if v in chain_aliases:
+				return None
+	return (loadlocal_idx, source_local)
+
+
+def _iter_value_uses(ins: M.MInstr) -> List[str]:
+	"""Yield the `ValueId`s an instruction reads.  Excludes outputs
+	(`dest`) and non-value identifiers (`local`, block-name targets,
+	type ids — those are int).  Used by the Return-as-move
+	external-use check, which only cares whether a particular SSA
+	value-id appears as an *input* to any instruction in the block.
+	"""
+	import dataclasses
+	uses: List[str] = []
+	if not dataclasses.is_dataclass(ins):
+		return uses
+	for f in dataclasses.fields(ins):
+		if f.name in ("dest", "local", "name", "ty", "field_ty",
+				"variant_ty", "inner_ty", "ctor", "field_index",
+				"is_mut", "fn_id", "method_name", "kind",
+				"then_target", "else_target", "target", "ordinal",
+				"span", "loc"):
+			continue
+		val = getattr(ins, f.name, None)
+		if isinstance(val, str):
+			uses.append(val)
+		elif isinstance(val, list):
+			for sub in val:
+				if isinstance(sub, str):
+					uses.append(sub)
+	return uses
 
 
 def _apply(

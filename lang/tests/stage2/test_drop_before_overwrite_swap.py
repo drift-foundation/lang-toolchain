@@ -1,28 +1,37 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 3B step 1 — `drop_before_overwrite` consumer-swap pin.
+`drop_before_overwrite` (site 4) — consumer-swap + Tier-1 promotion pin.
 
-Pins the consumer-swap contract for site 4 in `string_arc.py`'s
-StoreLocal-rewrite loop:
+This file pins BOTH historical milestones on site 4 in `string_arc.py`'s
+StoreLocal-rewrite loop.  They landed in sequence and the tests here
+still cover each contract:
 
+Phase 3B step 1 — consumer-swap:
 - The drop verdict at every `StoreLocal(L, _)` for a destructible
-  non-array, non-nullsafe local is now read from the 3A ledger's
-  `verdict_at` (with `needs_drop` from `compute_drop_policy` — the
+  non-array, non-nullsafe local is read from the 3A ledger's
+  `verdict_at`, with `needs_drop` from `compute_drop_policy` (the
   canonical `DropPolicy.needs_drop` axis, NOT raw `TypeTable.has_drop`).
-- For `MustDrop` / `MustNotDrop` verdicts, the ledger is authoritative.
-- For `PathDependent` (rare in current Drift; smoke + e2e observe
-  both showed 100 % verdict agreement at this site), site 4 now
-  RAISES instead of falling back — the `initialized_destructibles`
-  legacy state was retired in the Phase 4 Tier-1 promotion, and the
-  raise is the proof-obligation tripwire K required.  If this site
-  ever sees PathDependent in real code the raise triggers an
-  investigation before the regression reaches production.
-- The site continues to emit observe-mode telemetry records so that
-  observe runs after the swap can confirm no new bucket-5/6 class is
-  introduced.
+- For `MustDrop` / `MustNotDrop` the ledger is authoritative.
+- The site continues to emit observe-mode telemetry records so
+  observe runs can catch any new bucket-5/6 class a swap introduces.
 
-Tests in this file build minimal MIR fixtures and exercise the swap
-through `insert_string_arc` directly, asserting MIR-shape outcomes.
+Phase 4 Tier-1 promotion (2026-04-23):
+- The site no longer authors or consults the legacy
+  `initialized_destructibles` dataflow fallback — the set is deleted
+  from `string_arc.py`, along with its post-StoreLocal `.add` and
+  post-MoveOut `.discard` maintenance.  Site 4 is pure ledger
+  authority.
+- Cases that previously downgraded to the fallback now raise
+  `RuntimeError` as proof-obligation tripwires:
+  - `_ledger is None` — caller invoked `insert_string_arc` without
+    attaching the driver-built ledger.
+  - `verdict is PathDependent` — the lattice produced `MaybeUninit`
+    at a StoreLocal point.  Unreached across 1031 e2e cases at
+    promotion time; raise fires if a future change breaks that.
+
+Tests in this file build minimal MIR fixtures and exercise both
+contracts through `insert_string_arc` directly, asserting MIR-shape
+outcomes.
 """
 
 from __future__ import annotations

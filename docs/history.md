@@ -1,5 +1,71 @@
 # Drift development history
 
+## 2026-04-23
+- **Phase 4 ownership-ledger rollout — release 0.31.9 (ABI
+  unchanged at 10).**  Consolidates the remaining single-branch
+  ownership-ledger work into a release and defers the unfinished
+  architectural pieces (site 1 authority, site 3 Tier-1 promotion,
+  `_moved_locals` retirement) to a follow-up branch.  See
+  `work/ownership-ledger/branch-closure-memo.md` for the full
+  closure assessment.
+
+  Shipped in 0.31.9:
+
+  - **Phase 4 step 3a** — per-field state hooks on `LiveStateMap`:
+    `field_state_pre`, `field_state_post`, `field_verdict_at`.
+    Transfer rules for `VariantGetField` (by-value) and
+    `VariantGetFieldAddr` (conservative immediate-MovedOut; the
+    over-report is documented and pinned).
+  - **Phase 4 step 3b** — site-2 `match_cleanup` per-field
+    telemetry: partial-move branch now emits one
+    `DropDecisionEvent` per cleanup field (non-empty `field_path`)
+    instead of a single whole-scrutinee summary.  Reporter
+    compares via `field_verdict_at`; aggregator adds bucket 0d
+    `per_field_still_disagrees` for non-agree per-field records.
+    Bucket 1 `per_field_gap` dropped 360 → 0 in observe.
+  - **Phase 4 step 3c** — site-2 per-field ledger VETO via new
+    `lang/driftc/stage2/ownership_ledger_trim.py`.  Tier 2 split
+    authority: legacy inline decisions still author emission; the
+    ledger can excise drops it classifies `MUST_NOT_DROP` after
+    `build_ledger`.  Zero trims in 1031 e2e cases (site and
+    ledger agree on every real per-field decision).
+  - **Phase 4 Tier-1 promotion of `drop_before_overwrite`
+    (site 4 in `string_arc.py`)** — `initialized_destructibles`
+    dataflow fallback RETIRED.  Site authors nothing; ledger is
+    sole authority via `verdict_at(...)` with
+    `compute_drop_policy(type_table, ty).needs_drop`.
+    Proof-obligation tripwires: `RuntimeError` raised if
+    `_ledger is None` or verdict is `PathDependent`.  Pinned by
+    `test_drop_before_overwrite_swap.py::test_tier1_raises_*`.
+    Zero tripwire hits across 1031 e2e cases.
+  - **Phase 4 Return-as-move in `LiveStateMap`** — lattice now
+    models `LoadLocal(_, X); Return(t)` (including alias chains
+    through `AssignSSA`) as a consumption of `X`, with an
+    external-use check so non-return uses don't count.  Closes
+    the modeled theoretical gap and its unit-tested carriers;
+    does NOT reduce observed bucket 5 (those residual records
+    are a different class — path-insensitive `_moved_locals`
+    over-reports, not missing `LoadLocal+Return` edges).
+    Prerequisite groundwork for any future site 3 promotion.
+  - **Triage artifact relocation** — all compiler-generated IR,
+    stderr logs, and triage scratch moved from
+    `lang/tests/codegen/e2e/*/.triage_build/` and
+    `work/ownership-ledger/triage-raw/` to
+    `build/ownership-ledger/triage/`.  `.gitignore` gains a
+    defense-in-depth rule for `lang/tests/codegen/e2e/*/.triage_build`.
+
+  Observe state at release (1031 e2e cases, 9748 unique
+  decisions): bucket 6 `real_disagreement` = **0** (gate met);
+  agree = 9001.  Stage2 231/231, ledger_3c_acceptance 2/2,
+  driver suite 1056/1056.
+
+  **Not in 0.31.9, deferred to follow-up branch:**
+  single global ownership authority, `_moved_locals` retirement,
+  site 1 Tier-1 promotion, site 3 Tier-1 promotion, fully
+  explicit RAII tombstone/cleanup end-state.  See the closure
+  memo for the blocker list and why each remaining move is
+  architectural (not a narrow patch).
+
 ## 2026-04-22
 - **Phase 3C — runtime drop-flag insertion for path-dependent
   destructible locals (0.31.8, ABI unchanged at 10).**  Closes the
