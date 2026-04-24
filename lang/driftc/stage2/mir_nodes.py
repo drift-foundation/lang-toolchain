@@ -411,6 +411,53 @@ class CleanupHook(MInstr):
 
 
 @dataclass
+class MatchCleanupHook(MInstr):
+	"""Phase 4 site-2 per-field cleanup-authoring marker (patch 5).
+
+	Placed by HIR→MIR at the per-arm partial-move cleanup point that
+	legacy site 2 captured as `_cleanup_point` — immediately before
+	the legacy `VariantGetFieldAddr + LoadRef + StoreLocal +
+	arm-end MoveOut + DropValue` chain.
+
+	HIR→MIR pre-allocates one `__match_partial_drop_N` local per
+	surviving candidate (after the legacy `moved_field_indices` /
+	`_needs_runtime_drop` filter), registers it via
+	`_register_drop_local` so later site-1 CleanupHooks in the same
+	scope see it as a candidate, then emits this hook carrying the
+	`(drop_tmp_local, field_index, field_ty)` triples plus the
+	arm-end program point.
+
+	Consumed by `lang/driftc/stage2/match_cleanup_authoring.py` BEFORE
+	`cleanup_authoring` (site 1) runs, with a ledger rebuild in
+	between so site 1 sees the authored per-field transitions:
+
+	  - For each candidate, `field_verdict_at((ctor, field_index),
+	    ...)` is queried.  On MUST_DROP, the canonical chain is
+	    authored: `VariantGetFieldAddr + LoadRef + StoreLocal(drop_tmp)`
+	    at the hook position, `MoveOut(drop_tmp) + DropValue` at the
+	    `arm_end_block / arm_end_index`.  On MUST_NOT_DROP or
+	    PathDependent, NO chain is emitted; `drop_tmp` stays `UNINIT`
+	    and site-1 hooks in the arm body see
+	    `classify(UNINIT, needs_drop=True) = MUST_NOT_DROP` — no
+	    spurious drop.
+
+	Authority boundary for patch 5: HIR→MIR still decides the
+	candidate SET (legacy filter), the ledger decides emit-vs-skip
+	for carried candidates.  Broadening to full unfiltered
+	consideration is a separate follow-up outside patch 5.
+	"""
+	scope_id: int
+	arm_scrut_local: str
+	arm_scrut_ptr_local: ValueId
+	variant_ty: TypeId
+	ctor: str
+	# (drop_tmp_local, field_index, field_ty) triples in emission order.
+	candidates: List[tuple]
+	arm_end_block: str
+	arm_end_index: int
+
+
+@dataclass
 class MoveOut(MInstr):
 	"""dest = move local (read local, then reset storage to zero)."""
 	dest: ValueId

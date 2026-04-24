@@ -1114,6 +1114,15 @@ class HIRToMIR:
 		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
 
 	def _emit_scope_drops(self, *, scope_index: int) -> None:
+		"""Legacy inline scope-drop emission — ORPHAN (no production
+		callers as of 2026-04-24, retained only for the unit test at
+		`lang/tests/stage2/test_has_drop_cache_clear_before_mir_lowering.py`).
+		Production HIR→MIR sites all emit `M.CleanupHook` via
+		`_emit_scope_cleanup_hook`; `cleanup_authoring` then queries
+		`verdict_at` and emits the canonical MoveOut+DropValue pairs.
+		Removal is gated on retiring the helper test (or rewriting
+		it against `_emit_scope_cleanup_hook`).  Scheduled with the
+		patch-6 `_moved_locals` retirement work on the Path Y plan."""
 		if not self._scope_stack:
 			return
 		if scope_index < 0:
@@ -1181,17 +1190,21 @@ class HIRToMIR:
 		MIR legacy would have, modulo the authority shift from
 		`_moved_locals` to `verdict_at`.
 
-		Migration coverage today:
-		- patch 1 (`scope_index=0`): the seven function-exit call
-		  sites in `_visit_stmt_HReturn` / `_visit_stmt_HThrow`.
-		- patch 3 (`scope_index=len(stack)-1` for `lower_block`):
-		  end-of-block fall-through cleanup, the most common
-		  nested-scope shape.
+		Production call sites (all migrated 2026-04-24):
+		- function-exit: the seven `_visit_stmt_HReturn` /
+		  `_visit_stmt_HThrow` slots (via the patch-1 compat shim
+		  `_emit_function_exit_cleanup_hook(scope_index=0)`).
+		- `lower_function_body` fall-through (patch 4a).
+		- `lower_block` end-of-block fall-through (patch 3).
+		- lambda-block exits (patch 4b.1) — both expression-returning
+		  and statement-terminated forms.
+		- `HBreak` / `HContinue` (patch 4b.2).
 
-		Other `_emit_scope_drops` call sites — `lower_function_body`
-		fall-through (6453), the two lambda-block exits (4499, 4504),
-		and `HBreak` / `HContinue` (7201, 7210) — remain on legacy
-		until subsequent patches.
+		Site 1 emission decisions are now driven by `verdict_at`
+		across all sites; `_moved_locals` retirement is patch 6 in
+		the Path Y plan (still queried by the orphan
+		`_emit_scope_drops` definition / its `_scope_drop_verdict`
+		helper, neither of which has production callers).
 		"""
 		if not self._scope_stack:
 			return
@@ -1573,6 +1586,9 @@ class HIRToMIR:
 			arm_scrut_ptr: M.ValueId | None = None
 			arm_scrut_payload_moved = False
 			arm_drop_locals: list[str] = []
+			# Phase 4 site-2 patch 5: hook reference used to fill in the
+			# arm_end program point once arm-body lowering completes.
+			match_cleanup_hook_obj: M.MatchCleanupHook | None = None
 			# Field indices whose storage in `arm_scrut_local` no longer
 			# carries an owning refcount to drop — either because the
 			# binder loop MoveOut'd the single +1 into the binder (so
@@ -1955,6 +1971,23 @@ class HIRToMIR:
 					# records flow into agree (most cases) or
 					# per_field_still_disagrees (the residual K wants
 					# visible).
+					# Phase 4 site-2 patch 5: per-field cleanup is
+					# authored by `match_cleanup_authoring` post-ledger.
+					# HIR→MIR pre-allocates `drop_tmp` locals and
+					# registers them via `_register_drop_local` so later
+					# site-1 `CleanupHook` markers (for early return /
+					# throw inside the arm body) capture them as
+					# candidates, then emits a single
+					# `M.MatchCleanupHook` carrying the candidate list.
+					# The authoring pass queries `field_verdict_at` per
+					# candidate and emits the canonical chain only for
+					# `MUST_DROP` verdicts; non-emitted drop_tmps stay
+					# `UNINIT`, so site-1 `verdict_at` sees
+					# `classify(UNINIT) = MUST_NOT_DROP` and skips
+					# cleanly.  See `work/ownership-ledger/patch-5-design.md`
+					# and `lang/driftc/stage2/match_cleanup_authoring.py`.
+					match_cleanup_hook_point: tuple[str, int] | None = None
+					match_cleanup_candidates: list[tuple] = []
 					if (
 						arm.ctor is not None
 						and not scrut_is_ref
@@ -1996,14 +2029,8 @@ class HIRToMIR:
 									field_path=_field_path,
 								)
 								continue
-							# Site decision: emit the slot drop.  Field
-							# still owns its +1 inside the variant.
-							# Ledger should agree (state Live, needs
-							# drop) UNLESS 3a's conservative
-							# VariantGetFieldAddr over-reporting
-							# triggered MovedOut for this field —
-							# that lands in per_field_still_disagrees
-							# and is the residual K wants visible.
+							# Candidate survived legacy HIR filtering;
+							# authoring will decide emit vs skip.
 							self._record_drop_decision(
 								site=_ledger_events.SITE_MATCH_CLEANUP,
 								local=arm_scrut_local if arm_scrut_local is not None else "",
@@ -2011,50 +2038,54 @@ class HIRToMIR:
 								reason=_ledger_events.REASON_FIELD_NEEDS_DROP,
 								field_path=_field_path,
 							)
-							# Phase 4 step 3c: capture the program point
-							# BEFORE the slot-drop chain is emitted — the
-							# trim pass reads `field_state_pre` at this
-							# point (same program point the observe
-							# telemetry used).
-							_cleanup_point: tuple[str, int] = (self.b.block.name, len(self.b.block.instructions))
-							slot_addr = self.b.new_temp()
-							self.b.emit(
-								M.VariantGetFieldAddr(
-									dest=slot_addr,
-									variant_ref=arm_scrut_ptr,
-									variant_ty=scrut_ty,
-									ctor=arm.ctor,
-									field_index=int(cleanup_fidx),
-									field_ty=cleanup_fty,
-								)
-							)
-							self._local_types[slot_addr] = self._type_table.ensure_ref_mut(cleanup_fty)
-							slot_val = self.b.new_temp()
-							self.b.emit(M.LoadRef(dest=slot_val, ptr=slot_addr, inner_ty=cleanup_fty))
-							self._local_types[slot_val] = cleanup_fty
+							# Capture hook point before any per-candidate
+							# emission (no MIR instrs emitted per candidate
+							# in the patch-5 shape, so this is stable across
+							# the loop body).
+							if match_cleanup_hook_point is None:
+								match_cleanup_hook_point = (self.b.block.name, len(self.b.block.instructions))
+							# Pre-allocate drop_tmp local.  Registered via
+							# `_register_drop_local` so later site-1
+							# CleanupHooks in this scope include it.
+							# Deliberately NOT appended to
+							# `arm_drop_locals`: match_cleanup_authoring
+							# emits the arm-end MoveOut+DropValue at the
+							# arm_end point captured on the hook.
 							drop_tmp = f"__match_partial_drop_{self.b.new_temp()}"
 							self.b.ensure_local(drop_tmp)
 							self._local_types[drop_tmp] = cleanup_fty
-							self.b.emit(M.StoreLocal(local=drop_tmp, value=slot_val))
-							# Register for arm-end drop + scope drop (so early
-							# return/throw inside the arm body also cleans up).
-							arm_drop_locals.append(drop_tmp)
 							self._register_drop_local(drop_tmp, cleanup_fty)
-							# Phase 4 step 3c: side-table entry so the
-							# post-ledger trim pass can veto this drop
-							# if `field_verdict_at` disagrees.  Entry
-							# shape matches the tuple declared at init:
-							# (scrut_local, field_path, cleanup_point,
-							#  drop_local, cleanup_fty).
+							# Side-table entry retained during patch-5
+							# rollout as a safety net for the trim pass
+							# (step 7 of the slice retires both).  With
+							# the chain no longer emitted inline the
+							# trim pass is a no-op for this function.
 							self._match_cleanup_per_field_drops.append(
 								(
 									arm_scrut_local if arm_scrut_local is not None else "",
 									_field_path,
-									_cleanup_point,
+									match_cleanup_hook_point,
 									drop_tmp,
 									cleanup_fty,
 								)
 							)
+							match_cleanup_candidates.append(
+								(drop_tmp, int(cleanup_fidx), cleanup_fty)
+							)
+						if match_cleanup_candidates and match_cleanup_hook_point is not None:
+							hook_block, hook_idx = match_cleanup_hook_point
+							match_cleanup_hook_obj = M.MatchCleanupHook(
+								scope_id=self._cleanup_hook_counter,
+								arm_scrut_local=arm_scrut_local if arm_scrut_local is not None else "",
+								arm_scrut_ptr_local=arm_scrut_ptr,
+								variant_ty=scrut_ty,
+								ctor=arm.ctor,
+								candidates=list(match_cleanup_candidates),
+								arm_end_block="",
+								arm_end_index=-1,
+							)
+							self._cleanup_hook_counter += 1
+							self.b.func.blocks[hook_block].instructions.insert(hook_idx, match_cleanup_hook_obj)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
 					# Step 4: route through the match-scrutinee verdict
@@ -2149,6 +2180,21 @@ class HIRToMIR:
 					self.b.emit(M.MoveOut(dest=arm_scrut_moved, local=arm_scrut_local, ty=scrut_ty))
 					self._local_types[arm_scrut_moved] = scrut_ty
 					self.b.emit(M.DropValue(value=arm_scrut_moved, ty=scrut_ty))
+
+				if self.b.block.terminator is None and match_cleanup_hook_obj is not None:
+					# Phase 4 site-2 patch 5: fix up the hook's arm_end
+					# program point now that arm-body lowering is
+					# complete and the arm-end drainage emission is
+					# about to run.  match_cleanup_authoring will emit
+					# `MoveOut(drop_tmp) + DropValue` at this position
+					# for each MUST_DROP candidate.  If the arm instead
+					# early-returned/threw (terminator set), arm_end
+					# stays as the placeholder and authoring skips the
+					# tail chain — site-1 CleanupHooks at the early-exit
+					# point handle drop_tmp cleanup via their own
+					# verdict_at queries.
+					match_cleanup_hook_obj.arm_end_block = self.b.block.name
+					match_cleanup_hook_obj.arm_end_index = len(self.b.block.instructions)
 
 				if self.b.block.terminator is None:
 					for local in reversed(arm_drop_locals):

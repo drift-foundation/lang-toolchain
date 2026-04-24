@@ -6807,14 +6807,35 @@ def compile_stubbed_funcs(
 		for fn_id, func in mir_funcs_by_id.items():
 			ledger = _ol_build(func, drop_policy=lambda _t: None)
 			setattr(func, "_ownership_ledger", ledger)
-		# Phase 4 step 3c: site-2 per-field drop VETO via the ledger.
-		# Tier 2 split authority — the ledger does NOT author emission;
-		# site 2's inline legacy decisions still pick what to emit.
-		# The ledger's power here is limited to vetoing: drops the
-		# site emitted whose `field_verdict_at` returns `MUST_NOT_DROP`
-		# are excised.  Today (post-3b disagreement=0) this is a no-op
-		# for real code.  See
-		# `lang/driftc/stage2/ownership_ledger_trim.py`.
+		# Phase 4 site-2 patch 5 — per-field match-cleanup authoring.
+		# HIR→MIR emits `M.MatchCleanupHook` at each arm's partial-move
+		# cleanup point with pre-allocated `__match_partial_drop_N`
+		# locals (registered so later site-1 `CleanupHook`s see them
+		# as candidates).  This pass queries `field_verdict_at` per
+		# candidate and, for `MUST_DROP`, authors the canonical
+		# `VariantGetFieldAddr + LoadRef + StoreLocal + arm-end
+		# MoveOut + DropValue` chain.  For non-`MUST_DROP` candidates
+		# no chain is authored and the `drop_tmp` stays `UNINIT`, so
+		# site-1's subsequent `verdict_at` sees `classify(UNINIT,
+		# needs_drop=True) = MUST_NOT_DROP` and skips cleanly.  Runs
+		# BEFORE site-1 cleanup_authoring with a ledger rebuild in
+		# between so site 1 sees the authored per-field transitions.
+		# Supersedes the Phase 3c `ownership_ledger_trim` veto pass.
+		# See `lang/driftc/stage2/match_cleanup_authoring.py`.
+		if shared_type_table is not None:
+			from lang.driftc.stage2.match_cleanup_authoring import (
+				author_match_cleanup as _author_match_cleanup,
+			)
+			for fn_id, func in mir_funcs_by_id.items():
+				_author_match_cleanup(func, type_table=shared_type_table)
+				ledger = _ol_build(func, drop_policy=lambda _t: None)
+				setattr(func, "_ownership_ledger", ledger)
+		# Phase 3c trim pass — now operating as a no-op safety net
+		# during patch-5 rollout (retire at step 7 once telemetry and
+		# correctness are proven).  `_match_cleanup_per_field_drops`
+		# is now populated only for unmigrated code paths (if any
+		# slip through step 4 of the slice); when the side-table is
+		# empty, the trim pass is a no-op.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.ownership_ledger_trim import (
 				trim_match_cleanup_by_ledger as _ol_trim,
