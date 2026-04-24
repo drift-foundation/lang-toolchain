@@ -3479,7 +3479,7 @@ class HIRToMIR:
 			ptr, inner_ty = self._lower_addr_of_place(place_expr, is_mut=True)
 			old_val = self.b.new_temp()
 			self.b.emit(M.LoadRef(dest=old_val, ptr=ptr, inner_ty=inner_ty))
-			new_val = self.lower_expr(new_expr)
+			new_val = self._lower_owning_consume(new_expr, expected=inner_ty)
 			self.b.emit(M.StoreRef(ptr=ptr, value=new_val, inner_ty=inner_ty))
 			self._local_types[old_val] = inner_ty
 			return old_val
@@ -3493,7 +3493,7 @@ class HIRToMIR:
 			if inner_ty is None:
 				raise AssertionError("maybe_write(...) missing &mut T return type (checker bug)")
 			slot = self.lower_expr(expr.args[0])
-			val = self.lower_expr(expr.args[1])
+			val = self._lower_owning_consume(expr.args[1], expected=inner_ty)
 			raw_ptr = self.b.new_temp()
 			ptr_ty = self._type_table.new_ptr(inner_ty)
 			self.b.emit(M.PtrFromRef(dest=raw_ptr, src=slot, ptr_ty=ptr_ty))
@@ -6571,7 +6571,7 @@ class HIRToMIR:
 						raise AssertionError("write(...) missing RawBuffer element type (checker bug)")
 					buf_val = self.lower_expr(stmt.expr.args[0])
 					idx_val = self.lower_expr(stmt.expr.args[1])
-					val_val = self.lower_expr(stmt.expr.args[2])
+					val_val = self._lower_owning_consume(stmt.expr.args[2], expected=elem_ty)
 					self.b.emit(M.RawBufferWrite(buffer=buf_val, raw_ty=raw_param, elem_ty=elem_ty, index=idx_val, value=val_val))
 					return
 				if intrinsic is IntrinsicKind.PTR_WRITE:
@@ -6581,7 +6581,7 @@ class HIRToMIR:
 					if elem_ty is self._unknown_type:
 						raise AssertionError("ptr_write(...) missing Ptr<T> element type (checker bug)")
 					ptr_val = self.lower_expr(stmt.expr.args[0])
-					val_val = self.lower_expr(stmt.expr.args[1])
+					val_val = self._lower_owning_consume(stmt.expr.args[1], expected=elem_ty)
 					self.b.emit(M.PtrWrite(ptr=ptr_val, value=val_val, elem_ty=elem_ty))
 					return
 				if intrinsic is IntrinsicKind.DROP_VALUE:

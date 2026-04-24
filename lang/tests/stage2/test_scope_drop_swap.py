@@ -426,13 +426,15 @@ def test_emission_path_dependent_bucket6_shape_still_skips_at_site1() -> None:
 	)
 
 
-# -- Phase 4 site-1 patch 3 (REVERTED) ----------------------------------
-# The lower_block end-of-block migration was reverted after surfacing a
-# runtime corruption (driver test
-# `test_fat_arc_interface_views.py::test_drop_order_destructor_runs_exactly_once`
-# crashed with `tcache_thread_shutdown(): unaligned tcache chunk
-# detected`).  The patch-3 unit pins that exercised the migration are
-# removed; the helper `_emit_scope_cleanup_hook(scope_index=...)` and
-# the existing test_emission_definite_live_string... pin (which
-# exercises the function-exit shape) remain in place.  See
-# `work/ownership-ledger/3b-status.md` patch-3 section.
+# -- Phase 4 site-1 patch 3 (LANDED 2026-04-24) -------------------------
+# `lower_block` end-of-block fall-through cleanup is migrated to the
+# `M.CleanupHook` + `cleanup_authoring` post-pass pattern.  The first
+# attempt (2026-04-23) surfaced a runtime UAF traced to a
+# `core.drop_value` HIR→MIR lowering gap (bare `LoadLocal + DropValue`,
+# no `MoveOut`); fix landed at the lowering layer, pinned by
+# `lang/tests/stage2/test_drop_value_intrinsic_ownership.py`.  The
+# end-to-end carrier
+# `lang/tests/memcheck/test_patch3_nested_scope_uaf_regression.py`
+# proves nested-scope re-authoring no longer double-drops a destructible
+# inside a fat `Arc<Interface>` view.  The function-exit shape pin
+# (`test_emission_definite_live_string...`) remains in place.

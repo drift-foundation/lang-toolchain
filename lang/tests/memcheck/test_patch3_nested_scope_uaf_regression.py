@@ -1,25 +1,32 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Patch 3 nested-scope migration regression — fat-Arc-interface-view UAF.
 
-Pinned carrier for the heap-use-after-free that surfaced when
-`lower_block` end-of-block fall-through cleanup was migrated to the
-`M.CleanupHook` + `cleanup_authoring` post-pass pattern (patch 3
-attempt, 2026-04-23/24).  See `work/ownership-ledger/patch-3-diagnosis.md`
-for the full failure analysis.
+Historical pin for the heap-use-after-free that surfaced during the
+first patch-3 attempt (2026-04-23) when `lower_block` end-of-block
+fall-through cleanup was migrated to the `M.CleanupHook` +
+`cleanup_authoring` post-pass pattern.  Diagnosis: the
+`core.drop_value(local)` intrinsic was lowered as `LoadLocal +
+DropValue` (no `MoveOut`), so the ledger saw `inner` as still LIVE
+after consumption; `cleanup_authoring`'s `verdict_at` query returned
+`MUST_DROP` and authored a redundant scope-exit drop, double-running
+`AppService::destroy` and over-decrementing the counter Arc.  Full
+analysis in `work/ownership-ledger/patch-3-diagnosis.md`.
 
-Today (patch 3 reverted) this test PASSES — the legacy inline emission
-correctly drops the v1 (fat Arc<I1>) interface view at the end of run()
-without freeing the counter Arc storage prematurely.
+Patch 3 landed (2026-04-24) once the HIR→MIR `core.drop_value`
+lowering was fixed to emit `MoveOut + DropValue` for non-Copy local
+args (pinned by `lang/tests/stage2/test_drop_value_intrinsic_ownership.py`).
+This carrier is now the end-to-end gate proving that nested-scope
+cleanup re-authoring does not double-drop a destructible inside a
+fat `Arc<Interface>` view.  A regression in either the lowering or
+the cleanup-authoring pass would resurface as SIGABRT here.
 
-When patch 3 is retried, this test must continue to pass.  If
-re-enabling the lower_block migration + driver-side ledger rebuild
-causes a runtime crash here, the migration is unsound.
+Crash signature for a regression: glibc `tcache_thread_shutdown():
+unaligned tcache chunk detected` (rc=134), or ASAN
+`heap-use-after-free in drift_atomic_load_int`.
 
-Crash signature (legacy environment, with `tcache_thread_shutdown(): unaligned tcache chunk detected` from glibc, or ASAN: heap-use-after-free in drift_atomic_load_int).
-
-Minimization (per K's directive): the smallest source that reproduces
-the crash under patch 3.  Removing the interface view OR the method
-call through the interface eliminates the crash.
+Minimization: the smallest source that reproduced the original
+patch-3 crash.  Removing the interface view OR the method call
+through the interface eliminates the crash.
 """
 from __future__ import annotations
 
@@ -73,12 +80,14 @@ def test_patch3_nested_scope_fat_iface_uaf_carrier(tmp_path: Path) -> None:
 	no SIGABRT.  The destructor fires once and writes 1 to the
 	counter, then `drift_main` reads counter (returns 1).
 
-	Today (patch 3 reverted): exit=1 (success).
-	With patch 3 enabled: SIGABRT (rc=134) from heap-use-after-free
-	on counter Arc storage.
+	Expected: exit=1 (success) under landed patch 3.
 
-	When the patch-3 retry diagnoses and fixes the failure, this
-	test should continue to pass."""
+	Regression signature: SIGABRT (rc=134) from heap-use-after-free
+	on counter Arc storage, indicating either (a) the
+	`core.drop_value` HIR→MIR lowering regressed back to bare
+	`LoadLocal + DropValue` so the ledger no longer sees the
+	consumption, or (b) `cleanup_authoring` authored a redundant
+	scope-exit drop for an already-consumed local."""
 	src = tmp_path / "main.drift"
 	src.write_text(SOURCE)
 	out_bin = tmp_path / "test_bin"
