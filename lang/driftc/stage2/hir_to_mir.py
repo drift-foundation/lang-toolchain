@@ -4509,12 +4509,22 @@ class HIRToMIR:
 		if isinstance(last, H.HExprStmt):
 			val = lower.lower_expr(last.expr)
 			if lower.b.block.terminator is None:
-				lower._emit_scope_drops(scope_index=len(lower._scope_stack) - 1)
+				# Phase 4 site-1 patch 4b.1: lambda-block exit
+				# (expression-returning form) migrated to
+				# `M.CleanupHook` + `cleanup_authoring`.  Mirror of
+				# patch 4a for `lower_function_body` fall-through:
+				# scope drops run immediately before the synthetic
+				# function's Return terminator emitted by the
+				# driftc.py caller.
+				lower._emit_scope_cleanup_hook(scope_index=len(lower._scope_stack) - 1)
 			lower._pop_scope()
 			return val
 		lower.lower_stmt(last)
 		if lower.b.block.terminator is None:
-			lower._emit_scope_drops(scope_index=len(lower._scope_stack) - 1)
+			# Phase 4 site-1 patch 4b.1: lambda-block exit
+			# (statement-terminated form, e.g. final HReturn or fall-
+			# through with no value).  Same migration as above.
+			lower._emit_scope_cleanup_hook(scope_index=len(lower._scope_stack) - 1)
 		lower._pop_scope()
 		return None
 
@@ -7237,7 +7247,14 @@ class HIRToMIR:
 			raise NotImplementedError("break outside of loop not supported yet")
 		continue_target, break_target, loop_scope_index, _break_seen = self._loop_stack[-1]
 		self._loop_stack[-1] = (continue_target, break_target, loop_scope_index, True)
-		self._emit_scope_drops(scope_index=loop_scope_index)
+		# Phase 4 site-1 patch 4b.2: break-point scope drops (body
+		# scopes from the break point up to the loop scope) migrated
+		# to `M.CleanupHook` + `cleanup_authoring`.  The ledger
+		# lattice handles the path-dependent state from conditional
+		# breaks via its worklist; the post-authoring ledger rebuild
+		# ensures the loop-exit block's downstream consumers see the
+		# authored MoveOuts.
+		self._emit_scope_cleanup_hook(scope_index=loop_scope_index)
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=break_target))
 
@@ -7246,7 +7263,12 @@ class HIRToMIR:
 		if not self._loop_stack:
 			raise NotImplementedError("continue outside of loop not supported yet")
 		continue_target, _, loop_scope_index, _break_seen = self._loop_stack[-1]
-		self._emit_scope_drops(scope_index=loop_scope_index)
+		# Phase 4 site-1 patch 4b.2: continue-point scope drops
+		# migrated to `M.CleanupHook` + `cleanup_authoring`.  Body
+		# locals re-initialize on the next iteration via StoreLocal;
+		# the lattice transitions each re-init through the per-
+		# instruction snapshot in the rebuilt ledger.
+		self._emit_scope_cleanup_hook(scope_index=loop_scope_index)
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=continue_target))
 

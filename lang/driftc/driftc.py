@@ -6821,15 +6821,15 @@ def compile_stubbed_funcs(
 			)
 			for fn_id, func in mir_funcs_by_id.items():
 				_ol_trim(func, type_table=shared_type_table)
-		# Phase 4 site-1 patch 1: function-exit cleanup re-authoring.
-		# HIR→MIR's seven `_visit_stmt_HReturn` / `_visit_stmt_HThrow`
-		# scope-exit calls now emit `M.CleanupHook` markers instead of
-		# inline drops; this pass walks each block, queries
-		# `verdict_at` for every candidate, and emits the canonical
-		# `MoveOut + DropValue` sequences.  Site 1's function-exit
-		# drop authority is now the ledger; nested-scope
-		# `_emit_scope_drops(scope_index>0)` calls remain on legacy
-		# pending follow-up patches.  See
+		# Phase 4 site-1 — cleanup re-authoring pass.  All HIR→MIR
+		# scope-drop sites (function-exit, `lower_function_body` /
+		# `lower_block` fall-through, lambda-block exits, `HBreak` /
+		# `HContinue`) emit `M.CleanupHook` markers.  This pass walks
+		# each block, queries `verdict_at` for every candidate, and
+		# emits the canonical `MoveOut + DropValue` sequences.  Site 1
+		# drop authority is now `verdict_at`; `_moved_locals` is no
+		# longer an emission input (retirement pending in the Path Y
+		# plan as patch 6).  See
 		# `lang/driftc/stage2/cleanup_authoring.py`.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.cleanup_authoring import (

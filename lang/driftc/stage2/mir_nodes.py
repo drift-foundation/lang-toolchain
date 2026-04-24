@@ -385,10 +385,11 @@ class CleanupHook(MInstr):
 
 	Placed by HIR→MIR at every source-scope-exit point that previously
 	emitted inline `MoveOut + DropValue` pairs via
-	`_emit_scope_drops(scope_index=0)`.  Carries the candidate list
-	the legacy emission would have considered: a sequence of
-	`(local, ty)` pairs in legacy emission order (reversed scopes,
-	reversed locals).
+	`_emit_scope_drops(scope_index)` (function-exit, `lower_function_body`
+	/ `lower_block` fall-through, lambda-block exits, and `HBreak` /
+	`HContinue`).  Carries the candidate list the legacy emission
+	would have considered: a sequence of `(local, ty)` pairs in
+	legacy emission order (reversed scopes, reversed locals).
 
 	Consumed by `lang/driftc/stage2/cleanup_authoring.py` after
 	`build_ledger`: each candidate is queried via `verdict_at`, real

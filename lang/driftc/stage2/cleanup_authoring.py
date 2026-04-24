@@ -1,21 +1,26 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 4 site-1 patch 1 + patch 2 — cleanup re-authoring pass for
-function-exit scope drops, with observe parity.
+Phase 4 site-1 — cleanup re-authoring pass for scope drops, with
+observe parity.
 
-HIR→MIR's seven function-exit `_emit_scope_drops(scope_index=0)`
-call sites now emit a single `M.CleanupHook` instruction (via
-`_emit_function_exit_cleanup_hook`) instead of inline drops.  This
-pass runs after `build_ledger` and before `drop_flags` /
-`string_arc`; for each `CleanupHook` it consults the ledger's
-`verdict_at` for every candidate (local, type) pair and emits real
-`MoveOut + DropValue` sequences in legacy emission order.
+All of HIR→MIR's scope-drop call sites (function-exit at HReturn /
+HThrow, `lower_function_body` fall-through, `lower_block`
+fall-through, lambda-block exits, and HBreak / HContinue) now emit
+`M.CleanupHook` markers via `_emit_scope_cleanup_hook(scope_index)`
+instead of inline drops.  This pass runs after `build_ledger` and
+before `drop_flags` / `string_arc`; for each `CleanupHook` it
+consults the ledger's `verdict_at` for every candidate (local, type)
+pair and emits real `MoveOut + DropValue` sequences in legacy
+emission order.
 
-Authority: site 1's function-exit drop decisions are now driven by
-`verdict_at`, NOT by HIR→MIR's `_moved_locals` set.  Nested-scope
-`_emit_scope_drops(scope_index>0)` calls remain on legacy in this
-patch — `_moved_locals` retirement is gated on those migrating in
-follow-up patches.
+Authority: site 1's drop decisions are now driven by `verdict_at`
+across all emission sites, NOT by HIR→MIR's `_moved_locals` set.
+Consume-via-intrinsic gap class (DROP_VALUE / RAW_WRITE /
+PTR_WRITE / MAYBE_WRITE / REPLACE) is closed at the HIR→MIR
+boundary via `_lower_owning_consume`, so cleanup_authoring's
+verdict lookups see the intrinsic consumption as a real MoveOut
+in MIR.  `_moved_locals` retirement can now proceed in a
+follow-up patch (patch 6 in the Path Y plan).
 
 Variant zero-tag widening: when the verdict is `PathDependent`
 (state `MAYBE_UNINIT`), the policy bit `variant_zero_tag_drop_safe`
