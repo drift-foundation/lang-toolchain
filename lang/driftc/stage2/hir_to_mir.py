@@ -6472,7 +6472,15 @@ class HIRToMIR:
 		for stmt in block.statements:
 			self.lower_stmt(stmt)
 		if self.b.block.terminator is None:
-			self._emit_scope_drops(scope_index=len(self._scope_stack) - 1)
+			# Phase 4 site-1 patch 4a: `lower_function_body`
+			# fall-through cleanup migrated to `M.CleanupHook` +
+			# `cleanup_authoring`.  Structurally the closest
+			# remaining shape to the patch-1 function-exit slice
+			# (cleanup runs immediately before the implicit Return
+			# terminator, no mid-function downstream ledger
+			# queries).  Covered by the existing patch-3 carrier +
+			# the consume-via-intrinsic invariant pins.
+			self._emit_scope_cleanup_hook(scope_index=len(self._scope_stack) - 1)
 		self._pop_scope()
 		if self.b.block.terminator is not None:
 			return
