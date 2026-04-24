@@ -38,12 +38,17 @@ import os
 
 from lang.driftc.checker import FnInfo
 from lang.driftc.core.function_id import FunctionId
-from lang.driftc.core.types_core import TypeTable
+from lang.driftc.core.types_core import (
+	GenericTypeExpr,
+	TypeTable,
+	VariantArmSchema,
+	VariantFieldSchema,
+)
 from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2.drop_flags import insert_drop_flags, is_flag_managed, flag_local_name_for
 from lang.driftc.stage2.drop_policy_compute import compute_drop_policy
 from lang.driftc.stage2.ownership_ledger import build_ledger
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.string_arc import insert_string_arc, variant_zero_tag_drop_safe
 
 
 def _drop_policy_for(type_table: TypeTable):
@@ -382,4 +387,155 @@ def test_is_flag_managed_does_not_misattribute_collision_suffixed_flag(type_tabl
 		"(`func._drop_flag_managed_locals: set[str]`) and have "
 		"`is_flag_managed` consult that instead of reverse-parsing "
 		"local names."
+	)
+
+
+# -- Phase 4 sub-step 3: variant zero-tag widening, ledger-driven --------
+
+
+def _declare_destructible_variant(type_table: TypeTable, name: str = "V") -> int:
+	"""Declare a variant `V { Some(value: String), None }` and return
+	its concrete TypeId.  String fields make the type destructible
+	(via `_type_needs_drop` recursion), so it lands in
+	`destructible_locals`."""
+	base = type_table.declare_variant(
+		"test",
+		name,
+		[],
+		[
+			VariantArmSchema(
+				name="Some",
+				fields=[VariantFieldSchema(name="value", type_expr=GenericTypeExpr(name="String", args=[]))],
+			),
+			VariantArmSchema(name="None", fields=[]),
+		],
+	)
+	tid = type_table.ensure_variant_instantiated(base, [])
+	# Mark non-Copy so it goes through the destructible path.
+	prev_query = getattr(type_table, "_copy_query", None)
+	def _query(t):
+		if t == tid:
+			return False
+		return prev_query(t) if prev_query else None
+	type_table._copy_query = _query  # type: ignore[attr-defined]
+	return tid
+
+
+# -- Helper-level: variant_zero_tag_drop_safe predicate -----------------
+
+
+def test_variant_zero_tag_drop_safe_true_for_variant() -> None:
+	type_table = TypeTable()
+	vty = _declare_destructible_variant(type_table)
+	assert variant_zero_tag_drop_safe(vty, type_table) is True
+
+
+def test_variant_zero_tag_drop_safe_false_for_struct() -> None:
+	type_table = TypeTable()
+	sty = _make_droppable_struct(type_table, name="DropMeForVariantTest")
+	assert variant_zero_tag_drop_safe(sty, type_table) is False
+
+
+def test_variant_zero_tag_drop_safe_false_for_scalar() -> None:
+	type_table = TypeTable()
+	int_ty = type_table.ensure_int()
+	string_ty = type_table.ensure_string()
+	assert variant_zero_tag_drop_safe(int_ty, type_table) is False
+	assert variant_zero_tag_drop_safe(string_ty, type_table) is False
+
+
+# -- Site-3 widening: PathDependent + variant → fold into init set ------
+
+
+def _build_conditional_variant_init(type_table: TypeTable, vty: int) -> M.MirFunc:
+	"""Mimic the 0.27.145 carrier shape at MIR level:
+	  fn f(b: Bool) {
+	      var v: V;             // declared, not initialized
+	      if b { v = Some(...); }   // conditional init
+	      return;
+	  }
+
+	At the join Return: ledger reports `v` as MAYBE_UNINIT (LIVE
+	from the `then` branch joined with UNINIT from the implicit
+	else).  Site 3 must include `v` in `initialized_at_return` so
+	the drop fires (live path leaks otherwise; uninit path's
+	tag-0 destroy is a no-op)."""
+	bool_ty = type_table.ensure_bool()
+	func = _make_func(
+		"cond_init_variant",
+		params=["b"],
+		locals_=["b", "v"],
+		types={"b": bool_ty, "v": vty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="b", then_target="if_then", else_target="if_join")
+	then_block = M.BasicBlock(name="if_then")
+	# Materialize a variant value via ConstructVariant + StoreLocal.
+	then_block.instructions.append(
+		M.ConstructVariant(dest="t_v", variant_ty=vty, ctor="None", args=[])
+	)
+	then_block.instructions.append(M.StoreLocal(local="v", value="t_v"))
+	then_block.terminator = M.Goto(target="if_join")
+	join_block = M.BasicBlock(name="if_join")
+	join_block.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
+	return func
+
+
+def test_site3_widens_path_dependent_variant_into_init_set() -> None:
+	"""Variant local conditionally initialized → ledger says
+	PathDependent → site-3 widening (now ledger-driven) folds it
+	into `initialized_at_return` so a drop is emitted at the join
+	Return.  Pinned by the 0.27.145 memcheck carrier
+	(`scope_drop_conditional_move`); this test mirrors that shape
+	at the MIR/unit level so a regression flips here first."""
+	type_table = TypeTable()
+	vty = _declare_destructible_variant(type_table)
+	func = _build_conditional_variant_init(type_table, vty)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=type_table, fn_infos={})
+	# A drop sequence for `v` must appear in the join block (or
+	# expanded out of `_drop_destructible_local` in any block).
+	drops = _all_drop_destructible_pairs_for(func, "v")
+	assert drops, (
+		"variant zero-tag widening regressed: a conditionally-"
+		"initialized variant local must still be dropped at the join "
+		"Return (live path leaks otherwise; uninit path's tag-0 "
+		"destroy is a runtime no-op).  The new ledger-driven "
+		"widening should emit the drop via PathDependent + variant "
+		"type policy."
+	)
+
+
+def test_site3_does_not_widen_non_variant_path_dependent_local() -> None:
+	"""Negative: a destructible STRUCT in the same conditionally-
+	initialized shape must NOT be widened.  Variant zero-tag safety
+	is a variant-specific policy; structs do not have a tag-0 no-op
+	destructor, so widening them would risk dropping zero-PHI'd
+	storage that the destructor reads as live data → SIGSEGV."""
+	type_table = TypeTable()
+	sty = _make_droppable_struct(type_table, name="DropMeNonVariant")
+	bool_ty = type_table.ensure_bool()
+	func = _make_func(
+		"cond_init_struct",
+		params=["b"],
+		locals_=["b", "s"],
+		types={"b": bool_ty, "s": sty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="b", then_target="if_then", else_target="if_join")
+	then_block = M.BasicBlock(name="if_then")
+	then_block.instructions.append(M.StoreLocal(local="s", value="t_init"))
+	then_block.terminator = M.Goto(target="if_join")
+	join_block = M.BasicBlock(name="if_join")
+	join_block.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=type_table, fn_infos={})
+	drops = _all_drop_destructible_pairs_for(func, "s")
+	assert not drops, (
+		"non-variant local was widened — `variant_zero_tag_drop_safe` "
+		"policy should reject struct types because struct drops are "
+		"NOT no-op on zero storage (the destructor reads field bytes "
+		"and would crash on PHI-zero data)."
 	)

@@ -24,13 +24,40 @@ from .drop_policy_compute import compute_drop_policy as _compute_drop_policy
 from .drop_flags import is_flag_managed as _is_flag_managed
 
 
+def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
+	"""Phase 4 site-3 sub-step 3 — explicit policy axis.
+
+	True iff `local_ty` is a variant type whose tag-0 destructor is a
+	no-op.  Today: all variants — variant codegen lays out tag=0 as
+	the default (PHI-zero) state, and the runtime's variant
+	destructor dispatches on tag, so a tag=0 storage is a no-op
+	drop.  Future: if variant layout changes (e.g. non-zero default
+	tag, or per-variant destructor protocols), this predicate
+	tightens here in one place.
+
+	Used by site 3 to drive the conditionally-initialized variant
+	widening: when the ledger reports `PathDependent` for such a
+	local at a Return terminator, site 3 includes it in
+	`initialized_at_return` so the drop fires.  The drop is safe
+	(no-op on the uninit path) and necessary (live paths leak
+	otherwise).  Replaces the dataflow-based widening that lived
+	inline at the Return-terminator branch in 0.27.145–0.31.9.
+	"""
+	td = type_table.get(local_ty)
+	return td.kind is TypeKind.VARIANT
+
+
 def insert_string_arc(
 	func: M.MirFunc,
 	*,
 	type_table: TypeTable,
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
-	is_destructor_method = "std.core.Destructible::destroy" in func.fn_id.name
+	# (`is_destructor_method` was the site-local destructor-self
+	# skip flag; retired in Phase 4 site-3 sub-step 2.  The lattice
+	# now models the destructor's runtime-owned `self` at the
+	# Return terminator and the per-local ledger consultation in
+	# the Return branch handles the skip.)
 	# Phase 3B step 1 (`drop_before_overwrite` swap): the ledger is
 	# attached unconditionally by the driver and consulted as the
 	# authoritative drop verdict at site 4.  Site 3 (`string_arc_return`)
@@ -1370,8 +1397,31 @@ def insert_string_arc(
 			skip_cleanup_locals: Set[str] = set()
 			skip_cleanup_locals |= moved_out_locals
 			skip_cleanup_locals |= explicitly_dropped_locals
-			if is_destructor_method and "self" in func.params:
-				skip_cleanup_locals.add("self")
+			# Phase 4 site-3 sub-step 2 — destructor-method `self`
+			# skip is now ledger-authored.  The lattice transitions
+			# `self` to MOVED_OUT at the end of every Return-
+			# terminator block in a destructor method, so the
+			# per-local ledger consultation below folds it into
+			# `skip_cleanup_locals` without any site-local guard.
+			# The legacy
+			# `if is_destructor_method and "self" in func.params:
+			#     skip_cleanup_locals.add("self")` line is retired.
+			# Phase 4 sub-step 1 — returned-value source suppression
+			# is now ledger-authored.  The legacy alias-walk and
+			# `_collect_return_source_locals` composite walk that
+			# used to populate `skip_cleanup_locals` here are
+			# retired; the lattice's Return-as-move (incl.
+			# composite constructors: ConstructStruct /
+			# ConstructVariant / ConstructResultOk /
+			# ConstructIfaceValue) transitions the source locals
+			# to `MOVED_OUT`, and the per-local ledger consultation
+			# a few lines below folds every `MUST_NOT_DROP`
+			# verdict into `skip_cleanup_locals`.
+			#
+			# The alias walk is still needed for
+			# `can_move_from_skipped_local` (string-ownership
+			# transfer at the return value — a separate concern
+			# from cleanup).
 			can_move_from_skipped_local = False
 			if val is not None:
 				alias = val
@@ -1384,13 +1434,69 @@ def insert_string_arc(
 							break
 					if not moved:
 						break
+				# For STRING / ARRAY return-source locals, the legacy
+				# alias-walk skip is preserved here.  The Phase 4
+				# sub-step 1 ledger consultation below is limited to
+				# `destructible_locals`; strings and arrays have
+				# their own parallel ownership-tracking machinery
+				# (`_release_all_locals` / `_drop_all_arrays`) and
+				# folding them into `skip_cleanup_locals` via the
+				# generic consultation breaks that machinery in
+				# subtle ways (caught by the package-consumer
+				# memcheck regression `test_pkg_map_literal_string_leak`).
+				# Once strings/arrays move to ledger authority on a
+				# future track, this can collapse into the
+				# consultation.
 				for prev in reversed(new_instrs):
 					if isinstance(prev, M.LoadLocal) and prev.dest == alias:
-						skip_cleanup_locals.add(prev.local)
 						can_move_from_skipped_local = True
+						if prev.local in string_locals or prev.local in array_locals:
+							skip_cleanup_locals.add(prev.local)
 						break
-				return_source_locals = _collect_return_source_locals(val)
-				skip_cleanup_locals |= {loc for loc in return_source_locals if loc not in string_locals}
+			# Phase 4 sub-step 1 — ledger consultation for returned-
+			# value source suppression on DESTRUCTIBLES.  Every
+			# destructible local whose `verdict_at` at the return
+			# cursor returns `MUST_NOT_DROP` joins
+			# `skip_cleanup_locals`.  The lattice's Return-as-move
+			# (including composite constructors) transitions the
+			# source local(s) of the returned value to `MOVED_OUT`
+			# at the LoadLocal index, so the verdict is MustNotDrop
+			# and the return-source is correctly skipped without any
+			# site-local alias walk.
+			#
+			# Scope note (2026-04-23, post-sub-step-3 memcheck
+			# diagnosis): the consultation is intentionally
+			# restricted to `destructible_locals`.  Strings and
+			# arrays have their own parallel ownership-tracking
+			# machinery (`_release_all_locals` /
+			# `_drop_all_arrays`, plus `moved_out_locals` /
+			# `owned_values`) that pre-dates the ledger; folding
+			# string/array MUST_NOT_DROP verdicts into
+			# `skip_cleanup_locals` interferes with that machinery
+			# in subtle ways (caught by the 0.27.145 memcheck
+			# regression).  Strings/arrays remain on legacy
+			# authority on this track; their swap to ledger
+			# authority is separate work.
+			# Destructor `self` and variant zero-tag widening
+			# remain site-local (sub-steps 2 and 3).
+			if _ledger is not None:
+				_ledger_point = (block.name, len(block.instructions))
+				for _local in destructible_locals:
+					if _local in skip_cleanup_locals:
+						continue
+					_local_ty = local_types.get(_local)
+					if _local_ty is None:
+						continue
+					_needs_drop_axis = bool(
+						_compute_drop_policy(type_table, _local_ty).needs_drop
+					)
+					_verdict = _ledger.verdict_at(
+						_ledger_point,
+						_local,
+						needs_drop=_needs_drop_axis,
+					)
+					if _verdict is _DropVerdict.MUST_NOT_DROP:
+						skip_cleanup_locals.add(_local)
 			if val is not None and (_is_string_value(val) or _can_move_creator_return(val)):
 				if val in move_only_values or _can_move_owned_once(val) or _can_move_creator_return(val) or can_move_from_skipped_local:
 					_note_use(val, consume=True)
@@ -1400,23 +1506,33 @@ def insert_string_arc(
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
 			initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
-			# Widen for variant locals that are conditionally initialized:
-			# assigned on some predecessor paths but not all.  Variant
-			# destroy on zeroinitializer (tag 0) is always a no-op, so
-			# the PHI-provided zero for uninitialized paths is safe.
-			# Only include locals not moved on ANY predecessor to avoid
-			# double-free.
-			_ret_preds = preds.get(block.name, set())
-			if _ret_preds:
-				_any_pred_moved: Set[str] = set()
-				for _rp in _ret_preds:
-					_any_pred_moved |= moved_out.get(_rp, set())
-				for _rp in _ret_preds:
-					_pred_assigned = assigned_out.get(_rp, set()) | store_defs.get(_rp, set())
-					for _vl in _pred_assigned & destructible_locals - initialized_at_return - _any_pred_moved - skip_cleanup_locals:
-						_vty = local_types.get(_vl)
-						if _vty is not None and type_table.get(_vty).kind is TypeKind.VARIANT:
-							initialized_at_return.add(_vl)
+			# Phase 4 site-3 sub-step 3 — variant zero-tag widening,
+			# now ledger-driven.  The legacy widening used site-3
+			# dataflow (`assigned_out` / `store_defs` / `moved_out`)
+			# to detect "assigned on some predecessor paths but not
+			# all"; the lattice answers the same question via
+			# `MAYBE_UNINIT → PathDependent`.  Site 3 keeps one
+			# explicit policy axis: `variant_zero_tag_drop_safe(ty,
+			# table)` — variant types whose tag-0 destructor is a
+			# no-op.  Live paths get their drop; uninit paths drop
+			# the PHI-zero storage harmlessly.
+			# Carrier (0.27.145 fix): pinned by
+			# `lang/tests/codegen/e2e/scope_drop_conditional_move/`
+			# + `lang/tests/memcheck/test_scope_drop_conditional_move.py`.
+			if _ledger is not None:
+				for _local in destructible_locals:
+					if _local in initialized_at_return or _local in skip_cleanup_locals:
+						continue
+					_local_ty = local_types.get(_local)
+					if _local_ty is None or not variant_zero_tag_drop_safe(_local_ty, type_table):
+						continue
+					_verdict = _ledger.verdict_at(
+						_ledger_point,
+						_local,
+						needs_drop=True,
+					)
+					if _verdict is _DropVerdict.PATH_DEPENDENT:
+						initialized_at_return.add(_local)
 			# Phase 3B step 2 — `string_arc_return` swap (option 2:
 			# site-3 skips locals managed by Phase 3C drop-flag
 			# plumbing).  3C is the sole authority on scope-exit drops

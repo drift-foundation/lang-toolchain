@@ -293,3 +293,206 @@ def test_return_consume_verdict_at_after_loadlocal_returns_must_not_drop() -> No
 	func.blocks["entry"] = entry
 	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
 	assert ledger.verdict_at(("entry", 2), "x", needs_drop=True) is DropVerdict.MUST_NOT_DROP
+
+
+# -- Composite-constructor return-consume (Phase 4 sub-step 1) -----------
+
+
+def test_return_consume_through_construct_struct() -> None:
+	"""`LoadLocal(c, X); ConstructStruct(t, args=[c]); Return(t)` —
+	X is consumed by the constructor that builds the returned value."""
+	func = _make_func("ret_struct", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="x"))
+	entry.instructions.append(M.ConstructStruct(dest="t_struct", struct_ty=_TY_OTHER, args=["t_load"]))
+	entry.terminator = M.Return(value="t_struct")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT, (
+		"ConstructStruct args feeding Return should consume their "
+		"source locals — otherwise site 3's returned-value-source "
+		"suppression cannot be replaced by ledger consultation."
+	)
+
+
+def test_return_consume_through_construct_variant() -> None:
+	"""`LoadLocal(c, X); ConstructVariant(t, ctor, args=[c]); Return(t)`
+	— same logic as ConstructStruct but for variant constructors."""
+	func = _make_func("ret_variant", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="x"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Some", args=["t_load"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT
+
+
+def test_return_consume_through_construct_result_ok() -> None:
+	"""`LoadLocal(c, X); ConstructResultOk(t, value=c); Return(t)` —
+	the implicit FnResult.Ok wrapper for can-throw functions."""
+	func = _make_func("ret_result_ok", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="x"))
+	entry.instructions.append(M.ConstructResultOk(dest="t_ok", value="t_load"))
+	entry.terminator = M.Return(value="t_ok")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT
+
+
+def test_return_consume_through_construct_iface_value() -> None:
+	"""`LoadLocal(c, X); ConstructIfaceValue(iv, value=c); Return(iv)` —
+	interface boxing of an owned local."""
+	func = _make_func("ret_iface", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="x"))
+	entry.instructions.append(
+		M.ConstructIfaceValue(dest="t_iv", iface_ty=_TY_OTHER, value="t_load", value_ty=_TY_OWNED)
+	)
+	entry.terminator = M.Return(value="t_iv")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT
+
+
+def test_return_consume_multi_arg_construct_variant_marks_each() -> None:
+	"""Each tracked LoadLocal source in a multi-arg constructor is
+	independently consumed."""
+	func = _make_func(
+		"ret_multi",
+		params=[],
+		locals_=["x", "y"],
+		types={"x": _TY_OWNED, "y": _TY_OWNED},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_initx"))
+	entry.instructions.append(M.StoreLocal(local="y", value="t_inity"))
+	entry.instructions.append(M.LoadLocal(dest="t_lx", local="x"))
+	entry.instructions.append(M.LoadLocal(dest="t_ly", local="y"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Pair", args=["t_lx", "t_ly"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT
+	assert ledger.block_out["entry"]["y"] is LiveState.MOVED_OUT
+
+
+def test_return_consume_construct_arg_not_from_loadlocal_no_transition() -> None:
+	"""Negative: a constructor arg that is a constant / non-LoadLocal
+	value cannot be traced to a tracked source local; nothing
+	transitions for it."""
+	func = _make_func("ret_const_arg", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	# t_const isn't produced by any instruction in this block — it's
+	# treated as opaque (param / external value).
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Some", args=["t_const"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.LIVE
+
+
+def test_return_consume_construct_arg_loadlocal_of_untracked_no_transition() -> None:
+	"""Negative: a constructor arg LoadLocal of an UNTRACKED local
+	(not in `func.params` ∪ `func.locals`) is ignored; no tracked
+	local transitions."""
+	func = _make_func("ret_untracked_arg", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="not_tracked"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Some", args=["t_load"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.LIVE
+
+
+def test_return_consume_composite_arg_with_external_use_disqualifies_only_that_arg() -> None:
+	"""Negative: a constructor arg LoadLocal whose dest is consumed
+	OUTSIDE the chain (e.g., also stored into another local) is
+	disqualified.  Other args in the same constructor whose
+	LoadLocal dests are NOT externally used remain consumed."""
+	func = _make_func(
+		"ret_partial_external",
+		params=[],
+		locals_=["x", "y", "z"],
+		types={"x": _TY_OWNED, "y": _TY_OWNED, "z": _TY_OWNED},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_initx"))
+	entry.instructions.append(M.StoreLocal(local="y", value="t_inity"))
+	entry.instructions.append(M.LoadLocal(dest="t_lx", local="x"))
+	entry.instructions.append(M.LoadLocal(dest="t_ly", local="y"))
+	# t_lx has an external use: stored into z.  Disqualifies the
+	# x→t_lx→ConstructVariant→Return chain for x.
+	entry.instructions.append(M.StoreLocal(local="z", value="t_lx"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Pair", args=["t_lx", "t_ly"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.LIVE, (
+		"x's LoadLocal dest is also stored into z — must NOT be "
+		"treated as a return-consume."
+	)
+	assert ledger.block_out["entry"]["y"] is LiveState.MOVED_OUT, (
+		"y's LoadLocal dest is consumed only by the constructor — "
+		"the per-arg disqualification of x must not poison y."
+	)
+
+
+def test_return_consume_construct_chain_through_assign_ssa() -> None:
+	"""`LoadLocal(c, X); AssignSSA(s, c); ConstructVariant(args=[s]);
+	Return(t)` — AssignSSA chains inside constructor args also walk
+	back to the LoadLocal."""
+	func = _make_func("ret_assign_ssa_arg", params=[], locals_=["x"], types={"x": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="x"))
+	entry.instructions.append(M.AssignSSA(dest="t_alias", src="t_load"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_var", variant_ty=_TY_OTHER, ctor="Some", args=["t_alias"])
+	)
+	entry.terminator = M.Return(value="t_var")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["x"] is LiveState.MOVED_OUT
+
+
+def test_return_consume_nested_construct_variant_in_construct_result_ok() -> None:
+	"""Real-world shape: `return core.Result::Ok(JsonNode::Array(move
+	values))` lowers as nested constructors.  The return-consume must
+	walk through both the outer ConstructResultOk and the inner
+	ConstructVariant to reach the LoadLocal."""
+	func = _make_func("ret_nested", params=[], locals_=["values"], types={"values": _TY_OWNED})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="values", value="t_init"))
+	entry.instructions.append(M.LoadLocal(dest="t_load", local="values"))
+	entry.instructions.append(
+		M.ConstructVariant(dest="t_inner", variant_ty=_TY_OTHER, ctor="Array", args=["t_load"])
+	)
+	entry.instructions.append(M.ConstructResultOk(dest="t_outer", value="t_inner"))
+	entry.terminator = M.Return(value="t_outer")
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	assert ledger.block_out["entry"]["values"] is LiveState.MOVED_OUT, (
+		"nested constructors must compose: ConstructResultOk(value=...) "
+		"wrapping ConstructVariant(args=[LoadLocal(_, values)]) is the "
+		"shape `return core.Result::Ok(JsonNode::Array(move values))` "
+		"lowers to."
+	)

@@ -312,6 +312,16 @@ def build_ledger(
 		for ins in blk.instructions:
 			if isinstance(ins, M.AddrOfLocal):
 				addr_of_dest_to_local[ins.dest] = ins.local
+	# Phase 4 site-3 sub-step 2: destructor-method `self` is
+	# implicitly consumed by the runtime at function exit.  Detect
+	# the destructor by the same `func.fn_id.name` pattern site 3
+	# uses today, so the lattice and the (now-retired) site-local
+	# guard agree on which functions are destructors.  The
+	# transition is applied at the end of every Return-terminator
+	# block, AFTER the regular instruction loop, so mid-body
+	# per-instruction snapshots still see `self` as `LIVE`.
+	is_destructor = "std.core.Destructible::destroy" in getattr(func.fn_id, "name", "")
+	destructor_self_local: Optional[str] = "self" if (is_destructor and "self" in tracked) else None
 	preds = _compute_predecessors(func)
 	worklist: List[str] = [func.entry]
 	seen: Set[str] = {func.entry}
@@ -325,6 +335,23 @@ def build_ledger(
 		out_state, per_instr, field_out_state, field_per_instr = _walk_block(
 			in_state, field_in_state, block, tracked, addr_of_dest_to_local
 		)
+		# Destructor-method self consumption: applied at the end of
+		# every Return-terminator block.  Lands on block_out AND on
+		# the last per-instruction snapshot, so site 3's query at
+		# `(block, len(instructions))` (which reads
+		# `post_instr[len-1]` via `state_pre`) sees MOVED_OUT.
+		# Mid-body snapshots (any earlier index) are unchanged —
+		# the destructor body may freely use `self`.
+		if (
+			destructor_self_local is not None
+			and isinstance(block.terminator, M.Return)
+		):
+			out_state[destructor_self_local] = LiveState.MOVED_OUT
+			if per_instr:
+				last_idx, last_snap = per_instr[-1]
+				last_snap = dict(last_snap)
+				last_snap[destructor_self_local] = LiveState.MOVED_OUT
+				per_instr[-1] = (last_idx, last_snap)
 		ledger.block_out[block_name] = out_state
 		for idx, snap in per_instr:
 			ledger.post_instr[(block_name, idx)] = snap
@@ -471,7 +498,10 @@ def _walk_block(
 	field_per_instr: List[Tuple[int, Dict[Tuple[str, FieldPath], LiveState]]] = []
 	zero_values: Set[str] = set()
 	field_addr_dests: Dict[str, Tuple[str, str, int]] = {}
-	return_consumed = _identify_return_consumed_load(block, tracked)
+	return_consumed = _identify_return_consumed_loads(block, tracked)
+	consumed_by_idx: Dict[int, List[str]] = {}
+	for lidx, llocal in return_consumed:
+		consumed_by_idx.setdefault(lidx, []).append(llocal)
 	for idx, ins in enumerate(block.instructions):
 		_apply(ins, state, tracked, zero_values)
 		_apply_field_state(
@@ -482,81 +512,138 @@ def _walk_block(
 			addr_of_dest_to_local,
 			field_addr_dests,
 		)
-		if return_consumed is not None and return_consumed[0] == idx:
+		if idx in consumed_by_idx:
 			# Phase 4: this LoadLocal feeds the block's Return
-			# terminator and has no other consumers — treat as a
-			# `MoveOut`-equivalent.  Transition lands AT the
-			# LoadLocal index so any later cursor in the same block
-			# (e.g. site 1's scope-drop emitted after the return-
-			# value lowering) reads `MOVED_OUT` via `state_pre`.
-			state[return_consumed[1]] = LiveState.MOVED_OUT
-			_clear_local_field_state(field_state, return_consumed[1])
+			# terminator (directly, via AssignSSA chain, or through
+			# a composite constructor — `ConstructStruct` /
+			# `ConstructVariant` / `ConstructResultOk` /
+			# `ConstructIfaceValue` — that wraps the value).
+			# Treat as a `MoveOut`-equivalent.  Transition lands AT
+			# the LoadLocal index so any later cursor in the same
+			# block (notably site 3's return-cleanup query, which
+			# runs at `(block, len(instructions))`) reads
+			# `MOVED_OUT` via `state_pre`.
+			for llocal in consumed_by_idx[idx]:
+				state[llocal] = LiveState.MOVED_OUT
+				_clear_local_field_state(field_state, llocal)
 		per_instr.append((idx, dict(state)))
 		field_per_instr.append((idx, dict(field_state)))
 	return state, per_instr, field_state, field_per_instr
 
 
-def _identify_return_consumed_load(
+def _identify_return_consumed_loads(
 	block: M.BasicBlock,
 	tracked: Set[str],
-) -> Optional[Tuple[int, str]]:
-	"""Return `(loadlocal_index, source_local)` if the block's
-	`Return` terminator consumes its operand from a `LoadLocal(_, X)`
-	in this block (transitively through `AssignSSA` chains) AND
-	nothing outside the alias chain reads any value in the chain.
-	Otherwise `None`.
+) -> List[Tuple[int, str]]:
+	"""Return every `(loadlocal_index, source_local)` pair for
+	`LoadLocal(_, X)` instructions whose dest transitively feeds the
+	block's `Return` terminator.
 
-	Single-block analysis only — alias propagation across blocks
-	would need phi/predecessor reasoning; deferred until a real
-	carrier shape requires it.
+	Three composition shapes are recognized:
 
-	The "no external use" rule is what enforces K's "non-return
-	uses must not count as transfer."  A `LoadLocal` whose dest is
-	stored into another local, copied, or otherwise read outside the
-	chain is left alone.
+	1. Direct: `Return(t)` where `t` alias-chains (via `AssignSSA`)
+	   to a `LoadLocal(_, X)` in this block.
+	2. Composite: `Return(t)` where `t` alias-chains to the dest of
+	   a `ConstructStruct` / `ConstructVariant` / `ConstructResultOk`
+	   / `ConstructIfaceValue`, and one or more of that constructor's
+	   args further alias-chain to `LoadLocal(_, X_i)`.  Composite
+	   constructors can nest (e.g., `Result::Ok(Variant::Ctor(x))`).
+	3. Mixed: AssignSSA chains may appear at any level.
+
+	Each candidate `(loadlocal_idx, source_local)` must satisfy the
+	per-candidate external-use check: the LoadLocal's dest is
+	consumed only by chain participants (AssignSSA or Construct*
+	instructions on the chain) — any other consumer disqualifies
+	that specific candidate, but does not poison sibling candidates
+	in the same constructor args list.
+
+	Single-block analysis only; cross-block alias propagation would
+	require phi / predecessor reasoning and is deferred.
 	"""
 	term = getattr(block, "terminator", None)
 	if not isinstance(term, M.Return):
-		return None
+		return []
 	val = term.value
 	if val is None:
-		return None
-	chain_aliases: Set[str] = {val}
-	alias = val
-	while True:
-		moved = False
-		for prev in reversed(block.instructions):
-			if isinstance(prev, M.AssignSSA) and prev.dest == alias:
-				alias = prev.src
-				chain_aliases.add(alias)
-				moved = True
-				break
-		if not moved:
+		return []
+	instrs = block.instructions
+	# Producer index: ValueId → instruction index producing that dest.
+	producer_idx: Dict[str, int] = {}
+	for idx, ins in enumerate(instrs):
+		dest = getattr(ins, "dest", None)
+		if isinstance(dest, str):
+			producer_idx[dest] = idx
+	# Chain-consumer indices: instructions that are part of the
+	# alias/compose chain from Return.value downward.  A candidate's
+	# LoadLocal.dest is allowed to be read by these; anything else
+	# is an external use.
+	chain_consumer_indices: Set[int] = set()
+	candidates: List[Tuple[int, str]] = []
+
+	def _trace(start_alias: str) -> None:
+		# Walk AssignSSA chain from start_alias.
+		alias = start_alias
+		while alias in producer_idx:
+			pidx = producer_idx[alias]
+			pins = instrs[pidx]
+			if isinstance(pins, M.AssignSSA):
+				chain_consumer_indices.add(pidx)
+				alias = pins.src
+				continue
 			break
-	loadlocal_idx: Optional[int] = None
-	source_local: Optional[str] = None
-	for idx in range(len(block.instructions) - 1, -1, -1):
-		ins = block.instructions[idx]
-		if isinstance(ins, M.LoadLocal) and ins.dest == alias:
+		# Examine the producer of the chain-endpoint alias.
+		idx = producer_idx.get(alias)
+		if idx is None:
+			return  # opaque source (parameter, external value)
+		ins = instrs[idx]
+		if isinstance(ins, M.LoadLocal):
 			if ins.local in tracked:
-				loadlocal_idx = idx
-				source_local = ins.local
-			break
-	if loadlocal_idx is None or source_local is None:
-		return None
-	# External-use check: any non-AssignSSA-on-the-chain instruction
-	# (other than the LoadLocal itself) that reads any alias in the
-	# chain disqualifies the consumption.
-	for j, other in enumerate(block.instructions):
-		if j == loadlocal_idx:
+				candidates.append((idx, ins.local))
+			return
+		if isinstance(ins, M.ConstructStruct):
+			chain_consumer_indices.add(idx)
+			for arg in ins.args:
+				_trace(arg)
+			return
+		if isinstance(ins, M.ConstructVariant):
+			chain_consumer_indices.add(idx)
+			for arg in ins.args:
+				_trace(arg)
+			return
+		if isinstance(ins, M.ConstructResultOk):
+			chain_consumer_indices.add(idx)
+			if ins.value is not None:
+				_trace(ins.value)
+			return
+		if isinstance(ins, M.ConstructIfaceValue):
+			chain_consumer_indices.add(idx)
+			_trace(ins.value)
+			return
+		# Other producer kinds (BinaryOp, ConstInt, etc.) — opaque.
+		return
+
+	_trace(val)
+	if not candidates:
+		return []
+	# Per-candidate external-use check.
+	valid: List[Tuple[int, str]] = []
+	for cand_idx, cand_local in candidates:
+		cand_dest = getattr(instrs[cand_idx], "dest", None)
+		if not isinstance(cand_dest, str):
 			continue
-		if isinstance(other, M.AssignSSA) and other.dest in chain_aliases:
-			# Chain link — its read of `src` is part of the chain.
-			continue
-		for v in _iter_value_uses(other):
-			if v in chain_aliases:
-				return None
-	return (loadlocal_idx, source_local)
+		external = False
+		for j, other in enumerate(instrs):
+			if j == cand_idx or j in chain_consumer_indices:
+				continue
+			for v in _iter_value_uses(other):
+				if v == cand_dest:
+					external = True
+					break
+			if external:
+				break
+		if not external:
+			valid.append((cand_idx, cand_local))
+	return valid
 
 
 def _iter_value_uses(ins: M.MInstr) -> List[str]:
