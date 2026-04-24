@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 4 site-1 patch 1 — cleanup re-authoring pass for function-exit
-scope drops.
+Phase 4 site-1 patch 1 + patch 2 — cleanup re-authoring pass for
+function-exit scope drops, with observe parity.
 
 HIR→MIR's seven function-exit `_emit_scope_drops(scope_index=0)`
 call sites now emit a single `M.CleanupHook` instruction (via
@@ -22,9 +22,21 @@ Variant zero-tag widening: when the verdict is `PathDependent`
 (centralised in `string_arc.py` since site-3 sub-step 3) controls
 whether we emit anyway — variants are safe-to-drop on PHI-zero
 storage (tag-0 destructor is a no-op) AND necessary on live paths.
-For non-variant `PathDependent`, we skip emission AND record an
-observe-mode telemetry record (see `_emit_path_dependent_skip_record`)
-so we can detect the case if it ever fires in real Drift.
+For non-variant `PathDependent`, we skip emission.
+
+Observe parity (patch 2, 2026-04-23): every per-candidate decision
+is emitted as a `[drift:ownership_ledger]` stderr line, gated on
+`drift_debug.enabled("ownership_ledger")`.  Records carry
+`site=scope_drop` so observe triage routes them through the same
+buckets legacy site-1 records used.  Classification is hard-coded
+`agree` — cleanup_authoring IS the ledger consultation, so by
+construction the site verdict matches the ledger verdict at this
+program point.  This avoids re-running `compare_events` (which would
+use the quarantined `has_drop` approximation in
+`driftc.py::_needs_drop` and could spuriously flag bucket-6
+records).  Reason tags reuse the legacy site-1 set:
+`needs_drop` / `not_drop_needing` / `moved_unconditional` plus the
+new `path_dependent_non_variant_skip` tripwire.
 
 RAII timing: drops are emitted at the marker position in the
 block's instruction list (via list splice), preserving the original
@@ -41,9 +53,16 @@ from lang.driftc.core.types_core import TypeId, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import ownership_ledger_events as _ledger_events
-from .ownership_ledger import DropVerdict, LiveStateMap
+from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .drop_policy_compute import compute_drop_policy
 from .string_arc import variant_zero_tag_drop_safe
+
+
+# Patch-2 reason tag for the non-variant + PathDependent skip case.
+# Site 1's legacy `_moved_locals` would have skipped here too; this
+# tag makes the case visible in observe so we can detect any real
+# Drift code that hits it.
+_REASON_PATH_DEPENDENT_NON_VARIANT_SKIP = "path_dependent_non_variant_skip"
 
 
 def author_cleanup(
@@ -94,6 +113,7 @@ def author_cleanup(
 				used_temps.add(name)
 				return name
 
+	observe_on = drift_debug.enabled("ownership_ledger")
 	for blk in func.blocks.values():
 		new_instrs: List[M.MInstr] = []
 		for idx, ins in enumerate(blk.instructions):
@@ -111,28 +131,33 @@ def author_cleanup(
 			# original-index `idx` is the right query point.
 			hook_point = (blk.name, idx)
 			for local, ty in ins.candidates:
-				verdict = ledger.verdict_at(
-					hook_point,
-					local,
-					needs_drop=bool(compute_drop_policy(type_table, ty).needs_drop),
-				)
+				needs_drop_axis = bool(compute_drop_policy(type_table, ty).needs_drop)
+				verdict = ledger.verdict_at(hook_point, local, needs_drop=needs_drop_axis)
+				raw_state = ledger.state_pre(hook_point, local)
 				should_emit = False
 				if verdict is DropVerdict.MUST_DROP:
 					should_emit = True
 				elif verdict is DropVerdict.PATH_DEPENDENT:
+					# Variant zero-tag widening: tag=0 destructor is a
+					# no-op on uninit paths; drops on live paths are
+					# necessary.
 					if variant_zero_tag_drop_safe(ty, type_table):
-						# Variant zero-tag widening: tag=0 destructor
-						# is a no-op on uninit paths; drops on live
-						# paths are necessary.
 						should_emit = True
-					else:
-						# Non-variant + PathDependent at function-exit
-						# is a tripwire shape — site 1's `_moved_locals`
-						# legacy behaviour skipped here too, so for now
-						# we match (no leak), but record telemetry so
-						# the case is visible if it appears.
-						_emit_path_dependent_skip_record(func, blk.name, idx, local)
-						continue
+				# Patch 2: emit observe parity record per candidate,
+				# regardless of decision.  Reason tag mirrors the
+				# legacy site-1 set; classification is hard-coded
+				# `agree` (cleanup_authoring IS the ledger
+				# consultation; see module docstring).
+				if observe_on:
+					_emit_decision_record(
+						func=func,
+						block_name=blk.name,
+						idx=idx,
+						local=local,
+						verdict=verdict,
+						raw_state=raw_state,
+						should_emit=should_emit,
+					)
 				if not should_emit:
 					continue
 				tmp = _new_temp()
@@ -144,33 +169,70 @@ def author_cleanup(
 	return emitted_drops
 
 
-def _emit_path_dependent_skip_record(
+def _emit_decision_record(
+	*,
 	func: M.MirFunc,
 	block_name: str,
 	idx: int,
 	local: str,
+	verdict: DropVerdict,
+	raw_state: LiveState,
+	should_emit: bool,
 ) -> None:
-	"""Observe-mode tripwire for the `non-variant + PathDependent`
-	case at function-exit cleanup.  Today this case is a no-op
-	(legacy site 1 also skipped here via `_moved_locals`), but the
-	record lets us detect any real Drift code that hits it.
+	"""Patch-2 observe parity emit.  One JSON line per per-candidate
+	decision, format-compatible with the existing
+	`[drift:ownership_ledger]` channel that legacy site-1 records
+	flow through.
 
-	Gated on `drift_debug.enabled("ownership_ledger")` so production
-	builds stay quiet.
+	Classification is hard-coded `agree` — cleanup_authoring IS the
+	ledger consultation, so by construction the site verdict matches
+	the ledger verdict at this program point.  Routing through
+	`compare_events` would re-derive the verdict using the
+	quarantined `has_drop` approximation in `driftc.py::_needs_drop`
+	and could spuriously bucket-6 the records; the direct emit
+	avoids that.
+
+	Reason tag mapping (mirrors legacy site-1 reason set):
+
+	  - emit + MUST_DROP / PathDependent variant-widening → `needs_drop`
+	  - skip + state=MOVED_OUT → `moved_unconditional` (definite move)
+	  - skip + needs_drop=False / state=TOMBSTONED / state=UNINIT
+	    → `not_drop_needing`
+	  - skip + PathDependent non-variant → `path_dependent_non_variant_skip`
+	    (tripwire — site 1 legacy `_moved_locals` skipped here too;
+	    the tag makes the case visible if any real Drift hits it)
 	"""
-	if not drift_debug.enabled("ownership_ledger"):
-		return
 	import json
+	site_verdict = _ledger_events.VERDICT_MUST_DROP if should_emit else _ledger_events.VERDICT_MUST_NOT_DROP
+	if should_emit:
+		site_reason = _ledger_events.REASON_NEEDS_DROP
+	elif verdict is DropVerdict.PATH_DEPENDENT:
+		# Non-variant path-dependent skip — variant case took the
+		# emit branch above.
+		site_reason = _REASON_PATH_DEPENDENT_NON_VARIANT_SKIP
+	elif raw_state is LiveState.MOVED_OUT:
+		site_reason = _ledger_events.REASON_MOVED_UNCONDITIONAL
+	else:
+		site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
+	ledger_verdict_str = _verdict_to_str(verdict)
 	payload = {
-		"site": "scope_drop",
+		"site": _ledger_events.SITE_SCOPE_DROP,
 		"fn_name": func.name,
 		"program_point": [block_name, idx],
 		"local": local,
-		"site_verdict": _ledger_events.VERDICT_MUST_NOT_DROP,
-		"site_reason": "path_dependent_non_variant_skip",
-		"ledger_verdict": "path_dependent",
-		"raw_state": "maybe_uninit",
+		"site_verdict": site_verdict,
+		"site_reason": site_reason,
+		"ledger_verdict": ledger_verdict_str,
+		"raw_state": raw_state.value,
 		"classification": "agree",
 		"field_path": [],
 	}
 	sys.stderr.write("[drift:ownership_ledger] " + json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _verdict_to_str(v: DropVerdict) -> str:
+	if v is DropVerdict.MUST_DROP:
+		return _ledger_events.VERDICT_MUST_DROP
+	if v is DropVerdict.MUST_NOT_DROP:
+		return _ledger_events.VERDICT_MUST_NOT_DROP
+	return "path_dependent"

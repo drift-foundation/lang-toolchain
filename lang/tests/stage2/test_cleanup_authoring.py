@@ -351,6 +351,97 @@ def test_authoring_noop_when_no_hook() -> None:
 # -- Carrier 9: no ledger attached → no-op (hook stays) -----------------
 
 
+def test_authoring_emits_observe_parity_record_per_candidate(capfd) -> None:
+	"""Patch 2 observe parity: every per-candidate decision is
+	emitted as a `[drift:ownership_ledger]` line when observe mode
+	is on.  Granularity must match legacy site-1 records (one per
+	local), reason tags must be from the legacy site-1 set
+	(`needs_drop` / `not_drop_needing` / `moved_unconditional`) plus
+	the `path_dependent_non_variant_skip` tripwire."""
+	import os
+	from lang.driftc import debug as drift_debug
+	type_table = TypeTable()
+	dty = _make_droppable_struct(type_table)
+	func = _make_func(
+		"parity_emit",
+		params=[],
+		locals_=["live", "uninit"],
+		types={"live": dty, "uninit": dty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="live", value="t_init_live"))
+	entry.instructions.append(
+		M.CleanupHook(scope_id=0, candidates=[("live", dty), ("uninit", dty)])
+	)
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	_attach_ledger(func)
+	old_env = os.environ.get("DRIFT_COMPILER_DEBUG")
+	os.environ["DRIFT_COMPILER_DEBUG"] = '{"ownership_ledger":true}'
+	drift_debug._cached_flags = None
+	try:
+		author_cleanup(func, type_table=type_table)
+	finally:
+		drift_debug._cached_flags = None
+		if old_env is None:
+			os.environ.pop("DRIFT_COMPILER_DEBUG", None)
+		else:
+			os.environ["DRIFT_COMPILER_DEBUG"] = old_env
+	captured = capfd.readouterr()
+	# Two parity records expected (one per candidate).
+	lines = [
+		ln for ln in captured.err.splitlines()
+		if ln.startswith("[drift:ownership_ledger]")
+	]
+	assert len(lines) == 2, (
+		f"observe parity regressed: expected 2 per-candidate records "
+		f"(one for `live`, one for `uninit`), got {len(lines)}: {lines}"
+	)
+	import json
+	records = [json.loads(ln[len("[drift:ownership_ledger] "):]) for ln in lines]
+	by_local = {r["local"]: r for r in records}
+	# `live` → MUST_DROP / needs_drop, classification agree.
+	assert by_local["live"]["site_verdict"] == "must_drop"
+	assert by_local["live"]["site_reason"] == "needs_drop"
+	assert by_local["live"]["classification"] == "agree"
+	assert by_local["live"]["site"] == "scope_drop"
+	# `uninit` → MUST_NOT_DROP / not_drop_needing (legacy site-1 set).
+	assert by_local["uninit"]["site_verdict"] == "must_not_drop"
+	assert by_local["uninit"]["site_reason"] == "not_drop_needing"
+	assert by_local["uninit"]["classification"] == "agree"
+
+
+def test_authoring_emits_no_observe_records_when_flag_off(capfd) -> None:
+	"""Production builds (observe flag off) must emit zero
+	`[drift:ownership_ledger]` lines from cleanup_authoring."""
+	import os
+	from lang.driftc import debug as drift_debug
+	type_table = TypeTable()
+	dty = _make_droppable_struct(type_table)
+	func = _make_func("no_observe", params=[], locals_=["x"], types={"x": dty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.instructions.append(M.CleanupHook(scope_id=0, candidates=[("x", dty)]))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	_attach_ledger(func)
+	# Force observe flag OFF.
+	old_env = os.environ.get("DRIFT_COMPILER_DEBUG")
+	os.environ.pop("DRIFT_COMPILER_DEBUG", None)
+	drift_debug._cached_flags = None
+	try:
+		author_cleanup(func, type_table=type_table)
+	finally:
+		drift_debug._cached_flags = None
+		if old_env is not None:
+			os.environ["DRIFT_COMPILER_DEBUG"] = old_env
+	captured = capfd.readouterr()
+	assert "[drift:ownership_ledger]" not in captured.err, (
+		"cleanup_authoring leaked observe records into a non-observe "
+		"build — telemetry must be gated on `drift_debug.enabled`."
+	)
+
+
 def test_authoring_temp_names_do_not_collide_with_existing_locals() -> None:
 	"""K-found correctness pin (medium): MIR shares one string
 	namespace across locals and SSA value-ids.  The authoring pass
