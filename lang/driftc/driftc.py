@@ -6837,6 +6837,17 @@ def compile_stubbed_funcs(
 			)
 			for fn_id, func in mir_funcs_by_id.items():
 				_author_cleanup(func, type_table=shared_type_table)
+				# Patch 3 re-enables nested-scope `lower_block`
+				# fall-through migration to `M.CleanupHook`, which
+				# expands the set of CleanupHooks `_author_cleanup`
+				# rewrites.  Rebuild the ledger so downstream consumers
+				# (string_arc, drop_flags, site-2 trim) see the
+				# post-authoring per-instruction state instead of the
+				# stale pre-authoring snapshot.  Stale state caused
+				# site-4 tripwire fires under patch 3 before the
+				# rebuild was added.
+				ledger = _ol_build(func, drop_policy=lambda _t: None)
+				setattr(func, "_ownership_ledger", ledger)
 		if drift_debug.enabled("ownership_ledger"):
 			# Phase 3A observational: drain the decision events
 			# recorded by sites 1/2 during HIR→MIR and emit

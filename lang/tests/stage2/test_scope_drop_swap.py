@@ -424,3 +424,15 @@ def test_emission_path_dependent_bucket6_shape_still_skips_at_site1() -> None:
 		"source of the drop on the no-move path.  Adding an "
 		"unconditional drop here double-drops on the b=true path."
 	)
+
+
+# -- Phase 4 site-1 patch 3 (REVERTED) ----------------------------------
+# The lower_block end-of-block migration was reverted after surfacing a
+# runtime corruption (driver test
+# `test_fat_arc_interface_views.py::test_drop_order_destructor_runs_exactly_once`
+# crashed with `tcache_thread_shutdown(): unaligned tcache chunk
+# detected`).  The patch-3 unit pins that exercised the migration are
+# removed; the helper `_emit_scope_cleanup_hook(scope_index=...)` and
+# the existing test_emission_definite_live_string... pin (which
+# exercises the function-exit shape) remain in place.  See
+# `work/ownership-ledger/3b-status.md` patch-3 section.

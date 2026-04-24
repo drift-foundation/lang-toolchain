@@ -35,6 +35,17 @@ def _collect_ctor_callinfo(hir: H.HBlock, type_table: TypeTable, var_tid: TypeId
 
 
 def test_match_copy_payload_emits_copyvalue_and_has_single_scrutinee_drop_across_cfg() -> None:
+	"""Phase 4 site-1 patch 3 update: `lower_block`'s end-of-block
+	scope drop now emits a `M.CleanupHook` marker rather than an
+	inline `DropValue`; the materialised drop is authored by
+	`cleanup_authoring.author_cleanup` after the ledger build.
+	The semantic invariant pinned here — exactly one `DropValue`
+	of the variant type across the post-match CFG, never in
+	`match_dispatch` — is unchanged.  Same update pattern as
+	`test_scope_drop_swap.test_emission_definite_live_string_...`.
+	"""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
 	type_table = TypeTable()
 	var_base = type_table.declare_variant(
 		module_id="main",
@@ -63,6 +74,9 @@ def test_match_copy_payload_emits_copyvalue_and_has_single_scrutinee_drop_across
 	call_info_by_callsite_id = _collect_ctor_callinfo(hir, type_table, var_tid)
 	builder = make_builder(FunctionId(module="main", name="main", ordinal=0))
 	HIRToMIR(builder, type_table=type_table, call_info_by_callsite_id=call_info_by_callsite_id).lower_block(hir)
+	ledger = build_ledger(builder.func, drop_policy=lambda _t: None)
+	setattr(builder.func, "_ownership_ledger", ledger)
+	author_cleanup(builder.func, type_table=type_table)
 	arm_blocks = [block for block in builder.func.blocks.values() if block.name.startswith("match_arm_")]
 	assert arm_blocks
 	some_arm = next((block for block in arm_blocks if any(isinstance(instr, VariantGetFieldAddr) and instr.ctor == "Some" for instr in block.instructions)), None)

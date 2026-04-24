@@ -1163,33 +1163,42 @@ class HIRToMIR:
 				self.b.emit(M.DropValue(value=tmp, ty=ty))
 				self._local_types[tmp] = ty
 
-	def _emit_function_exit_cleanup_hook(self) -> None:
-		"""Phase 4 site-1 patch 1 — function-exit scope-drop migration.
+	def _emit_scope_cleanup_hook(self, *, scope_index: int) -> None:
+		"""Phase 4 site-1 cleanup-authoring marker emission.
 
-		Replaces `_emit_scope_drops(scope_index=0)` for the seven
-		function-exit call sites (in `_visit_stmt_HReturn` and
-		`_visit_stmt_HThrow`).  Walks the entire `_scope_stack`
-		(scope 0 down through every nested open scope) in legacy
-		emission order — `reversed(_scope_stack)`, then
-		`reversed(scope)` — and emits a single `M.CleanupHook`
-		instruction whose `candidates` list captures every
-		(local, type) pair the legacy emission would have considered.
+		Generalises patch 1's `_emit_function_exit_cleanup_hook`
+		(scope_index=0) to any scope_index.  Walks
+		`self._scope_stack[scope_index:]` in legacy emission order
+		(reversed scopes, then reversed locals) and emits a single
+		`M.CleanupHook` whose `candidates` list captures every
+		(local, type) pair the legacy `_emit_scope_drops` would
+		have considered at the same point.
 
 		The candidates list is unfiltered by drop verdict on purpose:
-		`cleanup_authoring.py` queries `verdict_at` for each candidate
-		and decides emission.  The hook carries the full legacy
-		consideration set so authoring can produce the same MIR
-		legacy would have, modulo the authority shift from
+		`cleanup_authoring.py` queries `verdict_at` for each
+		candidate and decides emission.  The hook carries the full
+		legacy consideration set so authoring can produce the same
+		MIR legacy would have, modulo the authority shift from
 		`_moved_locals` to `verdict_at`.
 
-		Nested-scope `_emit_scope_drops(scope_index>0)` calls are
-		NOT migrated by this patch — they remain on legacy until a
-		subsequent patch.
+		Migration coverage today:
+		- patch 1 (`scope_index=0`): the seven function-exit call
+		  sites in `_visit_stmt_HReturn` / `_visit_stmt_HThrow`.
+		- patch 3 (`scope_index=len(stack)-1` for `lower_block`):
+		  end-of-block fall-through cleanup, the most common
+		  nested-scope shape.
+
+		Other `_emit_scope_drops` call sites — `lower_function_body`
+		fall-through (6453), the two lambda-block exits (4499, 4504),
+		and `HBreak` / `HContinue` (7201, 7210) — remain on legacy
+		until subsequent patches.
 		"""
 		if not self._scope_stack:
 			return
+		if scope_index < 0:
+			scope_index = 0
 		candidates: list[tuple] = []
-		for scope in reversed(self._scope_stack):
+		for scope in reversed(self._scope_stack[scope_index:]):
 			for local in reversed(scope):
 				ty = self._local_types.get(local)
 				if ty is None:
@@ -1203,6 +1212,10 @@ class HIRToMIR:
 		scope_id = self._cleanup_hook_counter
 		self._cleanup_hook_counter += 1
 		self.b.emit(M.CleanupHook(scope_id=scope_id, candidates=candidates))
+
+	def _emit_function_exit_cleanup_hook(self) -> None:
+		"""Patch 1 compat shim around `_emit_scope_cleanup_hook(scope_index=0)`."""
+		self._emit_scope_cleanup_hook(scope_index=0)
 
 	def synth_sig_specs(self) -> list[SynthSigSpec]:
 		return list(self._synth_sig_specs)
@@ -6433,7 +6446,16 @@ class HIRToMIR:
 		for stmt in block.statements:
 			self.lower_stmt(stmt)
 		if self.b.block.terminator is None:
-			self._emit_scope_drops(scope_index=len(self._scope_stack) - 1)
+			# Phase 4 site-1 patch 3: nested-scope fall-through cleanup
+			# migrated to `M.CleanupHook`.  Re-enabled after the
+			# `core.drop_value` intrinsic lowering was fixed to emit
+			# `MoveOut + DropValue` (so the ledger sees the consumption
+			# and `cleanup_authoring`'s `verdict_at` returns
+			# MUST_NOT_DROP rather than authoring a redundant drop).
+			# Pinned by `test_drop_value_intrinsic_ownership.py` and
+			# `test_patch3_nested_scope_uaf_regression.py`.  See
+			# `work/ownership-ledger/patch-3-diagnosis.md`.
+			self._emit_scope_cleanup_hook(scope_index=len(self._scope_stack) - 1)
 		self._pop_scope()
 
 	def lower_function_body(self, block: H.HBlock) -> None:
@@ -6565,14 +6587,23 @@ class HIRToMIR:
 				if intrinsic is IntrinsicKind.DROP_VALUE:
 					info = self._call_info_for(stmt.expr)
 					param_ty = info.sig.param_types[0] if info.sig.param_types else self._unknown_type
-					val = self.lower_expr(stmt.expr.args[0])
+					# Lower through the owning-consume helper so a non-
+					# Copy local arg becomes `MoveOut(t, x, ty) + DropValue(t)`
+					# instead of `LoadLocal + DropValue`.  Without the
+					# explicit MoveOut, MIR carries no ownership transition
+					# for `x` and the ledger reports `x` as LIVE after the
+					# DropValue — patch-1 cleanup_authoring (function-exit)
+					# and patch-3 cleanup_authoring (nested-scope) would
+					# both query `verdict_at(x)` and authorize a redundant
+					# drop, double-running the destructor (manifested as
+					# UAF on the fat-Arc-interface-views driver carrier;
+					# see `work/ownership-ledger/patch-3-diagnosis.md`).
+					# `_lower_owning_consume` also handles `_mark_moved`
+					# for the HVar / projection-free HPlaceExpr cases, so
+					# the explicit `_mark_moved` block below is no longer
+					# needed.
+					val = self._lower_owning_consume(stmt.expr.args[0], expected=param_ty)
 					self.b.emit(M.DropValue(value=val, ty=param_ty))
-					# Mark source local as consumed so scope drops skip it.
-					arg0 = stmt.expr.args[0]
-					if isinstance(arg0, H.HVar):
-						self._mark_moved(self._canonical_local(getattr(arg0, "binding_id", None), arg0.name))
-					elif isinstance(arg0, H.HPlaceExpr) and not arg0.projections and isinstance(arg0.base, H.HVar):
-						self._mark_moved(self._canonical_local(getattr(arg0.base, "binding_id", None), arg0.base.name))
 					return
 				self.lower_expr(stmt.expr)
 				return
