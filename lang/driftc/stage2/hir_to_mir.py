@@ -531,19 +531,6 @@ class HIRToMIR:
 			setattr(self.b.func, "_drop_decision_log", self._drop_decision_log)
 		else:
 			self._drop_decision_log = None
-		# Phase 4 step 3c: per-field match-cleanup side table.  One
-		# entry per emitted per-field drop at site 2's partial-move
-		# branch.  Consumed post-HIR→MIR by
-		# `ownership_ledger_trim.trim_match_cleanup_by_ledger` to gate
-		# emission on `field_verdict_at`: if the ledger says the field
-		# is already MovedOut (MustNotDrop) the drop chain is removed.
-		# Populated unconditionally — the trim pass is the emission
-		# authority, not observation.  Entry shape:
-		# (scrut_local, field_path, cleanup_point, drop_local, cleanup_fty)
-		self._match_cleanup_per_field_drops: list[
-			tuple[str, tuple[tuple[str, int], ...], tuple[str, int], str, "TypeId"]
-		] = []
-		setattr(self.b.func, "_match_cleanup_per_field_drops", self._match_cleanup_per_field_drops)
 		# Phase 4 site-1 patch 1: per-function counter for
 		# `M.CleanupHook.scope_id`.  Used for telemetry correlation
 		# only; the authoring pass does not consume it for emission
@@ -1994,50 +1981,25 @@ class HIRToMIR:
 						and arm_scrut_ptr is not None
 					):
 						arm_def = inst.arms_by_name[arm.ctor]
+						# Phase 4 site-2 patch 5 step 6: legacy inline
+						# `_record_drop_decision(SITE_MATCH_CLEANUP, ...)`
+						# emissions removed.  Telemetry for the
+						# carried-candidate case is emitted by
+						# `match_cleanup_authoring._emit_decision_record`
+						# with `classification=agree` pre-baked.  The
+						# two HIR-filter skip cases (field moved by
+						# binder, field not drop-needing) are
+						# HIR-private decisions about the candidate
+						# SET, not emit-vs-skip verdicts on carried
+						# candidates — they intentionally no longer
+						# generate per-field records.  This is the
+						# "bucket 1 → structurally 0" telemetry-shape
+						# change called out in `patch-5-design.md`.
 						for cleanup_fidx, cleanup_fty in enumerate(arm_def.field_types):
-							_field_path = ((arm.ctor, int(cleanup_fidx)),)
 							if cleanup_fidx in moved_field_indices:
-								# Site decision: field was moved by
-								# binder; slot drop is skipped to
-								# avoid double-drop.  Ledger should
-								# agree (per-field state MovedOut from
-								# VariantGetFieldAddr in the binder
-								# loop).
-								self._record_drop_decision(
-									site=_ledger_events.SITE_MATCH_CLEANUP,
-									local=arm_scrut_local if arm_scrut_local is not None else "",
-									verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-									reason=_ledger_events.REASON_FIELD_MOVED,
-									field_path=_field_path,
-								)
 								continue
 							if not self._needs_runtime_drop(cleanup_fty):
-								# Site decision: field's type doesn't
-								# need drop; skip.  Ledger should
-								# agree (POD short-circuit in
-								# `classify` — needs_drop=False
-								# returns MustNotDrop regardless of
-								# raw state, even if 3a's
-								# conservative VariantGetFieldAddr
-								# over-reported the field as
-								# MovedOut).
-								self._record_drop_decision(
-									site=_ledger_events.SITE_MATCH_CLEANUP,
-									local=arm_scrut_local if arm_scrut_local is not None else "",
-									verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-									reason=_ledger_events.REASON_FIELD_NOT_DROP_NEEDING,
-									field_path=_field_path,
-								)
 								continue
-							# Candidate survived legacy HIR filtering;
-							# authoring will decide emit vs skip.
-							self._record_drop_decision(
-								site=_ledger_events.SITE_MATCH_CLEANUP,
-								local=arm_scrut_local if arm_scrut_local is not None else "",
-								verdict=_ledger_events.VERDICT_MUST_DROP,
-								reason=_ledger_events.REASON_FIELD_NEEDS_DROP,
-								field_path=_field_path,
-							)
 							# Capture hook point before any per-candidate
 							# emission (no MIR instrs emitted per candidate
 							# in the patch-5 shape, so this is stable across
@@ -2055,20 +2017,6 @@ class HIRToMIR:
 							self.b.ensure_local(drop_tmp)
 							self._local_types[drop_tmp] = cleanup_fty
 							self._register_drop_local(drop_tmp, cleanup_fty)
-							# Side-table entry retained during patch-5
-							# rollout as a safety net for the trim pass
-							# (step 7 of the slice retires both).  With
-							# the chain no longer emitted inline the
-							# trim pass is a no-op for this function.
-							self._match_cleanup_per_field_drops.append(
-								(
-									arm_scrut_local if arm_scrut_local is not None else "",
-									_field_path,
-									match_cleanup_hook_point,
-									drop_tmp,
-									cleanup_fty,
-								)
-							)
 							match_cleanup_candidates.append(
 								(drop_tmp, int(cleanup_fidx), cleanup_fty)
 							)

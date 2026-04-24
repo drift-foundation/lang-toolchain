@@ -6820,7 +6820,8 @@ def compile_stubbed_funcs(
 		# needs_drop=True) = MUST_NOT_DROP` and skips cleanly.  Runs
 		# BEFORE site-1 cleanup_authoring with a ledger rebuild in
 		# between so site 1 sees the authored per-field transitions.
-		# Supersedes the Phase 3c `ownership_ledger_trim` veto pass.
+		# Supersedes the Phase 3c `ownership_ledger_trim` veto pass
+		# (retired at patch-5 step 7).
 		# See `lang/driftc/stage2/match_cleanup_authoring.py`.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.match_cleanup_authoring import (
@@ -6830,18 +6831,6 @@ def compile_stubbed_funcs(
 				_author_match_cleanup(func, type_table=shared_type_table)
 				ledger = _ol_build(func, drop_policy=lambda _t: None)
 				setattr(func, "_ownership_ledger", ledger)
-		# Phase 3c trim pass — now operating as a no-op safety net
-		# during patch-5 rollout (retire at step 7 once telemetry and
-		# correctness are proven).  `_match_cleanup_per_field_drops`
-		# is now populated only for unmigrated code paths (if any
-		# slip through step 4 of the slice); when the side-table is
-		# empty, the trim pass is a no-op.
-		if shared_type_table is not None:
-			from lang.driftc.stage2.ownership_ledger_trim import (
-				trim_match_cleanup_by_ledger as _ol_trim,
-			)
-			for fn_id, func in mir_funcs_by_id.items():
-				_ol_trim(func, type_table=shared_type_table)
 		# Phase 4 site-1 — cleanup re-authoring pass.  All HIR→MIR
 		# scope-drop sites (function-exit, `lower_function_body` /
 		# `lower_block` fall-through, lambda-block exits, `HBreak` /
