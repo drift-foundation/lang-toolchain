@@ -379,6 +379,37 @@ class DropValue(MInstr):
 
 
 @dataclass
+class CleanupHook(MInstr):
+	"""Phase 4 site-1 cleanup-authoring marker (patch 1 — function-exit
+	scope-drop migration).
+
+	Placed by HIR→MIR at every source-scope-exit point that previously
+	emitted inline `MoveOut + DropValue` pairs via
+	`_emit_scope_drops(scope_index=0)`.  Carries the candidate list
+	the legacy emission would have considered: a sequence of
+	`(local, ty)` pairs in legacy emission order (reversed scopes,
+	reversed locals).
+
+	Consumed by `lang/driftc/stage2/cleanup_authoring.py` after
+	`build_ledger`: each candidate is queried via `verdict_at`, real
+	`MoveOut + DropValue` pairs are emitted for `MUST_DROP` (and for
+	`PathDependent` on variant types whose tag-0 destructor is a
+	no-op — the same widening policy site 3 sub-step 3 introduced
+	via `variant_zero_tag_drop_safe`).  The marker is removed after
+	authoring; downstream passes (`drop_flags`, `string_arc`) see
+	only the canonical drop sequences they already understand.
+
+	`scope_id` is a per-function counter used for telemetry
+	correlation only — the authoring pass does not consume it for
+	emission decisions.
+	"""
+	scope_id: int
+	# (local_name, type_id) pairs in legacy emission order:
+	# reversed(scope_stack), then reversed(locals_in_each_scope).
+	candidates: List[tuple]  # tuple[LocalId, TypeId]
+
+
+@dataclass
 class MoveOut(MInstr):
 	"""dest = move local (read local, then reset storage to zero)."""
 	dest: ValueId

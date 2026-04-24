@@ -254,9 +254,20 @@ def _find_drop_for_local(func, local: str) -> bool:
 
 
 def test_emission_definite_live_string_emits_drop_at_scope_exit() -> None:
-	"""HIR: `var s = "hi"; return 0;` — s is Live at return.  Helper
-	says MustDrop; site 1 emits MoveOut+DropValue before the
-	Return."""
+	"""HIR: `var s = "hi"; return 0;` — s is Live at return.
+
+	Post-Phase-4-site-1-patch-1, function-exit scope drops are no
+	longer emitted inline by `_emit_scope_drops(scope_index=0)`.
+	HIR→MIR emits a `M.CleanupHook` marker; the actual
+	`MoveOut + DropValue` pair is authored by
+	`cleanup_authoring.author_cleanup` after `build_ledger` runs.
+	The semantic property pinned here is unchanged: a definite-live
+	destructible local at function-exit gets a drop chain in the
+	final MIR.  The route through the new pass is what the test
+	now exercises end-to-end.
+	"""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
 	hir = HBlock(statements=[
 		HLet(name="s", value=HLiteralString("hi"), declared_type_expr=None, is_mutable=True, binding_id=None),
 		HReturn(value=HLiteralInt(0)),
@@ -269,10 +280,15 @@ def test_emission_definite_live_string_emits_drop_at_scope_exit() -> None:
 	builder = make_builder(FunctionId(module="main", name="f", ordinal=0))
 	lower = HIRToMIR(builder, type_table=type_table, return_type=int_ty)
 	lower.lower_block(hir)
+	ledger = build_ledger(builder.func, drop_policy=lambda _t: None)
+	setattr(builder.func, "_ownership_ledger", ledger)
+	author_cleanup(builder.func, type_table=type_table)
 	assert _find_drop_for_local(builder.func, "s"), (
-		"step 3 regression: a definite-live destructible local at "
-		"scope exit should get a MoveOut+DropValue emission — the "
-		"helper says MustDrop and site 1 must emit"
+		"patch 1 regression: a definite-live destructible local at "
+		"function-exit must get a MoveOut+DropValue emission via "
+		"`cleanup_authoring.author_cleanup` (the legacy inline "
+		"`_emit_scope_drops` emission was migrated to a post-pass "
+		"`M.CleanupHook` marker → authoring step)."
 	)
 
 

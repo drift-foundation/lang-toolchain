@@ -544,6 +544,11 @@ class HIRToMIR:
 			tuple[str, tuple[tuple[str, int], ...], tuple[str, int], str, "TypeId"]
 		] = []
 		setattr(self.b.func, "_match_cleanup_per_field_drops", self._match_cleanup_per_field_drops)
+		# Phase 4 site-1 patch 1: per-function counter for
+		# `M.CleanupHook.scope_id`.  Used for telemetry correlation
+		# only; the authoring pass does not consume it for emission
+		# decisions.
+		self._cleanup_hook_counter: int = 0
 		self._local_binding_ids: set[int] = set()
 		# Scope-aware set of `val ^x` captures active at the current throw site.
 		self._capture_scope_stack: list[list[int]] = []
@@ -1157,6 +1162,47 @@ class HIRToMIR:
 				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))
 				self.b.emit(M.DropValue(value=tmp, ty=ty))
 				self._local_types[tmp] = ty
+
+	def _emit_function_exit_cleanup_hook(self) -> None:
+		"""Phase 4 site-1 patch 1 — function-exit scope-drop migration.
+
+		Replaces `_emit_scope_drops(scope_index=0)` for the seven
+		function-exit call sites (in `_visit_stmt_HReturn` and
+		`_visit_stmt_HThrow`).  Walks the entire `_scope_stack`
+		(scope 0 down through every nested open scope) in legacy
+		emission order — `reversed(_scope_stack)`, then
+		`reversed(scope)` — and emits a single `M.CleanupHook`
+		instruction whose `candidates` list captures every
+		(local, type) pair the legacy emission would have considered.
+
+		The candidates list is unfiltered by drop verdict on purpose:
+		`cleanup_authoring.py` queries `verdict_at` for each candidate
+		and decides emission.  The hook carries the full legacy
+		consideration set so authoring can produce the same MIR
+		legacy would have, modulo the authority shift from
+		`_moved_locals` to `verdict_at`.
+
+		Nested-scope `_emit_scope_drops(scope_index>0)` calls are
+		NOT migrated by this patch — they remain on legacy until a
+		subsequent patch.
+		"""
+		if not self._scope_stack:
+			return
+		candidates: list[tuple] = []
+		for scope in reversed(self._scope_stack):
+			for local in reversed(scope):
+				ty = self._local_types.get(local)
+				if ty is None:
+					# Matches legacy `_emit_scope_drops`'s silent skip
+					# for unknown-type locals; the authoring pass also
+					# skips unknown-type candidates.
+					continue
+				candidates.append((local, ty))
+		if not candidates:
+			return
+		scope_id = self._cleanup_hook_counter
+		self._cleanup_hook_counter += 1
+		self.b.emit(M.CleanupHook(scope_id=scope_id, candidates=candidates))
 
 	def synth_sig_specs(self) -> list[SynthSigSpec]:
 		return list(self._synth_sig_specs)
@@ -7058,14 +7104,14 @@ class HIRToMIR:
 					val_ty = self._infer_expr_type(stmt.value)
 					if val_ty is None or self._type_table.is_void(val_ty):
 						self.lower_stmt(H.HExprStmt(expr=stmt.value))
-						self._emit_scope_drops(scope_index=0)
+						self._emit_function_exit_cleanup_hook()
 						term = M.Return(value=None)
 						if ret_span != Span():
 							term.span = ret_span
 						self.b.set_terminator(term)
 						return
 					raise AssertionError("Void function must not have a return value (checker bug)")
-				self._emit_scope_drops(scope_index=0)
+				self._emit_function_exit_cleanup_hook()
 				term = M.Return(value=None)
 				if ret_span != Span():
 					term.span = ret_span
@@ -7087,7 +7133,7 @@ class HIRToMIR:
 							f"returning an owned value from a reference requires "
 							f"explicit 'copy <expr>'"
 						)
-			self._emit_scope_drops(scope_index=0)
+			self._emit_function_exit_cleanup_hook()
 			term = M.Return(value=val)
 			if ret_span != Span():
 				term.span = ret_span
@@ -7101,7 +7147,7 @@ class HIRToMIR:
 				val_ty = self._infer_expr_type(stmt.value)
 				if val_ty is None or self._type_table.is_void(val_ty):
 					self.lower_stmt(H.HExprStmt(expr=stmt.value))
-					self._emit_scope_drops(scope_index=0)
+					self._emit_function_exit_cleanup_hook()
 					res_val = self.b.new_temp()
 					self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
 					term = M.Return(value=res_val)
@@ -7110,7 +7156,7 @@ class HIRToMIR:
 					self.b.set_terminator(term)
 					return
 				raise AssertionError("Void function must not have a return value (checker bug)")
-			self._emit_scope_drops(scope_index=0)
+			self._emit_function_exit_cleanup_hook()
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultOk(dest=res_val, value=None))
 			term = M.Return(value=res_val)
@@ -7138,7 +7184,7 @@ class HIRToMIR:
 						f"returning an owned value from a reference requires "
 						f"explicit 'copy <expr>'"
 					)
-		self._emit_scope_drops(scope_index=0)
+		self._emit_function_exit_cleanup_hook()
 		res_val = self.b.new_temp()
 		self.b.emit(M.ConstructResultOk(dest=res_val, value=val))
 		term = M.Return(value=res_val)
@@ -7343,7 +7389,7 @@ class HIRToMIR:
 				self.b.emit(M.ErrorRaise(error=err_val))
 				self.b.set_terminator(M.Unreachable())
 				return
-			self._emit_scope_drops(scope_index=0)
+			self._emit_function_exit_cleanup_hook()
 			res_val = self.b.new_temp()
 			self.b.emit(M.ConstructResultErr(dest=res_val, error=err_val))
 			self.b.set_terminator(M.Return(value=res_val))
