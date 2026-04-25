@@ -7,8 +7,9 @@
   emission all become **ledger-authoritative**; `_moved_locals` is
   deleted; the chain-aware per-field walker + a new `M.MoveFromRef`
   ownership-transfer primitive close the partial-move Copy-binder
-  leak class.  See `work/ownership-ledger/finale-closure.md` for the
-  final authority table and residuals.
+  leak class.  Site 3 strings/arrays return-source migration is
+  carried over to a separate follow-up branch
+  (`feature/site3-strings-arrays-tier1`).
 
   Shipped in 0.31.10 → 0.31.13:
 

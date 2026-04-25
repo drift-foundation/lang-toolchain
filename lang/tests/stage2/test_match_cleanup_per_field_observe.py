@@ -226,12 +226,7 @@ def test_per_field_still_disagrees_is_distinct_from_per_field_gap() -> None:
 	record (empty field_path) with a field-related reason still
 	routes to `per_field_gap` for back-compat with pre-3b
 	telemetry."""
-	import sys
-	sys.path.insert(0, "work/ownership-ledger")
-	try:
-		from aggregate_triage import bucket_for
-	finally:
-		sys.path.pop(0)
+	from tools.ownership_observe.buckets import bucket_for
 	# Per-field disagreement → per_field_still_disagrees.
 	per_field_disagree = {
 		"site": "match_cleanup",
