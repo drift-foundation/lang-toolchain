@@ -137,8 +137,20 @@ def test_cache_clear_restores_param_drop_locals() -> None:
 
 
 def test_scope_exit_drop_emitted_after_cache_clear() -> None:
-	"""After cache clear, _emit_scope_drops emits MoveOut+DropValue for the
-	droppable parameter — the compiler no longer relies on post-pass repair."""
+	"""After cache clear, the cleanup-authoring path emits
+	MoveOut+DropValue for the droppable parameter — the compiler no
+	longer relies on post-pass repair.
+
+	Patch 6c (2026-04-24) retired the legacy `_emit_scope_drops` helper
+	this test originally exercised.  Rewritten against the production
+	path: HIR→MIR emits `M.CleanupHook` via `_emit_scope_cleanup_hook`,
+	then `cleanup_authoring.author_cleanup` queries `verdict_at` per
+	candidate (against a fresh ledger build) and emits the canonical
+	chain.
+	"""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
+
 	table, arc_tid, handle_tid, int_tid = _make_table_with_destructor_and_stale_cache()
 	table._needs_drop_cache.clear()
 
@@ -152,10 +164,16 @@ def test_scope_exit_drop_emitted_after_cache_clear() -> None:
 		current_fn_id=fn_id,
 	)
 
-	# Simulate function body: push scope with params, emit scope drops, return.
+	# Simulate function body: push scope with params, emit cleanup
+	# hook (covers `handle` via the param-drop registration), return.
 	lower._push_scope(include_params=True)
-	lower._emit_scope_drops(scope_index=0)
+	lower._emit_scope_cleanup_hook(scope_index=0)
 	lower.b.set_terminator(M.Return(value=None))
+
+	# Author the cleanup hook through the production pipeline.
+	ledger = build_ledger(builder.func, drop_policy=lambda _t: None)
+	setattr(builder.func, "_ownership_ledger", ledger)
+	author_cleanup(builder.func, type_table=table)
 
 	func = builder.func
 	# Verify MoveOut + DropValue for handle was emitted.

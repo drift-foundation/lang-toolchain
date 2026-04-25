@@ -349,21 +349,13 @@ class HIRToMIR:
 		self._loop_stack: list[tuple[str, str, int, bool]] = []
 		# Stack of scopes; each scope stores locals that need drop at scope exit.
 		self._scope_stack: list[list[str]] = []
-		self._moved_locals: set[str] = set()
-		# Phase 4 step 2 — distinguish unconditional vs conditional
-		# moves in `_scope_drop_verdict`.  `_local_decl_scope_index`
-		# records the depth of `_scope_stack` at which each local was
-		# declared (via `_register_drop_local`).  `_moved_at_scope_index`
-		# records the depth of `_scope_stack` at which each move was
-		# lowered.  The verdict helper compares the two: equal depth
-		# means the move is in the same lexical scope as the
-		# declaration (definitely on this path, MustNotDrop with
-		# REASON_MOVED_UNCONDITIONAL); deeper means the move is in a
-		# nested scope (potentially path-dependent, PathDependent
-		# with REASON_MOVED — 3C's flag-guarded drop is the
-		# authority on the no-move arm).
-		self._local_decl_scope_index: dict[str, int] = {}
-		self._moved_at_scope_index: dict[str, int] = {}
+		# Phase 4 site-1 patch 6c (2026-04-24): `_moved_locals`,
+		# `_moved_at_scope_index`, `_local_decl_scope_index`,
+		# `_mark_moved`, `_scope_drop_verdict`, and `_emit_scope_drops`
+		# all retired.  Site 1's drop authority is now `verdict_at` on
+		# the post-build `_ownership_ledger` via the `M.CleanupHook` +
+		# `cleanup_authoring` path; HIR-side move bookkeeping is no
+		# longer consulted by any production cleanup decision.
 		# SSA temps produced by reading a non-bitcopy field from a &T
 		# (aliased pointers into the borrowed struct's memory).  These MUST
 		# be deep-copied before any ownership transfer (struct/variant
@@ -844,21 +836,6 @@ class HIRToMIR:
 			self._active_captured_locals.pop(int(bid), None)
 		self._scope_stack.pop()
 
-	def _mark_moved(self, local_name: str) -> None:
-		"""Add `local_name` to `_moved_locals` AND record the current
-		`_scope_stack` depth in `_moved_at_scope_index`.
-
-		Use in place of `self._moved_locals.add(...)` so the Phase 4
-		step-2 unconditional-vs-conditional-move distinction in
-		`_scope_drop_verdict` has the depth context it needs.  Uses
-		`setdefault`: if a local is moved at multiple points, the
-		first (typically shallowest) move wins — that's the most-
-		conservative answer for the verdict (deeper subsequent moves
-		don't make a path "more conditional")."""
-		self._moved_locals.add(local_name)
-		depth = max(0, len(self._scope_stack) - 1)
-		self._moved_at_scope_index.setdefault(local_name, depth)
-
 	def _register_drop_local(self, local_name: str, ty: TypeId) -> None:
 		if not self._scope_stack:
 			return
@@ -868,11 +845,6 @@ class HIRToMIR:
 		if local_name in scope:
 			return
 		scope.append(local_name)
-		# Record declaration depth for the Phase 4 step-2 unconditional-
-		# vs-conditional-move distinction in `_scope_drop_verdict`.  Use
-		# `setdefault` so that a re-registration in a deeper scope (rare)
-		# doesn't overwrite the original declaration depth.
-		self._local_decl_scope_index.setdefault(local_name, len(self._scope_stack) - 1)
 
 	def _register_captured_local(self, *, binding_id: int, local_name: str, source_name: str, capture_name: str) -> None:
 		if not self._capture_scope_stack:
@@ -1024,140 +996,6 @@ class HIRToMIR:
 		if not self._needs_runtime_drop(scrut_ty):
 			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
 		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
-
-	def _scope_drop_verdict(self, local: str) -> tuple[_DropVerdict, str]:
-		"""Phase 3B step 3 shared drop-decision helper.
-
-		Answers the three-state question "what should scope-drop do for
-		`local` at this site?" using information HIRToMIR has in hand —
-		`_local_types`, `_drop_policy`, `_moved_locals` — and nothing
-		that would require consulting a post-lowering ledger (which
-		does not exist yet at this point in the pipeline; trying to
-		rebuild it here would create circular authority between
-		HIRToMIR and the ledger builder).
-
-		Returns a `(verdict, reason_tag)` pair.  The `reason_tag` is a
-		stable `REASON_*` constant from `ownership_ledger_events` so
-		the observe-mode telemetry records a consistent rationale.
-
-		Verdict semantics at site 1 (scope-drop):
-		  - MustDrop: type is drop-needing AND the local is not in
-		    `_moved_locals` at this point.  Site emits the drop.
-		  - MustNotDrop: type does not need drop.  Site skips
-		    emission; no RAII effect.
-		  - PathDependent: type is drop-needing AND the local IS in
-		    `_moved_locals`.  This covers two sub-cases the function-
-		    wide set cannot distinguish:
-		      (a) truly unconditional move (legacy-correct skip), and
-		      (b) conditional move on some arms only (the bucket-6
-		          shape; Phase 3C's `drop_flags` pass has already
-		          inserted a flag-guarded drop at the real scope-exit
-		          point for these locals, so site 1 skipping is
-		          correct).
-		    Per the step-3 directive ("PathDependent must defer to the
-		    existing 3C / acceptance-tested behavior, not invent a new
-		    local policy"), site 1 skips emission for this verdict.
-		    3C owns the path-dependent drop.
-
-		Notes:
-		  - Returns `(MUST_NOT_DROP, "not_drop_needing")` when the
-		    local's type is unknown (defensive; prior code `continue`d
-		    silently in this case).
-		  - `_drop_policy` is consulted via the `_needs_runtime_drop`
-		    and `_type_is_destructible` wrappers (the DropPolicy
-		    contract surface) rather than raw type-table queries.
-		"""
-		ty = self._local_types.get(local)
-		if ty is None:
-			# Phase 4 step 2 cleanup of K-flagged limitation #2
-			# (unknown-type silent skip): preserve the skip behaviour
-			# but emit a distinct reason tag so observe triage can
-			# surface the case for diagnosis.
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_UNKNOWN_TYPE)
-		needs_drop = self._needs_runtime_drop(ty)
-		is_destructible = self._type_is_destructible(ty)
-		if not needs_drop and not is_destructible:
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
-		if local in self._moved_locals:
-			# Phase 4 step 2 cleanup of K-flagged limitation #1
-			# (unconditional vs conditional move conflation).  A move
-			# in the SAME scope as the local's declaration is
-			# unconditionally on the path that reaches `_emit_scope_drops`
-			# — legacy-correct skip with a distinct
-			# REASON_MOVED_UNCONDITIONAL tag.  A move in a DEEPER
-			# (nested) scope may not have executed and is the bucket-6
-			# conditional shape that 3C's flag-guarded drop handles —
-			# PathDependent with REASON_MOVED.  Missing-depth fallback
-			# (defensive: shouldn't fire after the `_mark_moved` /
-			# `_register_drop_local` sweep, but preserves prior
-			# behaviour if any code path remains untracked).
-			decl_depth = self._local_decl_scope_index.get(local)
-			move_depth = self._moved_at_scope_index.get(local)
-			if decl_depth is not None and move_depth is not None and move_depth <= decl_depth:
-				return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_MOVED_UNCONDITIONAL)
-			return (_DropVerdict.PATH_DEPENDENT, _ledger_events.REASON_MOVED)
-		if is_destructible and not needs_drop:
-			return (_DropVerdict.MUST_DROP, _ledger_events.REASON_DESTRUCTIBLE)
-		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
-
-	def _emit_scope_drops(self, *, scope_index: int) -> None:
-		"""Legacy inline scope-drop emission — ORPHAN (no production
-		callers as of 2026-04-24, retained only for the unit test at
-		`lang/tests/stage2/test_has_drop_cache_clear_before_mir_lowering.py`).
-		Production HIR→MIR sites all emit `M.CleanupHook` via
-		`_emit_scope_cleanup_hook`; `cleanup_authoring` then queries
-		`verdict_at` and emits the canonical MoveOut+DropValue pairs.
-		Removal is gated on retiring the helper test (or rewriting
-		it against `_emit_scope_cleanup_hook`).  Scheduled with the
-		patch-6 `_moved_locals` retirement work on the Path Y plan."""
-		if not self._scope_stack:
-			return
-		if scope_index < 0:
-			scope_index = 0
-		for scope in reversed(self._scope_stack[scope_index:]):
-			for local in reversed(scope):
-				verdict, reason = self._scope_drop_verdict(local)
-				if verdict is _DropVerdict.MUST_NOT_DROP:
-					# Skip emission (and for the unknown-type case,
-					# also skip the event record — matches prior silent
-					# continue).
-					if self._local_types.get(local) is None:
-						continue
-					self._record_drop_decision(
-						site=_ledger_events.SITE_SCOPE_DROP,
-						local=local,
-						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-						reason=reason,
-					)
-					continue
-				if verdict is _DropVerdict.PATH_DEPENDENT:
-					# Defer to Phase 3C's flag-guarded drop block (if
-					# the local was flagged); otherwise preserves the
-					# legacy `_moved_locals`-based skip behaviour.
-					# Observe record uses MustNotDrop as the site
-					# verdict (that IS what we emit) with the underlying
-					# reason tag, so observe triage can see the
-					# path-dependent class distinctly from the plain
-					# not-drop-needing case.
-					self._record_drop_decision(
-						site=_ledger_events.SITE_SCOPE_DROP,
-						local=local,
-						verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
-						reason=reason,
-					)
-					continue
-				# MustDrop
-				self._record_drop_decision(
-					site=_ledger_events.SITE_SCOPE_DROP,
-					local=local,
-					verdict=_ledger_events.VERDICT_MUST_DROP,
-					reason=reason,
-				)
-				ty = self._local_types[local]  # verdict MustDrop guarantees presence
-				tmp = self.b.new_temp()
-				self.b.emit(M.MoveOut(dest=tmp, local=local, ty=ty))
-				self.b.emit(M.DropValue(value=tmp, ty=ty))
-				self._local_types[tmp] = ty
 
 	def _emit_scope_cleanup_hook(self, *, scope_index: int) -> None:
 		"""Phase 4 site-1 cleanup-authoring marker emission.
@@ -1572,7 +1410,6 @@ class HIRToMIR:
 			arm_scrut_local: str | None = None
 			arm_scrut_ptr: M.ValueId | None = None
 			arm_scrut_payload_moved = False
-			arm_drop_locals: list[str] = []
 			# Phase 4 site-2 patch 5: hook reference used to fill in the
 			# arm_end program point once arm-body lowering completes.
 			match_cleanup_hook_obj: M.MatchCleanupHook | None = None
@@ -1614,16 +1451,10 @@ class HIRToMIR:
 						self._local_types[arm_scrut_moved_in] = scrut_ty
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=arm_scrut_moved_in))
 						if mark_source_moved:
-							# Record immediately (before any arm-body is
-							# lowered) so scope drops emitted during
-							# early return/throw inside the arm also skip
-							# the now-consumed named local.  Without this,
-							# a non-Copy named-local scrutinee would
-							# double-drop: once via the arm binder's
-							# payload move-out, once via the enclosing
-							# scope's MoveOut+DropValue on the
-							# already-consumed local.
-							self._mark_moved(source_local)
+							# Patch 6c: HIR-side `_mark_moved` retired —
+							# the lattice tracks the consumption via the
+							# MoveOut emitted at line 1450.
+							pass
 						else:
 							# Value-producing match: we cannot globally
 							# mark `source_local` moved, because sibling
@@ -1891,7 +1722,12 @@ class HIRToMIR:
 								self._local_types[bname] = binder_ty
 								binder_def = self._type_table.get(binder_ty)
 								if binder_def.kind is not TypeKind.REF and self._needs_runtime_drop(binder_ty):
-									arm_drop_locals.append(bname)
+									# Phase 4 site-1 patch 6a: arm-end binder
+									# drainage migrated to ledger-authored
+									# emission via the per-arm CleanupHook;
+									# `arm_drop_locals` mirror retired.  The
+									# scope-stack registration alone makes
+									# the binder a CleanupHook candidate.
 									self._register_drop_local(bname, binder_ty)
 								self.b.emit(M.StoreLocal(local=bname, value=field_moved))
 
@@ -2145,16 +1981,15 @@ class HIRToMIR:
 					match_cleanup_hook_obj.arm_end_index = len(self.b.block.instructions)
 
 				if self.b.block.terminator is None:
-					for local in reversed(arm_drop_locals):
-						if local in self._moved_locals:
-							continue
-						local_ty = self._local_types.get(local)
-						if local_ty is None or not self._needs_runtime_drop(local_ty):
-							continue
-						tmp = self.b.new_temp()
-						self.b.emit(M.MoveOut(dest=tmp, local=local, ty=local_ty))
-						self._local_types[tmp] = local_ty
-						self.b.emit(M.DropValue(value=tmp, ty=local_ty))
+					# Phase 4 site-1 patch 6a: arm-end drainage migrated
+					# to the per-arm `M.CleanupHook` — site-1 authoring
+					# queries `verdict_at` per binder/drop_tmp at this
+					# position and emits the canonical `MoveOut +
+					# DropValue` for live candidates.  drop_tmps with
+					# match_cleanup_authoring-emitted arm-end chains are
+					# already MOVED_OUT here; verdict_at returns
+					# MUST_NOT_DROP and skips them — no double-drop.
+					self._emit_scope_cleanup_hook(scope_index=len(self._scope_stack) - 1)
 					if want_value and result_local is not None and not did_store_result:
 						raise AssertionError(
 							"value-producing match arm falls through without storing result (lowering bug)"
@@ -2734,7 +2569,6 @@ class HIRToMIR:
 		moved_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 		self._local_types[moved_val] = inner_ty
-		self._mark_moved(subj_name)
 		return moved_val
 
 	def _move_from_callback_capture_slot(self, key: C.HCaptureKey) -> M.ValueId | None:
@@ -2757,7 +2591,6 @@ class HIRToMIR:
 		moved_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=moved_val, local=tmp_local, ty=inner_ty))
 		self._local_types[moved_val] = inner_ty
-		self._mark_moved(tmp_local)
 		zero_val = self.b.new_temp()
 		self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
 		self._local_types[zero_val] = inner_ty
@@ -3414,7 +3247,6 @@ class HIRToMIR:
 
 		dest = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=dest, local=map_local, ty=map_ty))
-		self._mark_moved(map_local)
 		self._local_types[dest] = map_ty
 		return dest
 
@@ -4209,7 +4041,6 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 						self._local_types[moved_val] = inner_ty
-						self._mark_moved(subj_name)
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
 				else:
@@ -4406,7 +4237,6 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=inner_ty))
 						self._local_types[moved_val] = inner_ty
-						self._mark_moved(subj_name)
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
 				else:
@@ -6378,7 +6208,6 @@ class HIRToMIR:
 			if arm.binder:
 				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
 				self._local_types[err_again] = error_ty
-				self._mark_moved(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block, arm.result)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
@@ -6398,13 +6227,11 @@ class HIRToMIR:
 				err_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
 				self._local_types[err_done] = error_ty
-				self._mark_moved(error_local)
 				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
 			if self.b.block.terminator is None and binder_local is not None:
 				binder_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
 				self._local_types[binder_done] = error_ty
-				self._mark_moved(binder_local)
 				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			self.b.emit(M.StoreLocal(local=temp_local, value=arm_val))
 			if self.b.block.terminator is None:
@@ -6490,21 +6317,16 @@ class HIRToMIR:
 			return
 		can_throw = self._fn_can_throw() is True
 		fn_is_void = self._ret_type is not None and self._type_table.is_void(self._ret_type)
-		if self._current_catch_error is not None:
-			reuses_caught = False
-			if isinstance(stmt.value, H.HVar):
-				cand = self._canonical_local(getattr(stmt.value, "binding_id", None), stmt.value.name)
-				reuses_caught = cand == self._current_catch_error
-			elif isinstance(stmt.value, H.HPlaceExpr) and not stmt.value.projections and isinstance(stmt.value.base, H.HVar):
-				cand = self._canonical_local(getattr(stmt.value.base, "binding_id", None), stmt.value.base.name)
-				reuses_caught = cand == self._current_catch_error
-			if not reuses_caught and self._current_catch_error not in self._moved_locals:
-				caught_drop = self.b.new_temp()
-				error_ty = self._type_table.ensure_error()
-				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
-				self._local_types[caught_drop] = error_ty
-				self._mark_moved(self._current_catch_error)
-				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
+		# Phase 4 site-1 patch 6b-B: the legacy inline `caught_error`
+		# drop here was dead code — `_current_catch_error` is only set
+		# inside `_visit_expr_HTryExpr`'s catch arm lowering (set at
+		# line ~6394, restored at line ~6399).  By the time this
+		# post-loop check ran, the catch arm body had completed and
+		# `_current_catch_error` was always None.  The function-exit
+		# `_emit_scope_cleanup_hook(scope_index=...)` above (patch 4a,
+		# line ~6490) covers `caught_error` as a candidate via the
+		# `_register_drop_local` registration at try-expression
+		# lowering time.  Dead-code site removed.
 		if not fn_is_void:
 			# Defensive invariant: the checker's terminal-flow pass
 			# (`Checker._check_terminal_returns`) is responsible for rejecting
@@ -6898,7 +6720,6 @@ class HIRToMIR:
 					source_name=stmt.name,
 					capture_name=cap_name,
 				)
-		self._moved_locals.discard(local_name)
 		self._current_stmt_span = prev_stmt_span
 
 	def _visit_stmt_HAssign(self, stmt: H.HAssign) -> None:
@@ -6950,7 +6771,6 @@ class HIRToMIR:
 						local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 						self.b.ensure_local(local_name)
 						self.b.emit(M.StoreLocal(local=local_name, value=val))
-						self._moved_locals.discard(local_name)
 						return
 					local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 					self.b.ensure_local(local_name)
@@ -6969,7 +6789,6 @@ class HIRToMIR:
 					fn = self._current_fn_id
 					print(f"[drift:debug][local_types_trace] fn={fn} stmt=HAssign local={local_name} ty={val_ty}:{td.kind.name}:{td.name}", file=sys.stderr)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
-			self._moved_locals.discard(local_name)
 			return
 		# Fast path: array element assignment for a direct local binding.
 		if (
@@ -7119,7 +6938,6 @@ class HIRToMIR:
 				moved_val = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
 				self._local_types[moved_val] = arg_ty
-				self._mark_moved(subj_name)
 				return moved_val
 		return self.lower_expr(value_expr, expected_type=expected)
 
@@ -7392,23 +7210,32 @@ class HIRToMIR:
 			# Throwing an existing Error value (e.g., from try-result sugar unwrap_err).
 			err_val = self.lower_expr(stmt.value)
 
-		# When throwing a new error from inside a catch arm, release the currently
-		# caught error unless this throw is directly reusing that same local.
+		# Phase 4 site-1 patch 6b-B: when throwing a new error from
+		# inside a catch arm, the currently-caught error needs release
+		# unless the catch arm body has already consumed it.  Pre-6b
+		# this was an inline `if not reuses_caught and caught_error
+		# not in self._moved_locals: emit MoveOut + DropValue` —
+		# `_moved_locals` was the skip authority and `reuses_caught`
+		# is unreachable from valid Drift syntax (verified during
+		# audit).  Post-6b: emit a focused `M.CleanupHook` carrying
+		# `caught_error` as the sole candidate.  `cleanup_authoring`
+		# queries `verdict_at(caught_error)` against the post-build
+		# ledger:
+		#   - LIVE → emit canonical MoveOut + DropValue.
+		#   - MOVED_OUT (catch body consumed it) → skip — no
+		#     redundant release on already-zeroed storage.
+		# Required for the outer-try `Goto(dispatch)` path: this
+		# CleanupHook is the ONLY release point for `caught_error`
+		# on that path (no function-exit hook fires when the throw
+		# routes through `_try_stack[-1].dispatch_block`).
 		if self._current_catch_error is not None:
-			reuses_caught = False
-			if isinstance(stmt.value, H.HVar):
-				cand = self._canonical_local(getattr(stmt.value, "binding_id", None), stmt.value.name)
-				reuses_caught = cand == self._current_catch_error
-			elif isinstance(stmt.value, H.HPlaceExpr) and not stmt.value.projections and isinstance(stmt.value.base, H.HVar):
-				cand = self._canonical_local(getattr(stmt.value.base, "binding_id", None), stmt.value.base.name)
-				reuses_caught = cand == self._current_catch_error
-			if not reuses_caught and self._current_catch_error not in self._moved_locals:
-				caught_drop = self.b.new_temp()
-				error_ty = self._type_table.ensure_error()
-				self.b.emit(M.MoveOut(dest=caught_drop, local=self._current_catch_error, ty=error_ty))
-				self._local_types[caught_drop] = error_ty
-				self._mark_moved(self._current_catch_error)
-				self.b.emit(M.DropValue(value=caught_drop, ty=error_ty))
+			error_ty = self._type_table.ensure_error()
+			scope_id = self._cleanup_hook_counter
+			self._cleanup_hook_counter += 1
+			self.b.emit(M.CleanupHook(
+				scope_id=scope_id,
+				candidates=[(self._current_catch_error, error_ty)],
+			))
 		self._emit_captured_locals(err_val)
 
 		# If we are inside a try, route to the catch block instead of returning.
@@ -7464,7 +7291,6 @@ class HIRToMIR:
 		err_val = self.b.new_temp()
 		self.b.emit(M.MoveOut(dest=err_val, local=self._current_catch_error, ty=error_ty))
 		self._local_types[err_val] = error_ty
-		self._mark_moved(self._current_catch_error)
 		self._propagate_error(err_val)
 
 	def _visit_stmt_HTry(self, stmt: H.HTry) -> None:
@@ -7598,7 +7424,6 @@ class HIRToMIR:
 			if arm.binder:
 				self.b.emit(M.MoveOut(dest=err_again, local=error_local, ty=error_ty))
 				self._local_types[err_again] = error_ty
-				self._mark_moved(error_local)
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block)
 				binder_local = self._canonical_local(binder_id, arm.binder)
 				self.b.ensure_local(binder_local)
@@ -7618,13 +7443,11 @@ class HIRToMIR:
 				err_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=err_done, local=error_local, ty=error_ty))
 				self._local_types[err_done] = error_ty
-				self._mark_moved(error_local)
 				self.b.emit(M.DropValue(value=err_done, ty=error_ty))
 			if self.b.block.terminator is None and binder_local is not None:
 				binder_done = self.b.new_temp()
 				self.b.emit(M.MoveOut(dest=binder_done, local=binder_local, ty=error_ty))
 				self._local_types[binder_done] = error_ty
-				self._mark_moved(binder_local)
 				self.b.emit(M.DropValue(value=binder_done, ty=error_ty))
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=cont_block.name))
@@ -7999,7 +7822,6 @@ class HIRToMIR:
 						moved_val = self.b.new_temp()
 						self.b.emit(M.MoveOut(dest=moved_val, local=subj_name, ty=arg_ty))
 						self._local_types[moved_val] = arg_ty
-						self._mark_moved(subj_name)
 						return moved_val
 		val = self.lower_expr(arg, expected_type=param_ty)
 		# If the arg was an aliased ref-field temp, deep-copy before passing
@@ -8978,7 +8800,6 @@ class HIRToMIR:
 			self.b.emit(M.LoadLocal(dest=dest, local=ok_local))
 		else:
 			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))
-			self._mark_moved(ok_local)
 		self._local_types[dest] = ok_ty
 		return dest
 

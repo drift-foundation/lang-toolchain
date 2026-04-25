@@ -32,12 +32,14 @@ optimizations.
 For correctness on the bucket-6 carrier shapes:
 
   Shape 1 — `if b { return move s; } return "fresh";`
-    HIR→MIR's `_moved_locals` poisons function-wide; the trailing
-    return's scope-drop skips emitting a drop for `s`.  This pass
-    inserts a flag-guarded drop at that return: on b=false the flag
-    is true (no MoveOut on this path) → drop fires; on b=true the
-    return inside the if executes before reaching the trailing
-    return, so the inserted drop is unreachable.
+    The lattice's per-instruction state at the trailing return is
+    PathDependent (Live on b=false, MovedOut on b=true), and the
+    cleanup-authoring path skips emission for non-variant
+    PathDependent.  This pass inserts a flag-guarded drop at that
+    return: on b=false the flag is true (no MoveOut on this path)
+    → drop fires; on b=true the return inside the if executes
+    before reaching the trailing return, so the inserted drop is
+    unreachable.
 
   Shape 2 — `if b { val t = move s; } return "fresh";`
     Same poisoning; trailing return skips drop.  This pass inserts
@@ -111,9 +113,12 @@ def insert_drop_flags(
 		#   (1) The local has at least one USER `move L` expression
 		#       (a MoveOut whose dest is consumed by something OTHER
 		#       than an immediately-following DropValue).  This is
-		#       the direct cause of the bucket-6 LANGUAGE_BUG:
-		#       function-wide `_moved_locals` poisoning is keyed off
-		#       user moves.
+		#       the direct cause of the bucket-6 LANGUAGE_BUG class:
+		#       a user move on one path makes the trailing scope-exit's
+		#       lattice state PathDependent (Live on the no-move path,
+		#       MovedOut on the move path), and cleanup-authoring's
+		#       non-variant PathDependent skip means no drop fires
+		#       on the no-move path without this pass.
 		#
 		#   (2) The local is potentially live (Live or MaybeUninit
 		#       state) at the pre-terminator point of at least one
@@ -288,8 +293,8 @@ def _has_user_moveout(func: M.MirFunc, local_name: str) -> bool:
 	"""True iff the function contains a `MoveOut(_, local_name, _)` that
 	is NOT immediately a scope-drop emission.
 
-	Scope-drops emitted by HIR→MIR's `_emit_scope_drops` follow a fixed
-	shape: `MoveOut(t, L, ty)` immediately followed by `DropValue(t, ty)`.
+	Cleanup-authored scope-drops follow a fixed shape: `MoveOut(t, L, ty)`
+	immediately followed by `DropValue(t, ty)`.
 	A user-side `move L` expression emits `MoveOut(t, L, ty)` whose `t`
 	is consumed by *something other than* an immediately-following
 	DropValue (a binder StoreLocal, a return value, etc.).

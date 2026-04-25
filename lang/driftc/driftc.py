@@ -3111,7 +3111,7 @@ def compile_stubbed_funcs(
 	# from both module_exports and external_impl_metas using trait_key name
 	# matching.  Do NOT re-assign here — reassignment triggers __setattr__
 	# cache clear, and any has_drop calls between the clear and the next
-	# _emit_scope_drops could re-poison the cache.
+	# scope-drop CleanupHook authoring could re-poison the cache.
 	#
 	# The pre-install block handles all sources:
 	#   - module_exports: local Destructible impls (source-compiled)
@@ -5352,8 +5352,8 @@ def compile_stubbed_funcs(
 	# Clear the has_drop cache immediately before MIR lowering so that
 	# _param_drop_locals in HIRToMIR sees the same has_drop() answers as
 	# the post-pass.  Without this, stale False entries from pre-K39 queries
-	# persist and _emit_scope_drops omits drops for types whose destructor
-	# was registered by K39 generic instantiation.
+	# persist and the cleanup-authoring path skips drops for types whose
+	# destructor was registered by K39 generic instantiation.
 	if shared_type_table is not None:
 		shared_type_table._needs_drop_cache.clear()
 		# Also clear the structural copy cache.  Stale True entries for
@@ -6837,9 +6837,9 @@ def compile_stubbed_funcs(
 		# `HContinue`) emit `M.CleanupHook` markers.  This pass walks
 		# each block, queries `verdict_at` for every candidate, and
 		# emits the canonical `MoveOut + DropValue` sequences.  Site 1
-		# drop authority is now `verdict_at`; `_moved_locals` is no
-		# longer an emission input (retirement pending in the Path Y
-		# plan as patch 6).  See
+		# drop authority is now `verdict_at`; HIR-side `_moved_locals`
+		# / `_mark_moved` / `_scope_drop_verdict` / `_emit_scope_drops`
+		# all retired in patch 6c (2026-04-24).  See
 		# `lang/driftc/stage2/cleanup_authoring.py`.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.cleanup_authoring import (
@@ -10244,8 +10244,8 @@ def main(argv: list[str] | None = None) -> int:
 	# (e.g. copy_status callbacks, borrow checker, or trait enforcement)
 	# before compile_stubbed_funcs runs gets the correct answer for
 	# Destructible types.  Without this, has_drop(Arc) can return False
-	# and the result gets cached, poisoning the later _emit_scope_drops
-	# decision even though compile_stubbed_funcs would install
+	# and the result gets cached, poisoning the later cleanup-authoring
+	# verdict decisions even though compile_stubbed_funcs would install
 	# destructor_fns internally.
 	if linked_world is not None:
 		_install_destructor_fns(semantic_world.type_table, linked_world, module_exports, external_impl_metas=semantic_world.external_impl_metas)

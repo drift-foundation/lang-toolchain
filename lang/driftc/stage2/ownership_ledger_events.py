@@ -1,14 +1,21 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Decision-event log for the observational ownership ledger (Phase 3A, sites 1
-and 2).
+Decision-event log for the observational ownership ledger (Phase 3A, historical
+context — sites 1 and 2 emission decisions).
 
-Sites 1 (`_emit_scope_drops`) and 2 (match-arm per-field cleanup) run inside
-HIR→MIR, which means the ledger cannot yet exist when they make their verdict.
-Retrospective inference from finished MIR is insufficient: a site that decides
-"skip drop" emits nothing, so the finished MIR carries no evidence that a
-decision point existed at all — and the leak case is exactly what observation
-is meant to catch.
+Originally, site 1 (legacy `_emit_scope_drops`, retired in patch 6c) and site 2
+(match-arm per-field cleanup) ran inside HIR→MIR, where the ledger could not
+yet exist when they made their verdict.  Telemetry was needed because a
+"skip drop" decision emits nothing, leaving no evidence in finished MIR that a
+decision point existed.
+
+Post Phase 4 patches 1–6: site 1 emission is decided by `cleanup_authoring`
+querying `verdict_at` against the post-build ledger (no inline HIR-side
+decisions remain), and site 2 carried-candidate emission is decided by
+`match_cleanup_authoring` (patch 5).  Both passes emit their decision records
+directly with `classification=agree` pre-baked.  This event log remains in
+place for the legacy site-2 whole-scrutinee branch (still inline in HIR→MIR)
+and for any future sites that need pre-ledger telemetry.
 
 This module defines the tiny event record emitted by those sites at each
 verdict, plus an append-only log that hangs off HIR→MIR for the reporter to
