@@ -498,6 +498,13 @@ def _walk_block(
 	field_per_instr: List[Tuple[int, Dict[Tuple[str, FieldPath], LiveState]]] = []
 	zero_values: Set[str] = set()
 	field_addr_dests: Dict[str, Tuple[str, str, int]] = {}
+	# Per-block chain-aware MovedOut detection state.  Together with
+	# `field_addr_dests` these track the canonical
+	#   `VariantGetFieldAddr → LoadRef → StoreLocal(L) → MoveOut(_, L)`
+	# chain that constitutes a real per-field ownership transfer.  See
+	# `_apply_field_state` docstring.
+	loadref_field_origin: Dict[str, Tuple[str, str, int]] = {}
+	local_field_origin: Dict[str, Tuple[str, str, int]] = {}
 	return_consumed = _identify_return_consumed_loads(block, tracked)
 	consumed_by_idx: Dict[int, List[str]] = {}
 	for lidx, llocal in return_consumed:
@@ -511,6 +518,8 @@ def _walk_block(
 			tracked,
 			addr_of_dest_to_local,
 			field_addr_dests,
+			loadref_field_origin,
+			local_field_origin,
 		)
 		if idx in consumed_by_idx:
 			# Phase 4: this LoadLocal feeds the block's Return
@@ -693,6 +702,12 @@ def _apply(
 	if isinstance(ins, M.MoveOut):
 		if ins.local in tracked:
 			state[ins.local] = LiveState.MOVED_OUT
+	if isinstance(ins, M.MoveFromRef):
+		# Atomic ownership transfer into `local`: destination becomes
+		# LIVE (owns the transferred value's stake).  The source-side
+		# per-field MovedOut transition lives in `_apply_field_state`.
+		if ins.local in tracked:
+			state[ins.local] = LiveState.LIVE
 
 
 def _apply_field_state(
@@ -702,10 +717,12 @@ def _apply_field_state(
 	tracked: Set[str],
 	addr_of_dest_to_local: Dict[str, str],
 	field_addr_dests: Dict[str, Tuple[str, str, int]],
+	loadref_field_origin: Dict[str, Tuple[str, str, int]],
+	local_field_origin: Dict[str, Tuple[str, str, int]],
 ) -> None:
-	"""Phase 4 step 3a per-field transfer functions.
+	"""Per-field transfer functions (chain-aware MovedOut detection).
 
-	Two MIR shapes generate per-field state transitions:
+	Two MIR shapes generate per-field `MovedOut` transitions:
 
 	1. **`VariantGetField(dest, variant=v_local, ctor=C, field_index=I, ...)`**
 	   — by-value extraction of a variant field directly from a named
@@ -714,28 +731,45 @@ def _apply_field_state(
 	   (rare today; mostly the by-ref path is used) and when
 	   `scrut_is_ref` doesn't apply.
 
-	2. **`VariantGetFieldAddr(dest, variant_ref=ref, ctor=C, field_index=I, ...)`**
-	   followed within the same block by a downstream consumer that
-	   transfers ownership.  Step 3a uses a CONSERVATIVE detection:
-	   any `VariantGetFieldAddr` whose `variant_ref` traces back to
-	   an `AddrOfLocal(_, v_local, _)` marks the field as
-	   `MovedOut`.  This over-reports for read-only borrows and
-	   Copy-classified fields (which use the same emission shape but
-	   then `CopyValue` instead of `MoveOut`); a tighter model is a
-	   step-3b/3c follow-up.  For step-3a's "data-structure exists"
-	   landing the over-report is a known limitation pinned by the
-	   tests in `test_ownership_ledger_field_state.py`.
+	2. **`VariantGetFieldAddr → LoadRef → StoreLocal(L) → MoveOut(_, L)`**
+	   — the canonical by-reference ownership-transfer chain emitted
+	   by HIRToMIR's binder loop MOVE branch (`hir_to_mir.py:1633-1643`).
+	   The transition fires AT the `MoveOut` step, only when the
+	   complete chain is present.
 
-	   `field_addr_dests` records the `(local, ctor, field_idx)` for
-	   each VariantGetFieldAddr's dest.  **SCAFFOLDING ONLY in step
-	   3a — populated but not consumed.**  Reserved for a future step
-	   (likely 3c) that wants to upgrade the current
-	   "mark-on-AddrOfLocal-provenance" rule to a chain-aware
-	   "mark-on-confirmed-downstream-move" detection: scan forward
-	   from each field_addr dest, look for `LoadRef → StoreLocal(_,
-	   loaded) → MoveOut(_, dest, _)` or equivalent, and only then
-	   transition to MovedOut.  Step 3a does not do this; the map
-	   exists so the change is a local edit when the time comes.
+	   The earlier conservative model marked the field MovedOut at the
+	   `VariantGetFieldAddr` step, which over-reported for both read-
+	   only borrows AND Copy-classified binders (which emit
+	   `VariantGetFieldAddr → LoadRef → CopyValue → StoreLocal`, with
+	   no `MoveOut` — the slot retains its +1, only the binder gets a
+	   retained copy).  The over-report caused
+	   `match_cleanup_authoring` to skip the per-field drop for the
+	   slot, leaking the slot's refcount.  Pinned as a LANGUAGE_BUG
+	   by `test_partial_move_copy_binder_string_slot_leak.py`.
+
+	   Chain-tracking state (per-block, all reset at block entry):
+	     - `field_addr_dests[fa] = (v_local, ctor, fidx)` —
+	       `VariantGetFieldAddr(dest=fa)` provenance.  Records that
+	       `fa` is the address of variant field `(v_local, ctor, fidx)`.
+	     - `loadref_field_origin[loaded] = (v_local, ctor, fidx)` —
+	       `LoadRef(dest=loaded, ptr=fa)` propagates provenance from
+	       `fa` (when `fa in field_addr_dests`).
+	     - `local_field_origin[L] = (v_local, ctor, fidx)` —
+	       `StoreLocal(local=L, value=loaded)` propagates provenance
+	       from `loaded` (when `loaded in loadref_field_origin`).  A
+	       `StoreLocal` whose source is NOT in the chain pops any
+	       prior origin for `L` — only fresh-from-the-chain stores
+	       carry origin forward.
+	     - On `MoveOut(_, local=L)`: if `L in local_field_origin`,
+	       fire the field MovedOut transition for the recorded source
+	       field, then clear `L`'s origin.  This is the only
+	       `MovedOut` transition for shape 2.
+
+	   `CopyValue` deliberately does NOT propagate origin — its dest
+	   is an independent owned copy whose later StoreLocal/MoveOut
+	   chain (the binder's scope-drop) doesn't transfer ownership out
+	   of the variant slot.  The chain breaks at the CopyValue step
+	   because CopyValue's dest is not in `loadref_field_origin`.
 
 	Whole-local moves (`MoveOut(_, local, _)`) and re-stores
 	(`StoreLocal(local, _)` with a non-tombstone source) reset ALL
@@ -743,11 +777,30 @@ def _apply_field_state(
 	a moved-out local's fields don't make sense as a per-field query
 	(but defaulting to `MovedOut` is consistent with "the slot is
 	gone")."""
-	# Whole-local writes invalidate per-field state.
+	# Whole-local writes invalidate per-field state.  StoreLocal also
+	# participates in the chain-aware MovedOut detection (shape 2): it
+	# either propagates the LoadRef-of-VariantGetFieldAddr provenance
+	# from `value` to `local`, or pops any stale provenance.
 	if isinstance(ins, M.StoreLocal) and ins.local in tracked:
 		_clear_local_field_state(field_state, ins.local)
+		# Propagate (or break) the chain-aware origin for `local`.
+		val = getattr(ins, "value", None)
+		if isinstance(val, str) and val in loadref_field_origin:
+			local_field_origin[ins.local] = loadref_field_origin[val]
+		else:
+			local_field_origin.pop(ins.local, None)
 		return
 	if isinstance(ins, M.MoveOut) and ins.local in tracked:
+		# Chain-aware shape-2 MovedOut transition: if this local was
+		# stored from a LoadRef of a variant-field address, mark the
+		# source field MovedOut.  Consume the origin so a stale entry
+		# can't fire a second transition.
+		origin = local_field_origin.pop(ins.local, None)
+		if origin is not None:
+			v_local, ctor, fidx = origin
+			if v_local in tracked:
+				key = (v_local, ((ctor, fidx),))
+				field_state[key] = LiveState.MOVED_OUT
 		_clear_local_field_state(field_state, ins.local)
 		return
 	# Shape 1: VariantGetField by-value extraction.
@@ -760,7 +813,11 @@ def _apply_field_state(
 				key = (v_local, ((ctor, fidx),))
 				field_state[key] = LiveState.MOVED_OUT
 		return
-	# Shape 2: VariantGetFieldAddr + (assumed) downstream move.
+	# Shape 2 step 1: VariantGetFieldAddr — record provenance only.
+	# The MovedOut transition (if any) fires later at the chain's
+	# MoveOut step.  Read-only borrows and Copy-classified binders
+	# both reach this instruction; only the chain ending in MoveOut
+	# transitions the field.
 	if isinstance(ins, M.VariantGetFieldAddr):
 		ref = getattr(ins, "variant_ref", None)
 		ctor = getattr(ins, "ctor", None)
@@ -771,12 +828,41 @@ def _apply_field_state(
 		v_local = addr_of_dest_to_local.get(ref)
 		if v_local is None or v_local not in tracked:
 			return
-		key = (v_local, ((ctor, fidx),))
-		# Conservative: mark MovedOut.  See docstring for rationale
-		# and limitations.
-		field_state[key] = LiveState.MOVED_OUT
 		if isinstance(dest, str):
 			field_addr_dests[dest] = (v_local, ctor, fidx)
+		return
+	# Shape 2 step 2: LoadRef from a tracked field address — propagate
+	# the source-field provenance to the loaded value.  Subsequent
+	# `StoreLocal(L, loaded)` carries this forward to `L`; if instead
+	# the loaded value flows into `CopyValue`, the chain naturally
+	# breaks (CopyValue's dest is not in `loadref_field_origin`).
+	if isinstance(ins, M.LoadRef):
+		ptr = getattr(ins, "ptr", None)
+		dest = getattr(ins, "dest", None)
+		if isinstance(ptr, str) and isinstance(dest, str) and ptr in field_addr_dests:
+			loadref_field_origin[dest] = field_addr_dests[ptr]
+		return
+	# Shape 3: `MoveFromRef(local=L, ptr=fa, inner_ty=T)` — atomic
+	# ownership transfer.  When `fa` is a tracked variant-field
+	# address (`field_addr_dests[fa]` resolves), the source field
+	# transitions to `MovedOut` directly at this instruction.  This
+	# parallels the legacy `LoadRef → StoreLocal → MoveOut(local)`
+	# chain but uses the explicit `MoveFromRef` ownership primitive
+	# emitted by `match_cleanup_authoring`.  See the `MoveFromRef`
+	# MIR docstring for the contract.
+	if isinstance(ins, M.MoveFromRef):
+		ptr = getattr(ins, "ptr", None)
+		local = getattr(ins, "local", None)
+		if isinstance(ptr, str) and ptr in field_addr_dests:
+			v_local, ctor, fidx = field_addr_dests[ptr]
+			if v_local in tracked:
+				key = (v_local, ((ctor, fidx),))
+				field_state[key] = LiveState.MOVED_OUT
+		# Destination local: clear any prior per-field state and any
+		# stale chain origin (the local is freshly assigned).
+		if isinstance(local, str) and local in tracked:
+			_clear_local_field_state(field_state, local)
+			local_field_origin.pop(local, None)
 		return
 
 

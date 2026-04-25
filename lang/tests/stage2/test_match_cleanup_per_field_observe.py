@@ -152,26 +152,33 @@ def test_per_field_telemetry_agrees_for_sibling_live_field() -> None:
 # Shape 3: VariantGetFieldAddr conservative over-report --------------------
 
 
-def test_per_field_telemetry_pins_variant_get_field_addr_conservative_overreport() -> None:
-	"""3a's IMMEDIATE-MARK-MOVED rule for VariantGetFieldAddr fires
-	regardless of downstream consumer.  If a Drift code path takes
-	an addr-of-field but doesn't actually move (e.g., read-only
-	borrow, or Copy-classified field whose downstream is `CopyValue`
-	not `MoveOut`), the ledger reports per-field MovedOut while the
-	site might still treat the field as live.  Pinned as current
-	behavior — these records flow into `per_field_still_disagrees`,
-	the bucket K wants visible to gate 3c.
+def test_per_field_telemetry_variant_get_field_addr_alone_does_not_overreport() -> None:
+	"""**Inverted pin (post-0.31.12)**: a `VariantGetFieldAddr` with
+	NO downstream ownership-transfer chain (no `LoadRef → StoreLocal
+	→ MoveOut(L)`, no `MoveFromRef`) must NOT mark the field
+	MovedOut.  Site verdict (MustDrop, field still owns) and
+	ledger verdict (also MustDrop, field is Live) now AGREE.
 
-	If an observe re-run shows this bucket dominated by
-	VariantGetFieldAddr-without-MoveOut shapes, 3c MUST tighten the
-	chain-aware detection before site-2 emission authority changes.
+	Pre-0.31.12 the per-field walker used a CONSERVATIVE rule
+	("any VariantGetFieldAddr → MovedOut") that over-reported for
+	read-only borrows AND Copy-classified binders, populating the
+	`per_field_still_disagrees` bucket and silently suppressing
+	per-field cleanup drops on the Copy-binder shape (LANGUAGE_BUG
+	carrier:
+	`lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`).
+
+	The chain-aware fix (`ownership_ledger.py::_apply_field_state`)
+	requires the FULL chain to fire MovedOut.  If this test
+	regresses to SITE_STRICTER, the over-report has come back —
+	re-investigate whether the per-field walker's chain-aware
+	detection was weakened or removed.
 	"""
-	func = _make_func("addr_overreport", locals_=["s"], types={"s": _TY_VARIANT})
+	func = _make_func("addr_no_move", locals_=["s"], types={"s": _TY_VARIANT})
 	entry = M.BasicBlock(name="entry")
 	entry.instructions.append(M.StoreLocal(local="s", value="t_init"))
 	entry.instructions.append(M.AddrOfLocal(dest="t_ref", local="s", is_mut=True))
-	# VariantGetFieldAddr without a downstream MoveOut chain — purely
-	# conservative.  3a marks the field MovedOut anyway.
+	# VariantGetFieldAddr alone — no LoadRef + StoreLocal + MoveOut
+	# chain, no MoveFromRef.  Post-0.31.12 the field stays Live.
 	entry.instructions.append(
 		M.VariantGetFieldAddr(
 			dest="t_field_addr",
@@ -186,9 +193,8 @@ def test_per_field_telemetry_pins_variant_get_field_addr_conservative_overreport
 	func.blocks["entry"] = entry
 	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
 	# Site says MustDrop (it didn't see a downstream move; field
-	# still owns).  Ledger says MustNotDrop (over-reported as
-	# MovedOut).  → CLASS_SITE_STRICTER → bucket
-	# per_field_still_disagrees.
+	# still owns).  Ledger now also says MustDrop (Live + needs_drop=True).
+	# → CLASS_AGREE.
 	event = DropDecisionEvent(
 		site=SITE_MATCH_CLEANUP,
 		fn_name=func.name,
@@ -200,12 +206,13 @@ def test_per_field_telemetry_pins_variant_get_field_addr_conservative_overreport
 	)
 	emit, captured = collecting_emit()
 	compare_events([event], ledger, needs_drop=lambda _l: True, emit=emit)
-	assert captured[0].classification == CLASS_SITE_STRICTER, (
-		f"expected SITE_STRICTER (ledger over-reports MovedOut due "
-		f"to VariantGetFieldAddr conservative rule); got "
-		f"{captured[0].classification}.  If this assertion flipped, "
-		f"3a's detection rule changed — re-derive whether the change "
-		f"is a tightening or a regression."
+	assert captured[0].classification == CLASS_AGREE, (
+		f"expected AGREE (chain-aware detection: VariantGetFieldAddr "
+		f"alone does not mark field MovedOut); got "
+		f"{captured[0].classification}.  If this regressed to "
+		f"SITE_STRICTER, the per-field walker's over-report rule has "
+		f"come back and the partial-move Copy-binder leak class "
+		f"returns."
 	)
 
 

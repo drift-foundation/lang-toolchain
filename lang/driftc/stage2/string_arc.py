@@ -346,6 +346,11 @@ def insert_string_arc(
 		elif isinstance(instr, M.StoreRef):
 			yield instr.ptr
 			yield instr.value
+		elif isinstance(instr, M.MoveFromRef):
+			# MoveFromRef reads through `ptr`; the destination is a
+			# named local (no SSA value yielded — the local is
+			# tracked separately).
+			yield instr.ptr
 		elif isinstance(instr, M.ArrayIndexStore):
 			yield instr.array
 			yield instr.index
@@ -650,6 +655,10 @@ def insert_string_arc(
 		for instr in func.blocks[name].instructions:
 			if isinstance(instr, M.StoreLocal):
 				stores.add(instr.local)
+			elif isinstance(instr, M.MoveFromRef):
+				# MoveFromRef is a definite assignment to `local` — the
+				# transferred bytes land in the local's storage.
+				stores.add(instr.local)
 		store_defs[name] = stores
 	assigned_in: Dict[str, Set[str]] = {name: set() for name in block_order}
 	assigned_out: Dict[str, Set[str]] = {name: set() for name in block_order}
@@ -698,6 +707,9 @@ def insert_string_arc(
 			cur = set(new_in)
 			for instr in func.blocks[name].instructions:
 				if isinstance(instr, M.StoreLocal):
+					cur.discard(instr.local)
+				elif isinstance(instr, M.MoveFromRef):
+					# Fresh assignment; local is no longer "moved-out."
 					cur.discard(instr.local)
 				elif isinstance(instr, M.MoveOut):
 					cur.add(instr.local)
@@ -862,6 +874,11 @@ def insert_string_arc(
 
 		for _instr_idx, instr in enumerate(block.instructions):
 			if isinstance(instr, M.StoreLocal):
+				moved_out_locals.discard(instr.local)
+				explicitly_dropped_locals.discard(instr.local)
+			if isinstance(instr, M.MoveFromRef):
+				# MoveFromRef defines `local` (transferred ownership);
+				# clear any prior moved/dropped state.
 				moved_out_locals.discard(instr.local)
 				explicitly_dropped_locals.discard(instr.local)
 			if isinstance(instr, M.StoreLocal) and instr.local in array_locals:
@@ -1065,6 +1082,25 @@ def insert_string_arc(
 					val = _ensure_owned(val, owned_values, new_instrs)
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
+				continue
+
+			if isinstance(instr, M.MoveFromRef) and _is_string_tid(instr.inner_ty):
+				# Ownership-transfer store: the source `*ptr` stake
+				# moves into `local` atomically (codegen handles the
+				# load + tombstone-write + transfer).  string_arc must
+				# NOT insert a `StringRetain` here — the value is
+				# transferred, not copied.
+				#
+				# Release any prior owned value at the destination so
+				# we don't leak it.  For a freshly-UNINIT local (the
+				# canonical match-cleanup-authoring use case),
+				# `_release_local` issues a release on the zero bytes
+				# loaded from the slot — `drift_string_release(null)`
+				# is a runtime no-op, so this is safe regardless of
+				# whether the local was previously written.
+				_release_local(instr.local, new_instrs)
+				new_instrs.append(instr)
+				_note_use(instr.ptr, consume=True)
 				continue
 
 			if isinstance(instr, M.StoreRef) and _is_string_tid(instr.inner_ty):

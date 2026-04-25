@@ -114,19 +114,25 @@ def test_authoring_emits_chain_for_must_drop_candidate() -> None:
 	assert not any(
 		isinstance(ins, M.MatchCleanupHook) for ins in func.blocks["entry"].instructions
 	), "MatchCleanupHook must be removed after authoring"
-	# Hook-position chain: VariantGetFieldAddr + LoadRef + StoreLocal(drop_tmp).
+	# Hook-position chain: VariantGetFieldAddr + MoveFromRef(drop_tmp).
+	# `MoveFromRef` is the explicit ownership-transfer primitive
+	# introduced in 0.31.12 to replace `LoadRef + StoreLocal` —
+	# string_arc recognises it as a transfer (no StringRetain insertion)
+	# so the slot's stake reaches the arm-end DropValue exactly once.
+	# See `lang/driftc/stage2/mir_nodes.py::MoveFromRef` and
+	# `lang/tests/stage2/test_move_from_ref_string_arc_contract.py`.
 	kinds = [type(ins).__name__ for ins in func.blocks["entry"].instructions]
 	assert "VariantGetFieldAddr" in kinds, f"missing VariantGetFieldAddr in authored chain; got {kinds}"
-	assert "LoadRef" in kinds, f"missing LoadRef in authored chain; got {kinds}"
-	store_idx = next(
+	assert "MoveFromRef" in kinds, f"missing MoveFromRef in authored chain; got {kinds}"
+	mfr_idx = next(
 		(
 			i for i, ins in enumerate(func.blocks["entry"].instructions)
-			if isinstance(ins, M.StoreLocal) and ins.local == "drop_tmp"
+			if isinstance(ins, M.MoveFromRef) and ins.local == "drop_tmp"
 		),
 		None,
 	)
-	assert store_idx is not None, "authoring must emit StoreLocal(drop_tmp, ...)"
-	# Arm-end chain: MoveOut(drop_tmp) + DropValue must appear after the StoreLocal.
+	assert mfr_idx is not None, "authoring must emit MoveFromRef(local=drop_tmp, ...)"
+	# Arm-end chain: MoveOut(drop_tmp) + DropValue must appear after the MoveFromRef.
 	mo_idx = next(
 		(
 			i for i, ins in enumerate(func.blocks["entry"].instructions)
@@ -135,7 +141,7 @@ def test_authoring_emits_chain_for_must_drop_candidate() -> None:
 		None,
 	)
 	assert mo_idx is not None, "authoring must emit MoveOut(drop_tmp, ...) at arm_end"
-	assert mo_idx > store_idx, "MoveOut(drop_tmp) must come AFTER StoreLocal(drop_tmp)"
+	assert mo_idx > mfr_idx, "MoveOut(drop_tmp) must come AFTER MoveFromRef(drop_tmp)"
 	# DropValue follows the MoveOut, consuming its dest.
 	drop_ins = func.blocks["entry"].instructions[mo_idx + 1]
 	assert isinstance(drop_ins, M.DropValue), (
@@ -214,16 +220,23 @@ def test_authoring_skips_chain_for_must_not_drop_candidate() -> None:
 	variant_ty, field_ty, ctor = _make_variant_with_destructible_field(type_table)
 	func = _make_func(
 		"skip",
-		locals_=["v", "v_ptr", "drop_tmp"],
-		types={"v": variant_ty, "v_ptr": type_table.ensure_ref_mut(variant_ty), "drop_tmp": field_ty},
+		locals_=["v", "v_ptr", "drop_tmp", "pre_tmp"],
+		types={
+			"v": variant_ty,
+			"v_ptr": type_table.ensure_ref_mut(variant_ty),
+			"drop_tmp": field_ty,
+			"pre_tmp": field_ty,
+		},
 	)
 	entry = M.BasicBlock(name="entry")
 	# Store + address-of as before.
 	entry.instructions.append(M.StoreLocal(local="v", value="t_init"))
 	entry.instructions.append(M.AddrOfLocal(dest="v_ptr", local="v", is_mut=True))
-	# Move the field out BEFORE the hook so field_verdict_at returns
-	# MUST_NOT_DROP.  VariantGetFieldAddr marks the field MovedOut in
-	# the 3a conservative-chain detection.
+	# Move the field out BEFORE the hook so `field_verdict_at` returns
+	# MUST_NOT_DROP at the hook point.  Post-0.31.12 the per-field
+	# walker requires the FULL chain (`VariantGetFieldAddr → LoadRef →
+	# StoreLocal → MoveOut`) to mark a field MovedOut — see
+	# `lang/driftc/stage2/ownership_ledger.py::_apply_field_state`.
 	entry.instructions.append(M.VariantGetFieldAddr(
 		dest="pre_field_addr",
 		variant_ref="v_ptr",
@@ -232,8 +245,11 @@ def test_authoring_skips_chain_for_must_not_drop_candidate() -> None:
 		field_index=0,
 		field_ty=field_ty,
 	))
-	# Hook after the pre-move; field_verdict_at should now see the
-	# field as MovedOut → MUST_NOT_DROP.
+	entry.instructions.append(M.LoadRef(dest="pre_loaded", ptr="pre_field_addr", inner_ty=field_ty))
+	entry.instructions.append(M.StoreLocal(local="pre_tmp", value="pre_loaded"))
+	entry.instructions.append(M.MoveOut(dest="pre_moved", local="pre_tmp", ty=field_ty))
+	# Hook after the pre-move; field_verdict_at sees field MovedOut.
+	hook_idx = len(entry.instructions)
 	entry.instructions.append(M.MatchCleanupHook(
 		scope_id=0,
 		arm_scrut_local="v",
@@ -242,11 +258,13 @@ def test_authoring_skips_chain_for_must_not_drop_candidate() -> None:
 		ctor=ctor,
 		candidates=[("drop_tmp", 0, field_ty)],
 		arm_end_block="entry",
-		arm_end_index=4,
+		arm_end_index=hook_idx + 1,
 	))
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry
 	func.local_types["pre_field_addr"] = type_table.ensure_ref_mut(field_ty)
+	func.local_types["pre_loaded"] = field_ty
+	func.local_types["pre_moved"] = field_ty
 	ledger = build_ledger(func, drop_policy=lambda _t: None)
 	setattr(func, "_ownership_ledger", ledger)
 	emitted = author_match_cleanup(func, type_table=type_table)

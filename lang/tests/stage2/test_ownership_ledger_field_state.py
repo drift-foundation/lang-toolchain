@@ -106,14 +106,122 @@ def test_field_state_single_field_moved_via_variant_get_field() -> None:
 	) is DropVerdict.MUST_DROP
 
 
-def test_field_state_via_variant_get_field_addr_chain() -> None:
-	"""The by-reference shape: `AddrOfLocal(ref, s, _) +
-	VariantGetFieldAddr(_, variant_ref=ref, ctor, idx)` → field
-	state[(s, ctor, idx)] = MovedOut.
+def test_field_state_via_variant_get_field_addr_chain_full_move() -> None:
+	"""The by-reference MOVE chain:
+	    AddrOfLocal(s) →
+	    VariantGetFieldAddr(s.Some.0) →
+	    LoadRef →
+	    StoreLocal(tmp, loaded) →
+	    MoveOut(_, tmp)
+	→ field_state[(s, Some, 0)] = MovedOut.
 
-	Conservative detection per step-3a (over-reports for read-only
-	borrows); pin documents the current contract."""
-	func = _make_func("by_ref", locals_=["s"], types={"s": _TY_VARIANT})
+	The chain-aware walker (`_apply_field_state`) only transitions
+	a field to `MovedOut` when the FULL chain ending in `MoveOut`
+	is observed.  This pins the canonical HIRToMIR binder-loop
+	MOVE branch shape (`hir_to_mir.py:1633-1643`).
+	"""
+	func = _make_func("by_ref_move", locals_=["s", "tmp"], types={"s": _TY_VARIANT, "tmp": _TY_PAYLOAD})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="s", value="t_init"))
+	entry.instructions.append(M.AddrOfLocal(dest="t_ref", local="s", is_mut=True))
+	entry.instructions.append(
+		M.VariantGetFieldAddr(
+			dest="t_field_addr",
+			variant_ref="t_ref",
+			variant_ty=_TY_VARIANT,
+			ctor="Some",
+			field_index=0,
+			field_ty=_TY_PAYLOAD,
+		)
+	)
+	entry.instructions.append(M.LoadRef(dest="t_loaded", ptr="t_field_addr", inner_ty=_TY_PAYLOAD))
+	entry.instructions.append(M.StoreLocal(local="tmp", value="t_loaded"))
+	entry.instructions.append(M.MoveOut(dest="t_moved", local="tmp", ty=_TY_PAYLOAD))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	# At VariantGetFieldAddr step alone (idx 2), the field is still LIVE —
+	# the chain isn't complete yet.
+	assert ledger.field_state_post(("entry", 2), "s", (("Some", 0),)) is LiveState.LIVE
+	# At LoadRef step (idx 3), still LIVE.
+	assert ledger.field_state_post(("entry", 3), "s", (("Some", 0),)) is LiveState.LIVE
+	# At StoreLocal step (idx 4), still LIVE — provenance is propagated
+	# to `tmp` but no MoveOut yet.
+	assert ledger.field_state_post(("entry", 4), "s", (("Some", 0),)) is LiveState.LIVE
+	# At MoveOut step (idx 5), the chain completes and the field
+	# transitions to MovedOut.
+	assert ledger.field_state_post(("entry", 5), "s", (("Some", 0),)) is LiveState.MOVED_OUT
+
+
+def test_field_state_via_variant_get_field_addr_chain_copy_does_not_move() -> None:
+	"""**LANGUAGE_BUG regression**: the by-reference COPY chain
+	(LoadRef → CopyValue → StoreLocal, no MoveOut) must NOT mark the
+	field MovedOut.
+
+	Pre-fix (`ownership_ledger.py` step-3a conservative detection):
+	the field was marked MovedOut at the VariantGetFieldAddr step,
+	regardless of whether the downstream consumer was MoveOut or
+	CopyValue.  For Copy-bound binders, this caused
+	`match_cleanup_authoring.field_verdict_at` to return
+	MUST_NOT_DROP for the slot's per-field cleanup candidate, and
+	the slot's +1 leaked.  See
+	`lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`
+	for the runtime carrier.
+
+	Post-fix: the chain breaks at the CopyValue step (CopyValue's
+	dest is not in `loadref_field_origin`); subsequent
+	`StoreLocal(binder, copy_dest)` finds no chain origin to
+	propagate; the binder's eventual scope-drop MoveOut on its OWN
+	storage does not transition the source field.  The variant
+	field remains `LIVE`, `field_verdict_at` returns MUST_DROP,
+	and per-field cleanup correctly emits the slot's drop.
+	"""
+	func = _make_func("by_ref_copy", locals_=["s", "binder"], types={"s": _TY_VARIANT, "binder": _TY_PAYLOAD})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="s", value="t_init"))
+	entry.instructions.append(M.AddrOfLocal(dest="t_ref", local="s", is_mut=True))
+	entry.instructions.append(
+		M.VariantGetFieldAddr(
+			dest="t_field_addr",
+			variant_ref="t_ref",
+			variant_ty=_TY_VARIANT,
+			ctor="Some",
+			field_index=0,
+			field_ty=_TY_PAYLOAD,
+		)
+	)
+	entry.instructions.append(M.LoadRef(dest="t_loaded", ptr="t_field_addr", inner_ty=_TY_PAYLOAD))
+	# CopyValue: makes `binder` an independent owned copy.  The slot
+	# (`s`'s Some.0 field) still owns its original +1.
+	entry.instructions.append(M.CopyValue(dest="t_copy", value="t_loaded", ty=_TY_PAYLOAD))
+	entry.instructions.append(M.StoreLocal(local="binder", value="t_copy"))
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
+	# The field MUST stay LIVE — no MoveOut anywhere in the chain.
+	# If this asserts MovedOut, the over-report has come back, and
+	# the partial-move Copy-binder leak class returns.
+	assert ledger.field_state_post(("entry", 5), "s", (("Some", 0),)) is LiveState.LIVE, (
+		"per-field walker over-reported MovedOut for a CopyValue chain — "
+		"the LANGUAGE_BUG regression has returned.  See "
+		"`test_partial_move_copy_binder_string_slot_leak.py` for the "
+		"runtime carrier."
+	)
+	# field_verdict_at must agree: LIVE + needs_drop=True → MUST_DROP.
+	assert ledger.field_verdict_at(
+		("entry", 6), "s", (("Some", 0),), needs_drop=True
+	) is DropVerdict.MUST_DROP
+
+
+def test_field_state_via_variant_get_field_addr_alone_does_not_move() -> None:
+	"""Pure read-only borrow shape: `AddrOfLocal + VariantGetFieldAddr`
+	with no LoadRef, no MoveOut.  Must NOT mark the field MovedOut.
+
+	This is the class of cases the old over-report rule wrongly
+	classified as MovedOut.  Examples include any future read-only
+	field-by-ref pattern that doesn't actually transfer ownership.
+	"""
+	func = _make_func("by_ref_borrow_only", locals_=["s"], types={"s": _TY_VARIANT})
 	entry = M.BasicBlock(name="entry")
 	entry.instructions.append(M.StoreLocal(local="s", value="t_init"))
 	entry.instructions.append(M.AddrOfLocal(dest="t_ref", local="s", is_mut=True))
@@ -130,7 +238,7 @@ def test_field_state_via_variant_get_field_addr_chain() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry
 	ledger = build_ledger(func, drop_policy=_drop_policy_stub)
-	assert ledger.field_state_post(("entry", 2), "s", (("Some", 0),)) is LiveState.MOVED_OUT
+	assert ledger.field_state_post(("entry", 2), "s", (("Some", 0),)) is LiveState.LIVE
 
 
 # -- Shape #4: whole scrutinee moved after field read --------------------

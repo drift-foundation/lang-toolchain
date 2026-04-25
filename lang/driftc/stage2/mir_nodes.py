@@ -586,6 +586,66 @@ class StoreRef(MInstr):
 
 
 @dataclass
+class MoveFromRef(MInstr):
+	"""
+	Atomic ownership transfer from `*ptr` into `local`.
+
+	Three operations performed atomically by codegen:
+	  1. Load the value at `ptr` (bitwise read of `*ptr`).
+	  2. Tombstone `*ptr` (write drop-safe bytes via `_emit_tombstone_value`),
+	     so any later `DropValue` on the source slot is a runtime no-op.
+	  3. Transfer the loaded value into `local` (the local's storage
+	     receives the bytes; ownership of the value moves with them).
+
+	**The whole point**: this is a TRANSFER, not a Copy.  `string_arc`
+	(and any other ownership-aware pass) must recognise `MoveFromRef`
+	as moving the source's ownership stake into `local` — NO
+	`StringRetain` / equivalent retain is inserted on this store.  The
+	caller pairs `MoveFromRef` with a later `MoveOut(_, local) +
+	DropValue(...)` to release the transferred stake exactly once.
+
+	**Why**: the per-field match-arm cleanup chain previously emitted
+	`LoadRef + StoreLocal(drop_tmp, ...)`, which `string_arc.StoreLocal`
+	expanded into `LoadRef + StringRetain(...) + StoreLocal(drop_tmp, ...)`
+	— i.e. a Copy with retain.  The subsequent `DropValue` then released
+	the retained stake, leaving the source slot's original stake
+	un-released → leak.  `MoveFromRef` lets authoring express "this
+	StoreLocal is a transfer" without a name-based or annotation-based
+	hack on `StoreLocal`.
+
+	**Codegen contract**:
+	- Routes through `_emit_tombstone_value(inner_ty)` to produce the
+	  tombstone bytes — same kind-by-kind dispatch (zero bytes for
+	  SCALAR/ARRAY/INTERFACE/DV; tombstone tag for VARIANT; recursive
+	  for STRUCT-without-user-destructor).
+	- **No codegen-level guard for user-Destructible structs.**  Unlike
+	  `TombstoneValue` (which produces drop-safe bytes for a slot that
+	  WILL still get `DropValue`'d), `MoveFromRef` transfers ownership
+	  AWAY from the slot — the safety contract is that callers
+	  guarantee the tombstoned slot is never subsequently dropped.
+	  For user-Destructible struct fields the tombstone bytes are NOT
+	  drop-safe under that destructor, but the caller's contract
+	  precludes the destructor from running on them.  Today the sole
+	  caller is `match_cleanup_authoring`'s partial-move branch, which
+	  suppresses the whole-variant `DropValue` (the per-field cleanup
+	  IS the drop authority).  Adding a codegen-level guard would
+	  refuse the legitimate Token-field carrier
+	  (`lang/tests/codegen/e2e/match_subset_bind_leaves_unbound_fields_dropped`).
+
+	**Ledger contract** (`_apply_field_state` in `ownership_ledger.py`):
+	- When `ptr` traces through a `VariantGetFieldAddr` to a tracked
+	  named local, the variant field transitions to `MovedOut` AT this
+	  instruction.  This is a parallel detection rule alongside the
+	  legacy `LoadRef → StoreLocal → MoveOut(local)` chain (which
+	  remains valid for HIRToMIR's binder-loop MOVE branch where the
+	  binder name is used directly).
+	"""
+	local: LocalId
+	ptr: ValueId
+	inner_ty: TypeId
+
+
+@dataclass
 class StoreLocal(MInstr):
 	"""locals[local] = value"""
 	local: LocalId

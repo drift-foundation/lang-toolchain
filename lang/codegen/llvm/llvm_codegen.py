@@ -163,6 +163,7 @@ from lang.driftc.stage2 import (
 	AddrOfField,
 	LoadRef,
 	StoreRef,
+	MoveFromRef,
 	ResultErr,
 	ResultIsErr,
 	ResultOk,
@@ -2254,10 +2255,19 @@ class _FuncBuilder:
 		rewritten to AssignSSA), and LLVM lowering allocates real storage slots
 		for them. This is required for correctness of `&T` / `&mut T`: taking the
 		address of a local must point at stable storage, not an SSA name.
+
+		`MoveFromRef(local=L, ...)` is also addr-taken-equivalent: codegen
+		needs stable alloca-backed storage for `L` to write the transferred
+		bytes into.  A subsequent `MoveOut(_, L, ty)` then reads the bytes
+		back via `LoadLocal(L)` (string_arc's lowering).  Without alloca-
+		backed storage, the SSA rename map silently drops the MoveFromRef
+		write and the value never lands in `L`.
 		"""
 		for block in self.func.blocks.values():
 			for instr in block.instructions:
 				if isinstance(instr, AddrOfLocal):
+					self.addr_taken_locals.add(instr.local)
+				elif isinstance(instr, MoveFromRef):
 					self.addr_taken_locals.add(instr.local)
 
 	def _alloca_name_for_local(self, local: str) -> str:
@@ -3573,6 +3583,80 @@ class _FuncBuilder:
 			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 				val = self._bool_to_storage(val)
 			self.lines.append(f"  store {emit_store_llty} {val}, {ptr_ty} {ptr}")
+		elif isinstance(instr, MoveFromRef):
+			# Atomic ownership transfer: read *ptr, tombstone *ptr,
+			# transfer the read value into `local` (no retain).  See the
+			# `MoveFromRef` MIR docstring for the contract.
+			#
+			# **Tombstone safety contract is at the CALLER layer.**
+			# Unlike `TombstoneValue` (which produces drop-safe bytes
+			# for a slot that WILL still get DropValue'd), `MoveFromRef`
+			# transfers ownership AWAY from the slot — the caller must
+			# guarantee the tombstoned slot is never subsequently
+			# DropValue'd.  For user-Destructible struct fields
+			# (`destructor_fns[inner_ty]` set), the tombstone bytes
+			# are NOT drop-safe under that destructor — but the
+			# caller's contract precludes the destructor from running
+			# on them.  Today the only caller is
+			# `match_cleanup_authoring`, which only emits MoveFromRef
+			# in the partial-move branch where the whole-variant
+			# DropValue is suppressed.  No codegen-level guard;
+			# adding one would refuse the legitimate Token-field
+			# carrier (`match_subset_bind_leaves_unbound_fields_dropped`).
+			if self.type_table is None:
+				raise NotImplementedError("LLVM codegen v1: MoveFromRef requires a TypeTable")
+			ptr = self._map_value(instr.ptr)
+			val_llty = self._llvm_type_for_typeid(instr.inner_ty)
+			store_llty = self._llvm_storage_type_for_typeid(instr.inner_ty)
+			emit_val_llty = self._llty(val_llty)
+			emit_store_llty = self._llty(store_llty)
+			# Step 1: load *ptr into a fresh temp.  Must precede the
+			# tombstone-write so we capture the live value bytes.
+			loaded = self._fresh("mfr_load")
+			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
+				raw = self._fresh("mfr_bool8")
+				self.lines.append(f"  {raw} = load i8, ptr {ptr}")
+				self._bool_from_storage(raw, dest=loaded)
+				self.value_types[loaded] = "i1"
+			else:
+				self.lines.append(f"  {loaded} = load {emit_val_llty}, ptr {ptr}")
+				self.value_types[loaded] = val_llty
+			# Step 2 + 3: produce tombstone bytes and write them back to
+			# *ptr.  Reuses the shared `_emit_tombstone_value` helper —
+			# same byte-pattern dispatch as `TombstoneValue`.
+			tomb = self._emit_tombstone_value(instr.inner_ty)
+			tomb_emit_llty = self._llty(self.value_types.get(tomb, val_llty))
+			self.lines.append(f"  store {tomb_emit_llty} {tomb}, ptr {ptr}")
+			# Step 4: transfer the loaded value into `local`.  Mirrors
+			# the StoreLocal lowering above (addr-taken alloca path or
+			# SSA value-rename), so any later code that takes the
+			# local's address or LoadLocal's it sees the transferred
+			# bytes.
+			if instr.local in self.addr_taken_locals:
+				alloca_id = self._ensure_local_storage(instr.local, store_llty)
+				val_for_store = loaded
+				if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
+					val_for_store = self._bool_to_storage(val_for_store)
+				self.lines.append(f"  store {emit_store_llty} {val_for_store}, ptr %{alloca_id}")
+				if self.module.debug_enabled and self.type_table is not None:
+					ty_id = self.func.local_types.get(instr.local)
+					span = getattr(instr, "span", None) or self._dbg_default_span
+					if ty_id is not None:
+						self._emit_dbg_declare(instr.local, ty_id, alloca_id, store_llty, span)
+			else:
+				# Pure-SSA local: thread the loaded value through the
+				# SSA rename map (same shape as StoreLocal's SSA branch).
+				block_name = getattr(self, "_current_block_name", None)
+				if instr_index is not None and block_name is not None:
+					ssa_name = self.ssa.value_for_instr.get((block_name, instr_index))
+				else:
+					ssa_name = None
+				if ssa_name:
+					self.aliases[ssa_name] = loaded
+					if loaded in self.value_types:
+						self.value_types[ssa_name] = self.value_types[loaded]
+				if instr.local in self.value_types and loaded in self.value_types:
+					self.value_types[instr.local] = self.value_types[loaded]
 		elif isinstance(instr, BinaryOpInstr):
 			self._lower_binary(instr)
 		elif isinstance(instr, FnPtrConst):

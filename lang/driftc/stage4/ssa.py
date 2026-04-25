@@ -31,6 +31,7 @@ from lang.driftc.stage2 import (
 	ZeroValue,
 	Goto,
 	IfTerminator,
+	MoveFromRef,
 )
 from lang.driftc.stage4.dom import DominatorAnalysis, DominanceFrontierAnalysis
 
@@ -113,10 +114,17 @@ class MirToSSA:
 		# Locals whose address is taken must remain as real storage (loads/stores),
 		# not SSA aliases. SSA renaming would sever pointer identity: `&x` must
 		# continue to refer to a stable storage slot for `x`.
+		# `MoveFromRef(local=L, ...)` is also addr-taken-equivalent: codegen
+		# writes the transferred bytes into L's alloca-backed storage; SSA
+		# renaming the LoadLocal/StoreLocal of L would silently miss the
+		# MoveFromRef-written value and read whatever the SSA pass last
+		# tracked for L.
 		addr_taken: set[str] = set()
 		for block in func.blocks.values():
 			for instr in block.instructions:
 				if isinstance(instr, AddrOfLocal):
+					addr_taken.add(instr.local)
+				elif isinstance(instr, MoveFromRef):
 					addr_taken.add(instr.local)
 
 		block = func.blocks[func.entry]
@@ -317,11 +325,16 @@ class MirToSSA:
 		df_info = DominanceFrontierAnalysis().compute(func, dom_info)
 
 		# Locals whose address is taken must remain as real storage (loads/stores),
-		# not SSA aliases; see _run_single_block for rationale.
+		# not SSA aliases; see _run_single_block for rationale.  `MoveFromRef`
+		# destinations are addr-taken-equivalent for the same reason
+		# (codegen writes into alloca-backed storage; SSA renaming would
+		# elide the write).
 		addr_taken: set[str] = set()
 		for block in func.blocks.values():
 			for instr in block.instructions:
 				if isinstance(instr, AddrOfLocal):
+					addr_taken.add(instr.local)
+				elif isinstance(instr, MoveFromRef):
 					addr_taken.add(instr.local)
 
 		# CFG maps

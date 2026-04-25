@@ -147,6 +147,14 @@ def validate_mir_basic_hygiene(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
 				elif isinstance(instr, M.StoreRef):
 					_check_value(instr.ptr, instr_name, "ptr")
 					_check_value(instr.value, instr_name, "value")
+				elif isinstance(instr, M.MoveFromRef):
+					# Atomic ownership-transfer primitive; reads `ptr`,
+					# writes into named `local`.  Both must be valid.
+					_check_value(instr.ptr, instr_name, "ptr")
+					if instr.local not in declared_locals:
+						raise AssertionError(
+							f"MIR invariant violation: unknown local '{instr.local}' in {instr_name}.local for {function_symbol(fn_id)}"
+						)
 				elif isinstance(instr, M.BinaryOpInstr):
 					_check_value(instr.left, instr_name, "left")
 					_check_value(instr.right, instr_name, "right")
@@ -462,7 +470,7 @@ def validate_mir_concrete_layout_types(
 				if isinstance(instr, (M.ZeroValue, M.CopyValue, M.MoveOut, M.DropValue)):
 					_check_type(fn_id, instr.ty, instr.__class__.__name__)
 					continue
-				if isinstance(instr, (M.LoadRef, M.StoreRef)):
+				if isinstance(instr, (M.LoadRef, M.StoreRef, M.MoveFromRef)):
 					_check_type(fn_id, instr.inner_ty, instr.__class__.__name__)
 					continue
 
@@ -756,6 +764,13 @@ def validate_mir_iface_init_invariants(
 						continue
 					if isinstance(instr, M.LoadRef) and _is_iface(instr.inner_ty):
 						cur_values.add(instr.dest)
+						continue
+					if isinstance(instr, M.MoveFromRef) and _is_iface(instr.inner_ty):
+						# Atomic transfer: the loaded iface lands in `local`'s
+						# storage.  Mark `local` as holding an initialized
+						# iface so subsequent reads validate.  No SSA `dest`
+						# (transfer is local-to-local at the storage level).
+						cur_locals.add(instr.local)
 						continue
 					if isinstance(instr, M.StoreLocal):
 						val_is_iface = instr.value in cur_values or instr.value in iface_params or value_iface_type.get(instr.value, False)

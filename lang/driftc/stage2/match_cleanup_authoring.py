@@ -169,7 +169,6 @@ def author_match_cleanup(
 			if not should_emit:
 				continue
 			slot_addr = _new_temp()
-			slot_val = _new_temp()
 			move_dest = _new_temp()
 			hook_chain.append(
 				M.VariantGetFieldAddr(
@@ -181,14 +180,23 @@ def author_match_cleanup(
 					field_ty=field_ty,
 				)
 			)
+			# Atomic ownership transfer from the variant slot into
+			# `drop_tmp`.  Codegen lowers this into:
+			#   1. load *slot_addr → loaded_value
+			#   2. tombstone bytes for `field_ty` written back to *slot_addr
+			#   3. transfer loaded_value into drop_tmp's storage
+			# `string_arc` recognises `MoveFromRef` as a TRANSFER
+			# (no `StringRetain` insertion); the tail-chain `MoveOut +
+			# DropValue` then releases the transferred stake exactly
+			# once.  Pre-`MoveFromRef` this was `LoadRef + StoreLocal`,
+			# which `string_arc.StoreLocal` rewrote with a retain —
+			# the net release count came out to zero, leaking the
+			# slot's original +1 (carrier:
+			# `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`).
 			hook_chain.append(
-				M.LoadRef(dest=slot_val, ptr=slot_addr, inner_ty=field_ty)
-			)
-			hook_chain.append(
-				M.StoreLocal(local=drop_tmp, value=slot_val)
+				M.MoveFromRef(local=drop_tmp, ptr=slot_addr, inner_ty=field_ty)
 			)
 			func.local_types[slot_addr] = type_table.ensure_ref_mut(field_ty)
-			func.local_types[slot_val] = field_ty
 			func.local_types[move_dest] = field_ty
 			tail_chain.append(M.MoveOut(dest=move_dest, local=drop_tmp, ty=field_ty))
 			tail_chain.append(M.DropValue(value=move_dest, ty=field_ty))
