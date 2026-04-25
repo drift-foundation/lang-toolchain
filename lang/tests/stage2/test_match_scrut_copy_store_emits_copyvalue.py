@@ -118,30 +118,33 @@ def _collect_ctor_callinfo(hir: H.HBlock, type_table: TypeTable, var_tid: TypeId
 
 
 def test_match_scrut_copy_store_branch_emits_copyvalue_for_refcounted_variant() -> None:
-	"""Pin: the Copy-store branch emits `CopyValue` for a non-bitcopy
-	refcount-bearing scrutinee, NOT the pre-Phase-2a bare `StoreLocal`.
+	"""Pin: a refcount-bearing scrutinee `V<String>` takes the MOVE
+	branch (`MoveOut(source_local) → StoreLocal(arm_scrut_local)`),
+	NOT the bare-`StoreLocal` double-owner shape.
 
-	Setup: `V<String>` variant (Optional<String>-shaped), Copy hook
-	installed to force `copy_status(V<String>) == True` at match-
-	lowering time — mirroring the packaged-`.dmp`-load classification
-	that caused the original TLS UAF.  The `_ensure_arm_scrut_ptr`
-	helper then takes its Copy-store else-branch for the scrutinee.
+	**History.**  Pre-Copy-shortcut-fix, V<String> with a Copy hook
+	had `is_cheap_copy=True AND has_structural_drop=True` — the
+	asymmetric triplet.  `_ensure_arm_scrut_ptr` reached its Copy-
+	store else-branch and the Phase 2a `dual_owner` dispatch had to
+	emit a `CopyValue` to retain the refcount.
 
-	Expected emission (post-Phase-2a):
-	  1. A `CopyValue` instruction whose `ty` is the scrutinee
-	     variant type.  This triggers `_emit_copy_value_inner`'s
-	     per-arm retain traversal at LLVM-codegen time, producing a
-	     fully independent copy in `arm_scrut_local`.
-	  2. A `StoreLocal` whose `value` is the `CopyValue`'s dest
-	     (NOT the raw scrut SSA value), placing the owned copy into
-	     the per-arm scrut_tmp.
+	**Post-fix.**  The Copy-shortcut fix
+	(`lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`)
+	makes `V<String>.is_cheap_copy = False` because structural-with-
+	drop is not cheap-copy regardless of `copy_status`.  V<String>
+	now naturally takes the MOVE branch at the top of
+	`_ensure_arm_scrut_ptr`: source_local is consumed via `MoveOut`
+	and `arm_scrut_local` owns the +1.  The arm-end drop releases
+	the +1; the source local is dead so its scope-drop is a no-op
+	(the lattice records it as MOVED_OUT after the MoveOut).
 
-	Pre-Phase-2a shape: `StoreLocal(arm_scrut_local, scrut_val)`
-	with NO preceding CopyValue.  If the test regresses, the
-	assertion on the CopyValue presence fires AND the message
-	identifies the exact emission pattern that reintroduced the
-	bug — so the triage path is "search for this pattern in the
-	Copy-store branch."
+	**The test.**  Verifies the new lowered shape: a `MoveOut`
+	whose `local` is the source local AND a `StoreLocal` into a
+	`__match_scrut_tmp*` whose `value` is the `MoveOut`'s dest.
+	No `CopyValue(ty=V<String>)` should appear at the scrut level
+	— the policy fix has subsumed Phase 2a's dual_owner mitigation
+	by routing structural-with-drop scrutinees through MOVE
+	directly.
 	"""
 	type_table = TypeTable()
 	# Build V<String> — structural equivalent of Optional<String>.
@@ -229,50 +232,53 @@ def test_match_scrut_copy_store_branch_emits_copyvalue_for_refcounted_variant() 
 		call_info_by_callsite_id=call_info_by_callsite_id,
 	).lower_block(hir)
 
-	# Scan emitted MIR for a CopyValue whose `ty` is the scrutinee
-	# variant type — that is the Phase 2a emission.  Also verify
-	# that the immediately-following StoreLocal into a
-	# `__match_scrut_tmp*` local uses the CopyValue's dest, not the
-	# raw scrut SSA value — the Pre-Phase-2a bug shape stored the
-	# raw SSA, which is what we are regressing against.
+	# Scan emitted MIR for the MOVE-path emission shape:
+	#   MoveOut(dest=tmp, local=source_local, ty=v_string_ty)
+	#   StoreLocal(local=__match_scrut_tmp*, value=tmp)
+	# AND assert no `CopyValue(ty=v_string_ty)` was emitted at the
+	# scrut level (the Copy-store branch must be unreachable for a
+	# structural-with-drop scrutinee post-policy-fix).
+	saw_move_out_of_scrut_ty = False
+	saw_store_of_moved_dest_into_scrut_tmp = False
 	saw_copy_of_scrut_ty = False
-	saw_store_of_copy_dest_into_scrut_tmp = False
-	copy_value_dests: set[str] = set()
+	move_out_dests: set[str] = set()
 	for block in builder.func.blocks.values():
 		for instr in block.instructions:
+			if isinstance(instr, M.MoveOut) and getattr(instr, "ty", None) == v_string_ty:
+				saw_move_out_of_scrut_ty = True
+				move_out_dests.add(getattr(instr, "dest", ""))
 			if isinstance(instr, M.CopyValue) and getattr(instr, "ty", None) == v_string_ty:
 				saw_copy_of_scrut_ty = True
-				copy_value_dests.add(getattr(instr, "dest", ""))
 			if isinstance(instr, M.StoreLocal):
 				local_name = getattr(instr, "local", "") or ""
 				value_name = getattr(instr, "value", "") or ""
 				if isinstance(local_name, str) and local_name.startswith("__match_scrut_tmp"):
-					if value_name in copy_value_dests:
-						saw_store_of_copy_dest_into_scrut_tmp = True
+					if value_name in move_out_dests:
+						saw_store_of_moved_dest_into_scrut_tmp = True
 
-	assert saw_copy_of_scrut_ty, (
-		"Phase 2a regressed: the Copy-store branch of "
-		"`_ensure_arm_scrut_ptr` did NOT emit a `CopyValue` for the "
-		"refcount-bearing scrutinee `V<String>`.  Pre-Phase-2a, this "
-		"branch emitted a bare `StoreLocal(arm_scrut_local, scrut_val)` "
-		"which bitcopies the variant without running the per-arm "
-		"retain traversal — both the source local and the arm_scrut_local "
-		"then claim ownership of the same refcount, and scope-exit "
-		"drops on both fire a double-release UAF (the TLS team's "
-		"original bug).  Re-audit the else-branch in "
-		"`_ensure_arm_scrut_ptr` — the `dual_owner` dispatch "
-		"(source_local is not None AND has_structural_drop) must stay "
-		"or the UAF returns."
+	assert saw_move_out_of_scrut_ty, (
+		"Policy-fix regression: V<String> scrutinee did NOT emit a "
+		"`MoveOut(ty=V<String>)` from its source local.  Post-fix, "
+		"`is_cheap_copy=False` for structural-with-drop variants, so "
+		"`_ensure_arm_scrut_ptr` must take its MOVE branch (line 1448 "
+		"in hir_to_mir.py) — consuming the source local and storing "
+		"the moved value into `arm_scrut_local`.  If MoveOut is "
+		"missing, the source local is leaving the helper still LIVE "
+		"and the dual-owner UAF returns."
 	)
-	assert saw_store_of_copy_dest_into_scrut_tmp, (
-		"Phase 2a regressed: the Copy-store branch emitted a "
-		"`CopyValue` but did NOT route its dest through the "
-		"`StoreLocal(__match_scrut_tmp*, ...)`.  That means the owned "
-		"copy isn't landing in the arm's scrut_tmp — the per-arm "
-		"cleanup operates on garbage.  Re-audit the else-branch in "
-		"`_ensure_arm_scrut_ptr`: the emission order must be "
-		"`CopyValue(dest=copy_dest, value=scrut_val, ty=scrut_ty)` "
-		"followed by `StoreLocal(local=arm_scrut_local, value=copy_dest)`."
+	assert saw_store_of_moved_dest_into_scrut_tmp, (
+		"Policy-fix regression: V<String> emitted MoveOut but did "
+		"NOT chain through `StoreLocal(__match_scrut_tmp*, "
+		"<move_dest>)`.  The arm temp is left holding garbage; the "
+		"arm-end drop will fire on uninitialised storage."
+	)
+	assert not saw_copy_of_scrut_ty, (
+		"Policy-fix regression: V<String> scrutinee emitted a "
+		"`CopyValue` at the scrut level.  Post-fix, structural-with-"
+		"drop variants must take the MOVE branch — `CopyValue` would "
+		"retain an extra refcount that has no symmetric drop, "
+		"leaking one refcount per match.  This is the inverse of the "
+		"Phase 2a leak (rvalue+CopyValue) and equally bad."
 	)
 
 
@@ -405,37 +411,32 @@ def test_match_scrut_copy_store_branch_preserves_fast_path_for_pod_variant() -> 
 
 
 def test_match_scrut_copy_store_inline_rvalue_does_not_copy() -> None:
-	"""Regression pin for the Phase 2a review-found leak: a transient
-	rvalue scrutinee with `has_structural_drop=True` must NOT go
-	through `CopyValue`.
+	"""Regression pin: a transient rvalue scrutinee with
+	`has_structural_drop=True` must NOT emit a `CopyValue` at the
+	scrut level — the original Phase 2a leak shape.
 
-	**The leak.**  The initial Phase 2a dispatch was
-	`if has_structural_drop: CopyValue else: bare StoreLocal`.  For
-	a match like `match make_opt_string() { Some(s) => ..., None
-	=> ... }` the scrutinee is a transient owning SSA value —
-	`scrut_val` holds the function-call return with refcount 1 on
-	the inner String, and there is NO named source local to
-	scope-drop.  Under that initial dispatch, `CopyValue` retained
-	the refcount (+1), `StoreLocal(arm_scrut_local, copy_dest)`
-	stored the retained copy into the arm temp, the arm-end drop
-	released once (refcount → 1), and the original `scrut_val` had
-	no owner to scope-drop — leaking one refcount for the function
-	lifetime.
+	**History.**  Pre-Copy-shortcut-fix, V<String> with the Copy
+	hook had `is_cheap_copy=True` so transient rvalue + Copy-store
+	branch was the reachable path.  The Phase 2a `dual_owner` guard
+	(`source_local is not None AND has_structural_drop`) was
+	required to prevent CopyValue on the rvalue path (which would
+	retain an unsymmetric +1 → leak).
 
-	**The fix.**  The dispatch is guarded by
-	`dual_owner = (source_local is not None) AND has_structural_drop`.
-	For transient rvalues (source_local is None), bare
-	`StoreLocal(arm_scrut_local, scrut_val)` transfers the single
-	refcount owner into the arm temp; drops stay balanced.  The
-	CopyValue path activates only when there's a named source local
-	that ALSO needs to be dropped later — the true dual-owner case
-	the TLS UAF created.
+	**Post-fix.**  V<String>.is_cheap_copy is now False (structural-
+	with-drop is not cheap).  The first MOVE-path conditional in
+	`_ensure_arm_scrut_ptr` synthesises a source_local for the
+	rvalue (line 1443: `if source_local is None and not
+	_should_copy_value(scrut_ty)`), then the second conditional
+	emits MoveOut from that synthetic source_local into
+	arm_scrut_local (line 1448).  No CopyValue at scrut level; the
+	single +1 from the rvalue transfers cleanly into the arm temp.
+	The synthetic source_local becomes MOVED_OUT after the MoveOut,
+	so its scope-drop is a no-op.
 
-	**What this test verifies.**  Construct a match whose
-	scrutinee is an inline ctor call (no `val` binding → no named
-	source local), with a forced `has_structural_drop=True`
-	classification.  Assert the emitted MIR does NOT contain a
-	CopyValue of the scrutinee type.  If it does, the leak is back.
+	**What this test verifies.**  Inline-ctor scrutinee with
+	`has_structural_drop=True` MUST NOT emit `CopyValue(ty=V<String>)`
+	at the scrut level.  The MOVE path (synthetic source_local +
+	MoveOut) is the post-fix expected shape.
 	"""
 	type_table = TypeTable()
 	var_base = type_table.declare_variant(
@@ -466,11 +467,13 @@ def test_match_scrut_copy_store_inline_rvalue_does_not_copy() -> None:
 	assert probe_policy.has_structural_drop, (
 		"test setup invariant broken: V<String> no longer reports "
 		"has_structural_drop=True — this test cannot prove the "
-		"transient-rvalue fast-path without that precondition"
+		"no-CopyValue-at-scrut invariant without that precondition"
 	)
-	assert probe_policy.is_cheap_copy, (
-		"test setup invariant broken: V<String> no longer takes "
-		"the Copy-store else-branch under the Copy hook"
+	assert not probe_policy.is_cheap_copy, (
+		"test setup invariant broken: V<String> is reporting "
+		"is_cheap_copy=True under the post-Copy-shortcut-fix policy.  "
+		"Structural-with-drop variants must classify as not cheap-"
+		"copy; if this flips back, the policy fix has regressed"
 	)
 
 	# Match on a ctor-call expression directly (no `val` binding)
@@ -543,24 +546,22 @@ def test_match_scrut_copy_store_inline_rvalue_does_not_copy() -> None:
 	).lower_block(hir)
 
 	# Transient rvalue + has_structural_drop must NOT produce a
-	# CopyValue of the scrut type.  If it does, the Phase 2a review
-	# finding has regressed and the original refcount leaks for
-	# every such match.
+	# CopyValue of the scrut type at the scrut level.  Post policy
+	# fix, V<String>.is_cheap_copy is False so the MOVE branch is
+	# taken: a synthetic source_local wraps the rvalue, then MoveOut
+	# transfers it into arm_scrut_local — the single +1 from the
+	# rvalue ends up in the arm temp without a CopyValue retain.
 	for block in builder.func.blocks.values():
 		for instr in block.instructions:
 			if isinstance(instr, M.CopyValue) and getattr(instr, "ty", None) == v_string_ty:
 				raise AssertionError(
-					"Phase 2a regressed the transient-rvalue "
-					"fast-path: a match on an inline ctor call "
-					"(no named source local) with a "
-					"has_structural_drop=True scrutinee emitted a "
-					"`CopyValue`.  Pre-review Phase 2a had this same "
-					"shape and leaked the original refcount (the "
-					"rvalue `scrut_val` has no named local to "
-					"scope-drop; CopyValue retains an extra refcount "
-					"for the arm temp; only the arm temp drops).  "
-					"The `dual_owner` guard in "
-					"`_ensure_arm_scrut_ptr`'s Copy-store branch "
-					"must require BOTH `source_local is not None` "
-					"AND `has_structural_drop`.  Re-audit the guard."
+					"Policy-fix regression: a match on an inline ctor "
+					"call (transient rvalue, no named source local) "
+					"with a has_structural_drop=True scrutinee emitted "
+					"a `CopyValue` at the scrut level.  Post-policy-"
+					"fix, V<String>.is_cheap_copy is False, so "
+					"`_ensure_arm_scrut_ptr` MUST take the MOVE branch "
+					"(synthetic source_local + MoveOut into arm temp).  "
+					"A CopyValue here would retain a second refcount "
+					"with no symmetric drop and leak per match."
 				)

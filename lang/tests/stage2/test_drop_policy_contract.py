@@ -154,35 +154,45 @@ def test_drop_policy_string_with_copy_hook_pins_shortcut_behaviour() -> None:
 
 	In a compiler run against a real stdlib (source or packaged),
 	the Copy trait's `impl Copy for String` resolves and
-	`copy_status(String)` returns True.  The Copy shortcut in
-	`_drop_policy` then fires, flipping `needs_drop` to False.
+	`copy_status(String)` returns True.
 
-	This is NOT a leak: `string_arc.py` tracks refcounted locals
-	independently via its own `string_locals` set and emits
-	`drift_string_retain`/`drift_string_release` pairs outside
-	the generic scope-drop path.  The generic `needs_drop`
-	returning False is what PREVENTS the generic path from
-	double-dropping String values that string_arc already manages.
+	After the Copy-short-circuit fix
+	(`lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`),
+	the policy is driven by destruction reality, not gated by
+	`copy_status`.  So:
+	  - needs_drop          = True   (refcount must be released —
+	                                  drift_string_release)
+	  - is_cheap_copy       = True   (single retain — String is a
+	                                  refcounted scalar, the Copy
+	                                  semantics ARE one retain)
+	  - has_structural_drop = True   (shortcut-free; refcount is the
+	                                  drop-bearing child)
 
-	Phase 2 (the ledger) is expected to reconcile this — either by
-	making `needs_drop` context-aware (string_arc vs generic) or
-	by rolling string-arc behaviour into the generic path so the
-	distinction vanishes.  Either way, this pin must be updated in
-	the same diff as the consumer-side string-arc changes.
+	The asymmetric triplet that previously gated the Copy/MOVE
+	decision (`needs_drop=False AND is_cheap_copy=True`) is gone:
+	the new policy has `needs_drop=True AND is_cheap_copy=True`,
+	which the binder/scrut Copy paths handle by emitting `CopyValue`
+	(single retain) and registering the binder for its own scope-
+	exit drop.  string_arc continues to manage refcounted locals
+	independently; double-drop is prevented by `string_arc` skipping
+	locals already authored by the generic path (see
+	`string_arc.py`'s skip-when-generic-handles logic).
 	"""
 	type_table = TypeTable()
 	string_ty = type_table.ensure_string()
 	_install_copy_hook(type_table, string_ty)
 	p = _policy(type_table, string_ty)
-	assert p.needs_drop is False, (
-		"String.needs_drop with Copy hook must be False under the "
-		"Phase-1-preserved semantics — string_arc handles the "
-		"String refcount release on a parallel track, so the "
-		"generic `_needs_runtime_drop` returns False to avoid "
-		"double-drop.  Flipping this to True is a Phase 2 "
-		"tightening; update the string_arc consumers too."
+	assert p.needs_drop is True, (
+		"String.needs_drop with Copy hook must be True — the refcount "
+		"MUST be released (drift_string_release) regardless of Copy "
+		"trait status.  This is the central fix for the LANGUAGE_BUG "
+		"in `test_drop_policy_copy_short_circuit_bug.py`."
 	)
-	assert p.is_cheap_copy is True
+	assert p.is_cheap_copy is True, (
+		"String.is_cheap_copy must remain True — the Copy semantics "
+		"for a refcounted scalar are a single retain, which is "
+		"cheap.  Decoupled from `needs_drop` after the policy fix."
+	)
 	assert p.has_structural_drop is True, (
 		"String.has_structural_drop must remain True even with "
 		"the Copy hook installed — the shortcut-free axis is the "
@@ -254,45 +264,40 @@ def test_drop_policy_variant_of_string_with_copy_hook() -> None:
 
 	When a consumer is built against a packaged `.dmp`, the Copy-
 	trait graph resolves eagerly and `copy_status(V<String>)` can
-	return True.  The policy derives:
-	  - needs_drop    = False  (Copy shortcut fires)
-	  - is_cheap_copy = True   (Copy shortcut says so)
-	  - has_structural_drop = True  (structural query ignores the
-	                                  shortcut)
+	return True (this is the same packaged-load shape that Bug 1
+	in `traits/world.py` canonicalises across raw/pkg builds).
 
-	Pre-0.31.0 this triplet WAS the UAF-producing bug shape: the
-	`_ensure_arm_scrut_ptr` Copy-store branch emitted a bare
-	`StoreLocal` which bitcopied the variant bits without running
-	per-arm retains — the source local and `arm_scrut_local` both
-	claimed ownership of the same refcount, both dropped at
-	scope exit, refcount underflowed, glibc aborted.
+	After the Copy-short-circuit fix the policy is:
+	  - needs_drop          = True   (raw_has_drop=True for variant
+	                                  containing String — refcount
+	                                  must be released)
+	  - is_cheap_copy       = False  (variant of String is structural
+	                                  with drop — per-field traversal
+	                                  is required, not cheap)
+	  - has_structural_drop = True   (shortcut-free axis)
 
-	As of 0.31.0 (Phase 2a) the triplet is no longer a bug shape:
-	the Copy-store branch now emits a `CopyValue` for non-bitcopy
-	scrutinees, which dispatches into `_emit_copy_value_inner`'s
-	per-arm retain traversal.  Source-local and `arm_scrut_local`
-	each own an independent set of refcount increments; their
-	scope-exit drops are symmetric.
-
-	This test pins the POLICY output (unchanged — the policy is
-	still descriptive of the classification); the CONSUMER-side
-	fix lives in `_ensure_arm_scrut_ptr` and is covered by the
-	runtime regression test in `lang/tests/codegen/e2e/`.  When
-	Phase 3's ledger lands and possibly changes this policy
-	(e.g. by making `needs_drop` structurally-derived and
-	independent of the Copy shortcut), this pin flips and the
-	consumers that depend on the asymmetric triplet must be
-	re-audited in the same diff.
+	Pre-fix: `needs_drop=False AND is_cheap_copy=True` was the UAF-
+	producing asymmetric triplet — the Copy shortcut hid required
+	release semantics from the generic drop path.  0.31.0 Phase 2a
+	mitigated the immediate UAF by switching the Copy-store branch
+	in `_ensure_arm_scrut_ptr` to emit `CopyValue`; the policy fix
+	now eliminates the asymmetry at the source.
 	"""
 	type_table = TypeTable()
 	opt_string_ty = _build_opt_variant(type_table, type_table.ensure_string())
 	_install_copy_hook(type_table, opt_string_ty)
 	p = _policy(type_table, opt_string_ty)
-	# Asymmetric triplet: preserved as descriptive of the current
-	# Copy-trait classification rules.  No longer a bug shape (the
-	# consumer handles it correctly as of 0.31.0).
-	assert p.needs_drop is False
-	assert p.is_cheap_copy is True
+	assert p.needs_drop is True, (
+		"V<String> with Copy hook must report needs_drop=True — the "
+		"variant's String payload requires drift_string_release.  "
+		"Pre-fix asymmetric triplet has been eliminated."
+	)
+	assert p.is_cheap_copy is False, (
+		"V<String>.is_cheap_copy must be False — a variant carrying a "
+		"refcounted payload requires per-field retain traversal, not "
+		"a single bitcopy/retain.  Decoupled from `needs_drop` after "
+		"the policy fix; structural-with-drop is not cheap."
+	)
 	assert p.has_structural_drop is True, (
 		"V<String> with Copy hook must STILL report "
 		"has_structural_drop=True — this is the shortcut-free axis "

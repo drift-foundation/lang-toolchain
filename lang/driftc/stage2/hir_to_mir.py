@@ -617,35 +617,17 @@ class HIRToMIR:
 		contains_dv = self._contains_dv_transitive(ty, set())
 
 		# --- needs_drop ----------------------------------------
-		# Order mirrors the pre-Phase-1 `_needs_runtime_drop` body:
-		# DV-bearing → True (short-circuits the Copy shortcut because
-		# DV destructors have side effects not captured by Copy-trait
-		# metadata); Copy trait True → False (the pre-Phase-1
-		# shortcut — the bug shape Phase 2 is targeting, preserved
-		# here intentionally so Phase 1 is semantic-preserving);
-		# otherwise defer to raw `has_drop`.
-		if contains_dv:
-			needs_drop = True
-		elif copy_status is True:
-			needs_drop = False
-		else:
-			needs_drop = raw_has_drop
-
-		# --- is_cheap_copy -------------------------------------
-		# Pre-Phase-1 `_classify_value_transfer` returned "copy"
-		# iff `copy_status is True AND not needs_runtime_drop`.
-		# `is_cheap_copy` reifies that same predicate, derived from
-		# the single `copy_status` snapshot above.  Note the
-		# asymmetry with `needs_drop`: `copy_status=True AND
-		# raw_has_drop=True` (the `Optional<String>` bug shape under
-		# packaged loads) yields `is_cheap_copy=True` AND
-		# `needs_drop=False` — precisely the wrong combination
-		# Phase 2 will fix.  Pinned by the contract tests so the
-		# fix is loud.
-		is_cheap_copy = (copy_status is True) and not needs_drop
-
-		# --- is_destructible -----------------------------------
-		is_destructible = raw_is_destructible
+		# Driven by destruction reality.  A type with `has_drop=True`
+		# (refcount release, user destructor, structural drop) MUST
+		# be dropped at scope exit, regardless of `copy_status`.  The
+		# pre-fix Copy short-circuit treated `Copy` as "no drop
+		# needed" — wrong for refcounted scalars like `String`
+		# (copy_status=True AND has_drop=True; bytes are bitcopyable
+		# but the refcount must be released) and for variants/
+		# structs that contain `String`/`Array<…>`/destructible
+		# fields.  Pinned by
+		# `lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`.
+		needs_drop = bool(contains_dv or raw_has_drop or raw_is_destructible)
 
 		# --- has_structural_drop -------------------------------
 		# Shortcut-free drop query: `raw_has_drop` direct, with the
@@ -655,6 +637,24 @@ class HIRToMIR:
 		# axis, not `needs_drop`, because it must NOT be fooled by
 		# the Copy-trait shortcut that the UAF exploited.
 		has_structural_drop = contains_dv or raw_has_drop
+
+		# --- is_cheap_copy -------------------------------------
+		# Decoupled from `needs_drop`.  A type is "cheap copy" when
+		# its Copy semantics can be implemented with a single bitcopy
+		# or a single retain: POD bitcopy types, refcounted SCALAR
+		# types (`String` — one retain), and Copy structural types
+		# whose payload has no drop work (POD variants/structs).
+		# Structural-with-drop (`Optional<String>`, `Array<String>`,
+		# struct-with-droppable-fields) requires per-field traversal
+		# and is NOT cheap.
+		td_for_kind = self._type_table.get(ty)
+		is_scalar_kind = td_for_kind.kind is TypeKind.SCALAR
+		is_cheap_copy = (copy_status is True) and (
+			is_bitcopy or is_scalar_kind or not has_structural_drop
+		)
+
+		# --- is_destructible -----------------------------------
+		is_destructible = raw_is_destructible
 
 		return DropPolicy(
 			needs_drop=needs_drop,
@@ -1669,27 +1669,16 @@ class HIRToMIR:
 									self._local_types[field_moved] = bty
 									payload_is_copy = self._should_copy_value(bty)
 									if payload_is_copy:
-										# Invariant relied on by PARTIAL-MOVE CLEANUP
-										# below: a Copy-classified payload never has
-										# runtime-drop semantics.
-										# `_classify_value_transfer` enforces this —
-										# `copy_status=True AND _needs_runtime_drop=True`
-										# degrades to "move".  So a Copy-bound binder
-										# cannot leave the variant's storage holding
-										# an owning ref that still needs release.
-										# This assertion forces any future Copy path
-										# for a runtime-drop type to be reviewed
-										# deliberately against PARTIAL-MOVE CLEANUP —
-										# it will NOT silently "still work" there.
-										if self._needs_runtime_drop(bty):
-											raise AssertionError(
-												f"internal: match binder '{bname}' for "
-												f"ctor '{arm.ctor}' field {fidx} classified "
-												f"as Copy but also requires runtime drop "
-												f"(typeid={bty}) — violates the "
-												f"_classify_value_transfer invariant that "
-												f"PARTIAL-MOVE CLEANUP relies on."
-											)
+										# Copy-classified payload: emit `CopyValue`,
+										# which dispatches per-type (bitcopy for POD,
+										# retain for refcounted scalars).  PARTIAL-
+										# MOVE CLEANUP below does not apply: this
+										# path does not set `arm_scrut_payload_moved`,
+										# so the variant slot retains its original
+										# +1 and is released by whole-variant scope
+										# drop.  The binder owns an independent +1
+										# (via `CopyValue`) and is released by its
+										# own scope drop.
 										copy_dest = self.b.new_temp()
 										self.b.emit(M.CopyValue(dest=copy_dest, value=field_moved, ty=bty))
 										self._local_types[copy_dest] = bty

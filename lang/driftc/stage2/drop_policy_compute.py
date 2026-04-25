@@ -56,15 +56,30 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 	except Exception:
 		raw_is_destructible = False
 	contains_dv = _contains_dv_transitive(type_table, ty, set())
-	if contains_dv:
-		needs_drop = True
-	elif copy_status is True:
-		needs_drop = False
-	else:
-		needs_drop = raw_has_drop
-	is_cheap_copy = (copy_status is True) and not needs_drop
-	is_destructible = raw_is_destructible
+	# needs_drop: driven by destruction reality.  A type that has
+	# `has_drop=True` (refcount release, user destructor, structural
+	# drop) MUST be dropped at scope exit, regardless of whether it
+	# also has `copy_status=True`.  The pre-fix shortcut
+	# (`elif copy_status is True: needs_drop=False`) treated `Copy`
+	# as "no drop needed" — wrong for refcounted scalars like
+	# `String` (`copy_status=True` AND `has_drop=True`) and for
+	# variants/structs with `String`/`Array<…>` fields.  Pinned by
+	# `lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`.
+	needs_drop = bool(contains_dv or raw_has_drop or raw_is_destructible)
+	# is_cheap_copy: decoupled from `needs_drop`.  A type is "cheap
+	# copy" when its Copy semantics can be implemented with a single
+	# bitcopy or a single retain — POD bitcopy types, refcounted
+	# SCALAR types (String — one retain), and Copy structural types
+	# whose payload has no drop work.  Structural-with-drop (e.g.
+	# `Optional<String>`, `Array<String>`) requires per-field
+	# traversal and is NOT cheap.
+	td_for_kind = type_table.get(ty)
+	is_scalar_kind = td_for_kind.kind is TypeKind.SCALAR
 	has_structural_drop = contains_dv or raw_has_drop
+	is_cheap_copy = (copy_status is True) and (
+		is_bitcopy or is_scalar_kind or not has_structural_drop
+	)
+	is_destructible = raw_is_destructible
 	return DropPolicy(
 		needs_drop=needs_drop,
 		is_bitcopy=is_bitcopy,
