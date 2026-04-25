@@ -944,59 +944,6 @@ class HIRToMIR:
 			field_path=field_path,
 		)
 
-	def _match_scrutinee_drop_verdict(
-		self,
-		*,
-		arm_scrut_local: str | None,
-		arm_scrut_payload_moved: bool,
-		scrut_ty: TypeId | None,
-	) -> tuple[_DropVerdict, str]:
-		"""Phase 3B step 4 match-cleanup drop-decision helper.
-
-		Mirrors the three-state shape of `_scope_drop_verdict` but
-		takes per-arm context (`arm_scrut_payload_moved`) that the
-		function-wide `_moved_locals` set cannot express.  Answers
-		"should the whole scrutinee-tmp be dropped at this arm's
-		cleanup boundary?" for the site-2 emission in
-		`_visit_expr_HMatchExpr`.
-
-		Step 4 is a NARROW alignment patch: the helper captures the
-		existing per-arm decision logic — there is no ledger-authoritative
-		path-dependent classification yet for match scrutinees because
-		the per-field gap (triage bucket 1, `per_field_gap`) blocks
-		per-local authority.  When/if per-field state lands in the
-		ledger, the `REASON_FIELD_MOVED` branch below evolves into a
-		proper `PATH_DEPENDENT` verdict with 3C-style flag-guard
-		support; until then, the site's per-field cleanup loop is the
-		sole authority on partial-move shapes.
-
-		Return shape matches `_scope_drop_verdict`: `(DropVerdict,
-		REASON_*)`.  The MIR emission at the site does NOT change as
-		a result of this refactor — the helper's verdict is used only
-		to drive the observe record; the drop (or per-field cleanup)
-		is still emitted by the existing site code.
-
-		Verdict mapping:
-		  - `arm_scrut_local is None` → `MustNotDrop` (no scrut tmp
-		    to drop; site's outer guard already filtered this).
-		  - `arm_scrut_payload_moved` → `MustNotDrop` with
-		    `REASON_FIELD_MOVED` (site's per-field cleanup runs
-		    instead of a whole-scrutinee drop).
-		  - `scrut_ty is None` or not drop-needing → `MustNotDrop`
-		    with `REASON_NOT_DROP_NEEDING` (shouldn't arise at this
-		    site today, but pinned for symmetry).
-		  - otherwise → `MustDrop` with `REASON_NEEDS_DROP`.
-		"""
-		if arm_scrut_local is None:
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
-		if arm_scrut_payload_moved:
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_FIELD_MOVED)
-		if scrut_ty is None:
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
-		if not self._needs_runtime_drop(scrut_ty):
-			return (_DropVerdict.MUST_NOT_DROP, _ledger_events.REASON_NOT_DROP_NEEDING)
-		return (_DropVerdict.MUST_DROP, _ledger_events.REASON_NEEDS_DROP)
-
 	def _emit_scope_cleanup_hook(self, *, scope_index: int) -> None:
 		"""Phase 4 site-1 cleanup-authoring marker emission.
 
@@ -1861,31 +1808,31 @@ class HIRToMIR:
 							self.b.func.blocks[hook_block].instructions.insert(hook_idx, match_cleanup_hook_obj)
 					arm_scrut_local = None
 				elif arm_scrut_local is not None:
-					# Step 4: route through the match-scrutinee verdict
-					# helper.  Verdict here is MustDrop (whole-scrutinee
-					# drop emitted); helper's reason tag matches the
-					# historical REASON_NEEDS_DROP.  Emission MIR shape
-					# is unchanged.
-					_match_verdict, _match_reason = self._match_scrutinee_drop_verdict(
-						arm_scrut_local=arm_scrut_local,
-						arm_scrut_payload_moved=False,
-						scrut_ty=scrut_ty,
-					)
-					_match_verdict_str = (
-						_ledger_events.VERDICT_MUST_DROP
-						if _match_verdict is _DropVerdict.MUST_DROP
-						else _ledger_events.VERDICT_MUST_NOT_DROP
-					)
-					self._record_drop_decision(
-						site=_ledger_events.SITE_MATCH_CLEANUP,
-						local=arm_scrut_local,
-						verdict=_match_verdict_str,
-						reason=_match_reason,
-					)
-					arm_scrut_moved_pre = self.b.new_temp()
-					self.b.emit(M.MoveOut(dest=arm_scrut_moved_pre, local=arm_scrut_local, ty=scrut_ty))
-					self._local_types[arm_scrut_moved_pre] = scrut_ty
-					self.b.emit(M.DropValue(value=arm_scrut_moved_pre, ty=scrut_ty))
+					# Phase 4 whole-scrutinee migration (post-Copy-shortcut-fix):
+					# emit a `M.CleanupHook` with `arm_scrut_local` as the sole
+					# candidate.  `cleanup_authoring` queries `verdict_at`
+					# and emits `MoveOut + DropValue` iff the lattice says
+					# `MUST_DROP` (with `compute_drop_policy.needs_drop` as
+					# the type-level needs_drop axis — now driven by
+					# destruction reality, not gated by `copy_status`).
+					#
+					# This subsumes the inline `MoveOut + DropValue`
+					# emission and the `_match_scrutinee_drop_verdict`
+					# HIR-side helper.  Telemetry is emitted by
+					# `cleanup_authoring._emit_decision_record` with
+					# `classification=agree` pre-baked (authoring IS the
+					# ledger consultation).
+					#
+					# Pre-fix this migration leaked 66 bytes against
+					# signed-package stdlib because
+					# `compute_drop_policy(Optional<String>).needs_drop`
+					# short-circuited to False on `copy_status=True` from
+					# the .dmp-side Copy-impl resolution.  Post-policy-fix
+					# (cba71410) and Bug 1 fix (79a0f87c), `needs_drop=True`
+					# uniformly across raw and pkg builds.
+					scope_id = self._cleanup_hook_counter
+					self._cleanup_hook_counter += 1
+					self.b.emit(M.CleanupHook(scope_id=scope_id, candidates=[(arm_scrut_local, scrut_ty)]))
 					arm_scrut_local = None
 
 				# Lower the arm body statements regardless of pattern kind.
