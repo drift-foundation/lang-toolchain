@@ -1360,15 +1360,13 @@ class HIRToMIR:
 			# Phase 4 site-2 patch 5: hook reference used to fill in the
 			# arm_end program point once arm-body lowering completes.
 			match_cleanup_hook_obj: M.MatchCleanupHook | None = None
-			# Field indices whose storage in `arm_scrut_local` no longer
-			# carries an owning refcount to drop — either because the
-			# binder loop MoveOut'd the single +1 into the binder (so
-			# dropping the original slot would double-drop the moved
-			# value) or, for `@tombstone`-like synth patterns, the slot
-			# was neutralized in place.  Populated by the MOVE branch of
-			# the binder loop.  Used by PARTIAL-MOVE CLEANUP to decide
-			# which remaining fields STILL need their in-slot drop.
-			moved_field_indices: set[int] = set()
+			# `arm_scrut_payload_moved` is the partial-move/whole-scrutinee
+			# MECHANISM SELECTOR — when True, the per-field cleanup hook
+			# fires; when False, the whole-scrutinee elif emits a
+			# single-candidate `M.CleanupHook` (the whole-variant drop
+			# path).  No HIR-side per-field filter exists post-0.31.13;
+			# `match_cleanup_authoring` + the chain-aware ledger are the
+			# sole authority on emit-vs-skip per candidate.
 			try:
 				def _ensure_arm_scrut_ptr(*, mark_source_moved: bool = False) -> None:
 					# When mark_source_moved is True, the caller guarantees
@@ -1640,7 +1638,16 @@ class HIRToMIR:
 										self._local_types[move_dest] = bty
 										field_moved = move_dest
 										arm_scrut_payload_moved = True
-										moved_field_indices.add(int(fidx))
+										# Per-field MovedOut tracking lives in the
+										# chain-aware ledger walker
+										# (`_apply_field_state` in
+										# `ownership_ledger.py`); the MoveOut emitted
+										# above transitions the field to MOVED_OUT,
+										# and `match_cleanup_authoring`'s
+										# `field_verdict_at` query at the cleanup
+										# hook position correctly returns
+										# MUST_NOT_DROP for it — no HIR-side
+										# `moved_field_indices` set is needed.
 								else:
 									self.b.emit(
 										M.VariantGetField(
@@ -1678,44 +1685,34 @@ class HIRToMIR:
 					# every OTHER field whose storage-ref remained in the
 					# variant.
 					#
-					# Per-field cleanup rule: emit a per-slot drop for each
-					# ctor field that (a) still needs runtime drop and (b)
-					# was NOT moved by the binder loop into its binder
-					# temp.  The field's original storage inside
-					# `arm_scrut_local` still owns its +1 in that case;
-					# `__match_partial_drop_N` temps take ownership and
-					# fire at arm end / early return / throw.
-					#
-					# Cases the loop covers:
-					#  - Unbound droppable field (no binder): slot owns
-					#    its ref — MUST drop.  Closes the named-subset
-					#    bind leak (`Pair(a = moved_a)` omitting `b`),
-					#    pinned by
-					#    `match_subset_bind_leaves_unbound_fields_dropped/`.
-					#  - Bound MOVED field (non-Copy, e.g. Token): binder
-					#    consumed the sole +1 via MoveOut; slot holds
-					#    moved-from bytes — MUST NOT drop.  The binder
-					#    loop's MOVE branch records the field index in
-					#    `moved_field_indices`.
-					#
-					# A third logical case — "bound COPIED + droppable
-					# field" — is structurally IMPOSSIBLE in v1 by the
-					# invariant in `_classify_value_transfer`:
-					# `copy_status=True AND _needs_runtime_drop=True`
-					# degrades to "move", so the binder loop's COPY
-					# branch (see `_should_copy_value` call above) is
-					# only ever taken for trivially-drop-safe types
-					# (bitcopy).  An assertion inside that COPY branch
-					# pins the invariant.  Keying this cleanup on
-					# "moved" rather than "bound" is behaviorally
-					# equivalent to a `bound_field_indices` filter
-					# today, but names the ownership fact the cleanup
-					# actually depends on.  If future work adds a Copy
-					# path for a runtime-drop type, the assertion in
-					# the binder's COPY branch fires first and forces
-					# that change to be reviewed against PARTIAL-MOVE
-					# CLEANUP deliberately — it will NOT silently stay
-					# correct here.
+					# **Authority boundary (post-0.31.13)**: HIR proposes
+					# the FULL `arm_def.field_types` set as candidates.
+					# `match_cleanup_authoring` queries `field_verdict_at`
+					# per candidate and the chain-aware ledger walker +
+					# `compute_drop_policy.needs_drop` are the sole
+					# authority on emit-vs-skip.  Three categories the
+					# authoring pass resolves:
+					#  - Unbound droppable field: slot still owns its
+					#    +1; lattice state LIVE → MUST_DROP → emit.
+					#    Closes the named-subset bind leak, pinned by
+					#    `lang/tests/codegen/e2e/match_subset_bind_leaves_unbound_fields_dropped/`.
+					#  - Bound MOVED field: binder consumed the +1 via
+					#    `MoveOut`; lattice marks the field MOVED_OUT
+					#    (chain-aware `_apply_field_state` rule);
+					#    `field_verdict_at` returns MUST_NOT_DROP → no
+					#    emission.
+					#  - Non-droppable / POD field: `compute_drop_policy
+					#    (ty).needs_drop=False` collapses the verdict to
+					#    MUST_NOT_DROP regardless of state → no emission.
+					#  - Bound COPIED droppable field (refcounted scalar
+					#    like String): `MoveFromRef` ownership-transfer
+					#    primitive lands the slot's +1 into drop_tmp; the
+					#    binder owns its own +1 (CopyValue retain).  The
+					#    chain-aware walker keeps the field LIVE (the
+					#    Copy chain breaks at `CopyValue`); authoring
+					#    emits the per-field cleanup chain to release the
+					#    slot's stake.  See
+					#    `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`.
 					# Phase 4 step 3b: replace the single whole-scrutinee
 					# REASON_FIELD_MOVED record with per-field records
 					# emitted inside the cleanup loop below.  The
@@ -1753,38 +1750,44 @@ class HIRToMIR:
 						and arm_scrut_ptr is not None
 					):
 						arm_def = inst.arms_by_name[arm.ctor]
-						# Phase 4 site-2 patch 5 step 6: legacy inline
-						# `_record_drop_decision(SITE_MATCH_CLEANUP, ...)`
-						# emissions removed.  Telemetry for the
-						# carried-candidate case is emitted by
-						# `match_cleanup_authoring._emit_decision_record`
-						# with `classification=agree` pre-baked.  The
-						# two HIR-filter skip cases (field moved by
-						# binder, field not drop-needing) are
-						# HIR-private decisions about the candidate
-						# SET, not emit-vs-skip verdicts on carried
-						# candidates — they intentionally no longer
-						# generate per-field records.  This is the
-						# "bucket 1 → structurally 0" telemetry-shape
-						# change called out in `patch-5-design.md`.
+						# **Authority boundary (post-0.31.13)**: HIR
+						# proposes the FULL ctor field set as
+						# candidates; `match_cleanup_authoring` queries
+						# `field_verdict_at` per candidate and the
+						# ledger / `compute_drop_policy` are the sole
+						# emit-vs-skip authority.  No HIR-side filters.
+						#
+						# History: Filter A (skip moved fields via
+						# `moved_field_indices`) and Filter B (skip
+						# non-drop-needing fields) were retired with
+						# the chain-aware per-field walker landing in
+						# 0.31.12 (`MoveFromRef` +
+						# `_apply_field_state`'s tightened MovedOut
+						# detection).  Both are now structurally
+						# redundant: the walker marks Move-chain fields
+						# MOVED_OUT (so authoring's `field_verdict_at`
+						# returns MUST_NOT_DROP for them); the
+						# `needs_drop=False` path in `classify`
+						# collapses POD candidates to MUST_NOT_DROP
+						# regardless of state.
+						#
+						# Pinned by
+						# `lang/tests/stage2/test_match_cleanup_full_candidate_set.py`.
 						for cleanup_fidx, cleanup_fty in enumerate(arm_def.field_types):
-							if cleanup_fidx in moved_field_indices:
-								continue
-							if not self._needs_runtime_drop(cleanup_fty):
-								continue
 							# Capture hook point before any per-candidate
 							# emission (no MIR instrs emitted per candidate
 							# in the patch-5 shape, so this is stable across
 							# the loop body).
 							if match_cleanup_hook_point is None:
 								match_cleanup_hook_point = (self.b.block.name, len(self.b.block.instructions))
-							# Pre-allocate drop_tmp local.  Registered via
-							# `_register_drop_local` so later site-1
-							# CleanupHooks in this scope include it.
-							# Deliberately NOT appended to
-							# `arm_drop_locals`: match_cleanup_authoring
-							# emits the arm-end MoveOut+DropValue at the
-							# arm_end point captured on the hook.
+							# Pre-allocate drop_tmp local.  `_register_drop_local`
+							# self-filters non-droppable types (so POD
+							# drop_tmps don't enter scope_stack and
+							# site-1 hooks correctly skip them), but the
+							# drop_tmp itself is allocated and added to
+							# the MatchCleanupHook candidate list so
+							# authoring can make the emit-vs-skip
+							# decision uniformly.
 							drop_tmp = f"__match_partial_drop_{self.b.new_temp()}"
 							self.b.ensure_local(drop_tmp)
 							self._local_types[drop_tmp] = cleanup_fty
