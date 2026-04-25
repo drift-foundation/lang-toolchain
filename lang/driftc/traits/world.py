@@ -199,6 +199,24 @@ def _qual_from_type_expr(typ: parser_ast.TypeExpr) -> Optional[str]:
 
 BUILTIN_TYPE_NAMES = {"Int", "Bool", "String", "Uint", "Uint64", "Byte", "Float", "Void", "Error", "DiagnosticValue"}
 BUILTIN_TRAIT_NAMES: set[str] = set()
+# Prelude-aliased nominal variants whose canonical type-table key
+# lives under `lang.core` rather than the source-file's module.  An
+# unqualified mention of one of these names in user/stdlib source
+# (e.g., `for Optional<T>` in `stdlib/std/core/copy.drift`) must
+# canonicalize to `lang.core::<name>` to match `type_key_from_typeid`'s
+# query-side answer for the same type.  Without this, source-side
+# trait-impl registration keys impls under the wrong module (the
+# source file's module), the trait prover fails to match the impl
+# against the canonical query subject, and the impl is silently
+# unreachable.  See `work/ownership-ledger/whole-scrutinee-investigation.md`
+# (Vector-4 root cause).
+#
+# Mirror of `_CORE_VARIANT_ALLOWLIST` in
+# `lang/driftc/core/type_resolve_common.py`; the two MUST stay in
+# sync — the type-resolver uses its set to route unqualified names
+# to `lang.core` at type-table interning time, and this set must
+# apply the same routing at impl-registration time.
+PRELUDE_LANG_CORE_NOMINAL_NAMES = {"Optional"}
 
 
 def type_key_from_expr(
@@ -218,10 +236,23 @@ def type_key_from_expr(
 		mod = None
 	elif qual is None and name in BUILTIN_TYPE_NAMES:
 		mod = None
+	elif qual is None and name in PRELUDE_LANG_CORE_NOMINAL_NAMES:
+		# Unqualified prelude-aliased nominal — canonicalize to lang.core
+		# to match `type_key_from_typeid`'s query-side answer for the
+		# same type at the type-table layer.
+		mod = "lang.core"
 	else:
 		mod = qual or default_module
 	pkg = None
-	if mod is not None:
+	if mod == "lang.core":
+		# Prelude-aliased nominals live in the lang.core package by
+		# convention (see parser/__init__.py:3169-3173 setting
+		# `module_packages["lang.core"] = "lang.core"`).  Fix the
+		# package alongside the module to keep the canonical key
+		# self-consistent regardless of caller's `module_packages`
+		# population state.
+		pkg = "lang.core"
+	elif mod is not None:
 		pkg = (module_packages or {}).get(mod, default_package)
 	elif name not in BUILTIN_TYPE_NAMES:
 		pkg = default_package
@@ -786,6 +817,27 @@ def build_trait_world(
 					default_package=package_id,
 					module_packages=module_packages,
 				)
+				# Bug 1 trait-canonicalization extension (2026-04-24):
+				# bake the resolved `module_id` back into the require
+				# clause's `atom.trait` AST node so the prove-time path
+				# (`solver.prove_expr` → `trait_key_from_expr`, which
+				# uses the env's `default_module=None`) sees the
+				# already-resolved key.  Without this, the prove path
+				# computes `Copy` with `module=None`, fails the
+				# `world.traits` lookup keyed by `std.core::Copy`, and
+				# REFUTES the require — causing every conditional impl
+				# (e.g. `implement<T> Copy for Optional<T> require T is
+				# Copy`) to silently fail to apply in raw-stdlib builds.
+				# Pkg-stdlib's .dmp serialization already bakes the
+				# resolved module_id into the trait AST; this matches
+				# that behavior at impl-build time.  See
+				# `work/ownership-ledger/whole-scrutinee-investigation.md`
+				# (Vector-4 root cause).
+				if trait_dep.module is not None and getattr(atom.trait, "module_id", None) is None:
+					try:
+						atom.trait.module_id = trait_dep.module
+					except Exception:
+						pass  # frozen AST — fall back to env propagation
 				if not _is_known_local_constraint(trait_dep):
 					world.diagnostics.append(
 						diag(

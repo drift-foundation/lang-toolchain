@@ -655,6 +655,87 @@ def _scan_destructible_impls_by_name(
 	return result
 
 
+def _dump_type_table_queries_if_enabled(type_table: TypeTable | None) -> None:
+	"""Diagnostic: when `DRIFT_DUMP_TYPE_QUERIES=1`, after the linked
+	world + destructor_fns are installed, dump
+	`(copy_status, has_drop, is_destructible, is_bitcopy)` for every
+	nominal type the type-table knows about (plus any generic
+	instantiation's resolved type-arg names).  One JSON record per
+	type, prefixed with `[drift:type-query]`.
+
+	Off by default; useful when comparing source-loaded vs
+	package-loaded stdlib for type-link / trait-prover divergence.
+	Originated as Vector-3/4 instrumentation for the whole-scrutinee
+	migration boundary-bug investigation (2026-04-24); kept as a
+	standing diagnostic since the surface (type-link canonicalization
+	across the .dmp boundary) is the kind of thing that needs ongoing
+	visibility.
+	"""
+	import os
+	if not os.environ.get("DRIFT_DUMP_TYPE_QUERIES") or type_table is None:
+		return
+	import json
+	import sys
+	from lang.driftc.core.types_core import TypeKind
+	dump_kinds = (
+		TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.SCALAR, TypeKind.INTERFACE,
+		TypeKind.ERROR, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT,
+		TypeKind.DIAGNOSTICVALUE,
+	)
+	def _safe(fn):
+		try:
+			return fn()
+		except Exception as e:
+			return f"<err:{type(e).__name__}>"
+	def _arg_name(tid):
+		try:
+			ad = type_table.get(tid)
+			return getattr(ad, "name", None) or ad.kind.name
+		except Exception:
+			return f"<tid:{tid}>"
+	for tid, td in sorted(type_table._defs.items()):
+		kind = getattr(td, "kind", None)
+		if kind not in dump_kinds:
+			continue
+		type_args: list[int] = []
+		try:
+			inst = type_table.get_variant_instance(tid)
+		except Exception:
+			inst = None
+		if inst is None:
+			try:
+				inst = type_table.get_struct_instance(tid)
+			except Exception:
+				inst = None
+		if inst is not None:
+			type_args = [int(a) for a in getattr(inst, "type_args", []) or []]
+		# Compute the post-link DropPolicy too — that's the
+		# authoritative drop-decision surface for cleanup_authoring
+		# and any other consumer that asks "should this type be
+		# dropped".  Bug 2 (compute_drop_policy short-circuit on
+		# Copy && has_drop, e.g. String / Optional<String>) is pinned
+		# via these fields.
+		from lang.driftc.stage2.drop_policy_compute import compute_drop_policy as _cdp
+		policy = _safe(lambda: _cdp(type_table, tid))
+		payload = {
+			"channel": "type-query",
+			"tid": int(tid),
+			"kind": kind.name,
+			"name": getattr(td, "name", None),
+			"module": getattr(td, "module_id", None),
+			"type_args": type_args,
+			"type_arg_names": [_arg_name(a) for a in type_args],
+			"copy_status": _safe(lambda: type_table.copy_status(tid)),
+			"has_drop": _safe(lambda: bool(type_table.has_drop(tid))),
+			"is_destructible": _safe(lambda: bool(type_table.is_destructible(tid))),
+			"is_bitcopy": _safe(lambda: bool(type_table.is_bitcopy(tid))),
+			"policy_needs_drop": (bool(getattr(policy, "needs_drop", None)) if hasattr(policy, "needs_drop") else None),
+			"policy_is_cheap_copy": (bool(getattr(policy, "is_cheap_copy", None)) if hasattr(policy, "is_cheap_copy") else None),
+			"policy_has_structural_drop": (bool(getattr(policy, "has_structural_drop", None)) if hasattr(policy, "has_structural_drop") else None),
+		}
+		sys.stderr.write("[drift:type-query] " + json.dumps(payload, sort_keys=True) + "\n")
+
+
 def _install_destructor_fns(
 	type_table: TypeTable | None,
 	linked_world: LinkedWorld | None,
@@ -10249,6 +10330,7 @@ def main(argv: list[str] | None = None) -> int:
 	# destructor_fns internally.
 	if linked_world is not None:
 		_install_destructor_fns(semantic_world.type_table, linked_world, module_exports, external_impl_metas=semantic_world.external_impl_metas)
+		_dump_type_table_queries_if_enabled(semantic_world.type_table)
 		# Re-finalize non-generic variants after destructor_fns are
 		# installed.  The parser-phase `finalize_variants()` call
 		# computes each variant instance's `internal_tombstone_ctor`

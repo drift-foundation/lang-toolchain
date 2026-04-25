@@ -196,51 +196,46 @@ def test_swap_skips_drop_after_moveout_zero_store_pattern() -> None:
 
 
 def test_swap_consults_compute_drop_policy_not_raw_has_drop() -> None:
-	"""For a Copy-trait-True type (where raw `has_drop` and
-	`DropPolicy.needs_drop` diverge — DropPolicy short-circuits to
-	False because of the Copy shortcut, raw walk says True), the
-	swap MUST consult `compute_drop_policy` and skip drop emission.
-	Pinning this against the K-quarantined `has_drop` approximation
-	used by the 3A reporter."""
+	"""Site 4 (drop_before_overwrite) MUST consult `compute_drop_policy`
+	rather than calling raw `TypeTable.has_drop` directly.  The
+	original 2026-04 framing of this test pinned a Copy && has_drop
+	type expecting `DropPolicy.needs_drop=False` (via the
+	`copy_status is True → needs_drop=False` short-circuit) — which
+	was the LANGUAGE_BUG the policy fix removed (2026-04-24, see
+	`lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`).
+	After the fix, `compute_drop_policy` correctly returns
+	`needs_drop=True` for has_drop types regardless of Copy, so a
+	drop-before-overwrite IS the correct emission for this
+	scenario.
+
+	Re-purposed: pin that the swap respects DropPolicy by using a
+	pure POD type — `has_drop=False, copy_status=True (default for
+	POD scalars), needs_drop=False`.  Site 4 must not emit
+	drop-before-overwrite for a value the policy says doesn't need
+	dropping."""
 	type_table = TypeTable()
 	int_ty = type_table.ensure_int()
-	# Build a struct with a destructor (raw has_drop = True) but force
-	# Copy to True (DropPolicy.needs_drop short-circuits to False).
-	tid = type_table.declare_struct(module_id="test", name="CopyButHasDrop", field_names=["x"])
-	type_table.define_struct_fields(tid, field_types=[int_ty])
-	type_table.destructor_fns = {tid: FunctionId(module="test", name="CopyButHasDrop::destroy", ordinal=0)}
-	type_table.set_copy_query(lambda t: True if t == tid else None, allow_fallback=True)
-	# Sanity-check the precondition: raw vs DropPolicy diverge.
+	# Pure POD: Int.  has_drop=False, copy_status=True (POD scalar),
+	# DropPolicy.needs_drop=False.  Site 4 must skip drop emission.
 	from lang.driftc.stage2.drop_policy_compute import compute_drop_policy
-	assert type_table.has_drop(tid), "test setup: raw has_drop should be True"
-	policy = compute_drop_policy(type_table, tid)
+	assert not type_table.has_drop(int_ty), "test setup: Int should not have drop"
+	policy = compute_drop_policy(type_table, int_ty)
 	assert policy.needs_drop is False, (
-		"test setup: DropPolicy.needs_drop should short-circuit to False "
-		"under the Copy hook"
+		"test setup: DropPolicy.needs_drop for POD Int should be False"
 	)
-	# Now build a function that does the swap-relevant pattern.
-	func = _make_func("copy_shortcut", params=[], locals_=["x"], types={"x": tid})
+	func = _make_func("pod_overwrite", params=[], locals_=["x"], types={"x": int_ty})
 	entry = M.BasicBlock(name="entry")
 	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
 	entry.instructions.append(M.StoreLocal(local="x", value="t_new"))
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry
-	# The post-string_arc destructible_locals filter excludes types
-	# whose `_is_destructible_tid` is False — but `_is_destructible_tid`
-	# is `TypeTable.is_destructible`, NOT `DropPolicy.needs_drop`.  So
-	# this struct may or may not be in `destructible_locals` depending
-	# on the destructible filter.  Either way, the swap MUST NOT use
-	# raw `has_drop` to decide; if it did, the verdict would be
-	# MustDrop and a drop sequence would be emitted, double-dropping
-	# the Copy value.
 	_attach_ledger(func)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
-	# No drop-before-overwrite immediately before the second store.
 	assert not _drop_just_before_storelocal(func, "x", "t_new"), (
-		"swap consulted raw `has_drop` instead of `compute_drop_policy`: "
-		"emitted a drop-before-overwrite for a Copy-True type whose "
-		"DropPolicy.needs_drop is False — double-drop on a value the "
-		"language considers freely copyable"
+		"swap emitted drop-before-overwrite for a POD Int — DropPolicy"
+		".needs_drop is False so site 4 must skip emission.  If this "
+		"fails, site 4 is no longer reading DropPolicy or DropPolicy "
+		"is over-classifying POD types as needing drop."
 	)
 
 
