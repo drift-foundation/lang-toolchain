@@ -1,5 +1,163 @@
 # Drift development history
 
+## 2026-04-25
+- **Ownership-authority finale — releases 0.31.10 → 0.31.13 (ABI
+  unchanged, still 10).**  Closes the `feature/ownership-authority-finale`
+  branch.  Site 1, site 2 whole-scrutinee, and site 2 per-field cleanup
+  emission all become **ledger-authoritative**; `_moved_locals` is
+  deleted; the chain-aware per-field walker + a new `M.MoveFromRef`
+  ownership-transfer primitive close the partial-move Copy-binder
+  leak class.  See `work/ownership-ledger/finale-closure.md` for the
+  final authority table and residuals.
+
+  Shipped in 0.31.10 → 0.31.13:
+
+  - **Bug 1 — prelude trait-impl key canonicalization (0.31.10).**
+    `traits/world.py` now registers builtin/prelude impl `target` keys
+    under the canonical `lang.core` namespace (e.g.
+    `lang.core::Optional`), matching the query-side
+    `type_key_from_typeid` keying.  Pre-fix, the source-side parser
+    registered impls under `std.core::Optional` while query subjects
+    used `lang.core::Optional`; pkg `.dmp` deserialization
+    incidentally re-keyed to `lang.core` so pkg builds matched and
+    raw builds missed.  Result was divergent `copy_status` for
+    `Optional<T>` instantiations across raw/pkg compilations of
+    identical source.  Permanent env-gated diagnostic
+    `DRIFT_DUMP_TYPE_QUERIES=1` emits `[drift:type-query]` records
+    after `_install_destructor_fns`.  Pinned by
+    `lang/tests/driver/test_pkg_typetable_copy_status_divergence.py`.
+
+  - **`compute_drop_policy.needs_drop` Copy-shortcut LANGUAGE_BUG
+    fix (0.31.11).**  Pre-fix, the policy short-circuited
+    `needs_drop = False` whenever `copy_status is True`.  For
+    refcounted scalars (`String`: `copy_status=True` AND
+    `has_drop=True` because the bytes are bitcopyable but the
+    refcount must be released via `drift_string_release`) and
+    for variants/structs containing such fields (`Optional<String>`),
+    this hid required release semantics from the generic drop path
+    and leaked under packaged-stdlib resolution.  The Bug 1 fix
+    unmasked the latent bug by making `copy_status` agree across
+    raw and pkg builds.  Post-fix `needs_drop` is driven by
+    destruction reality: `contains_dv | raw_has_drop |
+    raw_is_destructible`.  `is_cheap_copy` decoupled from
+    `needs_drop` so refcounted scalars stay cheap-copy via single
+    retain (POD scalar / refcounted scalar / Copy-no-structural-drop)
+    while structural-with-drop classifies as not cheap.  PARTIAL-MOVE
+    CLEANUP defensive `AssertionError` in `hir_to_mir.py` removed
+    (Copy + needs_drop is no longer a contradiction for refcounted
+    scalars; `CopyValue` does the right thing per type).  Pinned by
+    `lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`
+    (String, `Optional<String>`; `Optional<Int>` control).
+    Memcheck carrier:
+    `lang/tests/memcheck/test_pkg_vs_raw_stdlib_drop_policy_divergence.py`.
+
+  - **Site 1 cleanup emission migrated to ledger hooks
+    (0.31.10–0.31.11).**  All HIR→MIR scope-drop sites
+    (function-exit, `lower_function_body` / `lower_block` fall-through,
+    lambda-block exits, `HBreak` / `HContinue`, throw-time caught-error
+    release) emit `M.CleanupHook` markers.
+    `lang/driftc/stage2/cleanup_authoring.py` queries `verdict_at` per
+    candidate and emits the canonical `MoveOut + DropValue` chain only
+    when the lattice says `MUST_DROP`.  Site 1 = Tier 1.
+
+  - **Site 2 whole-scrutinee migrated to ledger authoring (0.31.12).**
+    The `elif arm_scrut_local is not None:` branch in
+    `_visit_expr_HMatchExpr` no longer emits inline `MoveOut +
+    DropValue`; it emits a single-candidate `M.CleanupHook`.
+    `cleanup_authoring` decides emit-vs-skip via `verdict_at` +
+    `compute_drop_policy.needs_drop`.  The `_match_scrutinee_drop_verdict`
+    HIR-side helper deleted; its companion test
+    `test_match_cleanup_swap.py` deleted.  Behavior-level pin:
+    `lang/tests/stage2/test_match_whole_scrutinee_cleanup_hook_pin.py`
+    proves the production path emits the hook and the legacy inline
+    shape is gone.
+
+  - **`MoveFromRef` ownership-transfer primitive + chain-aware
+    per-field walker (0.31.12).**  Resolves the partial-move
+    Copy-binder-of-refcounted-scalar slot-stake leak.  `M.MoveFromRef
+    (local, ptr, inner_ty)` is an atomic three-step operation: load
+    `*ptr`, tombstone `*ptr`, transfer the loaded bytes into `local`.
+    `string_arc` recognises it as a transfer (no `StringRetain`
+    insertion); the tail-chain `MoveOut + DropValue` releases the
+    transferred stake exactly once.  Per-field walker
+    `_apply_field_state` tightened: only the FULL chain
+    (`VariantGetFieldAddr → LoadRef → StoreLocal(L) → MoveOut(L)`,
+    or `MoveFromRef`) marks a field MovedOut.  Pre-fix conservative
+    rule (any `VariantGetFieldAddr` → MovedOut) over-reported for
+    Copy-classified binders, causing `match_cleanup_authoring` to
+    silently skip per-field cleanup for the Copy slot — exactly
+    the leak `match_subset_bind_leaves_unbound_fields_dropped`-shape
+    fixtures with mixed Move + Copy fields exposed.  Boundary
+    expectations (validator, SSA addr-taken, LLVM lowering
+    addr-taken) all updated for `MoveFromRef.local`.  Pinned by
+    `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`
+    (mixed Move + Copy carrier; all-Move control) and
+    `lang/tests/stage2/test_move_from_ref_string_arc_contract.py` (3
+    contract pins: no-retain, exactly-one-DropValue, early-exit-cleanup
+    includes drop_tmp).
+
+  - **`_moved_locals` retired (in-branch; first appearance pre-finale,
+    finalised here).**  `_moved_locals`, `_moved_at_scope_index`,
+    `_local_decl_scope_index`, `_mark_moved`, `_scope_drop_verdict`,
+    `_emit_scope_drops` all DELETED from `hir_to_mir.py`.  No HIR-side
+    shadow ownership-authority mechanism remains; the chain-aware
+    `LiveStateMap` is the sole MovedOut authority.  (Patch 6c
+    landed pre-finale; this branch finalised the consequences across
+    sites 1 / 2.)
+
+  - **Site 2 per-field candidate-set selection migrated to ledger
+    authoring (0.31.13).**  HIR→MIR's `if arm_scrut_payload_moved:`
+    branch now proposes the FULL `arm_def.field_types` set as
+    candidates in `M.MatchCleanupHook` — no Filter A
+    (`cleanup_fidx in moved_field_indices`), no Filter B
+    (`not _needs_runtime_drop(cleanup_fty)`).  `match_cleanup_authoring`
+    + the chain-aware ledger walker + `compute_drop_policy.needs_drop`
+    are the sole authority on emit-vs-skip per candidate.  The
+    `moved_field_indices` set itself deleted; `arm_scrut_payload_moved`
+    boolean retained as the partial-move/whole-scrutinee mechanism
+    selector.  Site 2 per-field = Tier 1.  Pinned by
+    `lang/tests/stage2/test_match_cleanup_full_candidate_set.py` (full
+    field set including moved fields; POD field as candidate, authoring
+    skips via MUST_NOT_DROP).
+
+  - **Tombstone audit outcome (no migration).**  Audit confirmed
+    tombstone is intentionally retained as a runtime drop-safe value
+    convention + ledger fact.  Not a cleanup-authority surface — the
+    only `M.TombstoneValue` producer is `_ensure_arm_scrut_ptr`, and
+    cleanup-decision sites consume `LiveState.TOMBSTONED` through the
+    ledger.  The variant-drop tag-switch in LLVM codegen is a co-equal
+    runtime-byte-pattern authority by design.  Three pin gaps
+    surfaced (codegen variant-drop tag-routing pin; MIR boundary
+    assertion pin; `ArrayElemTake` audit pin) are non-blocking; can
+    be backfilled in a follow-up.
+
+  Final observe state (0.31.13, 1031 e2e cases, 442 producing
+  records): bucket 6 (`real_disagreement`) = 0; bucket 2
+  (`droppolicy_approximation`) = 0; bucket 3 (`path_dependent`) = 2
+  (intentional residual; runtime-handled).  All other buckets 0
+  except `moved_unconditional` (1030, legacy-correct skips).
+
+  Verification gate per release: stage2 (-n 16), memcheck (-n 16,
+  `DRIFT_MEMCHECK=1`), driver (-n 16), observe sweep, full asan +
+  memcheck before commit — all green.
+
+  **Not closing on this branch (deferred to follow-up):**
+
+  - **Site 3 strings/arrays return-source.**  The destructibles
+    return-source consultation, destructor-method `self`
+    lattice-modeling, and variant zero-tag widening sub-steps
+    landed in 0.31.9 and remain in place.  The remaining
+    String / Array alias-walk surface in `string_arc.py`
+    (`_collect_return_source_locals` etc.) is its own work item;
+    broader consultation previously broke memcheck carriers
+    (`test_pkg_map_literal_string_leak.py`-shaped fixtures).
+    Memcheck must be in the standard verification gate when that
+    work resumes.
+
+  - **Tombstone hardening pins** (codegen variant-drop tag-routing,
+    MIR boundary assertion, `ArrayElemTake` audit) — non-blocking;
+    follow-up.
+
 ## 2026-04-23
 - **Phase 4 ownership-ledger rollout — release 0.31.9 (ABI
   unchanged at 10).**  Consolidates the remaining single-branch
