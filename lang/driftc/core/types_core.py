@@ -2850,6 +2850,52 @@ class TypeTable:
 		cache[ty] = False
 		return False
 
+	def set_share_query(self, query, *, allow_fallback: bool = False) -> None:
+		"""Install a Share-trait query hook.
+
+		Mirror of `set_destructible_query`.  The hook returns True if
+		`ty` implements `std.core.shareable.Share`, False if it
+		definitively does not, and None if the proof is unknown
+		(callers may fall back to a more conservative answer).
+
+		Used by the type checker's `E-CAPTURE-SHARE-NOT-SHARE`
+		diagnostic.  The synthesized `Share::share(&x)` HCall on
+		share-captures resolves through the standard call_resolver
+		(via `HQualifiedMember`); this query is the cheap predicate
+		path for the focused capture diagnostic.
+		"""
+		self._share_query = query  # type: ignore[attr-defined]
+		self._share_query_allow_fallback = bool(allow_fallback)  # type: ignore[attr-defined]
+		if hasattr(self, "_share_cache"):
+			self._share_cache.clear()  # type: ignore[attr-defined]
+
+	def is_share(self, ty: TypeId) -> bool:
+		"""Return True if `ty` implements `std.core.shareable.Share`.
+
+		Mirror of `is_destructible`.  Backed by the `_share_query`
+		hook installed at `_build_linked_world` time.
+		"""
+		if not hasattr(self, "_share_cache"):
+			self._share_cache = {}  # type: ignore[attr-defined]
+		cache: Dict[TypeId, bool] = getattr(self, "_share_cache")  # type: ignore[attr-defined]
+		if ty in cache:
+			return cache[ty]
+		if hasattr(self, "_share_query"):
+			query = getattr(self, "_share_query")  # type: ignore[attr-defined]
+			res = query(ty)
+			if res is True:
+				cache[ty] = True
+				return True
+			if res is False:
+				cache[ty] = False
+				return False
+			allow_fallback = bool(getattr(self, "_share_query_allow_fallback", False))  # type: ignore[attr-defined]
+			if not allow_fallback:
+				cache[ty] = False
+				return False
+		cache[ty] = False
+		return False
+
 	def is_bitcopy(self, ty: TypeId) -> bool:
 		"""
 		Return True if `ty` is safe to bitwise-copy (memcpy).

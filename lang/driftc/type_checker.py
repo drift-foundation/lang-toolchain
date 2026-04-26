@@ -155,6 +155,17 @@ GuardKey = int
 DeferredGuardKey = Tuple[GuardKey, str]
 
 
+# `Copy` lives in `std.core.copy` (per the std.core file split) and is
+# re-exported by `std.core`.  Both module ids are accepted as the
+# canonical Copy trait so test stubs that inline `pub trait Copy` in
+# `module std.core` and the production stdlib both validate.
+_CORE_COPY_MODULES: frozenset[str] = frozenset({"std.core", "std.core.copy"})
+
+
+def _is_core_copy_trait_key(key: object) -> bool:
+	return getattr(key, "module", None) in _CORE_COPY_MODULES and getattr(key, "name", None) == "Copy"
+
+
 @dataclass
 class TypedFn:
 	"""Typed view of a single function's HIR."""
@@ -1268,7 +1279,7 @@ class TypeChecker:
 			_tk = getattr(_impl, "trait_key", None)
 			if _tk is None:
 				continue
-			if getattr(_tk, "module", None) == "std.core" and getattr(_tk, "name", None) == "Copy":
+			if _is_core_copy_trait_key(_tk):
 				_ttd = self.type_table.get(_impl.target_type_id)
 				_copy_declared.add((_ttd.module_id, _ttd.name))
 
@@ -1360,7 +1371,7 @@ class TypeChecker:
 					)
 					if key is None:
 						return
-					if getattr(key, "module", None) == "std.core" and getattr(key, "name", None) == "Copy":
+					if _is_core_copy_trait_key(key):
 						covered.add(subj)
 					return
 				if isinstance(e, parser_ast.TraitAnd):
@@ -1376,7 +1387,7 @@ class TypeChecker:
 			trait_key = getattr(impl, "trait_key", None)
 			if trait_key is None:
 				continue
-			if getattr(trait_key, "module", None) == "std.core" and getattr(trait_key, "name", None) == "Copy":
+			if _is_core_copy_trait_key(trait_key):
 				# Generic Copy impls (e.g. `implement<T> Copy for
 				# Optional<T> require T is Copy`) still go through the
 				# structural prover — the prover treats TYPEVARs
@@ -6045,6 +6056,96 @@ class TypeChecker:
 							cap_ty = root_ty
 						scope_env[-1][cap.name] = cap_ty
 						scope_bindings[-1][cap.name] = root_id
+						if cap.kind == "share":
+							# `captures(share x)` requires `T: Share`.
+							# Reject Copy types up-front (they should be
+							# captured via `copy`) and types with no
+							# registered Share impl.  HIR→MIR carries a
+							# defensive assertion that enforces the same
+							# precondition; this is the user-facing
+							# diagnostic surface.
+							#
+							# `cap.binding_id` is the user's original local
+							# (the `share x` captures the same `x` the user
+							# spelled — the Share::share(&x) call evaluates
+							# inline at env construction, returning a fresh
+							# owner that goes into the env field).  So the
+							# diagnostic reads the user-spelled local's type
+							# directly off `binding_id` — no auxiliary
+							# tracking required.
+							# Default to False so the post-conditional
+							# `if implements_share and ...` gate at the bottom
+							# of this block is well-defined when `root_ty` is
+							# unknown (we skip diagnostic + share_value
+							# resolution entirely in that case — caller's
+							# binding-type resolution failed upstream).
+							implements_share = False
+							if root_ty == self._unknown:
+								pass
+							else:
+								# `is_share` runs against the trait prover via
+								# the query hook installed at
+								# `_build_linked_world` time — this is
+								# available now (mid-typecheck), before the
+								# trait-impl index used by HIR→MIR has been
+								# populated.
+								try:
+									implements_share = bool(self.type_table.is_share(root_ty))
+								except Exception:
+									implements_share = False
+								if not implements_share:
+									ty_name = self.type_table.get(root_ty).name or f"typeid={root_ty}"
+									is_copy = False
+									try:
+										is_copy = bool(self.type_table.copy_status(root_ty))
+									except Exception:
+										is_copy = False
+									if is_copy:
+										diagnostics.append(
+											_tc_diag(
+												message=(
+													f"E-CAPTURE-SHARE-NOT-SHARE: type "
+													f"'{ty_name}' is `Copy`, not `Share`. "
+													f"For value-like capture, use "
+													f"`captures(copy {cap.name})`. `share` "
+													f"is for non-Copy shared-owner types."
+												),
+												severity="error",
+												span=getattr(cap, "span", None) or getattr(cap, "loc", Span()),
+											)
+										)
+									else:
+										diagnostics.append(
+											_tc_diag(
+												message=(
+													f"E-CAPTURE-SHARE-NOT-SHARE: type "
+													f"'{ty_name}' does not implement "
+													f"`std.core.shareable.Share`. To "
+													f"transfer ownership, use "
+													f"`captures(move {cap.name})`. To enable "
+													f"share-capture for '{ty_name}', "
+													f"implement `std.core.shareable.Share` "
+													f"for it (an inherent `.share()` method "
+													f"does NOT satisfy `captures(share x)`)."
+												),
+												severity="error",
+												span=getattr(cap, "span", None) or getattr(cap, "loc", Span()),
+											)
+										)
+							# Type-check `cap.share_value` so the synthesized
+							# `Share::share(&x)` HCall goes through the
+							# normal call_resolver → instantiation pipeline.
+							# Without this, the HCall has no CallInfo and
+							# HIR→MIR's `lower_expr(cap.share_value)` would
+							# lower to a generic Arc<T>::share call instead
+							# of the monomorphized Arc<X>::share__inst__,
+							# producing a struct-field type mismatch at
+							# LLVM codegen.
+							if implements_share and getattr(cap, "share_value", None) is not None:
+								try:
+									type_expr(cap.share_value)
+								except Exception:
+									pass
 				if capture_kinds:
 					explicit_capture_stack.append(capture_kinds)
 				saved_return_type = return_type

@@ -458,7 +458,7 @@ class Lambda(Expr):
 class LambdaCapture:
     loc: Located
     name: str
-    kind: str  # "ref", "ref_mut", "copy", "move"
+    kind: str  # "ref", "ref_mut", "copy", "move", "share"
 
 
 @dataclass

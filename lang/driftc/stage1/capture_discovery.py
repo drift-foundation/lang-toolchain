@@ -270,6 +270,8 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			return C.HCaptureKind.COPY
 		if kind == "move":
 			return C.HCaptureKind.MOVE
+		if kind == "share":
+			return C.HCaptureKind.SHARE
 		if kind == "auto":
 			return C.HCaptureKind.REF
 		diags.append(

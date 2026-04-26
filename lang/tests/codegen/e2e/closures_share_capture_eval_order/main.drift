@@ -1,0 +1,135 @@
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.core.shareable as shareable;
+use trait shareable.Share;
+
+// Regression for the original Share Slice 1 review-blocker:
+//
+//     foo(side_effect(), || captures(share x) => ...)
+//
+// The OLD desugar pre-hoisted a synthetic
+//     let __share_tmp = Share::share(&x);
+// statement BEFORE the entire enclosing call, which made
+// `Share::share(&x)` run BEFORE `side_effect()` — wrong, since
+// argument evaluation is left-to-right and `Share::share` is not
+// specified as pure.
+//
+// To pin THE ORDERING PROPERTY (and not just structural shape), we
+// need to observe the `Share::share()` call itself.  We do that by
+// implementing `Share` for a user struct `Tracker` whose `share()`
+// method records into a shared `Cell<Int>` counter.
+//
+// Sequence of events in the call shape below:
+//   1. `record_side_effect(&order)` runs as arg 0 of `consume(...)`.
+//      It claims the next seq slot — slot 0 in correct order.
+//   2. `Tracker.share(&tr)` runs at the lambda's env-construction
+//      time as part of arg 1 lowering (the synthesized inline call).
+//      It claims the next seq slot — slot 1 in correct order.
+//   3. The lambda body never runs in the assertion-relevant path
+//      (we don't call `lam.call()`), so it does not perturb the
+//      counter.
+//
+// If the OLD pre-hoist were in effect, `Tracker.share` would run
+// BEFORE `record_side_effect`, claim slot 0, and force
+// `record_side_effect` into slot 1 — flipping the assertion.
+
+struct Counter {
+	v: core.Cell<Int>
+}
+
+fn next(c: &Counter) nothrow -> Int {
+	val n = c.v.get();
+	c.v.set(n + 1);
+	return n;
+}
+
+// `Tracker` is a user-defined `Share` implementor.  Its `share()`
+// method records the seq slot it observed at the moment it ran.
+// `order` and `share_slot` are heap-shared via `Arc<Counter>` so
+// the recorded values are visible in `main` after the lambda's
+// env construction.
+struct Tracker {
+	order: conc.Arc<Counter>,
+	share_slot: conc.Arc<Counter>
+}
+
+implement shareable.Share for Tracker {
+	pub fn share(self: &Tracker) nothrow -> Tracker {
+		// Claim the next seq slot at the moment Share::share runs.
+		val ord = self.order.get();
+		val slot = next(ord);
+		// Record what slot we claimed (we'll read this from main).
+		val rec = self.share_slot.get();
+		rec.v.set(slot);
+		// Build a NEW owner of the same underlying Arcs.
+		return Tracker(
+			order = self.order.share(),
+			share_slot = self.share_slot.share()
+		);
+	}
+}
+
+// `record_side_effect(&order)` — claims the next slot at the
+// moment side_effect runs.
+fn record_side_effect(order: &conc.Arc<Counter>) nothrow -> Int {
+	val ord = order.get();
+	return next(ord);
+}
+
+// `consume` exists so we have a 2-arg call where arg 1 is a
+// share-capturing lambda.  We deliberately do NOT call lam.call();
+// the assertion is about ARG-EVALUATION ORDER, which fires whether
+// or not the body is invoked.
+fn consume(side_slot: Int, _lam: core.Callback0<Int>) nothrow -> Int {
+	return side_slot;
+}
+
+fn read_int(c: &Counter) nothrow -> Int {
+	return c.v.get();
+}
+
+fn main() nothrow -> Int {
+	val order = conc.arc(Counter(v = core.cell(0)));
+	val share_slot = conc.arc(Counter(v = core.cell(-1)));
+	val tr = Tracker(
+		order = order.share(),
+		share_slot = share_slot.share()
+	);
+
+	// THE TEST.  Two-arg call, lambda is arg 1, and the lambda
+	// captures(share tr).  Old pre-hoist would run Tracker.share
+	// BEFORE record_side_effect (slot 0); new inline lowering
+	// runs record_side_effect first (slot 0), then Tracker.share
+	// at lambda construction (slot 1).
+	val side_slot = consume(
+		record_side_effect(&order),
+		core.callback0(| | captures(share tr) => {
+			// Body intentionally does not increment `order` — we
+			// want to observe the synthesized share's claim, not
+			// any later body work.  The body just satisfies the
+			// closure's signature.
+			return 0;
+		})
+	);
+
+	// `side_slot` should be 0 (record_side_effect ran first).
+	// `share_slot.get().v` should be 1 (Tracker.share ran second).
+	val recorded_share_slot = read_int(&share_slot.get());
+	var bits = 0;
+	if side_slot != 0 {
+		// record_side_effect did NOT run first — share-call hoisted
+		// ahead of it, claiming slot 0 and pushing record_side_effect
+		// to slot 1.
+		bits = bits + 1;
+	}
+	if recorded_share_slot != 1 {
+		// Tracker.share did NOT run at the lambda construction
+		// site (right after side_effect).  Either it ran first
+		// (pre-hoist bug → slot 0) or never ran (resolution bug
+		// → still -1).
+		bits = bits + 2;
+	}
+	return bits;
+}

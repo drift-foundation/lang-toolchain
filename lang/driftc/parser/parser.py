@@ -99,7 +99,17 @@ from .ast import (
 )
 
 _GRAMMAR_PATH = Path(__file__).with_name("grammar.lark")
-_GRAMMAR_SRC = _GRAMMAR_PATH.read_text()
+# `_PATH_SEG_ALTS` is the SINGLE source of truth for the set of
+# tokens permitted as a module-path segment.  The grammar uses the
+# `__PATH_SEG__` placeholder which is substituted here at load time.
+# A separate non-terminal (`path_ident`) was tried first but creates
+# unresolvable LALR(1) reduce/reduce conflicts with `ident` (which
+# accepts the same keyword set so users can name vars/fns after
+# contextual keywords).  Inline alternation via macro substitution
+# keeps the grammar deterministic.  When a new contextual keyword
+# needs to appear in module paths, extend this constant.
+_PATH_SEG_ALTS = "(NAME | MOVE | COPY | SHARE)"
+_GRAMMAR_SRC = _GRAMMAR_PATH.read_text().replace("__PATH_SEG__", _PATH_SEG_ALTS)
 
 
 def _decode_string_token(tok: Token) -> str:
@@ -132,22 +142,27 @@ def _unwrap_ident(node: object) -> Token:
 	"""
 	Extract an identifier token from a grammar `ident` node.
 
-	The grammar defines `ident: NAME | MOVE | COPY` so callers may receive:
-	- a `Token` (`NAME`, `MOVE`, or `COPY`) directly, or
-	- a `Tree('ident', [Token(...)])` wrapper.
+	The grammar defines `ident: NAME | MOVE | COPY | SHARE` so callers
+	may receive either a bare `Token` (NAME/MOVE/COPY/SHARE) or a
+	`Tree('ident', [Token(...)])` wrapper.
 	"""
 	if isinstance(node, Token):
-		if node.type in {"NAME", "MOVE", "COPY"}:
+		if node.type in {"NAME", "MOVE", "COPY", "SHARE"}:
 			return node
 		raise TypeError(f"Expected identifier token, got {node.type}")
 	if isinstance(node, Tree) and _name(node) == "ident":
 		tok = next((c for c in node.children if isinstance(c, Token)), None)
 		if tok is None:
 			raise TypeError("ident node missing token child")
-		if tok.type not in {"NAME", "MOVE", "COPY"}:
-			raise TypeError(f"Expected NAME/MOVE/COPY token in ident, got {tok.type}")
+		if tok.type not in {"NAME", "MOVE", "COPY", "SHARE"}:
+			raise TypeError(f"Expected NAME/MOVE/COPY/SHARE token in ident, got {tok.type}")
 		return tok
 	raise TypeError(f"Expected ident node, got {type(node)}")
+
+
+# Token types that may appear as a module-path segment.  Mirrors the
+# grammar macro `__PATH_SEG__` (see _PATH_SEG_ALTS in this module).
+_PATH_SEG_TOKENS: set[str] = {"NAME", "MOVE", "COPY", "SHARE"}
 
 
 _EXPR_PARSER = Lark(
@@ -1218,10 +1233,19 @@ def _build_type_alias_def(tree: Tree) -> "TypeAliasDef":
 
 
 def _build_module_decl(tree: Tree) -> str:
-    from lark import Token as LarkToken
-
-    path_parts = [tok.value for tok in tree.scan_values(lambda v: isinstance(v, LarkToken) and v.type == "NAME")]
-    return ".".join(path_parts) if path_parts else "main"
+    # `module_path: __PATH_SEG__ (DOT __PATH_SEG__)*` — segments are
+    # bare tokens of type NAME / MOVE / COPY / SHARE (see
+    # `_PATH_SEG_ALTS` for the canonical set).  The macro substitution
+    # at grammar-load time keeps the children flat (no per-segment
+    # Tree wrapper).
+    path_node = next(
+        (c for c in tree.children if isinstance(c, Tree) and _name(c) == "module_path"),
+        None,
+    )
+    if path_node is None:
+        return "main"
+    parts = [c.value for c in path_node.children if isinstance(c, Token) and c.type in _PATH_SEG_TOKENS]
+    return ".".join(parts) if parts else "main"
 
 
 def _build_exception_def(tree: Tree) -> ExceptionDef:
@@ -1903,6 +1927,9 @@ def _build_lambda(tree: Tree) -> Lambda:
 				elif child.type == "MOVE":
 					kind = "move"
 					seen_kind = True
+				elif child.type == "SHARE":
+					kind = "share"
+					seen_kind = True
 				elif child.type == "AMP":
 					kind = "ref"
 					seen_kind = True
@@ -2017,13 +2044,14 @@ def _build_type_expr(tree: Tree) -> TypeExpr:
 				args = [_build_type_expr(arg) for arg in children]
 		return TypeExpr(name=name_token.value, args=args, loc=Located(line=name_token.line, column=name_token.column, file=_CURRENT_FILE))
 	if name == "qualified_base_type":
-		# module_path type_args?
+		# module_path_type type_args?  Path segments are bare tokens
+		# of type NAME / MOVE / COPY / SHARE (see `_PATH_SEG_TOKENS`).
 		module_path = tree.children[0]
 		path_parts: List[str] = []
 		path_loc = None
 		if isinstance(module_path, Tree):
 			for child in module_path.children:
-				if isinstance(child, Token) and child.type == "NAME":
+				if isinstance(child, Token) and child.type in _PATH_SEG_TOKENS:
 					path_parts.append(child.value)
 					if path_loc is None:
 						path_loc = Located(line=child.line, column=child.column, file=_CURRENT_FILE)
@@ -2603,7 +2631,13 @@ def _build_struct_field(tree: Tree) -> StructField:
 def _build_import_stmt(tree: Tree) -> ImportStmt:
     loc = _loc(tree)
     path_node = tree.children[0]
-    parts = [child.value for child in path_node.children if isinstance(child, Token) and child.type == "NAME"]
+    # `module_path: __PATH_SEG__ (DOT __PATH_SEG__)*` — segments are
+    # bare tokens of type NAME / MOVE / COPY / SHARE.
+    parts = [
+        child.value
+        for child in path_node.children
+        if isinstance(child, Token) and child.type in _PATH_SEG_TOKENS
+    ]
     alias = None
     if len(tree.children) > 1 and isinstance(tree.children[1], Tree) and _name(tree.children[1]) == "import_alias":
         alias_tok = next((c for c in tree.children[1].children if isinstance(c, Token) and c.type == "NAME"), None)
@@ -2630,9 +2664,22 @@ def _build_export_item(tree: Tree) -> ExportItem:
 		None,
 	)
 	if module_node is not None:
-		parts = [tok.value for tok in module_node.children if isinstance(tok, Token) and tok.type == "NAME"]
+		# Path segments are bare tokens of type NAME / MOVE / COPY /
+		# SHARE (see `_PATH_SEG_TOKENS`).  The grammar uses the
+		# `__PATH_SEG__` macro so children are flat tokens, not
+		# wrapped in a per-segment Tree.
+		parts: list[str] = []
+		for child in module_node.children:
+			if isinstance(child, Token) and child.type in _PATH_SEG_TOKENS:
+				parts.append(child.value)
 		return ExportModuleStar(loc=loc, module_path=parts)
-	name_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
+	# Plain re-export: a single token from the path-segment set
+	# (`__PATH_SEG__` in the grammar) — covers NAME plus contextual
+	# keywords usable as identifiers (e.g. `share`, `copy`, `move`).
+	name_tok = next(
+		(c for c in tree.children if isinstance(c, Token) and c.type in _PATH_SEG_TOKENS),
+		None,
+	)
 	if name_tok is not None:
 		return ExportName(loc=loc, name=name_tok.value)
 	raise ValueError("export item missing name or module path")
@@ -2654,7 +2701,13 @@ def _build_use_trait_stmt(tree: Tree) -> UseTraitStmt:
 		child = next((c for c in ref_node.children if isinstance(c, Tree) and _name(c) == "module_path"), None)
 		if child is not None:
 			ref_node = child
-	parts = [tok.value for tok in ref_node.children if isinstance(tok, Token) and tok.type == "NAME"]
+	# `module_path: __PATH_SEG__ (DOT __PATH_SEG__)*` — segments are
+	# bare tokens of type NAME / MOVE / COPY / SHARE.
+	parts = [
+		child.value
+		for child in ref_node.children
+		if isinstance(child, Token) and child.type in _PATH_SEG_TOKENS
+	]
 	if len(parts) < 1:
 		raise ValueError("trait reference missing module path or trait name")
 	module_path = parts[:-1]
@@ -3573,7 +3626,7 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
             attr_token = next(
                 token
                 for token in child.children
-                if isinstance(token, Token) and token.type in {"NAME", "CAPTURES"}
+                if isinstance(token, Token) and token.type in {"NAME", "CAPTURES", "SHARE"}
             )
             expr = Attr(loc=_loc(child), value=expr, attr=attr_token.value)
         elif child_name == "arrow_suffix":

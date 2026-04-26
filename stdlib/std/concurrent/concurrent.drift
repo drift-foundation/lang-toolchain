@@ -1,6 +1,7 @@
 module std.concurrent;
 
 import std.core as core;
+import std.core.shareable as shareable;
 import std.mem as mem;
 import lang.thread as thread;
 import lang.atomic as atomic;
@@ -8,6 +9,7 @@ import lang.atomic as atomic;
 use trait core.Fn0;
 use trait core.Fn1;
 use trait core.Copy;
+use trait shareable.Share;
 use trait core.Borrow;
 use trait core.BorrowMut;
 use trait core.Destructible;
@@ -678,6 +680,24 @@ implement<T> core.Destructible for Arc<T> {
 	/// `Arc<T>`.  For concrete T the lowering redirects to
 	/// `_arc_destroy_impl<T>`; Stage 3 adds an interface-T branch.
 	@intrinsic pub fn destroy(var self: Arc<T>) nothrow -> Void;
+}
+
+/// `Arc<T>` is the canonical shared-owner type.  `share` produces
+/// another owner of the same `ArcBox<T>` (the underlying allocation
+/// + refcount header) by atomically incrementing the strong count.
+/// Cheap — no heap allocation, no value copy.  Aliasing is real:
+/// every owner of an `Arc<T>` observes the same value through
+/// `arc.get()`.
+///
+/// Implementation delegates to `Arc.clone` (the existing
+/// `_arc_clone_impl` runtime intrinsic).  `Arc.clone` remains
+/// available for code that explicitly wants the named clone API;
+/// `share` is the language-level spelling for the shared-ownership
+/// capability.
+implement<T> shareable.Share for Arc<T> {
+	pub fn share(self: &Arc<T>) nothrow -> Arc<T> {
+		return self.clone();
+	}
 }
 
 /// Constructs a `Mutex<T>` wrapping `value`, initially unlocked.

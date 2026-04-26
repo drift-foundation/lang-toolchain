@@ -308,11 +308,30 @@ class HParam(HNode):
 
 @dataclass
 class HExplicitCapture(HNode):
-	"""Explicit capture list entry (v0: root identifiers only)."""
+	"""Explicit capture list entry (v0: root identifiers only).
+
+	`kind="share"` captures carry a `share_value` HExpr — a synthesized
+	`HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`
+	that lowers to `Share::share(&local)` inline at the lambda's
+	env-construction site (NOT as a pre-hoisted let).  Inline lowering
+	preserves user-visible left-to-right evaluation order:
+	`foo(side_effect(), || captures(share x) => ...)` runs
+	`side_effect()` before `Share::share(&x)`, matching the source.
+
+	The user-spelled name and binding id remain on `name` / `binding_id`
+	(no rewrite) so:
+	  - The lambda body's `HVar(<name>, binding_id)` resolves through
+	    the standard capture-slot mechanism into the env field that
+	    holds the share-result.
+	  - The checker's focused `E-CAPTURE-SHARE-NOT-SHARE` diagnostic
+	    reads the user-spelled type/name directly off `binding_id` and
+	    `name` — no auxiliary `desugar_origin_*` plumbing required.
+	"""
 	name: str
-	kind: str  # "ref", "ref_mut", "copy", "move"
+	kind: str  # "ref", "ref_mut", "copy", "move", "share"
 	binding_id: Optional[BindingId] = None
 	span: Span = field(default_factory=Span)
+	share_value: Optional["HExpr"] = None
 
 
 @dataclass

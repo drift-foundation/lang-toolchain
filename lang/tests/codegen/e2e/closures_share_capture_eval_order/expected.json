@@ -1,0 +1,6 @@
+{
+  "description": "e2e: captures(share x) — Share::share(&x) evaluates AT lambda construction (after preceding args), not pre-hoisted; left-to-right argument order preserved",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

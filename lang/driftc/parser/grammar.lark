@@ -98,6 +98,7 @@ ELSE.2: /else\b/
 WHILE.2: /while\b/
 MOVE.2: /move\b/
 COPY.2: /copy\b/
+SHARE.2: /share\b/
 CAST.2: /cast\b/
 CAPTURES.2: /captures\b/
 BREAK.2: /break\b/
@@ -128,8 +129,23 @@ BLOCK_COMMENT: /\/\*([^*]|\*(?!\/))*\*\//
 program: (module_decl | item | TERMINATOR)*
 
 module_decl: MODULE module_path TERMINATOR
-module_path: NAME (DOT NAME)*
-ident: NAME | MOVE | COPY
+// `__PATH_SEG__` is a build-time macro substituted by parser.py at
+// grammar-load time; it expands to `(NAME | MOVE | COPY | SHARE)`,
+// the narrow set of tokens permitted as a module-path segment.
+// The macro lives in `_PATH_SEG_ALTS` (parser.py) so the contextual
+// keyword set is enumerated in exactly one place — adding a new
+// contextual keyword that should be usable as a module segment
+// requires updating that single Python constant.
+//
+// We can't use a separate `path_ident` non-terminal: it would
+// reduce/reduce-collide with `ident` (LALR(1) cannot disambiguate
+// the keyword tokens between path and non-path contexts), and a
+// rule priority would clobber non-path uses (`var copy: Int`
+// would mis-reduce).  Inline alternation via macro substitution
+// keeps the parser deterministic without enumerating keywords in
+// each module-path production.
+module_path: __PATH_SEG__ (DOT __PATH_SEG__)*
+ident: NAME | MOVE | COPY | SHARE
 
 ?item: test_build_only_marker? intrinsic_marker? pub_item
      | test_build_only_marker? intrinsic_marker? func_def
@@ -217,7 +233,7 @@ ref_type: AMP MUT? type_expr
 // segment as a module alias when available.
 base_type: module_path_type type_args? -> qualified_base_type
          | NAME type_args?        -> base_type
-module_path_type: NAME (DOT NAME)+
+module_path_type: __PATH_SEG__ (DOT __PATH_SEG__)+
 type_args: square_type_args
          | angle_type_args
 square_type_args: "[" type_expr (COMMA type_expr)* "]"
@@ -340,8 +356,13 @@ import_alias: "as" NAME
 
 export_stmt: EXPORT "{" export_items? "}"
 export_items: export_item (COMMA export_item)*
-export_item: NAME | module_path_star
-module_path_star: NAME (DOT NAME)* DOT STAR
+// `export_item` accepts either a plain identifier (re-exports a
+// single name from this module) or a starred module path (re-exports
+// every public item of a sibling submodule).  Plain identifiers may
+// be a contextual keyword (e.g. `share`) since users may name
+// functions/traits after them.
+export_item: __PATH_SEG__ | module_path_star
+module_path_star: __PATH_SEG__ (DOT __PATH_SEG__)* DOT STAR
 use_trait_stmt: USE TRAIT trait_ref
 trait_ref: module_path
 
@@ -488,7 +509,7 @@ macro_call_suffix: BANG "(" [call_args] ")"
 call_type_args: CALL_TYPE_LT type_expr (COMMA type_expr)* ">"
 type_app_suffix: call_type_args
 qualified_suffix: qualified_pre_type_args? DCOLON NAME
-attr_suffix: DOT (NAME | CAPTURES)
+attr_suffix: DOT (NAME | CAPTURES | SHARE)
 arrow_suffix: ARROW NAME
 index_suffix: "[" (leading_dot | expr) "]"
 
@@ -515,6 +536,7 @@ lambda_captures: CAPTURES "(" [lambda_capture_list] ")"
 lambda_capture_list: lambda_capture_item (COMMA lambda_capture_item)*
 lambda_capture_item: COPY NAME
                    | MOVE NAME
+                   | SHARE NAME
                    | AMP MUT? NAME
                    | NAME
 

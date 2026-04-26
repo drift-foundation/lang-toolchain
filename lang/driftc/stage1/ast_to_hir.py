@@ -618,17 +618,88 @@ class AstToHIR:
 
 	def _visit_expr_Lambda(self, expr: ast.Lambda) -> H.HExpr:
 		explicit_captures: list[H.HExplicitCapture] | None = None
+		# `captures(share x)` is lowered INLINE at the lambda's
+		# env-construction site (NOT pre-hoisted into the enclosing
+		# block).  Inline lowering preserves user-visible
+		# left-to-right evaluation order: in
+		# `foo(side_effect(), || captures(share x) => ...)`,
+		# `side_effect()` runs before `Share::share(&x)`, matching
+		# the source.  See `share_value` field on `HExplicitCapture`.
+		#
+		# AST→HIR's only job here is to synthesize the `share_value`
+		# expression — a trait-qualified call
+		# `HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`.
+		# Type-checking happens via the standard expression visitor
+		# (driven from the type checker's lambda capture walk) so the
+		# call goes through the regular call-resolver →
+		# instantiation pipeline; HIR→MIR's SHARE branch then lowers
+		# `cap.share_value` directly into the env field.
+		#
+		# `HQualifiedMember` enforces trait-discipline: resolution
+		# routes through `resolve_qualified_member_ufcs` against the
+		# `std.core.shareable.Share` trait specifically — an unrelated
+		# user `.share()` inherent method on a non-Share type cannot
+		# satisfy `captures(share x)`.
 		if getattr(expr, "captures", None) is not None:
 			explicit_captures = []
 			for cap in expr.captures:
-				explicit_captures.append(
-					H.HExplicitCapture(
-						name=cap.name,
-						kind=cap.kind,
-						binding_id=self._lookup_binding(cap.name),
-						span=Span.from_loc(getattr(cap, "loc", None)),
+				cap_span = Span.from_loc(getattr(cap, "loc", None))
+				if cap.kind == "share":
+					orig_bid = self._lookup_binding(cap.name)
+					if orig_bid is None:
+						# Unbound capture name — let the type checker emit
+						# the missing-root diagnostic.  No share_value to
+						# synthesize without a target binding.
+						explicit_captures.append(
+							H.HExplicitCapture(
+								name=cap.name,
+								kind=cap.kind,
+								binding_id=None,
+								span=cap_span,
+							)
+						)
+						continue
+					share_trait = ast.TypeNameRef(
+						name="Share",
+						module_id="std.core.shareable",
 					)
-				)
+					orig_var = H.HVar(
+						name=cap.name,
+						binding_id=orig_bid,
+						loc=cap_span,
+					)
+					orig_place = H.HPlaceExpr(
+						base=orig_var,
+						projections=[],
+						loc=cap_span,
+					)
+					share_call = H.HCall(
+						fn=H.HQualifiedMember(
+							base_type_expr=share_trait,
+							member="share",
+							loc=cap_span,
+						),
+						args=[H.HBorrow(subject=orig_place, is_mut=False)],
+						origin="share_capture",
+					)
+					explicit_captures.append(
+						H.HExplicitCapture(
+							name=cap.name,
+							kind=cap.kind,
+							binding_id=orig_bid,
+							span=cap_span,
+							share_value=share_call,
+						)
+					)
+				else:
+					explicit_captures.append(
+						H.HExplicitCapture(
+							name=cap.name,
+							kind=cap.kind,
+							binding_id=self._lookup_binding(cap.name),
+							span=cap_span,
+						)
+					)
 		self._push_scope()
 		try:
 			params: list[H.HParam] = []

@@ -501,11 +501,18 @@ def _find_trait_key(world: "TraitWorld", *, module: str, name: str) -> TraitKey 
 
 
 def _install_copy_query(type_table: TypeTable, linked_world: LinkedWorld) -> None:
-	copy_key = _find_trait_key(linked_world.global_world, module="std.core", name="Copy")
+	# `Copy` canonically lives in `std.core.copy` (re-exported by
+	# `std.core`).  Production stdlib registers it at the submodule;
+	# minimal test stubs that inline `pub trait Copy` inside
+	# `module std.core` register it at `std.core` directly — accept
+	# either.
+	copy_key = _find_trait_key(linked_world.global_world, module="std.core.copy", name="Copy")
 	if copy_key is None:
-		std_modules = {"std.core", "std.iter", "std.containers", "std.algo"}
+		copy_key = _find_trait_key(linked_world.global_world, module="std.core", name="Copy")
+	if copy_key is None:
+		std_modules = {"std.core", "std.core.copy", "std.iter", "std.containers", "std.algo"}
 		if any(mod in std_modules for mod in linked_world.trait_worlds.keys()):
-			raise ValueError("stdlib missing std.core.Copy trait metadata")
+			raise ValueError("stdlib missing std.core.copy.Copy trait metadata")
 		return
 	default_package = getattr(type_table, "package_id", None)
 	module_packages = getattr(type_table, "module_packages", None) or {}
@@ -582,6 +589,51 @@ def _install_diagnostic_query(type_table: TypeTable, linked_world: LinkedWorld) 
 		return None
 
 	type_table.set_diagnostic_query(_query_diag, allow_fallback=False)
+
+
+def _install_share_query(type_table: TypeTable, linked_world: LinkedWorld) -> None:
+	"""Install a Share-trait query hook on `type_table`.
+
+	Mirror of `_install_destructible_query`.  Used by the type
+	checker's focused `E-CAPTURE-SHARE-NOT-SHARE` diagnostic on
+	`captures(share x)` — the diagnostic needs a fast Share-impl
+	predicate to fire BEFORE the synthesized `Share::share(&x)`
+	HCall is dispatched to the call_resolver, so the user sees the
+	capture-specific message rather than a generic trait-resolution
+	error.  Routes through the trait prover.
+	"""
+	share_key = _find_trait_key(linked_world.global_world, module="std.core.shareable", name="Share")
+	if share_key is None:
+		# Stdlib trait metadata not present (e.g. test stubs).  Fall
+		# back to "unknown" — the checker treats unknown as "no
+		# diagnostic" so we don't false-fire.
+		def _fallback_share(_tid: int) -> bool | None:
+			return None
+		type_table.set_share_query(_fallback_share, allow_fallback=True)
+		return
+	default_package = getattr(type_table, "package_id", None)
+	module_packages = getattr(type_table, "module_packages", None) or {}
+	env = TraitEnv(
+		default_module=None,
+		default_package=default_package,
+		module_packages=module_packages,
+		type_table=type_table,
+	)
+	world = linked_world.global_world
+
+	def _query_share(tid: int) -> bool | None:
+		try:
+			subject = type_key_from_typeid(type_table, tid)
+		except Exception:
+			return None
+		res = prove_is(world, env, {}, subject, share_key)
+		if res.status is ProofStatus.PROVED:
+			return True
+		if res.status is ProofStatus.REFUTED:
+			return False
+		return None
+
+	type_table.set_share_query(_query_share, allow_fallback=False)
 
 
 def _install_destructible_query(type_table: TypeTable, linked_world: LinkedWorld) -> None:
@@ -801,6 +853,7 @@ def _build_linked_world(type_table: TypeTable | None) -> tuple[LinkedWorld | Non
 		_install_copy_query(type_table, linked_world)
 		_install_diagnostic_query(type_table, linked_world)
 		_install_destructible_query(type_table, linked_world)
+		_install_share_query(type_table, linked_world)
 	default_package = getattr(type_table, "package_id", None)
 	module_packages = getattr(type_table, "module_packages", None)
 	return linked_world, build_require_env(

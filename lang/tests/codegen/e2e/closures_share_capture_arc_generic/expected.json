@@ -1,0 +1,6 @@
+{
+  "description": "e2e: captures(share Arc<App>) — generic Share impl resolves for instantiated Arc<X>; both immediate-lambda and callback-boxed paths drop both stakes correctly",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

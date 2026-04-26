@@ -1,0 +1,56 @@
+module std.core.shareable;
+
+export {
+	Share
+};
+
+/// Trait for shared-owner types that can produce another OWNER of
+/// the same underlying resource.
+///
+/// `share` is intentionally distinct from `copy`:
+///
+/// - `copy` (only for `Copy` types) produces a value-like duplicate
+///   with no aliasing — the result behaves as an independent value.
+/// - `share` (only for `Share` types) produces another OWNER of the
+///   same underlying thing.  Aliasing is part of the semantic.
+///   Mutations through either owner are observable through the other.
+///
+/// `share` is a **warning-bearing** operation: choosing to call it
+/// is choosing to accept aliasing.  If the underlying resource is
+/// observed or mutated across threads, tasks, or callbacks,
+/// synchronization/serialization is the programmer's responsibility.
+/// `Share` says nothing about thread-safety of mutations performed
+/// through aliased owners.
+///
+/// `Share` is NOT a synonym for `Clone`.  Drift deliberately keeps
+/// "value-like duplication" (`Copy`) and "shared-owner duplication"
+/// (`Share`) as distinct capabilities — they answer different
+/// questions and carry different programmer guarantees.  A type
+/// implements one, the other, both (rare and meaningful), or
+/// neither.
+///
+/// **First adopter:** `Arc<T>` (in `std.concurrent`).
+///
+/// **String stays on `copy`, not `share`.**  Even though `String`
+/// is implemented with shared backing under the hood, its
+/// user-facing semantic is value-like duplication — `copy s`
+/// produces a value the user can treat as their own.  Forcing
+/// `String` into `Share` would conflate the two capabilities and
+/// defeat the warning value of the `share` keyword.
+///
+/// **Closure share-capture syntax:**
+///
+///     |req, ctx| captures(share app) => { app.handle(req, ctx) }
+///
+/// At closure-construction time, the compiler evaluates
+/// `app.share()` once, move-captures the resulting owned value into
+/// the closure environment, and leaves the outer `app` binding
+/// usable.
+pub trait Share {
+	/// Produce another owner of the same underlying resource.
+	///
+	/// Aliasing is intentional.  If the resource is mutated through
+	/// any owner across threads/tasks/callbacks, synchronization is
+	/// the caller's responsibility.
+	fn share(self: &Self) nothrow -> Self;
+}

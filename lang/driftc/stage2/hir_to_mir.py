@@ -1101,6 +1101,55 @@ class HIRToMIR:
 			loc=Span(),
 		)
 
+	def _lower_share_capture(
+		self,
+		*,
+		cap: "C.HExplicitCapture",
+		hir_cap: "H.HExplicitCapture",
+		env_vals: list[M.ValueId],
+		env_field_types: list[TypeId],
+	) -> None:
+		"""Lower a `captures(share x)` slot in a lambda capture list.
+
+		The synthesized `Share::share(&x)` HCall was built at AST→HIR
+		time and lives on `hir_cap.share_value`.  We lower it INLINE
+		at the env-construction site (NOT as a pre-statement) so the
+		call evaluates exactly when the lambda expression itself
+		evaluates — preserving user-visible left-to-right argument
+		order in shapes like
+		`foo(side_effect(), || captures(share x) => ...)`.
+
+		Trait dispatch routes through
+		`HQualifiedMember(std.core.shareable.Share, "share")` which
+		the call-resolver resolved to a monomorphized
+		`Share::share__inst__<...>` at type-check time; lowering
+		`cap.share_value` here just emits the resolved Call.
+
+		Ownership invariant (pinned by
+		`lang/tests/stage2/test_share_capture_ownership.py`):
+		  - `x` is borrowed by `Share::share(&x)` — stays LIVE.
+		  - The call returns a fresh +1 owner; ownership transfers
+		    directly into the env field via the slot append below.
+		"""
+		share_value = getattr(hir_cap, "share_value", None)
+		if share_value is None:
+			raise AssertionError(
+				"share capture missing synthesized share_value — "
+				"AST→HIR `_visit_expr_Lambda` should have populated it"
+			)
+		val = self.lower_expr(share_value)
+		val_ty = self._local_types.get(val)
+		if val_ty is None:
+			val_ty = self._infer_expr_type(share_value)
+		if val_ty is None:
+			raise AssertionError(
+				"share-capture call result has unknown type in MIR "
+				"lowering — checker should have resolved Share::share "
+				"before this point"
+			)
+		env_vals.append(val)
+		env_field_types.append(val_ty)
+
 	def _load_capture_from_env(self, slot: int) -> M.ValueId:
 		if self._lambda_env_local is None or self._lambda_env_ty is None or self._lambda_env_field_types is None:
 			raise AssertionError("capture env not initialized (lowering bug)")
@@ -3901,6 +3950,7 @@ class HIRToMIR:
 				"ref_mut": C.HCaptureKind.REF_MUT,
 				"copy": C.HCaptureKind.COPY,
 				"move": C.HCaptureKind.MOVE,
+				"share": C.HCaptureKind.SHARE,
 				"auto": C.HCaptureKind.REF,
 			}
 			for cap in lam.explicit_captures or []:
@@ -3945,6 +3995,15 @@ class HIRToMIR:
 			env_local = f"__imm_env_{lambda_id}"
 			self.b.ensure_local(env_local)
 			env_vals: list[M.ValueId] = []
+			# Build a binding_id → HExplicitCapture map so the SHARE
+			# branch can read `share_value` (synthesized in
+			# `ast_to_hir.py::_visit_expr_Lambda`).  `lam.captures` is
+			# the post-discovery `C.HCapture` list; `lam.explicit_captures`
+			# is the source-spelled HIR list — both share binding_ids.
+			hir_cap_by_bid: dict[int, "H.HExplicitCapture"] = {}
+			for ec in (getattr(lam, "explicit_captures", None) or []):
+				if ec.binding_id is not None:
+					hir_cap_by_bid[int(ec.binding_id)] = ec
 			for cap in lam.captures:
 				expr = self._expr_from_capture_key(cap.key)
 				if cap.kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT):
@@ -3982,6 +4041,18 @@ class HIRToMIR:
 						self._local_types[moved_val] = inner_ty
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
+				elif cap.kind is C.HCaptureKind.SHARE:
+					hir_cap = hir_cap_by_bid.get(int(cap.key.root_local))
+					if hir_cap is None:
+						raise AssertionError(
+							"SHARE capture has no matching HExplicitCapture with share_value"
+						)
+					self._lower_share_capture(
+						cap=cap,
+						hir_cap=hir_cap,
+						env_vals=env_vals,
+						env_field_types=env_field_types,
+					)
 				else:
 					env_val = self.lower_expr(expr)
 					env_vals.append(env_val)
@@ -4103,6 +4174,7 @@ class HIRToMIR:
 				"ref_mut": C.HCaptureKind.REF_MUT,
 				"copy": C.HCaptureKind.COPY,
 				"move": C.HCaptureKind.MOVE,
+				"share": C.HCaptureKind.SHARE,
 				"auto": C.HCaptureKind.REF,
 			}
 			for cap in lam.explicit_captures or []:
@@ -4141,6 +4213,14 @@ class HIRToMIR:
 			field_names = [f"c{i}" for i in range(len(lam.captures))]
 			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
 			env_vals: list[M.ValueId] = []
+			# Build a binding_id → HExplicitCapture map so the SHARE
+			# branch can read `share_value` (synthesized in
+			# `ast_to_hir.py::_visit_expr_Lambda`).  See the matching
+			# block in `_lower_lambda_immediate_call`.
+			hir_cap_by_bid: dict[int, "H.HExplicitCapture"] = {}
+			for ec in (getattr(lam, "explicit_captures", None) or []):
+				if ec.binding_id is not None:
+					hir_cap_by_bid[int(ec.binding_id)] = ec
 			for cap in lam.captures:
 				expr = self._expr_from_capture_key(cap.key)
 				if cap.kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT):
@@ -4178,6 +4258,18 @@ class HIRToMIR:
 						self._local_types[moved_val] = inner_ty
 						env_vals.append(moved_val)
 						env_field_types.append(inner_ty)
+				elif cap.kind is C.HCaptureKind.SHARE:
+					hir_cap = hir_cap_by_bid.get(int(cap.key.root_local))
+					if hir_cap is None:
+						raise AssertionError(
+							"SHARE capture has no matching HExplicitCapture with share_value"
+						)
+					self._lower_share_capture(
+						cap=cap,
+						hir_cap=hir_cap,
+						env_vals=env_vals,
+						env_field_types=env_field_types,
+					)
 				else:
 					env_val = self.lower_expr(expr)
 					env_vals.append(env_val)
@@ -4331,17 +4423,24 @@ class HIRToMIR:
 			kind = None
 			if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
 				kind = self._lambda_capture_kinds[slot]
-			if self._lambda_is_callback and kind is C.HCaptureKind.MOVE:
-				# Escaping callback lambdas own move captures in heap env storage.
-				# Avoid materializing per-invocation locals from env values.
+			if self._lambda_is_callback and kind in (C.HCaptureKind.MOVE, C.HCaptureKind.SHARE):
+				# Escaping callback lambdas own MOVE and SHARE captures in
+				# the heap env storage — the env field is the canonical
+				# owner and is dropped via the cb env-drop thunk.
+				# Materializing a per-invocation local AND registering it
+				# for cleanup would double-drop the same Arc / shared
+				# resource (the body local would scope-exit-drop it AND
+				# cb_drop would drop the env field).
 				continue
 			val = self._load_capture_from_env(slot)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
 			if local_ty is not None:
-				# Move-captured values remain owned by the lambda env object and are
-				# released by the env drop thunk; registering an additional local drop
-				# here double-drops non-Copy captures.
-				if kind is not C.HCaptureKind.MOVE:
+				# Move/share-captured values remain owned by the lambda
+				# env object and are released by the env drop thunk;
+				# registering an additional local drop here double-drops
+				# non-Copy captures.  SHARE follows the same shape as
+				# MOVE: the env field is the +1 owner.
+				if kind not in (C.HCaptureKind.MOVE, C.HCaptureKind.SHARE):
 					self._register_drop_local(local_name, local_ty)
 		self._lambda_capture_prologue_done = True
 

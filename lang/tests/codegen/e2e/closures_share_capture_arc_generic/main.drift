@@ -1,0 +1,65 @@
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+// Positive regression for `captures(share x)` where `x: Arc<UserType>`.
+//
+// Slice 1 of Share is desugared at AST→HIR time into:
+//
+//     let __share_tmp_<n> = std.core.shareable.Share::share(&x);
+//     // capture is rewritten from `share x` to `move __share_tmp_<n>`
+//
+// The desugar resolves through `HQualifiedMember(Share-trait, "share")`,
+// so a generic `implement<T> Share for Arc<T>` is monomorphized for the
+// concrete `Arc<App>` via the standard call-resolver / instantiation
+// pipeline — NOT through ordinary inherent-method lookup that could
+// accidentally bind to an unrelated `.share()` method.
+//
+// Two shapes are exercised below:
+//
+// 1. **Immediate-lambda call**: `(| | captures(share app) => ...)()`
+//    routes through the immediate-lambda env construction path in
+//    `hir_to_mir.py`.  Outer `app` stays LIVE throughout (only borrowed
+//    by `Share::share(&app)`), and the env's Arc field carries the
+//    new owner for the duration of the call.
+//
+// 2. **Callback-boxed**: `core.callback0(| | captures(share app) => ...)`
+//    routes through the callback heap-env path.  The cb-drop thunk
+//    drops the env's Arc field; cleanup-authoring skips emitting a
+//    duplicate scope-exit drop for the synthesized `__share_tmp_<n>`
+//    (it was already MoveOut'd into the env).
+//
+// Ownership invariant pinned by this test: original `app` is dropped
+// at function exit (stake #1 released), AND the env's Arc field is
+// dropped via the immediate-lambda env scope / the callback drop
+// thunk (stake #2 released).  No double-drop, no leak.
+
+struct App {
+	v: Int
+}
+
+implement App {
+	pub fn read(self: &App) nothrow -> Int {
+		return self.v;
+	}
+}
+
+fn main() nothrow -> Int {
+	val app = conc.arc(App(v = 42));
+
+	// Path 1 — immediate-lambda call.
+	val direct = (| | captures(share app) => {
+		val a = app.get();
+		return a.read();
+	})();
+
+	// Path 2 — callback-boxed.
+	val cb: core.Callback0<Int> = core.callback0(| | captures(share app) => {
+		val a = app.get();
+		return a.read();
+	});
+
+	val outer = app.get();
+	return (direct - 42) + (cb.call() - outer.read());
+}

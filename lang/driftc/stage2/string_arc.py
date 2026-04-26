@@ -1517,6 +1517,37 @@ def insert_string_arc(
 			# remain site-local (sub-steps 2 and 3).
 			if _ledger is not None:
 				_ledger_point = (block.name, len(block.instructions))
+				# **Authority boundary** (post-2026-04-25 site-3 String
+				# migration ATTEMPT + revert).  This consultation
+				# covers DESTRUCTIBLES only.  Strings and Arrays remain
+				# under `string_arc.py`'s post-rewrite alias-walk
+				# authority (lines 1486-1491 above).
+				#
+				# **Why strings/arrays are NOT here**: `string_arc` is a
+				# late-rewrite pass that synthesises `StringRetain` /
+				# `StringRelease` (and the `_drop_all_arrays`
+				# equivalent) AFTER the ledger is built.  For Strings
+				# specifically, the return-value handler retains-wraps
+				# the returned value (caller gets a fresh +1 via
+				# StringRetain; function still owns the local's
+				# original +1).  The lattice — built on the pre-rewrite
+				# MIR — sees a plain `LoadLocal+Return` chain and
+				# correctly transitions the local to MOVED_OUT
+				# (Return-as-move).  But that MOVED_OUT verdict is the
+				# WRONG predicate for "site 3 should skip the
+				# function-exit release": post-rewrite the function
+				# still holds its +1 and MUST release.  The alias-walk
+				# operates on the post-rewrite MIR (`new_instrs`) and
+				# matches only plain `LoadLocal` chain endpoints —
+				# `StringRetain` is not a `LoadLocal`, so the
+				# retain-wrapped pattern correctly does NOT skip.
+				#
+				# Arc<T> and other refcounted types whose
+				# clone/destroy are MIR-first (visible to the ledger
+				# at build time) flow through this consultation
+				# correctly via `destructible_locals`.  See
+				# `work/site3-strings-arrays/architecture-note-late-rewrite-authority.md`
+				# for the architectural rule.
 				for _local in destructible_locals:
 					if _local in skip_cleanup_locals:
 						continue

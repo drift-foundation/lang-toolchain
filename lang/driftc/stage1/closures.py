@@ -10,12 +10,20 @@ from lang.driftc.stage1.hir_nodes import BindingId
 
 
 class HCaptureKind(Enum):
-	"""How a value is captured."""
+	"""How a value is captured.
+
+	`SHARE` (added 0.31.14): the closure construction emits
+	`Call(Share::share, [&local])` and move-captures the returned
+	owned value.  Outer binding remains usable.  Type must implement
+	`std.core.shareable.Share`.  See `docs/design/drift-lang-spec.md` and
+	`docs/effective-drift.md`.
+	"""
 
 	REF = auto()
 	REF_MUT = auto()
 	COPY = auto()
 	MOVE = auto()
+	SHARE = auto()
 
 
 @dataclass(frozen=True)
