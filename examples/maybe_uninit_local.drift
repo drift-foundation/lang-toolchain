@@ -1,0 +1,73 @@
+// `MaybeUninit<T>` — safe pattern for a standalone uninitialized
+// local slot.
+//
+// `MaybeUninit<T>` is the canonical way to obtain a `T`-shaped slot
+// of storage without committing to an initial value.  All five
+// `mem.maybe_*` operations are `unsafe`, so the entire pattern must
+// run inside a surrounding `unsafe { ... }` block (and the compiler
+// must be invoked with `--allow-unsafe`).
+//
+// The safe end-to-end shape is **construct → write → read** in that
+// order, with no read of the slot before the write.
+//
+// Contract recap:
+//   * `mem.maybe_uninit<type T>()` produces an uninitialized slot.
+//     The slot must not be read until it has been written.
+//   * `mem.maybe_write<type T>(&mut slot, move v)` moves `v` into
+//     the slot.  Ownership of `v` transfers to the slot.
+//   * `mem.maybe_assume_init_read<type T>(&mut slot)` moves the
+//     value out of the slot and returns it.  After this call the
+//     slot is uninitialized again.
+//
+// What the compiler does *not* check
+//   * Read-before-write detection — the slot's contents are the
+//     user's responsibility under unsafe.
+//   * Forget-to-read leak detection — `MaybeUninit<T>` has no
+//     destructor, so abandoning a written-but-never-read slot
+//     leaks the inner value silently.
+//
+// Container variant: when many slots are needed at once, prefer
+// `RawBuffer<MaybeUninit<T>>` over an array of standalone locals.
+// `std.containers.HashMapCore` is the reference user.
+
+module main;
+
+import std.core as core;
+import std.mem as mem;
+
+pub struct Box {
+	pub n: Int,
+}
+
+implement core.Destructible for Box {
+	pub fn destroy(var self: Box) nothrow -> Void {
+		return;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val b = Box(n = 7);
+	unsafe {
+		// Construct: an uninitialized `MaybeUninit<Box>` slot.
+		var slot = mem.maybe_uninit<type Box>();
+
+		// Write: move ownership of `b` into the slot.  After this
+		// call `b` is moved-out and may not be used again.
+		mem.maybe_write<type Box>(&mut slot, b);
+
+		// Read: move the value back out.  The slot is tombstoned
+		// (zeroed) by the intrinsic itself; it is uninitialized
+		// again and the caller now owns the returned `Box`.
+		val b2 = mem.maybe_assume_init_read<type Box>(&mut slot);
+
+		// Use the read-back value normally.  Here we drop it
+		// explicitly via the canonical `core.drop_value` helper;
+		// scope-exit drop would also work for non-`unsafe` types.
+		core.drop_value<type Box>(b2);
+
+		// `slot` goes out of scope here.  Because `MaybeUninit<T>`
+		// has no destructor, no scope-exit drop is emitted — the
+		// compiler does not speculatively drop the slot's bytes.
+	}
+	return 0;
+}

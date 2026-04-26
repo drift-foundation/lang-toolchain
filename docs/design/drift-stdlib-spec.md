@@ -546,3 +546,40 @@ fn capacity<T>(buf: &RawBuffer<T>) -> Int;
 Rules:
 - `RawBuffer` operations are not available to user code; only trusted stdlib modules may call them.
 - `capacity` is a normal stdlib function (not an intrinsic fast-path).
+
+### `MaybeUninit<T>` (user-unsafe)
+
+```drift
+pub struct MaybeUninit<T> { /* phantom wrapper */ }
+
+@intrinsic fn maybe_uninit<T>() -> MaybeUninit<T> unsafe;
+@intrinsic fn maybe_write<T>(slot: &mut MaybeUninit<T>, v: T) -> &mut T unsafe;
+@intrinsic fn maybe_assume_init_ref<T>(slot: &MaybeUninit<T>) -> &T unsafe;
+@intrinsic fn maybe_assume_init_mut<T>(slot: &mut MaybeUninit<T>) -> &mut T unsafe;
+@intrinsic fn maybe_assume_init_read<T>(slot: &mut MaybeUninit<T>) -> T unsafe;
+```
+
+`MaybeUninit<T>` is a phantom wrapper for a `T`-shaped slot of storage that may or may not hold a live `T`.  Available to user code under `unsafe` (`--allow-unsafe`).  Two usage shapes are supported:
+
+- **Container-internal**: `RawBuffer<MaybeUninit<T>>` for per-slot initialization in trusted stdlib data structures (`std.containers.HashMapCore` is the reference user).
+- **Standalone local**: `var slot = mem.maybe_uninit<type T>()` in user `unsafe` code that needs a `T`-shaped slot without an initial value.
+
+Layout:
+- `sizeof(MaybeUninit<T>) == sizeof(T)` and `alignof(MaybeUninit<T>) == alignof(T)`.  The wrapper has no runtime overhead.
+
+Safe usage pattern (inside `unsafe`):
+
+```drift
+var slot = mem.maybe_uninit<type T>();
+mem.maybe_write<type T>(&mut slot, move v);
+val out = mem.maybe_assume_init_read<type T>(&mut slot);
+```
+
+See `examples/maybe_uninit_local.drift` for the full compileable example.
+
+Rules:
+- All five `mem.maybe_*` operations are `unsafe`; calls require a surrounding `unsafe { ... }` block and `--allow-unsafe`.
+- `maybe_uninit` zero-initializes the slot's bytes as a tombstone; the slot is *semantically* uninitialized — reading via `maybe_assume_init_*` before a corresponding `maybe_write` is undefined behavior.
+- `maybe_write` transfers ownership of `v` into the slot; for non-Copy `T`, `v` is moved-out at the call site.
+- `maybe_assume_init_read` moves the value out and zeroes the slot's bytes; the slot is uninitialized again after the call.
+- The compiler does not perform path-sensitive read-before-write detection or leak-on-drop hinting on `MaybeUninit<T>` locals.  `MaybeUninit<T>` itself has no destructor — abandoning a written-but-never-read slot leaks the inner value silently.  Tracking initialization state is the caller's contract under `unsafe`.

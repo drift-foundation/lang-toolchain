@@ -1,9 +1,13 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Consume-via-intrinsic ownership invariant — Path Y named bug class.
 
-Invariant (recorded in `work/ownership-ledger/3b-status.md`):
-**Consume-via-intrinsic must materialize as `MoveOut` in MIR before
-any ledger-authored cleanup path.**
+Invariant: **consume-by-value intrinsics must route non-Copy locals
+through `_lower_owning_consume` / `MoveOut` before cleanup authoring
+queries scope-exit state.**  Without it, the source local stays
+`LIVE` in the ledger after the intrinsic call; cleanup_authoring
+sees `LIVE` + `needs_drop=true` and authors a redundant scope-exit
+destructor — running the user's destructor twice on the same
+moved-from storage.
 
 Background.  When an intrinsic consumes a value-by-value argument
 (e.g. `mem.write(&mut buf, i, v)`, `mem.ptr_write(p, v)`,
@@ -94,6 +98,20 @@ pub fn main() nothrow -> Int {
 """
 
 
+_FIXTURE_MAYBE_WRITE_BODY = """\
+pub fn main() nothrow -> Int {
+\tval b = Box(n = 1);
+\tunsafe {
+\t\tvar slot = mem.maybe_uninit<type Box>();
+\t\tmem.maybe_write<type Box>(&mut slot, b);
+\t\tval b2 = mem.maybe_assume_init_read<type Box>(&mut slot);
+\t\tcore.drop_value<type Box>(b2);
+\t}
+\treturn 0;
+}
+"""
+
+
 _DESTROY_RE = re.compile(r'call void @"Box::std.core.Destructible::destroy"')
 _DRIFT_MAIN_RE = re.compile(r"define i64 @drift_main\(\) \{(.*?)^}", re.DOTALL | re.MULTILINE)
 
@@ -142,9 +160,10 @@ def _assert_consume_intrinsic_no_double_destroy(
 		f"destroy call(s).  Got {count}.  Pre-fix lowering for "
 		f"`{intrinsic_label}` left the consumed local LIVE in the "
 		f"ledger; cleanup_authoring authored a redundant scope-exit "
-		f"drop (expected count + 1).  See "
-		f"`work/ownership-ledger/3b-status.md` (consume-via-intrinsic "
-		f"invariant)."
+		f"drop (expected count + 1).  Invariant: consume-by-value "
+		f"intrinsics must route non-Copy locals through "
+		f"`_lower_owning_consume` / `MoveOut` before cleanup "
+		f"authoring queries scope-exit state."
 	)
 
 
@@ -186,24 +205,25 @@ def test_lowering_mem_replace_emits_moveout_for_non_copy_local(tmp_path: Path) -
 	)
 
 
-def test_lowering_mem_maybe_write_emits_moveout_for_non_copy_local() -> None:
-	"""`mem.maybe_write(slot, v)` is in the same consume-by-value
-	class and received the same `_lower_owning_consume` fix, but
-	`mem.maybe_uninit` (the only way to construct a `MaybeUninit<T>`
-	from user code) has its HIR→MIR lowering stubbed at
-	`NotImplementedError("maybe_uninit intrinsic lowering is not
-	implemented in v1")`.  A compile-through pin can't be written
-	until the constructor is implemented; the lowering fix is
-	mechanical and identical to the other three intrinsics in this
-	file.  When `maybe_uninit` lowering lands, this test should be
-	rewritten as a driver-style pin analogous to
-	`test_lowering_mem_ptr_write_emits_moveout_for_non_copy_local`
-	(pattern: construct slot, `maybe_write(&mut slot, b)` without
-	`move`, `maybe_assume_init_read`, `drop_value`, assert 1
-	destroy)."""
-	import pytest
-	pytest.skip(
-		"MAYBE_WRITE compile-through pin gated on `mem.maybe_uninit` "
-		"lowering (v1 NotImplementedError).  Fix is mechanical and "
-		"pinned by the shared `_lower_owning_consume` helper."
+def test_lowering_mem_maybe_write_emits_moveout_for_non_copy_local(tmp_path: Path) -> None:
+	"""Post-fix: 1 destroy (explicit `core.drop_value(b2)` on the
+	value read back out of the slot).  `b` is MOVED_OUT at the
+	`mem.maybe_write` call; `slot` is `MaybeUninit<Box>` (no-drop
+	type) so its scope-exit emits no destructor.  After
+	`mem.maybe_assume_init_read`, the slot is tombstoned to zero
+	bytes by the intrinsic itself; `b2` carries the +1 ownership
+	stake until `drop_value` consumes it.
+
+	`mem.maybe_uninit` lowering landed alongside this test
+	(`hir_to_mir.py::IntrinsicKind.MAYBE_UNINIT` → single
+	`ZeroValue(MaybeUninit<T>)`).  Pre-fix this test was skipped
+	with `NotImplementedError`; the bug class is the shared
+	consume-via-intrinsic invariant pinned by the three sibling
+	tests in this file."""
+	_assert_consume_intrinsic_no_double_destroy(
+		intrinsic_label="mem.maybe_write (MAYBE_WRITE)",
+		fixture_body=_FIXTURE_MAYBE_WRITE_BODY,
+		expected_destroys=1,
+		tmp_path=tmp_path,
+		allow_unsafe=True,
 	)

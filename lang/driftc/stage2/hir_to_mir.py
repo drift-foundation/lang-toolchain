@@ -3327,7 +3327,13 @@ class HIRToMIR:
 			self._local_types[old_val] = inner_ty
 			return old_val
 		if intrinsic is IntrinsicKind.MAYBE_UNINIT:
-			raise NotImplementedError("maybe_uninit intrinsic lowering is not implemented in v1")
+			if info is None:
+				raise AssertionError("maybe_uninit(...) missing CallInfo (checker bug)")
+			ret_ty = info.sig.user_ret_type
+			dest = self.b.new_temp()
+			self.b.emit(M.ZeroValue(dest=dest, ty=ret_ty))
+			self._local_types[dest] = ret_ty
+			return dest
 		if intrinsic is IntrinsicKind.MAYBE_WRITE:
 			if info is None:
 				raise AssertionError("maybe_write(...) missing CallInfo (checker bug)")

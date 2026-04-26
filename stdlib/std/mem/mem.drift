@@ -23,11 +23,30 @@ pub const RAW_BUFFER_CONTAINER_ID: String = "std.mem:RawBuffer";
 
 /// Possibly-uninitialized slot for a `T` value.
 ///
-/// Used by container internals to defer initialization (e.g. hash
-/// table slots that may be empty/full/tombstone).  Reading a slot
-/// without prior initialization is undefined behavior — use the
-/// `maybe_assume_init_*` variants only when the caller can prove
-/// the slot has been written.
+/// Two usage shapes are supported:
+///
+/// * **Container-internal**: `RawBuffer<MaybeUninit<T>>` for
+///   per-slot initialization in hash tables / deques / similar
+///   structures where some slots are empty/tombstone and some
+///   hold a live `T` (`std.containers.HashMapCore` is the
+///   reference user).
+/// * **Standalone local**: `var slot = mem.maybe_uninit<type T>()`
+///   for low-level `unsafe` code that needs a `T`-shaped slot
+///   without committing to an initial value.  See the safe
+///   construct → write → read pattern in
+///   `examples/maybe_uninit_local.drift`.
+///
+/// `MaybeUninit<T>` has the same byte layout and alignment as
+/// `T`; it is a phantom wrapper that the compiler unwraps in
+/// codegen.
+///
+/// Reading a slot without prior initialization is undefined
+/// behavior — use the `maybe_assume_init_*` variants only when
+/// the caller can prove the slot has been written.  The compiler
+/// does *not* perform path-sensitive read-before-write detection
+/// or leak-on-drop hinting on `MaybeUninit<T>` locals; the
+/// "is the slot occupied?" question is the caller's contract
+/// under `unsafe`.
 pub struct MaybeUninit<T> { }
 
 /// Allocates a `RawBuffer<T>` with `cap` uninitialized slots.  Pair
@@ -117,21 +136,42 @@ pub fn capacity<T>(buf: &RawBuffer<T>) nothrow -> Int {
 @intrinsic pub fn swap<T>(a: &mut T, b: &mut T) -> Void;
 
 /// Constructs an uninitialized `MaybeUninit<T>` slot.  Unsafe.
+///
+/// The slot's bytes are zero-initialized as a tombstone; reading
+/// the slot via `maybe_assume_init_*` before a corresponding
+/// `maybe_write` is undefined behavior.  See
+/// `examples/maybe_uninit_local.drift` for the safe pattern.
 @intrinsic pub unsafe fn maybe_uninit<T>() -> MaybeUninit<T>;
 
 /// Writes `v` into `slot` and returns a `&mut T` to the contained
-/// value.  Unsafe.
+/// value.  Ownership of `v` transfers to the slot; for non-Copy
+/// `T`, `v` is moved-out and may not be used after the call.
+/// Unsafe.
+///
+/// See `examples/maybe_uninit_local.drift` for the safe
+/// construct → write → read pattern.
 @intrinsic pub unsafe fn maybe_write<T>(slot: &mut MaybeUninit<T>, v: T) -> &mut T;
 
 /// Returns a shared reference to the value in `slot`, asserting
 /// (without checking) that the slot has been initialized.  Unsafe.
+///
+/// Pair with a prior `maybe_write`; reading an unwritten slot is
+/// undefined behavior.
 @intrinsic pub unsafe fn maybe_assume_init_ref<T>(slot: &MaybeUninit<T>) -> &T;
 
 /// Returns a mutable reference to the value in `slot`, asserting
 /// (without checking) that the slot has been initialized.  Unsafe.
+///
+/// Pair with a prior `maybe_write`; reading an unwritten slot is
+/// undefined behavior.
 @intrinsic pub unsafe fn maybe_assume_init_mut<T>(slot: &mut MaybeUninit<T>) -> &mut T;
 
 /// Moves the value out of `slot`, asserting (without checking) that
 /// the slot has been initialized.  After this call, the slot is
 /// uninitialized again.  Unsafe.
+///
+/// The intrinsic itself zeroes the slot's bytes as the value
+/// leaves; subsequent reads via `maybe_assume_init_*` are
+/// undefined until the slot is rewritten with `maybe_write`.
+/// See `examples/maybe_uninit_local.drift`.
 @intrinsic pub unsafe fn maybe_assume_init_read<T>(slot: &mut MaybeUninit<T>) -> T;

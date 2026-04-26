@@ -1,6 +1,114 @@
 # Drift development history
 
 ## 2026-04-26
+- **`MaybeUninit<T>` as a first-class local — release 0.31.16 (ABI
+  unchanged, still 10).**  Unblocks the standalone-local pattern
+
+  ```drift
+  unsafe {
+      var slot = mem.maybe_uninit<type T>();
+      mem.maybe_write<type T>(&mut slot, move v);
+      val out = mem.maybe_assume_init_read<type T>(&mut slot);
+  }
+  ```
+
+  for arbitrary `T`, including non-Copy / refcount-bearing types.
+
+  **Pre-fix.**  `mem.maybe_uninit` HIR→MIR lowering at
+  `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.MAYBE_UNINIT`
+  was a hard `NotImplementedError("maybe_uninit intrinsic lowering
+  is not implemented in v1")`.  The container path
+  (`RawBuffer<MaybeUninit<T>>` in `HashMapCore`) worked end-to-end
+  because it never constructs a standalone `MaybeUninit<T>` value;
+  buffer-internal slots are addressed via `mem.ptr_at_mut` /
+  `mem.ptr_at_ref` rather than as locals.  Standalone-local form
+  was unreachable from user code.
+
+  **Audit.**  Architectural readiness was already paid by the
+  four-site codegen unwrap of `MaybeUninit<T> → T` in
+  `lang/codegen/llvm/llvm_codegen.py` (`llvm_type_for_typeid`
+  l.1052, `_size_align_typeid` l.7493, `_llvm_type_for_typeid`
+  l.7782, `_llvm_storage_type_for_typeid` l.7862), which makes
+  `sizeof(MaybeUninit<T>) == sizeof(T)` and lets a
+  `MaybeUninit<T>`-typed local share storage shape with the
+  inner `T`.  Type checking, intrinsic-call resolution, and the
+  three sibling intrinsic lowerings (`maybe_write`,
+  `maybe_assume_init_ref/_mut`, `maybe_assume_init_read`) were
+  already complete.  Only the constructor was stubbed.
+
+  **Fix.**  Replaced the `NotImplementedError` with a single-op
+  lowering:
+  ```
+  if intrinsic is IntrinsicKind.MAYBE_UNINIT:
+      ret_ty = info.sig.user_ret_type      # MaybeUninit<T>
+      dest = self.b.new_temp()
+      self.b.emit(M.ZeroValue(dest=dest, ty=ret_ty))
+      self._local_types[dest] = ret_ty
+      return dest
+  ```
+  `ZeroValue` is the same op `mem.maybe_assume_init_read` already
+  uses to tombstone a slot after reading its value out
+  (`hir_to_mir.py:3360-3364`); using it here keeps the
+  construct-vs-tombstone story symmetric.  Codegen unwraps the
+  type, so the LLVM emission is `T`-shaped zero bytes — exactly
+  what `maybe_write` and `maybe_assume_init_read` expect to
+  read/write.  No new MIR opcode, no codegen changes, no ledger
+  changes.
+
+  **Ownership ledger.**  `MaybeUninit<T>` is an empty-bodied
+  struct (`pub struct MaybeUninit<T> { }` in
+  `stdlib/std/mem/mem.drift:31`), so the drop classifier
+  resolves `needs_drop(MaybeUninit<T>) = false` and
+  `classify(state, needs_drop=False) → MUST_NOT_DROP`
+  (`ownership_ledger.py:132-147`).  Cleanup_authoring emits no
+  scope-exit destructor for `MaybeUninit<T>`-typed locals,
+  regardless of what bytes have been written into the slot.
+  This is the correct boundary: the user's unsafe contract owns
+  the "is the slot occupied?" question end-to-end; the compiler
+  does not speculatively drop on `MaybeUninit<T>`, and does not
+  attempt path-sensitive initialization tracking.
+
+  **Diagnostics.**  None added.  All five `mem.maybe_*`
+  intrinsics are declared `pub unsafe fn …` in
+  `stdlib/std/mem/mem.drift`, so the standing
+  `unsafe call requires --allow-unsafe` rule
+  (`lang/driftc/checker/unsafe_gate.py`,
+  `lang/driftc/type_checker.py:5198`) gates the pattern with no
+  new compiler-side error code.
+
+  **Coverage** (regression-first):
+  - `lang/tests/stage2/test_consume_intrinsic_ownership.py::
+    test_lowering_mem_maybe_write_emits_moveout_for_non_copy_local`
+    — unskipped (was a `pytest.skip` placeholder gated on this
+    landing); pins the consume-via-intrinsic invariant for
+    `mem.maybe_write` end-to-end.
+  - `lang/tests/stage2/test_maybe_uninit_local_lowering.py` (new)
+    — pins the `MaybeUninit<Int>` slot-as-`alloca i64` shape, the
+    two-`add i64 0, 0` zero-materializer count (constructor +
+    read tombstone), and the no-scope-drop contract for
+    `MaybeUninit<Box>` (1 destroy in `drift_main`, from the
+    explicit `core.drop_value(b2)`).
+  - `lang/tests/driver/test_maybe_uninit_local_unsafe_gate.py`
+    (new) — pins compile-success under `--allow-unsafe` and
+    compile-failure with the canonical diagnostic without it.
+  - `lang/tests/memcheck/test_maybe_uninit_local_uaf.py` (new) —
+    valgrind carriers for `String` (refcount-bearing built-in;
+    exercises `string_arc` late-rewrite against the tombstone)
+    and `Arc<Payload>` (user-level refcount with structural
+    drop; exercises the +1 strong-stake transfer through the
+    slot).  Both clean.
+
+  **Out of scope for v1** (recorded for follow-up):
+  - Path-sensitive `MaybeUninit` initialization tracking (read-
+    before-write detection, leak-on-drop hint when a
+    non-trivially-Drop content escapes the slot).  Both require
+    lifting `LiveState.MAYBE_UNINIT` semantics to be type-aware;
+    deferred behind a separate proposal.
+  - `UninitValue` MIR op (LLVM `undef`/`poison` instead of zero-
+    fill).  Would shave a few zero-init bytes per
+    `mem.maybe_uninit` call but adds opcode surface; defer until
+    profile data shows it matters.
+
 - **`mem.replace<type T>` UAF fix for non-Copy refcount types —
   release 0.31.15 (ABI unchanged, still 10).**  Closes a
   use-after-free LANGUAGE_BUG surfaced during the Array audit
