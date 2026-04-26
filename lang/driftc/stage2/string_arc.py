@@ -1545,9 +1545,20 @@ def insert_string_arc(
 				# Arc<T> and other refcounted types whose
 				# clone/destroy are MIR-first (visible to the ledger
 				# at build time) flow through this consultation
-				# correctly via `destructible_locals`.  See
-				# `work/site3-strings-arrays/architecture-note-late-rewrite-authority.md`
-				# for the architectural rule.
+				# correctly via `destructible_locals`.
+				#
+				# Architectural rule (Share Slice 1 / 0.31.14 close-out;
+				# see `docs/history.md` 2026-04-26): ledger authority
+				# is valid only for ownership effects visible in the
+				# MIR snapshot used to build the ledger.  Any late
+				# pass that creates/releases refcount stakes remains
+				# its own authority unless we rebuild/extend the
+				# ledger after that pass or move those effects
+				# earlier.  `string_arc` is the canonical late-rewrite
+				# authority for refcounted-builtin return-source
+				# cleanup; future shared-owner types whose `Share`
+				# impl synthesises late refcount mutations must
+				# follow the same containment pattern.
 				for _local in destructible_locals:
 					if _local in skip_cleanup_locals:
 						continue
