@@ -1,5 +1,102 @@
 # Drift development history
 
+## 2026-04-26
+- **Share Slice 1 — release 0.31.14 (ABI unchanged, still 10).**
+  Closes `feature/site3-strings-arrays-tier1`.  Lands the first
+  slice of the **Share** language capability:
+  `std.core.shareable.Share` trait, `Arc<T>` impl, and
+  `captures(share x)` closure-capture syntax.  String/Array
+  return-source ledger migration (the branch's original goal)
+  closed as **WONTFIX** for ledger consultation — see below.
+
+  - **`std.core.shareable.Share` trait** (`stdlib/std/core/shareable.drift`):
+    `pub trait Share { fn share(self: &Self) nothrow -> Self; }`.
+    Distinct from `Copy`: `share x` produces a SECOND OWNER of the
+    same underlying resource (aliasing intentional, programmer
+    responsible for synchronization).  `Copy` types stay on `copy x`.
+    `String` is intentionally Copy, NOT Share.
+
+  - **`implement<T> shareable.Share for Arc<T>`** in
+    `stdlib/std/concurrent/concurrent.drift` — delegates to
+    `self.clone()` (the existing `_arc_clone_impl` ARC_CLONE
+    intrinsic).  `Arc.clone()` remains available; `share` is the
+    preferred spelling for callback shared-ownership capture.
+
+  - **`captures(share x)` closure-capture syntax.**  At AST→HIR
+    time, `_visit_expr_Lambda` synthesizes
+    `HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(x)])`
+    as `HExplicitCapture.share_value`.  HIR→MIR's SHARE branch
+    lowers `cap.share_value` INLINE at the lambda's
+    env-construction site.  Three load-bearing properties:
+
+    1. **Evaluation order.**  `Share::share(&x)` runs at the
+       lambda expression's position in the enclosing call —
+       AFTER preceding args, BEFORE following ones.  Not
+       pre-hoisted into the surrounding block.  Pinned by
+       `lang/tests/codegen/e2e/closures_share_capture_eval_order/`
+       which observes a user-defined Share impl's call order
+       relative to a side-effecting preceding arg.
+    2. **Trait-discipline.**  Resolution routes through the
+       fully-qualified `std.core.shareable.Share` trait via
+       `HQualifiedMember`, NOT through ordinary method-name
+       lookup.  An inherent `.share()` method on a non-Share
+       type cannot satisfy `captures(share x)`.  Pinned by
+       `test_share_capture_inherent_share_method_does_not_satisfy_trait`.
+    3. **Ownership.**  Original local stays LIVE through
+       `Share::share(&x)` (borrow, not consume).  The call
+       returns a new +1 owner that's stored directly into the
+       env field.  No double-drop, no leak.  Pinned by
+       `lang/tests/stage2/test_share_capture_ownership.py` and
+       valgrind-clean across both immediate-lambda and
+       callback-boxed positive e2es.
+
+  - **Type-table query**: `is_share(tid)` /
+    `set_share_query(...)` mirror `is_destructible` / pretrait
+    prover hook installed at `_build_linked_world` time so the
+    checker's focused `E-CAPTURE-SHARE-NOT-SHARE` diagnostic
+    fires before generic call-resolver errors.  Distinguishes
+    Copy-not-Share (suggest `copy x`) from non-Share-non-Copy
+    (suggest `move x` or implement Share).
+
+  - **Stdlib reorg**: `Copy` trait moved from `std.core` into
+    its own submodule `std.core.copy`, re-exported by `std.core`.
+    `core.Copy` user-facing path preserved.
+
+- **Site-3 String return-source ledger migration — closed
+  WONTFIX.**  After Patch 3 (broaden the ledger consultation
+  loop to include strings/arrays at function-exit) reopened
+  pre-existing memcheck regressions, an architectural review
+  established that `string_arc.py` is the canonical authority
+  for refcounted-builtin return-source cleanup decisions, NOT a
+  legacy artefact awaiting ledger migration.
+
+  The rule: **ledger authority is valid only for ownership
+  effects visible in the MIR snapshot used to build the ledger.
+  Any late pass that creates/releases refcount stakes remains
+  its own authority unless we rebuild/extend the ledger after
+  that pass or move those effects earlier.**
+
+  `string_arc`'s late-rewrite pass synthesises
+  `StringRetain` / `StringRelease` AFTER ledger build, so a
+  generic `verdict_at` consultation at function-exit
+  systematically over-reports MUST_NOT_DROP for return-source
+  String/Array locals.  The site-local alias-walk in
+  `string_arc.py:1486-1491` is now documented as the canonical
+  cleanup-skip authority for those cases.  Site 3 destructibles
+  (sub-step 1), destructor-self (sub-step 2), and variant
+  zero-tag widening (sub-step 3) remain on the ledger; only
+  strings/arrays return-source is parallel-authoritative by
+  design.  Patch-1 carriers in
+  `lang/tests/memcheck/test_site3_return_source_alias_walk.py`
+  remain as a permanent gate.
+
+  Future `implement Share for X` requiring late-rewrite refcount
+  synthesis must EITHER (a) make the rewrite MIR-first (so the
+  lattice sees it), OR (b) own its own cleanup decisions at the
+  late-rewrite layer.  `Arc<T>::share` is safe: its body calls
+  `_arc_clone_impl` which is a regular MIR `Call` — no late
+  rewrite, no trap.
+
 ## 2026-04-25
 - **Ownership-authority finale — releases 0.31.10 → 0.31.13 (ABI
   unchanged, still 10).**  Closes the `feature/ownership-authority-finale`

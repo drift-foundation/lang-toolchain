@@ -1148,6 +1148,83 @@ Any type that implements `Printable` must also implement `Debug` and `Display`.
 
 ---
 
+### 5.10.1. The `Share` trait (`std.core.shareable.Share`)
+
+Drift distinguishes **value-like duplication** (`Copy`) from
+**shared-owner duplication** (`Share`). They are deliberately separate
+capabilities:
+
+```drift
+// in stdlib/std/core/shareable.drift:
+pub trait Share {
+    fn share(self: &Self) nothrow -> Self;
+}
+```
+
+- **`Copy`** types may be passed by value without consuming.
+  Duplication produces a **value-like duplicate**: representation
+  aliasing (e.g., `String`'s shared ARC backing) is not observable
+  as **mutation aliasing** — at the language semantic layer the
+  duplicate behaves as an independent value. Default impls cover
+  scalars, references, `Optional<T>` over Copy, and `String`
+  (whose refcounted backing is a hidden optimization).
+- **`Share`** types produce **another OWNER** of the same underlying
+  resource. Aliasing is part of the meaning: subsequent mutations
+  through any owner are observable through the other. `share` is
+  intentionally a **warning-bearing** operation: choosing it is
+  choosing to accept aliasing.
+
+A type implements one, the other, both (rare and meaningful), or
+neither. Drift never auto-derives `Share`; it is always an explicit
+trait impl.
+
+#### Synchronization is the programmer's responsibility
+
+`Share` says nothing about thread-safety of mutations performed
+through aliased owners. If the underlying resource is mutated across
+threads, tasks, or callbacks, synchronization (e.g., `Mutex`,
+atomics) is the caller's contract. The `Share` impl's only
+guarantee is that the additional owner is well-formed (refcount
+bumped atomically for refcounted types like `Arc<T>`; the per-type
+contract is decided by the implementor).
+
+#### `Share` is not `Clone`
+
+Drift does not have a `Clone` trait. The single-trait "Clone" idiom
+in some other ecosystems conflates value-like duplication with
+shared-owner duplication, leading to recurring user surprise around
+whether `clone()` produces an independent copy or another handle to
+shared state. Drift keeps the two capabilities orthogonal to
+preserve the warning value of `share` at code-review time.
+
+#### `Share` method must be `nothrow`
+
+Aliasing-duplication does not introduce error paths. Implementors
+that need fallible setup should expose a separate factory function,
+not abuse `share`.
+
+#### Canonical adopters
+
+- **`Arc<T>` (`std.concurrent`)** is `Share`. The implementation
+  delegates to `Arc.clone()` (the existing `_arc_clone_impl`
+  intrinsic), atomically incrementing the strong count and returning
+  a new `Arc<T>` pointing to the same `ArcBox<T>`. `Arc.clone()`
+  remains available as a method; `share` is the language-level
+  spelling preferred for capture syntax (see §22.2.4).
+- **`String` is intentionally NOT `Share`.** Even though its
+  representation uses shared backing under the hood, the user-facing
+  semantic is value-like duplication. Forcing `String` into `Share`
+  would defeat the warning value of the `share` keyword. Use
+  `copy s` for `String`.
+- **`Array<T>` is NOT `Share`,** and a shared-backing variant of
+  `Array<T>` is **not planned**. Drift's `Array<T>` is owned-vector-
+  shaped (move on assignment, deep-copy via explicit clone); making
+  array assignment alias the backing store would change a load-
+  bearing semantic and is out of scope for the language. To share
+  collection state across owners, wrap the collection in an `Arc`
+  (e.g., `Arc<Mutex<Array<T>>>` for cross-thread mutation) and
+  share the `Arc`.
+
 ### 5.11. RAII and the `Destructible` trait
 
 Destruction is expressed as a trait:
@@ -4155,6 +4232,7 @@ Capture items:
 - `&mut x`
 - `copy x`
 - `move x`
+- `share x` — see §22.2.4.
 
 Rules:
 
@@ -4168,7 +4246,7 @@ Captured name types:
 
 - `x` or `&x` binds `x: &T`
 - `&mut x` binds `x: &mut T`
-- `copy x` or `move x` binds `x: T`
+- `copy x`, `move x`, or `share x` binds `x: T`
 
 There is no implicit auto-deref rewrite of captured names. If `x` is captured as
 `&T`, any body operation that requires mutation through `x` is an error; capture
@@ -4212,7 +4290,94 @@ Current limitations:
 - The Fn-bounded SCOPED inference applies only to `Fn`/`FnMut`/`FnOnce` trait
   bounds; non-Fn trait bounds (e.g., marker traits) do not trigger the relaxation.
 
-Closures with only `copy`/`move` captures may escape.
+Closures with only `copy`/`move`/`share` captures may escape.
+
+#### 22.2.4. `share x` capture (`std.core.shareable.Share`)
+
+`share x` produces a **second owner** of `x`'s underlying resource at
+closure-creation time and move-captures that owner into the
+environment. The original `x` binding remains usable in the enclosing
+scope.
+
+**Type requirement.** `T: Share` (see §5.10.1). The type must
+implement `std.core.shareable.Share`. If `T` is `Copy` (and not also
+`Share`), the diagnostic suggests `captures(copy x)`. If `T` is
+neither, the diagnostic suggests `captures(move x)` or implementing
+`Share` for `T`.
+
+**Trait resolution is by trait, not by method name.** The compiler
+resolves `share x` through the explicit `std.core.shareable.Share`
+trait (semantically equivalent to a fully-qualified
+`Share::share(&x)` call). An inherent `.share()` method on a non-
+`Share` type **does NOT satisfy** `captures(share x)`. This is
+intentional: code-review of `share x` carries the contract of the
+`Share` trait, not whatever a user-defined `.share()` method
+happens to do.
+
+**The trait does not need to be in scope** at the capture site.
+`use trait shareable.Share;` is not required for `captures(share x)`
+syntax (the compiler resolves the trait by fully-qualified
+identity). It IS required if user code wants to call `Share::share(...)`
+or `x.share()` explicitly via trait dispatch.
+
+**Evaluation timing and order.** The `Share::share(&x)` call is
+evaluated **inline at the lambda's expression position** in the
+enclosing call (not pre-hoisted into the surrounding block). In a
+shape like
+
+```drift
+foo(side_effect(),
+    | | captures(share app) => { ... })
+```
+
+the runtime order is:
+
+1. `side_effect()` runs first (arg 0).
+2. `Share::share(&app)` runs next, at the lambda's env-construction
+   site (arg 1).
+3. `foo`'s body runs after both args have evaluated.
+
+Earlier captures in the same `captures(...)` list also evaluate
+left-to-right; `share x` follows the same rule as `copy` / `move`.
+
+**Ownership semantics.** `share x` does **NOT** consume `x`. The
+synthesized `Share::share(&x)` borrows `&x` (immutable), then
+returns a fresh +1 owner of the same underlying resource. The fresh
+owner is move-captured into the closure environment. The outer `x`
+binding remains LIVE and is dropped at its own scope exit. The
+captured copy is dropped with the closure environment.
+
+In refcount terms (e.g., `Arc<T>`), exactly one bump and exactly
+two drops happen: bump from `Share::share(&x)`, drop of the env
+field at closure destruction, drop of the original `x` at outer
+scope exit. No double-drop, no leak.
+
+**Aliasing warning.** `share x` is a warning-bearing operation. The
+two owners point at the same underlying resource. Mutations through
+either owner are observable through the other. If the closure
+escapes to a thread/task/callback that mutates through the captured
+owner, **synchronization is the programmer's responsibility** (see
+§5.10.1).
+
+**Examples:**
+
+```drift
+val app: conc.Arc<App> = conc.arc(App(...));
+
+// Immediate call.
+val direct = (| | captures(share app) => {
+    return app.get().answer();
+})();
+
+// Callback-boxed (captures-share is the preferred spelling for
+// callback shared-ownership capture).
+val cb: core.Callback0<Int> = core.callback0(
+    | | captures(share app) => app.get().answer()
+);
+
+// Outer `app` is still LIVE here.
+val outer = app.get().answer();
+```
 
 ### 22.3. Lowering model
 

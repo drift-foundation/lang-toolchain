@@ -2,12 +2,41 @@
 
 Common idioms for programs that won’t ghost you in prod.
 
+## copy vs. move vs. share — when each spelling is right
+
+Drift's three by-value capture spellings are not synonyms. The
+distinction is load-bearing for code review:
+
+| Spelling | Type requirement | Semantic | When to use |
+|---|---|---|---|
+| `captures(copy x)` | `T: Copy` | Value-like duplicate. The new owner is independent; aliasing is invisible. | `Int`, `String`, `DiagnosticValue`, `Optional<T>` over Copy. The user is asking for a value, not a handle. |
+| `captures(move x)` | `T: !Copy` | Ownership transfer. The original `x` binding is consumed and unusable after the lambda is constructed. | One-owner-only types (`MutexGuard<T>`, `VirtualThread<T>`); also works for `Arc<T>` if you do not need `x` to survive the closure. |
+| `captures(share x)` | `T: Share` | A second OWNER of the same underlying resource. The original `x` remains usable; both owners hold the resource alive. **Aliasing is real**: mutations through either owner are observable through the other. | `Arc<T>` (and any user type implementing `std.core.shareable.Share`) when you need both the closure and the outer scope to keep using `x`. |
+
+Two rules to internalize:
+
+1. `share x` is **warning-bearing**. The keyword carries a contract:
+   you have just accepted aliasing. If the closure escapes to a
+   thread, task, or callback that mutates through the captured
+   owner, **you** are responsible for synchronization (e.g., wrap
+   the resource in `Mutex<T>` or use atomics).
+2. **`String` is `Copy`, not `Share`.** Even though `String` is
+   internally refcounted, the user-facing semantic is value-like
+   duplication — write `captures(copy s)`, not `captures(share s)`.
+   `share` is reserved for types whose aliasing is part of the
+   programming model (e.g., `Arc<T>`).
+
+`Arc.clone()` remains available as a method and produces the same
+runtime result as `Share::share(&arc)`. Prefer `captures(share x)`
+in capture lists: it keeps the aliasing contract visible at the
+capture site and avoids needing a named clone-temp.
+
 ## Shared state + callbacks (Arc + Mutex)
 
 When you need multiple handlers that all mutate the same receiver object, put
-the receiver in an `Arc` and wrap it in a `Mutex`. Each handler captures a
-clone, takes the lock, and mutates through a guard. This avoids ownership
-conflicts and keeps the emitter dumb.
+the receiver in an `Arc` and wrap it in a `Mutex`. Each handler **shares** the
+Arc into its environment, takes the lock, and mutates through a guard. This
+avoids ownership conflicts and keeps the emitter dumb.
 
 ```drift
 import std.core as core;
@@ -23,23 +52,20 @@ implement StateMachine {
 
 fn register_handlers(bus: &mut EventBus) -> Void {
     var sm: conc.Arc<conc.Mutex<StateMachine>> = conc.arc(conc.mutex(StateMachine(state = 0)));
-    var sm_x: conc.Arc<conc.Mutex<StateMachine>> = sm.clone();
-    var cb_x: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(move sm_x) => {
-        var guard = conc.lock(sm_x);
+    var cb_x: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(share sm) => {
+        var guard = conc.lock(sm);
         guard.get_mut().on_signal_x(e);
         return;
     });
     bus.on_x(move cb_x);
-    var sm_y: conc.Arc<conc.Mutex<StateMachine>> = sm.clone();
-    var cb_y: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(move sm_y) => {
-        var guard = conc.lock(sm_y);
+    var cb_y: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(share sm) => {
+        var guard = conc.lock(sm);
         guard.get_mut().on_signal_y(e);
         return;
     });
     bus.on_y(move cb_y);
-    var sm_z: conc.Arc<conc.Mutex<StateMachine>> = sm.clone();
-    var cb_z: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(move sm_z) => {
-        var guard = conc.lock(sm_z);
+    var cb_z: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(share sm) => {
+        var guard = conc.lock(sm);
         guard.get_mut().on_signal_z(e);
         return;
     });
@@ -49,7 +75,39 @@ fn register_handlers(bus: &mut EventBus) -> Void {
 
 Notes
 
-- This works with owned callbacks and does not rely on borrowed captures.
+- `captures(share sm)` evaluates `Share::share(&sm)` once at each
+  callback's construction site, then move-captures the produced
+  owner into the closure environment. The outer `sm` binding
+  remains usable across all three callback constructions — no
+  named `sm.clone()` temporaries needed.
+- Aliasing is real: all three callbacks (and `sm` in
+  `register_handlers`) hold owners of the same underlying
+  state-machine. The `Mutex<StateMachine>` is what makes
+  cross-thread mutation safe; `share` alone says nothing about
+  thread-safety.
+- This works with owned callbacks and does not rely on borrowed
+  captures.
+
+### The pre-`share` idiom (older spelling, less preferred in capture lists)
+
+Before `captures(share x)` existed, the same shape was written with
+a named clone temp per capture:
+
+```drift
+var sm_x: conc.Arc<conc.Mutex<StateMachine>> = sm.clone();
+var cb_x: core.Callback1<&Event, Void> = core.callback1(|e: &Event| captures(move sm_x) => {
+    /* ... */
+});
+```
+
+This is equivalent at runtime and **`Arc.clone()` remains
+available** as a method — it is **not deprecated** and is the
+right spelling when you need a named clone outside a capture list
+(e.g., to hand to a non-capture callee, or to build an
+intermediate handle that survives independently of any closure).
+In **capture lists** specifically, `captures(share sm)` is
+preferred: it is shorter, makes the aliasing contract visible at
+the capture site, and avoids per-callback temporaries.
 
 ## Shared service, multiple interface faces (`Arc.as_interface`)
 
