@@ -3591,18 +3591,26 @@ class _FuncBuilder:
 			# **Tombstone safety contract is at the CALLER layer.**
 			# Unlike `TombstoneValue` (which produces drop-safe bytes
 			# for a slot that WILL still get DropValue'd), `MoveFromRef`
-			# transfers ownership AWAY from the slot — the caller must
-			# guarantee the tombstoned slot is never subsequently
+			# transfers ownership AWAY from the slot — each caller
+			# must guarantee the tombstoned slot is never subsequently
 			# DropValue'd.  For user-Destructible struct fields
 			# (`destructor_fns[inner_ty]` set), the tombstone bytes
-			# are NOT drop-safe under that destructor — but the
-			# caller's contract precludes the destructor from running
-			# on them.  Today the only caller is
-			# `match_cleanup_authoring`, which only emits MoveFromRef
-			# in the partial-move branch where the whole-variant
-			# DropValue is suppressed.  No codegen-level guard;
-			# adding one would refuse the legitimate Token-field
-			# carrier (`match_subset_bind_leaves_unbound_fields_dropped`).
+			# are NOT drop-safe under that destructor; each caller's
+			# own surrounding chain must preclude the destructor from
+			# running on them.  Two callers exist today:
+			#   1. `match_cleanup_authoring` — emits MoveFromRef in
+			#      the partial-move branch where the whole-variant
+			#      DropValue is suppressed (per-field cleanup IS the
+			#      drop authority).
+			#   2. `IntrinsicKind.REPLACE` lowering in
+			#      `hir_to_mir.py` — emits an immediate `StoreRef`
+			#      after MoveFromRef, overwriting the tombstone with
+			#      the replacement value before any drop can reach it,
+			#      then `MoveOut` drains the temp local as the
+			#      expression's SSA result.
+			# No codegen-level guard; adding one would refuse the
+			# legitimate Token-field carrier
+			# (`match_subset_bind_leaves_unbound_fields_dropped`).
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: MoveFromRef requires a TypeTable")
 			ptr = self._map_value(instr.ptr)

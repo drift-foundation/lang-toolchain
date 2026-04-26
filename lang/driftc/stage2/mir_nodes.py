@@ -601,8 +601,10 @@ class MoveFromRef(MInstr):
 	(and any other ownership-aware pass) must recognise `MoveFromRef`
 	as moving the source's ownership stake into `local` — NO
 	`StringRetain` / equivalent retain is inserted on this store.  The
-	caller pairs `MoveFromRef` with a later `MoveOut(_, local) +
-	DropValue(...)` to release the transferred stake exactly once.
+	caller is responsible for releasing the transferred stake exactly
+	once via a tail chain that drains `local` (typically
+	`MoveOut(dest, local) + DropValue(dest)`, or `MoveOut(dest, local)`
+	to surface the value as the expression's SSA result).
 
 	**Why**: the per-field match-arm cleanup chain previously emitted
 	`LoadRef + StoreLocal(drop_tmp, ...)`, which `string_arc.StoreLocal`
@@ -612,6 +614,28 @@ class MoveFromRef(MInstr):
 	un-released → leak.  `MoveFromRef` lets authoring express "this
 	StoreLocal is a transfer" without a name-based or annotation-based
 	hack on `StoreLocal`.
+
+	**Callers (the slot-overwrite contract is per-call-site).**
+	Every `MoveFromRef` caller is responsible for guaranteeing the
+	tombstoned slot is never subsequently dropped (see Codegen
+	contract below).  Two caller shapes exist today:
+	  1. `match_cleanup_authoring`'s partial-move branch — pairs
+	     `MoveFromRef(local=drop_tmp, ptr, T)` with arm-end
+	     `MoveOut(dest, drop_tmp) + DropValue(dest)`.  The variant
+	     scrutinee's whole-value `DropValue` is suppressed (per-field
+	     cleanup IS the drop authority); the slot is only ever
+	     re-read via the suppressed drop path, which is a no-op.
+	  2. `IntrinsicKind.REPLACE` lowering in
+	     `hir_to_mir.py::IntrinsicKind.REPLACE` — pairs
+	     `MoveFromRef(local=__replace_old_*, ptr, T)` with an
+	     immediate `StoreRef(ptr, new_val, T)` (overwriting the
+	     tombstone with the replacement value before any drop can
+	     reach it), then `MoveOut(old_val, __replace_old_*, T)` to
+	     return the prior owner as the expression's SSA result.
+	     Caller-side ordering: the replacement value is fully
+	     lowered/consumed BEFORE the `MoveFromRef` mutates `*ptr`,
+	     so an aborted replacement-expression lowering cannot leave
+	     the slot tombstoned.
 
 	**Codegen contract**:
 	- Routes through `_emit_tombstone_value(inner_ty)` to produce the
@@ -624,12 +648,12 @@ class MoveFromRef(MInstr):
 	  AWAY from the slot — the safety contract is that callers
 	  guarantee the tombstoned slot is never subsequently dropped.
 	  For user-Destructible struct fields the tombstone bytes are NOT
-	  drop-safe under that destructor, but the caller's contract
-	  precludes the destructor from running on them.  Today the sole
-	  caller is `match_cleanup_authoring`'s partial-move branch, which
-	  suppresses the whole-variant `DropValue` (the per-field cleanup
-	  IS the drop authority).  Adding a codegen-level guard would
-	  refuse the legitimate Token-field carrier
+	  drop-safe under that destructor, but each caller's own contract
+	  must preclude the destructor from running on them: the
+	  match-cleanup caller suppresses the whole-variant `DropValue`;
+	  the REPLACE caller's `StoreRef` immediately overwrites the
+	  tombstone before any drop can reach it.  Adding a codegen-level
+	  guard would refuse the legitimate Token-field carrier
 	  (`lang/tests/codegen/e2e/match_subset_bind_leaves_unbound_fields_dropped`).
 
 	**Ledger contract** (`_apply_field_state` in `ownership_ledger.py`):

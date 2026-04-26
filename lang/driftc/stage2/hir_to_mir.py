@@ -3290,11 +3290,40 @@ class HIRToMIR:
 			new_expr = expr.args[1]
 			if not (hasattr(H, "HPlaceExpr") and isinstance(place_expr, getattr(H, "HPlaceExpr"))):
 				raise AssertionError("replace(place, v): non-canonical place reached MIR lowering (normalize/typechecker bug)")
+			# Order is load-bearing: address first, then lower/consume
+			# the replacement value, THEN MoveFromRef the old owner out
+			# (atomically tombstoning the slot), THEN StoreRef the new
+			# value, THEN MoveOut the temp local as the SSA result.
+			#
+			# Consuming `new_expr` BEFORE MoveFromRef matters because
+			# MoveFromRef is mutating (it tombstones *ptr).  If a
+			# throwing or otherwise abandoned replacement expression
+			# could leave the place tombstoned, callers would see a
+			# slot in an inconsistent state.  Lowering `new_expr` first
+			# guarantees the replacement is fully realised before any
+			# mutation reaches the destination.
+			#
+			# MoveFromRef vs LoadRef: LoadRef is a raw pointer copy
+			# with no ownership transfer.  string_arc's late-rewrite
+			# at `string_arc.py:StoreRef` synthesises a
+			# drop-before-overwrite (LoadRef + StringRelease) on every
+			# StoreRef to a String place — for non-Copy refcount types
+			# that release would free the original allocation while the
+			# caller still holds the LoadRef'd pointer (use-after-free;
+			# carrier `lang/tests/memcheck/test_mem_replace_string_uaf.py`).
+			# MoveFromRef tombstones the slot atomically, so the
+			# subsequent StoreRef rewrite's release fires on null bytes
+			# (`drift_string_release(null)` is a runtime no-op; see
+			# `string_arc.py:1097-1099`).
 			ptr, inner_ty = self._lower_addr_of_place(place_expr, is_mut=True)
-			old_val = self.b.new_temp()
-			self.b.emit(M.LoadRef(dest=old_val, ptr=ptr, inner_ty=inner_ty))
 			new_val = self._lower_owning_consume(new_expr, expected=inner_ty)
+			tmp_local = f"__replace_old_{self.b.new_temp()}"
+			self.b.ensure_local(tmp_local)
+			self._local_types[tmp_local] = inner_ty
+			self.b.emit(M.MoveFromRef(local=tmp_local, ptr=ptr, inner_ty=inner_ty))
 			self.b.emit(M.StoreRef(ptr=ptr, value=new_val, inner_ty=inner_ty))
+			old_val = self.b.new_temp()
+			self.b.emit(M.MoveOut(dest=old_val, local=tmp_local, ty=inner_ty))
 			self._local_types[old_val] = inner_ty
 			return old_val
 		if intrinsic is IntrinsicKind.MAYBE_UNINIT:

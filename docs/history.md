@@ -1,6 +1,87 @@
 # Drift development history
 
 ## 2026-04-26
+- **`mem.replace<type T>` UAF fix for non-Copy refcount types —
+  release 0.31.15 (ABI unchanged, still 10).**  Closes a
+  use-after-free LANGUAGE_BUG surfaced during the Array audit
+  follow-up while attempting to write a `&mut a[i]` disjoint-index
+  drop/refcount carrier.
+
+  **Bug.**  `mem.replace(place, v)` lowering at
+  `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.REPLACE` emitted
+  `LoadRef(old_val, ptr) + …consume(new_val)… + StoreRef(ptr, new_val)`
+  and returned `old_val`.  `LoadRef` is a raw pointer copy with no
+  ownership transfer; `string_arc`'s late-rewrite at
+  `string_arc.py:1106-1119` intercepts every `StoreRef` to a
+  String place and synthesises `LoadRef + StringRelease` of the
+  prior slot value (drop-before-overwrite).  For non-Copy refcount
+  types this released the original allocation while `old_val`
+  still held the now-dangling pointer — caller-side use was UAF.
+
+  **Smallest repro** (5 lines):
+  ```drift
+  var s: String = fmt.format_int(700);
+  val new_s: String = fmt.format_int(800);
+  val old_s = mem.replace<type String>(&mut s, move new_s);
+  val total = old_s.byte_length() + s.byte_length();
+  return total;
+  ```
+  Pre-fix: 10 valgrind errors / 6 contexts.  Post-fix: clean.
+
+  **Fix.**  Rewrote the REPLACE lowering as:
+  ```
+  ptr      = address(place)
+  new_val  = lower/consume(new_expr)   # MUST precede slot mutation
+  MoveFromRef(local=__replace_old_*, ptr=ptr, inner_ty=T)
+  StoreRef(ptr=ptr, value=new_val, inner_ty=T)
+  old_val  = MoveOut(local=__replace_old_*, ty=T)
+  return old_val
+  ```
+  Ordering is load-bearing: `MoveFromRef` is mutating (it
+  tombstones `*ptr`), so the replacement value must be fully
+  realised before any mutation reaches the destination.  An
+  aborted replacement-expression lowering would otherwise leave
+  the place tombstoned.  `MoveFromRef` is the existing
+  match-cleanup-authoring ownership-transfer primitive (see
+  `mir_nodes.py::MoveFromRef`); `string_arc`'s `StoreRef`
+  rewrite still runs but now reads the tombstoned (zero) bytes
+  and does `drift_string_release(null)` — a documented runtime
+  no-op (`string_arc.py:1097-1099`).
+
+  **Boundary contract comments updated** alongside the fix.
+  `MoveFromRef` previously had a single caller
+  (`match_cleanup_authoring`'s partial-move branch, which pairs
+  it with `MoveOut + DropValue`).  The REPLACE intrinsic adds a
+  second caller with a different tail chain (`MoveFromRef +
+  StoreRef + MoveOut returning the old value`), and a different
+  way of honouring the slot-overwrite contract (the immediate
+  `StoreRef` overwrites the tombstone before any drop can reach
+  it).  Updated both the MIR docstring at
+  `lang/driftc/stage2/mir_nodes.py::MoveFromRef` and the LLVM
+  codegen comment at `lang/codegen/llvm/llvm_codegen.py` to
+  document both caller shapes and the per-call-site
+  no-subsequent-drop guarantee.
+
+  **Coverage** (4 carriers in
+  `lang/tests/memcheck/test_mem_replace_string_uaf.py`):
+  - **String var** (the original repro)
+  - **`Array<String>` slot** (`mem.replace<type String>(&mut arr[i], …)`)
+  - **`Arc<T>` var** (refcount stake transfer)
+  - **Struct-with-String-field var** (structural drop, no user
+    destructor) — per `MoveFromRef`'s docstring, tombstone bytes
+    are not drop-safe under user destructors; this carrier covers
+    the structural-drop path.  All four pass post-fix.
+
+  **Coverage gap-closure carriers** (Array audit follow-up; same
+  release, all green): 8 new memcheck tests across
+  `test_array_nested_scope_drop.py` (Array<Array<T>>),
+  `test_array_return_source.py` (return move arr;), and
+  `test_array_in_optional_result.py` (Optional / Result wrappers).
+  These pin recursive Array drop-helper correctness, the natural
+  Array return-source pattern (independent of the residual
+  `array_locals` branch in `string_arc.py:1489`), and variant
+  drop-arm dispatch on Array payloads.
+
 - **Share Slice 1 — release 0.31.14 (ABI unchanged, still 10).**
   Closes `feature/site3-strings-arrays-tier1`.  Lands the first
   slice of the **Share** language capability:
