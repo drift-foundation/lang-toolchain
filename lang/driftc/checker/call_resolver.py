@@ -66,6 +66,40 @@ def _best_effort_span(*items: object | None) -> Span:
 	return Span()
 
 
+def _implicit_callback_wrap(
+	ctx: object,
+	*,
+	arg: object,
+	callback_arity: int,
+	is_throw: bool,
+	expected_type_hint: TypeId | None = None,
+) -> object:
+	# Sole constructor for implicit `core.callback{N}` / `core.callback_throw{N}`
+	# wrap nodes. The borrow checker recognises wraps by module_id="std.core"
+	# + name in {callback0..callback_throw2}, not by _is_implicit_wrap; routing
+	# every implicit-wrap site through this helper preserves that invariant.
+	# Construct-only: caller types the result with type_expr and splices it
+	# back into expr.args / arg_types.
+	if callback_arity == 0:
+		cb_name = "callback_throw0" if is_throw else "callback0"
+	elif callback_arity == 1:
+		cb_name = "callback_throw1" if is_throw else "callback1"
+	else:
+		cb_name = "callback_throw2" if is_throw else "callback2"
+	cb_var = H.HVar(name=cb_name, module_id="std.core")
+	cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
+	cb_call._is_implicit_wrap = True
+	alloc_callsite = getattr(ctx, "alloc_callsite_id", None)
+	if alloc_callsite is not None:
+		cb_call.callsite_id = alloc_callsite()
+	alloc_node = getattr(ctx, "alloc_node_id", None)
+	if alloc_node is not None:
+		alloc_node(cb_call)
+	if expected_type_hint is not None:
+		cb_call.expected_type_hint = expected_type_hint
+	return cb_call
+
+
 def _sig_from_decl_template(ctx: object, decl: CallableDecl, current_module_name: str) -> FnSignature | None:
 	tpl = getattr(decl, "template_signature", None)
 	if tpl is None:
@@ -3146,22 +3180,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				else:
 					arity = len(arg_def.param_types) - 1
 				is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
-				if arity == 0:
-					cb_name = "callback_throw0" if is_throw else "callback0"
-				elif arity == 1:
-					cb_name = "callback_throw1" if is_throw else "callback1"
-				else:
-					cb_name = "callback_throw2" if is_throw else "callback2"
-				cb_var = H.HVar(name=cb_name, module_id="std.core")
-				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
-				cb_call._is_implicit_wrap = True
-				_alloc_callsite_id = getattr(ctx, "alloc_callsite_id", None)
-				if _alloc_callsite_id is not None:
-					cb_call.callsite_id = _alloc_callsite_id()
-				_alloc_node_id = getattr(ctx, "alloc_node_id", None)
-				if _alloc_node_id is not None:
-					_alloc_node_id(cb_call)
-				cb_call.expected_type_hint = param_ty
+				cb_call = _implicit_callback_wrap(
+					ctx,
+					arg=arg,
+					callback_arity=arity,
+					is_throw=is_throw,
+					expected_type_hint=param_ty,
+				)
 				expr.args[idx] = cb_call
 				if idx < len(arg_types):
 					cb_ty = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
@@ -3188,22 +3213,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if isinstance(arg, H.HLambda):
 						arity = len(arg.params)
 						is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
-						if arity == 0:
-							cb_name = "callback_throw0" if is_throw else "callback0"
-						elif arity == 1:
-							cb_name = "callback_throw1" if is_throw else "callback1"
-						else:
-							cb_name = "callback_throw2" if is_throw else "callback2"
-						cb_var = H.HVar(name=cb_name, module_id="std.core")
-						cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
-						cb_call._is_implicit_wrap = True
-						_alloc_callsite_id = getattr(ctx, "alloc_callsite_id", None)
-						if _alloc_callsite_id is not None:
-							cb_call.callsite_id = _alloc_callsite_id()
-						_alloc_node_id = getattr(ctx, "alloc_node_id", None)
-						if _alloc_node_id is not None:
-							_alloc_node_id(cb_call)
-						cb_call.expected_type_hint = param_ty
+						cb_call = _implicit_callback_wrap(
+							ctx,
+							arg=arg,
+							callback_arity=arity,
+							is_throw=is_throw,
+							expected_type_hint=param_ty,
+						)
 						expr.args[idx] = cb_call
 						cb_ty = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
 						alt_arg_types[idx] = param_ty if cb_ty == ctx.unknown_ty else cb_ty
@@ -5608,19 +5624,12 @@ def resolve_call_expr(
 					arity = len(arg.params)
 				else:
 					arity = len(arg_def.param_types) - 1
-				if arity == 0:
-					cb_name = "callback0"
-				elif arity == 1:
-					cb_name = "callback1"
-				else:
-					cb_name = "callback2"
-				cb_var = H.HVar(name=cb_name, module_id="std.core")
-				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
-				cb_call._is_implicit_wrap = True
-				if ctx.alloc_callsite_id is not None:
-					cb_call.callsite_id = ctx.alloc_callsite_id()
-				if ctx.alloc_node_id is not None:
-					ctx.alloc_node_id(cb_call)
+				cb_call = _implicit_callback_wrap(
+					ctx,
+					arg=arg,
+					callback_arity=arity,
+					is_throw=False,
+				)
 				expr.args[idx] = cb_call
 				arg_types[idx] = type_expr(cb_call, used_as_value=False)
 				changed = True
@@ -5864,19 +5873,12 @@ def resolve_call_expr(
 						# Includes borrowed captures — the borrow checker validates
 						# escape levels; MIR callback env handles ref fields.
 						if _has_any_caps_tp5:
-							if arity == 0:
-								_cb_name = "callback_throw0" if can_throw else "callback0"
-							elif arity == 1:
-								_cb_name = "callback_throw1" if can_throw else "callback1"
-							else:
-								_cb_name = "callback_throw2" if can_throw else "callback2"
-							_cb_var = H.HVar(name=_cb_name, module_id="std.core")
-							_cb_call = H.HCall(fn=_cb_var, args=[arg], kwargs=[])
-							_cb_call._is_implicit_wrap = True
-							if ctx.alloc_callsite_id is not None:
-								_cb_call.callsite_id = ctx.alloc_callsite_id()
-							if ctx.alloc_node_id is not None:
-								ctx.alloc_node_id(_cb_call)
+							_cb_call = _implicit_callback_wrap(
+								ctx,
+								arg=arg,
+								callback_arity=arity,
+								is_throw=can_throw,
+							)
 							expr.args[param_idx] = _cb_call
 							arg_types[param_idx] = type_expr(_cb_call, used_as_value=False)
 							_b2_wrapped_params[param_idx] = arg_types[param_idx]
@@ -5905,19 +5907,12 @@ def resolve_call_expr(
 				else:
 					arity = len(arg_def.param_types) - 1
 				is_throw = schema.name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
-				if arity == 0:
-					cb_name = "callback_throw0" if is_throw else "callback0"
-				elif arity == 1:
-					cb_name = "callback_throw1" if is_throw else "callback1"
-				else:
-					cb_name = "callback_throw2" if is_throw else "callback2"
-				cb_var = H.HVar(name=cb_name, module_id="std.core")
-				cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
-				cb_call._is_implicit_wrap = True
-				if ctx.alloc_callsite_id is not None:
-					cb_call.callsite_id = ctx.alloc_callsite_id()
-				if ctx.alloc_node_id is not None:
-					ctx.alloc_node_id(cb_call)
+				cb_call = _implicit_callback_wrap(
+					ctx,
+					arg=arg,
+					callback_arity=arity,
+					is_throw=is_throw,
+				)
 				expr.args[idx] = cb_call
 				arg_types[idx] = type_expr(cb_call, expected_type=param_ty, used_as_value=False)
 		# B2: reconcile sig_inst param types with auto-wrapped callback args.
