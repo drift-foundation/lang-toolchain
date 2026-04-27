@@ -66,6 +66,177 @@ def _best_effort_span(*items: object | None) -> Span:
 	return Span()
 
 
+_CALLBACK_IFACE_NAMES = frozenset({"Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"})
+_CALLBACK_INTRINSIC_NAMES = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
+
+
+@dataclass(frozen=True)
+class CallbackWrapResult:
+	"""Outcome of `_try_wrap_arg_for_callback_field`.
+
+	Three distinct shapes so callers don't conflate them:
+
+	- WRAPPED  — `cb_call` and `cb_ty` are populated; caller splices.
+	- REJECTED — a diagnostic has already been appended (or the input is
+	  already poisoned); caller MUST NOT fall through to a raw
+	  `iface_coercion` and SHOULD propagate the error path.
+	- SKIP     — helper not applicable here (target isn't a concrete
+	  Callback* iface, arg is already an explicit wrap, arity mismatch,
+	  unresolved type vars). Caller continues with its existing
+	  iface_coercion / type-mismatch / no-overload logic.
+	"""
+	status: str  # "wrapped" | "rejected" | "skip"
+	cb_call: object | None = None
+	cb_ty: TypeId | None = None
+
+	@property
+	def is_wrapped(self) -> bool:
+		return self.status == "wrapped"
+
+	@property
+	def is_rejected(self) -> bool:
+		return self.status == "rejected"
+
+
+_WRAP_REJECTED = CallbackWrapResult(status="rejected")
+_WRAP_SKIP = CallbackWrapResult(status="skip")
+
+
+def _callback_param_kind(type_table: object, param_ty: TypeId) -> tuple[int, bool] | None:
+	"""If `param_ty` is a concrete `Callback{N}` / `CallbackThrow{N}` interface
+	with no unresolved type vars, return `(arity, is_throw)`. Else `None`.
+
+	Used by Patch B sites to decide whether a bare-lambda / fn-typed arg
+	should be implicitly wrapped via `_implicit_callback_wrap`.
+	"""
+	if type_table.has_typevar(param_ty):
+		return None
+	param_def = type_table.get(param_ty)
+	if param_def.kind is not TypeKind.INTERFACE:
+		return None
+	schema_name = None
+	try:
+		schema = type_table.get_interface_schema(param_ty)
+		schema_name = schema.name if schema is not None else None
+	except Exception:
+		schema_name = None
+	if schema_name is None:
+		schema_name = param_def.name
+	if schema_name not in _CALLBACK_IFACE_NAMES:
+		return None
+	if schema_name == "Callback0":
+		return (0, False)
+	if schema_name == "Callback1":
+		return (1, False)
+	if schema_name == "Callback2":
+		return (2, False)
+	if schema_name == "CallbackThrow0":
+		return (0, True)
+	if schema_name == "CallbackThrow1":
+		return (1, True)
+	if schema_name == "CallbackThrow2":
+		return (2, True)
+	return None
+
+
+def _is_explicit_callback_wrap_call(arg: object) -> bool:
+	"""True if `arg` is already a `core.callback{N}` / `core.callback_throw{N}`
+	HCall (explicit wrap by the user, or a previously-inserted implicit
+	wrap). Used for duplicate-wrap avoidance at Patch B sites."""
+	if not isinstance(arg, H.HCall):
+		return False
+	fn = getattr(arg, "fn", None)
+	if not isinstance(fn, H.HVar):
+		return False
+	return fn.module_id == "std.core" and fn.name in _CALLBACK_INTRINSIC_NAMES
+
+
+def _try_wrap_arg_for_callback_field(
+	ctx: object,
+	*,
+	arg: object,
+	have_ty: TypeId | None,
+	want_ty: TypeId,
+) -> CallbackWrapResult:
+	"""Schema-driven implicit wrap for ctor field / let / return slots.
+
+	Returns one of `CallbackWrapResult` shapes — see that class. Callers
+	MUST distinguish wrapped / rejected / skip; in particular, after a
+	`rejected` outcome, the caller must NOT record a raw iface_coercion
+	or otherwise treat the slot as if it had been silently coerced.
+	"""
+	if _is_explicit_callback_wrap_call(arg):
+		return _WRAP_SKIP
+	kind = _callback_param_kind(ctx.type_table, want_ty)
+	if kind is None:
+		return _WRAP_SKIP
+	arity, is_throw = kind
+	# Determine the arg's arity. HLambda: count params. fn-typed value: param count.
+	arg_arity: int | None = None
+	if isinstance(arg, H.HLambda):
+		arg_arity = len(arg.params)
+	elif have_ty is not None and have_ty != ctx.unknown_ty:
+		have_def = ctx.type_table.get(have_ty)
+		if have_def.kind is TypeKind.FUNCTION and have_def.param_types:
+			arg_arity = len(have_def.param_types) - 1  # last is return
+	if arg_arity is None or arg_arity != arity:
+		return _WRAP_SKIP
+	# Need type_expr to construct + type the wrap. Skip if missing.
+	type_expr = getattr(ctx, "type_expr", None)
+	if type_expr is None:
+		return _WRAP_SKIP
+	# Borrowed-capture escape rejection. Mirrors the explicit-form guard
+	# at `resolve_call_expr` for `core.callback{N}(lambda)` (this file,
+	# ~line 4806): same predicate (`explicit_captures` of kind ref or
+	# ref_mut), same diagnostic text, same severity. Single canonical
+	# rejection — without it, the implicit wrap would silently bypass
+	# borrow enforcement at sites whose surrounding call has no escape
+	# annotations (notably struct-ctor field args).
+	#
+	# Note for let-init / return-position: the same diagnostic is emitted
+	# earlier inside `type_expr(HLambda, expected_type=Callback*)` via
+	# `_expected_function_shape` → captureless-coercion branch
+	# (`type_checker.py:6253`). When that has already poisoned the arg
+	# (`have_ty == ctx.unknown_ty`), we MUST NOT duplicate the diagnostic;
+	# we still return REJECTED so the caller does not record a raw
+	# iface_coercion over the poisoned expression.
+	if isinstance(arg, H.HLambda):
+		_ec = getattr(arg, "explicit_captures", None) or []
+		if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in _ec):
+			diagnostics = getattr(ctx, "diagnostics", None)
+			tc_diag = getattr(ctx, "tc_diag", None)
+			if diagnostics is not None and tc_diag is not None:
+				_msg = "closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported"
+				_span = getattr(arg, "loc", Span())
+				# Dedup: if the upstream `type_expr(HLambda, expected_type=Callback*)`
+				# path (`type_checker.py:6253`) already emitted the same diagnostic
+				# at the same span, do not duplicate. Otherwise (notably the
+				# struct-ctor field path, where pre-typing has no Callback*
+				# expected_type), this is the canonical emission site.
+				_already = any(
+					getattr(d, "message", None) == _msg and getattr(d, "span", None) == _span
+					for d in diagnostics
+				)
+				if not _already:
+					diagnostics.append(tc_diag(
+						message=_msg,
+						severity="error",
+						span=_span,
+					))
+			return _WRAP_REJECTED
+	cb_call = _implicit_callback_wrap(
+		ctx,
+		arg=arg,
+		callback_arity=arity,
+		is_throw=is_throw,
+		expected_type_hint=want_ty,
+	)
+	cb_ty = type_expr(cb_call, expected_type=want_ty, used_as_value=False)
+	if cb_ty == ctx.unknown_ty:
+		cb_ty = want_ty
+	return CallbackWrapResult(status="wrapped", cb_call=cb_call, cb_ty=cb_ty)
+
+
 def _implicit_callback_wrap(
 	ctx: object,
 	*,
@@ -233,6 +404,21 @@ class StructCtorResolveResult:
 	ctor_args: list[object]
 
 
+class _StructCtorErrored:
+	"""Sentinel: `resolve_struct_ctor` recognised the call as a struct-ctor
+	dispatch and emitted a diagnostic; caller MUST short-circuit instead
+	of falling through to free-fn / kwargs resolution. Distinct from
+	`None`, which other historical return paths use to mean
+	`could-not-resolve`. Currently only the Patch B REJECTED branch (the
+	canonical borrowed-capture rejection) returns this; pre-existing
+	None-returning error paths are left alone for now to keep the
+	behavior change scope tight."""
+	pass
+
+
+_STRUCT_CTOR_ERRORED: object = _StructCtorErrored()
+
+
 @dataclass(frozen=True)
 class MethodCallResult:
 	return_type: TypeId
@@ -378,6 +564,11 @@ class ResolverContext:
 	unsafe_context: bool
 	allow_unsafe_without_block: bool
 	allow_rawbuffer: bool
+	# Patch B: needed by ctor resolvers to splice typed `_implicit_callback_wrap`
+	# nodes into field args before iface_coercion fallback fires.
+	type_expr: Callable[..., TypeId] | None = None
+	alloc_callsite_id: Callable[[], int] | None = None
+	alloc_node_id: Callable[[object], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -483,7 +674,7 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 	base.update(overrides)
 	return ResolverContext(**base)
 
@@ -1263,6 +1454,23 @@ def resolve_struct_ctor(
 			if ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
+				# Patch B Site 2: bare lambda / fn-ref to a concrete `Callback*` /
+				# `CallbackThrow*` field is implicitly wrapped here, before the
+				# iface_coercion fallback fires (which would otherwise lower via
+				# `M.ConstructIfaceValue` over a value that does not implement the
+				# interface).
+				_wrap_res = _try_wrap_arg_for_callback_field(ctx, arg=arg_exprs[idx], have_ty=have, want_ty=want)
+				if _wrap_res.is_wrapped:
+					arg_exprs[idx] = _wrap_res.cb_call
+					ctor_args[idx] = _wrap_res.cb_call
+					arg_types[idx] = _wrap_res.cb_ty
+					continue
+				if _wrap_res.is_rejected:
+					# Diagnostic already in stream (or arg already poisoned);
+					# return the ERRORED sentinel so the outer caller short-
+					# circuits instead of falling through to free-fn / kwargs
+					# resolution and emitting unrelated cascade noise.
+					return _STRUCT_CTOR_ERRORED
 				want_def = ctx.type_table.get(want)
 				have_def = ctx.type_table.get(have)
 				if want_def.kind is TypeKind.INTERFACE:
@@ -1303,6 +1511,14 @@ def resolve_struct_ctor(
 			if ctx.type_table.has_typevar(have) or ctx.type_table.has_typevar(want):
 				continue
 			if not _same_type(have, want):
+				# Patch B Site 2 (named): same as positional branch above.
+				_wrap_res = _try_wrap_arg_for_callback_field(ctx, arg=ctor_args[idx], have_ty=have, want_ty=want)
+				if _wrap_res.is_wrapped:
+					ctor_args[idx] = _wrap_res.cb_call
+					arg_types[idx] = _wrap_res.cb_ty
+					continue
+				if _wrap_res.is_rejected:
+					return _STRUCT_CTOR_ERRORED
 				want_def = ctx.type_table.get(want)
 				have_def = ctx.type_table.get(have)
 				if want_def.kind is TypeKind.INTERFACE:
@@ -5174,6 +5390,14 @@ def resolve_call_expr(
 			if kw_pairs and not arg_exprs:
 				arg_types = list(kw_value_types)
 			ctor_res = resolve_struct_ctor(_make_resolver_ctx(ctx, diagnostics=diagnostics, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, tc_diag=_tc_diag, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=_pretty_type_name, format_ctor_signature_list=_format_ctor_signature_list, instantiate_sig=_instantiate_sig, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw), struct_id=struct_id, struct_name=expr.fn.name, arg_exprs=list(arg_exprs), arg_types=arg_types, kw_pairs=kw_pairs, expected_type=expected_type, type_arg_ids=call_type_arg_ids, allow_infer=True, call_type_args_span=call_type_args_span, span=getattr(expr, "loc", Span()))
+			if ctor_res is _STRUCT_CTOR_ERRORED:
+				# struct_ctor recognised the call AND emitted the canonical
+				# diagnostic (Patch B borrowed-capture rejection). Short-
+				# circuit instead of falling through to free-fn / kwargs
+				# resolution, which would tack on unrelated cascade noise
+				# (e.g. "keyword arguments are only supported for ctors",
+				# "no matching overload for function 'Holder'").
+				return record_expr(expr, ctx.unknown_ty)
 			if ctor_res is not None:
 				expr.args = list(ctor_res.ctor_args)
 				expr.kwargs = []

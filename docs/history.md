@@ -1,6 +1,144 @@
 # Drift development history
 
 ## 2026-04-26
+- **Implicit `Callback*` / `CallbackThrow*` wrap at struct-ctor /
+  typed-let / return — release 0.31.17 (ABI unchanged, still 10).**
+  Closes a checker UX gap: when a parameter / field / let initializer
+  / return slot is statically typed as one of `Callback{0,1,2}` /
+  `CallbackThrow{0,1,2}`, a bare capturing lambda is now implicitly
+  wrapped the same way the existing free-fn / inherent-method dispatch
+  already wrapped it.  Borrow / escape contract is preserved exactly
+  — borrowed-capture lambdas are rejected at the new sites with the
+  same diagnostic the explicit `core.callback{N}(lambda)` form emits,
+  and the borrow checker continues to recognise wraps by
+  `module_id="std.core"` + name in
+  `{callback0..callback_throw2}` (not by `_is_implicit_wrap`).
+
+  **Two-step landing.**
+
+  *Patch A — refactor only.*  The five inline copies of the wrap
+  construction (inherent-method primary + alt, free-fn fallback +
+  post-resolution, `Fn*`-trait-bound auto-wrap) in
+  `lang/driftc/checker/call_resolver.py` collapsed to a single
+  helper `_implicit_callback_wrap(ctx, *, arg, callback_arity,
+  is_throw, expected_type_hint=None)` near line 89.  No behavior
+  change; verified by 1473-test broad regression matrix
+  (`checker + driver + borrow_checker + stage2`) plus memcheck.
+
+  *Patch B — gap sites.*  A higher-level dispatcher
+  `_try_wrap_arg_for_callback_field(ctx, *, arg, have_ty, want_ty)
+  -> CallbackWrapResult` applies the helper at three confirmed gap
+  sites, each *before* the existing `record_iface_coercion`
+  fallback fires:
+
+  - `resolve_struct_ctor` positional + named field-init branches
+    (`call_resolver.py:1228-1245`, `1267-1284`).  Pre-fix, a bare
+    lambda for a `Callback*`-typed field landed in
+    `record_iface_coercion`, which lowers as
+    `M.ConstructIfaceValue` over the lambda value
+    (`stage2/hir_to_mir.py:2029-2056`) — broken because lambdas
+    don't carry the iface vtable, and codegen aborted with
+    `NotImplementedError: interface impl not found for interface
+    value`.  Now wrapped through the same thunk the explicit form
+    builds.
+  - `type_checker.py` typed-let initializer (~`:9151`).  Same
+    breakage pre-fix; `val cb: core.Callback1<...> = |x| => …` now
+    wraps cleanly.
+  - `type_checker.py` return-position (~`:9561`).  Same breakage
+    pre-fix; `fn make_cb() -> core.Callback1<…> { return |x| =>
+    …; }` now wraps cleanly.
+
+  **Result type.**  `CallbackWrapResult` is `WRAPPED | REJECTED |
+  SKIP`.  Callers must distinguish — REJECTED halts the
+  `iface_coercion` fallback (struct ctor returns the new
+  `_STRUCT_CTOR_ERRORED` sentinel; type_checker `pass`); SKIP
+  falls through to the existing iface_coercion / type-mismatch /
+  no-overload logic.  This shape closes a borrow-bypass blocker
+  caught in review: the previous ambiguous `None` return left the
+  struct-ctor caller falling through to a raw `iface_coercion`
+  over a lambda the helper had just rejected for borrowed
+  captures.
+
+  **Cascade-noise fix.**  Returning `None` from `resolve_struct_ctor`
+  on REJECTED still cascaded into free-fn / kwargs resolution,
+  tacking on unrelated diagnostics (`keyword arguments are only
+  supported for constructors`, `no matching overload for function
+  'Holder'`).  Introduced `_STRUCT_CTOR_ERRORED`, a typed
+  sentinel returned only on the canonical Patch B borrowed-
+  capture rejection.  The outer `resolve_call_expr` recognises
+  the sentinel via `is _STRUCT_CTOR_ERRORED` and short-circuits
+  with `record_expr(expr, unknown_ty)` instead of falling through.
+  Existing pre-Patch-B `None`-returning error paths in
+  `resolve_struct_ctor` are left alone for now to keep the
+  behavior change scope tight; widening the sentinel to those
+  paths is a follow-up.  Tests pin the cascade-absent
+  contract for both named and positional ctor shapes.
+
+  **Borrowed-capture rejection.**  Mirrors the explicit-form guard
+  in `resolve_call_expr` for `core.callback{N}(lambda_with_borrow)`
+  (`call_resolver.py:~4806`): same predicate
+  (`explicit_captures` of kind `ref` / `ref_mut`), same diagnostic
+  text, same severity, same span source.  Single canonical
+  rejection.  Diagnostic emission deduplicates against the existing
+  diagnostic list (matching message text + `Span` field equality)
+  so the let-init / return-position cases — where the upstream
+  `type_expr(HLambda, expected_type=Callback*)` already emits via
+  the captureless-coercion branch (`type_checker.py:6253`) — don't
+  double-emit.
+
+  **`ResolverContext` extension.**  Three `None`-defaulted optional
+  fields added to the slimmer base context — `type_expr`,
+  `alloc_callsite_id`, `alloc_node_id` — so ctor resolvers can
+  construct + type a wrap node in place.  Forwarded by
+  `_make_resolver_ctx` from `CallResolverContext`.  No existing
+  caller paths change semantics.
+
+  **Out-of-scope (stop-and-report).**  Two sites in the original
+  scope dropped after probing:
+
+  - **Variant ctor field init** unreachable: variant-arm field
+    type resolution (`call_resolver.py:_lower_generic_expr`,
+    ~`:985-1019`) does not consult interface bases when resolving
+    a generic-type-expr in variant-decl context, so
+    `variant Holder { With(cb: core.Callback1<Int, Int>), … }`
+    errors at decl with `unknown generic type 'Callback1'`
+    *before* any ctor call exists.  Non-generic interfaces work as
+    variant arm fields; generic-iface-as-variant-field is the
+    pre-existing limitation.  Tracked as a separate issue.
+  - **UFCS / qualified trait dispatch** blocked by a separate
+    trait-impl signature normalization bug:
+    `core.Callback1<Int, Int>` declared in both the trait method
+    and the impl method produces
+    `expects core.Callback1<Int, Int> but got std.core.Callback1`
+    (impl side drops type args during normalization).  Cannot
+    write a clean probe today; instance-method dispatch
+    (`recv.run(|x| => …)`) already works through the inherent-
+    method path (Patch A site D).
+
+  **Test surface.**  `lang/tests/driver/test_implicit_callback_wrap.py`
+  — 14 tests: positives at sites 2/5/6 (positional + named field,
+  typed let, return position; with capture-copy and
+  `CallbackThrow1` variants); dup-wrap-avoidance at every site;
+  borrowed-capture negatives at sites 2/5/6.  Site 1
+  (`Type::method(|x| => …)`) tests are explicitly labeled as
+  pinning the pre-existing silent INTERFACE-coercion path in
+  `_args_match_params` (~`type_checker.py:2144`) — they do NOT
+  exercise the new wrap helper.  A pre-existing leniency on that
+  silent path (arity-1 lambda fed to `Callback2` compiles clean)
+  is documented as a separate issue.
+
+  **Verification gates.**
+
+  | Suite | Result |
+  |-------|--------|
+  | `test_implicit_callback_wrap.py` | 14 passed |
+  | `checker + driver + borrow_checker + stage2` | 1487 passed, 0 failed |
+  | `lang/tests/memcheck` | 36 passed, 1 skipped |
+
+  No new memcheck leaks.  Single-producer invariant verified:
+  `H.HVar(name=cb_name, module_id="std.core")` appears exactly once
+  in `call_resolver.py` (the helper).
+
 - **`MaybeUninit<T>` as a first-class local — release 0.31.16 (ABI
   unchanged, still 10).**  Unblocks the standalone-local pattern
 

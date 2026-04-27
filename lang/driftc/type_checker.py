@@ -133,7 +133,7 @@ from lang.driftc.traits.linked_world import (
 	link_trait_worlds,
 )
 from lang.driftc.method_resolver import MethodResolution, ResolutionError
-from lang.driftc.checker.call_resolver import MethodCallResult, make_call_ctx, make_method_ctx, make_resolver_ctx, resolve_call_expr, resolve_method_call, resolve_qualified_member_call, resolve_qualified_member_ufcs
+from lang.driftc.checker.call_resolver import MethodCallResult, _try_wrap_arg_for_callback_field, make_call_ctx, make_method_ctx, make_resolver_ctx, resolve_call_expr, resolve_method_call, resolve_qualified_member_call, resolve_qualified_member_ufcs
 from lang.driftc.parser import ast as parser_ast
 from lang.driftc.traits.solver import (
 	Env as TraitEnv,
@@ -5157,6 +5157,36 @@ class TypeChecker:
 		def record_iface_coercion(expr: H.HExpr, target_iface: TypeId) -> None:
 			iface_coercions[expr.node_id] = target_iface
 
+		# Patch B Sites 5 & 6: when an iface_coercion target is a concrete
+		# `Callback*` / `CallbackThrow*`, route through the canonical
+		# `_implicit_callback_wrap` helper instead of recording a raw
+		# coercion (which would lower as `M.ConstructIfaceValue` over a
+		# lambda value, breaking codegen since lambdas don't implement
+		# the iface). Returns a `CallbackWrapResult` — see the dataclass
+		# in `call_resolver.py` for the WRAPPED / REJECTED / SKIP
+		# contract. Caller MUST distinguish all three; in particular,
+		# REJECTED forbids the raw `record_iface_coercion` fallback.
+		# Built lazily so the adapter binds `type_expr` etc. after they
+		# are defined later in this function.
+		def _try_callback_wrap_for_iface_slot(arg: object, have_ty: TypeId | None, want_ty: TypeId):
+			class _Ctx:
+				pass
+			c = _Ctx()
+			c.type_table = self.type_table
+			c.unknown_ty = self._unknown
+			c.type_expr = type_expr
+			c.alloc_callsite_id = _alloc_callsite_id
+			c.alloc_node_id = _assign_node_id
+			# Borrowed-capture rejection at this site is owned by
+			# `type_expr(HLambda, expected_type=Callback*)` — see
+			# `_expected_function_shape` and the captureless-coercion
+			# branch below. The helper still returns REJECTED when it
+			# detects an already-poisoned arg so the caller does not
+			# record a raw iface_coercion over it.
+			c.diagnostics = diagnostics
+			c.tc_diag = _tc_diag
+			return _try_wrap_arg_for_callback_field(c, arg=arg, have_ty=have_ty, want_ty=want_ty)
+
 		def iface_assignable(src: TypeId, dst: TypeId) -> bool:
 			if src == dst:
 				return True
@@ -9148,7 +9178,19 @@ class TypeChecker:
 										)
 									)
 							else:
-								record_iface_coercion(stmt.value, declared_ty)
+								# Patch B Site 5: prefer implicit Callback* wrap over a raw
+								# iface_coercion when the target is a concrete callback iface.
+								_cb_res = _try_callback_wrap_for_iface_slot(stmt.value, inferred_ty, declared_ty)
+								if _cb_res.is_wrapped:
+									stmt.value = _cb_res.cb_call
+									inferred_ty = _cb_res.cb_ty
+								elif _cb_res.is_rejected:
+									# Diagnostic already in stream (or arg already
+									# poisoned upstream). Do NOT record a raw
+									# iface_coercion over the failed slot.
+									pass
+								else:
+									record_iface_coercion(stmt.value, declared_ty)
 						else:
 							is_int_lit = isinstance(stmt.value, H.HLiteralInt)
 							is_uint_lit = hasattr(H, "HLiteralUint") and isinstance(stmt.value, getattr(H, "HLiteralUint"))
@@ -9529,7 +9571,18 @@ class TypeChecker:
 										)
 									)
 							else:
-								record_iface_coercion(stmt.value, return_type)
+								# Patch B Site 6: prefer implicit Callback* wrap over a raw
+								# iface_coercion when the declared return type is a concrete
+								# callback iface and the returned expression is a bare lambda
+								# / fn-typed value.
+								_cb_res = _try_callback_wrap_for_iface_slot(stmt.value, inferred, return_type)
+								if _cb_res.is_wrapped:
+									stmt.value = _cb_res.cb_call
+									inferred = _cb_res.cb_ty
+								elif _cb_res.is_rejected:
+									pass  # see Patch B Site 5 comment
+								else:
+									record_iface_coercion(stmt.value, return_type)
 			elif isinstance(stmt, H.HIf):
 				if isinstance(stmt.cond, H.HTraitExpr):
 					parser_expr = _trait_expr_to_parser(stmt.cond)
