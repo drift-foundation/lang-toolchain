@@ -618,7 +618,7 @@ class MoveFromRef(MInstr):
 	**Callers (the slot-overwrite contract is per-call-site).**
 	Every `MoveFromRef` caller is responsible for guaranteeing the
 	tombstoned slot is never subsequently dropped (see Codegen
-	contract below).  Two caller shapes exist today:
+	contract below).  Three caller shapes exist today:
 	  1. `match_cleanup_authoring`'s partial-move branch — pairs
 	     `MoveFromRef(local=drop_tmp, ptr, T)` with arm-end
 	     `MoveOut(dest, drop_tmp) + DropValue(dest)`.  The variant
@@ -636,6 +636,24 @@ class MoveFromRef(MInstr):
 	     lowered/consumed BEFORE the `MoveFromRef` mutates `*ptr`,
 	     so an aborted replacement-expression lowering cannot leave
 	     the slot tombstoned.
+	  3. `_emit_assign_store_ref` in `hir_to_mir.py` — the
+	     replace-store lowering used for every `&mut`-place
+	     assignment whose `inner_ty` needs runtime drop (String,
+	     Arc, Destructible struct, ...).  Pairs
+	     `MoveFromRef(local=__assign_old_*, ptr, T)` with
+	     `MoveOut(old_val, __assign_old_*, T) + DropValue(old_val) +
+	     StoreRef(ptr, new_val, T)`.  Like REPLACE, the new value is
+	     fully lowered/consumed by `_visit_stmt_HAssign` BEFORE the
+	     helper runs, so self-referential RHS like
+	     `ctx.s = ctx.s + "A"` is materialised in `new_val` before
+	     the slot is tombstoned.  The legacy
+	     `LoadRef + ZeroValue + StoreRef(zero) + DropValue` shape
+	     this replaced double-released the old value via
+	     `string_arc.py:1108-1121`'s StoreRef rewrite — see the
+	     LANGUAGE_BUG carrier at
+	     `lang/tests/memcheck/test_mut_struct_string_field_self_concat.py`
+	     and the contract pin at
+	     `lang/tests/stage2/test_assign_store_ref_drop_bearing_lowering.py`.
 
 	**Codegen contract**:
 	- Routes through `_emit_tombstone_value(inner_ty)` to produce the

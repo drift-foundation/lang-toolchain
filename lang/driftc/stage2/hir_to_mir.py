@@ -6893,15 +6893,43 @@ class HIRToMIR:
 		return
 
 	def _emit_assign_store_ref(self, *, ptr: M.ValueId, value: M.ValueId, inner_ty: TypeId) -> None:
-		# Assignment semantics for lvalue stores are replace, not raw overwrite:
-		# drop the previous non-Copy occupant before storing the new value.
+		# Replace-store semantics for an owning slot: drop the previous
+		# non-Copy occupant exactly once before storing the new value.
+		#
+		# The canonical sequence — `MoveFromRef → MoveOut → DropValue
+		# → StoreRef` — uses the explicit ownership-transfer primitive
+		# `MoveFromRef` to atomically tombstone the slot AND capture
+		# the old value into a local in one operation, drains the
+		# local into an SSA value via `MoveOut`, drops it once, and
+		# stores the new value into the now-tombstoned slot.
+		#
+		# Why MoveFromRef and not the legacy `LoadRef + ZeroValue +
+		# StoreRef(zero) + DropValue` shape: `string_arc.py:1108-1121`
+		# rewrites every `StoreRef` to a String place as
+		# `LoadRef + StringRelease + StoreRef`.  In the legacy shape
+		# the zero-tombstone `StoreRef` therefore became a real
+		# release of the old slot value, and the explicit `DropValue`
+		# released the same allocation a second time via the SSA
+		# loaded BEFORE the tombstone — UAF + leak.  See
+		# `lang/tests/memcheck/test_mut_struct_string_field_self_concat.py`
+		# for the runtime carrier and
+		# `lang/tests/stage2/test_assign_store_ref_drop_bearing_lowering.py`
+		# for the post-string_arc MIR pin.
+		#
+		# Caller ordering: `_visit_stmt_HAssign` lowers the RHS into
+		# `value` BEFORE invoking this helper (see `_lower_owning_consume`
+		# at the call site), so any self-referential read like
+		# `ctx.s = ctx.s + "A"` is fully evaluated and materialized in
+		# `value` by the time the slot is tombstoned here.  Tombstoning
+		# at this point cannot break a still-pending RHS load.
 		if self._needs_runtime_drop(inner_ty):
+			tmp_local = f"__assign_old_{self.b.new_temp()}"
+			self.b.ensure_local(tmp_local)
+			self._local_types[tmp_local] = inner_ty
+			self.b.emit(M.MoveFromRef(local=tmp_local, ptr=ptr, inner_ty=inner_ty))
 			old_val = self.b.new_temp()
-			self.b.emit(M.LoadRef(dest=old_val, ptr=ptr, inner_ty=inner_ty))
 			self._local_types[old_val] = inner_ty
-			zero_val = self.b.new_temp()
-			self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
-			self.b.emit(M.StoreRef(ptr=ptr, value=zero_val, inner_ty=inner_ty))
+			self.b.emit(M.MoveOut(dest=old_val, local=tmp_local, ty=inner_ty))
 			self.b.emit(M.DropValue(value=old_val, ty=inner_ty))
 		self.b.emit(M.StoreRef(ptr=ptr, value=value, inner_ty=inner_ty))
 
