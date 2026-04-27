@@ -65,12 +65,20 @@ def insert_drop_flags(
 	*,
 	type_table: TypeTable,
 	drop_policy: Callable[[TypeId], "DropPolicy"],
-) -> M.MirFunc:
+) -> "tuple[M.MirFunc, bool]":
 	"""Rewrite `func` so every path-dependent destructible local has a
 	runtime drop-flag whose state governs scope-exit cleanup.
 
-	Returns the same `MirFunc` (mutated in-place).  Functions with no
-	path-dependent destructible locals are returned unchanged.
+	Returns `(func, mutated)` where `mutated` is `True` iff the pass
+	actually inserted any instructions (and therefore shifted block
+	instruction indices).  Callers that key cached MIR analyses by
+	`(block, instr_idx)` (notably the `_ownership_ledger`) MUST rebuild
+	those caches when `mutated` is `True` and may keep them when
+	`mutated` is `False`.
+
+	`func` is mutated in place when `mutated` is `True`.  Functions
+	with no path-dependent destructible locals are returned unchanged
+	with `mutated=False`.
 	"""
 	# Step 1: build the ledger; identify path-dependent destructible
 	# locals.  `func.params` and `func.locals` may overlap (params
@@ -143,7 +151,7 @@ def insert_drop_flags(
 			continue
 		flag_for[name] = _allocate_flag_name(name, all_locals + list(flag_for.values()))
 	if not flag_for:
-		return func
+		return func, False
 	# Step 2: declare flag locals on the function and seed their types.
 	bool_ty = type_table.ensure_bool()
 	for flag_name in flag_for.values():
@@ -245,7 +253,7 @@ def insert_drop_flags(
 	# `<L>_1`."  Explicit metadata removes the ambiguity.
 	existing: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()
 	setattr(func, "_drop_flag_managed_locals", existing | set(flag_for.keys()))
-	return func
+	return func, True
 
 
 def flag_local_name_for(local_name: str) -> str:

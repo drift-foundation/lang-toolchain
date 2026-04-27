@@ -56,12 +56,31 @@
 
   **Fix.**  Rebuild the ledger between `drop_flags` and
   `string_arc` in `driftc.compile_stubbed_funcs` (around
-  `lang/driftc/driftc.py:7068`).  The rebuild walks the same
-  pre-existing `_ol_build` worklist over the post-`drop_flags`
-  MIR; cost is amortised across the existing per-function
-  passes.  Comment at `string_arc.py:911-919` updated to record
-  the post-`drop_flags` build-timing invariant and reference the
-  pinned regression test.
+  `lang/driftc/driftc.py:7068`).  Comment at
+  `string_arc.py:911-919` updated to record the post-`drop_flags`
+  build-timing invariant and reference the pinned regression test.
+
+  **Narrowed rebuild — only mutated functions.**  `insert_drop_flags`
+  now returns `(func, mutated: bool)` and the driver only rebuilds
+  the ledger for functions where `mutated=True`.  Un-mutated
+  functions returned early at the no-flag-locals branch
+  (`drop_flags.py:145`); their pre-existing ledger is still
+  index-aligned, so the rebuild is unnecessary.  Empirically this
+  is the overwhelming common case — on a representative compile
+  (a `var t = move x` + drop-flag-receiving locals + uniform-move
+  shape plus full stdlib transitive closure), **933 of 935
+  functions (99.8 %) skip the rebuild**.  Timing impact on the
+  same compile:
+
+  | pass | unconditional rebuild | narrowed rebuild | Δ |
+  |------|-----------------------|------------------|---|
+  | `drop_flags` | 0.536 s | 0.537 s | + 0.001 s |
+  | `ledger_rebuild_post_drop_flags` | 0.338 s | 0.038 s | **− 0.300 s (−89 %)** |
+  | `string_arc` | 0.220 s | 0.213 s | unchanged |
+
+  Total compile-time saving on this slice: ~5 %.  Larger compiles
+  (drift-web, drift-mariadb-client) scale linearly because the
+  per-function overhead is dominated by un-mutated functions.
 
   **Regression test.**
   `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py::test_destructible_local_moved_on_both_arms_no_join_drop`
@@ -212,12 +231,13 @@
     method path (Patch A site D).
 
   **Test surface.**  `lang/tests/driver/test_implicit_callback_wrap.py`
-  — 14 tests: positives at sites 2/5/6 (positional + named field,
+  — 15 tests: positives at sites 2/5/6 (positional + named field,
   typed let, return position; with capture-copy and
   `CallbackThrow1` variants); dup-wrap-avoidance at every site;
-  borrowed-capture negatives at sites 2/5/6.  Site 1
-  (`Type::method(|x| => …)`) tests are explicitly labeled as
-  pinning the pre-existing silent INTERFACE-coercion path in
+  borrowed-capture negatives at sites 2/5/6 plus a parallel
+  positional-borrow guard for the struct-ctor cascade-noise fix.
+  Site 1 (`Type::method(|x| => …)`) tests are explicitly labeled
+  as pinning the pre-existing silent INTERFACE-coercion path in
   `_args_match_params` (~`type_checker.py:2144`) — they do NOT
   exercise the new wrap helper.  A pre-existing leniency on that
   silent path (arity-1 lambda fed to `Callback2` compiles clean)
@@ -227,8 +247,8 @@
 
   | Suite | Result |
   |-------|--------|
-  | `test_implicit_callback_wrap.py` | 14 passed |
-  | `checker + driver + borrow_checker + stage2` | 1487 passed, 0 failed |
+  | `test_implicit_callback_wrap.py` | 15 passed |
+  | `checker + driver + borrow_checker + stage2` | 1488 passed, 0 failed |
   | `lang/tests/memcheck` | 36 passed, 1 skipped |
 
   No new memcheck leaks.  Single-producer invariant verified:

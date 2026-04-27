@@ -7055,29 +7055,35 @@ def compile_stubbed_funcs(
 				)
 		# Phase 3C — runtime drop-flag insertion for path-dependent
 		# destructible locals.  Runs between HIR→MIR and string_arc.
+		_drop_flags_mutated_fns: list[FunctionId] = []
 		with _timed("drop_flags"):
 			from lang.driftc.stage2.drop_flags import insert_drop_flags as _insert_drop_flags
 			from lang.driftc.stage2.drop_policy_compute import compute_drop_policy as _compute_drop_policy
 			_drop_policy_callable = lambda ty: _compute_drop_policy(shared_type_table, ty)
 			for fn_id, func in mir_funcs_by_id.items():
-				mir_funcs_by_id[fn_id] = _insert_drop_flags(
+				_new_func, _mutated = _insert_drop_flags(
 					func,
 					type_table=shared_type_table,
 					drop_policy=_drop_policy_callable,
 				)
-		# Rebuild the ownership ledger AFTER drop_flags.  The ledger
-		# attached by `cleanup_authoring` is keyed by (block, idx)
-		# pairs from the pre-drop_flags MIR.  drop_flags inserts new
-		# instructions at block heads (drop-flag init `ConstBool` +
-		# `StoreLocal(__drop_flag_*)`) which shifts every subsequent
-		# index.  string_arc consults the ledger using POST-drop_flags
-		# indices via `_ledger.verdict_at((block, idx), local, ...)`,
-		# so without this rebuild it reads stale state.  In particular,
-		# the verdict at the first `StoreLocal(L, …)` for a freshly-
-		# declared destructible local would come from a different
-		# instruction's post-state and could return `MUST_DROP` over an
-		# UNINIT slot — string_arc then emits drop-before-overwrite
-		# reading uninit memory and SSA crashes.  Pinned by
+				mir_funcs_by_id[fn_id] = _new_func
+				if _mutated:
+					_drop_flags_mutated_fns.append(fn_id)
+		# Rebuild the ownership ledger AFTER drop_flags FOR THE
+		# FUNCTIONS IT MUTATED.  The ledger attached by
+		# `cleanup_authoring` is keyed by `(block, idx)` pairs from the
+		# pre-drop_flags MIR.  When drop_flags inserts drop-flag init
+		# instructions (`ConstBool(__df*, False)` +
+		# `StoreLocal(__drop_flag_*, __df*)`) at block heads, every
+		# subsequent index shifts.  string_arc then consults the
+		# ledger using POST-drop_flags indices via
+		# `_ledger.verdict_at((block, idx), local, ...)`, so without a
+		# rebuild it reads stale state.  In particular, the verdict at
+		# the first `StoreLocal(L, …)` for a freshly-declared
+		# destructible local can come from a different instruction's
+		# post-state and return `MUST_DROP` over an UNINIT slot —
+		# string_arc then emits drop-before-overwrite reading uninit
+		# memory and SSA crashes.  Pinned by
 		# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
 		# Originally introduced by 0.31.9 Phase 3B step-1
 		# (commit 94a9c44d "step 3 done"); the comment in
@@ -7085,9 +7091,20 @@ def compile_stubbed_funcs(
 		# decisions only depend on per-local state at StoreLocal points
 		# within the function body — none of those points are mutated
 		# by drop_flags" was wrong: drop_flags shifts the indices.
-		for fn_id, func in mir_funcs_by_id.items():
-			ledger = _ol_build(func, drop_policy=lambda _t: None)
-			setattr(func, "_ownership_ledger", ledger)
+		#
+		# Narrowing: `insert_drop_flags` returns `(func, mutated)`.
+		# Only mutated functions need the rebuild; un-mutated ones
+		# returned early at the no-flag-locals branch and their
+		# pre-existing ledger is still index-aligned.  This is the
+		# common case (most functions have no path-dependent
+		# destructible locals); the unconditional rebuild was 60-90 %
+		# overhead vs the changed-only rebuild on representative
+		# compiles.
+		with _timed("ledger_rebuild_post_drop_flags"):
+			for fn_id in _drop_flags_mutated_fns:
+				func = mir_funcs_by_id[fn_id]
+				ledger = _ol_build(func, drop_policy=lambda _t: None)
+				setattr(func, "_ownership_ledger", ledger)
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				mir_funcs_by_id[fn_id] = insert_string_arc(
