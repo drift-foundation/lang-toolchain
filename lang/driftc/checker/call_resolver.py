@@ -139,6 +139,51 @@ def _callback_param_kind(type_table: object, param_ty: TypeId) -> tuple[int, boo
 	return None
 
 
+def _callback_param_kind_permissive(type_table: object, param_ty: TypeId) -> tuple[int, bool] | None:
+	"""Like `_callback_param_kind`, but does NOT require `param_ty`'s
+	type-args to be concrete.  Returns `(arity, is_throw)` for any
+	`Callback{N}` / `CallbackThrow{N}` interface — including
+	typevar-bearing instances like `Callback0<T>` from a generic
+	signature `spawn_cb<T>(cb: Callback0<T>)`.
+
+	Used by the fallback wrap path (`_wrap_explicit_capture_callbacks`)
+	which must wrap regardless of whether the candidate's interface
+	type-args are resolved at the wrap site, preserving legacy
+	wrap-everything behavior for generic callback callees while still
+	dispatching `is_throw` from the parameter's interface kind (the
+	0.31.18 LANGUAGE_BUG fix authority).  Strict callers — e.g. the
+	pre-typing concretization extension that overrides the lambda's
+	expected param/return types from the interface's instantiated
+	type-args — must keep using `_callback_param_kind`.
+	"""
+	if type_table is None:
+		return None
+	param_def = type_table.get(param_ty)
+	if param_def.kind is not TypeKind.INTERFACE:
+		return None
+	schema_name = None
+	try:
+		schema = type_table.get_interface_schema(param_ty)
+		schema_name = schema.name if schema is not None else None
+	except Exception:
+		schema_name = None
+	if schema_name is None:
+		schema_name = param_def.name
+	if schema_name == "Callback0":
+		return (0, False)
+	if schema_name == "Callback1":
+		return (1, False)
+	if schema_name == "Callback2":
+		return (2, False)
+	if schema_name == "CallbackThrow0":
+		return (0, True)
+	if schema_name == "CallbackThrow1":
+		return (1, True)
+	if schema_name == "CallbackThrow2":
+		return (2, True)
+	return None
+
+
 def _is_explicit_callback_wrap_call(arg: object) -> bool:
 	"""True if `arg` is already a `core.callback{N}` / `core.callback_throw{N}`
 	HCall (explicit wrap by the user, or a previously-inserted implicit
@@ -5795,6 +5840,19 @@ def resolve_call_expr(
 					_inst = ctx.type_table.get_interface_instance(_expected_pty)
 					if _inst is not None and _inst.type_args and not any(ctx.type_table.has_typevar(ta) for ta in _inst.type_args):
 						arg.expected_type_hint = _expected_pty
+		# Candidate-driven concretization of bare HLambda args: for
+		# each HLambda whose unique candidate parameter at that index
+		# is a concrete `Callback*` / `CallbackThrow*` interface, derive
+		# `(param_types, ret_ty, can_throw)` from the interface's type
+		# args and use it as the expected function type for pre-typing.
+		# Without this, untyped lambda params (`|req, ctx| => ...`)
+		# would be pre-typed with `Fn(Unknown, Unknown) throws -> Unknown`,
+		# leaving the lambda body type-checked with Unknown args and
+		# emitting bogus "no matching overload" diagnostics that survive
+		# the fallback wrap path.  Mirrors the explicit-wrap pre-scan
+		# above (for `core.callback{N}(lambda)` HCall args) but for
+		# bare lambdas.
+		_lambda_pre_cands = list(ctx.callable_registry.get_free_candidates_unscoped(name=expr.fn.name)) if ctx.callable_registry is not None else []
 		for idx, arg in enumerate(expr.args):
 			if isinstance(arg, H.HLambda):
 				lambda_arg_indices.append(idx)
@@ -5815,6 +5873,57 @@ def resolve_call_expr(
 						ret_ty = ctx.unknown_ty
 				else:
 					ret_ty = ctx.unknown_ty
+				# Candidate-driven override.  Two axes, with different
+				# uniqueness rules:
+				#   (a) the wrap's `(arity, is_throw)` kind — derived from
+				#       the interface BASE name; safe to share across
+				#       overloads.  (Pre-typing doesn't construct the wrap,
+				#       but tracking ambiguity here mirrors the fallback.)
+				#   (b) the EXACT `param_ty` used to drive the lambda's
+				#       expected `(param_types, ret_ty)` — must be unique,
+				#       because two `CallbackThrow2<...>` overloads with
+				#       different concrete arg/return types would otherwise
+				#       silently concretize toward the first one seen.
+				# If the param_ty is not unique, we fall through to the
+				# lambda's own annotations and let overload resolution
+				# emit the existing diagnostic.
+				_cand_kind: tuple[int, bool] | None = None
+				_cand_pty: TypeId | None = None
+				_cand_kind_ambiguous = False
+				_cand_pty_ambiguous = False
+				for _pc in _lambda_pre_cands:
+					_ps = _pc.signature
+					if _ps is None or not _ps.param_types or idx >= len(_ps.param_types):
+						continue
+					_pty = _ps.param_types[idx]
+					_k = _callback_param_kind(ctx.type_table, _pty)
+					if _k is None:
+						continue
+					if _cand_kind is None:
+						_cand_kind = _k
+						_cand_pty = _pty
+					else:
+						if _cand_kind != _k:
+							_cand_kind_ambiguous = True
+						if _cand_pty != _pty:
+							_cand_pty_ambiguous = True
+						if _cand_kind_ambiguous and _cand_pty_ambiguous:
+							break
+				if (
+					(not _cand_kind_ambiguous)
+					and (not _cand_pty_ambiguous)
+					and _cand_kind is not None
+					and _cand_pty is not None
+					and len(arg.params) == _cand_kind[0]
+				):
+					_inst_pre = ctx.type_table.get_interface_instance(_cand_pty)
+					if _inst_pre is not None and len(_inst_pre.type_args) == _cand_kind[0] + 1 and not any(ctx.type_table.has_typevar(_ta) for _ta in _inst_pre.type_args):
+						fallback_params = list(_inst_pre.type_args[:_cand_kind[0]])
+						ret_ty = _inst_pre.type_args[_cand_kind[0]]
+						arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=_cand_kind[1])
+						arg.expected_fn_inferred = True
+						arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
+						continue
 				arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=True)
 				arg.expected_fn_inferred = True
 				arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
@@ -5835,7 +5944,42 @@ def resolve_call_expr(
 				if ty is None or ty == ctx.unknown_ty:
 					arg_types[idx] = type_expr(arg)
 		def _wrap_explicit_capture_callbacks() -> bool:
+			# Fallback wrap path: invoked when the initial free-fn
+			# resolution fails.  Walks each lambda / fn-typed arg
+			# and wraps it with the implicit `core.callback{N}` /
+			# `core.callback_throw{N}` thunk so a second resolution
+			# attempt can match it against a `Callback*` /
+			# `CallbackThrow*` parameter.
+			#
+			# Dispatch authority is the candidate parameter type,
+			# not the lambda body's throws-ness.  Two axes are
+			# tracked independently against the function's
+			# candidate signatures (per-loop detail in the inner
+			# block below):
+			#
+			#   (a) wrap kind `(arity, is_throw)` — derived from
+			#       the interface BASE name via
+			#       `_callback_param_kind_permissive`.  Permissive
+			#       so generic `Callback*<T>` candidates (e.g.
+			#       `spawn_cb<T>(cb: Callback0<T>)`) still drive
+			#       the right wrap.  If kinds disagree across
+			#       candidates we skip the wrap and let the
+			#       existing "no matching overload" diagnostic
+			#       fire.
+			#
+			#   (b) `expected_type_hint` / `expected_type` for
+			#       inner-lambda concretization — requires the
+			#       EXACT `param_ty` to be unique across
+			#       same-kind candidates AND to be typevar-free.
+			#       If multiple same-kind overloads differ in
+			#       concrete arg/return types, we still wrap
+			#       (legacy behavior) but skip expected-type
+			#       propagation so the lambda is not silently
+			#       locked to one overload's concrete types;
+			#       the second resolution pass then surfaces
+			#       the standard ambiguity diagnostic.
 			changed = False
+			_cands = list(ctx.callable_registry.get_free_candidates_unscoped(name=expr.fn.name)) if ctx.callable_registry is not None else []
 			for idx, arg in enumerate(expr.args):
 				arg_ty = arg_types[idx] if idx < len(arg_types) else None
 				if not isinstance(arg, H.HLambda):
@@ -5844,18 +5988,87 @@ def resolve_call_expr(
 					arg_def = ctx.type_table.get(arg_ty)
 					if arg_def.kind is not TypeKind.FUNCTION or not arg_def.param_types:
 						continue
+				# Param-type-driven dispatch.  Two axes, with different
+				# uniqueness rules — bug fix follow-up to the 2026-04-27
+				# LANGUAGE_BUG patch (see helper header comment):
+				#
+				# (a) wrap kind `(arity, is_throw)` — derived via
+				#     `_callback_param_kind_permissive` from the interface's
+				#     BASE name only.  Safe to share across overloads, and
+				#     deliberately permissive so generic `Callback*<T>` from
+				#     candidates like `spawn_cb<T>(cb: Callback0<T>)` still
+				#     drives the right wrap (legacy wrap-everything behavior
+				#     for typevar-bearing instances is preserved).
+				#
+				# (b) `expected_type_hint` / `expected_type` propagation —
+				#     requires the EXACT `param_ty` to be unique across all
+				#     candidates that contributed to the wrap kind.  Two
+				#     `CallbackThrow2<...>` overloads with different concrete
+				#     arg/return types share the same kind; propagating the
+				#     first-seen `param_ty` would silently concretize the
+				#     lambda toward one overload.  When `param_ty` is not
+				#     unique, we still wrap (legacy behavior) but skip
+				#     expected-type propagation and let the second resolution
+				#     pass disambiguate via the standard overload diagnostic.
+				_kind: tuple[int, bool] | None = None
+				_kind_param_ty: TypeId | None = None
+				_kind_ambiguous = False
+				_pty_ambiguous = False
+				for _pc in _cands:
+					_ps = _pc.signature
+					if _ps is None or not _ps.param_types or idx >= len(_ps.param_types):
+						continue
+					_pty = _ps.param_types[idx]
+					_k = _callback_param_kind_permissive(ctx.type_table, _pty)
+					if _k is None:
+						continue
+					if _kind is None:
+						_kind = _k
+						_kind_param_ty = _pty
+					else:
+						if _kind != _k:
+							_kind_ambiguous = True
+						if _kind_param_ty != _pty:
+							_pty_ambiguous = True
+						if _kind_ambiguous and _pty_ambiguous:
+							break
+				if _kind_ambiguous or _kind is None:
+					# No unique wrap kind at this index — skip the wrap; the
+					# existing "no matching overload" diagnostic will fire on
+					# the unresolved arg.
+					continue
+				_arity, _is_throw = _kind
 				if isinstance(arg, H.HLambda):
-					arity = len(arg.params)
+					_arg_arity = len(arg.params)
 				else:
-					arity = len(arg_def.param_types) - 1
+					_arg_arity = len(arg_def.param_types) - 1
+				if _arg_arity != _arity:
+					continue
+				# Propagate the resolved `Callback*` interface as the
+				# expected type only when (1) it is unique across all
+				# same-kind candidates and (2) its type-args are concrete
+				# (typevar-bearing generic `Callback*<T>` cannot drive
+				# concretization — type-arg inference happens during the
+				# second `_resolve_free_call_with_require_local` pass).
+				_concrete_param_ty = (
+					_kind_param_ty
+					if _kind_param_ty is not None
+					and not _pty_ambiguous
+					and not ctx.type_table.has_typevar(_kind_param_ty)
+					else None
+				)
 				cb_call = _implicit_callback_wrap(
 					ctx,
 					arg=arg,
-					callback_arity=arity,
-					is_throw=False,
+					callback_arity=_arity,
+					is_throw=_is_throw,
+					expected_type_hint=_concrete_param_ty,
 				)
 				expr.args[idx] = cb_call
-				arg_types[idx] = type_expr(cb_call, used_as_value=False)
+				if _concrete_param_ty is not None:
+					arg_types[idx] = type_expr(cb_call, expected_type=_concrete_param_ty, used_as_value=False)
+				else:
+					arg_types[idx] = type_expr(cb_call, used_as_value=False)
 				changed = True
 			return changed
 		try:
@@ -6107,7 +6320,7 @@ def resolve_call_expr(
 							arg_types[param_idx] = type_expr(_cb_call, used_as_value=False)
 							_b2_wrapped_params[param_idx] = arg_types[param_idx]
 			for idx, arg in enumerate(expr.args):
-				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, module_ids_by_name, visibility_provenance) and arg.fn.name in ("callback0", "callback1", "callback2"):
+				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, module_ids_by_name, visibility_provenance) and arg.fn.name in ("callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"):
 					continue
 				if idx >= len(sig_inst.param_types):
 					continue

@@ -489,6 +489,267 @@ fn main() nothrow -> Int {
 	assert errors == [], errors
 
 
+# ── Site 0: free-fn call with CallbackThrow* param ────────────────────
+#
+# Regression coverage for the 0.31.18 implicit-wrap throws-variant bug
+# (LANGUAGE_BUG): when the parameter type was a concrete `CallbackThrow*`
+# the fallback wrap path (`_wrap_explicit_capture_callbacks` in
+# `call_resolver.py`) was hardcoding `is_throw=False`, so it built
+# `core.callback{N}(throwing_lambda)` instead of
+# `core.callback_throw{N}(throwing_lambda)`. The lambda body's
+# throws-ness was never the dispatch authority — the parameter type is.
+#
+# Surfaced by pushcoin/bookkeeper @ 0.31.18 against
+# `web.rest.add_throws_route(..., |req, ctx| captures(share app) => ...)`.
+# Symptom: E-AUTO-fc123347 "lambda can throw but is expected to be
+# nothrow for Fn(...) nothrow -> Unknown" + E-AUTO-d5fc8414 "callback2
+# expects a function value".
+
+
+def test_site0_free_fn_throws_param_bare_lambda(tmp_path: Path) -> None:
+	"""Free-fn call with concrete `CallbackThrow2<...>` param + bare
+	throwing lambda must wrap implicitly as `callback_throw2`, not
+	`callback2`. This is the irreducible carrier for the 0.31.18
+	throws-variant regression: no captures, no overload ambiguity, just
+	a single concrete `CallbackThrow*` candidate at the lambda's
+	parameter index."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+exception Boom(message: String);
+
+struct Req {}
+struct Resp {}
+
+fn handle(req: &Req, ctx: &mut Int) -> Resp {
+	throw Boom(message = "x");
+}
+
+fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow -> Int {
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return add_throws_route(|req, ctx| => {
+		return handle(req, ctx);
+	});
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], (
+		f"bare-lambda + CallbackThrow2 param must implicitly wrap as "
+		f"`callback_throw2`. Got errors: {[d.message for d in errors]}"
+	)
+
+
+def test_site0_free_fn_throws_param_share_capture(tmp_path: Path) -> None:
+	"""App-shaped carrier: free-fn call with `CallbackThrow2<...>`
+	param, lambda that does `captures(share arc)` and a throwing call
+	on the captured value. Mirrors bookkeeper's `add_throws_route(...,
+	|req, ctx| captures(share app) => app.get().handle(...))`. The
+	throws-variant of fix #1 must compose with the share-capture
+	pattern (fix #2)."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+import std.concurrent as conc;
+
+exception Boom(message: String);
+
+struct Req {}
+struct Resp {}
+struct App { tag: Int }
+
+implement App {
+	pub fn handle(self: &App, req: &Req, ctx: &mut Int) -> Resp {
+		throw Boom(message = "x");
+	}
+}
+
+fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow -> Int {
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val app = conc.arc(App(tag = 7));
+	return add_throws_route(|req, ctx| captures(share app) => {
+		val a = app.get();
+		return a.handle(req, ctx);
+	});
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], (
+		f"share-captured throwing lambda into CallbackThrow2 must wrap "
+		f"as `callback_throw2`. Got errors: {[d.message for d in errors]}"
+	)
+
+
+def test_site0_free_fn_explicit_throw_wrap_no_double(tmp_path: Path) -> None:
+	"""Explicit `core.callback_throw2(...)` argument must NOT be
+	double-wrapped by either the pre-resolution scan, the
+	post-resolution loop, or the fallback path. Mirrors the
+	`callback2` no-double-wrap pin one floor up but for the throws
+	variant — the post-resolution duplicate-wrap skip at
+	`call_resolver.py:6110` previously listed only `callback0/1/2`,
+	risking a re-wrap of an explicit `callback_throw2` arg."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+exception Boom(message: String);
+
+struct Req {}
+struct Resp {}
+
+fn make_handler(req: &Req, ctx: &mut Int) -> Resp {
+	throw Boom(message = "x");
+}
+
+fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow -> Int {
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return add_throws_route(core.callback_throw2(make_handler));
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], (
+		f"explicit `core.callback_throw2(...)` arg must not be re-wrapped. "
+		f"Got errors: {[d.message for d in errors]}"
+	)
+
+
+def test_site0_free_fn_nothrow_param_still_clean(tmp_path: Path) -> None:
+	"""Regression guard: existing nothrow Callback2 positives must
+	keep working after the throws-variant fix. Free-fn call with
+	concrete `Callback2<...>` param + bare nothrow lambda continues
+	to wrap as `callback2`, not `callback_throw2`. Catches a
+	regression that flipped is_throw the other way.
+
+	Lambda params are explicitly typed (`|req: &Req, ctx: &mut Int|`)
+	to side-step a separate, pre-existing latent issue at this site
+	where bare-untyped lambdas + reference-typed params do not get
+	their inner-lambda params concretized through the
+	`_wrap_explicit_capture_callbacks` fallback (no
+	`expected_type=param_ty` propagation).  That issue is out of
+	scope for this fix; pin only the throws-variant dispatch."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+struct Req {}
+
+fn add_route(handler: core.Callback2<&Req, &mut Int, Int>) nothrow -> Int {
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return add_route(|req: &Req, ctx: &mut Int| nothrow => 0);
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], (
+		f"nothrow Callback2 positive must keep working after the "
+		f"throws-variant fix. Got errors: {[d.message for d in errors]}"
+	)
+
+
+def test_site0_free_fn_overloads_same_kind_diff_pty_no_concretize(tmp_path: Path) -> None:
+	"""Two free-fn overloads of `take_cb` both take `CallbackThrow2<...>`
+	but with different concrete arg/return types.  When the lambda is
+	bare (no param annotations), the wrap kind `(arity, is_throw)` is
+	shared so the wrap can still be selected as `callback_throw2`,
+	but the EXACT `param_ty` differs across overloads — so the
+	expected-type propagation must NOT lock the lambda to the
+	first-seen overload's concrete types.
+
+	This pins the kind-vs-param_ty uniqueness split.  Today's
+	correct outcome: overload resolution fails (both candidates
+	remain ambiguous against `Fn(Unknown,Unknown) throws -> Unknown`),
+	and the user gets the standard "ambiguous call" / "no matching
+	overload" diagnostic.  What MUST NOT happen is silent
+	concretization toward the first overload's `&ReqA / &mut CtxA / RespA`
+	types — that would let the wrong overload win without any
+	diagnostic.
+	"""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+exception Boom(message: String);
+
+struct ReqA {}
+struct ReqB {}
+struct CtxA {}
+struct CtxB {}
+struct RespA {}
+struct RespB {}
+
+fn take_cb(handler: core.CallbackThrow2<&ReqA, &mut CtxA, RespA>) nothrow -> Int {
+	return 0;
+}
+
+fn take_cb(handler: core.CallbackThrow2<&ReqB, &mut CtxB, RespB>) nothrow -> Int {
+	return 1;
+}
+
+fn main() nothrow -> Int {
+	return take_cb(|req, ctx| => {
+		throw Boom(message = "x");
+	});
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	# An error is expected and required: the bare lambda cannot be
+	# disambiguated against two same-kind overloads with different
+	# concrete param types.  We require the error to be an overload-
+	# resolution diagnostic on the call itself (not, say, a body
+	# error from typing the lambda body against one overload's
+	# concrete types).
+	assert errors, (
+		"expected an overload-ambiguity diagnostic when two same-kind "
+		"CallbackThrow2 overloads differ in concrete arg/return types; "
+		"got no errors — the wrap may have silently locked the lambda "
+		"to one overload's concrete param_ty, which is the bug this "
+		"test pins."
+	)
+	messages = [d.message for d in errors]
+	# Must NOT contain a body-typing failure that would indicate the
+	# lambda body was checked against one specific overload's concrete
+	# types (e.g. an error referencing ReqA/ReqB/CtxA/CtxB/RespA/RespB
+	# fields or methods).  The lambda body here is intentionally
+	# concrete-type-free so that any leakage of overload-specific types
+	# would have to come from the wrap pre-typing.
+	assert any(
+		"overload" in m or "ambiguous" in m or "matching" in m for m in messages
+	), (
+		f"expected an overload-resolution diagnostic, got: {messages}"
+	)
+
+
 def test_site1_static_assoc_fn_already_wrapped_no_double_wrap(tmp_path: Path) -> None:
 	"""Explicit `core.callback1(fn_ref)` arg passing through the
 	silent-coercion path. Pins behavior; not exercising Patch B's wrap
