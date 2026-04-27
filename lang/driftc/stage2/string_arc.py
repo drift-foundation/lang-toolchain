@@ -909,14 +909,16 @@ def insert_string_arc(
 				# Same behavior if the ledger is unset — any caller
 				# that hits site 4 MUST attach a ledger first.
 				#
-				# Build-timing invariant: the ledger consulted here
-				# is the PRE-`drop_flags` ledger (driver builds it
-				# before the drop_flags pass runs).
-				# Drop-before-overwrite decisions only depend on
-				# per-local state at StoreLocal points within the
-				# function body — none of those points are mutated by
-				# drop_flags.  See
-				# `work/ownership-ledger/3b-invariants.md`.
+				# Build-timing invariant: the ledger consulted here is
+				# the POST-`drop_flags` ledger (driver rebuilds it
+				# between `drop_flags` and `string_arc`).  drop_flags
+				# inserts drop-flag init instructions (`ConstBool` +
+				# `StoreLocal(__drop_flag_*)`) at block heads which
+				# shift every subsequent index, so the
+				# pre-drop_flags ledger's `(block, idx)` keys do not
+				# line up with the indices string_arc walks here.
+				# Pinned by
+				# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
 				if _ledger is None:
 					raise RuntimeError(
 						f"drop_before_overwrite invoked without an "

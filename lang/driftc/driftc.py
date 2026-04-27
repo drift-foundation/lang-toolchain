@@ -7065,6 +7065,29 @@ def compile_stubbed_funcs(
 					type_table=shared_type_table,
 					drop_policy=_drop_policy_callable,
 				)
+		# Rebuild the ownership ledger AFTER drop_flags.  The ledger
+		# attached by `cleanup_authoring` is keyed by (block, idx)
+		# pairs from the pre-drop_flags MIR.  drop_flags inserts new
+		# instructions at block heads (drop-flag init `ConstBool` +
+		# `StoreLocal(__drop_flag_*)`) which shifts every subsequent
+		# index.  string_arc consults the ledger using POST-drop_flags
+		# indices via `_ledger.verdict_at((block, idx), local, ...)`,
+		# so without this rebuild it reads stale state.  In particular,
+		# the verdict at the first `StoreLocal(L, …)` for a freshly-
+		# declared destructible local would come from a different
+		# instruction's post-state and could return `MUST_DROP` over an
+		# UNINIT slot — string_arc then emits drop-before-overwrite
+		# reading uninit memory and SSA crashes.  Pinned by
+		# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
+		# Originally introduced by 0.31.9 Phase 3B step-1
+		# (commit 94a9c44d "step 3 done"); the comment in
+		# `string_arc.py:911-919` claiming "drop-before-overwrite
+		# decisions only depend on per-local state at StoreLocal points
+		# within the function body — none of those points are mutated
+		# by drop_flags" was wrong: drop_flags shifts the indices.
+		for fn_id, func in mir_funcs_by_id.items():
+			ledger = _ol_build(func, drop_policy=lambda _t: None)
+			setattr(func, "_ownership_ledger", ledger)
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				mir_funcs_by_id[fn_id] = insert_string_arc(

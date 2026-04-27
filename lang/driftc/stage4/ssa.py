@@ -417,7 +417,7 @@ class MirToSSA:
 			if local not in stacks or not stacks[local]:
 				if drift_debug.enabled("ssa"):
 					print(f"[drift:ssa] load-before-store local={local} block={block.name} fn={func.fn_id}")
-				raise RuntimeError(f"SSA: load before store for local '{local}' in multi-block rename")
+				raise RuntimeError(f"SSA: load before store for local '{local}' in multi-block rename (fn={func.fn_id} block={block.name})")
 			return stacks[local][-1]
 
 		# Seed parameter versions so loads in entry can read them.

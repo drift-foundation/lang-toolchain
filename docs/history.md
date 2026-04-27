@@ -1,5 +1,101 @@
 # Drift development history
 
+## 2026-04-27
+- **Fix stale ledger after `drop_flags` before `string_arc` —
+  release 0.31.18 (ABI unchanged, still 10).**  LANGUAGE_BUG.
+
+  **Symptom.**  The orch certification for drift-web failed at
+  baseline smoke for `web-client` with
+  `RuntimeError: SSA: load before store for local 't' in multi-block
+  rename` on `web.client.session::_finish_tls_new`.  Reproduced with
+  the toolchain at HEAD efcfcf84 (Patch B / 0.31.17) AND with HEAD
+  reverted to Patch A (4b3368d3) — same crash, same source.  Bisect
+  via local pytest at successive worktrees identified
+  **`94a9c44d "step 3 done"`** (Phase 3B step-1 / 0.31.9 cumulative)
+  as the introducing commit.  Last successful drift-lang for the
+  same drift-net-tls@476c2a73 + drift-web@d93be40 pair was
+  `4f9db6d8` (orch lock `24b0f48` "toolchain 0.31.6").
+
+  **Root cause.**  Phase 3B step-1 made the ownership ledger
+  authoritative for site-4 (`drop_before_overwrite`) in
+  `string_arc.py`.  The driver builds the ledger after
+  `cleanup_authoring`, then runs `drop_flags`, which **inserts**
+  drop-flag init instructions (`ConstBool(__df1, False)` +
+  `StoreLocal(__drop_flag_*, __df1)`) at block heads.  The
+  insertions shift every subsequent index.  `string_arc` then
+  consults `_ledger.verdict_at((block, idx), local, ...)` using
+  POST-`drop_flags` indices against a ledger keyed by
+  PRE-`drop_flags` indices — reading state from the wrong
+  instruction.
+
+  For a function that introduces a destructible local with a
+  fresh `var t = move x;` AFTER prior locals that picked up drop
+  flags, the index shift makes `verdict_at` at the first
+  `StoreLocal(t)` resolve to the post-state of an unrelated earlier
+  instruction.  In the drift-web case, that resolved to the LIVE
+  post-state of the `var r = move result` store — so the ledger
+  reported `MUST_DROP` for `t` even though `t` was UNINIT there.
+  `string_arc` then emitted the drop-before-overwrite pattern
+  (`LoadLocal(t) → ZeroValue → StoreLocal → DropValue`) reading
+  uninit memory; SSA later caught it as `load before store for
+  local 't'`.  The error reported `block=if_join_drop_remainder`
+  because the `block` closure variable in `_run_multi_block_acyclic`
+  leaked from an earlier iteration loop and pointed at the wrong
+  block; the actual offending `LoadLocal(t)` was in the `entry`
+  block.
+
+  The Phase 3B step-1 commit comment in `string_arc.py:911-919`
+  explicitly *claimed* the build ordering was safe:
+  > Drop-before-overwrite decisions only depend on per-local state
+  > at StoreLocal points within the function body — none of those
+  > points are mutated by drop_flags.
+
+  That claim is wrong: `drop_flags` doesn't mutate the StoreLocal
+  *points themselves*, but it inserts new instructions BEFORE them,
+  which shifts the indices the ledger queries.
+
+  **Fix.**  Rebuild the ledger between `drop_flags` and
+  `string_arc` in `driftc.compile_stubbed_funcs` (around
+  `lang/driftc/driftc.py:7068`).  The rebuild walks the same
+  pre-existing `_ol_build` worklist over the post-`drop_flags`
+  MIR; cost is amortised across the existing per-function
+  passes.  Comment at `string_arc.py:911-919` updated to record
+  the post-`drop_flags` build-timing invariant and reference the
+  pinned regression test.
+
+  **Regression test.**
+  `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py::test_destructible_local_moved_on_both_arms_no_join_drop`
+  — minimal source repro that fails pre-fix (same SSA error,
+  same `entry` block dynamics) and passes post-fix.  Shape: a
+  struct with a `Destructible` impl (`DestrThing`), a result
+  struct (`PooledResult`) with a String + Array<Byte> + Bool that
+  `mem.replace`-extracts both heap fields, and a destructible
+  local moved on both arms of an `if`.  The cascade-relevant
+  prior locals (which receive drop flags from `drop_flags`) shift
+  the indices enough for the bug to fire on the destructible
+  local that follows.
+
+  **Why pytest didn't catch this earlier.**  None of the in-tree
+  tests combined all three ingredients in the right order:
+  destructor-impl-bearing local + drop-flag-receiving local
+  before it + uniform-move-on-both-arms shape.  The drift-web
+  cert was the first integration test to exercise that
+  combination.  The new regression pins the contract; CI now
+  fails on this shape going forward.
+
+  **Files touched.**
+  - `lang/driftc/driftc.py` — ledger rebuild after `drop_flags`.
+  - `lang/driftc/stage2/string_arc.py` — corrected build-timing
+    invariant comment.
+  - `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`
+    (new) — pinned regression.
+  - `lang/versions.py` — 0.31.17 → 0.31.18.
+
+  **Patch B (0.31.17) is innocent.**  Both Patch A (`4b3368d3`)
+  and Patch B (`efcfcf84`) toolchains reproduced the same SSA
+  crash on the same source; the bug long predates the implicit-
+  callback-wrap work.  No revert needed.
+
 ## 2026-04-26
 - **Implicit `Callback*` / `CallbackThrow*` wrap at struct-ctor /
   typed-let / return — release 0.31.17 (ABI unchanged, still 10).**
