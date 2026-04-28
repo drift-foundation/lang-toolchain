@@ -4431,6 +4431,8 @@ trait Fn2<A, B, R> {
 }
 ```
 
+The `FnN` family covers arities **0 through 6** (`Fn0`..`Fn6`); a parallel `FnThrow0`..`FnThrow6` family covers throwing callables. **Arity 6 is the v1 cap** — for 7+ params, pack arguments into a struct rather than asking for `Fn7`. This bound is intentional: every additional arity adds a row to the compiler's central callback table, and past 6 params the call site reads as a struct anyway.
+
 `FnMutN` and `FnOnceN` follow the same arity pattern but use `&mut Self` and
 `Self` receivers, respectively.
 

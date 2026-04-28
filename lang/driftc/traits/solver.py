@@ -360,7 +360,8 @@ def prove_is(
 		res = ProofResult(status=ProofStatus.UNKNOWN, reasons=["unknown subject type"])
 		cache[cache_key] = res
 		return res
-	if trait_key.name in ("Fn0", "Fn1", "Fn2") and subject_ty.name == "fn":
+	from lang.driftc.checker.call_resolver import _CALLBACK_FN_TRAIT_NAMES, _CALLBACK_FN_PAIRS
+	if trait_key.name in _CALLBACK_FN_TRAIT_NAMES and subject_ty.name == "fn":
 		if trait_key.module in (None, "std.core", "lang.core") or str(trait_key.module).endswith("std.core") or str(trait_key.module).endswith("lang.core"):
 			if subject_ty.fn_throws is True:
 				res = ProofResult(status=ProofStatus.REFUTED, reasons=["fn can throw"])
@@ -369,7 +370,6 @@ def prove_is(
 			res = ProofResult(status=ProofStatus.PROVED, reasons=["fn pointer impl"])
 			cache[cache_key] = res
 			return res
-	_CALLBACK_FN_PAIRS = {("Callback0", "Fn0"), ("Callback1", "Fn1"), ("Callback2", "Fn2"), ("CallbackThrow0", "FnThrow0"), ("CallbackThrow1", "FnThrow1"), ("CallbackThrow2", "FnThrow2")}
 	if (subject_ty.name, trait_key.name) in _CALLBACK_FN_PAIRS:
 		_mod_ok = lambda m: m in (None, "std.core", "lang.core") or str(m).endswith("std.core") or str(m).endswith("lang.core")
 		if _mod_ok(trait_key.module) and _mod_ok(subject_ty.module):

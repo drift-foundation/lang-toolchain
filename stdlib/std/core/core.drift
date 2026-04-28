@@ -25,17 +25,33 @@ export {
 	Fn0,
 	Fn1,
 	Fn2,
+	Fn3,
+	Fn4,
+	Fn5,
+	Fn6,
 	FnThrow0,
 	FnThrow1,
 	FnThrow2,
+	FnThrow3,
+	FnThrow4,
+	FnThrow5,
+	FnThrow6,
 	Borrow,
 	BorrowMut,
 	Callback0,
 	Callback1,
 	Callback2,
+	Callback3,
+	Callback4,
+	Callback5,
+	Callback6,
 	CallbackThrow0,
 	CallbackThrow1,
 	CallbackThrow2,
+	CallbackThrow3,
+	CallbackThrow4,
+	CallbackThrow5,
+	CallbackThrow6,
 	Cell,
 	cell,
 	void_value,
@@ -43,9 +59,17 @@ export {
 	callback0,
 	callback1,
 	callback2,
+	callback3,
+	callback4,
+	callback5,
+	callback6,
 	callback_throw0,
 	callback_throw1,
 	callback_throw2,
+	callback_throw3,
+	callback_throw4,
+	callback_throw5,
+	callback_throw6,
 	type_id,
 	STRING_CONTAINER_ID,
 	string_byte_at,
@@ -148,6 +172,26 @@ pub trait FnThrow2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) -> R;
 }
 
+/// Trait for three-argument throwing callables.  See `FnThrow0`.
+pub trait FnThrow3<A, B, C, R> {
+	fn call(self: &Self, a: A, b: B, c: C) -> R;
+}
+
+/// Trait for four-argument throwing callables.  See `FnThrow0`.
+pub trait FnThrow4<A, B, C, D, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D) -> R;
+}
+
+/// Trait for five-argument throwing callables.  See `FnThrow0`.
+pub trait FnThrow5<A, B, C, D, E, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E) -> R;
+}
+
+/// Trait for six-argument throwing callables.  See `FnThrow0`.
+pub trait FnThrow6<A, B, C, D, E, F2, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E, f: F2) -> R;
+}
+
 /// Boxed throwing callable interface, zero arguments.
 ///
 /// Construct via `callback_throw0(f)` from any `f` implementing
@@ -168,6 +212,30 @@ pub interface CallbackThrow1<A, R> {
 /// `CallbackThrow0`.
 pub interface CallbackThrow2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) -> R;
+}
+
+/// Boxed throwing callable interface, three arguments.  See
+/// `CallbackThrow0`.
+pub interface CallbackThrow3<A, B, C, R> {
+	fn call(self: &Self, a: A, b: B, c: C) -> R;
+}
+
+/// Boxed throwing callable interface, four arguments.  See
+/// `CallbackThrow0`.
+pub interface CallbackThrow4<A, B, C, D, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D) -> R;
+}
+
+/// Boxed throwing callable interface, five arguments.  See
+/// `CallbackThrow0`.
+pub interface CallbackThrow5<A, B, C, D, E, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E) -> R;
+}
+
+/// Boxed throwing callable interface, six arguments.  See
+/// `CallbackThrow0`.
+pub interface CallbackThrow6<A, B, C, D, E, F2, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E, f: F2) -> R;
 }
 
 /// Discriminated success / error type — Drift's primary value-level
@@ -252,6 +320,26 @@ pub trait Fn2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) nothrow -> R;
 }
 
+/// Trait for three-argument non-throwing callables.  See `Fn0`.
+pub trait Fn3<A, B, C, R> {
+	fn call(self: &Self, a: A, b: B, c: C) nothrow -> R;
+}
+
+/// Trait for four-argument non-throwing callables.  See `Fn0`.
+pub trait Fn4<A, B, C, D, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D) nothrow -> R;
+}
+
+/// Trait for five-argument non-throwing callables.  See `Fn0`.
+pub trait Fn5<A, B, C, D, E, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E) nothrow -> R;
+}
+
+/// Trait for six-argument non-throwing callables.  See `Fn0`.
+pub trait Fn6<A, B, C, D, E, F2, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E, f: F2) nothrow -> R;
+}
+
 /// Returns the unique `Void` value.
 ///
 /// Useful for code that needs to construct a `Void`-typed
@@ -323,6 +411,30 @@ pub interface Callback2<A, B, R> {
 	fn call(self: &Self, a: A, b: B) nothrow -> R;
 }
 
+/// Boxed non-throwing callable interface, three arguments.  See
+/// `Callback0`.
+pub interface Callback3<A, B, C, R> {
+	fn call(self: &Self, a: A, b: B, c: C) nothrow -> R;
+}
+
+/// Boxed non-throwing callable interface, four arguments.  See
+/// `Callback0`.
+pub interface Callback4<A, B, C, D, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D) nothrow -> R;
+}
+
+/// Boxed non-throwing callable interface, five arguments.  See
+/// `Callback0`.
+pub interface Callback5<A, B, C, D, E, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E) nothrow -> R;
+}
+
+/// Boxed non-throwing callable interface, six arguments.  See
+/// `Callback0`.
+pub interface Callback6<A, B, C, D, E, F2, R> {
+	fn call(self: &Self, a: A, b: B, c: C, d: D, e: E, f: F2) nothrow -> R;
+}
+
 /// Boxes a zero-argument non-throwing callable as a `Callback0<R>`.
 @intrinsic pub fn callback0<F, R>(f: F) nothrow -> Callback0<R> require F is Fn0<R>;
 
@@ -340,6 +452,30 @@ pub interface Callback2<A, B, R> {
 
 /// Boxes a two-argument throwing callable as `CallbackThrow2<A, B, R>`.
 @intrinsic pub fn callback_throw2<F, A, B, R>(f: F) nothrow -> CallbackThrow2<A, B, R> require F is FnThrow2<A, B, R>;
+
+/// Boxes a three-argument non-throwing callable as `Callback3<A, B, C, R>`.
+@intrinsic pub fn callback3<F, A, B, C, R>(f: F) nothrow -> Callback3<A, B, C, R> require F is Fn3<A, B, C, R>;
+
+/// Boxes a four-argument non-throwing callable as `Callback4<...>`.
+@intrinsic pub fn callback4<F, A, B, C, D, R>(f: F) nothrow -> Callback4<A, B, C, D, R> require F is Fn4<A, B, C, D, R>;
+
+/// Boxes a five-argument non-throwing callable as `Callback5<...>`.
+@intrinsic pub fn callback5<F, A, B, C, D, E, R>(f: F) nothrow -> Callback5<A, B, C, D, E, R> require F is Fn5<A, B, C, D, E, R>;
+
+/// Boxes a six-argument non-throwing callable as `Callback6<...>`.
+@intrinsic pub fn callback6<F, A, B, C, D, E, F2, R>(f: F) nothrow -> Callback6<A, B, C, D, E, F2, R> require F is Fn6<A, B, C, D, E, F2, R>;
+
+/// Boxes a three-argument throwing callable as `CallbackThrow3<...>`.
+@intrinsic pub fn callback_throw3<F, A, B, C, R>(f: F) nothrow -> CallbackThrow3<A, B, C, R> require F is FnThrow3<A, B, C, R>;
+
+/// Boxes a four-argument throwing callable as `CallbackThrow4<...>`.
+@intrinsic pub fn callback_throw4<F, A, B, C, D, R>(f: F) nothrow -> CallbackThrow4<A, B, C, D, R> require F is FnThrow4<A, B, C, D, R>;
+
+/// Boxes a five-argument throwing callable as `CallbackThrow5<...>`.
+@intrinsic pub fn callback_throw5<F, A, B, C, D, E, R>(f: F) nothrow -> CallbackThrow5<A, B, C, D, E, R> require F is FnThrow5<A, B, C, D, E, R>;
+
+/// Boxes a six-argument throwing callable as `CallbackThrow6<...>`.
+@intrinsic pub fn callback_throw6<F, A, B, C, D, E, F2, R>(f: F) nothrow -> CallbackThrow6<A, B, C, D, E, F2, R> require F is FnThrow6<A, B, C, D, E, F2, R>;
 
 /// Returns a stable `Uint64` type-id for `T`, used as the key by
 /// the registry / type-box machinery.

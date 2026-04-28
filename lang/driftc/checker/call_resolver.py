@@ -66,8 +66,86 @@ def _best_effort_span(*items: object | None) -> Span:
 	return Span()
 
 
-_CALLBACK_IFACE_NAMES = frozenset({"Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"})
-_CALLBACK_INTRINSIC_NAMES = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
+### Callback / CallbackThrow arity surface — single source of truth.
+#
+# Every site in this file (and in traits/enforce.py, traits/solver.py,
+# type_checker.py) that needs to enumerate the callback-family names
+# MUST derive from `_CALLBACK_ARITIES` and the lookup tables below.
+# Adding a new arity is a one-line change here; no further hardcoding.
+#
+# Arity cap is 6 in v1 (web-rest's middleware shape needs 3; 4-6 added
+# pre-emptively so the next ergonomic ask doesn't reopen this file).
+# If a 7+ arity is ever needed, pack into a struct — keep the cap.
+
+_CALLBACK_ARITY_MAX = 6
+_CALLBACK_ARITIES = tuple(range(_CALLBACK_ARITY_MAX + 1))
+
+# Per-arity name table — every other set/dict here is derived from this.
+_CALLBACK_ROWS = tuple(
+	{
+		"arity": n,
+		"callback_name": f"callback{n}",
+		"callback_throw_name": f"callback_throw{n}",
+		"iface_name": f"Callback{n}",
+		"iface_throw_name": f"CallbackThrow{n}",
+		"fn_trait": f"Fn{n}",
+		"fn_throw_trait": f"FnThrow{n}",
+	}
+	for n in _CALLBACK_ARITIES
+)
+
+# Membership sets — replace ad-hoc literal tuples / frozensets.
+_CALLBACK_IFACE_NAMES = frozenset(
+	name for r in _CALLBACK_ROWS for name in (r["iface_name"], r["iface_throw_name"])
+)
+_CALLBACK_INTRINSIC_NAMES = frozenset(
+	name for r in _CALLBACK_ROWS for name in (r["callback_name"], r["callback_throw_name"])
+)
+_CALLBACK_THROW_INTRINSIC_NAMES = frozenset(r["callback_throw_name"] for r in _CALLBACK_ROWS)
+_CALLBACK_THROW_IFACE_NAMES = frozenset(r["iface_throw_name"] for r in _CALLBACK_ROWS)
+_CALLBACK_FN_TRAIT_NAMES = frozenset(r["fn_trait"] for r in _CALLBACK_ROWS)
+
+# Lookup tables — replace explicit if-cascades.
+_CALLBACK_KIND_BY_IFACE = {
+	**{r["iface_name"]: (r["arity"], False) for r in _CALLBACK_ROWS},
+	**{r["iface_throw_name"]: (r["arity"], True) for r in _CALLBACK_ROWS},
+}
+_CALLBACK_KIND_BY_INTRINSIC = {
+	**{r["callback_name"]: (r["arity"], False) for r in _CALLBACK_ROWS},
+	**{r["callback_throw_name"]: (r["arity"], True) for r in _CALLBACK_ROWS},
+}
+_CALLBACK_INTRINSIC_BY_KIND = {
+	(r["arity"], False): r["callback_name"] for r in _CALLBACK_ROWS
+}
+_CALLBACK_INTRINSIC_BY_KIND.update({
+	(r["arity"], True): r["callback_throw_name"] for r in _CALLBACK_ROWS
+})
+_CALLBACK_IFACE_BY_KIND = {
+	(r["arity"], False): r["iface_name"] for r in _CALLBACK_ROWS
+}
+_CALLBACK_IFACE_BY_KIND.update({
+	(r["arity"], True): r["iface_throw_name"] for r in _CALLBACK_ROWS
+})
+
+# Iface ↔ Fn-trait pairs (used by the Fn-bound-of-Callback resolver).
+_CALLBACK_FN_PAIRS = frozenset(
+	(r["iface_name"], r["fn_trait"]) for r in _CALLBACK_ROWS
+) | frozenset(
+	(r["iface_throw_name"], r["fn_throw_trait"]) for r in _CALLBACK_ROWS
+)
+
+
+def _callback_arity_from_intrinsic(name: str) -> int | None:
+	kind = _CALLBACK_KIND_BY_INTRINSIC.get(name)
+	return kind[0] if kind is not None else None
+
+
+def _is_callback_throw_intrinsic(name: str) -> bool:
+	return name in _CALLBACK_THROW_INTRINSIC_NAMES
+
+
+def _is_callback_throw_iface(name: str) -> bool:
+	return name in _CALLBACK_THROW_IFACE_NAMES
 
 
 @dataclass(frozen=True)
@@ -122,21 +200,7 @@ def _callback_param_kind(type_table: object, param_ty: TypeId) -> tuple[int, boo
 		schema_name = None
 	if schema_name is None:
 		schema_name = param_def.name
-	if schema_name not in _CALLBACK_IFACE_NAMES:
-		return None
-	if schema_name == "Callback0":
-		return (0, False)
-	if schema_name == "Callback1":
-		return (1, False)
-	if schema_name == "Callback2":
-		return (2, False)
-	if schema_name == "CallbackThrow0":
-		return (0, True)
-	if schema_name == "CallbackThrow1":
-		return (1, True)
-	if schema_name == "CallbackThrow2":
-		return (2, True)
-	return None
+	return _CALLBACK_KIND_BY_IFACE.get(schema_name)
 
 
 def _callback_param_kind_permissive(type_table: object, param_ty: TypeId) -> tuple[int, bool] | None:
@@ -169,19 +233,7 @@ def _callback_param_kind_permissive(type_table: object, param_ty: TypeId) -> tup
 		schema_name = None
 	if schema_name is None:
 		schema_name = param_def.name
-	if schema_name == "Callback0":
-		return (0, False)
-	if schema_name == "Callback1":
-		return (1, False)
-	if schema_name == "Callback2":
-		return (2, False)
-	if schema_name == "CallbackThrow0":
-		return (0, True)
-	if schema_name == "CallbackThrow1":
-		return (1, True)
-	if schema_name == "CallbackThrow2":
-		return (2, True)
-	return None
+	return _CALLBACK_KIND_BY_IFACE.get(schema_name)
 
 
 def _is_explicit_callback_wrap_call(arg: object) -> bool:
@@ -296,12 +348,13 @@ def _implicit_callback_wrap(
 	# every implicit-wrap site through this helper preserves that invariant.
 	# Construct-only: caller types the result with type_expr and splices it
 	# back into expr.args / arg_types.
-	if callback_arity == 0:
-		cb_name = "callback_throw0" if is_throw else "callback0"
-	elif callback_arity == 1:
-		cb_name = "callback_throw1" if is_throw else "callback1"
-	else:
-		cb_name = "callback_throw2" if is_throw else "callback2"
+	cb_name = _CALLBACK_INTRINSIC_BY_KIND.get((callback_arity, is_throw))
+	if cb_name is None:
+		raise AssertionError(
+			f"_implicit_callback_wrap called with unsupported "
+			f"(arity={callback_arity}, is_throw={is_throw}); "
+			f"max arity is {_CALLBACK_ARITY_MAX}"
+		)
 	cb_var = H.HVar(name=cb_name, module_id="std.core")
 	cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
 	cb_call._is_implicit_wrap = True
@@ -2382,7 +2435,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			saw_method_in_scope = False
 			matching_traits: list[TraitKey] = []
 			scope_traits = traits_in_scope()
-			_FN_SCOPE_TRAITS = {("std.core", "Fn0"), ("std.core", "Fn1"), ("std.core", "Fn2"), ("std.core", "FnThrow0"), ("std.core", "FnThrow1"), ("std.core", "FnThrow2")}
+			_FN_SCOPE_TRAITS = frozenset(("std.core", n) for n in (_CALLBACK_FN_TRAIT_NAMES | frozenset(r["fn_throw_trait"] for r in _CALLBACK_ROWS)))
 			_fn_require_keys = [k for k in trait_type_args_by_key if (getattr(k, "module", None), getattr(k, "name", None)) in _FN_SCOPE_TRAITS] if trait_type_args_by_key else []
 			if not scope_traits and _fn_require_keys and (instantiation_mode or receiver_is_type_param):
 				scope_traits = list(_fn_require_keys)
@@ -2688,7 +2741,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						continue
 					if any(isinstance(a, H.HLambda) for a in expr.args):
 						atoms = _extract_conjunctive_facts(req_expr)
-						if atoms and all(isinstance(a, parser_ast.TraitIs) and getattr(a.trait, "name", None) in {"Fn0", "Fn1", "Fn2", "FnThrow0", "FnThrow1", "FnThrow2"} for a in atoms):
+						if atoms and all(isinstance(a, parser_ast.TraitIs) and getattr(a.trait, "name", None) in (_CALLBACK_FN_TRAIT_NAMES | frozenset(r["fn_throw_trait"] for r in _CALLBACK_ROWS)) for a in atoms):
 							filtered_candidates.append(cand)
 							continue
 					world = ctx.global_trait_world or ctx.visible_trait_world
@@ -2768,18 +2821,12 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 									if idx < len(inst_args):
 										local_param_map[tp.name] = inst_args[idx]
 						def _fn_trait_expected(trait_name: str) -> tuple[int, bool] | None:
-							if trait_name == "Fn0":
-								return (0, False)
-							if trait_name == "Fn1":
-								return (1, False)
-							if trait_name == "Fn2":
-								return (2, False)
-							if trait_name == "FnThrow0":
-								return (0, True)
-							if trait_name == "FnThrow1":
-								return (1, True)
-							if trait_name == "FnThrow2":
-								return (2, True)
+							# Table-driven via central _CALLBACK_ROWS.
+							for r in _CALLBACK_ROWS:
+								if trait_name == r["fn_trait"]:
+									return (r["arity"], False)
+								if trait_name == r["fn_throw_trait"]:
+									return (r["arity"], True)
 							return None
 						def _param_index_for_subject(subj: object) -> int | None:
 							if sig_local is None or not sig_local.param_type_ids:
@@ -2845,7 +2892,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 								if not isinstance(atom, parser_ast.TraitIs):
 									continue
 								trait_name = getattr(atom.trait, "name", None)
-								if trait_name not in {"Fn0", "Fn1", "Fn2", "FnThrow0", "FnThrow1", "FnThrow2"}:
+								if trait_name not in (_CALLBACK_FN_TRAIT_NAMES | frozenset(r["fn_throw_trait"] for r in _CALLBACK_ROWS)):
 									continue
 								subj_idx = None
 								if isinstance(atom.subject, TypeParamId) and atom.subject in id_to_idx:
@@ -3416,7 +3463,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if recv_base == first_base:
 						expected_params = expected_params[1:]
 			for idx, arg in enumerate(expr.args):
-				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, ctx.module_ids_by_name, ctx.visibility_provenance) and arg.fn.name in ("callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"):
+				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, ctx.module_ids_by_name, ctx.visibility_provenance) and arg.fn.name in _CALLBACK_INTRINSIC_NAMES:
 					continue
 				if idx >= len(expected_params):
 					continue
@@ -3427,7 +3474,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					param_def = ctx.type_table.get(param_ty)
 					if param_def.kind is TypeKind.INTERFACE:
 						schema_name = param_def.name
-				if schema_name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+				if schema_name not in _CALLBACK_IFACE_NAMES:
 					continue
 				arg_ty = arg_types[idx] if idx < len(arg_types) else None
 				if not isinstance(arg, H.HLambda):
@@ -3440,7 +3487,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					arity = len(arg.params)
 				else:
 					arity = len(arg_def.param_types) - 1
-				is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
+				is_throw = _is_callback_throw_iface(schema_name)
 				cb_call = _implicit_callback_wrap(
 					ctx,
 					arg=arg,
@@ -3469,11 +3516,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						param_def = ctx.type_table.get(param_ty)
 						if param_def.kind is TypeKind.INTERFACE:
 							schema_name = param_def.name
-					if schema_name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+					if schema_name not in _CALLBACK_IFACE_NAMES:
 						continue
 					if isinstance(arg, H.HLambda):
 						arity = len(arg.params)
-						is_throw = schema_name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
+						is_throw = _is_callback_throw_iface(schema_name)
 						cb_call = _implicit_callback_wrap(
 							ctx,
 							arg=arg,
@@ -4881,7 +4928,7 @@ def resolve_call_expr(
 			record_call_info(expr, param_types=[ctx.string_ty, ctx.string_ty], return_type=ret_ty, can_throw=False, target=CallTarget.intrinsic(intrinsic))
 			return record_expr(expr, ret_ty)
 
-	if isinstance(expr.fn, H.HVar) and _is_std_core_module(expr.fn.module_id, module_ids_by_name, visibility_provenance) and expr.fn.name in ("callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"):
+	if isinstance(expr.fn, H.HVar) and _is_std_core_module(expr.fn.module_id, module_ids_by_name, visibility_provenance) and expr.fn.name in _CALLBACK_INTRINSIC_NAMES:
 		if getattr(expr, "type_args", None):
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} does not accept type arguments", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
@@ -4892,36 +4939,18 @@ def resolve_call_expr(
 		if len(expr.args) != 1:
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects exactly one argument", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
-		if expr.fn.name == "callback0":
-			want_args = 0
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="Callback0")
-			intrinsic_kind = IntrinsicKind.CALLBACK0
-			expected_type_args = 1
-		elif expr.fn.name == "callback1":
-			want_args = 1
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="Callback1")
-			intrinsic_kind = IntrinsicKind.CALLBACK1
-			expected_type_args = 2
-		elif expr.fn.name == "callback2":
-			want_args = 2
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="Callback2")
-			intrinsic_kind = IntrinsicKind.CALLBACK2
-			expected_type_args = 3
-		elif expr.fn.name == "callback_throw0":
-			want_args = 0
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="CallbackThrow0")
-			intrinsic_kind = IntrinsicKind.CALLBACK_THROW0
-			expected_type_args = 1
-		elif expr.fn.name == "callback_throw1":
-			want_args = 1
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="CallbackThrow1")
-			intrinsic_kind = IntrinsicKind.CALLBACK_THROW1
-			expected_type_args = 2
-		else:
-			want_args = 2
-			cb_base = ctx.type_table.get_interface_base(module_id="std.core", name="CallbackThrow2")
-			intrinsic_kind = IntrinsicKind.CALLBACK_THROW2
-			expected_type_args = 3
+		# Table-driven dispatch keyed on the central `_CALLBACK_KIND_BY_INTRINSIC`
+		# table.  Adding a new arity is a one-line change in `_CALLBACK_ROWS`
+		# at the top of this file plus an `IntrinsicKind` enum row.
+		_kind = _CALLBACK_KIND_BY_INTRINSIC.get(expr.fn.name)
+		if _kind is None:
+			diagnostics.append(_tc_diag(message=f"unknown callback intrinsic '{expr.fn.name}' (compiler bug)", severity="error", span=getattr(expr, "loc", Span())))
+			return record_expr(expr, ctx.unknown_ty)
+		want_args, _is_throw_for_kind = _kind
+		_iface_name = _CALLBACK_IFACE_BY_KIND[(want_args, _is_throw_for_kind)]
+		cb_base = ctx.type_table.get_interface_base(module_id="std.core", name=_iface_name)
+		intrinsic_kind = IntrinsicKind(expr.fn.name)
+		expected_type_args = want_args + 1
 		if cb_base is None:
 			diagnostics.append(_tc_diag(message="callback interface type not found (compiler bug)", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
@@ -4942,7 +4971,7 @@ def resolve_call_expr(
 					return record_expr(expr, ctx.unknown_ty)
 			arg_expr.allow_capture_invoke = True
 			arg_expr.capture_as_move = True
-			is_throw = expr.fn.name in ("callback_throw0", "callback_throw1", "callback_throw2")
+			is_throw = _is_callback_throw_intrinsic(expr.fn.name)
 			if expected_type is None:
 				hint = getattr(expr, "expected_type_hint", None)
 				if hint is not None:
@@ -4955,15 +4984,11 @@ def resolve_call_expr(
 						expected_type = hint
 						inst = ctx.type_table.get_interface_instance(expected_type)
 				if inst is not None and inst.base_id == cb_base and len(inst.type_args) == expected_type_args:
-					if expr.fn.name in ("callback0", "callback_throw0"):
-						ret_ty = inst.type_args[0]
-						param_types = []
-					elif expr.fn.name in ("callback1", "callback_throw1"):
-						param_types = [inst.type_args[0]]
-						ret_ty = inst.type_args[1]
-					else:
-						param_types = [inst.type_args[0], inst.type_args[1]]
-						ret_ty = inst.type_args[2]
+					# Callback{N}<P1, ..., PN, R> — last type arg is the return,
+					# the prefix is the param tuple.  Generic over arity via
+					# `want_args = N`.
+					param_types = list(inst.type_args[:want_args])
+					ret_ty = inst.type_args[want_args]
 					arg_expected_type = ctx.type_table.ensure_function(param_types, ret_ty, can_throw=is_throw)
 			if arg_expected_type is None:
 				fallback_params: list[TypeId] = []
@@ -5003,16 +5028,13 @@ def resolve_call_expr(
 		if argc != want_args:
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects a function with {want_args} argument(s)", severity="error", span=getattr(expr.args[0], "loc", getattr(expr, "loc", Span()))))
 			return record_expr(expr, ctx.unknown_ty)
-		is_throw = expr.fn.name in ("callback_throw0", "callback_throw1", "callback_throw2")
+		is_throw = _is_callback_throw_intrinsic(expr.fn.name)
 		if not is_throw and arg_def.fn_throws:
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} requires a nothrow function", severity="error", span=getattr(expr.args[0], "loc", getattr(expr, "loc", Span()))))
 			return record_expr(expr, ctx.unknown_ty)
-		if expr.fn.name in ("callback0", "callback_throw0"):
-			type_args = [ret_ty]
-		elif expr.fn.name in ("callback1", "callback_throw1"):
-			type_args = [param_types[0], ret_ty]
-		else:
-			type_args = [param_types[0], param_types[1], ret_ty]
+		# Callback{N}<P1, ..., PN, R> — type args are the param tuple
+		# followed by the return type.  Generic over arity via `want_args`.
+		type_args = list(param_types[:want_args]) + [ret_ty]
 		if any(ctx.type_table.has_typevar(t) for t in type_args):
 			cb_ty = ctx.type_table.ensure_interface_template(cb_base, type_args)
 		else:
@@ -5594,7 +5616,7 @@ def resolve_call_expr(
 								if not isinstance(atom, parser_ast.TraitIs):
 									continue
 								trait_name = getattr(atom.trait, "name", None)
-								if trait_name not in {"Fn0", "Fn1", "Fn2"}:
+								if trait_name not in _CALLBACK_FN_TRAIT_NAMES:
 									continue
 								subj_name = _subject_name(atom.subject)
 								subj_idx = None
@@ -5696,7 +5718,7 @@ def resolve_call_expr(
 					continue
 				if any(isinstance(a, H.HLambda) for a in expr.args):
 					atoms = _extract_conjunctive_facts(req)
-					if atoms and all(isinstance(a, parser_ast.TraitIs) and getattr(a.trait, "name", None) in {"Fn0", "Fn1", "Fn2"} for a in atoms):
+					if atoms and all(isinstance(a, parser_ast.TraitIs) and getattr(a.trait, "name", None) in _CALLBACK_FN_TRAIT_NAMES for a in atoms):
 						applicable.append((decl, sig_inst, inst_subst))
 						continue
 				subjects: set[object] = set()
@@ -5799,8 +5821,8 @@ def resolve_call_expr(
 		# args so the inner lambda gets concrete param types from the outer call
 		# context. Without this, callback2(|req, ctx| ...) inside add_route(...)
 		# leaves the lambda params as Unknown.
-		_CB_NAMES_PRE = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
-		_CB_IFACE_NAMES = frozenset({"Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"})
+		_CB_NAMES_PRE = _CALLBACK_INTRINSIC_NAMES
+		_CB_IFACE_NAMES = _CALLBACK_IFACE_NAMES
 		if ctx.callable_registry is not None and any(
 			isinstance(a, H.HCall) and isinstance(getattr(a, "fn", None), H.HVar) and a.fn.name in _CB_NAMES_PRE
 			for a in expr.args
@@ -6150,7 +6172,7 @@ def resolve_call_expr(
 				if _req_pre is not None:
 					_sig_pre = ctx.signatures_by_id.get(decl.fn_id) if ctx.signatures_by_id is not None else None
 					_ptids_pre = list(getattr(_sig_pre, "param_type_ids", []) or []) if _sig_pre is not None else None
-					_FN_TRAITS = {"Fn0", "Fn1", "Fn2", "FnThrow0", "FnThrow1", "FnThrow2"}
+					_FN_TRAITS = (_CALLBACK_FN_TRAIT_NAMES | frozenset(r["fn_throw_trait"] for r in _CALLBACK_ROWS))
 					if _ptids_pre is not None:
 						for _atom in _extract_conjunctive_facts(_req_pre):
 							if not isinstance(_atom, parser_ast.TraitIs):
@@ -6201,7 +6223,7 @@ def resolve_call_expr(
 			# Without this, callback2(|req, ctx| ...) inside add_route(...)
 			# leaves the lambda params as Unknown because callback2 is generic
 			# and the expected type wasn't available during initial arg typing.
-			_CB_NAMES = frozenset({"callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"})
+			_CB_NAMES = _CALLBACK_INTRINSIC_NAMES
 			for idx, arg in enumerate(expr.args):
 				if not isinstance(arg, H.HCall):
 					continue
@@ -6215,7 +6237,7 @@ def resolve_call_expr(
 				param_def = ctx.type_table.get(param_ty)
 				if param_def.kind is not TypeKind.INTERFACE:
 					continue
-				if param_def.name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+				if param_def.name not in _CALLBACK_IFACE_NAMES:
 					continue
 				# The arg was already typed without expected_type. Re-type
 				# with the resolved Callback type so the inner lambda gets
@@ -6232,18 +6254,15 @@ def resolve_call_expr(
 					sig_local = ctx.signatures_by_id.get(decl.fn_id) if ctx.signatures_by_id is not None else None
 					param_types_for_subject = list(getattr(sig_local, "param_type_ids", []) or []) if sig_local is not None else list(sig_inst.param_types)
 					def _fn_trait_expected(trait_name: str) -> tuple[int, bool] | None:
-						if trait_name == "Fn0":
-							return (0, False)
-						if trait_name == "Fn1":
-							return (1, False)
-						if trait_name == "Fn2":
-							return (2, False)
-						if trait_name == "FnThrow0":
-							return (0, True)
-						if trait_name == "FnThrow1":
-							return (1, True)
-						if trait_name == "FnThrow2":
-							return (2, True)
+						# Returns (arity, is_throw) for Fn{N} / FnThrow{N}.
+						# Table-driven via the central _CALLBACK_ROWS — adding
+						# a new arity is a one-line change at the top of this
+						# file plus an IntrinsicKind enum row.
+						for r in _CALLBACK_ROWS:
+							if trait_name == r["fn_trait"]:
+								return (r["arity"], False)
+							if trait_name == r["fn_throw_trait"]:
+								return (r["arity"], True)
 						return None
 					def _param_index_for_subject(subj: object) -> int | None:
 						subj_name = _subject_name(subj)
@@ -6277,24 +6296,15 @@ def resolve_call_expr(
 							continue
 						trait_args = list(getattr(atom.trait, "args", []) or [])
 						arity, can_throw = expect
-						if arity == 0:
-							if len(trait_args) < 1:
-								continue
-							ret_ty = resolve_opaque_type(trait_args[0], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
-							param_tys: list[TypeId] = []
-						elif arity == 1:
-							if len(trait_args) < 2:
-								continue
-							param_tys = [resolve_opaque_type(trait_args[0], ctx.type_table, module_id=decl.fn_id.module or current_module_name)]
-							ret_ty = resolve_opaque_type(trait_args[1], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
-						else:
-							if len(trait_args) < 3:
-								continue
-							param_tys = [
-								resolve_opaque_type(trait_args[0], ctx.type_table, module_id=decl.fn_id.module or current_module_name),
-								resolve_opaque_type(trait_args[1], ctx.type_table, module_id=decl.fn_id.module or current_module_name),
-							]
-							ret_ty = resolve_opaque_type(trait_args[2], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
+						# Fn{N}<P1, ..., PN, R> — N param types followed by
+						# the return type.  Generic over arity.
+						if len(trait_args) < arity + 1:
+							continue
+						param_tys: list[TypeId] = [
+							resolve_opaque_type(trait_args[i], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
+							for i in range(arity)
+						]
+						ret_ty = resolve_opaque_type(trait_args[arity], ctx.type_table, module_id=decl.fn_id.module or current_module_name)
 						arg_expected_type = ctx.type_table.ensure_function(param_tys, ret_ty, can_throw=can_throw)
 						# For Fn-trait-bounded params with any captures,
 						# keep allow_capture_invoke=True. Borrowed captures validated
@@ -6320,7 +6330,7 @@ def resolve_call_expr(
 							arg_types[param_idx] = type_expr(_cb_call, used_as_value=False)
 							_b2_wrapped_params[param_idx] = arg_types[param_idx]
 			for idx, arg in enumerate(expr.args):
-				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, module_ids_by_name, visibility_provenance) and arg.fn.name in ("callback0", "callback1", "callback2", "callback_throw0", "callback_throw1", "callback_throw2"):
+				if isinstance(arg, H.HCall) and isinstance(arg.fn, H.HVar) and _is_std_core_module(arg.fn.module_id, module_ids_by_name, visibility_provenance) and arg.fn.name in _CALLBACK_INTRINSIC_NAMES:
 					continue
 				if idx >= len(sig_inst.param_types):
 					continue
@@ -6330,7 +6340,7 @@ def resolve_call_expr(
 				schema = ctx.type_table.interface_bases.get(base_id)
 				if schema is None:
 					continue
-				if schema.name not in ("Callback0", "Callback1", "Callback2", "CallbackThrow0", "CallbackThrow1", "CallbackThrow2"):
+				if schema.name not in _CALLBACK_IFACE_NAMES:
 					continue
 				arg_ty = arg_types[idx] if idx < len(arg_types) else None
 				if not isinstance(arg, H.HLambda):
@@ -6343,7 +6353,7 @@ def resolve_call_expr(
 					arity = len(arg.params)
 				else:
 					arity = len(arg_def.param_types) - 1
-				is_throw = schema.name in ("CallbackThrow0", "CallbackThrow1", "CallbackThrow2")
+				is_throw = _is_callback_throw_iface(schema.name)
 				cb_call = _implicit_callback_wrap(
 					ctx,
 					arg=arg,

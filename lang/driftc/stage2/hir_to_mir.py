@@ -45,6 +45,20 @@ from lang.driftc.stage1.call_info import (
 	call_abi_ret_type,
 )
 from lang.driftc.call_contract import intrinsic_call_issues, CtorFieldSpec, ctor_call_issues, array_method_arity_issues, call_kwargs_issues
+
+# Callback / CallbackThrow intrinsic kind sets — derived from the
+# central `call_resolver._CALLBACK_ARITIES` enumeration.  Adding a
+# new arity is a one-line change in `call_resolver._CALLBACK_ARITY_MAX`
+# plus the matching `IntrinsicKind` enum rows.
+from lang.driftc.checker.call_resolver import _CALLBACK_ARITIES as _CB_ARITIES  # noqa: E402
+_CALLBACK_INTRINSIC_KINDS = frozenset(
+	getattr(IntrinsicKind, f"CALLBACK{n}") for n in _CB_ARITIES
+) | frozenset(
+	getattr(IntrinsicKind, f"CALLBACK_THROW{n}") for n in _CB_ARITIES
+)
+_CALLBACK_THROW_INTRINSIC_KINDS = frozenset(
+	getattr(IntrinsicKind, f"CALLBACK_THROW{n}") for n in _CB_ARITIES
+)
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId, FunctionRefId, FunctionRefKind, function_symbol
 from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID
@@ -3555,11 +3569,11 @@ class HIRToMIR:
 			self.b.emit(M.StringConcat(dest=dest, left=l_val, right=r_val))
 			self._local_types[dest] = self._string_type
 			return dest
-		if intrinsic in (IntrinsicKind.CALLBACK0, IntrinsicKind.CALLBACK1, IntrinsicKind.CALLBACK2, IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2):
+		if intrinsic in _CALLBACK_INTRINSIC_KINDS:
 			arg = expr.args[0]
 			if info is None:
 				raise AssertionError(f"{intrinsic.value}(...) missing CallInfo (checker bug)")
-			can_throw = intrinsic in (IntrinsicKind.CALLBACK_THROW0, IntrinsicKind.CALLBACK_THROW1, IntrinsicKind.CALLBACK_THROW2)
+			can_throw = intrinsic in _CALLBACK_THROW_INTRINSIC_KINDS
 			dest = self.b.new_temp()
 			if isinstance(arg, H.HFnPtrConst):
 				self.b.emit(M.ConstructIface(dest=dest, iface_ty=info.sig.user_ret_type, fn_ref=arg.fn_ref, call_sig=arg.call_sig))

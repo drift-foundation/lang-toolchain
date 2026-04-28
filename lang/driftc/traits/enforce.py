@@ -485,7 +485,8 @@ def enforce_fn_requires(
 					if not isinstance(atom, parser_ast.TraitIs):
 						continue
 					trait_name = getattr(atom.trait, "name", None)
-					if trait_name not in ("Fn0", "Fn1", "Fn2"):
+					from lang.driftc.checker.call_resolver import _CALLBACK_FN_TRAIT_NAMES
+					if trait_name not in _CALLBACK_FN_TRAIT_NAMES:
 						continue
 					subj_id = None
 					if isinstance(atom.subject, TypeParamId):

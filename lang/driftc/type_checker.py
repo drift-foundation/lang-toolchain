@@ -3016,18 +3016,16 @@ class TypeChecker:
 				if base_def is None:
 					return None
 				args = list(inst.type_args) if inst is not None else []
-				if base_def.name == "Callback0" and len(args) >= 1:
-					return [], args[0], False
-				if base_def.name == "Callback1" and len(args) >= 2:
-					return [args[0]], args[1], False
-				if base_def.name == "Callback2" and len(args) >= 3:
-					return [args[0], args[1]], args[2], False
-				if base_def.name == "CallbackThrow0" and len(args) >= 1:
-					return [], args[0], True
-				if base_def.name == "CallbackThrow1" and len(args) >= 2:
-					return [args[0]], args[1], True
-				if base_def.name == "CallbackThrow2" and len(args) >= 3:
-					return [args[0], args[1]], args[2], True
+				# Table-driven over `Callback{N}` / `CallbackThrow{N}` —
+				# the iface's type-args layout is `<P1, ..., PN, R>`,
+				# generic over arity.  Adding a new arity is a one-line
+				# change in `call_resolver._CALLBACK_ROWS`.
+				from lang.driftc.checker.call_resolver import _CALLBACK_KIND_BY_IFACE
+				kind = _CALLBACK_KIND_BY_IFACE.get(base_def.name)
+				if kind is not None:
+					arity, is_throw = kind
+					if len(args) >= arity + 1:
+						return list(args[:arity]), args[arity], is_throw
 			if td.kind is not TypeKind.FUNCTION or not td.param_types:
 				return None
 			params = list(td.param_types[:-1])
@@ -3036,18 +3034,18 @@ class TypeChecker:
 			return params, ret, can_throw
 
 		def _fn_trait_expected(trait_name: str) -> tuple[int, bool] | None:
-			if trait_name == "Fn0":
-				return (1, False)
-			if trait_name == "Fn1":
-				return (2, False)
-			if trait_name == "Fn2":
-				return (3, False)
-			if trait_name == "FnThrow0":
-				return (1, True)
-			if trait_name == "FnThrow1":
-				return (2, True)
-			if trait_name == "FnThrow2":
-				return (3, True)
+			# Returns `(arity_plus_one, is_throw)` — the trait `Fn{N}` /
+			# `FnThrow{N}` corresponds to a function with N params + 1
+			# return type (so `arity_plus_one == N + 1`).  Table-driven
+			# from the central `_CALLBACK_ROWS` enumeration in
+			# `call_resolver.py` so a new arity adds a row there and
+			# nothing else.
+			from lang.driftc.checker.call_resolver import _CALLBACK_ROWS
+			for r in _CALLBACK_ROWS:
+				if trait_name == r["fn_trait"]:
+					return (r["arity"] + 1, False)
+				if trait_name == r["fn_throw_trait"]:
+					return (r["arity"] + 1, True)
 			return None
 
 		# Option B: boundary ABI functions collapsed. No cross-package

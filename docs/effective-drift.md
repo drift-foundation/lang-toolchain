@@ -82,6 +82,32 @@ ABI-neutral; source-only feature. The lowering desugars to the same
 trait dispatch the capture form already uses, so codegen and the
 borrow checker see identical IR.
 
+## Callback arity surface (`Callback0`..`Callback6`, 0.31.21)
+
+Drift ships boxed-callable interfaces and constructor intrinsics for arities **0 through 6**, in both nothrow and throwing flavors:
+
+| Param count | Nothrow iface / ctor | Throwing iface / ctor |
+|---|---|---|
+| 0 | `Callback0<R>` / `callback0(f)` | `CallbackThrow0<R>` / `callback_throw0(f)` |
+| 1 | `Callback1<A, R>` / `callback1(f)` | `CallbackThrow1<A, R>` / `callback_throw1(f)` |
+| 2 | `Callback2<A, B, R>` / `callback2(f)` | `CallbackThrow2<A, B, R>` / `callback_throw2(f)` |
+| 3 | `Callback3<A, B, C, R>` / `callback3(f)` | `CallbackThrow3<A, B, C, R>` / `callback_throw3(f)` |
+| 4 | `Callback4<A, B, C, D, R>` / `callback4(f)` | `CallbackThrow4<A, B, C, D, R>` / `callback_throw4(f)` |
+| 5 | `Callback5<A, B, C, D, E, R>` / `callback5(f)` | `CallbackThrow5<A, B, C, D, E, R>` / `callback_throw5(f)` |
+| 6 | `Callback6<A, B, C, D, E, F, R>` / `callback6(f)` | `CallbackThrow6<A, B, C, D, E, F, R>` / `callback_throw6(f)` |
+
+Each constructor is `@intrinsic` and requires the input function to satisfy the matching `Fn{N}` (nothrow) or `FnThrow{N}` (throwing) trait. Implicit-wrap dispatch covers all arities — bare lambdas, `captures(share x)` lambdas, and named-fn refs all wrap correctly into the matching boxed form when the parameter type is concrete.
+
+**The cap is 6 in v1, on purpose.** If you find yourself wanting `Callback7<...>`, the right answer is to **pack arguments into a struct** rather than extending the family:
+
+```drift
+struct DispatchCtx { req: Request, ctx: Context, depth: Int, deadline: Instant, /* ... */ }
+
+fn middleware(handler: core.CallbackThrow1<DispatchCtx, Response>) nothrow -> Int { ... }
+```
+
+Why the cap: every additional arity adds a row to `_CALLBACK_ROWS` (compiler) + `IntrinsicKind` enum + `call_contract` spec + four stdlib declarations. The benefit is bounded — past 6 params, the call site reads as a struct anyway. Capping at 6 keeps the compiler's central-table refactor self-contained and stops the "just one more arity" creep without forcing a real design choice (struct-pack) onto users.
+
 ## Shared state + callbacks (Arc + Mutex)
 
 When you need multiple handlers that all mutate the same receiver object, put

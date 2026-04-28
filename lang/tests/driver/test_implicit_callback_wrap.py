@@ -779,3 +779,166 @@ fn main() nothrow -> Int {
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert errors == [], errors
+
+
+
+# ── Arity 3..6 — central-table coverage ───────────────────────────────
+#
+# Compiler arity-handling is table-driven via `_CALLBACK_ROWS` in
+# `lang/driftc/checker/call_resolver.py`.  Adding a new arity is a
+# one-line change to `_CALLBACK_ARITY_MAX` plus the matching
+# `IntrinsicKind` enum + `call_contract` spec rows + stdlib decls.
+# These carriers exercise every arity from 3 to 6 through the same
+# implicit-wrap dispatch the arity-2 carriers above use, so a future
+# regression that re-introduces a hardcoded `Callback0/1/2`-only
+# branch surfaces here as a parametric failure, not silent breakage.
+#
+# Cap is 6 in v1.  For 7+ params, pack arguments into a struct.
+
+
+def _arity_n_callback_source(n: int, *, throws: bool) -> str:
+	"""Generate a free-fn-call carrier for `Callback{n}` /
+	`CallbackThrow{n}` with a bare-lambda implicit wrap.  Lambda
+	params are typed (`Int` each) and the body returns `Int`.  For
+	the throws variant the lambda body throws so the dispatch must
+	select `callback_throw{n}`."""
+	cb_name = f"CallbackThrow{n}" if throws else f"Callback{n}"
+	arg_uses = " + ".join(f"a{i}" for i in range(n)) if n > 0 else "0"
+	type_args = ", ".join(["Int"] * (n + 1))  # N param types + ret type
+	lambda_params = ", ".join(f"a{i}: Int" for i in range(n))
+	if throws:
+		exception = "exception Boom(message: String);\n"
+		body_block = "{ throw Boom(message = \"x\"); }"
+		nothrow_kw = ""
+	else:
+		exception = ""
+		body_block = f"{{ return {arg_uses}; }}"
+		nothrow_kw = "nothrow "
+	return f"""
+module m;
+
+import std.core as core;
+
+{exception}fn take_cb(cb: core.{cb_name}<{type_args}>) nothrow -> Int {{
+\treturn 0;
+}}
+
+fn main() nothrow -> Int {{
+\treturn take_cb(|{lambda_params}| {nothrow_kw}=> {body_block});
+}}
+"""
+
+
+def test_site0_arity3_callback_bare_lambda(tmp_path: Path) -> None:
+	"""`Callback3<Int,Int,Int,Int>` + bare lambda → implicit `callback3`."""
+	checked = _compile(tmp_path, _arity_n_callback_source(3, throws=False))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity4_callback_bare_lambda(tmp_path: Path) -> None:
+	"""`Callback4<...>` + bare lambda → implicit `callback4`."""
+	checked = _compile(tmp_path, _arity_n_callback_source(4, throws=False))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity5_callback_bare_lambda(tmp_path: Path) -> None:
+	"""`Callback5<...>` + bare lambda → implicit `callback5`."""
+	checked = _compile(tmp_path, _arity_n_callback_source(5, throws=False))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity6_callback_bare_lambda(tmp_path: Path) -> None:
+	"""`Callback6<...>` + bare lambda → implicit `callback6`.
+
+	Arity 6 is the v1 cap.  For 7+ params, pack arguments into a
+	struct (documented in `effective-drift.md`)."""
+	checked = _compile(tmp_path, _arity_n_callback_source(6, throws=False))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity3_callback_throw_bare_lambda(tmp_path: Path) -> None:
+	"""`CallbackThrow3<...>` + bare throwing lambda → implicit
+	`callback_throw3`.  Mirrors the 0.31.19 throws-variant fix at
+	arity 3."""
+	checked = _compile(tmp_path, _arity_n_callback_source(3, throws=True))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity4_callback_throw_bare_lambda(tmp_path: Path) -> None:
+	"""`CallbackThrow4<...>` + bare throwing lambda."""
+	checked = _compile(tmp_path, _arity_n_callback_source(4, throws=True))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity5_callback_throw_bare_lambda(tmp_path: Path) -> None:
+	"""`CallbackThrow5<...>` + bare throwing lambda."""
+	checked = _compile(tmp_path, _arity_n_callback_source(5, throws=True))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity6_callback_throw_bare_lambda(tmp_path: Path) -> None:
+	"""`CallbackThrow6<...>` + bare throwing lambda — v1 arity cap."""
+	checked = _compile(tmp_path, _arity_n_callback_source(6, throws=True))
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity3_explicit_wrap_named_fn(tmp_path: Path) -> None:
+	"""Explicit `core.callback3(named_fn)` resolves to a `Callback3<...>`
+	value.  Pins the explicit-wrap path through the central table —
+	complementary to the implicit-wrap carriers above."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+fn handle(a: Int, b: Int, c: Int) nothrow -> Int { return a + b + c; }
+
+fn use_cb(cb: core.Callback3<Int, Int, Int, Int>) nothrow -> Int {
+\treturn cb.call(1, 2, 3);
+}
+
+fn main() nothrow -> Int {
+\treturn use_cb(core.callback3(handle));
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+
+
+def test_site0_arity6_explicit_wrap_named_fn(tmp_path: Path) -> None:
+	"""Explicit `core.callback6(named_fn)` — exercises the v1 arity
+	cap through the explicit-wrap path, same central-table dispatch
+	as arity 3."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+fn handle(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int) nothrow -> Int {
+\treturn a + b + c + d + e + f;
+}
+
+fn use_cb(cb: core.Callback6<Int, Int, Int, Int, Int, Int, Int>) nothrow -> Int {
+\treturn cb.call(1, 2, 3, 4, 5, 6);
+}
+
+fn main() nothrow -> Int {
+\treturn use_cb(core.callback6(handle));
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
