@@ -48,7 +48,7 @@ import std.core as core;
 
 fn main() nothrow -> Int {
 	var cb = core.callback0(| | => {
-		val r: core.Optional<Int> = core.Optional::Some(7);
+		val r: Optional<Int> = Optional::Some(7);
 		match r {
 			Some(v) => { return v; },
 			None => { return 8; }

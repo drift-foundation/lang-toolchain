@@ -2958,6 +2958,30 @@ def parse_drift_workspace_to_hir(
 					_resolve_type_expr_in_file(path, file_aliases, expr.target_type)
 					_resolve_types_in_expr(expr.expr)
 					return
+				if isinstance(expr, parser_ast.Lambda):
+					# LANGUAGE_BUG fix (0.31.23): module aliases used in
+					# qualified type references inside a lambda body
+					# (e.g. `core.Result::Ok(...)` where `core` aliases
+					# `std.core`) must be resolved here.  Without this
+					# recursion the alias survives into HIR — variant /
+					# struct ctor resolution then sees `module_id="core"`
+					# (the alias spelling), `resolve_opaque_type` returns
+					# a FORWARD_NOMINAL, ctor resolution returns None,
+					# no CallInfo is recorded, and `_lambda_can_throw`
+					# falls back to the conservative may-throw default.
+					# The bare lambda then fails the implicit
+					# `core.callback{N}` wrap because the wrap target is
+					# nothrow.  See `test_lambda_result_ctor_nothrow.py`.
+					for p in getattr(expr, "params", []) or []:
+						_resolve_type_expr_in_file(path, file_aliases, getattr(p, "type_expr", None))
+					_resolve_type_expr_in_file(path, file_aliases, getattr(expr, "ret_type", None))
+					body_expr = getattr(expr, "body_expr", None)
+					if body_expr is not None:
+						_resolve_types_in_expr(body_expr)
+					body_block = getattr(expr, "body_block", None)
+					if body_block is not None:
+						_resolve_types_in_block(path, file_aliases, body_block)
+					return
 				# literals/names/placeholders are leaf nodes
 
 			if isinstance(st, parser_ast.LetStmt) and getattr(st, "type_expr", None) is not None:
