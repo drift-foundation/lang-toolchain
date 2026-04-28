@@ -489,6 +489,28 @@ class Copy(Expr):
 
 
 @dataclass
+class Share(Expr):
+    """`share <expr>` — second-owner aliasing operation at expression
+    position.  Symmetric with `captures(share x)` in lambda capture
+    lists.  v1 restricts the operand to a NAME (local binding) at
+    AST→HIR; non-NAME subjects emit
+    `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`.
+
+    Lowered at AST→HIR to
+    `HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`
+    with the call's `origin` field set to `"share_expr"` (NAME
+    subject) or `"share_expr_non_local"` (non-NAME).  The type
+    checker dispatches its source-form-keyed diagnostics
+    (`E-SHARE-EXPR-NOT-SHARE`, `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`)
+    on the `origin` field — dynamic attributes do NOT survive
+    `normalize.py`'s HCall rebuild, so `origin` is the durable
+    metadata channel.
+    """
+    loc: Located
+    value: Expr
+
+
+@dataclass
 class Index(Expr):
     loc: Located
     value: Expr

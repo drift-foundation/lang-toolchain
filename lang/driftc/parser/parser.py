@@ -58,6 +58,7 @@ from .ast import (
     RaiseStmt,
     RethrowStmt,
     ReturnStmt,
+    Share,
     StructDef,
     StructField,
     TraitDef,
@@ -3001,6 +3002,18 @@ def _build_expr(node) -> Expr:
             raise TypeError(f"copy_op expects an operand, got {node.children!r}")
         expr = _build_expr(target)
         return Copy(loc=_loc(node), value=expr)
+    if name == "share_op":
+        # Second-owner aliasing marker at expression position:
+        # `share <expr>`.  Symmetric with `captures(share x)`.  v1
+        # restricts subjects to NAMEs (local bindings); AST→HIR
+        # rejects non-NAME subjects with
+        # `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`.  Lowered to
+        # `Share::share(&x)` via the standard trait-dispatch path.
+        target = next((c for c in node.children if isinstance(c, Tree)), None)
+        if target is None:
+            raise TypeError(f"share_op expects an operand, got {node.children!r}")
+        expr = _build_expr(target)
+        return Share(loc=_loc(node), value=expr)
     if name == "postfix":
         return _build_postfix(node)
     if name == "qualified_member":

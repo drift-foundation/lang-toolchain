@@ -31,6 +31,57 @@ runtime result as `Share::share(&arc)`. Prefer `captures(share x)`
 in capture lists: it keeps the aliasing contract visible at the
 capture site and avoids needing a named clone-temp.
 
+### `share x` at the call boundary (expression form, 0.31.20)
+
+`share x` is also available as an **expression**, symmetric with
+the capture-list form, for passing a second owner to a callee
+without consuming the outer binding:
+
+```drift
+val app: conc.Arc<AppHandle> = conc.arc(make_handle());
+
+try {
+    val _ = serve(share app, port);   // adds an owner, app stays usable
+    return 0;
+} catch e {
+    val r = app.get();                 // app is still LIVE here
+    r.logger.error("startup-failed", { ... });
+    return 1;
+}
+```
+
+The expression form has the same Share-trait constraint as the
+capture form (`T: Share`) and emits the same warning-bearing
+contract: you have just accepted aliasing. It lowers to
+`Share::share(&x)` — refcount bump on `Arc<T>`, identical runtime
+cost to `app.clone()` or the explicit trait call.
+
+Two ergonomic gains over `move x` / `app.clone()` at call sites:
+
+1. The original binding stays usable after the call, so subsequent
+   code can reference `app` directly without a named keepalive
+   (`var log_app = app.clone()` becomes unnecessary).
+2. **Outstanding borrows survive the call, including the unwind
+   path of a throwing callee.** `share x` is a refcount bump on
+   the owner, NOT a mutation of the binding — so `val r = app.get();`
+   taken before a `try { f(share app); }` remains valid in the
+   `catch` arm. No re-`.get()` after every share call.
+
+Restrictions in v1:
+
+- The subject must be a NAME (local binding). Bind first if you
+  need a more complex expression: `val a = compute(); share a;`.
+  Diagnostic: `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`.
+- Subject type must implement `std.core.shareable.Share`. For
+  `Copy` types (`Int`, `String`, ...), use `copy x`; for non-Share
+  non-Copy types, use `move x`. Diagnostic:
+  `E-SHARE-EXPR-NOT-SHARE` (parallel to
+  `E-CAPTURE-SHARE-NOT-SHARE`).
+
+ABI-neutral; source-only feature. The lowering desugars to the same
+trait dispatch the capture form already uses, so codegen and the
+borrow checker see identical IR.
+
 ## Shared state + callbacks (Arc + Mutex)
 
 When you need multiple handlers that all mutate the same receiver object, put

@@ -488,6 +488,7 @@ term_tail: (STAR | SLASH | PERCENT) factor
        | STAR factor -> deref
        | MOVE factor -> move_op
        | COPY factor -> copy_op
+       | SHARE factor -> share_op
        | "+" factor -> pos
        | "-" factor -> neg
        | "not" factor -> not_op

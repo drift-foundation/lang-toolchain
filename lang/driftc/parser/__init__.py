@@ -586,6 +586,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		return s0.Move(value=_convert_expr(expr.value), loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Copy):
 		return s0.Copy(value=_convert_expr(expr.value), loc=Span.from_loc(getattr(expr, "loc", None)))
+	if isinstance(expr, parser_ast.Share):
+		return s0.Share(value=_convert_expr(expr.value), loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Placeholder):
 		return s0.Placeholder(loc=Span.from_loc(getattr(expr, "loc", None)))
 	if isinstance(expr, parser_ast.Ternary):

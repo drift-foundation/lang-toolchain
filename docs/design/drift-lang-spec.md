@@ -581,6 +581,25 @@ Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fail
 
 Copying still respects ownership rules: `self: &T` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
 
+### 4.4a. Explicit share expression (0.31.20)
+
+Use the `share <expr>` expression to construct a second owner of a `Share`-implementing value (e.g. `Arc<T>`) without consuming the outer binding. Symmetric with `captures(share x)` in lambda capture lists; same Share-trait constraint, same warning-bearing aliasing contract, same lowering to `Share::share(&x)`.
+
+```drift
+val app: Arc<AppHandle> = arc(make_handle());
+serve(share app, port);   // adds an owner; `app` remains usable
+val r = app.get();         // `app` is still LIVE
+```
+
+Restrictions in v1:
+
+- **Subject must be a NAME** (local binding). Bind first if you need a more complex expression: `val a = compute(); share a;`. Diagnostic: `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`.
+- **Subject type must implement `std.core.shareable.Share`.** For `Copy` types use `copy x`; for non-Share non-Copy types use `move x`. Diagnostic: `E-SHARE-EXPR-NOT-SHARE` (parallel to `E-CAPTURE-SHARE-NOT-SHARE`).
+- **Argument evaluation order is unchanged.** `share x` lowers in place; no pre-hoisting before earlier args.
+- **Borrow-survives-call invariant.** `share x` is a refcount bump on the owner, NOT a mutation of the binding. Outstanding borrows into `*x` (e.g. `val r = x.get();`) remain valid through the call AND its unwind path. A `try { f(share x); } catch ... { ...use(r)... }` does not need a re-`.get()` in the catch arm.
+
+ABI-neutral; source-only.
+
 ### 4.5. Explicit deep copies (`dup`-style)
 
 If a move-only type wants to offer a deliberate, potentially expensive duplicate, it can expose an explicit method (e.g., `dup`). Assignment still will not copy—callers must opt in:

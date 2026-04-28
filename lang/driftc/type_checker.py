@@ -7601,6 +7601,132 @@ class TypeChecker:
 
 			# Calls.
 			if isinstance(expr, H.HCall):
+				# `share x` expression form (0.31.20): the AST→HIR
+				# desugaring at `stage1/ast_to_hir.py::_visit_expr_Share`
+				# synthesizes
+				# `HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`
+				# with `origin="share_expr"` (NAME subject) or
+				# `origin="share_expr_non_local"` (non-NAME subject).
+				# Origin is used as the dispatch key because dynamic
+				# attributes would be dropped by `normalize.py`'s
+				# HCall rebuild — the `origin` dataclass field
+				# survives normalization.
+				#
+				# This block emits the source-form-keyed diagnostics
+				# (`E-SHARE-EXPR-SUBJECT-NOT-LOCAL`,
+				# `E-SHARE-EXPR-NOT-SHARE`) BEFORE the trait-
+				# resolution pipeline runs, so the user gets a clean
+				# message instead of a raw "no matching method" or
+				# "cannot copy value of type" complaint.
+				#
+				# Mirrors `E-CAPTURE-SHARE-NOT-SHARE` at lines
+				# 6126-6164 above (lambda capture-share form), with
+				# the call-site ergonomics:
+				#   - non-NAME subject  → SUBJECT-NOT-LOCAL
+				#   - Copy subject      → NOT-SHARE (copy hint)
+				#   - non-Share subject → NOT-SHARE (move hint)
+				_share_origin = getattr(expr, "origin", None)
+				if _share_origin in ("share_expr", "share_expr_non_local"):
+					# Dedup: `resolve_call_expr`'s fallback / retry paths
+					# can re-enter type_expr on the SAME HCall object
+					# (verified: same id() across visits within one
+					# normalize-pass).  Without this guard, the
+					# diagnostic fires twice per source `share x`.
+					# We use a dynamic attribute because dedup is
+					# per-HCall-instance — `normalize.py`'s rebuild
+					# creates a new HCall, which gets its own dedup
+					# slot by virtue of being a new object; the old
+					# instance's flag is no longer reachable.
+					if getattr(expr, "_share_expr_diagnosed", False):
+						return record_expr(expr, self._unknown)
+					_share_span = getattr(expr, "loc", None) or Span()
+					if _share_origin == "share_expr_non_local":
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"E-SHARE-EXPR-SUBJECT-NOT-LOCAL: "
+									"`share <expr>` requires a local "
+									"binding subject (e.g. `share app`); "
+									"computed expressions, calls, and "
+									"projections are not supported in v1. "
+									"Bind the value first: "
+									"`val a = <expr>; share a;`"
+								),
+								severity="error",
+								span=_share_span,
+							)
+						)
+						expr._share_expr_diagnosed = True
+						return record_expr(expr, self._unknown)
+					# Subject is a NAME — extract the binding via the
+					# HBorrow → HPlaceExpr → HVar chain that
+					# `_visit_expr_Share` builds.
+					_share_root_ty = self._unknown
+					_share_root_name: str | None = None
+					try:
+						_borrow_arg = expr.args[0] if expr.args else None
+						_place = getattr(_borrow_arg, "subject", None) if _borrow_arg is not None else None
+						_base = getattr(_place, "base", None) if _place is not None else None
+						_share_bid = getattr(_base, "binding_id", None) if _base is not None else None
+						_share_root_name = getattr(_base, "name", None) if _base is not None else None
+						if _share_bid is not None:
+							_share_root_ty = binding_types.get(_share_bid, self._unknown)
+					except Exception:
+						pass
+					if _share_root_ty != self._unknown:
+						_implements_share = False
+						try:
+							_implements_share = bool(self.type_table.is_share(_share_root_ty))
+						except Exception:
+							_implements_share = False
+						if not _implements_share:
+							_ty_name = self.type_table.get(_share_root_ty).name or f"typeid={_share_root_ty}"
+							_disp_name = _share_root_name or "x"
+							_is_copy = False
+							try:
+								_is_copy = bool(self.type_table.copy_status(_share_root_ty))
+							except Exception:
+								_is_copy = False
+							if _is_copy:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-SHARE-EXPR-NOT-SHARE: type "
+											f"'{_ty_name}' is `Copy`, not "
+											f"`Share`. For value-like "
+											f"duplication, use "
+											f"`copy {_disp_name}`. "
+											f"`share` is for non-Copy "
+											f"shared-owner types (e.g. "
+											f"`Arc<T>`)."
+										),
+										severity="error",
+										span=_share_span,
+									)
+								)
+							else:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-SHARE-EXPR-NOT-SHARE: type "
+											f"'{_ty_name}' does not "
+											f"implement "
+											f"`std.core.shareable.Share`. "
+											f"To transfer ownership, use "
+											f"`move {_disp_name}`. To "
+											f"enable share-expr for "
+											f"'{_ty_name}', implement "
+											f"`std.core.shareable.Share` "
+											f"for it (an inherent "
+											f"`.share()` method does NOT "
+											f"satisfy `share x`)."
+										),
+										severity="error",
+										span=_share_span,
+									)
+								)
+							expr._share_expr_diagnosed = True
+							return record_expr(expr, self._unknown)
 				if isinstance(expr.fn, H.HVar) and expr.fn.binding_id is not None:
 					pending = pending_lambda_by_binding.get(expr.fn.binding_id)
 					if pending is not None:

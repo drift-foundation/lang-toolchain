@@ -6,7 +6,7 @@ This file defines the lexical rules, precedence, and productions for Drift. It i
 ## 1. Lexical structure
 
 - **Identifiers:** `Ident ::= [A-Za-z_][A-Za-z0-9_]*`  
-  Keywords are not identifiers, except `move` and `copy`, which are permitted where `Ident` appears. Double-underscore names are reserved for the compiler.
+  Keywords are not identifiers, except `move`, `copy`, and `share`, which are permitted where `Ident` appears. Double-underscore names are reserved for the compiler.
 - **Literals:** `IntLiteral`, `FloatLiteral`, `StringLiteral` (UTF-8), `FStringLiteral`, `BoolLiteral` (`true` / `false`).
 - **Operators/punctuation:** `+ - * / % == != < <= > >= & | ^ ~ << >> and or not ! ? : += -= *= /= %= &= |= ^= <<= >>= . , : ; = -> => [ ] { } ( ) |> <|`.
 - **`mut` token:** `mut` is a keyword token and is meaningful after `&` in types/expressions.
@@ -15,7 +15,7 @@ This file defines the lexical rules, precedence, and productions for Drift. It i
 ## 2. Precedence and associativity (high → low)
 
 1. Postfix: call `()`, index `[]`, member `.`, member-through-ref `->`
-2. Unary: `move`, `-`, `~`, `!`, `not`, `&`, `*` (deref)
+2. Unary: `move`, `copy`, `share`, `-`, `~`, `!`, `not`, `&`, `*` (deref)
 3. Multiplicative: `*`, `/`, `%`
 4. Additive: `+`, `-`
 5. Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`

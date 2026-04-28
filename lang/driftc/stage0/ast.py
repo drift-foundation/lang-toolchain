@@ -292,6 +292,37 @@ class Copy(Expr):
 
 
 @dataclass
+class Share(Expr):
+	"""
+	Second-owner aliasing operation at expression position: `share <expr>`.
+
+	Symmetric with `captures(share x)` in lambda capture lists.  v1
+	restricts the operand to a NAME (local binding) at AST→HIR;
+	non-NAME subjects emit `E-SHARE-EXPR-SUBJECT-NOT-LOCAL`.
+
+	Lowered at AST→HIR to
+	`HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`
+	with the call's `origin` field set to `"share_expr"` (NAME
+	subject) or `"share_expr_non_local"` (non-NAME).  Type-check
+	flows through the standard trait-dispatch pipeline; the
+	source-form-keyed diagnostics (`E-SHARE-EXPR-NOT-SHARE`,
+	`E-SHARE-EXPR-SUBJECT-NOT-LOCAL`) are emitted by the type
+	checker dispatching on `origin` — `normalize.py`'s HCall rebuild
+	preserves `origin` (a declared dataclass field) but drops
+	dynamic attributes, so `origin` is the durable metadata
+	channel.
+
+	Borrow-check invariant: lowering must NOT mutate the binding.
+	`share x` is a refcount bump on the owner; outstanding borrows
+	into `*x` (e.g. `val r = x.get(); ... share x ...`) remain valid
+	through the call AND the unwind path.  The `HBorrow(<local>)`
+	desugaring guarantees this — no `MoveOut` / tombstone touches `x`.
+	"""
+	value: Expr
+	loc: Optional[object] = None
+
+
+@dataclass
 class Index(Expr):
 	"""Indexing expression: value[index]."""
 	value: Expr

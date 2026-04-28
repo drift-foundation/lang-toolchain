@@ -491,6 +491,94 @@ class AstToHIR:
 		"""Lower the `copy` expression to an explicit HIR marker."""
 		return H.HCopy(subject=self.lower_expr(expr.value), loc=getattr(expr, "loc", None) or Span())
 
+	def _visit_expr_Share(self, expr: ast.Share) -> H.HExpr:
+		"""
+		Lower the `share x` expression form (0.31.20).
+
+		Symmetric with `captures(share x)` — desugars to the same
+		`HCall(HQualifiedMember(Share-trait, "share"), [HBorrow(<local>)])`
+		shape the lambda-capture path produces (see lines 644-693
+		above).  Reuses the trait-dispatch + borrow-checker + codegen
+		pipeline; no new HIR/MIR/codegen plumbing.
+
+		**Diagnostic dispatch via the `origin` field, not a dynamic
+		attribute.**  `normalize.py::_rewrite_expr` rebuilds HCall
+		and only forwards declared dataclass fields (origin is one;
+		dynamic `setattr` flags are dropped).  v1 uses two origin
+		values:
+
+		- `origin="share_expr"` — NAME subject; type checker runs the
+		  Share-trait pre-check and emits
+		  `E-SHARE-EXPR-NOT-SHARE` (Copy or non-Share variant).
+		- `origin="share_expr_non_local"` — non-NAME subject (call,
+		  projection, etc.); type checker emits
+		  `E-SHARE-EXPR-SUBJECT-NOT-LOCAL` ("share x: subject must
+		  be a local binding") before borrow-check would complain
+		  about borrowing a temporary.  Users bind first:
+		  `val a = compute(); share a;`.
+
+		**Span**: the synthesized HCall is built with `loc=span`
+		(the `share` keyword's source position), so diagnostics
+		report a real file/line/column and tooling can map back to
+		the source.
+
+		Borrow-check invariant: lowering does NOT mutate the
+		binding.  The synthesized `HBorrow(<local>)` is read-only —
+		outstanding borrows into `*x` (e.g.
+		`val r = x.get(); ... share x ...`) stay valid through both
+		the call and any unwind path.  This is the second ergonomic
+		gain over `move x` (the first being that `x` itself stays
+		usable after the call).
+		"""
+		span = Span.from_loc(getattr(expr, "loc", None))
+		subject_is_name = isinstance(expr.value, ast.Name)
+		share_trait = ast.TypeNameRef(
+			name="Share",
+			module_id="std.core.shareable",
+		)
+		if subject_is_name:
+			subject_name = expr.value.ident
+			orig_bid = self._lookup_binding(subject_name)
+			subject_var = H.HVar(
+				name=subject_name,
+				binding_id=orig_bid,
+				loc=span,
+			)
+			subject_place = H.HPlaceExpr(
+				base=subject_var,
+				projections=[],
+				loc=span,
+			)
+			borrow_arg = H.HBorrow(subject=subject_place, is_mut=False)
+			origin_kind = "share_expr"
+		else:
+			# Non-NAME subject — synthesize a borrow over the lowered
+			# expression so the IR is well-formed, but tag the call
+			# with a distinct origin so the type checker emits the
+			# clear `E-SHARE-EXPR-SUBJECT-NOT-LOCAL` diagnostic
+			# before any borrow-checker complaint about borrowing a
+			# temporary.  Using the `origin` field (preserved by
+			# `normalize.py`'s HCall rebuild) instead of a dynamic
+			# attribute, which `normalize._rewrite_expr` would drop.
+			lowered_subject = self.lower_expr(expr.value)
+			subject_place = H.HPlaceExpr(
+				base=lowered_subject,
+				projections=[],
+				loc=span,
+			)
+			borrow_arg = H.HBorrow(subject=subject_place, is_mut=False)
+			origin_kind = "share_expr_non_local"
+		return H.HCall(
+			fn=H.HQualifiedMember(
+				base_type_expr=share_trait,
+				member="share",
+				loc=span,
+			),
+			args=[borrow_arg],
+			origin=origin_kind,
+			loc=span,
+		)
+
 	def _visit_expr_Binary(self, expr: ast.Binary) -> H.HExpr:
 		"""
 		Binary op lowering. Short-circuit behavior for &&/|| is NOT lowered
