@@ -3994,13 +3994,18 @@ class HIRToMIR:
 		lam = copy.deepcopy(lam)
 		if getattr(lam, "explicit_captures", None) is not None:
 			explicit_list: list[C.HCapture] = []
+			# Capture-mode keywords map 1-to-1 onto HCaptureKind.
+			# The legacy `"auto": REF` mapping (bareword
+			# `captures(x)` silently lowering to a borrowed-cell
+			# capture) was removed in 0.31.22 — see
+			# `lang/tests/driver/test_bareword_capture_rejected.py`
+			# and `parser/parser.py::_build_lambda_capture`.
 			kind_map = {
 				"ref": C.HCaptureKind.REF,
 				"ref_mut": C.HCaptureKind.REF_MUT,
 				"copy": C.HCaptureKind.COPY,
 				"move": C.HCaptureKind.MOVE,
 				"share": C.HCaptureKind.SHARE,
-				"auto": C.HCaptureKind.REF,
 			}
 			for cap in lam.explicit_captures or []:
 				if cap.binding_id is None:
@@ -4218,13 +4223,18 @@ class HIRToMIR:
 		"""Lower a lambda into a callback thunk + optional heap env."""
 		if getattr(lam, "explicit_captures", None) is not None:
 			explicit_list: list[C.HCapture] = []
+			# Capture-mode keywords map 1-to-1 onto HCaptureKind.
+			# The legacy `"auto": REF` mapping (bareword
+			# `captures(x)` silently lowering to a borrowed-cell
+			# capture) was removed in 0.31.22 — see
+			# `lang/tests/driver/test_bareword_capture_rejected.py`
+			# and `parser/parser.py::_build_lambda_capture`.
 			kind_map = {
 				"ref": C.HCaptureKind.REF,
 				"ref_mut": C.HCaptureKind.REF_MUT,
 				"copy": C.HCaptureKind.COPY,
 				"move": C.HCaptureKind.MOVE,
 				"share": C.HCaptureKind.SHARE,
-				"auto": C.HCaptureKind.REF,
 			}
 			for cap in lam.explicit_captures or []:
 				if cap.binding_id is None:

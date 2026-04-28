@@ -4246,12 +4246,13 @@ Using an explicit capture list disables implicit capture entirely.
 
 Capture items:
 
-- `x` (shorthand for `&x`)
-- `&x`
-- `&mut x`
-- `copy x`
-- `move x`
-- `share x` — see §22.2.4.
+- `&x` — borrowed read-only; non-escaping (see §22.2.3).
+- `&mut x` — borrowed mutable; non-escaping.
+- `copy x` — value-like duplicate; requires `T: Copy`.
+- `move x` — ownership transfer; outer binding consumed.
+- `share x` — second-owner alias; requires `T: Share`. See §22.2.4.
+
+**Bareword `captures(x)` (no mode keyword) is rejected at parse time as of 0.31.22.** Pre-0.31.22 it silently lowered to `&x`, which produced silent runtime miscompiles for escaping closures (e.g. loop-built closure chains assigned into `core.callback*` — every closure observed the loop-final value of the captured cell). Use one of the explicit forms above; the compiler diagnostic lists the available choices.
 
 Rules:
 
@@ -4263,7 +4264,7 @@ Rules:
 
 Captured name types:
 
-- `x` or `&x` binds `x: &T`
+- `&x` binds `x: &T`
 - `&mut x` binds `x: &mut T`
 - `copy x`, `move x`, or `share x` binds `x: T`
 

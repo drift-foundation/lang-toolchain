@@ -17,7 +17,7 @@ def test_hidden_lambda_ref_capture_local_type_is_ref(tmp_path: Path) -> None:
 
 		fn main() nothrow -> Int {
 			var count = core.cell(0);
-			(| | captures(count) => {
+			(| | captures(&count) => {
 				count.set(count.get() + 1);
 				return 0;
 			})();

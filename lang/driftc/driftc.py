@@ -5700,12 +5700,20 @@ def compile_stubbed_funcs(
 			discovery = discover_captures(lam)
 			lam.captures = discovery.captures
 		if not lam.captures and getattr(lam, "explicit_captures", None):
+			# Capture-mode keywords map 1-to-1 onto HCaptureKind.  No
+			# `"auto"` row — the bareword `captures(x)` form was
+			# removed at the parser level in 0.31.22 (silent-miscompile
+			# class for escaping closures; see
+			# `project_bareword_captures_removed.md`).  If a hidden /
+			# regenerated lambda spec ever surfaces with `kind="auto"`
+			# here, it's a stage1 capture-discovery bug that should be
+			# fixed at the source, not silently lowered to REF.
 			kind_map = {
 				"ref": C.HCaptureKind.REF,
 				"ref_mut": C.HCaptureKind.REF_MUT,
 				"copy": C.HCaptureKind.COPY,
 				"move": C.HCaptureKind.MOVE,
-				"auto": C.HCaptureKind.REF,
+				"share": C.HCaptureKind.SHARE,
 			}
 			if origin_typed is not None and lam.explicit_captures:
 				name_to_bid: dict[str, int] = {}

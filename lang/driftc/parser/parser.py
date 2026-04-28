@@ -1917,34 +1917,44 @@ def _build_lambda(tree: Tree) -> Lambda:
 	declared_nothrow = False
 
 	def _build_lambda_capture(node: Tree) -> LambdaCapture:
-		kind = "auto"
-		seen_kind = False
+		# Capture-list grammar (post-0.31.22) requires an explicit
+		# mode keyword.  The bareword `captures(x)` form was removed
+		# because it silently mapped to a borrowed-reference capture
+		# (`HCaptureKind.REF`), which silently miscompiled when the
+		# closure escaped and the outer binding cell was reseated
+		# (e.g. loop-built closure chain assigned into
+		# `core.callback*`).  See
+		# `lang/tests/driver/test_bareword_capture_rejected.py`.
+		kind: str | None = None
 		name_tok: Token | None = None
 		for child in node.children:
 			if isinstance(child, Token):
 				if child.type == "COPY":
 					kind = "copy"
-					seen_kind = True
 				elif child.type == "MOVE":
 					kind = "move"
-					seen_kind = True
 				elif child.type == "SHARE":
 					kind = "share"
-					seen_kind = True
 				elif child.type == "AMP":
 					kind = "ref"
-					seen_kind = True
 				elif child.type == "MUT":
 					kind = "ref_mut"
-					seen_kind = True
 				elif child.type == "NAME":
 					name_tok = child
 			elif isinstance(child, Tree) and _name(child) == "lambda_capture_item":
 				return _build_lambda_capture(child)
-		if not seen_kind:
-			kind = "auto"
 		if name_tok is None:
 			raise ValueError("lambda capture item missing name")
+		if kind is None:
+			# Defensive — the grammar no longer permits bareword
+			# `NAME` here, so this should be unreachable.  Kept as a
+			# clear compiler-bug message rather than a silent
+			# downstream "auto" lowering.
+			raise ValueError(
+				f"capture '{name_tok.value}' missing explicit mode "
+				"(copy / move / share / & / &mut); bareword "
+				"`captures(x)` is no longer supported"
+			)
 		return LambdaCapture(loc=_loc(node), name=name_tok.value, kind=kind)
 
 	for child in tree.children:

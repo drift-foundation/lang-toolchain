@@ -227,7 +227,7 @@ LambdaReturns ::= "->" Ty
 LambdaParams ::= LambdaParam ("," LambdaParam)*
 LambdaParam  ::= ("var" | "val")? NAME (":" Ty)?
 LambdaCaptures ::= "captures" "(" (LambdaCaptureItem ("," LambdaCaptureItem)*)? ")"
-LambdaCaptureItem ::= "copy" NAME | "move" NAME | "&" "mut"? NAME | NAME
+LambdaCaptureItem ::= "copy" NAME | "move" NAME | "share" NAME | "&" "mut"? NAME
 LambdaBody   ::= Expr | ValueBlock | Block
 
 TraitExpr    ::= TraitOr
@@ -248,7 +248,7 @@ Literal      ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral | FStri
 ### Notes
 
 - Pipelines use `|>` and are left-associative; `<|` is reserved for a future reverse-pipeline form.
-- Lambda captures are inferred by default; `captures(...)` opts into explicit capture mode.
+- Lambda captures are inferred by default; `captures(...)` opts into explicit capture mode. Each item in the list MUST spell its mode explicitly — `copy x`, `move x`, `share x`, `&x`, or `&mut x`. Bareword `captures(x)` (no mode keyword) is rejected at parse time as of 0.31.22; pre-0.31.22 it silently lowered to a borrowed-cell capture, which silently miscompiled escaping closures (loop-built closure chains observed only the loop-final value).
 - This grammar is a reference for parsers; semantic rules (ownership, moves, errors) are defined in `drift-lang-spec.md`.
 - In normal blocks, a bare expression must appear as a statement (`ExprStmt`) and end with `;`. In a `ValueBlock` (`{ ... Expr }`), statements require `;`, but the final value expression must not.
 - Examples: `try f() catch { 0 }`, `try f() catch { log("x"); 0 }`. A `{ x + 1 }` block is only legal where a value-producing block is expected (lambda bodies, match **expression** arms, try/catch expression arms).

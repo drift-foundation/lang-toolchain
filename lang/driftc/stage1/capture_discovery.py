@@ -272,11 +272,20 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			return C.HCaptureKind.MOVE
 		if kind == "share":
 			return C.HCaptureKind.SHARE
-		if kind == "auto":
-			return C.HCaptureKind.REF
+		# `kind == "auto"` (bareword `captures(x)` with no mode keyword)
+		# was removed at the parser level in 0.31.22 — silently lowered
+		# to REF and silently miscompiled escaping closures.  If we
+		# ever see "auto" here, it's a stale-path/regenerated-spec bug,
+		# not user code; surface it as a compiler bug rather than a
+		# silent REF lowering.  See `project_bareword_captures_removed.md`.
 		diags.append(
 			_cap_diag(
-				message="unsupported explicit capture kind",
+				message=(
+					f"unsupported explicit capture kind {kind!r} "
+					f"(0.31.22+: capture items must spell mode "
+					f"copy/move/share/&/&mut; bareword `captures(x)` "
+					f"is no longer accepted)"
+				),
 				severity="error",
 				span=span,
 			)
@@ -334,22 +343,11 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			kind = _kind_from_explicit(cap.kind, cap.span)
 			if kind is None:
 				continue
-			if cap.kind == "auto":
-				use = root_usage.get(int(cap.binding_id))
-				if use is not None:
-					if use.move:
-						diags.append(
-							_cap_diag(
-								message=f"capture '{cap.name}' moves value; capture move {cap.name} to move",
-								severity="error",
-								span=use.span if use.span != Span() else cap.span,
-							)
-						)
-						continue
-					if use.write or use.borrow_mut:
-						kind = C.HCaptureKind.REF_MUT
-					elif use.borrow_shared or use.read:
-						kind = C.HCaptureKind.REF
+			# Pre-0.31.22 had a `cap.kind == "auto"` body-usage-driven
+			# adjustment (downgrade to REF / REF_MUT based on observed
+			# usage, error on move).  Removed with the bareword form;
+			# every cap.kind now comes from an explicit user keyword
+			# and the lowering is direct.
 			explicit_roots.add(int(cap.binding_id))
 			explicit_names[int(cap.binding_id)] = cap.name
 			explicit_list.append(

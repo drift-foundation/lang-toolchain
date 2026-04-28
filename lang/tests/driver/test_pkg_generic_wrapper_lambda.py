@@ -55,11 +55,11 @@ module consumer;
 import std.core as core;
 pub fn main() nothrow -> Int {
 \tvar count = core.cell(0);
-\t(| | captures(count) => {
+\t(| | captures(&count) => {
 \t\tcount.set(count.get() + 1);
 \t\treturn 0;
 \t})();
-\t(| | captures(count) => {
+\t(| | captures(&count) => {
 \t\tcount.set(count.get() + 1);
 \t\treturn 0;
 \t})();
@@ -84,7 +84,7 @@ module consumer;
 import std.core as core;
 pub fn main() nothrow -> Int {
 \tvar count = core.cell(0);
-\tval outer = core.callback0(| | captures(count) nothrow => {
+\tval outer = core.callback0(| | captures(move count) nothrow => {
 \t\tcount.set(count.get() + 10);
 \t\treturn count.get();
 \t});

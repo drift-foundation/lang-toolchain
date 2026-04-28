@@ -539,7 +539,6 @@ lambda_capture_item: COPY NAME
                    | MOVE NAME
                    | SHARE NAME
                    | AMP MUT? NAME
-                   | NAME
 
 trait_expr: trait_or
 trait_or: trait_and (OR trait_and)*

@@ -5,11 +5,11 @@ import std.core as core;
 fn main() nothrow -> Int {
 	var count = core.cell(0);
 	var count2 = 0;
-	(| | captures(count) => {
+	(| | captures(&count) => {
 		count.set(count.get() + 1);
 		return 0;
 	})();
-	(| | captures(count) => {
+	(| | captures(&count) => {
 		count.set(count.get() + 1);
 		return 0;
 	})();

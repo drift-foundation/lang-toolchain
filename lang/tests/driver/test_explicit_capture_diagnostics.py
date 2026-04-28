@@ -57,7 +57,7 @@ module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
-	return (| | captures(x, x) => { return 0; })();
+	return (| | captures(&x, &x) => { return 0; })();
 }
 """
 	rc, payload = _compile_single_module(tmp_path, capsys, source)
@@ -74,7 +74,7 @@ module m_main;
 
 fn main() nothrow -> Int{
 	val x = 1;
-	return (|x: Int| captures(x) => { return x; })(1);
+	return (|x: Int| captures(&x) => { return x; })(1);
 }
 """
 	rc, payload = _compile_single_module(tmp_path, capsys, source)
