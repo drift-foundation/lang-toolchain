@@ -4520,7 +4520,7 @@ def resolve_call_expr(
 			return None
 		return getattr(sig, "intrinsic_kind", None)
 
-	if isinstance(expr.fn, H.HVar) and _is_std_mem_module(expr.fn.module_id) and expr.fn.name in ("alloc_uninit", "dealloc", "rawbuffer_ptr", "rawbuffer_cap", "rawbuffer_from_parts", "ptr_at_ref", "ptr_at_mut", "write", "read", "ptr_from_ref", "ptr_from_ref_mut", "ptr_offset", "ptr_read", "ptr_write", "ptr_is_null", "replace", "swap", "maybe_uninit", "maybe_write", "maybe_assume_init_ref", "maybe_assume_init_mut", "maybe_assume_init_read"):
+	if isinstance(expr.fn, H.HVar) and _is_std_mem_module(expr.fn.module_id) and expr.fn.name in ("alloc_uninit", "dealloc", "rawbuffer_ptr", "rawbuffer_cap", "rawbuffer_from_parts", "rawbuffer_empty", "ptr_at_ref", "ptr_at_mut", "write", "read", "ptr_from_ref", "ptr_from_ref_mut", "ptr_offset", "ptr_read", "ptr_write", "ptr_is_null", "replace", "swap", "maybe_uninit", "maybe_write", "maybe_assume_init_ref", "maybe_assume_init_mut", "maybe_assume_init_read"):
 		rawbuffer_allowed = bool(ctx.allow_rawbuffer)
 		if call_kwargs_issues(expr.fn.name, getattr(expr, "kwargs", None)):
 			first_kw = (getattr(expr, "kwargs", []) or [None])[0]
@@ -4546,6 +4546,24 @@ def resolve_call_expr(
 			param_types = [ctx.int_ty]
 			ret_ty = rawbuf_inst
 			intrinsic_kind = IntrinsicKind.RAW_ALLOC
+		elif expr.fn.name == "rawbuffer_empty":
+			# `rawbuffer_empty<T>()` — drained-state sentinel.  No
+			# args, one type arg.  Lowers to ConstructStruct with
+			# null Ptr<Byte> + cap=0.  Pure compile-time constant
+			# emit; no runtime symbol.  See the project memory entry
+			# `project_typebox_owning_extraction.md` for the design.
+			if len(expr.args) != 0:
+				diagnostics.append(_tc_diag(message="rawbuffer_empty expects no arguments", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
+			if len(type_arg_ids) != 1:
+				diagnostics.append(_tc_diag(message="rawbuffer_empty<T> requires exactly one type argument", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
+			t_elem = _canonical_tid(type_arg_ids[0])
+			rawbuf_tid = ctx.type_table.ensure_named("RawBuffer", module_id="std.mem")
+			rawbuf_inst = ctx.type_table.ensure_struct_template(rawbuf_tid, [t_elem]) if ctx.type_table.has_typevar(t_elem) else ctx.type_table.ensure_struct_instantiated(rawbuf_tid, [t_elem])
+			param_types = []
+			ret_ty = rawbuf_inst
+			intrinsic_kind = IntrinsicKind.RAWBUFFER_EMPTY
 		elif expr.fn.name in ("rawbuffer_ptr", "rawbuffer_cap", "rawbuffer_from_parts"):
 			if expr.fn.name in ("rawbuffer_ptr", "rawbuffer_cap"):
 				if len(expr.args) != 1:

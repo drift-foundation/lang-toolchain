@@ -22,7 +22,9 @@ export {
 	TypeBoxError,
 	type_box,
 	downcast,
-	expect_downcast
+	expect_downcast,
+	take,
+	expect_take
 };
 
 /// Process-wide type-keyed value registry.
@@ -477,9 +479,18 @@ pub exception TypeBoxError();
 
 /// Heterogeneous type-erased value carrier.
 ///
-/// Wraps a value of any single type; the original type is recovered
-/// via `downcast<T>(&box)` (returns `Optional<&T>`) or the strict
-/// `expect_downcast<T>(&box, tag)` (throws on type mismatch).
+/// Wraps a value of any single type.  The stored value is recovered
+/// either by:
+///
+/// * **borrowed view** — `downcast<T>(&box)` (returns `Optional<&T>`)
+///   or the strict `expect_downcast<T>(&box, tag)` (throws on tag
+///   mismatch).  The box continues to own the value.
+/// * **owning extraction** — `take<T>(box)` (returns `Optional<T>`,
+///   consumes the box on success) or the strict `expect_take<T>(box,
+///   tag)` (throws on tag mismatch).  Used to drain a box into a
+///   plain `T` — e.g. removing a typed entry from a
+///   `HashMap<Uint64, TypeBox>` without leaking the value.
+///
 /// Internally stores the value's `core.type_id<T>()` plus a typed
 /// dropper closure so the destructor can release the value
 /// correctly even though the type is erased.
@@ -487,7 +498,7 @@ pub exception TypeBoxError();
 /// Construct via `type_box(value)`.
 ///
 /// **See also:** `type_box`, `downcast`, `expect_downcast`,
-/// `TypeBox.type_id`.
+/// `take`, `expect_take`, `TypeBox.type_id`.
 pub struct TypeBox {
 	tag: Uint64,
 	buf: mem.RawBuffer<Byte>,
@@ -505,14 +516,16 @@ fn _typebox_drop_impl<T>(p: mem.Ptr<Byte>) nothrow -> Void {
 }
 
 /// Wraps `value` in a `TypeBox`, recording its type for later
-/// recovery via `downcast<T>` / `expect_downcast<T>`.
+/// recovery via `downcast<T>` / `expect_downcast<T>` (borrowed
+/// view) or `take<T>` / `expect_take<T>` (owning extraction).
 ///
 /// **Parameters:**
 /// - `value` — value to wrap (consumed by move).
 ///
 /// **Returns:** a `TypeBox` carrying the value and its type tag.
 ///
-/// **See also:** `TypeBox`, `downcast`, `expect_downcast`.
+/// **See also:** `TypeBox`, `downcast`, `expect_downcast`, `take`,
+/// `expect_take`.
 pub fn type_box<T>(value: T) nothrow -> TypeBox {
 	unsafe {
 		var raw = mem.alloc_uninit<type T>(1);
@@ -557,6 +570,79 @@ pub fn downcast<T>(self: &TypeBox) nothrow -> Optional<&T> {
 pub fn expect_downcast<T>(self: &TypeBox, tag: String) -> &T {
 	match downcast<type T>(self) {
 		Some(v) => { return v; },
+		None => {
+			core.drop_value(move tag);
+			throw TypeBoxError();
+		}
+	}
+}
+
+/// Owning extraction: if `self` contains a `T`, move it out and
+/// return `Some(T)`; otherwise return `None` and drop `self`
+/// normally.
+///
+/// On the matched path, `self.buf` is replaced with
+/// `mem.rawbuffer_empty<Byte>()` BEFORE the typed view is
+/// deallocated.  This disarms `TypeBox.destroy` via its existing
+/// `mem.ptr_is_null` early-return — without the buf-replace step
+/// `destroy` would re-invoke the typed dropper on an
+/// already-deallocated buffer.  The replace-before-dealloc
+/// ordering is intentional: any future early-exit edge added
+/// between extraction and dealloc would leave the box in the
+/// drained state rather than holding a freed-but-non-null ptr.
+///
+/// On the mismatched path, `self` is consumed by-value and falls
+/// off the stack with its dropper still armed, so the originally
+/// stored value is released exactly once via the normal
+/// `Destructible::destroy` path.
+///
+/// **Parameters:**
+/// - `self` — box to extract from (consumed by move).
+///
+/// **Returns:** `Some(T)` on successful tag-match; `None` on
+/// mismatch.
+///
+/// **See also:** `expect_take`, `downcast`.
+pub fn take<T>(var self: TypeBox) nothrow -> Optional<T> {
+	if self.tag != core.type_id<type T>() {
+		return Optional<T>::None();
+	}
+	unsafe {
+		val p = mem.rawbuffer_ptr<type Byte>(&self.buf);
+		var raw_t = mem.rawbuffer_from_parts<type T>(p, 1);
+		val value = mem.read<type T>(&mut raw_t, 0);
+		// Mark the box as drained BEFORE freeing the typed view.
+		// `old_buf` aliases the same allocation as `raw_t`, but
+		// `RawBuffer` has no destructor — binding to `_` is a true
+		// no-op.  `dealloc<T>` then frees the backing exactly once.
+		val _old_buf = mem.replace<type mem.RawBuffer<Byte>>(
+			&mut self.buf,
+			mem.rawbuffer_empty<type Byte>()
+		);
+		mem.dealloc<type T>(move raw_t);
+		return Optional::Some(move value);
+	}
+}
+
+/// Strict form of `take<T>` — throws `TypeBoxError` if the box
+/// does not contain a `T`.
+///
+/// `tag` is consumed by drop on the failure path; the thrown
+/// `TypeBoxError` does not expose it.  Reserved for future
+/// diagnostics that may carry the tag.  Mirrors
+/// `expect_downcast` for the owning surface.
+///
+/// **Parameters:**
+/// - `self` — box to extract from (consumed by move).
+/// - `tag` — diagnostic tag (consumed by drop on failure).
+///
+/// **Throws:** `TypeBoxError` if the stored type tag does not
+/// match `core.type_id<T>()`.
+///
+/// **See also:** `take`, `expect_downcast`, `TypeBoxError`.
+pub fn expect_take<T>(self: TypeBox, tag: String) -> T {
+	match take<type T>(move self) {
+		Some(v) => { return move v; },
 		None => {
 			core.drop_value(move tag);
 			throw TypeBoxError();

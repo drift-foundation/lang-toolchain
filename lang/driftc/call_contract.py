@@ -238,6 +238,7 @@ INTRINSIC_ARITY_TABLE: dict[IntrinsicKind, IntrinsicSpec] = {
 	IntrinsicKind.RAWBUFFER_PTR: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_RAWBUFFER_VIEW", label="rawbuffer_ptr"),
 	IntrinsicKind.RAWBUFFER_CAP: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_RAWBUFFER_VIEW", label="rawbuffer_cap"),
 	IntrinsicKind.RAWBUFFER_FROM_PARTS: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_RAWBUFFER_FROM_PARTS", label="rawbuffer_from_parts"),
+	IntrinsicKind.RAWBUFFER_EMPTY: IntrinsicSpec(expected_args=0, code="E_INTRINSIC_ARITY_RAWBUFFER_EMPTY", label="rawbuffer_empty"),
 	IntrinsicKind.RAW_PTR_AT_REF: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_PTR_AT", label="ptr_at"),
 	IntrinsicKind.RAW_PTR_AT_MUT: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_PTR_AT", label="ptr_at"),
 	IntrinsicKind.RAW_WRITE: IntrinsicSpec(expected_args=3, code="E_INTRINSIC_ARITY_RAW_WRITE", label="write"),

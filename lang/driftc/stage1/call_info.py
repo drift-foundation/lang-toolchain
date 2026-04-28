@@ -60,6 +60,7 @@ class IntrinsicKind(Enum):
 	RAWBUFFER_PTR = "rawbuffer_ptr"
 	RAWBUFFER_CAP = "rawbuffer_cap"
 	RAWBUFFER_FROM_PARTS = "rawbuffer_from_parts"
+	RAWBUFFER_EMPTY = "rawbuffer_empty"
 	RAW_PTR_AT_REF = "raw_ptr_at_ref"
 	RAW_PTR_AT_MUT = "raw_ptr_at_mut"
 	RAW_WRITE = "raw_write"

@@ -737,6 +737,21 @@ def insert_string_arc(
 			elif isinstance(instr, M.PtrRead):
 				if _is_string_tid(instr.elem_ty):
 					owned_defs.add(dest)
+			elif isinstance(instr, M.RawBufferRead):
+				# `mem.read<T>(&mut buf, i)` moves the slot's value out;
+				# slot becomes uninitialized.  For refcount-bearing T
+				# (String) the +1 stake travels with the read result —
+				# treat it as already-owned, identical to `ArrayElemTake`
+				# / `PtrRead`.  Without this, the subsequent
+				# `StoreLocal(local, dest)` in
+				# `val v = mem.read<String>(...)` inserts a spurious
+				# `StringRetain` (refcount → 2), and the final drop
+				# leaves refcount at 1 → the original allocation leaks
+				# (carrier C7 in `test_typebox_take.py`; web-team
+				# `ctx_take<T>` is the motivating use case).
+				if _is_string_tid(instr.elem_ty):
+					owned_defs.add(dest)
+					move_only_defs.add(dest)
 			elif isinstance(instr, M.MoveOut):
 				owned_defs.add(dest)
 				move_only_defs.add(dest)
@@ -1063,6 +1078,16 @@ def insert_string_arc(
 					owned_values.add(instr.dest)
 					move_only_values.add(instr.dest)
 			elif isinstance(instr, M.PtrRead):
+				local_types[instr.dest] = instr.elem_ty
+				if _is_string_tid(instr.elem_ty):
+					owned_values.add(instr.dest)
+					move_only_values.add(instr.dest)
+			elif isinstance(instr, M.RawBufferRead):
+				# See the matching `RawBufferRead` branch in the
+				# `owned_defs` pass above for the rationale.  Mirrors
+				# `ArrayElemTake` / `PtrRead` — `mem.read<T>` is a
+				# move-out-of-storage primitive; the read result owns
+				# the +1 stake for refcount-bearing element types.
 				local_types[instr.dest] = instr.elem_ty
 				if _is_string_tid(instr.elem_ty):
 					owned_values.add(instr.dest)

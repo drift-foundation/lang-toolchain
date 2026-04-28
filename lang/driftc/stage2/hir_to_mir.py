@@ -3439,6 +3439,19 @@ class HIRToMIR:
 			self.b.emit(M.ConstructStruct(dest=dest, struct_ty=info.sig.user_ret_type, args=[ptr_val, cap_val]))
 			self._local_types[dest] = info.sig.user_ret_type
 			return dest
+		if intrinsic is IntrinsicKind.RAWBUFFER_EMPTY:
+			# Drained-state sentinel for `RawBuffer<T>` — null ptr,
+			# zero cap.  Lowers to a single `ZeroValue` (LLVM
+			# zeroinitializer for the aggregate).  No runtime helper.
+			# Used by stdlib code that needs to mark a `RawBuffer<T>`
+			# field as drained without inventing a parallel flag —
+			# `TypeBox.take<T>` is the reference user.
+			if info is None:
+				raise AssertionError("rawbuffer_empty(...) missing CallInfo (checker bug)")
+			dest = self.b.new_temp()
+			self.b.emit(M.ZeroValue(dest=dest, ty=info.sig.user_ret_type))
+			self._local_types[dest] = info.sig.user_ret_type
+			return dest
 		if intrinsic in (IntrinsicKind.RAW_PTR_AT_REF, IntrinsicKind.RAW_PTR_AT_MUT):
 			if info is None or not info.sig.param_types:
 				raise AssertionError("ptr_at(...) missing CallInfo (checker bug)")
