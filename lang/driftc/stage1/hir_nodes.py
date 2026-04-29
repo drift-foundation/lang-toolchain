@@ -114,6 +114,13 @@ class HSelfRef(HTraitSubject):
 @dataclass
 class HTypeNameRef(HTraitSubject):
 	name: str
+	# Optional module qualifier — set when the source-side
+	# `s0.TypeNameRef` carried a `module_id` (e.g. a fully-qualified
+	# trait subject `std.foo::Type is Trait`).  Preserved through
+	# AST→HIR so the trait-resolution machinery can disambiguate
+	# subjects across modules.  Defaults to None for unqualified
+	# subjects (the only shape the current parser produces).
+	module_id: Optional[str] = None
 	loc: Span = field(default_factory=Span)
 
 

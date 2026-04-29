@@ -3429,7 +3429,17 @@ class TypeChecker:
 			if isinstance(subject, H.HSelfRef):
 				return parser_ast.SelfRef(loc=_loc_from_span(subject.loc))
 			if isinstance(subject, H.HTypeNameRef):
-				return parser_ast.TypeNameRef(name=subject.name, loc=_loc_from_span(subject.loc))
+				# Forward `module_id` so qualified subjects round-
+				# trip H → parser_ast without losing the qualifier.
+				# Same drop-shape as the `_to_jsonable` TypeNameRef
+				# collision closed at 0.31.28 and the AST→HIR drop
+				# closed at 0.31.29; this site is the matching
+				# back-conversion leg.
+				return parser_ast.TypeNameRef(
+					name=subject.name,
+					loc=_loc_from_span(subject.loc),
+					module_id=getattr(subject, "module_id", None),
+				)
 			return subject
 
 		def _trait_expr_to_parser(expr: H.HTraitExpr) -> parser_ast.TraitExpr:

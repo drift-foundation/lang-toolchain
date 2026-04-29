@@ -223,7 +223,18 @@ class AstToHIR:
 			if isinstance(subject, ast.SelfRef):
 				return H.HSelfRef(loc=self._as_span(getattr(subject, "loc", None)))
 			if isinstance(subject, ast.TypeNameRef):
-				return H.HTypeNameRef(name=subject.name, loc=self._as_span(getattr(subject, "loc", None)))
+				# Preserve `module_id` so qualified trait subjects
+				# (e.g. a future `std.foo::Type is Trait`) round-
+				# trip through HIR.  Same shape of bug as the
+				# DMIR-decode TypeNameRef collision fixed at
+				# 0.31.28; closing it defensively here prevents
+				# another package-mode surprise the next time the
+				# parser produces a qualified subject.
+				return H.HTypeNameRef(
+					name=subject.name,
+					module_id=getattr(subject, "module_id", None),
+					loc=self._as_span(getattr(subject, "loc", None)),
+				)
 			return subject
 		return H.HTraitIs(
 			subject=_lower_trait_subject(expr.subject),

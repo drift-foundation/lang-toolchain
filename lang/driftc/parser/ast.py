@@ -303,9 +303,21 @@ class SelfRef(TraitSubject):
 class TypeNameRef(TraitSubject):
     loc: Located
     name: str
+    # Optional module qualifier — present when the source-side
+    # subject is fully-qualified (e.g. `std.foo::Type is Trait`).
+    # Mirrors the field on `stage0.ast.TypeNameRef` so the back-
+    # conversion in `type_checker.py:_trait_subject_to_parser`
+    # round-trips `module_id` from `H.HTypeNameRef` without dropping
+    # it.  Defaults to None for the parser's only current shape
+    # (single NAME token from `parser/parser.py:1396`).
+    module_id: Optional[str] = None
 
     def __hash__(self) -> int:
-        return hash(self.name)
+        # Match the (module_id, name) hash discipline of
+        # `stage0.ast.TypeNameRef` so two TypeNameRefs that compare
+        # unequal under @dataclass-derived eq (different module_id)
+        # also hash differently.
+        return hash((self.module_id, self.name))
 
 
 @dataclass

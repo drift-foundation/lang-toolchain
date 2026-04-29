@@ -426,7 +426,15 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 		if isinstance(subject, parser_ast.SelfRef):
 			return s0.SelfRef(loc=Span.from_loc(getattr(subject, "loc", None)))
 		if isinstance(subject, parser_ast.TypeNameRef):
-			return s0.TypeNameRef(name=subject.name, loc=Span.from_loc(getattr(subject, "loc", None)))
+			# Forward `module_id` (parser_ast.TypeNameRef gained the
+			# field at 0.31.29 to round-trip qualified subjects);
+			# `getattr` is a defensive guard against any caller that
+			# constructs a TypeNameRef before the field landed.
+			return s0.TypeNameRef(
+				name=subject.name,
+				module_id=getattr(subject, "module_id", None),
+				loc=Span.from_loc(getattr(subject, "loc", None)),
+			)
 		return subject
 
 	if isinstance(expr, parser_ast.Literal):
