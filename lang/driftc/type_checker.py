@@ -317,8 +317,34 @@ class TypeChecker:
 			if td.can_throw():
 				return f"Fn({params}) -> {ret}"
 			return f"Fn({params}) nothrow -> {ret}"
-		if td.param_types:
-			args = ", ".join(self._pretty_type_name(t, current_module=current_module) for t in td.param_types)
+		# For nominal kinds with monomorphized instances, the user-facing
+		# type-args live in the instance map — NOT in `td.param_types`.
+		# STRUCT's `td.param_types` holds field types; INTERFACE's is
+		# typically empty (instance args only in `interface_instances`);
+		# VARIANT can also disagree.  Reading `td.param_types` here was
+		# the 0.31.20-era STRUCT-vs-VARIANT pretty-printer bug, also
+		# surfaced for INTERFACE in 0.31.31 by the bookkeeper /
+		# web-rest middleware diagnostic where the third Callback3
+		# type-arg rendered as bare `std.core.Callback2` (no args).
+		type_args: list[TypeId] = []
+		if td.kind is TypeKind.STRUCT:
+			inst = self.type_table.get_struct_instance(ty)
+			if inst is not None:
+				type_args = list(inst.type_args)
+		elif td.kind is TypeKind.INTERFACE:
+			inst = self.type_table.get_interface_instance(ty)
+			if inst is not None:
+				type_args = list(inst.type_args)
+		elif td.kind is TypeKind.VARIANT:
+			inst = self.type_table.get_variant_instance(ty)
+			if inst is not None:
+				type_args = list(inst.type_args)
+		elif td.param_types:
+			# REF / RAW_PTR / ARRAY etc. — `td.param_types` is the
+			# correct shape for these.
+			type_args = list(td.param_types)
+		if type_args:
+			args = ", ".join(self._pretty_type_name(t, current_module=current_module) for t in type_args)
 			return f"{name}<{args}>"
 		return name
 

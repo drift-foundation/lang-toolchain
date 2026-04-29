@@ -1,6 +1,108 @@
 # Drift development history
 
 ## 2026-04-29
+- **Fix `_pretty_type_name` rendering of nominal type-args for
+  diagnostics — release 0.31.31 (ABI unchanged, still 10).**
+
+  **Symptom.**  Two distinct rendering bugs collapsed into one
+  user-facing message in the bookkeeper / web-rest 0.4.0 throws
+  diagnostic that surfaced alongside 0.31.30:
+
+      lambda can throw but is expected to be nothrow for
+      Fn(Ref<web.rest.request.Request<String, String, String,
+         Array<String>, Array<String>, Array<String>, Array<String>,
+         Array<String>, Array<String>, Int,
+         std.json.JsonHandle<std.concurrent.Arc>>>,
+         RefMut<web.rest.context.Context<...>>,
+         std.core.Callback2)
+      nothrow -> std.core.Result<...>
+
+  R1.  An INTERFACE TypeId in FUNCTION param-type position rendered
+       with no type-args at all — bare `std.core.Callback2` instead
+       of `Callback2<&Req, &mut Ctx, Result<Resp, RestError>>`.
+  R2.  STRUCT TypeIds rendered with their *field types* in `<...>`
+       instead of their (typically empty) instance type-args:
+       non-generic `Request` rendered as
+       `Request<String, String, String, Array<String>, ...>` because
+       the renderer fell through to the struct's eleven field
+       types.  Same for `Context`, `Resp`, `AppErr`, etc.
+
+  The actual TypeIds were correct in both cases; only the rendering
+  was wrong.  Cosmetic, but actively misleading — R1 contributed to
+  the app team's misdiagnosis of the 0.31.30 bug as "Callback3
+  param inference broken at arity ≥ 3" (the bare-`Callback2` reading
+  in the third lambda-param position looked like type-arg loss).
+
+  **Root cause.**  `lang/driftc/type_checker.py::_pretty_type_name`
+  read `td.param_types` unconditionally as the type-args list and
+  rendered `Name<args>`.  But for nominal kinds the user-facing
+  type-args live in the matching instance map, NOT in
+  `td.param_types`:
+
+  - STRUCT: `td.param_types` holds *field types* (the 0.31.20-era
+    pretty-printer bug).  Instance args are in
+    `struct_instances[ty].type_args`.
+  - INTERFACE: `td.param_types` is typically empty.  Instance args
+    are in `interface_instances[ty].type_args`.
+  - VARIANT: similar instance-map decoupling.
+
+  REF / RAW_PTR / ARRAY / FUNCTION still use `td.param_types`
+  correctly (REF[T], Array[T], Fn(P...) -> R, etc.).
+
+  **Fix.**  Branch by `TypeKind` in `_pretty_type_name`:
+
+      if td.kind is TypeKind.STRUCT:
+          inst = self.type_table.get_struct_instance(ty)
+          type_args = list(inst.type_args) if inst is not None else []
+      elif td.kind is TypeKind.INTERFACE:
+          inst = self.type_table.get_interface_instance(ty)
+          type_args = list(inst.type_args) if inst is not None else []
+      elif td.kind is TypeKind.VARIANT:
+          inst = self.type_table.get_variant_instance(ty)
+          type_args = list(inst.type_args) if inst is not None else []
+      elif td.param_types:
+          type_args = list(td.param_types)
+
+  Behavior change is diagnostic-rendering only.  No HIR / MIR /
+  codegen path touched.  ABI 10 unchanged.
+
+  **Effect on the bookkeeper diagnostic.**  Original 0.31.30
+  rendering:
+
+      Fn(Ref<...Request<String, String, String, Array<String>, ...>>,
+         RefMut<...Context<Array<Uint64>, ...>>,
+         std.core.Callback2) nothrow ->
+         std.core.Result<Response<Int, ...>, RestError<...>>
+
+  After 0.31.31:
+
+      Fn(Ref<web.rest.request.Request>,
+         RefMut<web.rest.context.Context>,
+         std.core.Callback2<Ref<web.rest.request.Request>,
+                            RefMut<web.rest.context.Context>,
+                            std.core.Result<web.rest.response.Response,
+                                            web.rest.errors.RestError>>)
+         nothrow -> std.core.Result<web.rest.response.Response,
+                                    web.rest.errors.RestError>
+
+  Same TypeId graph, accurate rendering.
+
+  **Tests.**  New
+  `lang/tests/driver/test_pretty_type_name_diagnostic_rendering.py`
+  with three pins on the load-bearing `lambda can throw but is
+  expected to be nothrow for ...` diagnostic:
+  - R1: INTERFACE in FUNCTION param-type position must render with
+    type-args (`Callback2<...>` not bare `Callback2`).
+  - R2: non-generic STRUCT must not render with `<...>` at all
+    (`Resp` not `Resp<Int>`).
+  - VARIANT smoke: `Result<Resp, AppErr>` must still render with
+    both type-args (was already working; pinned to catch regressions
+    when the renderer is touched).
+
+  Pre-fix: 2 fail (R1, R2) and 1 passes (variant smoke).
+  Post-fix: 3/3 pass.  Broader driver+checker+stage1+stage2 gate:
+  1545 passed.
+
 - **Fix cascading Unknown-receiver diagnostics after a legitimate
   throws-mismatch in a candidate-typed bare lambda — release 0.31.30
   (ABI unchanged, still 10).**  LANGUAGE_BUG.
