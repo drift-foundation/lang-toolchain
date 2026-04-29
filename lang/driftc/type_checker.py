@@ -6169,11 +6169,41 @@ class TypeChecker:
 							# of the monomorphized Arc<X>::share__inst__,
 							# producing a struct-field type mismatch at
 							# LLVM codegen.
+							#
+							# When `type_expr` raises, surface a span-anchored
+							# internal-compiler-error diagnostic with the
+							# underlying exception type and message.  The
+							# previous form silently swallowed the exception,
+							# which left the synthesized HCall with a
+							# `callsite_id` but no `call_info_by_callsite_id`
+							# entry; the post-typecheck guard at
+							# `driftc.py:5273` then surfaced the unhelpful
+							# `E_INTERNAL_MISSING_CALLSITE_CALLINFO` with no
+							# source span.  Surfacing the real cause here
+							# replaces a cryptic downstream error with an
+							# actionable one anchored at the offending
+							# capture clause.
 							if implements_share and getattr(cap, "share_value", None) is not None:
 								try:
 									type_expr(cap.share_value)
-								except Exception:
-									pass
+								except Exception as _share_exc:
+									try:
+										_share_ty_name = self.type_table.get(root_ty).name or f"typeid={root_ty}"
+									except Exception:
+										_share_ty_name = f"typeid={root_ty}"
+									diagnostics.append(
+										_tc_diag(
+											message=(
+												f"internal: failed to type-check "
+												f"synthesized `Share::share(&{cap.name})` "
+												f"for type '{_share_ty_name}': "
+												f"{type(_share_exc).__name__}: {_share_exc}"
+											),
+											code="E_INTERNAL_SHARE_VALUE_TYPECHECK_FAILED",
+											severity="error",
+											span=getattr(cap, "span", None) or getattr(cap, "loc", Span()),
+										)
+									)
 				if capture_kinds:
 					explicit_capture_stack.append(capture_kinds)
 				saved_return_type = return_type
