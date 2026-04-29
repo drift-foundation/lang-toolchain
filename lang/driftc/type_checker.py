@@ -29,7 +29,7 @@ from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTarg
 from lang.driftc.stage1.node_ids import assign_node_ids
 from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
-from lang.driftc.checker import FnSignature, TypeParam
+from lang.driftc.checker import FnSignature, TypeParam, user_facing_binding_name
 from lang.driftc.checker.typed_validator import validate_typed_hir
 from lang.driftc.core.diagnostics import Diagnostic
 from lang.driftc.core.function_id import FunctionId
@@ -5973,7 +5973,7 @@ class TypeChecker:
 						return record_expr(expr, bid_ty)
 				diagnostics.append(
 					_tc_diag(
-						message=f"unknown name '{expr.name}'",
+						message=f"unknown name '{user_facing_binding_name(expr.name)}'",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)

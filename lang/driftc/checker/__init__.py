@@ -32,6 +32,42 @@ def _chk_diag(*args, **kwargs):
 		kwargs["phase"] = "typecheck"
 	return Diagnostic(*args, **kwargs)
 
+
+def user_facing_binding_name(name: str) -> str:
+	"""Strip internal-only binding-name prefixes for user-facing
+	diagnostics, recovering the source spelling.
+
+	Currently handles `__match_binder_<counter>_<source>` (synthesized
+	by `lang/driftc/stage1/ast_to_hir.py` to give match-arm binders
+	function-scoped uniqueness).  The internal name is implementation
+	detail; user diagnostics must spell the source name.
+
+	**Compiler-reserved prefix.**  `__match_binder_` is reserved for
+	the HIR lowering pass — it sits alongside other internal
+	identifiers like `__borrow_tmp` (cf. `stage2/string_arc.py`,
+	`borrow_checker_pass.py`).  Any local that begins
+	`__match_binder_<digits>_<rest>` is treated as compiler-generated
+	and unmangled here.  In the unlikely event a user-authored
+	identifier matches that exact regex, its diagnostic will display
+	the suffix only; this is acceptable because the `__`-prefix
+	namespace is already documented as compiler-internal across the
+	codebase.
+
+	Defense-in-depth: callers that emit diagnostics referencing a
+	binding by its HIR-level name should route through this helper.
+	The invariant pinned by
+	`lang/tests/driver/test_match_binder_diagnostic_hygiene.py` is
+	that no user diagnostic message contains `__match_binder_`.
+	"""
+	if name.startswith("__match_binder_"):
+		rest = name[len("__match_binder_"):]
+		i = 0
+		while i < len(rest) and rest[i].isdigit():
+			i += 1
+		if i > 0 and i < len(rest) and rest[i] == "_":
+			return rest[i + 1:]
+	return name
+
 from lang.driftc.core.function_id import FunctionId, function_symbol
 from lang.driftc.core.span import Span
 from lang.driftc.core.types_protocol import TypeEnv
@@ -1533,7 +1569,7 @@ class Checker:
 					if self.report_unknown_names:
 						self._append_diag(
 							_chk_diag(
-								message=f"unknown name '{expr.name}'",
+								message=f"unknown name '{user_facing_binding_name(expr.name)}'",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
 								code="E-UNKNOWN-NAME",

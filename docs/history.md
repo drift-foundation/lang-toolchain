@@ -1,6 +1,91 @@
 # Drift development history
 
 ## 2026-04-29
+- **Fix match-binder name leak in user-facing diagnostics —
+  release 0.31.32 (ABI unchanged, still 10).**  Bug A.2 from the
+  bookkeeper / web-rest middleware report.
+
+  **Symptom.**  When a `match` scrutinee is rejected upstream (e.g.
+  scrutinee is non-variant, or the scrutinee form itself fails the
+  variant-type check), the arm bodies' binders — already renamed by
+  HIR lowering to `__match_binder_<counter>_<source>` for
+  function-scoped uniqueness — leaked into cascading "unknown name"
+  diagnostics with their internal spelling:
+
+      error: match scrutinee must be a variant type
+      error: unknown name '__match_binder_1_resp'
+      error: unknown name '__match_binder_2_e'
+
+  The internal name is implementation detail and must never reach
+  the user.  Reported originally as part of the bookkeeper /
+  web-rest middleware Bug B cascade; that cascade was suppressed at
+  0.31.30, but the underlying scrutinee-type-rejection path
+  preserved the leak independently.
+
+  **Root cause.**  `lang/driftc/stage1/ast_to_hir.py` mints a unique
+  internal binder name `__match_binder_<counter>_<source>` and
+  rewrites the arm body's `HVar` references to use it.  When a
+  later type-checker site can't resolve the binding (e.g. because
+  the upstream scrutinee check rejected the match and skipped arm
+  binding setup), the unknown-name diagnostic interpolated
+  `expr.name` directly — so the internal spelling reached the user.
+
+  Two known emission sites:
+
+  - `lang/driftc/type_checker.py` (HVar resolution path,
+    `unknown name '{expr.name}'`)
+  - `lang/driftc/checker/__init__.py` (sibling local-ident
+    `unknown name` diagnostic gated by `report_unknown_names`)
+
+  **Fix.**  Defined a small helper in
+  `lang/driftc/checker/__init__.py`:
+
+      def user_facing_binding_name(name: str) -> str:
+          """Strip `__match_binder_<counter>_` prefix to recover
+          the source spelling for user diagnostics."""
+          if name.startswith("__match_binder_"):
+              rest = name[len("__match_binder_"):]
+              i = 0
+              while i < len(rest) and rest[i].isdigit():
+                  i += 1
+              if i > 0 and i < len(rest) and rest[i] == "_":
+                  return rest[i + 1:]
+          return name
+
+  Applied at both diagnostic emission sites.  Behavior change is
+  diagnostic-only.  No HIR / MIR / codegen path touched.  ABI 10
+  unchanged.
+
+  **Tests.**  New `lang/tests/driver/
+  test_match_binder_diagnostic_hygiene.py` with the broad invariant:
+  *no user-facing diagnostic message may contain
+  `__match_binder_`*.  Four shapes:
+
+  - H1: `match &result { Ok(resp) => ..., Err(e) => ... }` — the
+    user's literal report.  The hygiene invariant must hold whether
+    Bug A.1 (by-ref match acceptance) is later resolved as accept,
+    reject, or deferred.
+  - H2: by-value match with a deliberately-undefined name in the arm
+    body.  Confirms source-name spelling propagates through the
+    unknown-name path even when binders are themselves resolved.
+  - H3: scrutinee-type rejection (`match n { Ok(...) => ..., Err(...)
+    => ... }` with `n: Int`).  Load-bearing — pre-fix this leaks
+    `__match_binder_1_resp` / `__match_binder_2_e`; post-fix the
+    diagnostics spell `'resp'` / `'e'`.
+  - H1 follow-up: conditional pin asserting source-name spelling
+    when the H1 form does fire an unknown-name cascade (vacuous
+    under A.1 = accept; load-bearing under A.1 = reject).
+
+  Pre-fix: H3 fails.  Post-fix: 4/4 pass.
+
+  **Note on Bug A.1.**  This patch is strictly A.2 (diagnostic
+  hygiene).  A.1 (whether `match &Variant` is supported) is a
+  separate language-direction decision.  The release memo's
+  canonical example uses `match &result { Ok / Err }` and that form
+  appears to compile clean on HEAD, but the resolution of A.1 (e.g.
+  ownership-ledger work for by-ref destructure) is tracked
+  separately and not landed here.
+
 - **Fix `_pretty_type_name` rendering of nominal type-args for
   diagnostics — release 0.31.31 (ABI unchanged, still 10).**
 
