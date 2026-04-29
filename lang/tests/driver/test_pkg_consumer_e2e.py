@@ -87,6 +87,49 @@ def _run_binary(binary: Path, timeout: int = 30) -> subprocess.CompletedProcess[
 	)
 
 
+def _emit_package_consumer(
+	source: str,
+	*,
+	stdlib_pkg: "StdlibPackage",
+	tmp_path: Path,
+	package_id: str = "consumer",
+	package_version: str = "0.0.1",
+) -> subprocess.CompletedProcess[str]:
+	"""Build the consumer source as a package via --emit-package, against
+	stdlib loaded as a signed .dmp.
+
+	Mirrors the certified-toolchain producer flow (the certified driftc
+	auto-injects --package-root + --dep std@VERSION; here we set them
+	explicitly).  Returns the completed process so callers can inspect
+	stderr for diagnostics.
+	"""
+	src_dir = tmp_path / "src"
+	src_dir.mkdir(exist_ok=True)
+	(src_dir / "main.drift").write_text(source)
+	empty_stdlib = tmp_path / "_empty_stdlib"
+	empty_stdlib.mkdir(exist_ok=True)
+	out_dmp = tmp_path / f"{package_id}.dmp"
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		str(src_dir / "main.drift"),
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(stdlib_pkg.pkg_root),
+		"--dep", f"std@{stdlib_pkg.version}",
+		"--trust-store", str(stdlib_pkg.trust_path),
+		"--dev", "--dev-core-trust-store", str(stdlib_pkg.trust_path),
+		"--emit-package", str(out_dmp),
+		"--package-id", package_id,
+		"--package-version", package_version,
+		"--package-target", "drift-dev",
+		"--source-content-id",
+		"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	]
+	return subprocess.run(
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
+	)
+
+
 # ---------------------------------------------------------------------------
 # 1. pkg_vis_source_private_method_rejected
 #    K25-guard: calling private/non-exported method from a package module
@@ -304,4 +347,209 @@ fn main() nothrow -> Int {
 	assert res.returncode == 0, (
 		f"binary exited with code {res.returncode}\n"
 		f"stdout: {res.stdout[:200]}\nstderr: {res.stderr[:200]}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# 6. pkg_share_capture_arc
+#    Package-mode coverage for `captures(share x)` on `conc.Arc<T>`. The
+#    `implement<T> shareable.Share for Arc<T>` impl in std.concurrent
+#    must survive the .dmp boundary so that the trait prover proves
+#    Arc<App>: Share on the consumer side and the type checker does NOT
+#    fire E-CAPTURE-SHARE-NOT-SHARE. Mirrors the source-mode e2e
+#    `closures_share_capture_arc_generic` (immediate-lambda +
+#    callback-boxed shapes).
+# ---------------------------------------------------------------------------
+
+
+def test_pkg_share_capture_arc(stdlib_package, tmp_path: Path) -> None:
+	"""`captures(share arc)` on `conc.Arc<T>` must compile across package boundary.
+
+	Mirrors `lang/tests/codegen/e2e/closures_share_capture_arc_generic`
+	but exercises the consumer path (signed std.dmp) instead of
+	--stdlib-root, ensuring the Share-for-Arc impl in std.concurrent is
+	threaded through impl_headers into the consumer's trait world.
+	"""
+	source = """\
+module m;
+
+import std.core as core;
+import std.concurrent as conc;
+
+struct App { v: Int }
+
+implement App {
+\tpub fn read(self: &App) nothrow -> Int {
+\t\treturn self.v;
+\t}
+}
+
+fn main() nothrow -> Int {
+\tval app = conc.arc(App(v = 42));
+
+\tval direct = (| | captures(share app) => {
+\t\tval a = app.get();
+\t\treturn a.read();
+\t})();
+
+\tval cb: core.Callback0<Int> = core.callback0(| | captures(share app) => {
+\t\tval a = app.get();
+\t\treturn a.read();
+\t});
+
+\tval outer = app.get();
+\treturn (direct - 42) + (cb.call() - outer.read());
+}
+"""
+	binary = _compile_consumer(
+		source, stdlib_pkg=stdlib_package, tmp_path=tmp_path, entry="m::main",
+	)
+	res = _run_binary(binary)
+	assert res.returncode == 0, (
+		f"binary exited with code {res.returncode}\n"
+		f"stdout: {res.stdout[:200]}\nstderr: {res.stderr[:200]}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# 7. pkg_share_capture_arc_emit_package
+#    Regression: `captures(share x)` on `conc.Arc<T>` must compile when the
+#    consumer is built with `--emit-package` AND consumes stdlib as a signed
+#    .dmp.  This is the load-bearing certified-toolchain producer flow: the
+#    certified driftc auto-injects `--package-root <toolchain>/lib/stdlib
+#    --dep std@VERSION` and users invoke `--emit-package` to publish a
+#    package.
+#
+#    Bug pinned (2026-04-28): in `--emit-package` mode the impl-merge in
+#    `compile_stubbed_funcs` re-encoded `Arc<T>`'s free type-param `T` as
+#    a nominal `(std, std.concurrent, "T")` instead of the canonical
+#    TypeVar `(None, None, "T")` produced by Pass 1 main's encoding.  Both
+#    encodings were appended to `world.impls_by_trait_target[(Share,
+#    Arc-head)]` because the dup check compared `existing.target ==
+#    target_key` and they differed.  The solver's `_bind_impl_type_params`
+#    matches free type-params by NAME, so for `Arc<repro::State>` BOTH
+#    impls bound `T → State`, status became `AMBIGUOUS: multiple applicable
+#    impls`, `is_share` returned False, and E-CAPTURE-SHARE-NOT-SHARE
+#    fired even though the user wrote correct code.  Fix: derive
+#    `target_key`/`head_key` from `type_key_from_typeid(shared_type_table,
+#    impl.target_type_id)` so both merge sites produce the same key.
+# ---------------------------------------------------------------------------
+
+
+def test_pkg_share_capture_arc_emit_package(stdlib_package, tmp_path: Path) -> None:
+	"""`captures(share x)` on Arc<T> must compile under --emit-package + stdlib-as-package.
+
+	Web team carrier (2026-04-28): web-rest's dispatch onion uses a chain of
+	Callback2 closures over `Arc<State>` where the loop-built layer
+	share-captures `state_arc`.  Source-build mode accepted; `--emit-package`
+	rejected with E-CAPTURE-SHARE-NOT-SHARE because the Share-for-Arc impl
+	got registered twice with different type-param encodings.
+	"""
+	source = """\
+module repro;
+
+import std.core as core;
+import std.concurrent as conc;
+
+struct Resp { pub status: Int }
+struct AppErr { pub code: Int }
+
+struct State {
+\tpub callbacks: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>>
+}
+
+fn _term(a: Int, b: Int) nothrow -> core.Result<Resp, AppErr> {
+\treturn core.Result::Ok(Resp(status = a + b));
+}
+
+fn build_chain(state_arc: conc.Arc<State>) nothrow -> core.Callback2<Int, Int, core.Result<Resp, AppErr>> {
+\tvar next: core.Callback2<Int, Int, core.Result<Resp, AppErr>> =
+\t\tcore.callback2(|a: Int, b: Int| captures(share state_arc) => {
+\t\t\tval n = state_arc.get().callbacks.len;
+\t\t\treturn _term(a + n, b);
+\t\t});
+\tvar i = 0;
+\twhile i < 1 {
+\t\tnext = core.callback2(|a: Int, b: Int| captures(move next, share state_arc) => {
+\t\t\treturn next.call(a, b);
+\t\t});
+\t\ti = i + 1;
+\t}
+\treturn move next;
+}
+
+fn main() nothrow -> Int {
+\tvar cbs: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
+\tcbs.push(core.callback2(_term));
+\tval state = State(callbacks = move cbs);
+\tval state_arc = conc.arc(move state);
+\tval chain = build_chain(move state_arc);
+\tmatch chain.call(2, 3) {
+\t\tcore.Result::Ok(r) => { if r.status != 6 { return 1; } return 0; },
+\t\tcore.Result::Err(_) => { return 2; }
+\t}
+}
+"""
+	res = _emit_package_consumer(
+		source, stdlib_pkg=stdlib_package, tmp_path=tmp_path, package_id="repro",
+	)
+	assert res.returncode == 0, (
+		f"--emit-package compile must succeed; got returncode={res.returncode}\n"
+		f"stderr: {res.stderr[:1500]}"
+	)
+	assert "E-CAPTURE-SHARE-NOT-SHARE" not in res.stderr, (
+		f"E-CAPTURE-SHARE-NOT-SHARE must not fire on Arc<T>; stderr:\n{res.stderr[:1500]}"
+	)
+	out_dmp = tmp_path / "repro.dmp"
+	assert out_dmp.exists() and out_dmp.stat().st_size > 0, "package not emitted"
+
+
+# ---------------------------------------------------------------------------
+# 8. pkg_share_capture_inherent_share_still_rejected
+#    Negative control for fix #7: a struct with an INHERENT `.share()`
+#    method but no `implement Share` must still be rejected with
+#    E-CAPTURE-SHARE-NOT-SHARE in --emit-package mode.  Pins the
+#    diagnostic surface and prevents the fix from accidentally accepting
+#    the inherent method as a Share impl.
+# ---------------------------------------------------------------------------
+
+
+def test_pkg_share_capture_inherent_share_still_rejected(stdlib_package, tmp_path: Path) -> None:
+	"""Inherent `.share()` without `implement Share` must remain rejected.
+
+	The diagnostic text explicitly says "an inherent `.share()` method does
+	NOT satisfy `captures(share x)`".  Verify that contract still holds in
+	--emit-package mode after the canonical-encoding fix.
+	"""
+	source = """\
+module repro;
+
+import std.core as core;
+
+struct Box { v: Int }
+
+implement Box {
+\t// Inherent share() — looks like the trait method but is NOT a trait impl.
+\tpub fn share(self: &Box) nothrow -> Box {
+\t\treturn Box(v = self.v);
+\t}
+}
+
+fn run(_cb: core.Callback0<Int>) nothrow -> Int { return 0; }
+
+fn main() nothrow -> Int {
+\tval b = Box(v = 42);
+\treturn run(|| captures(share b) => { return b.v; });
+}
+"""
+	res = _emit_package_consumer(
+		source, stdlib_pkg=stdlib_package, tmp_path=tmp_path, package_id="repro",
+	)
+	assert res.returncode != 0, (
+		"compile should have failed: Box has inherent .share() but no Share impl\n"
+		f"stderr: {res.stderr[:500]}"
+	)
+	assert "E-CAPTURE-SHARE-NOT-SHARE" in res.stderr, (
+		"diagnostic must reference E-CAPTURE-SHARE-NOT-SHARE; "
+		f"stderr: {res.stderr[:500]}"
 	)

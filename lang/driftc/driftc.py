@@ -3140,12 +3140,23 @@ def compile_stubbed_funcs(
 				target_expr = getattr(impl, "target_expr", None)
 				if target_expr is None:
 					continue
-				target_key = type_key_from_expr(
-					target_expr,
-					default_module=getattr(impl, "def_module", None),
-					default_package=default_package,
-					module_packages=module_packages,
-				)
+				# Derive `target_key` from the already-resolved
+				# `impl.target_type_id` so that free impl type-params
+				# render as canonical TypeVars (`(None, None, "T")`)
+				# rather than nominal types in `def_module`
+				# (`("std", "std.concurrent", "T")` for an `Arc<T>`
+				# impl in std.concurrent).  Pass 1 main's matching
+				# merge already uses this canonical encoding;
+				# aligning here makes the dup check below see
+				# Pass 1's existing entry as identical and skip
+				# re-appending.  Without alignment, two entries
+				# land under `impls_by_trait_target[(Share,
+				# Arc-head)]`, the solver's name-based type-param
+				# binding makes BOTH applicable, status becomes
+				# AMBIGUOUS, `is_share` returns False, and the
+				# type checker fires `E-CAPTURE-SHARE-NOT-SHARE`
+				# on `captures(share x)` in `--emit-package` mode.
+				target_key = type_key_from_typeid(shared_type_table, impl.target_type_id)
 				head_key = target_key.head()
 				local_pkg = default_package
 				trait_pkg = getattr(impl.trait_key, "package_id", None) or local_pkg
