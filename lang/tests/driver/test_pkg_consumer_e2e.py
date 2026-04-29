@@ -130,6 +130,109 @@ def _emit_package_consumer(
 	)
 
 
+def _publish_library_package(
+	source_files: dict[str, str],
+	*,
+	stdlib_pkg: "StdlibPackage",
+	tmp_path: Path,
+	package_id: str,
+	package_version: str = "0.0.1",
+	module_namespace: str | None = None,
+) -> tuple[Path, Path]:
+	"""Build + sign a library package (multi-file source) and return
+	(pkg_root, library_trust_path).
+
+	Returns a `pkg_root` containing both the stdlib package symlink and
+	the new library package, plus a trust store covering both.  The
+	caller can hand `pkg_root` and `library_trust_path` to a consumer
+	compile that imports symbols from the published library.
+
+	`source_files` is `{relative_path: content}` — supports multiple
+	.drift files for cross-module library shapes.
+	"""
+	import base64
+	from hashlib import sha256
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+	from cryptography.hazmat.primitives import serialization
+	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+
+	src_dir = tmp_path / f"src_{package_id}"
+	src_dir.mkdir(parents=True, exist_ok=True)
+	src_paths: list[str] = []
+	for rel, content in source_files.items():
+		p = src_dir / rel
+		p.parent.mkdir(parents=True, exist_ok=True)
+		p.write_text(content)
+		src_paths.append(str(p))
+	empty_stdlib = tmp_path / "_empty_stdlib"
+	empty_stdlib.mkdir(exist_ok=True)
+	out_dmp = tmp_path / f"{package_id}.dmp"
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(stdlib_pkg.pkg_root),
+		"--dep", f"std@{stdlib_pkg.version}",
+		"--trust-store", str(stdlib_pkg.trust_path),
+		"--dev", "--dev-core-trust-store", str(stdlib_pkg.trust_path),
+		"--emit-package", str(out_dmp),
+		"--package-id", package_id,
+		"--package-version", package_version,
+		"--package-target", "drift-dev",
+		"--source-content-id",
+		"sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		*src_paths,
+	]
+	res = subprocess.run(
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
+	)
+	assert res.returncode == 0, (
+		f"library '{package_id}' --emit-package failed:\n{res.stderr[:1500]}"
+	)
+	# Sign the library package and place it next to stdlib in a unified
+	# pkg_root.
+	priv = Ed25519PrivateKey.generate()
+	pub = priv.public_key().public_bytes(
+		encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw,
+	)
+	kid = compute_ed25519_kid(pub)
+	pub_b64 = base64.b64encode(pub).decode("ascii")
+	pkg_bytes = out_dmp.read_bytes()
+	pkg_root = tmp_path / "pkg_root"
+	pkg_root.mkdir(exist_ok=True)
+	# Symlink stdlib into the unified root so the consumer can resolve both.
+	std_dest = pkg_root / "std"
+	if not std_dest.exists():
+		std_dest.symlink_to((stdlib_pkg.pkg_root / "std").resolve())
+	# Place library at <pkg_root>/<package_id>/<version>/.
+	lib_dest = pkg_root / package_id / package_version
+	lib_dest.mkdir(parents=True, exist_ok=True)
+	import shutil
+	shutil.copy2(str(out_dmp), str(lib_dest / f"{package_id}.dmp"))
+	(lib_dest / f"{package_id}.sig").write_text(json.dumps({
+		"format": "dmir-pkg-sig", "version": 0,
+		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
+		"signatures": [{"algo": "ed25519", "kid": kid,
+			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
+			"pubkey": pub_b64}],
+	}, separators=(",", ":"), sort_keys=True))
+	# Build a unified trust store that covers stdlib namespaces + the new
+	# library's namespace.
+	stdlib_trust = json.loads(stdlib_pkg.trust_path.read_text())
+	ns_glob = f"{module_namespace}.*" if module_namespace else f"{package_id}.*"
+	merged_trust_path = tmp_path / "merged_trust.json"
+	merged = {
+		"format": "drift-trust", "version": 0,
+		"keys": dict(stdlib_trust.get("keys", {})),
+		"namespaces": dict(stdlib_trust.get("namespaces", {})),
+		"revoked": list(stdlib_trust.get("revoked", [])),
+	}
+	merged["keys"][kid] = {"algo": "ed25519", "pubkey": pub_b64}
+	merged["namespaces"].setdefault(ns_glob, []).append(kid)
+	merged_trust_path.write_text(json.dumps(merged))
+	return pkg_root, merged_trust_path
+
+
 # ---------------------------------------------------------------------------
 # 1. pkg_vis_source_private_method_rejected
 #    K25-guard: calling private/non-exported method from a package module
@@ -552,4 +655,154 @@ fn main() nothrow -> Int {
 	assert "E-CAPTURE-SHARE-NOT-SHARE" in res.stderr, (
 		"diagnostic must reference E-CAPTURE-SHARE-NOT-SHARE; "
 		f"stderr: {res.stderr[:500]}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# 9. pkg_share_capture_consumer_re_typecheck
+#    Regression for E_INTERNAL_MISSING_CALLSITE_CALLINFO (web-rest 0.31.26
+#    carrier, 2026-04-29).  Root cause is in DMIR/HIR decode, not in
+#    trait visibility.
+#
+#    `_to_jsonable` (lang/driftc/packages/provisional_dmir_v0.py) tags
+#    serialized dataclasses with `_type: <class.__name__>` — bare class
+#    name, no module qualification.  Both `stage0/ast.py` and
+#    `parser/ast.py` define a class called `TypeNameRef` with DIFFERENT
+#    field sets:
+#      - `stage0.ast.TypeNameRef`: name, module_id, loc
+#      - `parser/ast.py:TypeNameRef`: loc, name        (no module_id)
+#    HIR builders use `stage0.ast.TypeNameRef` (e.g., `ast_to_hir.py`
+#    synthesizes `Share::share(&x)` for `captures(share x)` with
+#    `module_id="std.core.shareable"`).  The producer serializes that
+#    instance with `module_id` intact.  On the consumer side,
+#    `from_jsonable` looks up `"TypeNameRef"` in the registry — which
+#    only included `parser_ast` (no `stage0_ast`) — and reconstructs
+#    using `parser_ast.TypeNameRef`.  That class lacks `module_id`, so
+#    the field is silently dropped.  The reconstructed
+#    `TypeNameRef(loc=..., name="Share")` then makes `_qual_from_type_expr`
+#    return None, `trait_key_from_expr` falls back to the current module
+#    (`web.repro`), and the lookup misses the real `(std,
+#    std.core.shareable, Share)` trait.  `resolve_qualified_member_ufcs`
+#    returns `MethodCallResult(unknown_ty, None)`, `record_call_info` is
+#    never called for the synthesized HCall's csid, and the typed-mode
+#    guard at `driftc.py:5273` fires.
+#
+#    Fix: append `stage0.ast` to the dataclass registry in
+#    `decode_hir_funcs` and `decode_generic_templates` so its
+#    `TypeNameRef` (with `module_id`) wins the bare-name collision.
+#    This is an emergency decode-order fix for HIR/stage0-AST payloads;
+#    the long-term direction is module-qualified discriminators in
+#    `_to_jsonable` to eliminate the collision class.
+#
+#    The carrier shape mirrors web-rest's dispatch: a library package
+#    with a public function whose body share-captures `Arc<State>` and
+#    closes the synthesized `Share::share(&state_arc)` calls through
+#    `core.callback2(...)`.  The consumer compile imports the library
+#    and CALLS that function — that's what forces the cross-process
+#    HIR roundtrip and exposes the dropped `module_id`.  Single-module
+#    `--emit-package` programs don't reproduce because the in-process
+#    snapshot path doesn't go through the same dataclass-name registry
+#    lookup that strips the field.
+# ---------------------------------------------------------------------------
+
+
+def test_pkg_share_capture_consumer_re_typecheck(stdlib_package, tmp_path: Path) -> None:
+	"""Share-capture in a library fn must re-typecheck cleanly in consumer."""
+	library_lib_drift = """\
+module web.repro;
+
+import std.core as core;
+import std.concurrent as conc;
+
+export { Resp, AppErr, State, build_chain, empty_state };
+
+pub struct Resp { pub status: Int }
+pub struct AppErr { pub code: Int }
+
+pub struct State {
+\tpub callbacks: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>>
+}
+
+fn _term(a: Int, b: Int) nothrow -> core.Result<Resp, AppErr> {
+\treturn core.Result::Ok(Resp(status = a + b));
+}
+
+pub fn build_chain(state_arc: conc.Arc<State>) nothrow -> core.Callback2<Int, Int, core.Result<Resp, AppErr>> {
+\tvar next: core.Callback2<Int, Int, core.Result<Resp, AppErr>> =
+\t\tcore.callback2(|a: Int, b: Int| captures(share state_arc) => {
+\t\t\tval n = state_arc.get().callbacks.len;
+\t\t\treturn _term(a + n, b);
+\t\t});
+\tvar i = 0;
+\twhile i < 1 {
+\t\tnext = core.callback2(|a: Int, b: Int| captures(move next, share state_arc) => {
+\t\t\treturn next.call(a, b);
+\t\t});
+\t\ti = i + 1;
+\t}
+\treturn move next;
+}
+
+pub fn empty_state() nothrow -> State {
+\tvar cbs: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
+\tcbs.push(core.callback2(_term));
+\treturn State(callbacks = move cbs);
+}
+"""
+	pkg_root, trust_path = _publish_library_package(
+		{"lib.drift": library_lib_drift},
+		stdlib_pkg=stdlib_package,
+		tmp_path=tmp_path,
+		package_id="web-repro",
+		package_version="0.0.1",
+		module_namespace="web",
+	)
+
+	consumer_source = """\
+module consumer;
+
+import std.core as core;
+import std.concurrent as conc;
+import web.repro as repro;
+
+fn main() nothrow -> Int {
+\tval state = repro.empty_state();
+\tval state_arc = conc.arc(move state);
+\tval chain = repro.build_chain(move state_arc);
+\tmatch chain.call(2, 3) {
+\t\tcore.Result::Ok(r) => { if r.status != 6 { return 1; } return 0; },
+\t\tcore.Result::Err(_) => { return 2; }
+\t}
+}
+"""
+	src_dir = tmp_path / "consumer_src"
+	src_dir.mkdir(parents=True, exist_ok=True)
+	(src_dir / "main.drift").write_text(consumer_source)
+	out_bin = tmp_path / "consumer_bin"
+	empty_stdlib = tmp_path / "_empty_stdlib_consumer"
+	empty_stdlib.mkdir(exist_ok=True)
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		str(src_dir / "main.drift"),
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(pkg_root),
+		"--dep", f"std@{stdlib_package.version}",
+		"--dep", "web-repro@0.0.1",
+		"--trust-store", str(trust_path),
+		"--dev", "--dev-core-trust-store", str(trust_path),
+		"--entry", "consumer::main",
+		"-o", str(out_bin),
+	]
+	res = subprocess.run(
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
+	)
+	assert "E_INTERNAL_MISSING_CALLSITE_CALLINFO" not in res.stderr, (
+		"consumer compile of share-capture library must not fire "
+		"E_INTERNAL_MISSING_CALLSITE_CALLINFO; stderr:\n"
+		+ res.stderr[:2000]
+	)
+	assert res.returncode == 0, (
+		f"consumer compile must succeed; got returncode={res.returncode}\n"
+		f"stderr: {res.stderr[:2000]}"
 	)

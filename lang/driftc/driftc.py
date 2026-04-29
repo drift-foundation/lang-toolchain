@@ -5270,6 +5270,15 @@ def compile_stubbed_funcs(
 			return {}, checked
 		return {}
 	# Typed-mode guard: every call node must have callsite CallInfo coverage.
+	#
+	# When a call node has a `callsite_id` but no entry in
+	# `call_info_by_callsite_id`, the call's resolution path bailed out
+	# silently — either the type-checker emitted a non-error diagnostic
+	# and returned without recording, or a synthesized HCall (e.g. the
+	# `Share::share(&x)` for `captures(share x)`) was not visited by the
+	# resolution pipeline.  The bare csid number is unactionable in the
+	# field; surface enough HCall context (origin, loc, fn target, arg
+	# shapes) on each orphan to point reviewers at the responsible site.
 	for fn_id, typed_fn in typed_fns_by_id.items():
 		block = getattr(typed_fn, "body", None)
 		if not isinstance(block, H.HBlock):
@@ -5278,6 +5287,8 @@ def compile_stubbed_funcs(
 		if not isinstance(call_info_by_callsite, dict):
 			continue
 		missing_callsite: list[int] = []
+		# Map orphan csid -> HCall expr for detail emission below.
+		_orphan_exprs_by_csid: dict[int, H.HExpr] = {}
 		for expr in _collect_call_nodes_by_id(block).values():
 			csid = getattr(expr, "callsite_id", None)
 			if not isinstance(csid, int):
@@ -5285,17 +5296,62 @@ def compile_stubbed_funcs(
 				continue
 			if csid not in call_info_by_callsite:
 				missing_callsite.append(csid)
+				_orphan_exprs_by_csid[csid] = expr
 		if missing_callsite:
 			missing_desc = ", ".join(str(c) for c in sorted(set(missing_callsite))[:6])
+			# Build a per-orphan detail block — capped at the same 6
+			# csids the summary message lists.  For each orphan: the
+			# HCall's source location, `origin` annotation (e.g.
+			# "share_capture"), its `fn` target repr (truncated),
+			# and the per-arg type/repr.  This is the minimum info
+			# needed to identify which compiler path created the HCall
+			# without recording CallInfo.
+			_detail_lines: list[str] = []
+			_first_orphan_loc = None
+			for _ocsid in sorted(set(missing_callsite))[:6]:
+				_oexpr = _orphan_exprs_by_csid.get(_ocsid)
+				if _oexpr is None:
+					_detail_lines.append(
+						f"  csid {_ocsid}: <not reachable from body walk>"
+					)
+					continue
+				_oloc = getattr(_oexpr, "loc", None)
+				if _first_orphan_loc is None:
+					_first_orphan_loc = _oloc
+				_oorigin = getattr(_oexpr, "origin", None)
+				_ofn = getattr(_oexpr, "fn", None)
+				_ofn_repr = repr(_ofn)[:240] if _ofn is not None else "<no fn>"
+				_detail_lines.append(
+					f"  csid {_ocsid}: type={type(_oexpr).__name__} "
+					f"origin={_oorigin!r} loc={_oloc}"
+				)
+				_detail_lines.append(f"    fn={_ofn_repr}")
+				_oargs = getattr(_oexpr, "args", None) or []
+				for _ai, _arg in enumerate(_oargs):
+					_detail_lines.append(
+						f"    arg[{_ai}]: {type(_arg).__name__} {repr(_arg)[:160]}"
+					)
+			_detail_text = "\n".join(_detail_lines) if _detail_lines else "<no detail>"
+			# Anchor the diagnostic span at the first orphan's loc when
+			# available — gives the reviewer a source line to start from
+			# instead of `<source>:None:None`.
+			_anchor_span = None
+			if _first_orphan_loc is not None:
+				try:
+					_anchor_span = Span.from_loc(_first_orphan_loc)
+				except Exception:
+					_anchor_span = None
 			checked.diagnostics.append(
 				Diagnostic(
 					message=(
-						f"internal: missing CallInfo for callsite ids in '{function_symbol(fn_id)}': {missing_desc}"
+						f"internal: missing CallInfo for callsite ids in "
+						f"'{function_symbol(fn_id)}': {missing_desc}\n"
+						f"orphan call-node detail:\n{_detail_text}"
 					),
 					code="E_INTERNAL_MISSING_CALLSITE_CALLINFO",
 					severity="error",
 					phase="typecheck",
-					span=None,
+					span=_anchor_span,
 				)
 			)
 	had_errors = any(d.severity == "error" for d in checked.diagnostics)

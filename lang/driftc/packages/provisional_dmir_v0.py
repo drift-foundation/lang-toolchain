@@ -1582,8 +1582,25 @@ def decode_hir_funcs(
 	from lang.driftc.stage1 import closures as closures_mod  # local import
 	from lang.driftc.core import function_id as fn_id_mod  # local import
 	from lang.driftc.core import span as span_mod  # local import
+	from lang.driftc.stage0 import ast as stage0_ast  # local import
 
-	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod)
+	# Register `stage0.ast` last so its dataclass variants win the
+	# `_to_jsonable` discriminator collision with `parser_ast`.  HIR
+	# field types reference `stage0.ast.*` (e.g.,
+	# `HQualifiedMember.base_type_expr` is a `stage0.ast.TypeNameRef`
+	# carrying a `module_id`).  Both modules define a `TypeNameRef`,
+	# but `parser_ast.TypeNameRef` lacks `module_id` and silently drops
+	# it during `from_jsonable` reconstruction.  That dropped field was
+	# the underlying cause of `E_INTERNAL_MISSING_CALLSITE_CALLINFO`
+	# on package consumers of source containing `captures(share x)`:
+	# the synthesized `Share::share(&x)` HCall's
+	# `base_type_expr.module_id="std.core.shareable"` round-tripped to
+	# `module_id=None`, then `trait_key_from_expr` fell back to the
+	# current module (`web.rest.app`), the trait_index lookup missed,
+	# and the resolver returned without recording CallInfo.  Putting
+	# `stage0_ast` after `parser_ast` keeps `module_id` intact across
+	# the .dmp boundary.
+	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod, stage0_ast)
 	enums = build_enum_registry(H, fn_id_mod, closures_mod)
 	out: dict[str, Any] = {}
 	for sym, obj in hir_funcs_obj.items():
@@ -1695,8 +1712,10 @@ def decode_generic_templates(generic_templates_obj: Any) -> list[dict[str, Any]]
 	from lang.driftc.parser import ast as parser_ast  # local import
 	from lang.driftc.core import function_id as fn_id_mod  # local import
 	from lang.driftc.core import span as span_mod  # local import
+	from lang.driftc.stage0 import ast as stage0_ast  # local import
 
-	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod)
+	# See `decode_hir_funcs` for why `stage0_ast` is appended LAST.
+	dc = build_dataclass_registry(H, parser_ast, fn_id_mod, span_mod, closures_mod, stage0_ast)
 	enums = build_enum_registry(H, fn_id_mod, closures_mod)
 	out: list[dict[str, Any]] = []
 	for entry in generic_templates_obj:
