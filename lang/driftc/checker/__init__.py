@@ -1581,6 +1581,19 @@ class Checker:
 				# `move <place>` yields the underlying value type (best-effort).
 				return self._infer_expr_type(expr.subject)
 
+			if hasattr(H, "HBorrow") and isinstance(expr, getattr(H, "HBorrow")):
+				# `&expr` / `&mut expr` — yield `Ref<T>` / `RefMut<T>` where
+				# `T` is the subject's type.  Without this branch, an
+				# expression-form `match &x { ... }` makes the outer-arm
+				# binder setup fall back to Unknown for any nested match
+				# whose scrutinee is the binder (F3 nested case).
+				inner_ty = self._infer_expr_type(expr.subject) if expr.subject is not None else None
+				if inner_ty is None:
+					return None
+				if bool(getattr(expr, "is_mut", False)):
+					return self.table.ensure_ref_mut(inner_ty)
+				return self.table.ensure_ref(inner_ty)
+
 			if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
 				base_ty = self._infer_expr_type(expr.base) if expr.base is not None else None
 				if base_ty is None:
@@ -2687,6 +2700,14 @@ class Checker:
 			if arg_ty is None or param_ty is None:
 				continue
 			if arg_ty == self._unknown_type or param_ty == self._unknown_type:
+				continue
+			# Generic CallSigs may still carry TypeVar-bearing param types
+			# (e.g. `Arc<T>::as_interface` whose self param is `&Arc<T>` —
+			# T is substituted at the typed-checker resolution layer, not
+			# here).  Skip the equality check in that case so the legacy
+			# stub doesn't reject calls the typed checker has already
+			# accepted.
+			if self._type_table.has_typevar(param_ty):
 				continue
 			if arg_ty != param_ty:
 				try:

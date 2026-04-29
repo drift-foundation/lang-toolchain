@@ -9548,6 +9548,66 @@ class TypeChecker:
 							span=getattr(stmt, "loc", Span()),
 							)
 						)
+				# F1: assignment through a place rooted in a shared
+				# reference (`&T`) is read-only.  Auto-deref through a
+				# ref base for field / index projections, and explicit
+				# `*p` deref, both require `&mut T`.  Without this check
+				# the MIR-lowering contract at
+				# `hir_to_mir.py:_lower_place_address` fires as
+				# `mutable field place without &mut reached MIR
+				# lowering (checker bug)` — an internal-form message
+				# reaching the user.  Surfaces on the canonical shape
+				# `match &r { Ok(x) => { x.status = 99; ... } }`.
+				if (
+					hasattr(H, "HPlaceExpr")
+					and isinstance(stmt.target, getattr(H, "HPlaceExpr"))
+					and stmt.target.projections
+				):
+					cur = type_expr(stmt.target.base, used_as_value=False)
+					immut_ref_rejected = False
+					for pr in stmt.target.projections:
+						td = self.type_table.get(cur)
+						# Auto-deref through a ref base for the next
+						# projection step requires &mut.
+						if td.kind is TypeKind.REF and td.param_types:
+							if not td.ref_mut:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											"cannot assign through a shared reference (&T); "
+											"the place is read-only — use a `&mut` reference to mutate"
+										),
+										severity="error",
+										span=getattr(stmt, "loc", Span()),
+									)
+								)
+								immut_ref_rejected = True
+								break
+							cur = td.param_types[0]
+							td = self.type_table.get(cur)
+						if isinstance(pr, H.HPlaceField):
+							if td.kind is TypeKind.STRUCT:
+								info = self.type_table.struct_field(cur, pr.name)
+								if info is not None:
+									_, cur = info
+						elif isinstance(pr, H.HPlaceIndex):
+							if td.kind is TypeKind.ARRAY and td.param_types:
+								cur = td.param_types[0]
+						elif isinstance(pr, H.HPlaceDeref):
+							if td.kind is TypeKind.REF and td.param_types:
+								if not td.ref_mut:
+									diagnostics.append(
+										_tc_diag(
+											message="cannot assign through *p unless p is a mutable reference (&mut T)",
+											severity="error",
+											span=getattr(stmt, "loc", Span()),
+										)
+									)
+									immut_ref_rejected = True
+									break
+								cur = td.param_types[0]
+					if immut_ref_rejected:
+						return
 				# If assigning to a ref-typed binding, track origin (simple propagation).
 				if isinstance(stmt.target, H.HVar) and getattr(stmt.target, "binding_id", None) is not None:
 					tgt_bid = stmt.target.binding_id

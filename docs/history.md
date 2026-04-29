@@ -1,6 +1,97 @@
 # Drift development history
 
 ## 2026-04-29
+- **Certify shared by-reference variant match (`match &Variant`) —
+  release 0.31.33 (ABI unchanged, still 10).**  Bug A.1 (shared
+  half) from the bookkeeper / web-rest middleware report.
+
+  Three load-bearing fixes underpin the certification:
+
+  **F1 — type-checker rejects field-write through shared `&` binder.**
+  `match &r { Ok(x) => { x.status = 99; ... } }` previously
+  type-check-passed and was caught only at MIR lowering with the
+  internal-form `mutable field place without &mut reached MIR
+  lowering (checker bug)`.  Added a place-mutability walk to the
+  `HAssign` branch of `lang/driftc/type_checker.py` that mirrors the
+  existing augmented-assign logic: at any projection step where the
+  current type is `&T` (shared ref), reject with `cannot assign
+  through a shared reference (&T); the place is read-only — use a
+  `&mut` reference to mutate`.  Auto-deref through `&` for field /
+  index projections is now read-only at the type-checker layer; the
+  MIR contract becomes a true safety net rather than a primary
+  diagnostic source.
+
+  **F2 — arm-binder escape pinned safe by owner-borrow extension.**
+  Originally suspected as a UAF gap, but the borrow checker already
+  extends the live-borrow lifetime on the scrutinee for as long as
+  any escaped binder pointer is reachable.  `match &x { Ok(p) =>
+  leaked = Some(p) }; r = make_err(); use leaked` is rejected with
+  `cannot take mutable borrow while borrow active on 'r'` — the
+  invalidation chain catches the unsafe rewrite, not the escape
+  itself.  No compiler change here; the shape is pinned by two
+  regression tests so future tightenings don't silently regress
+  to a real UAF.
+
+  **F3 — scrutinee `Ref<Variant>` accepted for any value of that
+  type, not only literal `&expr`.**  `match &outer { Some(inner)
+  => match inner { Ok(...) ... } }` previously rejected the inner
+  match with `match scrutinee must have a variant type` because
+  the legacy stub-checker's `_infer_expr_type` had no `HBorrow`
+  case: when the OUTER arm binder type was set up via
+  `ctx.infer(expr.scrutinee)`, the inferencer returned `None` for
+  `&outer`, the inner binder fell through to `Unknown`, and the
+  inner match's variant-type check rejected.  Added an `HBorrow`
+  branch to `_infer_expr_type` that returns
+  `Ref<T>` / `RefMut<T>` based on the borrow's `is_mut`.  Nested
+  / factored (`val ref_r: &core.Result<...> = &r`) / function-
+  returning forms all compile.
+
+  As an interaction with the F3 fix, the legacy stub-checker's
+  call-arg validator (`check_call_signature` in
+  `lang/driftc/checker/__init__.py`) now sees concrete `Ref<...>`
+  types where it previously saw `None` and silently passed.  For
+  generic CallSigs whose param types still carry TypeVars (e.g.
+  `Arc<T>::as_interface(self: &Arc<T>)` — T substituted at the
+  typed-checker layer, not at the stub), strict equality fails.
+  Added a tolerance: skip the equality check when `param_ty`
+  contains a TypeVar.  The typed checker is the authoritative
+  layer for generic instantiation; the stub stays out of its way.
+
+  **Behavior summary.**
+
+  | Form                                                  | Status        |
+  |-------------------------------------------------------|---------------|
+  | `match &result { Ok(resp) => ..., Err(e) => ... }`    | accepted      |
+  | repeated `match &x` on same scrutinee                 | accepted      |
+  | nested `match &outer { Some(inner) => match inner }`  | accepted (F3) |
+  | `match` on `&Variant`-typed local / fn-returning ref  | accepted (F3) |
+  | drop-bearing payload field read via `.clone()`        | accepted      |
+  | `move binder.field` / `move binder` through `&`       | rejected      |
+  | `binder.field = ...` write through `&`                | rejected (F1, no MIR fallback) |
+  | borrow escape into outer var, then mutate scrutinee   | rejected (F2) |
+  | `match &mut Variant` certification                    | deferred — separate patch |
+
+  **Documentation.**  Spec at `docs/match_by_ref_variant.md`.
+
+  **Tests.**
+  - `lang/tests/driver/test_match_by_ref_variant.py` — 12 tests:
+    F1 (write-through rejected with clean diagnostic, no MIR
+    internal-error fallback), F2 ×2 (UAF-after-mutation rejected;
+    safe-no-mutation informational), F3 ×3 (nested, factored-let,
+    fn-returning), three positive cert cases (basic app-shape,
+    repeated match, drop-bearing payload read), two negative
+    (move payload field, move whole binder), and an A.2 hygiene
+    pin in the by-ref territory.
+  - `lang/tests/memcheck/test_match_by_ref_variant_drop.py` —
+    valgrind regression: heap-seeded `String` field inside a
+    matched `Result<Resp, AppErr>`, repeated `match &r` plus a
+    `.clone()`, exactly one release per allocation, no leak, no
+    UAF.
+
+  **Verification.**  Driver + checker + stage1 + stage2:
+  **1562 passed, 0 failed**.  Memcheck regression: clean (13
+  allocs / 13 frees, 0 errors).
+
 - **Fix match-binder name leak in user-facing diagnostics —
   release 0.31.32 (ABI unchanged, still 10).**  Bug A.2 from the
   bookkeeper / web-rest middleware report.
