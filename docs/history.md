@@ -1,5 +1,102 @@
 # Drift development history
 
+## 2026-04-29
+- **Fix cascading Unknown-receiver diagnostics after a legitimate
+  throws-mismatch in a candidate-typed bare lambda — release 0.31.30
+  (ABI unchanged, still 10).**  LANGUAGE_BUG.
+
+  **Symptom.**  The pushcoin-bookkeeper app team reported on
+  web-rest 0.4.0 / driftc 0.31.28 that
+
+      rest.add_middleware(&mut web_app, |req, ctx, next| captures(share app) => { ... });
+
+  failed with what looked like a Callback3 parameter inference gap:
+  the lambda body produced a flood of `field access requires a
+  struct value` / `Ref<Unknown>` / `no matching method 'clone' for
+  receiver Ref<Unknown>` / `no matching method 'call' for receiver
+  Unknown` / `callback3 expects a function value` / `no matching
+  overload for function 'add_middleware'` errors, plus a `lambda
+  can throw but is expected to be nothrow for Fn(Ref<Request<...>>,
+  RefMut<Context<...>>, std.core.Callback2) nothrow -> Result<...>`
+  line where the third lambda-param's `Callback2<...>` rendered with
+  no type-args.
+
+  **Diagnosis.**  Compiling the user's app on HEAD with
+  instrumentation in `call_resolver.py:5895-5969` (the
+  candidate-driven CallbackN pre-typing path) showed Callback3
+  inference *worked*: the candidate's `param_types[1]` resolved to
+  a concrete `Callback3<&Request, &mut Context,
+  Callback2<&Request, &mut Context, Result<Response, RestError>>,
+  Result<Response, RestError>>` with all four type-args intact
+  (including the inner `Callback2` instance with its three args).
+  The lambda's `req` / `ctx` / `next` parameters bound correctly to
+  those types in pass 1.
+
+  Pass 1's body walk then found a compiler-injected `or_throw()`
+  HMethodCall (auto-try contract on inferred bindings — the
+  surrounding `_serve()` is `throws`, but the lambda is the nothrow
+  Callback3 — a bare `a.logger.info(...)` / `val _g =
+  logging.push_request_context(...)` / `val r = next.call(...)`
+  type pattern triggers eager unwrap), flagged
+  `actual_can_throw=True` against the nothrow Callback3 expected
+  type, emitted the legitimate `lambda can throw but is expected to
+  be nothrow ...` diagnostic, and returned `Unknown`.
+
+  The retry loop at `call_resolver.py:5981-5985` then hit
+  `if ty == ctx.unknown_ty: arg_types[idx] = type_expr(arg)` and
+  re-typed the lambda **with `expected_type=None`**.  All three
+  params rebound to `Unknown`, the body re-type-checked against
+  Unknown receivers, and produced the cascade the user actually
+  saw.  The user's perceived "Callback3 param inference is broken"
+  was the cascade — not actual inference failure.
+
+  The misleading `std.core.Callback2` rendering (no type-args) in
+  the throws diagnostic is a *separate*, secondary
+  `_pretty_type_name` bug for INTERFACE in FUNCTION param-type
+  position, same family as the 0.31.20 STRUCT-vs-VARIANT
+  pretty-printer issue.  The actual TypeId is correct; only the
+  rendering is wrong.  Not bundled here; tracked separately.
+
+  **Fix.**  Gated the retry: an HLambda arg that already has
+  `expected_fn_inferred=True` (set by the candidate-driven path,
+  lines 5964 / 5968) is not re-typed with `expected_type=None`
+  even if pass 1 returned Unknown.  Pass 1 had a real expected;
+  retrying without one strictly degrades.  For lambda args that
+  never went through the candidate-driven path (no Callback*
+  candidate at that index), the original retry remains.
+
+      # call_resolver.py ~line 5981
+      for idx, arg in enumerate(expr.args):
+          if isinstance(arg, H.HLambda):
+              if getattr(arg, "expected_fn_inferred", False):
+                  continue
+              ty = arg_types[idx]
+              if ty is None or ty == ctx.unknown_ty:
+                  arg_types[idx] = type_expr(arg)
+
+  Behavior change is diagnostic-only (no codegen, no ABI shift):
+  the precise upstream error survives; the cascade does not.
+
+  **User-side note.**  The bookkeeper middleware lambda is
+  *genuinely throwing* under the auto-try contract — the compiler
+  fix surfaces that one real diagnostic instead of burying it.  To
+  make the app compile, the user must avoid auto-try in the
+  nothrow middleware: bind the Result/Optional explicitly with a
+  type annotation (`val _g: Optional<rt.ScopeGuard<log.LogContext>>
+  = logging.push_request_context(...);` etc.), match on the
+  result, or change the API to throw.
+
+  **Tests.**
+  - New `lang/tests/driver/test_callback3_bare_lambda_param_inference.py`
+    (P1-P7): single-source breadth coverage including the cascade
+    pin (P7).  P7 fails pre-fix (`no matching method 'call' for
+    receiver Unknown` cascade) and passes post-fix.
+  - New `lang/tests/driver/test_callback3_cross_package_bare_lambda.py`
+    (X1-X3): cross-package via signed library `.dmp`, including
+    a multi-module published-library shape (X3) that mirrors
+    web-rest's layout (sibling sub-modules + `pub type` re-exports
+    through a top-level module).
+
 ## 2026-04-27
 - **Fix stale ledger after `drop_flags` before `string_arc` —
   release 0.31.18 (ABI unchanged, still 10).**  LANGUAGE_BUG.

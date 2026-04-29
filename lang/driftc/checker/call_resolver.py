@@ -5980,6 +5980,20 @@ def resolve_call_expr(
 				arg_types.append(type_expr(arg, used_as_value=False))
 		for idx, arg in enumerate(expr.args):
 			if isinstance(arg, H.HLambda):
+				# Gated retry: skip if the candidate-driven path above
+				# (lines ~5896-5969) already handed the lambda a real
+				# `expected_type`. Pass 1 returning Unknown there means
+				# the body had a real error (e.g. throws-mismatch against
+				# a nothrow CallbackN parameter); retrying with
+				# `expected_type=None` rebinds every param to Unknown and
+				# the body re-type-checks against Unknown receivers,
+				# producing a flood of cascading "field access requires
+				# struct value" / "Ref<Unknown>" / "no matching method
+				# ... receiver Unknown" diagnostics that mask the precise
+				# upstream error. Surfaced 2026-04-29 by bookkeeper /
+				# web-rest 0.4.0 middleware report.
+				if getattr(arg, "expected_fn_inferred", False):
+					continue
 				ty = arg_types[idx]
 				if ty is None or ty == ctx.unknown_ty:
 					arg_types[idx] = type_expr(arg)
