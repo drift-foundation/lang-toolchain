@@ -1,6 +1,87 @@
 # Drift development history
 
 ## 2026-04-30
+- **Bug R1 — generic `Callback{N}<T>` fallback silently flipped
+  nothrow → throws when type-args contained typevars — release
+  0.31.40 (ABI unchanged, still 10).**  LANGUAGE_BUG fix surfaced as
+  6 e2e regressions in 0.31.39's full driver gate
+  (`concurrent_cancel_before_start_race_stress`,
+  `concurrent_cancel_before_start_race_stress_diagnostic`,
+  `concurrent_sleep_task_join_timeout_regression`,
+  `et_budget_yield_forward_progress`, `et_close_no_stale_replay`,
+  `et_pending_replay_no_hang`).
+
+  **Symptom.** Bare-lambda passed to a generic Callback site:
+
+      var t = conc.spawn(| | => {
+          val _ = conc.sleep(conc.Duration(millis = 1));
+          return 1;
+      });
+
+  rejected with:
+
+      error: lambda can throw but is expected to be nothrow for Fn() nothrow -> Unknown
+      error: callback0 expects a function value
+      error: cannot infer type arguments for 'spawn': T
+
+  **Root cause.**  In
+  `lang/driftc/checker/call_resolver.py`'s candidate-driven HLambda
+  pre-typing path (`:5930-5969`), the kind detector used the strict
+  `_callback_param_kind`, which returns `None` for any
+  `Callback{N}<T>` interface whose type-args contain typevars (per
+  its guard at `:190-191`).  For
+  `conc.spawn<T>(cb: Callback0<T>)`, the parameter `Callback0<T>`
+  has typevar T → strict detector returns `None` → `_cand_kind`
+  stays `None` → the fallback at `:5967` emitted
+  `ensure_function(..., can_throw=True)` (hardcoded).
+
+  The 0.31.38 lambda-boundary fix (Bug A) faithfully propagated that
+  `can_throw=True` into the lambda body's `fn_declared_throws` via
+  `expected_fn[2]`, so unannotated Result-returning calls inside the
+  lambda (`val _ = conc.sleep(...)`,
+  `var cr = net.connect(...)`) got auto-try'd, the synthesized
+  `or_throw()` made the lambda implicitly throwing, and
+  `match cr { Ok... }` then collapsed because `cr` had been
+  unwrapped to `Void` / `Unknown`.
+
+  In other words: pre-0.31.38 the bug was masked because the broken
+  expected-fn nothrow-bit didn't propagate into auto-try state; my
+  Bug A fix made the propagation correct, which exposed the
+  upstream lie in `call_resolver.py`'s fallback.
+
+  **Fix.**  Switch the kind detector at `:5939` to
+  `_callback_param_kind_permissive`, which detects the
+  `(arity, can_throw)` from the interface's BASE NAME
+  (`Callback0` vs `CallbackThrow0`) regardless of type-arg
+  resolution.  The throwability bit is well-defined even when the
+  type-args contain typevars; the concretization branch below
+  (`:5960-5966`) still uses its own `has_typevar` gate, so
+  concretization is not widened to typevar-bearing instances —
+  only the kind/throwability detection is.
+
+  Also tightened the fallback emit at `:5983` to use
+  `_cand_kind[1]` when `_cand_kind` is known (defensive — the
+  permissive detector should always populate it for Callback*
+  parameters, but the `else: True` keeps current behavior for
+  non-Callback paths).
+
+  **Regression coverage.**  New test file
+  `lang/tests/driver/test_generic_callback_lambda_throwability_inference.py`
+  (3 tests):
+
+  - `test_conc_spawn_nothrow_lambda_with_result_returning_call_compiles`
+    — primary regression, the team's exact minimal repro shape.
+  - `test_conc_spawn_lambda_match_on_result_compiles` — adjacent:
+    bare-lambda body that explicitly matches on a Result from a
+    nothrow call.
+  - `test_callback_throw_generic_still_permits_auto_try_inside`
+    — symmetric control: generic `CallbackThrow{N}<T>` lambda still
+    drives auto-try inside, confirming the fix doesn't flip
+    throws-lambda inference to nothrow.
+
+  All 6 originally-failing e2e fixtures verified passing post-fix
+  via direct PEX runner invocation.
+
 - **Bug Q2 — catch-arm binder treated as outer capture inside an
   explicit-capture lambda — release 0.31.39 (ABI unchanged, still
   10).**  LANGUAGE_BUG fix matching the bookkeeper / web-rest 0.4.1

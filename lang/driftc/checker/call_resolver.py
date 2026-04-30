@@ -5936,7 +5936,25 @@ def resolve_call_expr(
 					if _ps is None or not _ps.param_types or idx >= len(_ps.param_types):
 						continue
 					_pty = _ps.param_types[idx]
-					_k = _callback_param_kind(ctx.type_table, _pty)
+					# Use the permissive kind detector here: the
+					# `(arity, can_throw)` tuple is determined by the
+					# interface BASE NAME (`Callback0` vs
+					# `CallbackThrow0`) and is well-defined even when
+					# the interface's type-args contain typevars
+					# (e.g. `Callback0<T>` from generic
+					# `conc.spawn<T>(cb: Callback0<T>)`).  The strict
+					# `_callback_param_kind` would return None on any
+					# typevar-bearing instance, leaving `_cand_kind`
+					# None and forcing the fallback at line ~5983 to
+					# default to `can_throw=True` — which silently flips
+					# nothrow Callback inference to throws inside
+					# generic call sites.  The concretization branch
+					# below (line ~5960+) keeps using a separate
+					# typevar gate, so this change does NOT widen
+					# concretization to typevar-bearing instances —
+					# only the kind/throwability detection.
+					# Bug R1, 0.31.40.
+					_k = _callback_param_kind_permissive(ctx.type_table, _pty)
 					if _k is None:
 						continue
 					if _cand_kind is None:
@@ -5964,7 +5982,23 @@ def resolve_call_expr(
 						arg.expected_fn_inferred = True
 						arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
 						continue
-				arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=True)
+				# Generic-Callback fallback: the candidate's `(arity,
+				# can_throw)` kind is determined by the interface BASE
+				# NAME (`Callback0` vs `CallbackThrow0`), not by its
+				# type-args.  Even when the type-args contain typevars
+				# and we can't resolve concrete `(param_types, ret_ty)`,
+				# the `can_throw` bit is known from `_cand_kind[1]`.
+				# Bug R1, 0.31.40: hardcoded `can_throw=True` here
+				# silently flipped nothrow Callback inference to throws
+				# during pre-typing of generic spawns
+				# (`conc.spawn<T>(cb: Callback0<T>)`); my 0.31.38
+				# lambda-boundary fix faithfully propagated the lie into
+				# the lambda body via `expected_fn[2]`, so unannotated
+				# Result-returning calls inside `conc.spawn(|| => {
+				# val _ = conc.sleep(...); ... })` got auto-try'd, and
+				# downstream `match cr { Ok... }` collapsed.
+				_fb_can_throw = bool(_cand_kind[1]) if _cand_kind is not None else True
+				arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=_fb_can_throw)
 				arg.expected_fn_inferred = True
 				arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
 			elif isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
