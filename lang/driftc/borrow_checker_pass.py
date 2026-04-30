@@ -1563,6 +1563,285 @@ class BorrowChecker:
 			return int(bid_id)
 		return None
 
+	def _expr_references_any_binder(self, expr: Optional[H.HExpr], binder_ids: Set[int]) -> bool:
+		"""Return True iff `expr` (recursively) contains an `HVar`
+		whose `binding_id` is in `binder_ids`.
+
+		Used by the match-arm-binder escape detector: when an HAssign
+		/ HLet RHS contains an arm-binder reference and the target
+		binding is outside the arm scope, we treat that as an escape.
+		"""
+		if expr is None or not binder_ids:
+			return False
+		found = [False]
+
+		def _walk(node: object) -> None:
+			if found[0] or node is None:
+				return
+			if isinstance(node, H.HVar):
+				bid = getattr(node, "binding_id", None)
+				if bid is not None and int(bid) in binder_ids:
+					found[0] = True
+				return
+			if hasattr(H, "HPlaceExpr") and isinstance(node, getattr(H, "HPlaceExpr")):
+				_walk(node.base)
+				for proj in node.projections:
+					if isinstance(proj, H.HPlaceIndex):
+						_walk(proj.index)
+				return
+			if isinstance(node, H.HField):
+				_walk(node.subject); return
+			if isinstance(node, H.HIndex):
+				_walk(node.subject); _walk(node.index); return
+			if isinstance(node, H.HBorrow):
+				_walk(node.subject); return
+			if isinstance(node, H.HCall):
+				_walk(node.fn)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			if isinstance(node, H.HMethodCall):
+				_walk(node.receiver)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			if isinstance(node, H.HInvoke):
+				_walk(node.callee)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			if isinstance(node, H.HBinary):
+				_walk(node.left); _walk(node.right); return
+			if isinstance(node, H.HUnary):
+				_walk(node.expr); return
+			if isinstance(node, H.HTernary):
+				_walk(node.cond); _walk(node.then_expr); _walk(node.else_expr); return
+			if isinstance(node, H.HResultOk):
+				_walk(node.value); return
+			if isinstance(node, H.HArrayLiteral):
+				for el in node.elements:
+					_walk(el)
+				return
+			if isinstance(node, H.HDVInit):
+				for a in node.args:
+					_walk(a)
+				return
+			# Conservatively no-op for nodes we don't recognize —
+			# escape detection is one-way (false-negative is the
+			# safe direction for the user-facing diagnostic surface;
+			# false-positive would block valid programs).
+
+		_walk(expr)
+		return found[0]
+
+	def _arm_binder_target_bid(self, expr: object) -> Optional[int]:
+		"""Best-effort: extract the root binding id of an assignment
+		target.  Returns None for non-binding-rooted targets (e.g.
+		anonymous places)."""
+		if isinstance(expr, H.HVar):
+			return getattr(expr, "binding_id", None)
+		if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
+			return self._arm_binder_target_bid(expr.base)
+		if isinstance(expr, H.HField):
+			return self._arm_binder_target_bid(expr.subject)
+		if isinstance(expr, H.HIndex):
+			return self._arm_binder_target_bid(expr.subject)
+		return None
+
+	def _expr_passes_binder_to_call(self, expr: Optional[object], binder_ids: Set[int]) -> bool:
+		"""Return True iff `expr` (recursively) contains an HCall /
+		HMethodCall / HInvoke whose arguments or receiver reference
+		an arm binder in `binder_ids`.
+
+		Conservative call-escape detection.  We can't see what a
+		callee does with a borrowed argument; treat any call that
+		takes an arm binder as potentially storing it.  The match
+		handler then keeps the scrutinee loan live (rather than
+		dropping it as the no-escape case does), so subsequent
+		owner mutation / move / reassign is rejected by the
+		standard loan-conflict check.
+
+		This closes the UAF that direct-escape-only detection
+		missed:
+
+		    fn store(slot: &mut Optional<&mut T>, p: &mut T) { *slot = Some(p); }
+		    val _ = match &mut r {
+		        Ok(x) => { store(&mut leaked, x); 0 }, ...
+		    };
+		    r = make_err();   // ← without call detection, this was
+		                       //   accepted; with it, rejected
+		"""
+		if expr is None or not binder_ids:
+			return False
+		found = [False]
+
+		def _arg_has_binder(arg: object) -> bool:
+			# An HBorrow of an arm-binder place is itself a
+			# call-shaped escape — `f(&x)` or `f(&mut x)`.
+			if isinstance(arg, H.HBorrow):
+				return self._expr_references_any_binder(arg.subject, binder_ids)
+			return self._expr_references_any_binder(arg, binder_ids)
+
+		def _walk(node: object) -> None:
+			if found[0] or node is None:
+				return
+			if isinstance(node, H.HCall):
+				for a in node.args:
+					if _arg_has_binder(a):
+						found[0] = True
+						return
+				for kw in node.kwargs:
+					if _arg_has_binder(kw.value):
+						found[0] = True
+						return
+				_walk(node.fn)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			if isinstance(node, H.HMethodCall):
+				if _arg_has_binder(node.receiver):
+					found[0] = True
+					return
+				for a in node.args:
+					if _arg_has_binder(a):
+						found[0] = True
+						return
+				for kw in node.kwargs:
+					if _arg_has_binder(kw.value):
+						found[0] = True
+						return
+				_walk(node.receiver)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			if isinstance(node, H.HInvoke):
+				for a in node.args:
+					if _arg_has_binder(a):
+						found[0] = True
+						return
+				for kw in node.kwargs:
+					if _arg_has_binder(kw.value):
+						found[0] = True
+						return
+				_walk(node.callee)
+				for a in node.args:
+					_walk(a)
+				for kw in node.kwargs:
+					_walk(kw.value)
+				return
+			# Recurse through other expression shapes.
+			if hasattr(H, "HPlaceExpr") and isinstance(node, getattr(H, "HPlaceExpr")):
+				_walk(node.base)
+				for proj in node.projections:
+					if isinstance(proj, H.HPlaceIndex):
+						_walk(proj.index)
+				return
+			if isinstance(node, H.HField):
+				_walk(node.subject); return
+			if isinstance(node, H.HIndex):
+				_walk(node.subject); _walk(node.index); return
+			if isinstance(node, H.HBorrow):
+				_walk(node.subject); return
+			if isinstance(node, H.HBinary):
+				_walk(node.left); _walk(node.right); return
+			if isinstance(node, H.HUnary):
+				_walk(node.expr); return
+			if isinstance(node, H.HTernary):
+				_walk(node.cond); _walk(node.then_expr); _walk(node.else_expr); return
+			if isinstance(node, H.HResultOk):
+				_walk(node.value); return
+			if isinstance(node, H.HArrayLiteral):
+				for el in node.elements:
+					_walk(el)
+				return
+			if isinstance(node, H.HDVInit):
+				for a in node.args:
+					_walk(a)
+				return
+
+		_walk(expr)
+		return found[0]
+
+	def _arm_binder_escapes(self, arm_block: object, arm_result: Optional[object], arm_binder_ids: Set[int]) -> tuple[bool, bool]:
+		"""Detect arm-binder escape.  Returns
+		`(any_escape, store_to_outer)`:
+
+		- `any_escape`: True if ANY escape shape was detected —
+		  store-to-outer OR pass-to-call.  When True, the caller
+		  must keep the scrutinee loan live so the standard
+		  loan-conflict check rejects subsequent owner mutation /
+		  move / reassign.
+
+		- `store_to_outer`: True only for direct
+		  HAssign / HLet whose target binding is outside the arm
+		  scope and whose RHS references an arm binder.  This is
+		  the shape the `&mut` rejection diagnostic targets — a
+		  user explicitly stashing the binder past the arm.
+
+		Indirect escape via intermediate locals (`val temp =
+		arm_binder; outer = temp`) is a known v1 false-negative
+		— the existing non-Copy borrow rules already reject the
+		`val temp = arm_binder` step for `&mut` binders, but a
+		future shape that slips through that check is not caught
+		here.  Adding general taint propagation is future work.
+		"""
+		if not arm_binder_ids:
+			return (False, False)
+		any_escape = False
+		store_to_outer = False
+		statements = list(getattr(arm_block, "statements", []) or [])
+		for stmt in statements:
+			if isinstance(stmt, H.HLet):
+				tgt_bid = getattr(stmt, "binding_id", None)
+				outside = tgt_bid is None or int(tgt_bid) not in arm_binder_ids
+				if outside and self._expr_references_any_binder(stmt.value, arm_binder_ids):
+					any_escape = True
+					store_to_outer = True
+				if self._expr_passes_binder_to_call(stmt.value, arm_binder_ids):
+					any_escape = True
+			elif isinstance(stmt, H.HAssign):
+				tgt_bid = self._arm_binder_target_bid(stmt.target)
+				outside = tgt_bid is None or int(tgt_bid) not in arm_binder_ids
+				if outside and self._expr_references_any_binder(stmt.value, arm_binder_ids):
+					any_escape = True
+					store_to_outer = True
+				# An assignment whose value is itself a call passing
+				# the binder is call-escape regardless of LHS.  Note
+				# we do NOT flag `arm_binder.field = ...` here — that
+				# is a legitimate write *through* the binder, not an
+				# escape; the binder is used as a place root, not
+				# stored elsewhere.  The target's root binding is
+				# the arm binder itself in that case, which the
+				# `outside` check above correctly skips.
+				if self._expr_passes_binder_to_call(stmt.value, arm_binder_ids):
+					any_escape = True
+			elif hasattr(H, "HExprStmt") and isinstance(stmt, getattr(H, "HExprStmt")):
+				# A bare expression-statement that calls a function
+				# passing the binder (e.g. `store(&mut leaked, x);`).
+				if self._expr_passes_binder_to_call(stmt.expr, arm_binder_ids):
+					any_escape = True
+			elif hasattr(H, "HReturn") and isinstance(stmt, getattr(H, "HReturn")):
+				val = getattr(stmt, "value", None)
+				if val is not None and self._expr_passes_binder_to_call(val, arm_binder_ids):
+					any_escape = True
+		# Arm result expression: detect call-shape only.  A bare
+		# arm-result HVar of an arm binder isn't an escape — its
+		# lifetime is bounded by the match expression — but a call
+		# in the arm result that passes the binder counts.
+		if arm_result is not None and self._expr_passes_binder_to_call(arm_result, arm_binder_ids):
+			any_escape = True
+		return (any_escape, store_to_outer)
+
 	def _collect_binding_ids_for_name_in_expr(self, expr: H.HExpr, name: str, out: Set[int]) -> None:
 		if isinstance(expr, H.HVar):
 			if expr.name == name and getattr(expr, "binding_id", None) is not None:
@@ -2259,9 +2538,46 @@ class BorrowChecker:
 			self._visit_expr(state, expr.else_expr, consume=False, escapes=False)
 			return
 		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+			# G1+G2 (narrower-C model with conservative call-escape
+			# detection, 2026-04-29):
+			#
+			# Snapshot loans before visiting the scrutinee.  After
+			# all arms are processed, decide what to do with the
+			# loans the scrutinee introduced:
+			#
+			#   - No escape detected (no store-to-outer AND no call
+			#     passes the binder): drop new scrutinee loans.
+			#     The scrutinee borrow's lifetime ends at the match
+			#     expression for both `&` and `&mut` forms.
+			#   - Any escape detected (store-to-outer OR call
+			#     passing binder): KEEP the new loans live.  This
+			#     extends the F2 owner-extends-lifetime contract
+			#     conservatively to all escape shapes — subsequent
+			#     owner mutation / move / reassign is rejected by
+			#     the standard loan-conflict check, closing the UAF
+			#     a call-stashed binder would otherwise enable.
+			#   - Direct store-to-outer escape on `&mut` ALSO emits
+			#     a clear diagnostic so the user sees the issue
+			#     pointed at the escape site, not just at the
+			#     downstream owner-mutation rejection.
+			#
+			# Calls passing arm binders (e.g. stdlib `it.next()` in
+			# `match self { Ctor(it) => it.next() }`) are NOT
+			# rejected — they keep the loan live but the function
+			# body usually has no further operation on the scrutinee
+			# after the match, so the conservative loan-keeping is
+			# invisible to those patterns.  When a user does follow
+			# up with a scrutinee borrow / move, they get a clear
+			# loan-conflict diagnostic that points back to the
+			# match's escape.
+			pre_scrut_loans = set(state.loans)
 			self._visit_expr(state, expr.scrutinee, consume=False, escapes=False)
+			new_loans = set(state.loans) - pre_scrut_loans
+			any_mut_loan = any(ln.kind is LoanKind.MUT for ln in new_loans)
+			any_escape = False
 			for arm in expr.arms:
 				arm_state = _FlowState(place_states=dict(state.place_states), loans=set(state.loans))
+				arm_binder_ids: Set[int] = set()
 				for bname in getattr(arm, "binders", []) or []:
 					bids = self._binding_ids_for_name_in_block(arm.block, bname)
 					if arm.result is not None:
@@ -2272,10 +2588,36 @@ class BorrowChecker:
 						if base is None:
 							base = PlaceBase(PlaceKind.LOCAL, bid, bname)
 						self._set_state(arm_state, Place(base), PlaceState.VALID)
+						arm_binder_ids.add(int(bid))
 				arm_block = BasicBlock(id=self._current_block_id or 0, statements=list(arm.block.statements), terminator=None)
 				arm_state = self._transfer_block(arm_block, arm_state)
 				if arm.result is not None:
 					self._visit_expr(arm_state, arm.result, consume=consume, escapes=escapes)
+				# G2: detect any arm-binder escape (store + call shapes).
+				escape, store_to_outer = self._arm_binder_escapes(
+					arm.block, arm.result, arm_binder_ids,
+				)
+				if escape:
+					any_escape = True
+					if store_to_outer and any_mut_loan:
+						# Direct &mut store-style escape: emit a
+						# clear diagnostic at the escape site.
+						# Call-style escape on &mut is left to the
+						# loan-conflict check downstream — it's
+						# conservative-but-sound, and rejecting at
+						# the call would break load-bearing
+						# stdlib patterns like `match self {
+						# Ctor(it) => it.next() }`.
+						self._diagnostic(
+							"&mut match arm binder must not escape the match arm; "
+							"this would extend exclusive access to the scrutinee",
+							getattr(arm, "loc", Span()),
+						)
+			# G1 / G2: drop loans only when no escape was detected.
+			# Otherwise keep them live — F2 owner-extends contract
+			# for shared, conservative-but-sound for mut.
+			if not any_escape:
+				state.loans -= new_loans
 			return
 		if isinstance(expr, H.HResultOk):
 			self._visit_expr(state, expr.value, consume=False, escapes=False)

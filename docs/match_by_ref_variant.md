@@ -1,12 +1,13 @@
-# `match &Variant` — shared by-reference variant match
+# By-reference variant match (`match &Variant`, `match &mut Variant`)
 
-This document specifies the user-facing semantics of *shared* by-reference
-variant matching in Drift, certified at 0.31.33.
+This document specifies the user-facing semantics of by-reference variant
+matching in Drift.  Shared (`match &Variant`) was certified at 0.31.33;
+mutable (`match &mut Variant`) was certified at 0.31.35.
 
-`match &mut Variant` is a separate certification effort and is not yet
-covered here. The two forms are not interchangeable at the user level,
-even though they share scrutinee-type and binder-typing surface in the
-checker.
+The two forms share scrutinee-type and binder-typing surface in the
+checker but differ in arm-binder type, escape rules, and the
+diagnostics they produce.  See the *`match &mut Variant`* section
+below for the mutable form's contract.
 
 ## Form
 
@@ -108,13 +109,114 @@ holds across rejection paths (e.g. scrutinee-type rejection, body
 errors) and is pinned by
 `lang/tests/driver/test_match_binder_diagnostic_hygiene.py`.
 
+## `match &mut Variant` — mutable by-reference match (0.31.35)
+
+The mutable form is certified alongside the shared form. The
+contract is **"no unsafe escape,"** not "no escape" — direct
+escapes are rejected at the escape site, while call-mediated
+escapes are handled by retained owner-borrow tracking. Details
+below.
+
+1. **Non-consuming.** `match &mut r { ... }` does not move out of
+   `r`. After the match expression scope ends, when no arm binder
+   has escaped (see 4 below), `r` remains usable for any
+   operation: subsequent `match &r`, `match &mut r`, `move r`,
+   reassignment `r = ...`, return.
+
+2. **Mutable arm binders.** Arm payload binders are `&mut FieldType`.
+   Writes through the binder land in the original variant payload.
+   Calling methods that take `&mut Self` works.
+
+3. **No payload move-out.** `move binder` / `move binder.field` is
+   rejected — `&mut` gives mutation, not ownership extraction.
+
+4. **Escape rules — the actual v1 contract.**
+
+   The certified invariant is **no *unsafe* escape**: direct
+   escapes are rejected at the escape site, and call-mediated
+   escapes retain the scrutinee borrow conservatively (later
+   owner mutation / move / reborrow may reject by the standard
+   loan-conflict check).  The retention is conservative —
+   triggered by *any* call passing the binder, regardless of
+   whether the callee actually stored it — so well-formed
+   programs that pass an arm binder to a non-storing helper
+   may still reject a later scrutinee operation as a
+   false-positive.  This is the v1 trade-off; the alternative
+   (call-site rejection) would break the iterator pattern.
+
+   - **Direct escape is rejected at the escape site** with the
+     diagnostic:
+
+         &mut match arm binder must not escape the match arm;
+         this would extend exclusive access to the scrutinee
+
+     Direct shapes covered:
+
+     - `outer = x`
+     - `val outer: &mut T = match &mut r { Ok(x) => x, ... }`
+     - direct container wrapping in the arm:
+       `leaked = Optional::Some(x)`
+
+   - **Call-mediated use is allowed.** Passing the arm binder
+     to a function or method does not error at the call site:
+
+     - `x.next()`
+     - `helper(x)`
+     - `store(&mut leaked, x)`
+
+     The iterator pattern `match self { Ctor(it) => it.next()
+     }` and similar load-bearing stdlib shapes work
+     unchanged.
+
+   - **When a call passes the arm binder, the scrutinee loan
+     is retained conservatively.** The borrow-checker keeps
+     the `&mut r` loan live across the match expression
+     regardless of whether the callee actually stored the
+     reference; any subsequent owner mutation, move, or
+     reborrow may reject by the standard loan-conflict check.
+     This is what closes the UAF path for call-mediated
+     escape — the unsafe step is rejected at the conflict
+     site, not at the call site, and the diagnostic notes
+     point back to the still-live borrow.  The retention is
+     conservative-and-coarse: passing a binder to a
+     non-storing helper followed by a scrutinee operation
+     may reject as a false-positive; the workaround is to
+     scope the helper call inside a block whose arm result
+     does not need a follow-up scrutinee borrow, or to
+     restructure to avoid the helper call entirely.
+     No call-site diagnostic is required.
+
+5. **Borrow lifetime ends at the match expression when no arm
+   binder escapes.** The same G1 fix that landed for shared
+   applies to `&mut`. The function-scoped overshoot that
+   previously rejected `match &mut r; match &r` is gone for both
+   forms in the no-escape case.
+
+6. **Stdlib iterator pattern stays green.** `fn next(self: &mut V)
+   { match self { ... } }` works because the arm binder is used
+   only within the call expression in the arm body; the function
+   typically returns from the match, so the conservative
+   loan-retention has no later operation to conflict with.
+
+7. **Primitive payloads.** Explicit `*n` deref / write
+   (`*n = *n + 1`) is the documented surface. Bare-binder
+   ergonomics like `n + 1` / `n = ...` for `&mut` payloads are
+   intentionally NOT extended in this release — the shared-form
+   G3 ergonomics are scoped to shared binders only. A separate
+   ergonomics decision applies if needed.
+
 ## What is not yet supported
 
-- **`match &mut Variant`** — certification deferred. The shared
-  form's three load-bearing fixes (F1, F2, F3) do not by themselves
-  cover the mutable form's borrow-checker, lowering, or memcheck
-  surface. A separate patch will either certify `match &mut` with
-  full coverage or reject it cleanly with a documented diagnostic.
+- **Call-site `&mut` escape diagnostics.** Call-mediated escape
+  keeps the loan live and rejects the unsafe downstream
+  operation; it does not emit a diagnostic at the call itself.
+  Adding call-site rejection would break the iterator pattern
+  (which is also a call passing the arm binder) and is
+  explicitly out of scope.
+
+- **Bare-binder ergonomics for `&mut` primitive payloads.**
+  Use explicit `*n` / `*n = ...` for `&mut` payloads. The
+  shared-form G3 autoderef is scoped to shared binders.
 
 - **Type-driven exhaustiveness for `match &x` over open variants** —
   exhaustiveness checking treats by-ref match identically to by-value
@@ -133,6 +235,25 @@ errors) and is pinned by
   exactly one release per allocation, no leak, no UAF.
 
 ## History
+
+- 0.31.35 — certify `match &mut Variant`.
+  - G1: scrutinee borrow lifetime now ends at the match
+    expression (for both `&` and `&mut` forms) when no arm
+    binder escapes.  Fixes the function-scoped overshoot that
+    previously blocked `match &mut r; match &r`, repeated `&mut`
+    matches, use/move/return after `&mut` match, and primitive
+    write+readback.
+  - G2: arm-binder escape detection.  If a shared (`&`) arm
+    binder escapes via assignment / let-init to a target outside
+    the arm scope, the existing F2 owner-extends-lifetime
+    contract kicks in (loan stays live; subsequent owner
+    mutation rejected).  If a `&mut` arm binder escapes, it's
+    rejected directly with a clear diagnostic.
+  - Implementation: `lang/driftc/borrow_checker_pass.py`
+    `_visit_expr` HMatchExpr branch — pre/post snapshot of
+    scrutinee loans, per-arm binder-id collection, escape
+    detection via `_arm_binder_escapes`, then conditional loan
+    drop / direct rejection based on (mut/shared, escape/no-escape).
 
 - 0.31.34 — primitive-payload binder under shared by-ref match.
   - G3: HIR rewrite that inserts `HUnary(DEREF, HVar)` at HBinary

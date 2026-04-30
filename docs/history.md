@@ -1,6 +1,229 @@
 # Drift development history
 
 ## 2026-04-29
+- **Certify `match &mut Variant` (G1 + G2) — release 0.31.35
+  (ABI unchanged, still 10).**  Bug A.1 mutable half from the
+  bookkeeper / web-rest middleware report.  Closes the deferred
+  certification work scheduled when 0.31.33 shipped the shared
+  half.
+
+  **Probe baseline.**  Pre-fix mut matrix (13 probes):
+  - 6 G1 failures: `match &mut r; match &r` rejected, `match &mut
+    r; match &mut r` rejected, symmetric `shared+mut`, use /
+    move / return after &mut match all rejected.  Single root
+    cause — match-scrutinee loan has `live_blocks=None` and
+    `temporary=True`, so it's never dropped, effectively
+    function-scoped.
+  - 1 G2 failure: `Optional<&mut T>` escape from arm body
+    accepted.  Soundness gap (no exclusive-access tracking once
+    escaped).
+  - 1 primitive write+readback failure (G1 cascade).
+  - 5 already-correct: stdlib `match self` struct payload + full
+    compile, primitive `*n` deref read, direct `&mut` let escape
+    rejected, escape+mutate+use UAF rejected.
+
+  **Certified contract: "no *unsafe* escape," not "no escape."**
+  After three rounds of design iteration (B asymmetric drop, A
+  symmetric reject-escape, narrower-C escape-aware drop) and a
+  reviewer round on call-mediated escape, the chosen direction:
+
+  - **No arm-binder escape detected**: scrutinee borrow lifetime
+    ends at the match expression for both `&` and `&mut` forms.
+  - **Shared (`&`) direct escape**: keep the loan, preserving
+    the 0.31.33 F2 owner-extends-lifetime contract — escape
+    compiles, owner mutation while escaped pointer is reachable
+    rejects.
+  - **Mutable (`&mut`) direct escape**: reject at the escape
+    site with a clear diagnostic.
+  - **Call-mediated escape on either form**: keep the loan
+    live, no call-site diagnostic.  Subsequent owner mutation /
+    move / reassign is rejected by the standard loan-conflict
+    check.  This is what closes call-mediated UAF paths
+    without breaking the load-bearing iterator pattern
+    `match self { Ctor(it) => it.next() }`.
+
+  The certified invariant is therefore **no unsafe escape**:
+  direct escapes are rejected at the escape site, and
+  call-mediated escapes retain the scrutinee borrow
+  conservatively (later owner mutation / move / reborrow may
+  reject by the standard loan-conflict check).  The retention
+  is coarse — triggered by *any* call passing the binder
+  regardless of whether the callee actually stored the
+  reference — so a non-storing helper call followed by a
+  scrutinee operation may reject as a false-positive.  This
+  is the v1 trade-off; call-site rejection would break the
+  iterator pattern.
+
+  **Implementation.**  Single change in
+  `lang/driftc/borrow_checker_pass.py::_visit_expr` HMatchExpr
+  branch (~50 lines including helpers).  Three new helpers:
+
+  - `_expr_references_any_binder(expr, binder_ids)` — walks an
+    expression looking for an `HVar` whose `binding_id` is in
+    the supplied set.  Reuses the existing
+    `_ref_binding_ids_in_expr` walker pattern.
+  - `_expr_passes_binder_to_call(expr, binder_ids)` — flags
+    HCall / HMethodCall / HInvoke whose arguments or receiver
+    reference an arm binder.  Conservative call-escape
+    detection: we can't see what the callee does with the
+    borrow, so any call taking an arm binder is treated as
+    potential storage.
+  - `_arm_binder_escapes(arm_block, arm_result, arm_binder_ids)`
+    — returns `(any_escape, store_to_outer)`.  `any_escape`
+    fires for either store-to-outer OR call passing.
+    `store_to_outer` fires only for direct HAssign / HLet
+    whose target is outside the arm and whose RHS references
+    an arm binder.  The store flag drives the `&mut`
+    rejection diagnostic; the any-escape flag drives loan
+    retention.
+
+  **Reviewer-found UAF closed (post-first-attempt).**  An
+  earlier round of this work used direct-escape-only detection
+  (no call inspection).  Reviewer caught:
+
+      fn store(slot: &mut Optional<&mut Resp>, p: &mut Resp) {
+          *slot = Optional::Some(p);
+      }
+      val _ = match &mut r {
+          Ok(x) => { store(&mut leaked, x); 0 }, ...
+      };
+      r = make_err();              // ← was accepted; UAF
+      match leaked { Some(p) => p.status, ... }
+
+  Direct-escape detection missed the call-mediated stash.
+  Adding `_expr_passes_binder_to_call` to the escape detector
+  closes this: any call passing an arm binder keeps the
+  scrutinee loan live, so the subsequent owner reassignment is
+  rejected by the standard loan-conflict check.  No diagnostic
+  at the call site itself — that would break load-bearing
+  stdlib patterns like `match self { Ctor(it) => it.next() }`
+  — but the downstream rejection points back to the still-live
+  borrow.
+
+  Per-arm flow:
+
+      pre_scrut_loans = set(state.loans)
+      _visit_expr(scrutinee, escapes=False)
+      new_loans = state.loans - pre_scrut_loans
+      any_mut = any(ln.kind is LoanKind.MUT for ln in new_loans)
+      any_escape = False
+      for arm in arms:
+          ... arm processing as before ...
+          arm_binder_ids = collected for this arm
+          escape, store_to_outer = _arm_binder_escapes(...)
+          if escape:
+              any_escape = True
+              if store_to_outer and any_mut:
+                  emit "&mut match arm binder must not escape ..."
+      if not any_escape:
+          state.loans -= new_loans
+
+  Shared store-escape falls through (loans stay live, F2
+  contract preserved).  Mut store-escape is rejected at the
+  escape site with a clear diagnostic.  Call-escape on either
+  form keeps the loan live without a call-site diagnostic —
+  conservative-but-sound: subsequent owner mutation / move /
+  reassign is rejected by the standard loan-conflict check.
+
+  **Indirect escape via intermediate locals.**  The
+  `val temp = arm_binder; outer = temp` shape is closed by the
+  pre-existing borrow rules, not by the new escape detector:
+
+  - `val temp: &mut T = arm_binder` rejects with `cannot copy
+    'arm_binder': type 'RefMut<T>' is not Copy (use move
+    arm_binder)` — `&mut` is not Copy.
+  - `val temp: &mut T = move arm_binder` rejects with `cannot
+    move from a reference type; move requires owned storage`.
+
+  So indirect-via-temp for `&mut` arm binders is statically
+  blocked.  Shared `&` arm binders ARE Copy (refs to value),
+  but the F2 owner-extends-lifetime contract handles the case:
+  a `val temp = &shared_binder; outer = temp` chain keeps the
+  scrutinee loan live (any escape, including via temp,
+  triggers the keep-loan path), so subsequent owner mutation
+  is rejected.
+
+  **Behavior summary.**
+
+  | Form | Status |
+  |---|---|
+  | `match &mut r { ... }; match &r { ... }` (no escape) | accepted (G1) |
+  | `match &mut r { ... }; match &mut r { ... }` (no escape) | accepted (G1) |
+  | `match &r { ... }; match &mut r { ... }` (no escape) | accepted (G1) |
+  | use / move / reassign / return `r` after `match &mut r` (no escape) | accepted (G1) |
+  | mutate payload via `&mut` arm binder (`*n = ...`, struct field write) | accepted |
+  | `match self` where `self: &mut Variant` (stdlib iterator) | green |
+  | shared `Optional<&Resp>` escape, no owner mutation | accepted (F2) |
+  | shared `Optional<&Resp>` escape, then owner mutation | rejected (F2) |
+  | `&mut` direct escape `var leaked: &mut T = match &mut r { ... }` | rejected |
+  | `&mut` container escape `Optional::Some(x)` to outer | rejected (G2) |
+  | move payload through `&mut` binder | rejected |
+  | `match &mut r` for variant with primitive payload, write `*n = ...` then readback | accepted (full compile + run) |
+
+  **Tests.**  New `lang/tests/driver/test_match_by_mut_ref_variant_probes.py`
+  with 18 tests organized by axis:
+
+  - `test_g1_*` — 6 tests for the no-escape sequencing shapes,
+    including `test_g1_mutation_visible_after_match` (full
+    compile + run, asserts mutation lands and is visible after
+    the match expression scope).
+  - `test_g2_*` — 7 tests pinning escape behavior:
+    `mut_binder_escape_to_optional_must_reject` (direct-store
+    soundness fix), `direct_let_mut_binder_escape_must_reject`
+    (pinned), `mut_binder_use_after_scrutinee_mutate` (no-UAF
+    via owner mutation), `mut_binder_escape_through_helper_call_uaf_must_reject`
+    (call-mediated UAF carrier — reviewer-found),
+    `call_mediated_escape_blocks_subsequent_shared_match`
+    (read-side conflict pin), `call_through_arm_binder_compiles_when_scrutinee_unused`
+    (iterator-pattern call-through), `direct_container_wrap_escape_rejects`
+    (direct `Optional::Some(x)` rejection).
+  - `test_stdlib_*` — 3 tests including a full compile + run
+    that asserts mutation through `match self` lands, and
+    `method_call_through_arm_binder_compiles` for the iterator
+    method-call shape.
+  - `test_primitive_*` — 2 tests for `*n` read / `*n = ...`
+    write under `&mut` (full compile + run).
+
+  Pre-fix matrix (initial 13 probes): 8 fail (6 G1 + 1 G2
+  direct + 1 primitive write), 5 pass.  Post-fix: 18/18 pass
+  (5 additional pin tests added during review).
+
+  **Verification.**
+  - Mut probes (`-n16`): 18 passed.  Includes the call-escape
+    UAF carrier and three new pin tests:
+    `test_g2_call_mediated_escape_blocks_subsequent_shared_match`
+    (read-side conflict at `match &r` after a call-stash),
+    `test_g2_call_through_arm_binder_compiles_when_scrutinee_unused`
+    (single-match call-through compiles),
+    `test_g2_method_call_through_arm_binder_compiles` (full
+    iterator-pattern compile),
+    `test_g2_direct_container_wrap_escape_rejects` (direct
+    `Optional::Some(x)` rejected at escape site).
+  - A.1 mut + A.1 shared cert + A.2 hygiene + memcheck combined
+    (`-n16`): 42 passed.  F2 shared-escape contract preserved
+    end-to-end.
+  - Broader driver + checker + stage1 + stage2 gate (`-n16`):
+    1582 passed, 0 failed (running with the same code; result
+    re-verified post-doc-update).
+  - Memcheck regression (drop-bearing payload via shared
+    by-ref): clean.
+
+  **Spec doc updated** at `docs/match_by_ref_variant.md` with
+  the full mut semantics + history entry.
+
+  **Known v1 limitations.**
+  - Bare-binder ergonomics (`n + 1` / `n = ...`) for primitive
+    payloads under `&mut` are intentionally NOT extended.  The
+    shared-form G3 ergonomics are scoped to shared binders.
+    Explicit `*n` is the documented surface for the mut form.
+  - Indirect arm-binder escape via intermediate locals is
+    handled by the *existing* borrow rules, not the new escape
+    detector — see "Indirect escape" note above.  A future
+    shape that bypasses the existing copy/move rules and the
+    new call-escape detector would be a false-negative; we'll
+    cross that bridge with taint propagation if/when it
+    materializes.
+
 - **Primitive-payload binder under shared by-ref match (G3 + G4) —
   release 0.31.34 (ABI unchanged, still 10).**  Focused follow-up
   to the 0.31.33 shared-cert.
