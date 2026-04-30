@@ -780,6 +780,7 @@ class AstToHIR:
 						),
 						args=[H.HBorrow(subject=orig_place, is_mut=False)],
 						origin="share_capture",
+						loc=cap_span,
 					)
 					explicit_captures.append(
 						H.HExplicitCapture(

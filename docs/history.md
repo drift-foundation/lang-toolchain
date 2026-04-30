@@ -1,5 +1,51 @@
 # Drift development history
 
+## 2026-04-30
+- **Internal-tightening bundle — release 0.31.36 (ABI unchanged,
+  still 10).**  Two minimal ABI-neutral patches landed together
+  per the "minimal-internal-tightening" mandate.
+
+  **(1) `captures(share x)` synthesized HCall span.**  In
+  `lang/driftc/stage1/ast_to_hir.py` the synthesized
+  `Share::share(&x)` HCall (the one the resolver later attaches
+  CallInfo to) was constructed without a `loc=` argument, so the
+  HCall carried a default-empty `Span`.  Any diagnostic that
+  pointed at that HCall (e.g. resolver / call-info /
+  implicit-callback-wrap throws-classification) consequently
+  pointed at file `<unknown>` line 0.  Fix: pass `loc=cap_span`
+  (the capture-item span already in scope) to the synthesized
+  `H.HCall`.  Pure diagnostic-quality improvement, no accept /
+  reject change.
+
+  **(2) DMIR `build_dataclass_registry` defensive collision
+  check.**  At `lang/driftc/packages/provisional_dmir_v0.py`,
+  `build_dataclass_registry(*modules)` previously silently
+  overwrote on `__name__` collision.  The 0.31.28 fix worked
+  around the `parser_ast.TypeNameRef` vs
+  `stage0.ast.TypeNameRef` collision by reordering registration
+  so the field-richer `stage0` variant wins; that
+  registration-order discipline is fragile and the underlying
+  bare-name discriminator design is filed in
+  `docs/refactor_triggers.md` § "Promote DMIR `_to_jsonable`
+  discriminators to module-qualified names".  This patch turns
+  a future silent recurrence into a hard `AssertionError` that
+  names both colliding qualified-classes, the diverging field
+  sets, and points at the refactor-trigger entry — so the next
+  developer to add a colliding dataclass gets the structural-fix
+  pointer instead of debugging silent field drop on `.dmp`
+  round-trip.  Gated on diverging field sets, so benign
+  duplicate-name re-declarations with identical fields don't
+  trip it.  ~25 lines + 3-test unit at
+  `lang/tests/packages/test_dmir_registry_collision.py`.
+
+  **Verification.**  Compiler version bumped to `0.31.36` per
+  AGENTS.md "Compiler versioning rule" (behavior-changing
+  internal tightening, no boundary shape change → no ABI bump).
+  No `docs/refactor_triggers.md` entries closed — the
+  collision-check entry's trigger is "the assertion fires," not
+  "the assertion lands"; it stays parked.  No test edits;
+  unrelated tests untouched.
+
 ## 2026-04-29
 - **Certify `match &mut Variant` (G1 + G2) — release 0.31.35
   (ABI unchanged, still 10).**  Bug A.1 mutable half from the

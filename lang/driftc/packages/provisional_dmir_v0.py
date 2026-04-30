@@ -81,12 +81,35 @@ def build_dataclass_registry(*modules: Any) -> dict[str, type]:
 
 	This is used to reconstruct stage2 MIR nodes and other internal dataclasses from
 	the provisional JSON encoding.
+
+	Asserts no two distinct dataclasses with the same bare ``__name__`` but
+	differing field sets are registered — that's the silent-data-loss shape
+	that motivated the 0.31.28 ``stage0_ast`` registration-order workaround.
+	The structural fix (module-qualified discriminators) is filed in
+	``docs/refactor_triggers.md`` § "Promote DMIR ``_to_jsonable``
+	discriminators to module-qualified names"; this assertion turns a future
+	silent recurrence into a hard error pointing at that entry.
 	"""
 	out: dict[str, type] = {}
 	for mod in modules:
 		for v in vars(mod).values():
-			if dataclasses.is_dataclass(v):
-				out[v.__name__] = v
+			if not dataclasses.is_dataclass(v):
+				continue
+			existing = out.get(v.__name__)
+			if existing is not None and existing is not v:
+				ex_fields = tuple(f.name for f in dataclasses.fields(existing))
+				new_fields = tuple(f.name for f in dataclasses.fields(v))
+				if ex_fields != new_fields:
+					raise AssertionError(
+						f"DMIR registry collision: dataclass name '{v.__name__}' "
+						f"is defined by both {existing.__module__}.{existing.__qualname__} "
+						f"(fields={ex_fields}) and {v.__module__}.{v.__qualname__} "
+						f"(fields={new_fields}). Bare-name discriminators silently drop "
+						f"the diverging fields on .dmp round-trip. "
+						f"See docs/refactor_triggers.md § 'Promote DMIR _to_jsonable "
+						f"discriminators to module-qualified names'."
+					)
+			out[v.__name__] = v
 	return out
 
 
