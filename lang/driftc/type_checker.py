@@ -5631,6 +5631,11 @@ class TypeChecker:
 			nonlocal return_type
 			nonlocal catch_depth
 			nonlocal unsafe_context
+			# Auto-try contract state — must save/restore across lambda
+			# boundaries so a `throws` outer fn does not leak its auto-try
+			# context into a nothrow lambda body (Bug A — 0.31.38).
+			nonlocal fn_declared_throws
+			nonlocal try_block_depth
 			def _resolve_struct_field_type(struct_id: TypeId, field_name: str) -> tuple[int, TypeId] | None:
 				info = self.type_table.struct_field(struct_id, field_name)
 				if info is not None:
@@ -6265,6 +6270,37 @@ class TypeChecker:
 					explicit_capture_stack.append(capture_kinds)
 				saved_return_type = return_type
 				return_type = lambda_ret_type
+				# Auto-try lambda-boundary save/restore (Bug A — 0.31.38).
+				# `_auto_try_context()` reads `fn_declared_throws` /
+				# `try_block_depth` as closure-captured locals set by the
+				# enclosing function's signature.  Without save/restore, a
+				# nothrow lambda body nested inside a `throws` outer fn
+				# would inherit `fn_declared_throws=True`, eager-unwrap
+				# `Result<T,E>` bindings via `or_throw()` synthesis, and
+				# break user code that explicitly matches on the Result
+				# (`val r = call(); match &r { Ok(_)=>..., Err(_)=>... }`)
+				# — the unwrapped `r: T` then fails the variant-scrutinee
+				# check.  See `test_auto_try_lambda_boundary.py`.
+				saved_fn_declared_throws = fn_declared_throws
+				saved_try_block_depth = try_block_depth
+				# Lambda body has its own throwable surface, distinct
+				# from the outer fn:
+				#   - explicit `nothrow` declaration → not throws
+				#   - expected-fn shape (Callback*/CallbackThrow*) carries
+				#     the throwability the call site demands
+				#   - otherwise default to NOT throws (conservative —
+				#     auto-try fires only when the user has explicitly
+				#     opted into a throwable surface)
+				if getattr(expr, "declared_nothrow", False):
+					fn_declared_throws = False
+				elif expected_fn is not None:
+					fn_declared_throws = bool(expected_fn[2])
+				else:
+					fn_declared_throws = False
+				# `try {}` blocks do NOT transit lambda boundaries — if
+				# the lambda body wants try-semantics it must open its
+				# own.
+				try_block_depth = 0
 				if expr.body_expr is not None:
 					type_expr(expr.body_expr, expected_type=lambda_ret_type)
 				if expr.body_block is not None:
@@ -6305,6 +6341,9 @@ class TypeChecker:
 					if inferred_ret is not None:
 						lambda_ret_type = inferred_ret
 				return_type = saved_return_type
+				# Restore auto-try lambda-boundary state (Bug A — 0.31.38).
+				fn_declared_throws = saved_fn_declared_throws
+				try_block_depth = saved_try_block_depth
 				if capture_kinds:
 					explicit_capture_stack.pop()
 				scope_env.pop()

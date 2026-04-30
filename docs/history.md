@@ -1,6 +1,83 @@
 # Drift development history
 
 ## 2026-04-30
+- **Bug A — auto-try contract leaking across lambda body boundary —
+  release 0.31.38 (ABI unchanged, still 10).**  LANGUAGE_BUG fix
+  matching the bookkeeper / web-rest 0.4.1 middleware report on
+  driftc 0.31.37.
+
+  **Symptom.** A `throws` outer function containing a nothrow
+  Callback lambda whose body does
+  `val r = call_returning_Result(); match &r { Ok, Err }` rejected
+  with the diagnostic cascade:
+
+      error: match scrutinee must be a variant type
+      error: lambda can throw but is expected to be nothrow for Fn(...) nothrow -> Result<...>
+      error: callback3 expects a function value
+      error: no matching overload for function 'add_middleware'
+
+  Flipping the enclosing function `nothrow ↔ throws` was the only
+  variable that toggled the build outcome (single-knob A/B
+  reproduced by the user as Test C / Test D in the repro project).
+
+  **Root cause.**
+  `lang/driftc/type_checker.py:_check_function_body`'s auto-try
+  contract reads `fn_declared_throws` and `try_block_depth` as
+  closure-captured locals.  `fn_declared_throws` was set ONCE from
+  the outer fn's signature (`:9295`) with **no save/restore around
+  lambda body type-checking** at `:6266+`.  A nothrow lambda body
+  nested inside a `throws` outer fn inherited
+  `fn_declared_throws=True` for the duration of its body
+  type-check; `_should_auto_try` (`:9332`) returned True; eager
+  auto-try synthesized `or_throw()` on `val r = ...`, unwrapping
+  `Result<T,E>` to `T`; `match &r` then correctly rejected the
+  now-`&T` scrutinee with "must be a variant type."
+
+  **Fix.**  Save/restore `fn_declared_throws` and `try_block_depth`
+  across the lambda body type-check.  Reset based on the lambda's
+  effective throwability:
+
+  - explicit `nothrow` declaration → `fn_declared_throws=False`
+  - expected-fn shape from `Callback*`/`CallbackThrow*` → use the
+    can_throw bit
+  - otherwise → `False` (conservative — auto-try fires only when
+    the user has explicitly opted into a throwable surface)
+
+  `try_block_depth` resets to 0 at the lambda boundary regardless;
+  a `try {}` block in the outer fn does not transit a lambda
+  boundary.
+
+  **Regression coverage.**  One new test file plus one extended
+  package-consumer file:
+
+  - `lang/tests/driver/test_auto_try_lambda_boundary.py` (NEW,
+    5 tests) — single-source narrow regressions pinning the bug
+    shape in isolation: throws-outer × nothrow-lambda × `match
+    &Result` compiles; nothrow-outer control compiles; throws-lambda
+    auto-try still fires correctly (lambda's own throwable surface
+    drives auto-try, not the outer fn's); explicit `Result<T,E>`
+    annotation in nested lambda opts out of auto-try; **`try {}`
+    block around a lambda construction does not leak
+    `try_block_depth > 0` into the lambda body** (independently
+    pins the second half of the state leak — the test fails if
+    only the `fn_declared_throws` reset is in place but not the
+    `try_block_depth` reset).
+  - `lang/tests/driver/test_callback3_cross_package_bare_lambda.py`
+    (extended, 1 new test: X4) — package-consumer regression
+    matching the bookkeeper shape end-to-end (throws-outer ×
+    nothrow-Callback3 × `match &r` on Result returned by the inner
+    Callback2's `next.call(...)`).
+
+  **Coverage gap closed.**  The 0.31.33 / 0.31.35 `match &Variant`
+  cert tests (`test_match_by_ref_variant.py`,
+  `test_match_by_mut_ref_variant_probes.py`) all used `nothrow`
+  test fixtures.  None exercised the
+  `throws outer × nothrow lambda × match &Result` shape — that's
+  what let this slip through certification.  The new
+  `test_auto_try_lambda_boundary.py` pins the missing shape;
+  future cert work in this area must include throws-outer
+  variants.
+
 - **Hotfix — release 0.31.37 (ABI unchanged, still 10).**  Reverts
   the `build_dataclass_registry` collision assertion shipped in
   0.31.36.  The certify-lane smoke compile (orch run

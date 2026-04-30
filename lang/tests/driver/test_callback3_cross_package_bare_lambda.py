@@ -421,3 +421,69 @@ def test_x3_multi_module_cross_package_callback3_bare_lambda(
 			f"multi-module cross-package Callback3 bare lambda must "
 			f"compile; exit_code={exit_code} diagnostics:\n" + "\n".join(msgs)
 		)
+
+
+# X4 — Bug A package-consumer regression (LANGUAGE_BUG, 0.31.38).
+#
+# Bookkeeper shape: a `throws` outer function calls `lib.run_mw3(...)` with
+# a bare nothrow Callback3 lambda whose body does `val r = next.call(req,
+# ctx); match &r { Ok(_) => ..., Err(_) => ... }`.  Pre-fix
+# (`type_checker.py:_check_function_body`'s `fn_declared_throws` leaking
+# across the lambda boundary), the throws outer's auto-try context fires
+# inside the nothrow lambda body, eager-unwraps `r` from
+# `Result<Resp, AppErr>` to `Resp`, then `match &r` rejects with "match
+# scrutinee must be a variant type" → the cascade observed in the bookkeeper
+# / web-rest 0.4.1 report on driftc 0.31.37 (2026-04-30).
+#
+# This test pins the package-consumer shape directly.  The narrow
+# single-source regression for the same bug lives in
+# `test_auto_try_lambda_boundary.py` — that file isolates the fix; this
+# file pins that the fix closes the bookkeeper-shape report end-to-end.
+CONSUMER_X4_SOURCE = """\
+module main;
+
+import std.core as core;
+import mwlib as lib;
+
+// Throws outer fn — pre-fix, this throws-ness leaked into the nothrow
+// Callback3 lambda body's auto-try context.
+fn install() throws -> Int {
+\treturn lib.run_mw3(|req, ctx, next| => {
+\t\tval r = next.call(req, ctx);
+\t\tval n = match &r {
+\t\t\tcore.Result::Ok(_) => { 1 },
+\t\t\tcore.Result::Err(_) => { 0 }
+\t\t};
+\t\treturn lib.ok(req.n + ctx.k + n);
+\t});
+}
+
+fn main() nothrow -> Int { return 0; }
+"""
+
+
+def test_x4_throws_outer_with_nothrow_callback3_lambda_match_on_result(
+	_built_lib: tuple[Path, Path], tmp_path: Path,
+) -> None:
+	"""X4 — Bug A package-consumer regression (LANGUAGE_BUG, 0.31.38).
+	Throws outer fn × nothrow Callback3 lambda × `match &r { Ok, Err }`
+	on a Result returned by the inner Callback2's `.call(...)`.  Mirrors
+	the exact bookkeeper / web-rest 0.4.1 middleware shape.
+
+	Pre-fix: cascade of "match scrutinee must be a variant type",
+	"unknown name 'r'", "lambda can throw but is expected to be nothrow",
+	"callback3 expects a function value", "no matching overload for
+	function 'run_mw3'".  Post-fix: clean compile (the fix
+	save/restores `fn_declared_throws` and `try_block_depth` across the
+	lambda body type-check at `type_checker.py:6266+`)."""
+	pkg_root, trust_path = _built_lib
+	exit_code, msgs = _compile_consumer(
+		CONSUMER_X4_SOURCE,
+		pkg_root=pkg_root, trust_path=trust_path, tmp_path=tmp_path,
+	)
+	if exit_code != 0:
+		pytest.fail(
+			f"throws-outer × nothrow-Callback3-lambda × match-on-Result "
+			f"must compile post-fix; exit_code={exit_code} diagnostics:\n"
+			+ "\n".join(msgs)
+		)
