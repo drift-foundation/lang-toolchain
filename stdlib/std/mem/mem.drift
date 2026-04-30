@@ -111,8 +111,10 @@ pub fn capacity<T>(buf: &RawBuffer<T>) nothrow -> Int {
 /// check.  Unsafe.
 @intrinsic pub unsafe fn ptr_at_mut<T>(buf: &mut RawBuffer<T>, i: Int) -> &mut T;
 
-/// Writes `v` into the `i`th slot, dropping any previous value.
-/// No bounds check.  Unsafe.
+/// Writes `v` into the `i`th slot as a raw store.  Does **not** drop
+/// the previous slot contents — for non-Copy `T`, the caller must
+/// `mem.read` the slot first if it was previously initialized, or the
+/// old value will leak.  No bounds check.  Unsafe.
 @intrinsic pub unsafe fn write<T>(buf: &mut RawBuffer<T>, i: Int, v: T) -> Void;
 
 /// Moves the `i`th element out of the buffer.  Subsequent reads
@@ -132,8 +134,10 @@ pub fn capacity<T>(buf: &RawBuffer<T>) nothrow -> Int {
 /// Reads the `T` value pointed to by `p`.  Unsafe.
 @intrinsic pub unsafe fn ptr_read<T>(p: Ptr<T>) -> T;
 
-/// Writes `v` to the address pointed to by `p`.  Drops any previous
-/// value at that address.  Unsafe.
+/// Writes `v` to the address pointed to by `p` as a raw store.  Does
+/// **not** drop the previous value at that address — for non-Copy `T`,
+/// the caller must `mem.ptr_read` first if the address was previously
+/// initialized, or the old value will leak.  Unsafe.
 @intrinsic pub unsafe fn ptr_write<T>(p: Ptr<T>, v: T) -> Void;
 
 /// Returns `true` if `p` is the null pointer.

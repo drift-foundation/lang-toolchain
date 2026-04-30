@@ -244,6 +244,70 @@ opportunistic uplifts)" for the full rule.
   test that constructs a colliding registry and asserts the
   expected error.
 
+## Drop-aware `RawBuffer` / `Ptr` write variants
+
+- **Improvement:** today `mem.write<T>(&mut RawBuffer<T>, Int, T)` and
+  `mem.ptr_write<T>(Ptr<T>, T)` are raw stores (`_lower_raw_buffer_write`
+  / `_lower_ptr_write` in `lang/codegen/llvm/llvm_codegen.py`) — they
+  do not drop the previous slot contents.  Stdlib (`std.containers`)
+  already obeys the implicit raw-store contract: every callsite drains
+  via `mem.read` / `read_value` first when the slot may be initialized.
+  The user-facing intrinsic doc was corrected in 2026-04-30 to match
+  reality.  When demand surfaces, introduce drop-aware companion
+  intrinsics — e.g. `mem.write_drop<T>` and `mem.ptr_write_drop<T>` —
+  that lower to `(read old) + DropValue + (raw store)`, mirroring the
+  `_emit_assign_store_ref` shape the 0.31.18 replace-store invariant
+  established for `&mut`-place assignment.  Migrate stdlib callsites
+  that are conceptually doing "replace the value at this initialized
+  slot" (HashMap `replace_value`, TreeMap insert-replace, TreeMapEntryMut
+  insert-replace) to the drop-aware variants — this collapses the
+  manual drain-then-write pair into a single intrinsic and removes a
+  category of subtle leak bugs from any future user `unsafe` block.
+
+- **Why deferred (2026-04-30):** the doc/impl divergence was the
+  proximate concern, and that's a doc-only fix.  No stdlib callsite
+  is affected (all already drain manually).  Adding drop-aware
+  intrinsics is real surgery — new MIR ops, new LLVM lowering, new
+  ownership-pass handling parallel to the `M.RawBufferRead` /
+  `M.PtrRead` / `M.MoveOut` shape covered at
+  `lang/driftc/stage2/string_arc.py`.  No current bug attributable
+  to the missing drop-aware variant.  Speculative without a real
+  consumer.
+
+- **Triggers:**
+
+  - A user-reported leak / UAF in a downstream `unsafe` block traced
+    to "I called `mem.write` (or `mem.ptr_write`) into a slot that
+    was already initialized, expecting the old value to be dropped."
+    The doc fix is the first line of defense; if a user still trips
+    over this, the structural fix (drop-aware variant) is justified.
+  - Any new stdlib container that needs the drain-then-write idiom
+    in a perf-critical path where the manual `read_value` round-trip
+    is observable.  Three users of "replace at initialized slot"
+    (HashMap, TreeMap, plus the new container) is the minimum for a
+    correctly-shaped intrinsic.
+  - A safe-API wrapper effort over `RawBuffer<T>` / `Ptr<T>` (e.g.,
+    a future `Slot<T>` type that tracks init bit) that wants to
+    delegate "replace" to a single primitive instead of composing
+    `read` + `write`.
+
+- **Scope when triggered:** ~2-3 days.
+
+  1. New MIR ops (e.g. `M.RawBufferWriteDrop`, `M.PtrWriteDrop`) plus
+     HIR→MIR lowering of `mem.write_drop` / `mem.ptr_write_drop`
+     intrinsic calls.
+  2. LLVM lowering — `(read old into temp) + DropValue(temp) + raw
+     store new`.  Mirror the existing `_emit_assign_store_ref` shape.
+  3. `string_arc.py` (and any other ownership pass that walks
+     drop-bearing reads) handler parallel to `M.RawBufferRead` /
+     `M.PtrRead`.
+  4. Stdlib migration: HashMap `replace_value`, TreeMap insert-replace,
+     TreeMapEntryMut insert-replace.  ~6 lines per site.
+  5. Doc update — point users at the drop-aware variant as the
+     "replace at initialized slot" canonical primitive.
+  6. ABI bump — new compiler→runtime intrinsic surface (verify
+     against `AGENTS.md` § "Boundary Contract Guardrails").
+
 ## Add span / provenance to existing borrow-checker walkers
 
 - **Improvement:** existing walkers return `bool` or `set[int]` — by
