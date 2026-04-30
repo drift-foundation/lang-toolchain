@@ -631,6 +631,10 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 
 	# Execute.
 	print(f"drift build: {art.name} ({art.kind}) v{art.version}")
+	if package_roots:
+		print(f"  package roots ({len(package_roots)}):")
+		for i, p in enumerate(package_roots, start=1):
+			print(f"    {i}. {p}")
 	subprocess_env = _clean_env()
 	if debug_style_build:
 		# `--debug` and `DRIFT_DEBUG=1` are co-equal driver selectors; the

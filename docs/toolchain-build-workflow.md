@@ -208,7 +208,77 @@ NOT stored in the manifest. They come from three sources, in precedence order:
 2. `drift/deploy-config.json` (colocated with manifest)
 3. CLI flags (`--package-root`, `--native-lib-path`)
 
+Roots from all three layers are concatenated into a single ordered list.
+Within `DRIFT_PACKAGE_ROOT` the colon-separated order is preserved; within
+`deploy-config.json` and `--package-root` the array / repeat order is
+preserved. The resolver iterates the merged list and **first-root-wins on
+`(package_id, version)` collisions** — different versions of the same
+package both stay in the index and are selected by lockfile / `--dep`
+pinning.
+
 All paths must be absolute.
+
+### 2.3 Selective overlay (staging → certified)
+
+Short-term migration overlap — for example, an app team consuming
+`certified/current/libs` while another team has shipped a patch to
+`staging/` that the app team needs to integrate against before the next
+certification cycle — is the supported overlay use case. Order
+`DRIFT_PACKAGE_ROOT` (or the equivalent config / CLI layer) so the
+staging root precedes the certified root, then regenerate the lock:
+
+```bash
+# 1. Set ordered roots (staging first, certified second).
+export DRIFT_PACKAGE_ROOT=/abs/path/to/staging/libs:/abs/path/to/certified/current/libs
+
+# 2. Regenerate the lock against the overlayed roots.  drift-web (or
+#    whichever package staging publishes) pins to staging's exact
+#    identity; every other dep continues to pin to its certified
+#    identity via first-root-wins on non-shadowed (pkg_id, version)
+#    pairs.
+drift prepare --manifest drift/manifest.json
+
+# 3. Build with the same DRIFT_PACKAGE_ROOT in scope.
+drift build --manifest drift/manifest.json --driftc $DRIFTC
+```
+
+What this gets you:
+
+- **Surgical override per package** via root ordering. Staging-only
+  packages overlay; non-staging packages still resolve from certified.
+- **Provenance preserved.** The regenerated lockfile (schema v4) records
+  staging's `sha256` / `author_key` / `source_content_id` /
+  `source_attestation_key` for the overlayed dep, certified's identity
+  for everything else. The lockfile is the audit trail — no hand-copying
+  with lost provenance.
+- **Uncertified by definition.** An overlay build's output is not a
+  certified snapshot. Promotion / certify-lane semantics are unchanged;
+  only the consumer's local build floats. Steady state is: staging's
+  patch gets re-certified, app team picks up the new
+  `certified/current`, the overlay is removed.
+
+If staging publishes a *different* version (e.g. `drift-web@0.4.1` vs
+certified's `0.4.0`), `drift prepare` picks staging's version through
+ordinary semver constraint resolution. If staging publishes the *same*
+version with different content, first-root-wins on the index and the
+regenerated lock pins staging's identity explicitly — the v4 identity
+fields make silent same-version-different-bytes substitution
+detectable on later verification, by design.
+
+For a single-package surgical pin without regenerating the lock:
+
+```bash
+drift build --manifest drift/manifest.json --driftc $DRIFTC \
+  --dep drift-web@0.4.1
+```
+
+`--dep PKG@VERSION` (added in 0.27.48) selects the exact consumed
+version from whichever root provides it.
+
+**This pattern is the bridge for migration overlap, not a long-term
+consumption mode.** Overlay builds are uncertified by design; the
+expected steady state is re-certification of the staged patch and a
+fresh `certified/current` snapshot.
 
 ## 3. Build artifacts with `drift build`
 
