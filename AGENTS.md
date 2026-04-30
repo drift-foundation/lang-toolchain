@@ -106,3 +106,28 @@ This rule does NOT apply to:
 - Any new acceptance test (`rc == 0` expected) for a value-shape change that affects lowering — type-coercion, autoderef, escape rules, place-mutability — must include at least one full-compile-and-run companion test that proves the program actually lowers and executes.
 - Checker-only `--test-build-only` coverage is not enough for this class of change. G3 v1 passed `--test-build-only` while failing at LLVM IR generation; reviewer caught it because they ran the full compile manually.
 - Companion test format: spawn the driver as a subprocess, link the binary, run it, assert the exit code matches the expected semantic outcome. Cf. `_compile_and_run` in `lang/tests/driver/test_match_by_ref_variant.py`.
+
+## Refactor triggers (registry of opportunistic uplifts)
+
+Some compiler design improvements are deferred because the cost is not justified by current value — but they have specific bug shapes that, if they appear, become a natural forcing function. When that bug shape lands, the fix's budget is large enough to land the improvement as the deliverable.
+
+**Process rule (mandatory):**
+
+When starting any LANGUAGE_BUG fix, scan `docs/refactor_triggers.md`. For each registered entry, ask: does the current bug match its trigger condition? If yes, the bug fix's deliverable is the larger refactor, not the minimal patch. If no, proceed with the minimal fix.
+
+This is an explicit "stop and consult" step parallel to the LANGUAGE_BUG stop-and-confirm rule above — both fire at the start of bug investigation.
+
+**Adding entries:**
+
+When a refactor is identified but not currently justified, append an entry to `docs/refactor_triggers.md` with:
+
+1. The improvement (one paragraph).
+2. Why deferred (cost vs current value, dated).
+3. Trigger conditions — specific bug shapes that would justify the improvement.
+4. Estimated scope when triggered.
+
+Filing an entry without a real trigger condition is a smell — the discipline of writing the trigger forces honest assessment of whether the improvement is real or just nice-to-have. Entries with vague triggers should be challenged in review.
+
+**Removing entries:**
+
+When an entry is acted on (the trigger fired and the refactor landed), strike it through with the version it landed in, but keep it visible — a record of "this was opportunistically completed at version X" is useful future-you context.
