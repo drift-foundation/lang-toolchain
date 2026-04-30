@@ -43,7 +43,7 @@ from lang.driftc.core.diagnostics import Diagnostic
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.span import Span
 from lang.driftc.core.types_core import TypeKind, TypeTable, TypeId
-from lang.driftc.checker import FnSignature
+from lang.driftc.checker import FnSignature, user_facing_binding_name
 from lang.driftc.method_registry import CallableDecl
 from lang.driftc.method_resolver import MethodResolution, SelfMode
 from lang.driftc.stage1.call_info import CallInfo, CallTargetKind, IntrinsicKind
@@ -600,7 +600,7 @@ class BorrowChecker:
 				base = self._base_for_binding(int(cap.key.root_local))
 				name = base.name if base is not None else str(cap.key.root_local)
 				self._diagnostic(
-					f"cannot copy '{name}': type is not Copy",
+					f"cannot copy '{user_facing_binding_name(name)}': type is not Copy",
 					cap.span,
 				)
 
@@ -1933,7 +1933,7 @@ class BorrowChecker:
 				return
 			ty = self._type_of_place(place)
 			if not self._is_copy(ty):
-				self._diagnostic(f"cannot copy '{place.base.name}': type is not Copy", getattr(expr, "loc", Span()))
+				self._diagnostic(f"cannot copy '{user_facing_binding_name(place.base.name)}': type is not Copy", getattr(expr, "loc", Span()))
 				return
 			self._consume_place_use(state, place, getattr(expr, "loc", Span()))
 			return

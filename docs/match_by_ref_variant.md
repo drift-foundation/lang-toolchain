@@ -38,6 +38,36 @@ match path, not the syntactic shape of the scrutinee expression.
    `&self`-receiver methods through a binder works as on any
    `&T`-typed value.
 
+   **Match ergonomics for `Copy` payload fields.** When the
+   payload field type is `Copy` (`Int`, `Uint`, `Uint64`, `Float`,
+   `Bool`, `Byte`, `Char`, etc.) AND the scrutinee is a *shared*
+   by-ref match (`match &v`, not `match &mut v`), the binder is
+   marked as a *Copy arm binder*. At three syntactic positions
+   inside the arm body, a bare `HVar` reference to a Copy arm
+   binder is rewritten to `HUnary(DEREF, HVar)` during
+   type-check, so the lowered IR contains a `LoadRef` and the
+   loaded value participates in the operation:
+
+   - Binary-operator operands — `n + 1`, `n > 0`.
+   - Ternary condition — `b ? a : c` (when `b: &Bool`).
+   - Match arm result expression — `match &s { Active(n) => n }`
+     producing a value-typed result (e.g. `val k: Int = match …`).
+
+   For all other contexts (passing the binder to `fn(&T)`, taking
+   its address, nested `match` over `&Variant`, etc.) the binder's
+   type remains `&FieldType` per the spec. The rewrite is keyed
+   by binding-id (set membership), not by type pattern, so an
+   ordinary `&Int` value from any other source continues to
+   behave as a borrow — no broad `Ref<Copy> → Copy` coercion.
+
+   Stdlib's existing pattern of explicitly dereferencing a Copy
+   binder with `*x` continues to work — the binder type is
+   unchanged, so `*x` derefs the borrow as before.
+
+   Non-Copy payload fields (struct, `String`, `Array<T>`, etc.)
+   preserve the strict `&T` binder typing — moving / copying /
+   cloning semantics aren't elided.
+
 3. **No binder ownership.** Binders do not own or drop their payload
    fields. Drop responsibility stays with the original scrutinee. A
    non-Copy payload (e.g. a `String` field) is released exactly once
@@ -104,7 +134,27 @@ errors) and is pinned by
 
 ## History
 
-- 0.31.33 (this release) — shared `match &Variant` certified.
+- 0.31.34 — primitive-payload binder under shared by-ref match.
+  - G3: HIR rewrite that inserts `HUnary(DEREF, HVar)` at HBinary
+    operands, ternary conditions, and match arm-result expressions
+    when the operand is a bare `HVar` referring to a Copy
+    match-arm binder (`Ref<Copy>`).  HIR→MIR's existing DEREF
+    lowering emits a `LoadRef`, so the load is materialized in
+    the lowered IR.  Closes the gap that 0.31.33's cert
+    overlooked — primitive-payload variants like
+    `variant V { Active(n: Int) }` now allow `match &v { Active(n)
+    => n + 1 }`, `n > 0`, `val k: Int = match &v { Active(n) => n }`
+    end-to-end (compile + execute), not just type-check.
+  - The rewrite is keyed by binding-id set membership
+    (`copy_arm_binder_ids`), populated only for shared-by-ref
+    arm binders whose payload field type is `Copy`.  Ordinary
+    `&Int` values from any other source remain strict references
+    — no broad `Ref<Copy> → Copy` coercion.
+  - G4: routed copy/arithmetic diagnostics through
+    `user_facing_binding_name` so the internal
+    `__match_binder_<n>_<src>` form does not leak in those paths.
+
+- 0.31.33 — shared `match &Variant` certified.
   - F1: type-checker rejects field-write through shared `&` binder
     before MIR.
   - F2: arm-binder escape pinned safe via owner-borrow lifetime

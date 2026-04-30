@@ -1,6 +1,130 @@
 # Drift development history
 
 ## 2026-04-29
+- **Primitive-payload binder under shared by-ref match (G3 + G4) —
+  release 0.31.34 (ABI unchanged, still 10).**  Focused follow-up
+  to the 0.31.33 shared-cert.
+
+  **G3 — HIR rewrite to insert DEREF at value-context binder
+  uses.**  0.31.33's shared-cert tests used struct payloads only
+  (`Resp { status: Int }` where `x.status` autoderefs through
+  field access).  Variants with primitive payload fields like
+  `variant V { Active(n: Int) }` were not exercised, and
+  `match &v { Active(n) => { n + 1 } }` rejected with
+  `arithmetic operators require matching Int/Uint/Uint64/Float
+  operands (have Ref<Int> vs Int)` because the binder is `&Int`
+  and the arith path doesn't auto-deref.
+
+  An earlier round of this work attempted a checker-only
+  `_autodref_copy` at HBinary and let-init coercion.  That fix
+  passed `--test-build-only` regressions but failed end-to-end:
+  the type-checker accepted `n + 1` while LLVM rejected the IR
+  (`integer binop requires matching Int/Uint operands (have ptr,
+  drift.int)`) because MIR/codegen still saw the binder as a
+  `Ref<Int>` pointer.  Reviewer caught it; the patch was redone
+  to actually work end-to-end.
+
+  Final shape — HIR rewrite scoped by binder-id set, not by type
+  pattern:
+
+  1. At match-arm binder setup in `type_checker.py`
+     (~line 7176), record the binder's id in
+     `copy_arm_binder_ids` iff the scrutinee is a *shared* by-ref
+     match (`scrut_ref_mut is False`) AND the payload field type
+     is `Copy`.
+  2. At three HIR sites where a Copy arm binder is read as a
+     value, replace `HVar(bid)` with `HUnary(DEREF, HVar(bid))`:
+     - `HBinary` operands — covers `n + 1`, `n > 0`.
+     - `HTernary` condition — covers `b ? a : c` for `&Bool`
+       binders.
+     - Match arm result / trailing expression — covers
+       `val k: Int = match &v { Active(n) => { n } }`.
+  3. HIR→MIR lowering of `HUnary(DEREF)` at
+     `stage2/hir_to_mir.py:_visit_expr_HUnary` already emits
+     `LoadRef`, so the load is materialized end-to-end without
+     touching MIR.
+
+  The rewrite is keyed by binder-id set membership.  Ordinary
+  `&Int` values from any other source — taking the address of a
+  local, a function parameter typed `&Int`, etc. — stay
+  rejected at HBinary, preserving strict reference semantics.
+  No broad `Ref<Copy> → Copy` coercion.
+
+  Stdlib's existing pattern `match &self { Errno(code) => {
+  ... DiagnosticValue::Int(*code) ... } }` continues to work
+  because the binder type is unchanged (`Ref<Int>`); `*code`
+  derefs the borrow as before.  The match-binder rewrite affects
+  only HIR shapes where the user did NOT spell the deref and
+  expects ergonomic value semantics.
+
+  Non-Copy fields (struct, `String`, `Array<T>`) preserve their
+  strict `&T` binder typing — move / clone / copy semantics not
+  elided.  The mut form (`scrut_ref_mut == True`) is unchanged
+  in this patch — primitive-payload certification under `&mut`
+  is part of the deferred mut certification effort.
+
+  **G4 — `__match_binder_` hygiene in copy / capture diagnostics.**
+  0.31.32's `user_facing_binding_name` helper covered the
+  unknown-name diagnostic, but the copy / capture-Copy emission
+  sites still spelled `__match_binder_<n>_<src>` when an arm binder
+  failed a Copy check.  Routed three more sites through the helper:
+
+  - `lang/driftc/type_checker.py` — the `cannot copy '<name>'`
+    emission (both Copy-unknown and not-Copy paths).
+  - `lang/driftc/borrow_checker_pass.py` — the `cannot copy '<name>':
+    type is not Copy` emissions for capture-Copy and HCopy
+    consumption.
+
+  In practice, post-G3 the shared form rarely fires these paths
+  (the autodref makes the common arith / copy cases compile).
+  G4 hardens the hygiene defensively for any future shape that
+  reaches these sites with an arm-binder.
+
+  **Tests.**  Added 7 new tests to
+  `lang/tests/driver/test_match_by_ref_variant.py`:
+
+  - `test_g3_primitive_payload_arith_full_compile_and_run` — the
+    canonical `n + 1` shape, asserts binary exits with `n + 1`.
+  - `test_g3_primitive_payload_copy_full_compile_and_run` — typed
+    let-init coercion, asserts binary exits with the loaded value.
+  - `test_g3_primitive_payload_comparison_full_compile_and_run` —
+    the comparison-op path (`n > 0 ? 1 : 0`), asserts exit 1.
+  - `test_g3_bool_payload_full_compile_and_run` — Bool primitive
+    binder via ternary condition, asserts exit 1.
+  - `test_g3_scope_only_match_arm_binders_not_arbitrary_refs` —
+    pin: non-arm `val r: &Int = &n; r + 1` must still reject; the
+    G3 fix is scoped to match-arm binders.
+  - `test_g4_arith_diagnostic_uses_source_binder_name` — even when
+    the autodref leaves a real type-mismatch (`Int + Bool`), the
+    diagnostic must spell source binder names.
+  - `test_g4_copy_diagnostic_uses_source_binder_name` — passing a
+    non-Copy `&Big` binder to `fn(Big)` must reject; the
+    diagnostic must use source spelling.  Asserts `rc != 0`
+    explicitly so the hygiene check is never vacuous.
+
+  Of the seven new G3+G4 tests, the four end-to-end full-compile
+  cases failed pre-fix at LLVM IR generation; post-fix they
+  compile, link, and execute with the expected exit codes.  The
+  scope-pin test asserts that arbitrary `&Int` outside a match
+  arm still rejects.  Existing 12 shared-cert tests + 4 A.2
+  hygiene tests + 13 product-shape consumer tests + memcheck
+  regression all continue to pass.
+
+  **Verification.**  Memcheck regression: clean (1 passed).
+  A.1 cert + A.2 hygiene + memcheck combined: 24 passed.
+  Broader driver + checker + stage1 + stage2 gate:
+  **1568 passed, 0 failed**.
+
+  **Spec doc updated** at `docs/match_by_ref_variant.md` to call
+  out the Copy-payload match-ergonomics.
+
+  **What is still NOT certified.**
+  - `match &mut Variant` — primitive-payload behavior under `&mut`,
+    borrow-lifetime overshoot, escape-via-Optional<&mut>.  Three
+    distinct issues, at least one (borrow lifetime) is borrow-
+    checker work.  Per the matrix probe, mut certification stays
+    deferred until the borrow-checker effort is scheduled.
+
 - **Certify shared by-reference variant match (`match &Variant`) —
   release 0.31.33 (ABI unchanged, still 10).**  Bug A.1 (shared
   half) from the bookkeeper / web-rest middleware report.

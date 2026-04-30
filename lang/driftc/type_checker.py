@@ -1914,6 +1914,23 @@ class TypeChecker:
 		binding_for_var: Dict[int, int] = {}
 		binding_types: Dict[int, TypeId] = {}
 		binding_names: Dict[int, str] = {}
+		# G3: bindings introduced by `match &Variant { Ctor(x) => ... }`
+		# whose type is `Ref<Copy>` (e.g. binder for an `Int` payload
+		# field).  At three syntactic positions inside the arm body,
+		# a bare `HVar` referring to such a binder is rewritten to
+		# `HUnary(DEREF, HVar)` so HIR→MIR's existing DEREF lowering
+		# emits a `LoadRef`:
+		#   - HBinary operands (`n + 1`, `n > 0`).
+		#   - HTernary condition (`b ? a : c`).
+		#   - Match arm result / trailing expr (`val k: Int = match
+		#     &v { Active(n) => { n } }`).
+		# Other contexts — function arguments, return statements,
+		# nested `match` over the binder, taking its address — are
+		# *not* rewritten.  Those uses see the strict `&FieldType`
+		# binder type and obey the usual borrow rules.  Stdlib's
+		# existing `*code` form continues to work because the
+		# binder's stored type is unchanged (`Ref<Copy>`).
+		copy_arm_binder_ids: Set[int] = set()
 		# Binding mutability (val/var) keyed by binding id.
 		#
 		# MVP borrow rules depend on this:
@@ -2743,11 +2760,15 @@ class TypeChecker:
 			copy_status = self.type_table.copy_status(ty_id)
 			if copy_status is True:
 				return
+			# G4: route binder name through user_facing_binding_name so
+			# the internal `__match_binder_<n>_<src>` form never leaks
+			# into copy diagnostics for match-arm binders.
+			user_name = user_facing_binding_name(name) if name else name
 			if copy_status is None:
 				pretty = self._pretty_type_name(ty_id, current_module=current_module_name)
 				reason = self.type_table.copy_unknown_reason(ty_id)
-				if name:
-					msg = f"cannot copy '{name}': type '{pretty}' Copy is unknown ({reason})"
+				if user_name:
+					msg = f"cannot copy '{user_name}': type '{pretty}' Copy is unknown ({reason})"
 				else:
 					msg = f"cannot copy value of type '{pretty}': Copy is unknown ({reason})"
 				diagnostics.append(
@@ -2760,8 +2781,8 @@ class TypeChecker:
 				)
 				return
 			pretty = self._pretty_type_name(ty_id, current_module=current_module_name)
-			if name:
-				msg = f"cannot copy '{name}': type '{pretty}' is not Copy (use move {name})"
+			if user_name:
+				msg = f"cannot copy '{user_name}': type '{pretty}' is not Copy (use move {user_name})"
 			else:
 				msg = f"cannot copy value of type '{pretty}' (use move <expr>)"
 			diagnostics.append(
@@ -7173,6 +7194,15 @@ class TypeChecker:
 									if fidx < 0 or fidx >= len(field_types):
 										continue
 									bty = field_types[fidx]
+									# Track whether this binder's underlying
+									# field is `Copy` and the scrutinee is a
+									# *shared* by-ref match (G3 scope).  Used
+									# below to autodref via HIR rewrite at
+									# value-context use sites.
+									_is_copy_arm_binder = (
+										scrut_ref_mut is False
+										and self.type_table.copy_status(bty) is True
+									)
 									if scrut_ref_mut is not None:
 										bty = self.type_table.ensure_ref_mut(bty) if scrut_ref_mut else self.type_table.ensure_ref(bty)
 									if drift_debug.enabled("match"):
@@ -7189,18 +7219,51 @@ class TypeChecker:
 									binding_names[bid] = bname
 									binding_mutable[bid] = is_mut
 									binding_place_kind[bid] = PlaceKind.LOCAL
+									if _is_copy_arm_binder:
+										copy_arm_binder_ids.add(bid)
 
 						type_block_in_scope(arm.block)
 
+						# G3: rewrite a bare `HVar` arm result that refers
+						# to a Copy match-arm binder as `HUnary(DEREF,
+						# HVar)` so the arm value is the loaded Copy
+						# value, not the borrow.  Closes the let-init
+						# coercion gap (`val k: Int = match &v { Active(n)
+						# => { n } }`) end-to-end at HIR→MIR via the
+						# DEREF lowering.
+						def _maybe_rewrite_arm_value_to_deref(slot_get, slot_set) -> None:
+							e = slot_get()
+							if not isinstance(e, H.HVar):
+								return
+							bid = getattr(e, "binding_id", None)
+							if bid is None or bid not in copy_arm_binder_ids:
+								return
+							new_e = H.HUnary(op=H.UnaryOp.DEREF, expr=e)
+							_assign_node_id(new_e)
+							slot_set(new_e)
 						arm_value_ty: TypeId | None = None
 						if arm.result is not None:
 							arm_value_ty = type_expr(arm.result, expected_type=expected_type)
+							_maybe_rewrite_arm_value_to_deref(
+								lambda: arm.result,
+								lambda new: setattr(arm, "result", new),
+							)
+							if arm.result is not None and isinstance(arm.result, H.HUnary):
+								arm_value_ty = type_expr(arm.result, expected_type=expected_type)
 						elif used_as_value:
 							# For value-block arms, allow a trailing expression statement to
 							# supply the arm's result type.
 							last = arm.block.statements[-1] if arm.block.statements else None
 							if isinstance(last, H.HExprStmt):
 								arm_value_ty = type_expr(last.expr, expected_type=expected_type)
+								def _set_last_expr(new):
+									last.expr = new
+								_maybe_rewrite_arm_value_to_deref(
+									lambda: last.expr,
+									_set_last_expr,
+								)
+								if isinstance(last.expr, H.HUnary):
+									arm_value_ty = type_expr(last.expr, expected_type=expected_type)
 							else:
 								# Allow diverging arms to omit a value in v1. We treat a block as
 								# diverging when it ends with a terminator statement.
@@ -8704,6 +8767,29 @@ class TypeChecker:
 				else:
 					left_ty = type_expr(left_expr)
 					right_ty = type_expr(right_expr)
+				# G3: after operand type-check has resolved HVar
+				# binding_id, rewrite any operand that is a bare HVar
+				# referring to a Copy match-arm binder
+				# (`Ref<Copy>`) as `HUnary(DEREF, HVar)`.  The HIR
+				# now reflects the load explicitly; HIR→MIR lowering
+				# at `_visit_expr_HUnary` (DEREF case) emits a
+				# `LoadRef`.  Scoped to match-arm binders only via
+				# `copy_arm_binder_ids` — `&Int` from any other
+				# source is unchanged.
+				def _maybe_deref_arm_binder(e: object, ty: TypeId | None) -> tuple[object, TypeId | None]:
+					if not isinstance(e, H.HVar):
+						return e, ty
+					bid = getattr(e, "binding_id", None)
+					if bid is None or bid not in copy_arm_binder_ids:
+						return e, ty
+					# Wrap and re-type so the new node has a recorded
+					# type (Int/Uint/.../Bool, the inner Copy).
+					new_e = H.HUnary(op=H.UnaryOp.DEREF, expr=e)
+					_assign_node_id(new_e)
+					new_ty = type_expr(new_e)
+					return new_e, new_ty
+				expr.left, left_ty = _maybe_deref_arm_binder(expr.left, left_ty)
+				expr.right, right_ty = _maybe_deref_arm_binder(expr.right, right_ty)
 				if left_ty == self._string and right_ty == self._string:
 					if expr.op is H.BinaryOp.ADD:
 						return record_expr(expr, self._string)
@@ -9047,6 +9133,18 @@ class TypeChecker:
 
 			if isinstance(expr, H.HTernary):
 				type_expr(expr.cond)
+				# G3: rewrite a bare HVar ternary condition that
+				# refers to a Copy match-arm binder (`Ref<Bool>`) as
+				# `HUnary(DEREF, HVar)` so the lowered IR sees an
+				# `i1` rather than a `ptr`.  Same shape as the
+				# HBinary operand rewrite — see comments there.
+				if isinstance(expr.cond, H.HVar):
+					_bid = getattr(expr.cond, "binding_id", None)
+					if _bid is not None and _bid in copy_arm_binder_ids:
+						_new_cond = H.HUnary(op=H.UnaryOp.DEREF, expr=expr.cond)
+						_assign_node_id(_new_cond)
+						expr.cond = _new_cond
+						type_expr(expr.cond)
 				then_ty = type_expr(expr.then_expr)
 				else_ty = type_expr(expr.else_expr)
 				return record_expr(expr, then_ty if then_ty == else_ty else self._unknown)

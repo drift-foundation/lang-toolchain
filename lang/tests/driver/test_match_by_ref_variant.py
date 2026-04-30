@@ -44,11 +44,15 @@ Tests are organized by section:
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from lang.driftc.driftc import main as driftc_main
+
+_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tuple[int, dict]:
@@ -59,12 +63,44 @@ def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tup
 
 
 def _compile(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[str]]:
+	"""Type-check-only compile.  Used for diagnostic tests where the
+	full lowering pipeline is not relevant.  For G3-class tests
+	(value-context use of by-ref binders), use `_compile_and_run`
+	instead — `--test-build-only` does not exercise MIR/LLVM and
+	a checker-only fix can pass while lowering breaks."""
 	src = tmp_path / "main.drift"
 	src.write_text(source, encoding="utf-8")
 	argv = ["--stdlib-root", "stdlib", "--test-build-only", str(src)]
 	rc, payload = _run_driftc_json(argv, capsys)
 	errs = [d.get("message", "") for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
 	return rc, errs
+
+
+def _compile_and_run(tmp_path: Path, source: str, *, expected_rc: int) -> None:
+	"""Full compile + binary run.  Mandatory for G3-class regressions
+	(value-context use of by-ref binders): asserts both that the
+	compile succeeds and that the binary's exit code matches
+	`expected_rc`, so a checker-only fix that fails in MIR/LLVM
+	cannot quietly pass.  Spawns a subprocess so we get the real
+	link + execute path."""
+	src = tmp_path / "main.drift"
+	src.write_text(source, encoding="utf-8")
+	out_bin = tmp_path / "bin"
+	cp = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
+		 "--stdlib-root", str(_ROOT / "stdlib"),
+		 str(src), "--entry", "main::main", "-o", str(out_bin)],
+		cwd=str(_ROOT), capture_output=True, text=True, timeout=120,
+	)
+	assert cp.returncode == 0, (
+		f"full compile failed:\nstdout:\n{cp.stdout[:1500]}\n"
+		f"stderr:\n{cp.stderr[:1500]}"
+	)
+	assert out_bin.exists(), "binary not produced"
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	assert run.returncode == expected_rc, (
+		f"binary exited rc={run.returncode}, expected {expected_rc}"
+	)
 
 
 _PRE = """
@@ -388,6 +424,211 @@ fn main() nothrow -> Int {
 }
 """)
 	assert rc != 0, "moving the whole shared binder as an owned arg must be rejected"
+
+
+# ── G3: primitive-payload binders must auto-load through shared ref ─
+#
+# 0.31.33 certified shared by-ref match for struct-payload variants
+# (the canonical `Result<Resp, AppErr>` shape).  Primitive-payload
+# variants (`variant V { Active(n: Int) }`) slipped past because the
+# cert tests only used struct payloads.  The binder for a primitive
+# field is `Ref<Int>` (or `Ref<Bool>`, `Ref<Float>`, etc.) which the
+# arithmetic / copy / comparison machinery doesn't auto-deref.  Per
+# the spec, primitive-payload binders must behave identically to
+# their value-typed counterparts under shared by-ref match.
+
+
+def test_g3_primitive_payload_arith_full_compile_and_run(tmp_path: Path) -> None:
+	"""G3 — `match &s { Active(n) => n + 1 }` on a variant with a
+	primitive `Int` payload field must compile end-to-end and the
+	binary must produce `n + 1` at runtime.
+
+	A `--test-build-only` check is insufficient for this bug class:
+	a checker-only autoderef passes type-check while LLVM rejects
+	the IR (`integer binop requires matching Int/Uint operands
+	(have ptr, drift.int)`).  This test asserts the full pipeline:
+	type-check → MIR → LLVM → link → execute."""
+	_compile_and_run(tmp_path, """
+module main;
+import std.core as core;
+
+variant State { Active(n: Int) }
+
+fn main() nothrow -> Int {
+\tval s: State = State::Active(n = 5);
+\treturn match &s {
+\t\tState::Active(n) => { n + 1 }
+\t};
+}
+""", expected_rc=6)
+
+
+def test_g3_primitive_payload_copy_full_compile_and_run(tmp_path: Path) -> None:
+	"""G3 — typed let-init coercion of a primitive payload binder
+	(`val k: Int = match &s { Active(n) => n }`) must compile
+	end-to-end.  Pre-fix: clang rejects emitted IR with `ret ptr
+	%fieldptr10, expected i64`."""
+	_compile_and_run(tmp_path, """
+module main;
+import std.core as core;
+
+variant State { Active(n: Int) }
+
+fn main() nothrow -> Int {
+\tval s: State = State::Active(n = 42);
+\tval extracted: Int = match &s {
+\t\tState::Active(n) => { n }
+\t};
+\treturn extracted;
+}
+""", expected_rc=42)
+
+
+def test_g3_primitive_payload_comparison_full_compile_and_run(tmp_path: Path) -> None:
+	"""G3 — comparison with primitive payload binder."""
+	_compile_and_run(tmp_path, """
+module main;
+import std.core as core;
+
+variant State { Active(n: Int) }
+
+fn main() nothrow -> Int {
+\tval s: State = State::Active(n = 7);
+\treturn match &s {
+\t\tState::Active(n) => { n > 0 ? 1 : 0 }
+\t};
+}
+""", expected_rc=1)
+
+
+def test_g3_bool_payload_full_compile_and_run(tmp_path: Path) -> None:
+	"""G3 — Bool primitive payload."""
+	_compile_and_run(tmp_path, """
+module main;
+import std.core as core;
+
+variant Flag { On(b: Bool) }
+
+fn main() nothrow -> Int {
+\tval f: Flag = Flag::On(b = true);
+\treturn match &f {
+\t\tFlag::On(b) => { b ? 1 : 0 }
+\t};
+}
+""", expected_rc=1)
+
+
+def test_g3_scope_only_match_arm_binders_not_arbitrary_refs(tmp_path: Path) -> None:
+	"""G3 scope pin — the autoderef applies *only* to match-arm
+	binders, not to arbitrary `&Int` values.  This source takes the
+	address of a local and tries to use the resulting `&Int` in
+	arithmetic: pre-G3 this was rejected, and post-G3 it must
+	*still* be rejected (not silently coerced).  Confirms the fix
+	is scoped, not a broad `Ref<Copy> → Copy` coercion."""
+	src = tmp_path / "main.drift"
+	src.write_text("""
+module main;
+import std.core as core;
+
+fn main() nothrow -> Int {
+\tval n: Int = 5;
+\tval r: &Int = &n;
+\treturn r + 1;
+}
+""")
+	cp = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc", "--stdlib-root", str(_ROOT / "stdlib"),
+		 "--test-build-only", str(src), "--json"],
+		cwd=str(_ROOT), capture_output=True, text=True, timeout=60,
+	)
+	payload = json.loads(cp.stdout) if cp.stdout.strip() else {"diagnostics": []}
+	errs = [d.get("message", "") for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	assert cp.returncode != 0 or errs, (
+		"non-arm-binder `&Int + Int` must remain rejected; the G3 "
+		"fix must be scoped to match-arm binders only.  Compile "
+		"output: rc={} diags={}".format(cp.returncode, errs)
+	)
+
+
+# ── G4: A.2 hygiene in copy/arith diagnostics ───────────────────────
+#
+# 0.31.32 routed the unknown-name diagnostic through
+# `user_facing_binding_name`, but the copy / arithmetic / type-mismatch
+# diagnostic emission sites still spell `__match_binder_<n>_<src>`.
+# Surfaced 2026-04-29 by the &mut probe; affects shared too whenever
+# a binder participates in a failing copy/arith check.
+
+
+def test_g4_arith_diagnostic_uses_source_binder_name(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""G4 — force an arithmetic error involving a binder, assert the
+	diagnostic spells the source name (`n`), not the synthetic form."""
+	# The G3 fix should make this case compile cleanly; for the
+	# pre-G3 check we'd see `Ref<Int> vs Int`, with the binder
+	# named in the message.  Even post-G3, an actual type mismatch
+	# (e.g. Int + Bool) must still spell the source binder name in
+	# the diagnostic.
+	rc, errs = _compile(tmp_path, capsys, """
+module main;
+import std.core as core;
+
+variant V { A(n: Int, b: Bool) }
+
+fn main() nothrow -> Int {
+\tval v: V = V::A(n = 1, b = true);
+\treturn match &v {
+\t\tV::A(n, b) => { n + b }
+\t};
+}
+""")
+	assert rc != 0, "Int + Bool must error"
+	for m in errs:
+		assert "__match_binder_" not in m, (
+			f"A.2 hygiene invariant violated in arithmetic diagnostic: "
+			f"\n  {m}"
+		)
+
+
+def test_g4_copy_diagnostic_uses_source_binder_name(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+	"""G4 — force a copy error involving a binder of a non-Copy type
+	through the shared `&` binder.  Diagnostic must spell the source
+	name."""
+	rc, errs = _compile(tmp_path, capsys, """
+module main;
+import std.core as core;
+
+struct Big { pub data: Array<Int> }
+variant V { A(big: Big) }
+
+fn take_big(b: Big) nothrow -> Int { return b.data.len; }
+
+fn main() nothrow -> Int {
+\tval v: V = V::A(big = Big(data = [1, 2, 3]));
+\treturn match &v {
+\t\tV::A(big) => { take_big(big) }
+\t};
+}
+""")
+	# This source MUST fail compile — passing the `&Big` binder
+	# (shared borrow) to `fn take_big(b: Big)` (owned arg) requires
+	# a copy/move that the borrow checker rejects.  If a future
+	# regression accepts the call, the hygiene assertion below
+	# becomes vacuous; pin both halves explicitly.
+	assert rc != 0, (
+		"passing a non-Copy `&Big` arm binder to an owned-arg "
+		"function must fail compile; got rc=0 — the hygiene check "
+		"would be vacuous.  Either the binder is silently being "
+		"copied (regression in shared-by-ref binder semantics) or "
+		"an autodref widened beyond match-binder scope."
+	)
+	for m in errs:
+		assert "__match_binder_" not in m, (
+			f"A.2 hygiene invariant violated in copy/move diagnostic:"
+			f"\n  {m}"
+		)
 
 
 # ── A.2 hygiene invariant continues to hold ─────────────────────────
