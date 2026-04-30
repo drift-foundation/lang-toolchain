@@ -218,31 +218,55 @@ opportunistic uplifts)" for the full rule.
      boundary contract (verify against `AGENTS.md` § "Boundary
      Contract Guardrails").
 
-## Defensive collision check for DMIR registry
+## ~~Defensive collision check for DMIR registry~~ (attempted 0.31.36, reverted 0.31.37)
 
-- **Improvement:** add a runtime assertion in
-  `build_dataclass_registry` that fires if two dataclasses
+> **Status — not viable as filed.**  Attempted at 0.31.36 (`6a01a723`),
+> false-fired on the certify-lane smoke compile, reverted at 0.31.37
+> (`<TBD>`).  Kept visible per the registry's "record what was tried"
+> discipline.
+
+- **What was tried:** runtime assertion in
+  `build_dataclass_registry` that fires when two dataclasses
   with the same `__name__` but differing field sets are
-  registered.  Turns the silent-data-loss failure mode that
-  motivated 0.31.28 into a hard error with a clear upgrade
-  pointer to the qualified-discriminator entry above.
+  registered.  Intent: turn the silent-data-loss failure
+  mode that motivated 0.31.28 into a hard error with a clear
+  upgrade pointer to the qualified-discriminator entry above.
 
-- **Why deferred (2026-04-30):** running test gate at the
-  time the trigger surfaced; deferred to be its own minimal
-  patch (~15 lines + unit test) rather than co-mixed with
-  active in-flight work.  Strictly internal tightening, no
-  behavior change, ABI-neutral.
+- **Why it didn't work:** `parser.ast` and `stage0.ast` are
+  intentionally divergent ASTs that share class names by
+  convention.  An audit at 0.31.37 enumerated **16+** classes
+  whose field name *sets* (not just order) differ between the
+  two modules — `Attr` (parser-only `op`), `BlockStmt`
+  (`block` vs `body`), `IfStmt` (`condition` vs `cond`),
+  `Param` (parser missing `loc`), `Ternary`, `ThrowStmt`,
+  `WhileStmt`, etc.  All are benign at runtime: only stage0
+  nodes ever reach `_to_jsonable` (parser_ast is parser-only
+  and never serialized), so the registry's last-wins
+  behavior is correct.  A generic check at registry-build
+  time can't tell benign-divergence-with-only-stage0-encoded
+  from real-hazard-where-both-encode without per-class
+  serialization-side metadata that doesn't exist today.
 
-- **Triggers:**
+- **Lesson for any future attempt:** "do two dataclasses with
+  the same name have different fields?" is the wrong
+  question; the right question is "could a serialized
+  instance of one shape end up reconstructed against the
+  other shape?"  Answering that needs a side-channel — e.g.
+  a `_serialized_in_dmir = True` class-attribute marker, or
+  an explicit allowlist of "intentionally divergent
+  parser/stage0 twins."  The structural fix (module-qualified
+  discriminators, the entry above) sidesteps this entirely
+  by making the discriminator unambiguous; until that lands,
+  the registry stays on disciplined registration order.
 
-  - The 0.31.35 test gate clears (signal: no other in-flight
-    structural work conflicts).  This is a known scheduled
-    next step, not a hypothetical condition.
+- **Triggers (re-fire):**
 
-- **Scope when triggered:** ~30 minutes — 15 lines of
-  detection logic in `build_dataclass_registry`, one unit
-  test that constructs a colliding registry and asserts the
-  expected error.
+  - Module-qualified discriminator entry above is acted on.
+    At that point the bare-name registry goes away and any
+    defensive check moves with it.
+  - A future per-class `_serialized_in_dmir` marker (or
+    similar) lands, giving the check enough signal to
+    discriminate hazard from intentional divergence.
 
 ## Drop-aware `RawBuffer` / `Ptr` write variants
 

@@ -1,6 +1,70 @@
 # Drift development history
 
 ## 2026-04-30
+- **Hotfix — release 0.31.37 (ABI unchanged, still 10).**  Reverts
+  the `build_dataclass_registry` collision assertion shipped in
+  0.31.36.  The certify-lane smoke compile (orch run
+  `20260430-140735-drift-lang-ecf3dd3`) failed inside
+  `decode_generic_templates` with an `AssertionError` naming
+  `parser.ast.TypeNameRef` and `stage0.ast.TypeNameRef` as
+  colliding dataclasses with differing field tuples.
+
+  **Root cause.**  My 0.31.36 check used tuple equality on the
+  field name list, which fires on declaration-order
+  differences (`('loc', 'name', 'module_id')` vs
+  `('name', 'module_id', 'loc')`).  Tightening to set equality
+  uncovered a deeper truth: an audit
+  (`{parser_ast,stage0_ast} ∩ dataclasses`) showed **16+
+  classes** that share a name across the two modules with
+  truly divergent field name sets — `Attr` (parser-only
+  `op`), `BlockStmt` (`block` vs `body`), `IfStmt`
+  (`condition` vs `cond`), `Param` (parser missing `loc`),
+  `Ternary`, `ThrowStmt`, `WhileStmt`, etc.  These are
+  intentional: `parser.ast` and `stage0.ast` are two different
+  ASTs that share class names by convention.  All collisions
+  are benign at runtime — only stage0 nodes ever reach
+  `_to_jsonable` (parser_ast is parser-only and never
+  serialized) — so the registry's last-wins behavior is
+  correct.
+
+  **The defensive-check shape was the bug.**  "Do two
+  dataclasses with the same name have different fields?" is
+  not a sufficient signal: a generic check at registry-build
+  time can't distinguish benign-divergence-with-only-one-side-
+  serialized from real-hazard-where-both-sides-serialize
+  without per-class serialization-side metadata that doesn't
+  exist.  The structural fix (module-qualified discriminators,
+  filed in `docs/refactor_triggers.md`) sidesteps the
+  question entirely by making the discriminator unambiguous;
+  until that lands, the registry stays on disciplined
+  registration order.
+
+  **Changes.**
+
+  1. `lang/driftc/packages/provisional_dmir_v0.py` — restore
+     `build_dataclass_registry` to the pre-0.31.36 simple
+     last-wins shape.  Docstring rewritten to record the
+     0.31.36 attempt and 0.31.37 revert as a "tried, didn't
+     work, here's why" note for future-me.
+  2. `lang/tests/packages/test_dmir_registry_collision.py`
+     — deleted.  No assertion to test.
+  3. `docs/refactor_triggers.md` — strike-through the
+     "Defensive collision check for DMIR registry" entry
+     with a 16+-class audit, the lesson learned ("the right
+     question is 'could a serialized instance of one shape
+     end up reconstructed against the other shape?'"), and
+     re-fire conditions tied either to the
+     module-qualified-discriminator landing or to a future
+     per-class serialization-side marker.
+  4. Compiler version bump 0.31.36 → 0.31.37 per AGENTS.md
+     "Compiler versioning rule" (behavior-changing internal
+     fix; no boundary shape change → no ABI bump).
+
+  **What still stands from 0.31.36.**  The `captures(share x)`
+  synthesized HCall span fix in `lang/driftc/stage1/ast_to_hir.py`
+  is unaffected — pure diagnostic-quality, no defensive-check
+  interaction.  No source compatibility break.
+
 - **Internal-tightening bundle — release 0.31.36 (ABI unchanged,
   still 10).**  Two minimal ABI-neutral patches landed together
   per the "minimal-internal-tightening" mandate.
