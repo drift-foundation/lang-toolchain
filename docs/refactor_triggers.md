@@ -71,6 +71,97 @@ opportunistic uplifts)" for the full rule.
   diagnostic provenance; a `(found, span, path)` return shape
   enables better notes.
 
+## Promote DMIR `_to_jsonable` discriminators to module-qualified names
+
+- **Improvement:** the provisional DMIR encoder at
+  `lang/driftc/packages/provisional_dmir_v0.py:42-67` uses bare
+  class names as the `_type` discriminator
+  (`type(obj).__name__`).  Reconstruction looks up the bare name
+  in a registry built by `build_dataclass_registry`, where
+  registration order decides who wins on collisions.  Promote
+  the encoding to module-qualified names
+  (`lang.driftc.stage0.ast.TypeNameRef` instead of
+  `TypeNameRef`), with a back-compat read path that accepts
+  legacy bare-name `.dmp` files for one release cycle.
+
+  `parser_ast` and `stage0.ast` both define `TypeNameRef`; only
+  stage0's carries `module_id`.  The 0.31.28 fix worked around
+  the collision by reordering registration so stage0 wins —
+  fragile by design.  The failure mode is silent field drop on
+  round-trip, surfacing as multi-layer-deep downstream bugs
+  (e.g. the `E_INTERNAL_MISSING_CALLSITE_CALLINFO` chain that
+  0.31.28 fixed: dropped `module_id` →
+  `trait_key_from_expr` fallback → `trait_index` miss → no
+  `CallInfo` → confusing diagnostic on the user's
+  `captures(share x)` source).
+
+- **Why deferred (2026-04-30):** the structural fix changes the
+  `.dmp` format and needs back-compat for deployed consumers,
+  possibly an ABI implication.  Real surgery (~3-5 days).  In
+  the absence of a *new* collision, the 0.31.28 registration-
+  order fix holds.  See companion entry "Defensive collision
+  check for DMIR registry" — the lower-cost mitigation lands
+  first; this entry's trigger is the assertion in that one
+  firing.
+
+- **Triggers:**
+
+  - The defensive collision-check assertion in
+    `build_dataclass_registry` fires (a new dataclass with a
+    colliding name is added by any module).  Mechanical
+    trigger; the author hitting the assertion gets pointed
+    here from the assertion message.
+  - A reported package-consumer bug traces to silent field
+    drop or type collision on `.dmp` round-trip (i.e., the
+    failure mode that 0.31.28 mitigated, recurring in a new
+    location the registration-order fix doesn't cover).
+  - Another planned `.dmp`-format change that lets us bundle
+    the discriminator promotion (e.g., a versioned schema
+    bump).  Bundling avoids a second back-compat window.
+
+- **Scope when triggered:** ~3-5 days.
+  1. Switch `_to_jsonable` to emit
+     `f"{type(obj).__module__}.{type(obj).__qualname__}"` as
+     `_type`.  ~10 lines.
+  2. Update `from_jsonable` to look up by qualified name via a
+     `dataclasses_by_qualified` registry.  Keep the bare-name
+     registry as a back-compat fallback.  ~30 lines.
+  3. Mark the bare-name fallback `@deprecated` with a
+     release-cycle removal target; emit a warning when it
+     fires so deployed consumers see the upgrade path.
+  4. Update producer-side tests + add a fixture that exercises
+     a legacy bare-name `.dmp` to confirm back-compat path
+     works.
+  5. ABI bump if the `.dmp` schema version is part of the
+     boundary contract (verify against `AGENTS.md` § "Boundary
+     Contract Guardrails").
+
+## Defensive collision check for DMIR registry
+
+- **Improvement:** add a runtime assertion in
+  `build_dataclass_registry` that fires if two dataclasses
+  with the same `__name__` but differing field sets are
+  registered.  Turns the silent-data-loss failure mode that
+  motivated 0.31.28 into a hard error with a clear upgrade
+  pointer to the qualified-discriminator entry above.
+
+- **Why deferred (2026-04-30):** running test gate at the
+  time the trigger surfaced; deferred to be its own minimal
+  patch (~15 lines + unit test) rather than co-mixed with
+  active in-flight work.  Strictly internal tightening, no
+  behavior change, ABI-neutral.
+
+- **Triggers:**
+
+  - The 0.31.35 test gate clears (signal: no other in-flight
+    structural work conflicts).  This is a known scheduled
+    next step, not a hypothetical condition.
+
+- **Scope when triggered:** ~30 minutes — 15 lines of
+  detection logic in `build_dataclass_registry`, one unit
+  test that constructs a colliding registry and asserts the
+  expected error.
+
 ## Add span / provenance to existing borrow-checker walkers
 
 - **Improvement:** existing walkers return `bool` or `set[int]` — by
