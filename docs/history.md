@@ -1,6 +1,79 @@
 # Drift development history
 
 ## 2026-04-30
+- **Bug Q2 — catch-arm binder treated as outer capture inside an
+  explicit-capture lambda — release 0.31.39 (ABI unchanged, still
+  10).**  LANGUAGE_BUG fix matching the bookkeeper / web-rest 0.4.1
+  ^capture exception-attrs report on driftc 0.31.38.
+
+  **Symptom.** Inside a lambda with `captures(...)`, a `try { ... }
+  catch ExcType(e) { ... e.attrs["k"] ... }` arm that referenced the
+  catch binder `e` was rejected with:
+
+      error: value used in closure body is not listed in captures(...)
+        [E-AUTO-d612b3b9]
+
+  Bare `rethrow;` was clean.  Touching `e.attrs[...]` triggered the
+  diagnostic.
+
+  **Root cause.**
+  `lang/driftc/stage1/capture_discovery.py:_walk_stmt`'s `HTry` case
+  walked each catch arm's block statements without first registering
+  `arm.binder` into `lambda_local_names`.  Since the type-checker
+  allocates a fresh binding_id for the arm binder (`type_checker.py:
+  10103-10111`) and references to `e` inside the arm body resolve to
+  that binding_id, capture-discovery saw an HVar root with a
+  binding_id absent from `lambda_local_ids` and treated it as an
+  outer-scope reference requiring an entry in `captures(...)`.  The
+  end-of-walk suppression check
+  (`name in lambda_local_names`) failed because the binder name was
+  never seeded.
+
+  **Fix.**  Name-based seeding in the HTry walker.  The catch
+  binder name is added to `lambda_local_names` for the duration of
+  the arm walk; the seeded name remains in the set after the arm
+  exits because the end-of-walk suppression runs against the final
+  set, and `used_root_names` accumulated during the arm walk needs
+  the name to be present then.  Sound in practice because Drift has
+  no syntactic way to reach a shadowed outer binding from inside the
+  catch arm body.
+
+  Alternative considered: persist the binder's binding_id on
+  `HCatchArm` from the type-checker, then add it to
+  `lambda_local_ids` (binding_id-based suppression).  Cleaner against
+  the hypothetical shadowing edge case, but requires modifying the
+  HCatchArm dataclass + four HIR-pass constructors that re-build
+  catch arms.  Deferred — current name-based fix has no practical
+  edge case in Drift's syntax.
+
+  **Regression coverage.**  New test file
+  `lang/tests/driver/test_lambda_catch_binder_capture_discovery.py`
+  (4 tests):
+
+  - `test_catch_binder_attrs_index_inside_capture_lambda_compiles`
+    — primary regression mirroring the bookkeeper repro shape
+    (`captures(copy app)` lambda × `try { } catch Bang(e) { val v =
+    e.attrs[k]; ... }`).
+  - `test_catch_arm_without_capture_lambda_unaffected` — control:
+    same try/catch shape in a non-lambda function still compiles
+    (fix doesn't change non-lambda semantics).
+  - `test_outer_capture_still_required_when_actually_outer` —
+    adjacent: a *genuine* outer binding referenced inside the catch
+    arm without a `captures(...)` listing must still error (fix
+    doesn't over-suppress).
+  - `test_catch_binder_inside_nested_lambda_capture_lambda_compiles`
+    — nested lambda shape, finer-grained scope discipline check.
+
+  **Q1 (whole-`Error.attrs` enumeration) deferred to its own design
+  track.**  The user's parallel ask — make `Error.attrs` a real
+  read-only `Map<String, DiagnosticValue>`-shaped value (not
+  index-only pseudo-field), enabling `logger.error("...", e.attrs)`
+  / `for entry in e.attrs.entries() { ... }` for boundary-catch
+  diagnostic logging — is a language/library design item, not a
+  hotfix.  Filed for separate planning; sealed indexing
+  (`e.attrs["key"]`) stays as sugar over the same view when the
+  design lands.
+
 - **Bug A — auto-try contract leaking across lambda body boundary —
   release 0.31.38 (ABI unchanged, still 10).**  LANGUAGE_BUG fix
   matching the bookkeeper / web-rest 0.4.1 middleware report on

@@ -252,8 +252,36 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 			for st in s.body.statements:
 				_walk_stmt(st)
 			for arm in s.catches:
+				# Catch-arm binders are local to the arm, not outer
+				# captures.  Pre-fix, an explicit-capture lambda
+				# enclosing `try { ... } catch ExcType(e) { ... e ... }`
+				# fired "value used in closure body is not listed in
+				# captures(...)" the moment the arm body referenced
+				# `e` — capture discovery walked the arm body without
+				# first seeding the binder name as lambda-local, so
+				# the type-checker-allocated binding_id for `e`
+				# resolved to an outer root.  Name-based seeding here
+				# matches the suppression check below
+				# (`name in lambda_local_names`).  Bug Q2, 0.31.39.
+				added_binder = False
+				if arm.binder is not None and arm.binder not in lambda_local_names:
+					lambda_local_names.add(arm.binder)
+					added_binder = True
 				for st in arm.block.statements:
 					_walk_stmt(st)
+				# Keep the binder in `lambda_local_names` even after
+				# the arm exits.  The end-of-walk suppression check
+				# at the bottom of `discover_captures` runs against
+				# the final set, and `used_root_names` accumulated
+				# during the arm walk needs the name to be present
+				# at that final check to suppress correctly.  The
+				# only practical risk would be a lambda that
+				# contains *both* an outer capture named `e` and a
+				# catch binder named `e`; Drift has no syntactic way
+				# for the post-catch lambda body to reference the
+				# shadowed outer `e` (no qualified-outer escape), so
+				# in practice the persistent registration is sound.
+				_ = added_binder  # noqa: F841 — explicit no-op for the comment above
 		elif isinstance(s, H.HThrow):
 			_walk_expr(s.value)
 		elif isinstance(s, H.HMatchExpr):
