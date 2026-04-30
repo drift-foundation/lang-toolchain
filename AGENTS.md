@@ -67,3 +67,42 @@
 - Compiler versioning rule:
 		- Behavior-changing compiler/toolchain fixes that do not change ABI boundary shape must still bump compiler minor version (`DRIFTC_VERSION`).
 		- ABI shape changes require both: compiler version bump and ABI version bump.
+
+## Checker / Lowering Contract (strict)
+
+Surfaced by the G3 incident (0.31.34): a type-checker change accepted programs the lowering pipeline could not actually emit (`integer binop requires matching Int/Uint operands (have ptr, drift.int)`). These rules close that process gap.
+
+### Rule 1 — No checker-only semantic coercions
+
+- Any type-checker decision that changes the apparent type or value category of an expression in a way that affects lowering must be represented in the post-check IR, either by rewriting HIR or by recording a node-level coercion consumed by downstream passes.
+- It must NOT exist only in transient checker locals (e.g. `left_ty` / `right_ty` / similar local rebindings).
+- Test: "if I deleted the checker pass and re-ran lowering against the recorded HIR + node-level marks, would the result match the checker's accept verdict?" If no, the rule is violated.
+
+Examples (OK):
+
+- `record_iface_coercion(arg, param_ty)` — adds a node-level coercion mark the lowering pass reads.
+- Implicit `core.callbackN(...)` wrap — inserts a real HIR node the lowering pass sees.
+- G3 v2 `HUnary(DEREF, HVar)` rewrite at HBinary / HTernary cond / match arm result — HIR node insertion; HIR→MIR's existing DEREF lowering emits `LoadRef`.
+
+Examples (NOT OK):
+
+- G3 v1 `_autodref_copy` adjusting `left_ty` / `right_ty` in HBinary type-check without rewriting the HIR. Lowering still saw a `Ref<Int>` operand and crashed at LLVM IR generation.
+
+This rule does NOT apply to:
+
+- Borrow-checker liveness / aliasing decisions (those live in their own state machine and don't change the HIR's apparent type).
+- FORWARD_NOMINAL canonicalization (same bit pattern, different TypeId — no lowering change).
+- Generic instantiation via `CallInfo` (the substitution IS recorded at the call site).
+
+### Rule 2 — MIR / lowering contract failures must not surface as user diagnostics
+
+- The internal-form `(checker bug)` / `MIR contract failure` messages must never reach end users.
+- In dev / test builds, MIR / lowering contracts may `assert` — that's a useful safety net.
+- In user-facing builds, a contract failure must be surfaced as an internal compiler error with full context (file, span, expression shape, suggested issue link), not as a confusing diagnostic that reads like a user error.
+- A contract-fail diagnostic reaching a user is itself a process bug — the type-checker should have rejected upstream.
+
+### Rule 3 — Acceptance tests for lowering-visible changes need a full compile/run companion
+
+- Any new acceptance test (`rc == 0` expected) for a value-shape change that affects lowering — type-coercion, autoderef, escape rules, place-mutability — must include at least one full-compile-and-run companion test that proves the program actually lowers and executes.
+- Checker-only `--test-build-only` coverage is not enough for this class of change. G3 v1 passed `--test-build-only` while failing at LLVM IR generation; reviewer caught it because they ran the full compile manually.
+- Companion test format: spawn the driver as a subprocess, link the binary, run it, assert the exit code matches the expected semantic outcome. Cf. `_compile_and_run` in `lang/tests/driver/test_match_by_ref_variant.py`.
