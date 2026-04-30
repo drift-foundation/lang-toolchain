@@ -71,6 +71,88 @@ opportunistic uplifts)" for the full rule.
   diagnostic provenance; a `(found, span, path)` return shape
   enables better notes.
 
+- **Concrete plan when triggered (drafted 2026-04-30, parked
+  pending trigger).** Start narrow at HIR — MIR / full-pass refactor
+  is out of scope. Single new file
+  `lang/driftc/hir_walk.py` with three layers:
+
+  1. **Read-only HIR walker.** `walk_expr(expr, visitor, ctx)` /
+     `walk_stmt(stmt, visitor, ctx)`. Visitor exposes `pre_expr`,
+     `post_expr`, `pre_stmt`, `post_stmt` hooks; supports early
+     stop. `ctx` is a lightweight path/context object that
+     accumulates as the walker descends (e.g.
+     `[MatchArmResult, CallArg(idx=0)]` for a binder appearing
+     as the first arg of a call inside a match arm result).
+
+  2. **HIR rewrite visitor.** Returns possibly-replaced nodes,
+     used for transformations like the G3 v2
+     `HVar -> HUnary(DEREF, HVar)` rewrite.  **Contract on node
+     IDs:** any returned replacement node must have its
+     `node_id` assigned and any required side tables
+     (binding_for_var, type_by_node_id, etc.) updated.  The
+     visitor caller does NOT need to know which side tables —
+     the framework handles it.  This is non-trivial and easy
+     to forget on a first pass; spec it explicitly.
+
+  3. **Query helpers as thin wrappers.** Each ~5-10 lines, no
+     hand-written recursive traversal:
+     - `find_vars(expr_or_stmt, predicate) -> list[VarHit]`
+     - `references_any_binding(expr_or_stmt, ids) -> bool`
+     - `expr_passes_binding_to_call(expr, ids) -> Optional[VarHit]`
+     - `collect_captures(lambda)` (later)
+     - `contains_move(expr)` (later)
+
+  **`VarHit` shape:**
+
+  ```
+  @dataclass
+  class VarHit:
+      binding_id: int
+      source_name: str          # via user_facing_binding_name
+      span: Span                # the HVar node's loc
+      path: list[PathSegment]   # accumulated context, leaf-last
+  ```
+
+  `PathSegment` is a closed enum / union extended ONLY when a
+  migrating user demands a new variant.  Start with the four
+  contexts the existing walkers need (`CallArg`, `AssignRhs`,
+  `MatchArmResult`, `BorrowSubject`); add `LetInit`,
+  `ReturnValue`, `TernaryCond`, etc. as the second migration
+  site demands.  Don't pre-enumerate — speculative variants
+  are where API shape goes wrong.  Path is a list, not a
+  single tag — leaf-only loses nesting info that's exactly
+  what diagnostic notes want.
+
+  **Migration order (mandatory two-patch split):**
+
+  - **Patch 1 — framework only.** Land
+    `lang/driftc/hir_walk.py` with the read-only walker,
+    `find_vars`, `references_any_binding`, plus a unit-test
+    file pinning the API on synthetic HIR fixtures.  No
+    consumer changes; no existing walker touched.  This patch
+    is judged purely on framework correctness.
+  - **Patch 2 — first migration.** Re-implement the existing
+    `_arm_binder_escapes` / `_expr_references_any_binder` /
+    `_expr_passes_binder_to_call` in `borrow_checker_pass.py`
+    on top of `hir_walk`.  Keep public function names
+    unchanged so callers in `_visit_expr` HMatchExpr branch
+    don't move.  If the migration reveals an API gap (e.g.
+    "VarHit needs a `parent_kind` field"), the gap is fixed
+    in patch 1's framework, not entangled with the cert tests
+    in this patch.
+
+  Do NOT migrate lambda capture analysis or NLL `_build_regions`
+  in either patch — those are different beasts (capture-kind
+  state machine, fixed-point dataflow) and the abstraction
+  designed for one-shot HVar-finding will fit them badly.
+  Wait for those subsystems' own forcing function.
+
+  Total scope when triggered: ~3-5 days, split as patch-1
+  framework (~1.5 days, ~150 lines + tests) + patch-2 first
+  migration (~1.5 days, drop-in replacement with cert tests
+  unchanged) + buffer for the API gap discovered during
+  migration.
+
 ## Promote DMIR `_to_jsonable` discriminators to module-qualified names
 
 - **Improvement:** the provisional DMIR encoder at
