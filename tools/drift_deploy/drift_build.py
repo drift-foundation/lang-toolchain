@@ -632,8 +632,24 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Execute.
 	print(f"drift build: {art.name} ({art.kind}) v{art.version}")
 	if package_roots:
-		print(f"  package roots ({len(package_roots)}):")
-		for i, p in enumerate(package_roots, start=1):
+		# Dedup by resolved physical path while preserving order: when
+		# `DRIFT_PACKAGE_ROOT` (env) and `--package-root` (CLI) name the
+		# same directory, the resolver collapses them at lookup time —
+		# but the banner was printing both, suggesting two roots when
+		# only one is effective.  Resolve and dedup before display.
+		shown: list[Path] = []
+		seen_resolved: set[Path] = set()
+		for p in package_roots:
+			try:
+				resolved = p.resolve()
+			except Exception:
+				resolved = p
+			if resolved in seen_resolved:
+				continue
+			seen_resolved.add(resolved)
+			shown.append(p)
+		print(f"  package roots ({len(shown)}):")
+		for i, p in enumerate(shown, start=1):
 			print(f"    {i}. {p}")
 	subprocess_env = _clean_env()
 	if debug_style_build:
