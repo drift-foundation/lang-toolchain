@@ -6,8 +6,8 @@ from enum import Enum, auto
 from typing import Dict, List, Optional, Set, Tuple, Mapping
 
 from lang.driftc.parser import ast as parser_ast
-from lang.driftc.core.types_core import TypeTable
-from .world import TraitWorld, TraitKey, TypeKey, ImplDef, trait_key_from_expr, type_key_from_expr
+from lang.driftc.core.types_core import TypeTable, TypeKind
+from .world import TraitWorld, TraitKey, TypeKey, ImplDef, trait_key_from_expr, type_key_from_expr, type_key_from_typeid
 
 
 class ProofStatus(Enum):
@@ -525,10 +525,143 @@ def prove_is(
 					reasons=combined_reasons,
 					used_impls=res.used_impls,
 				)
+		# Frozen structural-derive shortcut.  When the regular impl
+		# lookup didn't prove `T: shareable.Frozen` for a struct/
+		# variant subject, fall back to structural derivation: the
+		# type is Frozen iff every owned field's type is itself
+		# proved Frozen.  Per the substrate plan
+		# `work/constshare-substrate/phase1a-dispositions.md` §3,
+		# this is path (a) — a prover-level shortcut, no synthesized
+		# ImplDef records.
+		#
+		# Constraints honored:
+		#   - Only auto-prove for STRUCT / VARIANT.
+		#   - Every field must be PROVED (UNKNOWN / AMBIGUOUS /
+		#     REFUTED on any field → don't promote to PROVED).
+		#   - Cycle handling: prove_is's existing in-progress set
+		#     covers self-recursion conservatively (returns UNKNOWN
+		#     on cycle), which propagates here as "field not PROVED"
+		#     and blocks the structural promotion.
+		#   - References (&T / &mut T) lack explicit Frozen impls in
+		#     stdlib; fall through here as REFUTED-on-field.
+		#   - Mutable backings (Mutex / Arc / Atomic / Array /
+		#     HashMap) similarly lack explicit impls and so block the
+		#     containing struct's promotion via the field check.
+		if (
+			res.status is ProofStatus.REFUTED
+			and trait_key.module == "std.core.shareable"
+			and trait_key.name == "Frozen"
+			and env.type_table is not None
+		):
+			structural = _frozen_structural_status(
+				world, env, subst, subject_ty, trait_key,
+				cache, in_progress,
+			)
+			if structural is ProofStatus.PROVED:
+				res = ProofResult(
+					status=ProofStatus.PROVED,
+					reasons=["frozen structural auto-derive (all fields Frozen)"],
+				)
 		cache[cache_key] = res
 		return res
 	finally:
 		in_progress.remove(cycle_key)
+
+
+def _frozen_structural_status(
+	world: TraitWorld,
+	env: Env,
+	subst: Dict[object, TypeKey],
+	subject_ty: TypeKey,
+	frozen_key: TraitKey,
+	cache: Dict[CacheKey, ProofResult],
+	in_progress: Set[Tuple[str, TraitKey, Optional[TypeKey]]],
+) -> Optional[ProofStatus]:
+	"""Structural Frozen derivation for STRUCT / VARIANT subjects.
+
+	Returns:
+	  - PROVED if subject_ty is a struct/variant whose every owned
+	    field type proves Frozen (recursively).
+	  - REFUTED if any field provably does NOT prove Frozen.
+	  - UNKNOWN if the lookup is inconclusive (no matching tid found,
+	    cycle in recursion, etc.) — caller leaves the prior REFUTED
+	    in place.
+	  - None if subject is not a struct/variant.
+	"""
+	type_table = env.type_table
+	if type_table is None:
+		return None
+	tid = _find_typeid_for_typekey(type_table, subject_ty)
+	if tid is None:
+		return ProofStatus.UNKNOWN
+	td = type_table.get(tid)
+	if td.kind is TypeKind.STRUCT:
+		inst = type_table.get_struct_instance(tid)
+		if inst is None:
+			return ProofStatus.UNKNOWN
+		field_types = list(inst.field_types)
+	elif td.kind is TypeKind.VARIANT:
+		inst = type_table.get_variant_instance(tid)
+		if inst is None:
+			return ProofStatus.UNKNOWN
+		field_types = []
+		for arm in inst.arms:
+			field_types.extend(arm.field_types)
+	else:
+		return None
+	# Empty struct / payload-less variant: no observation surface,
+	# trivially Frozen.
+	if not field_types:
+		return ProofStatus.PROVED
+	for ftid in field_types:
+		fkey = type_key_from_typeid(type_table, ftid)
+		sub = prove_is(
+			world, env, subst, fkey, frozen_key,
+			_cache=cache, _in_progress=in_progress,
+		)
+		if sub.status is not ProofStatus.PROVED:
+			return ProofStatus.REFUTED if sub.status is ProofStatus.REFUTED else ProofStatus.UNKNOWN
+	return ProofStatus.PROVED
+
+
+def _find_typeid_for_typekey(type_table: TypeTable, key: TypeKey) -> Optional[int]:
+	"""Locate a TypeId in the type_table whose canonical TypeKey
+	equals `key`.  Cached per-key on the type_table.
+
+	Linear scan over the type_table's tids on first lookup; cached
+	thereafter.  Used by the Frozen structural shortcut to navigate
+	from a prover-side TypeKey back to the type_table's struct/
+	variant instance for field walking.
+	"""
+	cache_attr = "_frozen_typekey_to_tid_cache"
+	cache: dict = getattr(type_table, cache_attr, None)
+	if cache is None:
+		cache = {}
+		setattr(type_table, cache_attr, cache)
+	cached = cache.get(key)
+	if cached is not None:
+		return cached if cached >= 0 else None
+	types_by_id = getattr(type_table, "types_by_id", None)
+	tid_iter: list[int]
+	if isinstance(types_by_id, dict):
+		tid_iter = list(types_by_id.keys())
+	else:
+		struct_bases = getattr(type_table, "struct_bases", {}) or {}
+		variant_schemas = getattr(type_table, "variant_schemas", {}) or {}
+		tid_iter = list(struct_bases.keys()) + list(variant_schemas.keys())
+	for tid in tid_iter:
+		td = type_table.get(tid)
+		if td.kind not in (TypeKind.STRUCT, TypeKind.VARIANT):
+			continue
+		try:
+			other_key = type_key_from_typeid(type_table, tid)
+		except Exception:
+			continue
+		if other_key == key:
+			cache[key] = tid
+			return tid
+	cache[key] = -1
+	return None
 
 
 def prove_obligation(

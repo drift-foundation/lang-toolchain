@@ -14,6 +14,8 @@ use trait Throw;
 // future `Share` impls in this file) resolve.
 use trait copy_mod.Copy;
 use trait shareable.Share;
+use trait shareable.Frozen;
+use trait shareable.ConstShare;
 
 export {
 	Destructible,
@@ -517,6 +519,33 @@ implement copy_mod.Copy for DiagnosticValue {
 
 implement copy_mod.Copy for DiagnosticEntry {
 }
+
+// ── Frozen marker — stdlib-baked impls for value-like primitives ─────
+//
+// See `std.core.shareable.Frozen` for the contract.  These types
+// are Frozen because their `&Self` API exposes only read
+// operations; no mutation, no aliasing-observable state.
+//
+// Notably absent: `&T` / `&mut T` (referent may be mutable;
+// reference-payload soundness deferred), `Array<T>` (mutable
+// element storage), `HashMap<K, V>`, `Mutex<T>`, `Arc<T>`, atomic
+// primitives.
+
+implement shareable.Frozen for Int { }
+implement shareable.Frozen for Uint { }
+implement shareable.Frozen for Uint64 { }
+implement shareable.Frozen for Bool { }
+implement shareable.Frozen for Float { }
+implement shareable.Frozen for Byte { }
+implement shareable.Frozen for String { }
+implement shareable.Frozen for Void { }
+implement shareable.Frozen for DiagnosticValue { }
+
+// Conditional Frozen for stdlib variants — Frozen iff all type-args
+// are Frozen.  Per the substrate plan's auto-derive-by-composition
+// rule applied to stdlib's own generics.
+implement<T> shareable.Frozen for Optional<T> require T is shareable.Frozen { }
+implement<T, E> shareable.Frozen for Result<T, E> require T is shareable.Frozen, E is shareable.Frozen { }
 
 implement copy_mod.Copy for Void {
 }

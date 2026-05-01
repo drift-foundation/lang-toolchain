@@ -716,6 +716,69 @@ def build_trait_world(
 			default_package=package_id,
 			module_packages=module_packages,
 		)
+		# Sealed `Frozen` trait: in v1, `Frozen` is compiler-derived
+		# (auto-derived for structs/variants whose every owned field
+		# is Frozen, via the prover-level structural shortcut at
+		# `traits/solver.py`).  User code MUST NOT write
+		# `implement std.core.shareable.Frozen for X { }` blocks —
+		# that would let a user claim Frozen for a type whose
+		# `&Self` API exposes mutation (Mutex / Atomic / etc.),
+		# breaking the soundness contract.
+		#
+		# Trust gate (v1 — trusted-stdlib escape hatch, NOT a general
+		# rule): the impl is accepted iff BOTH (a) the source file's
+		# module id starts with `std.`, AND (b) the host module's
+		# package id (`local_pkg`, looked up in `module_packages`)
+		# equals the package id of the `Frozen` trait declaration
+		# (`trait_key.package_id`, looked up in the same map).
+		#
+		# The actual trust boundary is the path-based classification
+		# in `parser/__init__.py::_is_stdlib_module`: only source
+		# files physically under `--stdlib-root` get assigned to the
+		# canonical `"std"` package; everything else is the user's
+		# `local_pkg`.  Therefore:
+		#
+		#   - genuine stdlib build: host module under stdlib-root →
+		#     local_pkg = "std" = trait_key.package_id → allowed.
+		#   - third-party declaring `module std.evil;` in a file NOT
+		#     under stdlib-root: host module → local_pkg = user pkg
+		#     or "__local__"; stdlib is loaded, so trait_key.package_id
+		#     = "std" → mismatch → rejected.
+		#   - user replacing stdlib by shipping their own
+		#     `std.core.shareable` source under their own root: the
+		#     trait identity becomes `(user_pkg, std.core.shareable,
+		#     Frozen)` — a different trait from stdlib's; their impl
+		#     satisfies their own trait, not stdlib's.  This is
+		#     bootstrap trust, not a runtime spoof.
+		#
+		# See `work/constshare-substrate/phase1a-dispositions.md` §3a.
+		if (
+			trait_key.module == "std.core.shareable"
+			and trait_key.name == "Frozen"
+		):
+			host_is_stdlib_module = (
+				module_id is not None and module_id.startswith("std.")
+			)
+			host_owns_trait_pkg = (local_pkg == trait_key.package_id)
+			if not (host_is_stdlib_module and host_owns_trait_pkg):
+				world.diagnostics.append(
+					diag(
+						(
+							"cannot implement Frozen for user types: in v1, "
+							"Frozen is compiler-derived (stdlib-baked impls "
+							"for primitives + auto-derive for structs / "
+							"variants whose every owned field is Frozen); "
+							"user-written `implement Frozen for X { }` "
+							"blocks are not accepted.  Define your type with "
+							"all-Frozen fields and the compiler will derive "
+							"Frozen automatically.  See `std.core.shareable` "
+							"for the contract."
+						),
+						getattr(impl, "loc", None),
+						code="E_FROZEN_USER_IMPL_REJECTED",
+					)
+				)
+				continue
 		if trait_key.module == module_id and trait_key.name in interface_names:
 			iface_target_key = type_key_from_expr(
 				impl.target,

@@ -1,8 +1,111 @@
 module std.core.shareable;
 
 export {
-	Share
+	Share,
+	Frozen,
+	ConstShare
 };
+
+/// Marker trait — `&T` access never mutates and never observes
+/// mutation through aliases.
+///
+/// A type implementing `Frozen` promises that any reachable state
+/// through its public `&Self` API is purely read; no `Mutex`-style
+/// locking, no atomic store, no interior-mutability shape.
+///
+/// `Frozen` is the soundness boundary for `ConstArc<T>` and
+/// `ConstShare`-implementing types: shared aliasing of a `Frozen`
+/// value is unobservable because there is no observation surface
+/// for mutation.
+///
+/// **No user-side hand-rolled `Frozen` impls (v1).**  A user
+/// struct or variant is `Frozen` iff every owned field type is
+/// itself `Frozen`.  The compiler enforces this auto-derive
+/// structurally; user code does NOT write `implement Frozen for
+/// X { }` blocks in v1.  Direct user impls are rejected.
+///
+/// **Future relaxation:** `unsafe implement Frozen for X { }`
+/// could permit user-side hand-rolled impls under explicit
+/// unsafe-block ceremony — deferred, not v1.
+///
+/// **Default impls (stdlib-baked, see `std.core`):** `Int`,
+/// `Uint`, `Uint64`, `Bool`, `Byte`, `Float`, `String`, `Void`,
+/// `DiagnosticValue`.  Recursive: `Optional<T> where T: Frozen`,
+/// `Result<T, E> where T: Frozen + E: Frozen`.
+///
+/// **Default NON-impls (explicitly NOT Frozen):**
+/// - `&T` / `&mut T` for any T — a reference is itself
+///   immutable, but its REFERENT may be mutable.  v1 does NOT
+///   carry lifetime/origin proof into ConstArc construction;
+///   borrowed Frozen payloads require future work.
+/// - `Array<T>` — mutable element storage.
+/// - `HashMap<K, V>` — mutable surface.
+/// - `Mutex<T>`, `RwLock<T>` — mutation through `&Self`.
+/// - Atomic primitives — atomic store through `&Self`.
+/// - `Arc<T>` — its inner `&T` may itself expose mutation.
+///
+/// **First adopters:** `core.ConstArc<T>` (this track's backing
+/// primitive for value-like immutable sharing).  Future
+/// adopters via consumer tracks: `containers.ReadOnlyMap<K, V>`
+/// (diagnostics-context), `String` (string-ownership),
+/// `JsonHandle` (future).
+pub trait Frozen {
+}
+
+/// Marker trait for value-like immutable shared data.
+///
+/// Types implementing `ConstShare` participate in cheap value-like
+/// duplication: `var b = a;` on a `T: ConstShare` value produces a
+/// second independent owner of the same underlying immutable
+/// data.  Aliasing is unobservable because the data is immutable;
+/// thread-safe by construction.
+///
+/// `ConstShare` is intentionally distinct from `Share`:
+///
+/// - `Share` (warning-bearing) signals "I'm choosing aliasing
+///   because mutations through aliases will be observable."  Used
+///   for `Arc<T>`-style mutable-shared types where the user must
+///   acknowledge the aliasing surface (`share x` keyword).
+///
+/// - `ConstShare` signals "I'm taking another stake of immutable
+///   data; aliasing is not observable to users."  No keyword
+///   ceremony; `var b = a;` works directly via compiler-
+///   synthesized `const_share()` call.
+///
+/// A type implements `ConstShare` OR `Share`, not both for the
+/// same semantic shape.  Documented here; not policed by the
+/// compiler in v1.
+///
+/// **Mutation contract.** Types implementing `ConstShare` must
+/// NOT expose mutation through `&mut` borrows or in-place state
+/// changes.  The compiler enforces this at the trait boundary:
+/// `&mut` borrow of a `T: ConstShare` value is rejected.
+///
+/// **Lowering contract.** `var b = a;` for `T: ConstShare` is
+/// lowered to a synthesized `T::const_share(&a)` call visible at
+/// HIR / MIR level (per the AGENTS.md § "Checker / Lowering
+/// Contract" rule against checker-only coercions).  Lowering
+/// emits the trait method's body — typically a refcount inc on
+/// the backing primitive.
+///
+/// **No user-side direct `implement ConstShare for X` (v1).**
+/// User types acquire `ConstShare` only via the strict
+/// composition rule: a struct or variant is auto-`ConstShare`
+/// iff every owned field's type is `ConstArc<U: Frozen>`,
+/// another `ConstShare` type, or a `Frozen + Copy` scalar.
+/// Direct user impls are rejected with a "use composition"
+/// diagnostic.  See `std.core.const_arc.ConstArc<T>` for the
+/// canonical composition primitive.
+pub trait ConstShare {
+	/// Produce another owner of the same underlying immutable
+	/// data.  Compiler synthesizes calls to this at value-flow
+	/// sites where the source binding remains usable after the
+	/// flow (per the trigger-site spec — see substrate plan).
+	///
+	/// `nothrow` because the operation is a refcount inc on the
+	/// backing primitive, which cannot fail.
+	fn const_share(self: &Self) nothrow -> Self;
+}
 
 /// Trait for shared-owner types that can produce another OWNER of
 /// the same underlying resource.
