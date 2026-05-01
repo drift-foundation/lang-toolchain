@@ -1,6 +1,105 @@
 # Drift development history
 
 ## 2026-05-01
+- **ConstShare structural synthesis — Phase 3 generic structs +
+  type-checker closure-scoping fix (release 0.31.44, ABI
+  unchanged, still 11).**  Two co-landing patches: synthesis now
+  auto-derives `ConstShare` for generic structs that already
+  carry an explicit user `require` clause proving every field
+  qualifies, AND a latent NameError in
+  `lang/driftc/type_checker.py:_resolve_struct_field_type` is
+  fixed.  See
+  `work/constshare-substrate/post-link-mandatory-design.md` for
+  the synthesis design.
+
+  **Phase 3 contract (synthesis).**  A generic struct `Box<T>
+  require T is X { value: T }` auto-derives ConstShare iff the
+  user's require clause already proves every field qualifies
+  under the v1 composition rule.  Two field paths supported in
+  this slice:
+
+      pub struct Box<T> require T is shareable.ConstShare {
+          pub value: T
+      }
+      // → derives, instantiation `Box<core.ConstArc<String>>`
+      //   proves ConstShare and `box.const_share()` resolves.
+
+      pub struct Box<T> require T is core.Copy, T is shareable.Frozen {
+          pub value: T
+      }
+      // → derives, `Box<Int>` works.
+
+  No implicit constraint strengthening: `Box<T> { value: T }`
+  with NO require clause does NOT derive.  Frozen-only or
+  Copy-only require clauses are NOT enough.  Phase 3 (this
+  slice) handles direct-typevar fields only (`value: T`);
+  concrete-generic-with-typevar-args fields (e.g.
+  `ConstArc<T>`) defer to a follow-up.
+
+  **Synth-side wiring.**  Generic candidates picked up by
+  reading `world.requires_by_struct` (StructSchema doesn't carry
+  the require clause; it lives in the trait world keyed by the
+  struct's TypeKey).  Require-atom subjects accept BOTH
+  `parser_ast.TypeNameRef("T")` AND the post-resolution
+  `TypeParamId(owner=__struct_<mod>::<Name>, index=i)` shape that
+  `world.py:1057` rewrites struct subjects into; mapping
+  `TypeParamId.index → schema_type_params[index]`.  Trait
+  identity uses FULL `TraitKey` (package_id + module + name),
+  not the `(module, name)` pair, to prevent cross-package spoof.
+
+  Synthesized `FnSignature` carries a real `Box<T_typevar>` self
+  type via `type_table.ensure_struct_template(base_id,
+  typevar_tids)`, matching what `parser/__init__.py:4607` does
+  for user-source `implement<T> Box<T>`.
+  `ImplMeta.target_type_id` is the template (`Box<T_typevar>`),
+  not the base — required by `validate_trait_impls`
+  (`type_checker.py:1454`) which binds `Self ->
+  impl.target_type_id` when expanding the trait method's
+  expected param/return type.  `ImplDef.target` carries typevar
+  placeholders in `args` for `_bind_impl_type_params` matching.
+  The impl-method's require clause is registered into
+  `linked_world.global_world.requires_by_fn` and the per-module
+  trait world so call-resolver typevar method dispatch
+  (`self.value.const_share()`) and constructor type inference
+  see `T is X` as a known fact.  Generic synth signatures also
+  carry the legacy raw `param_types` / `return_type` parser_ast
+  TypeExpr fields required by `compile_stubbed_funcs` /
+  TemplateHIR-v1 (`driftc.py:3298`); without them the producer
+  fails to emit the generic template payload.  Single mutation
+  entry point (`register_synthesized_const_share_impl`)
+  untouched in shape.
+
+  **Package roundtrip pinned.**  A separate driver test
+  (`lang/tests/driver/test_const_share_phase3_package.py`)
+  publishes a generic `Box<T> require T is ConstShare` from a
+  signed `.dmp` and proves that the consumer can prove
+  `Box<core.ConstArc<String>> is ConstShare`, dispatch
+  `box.const_share()`, and re-typecheck the synthesized HIR
+  body.  This pins serialization (impl_headers + signatures +
+  hir_funcs + generic_templates) AND consumer-side
+  reconstruction (typevar identity rebinding, template self-type
+  reconstruction, requires_by_fn restoration).
+
+  **LANGUAGE_BUG fix (`lang/driftc/type_checker.py:5656`).**
+  `_resolve_struct_field_type` is nested inside `type_expr`,
+  which has multiple `sig = ...` rebindings (call-resolution
+  branches) without `nonlocal sig`.  Python's scoping rule
+  treats `sig` as a local of `type_expr`; the free-variable
+  cell is unbound when `_resolve_struct_field_type` runs before
+  the first rebind on a typecheck visit.  Triggered by user
+  source: a generic struct's typevar-typed field read in
+  method-call position inside a generic impl method
+  (`self.value.<trait_method>()`).  Fix: read the closure-stable
+  `fn_sig` (assigned at `check_function:1629`, never rebound
+  inside `type_expr`) instead of `sig`.  No `nonlocal sig` —
+  that would let nested call-resolution assignments mutate the
+  current-function signature view, wider/riskier than needed.
+  Pinned by
+  `lang/tests/driver/test_generic_impl_typevar_field_method.py`.
+  The Phase 3 positives in
+  `test_const_share_phase3_generics.py` are a second carrier
+  via synthesized HIR.
+
 - **ConstShare structural synthesis — Phase 1 (release 0.31.43,
   ABI unchanged, still 11).**  User struct types whose every owned
   field qualifies under the v1 composition rule now auto-derive

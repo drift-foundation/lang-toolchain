@@ -5653,8 +5653,17 @@ class TypeChecker:
 						type_args.append(self._unknown)
 					else:
 						type_args.append(self.type_table.ensure_typevar(tp_id, name=tp_name))
-				if sig is not None and sig.impl_target_type_id == struct_id and sig.impl_target_type_args and len(sig.impl_target_type_args) == len(schema.type_params):
-					for idx, arg in enumerate(sig.impl_target_type_args):
+				# Closure-stable: read the current-function signature via
+				# `fn_sig` (assigned in `check_function` and never rebound
+				# inside `type_expr`).  Plain `sig` is locally rebound
+				# elsewhere inside `type_expr` (e.g. the call-resolution
+				# branches), which makes Python treat it as a local of
+				# `type_expr`; the free-variable cell is unbound when
+				# this fallback fires before the first rebind on a
+				# given typecheck visit.  Pinned by
+				# `lang/tests/driver/test_generic_impl_typevar_field_method.py`.
+				if fn_sig is not None and fn_sig.impl_target_type_id == struct_id and fn_sig.impl_target_type_args and len(fn_sig.impl_target_type_args) == len(schema.type_params):
+					for idx, arg in enumerate(fn_sig.impl_target_type_args):
 						if idx < len(type_args) and type_args[idx] == self._unknown:
 							type_args[idx] = arg
 				inst_id = self.type_table.ensure_struct_template(struct_id, type_args) if any(self.type_table.has_typevar(t) for t in type_args) else self.type_table.ensure_struct_instantiated(struct_id, type_args)
