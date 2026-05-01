@@ -1,5 +1,122 @@
 # Drift development history
 
+## 2026-05-01
+- **ConstShare structural synthesis — Phase 1 (release 0.31.43,
+  ABI unchanged, still 11).**  User struct types whose every owned
+  field qualifies under the v1 composition rule now auto-derive
+  `std.core.shareable.ConstShare` with a real lowering-visible
+  `const_share` method body.  Continues the substrate track from
+  0.31.42 (explicit `ConstShare for ConstArc<T>`); see
+  `work/constshare-substrate/post-link-mandatory-design.md` for
+  the design.
+
+  **What's new (user-visible).**  A struct like
+  `pub struct Holder { pub handle: core.ConstArc<String> }` now
+  satisfies `T is shareable.ConstShare` automatically AND
+  `holder.const_share()` resolves to a synthesized method that
+  recursively shares each field.  Generic code can dispatch
+  through the bound:
+
+      fn dup<T>(x: &T) nothrow -> T require T is shareable.ConstShare {
+          return x.const_share();
+      }
+      val h2 = dup<type Holder>(&h);    // works
+
+  Synthesis is package-aware: a producer module's auto-derived
+  impls serialize into `.dmp` (`impl_headers` + `hir_funcs` +
+  `signatures`); consumer modules see them through `LinkedWorld`
+  like any hand-written impl.
+
+  **Composition rule (v1, structs only in Phase 1).**  A struct
+  auto-derives iff every owned field is one of:
+   - a type that already proves `ConstShare` (recursive — covers
+     `core.ConstArc<U>` and nested user types in the same build),
+   - or `Copy + Frozen` (covers value-like primitives and
+     `String` per the `string-constshare-transitional.md`
+     posture).
+
+  The same rule is intended for variants in Phase 4 (per-arm
+  per-field qualification, with `match self { ... }` body
+  reconstruction); Phase 1 applies it only to structs.
+
+  Non-qualifying field types block the derivation (no UNKNOWN
+  promotion): `Arc<T>`, `Mutex<T>`, `Array<T>`, `HashMap<K, V>`,
+  `&T`, `&mut T`.  Direct user `implement ConstShare for X`
+  remains rejected with `E_CONST_SHARE_USER_IMPL_REJECTED`
+  (sealed substrate; users get the impl by satisfying the
+  composition rule, not by writing one).
+
+  **Phase-1 limitations (explicit, future phases lift):** structs
+  only (no variants — Phase 4); concrete fields only (no generic
+  typevar fields — Phase 3); only structs declared in the current
+  build's source modules (dep-package structs already had their
+  producer-side synthesis run during their own build); no implicit
+  `var b = a` value-flow synthesis (separate later milestone).
+
+  **Pipeline placement / mutation discipline.**  Synthesis runs
+  as a post-`link_trait_worlds` pass at driver level, BEFORE the
+  `_pre_typecheck_hirs` snapshot so synthesized HIR flows into
+  package emission.  This required moving `_build_linked_world`
+  from `driftc.py:10242` to ahead of the snapshot at
+  `driftc.py:9674` and removing a duplicate `driftc.py:10494`
+  build (linked_world is now built once and reused via in-scope
+  variable + `Pass1State.linked_world`).
+
+  Field qualification queries
+  `linked_world.visible_world(visible_module_names_by_name[M])`
+  for a struct defined in module M — NOT `linked_world.global_world`
+  directly.  Same visibility view the type checker uses for that
+  module; pinned by unit tests in
+  `lang/tests/driver/test_const_share_phase1_visibility_unit.py`.
+
+  All multi-table mutation goes through the single helper
+  `register_synthesized_const_share_impl` in
+  `lang/driftc/const_share_synth.py`.  The helper updates
+  `signatures_by_id` / `normalized_hirs_by_id` /
+  `func_hirs_by_id` / `fn_ids_by_name` /
+  `linked_world.global_world` (4 indices) /
+  `linked_world.trait_worlds[def_mid]` (4 indices) /
+  `module_exports[def_mid]["impls"]` /
+  `callable_registry.register_inherent_method`.  Per-iteration
+  registration drives same-module nested composition: registering
+  `Inner`'s synthesized impl makes the next iteration's
+  `prove_is(Inner, ConstShare)` resolve PROVED for `Outer`'s
+  qualification.
+
+  **Test coverage.**  Phase 1 driver: 11 tests
+  (`test_const_share_phase1_synthesis.py`) covering single-field,
+  mixed Copy+Frozen + ConstArc, nested same-module, generic
+  `dup<T:ConstShare>`, and 6 negative blockers (`Arc`, `Mutex`,
+  `Array`, `HashMap`, `&T`, `&mut T`).  Package roundtrip:
+  `test_const_share_phase1_package.py` (synthesized impl
+  serializes producer-side and consumes correctly).  Visibility
+  unit: 3 tests pinning `visible_world(M)` excludes non-visible
+  impls.  Memcheck: 3 carriers
+  (`test_const_share_phase1_synthesis_memcheck.py`) —
+  single-field + mixed + nested struct lifecycles, zero leaks,
+  zero invalid access.  Existing forward-pin
+  (`test_user_struct_does_not_prove_const_share_yet`) flipped to
+  the positive form
+  `test_user_struct_proves_const_share_via_synthesis`.
+
+  **Verification gate.**  Full broad suite green (1730 passed,
+  0 failed).  Full memcheck green (58 passed, 1 skipped, 0
+  failed).  No ABI bump (synthesized impls serialize through the
+  existing `impl_headers` / `hir_funcs` shapes; no schema
+  change).
+
+  **Track context.**  Substrate carry-over track 0.31.40 → 0.31.43:
+  Frozen + auto-derive (substrate root); ConstArc<T:Frozen>
+  primitive (0.31.40); Arc relocation `std.concurrent` →
+  `std.core` (0.31.42, ABI bump 10 → 11);
+  `implement ConstShare for ConstArc<T>` (0.31.42); structural
+  synthesis Phase 1 (this release, 0.31.43).  Phase 2 lifts the
+  source-module-only restriction for cross-module composition;
+  Phase 3 lifts the concrete-fields restriction (generic structs
+  with explicit `require T is ConstShare`); Phase 4 covers
+  variants.  Implicit `var b = a` value-flow synthesis is the
+  separate substrate-completion milestone after Phases 2-4.
+
 ## 2026-04-30
 - **Bug R2 — interprocedural borrowed-aggregate origin escape via
   method-call auto-borrow of local receiver — release 0.31.41 (ABI

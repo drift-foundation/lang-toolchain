@@ -110,16 +110,16 @@ fn main() nothrow -> Int {
 # ── No user-types-prove-ConstShare in v1 ─────────────────────────
 
 
-def test_user_struct_does_not_prove_const_share_yet(tmp_path, capsys):
-	"""Forward-looking pin: a user struct that holds a
-	`core.ConstArc<U>` field would intuitively be a candidate for
-	auto-derived ConstShare via composition.  In this milestone,
-	however, NO user struct proves ConstShare — auto-derive is
-	deferred until method-body synthesis lands together with the
-	structural proof rule.  This test pins the current "no user
-	composition yet" state; when the next milestone ships, this
-	test should be deleted (or flipped to `assert rc == 0`) as
-	part of that landing."""
+def test_user_struct_proves_const_share_via_synthesis(tmp_path, capsys):
+	"""Phase 1 ConstShare structural synthesis: a user struct with
+	a `core.ConstArc<U>` field auto-derives `ConstShare`.  See
+	`work/constshare-substrate/post-link-mandatory-design.md`.
+
+	This test was previously a forward-looking negative pin
+	(`test_user_struct_does_not_prove_const_share_yet`) asserting
+	the NO-synthesis state.  Phase 1 flipped it: the bound now
+	proves AND `holder.const_share()` resolves a real synthesized
+	method body."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub struct Holder {
 \tpub handle: core.ConstArc<Int>
@@ -130,12 +130,10 @@ fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
-	assert rc != 0, (
-		"user struct must NOT prove ConstShare in v1 — auto-derive "
-		"+ method synthesis is deferred to the next milestone.  "
-		"If this passes, structural ConstShare proof landed without "
-		"the matching method-body synthesis, leaving the trait in "
-		"an incomplete state."
+	assert rc == 0, (
+		"Phase 1 synthesis: user struct with `ConstArc<Int>` field "
+		"MUST auto-derive ConstShare.  Diagnostics:\n"
+		+ "\n".join(f"  {e.get('code')}: {e.get('message','')[:200]}" for e in errs)
 	)
 
 

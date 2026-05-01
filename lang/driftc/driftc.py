@@ -9657,15 +9657,29 @@ def main(argv: list[str] | None = None) -> int:
 		for _fn_id, _block in normalized_hirs_by_id.items():
 			validate_lambdas_non_retaining(_block)
 
-	# Snapshot normalized HIR before type-checking for package emission.
-	# The type checker mutates HIR in place (e.g., rewrites HQualifiedMember
-	# to HVar during variant constructor resolution).  Package consumers
-	# need the PRE-mutation HIR so their type checker can resolve variant
-	# constructors through the qualified-member path.
+	# Build LinkedWorld BEFORE the _pre_typecheck_hirs snapshot so that
+	# ConstShare structural synthesis can run before snapshot capture.
+	# The synthesis call itself is placed below — after
+	# `visible_module_names_by_name` is built — and the snapshot is
+	# moved after synthesis so synthesized methods serialize into .dmp.
+	#
+	# The move is dependency-safe:
+	#  - `_build_linked_world` reads only `type_table.trait_worlds`,
+	#    populated per-module by `lower_program` long before this point.
+	#  - Nothing between this point and the old L10242 site mutates
+	#    `trait_worlds` (verified by grep).
+	#  - `_install_*_query` callbacks installed by `_build_linked_world`
+	#    capture `linked_world.global_world` by reference; synthesized
+	#    impls added later are visible on next query.
+	linked_world, require_env = _build_linked_world(semantic_world.type_table)
+
+	# `_pre_typecheck_hirs` snapshot is taken later, after
+	# ConstShare synthesis runs — see the synthesis call site
+	# below (after `visible_module_names_by_name` is built).  The
+	# snapshot must capture synthesized HIR so package emission
+	# serializes synthesized methods.
 	import copy as _copy_mod
-	_pre_typecheck_hirs: dict[FunctionId, H.HBlock] = {
-		fn_id: _copy_mod.deepcopy(block) for fn_id, block in normalized_hirs_by_id.items()
-	} if getattr(args, "emit_package", None) else {}
+	_pre_typecheck_hirs: dict[FunctionId, H.HBlock] = {}
 
 	# Option B Phase 2: load package HIR functions into the normalized pool.
 	# With Phase 2a visibility entries above, the type checker can resolve
@@ -10141,6 +10155,54 @@ def main(argv: list[str] | None = None) -> int:
 				visible_ids_list.append(module_ids.setdefault(m, len(module_ids)))
 			visible_modules_by_name[mod_name] = tuple(visible_ids_list)
 
+	# ConstShare structural synthesis (Phase 1: structs only,
+	# concrete fields, same-module composition).  Runs AFTER
+	# `visible_module_names_by_name` is built (so the synthesizer can
+	# use visibility-aware proof worlds via
+	# `linked_world.visible_world(visible_modules_for(M))`) and
+	# BEFORE `global_impl_index` is built (so synthesized
+	# `ImplMeta` entries appended to `module_exports[def_mid]["impls"]`
+	# are picked up by `GlobalImplIndex.from_module_exports` below).
+	#
+	# Also runs BEFORE the `_pre_typecheck_hirs` snapshot below, so
+	# package emission serializes synthesized methods.
+	#
+	# See `work/constshare-substrate/post-link-mandatory-design.md`
+	# for the full design.
+	if linked_world is not None:
+		from lang.driftc.const_share_synth import synthesize_const_share_phase1
+		_const_share_next_id_box = [next_callable_id]
+		synthesize_const_share_phase1(
+			linked_world=linked_world,
+			type_table=semantic_world.type_table,
+			module_exports=module_exports,
+			signatures_by_id=signatures_by_id,
+			normalized_hirs_by_id=normalized_hirs_by_id,
+			func_hirs_by_id=func_hirs_by_id,
+			fn_ids_by_name=fn_ids_by_name,
+			module_ids=module_ids,
+			visible_module_names_by_name=visible_module_names_by_name,
+			package_id=package_id,
+			module_packages=getattr(semantic_world.type_table, "module_packages", None) or {},
+			callable_registry=callable_registry,
+			next_callable_id_box=_const_share_next_id_box,
+			source_modules=_source_mods_main,
+		)
+		next_callable_id = _const_share_next_id_box[0]
+
+	# Snapshot normalized HIR (post-synthesis, pre-typecheck) for
+	# package emission.  The type checker mutates HIR in place
+	# (e.g., rewrites HQualifiedMember to HVar during variant
+	# constructor resolution).  Package consumers need the
+	# pre-mutation HIR so their type checker can resolve variant
+	# constructors through the qualified-member path.  Capturing
+	# AFTER synthesis ensures synthesized const_share method bodies
+	# serialize alongside hand-written ones.
+	if getattr(args, "emit_package", None):
+		_pre_typecheck_hirs = {
+			fn_id: _copy_mod.deepcopy(block) for fn_id, block in normalized_hirs_by_id.items()
+		}
+
 	global_impl_index = GlobalImplIndex.from_module_exports(
 		module_exports=module_exports,
 		type_table=semantic_world.type_table,
@@ -10239,7 +10301,10 @@ def main(argv: list[str] | None = None) -> int:
 
 	signatures_by_id_all = dict(signatures_by_id)
 	signatures_by_id_all.update(external_signatures_by_id)
-	linked_world, require_env = _build_linked_world(semantic_world.type_table)
+	# linked_world was built earlier (before _pre_typecheck_hirs snapshot)
+	# so synthesized ConstShare impls are visible to package emission.
+	# This used to be: `linked_world, require_env = _build_linked_world(semantic_world.type_table)`
+	# Both linked_world and require_env are already in scope.
 
 	# K42 + Phase 5: build function_keys_by_fn_id for Pass 1 covering ALL
 	# generic signatures (wrappers + non-wrappers).  This serves two purposes:
@@ -10491,7 +10556,9 @@ def main(argv: list[str] | None = None) -> int:
 
 	# Enforce trait requirements (struct + function requires) before borrow checking.
 	trait_diags: list[Diagnostic] = []
-	linked_world, require_env = _build_linked_world(semantic_world.type_table)
+	# linked_world / require_env already built above (before the
+	# _pre_typecheck_hirs snapshot, so ConstShare synthesis can land
+	# before package emission).  Reuse rather than rebuild.
 	# Install destructor_fns early so any code that queries has_drop()
 	# (e.g. copy_status callbacks, borrow checker, or trait enforcement)
 	# before compile_stubbed_funcs runs gets the correct answer for
