@@ -110,12 +110,40 @@
   primitive (0.31.40); Arc relocation `std.concurrent` →
   `std.core` (0.31.42, ABI bump 10 → 11);
   `implement ConstShare for ConstArc<T>` (0.31.42); structural
-  synthesis Phase 1 (this release, 0.31.43).  Phase 2 lifts the
-  source-module-only restriction for cross-module composition;
-  Phase 3 lifts the concrete-fields restriction (generic structs
-  with explicit `require T is ConstShare`); Phase 4 covers
-  variants.  Implicit `var b = a` value-flow synthesis is the
-  separate substrate-completion milestone after Phases 2-4.
+  synthesis Phase 1 (this release, 0.31.43).  Phase 2 covers
+  variants (per-arm composition with `match self` body
+  reconstruction); Phase 3 covers generic structs with explicit
+  `require T is ConstShare` clauses.  Cross-module + package-mixed
+  composition is already covered by Phase 1's per-iteration
+  fixed-point + visibility-aware proof world (see follow-up
+  verification note below).  Implicit `var b = a` value-flow
+  synthesis is the separate substrate-completion milestone after
+  Phases 2 + 3.
+
+  **Phase 1 follow-up verification (no version bump).**  Added
+  `lang/tests/driver/test_const_share_phase2_cross_module.py`
+  with 4 tests covering same-build multi-module composition AND
+  package-mixed composition (producer publishes Inner with
+  auto-derived ConstShare; consumer composes Outer over the
+  packaged Inner; `outer.const_share()` resolves through both
+  tiers).  All 4 tests pass with the Phase 1 implementation
+  unchanged — no compiler logic added.  This is documentation
+  of pre-existing behavior, not a release.
+
+  - Same-build multi-module — both modules are in
+    `_source_mods_main`; per-iteration registration registers B
+    first, then A's qualifier (which uses `visible_world(A)`
+    re-merged through A's import of B) finds B's just-registered
+    impl.
+  - Package-mixed — producer's Phase-1 synthesis serialized
+    Inner's impl into the .dmp; consumer's LinkedWorld loads it;
+    the consumer-side `source_modules` guard correctly skips
+    re-deriving B's types (re-derivation would have triggered
+    the "module provided by multiple packages" regression we
+    saw and fixed during the Phase 1 implementation).
+
+  Pure-prover-level visibility regression remains pinned at the
+  unit level by `test_const_share_phase1_visibility_unit.py`.
 
 ## 2026-04-30
 - **Bug R2 — interprocedural borrowed-aggregate origin escape via
