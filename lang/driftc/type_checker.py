@@ -10465,6 +10465,29 @@ class TypeChecker:
 		def _borrowed_aggregate_origins(expr: H.HExpr, expected_ty: TypeId) -> Optional[set[int]]:
 			if not _is_borrowed_aggregate_type(expected_ty):
 				return None
+			# Method-call returning a borrowed aggregate: the borrow
+			# source at the call site is the auto-borrowed receiver.
+			# `_return_origin` already recurses through HMethodCall to
+			# the receiver and returns the receiver's ref-param origin
+			# (or None for a local).  Wire that into the borrowed-
+			# aggregate origin set so the MVP escape rule treats
+			# `c.view()` on a local `c` the same way it treats explicit
+			# `view_of(&c)` / `View(source = &c)`: empty origin set
+			# → rule fires the "must derive from a reference parameter"
+			# diagnostic.  Without this, an HMethodCall returning a
+			# borrowed aggregate slips past the rule because the early
+			# `not isinstance(expr, H.HCall)` bail returned None,
+			# which the caller's loop treats as "no constraint."
+			# See `work/borrow-origin-method-call-escape/notes.md`.
+			# Bug R2, 0.31.41.
+			if isinstance(expr, H.HMethodCall):
+				receiver_origin = _return_origin(expr.receiver)
+				if receiver_origin is None:
+					# Receiver doesn't trace to a ref-param (typically a
+					# local); empty set signals "no valid origin" so
+					# the caller emits the MVP-escape diagnostic.
+					return set()
+				return {receiver_origin}
 			if not isinstance(expr, H.HCall):
 				return None
 			layout = _struct_field_layout(expected_ty)

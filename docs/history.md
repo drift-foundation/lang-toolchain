@@ -1,6 +1,99 @@
 # Drift development history
 
 ## 2026-04-30
+- **Bug R2 — interprocedural borrowed-aggregate origin escape via
+  method-call auto-borrow of local receiver — release 0.31.41 (ABI
+  unchanged, still 10).**  LANGUAGE_BUG fix surfaced during Phase 1
+  hard-gate validation of the exception-diagnostics-context track's
+  `containers.ReadOnlyMap<K, V, B>` design
+  (`work/exception-diagnostics-context/plan.md`,
+  `work/borrow-origin-method-call-escape/notes.md`).
+
+  **Symptom.**  Drift's MVP escape rule
+  (`borrowed aggregate return must derive from a reference
+  parameter`) caught explicit-borrow forms only:
+
+      return view_of(&c);                  // rejected ✓
+      return View<type T>(source = &c);    // rejected ✓
+
+  But the *method-call* form was incorrectly accepted (and produced
+  a runtime UAF, confirmed under valgrind):
+
+      return c.view();                     // accepted (BUG)
+
+  Where `view(self: &Container<T>) -> View<T>` returns a struct
+  with a `&Container<T>` field.  The auto-borrow of the local
+  receiver `c` laundered through the method's `self: &Container<T>`
+  parameter without surfacing as a borrow-of-local at the
+  rule's evaluation site.
+
+  **Root cause.**  `lang/driftc/type_checker.py:_borrowed_aggregate_origins`
+  (`:10465`) early-bailed on `HMethodCall`:
+  `if not isinstance(expr, H.HCall): return None`.  The caller's
+  loop at `:11060-11071` reads `None` as "no constraint" and
+  silently passes.  The explicit-borrow forms hit the HCall walker,
+  which finds the `HBorrow` of a local and returns `set()` → rule
+  fires; the method-call form skipped the walker entirely.
+
+  **Fix.**  Extend `_borrowed_aggregate_origins` to handle
+  `HMethodCall` by treating the method's receiver as the borrow
+  source.  `_return_origin` (`:10363`) already recurses through
+  `HMethodCall` to receiver — wiring that recursion into
+  `_borrowed_aggregate_origins`'s entry path closes the gap:
+
+      if isinstance(expr, H.HMethodCall):
+          receiver_origin = _return_origin(expr.receiver)
+          if receiver_origin is None:
+              return set()  # local receiver → rule rejects
+          return {receiver_origin}
+
+  Auto-borrow of local receiver maps to empty origins (rule fires);
+  auto-borrow of ref-param receiver maps to that param's origin
+  (rule accepts).  The existing `requires_mut_origin` check at
+  `:11082` continues to enforce `&mut` discipline separately.
+
+  **Regression coverage.**  6-test suite at
+  `lang/tests/driver/test_borrow_origin_method_call_escape.py`:
+
+  - `test_method_call_returns_view_of_local_rejected` — primary
+    regression; the BUG-pin from pre-fix is flipped to the
+    post-fix-correct shape.
+  - `test_method_call_returns_view_of_ref_param_accepts` —
+    positive control; method on `&Container<T>` ref-param accepts.
+  - `test_explicit_borrow_return_of_local_correctly_rejected` —
+    control; existing rule's free-function-form path still rejects.
+  - `test_explicit_field_init_borrow_of_local_correctly_rejected` —
+    control; existing rule's direct-field-init-form path still
+    rejects.
+  - `test_mut_method_call_returns_view_of_local_rejected` — `&mut`
+    receiver shape; same rule applies.
+  - `test_chained_method_call_with_local_root_rejected` —
+    `a.inner_ref().view()` chain where `a` is local; recursion
+    through `_return_origin`'s HMethodCall case traces to the
+    ultimate local origin and rejects.
+
+  **Edge cases analyzed.**  Multi-`&T`-param methods are already
+  rejected upstream by the existing single-origin rule (`:11072-
+  11079`); the caller-side check never sees them, so the receiver-
+  origin heuristic is sound.  Receiver shapes that don't trace to
+  a ref-param via `_return_origin` (e.g. complex non-method calls)
+  fall back to the conservative empty-set "reject" — over-rejection
+  is the safe direction.
+
+  **Out of scope.**  No new diagnostic message (reuses existing
+  text).  No general interprocedural lifetime tracking (the fix is
+  the narrow shape "method-call return uses receiver origin").  No
+  stdlib changes — per the user's stop instruction, no API
+  workaround.
+
+  **Diagnostics-context track impact.**  Phase 1 of the unified
+  diagnostics-context track was paused 2026-04-30 by this bug.  The
+  fix unblocks resumption under Option C placement
+  (`std.containers.ReadOnlyMap<K, V, B>` per the package-cycle
+  finding from the prior attempt).  Phase 1 resume happens as a
+  separate patch; this entry's deliverable is the rule fix +
+  expanded regression suite only.
+
 - **Bug R1 — generic `Callback{N}<T>` fallback silently flipped
   nothrow → throws when type-args contained typevars — release
   0.31.40 (ABI unchanged, still 10).**  LANGUAGE_BUG fix surfaced as
