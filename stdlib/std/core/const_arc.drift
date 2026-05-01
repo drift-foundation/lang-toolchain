@@ -1,0 +1,100 @@
+// vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+module std.core.const_arc;
+
+export {
+	ConstArc,
+	const_arc
+};
+
+// Re-export `std.core.shareable.*` so that user code which writes
+// only `import std.core.const_arc as ca` gets the `Frozen` trait
+// AND its primitive impls in scope automatically — without that,
+// `ca.const_arc<type Int>(42)` would fail with
+// `E_REQUIREMENT_NOT_SATISFIED` because the prover would not see
+// the `implement Frozen for Int` impl.
+//
+// Re-export is one-way (this module sees shareable), so it does not
+// create a cycle.  This is the same pattern `std.core` uses to
+// re-export `shareable.*` and `copy.*`.  See the visibility BFS in
+// `lang/driftc/driftc.py` (~line 10063) which walks
+// `_collect_reexport_targets` to expand the visible-modules set
+// for type-checking.
+export { std.core.shareable.* };
+
+import std.core as core;
+import std.core.shareable as shareable;
+import std.concurrent as conc;
+
+/// Reference-counted owner of an immutable value.
+///
+/// `ConstArc<T>` is the read-only counterpart of `conc.Arc<T>`.  The
+/// payload `T` must satisfy `Frozen` — i.e. the value's `&T` API is
+/// guaranteed not to expose mutation or aliasing-observable state.
+/// That bound is what lets multiple owners share the same allocation
+/// safely without locking, atomic helpers, or interior-mutability
+/// reasoning at every `.get()` call site.
+///
+/// **What is in v1:**
+///   - construction via `const_arc(value)` — moves `value` onto a
+///     fresh `Arc<T>` allocation with strong count 1;
+///   - `.clone()` — atomically increments the strong count and
+///     returns a fresh `ConstArc<T>` over the same allocation;
+///   - `.get() -> &T` — borrows the inner value;
+///   - automatic drop — when a `ConstArc<T>` goes out of scope its
+///     inner `Arc<T>` field is structurally dropped, which atomically
+///     decrements the strong count and frees the allocation on the
+///     last release.
+///
+/// **What is NOT in v1:**
+///   - no `.get_mut`, no `&mut`-receiver method anywhere — that is
+///     the immutability seal;
+///   - no implicit `var b = a` duplication semantic — each owner is
+///     constructed via `const_arc(...)` or `.clone()` explicitly;
+///   - no `ConstShare` auto-derive yet (separate milestone);
+///   - no fat `ConstArc<Interface>` view — concrete `T` only this
+///     round (parallel to early-stage `Arc<T>`).
+///
+/// **Implementation strategy.**  `ConstArc<T>` is a thin wrapper over
+/// `conc.Arc<T>` rather than a parallel refcount machinery.  All
+/// retain / release / drop is delegated to `Arc<T>`'s existing
+/// compiler-owned intrinsics (`ARC_CLONE`, `ARC_GET`, `ARC_DESTROY`)
+/// via field access; the only new compile-time surface is the
+/// `Frozen` trait bound that gates construction.  No new runtime
+/// helpers, no IR shape change, no ABI bump.
+///
+/// **See also:** `std.core.shareable.Frozen`, `std.concurrent.Arc`.
+pub struct ConstArc<T> require T is shareable.Frozen {
+	inner: conc.Arc<T>
+}
+
+/// Constructs a fresh `ConstArc<T>` owning `value` with reference
+/// count 1.
+///
+/// Compile-time enforces `T: Frozen`: passing a non-Frozen payload
+/// (e.g. `Mutex<Int>`, `Arc<U>`, `Array<U>`) is rejected at the call
+/// site with `E_REQUIREMENT_NOT_SATISFIED`.
+///
+/// **Parameters:**
+///   - `value` — the owned, Frozen value to share immutably.
+///
+/// **Returns:** a `ConstArc<T>` wrapping a new heap allocation.
+///
+/// **See also:** `ConstArc.clone`, `ConstArc.get`.
+pub fn const_arc<T>(var value: T) nothrow -> ConstArc<T>
+		require T is shareable.Frozen {
+	return ConstArc<type T>(inner = conc.arc<type T>(move value));
+}
+
+implement<T> ConstArc<T> require T is shareable.Frozen {
+	/// Atomically increments the strong count and returns a fresh
+	/// `ConstArc<T>` sharing the same allocation.  Cheap — no heap
+	/// allocation, no value copy.
+	pub fn clone(self: &ConstArc<T>) nothrow -> ConstArc<T> {
+		return ConstArc<type T>(inner = self.inner.clone());
+	}
+
+	/// Returns a shared reference to the contained value.
+	pub fn get(self: &ConstArc<T>) nothrow -> &T {
+		return self.inner.get();
+	}
+}

@@ -520,30 +520,19 @@ implement copy_mod.Copy for DiagnosticValue {
 implement copy_mod.Copy for DiagnosticEntry {
 }
 
-// ── Frozen marker — stdlib-baked impls for value-like primitives ─────
+// ── Frozen — conditional impls for stdlib generics ────────────────
 //
-// See `std.core.shareable.Frozen` for the contract.  These types
-// are Frozen because their `&Self` API exposes only read
-// operations; no mutation, no aliasing-observable state.
+// Primitive Frozen impls (Int / Uint / String / Bool / Float /
+// Byte / Void / DiagnosticValue) live in
+// `stdlib/std/core/shareable.drift`, alongside the trait declaration.
+// The two impls below stay here because `Optional` and `Result` are
+// declared in this module — moving these impls would create a
+// circular import from `shareable.drift` back to `std.core`.
 //
-// Notably absent: `&T` / `&mut T` (referent may be mutable;
-// reference-payload soundness deferred), `Array<T>` (mutable
-// element storage), `HashMap<K, V>`, `Mutex<T>`, `Arc<T>`, atomic
-// primitives.
+// Per the substrate plan's auto-derive-by-composition rule applied
+// to stdlib's own generics: `Optional<T>` / `Result<T, E>` are
+// Frozen iff all type-args are Frozen.
 
-implement shareable.Frozen for Int { }
-implement shareable.Frozen for Uint { }
-implement shareable.Frozen for Uint64 { }
-implement shareable.Frozen for Bool { }
-implement shareable.Frozen for Float { }
-implement shareable.Frozen for Byte { }
-implement shareable.Frozen for String { }
-implement shareable.Frozen for Void { }
-implement shareable.Frozen for DiagnosticValue { }
-
-// Conditional Frozen for stdlib variants — Frozen iff all type-args
-// are Frozen.  Per the substrate plan's auto-derive-by-composition
-// rule applied to stdlib's own generics.
 implement<T> shareable.Frozen for Optional<T> require T is shareable.Frozen { }
 implement<T, E> shareable.Frozen for Result<T, E> require T is shareable.Frozen, E is shareable.Frozen { }
 

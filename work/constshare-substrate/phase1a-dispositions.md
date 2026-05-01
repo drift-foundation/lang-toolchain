@@ -83,28 +83,44 @@ ledger, codegen) must recognize.  Drift's existing pattern is
 "trait call goes through call lowering" — adding a new op for
 ConstShare would diverge from precedent without benefit.
 
-### 2. ConstArc placement — **`std.core.const_arc`**
+### 2. ConstArc placement — **`std.core.const_arc`** (NOT re-exported by `std.core`)
 
 > `stdlib/std/core/const_arc.drift`, module
-> `std.core.const_arc`.  Re-exports `ConstArc` through the
-> top-level `std.core` (matching how `std.core.copy.Copy` is
-> re-exported through `std.core`).  Users access via
-> `core.ConstArc<T>`.
+> `std.core.const_arc`.  Users import directly:
+> `import std.core.const_arc as ca`.
 
-**Rationale:**
+**Rationale (revised post-implementation 2026-04-30):**
 
 - Trait `ConstShare` is at `std.core.shareable` (next to
   `Share`); the backing primitive belongs in the same
   neighborhood.
 - Downstream consumers — eventual `Error.attrs` /
   `Error.captures` — live in `std.core`.  Placing
-  `ConstArc<T>` in `std.concurrent` would force core to import
-  concurrent, the wrong direction (concurrent already imports
-  core).
-- Cycle-free: `std.core` re-exports `std.core.const_arc`
-  symbols.  `std.core.const_arc` does not import `std.core`
-  itself (matches how `std.core.copy` and `std.core.shareable`
-  are structured today — they don't import `std.core`).
+  `ConstArc<T>` in `std.concurrent` would put it on the
+  wrong side of the prelude.
+- **No re-export through `std.core`.**  The original plan called
+  for `std.core` to re-export `ConstArc` so users could write
+  `core.ConstArc<T>`.  Implementation showed this would form a
+  cycle: the wrapper's inner refcount handle is `conc.Arc<T>`,
+  so `std.core.const_arc` imports `std.concurrent`, which
+  imports `std.core` — adding `std.core` → `std.core.const_arc`
+  closes the cycle.  Users instead write `ca.const_arc<T>(...)`
+  with a direct submodule import.
+- **Self-sufficient submodule import.**  `const_arc.drift`
+  re-exports `std.core.shareable.*`, and the primitive `Frozen`
+  impls live in `shareable.drift` (next to the trait
+  declaration).  This means `import std.core.const_arc as ca`
+  is sufficient — the user does NOT need a separate
+  `import std.core` to bring `Frozen` into scope.  Pinned by
+  `test_const_arc_works_without_explicit_std_core_import` in
+  `lang/tests/driver/test_const_arc_substrate.py`.
+- **Conditional `Frozen` for `Optional` / `Result` stays in
+  `core.drift`.**  Their impls reference `core.Optional` /
+  `core.Result` directly; moving them to `shareable.drift`
+  would re-introduce the import cycle.  Users who need
+  `ConstArc<Optional<…>>` or `ConstArc<Result<…>>` import
+  `std.core` explicitly — natural posture, since they are
+  already constructing those types.
 
 **Counter-considered:** `std.concurrent.const_arc` — would put
 `ConstArc<T>` next to `Arc<T>` for typological symmetry.  But
@@ -436,7 +452,7 @@ These are listed in the substrate plan but I'm marking them as
 | # | Question | Disposition | Status |
 |---|---|---|---|
 | 1 | Lowering shape | **(b) compiler-recognized method call**, mirroring `Share::share` synthesis pattern at `ast_to_hir.py:546-585` | ✅ APPROVED |
-| 2 | `ConstArc<T>` placement | **`std.core.const_arc`**, re-exported through `std.core` | ✅ APPROVED |
+| 2 | `ConstArc<T>` placement | **`std.core.const_arc`**, NOT re-exported by `std.core` (would cycle through `std.concurrent`); submodule re-exports `std.core.shareable.*` so a direct import is self-sufficient | ✅ APPROVED (revised post-implementation 2026-04-30) |
 | 3 | `T` constraint | **`Frozen` marker trait + sealed-via-composition `ConstShare` impls (strict — every owned field must satisfy the rule, no partial-immutability backdoor; references NOT Frozen in v1)** | ✅ APPROVED with two further tightening edits 2026-04-30: (a) `&T` removed from Frozen defaults; (b) composition rule narrowed to all-fields-must-satisfy |
 | 4 | Trait method signature | `fn const_share(self: &Self) nothrow -> Self` | ✅ APPROVED |
 | 5 | Atomic refcount | always atomic | ✅ APPROVED |
@@ -665,7 +681,12 @@ synthesis, synthesis last (it's the riskiest piece).
 **ConstArc (steps 4-6):**
 
 4. Add `ConstArc<T>` to new `stdlib/std/core/const_arc.drift`,
-   re-export through `std.core`.  `T: Frozen` constraint.
+   `T: Frozen` constraint.  NOT re-exported by `std.core` (cycle
+   via `std.concurrent`).  The submodule re-exports
+   `std.core.shareable.*` so `import std.core.const_arc as ca`
+   alone is sufficient — primitive `Frozen` impls live in
+   `shareable.drift`.  Pinned by
+   `test_const_arc_works_without_explicit_std_core_import`.
 5. Runtime helpers: `drift_const_arc_alloc`,
    `drift_const_arc_inc`, `drift_const_arc_dec` in
    `lang/runtime/`.  Atomic refcount.

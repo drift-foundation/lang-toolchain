@@ -157,3 +157,35 @@ pub trait Share {
 	/// the caller's responsibility.
 	fn share(self: &Self) nothrow -> Self;
 }
+
+
+// ── Frozen — stdlib-baked impls for value-like primitives ────────
+//
+// These impls are co-located with the `Frozen` trait declaration so
+// that any module which imports `std.core.shareable` (directly or
+// via re-export) sees the trait AND its primitive impls in one
+// step.  This is what makes `import std.core.const_arc as ca; var a
+// = ca.const_arc<type Int>(42)` work without a separate `import
+// std.core` to bring Frozen into scope.
+//
+// All types named here are compiler builtins (see
+// `lang/driftc/traits/world.py::BUILTIN_TYPE_NAMES`), so this module
+// does not need to import any other stdlib module to reference
+// them.
+//
+// Notably absent and intentionally so: `&T` / `&mut T` (the
+// referent may be mutable; reference-payload soundness deferred),
+// `Array<T>` (mutable element storage), `HashMap<K, V>`, `Mutex<T>`,
+// `Arc<T>`, atomic primitives.  Conditional Frozen impls for
+// stdlib generics (`Optional<T>`, `Result<T, E>`) live in
+// `std.core` because their type declarations live there.
+
+implement Frozen for Int { }
+implement Frozen for Uint { }
+implement Frozen for Uint64 { }
+implement Frozen for Bool { }
+implement Frozen for Float { }
+implement Frozen for Byte { }
+implement Frozen for String { }
+implement Frozen for Void { }
+implement Frozen for DiagnosticValue { }
