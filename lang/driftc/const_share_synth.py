@@ -80,10 +80,20 @@ _MAX_FIXEDPOINT_ITERS = 100
 
 
 @dataclass
+class _VariantArm:
+	"""Phase 4 — single arm in a variant candidate.  Field type-ids
+	are the concrete, instantiated payload types (variants are non-
+	generic in this slice)."""
+	name: str
+	field_names: List[str]
+	field_type_ids: List[TypeId]
+
+
+@dataclass
 class _Candidate:
 	target_type_id: TypeId
 	def_module: str
-	struct_name: str
+	struct_name: str  # variant name when `is_variant=True`
 	field_names: List[str]
 	field_type_ids: List[TypeId]
 	loc: object  # parser source loc for synthesized AST
@@ -104,6 +114,11 @@ class _Candidate:
 	type_params: List[str] = None  # type: ignore[assignment]
 	require_atoms: List[tuple] = None  # type: ignore[assignment]
 	field_typeparam_names: List[Optional[str]] = None  # type: ignore[assignment]
+	# Phase 4 variant support.  `is_variant=True` flips struct-side
+	# fields (`field_names`, `field_type_ids`) to empty/unused and
+	# uses `variant_arms` instead.  Non-generic variants only.
+	is_variant: bool = False
+	variant_arms: List[_VariantArm] = None  # type: ignore[assignment]
 
 	def __post_init__(self):
 		if self.type_params is None:
@@ -112,6 +127,8 @@ class _Candidate:
 			self.require_atoms = []
 		if self.field_typeparam_names is None:
 			self.field_typeparam_names = [None] * len(self.field_names)
+		if self.variant_arms is None:
+			self.variant_arms = []
 
 
 @dataclass
@@ -206,17 +223,20 @@ def synthesize_const_share_phase1(
 		# cause cross-package "module provided by multiple
 		# packages" conflicts at consumer load time.
 		#
-		# `source_modules` is the set of module names being
-		# compiled in this build (from `modules.keys()` in
-		# main()).  Empty / None → fall back to skipping
-		# stdlib + lang only (used by the test-helper paths
-		# that don't pass source_modules through).
-		if source_modules is not None:
-			if mid not in source_modules:
-				continue
-		else:
-			if mid.startswith("std.") or mid.startswith("lang.") or mid == "lang.core":
-				continue
+		# `source_modules` is the set of module names parsed in
+		# this build (`modules.keys()` from main()).  On a CONSUMER
+		# build, that set includes stdlib modules (parsed even when
+		# loaded as deps for cross-module type resolution); we must
+		# ALSO filter `std.*` / `lang.*` so synth never runs for
+		# stdlib types whose typecheck context the consumer can't
+		# fully reconstruct (e.g. trait-in-scope for the synthesized
+		# body's variant-ctor / method dispatch).  Stdlib provides
+		# its own hand-written ConstShare impls for the types that
+		# need them.
+		if mid.startswith("std.") or mid.startswith("lang.") or mid == "lang.core":
+			continue
+		if source_modules is not None and mid not in source_modules:
+			continue
 		fields = list(getattr(schema, "fields", []) or [])
 		if not fields:
 			continue
@@ -335,6 +355,80 @@ def synthesize_const_share_phase1(
 				loc=decl_loc,
 			))
 
+	# Phase 4: non-generic variant discovery.  Mirrors the struct
+	# loop above but iterates `type_table.variant_schemas` and pulls
+	# concrete arm payload types via `get_variant_instance`.
+	# Generic variants (type_params non-empty) are deferred to a
+	# follow-up — Phase 4 covers the non-generic path only.
+	variant_schemas = getattr(type_table, "variant_schemas", None)
+	if isinstance(variant_schemas, dict):
+		for tid, schema in variant_schemas.items():
+			mid = getattr(schema, "module_id", None)
+			if not isinstance(mid, str) or not mid:
+				continue
+			# Same source_modules + stdlib filter as the struct
+			# loop above (see comment there for rationale).  Phase 4
+			# specifically benefits from the stdlib filter: many
+			# stdlib variants (e.g. `IteratorOpId`) have zero-payload
+			# arms that trivially qualify, but stdlib doesn't need
+			# auto-derived ConstShare for them — and the synthesized
+			# match body fails to typecheck on a consumer that
+			# loaded stdlib as a dep with an impoverished trait
+			# scope.
+			if mid.startswith("std.") or mid.startswith("lang.") or mid == "lang.core":
+				continue
+			if source_modules is not None and mid not in source_modules:
+				continue
+			if (mid, schema.name) in user_impl_targets:
+				continue
+			if list(getattr(schema, "type_params", []) or []):
+				# Phase 4 (this slice): non-generic variants only.
+				continue
+			arms_schema = list(getattr(schema, "arms", []) or [])
+			if not arms_schema:
+				continue
+			# Tombstone constructors are internal-only — they're
+			# rejected by the typechecker as match-arm patterns
+			# (`E-MATCH-TOMBSTONE`), so the synthesized body must
+			# not enumerate them.  Skip when reconstructing arms;
+			# at runtime, a tombstone-tagged value never reaches
+			# user code (the runtime drops/swaps it before any
+			# `const_share()` call could observe it).
+			tombstone_name = getattr(schema, "tombstone_ctor", None)
+			vinst = type_table.get_variant_instance(tid)
+			if vinst is None:
+				continue
+			vinst_arms = list(getattr(vinst, "arms", []) or [])
+			if len(vinst_arms) != len(arms_schema):
+				continue
+			variant_arms: List[_VariantArm] = []
+			ok = True
+			for arm_schema, arm_inst in zip(arms_schema, vinst_arms):
+				if tombstone_name is not None and arm_schema.name == tombstone_name:
+					continue
+				field_names_arm = [f.name for f in (getattr(arm_schema, "fields", []) or [])]
+				field_type_ids_arm = list(getattr(arm_inst, "field_types", []) or [])
+				if len(field_names_arm) != len(field_type_ids_arm):
+					ok = False
+					break
+				variant_arms.append(_VariantArm(
+					name=arm_schema.name,
+					field_names=field_names_arm,
+					field_type_ids=field_type_ids_arm,
+				))
+			if not ok or not variant_arms:
+				continue
+			candidates.append(_Candidate(
+				target_type_id=tid,
+				def_module=mid,
+				struct_name=schema.name,
+				field_names=[],
+				field_type_ids=[],
+				loc=getattr(schema, "decl_loc", None),
+				is_variant=True,
+				variant_arms=variant_arms,
+			))
+
 	if not candidates:
 		return 0
 
@@ -364,21 +458,40 @@ def synthesize_const_share_phase1(
 				module_packages=dict(module_packages),
 				type_table=type_table,
 			)
-			field_paths = _qualify_fields(
-				cand=cand,
-				proof_world=proof_world,
-				env=env,
-				type_table=type_table,
-				cs_key=cs_key,
-				copy_key=copy_key,
-				frozen_key=frozen_key,
-			)
-			if field_paths is None:
-				continue
+			# Phase 4: variants take a per-arm qualifier; structs take
+			# the flat per-field qualifier.  Both return None on the
+			# first non-qualifying field.
+			variant_arm_paths: Optional[List[List[str]]] = None
+			field_paths: Optional[List[str]] = None
+			if cand.is_variant:
+				variant_arm_paths = _qualify_variant_arms(
+					cand=cand,
+					proof_world=proof_world,
+					env=env,
+					type_table=type_table,
+					cs_key=cs_key,
+					copy_key=copy_key,
+					frozen_key=frozen_key,
+				)
+				if variant_arm_paths is None:
+					continue
+			else:
+				field_paths = _qualify_fields(
+					cand=cand,
+					proof_world=proof_world,
+					env=env,
+					type_table=type_table,
+					cs_key=cs_key,
+					copy_key=copy_key,
+					frozen_key=frozen_key,
+				)
+				if field_paths is None:
+					continue
 			# Qualified — synthesize and register.
 			synth = _build_synthesis_artifact(
 				cand=cand,
 				field_paths=field_paths,
+				variant_arm_paths=variant_arm_paths,
 				type_table=type_table,
 				cs_key=cs_key,
 				fn_id_ordinals=fn_id_ordinals,
@@ -439,6 +552,34 @@ def _visible_modules_for(
 	return set(got)
 
 
+def _qualify_one_field(
+	field_ty_id: TypeId,
+	*,
+	proof_world: TraitWorld,
+	env: TraitEnv,
+	type_table,
+	cs_key: TraitKey,
+	copy_key: TraitKey,
+	frozen_key: TraitKey,
+) -> Optional[str]:
+	"""Single-field qualification helper, shared by struct and
+	variant paths.  Returns 'const_share' / 'copy_frozen' / None
+	(blocked).  Typevar fields conservatively reject (Phase 1
+	contract; generic struct path handles typevars separately
+	via `_qualify_fields_generic`)."""
+	if type_table.has_typevar(field_ty_id):
+		return None
+	field_ty_key = type_key_from_typeid(type_table, field_ty_id)
+	cs = prove_is(proof_world, env, {}, field_ty_key, cs_key)
+	if cs.status is ProofStatus.PROVED:
+		return "const_share"
+	cp = prove_is(proof_world, env, {}, field_ty_key, copy_key)
+	fz = prove_is(proof_world, env, {}, field_ty_key, frozen_key)
+	if cp.status is ProofStatus.PROVED and fz.status is ProofStatus.PROVED:
+		return "copy_frozen"
+	return None
+
+
 def _qualify_fields(
 	*,
 	cand: _Candidate,
@@ -461,25 +602,54 @@ def _qualify_fields(
 		)
 	field_paths: List[str] = []
 	for field_ty_id in cand.field_type_ids:
-		# Phase 1: reject typevars (generics handled separately
-		# in the generic branch above).
-		if type_table.has_typevar(field_ty_id):
+		path = _qualify_one_field(
+			field_ty_id,
+			proof_world=proof_world,
+			env=env,
+			type_table=type_table,
+			cs_key=cs_key,
+			copy_key=copy_key,
+			frozen_key=frozen_key,
+		)
+		if path is None:
 			return None
-		field_ty_key = type_key_from_typeid(type_table, field_ty_id)
-		# Path 1: ConstShare direct.
-		cs = prove_is(proof_world, env, {}, field_ty_key, cs_key)
-		if cs.status is ProofStatus.PROVED:
-			field_paths.append("const_share")
-			continue
-		# Path 2: Copy + Frozen.
-		cp = prove_is(proof_world, env, {}, field_ty_key, copy_key)
-		fz = prove_is(proof_world, env, {}, field_ty_key, frozen_key)
-		if cp.status is ProofStatus.PROVED and fz.status is ProofStatus.PROVED:
-			field_paths.append("copy_frozen")
-			continue
-		# Field doesn't qualify (REFUTED, UNKNOWN, or AMBIGUOUS).
-		return None
+		field_paths.append(path)
 	return field_paths
+
+
+def _qualify_variant_arms(
+	*,
+	cand: _Candidate,
+	proof_world: TraitWorld,
+	env: TraitEnv,
+	type_table,
+	cs_key: TraitKey,
+	copy_key: TraitKey,
+	frozen_key: TraitKey,
+) -> Optional[List[List[str]]]:
+	"""Phase 4 variant qualifier: returns per-arm per-field paths,
+	or None if ANY arm carries a non-qualifying field.  Single
+	non-qualifying field anywhere in the variant blocks the whole
+	derivation (matches the same all-or-nothing contract structs
+	use)."""
+	per_arm_paths: List[List[str]] = []
+	for arm in cand.variant_arms:
+		arm_paths: List[str] = []
+		for field_ty_id in arm.field_type_ids:
+			path = _qualify_one_field(
+				field_ty_id,
+				proof_world=proof_world,
+				env=env,
+				type_table=type_table,
+				cs_key=cs_key,
+				copy_key=copy_key,
+				frozen_key=frozen_key,
+			)
+			if path is None:
+				return None
+			arm_paths.append(path)
+		per_arm_paths.append(arm_paths)
+	return per_arm_paths
 
 
 def _qualify_fields_generic(
@@ -568,14 +738,19 @@ def _build_require_expr(
 def _build_synthesis_artifact(
 	*,
 	cand: _Candidate,
-	field_paths: List[str],
+	field_paths: Optional[List[str]],
+	variant_arm_paths: Optional[List[List[str]]] = None,
 	type_table,
 	cs_key: TraitKey,
 	fn_id_ordinals: dict,
 	module_packages: Mapping[str, str],
 ) -> _SynthResult:
 	"""Build the synthesized HIR + FnSignature + ImplMeta for one
-	candidate."""
+	candidate.
+
+	Either `field_paths` (struct path) or `variant_arm_paths`
+	(Phase 4 variant path) is non-None — selected by
+	`cand.is_variant`."""
 	def_module = cand.def_module
 	target_type_id = cand.target_type_id
 	target_name = cand.struct_name
@@ -688,12 +863,21 @@ def _build_synthesis_artifact(
 		return_type=raw_ret,
 	)
 
-	# Synthesized HIR body.
-	hir = _build_const_share_hir(
-		cand=cand,
-		field_paths=field_paths,
-		def_module=def_module,
-	)
+	# Synthesized HIR body.  Variant candidates produce a `match
+	# self { ... }` body; struct candidates produce a single
+	# constructor call.
+	if cand.is_variant:
+		hir = _build_const_share_hir_variant(
+			cand=cand,
+			variant_arm_paths=variant_arm_paths or [],
+			def_module=def_module,
+		)
+	else:
+		hir = _build_const_share_hir(
+			cand=cand,
+			field_paths=field_paths or [],
+			def_module=def_module,
+		)
 
 	# ImplMeta for serialization + impl_index.
 	loc = cand.loc
@@ -835,6 +1019,125 @@ def _build_const_share_hir(
 	)
 
 	return_stmt = H.HReturn(value=ctor, loc=span)
+	return H.HBlock(statements=[return_stmt])
+
+
+def _build_const_share_hir_variant(
+	*,
+	cand: _Candidate,
+	variant_arm_paths: List[List[str]],
+	def_module: str,
+) -> H.HBlock:
+	"""Phase 4 — synthesized HIR body for a variant `const_share`.
+
+	Body shape (one arm per variant case):
+
+	    return match self {
+	        V::A => { V::A() },
+	        V::B(b0) => { V::B(b0.const_share()) },
+	        V::C(c0, c1) => { V::C(c0, c1) },        // copy_frozen path
+	        ...
+	    };
+
+	Per-arm details:
+	  - `arm.ctor` is the bare ctor name (e.g. "B", not "V::B");
+	  - `arm.ctor_base` carries the variant TypeExpr so the
+	    typechecker knows which variant the ctor name belongs to,
+	    matching what user-source `match` arms produce in stage1
+	    (`ast_to_hir.py:1184`);
+	  - `pattern_arg_form="positional"` and
+	    `binder_field_indices=range(N)` for payload arms (zero-
+	    payload arms use "paren" with empty binders);
+	  - `block` stays empty — the synthesized arm produces its
+	    value via `result`, the same shape stage1 normalizer
+	    expects for value-form match arms.
+
+	Reconstruction at the value site uses
+	`HCall(HQualifiedMember(VariantTypeExpr, ctor_name), args=[
+	per-binder transformation])` — the same form a user-written
+	`V::B(...)` constructor lowers to.
+	"""
+	loc = cand.loc
+	span = Span.from_loc(loc)
+
+	# Variant base type-expr — referenced by `ctor_base` on each
+	# arm AND by the result-side ctor `HQualifiedMember`.  Module-id
+	# is set so the typechecker can resolve the variant's owning
+	# module deterministically (no name shadowing across modules).
+	variant_te = parser_ast.TypeExpr(
+		name=cand.struct_name,
+		loc=loc,
+		module_id=def_module,
+	)
+
+	self_var = H.HVar(name="self", loc=span)
+	arms: List[H.HMatchArm] = []
+	for arm_data, arm_paths in zip(cand.variant_arms, variant_arm_paths):
+		# Stable binder names from the schema's payload field names.
+		# User source typically uses pattern-binder names that match
+		# field names; mirroring that keeps the synthesized HIR
+		# easy to read in any debug dump.
+		binders: List[str] = list(arm_data.field_names)
+		# Per-binder result-side value: `binder.const_share()` for
+		# ConstShare-path fields, plain `HVar(binder)` for
+		# Copy+Frozen-path fields (HIR→MIR's borrowed-Copy auto-
+		# copy machinery handles the duplication at lowering time,
+		# the same way `self.f` reads through a borrowed match
+		# arm in user source).
+		ctor_args: List[H.HExpr] = []
+		for binder_name, path in zip(binders, arm_paths):
+			binder_var: H.HExpr = H.HVar(name=binder_name, loc=span)
+			if path == "const_share":
+				ctor_args.append(H.HMethodCall(
+					receiver=binder_var,
+					method_name="const_share",
+					args=[],
+					origin="const_share_synth_variant_arm",
+					loc=span,
+				))
+			else:  # "copy_frozen"
+				ctor_args.append(binder_var)
+		# Reconstruct: `V::Ctor(arg0, arg1, ...)` — qualified member
+		# call mirrors user-source variant construction.
+		ctor_hir = H.HCall(
+			fn=H.HQualifiedMember(
+				base_type_expr=variant_te,
+				member=arm_data.name,
+				loc=span,
+			),
+			args=ctor_args,
+			kwargs=[],
+			origin="const_share_synth_variant_ctor",
+			loc=span,
+		)
+		# Pattern arg form: zero-payload arms use "paren" with empty
+		# binders to match `V::A()` ctor shape; payload arms use
+		# positional matching.
+		if not binders:
+			pattern_arg_form = "paren"
+			binder_field_indices: List[int] = []
+		else:
+			pattern_arg_form = "positional"
+			binder_field_indices = list(range(len(binders)))
+		arms.append(H.HMatchArm(
+			ctor=arm_data.name,
+			ctor_base=variant_te,
+			binders=binders,
+			binder_is_mutable=None,
+			binder_fields=None,
+			pattern_arg_form=pattern_arg_form,
+			binder_field_indices=binder_field_indices,
+			block=H.HBlock(statements=[]),
+			result=ctor_hir,
+			loc=span,
+		))
+
+	match_expr = H.HMatchExpr(
+		scrutinee=self_var,
+		arms=arms,
+		loc=span,
+	)
+	return_stmt = H.HReturn(value=match_expr, loc=span)
 	return H.HBlock(statements=[return_stmt])
 
 

@@ -3345,16 +3345,40 @@ class _FuncBuilder:
 				):
 					arg_val = self._map_value(arg)
 					have = self.value_types.get(arg_val)
+					autoloaded_from_storage = False
 					if have is not None and have != want_llty:
-						# Auto-load pointer-to-value for small scalar fields (Byte, Bool).
-						# This handles the case where MIR passes a VariantGetFieldAddr result
-						# (pointer) directly to ConstructVariant (which expects a value).
+						# Auto-load pointer-to-value for payload fields.
+						# This handles the case where MIR passes a
+						# `VariantGetFieldAddr` result (pointer) directly
+						# to `ConstructVariant`, e.g. a borrowed-match
+						# arm reconstructing the SAME variant case from
+						# a Copy-typed payload binder
+						# (`match v { V::N(n) => V::N(n) }` over `&V`).
+						#
+						# The load type MUST be the concrete payload
+						# storage LLVM type (`store_llty`), not the
+						# abstract `field_lltys[idx]` (which can be a
+						# tag like `drift.int` resolved later in IR
+						# emission — clang's IR parser rejects it
+						# verbatim with "expected type").
+						# `field_storage_lltys` is authoritative for
+						# the in-memory payload layout.
+						#
+						# Bool note: `field_storage_lltys[idx]` for a
+						# Bool field is `i8` (storage); the value form
+						# would be `i1`.  After autoloading at
+						# `store_llty=i8`, the value is already in
+						# storage form — `autoloaded_from_storage=True`
+						# tells the downstream store to skip the
+						# i1→i8 conversion.  Pinned by
+						# `lang/tests/codegen/test_variant_borrowed_match_construct_int_payload.py`.
 						if _is_ptr_type(have):
 							loaded = self._fresh("autoload")
-							self.lines.append(f"  {loaded} = load {want_llty}, ptr {arg_val}")
+							self.lines.append(f"  {loaded} = load {store_llty}, ptr {arg_val}")
 							self.value_map[arg] = loaded
-							self.value_types[loaded] = want_llty
+							self.value_types[loaded] = store_llty
 							arg_val = loaded
+							autoloaded_from_storage = True
 						else:
 							raise NotImplementedError(
 								f"LLVM codegen v1: ConstructVariant field {idx} type mismatch (have {have}, expected {want_llty})"
@@ -3363,7 +3387,11 @@ class _FuncBuilder:
 					self.lines.append(
 						f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, ptr {payload_struct_ptr}, i32 0, i32 {idx}"
 					)
-					if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
+					needs_bool_xform = (
+						self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty)
+						and not autoloaded_from_storage
+					)
+					if needs_bool_xform:
 						arg_val = self._bool_to_storage(arg_val)
 						self.lines.append(f"  store i8 {arg_val}, ptr {field_ptr}")
 					else:
