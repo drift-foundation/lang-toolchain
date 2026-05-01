@@ -92,3 +92,25 @@ implement<T> ConstArc<T> require T is shareable.Frozen {
 		return self.inner.get();
 	}
 }
+
+/// `ConstArc<T>` is the canonical first adopter of `ConstShare` —
+/// the capability "produce another owner of an immutable, shared
+/// value."  `const_share` returns a fresh `ConstArc<T>` over the
+/// same allocation, atomically incrementing the strong count via
+/// the inner `Arc<T>::clone` intrinsic.  The two owners observe
+/// the same `T` and decrement the count independently on drop.
+///
+/// In v1, this is the ONLY direct `ConstShare` impl that user
+/// code can compose against.  User struct / variant types acquire
+/// `ConstShare` only through the structural composition rule
+/// (every owned field is `ConstArc<U>` / another `ConstShare`
+/// type / `Copy + Frozen`), proven by the trait prover's
+/// structural shortcut at `lang/driftc/traits/solver.py`.
+/// User-written `implement ConstShare for X` is rejected outside
+/// trusted stdlib by the gate in
+/// `lang/driftc/traits/world.py` (mirror of the `Frozen` gate).
+implement<T> shareable.ConstShare for ConstArc<T> require T is shareable.Frozen {
+	pub fn const_share(self: &ConstArc<T>) nothrow -> ConstArc<T> {
+		return self.clone();
+	}
+}

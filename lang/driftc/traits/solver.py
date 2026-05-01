@@ -562,6 +562,18 @@ def prove_is(
 					status=ProofStatus.PROVED,
 					reasons=["frozen structural auto-derive (all fields Frozen)"],
 				)
+		# `ConstShare` deliberately does NOT have a Frozen-style
+		# structural-derive shortcut in this milestone.  ConstShare's
+		# trait method
+		#     fn const_share(self: &Self) nothrow -> Self
+		# requires a real method body at call sites; a proof-only
+		# shortcut would let `Holder: ConstShare` prove while
+		# `holder.const_share()` failed to resolve a method — an
+		# incomplete trait state.  Either both proof AND method-body
+		# synthesis land together (next milestone), or neither lands
+		# for user types.  Until then, the only types that prove
+		# ConstShare are those with stdlib-baked direct impls
+		# (currently just `core.ConstArc<T:Frozen>`).
 		cache[cache_key] = res
 		return res
 	finally:

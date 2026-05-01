@@ -578,9 +578,9 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	ir = ir_path.read_text(encoding="utf-8")
 
 	# Extract fat Arc struct hashes — type lines matching
-	# `%Struct_std_2Econcurrent_Arc_<hash> = type { ptr, ptr, ptr }`.
+	# `%Struct_std_2Ecore_2Earc_Arc_<hash> = type { ptr, ptr, ptr }`.
 	fat_re = re.compile(
-		r"^%Struct_std_2Econcurrent_Arc_([0-9a-f]+) = type \{ ptr, ptr, ptr \}$",
+		r"^%Struct_std_2Ecore_2Earc_Arc_([0-9a-f]+) = type \{ ptr, ptr, ptr \}$",
 		re.MULTILINE,
 	)
 	fat_hashes = set(fat_re.findall(ir))
@@ -593,7 +593,7 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	# defined.  Symbol name pattern is `_arc_fat_destroy_wrapper__<N>`
 	# where N is the fat Arc<I> inst TypeId (an integer).
 	wrapper_def_re = re.compile(
-		r'^define [^\n]*@"std\.concurrent::_arc_fat_destroy_wrapper__\d+"',
+		r'^define [^\n]*@"std\.core\.arc::_arc_fat_destroy_wrapper__\d+"',
 		re.MULTILINE,
 	)
 	wrapper_defs = wrapper_def_re.findall(ir)
@@ -605,18 +605,18 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	# And the wrapper must actually be called at some scope-drop site
 	# — otherwise the destructor is dead code and AppService::destroy
 	# would never run.
-	assert 'call void @"std.concurrent::_arc_fat_destroy_wrapper__' in ir, (
+	assert 'call void @"std.core.arc::_arc_fat_destroy_wrapper__' in ir, (
 		"no call to `_arc_fat_destroy_wrapper__<N>` in IR — scope-drop "
 		"of fat Arc<I> is not dispatching through the wrapper"
 	)
 
 	# `_arc_fat_drop_via_ctrl` must be defined AND called (the wrapper
 	# calls it).
-	assert '@"std.concurrent::_arc_fat_drop_via_ctrl"' in ir, (
+	assert '@"std.core.arc::_arc_fat_drop_via_ctrl"' in ir, (
 		"`_arc_fat_drop_via_ctrl` symbol missing from IR — the ctrl-only "
 		"runtime helper is not linked"
 	)
-	assert 'call void @"std.concurrent::_arc_fat_drop_via_ctrl"(' in ir, (
+	assert 'call void @"std.core.arc::_arc_fat_drop_via_ctrl"(' in ir, (
 		"`_arc_fat_drop_via_ctrl` is defined but never called — the "
 		"wrapper is not forwarding through the ctrl-only drop path"
 	)
@@ -628,13 +628,13 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	# rejects both in one module even with identical prototypes).
 	# And the call MUST use the `_llvm_fn_sym` spelling — same
 	# escaping as every other Drift symbol.
-	_bump_declared = 'declare void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr)' in ir
-	_bump_defined = 'define void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(' in ir
+	_bump_declared = 'declare void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr)' in ir
+	_bump_defined = 'define void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(' in ir
 	assert _bump_declared or _bump_defined, (
 		"`_arc_fat_bump_strong_via_ctrl` has neither a declare nor a "
 		"define in IR — the Stage 3 fat-Arc bump helper is not linked"
 	)
-	assert 'call void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr' in ir, (
+	assert 'call void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr' in ir, (
 		"`_arc_fat_bump_strong_via_ctrl` linked but never called — "
 		"`ArcAsInterface` lowering is not emitting the strong-bump call"
 	)
@@ -644,8 +644,8 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 	# struct as its parameter.  Pattern match the define line and
 	# pull the parameter struct name.
 	destroy_impl_re = re.compile(
-		r'^define [^\n]*@"std\.concurrent::_arc_destroy_impl__inst__'
-		r'[0-9a-f]+"\(%Struct_std_2Econcurrent_Arc_([0-9a-f]+) ',
+		r'^define [^\n]*@"std\.core\.arc::_arc_destroy_impl__inst__'
+		r'[0-9a-f]+"\(%Struct_std_2Ecore_2Earc_Arc_([0-9a-f]+) ',
 		re.MULTILINE,
 	)
 	destroy_impl_struct_hashes = set(destroy_impl_re.findall(ir))
@@ -733,7 +733,7 @@ fn main() nothrow -> Int {
 	# ── Pin (a)+(b): fat destructor wrapper synthesis for the nested
 	# fat `Arc<ContextResolver>` field of LoggerConfig / builder.
 	wrapper_def_re = re.compile(
-		r'^define [^\n]*@"std\.concurrent::_arc_fat_destroy_wrapper__\d+"',
+		r'^define [^\n]*@"std\.core\.arc::_arc_fat_destroy_wrapper__\d+"',
 		re.MULTILINE,
 	)
 	assert wrapper_def_re.search(ir), (
@@ -745,7 +745,7 @@ fn main() nothrow -> Int {
 		"includes types transitively reachable from `DropValue.ty` via "
 		"struct fields — not only the direct `DropValue.ty` set."
 	)
-	assert 'call void @"std.concurrent::_arc_fat_destroy_wrapper__' in ir, (
+	assert 'call void @"std.core.arc::_arc_fat_destroy_wrapper__' in ir, (
 		"no call to `_arc_fat_destroy_wrapper__<N>` in IR — the "
 		"wrapper is defined but nothing drops the fat `Arc<I>` that "
 		"holds the std.log builder/config resolver; the outer struct "
@@ -776,7 +776,7 @@ fn main() nothrow -> Int {
 	)
 	impl_body = impl_match.group(1)
 	assert re.search(
-		r'call void @"std\.concurrent::_arc_destroy_impl__inst__[0-9a-f]+"',
+		r'call void @"std\.core\.arc::_arc_destroy_impl__inst__[0-9a-f]+"',
 		impl_body,
 	), (
 		"no `_arc_destroy_impl__inst__<hash>` call in config_builder__impl "

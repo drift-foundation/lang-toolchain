@@ -779,6 +779,51 @@ def build_trait_world(
 					)
 				)
 				continue
+		# Sealed `ConstShare` trait: same trust gate as `Frozen`.
+		# In v1, the only direct stdlib-baked `ConstShare` impl is
+		# on `core.ConstArc<T>`.  User struct / variant types acquire
+		# `ConstShare` only via the structural composition rule
+		# (every owned field is `ConstArc<U>`, another `ConstShare`
+		# type, or `Copy + Frozen`), proven by the prover-level
+		# shortcut at `traits/solver.py`.  Allowing user-written
+		# `implement ConstShare for X` would let user code claim the
+		# immutable-shared capability for a type that silently
+		# mutates through `&Self`, breaking the soundness contract
+		# that `ConstArc` rests on.  Same path-vetted package gate
+		# as `Frozen` — see the comment block above for the
+		# bootstrap-trust / spoof-resistance reasoning.
+		if (
+			trait_key.module == "std.core.shareable"
+			and trait_key.name == "ConstShare"
+		):
+			host_is_stdlib_module = (
+				module_id is not None and module_id.startswith("std.")
+			)
+			host_owns_trait_pkg = (local_pkg == trait_key.package_id)
+			if not (host_is_stdlib_module and host_owns_trait_pkg):
+				world.diagnostics.append(
+					diag(
+						(
+							"cannot implement ConstShare for user types: "
+							"in v1, ConstShare is compiler-derived / "
+							"stdlib-backed.  The only stdlib-baked impl "
+							"is on `core.ConstArc<T>`; user struct / "
+							"variant types acquire ConstShare via the "
+							"structural composition rule (every owned "
+							"field must be `core.ConstArc<U>`, another "
+							"ConstShare type, or a `Copy + Frozen` "
+							"scalar).  Wrap mutable / unique state in "
+							"`core.ConstArc<U>` and the compiler will "
+							"derive ConstShare for your struct "
+							"automatically.  See "
+							"`std.core.shareable.ConstShare` for the "
+							"contract."
+						),
+						getattr(impl, "loc", None),
+						code="E_CONST_SHARE_USER_IMPL_REJECTED",
+					)
+				)
+				continue
 		if trait_key.module == module_id and trait_key.name in interface_names:
 			iface_target_key = type_key_from_expr(
 				impl.target,
