@@ -6207,7 +6207,7 @@ def resolve_call_expr(
 		# `arc(concrete).as_interface<type I>()`.
 		if sig_inst is not None and decl.fn_id is not None:
 			_fid = decl.fn_id
-			if (getattr(_fid, "module", None) == "std.concurrent"
+			if (getattr(_fid, "module", None) == "std.core.arc"
 					and getattr(_fid, "name", None) == "arc"):
 				_ret_ty = getattr(sig_inst, "result_type", None)
 				if _ret_ty is not None and ctx.type_table.is_arc_interface_view_instance(_ret_ty):

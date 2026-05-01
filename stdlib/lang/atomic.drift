@@ -1,6 +1,11 @@
 module lang.atomic;
 
-import std.core as core;
+// `lang.atomic` does NOT import `std.core` — that would close a cycle
+// once `std.core.arc` imports `lang.atomic` for refcount storage.
+// The `implement Copy for MemoryOrder { }` impl that previously
+// lived here moved to `std.core/core.drift` (next to the other
+// stdlib Copy impls) so the dependency goes one way:
+// `std.core` → `lang.atomic` (and not the other way around).
 
 export {
 	MemoryOrder,
@@ -58,9 +63,6 @@ pub variant MemoryOrder {
 	Release,
 	AcqRel,
 	SeqCst,
-}
-
-implement core.Copy for MemoryOrder {
 }
 
 pub struct AtomicBool {

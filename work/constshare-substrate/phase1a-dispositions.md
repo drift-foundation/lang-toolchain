@@ -83,7 +83,21 @@ ledger, codegen) must recognize.  Drift's existing pattern is
 "trait call goes through call lowering" — adding a new op for
 ConstShare would diverge from precedent without benefit.
 
-### 2. ConstArc placement — **`std.core.const_arc`** (NOT re-exported by `std.core`)
+### 2. ConstArc placement — **`std.core` direct, on top of `core.Arc`** (post-Arc-relocation)
+
+**Status (2026-05-01, supersedes earlier disposition):** Arc has
+been relocated from `std.concurrent` to `std.core` (ABI 11 — see
+the relocation disposition at the bottom of this document).
+ConstArc therefore lands on top of `core.Arc<T>` and lives in
+`std.core` directly without the `std.core.const_arc → std.concurrent
+→ std.core` cycle that the original placement was working around.
+The old "`std.core.const_arc` submodule + re-export shareable.*"
+arrangement is superseded; the ConstArc milestone resumes against
+this cleaner layering.
+
+---
+
+### 2. (historical) ConstArc placement — `std.core.const_arc` (NOT re-exported by `std.core`)
 
 > `stdlib/std/core/const_arc.drift`, module
 > `std.core.const_arc`.  Users import directly:

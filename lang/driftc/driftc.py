@@ -1650,16 +1650,19 @@ def _synthesize_fat_arc_destructor_wrappers(
 	no-op.
 	"""
 	# Resolve the Slice 1 non-generic drop primitive.  It lives under
-	# `std.concurrent` and is nothrow/free-function.  Check the main
-	# sig table first; fall back to external (package-consumer shape).
+	# `std.core.arc` (relocated from `std.concurrent` at ABI 11 — see
+	# the module-classification rule in
+	# `feedback_module_classification_by_contract.md`) and is
+	# nothrow/free-function.  Check the main sig table first; fall
+	# back to external (package-consumer shape).
 	fat_drop_fn_id: FunctionId | None = None
 	for fid, sig in signatures_by_id.items():
-		if fid.module == "std.concurrent" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
+		if fid.module == "std.core.arc" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
 			fat_drop_fn_id = fid
 			break
 	if fat_drop_fn_id is None:
 		for fid, sig in external_signatures_by_id.items():
-			if fid.module == "std.concurrent" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
+			if fid.module == "std.core.arc" and fid.name == "_arc_fat_drop_via_ctrl" and not bool(getattr(sig, "is_method", False)):
 				fat_drop_fn_id = fid
 				break
 
@@ -1738,13 +1741,13 @@ def _synthesize_fat_arc_destructor_wrappers(
 			continue
 		if fat_drop_fn_id is None:
 			raise AssertionError(
-				"fat Arc<I> synthesis requires `std.concurrent._arc_fat_drop_via_ctrl` "
+				"fat Arc<I> synthesis requires `std.core.arc._arc_fat_drop_via_ctrl` "
 				"(non-generic Slice 1 helper) but it was not found in the signature "
 				"tables — STAGE3_FAT_ARC_ACTIVE is on yet the stdlib primitive is "
 				"missing or mis-declared"
 			)
 		wrap_name = f"_arc_fat_destroy_wrapper__{arc_inst_id}"
-		wrap_fn_id = FunctionId(module="std.concurrent", name=wrap_name, ordinal=0)
+		wrap_fn_id = FunctionId(module="std.core.arc", name=wrap_name, ordinal=0)
 		# Invariant enforced by the scan skips: no thin
 		# `_arc_destroy_impl<I>` instantiation should have landed for
 		# this Arc<I> inst.  Detect a stray one early — the
@@ -1766,7 +1769,7 @@ def _synthesize_fat_arc_destructor_wrappers(
 				declared_can_throw=False,
 				param_names=["self"],
 				param_mutable=[True],
-				module="std.concurrent",
+				module="std.core.arc",
 				is_mir_bound=True,
 			)
 			signatures_by_id[wrap_fn_id] = wrap_sig
@@ -1796,10 +1799,10 @@ def _synthesize_fat_arc_destructor_wrappers(
 		# may live in the source MIR pool (single-module build where
 		# stdlib is compiled from source) OR only in
 		# `external_signatures_by_id` (package-consumer build where
-		# std.concurrent is a pre-linked dep).  Either way, the
-		# wrapper body calls it — downstream reachability/seeding must
-		# see it, and the initial guard above already verified it
-		# exists in one of those tables.
+		# std.core.arc is a pre-linked dep).  Either way, the wrapper
+		# body calls it — downstream reachability/seeding must see
+		# it, and the initial guard above already verified it exists
+		# in one of those tables.
 		reachable.add(fat_drop_fn_id)
 		destructor_fns[arc_inst_id] = wrap_fn_id
 		added += 1
@@ -4209,7 +4212,7 @@ def compile_stubbed_funcs(
 						continue
 					helper_fn_id: FunctionId | None = None
 					for fid, sig in signatures_by_id.items():
-						if fid.module == "std.concurrent" and fid.name == _helper_name and not bool(getattr(sig, "is_method", False)):
+						if fid.module == "std.core.arc" and fid.name == _helper_name and not bool(getattr(sig, "is_method", False)):
 							helper_fn_id = fid
 							break
 					if helper_fn_id is None:
@@ -4296,7 +4299,7 @@ def compile_stubbed_funcs(
 		if _helper_name is None:
 			return None
 		for _helper_fid, _helper_key in function_keys_by_fn_id.items():
-			if _helper_fid.module != "std.concurrent":
+			if _helper_fid.module != "std.core.arc":
 				continue
 			if _helper_fid.name != _helper_name:
 				continue

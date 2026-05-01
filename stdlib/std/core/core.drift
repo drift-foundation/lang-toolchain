@@ -3,7 +3,10 @@ module std.core;
 import std.core.hash as hash;
 import std.core.copy as copy_mod;
 import std.core.shareable as shareable;
+import std.core.arc as arc_mod;
+import std.core.const_arc as const_arc_mod;
 import std.mem as mem;
+import lang.atomic as atomic;
 
 use trait hash.Hasher;
 use trait Diagnostic;
@@ -57,7 +60,6 @@ export {
 	Cell,
 	cell,
 	void_value,
-	drop_value,
 	callback0,
 	callback1,
 	callback2,
@@ -80,6 +82,8 @@ export {
 
 export { std.core.copy.* };
 export { std.core.shareable.* };
+export { std.core.arc.* };
+export { std.core.const_arc.* };
 
 // Note: `Copy` is now defined in `stdlib/std/core/copy.drift`
 // (`module std.core.copy`) and re-exported by this module so that
@@ -485,13 +489,11 @@ pub interface Callback6<A, B, C, D, E, F2, R> {
 /// **See also:** `runtime.GlobalRegistry`, `runtime.TypeBox`.
 @intrinsic pub fn type_id<T>() nothrow -> Uint64;
 
-/// Drops `value`, invoking any `Destructible::destroy` impl.
-///
-/// Used by stdlib internals when a value needs to be released
-/// outside its natural scope (e.g. tombstone-write paths).  Most
-/// user code never needs this — normal scope exit triggers
-/// destruction automatically.
-@intrinsic pub fn drop_value<T>(value: T) nothrow -> Void;
+// `drop_value` moved to `std.core.arc` (declared next to `arc()` /
+// the Arc drop thunk that is its primary internal user, breaking
+// what would otherwise be a `std.core.arc → std.core` cycle).
+// Re-exported through `export { std.core.arc.* }` above so the
+// canonical user access path remains `core.drop_value<T>(value)`.
 
 implement copy_mod.Copy for Int {
 }
@@ -518,6 +520,13 @@ implement copy_mod.Copy for DiagnosticValue {
 }
 
 implement copy_mod.Copy for DiagnosticEntry {
+}
+
+// `MemoryOrder` is declared in `lang.atomic`; its `Copy` impl lives
+// here so `lang.atomic` does not need to import `std.core` (which
+// would close a cycle through `std.core → std.core.arc →
+// lang.atomic`).
+implement copy_mod.Copy for atomic.MemoryOrder {
 }
 
 // ── Frozen — conditional impls for stdlib generics ────────────────
@@ -652,5 +661,55 @@ implement String {
 	/// This is a cheap ARC refcount increment, not a byte-level copy.
 	pub fn clone(self: &String) nothrow -> String {
 		return *self;
+	}
+}
+
+
+// ── Arc — shared-ownership primitive ─────────────────────────────
+//
+// `Arc<T>` / `ArcHeader` / `ArcBox<T>` and the `arc<T>()` factory
+// live in `std.core.arc` (re-exported above).  The trait impls
+// below stay here because they reference `Borrow`, `BorrowMut`,
+// `Destructible`, and `shareable.Share` — all declared in
+// `std.core` / `std.core.shareable`.  Going the other way would
+// force `std.core.arc` to import `std.core` and close a cycle.
+// See the module-classification rule in
+// `feedback_module_classification_by_contract.md`.
+
+implement<T> Borrow<T> for arc_mod.Arc<T> {
+	pub fn borrow(self: &arc_mod.Arc<T>) nothrow -> &T {
+		return self.get();
+	}
+}
+
+implement<T> BorrowMut<T> for arc_mod.Arc<T> {
+	pub fn borrow_mut(self: &mut arc_mod.Arc<T>) nothrow -> &mut T {
+		return self.get_mut();
+	}
+}
+
+implement<T> Destructible for arc_mod.Arc<T> {
+	/// Compiler-owned intrinsic (ARC_DESTROY) — last-drop of
+	/// `Arc<T>`.  For concrete T the lowering redirects to
+	/// `_arc_destroy_impl<T>`; the interface-T branch is handled by
+	/// the compiler-synthesized fat-Arc destructor.
+	@intrinsic pub fn destroy(var self: arc_mod.Arc<T>) nothrow -> Void;
+}
+
+/// `Arc<T>` is the canonical shared-owner type.  `share` produces
+/// another owner of the same `ArcBox<T>` (the underlying allocation
+/// + refcount header) by atomically incrementing the strong count.
+/// Cheap — no heap allocation, no value copy.  Aliasing is real:
+/// every owner of an `Arc<T>` observes the same value through
+/// `arc.get()`.
+///
+/// Implementation delegates to `Arc.clone` (the existing
+/// `_arc_clone_impl` runtime intrinsic).  `Arc.clone` remains
+/// available for code that explicitly wants the named clone API;
+/// `share` is the language-level spelling for the shared-ownership
+/// capability.
+implement<T> shareable.Share for arc_mod.Arc<T> {
+	pub fn share(self: &arc_mod.Arc<T>) nothrow -> arc_mod.Arc<T> {
+		return self.clone();
 	}
 }

@@ -8535,14 +8535,14 @@ class HIRToMIR:
 			data_v = _extract_fat_field(recv_val, _FAT_DATA_IDX)
 			vtbl_v = _extract_fat_field(recv_val, _FAT_VTABLE_IDX)
 			bump_fn = self._find_free_fn_id(
-				"std.concurrent", "_arc_fat_bump_strong_via_ctrl"
+				"std.core.arc", "_arc_fat_bump_strong_via_ctrl"
 			)
 			if bump_fn is None:
 				raise AssertionError(
 					"Slice 1 helper `_arc_fat_bump_strong_via_ctrl` not "
 					"found in signatures — the fat ARC_CLONE path requires "
 					"the non-generic refcount-bump helper declared in "
-					"stdlib/std/concurrent/concurrent.drift"
+					"stdlib/std/core/arc.drift"
 				)
 			self.b.emit(M.Call(dest=None, fn_id=bump_fn, args=[ctrl_v], can_throw=False))
 			dest = self.b.new_temp()
@@ -8562,14 +8562,14 @@ class HIRToMIR:
 			# plus drop_thunk on last drop.
 			ctrl_v = _extract_fat_field(recv_val, _FAT_CTRL_IDX)
 			drop_fn = self._find_free_fn_id(
-				"std.concurrent", "_arc_fat_drop_via_ctrl"
+				"std.core.arc", "_arc_fat_drop_via_ctrl"
 			)
 			if drop_fn is None:
 				raise AssertionError(
 					"Slice 1 helper `_arc_fat_drop_via_ctrl` not found "
 					"in signatures — the fat ARC_DESTROY path requires "
 					"the non-generic atomic-drop helper declared in "
-					"stdlib/std/concurrent/concurrent.drift"
+					"stdlib/std/core/arc.drift"
 				)
 			self.b.emit(M.Call(dest=None, fn_id=drop_fn, args=[ctrl_v], can_throw=False))
 			return None

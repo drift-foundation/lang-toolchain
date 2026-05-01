@@ -81,7 +81,7 @@ class IntrinsicKind(Enum):
 	# Arc runtime boundary — centralized Arc ownership primitives
 	# ---------------------------------------------------------------
 	#
-	# Drift's `std.concurrent.Arc<T>` is a compiler-known ownership
+	# Drift's `std.core.arc.Arc<T>` is a compiler-known ownership
 	# primitive: its payload and control-block management cannot be
 	# expressed as ordinary Drift field access once `Arc<Interface>`
 	# has a representation distinct from `Arc<Concrete>` (see the

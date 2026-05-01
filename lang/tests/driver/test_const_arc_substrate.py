@@ -324,6 +324,44 @@ fn main() nothrow -> Int {
 	)
 
 
+# ── Canonical user surface — `core.const_arc` via std.core ───────
+
+
+def test_const_arc_via_root_std_core(tmp_path, capsys):
+	"""The canonical user-facing path is `import std.core as core;
+	core.const_arc<type T>(...)` — `std.core` re-exports
+	`std.core.const_arc.*`, so the submodule's `ConstArc` type and
+	`const_arc()` constructor surface directly under the `core.`
+	prefix.
+
+	If this fails, the `export { std.core.const_arc.* }` line in
+	`stdlib/std/core/core.drift` regressed."""
+	src = tmp_path / "main.drift"
+	src.write_text("""\
+module main;
+
+import std.core as core;
+
+fn main() nothrow -> Int {
+\tval a = core.const_arc<type Int>(42);
+\tval b = a.clone();
+\tval h: core.ConstArc<Int> = a.clone();
+\tval v: Int = *b.get();
+\treturn v + *h.get();
+}
+""", encoding="utf-8")
+	rc = driftc_main(["--stdlib-root", "stdlib", "--test-build-only", str(src), "--json"])
+	out = capsys.readouterr().out
+	payload = json.loads(out) if out.strip() else {}
+	errs = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	assert rc == 0, (
+		"`core.const_arc<T>(...)` and `core.ConstArc<T>` MUST work "
+		"with only `import std.core as core` (no submodule import).  "
+		f"Diagnostics:\n"
+		+ "\n".join(f"  {e.get('code')}: {e.get('message','')[:200]}" for e in errs)
+	)
+
+
 # ── Negative — read-only seal (no &mut method) ───────────────────
 
 

@@ -1210,7 +1210,7 @@ class TypeTable:
 	def is_arc_interface_view(self, schema: "StructSchema", type_args: list[TypeId]) -> bool:
 		if schema.name != "Arc":
 			return False
-		if schema.module_id != "std.concurrent":
+		if schema.module_id != "std.core.arc":
 			return False
 		if len(type_args) != 1:
 			return False

@@ -4783,14 +4783,26 @@ def _lower_parsed_program_to_hir(
 			# and trip the "must return a value on all paths" check.
 			impl_method_decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
 			# Arc runtime boundary: when the @intrinsic method lives on
-			# `std.concurrent.Arc<T>`, tag the decl with the
-			# corresponding IntrinsicKind so downstream code (checker
-			# call-target, MIR lowering) dispatches through the Arc
-			# intrinsic machinery rather than trying to emit a call to
-			# a bodyless stub.  Dispatch is keyed on the impl target
+			# `Arc<T>`, tag the decl with the corresponding
+			# IntrinsicKind so downstream code (checker call-target,
+			# MIR lowering) dispatches through the Arc intrinsic
+			# machinery rather than trying to emit a call to a
+			# bodyless stub.  Dispatch is keyed on the impl target
 			# name + method name + declaration module — a narrow,
 			# centralized recognition point per the Stage 2 spec.
-			if impl_method_decl.is_intrinsic and module_id == "std.concurrent":
+			#
+			# Two recognized declaration modules:
+			#   - `std.core.arc` hosts the type's own intrinsic
+			#     methods (`clone`, `get`, `as_interface`) inside an
+			#     `implement<T> Arc<T>` block.
+			#   - `std.core` hosts the `Destructible` impl for
+			#     `Arc<T>` (next to where `Destructible` is declared,
+			#     so `std.core.arc` does not need to import
+			#     `std.core` and close a cycle).
+			# The Arc relocation moved these from `std.concurrent`
+			# to `std.core` / `std.core.arc` at ABI 11 (their
+			# semantic contract is shared ownership, not concurrency).
+			if impl_method_decl.is_intrinsic and module_id in ("std.core", "std.core.arc"):
 				_target_name = getattr(getattr(impl, "target", None), "name", None)
 				if _target_name == "Arc":
 					_meth_name = fn.name

@@ -6,28 +6,21 @@ export {
 	const_arc
 };
 
-// Re-export `std.core.shareable.*` so that user code which writes
-// only `import std.core.const_arc as ca` gets the `Frozen` trait
-// AND its primitive impls in scope automatically — without that,
-// `ca.const_arc<type Int>(42)` would fail with
-// `E_REQUIREMENT_NOT_SATISFIED` because the prover would not see
-// the `implement Frozen for Int` impl.
-//
-// Re-export is one-way (this module sees shareable), so it does not
-// create a cycle.  This is the same pattern `std.core` uses to
-// re-export `shareable.*` and `copy.*`.  See the visibility BFS in
-// `lang/driftc/driftc.py` (~line 10063) which walks
-// `_collect_reexport_targets` to expand the visible-modules set
-// for type-checking.
+// The canonical user surface is `import std.core as core; core.ConstArc<T>` —
+// `std.core` re-exports `std.core.const_arc.*`.  Direct
+// `import std.core.const_arc as ca` also works for callers that
+// want submodule-only access; the `export { std.core.shareable.* }`
+// below keeps that direct-import path self-sufficient (so the
+// `Frozen` trait + primitive impls are visible without an extra
+// `import std.core` line).
 export { std.core.shareable.* };
 
-import std.core as core;
 import std.core.shareable as shareable;
-import std.concurrent as conc;
+import std.core.arc as arc_mod;
 
 /// Reference-counted owner of an immutable value.
 ///
-/// `ConstArc<T>` is the read-only counterpart of `conc.Arc<T>`.  The
+/// `ConstArc<T>` is the read-only counterpart of `core.Arc<T>`.  The
 /// payload `T` must satisfy `Frozen` — i.e. the value's `&T` API is
 /// guaranteed not to expose mutation or aliasing-observable state.
 /// That bound is what lets multiple owners share the same allocation
@@ -54,17 +47,18 @@ import std.concurrent as conc;
 ///   - no fat `ConstArc<Interface>` view — concrete `T` only this
 ///     round (parallel to early-stage `Arc<T>`).
 ///
-/// **Implementation strategy.**  `ConstArc<T>` is a thin wrapper over
-/// `conc.Arc<T>` rather than a parallel refcount machinery.  All
-/// retain / release / drop is delegated to `Arc<T>`'s existing
+/// **Implementation strategy.**  `ConstArc<T>` is a thin wrapper
+/// over `core.Arc<T>` rather than a parallel refcount machinery.
+/// All retain / release / drop is delegated to `Arc<T>`'s existing
 /// compiler-owned intrinsics (`ARC_CLONE`, `ARC_GET`, `ARC_DESTROY`)
-/// via field access; the only new compile-time surface is the
+/// via the inner field; the only new compile-time surface is the
 /// `Frozen` trait bound that gates construction.  No new runtime
-/// helpers, no IR shape change, no ABI bump.
+/// helpers, no IR shape change, no ABI bump (beyond the Arc
+/// relocation itself at ABI 11).
 ///
-/// **See also:** `std.core.shareable.Frozen`, `std.concurrent.Arc`.
+/// **See also:** `std.core.shareable.Frozen`, `std.core.Arc`.
 pub struct ConstArc<T> require T is shareable.Frozen {
-	inner: conc.Arc<T>
+	inner: arc_mod.Arc<T>
 }
 
 /// Constructs a fresh `ConstArc<T>` owning `value` with reference
@@ -82,7 +76,7 @@ pub struct ConstArc<T> require T is shareable.Frozen {
 /// **See also:** `ConstArc.clone`, `ConstArc.get`.
 pub fn const_arc<T>(var value: T) nothrow -> ConstArc<T>
 		require T is shareable.Frozen {
-	return ConstArc<type T>(inner = conc.arc<type T>(move value));
+	return ConstArc<type T>(inner = arc_mod.arc<type T>(move value));
 }
 
 implement<T> ConstArc<T> require T is shareable.Frozen {

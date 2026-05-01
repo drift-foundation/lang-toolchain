@@ -132,7 +132,9 @@ pub trait ConstShare {
 /// implements one, the other, both (rare and meaningful), or
 /// neither.
 ///
-/// **First adopter:** `Arc<T>` (in `std.concurrent`).
+/// **First adopter:** `Arc<T>` (in `std.core` — relocated from
+/// `std.concurrent` at ABI 11; `std.concurrent` keeps a source-compat
+/// re-export for `conc.Arc<T>` / `conc.arc()` callers).
 ///
 /// **String stays on `copy`, not `share`.**  Even though `String`
 /// is implemented with shared backing under the hood, its

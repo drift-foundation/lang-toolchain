@@ -29,14 +29,12 @@ export {
 	ExecutorPolicy,
 	ExecutorPolicyBuilder,
 	Executor,
-	Arc,
 	Mutex,
 	MutexGuard,
 	VirtualThread,
 	Future,
 	FutureGroup,
 	Scope,
-	arc,
 	mutex,
 	lock,
 	mutex_guard_get_mut,
@@ -59,6 +57,28 @@ export {
 	ProcessSignal,
 	await_signal
 };
+
+// Source compatibility for `Arc<T>` / `arc()`.  These moved to
+// `std.core` — their semantic contract is shared ownership, not
+// concurrency (atomic refcounts is implementation, not contract).
+// User code that imports `std.concurrent as conc` and writes
+// `conc.Arc<T>` / `conc.arc(value)` continues to compile against
+// the same type identity (`std.core.arc.Arc<T>`).  See ABI 11
+// history entry for the relocation.
+//
+// `Arc` / `arc()` come through the submodule re-export below.
+// `arc()` lives directly in `std.core.arc` (alongside `Arc<T>`) so
+// the wildcard re-export covers it without a trampoline — and so
+// `core.arc(...)` in user code disambiguates cleanly between the
+// function and the submodule (the function wins because the
+// wildcard pulls it into `std.core`'s symbol table).
+//
+// No matching `import std.core.arc as ...` line is needed for this
+// re-export to resolve: the export-path is module-qualified, so
+// the parser walks it directly.  The `ArcHeader` / `ArcBox` types
+// are not in `std.core.arc`'s export list — they are
+// allocation-layout internals and never were public API.
+export { std.core.arc.* };
 
 /// Span of time used by timeouts, sleeps, and join deadlines, measured
 /// in milliseconds.
@@ -336,153 +356,14 @@ pub struct FutureGroup<T> {
 	items: Array<Future<T>>
 }
 
-/// Fixed-layout control header prefix of every `ArcBox<T>` allocation.
-///
-/// The header's size and field offsets are constant regardless of `T`
-/// so that a fat `Arc<Interface>` view (introduced in Phase 2) can
-/// reach `strong` via a fixed offset from the allocation base without
-/// knowing the concrete `T`.
-///
-/// Fields:
-/// - `strong` — atomic strong-reference count; zero triggers destruction.
-/// - `weak`   — atomic weak-reference count; reserved, currently always 0.
-///              Leaving the slot present now avoids an ABI break when
-///              weak `Arc`s land in a later phase.
-/// - `drop_thunk` — raw erased function pointer
-///              (`Fn(mem.Ptr<Byte>) nothrow -> Void`) that runs `T`'s
-///              destructor on the value and deallocates the ArcBox.
-///              Captured at `arc<T>(value)` construction time from the
-///              per-`T`-monomorphized `_arc_drop_thunk_for<T>` symbol;
-///              invoked on last drop from any view (concrete or
-///              interface), so destruction never needs to recover `T`
-///              from the Arc handle.
-pub struct ArcHeader {
-	strong: atomic.AtomicInt,
-	weak: atomic.AtomicInt,
-	drop_thunk: Fn(mem.Ptr<Byte>) nothrow -> Void
-}
+// `ArcHeader` / `ArcBox<T>` / `Arc<T>` and the per-`T` drop thunk
+// moved to `std.core.arc` (re-exported above).  See ABI 11 history
+// entry for the rationale (semantic contract is shared ownership,
+// not concurrency).
 
-/// Reference-counted heap allocation backing an `Arc<T>`.
-///
-/// Internal layout — not normally constructed directly by user code.
-/// The `header` prefix has a constant size for every `T`; `value` lives
-/// at offset `sizeof(ArcHeader)`.  That invariant is what makes fat
-/// `Arc<Interface>` views possible without a second allocation.
-pub struct ArcBox<T> {
-	header: ArcHeader,
-	value: T
-}
-
-/// Per-`T` destroy-and-dealloc thunk. Monomorphized once per `T` the
-/// compiler sees in an `arc<T>(value)` call; the resulting function
-/// symbol's address is captured into `ArcHeader.drop_thunk`.
-///
-/// Invoked on last drop (from any view) with `ctrl` = allocation base
-/// pointer (the same address stored inside `Arc<T>.buf`).  Reads the
-/// complete `ArcBox<T>` back out, runs `Destructible::destroy` on the
-/// `value` via `drop_value`, and frees the allocation.
-fn _arc_drop_thunk_for<T>(ctrl: mem.Ptr<Byte>) nothrow -> Void {
-	unsafe {
-		var buf = mem.rawbuffer_from_parts<type ArcBox<T>>(ctrl, 1);
-		var inner = mem.read<type ArcBox<T>>(&mut buf, 0);
-		core.drop_value<type ArcBox<T>>(inner);
-		mem.dealloc<type ArcBox<T>>(buf);
-	}
-	return;
-}
-
-// ---------------------------------------------------------------------
-// Stage 3 fat-Arc primitives (DORMANT in slice 1)
-// ---------------------------------------------------------------------
-//
-// `Arc<I>` where I is an interface uses a fat `{ctrl, data, vtable}`
-// layout (all `mem.Ptr<Byte>`).  I is irrelevant at refcount and
-// destroy time — drop runs through the `drop_thunk` captured at
-// `arc<T=concrete>(value)` construction, and the strong count lives at
-// offset 0 of `ArcHeader` (which is at offset 0 of `ArcBox<T>`,
-// addressed by `ctrl`).  The two helpers below encapsulate that
-// `ctrl`-only view: one atomic-bumps the strong count (called by
-// `.clone()` on Arc<I> and by `.as_interface<I>()` when minting a
-// fresh fat handle), one atomic-decrements and runs `drop_thunk` on
-// last drop (called at scope exit on Arc<I>).
-//
-// These are non-generic — a single symbol serves every `Arc<I>`
-// instance — matching the design directive that I is erased at
-// refcount time.  Live as of ABI 10: `ARC_AS_INTERFACE` lowering
-// wires the bump helper, and the compiler-synthesized per-I fat
-// destructor wrapper wires the drop helper.
-//
-// `ctrl` contract: points at the base of an `ArcBox<T>` allocation.
-// `ArcBox<T>` layout is `{ header: ArcHeader, value: T }` with
-// `header.strong` at offset 0.  Both helpers treat the first
-// `sizeof(ArcHeader)` bytes as an `ArcHeader`.
-
-/// Atomic strong-count bump for fat `Arc<Interface>` (ABI 10).
-///
-/// Reinterprets the first `sizeof(ArcHeader)` bytes of the allocation
-/// at `ctrl` as `ArcHeader` and performs a relaxed atomic fetch-add
-/// (+1) on `header.strong`.  Matches the strong-bump side of
-/// `_arc_clone_impl<T>` but without needing T — a single symbol for
-/// every interface I.
-fn _arc_fat_bump_strong_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
-	unsafe {
-		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-		val _ = atomic.atomic_fetch_add_int(&slot.strong, 1, 0);
-	}
-	return;
-}
-
-/// Atomic strong-count decrement + drop for fat `Arc<Interface>` (ABI 10).
-///
-/// Null-check guards the moved-from Arc sentinel (matches
-/// `_arc_destroy_impl<T>`'s null guard).  Otherwise atomic-subtracts
-/// 1 from `header.strong`; when the previous value was 1, loads
-/// `header.drop_thunk` (the per-T destructor captured at
-/// `arc<T=concrete>(value)` time) and invokes it with `ctrl`.
-///
-/// The release/acquire ordering mirrors the thin path
-/// (`_arc_destroy_impl<T>`): release on the fetch-sub (so prior
-/// writes through THIS Arc<I> are visible to whichever handle wins
-/// last-drop), plus the acquire load before `drop_thunk` — the
-/// same sequence the thin helper emits.
-fn _arc_fat_drop_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
-	unsafe {
-		if mem.ptr_is_null<type Byte>(ctrl) {
-			return;
-		}
-	}
-	var prev = 0;
-	unsafe {
-		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-		prev = atomic.atomic_fetch_sub_int(&slot.strong, 1, 2);
-	}
-	if prev == 1 {
-		unsafe {
-			val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-			val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-			val _ = atomic.atomic_load_int(&slot.strong, 1);
-			val thunk = slot.drop_thunk;
-			thunk(ctrl);
-		}
-	}
-	return;
-}
-
-/// Atomically reference-counted shared owner of a `T`.
-///
-/// Construct via `arc(value)`.  Each `.clone()` increments the count;
-/// dropping an `Arc<T>` decrements and frees the storage when the
-/// last reference goes away.  Implements `core.Borrow<T>` and
-/// `core.BorrowMut<T>`, so it composes with code that takes
-/// `&T` / `&mut T` via UFCS resolution.
-///
-/// **See also:** `arc`, `Arc.clone`, `Arc.get`, `Arc.get_mut`,
-/// `Mutex`.
-pub struct Arc<T> {
-	buf: mem.RawBuffer<ArcBox<T>>
-}
+// Stage 3 fat-Arc primitives `_arc_fat_bump_strong_via_ctrl` /
+// `_arc_fat_drop_via_ctrl` and `Arc<T>` itself moved to
+// `std.core.arc` along with the rest of the Arc machinery.
 
 /// Mutual-exclusion lock around a `T`.
 ///
@@ -514,191 +395,12 @@ pub struct MutexGuard<T> {
 	value_ptr: mem.Ptr<T>
 }
 
-/// Constructs a fresh `Arc<T>` owning `value` with reference count 1.
-///
-/// **Parameters:**
-/// - `value` — the owned value to share.
-///
-/// **Returns:** an `Arc<T>` wrapping a new heap allocation.
-///
-/// **See also:** `Arc`, `Arc.clone`, `Arc.get`.
-///
-/// **Example:** `examples/runtime_registry/per_thread_slots.drift`.
-pub fn arc<T>(var value: T) nothrow -> Arc<T> {
-	unsafe {
-		var buf = mem.alloc_uninit<type ArcBox<T>>(1);
-		var header = ArcHeader(
-			strong = atomic_int(1),
-			weak = atomic_int(0),
-			drop_thunk = _arc_drop_thunk_for<type T>
-		);
-		var box = ArcBox<type T>(header = move header, value = move value);
-		mem.write<type ArcBox<T>>(&mut buf, 0, move box);
-		return Arc<type T>(buf = move buf);
-	}
-}
-
-// ---------------------------------------------------------------------
-// Arc runtime boundary — Stage 2 implementation bridge
-// ---------------------------------------------------------------------
-//
-// These three `_arc_*_impl<T>` helpers carry the concrete-T
-// implementation of Arc's core operations.  The operational dispatch
-// for Arc<T>.clone / .get / Destructible::destroy on concrete T is:
-//
-//     compiler intrinsic (ARC_CLONE | ARC_GET | ARC_DESTROY)
-//       → call-site redirect to the matching `_arc_*_impl<T>`
-//
-// THIS IS A STAGE 2 IMPLEMENTATION BRIDGE, not the final Arc
-// abstraction boundary.  Stage 3 lands the fat-Arc representation and
-// the compiler takes over both concrete and interface branches
-// directly.  At that point these helpers either (a) get inlined into
-// the compiler's concrete-T lowering and deleted, or (b) stay as a
-// narrow concrete-branch implementation detail with explicit
-// "subject to elimination" scoping.  They are NEVER a substitute for
-// real compiler-owned fat-T lowering.
-//
-// User code never names these helpers; calls to Arc.clone / .get /
-// Destructible::destroy route through the compiler's intrinsic
-// dispatch which picks the right branch.
-//
-// See `docs/history.md` 2026-04-18 (Fat `Arc<Interface>`, 0.28.0,
-// ABI 10) for the cutover details.
-
-fn _arc_clone_impl<T>(self: &Arc<T>) nothrow -> Arc<T> {
-	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-		val _ = atomic.atomic_fetch_add_int(&slot.header.strong, 1, 0);
-	}
-	val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-	val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
-	return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
-}
-
-fn _arc_get_impl<T>(self: &Arc<T>) nothrow -> &T {
-	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-		return &slot.value;
-	}
-}
-
-fn _arc_destroy_impl<T>(var self: Arc<T>) nothrow -> Void {
-	unsafe {
-		// Moved-from Arc values are represented as zero/raw-null buffers.
-		// Dropping that sentinel must be a no-op.
-		val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-		if mem.ptr_is_null<type Byte>(ptr) {
-			return;
-		}
-	}
-	var prev = 0;
-	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-		prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
-	}
-	if prev == 1 {
-		// Route last-drop through the stored erased drop_thunk.
-		unsafe {
-			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			val _ = atomic.atomic_load_int(&slot.header.strong, 1);
-			val thunk = slot.header.drop_thunk;
-			val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-			thunk(ctrl_ptr);
-		}
-	}
-}
-
-implement<T> Arc<T> {
-	/// Returns a new `Arc<T>` sharing the same underlying allocation.
-	///
-	/// Atomically increments the reference count.  Cheap — no heap
-	/// allocation, no value copy.
-	///
-	/// Compiler-owned intrinsic (ARC_CLONE).  For concrete T the
-	/// lowering redirects to `_arc_clone_impl<T>` — the Stage 2
-	/// implementation bridge.  Stage 3 adds an interface-T branch
-	/// that builds a fat-handle view sharing the same control block.
-	///
-	/// **See also:** `Arc.get`, `arc`, spec § 6.16.
-	@intrinsic pub fn clone(self: &Arc<T>) nothrow -> Arc<T>;
-
-	/// Returns a shared reference to the contained value.
-	///
-	/// Compiler-owned intrinsic (ARC_GET).  For concrete T the
-	/// lowering redirects to `_arc_get_impl<T>` — Stage 2
-	/// implementation bridge.  Stage 3 adds an interface-T branch.
-	///
-	/// **See also:** `Arc.get_mut`.
-	@intrinsic pub fn get(self: &Arc<T>) nothrow -> &T;
-
-	/// Returns a mutable reference to the contained value.
-	///
-	/// `&mut` access through `Arc<T>` is **not** synchronized.  When
-	/// the value is shared across virtual threads, wrap it in a
-	/// `Mutex<T>` (and store `Arc<Mutex<T>>`) to obtain a guarded
-	/// `&mut T`.
-	///
-	/// **See also:** `Arc.get`, `Mutex`.
-	pub fn get_mut(self: &mut Arc<T>) nothrow -> &mut T {
-		unsafe {
-			val slot = mem.ptr_at_mut<type ArcBox<T>>(&mut self.buf, 0);
-			return &mut slot.value;
-		}
-	}
-
-	/// Returns an `Arc<I>` interface view over the same allocation.
-	///
-	/// The new handle shares the control block / strong count with
-	/// `self` — calling `as_interface` does not allocate a second
-	/// `ArcBox` and does not move or copy the concrete payload.  It
-	/// atomically increments the strong count and returns a fat
-	/// handle carrying the `T`-as-`I` vtable over the same `ArcBox`.
-	///
-	/// Permitted only when `T` implements `I` (enforced via the
-	/// `require T is I` clause — a call on a `T` that does not
-	/// implement `I` is rejected at compile time with the standard
-	/// `E_REQUIREMENT_NOT_SATISFIED` diagnostic).
-	///
-	/// **See also:** `Arc`, `Arc.clone`, spec § 6.16.
-	@intrinsic pub fn as_interface<I>(self: &Arc<T>) nothrow -> Arc<I> require T is I;
-}
-
-implement<T> core.Borrow<T> for Arc<T> {
-	pub fn borrow(self: &Arc<T>) nothrow -> &T {
-		return self.get();
-	}
-}
-
-implement<T> core.BorrowMut<T> for Arc<T> {
-	pub fn borrow_mut(self: &mut Arc<T>) nothrow -> &mut T {
-		return self.get_mut();
-	}
-}
-
-implement<T> core.Destructible for Arc<T> {
-	/// Compiler-owned intrinsic (ARC_DESTROY) — last-drop of
-	/// `Arc<T>`.  For concrete T the lowering redirects to
-	/// `_arc_destroy_impl<T>`; Stage 3 adds an interface-T branch.
-	@intrinsic pub fn destroy(var self: Arc<T>) nothrow -> Void;
-}
-
-/// `Arc<T>` is the canonical shared-owner type.  `share` produces
-/// another owner of the same `ArcBox<T>` (the underlying allocation
-/// + refcount header) by atomically incrementing the strong count.
-/// Cheap — no heap allocation, no value copy.  Aliasing is real:
-/// every owner of an `Arc<T>` observes the same value through
-/// `arc.get()`.
-///
-/// Implementation delegates to `Arc.clone` (the existing
-/// `_arc_clone_impl` runtime intrinsic).  `Arc.clone` remains
-/// available for code that explicitly wants the named clone API;
-/// `share` is the language-level spelling for the shared-ownership
-/// capability.
-implement<T> shareable.Share for Arc<T> {
-	pub fn share(self: &Arc<T>) nothrow -> Arc<T> {
-		return self.clone();
-	}
-}
+// `arc<T>()` factory, the Stage 2 `_arc_*_impl<T>` helpers,
+// `implement<T> Arc<T> { clone / get / get_mut / as_interface }`,
+// and the Borrow/BorrowMut/Destructible/Share impls all moved to
+// `std.core` along with the rest of the Arc ownership surface.
+// `Arc<T>` and `arc()` remain accessible through `std.concurrent`
+// via the source-compat re-exports near the top of this file.
 
 /// Constructs a `Mutex<T>` wrapping `value`, initially unlocked.
 ///

@@ -1621,9 +1621,9 @@ class LlvmModuleBuilder:
 			# `defined_symbols: set[str]` tracker populated by each
 			# `self.funcs.append(...)` site, rather than string
 			# matching on the serialized IR.
-			_bump_define_prefix = 'define void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"'
+			_bump_define_prefix = 'define void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"'
 			if not any(_bump_define_prefix in _fn_text for _fn_text in self.funcs):
-				lines.append('declare void @"std.concurrent::_arc_fat_bump_strong_via_ctrl"(ptr)')
+				lines.append('declare void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr)')
 				lines.append("")
 		if self.debug_enabled and self.needs_dbg_intrinsics:
 			lines.extend(
@@ -7117,7 +7117,7 @@ class _FuncBuilder:
 		# module-render pass emits the matching `declare void
 		# @"..."(ptr)` so opaque-pointer verification has a prototype.
 		self.module.needs_arc_fat_bump_helper = True
-		bump_sym = _llvm_fn_sym("std.concurrent::_arc_fat_bump_strong_via_ctrl")
+		bump_sym = _llvm_fn_sym("std.core.arc::_arc_fat_bump_strong_via_ctrl")
 		self.lines.append(f"  call void {bump_sym}(ptr {ctrl})")
 
 		# Step 3: data = GEP ArcBox<T>, ptr ctrl, i32 0, i32 1.
