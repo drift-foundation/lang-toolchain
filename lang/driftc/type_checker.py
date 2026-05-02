@@ -144,6 +144,7 @@ from lang.driftc.traits.solver import (
 	ProofFailureReason,
 	ProofStatus,
 	prove_expr,
+	prove_is,
 	prove_obligation,
 )
 from lang.driftc.traits.world import type_key_from_expr
@@ -2740,12 +2741,57 @@ class TypeChecker:
 		# element itself doesn't need to be Copy, only the projected field does.
 		_suppress_copy_type_ids: set = set()
 
+		# Phase 5 implicit ConstShare duplication — node_ids of HVar/HPlaceExpr
+		# reads at value-position sites where the type is non-Copy but proves
+		# `shareable.ConstShare`.  Recorded by `_require_copy_value` so its
+		# parent slot (HLet.value, HReturn.value, HCall.args[i], etc.) can
+		# wrap with `HMethodCall(receiver=..., method_name="const_share")`
+		# and re-route through `resolve_method_call`.  The wrapped call runs
+		# through the same call-resolution path user-written `.const_share()`
+		# does, so call_info / callsite_id tables are populated identically
+		# and HIR→MIR sees a fully-resolved call.  See
+		# `lang/tests/driver/test_const_share_phase5_implicit_duplication.py`.
+		_implicit_const_share_marks: set[int] = set()
+
+		def _proves_const_share(ty_id: TypeId | None) -> bool:
+			"""Returns True iff `ty_id` proves `std.core.shareable.ConstShare`
+			in the current function's visible trait world."""
+			if ty_id is None:
+				return False
+			if linked is None:
+				return False
+			if global_trait_world is None and visible_trait_world is None:
+				return False
+			cs_key = None
+			search_world = visible_trait_world if visible_trait_world is not None else global_trait_world
+			if search_world is None:
+				return False
+			for k in getattr(search_world, "traits", {}).keys():
+				if k.module == "std.core.shareable" and k.name == "ConstShare":
+					cs_key = k
+					break
+			if cs_key is None:
+				return False
+			try:
+				ty_key = type_key_from_typeid(self.type_table, ty_id)
+			except Exception:
+				return False
+			env = TraitEnv(
+				default_module=current_module_name,
+				default_package=default_package,
+				module_packages=module_packages or {},
+				type_table=self.type_table,
+			)
+			res = prove_is(search_world, env, {}, ty_key, cs_key)
+			return res.status is ProofStatus.PROVED
+
 		def _require_copy_value(
 			ty_id: TypeId | None,
 			*,
 			span: Span,
 			name: str | None = None,
 			used_as_value: bool = True,
+			expr: object | None = None,
 		) -> None:
 			if not used_as_value:
 				return
@@ -2759,6 +2805,26 @@ class TypeChecker:
 				return
 			copy_status = self.type_table.copy_status(ty_id)
 			if copy_status is True:
+				return
+			# Phase 5 implicit ConstShare duplication.  Non-Copy values that
+			# prove `shareable.ConstShare` are accepted at value-position
+			# binding-reads instead of erroring "use move"; a parent slot
+			# that cares (HLet.value, HReturn.value, HCall.args[i], etc.)
+			# wraps the marked node into `HMethodCall(receiver=...,
+			# method_name="const_share")` and re-routes through the normal
+			# call resolver.  Trigger condition is purely type-based
+			# (no liveness): explicit `move` is the user's escape hatch
+			# (HMove sets used_as_value=False, so this hook never fires
+			# under move; same for borrows).  Marker uses node_id so
+			# the parent slot can match by identity, which survives
+			# Python attribute mutations elsewhere in typecheck.
+			if (
+				copy_status is False
+				and expr is not None
+				and getattr(expr, "node_id", None) is not None
+				and _proves_const_share(ty_id)
+			):
+				_implicit_const_share_marks.add(int(expr.node_id))
 				return
 			# G4: route binder name through user_facing_binding_name so
 			# the internal `__match_binder_<n>_<src>` form never leaks
@@ -5938,7 +6004,7 @@ class TypeChecker:
 							else:
 								bound = self.type_table.ensure_ref_mut(bound) if cap_kind == "ref_mut" else self.type_table.ensure_ref(bound)
 						binding_for_var[expr.node_id] = expr.binding_id
-						_require_copy_value(bound, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
+						_require_copy_value(bound, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value, expr=expr)
 						return record_expr(expr, bound)
 				# Module-scoped compile-time constants.
 				#
@@ -5971,7 +6037,7 @@ class TypeChecker:
 							ty_id = scope[expr.name]
 							# Local consts re-materialize at each use site; skip Copy check.
 							if expr.binding_id is None or int(expr.binding_id) not in local_const_binding_ids:
-								_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
+								_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value, expr=expr)
 							return record_expr(expr, ty_id)
 				# Function reference in value position (typed context preferred).
 				resolution = _resolve_function_reference_value(
@@ -10163,6 +10229,417 @@ class TypeChecker:
 				type_stmt(s)
 
 		type_block(body)
+
+		# Phase 5 implicit ConstShare duplication — post-typecheck rewrite.
+		#
+		# Walks the body and, at every expression slot the walker has
+		# explicit slot-level handling for (see slot list below), if
+		# the held expression is a bare `HVar` (or `HPlaceExpr` rooted
+		# at `HVar` with no projections) AND its node_id was recorded
+		# in `_implicit_const_share_marks` by `_require_copy_value`
+		# (i.e., the typechecker silently accepted a non-Copy
+		# ConstShare binding-read at value position) AND the parent
+		# isn't `HMove`/`HCopy`/`HBorrow`, swaps the slot with a real
+		# `HMethodCall(receiver=HVar, method_name="const_share")` and
+		# re-routes through `type_expr` (which calls
+		# `resolve_method_call`) so call_info / callsite_id /
+		# call_resolutions tables are populated identically to
+		# user-written `.const_share()`.  HIR→MIR sees a
+		# fully-resolved method call, balanced refcounts.
+		#
+		# Owned-position slots the walker WRAPS at (each holds the
+		# expression by-value; the walker installs the
+		# `const_share()` HCall here when conditions hold):
+		#   - HLet.value
+		#   - HReturn.value
+		#   - HAssign.value
+		#   - HCall.args[i] and HCall.kwargs[i].value
+		#   - HMethodCall.args[i] / HMethodCall.kwargs[i].value
+		#     (receiver is borrow-position, skipped)
+		#   - HInvoke.args[i] / HInvoke.kwargs[i].value
+		#   - HMatchArm.result (value-form match arm result)
+		#   - HResultOk.value (Result::Ok payload)
+		#   - HTernary.then_expr / HTernary.else_expr
+		#     (cond is bool, not wrapped)
+		#
+		# Slots the walker recurses INTO but never wraps:
+		#   - HExprStmt.expr — `expr;` is typechecked with
+		#     `used_as_value=False` so the typechecker doesn't mark
+		#     it; per the mark-gating model below the walker doesn't
+		#     wrap it either.  Borrow-check's existing implicit-move
+		#     handling continues to apply for non-ConstShare types.
+		#   - HMethodCall.receiver, HField.subject, HIndex.subject
+		#     and similar borrow-positions (auto-borrowed).
+		#   - HBorrow.subject (explicit `&` / `&mut`).
+		#   - HMove/HCopy subjects (explicit user escape hatches).
+		#
+		# Wrap installation is gated on suppression-mark presence
+		# (`_is_suppression_marked`).  The mark set is the single
+		# source of truth for "this is an owned-position binding-
+		# read of non-Copy ConstShare-provable type" and is
+		# populated by TWO sources:
+		#
+		#   1. `_require_copy_value` at typecheck time — for slots
+		#      typed with `used_as_value=True` (HLet.value,
+		#      HReturn.value, HAssign.value, HResultOk.value,
+		#      HTernary.then_expr/else_expr, HMatchArm.result, the
+		#      regular HVar binding-read paths in `type_expr`).
+		#
+		#   2. The walker's `_consider_implicit_cs_mark_at` at
+		#      typecheck-untyped owned-arg slots — for slots typed
+		#      with `used_as_value=False` because the call resolver
+		#      determines per-param ownedness later (HCall.args[i],
+		#      HMethodCall.args[i], HInvoke.args[i], and the
+		#      corresponding kwargs[i].value).  These would never
+		#      be marked by typecheck; the walker explicitly marks
+		#      them just before the gated wrap fires.
+		#
+		# A node lacking a mark is never wrapped — that prevents
+		# spurious `const_share()` calls at non-value-consumption
+		# sites (HExprStmt.expr discard, borrow-positions).
+		#
+		# Borrow positions and explicit `move`/`copy`/`borrow`
+		# wrappers are skipped — the user's escape hatch stays
+		# intact and reuse-after-`move` errors continue to fire
+		# from the borrow checker.
+		#
+		# Soundness discipline: any slot the walker doesn't enumerate
+		# above but which `_require_copy_value` does suppress will
+		# leave a leftover mark; the post-walk assertion converts
+		# that into a clear "coverage gap in the walker" error
+		# pointing at the offending HVar's name and span.  Add the
+		# slot here; do not silently accept unwrapped HIR.
+		def _implicit_cs_binding_type(slot: object) -> TypeId | None:
+			"""Type of the binding at the root of `slot`, if `slot` is a
+			bare HVar (no module-id, has binding_id) or HPlaceExpr-rooted-
+			at-HVar with no projections."""
+			if isinstance(slot, H.HVar):
+				bid = slot.binding_id
+				if bid is None:
+					return None
+				if getattr(slot, "module_id", None) is not None:
+					return None
+				return binding_types.get(int(bid))
+			if isinstance(slot, H.HPlaceExpr):
+				if getattr(slot, "projections", None):
+					return None
+				if isinstance(slot.base, H.HVar):
+					bid = slot.base.binding_id
+					if bid is None:
+						return None
+					if getattr(slot.base, "module_id", None) is not None:
+						return None
+					return binding_types.get(int(bid))
+			return None
+
+		def _is_suppression_marked(node: object) -> bool:
+			"""True iff `node`'s node_id is in
+			`_implicit_const_share_marks` — i.e., either
+			`_require_copy_value` suppressed a "use move" diagnostic
+			for this node at typecheck time (value-position binding-
+			read with non-Copy ConstShare-provable type), or the
+			walker's `_consider_implicit_cs_mark_at` populated the
+			mark for an owned-position slot the typechecker doesn't
+			Copy-check (HCall.args[i] etc.).  Wrap installation is
+			gated on this so non-value-consumption sites
+			(HExprStmt.expr, HBorrow.subject, etc.) — not enumerated
+			by the walker AND not suppressed by the typechecker —
+			are never rewritten.
+			"""
+			nid = getattr(node, "node_id", None)
+			if nid is None:
+				return False
+			return int(nid) in _implicit_const_share_marks
+
+		def _consume_implicit_cs_mark(node: object) -> None:
+			nid = getattr(node, "node_id", None)
+			if nid is not None:
+				_implicit_const_share_marks.discard(int(nid))
+
+		def _consider_implicit_cs_mark_at(slot: object) -> None:
+			"""Walker-side mark population for owned-position slots
+			the typechecker doesn't Copy-check at value position
+			(HCall/HMethodCall/HInvoke args, HKwArg.value typed with
+			`used_as_value=False`).  If `slot` is a binding-read of a
+			non-Copy ConstShare-provable type, add its node_id to
+			the suppression marks set so the gated wrap helpers
+			fire.  No-op if `slot` is not a binding-read or its type
+			isn't eligible — keeps non-ConstShare consumption
+			(borrow-check implicit move) untouched.
+			"""
+			if isinstance(slot, (H.HMove, H.HCopy, H.HBorrow)):
+				return
+			ty = _implicit_cs_binding_type(slot)
+			if ty is None:
+				return
+			td = self.type_table.get(ty)
+			if td.kind is TypeKind.TYPEVAR:
+				return
+			if self.type_table.copy_status(ty) is True:
+				return
+			if not _proves_const_share(ty):
+				return
+			nid = getattr(slot, "node_id", None)
+			if nid is not None:
+				_implicit_const_share_marks.add(int(nid))
+
+		def _wrap_owned_slot(parent: object, attr: str) -> bool:
+			cur = getattr(parent, attr, None)
+			if cur is None:
+				return False
+			# Mark-gated: only wrap nodes that were actually
+			# suppressed by `_require_copy_value`.  A node not in
+			# the marks set was typechecked in a non-value-consumption
+			# context and must not be rewritten.
+			if not _is_suppression_marked(cur):
+				return False
+			if isinstance(cur, (H.HMove, H.HCopy, H.HBorrow)):
+				return False
+			ty = _implicit_cs_binding_type(cur)
+			if ty is None:
+				return False
+			if self.type_table.copy_status(ty) is True:
+				return False
+			if not _proves_const_share(ty):
+				return False
+			wrap = H.HMethodCall(
+				receiver=cur,
+				method_name="const_share",
+				args=[],
+				kwargs=[],
+				origin="implicit_const_share",
+				loc=getattr(cur, "loc", Span()),
+			)
+			wrap.callsite_id = _alloc_callsite_id()
+			_assign_node_id(wrap)
+			setattr(parent, attr, wrap)
+			_consume_implicit_cs_mark(cur)
+			# Re-type the wrap so call_info gets registered.  Visiting
+			# under typed scope re-uses the function-local resolver
+			# context (linked_world, signatures_by_id, etc.).
+			type_expr(wrap)
+			return True
+
+		def _wrap_owned_list_slot(holder: list, idx: int) -> bool:
+			cur = holder[idx]
+			if cur is None:
+				return False
+			if not _is_suppression_marked(cur):
+				return False
+			if isinstance(cur, (H.HMove, H.HCopy, H.HBorrow)):
+				return False
+			ty = _implicit_cs_binding_type(cur)
+			if ty is None:
+				return False
+			if self.type_table.copy_status(ty) is True:
+				return False
+			if not _proves_const_share(ty):
+				return False
+			wrap = H.HMethodCall(
+				receiver=cur,
+				method_name="const_share",
+				args=[],
+				kwargs=[],
+				origin="implicit_const_share",
+				loc=getattr(cur, "loc", Span()),
+			)
+			wrap.callsite_id = _alloc_callsite_id()
+			_assign_node_id(wrap)
+			holder[idx] = wrap
+			_consume_implicit_cs_mark(cur)
+			type_expr(wrap)
+			return True
+
+		def _walk_implicit_cs(node: object) -> None:
+			if node is None:
+				return
+			# Statement-level slots.
+			if isinstance(node, H.HBlock):
+				for s in node.statements:
+					_walk_implicit_cs(s)
+				return
+			if isinstance(node, H.HLet):
+				_wrap_owned_slot(node, "value")
+				_walk_implicit_cs(node.value)
+				return
+			if isinstance(node, H.HReturn):
+				if node.value is not None:
+					_wrap_owned_slot(node, "value")
+					_walk_implicit_cs(node.value)
+				return
+			if isinstance(node, H.HExprStmt):
+				# `expr;` is typechecked with `used_as_value=False`
+				# (`type_checker.py:9978`), so `_require_copy_value`
+				# never suppresses for binding-reads in this slot.
+				# Per Phase 5 walker discipline, no suppression =>
+				# no wrap; recurse without wrapping the slot.
+				_walk_implicit_cs(node.expr)
+				return
+			if isinstance(node, H.HAssign):
+				_wrap_owned_slot(node, "value")
+				_walk_implicit_cs(node.value)
+				_walk_implicit_cs(node.target)
+				return
+			if isinstance(node, H.HIf):
+				_walk_implicit_cs(node.cond)
+				_walk_implicit_cs(node.then_block)
+				if getattr(node, "else_block", None) is not None:
+					_walk_implicit_cs(node.else_block)
+				return
+			if isinstance(node, H.HLoop):
+				_walk_implicit_cs(node.body)
+				return
+			# Expression-level slots.  HCall / HMethodCall / HInvoke
+			# args are typechecked with `used_as_value=False` (the
+			# call resolver determines per-param ownedness later, and
+			# the borrow checker does the implicit-move-in-consuming-
+			# position pass), so `_require_copy_value` doesn't fire
+			# at typecheck time.  We mark walker-side via
+			# `_consider_implicit_cs_mark_at` so the mark-gated wrap
+			# helpers fire — keeping the mark set as the single
+			# source of truth for "this is an owned-position
+			# binding-read of non-Copy ConstShare type".
+			if isinstance(node, H.HCall):
+				for i in range(len(node.args)):
+					_consider_implicit_cs_mark_at(node.args[i])
+					_wrap_owned_list_slot(node.args, i)
+					_walk_implicit_cs(node.args[i])
+				for kw in (node.kwargs or []):
+					_consider_implicit_cs_mark_at(kw.value)
+					_wrap_owned_slot(kw, "value")
+					_walk_implicit_cs(kw.value)
+				_walk_implicit_cs(node.fn)
+				return
+			if isinstance(node, H.HMethodCall):
+				# receiver is borrow-position (auto-borrowed); do not wrap.
+				_walk_implicit_cs(node.receiver)
+				for i in range(len(node.args)):
+					_consider_implicit_cs_mark_at(node.args[i])
+					_wrap_owned_list_slot(node.args, i)
+					_walk_implicit_cs(node.args[i])
+				for kw in (getattr(node, "kwargs", []) or []):
+					_consider_implicit_cs_mark_at(kw.value)
+					_wrap_owned_slot(kw, "value")
+					_walk_implicit_cs(kw.value)
+				return
+			if isinstance(node, H.HInvoke):
+				_walk_implicit_cs(node.callee)
+				for i in range(len(node.args)):
+					_consider_implicit_cs_mark_at(node.args[i])
+					_wrap_owned_list_slot(node.args, i)
+					_walk_implicit_cs(node.args[i])
+				for kw in (getattr(node, "kwargs", []) or []):
+					_consider_implicit_cs_mark_at(kw.value)
+					_wrap_owned_slot(kw, "value")
+					_walk_implicit_cs(kw.value)
+				return
+			if isinstance(node, H.HMatchExpr):
+				# Scrutinee is borrow-position (match takes &T or T owned;
+				# arm binders project payload). Skip wrap on scrutinee.
+				_walk_implicit_cs(node.scrutinee)
+				for arm in node.arms:
+					_walk_implicit_cs(arm.block)
+					if arm.result is not None:
+						_wrap_owned_slot(arm, "result")
+						_walk_implicit_cs(arm.result)
+				return
+			if isinstance(node, H.HResultOk):
+				# Ok(value) — value position is owned (Result wraps its
+				# payload by-value).  type_expr(`expr.value`) at
+				# `type_checker.py:9400` runs with default
+				# `used_as_value=True`, so `_require_copy_value`
+				# suppression fires for ConstShare binding-reads;
+				# the wrap install must happen here.
+				_wrap_owned_slot(node, "value")
+				_walk_implicit_cs(node.value)
+				return
+			if isinstance(node, H.HTernary):
+				# `cond ? a : b` — both branches yield the ternary's
+				# result value; `then_expr` and `else_expr` are owned
+				# value positions and `_require_copy_value` will
+				# suppress non-Copy ConstShare binding-reads in either
+				# branch (HTernary is typed at
+				# `type_checker.py:9262` with default
+				# `used_as_value=True` for both branches).  Wrap each
+				# branch independently — only one branch executes at
+				# runtime, but both must produce a fresh-share owner
+				# so the result is a valid owned value regardless of
+				# which branch was taken.  `cond` is `Bool` and
+				# never carries a ConstShare type, so it's recursed
+				# without slot-level wrap.
+				_walk_implicit_cs(node.cond)
+				_wrap_owned_slot(node, "then_expr")
+				_walk_implicit_cs(node.then_expr)
+				_wrap_owned_slot(node, "else_expr")
+				_walk_implicit_cs(node.else_expr)
+				return
+			# Generic dataclass walk for nodes we don't need slot-level
+			# control over — recurse into HExpr/HBlock/HStmt/list children.
+			# This recursion does NOT wrap; if a node not handled above
+			# contains an owned-position binding-read of a ConstShare
+			# type, `_require_copy_value` will have suppressed the
+			# error and the post-walk discipline check below will
+			# detect the gap and raise an AssertionError so the
+			# missing slot is fixed instead of silently producing
+			# unsound HIR.
+			if is_dataclass(node):
+				for f in fields(node):
+					val = getattr(node, f.name, None)
+					if isinstance(val, (H.HNode, list)):
+						_walk_implicit_cs(val)
+				return
+			if isinstance(node, list):
+				for item in node:
+					_walk_implicit_cs(item)
+				return
+
+		_walk_implicit_cs(body)
+
+		# Discipline check — every binding-read whose
+		# `_require_copy_value` suppression accepted a non-Copy
+		# ConstShare type at value position MUST have been wrapped
+		# by the walker into a real `const_share()` call (mark gets
+		# discarded by `_consume_implicit_cs_mark`).  Any leftover
+		# mark means a parent slot is not in the walker's coverage
+		# — `_require_copy_value` accepted the read but no
+		# lowering-visible HCall was inserted.  That's a SOUNDNESS
+		# bug: the borrow checker / HIR→MIR sees a bare HVar at
+		# what should be a duplication site.  Fail loudly during
+		# typecheck rather than ship unsound HIR.
+		if _implicit_const_share_marks:
+			# Locate one of the offending nodes for a clearer
+			# diagnostic.  Walk the body again, find a HVar with
+			# matching node_id, and report its name + span.
+			leftover_id = next(iter(_implicit_const_share_marks))
+			leftover_info: list[str] = []
+			def _find_leftover(node: object) -> bool:
+				if isinstance(node, H.HVar) and getattr(node, "node_id", None) == leftover_id:
+					leftover_info.append(
+						f"name={node.name!r} span={getattr(node, 'loc', None)}"
+					)
+					return True
+				if is_dataclass(node):
+					for f in fields(node):
+						val = getattr(node, f.name, None)
+						if isinstance(val, (H.HNode, list)):
+							if _find_leftover(val):
+								return True
+				if isinstance(node, list):
+					for item in node:
+						if _find_leftover(item):
+							return True
+				return False
+			_find_leftover(body)
+			info_str = leftover_info[0] if leftover_info else f"node_id={leftover_id}"
+			raise AssertionError(
+				"implicit ConstShare wrap discipline violated: "
+				f"_require_copy_value suppressed a non-Copy ConstShare "
+				f"binding-read at value position but `_walk_implicit_cs` "
+				f"did not install a wrap.  This is a coverage gap in the "
+				f"walker — add slot-level handling for the parent HIR "
+				f"container holding this read.  Leftover mark: "
+				f"{info_str}; total leftover marks: {len(_implicit_const_share_marks)}."
+			)
 
 		def _apply_fnptr_consts(obj: object) -> object:
 			if isinstance(obj, H.HNode):

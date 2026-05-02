@@ -2608,7 +2608,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						mapped.append(m)
 				visible_modules_for_methods = tuple(mapped)
 			visible_modules_set = set(visible_modules_for_methods)
-			ignore_visibility = getattr(expr, "origin", None) in ("for_iter", "for_next", "wrapper_call")
+			ignore_visibility = getattr(expr, "origin", None) in ("for_iter", "for_next", "wrapper_call", "implicit_const_share")
 			def _collect_method_candidates(base_tid: TypeId) -> list[CallableDecl]:
 				if ctx.callable_registry is None:
 					return []

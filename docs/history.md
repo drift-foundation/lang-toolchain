@@ -1,6 +1,174 @@
 # Drift development history
 
 ## 2026-05-01
+- **ConstShare implicit duplication at value-flow sites
+  (release 0.31.47, ABI unchanged, still 11).**  Removes the
+  `.const_share()` ceremony from user code: any non-explicit-move
+  consumption of a `T: ConstShare` binding now auto-synthesizes
+  a real `const_share()` call through the same call-resolution
+  path user-written method calls take.
+
+  **What's new (user-visible).**
+
+      val a = core.const_arc<type String>("hi");
+      val b = a;             // implicit a.const_share()
+      val n = takes_owned(a); // implicit at call boundary
+      return a;               // implicit at owned-return
+
+      var x = core.const_arc<type String>("hi");
+      val n = takes_owned(move x);  // explicit move; x is consumed
+      val r = x.get();              // ERROR: moved (unchanged)
+
+      val arr: Array<Int> = [1, 2, 3];
+      val arr2 = arr;     // ERROR: 'cannot copy ... use move arr'
+                          // (non-ConstShare non-Copy preserves
+                          // existing diagnostic)
+
+  Applies uniformly to:
+    - `core.ConstArc<T: Frozen>`,
+    - Phase 1 synthesized ConstShare structs,
+    - Phase 4 synthesized ConstShare variants,
+    - Phase 3 generic structs that prove ConstShare,
+    - package-imported synthesized ConstShare types
+      (consumer-side walker proves ConstShare against the
+      consumer's loaded trait world and dispatches to the
+      producer's synthesized method body).
+
+  **Semantics, not optimization.**  Trigger condition is purely
+  type-based — non-Copy AND proves `shareable.ConstShare` at the
+  binding-read site.  No liveness / last-use analysis in v1; if
+  the user wants an actual move, they write `move a` (the
+  escape hatch).  Extra retain/release is acceptable for v1.
+  This gives stable value-like semantics: behavior does not
+  change when a later use is added or removed, and avoids a
+  fragile first pass at CFG/live-after analysis.
+
+  **Implementation.**  Two-part — typecheck-side suppression
+  + walker-side mark population, both feeding a single
+  `_implicit_const_share_marks` set that gates wrap installation.
+
+  1. `_require_copy_value` (`type_checker.py:2762`) tolerates
+     non-Copy binding-reads at value-position when the type
+     proves `shareable.ConstShare`, suppressing the
+     `cannot copy ... use move` diagnostic AND adding the
+     node's id to `_implicit_const_share_marks`.  Trigger uses
+     full `prove_is` against the function's visible trait world
+     via a new `_proves_const_share` helper.
+
+  2. Post-typecheck walker `_walk_implicit_cs` (immediately
+     after `type_block(body)` in `check_function`) visits owned-
+     position expression slots in the body.  The slots the
+     walker WRAPS at — i.e., where it installs a real
+     `HMethodCall(receiver=..., method_name="const_share")` if
+     the gated mark check passes:
+
+       - `HLet.value`
+       - `HReturn.value`
+       - `HAssign.value`
+       - `HCall.args[i]` and `HCall.kwargs[i].value`
+       - `HMethodCall.args[i]` and `HMethodCall.kwargs[i].value`
+         (receiver is borrow-position, skipped)
+       - `HInvoke.args[i]` and `HInvoke.kwargs[i].value`
+       - `HMatchArm.result` (value-form match arm result)
+       - `HResultOk.value` (Result::Ok payload)
+       - `HTernary.then_expr` and `HTernary.else_expr`
+         (cond is bool, recursed but not wrapped)
+
+     Slots the walker recurses INTO but never wraps:
+
+       - `HExprStmt.expr` (`expr;` discard — typed with
+         `used_as_value=False`, no mark, no wrap; borrow-check's
+         existing implicit-move semantics still apply for
+         non-ConstShare types).
+       - `HMethodCall.receiver`, `HField.subject`,
+         `HIndex.subject` (borrow-positions, auto-borrowed).
+       - `HBorrow.subject`, `HMove`/`HCopy` subjects (explicit
+         user escape hatches).
+
+     For each WRAP slot holding a bare `HVar` (or `HPlaceExpr`
+     rooted at `HVar` with no projections) whose node_id is in
+     `_implicit_const_share_marks` AND whose parent isn't
+     `HMove`/`HCopy`/`HBorrow`, the walker swaps the slot with a
+     real `HMethodCall(receiver=..., method_name="const_share",
+     origin="implicit_const_share")`, drops the mark, and
+     re-runs `type_expr` on the wrap so call_info /
+     callsite_id / call_resolutions are populated identically
+     to user-written `.const_share()`.  HIR→MIR sees a
+     fully-resolved method call.
+
+     **Mark population — two sources.**  The mark set is the
+     single source of truth for "this is an owned-position
+     binding-read of non-Copy ConstShare-provable type":
+
+       (a) `_require_copy_value` adds marks at value-position
+           binding-reads typed with `used_as_value=True` —
+           HLet.value, HReturn.value, HAssign.value,
+           HResultOk.value, HTernary branches, HMatchArm.result,
+           and any HVar binding-read in `type_expr`'s value-
+           position paths.  These also get the typecheck error
+           suppressed in the same call.
+
+       (b) The walker's `_consider_implicit_cs_mark_at` adds
+           marks at owned-arg slots typechecked with
+           `used_as_value=False` — `HCall.args[i]` /
+           `HCall.kwargs[i].value` and the matching slots on
+           `HMethodCall` and `HInvoke`.  The call resolver
+           determines per-param ownedness later and the borrow
+           checker performs implicit-move-in-consuming-position;
+           those slots would never be marked by typecheck on
+           their own, so the walker explicitly considers them
+           just before the gated wrap fires.
+
+     **Mark-consumption discipline.**  Wrap helpers gate on
+     mark presence (`_is_suppression_marked`) AND drop the
+     mark on wrap (`_consume_implicit_cs_mark`).  After the
+     walk completes, `check_function` asserts the marks set is
+     empty.  A leftover mark means typecheck-side suppression
+     fired (population path (a)) but the walker didn't visit
+     a wrap-slot enumerating that node — that's a soundness
+     bug (typecheck accepts a non-Copy binding-read at
+     value-position with no `.const_share()` call).  The
+     assertion raises a clear "coverage gap in the walker"
+     error pointing at the offending HVar's name and span, so
+     missing slots are surfaced at typecheck time instead of
+     producing silently-unsound HIR.  An earlier iteration of
+     Phase 5 had exactly this gap on `HResultOk.value` and on
+     `HTernary` branches; the discipline check would have
+     caught either on the first compile of any user
+     `Ok(a)` / `cond ? a : b` site.
+
+  Trait-scope bypass: the call_resolver's
+  `ignore_visibility` predicate (`call_resolver.py:2611`) now
+  accepts `origin="implicit_const_share"` so the synthesized
+  call resolves even when `use trait shareable.ConstShare;`
+  is not in the user's source — implicit duplication is a
+  language feature, not a trait import the user must remember.
+
+  **Borrow positions and explicit move untouched.**
+  `HBorrow.subject`, `HField.subject`, `HIndex.subject`,
+  `HMethodCall.receiver` (auto-borrowed), and `HMatchExpr.scrutinee`
+  are skipped by the walker.  Explicit `HMove`, `HCopy`, and
+  `HBorrow` wrappers are recognized and skipped.  The borrow
+  checker's existing implicit-move-in-consuming-position logic
+  and use-after-move diagnostics remain intact for non-CS
+  types.
+
+  **Coverage.**  11 source-mode driver tests
+  (`lang/tests/driver/test_const_share_phase5_implicit_duplication.py`)
+  cover ConstArc let-binding / owned-arg / owned-return,
+  Phase 1 struct, Phase 4 variant, Phase 3 generic struct,
+  ternary value branches, `Result::Ok` payload,
+  explicit-move-then-reuse-still-errors negative,
+  non-ConstShare-still-requires-move negative,
+  borrow-does-not-synthesize negative.  Package roundtrip
+  (`...phase5_implicit_duplication_package.py`) pins
+  consumer-side rewrite for a package-imported synthesized
+  Holder.  3 valgrind carriers
+  (`lang/tests/memcheck/test_const_share_phase5_implicit_duplication_memcheck.py`)
+  pin refcount balance for let-binding ConstArc,
+  owned-arg synthesized struct, owned-return synthesized
+  variant.
+
 - **ConstShare structural synthesis — Phase 4 variant package
   roundtrip (release 0.31.46, ABI unchanged, still 11).**  Pins
   the producer/consumer roundtrip for non-generic variant
