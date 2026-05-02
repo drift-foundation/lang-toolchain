@@ -328,11 +328,13 @@ pervasively in annotations. This is distinct from the value prelude above.
 
 The type prelude includes:
 
-- `Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`, `DiagnosticValue`
+- `Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`
 - `Array<T>`
 - `Optional<T>`
 - `FnResult<ok, err>`
 - `&T`, `&mut T` (reference type constructors)
+
+The diagnostic value model is `JsonNode` / `JsonHandle` from `std.json.value` (§5.13.8). These are not in the type prelude — diagnostic-context surfaces import them explicitly. The legacy `DiagnosticValue` type is no longer part of the public surface; see §5.13.8.
 
 Memory utilities live in `std.mem` and are **not** auto-imported. In particular:
 
@@ -1361,52 +1363,73 @@ require (T is Dup and not (T is Destructible))
 
 #### 5.13.7. Diagnostic trait
 
-Exceptions and `^`-captured locals rely on a dedicated diagnostic trait:
+Exceptions and `^`-captured locals rely on a dedicated diagnostic trait. The diagnostic representation is **JSON** — a `JsonNode` value owned by the projecting type:
 
 ```drift
 trait Diagnostic {
-    fn to_diag(self) -> DiagnosticValue
+    fn to_json(self: &Self) nothrow -> JsonNode
 }
 ```
 
+`JsonNode` is the recursive value variant exposed by `std.json.value` (low-level JSON layer; see Chapter 14 / §14.2 for the exception envelope and Chapter 18 for the JSON module split).
+
 Rules:
 
-- Primitive types implement `to_diag` as scalars.
-- `Optional<T>` implements `to_diag` as `Null` (`None()`) or `T.to_diag()`.
-- Structs without a custom implementation default to an `Object` mapping each field name to `field_value.to_diag()`.
-- `to_diag` must never throw.
+- Primitive types implement `to_json` as scalars (`Bool`, `Int`, `Uint`, `Float`, `String` map to the corresponding `JsonNode` arms; `Number` carries the textual representation).
+- `Optional<T>` implements `to_json` as `JsonNode::Null` (`None()`) or `T.to_json()`.
+- Structs without a custom implementation default to a `JsonNode::Object` mapping each field name to `field_value.to_json()`.
+- `to_json` must never throw.
+- The implementation lives next to `JsonNode` in the low-level `std.json.value` layer; user-side `import std.json.value as jv;` (or `import std.json as json;` which re-exports) brings it into scope.
 
-#### 5.13.8. DiagnosticValue: structured diagnostics
+#### 5.13.8. JsonNode: structured diagnostics
+
+The diagnostic value model is `JsonNode` (see Chapter 18 for the full JSON surface):
 
 ```drift
-variant DiagnosticValue {
-    Missing
+variant JsonNode {
     Null
     Bool(value: Bool)
-    Int(value: Int)
-    Float(value: Float)
+    Number(raw: String)        // textual numeric — parse via as_int / as_float / as_uint
     String(value: String)
-    Array(items: Array<DiagnosticValue>)
-    Object(fields: Map<String, DiagnosticValue>)
+    Array(values: Array<JsonNode>)
+    Object(fields: HashMap<String, JsonNode>)
 }
 ```
 
-Library helpers (non-throwing):
+Public access surface (non-throwing, all return `Optional<T>` for the leaf type):
 
 ```drift
-fn kind(self: &DiagnosticValue) -> String        // optional helper
-fn get(self: &DiagnosticValue, field: String) -> DiagnosticValue
-fn index(self: &DiagnosticValue, idx: Int) -> DiagnosticValue
-fn as_string(self: &DiagnosticValue) -> Optional<String>
-fn as_int(self: &DiagnosticValue) -> Optional<Int>
-fn as_bool(self: &DiagnosticValue) -> Optional<Bool>
-fn as_float(self: &DiagnosticValue) -> Optional<Float>
+fn as_int(self: &JsonNode) -> Optional<Int>
+fn as_uint(self: &JsonNode) -> Optional<Uint>
+fn as_float(self: &JsonNode) -> Optional<Float>
+fn as_bool(self: &JsonNode) -> Optional<Bool>
+fn as_string(self: &JsonNode) -> Optional<String>
+fn as_array(self: &JsonNode) -> Optional<&Array<JsonNode>>
+fn as_object(self: &JsonNode) -> Optional<&HashMap<String, JsonNode>>
+fn is_null(self: &JsonNode) -> Bool
+```
+
+A `JsonHandle` (`std.json.value`) wraps a refcounted owner of a `JsonNode` tree, implements `Frozen` + `ConstShare`, and provides two distinct surfaces — a cheap dump path and a fluent cursor lookup path:
+
+```drift
+// --- Dump path (primary log/save surface) ---
+fn encode_compact(self: &JsonHandle) nothrow -> String        // canonical JSON text
+
+// --- Fluent lookup (cursor-based — distinguishes missing from explicit JSON null) ---
+fn get(self: &JsonHandle, key: String) nothrow -> JsonCursor  // cursor over the named field
+
+// --- Structured traversal ---
+fn root(self: &JsonHandle) nothrow -> &JsonNode               // borrow the underlying tree
 ```
 
 Rules:
 
-- Wrong type / missing field / out-of-bounds → `DiagnosticValue::Missing`.
-- `.as_*()` on `Missing` returns `Optional.none`.
+- **Dump-first surface.** `encode_compact` is the primary public path; it emits canonical JSON text directly from the stored tree (or, for diagnostic carriers, directly from the stored canonical JSON string — see §14) and avoids parse/materialize/re-encode round-trips.
+- **Missing ≠ JSON null.** `JsonHandle::get` (and `JsonCursor::get`, `JsonCursor::index`) return a `JsonCursor` that *separately* represents "absent" and "present-and-explicit-null". Callers that need to distinguish them inspect the cursor; callers that don't simply chain `.as_int() / .as_string() / …`, both of which return `Optional<T>` and yield `Optional::None()` for either absent or wrong-typed values.
+- `JsonCursor` is the canonical fluent-lookup surface. The standard public chain is `e.params.get("k").as_int()` → `Optional<Int>` with no `&` ceremony at the call site.
+- `JsonHandle` is `ConstShare` — `var b = e.params; var c = b;` produces independent owners via implicit duplication (Phase 5 ConstShare substrate).
+
+> **Legacy note (transitional, internal-only):** The previous `DiagnosticValue` variant and `to_diag()` method are no longer part of the public diagnostic surface. The compiler may retain `DiagnosticValue` internally as runtime/migration glue; new public APIs, docs, and tests must use `JsonNode` and `to_json`.
 
 ### 5.14. Thread-safety marker traits (`Send`, `Sync`)
 
@@ -2442,7 +2465,9 @@ Decorator markers: `@tombstone`, `@test_build_only`, `@intrinsic`.
 
 The following type names cannot be used for user-defined struct/variant/exception/trait names:
 
-`Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`, `DiagnosticValue`, `Array`, `Optional`, `FnResult`.
+`Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`, `Array`, `Optional`, `FnResult`.
+
+`DiagnosticValue` remains reserved for compatibility — the compiler retains it internally during the JSON-diagnostics migration (see §5.13.8) — but it is not part of the public surface.
 
 ### 9.5. Operator tokens
 
@@ -2948,7 +2973,7 @@ Exceptions use **constructor syntax** (`ExcName(...)`) rather than braces (§14.
 ## 14. Exceptions and error context
 
 Drift provides structured exception handling through a single `Error` type, **exception events**, and the `^` capture modifier.  
-Exception declarations create constructor names in the value namespace. `throw ExcName(...)` is valid syntax: arguments must match the declared names/types, produce an `Error` value with the exception’s deterministic `event_code`, and integrate with the existing `try/catch` event dispatch. Every exception attribute is recorded in `Error.attrs` as a typed `DiagnosticValue`, and any `^`-captured locals are recorded in `ctx_frames` the same way; both are diagnostics, not user-facing payloads.
+Exception declarations create constructor names in the value namespace. `throw ExcName(...)` is valid syntax: arguments must match the declared names/types, produce an `Error` value with the exception’s deterministic `event_code`, and integrate with the existing `try/catch` event dispatch. Every exception attribute is recorded in `Error.params` as a JSON value, and any `^`-captured locals are recorded in `Error.context` as a JSON array of frame objects; both are diagnostics, not user-facing payloads.
 Exceptions are **not** UI messages: they carry machine-friendly context (event name, arguments, captured locals, stack) that can be logged, inspected, or transmitted without embedding human prose.
 `Error` itself is a catch-all handler type: user functions do not return `Error` or throw `Error` directly; they throw concrete exception events, and catch blocks may bind either a specific exception type or `Error` as a generic binder.
 
@@ -2989,11 +3014,11 @@ Drift’s exception system is designed to:
 type ErrorCode = Uint64
 
 struct Error {
-    event_code: Uint64,                      // stable, required
-    event_fqn: String,                         // canonical FQN label (for logging/telemetry only)
-    attrs: Map<String, DiagnosticValue>,       // see §5.13.7, §14.3
-    ctx_frames: Array<CtxFrame>,               // captured locals per frame
-    stack: BacktraceHandle                     // opaque backtrace
+    event_code: Uint64,        // stable runtime routing key (see §14.1.1)
+    event_fqn: String,         // canonical FQN label (for logging/telemetry only)
+    params: JsonHandle,        // declared exception fields, JSON object (see §14.2.2)
+    context: JsonHandle,       // ^-captured frames, JSON array of frame objects (see §14.2.3)
+    stack: BacktraceHandle     // opaque backtrace
 }
 
 exception IndexError {
@@ -3002,23 +3027,24 @@ exception IndexError {
 }
 ```
 
+The `Error` value is the user-visible catch binder. Internally the runtime stores `params` and `context` as a single JSON document (see ABI spec §2 for the on-the-wire shape); accessor methods return `JsonHandle` views without forcing the user to know the storage form.
+
 #### 14.2.1. event_code
 Deterministic 64-bit code derived from the exception’s fully-qualified name (`"<module>.<submodules>:<event>"`) using the frozen hash (§14.1.1). This is the **only** runtime routing key. `0` is reserved for unknown/unmapped events and must not be produced by user-declared exceptions.
 
-#### 14.2.2. attrs
-All exception attributes as typed `DiagnosticValue` entries (see §5.13.8). Values are produced via `Diagnostic.to_diag()`; no stringification is implied. Any value recorded in `Error.attrs` (exception fields or later-added attrs) must implement `Diagnostic`; attempting to attach a non-Diagnostic value is a compile-time error.
+#### 14.2.2. params
+JSON object whose entries are the exception’s declared fields, keyed by field name. Each declared field value is produced via `Diagnostic.to_json()` (§5.13.7) and stored as a `JsonNode`. Every declared field is stored under its own name — there is no special "primary payload" field. Any field type used in an exception declaration must implement `Diagnostic`; attempting to declare a non-Diagnostic field type is a compile-time error.
 
-#### 14.2.3. ctx_frames
-Per-frame captured locals:
+`params` is exposed to user code as a `JsonHandle`. The primary public surface is the dump form `e.params.encode_compact() -> String`; fluent lookup goes through a `JsonCursor` (`e.params.get("k").as_int()`) that distinguishes "absent key" from "present-and-explicit JSON null" — see §5.13.8 and §14.5.4.
 
-```drift
-struct CtxFrame {
-    fn_name: String,
-    locals: Map<String, DiagnosticValue>
-}
+#### 14.2.3. context
+JSON array of frame objects in unwind order, one entry per frame that captured locals via `^` (see §14.4). Each frame object has the shape:
+
+```json
+{ "fn_name": "<function name>", "locals": { "<name>": <JsonNode>, ... } }
 ```
 
-Event attrs never appear here.
+Frame `locals` values are produced via `Diagnostic.to_json()`. Event params never appear here. Frames are appended in unwind order (innermost first); a function that unwinds without capturing contributes no frame.
 
 #### 14.2.4. stack
 Opaque captured backtrace.
@@ -3051,8 +3077,8 @@ throw InvalidOrder(order_id = order.id, code = "order.invalid");
 
 Runtime builds an `Error` with:
 - `event_code = hash(fqn)` (see §14.1.1)
-- attrs (each declared field converted via `Diagnostic.to_diag()` into `Map<String, DiagnosticValue>`; every declared field is stored under its name—there is no special "primary payload" field; every value must implement the `Diagnostic` trait (§5.13.7))
-- empty ctx_frames (filled during unwind)
+- `params`: each declared field converted via `Diagnostic.to_json()` into a `JsonNode` and stored under its name in a JSON object; every declared field is stored — there is no special "primary payload" field; every field type must implement the `Diagnostic` trait (§5.13.7)
+- empty `context` (frame objects appended during unwind, see §14.4)
 - backtrace
 
 Exception throws use constructor syntax only:
@@ -3062,7 +3088,7 @@ Exception throws use constructor syntax only:
 - Unknown fields, missing fields, or duplicate fields are compile-time errors.
 
 #### 14.3.3. Diagnostic requirement
-Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can capture a typed `DiagnosticValue`.
+Each exception field type must implement `Diagnostic` (see §5.13.7) so the runtime can project the field value to a `JsonNode` via `to_json(&Self) -> JsonNode`.
 
 #### 14.3.4. Event code derivation and collision policy
 - Canonical FQN string: `"<module_name>.<submodule...>:<event>"` with UTF-8 encoding, no aliases or whitespace.
@@ -3081,7 +3107,7 @@ Locals can be captured:
 val ^input: String as "record.field" = s;
 ```
 
-A frame is added when unwinding past the function:
+A frame object is appended to `Error.context` when unwinding past the function:
 
 ```json
 {
@@ -3091,9 +3117,9 @@ A frame is added when unwinding past the function:
 ```
 
 Rules:
-- Only `^`-annotated locals captured.
-- Values must implement `Diagnostic` (see §5.13.7).
-- Capture happens once per frame.
+- Only `^`-annotated locals are captured.
+- Local values must implement `Diagnostic` (§5.13.7); each value is projected via `to_json` to a `JsonNode`.
+- Capture happens once per frame; a function that unwinds without any `^` capture contributes no frame.
 
 ---
 
@@ -3144,16 +3170,44 @@ The `else` expression must produce the same type as the `try` expression. Except
 
 ---
 
-#### 14.5.4. Accessing attributes
+#### 14.5.4. Accessing params and context
 
-Attributes are accessed via `Error.attrs`:
+Most handlers do not parse individual fields; they record the full envelope for logs/audits. The public surface is therefore led by the **dump path**, with structured traversal and typed lookup as secondary.
+
+**Dump path (primary).**
 
 ```drift
-val code = e.attrs["sql_code"].as_int();
-val cust = e.attrs["order"]["customer"]["id"].as_string();
+val whole   = e.encode_compact();             // canonical envelope JSON (event_code,
+                                              // event_fqn, params, context, stack)
+val params  = e.params.encode_compact();      // declared exception fields, JSON object
+val frames  = e.context.encode_compact();     // ^-captured frames, JSON array
+log(&whole);
 ```
 
-Lookups and `.as_*()` are non-throwing; missing or wrong-typed fields yield `DiagnosticValue::Missing` and `Optional.none`.
+`e.encode_compact()` is the canonical full-envelope log/save form. It emits directly from the stored canonical JSON strings (`params_json`, `context_json` — see ABI spec §2) without an intermediate parse/re-encode step.
+
+**Structured traversal.**
+
+```drift
+val tree: JsonHandle = e.to_json();   // materialize whole envelope as JsonHandle
+val params_handle    = e.params;      // JsonHandle over the params subtree
+```
+
+`e.to_json()` materializes the full envelope as a `JsonHandle` tree for callers that need traversal; `e.params` and `e.context` expose the named subtrees directly without re-materializing the envelope.
+
+**Typed lookup (secondary).**
+
+```drift
+val code = e.params.get("sql_code").as_int();             // Optional<Int>
+val cust = e.params.get("order").get("customer").get("id").as_string();
+
+for frame in e.context.iter() {
+    val name  = frame.get("fn_name").as_string();
+    val value = frame.get("locals").get("record.field").as_string();
+}
+```
+
+`JsonHandle::get` and `JsonCursor::get` return a `JsonCursor` (§5.13.8). `JsonCursor` distinguishes **absent** keys/indices from **present-and-explicit JSON null** — both yield `Optional.none` from the typed `.as_*()` accessors, but the cursor itself records which case occurred for callers that need to discriminate. `get`, `iter`, and the typed `.as_*()` accessors are all non-throwing; out-of-range indices and wrong-typed values likewise produce a cursor that returns `Optional.none` from typed reads.
 
 ---
 
@@ -3218,25 +3272,27 @@ Unwinding is allowed across **static Drift modules** as long as:
 
 This applies to modules that are compiled together into a single image (either directly from source or via DMIR/DMP). **Unwinding must not cross FFI or OS-level shared library boundaries**; any exported Drift APIs used via C/FFI must convert failures into value errors at the boundary (see Chapter 17).
 
-Event name + attrs + ctx_frames + stack fully capture portable state.
+Event code + event_fqn + params + context + stack fully capture portable state.
 
 ---
 
 ### 14.8. Logging and serialization
-Serialization/logging is implementation-defined. A possible JSON shape:
+The canonical full-envelope projection is `e.encode_compact()` (§14.5.4) — a `String` shaped as:
 
 ```json
 {
   "event_fqn": "orders:InvalidOrder",
   "event_code": "0x1…",
-  "attrs": { "order_id": 42, "code": "order.invalid" },
-  "ctx_frames": [
-    { "fn_name": "ship", "locals": { "record.id": "42" }},
-    { "fn_name": "ingest_order", "locals": { "batch": "B1" }}
+  "params": { "order_id": 42, "code": "order.invalid" },
+  "context": [
+    { "fn_name": "ship",          "locals": { "record.id": "42" } },
+    { "fn_name": "ingest_order",  "locals": { "batch": "B1" } }
   ],
   "stack": "opaque"
 }
 ```
+
+Because the runtime already stores `params` and `context` as canonical JSON strings (ABI spec §2), `e.encode_compact()` emits this envelope by string-splicing the stored buffers — no parse/materialize/re-encode step. The legacy DV→JSON conversion at logging time no longer exists. Whitespace and key ordering inside the inner segments are not stable (see ABI §2.2); structural callers must parse rather than byte-compare.
 
 ---
 
@@ -3244,7 +3300,8 @@ Serialization/logging is implementation-defined. A possible JSON shape:
 
 - Single `Error` type.
 - Event-based exceptions.
-- Attributes + captured locals stored as typed `DiagnosticValue`.
+- Declared exception fields stored as JSON `params`; `^`-captured locals stored as a JSON array of frame objects in `context`.
+- Public surface is dump-first: `e.encode_compact()` emits the full envelope directly from stored canonical JSON strings; `e.to_json()` materializes a `JsonHandle` tree for traversal; `e.params.get("k").as_*()` is the cursor-based fluent lookup. Cursors distinguish absent keys from explicit JSON null.
 - Move-only errors with deterministic ownership.
 - Precisely defined layout for cross-module-safe unwinding.
 - Semantically equivalent to `Result<T, Error>` internally.

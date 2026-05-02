@@ -57,10 +57,17 @@ Fixed-width primitives are ABI-defined but **reserved in v1 surface code**; they
 
 * A 64-bit **event code** (derived from the canonical FQN)
 * A canonical **event FQN string** label for logging/telemetry
-* A map of diagnostic attributes (“context fields”)
-* A list of **captured context frames**
+* A **`params` JSON document** holding the declared exception field values
+* A **`context` JSON document** holding `^`-captured frames as a JSON array
+* An opaque captured backtrace handle
 
 The ABI defines only the **stable public layout**. Internal payload structures remain opaque.
+
+> **Migration state.** The shape and helper signatures documented in this section describe the **target ABI 12** layout — the post-DV-removal end state. The current runtime implementation is **ABI 11 additive**: it carries both the legacy DV-shaped fields (`attrs` / `attr_count` / `frames` / `frame_count`) AND the new JSON fields (`params_json`, `context_json`) on the same `DriftError` struct, with both helper sets fully functional. `DRIFT_RT_ABI_VERSION` stays 11 throughout the additive slices (Phase 1 runtime substrate, Slice 1 throw-side params, Slice 2 context, Slice 3 envelope dump, Slice 4 cursor lookup). The ABI bump 11 → 12 happens at Slice 5, in the same patch that deletes the DV path. Until then, this section reads as the spec contract; the compiler-infra header is the authoritative current shape.
+>
+> **ABI 12 — DV→JSON migration (breaking, lands at Slice 5).** The legacy attribute list (`void *attrs; size_t attr_count;`) and frame list (`void *frames; size_t frame_count;`) are removed. Exception field values and `^`-captured frames remain stored as JSON documents (`params_json`, `context_json`) keyed by the same names. `DriftDiagnosticValue` is no longer reachable through the public Error ABI. See lang-spec §14.2.
+>
+> Consumers compiled against ABI 11 must be rebuilt; there is no compatibility shim.
 
 ### 2.1 C ABI representation
 
@@ -70,28 +77,74 @@ typedef uint64_t DriftErrorCode;
 typedef struct DriftError DriftError;
 
 struct DriftError {
-    DriftErrorCode code;      // Exception event code (see next section)
-    DriftString    event_fqn; // Canonical FQN label ("module.sub:Event"), for logging only
+    DriftErrorCode code;          // Exception event code (see §3)
+    DriftString    event_fqn;     // Canonical FQN label ("module.sub:Event"), logging only
 
-    // Attribute list (key -> DiagnosticValue). The element layout is runtime-defined,
-    // but the pointer+count positions are ABI-stable.
-    void  *attrs;
-    size_t attr_count;
+    // Declared exception fields, serialized as a JSON object.
+    // Each declared field is stored under its source-level name; the value is the
+    // result of Diagnostic.to_json() (lang-spec §5.13.7) re-encoded as JSON text.
+    // Storage is owned by the runtime; the pointer is valid for the lifetime of
+    // the DriftError. The textual encoding is UTF-8, RFC-8259 conformant.
+    DriftString    params_json;
 
-    // Captured context frames list. The element layout is runtime-defined, but the
-    // pointer+count positions are ABI-stable.
-    void  *frames;
-    size_t frame_count;
+    // ^-captured frames, serialized as ONE canonical JSON array document
+    // (a single DriftString, not an array-of-strings):
+    //     [ { "fn_name": "...", "locals": { "<name>": <JsonNode>, ... } }, ... ]
+    // Frames appear in unwind order (innermost first). A function that unwinds
+    // without any ^-capture contributes no entry.  Empty form is the two-byte
+    // literal "[]".
+    DriftString    context_json;
+
+    // Opaque captured backtrace.  Layout runtime-defined; pointer position is
+    // ABI-stable.
+    void          *stack;
 };
 ```
 
 ### 2.2 Guarantees
 
 * `sizeof(DriftErrorCode) == 8`
-* `DriftError.code` uses the ABI-stable event-code format described below; `0` is reserved for “unknown/unmapped”.
-* The pointer+count fields have ABI-stable *positions*, but the contents behind them are **not ABI-stable** and are opaque to external callers.
+* `DriftError.code` uses the ABI-stable event-code format described in §3; `0` is reserved for “unknown/unmapped”.
 * `event_fqn` stores the canonical FQN string; routing/matching is always by `code`, never by string compare.
+* `params_json` and `context_json` are well-formed JSON in UTF-8.  An empty error has `params_json == "{}"` and `context_json == "[]"`.
+* The textual encoding (whitespace, key ordering) inside `params_json` / `context_json` is **not** ABI-stable; consumers must parse, never byte-compare.
+* **Dump fast path.** Lang-level `e.encode_compact()` (lang-spec §14.5.4 / §14.8) is permitted — and expected — to splice `params_json` and `context_json` directly into the envelope without parse/materialize/re-encode. Helpers MUST therefore preserve the exact byte sequence of `params_json` / `context_json` from the most recent setter call until they are next replaced.
+* `stack` is opaque; callers obtain a printable form through the runtime backtrace API, not by dereferencing the field.
 * `Error` is always represented as a pointer handle (`DriftError*`) in the v1 runtime ABI (both intra-module and at module boundaries).
+
+### 2.3 Runtime helpers
+
+Helper signatures the runtime exposes for building and reading errors. Each helper specifies its ownership contract; any deviation is a runtime bug:
+
+```c
+// Construct a fresh error with empty params/context.  The runtime
+// makes its own owned copy of `event_fqn` (via the string-runtime's
+// header-allocating copy path); the caller retains ownership of the
+// input.  This is intentionally robust to all caller patterns —
+// heap-allocated DriftStrings, LLVM-emitted static-flagged literals,
+// and raw cstring `{len, ptr}` shapes constructed by C runtime
+// helpers all work uniformly without the caller knowing the
+// allocation class.
+DriftError *drift_error_new(DriftErrorCode code, DriftString event_fqn);
+
+// Replace params_json on an in-flight error. Takes ownership of params_json.
+// Caller must not retain or read the prior params_json after this call.
+void drift_error_set_params_json(DriftError *err, DriftString params_json);
+
+// Append one frame object (already serialized as JSON) to context_json.
+// Takes ownership of frame_json. The runtime re-emits context_json with the
+// new frame appended; the caller does not own the merged buffer.
+void drift_error_append_context_frame(DriftError *err, DriftString frame_json);
+
+// Read params_json / context_json. The returned DriftString is RETAINED
+// (refcount bumped); the caller owns the returned reference and is responsible
+// for releasing it.  Safe to surface to lang code as a normal owned `String`
+// return without compiler-side borrow handling.
+DriftString drift_error_get_params_json(const DriftError *err);
+DriftString drift_error_get_context_json(const DriftError *err);
+```
+
+The earlier `drift_error_add_attr_dv`, `drift_error_add_local_dv`, `__exc_attrs_get_dv`, `__exc_captures_get_dv`, and `drift_error_new_with_payload` helpers are removed at ABI 12.
 
 ---
 
@@ -479,10 +532,9 @@ typedef uint64_t DriftErrorCode;
 	typedef struct DriftError {
 	    DriftErrorCode code;
 	    DriftString    event_fqn;
-	    void          *attrs;
-	    DriftUint      attr_count;
-	    void          *frames;
-	    DriftUint      frame_count;
+	    DriftString    params_json;     // JSON object of declared exception fields
+	    DriftString    context_json;    // JSON array of ^-captured frame objects
+	    void          *stack;           // opaque backtrace
 	} DriftError;
 
 // Result<Int, Error> for exported functions

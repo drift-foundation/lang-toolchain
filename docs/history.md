@@ -1,6 +1,131 @@
 # Drift development history
 
 ## 2026-05-01
+- **DV→JSON diagnostics-context migration — spec/ABI Phase 0 (no
+  code change yet; ABI 12 reserved as a future target).**  Lands
+  the spec-side of the migration that retires `DiagnosticValue`
+  from the public diagnostic surface in favour of `JsonNode` /
+  `JsonHandle` for exception field values and `^`-captured
+  frames.  Phase 0 is documentation only — the runtime, codegen,
+  throw lowering, and catch accessors still emit the ABI 11
+  DV-shaped envelope.  **`DRIFT_RT_ABI_VERSION` stays 11 until
+  the final DV-removal slice (Slice 5) deletes the legacy DV
+  helpers and bumps to 12 in the same patch.**  Intermediate
+  slices (Phase 1 runtime substrate, Slice 1 throw-side params
+  JSON, Slice 2 context, Slice 3 envelope dump, Slice 4 cursor
+  lookup) are all additive and ABI-neutral.
+
+  **Spec edits.**
+    - `docs/design/drift-lang-spec.md`
+        - §5.13.7 `Diagnostic` trait — projection target
+          changes from `DiagnosticValue` to `JsonNode`; method
+          renamed `to_diag` → `to_json` returning `JsonNode`.
+        - §5.13.8 — replaces the DV variant description with
+          `JsonNode` (from `std.json.value`); fluent lookup
+          (`JsonHandle::get`, `JsonCursor::get`) flows through
+          `JsonCursor`, which separately represents "absent"
+          and "present-and-explicit-JSON-null" (see same-day
+          refinement at the end of this entry).  Typed
+          `.as_*()` accessors collapse both to `Optional.none`.
+          Adds an explicit "legacy / internal-only" footnote
+          pinning DV as runtime / migration glue.
+        - §14 (Exceptions and error context) — `Error.attrs`
+          and `Error.ctx_frames` retired; replaced with
+          `Error.params: JsonHandle` (JSON object of declared
+          fields, every field projected via
+          `Diagnostic.to_json()`) and `Error.context: JsonHandle`
+          (JSON array of frame objects in unwind order, frame
+          shape `{"fn_name": ..., "locals": { ... }}`).  §14.5.4
+          rewritten to show JSON access:
+
+              val code = e.params.get("sql_code").as_int();
+              for frame in e.context.iter() {
+                  val name = frame.get("fn_name").as_string();
+              }
+
+          §14.7 portable-state list and §14.8 logging envelope
+          updated to use `params` / `context` keys.  §14.9
+          summary updated.
+        - §3.2 type prelude — `DiagnosticValue` removed; an
+          explicit footnote points readers at
+          `JsonNode`/`JsonHandle` from `std.json.value`.
+        - §9.4 reserved type names — `DiagnosticValue` kept
+          reserved during the migration but flagged as
+          internal-only.
+
+    - `docs/design/drift-lang-abi.md`
+        - §2 Error ABI — `void *attrs / size_t attr_count` and
+          `void *frames / size_t frame_count` removed.  New
+          shape: `DriftString params_json` (RFC-8259 UTF-8 JSON
+          object) + `DriftString context_json` (UTF-8 JSON
+          array of frame objects) + opaque `void *stack`.
+          `params_json` and `context_json` are well-formed JSON;
+          textual encoding (whitespace, key order) is **not**
+          ABI-stable, so consumers must parse, never byte-
+          compare.  An empty error has `params_json == "{}"`
+          and `context_json == "[]"`.
+        - §2.3 — new helper signatures with explicit ownership
+          contracts: `drift_error_new`,
+          `drift_error_set_params_json`,
+          `drift_error_append_context_frame`,
+          `drift_error_get_params_json`,
+          `drift_error_get_context_json`.  Old DV helpers
+          (`drift_error_add_attr_dv`,
+          `drift_error_add_local_dv`,
+          `__exc_attrs_get_dv`, `__exc_captures_get_dv`,
+          `drift_error_new_with_payload`) listed as removed
+          at ABI 12.
+        - §8 appendix `DriftError` example header updated to
+          the JSON-text shape.
+
+  **Breaking changes (planned, land at Slice 5 / ABI 12).**
+    - User-source: `e.attrs[k]` and `e.captures[fr][k]` no
+      longer compile; replace with
+      `e.params.get(k).as_*()` / iteration over `e.context`.
+    - User-source: `impl Diagnostic for T { fn to_diag(...) ->
+      DiagnosticValue }` no longer compiles; replace with
+      `fn to_json(self: &Self) nothrow -> JsonNode`.
+    - ABI consumers compiled against ABI 11: rebuild required;
+      no compatibility shim.
+
+  **Phase 0 acceptance.**  Spec/ABI/history docs internally
+  consistent (no remaining public DV references in §14 or
+  §2; `DiagnosticValue` mentions only inside explicit "legacy
+  / internal-only" annotations).  Phase 1 (additive runtime
+  substrate — JSON storage fields and helpers added alongside
+  the legacy DV path; ABI stays 11) and subsequent slices
+  (throw-side params JSON, context, envelope dump, cursor,
+  DV public removal at Slice 5 / ABI 12) remain pending.
+
+  **Phase 0 refinements (same day).**
+    - **Public surface is dump-first.**  `e.encode_compact()`
+      is the primary log/save path: it emits the canonical
+      full envelope by string-splicing the stored
+      `params_json` / `context_json` (no parse/materialize/
+      re-encode).  `e.to_json()` materializes a `JsonHandle`
+      tree for callers that need structured traversal.
+      `e.params.encode_compact()` / `e.context.encode_compact()`
+      dump individual segments.  `e.params.get("k").as_*()` is
+      the secondary inspection ergonomics surface.  Spec
+      §14.5.4 reordered to lead with the dump path; §14.8
+      annotated with the no-re-encode guarantee.
+    - **ABI dump-fastpath guarantee added.**  ABI spec §2.2
+      now requires runtime helpers to preserve the exact byte
+      sequence of `params_json` / `context_json` from the
+      most recent setter call until replaced, so the lang-
+      level `encode_compact` splice is well-defined.
+    - **Missing ≠ JSON null (correction landed mid-day).**
+      Spec §5.13.8 / §14.2.2 / §14.5.4 require fluent lookup
+      to flow through a `JsonCursor` that separately
+      represents "absent" and "present-and-explicit-JSON-null".
+      The typed `.as_*()` accessors collapse both to
+      `Optional.none`, but callers that need to discriminate
+      inspect the cursor.  **Slice 4 (cursor lookup) must
+      land the `JsonHandle::get → JsonCursor` migration before
+      any typed-lookup tests are written.**  Slices 1–3 (params
+      JSON, context, envelope dump) are unaffected — they use
+      the dump path (`encode_compact`), not the lookup path.
+
 - **ConstShare implicit duplication at value-flow sites
   (release 0.31.47, ABI unchanged, still 11).**  Removes the
   `.const_share()` ceremony from user code: any non-explicit-move
