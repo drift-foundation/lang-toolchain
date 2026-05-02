@@ -1,6 +1,27 @@
 # Drift development history
 
 ## 2026-05-01
+- **ConstShare structural synthesis — Phase 4 variant package
+  roundtrip (release 0.31.46, ABI unchanged, still 11).**  Pins
+  the producer/consumer roundtrip for non-generic variant
+  ConstShare synthesis: a producer publishes a `Multi` variant
+  with `Empty` / `Number(n: Int)` / `Text(handle:
+  core.ConstArc<String>)` arms; a consumer imports the signed
+  package, asserts `Multi is shareable.ConstShare` via a generic
+  require-bounded helper, constructs values for each arm shape,
+  and calls `.const_share()` on each.
+
+  Closes the same risk class Phase 3 surfaced for generic
+  structs: source-mode tests can't catch serialization or
+  consumer-side decode gaps.  Variants add a new synthesized
+  HIR shape — a real `HMatchExpr` over `self` with arm-specific
+  `HQualifiedMember` reconstruction — which serialization and
+  consumer-side re-typecheck must round-trip cleanly.
+
+  No compiler logic changes since 0.31.45 — Phase 4 synth was
+  already correct; this commit just adds the previously-skipped
+  test surface.  Wide driver suite remains green.
+
 - **ConstShare structural synthesis — Phase 4 non-generic
   variants (release 0.31.45, ABI unchanged, still 11).**  A
   non-generic variant auto-derives `ConstShare` iff EVERY arm's
