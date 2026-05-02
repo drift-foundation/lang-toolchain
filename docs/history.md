@@ -1,6 +1,83 @@
 # Drift development history
 
 ## 2026-05-01
+- **ConstShare structural synthesis — Phase 4 non-generic
+  variants (release 0.31.45, ABI unchanged, still 11).**  A
+  non-generic variant auto-derives `ConstShare` iff EVERY arm's
+  payload fields qualify under the same v1 composition rule used
+  for structs (each field is `core.ConstArc<U>` / another
+  ConstShare type / `Copy + Frozen` scalar).  Generic variants
+  are NOT covered by this slice — Phase 5 territory.
+
+  **What's new (user-visible).**
+
+      pub variant Carrier {
+          Empty,
+          Wrap(handle: core.ConstArc<String>)
+      }
+      // → derives, `c.const_share()` reconstructs the same case
+      //   with each ConstArc payload `clone`-bumped.
+
+      pub variant Multi {
+          Empty, Number(n: Int), Text(handle: core.ConstArc<String>)
+      }
+      // → derives.  Number arm's Int uses the Copy+Frozen path;
+      //   Text arm's ConstArc uses the ConstShare path.
+
+      pub variant Color { Red, Green, Blue }
+      // → derives trivially (zero-payload arms qualify with no
+      //   field checks).
+
+  Negative shapes (any single arm with `Arc<T>`, `Array<T>`,
+  `&T`, `&mut T`, etc.) block the whole-variant derivation.
+
+  **Synth-side wiring.**  `_Candidate` extended with
+  `is_variant: bool` and `variant_arms: List[_VariantArm]`;
+  candidate discovery iterates `type_table.variant_schemas`
+  (non-generic only).  Tombstone arms (`schema.tombstone_ctor`)
+  are skipped — the typechecker rejects them in match patterns
+  (`E-MATCH-TOMBSTONE`), and at runtime tombstone-tagged values
+  never reach user code.  `_qualify_variant_arms` runs the
+  shared per-field qualifier across every arm; any non-
+  qualifying field anywhere blocks the whole variant
+  (all-or-nothing, same contract structs use).
+
+  Synthesized HIR body is a real `HMatchExpr` over `self`:
+
+      return match self {
+          V::A          => { V::A() },
+          V::B(b0)      => { V::B(b0.const_share()) },
+          V::C(c0, c1)  => { V::C(c0, c1) },              // Copy+Frozen
+          ...
+      };
+
+  Each arm uses `pattern_arg_form="positional"` with field-name
+  binders and `binder_field_indices=range(N)`; the result-side
+  ctor is `HCall(HQualifiedMember(VariantTypeExpr, ctor_name),
+  args=[per-binder transform])` — the same shape user-source
+  variant construction lowers to.
+
+  **Source-modules guard tightened.**  Both struct and variant
+  candidate loops now ALSO filter `std.*` / `lang.*` modules
+  even when they appear in `source_modules`.  On consumer
+  builds, `source_modules` includes stdlib (parsed for cross-
+  module type resolution); without this filter, stdlib
+  variants like `IteratorOpId` got synthesized and the
+  synthesized match body failed to typecheck against the
+  consumer's reduced trait scope.  Stdlib provides hand-written
+  ConstShare impls for the types that need them; auto-derive
+  was never the right contract for stdlib.
+
+  **Co-landed (committed in 0.31.44 follow-up).**  The
+  borrowed-variant-match copy-back-to-ctor codegen LANGUAGE_BUG
+  fix at `lang/codegen/llvm/llvm_codegen.py:3354`
+  (`load drift.int, ptr ...` → `load <storage_llty>, ptr ...`)
+  was a precondition for Phase 4 binaries to link.  Phase 4
+  source-mode tests use `--test-build-only` and would have
+  passed even without the codegen fix; the memcheck carriers
+  (real link + valgrind) cannot, so they functionally validate
+  both the synth and the codegen-fix together.
+
 - **ConstShare structural synthesis — Phase 3 generic structs +
   type-checker closure-scoping fix (release 0.31.44, ABI
   unchanged, still 11).**  Two co-landing patches: synthesis now
