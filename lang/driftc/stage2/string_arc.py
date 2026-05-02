@@ -502,6 +502,16 @@ def insert_string_arc(
 		elif isinstance(instr, M.DVGetField):
 			yield instr.dv
 			yield instr.key
+		elif isinstance(instr, M.DVIndex):
+			yield instr.dv
+			yield instr.idx
+		elif isinstance(instr, M.DVKind):
+			yield instr.dv
+		elif isinstance(instr, M.ExcGetParamsJson):
+			yield instr.error
+		elif isinstance(instr, M.ExcSetParamsJson):
+			yield instr.error
+			yield instr.json_text
 		elif isinstance(instr, M.ErrorEvent):
 			yield instr.error
 		elif isinstance(instr, M.StringFromInt):
@@ -729,6 +739,12 @@ def insert_string_arc(
 			if isinstance(instr, (M.ConstString, M.StringConcat, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
 				owned_defs.add(dest)
 			elif isinstance(instr, (M.StringRetain, M.CopyValue)):
+				owned_defs.add(dest)
+			elif isinstance(instr, M.ExcGetParamsJson):
+				# `drift_error_get_params_json` returns a RETAINED
+				# DriftString per ABI spec §2.3 — caller owns and is
+				# responsible for releasing.  Tracked as an owned
+				# string-result alongside the StringConcat / Call class.
 				owned_defs.add(dest)
 			elif isinstance(instr, (M.Call, M.CallIndirect, M.CallIface)):
 				# String-returning calls produce owned values that must be released
@@ -1298,6 +1314,22 @@ def insert_string_arc(
 						key = _ensure_owned(key, owned_values, new_instrs)
 						_note_use(key, consume=True)
 				new_instrs.append(M.ErrorAddAttrDV(error=instr.error, key=key, value=instr.value))
+				continue
+
+			if isinstance(instr, M.ExcSetParamsJson):
+				# `drift_error_set_params_json` takes ownership of
+				# `json_text` per ABI spec §2.3 — runtime releases the
+				# prior params_json and stores the input.  ARC must
+				# treat `json_text` as consumed (not a non-consuming
+				# read).  Mirrors `ErrorAddAttrDV.key` consume pattern.
+				json_val = instr.json_text
+				if _is_string_value(json_val):
+					if json_val in move_only_values or _can_move_owned_once(json_val):
+						_note_use(json_val, consume=True)
+					else:
+						json_val = _ensure_owned(json_val, owned_values, new_instrs)
+						_note_use(json_val, consume=True)
+				new_instrs.append(M.ExcSetParamsJson(error=instr.error, json_text=json_val))
 				continue
 
 			if isinstance(instr, M.ErrorAddLocalDV):

@@ -152,11 +152,15 @@ from lang.driftc.stage2 import (
 	DVAsInt,
 	DVAsObject,
 	DVGetField,
+	DVIndex,
+	DVKind,
 	DVLen,
 	DVEntries,
 	DVAsString,
 	ErrorAttrsGetDV,
 	ErrorCapturesGetDV,
+	ExcGetParamsJson,
+	ExcSetParamsJson,
 	LoadLocal,
 	AddrOfLocal,
 	AddrOfArrayElem,
@@ -1553,6 +1557,8 @@ class LlvmModuleBuilder:
 					f"declare i1 @drift_dv_as_string(ptr, ptr)",
 					f"declare i1 @drift_dv_as_object(ptr, ptr)",
 					f"declare i1 @drift_dv_get_field(ptr, {DRIFT_STRING_TYPE}, ptr)",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_index({DRIFT_DV_TYPE}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_dv_kind({DRIFT_DV_TYPE})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr)",
 					"declare void @drift_dv_entries(ptr, ptr)",
 					"",
@@ -1583,6 +1589,13 @@ class LlvmModuleBuilder:
 					"  ret void",
 					"}",
 					f"declare void @drift_error_raise({DRIFT_ERROR_PTR})",
+					# Phase 1+ DV→JSON migration: canonical params JSON dump
+					# surface and throw-side setter.  Both runtime helpers
+					# follow ABI spec §2.3 ownership: getter returns retained
+					# DriftString (caller releases), setter takes ownership of
+					# the input DriftString.
+					f"declare {DRIFT_STRING_TYPE} @drift_error_get_params_json({DRIFT_ERROR_PTR})",
+					f"declare void @drift_error_set_params_json({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
 				]
 			)
 			lines.append("")
@@ -4125,6 +4138,65 @@ class _FuncBuilder:
 					f"  {dest} = phi {variant_llty} [ {some_val}, {some_block} ], [ {none_val}, {none_block} ]"
 				)
 				self.value_types[dest] = variant_llty
+		elif isinstance(instr, DVKind):
+			# drift_dv_kind takes DV by value, returns u8 (DriftDiagnosticTag).
+			# We promote to Drift Int for the language-level return.
+			self.module.needs_dv_runtime = True
+			dest = self._map_value(instr.dest)
+			dv_val = self._map_value(instr.dv)
+			tag_byte = self._fresh("dv_kind_byte")
+			self.lines.append(
+				f"  {tag_byte} = call i8 @drift_dv_kind({DRIFT_DV_TYPE} {dv_val})"
+			)
+			self.lines.append(
+				f"  {dest} = zext i8 {tag_byte} to {self._llty(DRIFT_INT_TYPE)}"
+			)
+			self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+		elif isinstance(instr, DVIndex):
+			# drift_dv_index returns a DV that aliases items[idx] of the source
+			# (no clone in the C helper).  We MUST clone the result so the
+			# destination owns independent storage — otherwise drop of source
+			# AND clone double-frees `items[]`.  Codegen sequence:
+			#   1. call drift_dv_index by-value → aliased DV temporary.
+			#   2. store aliased DV in a stack alloca.
+			#   3. call drift_dv_clone(&alias) → owned DV (refcounted strings
+			#      retained, arrays/objects deep-copied).
+			# The aliased temporary itself has no independent refcount — it's
+			# a struct copy of the array slot — so no release is needed for it.
+			self.module.needs_dv_runtime = True
+			dest = self._map_value(instr.dest)
+			dv_val = self._map_value(instr.dv)
+			idx_val = self._map_value(instr.idx)
+			aliased = self._fresh("dv_alias")
+			self.lines.append(
+				f"  {aliased} = call {DRIFT_DV_TYPE} @drift_dv_index({DRIFT_DV_TYPE} {dv_val}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
+			)
+			alias_ptr = self._fresh("dv_alias_ptr")
+			self.lines.append(f"  {alias_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {aliased}, ptr {alias_ptr}")
+			self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_clone(ptr {alias_ptr})")
+			self.value_types[dest] = DRIFT_DV_TYPE
+		elif isinstance(instr, ExcGetParamsJson):
+			# Phase 1+ DV→JSON migration: read the canonical params JSON
+			# string from the runtime; returned String is RETAINED per ABI
+			# spec §2.3 (caller releases).
+			self.module.needs_error_runtime = True
+			dest = self._map_value(instr.dest)
+			err_val = self._map_value(instr.error)
+			self.lines.append(
+				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_error_get_params_json({DRIFT_ERROR_PTR} {err_val})"
+			)
+			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, ExcSetParamsJson):
+			# Phase 1+ DV→JSON migration: store the canonical params JSON
+			# string in the runtime; runtime takes ownership of the input
+			# String per ABI spec §2.3.
+			self.module.needs_error_runtime = True
+			err_val = self._map_value(instr.error)
+			json_val = self._map_value(instr.json_text)
+			self.lines.append(
+				f"  call void @drift_error_set_params_json({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {json_val})"
+			)
 		elif isinstance(instr, DVLen):
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)

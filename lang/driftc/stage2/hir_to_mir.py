@@ -3904,7 +3904,7 @@ class HIRToMIR:
 				else:
 					# Conservatively assume unknown method calls can throw, except for
 					# built-in, non-throwing intrinsics handled directly in lowering.
-					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "len", "entries", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
+					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
 						return True
 				if expr_can_throw(expr.receiver):
 					return True
@@ -4576,7 +4576,7 @@ class HIRToMIR:
 				self.b.emit(M.ResultErr(dest=dest, result=res_val))
 				self._local_types[dest] = self._type_table.ensure_error()
 				return dest
-		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "len", "entries"):
+		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries"):
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None:
 				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
@@ -4600,10 +4600,12 @@ class HIRToMIR:
 						return result
 					return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
 				return result
-			if expr.method_name != "get" and expr.args:
+			if expr.method_name not in ("get", "index") and expr.args:
 				raise NotImplementedError(f"{expr.method_name} takes no arguments")
 			if expr.method_name == "get" and len(expr.args) != 1:
 				raise NotImplementedError("get takes exactly one key argument")
+			if expr.method_name == "index" and len(expr.args) != 1:
+				raise NotImplementedError("index takes exactly one Int index argument")
 			dv_val = self.lower_expr(expr.receiver)
 			if recv_eff_ty is not None and recv_ty is not None:
 				recv_def2 = self._type_table.get(recv_ty)
@@ -4657,6 +4659,19 @@ class HIRToMIR:
 				key_val = self.lower_expr(expr.args[0])
 				self.b.emit(M.DVGetField(dest=dest, dv=dv_val, key=key_val))
 				self._local_types[dest] = self._optional_variant_type(self._dv_type)
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
+				return dest
+			if expr.method_name == "index":
+				idx_val = self.lower_expr(expr.args[0])
+				self.b.emit(M.DVIndex(dest=dest, dv=dv_val, idx=idx_val))
+				self._local_types[dest] = self._dv_type
+				if drop_rvalue_dv:
+					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
+				return dest
+			if expr.method_name == "kind":
+				self.b.emit(M.DVKind(dest=dest, dv=dv_val))
+				self._local_types[dest] = self._int_type
 				if drop_rvalue_dv:
 					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
 				return dest

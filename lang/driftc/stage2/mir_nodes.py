@@ -1351,6 +1351,33 @@ class ErrorCapturesGetDV(MInstr):
 
 
 @dataclass
+class ExcGetParamsJson(MInstr):
+	"""dest = drift_error_get_params_json(error) (returns retained
+	canonical JSON String; caller owns and releases).
+
+	Phase 1+ DV→JSON migration — used by `<error>.params` field-access
+	lowering to retrieve the stored canonical JSON document for the
+	`ErrorParamsView` constructor.  See ABI spec §2.3.
+	"""
+
+	dest: ValueId
+	error: ValueId
+
+
+@dataclass
+class ExcSetParamsJson(MInstr):
+	"""drift_error_set_params_json(error, json_text) — runtime takes
+	ownership of `json_text`; replacement releases the prior value.
+
+	Phase 1+ DV→JSON migration — emitted by throw-lowering after the
+	canonical-params JSON String is built.  See ABI spec §2.3.
+	"""
+
+	error: ValueId
+	json_text: ValueId
+
+
+@dataclass
 class DVAsInt(MInstr):
 	"""dest = drift_dv_as_int(dv) (returns Optional<Int>)."""
 
@@ -1397,6 +1424,47 @@ class DVGetField(MInstr):
 	dest: ValueId
 	dv: ValueId
 	key: ValueId
+
+
+@dataclass
+class DVKind(MInstr):
+	"""dest = drift_dv_kind(dv) (returns Int — matches C enum
+	DriftDiagnosticTag: 0=Missing, 1=Null, 2=Bool, 3=Int, 4=Float,
+	5=String, 6=Array, 7=Object).
+
+	DV→JSON migration (Slice 1+) — used by `_dv_to_json_text` to
+	disambiguate empty Array from Missing/Null cases that the
+	scalar/object accessors cannot distinguish.
+
+	DELETION LEDGER: transitional migration scaffolding only.  Not a
+	new user-facing DV API.  Delete with the rest of the DV public-
+	surface removal at Slice 5.  See deletion-ledger comment in
+	`stdlib/std/core/core.drift`.
+	"""
+
+	dest: ValueId
+	dv: ValueId
+
+
+@dataclass
+class DVIndex(MInstr):
+	"""dest = drift_dv_index(dv, idx) (returns DiagnosticValue at array
+	position idx; out-of-range yields DV_MISSING).
+
+	DV→JSON migration (Slice 1+) — used by `_dv_to_json_text` to
+	recurse over DV::Array variants.  Mirrors the existing DVGetField
+	op for Object access; pairs with DVLen for length-based iteration.
+
+	DELETION LEDGER: transitional migration scaffolding only.  Not a
+	new user-facing DV API.  Delete with the rest of the DV public-
+	surface removal at Slice 5.  See deletion-ledger comment in
+	`stdlib/std/core/core.drift`.
+	"""
+
+	dest: ValueId
+	dv: ValueId
+	idx: ValueId
+
 
 @dataclass
 class DVLen(MInstr):
@@ -1658,12 +1726,16 @@ __all__ = [
 	"ResultErr",
 	"ErrorAttrsGetDV",
 	"ErrorCapturesGetDV",
+	"ExcGetParamsJson",
+	"ExcSetParamsJson",
 	"DVAsInt",
 	"DVAsBool",
 	"DVAsFloat",
 	"DVAsString",
 	"DVAsObject",
 	"DVGetField",
+	"DVIndex",
+	"DVKind",
 	"DVLen",
 	"DVEntries",
 	"ErrorEvent",

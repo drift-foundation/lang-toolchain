@@ -77,7 +77,8 @@ export {
 	type_id,
 	STRING_CONTAINER_ID,
 	string_byte_at,
-	string_from_utf8_bytes
+	string_from_utf8_bytes,
+	ErrorParamsView
 };
 
 export { std.core.copy.* };
@@ -712,4 +713,229 @@ implement<T> shareable.Share for arc_mod.Arc<T> {
 	pub fn share(self: &arc_mod.Arc<T>) nothrow -> arc_mod.Arc<T> {
 		return self.clone();
 	}
+}
+
+
+// ── Diagnostics-context envelope view types (DV→JSON migration, Slice 1) ──
+//
+// Public dump surface for the migration: `e.params` returns an
+// `ErrorParamsView`; `view.encode_compact()` returns the canonical
+// JSON text of the exception's declared fields.  Construction of
+// the view is compiler-handled (type-checker special-case +
+// HIR→MIR field-access lowering); user code does not construct it
+// directly in Slice 1.
+
+/// Opaque view over an `Error`'s declared exception field values,
+/// serialized as canonical JSON text.  Construct via `e.params` on
+/// a catch-bound Error.
+pub struct ErrorParamsView {
+	json_text: String,
+}
+
+implement copy_mod.Copy for ErrorParamsView { }
+
+implement ErrorParamsView {
+	/// Returns the canonical JSON text of the exception's declared
+	/// fields.  Object form: `{"<key>":<value>,...}` with keys in
+	/// lex-utf8 order.  Empty exception → `"{}"`.
+	pub fn encode_compact(self: &ErrorParamsView) nothrow -> String {
+		return self.json_text;
+	}
+}
+
+
+// ── Internal JSON-text helpers (DV→JSON migration, transitional) ─
+//
+// ┌────────────────────────────────────────────────────────────────┐
+// │ DELETION LEDGER — transitional migration scaffolding only.     │
+// │                                                                │
+// │ The following helpers exist solely to bridge the existing      │
+// │ `to_diag() -> DiagnosticValue` exception-field projection      │
+// │ while public DV is replaced by canonical JSON params:          │
+// │                                                                │
+// │   - `_dv_to_json_text` (this module)                           │
+// │   - `DiagnosticValue.kind()` (compiler intrinsic — see         │
+// │     `lang/driftc/checker/call_resolver.py` and                 │
+// │     `lang/driftc/stage2/hir_to_mir.py`)                        │
+// │   - `DiagnosticValue.index()` (compiler intrinsic — same       │
+// │     locations)                                                 │
+// │                                                                │
+// │ These are NOT new user-facing DV APIs.  Do not document them   │
+// │ in `docs/effective-drift.md` or any other user-visible spec.   │
+// │ Do not expand them with new variants.  Do not call them from   │
+// │ user code (they are not exported from std.core).               │
+// │                                                                │
+// │ DELETE this path once throw-side projection no longer depends  │
+// │ on DV — i.e., once `to_diag()` is removed from the Diagnostic  │
+// │ trait and replaced with `to_json() -> JsonNode`.  Tracked in   │
+// │ `memory/project_dv_to_json_diagnostics.md` (Slice 5).          │
+// └────────────────────────────────────────────────────────────────┘
+//
+// Why these live in std.core (and not std.json): std.core has its
+// own throws (the `Throw for {Int,Uint,Bool,Float,String,
+// DiagnosticValue}` impls and `or_throw`), and HIR→MIR throw-
+// lowering needs to project declared exception fields to canonical
+// JSON text at the throw site.  std.core cannot import std.json
+// without cycling, so a minimal scoped JSON-text projector lives
+// here.  See ABI spec §2.3 for the migration plan.
+
+fn _hex_digit(v: Int) nothrow -> String {
+	if v == 0 { return "0"; }
+	if v == 1 { return "1"; }
+	if v == 2 { return "2"; }
+	if v == 3 { return "3"; }
+	if v == 4 { return "4"; }
+	if v == 5 { return "5"; }
+	if v == 6 { return "6"; }
+	if v == 7 { return "7"; }
+	if v == 8 { return "8"; }
+	if v == 9 { return "9"; }
+	if v == 10 { return "A"; }
+	if v == 11 { return "B"; }
+	if v == 12 { return "C"; }
+	if v == 13 { return "D"; }
+	if v == 14 { return "E"; }
+	return "F";
+}
+
+fn _byte_hex2(b: Byte) nothrow -> String {
+	val v = cast<Int>(b);
+	val hi = v / 16;
+	val lo = v % 16;
+	return _hex_digit(hi) + _hex_digit(lo);
+}
+
+fn _byte_to_string(b: Byte) nothrow -> String {
+	unsafe {
+		var raw = mem.alloc_uninit<type Byte>(1);
+		mem.write<type Byte>(&mut raw, 0, b);
+		val out = string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.dealloc<type Byte>(raw);
+		return out;
+	}
+}
+
+/// JSON-quotes and escapes `s` per RFC 8259.  Returns
+/// `"\"<escaped>\""`.  Private — Slice 1 transitional helper.
+fn _json_quote_string(s: &String) nothrow -> String {
+	var out = "\"";
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		val b = string_byte_at(s, i);
+		if b == cast<Byte>(34) {
+			out = out + "\\\"";
+		} else {
+			if b == cast<Byte>(92) {
+				out = out + "\\\\";
+			} else {
+				if b == cast<Byte>(8) {
+					out = out + "\\b";
+				} else {
+					if b == cast<Byte>(12) {
+						out = out + "\\f";
+					} else {
+						if b == cast<Byte>(10) {
+							out = out + "\\n";
+						} else {
+							if b == cast<Byte>(13) {
+								out = out + "\\r";
+							} else {
+								if b == cast<Byte>(9) {
+									out = out + "\\t";
+								} else {
+									if b < cast<Byte>(32) {
+										out = out + "\\u00" + _byte_hex2(b);
+									} else {
+										out = out + _byte_to_string(b);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return out + "\"";
+}
+
+/// Projects a `DiagnosticValue` to canonical JSON text, recursively.
+/// Private — Slice 1 transitional helper.  Covers all DV variants
+/// without silent corruption.  Variant discrimination uses
+/// `dv.kind()` (matches C enum DriftDiagnosticTag):
+///   - 0 (Missing) / 1 (Null) → `null`
+///   - 2 (Bool)               → `true` / `false`
+///   - 3 (Int)                → `f"{v}"` (decimal, signed)
+///   - 4 (Float)              → `f"{v}"` (round-trip-safe shortest)
+///   - 5 (String)             → `"<escaped>"` via `_json_quote_string`
+///   - 6 (Array)              → `[<v0>,<v1>,...]` (`[]` if empty),
+///                              recursing each item via `dv.index(i)`
+///   - 7 (Object)             → `{"<k0>":<v0>,...}` (`{}` if empty),
+///                              keys in `dv.entries()` order — NOT
+///                              lex-sorted; the throw lowering
+///                              imposes lex order on the OUTER
+///                              params object, not on nested
+///                              DV::Object values.
+fn _dv_to_json_text(dv: &DiagnosticValue) nothrow -> String {
+	val k = dv.kind();
+	if k == 2 {
+		match dv.as_bool() {
+			Some(v) => {
+				if v { return "true"; }
+				return "false";
+			},
+			None => { return "null"; }
+		}
+	}
+	if k == 3 {
+		match dv.as_int() {
+			Some(v) => { return f"{v}"; },
+			None => { return "null"; }
+		}
+	}
+	if k == 4 {
+		match dv.as_float() {
+			Some(v) => { return f"{v}"; },
+			None => { return "null"; }
+		}
+	}
+	if k == 5 {
+		match dv.as_string() {
+			Some(v) => { return _json_quote_string(&v); },
+			None => { return "null"; }
+		}
+	}
+	if k == 6 {
+		// DV::Array — iterate by index.
+		val n = dv.len();
+		if n == 0 { return "[]"; }
+		var out = "[";
+		var i = 0;
+		while i < n {
+			if i != 0 { out = out + ","; }
+			val item = dv.index(i);
+			out = out + _dv_to_json_text(&item);
+			i = i + 1;
+		}
+		return out + "]";
+	}
+	if k == 7 {
+		// DV::Object — iterate entries.
+		val entries = dv.entries();
+		val n: Int = entries.len;
+		if n == 0 { return "{}"; }
+		var out = "{";
+		var i = 0;
+		while i < n {
+			if i != 0 { out = out + ","; }
+			val entry = &entries[i];
+			out = out + _json_quote_string(&entry.key) + ":" + _dv_to_json_text(&entry.value);
+			i = i + 1;
+		}
+		return out + "}";
+	}
+	// DV::Missing (0) or DV::Null (1).
+	return "null";
 }

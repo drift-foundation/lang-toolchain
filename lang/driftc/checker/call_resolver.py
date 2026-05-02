@@ -1824,7 +1824,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				arg_types[idx] = exp_ty
 
 	# Built-in DiagnosticValue helpers are reserved method names and take precedence.
-	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get"):
+	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind"):
 		recv_ty = type_expr(expr.receiver, used_as_value=False)
 		recv_eff_ty = recv_ty
 		recv_def = ctx.type_table.get(recv_eff_ty)
@@ -1868,6 +1868,35 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				opt_dv = _optional_variant_type(ctx.dv_ty)
 				info = _call_info([recv_ty], opt_dv, False, _intrinsic_method_fn_id(expr.method_name))
 				return MethodCallResult(opt_dv, info)
+			# DELETION LEDGER: `DiagnosticValue.index()` is transitional
+			# DV→JSON migration scaffolding only — bridges the existing
+			# `to_diag() -> DiagnosticValue` exception-field projection.
+			# Not a new user-facing DV API.  Delete with the rest of the
+			# DV public-surface removal at Slice 5.  See deletion-ledger
+			# comment in `stdlib/std/core/core.drift`.
+			if expr.method_name == "index":
+				if len(getattr(expr, "args", []) or []) != 1:
+					diagnostics.append(_tc_diag(message="DiagnosticValue.index expects exactly one Int index argument", severity="error", span=getattr(expr, "loc", Span())))
+					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+					return MethodCallResult(ctx.unknown_ty, info)
+				idx_ty = type_expr(expr.args[0], used_as_value=False)
+				if idx_ty != ctx.int_ty:
+					diagnostics.append(_tc_diag(message="DiagnosticValue.index argument must be Int", severity="error", span=getattr(expr.args[0], "loc", Span())))
+					info = _call_info([recv_ty, idx_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+					return MethodCallResult(ctx.unknown_ty, info)
+				# Returns a fresh DiagnosticValue (out-of-range yields DV_MISSING).
+				info = _call_info([recv_ty, idx_ty], ctx.dv_ty, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(ctx.dv_ty, info)
+			# DELETION LEDGER: `DiagnosticValue.kind()` is transitional
+			# DV→JSON migration scaffolding only — see `index` above.
+			if expr.method_name == "kind":
+				if getattr(expr, "args", None):
+					diagnostics.append(_tc_diag(message="DiagnosticValue.kind takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
+					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+					return MethodCallResult(ctx.unknown_ty, info)
+				# Returns Int (matches C enum DriftDiagnosticTag: 0..7).
+				info = _call_info([recv_ty], ctx.int_ty, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(ctx.int_ty, info)
 			info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(ctx.unknown_ty, info)
 
