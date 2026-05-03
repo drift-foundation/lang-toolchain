@@ -1,6 +1,6 @@
 # Slice 5 Spec — `pub error` and the JSON-text Diagnostic Surface
 
-**Status:** DRAFT v0 — 2026-05-03. Spec-first per K's confirmed sequencing. Awaiting K's review/lock before any code, test, or stdlib edits begin.
+**Status:** LOCKED v1 — 2026-05-03. K signed off on direction with corrections (DiagnosticParse scope-cut, ResultError raw-JSON-splice rule, collection projectability rules, all six `std.core` helpers in 0.32.0, FNV-1a 64 with package-level duplicate detection, strict `or_throw()` enforcement in 0.32.0 with global `Result<T, E>` strictness deferred). Ready for test-drafting (step 2 of §15 sequencing).
 
 **Companion docs:**
 - `work/exception-diagnostics-context/slice5-preflight.md` — inventory, decision history, K sign-off (§12).
@@ -14,13 +14,21 @@
 
 This spec treats the following as **confirmed**, not open:
 
-1. **`pub exception` is a transitional alias for `pub error`** — compiles for one release; deprecation diagnostic if practical; canonical docs/spec use `pub error`. Hard-error deferred to 0.33.0.
-2. **`Result<T, E: error>` is the long-term strict rule.** Spec defines strict; implementation MAY stage through `or_throw()`-only enforcement first if full strict enforcement risks too much compiler churn. Strict is the target end-state.
+1. **`pub exception` is a transitional alias for `pub error`** — compiles for one release; deprecation diagnostic if practical; canonical docs/spec use `pub error`. Hard-error deferred to 0.33.0. Suppression uses the existing diagnostic system; no new pragma.
+2. **`Result<T, E: error>` is the long-term strict rule.** Slice 5 enforces strict on `or_throw()` (Phase 5a) and cleans all stdlib `Result<T, E>` Errs. Global hard enforcement on all `Result<T, E>` positions is deferred to 0.33.0 unless cheap to land in 0.32.0. Strict is the target end-state. Global Result strictness MUST NOT block DV removal in 0.32.0.
 3. **`pub error` is a distinct language kind**, not desugar to `struct + implement Error`. Internally it MAY lower to existing exception metadata, but semantically it is the datatype category valid for `Result` Err, throw, catch, event identity, and synthesized diagnostics.
 4. **Synthesis field ordering: lex-utf8.** Independent of source declaration order; survives field reordering refactors.
-5. **Synthesis succeeds when every field is `Diagnostic`/JSON-text-projectable.** Built-in primitives and `pub error` types are projectable by default. Non-projectable field → targeted diagnostic.
+5. **Synthesis succeeds when every field is `Diagnostic`/JSON-text-projectable.** Built-in primitives and `pub error` types are projectable by default. Collection rules: `Optional<U>`, `Array<U>`, and `Map<String, V>` are auto-projectable when contained values are projectable. `Map<K, V>` with non-`String` `K` is NOT projectable (rejected). Pointer / function / opaque types are NOT auto-projectable. Non-projectable field → targeted diagnostic.
 6. **Catch-by-supertype / marker is explicitly out of Slice 5.** Typed catch by concrete error identity only.
-7. **`ResultError` is demoted, not centered.** If retained, deprecated `pub error` with JSON-text payload, hidden behind `from_diagnostic` / `or_throw`-style APIs. No `DiagnosticValue`. No raw/`_trusted` constructors. If unneeded after the migration, delete or mark legacy.
+7. **`ResultError` is demoted, not centered.** Prefer delete if stdlib no longer needs it. If retained: do NOT model raw JSON as a normal `String` field (a normal field gets quoted via `diagnostic_json_string`, which is wrong for raw-JSON splice). The raw JSON carrier MUST be a private/internal field with a compiler-special raw-splice rule, exposed only through `from_diagnostic`-style helpers. No public raw constructor.
+
+**DiagnosticParse scope cut (K, 2026-05-03):** Slice 5 v1 does NOT introduce a public `DiagnosticParse` trait. Synthesized `pub error` projections come with synthesized reverse projection — `catch ParseError(e)` typed-binder works automatically. Manual `Diagnostic.to_json_text` overrides are allowed for envelope/log output, but typed catch binding on a manually-projected `pub error` is rejected with a clear diagnostic in v1. Manual reverse parsing is a deliberate follow-up design track. Users do NOT write `DiagnosticParse` impls in Slice 5.
+
+**`std.core` JSON helpers (K, 2026-05-03):** all six (`diagnostic_json_string`, `diagnostic_json_null`, `diagnostic_json_bool`, `diagnostic_json_int`, `diagnostic_json_uint`, `diagnostic_json_float`) ship in 0.32.0.
+
+**Empty payload (K, 2026-05-03):** synthesized projection for `pub error E {}` returns `"{}"`. The envelope's `params` is ALWAYS a JSON object, never `null`, never omitted.
+
+**`event_code` algorithm:** reuse the existing exception event-code scheme if one is in place. If not, pin **FNV-1a 64-bit** (exact algorithm, not "or equivalent"). Add per-package duplicate detection with a diagnostic recommending explicit `pub error E(0x....)` assignment.
 
 **Runtime boundary:** canonical JSON String only. `std.json` is allowed inside user projection code, but `JsonNode` / `JsonObject` / `JsonHandle` do NOT cross into the runtime exception envelope.
 
@@ -126,15 +134,15 @@ This applies to:
 - All `Result<T, E>` constructions: `Result::Ok(...)` for the Err type, `Result::Err(e)` for `e: E`, function signatures returning `Result<T, E>`, fields of type `Result<T, E>`.
 - All `Result` method usages: `or_throw()`, `unwrap()`, `unwrap_or()`, etc. — but see §3.3.
 
-### 3.2 Implementation staging clause (K answer 2)
+### 3.2 Implementation staging (K, 2026-05-03)
 
-If full strict enforcement creates excessive compiler churn (deep stdlib, downstream package rebuilds, generic-bounds machinery edits), the implementation MAY stage in this order:
+K pinned the staging:
 
-1. **Phase 5a (must land in 0.32.0):** `or_throw()` strictly requires `E: pub error`. Error message points to the migration.
-2. **Phase 5b (must land in 0.32.0):** All STDLIB uses of `Result<T, E>` migrate to `pub error` Errs. (Stdlib is the easiest blast-radius bound — must be clean.)
-3. **Phase 5c (may land in 0.32.0 or 0.33.0):** Strict global enforcement on `Result<T, E>` constructions and signatures. If deferred to 0.33.0, the 0.32.0 release ships a `W_RESULT_ERR_NOT_ERROR_TYPE` warning at non-error Err positions; 0.33.0 promotes it to error.
+1. **Phase 5a (LANDS in 0.32.0, strict):** `or_throw()` strictly requires `E: pub error`. Diagnostic `E_OR_THROW_NOT_ERROR_TYPE` at non-error `Result<T, E>` `or_throw()` call sites.
+2. **Phase 5b (LANDS in 0.32.0):** All STDLIB uses of `Result<T, E>` migrate to `pub error` Errs. Stdlib must be clean before release.
+3. **Phase 5c (warning in 0.32.0; error in 0.33.0):** Non-error `Result<T, E>` positions outside stdlib emit `W_RESULT_ERR_NOT_ERROR_TYPE` if practical. Promoted to `E_RESULT_ERR_NOT_ERROR_TYPE` in 0.33.0. If implementing the warning is cheap, ship it; if it requires generic-bounds machinery work, defer the warning too — but the strict `or_throw` enforcement at 5a is non-negotiable and **MUST NOT be blocked by Phase 5c work**.
 
-The spec end-state is strict; the staging is an implementation kindness, not a spec relaxation.
+The spec end-state is strict global enforcement; the staging is an implementation kindness, not a spec relaxation.
 
 ### 3.3 `or_throw()` semantics
 
@@ -165,7 +173,7 @@ try {
 }
 ```
 
-`e` binds the materialized `ParseError` value with full field access. The compiler reconstructs the bound `pub error` value from the runtime envelope; field types must be reconstructible from the envelope's `params_json` (this is automatic for synthesized projections; manual `to_json_text` impls require a parallel `from_json` story — see §7.5 for the rule).
+`e` binds the materialized `ParseError` value with full field access. **Scope cut for v1 (K, 2026-05-03):** typed catch-binding works automatically for `pub error` types using the synthesized `Diagnostic` projection. For `pub error` types with a manual `to_json_text` override, typed catch-binding is REJECTED at compile time with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` — see §7.5. Manual reverse parsing (`DiagnosticParse`) is a follow-up design track, not Slice 5.
 
 ### 3.4 Other `Result` methods
 
@@ -396,25 +404,36 @@ The diagnostic is emitted at the `pub error` declaration site (not at use sites 
 
 ### 7.5 Reverse projection (envelope → `pub error` for catch binding)
 
-For `catch ParseError(e) { ... }`, `e` is materialized from the envelope's `params_json` by inverse projection:
+For `catch ParseError(e) { ... }`, `e` is materialized from the envelope's `params_json` by inverse projection.
 
-- For synthesized `Diagnostic`: the compiler ALSO synthesizes a `from_json_text(s: &String) nothrow -> Optional<E>` parser at the declaration site, mirroring the synthesized projection. Field-by-field: parse the JSON object, look up each declared field name, parse its value via the field type's inverse parser.
-- For manual `Diagnostic`: the user MUST also provide a manual reverse parser if they want to use the type with `catch E(e)`. Spec-level rule:
-  > A user-overridden `Diagnostic` impl for a `pub error` type MUST be paired with a user-overridden inverse parser implementing trait `DiagnosticParse`:
-  > ```drift
-  > pub trait DiagnosticParse {
-  >     fn from_json_text(s: &String) nothrow -> Optional<Self>;
-  > }
-  > ```
-  > Lacking it, `catch E(e)` over a manually-projected `pub error` is a compile error pointing at the missing parser.
+**Slice 5 v1 scope (K-locked 2026-05-03):**
 
-This is an additive contract — synthesized projections come with a synthesized inverse for free; manual projections opt into providing both halves.
+- **Synthesized projection ⇒ synthesized inverse.** When the compiler synthesizes `Diagnostic for E`, it ALSO synthesizes a private inverse parser (internally — not exposed as a user-implementable trait) that mirrors the synthesized projection. Field-by-field: parse the JSON object, look up each declared field name (lex-utf8 sort matches the projection ordering), parse its value via the field type's inverse parser. This makes `catch E(e)` typed-binding "just work" for the dominant product path.
 
-**Open implementation question:** v1 may simplify by NOT supporting catch-bind on manually-projected `pub error` types, requiring users to use `catch * { e.params.get(...).as_*() }` access for those cases. This is a reasonable initial scope cut. The spec leaves it to the implementer; whichever choice ships must be accompanied by a clear diagnostic.
+- **Manual projection ⇒ NO synthesized inverse.** When the user provides an explicit `implement Diagnostic for E` override, the compiler does NOT auto-synthesize a reverse parser. Catch-binding of `E` with a typed binder is REJECTED with diagnostic `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`:
+
+  ```
+  error[E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED]: typed catch binding for 'SecretError' requires synthesized Diagnostic projection
+    --> src/foo.drift:42:9
+     |
+  42 |     catch SecretError(e) { ... }
+     |           ^^^^^^^^^^^^
+     = note: 'SecretError' has a manual 'implement Diagnostic for SecretError' impl
+     = help: SecretError values can still be caught by event identity:
+             catch SecretError { ... e.params.get("...") ... }
+             with the binder removed.
+             Manual reverse parsing (DiagnosticParse) is planned for a follow-up release.
+  ```
+
+- Manually-projected `pub error` types remain CATCHABLE BY EVENT IDENTITY (the `catch X { ... }` form WITHOUT the typed binder), with envelope access via `e.params.get(...)`. Only the typed-binder form is rejected.
+
+- **No public `DiagnosticParse` trait in 0.32.0.** Users do NOT write reverse parsers in Slice 5. The `DiagnosticParse` concept is reserved for a future design track; the spec mentions it only as a planned follow-up so reviewers can see where the door is left.
+
+**Why this scope cut:** the dominant product use case is `pub error E { ...primitive fields... }` with synthesized projection — that path gets full typed catch-binding for free. Custom-projection use cases (redaction, verbose dumps, std.json composition) tend to also want custom catch logic, which the user can write today via `catch E { e.params.get(...) }`. Punting manual reverse parsing to its own track keeps Slice 5 focused on the language model + DV removal.
 
 ### 7.6 Manual override
 
-To override synthesis, the user writes their own impl in the same package as the declaration:
+To override synthesis, the user writes their own `Diagnostic` impl in the same package as the declaration:
 
 ```drift
 pub error SecretError {
@@ -424,21 +443,24 @@ pub error SecretError {
 
 implement Diagnostic for SecretError {
     pub fn to_json_text(self: &SecretError) nothrow -> String {
-        // Redacted projection — secret_token never appears.
-        return "{\"user_id\":" + format_int(self.user_id) + "}";
+        // Redacted projection — secret_token never appears in logs/envelope.
+        return "{\"user_id\":" + diagnostic_json_int(self.user_id) + "}";
     }
 }
 
-implement DiagnosticParse for SecretError {
-    pub fn from_json_text(s: &String) nothrow -> Optional<SecretError> {
-        // Parser that reconstructs SecretError from redacted form,
-        // filling secret_token with empty string.
-        ...
-    }
-}
+// NO DiagnosticParse impl needed in v1 — typed catch-binding is unavailable
+// for SecretError because it has a manual projection. Catch by event identity:
+//
+//     try { ... } catch SecretError {
+//         val uid = e.params.get("user_id").as_int().unwrap_or(0);
+//         log("auth failed for user", uid);
+//     }
+//
+// (The implicit 'e' binder in the catch arm is the opaque envelope handle,
+// NOT a typed SecretError value. Use e.params.get(...) for field access.)
 ```
 
-The compiler detects the explicit `Diagnostic` impl and skips synthesis.
+The compiler detects the explicit `Diagnostic` impl and skips synthesis. Per §7.5, typed-binder catch (`catch SecretError(e)`) is rejected with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`; only the no-binder form (`catch SecretError { ... }`) is accepted for manually-projected errors in v1.
 
 ---
 
@@ -491,7 +513,7 @@ Exact API redesign is a `std.log` decision; spec requires only that no public `s
 
 ## 9. `std.core` JSON-text Helpers
 
-New public surface in `std.core`:
+New public surface in `std.core` — **all six ship in 0.32.0** (K, 2026-05-03):
 
 ```drift
 /// Quote a String as an RFC-8259 JSON string value.
@@ -505,24 +527,22 @@ pub fn diagnostic_json_null() nothrow -> String;
 
 /// Returns "true" or "false".
 pub fn diagnostic_json_bool(v: Bool) nothrow -> String;
-```
 
-**Optional follow-on helpers** (may land in Slice 5 or a follow-up; the three above are the minimum):
-
-```drift
-/// Format an Int as JSON number.
+/// Format an Int as JSON number text (decimal, no quotes).
 pub fn diagnostic_json_int(n: Int) nothrow -> String;
 
-/// Format a Uint as JSON number.
+/// Format a Uint as JSON number text (decimal, no quotes).
 pub fn diagnostic_json_uint(n: Uint) nothrow -> String;
 
-/// Format a Float as JSON number per format_float canonical form.
+/// Format a Float as JSON number text per format_float canonical form
+/// (handles infinities/NaN by emitting valid JSON-tolerant
+/// substitutes, e.g. very-large-magnitude finite literals or quoted
+/// sentinels — exact non-finite handling is implementation-defined
+/// but MUST produce parseable JSON).
 pub fn diagnostic_json_float(f: Float) nothrow -> String;
 ```
 
-(These three are mostly conveniences over existing `format_int` / `format_uint` / `format_float` since JSON's number grammar accepts those forms unchanged. Not strictly required, but reduce user error.)
-
-**Implementation note:** `_json_quote_string` already exists privately in `std.core` (used by Slice 1's `_dv_to_json_text`). `diagnostic_json_string` is `_json_quote_string` promoted to public + renamed.
+**Implementation note:** `_json_quote_string` already exists privately in `std.core` (used by Slice 1's `_dv_to_json_text`). `diagnostic_json_string` is `_json_quote_string` promoted to public + renamed. The number helpers are thin wrappers over existing `format_int` / `format_uint` / `format_float` (JSON's number grammar accepts those forms unchanged); the wrappers exist so users don't import formatting modules just for diagnostic projection.
 
 **No `diagnostic_json_field(key, value_json)` in v1.** Users compose objects via `String` concat or via `std.json`. A field-builder helper can be added later if patterns warrant.
 
@@ -565,41 +585,53 @@ struct DriftError {
 
 ---
 
-## 11. `ResultError` Disposition (K answer 7)
+## 11. `ResultError` Disposition (K answer 7, corrected 2026-05-03)
 
-### 11.1 Demoted
+### 11.1 Demoted; prefer delete
 
 `ResultError` is no longer the universal catchall. Primary user path is `or_throw()` throws concrete `pub error` types directly.
 
-### 11.2 If retained: deprecated `pub error` shape
+**Preferred outcome: delete entirely.** The implementation track audits stdlib during Slice 5; if no stdlib code requires a catchall after `or_throw()` migration to direct-type throw, `ResultError` is REMOVED. Users who want a generic catch use `catch *` (see §11.4).
 
-If `ResultError` is needed for compatibility (e.g., generic adapters wrapping arbitrary `Diagnostic` values without a specific `pub error`), the form is:
+### 11.2 If retained: NOT a normal `pub error` with `String` field
+
+K's correction (2026-05-03): the naive shape `pub error ResultError { error_json: String }` is **wrong**. A normal `String` field would be projected via the synthesized `Diagnostic` impl, which calls `diagnostic_json_string(&self.error_json)` and wraps the value in JSON-string quotes. That double-quotes the carrier's JSON content, corrupting the envelope.
+
+**Correct retention shape (if `ResultError` survives):**
 
 ```drift
 @deprecated("use concrete pub error types via or_throw")
 pub error ResultError {
-    error_json: String,  // JSON value text — NOT a quoted string of the error
+    // Internal raw-JSON-splice carrier. NOT a normal field.
+    // Compiler treats this field specially: its String value is a
+    // canonical JSON value (object/array/scalar) and is spliced verbatim
+    // into the envelope's params slot, NOT quoted via diagnostic_json_string.
+    @raw_json_splice  // hypothetical attribute marking the special-case
+    _error_json: String,
 }
 ```
 
 **Rules:**
-- `error_json` semantics: the value is a JSON value (object / array / scalar) per the projected error's `to_json_text` output. NOT a quoted string of it.
-- Spliced verbatim into `params.error_json` of the envelope (no double-quoting).
-- Constructed only via sanctioned helpers:
+- The raw-JSON-splice carrier field is INTERNAL to `std.err` — not user-nameable, not user-constructible. Mechanism: leading underscore + module-private constructor + the `@raw_json_splice` attribute (or whatever the existing internal-marker convention is) telling the synthesized projection to splice rather than quote.
+- The compiler MUST recognize the splice attribute and skip `diagnostic_json_string` wrapping for that field. Spec-level rule: the synthesized projection for a `pub error` containing a `@raw_json_splice` field emits the field's value verbatim (after a runtime well-formedness assert if cheap; otherwise trust the constructor).
+- Public constructors are sanctioned helpers ONLY:
   ```drift
+  // Wrap an arbitrary Diagnostic value into a ResultError.
   pub fn ResultError::from_diagnostic(d: &impl Diagnostic) nothrow -> ResultError;
   ```
-  (or a free function `result_error_from(d: &impl Diagnostic)` if trait static methods aren't supported in v1).
-- NO public raw constructor (no `ResultError(error_json = ...)` user form). The synthesized struct constructor is hidden from user code via existing `@internal` mechanism, OR the field is named with a leading underscore convention (`_error_json`) and the constructor is private to `std.err`.
-- `_trusted` JSON constructors are NOT exposed.
+  (Or a free function `result_error_from(d: &impl Diagnostic)` if trait static methods aren't supported in v1.)
+- NO public raw constructor — no user-facing `ResultError(_error_json = ...)`. The synthesized struct constructor for `ResultError` is hidden from user code (module-private declaration of the field, or existing `@internal`-equivalent mechanism).
+- `_trusted` JSON constructors are NOT exposed publicly.
 
-### 11.3 If unneeded: deleted
+### 11.3 Implementation choice point
 
-If after the migration no stdlib code requires the catchall, `ResultError` is REMOVED entirely. This is preferred. The spec authorizes either outcome; the implementation track decides based on stdlib audit during Slice 5 implementation.
+The implementation track decides between §11.1 (delete) and §11.2 (retain with raw-splice carrier) based on the stdlib audit during Slice 5. Spec authorizes either; recommendation is delete unless concrete stdlib need is found.
+
+If §11.2 is taken, the `@raw_json_splice` attribute (or equivalent) is a NEW compiler feature added in Slice 5. It is not exposed to users — only `std.err:ResultError` may use it in 0.32.0. Future expansion of raw-splice to user types is out of scope.
 
 ### 11.4 Catchall still works via wildcard
 
-`catch *` (and `catch * as e`, if added) covers cases users would have used `catch ResultError(e)` for previously. The recommended migration:
+`catch *` covers cases users would have used `catch ResultError(e)` for previously. Recommended migration:
 
 ```drift
 // Before:
@@ -607,12 +639,12 @@ try { ... } catch ResultError(e) { log(e.attrs["message"].as_string().unwrap());
 
 // After:
 try { ... } catch * {
-    // Use envelope accessors:
+    // Use envelope accessors via the implicit binder:
     log(e.params.get("message").as_string().unwrap_or("(no message)"));
 }
 ```
 
-(Assumes `catch * as e` is supported; if not, the catch arm has access to the implicit `e` via a future binder mechanism. In v1 this may require explicit naming syntax — out of scope for this spec.)
+(Existing `catch *` already binds `e` to the envelope handle — no spec change needed for the binder mechanism.)
 
 ---
 
@@ -665,7 +697,7 @@ In addition to the trait migration in §8:
 | `E_OR_THROW_NOT_ERROR_TYPE` | `or_throw()` on `Result<T, E>` where E is not a `pub error` (Phase 5a — strict from day one) | "or_throw requires the Err type to be a 'pub error'" |
 | `E_THROW_NOT_ERROR_TYPE` | `throw <expr>` where `expr`'s type is not a `pub error` | "cannot throw value of type '<T>'; only 'pub error' types are throwable" |
 | `E_CATCH_NOT_ERROR_TYPE` | `catch X(e)` where `X` is not a `pub error` | "catch requires a 'pub error' type; got '<type>'" |
-| `E_DIAG_PARSE_MISSING` | `catch E(e)` over a `pub error` with manual `Diagnostic` but no manual `DiagnosticParse` | See §7.5 |
+| `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` | `catch E(e)` (typed binder) on a `pub error` with manual `Diagnostic` impl | See §7.5 — manual reverse parsing is a follow-up track; v1 supports binder-less `catch E { ... }` for these |
 
 Codes are placeholders; final code allocation per the existing diagnostic-code registry.
 
@@ -734,7 +766,7 @@ try { ... } catch ParseError(e) {
 
 **Before:** custom `to_diag` returning a redacted DV object.
 
-**After:** custom `to_json_text` returning a redacted JSON object (see §7.6 example). Add the matching `DiagnosticParse` impl if `catch SecretError(e)` is used.
+**After:** custom `to_json_text` returning a redacted JSON object (see §7.6 example). Note v1 limitation: a `pub error` with a manual `Diagnostic` impl loses typed catch-binding — `catch SecretError(e)` with field access is rejected with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`. Use the binder-less form `catch SecretError { e.params.get("...") ... }` instead. Manual reverse parsing (`DiagnosticParse`) is a planned follow-up.
 
 ### 14.4 Universal `catch ResultError(e)`
 
@@ -793,9 +825,13 @@ Per K's confirmed top-down spec-first:
 5. **Compiler grammar + checker:**
    - `pub error` parsing.
    - `pub exception` deprecation alias.
-   - Synthesized `Diagnostic` + `DiagnosticParse` impl generators.
-   - `Result<T, E: pub error>` constraint enforcement (Phase 5a strict on `or_throw`; Phase 5c global per §3.2).
+   - Synthesized `Diagnostic` projection generator (forward direction).
+   - Synthesized internal reverse parser for typed catch-binding on synthesized `pub error` types (private; not a user-implementable trait — see §7.5).
+   - Typed-catch-binding rejection diagnostic for manually-projected `pub error` types (`E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`).
+   - `Result<T, E: pub error>` constraint enforcement (Phase 5a strict on `or_throw`; Phase 5c warning at non-error positions if practical, error in 0.33.0 — see §3.2).
    - Type-checker rejection diagnostics (§13.2).
+   - Per-package `event_code` duplicate detection (when auto-assigned codes collide via FNV-1a 64).
+   - If `ResultError` is retained: `@raw_json_splice` (or equivalent) compiler attribute; restricted to `std.err` use only.
 6. **Compiler lowering:**
    - HIR→MIR rewrite of throw-side params projection: replace `_dv_to_json_text` chain with direct `Diagnostic.to_json_text(&field)` calls.
    - `_emit_captured_locals` rewrite (same).
@@ -822,7 +858,7 @@ Compiler version: 0.31.53 → **0.32.0** at the end of step 7.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Catch-bind reverse projection (§7.5) | High | v1 may scope-cut to "synthesized projections only get catch-bind"; manual projections require `catch * { e.params.get(...) }` access. Diagnostic `E_DIAG_PARSE_MISSING` makes the limitation explicit. |
+| Catch-bind reverse projection (§7.5) | Resolved (scope-cut) | Synthesized-only typed binder in v1; manual projections use binder-less `catch E { ... }` with `e.params.get(...)`. Diagnostic `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` makes the limitation explicit. Manual `DiagnosticParse` deferred to a follow-up track. |
 | Stdlib migration is large (~13+7+stdlib internals) | Medium | Mechanical edits; bulk via review. Per-module testable. |
 | `Result<T, E>` strict enforcement churn | Medium | §3.2 staging clause permits `or_throw`-only enforcement in 0.32.0, full strict in 0.33.0. |
 | `pub exception` warning suppression | Low | Use existing diagnostic-suppression mechanism if needed; otherwise rely on the warning being eventually fixable. |
@@ -832,23 +868,20 @@ Compiler version: 0.31.53 → **0.32.0** at the end of step 7.
 
 ---
 
-## 17. Open Spec Questions (for K's review)
+## 17. Answers Locked (K, 2026-05-03)
 
-These are spec-level decisions I want K to confirm before drafting tests:
+The original v0 draft posed 7 open questions; K answered all of them. Recorded here for reference:
 
-1. **Field projectability for collection types** (§7.2): I specified `Optional<U>` and `Array<U>` recursively projectable. Should `Map<String, V>` be similarly auto-projectable? (Recommend yes, for `V: Diagnostic`.) Other collection types?
+1. **Collection projectability:** `Optional<U>`, `Array<U>`, and `Map<String, V>` are auto-projectable when contained values are projectable. `Map<K, V>` with `K != String` is rejected. Pointer / function / opaque types are NOT auto-projectable. — see §7.2.
+2. **`DiagnosticParse`:** NOT a public trait in 0.32.0. Synthesized inverse parsing happens internally for synthesized projections; manual projections lack typed catch-binding (binder-less `catch E { ... }` only). Manual reverse parsing is a follow-up design track. — see §7.5.
+3. **Catch-bind on manually-projected `pub error`:** scope-cut to synthesized-only in v1. Diagnostic `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` for the typed-binder form on manually-projected errors. — see §7.5.
+4. **`event_code` algorithm:** reuse the existing exception event-code scheme if one is in place; if not, **FNV-1a 64-bit** exactly (not "or equivalent"). Per-package duplicate detection diagnostic. — see §2.4.
+5. **`pub exception` warning suppression:** leave to existing diagnostic system; no new pragma in this slice. — see §2.1.
+6. **`std.core` JSON helpers:** all six ship in 0.32.0 (`diagnostic_json_string`, `diagnostic_json_null`, `diagnostic_json_bool`, `diagnostic_json_int`, `diagnostic_json_uint`, `diagnostic_json_float`). — see §9.
+7. **Empty payload:** synthesized projection for `pub error E {}` returns `"{}"`. Envelope's `params` is ALWAYS a JSON object, never `null`, never omitted. — see §7.3.
 
-2. **`DiagnosticParse` trait existence** (§7.5): is the right shape a separate `DiagnosticParse` trait, OR should it be a second method on `Diagnostic` itself (`fn from_json_text(s: &String) nothrow -> Optional<Self>`)? Two-method `Diagnostic` is simpler but couples projection and parsing more tightly. (Recommend separate trait so projection-only types — non-error `Diagnostic` impls used purely for log/trace/etc. — don't need to define a parser.)
-
-3. **Catch-bind on manually-projected `pub error`** (§7.5 closing note): scope-cut to synthesized-only in v1, OR require `DiagnosticParse` for catch-bind? (Recommend scope-cut for simplicity; document as planned follow-up.)
-
-4. **`event_code` auto-assign algorithm** (§2.4): FNV-1a 64 vs xxHash64 vs SHA256-truncated? FNV-1a is simplest; xxHash has lower collision risk. (Recommend FNV-1a 64 for simplicity unless an existing codebase part already uses xxHash.)
-
-5. **`pub exception` deprecation warning suppression** (§2.1): should the spec mandate a suppression pragma, or leave it to the existing diagnostic system? (Recommend leave to existing; if migration scale demands suppression, add as a follow-up.)
-
-6. **`std.core` JSON-text helper minimum set** (§9): the three (`diagnostic_json_string`, `diagnostic_json_null`, `diagnostic_json_bool`) — are the int/uint/float helpers worth including in 0.32.0 too, or defer? (Recommend include all six for symmetry; cost is minor.)
-
-7. **`pub error` empty-payload form** (§2.1 last example, §7.3): synthesizes `to_json_text` returning literal `"{}"`. Confirm this is the right shape vs `null` or omitting `params` from envelope. (Recommend `"{}"` for consistency with non-empty.)
+**Plus K's structural correction (2026-05-03):**
+- `ResultError` retention shape uses an internal `@raw_json_splice` carrier field (not a normal `String` field, which would get quoted by synthesized projection). Public API is `from_diagnostic`-style helpers only. Prefer delete entirely if stdlib audit allows. — see §11.
 
 ---
 
@@ -872,13 +905,28 @@ Slice 5 is done when:
 
 ---
 
-## 19. What I Need From K Before Drafting Tests
+## 19. Bridge to Step 2 — Test Drafting
 
-1. **Spec lock:** confirm or revise §1–§16 above. Spec is the contract subsequent tests are written against; revisions after tests land waste work.
-2. **Answers to §17 open questions** (7 spec-level details; recommendations inline).
-3. **Implementation staging preference for §3.2:** strict-on-`or_throw` only in 0.32.0 (Phase 5a) and defer global strict to 0.33.0 (Phase 5c)? Or push for global strict in 0.32.0?
-4. **Catch-bind scope cut for §7.5:** synthesized-only in v1 (recommended), or require `DiagnosticParse` for any catch-bind?
+Spec is locked (K, 2026-05-03). Next deliverable is the **failing-test set** for §15 step 2 + step 3 — positive tests for the new public model + negative tests for removed/restricted surfaces.
 
-After K's response on (1)–(4), I move to step 2 of the sequencing: draft failing positive tests.
+**Proposed test layout** (under `lang/tests/driver/`):
 
-No code changes to the live tree until K confirms.
+- `test_pub_error_decl.py` — declaration parses, type-checks, value type semantics (construct, copy where applicable, pass by value).
+- `test_pub_error_throw_catch.py` — `throw E(...)` + `catch E(e)` typed binder + field access; precise routing by event identity.
+- `test_pub_error_or_throw.py` — `Result<T, E: pub error>.or_throw()` throws `E` directly; `E_OR_THROW_NOT_ERROR_TYPE` for non-error Errs.
+- `test_pub_error_synthesized_diagnostic.py` — synthesized projection produces lex-utf8 sorted JSON; primitives + Optional + Array + Map<String,V>; empty-payload `"{}"`.
+- `test_pub_error_manual_diagnostic.py` — manual `Diagnostic` override skips synthesis; binder-less catch works; typed-binder catch fails with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`.
+- `test_pub_error_non_projectable_field.py` — `RawPtr<T>` / `Map<Int, V>` / function-type fields → `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`.
+- `test_pub_exception_deprecated.py` — `pub exception` declaration emits `W_PUB_EXCEPTION_DEPRECATED` warning; still compiles; round-trips through throw/catch.
+- `test_diagnostic_json_helpers.py` — all six `std.core` helpers produce correct RFC-8259 output (escapes, edge cases: empty string, surrogate pairs, large numbers, NaN/Inf for float).
+- `test_debuggable_migration.py` — `to_debug_json_text` for primitives + user types; `to_debug` rejected.
+- `test_exception_envelope_pub_error.py` — `e.encode_compact()` over a thrown `pub error` matches the expected envelope shape (event_code, event_fqn, params, context, stack=null).
+- `test_dv_public_removed.py` — negative tests: `DiagnosticValue::Int(...)`, `DiagnosticEntry`, `e.attrs[...]`, `e.captures[...]`, `to_diag(...) -> DiagnosticValue` user impl all rejected with the corresponding diagnostics from §13.2.
+- `test_event_code_collision.py` — two `pub error` types in same package with colliding auto-assigned codes → diagnostic recommending explicit assignment.
+
+**Test-drafting plan:**
+1. Write tests as **strict-xfail** (or use the same `_PENDING` decorator pattern from Slices 1-3) since the implementation is not yet in place.
+2. Land tests as a separate commit BEFORE any implementation, so the spec→test linkage is auditable in git.
+3. Implementation slices flip xfail decorators to live as each phase lands.
+
+**No code changes to the live tree** until K confirms the test layout. Once layout is OK, I draft `test_pub_error_decl.py` first (the most foundational), get review on its shape, then mass-produce the rest using the same pattern.
