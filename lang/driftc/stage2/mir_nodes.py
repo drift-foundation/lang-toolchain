@@ -1378,6 +1378,37 @@ class ExcSetParamsJson(MInstr):
 
 
 @dataclass
+class ExcGetContextJson(MInstr):
+	"""dest = drift_error_get_context_json(error) (returns retained
+	canonical context JSON array String; caller owns and releases).
+
+	Slice 2 DV→JSON — used by `<error>.context` field-access lowering
+	to retrieve the stored canonical JSON array document for the
+	`ErrorContextView` constructor.  See ABI spec §2.3.
+	"""
+
+	dest: ValueId
+	error: ValueId
+
+
+@dataclass
+class ExcAppendContextFrame(MInstr):
+	"""drift_error_append_context_frame(error, frame_json) — runtime
+	takes ownership of `frame_json` and rebuilds an owned
+	`context_json` with the frame appended.  Frame bytes preserved
+	verbatim inside the merged array (ABI §2.2 fastpath guarantee).
+
+	Slice 2 DV→JSON — emitted by `^`-capture unwind lowering for
+	each function frame on the throw path that has captured locals.
+	Frame ordering is innermost-first (matches unwind observation
+	order).  See ABI spec §2.3.
+	"""
+
+	error: ValueId
+	frame_json: ValueId
+
+
+@dataclass
 class DVAsInt(MInstr):
 	"""dest = drift_dv_as_int(dv) (returns Optional<Int>)."""
 
@@ -1728,6 +1759,8 @@ __all__ = [
 	"ErrorCapturesGetDV",
 	"ExcGetParamsJson",
 	"ExcSetParamsJson",
+	"ExcGetContextJson",
+	"ExcAppendContextFrame",
 	"DVAsInt",
 	"DVAsBool",
 	"DVAsFloat",

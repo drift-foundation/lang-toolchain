@@ -1,6 +1,141 @@
 # Drift development history
 
 ## 2026-05-02
+- **DV→JSON diagnostics-context migration — Slice 2: context
+  dump + `^`-capture frame projection (release 0.31.49, ABI
+  unchanged at 12).**  Second product-visible win: catch an
+  exception and read the full `^`-captured-frame chain as a
+  canonical JSON array via `e.context.encode_compact()`.
+
+      fn parse_record() throws -> Int {
+          val ^record_id: String as "record_id" = "rec-42";
+          throw ParseFail(tag = "fail");
+      }
+
+      try {
+          val _ = parse_record();
+      } catch ParseFail(e) {
+          val text = e.context.encode_compact();
+          // text == `[{"fn":"...parse_record","locals":{"record_id":"rec-42"}}]`
+      }
+
+  **What's new (user-visible).**
+    - `<Error>.context` field-access returns
+      `core.ErrorContextView` whose `encode_compact() -> String`
+      yields the canonical context JSON array.
+    - Throw-side: each function on the unwind path that has
+      `^`-captured locals appends a frame JSON object via
+      `drift_error_append_context_frame`.
+    - Frame shape: `{"fn":"<fqn>","locals":{<key>:<value>,...}}`.
+      Locals inside a frame are lex-utf8-sorted at compile time
+      for determinism.
+    - **Frame ordering: innermost-first** (matches unwind
+      observation — the function that threw appears at index 0;
+      outer functions follow as the unwind propagates outward).
+    - Recursive calls contribute REPEATED frame objects — frames
+      are NOT merged.  Each recursive level captures its own
+      local value at its own call site.
+    - Empty context (no `^` captures fired) →
+      `e.context.encode_compact() == "[]"`.
+
+  **No ABI bump.**  Slice 2 emits calls to
+  `drift_error_get_context_json` and
+  `drift_error_append_context_frame`, both of which were Phase 1
+  substrate already in the ABI 12 helper set.  No new runtime
+  surface or signature changes.  ABI stays 12; DRIFTC_VERSION
+  bumps 0.31.48 → 0.31.49 to track the user-visible behavior
+  change.  Slice 5 (DV deletion + ABI 13) remains the next ABI
+  transition.
+
+  **Implementation.**
+    - **Type-checker** (`lang/driftc/`): `<Error>.context` HField
+      and HPlaceField special-cases at `type_checker.py` return
+      `core.ErrorContextView` (parallel to Slice 1 `params`).
+    - **HIR→MIR** (`lang/driftc/stage2/hir_to_mir.py`):
+        - `_visit_expr_HField` / `_lower_addr_of_place` /
+          `_infer_expr_type` mirror Slice 1's params lowering for
+          `context`.
+        - **Multi-frame propagation**: `_emit_captured_locals`
+          call moved from throw-statement into `_propagate_error`
+          itself.  Every propagation hop (throw initiation +
+          every outer function's auto-try-then-rethrow point)
+          now emits the current function's captured frame.
+          Innermost-first ordering falls out naturally — the
+          throwing function's `_propagate_error` runs first, then
+          each outer function's `_propagate_error` appends its
+          own frame as the unwind ripples outward.
+        - `_build_throw_context_frame_json` mirrors the params
+          builder: lex-utf8-sorts captured locals, emits
+          `{"fn":"<fqn>","locals":{...}}` via
+          `M.ConstString` + `M.StringConcat`, projecting each
+          local's value through the transitional
+          `core._dv_to_json_text` helper.  Cloned DVs are
+          explicitly `M.DropValue`'d after projection (the throw
+          unwinds before normal scope-drop fires).
+        - 2 new MIR ops: `M.ExcGetContextJson(dest, error)` and
+          `M.ExcAppendContextFrame(error, frame_json)`.
+    - **Codegen** (`lang/codegen/llvm/llvm_codegen.py`):
+        - LLVM lowering for the 2 new MIR ops.
+        - Declarations for `drift_error_get_context_json` and
+          `drift_error_append_context_frame` in the
+          `needs_error_runtime` block.
+    - **Stdlib** (`stdlib/std/core/core.drift`): `ErrorContextView`
+      struct + Copy + `encode_compact()`.  Exported.
+    - **string_arc** (`lang/driftc/stage2/string_arc.py`):
+      `ExcGetContextJson.dest` added to `owned_defs` (retained-
+      string-result class).  `ExcAppendContextFrame.frame_json`
+      consume-on-set pattern (mirrors `ExcSetParamsJson`).
+
+  **Tests landed.**
+    - `lang/tests/driver/test_exception_context_json.py` — 4
+      passing cases: no captures → `"[]"`, single capture → one
+      frame, nested frames innermost-first, recursive frames
+      preserved (3 frames for depth-2 recursion).
+
+  **Verification.**  Full memcheck + exception suite + Slices 1-2
+  + branch-completion gate + LANGUAGE_BUG ledger:
+  102 passed / 1 skipped / 2 xfailed.  Phase 1 helper memcheck
+  green; Slice 1 still green; existing DV `e.captures[...]` path
+  preserved.
+
+  **Untouched per K directive.**  Branch-completion gate xfail
+  for direct `String:ConstShare` and inline-catch attrs
+  LANGUAGE_BUG xfail remain strict-xfailed.  No cursor lookup,
+  no full-envelope `e.encode_compact()`, no DV expansion in this
+  slice.
+
+- **Slice 2 follow-up: outer-captures bug on can-throw call
+  (release 0.31.50, ABI unchanged at 12).**  K-found regression:
+  the can-throw-call lowering paths (`hir_to_mir.py` HInvoke /
+  HCall / HMethodCall variants) routed errors to a local
+  `_try_stack` catch via `StoreLocal(error_local) + Goto(dispatch)`
+  WITHOUT calling `_emit_captured_locals(err_val)` first.  Direct
+  throw inside the same try emitted the captured frame because
+  the throw-statement lowering already does so (see Slice 2
+  primary entry).  Result: an outer function with active `^`
+  captures that catches an inner-call error via try silently
+  dropped its own frame from `e.context`.
+
+  **Fix.**  Added the `_emit_captured_locals(err_val)` call
+  before the local-catch goto at three sites in
+  `lang/driftc/stage2/hir_to_mir.py` (the can-throw-call err-path
+  branches that take the `if self._try_stack:` route).  No
+  duplicate-emission risk: `_propagate_error` only calls
+  `_emit_captured_locals` on its OWN propagation hop, and the
+  three fixed sites bypass `_propagate_error` entirely when an
+  active try exists locally.
+
+  **Regression test.**  `test_exception_context_json.py::
+  test_outer_captures_recorded_when_catching_can_throw_call`
+  pins the case (catches a `Boom(tag=...)` from `_inner()` inside
+  a `_run()` that has `^outer_id` active; expects exactly one
+  frame for `_run` with `outer_id="outer-1"`).  Confirmed failing
+  before the fix (got `[]`), passing after.
+
+  **Verification.**  103 passed / 1 skipped / 2 xfailed across
+  memcheck + exception suite + Slices 1-2 + ABI stamp +
+  branch-completion gate + LANGUAGE_BUG ledger.
+
 - **DV→JSON diagnostics-context migration — Slice 1: throw-side
   canonical params JSON + `e.params.encode_compact()` (release
   0.31.48, ABI 11 → 12).**  First product-visible win for the

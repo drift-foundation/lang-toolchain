@@ -78,7 +78,8 @@ export {
 	STRING_CONTAINER_ID,
 	string_byte_at,
 	string_from_utf8_bytes,
-	ErrorParamsView
+	ErrorParamsView,
+	ErrorContextView
 };
 
 export { std.core.copy.* };
@@ -739,6 +740,31 @@ implement ErrorParamsView {
 	/// fields.  Object form: `{"<key>":<value>,...}` with keys in
 	/// lex-utf8 order.  Empty exception → `"{}"`.
 	pub fn encode_compact(self: &ErrorParamsView) nothrow -> String {
+		return self.json_text;
+	}
+}
+
+/// Opaque view over an `Error`'s `^`-captured frames, serialized as
+/// a canonical JSON array.  Construct via `e.context` on a
+/// catch-bound Error.
+pub struct ErrorContextView {
+	json_text: String,
+}
+
+implement copy_mod.Copy for ErrorContextView { }
+
+implement ErrorContextView {
+	/// Returns the canonical JSON text of the exception's
+	/// `^`-captured frames.  Array form:
+	///
+	///     [{"fn":"<fqn>","locals":{<key>:<value>,...}}, ...]
+	///
+	/// Frames are in unwind observation order — innermost-first
+	/// (the function that threw appears first; outer functions
+	/// follow as the unwind propagates).  Recursive calls
+	/// contribute repeated frame objects (NOT merged).  Empty
+	/// context (no `^` captures fired) → `"[]"`.
+	pub fn encode_compact(self: &ErrorContextView) nothrow -> String {
 		return self.json_text;
 	}
 }

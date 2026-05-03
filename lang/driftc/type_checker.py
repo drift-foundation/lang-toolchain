@@ -8576,6 +8576,15 @@ class TypeChecker:
 					if epv_ty is None:
 						raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
 					return record_expr(expr, epv_ty)
+				if expr.name == "context" and inner_def.kind is TypeKind.ERROR:
+					# Slice 2: `<error>.context` returns an `ErrorContextView`
+					# whose `encode_compact()` method yields the canonical
+					# context JSON array.  Same compiler-handled construction
+					# pattern as params.
+					ecv_ty = self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorContextView")
+					if ecv_ty is None:
+						raise AssertionError("std.core:ErrorContextView not found in type table (compiler invariant)")
+					return record_expr(expr, ecv_ty)
 				if expr.name == "attrs":
 					diagnostics.append(
 						_tc_diag(
@@ -8642,6 +8651,14 @@ class TypeChecker:
 							if epv_ty is None:
 								raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
 							cur = epv_ty
+							continue
+						if proj.name == "context" and td.kind is TypeKind.ERROR:
+							# Slice 2: `<error>.context` projects to
+							# `core.ErrorContextView`.  Mirror of params.
+							ecv_ty = self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorContextView")
+							if ecv_ty is None:
+								raise AssertionError("std.core:ErrorContextView not found in type table (compiler invariant)")
+							cur = ecv_ty
 							continue
 						if td.kind is not TypeKind.STRUCT:
 							diagnostics.append(_tc_diag(message="field access requires a struct value", severity="error", span=getattr(expr, "loc", Span())))

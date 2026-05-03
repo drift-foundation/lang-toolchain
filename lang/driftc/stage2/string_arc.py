@@ -512,6 +512,11 @@ def insert_string_arc(
 		elif isinstance(instr, M.ExcSetParamsJson):
 			yield instr.error
 			yield instr.json_text
+		elif isinstance(instr, M.ExcGetContextJson):
+			yield instr.error
+		elif isinstance(instr, M.ExcAppendContextFrame):
+			yield instr.error
+			yield instr.frame_json
 		elif isinstance(instr, M.ErrorEvent):
 			yield instr.error
 		elif isinstance(instr, M.StringFromInt):
@@ -745,6 +750,9 @@ def insert_string_arc(
 				# DriftString per ABI spec §2.3 — caller owns and is
 				# responsible for releasing.  Tracked as an owned
 				# string-result alongside the StringConcat / Call class.
+				owned_defs.add(dest)
+			elif isinstance(instr, M.ExcGetContextJson):
+				# Same retained-string contract as ExcGetParamsJson.
 				owned_defs.add(dest)
 			elif isinstance(instr, (M.Call, M.CallIndirect, M.CallIface)):
 				# String-returning calls produce owned values that must be released
@@ -1330,6 +1338,21 @@ def insert_string_arc(
 						json_val = _ensure_owned(json_val, owned_values, new_instrs)
 						_note_use(json_val, consume=True)
 				new_instrs.append(M.ExcSetParamsJson(error=instr.error, json_text=json_val))
+				continue
+
+			if isinstance(instr, M.ExcAppendContextFrame):
+				# `drift_error_append_context_frame` takes ownership of
+				# `frame_json` per ABI spec §2.3 — runtime splices it
+				# into the merged context_json.  Same consume pattern
+				# as ExcSetParamsJson.
+				frame_val = instr.frame_json
+				if _is_string_value(frame_val):
+					if frame_val in move_only_values or _can_move_owned_once(frame_val):
+						_note_use(frame_val, consume=True)
+					else:
+						frame_val = _ensure_owned(frame_val, owned_values, new_instrs)
+						_note_use(frame_val, consume=True)
+				new_instrs.append(M.ExcAppendContextFrame(error=instr.error, frame_json=frame_val))
 				continue
 
 			if isinstance(instr, M.ErrorAddLocalDV):

@@ -161,6 +161,8 @@ from lang.driftc.stage2 import (
 	ErrorCapturesGetDV,
 	ExcGetParamsJson,
 	ExcSetParamsJson,
+	ExcGetContextJson,
+	ExcAppendContextFrame,
 	LoadLocal,
 	AddrOfLocal,
 	AddrOfArrayElem,
@@ -1596,6 +1598,8 @@ class LlvmModuleBuilder:
 					# the input DriftString.
 					f"declare {DRIFT_STRING_TYPE} @drift_error_get_params_json({DRIFT_ERROR_PTR})",
 					f"declare void @drift_error_set_params_json({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
+					f"declare {DRIFT_STRING_TYPE} @drift_error_get_context_json({DRIFT_ERROR_PTR})",
+					f"declare void @drift_error_append_context_frame({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
 				]
 			)
 			lines.append("")
@@ -4206,6 +4210,27 @@ class _FuncBuilder:
 			json_val = self._map_value(instr.json_text)
 			self.lines.append(
 				f"  call void @drift_error_set_params_json({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {json_val})"
+			)
+		elif isinstance(instr, ExcGetContextJson):
+			# Slice 2 DV→JSON: read the canonical context JSON array
+			# string from the runtime; returned String is RETAINED per
+			# ABI spec §2.3 (caller releases).
+			self.module.needs_error_runtime = True
+			dest = self._map_value(instr.dest)
+			err_val = self._map_value(instr.error)
+			self.lines.append(
+				f"  {dest} = call {DRIFT_STRING_TYPE} @drift_error_get_context_json({DRIFT_ERROR_PTR} {err_val})"
+			)
+			self.value_types[dest] = DRIFT_STRING_TYPE
+		elif isinstance(instr, ExcAppendContextFrame):
+			# Slice 2 DV→JSON: append a captured-frame JSON object to
+			# the stored context array; runtime takes ownership of the
+			# input String per ABI spec §2.3.
+			self.module.needs_error_runtime = True
+			err_val = self._map_value(instr.error)
+			frame_val = self._map_value(instr.frame_json)
+			self.lines.append(
+				f"  call void @drift_error_append_context_frame({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val})"
 			)
 		elif isinstance(instr, DVLen):
 			self.module.needs_dv_runtime = True

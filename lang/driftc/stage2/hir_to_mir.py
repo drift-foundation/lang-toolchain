@@ -910,6 +910,39 @@ class HIRToMIR:
 		frame_name = function_symbol(self._current_fn_id) if self._current_fn_id is not None else self.b.func.name
 		frame_val = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=frame_val, value=frame_name))
+
+		# Slice 2 DV→JSON: build the captured-frame JSON object
+		# alongside the legacy DV path.  Frame shape:
+		#   `{"fn":"<fqn>","locals":{<key>:<value>,...}}`
+		# `^`-keys are sorted lex-utf8 at compile time for
+		# determinism.  Emitted before the per-key DV adds so the
+		# frame JSON build can read each captured local's value via
+		# the `_dv_to_json_text` projector with a fresh DV.
+		#
+		# Skipped when std.core isn't loaded (stage2 unit tests with
+		# stubbed signatures); the DV path remains and the
+		# context_json segment stays at its empty default ("[]").
+		dv_to_json_fn = self._find_free_fn_id("std.core", "_dv_to_json_text")
+		emit_json_frame = dv_to_json_fn is not None
+
+		# Snapshot the captured locals in lex-utf8 order of capture_name
+		# so the inner JSON {"<key>":<value>,...} is deterministic.
+		# (Compile-time sort; the underlying dict is keyed by binding_id.)
+		caps_sorted = sorted(
+			self._active_captured_locals.values(),
+			key=lambda c: c.capture_name,
+		)
+
+		# Build frame_json String if std.core is loaded.
+		frame_json_val: M.ValueId | None = None
+		if emit_json_frame:
+			frame_json_val = self._build_throw_context_frame_json(
+				frame_name=frame_name,
+				caps_sorted=caps_sorted,
+				dv_to_json_fn=dv_to_json_fn,
+			)
+
+		# Legacy DV path: emit per-key ErrorAddLocalDV.
 		for bid in sorted(self._active_captured_locals.keys()):
 			cap = self._active_captured_locals[bid]
 			val = self.b.new_temp()
@@ -921,6 +954,13 @@ class HIRToMIR:
 			key_val = self.b.new_temp()
 			self.b.emit(M.ConstString(dest=key_val, value=cap.capture_name))
 			self.b.emit(M.ErrorAddLocalDV(error=err_val, frame=frame_val, key=key_val, value=dv))
+
+		# Slice 2 DV→JSON: append the built frame JSON to the
+		# context_json document.  Innermost-first ordering: each
+		# function's frame is appended at the throw site (inner
+		# function unwinds first, gets appended first).
+		if frame_json_val is not None:
+			self.b.emit(M.ExcAppendContextFrame(error=err_val, frame_json=frame_json_val))
 
 	def _record_drop_decision(
 		self,
@@ -2784,6 +2824,19 @@ class HIRToMIR:
 			view_dest = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=view_dest, struct_ty=epv_ty, args=[json_dest]))
 			self._local_types[view_dest] = epv_ty
+			return view_dest
+		if expr.name == "context" and sub_def.kind is TypeKind.ERROR:
+			# Slice 2 mirror of the params lowering: ExcGetContextJson +
+			# ConstructStruct of `core.ErrorContextView`.
+			json_dest = self.b.new_temp()
+			self.b.emit(M.ExcGetContextJson(dest=json_dest, error=subject))
+			self._local_types[json_dest] = self._string_type
+			ecv_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorContextView")
+			if ecv_ty is None:
+				raise AssertionError("std.core:ErrorContextView not found in type table (compiler invariant)")
+			view_dest = self.b.new_temp()
+			self.b.emit(M.ConstructStruct(dest=view_dest, struct_ty=ecv_ty, args=[json_dest]))
+			self._local_types[view_dest] = ecv_ty
 			return view_dest
 		if expr.name == "attrs":
 			raise NotImplementedError("attrs view must be indexed: Error.attrs[\"key\"]")
@@ -4830,6 +4883,100 @@ class HIRToMIR:
 	#                     storage at scope end (see regression
 	#                     `dv_projected_place_entries_no_double_free`).
 	_DV_RVALUE_RECV_HEXPRS: tuple = ()
+
+	def _build_throw_context_frame_json(
+		self,
+		*,
+		frame_name: str,
+		caps_sorted: list,
+		dv_to_json_fn: "FunctionId",
+	) -> M.ValueId:
+		"""Build a single context-frame JSON object for the current
+		function's `^`-captured locals at the throw site.
+
+		Slice 2 DV→JSON migration — emits MIR that produces a String
+		of the form:
+
+		    `{"fn":"<frame_name>","locals":{<k1>:<v1>,...}}`
+
+		Inner locals are lex-utf8 sorted by capture_name (caller
+		passes `caps_sorted` already in that order).  Each captured
+		local's value is projected to JSON text via the transitional
+		`core._dv_to_json_text` helper — same pattern as the params
+		builder.  Caller is `_emit_captured_locals`; the result is
+		consumed by `M.ExcAppendContextFrame`.
+
+		DELETION LEDGER: depends on the transitional `_dv_to_json_text`
+		projector (see `stdlib/std/core/core.drift`).  Replace at
+		Slice 5 with direct `to_json -> JsonNode` projection.
+		"""
+		# Open: `{"fn":"<frame_name>","locals":{`
+		# We embed frame_name as a JSON-quoted string at compile time
+		# (frame names are FQNs of compiled functions — ASCII-clean
+		# Drift identifiers separated by `.` and `:`; safe to bake as
+		# a literal without runtime escape).
+		open_lit = self.b.new_temp()
+		open_text = '{"fn":"' + frame_name + '","locals":{'
+		self.b.emit(M.ConstString(dest=open_lit, value=open_text))
+		result = open_lit
+		for i, cap in enumerate(caps_sorted):
+			# Comma separator between locals (after the first).
+			if i > 0:
+				comma = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=comma, value=","))
+				next_result = self.b.new_temp()
+				self.b.emit(M.StringConcat(dest=next_result, left=result, right=comma))
+				result = next_result
+			# `"<key>":` literal — capture_name is user-supplied;
+			# Drift identifiers + the optional `as "key"` syntax allow
+			# a wider char set, but in v1 capture keys are restricted
+			# to JSON-safe printable ASCII (no embedded quotes/escapes).
+			# Bake the quoted key+colon as a compile-time literal.
+			key_lit = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=key_lit, value='"' + cap.capture_name + '":'))
+			next_result = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=next_result, left=result, right=key_lit))
+			result = next_result
+			# Project the captured local value to JSON text via DV
+			# (same path as throw-side params).  Read the local, build
+			# a fresh DV (does not consume the original — captured
+			# locals can be observed by both the legacy DV path and
+			# this JSON path independently).
+			val = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=val, local=cap.local_name))
+			val_ty = self._local_types.get(cap.local_name) or self._binding_types.get(cap.binding_id)
+			if val_ty is None:
+				raise AssertionError("captured local type missing in MIR lowering (checker bug)")
+			dv_fresh = self._capture_to_dv(value=val, value_ty=val_ty)
+			self._local_types[dv_fresh] = self._dv_type
+			# Materialize for &DiagnosticValue borrow.
+			dv_local = f"__throw_ctx_proj_{self.b.new_temp()}"
+			self.b.ensure_local(dv_local)
+			self._local_types[dv_local] = self._dv_type
+			self.b.emit(M.StoreLocal(local=dv_local, value=dv_fresh))
+			dv_addr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=dv_addr, local=dv_local, is_mut=False))
+			value_text = self.b.new_temp()
+			self.b.emit(M.Call(dest=value_text, fn_id=dv_to_json_fn, args=[dv_addr], can_throw=False))
+			self._local_types[value_text] = self._string_type
+			# Concat value text into the frame.
+			next_result = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=next_result, left=result, right=value_text))
+			result = next_result
+			# Drop the cloned DV after projection.  Same pattern as
+			# `_build_throw_params_json`; the throw unwinds before
+			# normal scope-drop fires.
+			dv_for_drop = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=dv_for_drop, local=dv_local))
+			self._local_types[dv_for_drop] = self._dv_type
+			self.b.emit(M.DropValue(value=dv_for_drop, ty=self._dv_type))
+		# Close: `}}`
+		close_lit = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=close_lit, value="}}"))
+		final = self.b.new_temp()
+		self.b.emit(M.StringConcat(dest=final, left=result, right=close_lit))
+		self._local_types[final] = self._string_type
+		return final
 
 	def _build_throw_params_json(self, field_dvs: list[tuple[str, M.ValueId, bool]]) -> M.ValueId:
 		"""Build the canonical params JSON document for a throw site.
@@ -7630,10 +7777,12 @@ class HIRToMIR:
 				scope_id=scope_id,
 				candidates=[(self._current_catch_error, error_ty)],
 			))
-		self._emit_captured_locals(err_val)
-
-		# If we are inside a try, route to the catch block instead of returning.
+		# If we are inside a try, route to the catch block instead of
+		# returning.  Emit captured-frame BEFORE the goto so the frame
+		# is observable in the catch arm; the unwind doesn't propagate
+		# beyond the current function so _propagate_error won't fire.
 		if self._try_stack and self.b.block.terminator is None:
+			self._emit_captured_locals(err_val)
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
@@ -7641,6 +7790,10 @@ class HIRToMIR:
 			return
 
 		# Otherwise, propagate to an outer try if present, or return Err.
+		# _propagate_error emits the captured-frame for the current
+		# function on EVERY propagation hop (throw site + every outer
+		# function's auto-try-then-rethrow), producing innermost-first
+		# unwind ordering in `e.context`.
 		self._propagate_error(err_val)
 
 	def _propagate_error(self, err_val: M.ValueId) -> None:
@@ -7651,7 +7804,21 @@ class HIRToMIR:
 		    jump to its dispatch block (unwind to nearest outer try).
 		  - If there is no outer try, the error escapes the current function:
 		    wrap into FnResult.Err and return (can-throw ABI).
+
+		Slice 2 DV→JSON: emits the current function's captured-frame
+		(if any `^`-locals are active) before the propagation hop,
+		producing innermost-first ordering in `e.context`.  Each
+		function on the unwind path contributes one frame per call
+		invocation (recursive frames are NOT merged).  No-op when no
+		captures are active in the current scope.
 		"""
+		# Emit captured-frame for the current function BEFORE the
+		# propagation hop.  The propagation either routes to an outer
+		# try (frame is observable when the outer catch reads
+		# e.context) or escapes the function via FnResult.Err (frame
+		# rides the err_val to wherever it eventually lands).
+		self._emit_captured_locals(err_val)
+
 		if self._try_stack:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
@@ -9189,6 +9356,13 @@ class HIRToMIR:
 		err_val = self.b.new_temp()
 		self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
 		if self._try_stack:
+			# Slice 2 DV→JSON: emit the current function's captured-frame
+			# (if any) BEFORE the local-catch goto.  Symmetric with the
+			# direct-throw lowering at the throw-statement site; without
+			# this, can-throw call errors that get caught by a local try
+			# silently drop the outer function's `^` captures (asymmetric
+			# with direct-throw inside the same try).
+			self._emit_captured_locals(err_val)
 			ctx = self._try_stack[-1]
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
@@ -9263,6 +9437,9 @@ class HIRToMIR:
 			err_val = self.b.new_temp()
 			self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
 			if self._try_stack:
+				# Slice 2 DV→JSON: emit captured-frame before the local-
+				# catch goto.  See comment at the parallel site above.
+				self._emit_captured_locals(err_val)
 				ctx = self._try_stack[-1]
 				self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
 				self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
@@ -9290,6 +9467,9 @@ class HIRToMIR:
 		err_val = self.b.new_temp()
 		self.b.emit(M.ResultErr(dest=err_val, result=fnres_val))
 		if self._try_stack:
+			# Slice 2 DV→JSON: emit captured-frame before the local-
+			# catch goto.  See comment at the parallel site above.
+			self._emit_captured_locals(err_val)
 			ctx = self._try_stack[-1]
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
@@ -9641,6 +9821,17 @@ class HIRToMIR:
 							epv = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
 							if epv is not None:
 								cur = epv
+								continue
+					if proj.name == "context":
+						# Slice 2: same shape for `<error>.context` →
+						# `core.ErrorContextView`.
+						td = self._type_table.get(cur)
+						if td.kind is TypeKind.REF and td.param_types:
+							td = self._type_table.get(td.param_types[0])
+						if td.kind is TypeKind.ERROR:
+							ecv = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorContextView")
+							if ecv is not None:
+								cur = ecv
 								continue
 					info = self._type_table.struct_field(cur, proj.name)
 					if info is None:
@@ -10116,6 +10307,31 @@ class HIRToMIR:
 					view_addr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
 					return view_addr, epv_ty
+				# Slice 2: same shape for `<error>.context`.
+				if proj.name == "context" and base_def.kind is TypeKind.ERROR:
+					if is_mut:
+						raise AssertionError(
+							"mutable borrow of `<error>.context` is not "
+							"supported (the view is a synthesized read-only value)"
+						)
+					ecv_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorContextView")
+					if ecv_ty is None:
+						raise AssertionError("std.core:ErrorContextView not found in type table (compiler invariant)")
+					err_val = self.b.new_temp()
+					self.b.emit(M.LoadRef(dest=err_val, ptr=addr, inner_ty=cur_ty))
+					json_dest = self.b.new_temp()
+					self.b.emit(M.ExcGetContextJson(dest=json_dest, error=err_val))
+					self._local_types[json_dest] = self._string_type
+					view_val = self.b.new_temp()
+					self.b.emit(M.ConstructStruct(dest=view_val, struct_ty=ecv_ty, args=[json_dest]))
+					self._local_types[view_val] = ecv_ty
+					view_local = f"__exc_context_view_{self.b.new_temp()}"
+					self.b.ensure_local(view_local)
+					self._local_types[view_local] = ecv_ty
+					self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+					view_addr = self.b.new_temp()
+					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
+					return view_addr, ecv_ty
 				if base_def.kind is not TypeKind.STRUCT:
 					fn_name = getattr(self.b.func, "name", None)
 					raise AssertionError(
