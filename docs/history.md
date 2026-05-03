@@ -1,5 +1,112 @@
 # Drift development history
 
+## 2026-05-02
+- **DV→JSON diagnostics-context migration — Slice 1: throw-side
+  canonical params JSON + `e.params.encode_compact()` (release
+  0.31.48, ABI 11 → 12).**  First product-visible win for the
+  migration.  User code can now catch an exception and read the
+  declared exception fields as canonical JSON via the public
+  surface:
+
+      try {
+          throw InvalidOrder(order_id = 42, code = "X");
+      } catch InvalidOrder(e) {
+          val text = e.params.encode_compact();
+          // text == `{"code":"X","order_id":42}`
+      }
+
+  **What's new (user-visible).**
+    - `<Error>.params` field-access returns an opaque
+      `core.ErrorParamsView` whose `encode_compact() -> String`
+      method yields the canonical params JSON document.
+    - Throw-side canonical-params JSON is built at every throw
+      site, lex-utf8-sorted by field name (deterministic),
+      stored via the runtime `drift_error_set_params_json`
+      helper (Phase 1 substrate).
+    - Legacy `e.attrs[...]` DV access path remains fully
+      functional alongside the new JSON path; both are
+      populated at every throw.
+
+  **ABI bump (11 → 12).**  Compiler now emits codegen calls to
+  `drift_dv_kind`, `drift_dv_index`, `drift_error_get_params_json`,
+  and `drift_error_set_params_json`.  These were ABI 11 substrate
+  (added in Phase 1 / Slice 1 prep) but not previously emitted by
+  any compiler version.  ABI stamp guard ensures clean link-time
+  failure rather than fuzzy "undefined reference" if a Slice-1
+  compiler is paired with a pre-Phase-1 runtime.  ABI 13 is now
+  reserved for the final DV-removal transition at Slice 5.
+
+  **Implementation.**
+    - **Type-checker** (`lang/driftc/`): `<Error>.params` HField
+      and HPlaceField special-cases at `type_checker.py` return
+      `core.ErrorParamsView`.  DV intrinsic dispatch extended
+      for `dv.kind()` and `dv.index(i)` (transitional bridge —
+      see deletion ledger in `stdlib/std/core/core.drift`).
+    - **HIR→MIR** (`lang/driftc/stage2/hir_to_mir.py`):
+        - `_visit_expr_HField` lowers `<Error>.params` to
+          `M.ExcGetParamsJson` + `M.ConstructStruct(ErrorParamsView)`.
+        - `_lower_addr_of_place` HPlaceField branch materializes
+          synthesized `<Error>.params` to a named local + addr.
+        - `_lower_method_call_with_info` short-paths
+          `<error>.params.encode_compact()` through value-
+          construction + alloca + AddrOfLocal for the
+          `&ErrorParamsView` self argument.
+        - `_construct_error_from_exception_init` (throw lowering)
+          builds canonical params JSON BEFORE existing DV-path
+          consumption: per-field `M.CopyValue` clone (DV is
+          Copy), `M.StoreLocal` to a temp, `M.AddrOfLocal`,
+          `Call(_dv_to_json_text, &dv)` (transitional projector
+          in `std.core`), `M.StringConcat` chain, and
+          `M.ExcSetParamsJson` after `err_val` exists.
+        - Cloned DVs are explicitly `M.DropValue`'d after the
+          projection (the throw unwinds before normal scope-drop
+          fires on the throw block).
+        - DV intrinsic dispatch extended for `dv.kind()` and
+          `dv.index(i)`.
+    - **Codegen** (`lang/codegen/llvm/llvm_codegen.py`):
+        - New op codegen: `DVKind`, `DVIndex` (with
+          `drift_dv_clone` for ownership safety —
+          `drift_dv_index` aliases `items[idx]` without
+          retaining), `ExcGetParamsJson`, `ExcSetParamsJson`.
+        - LLVM declarations for the four runtime helpers.
+        - `value_types` for `DVKind.dest` correctly tagged
+          `DRIFT_INT_TYPE` so downstream `StringFromInt`
+          recognizes it.
+    - **Runtime** (`lang/compiler_infra/diagnostic_runtime.{h,c}`):
+        - `drift_dv_kind` and `drift_dv_index` migrated from
+          by-value DV input to pointer-input.  LLVM by-value
+          24-byte struct args without `byval` don't match SysV
+          x86_64 ABI; the rest of the DV runtime
+          (`drift_dv_as_int`, `drift_dv_clone`, etc.) already
+          uses the pointer convention.
+    - **Stdlib** (`stdlib/std/core/core.drift`): `ErrorParamsView`
+      exported.  `_dv_to_json_text` finalized — full
+      `Array`/`Object` recursion via `dv.kind()` / `dv.index(i)`
+      / `dv.entries()`; empty Array → `"[]"`, empty Object →
+      `"{}"`, no silent corruption.
+
+  **Tests landed.**
+    - `lang/tests/driver/test_exception_params_json.py` — 6
+      passing cases: empty params, Int+String fields, Bool+Float
+      fields, qualified-catch event_code routing, canonical
+      lex-utf8 ordering (two-field test that would fail under
+      nondeterministic ordering), legacy DV-additivity baseline.
+    - The strict-xfail decorators that pinned these as Slice 1
+      regression targets in the prep commit are removed; tests
+      are live.
+
+  **Verification.**  Full memcheck + exception suite + Slice 1 +
+  String:ConstShare branch-completion gate + inline-catch
+  LANGUAGE_BUG ledger: 83 passed / 1 skipped / 2 xfailed.
+  Phase 1 helper memcheck still green.  Existing DV path
+  preserved (legacy `e.attrs[...]` test passes).
+
+  **Untouched per K directive.**  Branch-completion gate xfail
+  for direct `String:ConstShare` (owned by the later String
+  normalization track) and inline-catch attrs LANGUAGE_BUG xfail
+  remain strict-xfailed.  No context, full-envelope dump, or
+  cursor lookup work in this slice — those are Slices 2/3/4.
+
 ## 2026-05-01
 - **DV→JSON diagnostics-context migration — spec/ABI Phase 0 (no
   code change yet; ABI 12 reserved as a future target).**  Lands

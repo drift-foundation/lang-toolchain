@@ -63,11 +63,17 @@ Fixed-width primitives are ABI-defined but **reserved in v1 surface code**; they
 
 The ABI defines only the **stable public layout**. Internal payload structures remain opaque.
 
-> **Migration state.** The shape and helper signatures documented in this section describe the **target ABI 12** layout — the post-DV-removal end state. The current runtime implementation is **ABI 11 additive**: it carries both the legacy DV-shaped fields (`attrs` / `attr_count` / `frames` / `frame_count`) AND the new JSON fields (`params_json`, `context_json`) on the same `DriftError` struct, with both helper sets fully functional. `DRIFT_RT_ABI_VERSION` stays 11 throughout the additive slices (Phase 1 runtime substrate, Slice 1 throw-side params, Slice 2 context, Slice 3 envelope dump, Slice 4 cursor lookup). The ABI bump 11 → 12 happens at Slice 5, in the same patch that deletes the DV path. Until then, this section reads as the spec contract; the compiler-infra header is the authoritative current shape.
+> **Migration state.** The shape and helper signatures documented in this section describe the **target ABI 13** layout — the post-DV-removal end state. The current runtime implementation is **ABI 12 additive**: it carries both the legacy DV-shaped fields (`attrs` / `attr_count` / `frames` / `frame_count`) AND the new JSON fields (`params_json`, `context_json`) on the same `DriftError` struct, with both helper sets fully functional. The `e.params.encode_compact()` public surface is live, and the throw-side canonical params JSON document is produced at every throw site.
 >
-> **ABI 12 — DV→JSON migration (breaking, lands at Slice 5).** The legacy attribute list (`void *attrs; size_t attr_count;`) and frame list (`void *frames; size_t frame_count;`) are removed. Exception field values and `^`-captured frames remain stored as JSON documents (`params_json`, `context_json`) keyed by the same names. `DriftDiagnosticValue` is no longer reachable through the public Error ABI. See lang-spec §14.2.
+> **ABI version trajectory:**
 >
-> Consumers compiled against ABI 11 must be rebuilt; there is no compatibility shim.
+> * **ABI 11** — Phase 0 spec / Phase 1 prep substrate (runtime helpers staged but not yet emitted by the compiler).
+> * **ABI 12** — Slice 1 (current).  Compiler emits calls to `drift_dv_kind`, `drift_dv_index`, `drift_error_get_params_json`, `drift_error_set_params_json`.  `<error>.params.encode_compact()` returns the canonical JSON document.  Runtime archive must export the new helper surface; the link-time ABI stamp guards against version skew.
+> * **ABI 13** — Slice 5 (planned).  Removes the legacy DV path: `attrs`/`frames` storage and the `drift_error_add_attr_dv` / `drift_error_add_local_dv` / `__exc_attrs_get_dv` / `__exc_captures_get_dv` / `drift_error_new_with_payload` helpers all delete in the same patch.  Slices 2–4 (context dump, full envelope dump, cursor lookup) land additively without ABI bumps in between unless they expand the codegen→runtime symbol set.
+>
+> **ABI 13 — DV→JSON migration final (breaking, lands at Slice 5).** The legacy attribute list (`void *attrs; size_t attr_count;`) and frame list (`void *frames; size_t frame_count;`) are removed. Exception field values and `^`-captured frames remain stored as JSON documents (`params_json`, `context_json`) keyed by the same names. `DriftDiagnosticValue` is no longer reachable through the public Error ABI. See lang-spec §14.2.
+>
+> Consumers compiled against ABI 11 or earlier must be rebuilt; ABI-12 consumers continue to work through Slices 2–4 and rebuild only at the Slice 5 transition.  No compatibility shim across the DV-removal break.
 
 ### 2.1 C ABI representation
 
