@@ -1557,8 +1557,8 @@ class LlvmModuleBuilder:
 					f"declare i1 @drift_dv_as_string(ptr, ptr)",
 					f"declare i1 @drift_dv_as_object(ptr, ptr)",
 					f"declare i1 @drift_dv_get_field(ptr, {DRIFT_STRING_TYPE}, ptr)",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_index({DRIFT_DV_TYPE}, {self._llty(DRIFT_INT_TYPE)})",
-					f"declare i8 @drift_dv_kind({DRIFT_DV_TYPE})",
+					f"declare {DRIFT_DV_TYPE} @drift_dv_index(ptr, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare i8 @drift_dv_kind(ptr)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr)",
 					"declare void @drift_dv_entries(ptr, ptr)",
 					"",
@@ -4139,37 +4139,47 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = variant_llty
 		elif isinstance(instr, DVKind):
-			# drift_dv_kind takes DV by value, returns u8 (DriftDiagnosticTag).
-			# We promote to Drift Int for the language-level return.
+			# drift_dv_kind: pointer-based dv input (matches the rest of
+			# the DV accessor convention; by-value 24-byte struct args
+			# without `byval` don't match SysV x86_64 ABI).  Returns u8
+			# (DriftDiagnosticTag); promoted to Drift Int.  value_types
+			# must be the TAG `DRIFT_INT_TYPE` (so downstream
+			# StringFromInt etc. recognize it).
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)
 			dv_val = self._map_value(instr.dv)
+			tmp_ptr = self._fresh("dv_kind_arg")
+			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
 			tag_byte = self._fresh("dv_kind_byte")
 			self.lines.append(
-				f"  {tag_byte} = call i8 @drift_dv_kind({DRIFT_DV_TYPE} {dv_val})"
+				f"  {tag_byte} = call i8 @drift_dv_kind(ptr {tmp_ptr})"
 			)
 			self.lines.append(
 				f"  {dest} = zext i8 {tag_byte} to {self._llty(DRIFT_INT_TYPE)}"
 			)
-			self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+			self.value_types[dest] = DRIFT_INT_TYPE
 		elif isinstance(instr, DVIndex):
-			# drift_dv_index returns a DV that aliases items[idx] of the source
-			# (no clone in the C helper).  We MUST clone the result so the
-			# destination owns independent storage — otherwise drop of source
-			# AND clone double-frees `items[]`.  Codegen sequence:
-			#   1. call drift_dv_index by-value → aliased DV temporary.
-			#   2. store aliased DV in a stack alloca.
-			#   3. call drift_dv_clone(&alias) → owned DV (refcounted strings
-			#      retained, arrays/objects deep-copied).
-			# The aliased temporary itself has no independent refcount — it's
-			# a struct copy of the array slot — so no release is needed for it.
+			# drift_dv_index: pointer-based dv input (same SysV x86_64 ABI
+			# reason as DVKind); result returned by value but ALIASES the
+			# source's `items[idx]` storage.  We MUST clone the result so
+			# the destination owns independent storage — otherwise drop of
+			# source AND clone double-frees `items[]`.  Codegen sequence:
+			#   1. store source DV to alloca; call drift_dv_index(ptr, idx)
+			#      → aliased DV by-value temporary.
+			#   2. store aliased DV in a fresh alloca.
+			#   3. call drift_dv_clone(&alias) → owned DV (refcounted
+			#      strings retained, arrays/objects deep-copied).
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)
 			dv_val = self._map_value(instr.dv)
 			idx_val = self._map_value(instr.idx)
+			src_ptr = self._fresh("dv_index_src")
+			self.lines.append(f"  {src_ptr} = alloca {DRIFT_DV_TYPE}")
+			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {src_ptr}")
 			aliased = self._fresh("dv_alias")
 			self.lines.append(
-				f"  {aliased} = call {DRIFT_DV_TYPE} @drift_dv_index({DRIFT_DV_TYPE} {dv_val}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
+				f"  {aliased} = call {DRIFT_DV_TYPE} @drift_dv_index(ptr {src_ptr}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
 			)
 			alias_ptr = self._fresh("dv_alias_ptr")
 			self.lines.append(f"  {alias_ptr} = alloca {DRIFT_DV_TYPE}")

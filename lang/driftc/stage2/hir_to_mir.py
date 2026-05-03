@@ -2768,6 +2768,23 @@ class HIRToMIR:
 			dest = self.b.new_temp()
 			self.b.emit(M.ArrayGen(dest=dest, array=subject))
 			return dest
+		if expr.name == "params" and sub_def.kind is TypeKind.ERROR:
+			# Slice 1 of the DV→JSON diagnostics-context migration:
+			# `<error>.params` lowers to ExcGetParamsJson + ConstructStruct
+			# of `core.ErrorParamsView { json_text: <retained-canonical-JSON> }`.
+			# The runtime helper returns a retained DriftString per ABI
+			# spec §2.3; string_arc tracks the dest as an owned string
+			# result (see stage2/string_arc.py).
+			json_dest = self.b.new_temp()
+			self.b.emit(M.ExcGetParamsJson(dest=json_dest, error=subject))
+			self._local_types[json_dest] = self._string_type
+			epv_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
+			if epv_ty is None:
+				raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
+			view_dest = self.b.new_temp()
+			self.b.emit(M.ConstructStruct(dest=view_dest, struct_ty=epv_ty, args=[json_dest]))
+			self._local_types[view_dest] = epv_ty
+			return view_dest
 		if expr.name == "attrs":
 			raise NotImplementedError("attrs view must be indexed: Error.attrs[\"key\"]")
 		if expr.name == "captures":
@@ -4814,6 +4831,207 @@ class HIRToMIR:
 	#                     `dv_projected_place_entries_no_double_free`).
 	_DV_RVALUE_RECV_HEXPRS: tuple = ()
 
+	def _build_throw_params_json(self, field_dvs: list[tuple[str, M.ValueId, bool]]) -> M.ValueId:
+		"""Build the canonical params JSON document for a throw site.
+
+		Slice 1 DV→JSON migration — emits MIR that produces a String
+		of the form `{"<k1>":<json1>,"<k2>":<json2>,...}` with field
+		names lex-utf8 sorted at compile time.  Each field value is
+		cloned (DV is Copy) so the original remains consumable by the
+		existing DV path; the cloned DV is materialized to a temp
+		local (auto-dropped at scope exit) for the `&DiagnosticValue`
+		argument to `core._dv_to_json_text`.
+
+		Returns the MIR ValueId of the final String.
+
+		Caller is responsible for ensuring `field_dvs` is non-empty;
+		empty exceptions skip the build (runtime params_json defaults
+		to `"{}"` from drift_error_new).
+
+		DELETION LEDGER: this helper depends on the transitional
+		`_dv_to_json_text` projector (see
+		`stdlib/std/core/core.drift`).  Replace at Slice 5 with a
+		direct `to_json -> JsonNode` projection path.
+		"""
+		assert field_dvs, "_build_throw_params_json requires at least one field"
+		dv_to_json_fn = self._find_free_fn_id("std.core", "_dv_to_json_text")
+		assert dv_to_json_fn is not None, (
+			"caller must check `_find_free_fn_id('std.core', '_dv_to_json_text')` "
+			"before invoking _build_throw_params_json"
+		)
+		# Sort by name for deterministic, lex-utf8-canonical output.
+		sorted_fields = sorted(field_dvs, key=lambda t: t[0])
+		# Start with "{".
+		result = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=result, value="{"))
+		for i, (name, dv_val, _is_rvalue) in enumerate(sorted_fields):
+			# Optional comma separator before all but the first entry.
+			if i > 0:
+				comma = self.b.new_temp()
+				self.b.emit(M.ConstString(dest=comma, value=","))
+				next_result = self.b.new_temp()
+				self.b.emit(M.StringConcat(dest=next_result, left=result, right=comma))
+				result = next_result
+			# Quoted key + colon — field name is a Drift identifier; it
+			# satisfies JSON-string-clean (ASCII identifier chars), so a
+			# bare ConstString of `"<name>":` is safe.  Escapes via
+			# `_json_quote_string` aren't needed at the key position for
+			# valid Drift identifiers in v1.
+			key_lit = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=key_lit, value=f'"{name}":'))
+			next_result = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=next_result, left=result, right=key_lit))
+			result = next_result
+			# Clone the DV (Copy semantics) so the original stays
+			# consumable by the existing DV path below.  Materialize to
+			# a temp local for the `&DiagnosticValue` borrow.
+			dv_copy = self.b.new_temp()
+			self.b.emit(M.CopyValue(dest=dv_copy, value=dv_val, ty=self._dv_type))
+			self._local_types[dv_copy] = self._dv_type
+			dv_local = f"__throw_dv_proj_{self.b.new_temp()}"
+			self.b.ensure_local(dv_local)
+			self._local_types[dv_local] = self._dv_type
+			self.b.emit(M.StoreLocal(local=dv_local, value=dv_copy))
+			dv_addr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=dv_addr, local=dv_local, is_mut=False))
+			# Call _dv_to_json_text(&dv_local) → owned String.
+			value_text = self.b.new_temp()
+			self.b.emit(M.Call(dest=value_text, fn_id=dv_to_json_fn, args=[dv_addr], can_throw=False))
+			self._local_types[value_text] = self._string_type
+			# Explicit drop of the cloned DV after the projection call.
+			# The local is created inside the throw site; control
+			# unwinds via the throw before normal scope-drop fires, so
+			# rely on an explicit DropValue here.  Reading the local
+			# back out via LoadLocal materializes the value for the
+			# drop; the local's underlying alloca is then dead.
+			dv_for_drop = self.b.new_temp()
+			self.b.emit(M.LoadLocal(dest=dv_for_drop, local=dv_local))
+			self._local_types[dv_for_drop] = self._dv_type
+			self.b.emit(M.DropValue(value=dv_for_drop, ty=self._dv_type))
+			# Concat: result += value_text.
+			next_result = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=next_result, left=result, right=value_text))
+			result = next_result
+		# Close brace.
+		close_lit = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=close_lit, value="}"))
+		final = self.b.new_temp()
+		self.b.emit(M.StringConcat(dest=final, left=result, right=close_lit))
+		self._local_types[final] = self._string_type
+		return final
+
+	def _lower_synthesized_error_params_view(self, recv: H.HExpr, view_ty: TypeId) -> M.ValueId:
+		"""Build an `ErrorParamsView` value from a synthesized
+		`<error>.params` receiver, returning the new MIR ValueId.
+
+		For the HField shape, `_visit_expr_HField` already special-
+		cases `params` on Error.  For the HPlaceExpr shape we
+		construct the equivalent here by lowering the parent place
+		(everything except the trailing HPlaceField("params")) into
+		an Error value, then emitting ExcGetParamsJson + ConstructStruct.
+		"""
+		if isinstance(recv, H.HField) and recv.name == "params":
+			return self.lower_expr(recv)
+		HPlaceExpr = getattr(H, "HPlaceExpr", None)
+		if HPlaceExpr is None or not isinstance(recv, HPlaceExpr):
+			raise AssertionError("_lower_synthesized_error_params_view: unexpected receiver shape")
+		if not recv.projections or not isinstance(recv.projections[-1], H.HPlaceField) or recv.projections[-1].name != "params":
+			raise AssertionError("_lower_synthesized_error_params_view: receiver must end in HPlaceField('params')")
+		# Lower the parent: HPlaceExpr with all but the last projection.
+		# When projections is just [HPlaceField("params")], the parent is
+		# the bare HVar `recv.base` — lower it directly.
+		if len(recv.projections) == 1:
+			err_val = self.lower_expr(recv.base)
+		else:
+			parent = HPlaceExpr(base=recv.base, projections=recv.projections[:-1], loc=getattr(recv, "loc", Span()))
+			# Parent HPlaceExpr value-lowering is unsupported in v1
+			# (no `_visit_expr_HPlaceExpr`).  In Slice 1 the only
+			# observed shape is `e.params` directly off a catch
+			# binder (HVar), so a deeper place chain hitting this
+			# branch indicates a use case beyond Slice 1's scope.
+			raise NotImplementedError(
+				"`<error>.params` through a multi-step place chain is not "
+				"supported in Slice 1; use `e.params` directly off a catch "
+				"binder."
+			)
+		# Unwrap reference if `err_val` is &Error.
+		err_ty = self._infer_expr_type(recv.base) if len(recv.projections) == 1 else None
+		if err_ty is not None:
+			err_def = self._type_table.get(err_ty)
+			if err_def.kind is TypeKind.REF and err_def.param_types:
+				inner_ty = err_def.param_types[0]
+				loaded = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=loaded, ptr=err_val, inner_ty=inner_ty))
+				err_val = loaded
+		json_dest = self.b.new_temp()
+		self.b.emit(M.ExcGetParamsJson(dest=json_dest, error=err_val))
+		self._local_types[json_dest] = self._string_type
+		view_dest = self.b.new_temp()
+		self.b.emit(M.ConstructStruct(dest=view_dest, struct_ty=view_ty, args=[json_dest]))
+		self._local_types[view_dest] = view_ty
+		return view_dest
+
+	def _is_synthesized_error_params_place(self, recv: H.HExpr) -> bool:
+		"""Detect `<error>.params` as a method-call receiver.
+
+		The expression has no real backing field on Error — it's
+		synthesized at HField/HPlaceField lowering into an
+		`ErrorParamsView` value via `ExcGetParamsJson + ConstructStruct`.
+		Method calls on it (currently just `encode_compact()`) cannot
+		auto-borrow through `_lower_addr_of_place` because the
+		"projection" doesn't correspond to a real struct address.
+		Caller materializes the value to a named local and takes
+		`AddrOfLocal` for the `&ErrorParamsView` self argument.
+
+		Recognizes both shapes the parser may produce:
+		  - `H.HField(subject=..., name="params")`
+		  - `H.HPlaceExpr(base=..., projections=[..., HPlaceField("params")])`
+		Subject must type to `TypeKind.ERROR` (after ref-unwrap).
+		"""
+		# HField shape.
+		if isinstance(recv, H.HField) and recv.name == "params":
+			subj_ty = self._infer_expr_type(recv.subject)
+			if subj_ty is None:
+				return False
+			td = self._type_table.get(subj_ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				td = self._type_table.get(td.param_types[0])
+			return td.kind is TypeKind.ERROR
+		# HPlaceExpr shape — last projection must be HPlaceField("params")
+		# and the type up to (but excluding) that projection must be Error.
+		HPlaceExpr = getattr(H, "HPlaceExpr", None)
+		if HPlaceExpr is not None and isinstance(recv, HPlaceExpr):
+			if not recv.projections:
+				return False
+			last_proj = recv.projections[-1]
+			if not isinstance(last_proj, H.HPlaceField) or last_proj.name != "params":
+				return False
+			# Walk projections (excluding the last) to find the parent type.
+			cur_ty = self._infer_expr_type(recv.base)
+			if cur_ty is None:
+				return False
+			for proj in recv.projections[:-1]:
+				if isinstance(proj, H.HPlaceDeref):
+					td = self._type_table.get(cur_ty)
+					if td.kind is not TypeKind.REF or not td.param_types:
+						return False
+					cur_ty = td.param_types[0]
+				elif isinstance(proj, H.HPlaceField):
+					info = self._type_table.struct_field(cur_ty, proj.name)
+					if info is None:
+						return False
+					_, cur_ty = info
+				elif isinstance(proj, H.HPlaceIndex):
+					td = self._type_table.get(cur_ty)
+					if td.kind is not TypeKind.ARRAY or not td.param_types:
+						return False
+					cur_ty = td.param_types[0]
+			td = self._type_table.get(cur_ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				td = self._type_table.get(td.param_types[0])
+			return td.kind is TypeKind.ERROR
+		return False
+
 	def _dv_method_recv_is_rvalue(self, recv: H.HExpr) -> bool:
 		"""Decide whether a DV intrinsic method's receiver is an OWNED rvalue
 		temp (so the lowering must release it after the read-only DV op) or
@@ -6103,6 +6321,24 @@ class HIRToMIR:
 				dv_is_rvalue = self._dv_method_recv_is_rvalue(field_expr)
 			field_dvs.append((name, dv_val, dv_is_rvalue))
 
+		# Slice 1 of the DV→JSON diagnostics-context migration: build
+		# the canonical params JSON document BEFORE the existing DV-path
+		# consumption (ConstructError + ErrorAddAttrDV) so each field's
+		# DV is still observable.  Each field's DV is cloned via
+		# M.CopyValue (DV is Copy via the std.core impl) so the original
+		# stays intact for the legacy DV path.  Field names are
+		# lex-utf8 sorted at compile time for deterministic output.
+		# After the existing consumption emits err_val, ExcSetParamsJson
+		# stores the built JSON.
+		#
+		# Skip the params build when std.core is not loaded (stage2 unit
+		# tests with stubbed signatures).  Production builds always have
+		# std.core; the params surface degrades gracefully to "{}" (the
+		# runtime default) in stubbed contexts.
+		params_json_val = None
+		if self._find_free_fn_id("std.core", "_dv_to_json_text") is not None:
+			params_json_val = self._build_throw_params_json(field_dvs)
+
 		first_name, first_dv, first_is_rvalue = field_dvs[0]
 		first_key = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=first_key, value=first_name))
@@ -6123,6 +6359,11 @@ class HIRToMIR:
 			self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key, value=dv))
 			if is_rvalue:
 				self.b.emit(M.DropValue(value=dv, ty=self._dv_type))
+		# Hand the built params JSON over to the runtime; ExcSetParamsJson
+		# takes ownership (string_arc treats it as consume; see
+		# stage2/string_arc.py).
+		if params_json_val is not None:
+			self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=params_json_val))
 		return err_val
 
 	def _visit_expr_HResultOk(self, expr: H.HResultOk) -> M.ValueId:
@@ -8860,6 +9101,21 @@ class HIRToMIR:
 			recv_def = self._type_table.get(recv_ty)
 			if recv_def.kind is TypeKind.REF:
 				receiver_arg = self.lower_expr(expr.receiver)
+			elif self._is_synthesized_error_params_place(expr.receiver):
+				# Slice 1 DV→JSON: `<error>.params.encode_compact()` — the
+				# receiver `<error>.params` is a synthesized ErrorParamsView
+				# value (no real `params` field on Error).  Build the value
+				# inline (ExcGetParamsJson + ConstructStruct), materialize
+				# to a named local, then take its address for the
+				# `&ErrorParamsView` self argument.
+				view_val = self._lower_synthesized_error_params_view(expr.receiver, recv_ty)
+				view_local = f"__exc_params_view_{self.b.new_temp()}"
+				self.b.ensure_local(view_local)
+				self._local_types[view_local] = recv_ty
+				self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+				addr_dest = self.b.new_temp()
+				self.b.emit(M.AddrOfLocal(dest=addr_dest, local=view_local, is_mut=False))
+				receiver_arg = addr_dest
 			else:
 				# Auto-borrow from an lvalue receiver. We support `HVar` and canonical
 				# `HPlaceExpr` receivers; other receiver expressions are not addressable
@@ -9374,6 +9630,18 @@ class HIRToMIR:
 					cur = td.param_types[0]
 					continue
 				if isinstance(proj, H.HPlaceField):
+					if proj.name == "params":
+						# Slice 1 DV→JSON: `<error>.params` projects to
+						# `core.ErrorParamsView`.  Mirrors the
+						# type_checker.py special-case for HField/HPlaceField.
+						td = self._type_table.get(cur)
+						if td.kind is TypeKind.REF and td.param_types:
+							td = self._type_table.get(td.param_types[0])
+						if td.kind is TypeKind.ERROR:
+							epv = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
+							if epv is not None:
+								cur = epv
+								continue
 					info = self._type_table.struct_field(cur, proj.name)
 					if info is None:
 						return None
@@ -9818,6 +10086,36 @@ class HIRToMIR:
 					addr = loaded_ptr
 					cur_ty = base_def.param_types[0]
 					base_def = self._type_table.get(cur_ty)
+				# Slice 1 DV→JSON: synthesized `<error>.params` projection
+				# has no real address.  Build the ErrorParamsView VALUE,
+				# materialize it to a named local, and take that local's
+				# address.  Must be the LAST projection in the chain
+				# (no further field/index after `params`).
+				if proj.name == "params" and base_def.kind is TypeKind.ERROR:
+					if is_mut:
+						raise AssertionError(
+							"mutable borrow of `<error>.params` is not "
+							"supported (the view is a synthesized read-only value)"
+						)
+					epv_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
+					if epv_ty is None:
+						raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
+					# Load the Error value at `addr`.
+					err_val = self.b.new_temp()
+					self.b.emit(M.LoadRef(dest=err_val, ptr=addr, inner_ty=cur_ty))
+					json_dest = self.b.new_temp()
+					self.b.emit(M.ExcGetParamsJson(dest=json_dest, error=err_val))
+					self._local_types[json_dest] = self._string_type
+					view_val = self.b.new_temp()
+					self.b.emit(M.ConstructStruct(dest=view_val, struct_ty=epv_ty, args=[json_dest]))
+					self._local_types[view_val] = epv_ty
+					view_local = f"__exc_params_view_{self.b.new_temp()}"
+					self.b.ensure_local(view_local)
+					self._local_types[view_local] = epv_ty
+					self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+					view_addr = self.b.new_temp()
+					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
+					return view_addr, epv_ty
 				if base_def.kind is not TypeKind.STRUCT:
 					fn_name = getattr(self.b.func, "name", None)
 					raise AssertionError(

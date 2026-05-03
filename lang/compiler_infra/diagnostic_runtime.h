@@ -89,10 +89,15 @@ void drift_dv_release(struct DriftDiagnosticValue* dv);
 
 // Accessors
 struct DriftDiagnosticValue drift_dv_get(struct DriftDiagnosticValue dv, struct DriftString field);
-struct DriftDiagnosticValue drift_dv_index(struct DriftDiagnosticValue dv, size_t idx);
+// Pointer-based dv input for the same SysV x86_64 ABI reason as
+// drift_dv_kind; result is returned by value (existing pattern).
+struct DriftDiagnosticValue drift_dv_index(const struct DriftDiagnosticValue* dv, size_t idx);
 
-// Type queries
-uint8_t drift_dv_kind(struct DriftDiagnosticValue dv);
+// Type queries.  Pointer-based to match the rest of the DV accessor
+// convention (drift_dv_as_int / drift_dv_clone / etc.); LLVM lowering
+// for by-value 24-byte struct args without an explicit `byval` attribute
+// does not match SysV x86_64 ABI for callee parameter loads.
+uint8_t drift_dv_kind(const struct DriftDiagnosticValue* dv);
 
 // Conversions
 bool drift_dv_as_int(const struct DriftDiagnosticValue* dv, drift_isize* out);

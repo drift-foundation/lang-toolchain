@@ -8565,6 +8565,17 @@ class TypeChecker:
 					else:
 						diagnostics.append(_tc_diag(message="len(x): unsupported argument type", severity="error", span=getattr(expr, "loc", Span())))
 					return record_expr(expr, self._unknown)
+				if expr.name == "params" and inner_def.kind is TypeKind.ERROR:
+					# Slice 1 of the DV→JSON diagnostics-context migration:
+					# `<error>.params` returns an `ErrorParamsView` whose
+					# `encode_compact()` method yields the canonical params
+					# JSON document.  Construction is HIR→MIR-handled (see
+					# field-access lowering); user code does not construct
+					# the view directly.
+					epv_ty = self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
+					if epv_ty is None:
+						raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
+					return record_expr(expr, epv_ty)
 				if expr.name == "attrs":
 					diagnostics.append(
 						_tc_diag(
@@ -8620,6 +8631,18 @@ class TypeChecker:
 						if td.kind is TypeKind.REF and td.param_types:
 							cur = td.param_types[0]
 							td = self.type_table.get(cur)
+						if proj.name == "params" and td.kind is TypeKind.ERROR:
+							# Slice 1 of the DV→JSON diagnostics-context migration:
+							# `<error>.params` projects to `core.ErrorParamsView`.
+							# Mirrors the HField special-case at type_checker.py
+							# `if expr.name == "params" and inner_def.kind is
+							# TypeKind.ERROR:`.  Reachable when the error binder
+							# comes through HPlaceExpr (catch binders).
+							epv_ty = self.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="ErrorParamsView")
+							if epv_ty is None:
+								raise AssertionError("std.core:ErrorParamsView not found in type table (compiler invariant)")
+							cur = epv_ty
+							continue
 						if td.kind is not TypeKind.STRUCT:
 							diagnostics.append(_tc_diag(message="field access requires a struct value", severity="error", span=getattr(expr, "loc", Span())))
 							return record_expr(expr, self._unknown)

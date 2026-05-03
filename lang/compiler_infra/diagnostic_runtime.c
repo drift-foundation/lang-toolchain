@@ -228,17 +228,17 @@ struct DriftDiagnosticValue drift_dv_get(struct DriftDiagnosticValue dv, struct 
     return drift_dv_missing();
 }
 
-struct DriftDiagnosticValue drift_dv_index(struct DriftDiagnosticValue dv, size_t idx) {
-    if (dv.tag != DV_ARRAY) {
+struct DriftDiagnosticValue drift_dv_index(const struct DriftDiagnosticValue* dv, size_t idx) {
+    if (!dv || dv->tag != DV_ARRAY) {
         return drift_dv_missing();
     }
-    if (idx >= dv.data.array.len) {
+    if (idx >= dv->data.array.len) {
         return drift_dv_missing();
     }
-    return dv.data.array.items[idx];
+    return dv->data.array.items[idx];
 }
 
-uint8_t drift_dv_kind(struct DriftDiagnosticValue dv) { return dv.tag; }
+uint8_t drift_dv_kind(const struct DriftDiagnosticValue* dv) { return dv ? dv->tag : 0; }
 
 bool drift_dv_as_int(const struct DriftDiagnosticValue* dv, drift_isize* out) {
     if (!dv || dv->tag != DV_INT) {

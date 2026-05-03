@@ -101,28 +101,15 @@ def _ok(rc: int, stdout: str, stderr: str, label: str) -> None:
 	)
 
 
-# All five throw-side / dump-surface tests below are PINNED REGRESSION
-# TARGETS for Slice 1.  They fail today because the public dump
-# surface (`e.params.encode_compact()`) and the throw-side canonical-
-# params JSON builder are not yet implemented.  Marking strict-xfail
-# keeps the test file committable without breaking driver collection;
-# when Slice 1 lands the implementation, every xfail flips to passing
-# and the strict flag enforces removal of the decorator.
+# All five throw-side / dump-surface tests below are LIVE Slice 1
+# regression targets.  They lock the public-surface contract:
+# `<error>.params` field access returns an `ErrorParamsView`, whose
+# `encode_compact()` returns the canonical lex-ordered params JSON
+# document built at the throw site.
 #
-# The legacy-additivity baseline (test 6, `test_old_attrs_path_still_
-# works_additive`) is NOT xfailed — it locks the existing DV path
-# behavior that Slice 1 must preserve, and passes today.
-
-_SLICE_1_PENDING = pytest.mark.xfail(
-	strict=True,
-	reason=(
-		"Slice 1 of the DV→JSON diagnostics-context migration — "
-		"requires `e.params.encode_compact()` public surface plus "
-		"throw-side canonical-params JSON builder.  Tracked under "
-		"task #66 in project memory.  When Slice 1 lands, every "
-		"xfailed test in this file flips to passing automatically."
-	),
-)
+# The legacy-additivity baseline (`test_old_attrs_path_still_works_
+# additive`) locks the existing DV path's behavior, which Slice 1
+# preserves additively.
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -130,7 +117,6 @@ _SLICE_1_PENDING = pytest.mark.xfail(
 # ─────────────────────────────────────────────────────────────────
 
 
-@_SLICE_1_PENDING
 def test_throw_empty_exception_params_is_empty_object(tmp_path):
 	"""`throw E()` with zero declared fields must produce
 	`e.params.encode_compact() == "{}"`."""
@@ -169,7 +155,6 @@ pub fn main() nothrow -> Int {
 # ─────────────────────────────────────────────────────────────────
 
 
-@_SLICE_1_PENDING
 def test_throw_int_string_fields(tmp_path):
 	"""`throw E(order_id=42, code="X")` produces a JSON object
 	containing both fields with their projected values.  String
@@ -212,7 +197,6 @@ pub fn main() nothrow -> Int {
 # ─────────────────────────────────────────────────────────────────
 
 
-@_SLICE_1_PENDING
 def test_throw_bool_float_fields(tmp_path):
 	"""`throw E(active=true, ratio=1.5)` projects Bool and Float
 	primitives correctly."""
@@ -255,7 +239,6 @@ pub fn main() nothrow -> Int {
 # ─────────────────────────────────────────────────────────────────
 
 
-@_SLICE_1_PENDING
 def test_qualified_catch_event_code_routing_unchanged(tmp_path):
 	"""Qualified-catch syntax (`catch <mod>:<Event>(e)`) routes by
 	the deterministic event_code derived from the canonical FQN.
@@ -315,7 +298,6 @@ pub fn main() nothrow -> Int {
 # ─────────────────────────────────────────────────────────────────
 
 
-@_SLICE_1_PENDING
 def test_throw_params_json_is_canonical_ordered(tmp_path):
 	"""Two-field exception with `z_last` declared FIRST and
 	`a_first` declared SECOND.  Canonical lex ordering forces
