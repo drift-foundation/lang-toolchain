@@ -1,6 +1,86 @@
 # Drift development history
 
 ## 2026-05-02
+- **DV→JSON diagnostics-context migration — Slice 4A: JsonCursor
+  scalar lookup on `e.params` (release 0.31.52, ABI unchanged at
+  12).**  Adds the typed-lookup ergonomics surface for params.
+
+      try {
+          throw InvalidOrder(order_id = 42, code = "X");
+      } catch InvalidOrder(e) {
+          val id = e.params.get("order_id").as_int();
+          //                                  ^^^^^ Optional<Int>
+          val absent = e.params.get("missing").is_missing();  // true
+      }
+
+  **What's new (user-visible).**
+    - `e.params.get(key) -> JsonCursor` looks up a declared field
+      by name in the canonical params JSON.
+    - `core.JsonCursor` is a variant: `Missing`, `NullValue`,
+      `BoolVal(value)`, `IntVal(value)`, `FloatVal(value)`,
+      `StringVal(value)`, `Other(text)` (object / array — held
+      as raw text for future drilling).  `Other` is reserved
+      for later slices; Slice 4A scalar accessors return None
+      on it.
+    - Accessors: `is_missing`, `is_null`, `as_int`, `as_bool`,
+      `as_float`, `as_string`.  `is_null` distinguishes
+      "present-and-explicit-JSON-null" from "absent" (false for
+      Missing, true for NullValue).
+    - JSON Number parsing matches `std.format.format_float`
+      output: `[-]<digits>[.<digits>][[eE][+-]?<digits>]`.
+
+  **No ABI bump.**  Slice 4A is parser-side only; no new runtime
+  helper / signature / layout.  Parsing happens inline in
+  std.core (text-only — no JsonNode / std.json dependency, in
+  keeping with the std.core/std.json architecture guardrail).
+  DRIFTC_VERSION 0.31.51 → 0.31.52 to track the user-visible
+  behavior change.
+
+  **Implementation.**
+    - **Stdlib** (`stdlib/std/core/core.drift`):
+        - `pub variant JsonCursor` with the seven arms.
+        - `implement JsonCursor` accessors.
+        - `_params_cursor_get`, `_json_skip_ws`,
+          `_json_parse_string_at`, `_json_skip_value`,
+          `_json_skip_balanced`, `_json_parse_value_at`,
+          `_json_match_literal`, `_string_slice`,
+          `_json_parse_number_at`, `_digit_to_float` —
+          private inline parser; no JsonNode dependency.
+        - `ErrorParamsView.get(key) -> JsonCursor` method.
+        - JsonCursor exported from std.core.
+
+  **Float parsing details.**  `_json_parse_number_at` accumulates
+  Int and Float in parallel during integer-part parsing; on
+  hitting `.`, switches to Float-only accumulation; on hitting
+  `e`/`E`, parses exponent (with optional `+`/`-`) and applies
+  via repeated multiply/divide.  `format_float(1.5)` produces
+  `"1.5E0"` — round-trips correctly.  Cast<Float>(Int) is not
+  in the v1 numeric scalar cast surface; the Int/Float
+  parallel-accumulator pattern works around that.  `as_float`
+  on `IntVal` returns None (no auto-promotion in Slice 4A).
+
+  **Tests landed.**
+    - `lang/tests/driver/test_exception_params_cursor.py` — 6
+      passing cases:
+        - scalar Int / String / Bool present → typed values.
+        - scalar Float (1.5) → Some(1.5).
+        - absent key → is_missing=true, is_null=false, all
+          typed accessors None.
+        - explicit JSON null → is_null=true, is_missing=false,
+          typed accessors None.
+        - wrong-typed accessor → None (defensive, no abort).
+        - empty params object → all lookups missing.
+
+  **Verification.**  Full memcheck + exception suite + Slices
+  1-3 + Slice 4A + ABI stamp + branch-completion gate +
+  LANGUAGE_BUG ledger: 114 passed / 1 skipped / 2 xfailed.
+
+  **Untouched per K directive.**  No `e.context.get(...)` cursor
+  (later slice — frame-array traversal questions).  No full
+  JSON library dependency in runtime.  No DV expansion.  No DV
+  removal.  Branch-completion gate xfail and inline-catch
+  LANGUAGE_BUG xfail remain strict-xfailed.
+
 - **DV→JSON diagnostics-context migration — Slice 3: full
   envelope dump via `Error.encode_compact()` (release 0.31.51,
   ABI unchanged at 12).**  Primary log/save path: one call

@@ -79,7 +79,8 @@ export {
 	string_byte_at,
 	string_from_utf8_bytes,
 	ErrorParamsView,
-	ErrorContextView
+	ErrorContextView,
+	JsonCursor
 };
 
 export { std.core.copy.* };
@@ -742,6 +743,19 @@ implement ErrorParamsView {
 	pub fn encode_compact(self: &ErrorParamsView) nothrow -> String {
 		return self.json_text;
 	}
+
+	/// Look up a declared field by key.  Returns a `JsonCursor` that
+	/// distinguishes "absent key" from "present-and-explicit-null"
+	/// and supports scalar typed accessors (`as_int`, `as_bool`,
+	/// `as_float`, `as_string`).  Slice 4A scope — scalars only;
+	/// nested-object/array drilling is a later slice.
+	///
+	/// `e.params.get("missing").is_missing() == true`
+	/// `e.params.get("present").is_null() == true` (when value was JSON `null`)
+	/// `e.params.get("count").as_int() == Optional::Some(42)`
+	pub fn get(self: &ErrorParamsView, key: String) nothrow -> JsonCursor {
+		return _params_cursor_get(&self.json_text, &key);
+	}
 }
 
 /// Opaque view over an `Error`'s `^`-captured frames, serialized as
@@ -885,6 +899,512 @@ fn _json_quote_string(s: &String) nothrow -> String {
 		i = i + 1;
 	}
 	return out + "\"";
+}
+
+// ── JsonCursor — diagnostics-only fluent lookup over canonical JSON ──
+//
+// Slice 4A surface for `<error>.params.get("k").as_*()` typed lookup.
+// Distinguishes "absent key" from "present-and-explicit-JSON-null".
+// SCALAR ACCESSORS ONLY (Int/Bool/Float/String).  Nested object /
+// array drilling is a later slice; for now those values are
+// represented by the `Other` variant and probed via the typed
+// accessors which all return `Optional::None()`.
+//
+// DELETION LEDGER (transitional duplicate-name with `std.json.JsonCursor`):
+// std.json already has a `JsonCursor` for navigating parsed `JsonNode`
+// trees — different shape entirely.  This `core.JsonCursor` is the
+// diagnostics-text cursor (no JsonNode dependency); it keeps the
+// architecture rule that std.core never imports std.json.  A future
+// cleanup may unify the two surfaces or rename the diagnostics one
+// (e.g., `core.DiagJsonCursor`).  For Slice 4A the K-spec'd public
+// spelling is `JsonCursor` returned from `e.params.get(...)`.
+//
+// **Float parsing.**  Slice 4A's `as_float` accepts JSON numbers in
+// the form `[-]<digits>[.<digits>][[eE][+-]?<digits>]`, matching
+// `std.format.format_float` output (which always emits the
+// exponent suffix — `1.5` round-trips as `"1.5E0"`).  The exponent
+// is applied as a power of 10 via repeated multiply/divide; very
+// large exponents are bounded by the loop count.  A future slice
+// may swap this for a runtime `drift_string_to_f64` helper for
+// full IEEE 754 round-trip fidelity.
+
+pub variant JsonCursor {
+	Missing,
+	NullValue,
+	BoolVal(value: Bool),
+	IntVal(value: Int),
+	FloatVal(value: Float),
+	StringVal(value: String),
+	/// Object / Array values — not consumable as scalar in Slice 4A.
+	/// Holds the raw canonical JSON text for future drilling.
+	Other(text: String),
+}
+
+implement copy_mod.Copy for JsonCursor { }
+
+implement JsonCursor {
+	pub fn is_missing(self: &JsonCursor) nothrow -> Bool {
+		match self {
+			Missing => { return true; },
+			default => { return false; },
+		}
+	}
+
+	pub fn is_null(self: &JsonCursor) nothrow -> Bool {
+		match self {
+			NullValue => { return true; },
+			default => { return false; },
+		}
+	}
+
+	pub fn as_int(self: &JsonCursor) nothrow -> Optional<Int> {
+		match self {
+			IntVal(v) => { return Optional::Some(*v); },
+			default => { return Optional<Int>::None(); },
+		}
+	}
+
+	pub fn as_bool(self: &JsonCursor) nothrow -> Optional<Bool> {
+		match self {
+			BoolVal(v) => { return Optional::Some(*v); },
+			default => { return Optional<Bool>::None(); },
+		}
+	}
+
+	/// Returns Some for `FloatVal` only.  `IntVal` does not auto-
+	/// promote in Slice 4A (no Int→Float cast in the v1 numeric
+	/// scalar cast surface); callers wanting numeric coercion can
+	/// match `IntVal` themselves.
+	pub fn as_float(self: &JsonCursor) nothrow -> Optional<Float> {
+		match self {
+			FloatVal(v) => { return Optional::Some(*v); },
+			default => { return Optional<Float>::None(); },
+		}
+	}
+
+	pub fn as_string(self: &JsonCursor) nothrow -> Optional<String> {
+		match self {
+			StringVal(v) => { return Optional::Some(*v); },
+			default => { return Optional<String>::None(); },
+		}
+	}
+}
+
+
+// ── JSON-text parser (Slice 4A — params lookup only) ────────────
+//
+// Minimal JSON parser scoped to params lookup.  Designed against
+// the canonical writer in `_dv_to_json_text` + `_json_quote_string`
+// + `_build_throw_params_json`: top-level object, declared field
+// keys, scalar values + nested object/array values held as raw
+// text.  Defensive on malformed input — returns `Missing` rather
+// than panicking.  Private; not exported.
+
+fn _byte_is_ws(b: Byte) nothrow -> Bool {
+	if b == cast<Byte>(32) { return true; }
+	if b == cast<Byte>(9) { return true; }
+	if b == cast<Byte>(10) { return true; }
+	if b == cast<Byte>(13) { return true; }
+	return false;
+}
+
+fn _byte_is_digit(b: Byte) nothrow -> Bool {
+	val v = cast<Int>(b);
+	if v >= 48 {
+		if v <= 57 { return true; }
+	}
+	return false;
+}
+
+fn _json_skip_ws(text: &String, p: Int) nothrow -> Int {
+	val n = text.byte_length();
+	var pos = p;
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if !_byte_is_ws(b) {
+			return pos;
+		}
+		pos = pos + 1;
+	}
+	return pos;
+}
+
+/// Result of a quoted-JSON-string parse: (`value`, `next_pos`)
+/// or (`""`, `-1`) on malformed input.
+struct _JsonStrParse {
+	value: String,
+	next_pos: Int,
+}
+
+fn _json_parse_string_at(text: &String, p: Int) nothrow -> _JsonStrParse {
+	val n = text.byte_length();
+	if p >= n { return _JsonStrParse(value = "", next_pos = -1); }
+	if string_byte_at(text, p) != cast<Byte>(34) {
+		return _JsonStrParse(value = "", next_pos = -1);
+	}
+	var pos = p + 1;
+	var out = "";
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if b == cast<Byte>(34) {
+			return _JsonStrParse(value = out, next_pos = pos + 1);
+		}
+		if b == cast<Byte>(92) {
+			// Escape sequence.
+			pos = pos + 1;
+			if pos >= n { return _JsonStrParse(value = "", next_pos = -1); }
+			val esc = string_byte_at(text, pos);
+			if esc == cast<Byte>(34) {
+				out = out + _byte_to_string(cast<Byte>(34));
+			} else {
+				if esc == cast<Byte>(92) {
+					out = out + _byte_to_string(cast<Byte>(92));
+				} else {
+					if esc == cast<Byte>(110) {
+						// `\n`
+						out = out + _byte_to_string(cast<Byte>(10));
+					} else {
+						if esc == cast<Byte>(114) {
+							out = out + _byte_to_string(cast<Byte>(13));
+						} else {
+							if esc == cast<Byte>(116) {
+								out = out + _byte_to_string(cast<Byte>(9));
+							} else {
+								if esc == cast<Byte>(98) {
+									out = out + _byte_to_string(cast<Byte>(8));
+								} else {
+									if esc == cast<Byte>(102) {
+										out = out + _byte_to_string(cast<Byte>(12));
+									} else {
+										// `\u00XX` and other escapes — defensive
+										// fallback: include literal escape sequence
+										// rather than failing.  Slice 4A's writer
+										// (_json_quote_string) only emits the cases
+										// handled above; pathological inputs land
+										// here.  Return Missing-equivalent.
+										return _JsonStrParse(value = "", next_pos = -1);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			pos = pos + 1;
+		} else {
+			out = out + _byte_to_string(b);
+			pos = pos + 1;
+		}
+	}
+	return _JsonStrParse(value = "", next_pos = -1);
+}
+
+/// Skip one JSON value starting at `pos`.  Returns the position
+/// just past the end of the value, or `-1` on malformed input.
+fn _json_skip_value(text: &String, p: Int) nothrow -> Int {
+	val n = text.byte_length();
+	if p >= n { return -1; }
+	val first = string_byte_at(text, p);
+	if first == cast<Byte>(34) {
+		// String — reuse parse-and-discard.
+		val parsed = _json_parse_string_at(text, p);
+		return parsed.next_pos;
+	}
+	if first == cast<Byte>(123) {
+		// Object — track brace depth, respecting strings.
+		return _json_skip_balanced(text, p, cast<Byte>(123), cast<Byte>(125));
+	}
+	if first == cast<Byte>(91) {
+		// Array — track bracket depth, respecting strings.
+		return _json_skip_balanced(text, p, cast<Byte>(91), cast<Byte>(93));
+	}
+	// Number / true / false / null — read until ws / `,` / `}` / `]`.
+	var pos = p;
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if _byte_is_ws(b) { return pos; }
+		if b == cast<Byte>(44) { return pos; }
+		if b == cast<Byte>(125) { return pos; }
+		if b == cast<Byte>(93) { return pos; }
+		pos = pos + 1;
+	}
+	return pos;
+}
+
+fn _json_skip_balanced(text: &String, p: Int, open: Byte, close: Byte) nothrow -> Int {
+	val n = text.byte_length();
+	if p >= n { return -1; }
+	var pos = p;
+	var depth = 0;
+	var in_string = false;
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if in_string {
+			if b == cast<Byte>(92) {
+				// Skip the escaped byte.
+				pos = pos + 2;
+				continue;
+			}
+			if b == cast<Byte>(34) {
+				in_string = false;
+				pos = pos + 1;
+				continue;
+			}
+			pos = pos + 1;
+			continue;
+		}
+		if b == cast<Byte>(34) {
+			in_string = true;
+			pos = pos + 1;
+			continue;
+		}
+		if b == open {
+			depth = depth + 1;
+			pos = pos + 1;
+			continue;
+		}
+		if b == close {
+			depth = depth - 1;
+			pos = pos + 1;
+			if depth == 0 { return pos; }
+			continue;
+		}
+		pos = pos + 1;
+	}
+	return -1;
+}
+
+/// Parse one JSON value at `pos` into a `JsonCursor`.  Returns
+/// `JsonCursor::Missing()` on malformed input (defensive
+/// fallback).
+fn _json_parse_value_at(text: &String, p: Int) nothrow -> JsonCursor {
+	val n = text.byte_length();
+	if p >= n { return JsonCursor::Missing(); }
+	val first = string_byte_at(text, p);
+	// Quoted string.
+	if first == cast<Byte>(34) {
+		val parsed = _json_parse_string_at(text, p);
+		if parsed.next_pos < 0 { return JsonCursor::Missing(); }
+		return JsonCursor::StringVal(value = parsed.value);
+	}
+	// `true` / `false` / `null` literals.
+	if first == cast<Byte>(116) {
+		// `true`
+		if _json_match_literal(text, p, "true") { return JsonCursor::BoolVal(value = true); }
+		return JsonCursor::Missing();
+	}
+	if first == cast<Byte>(102) {
+		// `false`
+		if _json_match_literal(text, p, "false") { return JsonCursor::BoolVal(value = false); }
+		return JsonCursor::Missing();
+	}
+	if first == cast<Byte>(110) {
+		// `null`
+		if _json_match_literal(text, p, "null") { return JsonCursor::NullValue(); }
+		return JsonCursor::Missing();
+	}
+	// Object / Array — store as Other(raw_text).
+	if first == cast<Byte>(123) {
+		val end = _json_skip_balanced(text, p, cast<Byte>(123), cast<Byte>(125));
+		if end < 0 { return JsonCursor::Missing(); }
+		return JsonCursor::Other(text = _string_slice(text, p, end));
+	}
+	if first == cast<Byte>(91) {
+		val end = _json_skip_balanced(text, p, cast<Byte>(91), cast<Byte>(93));
+		if end < 0 { return JsonCursor::Missing(); }
+		return JsonCursor::Other(text = _string_slice(text, p, end));
+	}
+	// Number — `[-]<digits>[.<digits>][[eE][+-]?<digits>]`.
+	// Exponent suffix is required to round-trip
+	// `std.format.format_float` output (e.g. `"1.5E0"`); see the
+	// commentary above the variant declaration.
+	return _json_parse_number_at(text, p);
+}
+
+fn _json_match_literal(text: &String, p: Int, lit: String) nothrow -> Bool {
+	val n = text.byte_length();
+	val m = lit.byte_length();
+	if p + m > n { return false; }
+	var i = 0;
+	while i < m {
+		if string_byte_at(text, p + i) != string_byte_at(&lit, i) {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+/// Slice `[start, end)` of `text` into a fresh owned `String`.
+fn _string_slice(text: &String, start: Int, end: Int) nothrow -> String {
+	if end <= start { return ""; }
+	var out = "";
+	var i = start;
+	while i < end {
+		out = out + _byte_to_string(string_byte_at(text, i));
+		i = i + 1;
+	}
+	return out;
+}
+
+fn _digit_to_float(b: Byte) nothrow -> Float {
+	if b == cast<Byte>(48) { return 0.0; }
+	if b == cast<Byte>(49) { return 1.0; }
+	if b == cast<Byte>(50) { return 2.0; }
+	if b == cast<Byte>(51) { return 3.0; }
+	if b == cast<Byte>(52) { return 4.0; }
+	if b == cast<Byte>(53) { return 5.0; }
+	if b == cast<Byte>(54) { return 6.0; }
+	if b == cast<Byte>(55) { return 7.0; }
+	if b == cast<Byte>(56) { return 8.0; }
+	return 9.0;
+}
+
+fn _json_parse_number_at(text: &String, p: Int) nothrow -> JsonCursor {
+	val n = text.byte_length();
+	if p >= n { return JsonCursor::Missing(); }
+	var pos = p;
+	var negative = false;
+	if string_byte_at(text, pos) == cast<Byte>(45) {
+		negative = true;
+		pos = pos + 1;
+	}
+	if pos >= n { return JsonCursor::Missing(); }
+	if !_byte_is_digit(string_byte_at(text, pos)) { return JsonCursor::Missing(); }
+	// Integer part — accumulate Int and Float simultaneously so we can
+	// emit IntVal for pure integers and FloatVal for decimals without
+	// needing an Int→Float cast (cast<Float>(Int) is not supported in
+	// the v1 numeric scalar cast surface).
+	var int_acc: Int = 0;
+	var float_acc: Float = 0.0;
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if !_byte_is_digit(b) { break; }
+		int_acc = int_acc * 10 + (cast<Int>(b) - 48);
+		float_acc = float_acc * 10.0 + _digit_to_float(b);
+		pos = pos + 1;
+	}
+	// Optional decimal part.
+	var has_decimal = false;
+	if pos < n {
+		val b = string_byte_at(text, pos);
+		if b == cast<Byte>(46) {
+			has_decimal = true;
+			pos = pos + 1;
+			if pos >= n { return JsonCursor::Missing(); }
+			if !_byte_is_digit(string_byte_at(text, pos)) { return JsonCursor::Missing(); }
+			var divisor: Float = 1.0;
+			while pos < n {
+				val db = string_byte_at(text, pos);
+				if !_byte_is_digit(db) { break; }
+				divisor = divisor * 10.0;
+				float_acc = float_acc + _digit_to_float(db) / divisor;
+				pos = pos + 1;
+			}
+		}
+	}
+	// Optional exponent — matches std.format.format_float output
+	// (which always emits `[eE]<sign?><digits>`).
+	var has_exponent = false;
+	var exp_negative = false;
+	var exp_value: Int = 0;
+	if pos < n {
+		val maybe_e = string_byte_at(text, pos);
+		if maybe_e == cast<Byte>(101) or maybe_e == cast<Byte>(69) {
+			has_exponent = true;
+			pos = pos + 1;
+			if pos >= n { return JsonCursor::Missing(); }
+			val sign_b = string_byte_at(text, pos);
+			if sign_b == cast<Byte>(43) {
+				pos = pos + 1;
+			} else {
+				if sign_b == cast<Byte>(45) {
+					exp_negative = true;
+					pos = pos + 1;
+				}
+			}
+			if pos >= n { return JsonCursor::Missing(); }
+			if !_byte_is_digit(string_byte_at(text, pos)) { return JsonCursor::Missing(); }
+			while pos < n {
+				val db = string_byte_at(text, pos);
+				if !_byte_is_digit(db) { break; }
+				exp_value = exp_value * 10 + (cast<Int>(db) - 48);
+				pos = pos + 1;
+			}
+		}
+	}
+	if has_decimal or has_exponent {
+		// FloatVal — apply the exponent.
+		if has_exponent {
+			var i = 0;
+			while i < exp_value {
+				if exp_negative {
+					float_acc = float_acc / 10.0;
+				} else {
+					float_acc = float_acc * 10.0;
+				}
+				i = i + 1;
+			}
+		}
+		if negative { float_acc = 0.0 - float_acc; }
+		return JsonCursor::FloatVal(value = float_acc);
+	}
+	if negative { int_acc = -int_acc; }
+	return JsonCursor::IntVal(value = int_acc);
+}
+
+/// Look up `key` inside the canonical params JSON object `text`.
+/// Returns a `JsonCursor` on success or `JsonCursor::Missing()` if
+/// the key is absent or the input is malformed.
+fn _params_cursor_get(text: &String, key: &String) nothrow -> JsonCursor {
+	val n = text.byte_length();
+	var pos = _json_skip_ws(text, 0);
+	if pos >= n { return JsonCursor::Missing(); }
+	if string_byte_at(text, pos) != cast<Byte>(123) {
+		return JsonCursor::Missing();
+	}
+	pos = pos + 1;
+	pos = _json_skip_ws(text, pos);
+	while pos < n {
+		val b = string_byte_at(text, pos);
+		if b == cast<Byte>(125) {
+			return JsonCursor::Missing();
+		}
+		if b != cast<Byte>(34) {
+			return JsonCursor::Missing();
+		}
+		val parsed = _json_parse_string_at(text, pos);
+		if parsed.next_pos < 0 { return JsonCursor::Missing(); }
+		val k = parsed.value;
+		pos = parsed.next_pos;
+		pos = _json_skip_ws(text, pos);
+		if pos >= n {
+			return JsonCursor::Missing();
+		}
+		if string_byte_at(text, pos) != cast<Byte>(58) {
+			return JsonCursor::Missing();
+		}
+		pos = pos + 1;
+		pos = _json_skip_ws(text, pos);
+		if k == *key {
+			return _json_parse_value_at(text, pos);
+		}
+		pos = _json_skip_value(text, pos);
+		if pos < 0 { return JsonCursor::Missing(); }
+		pos = _json_skip_ws(text, pos);
+		if pos >= n { return JsonCursor::Missing(); }
+		val sep = string_byte_at(text, pos);
+		if sep == cast<Byte>(44) {
+			pos = pos + 1;
+			pos = _json_skip_ws(text, pos);
+			continue;
+		}
+		if sep == cast<Byte>(125) {
+			return JsonCursor::Missing();
+		}
+		return JsonCursor::Missing();
+	}
+	return JsonCursor::Missing();
 }
 
 /// Projects a `DiagnosticValue` to canonical JSON text, recursively.
