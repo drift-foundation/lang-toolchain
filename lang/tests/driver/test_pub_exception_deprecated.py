@@ -1,30 +1,32 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Slice 5: `pub exception` transitional alias for `pub error`.
+"""Slice 5: `pub exception` is rejected — negative migration tests.
 
-Per K-correction (2026-05-03), this file is split:
+Per K (2026-05-03 hard-break direction): `pub exception` user-facing
+syntax is REMOVED in 0.32.0.  `pub error` is the only declaration
+syntax accepted at the user-source boundary.  Stdlib migrated its
+declarations in implementation slice 2 prep.
 
-  - **Alias behavior probes** (this file): `pub exception` parses,
-    behaves like `pub error` for declaration / construction /
-    field access / throw / catch.  All strict-xfail.
-  - **Warning emission probe** (also here, gated on stable
-    warning-capture plumbing): `W_PUB_EXCEPTION_DEPRECATED`
-    diagnostic at the declaration site.  If warning capture turns
-    out to be awkward, this probe is the one to defer.
+This file replaces the original alias-behavior tests with negative
+probes:
 
-Pins:
+  1. `pub exception E { ... }` brace form — DOES NOT PARSE (the
+     grammar accepts only paren-form `pub exception E(...)`, and
+     even that paren form is targeted for rejection).  Test asserts
+     a compile failure.  Flippable today.
+  2. `pub exception E(...)` paren form — once the user-source
+     rejection diagnostic (`E_PUB_EXCEPTION_REMOVED`) is enabled,
+     this fails compile with a migration hint pointing at
+     `pub error`.  Currently the diagnostic is GATED on the
+     test-corpus mass-migration sub-slice (101 driver/codegen test
+     files use paren-form `pub exception` in heredocs and need to
+     migrate first).  Strict-xfail until the gate lifts.
 
-  1. `pub exception E { ... }` declaration parses (transitional
-     alias for one release; spec §2.1).
-  2. Throw + catch over a `pub exception`-declared type works
-     identically to `pub error` (alias semantics).
-  3. The compiler emits a `W_PUB_EXCEPTION_DEPRECATED` warning at
-     the `pub exception` declaration site, recommending migration
-     to `pub error`.
+**Out of scope:** there is no transitional alias path — `pub error`
+is the only user-facing form.  Throw/catch behavior tests for
+`pub error` live in `test_pub_error_throw_catch.py`.
 
-**Out of scope:** the 0.33.0 promotion to hard error
-(implementation-phase concern).
-
-Spec: `work/exception-diagnostics-context/slice5-spec.md` §2.1.
+Spec: `work/exception-diagnostics-context/slice5-spec.md` §2.1
+(superseded — alias preservation removed by K, 2026-05-03 follow-up).
 """
 from __future__ import annotations
 
@@ -36,48 +38,40 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 
 
-_SLICE_5_PENDING = pytest.mark.xfail(
+_REJECTION_GATED_ON_TEST_MIGRATION = pytest.mark.xfail(
 	strict=True,
 	reason=(
-		"Slice 5 (pub error language migration) not yet implemented; "
-		"spec locked at work/exception-diagnostics-context/slice5-spec.md"
+		"`E_PUB_EXCEPTION_REMOVED` rejection diagnostic is gated on the "
+		"test-corpus mass-migration sub-slice; parser temporarily accepts "
+		"paren-form `pub exception` per K's staged-migration guardrail."
 	),
 )
 
 
-def _compile_all(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[dict]]:
-	"""Variant of _compile that returns ALL diagnostics (errors AND
-	warnings).  Needed for the deprecation-warning probe."""
+def _compile(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[dict]]:
 	src = tmp_path / "main.drift"
 	src.write_text(source, encoding="utf-8")
 	rc = driftc_main(["--stdlib-root", "stdlib", "--test-build-only", str(src), "--json"])
 	out = capsys.readouterr().out
 	payload = json.loads(out) if out.strip() else {}
-	return rc, payload.get("diagnostics", [])
+	errs = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	return rc, errs
 
 
-def _ok_no_errors(rc: int, all_diags: list[dict], label: str) -> None:
-	"""Compile must succeed; warnings are tolerated (the alias is
-	expected to emit a deprecation warning)."""
-	errs = [d for d in all_diags if d.get('severity') == 'error']
-	assert rc == 0, (
-		f"{label}: rc={rc}, errs:\n"
-		+ "\n".join(f"  {e.get('code')}: {e.get('message','')[:200]}" for e in errs)
-	)
+def _fails_to_compile(rc: int, errs: list[dict], label: str) -> None:
+	"""Compile must fail with at least one error — any rejection
+	is acceptable for the brace-form probe (grammar-level rejection
+	is itself the migration boundary)."""
+	assert rc != 0, f"{label}: expected compile failure but rc=0"
+	assert errs, f"{label}: expected at least one error diagnostic; got none"
 
 
-def _warns_with_code(rc: int, all_diags: list[dict], code: str, label: str) -> None:
-	"""Compile must succeed AND a warning with `code` must be in
-	the diagnostics."""
-	errs = [d for d in all_diags if d.get('severity') == 'error']
-	assert rc == 0, (
-		f"{label}: expected compile success but rc={rc}; errs:\n"
-		+ "\n".join(f"  {e.get('code')}: {e.get('message','')[:200]}" for e in errs)
-	)
-	warns = [d for d in all_diags if d.get('severity') == 'warning']
-	codes = [w.get('code') for w in warns]
+def _fails_with_code(rc: int, errs: list[dict], code: str, label: str) -> None:
+	codes = [e.get('code') for e in errs]
+	assert rc != 0, f"{label}: expected compile failure but rc=0"
 	assert code in codes, (
-		f"{label}: expected warning {code} not in {codes}"
+		f"{label}: expected diagnostic {code} not in {codes}\n"
+		+ "\n".join(f"  {e.get('code')}: {e.get('message','')[:200]}" for e in errs)
 	)
 
 
@@ -88,15 +82,16 @@ import std.core as core;
 """
 
 
-# ── Probe 1 ─ pub exception parses (alias) ─────────────────────────
+# ── Probe 1 ─ brace form rejected (grammar boundary) ─────────────
 
 
-def test_pub_exception_alias_parses(tmp_path, capsys):
-	"""`pub exception E { ... }` declaration parses as a transitional
-	alias for `pub error`.  No errors at compile (warnings are
-	tolerated; the deprecation-warning probe asserts that
-	separately)."""
-	rc, all_diags = _compile_all(tmp_path, capsys, _PRE + """
+def test_pub_exception_brace_form_rejected(tmp_path, capsys):
+	"""`pub exception E { ... }` does NOT parse — the grammar
+	accepts brace bodies only for `pub error`.  Compile fails with
+	a parse-level rejection.  This is the user-facing migration
+	boundary: anyone reaching for brace form should land on
+	`pub error E { ... }` instead."""
+	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub exception ParseError {
 \tmessage: String,
 \toffset: Int,
@@ -106,60 +101,26 @@ fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
-	_ok_no_errors(rc, all_diags, "pub exception alias parses")
+	_fails_to_compile(rc, errs, "pub exception brace form rejected")
 
 
-# ── Probe 2 ─ throw + catch over pub exception ─────────────────────
+# ── Probe 2 ─ paren form rejection diagnostic ────────────────────
 
 
-@_SLICE_5_PENDING
-def test_pub_exception_throw_catch_works(tmp_path, capsys):
-	"""Throw + typed catch over a `pub exception`-declared type
-	works identically to `pub error` (alias semantics)."""
-	rc, all_diags = _compile_all(tmp_path, capsys, _PRE + """
-pub exception ParseError {
-\toffset: Int,
-}
-
-fn risky() throws ParseError -> Int {
-\tthrow ParseError(offset = 12);
-}
-
-fn main() nothrow -> Int {
-\ttry {
-\t\treturn risky();
-\t} catch ParseError(e) {
-\t\treturn e.offset;
-\t}
-}
-""")
-	_ok_no_errors(rc, all_diags, "pub exception throw + catch")
-
-
-# ── Probe 3 ─ deprecation warning emitted ──────────────────────────
-
-
-@_SLICE_5_PENDING
-def test_pub_exception_emits_deprecation_warning(tmp_path, capsys):
-	"""`pub exception E { ... }` declaration emits the warning
-	`W_PUB_EXCEPTION_DEPRECATED` at the declaration site, pointing
-	users at `pub error`.
-
-	NOTE: this probe depends on the driver harness exposing
-	severity=warning diagnostics with stable codes.  Per
-	K-correction (2026-05-03), if warning-capture plumbing turns
-	out to be awkward at implementation time, THIS probe is the
-	one to defer to a follow-up; the alias-behavior probes (1 and
-	2) stand alone."""
-	rc, all_diags = _compile_all(tmp_path, capsys, _PRE + """
-pub exception ParseError {
-\tmessage: String,
-\toffset: Int,
-}
+@_REJECTION_GATED_ON_TEST_MIGRATION
+def test_pub_exception_paren_form_rejected_with_migration_diag(tmp_path, capsys):
+	"""Once the test-corpus migration sub-slice lands, paren-form
+	`pub exception E(...)` is rejected with diagnostic
+	`E_PUB_EXCEPTION_REMOVED` and a migration hint pointing at
+	`pub error E { ... }`.  Strict-xfail until the diagnostic
+	gate is lifted (TODO in
+	`lang/driftc/parser/__init__.py:_build_exception_catalog`)."""
+	rc, errs = _compile(tmp_path, capsys, _PRE + """
+pub exception ParseError(message: String, offset: Int);
 
 fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
-	_warns_with_code(rc, all_diags, 'W_PUB_EXCEPTION_DEPRECATED',
-		"pub exception emits deprecation warning")
+	_fails_with_code(rc, errs, 'E_PUB_EXCEPTION_REMOVED',
+		"pub exception paren form rejected with migration diagnostic")

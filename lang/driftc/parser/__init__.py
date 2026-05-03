@@ -1185,6 +1185,21 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 
 	Collisions on the payload bits are reported as errors and the colliding
 	exceptions are omitted from the catalog to avoid undefined dispatch.
+
+	Slice 5 hard-break direction (K, 2026-05-03): `pub exception` /
+	`exception` user-facing syntax is REMOVED in favor of `pub error` /
+	`error`.  Stdlib was migrated to `pub error` in slice 2 prep, so this
+	catalog no longer needs a stdlib exemption.
+
+	**Current state — rejection NOT yet enabled.**  The user-source
+	rejection diagnostic `E_PUB_EXCEPTION_REMOVED` is gated on the
+	test-corpus mass-migration sub-slice (101 driver / codegen / stage2
+	test files use `pub exception` in heredocs and must migrate first).
+	Until that sub-slice lands, the parser temporarily accepts paren-form
+	`pub exception` per K's explicit "Parser may temporarily still parse
+	legacy exception internally only if needed for staged migration"
+	guardrail.  See the TODO marker in the loop body for the rejection
+	site.
 	"""
 	catalog: dict[str, int] = {}
 	payload_seen: dict[int, str] = {}
@@ -1196,6 +1211,17 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 			diagnostics.append(_diagnostic(f"duplicate exception '{exc.name}'", getattr(exc, "loc", None)))
 			continue
 		seen_names.add(exc.name)
+		# Slice 5 hard-break direction (K, 2026-05-03): `pub exception` /
+		# `exception` user-facing syntax is REMOVED in 0.32.0 in favor of
+		# `pub error` / `error`.  Stdlib was migrated in slice 2; the
+		# user-source rejection diagnostic is gated on the mass-test-migration
+		# sub-slice (101 driver/codegen test files use `pub exception` in
+		# heredocs and need migration before the rejection can fire).  Until
+		# then the parser accepts `pub exception` as a legacy form per K's
+		# explicit "Parser may temporarily still parse legacy exception
+		# internally only if needed for staged migration" guardrail.
+		# TODO(slice5/test-migration): emit `E_PUB_EXCEPTION_REMOVED` here
+		# once the test corpus is on `pub error`.
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
 		# Slice 5: `pub error E(0x1234) { ... }` pins an explicit event_code.
 		# When set, use it directly instead of the FQN-derived hash.  The
@@ -2002,7 +2028,22 @@ def parse_drift_workspace_to_hir(
 		"""
 		module_fn_names: set[str] = {fn.name for fn in getattr(merged_prog, "functions", []) or []}
 		module_const_names: set[str] = {c.name for c in getattr(merged_prog, "consts", []) or []}
-		module_struct_names: set[str] = {s.name for s in getattr(merged_prog, "structs", []) or []}
+		# Slice 5 Path A: `pub error E { ... }` lowers to BOTH an ExceptionDef
+		# (event-identity) AND a parallel StructDef (value-type machinery).  The
+		# parallel StructDef is synthesized — it shares its name with the
+		# ExceptionDef on purpose, and the export-ambiguity check below MUST
+		# count it as a single "error" type kind, not as both "struct" and
+		# "exception".  Filter synthesized struct co-registrations out of the
+		# module_struct_names set so the export validator only sees the
+		# ExceptionDef face for these names.  See `_struct_from_error_decl`
+		# in `lang/driftc/parser/parser.py` for the parser-side of Path A.
+		_synthesized_error_struct_names: set[str] = {
+			e.name for e in getattr(merged_prog, "exceptions", []) or [] if getattr(e, "kind", "exception") == "error"
+		}
+		module_struct_names: set[str] = {
+			s.name for s in getattr(merged_prog, "structs", []) or []
+			if s.name not in _synthesized_error_struct_names
+		}
 		module_variant_names: set[str] = {v.name for v in getattr(merged_prog, "variants", []) or []}
 		module_exception_names: set[str] = {e.name for e in getattr(merged_prog, "exceptions", []) or []}
 		module_interface_names: set[str] = {i.name for i in getattr(merged_prog, "interfaces", []) or []}

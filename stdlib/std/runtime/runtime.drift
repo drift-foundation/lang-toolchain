@@ -90,7 +90,9 @@ pub struct ScopeGuard<T> {
 /// the catching code to distinguish causes.
 ///
 /// **See also:** `expect`, `expect_mut`.
-pub exception RegistryError(tag: String);
+pub error RegistryError {
+	tag: String,
+}
 
 /// Returns a borrow of the process-wide `GlobalRegistry`.
 ///
@@ -475,7 +477,7 @@ pub fn expect_mut<T>(reg: &ThreadRegistry, tag: String) -> &mut T {
 
 /// Thrown by `expect_downcast<T>` when the box does not contain a
 /// `T`.
-pub exception TypeBoxError();
+pub error TypeBoxError {}
 
 /// Heterogeneous type-erased value carrier.
 ///

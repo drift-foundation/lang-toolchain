@@ -1066,3 +1066,140 @@ work/exception-diagnostics-context/slice5-spec.md   (this section + xxHash64 cor
 ```
 
 **Version bump:** DRIFTC_VERSION 0.31.53 → **0.31.54** (per repo rule: behavior-changing compiler/toolchain change without ABI break still bumps compiler version). ABI 12 unchanged. No ABI stamp update needed.
+
+---
+
+## 21. Implementation Slice 2 prep — Landed 2026-05-03 (0.31.55)
+
+K's hard-break direction (2026-05-03 follow-up): no `pub exception` alias — `pub error` is the only user-facing declaration syntax. Stdlib must migrate; user-source rejection diagnostic for `pub exception` is gated on a separate test-corpus mass-migration sub-slice.
+
+Slice 2 was authorized as one larger slice to land coherent throw/catch checker semantics for `pub error`. **This commit lands the prep work only**; the substantive checker work (narrow throws-coverage analysis + catch typed binder typing + throws-types validation + visibility coherence) is split out as **slice 2B** because:
+1. The test-corpus migration is a hidden ~101-test scope that wasn't in the original slice scope.
+2. Coverage analysis + binder typing is a focused 300-500 LOC change that deserves its own review surface.
+3. Prep work is regression-clean and unblocks 2B.
+
+### 21.1 Stdlib migration (10 declarations across 4 files)
+
+| File | Decl |
+|---|---|
+| `stdlib/std/err/err.drift` | `IndexError`, `IteratorInvalidated`, `ResultError` |
+| `stdlib/std/json/json.drift` | `JsonError`, `JsonPathError` |
+| `stdlib/std/concurrent/concurrent.drift` | `VtResultNotAvailable`, `ExecSubmitFailed`, `InvalidDuration` |
+| `stdlib/std/runtime/runtime.drift` | `RegistryError`, `TypeBoxError` |
+
+All converted from paren-form `pub exception E(field: T, ...)` → brace-form `pub error E { field: T, ... }`. Event_codes are unchanged (xxHash64 of FQN; FQNs preserved).
+
+### 21.2 Grammar `throws TYPE_LIST` extension
+
+New `fn_signature_tail` non-terminal:
+
+```
+fn_signature_tail: NOTHROW return_sig
+                 | THROWS throws_types? return_sig
+                 | THROWS throws_types?
+                 | return_sig
+throws_types: type_expr (COMMA type_expr)*
+```
+
+Three signature builders (`func_def`, `trait_method_sig`, `interface_method_sig`) refactored to share a `_parse_fn_signature_tail` helper. Forms accepted:
+
+- `fn f(...) -> T` (plain may-throw value return — unchanged).
+- `fn f(...) nothrow -> T` (unchanged).
+- `fn f(...) throws -> T` (auto-try value-returning, generic throws — unchanged).
+- `fn f(...) throws E -> T` (NEW: typed-throws).
+- `fn f(...) throws E, F -> T` (NEW: multi-typed-throws).
+- `fn f(...) throws` / `throws E` / `throws E, F` (terminal forms).
+
+`declared_throws_types: List[TypeExpr]` field added to `FunctionDef` / `TraitMethodSig` / `InterfaceMethodSig`. Empty list = generic throws (existing behavior). Validation of types resolving to error/exception kinds is **slice 2B** work.
+
+### 21.3 Slice 1 brace-form `pub exception` reverted
+
+K's hard-break: no alias. `exception_def` grammar reverted to paren-only. `_build_exception_def` no longer handles brace bodies. Parser dispatch no longer co-registers a StructDef for kind="error" `pub exception` decls. **Only `pub error` co-registers a StructDef.**
+
+### 21.4 Path A export-ambiguity fix
+
+The Slice 1 explore agent's pessimism about Path A name-collision was overstated for value-type contexts but correct for **export validation**. Stdlib's export blocks list `pub error` types (e.g., `IndexError`); the validator saw the parallel StructDef + ExceptionDef and emitted `E_AUTO_*: exported type name 'X' is ambiguous (defined as multiple type kinds in module 'Y')`.
+
+Fix in `lang/driftc/parser/__init__.py:_build_exception_catalog` caller:
+
+```python
+_synthesized_error_struct_names: set[str] = {
+    e.name for e in getattr(merged_prog, "exceptions", []) or []
+    if getattr(e, "kind", "exception") == "error"
+}
+module_struct_names: set[str] = {
+    s.name for s in getattr(merged_prog, "structs", []) or []
+    if s.name not in _synthesized_error_struct_names
+}
+```
+
+The synthesized StructDef face is filtered out of `module_struct_names` so the export validator sees only the ExceptionDef face. Type lookup for value-type contexts continues to find the struct via the type-table (separate from `module_struct_names`).
+
+### 21.5 `pub exception` user-source rejection — gated on test migration
+
+`_build_exception_catalog` carries a TODO marker for `E_PUB_EXCEPTION_REMOVED`. Per K's "Parser may temporarily still parse legacy exception internally only if needed for staged migration" guardrail, the rejection is OFF until the **test-corpus mass-migration sub-slice** lands. **101 driver / codegen / stage2 test files** use `pub exception` in heredocs and need migration before the rejection can fire safely.
+
+When migration is done, the TODO emits:
+
+```
+error[E_PUB_EXCEPTION_REMOVED]: `pub exception X(...)` is removed in 0.32.0 — use `pub error X { ... }` instead
+```
+
+### 21.6 `test_pub_exception_deprecated.py` rewritten as negative tests
+
+Per K: "Replace test_pub_exception_deprecated.py with negative tests for old syntax."
+
+Old probes (alias-behavior) deleted. New probes:
+
+| Probe | What it asserts | Status |
+|---|---|---|
+| `test_pub_exception_brace_form_rejected` | `pub exception E { ... }` brace form fails to compile (grammar boundary) | LIVE (passes) |
+| `test_pub_exception_paren_form_rejected_with_migration_diag` | `pub exception E(...)` paren form fails with `E_PUB_EXCEPTION_REMOVED` | strict-xfail (gated on test migration) |
+
+### 21.7 Tests state after prep
+
+| File | Flipped | Still xfailed | Notes |
+|---|---|---|---|
+| `test_pub_error_decl.py` | 7/7 | — | unchanged from slice 1 |
+| `test_pub_error_throw_catch.py` | 0/3 | 3 | needs slice 2B coverage + binder + `catch *` heredoc fix |
+| `test_pub_error_or_throw.py` | 0/3 | 3 | slice 2B+ |
+| `test_pub_error_synthesized_diagnostic.py` | 0/4 | 4 | slice 3+ (synthesis machinery) |
+| `test_pub_error_manual_diagnostic.py` | 0/3 | 3 | slice 3+ (Diagnostic trait shape) |
+| `test_pub_error_non_projectable_field.py` | 0/3 | 3 | slice 3+ |
+| `test_pub_exception_deprecated.py` | 1/2 | 1 | brace rejection live; paren rejection gated on test migration |
+| `test_diagnostic_json_helpers.py` | 3/3 | — | unchanged from slice 1 |
+| `test_debuggable_migration.py` | 0/3 | 3 | slice 3+ |
+| `test_exception_envelope_pub_error.py` | 0/3 | 3 | slice 2B+ |
+| `test_dv_public_removed.py` | 0/5 | 5 | slice 5 final |
+| `test_event_code_collision.py` | 1/2 | 1 | unchanged from slice 1 |
+| **Total** | **12 of 42** | **30 of 42** | (one less probe count — alias probe replaced; 12 = same total as slice 1 since brace-rejection probe is new) |
+
+### 21.8 Slice 2B remaining scope (deferred)
+
+1. **Narrow typed-catch coverage analysis** — signature carries `throws_event_fqns: list[str]`; `expr_can_throw` HTryExpr branch tracks narrow throws sets; typed `catch X(e)` claims coverage when subset of arm fqns.
+2. **Catch typed binder typing** — when `arm.event_fqn` is in `exception_schemas` with `kind="error"`, bind binder to the parallel struct type (Path A) instead of `Error`. Runtime materialization is an open question — zero-init is forbidden per K's guardrail; real materialization needs synthesized reverse projection (slice 3 work). Compile-only tests can pass via type-only binding without runtime path.
+3. **Throws-types validation** — each type in `declared_throws_types` must resolve to an error/exception kind in `exception_schemas`. Reject non-error types.
+4. **Visibility coherence (throws-clause half)** — `pub fn f() throws PrivateError` rejected with `E_PRIVATE_ERROR_LEAKED_VIA_PUB`. Result-Err visibility deferred unless cheap.
+5. **Test heredoc `catch *` → bare `catch`** — several Slice 5 test heredocs use non-Drift `catch *` syntax. Replace with bare `catch` (catch-all-no-binder) per K's locked-test-correction authorization.
+
+### 21.9 Test-corpus mass-migration sub-slice (separate)
+
+101 test files use `pub exception` in heredocs. A dedicated sub-slice mass-migrates them to `pub error` syntax (mechanical rewrite: `pub exception E(field: T)` → `pub error E { field: T }`), then enables the `E_PUB_EXCEPTION_REMOVED` diagnostic at the catalog rejection site. Splits cleanly from slice 2B because it's pure test-edit + diagnostic-toggle work.
+
+### 21.10 Files touched (slice 2 prep)
+
+```
+lang/versions.py                                       (DRIFTC_VERSION 0.31.54 → 0.31.55)
+lang/driftc/parser/grammar.lark                        (throws TYPE_LIST + revert brace exception)
+lang/driftc/parser/parser.py                           (_parse_fn_signature_tail + revert brace exception build)
+lang/driftc/parser/ast.py                              (declared_throws_types on 3 sig classes)
+lang/driftc/parser/__init__.py                         (export-ambiguity fix + rejection TODO)
+stdlib/std/err/err.drift                               (3 decls migrated)
+stdlib/std/json/json.drift                             (2 decls migrated)
+stdlib/std/concurrent/concurrent.drift                 (3 decls migrated)
+stdlib/std/runtime/runtime.drift                       (2 decls migrated)
+lang/tests/driver/test_pub_exception_deprecated.py     (rewritten as negative tests)
+work/exception-diagnostics-context/slice5-spec.md      (this section)
+```
+
+ABI 12 unchanged. Compiler version bump 0.31.54 → 0.31.55. Regression sweep: **1332 passed, 1 xfailed (the gated paren-rejection probe), 0 failed in 15:26.**

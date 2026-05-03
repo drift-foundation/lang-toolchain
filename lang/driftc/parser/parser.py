@@ -1106,12 +1106,9 @@ def _build_program(tree: Tree) -> Program:
 			exc.is_pub = is_pub
 			exc.test_build_only = is_test_only
 			exceptions.append(exc)
-			# Slice 5 Path A: brace-form `pub exception E { ... }` is a
-			# transitional alias for `pub error` — gets a parallel StructDef
-			# for value-type machinery.  Paren-form (kind="exception") keeps
-			# legacy throw-only semantics with no struct co-registration.
-			if exc.kind == "error":
-				structs.append(_struct_from_error_decl(exc))
+			# Slice 5 hard-break: `pub exception` is parsed but rejected in
+			# user source.  No StructDef co-registration here — value-type
+			# machinery is reserved for `pub error` decls only.
 		elif kind == "error_def":
 			exc = _build_error_def(child)
 			exc.is_pub = is_pub
@@ -1266,16 +1263,72 @@ def _build_module_decl(tree: Tree) -> str:
     return ".".join(parts) if parts else "main"
 
 
+def _parse_fn_signature_tail(tail: Tree) -> tuple[bool, bool, bool, list[TypeExpr], TypeExpr | None]:
+    """
+    Parse a `fn_signature_tail` subtree (Slice 5 grammar refactor).
+
+    Grammar:
+      fn_signature_tail: NOTHROW return_sig
+                       | THROWS throws_types? return_sig
+                       | THROWS throws_types?
+                       | return_sig
+
+    Returns (declared_nothrow, declared_throws, declared_terminal_throws,
+             declared_throws_types, return_type).
+    """
+    declared_nothrow = False
+    declared_throws = False
+    declared_terminal_throws = False
+    declared_throws_types: list[TypeExpr] = []
+    return_type: TypeExpr | None = None
+    idx = 0
+    children = tail.children
+    if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
+        declared_nothrow = True
+        idx += 1
+    elif idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "THROWS":
+        idx += 1
+        # Optional throws_types subtree.
+        if idx < len(children) and isinstance(children[idx], Tree) and _name(children[idx]) == "throws_types":
+            declared_throws_types = [
+                _build_type_expr(t) for t in children[idx].children if isinstance(t, Tree) and _name(t) == "type_expr"
+            ]
+            idx += 1
+        # If a return_sig follows, this is the auto-try value-returning form;
+        # otherwise it's the bare-terminal `throws` form.
+        next_is_return_sig = (
+            idx < len(children)
+            and isinstance(children[idx], Tree)
+            and _name(children[idx]) == "return_sig"
+        )
+        if next_is_return_sig:
+            declared_throws = True
+        else:
+            declared_terminal_throws = True
+    if idx < len(children) and isinstance(children[idx], Tree) and _name(children[idx]) == "return_sig":
+        return_sig = children[idx]
+        type_child = next(child for child in return_sig.children if isinstance(child, Tree))
+        return_type = _build_type_expr(type_child)
+    return declared_nothrow, declared_throws, declared_terminal_throws, declared_throws_types, return_type
+
+
 def _build_exception_def(tree: Tree) -> ExceptionDef:
+    """
+    Build an `ExceptionDef` from a paren-form `pub exception E(...)` or
+    `exception E(...)` declaration.
+
+    Slice 5 hard-break: `pub exception` is rejected in user source by
+    `_reject_pub_exception_in_user_source` (called from the parser dispatch).
+    Stdlib migration was completed before the rejection landed; the parser
+    keeps the paren form working internally so the rejection diagnostic can
+    point to a clean migration.  Brace form for `pub exception` is NOT
+    supported — only `pub error E { ... }`.
+    """
     loc = _loc(tree)
     name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
     args: List[ExceptionArg] = []
     params_node = next(
         (child for child in tree.children if isinstance(child, Tree) and _name(child) == "exception_params"),
-        None,
-    )
-    block_node = next(
-        (child for child in tree.children if isinstance(child, Tree) and _name(child) == "block_struct"),
         None,
     )
     domain_node = next(
@@ -1296,14 +1349,6 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
                 str_node = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
                 if str_node:
                     domain_val = _decode_string_token(str_node)
-    # Slice 5: brace-form `pub exception E { ... }` is a transitional alias
-    # for `pub error`; lower its body via struct_field nodes and mark
-    # kind="error" so it gets the new value-type semantics.
-    if params_node is None and block_node is not None:
-        for sf_tree in _collect_struct_fields(block_node):
-            sf = _build_struct_field(sf_tree)
-            args.append(ExceptionArg(name=sf.name, type_expr=sf.type_expr))
-        return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val, kind="error")
     return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val)
 
 
@@ -1526,36 +1571,14 @@ def _build_trait_method_sig(tree: Tree) -> TraitMethodSig:
 	if idx < len(children) and _name(children[idx]) == "params":
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
-	# Phase 1 of terminal-`throws`: trait method signature shape is
-	# `((NOTHROW | THROWS)? return_sig | THROWS)`. See `_build_function` for
-	# the full rationale; the dispatch logic is identical.
-	declared_nothrow = False
-	declared_throws = False
-	declared_terminal_throws = False
-	saw_throws_prefix = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
-	elif idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "THROWS":
-		saw_throws_prefix = True
-		idx += 1
-	next_is_return_sig = (
-		idx < len(children)
-		and isinstance(children[idx], Tree)
-		and _name(children[idx]) == "return_sig"
+	# Slice 5: signature uses fn_signature_tail subtree.
+	tail_node = next(
+		(c for c in children if isinstance(c, Tree) and _name(c) == "fn_signature_tail"),
+		None,
 	)
-	if next_is_return_sig:
-		return_sig = children[idx]
-		type_child = next(child for child in return_sig.children if isinstance(child, Tree))
-		return_type = _build_type_expr(type_child)
-		if saw_throws_prefix:
-			declared_throws = True
-	else:
-		assert saw_throws_prefix, (
-			"unreachable: grammar should have rejected this trait method sig"
-		)
-		declared_terminal_throws = True
-		return_type = None
+	assert tail_node is not None, "unreachable: trait method grammar requires fn_signature_tail"
+	(declared_nothrow, declared_throws, declared_terminal_throws,
+	 declared_throws_types, return_type) = _parse_fn_signature_tail(tail_node)
 	return TraitMethodSig(
 		name=name_token.value,
 		params=params,
@@ -1566,6 +1589,7 @@ def _build_trait_method_sig(tree: Tree) -> TraitMethodSig:
 		declared_nothrow=declared_nothrow,
 		declared_throws=declared_throws,
 		declared_terminal_throws=declared_terminal_throws,
+		declared_throws_types=declared_throws_types,
 		is_unsafe=is_unsafe,
 	)
 
@@ -1629,36 +1653,14 @@ def _build_interface_method_sig(tree: Tree) -> InterfaceMethodSig:
 	if idx < len(children) and _name(children[idx]) == "params":
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
-	# Phase 1 of terminal-`throws`: interface method signature shape is
-	# `((NOTHROW | THROWS)? return_sig | THROWS)`. See `_build_function` for
-	# the full rationale; the dispatch logic is identical.
-	declared_nothrow = False
-	declared_throws = False
-	declared_terminal_throws = False
-	saw_throws_prefix = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
-	elif idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "THROWS":
-		saw_throws_prefix = True
-		idx += 1
-	next_is_return_sig = (
-		idx < len(children)
-		and isinstance(children[idx], Tree)
-		and _name(children[idx]) == "return_sig"
+	# Slice 5: signature uses fn_signature_tail subtree.
+	tail_node = next(
+		(c for c in children if isinstance(c, Tree) and _name(c) == "fn_signature_tail"),
+		None,
 	)
-	if next_is_return_sig:
-		return_sig = children[idx]
-		type_child = next(child for child in return_sig.children if isinstance(child, Tree))
-		return_type = _build_type_expr(type_child)
-		if saw_throws_prefix:
-			declared_throws = True
-	else:
-		assert saw_throws_prefix, (
-			"unreachable: grammar should have rejected this interface method sig"
-		)
-		declared_terminal_throws = True
-		return_type = None
+	assert tail_node is not None, "unreachable: interface method grammar requires fn_signature_tail"
+	(declared_nothrow, declared_throws, declared_terminal_throws,
+	 declared_throws_types, return_type) = _parse_fn_signature_tail(tail_node)
 	return InterfaceMethodSig(
 		name=name_token.value,
 		params=params,
@@ -1669,6 +1671,7 @@ def _build_interface_method_sig(tree: Tree) -> InterfaceMethodSig:
 		declared_nothrow=declared_nothrow,
 		declared_throws=declared_throws,
 		declared_terminal_throws=declared_terminal_throws,
+		declared_throws_types=declared_throws_types,
 		is_unsafe=is_unsafe,
 	)
 
@@ -1737,56 +1740,23 @@ def _build_function(tree: Tree, *, allow_missing_body: bool = False) -> Function
 	if idx < len(children) and _name(children[idx]) == "params":
 		params = [_build_param(p) for p in children[idx].children if isinstance(p, Tree)]
 		idx += 1
-	# Phase 1 of terminal-`throws`: signature shape is
-	# `((NOTHROW | THROWS)? return_sig | THROWS)`. The four legal forms are:
-	#   - `fn f(...) -> T`             plain may-throw value return
-	#   - `fn f(...) nothrow -> T`     non-throwing value return
-	#   - `fn f(...) throws -> T`      may-throw value return WITH body-wide
-	#                                  auto-try context via `or_throw()`
-	#   - `fn f(...) throws`           NEW: terminal throw-only form
+	# Slice 5: signature shape is `fn_signature_tail` subtree.  Five legal forms:
+	#   - `fn f(...) -> T`                  plain may-throw value return
+	#   - `fn f(...) nothrow -> T`          non-throwing value return
+	#   - `fn f(...) throws -> T`           may-throw value return WITH body-wide
+	#                                       auto-try context via `or_throw()`
+	#   - `fn f(...) throws E -> T`         throws-with-typed-error-list (Slice 5)
+	#   - `fn f(...) throws` / `throws E`   terminal throw-only form
 	#
-	# Builder logic: parse optional NOTHROW or THROWS prefix, then peek at the
-	# next child. If it is a return_sig Tree, this is a value-returning form
-	# (declared_throws=True if THROWS was the prefix, otherwise just nothrow or
-	# plain). If THROWS was seen and there is no return_sig, this is the new
-	# terminal form: declared_terminal_throws=True, return_type=None (do NOT
-	# synthesize Void — `declared_terminal_throws` is the source of truth).
-	declared_nothrow = False
-	declared_throws = False
-	declared_terminal_throws = False
-	saw_throws_prefix = False
-	if idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "NOTHROW":
-		declared_nothrow = True
-		idx += 1
-	elif idx < len(children) and isinstance(children[idx], Token) and children[idx].type == "THROWS":
-		saw_throws_prefix = True
-		idx += 1
-	# Now check whether a return_sig follows. The grammar guarantees: if
-	# saw_throws_prefix is True and the next child is NOT a return_sig, this is
-	# the bare terminal form. If it IS a return_sig, this is the auto-try
-	# value-returning form. If saw_throws_prefix is False, the next child must
-	# be a return_sig (the grammar wouldn't have matched otherwise).
-	next_is_return_sig = (
-		idx < len(children)
-		and isinstance(children[idx], Tree)
-		and _name(children[idx]) == "return_sig"
+	# `_parse_fn_signature_tail` does the dispatch and returns the parsed bits.
+	tail_node = next(
+		(c for c in children if isinstance(c, Tree) and _name(c) == "fn_signature_tail"),
+		None,
 	)
-	if next_is_return_sig:
-		return_sig = children[idx]
-		type_child = next(child for child in return_sig.children if isinstance(child, Tree))
-		return_type = _build_type_expr(type_child)
-		idx += 1
-		if saw_throws_prefix:
-			# `fn f(...) throws -> T` — auto-try value-returning form.
-			declared_throws = True
-	else:
-		# Bare terminal `throws` form. Must have a saw_throws_prefix or the
-		# grammar wouldn't have matched. return_type stays None.
-		assert saw_throws_prefix, (
-			"unreachable: grammar should have rejected this signature"
-		)
-		declared_terminal_throws = True
-		return_type = None
+	assert tail_node is not None, "unreachable: func_def grammar requires fn_signature_tail"
+	(declared_nothrow, declared_throws, declared_terminal_throws,
+	 declared_throws_types, return_type) = _parse_fn_signature_tail(tail_node)
+	idx = children.index(tail_node) + 1
 	require = None
 	if idx < len(children) and isinstance(children[idx], Tree) and _name(children[idx]) == "require_clause":
 		require = _build_require_clause(children[idx])
@@ -1807,6 +1777,7 @@ def _build_function(tree: Tree, *, allow_missing_body: bool = False) -> Function
 		declared_nothrow=declared_nothrow,
 		declared_throws=declared_throws,
 		declared_terminal_throws=declared_terminal_throws,
+		declared_throws_types=declared_throws_types,
 		is_unsafe=is_unsafe,
 		body=body,
 		loc=loc,

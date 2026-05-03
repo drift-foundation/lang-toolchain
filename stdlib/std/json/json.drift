@@ -36,7 +36,14 @@ export {
 	share
 };
 
-pub exception JsonError(tag: String, offset: Int, line: Int, col: Int, path: String, key: String);
+pub error JsonError {
+	tag: String,
+	offset: Int,
+	line: Int,
+	col: Int,
+	path: String,
+	key: String,
+}
 
 /// Structured exception thrown by `StrictJsonCursor` traversal failures.
 ///
@@ -59,7 +66,12 @@ pub exception JsonError(tag: String, offset: Int, line: Int, col: Int, path: Str
 /// `segment` is the failing key (empty for terminal type-mismatch
 /// failures since the failure is at the current node, not a child).
 /// `index` is the zero-based depth at which the failure occurred.
-pub exception JsonPathError(path: String, segment: String, index: Int, reason: String);
+pub error JsonPathError {
+	path: String,
+	segment: String,
+	index: Int,
+	reason: String,
+}
 
 pub struct JsonErrorData {
 	pub tag: String,

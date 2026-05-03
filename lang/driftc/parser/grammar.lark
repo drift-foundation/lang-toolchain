@@ -191,7 +191,11 @@ type_alias_def: TYPE NAME type_params? EQUAL type_expr TERMINATOR
 // Mutual exclusion: `nothrow` cannot combine with either `throws` form. The
 // distinction between forms 3 and 4 is the presence/absence of a return
 // signature after `throws`.
-func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS) require_clause? (block | TERMINATOR)
+func_def: UNSAFE? FN_KW ident type_params? "(" [params] ")" fn_signature_tail require_clause? (block | TERMINATOR)
+fn_signature_tail: NOTHROW return_sig
+                 | THROWS throws_types? return_sig
+                 | THROWS throws_types?
+                 | return_sig
 extern_fn: EXTERN STRING FN_KW ident "(" [params] ")" NOTHROW return_sig
 extern_block: EXTERN STRING "{" (extern_fn_item TERMINATOR?)* "}"
 extern_fn_item: FN_KW ident "(" [params] ")" NOTHROW return_sig
@@ -209,13 +213,21 @@ implement_item: test_build_only_marker? intrinsic_marker? PUB func_def -> implem
 trait_def: TRAIT NAME type_params? require_clause? trait_body
 trait_body: "{" (trait_item | TERMINATOR)* "}"
 trait_item: trait_method_sig TERMINATOR*
-trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS)
+trait_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" fn_signature_tail
 
 interface_def: INTERFACE NAME type_params? interface_parents? interface_body
 interface_parents: ":" type_expr ("," type_expr)*
 interface_body: "{" (interface_item | TERMINATOR)* "}"
 interface_item: interface_method_sig TERMINATOR*
-interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" ((NOTHROW | THROWS)? return_sig | THROWS)
+interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" fn_signature_tail
+
+// Slice 5: optional explicit error-type list after `throws`.
+//   `fn f() throws ParseError -> Int { ... }`
+//   `fn f() throws ParseError, CodecError -> Int { ... }`
+// Each TYPE in the list must resolve to a `pub error` (or `pub exception`)
+// kind; checked by the type checker, not the grammar.  When the list is
+// absent the existing throws-anything semantics apply.
+throws_types: type_expr (COMMA type_expr)*
 
 type_expr: ref_type
          | fn_type
@@ -377,7 +389,7 @@ struct_field: PUB? NAME COLON type_expr
 block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
 block_field: struct_field [COMMA]
 
-exception_def: EXCEPTION NAME ( "(" [exception_params] ")" | block_struct ) TERMINATOR?
+exception_def: EXCEPTION NAME "(" [exception_params] ")" TERMINATOR?
 exception_params: exception_param (COMMA exception_param)*
 exception_param: NAME COLON type_expr
                 | "domain" EQUAL STRING -> exception_domain_param

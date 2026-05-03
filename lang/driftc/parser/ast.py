@@ -260,6 +260,13 @@ class FunctionDef:
 	# in `throw` or a tail-call to another terminal-throws function. Phase 2
 	# will enforce body-flow rules keyed on this flag (NOT on declared_throws).
 	declared_terminal_throws: bool = False
+	# Slice 5: optional explicit error-type list following `throws`.
+	# `fn f() throws ParseError -> Int { ... }` → [TypeExpr("ParseError")].
+	# `fn f() throws ParseError, CodecError -> Int { ... }` → two entries.
+	# Empty list means generic throws-anything (existing semantics).  Each
+	# type is later validated by the checker to resolve to a `pub error`
+	# (or `pub exception`) kind; see spec §3 / §4 / §5.
+	declared_throws_types: List[TypeExpr] = field(default_factory=list)
 	is_unsafe: bool = False
 	is_pub: bool = False
 	test_build_only: bool = False
@@ -706,6 +713,9 @@ class TraitMethodSig:
 	declared_throws: bool = False
 	# NEW Phase 1: bare terminal `throws` form. See `FunctionDef` above.
 	declared_terminal_throws: bool = False
+	# Slice 5: optional explicit error-type list following `throws`.  See
+	# `FunctionDef.declared_throws_types` for semantics.
+	declared_throws_types: List[TypeExpr] = field(default_factory=list)
 	is_unsafe: bool = False
 
 
@@ -736,6 +746,9 @@ class InterfaceMethodSig:
 	declared_throws: bool = False
 	# NEW Phase 1: bare terminal `throws` form. See `FunctionDef` above.
 	declared_terminal_throws: bool = False
+	# Slice 5: optional explicit error-type list following `throws`.  See
+	# `FunctionDef.declared_throws_types` for semantics.
+	declared_throws_types: List[TypeExpr] = field(default_factory=list)
 	is_unsafe: bool = False
 
 

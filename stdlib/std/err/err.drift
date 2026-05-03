@@ -32,7 +32,10 @@ pub variant IteratorOpId {
 /// `container_id` identifies the container kind via its canonical
 /// id (e.g. `"std.containers:Array"`, `"std.containers:Deque"`).
 /// `index` is the offending index.
-pub exception IndexError(container_id: String, index: Int);
+pub error IndexError {
+	container_id: String,
+	index: Int,
+}
 
 /// Thrown when an iterator is used after its underlying container
 /// has been mutated.
@@ -41,7 +44,10 @@ pub exception IndexError(container_id: String, index: Int);
 /// specific iterator method that surfaced the invalidation.
 ///
 /// **See also:** `IteratorOpId`, `throw_iterator_invalidated`.
-pub exception IteratorInvalidated(container_id: String, op_id: IteratorOpId);
+pub error IteratorInvalidated {
+	container_id: String,
+	op_id: IteratorOpId,
+}
 
 /// Generic throwable wrapping a `DiagnosticValue` payload.
 ///
@@ -49,7 +55,9 @@ pub exception IteratorInvalidated(container_id: String, op_id: IteratorOpId);
 /// specific exception type isn't available — the error type's
 /// `Throw` impl projects its state to a `DiagnosticValue` and
 /// raises this exception.
-pub exception ResultError(dv: DiagnosticValue);
+pub error ResultError {
+	dv: DiagnosticValue,
+}
 
 /// Convenience wrapper that constructs and throws an
 /// `IteratorInvalidated` exception.

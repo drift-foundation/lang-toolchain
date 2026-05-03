@@ -203,7 +203,7 @@ pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 
 /// Reserved exception type for "join produced no value" situations.
 /// Currently unused — retained for forward compatibility.
-pub exception VtResultNotAvailable();
+pub error VtResultNotAvailable {}
 
 /// Carries the runtime submit-failure code wrapped by
 /// `ConcurrencyError::Failed` when an executor rejects a `spawn_on`
@@ -211,12 +211,16 @@ pub exception VtResultNotAvailable();
 ///
 /// `code` is the platform-specific error code; the catching site
 /// typically maps it to a coarse `ConcurrencyError` variant.
-pub exception ExecSubmitFailed(code: Int);
+pub error ExecSubmitFailed {
+	code: Int,
+}
 
 /// Carries the offending value when a `Duration`-taking helper is
 /// called with `millis < 0`.  Wrapped by
 /// `ConcurrencyError::Failed(InvalidDuration(...))`.
-pub exception InvalidDuration(millis: Int);
+pub error InvalidDuration {
+	millis: Int,
+}
 
 /// Process signal types delivered by `await_signal`.  Linux only.
 ///
