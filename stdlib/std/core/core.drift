@@ -80,7 +80,13 @@ export {
 	string_from_utf8_bytes,
 	ErrorParamsView,
 	ErrorContextView,
-	JsonCursor
+	JsonCursor,
+	diagnostic_json_string,
+	diagnostic_json_null,
+	diagnostic_json_bool,
+	diagnostic_json_int,
+	diagnostic_json_uint,
+	diagnostic_json_float
 };
 
 export { std.core.copy.* };
@@ -853,6 +859,52 @@ fn _byte_to_string(b: Byte) nothrow -> String {
 		mem.dealloc<type Byte>(raw);
 		return out;
 	}
+}
+
+/// JSON-quote and escape `s` per RFC 8259.  Returns a complete
+/// JSON value: the input string surrounded by double quotes, with
+/// `"` / `\` / control characters escaped per JSON rules.  The
+/// result is ready to splice into a JSON object/array.
+///
+/// Slice 5 public surface (spec §9).  Internal callers that
+/// historically used `_json_quote_string` continue to work via
+/// the wrapper below.
+pub fn diagnostic_json_string(s: &String) nothrow -> String {
+	return _json_quote_string(s);
+}
+
+/// JSON literal `null`.  Slice 5 public helper (spec §9).
+pub fn diagnostic_json_null() nothrow -> String {
+	return "null";
+}
+
+/// JSON literal `true` / `false`.  Slice 5 public helper (spec §9).
+pub fn diagnostic_json_bool(v: Bool) nothrow -> String {
+	if v {
+		return "true";
+	}
+	return "false";
+}
+
+/// Format `n` as a JSON number text (decimal, no quotes).  Slice 5
+/// public helper (spec §9).
+pub fn diagnostic_json_int(n: Int) nothrow -> String {
+	return f"{n}";
+}
+
+/// Format `n` as a JSON number text (decimal, no quotes).  Slice 5
+/// public helper (spec §9).
+pub fn diagnostic_json_uint(n: Uint) nothrow -> String {
+	return f"{n}";
+}
+
+/// Format `f` as a JSON number text (canonical decimal form per
+/// the runtime's default Float→String conversion).  Slice 5 public
+/// helper (spec §9).  Non-finite values (NaN/Inf) are explicitly
+/// out of scope for v1; if the runtime ever exposes stable
+/// non-finite syntax, this helper's behavior is defined then.
+pub fn diagnostic_json_float(f: Float) nothrow -> String {
+	return f"{f}";
 }
 
 /// JSON-quotes and escapes `s` per RFC 8259.  Returns

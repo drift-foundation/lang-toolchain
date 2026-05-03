@@ -71,7 +71,6 @@ import std.core as core;
 # ── Probe 1 ─ declaration parses ───────────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_error_decl_with_fields_parses(tmp_path, capsys):
 	"""`pub error E { f: T, ... }` declaration parses and
 	type-checks.  Foundational gate — every other Slice 5 test
@@ -89,7 +88,6 @@ fn main() nothrow -> Int {
 	_ok(rc, errs, "pub error declaration with fields parses")
 
 
-@_SLICE_5_PENDING
 def test_pub_error_decl_empty_payload_parses(tmp_path, capsys):
 	"""`pub error E {}` (no fields) is a valid declaration.  Empty
 	payload is the minimum-shape probe; synthesized projection
@@ -105,7 +103,6 @@ fn main() nothrow -> Int {
 	_ok(rc, errs, "pub error empty-payload declaration")
 
 
-@_SLICE_5_PENDING
 def test_pub_error_decl_explicit_event_code_parses(tmp_path, capsys):
 	"""`pub error E(0x1234) { ... }` — explicit event_code form
 	parses; the code is bound to the type's event identity (event
@@ -126,7 +123,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ construction with named args ─────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_error_named_arg_construction(tmp_path, capsys):
 	"""Construct a `pub error` value via named-arg constructor;
 	produces a usable value bound to a local.  Mirrors the existing
@@ -148,7 +144,6 @@ fn main() nothrow -> Int {
 # ── Probe 3 ─ field access ─────────────────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_error_field_access(tmp_path, capsys):
 	"""Bound `pub error` value supports field access on its declared
 	fields, exactly like a struct.  Tests the read-side of the
@@ -170,7 +165,6 @@ fn main() nothrow -> Int {
 # ── Probe 4 ─ pass-by-value ────────────────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_error_pass_by_value(tmp_path, capsys):
 	"""`pub error` values pass into functions by value.  Copy
 	semantics are inherited from field types per the composition
@@ -196,7 +190,6 @@ fn main() nothrow -> Int {
 # ── Probe 5 ─ Result<T, E> Err type acceptance ─────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_error_as_result_err_type(tmp_path, capsys):
 	"""`Result<T, E>` accepts a `pub error` as its Err type.
 	Compile-only — no `.or_throw()` here (see

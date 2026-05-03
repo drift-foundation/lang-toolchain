@@ -1197,7 +1197,11 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 			continue
 		seen_names.add(exc.name)
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
-		code = event_code(fqn)
+		# Slice 5: `pub error E(0x1234) { ... }` pins an explicit event_code.
+		# When set, use it directly instead of the FQN-derived hash.  The
+		# existing payload-collision check below catches duplicates.
+		explicit_code = getattr(exc, "explicit_event_code", None)
+		code = explicit_code if explicit_code is not None else event_code(fqn)
 		payload = code & PAYLOAD_MASK
 		if payload in payload_seen and payload_seen[payload] != fqn:
 			other = payload_seen[payload]

@@ -91,7 +91,6 @@ import std.core as core;
 # ── Probe 1 ─ pub exception parses (alias) ─────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_pub_exception_alias_parses(tmp_path, capsys):
 	"""`pub exception E { ... }` declaration parses as a transitional
 	alias for `pub error`.  No errors at compile (warnings are

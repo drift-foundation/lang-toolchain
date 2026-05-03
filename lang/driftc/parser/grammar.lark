@@ -109,6 +109,7 @@ FATARROW: "=>"
 UNSAFE.2: /unsafe\b/
 EXTERN.2: /extern\b/
 EXCEPTION.2: /exception\b/
+ERROR.2: /error\b/
 TRAIT.2: /trait\b/
 INTERFACE.2: /interface\b/
 REQUIRE.2: /require\b/
@@ -145,7 +146,7 @@ module_decl: MODULE module_path TERMINATOR
 // keeps the parser deterministic without enumerating keywords in
 // each module-path production.
 module_path: __PATH_SEG__ (DOT __PATH_SEG__)*
-ident: NAME | MOVE | COPY | SHARE
+ident: NAME | MOVE | COPY | SHARE | ERROR
 
 ?item: test_build_only_marker? intrinsic_marker? pub_item
      | test_build_only_marker? intrinsic_marker? func_def
@@ -153,6 +154,7 @@ ident: NAME | MOVE | COPY | SHARE
      | test_build_only_marker? type_alias_def
      | test_build_only_marker? struct_def
      | test_build_only_marker? exception_def
+     | test_build_only_marker? error_def
      | test_build_only_marker? variant_def
      | test_build_only_marker? trait_def
      | test_build_only_marker? interface_def
@@ -163,7 +165,7 @@ ident: NAME | MOVE | COPY | SHARE
      | import_stmt TERMINATOR
      | export_stmt TERMINATOR
 
-pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_def | variant_def | trait_def | interface_def | implement_def | extern_fn TERMINATOR | extern_block)
+pub_item: PUB (func_def | const_def | type_alias_def | struct_def | exception_def | error_def | variant_def | trait_def | interface_def | implement_def | extern_fn TERMINATOR | extern_block)
 
 # Top-level constant definition.
 #
@@ -375,10 +377,16 @@ struct_field: PUB? NAME COLON type_expr
 block_struct: "{" TERMINATOR* (block_field TERMINATOR*)* "}"
 block_field: struct_field [COMMA]
 
-exception_def: EXCEPTION NAME "(" [exception_params] ")" TERMINATOR?
+exception_def: EXCEPTION NAME ( "(" [exception_params] ")" | block_struct ) TERMINATOR?
 exception_params: exception_param (COMMA exception_param)*
 exception_param: NAME COLON type_expr
                 | "domain" EQUAL STRING -> exception_domain_param
+
+// Slice 5: `pub error E { ... }` — canonical error datatype.  Brace
+// syntax only.  Optional explicit event_code: `pub error E(0x1234) { ... }`.
+// Lowers to StructDef (value-type machinery via Path A) plus an
+// ExceptionDef with kind="error" (event_code registration).
+error_def: ERROR NAME ( "(" INT ")" )? block_struct TERMINATOR?
 
 domain_clause: "domain" NAME
 
@@ -510,7 +518,7 @@ macro_call_suffix: BANG "(" [call_args] ")"
 call_type_args: CALL_TYPE_LT type_expr (COMMA type_expr)* ">"
 type_app_suffix: call_type_args
 qualified_suffix: qualified_pre_type_args? DCOLON NAME
-attr_suffix: DOT (NAME | CAPTURES | SHARE)
+attr_suffix: DOT (NAME | CAPTURES | SHARE | ERROR)
 arrow_suffix: ARROW NAME
 index_suffix: "[" (leading_dot | expr) "]"
 
@@ -578,7 +586,7 @@ qualified_pre_type_args: QUAL_TYPE_LT type_expr (COMMA type_expr)* QUAL_TYPE_GT
 qualified_member: NAME qualified_pre_type_args? DCOLON NAME
                 | NAME DOT NAME qualified_pre_type_args? DCOLON NAME
 
-leading_dot: DOT NAME leading_suffix*
+leading_dot: DOT (NAME | ERROR) leading_suffix*
 leading_suffix: call_suffix
               | attr_suffix
               | arrow_suffix

@@ -148,15 +148,15 @@ def _unwrap_ident(node: object) -> Token:
 	`Tree('ident', [Token(...)])` wrapper.
 	"""
 	if isinstance(node, Token):
-		if node.type in {"NAME", "MOVE", "COPY", "SHARE"}:
+		if node.type in {"NAME", "MOVE", "COPY", "SHARE", "ERROR"}:
 			return node
 		raise TypeError(f"Expected identifier token, got {node.type}")
 	if isinstance(node, Tree) and _name(node) == "ident":
 		tok = next((c for c in node.children if isinstance(c, Token)), None)
 		if tok is None:
 			raise TypeError("ident node missing token child")
-		if tok.type not in {"NAME", "MOVE", "COPY", "SHARE"}:
-			raise TypeError(f"Expected NAME/MOVE/COPY/SHARE token in ident, got {tok.type}")
+		if tok.type not in {"NAME", "MOVE", "COPY", "SHARE", "ERROR"}:
+			raise TypeError(f"Expected NAME/MOVE/COPY/SHARE/ERROR token in ident, got {tok.type}")
 		return tok
 	raise TypeError(f"Expected ident node, got {type(node)}")
 
@@ -1106,6 +1106,23 @@ def _build_program(tree: Tree) -> Program:
 			exc.is_pub = is_pub
 			exc.test_build_only = is_test_only
 			exceptions.append(exc)
+			# Slice 5 Path A: brace-form `pub exception E { ... }` is a
+			# transitional alias for `pub error` — gets a parallel StructDef
+			# for value-type machinery.  Paren-form (kind="exception") keeps
+			# legacy throw-only semantics with no struct co-registration.
+			if exc.kind == "error":
+				structs.append(_struct_from_error_decl(exc))
+		elif kind == "error_def":
+			exc = _build_error_def(child)
+			exc.is_pub = is_pub
+			exc.test_build_only = is_test_only
+			exceptions.append(exc)
+			# Slice 5 Path A: `pub error` decls get a parallel StructDef
+			# so value-type machinery (constructor, field access, pass-by-value,
+			# Copy/Frozen/ConstShare composition) works via the existing struct
+			# path.  Event-identity comes from the ExceptionDef catalog
+			# registration above.
+			structs.append(_struct_from_error_decl(exc))
 		elif kind == "variant_def":
 			var_def = _build_variant_def(child)
 			var_def.is_pub = is_pub
@@ -1257,6 +1274,10 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
         (child for child in tree.children if isinstance(child, Tree) and _name(child) == "exception_params"),
         None,
     )
+    block_node = next(
+        (child for child in tree.children if isinstance(child, Tree) and _name(child) == "block_struct"),
+        None,
+    )
     domain_node = next(
         (child for child in tree.children if isinstance(child, Tree) and _name(child) == "exception_domain_param"),
         None,
@@ -1275,7 +1296,72 @@ def _build_exception_def(tree: Tree) -> ExceptionDef:
                 str_node = next((c for c in child.children if isinstance(c, Token) and c.type == "STRING"), None)
                 if str_node:
                     domain_val = _decode_string_token(str_node)
+    # Slice 5: brace-form `pub exception E { ... }` is a transitional alias
+    # for `pub error`; lower its body via struct_field nodes and mark
+    # kind="error" so it gets the new value-type semantics.
+    if params_node is None and block_node is not None:
+        for sf_tree in _collect_struct_fields(block_node):
+            sf = _build_struct_field(sf_tree)
+            args.append(ExceptionArg(name=sf.name, type_expr=sf.type_expr))
+        return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val, kind="error")
     return ExceptionDef(name=name_token.value, args=args, loc=loc, domain=domain_val)
+
+
+def _struct_from_error_decl(exc: ExceptionDef) -> StructDef:
+    """
+    Slice 5 Path A: produce a parallel StructDef for a kind="error"
+    ExceptionDef so value-type machinery — constructor, field access,
+    pass-by-value, Copy/Frozen/ConstShare composition — works via
+    the existing struct path.
+
+    Same name as the error decl; same fields with type_expr preserved.
+    Visibility (`is_pub`) and test_build_only mirror the error decl.
+    """
+    fields = [StructField(name=arg.name, type_expr=arg.type_expr) for arg in exc.args]
+    return StructDef(
+        name=exc.name,
+        fields=fields,
+        loc=exc.loc,
+        is_pub=exc.is_pub,
+        test_build_only=exc.test_build_only,
+    )
+
+
+def _build_error_def(tree: Tree) -> ExceptionDef:
+    """
+    Slice 5: `pub error E { ... }` (and `error E { ... }` for module-private).
+
+    Lowers to ExceptionDef(kind="error") for event_code registration.
+    The parallel StructDef co-registration for value-type semantics
+    happens at the top-level item dispatch in `_build_module` — see
+    the `error_def` branch there.
+    """
+    loc = _loc(tree)
+    name_token = next(child for child in tree.children if isinstance(child, Token) and child.type == "NAME")
+    int_token = next(
+        (child for child in tree.children if isinstance(child, Token) and child.type == "INT"),
+        None,
+    )
+    explicit_event_code: Optional[int] = None
+    if int_token is not None:
+        text = int_token.value
+        explicit_event_code = int(text, 16) if text[:2] in ("0x", "0X") else int(text)
+    block_node = next(
+        (child for child in tree.children if isinstance(child, Tree) and _name(child) == "block_struct"),
+        None,
+    )
+    args: List[ExceptionArg] = []
+    if block_node is not None:
+        for sf_tree in _collect_struct_fields(block_node):
+            sf = _build_struct_field(sf_tree)
+            args.append(ExceptionArg(name=sf.name, type_expr=sf.type_expr))
+    return ExceptionDef(
+        name=name_token.value,
+        args=args,
+        loc=loc,
+        kind="error",
+        explicit_event_code=explicit_event_code,
+    )
 
 
 def _build_variant_def(tree: Tree) -> VariantDef:
@@ -3587,7 +3673,7 @@ def _build_postfix(tree: Tree) -> Expr:
 def _build_leading_dot(tree: Tree) -> Expr:
     # Base receiver placeholder with an initial attribute name from the DOT NAME.
     name_tok = next(
-        tok for tok in tree.children if isinstance(tok, Token) and tok.type in {"NAME", "CAPTURES"}
+        tok for tok in tree.children if isinstance(tok, Token) and tok.type in {"NAME", "CAPTURES", "ERROR"}
     )
     base_loc = _loc(tree)
     expr: Expr = Attr(loc=_loc_from_token(name_tok), value=Placeholder(loc=base_loc), attr=name_tok.value)
@@ -3649,7 +3735,7 @@ def _apply_postfix_suffixes(expr: Expr, suffix_nodes: List[Tree]) -> Expr:
             attr_token = next(
                 token
                 for token in child.children
-                if isinstance(token, Token) and token.type in {"NAME", "CAPTURES", "SHARE"}
+                if isinstance(token, Token) and token.type in {"NAME", "CAPTURES", "SHARE", "ERROR"}
             )
             expr = Attr(loc=_loc(child), value=expr, attr=attr_token.value)
         elif child_name == "arrow_suffix":

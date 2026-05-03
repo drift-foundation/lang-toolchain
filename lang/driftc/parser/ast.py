@@ -37,6 +37,14 @@ class ExceptionDef:
     is_pub: bool = False
     test_build_only: bool = False
     domain: Optional[str] = None
+    # Slice 5 discriminator: "exception" (legacy paren-form `pub exception E(...)`)
+    # or "error" (canonical `pub error E { ... }` and transitional brace-form
+    # `pub exception E { ... }`).  kind="error" decls also produce a parallel
+    # StructDef for value-type machinery (Path A — see slice5-spec.md §2.2).
+    kind: str = "exception"
+    # Optional explicit event_code (`pub error E(0x1234) { ... }`).
+    # When unset, the catalog assigns one via the existing event_code() hash.
+    explicit_event_code: Optional[int] = None
 
 
 @dataclass(frozen=True)

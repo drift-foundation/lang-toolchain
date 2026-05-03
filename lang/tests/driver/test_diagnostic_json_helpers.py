@@ -87,7 +87,7 @@ fn main() nothrow -> Int {
 \tval _b: String = core.diagnostic_json_null();
 \tval _c: String = core.diagnostic_json_bool(true);
 \tval _d: String = core.diagnostic_json_int(42);
-\tval _e: String = core.diagnostic_json_uint(42);
+\tval _e: String = core.diagnostic_json_uint(42u);
 \tval _f: String = core.diagnostic_json_float(1.5);
 \treturn 0;
 }
@@ -98,7 +98,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ string helper edge-case inputs ───────────────────────
 
 
-@_SLICE_5_PENDING
 def test_string_helper_accepts_edge_inputs(tmp_path, capsys):
 	"""`diagnostic_json_string` accepts the K-listed minimum
 	edge-case inputs (compile-only — byte output is e2e-verified):
@@ -144,8 +143,8 @@ fn main() nothrow -> Int {
 \tval _a: String = core.diagnostic_json_int(0);
 \tval _b: String = core.diagnostic_json_int(-1);
 \tval _c: String = core.diagnostic_json_int(2147483647);
-\tval _d: String = core.diagnostic_json_uint(0);
-\tval _e: String = core.diagnostic_json_uint(4294967295);
+\tval _d: String = core.diagnostic_json_uint(0u);
+\tval _e: String = core.diagnostic_json_uint(4294967295u);
 \tval _f: String = core.diagnostic_json_float(0.0);
 \tval _g: String = core.diagnostic_json_float(1.5);
 \tval _h: String = core.diagnostic_json_float(-1.5);

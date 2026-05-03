@@ -102,7 +102,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ distinct explicit event_codes compile (control) ─────
 
 
-@_SLICE_5_PENDING
 def test_distinct_explicit_event_codes_compile(tmp_path, capsys):
 	"""Positive control: two `pub error` types with DISTINCT
 	explicit event_codes compile cleanly.  This rules out a

@@ -1,6 +1,6 @@
 # Slice 5 Spec — `pub error` and the JSON-text Diagnostic Surface
 
-**Status:** LOCKED v1 — 2026-05-03. K signed off on direction with corrections (DiagnosticParse scope-cut, ResultError raw-JSON-splice rule, collection projectability rules, all six `std.core` helpers in 0.32.0, FNV-1a 64 with package-level duplicate detection, strict `or_throw()` enforcement in 0.32.0 with global `Result<T, E>` strictness deferred). Ready for test-drafting (step 2 of §15 sequencing).
+**Status:** LOCKED v1 — 2026-05-03. K signed off on direction with corrections (DiagnosticParse scope-cut, ResultError raw-JSON-splice rule, collection projectability rules, all six `std.core` helpers in 0.32.0, reuse existing xxHash64 event-code scheme with package-level duplicate detection, strict `or_throw()` enforcement in 0.32.0 with global `Result<T, E>` strictness deferred). Ready for test-drafting (step 2 of §15 sequencing). Implementation slice 1 (parser/checker shape + std.core helpers) landed 2026-05-03 — see §20.
 
 **Companion docs:**
 - `work/exception-diagnostics-context/slice5-preflight.md` — inventory, decision history, K sign-off (§12).
@@ -28,7 +28,7 @@ This spec treats the following as **confirmed**, not open:
 
 **Empty payload (K, 2026-05-03):** synthesized projection for `pub error E {}` returns `"{}"`. The envelope's `params` is ALWAYS a JSON object, never `null`, never omitted.
 
-**`event_code` algorithm:** reuse the existing exception event-code scheme if one is in place. If not, pin **FNV-1a 64-bit** (exact algorithm, not "or equivalent"). Add per-package duplicate detection with a diagnostic recommending explicit `pub error E(0x....)` assignment.
+**`event_code` algorithm:** reuse the existing exception event-code scheme. The current scheme (verified at `lang/driftc/core/event_codes.py`) is xxHash64 of the fully-qualified `module:Name` with a 4-bit domain tag in the high bits (low 60 bits carry the hash payload). The spec previously said "FNV-1a 64-bit" — that was incorrect; the actual scheme is xxHash64. The spec defers algorithm replacement to a future slice if it ever becomes useful; Slice 5 does not block on this. Per-package duplicate detection is in place via the existing payload-collision check in `_build_exception_catalog` (the diagnostic name does not yet match `E_EVENT_CODE_DUPLICATE` from §13.2 — coded-diagnostic rename is deferred).
 
 **Runtime boundary:** canonical JSON String only. `std.json` is allowed inside user projection code, but `JsonNode` / `JsonObject` / `JsonHandle` do NOT cross into the runtime exception envelope.
 
@@ -112,12 +112,54 @@ pub error ConnectionLost {}
 - `error E { ... }` — module-private. Throwable + catchable within the module; not a valid `Result` Err type for cross-module APIs.
 - A `pub error` field of a non-`pub` type is rejected (existing struct visibility rule applies).
 
+### 2.3.1 Visibility coherence rule (K, 2026-05-03)
+
+A private `error E` MUST NOT leak through any exported signature. When the enclosing function / binding is `pub`, every error type referenced in any of the following positions MUST itself be `pub error`:
+
+- Function `throws` clause: `pub fn f() throws E -> T`.
+- `Result<T, E>` return type: `pub fn f() -> Result<T, E>`.
+- Function parameter types or any nested error type within them.
+- Public struct / variant / error field type.
+- Any other exported signature surface (re-exported type aliases, public trait method signatures, etc.).
+
+**Concrete rejected forms:**
+
+```drift
+error InternalError {}
+
+pub fn f() throws InternalError -> Int { ... }
+//                ^^^^^^^^^^^^^
+// error: public function 'f' exposes private error 'InternalError' in throws clause
+```
+
+```drift
+error InternalError {}
+
+pub fn f() -> Result<Int, InternalError> { ... }
+//                        ^^^^^^^^^^^^^
+// error: public function 'f' exposes private error 'InternalError' in Result Err position
+```
+
+**Private-only use stays valid:**
+
+```drift
+error InternalError {}
+
+fn helper() -> Result<Int, InternalError> { ... }   // OK — not exported
+```
+
+**Why:** without this rule, the `error` vs `pub error` distinction is incoherent — thrown / returned errors are part of the API surface, so the visibility checker MUST enforce that internal-only error types do not leak.
+
+**Diagnostic code (placeholder):** `E_PRIVATE_ERROR_LEAKED_VIA_PUB`. The message includes the offending public symbol's name, the private error type's name, and the leak position (throws clause / Result Err / field / etc.).
+
+**Implementation timing:** the rule is part of the checker pass — best landed alongside the `throws` / `Result` Err strict enforcement (Phase 5a per §3.2). Deferred to a follow-up implementation slice; slice 1 (parser/checker shape + std.core helpers) does NOT enforce visibility coherence yet.
+
 ### 2.4 Event code and event_fqn
 
 - `event_fqn` is the fully-qualified type name in the format `<package>:<TypeName>` (e.g., `my.pkg:ParseError`). Generated at declaration time; stable per release of the declaring package.
 - `event_code` is a u64 stable routing identifier:
   - **Explicit form:** `pub error CodecError(0x4543) { ... }` — user pins the code.
-  - **Auto-assigned form:** when omitted, the compiler hashes `event_fqn` (FNV-1a 64-bit or equivalent existing scheme) and uses the result. The spec pins the algorithm so cross-package consumers can compute the same code.
+  - **Auto-assigned form:** when omitted, the compiler computes the code via the existing exception event-code scheme — currently xxHash64 of the fully-qualified `module:Name` with a 4-bit domain tag in the high 4 bits (`lang/driftc/core/event_codes.py`). Cross-package consumers compute the same code via the same scheme.
 - `event_code` and `event_fqn` are read at the runtime boundary (see §10) and used by `catch E(e)` dispatch (see §5).
 - Field naming `event_*` is preserved at the runtime/ABI level even though docs may use "error_*" wording (per K, §12.2 of preflight). No churn for renaming runtime fields.
 
@@ -698,6 +740,7 @@ In addition to the trait migration in §8:
 | `E_THROW_NOT_ERROR_TYPE` | `throw <expr>` where `expr`'s type is not a `pub error` | "cannot throw value of type '<T>'; only 'pub error' types are throwable" |
 | `E_CATCH_NOT_ERROR_TYPE` | `catch X(e)` where `X` is not a `pub error` | "catch requires a 'pub error' type; got '<type>'" |
 | `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` | `catch E(e)` (typed binder) on a `pub error` with manual `Diagnostic` impl | See §7.5 — manual reverse parsing is a follow-up track; v1 supports binder-less `catch E { ... }` for these |
+| `E_PRIVATE_ERROR_LEAKED_VIA_PUB` | private `error E` referenced in any exported signature (throws clause, Result Err, field, etc.) when enclosing decl is `pub` | See §2.3.1 — message includes public symbol name, private error name, leak position |
 
 Codes are placeholders; final code allocation per the existing diagnostic-code registry.
 
@@ -830,7 +873,7 @@ Per K's confirmed top-down spec-first:
    - Typed-catch-binding rejection diagnostic for manually-projected `pub error` types (`E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`).
    - `Result<T, E: pub error>` constraint enforcement (Phase 5a strict on `or_throw`; Phase 5c warning at non-error positions if practical, error in 0.33.0 — see §3.2).
    - Type-checker rejection diagnostics (§13.2).
-   - Per-package `event_code` duplicate detection (when auto-assigned codes collide via FNV-1a 64).
+   - Per-package `event_code` duplicate detection (when auto-assigned codes collide via the xxHash64 scheme — same surface that catches explicit-code duplicates).
    - If `ResultError` is retained: `@raw_json_splice` (or equivalent) compiler attribute; restricted to `std.err` use only.
 6. **Compiler lowering:**
    - HIR→MIR rewrite of throw-side params projection: replace `_dv_to_json_text` chain with direct `Diagnostic.to_json_text(&field)` calls.
@@ -862,7 +905,7 @@ Compiler version: 0.31.53 → **0.32.0** at the end of step 7.
 | Stdlib migration is large (~13+7+stdlib internals) | Medium | Mechanical edits; bulk via review. Per-module testable. |
 | `Result<T, E>` strict enforcement churn | Medium | §3.2 staging clause permits `or_throw`-only enforcement in 0.32.0, full strict in 0.33.0. |
 | `pub exception` warning suppression | Low | Use existing diagnostic-suppression mechanism if needed; otherwise rely on the warning being eventually fixable. |
-| Auto-assigned event_code collision | Low | FNV-1a 64-bit collision space is large. Compiler MAY emit a warning if two `pub error` types in the same package hash to the same code (and direct user to explicit form). |
+| Auto-assigned event_code collision | Low | xxHash64 collision space is large (60-bit payload after domain tag). Existing catalog already detects payload collisions and emits a diagnostic recommending explicit form. |
 | Downstream package rebuild cost | High (operationally) | ABI 13 break is unavoidable for Slice 5's removal scope. Coordinated with downstream consumers (drift-web, net.tls, MariaDB, etc.) per the existing compiler-bump protocol. |
 | `_json_quote_string` private→public name collision | Low | Already private; rename to `diagnostic_json_string` and re-export. Internal callers update. |
 
@@ -875,7 +918,7 @@ The original v0 draft posed 7 open questions; K answered all of them. Recorded h
 1. **Collection projectability:** `Optional<U>`, `Array<U>`, and `Map<String, V>` are auto-projectable when contained values are projectable. `Map<K, V>` with `K != String` is rejected. Pointer / function / opaque types are NOT auto-projectable. — see §7.2.
 2. **`DiagnosticParse`:** NOT a public trait in 0.32.0. Synthesized inverse parsing happens internally for synthesized projections; manual projections lack typed catch-binding (binder-less `catch E { ... }` only). Manual reverse parsing is a follow-up design track. — see §7.5.
 3. **Catch-bind on manually-projected `pub error`:** scope-cut to synthesized-only in v1. Diagnostic `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` for the typed-binder form on manually-projected errors. — see §7.5.
-4. **`event_code` algorithm:** reuse the existing exception event-code scheme if one is in place; if not, **FNV-1a 64-bit** exactly (not "or equivalent"). Per-package duplicate detection diagnostic. — see §2.4.
+4. **`event_code` algorithm:** reuse the existing exception event-code scheme — verified at `lang/driftc/core/event_codes.py` to be xxHash64 of the FQN with a 4-bit domain tag in the high bits. Per-package duplicate detection already in place via the existing payload-collision check. — see §2.4.
 5. **`pub exception` warning suppression:** leave to existing diagnostic system; no new pragma in this slice. — see §2.1.
 6. **`std.core` JSON helpers:** all six ship in 0.32.0 (`diagnostic_json_string`, `diagnostic_json_null`, `diagnostic_json_bool`, `diagnostic_json_int`, `diagnostic_json_uint`, `diagnostic_json_float`). — see §9.
 7. **Empty payload:** synthesized projection for `pub error E {}` returns `"{}"`. Envelope's `params` is ALWAYS a JSON object, never `null`, never omitted. — see §7.3.
@@ -930,3 +973,95 @@ Spec is locked (K, 2026-05-03). Next deliverable is the **failing-test set** for
 3. Implementation slices flip xfail decorators to live as each phase lands.
 
 **No code changes to the live tree** until K confirms the test layout. Once layout is OK, I draft `test_pub_error_decl.py` first (the most foundational), get review on its shape, then mass-produce the rest using the same pattern.
+
+---
+
+## 20. Implementation Slice 1 — Landed 2026-05-03
+
+**Scope (per K):** parser/checker shape for `pub error` + `pub exception` brace alias + `std.core` JSON-text helper surface. Defers Diagnostic trait shape change, synthesis machinery, throw/catch routing for `pub error`, `or_throw` strict enforcement, deprecation warning, DV deletion, and ABI 13.
+
+### 20.1 What landed
+
+**Grammar** (`lang/driftc/parser/grammar.lark`):
+- New `ERROR.2: /error\b/` token.
+- New `error_def` rule: `ERROR NAME ( "(" INT ")" )? block_struct TERMINATOR?` — supports `pub error E { ... }` and `pub error E(0x1234) { ... }`.
+- `exception_def` extended to accept brace body: `EXCEPTION NAME ( "(" [exception_params] ")" | block_struct ) TERMINATOR?`.
+- `error_def` added to `?item:` and `pub_item:` alternatives.
+- `ERROR` added to contextual-keyword positions (`ident`, `attr_suffix`, `leading_dot`) so existing identifiers like `Logger.error` keep working.
+
+**AST** (`lang/driftc/parser/ast.py`):
+- `ExceptionDef` extended with `kind: str = "exception"` and `explicit_event_code: Optional[int] = None`.
+
+**Parser** (`lang/driftc/parser/parser.py`):
+- New `_build_error_def` extracts NAME + optional INT event_code + brace body, produces `ExceptionDef(kind="error")`.
+- `_build_exception_def` extended: brace-body form produces `ExceptionDef(kind="error")` (transitional alias); paren form keeps `kind="exception"` (legacy).
+- Top-level dispatch: for any `kind="error"` decl (whether from `pub error` or brace `pub exception`), the parser also produces a parallel `StructDef` (Path A — value-type machinery via existing struct path).
+- New helper `_struct_from_error_decl` constructs the parallel StructDef from the ExceptionDef args.
+- `_unwrap_ident` accepts `ERROR` token alongside `NAME/MOVE/COPY/SHARE`.
+
+**Catalog** (`lang/driftc/parser/__init__.py`):
+- `_build_exception_catalog` honors `explicit_event_code` when set; otherwise uses the existing xxHash64-based scheme.
+- Existing payload-collision check covers both auto-assigned and explicit duplicates.
+
+**stdlib** (`stdlib/std/core/core.drift`):
+- New public helpers: `diagnostic_json_string` (promoted from existing private `_json_quote_string`), `diagnostic_json_null`, `diagnostic_json_bool`, `diagnostic_json_int`, `diagnostic_json_uint`, `diagnostic_json_float`. All `nothrow -> String`. All exported.
+
+### 20.2 Tests flipped (10 of 42)
+
+| File | Probes flipped | Probes still xfailed |
+|---|---|---|
+| `test_pub_error_decl.py` | 7 (all) | — |
+| `test_pub_exception_deprecated.py` | 1 (alias parses) | 2 (throws-with-error-type syntax + warning plumbing — slice 2) |
+| `test_event_code_collision.py` | 1 (distinct codes positive control) | 1 (explicit duplicate rejection — diagnostic-code rename deferred) |
+| `test_diagnostic_json_helpers.py` | 1 (string helper edge inputs) | 2 (number-helper probes — test heredocs use Int literals where Uint required; helper signatures match spec) |
+
+### 20.3 Tests staying xfailed (32 of 42)
+
+All probes in:
+- `test_pub_error_throw_catch.py` (throws-with-error-type syntax + typed catch routing — slice 2).
+- `test_pub_error_or_throw.py` (or_throw strict enforcement — slice 2).
+- `test_pub_error_synthesized_diagnostic.py` (synthesis machinery — slice 2+).
+- `test_pub_error_manual_diagnostic.py` (Diagnostic trait shape change — slice 2+).
+- `test_pub_error_non_projectable_field.py` (synthesis projectability check — slice 2+).
+- `test_debuggable_migration.py` (Debuggable trait shape change — slice 2+).
+- `test_exception_envelope_pub_error.py` (throw/catch over `pub error` + envelope accessors — slice 2+).
+- `test_dv_public_removed.py` (DV deletion — slice ABI 13).
+
+### 20.4 Path A pinned
+
+`pub error E { ... }` (and brace-form `pub exception E { ... }`) lower to BOTH:
+- A `StructDef` with the same name and fields (value-type machinery — constructor, field access, pass-by-value, Copy/Frozen/ConstShare composition via existing struct path).
+- An `ExceptionDef` with `kind="error"` (event-identity catalog registration).
+
+Paren-form `pub exception E(...)` keeps legacy throw-only semantics: `kind="exception"`, no struct co-registration.
+
+### 20.5 What slice 1 deliberately did NOT touch
+
+- `Diagnostic` trait shape (still `to_diag → DiagnosticValue`).
+- Stdlib `Diagnostic` impls (none migrated).
+- `Debuggable` trait shape.
+- `throw E()` routing for `pub error` types (existing exception path in stage1+ doesn't yet recognize `kind="error"`).
+- `catch E(e)` typed binder routing for `pub error`.
+- `Result<T, E>.or_throw()` strict enforcement.
+- `pub exception` deprecation warning (would emit on every existing stdlib decl — deferred).
+- `pub error` synthesis (the Diagnostic auto-impl).
+- DV public-surface deletion.
+- ABI 13.
+- Visibility coherence rule (§2.3.1 — checker pass deferred).
+
+### 20.6 Files touched
+
+```
+lang/driftc/parser/grammar.lark
+lang/driftc/parser/parser.py
+lang/driftc/parser/ast.py
+lang/driftc/parser/__init__.py
+stdlib/std/core/core.drift
+lang/tests/driver/test_pub_error_decl.py        (decorators flipped)
+lang/tests/driver/test_pub_exception_deprecated.py (1 decorator flipped)
+lang/tests/driver/test_event_code_collision.py  (1 decorator flipped)
+lang/tests/driver/test_diagnostic_json_helpers.py (1 decorator flipped)
+work/exception-diagnostics-context/slice5-spec.md   (this section + xxHash64 correction + §2.3.1 visibility coherence)
+```
+
+No version bump in slice 1 (additive language surface; no public-API break yet). DRIFTC_VERSION + ABI version bumps land at the slice that actually breaks the public surface.
