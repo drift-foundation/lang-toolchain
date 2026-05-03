@@ -191,3 +191,37 @@ implement Frozen for Byte { }
 implement Frozen for String { }
 implement Frozen for Void { }
 implement Frozen for DiagnosticValue { }
+
+
+// ── Direct ConstShare for String — branch-completion gate ────────
+//
+// Promotes `String` to a first-class `ConstShare` adopter so user
+// code can prove `String : ConstShare` directly (e.g.
+// `assert_cs<type String>()`), and so the implicit-duplication
+// substrate at value-flow sites can route String through the
+// ConstShare path uniformly with other adopters.
+//
+// Until this impl, `String` was Copy + Frozen with refcount-aware
+// `string_arc` lowering; bare `String : ConstShare` did not prove
+// directly (see the previously-strict-xfailed probe at
+// `lang/tests/driver/test_string_const_share.py::test_string_proves_const_share`).
+// Compound carriers (`struct Carrier { name: String }`,
+// `Optional<String>`, etc.) acquired `ConstShare` via the
+// structural composition rule because `String` is `Copy + Frozen`,
+// but the bare-type proof was missing.
+//
+// **Body.**  `const_share(&String) -> String` dereferences `self`,
+// triggering the existing String Copy semantics — refcount inc on
+// the backing primitive via `string_arc`'s established lowering.
+// Static-flagged literals short-circuit the retain to a no-op.
+// The result is an independent owner of the same underlying byte
+// buffer, identical to `val b = a;` semantics that already work
+// for String.
+//
+// **No string_arc redesign.**  This impl is purely additive: it
+// surfaces existing Copy semantics through the trait method.
+implement ConstShare for String {
+	pub fn const_share(self: &String) nothrow -> String {
+		return *self;
+	}
+}

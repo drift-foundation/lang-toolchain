@@ -1,5 +1,66 @@
 # Drift development history
 
+## 2026-05-03
+- **Branch-completion gate cleared: direct `String : ConstShare`
+  (release 0.31.53, ABI unchanged at 12).**  Promotes `String`
+  to a first-class `ConstShare` adopter.  `assert_cs<type
+  String>()` now compiles directly; no more strict-xfail in
+  `lang/tests/driver/test_string_const_share.py`.
+
+  **Why this matters.**  Per K's directive on the diagnostics-
+  context migration, `String : ConstShare` was tracked as a
+  hard branch-completion gate from Slice 1 onward — the
+  migration's release/final-merge state was contractually
+  required to drop the strict-xfail.  Without it, every later
+  review carried unresolved substrate risk: `String` was
+  Copy+Frozen with refcount-aware `string_arc` lowering, and
+  compound carriers (`struct Carrier { name: String }`,
+  `Optional<String>`, etc.) acquired `ConstShare` via the
+  structural composition rule because `String` is `Copy +
+  Frozen`, but the bare-type proof was missing.
+
+  **Implementation.**  Single direct stdlib impl in
+  `stdlib/std/core/shareable.drift`:
+
+      implement ConstShare for String {
+          pub fn const_share(self: &String) nothrow -> String {
+              return *self;
+          }
+      }
+
+  Body dereferences `self` to trigger the existing String Copy
+  semantics — refcount inc on the backing primitive via
+  `string_arc`'s established lowering.  Static-flagged literals
+  short-circuit the retain to a no-op.  No `string_arc`
+  redesign — the impl is purely additive, surfacing existing
+  Copy semantics through the trait method.
+
+  **Trait gate.**  `E_CONST_SHARE_USER_IMPL_REJECTED` at
+  `lang/driftc/traits/world.py:823` permits `implement
+  ConstShare for X` only when the host module is in `std.*` AND
+  the host package owns the trait — both true for the new
+  `String` impl in `std.core.shareable`.  No gate change
+  needed.
+
+  **Verification.**
+    - `test_string_const_share.py`: 6 passed (was 5 + 1
+      strict-xfail).
+    - ConstShare phases (Phase 1 synthesis / Phase 4 variants /
+      Phase 5 implicit duplication): green — struct/variant
+      synthesis using String fields and implicit duplication
+      for String and String-containing carriers all unchanged.
+    - Slices 1-4A exception suite: green.
+    - Memcheck suite: green.
+    - Full matrix: 144 passed / 1 skipped / 1 xfailed (only
+      the orthogonal inline-catch attrs LANGUAGE_BUG remains
+      xfailed).
+
+  **Versioning.**  DRIFTC_VERSION 0.31.52 → 0.31.53.  No ABI
+  bump (no runtime helper / signature / layout change).
+  Closes the gate; the diagnostics-context migration branch
+  can now ship through Slice 4B / Slice 5 without leaving
+  unresolved substrate risk.
+
 ## 2026-05-02
 - **DV→JSON diagnostics-context migration — Slice 4A: JsonCursor
   scalar lookup on `e.params` (release 0.31.52, ABI unchanged at

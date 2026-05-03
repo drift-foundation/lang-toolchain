@@ -1,30 +1,27 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Load-bearing String + ConstShare regressions, pinned ahead of the
-Phase 2 throw-side JSON projection (DV→JSON migration).
+"""Load-bearing String + ConstShare regressions.
 
-The throw-time canonical-params builder will project declared
-exception fields via `Diagnostic.to_json(self: &Self) -> JsonNode`
-into a JSON object, then call `drift_error_set_params_json`.
-String-typed fields show up at every throw site; if `String` cannot
-flow through the value-flow surface in a ConstShare-equivalent way
-(or via Copy, where the substrate is currently anchored), the
-projection diverges from the implicit-duplication contract that
-covers other carriers.
+Pins three claims about `String`'s position in the trait surface:
 
-These tests pin three claims:
+  1. `assert_cs<type String>()` — `String` proves
+     `shareable.ConstShare` directly via the stdlib impl at
+     `stdlib/std/core/shareable.drift` (landed at 0.31.53,
+     2026-05-03 — closed the diagnostics-context branch-
+     completion gate).
+  2. `val b = a` over a `String` binding — implicit duplication
+     keeps both bindings live and value-equal (Copy semantics
+     for static-flagged literals; refcount inc for heap
+     strings via `string_arc`).
+  3. A synthesized struct with a `String` field — proves
+     `ConstShare` via the structural composition rule and
+     duplicates cleanly.
 
-  1. `assert_cs<type String>()` — does the String type prove
-     `shareable.ConstShare` (directly or via the Copy bridge)?
-  2. `val b = a` over a `String` binding — does implicit
-     duplication keep both bindings live and value-equal?
-  3. A synthesized struct with a String field — does it prove
-     ConstShare and duplicate cleanly?
-
-If a probe fails, that surfaces the prerequisite explicitly: either
-String is currently Copy-only (no ConstShare proof) — meaning the
-Phase 2 throw lowering must work over Copy semantics — or the
-String-normalization track must run before Phase 2 can rely on
-String going through the ConstShare path.
+`String` is `Copy + Frozen + ConstShare` — all three facts hold
+simultaneously.  The trait-method body for `ConstShare for String`
+is a thin surface over the existing Copy path
+(`return *self;` triggers `M.CopyValue → drift_string_retain`),
+so the runtime behavior is identical to plain Copy duplication;
+the trait identity is what's new.
 """
 from __future__ import annotations
 
@@ -75,29 +72,13 @@ fn assert_frozen<T>() nothrow -> Void require T is shareable.Frozen { }
 # ── Probe 1 ─ direct String : ConstShare proof ───────────────────
 
 
-@pytest.mark.xfail(
-	strict=True,
-	reason=(
-		"TRANSITIONAL — direct String:ConstShare is owned by the later "
-		"'String normalization' track, NOT by the diagnostics-context "
-		"migration.  String is currently treated as Copy+Frozen via "
-		"string_arc's refcount-aware lowering, which is sufficient for "
-		"every Phase 2/3 throw-projection carrier shape (bare String "
-		"flows through Copy; struct/variant carriers prove ConstShare "
-		"via Phase 1/4 synthesis).\n\n"
-		"BRANCH-COMPLETION GATE (K directive 2026-05-01): this xfail "
-		"MUST flip to passing before final merge/release.  No final "
-		"merge while String:ConstShare is still transitional.  When the "
-		"String normalization track lands direct ConstShare for String, "
-		"this xfail flips to passing automatically — at that point "
-		"remove the xfail decorator and treat String as a first-class "
-		"ConstShare adopter throughout the JSON throw-projection path."
-	),
-)
 def test_string_proves_const_share(tmp_path, capsys):
-	"""`assert_cs<type String>()` must compile if String adopts
-	`shareable.ConstShare` directly.  Currently expected to FAIL —
-	see xfail reason."""
+	"""`assert_cs<type String>()` must compile — `String` is a
+	first-class `ConstShare` adopter via the direct stdlib impl
+	at `stdlib/std/core/shareable.drift`.  This test was the
+	branch-completion gate for the diagnostics-context migration;
+	flipped from strict-xfail to live when the direct impl
+	landed."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 fn main() nothrow -> Int {
 \tassert_cs<type String>();
