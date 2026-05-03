@@ -1006,16 +1006,16 @@ Spec is locked (K, 2026-05-03). Next deliverable is the **failing-test set** for
 **stdlib** (`stdlib/std/core/core.drift`):
 - New public helpers: `diagnostic_json_string` (promoted from existing private `_json_quote_string`), `diagnostic_json_null`, `diagnostic_json_bool`, `diagnostic_json_int`, `diagnostic_json_uint`, `diagnostic_json_float`. All `nothrow -> String`. All exported.
 
-### 20.2 Tests flipped (10 of 42)
+### 20.2 Tests flipped (12 of 42)
 
 | File | Probes flipped | Probes still xfailed |
 |---|---|---|
 | `test_pub_error_decl.py` | 7 (all) | — |
 | `test_pub_exception_deprecated.py` | 1 (alias parses) | 2 (throws-with-error-type syntax + warning plumbing — slice 2) |
 | `test_event_code_collision.py` | 1 (distinct codes positive control) | 1 (explicit duplicate rejection — diagnostic-code rename deferred) |
-| `test_diagnostic_json_helpers.py` | 1 (string helper edge inputs) | 2 (number-helper probes — test heredocs use Int literals where Uint required; helper signatures match spec) |
+| `test_diagnostic_json_helpers.py` | 3 (all) | — |
 
-### 20.3 Tests staying xfailed (32 of 42)
+### 20.3 Tests staying xfailed (30 of 42)
 
 All probes in:
 - `test_pub_error_throw_catch.py` (throws-with-error-type syntax + typed catch routing — slice 2).
@@ -1052,16 +1052,17 @@ Paren-form `pub exception E(...)` keeps legacy throw-only semantics: `kind="exce
 ### 20.6 Files touched
 
 ```
+lang/versions.py                                 (DRIFTC_VERSION 0.31.53 → 0.31.54)
 lang/driftc/parser/grammar.lark
 lang/driftc/parser/parser.py
 lang/driftc/parser/ast.py
 lang/driftc/parser/__init__.py
 stdlib/std/core/core.drift
-lang/tests/driver/test_pub_error_decl.py        (decorators flipped)
-lang/tests/driver/test_pub_exception_deprecated.py (1 decorator flipped)
-lang/tests/driver/test_event_code_collision.py  (1 decorator flipped)
-lang/tests/driver/test_diagnostic_json_helpers.py (1 decorator flipped)
+lang/tests/driver/test_pub_error_decl.py            (7 decorators flipped)
+lang/tests/driver/test_pub_exception_deprecated.py  (1 decorator flipped)
+lang/tests/driver/test_event_code_collision.py      (1 decorator flipped + FNV→xxHash64 docstring correction)
+lang/tests/driver/test_diagnostic_json_helpers.py   (3 decorators flipped + 42u/0u/4294967295u Uint literal corrections)
 work/exception-diagnostics-context/slice5-spec.md   (this section + xxHash64 correction + §2.3.1 visibility coherence)
 ```
 
-No version bump in slice 1 (additive language surface; no public-API break yet). DRIFTC_VERSION + ABI version bumps land at the slice that actually breaks the public surface.
+**Version bump:** DRIFTC_VERSION 0.31.53 → **0.31.54** (per repo rule: behavior-changing compiler/toolchain change without ABI break still bumps compiler version). ABI 12 unchanged. No ABI stamp update needed.

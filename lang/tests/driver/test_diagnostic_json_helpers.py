@@ -76,7 +76,6 @@ import std.core as core;
 # ── Probe 1 ─ all six helpers callable ─────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_all_six_helpers_callable(tmp_path, capsys):
 	"""All six `diagnostic_json_*` helpers exist in std.core with
 	the documented signatures and return `String`."""
@@ -133,7 +132,6 @@ fn main() nothrow -> Int {
 # ── Probe 3 ─ number helpers accept representative finite values ──
 
 
-@_SLICE_5_PENDING
 def test_number_helpers_accept_finite_values(tmp_path, capsys):
 	"""Number helpers accept zero, positive, negative (where
 	applicable), and a normal finite Float (1.5).  NaN/Inf are

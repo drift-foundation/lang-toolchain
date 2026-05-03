@@ -3,9 +3,10 @@
 
 Per K-correction (2026-05-03), this test exercises EXPLICIT
 duplicate event-code assignment in the same package, NOT a forced
-auto-hash collision.  Auto-hash (FNV-1a 64) collision detection is
-covered by unit-level compiler tests if/when a deterministic
-injection hook exists.
+auto-hash collision.  Auto-hash collision detection (currently
+xxHash64 of the `module:Name` FQN, per
+`lang/driftc/core/event_codes.py`) is covered by unit-level
+compiler tests if/when a deterministic injection hook exists.
 
 Probes:
 
@@ -18,10 +19,10 @@ Probes:
   2. Distinct explicit event_codes in the same package compile
      cleanly (positive control).
 
-**Out of scope:** auto-hash FNV-1a collision (no hook for forced
-collision); cross-package duplicate detection (a different
-problem — packages have their own event_code namespaces via
-event_fqn).
+**Out of scope:** auto-hash collision (no hook for forced
+collision through the xxHash64 scheme); cross-package duplicate
+detection (a different problem — packages have their own
+event_code namespaces via event_fqn).
 
 Spec: `work/exception-diagnostics-context/slice5-spec.md` §0
 (event_code algorithm), §16 (collision-detection mitigation).
