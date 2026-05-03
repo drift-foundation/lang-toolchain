@@ -18,7 +18,19 @@ Scope (v1 bring-up):
   - Control flow: straight-line, if/else, and loops/backedges (general CFGs).
 
 ABI (from docs/design/drift-lang-abi.md):
-  - %DriftError           = { u64 code, %DriftString event_fqn, i8* attrs, usize attr_count, i8* frames, usize frame_count }
+  - %DriftError is modeled in LLVM as the stable prefix used by codegen:
+    { u64 code, %DriftString event_fqn,
+      i8* legacy_attrs, usize legacy_attr_count,
+      i8* legacy_frames, usize legacy_frame_count }
+    Additive JSON fields (`params_json`, `context_json`) live later in
+    the C struct (see `lang/compiler_infra/error_dummy.h` — ABI 12
+    additive layout) and are accessed only through the
+    `drift_error_*_params_json` / `drift_error_*_context_json` helper
+    surface — never via direct extractvalue.  Slice 3
+    (`Error.encode_compact`) extracts `event_fqn` via the stable prefix
+    (field 1) and reads the JSON segments through their helpers.
+    ABI 13 (Slice 5) reshapes this layout when the legacy DV path
+    deletes; until then, the prefix above is the codegen contract.
   - %FnResult_Int_Error   = { i8 is_err, isize ok, %DriftError* err }
   - %FnResult_String_Error= { i8 is_err, %DriftString ok, %DriftError* err }
   - %FnResult_Void_Error  = { i8 is_err, i8 ok, %DriftError* err } (void-like ok)
@@ -145,6 +157,7 @@ from lang.driftc.stage2 import (
 	ErrorAddLocalDV,
 	ErrorRaise,
 	ErrorEvent,
+	ErrorEventFqn,
 	ConstructResultErr,
 	ConstructResultOk,
 	DVAsBool,
@@ -2996,13 +3009,17 @@ class _FuncBuilder:
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
 			val_ty = self.value_types.get(val)
-			if val_ty != DRIFT_USIZE_TYPE:
+			# Accept both `DRIFT_USIZE_TYPE` (the Uint tag — usual
+			# producer) and `DRIFT_U64_TYPE` (raw i64, e.g.
+			# `M.ErrorEvent` for DriftErrorCode).  Both pass through
+			# at i64 width on word_bits=64 with no semantic change.
+			if val_ty != DRIFT_USIZE_TYPE and val_ty != DRIFT_U64_TYPE:
 				raise NotImplementedError(
-					f"LLVM codegen v1: StringFromUint requires Uint operand (have {val_ty})"
+					f"LLVM codegen v1: StringFromUint requires Uint or u64 operand (have {val_ty})"
 				)
 			self.module.needs_string_from_uint64 = True
 			int64_val = val
-			if self.module.word_bits != 64:
+			if val_ty == DRIFT_USIZE_TYPE and self.module.word_bits != 64:
 				int64_val = self._fresh("uint64")
 				self.lines.append(f"  {int64_val} = zext {self._llty(DRIFT_USIZE_TYPE)} {val} to i64")
 			self.lines.append(
@@ -3974,6 +3991,27 @@ class _FuncBuilder:
 			self.lines.append(f"  {loaded} = load {DRIFT_ERROR_TYPE}, {DRIFT_ERROR_PTR} {err_val}")
 			self.lines.append(f"  {dest} = extractvalue {DRIFT_ERROR_TYPE} {loaded}, 0")
 			self.value_types[dest] = DRIFT_ERROR_CODE_TYPE
+		elif isinstance(instr, ErrorEventFqn):
+			# Slice 3 DV→JSON: extract event_fqn (DriftError field 1) and
+			# retain so dest is independently owned.  No new runtime
+			# helper — reuses drift_string_retain.
+			dest = self._map_value(instr.dest)
+			err_val = self._map_value(instr.error)
+			err_ty = self.value_types.get(err_val)
+			if err_ty is None:
+				err_ty = DRIFT_ERROR_PTR
+				self.value_types[err_val] = err_ty
+			if err_ty != DRIFT_ERROR_PTR:
+				raise NotImplementedError(
+					f"LLVM codegen v1: ErrorEventFqn expects {DRIFT_ERROR_PTR}, got {err_ty}"
+				)
+			self.module.needs_string_retain = True
+			loaded = self._fresh("err_val")
+			self.lines.append(f"  {loaded} = load {DRIFT_ERROR_TYPE}, {DRIFT_ERROR_PTR} {err_val}")
+			alias = self._fresh("err_fqn_alias")
+			self.lines.append(f"  {alias} = extractvalue {DRIFT_ERROR_TYPE} {loaded}, 1")
+			self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_retain({DRIFT_STRING_TYPE} {alias})")
+			self.value_types[dest] = DRIFT_STRING_TYPE
 		elif isinstance(instr, (DVAsInt, DVAsBool, DVAsFloat, DVAsString, DVAsObject, DVGetField)):
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)

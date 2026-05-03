@@ -1,6 +1,98 @@
 # Drift development history
 
 ## 2026-05-02
+- **DV→JSON diagnostics-context migration — Slice 3: full
+  envelope dump via `Error.encode_compact()` (release 0.31.51,
+  ABI unchanged at 12).**  Primary log/save path: one call
+  serializes the entire exception event into canonical JSON.
+
+      try {
+          throw Faulty(reason = "boom", level = 7);
+      } catch Faulty(e) {
+          val text = e.encode_compact();
+          // text == `{"event_code":<u64>,"event_fqn":"main:Faulty","params":{"level":7,"reason":"boom"},"context":[],"stack":null}`
+      }
+
+  **Envelope shape.**
+
+      {
+          "event_code": <uint>,
+          "event_fqn":  "<JSON-escaped fqn>",
+          "params":     <params_json object — spliced verbatim>,
+          "context":    <context_json array — spliced verbatim>,
+          "stack":      null
+      }
+
+  `params` and `context` are the canonical JSON documents
+  produced by Slice 1 / Slice 2 throw-side wiring; they're
+  spliced into the envelope verbatim (no parse/re-encode).
+  `event_fqn` is JSON-escaped via `core._json_quote_string`.
+  `stack` is the literal `null`; full backtrace serialization is
+  a later track.
+
+  **No ABI bump.**  Slice 3 reuses existing infrastructure:
+    - `M.ErrorEvent` (already present) extracts event_code from
+      DriftError field 0 via LLVM `extractvalue` — no runtime
+      call.
+    - New MIR op `M.ErrorEventFqn` extracts event_fqn (DriftError
+      field 1) via `extractvalue` + `drift_string_retain` — no
+      new runtime symbol; `drift_string_retain` is already in
+      the runtime.
+    - `M.ExcGetParamsJson` / `M.ExcGetContextJson` already
+      emitted by Slices 1 / 2.
+    - `M.StringFromUint` widened to also accept `i64` operands
+      (previously rejected `M.ErrorEvent`'s `DRIFT_U64_TYPE`
+      tag); same i64 width on word_bits=64, no semantic change.
+    - `core._json_quote_string` already in stdlib.
+  Result: ABI stays 12; DRIFTC_VERSION bumps 0.31.50 → 0.31.51
+  to track the user-visible behavior change.
+
+  **Implementation.**
+    - **Type-checker** (`lang/driftc/checker/call_resolver.py`):
+      `<Error>.encode_compact()` recognized as a compiler-handled
+      method call, returns String, no real method body to
+      resolve.
+    - **HIR→MIR** (`lang/driftc/stage2/hir_to_mir.py`):
+      `_visit_expr_HMethodCall` dispatches to
+      `_lower_error_encode_compact` for the special-case.  The
+      helper auto-derefs `&Error`, extracts event_code via
+      `M.ErrorEvent`, extracts event_fqn via the new
+      `M.ErrorEventFqn`, materializes fqn for `&String` borrow,
+      calls `core._json_quote_string`, fetches params/context
+      via the existing get ops, and emits a `M.ConstString` +
+      `M.StringConcat` chain assembling the envelope.
+    - **Codegen** (`lang/codegen/llvm/llvm_codegen.py`):
+      `M.ErrorEventFqn` lowering — load Error struct,
+      `extractvalue ... 1`, call `drift_string_retain`.
+      `M.StringFromUint` widened to accept `DRIFT_U64_TYPE`.
+    - **string_arc** (`lang/driftc/stage2/string_arc.py`):
+      `M.ErrorEventFqn.dest` added to `owned_defs`
+      (retained-string-result class).
+
+  **Tests landed.**
+    - `lang/tests/driver/test_exception_envelope_json.py` — 5
+      passing cases:
+        - empty exception → params `{}`, context `[]`,
+          stack `null`.
+        - declared params spliced as JSON object (NOT a quoted
+          string).
+        - captured-frame context spliced as JSON array (NOT a
+          quoted string).
+        - event_code is a JSON number (Python `int` after
+          parse), non-zero, FQN contains canonical `:`
+          separator.
+        - JSON parses round-trip on the envelope (smoke test of
+          event_fqn escaping).
+
+  **Verification.**  Full memcheck + exception suite + Slices 1-3
+  + branch-completion gate + LANGUAGE_BUG ledger:
+  108 passed / 1 skipped / 2 xfailed.
+
+  **Untouched per K directive.**  Branch-completion gate xfail
+  for direct `String:ConstShare` and inline-catch attrs
+  LANGUAGE_BUG xfail remain strict-xfailed.  No JsonCursor,
+  no DV expansion, no DV removal.
+
 - **DV→JSON diagnostics-context migration — Slice 2: context
   dump + `^`-capture frame projection (release 0.31.49, ABI
   unchanged at 12).**  Second product-visible win: catch an

@@ -519,6 +519,8 @@ def insert_string_arc(
 			yield instr.frame_json
 		elif isinstance(instr, M.ErrorEvent):
 			yield instr.error
+		elif isinstance(instr, M.ErrorEventFqn):
+			yield instr.error
 		elif isinstance(instr, M.StringFromInt):
 			yield instr.value
 		elif isinstance(instr, M.StringFromUint):
@@ -753,6 +755,10 @@ def insert_string_arc(
 				owned_defs.add(dest)
 			elif isinstance(instr, M.ExcGetContextJson):
 				# Same retained-string contract as ExcGetParamsJson.
+				owned_defs.add(dest)
+			elif isinstance(instr, M.ErrorEventFqn):
+				# Slice 3 DV→JSON: codegen retains the extracted
+				# event_fqn String so the dest is independently owned.
 				owned_defs.add(dest)
 			elif isinstance(instr, (M.Call, M.CallIndirect, M.CallIface)):
 				# String-returning calls produce owned values that must be released

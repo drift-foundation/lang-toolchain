@@ -1823,6 +1823,25 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if arg_types[idx] is None or arg_types[idx] == ctx.unknown_ty:
 				arg_types[idx] = exp_ty
 
+	# Slice 3 of the DV→JSON diagnostics-context migration:
+	# `<Error>.encode_compact()` returns the canonical full envelope
+	# JSON document.  Compiler-handled — no real method body to
+	# resolve.
+	if getattr(expr, "method_name", None) == "encode_compact":
+		_recv_ty = type_expr(expr.receiver, used_as_value=False)
+		_eff_ty = _recv_ty
+		_eff_def = ctx.type_table.get(_eff_ty)
+		while _eff_def.kind is TypeKind.REF and _eff_def.param_types:
+			_eff_ty = _eff_def.param_types[0]
+			_eff_def = ctx.type_table.get(_eff_ty)
+		if _eff_def.kind is TypeKind.ERROR:
+			if getattr(expr, "args", None):
+				diagnostics.append(_tc_diag(message="Error.encode_compact takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
+				info = _call_info([_recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
+				return MethodCallResult(ctx.unknown_ty, info)
+			info = _call_info([_recv_ty], ctx.string_ty, False, _intrinsic_method_fn_id(expr.method_name))
+			return MethodCallResult(ctx.string_ty, info)
+
 	# Built-in DiagnosticValue helpers are reserved method names and take precedence.
 	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind"):
 		recv_ty = type_expr(expr.receiver, used_as_value=False)

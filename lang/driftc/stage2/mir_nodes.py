@@ -1528,6 +1528,25 @@ class ErrorEvent(MInstr):
 
 
 @dataclass
+class ErrorEventFqn(MInstr):
+	"""Project the canonical event FQN String from an Error value.
+
+	Mirrors `ErrorEvent` (which extracts field 0 / event_code).  Codegen
+	loads the Error struct, extracts field 1 (the event_fqn DriftString),
+	and retains the result so `dest` is an OWNED String the caller is
+	responsible for releasing.
+
+	Slice 3 DV→JSON migration — used by `<Error>.encode_compact()`
+	envelope assembly to splice the (JSON-quoted) event FQN into the
+	canonical envelope.  No new runtime surface; reuses
+	`drift_string_retain` which is already in the runtime.
+	"""
+
+	dest: ValueId
+	error: ValueId
+
+
+@dataclass
 class UnaryOpInstr(MInstr):
 	"""dest = op operand (unary numeric/logical/bit ops)."""
 	dest: ValueId
@@ -1772,6 +1791,7 @@ __all__ = [
 	"DVLen",
 	"DVEntries",
 	"ErrorEvent",
+	"ErrorEventFqn",
 	"UnaryOpInstr",
 	"BinaryOpInstr",
 	"WrappingAddU64",

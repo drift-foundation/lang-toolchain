@@ -4624,6 +4624,20 @@ class HIRToMIR:
 					self.b.emit(M.ArrayDup(dest=dest, elem_ty=elem_ty, array=recv_val))
 					self._local_types[dest] = recv_ty
 					return dest
+		# Slice 3 DV→JSON: `<Error>.encode_compact()` returns the
+		# canonical full-envelope JSON document.  Compiler-handled
+		# (no real method body); the type-checker recognized this
+		# call shape and tagged it with an intrinsic-method fn-id.
+		# Lower the entire envelope assembly here.
+		if expr.method_name == "encode_compact" and not expr.args:
+			recv_ty = self._infer_expr_type(expr.receiver)
+			if recv_ty is not None:
+				recv_def = self._type_table.get(recv_ty)
+				while recv_def.kind is TypeKind.REF and recv_def.param_types:
+					recv_ty = recv_def.param_types[0]
+					recv_def = self._type_table.get(recv_ty)
+				if recv_def.kind is TypeKind.ERROR:
+					return self._lower_error_encode_compact(expr.receiver)
 		handled, value = self._lower_array_intrinsic_method(expr, want_value=True)
 		if handled:
 			if value is None:
@@ -4883,6 +4897,101 @@ class HIRToMIR:
 	#                     storage at scope end (see regression
 	#                     `dv_projected_place_entries_no_double_free`).
 	_DV_RVALUE_RECV_HEXPRS: tuple = ()
+
+	def _lower_error_encode_compact(self, receiver: H.HExpr) -> M.ValueId:
+		"""Build the canonical full-envelope JSON document for an
+		`Error` value at the `<Error>.encode_compact()` call site.
+
+		Slice 3 DV→JSON migration — produces a String of the form:
+
+		    `{"event_code":<uint>,"event_fqn":"<escaped>","params":<params_json>,"context":<context_json>,"stack":null}`
+
+		`params` and `context` are spliced as already-canonical JSON
+		segments (NOT re-quoted as strings); `event_fqn` is JSON-
+		escaped via `core._json_quote_string`; `stack` is the literal
+		`null` (full backtrace serialization deferred).  No new
+		runtime helpers — reuses `M.ErrorEvent` (event_code via
+		extractvalue), `M.ErrorEventFqn` (event_fqn via extractvalue
+		+ retain), `M.ExcGetParamsJson`, `M.ExcGetContextJson`, and
+		`M.StringFromUint` for the numeric event_code.
+
+		The receiver is an `Error` (or a `&Error` borrow that we
+		auto-deref).  Caller is `_visit_expr_HMethodCall`'s
+		`encode_compact` special-case.
+		"""
+		# Lower receiver, deref if it's &Error.
+		recv_val = self.lower_expr(receiver)
+		recv_ty = self._infer_expr_type(receiver)
+		if recv_ty is not None:
+			recv_def = self._type_table.get(recv_ty)
+			if recv_def.kind is TypeKind.REF and recv_def.param_types:
+				inner_ty = recv_def.param_types[0]
+				loaded = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=loaded, ptr=recv_val, inner_ty=inner_ty))
+				recv_val = loaded
+
+		# Resolve the JSON-escape helper (private; std.core).
+		quote_fn = self._find_free_fn_id("std.core", "_json_quote_string")
+		if quote_fn is None:
+			raise AssertionError(
+				"std.core:_json_quote_string not found in signatures table — "
+				"Error.encode_compact requires the JSON-escape helper from "
+				"stdlib/std/core/core.drift"
+			)
+
+		# Extract event_code (Uint64) and format as decimal.
+		code_val = self.b.new_temp()
+		self.b.emit(M.ErrorEvent(dest=code_val, error=recv_val))
+		code_str = self.b.new_temp()
+		self.b.emit(M.StringFromUint(dest=code_str, value=code_val))
+		self._local_types[code_str] = self._string_type
+
+		# Extract event_fqn (retained owned String) and JSON-escape.
+		fqn_val = self.b.new_temp()
+		self.b.emit(M.ErrorEventFqn(dest=fqn_val, error=recv_val))
+		self._local_types[fqn_val] = self._string_type
+		# Materialize fqn for `&String` borrow into _json_quote_string.
+		fqn_local = f"__exc_fqn_{self.b.new_temp()}"
+		self.b.ensure_local(fqn_local)
+		self._local_types[fqn_local] = self._string_type
+		self.b.emit(M.StoreLocal(local=fqn_local, value=fqn_val))
+		fqn_addr = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=fqn_addr, local=fqn_local, is_mut=False))
+		fqn_quoted = self.b.new_temp()
+		self.b.emit(M.Call(dest=fqn_quoted, fn_id=quote_fn, args=[fqn_addr], can_throw=False))
+		self._local_types[fqn_quoted] = self._string_type
+
+		# Get params_json + context_json (both retained owned Strings).
+		params_str = self.b.new_temp()
+		self.b.emit(M.ExcGetParamsJson(dest=params_str, error=recv_val))
+		self._local_types[params_str] = self._string_type
+		context_str = self.b.new_temp()
+		self.b.emit(M.ExcGetContextJson(dest=context_str, error=recv_val))
+		self._local_types[context_str] = self._string_type
+
+		# Concat the envelope:
+		#   `{"event_code":<code>,"event_fqn":<quoted_fqn>,"params":<params>,"context":<context>,"stack":null}`
+		def _emit_lit(text: str) -> M.ValueId:
+			tmp = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=tmp, value=text))
+			return tmp
+
+		def _concat(left: M.ValueId, right: M.ValueId) -> M.ValueId:
+			tmp = self.b.new_temp()
+			self.b.emit(M.StringConcat(dest=tmp, left=left, right=right))
+			return tmp
+
+		result = _emit_lit('{"event_code":')
+		result = _concat(result, code_str)
+		result = _concat(result, _emit_lit(',"event_fqn":'))
+		result = _concat(result, fqn_quoted)
+		result = _concat(result, _emit_lit(',"params":'))
+		result = _concat(result, params_str)
+		result = _concat(result, _emit_lit(',"context":'))
+		result = _concat(result, context_str)
+		result = _concat(result, _emit_lit(',"stack":null}'))
+		self._local_types[result] = self._string_type
+		return result
 
 	def _build_throw_context_frame_json(
 		self,
