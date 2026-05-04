@@ -73,11 +73,13 @@ import std.core as core;
 # ── Probe 1 ─ encode_compact() over pub error ──────────────────────
 
 
-@_SLICE_5_PENDING
 def test_encode_compact_over_pub_error(tmp_path, capsys):
 	"""`e.encode_compact()` returns the full envelope JSON when the
 	thrown value was a `pub error`.  Envelope shape is unchanged
-	from Slice 3 — pins that pub error doesn't break it."""
+	from Slice 3 — pins that pub error doesn't break it.  The catch
+	binder `e` is the Error envelope handle for envelope-method
+	access; typed-binder field access is a separate (deferred)
+	probe in `test_pub_error_throw_catch.py`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error ParseError {
 \toffset: Int,
@@ -92,7 +94,7 @@ fn main() nothrow -> Int {
 \t\treturn risky();
 \t} catch ParseError(e) {
 \t\tval _envelope: String = e.encode_compact();
-\t\treturn e.offset;
+\t\treturn 0;
 \t}
 }
 """)
@@ -102,7 +104,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ params + context segment access ──────────────────────
 
 
-@_SLICE_5_PENDING
 def test_params_and_context_segment_access(tmp_path, capsys):
 	"""`e.params.encode_compact()` and `e.context.encode_compact()`
 	both compile when bound to a `pub error` catch arm.  Pins that

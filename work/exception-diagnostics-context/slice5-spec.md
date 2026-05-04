@@ -1292,3 +1292,115 @@ work/exception-diagnostics-context/slice5-spec.md                         (this 
 ```
 
 ABI 12 unchanged. DRIFTC_VERSION 0.31.55 → **0.31.56**.
+
+---
+
+## 23. Implementation Slice 2B — Landed 2026-05-03 (0.31.57)
+
+K's authorized scope: typed throws validation + typed catch coverage + catch binder typing + public/private error visibility for throws. Three of four landed in this slice; binder typing deferred to slice 3 due to a Path A surface conflict described in §23.5.
+
+### 23.1 Typed throws validation
+
+`fn f() throws E -> T` where `E` is not a `pub error` / module-private `error` is rejected with `E_THROWS_NOT_ERROR_TYPE` at the throws-clause site. Implemented in `lang/driftc/type_resolver.py:_resolve_declared_throws_types` — each `TypeExpr` in `decl.declared_throws_types` is canonicalized to its event FQN and looked up in `table.exception_schemas`. Failed lookups (after the bare-name fallback) emit the diagnostic and are dropped from the resolved list.
+
+### 23.2 Plumbing
+
+- `FnSignature.declared_throws_event_fqns: Optional[list[str]]` — `None` for generic throws, list for narrow declared types. Populated during signature resolution.
+- `_FrontendDecl.declared_throws_types` field added; populated from `FunctionDef.declared_throws_types` by `_decl_from_parser_fn`.
+- `resolve_program_signatures()` gained an optional `diagnostics: Optional[list]` parameter — the parser/__init__ caller passes through so throws-validation diagnostics reach the user.
+
+### 23.3 Narrow typed-catch coverage
+
+`expr_can_throw` HCall / HMethodCall / HInvoke branches in `_function_may_throw` (`lang/driftc/checker/__init__.py:1000+`) now consult `_is_call_throws_covered(info, caught_events_set, is_catch_all)` instead of just `not catch_all`:
+
+- **catch-all in scope:** covered (existing behavior).
+- **call has narrow declared throws:** covered iff the narrow set ⊆ caught_events.
+- **call has generic throws (no narrow declaration):** uncovered without catch-all (existing behavior).
+
+This makes `try { return risky(); } catch ParseError(e) { ... }` accept a `nothrow main` outer scope when `risky` declares `throws ParseError` — the typed catch arm fully covers the narrow declared throws.
+
+### 23.4 Visibility coherence — throws clause
+
+`pub fn f() throws PrivateError` is rejected with `E_PRIVATE_ERROR_LEAKED_VIA_PUB` in `lang/driftc/type_resolver.py` (after throws-types resolution). Driven by:
+
+- `TypeTable.exception_pub: dict[str, bool]` — populated in `lang/driftc/parser/__init__.py` from each `ExceptionDef.is_pub`.
+- After resolving `declared_throws_event_fqns`, if the function `is_pub` and any FQN's `exception_pub == False`, emit the diagnostic.
+
+The check fires per leaked FQN. Result-Err position visibility is deferred (per K's "do not let Result-signature work block throw/catch" guardrail).
+
+### 23.5 Catch binder typing — deferred to slice 3
+
+Attempted: bind `e` in `catch ParseError(e)` to the parallel `ParseError` struct (Path A) so users can write `e.message`, `e.offset` directly.
+
+Result: works for field access but **breaks the existing envelope surface** — `e.encode_compact()`, `e.params.encode_compact()`, `e.params.get(...)`, `e.context` all live on `Error`, not on the struct. Two regression tests (`test_exception_envelope_pub_error.py::test_encode_compact_over_pub_error` and `test_params_and_context_segment_access`) require both field access AND envelope methods on the same binder.
+
+Resolutions surveyed:
+- **Inject envelope methods on every `pub error` struct** — substantial Path A enhancement; touches struct method registration, Diagnostic surface coordination.
+- **Hybrid binder type** — Drift doesn't have first-class union types.
+- **HField fallback lookup at the type-checker** — special-case `e.<field>` resolution when receiver is `Error` and the catch arm has a typed `event_fqn`; lookup struct fields via `exception_kinds`/`get_nominal`. Tractable but invasive enough to be its own slice.
+
+**Reverted to `e: Error`.** Slice 2B catch binder typing is NOT implemented; the binder type for typed `catch X(e)` arms remains `Error`.
+
+**False-positive caveat (K-flagged 2026-05-03):** an earlier draft of this section said "field access on Error happens to type-check today" and treated probes that used `return e.offset` as if they validated typed-binder field access. That was wrong:
+
+- `e.offset` where `e: Error` compiles ONLY because Error's HField has a permissive Unknown fallback that the type-checker accepts without diagnostic. It is NOT real typed field access on a `ParseError` struct value.
+- Tests relying on `e.offset` for "typed catch coverage" were giving false confidence — they passed for an unrelated reason (the permissive fallback), not because the typed binder works.
+
+**Test fixes applied this slice:**
+
+1. `test_pub_error_throw_catch.py::test_throw_pub_error_typed_catch_field_access` and `test_two_typed_catch_arms_compile` and `test_catch_wildcard_after_typed_arm`: catch-arm bodies changed to literal `return 12;` / `return 99;` / `return -1;`. They now genuinely prove typed catch arm coverage of `nothrow` outer scopes WITHOUT relying on the permissive HField fallback.
+2. **NEW probe** `test_typed_catch_binder_is_struct_xfail` — strict-xfail. Asserts the binder type by passing `e` to `fn assert_parse_err(p: ParseError)`. Today `e: Error` causes a real type mismatch (Error ≠ ParseError) so the probe fails compile. When slice 3's binder typing lands, it XPASSes and the developer flips. The probe avoids the HField permissive fallback by exercising the binder TYPE directly, not field access.
+3. `test_exception_envelope_pub_error.py::test_encode_compact_over_pub_error` body: `return e.offset` → `return 0` after `e.encode_compact()`. The envelope test now solely pins envelope methods on Error.
+
+**Plumbing kept** (no revert): `TypeTable.exception_kinds` / `exception_pub` populated; `FnSignature.declared_throws_event_fqns` resolved; `_resolve_declared_throws_types` validates and emits diagnostics. Slice 3 picks up where this left off and finishes binder-typing correctly when synthesis lands.
+
+### 23.6 Test heredoc fixes (K-authorized)
+
+`catch *` (not Drift syntax) → bare `catch` (catch-all-no-binder). Two heredoc edits:
+
+- `lang/tests/driver/test_pub_error_throw_catch.py::test_catch_wildcard_after_typed_arm` (probe 3) — heredoc + docstring.
+- `lang/tests/driver/test_pub_error_or_throw.py::test_or_throw_rejects_non_error_err_type` (probe 3) — heredoc.
+
+### 23.7 Tests flipped
+
+| File | Before | After | Notes |
+|---|---|---|---|
+| `test_pub_error_throw_catch.py` | 0/3 | **5/5 live + 1 xfail** | Probes 1-3 flip via narrow coverage + bare-`catch` heredoc + literal-return body fix; **NEW** probe 4 (`test_typed_catch_binder_is_struct_xfail`) strict-xfailed for slice 3; **NEW** probe 5 (`test_throws_clause_rejects_non_error_type`) live; **NEW** probe 6 (`test_pub_fn_throws_private_error_rejected`) live |
+| `test_exception_envelope_pub_error.py` | 0/3 | **2/3** | Probe 3 (`e.params.get(...).as_int().unwrap_or(...)`) stays xfailed for unrelated `Optional.unwrap_or` method-dispatch issue |
+| Slice 5 set total | 13/42 | **20/45** | +5 live probes (3 throw_catch + 2 envelope) + 2 NEW negative regressions for the new diagnostics + 1 strict-xfail deferred binder-typing probe |
+
+### 23.7.1 Regression coverage for new diagnostics
+
+Per K's pre-commit findings (2026-05-03), `E_THROWS_NOT_ERROR_TYPE` and `E_PRIVATE_ERROR_LEAKED_VIA_PUB` are new checker rules and must have direct probe coverage:
+
+- `test_throws_clause_rejects_non_error_type` — `fn risky() throws Int -> Int { return 0; }` rejected with `E_THROWS_NOT_ERROR_TYPE`.
+- `test_pub_fn_throws_private_error_rejected` — `error PrivateE {}; pub fn f() throws PrivateE -> Int` rejected with `E_PRIVATE_ERROR_LEAKED_VIA_PUB`.
+
+Both probes pass live in slice 2B.
+
+### 23.7.2 Stale-language fixes
+
+K's pre-commit findings:
+- `lang/driftc/type_resolver.py:_p_diag_throws_not_error` diagnostic message no longer says `pub exception` is valid — message updated to `pub error` only.
+- `lang/driftc/parser/grammar.lark` and `lang/driftc/parser/ast.py` (FunctionDef/TraitMethodSig/InterfaceMethodSig) comments updated to drop `pub exception` from the "valid throws-types" claim.
+- `lang/driftc/core/types_core.py:exception_pub` doc comment updated.
+- `test_pub_error_throw_catch.py` module docstring rewritten — drops the false-positive field-access claim and the `catch *` reference; adds note explaining the false positive correction.
+
+### 23.8 Files touched (slice 2B)
+
+```
+lang/versions.py                                     (DRIFTC_VERSION 0.31.56 → 0.31.57)
+lang/driftc/checker/__init__.py                      (FnSignature.declared_throws_event_fqns + narrow coverage in _function_may_throw)
+lang/driftc/core/types_core.py                       (TypeTable.exception_kinds + exception_pub + comment fix)
+lang/driftc/parser/__init__.py                       (_FrontendDecl.declared_throws_types + plumbing + exception_kinds/pub population)
+lang/driftc/parser/grammar.lark                      (throws_types comment fix — drop pub exception)
+lang/driftc/parser/ast.py                            (declared_throws_types fields + comment fixes — drop pub exception)
+lang/driftc/type_resolver.py                         (_resolve_declared_throws_types + visibility coherence + diagnostics threading + diagnostic message fix)
+lang/driftc/type_checker.py                          (catch binder typing attempt — reverted with rationale comment)
+lang/tests/driver/test_pub_error_throw_catch.py      (probes 1-3 stripped of e.offset; module docstring rewritten; 2 NEW negative regressions for the new diagnostics; 1 NEW deferred xfail probe; _fails_with_code helper)
+lang/tests/driver/test_pub_error_or_throw.py         (catch * → catch heredoc)
+lang/tests/driver/test_exception_envelope_pub_error.py (encode_compact body literal-return; 2 decorators flipped)
+work/exception-diagnostics-context/slice5-spec.md    (this section)
+```
+
+ABI 12 unchanged.

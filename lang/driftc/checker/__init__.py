@@ -161,6 +161,14 @@ class FnSignature:
 	# this flag (NOT on declared_throws). Phase 0's missing-return checker
 	# already skips functions where this flag is set.
 	declared_terminal_throws: bool = False
+	# Slice 5: resolved event FQNs from `throws TYPE_LIST` clause.
+	# `None` means generic throws (no narrow declaration — existing semantics).
+	# An empty list means `throws` was declared with NO types (also generic).
+	# A non-empty list means the function's throws are narrowed to exactly
+	# these event types — used by the typed-catch-coverage analyzer in
+	# `expr_can_throw` HTryExpr to claim coverage when typed catch arms
+	# subsume the declared set.
+	declared_throws_event_fqns: Optional[list[str]] = None
 	declared_unsafe: Optional[bool] = None
 	is_extern: bool = False
 	is_extern_c: bool = False
@@ -1005,12 +1013,59 @@ class Checker:
 		Any `HThrow` or call to a function marked can-throw sets the flag. This is
 		still conservative but now accounts for try/catch coverage when the thrown
 		exception is an `HExceptionInit` that matches a catch arm (or a catch-all).
+
+		Slice 5: typed catch arms can also claim coverage for calls whose callee
+		declares a narrow throws-types list (`fn f() throws E -> T`).  When the
+		callee's `declared_throws_event_fqns` is a subset of the enclosing
+		`caught_events` (typed catch arms), the call counts as covered without
+		requiring a catch-all.  Generic-throws calls (no narrow declaration)
+		still require catch-all to claim coverage.
 		"""
 		from lang.driftc import stage1 as H
 		may_throw = False
 		first_span: Span | None = None
 		first_note: str | None = None
 		missing_callinfo_diags: list[Diagnostic] = []
+
+		def _call_narrow_throws_fqns(info: "CallInfo") -> list[str] | None:
+			"""Slice 5: return the callee's `declared_throws_event_fqns` (if any).
+
+			Returns:
+			  * `None` — callee has no narrow declaration (generic throws);
+			    only catch-all can claim coverage.
+			  * `list[str]` — the narrow set of FQNs the callee may throw;
+			    typed catch arms covering this set claim coverage.
+			"""
+			if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
+				callee_id = info.target.symbol
+				callee_info = fn_infos.get(callee_id)
+				sig = callee_info.signature if callee_info else None
+				if sig is None:
+					sig = self._signatures_by_id.get(callee_id)
+				if sig is not None:
+					return getattr(sig, "declared_throws_event_fqns", None)
+			return None
+
+		def _is_call_throws_covered(
+			info: "CallInfo",
+			caught_events_set: set[str] | None,
+			is_catch_all: bool,
+		) -> bool:
+			"""Slice 5: True if the call's narrow throws are covered by typed
+			catch arms or a catch-all in scope."""
+			if is_catch_all:
+				return True
+			narrow = _call_narrow_throws_fqns(info)
+			if narrow is None:
+				# Generic throws — only catch-all covers.
+				return False
+			if not narrow:
+				# Empty narrow set — call declared throws-types but listed
+				# none (rare; treat as covered since there's nothing to throw).
+				return True
+			if caught_events_set is None:
+				return False
+			return set(narrow).issubset(caught_events_set)
 
 		def walk_expr(expr: H.HExpr, caught_events: set[str] | None, catch_all: bool) -> None:
 			nonlocal may_throw
@@ -1077,7 +1132,7 @@ class Checker:
 							if _sig.declared_can_throw is False:
 								call_can_throw = False
 							break
-				if call_can_throw and not catch_all:
+				if call_can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 					may_throw = True
 					if first_span is None:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
@@ -1147,7 +1202,7 @@ class Checker:
 								wrapped_sig = self._signatures_by_id.get(callee_sig.wraps_target_fn_id)
 								if wrapped_sig is not None and wrapped_sig.declared_can_throw is False:
 									call_can_throw = False
-				if call_can_throw and not catch_all:
+				if call_can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 					may_throw = True
 					if first_span is None:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
@@ -1179,7 +1234,7 @@ class Checker:
 					if lam.body_expr is not None:
 						walk_expr(lam.body_expr, caught_events, catch_all)
 				else:
-					if info.sig.can_throw and not catch_all:
+					if info.sig.can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 						may_throw = True
 						if first_span is None:
 							first_span = Span.from_loc(getattr(expr, "loc", None))

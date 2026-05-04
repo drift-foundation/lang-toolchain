@@ -347,6 +347,17 @@ class TypeTable:
 		# - enforce exact coverage (no missing/unknown/duplicates)
 		# - attach attrs deterministically in lowering.
 		self.exception_schemas: dict[str, tuple[str, list[str]]] = {}
+		# Slice 5: per-event kind discriminator.  "exception" = legacy paren-form
+		# (throw-only, no value-type machinery); "error" = `pub error` decl
+		# (Path A struct co-registration; throw-able + value-typed).  Used by
+		# the catch arm binder typing in `type_checker.py` to bind `e` to the
+		# parallel struct type (kind="error") instead of `Error`.
+		self.exception_kinds: dict[str, str] = {}
+		# Slice 5: per-event public-visibility flag (True if declared
+		# `pub error`).  Drives the visibility coherence check —
+		# a `pub fn f() throws PrivateError` is rejected because a
+		# private error type leaks through the public throws clause.
+		self.exception_pub: dict[str, bool] = {}
 		# Struct schemas keyed by nominal identity. Values are (name, [field_names]).
 		# Field types live in the STRUCT TypeDef itself.
 		self.struct_schemas: dict[NominalKey, tuple[str, list[str]]] = {}

@@ -29,6 +29,7 @@ def resolve_program_signatures(
 	func_decls: Iterable[object],
 	*,
 	table: Optional[TypeTable] = None,
+	diagnostics: Optional[list] = None,
 ) -> tuple[TypeTable, dict[FunctionId, FnSignature]]:
 	"""
 	Resolve declared types on function declarations into TypeIds.
@@ -167,6 +168,29 @@ def resolve_program_signatures(
 		# termination. Phase 0's `_check_terminal_returns` already early-outs
 		# on this flag.
 		declared_terminal_throws = bool(getattr(decl, "declared_terminal_throws", False))
+		# Slice 5: resolve `throws TYPE_LIST` (e.g. `throws ParseError, CodecError`)
+		# to a list of event FQNs.  Each TypeExpr in the list must resolve to a
+		# kind="error" / kind="exception" entry in `table.exception_schemas`;
+		# otherwise emit `E_THROWS_NOT_ERROR_TYPE`.  A None result keeps the
+		# existing generic-throws semantics (no narrow declaration).
+		_diags = diagnostics if diagnostics is not None else []
+		declared_throws_event_fqns = _resolve_declared_throws_types(
+			decl=decl,
+			table=table,
+			module_name=module_name,
+			diagnostics=_diags,
+		)
+		# Slice 5 visibility coherence (§2.3.1): a `pub fn` MUST NOT leak
+		# private error types through its `throws` clause.  Each event_fqn in
+		# the resolved throws-type list is checked against the
+		# `table.exception_pub` map; a private (`exception_pub == False`)
+		# error type referenced from a public function emits
+		# `E_PRIVATE_ERROR_LEAKED_VIA_PUB`.
+		if declared_throws_event_fqns and bool(getattr(decl, "is_pub", False)):
+			exc_pub = getattr(table, "exception_pub", {}) or {}
+			for fqn in declared_throws_event_fqns:
+				if not exc_pub.get(fqn, True):
+					_diags.append(_p_diag_private_error_leaked(decl, fqn))
 		declared_unsafe = bool(getattr(decl, "is_unsafe", False)) or is_extern_c
 		# Surface ABI rule: nothrow is the only way to force a non-throwing ABI.
 		declared_can_throw = not declared_nothrow
@@ -221,6 +245,7 @@ def resolve_program_signatures(
 			declared_can_throw=declared_can_throw,
 			declared_throws=declared_throws,
 			declared_terminal_throws=declared_terminal_throws,
+			declared_throws_event_fqns=declared_throws_event_fqns,
 			declared_unsafe=declared_unsafe,
 			is_extern=is_extern,
 			is_extern_c=is_extern_c,
@@ -371,6 +396,89 @@ def _throws_from_decl(decl: object) -> Tuple[str, ...]:
 	if throws is None:
 		return ()
 	return tuple(throws)
+
+
+def _resolve_declared_throws_types(
+	*,
+	decl: object,
+	table: object,
+	module_name: str | None,
+	diagnostics: list,
+) -> list[str] | None:
+	"""
+	Resolve `throws TYPE_LIST` (Slice 5) to a list of canonical event FQNs.
+
+	Returns:
+	  * `None` — no `throws TYPE_LIST` declared; generic-throws semantics.
+	  * `[]` — explicitly empty list (rare; treated as no narrow info).
+	  * `[fqn, ...]` — each TypeExpr resolved to its event FQN, validated
+	    to exist in `table.exception_schemas`.
+
+	Validation: a type in the throws clause that doesn't resolve to an
+	error/exception kind (i.e. not in `exception_schemas`) emits
+	`E_THROWS_NOT_ERROR_TYPE` and is dropped from the resolved list.
+	"""
+	throws_types = getattr(decl, "declared_throws_types", None)
+	if not throws_types:
+		return None
+	# `exception_schemas: dict[str, tuple[str, list[str]]]` keyed by FQN.
+	schemas = getattr(table, "exception_schemas", {}) or {}
+	resolved: list[str] = []
+	for ty_expr in throws_types:
+		# A throws-type is a TypeExpr at the surface.  We resolve to its
+		# canonical "module:Name" key in exception_schemas.  Bare names
+		# default to the current module; module-qualified forms use the
+		# already-resolved module_id when present.
+		name = getattr(ty_expr, "name", None)
+		if not name:
+			continue
+		mod_id = getattr(ty_expr, "module_id", None) or module_name
+		fqn = f"{mod_id}:{name}" if mod_id else name
+		if fqn not in schemas:
+			# Try the fallback bare-name form (some tests / call paths use
+			# unqualified names that haven't been resolved yet).
+			alt_keys = [k for k in schemas.keys() if k.endswith(f":{name}")]
+			if len(alt_keys) == 1:
+				fqn = alt_keys[0]
+			else:
+				diagnostics.append(_p_diag_throws_not_error(decl, ty_expr, name))
+				continue
+		resolved.append(fqn)
+	return resolved
+
+
+def _p_diag_throws_not_error(decl: object, ty_expr: object, name: str):
+	"""Build a diagnostic for a non-error type appearing in `throws TYPE_LIST`."""
+	from lang.driftc.core.diagnostics import Diagnostic, Span
+	loc = getattr(ty_expr, "loc", None) or getattr(decl, "loc", None)
+	return Diagnostic(
+		message=(
+			f"throws clause type '{name}' is not a `pub error` — "
+			f"only `pub error` / `error` types are valid in `throws TYPE_LIST`"
+		),
+		severity="error",
+		span=Span.from_loc(loc) if loc is not None else Span(),
+		code="E_THROWS_NOT_ERROR_TYPE",
+		phase="parser",
+	)
+
+
+def _p_diag_private_error_leaked(decl: object, fqn: str):
+	"""Build a diagnostic for a private error leaking through a `pub fn`'s
+	`throws` clause (Slice 5 visibility coherence; see spec §2.3.1).
+	"""
+	from lang.driftc.core.diagnostics import Diagnostic, Span
+	fn_name = getattr(decl, "name", "?")
+	loc = getattr(decl, "loc", None)
+	return Diagnostic(
+		message=(
+			f"public function '{fn_name}' exposes private error '{fqn}' in throws clause"
+		),
+		severity="error",
+		span=Span.from_loc(loc) if loc is not None else Span(),
+		code="E_PRIVATE_ERROR_LEAKED_VIA_PUB",
+		phase="parser",
+	)
 
 
 __all__ = ["resolve_program_signatures"]

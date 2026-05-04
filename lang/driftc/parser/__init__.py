@@ -953,6 +953,10 @@ class _FrontendDecl:
 		# NEW Phase 1: bare terminal `throws` form. Phase 2 body-flow check
 		# enforces termination only on this flag, NOT on declared_throws.
 		self.declared_terminal_throws = declared_terminal_throws
+		# Slice 5: optional `throws TYPE_LIST` resolved to TypeExprs.
+		# Empty list means generic throws (existing semantics).  Resolver
+		# converts these to canonical event FQNs.
+		self.declared_throws_types: list[parser_ast.TypeExpr] = []
 		self.is_unsafe = is_unsafe
 		self.throws = ()
 		self.loc = loc
@@ -1014,6 +1018,10 @@ def _decl_from_parser_fn(
 	)
 	decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
 	decl.is_extern_c = bool(getattr(fn, "is_extern_c", False))
+	# Slice 5: forward `throws TYPE_LIST` to the frontend decl so the type
+	# resolver can canonicalize each TypeExpr to its event FQN.  See
+	# `_resolve_declared_throws_types` in `lang/driftc/type_resolver.py`.
+	decl.declared_throws_types = list(getattr(fn, "declared_throws_types", []) or [])
 	return decl
 
 
@@ -4228,10 +4236,19 @@ def _lower_parsed_program_to_hir(
 	type_alias_defs = list(getattr(prog, "type_aliases", []) or [])
 	struct_param_maps: dict[TypeKey, dict[str, TypeParamId]] = {}
 	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_id, diagnostics)
+	# Slice 5: per-event kind ("exception" legacy paren-form vs "error"
+	# new `pub error` decl).  Drives catch binder typing — kind="error"
+	# binds the typed catch binder to the parallel struct type (Path A).
+	exception_kinds: dict[str, str] = {}
+	# Slice 5: per-event public-visibility flag.  Drives the visibility
+	# coherence check (`pub fn f() throws PrivateError` rejected).
+	exception_pub: dict[str, bool] = {}
 	for exc in prog.exceptions:
 		fqn = f"{module_id}:{exc.name}"
 		field_names = [arg.name for arg in getattr(exc, "args", [])]
 		exception_schemas[fqn] = (fqn, field_names)
+		exception_kinds[fqn] = getattr(exc, "kind", "exception")
+		exception_pub[fqn] = bool(getattr(exc, "is_pub", False))
 	# Make exception schemas visible before signature resolution so exception
 	# types can be used in annotations without minting forward-nominal types.
 	prev_exc = getattr(type_table, "exception_schemas", None)
@@ -4239,6 +4256,16 @@ def _lower_parsed_program_to_hir(
 		prev_exc = {}
 	prev_exc.update(exception_schemas)
 	type_table.exception_schemas = prev_exc
+	prev_exc_kinds = getattr(type_table, "exception_kinds", None)
+	if not isinstance(prev_exc_kinds, dict):
+		prev_exc_kinds = {}
+	prev_exc_kinds.update(exception_kinds)
+	type_table.exception_kinds = prev_exc_kinds
+	prev_exc_pub = getattr(type_table, "exception_pub", None)
+	if not isinstance(prev_exc_pub, dict):
+		prev_exc_pub = {}
+	prev_exc_pub.update(exception_pub)
+	type_table.exception_pub = prev_exc_pub
 	# Build a TypeTable early so we can register user-defined type names (structs)
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.
@@ -4921,7 +4948,9 @@ def _lower_parsed_program_to_hir(
 	# Build signatures with resolved TypeIds from parser decls.
 	from lang.driftc.type_resolver import resolve_program_signatures
 
-	type_table, sigs, ffi_diags = resolve_program_signatures(decls, table=type_table)
+	type_table, sigs, ffi_diags = resolve_program_signatures(
+		decls, table=type_table, diagnostics=diagnostics,
+	)
 	signatures.update(sigs)
 	for msg in ffi_diags:
 		diagnostics.append(_p_diag(message=msg, severity="error"))

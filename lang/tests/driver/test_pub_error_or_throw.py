@@ -137,7 +137,7 @@ fn main() nothrow -> Int {
 \tval r: core.Result<Int, Int> = core.Result::Err(42);
 \ttry {
 \t\treturn r.or_throw();
-\t} catch * {
+\t} catch {
 \t\treturn -1;
 \t}
 }

@@ -37,10 +37,12 @@ class ExceptionDef:
     is_pub: bool = False
     test_build_only: bool = False
     domain: Optional[str] = None
-    # Slice 5 discriminator: "exception" (legacy paren-form `pub exception E(...)`)
-    # or "error" (canonical `pub error E { ... }` and transitional brace-form
-    # `pub exception E { ... }`).  kind="error" decls also produce a parallel
-    # StructDef for value-type machinery (Path A — see slice5-spec.md §2.2).
+    # Slice 5 discriminator: "exception" (legacy paren-form decls retained
+    # only for the parser's transitional staging path — REJECTED in user
+    # source via `E_PUB_EXCEPTION_REMOVED`) or "error" (canonical
+    # `pub error E { ... }` / `error E { ... }`).  kind="error" decls also
+    # produce a parallel StructDef for value-type machinery (Path A — see
+    # slice5-spec.md §2.2).
     kind: str = "exception"
     # Optional explicit event_code (`pub error E(0x1234) { ... }`).
     # When unset, the catalog assigns one via the existing event_code() hash.
@@ -264,8 +266,8 @@ class FunctionDef:
 	# `fn f() throws ParseError -> Int { ... }` → [TypeExpr("ParseError")].
 	# `fn f() throws ParseError, CodecError -> Int { ... }` → two entries.
 	# Empty list means generic throws-anything (existing semantics).  Each
-	# type is later validated by the checker to resolve to a `pub error`
-	# (or `pub exception`) kind; see spec §3 / §4 / §5.
+	# type is later validated by the checker to resolve to a `pub error` /
+	# `error` kind; see spec §3 / §4 / §5.
 	declared_throws_types: List[TypeExpr] = field(default_factory=list)
 	is_unsafe: bool = False
 	is_pub: bool = False

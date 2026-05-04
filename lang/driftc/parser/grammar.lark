@@ -224,8 +224,8 @@ interface_method_sig: UNSAFE? FN_KW ident type_params? "(" [params] ")" fn_signa
 // Slice 5: optional explicit error-type list after `throws`.
 //   `fn f() throws ParseError -> Int { ... }`
 //   `fn f() throws ParseError, CodecError -> Int { ... }`
-// Each TYPE in the list must resolve to a `pub error` (or `pub exception`)
-// kind; checked by the type checker, not the grammar.  When the list is
+// Each TYPE in the list must resolve to a `pub error` / `error` kind;
+// checked by the type checker, not the grammar.  When the list is
 // absent the existing throws-anything semantics apply.
 throws_types: type_expr (COMMA type_expr)*
 

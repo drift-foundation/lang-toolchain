@@ -10216,6 +10216,17 @@ class TypeChecker:
 					scope_bindings.append(dict())
 					try:
 						if arm.binder:
+							# Slice 5: catch binder typing for `pub error` was
+							# attempted in slice 2B but reverted — binding `e`
+							# to the parallel struct (Path A) gives field access
+							# (`e.message`) but breaks the existing envelope
+							# surface (`e.encode_compact()`, `e.params`,
+							# `e.context`) since those live on Error.  A unified
+							# binder type that satisfies both requires either
+							# struct method injection or HField fallback lookup
+							# — both are slice 3+ work (deferred alongside
+							# synthesis).  For now `e: Error` as before; the
+							# typed-binder field-access tests stay xfailed.
 							bid = self._alloc_local_id()
 							locals.append(bid)
 							scope_env[-1][arm.binder] = self._error
