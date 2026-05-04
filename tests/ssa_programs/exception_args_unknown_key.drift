@@ -1,5 +1,4 @@
-exception MyError(a: String)
-
+error MyError { a: String }
 fn raise_it() -> Void {
   throw MyError(a = "AA")
 }

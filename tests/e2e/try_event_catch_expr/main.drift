@@ -1,5 +1,4 @@
-exception MyErr(msg: String)
-
+error MyErr { msg: String }
 fn foo(flag: Int) -> Int {
   if flag == 1 {
     throw MyErr(msg = "one")

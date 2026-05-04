@@ -2,8 +2,7 @@ module main;
 
 import std.console as console;
 
-exception E(msg: String)
-
+error E { msg: String }
 fn fail() -> Int {
 	throw E(msg = "boom");
 }

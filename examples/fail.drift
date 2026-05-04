@@ -1,5 +1,4 @@
-exception DiskError(code: String)
-
+error DiskError { code: String }
 fn fail() -> Void {
 	throw DiskError(code = "ENOENT")
 }

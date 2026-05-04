@@ -2,8 +2,7 @@ module main;
 
 import std.core as core;
 
-exception Oops()
-
+error Oops {}
 struct Stream { v: Int }
 
 fn handle(var s: Stream) -> Int {

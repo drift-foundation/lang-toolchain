@@ -1,5 +1,4 @@
-exception MyExc(msg: String)
-
+error MyExc { msg: String }
 fn boom(x: Int) -> Int {
   if x == 0 {
     throw MyExc(msg = "zero")

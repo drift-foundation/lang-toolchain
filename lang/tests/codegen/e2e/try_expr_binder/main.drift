@@ -2,8 +2,7 @@ module m;
 
 import std.console as console;
 
-exception Boom()
-
+error Boom {}
 fn may_fail(flag: Int) -> Int {
 	if flag == 0 {
 		return 0;

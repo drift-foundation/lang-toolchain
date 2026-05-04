@@ -1,7 +1,6 @@
 module m;
 
-exception MyErr()
-
+error MyErr {}
 fn may_fail(x: Int) -> Int {
 	throw MyErr();
 }

@@ -27,8 +27,7 @@ def test_catch_unknown_event_reports_diagnostic(tmp_path: Path) -> None:
 		"""
 module main;
 
-exception Boom()
-
+error Boom {}
 fn boom() -> Int {
     throw Boom();
 }
@@ -52,8 +51,7 @@ def test_declared_exception_enables_catch(tmp_path: Path) -> None:
 		"""
 module main;
 
-exception Boom(msg: String)
-
+error Boom { msg: String }
 fn boom() -> Int {
     throw Boom(msg = "boom");
 }

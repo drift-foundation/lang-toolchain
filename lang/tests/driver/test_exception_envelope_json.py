@@ -101,8 +101,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception EmptyExc()
-
+pub error EmptyExc {}
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow EmptyExc();
@@ -149,8 +148,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception Faulty(reason: String, level: Int)
-
+pub error Faulty { reason: String, level: Int }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow Faulty(reason = "boom", level = 7);
@@ -196,8 +194,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception WrappedErr(tag: String)
-
+pub error WrappedErr { tag: String }
 fn _inner() throws -> Int {
 \tval ^record_id: String as "record_id" = "rec-99";
 \tthrow WrappedErr(tag = "boom");
@@ -251,8 +248,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception NumericEv()
-
+pub error NumericEv {}
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow NumericEv();
@@ -299,8 +295,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception EscapeProbe()
-
+pub error EscapeProbe {}
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow EscapeProbe();

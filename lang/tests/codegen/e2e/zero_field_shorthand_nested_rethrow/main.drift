@@ -2,8 +2,7 @@ module main;
 
 import std.console as console;
 
-exception E()
-
+error E {}
 fn run() -> Int {
     try {
         try {

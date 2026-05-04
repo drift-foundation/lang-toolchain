@@ -9,8 +9,7 @@ def test_exception_default_module_fqn_is_main(tmp_path: Path) -> None:
 	path = tmp_path / "main.drift"
 	path.write_text(
 		"""
-exception Boom()
-
+error Boom {}
 fn main() -> Int {
     try {
         throw Boom();

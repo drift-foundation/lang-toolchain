@@ -51,8 +51,7 @@ _PRE = """
 module main;
 import std.core as core;
 
-exception Bang()
-
+error Bang {}
 fn make_ok() nothrow -> core.Result<Int, String> {
 \treturn core.Result::Ok(1);
 }

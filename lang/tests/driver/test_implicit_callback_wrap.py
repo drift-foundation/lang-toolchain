@@ -520,8 +520,7 @@ module m;
 
 import std.core as core;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct Req {}
 struct Resp {}
 
@@ -562,8 +561,7 @@ module m;
 import std.core as core;
 import std.concurrent as conc;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct Req {}
 struct Resp {}
 struct App { tag: Int }
@@ -609,8 +607,7 @@ module m;
 
 import std.core as core;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct Req {}
 struct Resp {}
 
@@ -698,8 +695,7 @@ module m;
 
 import std.core as core;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct ReqA {}
 struct ReqB {}
 struct CtxA {}
@@ -807,7 +803,7 @@ def _arity_n_callback_source(n: int, *, throws: bool) -> str:
 	type_args = ", ".join(["Int"] * (n + 1))  # N param types + ret type
 	lambda_params = ", ".join(f"a{i}: Int" for i in range(n))
 	if throws:
-		exception = "exception Boom(message: String);\n"
+		exception = "error Boom { message: String }\n"
 		body_block = "{ throw Boom(message = \"x\"); }"
 		nothrow_kw = ""
 	else:

@@ -126,8 +126,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception EmptyExc()
-
+pub error EmptyExc {}
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow EmptyExc();
@@ -165,8 +164,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception InvalidOrder(order_id: Int, code: String)
-
+pub error InvalidOrder { order_id: Int, code: String }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow InvalidOrder(order_id = 42, code = "X");
@@ -206,8 +204,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception StatusFault(active: Bool, ratio: Float)
-
+pub error StatusFault { active: Bool, ratio: Float }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow StatusFault(active = true, ratio = 1.5);
@@ -249,8 +246,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception OuterFault(reason: String)
-
+pub error OuterFault { reason: String }
 fn _inner() throws -> Int {
 \tthrow main:OuterFault(reason = "from-inner");
 }
@@ -309,8 +305,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception OrderProbe(z_last: Int, a_first: Int)
-
+pub error OrderProbe { z_last: Int, a_first: Int }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow OrderProbe(z_last = 2, a_first = 1);
@@ -357,8 +352,7 @@ import std.core as core;
 import std.console as console;
 import std.format as format;
 
-pub exception DualPath(payload: String, idx: Int);
-
+pub error DualPath { payload: String, idx: Int }
 fn _run() nothrow -> Int {
 \ttry {
 \t\tthrow DualPath(payload = "tag.value", idx = 99);

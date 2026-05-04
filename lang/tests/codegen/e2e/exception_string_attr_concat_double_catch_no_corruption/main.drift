@@ -6,8 +6,7 @@ import std.core as core;
 // at the throw site is a heap allocation built from `+` (drift_string_concat),
 // not a static literal — this is the trigger condition for the
 // language bug.
-pub exception PathErr(payload: String, idx: Int);
-
+pub error PathErr { payload: String, idx: Int }
 // Builds a fresh heap String via concatenation.  The result is NOT a
 // static literal — it goes through drift_string_concat and gets a
 // fresh refcounted allocation.

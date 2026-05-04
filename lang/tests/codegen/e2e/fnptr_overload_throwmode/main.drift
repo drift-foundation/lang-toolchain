@@ -1,7 +1,6 @@
 module main;
 
-exception Boom()
-
+error Boom {}
 fn pick(f: Fn(Int) nothrow -> Int) nothrow -> Int {
 	return 1;
 }

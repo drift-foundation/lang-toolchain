@@ -1,8 +1,7 @@
 module main;
 
-exception EvA()
-exception EvB()
-
+error EvA {}
+error EvB {}
 fn fail() -> Int {
 	throw EvA();
 }

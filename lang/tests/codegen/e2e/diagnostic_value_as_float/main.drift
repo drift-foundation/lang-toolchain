@@ -1,7 +1,6 @@
 module main;
 
-exception E(v: Float)
-
+error E { v: Float }
 fn run() -> Int {
 	try {
 		throw E(v = 1.5);

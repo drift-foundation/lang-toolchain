@@ -50,8 +50,8 @@ module main;
 
 import std.core as core;
 
-pub exception E1();
-pub exception E2();
+pub error E1 {}
+pub error E2 {}
 """
 
 

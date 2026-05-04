@@ -1,7 +1,6 @@
 module m;
 
-exception Timeout()
-
+error Timeout {}
 fn main() nothrow -> Int{
     throw Timeout(x = 1);
 }

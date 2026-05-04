@@ -295,8 +295,7 @@ def test_throwing_fn_terminal_via_inline_throw_is_accepted(tmp_path: Path, capsy
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn always_fail() -> Int {
 	throw Boom();
 }

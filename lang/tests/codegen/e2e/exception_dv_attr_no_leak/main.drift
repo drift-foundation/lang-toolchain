@@ -6,16 +6,14 @@ import std.core as core;
 // drift_error_add_attr_dv clones them. Without the fix, each DV::String attr
 // leaks one retain per throw.
 
-pub exception Info(tag: String, message: String)
-
+pub error Info { tag: String, message: String }
 // Both attrs are inline DV::String from ConstructDV — fresh temps, not locals.
 fn throw_inline() throws -> Int {
 	throw Info(tag = "t1", message = "m1");
 }
 
 // DV::Object attr from a local — must not be double-freed.
-pub exception Detail(tag: String, fields: DiagnosticValue)
-
+pub error Detail { tag: String, fields: DiagnosticValue }
 fn make_fields() nothrow -> DiagnosticValue {
 	return DiagnosticValue::Object([
 		core.diagnostic_entry("email", DiagnosticValue::String("required"))

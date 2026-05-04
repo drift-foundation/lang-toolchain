@@ -1,5 +1,4 @@
-exception E(a: Int)
-
+error E { a: Int }
 fn main() -> Int {
   throw E(x = 1)
   return 0

@@ -1,7 +1,6 @@
 module m;
 
-exception Boom()
-
+error Boom {}
 fn main() nothrow -> Int{
 	try {
 		if true {

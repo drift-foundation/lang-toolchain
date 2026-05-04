@@ -1,7 +1,6 @@
 module m;
 
-exception Boom(a: Int, b: String)
-
+error Boom { a: Int, b: String }
 fn handle() nothrow -> Int {
     try {
         throw Boom(a = 7, b = "hi");

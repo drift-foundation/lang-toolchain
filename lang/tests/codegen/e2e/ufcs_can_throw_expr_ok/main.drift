@@ -1,7 +1,6 @@
 module main;
 
-exception Fail()
-
+error Fail {}
 trait Boom {
 	fn boom_value(self: &Self) -> Int
 }

@@ -87,8 +87,7 @@ def test_cross_source_module_result_return_resolves(tmp_path: Path) -> None:
 module mylib.svc;
 export { process, SvcError };
 
-pub exception SvcError(msg: String);
-
+pub error SvcError { msg: String }
 pub fn process(x: Int) -> Int {
 	if x < 0 {
 		throw SvcError("negative");
@@ -173,8 +172,7 @@ module mylib.api;
 import dep.util as util;
 export { process, ApiError };
 
-pub exception ApiError(msg: String);
-
+pub error ApiError { msg: String }
 pub fn process(x: Int) -> Int {
 	if x < 0 {
 		throw ApiError("bad");

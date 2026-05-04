@@ -24,8 +24,7 @@ module main;
 import std.core as core;
 import std.io as io;
 
-exception Info(msg: String, detail: String)
-
+error Info { msg: String, detail: String }
 fn _heap_string(bytes: &Array<Byte>) nothrow -> String {
 \tval n = bytes.len;
 \tvar buf = io.buffer(n);

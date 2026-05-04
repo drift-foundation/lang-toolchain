@@ -64,8 +64,7 @@ def test_terminal_throws_body_ending_in_throw_is_accepted(tmp_path: Path, capsys
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -86,8 +85,7 @@ def test_terminal_throws_body_ending_in_tail_call_to_terminal_throws_is_accepted
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn inner() throws {
 	throw Boom();
 }
@@ -110,9 +108,8 @@ def test_terminal_throws_body_with_branches_all_terminal_is_accepted(tmp_path: P
 	source = """
 module m;
 
-exception A()
-exception B()
-
+error A {}
+error B {}
 fn fail(flag: Bool) throws {
 	if flag {
 		throw A();
@@ -138,9 +135,8 @@ module m;
 
 variant Choice { A, B }
 
-exception ExA()
-exception ExB()
-
+error ExA {}
+error ExB {}
 fn fail(c: Choice) throws {
 	match c {
 		A => { throw ExA(); },
@@ -226,8 +222,7 @@ def test_terminal_throws_body_with_partial_if_branch_is_rejected(tmp_path: Path,
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail(c: Bool) throws {
 	if c {
 		throw Boom();
@@ -250,8 +245,7 @@ module m;
 
 variant Choice { A, B }
 
-exception Boom()
-
+error Boom {}
 fn fail(c: Choice) throws {
 	match c {
 		A => { throw Boom(); },
@@ -290,8 +284,7 @@ module m;
 
 variant Choice { A, B }
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -321,8 +314,7 @@ def test_value_returning_if_branch_calling_terminal_throws_is_terminal(tmp_path:
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -366,8 +358,7 @@ def test_terminal_throws_call_in_return_value_position_is_rejected(tmp_path: Pat
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -407,8 +398,7 @@ def test_terminal_throws_call_in_let_binding_is_rejected(tmp_path: Path, capsys)
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -432,8 +422,7 @@ def test_terminal_throws_call_as_operand_is_rejected(tmp_path: Path, capsys) -> 
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -455,8 +444,7 @@ def test_terminal_throws_call_in_function_argument_is_rejected(tmp_path: Path, c
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -486,8 +474,7 @@ module m;
 
 variant Choice { A, B }
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -520,8 +507,7 @@ module m;
 
 variant Choice { A, B }
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }

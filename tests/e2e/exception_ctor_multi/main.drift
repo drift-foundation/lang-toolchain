@@ -1,8 +1,7 @@
 import std.console.out;
 
-exception A()
-exception B()
-
+error A {}
+error B {}
 fn fire() -> Void {
   throw B()
 }

@@ -2,8 +2,7 @@ module acme.boom;
 
 export { boom };
 
-exception Boom()
-
+error Boom {}
 pub fn boom() -> Int {
 	throw Boom();
 }

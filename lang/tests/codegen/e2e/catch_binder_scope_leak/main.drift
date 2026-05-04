@@ -1,7 +1,6 @@
 module main;
 
-exception EvTest()
-
+error EvTest {}
 fn fail() -> Int {
 	throw EvTest();
 }

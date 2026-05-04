@@ -112,8 +112,7 @@ def test_plain_may_throw_function_no_throws_flags(tmp_path: Path, capsys) -> Non
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() -> Int {
 	throw Boom();
 }
@@ -170,8 +169,7 @@ module m;
 
 import std.core as core;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws -> Int {
 	throw Boom();
 }
@@ -201,8 +199,7 @@ def test_bare_terminal_throws_sets_declared_terminal_throws(tmp_path: Path, caps
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() throws {
 	throw Boom();
 }
@@ -235,8 +232,7 @@ def test_pub_bare_terminal_throws_signature_carries_flag(tmp_path: Path, capsys)
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 pub fn fail() throws {
 	throw Boom();
 }
@@ -265,8 +261,7 @@ def test_implement_block_bare_terminal_throws_method_carries_flag(tmp_path: Path
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 pub struct Foo { v: Int }
 
 implement Foo {
@@ -300,8 +295,7 @@ def test_implement_block_auto_try_method_carries_flag(tmp_path: Path, capsys) ->
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 pub struct Foo { v: Int }
 
 implement Foo {
@@ -486,8 +480,7 @@ def test_nothrow_throws_combination_is_rejected(tmp_path: Path, capsys) -> None:
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() nothrow throws {
 	throw Boom();
 }
@@ -506,8 +499,7 @@ def test_nothrow_throws_with_return_type_is_rejected(tmp_path: Path, capsys) -> 
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 fn fail() nothrow throws -> Int {
 	throw Boom();
 }

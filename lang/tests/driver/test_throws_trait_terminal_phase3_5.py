@@ -66,8 +66,7 @@ def test_generic_trait_terminal_call_is_terminator(tmp_path: Path, capsys) -> No
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Throw {
 	fn throw_self(self: Self) throws;
 }
@@ -98,8 +97,7 @@ def test_generic_trait_terminal_call_in_match_arm(tmp_path: Path, capsys) -> Non
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Throw {
 	fn throw_self(self: Self) throws;
 }
@@ -135,8 +133,7 @@ def test_concrete_trait_terminal_call_is_terminator(tmp_path: Path, capsys) -> N
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Throw {
 	fn throw_self(self: Self) throws;
 }
@@ -173,8 +170,7 @@ def test_non_terminal_trait_method_not_treated_as_terminator(tmp_path: Path, cap
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Converter {
 	fn convert(self: Self) -> Int;
 }
@@ -244,8 +240,7 @@ def test_impl_terminal_throws_for_value_returning_trait_method(tmp_path: Path, c
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Converter {
 	fn convert(self: Self) -> Int;
 }
@@ -275,8 +270,7 @@ def test_impl_matches_terminal_throws_exactly(tmp_path: Path, capsys) -> None:
 	source = """
 module m;
 
-exception Boom()
-
+error Boom {}
 trait Throw {
 	fn throw_self(self: Self) throws;
 }

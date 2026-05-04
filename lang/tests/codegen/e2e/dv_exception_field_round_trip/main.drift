@@ -2,8 +2,7 @@ module m;
 
 import std.core as core;
 
-pub exception BadRequest(tag: String, message: String, fields: DiagnosticValue)
-
+pub error BadRequest { tag: String, message: String, fields: DiagnosticValue }
 fn make_fields() nothrow -> DiagnosticValue {
 	return DiagnosticValue::Object([
 		core.diagnostic_entry("email", DiagnosticValue::String("invalid-format")),

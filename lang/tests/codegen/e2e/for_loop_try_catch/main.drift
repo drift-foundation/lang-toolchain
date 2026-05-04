@@ -1,7 +1,6 @@
 module main;
 
-exception Boom()
-
+error Boom {}
 fn maybe_boom(x: Int) -> Int {
 	if x == 2 {
 		throw Boom();

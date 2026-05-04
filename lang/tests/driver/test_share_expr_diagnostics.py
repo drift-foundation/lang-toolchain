@@ -119,8 +119,7 @@ module main;
 import std.core as core;
 import std.concurrent as conc;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct App { tag: Int }
 
 fn _serve(a: conc.Arc<App>, port: Int) -> Int {
@@ -223,8 +222,7 @@ module main;
 import std.core as core;
 import std.concurrent as conc;
 
-exception Boom(message: String);
-
+error Boom { message: String }
 struct App { tag: Int }
 
 fn _serve(a: conc.Arc<App>, port: Int) -> Int {

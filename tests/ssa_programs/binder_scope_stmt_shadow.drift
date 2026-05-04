@@ -1,5 +1,4 @@
-exception MyError(msg: String)
-
+error MyError { msg: String }
 fn may_fail() -> Int {
   throw drift_error_new_dummy(1, "msg", "")
 }

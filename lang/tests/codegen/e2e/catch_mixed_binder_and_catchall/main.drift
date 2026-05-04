@@ -2,9 +2,8 @@ module main;
 
 import std.console as console;
 
-exception A()
-exception B()
-
+error A {}
+error B {}
 fn fail() -> Int {
 	throw A();
 }

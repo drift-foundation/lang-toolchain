@@ -1,8 +1,7 @@
 import std.console.out;
 
-exception MyEventA(msg: String)
-exception MyEventB(msg: String)
-
+error MyEventA { msg: String }
+error MyEventB { msg: String }
 fn throw_b() -> Int {
   // Event code 2 (second exception) will not match the first catch arm.
   throw drift_error_new_dummy(2, "payload", "")

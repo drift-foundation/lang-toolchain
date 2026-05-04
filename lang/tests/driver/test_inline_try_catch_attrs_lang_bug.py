@@ -99,8 +99,7 @@ import std.core as core;
 import std.console as console;
 import std.format as format;
 
-pub exception PathErr(payload: String, idx: Int);
-
+pub error PathErr { payload: String, idx: Int }
 fn _do_throw() throws -> Int {
 \tthrow PathErr(payload = "tag.value", idx = 99);
 }

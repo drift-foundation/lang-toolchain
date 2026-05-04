@@ -2,8 +2,7 @@ module main;
 
 import std.core as core;
 
-exception AppError(status: String, tag: String, field: String, reason: String)
-
+error AppError { status: String, tag: String, field: String, reason: String }
 fn might_fail() -> Int {
 	throw AppError(status = "FAILED", tag = "test", field = "x", reason = "bad");
 }

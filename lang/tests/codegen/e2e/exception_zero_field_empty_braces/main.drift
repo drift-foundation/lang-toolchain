@@ -1,7 +1,6 @@
 module main;
 
-exception Timeout()
-
+error Timeout {}
 fn fail() -> Int {
 	throw Timeout();
 }

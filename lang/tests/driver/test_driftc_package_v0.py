@@ -520,8 +520,7 @@ module {module_id};
 
 export {{ Boom }};
 
-pub exception Boom(a: Int, b: String);
-
+pub error Boom {{ a: Int, b: String }}
 fn dummy() nothrow -> Int {{
 	return 0;
 }}

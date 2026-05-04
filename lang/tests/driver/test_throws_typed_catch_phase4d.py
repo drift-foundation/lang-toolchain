@@ -50,8 +50,7 @@ module main;
 import std.core as core;
 import std.err as err;
 
-pub exception ServiceDown(reason: String)
-
+pub error ServiceDown { reason: String }
 struct ServiceError {
 	pub reason: String
 }

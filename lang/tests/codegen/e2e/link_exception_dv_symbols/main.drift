@@ -2,8 +2,7 @@ module main;
 
 import std.console as console;
 
-exception E(n: Int, s: String, b: Bool)
-
+error E { n: Int, s: String, b: Bool }
 fn fail() -> Int {
 	throw E(n = 1, s = "x", b = false);
 }

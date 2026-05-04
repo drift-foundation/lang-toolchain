@@ -1,6 +1,5 @@
-exception Foo(msg: String)
-exception Bar(msg: String)
-
+error Foo { msg: String }
+error Bar { msg: String }
 fn boom(x: Int) -> Int {
   if x == 1 {
     throw Foo(msg = "foo")

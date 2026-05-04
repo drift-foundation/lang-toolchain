@@ -14,8 +14,7 @@ def test_exception_decl_yields_event_code(tmp_path: Path) -> None:
 		"""
 module foo.bar;
 
-exception EvtA(code: Int)
-
+error EvtA { code: Int }
 fn main() -> Int { return 0; }
 """
 	)
@@ -29,9 +28,8 @@ def test_duplicate_exception_reports_diagnostic(tmp_path: Path) -> None:
 	src = tmp_path / "dupe.drift"
 	src.write_text(
 		"""
-exception Boom(msg: String)
-exception Boom(code: Int)
-
+error Boom { msg: String }
+error Boom { code: Int }
 fn main() -> Int { return 0; }
 """
 	)
@@ -51,9 +49,8 @@ def test_exception_code_collision_reports_diagnostic(tmp_path: Path, monkeypatch
 	src = tmp_path / "collide.drift"
 	src.write_text(
 		"""
-exception Boom(msg: String)
-exception Zoom(code: Int)
-
+error Boom { msg: String }
+error Zoom { code: Int }
 fn main() -> Int { return 0; }
 """
 	)

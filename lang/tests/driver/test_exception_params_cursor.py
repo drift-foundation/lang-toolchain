@@ -94,8 +94,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception ScalarErr(order_id: Int, code: String, active: Bool)
-
+pub error ScalarErr { order_id: Int, code: String, active: Bool }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow ScalarErr(order_id = 42, code = "x", active = true);
@@ -138,8 +137,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception FloatErr(ratio: Float)
-
+pub error FloatErr { ratio: Float }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow FloatErr(ratio = 1.5);
@@ -183,8 +181,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception AbsentErr(present: Int)
-
+pub error AbsentErr { present: Int }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow AbsentErr(present = 1);
@@ -240,8 +237,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception DvErr(payload: DiagnosticValue)
-
+pub error DvErr { payload: DiagnosticValue }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow DvErr(payload = DiagnosticValue::Null());
@@ -282,8 +278,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception MixedErr(label: String, count: Int)
-
+pub error MixedErr { label: String, count: Int }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow MixedErr(label = "hello", count = 7);
@@ -323,8 +318,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception EmptyParams()
-
+pub error EmptyParams {}
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow EmptyParams();

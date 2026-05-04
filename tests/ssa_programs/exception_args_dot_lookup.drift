@@ -1,5 +1,4 @@
-exception MyError(a: String, b: String)
-
+error MyError { a: String, b: String }
 fn make_error() -> Void {
   throw MyError(a = "AA", b = "BBB")
 }

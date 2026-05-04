@@ -25,8 +25,7 @@ import std.core as core;
 // DRIFT_MEMCHECK=1 (string literals carry DRIFT_STRING_FLAG_STATIC and
 // their release is a no-op, masking the bug).
 
-pub exception BadReq(tag: String, fields: DiagnosticValue)
-
+pub error BadReq { tag: String, fields: DiagnosticValue }
 fn heap_key() nothrow -> String {
 	// Concat of two literals is forced through drift_string_concat which
 	// always allocates a fresh heap buffer — i.e. a non-static String.

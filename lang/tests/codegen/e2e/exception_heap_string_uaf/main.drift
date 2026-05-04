@@ -3,8 +3,7 @@ module repro;
 import std.core as core;
 import std.io as io;
 
-exception Info(msg: String, detail: String)
-
+error Info { msg: String, detail: String }
 fn _heap_string(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	var buf = io.buffer(n);

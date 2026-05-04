@@ -1,5 +1,4 @@
-exception MyError(msg: String)
-
+error MyError { msg: String }
 fn main() -> Int {
   try {
     throw MyError("boom")

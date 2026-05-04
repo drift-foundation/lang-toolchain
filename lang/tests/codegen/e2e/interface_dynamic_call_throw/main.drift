@@ -1,7 +1,6 @@
 module m;
 
-exception Boom()
-
+error Boom {}
 interface Thrower {
 	fn blow(self: &Self, x: Int) -> Int;
 }

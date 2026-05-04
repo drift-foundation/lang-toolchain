@@ -4,8 +4,7 @@ module m;
 // drift_error_add_local_dv clones them. A heap-backed captured String leaks
 // the DV retain without the fix.
 
-exception E(code: Int)
-
+error E { code: Int }
 fn mk() nothrow -> String {
 	return "cap" + "tured";
 }

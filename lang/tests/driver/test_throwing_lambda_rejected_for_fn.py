@@ -44,8 +44,7 @@ module m;
 
 import std.core as core;
 
-exception MyError(code: Int);
-
+error MyError { code: Int }
 fn takes_fn<F>(f: F) nothrow -> Int require F is core.Fn1<Int, Int> {
 	return f.call(1);
 }

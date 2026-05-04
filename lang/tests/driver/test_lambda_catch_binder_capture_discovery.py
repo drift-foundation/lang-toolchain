@@ -50,8 +50,7 @@ _PRE = """
 module main;
 import std.core as core;
 
-exception Bang()
-
+error Bang {}
 fn run_cb(cb: core.Callback0<Int>) nothrow -> Int {
 \treturn cb.call();
 }

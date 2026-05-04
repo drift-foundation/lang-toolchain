@@ -1203,3 +1203,92 @@ work/exception-diagnostics-context/slice5-spec.md      (this section)
 ```
 
 ABI 12 unchanged. Compiler version bump 0.31.54 → 0.31.55. Regression sweep: **1332 passed, 1 xfailed (the gated paren-rejection probe), 0 failed in 15:26.**
+
+---
+
+## 22. Test-Corpus Migration Sub-Slice — Landed 2026-05-03 (0.31.56)
+
+K authorized a dedicated sub-slice (after slice 2 prep) to mass-migrate `pub exception E(...)` → `pub error E { ... }` across `lang/tests/`, `examples/`, and top-level `tests/`, then enable the `E_PUB_EXCEPTION_REMOVED` rejection diagnostic in `_build_exception_catalog`. After this sub-slice, `pub exception` is fully rejected at the user-source boundary.
+
+### 22.1 Migration mechanics
+
+A one-shot Python script (`/tmp/migrate_pub_exception.py`, anchored line-regex):
+
+```python
+DECL_RE = re.compile(
+    r'^(?P<lead>\s*)(?P<pub>pub\s+)?exception\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<fields>[^)]*)\)\s*;?\s*$',
+    re.MULTILINE,
+)
+```
+
+Walks `.py` and `.drift` files; rewrites complete-line declarations of the form `(pub )?exception E(fields);` to `(pub )?error E { fields }`. Line anchoring avoids touching docstrings / comments / identifier-position uses of the word `exception`.
+
+### 22.2 Counts
+
+- `lang/tests/` (driver / codegen / stage2 / memcheck): **164 declarations across 100 files**.
+- `examples/` + top-level `tests/`: **28 declarations across 25 files**.
+- Total: **192 declarations migrated, 125 files touched**.
+
+### 22.3 Hand-fixes after script run
+
+The mechanical script needed two manual interventions:
+
+1. **`lang/tests/driver/test_driftc_package_v0.py:523`** — the migrated text landed inside an f-string template. Doubled the brace escapes: `pub error Boom { a: Int, b: String }` → `pub error Boom {{ a: Int, b: String }}` so the f-string emits single braces in the rendered Drift source.
+2. **`lang/tests/driver/test_implicit_callback_wrap.py:806`** — a Drift declaration constructed via Python string concatenation (`exception = "exception Boom(message: String);\n"`) that the line-anchored regex didn't catch. Rewrote to `"error Boom { message: String }\n"`.
+
+### 22.4 Negative test heredocs preserved
+
+`test_pub_exception_deprecated.py` deliberately keeps `pub exception E(message: String, offset: Int);` in its negative-rejection heredoc (the test asserts the rejection diagnostic fires). The migration script over-wrote it on first pass; restored manually before sweep.
+
+### 22.5 Catalog rejection enabled
+
+`lang/driftc/parser/__init__.py:_build_exception_catalog` now emits:
+
+```python
+if getattr(exc, "kind", "exception") == "exception":
+    diagnostics.append(_p_diag(
+        message=f"`pub exception {exc.name}(...)` is removed in 0.32.0 — use `pub error {exc.name} {{ ... }}` instead",
+        severity="error",
+        span=Span.from_loc(getattr(exc, "loc", None)),
+        code="E_PUB_EXCEPTION_REMOVED",
+    ))
+    continue
+```
+
+Docstring + in-loop comment updated to match (no longer "TODO-gated").
+
+### 22.6 Tests flipped
+
+- `test_pub_exception_deprecated.py::test_pub_exception_paren_form_rejected_with_migration_diag` — strict-xfail decorator removed; live and passing.
+- `test_pub_exception_deprecated.py::test_pub_exception_brace_form_rejected` — already live from slice 2 prep.
+
+Full file is now 2/2 green, no xfailed probes remain.
+
+### 22.7 Downstream-repo boundary
+
+K explicit instruction: **do not edit drift-web or any other downstream repo from this branch.** The `pub exception` rejection diagnostic now fires on drift-web sources too (3 .drift files at `/home/sl/src/drift-web/packages/{web-jwt,web-rest,or-throw-probe}/src/`), but drift-web migration belongs in its own branch after the release notes / spec are clear.
+
+`test_forward_nominal_reexport_instantiation.py::test_drift_web_add_route_pattern` (the test that conditionally compiles drift-web sources) was updated to skip when the checked-out drift-web tree still contains legacy `pub exception` decls. The check is narrow (regex matches DECLARATIONS only, not docstrings / comments / arbitrary text) — other failures in drift-web are NOT masked. When drift-web migrates downstream, the skip auto-disengages.
+
+### 22.8 Files touched (test-corpus sub-slice)
+
+```
+lang/versions.py                                                          (DRIFTC_VERSION 0.31.55 → 0.31.56)
+lang/driftc/parser/__init__.py                                            (rejection enabled; docstring + comment updated)
+lang/tests/driver/test_pub_exception_deprecated.py                        (xfail decorator removed; probe live)
+lang/tests/driver/test_forward_nominal_reexport_instantiation.py          (downstream-skip guard added)
+lang/tests/driver/test_driftc_package_v0.py                               (f-string brace escape hand-fix)
+lang/tests/driver/test_implicit_callback_wrap.py                          (Python-string Drift snippet hand-fix)
+lang/tests/driver/test_forward_nominal_reexport_instantiation.py:45       (svc.errors module-source string)
++ ~125 mass-migrated test files across:
+    lang/tests/driver/*.py
+    lang/tests/codegen/e2e/*/main.drift
+    lang/tests/stage2/test_*.py
+    lang/tests/memcheck/test_dv_string_borrowed_exception.py
+    examples/*.drift
+    tests/e2e/*/main.drift
+    tests/ssa_programs/*.drift
+work/exception-diagnostics-context/slice5-spec.md                         (this section)
+```
+
+ABI 12 unchanged. DRIFTC_VERSION 0.31.55 → **0.31.56**.

@@ -160,7 +160,9 @@ def test_borrowed_local_no_extra_release(tmp_path: Path) -> None:
 		"module main;\n"
 		"import std.core as core;\n"
 		"\n"
-		"exception Info(msg: String)\n"
+		"error Info {\n"
+		"\tmsg: String,\n"
+		"}\n"
 		"\n"
 		"fn do_throw(s: String) -> Int {\n"
 		"\tthrow Info(s);\n"
@@ -173,18 +175,32 @@ def test_borrowed_local_no_extra_release(tmp_path: Path) -> None:
 	)
 	ir = _compile_ir(tmp_path, source)
 	do_throw = _extract_func(ir, "do_throw")
-	# Count drift_string_release calls in do_throw.  The function has
-	# one string param (s) which gets exactly one scope-exit release.
-	# If ConstructDV(String) incorrectly adds another, there would be
-	# two releases for the same string → double-free.
-	releases = do_throw.count("drift_string_release(")
 	dv_calls = do_throw.count("drift_dv_string(")
-	# There should be at most one release per string local (scope-exit).
-	# The DV construction must NOT add an extra release for the borrowed arg.
+	# `Info(s)` projects the borrowed param `s` into a DiagnosticValue
+	# via `drift_dv_string`.  This call must still happen — the DV path
+	# is the legacy field-storage path until Slice 5 deletes DV.
 	assert dv_calls >= 1, "do_throw should call drift_dv_string for Info(s)"
-	# One release for param s at scope-exit is expected.
-	# More than one would indicate a double-release bug.
-	assert releases <= 1, (
-		f"do_throw has {releases} drift_string_release calls but only one "
-		f"string param — borrowed DV string arg should NOT get extra release"
+	# The original invariant on this test was `assert releases <= 1`,
+	# pinning that the legacy DV-only throw path borrowed `s` and emitted
+	# only the scope-exit release.  Slice 1 of the DV→JSON migration
+	# (release 0.31.48, commit 5c6132c7) added throw-side JSON-params
+	# projection: the throw lowering now emits a String-concat chain to
+	# build `params_json`, producing several intermediate-string releases
+	# inside the same function.  Total release count is no longer a
+	# meaningful invariant — concat temps are real and expected.
+	#
+	# What we still pin: the BORROWED param `s` is not double-released
+	# by DV construction.  An incorrect DV path that clones-and-also-
+	# releases the borrowed source would surface as multiple
+	# `drift_string_release(%DriftString %s)` calls.  Concat-temp
+	# releases use other SSA names (e.g. `%t7`, `%t13`) and are out of
+	# scope for this regression.
+	import re as _re
+	param_release_pat = _re.compile(r"drift_string_release\(%DriftString\s+%s\)")
+	param_releases = len(param_release_pat.findall(do_throw))
+	assert param_releases == 1, (
+		f"do_throw must release the borrowed param `s` exactly once "
+		f"(scope-exit), got {param_releases}.  An extra release would be "
+		f"a double-free bug from DV construction borrowing-then-releasing "
+		f"the source value."
 	)

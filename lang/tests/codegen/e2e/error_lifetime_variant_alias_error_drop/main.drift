@@ -2,8 +2,7 @@ module m;
 
 import std.core as core;
 
-exception Boom();
-
+error Boom {}
 type AliasErr = Error;
 
 variant Wrapper {

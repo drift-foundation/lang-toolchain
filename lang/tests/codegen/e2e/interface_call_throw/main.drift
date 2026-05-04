@@ -1,7 +1,6 @@
 module m_main;
 
-exception Boom()
-
+error Boom {}
 interface I {
 	fn call(self: &Self, v: Int) -> Int;
 }

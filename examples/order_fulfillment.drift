@@ -1,7 +1,6 @@
 import sys.console.out;
 
-exception InvalidOrder(order_id: Int64, code: String)
-
+error InvalidOrder { order_id: Int64, code: String }
 struct Order {
 	id: Int64,
 	sku: String,

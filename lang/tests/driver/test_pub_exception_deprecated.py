@@ -38,16 +38,6 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 
 
-_REJECTION_GATED_ON_TEST_MIGRATION = pytest.mark.xfail(
-	strict=True,
-	reason=(
-		"`E_PUB_EXCEPTION_REMOVED` rejection diagnostic is gated on the "
-		"test-corpus mass-migration sub-slice; parser temporarily accepts "
-		"paren-form `pub exception` per K's staged-migration guardrail."
-	),
-)
-
-
 def _compile(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[dict]]:
 	src = tmp_path / "main.drift"
 	src.write_text(source, encoding="utf-8")
@@ -107,14 +97,12 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ paren form rejection diagnostic ────────────────────
 
 
-@_REJECTION_GATED_ON_TEST_MIGRATION
 def test_pub_exception_paren_form_rejected_with_migration_diag(tmp_path, capsys):
-	"""Once the test-corpus migration sub-slice lands, paren-form
-	`pub exception E(...)` is rejected with diagnostic
+	"""Paren-form `pub exception E(...)` is rejected with diagnostic
 	`E_PUB_EXCEPTION_REMOVED` and a migration hint pointing at
-	`pub error E { ... }`.  Strict-xfail until the diagnostic
-	gate is lifted (TODO in
-	`lang/driftc/parser/__init__.py:_build_exception_catalog`)."""
+	`pub error E { ... }`.  Diagnostic emitted from
+	`lang/driftc/parser/__init__.py:_build_exception_catalog` after the
+	test-corpus migration sub-slice landed (2026-05-03)."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub exception ParseError(message: String, offset: Int);
 

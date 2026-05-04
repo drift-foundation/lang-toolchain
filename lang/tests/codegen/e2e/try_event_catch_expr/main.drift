@@ -1,8 +1,7 @@
 module m;
 
-exception MyErr(msg: String)
-exception Other()
-
+error MyErr { msg: String }
+error Other {}
 fn foo(flag: Int) -> Int {
 	if flag == 1 {
 		throw MyErr(msg = "one");

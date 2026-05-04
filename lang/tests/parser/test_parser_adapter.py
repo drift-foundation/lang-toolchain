@@ -141,8 +141,7 @@ def test_parse_throw_stmt(tmp_path: Path):
 		"""
 module m;
 
-exception Boom()
-
+error Boom {}
 fn main() -> Int {
     throw Boom();
 }

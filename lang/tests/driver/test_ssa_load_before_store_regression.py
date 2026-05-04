@@ -33,8 +33,7 @@ module main;
 
 import std.concurrent as conc;
 
-exception Oops()
-
+error Oops {}
 struct Stream { v: Int }
 
 fn accept() nothrow -> Stream { return Stream(v = 1); }

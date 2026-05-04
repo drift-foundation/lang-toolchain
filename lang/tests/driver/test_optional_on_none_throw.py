@@ -43,8 +43,7 @@ module m_main;
 
 import std.core as core;
 
-exception MyErr()
-
+error MyErr {}
 fn boom() -> Int { throw MyErr(); }
 
 fn run() -> Int {

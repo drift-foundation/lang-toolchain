@@ -53,8 +53,7 @@ def test_missing_semicolon_after_return_try_catch_reports_error(
 		"""
 module main;
 
-	exception Boom()
-
+	error Boom {}
 	fn foo() -> Int { throw Boom(); }
 
 fn main() nothrow -> Int {
@@ -76,7 +75,7 @@ def test_value_block_allows_trailing_expr_without_semicolon(
 		"""
 module main;
 
-exception Boom()
+error Boom {}
 import std.console as console;
 
 fn foo() -> Int { throw Boom(); }

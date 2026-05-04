@@ -108,8 +108,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception SimpleErr(tag: String)
-
+pub error SimpleErr { tag: String }
 fn _run() nothrow -> String {
 \ttry {
 \t\tthrow SimpleErr(tag = "x");
@@ -146,8 +145,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception ParseFail(tag: String)
-
+pub error ParseFail { tag: String }
 fn _inner() throws -> Int {
 \tval ^record_id: String as "record_id" = "rec-42";
 \tthrow ParseFail(tag = "fail");
@@ -201,8 +199,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception NestedErr(tag: String)
-
+pub error NestedErr { tag: String }
 fn _innermost() throws -> Int {
 \tval ^level: String as "level" = "innermost";
 \tthrow NestedErr(tag = "boom");
@@ -265,8 +262,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception RecurErr(tag: String)
-
+pub error RecurErr { tag: String }
 fn _recur(depth: Int) throws -> Int {
 \tval ^depth_val: Int as "depth" = depth;
 \tif depth == 0 {
@@ -338,8 +334,7 @@ module main;
 import std.core as core;
 import std.console as console;
 
-pub exception Boom(tag: String)
-
+pub error Boom { tag: String }
 fn _inner() throws -> Int {
 \tthrow Boom(tag = "x");
 }

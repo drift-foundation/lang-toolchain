@@ -2,8 +2,7 @@ module m;
 
 import std.console as console;
 
-exception Boom()
-
+error Boom {}
 fn foo() -> Int {
 	throw Boom();
 }

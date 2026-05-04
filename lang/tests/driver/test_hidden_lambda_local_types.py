@@ -14,8 +14,7 @@ def test_hidden_lambda_local_types_for_try_temps(tmp_path: Path) -> None:
 
 		import std.concurrent as conc;
 
-		exception Oops()
-
+		error Oops {}
 		struct Stream { v: Int }
 
 		fn accept() nothrow -> Stream { return Stream(v = 1); }

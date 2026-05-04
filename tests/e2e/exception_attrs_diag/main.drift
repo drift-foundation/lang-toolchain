@@ -1,7 +1,6 @@
 import std.console.out;
 
-exception SqlErr(code: Int, msg: String)
-
+error SqlErr { code: Int, msg: String }
 fn raise_sql(code: Int) -> Void {
     val code_val = code
     throw SqlErr(code = code_val, msg = "bad")

@@ -35,8 +35,7 @@ def test_generic_throw_exception_string_field_compiles(tmp_path: Path, capsys: p
 		"""
 module main;
 
-exception E(tag: String)
-
+error E { tag: String }
 fn fail<T>(tag: String) -> Int {
 	throw E(tag = tag);
 }
@@ -62,8 +61,7 @@ def test_generic_throw_exception_string_field_after_optional_ref_match_compiles(
 		"""
 module main;
 
-exception E(tag: String)
-
+error E { tag: String }
 fn get_opt<T>() nothrow -> Optional<&T> {
 	return Optional<&T>::None();
 }

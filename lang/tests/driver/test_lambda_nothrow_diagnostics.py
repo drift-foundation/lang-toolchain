@@ -37,8 +37,7 @@ def test_lambda_declared_nothrow_but_throws_reports_diag(
 	source = """
 module m_main;
 
-exception Boom()
-
+error Boom {}
 fn main() nothrow -> Int{
 	val f: Fn() nothrow -> Int = | | nothrow => { throw Boom(); };
 	return 0;
@@ -61,8 +60,7 @@ def test_lambda_can_throw_rejected_for_nothrow_param(
 	source = """
 module m_main;
 
-exception Boom()
-
+error Boom {}
 fn takes(f: Fn() nothrow -> Int) nothrow -> Int {
 	return f();
 }

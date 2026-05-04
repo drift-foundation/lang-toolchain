@@ -1,5 +1,4 @@
-exception MyErr()
-
+error MyErr {}
 pub fn main() nothrow -> Int {
 	val o: Optional<Int> = Optional::None();
 	val v = try o.on_none(| | => { throw MyErr(); }) catch MyErr(_) { 7 } catch { 9 };

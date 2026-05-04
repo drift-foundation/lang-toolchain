@@ -1,5 +1,4 @@
-exception ReqErr(a: String, b: String)
-
+error ReqErr { a: String, b: String }
 fn make_error() -> Void {
   throw ReqErr(a = "aa", b = "bb")
 }

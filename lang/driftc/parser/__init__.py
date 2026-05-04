@@ -1188,18 +1188,12 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 
 	Slice 5 hard-break direction (K, 2026-05-03): `pub exception` /
 	`exception` user-facing syntax is REMOVED in favor of `pub error` /
-	`error`.  Stdlib was migrated to `pub error` in slice 2 prep, so this
-	catalog no longer needs a stdlib exemption.
-
-	**Current state — rejection NOT yet enabled.**  The user-source
-	rejection diagnostic `E_PUB_EXCEPTION_REMOVED` is gated on the
-	test-corpus mass-migration sub-slice (101 driver / codegen / stage2
-	test files use `pub exception` in heredocs and must migrate first).
-	Until that sub-slice lands, the parser temporarily accepts paren-form
-	`pub exception` per K's explicit "Parser may temporarily still parse
-	legacy exception internally only if needed for staged migration"
-	guardrail.  See the TODO marker in the loop body for the rejection
-	site.
+	`error`.  Stdlib was migrated to `pub error` in slice 2 prep; the
+	test corpus was mass-migrated in the test-corpus sub-slice.  This
+	catalog now REJECTS any kind="exception" entry with
+	`E_PUB_EXCEPTION_REMOVED` and a migration hint.  The grammar still
+	parses paren-form internally so the rejection diagnostic can point
+	at a clean migration target.
 	"""
 	catalog: dict[str, int] = {}
 	payload_seen: dict[int, str] = {}
@@ -1211,17 +1205,18 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 			diagnostics.append(_diagnostic(f"duplicate exception '{exc.name}'", getattr(exc, "loc", None)))
 			continue
 		seen_names.add(exc.name)
-		# Slice 5 hard-break direction (K, 2026-05-03): `pub exception` /
-		# `exception` user-facing syntax is REMOVED in 0.32.0 in favor of
-		# `pub error` / `error`.  Stdlib was migrated in slice 2; the
-		# user-source rejection diagnostic is gated on the mass-test-migration
-		# sub-slice (101 driver/codegen test files use `pub exception` in
-		# heredocs and need migration before the rejection can fire).  Until
-		# then the parser accepts `pub exception` as a legacy form per K's
-		# explicit "Parser may temporarily still parse legacy exception
-		# internally only if needed for staged migration" guardrail.
-		# TODO(slice5/test-migration): emit `E_PUB_EXCEPTION_REMOVED` here
-		# once the test corpus is on `pub error`.
+		# Slice 5 hard-break (K, 2026-05-03): reject `pub exception` /
+		# `exception` legacy declarations at the user-source boundary.
+		# Stdlib + test corpus both migrated to `pub error` before this
+		# rejection landed; the diagnostic now fires unconditionally.
+		if getattr(exc, "kind", "exception") == "exception":
+			diagnostics.append(_p_diag(
+				message=f"`pub exception {exc.name}(...)` is removed in 0.32.0 — use `pub error {exc.name} {{ ... }}` instead",
+				severity="error",
+				span=Span.from_loc(getattr(exc, "loc", None)),
+				code="E_PUB_EXCEPTION_REMOVED",
+			))
+			continue
 		fqn = f"{module_name}:{exc.name}" if module_name else exc.name
 		# Slice 5: `pub error E(0x1234) { ... }` pins an explicit event_code.
 		# When set, use it directly instead of the FQN-derived hash.  The

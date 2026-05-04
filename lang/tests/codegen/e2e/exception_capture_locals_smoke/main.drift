@@ -1,7 +1,6 @@
 module m;
 
-exception E(code: Int)
-
+error E { code: Int }
 fn fail(x: Int) -> Int {
 	val ^input: Int = x;
 	val ^note: String as "pipeline.note" = "captured";

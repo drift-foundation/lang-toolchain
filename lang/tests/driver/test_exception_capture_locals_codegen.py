@@ -27,8 +27,7 @@ def test_throw_emits_captured_locals_into_error_frames(tmp_path: Path) -> None:
 		"""
 module main;
 
-exception E(code: Int)
-
+error E { code: Int }
 fn fail() -> Int {
 	val ^count: Int as "step.count" = 7;
 	val ^msg: String = "boom";

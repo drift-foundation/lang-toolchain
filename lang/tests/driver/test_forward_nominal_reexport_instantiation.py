@@ -42,7 +42,7 @@ def test_pub_type_alias_in_throwing_function_resolves(tmp_path: Path) -> None:
 	)
 	_write_file(
 		tmp_path / "svc" / "errors" / "errors.drift",
-		"module svc.errors;\nexport { SvcError };\npub exception SvcError(msg: String);\n",
+		"module svc.errors;\nexport { SvcError };\npub error SvcError { msg: String }\n",
 	)
 	_write_file(
 		tmp_path / "svc" / "api" / "api.drift",
@@ -96,6 +96,25 @@ def test_drift_web_add_route_pattern(tmp_path: Path) -> None:
 	dw = Path("/home/sl/src/drift-web")
 	if not (dw / "packages" / "web-rest" / "src" / "lib.drift").exists():
 		pytest.skip("drift-web sources not available")
+
+	# Slice 5 hard-break (2026-05-03): `pub exception` is rejected in user
+	# source.  Skip this test if the checked-out drift-web sources still use
+	# the legacy form — drift-web migration to `pub error` belongs in a
+	# downstream branch, not this repo.  When drift-web has no remaining
+	# `pub exception` decls the test runs normally.  Other failures are NOT
+	# masked by this check (the grep is narrow: declarations only).
+	import re
+	_pub_exception_decl_re = re.compile(r"^\s*(?:pub\s+)?exception\s+\w+\s*\(", re.MULTILINE)
+	for src in (dw / "packages").rglob("*.drift"):
+		try:
+			text = src.read_text(encoding="utf-8")
+		except OSError:
+			continue
+		if _pub_exception_decl_re.search(text):
+			pytest.skip(
+				f"drift-web has not migrated `pub exception` → `pub error` for Slice 5 / 0.32 "
+				f"(legacy decl found in {src.relative_to(dw)})"
+			)
 
 	_write_file(
 		tmp_path / "test.drift",

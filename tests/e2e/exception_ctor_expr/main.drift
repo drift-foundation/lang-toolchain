@@ -1,7 +1,6 @@
 import std.console.out;
 
-exception InvalidPayload(payload: String)
-
+error InvalidPayload { payload: String }
 fn ingest(line: String) -> Int {
   if line == "" {
     throw InvalidPayload(payload = line)

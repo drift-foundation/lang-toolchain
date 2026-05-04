@@ -1,5 +1,4 @@
-exception E(a: String)
-
+error E { a: String }
 fn main() -> Int {
   throw E(a = "x")
 }

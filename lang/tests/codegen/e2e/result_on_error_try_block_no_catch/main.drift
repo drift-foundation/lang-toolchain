@@ -2,8 +2,7 @@ module m;
 
 import std.core as core;
 
-exception MyError(code: Int);
-
+error MyError { code: Int }
 fn ok() -> core.Result<Int, Int> {
 	return core.Result::Ok(7);
 }

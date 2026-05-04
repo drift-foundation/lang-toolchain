@@ -1,7 +1,6 @@
 import std.console.out;
 
-exception OptErr(a: String, b: String)
-
+error OptErr { a: String, b: String }
 fn raise_opt() -> Void {
     throw OptErr(a = "alpha", b = "beta")
 }

@@ -1,7 +1,6 @@
 module main;
 
-exception Boom()
-
+error Boom {}
 fn may_fail(flag: Int) -> Int {
 	if flag == 0 {
 		return 41;
