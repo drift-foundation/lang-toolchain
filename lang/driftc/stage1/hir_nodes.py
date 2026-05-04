@@ -585,6 +585,15 @@ class HField(HExpr):
 	"""Field access: subject.name"""
 	subject: HExpr
 	name: str
+	# Slice 5 (slice 3 of impl): when set, this HField is a typed catch
+	# binder field projection — `subject` resolves to a typed catch
+	# binder (Error envelope) and `name` is a declared schema field of
+	# `typed_proj_event_fqn`'s `pub error`.  The HIR→MIR lowering
+	# emits a compiler-owned typed projection from the envelope's
+	# params JSON (no public-API stringing through ErrorParamsView).
+	# Set by type_checker.py when the typed-catch HField branch
+	# fires; read by stage2/hir_to_mir.py at HField lowering.
+	typed_proj_event_fqn: Optional[str] = None
 
 
 @dataclass

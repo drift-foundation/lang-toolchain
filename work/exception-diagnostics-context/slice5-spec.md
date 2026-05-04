@@ -1404,3 +1404,176 @@ work/exception-diagnostics-context/slice5-spec.md    (this section)
 ```
 
 ABI 12 unchanged.
+
+---
+
+## 24. Implementation Slice 3 first pass — Landed 2026-05-03 (0.31.58)
+
+K's narrow scope: typed catch binder materialization aligned with the clarified model — `pub error` values are encoded into the generic Error envelope at throw time; after throw, only the envelope exists; the typed catch binder IS the envelope plus typed schema projection (no native `ParseError` object recovery).
+
+### 24.1 Model (K-clarified, 2026-05-03)
+
+- **Before throw**: a `pub error E { ... }` value is a normal value type (Path A struct).
+- **At throw**: the compiler encodes fields into the envelope's params JSON and constructs the generic Error.
+- **During propagation / catch**: only the Error envelope exists. There is no native `pub error` object identity or lifetime after throw.
+- **Typed catch dispatch**: event identity match on the envelope.
+- **Typed catch binder**: the Error envelope, viewed through the matched event's schema. Storage type is `Error`; no second native struct local.
+- **`e.encode_compact()`, `e.params`, `e.context`**: direct envelope APIs, dispatched on the same Error handle.
+- **`e.<declared_field>`**: typed projection from the envelope's params, with the type taken from the Path-A co-registered struct's field declaration.
+
+### 24.2 What landed
+
+**Type-checker** (`lang/driftc/type_checker.py`):
+- New `self._typed_catch_binders: dict[binding_id, event_fqn]` — populated in the catch arm processing when `arm.binder` is set AND `arm.event_fqn` is non-None.
+- HField on Error: when receiver is an `H.HVar` whose `binding_id` is a typed catch binder, route the field name:
+  - Existing Error envelope branches (`params`, `context`, `attrs`, `captures`) continue to fire first.
+  - Else: look up the Path-A co-registered struct for `event_fqn`, resolve `expr.name` against its declared fields, return the declared field type.
+  - Else: emit `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` — does NOT fall through to the permissive Unknown sentinel.
+- The previous permissive `return record_expr(expr, self._unknown)` fallback is reachable ONLY when the receiver is NOT a typed catch binder (legacy paren-form `pub exception` and other Error-typed values continue to use the existing path).
+
+### 24.3 HIR→MIR lowering — compiler-owned typed projection
+
+K's clarification: a checker-only proof is a boundary-contract violation. Once the type-checker accepts `e.offset` as `Int`, lowering MUST produce a runtime that reads the real value. This slice carries that meaning through.
+
+**HIR layer**: new field on `H.HField` — `typed_proj_event_fqn: Optional[str]`. Type-checker sets it when the typed-catch field-projection branch fires.
+
+**Stage 2 lowering** (`lang/driftc/stage2/hir_to_mir.py`): new `_lower_typed_catch_field_proj()` helper. When `_visit_expr_HField` encounters HField with `typed_proj_event_fqn` set on an Error subject, the helper:
+
+1. Looks up the field's declared type from the Path-A co-registered struct (`exception_kinds["error"]` discriminator + `type_table.struct_field`).
+2. Picks the appropriate compiler-owned helper based on the scalar type:
+   - `Int` → `core._typed_params_field_int`
+   - `Uint` → `core._typed_params_field_uint`
+   - `Bool` → `core._typed_params_field_bool`
+   - `Float` → `core._typed_params_field_float`
+   - `String` → `core._typed_params_field_string`
+3. Extracts `params_json` from the envelope via `M.ExcGetParamsJson` (existing slice 1 op, retained DriftString per ABI §2.3).
+4. Materializes both `params_json` and the field key into locals so they can be borrowed as `&String`.
+5. Emits `M.Call` to the helper.
+
+**Helpers** (`stdlib/std/core/core.drift`): five private free functions, each a thin wrapper over `_params_cursor_get` + a `match` on `JsonCursor` with a `default` arm that returns the type's default (`0` / `0u` / `0.0` / `""` / `false`).
+
+K's lowering guardrails (§24 model):
+- ✅ Compiler-owned behavior — missing key / wrong JSON type / malformed JSON all map to the type's default deterministically; no surprising Optional or Result threading.
+- ✅ No accidental dependency on `Optional.unwrap_or` method dispatch (helpers `match` on `JsonCursor` arms directly and return).
+- ✅ No public API stringing through `ErrorParamsView.get` (compiler emits direct calls into the private `_typed_params_field_<scalar>` helpers; reuses the internal `_params_cursor_get` parser per K's "may reuse internal cursor/parser helpers" carve-out).
+- ✅ Helpers are private (`fn`, not `pub fn`) — public callers cannot reach them; only the compiler emits calls.
+
+### 24.4 End-to-end proof
+
+`lang/tests/codegen/e2e/typed_catch_envelope_projection/`:
+
+```drift
+pub error ParseError {
+    offset: Int,
+    message: String,
+}
+
+fn risky() throws ParseError -> Int {
+    throw ParseError(offset = 42, message = "bad input");
+}
+
+fn main() nothrow -> Int {
+    try {
+        return risky();
+    } catch ParseError(e) {
+        val n: Int = e.offset;
+        val msg: String = e.message;
+        val envelope: String = e.encode_compact();
+        console.print(msg);
+        if envelope.byte_length() > 0 {
+            return n;
+        }
+        return 0;
+    }
+}
+```
+
+Expected: stdout `bad input`, exit code `42`. Validated by direct compile+run via source-tree driftc:
+
+```
+$ python3 -m lang.driftc --stdlib-root stdlib lang/tests/codegen/e2e/typed_catch_envelope_projection/main.drift -o /tmp/x
+$ /tmp/x; echo "exit=$?"
+bad inputexit=42
+```
+
+Both typed projections produced the real values; envelope method dispatch worked on the same binder.
+
+### 24.4.1 Lowering boundary invariant (K blocker, 2026-05-04 follow-up)
+
+K's pre-commit follow-up: even with the type-checker scope guards in §24.5, the lowering still had an unsafe fallback at the HField branch:
+
+```python
+result = self._lower_typed_catch_field_proj(...)
+if result is not None:
+    return result
+# fell through to default field lowering — boundary bug
+```
+
+If `_lower_typed_catch_field_proj` returned `None` for an annotated typed projection (e.g. due to a checker/lowering boundary mismatch), the HField branch silently fell through to the default field lowering, which would emit garbage at runtime.
+
+**Fix (this commit):** `_lower_typed_catch_field_proj` no longer returns `Optional[ValueId]`; it returns `ValueId` and raises `AssertionError` on every path that previously returned `None`. The HField branch asserts the result is non-None instead of falling through. Each former `return None` now points at the specific invariant violated:
+
+- `event_fqn` not in canonical `module:Name` shape → checker invariant violation.
+- Path-A co-registered struct missing → Path-A invariant violation.
+- Field absent from Path-A struct schema → checker invariant violation (would have been rejected via `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA`).
+- Declared field type not a supported scalar → checker should have rejected via `E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE`.
+- `std.core._typed_params_field_<scalar>` not loaded → build environment is broken.
+
+The lowering now treats any annotated typed projection as an inviolable invariant, never a "best effort then fall through" condition.
+
+### 24.5 Type-checker guards (K blockers, 2026-05-04)
+
+K's pre-commit review flagged that scalar-only support is fine for slice 3 first pass, BUT the checker must REJECT unsupported typed-catch field projections with a real diagnostic instead of silently letting the lowering fall through to garbage. Two guards added:
+
+**Unsupported field type** (`E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE`): when the typed-catch field projection branch fires and the declared field type is NOT one of the supported scalars (Int / Uint / Bool / Float / String), emit the diagnostic and DO NOT annotate `typed_proj_event_fqn`. The slice 3 lowering only handles scalars; non-scalar field types (collections, struct types, `pub error` types) are deferred. Closing the door at the checker prevents the "fall through to garbage" failure mode.
+
+**Aliased binder rejection** (`E_UNKNOWN_FIELD_ON_ERROR`): an Error value that's NOT a typed catch binder (e.g. `val ref = e; ref.offset` — the alias `ref` has its own `binding_id` not in `_typed_catch_binders`) used to fall through to the permissive Unknown sentinel and silently compile with wrong runtime behavior. The Error HField branch now emits a diagnostic for any unknown field name on Error values that are not the immediate catch binder. Slice 3 first-pass binder detection is `HVar`-only; aliasing is deferred follow-up but it now FAILS CLEARLY rather than compiling-and-lowering-wrong.
+
+### 24.6 Negative regressions
+
+| Probe | Asserts |
+|---|---|
+| `test_typed_catch_binder_unsupported_field_type_rejected` | `pub error Bad { xs: Array<Int> }` + `e.xs` access → `E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE` |
+| `test_typed_catch_binder_alias_field_access_rejected` | `val ref = e; ref.offset` → `E_UNKNOWN_FIELD_ON_ERROR` |
+| `test_typed_catch_binder_unknown_field_rejected` | `e.not_a_declared_field` (already from earlier in slice 3) → `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` |
+
+### 24.7 What's deliberately not in this slice
+
+- Manual `Diagnostic` override → typed-binder rejection (slice 4+).
+- Diagnostic trait shape (`to_json_text`).
+- `or_throw` strict enforcement.
+- Collection / struct / nested-error field projection — type-checker REJECTS these now (§24.5); follow-up slice extends scalar lowering to wider types.
+- Aliased binder access (`val ref = e; ref.offset`) — type-checker REJECTS (§24.5); follow-up slice can widen detection to track alias propagation.
+
+### 24.4 Tests touched
+
+- **REPLACED** `test_typed_catch_binder_is_struct_xfail` (slice 2B; was strict-xfailed for a model that turned out to be wrong) with `test_typed_catch_binder_same_envelope_typed_projection` (live). Asserts the K-stated proof: same binder, both `e.offset` (typed projection) and `e.encode_compact()` (envelope method).
+- **NEW** `test_typed_catch_binder_unknown_field_rejected` (live). Asserts `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` for a field name that's neither in the schema nor on Error. Closes the false-positive route from slice 2B.
+- **REWRITTEN** module docstring of `test_pub_error_throw_catch.py` — drops the false-positive `e.offset` claim, drops the deferred-probe reference, adds the slice-3 model summary + history note about the slice-2B course correction.
+- **TIDIED** probe-1 docstring — drops the stale "see deferred probe" reference; describes the probe scope as coverage-only.
+
+### 24.8 Files touched
+
+```
+lang/versions.py                                                                  (DRIFTC_VERSION 0.31.57 → 0.31.58)
+lang/driftc/stage1/hir_nodes.py                                                   (HField.typed_proj_event_fqn metadata field)
+lang/driftc/type_checker.py                                                       (_typed_catch_binders + HField routing + annotation + E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA)
+lang/driftc/stage2/hir_to_mir.py                                                  (_lower_typed_catch_field_proj + HField branch)
+stdlib/std/core/core.drift                                                        (5 private compiler-owned scalar projection helpers)
+lang/tests/driver/test_pub_error_throw_catch.py                                   (replace deferred probe with same-binder proof; add negative probe; rewrite module + probe-1 docstrings)
+lang/tests/codegen/e2e/typed_catch_envelope_projection/main.drift                 (NEW e2e — runtime correctness proof)
+lang/tests/codegen/e2e/typed_catch_envelope_projection/expected.json              (NEW)
+work/exception-diagnostics-context/slice5-spec.md                                 (this section)
+```
+
+ABI 12 unchanged.
+
+### 24.9 Verification target
+
+- `test_pub_error_throw_catch.py::test_typed_catch_binder_same_envelope_typed_projection` flips (live).
+- `test_pub_error_throw_catch.py::test_typed_catch_binder_unknown_field_rejected` flips (live).
+- Existing envelope probes (`test_exception_envelope_pub_error.py::test_encode_compact_over_pub_error` + `test_params_and_context_segment_access`) continue to pass.
+- New e2e `typed_catch_envelope_projection` proves runtime correctness via direct source-tree driftc + `./out` invocation.
+- Driver sweep stays clean.
+
+Slice 5 probe count after this slice: **22 of 45** flipped (was 18 in slice 2B).

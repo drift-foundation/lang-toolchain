@@ -265,6 +265,11 @@ class TypeChecker:
 		self._unknown = self.type_table.ensure_unknown()
 		self._thunk_specs: dict[tuple[ThunkKind, FunctionId, tuple[TypeId, ...], TypeId], ThunkSpec] = {}
 		self._lambda_fn_specs: dict[FunctionId, LambdaFnSpec] = {}
+		# Slice 5: typed catch binder → matched event_fqn.  Populated when
+		# a `catch <fqn>(<binder>) { ... }` arm is type-checked.  Used by
+		# HField on Error to route between schema field projection and
+		# Error envelope methods.  See spec §24 (slice 3 of impl).
+		self._typed_catch_binders: dict[int, str] = {}
 		# Binding ids (params and locals) share a single id-space.
 		self._next_binding_id: int = 1
 		self._defaulted_phase_count: int = 0
@@ -8621,6 +8626,121 @@ class TypeChecker:
 					if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
 						_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
 					return record_expr(expr, field_ty)
+				# Slice 5 (slice 3 of impl): typed catch binder field projection.
+				# When the receiver is a typed catch binder (registered in
+				# `self._typed_catch_binders` by the catch arm) and inner_def
+				# is Error, route the field access via the matched event's
+				# schema:
+				#   * declared field name → typed projection from envelope
+				#     params (type read from the Path-A co-registered struct)
+				#   * unknown field → real diagnostic, not Unknown
+				# The binder remains storage-typed Error (no separate native
+				# struct local).  Per K's clarified model (spec §24): there
+				# is no native exception object after throw — the binder IS
+				# the envelope plus typed schema projection.
+				if inner_def.kind is TypeKind.ERROR:
+					bid = expr.subject.binding_id if isinstance(expr.subject, H.HVar) else None
+					if bid is not None and bid in self._typed_catch_binders:
+						event_fqn = self._typed_catch_binders[bid]
+						struct_id = None
+						if ":" in event_fqn:
+							mod_id, type_name = event_fqn.split(":", 1)
+							struct_id = self.type_table.get_nominal(
+								kind=TypeKind.STRUCT,
+								module_id=mod_id,
+								name=type_name,
+							)
+						if struct_id is not None:
+							field_info = _resolve_struct_field_type(struct_id, expr.name)
+							if field_info is not None:
+								_, field_ty = field_info
+								# Slice 3 first-pass scope cut: only scalar
+								# field types (Int/Uint/Bool/Float/String) can
+								# be typed-projected this slice.  Anything
+								# else MUST be rejected at type-check rather
+								# than annotated and let through to a
+								# fall-through-to-garbage lowering.  K's
+								# blocker (2026-05-04): "the checker must
+								# reject unsupported typed-catch field
+								# projections with a real diagnostic instead
+								# of accepting them and letting lowering fall
+								# through".
+								supported_scalars = (
+									self._int,
+									self._uint,
+									self._bool,
+									self._float,
+									self._string,
+								)
+								if field_ty not in supported_scalars:
+									pretty = self._pretty_type_name(field_ty, current_module=current_module_name)
+									diagnostics.append(
+										_tc_diag(
+											message=(
+												f"typed catch projection for field '{expr.name}' "
+												f"of `pub error` type '{event_fqn}' is unsupported "
+												f"in this release (field type '{pretty}' is not one "
+												f"of the supported scalars: Int / Uint / Bool / "
+												f"Float / String).  Collection / nested-error / "
+												f"struct field projection is a follow-up"
+											),
+											severity="error",
+											code="E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE",
+											span=getattr(expr, "loc", Span()),
+										)
+									)
+									# Do NOT annotate typed_proj_event_fqn —
+									# the lowering would otherwise return
+									# None and silently fall through.
+									return record_expr(expr, self._unknown)
+								# Annotate so HIR→MIR lowering knows to emit
+								# a compiler-owned typed projection from the
+								# envelope's params JSON (compile-only proof
+								# is not enough — see spec §24).
+								expr.typed_proj_event_fqn = event_fqn
+								return record_expr(expr, field_ty)
+						# Field is NOT a declared schema field and was not
+						# matched by the earlier Error envelope branches
+						# (params/context/attrs/captures).  Reject with a
+						# real diagnostic rather than falling through to
+						# the permissive Unknown sentinel.
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									f"field '{expr.name}' is not declared on `pub error` "
+									f"type '{event_fqn}' and is not an Error envelope "
+									f"method/field"
+								),
+								severity="error",
+								code="E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA",
+								span=getattr(expr, "loc", Span()),
+							)
+						)
+						return record_expr(expr, self._unknown)
+					# Slice 3 alias guard (K, 2026-05-04): an Error value
+					# that is NOT a typed catch binder (e.g. an alias like
+					# `val ref = e; ref.offset`) used to fall through to
+					# the permissive Unknown sentinel and silently compile
+					# with wrong runtime behavior.  Reject with a diagnostic
+					# so aliased uses fail clearly rather than lowering to
+					# garbage.  The binder itself (`e.field`) remains the
+					# only supported shape for typed-catch field projection
+					# in this slice; aliasing is deferred follow-up.
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								f"unknown field '{expr.name}' on Error value.  "
+								f"Typed catch field projection is only supported on "
+								f"the immediate catch binder in this release; aliases "
+								f"(`val ref = e; ref.{expr.name}`) are deferred — "
+								f"access the field directly on the catch binder"
+							),
+							severity="error",
+							code="E_UNKNOWN_FIELD_ON_ERROR",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+					return record_expr(expr, self._unknown)
 				return record_expr(expr, self._unknown)
 
 			if hasattr(H, "HPlaceExpr") and isinstance(expr, getattr(H, "HPlaceExpr")):
@@ -10216,17 +10336,22 @@ class TypeChecker:
 					scope_bindings.append(dict())
 					try:
 						if arm.binder:
-							# Slice 5: catch binder typing for `pub error` was
-							# attempted in slice 2B but reverted — binding `e`
-							# to the parallel struct (Path A) gives field access
-							# (`e.message`) but breaks the existing envelope
-							# surface (`e.encode_compact()`, `e.params`,
-							# `e.context`) since those live on Error.  A unified
-							# binder type that satisfies both requires either
-							# struct method injection or HField fallback lookup
-							# — both are slice 3+ work (deferred alongside
-							# synthesis).  For now `e: Error` as before; the
-							# typed-binder field-access tests stay xfailed.
+							# Slice 5 (slice 3 of impl): typed catch binders.
+							# Per K's clarified model (2026-05-03) — `pub error`
+							# values are encoded into the generic Error envelope
+							# at throw time; the binder IS the Error envelope,
+							# not a re-materialized struct.  For typed catch
+							# arms (arm.event_fqn set) we register the binder's
+							# binding_id alongside the matched event_fqn so
+							# HField on the binder can route between:
+							#   * declared-schema field names → typed projection
+							#     from the Error envelope's params JSON
+							#   * Error envelope methods (encode_compact, params,
+							#     context, …) → existing dispatch
+							#   * anything else → diagnostic (no permissive
+							#     fallback to Unknown)
+							# The binder's storage type stays `Error` (no
+							# separate native struct local).
 							bid = self._alloc_local_id()
 							locals.append(bid)
 							scope_env[-1][arm.binder] = self._error
@@ -10235,6 +10360,8 @@ class TypeChecker:
 							binding_names[bid] = arm.binder
 							binding_mutable[bid] = False
 							binding_place_kind[bid] = PlaceKind.LOCAL
+							if arm.event_fqn is not None:
+								self._typed_catch_binders[bid] = arm.event_fqn
 						type_block(arm.block)
 					finally:
 						scope_env.pop()

@@ -1,0 +1,6 @@
+{
+  "description": "Slice 5 (slice 3 of impl) e2e: typed catch binder = Error envelope + schema projection. Same binder uses e.offset/e.message (typed projection from params JSON) and e.encode_compact() (envelope method). Validates runtime correctness — exit 42 means e.offset typed-projected the real value and the envelope.byte_length() check on encode_compact() saw a non-empty envelope.",
+  "exit_code": 42,
+  "stderr": "",
+  "stdout": "bad input"
+}

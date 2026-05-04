@@ -1,0 +1,44 @@
+// Slice 5 (slice 3 of impl) e2e: typed catch binder is the Error
+// envelope viewed through the matched event schema.  The same
+// binder supports BOTH typed schema field projection (`e.offset`,
+// `e.message`) AND envelope methods (`e.encode_compact()`).
+//
+// At throw time, the `pub error ParseError` value is encoded into
+// the generic Error envelope's params JSON.  At catch time, the
+// binder IS that envelope; field access lowers to a compiler-owned
+// typed projection from params (deterministic missing/wrong-type
+// behavior); envelope methods dispatch on the same Error.
+//
+// This e2e proves runtime correctness — `e.offset` reads the real
+// 42, `e.message` reads "bad input", and `e.encode_compact()`
+// returns a non-empty envelope string.
+module main;
+
+import std.console as console;
+
+pub error ParseError {
+	offset: Int,
+	message: String,
+}
+
+fn risky() throws ParseError -> Int {
+	throw ParseError(offset = 42, message = "bad input");
+}
+
+fn main() nothrow -> Int {
+	try {
+		return risky();
+	} catch ParseError(e) {
+		val n: Int = e.offset;
+		val msg: String = e.message;
+		val envelope: String = e.encode_compact();
+		console.print(msg);
+		// Return the typed-projected offset so the exit code observes
+		// the runtime value of the projection (compile-only would not
+		// catch a wrong-value bug here).
+		if envelope.byte_length() > 0 {
+			return n;
+		}
+		return 0;
+	}
+}

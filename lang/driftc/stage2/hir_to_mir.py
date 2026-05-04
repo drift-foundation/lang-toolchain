@@ -2844,6 +2844,36 @@ class HIRToMIR:
 			raise NotImplementedError(
 				"captures view must be indexed: Error.captures[\"frame\"][\"key\"]"
 			)
+		# Slice 5 (slice 3 of impl): typed catch binder field projection.
+		# When the type-checker recognized this HField as a typed
+		# projection on a typed catch binder (Error envelope viewed
+		# through the matched event's schema), it set
+		# `expr.typed_proj_event_fqn`.  Lower as a compiler-owned
+		# call to the appropriate `_typed_params_field_<scalar>`
+		# helper in std.core — bypasses the public ErrorParamsView /
+		# JsonCursor surface so the typed projection's behavior
+		# (deterministic missing-key / wrong-type → default) is
+		# fixed by spec, not by user-visible cursor ergonomics.
+		typed_proj_fqn = getattr(expr, "typed_proj_event_fqn", None)
+		if typed_proj_fqn is not None and sub_def.kind is TypeKind.ERROR:
+			# Invariant: the type-checker only sets `typed_proj_event_fqn`
+			# after validating the binder + schema field + supported scalar
+			# type.  Lowering returning None here means a checker/lowering
+			# boundary mismatch — fail loud, do NOT fall through to the
+			# default lowering (which would emit garbage at runtime).
+			result = self._lower_typed_catch_field_proj(
+				envelope=subject,
+				event_fqn=typed_proj_fqn,
+				field_name=expr.name,
+			)
+			if result is None:
+				raise AssertionError(
+					f"typed_proj_event_fqn={typed_proj_fqn!r} field={expr.name!r}: "
+					f"_lower_typed_catch_field_proj returned None for an annotated "
+					f"projection — checker/lowering boundary mismatch (slice 3 "
+					f"first pass invariant)"
+				)
+			return result
 		if sub_def.kind is TypeKind.FORWARD_NOMINAL:
 			resolved_ty: TypeId | None = None
 			alias_def = self._type_table.lookup_type_alias(module_id=sub_def.module_id, name=sub_def.name)
@@ -5086,6 +5116,143 @@ class HIRToMIR:
 		self.b.emit(M.StringConcat(dest=final, left=result, right=close_lit))
 		self._local_types[final] = self._string_type
 		return final
+
+	def _lower_typed_catch_field_proj(
+		self,
+		*,
+		envelope: M.ValueId,
+		event_fqn: str,
+		field_name: str,
+	) -> M.ValueId:
+		"""Slice 5 (slice 3 of impl): lower a typed catch binder field
+		access (`e.<declared_field>`) as a compiler-owned typed
+		projection from the Error envelope's params JSON.
+
+		**Invariant** (K, 2026-05-04): this helper is only called by
+		the HField branch when the type-checker has set
+		`expr.typed_proj_event_fqn`, which only happens AFTER the
+		checker validated that the binder is a typed catch binder,
+		the field is declared on the matched event's schema, AND the
+		declared field type is one of the supported scalars
+		(Int/Uint/Bool/Float/String).  Every path below that would
+		otherwise return None is therefore a checker/lowering
+		boundary mismatch and aborts compilation — there is NO
+		fall-through to default field lowering, since that route
+		would emit garbage at runtime for an annotated typed
+		projection.  Non-scalar field types are rejected at the
+		checker via `E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE` before
+		annotation; aliased binders are rejected via
+		`E_UNKNOWN_FIELD_ON_ERROR`.
+
+		Steps:
+		  1. Look up the field's declared type from the Path-A
+		     co-registered struct.
+		  2. Pick the appropriate `core._typed_params_field_<scalar>`
+		     helper.
+		  3. Extract `params_json` from the envelope via
+		     `M.ExcGetParamsJson` (returns retained DriftString).
+		  4. Materialize the params text + key into locals so we can
+		     borrow them as `&String` for the helper call.
+		  5. Emit `M.Call`.
+
+		Behavior on missing-key / wrong-type / malformed JSON is
+		deterministic (default value for the scalar type) — see the
+		helpers in `stdlib/std/core/core.drift`.
+		"""
+		# 1. Look up the field's declared type from the Path-A co-
+		# registered struct (slice 1 / Path A).
+		if ":" not in event_fqn:
+			raise AssertionError(
+				f"typed projection event_fqn {event_fqn!r} is not in canonical "
+				f"`module:Name` shape — checker invariant violation"
+			)
+		mod_id, type_name = event_fqn.split(":", 1)
+		struct_id = self._type_table.get_nominal(
+			kind=TypeKind.STRUCT,
+			module_id=mod_id,
+			name=type_name,
+		)
+		if struct_id is None:
+			raise AssertionError(
+				f"typed projection {event_fqn!r}: Path-A co-registered struct "
+				f"missing from type table — Path-A invariant violation"
+			)
+		field_info = self._type_table.struct_field(struct_id, field_name)
+		if field_info is None:
+			raise AssertionError(
+				f"typed projection {event_fqn}.{field_name}: field absent from "
+				f"Path-A struct schema — checker invariant violation"
+			)
+		_field_idx, field_ty = field_info
+
+		# 2. Pick the helper based on the declared field type.
+		#    Slice 3 first-pass scope: scalars only.  The checker
+		#    rejects non-scalar field types upstream with
+		#    E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE, so reaching here
+		#    with a non-scalar type is a boundary mismatch.
+		int_ty = self._type_table.ensure_int()
+		uint_ty = self._type_table.ensure_uint()
+		bool_ty = self._type_table.ensure_bool()
+		float_ty = self._type_table.ensure_float()
+		string_ty = self._type_table.ensure_string()
+		if field_ty == int_ty:
+			helper_name = "_typed_params_field_int"
+		elif field_ty == uint_ty:
+			helper_name = "_typed_params_field_uint"
+		elif field_ty == bool_ty:
+			helper_name = "_typed_params_field_bool"
+		elif field_ty == float_ty:
+			helper_name = "_typed_params_field_float"
+		elif field_ty == string_ty:
+			helper_name = "_typed_params_field_string"
+		else:
+			raise AssertionError(
+				f"typed projection {event_fqn}.{field_name}: declared field type "
+				f"is not one of the supported scalars (Int/Uint/Bool/Float/String) — "
+				f"checker should have rejected with E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE"
+			)
+		helper_fn_id = self._find_free_fn_id("std.core", helper_name)
+		if helper_fn_id is None:
+			raise AssertionError(
+				f"std.core function {helper_name!r} not loaded — typed catch "
+				f"projection requires std.core in the build (the helper is "
+				f"compiler-emitted; stage2 unit tests must pre-stage signatures "
+				f"if they reach this lowering path)"
+			)
+
+		# 3. Extract params_json text from the envelope.
+		json_text = self.b.new_temp()
+		self.b.emit(M.ExcGetParamsJson(dest=json_text, error=envelope))
+		self._local_types[json_text] = self._string_type
+
+		# 4. Materialize params text into a local for `&String` borrow.
+		json_local = f"__typed_proj_json_{json_text}"
+		self.b.ensure_local(json_local)
+		self.b.emit(M.StoreLocal(local=json_local, value=json_text))
+		json_addr = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=json_addr, local=json_local, is_mut=False))
+
+		# 5. Build key string + materialize for `&String` borrow.
+		key_text = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=key_text, value=field_name))
+		self._local_types[key_text] = self._string_type
+		key_local = f"__typed_proj_key_{key_text}"
+		self.b.ensure_local(key_local)
+		self.b.emit(M.StoreLocal(local=key_local, value=key_text))
+		key_addr = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=key_addr, local=key_local, is_mut=False))
+
+		# 6. Call helper.  Helpers are nothrow.
+		result = self.b.new_temp()
+		self.b.emit(M.Call(
+			dest=result,
+			fn_id=helper_fn_id,
+			args=[json_addr, key_addr],
+			can_throw=False,
+		))
+		self._local_types[result] = field_ty
+		return result
+
 
 	def _build_throw_params_json(self, field_dvs: list[tuple[str, M.ValueId, bool]]) -> M.ValueId:
 		"""Build the canonical params JSON document for a throw site.

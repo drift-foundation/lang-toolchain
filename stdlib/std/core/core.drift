@@ -1459,6 +1459,70 @@ fn _params_cursor_get(text: &String, key: &String) nothrow -> JsonCursor {
 	return JsonCursor::Missing();
 }
 
+// ── Compiler-owned typed scalar projection from Error envelope params ──
+//
+// Slice 5 (slice 3 of impl): emitted by HIR→MIR for typed catch
+// binder field access (`e.<declared_field>`).  Each helper takes
+// the envelope's params_json text + a field name and returns the
+// typed scalar value with deterministic missing-key / wrong-type
+// behavior:
+//
+//   * key absent or value is JSON null   → return type's default
+//     (0 / 0u / 0.0 / "" / false)
+//   * value present with mismatched type → return type's default
+//   * malformed JSON                     → return type's default
+//
+// Reuses the inline JSON parser (`_params_cursor_get` +
+// `JsonCursor` arms) but the helpers themselves are compiler-
+// owned: their default-on-missing/mismatch behavior is fixed by
+// spec, not by user-visible Optional.unwrap_or / cursor ergonomics.
+// Public callers MUST NOT depend on these helpers — they are
+// emitted by the compiler at typed-catch field-access sites.
+
+fn _typed_params_field_int(text: &String, key: &String) nothrow -> Int {
+	val cursor = _params_cursor_get(text, key);
+	match cursor {
+		JsonCursor::IntVal(n) => { return n; },
+		default => { return 0; },
+	}
+}
+
+fn _typed_params_field_uint(text: &String, key: &String) nothrow -> Uint {
+	val cursor = _params_cursor_get(text, key);
+	match cursor {
+		JsonCursor::IntVal(n) => {
+			if n < 0 { return 0u; }
+			return cast<Uint>(n);
+		},
+		default => { return 0u; },
+	}
+}
+
+fn _typed_params_field_string(text: &String, key: &String) nothrow -> String {
+	val cursor = _params_cursor_get(text, key);
+	match cursor {
+		JsonCursor::StringVal(s) => { return s; },
+		default => { return ""; },
+	}
+}
+
+fn _typed_params_field_bool(text: &String, key: &String) nothrow -> Bool {
+	val cursor = _params_cursor_get(text, key);
+	match cursor {
+		JsonCursor::BoolVal(b) => { return b; },
+		default => { return false; },
+	}
+}
+
+fn _typed_params_field_float(text: &String, key: &String) nothrow -> Float {
+	val cursor = _params_cursor_get(text, key);
+	match cursor {
+		JsonCursor::FloatVal(f) => { return f; },
+		default => { return 0.0; },
+	}
+}
+
+
 /// Projects a `DiagnosticValue` to canonical JSON text, recursively.
 /// Private — Slice 1 transitional helper.  Covers all DV variants
 /// without silent corruption.  Variant discrimination uses
