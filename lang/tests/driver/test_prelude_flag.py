@@ -273,11 +273,22 @@ pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
 }
 
+// Slice 5 (pub-error track): `or_throw()` requires Err to be `pub error`.
+// `std.io.IoError` is a `pub variant` so it can't be the Err of or_throw
+// under Phase 5a strict enforcement.  This test pins parser non-hang on
+// a long fluent builder chain — the or_throw() shape is incidental to
+// that purpose, so we match on the Result instead.
 fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 1000);
-	val opened = io.file_builder("tmp_chain.bin").read(true).write(true).create(true).truncate(true).append(false).mode(io.FILE_MODE_DEFAULT).timeout(t).build().or_throw();
-	opened.close().or_throw();
-	return 0;
+	match io.file_builder("tmp_chain.bin").read(true).write(true).create(true).truncate(true).append(false).mode(io.FILE_MODE_DEFAULT).timeout(t).build() {
+		Ok(opened) => {
+			match opened.close() {
+				Ok(_) => { return 0; },
+				Err(_) => { return 1; },
+			}
+		},
+		Err(_) => { return 1; },
+	}
 }
 	"""
 	root = tmp_path / "mods"

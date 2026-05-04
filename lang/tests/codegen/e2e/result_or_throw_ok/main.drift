@@ -1,10 +1,13 @@
 module m;
 
 import std.core as core;
-import std.err as err;
+
+pub error MyErr {
+	code: Int,
+}
 
 pub fn main() nothrow -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(7);
-	val v = try (move r).or_throw() catch err:ResultError(_) { 1 } catch { 2 };
+	val r: core.Result<Int, MyErr> = core.Result::Ok(7);
+	val v = try (move r).or_throw() catch MyErr(_) { 1 } catch { 2 };
 	return v;
 }

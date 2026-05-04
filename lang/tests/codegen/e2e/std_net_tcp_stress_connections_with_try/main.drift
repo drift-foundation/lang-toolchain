@@ -10,38 +10,51 @@ type VtInt = conc.VirtualThread<Int>;
 
 const N: Int = 500;
 
-fn handle_client(var s: net.TcpStream, timeout: conc.Duration) throws -> Int {
+// Slice 5 (pub-error track): Phase 5a strict enforcement rejects
+// `or_throw()` on `Result<T, NetError>` (NetError is a `pub variant`).
+// Auto-try wrapping that previously bridged net.* calls into
+// `throws`-functions is no longer valid.  We unwrap each net call
+// with explicit `match` so the test stays focused on its real subject
+// — TCP stress under timeouts — without dragging or_throw's strict
+// enforcement into scope.
+fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	// Server-side handler for one client:
 	// - read a fixed-size buffer
 	// - echo it back
 	// - close the socket
 	var buf = io.buffer(1024);
-	s.read(&mut buf, timeout);
-	s.write(&buf, timeout);
-	s.close(timeout);
+	match s.read(&mut buf, timeout) {
+		Ok(_) => {},
+		Err(_) => { return -1; },
+	}
+	match s.write(&buf, timeout) {
+		Ok(_) => {},
+		Err(_) => { return -2; },
+	}
+	match s.close(timeout) {
+		Ok(_) => {},
+		Err(_) => { return -3; },
+	}
 	return 0;
 }
 
-fn server_loop(listener: net.TcpListener, timeout: conc.Duration) throws -> Int {
+fn server_loop(listener: net.TcpListener, timeout: conc.Duration) -> Int {
 	// Accept exactly N connections and handle them sequentially.
 	var i = 0;
 	while i < N {
-		val s = net.accept(&listener, timeout);
-		val r = handle_client(move s, timeout);
-		if r < 0 { return r; }
+		match net.accept(&listener, timeout) {
+			Ok(s) => {
+				val r = handle_client(move s, timeout);
+				if r < 0 { return r; }
+			},
+			Err(_) => { return -10; },
+		}
 		i = i + 1;
 	}
 	return 0;
 }
 
-fn client_once(port: Int, size: Int, timeout: conc.Duration) throws -> Int {
-	// One client:
-	// - connect to 127.0.0.1:port
-	// - write size bytes (all 65)
-	// - read size bytes back
-	// - close socket
-	var addr = net.socket_addr("127.0.0.1", port);
-	val s = net.connect(&addr, timeout);
+fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) -> Int {
 	// Prepare write buffer.
 	val byte = cast<Byte>(65);
 	var wbuf = io.buffer(size);
@@ -50,14 +63,36 @@ fn client_once(port: Int, size: Int, timeout: conc.Duration) throws -> Int {
 		io.buffer_write(&mut wbuf, i, byte);
 		i = i + 1;
 	}
-	val n = s.write(&wbuf, timeout);
-	if n != size { return -33; }
+	var wn: Int = 0;
+	match s.write(&wbuf, timeout) {
+		Ok(v) => { wn = v; },
+		Err(_) => { return -30; },
+	}
+	if wn != size { return -33; }
 	// Read echoed bytes into a fresh buffer.
 	var rbuf = io.buffer(size);
-	val r = s.read(&mut rbuf, timeout);
-	if r != size { return -36; }
-	s.close(timeout);
+	var rn: Int = 0;
+	match s.read(&mut rbuf, timeout) {
+		Ok(v) => { rn = v; },
+		Err(_) => { return -35; },
+	}
+	if rn != size { return -36; }
+	match s.close(timeout) {
+		Ok(_) => {},
+		Err(_) => { return -37; },
+	}
 	return size * 65;
+}
+
+fn client_once(port: Int, size: Int, timeout: conc.Duration) -> Int {
+	// One client:
+	// - connect to 127.0.0.1:port
+	// - hand off to _client_after_connect for write/read/close
+	var addr = net.socket_addr("127.0.0.1", port);
+	match net.connect(&addr, timeout) {
+		Ok(s) => { return _client_after_connect(move s, size, timeout); },
+		Err(_) => { return -20; },
+	}
 }
 
 pub fn main() nothrow -> Int {
@@ -68,7 +103,13 @@ fn run_main() throws -> Int {
 	// Spin up a TCP listener on an ephemeral port.
 	val io_t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t);
+	match net.listen(&addr, io_t) {
+		Ok(listener) => { return _run_with_listener(move listener, io_t); },
+		Err(_) => { return -50; },
+	}
+}
+
+fn _run_with_listener(listener: net.TcpListener, io_t: conc.Duration) throws -> Int {
 	val port = listener.local_port();
 	// Start the server in its own VT.
 	var server = conc.spawn(| | captures(move listener, copy port, copy io_t) => {
@@ -96,17 +137,25 @@ fn run_main() throws -> Int {
 		match opt {
 			Some(vt) => {
 				var t = move vt;
-				val code = t.join();
-				if code < 0 { return code; }
-				actual = actual + code;
+				match t.join() {
+					Ok(code) => {
+						if code < 0 { return code; }
+						actual = actual + code;
+					},
+					Err(_) => { return -90; },
+				}
 			},
 			None => { return 60; },
 			default => { return 63; }
 		}
 	}
 	// Join server and verify total math.
-	val v = server.join();
-	if v != 0 { return 70; }
+	match server.join() {
+		Ok(v) => {
+			if v != 0 { return 70; }
+		},
+		Err(_) => { return -91; },
+	}
 	if actual != expected { return 71; }
 	return 0;
 }

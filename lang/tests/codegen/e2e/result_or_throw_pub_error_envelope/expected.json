@@ -1,0 +1,6 @@
+{
+  "description": "Slice 5 (pub-error track) e2e: Result<T, ParseError>.Err(...).or_throw() routes through the auto-gen `implement core.Throw for ParseError` and is caught as `ParseError(e)`. The typed catch binder exposes both the schema fields (e.offset, e.message) and the Error envelope surface (e.encode_compact()). Exit 42 means e.offset typed-projected the real value, stdout `bad input` means e.message typed-projected, and the envelope.byte_length() check confirms the envelope is non-empty.",
+  "exit_code": 42,
+  "stderr": "",
+  "stdout": "bad input"
+}

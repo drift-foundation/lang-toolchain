@@ -72,7 +72,6 @@ import std.core as core;
 # ── Probe 1 ─ or_throw throws pub error directly ───────────────────
 
 
-@_SLICE_5_PENDING
 def test_or_throw_throws_pub_error_directly(tmp_path, capsys):
 	"""`Result::Err(ParseError(...)).or_throw()` throws ParseError
 	directly; `catch ParseError(e)` binds it with typed field
@@ -100,7 +99,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ or_throw returns Ok value ────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_or_throw_returns_ok_value(tmp_path, capsys):
 	"""`Result::Ok(v).or_throw()` returns `v` without throwing —
 	pins the success-path semantics of or_throw."""
@@ -127,7 +125,6 @@ fn main() nothrow -> Int {
 # ── Probe 3 ─ or_throw rejects non-pub-error Err ───────────────────
 
 
-@_SLICE_5_PENDING
 def test_or_throw_rejects_non_error_err_type(tmp_path, capsys):
 	"""`Result<Int, Int>.or_throw()` is a compile error — Phase 5a
 	strict enforcement requires the Err type to be a `pub error`.

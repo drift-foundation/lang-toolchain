@@ -6734,6 +6734,15 @@ class HIRToMIR:
 			else:
 				dv_val = self.lower_expr(field_expr)
 				dv_ty = self._local_types.get(dv_val)
+				if dv_ty is None:
+					# Slice 5: not every MIR temp producer (notably struct field
+					# reads via StructGetField) populates `_local_types`.  Fall
+					# back to type inference so DV-typed struct field loads —
+					# e.g. `self.dv` on `pub error ResultError { dv: DV }` from
+					# the auto-gen Throw impl — pass this contract check.
+					inferred = self._infer_expr_type(field_expr)
+					if inferred is not None:
+						dv_ty = inferred
 				if dv_ty != self._dv_type:
 					raise AssertionError(
 						f"exception field {name!r} must lower to DiagnosticValue (checker bug)"

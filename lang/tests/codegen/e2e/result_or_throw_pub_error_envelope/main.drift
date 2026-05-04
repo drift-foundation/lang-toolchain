@@ -1,0 +1,40 @@
+module main;
+
+import std.core as core;
+import std.console as console;
+
+// Slice 5 (pub-error track): runtime proof that
+// `Result<T, ParseError>.Err(...).or_throw()` is caught as
+// `ParseError(e)` (the auto-gen `implement core.Throw for ParseError`
+// throws ParseError directly — no ResultError wrap), and that the
+// typed catch binder exposes the schema fields and the Error envelope
+// surface in one binder.
+//
+// Exit code 42 = `e.offset` projected from the live envelope params
+// JSON.  Stdout "bad input" = `e.message` typed projection.  The
+// `e.encode_compact()` byte_length() check guards against the
+// envelope being constructed empty.
+pub error ParseError {
+	offset: Int,
+	message: String,
+}
+
+fn risky() throws ParseError -> Int {
+	val r: core.Result<Int, ParseError> = core.Result::Err(ParseError(offset = 42, message = "bad input"));
+	return (move r).or_throw();
+}
+
+fn main() nothrow -> Int {
+	try {
+		return risky();
+	} catch ParseError(e) {
+		val n: Int = e.offset;
+		val msg: String = e.message;
+		val envelope: String = e.encode_compact();
+		console.print(msg);
+		if envelope.byte_length() > 0 {
+			return n;
+		}
+		return 0;
+	}
+}

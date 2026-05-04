@@ -1361,8 +1361,16 @@ def _struct_from_error_decl(exc: ExceptionDef) -> StructDef:
 
     Same name as the error decl; same fields with type_expr preserved.
     Visibility (`is_pub`) and test_build_only mirror the error decl.
+
+    Slice 5 field visibility: `pub error` fields are part of the
+    public error schema (they appear in the canonical params JSON
+    surface and are readable by typed catch projection across module
+    boundaries).  Mirror the error's `is_pub` onto every synthesized
+    struct field — otherwise cross-module field access on the
+    parallel struct face fails with "field 'X' is private".
     """
-    fields = [StructField(name=arg.name, type_expr=arg.type_expr) for arg in exc.args]
+    field_is_pub = bool(exc.is_pub)
+    fields = [StructField(name=arg.name, type_expr=arg.type_expr, is_pub=field_is_pub) for arg in exc.args]
     return StructDef(
         name=exc.name,
         fields=fields,

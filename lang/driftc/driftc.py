@@ -5195,6 +5195,13 @@ def compile_stubbed_funcs(
 			exported_structs = set(types_obj.get("structs") or [])
 			exported_variants = set(types_obj.get("variants") or [])
 			exported_interfaces = set(types_obj.get("interfaces") or [])
+			# Slice 5 (Path A): a `pub error E` carries a parallel StructDef
+			# face for value-type machinery, but it exports under
+			# `exceptions` (the package validator rejects overlap across
+			# kinds).  Treat exported exceptions as implicitly exporting
+			# the parallel struct face so a public surface referencing E
+			# (e.g. signature `Result<T, E>`) doesn't hit `E-PRIVATE-TYPE`.
+			exported_structs |= set(types_obj.get("exceptions") or [])
 			for sym in vals:
 				if not isinstance(sym, str):
 					continue

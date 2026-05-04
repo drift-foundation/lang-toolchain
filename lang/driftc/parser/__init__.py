@@ -1246,6 +1246,104 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 	return catalog
 
 
+def _synthesize_auto_throw_impls(
+	prog: parser_ast.Program,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str] | None = None,
+) -> None:
+	"""Slice 5: auto-generate `implement core.Throw for E` for every
+	`pub error E` declaration in the module unless an explicit
+	`implement std.core.Throw for E` already exists.
+
+	Rationale (K, 2026-05-04): `pub error` is the canonical throwable
+	error type — requiring users to also write `implement Throw for E`
+	is backwards.  The compiler synthesizes that contract.
+
+	The synthesized body routes through the existing `throw E(...)`
+	lowering so envelope construction (event_code, params JSON) stays
+	centralized — no special HIR rewrite of `or_throw`.
+
+	Skip-when-manual is gated on the trait resolving to `std.core.Throw`
+	specifically — a user-defined trait that happens to be named `Throw`
+	in a different module must NOT suppress synthesis of the std.core
+	contract.
+	"""
+	exceptions = [
+		e for e in (getattr(prog, "exceptions", []) or [])
+		if getattr(e, "kind", "exception") == "error"
+	]
+	if not exceptions:
+		return
+	impls = list(getattr(prog, "implements", []) or [])
+	aliases = module_aliases or {}
+	manual_throw_targets: set[str] = set()
+	for impl in impls:
+		trait = getattr(impl, "trait", None)
+		if trait is None or getattr(trait, "name", None) != "Throw":
+			continue
+		# Resolve the trait to its canonical module_id.  We accept
+		# (a) explicit module_id == "std.core",
+		# (b) module_alias resolving via the file's import map to "std.core",
+		# (c) unqualified `Throw` only when the impl lives inside std.core
+		#     itself (where the trait is the in-module declaration).
+		trait_module = getattr(trait, "module_id", None)
+		if trait_module is None:
+			alias_name = getattr(trait, "module_alias", None)
+			if alias_name is not None:
+				trait_module = aliases.get(alias_name)
+			elif module_id == "std.core":
+				trait_module = "std.core"
+		if trait_module != "std.core":
+			continue
+		target = getattr(impl, "target", None)
+		if target is None or getattr(target, "name", None) is None:
+			continue
+		manual_throw_targets.add(target.name)
+	for exc in exceptions:
+		if exc.name in manual_throw_targets:
+			continue
+		loc = exc.loc
+		target = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
+		trait = parser_ast.TypeExpr(name="Throw", module_id="std.core", loc=loc)
+		self_ty = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
+		self_param = parser_ast.Param(name="self", type_expr=self_ty, mutable=False)
+		self_var = parser_ast.Name(loc=loc, ident="self")
+		kwargs: list[parser_ast.KwArg] = []
+		for arg in exc.args:
+			field_access = parser_ast.Attr(loc=loc, value=self_var, attr=arg.name, op=".")
+			kwargs.append(parser_ast.KwArg(name=arg.name, value=field_access, loc=loc))
+		ctor = parser_ast.ExceptionCtor(loc=loc, name=exc.name, args=[], kwargs=kwargs)
+		throw_stmt = parser_ast.RaiseStmt(loc=loc, value=ctor, domain=None)
+		body = parser_ast.Block(statements=[throw_stmt])
+		# Narrow `throws E` so typed-catch coverage analysis can claim
+		# coverage of `or_throw()` chains via this impl (Slice 2B narrow
+		# coverage relies on `declared_throws_event_fqns`).
+		throws_ty = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
+		throw_self_fn = parser_ast.FunctionDef(
+			name="throw_self",
+			orig_name="throw_self",
+			type_params=[],
+			params=[self_param],
+			return_type=None,
+			body=body,
+			loc=loc,
+			declared_terminal_throws=True,
+			declared_throws_types=[throws_ty],
+			is_pub=True,
+			is_method=True,
+			self_mode="value",
+			impl_target=target,
+		)
+		impls.append(parser_ast.ImplementDef(
+			target=target,
+			loc=loc,
+			methods=[throw_self_fn],
+			trait=trait,
+		))
+	prog.implements = impls
+
+
 def _span_in_file(path: Path, loc: object | None, source_manager: SourceManager | None = None) -> Span:
 	"""
 	Construct a Span that is anchored to a specific source file.
@@ -3675,9 +3773,26 @@ def parse_drift_workspace_to_hir(
 				return (target_mod, target_name)
 			return _resolve_alias_target_struct(target_mod, target_name, seen)
 
+		def _exported_exception_names(mod: str) -> set[str]:
+			if mod in exports_types_by_module:
+				return set((exports_types_by_module.get(mod) or {}).get("exceptions") or set())
+			if external_module_exports is not None and mod in external_module_exports:
+				ext = external_module_exports.get(mod) or {}
+				ext_types = ext.get("types")
+				if isinstance(ext_types, dict):
+					return set(ext_types.get("exceptions") or set())
+			return set()
+
 		def _resolve_exported_ctor_target(mod: str, member: str) -> tuple[str, str] | None:
 			if member in exported_struct_names(mod):
 				return reexported_type_targets_by_module.get(mod, {}).get("structs", {}).get(member, (mod, member))
+			# Slice 5 (Path A): a `pub error E` decl carries a parallel
+			# StructDef face for value-type machinery (constructor / field
+			# access).  Exported under `exceptions` to avoid the package
+			# validator's no-overlap-across-kinds rule, but for ctor-call
+			# resolution it must behave like a struct ctor.
+			if member in _exported_exception_names(mod):
+				return (mod, member)
 			if member not in exported_alias_names(mod):
 				return None
 			def_mod, def_name = reexported_type_targets_by_module.get(mod, {}).get("aliases", {}).get(member, (mod, member))
@@ -4266,6 +4381,12 @@ def _lower_parsed_program_to_hir(
 		prev_exc_pub = {}
 	prev_exc_pub.update(exception_pub)
 	type_table.exception_pub = prev_exc_pub
+	# Slice 5: synthesize `implement core.Throw for E` for every `pub error E`
+	# (idempotent skip when a manual impl exists).  Must run BEFORE
+	# `build_trait_world` so the synthesized impls participate in trait-world
+	# construction and `Result<T, E>.or_throw()` resolves the `require E is Throw`
+	# clause cleanly without forcing users to hand-write boilerplate.
+	_synthesize_auto_throw_impls(prog, module_id=module_id, module_aliases=module_aliases)
 	# Build a TypeTable early so we can register user-defined type names (structs)
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.

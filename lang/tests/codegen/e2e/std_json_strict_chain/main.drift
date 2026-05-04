@@ -47,8 +47,19 @@ fn pull_string_as_float(root: &json.JsonNode) -> Float {
 
 fn run() -> Int {
 	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"count\":42,\"ratio\":1.5,\"on\":true}},\"items\":[1,2]}";
-	val parsed = json.parse(&text);
-	val root = (move parsed).or_throw();
+	// Slice 5 (pub-error track): `or_throw()` requires Err to be a
+	// `pub error`.  `json.parse` returns `Result<_, JsonErrorData>` —
+	// JsonErrorData is a `pub struct` with a manual Throw-to-JsonError
+	// impl, so or_throw is rejected.  Match the Result and route the
+	// parse-success branch through `_run_with_root` (the parse text is
+	// well-formed, so Err is unreachable).
+	match json.parse(&text) {
+		Ok(root) => { return _run_with_root(move root); },
+		Err(_) => { return -1; },
+	}
+}
+
+fn _run_with_root(root: json.JsonNode) -> Int {
 
 	// ── Happy paths ───────────────────────────────────────────
 	if pull_status(&root) != "ok" { return 1; }

@@ -1042,8 +1042,40 @@ class Checker:
 				sig = callee_info.signature if callee_info else None
 				if sig is None:
 					sig = self._signatures_by_id.get(callee_id)
+				# Instantiated method bodies use a `__inst__<hash>` suffix on
+				# the function name and live only in the instantiation cache;
+				# fall back to the base function id so we can read the base
+				# signature for narrow-throws lookup below.
+				if sig is None and "__inst__" in callee_id.name:
+					base_name = callee_id.name.split("__inst__", 1)[0]
+					base_id = FunctionId(module=callee_id.module, name=base_name, ordinal=callee_id.ordinal)
+					sig = self._signatures_by_id.get(base_id)
 				if sig is not None:
-					return getattr(sig, "declared_throws_event_fqns", None)
+					decl = getattr(sig, "declared_throws_event_fqns", None)
+					if decl is not None:
+						return decl
+					# Slice 5 (pub-error): `Result<T, E>.or_throw()` narrows to
+					# E.  E is required to be a `pub error` type (enforced
+					# upstream by E_OR_THROW_NOT_ERROR_TYPE), and the auto-gen
+					# `implement core.Throw for E` throws E directly — so the
+					# call's narrow throws set is exactly {fqn(E)}.
+					if (
+						getattr(sig, "method_name", None) == "or_throw"
+						and info.sig.param_types
+					):
+						recv_ty = info.sig.param_types[0]
+						table = self._type_table
+						inst = getattr(table, "variant_instances", {}).get(recv_ty)
+						if inst is not None and len(inst.type_args) >= 2:
+							e_ty = inst.type_args[1]
+							e_def = table.get(e_ty)
+							e_mod = getattr(e_def, "module_id", None)
+							e_name = getattr(e_def, "name", None)
+							if e_mod and e_name:
+								fqn = f"{e_mod}:{e_name}"
+								kinds = getattr(table, "exception_kinds", {}) or {}
+								if kinds.get(fqn) == "error":
+									return [fqn]
 			return None
 
 		def _is_call_throws_covered(

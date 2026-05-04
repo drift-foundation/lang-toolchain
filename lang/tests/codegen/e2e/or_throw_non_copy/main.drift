@@ -6,12 +6,16 @@ struct S {
 	arr: Array<Int>,
 }
 
+pub error MyErr {
+	code: Int,
+}
+
 pub fn main() nothrow -> Int {
 	try {
-		val r: core.Result<S, Int> = core.Result::Ok(S(arr = [1]));
+		val r: core.Result<S, MyErr> = core.Result::Ok(S(arr = [1]));
 		val s = r.or_throw();
 		return s.arr.len;
-	} catch std.err:ResultError(_) {
+	} catch MyErr(_) {
 		return 0;
 	} catch {
 		return 0;

@@ -1640,14 +1640,13 @@ import std.core as core;
 
 export { ProducerError, make_err };
 
-pub struct ProducerError {
-	pub code: Int
-}
-
-implement core.Throw for ProducerError {
-	pub fn throw_self(self: ProducerError) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Int(self.code));
-	}
+// Slice 5 (pub-error track): `pub error` is the canonical throwable error
+// type — auto-gen `implement core.Throw for ProducerError` is provided
+// by the compiler, so no manual impl is needed.  Or_throw on
+// `Result<T, ProducerError>` throws ProducerError directly (no
+// ResultError wrap).
+pub error ProducerError {
+	code: Int,
 }
 
 pub fn make_err() nothrow -> core.Result<Int, ProducerError> {

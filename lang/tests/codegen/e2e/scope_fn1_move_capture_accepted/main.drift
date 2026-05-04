@@ -1,11 +1,20 @@
 module main;
 
+import std.core as core;
 import std.concurrent as conc;
 
+// Slice 5 (pub-error track): `or_throw()` requires Err to be `pub error`.
+// Auto-try wrapping of `conc.scope(...)` is rejected because
+// `conc.ConcurrencyError` is a `pub variant`.  Match the Result and
+// keep the try/catch outer so the conservative may-throw analysis on
+// the stubbed Fn1::call dispatch stays satisfied.
 pub fn main() nothrow -> Int {
 	var x: Int = 42;
 	try {
-		conc.scope(|_s: std.concurrent.Scope| captures(copy x) nothrow => { val y = x; return; });
-		return 0;
-	} catch e { return 2; }
+		val r: core.Result<Void, conc.ConcurrencyError> = conc.scope(|_s: std.concurrent.Scope| captures(copy x) nothrow => { val y = x; return; });
+		match r {
+			Ok(_) => { return 0; },
+			Err(_) => { return 2; },
+		}
+	} catch _ { return 99; }
 }

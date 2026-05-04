@@ -8163,6 +8163,42 @@ class TypeChecker:
 							callsite_id=getattr(expr, "callsite_id", None),
 						)
 						return type_expr(free_call, expected_type=expected_type)
+				# Slice 5 (pub-error track): `Result<T, E>.or_throw()` requires
+				# `E` to be a `pub error` type — Phase 5a strict enforcement
+				# (spec §3.2).  Run BEFORE method resolution so the diagnostic
+				# surfaces without cascading `require E is Throw` failures and
+				# without the legacy `Throw for Int/String/...` impls papering
+				# over a non-error Err type.
+				if expr.method_name == "or_throw":
+					_or_throw_recv_ty = type_expr(expr.receiver, used_as_value=False)
+					if _or_throw_recv_ty is not None:
+						_or_throw_recv_unwrapped = _unwrap_ref_type(_or_throw_recv_ty)
+						if _is_core_result_variant(_or_throw_recv_unwrapped):
+							_or_throw_inst = self.type_table.variant_instances.get(_or_throw_recv_unwrapped)
+							if _or_throw_inst is not None and len(_or_throw_inst.type_args) >= 2:
+								_or_throw_e_ty = _or_throw_inst.type_args[1]
+								_or_throw_e_def = self.type_table.get(_or_throw_e_ty)
+								_or_throw_concrete = _or_throw_e_def.kind not in (TypeKind.TYPEVAR, TypeKind.UNKNOWN)
+								if _or_throw_concrete:
+									_or_throw_mod = getattr(_or_throw_e_def, "module_id", None)
+									_or_throw_name = getattr(_or_throw_e_def, "name", None)
+									_or_throw_fqn = f"{_or_throw_mod}:{_or_throw_name}" if (_or_throw_mod and _or_throw_name) else None
+									_or_throw_kinds = getattr(self.type_table, "exception_kinds", {}) or {}
+									if _or_throw_fqn is None or _or_throw_kinds.get(_or_throw_fqn) != "error":
+										_pretty_e = self._pretty_type_name(_or_throw_e_ty, current_module=current_module_name)
+										diagnostics.append(
+											_tc_diag(
+												message=(
+													f"`or_throw()` requires the Err type of "
+													f"`Result<T, E>` to be a `pub error` type "
+													f"(got `{_pretty_e}`); Slice 5 spec §3.2"
+												),
+												severity="error",
+												code="E_OR_THROW_NOT_ERROR_TYPE",
+												span=getattr(expr, "loc", Span()),
+											)
+										)
+										return record_expr(expr, self._unknown)
 				preseed = preseed_type_params or {}
 				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, dv_ty=self._dv, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
 				method_ctx = make_method_ctx(call_ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)

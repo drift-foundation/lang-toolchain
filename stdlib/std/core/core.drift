@@ -142,9 +142,22 @@ pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> 
 ///
 /// `throw_self(self)` is a terminal-`throws` method (never returns
 /// normally — must throw).  Required by `or_throw` (and the
-/// compiler-owned auto-try inside `throws` functions) so any
-/// `Result<T, E>` with `E: Throw` can be unwrapped.  Default impls:
-/// `Int`, `Uint`, `Bool`, `Float`, `String`, `DiagnosticValue`.
+/// compiler-owned auto-try inside `throws` functions) so a
+/// `Result<T, E>` whose Err type is a `pub error` can be unwrapped.
+///
+/// **Slice 5 (Phase 5a) — `pub error` carries the contract.**
+/// Every `pub error E` decl gets a compiler-synthesized
+/// `implement core.Throw for E` whose body throws `E` directly via
+/// the existing language throw lowering (params JSON / envelope
+/// construction stays centralized).  User code does NOT hand-write
+/// `Throw` impls for `pub error` types — the compiler owns it.
+///
+/// The scalar impls below (`Int`, `Uint`, `Bool`, `Float`,
+/// `String`, `DiagnosticValue`) are TRANSITIONAL / INTERNAL
+/// compatibility for legacy stdlib paths.  They are NOT a
+/// supported user-facing `or_throw` Err path under Phase 5a:
+/// `Result<T, scalar>.or_throw()` is rejected at the call site
+/// with `E_OR_THROW_NOT_ERROR_TYPE` (see `Result.or_throw`).
 ///
 /// **See also:** `Result.or_throw`, the auto-try contract in
 /// `docs/effective-drift.md`.
@@ -260,9 +273,14 @@ pub interface CallbackThrow6<A, B, C, D, E, F2, R> {
 /// error `E`.  The `@tombstone` arm is internal — it represents
 /// post-move state and should not appear in user code.
 ///
-/// Use `match` to destructure, or `or_throw` (when `E: Throw`) to
-/// unwrap, or rely on the auto-try contract inside `throws`
-/// functions.
+/// Use `match` to destructure, or `or_throw` (when `E` is a
+/// `pub error`) to unwrap, or rely on the auto-try contract inside
+/// `throws` functions.
+///
+/// **Slice 5 (Phase 5a):** `or_throw()` requires `E` to be a
+/// `pub error` type — the compiler synthesizes the `Throw` impl
+/// for every `pub error`.  Other Err shapes (scalars, `pub struct`,
+/// `pub variant`) must be unwrapped via explicit `match`.
 ///
 /// **See also:** `Result.or_throw`, `Result.on_error`, the auto-try
 /// contract in `docs/effective-drift.md`.
@@ -273,15 +291,28 @@ pub variant Result<T, E> {
 }
 
 implement<T, E> Result<T, E> {
-/// Unwraps the Ok value or throws via `E.throw_self`.
+/// Unwraps the Ok value or throws the `Err` payload directly as the
+/// matching typed `pub error`.
 ///
 /// The single user-facing explicit-unwrap operation on `Result`.
 /// Inside `throws` functions and `try {}` blocks, the compiler-owned
 /// auto-try contract synthesizes `or_throw()` automatically — see
 /// `docs/effective-drift.md`.
 ///
+/// **Slice 5 (Phase 5a) contract:** `E` MUST be a `pub error` type.
+/// The compiler synthesizes `implement core.Throw for E` for every
+/// `pub error E`, so the `require E is Throw` clause is satisfied
+/// implicitly.  Calling `or_throw` on a `Result<T, E>` whose Err is
+/// NOT a `pub error` (scalar, `pub struct`, `pub variant`) is
+/// rejected at the call site with `E_OR_THROW_NOT_ERROR_TYPE` — those
+/// shapes must be unwrapped via explicit `match`.
+///
+/// On the `Err` path, the synthesized impl throws `E` directly (no
+/// `ResultError` wrap), so `catch E(e)` binds the typed envelope and
+/// `e.<schema_field>` / `e.encode_compact()` work in one binder.
+///
 /// **Returns:** the `Ok` value.  Never returns on `Err` (control
-/// transfers to the nearest catch via `Throw::throw_self`).
+/// transfers to the nearest catch via the synthesized `Throw` impl).
 ///
 /// **See also:** `Result`, `Throw`, `Result.on_error`.
 pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
@@ -602,6 +633,14 @@ implement Diagnostic for DiagnosticValue {
 	}
 }
 
+// ── Slice 5 (Phase 5a): legacy scalar Throw impls are TRANSITIONAL /
+// INTERNAL.  They are NOT a supported user-facing `or_throw` Err path —
+// `Result<T, scalar>.or_throw()` is rejected at the call site with
+// `E_OR_THROW_NOT_ERROR_TYPE`.  These impls remain only so that
+// pre-existing internal stdlib paths (and a small number of legacy
+// downstream call shapes) keep linking through 0.32.x; they will be
+// retired alongside the DV→JSON ABI 13 cut.  Do NOT introduce new
+// callers — use `pub error E` for any throwable error type.
 implement Throw for Int {
 	pub fn throw_self(self: Int) throws {
 		throw std.err:ResultError(dv = DiagnosticValue::Int(self));

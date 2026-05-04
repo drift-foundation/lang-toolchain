@@ -36,14 +36,21 @@ def _compile_source(src: str, tmp_path: Path):
 
 
 def test_ufcs_callinfo_preserved(tmp_path: Path) -> None:
+	# Slice 5 (pub-error track): `or_throw()` requires Err to be a `pub error`
+	# (E_OR_THROW_NOT_ERROR_TYPE).  Migrated from `Result<Int, Int>` —
+	# the UFCS-callinfo regression this pins is unrelated to the Err type.
 	src = """
 module main;
 
 import std.core as core;
 use trait core.Diagnostic;
 
+pub error MyErr {
+	code: Int,
+}
+
 fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = r.or_throw();
 	return v;
 }

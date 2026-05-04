@@ -52,7 +52,11 @@ module main;
 
 import std.core as core;
 
-fn ok() -> core.Result<Int, Int> {
+pub error MyErr {
+    code: Int,
+}
+
+fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 
@@ -82,7 +86,11 @@ module main;
 
 import std.core as core;
 
-fn ok() -> core.Result<Int, Int> {
+pub error MyErr {
+    code: Int,
+}
+
+fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 
@@ -108,7 +116,11 @@ module main;
 
 import std.core as core;
 
-fn ok() -> core.Result<Int, Int> {
+pub error MyErr {
+    code: Int,
+}
+
+fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 

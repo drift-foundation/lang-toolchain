@@ -1,10 +1,22 @@
 module main;
 
+import std.core as core;
 import std.concurrent as conc;
 
+// Slice 5 (pub-error track): `or_throw()` requires Err to be `pub error`.
+// `conc.ConcurrencyError` is a `pub variant`, so the prior auto-try
+// wrapping of `conc.scope(...)` (which returns
+// `Result<Void, ConcurrencyError>`) is rejected under Phase 5a strict
+// enforcement.  This test pins escape/borrow scope acceptance —
+// the try/or_throw shape was incidental.  Match the Result inside a
+// catch-all `try {}` so the conservative may-throw analysis on the
+// stubbed Fn1::call lambda dispatch is satisfied.
 pub fn main() nothrow -> Int {
 	try {
-		conc.scope(|_s: std.concurrent.Scope| nothrow => { return; });
-		return 0;
-	} catch e { return 2; }
+		val r: core.Result<Void, conc.ConcurrencyError> = conc.scope(|_s: std.concurrent.Scope| nothrow => { return; });
+		match r {
+			Ok(_) => { return 0; },
+			Err(_) => { return 2; },
+		}
+	} catch _ { return 99; }
 }

@@ -944,6 +944,25 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 				host.exception_schemas[fqn] = schema
 			elif prev != schema:
 				raise ValueError(f"exception schema collision for '{fqn}'")
+	# Slice 5: package format predates `exception_kinds` / `exception_pub`.
+	# Under post-migration semantics every surviving `pub error E` reaches
+	# the package format as a member of `exception_schemas` (legacy
+	# `pub exception` is rejected at user source via E_PUB_EXCEPTION_REMOVED),
+	# so populate the consumer-side maps with kind="error" / pub=True from
+	# the schema set.  Without this, consumer-side rules keyed on
+	# `exception_kinds` (`or_throw()` Err-type validation, typed catch
+	# binder routing) silently fail across the package boundary.
+	host_kinds = getattr(host, "exception_kinds", None)
+	if not isinstance(host_kinds, dict):
+		host_kinds = {}
+	host_pub = getattr(host, "exception_pub", None)
+	if not isinstance(host_pub, dict):
+		host_pub = {}
+	for fqn in host.exception_schemas:
+		host_kinds.setdefault(fqn, "error")
+		host_pub.setdefault(fqn, True)
+	host.exception_kinds = host_kinds
+	host.exception_pub = host_pub
 
 	# Phase A: merge/validate variant schemas by nominal identity.
 	merged_variant_schemas: dict[NominalKey, VariantSchema] = {}

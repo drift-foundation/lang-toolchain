@@ -90,13 +90,19 @@ def test_throws_inferred_local_auto_unwraps(tmp_path: Path) -> None:
 	eagerly auto-unwraps to T.  This is the primary ergonomic contract of
 	`throws` — zero ceremony for the common case.
 
-	Regression: downstream uses of `r` must see `T`, not `Result<T, E>`."""
+	Regression: downstream uses of `r` must see `T`, not `Result<T, E>`.
+
+	Slice 5 (pub-error track): or_throw requires Err to be `pub error`."""
 	src = """
 module main;
 
 import std.core as core;
 
-fn fallible() -> core.Result<Int, Int> {
+pub error MyErr {
+	code: Int,
+}
+
+fn fallible() -> core.Result<Int, MyErr> {
 	return core.Result::Ok(42);
 }
 
@@ -127,18 +133,24 @@ def test_throws_annotated_result_preserves_result(tmp_path: Path) -> None:
 
 	Regression for the K28 package-boundary local_binding shape:
 	`val r: Result<T, E> = producer_fn(); return (move r).or_throw();`
-	must compile and resolve `.or_throw()` on the Result local."""
+	must compile and resolve `.or_throw()` on the Result local.
+
+	Slice 5 (pub-error track): or_throw requires Err to be `pub error`."""
 	src = """
 module main;
 
 import std.core as core;
 
-fn fallible() -> core.Result<Int, Int> {
+pub error MyErr {
+	code: Int,
+}
+
+fn fallible() -> core.Result<Int, MyErr> {
 	return core.Result::Ok(42);
 }
 
 fn do_work() throws -> Int {
-	val r: core.Result<Int, Int> = fallible();
+	val r: core.Result<Int, MyErr> = fallible();
 	return (move r).or_throw();
 }
 
@@ -155,13 +167,19 @@ fn main() nothrow -> Int {
 
 def test_throws_annotated_non_result_auto_unwraps(tmp_path: Path) -> None:
 	"""With a non-Result type annotation, auto-try still fires — this is
-	the same as inferred (eager) but with an explicit expected type."""
+	the same as inferred (eager) but with an explicit expected type.
+
+	Slice 5 (pub-error track): or_throw requires Err to be `pub error`."""
 	src = """
 module main;
 
 import std.core as core;
 
-fn fallible() -> core.Result<Int, Int> {
+pub error MyErr {
+	code: Int,
+}
+
+fn fallible() -> core.Result<Int, MyErr> {
 	return core.Result::Ok(42);
 }
 
@@ -184,14 +202,20 @@ fn main() nothrow -> Int {
 def test_try_block_auto_try_without_use_trait(tmp_path: Path) -> None:
 	"""A bare `try {}` block (outside a throws function) auto-propagates a
 	discarded Result<T, E> expression statement via or_throw() — no trait
-	import required.  Auto-try is compiler-owned in all auto-try contexts."""
+	import required.  Auto-try is compiler-owned in all auto-try contexts.
+
+	Slice 5 (pub-error track): or_throw requires Err to be `pub error`."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
 
-fn fallible() -> core.Result<Int, Int> {
+pub error MyErr {
+	code: Int,
+}
+
+fn fallible() -> core.Result<Int, MyErr> {
 	return core.Result::Ok(42);
 }
 
@@ -221,15 +245,21 @@ fn main() nothrow -> Int {
 
 def test_explicit_or_throw_works_without_use_trait(tmp_path: Path) -> None:
 	"""Explicit `.or_throw()` is an inherent method on Result and must work
-	without any trait import.  This is the supported explicit form."""
+	without any trait import.  This is the supported explicit form.
+
+	Slice 5 (pub-error track): or_throw requires Err to be `pub error`."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
 
+pub error MyErr {
+	code: Int,
+}
+
 fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(42);
+	val r: core.Result<Int, MyErr> = core.Result::Ok(42);
 	val v = r.or_throw();
 	return v;
 }
@@ -242,17 +272,23 @@ fn main() -> Int {
 	)
 
 
-def test_or_throw_with_net_error(tmp_path: Path) -> None:
-	"""or_throw works with stdlib error types that implement Throw."""
+def test_or_throw_with_stdlib_pub_error(tmp_path: Path) -> None:
+	"""or_throw works with stdlib `pub error` types — the auto-gen
+	`implement core.Throw for E` provides the Throw contract, no manual
+	impl required.
+
+	Slice 5 (pub-error track): replaces the old test that pinned
+	`Result<T, NetError>` (NetError is a `pub variant` and is no longer
+	a valid `or_throw` Err under Phase 5a strict enforcement)."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
-import std.net as net;
+import std.err as err;
 
 fn main() -> Int {
-	val r: core.Result<net.TcpListener, net.NetError> = Err(net.NetError::WouldBlock());
+	val r: core.Result<Int, err.IndexError> = core.Result::Ok(0);
 	val _v = r.or_throw();
 	return 0;
 }
@@ -299,15 +335,23 @@ fn main() -> Int {
 def test_or_throw_on_ref_rejected(tmp_path: Path) -> None:
 	"""Borrowed &Result cannot use or_throw — users must own the Result.
 	The owned or_throw impl calls Throw::throw_self which consumes the
-	error value."""
+	error value.
+
+	Slice 5 (pub-error track): Err is a `pub error` so the rejection
+	is unambiguously about receiver shape (not E_OR_THROW_NOT_ERROR_TYPE),
+	pinning the &T-receiver dispatch failure on its own."""
 	diagnostics = _compile_source(
 		"""
 module main;
 
 import std.core as core;
 
+pub error MyErr {
+	code: Int,
+}
+
 fn main() -> Int {
-	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = (&r).or_throw();
 	return v;
 }
@@ -315,12 +359,26 @@ fn main() -> Int {
 		tmp_path,
 	)
 	assert len(diagnostics) > 0, "borrowed &Result should not have an or_throw impl"
+	# Phase 5a: with `pub error` Err, the rejection MUST come from the
+	# receiver-shape / no-matching-method dispatch — NOT from
+	# E_OR_THROW_NOT_ERROR_TYPE.
+	codes = {d.code for d in diagnostics}
+	assert "E_OR_THROW_NOT_ERROR_TYPE" not in codes, (
+		f"`(&r).or_throw()` rejection should be about borrowed receiver "
+		f"shape, not Err type; got codes: {codes}"
+	)
 	assert any("or_throw" in d.message or "method" in d.message.lower() for d in diagnostics)
 
 
-def test_or_throw_requires_throw_impl(tmp_path: Path) -> None:
-	"""Error type without Throw impl cannot use or_throw — even if it
-	implements Diagnostic.  The or_throw body calls Throw::throw_self."""
+def test_or_throw_requires_pub_error_err(tmp_path: Path) -> None:
+	"""Slice 5 (pub-error track) Phase 5a strict enforcement: `or_throw()`
+	requires the Err type to be a `pub error`.  A `pub variant` Err
+	(even one that implements Diagnostic / Throw) is rejected at compile
+	time with `E_OR_THROW_NOT_ERROR_TYPE`.
+
+	Replaces the legacy `test_or_throw_requires_throw_impl` framing —
+	under Slice 5, the rejection is `or_throw requires pub error`, not
+	`Throw impl missing`."""
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -351,4 +409,9 @@ pub variant MyErr {
 """,
 		tmp_path,
 	)
-	assert diagnostics, "Diagnostic-only error type should not satisfy or_throw (requires Throw)"
+	assert diagnostics, "non-pub-error Err type should be rejected by or_throw"
+	codes = {d.code for d in diagnostics}
+	assert "E_OR_THROW_NOT_ERROR_TYPE" in codes, (
+		f"expected E_OR_THROW_NOT_ERROR_TYPE for `Result<T, MyVariant>.or_throw()`; "
+		f"got codes: {codes}"
+	)

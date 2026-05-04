@@ -5,6 +5,10 @@ import std.core as core;
 import std.err;
 
 
+// Slice 5 (pub-error track): `or_throw()` requires Err to be `pub error`.
+// `conc.spawn().join()` returns Result<T, ConcurrencyError> where
+// ConcurrencyError is a `pub variant`.  Match the Result instead of
+// auto-or_throw — preserves the immediate-lambda + capture exercise.
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
 }
@@ -14,6 +18,8 @@ fn run_main() throws -> Int {
 	var t = conc.spawn(| | captures(move x) => {
 		return try (| | captures(move x) => { return x + 1; })() catch { 0 };
 	});
-	val r = t.join().or_throw();
-	return r;
+	match t.join() {
+		Ok(v) => { return v; },
+		Err(_) => { return 0; },
+	}
 }
