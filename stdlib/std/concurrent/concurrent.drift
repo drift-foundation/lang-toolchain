@@ -140,22 +140,22 @@ pub variant ConcurrencyError {
 }
 
 implement core.Diagnostic for ConcurrencyError {
-	pub fn to_diag(self: &ConcurrencyError) nothrow -> DiagnosticValue {
+	pub fn to_json_text(self: &ConcurrencyError) nothrow -> String {
 		return match self {
 			Timeout => {
-				DiagnosticValue::Int(-1)
+				core.diagnostic_json_int(-1)
 			},
 			Cancelled => {
-				DiagnosticValue::Int(-2)
+				core.diagnostic_json_int(-2)
 			},
 			Closed => {
-				DiagnosticValue::Int(-3)
+				core.diagnostic_json_int(-3)
 			},
 			Busy => {
-				DiagnosticValue::Int(-4)
+				core.diagnostic_json_int(-4)
 			},
 			Failed(_) => {
-				DiagnosticValue::Int(-5)
+				core.diagnostic_json_int(-5)
 			}
 		};
 	}

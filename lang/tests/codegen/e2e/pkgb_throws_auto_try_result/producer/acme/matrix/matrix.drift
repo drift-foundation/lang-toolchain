@@ -10,10 +10,10 @@ pub variant AcmeError {
 }
 
 implement core.Diagnostic for AcmeError {
-	pub fn to_diag(self: &AcmeError) nothrow -> DiagnosticValue {
+	pub fn to_json_text(self: &AcmeError) nothrow -> String {
 		return match self {
-			Failed(c) => { DiagnosticValue::Int(*c) },
-			default => { DiagnosticValue::Int(0) }
+			Failed(c) => { core.diagnostic_json_int(*c) },
+			default => { core.diagnostic_json_int(0) }
 		};
 	}
 }

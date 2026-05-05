@@ -1,12 +1,18 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Slice 5: manual `Diagnostic` override on `pub error` types.
 
-This file protects the DiagnosticParse scope cut (spec §7.5) — the
-defining v1 boundary on what manual projections can and cannot do.
+This file protects the manual/auto boundary (spec §7.5):
+
+  * A type has exactly ONE Diagnostic JSON owner.
+  * If a type manually implements `Diagnostic`, that impl owns the
+    complete JSON shape — no blending of manual field behavior with
+    compiler-generated outer shape.
+  * If a `pub error` has no manual `Diagnostic` impl, the compiler
+    may synthesize one (only if all fields are projectable).
 
 Pins:
 
-  1. A manual `implement Diagnostic for E` override skips
+  1. A manual `implement core.Diagnostic for E` override skips
      synthesis; the user-supplied `to_json_text` is dispatched in
      place of the synthesized projection.
   2. **Binder-less catch works:** `catch SecretError { ... }`

@@ -325,14 +325,17 @@ fn main() nothrow -> Int {
 
 
 def test_typed_catch_binder_unsupported_field_type_rejected(tmp_path, capsys):
-	"""Slice 3 negative (K-blocker fix, 2026-05-04): a typed catch
-	binder field whose declared type is NOT one of the supported
-	scalars (Int / Uint / Bool / Float / String) MUST be rejected at
-	type-check with `E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE` rather
-	than annotated and let through to a fall-through-to-garbage
-	lowering.  Collection / nested-error / struct field projection
-	is a deferred follow-up, but the checker must close the door
-	now."""
+	"""Slice 3 negative (K-blocker fix, 2026-05-04), tightened by Slice 5
+	projectability rule (K, 2026-05-04): a `pub error` field whose
+	type is NOT projectable (collections, raw pointers, plain
+	structs without a manual `Diagnostic`) is now rejected at the
+	declaration site with `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`.
+
+	Originally pinned the typed-catch binder rejection
+	(`E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE`).  Under the Slice 5
+	rule the decl fails closed BEFORE typed-catch lookup runs —
+	same fall-through-to-garbage protection at an earlier and
+	stricter site."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error Bad {
 \txs: Array<Int>,
@@ -351,7 +354,7 @@ fn main() nothrow -> Int {
 \t}
 }
 """)
-	_fails_with_code(rc, errs, 'E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE',
+	_fails_with_code(rc, errs, 'E_PUB_ERROR_FIELD_NOT_PROJECTABLE',
 		"typed catch binder unsupported field type rejected")
 
 

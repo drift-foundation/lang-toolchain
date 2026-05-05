@@ -72,26 +72,26 @@ implement core.Copy for IteratorOpId {
 }
 
 implement core.Diagnostic for IteratorOpId {
-	pub fn to_diag(self: &IteratorOpId) nothrow -> DiagnosticValue {
+	pub fn to_json_text(self: &IteratorOpId) nothrow -> String {
 		// ABI-stable numeric tags: append-only; never reorder.
 		return match self {
 			Next => {
-				DiagnosticValue::Int(0)
+				core.diagnostic_json_int(0)
 			},
 			Prev => {
-				DiagnosticValue::Int(1)
+				core.diagnostic_json_int(1)
 			},
 			Len => {
-				DiagnosticValue::Int(2)
+				core.diagnostic_json_int(2)
 			},
 			CompareAt => {
-				DiagnosticValue::Int(3)
+				core.diagnostic_json_int(3)
 			},
 			Swap => {
-				DiagnosticValue::Int(4)
+				core.diagnostic_json_int(4)
 			},
 			CompareKey => {
-				DiagnosticValue::Int(5)
+				core.diagnostic_json_int(5)
 			},
 		};
 	}

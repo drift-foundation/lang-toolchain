@@ -9530,10 +9530,22 @@ class TypeChecker:
 						type_expr(dv_init)
 						replacements[id(val_expr)] = dv_init
 						continue
-					to_diag_call = H.HMethodCall(receiver=val_expr, method_name="to_diag", args=[])
-					to_diag_call.callsite_id = _alloc_callsite_id()
-					type_expr(to_diag_call)
-					replacements[id(val_expr)] = to_diag_call
+					# Slice 5 (Phase 5a): the public Diagnostic trait method is
+					# `to_json_text(self) -> String`.  For non-scalar Diagnostic-
+					# impl field values, call `to_json_text` and wrap the result
+					# in `DV::String` so the legacy DV-attachment path
+					# (ConstructError + ErrorAddAttrDV) keeps working through
+					# the ABI-13 cut.  Note: this leaves the rendered params JSON
+					# for these fields as a JSON-string-quoted JSON document
+					# rather than a raw splice — the authoritative shape comes
+					# from the synthesized `Diagnostic.to_json_text` on the
+					# enclosing `pub error`, not from this DV passthrough.
+					to_json_call = H.HMethodCall(receiver=val_expr, method_name="to_json_text", args=[])
+					to_json_call.callsite_id = _alloc_callsite_id()
+					type_expr(to_json_call)
+					dv_init = H.HDVInit(dv_type_name="String", args=[to_json_call])
+					type_expr(dv_init)
+					replacements[id(val_expr)] = dv_init
 
 				if replacements:
 					expr.pos_args = [replacements.get(id(a), a) for a in expr.pos_args]

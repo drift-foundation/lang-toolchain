@@ -1344,6 +1344,362 @@ def _synthesize_auto_throw_impls(
 	prog.implements = impls
 
 
+_PROJECTABLE_SCALARS: frozenset[str] = frozenset(
+	{"Int", "Uint", "Bool", "Float", "String", "DiagnosticValue"}
+)
+# Container / pointer / opaque types explicitly NOT auto-projectable
+# (K, 2026-05-04).  Each must be wrapped behind a user-defined
+# Diagnostic carrier — we reject at the field site with
+# E_PUB_ERROR_FIELD_NOT_PROJECTABLE rather than silently dumping.
+_NON_PROJECTABLE_BUILTINS: frozenset[str] = frozenset(
+	{"Optional", "Array", "Map", "RawPtr", "Ptr", "TypeBox", "fn"}
+)
+
+
+def _resolve_field_type_module(
+	field_ty_expr: object,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str],
+) -> str | None:
+	"""Best-effort resolve a field TypeExpr's canonical module_id at
+	parser-synthesis time (before resolve_opaque_type runs).
+
+	Order:
+	  1. explicit `module_id` on the TypeExpr (if filled by an earlier pass);
+	  2. `module_alias` resolved via the file's import map;
+	  3. fallback to the current module (unqualified name).
+	"""
+	mod = getattr(field_ty_expr, "module_id", None)
+	if mod:
+		return mod
+	alias = getattr(field_ty_expr, "module_alias", None)
+	if alias and alias in module_aliases:
+		return module_aliases[alias]
+	return module_id
+
+
+def _field_is_projectable(
+	field_ty_expr: object,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str],
+	exception_kinds: dict[str, str],
+	exception_pub: dict[str, bool],
+	diagnostic_targets: set[tuple[str | None, str]],
+) -> bool:
+	"""Slice 5 projectability rule (K, 2026-05-04):
+
+	  * scalars (Int / Uint / Bool / Float / String / DiagnosticValue) ✓
+	  * `pub error E` (recursively projectable through synthesis) ✓
+	  * any type with an explicit `implement core.Diagnostic for T` ✓
+	  * collections (Optional / Array / Map) ✗ — wrap behind a carrier
+	  * pointer / opaque / function types ✗
+	  * private (non-pub) `error E` ✗ — synthesis does not fire for
+	    non-pub error decls, so they have no Diagnostic impl to reach.
+
+	`diagnostic_targets` carries (module_id, name) keys for explicit
+	manual `implement core.Diagnostic for T` impls we know about
+	(local + external trait worlds).
+	"""
+	ty_name = getattr(field_ty_expr, "name", None)
+	if not ty_name:
+		return False
+	if ty_name in _PROJECTABLE_SCALARS:
+		# Scalars take no type args — guard against pathological forms.
+		if getattr(field_ty_expr, "args", None):
+			return False
+		return True
+	if ty_name in _NON_PROJECTABLE_BUILTINS:
+		return False
+	target_mod = _resolve_field_type_module(
+		field_ty_expr, module_id=module_id, module_aliases=module_aliases,
+	)
+	# Pub error reachable through its own (synthesized or manual)
+	# Diagnostic.  Private `error E` decls do NOT get synthesized
+	# impls, so a private error as a field type is rejected unless
+	# the user supplies a manual impl (caught by diagnostic_targets
+	# below).
+	if target_mod:
+		fqn = f"{target_mod}:{ty_name}"
+		if exception_kinds.get(fqn) == "error" and bool(exception_pub.get(fqn, False)):
+			return True
+	# Explicit Diagnostic impl in scope (current module or known
+	# external — external impls are sourced from already-loaded
+	# package trait worlds at the synthesizer call site).
+	if (target_mod, ty_name) in diagnostic_targets or (None, ty_name) in diagnostic_targets:
+		return True
+	return False
+
+
+def _is_std_core_diagnostic_trait(
+	trait_expr: object,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str],
+) -> bool:
+	"""Mirror of the std.core.Throw gating used by the auto-Throw
+	synthesizer.  Accepts (a) explicit `module_id == "std.core"`,
+	(b) `module_alias` resolving to `std.core`, (c) unqualified
+	`Diagnostic` only when this is std.core itself."""
+	if getattr(trait_expr, "name", None) != "Diagnostic":
+		return False
+	mod = getattr(trait_expr, "module_id", None)
+	if mod is None:
+		alias = getattr(trait_expr, "module_alias", None)
+		if alias is not None:
+			mod = module_aliases.get(alias)
+		elif module_id == "std.core":
+			mod = "std.core"
+	return mod == "std.core"
+
+
+def _scan_external_diagnostic_targets(
+	type_table: object,
+) -> set[tuple[str | None, str]]:
+	"""Slice 5 cross-package projectability: scan already-loaded
+	external trait worlds for explicit `implement core.Diagnostic
+	for T` impls so a `pub error` field in this module that names
+	an imported type with its own Diagnostic impl is recognized as
+	projectable.
+
+	Without this, the rule "struct fields participate when that
+	struct has an explicit Diagnostic impl" silently rejects every
+	cross-package case at the field site.
+
+	`TraitWorld.impls` entries are `ImplDef` records whose `trait`
+	is a `TraitKey(package_id, module, name)` and `target` is a
+	`TypeKey(package_id, module, name, ...)` — not `trait_key` /
+	`target_key`, and the field is `module` (not `module_id`).
+	"""
+	out: set[tuple[str | None, str]] = set()
+	trait_worlds = getattr(type_table, "trait_worlds", None)
+	if not isinstance(trait_worlds, dict):
+		return out
+	for ext_world in trait_worlds.values():
+		if ext_world is None:
+			continue
+		impls = getattr(ext_world, "impls", []) or []
+		for impl in impls:
+			trait_key = getattr(impl, "trait", None)
+			if trait_key is None:
+				continue
+			tk_module = getattr(trait_key, "module", None)
+			tk_name = getattr(trait_key, "name", None)
+			if tk_module != "std.core" or tk_name != "Diagnostic":
+				continue
+			target_key = getattr(impl, "target", None)
+			if target_key is None:
+				continue
+			t_mod = getattr(target_key, "module", None)
+			t_name = getattr(target_key, "name", None)
+			if t_name:
+				out.add((t_mod, t_name))
+	return out
+
+
+def _synthesize_auto_diagnostic_impls(
+	prog: parser_ast.Program,
+	*,
+	module_id: str,
+	type_table: object | None = None,
+	module_aliases: dict[str, str] | None = None,
+	exception_kinds: dict[str, str] | None = None,
+	exception_pub: dict[str, bool] | None = None,
+	diagnostics: list[Diagnostic] | None = None,
+) -> None:
+	"""Slice 5 (Phase 5a): auto-generate `implement core.Diagnostic for E`
+	for every `pub error E` in the module whose fields are all
+	projectable, unless an explicit `implement std.core.Diagnostic for E`
+	already exists.
+
+	Single-owner contract (K, 2026-05-04): a type has EXACTLY ONE
+	Diagnostic JSON owner.  A manual impl owns the whole shape; the
+	compiler does not blend manual field behavior with a synthesized
+	outer shape.  When ANY field is non-projectable, the `pub error`
+	declaration is rejected at the field site with
+	`E_PUB_ERROR_FIELD_NOT_PROJECTABLE` — synthesis fails closed.
+
+	Body shape (spec §7.3): String concat over lex-utf8-sorted field
+	names with pre-quoted keys + per-field `<self>.<f>.to_json_text()`
+	dispatch.  Empty pub error → returns the literal `"{}"`.
+	"""
+	exc_kinds = exception_kinds or {}
+	exc_pub = exception_pub or {}
+	aliases = module_aliases or {}
+	diags = diagnostics if diagnostics is not None else []
+	# Diagnostic synthesis fires on `pub error E` only — non-public
+	# `error E` decls (module-private) don't get auto-projection.
+	# Per K (2026-05-04): "pub error is the only user aggregate that
+	# gets compiler-synthesized Diagnostic projection."
+	exceptions = [
+		e for e in (getattr(prog, "exceptions", []) or [])
+		if getattr(e, "kind", "exception") == "error"
+		and bool(getattr(e, "is_pub", False))
+	]
+	if not exceptions:
+		return
+	impls = list(getattr(prog, "implements", []) or [])
+	manual_diag_targets_local: set[str] = set()
+	diagnostic_targets: set[tuple[str | None, str]] = set()
+	# Scan ALREADY-LOADED external (package) trait worlds for explicit
+	# `implement core.Diagnostic for T` impls so cross-package field
+	# types with their own Diagnostic impls are recognized as
+	# projectable rather than silently rejected at the field site.
+	if type_table is not None:
+		diagnostic_targets |= _scan_external_diagnostic_targets(type_table)
+		# Workspace pre-scan (intra-project cross-module case).  The
+		# workspace loader pre-scans every module's prog.implements for
+		# `implement core.Diagnostic for T` and stashes the (mod, name)
+		# set on shared_type_table so the per-module synthesizer sees
+		# cross-module impls regardless of module visit order.
+		ws_targets = getattr(type_table, "workspace_diagnostic_targets", None)
+		if ws_targets:
+			diagnostic_targets |= ws_targets
+	for impl in impls:
+		trait = getattr(impl, "trait", None)
+		if trait is None:
+			continue
+		target = getattr(impl, "target", None)
+		if target is None or getattr(target, "name", None) is None:
+			continue
+		if not _is_std_core_diagnostic_trait(
+			trait, module_id=module_id, module_aliases=aliases,
+		):
+			continue
+		manual_diag_targets_local.add(target.name)
+		# Record (module_id, name) for projectability lookup.
+		t_mod = _resolve_field_type_module(
+			target, module_id=module_id, module_aliases=aliases,
+		)
+		diagnostic_targets.add((t_mod, target.name))
+	# Built-in scalars are always projectable via the trait but also
+	# count as Diagnostic-impl targets for the projectability lookup
+	# (an external module that names `core.String` as a field type
+	# resolves through this set).
+	for scalar in _PROJECTABLE_SCALARS:
+		diagnostic_targets.add((None, scalar))
+		diagnostic_targets.add(("std.core", scalar))
+	synthesized_any = False
+	for exc in exceptions:
+		if exc.name in manual_diag_targets_local:
+			continue
+		loc = exc.loc
+		# Projectability gate.  On any non-projectable field, emit a
+		# diagnostic at the field site and skip synthesis for this E.
+		first_bad: parser_ast.ExceptionArg | None = None
+		for arg in exc.args:
+			if not _field_is_projectable(
+				arg.type_expr,
+				module_id=module_id,
+				module_aliases=aliases,
+				exception_kinds=exc_kinds,
+				exception_pub=exc_pub,
+				diagnostic_targets=diagnostic_targets,
+			):
+				first_bad = arg
+				break
+		if first_bad is not None:
+			ty_name = getattr(first_bad.type_expr, "name", "?")
+			diags.append(_p_diag(
+				message=(
+					f"cannot synthesize `core.Diagnostic` for `pub error {exc.name}`: "
+					f"field '{first_bad.name}' (type '{ty_name}') is not projectable"
+				),
+				severity="error",
+				span=Span.from_loc(getattr(first_bad.type_expr, "loc", None) or loc),
+				code="E_PUB_ERROR_FIELD_NOT_PROJECTABLE",
+				notes=[
+					"container types (Array, Optional, Map) and ordinary "
+					"structs/variants are not auto-projected.",
+					f"either implement `core.Diagnostic for {ty_name}` so the "
+					"field carries its own JSON shape, or change the field "
+					f"type to a projectable scalar / `pub error`, or implement "
+					f"`core.Diagnostic for {exc.name}` manually to take "
+					f"ownership of the whole shape.",
+				],
+			))
+			continue
+		# All fields projectable — synthesize the impl.
+		target = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
+		trait = parser_ast.TypeExpr(name="Diagnostic", module_id="std.core", loc=loc)
+		self_inner = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
+		self_ty = parser_ast.TypeExpr(name="&", args=[self_inner], loc=loc)
+		self_param = parser_ast.Param(name="self", type_expr=self_ty, mutable=False)
+		ret_ty = parser_ast.TypeExpr(name="String", loc=loc)
+		# Build the body: lex-utf8 sorted field projection.
+		sorted_fields = sorted(exc.args, key=lambda a: a.name)
+		body_expr: parser_ast.Expr
+		if not sorted_fields:
+			body_expr = parser_ast.Literal(loc=loc, value="{}")
+		else:
+			chunks: list[parser_ast.Expr] = [parser_ast.Literal(loc=loc, value="{")]
+			for i, field in enumerate(sorted_fields):
+				if i > 0:
+					chunks.append(parser_ast.Literal(loc=loc, value=","))
+				chunks.append(parser_ast.Literal(loc=loc, value=f'"{field.name}":'))
+				# self.<field>.to_json_text() — auto-borrow handles &Self.
+				self_ref = parser_ast.Name(loc=loc, ident="self")
+				field_access = parser_ast.Attr(loc=loc, value=self_ref, attr=field.name, op=".")
+				method_attr = parser_ast.Attr(loc=loc, value=field_access, attr="to_json_text", op=".")
+				method_call = parser_ast.Call(
+					loc=loc, func=method_attr, args=[], kwargs=[], type_args=None,
+				)
+				chunks.append(method_call)
+			chunks.append(parser_ast.Literal(loc=loc, value="}"))
+			body_expr = chunks[0]
+			for chunk in chunks[1:]:
+				body_expr = parser_ast.Binary(loc=loc, op="+", left=body_expr, right=chunk)
+		return_stmt = parser_ast.ReturnStmt(loc=loc, value=body_expr)
+		body = parser_ast.Block(statements=[return_stmt])
+		to_json_fn = parser_ast.FunctionDef(
+			name="to_json_text",
+			orig_name="to_json_text",
+			type_params=[],
+			params=[self_param],
+			return_type=ret_ty,
+			body=body,
+			loc=loc,
+			declared_nothrow=True,
+			is_pub=True,
+			is_method=True,
+			self_mode="ref",
+			impl_target=target,
+		)
+		impls.append(parser_ast.ImplementDef(
+			target=target,
+			loc=loc,
+			methods=[to_json_fn],
+			trait=trait,
+		))
+		synthesized_any = True
+	prog.implements = impls
+	# Bring `core.Diagnostic` into trait scope so the synthesized
+	# `<self>.<field>.to_json_text()` UFCS dispatch resolves through
+	# the std.core scalar impls without forcing every user module
+	# that declares a `pub error` to write `use trait core.Diagnostic`
+	# explicitly.  Idempotent — only added when not already present
+	# AND at least one synthesis actually emitted (the post-scan
+	# `emitted_diag` form would also fire on pre-existing manual
+	# impls, which is misleading; `synthesized_any` is the precise
+	# signal).
+	used_traits = list(getattr(prog, "used_traits", []) or [])
+	already_used = any(
+		getattr(t, "name", None) == "Diagnostic"
+		and tuple(getattr(t, "module_path", []) or []) in (("std", "core"), ("core",))
+		for t in used_traits
+	)
+	if synthesized_any and not already_used:
+		# Synthesize `use trait std.core.Diagnostic;`.  TraitRef takes
+		# a module_path list; we use the canonical std.core form.
+		used_traits.append(parser_ast.TraitRef(
+			loc=parser_ast.Located(line=0, column=0),
+			module_path=["std", "core"],
+			name="Diagnostic",
+		))
+		prog.used_traits = used_traits
+
+
 def _span_in_file(path: Path, loc: object | None, source_manager: SourceManager | None = None) -> Span:
 	"""
 	Construct a Span that is anchored to a specific source file.
@@ -1710,6 +2066,7 @@ def parse_drift_workspace_to_hir(
 	external_module_packages: dict[str, str] | None = None,
 	external_exception_schemas: dict[str, tuple[str, list[str]]] | None = None,
 	external_type_aliases: list[tuple[str, str, list[str], object]] | None = None,
+	external_diagnostic_targets: set[tuple[str | None, str]] | None = None,
 	package_id: str | None = None,
 	stdlib_root: Path | None = None,
 	test_build_only: bool = False,
@@ -2054,6 +2411,53 @@ def parse_drift_workspace_to_hir(
 		merged_programs[mid] = prog
 		module_file_by_id[mid] = path
 	source_modules = set(merged_programs.keys())
+	# Slice 5 (Diagnostic / projectability — K, 2026-05-04):
+	# pre-scan every workspace module's `implement core.Diagnostic
+	# for T` impls so a `pub error` field in module B that names
+	# a struct from module A is recognized as projectable, regardless
+	# of the order in which `_lower_parsed_program_to_hir` happens
+	# to visit modules.  Gated on canonical `std.core.Diagnostic`
+	# resolution (matching the auto-Throw / auto-Diagnostic gate)
+	# so a user-defined trait that happens to be named `Diagnostic`
+	# in another module does NOT incorrectly mark a target as
+	# projectable.  Stashed on the shared TypeTable below.
+	workspace_diag_targets: set[tuple[str | None, str]] = set()
+	for _mid, _prog in merged_programs.items():
+		# Build the file's import aliases on the fly — the canonical
+		# `module_aliases_by_module` map is populated later in this
+		# function, so we need a local view of (alias → module_id)
+		# for the std.core gating below.
+		_file_aliases: dict[str, str] = {}
+		for _imp in (getattr(_prog, "imports", []) or []):
+			_path = getattr(_imp, "path", []) or []
+			_mod = ".".join(_path)
+			if not _mod:
+				continue
+			_alias = getattr(_imp, "alias", None) or (_path[-1] if _path else _mod)
+			if _alias not in _file_aliases:
+				_file_aliases[_alias] = _mod
+		for _impl in (getattr(_prog, "implements", []) or []):
+			_trait = getattr(_impl, "trait", None)
+			if _trait is None or getattr(_trait, "name", None) != "Diagnostic":
+				continue
+			# Canonical std.core gating: accept (a) explicit module_id ==
+			# "std.core", (b) module_alias resolving via this module's
+			# imports to "std.core", (c) unqualified `Diagnostic` only
+			# when the impl lives inside std.core itself.
+			_trait_module = getattr(_trait, "module_id", None)
+			if _trait_module is None:
+				_alias_name = getattr(_trait, "module_alias", None)
+				if _alias_name is not None:
+					_trait_module = _file_aliases.get(_alias_name)
+				elif _mid == "std.core":
+					_trait_module = "std.core"
+			if _trait_module != "std.core":
+				continue
+			_target = getattr(_impl, "target", None)
+			if _target is None or getattr(_target, "name", None) is None:
+				continue
+			_t_mod = getattr(_target, "module_id", None) or _mid
+			workspace_diag_targets.add((_t_mod, _target.name))
 	if isinstance(external_module_packages, dict) and package_id:
 		# Self-exclusion defense-in-depth: if the current build's package_id
 		# leaked into external_module_packages (should not happen — driftc.py
@@ -3328,6 +3732,19 @@ def parse_drift_workspace_to_hir(
 		if word_bits is not None:
 			_tt_kwargs["word_bits"] = word_bits
 		shared_type_table = TypeTable(**_tt_kwargs)
+	# Slice 5: stash the pre-scanned workspace Diagnostic-impl
+	# targets so the per-module synthesizer in
+	# `_synthesize_auto_diagnostic_impls` can recognize cross-module
+	# explicit `implement core.Diagnostic for T` impls regardless
+	# of module visit order.  Also fold in cross-PACKAGE Diagnostic
+	# targets gathered by driftc.py from each loaded package's
+	# `impl_headers` (the parser-side trait_worlds[external_module]
+	# entries are populated AFTER per-module HIR lowering, so an
+	# upfront set is needed here).
+	combined_diag_targets = set(workspace_diag_targets)
+	if external_diagnostic_targets:
+		combined_diag_targets |= set(external_diagnostic_targets)
+	shared_type_table.workspace_diagnostic_targets = combined_diag_targets
 	if package_id is not None:
 		shared_type_table.package_id = package_id
 	local_pkg = package_id or "__local__"
@@ -4387,6 +4804,20 @@ def _lower_parsed_program_to_hir(
 	# construction and `Result<T, E>.or_throw()` resolves the `require E is Throw`
 	# clause cleanly without forcing users to hand-write boilerplate.
 	_synthesize_auto_throw_impls(prog, module_id=module_id, module_aliases=module_aliases)
+	# Slice 5: synthesize `implement core.Diagnostic for E` for every
+	# `pub error E` whose fields are all projectable.  Non-projectable
+	# fields surface E_PUB_ERROR_FIELD_NOT_PROJECTABLE here.  Same
+	# placement rationale as auto-Throw — must run before
+	# `build_trait_world` so the synthesized impls register cleanly.
+	_synthesize_auto_diagnostic_impls(
+		prog,
+		module_id=module_id,
+		type_table=type_table,
+		module_aliases=module_aliases,
+		exception_kinds=type_table.exception_kinds,
+		exception_pub=type_table.exception_pub,
+		diagnostics=diagnostics,
+	)
 	# Build a TypeTable early so we can register user-defined type names (structs)
 	# before resolving function signatures. This prevents `resolve_opaque_type`
 	# from minting unrelated placeholder TypeIds for struct names.

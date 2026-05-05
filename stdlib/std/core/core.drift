@@ -111,14 +111,34 @@ pub trait Destructible {
 	fn destroy(self: Self) nothrow -> Void;
 }
 
-/// Trait for types that can produce a `DiagnosticValue` projection
-/// of themselves.
+/// Trait for types that produce a JSON-text projection of themselves
+/// for error-reporting paths.
 ///
-/// Used by error-reporting paths to render typed values in
-/// machine-readable diagnostic output.  Default impls: `Int`,
-/// `Uint`, `Bool`, `Float`, `String`, `DiagnosticValue`.
+/// Slice 5 (Phase 5a) — single owner of the JSON shape.  A type has
+/// EXACTLY ONE Diagnostic JSON owner: a manual
+/// `implement core.Diagnostic for T` impl, OR a compiler-synthesized
+/// impl on a `pub error T` whose fields are all projectable.  No
+/// blending of manual field behavior with compiler-generated outer
+/// shape — if you write the impl, you own the whole JSON.
+///
+/// Field projectability (compile-time gate on synthesis — see
+/// `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`):
+///   * Scalars are projectable (`Int`, `Uint`, `Bool`, `Float`,
+///     `String`, `DiagnosticValue`).
+///   * `pub error` is projectable through its own (synthesized or
+///     manual) Diagnostic impl.
+///   * Ordinary `pub struct` / `pub variant` fields are projectable
+///     ONLY when they have an explicit `implement core.Diagnostic
+///     for T` — no automatic structural dump.
+///   * Collections (`Optional<U>`, `Array<U>`, `Map<K, V>`) are NEVER
+///     auto-projectable — wrap behind a carrier with a manual impl.
+///   * `RawPtr<T>` / `Ptr<T>` / `TypeBox` / function-typed fields are
+///     not projectable.
+///
+/// Built-in impls below: `Int`, `Uint`, `Bool`, `Float`, `String`,
+/// `DiagnosticValue`.
 pub trait Diagnostic {
-	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
+	fn to_json_text(self: &Self) nothrow -> String;
 }
 
 /// Single key/value pair carried by structured diagnostics.
@@ -598,38 +618,38 @@ implement<T> copy_mod.Copy for mem.Ptr<T> {
 }
 
 implement Diagnostic for Int {
-	pub fn to_diag(self: &Int) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(*self);
+	pub fn to_json_text(self: &Int) nothrow -> String {
+		return diagnostic_json_int(*self);
 	}
 }
 
 implement Diagnostic for Uint {
-	pub fn to_diag(self: &Uint) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(*self);
+	pub fn to_json_text(self: &Uint) nothrow -> String {
+		return diagnostic_json_uint(*self);
 	}
 }
 
 implement Diagnostic for Bool {
-	pub fn to_diag(self: &Bool) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Bool(*self);
+	pub fn to_json_text(self: &Bool) nothrow -> String {
+		return diagnostic_json_bool(*self);
 	}
 }
 
 implement Diagnostic for Float {
-	pub fn to_diag(self: &Float) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Float(*self);
+	pub fn to_json_text(self: &Float) nothrow -> String {
+		return diagnostic_json_float(*self);
 	}
 }
 
 implement Diagnostic for String {
-	pub fn to_diag(self: &String) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(*self);
+	pub fn to_json_text(self: &String) nothrow -> String {
+		return diagnostic_json_string(self);
 	}
 }
 
 implement Diagnostic for DiagnosticValue {
-	pub fn to_diag(self: &DiagnosticValue) nothrow -> DiagnosticValue {
-		return *self;
+	pub fn to_json_text(self: &DiagnosticValue) nothrow -> String {
+		return _dv_to_json_text(self);
 	}
 }
 
@@ -834,10 +854,15 @@ implement ErrorContextView {
 // ┌────────────────────────────────────────────────────────────────┐
 // │ DELETION LEDGER — transitional migration scaffolding only.     │
 // │                                                                │
-// │ The following helpers exist solely to bridge the existing      │
-// │ `to_diag() -> DiagnosticValue` exception-field projection      │
-// │ while public DV is replaced by canonical JSON params:          │
+// │ The Diagnostic trait surface migrated to                       │
+// │ `to_json_text(self) -> String` in 0.31.60.  The DV-attachment  │
+// │ path (ConstructError + ErrorAddAttrDV) is still operational    │
+// │ because exception-field auto-promotion wraps                   │
+// │ `value.to_json_text()` into `DV::String(json)` and the         │
+// │ existing throw lowering threads that DV through the legacy     │
+// │ `e.attrs[k]` surface and the params-JSON builder.              │
 // │                                                                │
+// │ The following helpers exist solely to bridge that DV path:     │
 // │   - `_dv_to_json_text` (this module)                           │
 // │   - `DiagnosticValue.kind()` (compiler intrinsic — see         │
 // │     `lang/driftc/checker/call_resolver.py` and                 │
@@ -845,15 +870,15 @@ implement ErrorContextView {
 // │   - `DiagnosticValue.index()` (compiler intrinsic — same       │
 // │     locations)                                                 │
 // │                                                                │
-// │ These are NOT new user-facing DV APIs.  Do not document them   │
-// │ in `docs/effective-drift.md` or any other user-visible spec.   │
-// │ Do not expand them with new variants.  Do not call them from   │
+// │ These are NOT user-facing DV APIs.  Do not document them in    │
+// │ `docs/effective-drift.md` or any other user-visible spec.  Do  │
+// │ not expand them with new variants.  Do not call them from      │
 // │ user code (they are not exported from std.core).               │
 // │                                                                │
-// │ DELETE this path once throw-side projection no longer depends  │
-// │ on DV — i.e., once `to_diag()` is removed from the Diagnostic  │
-// │ trait and replaced with `to_json() -> JsonNode`.  Tracked in   │
-// │ `memory/project_dv_to_json_diagnostics.md` (Slice 5).          │
+// │ DELETE this path at the ABI-13 cut, when DV-attachment goes    │
+// │ away entirely and the params-JSON builder calls                │
+// │ `value.to_json_text()` directly.  Tracked in                   │
+// │ `memory/project_dv_to_json_diagnostics.md` (Slice 5+).         │
 // └────────────────────────────────────────────────────────────────┘
 //
 // Why these live in std.core (and not std.json): std.core has its

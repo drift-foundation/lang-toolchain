@@ -88,13 +88,13 @@ pub variant IoError {
 }
 
 implement core.Diagnostic for IoError {
-	pub fn to_diag(self: &IoError) nothrow -> DiagnosticValue {
+	pub fn to_json_text(self: &IoError) nothrow -> String {
 		return match self {
 			Errno(code) => {
-				DiagnosticValue::Int(*code)
+				core.diagnostic_json_int(*code)
 			},
 			RequiresVirtualThread => {
-				DiagnosticValue::Int(-2)
+				core.diagnostic_json_int(-2)
 			}
 		};
 	}

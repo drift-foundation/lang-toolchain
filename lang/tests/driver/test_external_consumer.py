@@ -2147,3 +2147,162 @@ pub fn main() nothrow -> Int {
 	assert "exists but is not visible here" in messages, (
 		f"K28 guard: expected visibility diagnostic for Cell.get; got: {messages}"
 	)
+
+
+# ── Slice 5: cross-package Diagnostic-impl projectability ──────────
+
+
+_ACME_DIAGCARRIER_SOURCE = """\
+module acme.diagcarrier;
+
+import std.core as core;
+
+use trait core.Diagnostic;
+
+export { Carrier };
+
+pub struct Carrier {
+	pub n: Int,
+}
+
+implement core.Diagnostic for Carrier {
+	pub fn to_json_text(self: &Carrier) nothrow -> String {
+		return core.diagnostic_json_int(self.n);
+	}
+}
+"""
+
+
+def _build_signed_diagcarrier_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
+	"""Build a signed acme.diagcarrier package with `pub struct Carrier`
+	and an explicit `implement core.Diagnostic for Carrier`.  Used by
+	`test_ext_cross_package_diagnostic_projectability_gate_only` to pin
+	the external trait-world scan in `_scan_external_diagnostic_targets`."""
+	build = tmp_path / "diagcarrier_build"
+	mod_dir = build / "acme" / "diagcarrier"
+	_write_file(mod_dir / "diagcarrier.drift", _ACME_DIAGCARRIER_SOURCE)
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	pkg_path = tmp_path / "pkgs" / "acme.diagcarrier.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(stdlib_dir),
+		str(mod_dir / "diagcarrier.drift"),
+		*_emit_pkg_args("acme.diagcarrier"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.diagcarrier package fixture"
+
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(
+		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+	)
+	return pkg_path
+
+
+def test_ext_cross_package_diagnostic_projectability_gate_only(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""Slice 5 — GATE-ONLY regression for cross-package projectability.
+
+	Pins one narrow contract: with a producer package that supplies
+	`implement core.Diagnostic for Carrier`, a consumer that names
+	`carrier.Carrier` as a field type in a `pub error` must NOT be
+	rejected by the synthesis projectability gate with
+	`E_PUB_ERROR_FIELD_NOT_PROJECTABLE`.  This exercises the
+	external-impl-headers pre-scan in driftc.py +
+	`_scan_external_diagnostic_targets` (`lang/driftc/parser/__init__.py`).
+	`TraitWorld.impls` entries are `ImplDef(trait=TraitKey,
+	target=TypeKey, ...)` using `module` (not `module_id`) — both
+	the parser-side scan and the impl-headers scan are sensitive to
+	getting those field names right.
+
+	**Test name says "gate-only" deliberately.**  The synthesized
+	body's downstream UFCS dispatch on a cross-package
+	Diagnostic-impl method (`(&self.c).to_json_text()`) currently
+	does not resolve through the consumer's call resolver —
+	tracked as a follow-up trait-impl-visibility issue.  We assert
+	that downstream failure is exactly the expected
+	"no matching method 'to_json_text'" so unrelated package-
+	consumer breakage (load failure, signature mismatch, etc.)
+	can't slip past silently.
+	"""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+	keys = _gen_keys()
+	carrier_pkg = _build_signed_diagcarrier_pkg(tmp_path, keys)
+	_ = capsys.readouterr()
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	core_trust = tmp_path / "core_trust.json"
+	_write_trust_store(
+		core_trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
+	trust = tmp_path / "trust.json"
+	_write_trust_store(
+		trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["acme.*"],
+	)
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	_write_file(main_src, """\
+module main;
+
+import std.core as core;
+import acme.diagcarrier as carrier;
+
+pub error Wraps {
+	c: carrier.Carrier,
+}
+
+pub fn main() nothrow -> Int {
+	return 0;
+}
+""")
+	argv = [
+		"-M", str(consumer),
+		"--stdlib-root", str(stdlib_dir),
+		"--package-root", str(carrier_pkg.parent),
+		"--dep", "acme.diagcarrier@0.0.0",
+		"--dev",
+		"--dev-core-trust-store", str(core_trust),
+		"--trust-store", str(trust),
+		"--entry", "main::main",
+		str(main_src),
+		"--json",
+	]
+	driftc_main(argv)
+	captured = capsys.readouterr()
+	payload = json.loads(captured.out) if captured.out.strip() else {}
+	diags = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	codes = [d.get("code") for d in diags]
+	messages = [d.get("message", "") for d in diags]
+	# Gate (this slice's contract): the projectability check must
+	# accept the cross-package field via the impl-headers pre-scan.
+	assert "E_PUB_ERROR_FIELD_NOT_PROJECTABLE" not in codes, (
+		f"cross-package Diagnostic impl on `acme.diagcarrier.Carrier` should make "
+		f"a `pub error Wraps {{ c: carrier.Carrier }}` field projectable via "
+		f"the impl-headers pre-scan in driftc.py; got codes: {codes}"
+	)
+	# Pin the EXPECTED downstream out-of-scope diagnostic so an
+	# unrelated package-consumer regression (load failure, sig
+	# mismatch, etc.) can't pass this gate-only test silently.
+	# When the cross-package UFCS dispatch follow-up lands, this
+	# assertion flips to `rc == 0` + no diagnostics and the
+	# gate-only framing is retired.
+	assert any("no matching method 'to_json_text'" in m for m in messages), (
+		f"expected the known out-of-scope `to_json_text` UFCS-dispatch "
+		f"failure on the cross-package Carrier — its absence suggests "
+		f"either the gate regressed silently OR the dispatch was fixed "
+		f"and this test should be retargeted; got: {messages}"
+	)

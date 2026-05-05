@@ -377,8 +377,8 @@ pub struct CryptoError {
 }
 
 implement core.Diagnostic for CryptoError {
-	pub fn to_diag(self: &CryptoError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &CryptoError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

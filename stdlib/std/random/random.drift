@@ -22,8 +22,8 @@ pub struct RandomError {
 }
 
 implement core.Diagnostic for RandomError {
-	pub fn to_diag(self: &RandomError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &RandomError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

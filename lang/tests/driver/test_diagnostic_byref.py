@@ -36,6 +36,11 @@ def _compile_source(src: str, tmp_path: Path):
 
 
 def test_diagnostic_byref_impl_allows_noncopy(tmp_path: Path) -> None:
+	# Slice 5 (0.31.60): Diagnostic migrated `to_diag → DV` to
+	# `to_json_text → String`.  This test pins that the by-reference
+	# `&Self` receiver shape compiles cleanly for a struct that opts
+	# in via an explicit Diagnostic impl — the receiver-shape rule
+	# is independent of the trait-method body.
 	diagnostics = _compile_source(
 		"""
 module main;
@@ -46,14 +51,14 @@ use trait core.Diagnostic;
 struct S { x: Int }
 
 implement core.Diagnostic for S {
-	pub fn to_diag(self: &S) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(self.x);
+	pub fn to_json_text(self: &S) nothrow -> String {
+		return core.diagnostic_json_int(self.x);
 	}
 }
 
 pub fn main() nothrow -> Int {
 	val s = S(x = 1);
-	val dv = s.to_diag();
+	val js = s.to_json_text();
 	return 0;
 }
 """,

@@ -125,8 +125,8 @@ implement core.Copy for JsonConfig {
 }
 
 implement core.Diagnostic for JsonErrorData {
-	pub fn to_diag(self: &JsonErrorData) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &JsonErrorData) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

@@ -80,8 +80,8 @@ pub struct TimeParseError {
 }
 
 implement core.Diagnostic for TimeParseError {
-	pub fn to_diag(self: &TimeParseError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &TimeParseError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

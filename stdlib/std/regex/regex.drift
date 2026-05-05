@@ -51,8 +51,8 @@ pub struct RegexError {
 }
 
 implement core.Diagnostic for RegexError {
-	pub fn to_diag(self: &RegexError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &RegexError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

@@ -8432,6 +8432,42 @@ def main(argv: list[str] | None = None) -> int:
 	if "lang.core" not in external_exports:
 		external_exports["lang.core"] = _prelude_exports()
 
+	# Slice 5 cross-package projectability: scan loaded packages'
+	# `impl_headers` for `implement core.Diagnostic for T` impls so
+	# the parser-side synthesizer in
+	# `_synthesize_auto_diagnostic_impls` can recognize cross-package
+	# carriers as projectable.  Stashed on the parsed TypeTable below.
+	external_diagnostic_targets: set[tuple[str | None, str]] = set()
+	if loaded_pkgs:
+		for _pkg in loaded_pkgs:
+			for _mid, _mod in getattr(_pkg, "modules_by_id", {}).items():
+				_impl_hdrs = (_mod.interface or {}).get("impl_headers") if isinstance(_mod.interface, dict) else None
+				if not isinstance(_impl_hdrs, list):
+					continue
+				for _entry in _impl_hdrs:
+					if not isinstance(_entry, dict):
+						continue
+					_trait_obj = _entry.get("trait")
+					if not isinstance(_trait_obj, dict):
+						continue
+					if _trait_obj.get("module") != "std.core" or _trait_obj.get("name") != "Diagnostic":
+						continue
+					_target_obj = _entry.get("target")
+					if not isinstance(_target_obj, dict):
+						continue
+					_t_name = _target_obj.get("name")
+					# `encode_type_expr` serializes the type's module under
+					# the key "module" (provisional_dmir_v0.py:403) — NOT
+					# "module_id".  For impls whose target's module differs
+					# from def_module (cross-namespace orphan-style impls
+					# allowed when the target package is consumed), reading
+					# the wrong key would mis-attribute the (mod, name)
+					# entry; the def_module fallback only covers the common
+					# case.
+					_t_mod = _target_obj.get("module") or _entry.get("def_module") or _mid
+					if isinstance(_t_name, str) and _t_name:
+						external_diagnostic_targets.add((_t_mod, _t_name))
+
 	external_module_packages: dict[str, str] = {}
 	if loaded_pkgs:
 		for pkg in loaded_pkgs:
@@ -8601,6 +8637,7 @@ def main(argv: list[str] | None = None) -> int:
 		external_module_exports=external_exports,
 		external_module_packages=external_module_packages,
 		external_exception_schemas=external_exception_schemas or None,
+		external_diagnostic_targets=external_diagnostic_targets,
 		package_id=package_id,
 		stdlib_root=args.stdlib_root,
 		test_build_only=bool(getattr(args, "test_build_only", False)),

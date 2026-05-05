@@ -66,16 +66,16 @@ pub variant NetError {
 }
 
 implement core.Diagnostic for NetError {
-	pub fn to_diag(self: &NetError) nothrow -> DiagnosticValue {
+	pub fn to_json_text(self: &NetError) nothrow -> String {
 		return match self {
 			Errno(code) => {
-				DiagnosticValue::Int(*code)
+				core.diagnostic_json_int(*code)
 			},
 			WouldBlock => {
-				DiagnosticValue::Int(-1)
+				core.diagnostic_json_int(-1)
 			},
 			RequiresVirtualThread => {
-				DiagnosticValue::Int(-2)
+				core.diagnostic_json_int(-2)
 			}
 		};
 	}

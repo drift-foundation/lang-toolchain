@@ -75,8 +75,8 @@ pub struct Base32Decoder {
 }
 
 implement core.Diagnostic for CodecError {
-	pub fn to_diag(self: &CodecError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &CodecError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

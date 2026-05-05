@@ -28,8 +28,8 @@ const INT_MIN: Int = -9223372036854775808;
 const INT_MAX: Int = 9223372036854775807;
 
 implement core.Diagnostic for ParseError {
-	pub fn to_diag(self: &ParseError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &ParseError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 

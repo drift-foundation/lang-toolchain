@@ -4,12 +4,32 @@ import std.err as err;
 import std.core as core;
 
 use trait core.Diagnostic;
+
+// Slice 5 (0.31.60): Diagnostic migrated `to_diag → DV` to
+// `to_json_text → String`.  The IteratorOpId numeric mapping now
+// projects through `to_json_text` returning the raw JSON int text
+// (`"0"`, `"1"`, ...).  The check parses the string back to Int and
+// asserts the same Slice 1/2/3 ABI-stable numeric tags.
+fn _str_to_int(s: &String) nothrow -> Optional<Int> {
+	if s.byte_length() == 0 { return Optional::None(); }
+	val c0 = s.byte_at(0);
+	if c0 < cast<Byte>(48) or c0 > cast<Byte>(57) { return Optional::None(); }
+	var n: Int = 0;
+	var i: Int = 0;
+	val len = s.byte_length();
+	while i < len {
+		val b = s.byte_at(i);
+		if b < cast<Byte>(48) or b > cast<Byte>(57) { return Optional::None(); }
+		n = n * 10 + (cast<Int>(b) - 48);
+		i = i + 1;
+	}
+	return Optional::Some(value = n);
+}
+
 fn check(op: err.IteratorOpId, expected: Int) nothrow -> Int {
-	val dv = try op.to_diag() catch { DiagnosticValue::Int(-1) };
-	val i = dv.as_int();
-	match i {
+	val s = op.to_json_text();
+	match _str_to_int(&s) {
 		Some(v) => {
-			if v == -1 { return 40 + expected; }
 			if v != expected {
 				return 20 + expected;
 			}

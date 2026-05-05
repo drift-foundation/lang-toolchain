@@ -90,8 +90,8 @@ pub struct Utf8Error {
 }
 
 implement core.Diagnostic for Utf8Error {
-	pub fn to_diag(self: &Utf8Error) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &Utf8Error) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 
@@ -108,8 +108,8 @@ pub struct TextError {
 }
 
 implement core.Diagnostic for TextError {
-	pub fn to_diag(self: &TextError) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(self.tag);
+	pub fn to_json_text(self: &TextError) nothrow -> String {
+		return core.diagnostic_json_string(&self.tag);
 	}
 }
 
