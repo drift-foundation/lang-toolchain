@@ -1,0 +1,6 @@
+{
+  "description": "Slice 6 (0.31.61) e2e: manual `Diagnostic for E` owns the throw-side params JSON. The user-supplied `to_json_text` redacts a sensitive `secret` field; the runtime envelope's `e.encode_compact()` must not contain the secret string but must contain the public id. Exit 0 means redaction held; exit 10 = secret leaked; exit 11 = public id missing; exit 12 = unexpected arm.",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

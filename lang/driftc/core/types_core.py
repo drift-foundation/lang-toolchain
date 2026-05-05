@@ -358,6 +358,28 @@ class TypeTable:
 		# a `pub fn f() throws PrivateError` is rejected because a
 		# private error type leaks through the public throws clause.
 		self.exception_pub: dict[str, bool] = {}
+		# Slice 6: FQN set of `pub error E` decls whose Diagnostic
+		# projection is OWNED BY THE USER — i.e. the user wrote
+		# `implement core.Diagnostic for E` and the compiler skipped
+		# synthesis.  The K-rule for this set: once a user writes
+		# `implement core.Diagnostic for E`, the compiler STOPS
+		# interpreting E's fields for diagnostic projection.  The
+		# user owns the whole JSON shape and may walk arbitrary
+		# fields/types however they want — the compiler only
+		# requires the impl to return JSON text.  Drives:
+		#   * Site A (type_checker HExceptionInit): per-field
+		#     `is_diagnostic` validation + `to_json_text → DV::String`
+		#     auto-promotion both SKIPPED for these errors.
+		#   * Site B (checker validator): same per-field walk SKIPPED.
+		#   * Site C (hir_to_mir HExceptionInit): legacy DV-attachment
+		#     path SKIPPED in favor of building the Path-A struct,
+		#     calling `e.to_json_text()` for params JSON, and emitting
+		#     an empty-payload Error envelope.
+		#   * Typed catch arm: `catch E(e) { ... }` REJECTED with
+		#     `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` (binder-less
+		#     `catch E { ... }` remains allowed, with envelope access
+		#     via `e.params.get(...)`).
+		self.manual_diagnostic_pub_errors: set[str] = set()
 		# Struct schemas keyed by nominal identity. Values are (name, [field_names]).
 		# Field types live in the STRUCT TypeDef itself.
 		self.struct_schemas: dict[NominalKey, tuple[str, list[str]]] = {}

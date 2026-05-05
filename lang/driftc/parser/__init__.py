@@ -972,6 +972,14 @@ class _FrontendDecl:
 		self.impl_type_param_locs = list(impl_type_param_locs or [])
 		self.impl_owner = impl_owner
 		self.module = module
+		# Slice 6: trait identity for impl-block methods, plumbed
+		# through to FnSignature.impl_trait_{module,name} so consumers
+		# (e.g. the manual-Diagnostic Site C lowering's
+		# `_lookup_manual_diagnostic_to_json_text_fn_id`) can filter
+		# on the canonical trait without scanning all impls or relying
+		# on method-name uniqueness.
+		self.impl_trait_module: Optional[str] = None
+		self.impl_trait_name: Optional[str] = None
 
 
 def _decl_from_parser_fn(
@@ -1580,6 +1588,20 @@ def _synthesize_auto_diagnostic_impls(
 	for scalar in _PROJECTABLE_SCALARS:
 		diagnostic_targets.add((None, scalar))
 		diagnostic_targets.add(("std.core", scalar))
+	# Slice 6: stash the FQN set of pub errors with user-owned
+	# Diagnostic projection on the type table for downstream gates
+	# (Sites A/B/C + typed-catch boundary).  K-rule: once a user
+	# writes `implement core.Diagnostic for E`, the compiler stops
+	# interpreting E's fields for diagnostic projection.  See
+	# `TypeTable.manual_diagnostic_pub_errors` (types_core.py).
+	if type_table is not None:
+		manual_owners_set = getattr(type_table, "manual_diagnostic_pub_errors", None)
+		if manual_owners_set is None:
+			manual_owners_set = set()
+			type_table.manual_diagnostic_pub_errors = manual_owners_set
+		for exc in exceptions:
+			if exc.name in manual_diag_targets_local:
+				manual_owners_set.add(f"{module_id}:{exc.name}")
 	synthesized_any = False
 	for exc in exceptions:
 		if exc.name in manual_diag_targets_local:
@@ -3779,6 +3801,21 @@ def parse_drift_workspace_to_hir(
 			prev_exc = {}
 		prev_exc.update(external_exception_schemas)
 		shared_type_table.exception_schemas = prev_exc
+	# Slice 6: cross-package manual-Diagnostic merge.
+	# Package-defined `pub error E` with a user-owned
+	# `implement core.Diagnostic for E` is recorded at producer-side
+	# synthesis time and serialized into the package format
+	# (`provisional_dmir_v0.py: manual_diagnostic_pub_errors`) and
+	# decoded into `DecodedTypeTable.manual_diagnostic_pub_errors`.
+	# The package linker (`type_table_link_v0.py`) merges per-package
+	# entries into `host.manual_diagnostic_pub_errors`, which is the
+	# pre-linked TypeTable passed in via `type_table=` here.  No
+	# intersection-with-impl-headers — that approach can't
+	# distinguish synthesized impls from manual impls and incorrectly
+	# tagged auto-synthesized Diagnostic impls (e.g. on stdlib /
+	# package-defined pub errors with all-projectable fields) as
+	# manual.  Pinned by
+	# `test_ext_cross_package_manual_diagnostic_typed_binder_rejected`.
 	# Pre-populate type aliases from loaded packages so that cross-package
 	# type references (e.g. web.rest.Request → web.rest.request.Request) resolve
 	# correctly during signature resolution in _lower_parsed_program_to_hir.
@@ -5401,6 +5438,21 @@ def _lower_parsed_program_to_hir(
 			# Arc / std.concurrent would be treated as bodied functions
 			# and trip the "must return a value on all paths" check.
 			impl_method_decl.is_intrinsic = bool(getattr(fn, "is_intrinsic", False))
+			# Slice 6: stash trait identity (canonical module + name)
+			# on the impl-method decl so FnSignature carries it
+			# downstream.  Used by the manual-Diagnostic Site C
+			# lowering to disambiguate `to_json_text` providers.
+			_impl_trait_expr = getattr(impl, "trait", None)
+			if _impl_trait_expr is not None:
+				_it_mod = getattr(_impl_trait_expr, "module_id", None)
+				if _it_mod is None:
+					_it_alias = getattr(_impl_trait_expr, "module_alias", None)
+					if _it_alias is not None:
+						_it_mod = file_module_aliases.get(_it_alias)
+					elif module_id == "std.core":
+						_it_mod = "std.core"
+				impl_method_decl.impl_trait_module = _it_mod
+				impl_method_decl.impl_trait_name = getattr(_impl_trait_expr, "name", None)
 			# Arc runtime boundary: when the @intrinsic method lives on
 			# `Arc<T>`, tag the decl with the corresponding
 			# IntrinsicKind so downstream code (checker call-target,

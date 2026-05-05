@@ -1,0 +1,88 @@
+module main;
+
+import std.core as core;
+import std.console as console;
+
+use trait core.Diagnostic;
+
+// Slice 6 (0.31.61): manual `Diagnostic for E` owns the throw-side
+// params JSON.  When the user redacts a sensitive field in their
+// manual `to_json_text`, the throw envelope's `e.encode_compact()`
+// must NOT contain the redacted value — the compiler stops
+// interpreting E's fields the moment a manual impl exists.
+//
+// This e2e proves the K-rule end-to-end:
+//   1. `pub error Audit { user_id: Int, secret: String }` declares
+//      both a public id and a sensitive secret.
+//   2. The manual `to_json_text` projects ONLY `user_id` (redaction).
+//   3. A binder-less catch reads the envelope and asserts:
+//        a) the secret string `"shhh-secret-token"` is NOT present
+//           anywhere in `e.encode_compact()`.
+//        b) the public id `42` IS present.
+// Exit 0 = both checks pass.  Exit 10 = secret leaked.  Exit 11 =
+// public id missing.  Exit 12 = unexpected catch arm fired.
+pub error Audit {
+	user_id: Int,
+	secret: String,
+}
+
+implement core.Diagnostic for Audit {
+	pub fn to_json_text(self: &Audit) nothrow -> String {
+		// Redacted projection: secret never appears.
+		return "{\"user_id\":" + core.diagnostic_json_int(self.user_id) + "}";
+	}
+}
+
+fn risky() throws Audit -> Int {
+	throw Audit(user_id = 42, secret = "shhh-secret-token");
+}
+
+fn _str_contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val n = needle.byte_length();
+	val h = haystack.byte_length();
+	if n == 0 { return true; }
+	if n > h { return false; }
+	var i: Int = 0;
+	val limit = h - n;
+	while i <= limit {
+		var j: Int = 0;
+		var matched = true;
+		while j < n {
+			if haystack.byte_at(i + j) != needle.byte_at(j) {
+				matched = false;
+				j = n;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn main() nothrow -> Int {
+	// Catch-all `catch e { ... }` binds the Error envelope.  Typed
+	// binder `catch Audit(e)` is rejected at compile time for
+	// manual-Diagnostic pub errors (Slice 6 boundary —
+	// E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED), so we use the
+	// envelope-level form spec'd as the supported manual handling
+	// shape.
+	try {
+		val _ = risky();
+		return 99;
+	} catch e {
+		val envelope = e.encode_compact();
+		val secret_str: String = "shhh-secret-token";
+		val public_str: String = "42";
+		if _str_contains(&envelope, &secret_str) {
+			console.print("LEAK: secret in envelope");
+			return 10;
+		}
+		if !_str_contains(&envelope, &public_str) {
+			console.print("MISSING: public user_id");
+			return 11;
+		}
+		return 0;
+	}
+}

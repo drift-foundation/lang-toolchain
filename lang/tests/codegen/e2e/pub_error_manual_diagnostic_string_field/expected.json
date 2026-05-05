@@ -1,0 +1,6 @@
+{
+  "description": "Slice 6 (0.31.61) e2e: heap-backed-field ownership audit for the manual-Diagnostic Site C lowering. `pub error Wrap { tag: String, count: Int }` with manual `core.Diagnostic for Wrap` is thrown 64 times in a loop; each throw constructs a Path-A struct from heap String + Int values, the user's `to_json_text(&Wrap)` reads `&self.tag` directly, and the catch arm asserts the envelope contains the tag string verbatim. Pins no double-free / no leak / no refcount drift on String fields under the new lowering. Exit 0 = round-trip clean; exit 10 = tag missing from envelope; exit 11 = unexpected arm.",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

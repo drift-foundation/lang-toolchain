@@ -893,6 +893,19 @@ def encode_type_table(table: TypeTable, *, package_id: str, canonical_keys: dict
 		"provided_nominals": provided_nominals,
 		"type_aliases": type_aliases_entries,
 	}
+	# Slice 6: package-level FQN list of `pub error E` decls whose
+	# Diagnostic projection is user-owned (manual `implement
+	# core.Diagnostic for E`).  The consumer's
+	# `parse_drift_workspace_to_hir` reads this back and seeds
+	# `TypeTable.manual_diagnostic_pub_errors` so Sites A/B/C and
+	# the typed-catch boundary (E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED)
+	# fire identically across the package boundary.  Without this
+	# explicit list, the consumer cannot distinguish a producer's
+	# manual impl from the auto-synthesized one (impl_headers don't
+	# carry the manual-vs-synthesized bit).
+	manual_diag_set = getattr(table, "manual_diagnostic_pub_errors", None)
+	if isinstance(manual_diag_set, set):
+		out["manual_diagnostic_pub_errors"] = sorted(manual_diag_set)
 	if canonical_keys_obj is not None:
 		out["canonical_keys"] = canonical_keys_obj
 	return out

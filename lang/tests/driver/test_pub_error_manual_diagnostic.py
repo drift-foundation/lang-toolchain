@@ -88,7 +88,6 @@ use trait core.Diagnostic;
 # ── Probe 1 ─ manual override compiles + skips synthesis ───────────
 
 
-@_SLICE_5_PENDING
 def test_manual_diagnostic_override_compiles(tmp_path, capsys):
 	"""User-supplied `implement Diagnostic for E` skips synthesis;
 	the manual `to_json_text` is dispatched.  Built-in helpers
@@ -100,7 +99,7 @@ pub error SecretError {
 \tsecret_token: String,
 }
 
-implement Diagnostic for SecretError {
+implement core.Diagnostic for SecretError {
 \tpub fn to_json_text(self: &SecretError) nothrow -> String {
 \t\t// Redacted projection — secret_token never appears in output.
 \t\treturn "{\\"user_id\\":" + core.diagnostic_json_int(self.user_id) + "}";
@@ -119,7 +118,6 @@ fn main() nothrow -> Int {
 # ── Probe 2 ─ binder-less catch works ──────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_manual_projection_binderless_catch_works(tmp_path, capsys):
 	"""`catch SecretError { ... }` (no typed binder) compiles when
 	SecretError has a manual `Diagnostic` impl.  Envelope access
@@ -130,7 +128,7 @@ pub error SecretError {
 \tsecret_token: String,
 }
 
-implement Diagnostic for SecretError {
+implement core.Diagnostic for SecretError {
 \tpub fn to_json_text(self: &SecretError) nothrow -> String {
 \t\treturn "{\\"user_id\\":" + core.diagnostic_json_int(self.user_id) + "}";
 \t}
@@ -154,7 +152,6 @@ fn main() nothrow -> Int {
 # ── Probe 3 ─ typed binder rejected on manual projection ──────────
 
 
-@_SLICE_5_PENDING
 def test_manual_projection_typed_binder_rejected(tmp_path, capsys):
 	"""`catch SecretError(e)` (typed binder) is REJECTED at compile
 	time when SecretError has a manual `Diagnostic` impl —
@@ -167,7 +164,7 @@ pub error SecretError {
 \tsecret_token: String,
 }
 
-implement Diagnostic for SecretError {
+implement core.Diagnostic for SecretError {
 \tpub fn to_json_text(self: &SecretError) nothrow -> String {
 \t\treturn "{\\"user_id\\":" + core.diagnostic_json_int(self.user_id) + "}";
 \t}

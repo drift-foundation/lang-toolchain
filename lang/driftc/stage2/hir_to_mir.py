@@ -6683,6 +6683,27 @@ class HIRToMIR:
 		if diags:
 			raise AssertionError("exception ctor args reached MIR lowering with diagnostics (checker bug)")
 
+		# Slice 6 — manual-Diagnostic ownership gate (Site C).
+		# K-rule: once a user writes `implement core.Diagnostic for E`,
+		# the compiler stops interpreting E's fields for diagnostic
+		# projection.  Bypass the per-field DV-attachment path
+		# (ConstructError(payload=...) + ErrorAddAttrDV) entirely and
+		# route the params JSON through the user's own
+		# `to_json_text(&E)` impl: build the Path-A struct from the
+		# resolved field values, dispatch the user's manual
+		# `to_json_text`, and hand the resulting JSON string straight
+		# to `ExcSetParamsJson`.
+		manual_owners = getattr(self._type_table, "manual_diagnostic_pub_errors", None) or set()
+		if expr.event_fqn in manual_owners:
+			return self._construct_error_via_manual_diagnostic(
+				err_val=err_val,
+				code_val=code_val,
+				event_fqn_val=event_fqn_val,
+				event_fqn=expr.event_fqn,
+				resolved=resolved,
+				schema_fields=schema_fields,
+			)
+
 		if not resolved:
 			self.b.emit(
 				M.ConstructError(
@@ -6797,6 +6818,134 @@ class HIRToMIR:
 		if params_json_val is not None:
 			self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=params_json_val))
 		return err_val
+
+	def _construct_error_via_manual_diagnostic(
+		self,
+		*,
+		err_val: M.ValueId,
+		code_val: M.ValueId,
+		event_fqn_val: M.ValueId,
+		event_fqn: str,
+		resolved: list[tuple[str, "H.HExpr"]],
+		schema_fields: list[str] | None,
+	) -> M.ValueId:
+		"""Slice 6 manual-Diagnostic owning lowering for `throw E(...)`.
+
+		Build the Path-A struct E from the resolved field values, call
+		the user's manual `to_json_text(&E)` to project the JSON, and
+		hand the result to `ExcSetParamsJson`.  No DV-attachment
+		(`ConstructError(payload=...)` / `ErrorAddAttrDV`) — the user
+		owns the whole JSON shape.
+
+		`resolved` is in declaration order (matching `schema_fields`),
+		so positional `M.ConstructStruct` field order is correct.
+
+		Ownership invariant: each field value is consumed exactly once
+		— by the struct constructor.  `to_json_text` takes `&Self`
+		(reference borrow), so the struct stays live for the projection
+		and gets dropped at scope exit through the ordinary local
+		drop path.  String / Array fields therefore round-trip without
+		double-free OR leak (heap-string e2e
+		`pub_error_manual_diagnostic_string_field` is the regression
+		anchor).
+		"""
+		# Resolve event_fqn → (module_id, type_name) → Path-A struct TypeId.
+		if ":" not in event_fqn:
+			raise AssertionError(
+				f"event_fqn {event_fqn!r} missing module qualifier; "
+				"manual-Diagnostic lowering requires a module-qualified pub error"
+			)
+		mod_id, type_name = event_fqn.split(":", 1)
+		struct_ty = self._type_table.get_nominal(
+			kind=TypeKind.STRUCT, module_id=mod_id, name=type_name,
+		)
+		if struct_ty is None:
+			raise AssertionError(
+				f"no Path-A struct registered for `pub error {event_fqn}` "
+				"(parser-side parallel struct synthesis bug)"
+			)
+		# Lower each resolved field value to a MIR temp.  ConstructStruct
+		# expects positional args in declaration order — `resolved` is
+		# already in that order.
+		field_vals: list[M.ValueId] = [self.lower_expr(val) for _name, val in resolved]
+		struct_val = self.b.new_temp()
+		self._local_types[struct_val] = struct_ty
+		self.b.emit(M.ConstructStruct(
+			dest=struct_val,
+			struct_ty=struct_ty,
+			args=field_vals,
+		))
+		# Locate the user's manual `to_json_text` method on this struct
+		# type — Slice 6 invariant: a manual-owned pub error has exactly
+		# ONE `to_json_text` method on its Path-A struct (the user's
+		# `implement core.Diagnostic for E`; synthesis was skipped).
+		to_json_fn_id = self._lookup_manual_diagnostic_to_json_text_fn_id(struct_ty)
+		if to_json_fn_id is None:
+			raise AssertionError(
+				f"manual `core.Diagnostic for {event_fqn}` recorded but "
+				f"its `to_json_text` impl method is missing from signatures"
+			)
+		# Materialize the struct in a named local so we can take its
+		# address (`AddrOfLocal` requires a named local, not a temp).
+		# Drop semantics: the local goes out of scope at the throw site
+		# — Drift's standard scope-drop frees the struct after the
+		# `to_json_text` call returns the JSON string.  Heap-backed
+		# fields (String / Array / Arc / etc.) round-trip without
+		# double-free or leak (see e2e
+		# `pub_error_manual_diagnostic_string_field`).
+		struct_local = f"__throw_manual_diag_{self.b.new_temp()}"
+		self.b.ensure_local(struct_local)
+		self._local_types[struct_local] = struct_ty
+		self.b.emit(M.StoreLocal(local=struct_local, value=struct_val))
+		struct_ref = self.b.new_temp()
+		self._local_types[struct_ref] = self._type_table.ensure_ref(struct_ty)
+		self.b.emit(M.AddrOfLocal(dest=struct_ref, local=struct_local, is_mut=False))
+		# Call the user's to_json_text(&E) → String.
+		json_str_val = self.b.new_temp()
+		self._local_types[json_str_val] = self._string_type
+		self.b.emit(M.Call(
+			dest=json_str_val,
+			fn_id=to_json_fn_id,
+			args=[struct_ref],
+			can_throw=False,
+		))
+		# Empty envelope: payload=None / attr_key=None matches the
+		# zero-fields ConstructError shape that already exists for
+		# `throw E()` with no payload.
+		self.b.emit(M.ConstructError(
+			dest=err_val,
+			code=code_val,
+			event_fqn=event_fqn_val,
+			payload=None,
+			attr_key=None,
+		))
+		# Hand the user-projected JSON over to the runtime.
+		self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=json_str_val))
+		return err_val
+
+	def _lookup_manual_diagnostic_to_json_text_fn_id(self, struct_ty: TypeId) -> "FunctionId | None":
+		"""Find the user's `implement core.Diagnostic for E` impl's
+		`to_json_text` method by scanning signatures for a TRAIT IMPL
+		method on `struct_ty` for the canonical `std.core.Diagnostic`
+		trait.  Filtering on the trait identity (not just method name)
+		avoids dispatching to an inherent `to_json_text` or to a
+		different-trait `to_json_text` that happens to share the
+		method name.  See `FnSignature.impl_trait_{module,name}`.
+		"""
+		for fn_id, sig in self._signatures_by_id.items():
+			if not bool(getattr(sig, "is_method", False)):
+				continue
+			if getattr(sig, "method_name", None) != "to_json_text":
+				continue
+			if getattr(sig, "impl_target_type_id", None) != struct_ty:
+				continue
+			# Canonical std.core.Diagnostic gating.
+			if getattr(sig, "impl_trait_module", None) != "std.core":
+				continue
+			if getattr(sig, "impl_trait_name", None) != "Diagnostic":
+				continue
+			return fn_id
+		return None
 
 	def _visit_expr_HResultOk(self, expr: H.HResultOk) -> M.ValueId:
 		"""

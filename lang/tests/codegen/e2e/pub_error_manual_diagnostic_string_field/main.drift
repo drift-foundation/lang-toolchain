@@ -1,0 +1,98 @@
+module main;
+
+import std.core as core;
+import std.console as console;
+
+use trait core.Diagnostic;
+
+// Slice 6 (0.31.61): heap-backed-field ownership audit for the
+// manual-Diagnostic Site C lowering.
+//
+// `_construct_error_via_manual_diagnostic` builds a Path-A struct
+// from the resolved field values, then calls `to_json_text(&E)` on
+// it.  Heap-backed fields (`String`, `Array<...>`, etc.) must
+// round-trip correctly:
+//   * the field value passed to `throw E(...)` is consumed exactly
+//     once (by `M.ConstructStruct`),
+//   * the user's `to_json_text` reads through `&E`, leaving the
+//     struct live for the borrow's lifetime,
+//   * the struct is dropped at scope exit (standard local drop),
+//   * no double-free, no leak.
+//
+// This e2e exercises a `String` field in a manual-Diagnostic
+// `pub error` and asserts:
+//   1. The thrown envelope contains the field value verbatim
+//      (proving the user's projection saw the heap String correctly).
+//   2. Construction of a moderate number of throws does not crash
+//      (a smoke check for refcount drift / use-after-free under
+//      the new lowering).
+//
+// Exit 0 = both checks pass.  Exit 10 = field value missing from
+// envelope.  Exit 11 = unexpected catch arm.
+pub error Wrap {
+	tag: String,
+	count: Int,
+}
+
+implement core.Diagnostic for Wrap {
+	pub fn to_json_text(self: &Wrap) nothrow -> String {
+		// User reads the heap field directly through `&self.tag`.
+		return "{\"count\":" + core.diagnostic_json_int(self.count)
+			+ ",\"tag\":" + core.diagnostic_json_string(&self.tag) + "}";
+	}
+}
+
+fn risky(t: String, c: Int) throws Wrap -> Int {
+	throw Wrap(tag = t, count = c);
+}
+
+fn _str_contains(haystack: &String, needle: &String) nothrow -> Bool {
+	val n = needle.byte_length();
+	val h = haystack.byte_length();
+	if n == 0 { return true; }
+	if n > h { return false; }
+	var i: Int = 0;
+	val limit = h - n;
+	while i <= limit {
+		var j: Int = 0;
+		var matched = true;
+		while j < n {
+			if haystack.byte_at(i + j) != needle.byte_at(j) {
+				matched = false;
+				j = n;
+			} else {
+				j = j + 1;
+			}
+		}
+		if matched { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _check_one(tag: String, count: Int) nothrow -> Int {
+	try {
+		val _ = risky(tag, count);
+		return 99;
+	} catch e {
+		val envelope = e.encode_compact();
+		val needle: String = "heap-tag-payload";
+		if !_str_contains(&envelope, &needle) {
+			console.print("MISSING: tag in envelope");
+			return 10;
+		}
+		return 0;
+	}
+}
+
+fn main() nothrow -> Int {
+	// Run the throw/catch round trip multiple times to surface any
+	// refcount drift or use-after-free under the new lowering.
+	var i: Int = 0;
+	while i < 64 {
+		val rc = _check_one("heap-tag-payload", i);
+		if rc != 0 { return rc; }
+		i = i + 1;
+	}
+	return 0;
+}

@@ -184,6 +184,14 @@ class FnSignature:
 	impl_target_type_id: Optional[TypeId] = None
 	impl_target_type_args: Optional[list[TypeId]] = None
 	impl_type_params: list[TypeParam] = field(default_factory=list)
+	# Slice 6: canonical trait identity for impl-block methods.
+	# Populated by the parser when the impl is attached to a trait
+	# (e.g. `implement core.Diagnostic for E`); None for inherent
+	# `implement E { ... }` blocks and free functions.  Used to
+	# disambiguate impl-method lookups when a type carries both an
+	# inherent and a trait-impl method with the same name.
+	impl_trait_module: Optional[str] = None
+	impl_trait_name: Optional[str] = None
 	# Visibility marker (currently only `pub` vs private for method calls).
 	is_pub: bool = False
 	# Wrapper metadata (boundary Ok-wrap, not user-facing).
@@ -4482,6 +4490,16 @@ class Checker:
 			values_to_validate = [v for _name, v in resolved]
 			if schema_fields is None:
 				values_to_validate = list(stmt.value.pos_args) + [kw.value for kw in stmt.value.kw_args]
+
+			# Slice 6 — manual-Diagnostic ownership gate (Site B).
+			# Same K-rule as Site A in the type-checker: when E has
+			# user-owned `Diagnostic for E`, per-field projection
+			# validation is the user's responsibility, not the
+			# compiler's.  Skip the per-field `is_diagnostic` walk
+			# entirely.  See `TypeTable.manual_diagnostic_pub_errors`.
+			_manual_owners = getattr(ctx.table, "manual_diagnostic_pub_errors", None) or set()
+			if stmt.value.event_fqn in _manual_owners:
+				return
 
 			for fexpr in values_to_validate:
 				if isinstance(fexpr, H.HMove):

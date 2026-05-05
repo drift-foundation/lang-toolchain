@@ -294,18 +294,17 @@ fn main() nothrow -> Int {
 # ── Probe 7 ─ manual impl on the pub error itself unblocks ────────
 
 
-@_SLICE_5_PENDING
 def test_manual_impl_unblocks_non_projectable_field(tmp_path, capsys):
 	"""When the user supplies a manual `Diagnostic for E` impl, the
 	non-projectable-field rule does not fire — the user owns the
 	whole JSON shape (no blending of manual + synthesized).
 
-	Currently still xfailed: the synthesized auto-`Throw for E` body
-	(`throw E(p=self.p)`) goes through the legacy DV-attachment field
-	validator, which still requires `RawPtr<Byte>` to implement
-	`Diagnostic`.  Routing the throw-side params projection through
-	the user's manual `to_json_text` is a follow-up tied to the
-	ABI-13 DV-deletion cut."""
+	Slice 6 (0.31.61): the auto-`Throw for E` body (`throw E(p=self.p)`)
+	now lowers through the manual-Diagnostic Site C path
+	(`_construct_error_via_manual_diagnostic`), which builds the
+	Path-A struct and calls `to_json_text(&E)` instead of walking
+	fields one-by-one through the DV-attachment validator.  No
+	per-field `Diagnostic` requirement — `RawPtr<Byte>` is fine."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error PtrError {
 \tp: RawPtr<Byte>,

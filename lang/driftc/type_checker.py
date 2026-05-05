@@ -9486,6 +9486,25 @@ class TypeChecker:
 				if decl_fields is None:
 					values_to_validate = list(expr.pos_args) + [kw.value for kw in expr.kw_args]
 
+				# Slice 6 — manual-Diagnostic ownership gate (Site A).
+				# Once a user writes `implement core.Diagnostic for E`,
+				# the compiler stops interpreting E's fields for
+				# diagnostic projection.  The user owns the whole JSON
+				# shape (returns from `to_json_text`) and may walk
+				# arbitrary fields/types however they want.  We must
+				# still type-check field expressions (so type errors
+				# inside the args surface), but we DO NOT enforce
+				# `is_diagnostic` per-field and DO NOT auto-promote
+				# values into `DV::String(value.to_json_text())` for
+				# the legacy DV-attachment path — Site C will skip the
+				# DV-attachment entirely and route params JSON through
+				# the user's own `to_json_text(&E)`.
+				_manual_owners = getattr(self.type_table, "manual_diagnostic_pub_errors", None) or set()
+				if expr.event_fqn in _manual_owners:
+					for val_expr in values_to_validate:
+						type_expr(val_expr, used_as_value=True)
+					return record_expr(expr, self._error)
+
 				replacements: dict[int, H.HExpr] = {}
 				for val_expr in values_to_validate:
 					if isinstance(val_expr, H.HMove):
@@ -10383,7 +10402,45 @@ class TypeChecker:
 					scope_env.append(dict())
 					scope_bindings.append(dict())
 					try:
-						if arm.binder:
+						# Slice 6 — typed catch binder boundary.
+						# Typed catch binding (`catch E(e) { ... }`) is
+						# only allowed when E's Diagnostic projection is
+						# COMPILER-SYNTHESIZED.  When the user wrote a
+						# manual `implement core.Diagnostic for E`, the
+						# typed binder's reverse projection (envelope
+						# params JSON → typed E view) cannot be inferred
+						# — synthesis was skipped, so the field-level
+						# JSON shape is opaque to the compiler.  Reject
+						# with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`.
+						# Binderless `catch E { ... }` remains allowed
+						# (the user reads via `e.params.get(...)` on the
+						# envelope handle).  See spec §7.5.
+						_manual_owners = getattr(self.type_table, "manual_diagnostic_pub_errors", None) or set()
+						_typed_binder_rejected = (
+							arm.binder is not None
+							and arm.event_fqn is not None
+							and arm.event_fqn in _manual_owners
+						)
+						if _typed_binder_rejected:
+							diagnostics.append(_tc_diag(
+								message=(
+									f"typed catch binding for `{arm.event_fqn}` "
+									f"requires synthesized Diagnostic projection "
+									f"— this `pub error` has a manual "
+									f"`implement core.Diagnostic` impl"
+								),
+								code="E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED",
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+								notes=[
+									f"use binderless `catch {arm.event_fqn} {{ ... }}` "
+									"for envelope-level handling; envelope access "
+									"via `e.params.get(...)` remains available.",
+									"manual reverse parsing (DiagnosticParse) is a "
+									"future design track.",
+								],
+							))
+						if arm.binder and not _typed_binder_rejected:
 							# Slice 5 (slice 3 of impl): typed catch binders.
 							# Per K's clarified model (2026-05-03) — `pub error`
 							# values are encoded into the generic Error envelope

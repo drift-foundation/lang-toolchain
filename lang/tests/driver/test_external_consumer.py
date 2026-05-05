@@ -2306,3 +2306,167 @@ pub fn main() nothrow -> Int {
 		f"either the gate regressed silently OR the dispatch was fixed "
 		f"and this test should be retargeted; got: {messages}"
 	)
+
+
+# ── Slice 6: cross-package manual-Diagnostic gates (Sites A/B/C + typed-catch) ──
+
+
+_ACME_MANUAL_DIAG_ERROR_SOURCE = """\
+module acme.manualdiag;
+
+import std.core as core;
+
+use trait core.Diagnostic;
+
+export { ManualErr, raise_it };
+
+pub error ManualErr {
+	user_id: Int,
+	secret: String,
+}
+
+implement core.Diagnostic for ManualErr {
+	pub fn to_json_text(self: &ManualErr) nothrow -> String {
+		// Redacted: secret never appears.
+		return "{\\"user_id\\":" + core.diagnostic_json_int(self.user_id) + "}";
+	}
+}
+
+// Producer-side helper: cross-module throw of `ManualErr` requires the
+// bare ctor (the v1 grammar's throw clause/ctor doesn't accept the
+// module-alias-qualified form), so the consumer reaches the typed
+// catch arm by calling this exported function instead of throwing
+// `md.ManualErr(...)` itself.
+pub fn raise_it() throws ManualErr -> Int {
+	throw ManualErr(user_id = 7, secret = "shhh");
+}
+"""
+
+
+def _build_signed_manual_diag_error_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
+	"""Build a signed `acme.manualdiag` package whose `pub error ManualErr`
+	carries a user-owned `implement core.Diagnostic for ManualErr`.
+
+	Used by `test_ext_cross_package_manual_diagnostic_typed_binder_rejected`
+	to pin: package-defined manual-Diagnostic pub errors hit the same
+	Slice-6 gates (typed-catch rejection + Site A/B/C ownership) when
+	used by a consumer.  Without the cross-package serialization fix
+	in `parse_drift_workspace_to_hir`, the consumer would never see
+	the manual-ownership bit and the typed binder would be silently
+	accepted."""
+	build = tmp_path / "manualdiag_build"
+	mod_dir = build / "acme" / "manualdiag"
+	_write_file(mod_dir / "manualdiag.drift", _ACME_MANUAL_DIAG_ERROR_SOURCE)
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	pkg_path = tmp_path / "pkgs" / "acme.manualdiag.dmp"
+	pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	rc = driftc_main([
+		"--dev",
+		"-M", str(build),
+		"--stdlib-root", str(stdlib_dir),
+		str(mod_dir / "manualdiag.drift"),
+		*_emit_pkg_args("acme.manualdiag"),
+		"--emit-package", str(pkg_path),
+	])
+	assert rc == 0, "failed to build acme.manualdiag package fixture"
+
+	pkg_bytes = pkg_path.read_bytes()
+	sig_raw = keys.priv.sign(pkg_bytes)
+	_write_sig_sidecar(
+		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+	)
+	return pkg_path
+
+
+def test_ext_cross_package_manual_diagnostic_typed_binder_rejected(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+	"""Slice 6 — cross-package boundary regression.
+
+	A `pub error E` defined in package P with a user-supplied
+	`implement core.Diagnostic for E` must carry the manual-ownership
+	bit across the package boundary: a consumer that writes
+	`catch P.E(e) { ... }` (typed binder) must be rejected at
+	compile time with `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED`,
+	just like a workspace-local manual-Diagnostic pub error.
+
+	Pins the cross-package serialization plumbing: the producer's
+	`_synthesize_auto_diagnostic_impls` records manual-Diagnostic
+	pub-error FQNs in `TypeTable.manual_diagnostic_pub_errors`,
+	`provisional_dmir_v0.py` serializes them into the package
+	format, and `type_table_link_v0.py` merges per-package entries
+	into the consumer's `host.manual_diagnostic_pub_errors` at
+	link time.  Without this, the consumer would silently accept
+	the typed binder (no gate fires).  The intersection-with-
+	impl-headers approach was rejected because impl_headers
+	don't carry the synthesized-vs-manual bit and would tag
+	auto-synthesized Diagnostic impls (e.g. on package-defined
+	pub errors with all-projectable fields) as manual."""
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+	keys = _gen_keys()
+	manualdiag_pkg = _build_signed_manual_diag_error_pkg(tmp_path, keys)
+	_ = capsys.readouterr()
+
+	repo_root = Path(__file__).resolve().parents[3]
+	stdlib_dir = repo_root / "stdlib"
+
+	core_trust = tmp_path / "core_trust.json"
+	_write_trust_store(
+		core_trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
+	trust = tmp_path / "trust.json"
+	_write_trust_store(
+		trust, kid=keys.kid, pub_b64=keys.pub_b64,
+		namespaces=["acme.*"],
+	)
+
+	consumer = tmp_path / "consumer"
+	main_src = consumer / "main.drift"
+	# Note: cross-module throw of ManualErr lives in the producer's
+	# `raise_it` (v1 grammar limitation on module-alias-qualified
+	# throw ctors).  The consumer's typed binder is the gate-bearing
+	# surface here.
+	_write_file(main_src, """\
+module main;
+
+import std.core as core;
+import acme.manualdiag as md;
+
+pub fn main() nothrow -> Int {
+	try {
+		return md.raise_it();
+	} catch md:ManualErr(e) {
+		return e.user_id;
+	} catch {
+		return 99;
+	}
+}
+""")
+	argv = [
+		"-M", str(consumer),
+		"--stdlib-root", str(stdlib_dir),
+		"--package-root", str(manualdiag_pkg.parent),
+		"--dep", "acme.manualdiag@0.0.0",
+		"--dev",
+		"--dev-core-trust-store", str(core_trust),
+		"--trust-store", str(trust),
+		"--entry", "main::main",
+		str(main_src),
+		"--json",
+	]
+	driftc_main(argv)
+	captured = capsys.readouterr()
+	payload = json.loads(captured.out) if captured.out.strip() else {}
+	diags = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	codes = [d.get("code") for d in diags]
+	assert "E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED" in codes, (
+		f"cross-package manual-Diagnostic typed catch binder must be rejected; "
+		f"got codes: {codes}"
+	)
+

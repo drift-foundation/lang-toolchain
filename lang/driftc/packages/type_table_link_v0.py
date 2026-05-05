@@ -89,6 +89,13 @@ class DecodedTypeTable:
 	# rejects packages without canonical_keys. None only during decode before
 	# the field is populated.
 	canonical_keys: dict[TypeId, object] | None = None
+	# Slice 6: producer-side FQN list of `pub error E` decls with a
+	# user-owned `implement core.Diagnostic for E`.  The consumer
+	# parser merges this into `TypeTable.manual_diagnostic_pub_errors`
+	# so Sites A/B/C + typed-catch boundary fire across the package
+	# boundary.  Never None for packages emitted at 0.31.61+; absent
+	# (empty) for older packages — back-compat default.
+	manual_diagnostic_pub_errors: tuple[str, ...] = ()
 
 
 def _decode_kind(name: str) -> TypeKind:
@@ -413,6 +420,16 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 				raise ValueError("invalid exception_schemas field list")
 			exception_schemas[fqn] = (fqn, [str(x) for x in fields])
 
+	manual_diag_obj = obj.get("manual_diagnostic_pub_errors")
+	manual_diag_list: tuple[str, ...] = ()
+	if manual_diag_obj is not None:
+		if not isinstance(manual_diag_obj, list):
+			raise ValueError("invalid manual_diagnostic_pub_errors (must be list)")
+		for entry in manual_diag_obj:
+			if not isinstance(entry, str):
+				raise ValueError("invalid manual_diagnostic_pub_errors entry")
+		manual_diag_list = tuple(manual_diag_obj)
+
 	variant_schemas_obj = obj.get("variant_schemas")
 	variant_schemas: dict[TypeId, VariantSchema] = {}
 	if variant_schemas_obj is not None:
@@ -584,6 +601,7 @@ def decode_type_table_obj(obj: Mapping[str, Any]) -> DecodedTypeTable:
 		provided_nominals=provided_nominals,
 		type_aliases=type_aliases,
 		canonical_keys=canonical_keys,
+		manual_diagnostic_pub_errors=manual_diag_list,
 	)
 
 
@@ -963,6 +981,20 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 		host_pub.setdefault(fqn, True)
 	host.exception_kinds = host_kinds
 	host.exception_pub = host_pub
+	# Slice 6: merge per-package manual-Diagnostic FQN lists into the
+	# host so Sites A/B/C and the typed-catch boundary fire identically
+	# across the package boundary.  Producer-side
+	# `_synthesize_auto_diagnostic_impls` records the FQN at synthesis
+	# time when a manual `implement core.Diagnostic for E` is detected
+	# (skipping synthesis); the FQN is serialized into the package
+	# format (`provisional_dmir_v0.py`) and read back here.  Older
+	# packages without the field default to empty (back-compat).
+	host_manual_diag = getattr(host, "manual_diagnostic_pub_errors", None)
+	if not isinstance(host_manual_diag, set):
+		host_manual_diag = set()
+	for pkg in pkgs:
+		host_manual_diag.update(getattr(pkg, "manual_diagnostic_pub_errors", ()) or ())
+	host.manual_diagnostic_pub_errors = host_manual_diag
 
 	# Phase A: merge/validate variant schemas by nominal identity.
 	merged_variant_schemas: dict[NominalKey, VariantSchema] = {}
