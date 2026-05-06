@@ -1,4 +1,4 @@
 {
-  "description": "Auto-generated ownership-transfer regression: site=local_assign, type=string, flavor=static. Exercises HVar local, HCall rvalue, and projected-place value shapes through the named transfer site. Post-transfer integrity checked via byte_length / key.byte_length / value comparison. Must pass plain + ASAN; memcheck applies to heap-backed string subset and the diag_entry type.",
+  "description": "Auto-generated ownership-transfer regression: site=local_assign, type=string, flavor=static. Exercises HVar local, HCall rvalue, and projected-place value shapes through the named transfer site. Post-transfer integrity checked via byte_length / key.byte_length / value comparison. Must pass plain + ASAN; memcheck applies to heap-backed string subset.",
   "exit_code": 0
 }
