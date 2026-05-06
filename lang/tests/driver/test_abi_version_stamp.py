@@ -476,3 +476,122 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 		f"provenance string 'driftc {DRIFTC_VERSION}' not found in linked binary; "
 		f"strings output has {len(strings_result.stdout.splitlines())} lines"
 	)
+
+
+def test_abi14_binary_contains_no_dv_runtime_symbols(tmp_path: Path) -> None:
+	"""Slice 7c-1 (0.31.64, ABI 14, 2026-05-06): a production binary
+	produced at ABI 14 must NOT reference any of the deleted DV
+	runtime symbols.
+
+	Deleted symbols (this slice):
+	  - `drift_dv_*` family (drift_dv_int / _bool / _float / _string /
+	    _missing / _null / _array / _object / _object_from_entries /
+	    _clone / _release / _kind / _index / _len / _entries / _get /
+	    _get_field / _as_int / _as_bool / _as_float / _as_string /
+	    _as_object)
+	  - `drift_error_add_attr_dv`
+	  - `drift_error_add_local_dv`
+	  - `__exc_attrs_get_dv`
+	  - `__exc_captures_get_dv`
+	  - `drift_error_new_with_payload`
+	  - `drift_diag_from_int` / `drift_diag_from_string` aliases
+
+	Builds a non-trivial sample with a `pub error` throw + catch to
+	exercise the throw lowering path that historically went through
+	the DV substrate (Slice 7a base ABI 13), then walks the linked
+	binary's symbol table with `nm` and asserts zero matches.
+
+	If this regresses (any symbol shows up), the cause is either
+	(a) production lowering still emits a DV-related MIR op despite
+	the codegen ICE guards (Slice 7b migration incomplete), or
+	(b) the runtime archive at ABI 14 reintroduced the symbol — both
+	are contract failures that should fail loudly here rather than
+	silently leak DV runtime through the boundary."""
+	clang = shutil.which("clang")
+	assert clang, "clang not available"
+	nm_bin = shutil.which("nm")
+	assert nm_bin, "nm(1) not available"
+	# Sample: pub error with field projection covers the throw-side
+	# unification path post-Slice 7b (which was the last home of
+	# DV-attachment emission).
+	src = tmp_path / "main.drift"
+	src.write_text("""\
+module main;
+
+pub error E { msg: String, count: Int }
+
+fn boom() -> Int {
+\tthrow E(msg = "oops", count = 7);
+}
+
+fn main() nothrow -> Int {
+\ttry {
+\t\treturn boom();
+\t} catch E(e) {
+\t\tval c = e.count;
+\t\tif c == 7 { return 0; }
+\t\treturn 1;
+\t} catch e { return 2; }
+\treturn 3;
+}
+""")
+	out_bin = tmp_path / "abi14_smoke"
+	from lang.driftc.driftc import main as driftc_main
+	rc = driftc_main([
+		"--stdlib-root", "stdlib",
+		str(src),
+		"-o", str(out_bin),
+	])
+	assert rc == 0, f"compile failed: rc={rc}"
+	assert out_bin.exists(), "linked binary missing"
+	# `nm` lists every defined and undefined symbol.  Restrict to the
+	# DV runtime set; DriftDiagnostic* type names alone (zero-arg
+	# struct mangling) don't appear because LLVM IR uses the named
+	# `%DriftDiagnosticValue` LLVM type purely for layout (still
+	# allowed at ABI 14 — Slice 7c-2 is the type-table cleanup).
+	# Prefix-based check.  Any symbol matching one of the deleted
+	# families fails the contract — this catches the entire
+	# `drift_dv_*` and `drift_diag_from_*` families plus the
+	# specific `drift_error_*_dv` / `__exc_*_get_dv` /
+	# `drift_error_new_with_payload` symbols.  Using prefixes avoids
+	# missing future helpers in the same family (the original
+	# enumeration missed `drift_diag_from_bool` / `_float`, found
+	# during Slice 7c-1 review).
+	deleted_prefixes = (
+		"drift_dv_",
+		"drift_diag_from_",
+	)
+	deleted_exact = {
+		"drift_error_add_attr_dv",
+		"drift_error_add_local_dv",
+		"__exc_attrs_get_dv",
+		"__exc_captures_get_dv",
+		"drift_error_new_with_payload",
+	}
+	nm_out = subprocess.run(
+		[nm_bin, str(out_bin)],
+		capture_output=True, text=True, timeout=10,
+	)
+	assert nm_out.returncode == 0, f"nm failed: {nm_out.stderr}"
+	hits = []
+	for line in nm_out.stdout.splitlines():
+		# nm lines: "<addr> <type> <symbol>" or "         U <symbol>".
+		# Symbol is the last whitespace-separated token.
+		parts = line.split()
+		if not parts:
+			continue
+		sym = parts[-1]
+		# Strip leading underscore on Mach-O / leave as-is on ELF.
+		bare = sym.lstrip("_")
+		if bare.startswith(deleted_prefixes) or sym.startswith(deleted_prefixes):
+			hits.append(sym)
+			continue
+		if sym in deleted_exact or bare in deleted_exact:
+			hits.append(sym)
+	# Dedupe; preserve order for diagnostic output.
+	seen: set[str] = set()
+	uniq_hits = [s for s in hits if not (s in seen or seen.add(s))]
+	assert not uniq_hits, (
+		f"ABI 14 binary references deleted DV runtime symbols — Slice "
+		f"7c-1 contract failure.  Hits ({len(uniq_hits)}): {uniq_hits[:20]}"
+	)

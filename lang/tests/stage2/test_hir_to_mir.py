@@ -33,7 +33,6 @@ from lang.driftc.stage1 import (
 	HBreak,
 	HContinue,
 	HCall,
-	HDVInit,
 	HFString,
 	HFStringHole,
 	HExprStmt,
@@ -62,7 +61,6 @@ from lang.driftc.stage2 import (
 	IfTerminator,
 	Goto,
 	Call,
-	ConstructDV,
 	ConstructVariant,
 	MoveOut,
 )
@@ -367,19 +365,20 @@ def test_constructor_noncopy_arg_moves_out_local() -> None:
 	assert any(isinstance(op, ConstructVariant) for op in entry.instructions)
 
 
-def test_calls_and_dv():
-	# f(1); MyDV(3)
+def test_calls():
+	# f(1)  — Slice 7c: HDVInit + ConstructDV deleted; this test
+	# previously paired the call with `MyDV(3)` to also pin
+	# ConstructDV emission.  Call lowering is the only contract left
+	# here.
 	block = HBlock(
 		statements=[
 			HExprStmt(expr=HCall(fn=HVar("f"), args=[HLiteralInt(1)])),
-			HExprStmt(expr=HDVInit(dv_type_name="MyDV", args=[HLiteralInt(3)])),
 		]
 	)
 	func = _build_and_lower(block)
 	entry = func.blocks[func.entry]
 	kinds = {type(instr) for instr in entry.instructions}
 	assert Call in kinds
-	assert ConstructDV in kinds
 
 
 def test_float_literal_lowers_to_const_float():

@@ -1553,32 +1553,17 @@ class LlvmModuleBuilder:
 						"",
 					]
 				)
-		if self.needs_dv_runtime:
-			lines.extend(
-				[
-					f"declare void @__exc_attrs_get_dv(ptr, {DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
-					f"declare void @__exc_captures_get_dv(ptr, {DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_missing()",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_int({self._llty(DRIFT_INT_TYPE)})",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_bool(i8)",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_float(double)",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE})",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_object_from_entries(ptr, {self._llty(DRIFT_INT_TYPE)})",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_clone(ptr)",
-					f"declare void @drift_dv_release(ptr)",
-					f"declare i1 @drift_dv_as_int(ptr, ptr)",
-					f"declare i1 @drift_dv_as_bool(ptr, ptr)",
-					f"declare i1 @drift_dv_as_float(ptr, ptr)",
-					f"declare i1 @drift_dv_as_string(ptr, ptr)",
-					f"declare i1 @drift_dv_as_object(ptr, ptr)",
-					f"declare i1 @drift_dv_get_field(ptr, {DRIFT_STRING_TYPE}, ptr)",
-					f"declare {DRIFT_DV_TYPE} @drift_dv_index(ptr, {self._llty(DRIFT_INT_TYPE)})",
-					f"declare i8 @drift_dv_kind(ptr)",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr)",
-					"declare void @drift_dv_entries(ptr, ptr)",
-					"",
-				]
-			)
+		# Slice 7c-1 (0.31.64, ABI 14, 2026-05-06): the
+		# `needs_dv_runtime` block is gone — at ABI 14 production
+		# codegen never references `drift_dv_*`, `__exc_*_get_dv`,
+		# `drift_error_add_attr_dv`, `drift_error_add_local_dv`, or
+		# `drift_error_new_with_payload`.  The codegen handlers for
+		# the 5 dead MIR ops (ConstructDV, ErrorAddAttrDV,
+		# ErrorAddLocalDV, ErrorAttrsGetDV, ErrorCapturesGetDV) ICE
+		# if reached, since no production lowering should emit them.
+		# `needs_dv_runtime` itself is retained for one slice as a
+		# carrying-cost field; Slice 7c-2 deletes it along with the
+		# DV MIR op classes and TypeKind.DIAGNOSTICVALUE.
 		if self.needs_error_runtime:
 			self.needs_llvm_trap = True
 			lines.extend(
@@ -1587,28 +1572,16 @@ class LlvmModuleBuilder:
 					"__bb_entry:",
 					f"  ret {DRIFT_ERROR_PTR} null",
 					"}",
-					f"define weak {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE} %code, {DRIFT_STRING_TYPE} %event, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"__bb_entry:",
-					f"  ret {DRIFT_ERROR_PTR} null",
-					"}",
 					f"define weak void @drift_error_release({DRIFT_ERROR_PTR} %err) {{",
 					"__bb_entry:",
 					"  ret void",
 					"}",
-					f"define weak void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"__bb_entry:",
-					"  ret void",
-					"}",
-					f"define weak void @drift_error_add_local_dv({DRIFT_ERROR_PTR} %err, {DRIFT_STRING_TYPE} %frame, {DRIFT_STRING_TYPE} %key, ptr %dv) {{",
-					"__bb_entry:",
-					"  ret void",
-					"}",
 					f"declare void @drift_error_raise({DRIFT_ERROR_PTR})",
-					# Phase 1+ DV→JSON migration: canonical params JSON dump
-					# surface and throw-side setter.  Both runtime helpers
-					# follow ABI spec §2.3 ownership: getter returns retained
-					# DriftString (caller releases), setter takes ownership of
-					# the input DriftString.
+					# Slice 1+ DV→JSON migration / Slice 7b unification:
+					# canonical params JSON dump surface and throw-side setter.
+					# Both runtime helpers follow ABI spec §2.3 ownership:
+					# getter returns retained DriftString (caller releases),
+					# setter takes ownership of the input DriftString.
 					f"declare {DRIFT_STRING_TYPE} @drift_error_get_params_json({DRIFT_ERROR_PTR})",
 					f"declare void @drift_error_set_params_json({DRIFT_ERROR_PTR}, {DRIFT_STRING_TYPE})",
 					f"declare {DRIFT_STRING_TYPE} @drift_error_get_context_json({DRIFT_ERROR_PTR})",
@@ -3835,64 +3808,25 @@ class _FuncBuilder:
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
 			self.lines.append(f"  {dest} = insertvalue {fnres_llty} {tmp1}, {DRIFT_ERROR_PTR} {err_val}, 2")
 		elif isinstance(instr, ConstructDV):
-			dest = self._map_value(instr.dest)
-			self.value_types[dest] = DRIFT_DV_TYPE
-			self._construct_dv_temps.add(instr.dest)
-			if not instr.args:
-				self.module.needs_dv_runtime = True
-				# DV_MISSING is a runtime-defined constant (tag=0); call helper to avoid
-				# baking layout assumptions here.
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_missing()")
-				return
-			if len(instr.args) != 1:
-				raise NotImplementedError(
-					"LLVM codegen v1: DiagnosticValue constructors support at most one argument (Int/Bool/Float/String/Object)"
-				)
-			self.module.needs_dv_runtime = True
-			arg_val = self._map_value(instr.args[0])
-			arg_ty = self.value_types.get(arg_val)
-			if arg_ty == DRIFT_INT_TYPE:
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_int({self._llty(DRIFT_INT_TYPE)} {arg_val})")
-				return
-			if arg_ty == "i1":
-				raw = self._fresh("bool8")
-				self.lines.append(f"  {raw} = zext i1 {arg_val} to i8")
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_bool(i8 {raw})")
-				return
-			if arg_ty == DRIFT_STRING_TYPE:
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_string({DRIFT_STRING_TYPE} {arg_val})")
-				return
-			if instr.dv_type_name == "Object":
-				if arg_ty != "%DriftArrayHeader":
-					raise NotImplementedError(
-						f"LLVM codegen v1: DiagnosticValue::Object expects Array<DiagnosticEntry>-shaped argument, got {arg_ty}"
-					)
-				len_val = self._fresh("dv_obj_len")
-				ptr_val = self._fresh("dv_obj_ptr")
-				self.lines.append(f"  {len_val} = extractvalue %DriftArrayHeader {arg_val}, {ARRAY_LEN_IDX}")
-				self.lines.append(f"  {ptr_val} = extractvalue %DriftArrayHeader {arg_val}, {ARRAY_PTR_IDX}")
-				self.lines.append(
-					f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_object_from_entries(ptr {ptr_val}, {self._llty(DRIFT_INT_TYPE)} {len_val})"
-				)
-				return
-			float_llty = self._llvm_float_type()
-			if arg_ty == float_llty:
-				if float_llty == "float":
-					ext = self._fresh("dv_f64")
-					self.lines.append(f"  {ext} = fpext float {arg_val} to double")
-					self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_float(double {ext})")
-					return
-				self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_float(double {arg_val})")
-				return
-			raise NotImplementedError(
-				f"LLVM codegen v1: ConstructDV arg type {arg_ty} not supported (expected Int/Bool/Float/String/Object)"
+			# Slice 7c-1 (0.31.64, ABI 14, 2026-05-06): dead substrate.
+			# No production lowering path emits `ConstructDV` post-
+			# Slice 7b (the only emitter was `_visit_expr_HDVInit`,
+			# which is reachable only from `H.HDVInit` nodes that no
+			# production path creates).  Reaching codegen with this op
+			# is a contract failure — ICE so the bug surfaces.  The
+			# class itself stays for one slice as carrying-cost stub
+			# (Slice 7c-2 deletes it along with `H.HDVInit` and
+			# `TypeKind.DIAGNOSTICVALUE`).
+			raise AssertionError(
+				"M.ConstructDV reached LLVM codegen at ABI 14 — no "
+				"production lowering should emit it.  This is a "
+				"compiler bug; classify as incomplete Slice 7b "
+				"migration and find the emitter."
 			)
 		elif isinstance(instr, ConstructError):
 			dest = self._map_value(instr.dest)
 			code = self._map_value(instr.code)
 			event_fqn = self._map_value(instr.event_fqn)
-			payload = self._map_value(instr.payload) if instr.payload is not None else None
-			attr_key = self._map_value(instr.attr_key) if instr.attr_key is not None else None
 			self.value_types[dest] = DRIFT_ERROR_PTR
 			self.module.needs_error_runtime = True
 			code_ty = self.value_types.get(code)
@@ -3905,71 +3839,54 @@ class _FuncBuilder:
 				raise NotImplementedError(
 					f"LLVM codegen v1: event_fqn must be String ({DRIFT_STRING_TYPE}), got {event_fqn_ty}"
 				)
-			if payload is None or attr_key is None:
-				self.lines.append(
-					f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE} {code}, {DRIFT_STRING_TYPE} {event_fqn})"
+			# Slice 7c-1 contract guard: `ConstructError(payload=DV,
+			# attr_key=K)` was the legacy DV-attachment shape.  Slice
+			# 7b retired it — production lowering always passes
+			# `payload=None, attr_key=None` and uses `ExcSetParamsJson`
+			# for the JSON-text params.  Reaching codegen with a non-
+			# None payload at ABI 14 is a contract failure.
+			if instr.payload is not None or instr.attr_key is not None:
+				raise AssertionError(
+					"M.ConstructError reached LLVM codegen with a "
+					"non-empty DV payload at ABI 14.  No production "
+					"lowering should emit this shape post-Slice 7b "
+					"(the unified Diagnostic owning-throw path always "
+					"uses ConstructError(payload=None) + "
+					"ExcSetParamsJson).  Compiler bug."
 				)
-			else:
-				# Attach payload via runtime helper; payload is expected to be a DiagnosticValue.
-				tmp_ptr = self._fresh("dvptr")
-				self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-				self.lines.append(f"  store {DRIFT_DV_TYPE} {payload}, ptr {tmp_ptr}")
-				self.lines.append(
-					f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new_with_payload({DRIFT_ERROR_CODE_TYPE} {code}, {DRIFT_STRING_TYPE} {event_fqn}, {DRIFT_STRING_TYPE} {attr_key}, ptr {tmp_ptr})"
-				)
-				self._release_construct_dv_temp(instr.payload, payload)
+			self.lines.append(
+				f"  {dest} = call {DRIFT_ERROR_PTR} @drift_error_new({DRIFT_ERROR_CODE_TYPE} {code}, {DRIFT_STRING_TYPE} {event_fqn})"
+			)
 		elif isinstance(instr, ErrorAttrsGetDV):
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			err_val = self._map_value(instr.error)
-			key_val = self._map_value(instr.key)
-			self.value_types[dest] = DRIFT_DV_TYPE
-			tmp_ptr = self._fresh("dvptr")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(
-				f"  call void @__exc_attrs_get_dv(ptr {tmp_ptr}, {DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val})"
+			# Slice 7c-1: dead substrate.  See `ConstructDV` note.
+			raise AssertionError(
+				"M.ErrorAttrsGetDV reached LLVM codegen at ABI 14 — "
+				"no production lowering should emit it.  `e.attrs[k]` "
+				"from user source is rejected at the type checker; "
+				"Slice 7b deleted the lowering paths."
 			)
-			self.lines.append(f"  {dest} = load {DRIFT_DV_TYPE}, ptr {tmp_ptr}")
 		elif isinstance(instr, ErrorCapturesGetDV):
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			err_val = self._map_value(instr.error)
-			frame_val = self._map_value(instr.frame)
-			key_val = self._map_value(instr.key)
-			self.value_types[dest] = DRIFT_DV_TYPE
-			tmp_ptr = self._fresh("dvptr")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(
-				f"  call void @__exc_captures_get_dv(ptr {tmp_ptr}, {DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val})"
+			# Slice 7c-1: dead substrate.  See `ConstructDV` note.
+			raise AssertionError(
+				"M.ErrorCapturesGetDV reached LLVM codegen at ABI 14 — "
+				"no production lowering should emit it."
 			)
-			self.lines.append(f"  {dest} = load {DRIFT_DV_TYPE}, ptr {tmp_ptr}")
 		elif isinstance(instr, ErrorAddAttrDV):
-			self.module.needs_error_runtime = True
-			self.module.needs_dv_runtime = True
-			err_val = self._map_value(instr.error)
-			key_val = self._map_value(instr.key)
-			val = self._map_value(instr.value)
-			tmp_ptr = self._fresh("dvptr")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {val}, ptr {tmp_ptr}")
-			self.lines.append(
-				f"  call void @drift_error_add_attr_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {key_val}, ptr {tmp_ptr})"
+			# Slice 7c-1: dead substrate.  See `ConstructDV` note.
+			raise AssertionError(
+				"M.ErrorAddAttrDV reached LLVM codegen at ABI 14 — "
+				"no production lowering should emit it.  Throw-side "
+				"params flow through `core.Diagnostic.to_json_text` "
+				"+ ExcSetParamsJson now."
 			)
-			self._release_construct_dv_temp(instr.value, val)
 		elif isinstance(instr, ErrorAddLocalDV):
-			self.module.needs_error_runtime = True
-			self.module.needs_dv_runtime = True
-			err_val = self._map_value(instr.error)
-			frame_val = self._map_value(instr.frame)
-			key_val = self._map_value(instr.key)
-			val = self._map_value(instr.value)
-			tmp_ptr = self._fresh("dvptr")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {val}, ptr {tmp_ptr}")
-			self.lines.append(
-				f"  call void @drift_error_add_local_dv({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val}, {DRIFT_STRING_TYPE} {key_val}, ptr {tmp_ptr})"
+			# Slice 7c-1: dead substrate.  See `ConstructDV` note.
+			raise AssertionError(
+				"M.ErrorAddLocalDV reached LLVM codegen at ABI 14 — "
+				"no production lowering should emit it.  Captured-"
+				"locals frames flow through `_emit_captured_locals` "
+				"direct per-scalar dispatch now."
 			)
-			self._release_construct_dv_temp(instr.value, val)
 		elif isinstance(instr, ErrorRaise):
 			self.module.needs_error_runtime = True
 			err_val = self._map_value(instr.error)
@@ -4013,6 +3930,17 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = call {DRIFT_STRING_TYPE} @drift_string_retain({DRIFT_STRING_TYPE} {alias})")
 			self.value_types[dest] = DRIFT_STRING_TYPE
 		elif isinstance(instr, (DVAsInt, DVAsBool, DVAsFloat, DVAsString, DVAsObject, DVGetField)):
+			# Slice 7c-1: DV accessor MIR ops are dead substrate at
+			# ABI 14.  No production lowering reaches them — public
+			# DV is removed (Slice 7a) and stdlib has no DV-typed
+			# values (Slice 7b cleanup).  ICE if they show up.
+			raise AssertionError(
+				f"M.{type(instr).__name__} reached LLVM codegen at "
+				"ABI 14 — no production lowering should emit DV "
+				"accessor ops (no DV value can be constructed)."
+			)
+			# dead — kept under the ICE for the type-checker's
+			# benefit (the original branch follows but is unreachable).
 			self.module.needs_dv_runtime = True
 			dest = self._map_value(instr.dest)
 			dv_val = self._map_value(instr.dv)
@@ -4181,53 +4109,17 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = variant_llty
 		elif isinstance(instr, DVKind):
-			# drift_dv_kind: pointer-based dv input (matches the rest of
-			# the DV accessor convention; by-value 24-byte struct args
-			# without `byval` don't match SysV x86_64 ABI).  Returns u8
-			# (DriftDiagnosticTag); promoted to Drift Int.  value_types
-			# must be the TAG `DRIFT_INT_TYPE` (so downstream
-			# StringFromInt etc. recognize it).
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			dv_val = self._map_value(instr.dv)
-			tmp_ptr = self._fresh("dv_kind_arg")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
-			tag_byte = self._fresh("dv_kind_byte")
-			self.lines.append(
-				f"  {tag_byte} = call i8 @drift_dv_kind(ptr {tmp_ptr})"
+			# Slice 7c-1: dead substrate at ABI 14.
+			raise AssertionError(
+				"M.DVKind reached LLVM codegen at ABI 14 — no "
+				"production lowering should emit it."
 			)
-			self.lines.append(
-				f"  {dest} = zext i8 {tag_byte} to {self._llty(DRIFT_INT_TYPE)}"
-			)
-			self.value_types[dest] = DRIFT_INT_TYPE
 		elif isinstance(instr, DVIndex):
-			# drift_dv_index: pointer-based dv input (same SysV x86_64 ABI
-			# reason as DVKind); result returned by value but ALIASES the
-			# source's `items[idx]` storage.  We MUST clone the result so
-			# the destination owns independent storage — otherwise drop of
-			# source AND clone double-frees `items[]`.  Codegen sequence:
-			#   1. store source DV to alloca; call drift_dv_index(ptr, idx)
-			#      → aliased DV by-value temporary.
-			#   2. store aliased DV in a fresh alloca.
-			#   3. call drift_dv_clone(&alias) → owned DV (refcounted
-			#      strings retained, arrays/objects deep-copied).
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			dv_val = self._map_value(instr.dv)
-			idx_val = self._map_value(instr.idx)
-			src_ptr = self._fresh("dv_index_src")
-			self.lines.append(f"  {src_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {src_ptr}")
-			aliased = self._fresh("dv_alias")
-			self.lines.append(
-				f"  {aliased} = call {DRIFT_DV_TYPE} @drift_dv_index(ptr {src_ptr}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
+			# Slice 7c-1: dead substrate at ABI 14.
+			raise AssertionError(
+				"M.DVIndex reached LLVM codegen at ABI 14 — no "
+				"production lowering should emit it."
 			)
-			alias_ptr = self._fresh("dv_alias_ptr")
-			self.lines.append(f"  {alias_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {aliased}, ptr {alias_ptr}")
-			self.lines.append(f"  {dest} = call {DRIFT_DV_TYPE} @drift_dv_clone(ptr {alias_ptr})")
-			self.value_types[dest] = DRIFT_DV_TYPE
 		elif isinstance(instr, ExcGetParamsJson):
 			# Phase 1+ DV→JSON migration: read the canonical params JSON
 			# string from the runtime; returned String is RETAINED per ABI
@@ -4271,26 +4163,17 @@ class _FuncBuilder:
 				f"  call void @drift_error_append_context_frame({DRIFT_ERROR_PTR} {err_val}, {DRIFT_STRING_TYPE} {frame_val})"
 			)
 		elif isinstance(instr, DVLen):
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			dv_val = self._map_value(instr.dv)
-			tmp_ptr = self._fresh("dvarg")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
-			self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_dv_len(ptr {tmp_ptr})")
-			self.value_types[dest] = self._llty(DRIFT_INT_TYPE)
+			# Slice 7c-1: dead substrate at ABI 14.
+			raise AssertionError(
+				"M.DVLen reached LLVM codegen at ABI 14 — no "
+				"production lowering should emit it."
+			)
 		elif isinstance(instr, DVEntries):
-			self.module.needs_dv_runtime = True
-			dest = self._map_value(instr.dest)
-			dv_val = self._map_value(instr.dv)
-			tmp_ptr = self._fresh("dvarg")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {dv_val}, ptr {tmp_ptr}")
-			out_ptr = self._fresh("entries_out")
-			self.lines.append(f"  {out_ptr} = alloca %DriftArrayHeader")
-			self.lines.append(f"  call void @drift_dv_entries(ptr {tmp_ptr}, ptr {out_ptr})")
-			self.lines.append(f"  {dest} = load %DriftArrayHeader, ptr {out_ptr}")
-			self.value_types[dest] = "%DriftArrayHeader"
+			# Slice 7c-1: dead substrate at ABI 14.
+			raise AssertionError(
+				"M.DVEntries reached LLVM codegen at ABI 14 — no "
+				"production lowering should emit it."
+			)
 		elif isinstance(instr, Phi):
 			# Already handled in _lower_phi.
 			return
@@ -9283,14 +9166,19 @@ class _FuncBuilder:
 			self.value_types[out] = variant_llty
 			return out
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			self.module.needs_dv_runtime = True
-			tmp_ptr = self._fresh("dv_clone_arg")
-			self.lines.append(f"  {tmp_ptr} = alloca {DRIFT_DV_TYPE}")
-			self.lines.append(f"  store {DRIFT_DV_TYPE} {value}, ptr {tmp_ptr}")
-			out = self._fresh("dv_clone")
-			self.lines.append(f"  {out} = call {DRIFT_DV_TYPE} @drift_dv_clone(ptr {tmp_ptr})")
-			self.value_types[out] = DRIFT_DV_TYPE
-			return out
+			# Slice 7c-1 (ABI 14): DV clone path is dead substrate.
+			# `drift_dv_clone` is gone from the runtime archive; no
+			# production lowering should reach this site (no
+			# DV-typed value can be constructed user-side, and stdlib
+			# has no DV-typed values).  Same ICE pattern as the
+			# `_drop_value` and field-drop arms — see those for
+			# rationale.  Slice 7c-2 deletes the TypeKind itself.
+			raise AssertionError(
+				"struct/value copy for TypeKind.DIAGNOSTICVALUE at "
+				"ABI 14 — no production path should construct a DV "
+				"value.  Compiler bug; the DV value's source is "
+				"likely a missed Slice 7b migration."
+			)
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
 			if inst is None:
@@ -9678,10 +9566,17 @@ class _FuncBuilder:
 			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value}){call_dbg_suffix}")
 			return
 		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			self.module.needs_dv_runtime = True
-			helper = self._ensure_dv_drop_helper()
-			self.lines.append(f"  call void @{helper}({DRIFT_DV_TYPE} {value}){call_dbg_suffix}")
-			return
+			# Slice 7c-1 (ABI 14): no production lowering creates a
+			# DV-typed value, so its drop should never be emitted.
+			# Reaching here means a DV value got past the rejection
+			# gates — classify as compiler bug.  The TypeKind itself
+			# stays for one slice (Slice 7c-2 deletes it).
+			raise AssertionError(
+				"_drop_value called for TypeKind.DIAGNOSTICVALUE at "
+				"ABI 14 — no production path should construct a DV "
+				"value.  Compiler bug; the DV value's source is "
+				"likely a missed Slice 7b migration."
+			)
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]
 			elem_llty = self._llvm_array_elem_type(elem_ty)
@@ -9767,10 +9662,14 @@ class _FuncBuilder:
 				lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {val})")
 				return
 			if td.kind is TypeKind.DIAGNOSTICVALUE:
-				self.module.needs_dv_runtime = True
-				helper = self._ensure_dv_drop_helper()
-				lines.append(f"  call void @{helper}({DRIFT_DV_TYPE} {val})")
-				return
+				# Slice 7c-1 (ABI 14): see the parallel guard in
+				# `_drop_value`.  No production lowering creates DV
+				# values; reaching here is a compiler bug.
+				raise AssertionError(
+					"struct field drop for TypeKind.DIAGNOSTICVALUE "
+					"at ABI 14 — no production path should construct "
+					"a DV value as a struct field."
+				)
 			if td.kind is TypeKind.INTERFACE:
 				helper = self._ensure_interface_drop_helper()
 				iface_llty = self._llty(DRIFT_IFACE_TYPE)
@@ -9922,6 +9821,23 @@ class _FuncBuilder:
 		return name
 
 	def _ensure_dv_drop_helper(self) -> str:
+		# Slice 7c-1 (ABI 14): DV drop helper is dead substrate.  It
+		# emits a call to `drift_dv_release` which is no longer
+		# exported by the runtime archive — reaching this site
+		# would produce a link failure rather than a clear
+		# contract failure.  ICE so the compiler-side bug surfaces
+		# before link.  All callers already have ICE guards in
+		# their own paths (drop_value, field-drop, copy);
+		# `_ensure_dv_drop_helper` itself is reachable only as a
+		# defensive belt-and-braces, so the ICE here is structural.
+		raise AssertionError(
+			"_ensure_dv_drop_helper called at ABI 14 — DV drop "
+			"helper is dead substrate.  This call site should be "
+			"unreachable; trace the caller and classify as a "
+			"compiler bug (likely a missed ICE guard upstream)."
+		)
+		# Dead — kept under the ICE for the benefit of any reader
+		# tracing what the helper used to do.
 		name = self.module.dv_drop_helper
 		if name is not None:
 			return name

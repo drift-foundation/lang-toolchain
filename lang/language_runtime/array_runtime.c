@@ -184,20 +184,13 @@ void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, d
 	struct DriftString event_fqn = { (drift_isize)(sizeof(k_index_error_event) - 1), (char *)k_index_error_event };
 	struct DriftError *err = drift_error_new(k_index_error_code, event_fqn);
 	if (err) {
-		struct DriftString container_key = { (drift_isize)(sizeof(k_container_key) - 1), (char *)k_container_key };
-		struct DriftString index_key = { (drift_isize)(sizeof(k_index_key) - 1), (char *)k_index_key };
-		// Slice 7a: legacy DV-attrs path retained for the internal
-		// bridge (per ABI invariant — kept alive while synthesized
-		// Diagnostic lowering still emits DV attaches).
-		struct DriftDiagnosticValue dv_container = drift_diag_from_string(container_id);
-		struct DriftDiagnosticValue dv_index = drift_diag_from_int(idx);
-		drift_error_add_attr_dv(err, container_key, &dv_container);
-		drift_error_add_attr_dv(err, index_key, &dv_index);
-		// Slice 7a: also populate canonical params JSON so user code
-		// reading via typed catch projection (`e.container_id`,
-		// `e.index`) and via `e.params.encode_compact()` /
-		// `e.params.get(k)` sees the values.  Lex-utf8-sorted keys —
-		// container_id < index alphabetically.  Buffer sizing
+		// Slice 7c-1 (ABI 14, 2026-05-06): legacy DV-attrs path
+		// (`drift_error_add_attr_dv` + `drift_diag_from_*`) deleted.
+		// At ABI 14 the runtime emits ONLY the canonical params
+		// JSON via `drift_error_set_params_json` — user code reads
+		// via typed catch projection (`e.container_id` / `e.index`)
+		// or `e.params.get(...)` against that JSON.  Lex-utf8-sorted
+		// keys — container_id < index alphabetically.  Buffer sizing
 		// accommodates 6× expansion of the escaped key plus the
 		// 24-char signed-decimal int.  See
 		// `drift_bounds_check_params_json_build` for the escape

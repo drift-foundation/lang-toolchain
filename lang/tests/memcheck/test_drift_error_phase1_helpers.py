@@ -24,19 +24,17 @@ The C test pins:
      RETAINED `DriftString` (caller owns and releases — safe to
      surface as a normal Drift `String` return without
      compiler-side borrow handling).
-  5. ADDITIVE: the existing DV path
-     (`drift_error_add_attr_dv`) continues to work unchanged.
-  6. ADDITIVE: `drift_error_release` drops both DV-side and
-     JSON-side fields cleanly when both are populated.
 
-Phase 1 is additive and behavior-preserving: the existing DV
-path remains fully functional, no ABI bump.  Phase 2 deletes the
-DV path and bumps `DRIFT_RT_ABI_VERSION` 11 → 12 in the same
-patch.
+Slice 7c-1 (ABI 14, 2026-05-06): the legacy DV path
+(`drift_error_add_attr_dv` + `drift_dv_*`) is deleted from the
+runtime archive.  The earlier "ADDITIVE: DV path coexistence"
+and "ADDITIVE: release drops both DV and JSON fields" pins are
+retired alongside the runtime symbols they exercised.  This
+file now pins the JSON-only helper ownership contract that
+survives at ABI 14.
 
 See `docs/design/drift-lang-abi.md` §2.3 (helper ownership
-contract), `docs/history.md` 2026-05-01 (Phase 0 spec), and
-`memory/project_dv_to_json_diagnostics.md` (multi-phase plan).
+contract).
 """
 from __future__ import annotations
 

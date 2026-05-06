@@ -13,8 +13,12 @@ fn _heap_string(bytes: &Array<Byte>) nothrow -> String {
 }
 
 // The original string goes out of scope when this function returns via throw.
-// If drift_dv_string does not retain, the error holds a dangling pointer and
-// drift_error_release will use-after-free.
+// Slice 7c-1 (ABI 14): the throw-side String fields are projected through
+// `core.Diagnostic.to_json_text` into the params JSON.  The Path-A struct
+// constructed at the throw site consumes the Strings exactly once, and
+// `_emit_diagnostic_owning_throw`'s explicit DropValue (Slice 7b leak fix)
+// frees them after the to_json_text call.  Pre-Slice 7b this code path
+// went through `drift_dv_string` retain — that path is gone.
 fn throw_one_heap(label: String) -> Int {
 	var b: Array<Byte> = [cast<Byte>(104), cast<Byte>(101), cast<Byte>(108), cast<Byte>(108), cast<Byte>(111)];
 	val s = _heap_string(&b);

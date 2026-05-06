@@ -1,5 +1,160 @@
 # Drift development history
 
+## 2026-05-06 (Slice 7c-1)
+- **Slice 7c-1: DV runtime wire cut + ABI 13 → 14 (release
+  0.31.64).**  Deletes the runtime/codegen substrate for the legacy
+  `DiagnosticValue` attachment path.  No production lowering
+  references the deleted symbols anymore — they are all dead since
+  Slice 7b's migration of throw-side params projection through
+  `core.Diagnostic.to_json_text` and captured-locals frames through
+  direct per-scalar `core.diagnostic_json_*` dispatch.
+
+  **Why split into a separate slice.**  Slice 7c bundles two
+  conceptually independent changes: (a) the ABI-visible cut that
+  removes the runtime DV exports (this slice, 7c-1), and (b) the
+  compiler-internal cleanup of the now-dead HIR / MIR / TypeKind
+  substrate (Slice 7c-2, planned).  The wire cut is the externally
+  meaningful change consumers see; the compiler-internal cleanup is
+  carrying-cost and lands separately so its review noise doesn't
+  obscure the ABI bump.
+
+  **Deleted runtime symbols (ABI 14 archive exports zero of these):**
+  - `drift_dv_missing` / `_null` / `_bool` / `_int` / `_float` /
+    `_string` / `_array` / `_object` / `_object_from_entries` /
+    `_clone` / `_release` / `_get` / `_index` / `_kind` /
+    `_as_int` / `_as_bool` / `_as_float` / `_as_string` /
+    `_as_object` / `_get_field` / `_len` / `_entries` (the
+    `drift_dv_*` family).
+  - `drift_error_add_attr_dv` (DV-attachment write).
+  - `drift_error_add_local_dv` (captured-local DV write).
+  - `__exc_attrs_get_dv` / `__exc_captures_get_dv` (DV reads).
+  - `drift_error_new_with_payload` (DV-payload error
+    constructor).
+  - `drift_diag_from_int` / `drift_diag_from_string` (legacy
+    aliases used only by `drift_bounds_check_fail`'s old DV path,
+    also deleted this slice).
+
+  **Deleted struct types (runtime-side, on `DriftError`):**
+  - `DriftErrorAttr` / `DriftErrorLocal` / `DriftCtxFrame`.
+  - `DriftError.attrs` / `attr_count` / `frames` / `frame_count`
+    fields.  The struct now carries only `code` / `event_fqn` /
+    `params_json` / `context_json`.  `drift_error_release` no longer
+    walks the deleted lists.
+
+  **Deleted compiler-side wire emission:**
+  - `llvm_codegen.py` `if needs_dv_runtime:` declaration block —
+    no `declare` directives for the deleted runtime symbols.
+  - `ConstructError(payload=DV, attr_key=K)` codegen branch (the
+    legacy DV-attachment shape; Slice 7b made it unreachable).
+  - Codegen handlers for `M.ConstructDV`, `M.ErrorAddAttrDV`,
+    `M.ErrorAddLocalDV`, `M.ErrorAttrsGetDV`,
+    `M.ErrorCapturesGetDV`, `M.DVAsInt`/`Bool`/`Float`/`String`/
+    `Object`, `M.DVGetField`, `M.DVLen`, `M.DVEntries`, `M.DVKind`,
+    `M.DVIndex` — all now ICE on reach with a clear assertion
+    pointing at "compiler bug; classify as incomplete Slice 7b
+    migration and find the emitter".  The `_drop_value` /
+    struct-field-drop arms for `TypeKind.DIAGNOSTICVALUE` ICE the
+    same way.
+
+  **Compiler-internal substrate retained (Slice 7c-2 deletes
+  these):**
+  - HIR `H.HDVInit` node + its handlers in stage1 normalize /
+    place_canonicalize / borrow_materialize / ast_to_hir, in
+    `borrow_checker_pass.py`, in `type_checker.py`, in `driftc.py`
+    code-walking sites, and in `hir_to_mir.py` (including
+    `_visit_expr_HDVInit`).  All passthrough or guarded — no
+    production path creates an HDVInit node.
+  - MIR op classes `ConstructDV` / `ErrorAddAttrDV` /
+    `ErrorAddLocalDV` / `ErrorAttrsGetDV` / `ErrorCapturesGetDV`
+    + their `__all__` exports.  The classes stay so the codegen
+    isinstance checks still type-check; the codegen handlers ICE.
+  - String_arc passthrough handlers for the dead MIR ops in
+    `lang/driftc/stage2/string_arc.py`.
+  - `TypeKind.DIAGNOSTICVALUE` enum value and its ~25
+    type-introspection arms (package serialization, type-table
+    queries, copy/drop policy, layout queries).  All unreachable
+    in production (no DV value can be constructed); deletion
+    requires a coordinated pass.
+  - `LLVMCodegenModule.needs_dv_runtime` field.
+
+  **C runtime cleanup:**
+  - `lang/compiler_infra/diagnostic_runtime.c` reduced to a
+    declaration-only stub.  All DV constructor / accessor /
+    conversion / clone / release / kind / index / entries / len /
+    get_field / get / `drift_diag_from_*` function bodies deleted.
+  - `lang/compiler_infra/diagnostic_runtime.h` keeps the struct
+    types (`DriftDiagnosticValue` / `DriftDiagnosticEntry` /
+    `DriftDiagnosticField`) but drops every function declaration.
+    Slice 7c-2 deletes the struct types alongside
+    `TypeKind.DIAGNOSTICVALUE`.
+  - `lang/compiler_infra/error_dummy.c` rewritten to drop the
+    `attrs`/`frames` allocation and DV-clone paths.
+  - `lang/language_runtime/array_runtime.c`'s
+    `drift_bounds_check_fail` retired its legacy DV-attachment
+    branch — at ABI 14 it emits ONLY canonical params JSON via
+    `drift_error_set_params_json`.
+
+  **Test-corpus updates:**
+  - Deleted `lang/codegen/llvm/tests/test_llvm_codegen_diagnostic_value.py`
+    (every test pinned dead DV-emission IR shapes).
+  - Deleted `test_llvm_codegen_dv_drop_helper.py` (DV drop helper
+    is gone).
+  - Deleted `test_llvm_codegen_optional_ops.py` (its tests
+    constructed `M.ConstructDV` directly to feed Optional-payload
+    codegen — the path is dead).
+  - Deleted orphan `tests/runtime_diagnostic_value.c` (no build
+    wiring).
+  - `lang/compiler_infra/tests/test_drift_error_phase1.c`:
+    retired `test_old_dv_path_still_works` and
+    `test_both_paths_release_clean` (asserted DV+JSON
+    coexistence; the helpers they call are gone).
+  - `lang/tests/stage2/test_hir_to_mir.py::test_calls_and_dv` →
+    `test_calls`; dropped `HDVInit` and `ConstructDV` imports.
+  - **New regression** (`test_abi_version_stamp.py::test_abi14_binary_contains_no_dv_runtime_symbols`):
+    builds a `pub error` throw + catch + projection sample,
+    walks the linked binary's `nm` output, asserts zero DV
+    runtime symbols.  This is the wire-cut contract pin.
+
+  **ABI version trajectory:**
+  - **ABI 13** (Slice 7a/7b, 0.31.62/63): public DV surface
+    removed; throw lowering migrated off DV; runtime exports
+    retained for backward-compat with ABI 13 consumers.
+  - **ABI 14** (Slice 7c-1, 0.31.64, this slice): runtime
+    exports deleted; old (ABI 13) binaries that still reference
+    these symbols fail to link against ABI 14 archives.  No
+    compatibility shim — the link-time
+    `__drift_rt_abi_version_NN` stamp is the contract gate.
+
+  **Grep proof of wire cut.**  Compiling a representative `pub
+  error` throw + catch + scalar field projection sample at
+  ABI 14 produces an `.ll` with zero references to any deleted
+  symbol; the linked binary's `nm` output shows zero matches in
+  the deleted-symbols set (pinned by the new
+  `test_abi14_binary_contains_no_dv_runtime_symbols` regression).
+
+  **Focused regression coverage** (Slice 7b's targeted suite plus
+  the new ABI 14 wire-cut probe):
+  - `test_pub_error_synthesized_diagnostic` — pub error +
+    auto-Diagnostic + params projection.
+  - `test_pub_error_manual_diagnostic` — manual Diagnostic
+    ownership; envelope round-trip.
+  - `test_throw_private_error_projects_fields_through_synthesized_diagnostic`
+    — private `error E` projects fields end-to-end (Slice 7b
+    LANGUAGE_BUG fix).
+  - `test_pkg_trait_impl_target_type::test_array_range_len` —
+    package-imported `pub error` + bounds-check throw on
+    `Array<Int>.range()`.
+  - `test_exception_context_json` — `^`-capture frames (no DV
+    intermediate).
+  - `test_dv_string_borrowed_exception` — heap-String round-
+    trip on throw, valgrind clean.
+  - `test_external_consumer::test_ext_cross_package_diagnostic_projectability_gate_only`
+    — cross-package Diagnostic projectability.
+  - `test_dv_public_removed` — public DV surfaces remain
+    rejected (Slice 7a contract still holds).
+  - `test_abi14_binary_contains_no_dv_runtime_symbols` — wire-
+    cut contract pin (this slice).
+
 ## 2026-05-06
 - **Slice 7b: synthesized-Diagnostic throws onto the JSON-text path
   (release 0.31.63, ABI unchanged at 13).** Unifies user-source

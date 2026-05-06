@@ -15,10 +15,12 @@
 //      guarantee for the `e.encode_compact()` splice path).
 //   6. `get_params_json` / `get_context_json` return RETAINED `DriftString`
 //      (caller owns and releases).
-//   7. ADDITIVE: old DV path (`drift_error_add_attr_dv`,
-//      `drift_dv_*`) continues to work unchanged.
-//   8. ADDITIVE: `drift_error_release` correctly releases BOTH DV-side
-//      and JSON-side fields when both are populated.
+//
+// Slice 7c-1 (ABI 14, 2026-05-06): the DV-side ADDITIVE pins
+// (DV path coexistence + dual release) are retired with the
+// runtime DV exports.  At ABI 14 the runtime archive has no DV
+// symbols; this test file pins the surviving JSON-helper
+// ownership contract only.
 //
 // Run under valgrind from `lang/tests/memcheck/test_drift_error_phase1_helpers.py`.
 // See `docs/design/drift-lang-abi.md` §2.3 for the canonical helper
@@ -266,27 +268,11 @@ static int test_getters_retain(void) {
 	return 0;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Test 8: ADDITIVE — old DV path still works after Phase 1 changes.
-// `drift_error_add_attr_dv` is the canonical existing entry point.
-// Phase 1 must keep it functional (Phase 2 deletes it).
-// ─────────────────────────────────────────────────────────────────
-static int test_old_dv_path_still_works(void) {
-	struct DriftString fqn = drift_string_from_cstr("test:OldDvPath");
-	struct DriftError *err = drift_error_new(0, fqn);
-
-	struct DriftString k = drift_string_from_cstr("user_id");
-	struct DriftDiagnosticValue v = drift_dv_int(42);
-	drift_error_add_attr_dv(err, k, &v);
-	drift_string_release(k);
-	drift_dv_release(&v);
-
-	drift_error_code_t code = drift_error_get_code(err);
-	CHECK(code == 0);
-
-	release_err_and_fqn(err, fqn);
-	return 0;
-}
+// Slice 7c (0.31.64, ABI 14, 2026-05-06): the legacy DV path
+// (`drift_error_add_attr_dv` + `drift_dv_*`) is deleted at the
+// runtime boundary.  The previous `test_old_dv_path_still_works`
+// probe (Phase 1 ADDITIVE check) is retired here because the
+// helpers it called are no longer exported.
 
 // ─────────────────────────────────────────────────────────────────
 // Test 10: getter-return release safety — params_json.
@@ -341,31 +327,9 @@ static int test_get_context_release_safety(void) {
 	return 0;
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Test 9: ADDITIVE — both DV and JSON paths populated; release must
-// drop everything cleanly with no leaks and no double-frees.
-// ─────────────────────────────────────────────────────────────────
-static int test_both_paths_release_clean(void) {
-	struct DriftString fqn = drift_string_from_cstr("test:BothPaths");
-	struct DriftError *err = drift_error_new(0, fqn);
-
-	// Old DV path.
-	struct DriftString k = drift_string_from_cstr("user_id");
-	struct DriftDiagnosticValue v = drift_dv_int(42);
-	drift_error_add_attr_dv(err, k, &v);
-	drift_string_release(k);
-	drift_dv_release(&v);
-
-	// New JSON path.
-	struct DriftString p = drift_string_from_cstr("{\"k\":1}");
-	drift_error_set_params_json(err, p);
-	struct DriftString f =
-		drift_string_from_cstr("{\"fn_name\":\"f\",\"locals\":{}}");
-	drift_error_append_context_frame(err, f);
-
-	release_err_and_fqn(err, fqn);
-	return 0;
-}
+// Slice 7c (2026-05-06): `test_both_paths_release_clean` retired —
+// the "both DV and JSON" coexistence contract is gone.  ABI 14
+// keeps only the JSON path.
 
 
 int main(void) {
@@ -379,8 +343,6 @@ int main(void) {
 	RUN(test_getters_retain);
 	RUN(test_get_params_release_safety);
 	RUN(test_get_context_release_safety);
-	RUN(test_old_dv_path_still_works);
-	RUN(test_both_paths_release_clean);
 
 	if (total_failures != 0) {
 		fprintf(stderr, "test_drift_error_phase1: %d test(s) failed\n", total_failures);

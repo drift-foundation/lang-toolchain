@@ -1,4 +1,4 @@
 {
-  "description": "e2e: heap-backed string in exception DV must be retained (UAF regression for drift_dv_string missing retain)",
+  "description": "e2e: heap-backed String fields on a thrown `error` must round-trip cleanly without UAF.  Original regression (pre-Slice 7b) was for `drift_dv_string` missing retain on DV-attachment.  Slice 7b retired the DV path; the contract now lives on `_emit_diagnostic_owning_throw`'s explicit DropValue after the synthesized `to_json_text` call (otherwise the Path-A struct local leaks across throw propagation).  Test still pins the no-UAF / no-leak end-to-end shape — exit 0 = three throw/catch round-trips clean.",
   "exit_code": 0
 }

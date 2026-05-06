@@ -16,23 +16,12 @@ struct DriftError* drift_error_new_dummy(drift_error_code_t code, struct DriftSt
     err->code = code;
     // Robustness contract: the runtime allocates its own owned copy of
     // event_fqn so callers don't have to know the input string's
-    // allocation class.  This handles all caller patterns uniformly:
-    //   - heap DriftString (refcount=1) — input ref kept by caller.
-    //   - static-flagged DriftString (LLVM-emitted literal) — caller's
-    //     reference is permanent; runtime owns its own copy.
-    //   - raw cstring DriftString (e.g. lang/language_runtime/array_runtime.c:106
-    //     constructs `{ len, (char *)k_event }` over a static C literal
-    //     with no DriftStringHeader at all).  drift_string_from_utf8_bytes
-    //     copies the bytes into a properly-headered DriftString,
-    //     decoupling the runtime's storage from the caller's input.
-    // drift_error_release safely drops the runtime's owned copy.
+    // allocation class (heap / static / raw cstring all handled
+    // uniformly).  drift_error_release safely drops the runtime's
+    // owned copy.
     err->event_fqn = drift_string_from_utf8_bytes(event_fqn.data, event_fqn.len);
-    err->attrs = NULL;
-    err->attr_count = 0;
-    err->frames = NULL;
-    err->frame_count = 0;
-    // Phase 1 additive: initialize JSON segments to empty canonical form
-    // ("{}" / "[]") so getters always observe well-formed JSON.
+    // Initialize JSON segments to empty canonical form ("{}" / "[]")
+    // so getters always observe well-formed JSON.
     err->params_json = drift_string_from_cstr("{}");
     err->context_json = drift_string_from_cstr("[]");
     (void)key;
@@ -40,60 +29,12 @@ struct DriftError* drift_error_new_dummy(drift_error_code_t code, struct DriftSt
     return err;
 }
 
-void drift_error_add_attr_dv(struct DriftError* err, struct DriftString key, const struct DriftDiagnosticValue* value) {
-    if (!err) {
-        return;
-    }
-    size_t new_count = err->attr_count + 1;
-    struct DriftErrorAttr* new_attrs = realloc(err->attrs, new_count * sizeof(struct DriftErrorAttr));
-    if (!new_attrs) {
-        abort();
-    }
-    new_attrs[new_count - 1].key = drift_string_retain(key);
-    new_attrs[new_count - 1].value = drift_dv_clone(value);
-#ifdef DEBUG_DIAGNOSTICS
-    if (value) {
-        fprintf(stderr, "[err_add_attr] count=%zu key=%.*s tag=%u len=%lld ptr=%p\n",
-                new_count,
-                (int)key.len, key.data ? key.data : "<null>",
-                value->tag,
-                (long long)value->data.string_value.len,
-                (void*)value->data.string_value.data);
-        fflush(stderr);
-    }
-#endif
-    err->attrs = new_attrs;
-    err->attr_count = new_count;
-}
-
-void drift_error_add_local_dv(struct DriftError* err, struct DriftString frame, struct DriftString key, const struct DriftDiagnosticValue* value) {
-    if (!err) return;
-    size_t frame_idx = err->frame_count;
-    for (size_t i = 0; i < err->frame_count; i++) {
-        if (err->frames[i].name.len == frame.len && (frame.len == 0 || memcmp(err->frames[i].name.data, frame.data, frame.len) == 0)) {
-            frame_idx = i;
-            break;
-        }
-    }
-    if (frame_idx == err->frame_count) {
-        size_t new_count = err->frame_count + 1;
-        struct DriftCtxFrame* new_frames = realloc(err->frames, new_count * sizeof(struct DriftCtxFrame));
-        if (!new_frames) abort();
-        new_frames[new_count - 1].name = drift_string_retain(frame);
-        new_frames[new_count - 1].locals = NULL;
-        new_frames[new_count - 1].local_count = 0;
-        err->frames = new_frames;
-        err->frame_count = new_count;
-    }
-    struct DriftCtxFrame* tgt = &err->frames[frame_idx];
-    size_t new_lcount = tgt->local_count + 1;
-    struct DriftErrorLocal* new_locals = realloc(tgt->locals, new_lcount * sizeof(struct DriftErrorLocal));
-    if (!new_locals) abort();
-    new_locals[new_lcount - 1].key = drift_string_retain(key);
-    new_locals[new_lcount - 1].value = value ? drift_dv_clone(value) : drift_dv_missing();
-    tgt->locals = new_locals;
-    tgt->local_count = new_lcount;
-}
+// Slice 7c-1 (ABI 14, 2026-05-06): the legacy DV-attachment helpers
+// (`drift_error_add_attr_dv`, `drift_error_add_local_dv`,
+// `__exc_attrs_get_dv`, `__exc_captures_get_dv`,
+// `drift_error_new_with_payload`, `drift_error_get_attr`) are
+// deleted.  Old (ABI 13) binaries that still reference these symbols
+// will fail to link against the ABI 14 archive.
 
 drift_error_code_t drift_error_get_code(struct DriftError* err) {
     if (!err) return 0;
@@ -108,92 +49,20 @@ struct DriftString drift_error_get_event_fqn(const struct DriftError* err) {
     return err->event_fqn;
 }
 
-const struct DriftDiagnosticValue* drift_error_get_attr(const struct DriftError* err, const struct DriftString* key) {
-    if (!err || !key) return NULL;
-    for (size_t i = 0; i < err->attr_count; i++) {
-        struct DriftErrorAttr* entry = &err->attrs[i];
-        if (entry->key.len == key->len && (key->len == 0 || memcmp(entry->key.data, key->data, key->len) == 0)) {
-            return &entry->value;
-        }
-    }
-    return NULL;
-}
-
 uint8_t __exc_attrs_get(struct DriftString* out, const struct DriftError* err, struct DriftString key) {
-    if (!err) {
-        return 0;
-    }
-    const struct DriftDiagnosticValue* val = drift_error_get_attr(err, &key);
-    if (!val || val->tag != DV_STRING) {
-        return 0;
-    }
+    // Slice 7c-1 (ABI 14): the legacy `__exc_attrs_get_dv` and the
+    // typed-attrs lookup that backed `__exc_attrs_get` are gone —
+    // the params JSON path is the sole source of attr values now.
+    // This entry point is retained as a soft no-op so any
+    // codegen-emitted call that slipped past the type-checker
+    // (shouldn't happen, but defense-in-depth) returns "no attr".
+    (void)err;
+    (void)key;
     if (out) {
-        out->len = val->data.string_value.len;
-        out->data = val->data.string_value.data;
+        out->len = 0;
+        out->data = NULL;
     }
-    return 1;
-}
-
-void __exc_attrs_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString key) {
-    if (!out) return;
-    *out = drift_dv_missing();
-    if (!err) {
-        return;
-    }
-    const struct DriftDiagnosticValue* val = drift_error_get_attr(err, &key);
-    if (!val) {
-        return;
-    }
-    // The returned DriftDiagnosticValue must be an INDEPENDENT owner
-    // of any inner refcounted storage (e.g. DV_STRING).  A shallow
-    // `*out = *val` aliases the exception's attribute storage and
-    // double-releases when both the user-side DV and the exception
-    // tear down — heap corruption when the same exception type is
-    // thrown more than once with heap-built String fields.
-    *out = drift_dv_clone(val);
-}
-
-void __exc_captures_get_dv(struct DriftDiagnosticValue* out, const struct DriftError* err, struct DriftString frame, struct DriftString key) {
-    if (!out) return;
-    *out = drift_dv_missing();
-    if (!err) {
-        return;
-    }
-    for (size_t i = 0; i < err->frame_count; i++) {
-        const struct DriftCtxFrame* fr = &err->frames[i];
-        if (fr->name.len != frame.len) {
-            continue;
-        }
-        if (frame.len != 0 && memcmp(fr->name.data, frame.data, frame.len) != 0) {
-            continue;
-        }
-        for (size_t j = 0; j < fr->local_count; j++) {
-            const struct DriftErrorLocal* loc = &fr->locals[j];
-            if (loc->key.len != key.len) {
-                continue;
-            }
-            if (key.len != 0 && memcmp(loc->key.data, key.data, key.len) != 0) {
-                continue;
-            }
-            // Same ownership-clone requirement as __exc_attrs_get_dv —
-            // the user-side DV must independently own any refcounted
-            // inner storage to avoid double-release on teardown.
-            *out = drift_dv_clone(&loc->value);
-            return;
-        }
-        return;
-    }
-}
-
-struct DriftError* drift_error_new_with_payload(drift_error_code_t code, struct DriftString event_fqn, struct DriftString key, const struct DriftDiagnosticValue* payload) {
-    struct DriftError* err = drift_error_new_dummy(code, event_fqn, (struct DriftString){0, NULL}, (struct DriftString){0, NULL});
-    if (!err) {
-        return NULL;
-    }
-    if (payload) {
-        drift_error_add_attr_dv(err, key, payload);
-    }
-    return err;
+    return 0;
 }
 
 struct DriftError* drift_error_new(drift_error_code_t code, struct DriftString event_fqn) {
@@ -205,33 +74,10 @@ void drift_error_release(struct DriftError* err) {
     if (!err) {
         return;
     }
-    for (size_t i = 0; i < err->frame_count; i++) {
-        struct DriftCtxFrame* frame = &err->frames[i];
-        for (size_t j = 0; j < frame->local_count; j++) {
-            drift_string_release(frame->locals[j].key);
-            drift_dv_release(&frame->locals[j].value);
-        }
-        free(frame->locals);
-        frame->locals = NULL;
-        frame->local_count = 0;
-        drift_string_release(frame->name);
-    }
-    free(err->frames);
-    err->frames = NULL;
-    err->frame_count = 0;
-    for (size_t i = 0; i < err->attr_count; i++) {
-        drift_string_release(err->attrs[i].key);
-        drift_dv_release(&err->attrs[i].value);
-    }
-    free(err->attrs);
-    err->attrs = NULL;
-    err->attr_count = 0;
-    // Phase 1: release event_fqn alongside JSON segments.  The runtime
-    // holds its own owned copy of event_fqn (allocated at
-    // drift_error_new_dummy via drift_string_from_utf8_bytes — see
-    // drift-lang-abi.md §2.3 ownership contract), independent of the
-    // caller's input.  Releasing it here is always safe regardless of
-    // the caller's allocation class.
+    // Slice 7c-1 (ABI 14): legacy `attrs` / `frames` storage (and
+    // the matching DV-release loops) is gone — the DriftError struct
+    // no longer carries those fields.  Only `event_fqn` /
+    // `params_json` / `context_json` need releasing.
     drift_string_release(err->event_fqn);
     err->event_fqn = (struct DriftString){0, NULL};
     drift_string_release(err->params_json);

@@ -74,72 +74,19 @@ struct DriftDiagnosticEntry {
 _Static_assert(sizeof(struct DriftDiagnosticValue) == 24, "DriftDiagnosticValue size mismatch");
 _Static_assert(_Alignof(struct DriftDiagnosticValue) == 8, "DriftDiagnosticValue alignment mismatch");
 
-// Constructors
-struct DriftDiagnosticValue drift_dv_missing(void);
-struct DriftDiagnosticValue drift_dv_null(void);
-struct DriftDiagnosticValue drift_dv_bool(uint8_t value);
-struct DriftDiagnosticValue drift_dv_int(drift_isize value);
-struct DriftDiagnosticValue drift_dv_float(double value);
-struct DriftDiagnosticValue drift_dv_string(struct DriftString value);
-struct DriftDiagnosticValue drift_dv_array(struct DriftDiagnosticValue* items, size_t len);
-struct DriftDiagnosticValue drift_dv_object(struct DriftDiagnosticField* fields, size_t len);
-struct DriftDiagnosticValue drift_dv_object_from_entries(void* entries_data, drift_isize len);
-struct DriftDiagnosticValue drift_dv_clone(const struct DriftDiagnosticValue* dv);
-void drift_dv_release(struct DriftDiagnosticValue* dv);
+// Slice 7c-1 (ABI 14, 2026-05-06): all `drift_dv_*` function
+// declarations deleted.  The struct types above remain declared
+// for transitive includers but carry no callable surface at
+// ABI 14 — no production code path references DV.
 
-// Accessors
-struct DriftDiagnosticValue drift_dv_get(struct DriftDiagnosticValue dv, struct DriftString field);
-// Pointer-based dv input for the same SysV x86_64 ABI reason as
-// drift_dv_kind; result is returned by value (existing pattern).
-struct DriftDiagnosticValue drift_dv_index(const struct DriftDiagnosticValue* dv, size_t idx);
-
-// Type queries.  Pointer-based to match the rest of the DV accessor
-// convention (drift_dv_as_int / drift_dv_clone / etc.); LLVM lowering
-// for by-value 24-byte struct args without an explicit `byval` attribute
-// does not match SysV x86_64 ABI for callee parameter loads.
-uint8_t drift_dv_kind(const struct DriftDiagnosticValue* dv);
-
-// Conversions
-bool drift_dv_as_int(const struct DriftDiagnosticValue* dv, drift_isize* out);
-bool drift_dv_as_bool(const struct DriftDiagnosticValue* dv, uint8_t* out);
-bool drift_dv_as_float(const struct DriftDiagnosticValue* dv, double* out);
-bool drift_dv_as_string(const struct DriftDiagnosticValue* dv, struct DriftString* out);
-bool drift_dv_as_object(const struct DriftDiagnosticValue* dv, struct DriftDiagnosticValue* out);
-bool drift_dv_get_field(const struct DriftDiagnosticValue* dv, struct DriftString key, struct DriftDiagnosticValue* out);
-
-// Object/Array enumeration
-drift_isize drift_dv_len(const struct DriftDiagnosticValue* dv);
-
-// Build Array<DiagnosticEntry> from Object fields. Keys retained, values cloned.
-// Result written to out to avoid large-struct ABI issues.
-// DriftArrayHeader is defined in array_runtime.h; forward-declared here
-// so diagnostic_runtime.h can declare drift_dv_entries without pulling
-// in the full array runtime header.
-struct DriftArrayHeader;
-void drift_dv_entries(const struct DriftDiagnosticValue* dv, struct DriftArrayHeader* out);
-
-// Layout compatibility: DiagnosticEntry in Drift is {String, DiagnosticValue},
-// which must match DriftDiagnosticEntry {DriftString, DriftDiagnosticValue}.
-// drift_dv_entries writes directly into Array<DiagnosticEntry> storage, so
-// exact field offset agreement is boundary-critical.
-_Static_assert(sizeof(struct DriftDiagnosticEntry) == sizeof(struct DriftString) + sizeof(struct DriftDiagnosticValue),
-               "DriftDiagnosticEntry must be packed {String, DiagnosticValue}");
-_Static_assert(_Alignof(struct DriftDiagnosticEntry) == _Alignof(struct DriftString),
-               "DriftDiagnosticEntry alignment must match String alignment");
-_Static_assert(offsetof(struct DriftDiagnosticEntry, key) == 0,
-               "DriftDiagnosticEntry.key must be at offset 0");
-_Static_assert(offsetof(struct DriftDiagnosticEntry, value) == sizeof(struct DriftString),
-               "DriftDiagnosticEntry.value must follow key at sizeof(DriftString)");
-
-// Primitive to_diag helpers (runtime equivalents of Diagnostic for primitives)
-struct DriftDiagnosticValue drift_diag_from_bool(uint8_t value);
-struct DriftDiagnosticValue drift_diag_from_int(drift_isize value);
-struct DriftDiagnosticValue drift_diag_from_float(double value);
-struct DriftDiagnosticValue drift_diag_from_string(struct DriftString value);
-
-// DV_MISSING must remain zero so codegen can treat zeroinitializer as the
-// canonical missing value when calling drift_dv_missing().
-_Static_assert(DV_MISSING == 0, "DV_MISSING must be zero for codegen assumptions");
+// Slice 7c-1 (ABI 14, 2026-05-06): the `drift_diag_from_*`
+// aliases (bool/int/float/string) are deleted alongside the
+// `drift_dv_*` family — no callable surface remains.
+//
+// Layout asserts on `DriftDiagnosticEntry` are also retired here:
+// they were boundary-critical only for `drift_dv_entries`, which
+// is gone.  Slice 7c-2 deletes the struct types themselves
+// alongside the compiler-internal `TypeKind.DIAGNOSTICVALUE`.
 
 #ifdef __cplusplus
 }

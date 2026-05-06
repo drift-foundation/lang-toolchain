@@ -1231,7 +1231,14 @@ class CallIface(MInstr):
 
 @dataclass
 class ConstructDV(MInstr):
-	"""dest = DiagnosticValue constructor with typed args."""
+	"""DEAD post-Slice 7b — no production emitter.  Slice 7c
+	deleted the codegen + string_arc handlers + runtime exports;
+	the class definition itself stays for one slice as carrying-
+	cost stub so the compiler-internal substrate (HDVInit lowering,
+	type-introspection arms) doesn't have to be hand-rewritten in
+	the same patch.  Slice 7d deletes the class along with
+	`H.HDVInit` and `TypeKind.DIAGNOSTICVALUE`.
+	"""
 	dest: ValueId
 	dv_type_name: str
 	args: List[ValueId]
@@ -1256,7 +1263,7 @@ class ConstructError(MInstr):
 
 @dataclass
 class ErrorAddAttrDV(MInstr):
-	"""error.attrs[key] = dv (in-place)."""
+	"""DEAD post-Slice 7b — see `ConstructDV` note."""
 
 	error: ValueId
 	key: ValueId
@@ -1265,7 +1272,7 @@ class ErrorAddAttrDV(MInstr):
 
 @dataclass
 class ErrorAddLocalDV(MInstr):
-	"""error.ctx_frames[frame].locals[key] = dv (append-style in runtime)."""
+	"""DEAD post-Slice 7b — see `ConstructDV` note."""
 
 	error: ValueId
 	frame: ValueId
@@ -1329,9 +1336,7 @@ class ResultErr(MInstr):
 
 @dataclass
 class ErrorAttrsGetDV(MInstr):
-	"""
-	dest = error.attrs[key] (DiagnosticValue lookup; missing yields DV_MISSING).
-	"""
+	"""DEAD post-Slice 7b — see `ConstructDV` note."""
 
 	dest: ValueId
 	error: ValueId
@@ -1340,9 +1345,7 @@ class ErrorAttrsGetDV(MInstr):
 
 @dataclass
 class ErrorCapturesGetDV(MInstr):
-	"""
-	dest = error.captures[frame][key] (DiagnosticValue lookup; missing yields DV_MISSING).
-	"""
+	"""DEAD post-Slice 7b — see `ConstructDV` note."""
 
 	dest: ValueId
 	error: ValueId
