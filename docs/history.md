@@ -1,5 +1,95 @@
 # Drift development history
 
+## 2026-05-06 (Slice 7c-2)
+- **Slice 7c-2: compiler-internal DV substrate deletion (release
+  0.31.64, ABI unchanged at 14).**  Deletes the dead HIR / MIR /
+  helper machinery left in place by Slice 7c-1's wire cut.  No
+  ABI bump — the runtime contract didn't change; this is pure
+  carrying-cost cleanup of substrate that no production lowering
+  reached after Slice 7c-1.
+
+  **Deleted HIR machinery:**
+  - `H.HDVInit` HIR node class.
+  - `stage1/normalize.py:DVInitRewriter` (the only `H.HDVInit`
+    creator) — gone in its entirety.  Its rewrite call in
+    `normalize_hir` was already removed in 7c-1.
+  - HDVInit isinstance handlers across `stage1/normalize.py`,
+    `stage1/place_canonicalize.py`, `stage1/borrow_materialize.py`,
+    `stage1/ast_to_hir.py`, `borrow_checker_pass.py` (six sites),
+    `type_checker.py` (three sites — including the type-check
+    arm that returned `self._dv` for HDVInit), `checker/__init__.py`
+    (four walker sites), `driftc.py` (two scan/remap walkers),
+    and `stage2/hir_to_mir.py` (`_visit_expr_HDVInit` plus the
+    can-throw and type-inference fall-through arms).
+  - `H.HDVInit` removed from `stage1/__init__.py` exports and the
+    `stage1/hir_nodes.py` `__all__` list.
+
+  **Deleted MIR op classes (12 ops):**
+  - `M.ConstructDV`, `M.ErrorAddAttrDV`, `M.ErrorAddLocalDV`,
+    `M.ErrorAttrsGetDV`, `M.ErrorCapturesGetDV` (the 5 storage
+    ops).
+  - `M.DVAsInt`, `M.DVAsBool`, `M.DVAsFloat`, `M.DVAsString`,
+    `M.DVAsObject`, `M.DVGetField`, `M.DVKind`, `M.DVIndex`,
+    `M.DVLen`, `M.DVEntries` (the reader ops).
+  - All 12 classes deleted from `stage2/mir_nodes.py` + their
+    `__all__` exports.  Removed from `stage2/__init__.py` import
+    block + `__all__` exports.
+  - Codegen ICE handlers for every op deleted from
+    `lang/codegen/llvm/llvm_codegen.py` (Slice 7c-1 left them as
+    ICE-on-reach guards; Slice 7c-2 deletes the dead branches
+    along with their imports).
+  - String-arc passthrough handlers in
+    `lang/driftc/stage2/string_arc.py` deleted (5 sites in the
+    operand-yield walker plus 4 sites in the move/borrow rewriter).
+
+  **Deleted codegen carrying cost:**
+  - `LLVMCodegenModule.needs_dv_runtime: bool` field deleted.
+  - `LLVMCodegenModule.dv_drop_helper: str | None` field deleted.
+  - `_construct_dv_temps: set[str]` field on the lowering builder
+    deleted.
+  - `_release_construct_dv_temp(...)` helper deleted.
+  - `_ensure_dv_drop_helper(...)` helper deleted (was the
+    `__drift_dv_drop_helper` synthesis path).
+
+  **Deleted stage3 pre-analysis arm:**
+  - `lang/driftc/stage3/pre_analysis.py`'s `(ConstructDV,
+    ConstructError)` may-fail tuple pattern collapsed to just
+    `ConstructError`.  `ConstructDV` import dropped.
+
+  **Test-corpus updates:**
+  - Deleted `lang/tests/type_checker/test_type_checker_dv_attrs.py`
+    (the entire file was DV constructor / DV-attr type-check
+    probes — every test built `H.HDVInit` directly).
+
+  **Retained (Slice 7c-3 follow-up if pursued):**
+  - `TypeKind.DIAGNOSTICVALUE` enum value + ~25 type-introspection
+    arms across `core/types_core.py`, `packages/type_table_link_v0.py`,
+    `packages/provisional_dmir_v0.py`, `checker/`, `driftc.py`,
+    `trait_index.py`, `string_arc.py`, `stage2/hir_to_mir.py`.
+    All unreachable in production (no DV value can be constructed
+    user-side, and stdlib never constructs DV values), but the
+    enum value's removal would touch ~86 sites and is a
+    standalone-slice-sized change.
+  - `DRIFT_DV_TYPE` LLVM type alias and the `%DriftDiagnosticValue`
+    LLVM struct type alias.  Used only in type-table /
+    type-introspection arms guarded by `TypeKind.DIAGNOSTICVALUE`,
+    which are themselves dead.
+  - `TypeTable.ensure_diagnostic_value()` / `self._dv` cache
+    fields.
+  - C struct types `DriftDiagnosticValue` /
+    `DriftDiagnosticEntry` / `DriftDiagnosticField` in
+    `lang/compiler_infra/diagnostic_runtime.h` — header-only at
+    ABI 14 (no callable surface left).
+
+  **Verification:**
+  - All references to deleted classes/functions grep clean except
+    for documentation comments referencing them historically.
+  - Compiler imports cleanly.
+  - Targeted regression: 82 tests pass (`test_pub_error_*`,
+    `test_dv_public_removed`, `test_exception_context_json`,
+    `test_pkg_trait_impl_target_type`, `test_abi_version_stamp`,
+    `test_external_consumer`).
+
 ## 2026-05-06 (Slice 7c-1)
 - **Slice 7c-1: DV runtime wire cut + ABI 13 → 14 (release
   0.31.64).**  Deletes the runtime/codegen substrate for the legacy

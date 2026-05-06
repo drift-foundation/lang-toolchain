@@ -511,9 +511,6 @@ class Checker:
 				elif isinstance(expr, H.HIndex):
 					walk_expr(expr.subject)
 					walk_expr(expr.index)
-				elif isinstance(expr, H.HDVInit):
-					for a in expr.args:
-						walk_expr(a)
 				elif isinstance(expr, H.HTryExpr):
 					walk_expr(expr.attempt)
 					for arm in expr.arms:
@@ -1322,9 +1319,6 @@ class Checker:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
 					if first_note is None:
 						first_note = "indexing may throw"
-			elif isinstance(expr, H.HDVInit):
-				for a in expr.args:
-					walk_expr(a, caught_events, catch_all)
 			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 				walk_expr(expr.scrutinee, caught_events, catch_all)
 				for arm in expr.arms:
@@ -2659,9 +2653,6 @@ class Checker:
 			elif isinstance(expr, H.HIndex):
 				walk_expr(expr.subject)
 				walk_expr(expr.index)
-			elif isinstance(expr, H.HDVInit):
-				for a in expr.args:
-					walk_expr(a)
 			elif isinstance(expr, H.HTryExpr):
 				walk_expr(expr.attempt)
 				for arm in expr.arms:
@@ -3108,9 +3099,6 @@ class Checker:
 			elif isinstance(expr, H.HArrayLiteral):
 				for el in expr.elements:
 					walk_expr(el)
-			elif isinstance(expr, H.HDVInit):
-				for a in expr.args:
-					walk_expr(a)
 			elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 				# `match` is an expression; traverse scrutinee and then each arm with
 				# a scoped view of locals that includes any pattern binders.

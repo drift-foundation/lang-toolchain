@@ -41,7 +41,6 @@ from lang.driftc.stage2 import (
 	ConstructError,
 	ConstructResultErr,
 	ConstructResultOk,
-	ConstructDV,
 	BinaryOpInstr,
 	IntFromUint,
 	MirFunc,
@@ -225,15 +224,18 @@ def test_export_wrapper_bool_return_uses_i8():
 def test_codegen_fnresult_ref_err_zero_ok_slot():
 	"""
 	FnResult.Err for Ref<Int> ok payload should zero-initialize the ptr ok slot cleanly.
+
+	Slice 7c-2 (ABI 14, 2026-05-06) update: the legacy DV-attachment
+	`ConstructError(payload=DV, attr_key=K)` shape is gone — at
+	ABI 14 the only valid form is `ConstructError(payload=None,
+	attr_key=None)`, which is what production lowering emits.
 	"""
 	entry = BasicBlock(
 		name="entry",
 		instructions=[
 			ConstUint64(dest="code", value=1),
 			ConstString(dest="ename", value="m:Evt"),
-			ConstructDV(dest="dv", dv_type_name="Missing", args=[]),
-			ConstString(dest="key", value="k"),
-			ConstructError(dest="err", code="code", event_fqn="ename", payload="dv", attr_key="key"),
+			ConstructError(dest="err", code="code", event_fqn="ename", payload=None, attr_key=None),
 			ConstructResultErr(dest="res", error="err"),
 		],
 		terminator=Return(value="res"),

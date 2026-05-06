@@ -3196,7 +3196,7 @@ class HIRToMIR:
 					#   dropping it would UAF on the next store into
 					#   that local (the drift-net-tls Array<String>
 					#   regression family).
-					# - Everything else (HCall, HDVInit, HPlaceExpr with
+					# - Everything else (HCall, HPlaceExpr with
 					#   projections after `_copy_if_ref_alias` upgraded
 					#   them to owned temps, …) → owned rvalue temp;
 					#   the paired DropValue releases its own ref so
@@ -3992,8 +3992,6 @@ class HIRToMIR:
 				return any(expr_can_throw(el) for el in expr.elements)
 			if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
 				return any(expr_can_throw(e.key) or expr_can_throw(e.value) for e in expr.entries)
-			if isinstance(expr, H.HDVInit):
-				return any(expr_can_throw(a) for a in expr.args)
 			return False
 
 		def stmt_can_throw(stmt: H.HStmt) -> bool:
@@ -4627,122 +4625,36 @@ class HIRToMIR:
 				self._local_types[dest] = self._type_table.ensure_error()
 				return dest
 		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries"):
+			# Slice 7c-2 (ABI 14, 2026-05-06): the DV-intrinsic
+			# dispatch path that recognized these method names on a
+			# `DiagnosticValue` receiver is dead substrate.  All
+			# `M.DV*` MIR ops are deleted; no production lowering
+			# can construct a DV value (public DV is rejected at the
+			# parser; stdlib has no DV-typed values).  If the
+			# receiver is a DV value at this site, that's a compiler
+			# bug — ICE before any reference to a deleted MIR op
+			# would AttributeError.
 			recv_ty = self._infer_expr_type(expr.receiver)
 			if recv_ty is None:
 				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
-			recv_eff_ty = recv_ty
 			if recv_ty is not None:
 				recv_def = self._type_table.get(recv_ty)
 				while recv_def.kind is TypeKind.REF and recv_def.param_types:
-					recv_eff_ty = recv_def.param_types[0]
-					recv_def = self._type_table.get(recv_eff_ty)
-				if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
-					recv_ty = None
-			if recv_ty is None:
-				result, info = self._lower_method_call(expr)
-				if result is None:
-					if self._type_table.is_void(info.sig.user_ret_type):
-						return self._void_value()
-					raise AssertionError("Void-returning method call used in expression context (checker bug)")
-				if info.sig.can_throw:
-					ok_tid = info.sig.user_ret_type
-					def emit_call() -> M.ValueId:
-						return result
-					return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_tid)
-				return result
-			if expr.method_name not in ("get", "index") and expr.args:
-				raise NotImplementedError(f"{expr.method_name} takes no arguments")
-			if expr.method_name == "get" and len(expr.args) != 1:
-				raise NotImplementedError("get takes exactly one key argument")
-			if expr.method_name == "index" and len(expr.args) != 1:
-				raise NotImplementedError("index takes exactly one Int index argument")
-			dv_val = self.lower_expr(expr.receiver)
-			if recv_eff_ty is not None and recv_ty is not None:
-				recv_def2 = self._type_table.get(recv_ty)
-				if recv_def2.kind is TypeKind.REF:
-					deref = H.HUnary(op=H.UnaryOp.DEREF, expr=expr.receiver)
-					dv_val = self.lower_expr(deref)
-			# K28-aftermath Leak A: DV intrinsic methods (DVAs*, DVGetField,
-			# DVLen, DVEntries) read the receiver via pointer and do NOT
-			# consume it.  When the receiver is an rvalue (e.g.
-			# `e.attrs["fields"].entries()`), `dv_val` is an OWNED temp that
-			# nothing else releases — its inner refcounted payload (Object's
-			# Array<DiagnosticEntry>, Array's items, String buffers) leaks.
-			# Bound receivers (`val dv = …; dv.entries()`) are safe because
-			# the local's scope-drop releases the DV.  We detect "rvalue
-			# receiver" syntactically: HVar / HPlaceExpr (with no projections
-			# on the place itself, which would already have built an rvalue
-			# temp via lower_expr) are bound; everything else is rvalue.
-			drop_rvalue_dv = self._dv_method_recv_is_rvalue(expr.receiver)
-			dest = self.b.new_temp()
-			if expr.method_name == "as_int":
-				self.b.emit(M.DVAsInt(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._optional_variant_type(self._int_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "as_bool":
-				self.b.emit(M.DVAsBool(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._optional_variant_type(self._bool_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "as_float":
-				self.b.emit(M.DVAsFloat(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._optional_variant_type(self._float_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "as_string":
-				self.b.emit(M.DVAsString(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._optional_variant_type(self._string_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "as_object":
-				self.b.emit(M.DVAsObject(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._optional_variant_type(self._dv_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "get":
-				key_val = self.lower_expr(expr.args[0])
-				self.b.emit(M.DVGetField(dest=dest, dv=dv_val, key=key_val))
-				self._local_types[dest] = self._optional_variant_type(self._dv_type)
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "index":
-				idx_val = self.lower_expr(expr.args[0])
-				self.b.emit(M.DVIndex(dest=dest, dv=dv_val, idx=idx_val))
-				self._local_types[dest] = self._dv_type
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "kind":
-				self.b.emit(M.DVKind(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._int_type
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "len":
-				self.b.emit(M.DVLen(dest=dest, dv=dv_val))
-				self._local_types[dest] = self._int_type
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
-			if expr.method_name == "entries":
-				self.b.emit(M.DVEntries(dest=dest, dv=dv_val))
-				# Resolve canonical std.core:DiagnosticEntry via public API.
-				# No fallback — this is a compiler invariant.
-				de_ty = self._type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="DiagnosticEntry")
-				if de_ty is None:
-					raise AssertionError("std.core:DiagnosticEntry not found in type table (compiler invariant)")
-				arr_ty = self._type_table.new_array(de_ty)
-				self._local_types[dest] = arr_ty
-				if drop_rvalue_dv:
-					self.b.emit(M.DropValue(value=dv_val, ty=self._dv_type))
-				return dest
+					recv_def = self._type_table.get(recv_def.param_types[0])
+				if recv_def.kind is TypeKind.DIAGNOSTICVALUE:
+					raise AssertionError(
+						f"DV intrinsic method `{expr.method_name}` "
+						"reached HIR→MIR lowering with a "
+						"DiagnosticValue receiver at ABI 14.  No "
+						"production path can construct a DV value; "
+						"this is a compiler bug — classify as "
+						"incomplete Slice 7b/7c-1 migration."
+					)
+			# Non-DV receivers fall through to the normal method-call
+			# lowering below.  The `as_int` / `as_bool` / etc. names
+			# also belong to `core.JsonCursor` (Slice 4A); that
+			# resolves through standard call-resolver method
+			# dispatch.
 		result, info = self._lower_method_call(expr)
 		if result is None:
 			if self._type_table.is_void(info.sig.user_ret_type):
@@ -4822,47 +4734,10 @@ class HIRToMIR:
 		self._local_types[dest] = elem_ty
 		return dest
 
-	# Allow-list of HExpr shapes that produce an OWNED, INDEPENDENT
-	# DiagnosticValue rvalue temp at a DV-intrinsic-method call site.
-	# Used by `_dv_method_recv_is_rvalue` to decide whether the lowering
-	# must emit a `DropValue` after a read-only DV op (DVAs*, DVGetField,
-	# DVLen, DVEntries) to avoid leaking the receiver's refcounted
-	# payload.
-	#
-	# In allow-list (return True):
-	# - `H.HCall`       — function call returning DV (e.g. `make_obj()`).
-	#                     The ConstructDV (if any) is inside the callee;
-	#                     the caller sees the return value which is NOT
-	#                     tracked in `_construct_dv_temps`.
-	# - `H.HMethodCall` — method call returning DV (same reasoning).
-	# - `H.HIndex`      — `e.attrs["fields"]`, `e.captures["fr"]["k"]` — both
-	#                     lower to ErrorAttrsGetDV / ErrorCapturesGetDV which
-	#                     call `drift_dv_clone` and hand back an owned DV
-	#                     (not a ConstructDV result).
-	# - `H.HDVInit`     — inline `DiagnosticValue::…` literal used AS A
-	#                     DV METHOD RECEIVER (e.g. `DV::Object(...).entries()`).
-	#                     HDVInit lowers to `M.ConstructDV`, whose dest is
-	#                     added to `_construct_dv_temps`.  That codegen-side
-	#                     release only fires at `ConstructError` /
-	#                     `ErrorAddAttrDV` sites (the 0.27.187/188 mechanism);
-	#                     `DVEntries` / `DVLen` / `DVAs*` / `DVGetField` do
-	#                     NOT fire it, so without a MIR-level DropValue the
-	#                     inline DV would leak.  This is the correct
-	#                     allow-list entry for DV-method receivers; the
-	#                     exception-ctor lowering handles HDVInit separately
-	#                     (explicitly sets `dv_is_rvalue=False` there —
-	#                     see `_construct_error_from_exception_init`) to
-	#                     avoid double-release when the DV DOES reach a
-	#                     ConstructError/ErrorAddAttrDV site.
-	#
-	# NOT in allow-list:
-	# - `H.HVar`, `H.HPlaceExpr` (with or without projections) — bound /
-	#                     aliased view of an owning struct field whose local
-	#                     scope-drop already accounts for the DV.  Dropping a
-	#                     projected-place DV double-frees the owning struct's
-	#                     storage at scope end (see regression
-	#                     `dv_projected_place_entries_no_double_free`).
-	_DV_RVALUE_RECV_HEXPRS: tuple = ()
+	# Slice 7c-2 (ABI 14, 2026-05-06): `_DV_RVALUE_RECV_HEXPRS`
+	# allow-list and the surrounding ownership comment block
+	# deleted along with `_dv_method_recv_is_rvalue` and the DV-
+	# intrinsic dispatch path.
 
 	def _lower_error_encode_compact(self, receiver: H.HExpr) -> M.ValueId:
 		"""Build the canonical full-envelope JSON document for an
@@ -5334,36 +5209,9 @@ class HIRToMIR:
 			return td.kind is TypeKind.ERROR
 		return False
 
-	def _dv_method_recv_is_rvalue(self, recv: H.HExpr) -> bool:
-		"""Decide whether a DV intrinsic method's receiver is an OWNED rvalue
-		temp (so the lowering must release it after the read-only DV op) or
-		a place expression whose owning local handles cleanup via scope-drop.
-
-		Conservative allow-list (see `_DV_RVALUE_RECV_HEXPRS` above): only
-		shapes known to allocate or clone a fresh, independently-owned DV are
-		treated as rvalue temps.  Place expressions (`H.HVar`, any
-		`H.HPlaceExpr` — including projected ones like `holder.dv.entries()`)
-		are NOT rvalue receivers: `extractvalue` from an owning struct yields
-		a shallow alias of its storage, and dropping that alias would
-		double-free the owning local at scope drop (see
-		`dv_projected_place_entries_no_double_free`).
-
-		See the K28-aftermath Leak A regression
-		(`exception_dv_object_rvalue_entries_no_leak`) for the rvalue
-		case this gate is meant to catch.
-		"""
-		# Build the tuple lazily so type lookups are deferred to first call
-		# (avoids hitting partially-loaded H module attributes at import).
-		shapes = type(self)._DV_RVALUE_RECV_HEXPRS
-		if not shapes:
-			candidates: list[type] = []
-			for attr_name in ("HCall", "HMethodCall", "HIndex", "HDVInit"):
-				cls = getattr(H, attr_name, None)
-				if isinstance(cls, type):
-					candidates.append(cls)
-			shapes = tuple(candidates)
-			type(self)._DV_RVALUE_RECV_HEXPRS = shapes
-		return isinstance(recv, shapes)
+	# Slice 7c-2 (ABI 14, 2026-05-06): `_dv_method_recv_is_rvalue`
+	# helper deleted along with the DV-intrinsic dispatch path that
+	# was its only caller.
 
 	def _call_arg_yields_owned_temp(self, arg: H.HExpr, param_ty: TypeId | None) -> bool:
 		"""Mirror of `_lower_call_arg`'s ownership decision for use by
@@ -5380,7 +5228,7 @@ class HIRToMIR:
 		- HVar / projection-free HPlaceExpr with a COPY-classified type
 		  → plain load (borrowed view sharing refcount with the local).
 		- HPlaceExpr with projections → `lower_expr` deep-copy → owned.
-		- Anything else (HCall, HMethodCall, HDVInit, …) → `lower_expr`
+		- Anything else (HCall, HMethodCall, …) → `lower_expr`
 		  on an rvalue expression → owned temp.
 
 		This distinction matters for `_ensure_array_elem_copy`:
@@ -6509,20 +6357,12 @@ class HIRToMIR:
 		return dest
 
 
-	def _visit_expr_HDVInit(self, expr: H.HDVInit) -> M.ValueId:
-		arg_vals = [self.lower_expr(arg) for arg in expr.args]
-		if len(expr.args) == 1 and self._expr_types:
-			arg_expr = expr.args[0]
-			arg_ty = self._expr_types.get(arg_expr.node_id)
-			if arg_ty == self._uint_type:
-				src_val = arg_vals[0]
-				conv = self.b.new_temp()
-				self.b.emit(M.IntFromUint(dest=conv, value=src_val))
-				self._local_types[conv] = self._int_type
-				arg_vals = [conv]
-		dest = self.b.new_temp()
-		self.b.emit(M.ConstructDV(dest=dest, dv_type_name=expr.dv_type_name, args=arg_vals))
-		return dest
+	# Slice 7c-2 (ABI 14, 2026-05-06): `_visit_expr_HDVInit` deleted
+	# along with `H.HDVInit` and `M.ConstructDV`.  No production
+	# path emits HDVInit nodes — the dispatch via
+	# `getattr(self, f"_visit_expr_{type(expr).__name__}")` will
+	# raise NotImplementedError if anything ever does, which is
+	# the correct contract failure shape.
 
 	def _visit_expr_HExceptionInit(self, expr: H.HExceptionInit) -> M.ValueId:
 		"""
@@ -9952,8 +9792,6 @@ class HIRToMIR:
 			return self._bool_type
 		if isinstance(expr, H.HLiteralString):
 			return self._string_type
-		if isinstance(expr, H.HDVInit):
-			return self._dv_type
 		if isinstance(expr, H.HFString):
 			return self._string_type
 		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):

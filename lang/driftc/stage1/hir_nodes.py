@@ -658,11 +658,11 @@ class HCopy(HExpr):
 	loc: Span = field(default_factory=Span)
 
 
-@dataclass
-class HDVInit(HExpr):
-	"""Desugared DiagnosticValue constructor call."""
-	dv_type_name: str
-	args: List[HExpr]
+# Slice 7c-2 (ABI 14, 2026-05-06): `HDVInit` HIR node deleted.
+# Its rewriter (`stage1/normalize.py:DVInitRewriter`) is retired
+# along with the lowering target (`M.ConstructDV`) and the runtime
+# `drift_dv_*` exports (Slice 7c-1).  User-source DV is rejected
+# at the parser boundary (Slice 7a `E_DV_PUBLIC_REMOVED`).
 
 
 @dataclass
@@ -887,7 +887,7 @@ __all__ = [
 	"HCall", "HInvoke", "HFnPtrConst", "HMethodCall", "HTernary", "HResultOk",
 	"HTypeApp", "HCast",
 	"HPlaceExpr", "HPlaceProj", "HPlaceField", "HPlaceIndex", "HPlaceDeref",
-	"HField", "HQualifiedMember", "HIndex", "HBorrow", "HDVInit",
+	"HField", "HQualifiedMember", "HIndex", "HBorrow",
 	"HMove", "HCopy",
 	"HKwArg",
 	"HExceptionInit",

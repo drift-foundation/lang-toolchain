@@ -283,12 +283,6 @@ class PlaceCanonicalizeRewriter:
 					)
 				)
 			return [], H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc)
-		if isinstance(expr, H.HDVInit):
-			new_args: List[H.HExpr] = []
-			for a in expr.args:
-				_, av = self._rewrite_expr(a)
-				new_args.append(av)
-			return [], H.HDVInit(dv_type_name=expr.dv_type_name, args=new_args)
 		if isinstance(expr, H.HExceptionInit):
 			new_pos: List[H.HExpr] = []
 			for a in expr.pos_args:

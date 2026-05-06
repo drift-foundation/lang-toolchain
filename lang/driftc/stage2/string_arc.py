@@ -469,44 +469,8 @@ def insert_string_arc(
 				yield instr.payload
 			if instr.attr_key is not None:
 				yield instr.attr_key
-		elif isinstance(instr, M.ErrorAddAttrDV):
-			yield instr.error
-			yield instr.key
-			yield instr.value
-		elif isinstance(instr, M.ErrorAddLocalDV):
-			yield instr.error
-			yield instr.frame
-			yield instr.key
-			yield instr.value
 		elif isinstance(instr, M.ErrorRaise):
 			yield instr.error
-		elif isinstance(instr, M.ErrorAttrsGetDV):
-			yield instr.error
-			yield instr.key
-		elif isinstance(instr, M.ErrorCapturesGetDV):
-			yield instr.error
-			yield instr.frame
-			yield instr.key
-		elif isinstance(instr, M.ConstructDV):
-			yield from instr.args
-		elif isinstance(instr, M.DVAsInt):
-			yield instr.dv
-		elif isinstance(instr, M.DVAsBool):
-			yield instr.dv
-		elif isinstance(instr, M.DVAsFloat):
-			yield instr.dv
-		elif isinstance(instr, M.DVAsString):
-			yield instr.dv
-		elif isinstance(instr, M.DVAsObject):
-			yield instr.dv
-		elif isinstance(instr, M.DVGetField):
-			yield instr.dv
-			yield instr.key
-		elif isinstance(instr, M.DVIndex):
-			yield instr.dv
-			yield instr.idx
-		elif isinstance(instr, M.DVKind):
-			yield instr.dv
 		elif isinstance(instr, M.ExcGetParamsJson):
 			yield instr.error
 		elif isinstance(instr, M.ExcSetParamsJson):
@@ -1319,23 +1283,12 @@ def insert_string_arc(
 				)
 				continue
 
-			if isinstance(instr, M.ErrorAddAttrDV):
-				key = instr.key
-				if _is_string_value(key):
-					if key in move_only_values or _can_move_owned_once(key):
-						_note_use(key, consume=True)
-					else:
-						key = _ensure_owned(key, owned_values, new_instrs)
-						_note_use(key, consume=True)
-				new_instrs.append(M.ErrorAddAttrDV(error=instr.error, key=key, value=instr.value))
-				continue
-
 			if isinstance(instr, M.ExcSetParamsJson):
 				# `drift_error_set_params_json` takes ownership of
 				# `json_text` per ABI spec §2.3 — runtime releases the
 				# prior params_json and stores the input.  ARC must
 				# treat `json_text` as consumed (not a non-consuming
-				# read).  Mirrors `ErrorAddAttrDV.key` consume pattern.
+				# read).
 				json_val = instr.json_text
 				if _is_string_value(json_val):
 					if json_val in move_only_values or _can_move_owned_once(json_val):
@@ -1361,55 +1314,8 @@ def insert_string_arc(
 				new_instrs.append(M.ExcAppendContextFrame(error=instr.error, frame_json=frame_val))
 				continue
 
-			if isinstance(instr, M.ErrorAddLocalDV):
-				frame = instr.frame
-				if _is_string_value(frame):
-					if frame in move_only_values or _can_move_owned_once(frame):
-						_note_use(frame, consume=True)
-					else:
-						frame = _ensure_owned(frame, owned_values, new_instrs)
-						_note_use(frame, consume=True)
-				key = instr.key
-				if _is_string_value(key):
-					if key in move_only_values or _can_move_owned_once(key):
-						_note_use(key, consume=True)
-					else:
-						key = _ensure_owned(key, owned_values, new_instrs)
-						_note_use(key, consume=True)
-				new_instrs.append(M.ErrorAddLocalDV(error=instr.error, frame=frame, key=key, value=instr.value))
-				continue
-
 			if isinstance(instr, M.ErrorRaise):
 				new_instrs.append(instr)
-				continue
-
-			if isinstance(instr, M.ErrorCapturesGetDV):
-				frame = instr.frame
-				if _is_string_value(frame):
-					if frame in move_only_values or _can_move_owned_once(frame):
-						_note_use(frame, consume=True)
-					else:
-						frame = _ensure_owned(frame, owned_values, new_instrs)
-						_note_use(frame, consume=True)
-				key = instr.key
-				if _is_string_value(key):
-					if key in move_only_values or _can_move_owned_once(key):
-						_note_use(key, consume=True)
-					else:
-						key = _ensure_owned(key, owned_values, new_instrs)
-						_note_use(key, consume=True)
-				new_instrs.append(M.ErrorCapturesGetDV(dest=instr.dest, error=instr.error, frame=frame, key=key))
-				continue
-
-			if isinstance(instr, M.DVGetField):
-				key = instr.key
-				if _is_string_value(key):
-					if key in move_only_values or _can_move_owned_once(key):
-						_note_use(key, consume=True)
-					else:
-						key = _ensure_owned(key, owned_values, new_instrs)
-						_note_use(key, consume=True)
-				new_instrs.append(M.DVGetField(dest=instr.dest, dv=instr.dv, key=key))
 				continue
 
 			if isinstance(instr, M.Call):

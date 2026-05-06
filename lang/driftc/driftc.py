@@ -6134,9 +6134,6 @@ def compile_stubbed_funcs(
 					elif isinstance(expr, H.HArrayLiteral):
 						for el in expr.elements:
 							_scan_expr(el)
-					elif isinstance(expr, H.HDVInit):
-						for a in expr.args:
-							_scan_expr(a)
 					elif isinstance(expr, H.HExceptionInit):
 						for a in expr.pos_args:
 							_scan_expr(a)
@@ -6246,9 +6243,6 @@ def compile_stubbed_funcs(
 					elif isinstance(expr, H.HArrayLiteral):
 						for el in expr.elements:
 							_remap_expr(el)
-					elif isinstance(expr, H.HDVInit):
-						for a in expr.args:
-							_remap_expr(a)
 					elif isinstance(expr, H.HExceptionInit):
 						for a in expr.pos_args:
 							_remap_expr(a)

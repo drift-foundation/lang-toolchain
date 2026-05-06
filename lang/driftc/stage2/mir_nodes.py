@@ -1229,55 +1229,33 @@ class CallIface(MInstr):
 	slot_index: int
 
 
-@dataclass
-class ConstructDV(MInstr):
-	"""DEAD post-Slice 7b — no production emitter.  Slice 7c
-	deleted the codegen + string_arc handlers + runtime exports;
-	the class definition itself stays for one slice as carrying-
-	cost stub so the compiler-internal substrate (HDVInit lowering,
-	type-introspection arms) doesn't have to be hand-rewritten in
-	the same patch.  Slice 7d deletes the class along with
-	`H.HDVInit` and `TypeKind.DIAGNOSTICVALUE`.
-	"""
-	dest: ValueId
-	dv_type_name: str
-	args: List[ValueId]
+# Slice 7c-2 (ABI 14, 2026-05-06): `ConstructDV`, `ErrorAddAttrDV`,
+# `ErrorAddLocalDV`, `ErrorAttrsGetDV`, `ErrorCapturesGetDV`,
+# `DVAs{Int,Bool,Float,String,Object}`, `DVKind`, `DVIndex`,
+# `DVLen`, `DVEntries`, `DVGetField` MIR ops are deleted along
+# with `H.HDVInit` and the runtime DV exports.  Slice 7c-1 retired
+# the runtime/codegen wire; this slice retires the compiler-
+# internal substrate.
 
 
 @dataclass
 class ConstructError(MInstr):
-	"""
-	Construct an Error value from an event code and diagnostic payload.
+	"""Construct an Error value from an event code.
 
-	`code` is the 64-bit event code (as per drift-abi-exceptions).
-	`event_fqn` is the canonical FQN label (for logging/telemetry; not used for matching).
-	`payload` is a DiagnosticValue representing structured attrs (optional).
-	`attr_key` is the attr name under which to store the payload (optional).
+	`code` is the 64-bit event code (see drift-abi-exceptions).
+	`event_fqn` is the canonical FQN label (for logging/telemetry;
+	not used for matching).  Slice 7c-1 (ABI 14) retired the
+	`payload` / `attr_key` legacy DV-attachment shape — at ABI 14
+	the only valid form is `payload=None, attr_key=None` and
+	params flow through `ExcSetParamsJson`.  Fields kept for
+	backward source compat at the dataclass level; codegen ICEs
+	if either is non-None.
 	"""
 	dest: ValueId
 	code: ValueId
 	event_fqn: ValueId
 	payload: ValueId | None
 	attr_key: ValueId | None
-
-
-@dataclass
-class ErrorAddAttrDV(MInstr):
-	"""DEAD post-Slice 7b — see `ConstructDV` note."""
-
-	error: ValueId
-	key: ValueId
-	value: ValueId
-
-
-@dataclass
-class ErrorAddLocalDV(MInstr):
-	"""DEAD post-Slice 7b — see `ConstructDV` note."""
-
-	error: ValueId
-	frame: ValueId
-	key: ValueId
-	value: ValueId
 
 
 @dataclass
@@ -1332,25 +1310,6 @@ class ResultErr(MInstr):
 
 	dest: ValueId
 	result: ValueId
-
-
-@dataclass
-class ErrorAttrsGetDV(MInstr):
-	"""DEAD post-Slice 7b — see `ConstructDV` note."""
-
-	dest: ValueId
-	error: ValueId
-	key: ValueId
-
-
-@dataclass
-class ErrorCapturesGetDV(MInstr):
-	"""DEAD post-Slice 7b — see `ConstructDV` note."""
-
-	dest: ValueId
-	error: ValueId
-	frame: ValueId
-	key: ValueId
 
 
 @dataclass
@@ -1411,109 +1370,9 @@ class ExcAppendContextFrame(MInstr):
 	frame_json: ValueId
 
 
-@dataclass
-class DVAsInt(MInstr):
-	"""dest = drift_dv_as_int(dv) (returns Optional<Int>)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVAsBool(MInstr):
-	"""dest = drift_dv_as_bool(dv) (returns Optional<Bool>)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVAsFloat(MInstr):
-	"""dest = drift_dv_as_float(dv) (returns Optional<Float>)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVAsString(MInstr):
-	"""dest = drift_dv_as_string(dv) (returns Optional<String>)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVAsObject(MInstr):
-	"""dest = drift_dv_as_object(dv) (returns Optional<DiagnosticValue>)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVGetField(MInstr):
-	"""dest = drift_dv_get_field(dv, key) (returns Optional<DiagnosticValue>)."""
-
-	dest: ValueId
-	dv: ValueId
-	key: ValueId
-
-
-@dataclass
-class DVKind(MInstr):
-	"""dest = drift_dv_kind(dv) (returns Int — matches C enum
-	DriftDiagnosticTag: 0=Missing, 1=Null, 2=Bool, 3=Int, 4=Float,
-	5=String, 6=Array, 7=Object).
-
-	DV→JSON migration (Slice 1+) — used by `_dv_to_json_text` to
-	disambiguate empty Array from Missing/Null cases that the
-	scalar/object accessors cannot distinguish.
-
-	DELETION LEDGER: transitional migration scaffolding only.  Not a
-	new user-facing DV API.  Delete with the rest of the DV public-
-	surface removal at Slice 5.  See deletion-ledger comment in
-	`stdlib/std/core/core.drift`.
-	"""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVIndex(MInstr):
-	"""dest = drift_dv_index(dv, idx) (returns DiagnosticValue at array
-	position idx; out-of-range yields DV_MISSING).
-
-	DV→JSON migration (Slice 1+) — used by `_dv_to_json_text` to
-	recurse over DV::Array variants.  Mirrors the existing DVGetField
-	op for Object access; pairs with DVLen for length-based iteration.
-
-	DELETION LEDGER: transitional migration scaffolding only.  Not a
-	new user-facing DV API.  Delete with the rest of the DV public-
-	surface removal at Slice 5.  See deletion-ledger comment in
-	`stdlib/std/core/core.drift`.
-	"""
-
-	dest: ValueId
-	dv: ValueId
-	idx: ValueId
-
-
-@dataclass
-class DVLen(MInstr):
-	"""dest = drift_dv_len(dv) (returns Int)."""
-
-	dest: ValueId
-	dv: ValueId
-
-
-@dataclass
-class DVEntries(MInstr):
-	"""dest = drift_dv_entries(dv) (returns Array<DiagnosticEntry>)."""
-
-	dest: ValueId
-	dv: ValueId
+# Slice 7c-2 (ABI 14, 2026-05-06): DVAs* / DVKind / DVIndex /
+# DVLen / DVEntries / DVGetField MIR ops deleted alongside the
+# `drift_dv_*` runtime exports they wrapped.
 
 
 @dataclass
@@ -1767,32 +1626,17 @@ __all__ = [
 	"Call",
 	"CallIndirect",
 	"CallIface",
-	"ConstructDV",
 	"ConstructError",
-	"ErrorAddAttrDV",
-	"ErrorAddLocalDV",
 	"ErrorRaise",
 	"ConstructResultOk",
 	"ConstructResultErr",
 	"ResultIsErr",
 	"ResultOk",
 	"ResultErr",
-	"ErrorAttrsGetDV",
-	"ErrorCapturesGetDV",
 	"ExcGetParamsJson",
 	"ExcSetParamsJson",
 	"ExcGetContextJson",
 	"ExcAppendContextFrame",
-	"DVAsInt",
-	"DVAsBool",
-	"DVAsFloat",
-	"DVAsString",
-	"DVAsObject",
-	"DVGetField",
-	"DVIndex",
-	"DVKind",
-	"DVLen",
-	"DVEntries",
 	"ErrorEvent",
 	"ErrorEventFqn",
 	"UnaryOpInstr",

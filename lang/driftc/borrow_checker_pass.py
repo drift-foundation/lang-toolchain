@@ -1520,10 +1520,6 @@ class BorrowChecker:
 				for el in node.elements:
 					_walk(el)
 				return
-			if isinstance(node, H.HDVInit):
-				for a in node.args:
-					_walk(a)
-				return
 			if hasattr(H, "HMatchExpr") and isinstance(node, getattr(H, "HMatchExpr")):
 				_walk(node.scrutinee)
 				for arm in node.arms:
@@ -1627,10 +1623,6 @@ class BorrowChecker:
 			if isinstance(node, H.HArrayLiteral):
 				for el in node.elements:
 					_walk(el)
-				return
-			if isinstance(node, H.HDVInit):
-				for a in node.args:
-					_walk(a)
 				return
 			# Conservatively no-op for nodes we don't recognize —
 			# escape detection is one-way (false-negative is the
@@ -1763,10 +1755,6 @@ class BorrowChecker:
 			if isinstance(node, H.HArrayLiteral):
 				for el in node.elements:
 					_walk(el)
-				return
-			if isinstance(node, H.HDVInit):
-				for a in node.args:
-					_walk(a)
 				return
 
 		_walk(expr)
@@ -1913,10 +1901,6 @@ class BorrowChecker:
 		if isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:
 				self._collect_binding_ids_for_name_in_expr(el, name, out)
-			return
-		if isinstance(expr, H.HDVInit):
-			for a in expr.args:
-				self._collect_binding_ids_for_name_in_expr(a, name, out)
 			return
 		if isinstance(expr, H.HResultOk):
 			self._collect_binding_ids_for_name_in_expr(expr.value, name, out)
@@ -2125,10 +2109,6 @@ class BorrowChecker:
 		if isinstance(expr, H.HArrayLiteral):
 			for e in expr.elements:
 				self._collect_ref_uses_in_expr(e, bid, ref_uses, ref_use_spans)
-			return
-		if isinstance(expr, H.HDVInit):
-			for a in expr.args:
-				self._collect_ref_uses_in_expr(a, bid, ref_uses, ref_use_spans)
 			return
 		if isinstance(expr, H.HResultOk):
 			self._collect_ref_uses_in_expr(expr.value, bid, ref_uses, ref_use_spans)
@@ -2625,10 +2605,6 @@ class BorrowChecker:
 		if isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:
 				self._visit_expr(state, el, consume=False, escapes=False)
-			return
-		if isinstance(expr, H.HDVInit):
-			for a in expr.args:
-				self._visit_expr(state, a, consume=False, escapes=False)
 			return
 		# Literals and other rvalues need no action.
 

@@ -3496,8 +3496,6 @@ class TypeChecker:
 					return False
 				if isinstance(expr, H.HArrayLiteral):
 					return any(expr_can_throw(el) for el in expr.elements)
-				if isinstance(expr, H.HDVInit):
-					return any(expr_can_throw(a) for a in expr.args)
 				return False
 
 			def stmt_can_throw(stmt: H.HStmt) -> bool:
@@ -7502,8 +7500,6 @@ class TypeChecker:
 						return False
 					if isinstance(node, H.HArrayLiteral):
 						return any(_contains_move(e) for e in node.elements)
-					if isinstance(node, H.HDVInit):
-						return any(_contains_move(a) for a in node.args)
 					if isinstance(node, H.HExceptionInit):
 						return any(_contains_move(a) for a in node.pos_args) or any(_contains_move(k.value) for k in node.kw_args)
 					# NOTE: body scan only checks HExprStmt, so moves inside HLet/HAssign
@@ -9693,55 +9689,11 @@ class TypeChecker:
 					diagnostics.append(_tc_diag(**diag_kwargs))
 				return record_expr(expr, self._error)
 
-			# DiagnosticValue constructors.
-			if isinstance(expr, H.HDVInit):
-				arg_types = [type_expr(a) for a in expr.args]
-				if expr.args:
-					# Only zero-arg, single-arg primitive DV ctors, or Object(entries)
-					# are supported in v1.
-					if len(expr.args) > 1:
-						diagnostics.append(
-							_tc_diag(
-								message="DiagnosticValue constructors support at most one argument in v1",
-								severity="error",
-								span=getattr(expr, "loc", Span()),
-							)
-						)
-						return record_expr(expr, self._unknown)
-					inner_ty = arg_types[0]
-					if expr.dv_type_name == "Object":
-						td_inner = self.type_table.get(inner_ty)
-						is_ok = False
-						if td_inner.kind is TypeKind.ARRAY and td_inner.param_types:
-							elem_ty = td_inner.param_types[0]
-							elem_td = self.type_table.get(elem_ty)
-							if elem_td.kind is TypeKind.STRUCT:
-								key_info = _resolve_struct_field_type(elem_ty, "key")
-								value_info = _resolve_struct_field_type(elem_ty, "value")
-								if key_info is not None and value_info is not None:
-									_, key_ty = key_info
-									_, value_ty = value_info
-									if key_ty == self._string and value_ty == self._dv:
-										is_ok = True
-						if not is_ok:
-							diagnostics.append(
-								_tc_diag(
-									message="DiagnosticValue::Object requires Array<DiagnosticEntry>-shaped argument (fields: key:String, value:DiagnosticValue)",
-									severity="error",
-									span=getattr(expr.args[0], "loc", Span()),
-								)
-							)
-							return record_expr(expr, self._unknown)
-					elif inner_ty not in (self._int, self._uint, self._bool, self._string, self._float):
-						diagnostics.append(
-							_tc_diag(
-								message="unsupported DiagnosticValue constructor argument type",
-								severity="error",
-								span=getattr(expr.args[0], "loc", Span()),
-							)
-						)
-						return record_expr(expr, self._unknown)
-				return record_expr(expr, self._dv)
+			# Slice 7c-2 (ABI 14, 2026-05-06): the `H.HDVInit` type-
+			# check arm is deleted along with `H.HDVInit` itself.
+			# User-source DV is rejected at the parser boundary
+			# (Slice 7a `E_DV_PUBLIC_REMOVED`); no production path
+			# can produce an HDVInit node anymore.
 
 			# Result/try sugar.
 			if isinstance(expr, H.HResultOk):

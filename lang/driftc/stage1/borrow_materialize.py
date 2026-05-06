@@ -194,8 +194,6 @@ class BorrowMaterializeRewriter:
 			return any(self._contains_move(e) for e in expr.elements)
 		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
 			return any(self._contains_move(e.key) or self._contains_move(e.value) for e in expr.entries)
-		if isinstance(expr, H.HDVInit):
-			return any(self._contains_move(a) for a in expr.args)
 		if isinstance(expr, H.HExceptionInit):
 			return any(self._contains_move(a) for a in expr.pos_args) or any(
 				self._contains_move(k.value) for k in expr.kw_args
@@ -410,14 +408,6 @@ class BorrowMaterializeRewriter:
 					)
 				)
 			return pfx_scrutinee, H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc)
-		if isinstance(expr, H.HDVInit):
-			pfx: List[H.HStmt] = []
-			new_args: List[H.HExpr] = []
-			for a in expr.args:
-				apfx, av = self._rewrite_expr(a)
-				pfx.extend(apfx)
-				new_args.append(av)
-			return pfx, H.HDVInit(dv_type_name=expr.dv_type_name, args=new_args)
 		if isinstance(expr, H.HExceptionInit):
 			pfx: List[H.HStmt] = []
 			new_pos: List[H.HExpr] = []

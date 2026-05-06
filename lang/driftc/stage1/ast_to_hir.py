@@ -1085,8 +1085,6 @@ class AstToHIR:
 				return H.HCast(target_type_expr=e.target_type_expr, value=_rename_expr(e.value, mapping), loc=e.loc)
 			if isinstance(e, H.HResultOk):
 				return H.HResultOk(value=_rename_expr(e.value, mapping))
-			if isinstance(e, H.HDVInit):
-				return H.HDVInit(dv_type_name=e.dv_type_name, args=[_rename_expr(a, mapping) for a in e.args])
 			if hasattr(H, "HQualifiedMember") and isinstance(e, getattr(H, "HQualifiedMember")):
 				return e
 			return e

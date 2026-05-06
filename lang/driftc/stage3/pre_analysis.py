@@ -12,10 +12,11 @@ purely structural: all semantic flags are computed here.
 
 Current analyses:
   - address_taken: locals whose address is observed (AddrOfLocal)
-  - may_fail: instruction sites that *construct* errors (ConstructDV,
-    ConstructError). Call sites are recorded separately for future refinement.
+  - may_fail: instruction sites that *construct* errors (ConstructError).
+    Call sites are recorded separately for future refinement.
   - throw summary: per-function flags/sets for error construction and the
-    exception DV types involved (when a code→exception mapping is provided)
+    exception event/type names involved (when a code→exception mapping is
+    provided).
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ from lang.driftc.stage2 import (
 	AddrOfLocal,
 	Call,
 	CallIndirect,
-	ConstructDV,
 	ConstructError,
 	ConstInt,
 	ConstUint,
@@ -46,17 +46,19 @@ class MirAnalysisResult:
 	may_fail: Set[tuple[str, int]]  # instruction sites that construct errors (block_name, instruction_index)
 	call_sites: Set[tuple[str, int]]  # all Call sites (informational)
 	construct_error_sites: Set[tuple[str, int]]  # where ConstructError appears
-	exception_types: Set[str] = field(default_factory=set)  # DV type names seen via event-code mapping
+	exception_types: Set[str] = field(default_factory=set)  # exception event/type names seen via event-code mapping
 
 
 class MirPreAnalysis:
 	"""
 	Run MIR pre-analyses:
 	  - address_taken: which locals have their address observed
-	  - may_fail: instruction sites that construct errors (ConstructDV,
-	    ConstructError); calls are tracked separately for future invariants
+	  - may_fail: instruction sites that construct errors
+	    (ConstructError only — the legacy DV-attachment shape is gone
+	    at ABI 14); calls are tracked separately for future invariants
 	  - construct_error_sites: where Errors are constructed (throw sites)
-	  - exception_types: DV type names used in ConstructError
+	  - exception_types: exception event/type names mapped from the
+	    event code at each ConstructError site
 
 	Entry point:
 	  analyze(func: MirFunc) -> MirAnalysisResult
@@ -126,8 +128,8 @@ class MirPreAnalysis:
 			call_sites.add((block_name, idx))
 		if isinstance(instr, CallIndirect):
 			call_sites.add((block_name, idx))
-		if isinstance(instr, (ConstructDV, ConstructError)):
-			# ConstructError (and DV ctor used by throw) is a hard may-fail site.
+		if isinstance(instr, ConstructError):
+			# ConstructError is a hard may-fail site.
 			may_fail.add((block_name, idx))
 
 		if isinstance(instr, ConstructError):
