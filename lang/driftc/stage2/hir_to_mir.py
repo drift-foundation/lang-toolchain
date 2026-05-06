@@ -2942,6 +2942,15 @@ class HIRToMIR:
 						continue
 					if idx + 2 != len(expr.subject.projections):
 						continue
+					# Slice 7a (0.31.62, 2026-05-05): `Error.attrs[...]` user-source
+					# access is rejected at the checker boundary with
+					# `E_EXC_ATTRS_REMOVED` for non-stdlib callers (and stdlib has
+					# no internal use as of this slice — verified by grep).  This
+					# lowering path therefore is not reachable from production
+					# compilation; it stays alive for the stage2 / codegen unit
+					# tests that construct the HIR shape directly to exercise the
+					# `ErrorAttrsGetDV` MIR op + LLVM codegen.  Slice 7b retires
+					# the runtime export and removes the lowering.
 					err_val = self.lower_expr(expr.subject.base)
 					err_ty = self._infer_expr_type(expr.subject.base)
 					if err_ty is not None:
@@ -2961,6 +2970,12 @@ class HIRToMIR:
 						continue
 					if idx + 2 != len(expr.subject.projections):
 						continue
+					# Slice 7a (0.31.62, 2026-05-05): `Error.captures[...]`
+					# user-source access is rejected at the checker boundary with
+					# `E_EXC_CAPTURES_REMOVED` for non-stdlib callers (and stdlib
+					# has no internal use as of this slice).  Same caveat as the
+					# `Error.attrs[...]` site above — this path is alive only for
+					# stage2 / codegen unit tests; Slice 7b retires it.
 					err_val = self.lower_expr(expr.subject.base)
 					err_ty = self._infer_expr_type(expr.subject.base)
 					if err_ty is not None:
@@ -3124,6 +3139,23 @@ class HIRToMIR:
 		self._local_types[dv_index] = self._dv_type
 
 		name_to_dv = {"container_id": dv_container, "index": dv_index}
+		# Slice 7a (0.31.62, 2026-05-05): also project the schema fields to
+		# canonical params JSON so user code reading via typed catch
+		# (`e.container_id`, `e.index`) and via `e.params.encode_compact()`
+		# / `e.params.get(k)` sees the values.  This mirrors the per-field
+		# DV projection done by user-source `throw IndexError(...)`
+		# lowering in `_construct_error_via_synthesized_diagnostic`; the
+		# inline bounds-check block bypasses that lowering since the error
+		# is constructed directly here.  Order: lex-utf8-sorted (matches
+		# the throw-side projection invariant — `container_id` < `index`).
+		field_dvs = [
+			("container_id", dv_container, False),
+			("index", dv_index, False),
+		]
+		params_json_val = None
+		if self._find_free_fn_id("std.core", "_dv_to_json_text") is not None:
+			params_json_val = self._build_throw_params_json(field_dvs)
+
 		first_name = schema_fields[0]
 		first_dv = name_to_dv[first_name]
 		first_key = self.b.new_temp()
@@ -3144,6 +3176,8 @@ class HIRToMIR:
 			key_val = self.b.new_temp()
 			self.b.emit(M.ConstString(dest=key_val, value=name))
 			self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key_val, value=dv_val))
+		if params_json_val is not None:
+			self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=params_json_val))
 
 		self._propagate_error(err_val)
 

@@ -20,7 +20,7 @@ implement core.Diagnostic for AcmeError {
 
 implement core.Throw for AcmeError {
 	pub fn throw_self(self: AcmeError) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Int(1));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_int(1));
 	}
 }
 

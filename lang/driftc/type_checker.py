@@ -8117,7 +8117,43 @@ class TypeChecker:
 					scope_env.append(dict())
 					scope_bindings.append(dict())
 					try:
-						if arm.binder:
+						# Slice 6 — typed catch binder boundary, expression-form
+						# mirror.  Same gate as the HCatch (statement-form) path:
+						# typed binding (`catch E(e) { ... }`) is only allowed
+						# when E's Diagnostic projection is COMPILER-SYNTHESIZED.
+						# When the user wrote a manual `implement core.Diagnostic
+						# for E`, the typed binder's reverse projection cannot be
+						# inferred — synthesis was skipped.  Without this mirror
+						# the rejection at the statement-form site at line ~10493
+						# was bypassable simply by rewriting `try { } catch X(e)
+						# { ... }` to expression-form `try expr catch X(e) { ...
+						# }`.  See test_pub_error_manual_diagnostic.py probe 4.
+						_manual_owners_expr = getattr(self.type_table, "manual_diagnostic_pub_errors", None) or set()
+						_typed_binder_rejected_expr = (
+							arm.binder is not None
+							and arm.event_fqn is not None
+							and arm.event_fqn in _manual_owners_expr
+						)
+						if _typed_binder_rejected_expr:
+							diagnostics.append(_tc_diag(
+								message=(
+									f"typed catch binding for `{arm.event_fqn}` "
+									f"requires synthesized Diagnostic projection "
+									f"— this `pub error` has a manual "
+									f"`implement core.Diagnostic` impl"
+								),
+								code="E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED",
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+								notes=[
+									f"use binderless `catch {arm.event_fqn} {{ ... }}` "
+									"for envelope-level handling; envelope access "
+									"via `e.params.get(...)` remains available.",
+									"manual reverse parsing (DiagnosticParse) is a "
+									"future design track.",
+								],
+							))
+						if arm.binder and not _typed_binder_rejected_expr:
 							bid = self._alloc_local_id()
 							locals.append(bid)
 							scope_env[-1][arm.binder] = self._error
@@ -8126,6 +8162,17 @@ class TypeChecker:
 							binding_names[bid] = arm.binder
 							binding_mutable[bid] = False
 							binding_place_kind[bid] = PlaceKind.LOCAL
+							# Slice 7a (0.31.62, 2026-05-05): expression-form
+							# `try expr catch X(e) { ... e.field ... }` must
+							# register the typed-catch binder so HField on `e`
+							# routes through schema-typed projection — same
+							# behavior as the statement-form `try { } catch
+							# X(e) { ... }` arm.  Without this registration the
+							# alias guard fires on every `e.field` access in
+							# the expression-form arm even though `e` IS the
+							# immediate catch binder.
+							if arm.event_fqn is not None:
+								self._typed_catch_binders[bid] = arm.event_fqn
 						type_block_in_scope(arm.block)
 						if arm.result is not None:
 							type_expr(arm.result, expected_type=result_ty)
@@ -8879,6 +8926,22 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
+					_is_stdlib_caller = isinstance(current_module_name, str) and (
+						current_module_name.startswith("std.") or current_module_name == "lang.thread"
+					)
+					if not _is_stdlib_caller:
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"`Error.captures[...]` is removed in 0.31.62; "
+									"user code may not access the DV-typed captures view "
+									"— use `e.context.encode_compact()` for canonical JSON"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E_EXC_CAPTURES_REMOVED",
+							)
+						)
 					if self.type_table.get(frame_ty).name != "String":
 						diagnostics.append(
 							_tc_diag(
@@ -8937,6 +9000,22 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
+					_is_stdlib_caller = isinstance(current_module_name, str) and (
+						current_module_name.startswith("std.") or current_module_name == "lang.thread"
+					)
+					if not _is_stdlib_caller:
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"`Error.attrs[...]` is removed in 0.31.62; "
+									"user code may not access the DV-typed attrs view "
+									"— use `e.params.get(k)` (typed cursor) for params"
+								),
+								severity="error",
+								span=getattr(expr, "loc", Span()),
+								code="E_EXC_ATTRS_REMOVED",
+							)
+						)
 					if self.type_table.get(key_ty).name != "String":
 						diagnostics.append(
 							_tc_diag(
@@ -8970,6 +9049,22 @@ class TypeChecker:
 									)
 								)
 								return record_expr(expr, self._unknown)
+							_is_stdlib_caller = isinstance(current_module_name, str) and (
+								current_module_name.startswith("std.") or current_module_name == "lang.thread"
+							)
+							if not _is_stdlib_caller:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											"`Error.captures[...]` is removed in 0.31.62; "
+											"user code may not access the DV-typed captures view "
+											"— use `e.context.encode_compact()` for canonical JSON"
+										),
+										severity="error",
+										span=getattr(expr, "loc", Span()),
+										code="E_EXC_CAPTURES_REMOVED",
+									)
+								)
 							if self.type_table.get(frame_ty).name != "String":
 								diagnostics.append(
 									_tc_diag(
@@ -9008,6 +9103,22 @@ class TypeChecker:
 								)
 							)
 							return record_expr(expr, self._unknown)
+						_is_stdlib_caller = isinstance(current_module_name, str) and (
+							current_module_name.startswith("std.") or current_module_name == "lang.thread"
+						)
+						if not _is_stdlib_caller:
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										"`Error.attrs[...]` is removed in 0.31.62; "
+										"user code may not access the DV-typed attrs view "
+										"— use `e.params.get(k)` (typed cursor) for params"
+									),
+									severity="error",
+									span=getattr(expr, "loc", Span()),
+									code="E_EXC_ATTRS_REMOVED",
+								)
+							)
 						key_ty = type_expr(expr.index)
 						if self.type_table.get(key_ty).name != "String":
 							diagnostics.append(

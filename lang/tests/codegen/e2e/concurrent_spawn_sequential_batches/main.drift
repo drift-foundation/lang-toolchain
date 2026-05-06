@@ -5,25 +5,30 @@ import std.console as console;
 import std.core as core;
 import std.net as net;
 import std.err;
+import std.parse as parse;
 
-fn code_from_error(e: std.err.ResultError) nothrow -> Int {
-	val dv = e.attrs["dv"];
-	val opt = dv.as_int();
-	match opt {
-		Some(v) => { return v; },
-		None => { return 90; }
+// Slice 7a: ResultError carries `diag_json: String`.  This helper
+// receives the catch binder (Error envelope) and typed-projects the
+// `diag_json` String field, then parses the JSON-text marker back to
+// Int.  The function takes `Error` rather than `ResultError` because
+// typed-catch binders are envelope-typed (slice 6 boundary contract);
+// schema field projection happens via the synthesized Diagnostic.
+fn code_from_error(diag_json: String) nothrow -> Int {
+	match parse.parse_int(diag_json) {
+		Ok(v) => { return v; },
+		Err(_) => { return 90; }
 	}
 }
 
 fn server_task(listener: net.TcpListener, timeout: conc.Duration) -> Int {
-	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -2); });
+	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); });
 	val _ = s.close(timeout);
 	return 0;
 }
 
 fn client_task(port: Int, timeout: conc.Duration) -> Int {
 	var caddr = net.socket_addr("127.0.0.1", port);
-	val cs = net.connect(&caddr, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -3); });
+	val cs = net.connect(&caddr, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-3)); });
 	val _ = cs.close(timeout);
 	return 0;
 }
@@ -32,21 +37,21 @@ fn run() -> Int {
 	val io_t = conc.Duration(millis = 5000);
 	// Batch 1: TCP listen + connect on VTs (forces reactor init + I/O).
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -1); });
+	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); });
 	val port = listener.local_port();
 	var server = conc.spawn(| | captures(move listener, copy io_t) => {
 		return try server_task(move listener, io_t) catch std.err:ResultError(e) {
-			code_from_error(e)
+			code_from_error(e.diag_json)
 		} catch { 91 };
 	});
 	var client = conc.spawn(| | captures(copy port, copy io_t) => {
 		return try client_task(port, io_t) catch std.err:ResultError(e) {
-			code_from_error(e)
+			code_from_error(e.diag_json)
 		} catch { 92 };
 	});
-	val cr = client.join().on_error(|_e| => { throw std.err:ResultError(dv = 50); });
+	val cr = client.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(50)); });
 	if cr != 0 { return cr; }
-	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(dv = 51); });
+	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(51)); });
 	if sr != 0 { return sr; }
 	console.eprintln("batch1");
 	// After batch 1, the reactor is alive and the worker is idle.
@@ -57,14 +62,14 @@ fn run() -> Int {
 		console.eprintln("batch2");
 		return 0;
 	});
-	val r2 = vt2.join().on_error(|_e| => { throw std.err:ResultError(dv = 60); });
+	val r2 = vt2.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(60)); });
 	if r2 != 0 { return r2; }
 	return 0;
 }
 
 pub fn main() nothrow -> Int {
 	val r = try run() catch std.err:ResultError(e) {
-		1000 + code_from_error(e)
+		1000 + code_from_error(e.diag_json)
 	} catch { -777 };
 	if r == 0 {
 		console.println("done");

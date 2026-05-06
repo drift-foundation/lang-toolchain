@@ -28,4 +28,21 @@ void drift_array_byte_commit_init_len(DriftArrayHeader *arr, drift_isize len);
 __attribute__((noreturn))
 void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, drift_isize len);
 
+// Slice 7a follow-up (K finding 3, 2026-05-05): factor the IndexError
+// params-JSON builder out of `drift_bounds_check_fail` into a
+// separately-testable helper.  Builds the canonical
+// `{"container_id":"<escaped>","index":N}` document into `out_buf` and
+// returns the byte length written, or -1 on overflow / -2 on bad
+// inputs.  The container_id is JSON-string-escaped (RFC 8259 §7);
+// callers in the production runtime do not currently pass strings
+// with `"`, `\`, or control bytes, but the helper must be safe for
+// any UTF-8 input.  Caller owns `out_buf`; capacity must accommodate
+// 6× expansion of `container_id.len` (worst-case `\u00XX` per byte)
+// plus a 24-char signed decimal int plus the literal scaffolding.
+drift_isize drift_bounds_check_params_json_build(
+	struct DriftString container_id,
+	drift_isize idx,
+	char *out_buf,
+	drift_isize out_cap);
+
 #endif // LANG2_ARRAY_RUNTIME_H

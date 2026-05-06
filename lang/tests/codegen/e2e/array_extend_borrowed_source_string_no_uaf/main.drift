@@ -65,47 +65,16 @@ fn run_string_extend() nothrow -> Int {
 	return 0;
 }
 
-// Same shape with Array<core.DiagnosticEntry>: DiagnosticEntry is a
-// Copy non-bitcopy struct whose `key: String` lives on the heap when
-// built via concat.  The extend lowering must leave src holding valid
-// keys post-extend.
-fn run_diagnostic_entry_extend() nothrow -> Int {
-	var src: Array<core.DiagnosticEntry> = [];
-	src.push(core.diagnostic_entry(heap_str("x"), DiagnosticValue::String("vx")));
-	src.push(core.diagnostic_entry(heap_str("y"), DiagnosticValue::Int(42)));
-
-	var dest: Array<core.DiagnosticEntry> = [];
-	dest.extend(&src);
-
-	if src.len != 2 {
-		return 10;
-	}
-	if src[0].key != "k_x" {
-		return 11;
-	}
-	if src[1].key != "k_y" {
-		return 12;
-	}
-	if dest.len != 2 {
-		return 13;
-	}
-	if dest[0].key != "k_x" {
-		return 14;
-	}
-	if dest[1].key != "k_y" {
-		return 15;
-	}
-	return 0;
-}
+// Slice 7a (0.31.62, 2026-05-05): the parallel `Array<core.DiagnosticEntry>`
+// extend scenario was retired alongside the DV/DiagnosticEntry public-
+// surface removal.  Copy-non-bitcopy ownership coverage in the
+// extend-from-borrow path is preserved by `om_array_extend_string`
+// (heap-concat flavor) under `__ownership_matrix__/`.
 
 pub fn main() nothrow -> Int {
 	val r1 = run_string_extend();
 	if r1 != 0 {
 		return 100 + r1;
-	}
-	val r2 = run_diagnostic_entry_extend();
-	if r2 != 0 {
-		return 200 + r2;
 	}
 	return 0;
 }

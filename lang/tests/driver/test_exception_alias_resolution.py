@@ -25,7 +25,7 @@ import std.err as err;
 
 fn main() nothrow -> Int {
 	try {
-		throw err:ResultError(dv = core.DiagnosticValue::Int(5));
+		throw err:ResultError(diag_json = core.diagnostic_json_int(5));
 	} catch err:ResultError(_) {
 		return 0;
 	}

@@ -1,5 +1,0 @@
-{
-  "description": "Package-boundary ownership: construct `Bag<core.DiagnosticEntry>` across a signed producer package boundary.  Verifies copy_status / is_bitcopy / needs_drop classifications match source mode for imported DiagnosticEntry, and that DV-bearing struct field metadata reconstructs correctly.",
-  "exit_code": 0,
-  "package_consumer_only": true
-}

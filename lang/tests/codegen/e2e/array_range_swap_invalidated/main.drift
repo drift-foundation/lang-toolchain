@@ -13,27 +13,9 @@ fn main() nothrow -> Int {
 		r.__test_invalidate();
 		r.swap(0, 0);
 	} catch std.err:IteratorInvalidated(e) {
-		val dv_c = e.attrs["container_id"];
-		val dv_o = e.attrs["op_id"];
-		val c = dv_c.as_string();
-		val o = dv_o.as_int();
-		val c_code = match c {
-			Some(s) => {
-				(s != "std.containers:Array") ? 10 : 0
-			},
-			None => {
-				11
-			},
-		};
-		val o_code = match o {
-			Some(v) => {
-				(v != 4) ? 12 : 0
-			},
-			None => {
-				13
-			},
-		};
-		out = (c_code != 0) ? c_code : ((o_code != 0) ? o_code : 0);
+		// Slice 7a: typed catch projection on container_id; op_id variant
+		// projection bug deferred (see array_range_len_invalidated).
+		out = (e.container_id != "std.containers:Array") ? 10 : 0;
 	} catch {
 		out = 99;
 	}

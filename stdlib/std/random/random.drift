@@ -29,7 +29,7 @@ implement core.Diagnostic for RandomError {
 
 implement core.Throw for RandomError {
 	pub fn throw_self(self: RandomError) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
 	}
 }
 

@@ -222,32 +222,36 @@ def test_explicit_null_distinguished_from_missing(tmp_path):
 	`is_null()` is true and `is_missing()` is false.  Typed
 	accessors still return None — JSON null is not coercible to
 	Int/Bool/Float/String."""
-	# Construct a params JSON manually with a null value.
-	# Slice 1's canonical writer projects scalar Ints/Strings/etc.,
-	# but `_dv_to_json_text` emits "null" for DV::Missing or
-	# DV::Null variants.  Easiest reachable shape: use the Slice 1
-	# writer with no fields (params == "{}"), then probe a
-	# constructed null.  Since user code can't directly write a
-	# null-valued param without the DV machinery, build a custom
-	# params text via the dv-string-trick: throw with a
-	# DiagnosticValue field that holds DV::Null.
+	# Slice 7a (0.31.62, 2026-05-05): the original probe used
+	# `pub error DvErr { payload: DiagnosticValue }` + DV::Null to
+	# inject a JSON null into the params document.  DV is no longer
+	# user-nameable.  A manual `core.Diagnostic` impl on the pub
+	# error builds the same `{"payload":null}` shape via
+	# `core.diagnostic_json_null()` / lex-utf8 sort + key
+	# concatenation, exercising the same JsonCursor surface.
 	source = """
 module main;
 
 import std.core as core;
 import std.console as console;
 
-pub error DvErr { payload: DiagnosticValue }
+pub error DvErr { tag: Int }
+
+implement core.Diagnostic for DvErr {
+\tpub fn to_json_text(self: &DvErr) nothrow -> String {
+\t\tval _tag = self.tag;
+\t\treturn "{\\"payload\\":" + core.diagnostic_json_null() + "}";
+\t}
+}
+
 fn _run() nothrow -> String {
 \ttry {
-\t\tthrow DvErr(payload = DiagnosticValue::Null());
-\t} catch DvErr(e) {
+\t\tthrow DvErr(tag = 0);
+\t} catch e {
 \t\tval c = e.params.get("payload");
 \t\tval missing = c.is_missing();
 \t\tval is_null = c.is_null();
 \t\treturn f"missing={missing}|null={is_null}";
-\t} catch e {
-\t\treturn "WRONG_CATCH";
 \t}
 \treturn "NO_THROW";
 }

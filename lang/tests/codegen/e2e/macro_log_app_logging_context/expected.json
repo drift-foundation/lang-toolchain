@@ -27,8 +27,7 @@
       "logger": "security",
       "attrs": {
         "user": "alice",
-        "req": "r-2",
-        "code": 401
+        "req": "r-2"
       },
       "vtid": "__ANY__", "ptid": "__ANY__"
     },

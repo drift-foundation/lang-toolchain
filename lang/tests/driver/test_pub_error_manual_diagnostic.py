@@ -184,3 +184,46 @@ fn main() nothrow -> Int {
 """)
 	_fails_with_code(rc, errs, 'E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED',
 		"typed binder rejected on manual projection")
+
+
+# ── Probe 4 ─ typed binder rejected on manual projection in
+#               EXPRESSION-form try/catch — same boundary as Probe 3
+#               extended to `try expr catch X(e) { e.field }` ─────────
+
+
+def test_manual_projection_typed_binder_rejected_expression_form(tmp_path, capsys):
+	"""Mirror of Probe 3 for the expression-form `val x = try
+	risky() catch SecretError(e) { e.user_id }`.  Slice 7a follow-up
+	(2026-05-05): the manual-Diagnostic boundary applies regardless of
+	statement-form or expression-form try/catch — they share the same
+	binder semantics.  Without an expression-form gate, user code
+	could bypass `E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED` simply by
+	rewriting `try { ... } catch X(e) { ... }` to `try ... catch X(e)
+	{ ... }`."""
+	rc, errs = _compile(tmp_path, capsys, _PRE + """
+pub error SecretError {
+\tuser_id: Int,
+\tsecret_token: String,
+}
+
+implement core.Diagnostic for SecretError {
+\tpub fn to_json_text(self: &SecretError) nothrow -> String {
+\t\treturn "{\\"user_id\\":" + core.diagnostic_json_int(self.user_id) + "}";
+\t}
+}
+
+fn risky() throws SecretError -> Int {
+\tthrow SecretError(user_id = 42, secret_token = "shhh");
+}
+
+fn main() nothrow -> Int {
+\tval x = try risky() catch SecretError(e) {
+\t\te.user_id
+\t} catch {
+\t\t-1
+\t};
+\treturn x;
+}
+""")
+	_fails_with_code(rc, errs, 'E_TYPED_CATCH_BIND_REQUIRES_SYNTHESIZED',
+		"typed binder rejected on manual projection (expression-form)")

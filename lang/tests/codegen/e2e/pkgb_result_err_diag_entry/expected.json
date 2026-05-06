@@ -1,5 +1,0 @@
-{
-  "description": "Package-boundary ownership: consume `core.Result<Int, core.DiagnosticEntry>` returned by a signed-producer fn and match its Err arm.  Verifies Result Err-side payload ownership transfer across the boundary and DV-bearing DiagnosticEntry payload round-trip (copy_status / is_bitcopy / needs_drop) after package linking.",
-  "exit_code": 0,
-  "package_consumer_only": true
-}

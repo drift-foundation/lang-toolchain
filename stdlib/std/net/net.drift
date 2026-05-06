@@ -84,9 +84,9 @@ implement core.Diagnostic for NetError {
 implement core.Throw for NetError {
 	pub fn throw_self(self: NetError) throws {
 		match &self {
-			Errno(code) => { throw std.err:ResultError(dv = DiagnosticValue::Int(*code)); },
-			WouldBlock => { throw std.err:ResultError(dv = DiagnosticValue::Int(-1)); },
-			RequiresVirtualThread => { throw std.err:ResultError(dv = DiagnosticValue::Int(-2)); },
+			Errno(code) => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(*code)); },
+			WouldBlock => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); },
+			RequiresVirtualThread => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); },
 		}
 	}
 }

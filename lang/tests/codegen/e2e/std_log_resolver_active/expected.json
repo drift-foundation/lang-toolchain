@@ -19,8 +19,7 @@
       "logger": "svc",
       "attrs": {
         "req": "r-ambient",
-        "user": "u-caller-wins",
-        "code": 200
+        "user": "u-caller-wins"
       },
       "vtid": "__ANY__", "ptid": "__ANY__"
     },

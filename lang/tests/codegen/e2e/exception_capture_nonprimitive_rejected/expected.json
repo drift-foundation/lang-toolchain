@@ -1,9 +1,0 @@
-{
-  "description": "e2e: exception capture nonprimitive rejected",
-  "diagnostics": [
-    {
-      "message_contains": "captured locals currently support Int/Uint/Bool/Float/String/DiagnosticValue only"
-    }
-  ],
-  "exit_code": 1
-}

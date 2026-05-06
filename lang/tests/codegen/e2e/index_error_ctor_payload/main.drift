@@ -7,29 +7,12 @@ fn main() nothrow -> Int {
 	try {
 		throw std.err:IndexError(container_id = "std.containers:Array", index = 7);
 	} catch std.err:IndexError(e) {
-		val dv_c = e.attrs["container_id"];
-		val dv_i = e.attrs["index"];
-		val c = dv_c.as_string();
-		val i = dv_i.as_int();
-		match c {
-			Some(s) => {
-				if s != "std.containers:Array" {
-					return 20;
-				}
-			},
-			None => {
-				return 21;
-			},
+		// Slice 7a: typed catch projection on synthesized fields.
+		if e.container_id != "std.containers:Array" {
+			return 20;
 		}
-		match i {
-			Some(v) => {
-				if v != 7 {
-					return 22;
-				}
-			},
-			None => {
-				return 23;
-			},
+		if e.index != 7 {
+			return 22;
 		}
 		return 0;
 	}

@@ -336,47 +336,10 @@ pub fn main() nothrow -> Int {
 
 
 # ─────────────────────────────────────────────────────────────────
-# Test 8: ADDITIVE — old e.attrs[...] still works alongside JSON path
+# Test 8: ADDITIVE legacy `e.attrs[...]` path retired in Slice 7a
+# (0.31.62, 2026-05-05).  The DV-typed attrs view is no longer
+# user-accessible — `Error.attrs[...]` from user source is rejected
+# with `E_EXC_ATTRS_REMOVED` (see test_dv_public_removed.py).  The
+# JSON-text path on `e.params.encode_compact()` / `e.params.get(k)`
+# is the sole supported user surface; covered by Tests 1–7 above.
 # ─────────────────────────────────────────────────────────────────
-
-
-def test_old_attrs_path_still_works_additive(tmp_path):
-	"""Phase 2 must not regress the legacy `e.attrs[...]` dump
-	path.  Both paths populated from the same throw, both
-	observable.  Phase 5 (DV deletion) eventually retires
-	e.attrs."""
-	source = """
-module main;
-
-import std.core as core;
-import std.console as console;
-import std.format as format;
-
-pub error DualPath { payload: String, idx: Int }
-fn _run() nothrow -> Int {
-\ttry {
-\t\tthrow DualPath(payload = "tag.value", idx = 99);
-\t} catch DualPath(e) {
-\t\tval dv = e.attrs["idx"];
-\t\tmatch dv.as_int() {
-\t\t\tSome(v) => { return v; },
-\t\t\tNone => { return -2; }
-\t\t}
-\t} catch e {
-\t\treturn -3;
-\t}
-\treturn -4;
-}
-
-pub fn main() nothrow -> Int {
-\tval result: Int = _run();
-\tconsole.println(format.format_int(result));
-\treturn 0;
-}
-"""
-	rc, stdout, stderr = _build_run(tmp_path, source)
-	_ok(rc, stdout, stderr, "legacy e.attrs path additive")
-	assert stdout.strip() == "99", (
-		f"legacy attrs path returned wrong value: {stdout!r}\n"
-		f"stderr: {stderr[:1000]}"
-	)

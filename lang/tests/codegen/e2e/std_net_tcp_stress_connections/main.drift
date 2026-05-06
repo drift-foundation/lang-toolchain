@@ -6,17 +6,19 @@ import std.core as core;
 import std.io as io;
 import std.net as net;
 import std.err;
+import std.parse as parse;
 
 type VtInt = conc.VirtualThread<Int>;
 
 const N: Int = 500;
 
-fn code_from_error(e: std.err.ResultError) nothrow -> Int {
-	val dv = e.attrs["dv"];
-	val opt = dv.as_int();
-	match opt {
-		Some(v) => { return v; },
-		None => { return 90; }
+// Slice 7a: ResultError carries `diag_json: String`.  This helper
+// receives the diag_json String from the catch binder's typed
+// projection and parses it back to Int.
+fn code_from_error(diag_json: String) nothrow -> Int {
+	match parse.parse_int(diag_json) {
+		Ok(v) => { return v; },
+		Err(_) => { return 90; }
 	}
 }
 
@@ -26,9 +28,9 @@ fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	// - echo it back
 	// - close the socket
 	var buf = io.buffer(1024);
-	s.read(&mut buf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = 11); });
-	s.write(&buf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = 13); });
-	s.close(timeout).on_error(|_e| => { throw std.err:ResultError(dv = 15); });
+	s.read(&mut buf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(11)); });
+	s.write(&buf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(13)); });
+	s.close(timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(15)); });
 	return 0;
 }
 
@@ -36,7 +38,7 @@ fn server_loop(listener: net.TcpListener, timeout: conc.Duration) -> Int {
 	// Accept exactly N connections and handle them sequentially.
 	var i = 0;
 	while i < N {
-		val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -21); });
+		val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-21)); });
 		val r = handle_client(move s, timeout);
 		if r < 0 { return r; }
 		i = i + 1;
@@ -51,7 +53,7 @@ fn client_once(port: Int, size: Int, timeout: conc.Duration) -> Int {
 	// - read size bytes back
 	// - close socket
 	var addr = net.socket_addr("127.0.0.1", port);
-	val s = net.connect(&addr, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -31); });
+	val s = net.connect(&addr, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-31)); });
 	// Prepare write buffer.
 	val byte = cast<Byte>(65);
 	var wbuf = io.buffer(size);
@@ -60,19 +62,19 @@ fn client_once(port: Int, size: Int, timeout: conc.Duration) -> Int {
 		io.buffer_write(&mut wbuf, i, byte);
 		i = i + 1;
 	}
-	val n = s.write(&wbuf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -34); });
+	val n = s.write(&wbuf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-34)); });
 	if n != size { return -33; }
 	// Read echoed bytes into a fresh buffer.
 	var rbuf = io.buffer(size);
-	val r = s.read(&mut rbuf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -37); });
+	val r = s.read(&mut rbuf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-37)); });
 	if r != size { return -36; }
-	s.close(timeout).on_error(|_e| => { throw std.err:ResultError(dv = -40); });
+	s.close(timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-40)); });
 	return size * 65;
 }
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch std.err:ResultError(e) {
-		1000 + code_from_error(e)
+		1000 + code_from_error(e.diag_json)
 	} catch {
 		-777
 	};
@@ -82,12 +84,12 @@ fn run_main() -> Int {
 	// Spin up a TCP listener on an ephemeral port.
 	val io_t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(dv = 101); });
+	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(101)); });
 	val port = listener.local_port();
 	// Start the server in its own VT.
 	var server = conc.spawn(| | captures(move listener, copy port, copy io_t) => {
 		return try server_loop(move listener, io_t) catch std.err:ResultError(e) {
-			code_from_error(e)
+			code_from_error(e.diag_json)
 		} catch { 92 };
 	});
 	var dq = containers.deque<type VtInt>();
@@ -102,7 +104,7 @@ fn run_main() -> Int {
 		// Spawn the client VT.
 		val t = conc.spawn(| | captures(copy port, copy size, copy io_t) => {
 			return try client_once(port, size, io_t) catch std.err:ResultError(e) {
-				code_from_error(e)
+				code_from_error(e.diag_json)
 			} catch { 91 };
 		});
 		dq.push_back(move t);
@@ -110,14 +112,14 @@ fn run_main() -> Int {
 	}
 	// Join all client VTs and accumulate actual sum.
 	while dq.len() > 0 {
-		val vt = dq.pop_front().on_none(| | => { throw std.err:ResultError(dv = 60); });
+		val vt = dq.pop_front().on_none(| | => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(60)); });
 		var t = move vt;
-		val code = t.join().on_error(|_e| => { throw std.err:ResultError(dv = 61); });
+		val code = t.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(61)); });
 		if code < 0 { return code; }
 		actual = actual + code;
 	}
 	// Join server and verify total math.
-	val v = server.join().on_error(|_e| => { throw std.err:ResultError(dv = 51); });
+	val v = server.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(51)); });
 	if v != 0 { return 70; }
 	if actual != expected { return 71; }
 	return 0;

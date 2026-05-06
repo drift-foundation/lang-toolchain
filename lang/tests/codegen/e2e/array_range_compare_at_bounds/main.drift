@@ -5,27 +5,10 @@ import std.iter as iter;
 
 fn check_bounds<R>(r: &R, i: Int, j: Int, expect: Int) nothrow -> Int require R is iter.RandomAccessReadable<Int> {
 	val out = try iter.RandomAccessReadable::compare_at(r, i, j) catch std.err:IndexError(e) {
-		val dv_c = e.attrs["container_id"];
-		val dv_i = e.attrs["index"];
-		val c = dv_c.as_string();
-		val idx = dv_i.as_int();
-		val c_code = match c {
-			Some(s) => {
-				(s != "std.containers:Array") ? 10 : 0
-			},
-			None => {
-				11
-			},
-		};
-		val i_code = match idx {
-			Some(v) => {
-				(v != expect) ? 12 : 0
-			},
-			None => {
-				13
-			},
-		};
-		(c_code != 0) ? c_code : ((i_code != 0) ? i_code : 0)
+		// Slice 7a: typed catch projection on synthesized fields.
+		val c_code = (e.container_id != "std.containers:Array") ? 10 : 0;
+		val i_code = (e.index != expect) ? 12 : 0;
+		(c_code != 0) ? c_code : i_code
 	} catch {
 		90
 	};

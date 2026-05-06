@@ -22,7 +22,7 @@ fn identity(n: Int) -> Int {
 
 fn fallible_identity(n: Int) -> Int {
 	if n < 0 {
-		throw std.err:ResultError(dv = core.DiagnosticValue::Int(n));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_int(n));
 	}
 	return n;
 }

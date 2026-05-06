@@ -391,12 +391,12 @@ pub variant MyErr {
 }
 
 	implement core.Diagnostic for MyErr {
-		pub fn to_diag(self: &MyErr) nothrow -> DiagnosticValue {
+		pub fn to_json_text(self: &MyErr) nothrow -> String {
 			return match self {
 				Msg(m) => {
-					m.to_diag()
+					core.diagnostic_json_string(m)
 				},
-				default => { DiagnosticValue::Int(0) }
+				default => { core.diagnostic_json_int(0) }
 			};
 		}
 	}

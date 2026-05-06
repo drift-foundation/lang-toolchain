@@ -1462,6 +1462,91 @@ def _is_std_core_diagnostic_trait(
 	return mod == "std.core"
 
 
+def _is_std_log_debuggable_trait(
+	trait_expr: object,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str],
+) -> bool:
+	"""Identify `log.Debuggable` (or in-module `Debuggable` from std.log).
+	Same shape as `_is_std_core_diagnostic_trait`."""
+	if getattr(trait_expr, "name", None) != "Debuggable":
+		return False
+	mod = getattr(trait_expr, "module_id", None)
+	if mod is None:
+		alias = getattr(trait_expr, "module_alias", None)
+		if alias is not None:
+			mod = module_aliases.get(alias)
+		elif module_id == "std.log":
+			mod = "std.log"
+	return mod == "std.log"
+
+
+def _reject_deprecated_trait_method_shapes(
+	prog: parser_ast.Program,
+	*,
+	module_id: str,
+	module_aliases: dict[str, str] | None,
+	diagnostics: list,
+) -> None:
+	"""Slice 7a (0.31.62, 2026-05-05): reject the legacy `to_diag` /
+	`to_debug` method shapes on user impls.
+
+	`Diagnostic.to_diag(self) -> DiagnosticValue` (retired in Slice 5)
+	and `Debuggable.to_debug(self) -> DiagnosticValue` (retired in
+	Slice 7a) are gone.  Their new contracts are
+	`Diagnostic.to_json_text(self) -> String` and
+	`Debuggable.to_debug_json_text(self) -> String`, with values projected
+	through `core.diagnostic_json_*`.  Without explicit rejection here,
+	an old-shape impl would surface as a confusing trait-satisfaction
+	error elsewhere; emitting `E_TO_DIAG_DEPRECATED` /
+	`E_TO_DEBUG_DEPRECATED` at the impl-block boundary points consumers
+	at the migration directly.
+
+	The check is keyed on (trait identity, method name) — return type
+	is intentionally not inspected.  Accidental stdlib backslide will
+	also trip the check (stdlib was migrated before this rejection
+	landed)."""
+	aliases = module_aliases or {}
+	for impl in getattr(prog, "implements", []) or []:
+		trait = getattr(impl, "trait", None)
+		if trait is None:
+			continue
+		is_diagnostic = _is_std_core_diagnostic_trait(
+			trait, module_id=module_id, module_aliases=aliases,
+		)
+		is_debuggable = _is_std_log_debuggable_trait(
+			trait, module_id=module_id, module_aliases=aliases,
+		)
+		if not (is_diagnostic or is_debuggable):
+			continue
+		for method in getattr(impl, "methods", []) or []:
+			mname = getattr(method, "name", None)
+			loc = getattr(method, "loc", None)
+			if is_diagnostic and mname == "to_diag":
+				diagnostics.append(_p_diag(
+					message=(
+						"`Diagnostic.to_diag(...) -> DiagnosticValue` is removed in 0.31.62; "
+						"implement `to_json_text(self: &Self) nothrow -> String` instead and "
+						"project values via `core.diagnostic_json_*`"
+					),
+					severity="error",
+					span=Span.from_loc(loc),
+					code="E_TO_DIAG_DEPRECATED",
+				))
+			elif is_debuggable and mname == "to_debug":
+				diagnostics.append(_p_diag(
+					message=(
+						"`Debuggable.to_debug(...) -> DiagnosticValue` is removed in 0.31.62; "
+						"implement `to_debug_json_text(self: &Self) nothrow -> String` instead "
+						"and project values via `core.diagnostic_json_*`"
+					),
+					severity="error",
+					span=Span.from_loc(loc),
+					code="E_TO_DEBUG_DEPRECATED",
+				))
+
+
 def _scan_external_diagnostic_targets(
 	type_table: object,
 ) -> set[tuple[str | None, str]]:
@@ -2336,6 +2421,18 @@ def parse_drift_workspace_to_hir(
 	for mid, files in by_module.items():
 		if files:
 			module_source_path[mid] = files[0][0]
+
+	# Slice 7a follow-up (K finding 1, 2026-05-05): module-id-by-path lookup
+	# powers the DV-public-removed gate's "is stdlib?" check.  The
+	# path-under-stdlib_root path is unreliable when callers invoke driftc
+	# with `--stdlib-root <empty>` and pass stdlib files as inputs (e.g. the
+	# stdlib-self-deploy + hir-funcs round-trip tests); the gate must still
+	# allow stdlib internal use, gated by the file's declared `module`
+	# matching `std.*` / `lang.*`.
+	module_id_by_path: dict[str, str] = {}
+	for mid, files in by_module.items():
+		for fpath, _prog in files:
+			module_id_by_path[str(fpath.resolve())] = mid
 
 	std_root_resolved: Path | None = None
 	if stdlib_root is not None:
@@ -3368,6 +3465,59 @@ def parse_drift_workspace_to_hir(
 	) -> None:
 		if te is None:
 			return
+		# Slice 7a (0.31.62, 2026-05-05): user code may not name
+		# `core.DiagnosticValue` / `core.DiagnosticEntry` — the DV/DE public
+		# surface is removed (compiler-internal only through the synthesized
+		# Diagnostic bridge).  Stdlib retains internal use; we discriminate
+		# by source-file path under stdlib_root.  Without this rejection the
+		# user gets the generic "module 'std.core' does not export type X"
+		# error, which doesn't point at the migration.
+		#
+		# Slice 7a follow-up (K finding 1, 2026-05-05): the rejection covers
+		# both module-aliased forms (`core.DiagnosticValue`) AND unqualified
+		# uses (`DiagnosticValue` directly).  Unqualified DV is normally a
+		# built-in name that the resolver lets through; for user source we
+		# reject it here at the type-resolution boundary.  Stdlib internal
+		# type positions are still allowed.
+		if te.name in ("DiagnosticValue", "DiagnosticEntry"):
+			alias = getattr(te, "module_alias", None)
+			mod = file_aliases.get(alias or "") if alias else None
+			is_aliased_to_std_core = (alias is not None and mod == "std.core")
+			is_unqualified = (
+				alias is None
+				and getattr(te, "module_id", None) is None
+			)
+			# `is_stdlib_source` allows stdlib internal use of the DV/DE
+			# bridge.  Path-under-stdlib_root catches the standard
+			# configuration; module-id-prefix catches the case where stdlib
+			# files are passed as inputs with `--stdlib-root` pointing at a
+			# different directory (stdlib-self-deploy / hir-funcs round-trip
+			# tests).  Either signal suffices.
+			path_str = str(path.resolve()) if path is not None else ""
+			file_mid = module_id_by_path.get(path_str)
+			is_stdlib_source = (
+				(std_root_resolved is not None and _is_path_under(path, std_root_resolved))
+				or (
+					isinstance(file_mid, str)
+					and (file_mid.startswith("std.") or file_mid == "std.core" or file_mid.startswith("lang."))
+				)
+			)
+			if (is_aliased_to_std_core or is_unqualified) and not is_stdlib_source:
+				display_name = f"core.{te.name}" if is_aliased_to_std_core else te.name
+				diagnostics.append(_p_diag(
+					message=(
+						f"`{display_name}` is removed in 0.31.62; user code may not "
+						f"name the DV public surface — produce canonical JSON text via "
+						f"`core.diagnostic_json_*` and pass `String` instead"
+					),
+					severity="error",
+					span=_span_in_file(path, getattr(te, "loc", None)),
+					code="E_DV_PUBLIC_REMOVED",
+				))
+				if is_aliased_to_std_core:
+					te.module_id = mod
+					te.module_alias = None
+				return
 		if getattr(te, "module_alias", None):
 			alias = te.module_alias
 			mod = file_aliases.get(alias or "")
@@ -3473,6 +3623,14 @@ def parse_drift_workspace_to_hir(
 					_resolve_type_expr_in_file(path, file_aliases, expr.base_type, allow_traits=True)
 					return
 				if isinstance(expr, parser_ast.Call):
+					# Note: unqualified `diagnostic_entry(...)` / `diagnostic_value(...)`
+					# from user source falls through to the natural unknown-name /
+					# no-matching-overload diagnostic — those names resolve at the
+					# call-resolver level, not by spelling.  A spelling-based gate
+					# here would create false positives for user-defined functions
+					# of the same name.  The qualified `core.diagnostic_entry(...)`
+					# path is identity-gated in the module-qualified call rewriter
+					# (see `_rewrite_module_qualified_call`).
 					_resolve_types_in_expr(expr.func)
 					for a in getattr(expr, "args", []) or []:
 						_resolve_types_in_expr(a)
@@ -3652,6 +3810,51 @@ def parse_drift_workspace_to_hir(
 				_resolve_type_expr_in_file(path, file_aliases, impl.target)
 				_resolve_type_expr_in_file(path, file_aliases, getattr(impl, "trait", None), allow_traits=True)
 				_resolve_trait_expr_in_file(path, file_aliases, getattr(impl, "require", None).expr if getattr(impl, "require", None) is not None else None)
+				# Slice 7a (0.31.62, 2026-05-05): reject legacy Diagnostic.to_diag /
+				# Debuggable.to_debug method shapes at the workspace pre-scan so the
+				# rejection fires regardless of whether the workspace bails out
+				# before per-module lowering (it does, on the first DV reference
+				# in user code via E_DV_PUBLIC_REMOVED).  Identical guards as the
+				# duplicate hook in `_lower_parsed_program_to_hir` — which still
+				# runs for clean (no-DV-leak) impls so the diagnostic still fires
+				# when the rest of the file is fine.  See
+				# `_reject_deprecated_trait_method_shapes`.
+				_trait = getattr(impl, "trait", None)
+				if _trait is not None:
+					_is_diagnostic = _is_std_core_diagnostic_trait(
+						_trait, module_id=mid, module_aliases=module_aliases,
+					)
+					_is_debuggable = _is_std_log_debuggable_trait(
+						_trait, module_id=mid, module_aliases=module_aliases,
+					)
+					if _is_diagnostic or _is_debuggable:
+						for _mfn in getattr(impl, "methods", []) or []:
+							_mname = getattr(_mfn, "name", None)
+							_mloc = getattr(_mfn, "loc", None)
+							if _is_diagnostic and _mname == "to_diag":
+								diagnostics.append(_p_diag(
+									message=(
+										"`Diagnostic.to_diag(...) -> DiagnosticValue` is removed in "
+										"0.31.62; implement `to_json_text(self: &Self) nothrow -> "
+										"String` instead and project values via "
+										"`core.diagnostic_json_*`"
+									),
+									severity="error",
+									span=_span_in_file(path, _mloc),
+									code="E_TO_DIAG_DEPRECATED",
+								))
+							elif _is_debuggable and _mname == "to_debug":
+								diagnostics.append(_p_diag(
+									message=(
+										"`Debuggable.to_debug(...) -> DiagnosticValue` is removed "
+										"in 0.31.62; implement `to_debug_json_text(self: &Self) "
+										"nothrow -> String` instead and project values via "
+										"`core.diagnostic_json_*`"
+									),
+									severity="error",
+									span=_span_in_file(path, _mloc),
+									code="E_TO_DEBUG_DEPRECATED",
+								))
 				for mfn in getattr(impl, "methods", []) or []:
 					for p in getattr(mfn, "params", []) or []:
 						_resolve_type_expr_in_file(path, file_aliases, p.type_expr)
@@ -4307,6 +4510,37 @@ def parse_drift_workspace_to_hir(
 			mod = file_module_aliases.get(alias)
 			if mod is None:
 				return None
+			# Slice 7a follow-up (K finding 2, 2026-05-05): direct
+			# `core.diagnostic_entry(...)` value-call must surface
+			# `E_DV_PUBLIC_REMOVED` rather than the generic "module
+			# does not export symbol".  Stdlib retained an internal
+			# `diagnostic_entry` for the legacy DV bridge; in user
+			# source we want the migration-friendly diagnostic.
+			# Stdlib internal use is allowed via module-id prefix
+			# (the rewriter doesn't know its source path directly,
+			# but the enclosing module_id is in scope).
+			if mod == "std.core" and member in ("diagnostic_entry", "diagnostic_value"):
+				caller_is_stdlib = (
+					isinstance(module_id, str)
+					and (module_id.startswith("std.") or module_id.startswith("lang."))
+				)
+				if not caller_is_stdlib:
+					diagnostics.append(_p_diag(
+						message=(
+							f"`core.{member}(...)` is removed in 0.31.62; user code may not "
+							f"name the DV public surface — produce canonical JSON text via "
+							f"`core.diagnostic_json_*` and pass `String` instead"
+						),
+						severity="error",
+						span=getattr(receiver, "loc", Span()),
+						code="E_DV_PUBLIC_REMOVED",
+					))
+					return H.HCall(
+						fn=H.HVar(name=member, module_id=mod),
+						args=args,
+						kwargs=kwargs,
+						type_args=type_args,
+					)
 			vals = exported_value_names(mod)
 			types = exported_type_names(mod)
 			if member in vals:
@@ -4554,6 +4788,16 @@ def parse_drift_workspace_to_hir(
 						elif hasattr(H, "HMapEntry") and isinstance(it, getattr(H, "HMapEntry")):
 							it.key = walk_expr(it.key, bound=bound)
 							it.value = walk_expr(it.value, bound=bound)
+							new_list.append(it)
+						elif hasattr(H, "HKwArg") and isinstance(it, getattr(H, "HKwArg")):
+							# HExceptionInit (and any other shape carrying HKwArg
+							# items in a list field) reaches the generic recursion
+							# arm.  Without this branch, `throw E(field = alias.fn(...))`
+							# would leave the kw value as `HMethodCall(receiver=HVar("alias"), ...)`
+							# instead of the rewritten module-qualified call, and the
+							# type-checker would then report `unknown name 'alias'`.
+							if getattr(it, "value", None) is not None:
+								it.value = walk_expr(it.value, bound=bound)
 							new_list.append(it)
 						else:
 							new_list.append(it)
@@ -4841,6 +5085,16 @@ def _lower_parsed_program_to_hir(
 	# construction and `Result<T, E>.or_throw()` resolves the `require E is Throw`
 	# clause cleanly without forcing users to hand-write boilerplate.
 	_synthesize_auto_throw_impls(prog, module_id=module_id, module_aliases=module_aliases)
+	# Slice 7a: reject legacy `Diagnostic.to_diag` / `Debuggable.to_debug`
+	# impl method shapes BEFORE synthesis runs so the rejection points at
+	# the user's offending decl rather than a downstream cascade (e.g.
+	# trait-satisfaction failures during synthesis or build_trait_world).
+	_reject_deprecated_trait_method_shapes(
+		prog,
+		module_id=module_id,
+		module_aliases=module_aliases,
+		diagnostics=diagnostics,
+	)
 	# Slice 5: synthesize `implement core.Diagnostic for E` for every
 	# `pub error E` whose fields are all projectable.  Non-projectable
 	# fields surface E_PUB_ERROR_FIELD_NOT_PROJECTABLE here.  Same

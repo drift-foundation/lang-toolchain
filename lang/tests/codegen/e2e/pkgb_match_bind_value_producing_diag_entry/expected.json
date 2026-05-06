@@ -1,5 +1,0 @@
-{
-  "description": "Package-boundary ownership: value-producing match on a cross-boundary generic variant `Box<core.DiagnosticEntry>` where the arm result IS the bound binder.  Pins the 0.27.198 LANGUAGE_BUG fixes (hir_to_mir `_lower_owning_consume` for arm result + string_arc `VariantGetField` owned-tracking) against regression when the scrutinee type was imported from a signed producer package.",
-  "exit_code": 0,
-  "package_consumer_only": true
-}

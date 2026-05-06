@@ -81,6 +81,10 @@ fn main() nothrow -> Int {
 
 
 def test_bool_float_byte_uint_void_dv_are_frozen(tmp_path, capsys):
+	# Slice 7a (0.31.62, 2026-05-05): `DiagnosticValue` retired from
+	# the user-source surface (see test_dv_public_removed.py); the
+	# Frozen impl on it is now compiler-internal only.  This probe
+	# pins Frozen for the remaining primitives.
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 fn main() nothrow -> Int {
 \tassert_frozen<type Bool>();
@@ -89,7 +93,6 @@ fn main() nothrow -> Int {
 \tassert_frozen<type Uint>();
 \tassert_frozen<type Uint64>();
 \tassert_frozen<type Void>();
-\tassert_frozen<type DiagnosticValue>();
 \treturn 0;
 }
 """)

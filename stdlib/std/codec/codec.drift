@@ -82,7 +82,7 @@ implement core.Diagnostic for CodecError {
 
 implement core.Throw for CodecError {
 	pub fn throw_self(self: CodecError) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
 	}
 }
 

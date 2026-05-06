@@ -1,9 +1,10 @@
 module m;
 
+import std.core as core;
 import std.err as err;
 
 fn fail() -> Int {
-	throw err:ResultError(dv = 7);
+	throw err:ResultError(diag_json = core.diagnostic_json_int(7));
 }
 
 fn main() nothrow -> Int {

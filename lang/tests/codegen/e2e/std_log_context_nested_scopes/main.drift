@@ -1,5 +1,6 @@
 module m;
 
+import std.core as core;
 import std.log as log;
 import std.runtime as rt;
 
@@ -11,7 +12,7 @@ fn _inner(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow ->
 	val g2 = st.push(move inner);
 	match st.peek() {
 		Some(top) => {
-			main.info("inner", top, {"req": DiagnosticValue::String("r-override"), "code": DiagnosticValue::Int(500)});
+			main.info("inner", top, {"req": core.diagnostic_json_string(&"r-override"), "code": core.diagnostic_json_int(500)});
 		},
 		None => {
 			return 32;

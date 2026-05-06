@@ -29,9 +29,13 @@ export {
 /// unsafe-block ceremony — deferred, not v1.
 ///
 /// **Default impls (stdlib-baked, see `std.core`):** `Int`,
-/// `Uint`, `Uint64`, `Bool`, `Byte`, `Float`, `String`, `Void`,
-/// `DiagnosticValue`.  Recursive: `Optional<T> where T: Frozen`,
+/// `Uint`, `Uint64`, `Bool`, `Byte`, `Float`, `String`, `Void`.
+/// Recursive: `Optional<T> where T: Frozen`,
 /// `Result<T, E> where T: Frozen + E: Frozen`.
+///
+/// (`DiagnosticValue` retains an internal Frozen impl through the
+/// Slice 7a→7b transition for the legacy DV bridge but is no longer
+/// part of the user-facing surface; see `slice7-followups.md`.)
 ///
 /// **Default NON-impls (explicitly NOT Frozen):**
 /// - `&T` / `&mut T` for any T — a reference is itself

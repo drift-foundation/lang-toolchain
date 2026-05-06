@@ -1,4 +1,0 @@
-{
-  "description": "Regression: ConstructDV temps used as exception attrs must be released after error construction clones them. Covers inline DV::String attrs (fresh ConstructDV temps) and DV::Object from local (no double-free).",
-  "exit_code": 0
-}

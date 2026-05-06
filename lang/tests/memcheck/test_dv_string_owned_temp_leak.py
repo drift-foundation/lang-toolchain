@@ -1,15 +1,17 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Regression: DiagnosticValue::String(owned_temp) must not leak the
-original string reference.
+"""Regression: owned-temp String through `core.diagnostic_json_string`
+must not leak the original string reference.
 
-drift_dv_string retains the string, so the caller's original reference
-is redundant.  For owned temporaries (e.g. fmt.format_int result), the
-compiler must ensure the original is released.  Without the MIR
-ownership split, string_arc cannot distinguish owned temps from borrowed
-locals and the release is never emitted → 20 bytes/call leak.
+Slice 7a (0.31.62, 2026-05-05): the original probe used
+`DiagnosticValue::String(fmt.format_int(code))` — that DV public
+surface is gone.  The equivalent ownership shape is
+`core.diagnostic_json_string(&fmt.format_int(code))` returning the
+JSON-quoted String.  The borrowed `&` of an owned temporary still
+needs the source release to fire after the helper returns; without
+the ownership split, string_arc would miss the release for the temp
+→ leak per call.
 
-This test asserts zero definitely-lost bytes.  It will FAIL until the
-ConstructDV(String) MIR ownership split is implemented.
+This test asserts zero definitely-lost bytes.
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ import std.core as core;
 import std.format as fmt;
 
 fn do_work(code: Int) nothrow -> Int {
-\tval dv = DiagnosticValue::String(fmt.format_int(code));
+\tval _projected: String = core.diagnostic_json_string(&fmt.format_int(code));
 \treturn code;
 }
 
@@ -42,7 +44,7 @@ pub fn main() nothrow -> Int {
 
 
 def test_dv_string_owned_temp_no_leak(tmp_path: Path) -> None:
-	"""DiagnosticValue::String(fmt.format_int(...)) must not leak."""
+	"""`core.diagnostic_json_string(&fmt.format_int(...))` must not leak."""
 	assert shutil.which("valgrind") is not None, "valgrind required"
 
 	src = tmp_path / "main.drift"

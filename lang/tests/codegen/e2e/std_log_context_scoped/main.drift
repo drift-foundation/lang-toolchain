@@ -1,5 +1,6 @@
 module m;
 
+import std.core as core;
 import std.log as log;
 import std.runtime as rt;
 
@@ -14,7 +15,7 @@ fn _with_ctx(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow
 	match st.peek() {
 		Some(top) => {
 			main.info("auth-start", top);
-			main.info("auth-failed", top, {"user": DiagnosticValue::String("u-override"), "code": DiagnosticValue::Int(401)});
+			main.info("auth-failed", top, {"user": core.diagnostic_json_string(&"u-override"), "code": core.diagnostic_json_int(401)});
 		},
 		None => {
 			return 5;

@@ -1,6 +1,7 @@
 module m;
 
 import app.logging as applog;
+import std.core as core;
 import std.log as log;
 import std.meta as meta;
 import std.runtime as rt;
@@ -11,7 +12,11 @@ fn _with_ctx() -> Int {
 	match applog.current_context() {
 		Some(ctx) => {
 			log.info!(&st.security, "auth-start", ctx);
-			log.info!(&st.security, "auth-failed", ctx, {"req": DiagnosticValue::String("r-2"), "code": DiagnosticValue::Int(401)});
+			// Slice 7a: typed-V Debuggable form encodes raw values into
+			// canonical JSON.  Mixed types (originally `DV::String + DV::Int`)
+			// are out of scope for the slice surface; pin the override-merge
+			// behavior with a single-V map (V=String).
+			log.info!(&st.security, "auth-failed", ctx, {"req": "r-2"});
 		},
 		None => {
 			return 5;

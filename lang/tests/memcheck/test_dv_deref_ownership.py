@@ -1,16 +1,18 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Regression: deref of &DiagnosticValue into owned context must clone,
-not alias.
+"""Regression: log-attr value ownership through Debuggable.
 
-The Debuggable::to_debug impl for DiagnosticValue does `return *self`,
-which lowers to LoadRef — a raw bitwise copy.  Without a CopyValue
-(drift_dv_clone), the loaded DV and the original share the same inner
-string pointer with only one refcount.  When both are destroyed, the
-string is freed twice.
+Slice 7a (0.31.62, 2026-05-05): the original probe exercised
+`Debuggable::to_debug` for `DiagnosticValue` (`return *self` lowering
+to LoadRef) — that DV public surface is gone.  The equivalent
+ownership contract today is `Debuggable::to_debug_json_text` on
+String-valued attrs: the typed `Logger.info(ev, attrs: HashMap<String,
+String>)` form consumes the attrs map and projects each value through
+`Debuggable`; the projected JSON text and the original input must
+each release exactly once across multiple emit calls.
 
 This test pins:
-1. No crash (double-free / UAF from the aliased deref)
-2. No leak (the cloned DV must still be properly released)
+1. No crash (double-free / UAF from aliased ownership)
+2. No leak (each formatted value released exactly once)
 """
 from __future__ import annotations
 
@@ -35,13 +37,13 @@ pub fn main() nothrow -> Int {
 \tcfgb.min_level(log.Level::Error());
 \tval logger = log.create_logger("test", cfgb.build());
 \tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8080))
+\t\t"port": fmt.format_int(8080)
 \t});
 \tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8081))
+\t\t"port": fmt.format_int(8081)
 \t});
 \tval _ = logger.info("ev", {
-\t\t"port": DiagnosticValue::String(fmt.format_int(8082))
+\t\t"port": fmt.format_int(8082)
 \t});
 \treturn 0;
 }
@@ -49,7 +51,8 @@ pub fn main() nothrow -> Int {
 
 
 def test_dv_deref_no_crash_no_leak(tmp_path: Path) -> None:
-	"""Deref of &DiagnosticValue must clone, not alias — no crash, no leak."""
+	"""Log-attr String value through `Debuggable::to_debug_json_text`
+	must not double-free or leak across multiple emits."""
 	assert shutil.which("valgrind") is not None, "valgrind required"
 
 	src = tmp_path / "main.drift"

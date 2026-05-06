@@ -1,4 +1,0 @@
-{
-  "description": "K28-aftermath Leak B regression. A struct owning Array<core.DiagnosticEntry> with heap-allocated keys must release those keys when the struct drops at scope exit, whether bound directly or wrapped in Result::Err. Fails under DRIFT_MEMCHECK=1 pre-fix because the array element drop path does not recursively release DiagnosticEntry's inner String; exit_code=0 passes.",
-  "exit_code": 0
-}

@@ -97,7 +97,7 @@ implement core.Diagnostic for Utf8Error {
 
 implement core.Throw for Utf8Error {
 	pub fn throw_self(self: Utf8Error) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
 	}
 }
 
@@ -115,7 +115,7 @@ implement core.Diagnostic for TextError {
 
 implement core.Throw for TextError {
 	pub fn throw_self(self: TextError) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::String(self.tag));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
 	}
 }
 

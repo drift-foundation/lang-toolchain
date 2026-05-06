@@ -13,11 +13,15 @@ export {
 ///
 /// `Copy` types may be passed by value without moving — read-after-
 /// pass is permitted.  Default impls: `Int`, `Uint`, `Uint64`,
-/// `Bool`, `Float`, `Byte`, `String`, `DiagnosticValue`,
-/// `DiagnosticEntry`, `Void`, `&T` (for any `T`), `Optional<T>`
-/// when `T: Copy`, `mem.Ptr<T>`.
+/// `Bool`, `Float`, `Byte`, `String`, `Void`, `&T` (for any `T`),
+/// `Optional<T>` when `T: Copy`, `mem.Ptr<T>`.
 ///
 /// String is `Copy` because its representation is an ARC handle;
 /// copying bumps the refcount, no byte-level duplication.
+///
+/// (`DiagnosticValue` and `DiagnosticEntry` retain internal Copy
+/// impls through the Slice 7a→7b transition for the legacy DV
+/// bridge but are no longer part of the user-facing surface; see
+/// `slice7-followups.md`.)
 pub trait Copy {
 }

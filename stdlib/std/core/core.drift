@@ -23,8 +23,11 @@ use trait shareable.ConstShare;
 export {
 	Destructible,
 	Diagnostic,
-	DiagnosticEntry,
-	diagnostic_entry,
+	// Slice 7a (0.31.62, 2026-05-05): `DiagnosticEntry` and
+	// `diagnostic_entry` are no longer exported.  The DV public surface
+	// is rejected at the user-source boundary with `E_DV_PUBLIC_REMOVED`;
+	// removing from `export` aligns the std.core surface with that
+	// contract.  Internal use inside std.core is unchanged.
 	Throw,
 	Result,
 	Fn0,
@@ -124,7 +127,7 @@ pub trait Destructible {
 /// Field projectability (compile-time gate on synthesis — see
 /// `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`):
 ///   * Scalars are projectable (`Int`, `Uint`, `Bool`, `Float`,
-///     `String`, `DiagnosticValue`).
+///     `String`).
 ///   * `pub error` is projectable through its own (synthesized or
 ///     manual) Diagnostic impl.
 ///   * Ordinary `pub struct` / `pub variant` fields are projectable
@@ -135,25 +138,29 @@ pub trait Destructible {
 ///   * `RawPtr<T>` / `Ptr<T>` / `TypeBox` / function-typed fields are
 ///     not projectable.
 ///
-/// Built-in impls below: `Int`, `Uint`, `Bool`, `Float`, `String`,
-/// `DiagnosticValue`.
+/// Built-in impls below: `Int`, `Uint`, `Bool`, `Float`, `String`.
+/// (The legacy `DiagnosticValue` impl is internal and not part of
+/// the supported user surface; see Slice 7a `slice7-followups.md`.)
 pub trait Diagnostic {
 	fn to_json_text(self: &Self) nothrow -> String;
 }
 
 /// Single key/value pair carried by structured diagnostics.
 ///
-/// `key` is a stable identifier; `value` is the typed payload.
-/// `DiagnosticEntry` is `Copy` (both fields are `Copy`).
-///
-/// **See also:** `diagnostic_entry`, `DiagnosticValue`.
-pub struct DiagnosticEntry {
-	pub key: String,
-	pub value: DiagnosticValue,
+/// **Slice 7a (0.31.62, 2026-05-05):** the public DV/DE surface is
+/// removed.  `DiagnosticEntry` is no longer `pub` and is no longer
+/// exported from `std.core`; user-source references are rejected with
+/// `E_DV_PUBLIC_REMOVED`.  This decl stays in the module as
+/// internal-only carriage for the legacy DV bridge that is retired in
+/// Slice 7b.
+struct DiagnosticEntry {
+	key: String,
+	value: DiagnosticValue,
 }
 
-/// Constructs a `DiagnosticEntry` from `key` and `value`.
-pub fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
+/// Internal helper — see the `DiagnosticEntry` decl above.  No longer
+/// `pub`; user-source references are rejected with `E_DV_PUBLIC_REMOVED`.
+fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
 	return DiagnosticEntry(key = move key, value = move value);
 }
 
@@ -339,7 +346,7 @@ pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 		match self {
 			Ok(v) => { return move v; },
 			Err(err) => { Throw::throw_self(move err); },
-			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
+			default => { throw std.err:ResultError(diag_json = diagnostic_json_int(0)); }
 		}
 	}
 
@@ -353,7 +360,7 @@ pub fn or_throw(self: Result<T, E>) -> T require E is Throw {
 		match self {
 			Ok(v) => { return move v; },
 			Err(err) => { return f.call(move err); },
-			default => { throw std.err:ResultError(dv = DiagnosticValue::Int(0)); }
+			default => { throw std.err:ResultError(diag_json = diagnostic_json_int(0)); }
 		}
 	}
 }
@@ -653,49 +660,12 @@ implement Diagnostic for DiagnosticValue {
 	}
 }
 
-// ── Slice 5 (Phase 5a): legacy scalar Throw impls are TRANSITIONAL /
-// INTERNAL.  They are NOT a supported user-facing `or_throw` Err path —
-// `Result<T, scalar>.or_throw()` is rejected at the call site with
-// `E_OR_THROW_NOT_ERROR_TYPE`.  These impls remain only so that
-// pre-existing internal stdlib paths (and a small number of legacy
-// downstream call shapes) keep linking through 0.32.x; they will be
-// retired alongside the DV→JSON ABI 13 cut.  Do NOT introduce new
-// callers — use `pub error E` for any throwable error type.
-implement Throw for Int {
-	pub fn throw_self(self: Int) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Int(self));
-	}
-}
-
-implement Throw for Uint {
-	pub fn throw_self(self: Uint) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Int(self));
-	}
-}
-
-implement Throw for Bool {
-	pub fn throw_self(self: Bool) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Bool(self));
-	}
-}
-
-implement Throw for Float {
-	pub fn throw_self(self: Float) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::Float(self));
-	}
-}
-
-implement Throw for String {
-	pub fn throw_self(self: String) throws {
-		throw std.err:ResultError(dv = DiagnosticValue::String(self));
-	}
-}
-
-implement Throw for DiagnosticValue {
-	pub fn throw_self(self: DiagnosticValue) throws {
-		throw std.err:ResultError(dv = self);
-	}
-}
+// ── Slice 7a (ABI 13): legacy scalar `Throw for {Int,Uint,Bool,Float,
+// String,DiagnosticValue}` impls retired.  `Result<T, scalar>.or_throw()`
+// has been rejected at the call site since Slice 5 (Phase 5a) with
+// `E_OR_THROW_NOT_ERROR_TYPE`, and no caller in stdlib/tests/examples
+// throws a bare scalar value.  Use `pub error E` for any throwable
+// error type — the compiler auto-synthesizes `Throw for E`.
 
 /// Canonical container id for `String`, used in
 /// `IndexError.container_id` when string operations bounds-check.

@@ -112,51 +112,46 @@ pub variant FormatterKind {
 /// Trait implemented by types that can appear as log-attribute
 /// values.
 ///
-/// `to_debug` projects the value into a `DiagnosticValue` —
-/// machine-readable, format-agnostic.  `Int`, `Uint`, `Bool`,
-/// `Float`, `String`, and `DiagnosticValue` itself ship with default
-/// impls.  Implement for user types to log them as attribute values
+/// `to_debug_json_text` projects the value into its canonical JSON
+/// text form (a single JSON value: number, string, bool, or `null`).
+/// `Int`, `Uint`, `Bool`, `Float`, and `String` ship with default
+/// impls that delegate to the corresponding `core.diagnostic_json_*`
+/// helpers.  Implement for user types to log them as attribute values
 /// in the typed `info` / `debug` / `error` overloads.
 ///
 /// **See also:** `Logger.info`, `Logger.debug`, `Logger.error`,
 /// `LogContext.put`.
 pub trait Debuggable {
-	fn to_debug(self: &Self) nothrow -> DiagnosticValue;
+	fn to_debug_json_text(self: &Self) nothrow -> String;
 }
 
 implement Debuggable for Int {
-	pub fn to_debug(self: &Int) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(*self);
+	pub fn to_debug_json_text(self: &Int) nothrow -> String {
+		return core.diagnostic_json_int(*self);
 	}
 }
 
 implement Debuggable for Uint {
-	pub fn to_debug(self: &Uint) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(*self);
+	pub fn to_debug_json_text(self: &Uint) nothrow -> String {
+		return core.diagnostic_json_uint(*self);
 	}
 }
 
 implement Debuggable for Bool {
-	pub fn to_debug(self: &Bool) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Bool(*self);
+	pub fn to_debug_json_text(self: &Bool) nothrow -> String {
+		return core.diagnostic_json_bool(*self);
 	}
 }
 
 implement Debuggable for Float {
-	pub fn to_debug(self: &Float) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Float(*self);
+	pub fn to_debug_json_text(self: &Float) nothrow -> String {
+		return core.diagnostic_json_float(*self);
 	}
 }
 
 implement Debuggable for String {
-	pub fn to_debug(self: &String) nothrow -> DiagnosticValue {
-		return DiagnosticValue::String(*self);
-	}
-}
-
-implement Debuggable for DiagnosticValue {
-	pub fn to_debug(self: &DiagnosticValue) nothrow -> DiagnosticValue {
-		return *self;
+	pub fn to_debug_json_text(self: &String) nothrow -> String {
+		return core.diagnostic_json_string(self);
 	}
 }
 
@@ -218,7 +213,7 @@ pub struct LogRecord {
 /// **See also:** `log_context`, `LogContext.put`,
 /// `Logger.info(ev, ctx)`, `LoggerConfigBuilder.context_resolver`.
 pub struct LogContext {
-	attrs: containers.HashMap<String, DiagnosticValue>
+	attrs: containers.HashMap<String, String>
 }
 
 /// Application-supplied service consulted by the logger to resolve
@@ -465,16 +460,16 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 /// **See also:** `LogContext`, `LogContext.put`,
 /// `Logger.info(ev, ctx)`, `LoggerConfigBuilder.context_resolver`.
 pub fn log_context() nothrow -> LogContext {
-	var attrs: containers.HashMap<String, DiagnosticValue> = {:};
+	var attrs: containers.HashMap<String, String> = {:};
 	return LogContext(attrs = move attrs);
 }
 
 implement LogContext {
 	/// Inserts (or replaces) an attribute pair.
 	///
-	/// `value` is projected to `DiagnosticValue` via the `Debuggable`
-	/// impl on `V`.  If `key` was already present, the old value is
-	/// dropped silently.
+	/// `value` is projected to its canonical JSON text via the
+	/// `Debuggable` impl on `V`.  If `key` was already present, the
+	/// old value is dropped silently.
 	///
 	/// **Parameters:**
 	/// - `key` — attribute name (consumed by move).
@@ -483,8 +478,8 @@ implement LogContext {
 	///
 	/// **See also:** `Debuggable`, `LogContext.get`.
 	pub fn put<V>(self: &mut LogContext, key: String, value: V) nothrow -> Void require V is Debuggable {
-		val dv = Debuggable::to_debug(&value);
-		match self.attrs.insert(move key, dv) {
+		val json = Debuggable::to_debug_json_text(&value);
+		match self.attrs.insert(move key, json) {
 			Some(old) => {
 				core.drop_value(move old);
 			},
@@ -495,9 +490,9 @@ implement LogContext {
 		return;
 	}
 
-	/// Looks up the `DiagnosticValue` stored under `key`, or `None`
-	/// if absent.
-	pub fn get(self: &LogContext, key: &String) nothrow -> Optional<&DiagnosticValue> {
+	/// Looks up the canonical-JSON-text value stored under `key`, or
+	/// `None` if absent.
+	pub fn get(self: &LogContext, key: &String) nothrow -> Optional<&String> {
 		return self.attrs.get(key);
 	}
 
@@ -937,7 +932,7 @@ fn _emit_no_attrs(logger: &Logger, var level: Level, ev: String) nothrow -> Bool
 	}
 }
 
-fn _emit_explicit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Bool {
+fn _emit_explicit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>) nothrow -> Bool {
 	if not _enabled(logger.min_level, level) {
 		core.drop_value(move attrs);
 		return false;
@@ -972,7 +967,7 @@ fn _emit_no_attrs_throwing(logger: &Logger, var level: Level, ev: String) -> Boo
 	return _emit_payload_throwing(logger, level, payload);
 }
 
-fn _emit_ctx_attrs_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> Bool {
+fn _emit_ctx_attrs_throwing(logger: &Logger, var level: Level, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, String>) -> Bool {
 	val payload = _payload_json_ctx_attrs(logger, ev, ctx, attrs);
 	return _emit_payload_throwing(logger, level, payload);
 }
@@ -1018,8 +1013,7 @@ fn _attrs_json<V>(attrs: &containers.HashMap<String, V>) -> String require V is 
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val dv = Debuggable::to_debug(item.value);
-				val value_json = _dv_json(&dv);
+				val value_json = Debuggable::to_debug_json_text(item.value);
 				out = out + "\"" + key + "\":" + value_json;
 			},
 			None => {
@@ -1050,8 +1044,7 @@ fn _ctx_attrs_json(ctx: &LogContext) -> String {
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val value_json = _dv_json(item.value);
-				out = out + "\"" + key + "\":" + value_json;
+				out = out + "\"" + key + "\":" + *item.value;
 			},
 			None => {
 				break;
@@ -1061,7 +1054,7 @@ fn _ctx_attrs_json(ctx: &LogContext) -> String {
 	return out + "}";
 }
 
-fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> String {
+fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, String>) -> String {
 	var out = "{";
 	var first = true;
 	var it_ctx = ctx.attrs.iter();
@@ -1077,8 +1070,7 @@ fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, D
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val value_json = _dv_json(item.value);
-				out = out + "\"" + key + "\":" + value_json;
+				out = out + "\"" + key + "\":" + *item.value;
 			},
 			None => {
 				break;
@@ -1095,8 +1087,7 @@ fn _ctx_attrs_json_merged(ctx: &LogContext, attrs: &containers.HashMap<String, D
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val value_json = _dv_json(item.value);
-				out = out + "\"" + key + "\":" + value_json;
+				out = out + "\"" + key + "\":" + *item.value;
 			},
 			None => {
 				break;
@@ -1119,7 +1110,7 @@ fn _payload_json_ctx(logger: &Logger, ev: String, ctx: &LogContext) -> String {
 	return "\"ev\":\"" + ev_json + "\",\"logger\":\"" + logger_json + "\",\"attrs\":" + attrs_json;
 }
 
-fn _payload_json_ctx_attrs(logger: &Logger, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, DiagnosticValue>) -> String {
+fn _payload_json_ctx_attrs(logger: &Logger, ev: String, ctx: &LogContext, attrs: &containers.HashMap<String, String>) -> String {
 	val ev_json = _json_escape(ev);
 	val logger_json = _json_escape(logger.name);
 	val attrs_json = _ctx_attrs_json_merged(ctx, attrs);
@@ -1149,8 +1140,7 @@ fn _ctx_attrs_json_merged_typed<V>(ctx: &LogContext, attrs: &containers.HashMap<
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val value_json = _dv_json(item.value);
-				out = out + "\"" + key + "\":" + value_json;
+				out = out + "\"" + key + "\":" + *item.value;
 			},
 			None => {
 				break;
@@ -1167,8 +1157,7 @@ fn _ctx_attrs_json_merged_typed<V>(ctx: &LogContext, attrs: &containers.HashMap<
 				}
 				first = false;
 				val key = _json_escape(*item.key);
-				val dv = Debuggable::to_debug(item.value);
-				val value_json = _dv_json(&dv);
+				val value_json = Debuggable::to_debug_json_text(item.value);
 				out = out + "\"" + key + "\":" + value_json;
 			},
 			None => {
@@ -1309,8 +1298,9 @@ implement Logger {
 	/// Values may be any type implementing `Debuggable` — use this
 	/// form for the common single-type override case
 	/// (`{"size": 42}`).  When overrides carry mixed types, fall
-	/// back to the `DiagnosticValue` form: explicitly project each
-	/// value (`{"k": DiagnosticValue::String(...), ...}`).
+	/// back to the pre-projected JSON-text form: project each value
+	/// via `core.diagnostic_json_*` and pass a
+	/// `HashMap<String, String>`.
 	///
 	/// **See also:** `Logger.info(ev, ctx)`, `LogContext`,
 	/// `Debuggable`.
@@ -1318,11 +1308,12 @@ implement Logger {
 		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Info(), ev, ctx, move attrs);
 	}
 
-	/// Explicit-context-plus-DV-overrides overload of `Logger.info`.
-	/// Same as the typed form but takes a pre-projected
-	/// `HashMap<String, DiagnosticValue>` so the overrides can carry
-	/// mixed-type values.
-	pub fn info(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+	/// Explicit-context-plus-pre-projected-overrides overload of
+	/// `Logger.info`.  Same as the typed form but takes a
+	/// `HashMap<String, String>` whose values are already canonical
+	/// JSON text (e.g. produced by `core.diagnostic_json_*`), so the
+	/// overrides can carry mixed-type values.
+	pub fn info(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>) nothrow -> Void {
 		val _ = _emit_explicit_ctx_attrs(self, Level::Info(), ev, ctx, move attrs);
 	}
 
@@ -1356,10 +1347,11 @@ implement Logger {
 		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Debug(), ev, ctx, move attrs);
 	}
 
-	/// Explicit-context-plus-DV-overrides overload of `Logger.debug`.
-	/// See the typed `Logger.debug(ev, ctx, attrs)` overload above
-	/// for the common case.
-	pub fn debug(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+	/// Explicit-context-plus-pre-projected-overrides overload of
+	/// `Logger.debug`.  See the typed `Logger.debug(ev, ctx, attrs)`
+	/// overload above for the common case.  Values must be canonical
+	/// JSON text (e.g. produced by `core.diagnostic_json_*`).
+	pub fn debug(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>) nothrow -> Void {
 		val _ = _emit_explicit_ctx_attrs(self, Level::Debug(), ev, ctx, move attrs);
 	}
 
@@ -1392,10 +1384,11 @@ implement Logger {
 		val _ = _emit_explicit_ctx_attrs_typed<type V>(self, Level::Error(), ev, ctx, move attrs);
 	}
 
-	/// Explicit-context-plus-DV-overrides overload of `Logger.error`.
-	/// See the typed `Logger.error(ev, ctx, attrs)` overload above
-	/// for the common case.
-	pub fn error(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>) nothrow -> Void {
+	/// Explicit-context-plus-pre-projected-overrides overload of
+	/// `Logger.error`.  See the typed `Logger.error(ev, ctx, attrs)`
+	/// overload above for the common case.  Values must be canonical
+	/// JSON text (e.g. produced by `core.diagnostic_json_*`).
+	pub fn error(self: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>) nothrow -> Void {
 		val _ = _emit_explicit_ctx_attrs(self, Level::Error(), ev, ctx, move attrs);
 	}
 }
@@ -1536,48 +1529,6 @@ fn _json_escape(s: String) nothrow -> String {
 	return out;
 }
 
-fn _dv_json(dv: &DiagnosticValue) nothrow -> String {
-	match dv.as_bool() {
-		Some(v) => {
-			if v {
-				return "true";
-			}
-			return "false";
-		},
-		None => {
-		}
-	}
-	match dv.as_int() {
-		Some(v) => {
-			return format.format_int(v);
-		},
-		None => {
-		}
-	}
-	match dv.as_float() {
-		Some(v) => {
-			return format.format_float(v);
-		},
-		None => {
-		}
-	}
-	match dv.as_string() {
-		Some(v) => {
-			return "\"" + _json_escape(v) + "\"";
-		},
-		None => {
-		}
-	}
-	match dv.as_object() {
-		Some(_) => {
-			return "{}";
-		},
-		None => {
-		}
-	}
-	return "null";
-}
-
 /// Macro-target for `log.debug!(logger, ev)`.
 ///
 /// Generated by the macro expander from `log.debug!(...)` syntax;
@@ -1608,9 +1559,9 @@ pub fn macro_debug<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: cont
 }
 
 /// Macro-target for `log.debug!(logger, ev, ctx, attrs)` with a
-/// pre-projected `DiagnosticValue` map.  See the typed overload
-/// above for the common case.
-pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
+/// pre-projected JSON-text map.  See the typed overload above for
+/// the common case.
+pub fn macro_debug(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.debug(ev, ctx, move attrs);
 }
@@ -1645,9 +1596,9 @@ pub fn macro_info<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: conta
 }
 
 /// Macro-target for `log.info!(logger, ev, ctx, attrs)` with a
-/// pre-projected `DiagnosticValue` map.  See the typed overload
-/// above for the common case.
-pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
+/// pre-projected JSON-text map.  See the typed overload above for
+/// the common case.
+pub fn macro_info(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.info(ev, ctx, move attrs);
 }
@@ -1682,9 +1633,9 @@ pub fn macro_error<V>(logger: &Logger, ev: String, ctx: &LogContext, attrs: cont
 }
 
 /// Macro-target for `log.error!(logger, ev, ctx, attrs)` with a
-/// pre-projected `DiagnosticValue` map.  See the typed overload
-/// above for the common case.
-pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, DiagnosticValue>, src: meta.Caller) nothrow -> Void {
+/// pre-projected JSON-text map.  See the typed overload above for
+/// the common case.
+pub fn macro_error(logger: &Logger, ev: String, ctx: &LogContext, attrs: containers.HashMap<String, String>, src: meta.Caller) nothrow -> Void {
 	val _ = move src;
 	logger.error(ev, ctx, move attrs);
 }

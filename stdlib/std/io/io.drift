@@ -103,8 +103,8 @@ implement core.Diagnostic for IoError {
 implement core.Throw for IoError {
 	pub fn throw_self(self: IoError) throws {
 		match &self {
-			Errno(code) => { throw std.err:ResultError(dv = DiagnosticValue::Int(*code)); },
-			RequiresVirtualThread => { throw std.err:ResultError(dv = DiagnosticValue::Int(-2)); },
+			Errno(code) => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(*code)); },
+			RequiresVirtualThread => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); },
 		}
 	}
 }

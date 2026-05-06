@@ -1,4 +1,0 @@
-{
-  "description": "Regression: heap-backed captured String must not leak the ConstructDV retain through ErrorAddLocalDV. The runtime clones the DV; the caller's ConstructDV temp must be released.",
-  "exit_code": 0
-}

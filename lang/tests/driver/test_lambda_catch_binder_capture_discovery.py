@@ -74,8 +74,7 @@ fn outer(app: Int) nothrow -> Int {
 \t\ttry {
 \t\t\treturn app;
 \t\t} catch Bang(e) {
-\t\t\tval k = "x";
-\t\t\tval v = e.attrs[k];
+\t\t\tval v = e.encode_compact();
 \t\t\treturn app;
 \t\t}
 \t});
@@ -97,8 +96,7 @@ fn outer() nothrow -> Int {
 \ttry {
 \t\treturn 1;
 \t} catch Bang(e) {
-\t\tval k = "x";
-\t\tval v = e.attrs[k];
+\t\tval v = e.encode_compact();
 \t\treturn 0;
 \t}
 }
@@ -146,8 +144,7 @@ fn outer(app: Int) nothrow -> Int {
 \t\ttry {
 \t\t\treturn app;
 \t\t} catch Bang(e) {
-\t\t\tval k = "x";
-\t\t\tval v = e.attrs[k];
+\t\t\tval v = e.encode_compact();
 \t\t\treturn app;
 \t\t}
 \t});

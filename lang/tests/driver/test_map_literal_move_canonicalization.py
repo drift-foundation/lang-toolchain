@@ -32,6 +32,7 @@ def test_emit_ir_map_literal_move_value_no_noncanonical_move_assert(
 		"""
 module main;
 
+import std.core as core;
 import std.log as log;
 import std.concurrent as conc;
 
@@ -41,8 +42,8 @@ struct Document {
 }
 
 implement log.Debuggable for Document {
-	pub fn to_debug(self: &Document) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(self.size);
+	pub fn to_debug_json_text(self: &Document) nothrow -> String {
+		return core.diagnostic_json_int(self.size);
 	}
 }
 

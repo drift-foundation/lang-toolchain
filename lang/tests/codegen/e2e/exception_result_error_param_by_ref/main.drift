@@ -1,24 +1,16 @@
 module m;
 
+import std.core as core;
 import std.err as err;
 
-fn code_from_error(e: &err.ResultError) nothrow -> Int {
-	val dv = e.attrs["dv"];
-	val opt = dv.as_int();
-	match opt {
-		Some(v) => { return v; },
-		None => { return -1; },
-		default => { return -2; }
-	}
-}
-
 fn fail() -> Int {
-	throw err:ResultError(dv = 7);
+	throw err:ResultError(diag_json = core.diagnostic_json_int(7));
 }
 
 pub fn main() nothrow -> Int {
+	// Slice 7a: ResultError carries `diag_json: String`.
 	val v = try fail() catch err:ResultError(e) {
-		code_from_error(&e)
+		(e.diag_json == "7") ? 7 : -1
 	} catch {
 		99
 	};

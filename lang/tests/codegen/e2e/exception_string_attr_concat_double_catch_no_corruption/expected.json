@@ -1,4 +1,0 @@
-{
-  "description": "LANGUAGE_BUG regression: a pub exception with a String attr built via heap string_concat must produce independent ARC ownership across two sequential try/catch arms; both extracted via e.attrs[k].as_string() must read valid memory and the program must teardown without heap corruption.",
-  "exit_code": 0
-}

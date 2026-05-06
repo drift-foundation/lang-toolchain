@@ -49,14 +49,20 @@ pub error IteratorInvalidated {
 	op_id: IteratorOpId,
 }
 
-/// Generic throwable wrapping a `DiagnosticValue` payload.
+/// Generic throwable wrapping a JSON-text diagnostic payload.
 ///
-/// Used by `or_throw` and other auto-conversions when a more
-/// specific exception type isn't available — the error type's
-/// `Throw` impl projects its state to a `DiagnosticValue` and
-/// raises this exception.
+/// Used by transitional internal `Throw` adapters that don't have a
+/// more specific `pub error` type — the adapter projects its state
+/// to JSON text via `core.diagnostic_json_*` helpers and raises this
+/// exception with the projected text in `diag_json`.
+///
+/// **Slice 7a (0.31.62):** field migrated `dv: DiagnosticValue` →
+/// `diag_json: String`.  The DV public surface is removed in this
+/// slice; user code that was constructing `ResultError(dv = ...)`
+/// must switch to `ResultError(diag_json = ...)` and produce JSON
+/// text via `core.diagnostic_json_string` etc.
 pub error ResultError {
-	dv: DiagnosticValue,
+	diag_json: String,
 }
 
 /// Convenience wrapper that constructs and throws an

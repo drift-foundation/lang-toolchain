@@ -70,7 +70,7 @@ FIXTURES_ROOT = HERE.parent
 # TYPES
 # --------------------------------------------------------------------
 # Each type descriptor provides the Drift snippets needed to:
-#   - decl_ty(): the Drift type syntax (e.g. "String", "core.DiagnosticEntry").
+#   - decl_ty(): the Drift type syntax (e.g. "String").
 #   - build_heap_expr(flavor): expression that yields a HEAP-backed value
 #     of this type (non-static where applicable).  The `flavor` argument
 #     is only consulted for String; other types ignore it.
@@ -131,18 +131,10 @@ TYPE_INFO = {
         "is_bitcopy": False,
         "needs_import_core": False,
     },
-    "diag_entry": {
-        "decl_ty": "core.DiagnosticEntry",
-        "build_heap": lambda _f: 'core.diagnostic_entry("k" + "ey", DiagnosticValue::String("v" + "alue"))',
-        "replacement": lambda _f: 'core.diagnostic_entry("o" + "ther", DiagnosticValue::String("q" + "quux"))',
-        "assert_eq_heap": lambda expr: f'if ({expr}).key.byte_length() != 3 {{ return 1; }}',   # "key"
-        "extract_int": lambda expr: f"({expr}).key.byte_length()",
-        "expected_int": 3,
-        "replacement_expected_int": 5,   # "other".byte_length() == 5
-        "flavors": [None],
-        "is_bitcopy": False,
-        "needs_import_core": True,
-    },
+    # `diag_entry` retired in Slice 7a (0.31.62, 2026-05-05) along
+    # with the DV/DiagnosticEntry public surface; the parameterization
+    # remains illustrated in the comment block below for cross-reference
+    # but no `om_*_diag_entry` test is generated.
     "int": {
         "decl_ty": "Int",
         "build_heap": lambda _f: "42",
@@ -609,7 +601,7 @@ SITE_HELPERS["extend_source"] = helpers_extend_source
 #   - `value_producing_match`:
 #     `val x = match r { Payload(v) => v, default => fallback }` —
 #     result takes ownership of the arm-bound payload.
-#     * For Copy / Copy-non-bitcopy (String, DiagnosticEntry):
+#     * For Copy / Copy-non-bitcopy (String):
 #       verifies that the bound `v` carries a retained / owned payload
 #       after the arm, and the scrutinee's scope-drop does NOT free it
 #       early.
@@ -1635,7 +1627,7 @@ def render_expected(site: str, ty_name: str, flavor: str | None) -> str:
         f"type={ty_name}{flavor_suffix}. {shape_note} "
         f"Post-transfer integrity checked via byte_length / key.byte_length / "
         f"value comparison. Must pass plain + ASAN; memcheck applies to "
-        f"heap-backed string subset and the diag_entry type."
+        f"heap-backed string subset."
     )
     return json.dumps({"description": desc, "exit_code": 0}, indent=2) + "\n"
 

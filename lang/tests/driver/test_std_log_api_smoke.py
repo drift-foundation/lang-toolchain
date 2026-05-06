@@ -100,6 +100,7 @@ def test_std_log_user_type_can_be_attr_via_debuggable_impl(tmp_path: Path, capsy
 		"""
 module main;
 
+import std.core as core;
 import std.log as log;
 
 struct User {
@@ -107,8 +108,8 @@ struct User {
 }
 
 implement log.Debuggable for User {
-	pub fn to_debug(self: &User) nothrow -> DiagnosticValue {
-		return DiagnosticValue::Int(self.id);
+	pub fn to_debug_json_text(self: &User) nothrow -> String {
+		return core.diagnostic_json_int(self.id);
 	}
 }
 

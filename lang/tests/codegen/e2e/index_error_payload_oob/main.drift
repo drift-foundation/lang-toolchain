@@ -8,29 +8,14 @@ fn main() nothrow -> Int {
 		val _ = xs[3];
 		return 10;
 	} catch std.err:IndexError(e) {
-		val dv_c = e.attrs["container_id"];
-		val dv_i = e.attrs["index"];
-		val c = dv_c.as_string();
-		val i = dv_i.as_int();
-		match c {
-			Some(s) => {
-				if s != "std.containers:Array" {
-					return 20;
-				}
-			},
-			None => {
-				return 21;
-			},
+		// Slice 7a: typed catch projection on the synthesized
+		// pub error fields.  Replaces the retired
+		// `e.attrs[k]` DV-typed view.
+		if e.container_id != "std.containers:Array" {
+			return 20;
 		}
-		match i {
-			Some(v) => {
-				if v != 3 {
-					return 22;
-				}
-			},
-			None => {
-				return 23;
-			},
+		if e.index != 3 {
+			return 22;
 		}
 		return 0;
 	}

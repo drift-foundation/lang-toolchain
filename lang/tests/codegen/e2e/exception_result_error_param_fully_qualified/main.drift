@@ -1,22 +1,17 @@
 module m;
 
-fn code_from_error(e: std.err.ResultError) nothrow -> Int {
-	val dv = e.attrs["dv"];
-	val opt = dv.as_int();
-	match opt {
-		Some(v) => { return v; },
-		None => { return -1; },
-		default => { return -2; }
-	}
-}
+import std.core as core;
 
 fn fail() -> Int {
-	throw std.err:ResultError(dv = 7);
+	throw std.err:ResultError(diag_json = core.diagnostic_json_int(7));
 }
 
 pub fn main() nothrow -> Int {
+	// Slice 7a: ResultError carries `diag_json: String`.  Pins the
+	// round-trip via typed catch projection on the synthesized field;
+	// marker payload is the canonical JSON-text form of integer 7.
 	val v = try fail() catch std.err:ResultError(e) {
-		code_from_error(e)
+		(e.diag_json == "7") ? 7 : -1
 	} catch {
 		99
 	};

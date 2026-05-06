@@ -30,7 +30,7 @@ fn run_main() -> Int {
 	var t = conc.spawn_cb(core.callback0(| | captures(copy io_t) nothrow => {
 		return use_timeout(io_t);
 	}));
-	return t.join().on_error(|_e| => { throw std.err:ResultError(dv = 1); });
+	return t.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(1)); });
 }
 
 pub fn main() nothrow -> Int {

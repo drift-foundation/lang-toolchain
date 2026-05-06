@@ -8,26 +8,28 @@ import std.io as io;
 import std.net as net;
 import std.time as time;
 import std.err;
+import std.parse as parse;
 
 const WARMUP: Int = 20;
 const ITERS: Int = 1000;
 
-fn code_from_error(e: std.err.ResultError) nothrow -> Int {
-	val dv = e.attrs["dv"];
-	val opt = dv.as_int();
-	match opt {
-		Some(v) => { return v; },
-		None => { return 90; }
+// Slice 7a: ResultError carries `diag_json: String`.  This helper
+// receives the diag_json String from the catch binder's typed
+// projection and parses it back to Int.
+fn code_from_error(diag_json: String) nothrow -> Int {
+	match parse.parse_int(diag_json) {
+		Ok(v) => { return v; },
+		Err(_) => { return 90; }
 	}
 }
 
 fn server_handler(listener: net.TcpListener, n: Int, timeout: conc.Duration) -> Int {
-	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -10); });
+	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-10)); });
 	var buf = io.buffer(64);
 	var i = 0;
 	while i < n {
-		s.read(&mut buf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -11); });
-		s.write(&buf, timeout).on_error(|_e| => { throw std.err:ResultError(dv = -12); });
+		s.read(&mut buf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-11)); });
+		s.write(&buf, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-12)); });
 		i = i + 1;
 	}
 	val _ = s.close(timeout);
@@ -38,17 +40,17 @@ fn run_bench() -> Int {
 	val io_t = conc.Duration(millis = 10000);
 	val total = WARMUP + ITERS;
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(dv = 101); });
+	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(101)); });
 	val port = listener.local_port();
 	// Server VT: accept one connection, echo total request/response pairs.
 	var server = conc.spawn(| | captures(move listener, copy total, copy io_t) => {
 		return try server_handler(move listener, total, io_t) catch std.err:ResultError(e) {
-			code_from_error(e)
+			code_from_error(e.diag_json)
 		} catch { 92 };
 	});
 	// Client: connect once, run warmup + measured iterations on same connection.
 	var caddr = net.socket_addr("127.0.0.1", port);
-	val cs = net.connect(&caddr, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -20); });
+	val cs = net.connect(&caddr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-20)); });
 	val byte = cast<Byte>(65);
 	var wbuf = io.buffer(64);
 	var j = 0;
@@ -60,29 +62,29 @@ fn run_bench() -> Int {
 	// Warmup.
 	var wi = 0;
 	while wi < WARMUP {
-		cs.write(&wbuf, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -21); });
-		cs.read(&mut rbuf, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -22); });
+		cs.write(&wbuf, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-21)); });
+		cs.read(&mut rbuf, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-22)); });
 		wi = wi + 1;
 	}
 	// Measured.
 	val t0 = time.now_monotonic();
 	var mi = 0;
 	while mi < ITERS {
-		cs.write(&wbuf, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -31); });
-		cs.read(&mut rbuf, io_t).on_error(|_e| => { throw std.err:ResultError(dv = -32); });
+		cs.write(&wbuf, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-31)); });
+		cs.read(&mut rbuf, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-32)); });
 		mi = mi + 1;
 	}
 	val elapsed = time.elapsed_ms(&t0);
 	console.eprintln("[bench] vt_loopback " + format.format_int(ITERS) + " iters " + format.format_int(elapsed) + " ms");
 	val _ = cs.close(io_t);
-	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(dv = 51); });
+	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(51)); });
 	if sr != 0 { return sr; }
 	return 0;
 }
 
 pub fn main() nothrow -> Int {
 	return try run_bench() catch std.err:ResultError(e) {
-		1000 + code_from_error(e)
+		1000 + code_from_error(e.diag_json)
 	} catch {
 		-777
 	};

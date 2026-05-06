@@ -80,9 +80,11 @@ use trait log.Debuggable;
 
 
 # ── Probe 1 ─ to_debug_json_text exists + dispatchable ─────────────
+#
+# Slice 7a (0.31.62, 2026-05-05): flipped live alongside the std.log
+# Debuggable migration to `to_debug_json_text -> String`.
 
 
-@_SLICE_5_PENDING
 def test_debuggable_method_callable_on_primitive(tmp_path, capsys):
 	"""`Debuggable.to_debug_json_text` is callable on stdlib
 	primitives (Int).  Pins that the migrated trait shape exists
@@ -98,9 +100,15 @@ fn main() nothrow -> Int {
 
 
 # ── Probe 2 ─ user Debuggable impl compiles ───────────────────────
+#
+# Slice 7a (0.31.62, 2026-05-05): flipped live with the std.log
+# Debuggable migration to JSON-text return.  Note: the impl block
+# uses `implement log.Debuggable for UserId` (qualified) — bare
+# `implement Debuggable for UserId` after `use trait log.Debuggable`
+# is not currently supported by the impl-target resolver.  Method
+# dispatch (`u.to_debug_json_text()`) still uses the `use trait`.
 
 
-@_SLICE_5_PENDING
 def test_user_debuggable_impl_compiles(tmp_path, capsys):
 	"""User `implement Debuggable for T` with the new method shape
 	compiles.  Body returns canonical JSON text via std.core
@@ -110,7 +118,7 @@ struct UserId {
 \tvalue: Int,
 }
 
-implement Debuggable for UserId {
+implement log.Debuggable for UserId {
 \tpub fn to_debug_json_text(self: &UserId) nothrow -> String {
 \t\treturn core.diagnostic_json_int(self.value);
 \t}
@@ -126,9 +134,18 @@ fn main() nothrow -> Int {
 
 
 # ── Probe 3 ─ old to_debug shape rejected ──────────────────────────
+#
+# Slice 7a (0.31.62, 2026-05-05): flipped live with the
+# `_reject_deprecated_trait_method_shapes` workspace pre-scan rejection.
+# Note: the impl block uses `implement log.Debuggable` (qualified) so
+# the trait identity resolves to std.log.Debuggable; bare `implement
+# Debuggable` after `use trait log.Debuggable` does not currently
+# resolve through the impl-target lookup.  The `to_debug` method body
+# returns `Int` rather than `core.DiagnosticValue` to avoid the
+# overlapping `E_DV_PUBLIC_REMOVED` rejection — the diagnostic under
+# test is keyed on (trait, method name), not return type.
 
 
-@_SLICE_5_PENDING
 def test_old_to_debug_shape_rejected(tmp_path, capsys):
 	"""User impl using the OLD trait method name `to_debug`
 	returning `DiagnosticValue` is rejected with
@@ -139,9 +156,9 @@ struct UserId {
 \tvalue: Int,
 }
 
-implement Debuggable for UserId {
-\tpub fn to_debug(self: &UserId) nothrow -> core.DiagnosticValue {
-\t\treturn core.DiagnosticValue::Int(self.value);
+implement log.Debuggable for UserId {
+\tpub fn to_debug(self: &UserId) nothrow -> Int {
+\t\treturn self.value;
 \t}
 }
 

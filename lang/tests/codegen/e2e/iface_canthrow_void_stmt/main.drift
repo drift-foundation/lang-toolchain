@@ -19,7 +19,7 @@ fn invoke_void(cb: core.CallbackThrow1<Int, Void>) -> Void {
 
 fn thrower(n: Int) -> Void {
 	if n < 0 {
-		throw std.err:ResultError(dv = core.DiagnosticValue::Int(n));
+		throw std.err:ResultError(diag_json = core.diagnostic_json_int(n));
 	}
 }
 

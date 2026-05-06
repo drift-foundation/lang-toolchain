@@ -1,4 +1,0 @@
-{
-  "description": "K28 review regression. DV intrinsic methods (.entries / .len / .get) called on a projected place (`holder.dv.entries()`) where holder owns a non-empty DV::Object with heap-allocated keys. Holder must drop cleanly at scope end without UAF/double-free under DRIFT_MEMCHECK=1.",
-  "exit_code": 0
-}

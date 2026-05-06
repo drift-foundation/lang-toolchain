@@ -1516,6 +1516,22 @@ class Checker:
 			err_def = self.table.get(err_ty)
 			return err_def.kind is TypeKind.ERROR
 
+		def _current_fn_is_stdlib(self) -> bool:
+			"""Slice 7a: distinguish user code from stdlib internals to gate
+			the `Error.attrs[k]` / `Error.captures[fr][k]` rejections.  The
+			DV-typed views are kept alive as a compiler-internal bridge for
+			Slice 7a; only user-source access is rejected."""
+			cur = getattr(self, "current_fn", None)
+			if cur is None:
+				return False
+			sig = getattr(cur, "signature", None)
+			if sig is None:
+				return False
+			mod = getattr(sig, "module", None)
+			if not isinstance(mod, str):
+				return False
+			return mod.startswith("std.") or mod == "lang.thread"
+
 		def _append_diag(self, diag: Diagnostic) -> None:
 			if self.diagnostics is not None:
 				self.diagnostics.append(diag)
@@ -2074,6 +2090,19 @@ class Checker:
 						if is_err is None:
 							return None
 						if is_err:
+							if not self._current_fn_is_stdlib():
+								self._append_diag(
+									_chk_diag(
+										message=(
+											"`Error.captures[...]` is removed in 0.31.62; "
+											"user code may not access the DV-typed captures view "
+											"— use `e.context.encode_compact()` for canonical JSON"
+										),
+										severity="error",
+										span=None,
+										code="E_EXC_CAPTURES_REMOVED",
+									)
+								)
 							frame_ty = self._infer_expr_type(expr.index)
 							if frame_ty is not None:
 								frame_def = self.table.get(frame_ty)
@@ -2099,6 +2128,19 @@ class Checker:
 						if is_err is None:
 							return None
 						if is_err:
+							if not self._current_fn_is_stdlib():
+								self._append_diag(
+									_chk_diag(
+										message=(
+											"`Error.captures[...]` is removed in 0.31.62; "
+											"user code may not access the DV-typed captures view "
+											"— use `e.context.encode_compact()` for canonical JSON"
+										),
+										severity="error",
+										span=None,
+										code="E_EXC_CAPTURES_REMOVED",
+									)
+								)
 							frame_ty = self._infer_expr_type(subject.projections[idx + 1].index)
 							if frame_ty is not None:
 								frame_def = self.table.get(frame_ty)
@@ -2131,6 +2173,19 @@ class Checker:
 					if is_err is None:
 						return None
 					if is_err:
+						if not self._current_fn_is_stdlib():
+							self._append_diag(
+								_chk_diag(
+									message=(
+										"`Error.captures[...]` is removed in 0.31.62; "
+										"user code may not access the DV-typed captures view "
+										"— use `e.context.encode_compact()` for canonical JSON"
+									),
+									severity="error",
+									span=None,
+									code="E_EXC_CAPTURES_REMOVED",
+								)
+							)
 						frame_ty = self._infer_expr_type(expr.subject.index)
 						if frame_ty is not None:
 							frame_def = self.table.get(frame_ty)
@@ -2159,6 +2214,19 @@ class Checker:
 					if is_err is None:
 						return None
 					if is_err:
+						if not self._current_fn_is_stdlib():
+							self._append_diag(
+								_chk_diag(
+									message=(
+										"`Error.captures[...]` is removed in 0.31.62; "
+										"user code may not access the DV-typed captures view "
+										"— use `e.context.encode_compact()` for canonical JSON"
+									),
+									severity="error",
+									span=None,
+									code="E_EXC_CAPTURES_REMOVED",
+								)
+							)
 						frame_ty = self._infer_expr_type(expr.index)
 						if frame_ty is not None:
 							frame_def = self.table.get(frame_ty)
@@ -2177,6 +2245,19 @@ class Checker:
 					if is_err is None:
 						return None
 					if is_err:
+						if not self._current_fn_is_stdlib():
+							self._append_diag(
+								_chk_diag(
+									message=(
+										"`Error.attrs[...]` is removed in 0.31.62; "
+										"user code may not access the DV-typed attrs view "
+										"— use `e.params.get(k)` (typed cursor) for params"
+									),
+									severity="error",
+									span=None,
+									code="E_EXC_ATTRS_REMOVED",
+								)
+							)
 						idx_ty = self._infer_expr_type(expr.index)
 						if idx_ty is not None:
 							idx_def = self.table.get(idx_ty)

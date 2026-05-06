@@ -2,7 +2,7 @@ module main;
 
 import std.core as core;
 
-error AppError { status: String, tag: String, field: String, reason: String }
+pub error AppError { status: String, tag: String, field: String, reason: String }
 fn might_fail() -> Int {
 	throw AppError(status = "FAILED", tag = "test", field = "x", reason = "bad");
 }
@@ -14,22 +14,11 @@ fn main() nothrow -> Int {
 	var err_reason = "";
 
 	val result = try might_fail() catch AppError(e) {
-		match e.attrs["status"].as_string() {
-			Some(s) => { result_state = s; },
-			None => { result_state = "FAILED"; }
-		}
-		match e.attrs["tag"].as_string() {
-			Some(t) => { err_tag = t; },
-			None => {}
-		}
-		match e.attrs["field"].as_string() {
-			Some(f) => { err_field = f; },
-			None => {}
-		}
-		match e.attrs["reason"].as_string() {
-			Some(r) => { err_reason = r; },
-			None => {}
-		}
+		// Slice 7a: typed catch projection on synthesized fields.
+		result_state = e.status;
+		err_tag = e.tag;
+		err_field = e.field;
+		err_reason = e.reason;
 		0
 	} catch { 3 };
 	return result;

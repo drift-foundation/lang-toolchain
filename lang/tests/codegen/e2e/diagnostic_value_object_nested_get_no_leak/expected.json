@@ -1,7 +1,0 @@
-{
-  "description": "DiagnosticValue object/get/as_object path should not leak under alloc tracking",
-  "exit_code": 0,
-  "stdout": "",
-  "stderr": "",
-  "alloc_track_leak": true
-}
