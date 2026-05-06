@@ -494,7 +494,8 @@ def test_abi14_binary_contains_no_dv_runtime_symbols(tmp_path: Path) -> None:
 	  - `__exc_attrs_get_dv`
 	  - `__exc_captures_get_dv`
 	  - `drift_error_new_with_payload`
-	  - `drift_diag_from_int` / `drift_diag_from_string` aliases
+	  - `drift_diag_from_*` alias family (`_bool` / `_int` /
+	    `_float` / `_string`)
 
 	Builds a non-trivial sample with a `pub error` throw + catch to
 	exercise the throw lowering path that historically went through

@@ -72,11 +72,23 @@ ptrdiff_t params_build_test(
 @pytest.fixture(scope="module")
 def trampoline_lib(tmp_path_factory):
 	"""Build a tiny .so that wraps `drift_bounds_check_params_json_build`
-	for direct ctypes access.  `array_runtime.c` references runtime
-	symbols (drift_error_new, drift_diag_from_string, …) we do not
-	need to call from the helper; stub them so the .so loads cleanly.
-	`-Wl,--no-undefined` makes any missing symbol a link-time error
-	rather than a dlopen-time surprise."""
+	for direct ctypes access.
+
+	`array_runtime.c` references the live ABI 14 runtime surface
+	(`drift_error_new`, `drift_error_set_params_json`,
+	`drift_error_raise`, `drift_string_from_utf8_bytes`) — stub
+	those so the .so loads cleanly.  `-Wl,--no-undefined` makes
+	any missing symbol a link-time error rather than a dlopen-time
+	surprise.
+
+	Slice 7c-1 (ABI 14, 2026-05-06): the deleted DV-helper stubs
+	(`drift_diag_from_*`, `drift_error_add_attr_dv`) are
+	intentionally NOT provided here.  If `array_runtime.c`
+	accidentally reintroduces a reference to any of those, the
+	`-Wl,--no-undefined` link surfaces it as a missing symbol —
+	without these stubs hiding the regression.  This is part of
+	the same wire-cut guard as
+	`test_abi_version_stamp.py::test_abi14_binary_contains_no_dv_runtime_symbols`."""
 	clang = shutil.which("clang") or shutil.which("cc")
 	if clang is None:
 		pytest.skip("no clang/cc available")
@@ -93,9 +105,6 @@ struct DriftError;
 typedef unsigned long long drift_error_code_t;
 
 struct DriftError *drift_error_new(drift_error_code_t c, struct DriftString f) { (void)c; (void)f; return 0; }
-struct DriftDiagnosticValue drift_diag_from_string(struct DriftString s) { (void)s; struct DriftDiagnosticValue v = {0}; return v; }
-struct DriftDiagnosticValue drift_diag_from_int(ptrdiff_t i) { (void)i; struct DriftDiagnosticValue v = {0}; return v; }
-void drift_error_add_attr_dv(struct DriftError *e, struct DriftString k, const struct DriftDiagnosticValue *v) { (void)e; (void)k; (void)v; }
 void drift_error_set_params_json(struct DriftError *e, struct DriftString p) { (void)e; (void)p; }
 __attribute__((noreturn)) void drift_error_raise(struct DriftError *e) { (void)e; for(;;); }
 struct DriftString drift_string_from_utf8_bytes(const char *d, ptrdiff_t l) { struct DriftString s; s.len = l; s.data = (char *)d; return s; }
