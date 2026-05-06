@@ -21,6 +21,15 @@ class StructDef:
     require: Optional["RequireClause"] = None
     type_params: List[str] = field(default_factory=list)
     type_param_locs: List["Located"] = field(default_factory=list)
+    # Slice 5 Path A (LANGUAGE_BUG follow-up, 2026-05-06): True for
+    # the parallel StructDef that `pub error E { ... }` co-registers
+    # alongside its ExceptionDef so value-type machinery (constructor,
+    # field access, pass-by-value, Copy/Frozen/ConstShare composition)
+    # routes through the struct path.  This decl is COMPILER-INTERNAL
+    # — it is NOT a source struct decl and must not appear in
+    # source-decl-counting tests, export validation as a struct, or
+    # any other place that asks "did the user write `struct X`?".
+    is_synthesized_for_error: bool = False
 
 
 @dataclass

@@ -1377,6 +1377,7 @@ def _struct_from_error_decl(exc: ExceptionDef) -> StructDef:
         loc=exc.loc,
         is_pub=exc.is_pub,
         test_build_only=exc.test_build_only,
+        is_synthesized_for_error=True,
     )
 
 

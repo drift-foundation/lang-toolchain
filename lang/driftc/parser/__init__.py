@@ -1261,6 +1261,7 @@ def _synthesize_auto_throw_impls(
 	*,
 	module_id: str,
 	module_aliases: dict[str, str] | None = None,
+	blocked_error_names: set[str] | None = None,
 ) -> None:
 	"""Slice 5: auto-generate `implement core.Throw for E` for every
 	`pub error E` declaration in the module unless an explicit
@@ -1310,9 +1311,25 @@ def _synthesize_auto_throw_impls(
 		if target is None or getattr(target, "name", None) is None:
 			continue
 		manual_throw_targets.add(target.name)
+	# LANGUAGE_BUG follow-up (2026-05-06): dedupe by error name so a
+	# duplicate `error Boom { ... }` decl does not produce two
+	# synthesized `Throw for Boom` impls (which would surface as a
+	# noisy `duplicate impl for trait 'std.core.Throw' on 'main.Boom'`
+	# cascade on top of the catalog's `duplicate exception 'Boom'`
+	# diagnostic).  Also skip names blocked by an upstream Path-A
+	# struct-face collision with a user-source struct (Finding 1) —
+	# the synthesized Throw body would reference a target whose
+	# struct face is gone.
+	_blocked = blocked_error_names or set()
+	_seen_throw_targets: set[str] = set()
 	for exc in exceptions:
 		if exc.name in manual_throw_targets:
 			continue
+		if exc.name in _blocked:
+			continue
+		if exc.name in _seen_throw_targets:
+			continue
+		_seen_throw_targets.add(exc.name)
 		loc = exc.loc
 		target = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
 		trait = parser_ast.TypeExpr(name="Throw", module_id="std.core", loc=loc)
@@ -1664,6 +1681,7 @@ def _synthesize_auto_diagnostic_impls(
 	exception_kinds: dict[str, str] | None = None,
 	exception_pub: dict[str, bool] | None = None,
 	diagnostics: list[Diagnostic] | None = None,
+	blocked_error_names: set[str] | None = None,
 ) -> None:
 	"""Slice 5 (Phase 5a): auto-generate `implement core.Diagnostic for E`
 	for every `error E` in the module whose fields are all
@@ -1771,9 +1789,25 @@ def _synthesize_auto_diagnostic_impls(
 			if exc.name in manual_diag_targets_local:
 				manual_owners_set.add(f"{module_id}:{exc.name}")
 	synthesized_any = False
+	# LANGUAGE_BUG follow-up (2026-05-06): dedupe by error name +
+	# skip blocked names so duplicate `error Boom { ... }` decls
+	# don't cascade into a second `Diagnostic for Boom` impl
+	# (which would surface as a `duplicate impl for trait
+	# 'std.core.Diagnostic'` error on top of the catalog's
+	# `duplicate exception 'Boom'` diagnostic), and so an error
+	# name whose Path-A struct face was suppressed by a user-source
+	# struct collision (Finding 1) doesn't get a Diagnostic impl
+	# pointing at the now-missing struct face.
+	_blocked = blocked_error_names or set()
+	_seen_diag_targets: set[str] = set()
 	for exc in exceptions:
 		if exc.name in manual_diag_targets_local:
 			continue
+		if exc.name in _blocked:
+			continue
+		if exc.name in _seen_diag_targets:
+			continue
+		_seen_diag_targets.add(exc.name)
 		loc = exc.loc
 		# Projectability gate.  On any non-projectable field, emit a
 		# diagnostic at the field site and skip synthesis for this E.
@@ -4160,9 +4194,42 @@ def parse_drift_workspace_to_hir(
 	# are idempotent when the kind already matches, so later per-module lowering
 	# can safely re-run its local declaration passes.
 	for _mid, _prog in merged_programs.items():
+		# LANGUAGE_BUG follow-up (2026-05-06): apply the same
+		# collision dedupe as the per-module lowering pass below
+		# (see the longer comment there for the classification +
+		# 3-by-3 matrix).  Without this, the workspace pre-scan
+		# crashes BEFORE the per-module pass even runs, leaking a
+		# raw `field list mismatch` ValueError instead of a clean
+		# user diagnostic.  The per-module pass below is the
+		# authoritative diagnostic emitter for these classes; the
+		# pre-scan dedupes silently so registration completes.
+		_pre_seen_source_struct: set[str] = set()
+		_pre_seen_synth: set[str] = set()
 		for _s in getattr(_prog, "structs", []) or []:
 			if _reject_reserved_nominal_type(getattr(_s, "name", ""), loc=getattr(_s, "loc", None), diagnostics=diagnostics):
 				continue
+			if getattr(_s, "is_synthesized_for_error", False):
+				if _s.name in _pre_seen_source_struct:
+					# Source struct already occupies this name —
+					# per-module lowerer emits
+					# `E_DUP_TYPE_NAME_ERROR_VS_STRUCT`.
+					continue
+				if _s.name in _pre_seen_synth:
+					# Duplicate `error` decl; per-module lowerer
+					# emits `duplicate exception` via the catalog.
+					continue
+				_pre_seen_synth.add(_s.name)
+			else:
+				if _s.name in _pre_seen_source_struct:
+					# Duplicate source struct decl; per-module
+					# lowerer emits `E_DUP_SOURCE_STRUCT_NAME`.
+					continue
+				if _s.name in _pre_seen_synth:
+					# Synthesized error struct face already used
+					# this name in this module; per-module lowerer
+					# emits `E_DUP_TYPE_NAME_ERROR_VS_STRUCT`.
+					continue
+				_pre_seen_source_struct.add(_s.name)
 			try:
 				struct_id = shared_type_table.declare_struct(
 					_mid,
@@ -5164,7 +5231,109 @@ def _lower_parsed_program_to_hir(
 	lowerer._module_aliases = module_aliases
 	module_function_names: set[str] = {fn.name for fn in getattr(prog, "functions", []) or []}
 	exception_schemas: dict[str, tuple[str, list[str]]] = {}
-	struct_defs = list(getattr(prog, "structs", []) or [])
+	# LANGUAGE_BUG follow-ups (2026-05-06): collision classes in the
+	# pub-error Path-A struct face AND in plain user-source struct
+	# decls.  The classification (per K's review-loop step 1):
+	#
+	#   - source struct E             (StructDef, is_synthesized_for_error=False)
+	#   - source error E              (ExceptionDef, kind="error")
+	#   - synthesized struct face for error E
+	#                                 (StructDef, is_synthesized_for_error=True)
+	#
+	# The 3-by-3 collision space (per K's review-loop step 2) has
+	# the following crash classes that previously leaked
+	# `field list mismatch` ValueError text into user diagnostics:
+	#
+	#   (a) source struct E + source struct E (different fields)
+	#   (b) error E + error E (catalog catches name dup, but synth
+	#       struct face dup crashes schema registration)
+	#   (c) source struct E + error E (source vs synth struct face,
+	#       different fields)
+	#
+	# Strategy:
+	#   1. Walk source structs first; emit `E_DUP_SOURCE_STRUCT_NAME`
+	#      at second-and-later occurrences and skip them from
+	#      registration so the type table sees only the first
+	#      (authoritative) decl.
+	#   2. Walk synthesized error struct faces; skip when the name
+	#      collides with (i) the surviving source struct (emit
+	#      `E_DUP_TYPE_NAME_ERROR_VS_STRUCT`) or (ii) a previously-
+	#      seen synthesized face (silent — the catalog surfaces its
+	#      own `duplicate exception` diagnostic).
+	#
+	# Pinned by:
+	#   - `test_parser_pub_decls.py::test_parse_pub_top_level_decls`
+	#   - `test_parser_exceptions.py::test_duplicate_exception_reports_diagnostic`
+	#   - `test_parser_exceptions.py::test_struct_and_error_same_name_reports_clean_diagnostic`
+	#   - `test_parser_exceptions.py::test_duplicate_pub_error_does_not_cascade_into_synth_impls`
+	#   - `test_parser_structs.py::test_duplicate_source_struct_reports_clean_diagnostic`
+	_struct_defs_raw = list(getattr(prog, "structs", []) or [])
+	# Track error names whose synthesized face was suppressed because
+	# a user-source struct of the same name exists, so downstream
+	# Throw / Diagnostic synthesis can also skip them (otherwise the
+	# auto-impls reference a target whose struct face no longer
+	# matches the error's field schema, producing a cascade of
+	# spurious "trait method body type mismatch" diagnostics).
+	_blocked_error_names: set[str] = set()
+	_seen_source_struct_names: set[str] = set()
+	_seen_synth_struct_names: set[str] = set()
+	struct_defs = []
+	for _s in _struct_defs_raw:
+		if getattr(_s, "is_synthesized_for_error", False):
+			if _s.name in _seen_source_struct_names:
+				diagnostics.append(_p_diag(
+					message=(
+						f"type name '{_s.name}' is already declared as a struct in "
+						f"this module — `error {_s.name}` cannot share the name"
+					),
+					severity="error",
+					span=Span.from_loc(getattr(_s, "loc", None)),
+					code="E_DUP_TYPE_NAME_ERROR_VS_STRUCT",
+				))
+				_blocked_error_names.add(_s.name)
+				continue
+			if _s.name in _seen_synth_struct_names:
+				continue
+			_seen_synth_struct_names.add(_s.name)
+		else:
+			# Source struct decl.  Detect duplicate source struct
+			# names AND collisions against an already-registered
+			# synthesized error struct face BEFORE registration so
+			# the type table's `define_struct_schema_fields` doesn't
+			# trip on mismatched schemas with a leaked
+			# `field list mismatch` ValueError.  Three cases:
+			#   - source struct E + source struct E (same/different
+			#     fields): clean `duplicate struct` diagnostic.
+			#   - error E (first) + source struct E (second): clean
+			#     `E_DUP_TYPE_NAME_ERROR_VS_STRUCT` diagnostic at
+			#     the source struct site (the synth face already
+			#     occupied the name; the source struct is the
+			#     intruder in this declaration order).
+			if _s.name in _seen_source_struct_names:
+				diagnostics.append(_p_diag(
+					message=f"duplicate struct '{_s.name}' in module '{module_id}'",
+					severity="error",
+					span=Span.from_loc(getattr(_s, "loc", None)),
+					code="E_DUP_SOURCE_STRUCT_NAME",
+				))
+				continue
+			if _s.name in _seen_synth_struct_names:
+				# A synthesized error struct face was already
+				# registered for this name; the source struct
+				# cannot share it.  Block the source struct from
+				# registration — the user must rename one of them.
+				diagnostics.append(_p_diag(
+					message=(
+						f"type name '{_s.name}' is already declared as an error in "
+						f"this module — `struct {_s.name}` cannot share the name"
+					),
+					severity="error",
+					span=Span.from_loc(getattr(_s, "loc", None)),
+					code="E_DUP_TYPE_NAME_ERROR_VS_STRUCT",
+				))
+				continue
+			_seen_source_struct_names.add(_s.name)
+		struct_defs.append(_s)
 	variant_defs = list(getattr(prog, "variants", []) or [])
 	interface_defs = list(getattr(prog, "interfaces", []) or [])
 	type_alias_defs = list(getattr(prog, "type_aliases", []) or [])
@@ -5205,7 +5374,10 @@ def _lower_parsed_program_to_hir(
 	# `build_trait_world` so the synthesized impls participate in trait-world
 	# construction and `Result<T, E>.or_throw()` resolves the `require E is Throw`
 	# clause cleanly without forcing users to hand-write boilerplate.
-	_synthesize_auto_throw_impls(prog, module_id=module_id, module_aliases=module_aliases)
+	_synthesize_auto_throw_impls(
+		prog, module_id=module_id, module_aliases=module_aliases,
+		blocked_error_names=_blocked_error_names,
+	)
 	# Slice 7a: reject legacy `Diagnostic.to_diag` / `Debuggable.to_debug`
 	# impl method shapes BEFORE synthesis runs so the rejection points at
 	# the user's offending decl rather than a downstream cascade (e.g.
@@ -5229,6 +5401,7 @@ def _lower_parsed_program_to_hir(
 		exception_kinds=type_table.exception_kinds,
 		exception_pub=type_table.exception_pub,
 		diagnostics=diagnostics,
+		blocked_error_names=_blocked_error_names,
 	)
 	# Build a TypeTable early so we can register user-defined type names (structs)
 	# before resolving function signatures. This prevents `resolve_opaque_type`
