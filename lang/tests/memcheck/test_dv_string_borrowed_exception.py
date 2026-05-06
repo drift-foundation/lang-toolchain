@@ -1,12 +1,20 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Regression: DiagnosticValue::String(local_var) in exception throw
-must retain the string so the error payload survives scope exit.
+"""Regression: a String field on a thrown `error E` referencing a
+heap-backed local must retain the string so the error payload
+survives scope exit.
 
-The borrowed path (exception fields referencing live locals) must use
-drift_dv_string with retain.  Without retain, the local's scope-exit
-release frees the string while the error still holds it → UAF.
-
-This test must PASS both before and after the MIR ownership split.
+Slice 7b update: pre-Slice 7a the throw lowering wrapped the
+String value in `DiagnosticValue::String(local_var)` and relied on
+`drift_dv_string` to bump the refcount; without that bump, the
+local's scope-exit release would free the string while the error
+still held it (UAF).  Slice 7b retired that DV path — the throw
+lowering now constructs a Path-A `Info` struct from the String
+local, then calls `to_json_text(&Info)` on it.  The struct
+constructor consumes the String value (one owner — the struct);
+the string survives across scope exit because it's now owned by
+the struct, which is owned by the error envelope's params JSON.
+This test pins both the no-leak and the no-UAF properties end-to-
+end (valgrind clean) on the new path.
 """
 from __future__ import annotations
 

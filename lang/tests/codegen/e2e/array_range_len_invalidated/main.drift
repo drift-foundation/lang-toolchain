@@ -8,17 +8,20 @@ fn main() nothrow -> Int {
 	var r = arr.range();
 	arr.push(3);
 	val out = try iter.RandomAccessReadable::len(&r) catch std.err:IteratorInvalidated(e) {
-		// Slice 7a: typed catch projection on the `container_id` String
-		// field.  The `op_id` field is `IteratorOpId` (a variant) — its
-		// throw-side params-JSON projection currently double-quotes the
-		// numeric tag (the auto-promotion path wraps the variant's
-		// `to_json_text` output in `DV::String`, which then JSON-quotes
-		// the already-canonical numeric body).  That's a separate
-		// variant-field projection bug, out of scope for Slice 7a; this
-		// test pins the container_id round-trip and the
-		// IteratorInvalidated catch path while the op_id tag check
-		// stays deferred.
-		(e.container_id != "std.containers:Array") ? 10 : 0
+		// Slice 7b: variant-field projection through params JSON now
+		// splices the canonical numeric tag verbatim (no DV-wrap re-
+		// encoding), so `op_id` reads back as a bare integer.  Len → 2
+		// per IteratorOpId's manual `Diagnostic` impl in std.err.
+		// container_id is a synthesized String field (typed catch
+		// scalar projection); op_id is a variant, accessed via the
+		// params cursor.
+		val cid_bad = (e.container_id != "std.containers:Array");
+		val op = match e.params.get("op_id").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		val op_bad = (op != 2);
+		(cid_bad ? 10 : 0) + (op_bad ? 20 : 0)
 	} catch {
 		99
 	};

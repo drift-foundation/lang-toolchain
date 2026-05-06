@@ -1,8 +1,8 @@
 {
-  "description": "e2e: exception attrs reject nonprimitive",
+  "description": "e2e: exception attrs reject nonprimitive — Slice 7b (2026-05-06) routes the rejection through the field-TYPE check at HExceptionInit type-check time (E_THROW_FIELD_TYPE_MISMATCH) instead of the legacy is_diagnostic walk in the checker validator pass.  The new diagnostic identifies the field name and the actual vs declared types — strictly better than the old 'must implement Diagnostic' message.",
   "diagnostics": [
     {
-      "message_contains": "exception field value must implement Diagnostic"
+      "message_contains": "E(...) field 'code' expects Int but got S"
     }
   ],
   "exit_code": 1

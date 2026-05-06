@@ -9,7 +9,7 @@ distinction is load-bearing for code review:
 
 | Spelling | Type requirement | Semantic | When to use |
 |---|---|---|---|
-| `captures(copy x)` | `T: Copy` | Value-like duplicate. The new owner is independent; aliasing is invisible. | `Int`, `String`, `DiagnosticValue`, `Optional<T>` over Copy. The user is asking for a value, not a handle. |
+| `captures(copy x)` | `T: Copy` | Value-like duplicate. The new owner is independent; aliasing is invisible. | `Int`, `String`, `Optional<T>` over Copy. The user is asking for a value, not a handle. |
 | `captures(move x)` | `T: !Copy` | Ownership transfer. The original `x` binding is consumed and unusable after the lambda is constructed. | One-owner-only types (`MutexGuard<T>`, `VirtualThread<T>`); also works for `Arc<T>` if you do not need `x` to survive the closure. |
 | `captures(share x)` | `T: Share` | A second OWNER of the same underlying resource. The original `x` remains usable; both owners hold the resource alive. **Aliasing is real**: mutations through either owner are observable through the other. | `Arc<T>` (and any user type implementing `std.core.shareable.Share`) when you need both the closure and the outer scope to keep using `x`. |
 
@@ -1108,79 +1108,99 @@ where type information is still available, and framework catch arms receive the
 exception type they already understand. The framework does not parse diagnostic
 strings or guess from generic payloads.
 
-### Structured exception attrs with `DiagnosticEntry`
+### Structured exception attrs with `pub error` + manual `Diagnostic`
 
 When a framework exception needs to carry structured field-level detail (e.g.
-validation errors per input field), use `core.diagnostic_entry` to build an
-`Array<core.DiagnosticEntry>` and pass it through a `DiagnosticValue::Object`.
+validation errors per input field), declare a `pub error` with the fields you
+need and provide a manual `core.Diagnostic` impl that projects the structured
+shape to canonical JSON text.  The throw envelope's `params` JSON is what
+catch-side code reads via `e.params.get(key).as_*()`.
 
-Create entries with the helper function, not the struct constructor directly:
+> Background: `DiagnosticValue` / `DiagnosticEntry` / `core.diagnostic_entry`
+> / `e.attrs["..."]` were the pre-Slice 7a path.  Slice 7a removed the public
+> `DiagnosticValue` surface and Slice 7b retired the `e.attrs[k]` reader; user
+> code should not reference them.  Use `pub error` + `core.Diagnostic` instead.
 
-```drift
-import std.core as core;
-
-val field = core.diagnostic_entry("email", DiagnosticValue::String("invalid-format"));
-```
-
-`core.diagnostic_entry(key, value)` returns a `core.DiagnosticEntry` with
-public fields `key: String` and `value: DiagnosticValue`.
-
-#### Throw side: building the fields array
-
-Extend the framework error struct to carry a `fields` array and wrap it in
-`DiagnosticValue::Object` when throwing:
+#### Throw side: declare the error and project to JSON
 
 ```drift
 import std.core as core;
-import std.mem as mem;
+import std.json as json;
 
-pub exception RestBadRequest(tag: String, message: String, fields: DiagnosticValue);
-pub exception RestInternal(tag: String, message: String, fields: DiagnosticValue);
+use trait core.Diagnostic;
 
-pub struct RestError {
-    pub status: Int,
-    pub tag: String,
-    pub message: String,
-    pub fields: Array<core.DiagnosticEntry>,
+pub error RestBadRequest {
+    tag: String,
+    message: String,
+    fields: Array<FieldError>,
 }
 
-implement core.Throw for RestError {
-    pub fn throw_self(var self: RestError) throws {
-        var empty: Array<core.DiagnosticEntry> = [];
-        val fields = mem.replace(&mut self.fields, move empty);
-        val dv = DiagnosticValue::Object(move fields);
-        if self.status == 400 {
-            throw RestBadRequest(tag = self.tag, message = self.message, fields = dv);
+pub error RestInternal {
+    tag: String,
+    message: String,
+}
+
+pub struct FieldError {
+    pub field: String,
+    pub code: String,
+}
+
+// `Array<FieldError>` is not auto-projectable, so RestBadRequest carries a
+// MANUAL Diagnostic impl that owns the JSON shape.  The projectability gate
+// at the decl site (`E_PUB_ERROR_FIELD_NOT_PROJECTABLE`) requires this once
+// you reach for any non-scalar field.
+implement core.Diagnostic for RestBadRequest {
+    pub fn to_json_text(self: &RestBadRequest) nothrow -> String {
+        var fields_json = "[";
+        var i = 0;
+        while i < self.fields.len {
+            if i != 0 { fields_json = fields_json + ","; }
+            val f = &self.fields[i];
+            fields_json = fields_json
+                + "{\"field\":" + core.diagnostic_json_string(&f.field)
+                + ",\"code\":" + core.diagnostic_json_string(&f.code)
+                + "}";
+            i = i + 1;
         }
-        throw RestInternal(tag = self.tag, message = self.message, fields = dv);
+        fields_json = fields_json + "]";
+        return "{"
+            + "\"fields\":" + fields_json
+            + ",\"message\":" + core.diagnostic_json_string(&self.message)
+            + ",\"tag\":" + core.diagnostic_json_string(&self.tag)
+            + "}";
     }
 }
 ```
 
-**v1 note:** `Array<T>` is not Copy, so you cannot write `move self.fields`
-directly — v1 does not yet support moving a field out of an owned struct. Use
-`std.mem.replace(&mut self.fields, empty)` to swap the non-Copy field out and
-leave a valid empty value behind. `String` fields like `tag` and `message`
-work as plain reads because `String` is Copy (ARC-backed). Declare `var self`
-to make the receiver mutable; this is compatible with the trait's by-value
-`self: Self` signature.
+Two things to note:
 
-App code builds the error with plain `diagnostic_entry` calls:
+1. **Lex-utf8 key order matters for canonical envelopes.**  The
+   compiler-synthesized impl for a `pub error` whose fields are all
+   projectable lex-sorts keys; manual impls should follow the same convention
+   so test fixtures pinning `e.params.encode_compact()` round-trip stably.
+2. **Use the `core.diagnostic_json_*` helpers**
+   (`diagnostic_json_string`, `_int`, `_uint`, `_bool`, `_float`,
+   `_null`) — they emit canonical JSON text and handle string escaping for
+   you.  Concatenate the pieces; do not re-quote already-canonical numeric
+   output.
+
+#### App code throws the error directly
 
 ```drift
-fn validate_signup(body: &SignupRequest) -> Result<Account, RestError> {
-    var fields: Array<core.DiagnosticEntry> = [];
+fn validate_signup(body: &SignupRequest) -> Result<Account, RestBadRequest> {
+    var fields: Array<FieldError> = [];
 
     if !is_valid_email(&body.email) {
-        fields.push(core.diagnostic_entry("email", DiagnosticValue::String("invalid-format")));
+        fields.push(FieldError(field = "email", code = "invalid-format"));
     }
     if body.age < 0 {
-        fields.push(core.diagnostic_entry("age", DiagnosticValue::String("must-be-non-negative")));
+        fields.push(FieldError(field = "age", code = "must-be-non-negative"));
     }
 
     if fields.len > 0 {
-        return Err(RestError(
-            status = 400, tag = "validation", message = "invalid input",
+        return Err(RestBadRequest(
+            tag = "validation",
+            message = "invalid input",
             fields = move fields,
         ));
     }
@@ -1189,38 +1209,47 @@ fn validate_signup(body: &SignupRequest) -> Result<Account, RestError> {
 }
 ```
 
-#### Catch side: reading entries back
+Inside a `throws` function, `validate_signup(body).or_throw()` raises the
+typed exception directly — every `pub error` gets a compiler-synthesized
+`core.Throw for E` impl, so no extra trait wiring is needed.
 
-On the catch side, `e.attrs["fields"]` returns the `DiagnosticValue::Object`.
-Call `.entries()` to get an `Array<core.DiagnosticEntry>`, then read `entry.key`
-and `entry.value` directly:
+#### Catch side: read fields via the params JSON cursor
 
 ```drift
 fn dispatch(req: &rest.Request, ctx: &mut rest.Context) nothrow -> rest.Response {
     return try handle_signup(req, ctx) catch RestBadRequest(e) {
-        val fields_dv = e.attrs["fields"];
-        val entries = fields_dv.entries();
+        // Typed scalar projection from the typed catch binder works for
+        // declared scalar fields:
+        val tag = e.tag;          // String
+        val message = e.message;  // String
 
-        // entries is Array<core.DiagnosticEntry>
-        // each entry has public .key (String) and .value (DiagnosticValue)
-        return rest.validation_response(400, e.tag, e.message, &entries);
+        // For the structured `fields` array, reach into the params JSON
+        // (the params object only — call `e.encode_compact()` if you want
+        // the full envelope shape `{event_code, event_fqn, params, ...}`).
+        val params_json = e.params.encode_compact();
+        return rest.validation_response_from_json(400, tag, message, &params_json);
     } catch RestInternal(e) {
         return rest.error_response(500, e.tag, e.message);
     };
 }
 ```
 
-The key methods on `DiagnosticValue`:
+The key envelope-side surfaces:
 
-- `.entries()` — returns `Array<core.DiagnosticEntry>` (empty array for
-  non-Object values)
-- `.get(key)` — returns `Optional<DiagnosticValue>` for keyed lookup
-- `.as_string()` / `.as_int()` — returns `Optional<String>` / `Optional<Int>`
-- `.len()` — number of entries in an Object
-
-This avoids parallel arrays, stringly-typed field maps, and guessing
-constructor syntax. `core.diagnostic_entry(key, value)` is the documented
-creation path; `entry.key` and `entry.value` are the documented read path.
+- `e.<declared_scalar_field>` — typed projection from params JSON for
+  declared `Int` / `Uint` / `Bool` / `Float` / `String` fields on the
+  matched event schema.  Variant / Array / nested-struct fields are NOT
+  scalar-projectable; reach for the params JSON cursor instead.
+- `e.params.get("k").as_int()` / `.as_string()` / `.as_bool()` /
+  `.as_float()` — returns `Optional<T>` for the scalar accessor; `None` on
+  missing key or wrong type.
+- `e.params.encode_compact()` — full params JSON object as a String, for
+  callers that want to forward the structured payload (e.g. into a JSON
+  serializer downstream) without re-projecting key by key.
+- `e.context.encode_compact()` — `^`-capture frames as a JSON array
+  (innermost frame first).
+- `e.encode_compact()` — full envelope JSON
+  (`{event_code, event_fqn, params, context, stack}`).
 
 ### Auto-try regions: `throws -> T`
 

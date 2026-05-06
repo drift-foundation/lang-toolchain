@@ -1,0 +1,69 @@
+module main;
+
+import std.core as core;
+import std.console as console;
+
+use trait core.Diagnostic;
+
+// Slice 7b (0.31.63, 2026-05-05): synthesized-Diagnostic throws now
+// route through the same `to_json_text(&E)` path as manual-Diagnostic
+// throws.  The compiler-synthesized `to_json_text` body is canonical
+// JSON concatenation of `<self>.<field>.to_json_text()` per field.
+//
+// Pre-7b bug: variant fields with manual `Diagnostic` impls (e.g.
+// `IteratorOpId` projecting to a numeric tag) were double-quoted
+// because the throw-side per-field DV-attachment auto-promoted the
+// non-scalar field value as `DV::String(value.to_json_text())`,
+// which the params-JSON builder then re-encoded as a JSON string.
+// `params.encode_compact()` showed `{"op":"2"}` instead of `{"op":2}`.
+//
+// This e2e pins the post-7b shape: a `pub error` with a variant
+// field whose manual `Diagnostic` projects as a JSON int gets that
+// int spliced as a number, NOT as a quoted string.  Exit 0 = clean;
+// exit 10 = wrong envelope shape; exit 11 = unexpected catch arm.
+
+pub variant Severity {
+	Low,
+	Medium,
+	High,
+	@tombstone Tombstone
+}
+
+implement core.Diagnostic for Severity {
+	pub fn to_json_text(self: &Severity) nothrow -> String {
+		return match self {
+			Low => { core.diagnostic_json_int(0) },
+			Medium => { core.diagnostic_json_int(1) },
+			High => { core.diagnostic_json_int(2) },
+			default => { core.diagnostic_json_int(-1) }
+		};
+	}
+}
+
+pub error Alarm {
+	severity: Severity,
+	tag: String,
+}
+
+fn trigger() throws Alarm -> Int {
+	throw Alarm(severity = Severity::High(), tag = "fire");
+}
+
+fn main() nothrow -> Int {
+	try {
+		return trigger();
+	} catch Alarm(e) {
+		val envelope = e.params.encode_compact();
+		console.println(envelope);
+		// Canonical lex-utf8 ordering: severity < tag.  Variant
+		// projects as bare integer (no quotes).  String projects as
+		// JSON-quoted.  The bug shape would be `{"severity":"2",...}`
+		// (quoted "2") instead of `{"severity":2,...}`.
+		if envelope != "{\"severity\":2,\"tag\":\"fire\"}" {
+			return 10;
+		}
+		return 0;
+	} catch {
+		return 11;
+	}
+}

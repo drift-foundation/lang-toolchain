@@ -26,9 +26,12 @@ Out of scope for Slice 2:
   - JsonCursor / `e.context.get(...)` typed lookup (Slice 4).
   - DV public removal (Slice 5).
 
-Slice 2 is ADDITIVE: the existing `e.captures[...]` DV path
-remains fully functional.  ABI stays at 12 (same Phase 1 helper
-set as Slice 1; no new symbols, no signature changes).
+Slice 2 was ADDITIVE alongside the legacy `e.captures[...]` DV
+path; Slice 7a/7b retired that DV path (`e.captures[...]` from
+user source is rejected with `E_EXC_CAPTURES_REMOVED`, and the
+`drift_error_add_local_dv` emission is gone).  The
+`e.context.encode_compact()` JSON path covered by this file is
+now the sole user-facing read of `^`-capture frames.
 
 Note on test form: tests use the statement-form try/catch.  The
 inline expression-form catch-binder bug is pinned separately in

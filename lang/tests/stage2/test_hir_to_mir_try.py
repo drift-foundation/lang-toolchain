@@ -9,7 +9,6 @@ from lang.driftc.stage1.normalize import normalize_hir
 from lang.driftc.stage2 import (
 	HIRToMIR,
 	make_builder,
-	ConstString,
 	ConstUint64,
 	ConstructError,
 	Goto,
@@ -49,7 +48,7 @@ def test_try_routes_throw_to_catch_block():
 								kw_args=[
 									H.HKwArg(
 										name="msg",
-										value=H.HDVInit(dv_type_name="Evt", args=[H.HLiteralString("boom")]),
+										value=H.HLiteralString("boom"),
 									)
 								],
 							)
@@ -71,12 +70,15 @@ def test_try_routes_throw_to_catch_block():
 	assert isinstance(blocks["entry"].terminator, Goto)
 	assert blocks["entry"].terminator.target.startswith("try_body")
 
-	# Try body should build error and jump to dispatch
+	# Try body should build error and jump to dispatch.  Slice 7b
+	# (2026-05-05): without a Path-A struct registered for `m:Evt`,
+	# the unified Diagnostic owning-throw path falls through to the
+	# empty-envelope ConstructError shape, so the field literals
+	# ("boom", "msg") aren't materialized.  This test pins try
+	# ROUTING (entry → body → dispatch → catch); per-field projection
+	# is covered by user-source e2e tests.
 	try_body = blocks[blocks["entry"].terminator.target]
 	instrs = try_body.instructions
-	consts = [i for i in instrs if isinstance(i, ConstString)]
-	assert any(c.value == "boom" for c in consts)
-	assert any(c.value == "msg" for c in consts)
 	assert any(isinstance(i, ConstUint64) for i in instrs)
 	assert any(isinstance(i, ConstructError) for i in instrs)
 	assert isinstance(try_body.terminator, Goto)
@@ -117,7 +119,7 @@ def test_try_dispatches_on_event_codes():
 								kw_args=[
 									H.HKwArg(
 										name="msg",
-										value=H.HDVInit(dv_type_name="EvtA", args=[H.HLiteralString("boom")]),
+										value=H.HLiteralString("boom"),
 									)
 								],
 							)

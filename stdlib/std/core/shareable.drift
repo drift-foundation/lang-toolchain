@@ -33,10 +33,6 @@ export {
 /// Recursive: `Optional<T> where T: Frozen`,
 /// `Result<T, E> where T: Frozen + E: Frozen`.
 ///
-/// (`DiagnosticValue` retains an internal Frozen impl through the
-/// Slice 7a→7b transition for the legacy DV bridge but is no longer
-/// part of the user-facing surface; see `slice7-followups.md`.)
-///
 /// **Default NON-impls (explicitly NOT Frozen):**
 /// - `&T` / `&mut T` for any T — a reference is itself
 ///   immutable, but its REFERENT may be mutable.  v1 does NOT
@@ -194,7 +190,8 @@ implement Frozen for Float { }
 implement Frozen for Byte { }
 implement Frozen for String { }
 implement Frozen for Void { }
-implement Frozen for DiagnosticValue { }
+// Slice 7b (0.31.63, 2026-05-06): `Frozen for DiagnosticValue` impl
+// deleted alongside the struct decl in std.core/core.drift.
 
 
 // ── Direct ConstShare for String — branch-completion gate ────────

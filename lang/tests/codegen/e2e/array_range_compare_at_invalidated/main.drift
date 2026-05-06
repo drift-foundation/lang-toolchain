@@ -8,10 +8,15 @@ fn main() nothrow -> Int {
 	var r = arr.range();
 	arr.push(3);
 	val out = try iter.RandomAccessReadable::compare_at(&r, 0, 0) catch std.err:IteratorInvalidated(e) {
-		// Slice 7a: typed catch projection on container_id; op_id is a
-		// variant whose throw-side projection has a known double-quoting
-		// bug (out-of-scope for 7a — see array_range_len_invalidated).
-		(e.container_id != "std.containers:Array") ? 10 : 0
+		// Slice 7b: variant `op_id` projection via params cursor reads
+		// the bare numeric tag.  CompareAt → 3.
+		val cid_bad = (e.container_id != "std.containers:Array");
+		val op = match e.params.get("op_id").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		val op_bad = (op != 3);
+		(cid_bad ? 10 : 0) + (op_bad ? 20 : 0)
 	} catch {
 		99
 	};

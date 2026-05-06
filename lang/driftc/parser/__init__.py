@@ -1353,7 +1353,13 @@ def _synthesize_auto_throw_impls(
 
 
 _PROJECTABLE_SCALARS: frozenset[str] = frozenset(
-	{"Int", "Uint", "Bool", "Float", "String", "DiagnosticValue"}
+	# Slice 7b (2026-05-06): `DiagnosticValue` removed from the
+	# projectable set.  Slice 7a deleted DV from the public surface
+	# (user-source `DiagnosticValue` references are rejected with
+	# `E_DV_PUBLIC_REMOVED`), and Slice 7b retired the DV-attachment
+	# throw lowering — no production path reaches DV through field
+	# projection anymore.
+	{"Int", "Uint", "Bool", "Float", "String"}
 )
 # Container / pointer / opaque types explicitly NOT auto-projectable
 # (K, 2026-05-04).  Each must be wrapped behind a user-defined
@@ -1396,15 +1402,18 @@ def _field_is_projectable(
 	exception_pub: dict[str, bool],
 	diagnostic_targets: set[tuple[str | None, str]],
 ) -> bool:
-	"""Slice 5 projectability rule (K, 2026-05-04):
+	"""Slice 5 projectability rule (K, 2026-05-04; trimmed in Slice 7b):
 
-	  * scalars (Int / Uint / Bool / Float / String / DiagnosticValue) ✓
+	  * scalars (Int / Uint / Bool / Float / String) ✓
 	  * `pub error E` (recursively projectable through synthesis) ✓
 	  * any type with an explicit `implement core.Diagnostic for T` ✓
 	  * collections (Optional / Array / Map) ✗ — wrap behind a carrier
 	  * pointer / opaque / function types ✗
 	  * private (non-pub) `error E` ✗ — synthesis does not fire for
 	    non-pub error decls, so they have no Diagnostic impl to reach.
+
+	Slice 7b (2026-05-06): `DiagnosticValue` removed from the scalar
+	set.  See `_PROJECTABLE_SCALARS` above.
 
 	`diagnostic_targets` carries (module_id, name) keys for explicit
 	manual `implement core.Diagnostic for T` impls we know about
@@ -1423,11 +1432,16 @@ def _field_is_projectable(
 	target_mod = _resolve_field_type_module(
 		field_ty_expr, module_id=module_id, module_aliases=module_aliases,
 	)
-	# Pub error reachable through its own (synthesized or manual)
-	# Diagnostic.  Private `error E` decls do NOT get synthesized
-	# impls, so a private error as a field type is rejected unless
-	# the user supplies a manual impl (caught by diagnostic_targets
-	# below).
+	# `pub error E` is reachable as a projectable field type through
+	# its own synthesized or manual Diagnostic impl.  Slice 7b:
+	# synthesis fires for non-pub `error E` too, but its TYPE is
+	# private — using it as a field type of another error would leak
+	# a private type through a public surface, so the gate stays
+	# pub-only here.  Private errors can still be thrown directly
+	# and project their own fields via `e.params.get(...)` (intra-
+	# module use only); to use them as a field type, the user must
+	# add an explicit `implement core.Diagnostic for PrivateE` (which
+	# the `diagnostic_targets` check below picks up).
 	if target_mod:
 		fqn = f"{target_mod}:{ty_name}"
 		if exception_kinds.get(fqn) == "error" and bool(exception_pub.get(fqn, False)):
@@ -1602,7 +1616,7 @@ def _synthesize_auto_diagnostic_impls(
 	diagnostics: list[Diagnostic] | None = None,
 ) -> None:
 	"""Slice 5 (Phase 5a): auto-generate `implement core.Diagnostic for E`
-	for every `pub error E` in the module whose fields are all
+	for every `error E` in the module whose fields are all
 	projectable, unless an explicit `implement std.core.Diagnostic for E`
 	already exists.
 
@@ -1615,20 +1629,25 @@ def _synthesize_auto_diagnostic_impls(
 
 	Body shape (spec §7.3): String concat over lex-utf8-sorted field
 	names with pre-quoted keys + per-field `<self>.<f>.to_json_text()`
-	dispatch.  Empty pub error → returns the literal `"{}"`.
+	dispatch.  Empty error → returns the literal `"{}"`.
+
+	Slice 7b (K, 2026-05-06; LANGUAGE_BUG fix): synthesis fires for
+	BOTH `pub error E` AND non-pub `error E`.  Pre-fix, non-pub
+	`error E { msg: String }` had no synthesized impl, so the unified
+	throw lowering's `to_json_text` lookup missed and the throw
+	emitted an empty params envelope — silent data loss when the
+	catch site read `e.params.get("msg")`.  The synthesized impl on
+	a non-pub error stays module-internal (the type itself is not
+	exported); projectability AS A FIELD TYPE in another `pub error`
+	remains pub-only via the gate in `_field_is_projectable`.
 	"""
 	exc_kinds = exception_kinds or {}
 	exc_pub = exception_pub or {}
 	aliases = module_aliases or {}
 	diags = diagnostics if diagnostics is not None else []
-	# Diagnostic synthesis fires on `pub error E` only — non-public
-	# `error E` decls (module-private) don't get auto-projection.
-	# Per K (2026-05-04): "pub error is the only user aggregate that
-	# gets compiler-synthesized Diagnostic projection."
 	exceptions = [
 		e for e in (getattr(prog, "exceptions", []) or [])
 		if getattr(e, "kind", "exception") == "error"
-		and bool(getattr(e, "is_pub", False))
 	]
 	if not exceptions:
 		return
@@ -1708,23 +1727,54 @@ def _synthesize_auto_diagnostic_impls(
 				break
 		if first_bad is not None:
 			ty_name = getattr(first_bad.type_expr, "name", "?")
+			# Slice 7b (K, 2026-05-06): synthesis now fires for both
+			# `pub error` and non-pub `error`; the message has to
+			# reflect the actual decl visibility instead of
+			# hard-coding `pub error`.
+			err_label = (
+				f"pub error {exc.name}"
+				if bool(getattr(exc, "is_pub", False))
+				else f"error {exc.name}"
+			)
+			# Container / nested-struct help: the carrier error owns
+			# the whole JSON shape via a manual `core.Diagnostic for E`
+			# impl.  We deliberately do NOT suggest
+			# `implement core.Diagnostic for Array<T>` — that would
+			# steer users toward a global collection serializer, which
+			# the projectability rule explicitly rejects (K, slice 5).
+			# For non-collection field types, naming a manual
+			# Diagnostic on the field type itself is still legitimate;
+			# guard the suggestion accordingly.
+			collection_or_pointer_help = ty_name in _NON_PROJECTABLE_BUILTINS
+			notes_list = [
+				"container types (Array, Optional, Map) and ordinary "
+				"structs/variants are not auto-projected.",
+			]
+			if collection_or_pointer_help:
+				notes_list.append(
+					f"implement `core.Diagnostic for {exc.name}` manually so "
+					f"the carrier owns the whole JSON shape (project a "
+					f"compact preview / size summary, not a full collection "
+					f"dump), or change the field type to a projectable "
+					f"scalar / `pub error`."
+				)
+			else:
+				notes_list.append(
+					f"either implement `core.Diagnostic for {ty_name}` so "
+					f"the field carries its own JSON shape, or change the "
+					f"field type to a projectable scalar / `pub error`, or "
+					f"implement `core.Diagnostic for {exc.name}` manually "
+					f"to take ownership of the whole shape."
+				)
 			diags.append(_p_diag(
 				message=(
-					f"cannot synthesize `core.Diagnostic` for `pub error {exc.name}`: "
+					f"cannot synthesize `core.Diagnostic` for `{err_label}`: "
 					f"field '{first_bad.name}' (type '{ty_name}') is not projectable"
 				),
 				severity="error",
 				span=Span.from_loc(getattr(first_bad.type_expr, "loc", None) or loc),
 				code="E_PUB_ERROR_FIELD_NOT_PROJECTABLE",
-				notes=[
-					"container types (Array, Optional, Map) and ordinary "
-					"structs/variants are not auto-projected.",
-					f"either implement `core.Diagnostic for {ty_name}` so the "
-					"field carries its own JSON shape, or change the field "
-					f"type to a projectable scalar / `pub error`, or implement "
-					f"`core.Diagnostic for {exc.name}` manually to take "
-					f"ownership of the whole shape.",
-				],
+				notes=notes_list,
 			))
 			continue
 		# All fields projectable — synthesize the impl.

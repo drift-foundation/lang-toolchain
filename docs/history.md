@@ -1,5 +1,165 @@
 # Drift development history
 
+## 2026-05-06
+- **Slice 7b: synthesized-Diagnostic throws onto the JSON-text path
+  (release 0.31.63, ABI unchanged at 13).** Unifies user-source
+  `throw E(...)` lowering for every `pub error E` — manual or
+  compiler-synthesized `core.Diagnostic for E` — through a single
+  `_construct_error_via_diagnostic` helper that builds the Path-A
+  struct, calls `to_json_text(&E)`, and emits
+  `ConstructError(payload=None) + ExcSetParamsJson`.  No more
+  legacy `M.ConstructDV` / `M.ErrorAddAttrDV` / `M.ErrorAddLocalDV`
+  emission from production lowering.
+
+  **Why this matters.**  Pre-7b, throws of `pub error E` with
+  fields whose manual `Diagnostic` impl projected as a non-string
+  scalar (e.g. variant tag → bare integer) were double-quoted.
+  The throw-side per-field DV-attachment auto-promoted the field
+  value as `DV::String(value.to_json_text())`, which the params-
+  JSON builder re-encoded as a JSON string.  An `IteratorOpId`
+  variant whose `to_json_text` returned canonical `"2"` showed up
+  in `e.params.encode_compact()` as `{"op":"2"}` instead of
+  `{"op":2}`.  The bug shape silently corrupted the wire payload
+  for any user code that attempted typed-catch projection of the
+  variant via `e.params.get(k).as_int()`.
+
+  Slice 7b unifies the two paths so the same per-field
+  `<self>.<field>.to_json_text()` dispatch (canonical for
+  whatever the field type's `Diagnostic` impl emits — number /
+  bool / string / null / nested object) is the only source of
+  the params JSON.  Variant tags now project as bare integers;
+  scalar fields project as canonical scalars; nested
+  `pub error` types project recursively via their own
+  synthesized impl.
+
+  **Throw-side scope this slice:**
+  - Renamed `_construct_error_via_manual_diagnostic` →
+    `_construct_error_via_diagnostic`; renamed
+    `_lookup_manual_diagnostic_to_json_text_fn_id` →
+    `_lookup_diagnostic_to_json_text_fn_id` (always keyed on
+    `(struct_ty, std.core.Diagnostic)`, finds manual + synthesized
+    impls equivalently).
+  - `HExceptionInit` lowering routes EVERY `pub error E` through
+    the unified path; non-pub `error E` decls without a manual
+    impl fall through to empty-envelope `ConstructError`.
+  - Type-checker Site A (`HExceptionInit` arm in
+    `lang/driftc/type_checker.py`) no longer auto-promotes
+    non-scalar field values to `DV::String(value.to_json_text())`.
+  - Inline `arr[idx]` bounds-check throw
+    (`_emit_index_error_throw`) refactored to construct the
+    `std.err:IndexError` Path-A struct + call its synthesized
+    `to_json_text` — same shape as user-source throws.  Falls
+    through to empty-envelope `ConstructError` when std.err's
+    Path-A struct or to_json_text fn isn't loaded (package-
+    consumer compilation OR stage2 unit-test environments).
+
+  **Captured-locals migration:**
+  - `_emit_captured_locals` no longer emits `M.ErrorAddLocalDV`
+    per-key; the legacy DV captures map was already unreadable
+    from user code post-Slice 7a (`E_EXC_CAPTURES_REMOVED`).
+  - `_build_throw_context_frame_json` rewritten to dispatch each
+    captured local directly to the matching
+    `core.diagnostic_json_<scalar>` helper (Int / Uint / Bool /
+    Float / String) — no DV intermediate.  String captures
+    materialize a borrow + explicit `M.DropValue` after the call
+    (throw-site unwind bypasses normal scope drops, same pattern
+    the old DV path used).
+  - Helper `_capture_to_dv` deleted (no callers).
+  - Helper `_build_throw_params_json` deleted (no callers — the
+    last user, `_emit_index_error_throw`, was migrated to the
+    unified diagnostic path).
+
+  **Stdlib decl retirement:**
+  - `_dv_to_json_text` deleted from `stdlib/std/core/core.drift`
+    (no production caller after the captured-locals migration).
+  - `Diagnostic for DiagnosticValue` impl deleted.
+  - `Copy for DiagnosticValue` and `Copy for DiagnosticEntry`
+    impls deleted.
+  - `Frozen for DiagnosticValue` impl deleted from
+    `stdlib/std/core/shareable.drift`.
+  - `DiagnosticEntry` struct + `diagnostic_entry` helper fn
+    deleted (internal-only carriage for the legacy DV bridge,
+    no callers).
+  - The compiler-intrinsic `DiagnosticValue` TypeKind remains as
+    vestigial substrate — the type's MIR ops (`M.ConstructDV` &
+    family) and runtime helpers (`drift_dv_*` /
+    `drift_error_add_attr_dv` / `drift_error_add_local_dv` /
+    `drift_error_attrs_get_dv` / `drift_error_captures_get_dv`)
+    are no longer emitted by production lowering but the symbol
+    surface is preserved in this slice for binary
+    compatibility with old (ABI 13) consumers.  Their deletion
+    is a planned Slice 7c follow-up that bumps ABI 13 → 14.
+
+  **Cross-package UFCS dispatch gate flipped:**
+  - `test_ext_cross_package_diagnostic_projectability_gate_only`
+    (lang/tests/driver/test_external_consumer.py) retired its
+    "expected the known UFCS-dispatch failure" framing.
+    Pre-7b, the type-checker-side per-field DV auto-promotion
+    attempted `(&self.c).to_json_text()` UFCS dispatch at type-
+    check time and failed for cross-package `Diagnostic` impl
+    targets with `no matching method 'to_json_text'`.  With
+    Slice 7b's auto-promotion gone, the dispatch resolves
+    uniformly later in `hir_to_mir.py`.  Test now asserts the
+    consumer compile produces no error diagnostics.
+
+  **E2E regression coverage added:**
+  - `pub_error_synthesized_variant_field_projection/` — new e2e
+    that pins `{"severity":2,"tag":"fire"}` (bare integer for
+    variant tag, JSON string for `String` field).  Pre-7b shape
+    `{"severity":"2",...}` (double-quoted variant tag) is the
+    bug this slice closed.
+  - 6 deferred `op_id` checks restored across iterator-
+    invalidated tests
+    (`array_range_{len,compare_at,swap}_invalidated/`,
+    `array_range_reserve_noop_invalidates/`,
+    `deque_range_{compare_at,swap}_invalidated/`).  Each now
+    projects `e.params.get("op_id").as_int()` and asserts the
+    canonical `IteratorOpId` numeric tag (Len → 2, CompareAt →
+    3, Swap → 4).
+
+  **Test-corpus updates:**
+  - `test_array_dup_string_codegen.py::test_array_index_negative_literal_bounds_check_ir`
+    flipped to assert `drift_error_set_params_json` in the
+    inline-bounds-check IR (was asserting
+    `drift_error_add_attr_dv`).
+  - `test_exception_capture_locals_codegen.py` flipped to assert
+    `drift_error_append_context_frame` in the throw-site IR
+    (was asserting `drift_error_add_local_dv`).
+  - 4 legacy DV-substrate stage2 tests deleted:
+    `test_hir_to_mir_try_throw.py`, `test_dv_deref_clone.py`,
+    `test_dv_string_arc_release.py`,
+    `test_hir_to_mir_diagnostic_value.py` — every test in those
+    files pinned the legacy DV throw lowering / DV ARC behavior
+    that this slice retires.
+  - `test_hir_to_mir_try.py` field-literal assertions retired
+    (test now pins try ROUTING only); migrated off
+    `H.HDVInit` (uses `H.HLiteralString` for the kwarg value).
+
+  **What is NOT in this slice:**
+  - HIR `H.HDVInit` node + `_visit_expr_HDVInit` lowering still
+    exist (no production caller; reachable only from stage2
+    tests that I migrated, but the node + handlers across
+    `stage1/normalize.py`, `stage1/borrow_materialize.py`,
+    `stage1/place_canonicalize.py`, `borrow_checker_pass.py`
+    remain).
+  - MIR ops `M.ConstructDV`, `M.ErrorAddAttrDV`,
+    `M.ErrorAddLocalDV`, `M.ErrorAttrsGetDV`,
+    `M.ErrorCapturesGetDV` still defined; codegen + string_arc
+    handlers still in place.
+  - Runtime helpers `drift_dv_*`, `drift_error_add_attr_dv`,
+    `drift_error_add_local_dv`, `drift_error_attrs_get_dv`,
+    `drift_error_captures_get_dv` still exported.
+
+  Together those define the Slice 7c follow-up: substrate
+  deletion + ABI bump 13 → 14.
+
+  **ABI:** unchanged at 13 — runtime-exported helper signatures
+  unchanged this slice; the deletion that warrants the bump is
+  Slice 7c's job.
+
+  **Regression:** focused 118 passed + 1 xfailed in 127s; full
+  e2e suite exits 0 (1185 cases).
+
 ## 2026-05-03
 - **Branch-completion gate cleared: direct `String : ConstShare`
   (release 0.31.53, ABI unchanged at 12).**  Promotes `String`

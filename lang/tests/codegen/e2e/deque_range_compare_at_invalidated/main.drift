@@ -11,9 +11,14 @@ var dq = containers.deque<type Int>();
 	var r = dq.range();
 	dq.push_back(3);
 	val out = try iter.RandomAccessReadable::compare_at(&r, 0, 0) catch std.err:IteratorInvalidated(e) {
-		// Slice 7a: typed catch projection on container_id; op_id variant
-		// projection bug deferred (see array_range_len_invalidated).
-		(not (e.container_id == "std.containers:Deque")) ? 10 : 0
+		// Slice 7b: op_id projects as bare integer (CompareAt → 3).
+		val cid_bad = (not (e.container_id == "std.containers:Deque"));
+		val op = match e.params.get("op_id").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		val op_bad = (op != 3);
+		(cid_bad ? 10 : 0) + (op_bad ? 20 : 0)
 	} catch {
 		99
 	};

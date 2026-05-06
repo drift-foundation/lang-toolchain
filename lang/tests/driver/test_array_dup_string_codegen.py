@@ -127,6 +127,11 @@ fn main() nothrow -> Int {
 	main_ir = _extract_llvm_function(ir, "main")
 	assert "drift_bounds_check" not in main_ir
 	assert "drift_error_new" in main_ir
-	assert "drift_error_add_attr_dv" in main_ir
+	# Slice 7b: inline bounds-check throw routes through the unified
+	# Diagnostic owning-throw path — params JSON is set via
+	# `drift_error_set_params_json` after calling the synthesized
+	# `to_json_text(&IndexError)`.  No legacy DV attachment.
+	assert "drift_error_set_params_json" in main_ir
+	assert "drift_error_add_attr_dv" not in main_ir
 	# Negative literal is lowered as `sub i64 0, <const>` (unary negation).
 	assert "sub i64 0," in main_ir

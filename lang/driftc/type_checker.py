@@ -9593,94 +9593,104 @@ class TypeChecker:
 				)
 				diagnostics.extend(diags)
 
-				values_to_validate = [v for _name, v in resolved]
+				# Slice 7b unification (2026-05-05): post-Slice 7b every
+				# `pub error E` with fields has a `core.Diagnostic` impl
+				# (manual OR compiler-synthesized) and the throw lowering
+				# routes through `_construct_error_via_diagnostic`, which
+				# builds the Path-A struct and dispatches the impl's
+				# `to_json_text(&E)` to project params JSON.  The
+				# type-checker therefore no longer:
+				#   - enforces per-field `is_diagnostic` (the decl-site
+				#     `E_PUB_ERROR_FIELD_NOT_PROJECTABLE` already gates
+				#     synthesis to projectable fields; the manual case
+				#     owns its own validation),
+				#   - auto-promotes scalar fields into `HDVInit`, or
+				#   - wraps non-scalar fields in `DV::String(...)` (the
+				#     variant-field double-quoting bug source — see
+				#     `slice7-followups.md`).
+				#
+				# Slice 7b regression fix (K, 2026-05-06, LANGUAGE_BUG):
+				# field-TYPE validation must remain.  Argument types
+				# must match the Path-A co-registered struct's
+				# declared field types — without this, a mismatched
+				# value (e.g. a String literal where Int is declared)
+				# silently reaches HIR→MIR's `ConstructStruct` and
+				# crashes LLVM codegen with an internal "struct field
+				# type mismatch" — a checker/lowering contract failure
+				# that AGENTS forbids surfacing as a user diagnostic.
 				if decl_fields is None:
-					values_to_validate = list(expr.pos_args) + [kw.value for kw in expr.kw_args]
-
-				# Slice 6 — manual-Diagnostic ownership gate (Site A).
-				# Once a user writes `implement core.Diagnostic for E`,
-				# the compiler stops interpreting E's fields for
-				# diagnostic projection.  The user owns the whole JSON
-				# shape (returns from `to_json_text`) and may walk
-				# arbitrary fields/types however they want.  We must
-				# still type-check field expressions (so type errors
-				# inside the args surface), but we DO NOT enforce
-				# `is_diagnostic` per-field and DO NOT auto-promote
-				# values into `DV::String(value.to_json_text())` for
-				# the legacy DV-attachment path — Site C will skip the
-				# DV-attachment entirely and route params JSON through
-				# the user's own `to_json_text(&E)`.
-				_manual_owners = getattr(self.type_table, "manual_diagnostic_pub_errors", None) or set()
-				if expr.event_fqn in _manual_owners:
-					for val_expr in values_to_validate:
+					# No schema (synthetic stage2 test or unresolved
+					# event_fqn): fall back to plain expression
+					# type-checking; the Path-A struct lookup below
+					# would fail anyway.
+					for val_expr in (list(expr.pos_args) + [kw.value for kw in expr.kw_args]):
 						type_expr(val_expr, used_as_value=True)
 					return record_expr(expr, self._error)
-
-				replacements: dict[int, H.HExpr] = {}
-				for val_expr in values_to_validate:
-					if isinstance(val_expr, H.HMove):
-						val_check_expr = val_expr.subject
-						if hasattr(H, "HPlaceExpr") and isinstance(val_check_expr, getattr(H, "HPlaceExpr")):
-							val_check_expr = val_check_expr.base
-					else:
-						val_check_expr = val_expr
-					val_ty = type_expr(val_check_expr, used_as_value=True)
-					if val_ty == self._dv:
+				struct_id: TypeId | None = None
+				if ":" in expr.event_fqn:
+					_mod_id, _type_name = expr.event_fqn.split(":", 1)
+					struct_id = self.type_table.get_nominal(
+						kind=TypeKind.STRUCT, module_id=_mod_id, name=_type_name,
+					)
+				for field_name, val_expr in resolved:
+					val_ty = type_expr(val_expr, used_as_value=True)
+					if struct_id is None or val_ty is None or val_ty == self._unknown:
 						continue
-					val_nom_ty = val_ty
-					val_td = self.type_table.get(val_nom_ty)
-					if val_td.kind is TypeKind.REF and val_td.param_types:
-						val_nom_ty = val_td.param_types[0]
-					if not self.type_table.is_diagnostic(val_nom_ty):
-						diagnostics.append(
-							_tc_diag(
-								message="exception field value must implement Diagnostic",
-								severity="error",
-								span=getattr(val_expr, "loc", Span()),
-							)
+					field_info = self.type_table.struct_field(struct_id, field_name)
+					if field_info is None:
+						continue
+					_idx, declared_ty = field_info
+					if val_ty == declared_ty:
+						continue
+					# Strict nominal match — mirror the plain-struct
+					# constructor contract.  Implicit borrow / numeric
+					# promotion / interface coercion are intentionally
+					# NOT applied here: the lowering hands the
+					# resolved expression directly to
+					# `M.ConstructStruct`, so any value type that
+					# differs from the declared field type produces an
+					# LLVM-codegen-time crash if it slipped past us.
+					# K (2026-05-06) called out that an earlier draft
+					# of this check accepted `&Declared` where
+					# `Declared` was expected, which then crashed
+					# codegen with `have ptr, expected drift.int`.
+					# Rejection at type-check time is the safer
+					# contract.  Users who want a borrow either
+					# declare the field as `&T` or dereference at the
+					# call site.
+					def _ref_or_pretty(ty: TypeId) -> str:
+						td = self.type_table.get(ty)
+						if td.kind is TypeKind.REF and td.param_types:
+							inner = self._pretty_type_name(td.param_types[0], current_module=current_module_name)
+							prefix = "&mut " if getattr(td, "ref_mut", False) else "&"
+							return f"{prefix}{inner}"
+						return self._pretty_type_name(ty, current_module=current_module_name)
+					declared_name = _ref_or_pretty(declared_ty)
+					val_name = _ref_or_pretty(val_ty)
+					message = (
+						f"throw {expr.event_fqn.split(':', 1)[-1]}(...) field "
+						f"'{field_name}' expects {declared_name} but got {val_name}"
+					)
+					val_def = self.type_table.get(val_ty)
+					notes: list[str] = []
+					if (
+						val_def.kind is TypeKind.REF
+						and val_def.param_types
+						and val_def.param_types[0] == declared_ty
+					):
+						notes.append(
+							f"pass an {declared_name} value for field "
+							f"'{field_name}', not a reference"
 						)
-						continue
-					if isinstance(val_expr, (H.HLiteralInt, H.HLiteralBool, H.HLiteralString)):
-						continue
-					if hasattr(H, "HLiteralUint") and isinstance(val_expr, getattr(H, "HLiteralUint")):
-						continue
-					if hasattr(H, "HLiteralUint64") and isinstance(val_expr, getattr(H, "HLiteralUint64")):
-						continue
-					if isinstance(val_expr, H.HDVInit):
-						continue
-					if val_nom_ty in (self._int, self._uint, self._bool, self._string, self._float):
-						kind_name = "Int"
-						if val_nom_ty == self._bool:
-							kind_name = "Bool"
-						elif val_nom_ty == self._string:
-							kind_name = "String"
-						elif val_nom_ty == self._float:
-							kind_name = "Float"
-						dv_init = H.HDVInit(dv_type_name=kind_name, args=[val_expr])
-						type_expr(dv_init)
-						replacements[id(val_expr)] = dv_init
-						continue
-					# Slice 5 (Phase 5a): the public Diagnostic trait method is
-					# `to_json_text(self) -> String`.  For non-scalar Diagnostic-
-					# impl field values, call `to_json_text` and wrap the result
-					# in `DV::String` so the legacy DV-attachment path
-					# (ConstructError + ErrorAddAttrDV) keeps working through
-					# the ABI-13 cut.  Note: this leaves the rendered params JSON
-					# for these fields as a JSON-string-quoted JSON document
-					# rather than a raw splice — the authoritative shape comes
-					# from the synthesized `Diagnostic.to_json_text` on the
-					# enclosing `pub error`, not from this DV passthrough.
-					to_json_call = H.HMethodCall(receiver=val_expr, method_name="to_json_text", args=[])
-					to_json_call.callsite_id = _alloc_callsite_id()
-					type_expr(to_json_call)
-					dv_init = H.HDVInit(dv_type_name="String", args=[to_json_call])
-					type_expr(dv_init)
-					replacements[id(val_expr)] = dv_init
-
-				if replacements:
-					expr.pos_args = [replacements.get(id(a), a) for a in expr.pos_args]
-					for kw in expr.kw_args:
-						kw.value = replacements.get(id(kw.value), kw.value)
+					diag_kwargs = dict(
+						code="E_THROW_FIELD_TYPE_MISMATCH",
+						message=message,
+						severity="error",
+						span=getattr(val_expr, "loc", getattr(expr, "loc", Span())),
+					)
+					if notes:
+						diag_kwargs["notes"] = notes
+					diagnostics.append(_tc_diag(**diag_kwargs))
 				return record_expr(expr, self._error)
 
 			# DiagnosticValue constructors.

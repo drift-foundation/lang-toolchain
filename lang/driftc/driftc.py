@@ -9158,6 +9158,9 @@ def main(argv: list[str] | None = None) -> int:
 						is_method=bool(sd.get("is_method", False)),
 						self_mode=sd.get("self_mode"),
 						impl_target_type_id=impl_tid,
+						# Slice 7b (2026-05-06): trait identity round-trip.
+						impl_trait_module=sd.get("impl_trait_module"),
+						impl_trait_name=sd.get("impl_trait_name"),
 						is_pub=bool(sd.get("is_pub")),
 						is_wrapper=bool(sd.get("is_wrapper", False)),
 						wraps_target_fn_id=wraps_fn_id,
@@ -9803,6 +9806,9 @@ def main(argv: list[str] | None = None) -> int:
 							declared_can_throw=sd.get("declared_can_throw"),
 							is_method=bool(sd.get("is_method", False)),
 							self_mode=sd.get("self_mode"),
+							# Slice 7b (2026-05-06): trait identity round-trip.
+							impl_trait_module=sd.get("impl_trait_module"),
+							impl_trait_name=sd.get("impl_trait_name"),
 							is_pub=bool(sd.get("is_pub", False)),
 							is_exported_entrypoint=bool(sd.get("is_exported_entrypoint", False)),
 						)

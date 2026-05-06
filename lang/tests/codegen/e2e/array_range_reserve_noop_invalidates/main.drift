@@ -28,9 +28,14 @@ fn main() nothrow -> Int {
 		val len2 = r.len();
 		out = len2;
 	} catch std.err:IteratorInvalidated(e) {
-		// Slice 7a: typed catch projection on container_id; op_id variant
-		// projection bug deferred (see array_range_len_invalidated).
-		out = (e.container_id != "std.containers:Array") ? 20 : 0;
+		// Slice 7b: op_id projects as bare integer (Len → 2).
+		val cid_bad = (e.container_id != "std.containers:Array");
+		val op = match e.params.get("op_id").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		val op_bad = (op != 2);
+		out = (cid_bad ? 20 : 0) + (op_bad ? 30 : 0);
 	} catch {
 		out = 99;
 	}

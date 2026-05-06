@@ -871,96 +871,84 @@ class HIRToMIR:
 		)
 		self._capture_scope_stack[-1].append(int(binding_id))
 
-	def _capture_to_dv(self, *, value: M.ValueId, value_ty: TypeId) -> M.ValueId:
-		if value_ty == self._dv_type:
-			return value
-		if value_ty == self._int_type:
-			dv = self.b.new_temp()
-			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Int", args=[value]))
-			self._local_types[dv] = self._dv_type
-			return dv
-		if value_ty == self._uint_type:
-			as_int = self.b.new_temp()
-			self.b.emit(M.IntFromUint(dest=as_int, value=value))
-			self._local_types[as_int] = self._int_type
-			dv = self.b.new_temp()
-			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Int", args=[as_int]))
-			self._local_types[dv] = self._dv_type
-			return dv
-		if value_ty == self._bool_type:
-			dv = self.b.new_temp()
-			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Bool", args=[value]))
-			self._local_types[dv] = self._dv_type
-			return dv
-		if value_ty == self._string_type:
-			dv = self.b.new_temp()
-			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="String", args=[value]))
-			self._local_types[dv] = self._dv_type
-			return dv
-		if value_ty == self._float_type:
-			dv = self.b.new_temp()
-			self.b.emit(M.ConstructDV(dest=dv, dv_type_name="Float", args=[value]))
-			self._local_types[dv] = self._dv_type
-			return dv
-		raise AssertionError("captured local type must lower to DiagnosticValue (checker bug)")
-
 	def _emit_captured_locals(self, err_val: M.ValueId) -> None:
+		"""Slice 7b (2026-05-05): emit the captured-frame JSON object for
+		the current function's `^`-captured locals at the throw site.
+
+		Pre-7b this site dual-wrote the frame: a legacy DV path
+		(`M.ErrorAddLocalDV` per key) AND the JSON frame consumed by
+		`<error>.context.encode_compact()`.  Slice 7b deletes the legacy
+		DV path (the captures DV map was already unreadable from user
+		code post-Slice 7a — `e.captures[k]` is rejected with
+		`E_EXC_CAPTURES_REMOVED`); only the JSON frame remains.
+
+		Frame shape:
+		    `{"fn":"<fqn>","locals":{<key>:<value>,...}}`
+
+		`^`-keys are sorted lex-utf8 at compile time for determinism.
+		Per-capture value text is emitted directly via
+		`core.diagnostic_json_<scalar>` helpers — no DV intermediate.
+		The set of supported capture types (Int/Uint/Bool/Float/String)
+		is enforced upstream by the checker.
+
+		Slice 7b (K, 2026-05-06; negative-space audit): production
+		compilation always has std.core loaded, so the per-scalar
+		JSON helpers must be resolvable.  Reaching this site with
+		active captures and a missing helper ICEs as a contract
+		failure rather than silently skipping the frame (which would
+		drop captured-frame data from `<error>.context.encode_compact()`
+		without any signal).  Stage2 unit tests do not construct
+		active captures without loading std.core, so the ICE never
+		fires there.
+		"""
 		if not self._active_captured_locals:
 			return
 		frame_name = function_symbol(self._current_fn_id) if self._current_fn_id is not None else self.b.func.name
-		frame_val = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=frame_val, value=frame_name))
-
-		# Slice 2 DV→JSON: build the captured-frame JSON object
-		# alongside the legacy DV path.  Frame shape:
-		#   `{"fn":"<fqn>","locals":{<key>:<value>,...}}`
-		# `^`-keys are sorted lex-utf8 at compile time for
-		# determinism.  Emitted before the per-key DV adds so the
-		# frame JSON build can read each captured local's value via
-		# the `_dv_to_json_text` projector with a fresh DV.
-		#
-		# Skipped when std.core isn't loaded (stage2 unit tests with
-		# stubbed signatures); the DV path remains and the
-		# context_json segment stays at its empty default ("[]").
-		dv_to_json_fn = self._find_free_fn_id("std.core", "_dv_to_json_text")
-		emit_json_frame = dv_to_json_fn is not None
 
 		# Snapshot the captured locals in lex-utf8 order of capture_name
 		# so the inner JSON {"<key>":<value>,...} is deterministic.
-		# (Compile-time sort; the underlying dict is keyed by binding_id.)
 		caps_sorted = sorted(
 			self._active_captured_locals.values(),
 			key=lambda c: c.capture_name,
 		)
 
-		# Build frame_json String if std.core is loaded.
-		frame_json_val: M.ValueId | None = None
-		if emit_json_frame:
-			frame_json_val = self._build_throw_context_frame_json(
-				frame_name=frame_name,
-				caps_sorted=caps_sorted,
-				dv_to_json_fn=dv_to_json_fn,
-			)
+		# Slice 7b contract guard (K, 2026-05-06): production
+		# compilation always has std.core loaded, so the per-scalar
+		# JSON helpers must be resolvable.  Reaching this site with
+		# active captures and a missing helper is a contract failure
+		# (would silently drop captured-frame data from
+		# `<error>.context.encode_compact()`); ICE so the bug
+		# surfaces.  Stage2 unit tests don't construct active captures
+		# without loading std.core.
+		json_helpers: dict[str, "FunctionId"] = {}
+		for hkey, hname in (
+			("int", "diagnostic_json_int"),
+			("uint", "diagnostic_json_uint"),
+			("bool", "diagnostic_json_bool"),
+			("float", "diagnostic_json_float"),
+			("string", "diagnostic_json_string"),
+		):
+			fn_id = self._find_free_fn_id("std.core", hname)
+			if fn_id is None:
+				raise AssertionError(
+					f"`^`-captured-locals frame builder reached HIR→MIR "
+					f"with active captures but `core.{hname}` is not in "
+					"signatures — std.core not loaded.  Contract failure: "
+					"production compilation always has std.core; silently "
+					"skipping the frame would drop captured-frame data "
+					"from `<error>.context.encode_compact()`."
+				)
+			json_helpers[hkey] = fn_id
 
-		# Legacy DV path: emit per-key ErrorAddLocalDV.
-		for bid in sorted(self._active_captured_locals.keys()):
-			cap = self._active_captured_locals[bid]
-			val = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=val, local=cap.local_name))
-			val_ty = self._local_types.get(cap.local_name) or self._binding_types.get(cap.binding_id)
-			if val_ty is None:
-				raise AssertionError("captured local type missing in MIR lowering (checker bug)")
-			dv = self._capture_to_dv(value=val, value_ty=val_ty)
-			key_val = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=key_val, value=cap.capture_name))
-			self.b.emit(M.ErrorAddLocalDV(error=err_val, frame=frame_val, key=key_val, value=dv))
-
-		# Slice 2 DV→JSON: append the built frame JSON to the
-		# context_json document.  Innermost-first ordering: each
-		# function's frame is appended at the throw site (inner
-		# function unwinds first, gets appended first).
-		if frame_json_val is not None:
-			self.b.emit(M.ExcAppendContextFrame(error=err_val, frame_json=frame_json_val))
+		frame_json_val = self._build_throw_context_frame_json(
+			frame_name=frame_name,
+			caps_sorted=caps_sorted,
+			json_helpers=json_helpers,
+		)
+		# Innermost-first ordering: each function's frame is appended
+		# at the throw site (inner function unwinds first → appended
+		# first in the context_json array).
+		self.b.emit(M.ExcAppendContextFrame(error=err_val, frame_json=frame_json_val))
 
 	def _record_drop_decision(
 		self,
@@ -2933,111 +2921,12 @@ class HIRToMIR:
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:
-		if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
-			for idx, proj in enumerate(expr.subject.projections):
-				if not isinstance(proj, H.HPlaceField):
-					continue
-				if proj.name == "attrs":
-					if idx + 1 >= len(expr.subject.projections) or not isinstance(expr.subject.projections[idx + 1], H.HPlaceIndex):
-						continue
-					if idx + 2 != len(expr.subject.projections):
-						continue
-					# Slice 7a (0.31.62, 2026-05-05): `Error.attrs[...]` user-source
-					# access is rejected at the checker boundary with
-					# `E_EXC_ATTRS_REMOVED` for non-stdlib callers (and stdlib has
-					# no internal use as of this slice — verified by grep).  This
-					# lowering path therefore is not reachable from production
-					# compilation; it stays alive for the stage2 / codegen unit
-					# tests that construct the HIR shape directly to exercise the
-					# `ErrorAttrsGetDV` MIR op + LLVM codegen.  Slice 7b retires
-					# the runtime export and removes the lowering.
-					err_val = self.lower_expr(expr.subject.base)
-					err_ty = self._infer_expr_type(expr.subject.base)
-					if err_ty is not None:
-						err_def = self._type_table.get(err_ty)
-						if err_def.kind is TypeKind.REF and err_def.param_types:
-							inner_ty = err_def.param_types[0]
-							tmp = self.b.new_temp()
-							self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
-							err_val = tmp
-					key_val = self.lower_expr(expr.index)
-					dest = self.b.new_temp()
-					self.b.emit(M.ErrorAttrsGetDV(dest=dest, error=err_val, key=key_val))
-					self._local_types[dest] = self._dv_type
-					return dest
-				if proj.name == "captures":
-					if idx + 1 >= len(expr.subject.projections) or not isinstance(expr.subject.projections[idx + 1], H.HPlaceIndex):
-						continue
-					if idx + 2 != len(expr.subject.projections):
-						continue
-					# Slice 7a (0.31.62, 2026-05-05): `Error.captures[...]`
-					# user-source access is rejected at the checker boundary with
-					# `E_EXC_CAPTURES_REMOVED` for non-stdlib callers (and stdlib
-					# has no internal use as of this slice).  Same caveat as the
-					# `Error.attrs[...]` site above — this path is alive only for
-					# stage2 / codegen unit tests; Slice 7b retires it.
-					err_val = self.lower_expr(expr.subject.base)
-					err_ty = self._infer_expr_type(expr.subject.base)
-					if err_ty is not None:
-						err_def = self._type_table.get(err_ty)
-						if err_def.kind is TypeKind.REF and err_def.param_types:
-							inner_ty = err_def.param_types[0]
-							tmp = self.b.new_temp()
-							self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
-							err_val = tmp
-					frame_val = self.lower_expr(expr.subject.projections[idx + 1].index)
-					key_val = self.lower_expr(expr.index)
-					dest = self.b.new_temp()
-					self.b.emit(M.ErrorCapturesGetDV(dest=dest, error=err_val, frame=frame_val, key=key_val))
-					self._local_types[dest] = self._dv_type
-					return dest
-		if (
-			isinstance(expr.subject, H.HIndex)
-			and (
-				(
-					isinstance(expr.subject.subject, H.HField)
-					and expr.subject.subject.name == "captures"
-				)
-				or (
-					hasattr(H, "HPlaceExpr")
-					and isinstance(expr.subject.subject, getattr(H, "HPlaceExpr"))
-					and len(expr.subject.subject.projections) == 1
-					and isinstance(expr.subject.subject.projections[0], H.HPlaceField)
-					and expr.subject.subject.projections[0].name == "captures"
-				)
-			)
-		):
-			err_base = expr.subject.subject.subject if isinstance(expr.subject.subject, H.HField) else expr.subject.subject.base
-			err_val = self.lower_expr(err_base)
-			err_ty = self._infer_expr_type(err_base)
-			if err_ty is not None:
-				err_def = self._type_table.get(err_ty)
-				if err_def.kind is TypeKind.REF and err_def.param_types:
-					inner_ty = err_def.param_types[0]
-					tmp = self.b.new_temp()
-					self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
-					err_val = tmp
-			frame_val = self.lower_expr(expr.subject.index)
-			key_val = self.lower_expr(expr.index)
-			dest = self.b.new_temp()
-			self.b.emit(M.ErrorCapturesGetDV(dest=dest, error=err_val, frame=frame_val, key=key_val))
-			self._local_types[dest] = self._dv_type
-			return dest
-		if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
-			err_val = self.lower_expr(expr.subject.subject)
-			err_ty = self._infer_expr_type(expr.subject.subject)
-			if err_ty is not None:
-				err_def = self._type_table.get(err_ty)
-				if err_def.kind is TypeKind.REF and err_def.param_types:
-					inner_ty = err_def.param_types[0]
-					tmp = self.b.new_temp()
-					self.b.emit(M.LoadRef(dest=tmp, ptr=err_val, inner_ty=inner_ty))
-					err_val = tmp
-			key_val = self.lower_expr(expr.index)
-			dest = self.b.new_temp()
-			self.b.emit(M.ErrorAttrsGetDV(dest=dest, error=err_val, key=key_val))
-			self._local_types[dest] = self._dv_type
-			return dest
+		# Slice 7b (2026-05-05): user-source `e.attrs[k]` / `e.captures[k]`
+		# is rejected at the checker boundary with `E_EXC_ATTRS_REMOVED`
+		# / `E_EXC_CAPTURES_REMOVED`; the legacy DV-bridge lowering paths
+		# that emitted `M.ErrorAttrsGetDV` / `M.ErrorCapturesGetDV` are
+		# retired here.  The corresponding MIR ops + runtime exports are
+		# slated for deletion later in this slice.
 		subject = self.lower_expr(expr.subject)
 		index = self.lower_expr(expr.index)
 		elem_ty = self._infer_array_elem_type(expr.subject)
@@ -3111,6 +3000,15 @@ class HIRToMIR:
 		return loaded
 
 	def _emit_index_error_throw(self, *, index_val: M.ValueId) -> None:
+		"""Compiler-synthesized inline throw for the array bounds-check.
+
+		Slice 7b (2026-05-05): routed through the same unified
+		Diagnostic owning-throw path as user-source `throw E(...)` —
+		constructs the `std.err:IndexError` Path-A struct from MIR
+		values, calls its synthesized `to_json_text(&IndexError)`, and
+		emits ConstructError(empty) + ExcSetParamsJson.  No legacy DV
+		attachment.
+		"""
 		event_fqn = "std.err:IndexError"
 		schema = self._exception_schemas.get(event_fqn)
 		if schema is None:
@@ -3122,6 +3020,15 @@ class HIRToMIR:
 			if required not in field_set:
 				raise AssertionError(f"IndexError schema missing field {required!r} (checker bug)")
 
+		# Slice 7b: stage2-unit-test environments stub out std.err — no
+		# Path-A struct is registered in the synthetic type table.
+		# Fall through to empty-envelope ConstructError when missing.
+		# (Production compilation always has the struct registered by
+		# parser-side parallel struct synthesis.)
+		struct_ty = self._type_table.get_nominal(
+			kind=TypeKind.STRUCT, module_id="std.err", name="IndexError",
+		)
+
 		code_const = self._lookup_error_code(event_fqn=event_fqn)
 		code_val = self.b.new_temp()
 		self.b.emit(M.ConstUint64(dest=code_val, value=code_const))
@@ -3131,53 +3038,48 @@ class HIRToMIR:
 
 		container_const = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=container_const, value=ARRAY_CONTAINER_ID))
-		dv_container = self.b.new_temp()
-		self.b.emit(M.ConstructDV(dest=dv_container, dv_type_name="String", args=[container_const]))
-		self._local_types[dv_container] = self._dv_type
-		dv_index = self.b.new_temp()
-		self.b.emit(M.ConstructDV(dest=dv_index, dv_type_name="Int", args=[index_val]))
-		self._local_types[dv_index] = self._dv_type
+		self._local_types[container_const] = self._string_type
 
-		name_to_dv = {"container_id": dv_container, "index": dv_index}
-		# Slice 7a (0.31.62, 2026-05-05): also project the schema fields to
-		# canonical params JSON so user code reading via typed catch
-		# (`e.container_id`, `e.index`) and via `e.params.encode_compact()`
-		# / `e.params.get(k)` sees the values.  This mirrors the per-field
-		# DV projection done by user-source `throw IndexError(...)`
-		# lowering in `_construct_error_via_synthesized_diagnostic`; the
-		# inline bounds-check block bypasses that lowering since the error
-		# is constructed directly here.  Order: lex-utf8-sorted (matches
-		# the throw-side projection invariant — `container_id` < `index`).
-		field_dvs = [
-			("container_id", dv_container, False),
-			("index", dv_index, False),
-		]
-		params_json_val = None
-		if self._find_free_fn_id("std.core", "_dv_to_json_text") is not None:
-			params_json_val = self._build_throw_params_json(field_dvs)
+		# Build positional MIR values in declaration order.
+		name_to_mir = {"container_id": container_const, "index": index_val}
+		field_mir_vals = [name_to_mir[name] for name in schema_fields]
 
-		first_name = schema_fields[0]
-		first_dv = name_to_dv[first_name]
-		first_key = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=first_key, value=first_name))
 		err_val = self.b.new_temp()
-		self.b.emit(
-			M.ConstructError(
+		self._local_types[err_val] = self._type_table.ensure_error()
+		# Slice 7b contract guard (K, 2026-05-06):
+		#   - Stage2-unit-test environments stub out std.err — no
+		#     Path-A struct registered — fall through to empty-envelope.
+		#   - Production / package-consumer compilation MUST have the
+		#     synthesized `to_json_text` reachable; missing it is a
+		#     compiler/package-loader bug, not a valid `{}` payload.
+		#     ICE so the bug surfaces clearly.
+		if struct_ty is None:
+			self.b.emit(M.ConstructError(
 				dest=err_val,
 				code=code_val,
 				event_fqn=event_fqn_val,
-				payload=first_dv,
-				attr_key=first_key,
+				payload=None,
+				attr_key=None,
+			))
+		else:
+			to_json_fn_id = self._lookup_diagnostic_to_json_text_fn_id(struct_ty)
+			if to_json_fn_id is None:
+				raise AssertionError(
+					f"`pub error {event_fqn}` has its Path-A struct registered "
+					"but its synthesized `core.Diagnostic.to_json_text` impl "
+					"method is not in `_signatures_by_id` — compiler / "
+					"package-loader bug.  The synthesized impl should always "
+					"be reachable for production `pub error` types (including "
+					"package-consumer compilation that imports std.err)."
+				)
+			self._emit_diagnostic_owning_throw(
+				err_val=err_val,
+				code_val=code_val,
+				event_fqn_val=event_fqn_val,
+				event_fqn=event_fqn,
+				struct_ty=struct_ty,
+				field_mir_vals=field_mir_vals,
 			)
-		)
-		self._local_types[err_val] = self._type_table.ensure_error()
-		for name in schema_fields[1:]:
-			dv_val = name_to_dv[name]
-			key_val = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=key_val, value=name))
-			self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key_val, value=dv_val))
-		if params_json_val is not None:
-			self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=params_json_val))
 
 		self._propagate_error(err_val)
 
@@ -5062,26 +4964,23 @@ class HIRToMIR:
 		*,
 		frame_name: str,
 		caps_sorted: list,
-		dv_to_json_fn: "FunctionId",
+		json_helpers: dict,
 	) -> M.ValueId:
-		"""Build a single context-frame JSON object for the current
-		function's `^`-captured locals at the throw site.
+		"""Slice 7b (2026-05-05): build a single context-frame JSON
+		object for the current function's `^`-captured locals.
 
-		Slice 2 DV→JSON migration — emits MIR that produces a String
-		of the form:
-
+		Output shape:
 		    `{"fn":"<frame_name>","locals":{<k1>:<v1>,...}}`
 
-		Inner locals are lex-utf8 sorted by capture_name (caller
-		passes `caps_sorted` already in that order).  Each captured
-		local's value is projected to JSON text via the transitional
-		`core._dv_to_json_text` helper — same pattern as the params
-		builder.  Caller is `_emit_captured_locals`; the result is
-		consumed by `M.ExcAppendContextFrame`.
+		Inner locals are lex-utf8 sorted by capture_name (caller passes
+		`caps_sorted` already in that order).  Each captured local's
+		value is projected to JSON text by direct dispatch to the
+		appropriate `core.diagnostic_json_<scalar>` helper — no DV
+		intermediate.  The set of supported capture types
+		(Int/Uint/Bool/Float/String) is enforced by the checker.
 
-		DELETION LEDGER: depends on the transitional `_dv_to_json_text`
-		projector (see `stdlib/std/core/core.drift`).  Replace at
-		Slice 5 with direct `to_json -> JsonNode` projection.
+		`json_helpers` is a `{"int","uint","bool","float","string"} →
+		FunctionId` map pre-resolved by the caller.
 		"""
 		# Open: `{"fn":"<frame_name>","locals":{`
 		# We embed frame_name as a JSON-quoted string at compile time
@@ -5110,39 +5009,20 @@ class HIRToMIR:
 			next_result = self.b.new_temp()
 			self.b.emit(M.StringConcat(dest=next_result, left=result, right=key_lit))
 			result = next_result
-			# Project the captured local value to JSON text via DV
-			# (same path as throw-side params).  Read the local, build
-			# a fresh DV (does not consume the original — captured
-			# locals can be observed by both the legacy DV path and
-			# this JSON path independently).
+			# Load the captured local and project to JSON text.
 			val = self.b.new_temp()
 			self.b.emit(M.LoadLocal(dest=val, local=cap.local_name))
 			val_ty = self._local_types.get(cap.local_name) or self._binding_types.get(cap.binding_id)
 			if val_ty is None:
 				raise AssertionError("captured local type missing in MIR lowering (checker bug)")
-			dv_fresh = self._capture_to_dv(value=val, value_ty=val_ty)
-			self._local_types[dv_fresh] = self._dv_type
-			# Materialize for &DiagnosticValue borrow.
-			dv_local = f"__throw_ctx_proj_{self.b.new_temp()}"
-			self.b.ensure_local(dv_local)
-			self._local_types[dv_local] = self._dv_type
-			self.b.emit(M.StoreLocal(local=dv_local, value=dv_fresh))
-			dv_addr = self.b.new_temp()
-			self.b.emit(M.AddrOfLocal(dest=dv_addr, local=dv_local, is_mut=False))
-			value_text = self.b.new_temp()
-			self.b.emit(M.Call(dest=value_text, fn_id=dv_to_json_fn, args=[dv_addr], can_throw=False))
-			self._local_types[value_text] = self._string_type
-			# Concat value text into the frame.
+			value_text = self._project_capture_to_json_text(
+				value=val,
+				value_ty=val_ty,
+				json_helpers=json_helpers,
+			)
 			next_result = self.b.new_temp()
 			self.b.emit(M.StringConcat(dest=next_result, left=result, right=value_text))
 			result = next_result
-			# Drop the cloned DV after projection.  Same pattern as
-			# `_build_throw_params_json`; the throw unwinds before
-			# normal scope-drop fires.
-			dv_for_drop = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=dv_for_drop, local=dv_local))
-			self._local_types[dv_for_drop] = self._dv_type
-			self.b.emit(M.DropValue(value=dv_for_drop, ty=self._dv_type))
 		# Close: `}}`
 		close_lit = self.b.new_temp()
 		self.b.emit(M.ConstString(dest=close_lit, value="}}"))
@@ -5150,6 +5030,60 @@ class HIRToMIR:
 		self.b.emit(M.StringConcat(dest=final, left=result, right=close_lit))
 		self._local_types[final] = self._string_type
 		return final
+
+	def _project_capture_to_json_text(
+		self,
+		*,
+		value: M.ValueId,
+		value_ty: TypeId,
+		json_helpers: dict,
+	) -> M.ValueId:
+		"""Slice 7b: dispatch a captured-local scalar value to the
+		matching `core.diagnostic_json_<scalar>` helper.  Returns a MIR
+		value of String type holding the JSON text.
+
+		String values pass via `&String` (AddrOfLocal); other scalars
+		pass by value.  Capture types are restricted to scalars by the
+		checker; reaching this helper with a non-scalar is a checker /
+		lowering boundary mismatch.
+		"""
+		json_text = self.b.new_temp()
+		self._local_types[json_text] = self._string_type
+		if value_ty == self._int_type:
+			self.b.emit(M.Call(dest=json_text, fn_id=json_helpers["int"], args=[value], can_throw=False))
+			return json_text
+		if value_ty == self._uint_type:
+			self.b.emit(M.Call(dest=json_text, fn_id=json_helpers["uint"], args=[value], can_throw=False))
+			return json_text
+		if value_ty == self._bool_type:
+			self.b.emit(M.Call(dest=json_text, fn_id=json_helpers["bool"], args=[value], can_throw=False))
+			return json_text
+		if value_ty == self._float_type:
+			self.b.emit(M.Call(dest=json_text, fn_id=json_helpers["float"], args=[value], can_throw=False))
+			return json_text
+		if value_ty == self._string_type:
+			# diagnostic_json_string takes &String — materialize a
+			# named local and pass its address.  We must explicitly
+			# drop the local after the call: throw-site unwind bypasses
+			# normal scope-drop, so the LoadLocal-staked refcount on
+			# the captured local would otherwise leak.
+			str_local = f"__throw_ctx_str_{self.b.new_temp()}"
+			self.b.ensure_local(str_local)
+			self._local_types[str_local] = self._string_type
+			self.b.emit(M.StoreLocal(local=str_local, value=value))
+			str_ref = self.b.new_temp()
+			self._local_types[str_ref] = self._type_table.ensure_ref(self._string_type)
+			self.b.emit(M.AddrOfLocal(dest=str_ref, local=str_local, is_mut=False))
+			self.b.emit(M.Call(dest=json_text, fn_id=json_helpers["string"], args=[str_ref], can_throw=False))
+			str_for_drop = self.b.new_temp()
+			self._local_types[str_for_drop] = self._string_type
+			self.b.emit(M.LoadLocal(dest=str_for_drop, local=str_local))
+			self.b.emit(M.DropValue(value=str_for_drop, ty=self._string_type))
+			return json_text
+		raise AssertionError(
+			"captured local type must be a supported scalar "
+			"(Int/Uint/Bool/Float/String) — checker should have rejected"
+		)
 
 	def _lower_typed_catch_field_proj(
 		self,
@@ -5287,95 +5221,6 @@ class HIRToMIR:
 		self._local_types[result] = field_ty
 		return result
 
-
-	def _build_throw_params_json(self, field_dvs: list[tuple[str, M.ValueId, bool]]) -> M.ValueId:
-		"""Build the canonical params JSON document for a throw site.
-
-		Slice 1 DV→JSON migration — emits MIR that produces a String
-		of the form `{"<k1>":<json1>,"<k2>":<json2>,...}` with field
-		names lex-utf8 sorted at compile time.  Each field value is
-		cloned (DV is Copy) so the original remains consumable by the
-		existing DV path; the cloned DV is materialized to a temp
-		local (auto-dropped at scope exit) for the `&DiagnosticValue`
-		argument to `core._dv_to_json_text`.
-
-		Returns the MIR ValueId of the final String.
-
-		Caller is responsible for ensuring `field_dvs` is non-empty;
-		empty exceptions skip the build (runtime params_json defaults
-		to `"{}"` from drift_error_new).
-
-		DELETION LEDGER: this helper depends on the transitional
-		`_dv_to_json_text` projector (see
-		`stdlib/std/core/core.drift`).  Replace at Slice 5 with a
-		direct `to_json -> JsonNode` projection path.
-		"""
-		assert field_dvs, "_build_throw_params_json requires at least one field"
-		dv_to_json_fn = self._find_free_fn_id("std.core", "_dv_to_json_text")
-		assert dv_to_json_fn is not None, (
-			"caller must check `_find_free_fn_id('std.core', '_dv_to_json_text')` "
-			"before invoking _build_throw_params_json"
-		)
-		# Sort by name for deterministic, lex-utf8-canonical output.
-		sorted_fields = sorted(field_dvs, key=lambda t: t[0])
-		# Start with "{".
-		result = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=result, value="{"))
-		for i, (name, dv_val, _is_rvalue) in enumerate(sorted_fields):
-			# Optional comma separator before all but the first entry.
-			if i > 0:
-				comma = self.b.new_temp()
-				self.b.emit(M.ConstString(dest=comma, value=","))
-				next_result = self.b.new_temp()
-				self.b.emit(M.StringConcat(dest=next_result, left=result, right=comma))
-				result = next_result
-			# Quoted key + colon — field name is a Drift identifier; it
-			# satisfies JSON-string-clean (ASCII identifier chars), so a
-			# bare ConstString of `"<name>":` is safe.  Escapes via
-			# `_json_quote_string` aren't needed at the key position for
-			# valid Drift identifiers in v1.
-			key_lit = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=key_lit, value=f'"{name}":'))
-			next_result = self.b.new_temp()
-			self.b.emit(M.StringConcat(dest=next_result, left=result, right=key_lit))
-			result = next_result
-			# Clone the DV (Copy semantics) so the original stays
-			# consumable by the existing DV path below.  Materialize to
-			# a temp local for the `&DiagnosticValue` borrow.
-			dv_copy = self.b.new_temp()
-			self.b.emit(M.CopyValue(dest=dv_copy, value=dv_val, ty=self._dv_type))
-			self._local_types[dv_copy] = self._dv_type
-			dv_local = f"__throw_dv_proj_{self.b.new_temp()}"
-			self.b.ensure_local(dv_local)
-			self._local_types[dv_local] = self._dv_type
-			self.b.emit(M.StoreLocal(local=dv_local, value=dv_copy))
-			dv_addr = self.b.new_temp()
-			self.b.emit(M.AddrOfLocal(dest=dv_addr, local=dv_local, is_mut=False))
-			# Call _dv_to_json_text(&dv_local) → owned String.
-			value_text = self.b.new_temp()
-			self.b.emit(M.Call(dest=value_text, fn_id=dv_to_json_fn, args=[dv_addr], can_throw=False))
-			self._local_types[value_text] = self._string_type
-			# Explicit drop of the cloned DV after the projection call.
-			# The local is created inside the throw site; control
-			# unwinds via the throw before normal scope-drop fires, so
-			# rely on an explicit DropValue here.  Reading the local
-			# back out via LoadLocal materializes the value for the
-			# drop; the local's underlying alloca is then dead.
-			dv_for_drop = self.b.new_temp()
-			self.b.emit(M.LoadLocal(dest=dv_for_drop, local=dv_local))
-			self._local_types[dv_for_drop] = self._dv_type
-			self.b.emit(M.DropValue(value=dv_for_drop, ty=self._dv_type))
-			# Concat: result += value_text.
-			next_result = self.b.new_temp()
-			self.b.emit(M.StringConcat(dest=next_result, left=result, right=value_text))
-			result = next_result
-		# Close brace.
-		close_lit = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=close_lit, value="}"))
-		final = self.b.new_temp()
-		self.b.emit(M.StringConcat(dest=final, left=result, right=close_lit))
-		self._local_types[final] = self._string_type
-		return final
 
 	def _lower_synthesized_error_params_view(self, recv: H.HExpr, view_ty: TypeId) -> M.ValueId:
 		"""Build an `ErrorParamsView` value from a synthesized
@@ -6717,19 +6562,37 @@ class HIRToMIR:
 		if diags:
 			raise AssertionError("exception ctor args reached MIR lowering with diagnostics (checker bug)")
 
-		# Slice 6 — manual-Diagnostic ownership gate (Site C).
-		# K-rule: once a user writes `implement core.Diagnostic for E`,
-		# the compiler stops interpreting E's fields for diagnostic
-		# projection.  Bypass the per-field DV-attachment path
-		# (ConstructError(payload=...) + ErrorAddAttrDV) entirely and
-		# route the params JSON through the user's own
-		# `to_json_text(&E)` impl: build the Path-A struct from the
-		# resolved field values, dispatch the user's manual
-		# `to_json_text`, and hand the resulting JSON string straight
-		# to `ExcSetParamsJson`.
-		manual_owners = getattr(self._type_table, "manual_diagnostic_pub_errors", None) or set()
-		if expr.event_fqn in manual_owners:
-			return self._construct_error_via_manual_diagnostic(
+		# Slice 7b unification (2026-05-05): all `error E` throws —
+		# pub or non-pub, manual `implement core.Diagnostic` or
+		# compiler-synthesized — route through the same
+		# `_construct_error_via_diagnostic` path.  The path builds the
+		# Path-A struct from resolved field values, calls the type's
+		# `to_json_text(&E)` impl, and hands the resulting String to
+		# `ExcSetParamsJson`.  There is no DV-attachment
+		# (`ConstructError(payload=DV)` / `ErrorAddAttrDV`) on the
+		# production throw lowering anymore — Slice 6's K-rule
+		# ("Diagnostic impl owns the whole JSON shape") now applies
+		# uniformly.
+		#
+		# Slice 7b (K, 2026-05-06; LANGUAGE_BUG fix): synthesis fires
+		# for non-pub `error E` too — pre-fix, non-pub error throws
+		# silently emitted an empty params envelope.  The empty-
+		# envelope branch below is now reachable only for empty
+		# throws (`throw E()` with no fields) or stage2-stub test
+		# environments (no Path-A struct registered); a non-empty
+		# throw of an `error E` whose Diagnostic impl is missing ICEs
+		# in the contract guard (compiler / package metadata bug).
+		struct_ty: TypeId | None = None
+		if ":" in expr.event_fqn:
+			_mod_id, _type_name = expr.event_fqn.split(":", 1)
+			struct_ty = self._type_table.get_nominal(
+				kind=TypeKind.STRUCT, module_id=_mod_id, name=_type_name,
+			)
+		diag_fn_id: "FunctionId | None" = None
+		if struct_ty is not None:
+			diag_fn_id = self._lookup_diagnostic_to_json_text_fn_id(struct_ty)
+		if diag_fn_id is not None and resolved:
+			return self._construct_error_via_diagnostic(
 				err_val=err_val,
 				code_val=code_val,
 				event_fqn_val=event_fqn_val,
@@ -6737,123 +6600,50 @@ class HIRToMIR:
 				resolved=resolved,
 				schema_fields=schema_fields,
 			)
-
-		if not resolved:
-			self.b.emit(
-				M.ConstructError(
-					dest=err_val,
-					code=code_val,
-					event_fqn=event_fqn_val,
-					payload=None,
-					attr_key=None,
+		# Slice 7b contract guard (K, 2026-05-06): a non-empty throw
+		# of any `error E` (pub OR non-pub) MUST route through the
+		# Diagnostic impl.  Synthesis fires for every `error` decl
+		# with projectable fields, so reaching this fall-through with
+		# `resolved` non-empty AND a Path-A struct registered AND the
+		# event known as an `error` means `to_json_text` is missing
+		# from `_signatures_by_id` — a compiler / package metadata
+		# bug, not a valid `{}` payload.  ICE so the bug surfaces
+		# clearly instead of silently dropping field values from
+		# `e.params.get(...)`.
+		if resolved and struct_ty is not None and diag_fn_id is None:
+			exc_kinds = getattr(self._type_table, "exception_kinds", None) or {}
+			if exc_kinds.get(expr.event_fqn) == "error":
+				raise AssertionError(
+					f"`error {expr.event_fqn}` reached HIR→MIR throw "
+					"lowering with fields but `core.Diagnostic.to_json_text` "
+					"impl method is not in signatures — compiler / package "
+					"metadata bug; the synthesized impl should always be "
+					"reachable for any `error` type with projectable fields"
 				)
-			)
-			return err_val
-
-		# K28-aftermath Leak A (throw side): exception ctor lowers each field
-		# to a DV and consumes it via ConstructError(payload=…) /
-		# ErrorAddAttrDV(value=…), both of which clone the DV at runtime
-		# (drift_error_new_with_payload + drift_error_add_attr_dv both call
-		# drift_dv_clone).  The source DV temp must be released after
-		# consumption or its inner refcounted payload (Object's
-		# Array<DiagnosticEntry>, String buffers) leaks.
-		#
-		# Two ownership-release mechanisms coexist and must NOT overlap:
-		# (a) `_construct_dv_temps` / `_release_construct_dv_temp` in LLVM
-		#     codegen (added in 0.27.187/188) fires automatically when a
-		#     ConstructError / ErrorAddAttrDV site consumes a MIR value
-		#     that was produced by `M.ConstructDV` (HDVInit and the
-		#     literal-promotion branch below both go through ConstructDV).
-		# (b) MIR-level `DropValue` emitted here when the field expr is an
-		#     HCall / HMethodCall / HIndex returning DV — those produce an
-		#     owned temp across a function / runtime boundary and are NOT
-		#     tracked by (a).
-		# Emitting BOTH on the same value double-frees (see
-		# `exception_string_attr_concat_double_catch_no_corruption`), so
-		# `dv_is_rvalue` stays False whenever (a) already covers the value.
-		field_dvs: list[tuple[str, M.ValueId, bool]] = []
-		for name, field_expr in resolved:
-			if isinstance(field_expr, H.HDVInit):
-				# HDVInit lowers to M.ConstructDV — covered by _construct_dv_temps.
-				dv_val = self.lower_expr(field_expr)
-				dv_is_rvalue = False
-			elif isinstance(field_expr, (H.HLiteralInt, H.HLiteralBool, H.HLiteralString)):
-				inner_val = self.lower_expr(field_expr)
-				dv_val = self.b.new_temp()
-				kind_name = "Int" if isinstance(field_expr, H.HLiteralInt) else "Bool"
-				if isinstance(field_expr, H.HLiteralString):
-					kind_name = "String"
-				self.b.emit(M.ConstructDV(dest=dv_val, dv_type_name=kind_name, args=[inner_val]))
-				# Literal-promoted ConstructDV — covered by _construct_dv_temps.
-				dv_is_rvalue = False
-			else:
-				dv_val = self.lower_expr(field_expr)
-				dv_ty = self._local_types.get(dv_val)
-				if dv_ty is None:
-					# Slice 5: not every MIR temp producer (notably struct field
-					# reads via StructGetField) populates `_local_types`.  Fall
-					# back to type inference so DV-typed struct field loads —
-					# e.g. `self.dv` on `pub error ResultError { dv: DV }` from
-					# the auto-gen Throw impl — pass this contract check.
-					inferred = self._infer_expr_type(field_expr)
-					if inferred is not None:
-						dv_ty = inferred
-				if dv_ty != self._dv_type:
-					raise AssertionError(
-						f"exception field {name!r} must lower to DiagnosticValue (checker bug)"
-					)
-				# HCall / HMethodCall / HIndex returning DV are not tracked
-				# by _construct_dv_temps; MIR-level DropValue is needed.
-				# HVar / HPlaceExpr defer to local scope-drop.
-				dv_is_rvalue = self._dv_method_recv_is_rvalue(field_expr)
-			field_dvs.append((name, dv_val, dv_is_rvalue))
-
-		# Slice 1 of the DV→JSON diagnostics-context migration: build
-		# the canonical params JSON document BEFORE the existing DV-path
-		# consumption (ConstructError + ErrorAddAttrDV) so each field's
-		# DV is still observable.  Each field's DV is cloned via
-		# M.CopyValue (DV is Copy via the std.core impl) so the original
-		# stays intact for the legacy DV path.  Field names are
-		# lex-utf8 sorted at compile time for deterministic output.
-		# After the existing consumption emits err_val, ExcSetParamsJson
-		# stores the built JSON.
-		#
-		# Skip the params build when std.core is not loaded (stage2 unit
-		# tests with stubbed signatures).  Production builds always have
-		# std.core; the params surface degrades gracefully to "{}" (the
-		# runtime default) in stubbed contexts.
-		params_json_val = None
-		if self._find_free_fn_id("std.core", "_dv_to_json_text") is not None:
-			params_json_val = self._build_throw_params_json(field_dvs)
-
-		first_name, first_dv, first_is_rvalue = field_dvs[0]
-		first_key = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=first_key, value=first_name))
+		# Empty-envelope shape: reachable in two cases:
+		#   1. The throw has zero fields (`throw E()` with empty
+		#      schema) — `to_json_text` would return the literal
+		#      `"{}"`, but we skip the call and let the runtime's
+		#      default `"{}"` stand.
+		#   2. Stage2-stub test environments where the synthetic type
+		#      table has no Path-A struct registered for this
+		#      event_fqn.  Production compilation always registers the
+		#      struct (parser-side parallel struct synthesis); the ICE
+		#      above guards the production path.
+		# No params JSON is attached — the runtime default `"{}"` is
+		# returned by `e.params.encode_compact()`.
 		self.b.emit(
 			M.ConstructError(
 				dest=err_val,
 				code=code_val,
 				event_fqn=event_fqn_val,
-				payload=first_dv,
-				attr_key=first_key,
+				payload=None,
+				attr_key=None,
 			)
 		)
-		if first_is_rvalue:
-			self.b.emit(M.DropValue(value=first_dv, ty=self._dv_type))
-		for name, dv, is_rvalue in field_dvs[1:]:
-			key = self.b.new_temp()
-			self.b.emit(M.ConstString(dest=key, value=name))
-			self.b.emit(M.ErrorAddAttrDV(error=err_val, key=key, value=dv))
-			if is_rvalue:
-				self.b.emit(M.DropValue(value=dv, ty=self._dv_type))
-		# Hand the built params JSON over to the runtime; ExcSetParamsJson
-		# takes ownership (string_arc treats it as consume; see
-		# stage2/string_arc.py).
-		if params_json_val is not None:
-			self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=params_json_val))
 		return err_val
 
-	def _construct_error_via_manual_diagnostic(
+	def _construct_error_via_diagnostic(
 		self,
 		*,
 		err_val: M.ValueId,
@@ -6863,13 +6653,23 @@ class HIRToMIR:
 		resolved: list[tuple[str, "H.HExpr"]],
 		schema_fields: list[str] | None,
 	) -> M.ValueId:
-		"""Slice 6 manual-Diagnostic owning lowering for `throw E(...)`.
+		"""Slice 6/7b unified-Diagnostic owning lowering for `throw E(...)`.
 
 		Build the Path-A struct E from the resolved field values, call
-		the user's manual `to_json_text(&E)` to project the JSON, and
+		the type's `to_json_text(&E)` impl to project the JSON, and
 		hand the result to `ExcSetParamsJson`.  No DV-attachment
-		(`ConstructError(payload=...)` / `ErrorAddAttrDV`) — the user
-		owns the whole JSON shape.
+		(`ConstructError(payload=...)` / `ErrorAddAttrDV`) — the
+		Diagnostic impl owns the whole JSON shape, regardless of
+		whether the impl is user-manual (Slice 6) or compiler-
+		synthesized (Slice 7b — same code path).
+
+		Slice 7b unification (2026-05-05): the synthesized
+		`to_json_text` body emits canonical JSON via per-field
+		`<self>.<field>.to_json_text()` dispatch; routing synthesized
+		throws through the same path as manual throws fixes the
+		variant-field double-quoting bug (synthesized was wrapping
+		non-scalar field values in `DV::String(value.to_json_text())`,
+		which then JSON-quoted the already-canonical body).
 
 		`resolved` is in declaration order (matching `schema_fields`),
 		so positional `M.ConstructStruct` field order is correct.
@@ -6902,39 +6702,61 @@ class HIRToMIR:
 		# expects positional args in declaration order — `resolved` is
 		# already in that order.
 		field_vals: list[M.ValueId] = [self.lower_expr(val) for _name, val in resolved]
+		return self._emit_diagnostic_owning_throw(
+			err_val=err_val,
+			code_val=code_val,
+			event_fqn_val=event_fqn_val,
+			event_fqn=event_fqn,
+			struct_ty=struct_ty,
+			field_mir_vals=field_vals,
+		)
+
+	def _emit_diagnostic_owning_throw(
+		self,
+		*,
+		err_val: M.ValueId,
+		code_val: M.ValueId,
+		event_fqn_val: M.ValueId,
+		event_fqn: str,
+		struct_ty: TypeId,
+		field_mir_vals: list[M.ValueId],
+	) -> M.ValueId:
+		"""Slice 7b shared post-lowering owning-throw emission.
+
+		Given pre-lowered MIR values for the Path-A struct's fields (in
+		declaration order), construct the struct, call its
+		`to_json_text(&E)` Diagnostic impl, and emit ConstructError +
+		ExcSetParamsJson.  Used by both the user-source `throw E(...)`
+		path (`_construct_error_via_diagnostic`) and compiler-synthesized
+		inline throws (e.g. the array bounds-check IndexError site).
+		"""
+		# Locate the `to_json_text` method on this struct type.  Slice 7b
+		# invariant: every reachable `pub error E` has either a manual or
+		# compiler-synthesized `core.Diagnostic for E`; the lookup keys
+		# on (struct_ty, std.core.Diagnostic) and finds both.
+		to_json_fn_id = self._lookup_diagnostic_to_json_text_fn_id(struct_ty)
+		if to_json_fn_id is None:
+			raise AssertionError(
+				f"`core.Diagnostic for {event_fqn}` recorded but "
+				f"its `to_json_text` impl method is missing from signatures "
+				f"(manual or synthesized)"
+			)
 		struct_val = self.b.new_temp()
 		self._local_types[struct_val] = struct_ty
 		self.b.emit(M.ConstructStruct(
 			dest=struct_val,
 			struct_ty=struct_ty,
-			args=field_vals,
+			args=field_mir_vals,
 		))
-		# Locate the user's manual `to_json_text` method on this struct
-		# type — Slice 6 invariant: a manual-owned pub error has exactly
-		# ONE `to_json_text` method on its Path-A struct (the user's
-		# `implement core.Diagnostic for E`; synthesis was skipped).
-		to_json_fn_id = self._lookup_manual_diagnostic_to_json_text_fn_id(struct_ty)
-		if to_json_fn_id is None:
-			raise AssertionError(
-				f"manual `core.Diagnostic for {event_fqn}` recorded but "
-				f"its `to_json_text` impl method is missing from signatures"
-			)
 		# Materialize the struct in a named local so we can take its
 		# address (`AddrOfLocal` requires a named local, not a temp).
-		# Drop semantics: the local goes out of scope at the throw site
-		# — Drift's standard scope-drop frees the struct after the
-		# `to_json_text` call returns the JSON string.  Heap-backed
-		# fields (String / Array / Arc / etc.) round-trip without
-		# double-free or leak (see e2e
-		# `pub_error_manual_diagnostic_string_field`).
-		struct_local = f"__throw_manual_diag_{self.b.new_temp()}"
+		struct_local = f"__throw_diag_{self.b.new_temp()}"
 		self.b.ensure_local(struct_local)
 		self._local_types[struct_local] = struct_ty
 		self.b.emit(M.StoreLocal(local=struct_local, value=struct_val))
 		struct_ref = self.b.new_temp()
 		self._local_types[struct_ref] = self._type_table.ensure_ref(struct_ty)
 		self.b.emit(M.AddrOfLocal(dest=struct_ref, local=struct_local, is_mut=False))
-		# Call the user's to_json_text(&E) → String.
 		json_str_val = self.b.new_temp()
 		self._local_types[json_str_val] = self._string_type
 		self.b.emit(M.Call(
@@ -6943,9 +6765,6 @@ class HIRToMIR:
 			args=[struct_ref],
 			can_throw=False,
 		))
-		# Empty envelope: payload=None / attr_key=None matches the
-		# zero-fields ConstructError shape that already exists for
-		# `throw E()` with no payload.
 		self.b.emit(M.ConstructError(
 			dest=err_val,
 			code=code_val,
@@ -6953,18 +6772,40 @@ class HIRToMIR:
 			payload=None,
 			attr_key=None,
 		))
-		# Hand the user-projected JSON over to the runtime.
 		self.b.emit(M.ExcSetParamsJson(error=err_val, json_text=json_str_val))
+		# Slice 7b leak fix (K, 2026-05-06; surfaced by negative-space
+		# audit): explicit DropValue on the throw-site struct local.
+		# Throw propagation unwinds via gotos to the dispatch block —
+		# normal scope-drop does NOT fire on locals materialized inside
+		# the throw lowering itself, so heap-backed fields (String,
+		# Array, Arc, ...) on the struct would leak one slot per
+		# throw.  Same explicit-drop pattern as the captured-locals
+		# JSON frame builder uses for borrowed Strings.  Pre-fix this
+		# matched valgrind clean only for string-literal fields (Const
+		# strings have no heap allocation); heap-allocated String
+		# fields leaked silently.
+		struct_for_drop = self.b.new_temp()
+		self._local_types[struct_for_drop] = struct_ty
+		self.b.emit(M.LoadLocal(dest=struct_for_drop, local=struct_local))
+		self.b.emit(M.DropValue(value=struct_for_drop, ty=struct_ty))
 		return err_val
 
-	def _lookup_manual_diagnostic_to_json_text_fn_id(self, struct_ty: TypeId) -> "FunctionId | None":
-		"""Find the user's `implement core.Diagnostic for E` impl's
-		`to_json_text` method by scanning signatures for a TRAIT IMPL
-		method on `struct_ty` for the canonical `std.core.Diagnostic`
-		trait.  Filtering on the trait identity (not just method name)
-		avoids dispatching to an inherent `to_json_text` or to a
-		different-trait `to_json_text` that happens to share the
-		method name.  See `FnSignature.impl_trait_{module,name}`.
+	def _lookup_diagnostic_to_json_text_fn_id(self, struct_ty: TypeId) -> "FunctionId | None":
+		"""Find the `implement core.Diagnostic for E` impl's `to_json_text`
+		method by scanning signatures for a TRAIT IMPL method on
+		`struct_ty` for the canonical `std.core.Diagnostic` trait.
+		Filtering on the trait identity (not just method name) avoids
+		dispatching to an inherent `to_json_text` or to a different-trait
+		`to_json_text` that happens to share the method name.  See
+		`FnSignature.impl_trait_{module,name}`.
+
+		Slice 7b (2026-05-05): renamed from
+		`_lookup_manual_diagnostic_to_json_text_fn_id` — the helper has
+		always keyed on (target type, std.core.Diagnostic trait
+		identity), which is shared between user-manual impls and
+		compiler-synthesized impls.  The synthesized impl is registered
+		via the same `ImplementDef` shape (`trait=TypeExpr(name="Diagnostic",
+		module_id="std.core")`) so this lookup finds both equivalently.
 		"""
 		for fn_id, sig in self._signatures_by_id.items():
 			if not bool(getattr(sig, "is_method", False)):

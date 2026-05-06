@@ -15,9 +15,14 @@ var dq = containers.deque<type Int>();
 		r.__test_invalidate();
 		r.swap(0, 0);
 	} catch std.err:IteratorInvalidated(e) {
-		// Slice 7a: typed catch projection on synthesized fields.
-		val c_code = (not (e.container_id == "std.containers:Deque")) ? 10 : 0;
-		out = c_code;
+		// Slice 7b: op_id projects as bare integer (Swap → 4).
+		val cid_bad = (not (e.container_id == "std.containers:Deque"));
+		val op = match e.params.get("op_id").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		val op_bad = (op != 4);
+		out = (cid_bad ? 10 : 0) + (op_bad ? 20 : 0);
 	} catch {
 		out = 99;
 	}

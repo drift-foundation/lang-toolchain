@@ -2209,29 +2209,23 @@ def _build_signed_diagcarrier_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
 def test_ext_cross_package_diagnostic_projectability_gate_only(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-	"""Slice 5 — GATE-ONLY regression for cross-package projectability.
+	"""Slice 5/7b — cross-package projectability + clean compile.
 
-	Pins one narrow contract: with a producer package that supplies
+	Pins two contracts: with a producer package that supplies
 	`implement core.Diagnostic for Carrier`, a consumer that names
-	`carrier.Carrier` as a field type in a `pub error` must NOT be
-	rejected by the synthesis projectability gate with
-	`E_PUB_ERROR_FIELD_NOT_PROJECTABLE`.  This exercises the
-	external-impl-headers pre-scan in driftc.py +
-	`_scan_external_diagnostic_targets` (`lang/driftc/parser/__init__.py`).
-	`TraitWorld.impls` entries are `ImplDef(trait=TraitKey,
-	target=TypeKey, ...)` using `module` (not `module_id`) — both
-	the parser-side scan and the impl-headers scan are sensitive to
-	getting those field names right.
-
-	**Test name says "gate-only" deliberately.**  The synthesized
-	body's downstream UFCS dispatch on a cross-package
-	Diagnostic-impl method (`(&self.c).to_json_text()`) currently
-	does not resolve through the consumer's call resolver —
-	tracked as a follow-up trait-impl-visibility issue.  We assert
-	that downstream failure is exactly the expected
-	"no matching method 'to_json_text'" so unrelated package-
-	consumer breakage (load failure, signature mismatch, etc.)
-	can't slip past silently.
+	`carrier.Carrier` as a field type in a `pub error`:
+	  1. Must NOT be rejected by the synthesis projectability gate
+	     with `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`.  Exercises the
+	     external-impl-headers pre-scan in driftc.py +
+	     `_scan_external_diagnostic_targets`
+	     (`lang/driftc/parser/__init__.py`).
+	  2. Must compile cleanly (no diagnostics).  Slice 7b's
+	     unification of synthesized + manual Diagnostic throw lowering
+	     removed the type-checker-side per-field DV auto-promotion that
+	     used to attempt UFCS dispatch on `(&self.c).to_json_text()`
+	     at type-check time and fail for cross-package targets.  The
+	     synthesized `to_json_text` body's UFCS dispatch is deferred to
+	     hir_to_mir.py where the trait impl is uniformly resolvable.
 	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
 
@@ -2287,24 +2281,24 @@ pub fn main() nothrow -> Int {
 	diags = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
 	codes = [d.get("code") for d in diags]
 	messages = [d.get("message", "") for d in diags]
-	# Gate (this slice's contract): the projectability check must
-	# accept the cross-package field via the impl-headers pre-scan.
+	# Gate 1: projectability check must accept the cross-package field
+	# via the impl-headers pre-scan.
 	assert "E_PUB_ERROR_FIELD_NOT_PROJECTABLE" not in codes, (
 		f"cross-package Diagnostic impl on `acme.diagcarrier.Carrier` should make "
 		f"a `pub error Wraps {{ c: carrier.Carrier }}` field projectable via "
 		f"the impl-headers pre-scan in driftc.py; got codes: {codes}"
 	)
-	# Pin the EXPECTED downstream out-of-scope diagnostic so an
-	# unrelated package-consumer regression (load failure, sig
-	# mismatch, etc.) can't pass this gate-only test silently.
-	# When the cross-package UFCS dispatch follow-up lands, this
-	# assertion flips to `rc == 0` + no diagnostics and the
-	# gate-only framing is retired.
-	assert any("no matching method 'to_json_text'" in m for m in messages), (
-		f"expected the known out-of-scope `to_json_text` UFCS-dispatch "
-		f"failure on the cross-package Carrier — its absence suggests "
-		f"either the gate regressed silently OR the dispatch was fixed "
-		f"and this test should be retargeted; got: {messages}"
+	# Gate 2 (Slice 7b): consumer compile must produce no error
+	# diagnostics.  Pre-7b, the type-checker-side per-field DV
+	# auto-promotion attempted UFCS dispatch on `(&self.c).to_json_text()`
+	# at type-check time and failed for cross-package targets with
+	# "no matching method 'to_json_text'".  Slice 7b retired that
+	# auto-promotion — the synthesized body's UFCS dispatch is now
+	# resolved later in hir_to_mir.py uniformly.
+	assert codes == [], (
+		f"unexpected error diagnostics on cross-package consumer compile "
+		f"(Slice 7b unified the throw lowering — type-checker should not "
+		f"reject this); codes={codes}, messages={messages}"
 	)
 
 

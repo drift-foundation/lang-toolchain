@@ -390,3 +390,153 @@ fn main() nothrow -> Int {
 """)
 	_fails_with_code(rc, errs, 'E_UNKNOWN_FIELD_ON_ERROR',
 		"aliased typed catch binder field access rejected")
+
+
+# ── Probe 4-neg4 ─ throw arg type must match declared field type ──
+
+
+def test_throw_pub_error_field_type_mismatch_rejected(tmp_path, capsys):
+	"""Slice 7b regression (K, 2026-05-06, LANGUAGE_BUG): `throw E(...)`
+	argument types must match the `pub error E` declared field types.
+
+	Pre-fix bug shape: when Slice 7b retired the per-field
+	`is_diagnostic` walk + DV auto-promotion at HExceptionInit
+	(Site A), the field-type check was lost too.  The lowering
+	then constructed the Path-A struct with mismatched MIR values
+	and LLVM codegen crashed with an internal `struct field type
+	mismatch (have %DriftString, expected drift.int)` —
+	a checker/lowering contract failure, not a user diagnostic.
+
+	Post-fix: each resolved field value is compared against the
+	Path-A co-registered struct's declared field type at type-
+	check time; mismatches surface as
+	`E_THROW_FIELD_TYPE_MISMATCH` user diagnostics."""
+	rc, errs = _compile(tmp_path, capsys, _PRE + """
+pub error Bad { x: Int }
+
+fn boom() -> Int {
+\tthrow Bad(x = "not-int");
+}
+
+fn main() nothrow -> Int {
+\ttry { return boom(); } catch { return 0; }
+}
+""")
+	_fails_with_code(rc, errs, 'E_THROW_FIELD_TYPE_MISMATCH',
+		"throw arg type mismatch with declared pub error field type")
+
+
+# ── Probe 4-neg5 ─ &Declared NOT accepted where Declared expected ──
+
+
+def test_throw_pub_error_field_ref_for_owned_rejected(tmp_path, capsys):
+	"""Slice 7b regression follow-up (K, 2026-05-06, LANGUAGE_BUG):
+	a `&Int` value is NOT accepted where the `pub error` field
+	declares an owned `Int`.
+
+	Pre-fix bug shape: an earlier draft of the field-type check
+	allowed `&Declared` where `Declared` was expected (intended as
+	a reborrow convenience).  But HIR→MIR's `ConstructStruct`
+	hands the original expression directly to the Path-A struct
+	constructor — there is no implicit deref / reborrow at that
+	site — so a `&Int` value reached LLVM codegen and crashed
+	with `struct field type mismatch (have ptr, expected
+	drift.int)`.  Same class of contract failure as the plain
+	String-for-Int case, just routed through a borrow.
+
+	Post-fix: rejected at type-check time with
+	`E_THROW_FIELD_TYPE_MISMATCH` and a help note pointing at the
+	owned-value expectation.  Users who want to throw a borrow
+	declare the field as `&T` explicitly."""
+	rc, errs = _compile(tmp_path, capsys, _PRE + """
+pub error Bad { x: Int }
+
+fn boom() -> Int {
+\tval n = 7;
+\tthrow Bad(x = &n);
+}
+
+fn main() nothrow -> Int {
+\ttry { return boom(); } catch { return 0; }
+}
+""")
+	_fails_with_code(rc, errs, 'E_THROW_FIELD_TYPE_MISMATCH',
+		"&Int rejected where Int field expected")
+	# Also pin the help-note shape so the user-facing guidance
+	# doesn't silently regress.
+	hits = [e for e in errs if e.get('code') == 'E_THROW_FIELD_TYPE_MISMATCH']
+	assert hits, "expected E_THROW_FIELD_TYPE_MISMATCH"
+	notes = hits[0].get('notes') or []
+	assert any('not a reference' in n for n in notes), (
+		f"expected help note pointing at the owned-value expectation; got notes={notes}"
+	)
+
+
+# ── Probe 4-neg6 ─ private error fields project through Diagnostic ──
+
+
+def test_throw_private_error_projects_fields_through_synthesized_diagnostic(
+	tmp_path, capsys
+):
+	"""Slice 7b regression follow-up (K, 2026-05-06, LANGUAGE_BUG):
+	a `throw` of a non-pub `error E { ... }` with fields must NOT
+	silently drop the field values from the params envelope.
+
+	Pre-fix bug shape: synthesis of `implement core.Diagnostic for E`
+	fired only for `pub error` — non-pub `error E { msg: String }`
+	had no Diagnostic impl, so the unified throw lowering's
+	`to_json_text` lookup missed and emission fell through to the
+	empty-envelope `ConstructError(payload=None)` shape.  At runtime
+	`e.params.get("msg")` returned `Missing` even though `"boom"` was
+	the value passed at the throw site.  Silent data loss across the
+	throw boundary.
+
+	Post-fix: synthesis fires for ALL `error E` decls (pub or
+	non-pub) once they have at least one field — the module-internal
+	thrower gets the same canonical params projection as a pub
+	error.  Visibility AS A FIELD TYPE in another `pub error` stays
+	pub-only (private types do not leak through public surfaces).
+
+	This is a build-and-run probe (not just compile-only) to catch
+	the runtime data-loss class — a compile-only assertion would
+	pass even pre-fix because the empty-envelope shape compiles
+	cleanly."""
+	from lang.driftc.driftc import main as driftc_main
+	import subprocess
+	src = tmp_path / "main.drift"
+	out_bin = tmp_path / "main_bin"
+	src.write_text("""\
+module main;
+
+import std.core as core;
+
+error E { msg: String }
+
+fn _run() nothrow -> Int {
+\ttry {
+\t\tthrow E(msg = "boom");
+\t} catch E(e) {
+\t\tmatch e.params.get("msg").as_string() {
+\t\t\tSome(v) => { if v == "boom" { return 0; } return 2; },
+\t\t\tNone => { return 3; }
+\t\t}
+\t} catch e { return 5; }
+\treturn 4;
+}
+
+fn main() nothrow -> Int {
+\treturn _run();
+}
+""", encoding="utf-8")
+	rc = driftc_main([
+		"--stdlib-root", "stdlib",
+		str(src),
+		"-o", str(out_bin),
+	])
+	out = capsys.readouterr().out
+	assert rc == 0, f"compile failed: rc={rc} out={out[:300]}"
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	assert run.returncode == 0, (
+		f"non-pub `error E` field 'msg' was silently dropped from params "
+		f"(exit {run.returncode}); expected 0 = `{{\"msg\":\"boom\"}}` round-trip"
+	)

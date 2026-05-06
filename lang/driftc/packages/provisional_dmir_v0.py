@@ -1064,6 +1064,15 @@ def encode_signatures(
 			"fn_id": function_id_to_obj(fn_id),
 			"is_method": sig.is_method,
 			"method_name": getattr(sig, "method_name", None),
+			# Slice 7b (2026-05-06): trait identity for impl methods.
+			# Without these, the consumer's lookup of e.g.
+			# `core.Diagnostic.to_json_text` for std.err:IndexError
+			# (used by `_emit_index_error_throw` and the unified
+			# diagnostic owning-throw path) finds the method by name
+			# but rejects it because the trait identity check fails,
+			# producing a contract-failure ICE in HIR→MIR lowering.
+			"impl_trait_module": getattr(sig, "impl_trait_module", None),
+			"impl_trait_name": getattr(sig, "impl_trait_name", None),
 			"self_mode": getattr(sig, "self_mode", None),
 			"is_pub": bool(getattr(sig, "is_pub", False)),
 			"is_intrinsic": bool(getattr(sig, "is_intrinsic", False)),

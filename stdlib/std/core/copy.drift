@@ -18,10 +18,5 @@ export {
 ///
 /// String is `Copy` because its representation is an ARC handle;
 /// copying bumps the refcount, no byte-level duplication.
-///
-/// (`DiagnosticValue` and `DiagnosticEntry` retain internal Copy
-/// impls through the Slice 7a→7b transition for the legacy DV
-/// bridge but are no longer part of the user-facing surface; see
-/// `slice7-followups.md`.)
 pub trait Copy {
 }

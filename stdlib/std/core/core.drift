@@ -145,24 +145,11 @@ pub trait Diagnostic {
 	fn to_json_text(self: &Self) nothrow -> String;
 }
 
-/// Single key/value pair carried by structured diagnostics.
-///
-/// **Slice 7a (0.31.62, 2026-05-05):** the public DV/DE surface is
-/// removed.  `DiagnosticEntry` is no longer `pub` and is no longer
-/// exported from `std.core`; user-source references are rejected with
-/// `E_DV_PUBLIC_REMOVED`.  This decl stays in the module as
-/// internal-only carriage for the legacy DV bridge that is retired in
-/// Slice 7b.
-struct DiagnosticEntry {
-	key: String,
-	value: DiagnosticValue,
-}
-
-/// Internal helper — see the `DiagnosticEntry` decl above.  No longer
-/// `pub`; user-source references are rejected with `E_DV_PUBLIC_REMOVED`.
-fn diagnostic_entry(var key: String, var value: DiagnosticValue) nothrow -> DiagnosticEntry {
-	return DiagnosticEntry(key = move key, value = move value);
-}
+// Slice 7b (0.31.63, 2026-05-06): `DiagnosticEntry` struct and
+// `diagnostic_entry` helper deleted — both were internal-only
+// carriage for the legacy DV bridge and have no callers post-Slice 7b
+// migration of throw-side and captured-locals projection to direct
+// `core.diagnostic_json_*` dispatch.
 
 /// Trait for error types that can raise themselves as a typed
 /// exception.
@@ -583,11 +570,8 @@ implement copy_mod.Copy for Byte {
 implement copy_mod.Copy for String {
 }
 
-implement copy_mod.Copy for DiagnosticValue {
-}
-
-implement copy_mod.Copy for DiagnosticEntry {
-}
+// Slice 7b (0.31.63, 2026-05-06): `Copy for DiagnosticValue` and
+// `Copy for DiagnosticEntry` impls deleted alongside the structs.
 
 // `MemoryOrder` is declared in `lang.atomic`; its `Copy` impl lives
 // here so `lang.atomic` does not need to import `std.core` (which
@@ -654,11 +638,9 @@ implement Diagnostic for String {
 	}
 }
 
-implement Diagnostic for DiagnosticValue {
-	pub fn to_json_text(self: &DiagnosticValue) nothrow -> String {
-		return _dv_to_json_text(self);
-	}
-}
+// Slice 7b (0.31.63, 2026-05-06): `Diagnostic for DiagnosticValue`
+// impl deleted alongside `_dv_to_json_text`.  No production code
+// projects DV values to JSON anymore.
 
 // ── Slice 7a (ABI 13): legacy scalar `Throw for {Int,Uint,Bool,Float,
 // String,DiagnosticValue}` impls retired.  `Result<T, scalar>.or_throw()`
@@ -819,45 +801,30 @@ implement ErrorContextView {
 }
 
 
-// ── Internal JSON-text helpers (DV→JSON migration, transitional) ─
+// ── Internal JSON-text helpers ───────────────────────────────────
 //
-// ┌────────────────────────────────────────────────────────────────┐
-// │ DELETION LEDGER — transitional migration scaffolding only.     │
-// │                                                                │
-// │ The Diagnostic trait surface migrated to                       │
-// │ `to_json_text(self) -> String` in 0.31.60.  The DV-attachment  │
-// │ path (ConstructError + ErrorAddAttrDV) is still operational    │
-// │ because exception-field auto-promotion wraps                   │
-// │ `value.to_json_text()` into `DV::String(json)` and the         │
-// │ existing throw lowering threads that DV through the legacy     │
-// │ `e.attrs[k]` surface and the params-JSON builder.              │
-// │                                                                │
-// │ The following helpers exist solely to bridge that DV path:     │
-// │   - `_dv_to_json_text` (this module)                           │
-// │   - `DiagnosticValue.kind()` (compiler intrinsic — see         │
-// │     `lang/driftc/checker/call_resolver.py` and                 │
-// │     `lang/driftc/stage2/hir_to_mir.py`)                        │
-// │   - `DiagnosticValue.index()` (compiler intrinsic — same       │
-// │     locations)                                                 │
-// │                                                                │
-// │ These are NOT user-facing DV APIs.  Do not document them in    │
-// │ `docs/effective-drift.md` or any other user-visible spec.  Do  │
-// │ not expand them with new variants.  Do not call them from      │
-// │ user code (they are not exported from std.core).               │
-// │                                                                │
-// │ DELETE this path at the ABI-13 cut, when DV-attachment goes    │
-// │ away entirely and the params-JSON builder calls                │
-// │ `value.to_json_text()` directly.  Tracked in                   │
-// │ `memory/project_dv_to_json_diagnostics.md` (Slice 5+).         │
-// └────────────────────────────────────────────────────────────────┘
+// Slice 7b (0.31.63, 2026-05-06): the legacy DV-attachment path
+// (ConstructError(payload=DV) + ErrorAddAttrDV) is retired from
+// production lowering.  `_dv_to_json_text` and the
+// `DiagnosticEntry` / `diagnostic_entry` helpers were deleted with
+// it.  Throw-side params JSON now comes from
+// `core.Diagnostic for E`'s `to_json_text(&E)` impl (manual or
+// compiler-synthesized) called by `_construct_error_via_diagnostic`
+// in `lang/driftc/stage2/hir_to_mir.py`.  The captured-locals JSON
+// frame is built by direct per-scalar dispatch to the
+// `core.diagnostic_json_*` helpers (no DV intermediate).
 //
-// Why these live in std.core (and not std.json): std.core has its
-// own throws (the `Throw for {Int,Uint,Bool,Float,String,
-// DiagnosticValue}` impls and `or_throw`), and HIR→MIR throw-
-// lowering needs to project declared exception fields to canonical
-// JSON text at the throw site.  std.core cannot import std.json
-// without cycling, so a minimal scoped JSON-text projector lives
-// here.  See ABI spec §2.3 for the migration plan.
+// The string-escape / number-format helpers below
+// (`_json_quote_string`, the `diagnostic_json_*` family, etc.) are
+// kept here because std.core has its own throws and cannot depend on
+// std.json — projecting structured fields to canonical JSON at the
+// throw site needs a minimal scoped JSON-text projector that does
+// not pull std.json into std.core's dependency closure.
+//
+// The compiler-intrinsic `DiagnosticValue` TypeKind remains as
+// vestigial substrate (no impls, no callers) pending its full
+// removal in Slice 7c alongside the corresponding MIR ops + runtime
+// helpers and the ABI 13 → 14 bump.
 
 fn _hex_digit(v: Int) nothrow -> String {
 	if v == 0 { return "0"; }
@@ -1080,11 +1047,13 @@ implement JsonCursor {
 // ── JSON-text parser (Slice 4A — params lookup only) ────────────
 //
 // Minimal JSON parser scoped to params lookup.  Designed against
-// the canonical writer in `_dv_to_json_text` + `_json_quote_string`
-// + `_build_throw_params_json`: top-level object, declared field
-// keys, scalar values + nested object/array values held as raw
-// text.  Defensive on malformed input — returns `Missing` rather
-// than panicking.  Private; not exported.
+// the canonical writer used at the throw site:
+// `core.Diagnostic for E`'s `to_json_text` impl (manual or
+// compiler-synthesized) emits a top-level object with declared
+// field keys; scalar values use the `core.diagnostic_json_*`
+// helpers below; nested object/array values are held as raw text.
+// Defensive on malformed input — returns `Missing` rather than
+// panicking.  Private; not exported.
 
 fn _byte_is_ws(b: Byte) nothrow -> Bool {
 	if b == cast<Byte>(32) { return true; }
@@ -1557,81 +1526,11 @@ fn _typed_params_field_float(text: &String, key: &String) nothrow -> Float {
 }
 
 
-/// Projects a `DiagnosticValue` to canonical JSON text, recursively.
-/// Private — Slice 1 transitional helper.  Covers all DV variants
-/// without silent corruption.  Variant discrimination uses
-/// `dv.kind()` (matches C enum DriftDiagnosticTag):
-///   - 0 (Missing) / 1 (Null) → `null`
-///   - 2 (Bool)               → `true` / `false`
-///   - 3 (Int)                → `f"{v}"` (decimal, signed)
-///   - 4 (Float)              → `f"{v}"` (round-trip-safe shortest)
-///   - 5 (String)             → `"<escaped>"` via `_json_quote_string`
-///   - 6 (Array)              → `[<v0>,<v1>,...]` (`[]` if empty),
-///                              recursing each item via `dv.index(i)`
-///   - 7 (Object)             → `{"<k0>":<v0>,...}` (`{}` if empty),
-///                              keys in `dv.entries()` order — NOT
-///                              lex-sorted; the throw lowering
-///                              imposes lex order on the OUTER
-///                              params object, not on nested
-///                              DV::Object values.
-fn _dv_to_json_text(dv: &DiagnosticValue) nothrow -> String {
-	val k = dv.kind();
-	if k == 2 {
-		match dv.as_bool() {
-			Some(v) => {
-				if v { return "true"; }
-				return "false";
-			},
-			None => { return "null"; }
-		}
-	}
-	if k == 3 {
-		match dv.as_int() {
-			Some(v) => { return f"{v}"; },
-			None => { return "null"; }
-		}
-	}
-	if k == 4 {
-		match dv.as_float() {
-			Some(v) => { return f"{v}"; },
-			None => { return "null"; }
-		}
-	}
-	if k == 5 {
-		match dv.as_string() {
-			Some(v) => { return _json_quote_string(&v); },
-			None => { return "null"; }
-		}
-	}
-	if k == 6 {
-		// DV::Array — iterate by index.
-		val n = dv.len();
-		if n == 0 { return "[]"; }
-		var out = "[";
-		var i = 0;
-		while i < n {
-			if i != 0 { out = out + ","; }
-			val item = dv.index(i);
-			out = out + _dv_to_json_text(&item);
-			i = i + 1;
-		}
-		return out + "]";
-	}
-	if k == 7 {
-		// DV::Object — iterate entries.
-		val entries = dv.entries();
-		val n: Int = entries.len;
-		if n == 0 { return "{}"; }
-		var out = "{";
-		var i = 0;
-		while i < n {
-			if i != 0 { out = out + ","; }
-			val entry = &entries[i];
-			out = out + _json_quote_string(&entry.key) + ":" + _dv_to_json_text(&entry.value);
-			i = i + 1;
-		}
-		return out + "}";
-	}
-	// DV::Missing (0) or DV::Null (1).
-	return "null";
-}
+// Slice 7b (0.31.63, 2026-05-06): `_dv_to_json_text` deleted — the
+// last caller (the captured-locals JSON frame builder in
+// hir_to_mir.py's `_emit_captured_locals`) was migrated to direct
+// per-scalar-type dispatch via `core.diagnostic_json_*` helpers.  The
+// throw-side params projection had already been routed through the
+// unified `core.Diagnostic for E` lowering in Slice 6/7b, so no
+// production lowering path needs the recursive DV→JSON projector
+// anymore.

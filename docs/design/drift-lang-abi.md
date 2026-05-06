@@ -63,17 +63,18 @@ Fixed-width primitives are ABI-defined but **reserved in v1 surface code**; they
 
 The ABI defines only the **stable public layout**. Internal payload structures remain opaque.
 
-> **Migration state.** The shape and helper signatures documented in this section describe the **target ABI 13** layout — the post-DV-removal end state. The current runtime implementation is **ABI 12 additive**: it carries both the legacy DV-shaped fields (`attrs` / `attr_count` / `frames` / `frame_count`) AND the new JSON fields (`params_json`, `context_json`) on the same `DriftError` struct, with both helper sets fully functional. The `e.params.encode_compact()` public surface is live, and the throw-side canonical params JSON document is produced at every throw site.
+> **Migration state (Slice 7b, 0.31.63, 2026-05-06).** Current runtime is **ABI 13**.  The public DV surface is removed (`DiagnosticValue` / `DiagnosticEntry` / `core.diagnostic_entry` / `e.attrs[k]` / `e.captures[k]` are all rejected at the parser/checker boundary).  Throw-side params projection is owned by `core.Diagnostic for E`'s `to_json_text(&E)` impl (manual or compiler-synthesized) — no DV-attachment.  Captured-locals frame JSON is built by direct per-scalar dispatch to the `core.diagnostic_json_*` helpers — no DV intermediate.
+>
+> **What remains as vestigial substrate at ABI 13** (slated for ABI 14 / Slice 7c): the runtime helpers `drift_dv_*`, `drift_error_add_attr_dv`, `drift_error_add_local_dv`, `__exc_attrs_get_dv`, `__exc_captures_get_dv`, `drift_error_new_with_payload`; the corresponding MIR ops (`M.ConstructDV`, `M.ErrorAddAttrDV`, `M.ErrorAddLocalDV`, `M.ErrorAttrsGetDV`, `M.ErrorCapturesGetDV`); the HIR `H.HDVInit` node + `_visit_expr_HDVInit` lowering; and the compiler-intrinsic `DiagnosticValue` TypeKind itself.  No production lowering path emits any of them post-Slice 7b — they're carrying-cost-only until ABI 14.
 >
 > **ABI version trajectory:**
 >
 > * **ABI 11** — Phase 0 spec / Phase 1 prep substrate (runtime helpers staged but not yet emitted by the compiler).
-> * **ABI 12** — Slices 1 / 2 / 3 (current).  Compiler emits calls to `drift_dv_kind`, `drift_dv_index`, `drift_error_get_params_json`, `drift_error_set_params_json`, `drift_error_get_context_json`, `drift_error_append_context_frame`, and (for Slice 3 envelope assembly) `drift_string_retain` already in the runtime.  `<error>.params.encode_compact()` returns the canonical params JSON document (Slice 1); `<error>.context.encode_compact()` returns the canonical context JSON array (Slice 2); `e.encode_compact()` returns the canonical full envelope (Slice 3).  Slice 3 introduces no new runtime surface — `M.ErrorEventFqn` reuses LLVM `extractvalue` on the Error struct + `drift_string_retain`.  Runtime archive must export the helper surface; the link-time ABI stamp guards against version skew.
-> * **ABI 13** — Slice 5 (planned).  Removes the legacy DV path: `attrs`/`frames` storage and the `drift_error_add_attr_dv` / `drift_error_add_local_dv` / `__exc_attrs_get_dv` / `__exc_captures_get_dv` / `drift_error_new_with_payload` helpers all delete in the same patch.  Slices 2–4 (context dump, full envelope dump, cursor lookup) land additively without ABI bumps in between unless they expand the codegen→runtime symbol set.
+> * **ABI 12** — Slices 1 / 2 / 3 (additive).  Compiler emits calls to `drift_dv_kind`, `drift_dv_index`, `drift_error_get_params_json`, `drift_error_set_params_json`, `drift_error_get_context_json`, `drift_error_append_context_frame`, and (for Slice 3 envelope assembly) `drift_string_retain`.  Both the legacy DV path AND the new JSON-text path are operational; `<error>.params.encode_compact()`, `<error>.context.encode_compact()`, and `e.encode_compact()` return canonical JSON documents.
+> * **ABI 13** — Slice 7a (current; 0.31.62) cuts the public DV/DE surface and migrates `Diagnostic.to_diag(self) -> DV` → `to_json_text(self) -> String`.  Slice 7b (0.31.63) retires the DV-attachment lowering: throw-side params and captured-locals frame JSON both flow through `core.Diagnostic.to_json_text` / `core.diagnostic_json_*` directly.  Runtime DV helpers stay exported in this slice for binary compatibility with ABI 13 consumers; new compilations no longer call them.
+> * **ABI 14** — Slice 7c (planned).  Deletes the runtime DV exports (`drift_dv_*`, `drift_error_add_attr_dv`, `drift_error_add_local_dv`, `__exc_attrs_get_dv`, `__exc_captures_get_dv`, `drift_error_new_with_payload`) along with the parallel MIR ops, the `H.HDVInit` HIR node, and the `DiagnosticValue` intrinsic TypeKind.  Breaking — old (ABI 13) binaries that still call the helpers will fail to link against the ABI 14 runtime.  No compatibility shim.
 >
-> **ABI 13 — DV→JSON migration final (breaking, lands at Slice 5).** The legacy attribute list (`void *attrs; size_t attr_count;`) and frame list (`void *frames; size_t frame_count;`) are removed. Exception field values and `^`-captured frames remain stored as JSON documents (`params_json`, `context_json`) keyed by the same names. `DriftDiagnosticValue` is no longer reachable through the public Error ABI. See lang-spec §14.2.
->
-> Consumers compiled against ABI 11 or earlier must be rebuilt; ABI-12 consumers continue to work through Slices 2–4 and rebuild only at the Slice 5 transition.  No compatibility shim across the DV-removal break.
+> Consumers compiled against ABI 11 or earlier must be rebuilt.  ABI 12 binaries that still call legacy DV runtime helpers (`drift_error_add_attr_dv`, etc.) continue to link against the ABI 13 runtime since the helpers are preserved; the public-DV-removed source guards prevent fresh ABI 12-style emission.  ABI 13 binaries continue to link against the ABI 13 runtime.  ABI 14's break is enforced by the link-time ABI stamp.
 
 ### 2.1 C ABI representation
 
@@ -150,7 +151,7 @@ DriftString drift_error_get_params_json(const DriftError *err);
 DriftString drift_error_get_context_json(const DriftError *err);
 ```
 
-The earlier `drift_error_add_attr_dv`, `drift_error_add_local_dv`, `__exc_attrs_get_dv`, `__exc_captures_get_dv`, and `drift_error_new_with_payload` helpers are removed at ABI 12.
+The earlier `drift_error_add_attr_dv`, `drift_error_add_local_dv`, `__exc_attrs_get_dv`, `__exc_captures_get_dv`, and `drift_error_new_with_payload` helpers are no longer emitted by production compilation as of ABI 13 / Slice 7b — the symbols still exist in the runtime archive for binary compatibility with ABI 13 consumers and are slated for full removal at ABI 14 / Slice 7c.
 
 ---
 

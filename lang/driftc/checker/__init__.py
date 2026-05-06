@@ -4527,91 +4527,23 @@ class Checker:
 		Surface syntax uses constructor-call form only:
 		  throw E(...)
 
-		Argument mapping rules:
-		- positional arguments map to declared exception fields in declaration order
-		- keyword arguments fill remaining fields
-		- exact coverage required (no missing/unknown/duplicates)
+		Slice 7b (2026-05-06): no-op for `pub error` throws.
 
-		Attribute payload rule (Phase 2, MVP):
-		- exception field values must implement Diagnostic; primitive literals
-		  are allowed and wrapped into DiagnosticValue during lowering.
+		The per-field `is_diagnostic` walk that used to live here was
+		the legacy DV-bridge gate — it enforced "every field value
+		must implement Diagnostic" so the synthesized throw lowering
+		could DV-promote each field via `to_json_text`.  Slice 7b
+		retired DV promotion entirely (variant fields no longer get
+		double-quoted), and the projectability rule at the decl site
+		(`E_PUB_ERROR_FIELD_NOT_PROJECTABLE`) already gates synthesis
+		to projectable field types.  Field-TYPE matching (the
+		LANGUAGE_BUG fix from K, 2026-05-06) is enforced at Site A in
+		`type_checker.py` against the Path-A co-registered struct's
+		declared field types.  Ctor-shape validation
+		(`resolve_exception_ctor_args`) also runs at Site A; running
+		it again here would duplicate diagnostics.
 		"""
-		from lang.driftc import stage1 as H
-		from lang.driftc.core.exception_ctor_args import KwArg as _KwArg, resolve_exception_ctor_args
-
-		schemas: dict[str, tuple[str, list[str]]] = getattr(self._type_table, "exception_schemas", {})
-
-		def _schema(name: str) -> tuple[str, list[str]] | None:
-			return schemas.get(name)
-
-		if not isinstance(stmt, H.HThrow):
-			return
-
-		if isinstance(stmt.value, H.HExceptionInit):
-			schema = _schema(stmt.value.event_fqn)
-			schema_fields: list[str] | None
-			if schema is None:
-				schema_fields = None
-			else:
-				_decl_fqn, schema_fields = schema
-
-			resolved, diags = resolve_exception_ctor_args(
-				event_fqn=stmt.value.event_fqn,
-				declared_fields=schema_fields,
-				pos_args=[(a, getattr(a, "loc", Span())) for a in stmt.value.pos_args],
-				kw_args=[
-					_KwArg(name=kw.name, value=kw.value, name_span=getattr(kw, "loc", Span()))
-					for kw in stmt.value.kw_args
-				],
-				span=getattr(stmt.value, "loc", Span()),
-			)
-			for d in diags:
-				ctx._append_diag(d)
-
-			values_to_validate = [v for _name, v in resolved]
-			if schema_fields is None:
-				values_to_validate = list(stmt.value.pos_args) + [kw.value for kw in stmt.value.kw_args]
-
-			# Slice 6 — manual-Diagnostic ownership gate (Site B).
-			# Same K-rule as Site A in the type-checker: when E has
-			# user-owned `Diagnostic for E`, per-field projection
-			# validation is the user's responsibility, not the
-			# compiler's.  Skip the per-field `is_diagnostic` walk
-			# entirely.  See `TypeTable.manual_diagnostic_pub_errors`.
-			_manual_owners = getattr(ctx.table, "manual_diagnostic_pub_errors", None) or set()
-			if stmt.value.event_fqn in _manual_owners:
-				return
-
-			for fexpr in values_to_validate:
-				if isinstance(fexpr, H.HMove):
-					fexpr_check = fexpr.subject
-					if hasattr(H, "HPlaceExpr") and isinstance(fexpr_check, getattr(H, "HPlaceExpr")):
-						fexpr_check = fexpr_check.base
-				else:
-					fexpr_check = fexpr
-				if isinstance(fexpr_check, H.HDVInit):
-					continue
-				if isinstance(fexpr_check, (H.HLiteralInt, H.HLiteralBool)):
-					continue
-				if hasattr(H, "HLiteralString") and isinstance(fexpr_check, getattr(H, "HLiteralString")):
-					continue
-				val_ty = ctx.infer(fexpr_check)
-				if val_ty is None:
-					continue
-				val_nom_ty = val_ty
-				td = ctx.table.get(val_nom_ty)
-				if td.kind is TypeKind.REF and td.param_types:
-					val_nom_ty = td.param_types[0]
-				if val_nom_ty is not None and ctx.table.is_diagnostic(val_nom_ty):
-					continue
-				ctx._append_diag(
-					_chk_diag(
-						message="exception field value must implement Diagnostic",
-						severity="error",
-						span=getattr(fexpr, "loc", getattr(stmt.value, "loc", Span())),
-					)
-				)
-			return
+		return
 
 	def _validate_array_exprs(self, block: "H.HBlock", ctx: "_TypingContext") -> None:
 		"""Validate array literals/indexing/assignments over a HIR block."""

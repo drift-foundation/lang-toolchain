@@ -1,0 +1,6 @@
+{
+  "description": "Slice 7b (0.31.63) e2e: synthesized-Diagnostic pub error with a variant field whose manual `Diagnostic` projects as a JSON int (`Severity` -> 0/1/2). After Slice 7b's unification of synthesized + manual Diagnostic throw lowering through `_construct_error_via_diagnostic`, the canonical params JSON splices the variant's `to_json_text` output verbatim (no `DV::String(value.to_json_text())` re-encoding wrap). Exit 0 = `{\"severity\":2,\"tag\":\"fire\"}` envelope (variant tag is a bare integer, NOT a quoted string); exit 10 = wrong envelope shape; exit 11 = unexpected catch arm.",
+  "exit_code": 0,
+  "stdout": "{\"severity\":2,\"tag\":\"fire\"}\n",
+  "stderr": ""
+}

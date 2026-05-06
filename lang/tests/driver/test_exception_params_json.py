@@ -26,9 +26,11 @@ Out of scope for Slice 1 (intentional, narrowed per K directive):
   - JsonCursor / `e.params.get(k)` typed lookup (Slice 4).
   - DV public removal + `Diagnostic.to_json` migration (Slice 5).
 
-Slice 1 is ADDITIVE: the existing DV path
-(`drift_error_add_attr_dv`, `e.attrs[...]`) remains fully
-functional.  No ABI bump (`DRIFT_RT_ABI_VERSION` stays 11).
+Slice 1 was ADDITIVE alongside the legacy DV path; Slices 7a/7b
+retired that DV path (`e.attrs[...]` from user source is rejected
+with `E_EXC_ATTRS_REMOVED`, and `drift_error_add_attr_dv` emission
+is gone from production lowering — the throw-side params JSON now
+flows through `core.Diagnostic for E.to_json_text(&E)`).
 
 The branch-completion gate (direct `String:ConstShare`) is
 tracked separately in `test_string_const_share.py` and must flip

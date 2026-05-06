@@ -57,6 +57,12 @@ fn main() nothrow -> Int {
 	)
 	assert not checked.diagnostics
 	fail_ir = _extract_llvm_function(ir, "fail")
-	assert "drift_error_add_local_dv" in fail_ir
+	# Slice 7b: legacy DV captures path retired.  Captured locals are
+	# now projected directly to JSON text via per-scalar
+	# `core.diagnostic_json_*` helpers and concatenated into a frame
+	# JSON appended via `drift_error_append_context_frame`.  No more
+	# `drift_error_add_local_dv` emission.
+	assert "drift_error_add_local_dv" not in fail_ir
+	assert "drift_error_append_context_frame" in fail_ir
 	assert "step.count" in ir
 	assert "msg" in ir
