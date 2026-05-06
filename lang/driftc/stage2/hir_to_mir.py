@@ -246,9 +246,7 @@ class DropPolicy:
 	# local of this type.  POD types are False.  Refcounted scalar
 	# (`String`), structural-with-drop (`Optional<String>`,
 	# `Array<String>`, structs with droppable fields), and
-	# user-`Destructible` types are True.  `DiagnosticValue`-bearing
-	# types short-circuit to True regardless of `has_drop` (see
-	# `_contains_dv_transitive`).
+	# user-`Destructible` types are True.
 	needs_drop: bool
 	# True iff the value's bits are semantically an independent
 	# owner with no shared refcounts or pointers-to-shared.  POD
@@ -401,7 +399,8 @@ class HIRToMIR:
 		self._uint64_type = self._type_table.ensure_uint64()
 		self._unknown_type = self._type_table.ensure_unknown()
 		self._void_type = self._type_table.ensure_void()
-		self._dv_type = self._type_table.ensure_diagnostic_value()
+		# Slice 7c-3 (ABI 14): `_dv_type` field deleted along with
+		# `TypeKind.DIAGNOSTICVALUE`.
 		self._signatures_by_id = signatures_by_id or {}
 		self._current_fn_id = current_fn_id
 		self._type_param_subst: dict[str, TypeId] = dict(type_param_subst or {})
@@ -478,8 +477,8 @@ class HIRToMIR:
 					# Structural drop needed but the generic path
 					# returned `needs_drop=False` — this type is
 					# handled by string_arc (e.g. String, Array,
-					# Error, DiagnosticValue, Interface) on a
-					# parallel track.  Use the shortcut-free axis so
+					# Error, Interface) on a parallel track.  Use
+					# the shortcut-free axis so
 					# we classify correctly even under the packaged-
 					# load `copy_status` resolution that flips
 					# `needs_drop` to False.
@@ -628,7 +627,10 @@ class HIRToMIR:
 			raw_is_destructible = bool(self._type_table.is_destructible(ty))
 		except Exception:
 			raw_is_destructible = False
-		contains_dv = self._contains_dv_transitive(ty, set())
+		# Slice 7c-3 (ABI 14): `_contains_dv_transitive` is gone with
+		# `TypeKind.DIAGNOSTICVALUE`.  needs_drop / has_structural_drop
+		# now collapse to the underlying `has_drop` / `is_destructible`
+		# signals.
 
 		# --- needs_drop ----------------------------------------
 		# Driven by destruction reality.  A type with `has_drop=True`
@@ -641,16 +643,14 @@ class HIRToMIR:
 		# structs that contain `String`/`Array<…>`/destructible
 		# fields.  Pinned by
 		# `lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`.
-		needs_drop = bool(contains_dv or raw_has_drop or raw_is_destructible)
+		needs_drop = bool(raw_has_drop or raw_is_destructible)
 
 		# --- has_structural_drop -------------------------------
-		# Shortcut-free drop query: `raw_has_drop` direct, with the
-		# DV transitive walk honoured (a DV-bearing type structurally
-		# has drop — the DV destructor has side effects independent
-		# of Copy-trait claims).  The phase-0 fail-stop reads THIS
-		# axis, not `needs_drop`, because it must NOT be fooled by
-		# the Copy-trait shortcut that the UAF exploited.
-		has_structural_drop = contains_dv or raw_has_drop
+		# Shortcut-free drop query: `raw_has_drop` direct.  The
+		# phase-0 fail-stop reads THIS axis, not `needs_drop`,
+		# because it must NOT be fooled by the Copy-trait shortcut
+		# that the UAF exploited.
+		has_structural_drop = bool(raw_has_drop)
 
 		# --- is_cheap_copy -------------------------------------
 		# Decoupled from `needs_drop`.  A type is "cheap copy" when
@@ -696,31 +696,8 @@ class HIRToMIR:
 		"""
 		return self._drop_policy(ty).needs_drop
 
-	def _contains_dv_transitive(self, ty: TypeId, visited: set[TypeId]) -> bool:
-		if ty in visited:
-			return False
-		visited.add(ty)
-		td = self._type_table.get(ty)
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			return True
-		if td.kind is TypeKind.STRUCT:
-			inst = self._type_table.get_struct_instance(ty)
-			if inst is not None:
-				for ft in inst.field_types:
-					if self._contains_dv_transitive(ft, visited):
-						return True
-		if td.kind is TypeKind.VARIANT:
-			inst = self._type_table.get_variant_instance(ty)
-			if inst is not None:
-				for arm in inst.arms:
-					for ft in arm.field_types:
-						if self._contains_dv_transitive(ft, visited):
-							return True
-		if td.param_types:
-			for pt in td.param_types:
-				if self._contains_dv_transitive(pt, visited):
-					return True
-		return False
+	# Slice 7c-3 (ABI 14): `_contains_dv_transitive` deleted along
+	# with `TypeKind.DIAGNOSTICVALUE`.
 
 	def _can_inline_copy(self, ty: TypeId, visiting: set[TypeId]) -> bool:
 		"""Check whether a type's copy can be fully inlined at compile time.
@@ -823,10 +800,10 @@ class HIRToMIR:
 			self._local_types[dup] = ty
 			return dup
 		# Any type that requires a runtime clone-on-read-from-ref must
-		# go through CopyValue here.  DIAGNOSTICVALUE is the same class
-		# as STRUCT/VARIANT: it contains refcounted fields (String) and
-		# a raw LoadRef from &T produces a bitwise alias, not an owned copy.
-		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.DIAGNOSTICVALUE) or (
+		# go through CopyValue here.  STRUCT/VARIANT contain refcounted
+		# fields (e.g. String) and a raw LoadRef from &T produces a
+		# bitwise alias, not an owned copy.
+		if td.kind in (TypeKind.STRUCT, TypeKind.VARIANT) or (
 			td.kind is TypeKind.SCALAR and td.name == "String"
 		):
 			copy = self.b.new_temp()
@@ -4624,37 +4601,11 @@ class HIRToMIR:
 				self.b.emit(M.ResultErr(dest=dest, result=res_val))
 				self._local_types[dest] = self._type_table.ensure_error()
 				return dest
-		if expr.method_name in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries"):
-			# Slice 7c-2 (ABI 14, 2026-05-06): the DV-intrinsic
-			# dispatch path that recognized these method names on a
-			# `DiagnosticValue` receiver is dead substrate.  All
-			# `M.DV*` MIR ops are deleted; no production lowering
-			# can construct a DV value (public DV is rejected at the
-			# parser; stdlib has no DV-typed values).  If the
-			# receiver is a DV value at this site, that's a compiler
-			# bug — ICE before any reference to a deleted MIR op
-			# would AttributeError.
-			recv_ty = self._infer_expr_type(expr.receiver)
-			if recv_ty is None:
-				recv_ty = self._expr_types.get(expr.receiver.node_id) if self._expr_types else None
-			if recv_ty is not None:
-				recv_def = self._type_table.get(recv_ty)
-				while recv_def.kind is TypeKind.REF and recv_def.param_types:
-					recv_def = self._type_table.get(recv_def.param_types[0])
-				if recv_def.kind is TypeKind.DIAGNOSTICVALUE:
-					raise AssertionError(
-						f"DV intrinsic method `{expr.method_name}` "
-						"reached HIR→MIR lowering with a "
-						"DiagnosticValue receiver at ABI 14.  No "
-						"production path can construct a DV value; "
-						"this is a compiler bug — classify as "
-						"incomplete Slice 7b/7c-1 migration."
-					)
-			# Non-DV receivers fall through to the normal method-call
-			# lowering below.  The `as_int` / `as_bool` / etc. names
-			# also belong to `core.JsonCursor` (Slice 4A); that
-			# resolves through standard call-resolver method
-			# dispatch.
+		# Slice 7c-3 (ABI 14, 2026-05-06): the DV-intrinsic dispatch
+		# guard is gone with `TypeKind.DIAGNOSTICVALUE`.  Method
+		# names like `as_int` / `as_bool` / `get` resolve through
+		# normal method dispatch (e.g. `core.JsonCursor.get(k)
+		# .as_int()` from Slice 4A).
 		result, info = self._lower_method_call(expr)
 		if result is None:
 			if self._type_table.is_void(info.sig.user_ret_type):
@@ -9861,8 +9812,9 @@ class HIRToMIR:
 			ty_def = self._type_table.get(subj_ty)
 			if ty_def.kind is TypeKind.ARRAY or (ty_def.kind is TypeKind.SCALAR and ty_def.name == "String"):
 				return self._int_type
-			if expr.name == "attrs" and ty_def.kind is TypeKind.ERROR:
-				return self._dv_type
+			# Slice 7c-3 (ABI 14): `e.attrs` field on Error is gone
+			# along with `TypeKind.DIAGNOSTICVALUE` (rejected at the
+			# checker since Slice 7a).
 		if isinstance(expr, H.HField):
 			subj_ty = self._infer_expr_type(expr.subject)
 			if subj_ty is None:
@@ -10018,25 +9970,8 @@ class HIRToMIR:
 			info = self._call_info_for_expr_optional(expr)
 			if info is not None:
 				return info.sig.user_ret_type
-			recv_ty = self._infer_expr_type(expr.receiver)
-			if recv_ty is not None:
-				recv_def = self._type_table.get(recv_ty)
-				while recv_def.kind is TypeKind.REF and recv_def.param_types:
-					recv_ty = recv_def.param_types[0]
-					recv_def = self._type_table.get(recv_ty)
-				if recv_def.kind is TypeKind.DIAGNOSTICVALUE:
-					if expr.method_name == "as_int":
-						return self._optional_variant_type(self._int_type)
-					if expr.method_name == "as_bool":
-						return self._optional_variant_type(self._bool_type)
-					if expr.method_name == "as_float":
-						return self._optional_variant_type(self._float_type)
-					if expr.method_name == "as_string":
-						return self._optional_variant_type(self._string_type)
-					if expr.method_name == "as_object":
-						return self._optional_variant_type(self._dv_type)
-					if expr.method_name == "get":
-						return self._optional_variant_type(self._dv_type)
+			# Slice 7c-3 (ABI 14): the DV-receiver method-name
+			# inference shortcut is gone with TypeKind.DIAGNOSTICVALUE.
 		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
 			return self._infer_expr_type(expr.attempt)
 		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):

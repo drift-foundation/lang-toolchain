@@ -1429,7 +1429,7 @@ Rules:
 - `JsonCursor` is the canonical fluent-lookup surface. The standard public chain is `e.params.get("k").as_int()` → `Optional<Int>` with no `&` ceremony at the call site.
 - `JsonHandle` is `ConstShare` — `var b = e.params; var c = b;` produces independent owners via implicit duplication (Phase 5 ConstShare substrate).
 
-> **Legacy note (transitional, internal-only):** The previous `DiagnosticValue` variant and `to_diag()` method are no longer part of the public diagnostic surface. The compiler may retain `DiagnosticValue` internally as runtime/migration glue; new public APIs, docs, and tests must use `JsonNode` and `to_json`.
+> **Legacy note (Slice 7c-3, ABI 14, 2026-05-06):** The previous `DiagnosticValue` variant and `to_diag()` method are fully retired. Slice 7a removed the public surface, Slice 7c-1 deleted the runtime exports, Slice 7c-2 deleted the compiler-internal HIR / MIR / codegen substrate, and Slice 7c-3 deleted the residual `TypeKind.DIAGNOSTICVALUE` type identity (enum value, `ensure_diagnostic_value()` helper, `dv_ty` plumbing, package serialization arms, LLVM type emission, C struct types). New public APIs, docs, and tests must use `JsonNode` and `to_json` (or, for diagnostic projection, `core.Diagnostic.to_json_text`).
 
 ### 5.14. Thread-safety marker traits (`Send`, `Sync`)
 
@@ -2467,7 +2467,7 @@ The following type names cannot be used for user-defined struct/variant/exceptio
 
 `Int`, `Uint`, `Byte`, `Bool`, `Float`, `String`, `Void`, `Error`, `Array`, `Optional`, `FnResult`.
 
-`DiagnosticValue` remains reserved for compatibility — the compiler retains it internally during the JSON-diagnostics migration (see §5.13.8) — but it is not part of the public surface.
+`DiagnosticValue` is no longer reserved (Slice 7c-3, ABI 14, 2026-05-06). The legacy DV substrate is fully retired across the public surface, runtime archive, and compiler internals (see §5.13.8). The name is now an ordinary identifier and may be used freely.
 
 ### 9.5. Operator tokens
 

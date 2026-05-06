@@ -139,8 +139,6 @@ pub trait Destructible {
 ///     not projectable.
 ///
 /// Built-in impls below: `Int`, `Uint`, `Bool`, `Float`, `String`.
-/// (The legacy `DiagnosticValue` impl is internal and not part of
-/// the supported user surface; see Slice 7a `slice7-followups.md`.)
 pub trait Diagnostic {
 	fn to_json_text(self: &Self) nothrow -> String;
 }
@@ -167,11 +165,11 @@ pub trait Diagnostic {
 /// `Throw` impls for `pub error` types — the compiler owns it.
 ///
 /// The scalar impls below (`Int`, `Uint`, `Bool`, `Float`,
-/// `String`, `DiagnosticValue`) are TRANSITIONAL / INTERNAL
-/// compatibility for legacy stdlib paths.  They are NOT a
-/// supported user-facing `or_throw` Err path under Phase 5a:
-/// `Result<T, scalar>.or_throw()` is rejected at the call site
-/// with `E_OR_THROW_NOT_ERROR_TYPE` (see `Result.or_throw`).
+/// `String`) are TRANSITIONAL / INTERNAL compatibility for legacy
+/// stdlib paths.  They are NOT a supported user-facing `or_throw`
+/// Err path under Phase 5a: `Result<T, scalar>.or_throw()` is
+/// rejected at the call site with `E_OR_THROW_NOT_ERROR_TYPE` (see
+/// `Result.or_throw`).
 ///
 /// **See also:** `Result.or_throw`, the auto-try contract in
 /// `docs/effective-drift.md`.
@@ -583,8 +581,8 @@ implement copy_mod.Copy for atomic.MemoryOrder {
 // ── Frozen — conditional impls for stdlib generics ────────────────
 //
 // Primitive Frozen impls (Int / Uint / String / Bool / Float /
-// Byte / Void / DiagnosticValue) live in
-// `stdlib/std/core/shareable.drift`, alongside the trait declaration.
+// Byte / Void) live in `stdlib/std/core/shareable.drift`,
+// alongside the trait declaration.
 // The two impls below stay here because `Optional` and `Result` are
 // declared in this module — moving these impls would create a
 // circular import from `shareable.drift` back to `std.core`.
@@ -643,8 +641,8 @@ implement Diagnostic for String {
 // projects DV values to JSON anymore.
 
 // ── Slice 7a (ABI 13): legacy scalar `Throw for {Int,Uint,Bool,Float,
-// String,DiagnosticValue}` impls retired.  `Result<T, scalar>.or_throw()`
-// has been rejected at the call site since Slice 5 (Phase 5a) with
+// String}` impls retired.  `Result<T, scalar>.or_throw()` has been
+// rejected at the call site since Slice 5 (Phase 5a) with
 // `E_OR_THROW_NOT_ERROR_TYPE`, and no caller in stdlib/tests/examples
 // throws a bare scalar value.  Use `pub error E` for any throwable
 // error type — the compiler auto-synthesizes `Throw for E`.
@@ -821,10 +819,10 @@ implement ErrorContextView {
 // throw site needs a minimal scoped JSON-text projector that does
 // not pull std.json into std.core's dependency closure.
 //
-// The compiler-intrinsic `DiagnosticValue` TypeKind remains as
-// vestigial substrate (no impls, no callers) pending its full
-// removal in Slice 7c alongside the corresponding MIR ops + runtime
-// helpers and the ABI 13 → 14 bump.
+// Slice 7c-3 (ABI 14, 2026-05-06): the compiler-intrinsic
+// `DiagnosticValue` TypeKind / runtime substrate is fully retired
+// across the public surface, runtime archive, and compiler
+// internals.  The DV→JSON migration is complete.
 
 fn _hex_digit(v: Int) nothrow -> String {
 	if v == 0 { return "0"; }

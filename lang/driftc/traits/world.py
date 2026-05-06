@@ -197,7 +197,11 @@ def _qual_from_type_expr(typ: parser_ast.TypeExpr) -> Optional[str]:
 	return getattr(typ, "module_id", None) or getattr(typ, "module_alias", None)
 
 
-BUILTIN_TYPE_NAMES = {"Int", "Bool", "String", "Uint", "Uint64", "Byte", "Float", "Void", "Error", "DiagnosticValue"}
+# Slice 7c-3 (ABI 14, 2026-05-06): "DiagnosticValue" removed —
+# `TypeKind.DIAGNOSTICVALUE` and `ensure_diagnostic_value()` are
+# deleted; the name is no longer a builtin type and must not be
+# treated as one for trait-impl key canonicalization.
+BUILTIN_TYPE_NAMES = {"Int", "Bool", "String", "Uint", "Uint64", "Byte", "Float", "Void", "Error"}
 BUILTIN_TRAIT_NAMES: set[str] = set()
 # Prelude-aliased nominal variants whose canonical type-table key
 # lives under `lang.core` rather than the source-file's module.  An

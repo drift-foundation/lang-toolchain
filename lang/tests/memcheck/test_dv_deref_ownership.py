@@ -82,7 +82,10 @@ def test_dv_deref_no_crash_no_leak(tmp_path: Path) -> None:
 	invalid_reads = len(re.findall(r"Invalid read", vg_output))
 	assert invalid_reads == 0, (
 		f"Valgrind detected {invalid_reads} invalid reads — "
-		f"deref of &DiagnosticValue aliased without clone.\n"
+		f"deref-of-borrow regression (historical: aliased deref of "
+		f"&DiagnosticValue without clone; the DV substrate is now "
+		f"retired but the deref-of-borrow ownership invariant still "
+		f"applies to other reference types).\n"
 		f"valgrind log:\n{vg_output[-500:]}"
 	)
 

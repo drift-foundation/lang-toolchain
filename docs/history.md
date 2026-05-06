@@ -1,5 +1,128 @@
 # Drift development history
 
+## 2026-05-06 (Slice 7c-3)
+- **Slice 7c-3: residual DV type identity deletion (release
+  0.31.65, ABI unchanged at 14).**  Closes out the DV→JSON
+  migration by removing the last carrying cost of the legacy
+  `DiagnosticValue` substrate from the compiler: the
+  `TypeKind.DIAGNOSTICVALUE` enum value, the
+  `TypeTable.ensure_diagnostic_value()` / `_dv_type` cache, the
+  package encode / decode / link compatibility arms, the
+  `DRIFT_DV_TYPE` / `%DriftDiagnosticValue` LLVM type emission, the
+  C header struct types, and ~20 type-introspection arms across
+  driftc.  Deletion-only: every removed site was unreachable in
+  production after Slice 7c-1's wire cut, and Slice 7c-2 already
+  stripped the HIR / MIR / codegen substrate that could have
+  produced a DV-typed value.
+
+  **Deleted from `core/`:**
+  - `TypeKind.DIAGNOSTICVALUE` enum value (`core/types_core.py`).
+    The auto() value is replaced with a tombstone comment so the
+    surrounding enum's auto() ordering is preserved without
+    perturbing serialization (which uses `kind.name` strings).
+  - `TypeTable.ensure_diagnostic_value()` and the `_dv_type` cache
+    field.
+  - Three remaining arms in `core/types_core.py`'s `needs_drop`,
+    `is_diagnostic`, `_is_copy_internal`, and key-pretty-print
+    paths.
+  - Two arms in `core/type_resolve_common.py`'s opaque-type and
+    raw-type resolvers.
+
+  **Deleted from `checker/`:**
+  - `dv_ty: TypeId` field on `CallResolverContext`,
+    `MethodResolverContext`, and `MakeStructResolverContext`
+    (call_resolver.py:562, 637, 693), and its forwarding in the
+    two propagator builders.
+
+  **Deleted from `type_checker.py`:**
+  - `self._dv` field initialization (no remaining consumer).
+  - `dv_ty=self._dv` keyword argument at all three `make_call_ctx`
+    callsites.
+  - `"DiagnosticValue"` arm in the generic-type-expr lowering
+    (formerly returned `self._dv`).
+  - DV-typed return for the `Error.attrs[...]` / `Error.captures[...]`
+    place-expr fallthroughs (now return `self._unknown` after the
+    upstream `E_EXC_ATTRS_REMOVED` / `E_EXC_CAPTURES_REMOVED`
+    rejection — the diagnostic is the user-visible behavior; the
+    return type is no longer consulted).
+  - `self._dv` from the captured-locals "allowed type" set in `^`
+    capture validation.  The diagnostic now reads "Int / Uint /
+    Bool / Float / String only".
+
+  **Deleted from `stage2/`:**
+  - `_contains_dv_transitive` helpers in `drop_policy_compute.py`
+    and `hir_to_mir.py` (no DV sub-types to walk).  Drop policy
+    collapses to the underlying `has_drop` / `is_destructible`
+    signal — no behavior change because there was no DV-typed
+    value to flag.
+  - DIAGNOSTICVALUE arm in `string_arc.py:_type_needs_drop_cache`.
+
+  **Deleted from `packages/`:**
+  - `provisional_dmir_v0.py`'s DV arm in the type-expr decoder.
+  - Five `type_table_link_v0.py` arms (decoder, host-key memo,
+    encoder, builtin alias) plus the docstring listing.
+
+  **Deleted from `trait_index.py`:**
+  - DV early-return in `GlobalTraitImplIndex._target_base_id`
+    (DV could not be a trait impl target in practice).
+
+  **Deleted from `driftc.py`:**
+  - `type_table.ensure_diagnostic_value()` seed call in the
+    builtin-stable-id pass.
+  - `("builtin", "DIAGNOSTICVALUE", "DiagnosticValue")` arm in the
+    builtin-key resolver.
+  - `TypeKind.DIAGNOSTICVALUE` from the `dump_kinds` tuple.
+
+  **Deleted from `parser/__init__.py`:**
+  - `table.ensure_diagnostic_value()` seed call in
+    `_seed_builtin_stable_ids`.
+
+  **Deleted from `codegen/llvm/llvm_codegen.py`:**
+  - `DRIFT_DV_TYPE = "%DriftDiagnosticValue"` constant.
+  - `%DriftDiagnosticValue = type { i8, [7 x i8], [2 x i64] }`
+    LLVM type emission.
+  - `dv_type_id: Optional[TypeId]` field.
+  - DIAGNOSTICVALUE arms across `_llvm_type_for_typeid`,
+    `_emit_nothrow_return_value`, the size/align cache,
+    `_llvm_storage_type_for_typeid`, `_fnresult_ok_type_key`,
+    zero-value-as-constant, `_emit_zero_value`,
+    `_emit_tombstone_value`, `_copy_value`, `_drop_value`, and
+    struct field drop (the latter three were ICE-on-reach guards
+    after Slice 7c-2; now physically gone).
+
+  **Deleted from `lang/compiler_infra/`:**
+  - `DriftDiagnosticTag` enum, `DriftDiagnosticArray`,
+    `DriftDiagnosticObject`, `DriftDiagnosticField`,
+    `DriftDiagnosticEntry`, and `DriftDiagnosticValue` struct
+    types from `diagnostic_runtime.h`.  The foundational
+    `drift_isize` / `drift_usize` typedefs and the `DriftString`
+    forward struct are preserved (they were historically hosted
+    in this header alongside the DV substrate and are pulled in
+    transitively by `error_dummy.h` and the language-runtime C
+    sources — relocating them is a separate slice).
+  - `diagnostic_runtime.c` translation unit reduced to a tombstone
+    `#include` of the trimmed header.
+
+  **Test-corpus migration:**
+  - Deleted `test_compute_drop_policy_matches_for_diagnostic_value`
+    from `lang/tests/stage2/test_drop_policy_standalone_matches_hir_to_mir.py`.
+  - Deleted DV assertion from
+    `lang/tests/core/test_type_resolve_common.py`'s opaque-type
+    test.
+  - Reframed `lang/tests/core/test_type_table.py`'s
+    `test_type_table_seeds_diagnostic_value_and_optional` to
+    `test_type_table_seeds_optional_instantiation_cache`,
+    preserving the Optional cache stability assertion.
+
+  **No ABI bump.**  The C header `diagnostic_runtime.h` is
+  internal-only — only the in-tree compiler runtime archive,
+  `lang-obsolete/`, and a couple of test trampolines included
+  it, and Slice 7c-1 already retired the boundary-critical
+  `_Static_assert` layout asserts on `DriftDiagnosticValue` once
+  the runtime DV exports were deleted.  Removing the struct
+  types is a pure compile-time cleanup.  Runtime ABI stamp
+  remains `__drift_rt_abi_version_14`.
+
 ## 2026-05-06 (Slice 7c-2)
 - **Slice 7c-2: compiler-internal DV substrate deletion (release
   0.31.64, ABI unchanged at 14).**  Deletes the dead HIR / MIR /

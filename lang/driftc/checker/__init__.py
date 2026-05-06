@@ -386,7 +386,7 @@ class Checker:
 		self._uint64_type = _find_named(TypeKind.SCALAR, "Uint64") or self._type_table.ensure_uint64()
 		self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
 		self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
-		self._dv = _find_named(TypeKind.DIAGNOSTICVALUE, "DiagnosticValue") or self._type_table.ensure_diagnostic_value()
+		# Slice 7c-3 (ABI 14): `self._dv` and `TypeKind.DIAGNOSTICVALUE` deleted.
 		self._unknown_type = _find_named(TypeKind.UNKNOWN, "Unknown") or self._type_table.ensure_unknown()
 
 	def _type_label(self, ty: Optional[TypeId]) -> str:
@@ -4333,8 +4333,8 @@ class Checker:
 			# HLambda: do NOT recurse — its body is an independent function
 			# checked separately by the per-function loop.
 			# HVar, HSelfRef, HLiteral*, HQualifiedMember, HFnPtrConst,
-			# HTypeApp, HDVInit: leaf nodes or cannot syntactically contain
-			# a call expression at user level.
+			# HTypeApp: leaf nodes or cannot syntactically contain a call
+			# expression at user level.
 
 		for s in hir_block.statements:
 			visit_stmt(s)

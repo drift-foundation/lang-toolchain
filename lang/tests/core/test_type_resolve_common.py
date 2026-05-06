@@ -68,10 +68,6 @@ def test_resolve_optional_and_diagnostic_value():
 	assert schema is not None
 	assert [arm.name for arm in schema.arms] == ["None", "Some", "Tombstone"]
 
-	dv_ty = resolve_opaque_type("DiagnosticValue", table)
-	assert table.get(dv_ty).kind is TypeKind.DIAGNOSTICVALUE
-
-
 def test_resolve_function_type_interning_and_throw_mode():
 	table = TypeTable()
 	int_expr = TypeExpr(name="Int")

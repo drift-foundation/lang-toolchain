@@ -72,14 +72,9 @@ def test_compute_drop_policy_matches_for_unknown() -> None:
 	_assert_match(type_table, type_table.ensure_unknown(), "Unknown")
 
 
-def test_compute_drop_policy_matches_for_diagnostic_value() -> None:
-	type_table = TypeTable()
-	_assert_match(type_table, type_table.ensure_diagnostic_value(), "DiagnosticValue")
-
-
 def test_compute_drop_policy_matches_for_optional_int_variant() -> None:
-	"""POD-payload variant — exercises the variant-walk path of
-	`_contains_dv_transitive` and the structural drop axis."""
+	"""POD-payload variant — exercises the variant-walk path of the
+	drop policy compute and the structural drop axis."""
 	type_table = TypeTable()
 	int_ty = type_table.ensure_int()
 	var_base = type_table.declare_variant(

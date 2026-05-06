@@ -20,7 +20,7 @@ This makes package consumption scale without pinning everything to a single
 Pinned rules (MVP)
 ------------------
 - Builtins are toolchain-owned and must unify to the host builtins:
-  Int/Uint/Uint64/Bool/Float/String/Byte/Void/Error/DiagnosticValue/Unknown.
+  Int/Uint/Uint64/Bool/Float/String/Byte/Void/Error/Unknown.
 - Packages may import new user-defined nominal types into the host TypeTable
   as long as there are no semantic collisions.
 - Collisions are hard errors:
@@ -639,8 +639,6 @@ def _builtin_type_id(host: TypeTable, td: DecodedTypeDef) -> TypeId | None:
 		return host.ensure_void()
 	if td.kind is TypeKind.ERROR and td.name == "Error":
 		return host.ensure_error()
-	if td.kind is TypeKind.DIAGNOSTICVALUE and td.name == "DiagnosticValue":
-		return host.ensure_diagnostic_value()
 	if td.kind is TypeKind.UNKNOWN and td.name == "Unknown":
 		return host.ensure_unknown()
 	return None
@@ -712,10 +710,6 @@ def compute_canonical_keys(table: TypeTable, package_id: str) -> dict[TypeId, Ty
 			return k
 		if td.kind is TypeKind.ERROR:
 			k = ("builtin", "ERROR", "Error")
-			memo[tid] = k
-			return k
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			k = ("builtin", "DIAGNOSTICVALUE", "DiagnosticValue")
 			memo[tid] = k
 			return k
 		if td.kind is TypeKind.UNKNOWN:
@@ -1089,8 +1083,6 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			return host.ensure_void()
 		if kind is TypeKind.ERROR and name == "Error":
 			return host.ensure_error()
-		if kind is TypeKind.DIAGNOSTICVALUE and name == "DiagnosticValue":
-			return host.ensure_diagnostic_value()
 		if kind is TypeKind.UNKNOWN and name == "Unknown":
 			return host.ensure_unknown()
 		raise ValueError(f"unsupported builtin type in package: {k!r}")
@@ -1421,10 +1413,6 @@ def import_type_tables_and_build_typeid_maps(pkg_tt_objs: list[Mapping[str, Any]
 			return k
 		if td.kind is TypeKind.ERROR and td.name == "Error":
 			k = ("builtin", TypeKind.ERROR.name, "Error")
-			host_key_memo[tid] = k
-			return k
-		if td.kind is TypeKind.DIAGNOSTICVALUE and td.name == "DiagnosticValue":
-			k = ("builtin", TypeKind.DIAGNOSTICVALUE.name, "DiagnosticValue")
 			host_key_memo[tid] = k
 			return k
 		if td.kind is TypeKind.UNKNOWN and td.name == "Unknown":

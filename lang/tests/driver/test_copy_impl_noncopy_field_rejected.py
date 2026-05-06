@@ -76,12 +76,13 @@ def test_copy_impl_rejected_for_struct_with_arc_interface_field(
 ) -> None:
 	"""A struct containing a non-Copy field (Arc<Interface>) must not
 	accept a core.Copy impl.  Validation applies uniformly — the
-	checker no longer exempts std.* / lang.* modules; only a narrow
-	allowlist of compiler-known Copy types (String, DiagnosticValue)
-	bypasses the structural prover.  Generic Copy impls
-	(`implement<T> Copy for X<T> require T is Copy`) carry their
-	soundness in the require clause; concrete instantiations are
-	checked when they appear as struct fields."""
+	checker no longer exempts std.* / lang.* modules.  Slice 7c-3
+	(ABI 14, 2026-05-06) emptied the compiler-known Copy allowlist
+	(`_COMPILER_KNOWN_COPY_KINDS`) along with `TypeKind.DIAGNOSTICVALUE`,
+	so every Copy claim now flows through the structural prover.
+	Generic Copy impls (`implement<T> Copy for X<T> require T is Copy`)
+	carry their soundness in the require clause; concrete
+	instantiations are checked when they appear as struct fields."""
 	rc, payload = _run_driftc_json(tmp_path, _COPY_WITH_ARC_FIELD, capsys)
 	diagnostics = payload.get("diagnostics", [])
 	assert rc != 0, (

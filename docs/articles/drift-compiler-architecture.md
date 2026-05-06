@@ -10,7 +10,6 @@ Each stage has one responsibility and transforms the program into a simpler, mor
 - **SSA**: Static Single Assignment form (stage4)
 - **CFG**: Control-Flow Graph
 - **DF**: Dominance Frontier
-- **DV**: DiagnosticValue (error payload)
 - **FnResult**: Result-like return type `<T, Error>` used for can-throw functions
 - **TypeEnv**: Type environment protocol used by typed throw checks (is_fnresult/fnresult_parts)
 - **IR**: Intermediate Representation (generic term; refers to HIR/MIR/SSA in this doc)
@@ -54,7 +53,6 @@ Normalize the language into a **sugar-free, explicit** representation.
 
   * Method sugar → `HMethodCall`
   * Indexing/field sugar → `HIndex` / `HField`
-  * DV constructors → explicit `HDVInit`
   * Loop/if expressions → `HLoop`, `HIf`
   * Try/throw → `HTry`, `HThrow`
 * Eliminate placeholders and implicit receivers.
@@ -101,7 +99,7 @@ Lower HIR to a **control-flow-explicit intermediate representation** with clear 
 * Emit MIR instructions:
 
   * `LoadLocal`, `StoreLocal`, `Call`, `MethodCall`
-  * `ConstructDV`, `ConstructError`, `ConstructResultOk/Err`
+  * `ConstructError`, `ConstructResultOk/Err`
   * `ErrorEvent`, `AssignSSA` (pre-SSA helper), `Phi`
 * Build explicit **basic blocks** and CFG with terminators:
 

@@ -33,7 +33,9 @@ class TypeKind(Enum):
 	INTERFACE = auto()
 	TYPEVAR = auto()
 	ERROR = auto()
-	DIAGNOSTICVALUE = auto()
+	# Slice 7c-3 (ABI 14, 2026-05-06): `DIAGNOSTICVALUE` enum value
+	# deleted along with the entire DV substrate (HIR / MIR /
+	# codegen / runtime / public surface).
 	VOID = auto()
 	FNRESULT = auto()
 	FUNCTION = auto()
@@ -339,7 +341,9 @@ class TypeTable:
 		self._string_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._void_type: TypeId | None = None  # type: ignore[var-annotated]
 		self._error_type: TypeId | None = None  # type: ignore[var-annotated]
-		self._dv_type: TypeId | None = None  # type: ignore[var-annotated]
+		# Slice 7c-3 (ABI 14, 2026-05-06): `_dv_type` cache + the
+		# `ensure_diagnostic_value()` helper deleted along with
+		# `TypeKind.DIAGNOSTICVALUE`.
 		self.source_manager: SourceManager | None = None
 		# Exception schemas keyed by canonical event FQN strings. Values are
 		# (canonical_fqn, [declared_field_names]) so later stages can:
@@ -1774,9 +1778,6 @@ class TypeTable:
 		if td.kind is TypeKind.ERROR:
 			self._needs_drop_cache[tid] = True
 			return True
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			self._needs_drop_cache[tid] = True
-			return True
 		if td.kind is TypeKind.INTERFACE:
 			self._needs_drop_cache[tid] = True
 			return True
@@ -1886,8 +1887,6 @@ class TypeTable:
 			return self.ensure_void()
 		if name == "Error":
 			return self.ensure_error()
-		if name == "DiagnosticValue":
-			return self.ensure_diagnostic_value()
 		if name == "Unknown":
 			return self.ensure_unknown()
 		# Reference constructors as produced by the parser (`&` / `&mut`).
@@ -2213,11 +2212,9 @@ class TypeTable:
 			self._void_type = self._add(TypeKind.VOID, "Void", [])  # type: ignore[attr-defined]
 		return self._void_type  # type: ignore[attr-defined]
 
-	def ensure_diagnostic_value(self) -> TypeId:
-		"""Return the canonical DiagnosticValue TypeId, creating it once."""
-		if getattr(self, "_dv_type", None) is None:
-			self._dv_type = self._add(TypeKind.DIAGNOSTICVALUE, "DiagnosticValue", [])  # type: ignore[attr-defined]
-		return self._dv_type  # type: ignore[attr-defined]
+	# Slice 7c-3 (ABI 14, 2026-05-06): `ensure_diagnostic_value()`
+	# deleted along with `TypeKind.DIAGNOSTICVALUE` and the `_dv_type`
+	# cache.  No remaining call sites — DV substrate is fully retired.
 
 	def ensure_optional_base(self) -> TypeId:
 		"""
@@ -2671,7 +2668,7 @@ class TypeTable:
 				_assert_structural_cacheable(tid)
 				cache_structural[tid] = ok
 				return ok
-			if td.kind in {TypeKind.FORWARD_NOMINAL, TypeKind.UNKNOWN, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.TYPEVAR}:
+			if td.kind in {TypeKind.FORWARD_NOMINAL, TypeKind.UNKNOWN, TypeKind.ERROR, TypeKind.TYPEVAR}:
 				if drift_debug.enabled("copy_cache"):
 					print(f"[drift:debug][copy_cache] unresolved ty={tid} kind={td.kind.name} name={td.name}", file=sys.stderr)
 				return False
@@ -2847,9 +2844,6 @@ class TypeTable:
 				cache[ty] = False
 				return False
 		td = self.get(ty)
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			cache[ty] = True
-			return True
 		if td.kind is TypeKind.SCALAR and td.name in {"Int", "Uint", "Bool", "Float", "String"}:
 			cache[ty] = True
 			return True
@@ -2959,7 +2953,7 @@ class TypeTable:
 					return False
 				cache[tid] = True
 				return True
-			if td.kind in {TypeKind.FORWARD_NOMINAL, TypeKind.UNKNOWN, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.TYPEVAR}:
+			if td.kind in {TypeKind.FORWARD_NOMINAL, TypeKind.UNKNOWN, TypeKind.ERROR, TypeKind.TYPEVAR}:
 				cache[tid] = False
 				return False
 			if td.kind is TypeKind.ARRAY:
@@ -3065,8 +3059,6 @@ class TypeTable:
 					return "Void"
 				if td.kind is TypeKind.ERROR:
 					return "Error"
-				if td.kind is TypeKind.DIAGNOSTICVALUE:
-					return "DiagnosticValue"
 				if td.kind is TypeKind.TYPEVAR and td.type_param_id is not None:
 					owner = function_symbol(td.type_param_id.owner)
 					return f"TypeVar<{owner}#{td.type_param_id.index}>"

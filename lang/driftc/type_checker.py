@@ -243,8 +243,7 @@ class TypeChecker:
 	Minimal HIR type checker that assigns binding IDs and basic types.
 
 	This is a skeleton: it understands literals, vars, lets, borrows, calls, and
-	a small set of builtin constructs (f-strings, exceptions, DiagnosticValue
-	helpers).
+	a small set of builtin constructs (f-strings, exceptions).
 	"""
 
 	def __init__(self, type_table: Optional[TypeTable] = None, *, allow_unsafe: bool = False, allow_unsafe_without_block: bool = False, unsafe_trusted_modules: set[str] | None = None, pkg_unsafe_modules: set[str] | None = None, semantic_world: object | None = None, source_modules: set[str] | None = None):
@@ -261,7 +260,9 @@ class TypeChecker:
 		self._string = self.type_table.ensure_string()
 		self._void = self.type_table.ensure_void()
 		self._error = self.type_table.ensure_error()
-		self._dv = self.type_table.ensure_diagnostic_value()
+		# Slice 7c-3 (ABI 14, 2026-05-06): `_dv` cache + DV TypeId gone
+		# along with `TypeKind.DIAGNOSTICVALUE` and the public DV
+		# substrate.  Former call_ctx `dv_ty` field also retired.
 		self._unknown = self.type_table.ensure_unknown()
 		self._thunk_specs: dict[tuple[ThunkKind, FunctionId, tuple[TypeId, ...], TypeId], ThunkSpec] = {}
 		self._lambda_fn_specs: dict[FunctionId, LambdaFnSpec] = {}
@@ -1320,7 +1321,9 @@ class TypeChecker:
 		# behaving as O(1) bit-copyable at the source level).  These
 		# are the only types allowed to declare `implement Copy` without
 		# passing the field-level structural check.
-		_COMPILER_KNOWN_COPY_KINDS = {TypeKind.DIAGNOSTICVALUE}
+		# Slice 7c-3 (ABI 14): `TypeKind.DIAGNOSTICVALUE` deleted —
+		# `String` is the only remaining compiler-known Copy scalar.
+		_COMPILER_KNOWN_COPY_KINDS: set[TypeKind] = set()
 		_COMPILER_KNOWN_COPY_SCALARS = {"String"}
 
 		def _is_compiler_known_copy(tid: TypeId) -> bool:
@@ -1347,7 +1350,7 @@ class TypeChecker:
 				# in a stored field flips this to non-Copy and rejects
 				# the impl, matching how concrete instantiations behave.
 				return td.type_param_id is not None and td.type_param_id in covered_tparams
-			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
+			if td.kind in (TypeKind.ARRAY, TypeKind.FNRESULT, TypeKind.ERROR, TypeKind.UNKNOWN, TypeKind.FORWARD_NOMINAL):
 				return False
 			if td.kind is TypeKind.INTERFACE:
 				return False
@@ -2035,7 +2038,13 @@ class TypeChecker:
 									code="E-ERROR-ATTR-KEY-NOT-STRING",
 								)
 							)
-						return record_expr(expr, self._dv)
+						# Slice 7c-3 (ABI 14, 2026-05-06): with the DV
+						# substrate gone, this path only fires after the
+						# upstream `E_EXC_ATTRS_REMOVED` rejection has
+						# been emitted in HField/HIndex.  Return type is
+						# `Unknown` — compilation has already failed and
+						# no later check consumes the result.
+						return record_expr(expr, self._unknown)
 					diagnostics.append(
 						_tc_diag(
 							message="attrs access is only supported on Error values",
@@ -6691,8 +6700,6 @@ class TypeChecker:
 						return self._void
 					if name == "Error":
 						return self._error
-					if name == "DiagnosticValue":
-						return self._dv
 					if name == "Unknown":
 						return self._unknown
 					if name in {"&", "&mut"} and expr.args:
@@ -7034,7 +7041,7 @@ class TypeChecker:
 					return record_expr(expr, self._unknown)
 				if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 					preseed = preseed_type_params or {}
-					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, dv_ty=self._dv, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
+					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
 					ctor_res = resolve_qualified_member_call(
 						make_resolver_ctx(call_ctx),
 						expr.fn,
@@ -7987,7 +7994,7 @@ class TypeChecker:
 						binding_types[expr.fn.binding_id] = typed if typed is not None else self._unknown
 						pending_lambda_by_binding.pop(expr.fn.binding_id, None)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, dv_ty=self._dv, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
 				return resolve_call_expr(call_ctx, expr, expected_type, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
 			if isinstance(expr, getattr(H, "HInvoke", ())):
 				if drift_debug.enabled("call"):
@@ -8243,7 +8250,7 @@ class TypeChecker:
 										)
 										return record_expr(expr, self._unknown)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, dv_ty=self._dv, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name))
 				method_ctx = make_method_ctx(call_ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
 				method_res = resolve_method_call(method_ctx, expr, expected_type=expected_type)
 				if method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
@@ -8885,7 +8892,14 @@ class TypeChecker:
 				return record_expr(expr, cur)
 
 			if isinstance(expr, H.HIndex):
-				# Special-case Error.captures["frame"]["key"] → DiagnosticValue.
+				# Slice 7c-3 (ABI 14, 2026-05-06): the legacy
+				# `Error.captures["frame"]["key"]` user-source path is
+				# rejected upstream with `E_EXC_CAPTURES_REMOVED` and the
+				# match here exists only to attach diagnostics (key-type
+				# checks, "captures only on Error" guard).  The fall-through
+				# return type is `Unknown` because compilation has already
+				# failed; users now use `e.context.encode_compact()` for
+				# canonical context JSON.
 				if (
 					isinstance(expr.subject, H.HIndex)
 					and (
@@ -8954,7 +8968,7 @@ class TypeChecker:
 								span=getattr(expr.index, "loc", Span()),
 							)
 						)
-					return record_expr(expr, self._dv)
+					return record_expr(expr, self._unknown)
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "captures":
 					diagnostics.append(
 						_tc_diag(
@@ -8979,7 +8993,13 @@ class TypeChecker:
 						)
 					)
 					return record_expr(expr, self._unknown)
-				# Special-case Error.attrs["key"] → DiagnosticValue.
+				# Slice 7c-3 (ABI 14, 2026-05-06): the legacy
+				# `Error.attrs["key"]` user-source path is rejected
+				# upstream with `E_EXC_ATTRS_REMOVED`; the match here only
+				# attaches diagnostics (key-type check, "attrs only on
+				# Error" guard) and returns `Unknown` after compilation
+				# has already failed.  Users now use
+				# `e.params.get(k).as_*()` to project params.
 				if isinstance(expr.subject, H.HField) and expr.subject.name == "attrs":
 					sub_ty = type_expr(expr.subject.subject, used_as_value=False)
 					key_ty = type_expr(expr.index)
@@ -9021,7 +9041,7 @@ class TypeChecker:
 								code="E-ERROR-ATTR-KEY-NOT-STRING",
 							)
 						)
-					return record_expr(expr, self._dv)
+					return record_expr(expr, self._unknown)
 				if hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")):
 					subject = expr.subject
 					for idx, proj in enumerate(subject.projections):
@@ -9078,7 +9098,7 @@ class TypeChecker:
 										span=getattr(expr.index, "loc", Span()),
 									)
 								)
-							return record_expr(expr, self._dv)
+							return record_expr(expr, self._unknown)
 						if not (isinstance(proj, H.HPlaceField) and proj.name == "attrs"):
 							continue
 						if idx + 1 >= len(subject.projections) or not isinstance(subject.projections[idx + 1], H.HPlaceIndex):
@@ -9125,7 +9145,7 @@ class TypeChecker:
 									code="E-ERROR-ATTR-KEY-NOT-STRING",
 								)
 							)
-						return record_expr(expr, self._dv)
+						return record_expr(expr, self._unknown)
 
 				sub_ty = type_expr(expr.subject, used_as_value=False)
 				idx_ty = type_expr(expr.index)
@@ -9140,13 +9160,24 @@ class TypeChecker:
 				# NotImplementedError for non-Copy array index access.
 				return record_expr(expr, elem_ty)
 
-			# Disallow implicit setters; attrs require explicit runtime helpers in MIR.
+			# Slice 7c-3 (ABI 14, 2026-05-06): the user-source
+			# `e.attrs(...)` call form is rejected here; the legacy
+			# attrs surface is fully retired (see
+			# `E_EXC_ATTRS_REMOVED` for the indexed `e.attrs[...]`
+			# form).  Throw-side params are now owned by
+			# `core.Diagnostic.to_json_text(&E)` + `ExcSetParamsJson`.
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HField) and expr.fn.name == "attrs":
 				diagnostics.append(
 					_tc_diag(
-						message="attrs values must be DiagnosticValue; implicit setters are not supported",
+						message=(
+							"`Error.attrs(...)` is removed in 0.31.62; throw-side "
+							"params projection is owned by `core.Diagnostic for E` — "
+							"declare `pub error E { ... }` (auto-synthesized) or "
+							"`implement core.Diagnostic for E { fn to_json_text(self) -> String { ... } }`"
+						),
 						severity="error",
 						span=getattr(expr, "loc", Span()),
+						code="E_EXC_ATTRS_REMOVED",
 					)
 				)
 				return record_expr(expr, self._unknown)
@@ -9921,11 +9952,11 @@ class TypeChecker:
 				if bool(getattr(stmt, "capture", False)):
 					cap_ty = val_ty
 					if cap_ty is not None and cap_ty != self._unknown:
-						allowed = {self._dv, self._int, self._uint, self._bool, self._string, self._float}
+						allowed = {self._int, self._uint, self._bool, self._string, self._float}
 						if cap_ty not in allowed:
 							diagnostics.append(
 								_tc_diag(
-									message="captured locals currently support Int/Uint/Bool/Float/String/DiagnosticValue only",
+									message="captured locals currently support Int/Uint/Bool/Float/String only",
 									severity="error",
 									span=getattr(stmt, "loc", Span()),
 								)

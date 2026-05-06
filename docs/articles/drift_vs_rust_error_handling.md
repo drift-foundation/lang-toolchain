@@ -70,11 +70,13 @@ Unlike Rust (where `E` is arbitrary), Drift has exactly **one runtime error repr
 struct Error {
     event_code: Uint64
     event_fqn: String
-    attrs: Map<String, DiagnosticValue>
-    ctx_frames: Array<CtxFrame>
+    params_json: String      // canonical JSON object: declared field values
+    context_json: String     // canonical JSON array: `^`-captured frames
     stack: BacktraceHandle
 }
 ```
+
+> **Migration note (Slice 7c-3, ABI 14, 2026-05-06).** Earlier drafts of this article showed `attrs: Map<String, DiagnosticValue>` and a separate `ctx_frames` array. Both were retired by the DV→JSON migration (Slices 7a–7c-3). The shape above is the live ABI 14 surface; see `docs/design/drift-lang-abi.md` §2 for the helper contract.
 
 Key properties:
 

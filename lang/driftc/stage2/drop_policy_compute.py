@@ -55,7 +55,13 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 		raw_is_destructible = bool(type_table.is_destructible(ty))
 	except Exception:
 		raw_is_destructible = False
-	contains_dv = _contains_dv_transitive(type_table, ty, set())
+	# Slice 7c-3 (ABI 14, 2026-05-06): `_contains_dv_transitive`
+	# walked the type tree looking for `TypeKind.DIAGNOSTICVALUE`
+	# sub-types so the drop policy could mark them as needing
+	# structural drop.  With `TypeKind.DIAGNOSTICVALUE` deleted, the
+	# walk always returns False — collapse to the underlying
+	# `has_drop` / `is_destructible` signal.
+	#
 	# needs_drop: driven by destruction reality.  A type that has
 	# `has_drop=True` (refcount release, user destructor, structural
 	# drop) MUST be dropped at scope exit, regardless of whether it
@@ -65,7 +71,7 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 	# `String` (`copy_status=True` AND `has_drop=True`) and for
 	# variants/structs with `String`/`Array<…>` fields.  Pinned by
 	# `lang/tests/driver/test_drop_policy_copy_short_circuit_bug.py`.
-	needs_drop = bool(contains_dv or raw_has_drop or raw_is_destructible)
+	needs_drop = bool(raw_has_drop or raw_is_destructible)
 	# is_cheap_copy: decoupled from `needs_drop`.  A type is "cheap
 	# copy" when its Copy semantics can be implemented with a single
 	# bitcopy or a single retain — POD bitcopy types, refcounted
@@ -75,7 +81,7 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 	# traversal and is NOT cheap.
 	td_for_kind = type_table.get(ty)
 	is_scalar_kind = td_for_kind.kind is TypeKind.SCALAR
-	has_structural_drop = contains_dv or raw_has_drop
+	has_structural_drop = bool(raw_has_drop)
 	is_cheap_copy = (copy_status is True) and (
 		is_bitcopy or is_scalar_kind or not has_structural_drop
 	)
@@ -87,30 +93,3 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 		is_destructible=is_destructible,
 		has_structural_drop=has_structural_drop,
 	)
-
-
-def _contains_dv_transitive(type_table: TypeTable, ty: TypeId, visited: Set[TypeId]) -> bool:
-	if ty in visited:
-		return False
-	visited.add(ty)
-	td = type_table.get(ty)
-	if td.kind is TypeKind.DIAGNOSTICVALUE:
-		return True
-	if td.kind is TypeKind.STRUCT:
-		inst = type_table.get_struct_instance(ty)
-		if inst is not None:
-			for ft in inst.field_types:
-				if _contains_dv_transitive(type_table, ft, visited):
-					return True
-	if td.kind is TypeKind.VARIANT:
-		inst = type_table.get_variant_instance(ty)
-		if inst is not None:
-			for arm in inst.arms:
-				for ft in arm.field_types:
-					if _contains_dv_transitive(type_table, ft, visited):
-						return True
-	if td.param_types:
-		for pt in td.param_types:
-			if _contains_dv_transitive(type_table, pt, visited):
-				return True
-	return False

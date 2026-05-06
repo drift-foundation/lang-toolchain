@@ -256,7 +256,9 @@ def _llvm_comdat_sym(name: str) -> str:
 	return _llvm_fn_sym(name).replace("@", "$", 1)
 
 
-DRIFT_DV_TYPE = "%DriftDiagnosticValue"
+# Slice 7c-3 (ABI 14, 2026-05-06): `DRIFT_DV_TYPE` constant and
+# the `%DriftDiagnosticValue` LLVM type alias are deleted along
+# with `TypeKind.DIAGNOSTICVALUE`.
 DWARF_LANG = "DW_LANG_Rust"
 DW_TAG_POINTER = "DW_TAG_pointer_type"
 DW_TAG_STRUCT = "DW_TAG_structure_type"
@@ -827,7 +829,6 @@ class LlvmModuleBuilder:
 				f"{DRIFT_IFACE_TYPE} = type {{ ptr, ptr, {inline_storage}, i8, [7 x i8] }}",
 				f"{DRIFT_CALLBACK_VTABLE_TYPE} = type [2 x ptr]",
 				f"{FNRESULT_INT_ERROR} = type {{ i8, {self._llty(DRIFT_INT_TYPE)}, {DRIFT_ERROR_PTR} }}",
-				f"{DRIFT_DV_TYPE} = type {{ i8, [7 x i8], [2 x i64] }}",
 				f"%DriftArrayHeader = type {{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, ptr }}",
 				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ ptr, ptr }}",
 			]
@@ -1088,8 +1089,6 @@ class LlvmModuleBuilder:
 			return DRIFT_IFACE_TYPE
 		if td.kind is _TK.VARIANT:
 			return self._ensure_variant_layout(ty_id, type_table)
-		if td.kind is _TK.DIAGNOSTICVALUE:
-			return DRIFT_DV_TYPE
 		if td.kind is _TK.ERROR:
 			return DRIFT_ERROR_PTR
 		if td.kind is _TK.FNRESULT and td.param_types and len(td.param_types) >= 2:
@@ -1726,7 +1725,8 @@ class _FuncBuilder:
 	_value_fn_throws: Dict[str, bool] = field(default_factory=dict)
 	_nothrow_wrap_thunks: Dict[str, bool] = field(default_factory=dict)
 	_nothrow_wrap_for: Dict[str, str] = field(default_factory=dict)
-	dv_type_id: Optional[TypeId] = None
+	# Slice 7c-3 (ABI 14): `dv_type_id` field deleted along with
+	# `TypeKind.DIAGNOSTICVALUE`.
 	sym_name: Optional[str] = None
 	# Variant lowering caches (compiler-private ABI).
 	_variant_layouts: Dict[TypeId, "_VariantLayout"] = field(default_factory=dict)
@@ -1817,8 +1817,6 @@ class _FuncBuilder:
 				self.float_type_id = ty_id
 			if ty_def.kind is TypeKind.VOID:
 				self.void_type_id = ty_id
-			if ty_def.kind is TypeKind.DIAGNOSTICVALUE:
-				self.dv_type_id = ty_id
 
 	def _emit_header(self) -> None:
 		ret_ty = self._return_llvm_type()
@@ -7110,9 +7108,6 @@ class _FuncBuilder:
 		if ty == DRIFT_STRING_TYPE:
 			self.lines.append(f"  ret {DRIFT_STRING_TYPE} {val}")
 			return
-		if ty == DRIFT_DV_TYPE:
-			self.lines.append(f"  ret {DRIFT_DV_TYPE} {val}")
-			return
 		if ty == DRIFT_IFACE_TYPE:
 			self.lines.append(f"  ret {DRIFT_IFACE_TYPE} {val}")
 			return
@@ -7142,7 +7137,7 @@ class _FuncBuilder:
 			self.lines.append(f"  ret %DriftArrayHeader {val}")
 			return
 		raise NotImplementedError(
-			f"LLVM codegen v1: non-can-throw return must be Int, Float, String, DiagnosticValue, Interface, &T, Array, Struct, or Variant, got {ty}"
+			f"LLVM codegen v1: non-can-throw return must be Int, Float, String, Interface, &T, Array, Struct, or Variant, got {ty}"
 		)
 
 	def _lower_term(self, term: object) -> None:
@@ -7294,12 +7289,6 @@ class _FuncBuilder:
 			return out
 		if td.kind in (TypeKind.REF, TypeKind.ERROR):
 			out = (word_bytes, word_bytes)
-			self._size_align_cache[ty_id] = out
-			return out
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			# Keep in sync with %DriftDiagnosticValue = { i8, [7 x i8], [2 x i64] }.
-			# This is currently 24 bytes with word alignment on 64-bit targets.
-			out = (word_bytes * 3, word_bytes)
 			self._size_align_cache[ty_id] = out
 			return out
 		if td.kind is TypeKind.ARRAY:
@@ -7598,8 +7587,6 @@ class _FuncBuilder:
 				# Concrete variants lower to a named LLVM struct type that contains a
 				# tag byte and an aligned payload buffer.
 				return self._variant_layout(ty_id).llvm_ty
-			if td.kind is TypeKind.DIAGNOSTICVALUE:
-				return DRIFT_DV_TYPE
 			if td.kind is TypeKind.ERROR:
 				return DRIFT_ERROR_PTR
 			if td.kind is TypeKind.FNRESULT and td.param_types and len(td.param_types) >= 2:
@@ -7719,11 +7706,9 @@ class _FuncBuilder:
 			return "ptr", key
 		if td.kind is TypeKind.FUNCTION:
 			return self._llvm_type_for_typeid(ty_id), key
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			return DRIFT_DV_TYPE, key
 		if td.kind in (TypeKind.ARRAY, TypeKind.STRUCT, TypeKind.VARIANT):
 			return self._llvm_type_for_typeid(ty_id), key
-		supported = "Int, Uint, Uint64, Bool, Byte, Float, String, DiagnosticValue, Void, Ref<T>, Array<T>, Struct, Variant, FnPtr"
+		supported = "Int, Uint, Uint64, Bool, Byte, Float, String, Void, Ref<T>, Array<T>, Struct, Variant, FnPtr"
 		raise NotImplementedError(
 			f"LLVM codegen v1: FnResult ok type {key} is not supported yet; supported ok payloads: {supported}"
 		)
@@ -7905,7 +7890,7 @@ class _FuncBuilder:
 		if _is_ptr_type(llty):
 			return "ptr null"
 		# Arrays/structs (including String-as-aggregate) can be used as constants.
-		if td is not None and td.kind in (TypeKind.ARRAY, TypeKind.STRUCT, TypeKind.SCALAR, TypeKind.ERROR, TypeKind.DIAGNOSTICVALUE):
+		if td is not None and td.kind in (TypeKind.ARRAY, TypeKind.STRUCT, TypeKind.SCALAR, TypeKind.ERROR):
 			return f"{llty} zeroinitializer"
 		return f"{llty} zeroinitializer"
 
@@ -7956,13 +7941,6 @@ class _FuncBuilder:
 			# Pointer null as an SSA value.
 			self.lines.append(f"  {dest} = select i1 1, ptr null, ptr null")
 			self.value_types[dest] = "ptr"
-			return
-
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			self.lines.append(
-				f"  {dest} = select i1 1, {DRIFT_DV_TYPE} zeroinitializer, {DRIFT_DV_TYPE} zeroinitializer"
-			)
-			self.value_types[dest] = DRIFT_DV_TYPE
 			return
 
 		# Array runtime representation is a fixed 4-field aggregate in v1:
@@ -8055,10 +8033,6 @@ class _FuncBuilder:
 			return dest
 		if td.kind is TypeKind.INTERFACE:
 			dest = self._fresh("tomb_iface")
-			self._emit_zero_value(dest, ty_id)
-			return dest
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			dest = self._fresh("tomb_dv")
 			self._emit_zero_value(dest, ty_id)
 			return dest
 		if td.kind is TypeKind.STRUCT:
@@ -8884,20 +8858,6 @@ class _FuncBuilder:
 			self.lines.append(f"  {out} = load {variant_llty}, ptr {result_ptr}")
 			self.value_types[out] = variant_llty
 			return out
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			# Slice 7c-1 (ABI 14): DV clone path is dead substrate.
-			# `drift_dv_clone` is gone from the runtime archive; no
-			# production lowering should reach this site (no
-			# DV-typed value can be constructed user-side, and stdlib
-			# has no DV-typed values).  Same ICE pattern as the
-			# `_drop_value` and field-drop arms — see those for
-			# rationale.  Slice 7c-2 deletes the TypeKind itself.
-			raise AssertionError(
-				"struct/value copy for TypeKind.DIAGNOSTICVALUE at "
-				"ABI 14 — no production path should construct a DV "
-				"value.  Compiler bug; the DV value's source is "
-				"likely a missed Slice 7b migration."
-			)
 		if td.kind is TypeKind.STRUCT:
 			inst = self.type_table.get_struct_instance(ty_id)
 			if inst is None:
@@ -9284,18 +9244,6 @@ class _FuncBuilder:
 			self.module.needs_error_runtime = True
 			self.lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {value}){call_dbg_suffix}")
 			return
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			# Slice 7c-1 (ABI 14): no production lowering creates a
-			# DV-typed value, so its drop should never be emitted.
-			# Reaching here means a DV value got past the rejection
-			# gates — classify as compiler bug.  The TypeKind itself
-			# stays for one slice (Slice 7c-2 deletes it).
-			raise AssertionError(
-				"_drop_value called for TypeKind.DIAGNOSTICVALUE at "
-				"ABI 14 — no production path should construct a DV "
-				"value.  Compiler bug; the DV value's source is "
-				"likely a missed Slice 7b migration."
-			)
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			elem_ty = td.param_types[0]
 			elem_llty = self._llvm_array_elem_type(elem_ty)
@@ -9380,15 +9328,6 @@ class _FuncBuilder:
 				self.module.needs_error_runtime = True
 				lines.append(f"  call void @drift_error_release({DRIFT_ERROR_PTR} {val})")
 				return
-			if td.kind is TypeKind.DIAGNOSTICVALUE:
-				# Slice 7c-1 (ABI 14): see the parallel guard in
-				# `_drop_value`.  No production lowering creates DV
-				# values; reaching here is a compiler bug.
-				raise AssertionError(
-					"struct field drop for TypeKind.DIAGNOSTICVALUE "
-					"at ABI 14 — no production path should construct "
-					"a DV value as a struct field."
-				)
 			if td.kind is TypeKind.INTERFACE:
 				helper = self._ensure_interface_drop_helper()
 				iface_llty = self._llty(DRIFT_IFACE_TYPE)

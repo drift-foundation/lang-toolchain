@@ -357,8 +357,6 @@ def _host_type_key(tid: TypeId, tt: TypeTable, _memo: dict[TypeId, object] | Non
 		r = ("builtin", "VOID", "Void")
 	elif k is TypeKind.ERROR:
 		r = ("builtin", "ERROR", "Error")
-	elif k is TypeKind.DIAGNOSTICVALUE:
-		r = ("builtin", "DIAGNOSTICVALUE", "DiagnosticValue")
 	elif k is TypeKind.UNKNOWN:
 		r = ("unknown",)
 	elif k is TypeKind.SCALAR:
@@ -732,7 +730,6 @@ def _dump_type_table_queries_if_enabled(type_table: TypeTable | None) -> None:
 	dump_kinds = (
 		TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.SCALAR, TypeKind.INTERFACE,
 		TypeKind.ERROR, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT,
-		TypeKind.DIAGNOSTICVALUE,
 	)
 	def _safe(fn):
 		try:
@@ -8773,7 +8770,6 @@ def main(argv: list[str] | None = None) -> int:
 	type_table.ensure_string()
 	type_table.ensure_void()
 	type_table.ensure_error()
-	type_table.ensure_diagnostic_value()
 	# Keep derived Optional<T> ids stable across builds (package embedding).
 	opt_base = type_table.ensure_optional_base()
 	type_table.ensure_instantiated(opt_base, [type_table.ensure_int()])

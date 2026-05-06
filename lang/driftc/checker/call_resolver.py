@@ -559,7 +559,6 @@ class MethodResolverContext:
 	string_ty: TypeId
 	void_ty: TypeId
 	error_ty: TypeId
-	dv_ty: TypeId
 	unknown_ty: TypeId
 	signatures_by_id: dict
 	callable_registry: object
@@ -634,7 +633,6 @@ class ResolverContext:
 	string_ty: TypeId
 	void_ty: TypeId
 	error_ty: TypeId
-	dv_ty: TypeId
 	unknown_ty: TypeId
 	tc_diag: Callable[..., object]
 	fixed_width_allowed: Callable[[str], bool]
@@ -690,7 +688,6 @@ class CallResolverContext:
 	string_ty: TypeId
 	void_ty: TypeId
 	error_ty: TypeId
-	dv_ty: TypeId
 	unknown_ty: TypeId
 	signatures_by_id: dict
 	callable_registry: object
@@ -772,14 +769,14 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 	base.update(overrides)
 	return ResolverContext(**base)
 
 
 def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None) -> MethodResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, dv_ty=ctx.dv_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 
 
 def make_call_ctx(**kwargs) -> CallResolverContext:
@@ -1115,8 +1112,6 @@ def resolve_variant_ctor(
 			return ctx.void_ty
 		if name == "Error":
 			return ctx.error_ty
-		if name == "DiagnosticValue":
-			return ctx.dv_ty
 		if name == "Unknown":
 			return ctx.unknown_ty
 		if name in {"&", "&mut"} and expr.args:
@@ -1842,122 +1837,12 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			info = _call_info([_recv_ty], ctx.string_ty, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(ctx.string_ty, info)
 
-	# Built-in DiagnosticValue helpers are reserved method names and take precedence.
-	if getattr(expr, "method_name", None) in ("as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind"):
-		recv_ty = type_expr(expr.receiver, used_as_value=False)
-		recv_eff_ty = recv_ty
-		recv_def = ctx.type_table.get(recv_eff_ty)
-		while recv_def.kind is TypeKind.REF and recv_def.param_types:
-			recv_eff_ty = recv_def.param_types[0]
-			recv_def = ctx.type_table.get(recv_eff_ty)
-		if recv_def.kind is not TypeKind.DIAGNOSTICVALUE:
-			# Allow normal method resolution on non-DV receivers (e.g. JsonNode.get/as_object).
-			pass
-		else:
-			if expr.method_name == "get":
-				if len(getattr(expr, "args", []) or []) != 1:
-					diagnostics.append(_tc_diag(message="DiagnosticValue.get expects exactly one key argument", severity="error", span=getattr(expr, "loc", Span())))
-					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-					return MethodCallResult(ctx.unknown_ty, info)
-				key_ty = type_expr(expr.args[0], used_as_value=False)
-				if key_ty != ctx.string_ty:
-					diagnostics.append(_tc_diag(message="DiagnosticValue.get key must be String", severity="error", span=getattr(expr.args[0], "loc", Span())))
-					info = _call_info([recv_ty, key_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-					return MethodCallResult(ctx.unknown_ty, info)
-				opt_dv = _optional_variant_type(ctx.dv_ty)
-				info = _call_info([recv_ty, key_ty], opt_dv, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_dv, info)
-			if expr.method_name == "as_int":
-				opt_int = _optional_variant_type(ctx.int_ty)
-				info = _call_info([recv_ty], opt_int, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_int, info)
-			if expr.method_name == "as_bool":
-				opt_bool = _optional_variant_type(ctx.bool_ty)
-				info = _call_info([recv_ty], opt_bool, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_bool, info)
-			if expr.method_name == "as_float":
-				opt_float = _optional_variant_type(ctx.float_ty)
-				info = _call_info([recv_ty], opt_float, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_float, info)
-			if expr.method_name == "as_string":
-				opt_string = _optional_variant_type(ctx.string_ty)
-				info = _call_info([recv_ty], opt_string, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_string, info)
-			if expr.method_name == "as_object":
-				opt_dv = _optional_variant_type(ctx.dv_ty)
-				info = _call_info([recv_ty], opt_dv, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(opt_dv, info)
-			# DELETION LEDGER: `DiagnosticValue.index()` is transitional
-			# DV→JSON migration scaffolding only — bridges the existing
-			# `to_diag() -> DiagnosticValue` exception-field projection.
-			# Not a new user-facing DV API.  Delete with the rest of the
-			# DV public-surface removal at Slice 5.  See deletion-ledger
-			# comment in `stdlib/std/core/core.drift`.
-			if expr.method_name == "index":
-				if len(getattr(expr, "args", []) or []) != 1:
-					diagnostics.append(_tc_diag(message="DiagnosticValue.index expects exactly one Int index argument", severity="error", span=getattr(expr, "loc", Span())))
-					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-					return MethodCallResult(ctx.unknown_ty, info)
-				idx_ty = type_expr(expr.args[0], used_as_value=False)
-				if idx_ty != ctx.int_ty:
-					diagnostics.append(_tc_diag(message="DiagnosticValue.index argument must be Int", severity="error", span=getattr(expr.args[0], "loc", Span())))
-					info = _call_info([recv_ty, idx_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-					return MethodCallResult(ctx.unknown_ty, info)
-				# Returns a fresh DiagnosticValue (out-of-range yields DV_MISSING).
-				info = _call_info([recv_ty, idx_ty], ctx.dv_ty, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(ctx.dv_ty, info)
-			# DELETION LEDGER: `DiagnosticValue.kind()` is transitional
-			# DV→JSON migration scaffolding only — see `index` above.
-			if expr.method_name == "kind":
-				if getattr(expr, "args", None):
-					diagnostics.append(_tc_diag(message="DiagnosticValue.kind takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
-					info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-					return MethodCallResult(ctx.unknown_ty, info)
-				# Returns Int (matches C enum DriftDiagnosticTag: 0..7).
-				info = _call_info([recv_ty], ctx.int_ty, False, _intrinsic_method_fn_id(expr.method_name))
-				return MethodCallResult(ctx.int_ty, info)
-			info = _call_info([recv_ty], ctx.unknown_ty, False, _intrinsic_method_fn_id(expr.method_name))
-			return MethodCallResult(ctx.unknown_ty, info)
-
-	# DiagnosticValue.len() and .entries() — checked separately because "len"
-	# is also a field-sugar name on Array/String. Only intercept when the
-	# receiver is actually DiagnosticValue.
-	if getattr(expr, "method_name", None) in ("len", "entries"):
-		_dv_recv_ty = type_expr(expr.receiver, used_as_value=False)
-		_dv_eff_ty = _dv_recv_ty
-		_dv_td = ctx.type_table.get(_dv_eff_ty)
-		while _dv_td.kind is TypeKind.REF and _dv_td.param_types:
-			_dv_eff_ty = _dv_td.param_types[0]
-			_dv_td = ctx.type_table.get(_dv_eff_ty)
-		if _dv_td.kind is TypeKind.DIAGNOSTICVALUE:
-			if expr.method_name == "len":
-				if getattr(expr, "args", None):
-					diagnostics.append(_tc_diag(message="DiagnosticValue.len takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
-					return MethodCallResult(ctx.unknown_ty, None)
-				if call_kwargs_issues(f"DiagnosticValue.{expr.method_name}", getattr(expr, "kwargs", None)):
-					first = (getattr(expr, "kwargs", []) or [None])[0]
-					diagnostics.append(_tc_diag(message="DiagnosticValue.len takes no keyword arguments", severity="error", span=_best_effort_span(first, expr)))
-					return MethodCallResult(ctx.unknown_ty, None)
-				info = _call_info([_dv_recv_ty], ctx.int_ty, False, _intrinsic_method_fn_id("len"))
-				return MethodCallResult(ctx.int_ty, info)
-			if expr.method_name == "entries":
-				if getattr(expr, "args", None):
-					diagnostics.append(_tc_diag(message="DiagnosticValue.entries takes no arguments", severity="error", span=getattr(expr, "loc", Span())))
-					return MethodCallResult(ctx.unknown_ty, None)
-				if call_kwargs_issues(f"DiagnosticValue.{expr.method_name}", getattr(expr, "kwargs", None)):
-					first = (getattr(expr, "kwargs", []) or [None])[0]
-					diagnostics.append(_tc_diag(message="DiagnosticValue.entries takes no keyword arguments", severity="error", span=_best_effort_span(first, expr)))
-					return MethodCallResult(ctx.unknown_ty, None)
-				# Resolve canonical std.core:DiagnosticEntry via public API.
-				# No fallback — this intrinsic returns a fixed C layout that
-				# must match std.core's definition exactly.
-				de_ty = ctx.type_table.get_nominal(kind=TypeKind.STRUCT, module_id="std.core", name="DiagnosticEntry")
-				if de_ty is None:
-					diagnostics.append(_tc_diag(message="internal: std.core:DiagnosticEntry not found in type table (compiler invariant violation)", severity="error", span=getattr(expr, "loc", Span())))
-					return MethodCallResult(ctx.unknown_ty, None)
-				arr_de_ty = ctx.type_table.new_array(de_ty)
-				info = _call_info([_dv_recv_ty], arr_de_ty, False, _intrinsic_method_fn_id("entries"))
-				return MethodCallResult(arr_de_ty, info)
+	# Slice 7c-3 (ABI 14, 2026-05-06): the DiagnosticValue intrinsic
+	# method block (`as_int`/`as_bool`/`as_float`/`as_string`/
+	# `as_object`/`get`/`index`/`kind`/`len`/`entries`) is deleted
+	# along with `TypeKind.DIAGNOSTICVALUE`.  Method names like
+	# `as_int` / `get` still resolve through normal method dispatch
+	# on non-DV receivers (e.g. `core.JsonCursor.get(k).as_int()`).
 
 	if call_kwargs_issues("method calls", getattr(expr, "kwargs", None)):
 		first = (getattr(expr, "kwargs", []) or [None])[0]

@@ -75,7 +75,9 @@ def test_dv_string_owned_temp_no_leak(tmp_path: Path) -> None:
 
 	assert vg.returncode != 97, (
 		f"Valgrind detected leaks — owned string temp not released "
-		f"after ConstructDV(String).\n"
+		f"(historical: leak after ConstructDV(String); the DV substrate "
+		f"is now retired but the owned-temp ownership invariant still "
+		f"applies to throw-side params projection).\n"
 		f"definitely lost: {definitely_lost} bytes\n"
 		f"valgrind log:\n{vg_output[-500:]}"
 	)

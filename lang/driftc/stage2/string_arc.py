@@ -130,9 +130,6 @@ def insert_string_arc(
 		if td.kind is TypeKind.ERROR:
 			_type_needs_drop_cache[tid] = True
 			return True
-		if td.kind is TypeKind.DIAGNOSTICVALUE:
-			_type_needs_drop_cache[tid] = True
-			return True
 		if td.kind is TypeKind.ARRAY and td.param_types:
 			_type_needs_drop_cache[tid] = True
 			return True

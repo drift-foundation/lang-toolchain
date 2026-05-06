@@ -151,7 +151,10 @@ _BUILTIN_TYPE_NAMES = {
 	"String",
 	"Void",
 	"Error",
-	"DiagnosticValue",
+	# Slice 7c-3 (ABI 14, 2026-05-06): "DiagnosticValue" removed —
+	# `TypeKind.DIAGNOSTICVALUE` and `ensure_diagnostic_value()` are
+	# deleted; the name is no longer a builtin type and must not be
+	# canonicalized as one in package type-key serialization.
 	"Array",
 	"FnResult",
 	"&",
@@ -258,8 +261,6 @@ def typeid_to_type_expr(
 		return parser_ast.TypeExpr(name="Void", args=[], module_alias=None, module_id=None, loc=None)
 	if kind is TypeKind.ERROR:
 		return parser_ast.TypeExpr(name="Error", args=[], module_alias=None, module_id=None, loc=None)
-	if kind is TypeKind.DIAGNOSTICVALUE:
-		return parser_ast.TypeExpr(name="DiagnosticValue", args=[], module_alias=None, module_id=None, loc=None)
 	if kind is TypeKind.UNKNOWN:
 		return None
 	if kind is TypeKind.SCALAR:

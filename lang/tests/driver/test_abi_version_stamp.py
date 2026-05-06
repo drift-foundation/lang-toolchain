@@ -546,10 +546,10 @@ fn main() nothrow -> Int {
 	assert rc == 0, f"compile failed: rc={rc}"
 	assert out_bin.exists(), "linked binary missing"
 	# `nm` lists every defined and undefined symbol.  Restrict to the
-	# DV runtime set; DriftDiagnostic* type names alone (zero-arg
-	# struct mangling) don't appear because LLVM IR uses the named
-	# `%DriftDiagnosticValue` LLVM type purely for layout (still
-	# allowed at ABI 14 — Slice 7c-2 is the type-table cleanup).
+	# DV runtime set; with Slice 7c-3 the `%DriftDiagnosticValue`
+	# LLVM type alias and the C struct types are deleted, so any
+	# accidental re-emission would also surface here as a
+	# `DriftDiagnostic*` / `drift_dv_*` symbol leak.
 	# Prefix-based check.  Any symbol matching one of the deleted
 	# families fails the contract — this catches the entire
 	# `drift_dv_*` and `drift_diag_from_*` families plus the

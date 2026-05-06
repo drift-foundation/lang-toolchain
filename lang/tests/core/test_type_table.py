@@ -72,14 +72,15 @@ def test_type_table_seeds_error_canonically():
 	assert err_ty == table.ensure_error()
 
 
-def test_type_table_seeds_diagnostic_value_and_optional():
+def test_type_table_seeds_optional_instantiation_cache():
+	# Slice 7c-3 (ABI 14, 2026-05-06): the DV seeding half of the
+	# original test is gone with `TypeKind.DIAGNOSTICVALUE` and
+	# `ensure_diagnostic_value()`.  Pin the Optional cache stability
+	# half explicitly.
 	table = TypeTable()
-	dv_ty = table.ensure_diagnostic_value()
 	opt_int = _ensure_optional(table, table.ensure_int())
 	opt_int_again = _ensure_optional(table, table.ensure_int())
 
-	assert table.get(dv_ty).kind is TypeKind.DIAGNOSTICVALUE
-	assert dv_ty == table.ensure_diagnostic_value()
 	assert table.get(opt_int).kind is TypeKind.VARIANT
 	inst = table.get_variant_instance(opt_int)
 	assert inst is not None

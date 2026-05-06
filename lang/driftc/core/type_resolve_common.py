@@ -4,8 +4,8 @@ from __future__ import annotations
 Shared helpers for resolving raw/builtin type shapes into TypeIds.
 
 This centralizes the knowledge of builtin names (`Int`, `Bool`, `String`,
-`Uint`, `Float`, `Void`, `Error`, `DiagnosticValue`, `Array`, `Optional`, `FnResult`, `fn`) so resolver and checker code
-stay in sync as the language evolves.
+`Uint`, `Float`, `Void`, `Error`, `Array`, `Optional`, `FnResult`, `fn`)
+so resolver and checker code stay in sync as the language evolves.
 """
 
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeParamId, TypeTable
@@ -28,7 +28,7 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 
 	Supported inputs:
 	- TypeExpr-like objects exposing `name` and `args`.
-	- Strings naming builtins (Int/Bool/String/Uint/Float/Void/Error/DiagnosticValue),
+	- Strings naming builtins (Int/Bool/String/Uint/Float/Void/Error),
 	  Array<...>, Optional<...>, and FnResult<ok, err>.
 	- Tuples encoding FnResult, e.g. ("FnResult", ok, err) or (ok, err).
 	Unknown shapes return the canonical Unknown TypeId for the table.
@@ -204,8 +204,6 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 		if name == "Array":
 			elem = resolve_opaque_type(args[0] if args else None, table, module_id=origin_mod, type_params=type_params, alias_stack=alias_stack)
 			return table.new_array(elem)
-		if name == "DiagnosticValue":
-			return table.ensure_diagnostic_value()
 		if name == "Uint":
 			return table.ensure_uint()
 		if name == "Uint64":
@@ -340,8 +338,6 @@ def resolve_opaque_type(raw: object, table: TypeTable, *, module_id: str | None 
 			return table.ensure_float()
 		if raw == "Error":
 			return table.ensure_error()
-		if raw == "DiagnosticValue":
-			return table.ensure_diagnostic_value()
 		if raw == "Uint":
 			return table.ensure_uint()
 		if raw == "Uint64":

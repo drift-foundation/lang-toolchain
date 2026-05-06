@@ -293,7 +293,7 @@ pub trait Destructible {
 }
 
 pub trait Diagnostic {
-	fn to_diag(self: &Self) nothrow -> DiagnosticValue;
+	fn to_json_text(self: &Self) nothrow -> String;
 }
 
 pub trait Fn1<A, R> {

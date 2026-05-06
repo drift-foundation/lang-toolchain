@@ -298,8 +298,8 @@ class TombstoneValue(MInstr):
 	  skipping all payload destructors.  SAFE.
 	- **String / Array** — release-on-null is a runtime no-op; zero
 	  bytes represent an empty/released slot.  SAFE.
-	- **Interface / DiagnosticValue** — null fat-pointer drop is a
-	  runtime no-op.  SAFE.
+	- **Interface** — null fat-pointer drop is a runtime no-op.
+	  SAFE.
 	- **Plain aggregates of the above** (structs containing only
 	  tombstone-safe fields) — composed of SAFE parts.  SAFE.
 

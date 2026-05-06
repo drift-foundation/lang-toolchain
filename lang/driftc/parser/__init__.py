@@ -55,6 +55,10 @@ from lang.driftc.stage1 import assign_callsite_ids
 if TYPE_CHECKING:
 	from lang.driftc.traits.world import TraitKey
 
+# Slice 7c-3 (ABI 14, 2026-05-06): `DiagnosticValue` removed from the
+# reserved-nominal set — `TypeKind.DIAGNOSTICVALUE` is gone, so the
+# name is no longer a builtin and may be used as an ordinary user
+# identifier.  Spec §9.4 reflects this.
 _RESERVED_NOMINAL_TYPE_NAMES: set[str] = {
 	"Int",
 	"Uint",
@@ -64,7 +68,6 @@ _RESERVED_NOMINAL_TYPE_NAMES: set[str] = {
 	"String",
 	"Void",
 	"Error",
-	"DiagnosticValue",
 	"Array",
 	"Optional",
 	"FnResult",
@@ -204,7 +207,6 @@ def _prime_builtins(table: TypeTable) -> None:
 	table.ensure_string()
 	table.ensure_void()
 	table.ensure_error()
-	table.ensure_diagnostic_value()
 	# Seed commonly used derived types so TypeIds are stable across builds.
 
 
@@ -3515,20 +3517,21 @@ def parse_drift_workspace_to_hir(
 	) -> None:
 		if te is None:
 			return
-		# Slice 7a (0.31.62, 2026-05-05): user code may not name
-		# `core.DiagnosticValue` / `core.DiagnosticEntry` — the DV/DE public
-		# surface is removed (compiler-internal only through the synthesized
-		# Diagnostic bridge).  Stdlib retains internal use; we discriminate
-		# by source-file path under stdlib_root.  Without this rejection the
-		# user gets the generic "module 'std.core' does not export type X"
-		# error, which doesn't point at the migration.
+		# Slice 7a (0.31.62, 2026-05-05) → Slice 7c-3 (0.31.65,
+		# 2026-05-06): user code may not name `core.DiagnosticValue` /
+		# `core.DiagnosticEntry`.  The DV/DE public surface was removed
+		# in 7a; the runtime exports + compiler-internal substrate were
+		# deleted in 7c-1 / 7c-2 / 7c-3.  The rejection here is now a
+		# pure migration diagnostic — without it user source gets the
+		# generic "module 'std.core' does not export type X" error,
+		# which doesn't point at the migration.  Stdlib source no longer
+		# uses these names either (only tombstone comments remain), but
+		# we keep the stdlib-source allowance as a guard against future
+		# accidental re-introduction inside stdlib.
 		#
-		# Slice 7a follow-up (K finding 1, 2026-05-05): the rejection covers
-		# both module-aliased forms (`core.DiagnosticValue`) AND unqualified
-		# uses (`DiagnosticValue` directly).  Unqualified DV is normally a
-		# built-in name that the resolver lets through; for user source we
-		# reject it here at the type-resolution boundary.  Stdlib internal
-		# type positions are still allowed.
+		# The rejection covers both module-aliased forms
+		# (`core.DiagnosticValue`) AND unqualified uses
+		# (`DiagnosticValue` directly).
 		if te.name in ("DiagnosticValue", "DiagnosticEntry"):
 			alias = getattr(te, "module_alias", None)
 			mod = file_aliases.get(alias or "") if alias else None
