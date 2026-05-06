@@ -10743,6 +10743,31 @@ class TypeChecker:
 			if nid is not None:
 				_implicit_const_share_marks.discard(int(nid))
 
+		# Consume intrinsics: their declared param is consumed (moved)
+		# at lowering, so an implicit-const-share wrap on the arg
+		# would retain a +1 owner that the intrinsic destroys, leaving
+		# the source local LIVE for cleanup_authoring.  See the gate
+		# in `_walk_implicit_cs`'s HCall handler below.
+		_CONSUME_INTRINSIC_KINDS = frozenset({
+			IntrinsicKind.DROP_VALUE,
+			IntrinsicKind.RAW_WRITE,
+			IntrinsicKind.PTR_WRITE,
+			IntrinsicKind.REPLACE,
+			IntrinsicKind.MAYBE_WRITE,
+		})
+
+		def _is_consume_intrinsic_call(node: object) -> bool:
+			csid = getattr(node, "callsite_id", None)
+			if csid is None:
+				return False
+			info = call_info_by_callsite_id.get(int(csid))
+			if info is None:
+				return False
+			target = getattr(info, "target", None)
+			if target is None or getattr(target, "kind", None) is not CallTargetKind.INTRINSIC:
+				return False
+			return getattr(target, "intrinsic", None) in _CONSUME_INTRINSIC_KINDS
+
 		def _consider_implicit_cs_mark_at(slot: object) -> None:
 			"""Walker-side mark population for owned-position slots
 			the typechecker doesn't Copy-check at value position
@@ -10887,6 +10912,37 @@ class TypeChecker:
 			# source of truth for "this is an owned-position
 			# binding-read of non-Copy ConstShare type".
 			if isinstance(node, H.HCall):
+				# LANGUAGE_BUG (consume-intrinsic ownership, 2026-05-06):
+				# Args to consume intrinsics (`core.drop_value`,
+				# `mem.write`, `mem.maybe_write`, `mem.replace`,
+				# `mem.ptr_write`) are CONSUMED by the intrinsic — the
+				# source local must be moved out, not retained.  But the
+				# auto-`ConstShare`-by-composition rule auto-derives
+				# `core.ConstShare` for plain structs whose fields are
+				# all-`ConstShare` even when the struct ALSO has a
+				# user `core.Destructible` impl.  Without this gate, the
+				# implicit-const-share walker rewrites `inner` (HVar) to
+				# `inner.const_share()` (HMethodCall) at the consume
+				# site, which retains a +1 owner that the intrinsic
+				# destroys — leaving the source still LIVE.
+				# `cleanup_authoring` then emits a redundant scope-exit
+				# destructor → double-destroy / UAF when destroy()
+				# touches heap.  Pinned by
+				# `lang/tests/stage2/test_drop_value_intrinsic_ownership.py`,
+				# `test_consume_intrinsic_ownership.py`, and
+				# `test_maybe_uninit_local_lowering.py`.
+				#
+				# Skip implicit-const-share wrapping for args at
+				# consume-intrinsic call sites — the consume semantic is
+				# move-by-construction, and `_lower_owning_consume` in
+				# HIR→MIR will emit the proper `MoveOut`.
+				if _is_consume_intrinsic_call(node):
+					for i in range(len(node.args)):
+						_walk_implicit_cs(node.args[i])
+					for kw in (node.kwargs or []):
+						_walk_implicit_cs(kw.value)
+					_walk_implicit_cs(node.fn)
+					return
 				for i in range(len(node.args)):
 					_consider_implicit_cs_mark_at(node.args[i])
 					_wrap_owned_list_slot(node.args, i)

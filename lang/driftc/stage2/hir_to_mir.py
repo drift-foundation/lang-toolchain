@@ -7573,7 +7573,39 @@ class HIRToMIR:
 			arg_ty = self._infer_expr_type(base)
 			if expected is not None and not self._should_copy_value(expected):
 				arg_ty = expected
-			if arg_ty is not None and not self._should_copy_value(arg_ty):
+			# LANGUAGE_BUG (consume-intrinsic ownership, 2026-05-06):
+			# At an OWNING-CONSUMPTION boundary, a value with a custom
+			# `core.Destructible` impl MUST move, never cheap-copy.
+			# Otherwise the source local stays LIVE in the ledger,
+			# `cleanup_authoring` queries `verdict_at(local)` at scope
+			# exit, sees `MUST_DROP`, and authors a redundant
+			# scope-exit destructor — running the user `destroy()` body
+			# twice for the same logical instance (UAF when destroy
+			# touches heap; latent for empty destructors).
+			#
+			# The pre-fix gate (`not _should_copy_value(arg_ty)`) only
+			# moved when `_drop_policy.is_cheap_copy` was False.  But a
+			# plain struct with all-`ConstShare` fields AND a
+			# user-declared `core.Destructible for T` impl can have
+			# `is_cheap_copy=True` (auto-`ConstShare` is currently not
+			# disqualified by the presence of `Destructible`).  At
+			# consume sites that's the source of the double-destroy
+			# class K flagged across `core.drop_value`, `mem.write`,
+			# `mem.maybe_write`, `mem.replace`, `mem.ptr_write`, and
+			# the `MaybeUninit` standalone-local lowering.
+			#
+			# Pinned by `test_drop_value_intrinsic_ownership.py::
+			# test_lowering_drop_value_emits_moveout_for_non_copy_local`
+			# and the consume-intrinsic / maybe-uninit siblings.  The
+			# auto-`ConstShare`-with-`Destructible` gap remains a
+			# separate phase (synthesis-side disqualification); this
+			# patch hardens the consume-side decision so the gap does
+			# not leak into runtime double-destroy.
+			must_move = arg_ty is not None and (
+				not self._should_copy_value(arg_ty)
+				or self._drop_policy(arg_ty).is_destructible
+			)
+			if must_move:
 				subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
 				self.b.ensure_local(subj_name)
 				moved_val = self.b.new_temp()
