@@ -1563,6 +1563,54 @@ def _reject_deprecated_trait_method_shapes(
 				))
 
 
+def _diagnostic_body_emission_enabled(
+	*, type_table: object | None, module_id: str,
+) -> bool:
+	"""Return True iff this compilation context can resolve the
+	synthesized `core.Diagnostic for E.to_json_text` body's
+	`(&self.<f>).to_json_text()` calls against stdlib's scalar
+	impls.
+
+	NARROW signal — only suppresses BODY emission, not
+	projectability validation, manual-Diagnostic ownership tracking,
+	or the `_PUB_ERROR_FIELD_NOT_PROJECTABLE` diagnostic.  Those
+	always run regardless of stdlib reachability so that synthesis
+	semantics (single-owner contract, projectability rule, typed-
+	catch boundary) stay coherent across all parse paths.
+
+	Reachability is determined by whether a workspace orchestrator
+	has set up `workspace_diagnostic_targets` on the shared
+	type_table.  Even when the workspace pre-scan finds no
+	cross-module Diagnostic impls (a common case for small
+	projects), `_orchestrate_workspace` sets the attribute to an
+	empty set — its mere presence indicates "the driftc workspace
+	loader ran with stdlib in scope and per-module synthesis
+	bodies will be link-resolved against std.core's scalar impls."
+
+	The narrow case where this returns False is the single-file
+	`parse_drift_to_hir(path)` test path: no orchestrator runs, the
+	attribute is never set on the fresh TypeTable, and the
+	synthesized body's `to_json_text` calls would not resolve
+	(stdlib was never parsed).  Bootstrap exemptions:
+
+	- `module_id == "std.core"` — std.core's own scalar impls live
+	  in this same module; the body's recursive calls resolve
+	  intra-module.
+	- `module_id` is `std.*` or `lang.*` — driftc always parses
+	  std.core when any stdlib module is being compiled; cross-
+	  module dispatch will resolve once trait worlds are built.
+	"""
+	if module_id == "std.core":
+		return True
+	if isinstance(module_id, str) and (
+		module_id.startswith("std.") or module_id.startswith("lang.")
+	):
+		return True
+	if type_table is not None and hasattr(type_table, "workspace_diagnostic_targets"):
+		return True
+	return False
+
+
 def _scan_external_diagnostic_targets(
 	type_table: object,
 ) -> set[tuple[str | None, str]]:
@@ -1653,6 +1701,20 @@ def _synthesize_auto_diagnostic_impls(
 	]
 	if not exceptions:
 		return
+	# Slice 7c-3 follow-up #2 (K, 2026-05-06): NARROW gate on body
+	# emission only.  Projectability validation, manual-Diagnostic
+	# ownership tracking, and the `E_PUB_ERROR_FIELD_NOT_PROJECTABLE`
+	# diagnostic ALWAYS run — those define synthesis semantics and
+	# downstream gates (typed-catch boundary, single-owner contract)
+	# regardless of whether stdlib happens to be reachable in this
+	# compile.  Only the actual `impls.append(...)` of the synthesized
+	# `to_json_text` body is suppressed when `_diagnostic_body_emission_enabled`
+	# returns False — the narrow `parse_drift_to_hir(path)` test path
+	# where the synthesized body's recursive `to_json_text` dispatch
+	# cannot resolve against any stdlib scalar impl.
+	body_emission_enabled = _diagnostic_body_emission_enabled(
+		type_table=type_table, module_id=module_id,
+	)
 	impls = list(getattr(prog, "implements", []) or [])
 	manual_diag_targets_local: set[str] = set()
 	diagnostic_targets: set[tuple[str | None, str]] = set()
@@ -1778,6 +1840,12 @@ def _synthesize_auto_diagnostic_impls(
 				code="E_PUB_ERROR_FIELD_NOT_PROJECTABLE",
 				notes=notes_list,
 			))
+			continue
+		# Slice 7c-3 follow-up #2: stdlib-less single-file parse path
+		# never reaches stdlib's scalar `Diagnostic` impls — the
+		# synthesized body would be unresolvable.  Skip the impl
+		# emission only; projectability validation already ran.
+		if not body_emission_enabled:
 			continue
 		# All fields projectable — synthesize the impl.
 		target = parser_ast.TypeExpr(name=exc.name, module_id=module_id, loc=loc)
