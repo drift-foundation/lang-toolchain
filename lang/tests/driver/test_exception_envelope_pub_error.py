@@ -133,11 +133,15 @@ fn main() nothrow -> Int {
 # ── Probe 3 ─ params.get cursor access ─────────────────────────────
 
 
-@_SLICE_5_PENDING
 def test_params_cursor_access_over_pub_error(tmp_path, capsys):
 	"""`e.params.get(key).as_*()` continues to work over the
 	synthesized params of a thrown `pub error`.  Pins that Slice
-	4A's cursor surface is preserved."""
+	4A's cursor surface is preserved.
+
+	Was xfailed pre-2026-05-06 with a stale "Slice 5 not yet
+	implemented" reason; the actual blocker was the missing
+	`Optional<T>::unwrap_or` stdlib method.  Live as of the
+	`unwrap_or` addition in `stdlib/std/core/core.drift`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error ParseError {
 \toffset: Int,

@@ -361,6 +361,23 @@ implement<T> Optional<T> {
 			None => { return f.call(); }
 		}
 	}
+
+	/// Unwraps the `Some` value or returns `fallback` on `None`.
+	///
+	/// Canonical fluent-chain ergonomic over `Optional<T>`.  Use this
+	/// when the fallback is a value already on hand; for fallbacks
+	/// that need to be computed lazily (or that can throw), use
+	/// `on_none` with a callback instead.
+	///
+	/// Pinned by `test_params_cursor_access_over_pub_error` —
+	/// `e.params.get(k).as_int().unwrap_or(-1)` is the canonical
+	/// fluent shape over a `JsonCursor` parse result.
+	pub fn unwrap_or(self: Optional<T>, fallback: T) nothrow -> T {
+		match self {
+			Some(v) => { return move v; },
+			None => { return move fallback; }
+		}
+	}
 }
 
 /// Trait for zero-argument non-throwing callables.  See `FnThrow0`.
