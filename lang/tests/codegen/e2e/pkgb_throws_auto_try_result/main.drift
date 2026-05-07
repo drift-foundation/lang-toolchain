@@ -1,8 +1,11 @@
 // Package-boundary regression: throws auto-try must unwrap
-// Result<T, E> returned by a package function when E: Throw,
-// including when the unwrapped value is passed by &mut ref
-// to subsequent calls (the web-rest pattern) — with zero
-// trait import on the consumer side.
+// Result<T, E> returned by a package function when E is `pub
+// error` (auto-try desugars through `or_throw`, which under
+// Slice 5 requires E to be a `pub error` per
+// `E_OR_THROW_NOT_ERROR_TYPE`).  Includes the case where the
+// unwrapped value is passed by &mut ref to subsequent calls
+// (the web-rest pattern) — with zero trait import on the
+// consumer side.
 
 module main;
 

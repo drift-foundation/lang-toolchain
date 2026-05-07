@@ -1,5 +1,5 @@
 {
-  "description": "Package-boundary regression: throws auto-try eagerly unwraps Result<T, E> from package fn (E: Throw) on inferred local bindings, &mut pass-through, and move consumption. No trait import on consumer.",
+  "description": "Package-boundary regression: throws auto-try eagerly unwraps Result<T, E> from package fn (E is `pub error`) on inferred local bindings, &mut pass-through, and move consumption. No trait import on consumer.",
   "exit_code": 0,
   "package_consumer_only": true
 }

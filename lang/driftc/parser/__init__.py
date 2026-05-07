@@ -4203,6 +4203,29 @@ def parse_drift_workspace_to_hir(
 		# user diagnostic.  The per-module pass below is the
 		# authoritative diagnostic emitter for these classes; the
 		# pre-scan dedupes silently so registration completes.
+		# LANGUAGE_BUG follow-up (nominal-namespace coherence,
+		# 2026-05-06): build a name→first-kind map across all source
+		# decl kinds in this module BEFORE per-kind registration so
+		# cross-kind collisions can be skipped silently here (the
+		# per-module lowerer below is the authoritative diagnostic
+		# emitter via `E_DUP_NOMINAL_NAME`).  Without this, the
+		# pre-scan's `declare_*` would fail with a raw type-kind
+		# mismatch ValueError, which the surrounding `except
+		# ValueError` handler would surface as a leaky diagnostic in
+		# parallel to the per-module pass's clean diagnostic.
+		_pre_kind_by_name: dict[str, str] = {}
+		for _s in getattr(_prog, "structs", []) or []:
+			if getattr(_s, "is_synthesized_for_error", False):
+				_pre_kind_by_name.setdefault(_s.name, "error")
+			else:
+				_pre_kind_by_name.setdefault(_s.name, "struct")
+		for _i in getattr(_prog, "interfaces", []) or []:
+			_pre_kind_by_name.setdefault(_i.name, "interface")
+		for _v in getattr(_prog, "variants", []) or []:
+			_pre_kind_by_name.setdefault(_v.name, "variant")
+		for _t in getattr(_prog, "traits", []) or []:
+			_pre_kind_by_name.setdefault(_t.name, "trait")
+
 		_pre_seen_source_struct: set[str] = set()
 		_pre_seen_synth: set[str] = set()
 		for _s in getattr(_prog, "structs", []) or []:
@@ -4251,9 +4274,18 @@ def parse_drift_workspace_to_hir(
 				shared_type_table.define_struct_schema_fields(struct_id, field_templates)
 			except ValueError as err:
 				diagnostics.append(_p_diag(message=str(err), severity="error", span=Span.from_loc(getattr(_s, "loc", None))))
+		_pre_seen_interface: set[str] = set()
 		for _i in getattr(_prog, "interfaces", []) or []:
 			if _reject_reserved_nominal_type(getattr(_i, "name", ""), loc=getattr(_i, "loc", None), diagnostics=diagnostics):
 				continue
+			# Cross-kind collision: name was first claimed by a
+			# different decl kind; per-module pass emits
+			# `E_DUP_NOMINAL_NAME`.  Same-kind duplicate dedupes here.
+			if _pre_kind_by_name.get(_i.name) != "interface":
+				continue
+			if _i.name in _pre_seen_interface:
+				continue
+			_pre_seen_interface.add(_i.name)
 			try:
 				shared_type_table.declare_interface(
 					_mid,
@@ -4307,9 +4339,16 @@ def parse_drift_workspace_to_hir(
 				)
 			except ValueError as err:
 				diagnostics.append(_p_diag(message=str(err), severity="error", span=Span.from_loc(getattr(_i, "loc", None))))
+		_pre_seen_variant: set[str] = set()
 		for _v in getattr(_prog, "variants", []) or []:
 			if _reject_reserved_nominal_type(getattr(_v, "name", ""), loc=getattr(_v, "loc", None), diagnostics=diagnostics):
 				continue
+			# Cross-kind collision dedupe; same-kind dedupe.
+			if _pre_kind_by_name.get(_v.name) != "variant":
+				continue
+			if _v.name in _pre_seen_variant:
+				continue
+			_pre_seen_variant.add(_v.name)
 			arms: list[VariantArmSchema] = []
 			tombstone_ctor: str | None = None
 			invalid_variant = False
@@ -5334,8 +5373,217 @@ def _lower_parsed_program_to_hir(
 				continue
 			_seen_source_struct_names.add(_s.name)
 		struct_defs.append(_s)
-	variant_defs = list(getattr(prog, "variants", []) or [])
-	interface_defs = list(getattr(prog, "interfaces", []) or [])
+	# LANGUAGE_BUG follow-up (nominal-namespace coherence,
+	# 2026-05-06): K's review-loop matrix sweep flagged that
+	# cross-kind decls sharing a name silently coexist (e.g.
+	# `pub struct X` + `pub variant X`, `pub error X` + `pub trait X`),
+	# producing two type-table entries under different `TypeKind`s.
+	# Downstream resolution then picks one ambiguously.  Fix:
+	# detect cross-kind collisions BEFORE per-kind registration
+	# runs; emit a clean `E_DUP_NOMINAL_NAME` diagnostic at the
+	# second-and-later sites and skip them from registration.
+	#
+	# Iteration order is source-decl source order (struct, variant,
+	# interface, trait, error/pub error).  First-seen kind wins;
+	# subsequent decls under any other kind are blocked.  Same-kind
+	# duplicates are already handled by per-kind dedupe paths
+	# (struct+struct via E_DUP_SOURCE_STRUCT_NAME; trait+trait via
+	# the trait-world's "duplicate trait definition" diagnostic).
+	# Pinned by `lang/tests/parser/test_parser_nominal_coherence.py`'s
+	# 15-cell collision matrix.
+	_NOMINAL_KIND_LABELS: dict[str, str] = {
+		"struct": "struct",
+		"variant": "variant",
+		"interface": "interface",
+		"trait": "trait",
+		"error": "error",
+	}
+	_nominal_first_kind: dict[str, str] = {}
+	_blocked_variant_names: set[str] = set()
+	_blocked_interface_names: set[str] = set()
+	_blocked_trait_names: set[str] = set()
+	_nominal_blocked_error_names_xkind: set[str] = set()
+
+	def _register_nominal_or_diag(_name: str, _kind: str, _loc: object) -> bool:
+		"""Returns True if this decl should be allowed to register;
+		False if a cross-kind collision was detected and a diagnostic
+		was emitted."""
+		first = _nominal_first_kind.get(_name)
+		if first is None:
+			_nominal_first_kind[_name] = _kind
+			return True
+		if first == _kind:
+			# Same-kind duplicate; defer to the per-kind handler
+			# (which has already-fixed paths for struct/trait or
+			# clean type-table contract checks for variant/interface).
+			return True
+		first_label = _NOMINAL_KIND_LABELS.get(first, first)
+		this_label = _NOMINAL_KIND_LABELS.get(_kind, _kind)
+		_article = "an" if first_label[:1] in {"a", "e", "i", "o", "u"} else "a"
+		diagnostics.append(_p_diag(
+			message=(
+				f"type name '{_name}' is already declared as "
+				f"{_article} {first_label} in this module — "
+				f"`{this_label} {_name}` cannot share the name"
+			),
+			severity="error",
+			span=Span.from_loc(_loc),
+			code="E_DUP_NOMINAL_NAME",
+		))
+		return False
+
+	# Build a unified source-order list of (name, kind, loc) tuples
+	# from all source decls.  Source order is the user's declaration
+	# order in the file; iterating per-kind (structs first, then
+	# variants, etc.) gives wrong "already declared as <X>"
+	# diagnostics when a variant/interface/trait was actually
+	# declared FIRST and a later struct/error tries to share the
+	# name.  Pinned by reverse-order regression cases in
+	# `test_parser_nominal_coherence.py` (15 forward + 12 reverse =
+	# 27 cross-kind pairs total).
+	def _decl_pos(_decl) -> tuple[int, int, int]:
+		"""Sort key drawn from the decl's source location.  Falls
+		back to large sentinels so any decl missing a usable loc
+		still sorts deterministically (after all located decls).
+		"""
+		_loc = getattr(_decl, "loc", None)
+		if _loc is None:
+			return (10**9, 10**9, 10**9)
+		_sp = getattr(_loc, "start_pos", None)
+		if isinstance(_sp, int):
+			return (_sp, 0, 0)
+		_line = getattr(_loc, "line", None) or 10**9
+		_col = getattr(_loc, "column", None) or 10**9
+		return (10**9, int(_line), int(_col))
+
+	_decls_in_source_order: list[tuple] = []
+	for _s in (getattr(prog, "structs", []) or []):
+		# Skip synthesized error struct faces — they share the
+		# `loc` of the originating `error` decl (already counted
+		# under "error" below).  Counting both would double-emit.
+		if getattr(_s, "is_synthesized_for_error", False):
+			continue
+		# Skip source structs already filtered out by the synth-vs-
+		# source dedupe (`struct_defs` is the survivor set).
+		if _s not in struct_defs:
+			continue
+		_decls_in_source_order.append(("struct", _s.name, _s, _decl_pos(_s)))
+	for _exc in (getattr(prog, "exceptions", []) or []):
+		if getattr(_exc, "kind", "exception") == "error":
+			_decls_in_source_order.append(("error", _exc.name, _exc, _decl_pos(_exc)))
+	for _v in (getattr(prog, "variants", []) or []):
+		_decls_in_source_order.append(("variant", _v.name, _v, _decl_pos(_v)))
+	for _i in (getattr(prog, "interfaces", []) or []):
+		_decls_in_source_order.append(("interface", _i.name, _i, _decl_pos(_i)))
+	for _t in (getattr(prog, "traits", []) or []):
+		_decls_in_source_order.append(("trait", _t.name, _t, _decl_pos(_t)))
+	_decls_in_source_order.sort(key=lambda _e: _e[3])
+
+	# Single source-ordered walk: same-kind same-name dedupe per
+	# kind + cross-kind first-claim-wins.  All diagnostics emit
+	# clean codes (no raw "schema mismatch" / "field list mismatch"
+	# contract text leaks).
+	_seen_variant_names: set[str] = set()
+	_seen_interface_names: set[str] = set()
+	_seen_trait_names: set[str] = set()
+	_blocked_struct_names_xkind: set[str] = set()
+	_blocked_error_names_xkind: set[str] = set()
+	for _kind, _name, _decl, _ in _decls_in_source_order:
+		_loc = getattr(_decl, "loc", None)
+		if _kind == "struct":
+			# Source struct same-kind dedupe was already done
+			# upstream when building `struct_defs` (E_DUP_SOURCE_STRUCT_NAME);
+			# here we record the cross-kind first-claim.  If a
+			# variant/interface/trait/error already claimed this
+			# name (declared earlier in source order), block this
+			# struct decl from the registration loops below.
+			if not _register_nominal_or_diag(_name, "struct", _loc):
+				_blocked_struct_names_xkind.add(_name)
+		elif _kind == "error":
+			# Source error.  The synth-vs-source dedupe and
+			# duplicate-error catalog handle same-kind dups; here
+			# we record the cross-kind first-claim.  If a
+			# variant/interface/trait/struct already claimed this
+			# name, block this error decl AND its synthesized
+			# struct face from registration.
+			if not _register_nominal_or_diag(_name, "error", _loc):
+				_blocked_error_names.add(_name)
+				_blocked_error_names_xkind.add(_name)
+		elif _kind == "variant":
+			if _name in _seen_variant_names:
+				diagnostics.append(_p_diag(
+					message=f"duplicate variant '{_name}' in module '{module_id}'",
+					severity="error",
+					span=Span.from_loc(_loc),
+					code="E_DUP_SOURCE_VARIANT_NAME",
+				))
+				_blocked_variant_names.add(_name)
+				continue
+			if not _register_nominal_or_diag(_name, "variant", _loc):
+				_blocked_variant_names.add(_name)
+				continue
+			_seen_variant_names.add(_name)
+		elif _kind == "interface":
+			if _name in _seen_interface_names:
+				diagnostics.append(_p_diag(
+					message=f"duplicate interface '{_name}' in module '{module_id}'",
+					severity="error",
+					span=Span.from_loc(_loc),
+					code="E_DUP_SOURCE_INTERFACE_NAME",
+				))
+				_blocked_interface_names.add(_name)
+				continue
+			if not _register_nominal_or_diag(_name, "interface", _loc):
+				_blocked_interface_names.add(_name)
+				continue
+			_seen_interface_names.add(_name)
+		elif _kind == "trait":
+			if _name in _seen_trait_names:
+				diagnostics.append(_p_diag(
+					message=f"duplicate trait '{_name}' in module '{module_id}'",
+					severity="error",
+					span=Span.from_loc(_loc),
+					code="E_DUP_SOURCE_TRAIT_NAME",
+				))
+				_blocked_trait_names.add(_name)
+				continue
+			if not _register_nominal_or_diag(_name, "trait", _loc):
+				_blocked_trait_names.add(_name)
+				continue
+			_seen_trait_names.add(_name)
+
+	# A struct decl that lost a cross-kind collision must be
+	# filtered from `struct_defs` so the registration loops below
+	# don't try to register it (which would crash via the type-
+	# table contract).  Same for the synthesized error struct face
+	# of any error that lost cross-kind.
+	if _blocked_struct_names_xkind or _blocked_error_names_xkind:
+		struct_defs = [
+			_s for _s in struct_defs
+			if (
+				_s.name not in _blocked_struct_names_xkind
+				and not (
+					getattr(_s, "is_synthesized_for_error", False)
+					and _s.name in _blocked_error_names_xkind
+				)
+			)
+		]
+
+	variant_defs = [
+		_v for _v in (getattr(prog, "variants", []) or [])
+		if _v.name not in _blocked_variant_names
+	]
+	# Dedupe by name so two `pub variant X` decls are filtered down
+	# to one (the first occurrence) for registration; the duplicate
+	# diagnostic was already emitted above.
+	_seen_v: set[str] = set()
+	variant_defs = [_v for _v in variant_defs if not (_v.name in _seen_v or _seen_v.add(_v.name))]
+	interface_defs = [
+		_i for _i in (getattr(prog, "interfaces", []) or [])
+		if _i.name not in _blocked_interface_names
+	]
+	_seen_i: set[str] = set()
+	interface_defs = [_i for _i in interface_defs if not (_i.name in _seen_i or _seen_i.add(_i.name))]
 	type_alias_defs = list(getattr(prog, "type_aliases", []) or [])
 	struct_param_maps: dict[TypeKey, dict[str, TypeParamId]] = {}
 	exception_catalog: dict[str, int] = _build_exception_catalog(prog.exceptions, module_id, diagnostics)
@@ -5409,6 +5657,17 @@ def _lower_parsed_program_to_hir(
 	if package_id is not None:
 		type_table.package_id = package_id
 	_prime_builtins(type_table)
+	# LANGUAGE_BUG follow-up (nominal-namespace coherence,
+	# 2026-05-06): drop traits whose name was blocked above due to
+	# a cross-kind collision (e.g. `pub struct X` + `pub trait X`)
+	# so `build_trait_world` doesn't register them under the same
+	# name as another nominal kind.  The user-facing
+	# `E_DUP_NOMINAL_NAME` diagnostic was already emitted above.
+	if _blocked_trait_names:
+		prog.traits = [
+			_t for _t in (getattr(prog, "traits", []) or [])
+			if _t.name not in _blocked_trait_names
+		]
 	# Build a per-module TraitWorld and stash it on the shared TypeTable so later
 	# phases can enforce requirements without re-parsing sources.
 	world = build_trait_world(

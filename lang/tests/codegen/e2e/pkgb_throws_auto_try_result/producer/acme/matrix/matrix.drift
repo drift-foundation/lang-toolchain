@@ -4,25 +4,15 @@ import std.core as core;
 
 export { AcmeError, Widget, make_widget, configure, run_widget };
 
-pub variant AcmeError {
-	Failed(code: Int),
-	@tombstone None
-}
-
-implement core.Diagnostic for AcmeError {
-	pub fn to_json_text(self: &AcmeError) nothrow -> String {
-		return match self {
-			Failed(c) => { core.diagnostic_json_int(*c) },
-			default => { core.diagnostic_json_int(0) }
-		};
-	}
-}
-
-implement core.Throw for AcmeError {
-	pub fn throw_self(self: AcmeError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_int(1));
-	}
-}
+// Migrated 2026-05-06 from `pub variant AcmeError` + hand-rolled
+// `core.Throw` / `core.Diagnostic` impls to canonical `pub error`.
+// Slice 5's strict `or_throw()` gate (E_OR_THROW_NOT_ERROR_TYPE)
+// requires the `Err` type of `Result<T, E>` to be a `pub error`
+// type; auto-try desugars through `or_throw`, so the same gate
+// applies to the consumer's auto-try use of this type.  The
+// `Throw` and `Diagnostic` impls are now compiler-synthesized
+// from the `pub error` decl — no hand-rolled impls needed.
+pub error AcmeError { code: Int }
 
 pub struct Widget {
 	pub v: Int,
