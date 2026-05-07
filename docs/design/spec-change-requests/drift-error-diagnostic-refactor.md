@@ -1,5 +1,21 @@
 # 🚨 **Global Architectural Change Summary**
 
+> **HISTORICAL — RETIRED (Slice 7c-3, ABI 14, 2026-05-06).**  This
+> change request introduced the `DiagnosticValue` variant + the
+> `Error.attrs: Map<String, DiagnosticValue>` shape.  Both were
+> implemented, shipped through ABI 12, and **fully retired** by the
+> DV→JSON migration: Slice 7a removed the public DV surface, Slice
+> 7b retired the throw-side DV-attachment, and Slices 7c-1/7c-2/7c-3
+> deleted the runtime exports, compiler-internal substrate, and
+> residual `TypeKind.DIAGNOSTICVALUE` type identity.  The canonical
+> ABI 14 surface is `params_json` + `context_json` (canonical JSON
+> text), with diagnostic projection owned by
+> `core.Diagnostic.to_json_text(&E) -> String`.  See
+> `docs/design/drift-lang-abi.md` §2 for the live error shape and
+> `docs/design/drift-lang-spec.md` §5.13.8 for the public diagnostic
+> surface.  This document is preserved as the historical design
+> record; do not implement against it.
+
 We are committing the following core changes:
 
 ### **A. Replace string-based diagnostics with tree-shaped `DiagnosticValue`**
