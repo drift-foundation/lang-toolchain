@@ -464,7 +464,22 @@ def _candidate_visible(cand: CallableDecl, *, visible_modules_set: set, current_
 # (test_ext_cross_package_or_throw, test_ext_std_core_non_prelude_still_hidden).
 _PRELUDE_TYPE_MODULES: frozenset[str | None] = frozenset({None, "lang.core"})
 _PRELUDE_METHOD_SOURCE_MODULES: frozenset[str] = frozenset({"std.core", "std.iter", "std.containers", "lang.core"})
-_PRELUDE_STD_CORE_TYPE_NAMES: frozenset[str] = frozenset({"Result"})
+# LANGUAGE_BUG follow-up (2026-05-06): `pub error` catch arms expose
+# `e.params` (ErrorParamsView), `e.params.get(k)` (JsonCursor), and
+# `e.context` (ErrorContextView) without the user explicitly naming
+# `std.core`.  Method dispatch on those types must therefore resolve
+# without `import std.core` in scope, otherwise the canonical fluent
+# chain `e.params.get("k").as_int()` types as Unknown when used in a
+# match scrutinee (the Optional<Int> result is lost; "match arms
+# must produce the same type" cascades).  Pinned by
+# `test_params_cursor_chained_match_resolves` in
+# `lang/tests/driver/test_exception_envelope_pub_error.py`.
+_PRELUDE_STD_CORE_TYPE_NAMES: frozenset[str] = frozenset({
+	"Result",
+	"ErrorParamsView",
+	"ErrorContextView",
+	"JsonCursor",
+})
 
 def _is_prelude_type_method(cand: CallableDecl, type_table: object) -> bool:
 	if cand.impl_target_type_id is None or not cand.visibility.is_public:

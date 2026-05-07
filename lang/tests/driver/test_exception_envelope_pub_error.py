@@ -37,15 +37,6 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 
 
-_SLICE_5_PENDING = pytest.mark.xfail(
-	strict=True,
-	reason=(
-		"Slice 5 (pub error language migration) not yet implemented; "
-		"spec locked at work/exception-diagnostics-context/slice5-spec.md"
-	),
-)
-
-
 def _compile(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[dict]]:
 	src = tmp_path / "main.drift"
 	src.write_text(source, encoding="utf-8")
@@ -131,6 +122,73 @@ fn main() nothrow -> Int {
 
 
 # ── Probe 3 ─ params.get cursor access ─────────────────────────────
+
+
+def test_params_cursor_chained_match_resolves_without_std_core_import(tmp_path, capsys):
+	"""LANGUAGE_BUG (2026-05-06): `e.params.get(k).as_int()` used as
+	a `match` scrutinee was typing as `Unknown` when the user's
+	module did not `import std.core`, because `JsonCursor`'s
+	inherent methods required the type's defining module to be
+	visible.  The `Unknown` scrutinee then cascaded to "match arms
+	must produce the same type (have Int, expected Unknown)" and
+	"unknown name 'v'" because the `Some(v)` pattern bound nothing.
+
+	`pub error` exposes `e.params` (ErrorParamsView) and
+	`params.get(k)` (JsonCursor) without the user explicitly
+	naming `std.core`, so those types' inherent methods must
+	resolve without the import.  Fix: extend
+	`_PRELUDE_STD_CORE_TYPE_NAMES` to include `ErrorParamsView`,
+	`ErrorContextView`, and `JsonCursor`.
+
+	Both pre-bound (`val cur = ...; match cur`) and direct-chained
+	(`match e.params.get(k).as_int()`) forms should compile cleanly
+	without `import std.core` post-fix."""
+	# Bound form — no `std.core` import in the source.
+	source_bound = """
+module main;
+
+pub error PE { offset: Int }
+
+fn risky() throws PE -> Int { throw PE(offset = 12); }
+
+fn main() nothrow -> Int {
+	try {
+		return risky();
+	} catch PE(e) {
+		val cur = e.params.get("offset").as_int();
+		val n = match cur {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		return n;
+	}
+}
+"""
+	rc, errs = _compile(tmp_path, capsys, source_bound)
+	_ok(rc, errs, "bound `as_int()` match scrutinee without std.core import")
+
+	# Direct-chained form — same shape, no `val cur` indirection.
+	source_chained = """
+module main;
+
+pub error PE { offset: Int }
+
+fn risky() throws PE -> Int { throw PE(offset = 12); }
+
+fn main() nothrow -> Int {
+	try {
+		return risky();
+	} catch PE(e) {
+		val n = match e.params.get("offset").as_int() {
+			Some(v) => { v },
+			None => { -1 }
+		};
+		return n;
+	}
+}
+"""
+	rc, errs = _compile(tmp_path, capsys, source_chained)
+	_ok(rc, errs, "chained `as_int()` match scrutinee without std.core import")
 
 
 def test_params_cursor_access_over_pub_error(tmp_path, capsys):
