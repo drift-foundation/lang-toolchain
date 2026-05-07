@@ -1035,9 +1035,15 @@ def _decl_from_parser_fn(
 	return decl
 
 
-def _diagnostic(message: str, loc: object | None) -> Diagnostic:
-	"""Helper to create a Diagnostic from a parser location."""
-	return _p_diag(message=message, severity="error", span=Span.from_loc(loc))
+def _diagnostic(message: str, loc: object | None, *, code: str | None = None) -> Diagnostic:
+	"""Helper to create a Diagnostic from a parser location.
+
+	`code` is an optional stable diagnostic code; when None, the
+	caller relies on the auto-generated `E-AUTO-...` hash code from
+	the message.  Stable codes are required for tests/tooling that
+	need to assert on a specific failure mode.
+	"""
+	return _p_diag(message=message, severity="error", span=Span.from_loc(loc), code=code)
 
 
 def _is_trait_prop_value_pos_error(err: UnexpectedInput) -> bool:
@@ -1248,6 +1254,7 @@ def _build_exception_catalog(exceptions: list[parser_ast.ExceptionDef], module_n
 				_diagnostic(
 					f"exception code collision between '{other}' and '{fqn}' (payload {payload})",
 					getattr(exc, "loc", None),
+					code="E_EVENT_CODE_DUPLICATE",
 				)
 			)
 			continue
@@ -5107,7 +5114,7 @@ def parse_drift_workspace_to_hir(
 		payload = code & PAYLOAD_MASK
 		other = payload_seen.get(payload)
 		if other is not None and other != fqn:
-			diagnostics.append(_p_diag(message=f"exception code collision between '{other}' and '{fqn}' (payload {payload})", severity="error", span=Span()))
+			diagnostics.append(_p_diag(message=f"exception code collision between '{other}' and '{fqn}' (payload {payload})", severity="error", span=Span(), code="E_EVENT_CODE_DUPLICATE"))
 		else:
 			payload_seen[payload] = fqn
 

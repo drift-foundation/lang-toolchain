@@ -37,15 +37,6 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 
 
-_SLICE_5_PENDING = pytest.mark.xfail(
-	strict=True,
-	reason=(
-		"Slice 5 (pub error language migration) not yet implemented; "
-		"spec locked at work/exception-diagnostics-context/slice5-spec.md"
-	),
-)
-
-
 def _compile(tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str) -> tuple[int, list[dict]]:
 	src = tmp_path / "main.drift"
 	src.write_text(source, encoding="utf-8")
@@ -82,12 +73,18 @@ import std.core as core;
 # ── Probe 1 ─ explicit duplicate event_code rejected ──────────────
 
 
-@_SLICE_5_PENDING
 def test_explicit_duplicate_event_code_rejected(tmp_path, capsys):
 	"""Two `pub error` types in the same module/package both
 	pinning event_code 0x1234 fail compile with
 	`E_EVENT_CODE_DUPLICATE`.  Per-package collision detection
-	per spec §0 / §16."""
+	per spec §0 / §16.
+
+	Was xfailed pre-2026-05-06 with a stale "Slice 5 not yet
+	implemented" reason; the duplicate-detection diagnostic
+	already existed but was emitted with an auto-generated code.
+	Live as of the stable-code addition in
+	`_build_exception_catalog` and the cross-module collision
+	check at `_lower_parsed_program_to_hir`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error A(0x1234) {}
 pub error B(0x1234) {}
