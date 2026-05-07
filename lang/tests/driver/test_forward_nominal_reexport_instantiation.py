@@ -84,74 +84,80 @@ def test_pub_type_alias_in_throwing_function_resolves(tmp_path: Path) -> None:
 	)
 
 
-def test_drift_web_add_route_pattern(tmp_path: Path) -> None:
-	"""Minimal reproduction of the drift-web add_route regression.
+def test_pub_type_alias_through_callback_param(tmp_path: Path) -> None:
+	"""Companion to `test_pub_type_alias_in_throwing_function_resolves`.
 
-	Facade module re-exports Response and RestError via pub type aliases,
-	then defines add_route with a Callback2 parameter that nests those
-	aliased types inside Result. Caller passes a handler function whose
-	return type uses the aliased types through the facade import.
+	Facade module re-exports `Response` and `SvcError` via pub type
+	aliases.  A function `register_handler` takes a `Callback2`
+	parameter whose call signature returns
+	`Result<aliased_response, aliased_error>`.  The caller passes a
+	handler function whose return type uses the aliased types
+	through the facade import; the resolver must collapse the
+	aliases on both sides so the handler's signature matches the
+	Callback2 contract.
+
+	Pre-fix (the drift-web `add_route` regression): the
+	Callback2 instantiation seen by the caller would mint a
+	FORWARD_NOMINAL TypeId for the aliased types, while
+	`register_handler` saw the concrete STRUCT — overload
+	resolution then failed.  Fixed by pre-registering all pub type
+	aliases before any module is lowered (see
+	`test_pub_type_alias_in_throwing_function_resolves`).
+
+	This test was previously a cross-repo dependency on drift-web
+	(`/home/sl/src/drift-web/packages/web-rest`).  Replaced with a
+	synthetic fixture per K's directive: tests must recreate the
+	pattern in isolation, not lean on a sibling repo.
 	"""
-	# Only run if drift-web sources are available.
-	dw = Path("/home/sl/src/drift-web")
-	if not (dw / "packages" / "web-rest" / "src" / "lib.drift").exists():
-		pytest.skip("drift-web sources not available")
-
-	# Slice 5 hard-break (2026-05-03): `pub exception` is rejected in user
-	# source.  Skip this test if the checked-out drift-web sources still use
-	# the legacy form — drift-web migration to `pub error` belongs in a
-	# downstream branch, not this repo.  When drift-web has no remaining
-	# `pub exception` decls the test runs normally.  Other failures are NOT
-	# masked by this check (the grep is narrow: declarations only).
-	import re
-	_pub_exception_decl_re = re.compile(r"^\s*(?:pub\s+)?exception\s+\w+\s*\(", re.MULTILINE)
-	for src in (dw / "packages").rglob("*.drift"):
-		try:
-			text = src.read_text(encoding="utf-8")
-		except OSError:
-			continue
-		if _pub_exception_decl_re.search(text):
-			pytest.skip(
-				f"drift-web has not migrated `pub exception` → `pub error` for Slice 5 / 0.32 "
-				f"(legacy decl found in {src.relative_to(dw)})"
-			)
-
 	_write_file(
-		tmp_path / "test.drift",
-		"module test.route;\n"
+		tmp_path / "svc" / "response" / "response.drift",
+		"module svc.response;\nexport { Response };\npub struct Response { pub code: Int }\n",
+	)
+	_write_file(
+		tmp_path / "svc" / "errors" / "errors.drift",
+		"module svc.errors;\nexport { SvcError };\npub error SvcError { msg: String }\n",
+	)
+	_write_file(
+		tmp_path / "svc" / "api" / "api.drift",
+		"module svc.api;\n"
 		"import std.core as core;\n"
-		"import web.rest as rest;\n"
-		"fn _health(req: &rest.Request, ctx: &mut rest.Context) nothrow -> core.Result<rest.Response, rest.RestError> {\n"
-		"\treturn core.Result::Ok(rest.json_response(200, \"ok\"));\n"
+		"import svc.response as response;\n"
+		"import svc.errors as errors;\n"
+		"export { Response, SvcError, register_handler };\n"
+		"pub type Response = response.Response;\n"
+		"pub type SvcError = errors.SvcError;\n"
+		"pub fn register_handler(handler: core.Callback2<String, Int, core.Result<response.Response, errors.SvcError>>, path: String, code: Int) nothrow -> core.Result<response.Response, errors.SvcError> {\n"
+		"\treturn handler.call(path, code);\n"
+		"}\n",
+	)
+	_write_file(
+		tmp_path / "main.drift",
+		"module main;\n"
+		"import std.core as core;\n"
+		"import svc.api as api;\n"
+		"fn _health(path: String, code: Int) nothrow -> core.Result<api.Response, api.SvcError> {\n"
+		"\treturn core.Result::Ok(api.Response(code = code));\n"
 		"}\n"
 		"pub fn main() nothrow -> Int {\n"
-		"\tvar b = rest.new_app_builder();\n"
-		"\trest.bind(&mut b, \"127.0.0.1\", 0);\n"
-		"\tmatch rest.build_app(move b) {\n"
+		"\tval cb = core.callback2(_health);\n"
+		"\tmatch api.register_handler(cb, \"/health\", 200) {\n"
 		"\t\tcore.Result::Err(_) => { return 1; },\n"
-		"\t\tcore.Result::Ok(a) => {\n"
-		"\t\t\tvar app = move a;\n"
-		"\t\t\tmatch rest.add_route(&mut app, \"GET\", \"/health\", _health) {\n"
-		"\t\t\t\tcore.Result::Err(_) => { return 2; },\n"
-		"\t\t\t\tcore.Result::Ok(_) => { return 0; }\n"
-		"\t\t\t}\n"
-		"\t\t}\n"
+		"\t\tcore.Result::Ok(r) => { return r.code; }\n"
 		"\t}\n"
 		"}\n",
 	)
 
-	src_files = sorted((dw / "packages" / "web-jwt" / "src").glob("*.drift")) + \
-		sorted((dw / "packages" / "web-rest" / "src").glob("*.drift"))
-
 	cmd = [
 		sys.executable, "-m", "lang.driftc",
-		"--target-word-bits", "64",
-		"--entry", "test.route::main",
-	] + [str(f) for f in src_files] + [
-		str(tmp_path / "test.drift"),
-		"-o", str(tmp_path / "out"),
+		"-M", str(tmp_path),
+		str(tmp_path / "svc" / "response" / "response.drift"),
+		str(tmp_path / "svc" / "errors" / "errors.drift"),
+		str(tmp_path / "svc" / "api" / "api.drift"),
+		str(tmp_path / "main.drift"),
+		"--emit-ir", str(tmp_path / "out.ll"),
+		"--entry", "main::main",
 	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
+	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, (
-		f"drift-web add_route pattern must compile:\n{res.stderr[:500]}"
+		f"pub type alias through Callback2 param must compile:\n{res.stderr[:600]}"
 	)
