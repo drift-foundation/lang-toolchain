@@ -9407,11 +9407,25 @@ class HIRToMIR:
 				# inline (ExcGetParamsJson + ConstructStruct), materialize
 				# to a named local, then take its address for the
 				# `&ErrorParamsView` self argument.
+				#
+				# LANGUAGE_BUG follow-up (Cluster 1, 2026-05-06): the
+				# synthesized View struct holds a refcount-retained
+				# `String` (the params JSON pulled from the runtime via
+				# `ExcGetParamsJson`).  Without registering the
+				# materialized local on the current scope's drop list,
+				# the cleanup-authoring pass never sees it and the
+				# scope-exit drop for the View's String field is
+				# missing — leaks one `params_json` allocation per
+				# catch arm that reads `e.params`.  Pinned by
+				# `lang/tests/memcheck/test_pub_error_params_view_drop.py::
+				# test_pub_error_params_encode_compact_no_leak` and the
+				# 7 e2e fixtures listed in the bug report.
 				view_val = self._lower_synthesized_error_params_view(expr.receiver, recv_ty)
 				view_local = f"__exc_params_view_{self.b.new_temp()}"
 				self.b.ensure_local(view_local)
 				self._local_types[view_local] = recv_ty
 				self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+				self._register_drop_local(view_local, recv_ty)
 				addr_dest = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr_dest, local=view_local, is_mut=False))
 				receiver_arg = addr_dest
@@ -10418,6 +10432,13 @@ class HIRToMIR:
 					self.b.ensure_local(view_local)
 					self._local_types[view_local] = epv_ty
 					self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+					# LANGUAGE_BUG follow-up (Cluster 1, 2026-05-06):
+					# register the synthesized view local on the
+					# current scope's drop list so the cleanup pass
+					# emits a structural drop for its `String` field.
+					# See companion comment in
+					# `_lower_method_call_with_info`'s synthesis site.
+					self._register_drop_local(view_local, epv_ty)
 					view_addr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
 					return view_addr, epv_ty
@@ -10443,6 +10464,11 @@ class HIRToMIR:
 					self.b.ensure_local(view_local)
 					self._local_types[view_local] = ecv_ty
 					self.b.emit(M.StoreLocal(local=view_local, value=view_val))
+					# LANGUAGE_BUG follow-up (Cluster 1, 2026-05-06):
+					# parallel scope-drop registration for the
+					# `ErrorContextView` synthesis path — same shape as
+					# the params-view fix.
+					self._register_drop_local(view_local, ecv_ty)
 					view_addr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
 					return view_addr, ecv_ty
