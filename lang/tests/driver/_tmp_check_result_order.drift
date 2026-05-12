@@ -2,6 +2,6 @@ module main;
 import std.core as core;
 import std.net as net;
 fn main() -> Int {
-  val r: core.Result<net.TcpListener, net.NetError> = core.Result::Err(net.NetError::WouldBlock);
+  val r: core.Result<net.TcpListener, net.NetError> = core.Result::Err(net.NetError(kind = net.NET_ERROR_KIND_WOULD_BLOCK, code = 0));
   return 0;
 }

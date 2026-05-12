@@ -49,7 +49,7 @@ fn _open_input(path: String, t: conc.Duration, max_line_bytes: Int) nothrow -> c
 			return core.Result::Ok(io.configured_input_from_file(&f, max_line_bytes));
 		},
 		Err(e) => { return core.Result::Err(e); },
-		default => { return core.Result::Err(io.IoError::Errno(-1)); }
+		default => { return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = -1)); }
 	}
 }
 

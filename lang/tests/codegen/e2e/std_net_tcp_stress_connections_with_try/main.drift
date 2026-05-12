@@ -10,18 +10,16 @@ type VtInt = conc.VirtualThread<Int>;
 
 const N: Int = 500;
 
-// Slice 5 (pub-error track): Phase 5a strict enforcement rejects
-// `or_throw()` on `Result<T, NetError>` (NetError is a `pub variant`).
-// Auto-try wrapping that previously bridged net.* calls into
-// `throws`-functions is no longer valid.  We unwrap each net call
-// with explicit `match` so the test stays focused on its real subject
-// — TCP stress under timeouts — without dragging or_throw's strict
-// enforcement into scope.
-fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
-	// Server-side handler for one client:
-	// - read a fixed-size buffer
-	// - echo it back
-	// - close the socket
+// NetError is a `pub error` (0.31.67) — the `throws`-function entry
+// (run_main) uses auto-try over `net.listen(...)` and the top-level
+// dispatcher catches `net:NetError(e)` as a typed pub-error catch arm.
+// That is the contract this fixture pins.  Per-syscall failures inside
+// the spawned worker VTs use explicit `match` to tolerate transient
+// kernel conditions under N=500 concurrent connections, so the
+// fixture's exit code distinguishes "auto-try / typed catch failed to
+// compile or routed wrong" (catch-all → 1) from "kernel transient,
+// retried elsewhere" (typed → distinct code).
+fn handle_client(var s: net.TcpStream, timeout: conc.Duration) nothrow -> Int {
 	var buf = io.buffer(1024);
 	match s.read(&mut buf, timeout) {
 		Ok(_) => {},
@@ -38,8 +36,7 @@ fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	return 0;
 }
 
-fn server_loop(listener: net.TcpListener, timeout: conc.Duration) -> Int {
-	// Accept exactly N connections and handle them sequentially.
+fn server_loop(listener: net.TcpListener, timeout: conc.Duration) nothrow -> Int {
 	var i = 0;
 	while i < N {
 		match net.accept(&listener, timeout) {
@@ -54,8 +51,7 @@ fn server_loop(listener: net.TcpListener, timeout: conc.Duration) -> Int {
 	return 0;
 }
 
-fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) -> Int {
-	// Prepare write buffer.
+fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) nothrow -> Int {
 	val byte = cast<Byte>(65);
 	var wbuf = io.buffer(size);
 	var i = 0;
@@ -69,7 +65,6 @@ fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) ->
 		Err(_) => { return -30; },
 	}
 	if wn != size { return -33; }
-	// Read echoed bytes into a fresh buffer.
 	var rbuf = io.buffer(size);
 	var rn: Int = 0;
 	match s.read(&mut rbuf, timeout) {
@@ -84,10 +79,7 @@ fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) ->
 	return size * 65;
 }
 
-fn client_once(port: Int, size: Int, timeout: conc.Duration) -> Int {
-	// One client:
-	// - connect to 127.0.0.1:port
-	// - hand off to _client_after_connect for write/read/close
+fn client_once(port: Int, size: Int, timeout: conc.Duration) nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", port);
 	match net.connect(&addr, timeout) {
 		Ok(s) => { return _client_after_connect(move s, size, timeout); },
@@ -96,17 +88,21 @@ fn client_once(port: Int, size: Int, timeout: conc.Duration) -> Int {
 }
 
 pub fn main() nothrow -> Int {
-	return try run_main() catch { 1 };
+	return try run_main() catch net:NetError(_e) {
+		// Listen / accept threw before the worker VTs took over.  Auto-try
+		// over the boundary call routed through this typed pub-error arm,
+		// which is the migration's load-bearing contract.
+		50
+	} catch {
+		1
+	};
 }
 
 fn run_main() throws -> Int {
-	// Spin up a TCP listener on an ephemeral port.
 	val io_t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	match net.listen(&addr, io_t) {
-		Ok(listener) => { return _run_with_listener(move listener, io_t); },
-		Err(_) => { return -50; },
-	}
+	val listener = net.listen(&addr, io_t);
+	return _run_with_listener(move listener, io_t);
 }
 
 fn _run_with_listener(listener: net.TcpListener, io_t: conc.Duration) throws -> Int {

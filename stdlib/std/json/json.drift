@@ -73,13 +73,15 @@ pub error JsonPathError {
 	reason: String,
 }
 
-pub struct JsonErrorData {
-	pub tag: String,
-	pub offset: Int,
-	pub line: Int,
-	pub col: Int,
-	pub path: String,
-	pub key: String
+/// `pub error`: compiler synthesizes `core.Throw` / `core.Diagnostic`
+/// so `or_throw()` and auto-try unwrap it directly.
+pub error JsonErrorData {
+	tag: String,
+	offset: Int,
+	line: Int,
+	col: Int,
+	path: String,
+	key: String,
 }
 
 pub variant JsonNode {
@@ -122,18 +124,6 @@ implement core.Copy for JsonKeyOrder {
 }
 
 implement core.Copy for JsonConfig {
-}
-
-implement core.Diagnostic for JsonErrorData {
-	pub fn to_json_text(self: &JsonErrorData) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for JsonErrorData {
-	pub fn throw_self(self: JsonErrorData) throws {
-		throw JsonError(tag = self.tag, offset = self.offset, line = self.line, col = self.col, path = self.path, key = self.key);
-	}
 }
 
 pub fn config_builder() nothrow -> JsonConfigBuilder {

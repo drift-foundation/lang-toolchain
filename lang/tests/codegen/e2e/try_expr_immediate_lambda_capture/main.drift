@@ -5,10 +5,10 @@ import std.core as core;
 import std.err;
 
 
-// Slice 5 (pub-error track): `or_throw()` requires Err to be `pub error`.
-// `conc.spawn().join()` returns Result<T, ConcurrencyError> where
-// ConcurrencyError is a `pub variant`.  Match the Result instead of
-// auto-or_throw — preserves the immediate-lambda + capture exercise.
+// Pins immediate-lambda + capture: the inner `try (| | ...)() catch { 0 }`
+// is the real subject.  Match the outer Result rather than chain into
+// or_throw so the test stays focused on capture lowering, not the
+// throws/auto-try wiring.
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
 }

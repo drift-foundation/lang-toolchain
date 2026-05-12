@@ -10,17 +10,15 @@ fn cancel_one() -> Int {
 	});
 	t.cancel();
 	var res = t.join_timeout(conc.Duration(millis = 50));
-	return match res {
+		match res {
 		Err(err) => {
-			yield match err {
-				Cancelled => { 0 },
-				Timeout => { 0 },
-				default => { 20 },
-			}
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+			return 20;
 		},
-		Ok(_v) => { 0 },
-		default => { 21 },
-	};
+		Ok(_v) => { return 0; },
+		default => { return 21; },
+	}
 }
 
 fn normal_one() -> Int {

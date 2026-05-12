@@ -1,0 +1,36 @@
+module main;
+
+import std.core as core;
+import std.parse as parse;
+import std.console as console;
+
+// Cross-package e2e proof: std.parse.ParseError is a `pub error` whose
+// auto-Throw / auto-Diagnostic synthesis crosses the stdlib package
+// boundary correctly, and downstream auto-try inside a `throws`
+// function lowers to or_throw() against the synthesized contract.
+//
+// Probe shape:
+//   * parse.parse_int returns Result<Int, parse.ParseError>.
+//   * The throws-wrapper relies on auto-try; if ParseError were not
+//     a `pub error`, the checker would reject this with
+//     E_OR_THROW_NOT_ERROR_TYPE.
+//   * The typed catch arm exposes both the schema fields (e.offset,
+//     e.tag) and the Error envelope surface (e.encode_compact()).
+//   * Exit 42 = e.offset on the failing parse.  Stdout = e.tag
+//     ("invalid-digit" — the parser stops at the 'x' at offset 2).
+
+fn main() nothrow -> Int {
+	try {
+		return parse.parse_int("12x").or_throw();
+	} catch parse:ParseError(e) {
+		val envelope: String = e.encode_compact();
+		val tag: String = e.tag;
+		console.print(tag);
+		if envelope.byte_length() == 0 {
+			return 1;
+		}
+		return e.offset + 40;
+	} catch {
+		return 99;
+	}
+}

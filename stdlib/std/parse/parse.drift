@@ -18,26 +18,16 @@ export {
 /// `"invalid-char"`, `"out-of-range"`).  `offset` is the zero-based
 /// byte position in the input where the parser gave up.
 ///
-/// `ParseError` implements `core.Throw` and `core.Diagnostic`.
-pub struct ParseError {
-	pub tag: String,
-	pub offset: Int
+/// `ParseError` is a `pub error`, so the compiler synthesizes its
+/// `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
+pub error ParseError {
+	tag: String,
+	offset: Int,
 }
 
 const INT_MIN: Int = -9223372036854775808;
 const INT_MAX: Int = 9223372036854775807;
-
-implement core.Diagnostic for ParseError {
-	pub fn to_json_text(self: &ParseError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for ParseError {
-	pub fn throw_self(self: ParseError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
-}
 
 fn _is_digit(b: Byte) nothrow -> Bool {
 	return b >= cast<Byte>(48) and b <= cast<Byte>(57);

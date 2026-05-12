@@ -3,9 +3,9 @@ module m;
 import std.concurrent as conc;
 
 pub fn main() nothrow -> Int {
-	val e = conc.ConcurrencyError::Closed();
+	val e = conc.SaturationPolicy::Block();
 	match e {
-		conc.ConcurrencyError::Closed() => { return 7; },
+		conc.SaturationPolicy::Block() => { return 7; },
 		default => { return 1; }
 	}
 }

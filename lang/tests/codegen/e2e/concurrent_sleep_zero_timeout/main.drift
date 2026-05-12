@@ -6,10 +6,8 @@ pub fn main() nothrow -> Int {
 	var r = conc.sleep(conc.Duration(millis = 0));
 	match r {
 		Err(e) => {
-			match e {
-				Timeout() => { return 1; },
-				default => { return 3; }
-			}
+			if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 1; }
+			return 3;
 		},
 		Ok(_) => { return 2; },
 		default => { return 3; }

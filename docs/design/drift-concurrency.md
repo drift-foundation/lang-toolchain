@@ -78,7 +78,7 @@ Module: `std.concurrent`
 Types:
 
 - `struct Duration { pub millis: Int }`
-- `variant ConcurrencyError { Timeout, Cancelled, Closed, Busy, Failed(err: Error) }`
+- `pub error ConcurrencyError { kind: String, code: Int }` — flat shape; `kind` is one of `CONCURRENCY_KIND_TIMEOUT` / `CONCURRENCY_KIND_CANCELLED` / `CONCURRENCY_KIND_CLOSED` / `CONCURRENCY_KIND_BUSY` / `CONCURRENCY_KIND_FAILED`
 - `struct Executor`
 - `struct ExecutorPolicy`
 - `struct ExecutorPolicyBuilder`

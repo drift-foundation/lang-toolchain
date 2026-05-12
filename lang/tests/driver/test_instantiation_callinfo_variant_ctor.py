@@ -37,8 +37,8 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn g<T>() nothrow -> core.Result<Int, conc.ConcurrencyError> {
-	return core.Result::Err(conc.ConcurrencyError::Closed());
+fn g<T>() nothrow -> core.Result<Int, conc.SaturationPolicy> {
+	return core.Result::Err(conc.SaturationPolicy::Block());
 }
 
 fn main() nothrow -> Int {

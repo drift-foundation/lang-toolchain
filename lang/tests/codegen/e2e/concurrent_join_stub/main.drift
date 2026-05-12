@@ -6,17 +6,16 @@ import std.core as core;
 fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	var res = t.join();
-	return match res {
-		Err(err) => { yield match err {
-				Failed(_e) => { 2 },
-				Busy => { 1 },
-				Cancelled => { 1 },
-				Closed => { 1 },
-				Timeout => { 1 },
-				default => { 1 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return 2; }
+			if err.kind == conc.CONCURRENCY_KIND_BUSY { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_CLOSED { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 1; }
+			return 1;
 		},
-		Ok(v) => { v },
-		default => { 1 },
-	};
+		Ok(v) => { return v; },
+		default => { return 1; },
+	}
 }

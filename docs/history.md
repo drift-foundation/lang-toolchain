@@ -1,5 +1,71 @@
 # Drift development history
 
+## 2026-05-12 (Stdlib pub-error migration)
+- **Stdlib `pub error` migration for exported Result Err carriers
+  (release 0.31.67, ABI unchanged at 14).**  Closes the
+  drift-net-tls blocker on 0.31.66+abi14: throws-based e2e / perf /
+  stress binaries failed because public stdlib Result error
+  carriers were still on the legacy `pub struct E + implement
+  core.Throw for E` shape and Phase 5a strict (`or_throw` requires
+  `E` to be a `pub error`) rejected the auto-try path with
+  `E_OR_THROW_NOT_ERROR_TYPE`.
+
+  Migrated carriers (13):
+  - `std.parse.ParseError`, `std.time.TimeParseError`,
+    `std.random.RandomError`, `std.text.Utf8Error`,
+    `std.text.TextError`, `std.regex.RegexError`,
+    `std.codec.CodecError`, `std.crypto.CryptoError`,
+    `std.cli.CliError`, `std.json.JsonErrorData` —
+    `pub struct E + implement Throw + implement Diagnostic`
+    → `pub error E` (synthesis covers both impls; manual impls
+    deleted).  Field names preserved; field-`pub` prefix dropped
+    (pub-error fields default to pub).
+  - `std.net.NetError`, `std.io.IoError`,
+    `std.concurrent.ConcurrencyError` — variant-shape converted to
+    the conservative flat `pub error E { kind: String, code: Int }`
+    (per K's certification-shape ruling: typed-catch projection +
+    synthesis only support scalar field types, not variants).
+    String-discriminant constants exported alongside each:
+    `NET_ERROR_KIND_{ERRNO,WOULD_BLOCK,REQUIRES_VTHREAD}`,
+    `IO_ERROR_KIND_{ERRNO,REQUIRES_VTHREAD}`,
+    `CONCURRENCY_KIND_{TIMEOUT,CANCELLED,CLOSED,BUSY,FAILED}`.
+    `ConcurrencyError::Failed(err: Error)`'s wrapped Error payload
+    is not preserved across the new carrier (sentinel `code=-5`
+    only); follow-up if downstream needs it.
+
+  Test corpus migration (Slice-5-style):
+  - 7 new regression probes in
+    `lang/tests/driver/test_stdlib_pub_error_carriers.py` —
+    auto-try inside `throws` over each migrated carrier.  All
+    failed on 0.31.66 with `E_OR_THROW_NOT_ERROR_TYPE`; all pass
+    after migration.
+  - New e2e
+    `lang/tests/codegen/e2e/stdlib_parse_auto_try_pub_error/` —
+    cross-package runtime proof that
+    `parse.parse_int(...).or_throw()` lands in `catch
+    parse:ParseError(e)` with both schema fields (`e.offset`,
+    `e.tag`) and envelope methods (`e.encode_compact()`)
+    reachable.
+  - 7 existing e2e fixtures pinned the legacy variant shape and
+    were migrated to the flat-pub-error shape:
+    `concurrent_join_twice_closed`, `match_yield_qualified_ctor`,
+    `match_qualified_ctor_pattern`, `std_io_requires_vt_variant`,
+    `std_io_error_code_helpers_api`,
+    `std_io_stdin_line_edge_matrix`, `std_net_requires_vt_variant`.
+    The two `match_*_qualified_ctor` tests' purpose (qualified
+    variant ctor coverage) is preserved by switching to
+    `conc.SaturationPolicy::Block` (still a variant).
+  - `lang/tests/driver/_tmp_check_result_order.drift` updated to
+    new ctor shape.
+
+  Doc updates: `docs/effective-drift.md` stdlib-behavior section
+  rewritten — the "JsonErrorData throws JsonError" wrap is gone;
+  every stdlib Result Err carrier is its own catchable event now.
+
+  ABI unchanged.  No compiler / runtime boundary shape changes;
+  this is pure stdlib source / API surface plus the test corpus
+  it touches.  Bump is compiler-only (0.31.66 → 0.31.67).
+
 ## 2026-05-06 (Slice 7c-3)
 - **Slice 7c-3: residual DV type identity deletion (release
   0.31.65, ABI unchanged at 14).**  Closes out the DV→JSON

@@ -249,7 +249,7 @@ module m_main;
 import std.io as io;
 
 fn main() nothrow -> Int{
-	val e = io.IoError::Errno(io.IO_ERR_EOF);
+	val e = io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = io.IO_ERR_EOF);
 	if io.is_eof_error(e) { return 0; }
 	return 1;
 }

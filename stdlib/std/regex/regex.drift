@@ -42,24 +42,14 @@ export {
 /// `"empty-class"`, `"trailing-backslash"`).  `offset` is the
 /// zero-based byte position in the pattern where the parser gave up.
 ///
-/// `RegexError` implements `core.Throw` and `core.Diagnostic`.
+/// `RegexError` is a `pub error`, so the compiler synthesizes its
+/// `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
 ///
 /// **See also:** `compile`, `Regex`.
-pub struct RegexError {
-	pub tag: String,
-	pub offset: Int
-}
-
-implement core.Diagnostic for RegexError {
-	pub fn to_json_text(self: &RegexError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for RegexError {
-	pub fn throw_self(self: RegexError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+pub error RegexError {
+	tag: String,
+	offset: Int,
 }
 
 // ---------------------------------------------------------------------------

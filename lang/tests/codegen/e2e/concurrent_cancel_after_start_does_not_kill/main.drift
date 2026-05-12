@@ -8,19 +8,18 @@ fn main() nothrow -> Int {
 	thread.vt_park_until(1);
 	t.cancel();
 	var res = t.join();
-	return match res {
+		match res {
 		Ok(v) => {
-			var out = 1;
-			if v == 9 {
-				out = 0;
-			}
-			out
+	var out = 1;
+				if v == 9 {
+					out = 0;
+				}
+			return out;
 		},
-		Err(err) => { yield match err {
-				Cancelled => { 0 },
-				default => { 2 },
-			}
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			return 2;
 		},
-		default => { 2 },
-	};
+		default => { return 2; },
+	}
 }

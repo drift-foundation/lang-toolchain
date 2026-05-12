@@ -9,33 +9,25 @@ fn main() nothrow -> Int {
 
 	thread.exec_submit_test_override(1);
 	val res_busy = conc.spawn_on(exec, | | => { return 1; });
-	var ok_busy = match res_busy {
+	var ok_busy = false;
+	match res_busy {
 		Err(err) => {
-			var ok = false;
-			match err {
-				Busy => { ok = true; },
-				default => { }
-			}
-			ok
+			if err.kind == conc.CONCURRENCY_KIND_BUSY { ok_busy = true; }
 		},
-		Ok(_t) => { false },
-		default => { false },
-	};
+		Ok(_t) => {},
+		default => {},
+	}
 
 	thread.exec_submit_test_override(2);
 	val res_timeout = conc.spawn_on(exec, | | => { return 1; });
-	var ok_timeout = match res_timeout {
+	var ok_timeout = false;
+	match res_timeout {
 		Err(err) => {
-			var ok = false;
-			match err {
-				Timeout => { ok = true; },
-				default => { }
-			}
-			ok
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { ok_timeout = true; }
 		},
-		Ok(_t) => { false },
-		default => { false },
-	};
+		Ok(_t) => {},
+		default => {},
+	}
 
 	thread.exec_submit_test_override(-1);
 

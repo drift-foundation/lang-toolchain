@@ -1,0 +1,5 @@
+{
+  "description": "Cross-package pub-error proof: parse.parse_int's Result<Int, ParseError> auto-try lowers to or_throw() against the synthesized Throw, lands in a typed catch on parse.ParseError with both schema fields (e.offset, e.tag) and envelope methods (e.encode_compact()) reachable. Exit 42 = e.offset(2) + 40; stdout 'invalid-digit' = e.tag typed-projection.",
+  "exit_code": 42,
+  "stdout": "invalid-digit"
+}

@@ -44,7 +44,7 @@ import std.err as err;
 import std.core as core;
 
 fn main() nothrow -> Int {
-	val e = conc.ConcurrencyError::Closed();
+	val e = conc.SaturationPolicy::Block();
 	return 0;
 }
 """.lstrip()
@@ -60,7 +60,7 @@ import std.core as core;
 import std.concurrent as conc;
 
 fn main() nothrow -> Int {
-	val x = core.Result::Err(conc.ConcurrencyError::Closed());
+	val x = core.Result::Err(conc.SaturationPolicy::Block());
 	return 0;
 }
 """.lstrip()

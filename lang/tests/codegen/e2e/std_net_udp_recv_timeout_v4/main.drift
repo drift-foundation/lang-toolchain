@@ -17,11 +17,9 @@ pub fn main() nothrow -> Int {
 			match r {
 				Ok(_) => { return 2; },
 				Err(e) => {
-					match e {
-						WouldBlock => { return 0; },
-						Errno(_) => { return 3; },
-						default => { return 4; }
-					}
+					if e.kind == net.NET_ERROR_KIND_WOULD_BLOCK { return 0; }
+					if e.kind == net.NET_ERROR_KIND_ERRNO { return 3; }
+					return 4;
 				},
 				default => { return 5; }
 			}

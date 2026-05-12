@@ -13,9 +13,9 @@ def test_parser_match_qualified_ctor_pattern() -> None:
 import std.concurrent as conc;
 
 fn main() -> Int {
-	val e = conc.ConcurrencyError::Closed();
+	val e = conc.SaturationPolicy::Block();
 	return match e {
-		conc.ConcurrencyError::Closed() => { 7 },
+		conc.SaturationPolicy::Block() => { 7 },
 		default => { 1 },
 	};
 }
@@ -29,10 +29,10 @@ fn main() -> Int {
 	match_expr = ret_stmt.value
 	assert len(match_expr.arms) == 2
 	arm = match_expr.arms[0]
-	assert arm.ctor == "Closed"
+	assert arm.ctor == "Block"
 	assert arm.pattern_arg_form == "paren"
 	assert arm.ctor_base is not None
-	assert arm.ctor_base.name == "ConcurrencyError"
+	assert arm.ctor_base.name == "SaturationPolicy"
 	assert arm.ctor_base.module_alias == "conc"
 
 
@@ -43,9 +43,9 @@ def test_parser_match_qualified_ctor_pattern_malformed() -> None:
 import std.concurrent as conc;
 
 fn main() -> Int {
-	val e = conc.ConcurrencyError::Closed();
+	val e = conc.SaturationPolicy::Block();
 	return match e {
-		conc.ConcurrencyError::Closed( => { 7 },
+		conc.SaturationPolicy::Block( => { 7 },
 		default => { 1 },
 	};
 }

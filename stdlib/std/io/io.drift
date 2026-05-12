@@ -9,6 +9,8 @@ import lang.thread as thread;
 export {
 	IoInterest,
 	IoError,
+	IO_ERROR_KIND_ERRNO,
+	IO_ERROR_KIND_REQUIRES_VTHREAD,
 	File,
 	FileBuilder,
 	ConfiguredFile,
@@ -73,41 +75,34 @@ pub variant IoInterest {
 	Write
 }
 
-/// Error type returned by I/O operations on `File`, `InputStream`,
+/// Error returned by I/O operations on `File`, `InputStream`,
 /// `OutputStream`, and the `Configured*` variants.
 ///
-/// Wraps either a numeric errno (the kernel's error code, possibly
-/// translated via the `IO_ERR_*` constants) or a synthetic case
-/// indicating the call was made from outside a virtual thread.
+/// Flat shape (`pub error`) with a string `kind` discriminator and
+/// integer `code`:
+///
+///   * `kind == IO_ERROR_KIND_ERRNO` — `code` is the kernel's errno
+///     (possibly one of the `IO_ERR_*` sentinels for translated
+///     would-block / EOF / line-too-long conditions).
+///   * `kind == IO_ERROR_KIND_REQUIRES_VTHREAD` — synthetic case
+///     returned when the call was made from outside a virtual thread.
+///     `code = -2` for back-compat with `io_error_code`.
+///
+/// `pub error`: the compiler synthesizes `core.Throw` and
+/// `core.Diagnostic`; `or_throw()` and auto-try unwrap it directly.
 ///
 /// **See also:** `io_error_code`, `is_would_block_error`,
 /// `is_eof_error`.
-pub variant IoError {
-	Errno(code: Int),
-	RequiresVirtualThread
+pub error IoError {
+	kind: String,
+	code: Int,
 }
 
-implement core.Diagnostic for IoError {
-	pub fn to_json_text(self: &IoError) nothrow -> String {
-		return match self {
-			Errno(code) => {
-				core.diagnostic_json_int(*code)
-			},
-			RequiresVirtualThread => {
-				core.diagnostic_json_int(-2)
-			}
-		};
-	}
-}
+/// `IoError.kind` discriminator: `code` is the kernel errno.
+pub const IO_ERROR_KIND_ERRNO: String = "errno";
 
-implement core.Throw for IoError {
-	pub fn throw_self(self: IoError) throws {
-		match &self {
-			Errno(code) => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(*code)); },
-			RequiresVirtualThread => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); },
-		}
-	}
-}
+/// `IoError.kind` discriminator: call requires a virtual thread.
+pub const IO_ERROR_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
 
 /// An open file descriptor with a tracking `closed` cell.
 ///
@@ -599,8 +594,10 @@ pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
 
 /// Extracts the numeric error code from an `IoError`.
 ///
-/// `Errno(code)` returns `code` directly.  `RequiresVirtualThread`
-/// returns `-2`, the synthetic code reserved for that case.
+/// `kind = IO_ERROR_KIND_ERRNO` returns the kernel errno.
+/// `kind = IO_ERROR_KIND_REQUIRES_VTHREAD` returns `-2`, the
+/// synthetic code reserved for that case (the `code` field already
+/// carries `-2` for that kind).
 ///
 /// **Parameters:**
 /// - `e` — the `IoError` to project.
@@ -612,10 +609,7 @@ pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
 /// **See also:** `is_would_block_error`, `is_eof_error`,
 /// `is_line_too_long_error`.
 pub fn io_error_code(e: IoError) nothrow -> Int {
-	return match e {
-		Errno(code) => { code },
-		RequiresVirtualThread => { -2 }
-	};
+	return e.code;
 }
 
 /// Returns `true` if `code` matches the would-block sentinel
@@ -969,18 +963,18 @@ fn _file_open(path: String, opts: &FileOpenOptions, timeout: conc.Duration) noth
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_park_main_thread_io(remaining);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 fn _file_close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void, IoError> {
@@ -1000,18 +994,18 @@ fn _file_close(self: &File, timeout: conc.Duration) nothrow -> core.Result<Void,
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_park_main_thread_io(remaining);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Pairs an open `File` with a per-operation timeout, producing a
@@ -1171,7 +1165,7 @@ implement FileBuilder {
 				return core.Result::Err(e);
 			},
 			default => {
-				return core.Result::Err(IoError::Errno(-1));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 			}
 		}
 	}
@@ -1202,7 +1196,7 @@ implement OutputStreamBuilder {
 /// On success, sets `buf.len` to the number of bytes read.  Blocks the
 /// calling virtual thread until data is available or the timeout
 /// elapses.  Must be called from a virtual thread (`vt_current() != 0`);
-/// otherwise returns `Err(IoError::RequiresVirtualThread)`.
+/// otherwise returns `Err(IoError(kind=IO_ERROR_KIND_REQUIRES_VTHREAD))`.
 ///
 /// **Parameters:**
 /// - `buf` — destination buffer; receives the bytes and has its `len`
@@ -1219,7 +1213,7 @@ implement OutputStreamBuilder {
 /// `is_would_block_error`.
 pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(IoError::RequiresVirtualThread());
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
@@ -1237,18 +1231,18 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Writes the first `buf.len` bytes of `buf` to the output stream.
@@ -1256,7 +1250,7 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 /// Blocks the calling virtual thread until the write is accepted by
 /// the kernel or the timeout elapses.  Must be called from a virtual
 /// thread (`vt_current() != 0`); otherwise returns
-/// `Err(IoError::RequiresVirtualThread)`.
+/// `Err(IoError(kind=IO_ERROR_KIND_REQUIRES_VTHREAD))`.
 ///
 /// **Parameters:**
 /// - `buf` — source bytes; the buffer is read but not modified.
@@ -1269,7 +1263,7 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 /// **See also:** `OutputStream.write`, `is_would_block_error`.
 pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(IoError::RequiresVirtualThread());
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
@@ -1286,18 +1280,18 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_block_on_io(self.fd, 4, deadline);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Reads from the configured input stream using its bound timeout.
@@ -1426,7 +1420,7 @@ implement ConfiguredFile {
 
 fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(IoError::RequiresVirtualThread());
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.cap;
@@ -1444,18 +1438,18 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Reads a single line (terminated by `'\n'`) from the configured
@@ -1476,7 +1470,7 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 /// `is_line_too_long_error`.
 pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.Result<String, IoError> {
 	if self.max_line_bytes <= 0 {
-		return core.Result::Err(IoError::Errno(IO_ERR_LINE_TOO_LONG));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_LINE_TOO_LONG));
 	}
 	var line = buffer(self.max_line_bytes);
 	var one = buffer(1);
@@ -1491,7 +1485,7 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 						val s = core.string_from_utf8_bytes(buffer_ptr(&line), used);
 						return core.Result::Ok(s);
 					}
-					return core.Result::Err(IoError::Errno(IO_ERR_EOF));
+					return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_EOF));
 				}
 				got_any = true;
 				val b = buffer_read(&mut one, 0);
@@ -1500,7 +1494,7 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 					return core.Result::Ok(s);
 				}
 				if used >= self.max_line_bytes {
-					return core.Result::Err(IoError::Errno(IO_ERR_LINE_TOO_LONG));
+					return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_LINE_TOO_LONG));
 				}
 				buffer_write(&mut line, used, b);
 				used += 1;
@@ -1510,11 +1504,11 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 				return core.Result::Err(e);
 			},
 			default => {
-				return core.Result::Err(IoError::Errno(-1));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 			}
 		}
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Reads a single line from the input stream using the supplied
@@ -1541,7 +1535,7 @@ pub fn input_read_line(self: &InputStream, timeout: conc.Duration, max_line_byte
 
 fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(IoError::RequiresVirtualThread());
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
 	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
 	val len = buf.len;
@@ -1558,16 +1552,16 @@ fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> cor
 		}
 		if err == IO_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(IoError::Errno(IO_ERR_WOULD_BLOCK));
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_WOULD_BLOCK));
 			}
 			_block_on_io(self.fd, 4, deadline);
 			continue;
 		}
-		return core.Result::Err(IoError::Errno(err));
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(IoError::Errno(-1));
+	return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = -1));
 }

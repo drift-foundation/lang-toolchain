@@ -27,10 +27,12 @@ export {
 /// `"invalid-char"`, `"bad-padding"`).  `offset` is the zero-based
 /// byte position in the input where the decoder gave up.
 ///
-/// `CodecError` implements `core.Throw` and `core.Diagnostic`.
-pub struct CodecError {
-	pub tag: String,
-	pub offset: Int
+/// `CodecError` is a `pub error`, so the compiler synthesizes its
+/// `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
+pub error CodecError {
+	tag: String,
+	offset: Int,
 }
 
 /// Configurable hex (base-16) decoder.
@@ -72,18 +74,6 @@ pub struct Base64Decoder {
 pub struct Base32Decoder {
 	allow_whitespace: Bool,
 	allow_lowercase: Bool
-}
-
-implement core.Diagnostic for CodecError {
-	pub fn to_json_text(self: &CodecError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for CodecError {
-	pub fn throw_self(self: CodecError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
 }
 
 /// Constructs a strict-default `HexDecoder` (no whitespace, no `0x`

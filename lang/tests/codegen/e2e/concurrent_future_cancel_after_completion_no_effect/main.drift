@@ -12,10 +12,12 @@ fn main() nothrow -> Int {
 	}
 	f.cancel();
 	var res2 = f.join();
-	return match res2 {
-		Err(err) => { yield match err { Closed => { 0 }, default => { 3 } }
+		match res2 {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+			return 3;
 		},
-		Ok(_v) => { 4 },
-		default => { 4 },
-	};
+		Ok(_v) => { return 4; },
+		default => { return 4; },
+	}
 }

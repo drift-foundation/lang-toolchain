@@ -3,13 +3,12 @@ module m;
 import std.io as io;
 import std.core as core;
 
-// Verify IoError::RequiresVirtualThread variant exists and matches.
+// Verify IoError pub-error shape exposes the requires-virtual-thread
+// kind discriminator with the documented sentinel code (-2).
 fn run() -> Int {
-	val err: io.IoError = io.IoError::RequiresVirtualThread();
-	match err {
-		RequiresVirtualThread => {},
-		default => { return 1; }
-	}
+	val err: io.IoError = io.IoError(kind = io.IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2);
+	if err.kind != io.IO_ERROR_KIND_REQUIRES_VTHREAD { return 1; }
+	if err.code != -2 { return 2; }
 	return 0;
 }
 

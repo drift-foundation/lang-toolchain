@@ -15,22 +15,12 @@ export {
 /// `"os-random-failed"`).  `errno` is the platform errno (positive
 /// integer) when the OS call returned an error code; `0` otherwise.
 ///
-/// `RandomError` implements `core.Throw` and `core.Diagnostic`.
-pub struct RandomError {
-	pub tag: String,
-	pub errno: Int
-}
-
-implement core.Diagnostic for RandomError {
-	pub fn to_json_text(self: &RandomError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for RandomError {
-	pub fn throw_self(self: RandomError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+/// `RandomError` is a `pub error`, so the compiler synthesizes its
+/// `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
+pub error RandomError {
+	tag: String,
+	errno: Int,
 }
 
 /// Returns `n` cryptographically-secure random bytes.

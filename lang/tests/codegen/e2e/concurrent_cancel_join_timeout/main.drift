@@ -10,14 +10,13 @@ fn main() nothrow -> Int {
 	});
 	t.cancel();
 	var res = t.join_timeout(conc.Duration(millis = 200));
-	return match res {
-		Err(err) => { yield match err {
-				Cancelled => { 0 },
-				Timeout => { 1 },
-				default => { 2 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 1; }
+			return 2;
 		},
-		Ok(_v) => { 3 },
-		default => { 4 },
-	};
+		Ok(_v) => { return 3; },
+		default => { return 4; },
+	}
 }

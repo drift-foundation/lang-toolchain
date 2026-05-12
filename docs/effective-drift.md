@@ -736,9 +736,11 @@ Loop ergonomics note:
 See also: **Result to throwing flow** below — `json.parse(&text)` returns
 `Result<JsonNode, JsonErrorData>`, and the recommended idiom is to convert
 it to throwing flow with `.or_throw()` and catch once at the `nothrow`
-boundary, rather than nesting `match` per call. `JsonErrorData` implements
-`core.Throw`, so `.or_throw()` throws a typed `json:JsonError` exception
-that the caller catches directly.
+boundary, rather than nesting `match` per call.  `JsonErrorData` is a
+`pub error`, so the compiler-synthesized `core.Throw` impl makes
+`.or_throw()` throw `JsonErrorData` directly — the caller catches it as
+`catch json:JsonErrorData(e)` with `e.tag` / `e.offset` / `e.line` /
+`e.col` / `e.path` / `e.key` typed-projected from the envelope.
 
 ## The `throws` keyword
 
@@ -818,7 +820,9 @@ val q = rest.require_query_param(req, &"q").or_throw();
 ```
 
 `or_throw()` is the single user-facing explicit-unwrap operation on
-`Result<T, E>`. It requires `E: Throw` and consumes `self` by value.
+`Result<T, E>`.  Under Phase 5a strict enforcement, `E` MUST be a
+`pub error` type — the compiler synthesizes the `core.Throw` impl, and
+`or_throw()` consumes `self` by value.
 
 #### Common pitfall: bound local + explicit `or_throw()`
 
@@ -881,23 +885,22 @@ operation.
 ### Terminal form: `throws` (no return type)
 
 A function declared `fn f(...) throws` (bare, no `-> T`) is a
-**terminal** function: it **never returns normally**. Every control-flow
+**terminal** function: it **never returns normally**.  Every control-flow
 path must end in `throw` or a tail call to another terminal-`throws`
-function. The checker rejects `return` statements and fallthrough.
+function.  The checker rejects `return` statements and fallthrough.
 
 ```drift
-pub trait Throw {
-    fn throw_self(self: Self) throws;
+pub error ServiceDown {
+    reason: String,
 }
 
-exception ServiceDown(reason: String);
-
-implement Throw for ServiceDown {
-    pub fn throw_self(self: ServiceDown) throws {
-        throw self;
-    }
+fn cannot_recover(why: String) throws {
+    throw ServiceDown(reason = why);
 }
 ```
+
+The compiler synthesizes `implement core.Throw for ServiceDown` for
+every `pub error`; user code never writes a `Throw` impl.
 
 Terminal-`throws` calls are **terminators** for missing-return analysis.
 A match arm or if-branch whose only statement is a call to a
@@ -908,7 +911,7 @@ non-`throws` caller:
 fn handle(r: Result<Int, ServiceDown>) -> Int {
     match r {
         Ok(v) => { return v; },
-        Err(e) => { Throw::throw_self(move e); },
+        Err(e) => { cannot_recover(e.reason); },
     }
 }
 ```
@@ -949,13 +952,26 @@ or not-found responses.
 
 ### The contract: `or_throw()` consumes a `Result`
 
-`or_throw()` is an inherent method on `Result<T, E>`.  It requires the
-error type `E` to implement `core.Throw`.  The unwrap path is:
+`or_throw()` is an inherent method on `Result<T, E>`.  Phase 5a strict
+enforcement requires `E` to be a `pub error` type — the compiler
+synthesizes `implement core.Throw for E` for every `pub error E`, so the
+`require E is Throw` clause is satisfied automatically.  Calling
+`or_throw()` on a `Result<T, E>` where `E` is not a `pub error` (scalar,
+`pub struct`, `pub variant`, private `error`) is rejected at compile time
+with `E_OR_THROW_NOT_ERROR_TYPE`.  The unwrap path is:
 
 1. `result.or_throw()` consumes the owned `Result`.
 2. The `Ok` arm returns the value.
-3. The `Err` arm calls `e.throw_self()`.
-4. `throw_self` is a terminal-`throws` method, so it never returns normally.
+3. The `Err` arm throws the typed `pub error` directly via the
+   synthesized `core.Throw` impl.
+4. The throw is terminal — `or_throw()` never returns normally on the
+   `Err` arm.
+
+The corresponding catch arm receives the typed event:
+
+```drift
+try result.or_throw() catch my:ParseError(e) { ... e.offset ... }
+```
 
 The supported API is the method form:
 
@@ -990,44 +1006,31 @@ val id = (move id_result).or_throw();
 This is often useful in examples and refactors, but it is not required for the
 first consuming use of a named local.
 
-### The `Throw` trait
+### `pub error` carries the contract
 
-An error type opts into typed throwing by implementing `core.Throw`:
-
-```drift
-pub trait Throw {
-    fn throw_self(self: Self) throws;
-}
-```
-
-The method takes `self: Self`, so it owns the error payload and can move fields
-into the exception. The bare `throws` return shape means `throw_self` is
-terminal: every path must throw or tail-call another terminal-`throws` function.
+In current Drift (Slice 5, Phase 5a), the throwable + `or_throw`-compatible
+shape is `pub error E { ... }`.  The compiler synthesizes
+`implement core.Throw for E` and `implement core.Diagnostic for E`
+automatically — there is no user-written `Throw` impl, no struct/exception
+twin, no manual remap.  The `core.Throw` trait still exists internally for
+the synthesized impls; user code should not write it.
 
 Here is a minimal custom error:
 
 ```drift
 import std.core as core;
 
-pub exception ServiceDown(service: String, reason: String);
-
-struct ServiceError {
+pub error ServiceDown {
     service: String,
-    reason: String
-}
-
-implement core.Throw for ServiceError {
-    pub fn throw_self(self: ServiceError) throws {
-        throw ServiceDown(service = self.service, reason = self.reason);
-    }
+    reason: String,
 }
 ```
 
-Now `Result<T, ServiceError>.or_throw()` throws `ServiceDown`. The caller catches
-the domain exception, not a generic wrapper:
+Now `Result<T, ServiceDown>.or_throw()` throws `ServiceDown` directly.  The
+caller catches the domain event:
 
 ```drift
-fn call_service() -> Response {
+fn call_service() throws -> Response {
     return internal_rpc().or_throw();
 }
 
@@ -1040,42 +1043,46 @@ fn main() nothrow -> Int {
 }
 ```
 
-### Framework errors: map once, catch centrally
+The typed-catch binder `e` exposes both the schema fields declared on the
+`pub error` (typed-projected from the envelope's params JSON; supported
+scalars are `Int / Uint / Bool / Float / String`) and the Error envelope
+methods (`e.encode_compact()`, `e.params.get(k)`, `e.context.encode_compact()`).
 
-Frameworks should implement `Throw` on their own error type and map each error
-variant to the exception the dispatcher already catches.
+### Framework errors: one `pub error` per dispatcher arm
+
+Frameworks declare one `pub error` per dispatcher arm and throw it directly
+from the failing operation — no central `RestError + Throw impl` mapper is
+needed, because synthesis lands the typed event in the right catch arm
+without an intermediate trait body.
 
 ```drift
 import std.core as core;
 
-pub exception RestBadRequest(tag: String, message: String);
-pub exception RestUnauthorized(tag: String, message: String);
-pub exception RestNotFound(tag: String, message: String);
-pub exception RestInternal(tag: String, message: String);
-
-struct RestError {
-    status: Int,
+pub error RestBadRequest {
     tag: String,
-    message: String
+    message: String,
 }
 
-implement core.Throw for RestError {
-    pub fn throw_self(self: RestError) throws {
-        if self.status == 400 {
-            throw RestBadRequest(tag = self.tag, message = self.message);
-        }
-        if self.status == 401 {
-            throw RestUnauthorized(tag = self.tag, message = self.message);
-        }
-        if self.status == 404 {
-            throw RestNotFound(tag = self.tag, message = self.message);
-        }
-        throw RestInternal(tag = self.tag, message = self.message);
-    }
+pub error RestUnauthorized {
+    tag: String,
+    message: String,
+}
+
+pub error RestNotFound {
+    tag: String,
+    message: String,
+}
+
+pub error RestInternal {
+    tag: String,
+    message: String,
 }
 ```
 
-Then app code stays small:
+The framework helper functions that produce these errors can either return
+`Result<T, RestBadRequest>` (for one-arm operations) or `throw RestNotFound(...)`
+directly from a `throws` body when no Result staging is needed.  App code
+stays small:
 
 ```drift
 fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
@@ -1086,7 +1093,7 @@ fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Res
 }
 ```
 
-The dispatcher catches the typed exception and maps it to the right transport
+The dispatcher catches each typed event and maps it to the right transport
 response:
 
 ```drift
@@ -1103,10 +1110,10 @@ fn dispatch(req: &rest.Request, ctx: &mut rest.Context) nothrow -> rest.Response
 }
 ```
 
-This is the important UX property: app authors use `.or_throw()` at the point
-where type information is still available, and framework catch arms receive the
-exception type they already understand. The framework does not parse diagnostic
-strings or guess from generic payloads.
+The important UX property: app authors use `.or_throw()` at the point where
+type information is still available, framework catch arms receive the event
+they already understand, and the compiler — not a hand-written Throw impl —
+carries the routing.
 
 ### Structured exception attrs with `pub error` + manual `Diagnostic`
 
@@ -1253,11 +1260,12 @@ The key envelope-side surfaces:
 
 ### Auto-try regions: `throws -> T`
 
-`fn f(...) throws -> T` is a body-wide auto-try region. Inside the function,
+`fn f(...) throws -> T` is a body-wide auto-try region.  Inside the function,
 `Result<X, E>` expressions where the expected type is `X` are auto-unwrapped
-via `or_throw()`. The error type constraint `E: Throw` is what controls
-typed exception propagation.  Auto-try is compiler-owned — no trait import
-required.
+via `or_throw()`.  Phase 5a strict: `E` MUST be a `pub error` type — the
+compiler synthesizes its `core.Throw` impl, which routes the typed event
+into the surrounding exception flow.  Auto-try is compiler-owned — no
+trait import required.
 
 Use this for route handlers, request pipelines, and command handlers where most
 intermediate `Result` errors should leave through the same exception boundary.
@@ -1290,14 +1298,14 @@ Pick one style per function. Use auto-try for dense straight-line pipelines; use
 
 ### Stdlib behavior
 
-Every stdlib error type implements `Throw`. Types with a natural domain
-exception throw it directly. For example, `std.json.JsonErrorData` throws
-`json:JsonError`.
+Every stdlib error type is a `pub error`, so the compiler synthesizes its
+`core.Throw` impl: `or_throw()` and auto-try unwrap the error type directly
+into a typed catch arm.  For example, `Result<JsonNode, json.JsonErrorData>`
+unwraps as `catch json:JsonErrorData(e)`; `Result<TcpStream, net.NetError>`
+unwraps as `catch net:NetError(e)` with `e.kind` / `e.code` projection.
 
-Types without a dedicated domain exception throw `std.err:ResultError` with a
-diagnostic payload. This is the stable generic diagnostic fallback, not a
-temporary migration bridge. It is appropriate for low-level errors where callers
-usually only need "this failed" plus structured diagnostics.
+There is no longer a "wrap in `std.err:ResultError`" bridge in the stdlib
+surface — every public Result error carrier is its own catchable event.
 
 Example with JSON:
 
@@ -1317,7 +1325,7 @@ fn extract_status(payload: &String) -> String {
 fn main() nothrow -> Int {
     val payload = "{\"meta\":{\"callback\":{\"status\":\"ok\"}}}";
 
-    val status = try extract_status(&payload) catch json:JsonError(e) {
+    val status = try extract_status(&payload) catch json:JsonErrorData(e) {
         ""
     } catch json:JsonPathError(e) {
         ""
@@ -1335,8 +1343,9 @@ A few things to notice:
   cursor’s `field/string/...`) propagate naturally through the call stack.
 - `main` is `nothrow` because it has a `try ... catch` boundary that handles
   the exceptions it cares about and a catch-all for the rest.
-- The JSON parse catch arm matches `json:JsonError`, not
-  `std.err:ResultError`, because `JsonErrorData` has a domain `Throw` impl.
+- The JSON parse catch arm matches `json:JsonErrorData` (the synthesized
+  throw of the Result's Err carrier).  Strict-cursor failures still raise
+  `json:JsonPathError` directly.
 
 ### Designing a good `Throw` impl
 
@@ -1363,7 +1372,11 @@ yours or when this specific call needs extra context:
 ```drift
 import std.json as json;
 
-pub exception ParseFailed(tag: String, path: String, request_id: String);
+pub error ParseFailed {
+    tag: String,
+    path: String,
+    request_id: String,
+}
 
 fn parse_required(payload: &String, request_id: String) -> json.JsonNode {
     return json.parse(payload).on_error(|e: json.JsonErrorData| => {
@@ -1384,12 +1397,14 @@ fn main() nothrow -> Int {
 
 Reach for `on_error` instead of `or_throw` when:
 
-- the caller wants a different exception name than the error type’s default
-  `Throw` impl
+- the caller wants a different event name than the Err carrier's
+  synthesized throw (`or_throw()` throws the carrier directly under
+  Phase 5a)
 - the caller wants to add local context such as request id, tenant id, or input
   source
 - the caller wants to project, rename, or redact fields before throwing
-- the error type belongs to another package and has no `Throw` impl
+- the Result's Err type is a `pub error` from another package whose
+  synthesized throw target isn't the event the caller wants to catch
 
 ### When `match` is still the right answer
 

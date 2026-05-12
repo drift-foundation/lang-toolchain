@@ -3,29 +3,19 @@ module m;
 import std.net as net;
 import std.core as core;
 
-// Verify RequiresVirtualThread variant exists and matches correctly.
+// Verify NetError pub-error shape exposes the documented kind
+// discriminators (requires-vthread / would-block / errno) and the
+// integer code companion field.
 fn run() -> Int {
-	val err: net.NetError = net.NetError::RequiresVirtualThread();
-	match err {
-		RequiresVirtualThread => {},
-		default => { return 1; }
-	}
+	val err: net.NetError = net.NetError(kind = net.NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0);
+	if err.kind != net.NET_ERROR_KIND_REQUIRES_VTHREAD { return 1; }
 
-	// Verify WouldBlock still works.
-	val err2: net.NetError = net.NetError::WouldBlock();
-	match err2 {
-		WouldBlock => {},
-		default => { return 2; }
-	}
+	val err2: net.NetError = net.NetError(kind = net.NET_ERROR_KIND_WOULD_BLOCK, code = 0);
+	if err2.kind != net.NET_ERROR_KIND_WOULD_BLOCK { return 2; }
 
-	// Verify Errno still works.
-	val err3: net.NetError = net.NetError::Errno(42);
-	match err3 {
-		Errno(code) => {
-			if code != 42 { return 3; }
-		},
-		default => { return 4; }
-	}
+	val err3: net.NetError = net.NetError(kind = net.NET_ERROR_KIND_ERRNO, code = 42);
+	if err3.kind != net.NET_ERROR_KIND_ERRNO { return 3; }
+	if err3.code != 42 { return 4; }
 
 	return 0;
 }

@@ -17,6 +17,11 @@ use trait core.Destructible;
 export {
 	Duration,
 	ConcurrencyError,
+	CONCURRENCY_KIND_TIMEOUT,
+	CONCURRENCY_KIND_CANCELLED,
+	CONCURRENCY_KIND_CLOSED,
+	CONCURRENCY_KIND_BUSY,
+	CONCURRENCY_KIND_FAILED,
 	VtResultNotAvailable,
 	ExecSubmitFailed,
 	InvalidDuration,
@@ -86,7 +91,7 @@ export { std.core.arc.* };
 /// Invariant: `millis >= 0`.  Negative values are rejected at runtime
 /// by the helpers that consume `Duration` (notably `sleep` and
 /// `VirtualThread.join_timeout`), which return
-/// `Err(ConcurrencyError::Failed(InvalidDuration(...)))`.  `Duration`
+/// `Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5))`.  `Duration`
 /// is `Copy`, so it can be passed around freely.
 ///
 /// **See also:** `sleep`, `VirtualThread.join_timeout`,
@@ -116,62 +121,48 @@ pub type AtomicUint = atomic.AtomicUint;
 /// Re-export of `lang.atomic.AtomicUint64` — atomic `Uint64` cell.
 pub type AtomicUint64 = atomic.AtomicUint64;
 
-/// Error type returned by `std.concurrent` operations that may fail
-/// or be canceled.
+/// Error returned by `std.concurrent` operations that may fail or
+/// be canceled.
 ///
-/// `Timeout` — the operation's deadline elapsed before a result was
-/// produced (`sleep`, `join_timeout`, `FutureGroup.join_any` on an
-/// empty group).  `Cancelled` — the target was canceled before it
-/// completed.  `Closed` — the handle has already been joined or
-/// otherwise consumed.  `Busy` — an executor or queue rejected the
-/// submission because of saturation.  `Failed(err)` — wraps a
-/// caller-defined exception (typically `ExecSubmitFailed` or
-/// `InvalidDuration`) when no other variant fits.
+/// Flat shape (`pub error`) with a string `kind` discriminator and
+/// integer `code`:
 ///
-/// `ConcurrencyError` implements `core.Throw`, so callers can use
-/// `or_throw` or rely on the auto-try contract inside `throws`
-/// functions.
-pub variant ConcurrencyError {
-	Timeout,
-	Cancelled,
-	Closed,
-	Busy,
-	Failed(err: Error),
+///   * `kind == CONCURRENCY_KIND_TIMEOUT` — the operation's deadline
+///     elapsed before a result was produced (`sleep`, `join_timeout`,
+///     `FutureGroup.join_any` on an empty group).
+///   * `kind == CONCURRENCY_KIND_CANCELLED` — the target was canceled
+///     before it completed.
+///   * `kind == CONCURRENCY_KIND_CLOSED` — the handle has already
+///     been joined or otherwise consumed.
+///   * `kind == CONCURRENCY_KIND_BUSY` — an executor or queue rejected
+///     the submission because of saturation.
+///   * `kind == CONCURRENCY_KIND_FAILED` — wraps a deeper failure
+///     when no other kind fits (e.g. an executor's `ExecSubmitFailed`
+///     or `InvalidDuration`).  `code` carries a stable sentinel
+///     (`-5`); the originating Error envelope is not preserved across
+///     the carrier.
+///
+/// `pub error`: the compiler synthesizes `core.Throw` and
+/// `core.Diagnostic`; `or_throw()` and auto-try unwrap it directly.
+pub error ConcurrencyError {
+	kind: String,
+	code: Int,
 }
 
-implement core.Diagnostic for ConcurrencyError {
-	pub fn to_json_text(self: &ConcurrencyError) nothrow -> String {
-		return match self {
-			Timeout => {
-				core.diagnostic_json_int(-1)
-			},
-			Cancelled => {
-				core.diagnostic_json_int(-2)
-			},
-			Closed => {
-				core.diagnostic_json_int(-3)
-			},
-			Busy => {
-				core.diagnostic_json_int(-4)
-			},
-			Failed(_) => {
-				core.diagnostic_json_int(-5)
-			}
-		};
-	}
-}
+/// `ConcurrencyError.kind` discriminator: deadline elapsed.
+pub const CONCURRENCY_KIND_TIMEOUT: String = "timeout";
 
-implement core.Throw for ConcurrencyError {
-	pub fn throw_self(self: ConcurrencyError) throws {
-		match &self {
-			Timeout => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); },
-			Cancelled => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); },
-			Closed => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-3)); },
-			Busy => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-4)); },
-			Failed(_) => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-5)); },
-		}
-	}
-}
+/// `ConcurrencyError.kind` discriminator: target was canceled.
+pub const CONCURRENCY_KIND_CANCELLED: String = "cancelled";
+
+/// `ConcurrencyError.kind` discriminator: handle already consumed.
+pub const CONCURRENCY_KIND_CLOSED: String = "closed";
+
+/// `ConcurrencyError.kind` discriminator: executor / queue saturated.
+pub const CONCURRENCY_KIND_BUSY: String = "busy";
+
+/// `ConcurrencyError.kind` discriminator: wraps a deeper failure.
+pub const CONCURRENCY_KIND_FAILED: String = "failed";
 
 /// Constructs an atomic `Bool` cell initialized to `v`.
 ///
@@ -206,7 +197,7 @@ pub fn atomic_uint64(v: Uint64) nothrow -> AtomicUint64 {
 pub error VtResultNotAvailable {}
 
 /// Carries the runtime submit-failure code wrapped by
-/// `ConcurrencyError::Failed` when an executor rejects a `spawn_on`
+/// `ConcurrencyError(kind=CONCURRENCY_KIND_FAILED)` when an executor rejects a `spawn_on`
 /// submission for a reason other than saturation or timeout.
 ///
 /// `code` is the platform-specific error code; the catching site
@@ -217,7 +208,7 @@ pub error ExecSubmitFailed {
 
 /// Carries the offending value when a `Duration`-taking helper is
 /// called with `millis < 0`.  Wrapped by
-/// `ConcurrencyError::Failed(InvalidDuration(...))`.
+/// `ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5)`.
 pub error InvalidDuration {
 	millis: Int,
 }
@@ -238,7 +229,7 @@ pub variant ProcessSignal {
 ///
 /// `Block` — the submitter blocks until queue space opens up or the
 /// executor's submit timeout elapses.  `ReturnBusy` — the submitter
-/// is rejected immediately with `ConcurrencyError::Busy`.
+/// is rejected immediately with `ConcurrencyError(kind=CONCURRENCY_KIND_BUSY)`.
 ///
 /// **See also:** `ExecutorPolicyBuilder.on_saturation`.
 pub variant SaturationPolicy {
@@ -674,7 +665,7 @@ pub fn set_default_executor(exec: Executor) nothrow -> Void {
 ///
 /// **Returns:** a `VirtualThread<T>` whose `submit_error` is non-zero
 /// if the executor refused submission (check via `.join` to surface
-/// the error as `ConcurrencyError::Failed(ExecSubmitFailed(code))`).
+/// the error as `ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5)`).
 /// Use `spawn_on` if you want the submit failure surfaced as a
 /// `Result` directly instead of being deferred to join.
 ///
@@ -753,10 +744,10 @@ pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 ///   result.
 ///
 /// **Returns:** `Ok(VirtualThread<T>)` if the submit succeeded.
-/// `Err(ConcurrencyError::Busy)` if the executor is saturated and
-/// configured to return-busy.  `Err(ConcurrencyError::Timeout)` if
+/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_BUSY))` if the executor is saturated and
+/// configured to return-busy.  `Err(ConcurrencyError(kind=CONCURRENCY_KIND_TIMEOUT))` if
 /// the saturation policy is `Block` and the submit timeout elapsed.
-/// `Err(ConcurrencyError::Failed(ExecSubmitFailed(code)))` for
+/// `Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5))` for
 /// other submit failures.
 ///
 /// **See also:** `spawn`, `spawn_future_on`, `Executor`,
@@ -786,15 +777,15 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 		mem.dealloc<type T>(buf2);
 		thread.vt_drop(h);
 		if submit_code == 1 {
-			return core.Result::Err(ConcurrencyError::Busy());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4));
 		}
 		if submit_code == 2 {
-			return core.Result::Err(ConcurrencyError::Timeout());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 		}
 		try {
 			throw ExecSubmitFailed(code = submit_code);
 		} catch e {
-			return core.Result::Err(ConcurrencyError::Failed(e));
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
 		}
 	}
 }
@@ -818,7 +809,7 @@ pub fn spawn_future_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> 
 	return match res {
 		Ok(vt) => { core.Result::Ok(Future<type T>(vt)) },
 		Err(err) => { core.Result::Err(err) },
-		default => { core.Result::Err(ConcurrencyError::Busy()) }
+		default => { core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4)) }
 	};
 }
 
@@ -839,7 +830,7 @@ fn _check_duration(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 		try {
 			throw InvalidDuration(millis = d.millis);
 		} catch e {
-			return core.Result::Err(ConcurrencyError::Failed(e));
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
 		}
 	}
 	return core.Result::Ok(core.void_value());
@@ -851,9 +842,9 @@ implement<T> VirtualThread<T> {
 	/// produced value.
 	///
 	/// Marks `self` as joined; further joins return
-	/// `Err(ConcurrencyError::Closed)`.  If the underlying executor
+	/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_CLOSED))`.  If the underlying executor
 	/// rejected the original submission, the deferred error surfaces
-	/// here as `Err(ConcurrencyError::Failed(ExecSubmitFailed(...)))`.
+	/// here as `Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5))`.
 	/// If the task was cancelled, returns `Err(Cancelled)` after the
 	/// internal cleanup completes.
 	///
@@ -864,7 +855,7 @@ implement<T> VirtualThread<T> {
 	/// `VirtualThread.cancel`.
 	pub fn join(self: &mut VirtualThread<T>) nothrow -> core.Result<T, ConcurrencyError> {
 		if self.joined {
-			return core.Result::Err(ConcurrencyError::Closed());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CLOSED, code = -3));
 		}
 		if self.submit_error != 0 {
 			var code = self.submit_error;
@@ -873,7 +864,7 @@ implement<T> VirtualThread<T> {
 			try {
 				throw ExecSubmitFailed(code = code);
 			} catch e {
-				return core.Result::Err(ConcurrencyError::Failed(e));
+				return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
 			}
 		}
 		if self.cancelled {
@@ -886,7 +877,7 @@ implement<T> VirtualThread<T> {
 				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
 				mem.dealloc<type T>(buf);
 			}
-			return core.Result::Err(ConcurrencyError::Cancelled());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -2));
 		}
 		thread.vt_join(self.handle);
 		self.joined = true;
@@ -904,7 +895,7 @@ implement<T> VirtualThread<T> {
 	/// Blocks until the spawned task completes or `d` elapses.
 	///
 	/// Same success/failure shape as `join`, plus
-	/// `Err(ConcurrencyError::Timeout)` when the deadline hits before
+	/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_TIMEOUT))` when the deadline hits before
 	/// the task is done.  `d.millis < 0` is rejected as
 	/// `Err(Failed(InvalidDuration(...)))`; `d.millis == 0` returns
 	/// `Err(Timeout)` immediately if the task is not already
@@ -924,7 +915,7 @@ implement<T> VirtualThread<T> {
 			Ok(_) => { }
 		}
 		if self.joined {
-			return core.Result::Err(ConcurrencyError::Closed());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CLOSED, code = -3));
 		}
 		if self.submit_error != 0 {
 			var code = self.submit_error;
@@ -933,7 +924,7 @@ implement<T> VirtualThread<T> {
 			try {
 				throw ExecSubmitFailed(code = code);
 			} catch e {
-				return core.Result::Err(ConcurrencyError::Failed(e));
+				return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
 			}
 		}
 		if self.cancelled {
@@ -946,7 +937,7 @@ implement<T> VirtualThread<T> {
 				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
 				mem.dealloc<type T>(buf);
 			}
-			return core.Result::Err(ConcurrencyError::Cancelled());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -2));
 		}
 		var done = thread.vt_is_completed(self.handle);
 		if done != 0 {
@@ -963,11 +954,11 @@ implement<T> VirtualThread<T> {
 			}
 		}
 		if d.millis == 0 {
-			return core.Result::Err(ConcurrencyError::Timeout());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 		}
 		var code = thread.vt_join_timeout(self.handle, d.millis);
 		if code != 0 {
-			return core.Result::Err(ConcurrencyError::Timeout());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 		}
 		self.joined = true;
 		self.handle = 0;
@@ -986,7 +977,7 @@ implement<T> VirtualThread<T> {
 	/// No-op if the thread is already joined or if no live handle is
 	/// attached.  After a successful cancellation request, the next
 	/// `join`/`join_timeout` call returns
-	/// `Err(ConcurrencyError::Cancelled)`.
+	/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_CANCELLED))`.
 	///
 	/// **See also:** `VirtualThread.join`, `VirtualThread.join_timeout`.
 	pub fn cancel(self: &mut VirtualThread<T>) nothrow -> Void {
@@ -1083,7 +1074,7 @@ implement<T> FutureGroup<T> require T is core.Copy {
 			match res {
 				Ok(v) => { out.push(v); },
 				Err(err) => { return core.Result::Err(err); },
-				default => { return core.Result::Err(ConcurrencyError::Busy()); }
+				default => { return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4)); }
 			}
 			i += 1;
 		}
@@ -1094,8 +1085,8 @@ implement<T> FutureGroup<T> require T is core.Copy {
 	/// polling each in turn and parking briefly between sweeps.
 	///
 	/// **Returns:** `Ok(T)` from the first ready future.
-	/// `Err(ConcurrencyError::Timeout)` if the group is empty.
-	/// `Err(ConcurrencyError::Closed)` if every future is already
+	/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_TIMEOUT))` if the group is empty.
+	/// `Err(ConcurrencyError(kind=CONCURRENCY_KIND_CLOSED))` if every future is already
 	/// joined and no value remains to be observed.
 	///
 	/// Note: the value returned by `join_any` is read out of the
@@ -1107,7 +1098,7 @@ implement<T> FutureGroup<T> require T is core.Copy {
 	/// **See also:** `FutureGroup.join_all`.
 	pub fn join_any(self: &mut FutureGroup<T>) nothrow -> core.Result<T, ConcurrencyError> {
 		if self.items.len == 0 {
-			return core.Result::Err(ConcurrencyError::Timeout());
+			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 		}
 		while true {
 			var i: Int = 0;
@@ -1129,7 +1120,7 @@ implement<T> FutureGroup<T> require T is core.Copy {
 				i += 1;
 			}
 			if !pending {
-				return core.Result::Err(ConcurrencyError::Closed());
+				return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CLOSED, code = -3));
 			}
 			var me = thread.vt_current();
 			if me != 0 {
@@ -1138,7 +1129,7 @@ implement<T> FutureGroup<T> require T is core.Copy {
 				thread.vt_park_until(1);
 			}
 		}
-		return core.Result::Err(ConcurrencyError::Timeout());
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 	}
 }
 
@@ -1185,7 +1176,7 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 		Ok(_) => { }
 	}
 	if d.millis == 0 {
-		return core.Result::Err(ConcurrencyError::Timeout());
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
 	}
 	var deadline = thread.now_ms() + d.millis;
 	var vt = thread.vt_current();

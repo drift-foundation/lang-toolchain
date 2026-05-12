@@ -11,13 +11,12 @@ fn main() nothrow -> Int {
 	t.cancel();
 	t.cancel();
 	var res = t.join();
-	return match res {
-		Err(err) => { yield match err {
-				Cancelled => { 0 },
-				default => { 1 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			return 1;
 		},
-		Ok(_v) => { 2 },
-		default => { 3 },
-	};
+		Ok(_v) => { return 2; },
+		default => { return 3; },
+	}
 }

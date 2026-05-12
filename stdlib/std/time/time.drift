@@ -71,24 +71,14 @@ pub struct Date {
 /// `"bad-format"`, `"month-out-of-range"`).  `offset` is the
 /// zero-based byte position in the input where the parser gave up.
 ///
-/// `TimeParseError` implements `core.Throw`.
+/// `TimeParseError` is a `pub error`, so the compiler synthesizes
+/// its `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
 ///
 /// **See also:** `parse_iso8601_utc`, `parse_iso8601_date`.
-pub struct TimeParseError {
-	pub tag: String,
-	pub offset: Int
-}
-
-implement core.Diagnostic for TimeParseError {
-	pub fn to_json_text(self: &TimeParseError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for TimeParseError {
-	pub fn throw_self(self: TimeParseError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+pub error TimeParseError {
+	tag: String,
+	offset: Int,
 }
 
 /// Returns an `Instant` capturing the current monotonic clock

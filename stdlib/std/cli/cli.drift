@@ -23,11 +23,11 @@ export {
 /// Note: the special tag `"cli-help-requested"` is returned when
 /// `--help` is encountered; callers typically treat it as "exit 0",
 /// not as an error.
-pub struct CliError {
-	pub tag: String,
-	pub arg: String,
-	pub message: String,
-	pub index: Int
+pub error CliError {
+	tag: String,
+	arg: String,
+	message: String,
+	index: Int,
 }
 
 /// Result of a successful `ArgParser.parse`.

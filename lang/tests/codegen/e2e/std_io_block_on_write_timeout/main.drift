@@ -16,13 +16,11 @@ pub fn main() nothrow -> Int {
 	match r {
 		Ok(_) => { return 2; },
 		Err(e) => {
-			match e {
-				Errno(code) => {
-					if io.io_is_would_block(code) { return 0; }
-					return 0;
-				},
-				default => { return 4; }
+			if e.kind == io.IO_ERROR_KIND_ERRNO {
+				if io.io_is_would_block(e.code) { return 0; }
+				return 0;
 			}
+			return 4;
 		},
 		default => { return 5; }
 	}

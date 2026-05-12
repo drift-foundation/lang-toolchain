@@ -368,24 +368,14 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 /// `tag` is a stable machine-readable identifier for the failure
 /// (e.g. `"length-out-of-range"`, `"auth-tag-mismatch"`).
 ///
-/// `CryptoError` implements `core.Throw` and `core.Diagnostic`.
+/// `CryptoError` is a `pub error`, so the compiler synthesizes its
+/// `core.Throw` and `core.Diagnostic` impls; `or_throw()` and
+/// auto-try unwrap it directly.
 ///
 /// **See also:** `chacha20_poly1305_decrypt`, `hkdf_sha256`.
-pub struct CryptoError {
-	pub tag: String,
-	pub errno: Int
-}
-
-implement core.Diagnostic for CryptoError {
-	pub fn to_json_text(self: &CryptoError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for CryptoError {
-	pub fn throw_self(self: CryptoError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+pub error CryptoError {
+	tag: String,
+	errno: Int,
 }
 
 const U64_MASK: Uint64 = 255u64;

@@ -9,20 +9,18 @@ fn one() -> Int {
 	});
 	t.cancel();
 	var res = t.join_timeout(conc.Duration(millis = 0));
-	return match res {
+		match res {
 		Err(err) => {
-			yield match err {
-				Cancelled => { 0 },
-				Timeout => { 0 },
-				Closed => { 12 },
-				Busy => { 13 },
-				Failed(_) => { 14 },
-				default => { 15 },
-			}
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+			if err.kind == conc.CONCURRENCY_KIND_CLOSED { return 12; }
+			if err.kind == conc.CONCURRENCY_KIND_BUSY { return 13; }
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return 14; }
+			return 15;
 		},
-		Ok(_v) => { 0 },
-		default => { 16 },
-	};
+		Ok(_v) => { return 0; },
+		default => { return 16; },
+	}
 }
 
 fn run() -> Int {

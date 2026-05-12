@@ -10,10 +10,8 @@ fn main() nothrow -> Int {
 	val r = f.join_timeout(conc.Duration(millis = 100));
 	match r {
 		Err(e) => {
-			match e {
-				Timeout => { return 0; },
-				default => { return 2; }
-			}
+			if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+			return 2;
 		},
 		Ok(_) => { return 1; },
 		default => { return 3; }

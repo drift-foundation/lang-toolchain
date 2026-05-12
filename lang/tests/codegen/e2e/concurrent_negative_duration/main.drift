@@ -4,27 +4,25 @@ import std.concurrent as conc;
 import std.core as core;
 
 fn is_failed_void(res: core.Result<Void, conc.ConcurrencyError>) nothrow -> Bool {
-	return match res {
-		Err(err) => { yield match err {
-				Failed(_e) => { true },
-				default => { false },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return true; }
+			return false;
 		},
-		Ok(_v) => { false },
-		default => { false },
-	};
+		Ok(_v) => { return false; },
+		default => { return false; },
+	}
 }
 
 fn is_failed_int(res: core.Result<Int, conc.ConcurrencyError>) nothrow -> Bool {
-	return match res {
-		Err(err) => { yield match err {
-				Failed(_e) => { true },
-				default => { false },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return true; }
+			return false;
 		},
-		Ok(_v) => { false },
-		default => { false },
-	};
+		Ok(_v) => { return false; },
+		default => { return false; },
+	}
 }
 
 fn main() nothrow -> Int {

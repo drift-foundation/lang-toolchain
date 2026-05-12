@@ -8,13 +8,12 @@ fn main() nothrow -> Int {
 	thread.exec_submit_test_override(1);
 	var t = conc.spawn(| | => { return 7; });
 	var res = t.join();
-	return match res {
-		Err(err) => { yield match err {
-				Failed(_e) => { 0 },
-				default => { 1 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return 0; }
+			return 1;
 		},
-		Ok(_v) => { 2 },
-		default => { 2 },
-	};
+		Ok(_v) => { return 2; },
+		default => { return 2; },
+	}
 }

@@ -9,6 +9,9 @@ export {
 	SocketAddr,
 	SocketAddrV6,
 	NetError,
+	NET_ERROR_KIND_ERRNO,
+	NET_ERROR_KIND_WOULD_BLOCK,
+	NET_ERROR_KIND_REQUIRES_VTHREAD,
 	TcpStream,
 	TcpListener,
 	UdpSocket,
@@ -48,54 +51,43 @@ pub struct SocketAddrV6 {
 	pub port: Int
 }
 
-/// Error type returned by `std.net` socket operations.
+/// Error returned by `std.net` socket operations.
 ///
-/// `Errno(code)` carries the kernel's errno from a failed syscall.
-/// `WouldBlock` indicates the operation's deadline elapsed before the
-/// kernel produced a result (distinct from `Errno(EAGAIN)`, which is
-/// retried internally).  `RequiresVirtualThread` is the synthetic case
-/// returned when a blocking operation is invoked from outside a
-/// virtual thread.
+/// Flat shape (`pub error`) with a string `kind` discriminator and
+/// integer `code`:
 ///
-/// `NetError` implements `core.Throw`, so callers can use `or_throw`
-/// or rely on the auto-try convention inside `throws` functions.
-pub variant NetError {
-	Errno(code: Int),
-	WouldBlock,
-	RequiresVirtualThread
+///   * `kind == NET_ERROR_KIND_ERRNO` — `code` is the kernel's errno
+///     from a failed syscall (positive integer).
+///   * `kind == NET_ERROR_KIND_WOULD_BLOCK` — the operation's deadline
+///     elapsed before the kernel produced a result (distinct from
+///     `errno = EAGAIN`, which is retried internally).  `code = 0`.
+///   * `kind == NET_ERROR_KIND_REQUIRES_VTHREAD` — synthetic case
+///     returned when a blocking operation is invoked from outside a
+///     virtual thread.  `code = 0`.
+///
+/// `pub error`: the compiler synthesizes `core.Throw` and
+/// `core.Diagnostic`, so callers can use `or_throw()` or rely on the
+/// auto-try convention inside `throws` functions, and `catch
+/// NetError(e)` exposes `e.kind` / `e.code` for typed classification.
+pub error NetError {
+	kind: String,
+	code: Int,
 }
 
-implement core.Diagnostic for NetError {
-	pub fn to_json_text(self: &NetError) nothrow -> String {
-		return match self {
-			Errno(code) => {
-				core.diagnostic_json_int(*code)
-			},
-			WouldBlock => {
-				core.diagnostic_json_int(-1)
-			},
-			RequiresVirtualThread => {
-				core.diagnostic_json_int(-2)
-			}
-		};
-	}
-}
+/// `NetError.kind` discriminator: `code` is the kernel errno.
+pub const NET_ERROR_KIND_ERRNO: String = "errno";
 
-implement core.Throw for NetError {
-	pub fn throw_self(self: NetError) throws {
-		match &self {
-			Errno(code) => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(*code)); },
-			WouldBlock => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); },
-			RequiresVirtualThread => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); },
-		}
-	}
-}
+/// `NetError.kind` discriminator: timeout elapsed before completion.
+pub const NET_ERROR_KIND_WOULD_BLOCK: String = "would_block";
+
+/// `NetError.kind` discriminator: call requires a virtual thread.
+pub const NET_ERROR_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
 
 /// Connected TCP stream backed by a non-blocking file descriptor.
 ///
 /// Obtained from `connect()` (client side) or `accept()` on a
 /// `TcpListener` (server side).  All read/write operations require a
-/// virtual thread and may return `NetError::WouldBlock` if the
+/// virtual thread and may return `NetError(kind=NET_ERROR_KIND_WOULD_BLOCK)` if the
 /// configured timeout elapses before the kernel can satisfy the call.
 ///
 /// **See also:** `connect`, `accept`, `TcpStream.read`,
@@ -133,7 +125,7 @@ pub const NET_EINTR: Int = 4;
 /// Errno value for "resource temporarily unavailable" (`EAGAIN`).
 /// Operations that hit this code park on the reactor (in a virtual
 /// thread) or busy-wait (on the main thread) until the deadline
-/// elapses, then return `NetError::WouldBlock`.
+/// elapses, then return `NetError(kind=NET_ERROR_KIND_WOULD_BLOCK)`.
 pub const NET_EAGAIN: Int = 11;
 
 /// Polling quantum (in milliseconds) used when a main-thread caller
@@ -229,7 +221,7 @@ pub fn socket_addr_v6(ip: String, port: Int) nothrow -> SocketAddrV6 {
 pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
 	val fd = thread.net_udp_bind(&addr.ip, addr.port);
 	if fd < 0 {
-		return core.Result::Err(NetError::Errno(thread.io_errno()));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = thread.io_errno()));
 	}
 	return core.Result::Ok(UdpSocket(fd = fd));
 }
@@ -246,7 +238,7 @@ pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
 pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetError> {
 	val fd = thread.net_udp_bind_v6(&addr.ip, addr.port);
 	if fd < 0 {
-		return core.Result::Err(NetError::Errno(thread.io_errno()));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = thread.io_errno()));
 	}
 	return core.Result::Ok(UdpSocket(fd = fd));
 }
@@ -255,7 +247,7 @@ pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetErr
 ///
 /// Retries internally on `EINTR`.  If the kernel returns `EAGAIN`,
 /// busy-polls (on the main thread) until the deadline elapses, then
-/// returns `NetError::WouldBlock`.
+/// returns `NetError(kind=NET_ERROR_KIND_WOULD_BLOCK)`.
 ///
 /// **Parameters:**
 /// - `addr` — local address to bind to; `port = 0` requests an
@@ -282,38 +274,38 @@ pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<
 		}
 		if err == NET_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			_park_main_thread_io(remaining);
 			continue;
 		}
-		return core.Result::Err(NetError::Errno(err));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(NetError::Errno(-1));
+	return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Accepts the next pending connection on the listener, blocking the
 /// calling virtual thread until one arrives or the timeout elapses.
 ///
 /// Must be called from a virtual thread (`vt_current() != 0`);
-/// otherwise returns `Err(NetError::RequiresVirtualThread)`.
+/// otherwise returns `Err(NetError(kind=NET_ERROR_KIND_REQUIRES_VTHREAD))`.
 ///
 /// **Parameters:**
 /// - `timeout` — maximum time to wait for an incoming connection
-///   before returning `NetError::WouldBlock`.
+///   before returning `NetError(kind=NET_ERROR_KIND_WOULD_BLOCK)`.
 ///
 /// **Returns:** `Ok(TcpStream)` for the accepted connection.
-/// `Err(NetError::WouldBlock)` if the timeout elapses with no pending
-/// connection.  `Err(NetError::Errno(code))` on accept failure.
+/// `Err(NetError(kind=NET_ERROR_KIND_WOULD_BLOCK))` if the timeout elapses with no pending
+/// connection.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` on accept failure.
 ///
 /// **See also:** `accept`, `listen`, `TcpStream`.
 pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(NetError::RequiresVirtualThread());
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 	}
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -327,18 +319,18 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 		}
 		if err == NET_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			_block_on_io(self.fd, 1, deadline);
 			continue;
 		}
-		return core.Result::Err(NetError::Errno(err));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(NetError::Errno(-1));
+	return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Establishes a TCP connection to `addr`, blocking the calling
@@ -346,12 +338,12 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 /// elapses.
 ///
 /// Must be called from a virtual thread; otherwise returns
-/// `Err(NetError::RequiresVirtualThread)`.
+/// `Err(NetError(kind=NET_ERROR_KIND_REQUIRES_VTHREAD))`.
 ///
 /// **Parameters:**
 /// - `addr` — remote address to connect to.
 /// - `timeout` — maximum time to wait for the connect to complete
-///   before returning `NetError::WouldBlock`.
+///   before returning `NetError(kind=NET_ERROR_KIND_WOULD_BLOCK)`.
 ///
 /// **Returns:** `Ok(TcpStream)` on success.  `Err(NetError)` on
 /// connect failure (refused, unreachable, timed out, etc.).
@@ -361,7 +353,7 @@ pub fn accept(self: &TcpListener, timeout: conc.Duration) nothrow -> core.Result
 /// **Example:** `examples/tcp_client_server/client.drift`.
 pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpStream, NetError> {
 	if thread.vt_current() == 0 {
-		return core.Result::Err(NetError::RequiresVirtualThread());
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 	}
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -375,18 +367,18 @@ pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result
 		}
 		if err == NET_EAGAIN {
 			if deadline <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			val remaining = _remaining_ms(deadline);
 			if remaining <= 0 {
-				return core.Result::Err(NetError::WouldBlock());
+				return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 			}
 			thread.vt_yield();
 			continue;
 		}
-		return core.Result::Err(NetError::Errno(err));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(NetError::Errno(-1));
+	return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 }
 
 /// Test-only constructor that wraps an eventfd as a `TcpStream`.
@@ -415,19 +407,19 @@ implement TcpStream {
 	/// On success, sets `buf.len` to the number of bytes read.  Blocks
 	/// the calling virtual thread until data arrives or the timeout
 	/// elapses.  Must be called from a virtual thread; otherwise
-	/// returns `Err(NetError::RequiresVirtualThread)`.
+	/// returns `Err(NetError(kind=NET_ERROR_KIND_REQUIRES_VTHREAD))`.
 	///
 	/// **Parameters:**
 	/// - `buf` — destination buffer.
 	/// - `timeout` — maximum time to wait for data.
 	///
-	/// **Returns:** `Ok(n)` bytes read.  `Err(NetError::WouldBlock)` on
-	/// timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	/// **Returns:** `Ok(n)` bytes read.  `Err(NetError(kind=NET_ERROR_KIND_WOULD_BLOCK))` on
+	/// timeout.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` on syscall failure.
 	///
 	/// **See also:** `TcpStream.write`, `TcpStream.close`.
 	pub fn read(self: &TcpStream, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
@@ -445,18 +437,18 @@ implement TcpStream {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// Writes the first `buf.len` bytes from `buf` to the stream.
@@ -469,13 +461,13 @@ implement TcpStream {
 	/// - `buf` — source bytes (read but not modified).
 	/// - `timeout` — maximum time to wait for the kernel to accept.
 	///
-	/// **Returns:** `Ok(n)` bytes written.  `Err(NetError::WouldBlock)`
-	/// on timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	/// **Returns:** `Ok(n)` bytes written.  `Err(NetError(kind=NET_ERROR_KIND_WOULD_BLOCK))`
+	/// on timeout.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` on syscall failure.
 	///
 	/// **See also:** `TcpStream.read`, `TcpStream.close`.
 	pub fn write(self: &TcpStream, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
@@ -492,18 +484,18 @@ implement TcpStream {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// Closes the underlying file descriptor.
@@ -522,7 +514,7 @@ implement TcpStream {
 	/// **See also:** `TcpStream.read`, `TcpStream.write`.
 	pub fn close(self: &TcpStream, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
@@ -536,18 +528,18 @@ implement TcpStream {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(NetError::Errno(-1));
+	return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 }
 
 	/// Returns the underlying file descriptor without transferring
@@ -569,7 +561,7 @@ implement TcpStream {
 	/// **Parameters:**
 	/// - `enabled` — `true` to disable Nagle, `false` to enable.
 	///
-	/// **Returns:** `Ok(void)` on success.  `Err(NetError::Errno(code))`
+	/// **Returns:** `Ok(void)` on success.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))`
 	/// if the setsockopt call fails.
 	///
 	/// **See also:** `TcpStream.nodelay`.
@@ -578,7 +570,7 @@ implement TcpStream {
 		val r = thread.net_set_nodelay(self.fd, flag);
 		if r < 0 {
 			val err = thread.io_errno();
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
 		return core.Result::Ok(core.void_value());
 	}
@@ -586,7 +578,7 @@ implement TcpStream {
 	/// Reads the current `TCP_NODELAY` setting on the stream.
 	///
 	/// **Returns:** `Ok(true)` if Nagle is disabled, `Ok(false)` if
-	/// enabled.  `Err(NetError::Errno(code))` if the getsockopt call
+	/// enabled.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` if the getsockopt call
 	/// fails.
 	///
 	/// **See also:** `TcpStream.set_nodelay`.
@@ -594,7 +586,7 @@ implement TcpStream {
 		val r = thread.net_get_nodelay(self.fd);
 		if r < 0 {
 			val err = thread.io_errno();
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
 		return core.Result::Ok(r != 0);
 	}
@@ -653,13 +645,13 @@ implement UdpSocket {
 	/// - `buf` — datagram payload.
 	/// - `timeout` — maximum time to wait for the send to be accepted.
 	///
-	/// **Returns:** `Ok(n)` bytes sent.  `Err(NetError::WouldBlock)` on
-	/// timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	/// **Returns:** `Ok(n)` bytes sent.  `Err(NetError(kind=NET_ERROR_KIND_WOULD_BLOCK))` on
+	/// timeout.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` on syscall failure.
 	///
 	/// **See also:** `UdpSocket.send_to_v6`, `UdpSocket.recv_from`.
 	pub fn send_to(self: &UdpSocket, addr: &SocketAddr, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
@@ -675,18 +667,18 @@ implement UdpSocket {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// IPv6 form of `UdpSocket.send_to`.
@@ -701,7 +693,7 @@ implement UdpSocket {
 	/// **See also:** `UdpSocket.send_to`, `UdpSocket.recv_from_v6`.
 	pub fn send_to_v6(self: &UdpSocket, addr: &SocketAddrV6, buf: &io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
@@ -717,18 +709,18 @@ implement UdpSocket {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// Receives the next IPv4 UDP datagram into `buf`, recording the
@@ -745,13 +737,13 @@ implement UdpSocket {
 	/// - `buf` — destination buffer.
 	/// - `timeout` — maximum time to wait for a datagram.
 	///
-	/// **Returns:** `Ok(n)` bytes received.  `Err(NetError::WouldBlock)`
-	/// on timeout.  `Err(NetError::Errno(code))` on syscall failure.
+	/// **Returns:** `Ok(n)` bytes received.  `Err(NetError(kind=NET_ERROR_KIND_WOULD_BLOCK))`
+	/// on timeout.  `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` on syscall failure.
 	///
 	/// **See also:** `UdpSocket.recv_from_v6`, `UdpSocket.send_to`.
 	pub fn recv_from(self: &UdpSocket, addr_out: &mut SocketAddr, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
@@ -768,18 +760,18 @@ implement UdpSocket {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// IPv6 form of `UdpSocket.recv_from`.
@@ -795,7 +787,7 @@ implement UdpSocket {
 	/// **See also:** `UdpSocket.recv_from`, `UdpSocket.send_to_v6`.
 	pub fn recv_from_v6(self: &UdpSocket, addr_out: &mut SocketAddrV6, buf: &mut io.Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val ptr = io.buffer_ptr_mut(buf);
 		val len = io.buffer_capacity_mut(buf);
@@ -812,18 +804,18 @@ implement UdpSocket {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 1, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
-		return core.Result::Err(NetError::Errno(-1));
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 	}
 
 	/// Closes the underlying file descriptor.
@@ -841,7 +833,7 @@ implement UdpSocket {
 	/// **See also:** `UdpSocket.send_to`, `UdpSocket.recv_from`.
 	pub fn close(self: &UdpSocket, timeout: conc.Duration) nothrow -> core.Result<Void, NetError> {
 		if thread.vt_current() == 0 {
-			return core.Result::Err(NetError::RequiresVirtualThread());
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
 		}
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
@@ -855,18 +847,18 @@ implement UdpSocket {
 			}
 			if err == NET_EAGAIN {
 				if deadline <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				val remaining = _remaining_ms(deadline);
 				if remaining <= 0 {
-					return core.Result::Err(NetError::WouldBlock());
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
 				}
 				_block_on_io(self.fd, 4, deadline);
 				continue;
 			}
-			return core.Result::Err(NetError::Errno(err));
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 	}
-	return core.Result::Err(NetError::Errno(-1));
+	return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
 }
 
 	/// Test alias for `UdpSocket.local_port` retained for symmetry

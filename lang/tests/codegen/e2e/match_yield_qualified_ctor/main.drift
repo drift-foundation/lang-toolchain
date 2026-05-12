@@ -3,11 +3,11 @@ module m;
 import std.concurrent as conc;
 
 pub fn main() nothrow -> Int {
-	val e = conc.ConcurrencyError::Closed();
+	val e = conc.SaturationPolicy::Block();
 	val out = match e {
-		conc.ConcurrencyError::Closed() => {
+		conc.SaturationPolicy::Block() => {
 			yield match e {
-				conc.ConcurrencyError::Closed() => { 7 },
+				conc.SaturationPolicy::Block() => { 7 },
 				default => { 1 }
 			}
 		},

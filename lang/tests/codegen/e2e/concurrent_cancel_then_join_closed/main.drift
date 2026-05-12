@@ -6,19 +6,24 @@ fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	t.cancel();
 	var res1 = t.join();
-	var ok1 = match res1 {
-		Err(err) => { yield match err { Cancelled => { true }, default => { false } } },
-		Ok(_v) => { false },
-		default => { false },
-	};
+	var ok1 = false;
+	match res1 {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { ok1 = true; }
+		},
+		Ok(_v) => {},
+		default => {},
+	}
 	if not ok1 {
 		return 2;
 	}
 	var res2 = t.join();
-	return match res2 {
-		Err(err) => { yield match err { Closed => { 0 }, default => { 3 } }
+		match res2 {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+			return 3;
 		},
-		Ok(_v) => { 4 },
-		default => { 4 },
-	};
+		Ok(_v) => { return 4; },
+		default => { return 4; },
+	}
 }

@@ -13,15 +13,12 @@ pub fn main() nothrow -> Int {
 		default => { return 2; }
 	}
 	var r2 = t.join();
-	var out = match r2 {
+	match r2 {
 		Err(e) => {
-			yield match e {
-				conc.ConcurrencyError::Closed() => { acc },
-				default => { 3 }
-			}
+			if e.kind == conc.CONCURRENCY_KIND_CLOSED { return acc; }
+			return 3;
 		},
-		Ok(_) => { 4 },
-		default => { 5 }
-	};
-	return out;
+		Ok(_) => { return 4; },
+		default => { return 5; }
+	}
 }

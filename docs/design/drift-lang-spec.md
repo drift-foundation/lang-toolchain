@@ -3705,13 +3705,27 @@ ConfiguredFile.close()                       -> Result<Void, IoError>
 
 ### 18.3. Error model
 
-`IoError` is flat:
+`IoError` is a flat `pub error` with a string `kind` discriminator and
+an integer `code`:
 
 ```drift
-variant IoError { Errno(code: Int) }
+pub error IoError {
+    kind: String,
+    code: Int,
+}
+
+// kind discriminators
+pub const IO_ERROR_KIND_ERRNO: String = "errno";
+pub const IO_ERROR_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
 ```
 
-Sentinel codes:
+`kind = IO_ERROR_KIND_ERRNO` carries the kernel's errno (possibly one of
+the `IO_ERR_*` sentinels for translated would-block / EOF / line-too-long
+conditions) in `code`.  `kind = IO_ERROR_KIND_REQUIRES_VTHREAD` is the
+synthetic case returned when the call was made from outside a virtual
+thread; `code = -2` for back-compat with `io_error_code`.
+
+Sentinel codes (for `kind = IO_ERROR_KIND_ERRNO`):
 
 - `IO_ERR_WOULD_BLOCK`
 - `IO_ERR_EOF`
@@ -3729,12 +3743,18 @@ fn is_eof_error(e: IoError) -> Bool
 fn is_line_too_long_error(e: IoError) -> Bool
 ```
 
+Because `IoError` is a `pub error`, the compiler synthesizes
+`implement core.Throw for IoError` and `implement core.Diagnostic for
+IoError`; `Result<T, IoError>.or_throw()` and auto-try inside `throws`
+functions unwrap directly into `catch io:IoError(e)` with `e.kind` and
+`e.code` available as typed-projected fields.
+
 ### 18.4. `read_line` semantics
 
 - Returns `Ok(line)` without trailing `\n` (newline is consumed).
 - Consecutive newlines produce consecutive empty strings (`Ok("")`).
-- EOF before any byte returns `Err(Errno(IO_ERR_EOF))`.
-- If bytes exceed `max_line_bytes`, returns `Err(Errno(IO_ERR_LINE_TOO_LONG))`.
+- EOF before any byte returns `Err(IoError(kind=IO_ERROR_KIND_ERRNO, code=IO_ERR_EOF))`.
+- If bytes exceed `max_line_bytes`, returns `Err(IoError(kind=IO_ERROR_KIND_ERRNO, code=IO_ERR_LINE_TOO_LONG))`.
 
 ### 18.5. Console wrappers
 

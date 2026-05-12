@@ -15,11 +15,9 @@ pub fn main() nothrow -> Int {
 			match lr2 {
 				Ok(_l2) => { return 2; },
 				Err(e) => {
-					val code = match e {
-						Errno(c) => { c },
-						WouldBlock => { 201 },
-						default => { 202 }
-					};
+					var code = 202;
+					if e.kind == net.NET_ERROR_KIND_ERRNO { code = e.code; }
+					if e.kind == net.NET_ERROR_KIND_WOULD_BLOCK { code = 201; }
 					if code == 98 { return 0; }
 					return code;
 				},

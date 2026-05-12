@@ -19,7 +19,7 @@ module main;
 import std.concurrent as conc;
 
 fn main() nothrow -> Int {
-	val f = conc.ConcurrencyError::Failed;
+	val f = conc.SaturationPolicy::Block;
 	return 0;
 }
 """.lstrip()

@@ -5,17 +5,16 @@ import std.concurrent as conc;
 fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	var res = t.join_timeout(conc.Duration(millis = 0));
-	return match res {
-		Err(err) => { yield match err {
-				Timeout => { 0 },
-				Busy => { 1 },
-				Cancelled => { 1 },
-				Closed => { 1 },
-				Failed(_e) => { 1 },
-				default => { 1 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+			if err.kind == conc.CONCURRENCY_KIND_BUSY { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_CLOSED { return 1; }
+			if err.kind == conc.CONCURRENCY_KIND_FAILED { return 1; }
+			return 1;
 		},
-		Ok(_v) => { 2 },
-		default => { 2 },
-	};
+		Ok(_v) => { return 2; },
+		default => { return 2; },
+	}
 }

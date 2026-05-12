@@ -84,39 +84,21 @@ implement core.Copy for TokenSpan {
 // ── Error types ─────────────────────────────────────────────────────
 
 /// Error from UTF-8 validation operations.
-pub struct Utf8Error {
-	pub tag: String,
-	pub offset: Int
-}
-
-implement core.Diagnostic for Utf8Error {
-	pub fn to_json_text(self: &Utf8Error) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for Utf8Error {
-	pub fn throw_self(self: Utf8Error) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+///
+/// `pub error`: compiler synthesizes `core.Throw` / `core.Diagnostic`
+/// so `or_throw()` and auto-try unwrap it directly.
+pub error Utf8Error {
+	tag: String,
+	offset: Int,
 }
 
 /// Error from text operations such as `substring` or `char_at`.
-pub struct TextError {
-	pub tag: String,
-	pub offset: Int
-}
-
-implement core.Diagnostic for TextError {
-	pub fn to_json_text(self: &TextError) nothrow -> String {
-		return core.diagnostic_json_string(&self.tag);
-	}
-}
-
-implement core.Throw for TextError {
-	pub fn throw_self(self: TextError) throws {
-		throw std.err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
-	}
+///
+/// `pub error`: compiler synthesizes `core.Throw` / `core.Diagnostic`
+/// so `or_throw()` and auto-try unwrap it directly.
+pub error TextError {
+	tag: String,
+	offset: Int,
 }
 
 // ── Internal helpers ────────────────────────────────────────────────

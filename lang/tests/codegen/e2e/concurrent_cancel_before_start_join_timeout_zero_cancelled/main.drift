@@ -6,13 +6,12 @@ fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	t.cancel();
 	var res = t.join_timeout(conc.Duration(millis = 0));
-	return match res {
-		Err(err) => { yield match err {
-				Cancelled => { 0 },
-				default => { 1 },
-			}
+		match res {
+		Err(err) => {
+			if err.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+			return 1;
 		},
-		Ok(_v) => { 2 },
-		default => { 2 },
-	};
+		Ok(_v) => { return 2; },
+		default => { return 2; },
+	}
 }
