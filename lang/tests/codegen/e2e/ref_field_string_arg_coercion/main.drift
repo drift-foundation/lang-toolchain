@@ -1,0 +1,23 @@
+// Regression pin (0.31.69): `&T → T` arg auto-dup must also work
+// when the argument is a struct-field projection of ref type,
+// not just a bare local — mirrors the app-shape
+// `target.set(entry.key, ...)` over a `HashMapItemRef<String, V>`
+// (where `entry.key` is `&String`).
+//
+// The implicit coercion lowers `take(e.key)` to
+// `take(*e.key)` and string_arc retains the loaded String for
+// the call-arg ownership transfer.
+
+module main;
+
+pub struct ItemRef { pub key: &String }
+
+fn take(k: String) nothrow -> Int {
+	return k.byte_length();
+}
+
+fn main() nothrow -> Int {
+	val s: String = "abc";
+	val e = ItemRef(key = &s);
+	return take(e.key);
+}

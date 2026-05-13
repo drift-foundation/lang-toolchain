@@ -7940,9 +7940,24 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-				return record_expr(expr, inner_ty)
+					# When subject is `&T`, HIR→MIR lowering
+					# (`_visit_expr_HCopy` in stage2/hir_to_mir.py)
+					# derefs through the ref and copies the inner
+					# value — the produced MIR temp has type `T`,
+					# not `&T`.  Record the HCopy expression type
+					# to match; otherwise downstream coercion (e.g.
+					# `&T → T` arg auto-dup) sees a ref type, wraps
+					# another `HUnary(DEREF)` on top of an
+					# already-dereffed value, and codegen emits
+					# a bogus `load %DriftString, ptr <retain>`.
+					recorded_ty = inner_ty
+					if inner_ty is not None:
+						td_inner = self.type_table.get(inner_ty)
+						if td_inner.kind is TypeKind.REF and td_inner.param_types:
+							recorded_ty = td_inner.param_types[0]
+					return record_expr(expr, recorded_ty)
 
-			# Calls.
+				# Calls.
 			if isinstance(expr, H.HCall):
 				# `share x` expression form (0.31.20): the AST→HIR
 				# desugaring at `stage1/ast_to_hir.py::_visit_expr_Share`

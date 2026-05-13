@@ -1,5 +1,46 @@
 # Drift development history
 
+## 2026-05-13 (HCopy `&T` ref-typing fix)
+- **`HCopy` of a ref subject now records type `T`, not `&T`
+  (release 0.31.69, ABI unchanged at 14).**  Closes the codegen
+  regression reported by the drift-web app team after 0.31.68
+  shipped: `target.set(copy entry.key, ...)` over a
+  `HashMap<String, JsonNode>` iterator (`HashMapItemRef`)
+  compiled to invalid LLVM IR — clang rejected
+  `load %DriftString, ptr <retain-result>` because the retain
+  helper returns `%DriftString` by value.
+
+  Root cause: the type-checker recorded `HCopy(<&T>)` as type
+  `&T`, but the HIR→MIR lowering at `stage2/hir_to_mir.py::
+  _visit_expr_HCopy` derefs through the ref and copies the
+  inner value (producing `T`).  The 0.31.68 `&T → T` arg auto-
+  dup coercion at the call boundary read the (wrong) ref type
+  from HCopy's expression slot and wrapped a redundant
+  `HUnary(DEREF)` on top of the already-derefed retain result —
+  emitting the bogus load.
+
+  Fix: align the type-checker with the lowering.
+  `_visit_expr_HCopy` in `type_checker.py:7943-7957` now unwraps
+  one level of `REF` when recording the HCopy expression type,
+  so downstream coercion sees `String` and no second deref is
+  inserted.
+
+  Regression coverage (e2e, both shapes the team flagged):
+  - `lang/tests/codegen/e2e/copy_ref_field_string_no_extra_load`
+    — explicit `copy <struct_field: &String>` minimal repro
+    (matches `target.set(copy entry.key, ...)`).
+  - `lang/tests/codegen/e2e/ref_field_string_arg_coercion` —
+    implicit-coercion sibling (struct-field projection `&String`
+    flowing into a `String` parameter without explicit `copy`).
+
+  Per team process improvement: the 0.31.68 probe set proved
+  the new `&T → T` syntax via bare locals + memcheck for
+  retain/release balance, but never compiled a struct-field
+  projection through LLVM.  The new e2e pair closes that
+  expression-shape gap.
+
+  ABI unchanged.  Bump is compiler-only (0.31.68 → 0.31.69).
+
 ## 2026-05-13 (Symmetric `&T → T` arg coercion)
 - **Symmetric `&T → T` / `&mut T → T` call-argument coercion
   (release 0.31.68, ABI unchanged at 14).**  Mirrors the existing

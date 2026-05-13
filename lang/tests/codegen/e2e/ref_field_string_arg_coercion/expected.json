@@ -1,0 +1,4 @@
+{
+  "description": "e2e: `&T → T` arg coercion with the arg being a struct-field projection of ref type (struct.key: &String → take(k: String))",
+  "exit_code": 3
+}

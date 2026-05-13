@@ -1,0 +1,22 @@
+// Regression pin (0.31.69): `copy <struct_field: &String>` must
+// type-check as `String` (not `&String`), so downstream coercion
+// doesn't wrap a redundant deref on top of the already-derefed
+// retain result.  Pre-fix this compiled to bogus LLVM IR
+// (`load %DriftString, ptr <retain-result>` — load on a value).
+//
+// Mirrors the app-shape `target.set(copy entry.key, ...)` over a
+// `HashMapItemRef<String, V>` where `entry.key` is `&String`.
+
+module main;
+
+pub struct ItemRef { pub key: &String }
+
+fn take(k: String) nothrow -> Int {
+	return k.byte_length();
+}
+
+fn main() nothrow -> Int {
+	val s: String = "abc";
+	val e = ItemRef(key = &s);
+	return take(copy e.key);
+}

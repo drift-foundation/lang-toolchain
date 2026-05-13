@@ -1,0 +1,4 @@
+{
+  "description": "e2e: `copy <struct_field: &String>` does not emit a redundant load on top of drift_string_retain (regression from 0.31.68 → 0.31.69 fix)",
+  "exit_code": 3
+}
