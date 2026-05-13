@@ -178,8 +178,11 @@ pub trait Formatter {
 /// payload.
 ///
 /// Field naming matches the JSON wire format produced by the default
-/// formatter (`tm`, `ev`, `level`, `logger`, `vtid`, `ptid`,
-/// `attrs`).
+/// formatter (`tm`, `ev`, `level`, `logger`, `vtid`, `attrs`).
+/// `ptid` is opt-in via `LoggerConfigBuilder.include_ptid(true)` —
+/// off by default since the OS thread is shared across many virtual
+/// threads under VT scheduling and is not meaningful at app
+/// granularity.
 ///
 /// **See also:** `Sink.write`, `Formatter.format`.
 pub struct LogRecord {
@@ -301,7 +304,17 @@ pub struct LoggerConfig {
 	pub enqueue_timeout: conc.Duration,
 	pub backpressure_policy: BackpressurePolicy,
 	pub formatter: FormatterKind,
-	pub resolver: conc.Arc<ContextResolver>
+	pub resolver: conc.Arc<ContextResolver>,
+	/// Include the OS-thread ID (`ptid`) in the default
+	/// `JsonIso8601` output.  Default `false` because under VT
+	/// scheduling, the OS thread is shared across many virtual
+	/// threads and is not meaningful at application granularity —
+	/// `vtid` (always emitted) is the unit that corresponds to a
+	/// request / fiber / scoped piece of work.  Opt in via
+	/// `LoggerConfigBuilder.include_ptid(true)` for runtime /
+	/// scheduler debugging where the OS thread identity is the
+	/// quantity of interest.
+	pub include_ptid: Bool
 }
 
 /// Mutable builder for `LoggerConfig`.
@@ -323,7 +336,8 @@ pub struct LoggerConfigBuilder {
 	enqueue_timeout: conc.Duration,
 	backpressure_policy: BackpressurePolicy,
 	formatter: FormatterKind,
-	resolver: conc.Arc<ContextResolver>
+	resolver: conc.Arc<ContextResolver>,
+	include_ptid: Bool
 }
 
 /// Live logger handle.
@@ -356,7 +370,8 @@ struct LoggerRuntimeState {
 	stderr_cap: Optional<io.ProcessStderrCapability>,
 	queue: sync.MpscQueue<Byte>,
 	drain_lock: sync.AtomicBool,
-	resolver: conc.Arc<ContextResolver>
+	resolver: conc.Arc<ContextResolver>,
+	include_ptid: Bool
 }
 
 struct LogEnvelope {
@@ -446,7 +461,8 @@ pub fn config_builder() nothrow -> LoggerConfigBuilder {
 		enqueue_timeout = conc.Duration(millis = 1000),
 		backpressure_policy = BackpressurePolicy::BlockWithTimeout(),
 		formatter = FormatterKind::JsonIso8601(),
-		resolver = conc.arc(NoContextResolver()).as_interface<type ContextResolver>()
+		resolver = conc.arc(NoContextResolver()).as_interface<type ContextResolver>(),
+		include_ptid = false
 	);
 }
 
@@ -585,6 +601,22 @@ implement LoggerConfigBuilder {
 		return self;
 	}
 
+	/// Toggle whether the default `JsonIso8601` formatter emits the
+	/// `ptid` (OS thread ID) field on every record.
+	///
+	/// Default is `false`: under Drift's virtual-thread scheduling
+	/// the OS thread runs work for many VTs over its lifetime, so
+	/// `ptid` does not identify anything meaningful at application
+	/// granularity.  `vtid` is always emitted and is the unit that
+	/// corresponds to a request / fiber / scoped piece of work.
+	///
+	/// Pass `true` for runtime / scheduler debugging contexts where
+	/// the OS thread identity is the quantity of interest.
+	pub fn include_ptid(self: &mut LoggerConfigBuilder, on: Bool) nothrow -> &mut LoggerConfigBuilder {
+		self.include_ptid = on;
+		return self;
+	}
+
 	/// Materializes the builder into a `LoggerConfig` value
 	/// suitable for `create_logger`.
 	pub fn build(self: &LoggerConfigBuilder) nothrow -> LoggerConfig {
@@ -596,7 +628,8 @@ implement LoggerConfigBuilder {
 			enqueue_timeout = self.enqueue_timeout,
 			backpressure_policy = self.backpressure_policy,
 			formatter = self.formatter,
-			resolver = self.resolver.clone()
+			resolver = self.resolver.clone(),
+			include_ptid = self.include_ptid
 		);
 	}
 }
@@ -686,7 +719,8 @@ fn _runtime_state_from_cfg(cfg: &LoggerConfig, stderr_cap: Optional<io.ProcessSt
 		stderr_cap = stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(cfg.queue_capacity),
 		drain_lock = sync.atomic_bool(false),
-		resolver = cfg.resolver.clone()
+		resolver = cfg.resolver.clone(),
+		include_ptid = cfg.include_ptid
 	);
 }
 
@@ -700,7 +734,8 @@ fn _clone_runtime_state(st: &LoggerRuntimeState, min_level: Level) nothrow -> Lo
 		stderr_cap = st.stderr_cap,
 		queue = sync.mpsc_queue<type Byte>(st.queue_capacity),
 		drain_lock = sync.atomic_bool(false),
-		resolver = st.resolver.clone()
+		resolver = st.resolver.clone(),
+		include_ptid = st.include_ptid
 	);
 }
 
@@ -767,8 +802,18 @@ fn _emit_envelope_handle(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow 
 		// vtid/ptid were captured synchronously at emit time on the
 		// caller's thread — use the stored snapshot, never probe
 		// here (the drain path may be running on a completely
-		// different VT/OS thread than the emitter).
-		val line = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"vtid\":" + format.format_int(env.vtid) + ",\"ptid\":" + format.format_int(env.ptid) + "}";
+		// different VT/OS thread than the emitter).  `ptid` is
+		// opt-in (default off) because under VT scheduling the OS
+		// thread is shared across many virtual threads — `vtid` is
+		// the unit that corresponds to a request / fiber / scoped
+		// piece of work and is always emitted.
+		val head = "{\"tm\":\"" + _json_escape(tm) + "\",\"level\":\"" + _level_text_from_rank(env.level_rank) + "\"," + env.payload_json + ",\"vtid\":" + format.format_int(env.vtid);
+		var line: String = "";
+		if st.include_ptid {
+			line = head + ",\"ptid\":" + format.format_int(env.ptid) + "}";
+		} else {
+			line = head + "}";
+		}
 		val _ = _sink_write_line(st, line);
 		core.drop_value(move env);
 		mem.dealloc<type LogEnvelope>(raw);

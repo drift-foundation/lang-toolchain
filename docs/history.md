@@ -1,5 +1,90 @@
 # Drift development history
 
+## 2026-05-13 (Friendly use-move + `ptid` opt-in)
+- **MIR by-value-arg validator now emits friendly `use move`
+  diagnostic instead of `internal: MIR validation contract failure`
+  (release 0.31.70, ABI unchanged at 14).**  Closes the diagnostic
+  UX issue reported by the app team: passing a non-Copy local
+  by-value to an owned parameter without `move` previously
+  surfaced as
+
+      error: internal: MIR validation contract failure
+             (validate_mir_call_byvalue_moves)
+             (MIR invariant violation: by-value arg must MoveOut
+              non-Copy local in <fn>) [E-AUTO-...]
+
+  The `internal:` prefix + MIR framing made user code look like a
+  compiler bug, when the fix is just `f(move x)` instead of `f(x)`.
+
+  `validate_mir_call_byvalue_moves` now takes a `diagnostics` list
+  and, when the violation is detected on a `LoadLocal` / `LoadRef`
+  source, appends the same friendly message format the type-checker
+  uses for value-position `_require_copy_value` violations:
+
+      cannot copy 'handler_obj': type 'std.json.JsonObject' is not
+      Copy (use move handler_obj)
+
+  The `AssertionError` path is retained for genuine compiler
+  invariants (unresolved Copy status), which should remain
+  developer-facing.  If the user-error path ever fires for code
+  that should compile cleanly, that's now a separate checker gap.
+
+  Pipeline-boundary discipline: after appending all user-facing
+  diagnostics, the validator raises an internal sentinel
+  `UserFacingMirDiagnostic` so the MIR-validator driver in
+  `driftc.py::_run_mir_validator` stops the compile at this
+  boundary.  Without that signal the invalid MIR would flow into
+  cleanup / SSA / throw passes before a later diagnostic gate
+  noticed — fragile and slow to fail.  `_run_mir_validator`
+  catches the sentinel and routes through the same not-OK return
+  path used for AssertionError, minus the internal-error
+  wrap.
+
+  Regression coverage:
+  - `lang/tests/driver/test_use_move_call_arg_friendly_diag.py` —
+    3 probes: bare-local owned-arg shape, match-arm binder shape
+    (no `__match_binder_` leak), and positive companion that
+    `move <local>` makes the call compile.
+
+- **`std.log` JsonIso8601 default no longer emits `ptid`.**
+  Under Drift's VT scheduling, the OS thread (`ptid`) runs work
+  for many virtual threads over its lifetime, so its value does
+  not identify anything meaningful at app granularity.  `vtid` is
+  the unit that corresponds to a request / fiber / scoped piece
+  of work and is always emitted.
+
+  Default behavior change: records now look like
+
+      {"tm":"...","ev":"req-out","level":"info","logger":"svc",
+       "attrs":{...},"vtid":2}
+
+  (no `,"ptid":137681778505408` suffix).
+
+  Opt back in for runtime / scheduler debugging via the new
+  `LoggerConfigBuilder.include_ptid(true)` knob.
+
+  Implementation:
+  - New `include_ptid: Bool` field on `LoggerConfig`,
+    `LoggerConfigBuilder`, and `LoggerRuntimeState` (default
+    `false`; `config_builder()` seeds it).
+  - `_emit_envelope_handle` JSON formatter conditionally appends
+    `,"ptid":<int>` only when the runtime state's flag is set.
+  - `LogEnvelope` still carries `ptid` as a field (captured at
+    emit time on the caller's thread) so custom Sinks /
+    Formatters that want it can read through.
+
+  Regression coverage:
+  - `lang/tests/driver/test_log_vtid_ptid.py` — pinned the new
+    default-absent + opt-in-present matrix (`test_ptid_absent_by_default`,
+    `test_ptid_present_when_opted_in`).
+  - `lang/tests/codegen/e2e/std_log_include_ptid_opt_in/` — new
+    e2e proving the opt-in JSON shape end-to-end.
+  - 7 existing std_log / macro_log e2e expected.json files
+    updated to drop the legacy `"ptid": "__ANY__"` from the
+    canonical record shape.
+
+  ABI unchanged.  Bump is compiler+stdlib (0.31.69 → 0.31.70).
+
 ## 2026-05-13 (HCopy `&T` ref-typing fix)
 - **`HCopy` of a ref subject now records type `T`, not `&T`
   (release 0.31.69, ABI unchanged at 14).**  Closes the codegen

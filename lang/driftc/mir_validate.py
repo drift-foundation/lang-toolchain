@@ -5,10 +5,94 @@ import re
 from typing import Callable, Mapping
 
 from lang.driftc.core.function_id import FunctionId, function_symbol
-from lang.driftc.checker import FnSignature
+from lang.driftc.checker import FnSignature, user_facing_binding_name
+from lang.driftc.core.diagnostics import Diagnostic
+from lang.driftc.core.span import Span
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang.driftc.stage2 import mir_nodes as M
+
+
+class UserFacingMirDiagnostic(Exception):
+	"""Internal sentinel for the MIR validator pipeline driver
+	(`_run_mir_validator` in driftc.py).
+
+	A validator raises this *after* appending one or more
+	user-facing `Diagnostic`s to signal "user-error shape detected,
+	stop the pipeline at this boundary".  Distinct from
+	`AssertionError`, which the driver wraps as
+	`internal: <prefix> (<err>)` — that framing is appropriate for
+	genuine compiler invariant violations, not user code.
+
+	Without this signal the validator would return normally, the
+	pipeline driver would treat it as successful, and the invalid
+	MIR would flow into cleanup / SSA / throw passes before
+	tripping a later diagnostic gate — fragile and slow to fail.
+	The caller in driftc.py catches this sentinel and stops the
+	compile via the same not-OK path AssertionError uses, minus
+	the internal-error wrap.
+	"""
+
+
+def _pretty_type_for_diag(type_table: TypeTable, ty: TypeId) -> str:
+	"""Render a user-facing type name for use-move diagnostics.
+	Mirrors the type-checker's `_pretty_type_name` for the cases
+	this validator can produce: nominal kinds (struct / variant /
+	interface) with optional type-args, plus `&T` and `Array<T>`.
+	Internal kinds (FUNCTION / FNRESULT) shouldn't appear as
+	by-value owned param types in practice.
+	"""
+	td = type_table.get(ty)
+	if td.kind is TypeKind.REF and td.param_types:
+		return f"&{_pretty_type_for_diag(type_table, td.param_types[0])}"
+	name = td.name
+	if td.module_id and td.module_id not in {"lang.core"}:
+		name = f"{td.module_id}.{name}"
+	type_args: list[TypeId] = []
+	if td.kind is TypeKind.STRUCT:
+		inst = type_table.get_struct_instance(ty)
+		if inst is not None:
+			type_args = list(inst.type_args)
+	elif td.kind is TypeKind.INTERFACE:
+		inst = type_table.get_interface_instance(ty)
+		if inst is not None:
+			type_args = list(inst.type_args)
+	elif td.kind is TypeKind.VARIANT:
+		inst = type_table.get_variant_instance(ty)
+		if inst is not None:
+			type_args = list(inst.type_args)
+	elif td.param_types:
+		type_args = list(td.param_types)
+	if type_args:
+		args = ", ".join(_pretty_type_for_diag(type_table, t) for t in type_args)
+		return f"{name}<{args}>"
+	return name
+
+
+def _diag_user_facing_use_move(
+	*,
+	diagnostics: list[Diagnostic],
+	type_table: TypeTable,
+	src: M.MInstr | None,
+	param_ty: TypeId,
+	instr: M.MInstr,
+) -> None:
+	"""Append a friendly 'cannot copy NAME: type T is not Copy (use
+	move NAME)' diagnostic for a non-Copy local/ref-loaded value
+	that reached a by-value owned call arg slot without `MoveOut`.
+	Mirrors the message format of the type-checker's value-position
+	gate at `type_checker.py` `_require_copy_value`.
+	"""
+	pretty = _pretty_type_for_diag(type_table, param_ty)
+	span = getattr(instr, "span", Span()) or Span()
+	if isinstance(src, M.LoadLocal):
+		name = user_facing_binding_name(src.local)
+		msg = f"cannot copy '{name}': type '{pretty}' is not Copy (use move {name})"
+	else:
+		# LoadRef source — no single binding name; phrase the message
+		# without one but still suggest `move`.
+		msg = f"cannot copy value of type '{pretty}' (use move <expr>)"
+	diagnostics.append(Diagnostic(message=msg, severity="error", span=span, phase="checker"))
 
 
 def _canonicalize_forward_nominal_type_id(
@@ -844,8 +928,28 @@ def validate_mir_call_byvalue_moves(
 	funcs: Mapping[FunctionId, M.MirFunc],
 	signatures_by_id: Mapping[FunctionId, FnSignature],
 	type_table: TypeTable,
+	*,
+	diagnostics: list[Diagnostic] | None = None,
 ) -> None:
-	"""Ensure non-Copy by-value call args originate from MoveOut (or non-local producers)."""
+	"""Ensure non-Copy by-value call args originate from MoveOut (or non-local producers).
+
+	When `diagnostics` is provided, user-facing violations
+	(`LoadLocal` / `LoadRef` source of a non-Copy owned arg with
+	no `MoveOut`) are appended as a friendly "cannot copy NAME:
+	type T is not Copy (use move NAME)" diagnostic — mirroring the
+	type-checker's value-position gate — instead of raising
+	`AssertionError`.  The AssertionError path is retained for
+	genuine compiler-side invariant violations (unresolved Copy
+	status), which should remain developer-facing.
+
+	If at least one user-facing diagnostic was appended, the
+	function raises `UserFacingMirDiagnostic` after the scan
+	completes — collecting all violations in one pass so the user
+	sees the full set, then stopping the pipeline at the validator
+	boundary so cleanup / SSA / throw passes never see the
+	invalid MIR.
+	"""
+	user_diag_emitted = False
 	def _copy_status_can_be_unknown(tid: TypeId) -> bool:
 		seen: set[TypeId] = set()
 
@@ -908,6 +1012,16 @@ def validate_mir_call_byvalue_moves(
 						if isinstance(src, M.MoveOut):
 							continue
 						if isinstance(src, (M.LoadLocal, M.LoadRef)):
+							if diagnostics is not None:
+								_diag_user_facing_use_move(
+									diagnostics=diagnostics,
+									type_table=type_table,
+									src=src,
+									param_ty=param_ty,
+									instr=instr,
+								)
+								user_diag_emitted = True
+								continue
 							raise AssertionError(
 								f"MIR invariant violation: by-value arg must MoveOut non-Copy local in {function_symbol(fn_id)}"
 							)
@@ -929,6 +1043,23 @@ def validate_mir_call_byvalue_moves(
 						if isinstance(src, M.MoveOut):
 							continue
 						if isinstance(src, (M.LoadLocal, M.LoadRef)):
+							if diagnostics is not None:
+								_diag_user_facing_use_move(
+									diagnostics=diagnostics,
+									type_table=type_table,
+									src=src,
+									param_ty=param_ty,
+									instr=instr,
+								)
+								user_diag_emitted = True
+								continue
 							raise AssertionError(
 								f"MIR invariant violation: by-value arg must MoveOut non-Copy local in {function_symbol(fn_id)}"
 							)
+	if user_diag_emitted:
+		# Stop the pipeline at the validator boundary; the
+		# friendly diagnostic(s) are already in `diagnostics`.
+		# `_run_mir_validator` in driftc.py catches this sentinel
+		# and routes through the same not-OK return path used for
+		# AssertionError, without the internal-error wrap.
+		raise UserFacingMirDiagnostic()

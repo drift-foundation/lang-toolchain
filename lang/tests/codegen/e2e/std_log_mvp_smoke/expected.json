@@ -10,7 +10,7 @@
         "attempts": 3,
         "status": 401
       },
-      "vtid": "__ANY__", "ptid": "__ANY__"
+      "vtid": "__ANY__"
     },
     {
       "tm": "__ANY__",
@@ -21,7 +21,7 @@
         "attempts": 3,
         "status": 401
       },
-      "vtid": "__ANY__", "ptid": "__ANY__"
+      "vtid": "__ANY__"
     }
   ]
 }

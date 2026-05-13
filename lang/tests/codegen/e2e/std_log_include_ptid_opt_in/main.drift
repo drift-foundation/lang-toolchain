@@ -1,0 +1,25 @@
+// Pins the `LoggerConfigBuilder.include_ptid(true)` opt-in path.
+// Default JsonIso8601 omits `ptid` because under VT scheduling the
+// OS thread is shared across many virtual threads and is not
+// meaningful at app granularity (see `std_log_resolver_active`).
+// Runtime / scheduler debugging contexts that DO care about the
+// OS thread ID can opt back in via this knob.
+
+module m;
+
+import std.log as log;
+
+fn run() -> Int {
+	var b = log.config_builder();
+	b.min_level(log.Level::Debug());
+	b.include_ptid(true);
+	val main = log.create_logger("svc", b.build());
+	main.info("ptid-on-info");
+	main.debug("ptid-on-debug");
+	main.error("ptid-on-error");
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	return try run() catch { 99 };
+}

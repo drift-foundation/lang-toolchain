@@ -106,6 +106,7 @@ from lang.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang.driftc.stage4 import run_throw_checks
 from lang.driftc.stage4 import MirToSSA
 from lang.driftc.mir_validate import (
+	UserFacingMirDiagnostic,
 	validate_mir_array_alloc_invariants,
 	validate_mir_array_copy_invariants,
 	validate_mir_call_byvalue_moves,
@@ -6925,6 +6926,18 @@ def compile_stubbed_funcs(
 			try:
 				action()
 				return True
+			except UserFacingMirDiagnostic:
+				# Validator emitted user-facing diagnostic(s) into
+				# `checked.diagnostics` already; stop the pipeline at
+				# this boundary without wrapping as an internal error.
+				# Distinct from AssertionError below, which IS the
+				# internal-error path for genuine invariant violations.
+				_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+				if return_checked:
+					if return_ssa:
+						return False
+					return False
+				return False
 			except AssertionError as err:
 				_append_boundary_contract_diag(
 					checked,
@@ -6985,7 +6998,7 @@ def compile_stubbed_funcs(
 				[
 					("validate_mir_iface_init_invariants", lambda: validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)),
 					("validate_mir_array_copy_invariants", lambda: validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)),
-					("validate_mir_call_byvalue_moves", lambda: validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table)),
+					("validate_mir_call_byvalue_moves", lambda: validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table, diagnostics=checked.diagnostics)),
 				]
 			)
 		for validator_name, validator_action in validator_plan:
