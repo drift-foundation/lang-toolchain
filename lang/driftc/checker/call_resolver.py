@@ -599,6 +599,7 @@ class MethodResolverContext:
 	receiver_preference: Callable[[object, bool, bool, bool], int | None]
 	args_match_params: Callable[[list[TypeId], list[TypeId]], bool]
 	coerce_args_for_params: Callable[[list[TypeId], list[TypeId]], list[TypeId]]
+	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	infer_receiver_arg_type: Callable[[object, TypeId, bool, bool], TypeId]
 	instantiate_sig_with_subst: Callable[..., InferResult]
 	apply_autoborrow_args: Callable[..., tuple[list[TypeId], bool]]
@@ -662,6 +663,7 @@ class ResolverContext:
 	receiver_compat: Callable[[TypeId, TypeId, object], tuple[bool, bool]]
 	args_match_params: Callable[[list[TypeId], list[TypeId]], bool]
 	coerce_args_for_params: Callable[[list[TypeId], list[TypeId]], list[TypeId]]
+	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	self_mode_from_sig: Callable[[FnSignature], object]
 	match_impl_type_args: Callable[..., object]
 	module_ids_by_name: dict
@@ -730,6 +732,7 @@ class CallResolverContext:
 	receiver_preference: Callable[[object, bool, bool, bool], int | None]
 	args_match_params: Callable[[list[TypeId], list[TypeId]], bool]
 	coerce_args_for_params: Callable[[list[TypeId], list[TypeId]], list[TypeId]]
+	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	infer_receiver_arg_type: Callable[[object, TypeId, bool, bool], TypeId]
 	instantiate_sig_with_subst: Callable[..., InferResult]
 	apply_autoborrow_args: Callable[..., tuple[list[TypeId], bool]]
@@ -784,14 +787,14 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 	base.update(overrides)
 	return ResolverContext(**base)
 
 
 def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None) -> MethodResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 
 
 def make_call_ctx(**kwargs) -> CallResolverContext:
@@ -4036,6 +4039,7 @@ def resolve_call_expr(
 	_receiver_preference = ctx.receiver_preference
 	_args_match_params = ctx.args_match_params
 	_coerce_args_for_params = ctx.coerce_args_for_params
+	_can_ref_to_value_coerce = ctx.can_ref_to_value_coerce
 	_infer_receiver_arg_type = ctx.infer_receiver_arg_type
 	_instantiate_sig_with_subst = ctx.instantiate_sig_with_subst
 	_apply_autoborrow_args = ctx.apply_autoborrow_args
@@ -5486,6 +5490,10 @@ def resolve_call_expr(
 			include_private = current_module if module_name is None else None
 			candidates = callable_registry.get_free_candidates(name=name, visible_modules=_visible_modules_for_free_call(module_name), include_private_in=include_private)
 			viable: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
+			# Secondary `&T → T` / `&mut T → T` matches.  Promoted
+			# to `viable` only when no strict/borrow candidates
+			# exist, so exact `&T → &T` overloads always win.
+			ref_value_only: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			type_arg_counts: set[int] = set()
 			saw_registry_only_with_type_args = False
 			saw_typed_nongeneric_with_type_args = False
@@ -5516,6 +5524,8 @@ def resolve_call_expr(
 						viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), None))
 					elif _can_borrow_coerce(list(params), arg_types):
 						viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), None))
+					elif _can_ref_to_value_coerce(list(params), arg_types):
+						ref_value_only.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), None))
 					continue
 				param_needs_resolve = sig.param_type_ids is None
 				if not param_needs_resolve and sig.param_type_ids is not None:
@@ -5645,6 +5655,14 @@ def resolve_call_expr(
 					viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), inst_subst))
 				elif _can_borrow_coerce(list(params), arg_types):
 					viable.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), inst_subst))
+				elif _can_ref_to_value_coerce(list(params), arg_types):
+					# Secondary `&T → T` / `&mut T → T` coercion.  Only
+					# kept as a fallback below — exact `&T → &T` /
+					# `T → &T` matches must win.  Collected separately
+					# so we can drop these if any strict viable exists.
+					ref_value_only.append((decl, CallableSignature(param_types=tuple(params), result_type=result_type), inst_subst))
+			if not viable and ref_value_only:
+				viable = ref_value_only
 			if not viable:
 				if call_type_args:
 					if type_arg_counts:

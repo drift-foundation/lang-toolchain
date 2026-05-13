@@ -1829,6 +1829,36 @@ b.pick(&"hello")   // also valid
 This applies only to shared borrows. `&mut T` parameters still need an
 explicit `&mut` at the call site so mutation is visible at the use site.
 
+## Call-site auto-dup for value parameters from `&T` / `&mut T`
+
+The inverse coercion is also permitted: when a function parameter is
+declared `T` (a value) and the argument is `&T` or `&mut T`, the call
+site auto-dereferences (and, for non-Copy `ConstShare` types, also
+auto-shares) so callers don't have to spell `.clone()` at every
+boundary.
+
+```drift
+fn take(s: String) nothrow -> Int { return s.byte_length(); }
+
+fn caller(borrowed: &String) nothrow -> Int {
+    return take(borrowed);     // preferred — auto-dup
+}
+```
+
+The rule only fires when `T` is `Copy` or proves `ConstShare`. Types
+that satisfy neither (e.g. a struct with a user `Destructible` impl
+and no `ConstShare`) still require an explicit conversion at the
+call site — there is no implicit move out of the referent.
+
+For `String`, the dup is the same O(1) refcount bump that `clone()`
+produces. This is auto-dup of `Copy` / `ConstShare` owners — distinct
+from the expression-form `share x`, which is the explicit form for
+types implementing `Share`. The two coexist: auto-dup is implicit and
+triggered by the `&T → T` parameter shape; `share x` is explicit and
+required where `Share` semantics differ from `Copy` / `ConstShare`.
+Mirrors the existing field-projection auto-dup that already lets you
+read a `Copy` / `ConstShare` field through a borrowed struct.
+
 ## Cheap `String` clone
 
 `String` is ARC-backed. To produce an owned `String` from a borrowed

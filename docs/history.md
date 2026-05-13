@@ -1,5 +1,57 @@
 # Drift development history
 
+## 2026-05-13 (Symmetric `&T → T` arg coercion)
+- **Symmetric `&T → T` / `&mut T → T` call-argument coercion
+  (release 0.31.68, ABI unchanged at 14).**  Mirrors the existing
+  borrowed field-projection auto-dup at type_checker.py:8645-8646
+  on the parameter-passing side.  When a function parameter is
+  declared `T` and the argument is `&T` or `&mut T`, the call site
+  auto-dereferences (and, for non-Copy `ConstShare` types,
+  auto-shares) so callers don't have to spell `.clone()` /
+  `(*r).const_share()` at every boundary.
+
+  Reported by the drift-web app team as counterintuitive
+  asymmetry: borrowed field-projection auto-duped Copy /
+  ConstShare fields, but parameter passing did not.
+
+  Implementation:
+  - `_can_ref_to_value_coerce` (new sibling of `_can_borrow_coerce`,
+    type_checker.py:2248-2290) accepts `arg=&T, param=T` (and the
+    `&mut T → T` variant) when T is Copy or proves ConstShare.
+    Kept **out** of strict `_args_match_params` so existing overload
+    disambiguation (`pick(&s)` choosing `pick(s: &String)` over
+    `pick(s: String)`) keeps working — exact `&T → &T` must win.
+  - Free-function resolver (call_resolver.py:5519-5524 and
+    5654-5663) runs two-pass: strict + borrow_coerce viable first,
+    then a `ref_value_only` fallback promoted to `viable` only when
+    the strict set is empty.  Coerced matches never compete with
+    exact matches.
+  - `_apply_autoborrow_args` rewrites the HIR argument: synthesize
+    `HUnary(DEREF, arg)`; for non-Copy ConstShare T, wrap in
+    `HMethodCall(method_name="const_share")`.  Plain-Copy T (Int,
+    String) needs no wrap — the deref load itself produces an owned
+    value (string_arc retains via Copy semantics for String).
+
+  Regression coverage:
+  - `lang/tests/driver/test_ref_to_value_arg_coercion.py` — 7
+    probes: `&String → String`, `&Int → Int`, `&mut String → String`,
+    `var x: String` param, aliasing pin for `&mut`, negative
+    `Destructible` rejection (valid `var self: Self` signature),
+    overload-disambiguation pin (exact `&T → &T` wins over coerced
+    `&T → T`).
+  - `lang/tests/memcheck/test_ref_to_value_arg_coercion_memcheck.py`
+    — String retain/release balance on the deref-rewrite path.
+
+  Docs: `docs/effective-drift.md` gains a "Call-site auto-dup for
+  value parameters from `&T` / `&mut T`" section next to the
+  existing `T → &T` auto-borrow.  Auto-dup is for Copy / ConstShare;
+  the `share x` expression form remains the explicit path for types
+  implementing `Share`.
+
+  ABI unchanged.  Pure type-checker / HIR-rewrite change; no
+  runtime helper signatures touched.  Bump is compiler-only
+  (0.31.67 → 0.31.68).
+
 ## 2026-05-12 (Stdlib pub-error migration)
 - **Stdlib `pub error` migration for exported Result Err carriers
   (release 0.31.67, ABI unchanged at 14).**  Closes the
