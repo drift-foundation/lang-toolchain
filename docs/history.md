@@ -1,5 +1,71 @@
 # Drift development history
 
+## 2026-05-13 (Cross-module callback-wrap nothrow fix)
+- **`core.callback{N}(other_mod.fn)` over a declared-nothrow
+  exported function no longer rejects with "callback{N} requires
+  a nothrow function" (release 0.31.71, ABI unchanged at 14).**
+  Closes the diagnostic + cascade reported by the drift-web app
+  team against bookkeeper's `auth_middleware` /
+  `task_middleware`: `core.callback3(routes_common.auth_middleware)`
+  produced
+
+      error: callback3 requires a nothrow function           [E-AUTO-404a8a43]
+      error: no matching overload for function
+             'add_route_group_middleware'
+             with args [296, 1573, 3]                        [E-AUTO-946362e5]
+
+  where arg type `3` was `Unknown` — the failed callback wrap
+  poisoned the result type and every downstream call cascaded.
+
+  Root cause: `_call_sig_for_fn_ref` in
+  `type_checker.py:3306-3307` forced `can_throw = True` for every
+  `is_exported_entrypoint` / `is_extern` signature.  The override
+  reflected the OK-wrap-thunk's `FnResult`-based cross-package
+  ABI (set up at lines 3395-3400) but conflated two layers: the
+  thunk-adapted call-boundary shape vs. the user-declared
+  function-value shape that `core.callback{N}(...)` reasons over.
+  Downstream, the callback intrinsic at `call_resolver.py:5002`
+  read the (wrongly can-throw) fn-ref TypeId and rejected the
+  wrap; the rejection's `record_expr(expr, ctx.unknown_ty)` is
+  what produced the `Unknown` that the team observed.
+
+  Fix: delete the two-line override.  The function-reference
+  TypeId now carries the user-declared `can_throw` unchanged.
+  The thunk machinery at lines 3395-3400 reads
+  `sig.declared_can_throw` directly to decide which thunk to
+  install, so the type-side and lowering-side stay aligned.
+
+  Narrowing (each axis independent of the bug):
+  - Universal across `callback1` / `callback2` / `callback3` —
+    not specific to arity 3.
+  - Universal across `&T` / `&mut T` / scalar params — not
+    about ref types.
+  - Universal across `pub error` / `pub struct` / no-error
+    returns — not about pub-error carriers.
+  - Universal across re-export shapes — not the `web.rest`
+    umbrella vs `web.rest.errors` direct-import distinction.
+  - Specific to **cross-module** named-fn refs (`other_mod.fn`);
+    same-module refs were never broken (`is_exported_entrypoint`
+    only flips when a function is referenced from outside its
+    defining module).
+
+  Regression coverage:
+  `lang/tests/driver/test_cross_module_callback_named_fn.py` —
+  5 probes:
+  - `test_callback{1,2,3}_cross_module_named_fn_compiles` — the
+    minimal arity-1/2/3 triggers.
+  - `test_callback3_cross_module_with_ref_and_pub_error_compiles`
+    — the full app-team shape (`Callback3<&T, &mut T,
+    Callback2<&T, &mut T, Result<Int, pub error E>>,
+    Result<Int, pub error E>>`).
+  - `test_callback3_throws_variant_still_rejects_nothrow_callback`
+    — sanity that a declared-throws fn is still rejected; the
+    fix closes the false-positive on nothrow exports without
+    accidentally accepting actually-throwing functions.
+
+  ABI unchanged.  Pure type-checker change.  Bump is
+  compiler-only (0.31.70 → 0.31.71).
+
 ## 2026-05-13 (Friendly use-move + `ptid` opt-in)
 - **MIR by-value-arg validator now emits friendly `use move`
   diagnostic instead of `internal: MIR validation contract failure`

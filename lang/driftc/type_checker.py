@@ -3303,8 +3303,18 @@ class TypeChecker:
 				can_throw = True
 			else:
 				can_throw = bool(sig.declared_can_throw)
-			if getattr(sig, "is_exported_entrypoint", False) or getattr(sig, "is_extern", False):
-				can_throw = True
+			# Preserve the function's declared `nothrow` bit for
+			# function-reference resolution.  The
+			# `is_exported_entrypoint` / `is_extern` cases route
+			# through `_ensure_ok_wrap_thunk` / `_ensure_boundary_thunk`
+			# at the fn_ref construction site (see lines 3395-3400),
+			# which adapts the bare nothrow return into the FnResult
+			# ABI without changing the user-facing nothrow shape.
+			# Overriding `can_throw = True` here broke
+			# `callback{N}(routes.my_fn)`: the resolver compared the
+			# (wrongly can-throw) fn-ref type against `Fn{N}`'s
+			# nothrow requirement and rejected the wrap as
+			# "requires a nothrow function".
 			return list(sig.param_type_ids), sig.return_type_id, can_throw
 
 		def _ensure_ok_wrap_thunk(

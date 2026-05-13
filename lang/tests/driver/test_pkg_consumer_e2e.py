@@ -806,3 +806,195 @@ fn main() nothrow -> Int {
 		f"consumer compile must succeed; got returncode={res.returncode}\n"
 		f"stderr: {res.stderr[:2000]}"
 	)
+
+
+# ---------------------------------------------------------------------------
+# Cross-package callback-wrap + OK-wrap thunk preservation
+# (0.31.71 fix for the bookkeeper/web-rest report).
+#
+# 0.31.70 forced `can_throw = True` for every `is_exported_entrypoint`
+# fn ref in `_call_sig_for_fn_ref`, which broke
+# `core.callback{N}(pkg.fn)` over a declared-nothrow exported function.
+# 0.31.71 removes the override; the OK-wrap thunk at the call boundary
+# still reads `sig.declared_can_throw` directly, so the FnResult ABI
+# adaptation for direct cross-package calls remains intact.
+#
+# The same-workspace cross-module shape is pinned by
+# `test_cross_module_callback_named_fn.py`; this test pins the
+# stricter cross-PACKAGE boundary (signed .dmp consumed via
+# --package-root + --dep), where `is_exported_entrypoint` fires
+# unconditionally on every published symbol.
+# ---------------------------------------------------------------------------
+
+
+def test_pkg_callback_wrap_named_fn_ref_compiles_and_runs(stdlib_package, tmp_path: Path) -> None:
+	"""Cross-package `core.callback{N}(pkg.fn)` over a declared-nothrow
+	exported function.  Pre-0.31.71 the consumer compile failed with
+	"callback3 requires a nothrow function" because the published-fn's
+	`is_exported_entrypoint=True` flipped its TypeId-side `can_throw`
+	to True, even though the user declared `nothrow`.
+	"""
+	library_lib_drift = """\
+module web.cb_wrap_repro;
+
+import std.core as core;
+
+export { passthrough1, passthrough2, passthrough3 };
+
+pub fn passthrough1(a: Int) nothrow -> Int {
+\treturn a + 1;
+}
+
+pub fn passthrough2(a: Int, b: Int) nothrow -> Int {
+\treturn a + b;
+}
+
+pub fn passthrough3(a: Int, b: Int, c: Int) nothrow -> Int {
+\treturn a + b + c;
+}
+"""
+	pkg_root, trust_path = _publish_library_package(
+		{"lib.drift": library_lib_drift},
+		stdlib_pkg=stdlib_package,
+		tmp_path=tmp_path,
+		package_id="web-cb-wrap-repro",
+		package_version="0.0.1",
+		module_namespace="web",
+	)
+
+	consumer_source = """\
+module consumer;
+
+import std.core as core;
+import web.cb_wrap_repro as cb;
+
+fn main() nothrow -> Int {
+\tval cb1 = core.callback1(cb.passthrough1);
+\tval r1 = cb1.call(41);
+\tif r1 != 42 { return 1; }
+\tval cb2 = core.callback2(cb.passthrough2);
+\tval r2 = cb2.call(20, 22);
+\tif r2 != 42 { return 2; }
+\tval cb3 = core.callback3(cb.passthrough3);
+\tval r3 = cb3.call(10, 12, 20);
+\tif r3 != 42 { return 3; }
+\treturn 0;
+}
+"""
+	src_dir = tmp_path / "consumer_src"
+	src_dir.mkdir(parents=True, exist_ok=True)
+	(src_dir / "main.drift").write_text(consumer_source)
+	out_bin = tmp_path / "consumer_bin"
+	empty_stdlib = tmp_path / "_empty_stdlib_consumer"
+	empty_stdlib.mkdir(exist_ok=True)
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		str(src_dir / "main.drift"),
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(pkg_root),
+		"--dep", f"std@{stdlib_package.version}",
+		"--dep", "web-cb-wrap-repro@0.0.1",
+		"--trust-store", str(trust_path),
+		"--dev", "--dev-core-trust-store", str(trust_path),
+		"--entry", "consumer::main",
+		"-o", str(out_bin),
+	]
+	res = subprocess.run(
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
+	)
+	assert "callback1 requires a nothrow function" not in res.stderr, (
+		"consumer compile must not fire the pre-0.31.71 false-positive; "
+		f"stderr:\n{res.stderr[:1500]}"
+	)
+	assert "callback2 requires a nothrow function" not in res.stderr, res.stderr[:1500]
+	assert "callback3 requires a nothrow function" not in res.stderr, res.stderr[:1500]
+	assert res.returncode == 0, f"compile failed; stderr:\n{res.stderr[:2000]}"
+	assert out_bin.exists()
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(20))
+	assert run.returncode == 0, (
+		f"binary exit={run.returncode} (expected 0). 1=cb1 mismatch, "
+		f"2=cb2 mismatch, 3=cb3 mismatch.  stdout: {run.stdout[:200]}; "
+		f"stderr: {run.stderr[:200]}"
+	)
+
+
+def test_pkg_direct_call_ok_wrap_thunk_preserved(stdlib_package, tmp_path: Path) -> None:
+	"""OK-wrap thunk preservation: a direct cross-package call to a
+	declared-nothrow exported function must still go through the
+	FnResult ABI wrapper (`_ensure_ok_wrap_thunk`) so the consumer
+	receives the unwrapped bare return value.
+
+	The 0.31.71 patch removed the `can_throw = True` override from
+	the fn-reference TypeId path, but did NOT touch the thunk
+	machinery — `_ensure_ok_wrap_thunk` continues to fire because
+	the construction-site check at type_checker.py:3395-3400 reads
+	`sig.declared_can_throw` directly.  This test pins that
+	direct cross-package calls of `pub fn foo() nothrow -> Int`
+	still produce a usable `Int` (not a leaked `FnResult` shape).
+	"""
+	library_lib_drift = """\
+module web.thunk_repro;
+
+export { add_one, mul_two };
+
+pub fn add_one(a: Int) nothrow -> Int {
+\treturn a + 1;
+}
+
+pub fn mul_two(a: Int) nothrow -> Int {
+\treturn a * 2;
+}
+"""
+	pkg_root, trust_path = _publish_library_package(
+		{"lib.drift": library_lib_drift},
+		stdlib_pkg=stdlib_package,
+		tmp_path=tmp_path,
+		package_id="web-thunk-repro",
+		package_version="0.0.1",
+		module_namespace="web",
+	)
+
+	consumer_source = """\
+module consumer;
+
+import web.thunk_repro as t;
+
+fn main() nothrow -> Int {
+\tval a = t.add_one(40);
+\tif a != 41 { return 1; }
+\tval b = t.mul_two(a);
+\tif b != 82 { return 2; }
+\treturn 0;
+}
+"""
+	src_dir = tmp_path / "consumer_src"
+	src_dir.mkdir(parents=True, exist_ok=True)
+	(src_dir / "main.drift").write_text(consumer_source)
+	out_bin = tmp_path / "consumer_bin"
+	empty_stdlib = tmp_path / "_empty_stdlib_consumer"
+	empty_stdlib.mkdir(exist_ok=True)
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		str(src_dir / "main.drift"),
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(pkg_root),
+		"--dep", f"std@{stdlib_package.version}",
+		"--dep", "web-thunk-repro@0.0.1",
+		"--trust-store", str(trust_path),
+		"--dev", "--dev-core-trust-store", str(trust_path),
+		"--entry", "consumer::main",
+		"-o", str(out_bin),
+	]
+	res = subprocess.run(
+		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
+	)
+	assert res.returncode == 0, f"compile failed; stderr:\n{res.stderr[:2000]}"
+	assert out_bin.exists()
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(20))
+	assert run.returncode == 0, (
+		f"binary exit={run.returncode} (expected 0). 1=add_one mismatch, "
+		f"2=mul_two mismatch.  stdout: {run.stdout[:200]}; "
+		f"stderr: {run.stderr[:200]}"
+	)
