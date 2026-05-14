@@ -1,5 +1,136 @@
 # Drift development history
 
+## 2026-05-14 (`mem.replace` accepts named `&mut T` values, not just inline borrows)
+- **LANGUAGE_BUG fix.** Release 0.31.81, ABI unchanged at 14.
+  Reported by the mariadb team (managed-connection spike, see
+  `~/src/pushcoin/work/customers-snapshot-handler/`); blocks the
+  recommended Pattern A from `effective-drift.md` whenever the
+  `&mut Optional<T>` slot is factored through a helper or a method.
+
+  **Symptom.** `mem.replace<T>(slot, replacement)` rejected its first
+  argument with `replace expects &mut T as the first argument
+  [E-AUTO-9370445a]` (sometimes also `replace(...) requires &mut
+  place target [E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED]`) when
+  `slot` was a *named* `&mut T` — a local binding, a function
+  parameter, or a method-call return — even though the resolved
+  type was identical to the inline `&mut <place>` form the same
+  call accepts.
+
+  Customer working / failing partition:
+
+  | Shape | 0.31.80 |
+  |---|---|
+  | `mem.replace(&mut box.x, _none())` (inline borrow) | ✅ |
+  | `val slot = &mut b.x; mem.replace(slot, _none())` | ❌ |
+  | `fn h(slot: &mut Optional<R>) { mem.replace(slot, _none()) }` | ❌ |
+  | `mem.replace(guard.get_mut(), _none())` | ❌ |
+  | `&mut *slot` (explicit reborrow) workaround | ✅ |
+
+  The workaround (`&mut *slot`) compiles, runs, valgrind-clean
+  — proving the underlying lowering and runtime machinery were
+  always correct. The bug was purely in the checker's argument
+  *shape* analysis.
+
+  **Root cause.** Four independent layers all assumed the first
+  argument was a literal `&mut <place>` HBorrow / HPlaceExpr:
+
+  1. `lang/driftc/checker/call_resolver.py:4674` — the call
+     resolver, after correctly verifying `arg_types[0]` resolves to
+     `&mut T` (line ~4668), additionally called `_borrowed_place()`
+     to extract a syntactic place from the arg expression and
+     rejected when that returned None. For a named `&mut T` value
+     (HVar), `_borrowed_place` returns None — even though the type
+     check had already passed.
+  2. `lang/driftc/call_contract.py:305` — a separate "intrinsic
+     call shape" contract pass duplicated the same syntactic
+     check via `isinstance(args[0], HBorrow) and args[0].is_mut`.
+     The hir_to_mir lowering already filtered this contract issue
+     out at lines 3310 / 6997 — only the driftc.py top-level
+     contract sweep enforced it.
+  3. `lang/driftc/borrow_checker_pass.py:2254` — the borrow checker
+     attempted `place_from_expr(arg_base)` and raised an
+     `AssertionError` ("checker bug") if it returned None — so
+     once the call resolver was relaxed, the borrow pass would
+     ICE.
+  4. `lang/driftc/stage2/hir_to_mir.py:3318` — the lowering
+     asserted the place_expr was an `HPlaceExpr` and raised if
+     not — same ICE shape, one layer down.
+
+  The customer-facing error was emitted only by (1), but all four
+  needed to relax in lock-step.
+
+  **Fix.** Four surgical edits:
+
+  - `call_resolver.py`: keep the `&mut T` type check, drop the
+    redundant form-check rejection. Make the inline-deref safety
+    check (line ~4678) conditional on `place_expr is not None` —
+    it's only meaningful for the inline `&mut *var` shape; for a
+    named ref, the type itself encodes mutability.
+  - `call_contract.py`: remove the syntactic
+    `E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED` issue. The call
+    resolver's type check covers the same correctness criterion
+    more precisely.
+  - `borrow_checker_pass.py`: when `place_from_expr` returns None,
+    don't ICE. Visit the ref-valued arg as a normal read (so
+    use-after-move checks on the ref-holding local still fire) and
+    consume the replacement. Place-level state tracking is only
+    possible when we have direct access to the underlying place
+    — that's the inline-borrow case, kept on the precise path.
+  - `hir_to_mir.py`: when the first arg isn't an `HBorrow`/
+    `HPlaceExpr`, lower the expression as a value (refs are
+    pointers at the MIR boundary; the lowered ref-value IS the
+    pointer for `M.MoveFromRef` / `M.StoreRef`). Get `inner_ty`
+    from the recorded `CallInfo` rather than from `_lower_addr_of_place`.
+
+  Net diff: **~30 lines across 4 files**, all replacing
+  diagnostics/asserts with the correct case split. No new public
+  surface; no MIR opcode changes; no ABI implications.
+
+  **Regression tests.** Regression-first:
+
+  - `lang/tests/codegen/e2e/mem_replace_named_mut_local_ref/` —
+    customer's headline case: bind `&mut b.x` to a local, then
+    pass that local to `mem.replace`. Round-trips through the
+    `Optional<Resource>::Some → take → None` sequence; also pins
+    that a second take returns `None` (proves no double-move).
+  - `lang/tests/codegen/e2e/mem_replace_helper_param_ref/` —
+    `fn take_via_helper(slot: &mut Optional<R>) { mem.replace(slot, ...) }`,
+    called twice. Pins the factor-out shape that Pattern A
+    recommends.
+  - `lang/tests/codegen/e2e/mem_replace_method_ref_return/` —
+    `mem.replace(cell.get_mut(), ...)` (MutexGuard.get_mut() shape,
+    with a handcrafted Cell to avoid pulling in std.sync).
+  - `lang/tests/codegen/e2e/mem_replace_rejects_shared_ref/` —
+    **negative pin**: a shared `&T` first argument must still be
+    rejected with the same diagnostic substring (`replace expects
+    &mut T as the first argument`). Widening to named &mut must
+    not accidentally accept &T.
+
+  All four pass under `DRIFT_MEMCHECK=1` valgrind (positive cases
+  — the negative case fails at typecheck before producing a
+  binary). Full 189-test checker + type_checker suite remains
+  green; representative e2e sample (13 cases including
+  pub-error/codec/uuid/ownership) — 13 pass, 0 fail.
+
+  **Doc fix-up.** `effective-drift.md` (Pattern A) gains a note
+  that `mem.replace` now accepts named locals / parameters /
+  method-call returns as of 0.31.81, with a reference to
+  E-AUTO-9370445a so anyone hitting an old error message in
+  pre-0.31.81 code can find the explanation. The earlier doc
+  cleanup in this session already corrected
+  `core.Optional::None` → `Optional<T>::None()` and the
+  destructor signature.
+
+  **Out of scope / follow-ups.**
+  - `mem.swap` has the same structural shape — accepts inline
+    `&mut place` operands, will likely reject named refs the same
+    way. The customer report focuses on `replace`; `swap` should
+    get the same treatment as a follow-up. Tracked.
+  - Improving the diagnostic to surface "must be `&mut T` (got
+    `T` / `&T`)" with a type-aware message rather than the static
+    string — separate follow-up. The current message is correct
+    for the cases it now actually fires on (shared ref, by-value).
+
 ## 2026-05-14 (shallow checker: `Byte` and `Float` comparisons infer `Bool`)
 - **LANGUAGE_BUG fix.**  Release 0.31.80, ABI unchanged at 14.
   Reported by the bookkeeper team while exercising the new

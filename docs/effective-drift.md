@@ -1681,6 +1681,19 @@ implement core.Destructible for Session {
 > the bare form `Optional::None` is fine; the pattern resolver has the
 > scrutinee's type to work with.
 
+> **Note on `mem.replace` argument shape.** As of 0.31.81, `mem.replace`
+> accepts any first argument whose resolved type is `&mut T` — the
+> inline `&mut <place>` form shown above, a named local
+> (`val slot_mut: &mut Optional<Token> = &mut self.token; mem.replace(slot_mut, ...)`),
+> a function parameter (`fn helper(slot: &mut Optional<Token>) { mem.replace(slot, ...) }`),
+> or a method-call return (`mem.replace(cell.get_mut(), ...)`). This
+> means the take logic can be factored out of `take_token` and shared
+> across types without losing the ability to call `mem.replace`.
+> Earlier toolchains (≤ 0.31.80) rejected the named / parameter / call
+> forms with `replace expects &mut T as the first argument`
+> [E-AUTO-9370445a] even though the resolved type was identical — that
+> was a checker bug, not a language constraint.
+
 This is what the diagnostic on a `Destructible` aggregate is steering you
 toward:
 

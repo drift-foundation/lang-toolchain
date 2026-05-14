@@ -776,8 +776,10 @@ A struct that implements `Destructible` (or contains a field that does)
 will **not** support partial field moves, in v1 or later. The reason is
 contractual, not implementation-driven:
 
-- `destroy(self)` runs as a single, indivisible action over the whole
-  aggregate. It expects every field to be in a fully-formed state.
+- The `destroy` method runs as a single, indivisible action over the
+  whole aggregate. It expects every field to be in a fully-formed
+  state. (Concrete signature: `pub fn destroy(var self: T) nothrow
+  -> Void`.)
 - A partial move would force `destroy` to inspect per-field liveness and
   branch on it. That defeats the point of the trait — destructors must
   remain simple and total.
@@ -1266,7 +1268,7 @@ struct OwnedMySql
 }
 
 implement Destructible for OwnedMySql {
-    fn destroy(self) -> Void {
+    pub fn destroy(var self: OwnedMySql) nothrow -> Void {
         if !self.handle.is_null() {
             mysql_close(self.handle);
         }

@@ -1,0 +1,77 @@
+module main;
+
+// Precision pin for the named-`&mut T` mem.replace borrow-check path.
+// Companion to `mem_replace_named_ref_rejects_live_reborrow/`.
+//
+// The negative test pins that a *live* shared reborrow blocks the
+// replace. This positive test pins the symmetric property: once the
+// reborrow falls out of scope, the same replace must succeed. Without
+// this companion, a future "over-eager" patch to the borrow checker
+// could pass the negative test by rejecting *all* named-ref replaces
+// — that would be a regression for the customer (the bookkeeper /
+// mariadb use case is "factor `&mut Optional<T>` through a helper and
+// take from it"), so we lock down both directions.
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+
+pub struct Resource { pub id: Int }
+pub struct Box { pub x: Optional<Resource> }
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+implement core.Destructible for Box {
+	pub fn destroy(var self: Box) nothrow -> Void { return; }
+}
+
+fn _none_resource() nothrow -> Optional<Resource> {
+	return Optional<Resource>::None();
+}
+
+fn _peek(opt: &Optional<Resource>) nothrow -> Int {
+	match *opt {
+		Some(r) => { return r.id; },
+		None    => { return -1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var b = Box(x = Optional<Resource>::Some(Resource(id = 99)));
+	val slot: &mut Optional<Resource> = &mut b.x;
+	{
+		// Shared reborrow scoped to this inner block.
+		val r: &Optional<Resource> = &*slot;
+		val peek_before = _peek(r);
+		if peek_before != 99 {
+			cons.eprintln("FAIL: pre-replace peek wrong");
+			return 1;
+		}
+	}
+	// `r` is out of scope by now; the loan has ended. The replace must
+	// succeed, and must return the original Some(99).
+	val taken = mem.replace<type Optional<Resource> >(slot, _none_resource());
+	match taken {
+		Some(res) => {
+			if res.id != 99 {
+				cons.eprintln("FAIL: wrong taken id");
+				return 2;
+			}
+		},
+		None => {
+			cons.eprintln("FAIL: expected Some after replace");
+			return 3;
+		}
+	}
+	// b.x must now be None.
+	match b.x {
+		Some(res) => {
+			cons.eprintln("FAIL: slot should be None");
+			return 4;
+		},
+		None => { }
+	}
+	cons.println("ok");
+	return 0;
+}

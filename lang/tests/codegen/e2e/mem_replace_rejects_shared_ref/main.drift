@@ -1,0 +1,40 @@
+module main;
+
+// Negative regression: extending mem.replace's accepted forms to
+// include named &mut T must NOT accidentally accept shared &T (which
+// can't be written through).
+//
+// Per the customer ask's "keep invalid cases rejected" guardrail:
+// "shared &T, by-value T, and borrowed-conflict cases" must still
+// produce a diagnostic.
+//
+// This file passes a `shared_ref: &Optional<Resource>` (immutable
+// reference) to mem.replace. The compiler must reject it. We assert
+// the rejection via expected.json's diagnostic-checking shape.
+
+import std.core as core;
+import std.mem as mem;
+
+pub struct Resource { pub id: Int }
+pub struct Box { pub x: Optional<Resource> }
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+
+implement core.Destructible for Box {
+	pub fn destroy(var self: Box) nothrow -> Void { return; }
+}
+
+fn _none_resource() nothrow -> Optional<Resource> {
+	return Optional<Resource>::None();
+}
+
+fn main() nothrow -> Int {
+	var b = Box(x = Optional<Resource>::Some(Resource(id = 99)));
+	// shared_ref is &Optional<Resource> (immutable), NOT &mut.
+	val shared_ref: &Optional<Resource> = &b.x;
+	// Must be rejected: can't replace through an immutable reference.
+	val taken = mem.replace<type Optional<Resource> >(shared_ref, _none_resource());
+	return 0;
+}

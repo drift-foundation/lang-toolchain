@@ -1,0 +1,7 @@
+{
+  "description": "e2e precision pin: mem.replace(slot, ...) MUST succeed when a shared reborrow of *slot was used only inside an inner scope that has since ended. Companion to mem_replace_named_ref_rejects_live_reborrow — together they pin that the borrow-check rejection is precise, not over-eager.",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

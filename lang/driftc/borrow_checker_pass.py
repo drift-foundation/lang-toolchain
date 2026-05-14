@@ -2251,14 +2251,29 @@ class BorrowChecker:
 				place_expr, new_expr = expr.args
 				place_base = place_expr.subject if isinstance(place_expr, H.HBorrow) and place_expr.is_mut else place_expr
 				place = place_from_expr(place_base, base_lookup=self.base_lookup)
-				if place is None:
-					raise AssertionError("replace argument 0 must be an addressable place (checker bug)")
-				# replace reads the old value (use-after-move) and writes the new.
-				self._consume_place_use(state, place, getattr(place_base, "loc", Span()))
-				self._visit_expr(state, new_expr, consume=True, escapes=False)
-				if not self._reject_write_while_borrowed(state, place, getattr(place_base, "loc", Span())):
+				if place is not None:
+					# Inline-borrow / direct place form — we can track
+					# state of the underlying place precisely.  Read the
+					# old value (use-after-move), lower the replacement,
+					# reject write-while-borrowed conflicts, and mark
+					# the place VALID after the swap.
+					self._consume_place_use(state, place, getattr(place_base, "loc", Span()))
+					self._visit_expr(state, new_expr, consume=True, escapes=False)
+					if not self._reject_write_while_borrowed(state, place, getattr(place_base, "loc", Span())):
+						return
+					self._set_state(state, place, PlaceState.VALID)
 					return
-				self._set_state(state, place, PlaceState.VALID)
+				# Named &mut T value (HVar binding, parameter, method-call
+				# return, etc.).  The underlying place's borrow rights were
+				# already validated when the &mut T was formed at its
+				# binding site; the borrow's liveness covers this write.
+				# We just need to visit the ref-valued arg expression as a
+				# read (use-after-move / move-checks on the local holding
+				# the ref) and consume the replacement.  Place-level state
+				# tracking is skipped — we don't have direct access to the
+				# underlying place from a ref-valued expression.
+				self._visit_expr(state, place_expr, consume=False, escapes=False)
+				self._visit_expr(state, new_expr, consume=True, escapes=False)
 				return
 
 			pre_loans = set(state.loans)

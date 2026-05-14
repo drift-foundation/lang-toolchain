@@ -1,0 +1,71 @@
+module main;
+
+// Regression: mem.replace must accept the return value of a method
+// call that yields &mut T directly, without binding it to an
+// intermediate local. The customer's report flagged
+// `mem.replace<...>(guard.get_mut(), _none())` (MutexGuard.get_mut())
+// as one of the blocking forms. We exercise the equivalent shape
+// with a small handcrafted struct rather than pulling in std.sync.
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+
+pub struct Resource { pub id: Int }
+
+pub struct Cell {
+	pub value: Optional<Resource>
+}
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+
+implement core.Destructible for Cell {
+	pub fn destroy(var self: Cell) nothrow -> Void { return; }
+}
+
+implement Cell {
+	// Returns &mut to the inner Optional<Resource>. Analogous to
+	// MutexGuard<T>::get_mut() in std.sync.
+	pub fn get_mut(self: &mut Cell) nothrow -> &mut Optional<Resource> {
+		return &mut self.value;
+	}
+}
+
+fn _none_resource() nothrow -> Optional<Resource> {
+	return Optional<Resource>::None();
+}
+
+fn main() nothrow -> Int {
+	var cell = Cell(value = Optional<Resource>::Some(Resource(id = 11)));
+
+	// The customer-reported shape: method call returning &mut T,
+	// passed directly to mem.replace without an intermediate val.
+	val taken = mem.replace<type Optional<Resource> >(cell.get_mut(), _none_resource());
+
+	match taken {
+		Some(r) => {
+			if r.id != 11 {
+				cons.eprintln("FAIL: wrong id");
+				return 1;
+			}
+		},
+		None => {
+			cons.eprintln("FAIL: expected Some");
+			return 2;
+		}
+	}
+
+	// cell.value must be None now.
+	match cell.value {
+		Some(r) => {
+			cons.eprintln("FAIL: cell.value should be None");
+			return 3;
+		},
+		None => { }
+	}
+
+	cons.println("ok");
+	return 0;
+}

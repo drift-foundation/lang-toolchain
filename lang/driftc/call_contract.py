@@ -302,15 +302,17 @@ def intrinsic_call_issues(kind: IntrinsicKind, call: object, *, kwargs: object) 
 				message="swap(...) requires &mut place operands",
 				span=span,
 			))
-	# REPLACE: requires &mut place target
-	if kind is IntrinsicKind.REPLACE and args:
-		HBorrow = getattr(H, "HBorrow", None)
-		if HBorrow is not None and not (isinstance(args[0], HBorrow) and args[0].is_mut):
-			issues.append(CallContractIssue(
-				code="E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED",
-				message="replace(...) requires &mut place target",
-				span=span,
-			))
+	# REPLACE: the &mut T type check on the first argument is enforced
+	# by the call resolver (`replace expects &mut T as the first
+	# argument` at call_resolver.py).  We previously also ran a
+	# *syntactic* check here that required the arg to be a literal
+	# `&mut <place>` HBorrow expression — that was too strict: it
+	# rejected named locals / parameters / method-call returns whose
+	# resolved TYPE was already &mut T (bookkeeper customer report
+	# 2026-05-14).  Removed — the type-level check in call_resolver
+	# is correct and sufficient.  The hir_to_mir lowering filters
+	# already drop MUT_BORROW_REQUIRED issues, so this branch was
+	# only ever a hard error via the driftc.py top-level loop.
 	return issues
 
 

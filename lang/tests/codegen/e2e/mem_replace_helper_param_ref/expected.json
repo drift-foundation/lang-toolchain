@@ -1,0 +1,7 @@
+{
+  "description": "e2e regression: mem.replace accepts a helper function parameter `slot: &mut T` (factor-out shape from the customer report)",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

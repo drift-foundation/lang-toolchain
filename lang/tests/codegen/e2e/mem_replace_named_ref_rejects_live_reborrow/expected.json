@@ -1,0 +1,10 @@
+{
+  "description": "e2e SOUNDNESS regression: mem.replace(slot, ...) where `slot: &mut T` is a named local with a live shared reborrow (`val r: &T = &*slot`) MUST be rejected. Proves the new named-ref borrow-check path in 0.31.81 still catches conflicts via loan tracking on the ref local, even though it skips the inline path's place-state tracking on the underlying slot.",
+  "diagnostics": [
+    {
+      "message_contains": "cannot write to 'slot' while it is borrowed",
+      "phase": "borrowcheck"
+    }
+  ],
+  "exit_code": 1
+}

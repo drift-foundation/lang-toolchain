@@ -1,0 +1,10 @@
+{
+  "description": "e2e negative regression: mem.replace must reject a shared &T argument (the type-check guardrail; widening Byte-shaped acceptance to named &mut T must not accidentally accept &T)",
+  "diagnostics": [
+    {
+      "message_contains": "replace expects &mut T as the first argument"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "typecheck"
+}

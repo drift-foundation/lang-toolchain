@@ -1,0 +1,63 @@
+module main;
+
+// SOUNDNESS regression for the named-`&mut T` mem.replace path
+// (0.31.81). Code reviewer noted that the new borrow-check branch in
+// `borrow_checker_pass.py` skips the underlying-place state tracking
+// that the inline-borrow path performs (via `place_from_expr` +
+// `_reject_write_while_borrowed`), and asked for a test that *proves*
+// reborrows through the same named `&mut T` are still rejected.
+//
+// If the patch were unsound, the program below would compile —
+// `mem.replace(slot, ...)` would then mutate / tombstone the storage
+// `r` aliases, leaving `r` dangling for the `_peek(r)` use that
+// follows.
+//
+// The correct outcome: the borrow checker recognizes that `slot` is
+// loaned to `r` (the shared reborrow via `&*slot`) and refuses the
+// write through `slot` at the `mem.replace` site:
+//
+//   error: cannot write to 'slot' while it is borrowed [E-AUTO-ad747cc6]
+//
+// This works because the new mem.replace borrow-check path visits
+// the ref-valued first argument as a read via `_visit_expr(...,
+// consume=False, ...)`, which interacts with the loan tracking
+// `r = &*slot` set up. The named-ref path therefore inherits the same
+// soundness guarantees as the inline-borrow path through a different
+// (but precise) mechanism — loan tracking on the ref local rather
+// than place-state tracking on the underlying slot.
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+
+pub struct Resource { pub id: Int }
+pub struct Box { pub x: Optional<Resource> }
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+implement core.Destructible for Box {
+	pub fn destroy(var self: Box) nothrow -> Void { return; }
+}
+
+fn _none_resource() nothrow -> Optional<Resource> {
+	return Optional<Resource>::None();
+}
+
+fn _peek(opt: &Optional<Resource>) nothrow -> Int {
+	match *opt {
+		Some(r) => { return r.id; },
+		None    => { return -1; }
+	}
+}
+
+fn main() nothrow -> Int {
+	var b = Box(x = Optional<Resource>::Some(Resource(id = 99)));
+	val slot: &mut Optional<Resource> = &mut b.x;
+	val r: &Optional<Resource> = &*slot;
+	// MUST be rejected: r is a live shared reborrow of the slot.
+	val taken = mem.replace<type Optional<Resource> >(slot, _none_resource());
+	val peek = _peek(r);
+	cons.println("unsound");
+	return 0;
+}

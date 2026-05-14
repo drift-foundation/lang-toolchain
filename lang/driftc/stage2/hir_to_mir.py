@@ -3315,8 +3315,6 @@ class HIRToMIR:
 			if isinstance(place_expr, H.HBorrow) and place_expr.is_mut:
 				place_expr = place_expr_from_lvalue_expr(place_expr.subject)
 			new_expr = expr.args[1]
-			if not (hasattr(H, "HPlaceExpr") and isinstance(place_expr, getattr(H, "HPlaceExpr"))):
-				raise AssertionError("replace(place, v): non-canonical place reached MIR lowering (normalize/typechecker bug)")
 			# Order is load-bearing: address first, then lower/consume
 			# the replacement value, THEN MoveFromRef the old owner out
 			# (atomically tombstoning the slot), THEN StoreRef the new
@@ -3342,7 +3340,28 @@ class HIRToMIR:
 			# subsequent StoreRef rewrite's release fires on null bytes
 			# (`drift_string_release(null)` is a runtime no-op; see
 			# `string_arc.py:1097-1099`).
-			ptr, inner_ty = self._lower_addr_of_place(place_expr, is_mut=True)
+			#
+			# Two argument shapes are accepted, matching the checker's
+			# acceptance criterion (resolved type == &mut T):
+			#   1. Inline borrow form (`&mut <place>`) or a bare
+			#      HPlaceExpr — gives us a place to lower as an
+			#      address via _lower_addr_of_place.
+			#   2. Any other expression that resolves to &mut T —
+			#      named local / parameter / method-call return.
+			#      The expression's lowered value IS the pointer
+			#      (refs are pointers at the MIR boundary); inner_ty
+			#      comes from the call's recorded signature.  This
+			#      is the customer-facing fix for the 0.31.80 bug
+			#      where named &mut T values were rejected with
+			#      "replace expects &mut T as the first argument"
+			#      even though the type matched.
+			if hasattr(H, "HPlaceExpr") and isinstance(place_expr, getattr(H, "HPlaceExpr")):
+				ptr, inner_ty = self._lower_addr_of_place(place_expr, is_mut=True)
+			else:
+				if info is None or info.sig is None:
+					raise AssertionError("replace(named-ref, v): missing CallInfo (checker bug)")
+				inner_ty = info.sig.user_ret_type
+				ptr = self.lower_expr(expr.args[0])
 			new_val = self._lower_owning_consume(new_expr, expected=inner_ty)
 			tmp_local = f"__replace_old_{self.b.new_temp()}"
 			self.b.ensure_local(tmp_local)

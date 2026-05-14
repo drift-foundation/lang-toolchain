@@ -1,0 +1,80 @@
+module main;
+
+// Regression for the mariadb-team customer report (0.31.80):
+// `mem.replace(slot_mut, ...)` where `slot_mut: &mut T` is a named
+// local was rejected with `replace expects &mut T as the first
+// argument [E-AUTO-9370445a]` even though the type is exactly
+// `&mut T`. The validator was checking expression *form* (must be
+// inline `&mut <place>`) rather than just the resolved type.
+//
+// This file pins the named-local shape: bind `&mut b.x` to a local
+// `val slot_mut: &mut Optional<Resource> = &mut b.x;` and then pass
+// `slot_mut` to `mem.replace`. The doc-recommended Pattern A
+// (`effective-drift.md`, "Moving a field out of a struct") relies on
+// this composition: a take_token() helper can factor out the
+// `&mut <field>` projection and pass it down.
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+
+pub struct Resource { pub id: Int }
+pub struct Box { pub x: Optional<Resource> }
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+
+implement core.Destructible for Box {
+	pub fn destroy(var self: Box) nothrow -> Void { return; }
+}
+
+fn _none_resource() nothrow -> Optional<Resource> {
+	return Optional<Resource>::None();
+}
+
+fn main() nothrow -> Int {
+	var b = Box(x = Optional<Resource>::Some(Resource(id = 33)));
+
+	// The headline customer case: bind &mut b.x to a local first,
+	// then pass that local to mem.replace.
+	val slot_mut: &mut Optional<Resource> = &mut b.x;
+	val taken = mem.replace<type Optional<Resource> >(slot_mut, _none_resource());
+
+	match taken {
+		Some(r) => {
+			if r.id != 33 {
+				cons.eprintln("FAIL: wrong resource id");
+				return 1;
+			}
+		},
+		None => {
+			cons.eprintln("FAIL: expected Some");
+			return 2;
+		}
+	}
+
+	// b.x must now be None (slot was tombstoned + replaced).
+	match b.x {
+		Some(r) => {
+			cons.eprintln("FAIL: slot should be None after replace");
+			return 3;
+		},
+		None => { }
+	}
+
+	// A second take through the same named-ref shape must return None
+	// without panicking — proves we didn't accidentally double-move.
+	val slot_mut_2: &mut Optional<Resource> = &mut b.x;
+	val taken_again = mem.replace<type Optional<Resource> >(slot_mut_2, _none_resource());
+	match taken_again {
+		Some(r) => {
+			cons.eprintln("FAIL: second take should be None");
+			return 4;
+		},
+		None => { }
+	}
+
+	cons.println("ok");
+	return 0;
+}

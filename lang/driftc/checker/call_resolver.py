@@ -4671,11 +4671,21 @@ def resolve_call_expr(
 				if arg_types_local[1] is not None and _canonical_tid(arg_types_local[1]) != _canonical_tid(t_elem):
 					diagnostics.append(_tc_diag(message="cannot infer type arguments for 'replace': conflicting constraints", severity="error", span=getattr(expr, "loc", Span())))
 					return record_expr(expr, ctx.unknown_ty)
+				# The first-arg type-shape check above (line ~4668) is the
+				# load-bearing correctness check: it rejects by-value T,
+				# shared &T, and any other resolved type that isn't &mut T.
+				# We additionally extract a place_expr for the inline-borrow
+				# shape — used below to run a syntactic guardrail against
+				# `*var` where `var: &T` (a shape the type system on the
+				# arg alone can't disambiguate cleanly because it would
+				# need to look "through" the HVar binding). When the arg
+				# isn't a place form (HVar / HMethodCall / etc. resolving
+				# to &mut T), place_expr is None — that is NOT a rejection
+				# case, just a "no inline place to inspect". The named-ref
+				# value is structurally indistinguishable from `&mut *x`
+				# and is handled identically at lowering time.
 				place_expr = _borrowed_place(expr.args[0])
-				if place_expr is None:
-					diagnostics.append(_tc_diag(message="replace expects &mut T as the first argument", severity="error", span=getattr(expr, "loc", Span())))
-					return record_expr(expr, ctx.unknown_ty)
-				if any(isinstance(p, H.HPlaceDeref) for p in place_expr.projections) and isinstance(place_expr.base, H.HVar):
+				if place_expr is not None and any(isinstance(p, H.HPlaceDeref) for p in place_expr.projections) and isinstance(place_expr.base, H.HVar):
 					base_ty = ctx.type_expr(place_expr.base, used_as_value=False)
 					if base_ty is not None:
 						base_def = ctx.type_table.get(base_ty)

@@ -1,0 +1,7 @@
+{
+  "description": "e2e regression: mem.replace accepts a named local of type &mut T (was rejected with E-AUTO-9370445a in 0.31.80 because the validator was checking expression form, not just resolved type)",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}
