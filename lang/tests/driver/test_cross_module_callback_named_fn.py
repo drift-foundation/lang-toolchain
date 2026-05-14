@@ -239,6 +239,100 @@ fn main() nothrow -> Int {
 	assert rc == 0, payload
 
 
+def test_two_cross_module_callbacks_chained_dispatches_correctly(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	"""Multi-mw chain regression: two cross-module exported nothrow
+	`Callback3` middlewares stored simultaneously and dispatched
+	through a `next.call(...)` chain.
+
+	Pre-0.31.72 the resolver's rewrite of the wrapped fn-ref used
+	`has_wrapper=False`, which resolved the symbol to the bare
+	exported boundary wrapper (FnResult-returning) instead of the
+	`__impl` bare-R body.  The Callback3's vtable indirected
+	through a FnResult-shaped pointer where Fn{N}.call expected a
+	bare R — observed as a SIGSEGV inside the next-link dispatch
+	(bookkeeper's `auth_middleware` → `__lambda_cb_dispatch_0_1`
+	crash trace).
+
+	After fix (`has_wrapper=True`): the fn-ref resolves to
+	`<base>__impl`, matching the ABI that Fn{N}.call indirects
+	through.  Chain runs to completion: mw1.call(1, 2, next=...) →
+	next is a lambda that calls mw2.call(...) → mw2 returns
+	Ok(42) → exit 42.
+	"""
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "routes" / "routes.drift",
+		"""
+module routes;
+
+import std.core as core;
+
+pub error E { tag: String }
+
+export { E, mw1, mw2 };
+
+pub fn mw1(a: Int, b: Int, next: core.Callback2<Int, Int, core.Result<Int, E>>) nothrow -> core.Result<Int, E> {
+	return next.call(a, b);
+}
+
+pub fn mw2(a: Int, b: Int, next: core.Callback2<Int, Int, core.Result<Int, E>>) nothrow -> core.Result<Int, E> {
+	val _a = a;
+	val _b = b;
+	val _next = move next;
+	return core.Result<Int, E>::Ok(42);
+}
+""".lstrip(),
+	)
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main;
+
+import std.core as core;
+import routes as routes;
+
+fn terminal(a: Int, b: Int) nothrow -> core.Result<Int, routes.E> {
+	val _ = a;
+	val _ = b;
+	return core.Result<Int, routes.E>::Err(routes.E(tag = "should-not-reach"));
+}
+
+fn main() nothrow -> Int {
+	val cb1 = core.callback3(routes.mw1);
+	val cb2 = core.callback3(routes.mw2);
+	val cb_term = core.callback2(terminal);
+	match cb1.call(1, 2, core.callback2(|a: Int, b: Int| captures(move cb2, move cb_term) => {
+		return cb2.call(a, b, move cb_term);
+	})) {
+		core.Result::Ok(v) => { return v; },
+		core.Result::Err(_) => { return 99; }
+	}
+}
+""".lstrip(),
+	)
+	import subprocess as _sub
+	import sys as _sys
+	from lang.codegen.llvm.test_utils import sanitizer_timeout
+	root_path = Path(__file__).resolve().parents[3]
+	paths = sorted(mod_root.rglob("*.drift"))
+	out_bin = tmp_path / "bin"
+	cmd = [
+		_sys.executable, "-m", "lang.driftc.driftc", "--dev",
+		"--stdlib-root", str(stdlib_root() or (root_path / "stdlib")),
+		"-M", str(mod_root), *map(str, paths),
+		"--entry", "main::main", "-o", str(out_bin),
+	]
+	res = _sub.run(cmd, cwd=root_path, capture_output=True, text=True, timeout=sanitizer_timeout(60))
+	assert res.returncode == 0, f"compile failed: {res.stderr[:1500]}"
+	run = _sub.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(20))
+	assert run.returncode == 42, (
+		f"chain dispatch returned exit={run.returncode} (expected 42 from mw2.Ok); "
+		f"139=SIGSEGV (pre-fix symbol mismatch).  stderr: {run.stderr[:200]}"
+	)
+
+
 def test_callback3_throws_variant_still_rejects_nothrow_callback(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

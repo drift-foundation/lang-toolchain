@@ -5035,9 +5035,23 @@ def resolve_call_expr(
 					if spec is not None:
 						underlying_params = list(spec.param_types)
 						underlying_ret = spec.return_type
+						# `has_wrapper=True` resolves the fn-ref symbol
+						# to `<base>__impl` — the bare-ABI body — which
+						# is what `Fn{N}.call` expects.  `has_wrapper=
+						# False` would resolve to bare `<base>`, i.e.
+						# the public FnResult-returning boundary wrapper
+						# emitted by `llvm_codegen.py:462-465` for every
+						# exported entrypoint.  Mismatched ABIs at
+						# Fn{N}.call's indirect site cause a runtime
+						# SIGSEGV when the FnResult struct is misread as
+						# a bare R (observed in the bookkeeper trace:
+						# crash inside `__lambda_cb_dispatch_0_1` after
+						# `task_middleware` returns through the wrong
+						# symbol).
 						new_fn_ref = FunctionRefId(
 							fn_id=spec.target_fn_id,
 							kind=FunctionRefKind.IMPL,
+							has_wrapper=True,
 						)
 						new_call_sig = CallSig(
 							param_types=tuple(underlying_params),

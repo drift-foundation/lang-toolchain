@@ -1,5 +1,51 @@
 # Drift development history
 
+## 2026-05-13 (Cross-module callback-wrap symbol-routing fix)
+- **`core.callback{N}(other_mod.fn)` wrap now indirects to the
+  `<base>__impl` body, not the FnResult-returning public wrapper
+  (release 0.31.73, ABI unchanged at 14).**  Closes the runtime
+  SIGSEGV reported by the drift-web app team after 0.31.72: the
+  frontend accepted the wrap and IR validated, but at runtime —
+  when two named cross-module nothrow callbacks are stored
+  together and dispatched through `next.call(...)` — the second
+  middleware's vtable indirection crashed inside the dispatch
+  lambda.
+
+  Root cause: the 0.31.72 resolver rewrite at
+  `call_resolver.py` produced
+  `FunctionRefId(fn_id=target, kind=IMPL, has_wrapper=False)`.
+  `function_ref_symbol` resolves that to the bare `<base>`
+  symbol — which, for every `is_exported_entrypoint` function,
+  is the **public boundary wrapper** that converts the bare-R
+  return into `FnResult<R, Error>` (see
+  `llvm_codegen.py:462-465`).  `Fn{N}.call` is declared
+  `nothrow -> R`; the vtable indirected through a wrapper that
+  returned `{R, Error*}` instead of `R`, and the caller
+  misread the second field as a function pointer / vtable for
+  the next-link callback, crashing on the first `next.call(...)`
+  inside the chain.
+
+  Fix: set `has_wrapper=True` in the rewrite.
+  `function_ref_symbol` then resolves the fn-ref to
+  `<base>__impl` — the bare-ABI body that matches Fn{N}.call's
+  declared shape.  Two-byte change inside the existing thunk-
+  unwrap clause; no plumbing changes.
+
+  Regression coverage added:
+  - `test_two_cross_module_callbacks_chained_dispatches_correctly`
+    in `test_cross_module_callback_named_fn.py` — pins the
+    chain dispatch through `next.call(...)`.  Pre-0.31.73
+    exits 139 (SIGSEGV); post-fix exits 42.
+
+  Existing single-construction probes (5 cross-module + 2
+  cross-package) covered "callback wrap compiles + returns the
+  right value when called once", but never exercised storing two
+  cross-module callbacks and chaining them — which is what
+  surfaced the symbol-routing mismatch.
+
+  ABI unchanged.  Pure resolver-side fix; bump is compiler-only
+  (0.31.72 → 0.31.73).
+
 ## 2026-05-13 (Cross-module callback-wrap nothrow fix)
 - **`core.callback{N}(other_mod.fn)` over a declared-nothrow
   exported function no longer rejects with "callback{N} requires
