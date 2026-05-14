@@ -1,5 +1,65 @@
 # Drift development history
 
+## 2026-05-14 (`&T → T` coercion extended: let-init, return, binop `==`)
+- **`&T → T` auto-dup now applies in let/var init, `return`
+  expressions, and binary-op operand positions (release
+  0.31.75, ABI unchanged at 14).**  Closes the friction reported
+  by the drift-web app team (review-list items #3 and #4):
+
+  - **Let-init.** `val owned: String = s_ref` (where `s_ref:
+    &String`) used to error `initializer type 'Ref' does not
+    match declared type 'String'`.  Now derefs implicitly.
+
+  - **Return.** `return s_ref` from `fn extract(s: &String) ->
+    String` used to surface as `internal: cannot return
+    reference as owned 'String'; ... requires explicit 'copy
+    <expr>'` from `stage2/hir_to_mir.py:7665` (with a sibling
+    site at 7716 for throws-fn returns).  Now coerced at the
+    type-checker so stage 2 never sees the mismatch.
+
+  - **Binary-op operands.** `s_ref == "literal"` (and the
+    symmetric `"literal" == s_ref`) used to error `comparison
+    requires matching operand types (have Ref<String> vs
+    String)`.  Now derefs the ref side.  Applies to all six
+    comparison ops (`==`, `!=`, `<`, `<=`, `>`, `>=`).
+
+  Same mechanism as the 0.31.68 call-arg coercion: synthesize
+  an explicit `HUnary(DEREF, …)` HIR node; for non-Copy
+  ConstShare T, wrap in `HMethodCall(method_name="const_share")`.
+  Two new helpers in `type_checker.py` next to
+  `_proves_const_share`:
+  - `_ref_to_value_coerce_applies(ref_ty, inner_ty)` — the
+    Copy-or-ConstShare gate.
+  - `_rewrite_ref_to_value(expr, inner_ty)` — the HIR
+    synthesizer.  Both are reusable by future value slots if
+    the family expands again.
+
+  Sites wired:
+  - Let-init: `type_checker.py` HLet mismatch branch (before
+    the diagnostic).
+  - Return: `type_checker.py` HReturn type-check (between the
+    auto-try wrap and the interface mismatch branch).
+  - Binop comparison: `type_checker.py` HBinary EQ/NE/LT/LE/GT/GE
+    (before the mismatch diagnostic).
+
+  Regression coverage:
+  `lang/tests/driver/test_ref_to_value_extended_slots.py` —
+  8 compile-and-run probes:
+  - `test_let_init_coerces_ref_string_to_string` /
+    `test_let_init_coerces_ref_int_to_int`
+  - `test_return_coerces_ref_string_to_string` /
+    `test_return_coerces_ref_int_to_int`
+  - `test_eq_coerces_ref_string_lhs_to_string` /
+    `test_eq_coerces_ref_string_rhs_to_string` /
+    `test_eq_negative_case_compiles_and_returns_false`
+  - `test_let_init_negative_destructible_still_rejected` —
+    pins that non-Copy non-ConstShare types still error
+    (`Destructible`-bearing struct can't sneak through the
+    deref).
+
+  ABI unchanged.  Pure type-checker change; bump is compiler-
+  only (0.31.74 → 0.31.75).
+
 ## 2026-05-14 (Shared ref-returning rvalue chain receiver)
 - **Method chains on a shared `&T`-returning rvalue no longer
   reject with "borrow requires an addressable place; bind to a

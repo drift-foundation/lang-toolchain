@@ -2904,6 +2904,59 @@ class TypeChecker:
 			res = prove_is(search_world, env, {}, ty_key, cs_key)
 			return res.status is ProofStatus.PROVED
 
+		def _ref_to_value_coerce_applies(ref_ty: TypeId | None, inner_ty: TypeId | None) -> bool:
+			"""True iff `ref_ty` is `&T`, `inner_ty == T`, and `T` is
+			`Copy` or proves `ConstShare`.  Companion to
+			`_can_ref_to_value_coerce` (used by the call-arg coercion
+			path at line ~2256); this primitive lets non-call slots —
+			`let`/`var` init, `return` value, binary-op operand —
+			share the same Copy/ConstShare gate without going through
+			the call-arg signature shape.
+			"""
+			if ref_ty is None or inner_ty is None:
+				return False
+			rd = self.type_table.get(ref_ty)
+			if rd.kind is not TypeKind.REF or not rd.param_types:
+				return False
+			if rd.param_types[0] != inner_ty:
+				return False
+			return self.type_table.copy_status(inner_ty) is True or _proves_const_share(inner_ty)
+
+		def _rewrite_ref_to_value(expr: H.HExpr, inner_ty: TypeId) -> H.HExpr | None:
+			"""Wrap `expr` (whose type is `&inner_ty`) into an
+			`HUnary(DEREF, expr)` value-position expression of type
+			`inner_ty`.  For non-Copy ConstShare `inner_ty`, wrap the
+			deref in `.const_share()` so the produced value owns a
+			fresh share (mirrors the 0.31.68 call-arg path).
+			Returns the rewritten node, or `None` if the synthesized
+			deref didn't type as `inner_ty` (defensive — should not
+			happen given `_ref_to_value_coerce_applies` already
+			vetted the shape).
+			"""
+			deref_expr = H.HUnary(op=H.UnaryOp.DEREF, expr=expr)
+			_assign_node_id(deref_expr)
+			coerced_ty = type_expr(deref_expr, expected_type=inner_ty)
+			if coerced_ty != inner_ty:
+				return None
+			if (
+				self.type_table.copy_status(inner_ty) is not True
+				and _proves_const_share(inner_ty)
+			):
+				wrap = H.HMethodCall(
+					receiver=deref_expr,
+					method_name="const_share",
+					args=[],
+					kwargs=[],
+					origin="implicit_const_share",
+					loc=getattr(expr, "loc", Span()),
+				)
+				wrap.callsite_id = _alloc_callsite_id()
+				_assign_node_id(wrap)
+				_implicit_const_share_marks.discard(int(deref_expr.node_id))
+				type_expr(wrap)
+				return wrap
+			return deref_expr
+
 		def _require_copy_value(
 			ty_id: TypeId | None,
 			*,
@@ -9535,6 +9588,22 @@ class TypeChecker:
 							return record_expr(expr, self._bool)
 						if self.type_table.get(right_ty).kind is TypeKind.TYPEVAR:
 							return record_expr(expr, self._bool)
+						# Symmetric `&T == T` coercion (mirrors the
+						# 0.31.68 call-arg / 0.31.75 let-init paths).
+						# When exactly one operand is `&T` and the
+						# other is `T` with `T` Copy or proves
+						# ConstShare, deref the ref side so both
+						# operands match.
+						if _ref_to_value_coerce_applies(left_ty, right_ty):
+							_rewritten_left = _rewrite_ref_to_value(expr.left, right_ty)
+							if _rewritten_left is not None:
+								expr.left = _rewritten_left
+								return record_expr(expr, self._bool)
+						if _ref_to_value_coerce_applies(right_ty, left_ty):
+							_rewritten_right = _rewrite_ref_to_value(expr.right, left_ty)
+							if _rewritten_right is not None:
+								expr.right = _rewritten_right
+								return record_expr(expr, self._bool)
 						diagnostics.append(
 							_tc_diag(
 								message=(
@@ -10087,6 +10156,17 @@ class TypeChecker:
 							inf_name = self.type_table.get(inferred_ty).name
 							if inferred_ty == self._unknown:
 								pass  # upstream error already poisoned the expression; suppress cascading mismatch
+							elif _ref_to_value_coerce_applies(inferred_ty, declared_ty):
+								# `val name: T = expr_of_ref_T` — symmetric
+								# with the 0.31.68 call-arg `&T → T`
+								# coercion.  Synthesize an explicit
+								# deref + optional const_share wrap so
+								# HIR→MIR sees the unwrapped owned-value
+								# shape.  No diagnostic.
+								_rewritten = _rewrite_ref_to_value(stmt.value, declared_ty)
+								if _rewritten is not None:
+									stmt.value = _rewritten
+									inferred_ty = declared_ty
 							elif not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int") and not (is_uint_lit and decl_name == "Uint" and inf_name == "Uint") and not (is_uint64_lit and decl_name == "Uint64" and inf_name == "Uint64"):
 								diagnostics.append(
 									_tc_diag(
@@ -10505,6 +10585,25 @@ class TypeChecker:
 					if _should_auto_try(inferred, return_type):
 						stmt.value = _wrap_auto_try(stmt.value)
 						inferred = type_expr(stmt.value, expected_type=return_type, used_as_value=used_as_value)
+					# Symmetric `&T → T` return coercion.  Without
+					# this, `return s_ref` from `fn -> String` slips
+					# past the type-checker (no diagnostic here for
+					# non-interface mismatch) and surfaces in HIR→MIR
+					# as an `internal: cannot return reference as
+					# owned 'String'; ... requires explicit 'copy'`
+					# from `stage2/hir_to_mir.py:7665` (and a sibling
+					# at 7716 for the throws-fn path).  Coerce here so
+					# stage 2 sees a consistent owned-value return.
+					if (
+						return_type is not None
+						and inferred is not None
+						and inferred != return_type
+						and _ref_to_value_coerce_applies(inferred, return_type)
+					):
+						_rewritten_ret = _rewrite_ref_to_value(stmt.value, return_type)
+						if _rewritten_ret is not None:
+							stmt.value = _rewritten_ret
+							inferred = return_type
 					if return_type is not None and inferred is not None and inferred != return_type:
 						if self.type_table.get(return_type).kind is TypeKind.INTERFACE:
 							if self.type_table.get(inferred).kind is TypeKind.INTERFACE:
