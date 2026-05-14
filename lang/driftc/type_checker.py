@@ -8488,7 +8488,17 @@ class TypeChecker:
 						autoborrow_mode = getattr(method_res.resolution, "receiver_autoborrow", None)
 						if decl_self_mode is SelfMode.SELF_BY_REF and autoborrow_mode is None:
 							recv_place = place_expr_from_lvalue_expr(expr.receiver)
-							if recv_place is None and not isinstance(expr.receiver, H.HBorrow):
+							# Allow rvalue ref-returning calls as
+							# receivers when no auto-borrow is needed —
+							# the call already produced a `&T` value
+							# that matches `&self: &T` directly; nothing
+							# is being borrowed at the call site.
+							# Symmetric to the auto-borrow path below
+							# (lines ~8505) which permits HCall /
+							# HMethodCall / HInvoke rvalues for the
+							# shared receiver shape.
+							allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+							if recv_place is None and not allow_rvalue_receiver and not isinstance(expr.receiver, H.HBorrow):
 								diagnostics.append(
 									_tc_diag(
 										message="borrow requires an addressable place; bind to a local first",

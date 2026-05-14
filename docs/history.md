@@ -1,5 +1,48 @@
 # Drift development history
 
+## 2026-05-14 (Shared ref-returning rvalue chain receiver)
+- **Method chains on a shared `&T`-returning rvalue no longer
+  reject with "borrow requires an addressable place; bind to a
+  local first" (release 0.31.74, ABI unchanged at 14).**
+  Closes the friction reported by the drift-web app team
+  (review-list item #1, repro
+  `payload.node().get_string_at_path("...")` over std.json's
+  `JsonHandle.node() -> &JsonNode` then `JsonNode.get_string_at_path(&self, …)`).
+
+  Root cause: the method-call check site
+  (`type_checker.py:8489-8499`) had two parallel branches —
+  one for receivers needing auto-borrow (line ~8500) and one
+  for receivers whose type already matches `&self` (line 8489).
+  The auto-borrow branch carried an `allow_rvalue_receiver`
+  exception for `HCall` / `HMethodCall` / `HInvoke` shared
+  receivers; the no-auto-borrow branch did not.  When a chain's
+  intermediate call returned `&T` *directly* (matching `&self:
+  &T` without any borrow being taken), the no-auto-borrow path
+  still demanded an addressable place and rejected the rvalue
+  ref-returning call.
+
+  Same-shape failure existed for any `f() -> &T` followed by
+  `.method(&self: &T)`.  Not specific to std.json.  Pinned test
+  (`test_autoborrow_shared_receiver_allows_rvalue_place_chain`)
+  covered the *owned* rvalue chain (`make() -> Wrap` then
+  `.field` then `.get()`); the *ref-returning* rvalue chain was
+  uncovered.
+
+  Fix: lift `allow_rvalue_receiver` into the no-auto-borrow
+  branch.  Symmetric with the auto-borrow path.  `&mut` rvalue
+  chains stay rejected — that scoping decision is unchanged
+  (still pinned by
+  `test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion`).
+
+  Regression coverage:
+  - `test_autoborrow_shared_receiver_allows_ref_returning_rvalue_chain`
+    in `lang/tests/driver/test_autoborrow_receiver_place.py`:
+    `Outer.node() -> &Inner` → `.get(&self: &Inner)` chain
+    compiles + matches the std.json idiom shape.
+
+  ABI unchanged.  Pure type-checker change; bump is compiler-
+  only (0.31.73 → 0.31.74).
+
 ## 2026-05-13 (Cross-module callback-wrap symbol-routing fix)
 - **`core.callback{N}(other_mod.fn)` wrap now indirects to the
   `<base>__impl` body, not the FnResult-returning public wrapper

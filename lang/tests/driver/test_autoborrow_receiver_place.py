@@ -60,6 +60,54 @@ fn main() nothrow -> Int {
 	assert rc == 0, payload
 
 
+def test_autoborrow_shared_receiver_allows_ref_returning_rvalue_chain(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	"""Shared receiver chain where the intermediate rvalue is *already
+	a `&T`* (not an owned value): `node() -> &Inner` then
+	`.get(&self: &Inner)`.  No autoborrow is needed — the
+	intermediate ref already matches the method's `&self` — but
+	the pre-fix check at type_checker.py:8489-8499 required an
+	addressable place and rejected the rvalue ref-returning call
+	with "borrow requires an addressable place; bind to a local
+	first".
+
+	The sibling test `..._allows_rvalue_place_chain` covers the
+	`make() -> Wrap` (owned rvalue) → `.field` (place) → `.get()`
+	shape; this test covers the distinct `f() -> &T` (rvalue ref)
+	→ `.method()` shape, which surfaced against std.json's
+	`payload.node().get_string_at_path(...)` idiom in the
+	bookkeeper tree.
+	"""
+	mod_root = tmp_path / "mods"
+	_write_file(
+		mod_root / "main" / "main.drift",
+		"""
+module main;
+
+struct Inner { value: Int }
+
+implement Inner {
+	pub fn get(self: &Inner) nothrow -> Int { return self.value; }
+}
+
+struct Outer { inner: Inner }
+
+implement Outer {
+	pub fn node(self: &Outer) nothrow -> &Inner { return &self.inner; }
+}
+
+fn main() nothrow -> Int {
+	val o = Outer(inner = Inner(value = 42));
+	return o.node().get();
+}
+""".lstrip(),
+	)
+	paths = sorted(mod_root.rglob("*.drift"))
+	rc, payload = _run_driftc_json(["-M", str(mod_root), *map(str, paths)], capsys)
+	assert rc == 0, payload
+
+
 def test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion(tmp_path: Path) -> None:
 	mod_root = tmp_path / "mods"
 	_write_file(
