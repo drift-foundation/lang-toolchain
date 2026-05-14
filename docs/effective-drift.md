@@ -1640,24 +1640,46 @@ struct Token { /* ... */ }
 struct Session
     require Self is core.Destructible
 {
-    token: core.Optional<Token>,
+    token: Optional<Token>,
     /* ... other fields ... */
 }
 
+// Typed helper for the replacement value. Constructing the niladic
+// variant in a slot where inference is weak (e.g. the second argument
+// of `mem.replace`) needs an explicit type — either `Optional<T>::None()`
+// at the call site or, more readably, a `nothrow -> Optional<T>` helper
+// whose return slot supplies the type.
+fn _none_token() nothrow -> Optional<Token> {
+    return Optional<Token>::None();
+}
+
 implement Session {
-    pub fn take_token(self: &mut Session) -> core.Optional<Token> {
-        return mem.replace(&mut self.token, core.Optional::None);
+    pub fn take_token(self: &mut Session) -> Optional<Token> {
+        // Explicit generic on `mem.replace` avoids inference ambiguity
+        // with the `&mut Optional<Token>` first argument.
+        return mem.replace<type Optional<Token> >(&mut self.token, _none_token());
     }
 }
 
 implement core.Destructible for Session {
-    pub fn destroy(self) -> Void {
+    pub fn destroy(var self: Session) nothrow -> Void {
         // Runs over a fully-formed Session. self.token is either Some(_) or
         // None — both are valid; no special "this field was moved" branch.
         return;
     }
 }
 ```
+
+> **Note on Optional construction.** `Optional` is the prelude-level
+> generic — use `Optional<T>` directly, not `core.Optional<T>`. For
+> *value* construction of the niladic variant, prefer `Optional::None()`
+> when the surrounding slot's type is known (e.g. a `return` in a
+> `nothrow -> Optional<T>` function), or `Optional<T>::None()` /
+> a typed helper when inference is weak (function arguments,
+> `mem.replace` second arg, struct literals with multiple Optional
+> fields). In **pattern position** — `match`, `catch`, destructuring —
+> the bare form `Optional::None` is fine; the pattern resolver has the
+> scrutinee's type to work with.
 
 This is what the diagnostic on a `Destructible` aggregate is steering you
 toward:

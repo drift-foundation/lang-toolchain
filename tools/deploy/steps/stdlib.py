@@ -46,6 +46,18 @@ def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> Path:
 		"--package-id", "std",
 		"--package-version", version,
 		"--package-target", "drift-dev",
+		# std.codec.gzip_encode / gzip_decode call into libz via the
+		# runtime-owned shim in lang/language_runtime/codec_gzip_runtime.c.
+		# The shim's deflate / inflate symbols are unresolved at the .o
+		# level; consumers of the stdlib package auto-link -lz from this
+		# native_deps.link_libs entry. Note: because stdlib is compiled
+		# monolithically, every consumer Drift binary will carry libz.so.1
+		# in DT_NEEDED at runtime regardless of whether it calls into the
+		# gzip surface (std.codec's wrappers are emitted into the IR
+		# unconditionally and reference codec_gzip_runtime.o, so
+		# -Wl,--as-needed cannot drop libz). Accepted cost — libz is
+		# universal on x86_64 Linux, the only supported target.
+		"--native-link-lib", "z",
 		"--emit-package", str(dmp_path),
 		"--json",
 	]

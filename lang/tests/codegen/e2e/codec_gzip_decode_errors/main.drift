@@ -1,0 +1,99 @@
+module main;
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+fn _string_eq(a: &String, b: &String) nothrow -> Bool {
+	return *a == *b;
+}
+
+fn _seq_bytes(n: Int) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < n {
+		out.push(cast<Byte>(i % 256));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _check_err_tag(result: core.Result<Array<Byte>, codec.CodecError>, expected: &String) nothrow -> Bool {
+	match result {
+		Ok(b) => {
+			return false;
+		},
+		Err(e) => {
+			return _string_eq(&e.tag, expected);
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	// 1. Bad magic — random non-gzip bytes -> gzip-bad-data
+	var bad_magic: Array<Byte> = [];
+	bad_magic.push(cast<Byte>(0));
+	bad_magic.push(cast<Byte>(0));
+	bad_magic.push(cast<Byte>(0));
+	bad_magic.push(cast<Byte>(0));
+	val tag1: String = "gzip-bad-data";
+	if not _check_err_tag(codec.gzip_decode(&bad_magic), &tag1) {
+		cons.eprintln("bad-magic");
+		return 1;
+	}
+
+	// 2. Truncated — encode something, drop last 8 bytes -> gzip-truncated
+	val input = _seq_bytes(128);
+	val full = codec.gzip_encode(&input);
+	var trunc: Array<Byte> = [];
+	var i = 0;
+	while i < full.len - 8 {
+		trunc.push(full[i]);
+		i = i + 1;
+	}
+	val tag2: String = "gzip-truncated";
+	if not _check_err_tag(codec.gzip_decode(&trunc), &tag2) {
+		cons.eprintln("truncated");
+		return 2;
+	}
+
+	// 3. CRC mismatch — encode then flip a payload byte in the middle.
+	// The CRC32 at the end won't match -> gzip-bad-data.
+	var corrupted: Array<Byte> = [];
+	var j = 0;
+	while j < full.len {
+		corrupted.push(full[j]);
+		j = j + 1;
+	}
+	// Flip one bit in the compressed payload (skip 10-byte header).
+	val midx = 15;
+	val orig = cast<Int>(corrupted[midx]);
+	corrupted[midx] = cast<Byte>(orig + 1);
+	val r3 = codec.gzip_decode(&corrupted);
+	match r3 {
+		Ok(b) => {
+			cons.eprintln("crc-not-detected");
+			return 3;
+		},
+		Err(e) => {
+			// Either gzip-bad-data (corrupt block) or gzip-truncated
+			// (zlib couldn't reach end). Both are valid rejections.
+			val td: String = "gzip-bad-data";
+			val tt: String = "gzip-truncated";
+			if not (_string_eq(&e.tag, &td) or _string_eq(&e.tag, &tt)) {
+				cons.eprintln("crc-wrong-tag");
+				return 4;
+			}
+		}
+	}
+
+	// 4. Empty input -> gzip-truncated
+	var empty: Array<Byte> = [];
+	if not _check_err_tag(codec.gzip_decode(&empty), &tag2) {
+		cons.eprintln("empty");
+		return 5;
+	}
+
+	cons.println("ok");
+	return 0;
+}

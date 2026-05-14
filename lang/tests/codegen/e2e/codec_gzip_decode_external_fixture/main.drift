@@ -1,0 +1,88 @@
+module main;
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+// Fixture produced by external `python3 -c 'import gzip; gzip.compress(...)'`
+// (zlib level 6, mtime=0). Decoding to "the quick brown fox jumps over the
+// lazy dog\n" proves cross-implementation gzip compatibility.
+fn _fixture() nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	b.push(cast<Byte>(31));   b.push(cast<Byte>(-117)); // 139 unsigned = -117 signed
+	b.push(cast<Byte>(8));    b.push(cast<Byte>(0));
+	b.push(cast<Byte>(0));    b.push(cast<Byte>(0));
+	b.push(cast<Byte>(0));    b.push(cast<Byte>(0));
+	b.push(cast<Byte>(0));    b.push(cast<Byte>(-1));   // 255 unsigned = -1 signed
+	b.push(cast<Byte>(43));   b.push(cast<Byte>(-55));  // 201 = -55
+	b.push(cast<Byte>(72));   b.push(cast<Byte>(85));
+	b.push(cast<Byte>(40));   b.push(cast<Byte>(44));
+	b.push(cast<Byte>(-51));  // 205
+	b.push(cast<Byte>(76));   b.push(cast<Byte>(-50));  // 206
+	b.push(cast<Byte>(86));   b.push(cast<Byte>(72));
+	b.push(cast<Byte>(42));   b.push(cast<Byte>(-54));  // 202
+	b.push(cast<Byte>(47));   b.push(cast<Byte>(-49));  // 207
+	b.push(cast<Byte>(83));   b.push(cast<Byte>(72));
+	b.push(cast<Byte>(-53));  // 203
+	b.push(cast<Byte>(-81));  // 175
+	b.push(cast<Byte>(80));   b.push(cast<Byte>(-56));  // 200
+	b.push(cast<Byte>(42));   b.push(cast<Byte>(-51));  // 205
+	b.push(cast<Byte>(45));   b.push(cast<Byte>(40));
+	b.push(cast<Byte>(86));   b.push(cast<Byte>(-56));  // 200
+	b.push(cast<Byte>(47));   b.push(cast<Byte>(75));
+	b.push(cast<Byte>(45));   b.push(cast<Byte>(82));
+	b.push(cast<Byte>(40));   b.push(cast<Byte>(1));
+	b.push(cast<Byte>(74));   b.push(cast<Byte>(-25));  // 231
+	b.push(cast<Byte>(36));   b.push(cast<Byte>(86));
+	b.push(cast<Byte>(85));   b.push(cast<Byte>(42));
+	b.push(cast<Byte>(-92));  // 164
+	b.push(cast<Byte>(-28));  // 228
+	b.push(cast<Byte>(-89));  // 167
+	b.push(cast<Byte>(115));  b.push(cast<Byte>(1));
+	b.push(cast<Byte>(0));    b.push(cast<Byte>(-65));  // 191
+	b.push(cast<Byte>(-34));  // 222
+	b.push(cast<Byte>(-61));  // 195
+	b.push(cast<Byte>(40));   b.push(cast<Byte>(44));
+	b.push(cast<Byte>(0));    b.push(cast<Byte>(0));
+	b.push(cast<Byte>(0));
+	return move b;
+}
+
+fn _expected_bytes() nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	val msg = "the quick brown fox jumps over the lazy dog\n";
+	val n = msg.byte_length();
+	var i = 0;
+	while i < n {
+		b.push(core.string_byte_at(&msg, i));
+		i = i + 1;
+	}
+	return move b;
+}
+
+fn main() nothrow -> Int {
+	val gz = _fixture();
+	match codec.gzip_decode(&gz) {
+		Ok(decoded) => {
+			val expected = _expected_bytes();
+			if decoded.len != expected.len {
+				cons.eprintln("len mismatch");
+				return 1;
+			}
+			var i = 0;
+			while i < decoded.len {
+				if decoded[i] != expected[i] {
+					cons.eprintln("byte mismatch");
+					return 2;
+				}
+				i = i + 1;
+			}
+			cons.println("ok");
+			return 0;
+		},
+		Err(e) => {
+			cons.eprintln("decode err");
+			return 3;
+		}
+	}
+}

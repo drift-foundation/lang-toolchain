@@ -203,6 +203,17 @@ def _run_ir_with_clang(
 				return [f"-l{name}"]
 		return []
 	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	# std.codec.gzip_* calls into libz via the gzip shim in
+	# codec_gzip_runtime.o (part of the runtime archive). Because stdlib is
+	# compiled monolithically, every Drift binary's IR includes std.codec's
+	# wrappers, which reference codec_gzip_runtime.o, so the linker pulls
+	# it in regardless of whether the test source calls gzip_encode /
+	# gzip_decode — and -lz is required even for non-gzip tests.
+	# `-Wl,--as-needed` cannot strip libz here (refs are real).
+	# Production driftc gets -lz from the stdlib .dmp's
+	# native_deps.link_libs; tests build against stdlib source so we wire
+	# it explicitly here.
+	link_libs = link_libs + _link_flags_for_lib("z")
 	memcheck_enabled = _env_true("DRIFT_MEMCHECK")
 	massif_enabled = _env_true("DRIFT_MASSIF")
 	asan_enabled = _env_true("DRIFT_ASAN")

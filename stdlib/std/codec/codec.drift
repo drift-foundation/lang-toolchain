@@ -2,6 +2,8 @@ module std.codec;
 
 import std.core as core;
 import std.io as io;
+import std.mem as mem;
+import lang.thread as thread;
 
 export {
 	CodecError,
@@ -18,7 +20,11 @@ export {
 	base64url_decode,
 	base32_encode,
 	base32_decode,
-	base32_decoder
+	base32_decoder,
+	gzip_encode,
+	gzip_encode_level,
+	gzip_decode,
+	GZIP_DECODE_MAX_OUTPUT
 };
 
 /// Error returned by failable codec decoders.
@@ -861,4 +867,208 @@ fn _byte_u8(b: Byte) nothrow -> Int {
 		v = v + 256;
 	}
 	return v;
+}
+
+// =========================================================================
+// gzip codec — backed by the runtime/toolchain-owned C shim in
+// lang/language_runtime/codec_gzip_runtime.c which wraps libz.
+//
+// Design contract:
+//   * The shim hides zlib's z_stream entirely; Drift code sees only
+//     bytes-in / bytes-out + a small error-code enum.
+//   * The shim mallocs its output; the wrapper copies into a Drift
+//     Array<Byte> and frees the C buffer on every path.
+//   * Decode is capped at GZIP_DECODE_MAX_OUTPUT (256 MiB) to defend
+//     against decompression bombs; encode has no input-level failure
+//     mode (an internal zlib failure aborts in C, matching the
+//     runtime convention for invariant violations).
+//   * gzip wrapper is strict on both sides — encode produces RFC
+//     1952 gzip, decode rejects zlib-wrapped input.
+//   * Synchronous, CPU-bound: gzip_encode / gzip_decode block the
+//     current virtual thread for the full duration. Callers
+//     processing large payloads should consider running on a
+//     dedicated worker.
+
+/// Hard cap on `gzip_decode` output: 256 MiB.  Decompressed output
+/// exceeding this size returns `Err(CodecError{tag =
+/// "gzip-output-too-large", ...})`.
+pub const GZIP_DECODE_MAX_OUTPUT: Int = 268435456;
+
+// ---- shared codec status codes (mirror codec_runtime.h DRIFT_CODEC_*) ----
+// Declared as Int (compile-time integer literal); rc is widened to Int at
+// the compare site since v1 const initializers cannot use cast<>.
+const _CODEC_OK: Int = 0;
+const _CODEC_TRUNCATED: Int = 1;
+const _CODEC_BAD_DATA: Int = 2;
+const _CODEC_OUTPUT_TOO_LARGE: Int = 3;
+const _CODEC_INVALID_LEVEL: Int = 4;
+
+// ---- FFI bindings into the codec runtime shim ----
+extern "C" fn drift_codec_gzip_encode(
+	src: mem.Ptr<Byte>,
+	src_len: Int,
+	level: Int32,
+	out: mem.Ptr<mem.Ptr<Byte> >,
+	out_len: mem.Ptr<Int>
+) nothrow -> Int32;
+
+extern "C" fn drift_codec_gzip_decode(
+	src: mem.Ptr<Byte>,
+	src_len: Int,
+	max_out: Int,
+	out: mem.Ptr<mem.Ptr<Byte> >,
+	out_len: mem.Ptr<Int>
+) nothrow -> Int32;
+
+extern "C" fn drift_codec_free(p: mem.Ptr<Byte>) nothrow -> Void;
+
+extern "C" fn drift_codec_copy_bytes(
+	dst: mem.Ptr<Byte>,
+	src: mem.Ptr<Byte>,
+	len: Int
+) nothrow -> Void;
+
+fn _null_byte_ptr() nothrow -> mem.Ptr<Byte> {
+	return cast<mem.Ptr<Byte> >(cast<Uint>(0));
+}
+
+// Adopt a (C-malloc'd, length) buffer into a Drift Array<Byte>.
+// Copies + frees the C buffer; resulting Array owns the data.
+fn _gzip_take_buffer(c_buf: mem.Ptr<Byte>, c_len: Int) nothrow -> Array<Byte> {
+	if c_len <= 0 {
+		unsafe { drift_codec_free(c_buf); }
+		var empty: Array<Byte> = [];
+		return move empty;
+	}
+	var out = unsafe { thread.array_byte_alloc_uninit(c_len) };
+	val dst = unsafe { thread.array_byte_as_mut_ptr(&mut out) };
+	unsafe { drift_codec_copy_bytes(dst, c_buf, c_len); }
+	unsafe { drift_codec_free(c_buf); }
+	unsafe { thread.array_byte_commit_init_len(&mut out, c_len); }
+	return move out;
+}
+
+// Shared encode path; called by both gzip_encode (level = -1) and
+// gzip_encode_level (after Drift-side level validation).
+fn _gzip_encode_impl(bytes: &Array<Byte>, level: Int32) nothrow -> Array<Byte> {
+	val n = bytes.len;
+	var c_buf: mem.Ptr<Byte> = _null_byte_ptr();
+	var c_len: Int = 0;
+	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(&mut c_buf) };
+	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(&mut c_len) };
+	var rc: Int32 = cast<Int32>(0);
+	if n == 0 {
+		rc = unsafe { drift_codec_gzip_encode(_null_byte_ptr(), 0, level, out_ptr_p, out_len_p) };
+	} else {
+		val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(&bytes[0]) };
+		rc = unsafe { drift_codec_gzip_encode(in_ptr, n, level, out_ptr_p, out_len_p) };
+	}
+	// Encode shim aborts on internal failure; only INVALID_LEVEL can come
+	// back. The public `gzip_encode` always passes -1 (always valid), and
+	// `gzip_encode_level` validates first, so reaching a non-OK status here
+	// is a contract violation — defense in depth.
+	if cast<Int>(rc) != _CODEC_OK {
+		unsafe { drift_codec_free(c_buf); }
+		var empty: Array<Byte> = [];
+		return move empty;
+	}
+	return _gzip_take_buffer(c_buf, c_len);
+}
+
+/// Encodes `bytes` as a gzip stream using zlib's default compression
+/// level.  The output is RFC 1952 gzip — browser-compatible
+/// (Content-Encoding: gzip) and accepted by `gzip` / `gunzip` CLI
+/// tools, nginx, curl, etc.
+///
+/// **Synchronous CPU work.**  This call blocks the current virtual
+/// thread for the full duration of the compression.  For large
+/// payloads (multi-MiB), consider running on a dedicated worker
+/// thread to avoid stalling the scheduler.
+///
+/// Empty input produces a ~20-byte valid empty gzip stream.
+///
+/// Native dependency: requires libz at link time (the stdlib package
+/// declares `z` as a `native_deps.link_libs` entry; consumers
+/// auto-link `-lz`).
+///
+/// **See also:** `gzip_encode_level`, `gzip_decode`.
+pub fn gzip_encode(bytes: &Array<Byte>) nothrow -> Array<Byte> {
+	// -1 == Z_DEFAULT_COMPRESSION in zlib; treat as opaque "default" here.
+	return _gzip_encode_impl(bytes, cast<Int32>(-1));
+}
+
+/// Encodes `bytes` as a gzip stream at the given compression `level`.
+///
+/// `level` accepts:
+///   * `-1` — zlib's default compression (same as `gzip_encode`).
+///   * `0`  — no compression (valid gzip with deflate "stored" blocks).
+///   * `1..9` — zlib compression levels (1 = fastest, 9 = best ratio).
+///
+/// Any other value returns `Err(CodecError{tag = "gzip-invalid-level",
+/// offset = level})` without invoking the codec.
+///
+/// **See also:** `gzip_encode`, `gzip_decode`.
+pub fn gzip_encode_level(bytes: &Array<Byte>, level: Int) nothrow -> core.Result<Array<Byte>, CodecError> {
+	if level != -1 and (level < 0 or level > 9) {
+		return core.Result::Err(CodecError(tag = "gzip-invalid-level", offset = level));
+	}
+	var out = _gzip_encode_impl(bytes, cast<Int32>(level));
+	return core.Result::Ok(move out);
+}
+
+/// Decodes a gzip stream (RFC 1952) and returns the original bytes.
+///
+/// Strict gzip-only — zlib-wrapped streams (RFC 1950) are rejected.
+/// Output is capped at `GZIP_DECODE_MAX_OUTPUT` (256 MiB) to defend
+/// against decompression bombs; exceeding the cap returns
+/// `Err(CodecError{tag = "gzip-output-too-large"})`.
+///
+/// **Synchronous CPU work.**  This call blocks the current virtual
+/// thread for the full duration of the decompression.
+///
+/// **Returns:**
+///   * `Ok(Array<Byte>)` — decompressed bytes (possibly empty).
+///   * `Err(CodecError{tag = "gzip-truncated"})` — stream ended
+///     before a complete gzip frame was read.
+///   * `Err(CodecError{tag = "gzip-bad-data"})` — bad magic, unknown
+///     compression method, malformed deflate block, or CRC32
+///     mismatch.
+///   * `Err(CodecError{tag = "gzip-output-too-large"})` — output
+///     would exceed the cap.
+///
+/// **See also:** `gzip_encode`, `gzip_encode_level`.
+pub fn gzip_decode(bytes: &Array<Byte>) nothrow -> core.Result<Array<Byte>, CodecError> {
+	val n = bytes.len;
+	if n == 0 {
+		return core.Result::Err(CodecError(tag = "gzip-truncated", offset = 0));
+	}
+	var c_buf: mem.Ptr<Byte> = _null_byte_ptr();
+	var c_len: Int = 0;
+	val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(&bytes[0]) };
+	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(&mut c_buf) };
+	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(&mut c_len) };
+	val rc = unsafe {
+		drift_codec_gzip_decode(in_ptr, n, GZIP_DECODE_MAX_OUTPUT, out_ptr_p, out_len_p)
+	};
+	val rc_i = cast<Int>(rc);
+	if rc_i == _CODEC_OK {
+		var out = _gzip_take_buffer(c_buf, c_len);
+		return core.Result::Ok(move out);
+	}
+	// Shim sets c_buf=NULL on error; drift_codec_free is null-safe.
+	unsafe { drift_codec_free(c_buf); }
+	if rc_i == _CODEC_TRUNCATED {
+		return core.Result::Err(CodecError(tag = "gzip-truncated", offset = n));
+	}
+	if rc_i == _CODEC_BAD_DATA {
+		return core.Result::Err(CodecError(tag = "gzip-bad-data", offset = n));
+	}
+	if rc_i == _CODEC_OUTPUT_TOO_LARGE {
+		return core.Result::Err(CodecError(tag = "gzip-output-too-large", offset = n));
+	}
+	// _CODEC_INVALID_LEVEL is not produced by decode; any other code is a
+	// contract violation. The shim aborts on real internal failure, so the
+	// only way to land here is a contract drift between header and impl —
+	// surface it as bad-data rather than masking.
+	return core.Result::Err(CodecError(tag = "gzip-bad-data", offset = n));
 }

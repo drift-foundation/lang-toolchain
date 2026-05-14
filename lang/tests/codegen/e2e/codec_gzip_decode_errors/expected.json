@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip_decode error paths — bad magic / truncated / CRC mismatch / empty",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

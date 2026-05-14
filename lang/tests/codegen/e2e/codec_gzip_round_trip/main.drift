@@ -1,0 +1,88 @@
+module main;
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+fn _fail(code: Int) nothrow -> Int {
+	cons.eprintln("FAIL");
+	return code;
+}
+
+fn _byte_eq(a: Byte, b: Byte) nothrow -> Bool {
+	return a == b;
+}
+
+fn _byte_u8(b: Byte) nothrow -> Int {
+	var v = cast<Int>(b);
+	if v < 0 {
+		v = v + 256;
+	}
+	return v;
+}
+
+fn _seq_bytes(n: Int) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < n {
+		out.push(cast<Byte>(i % 256));
+		i = i + 1;
+	}
+	return move out;
+}
+
+fn _check_round_trip(input: &Array<Byte>) nothrow -> Bool {
+	val encoded = codec.gzip_encode(input);
+	if encoded.len < 18 {
+		return false;
+	}
+	if _byte_u8(encoded[0]) != 31 {
+		return false;
+	}
+	if _byte_u8(encoded[1]) != 139 {
+		return false;
+	}
+	match codec.gzip_decode(&encoded) {
+		Ok(decoded) => {
+			if decoded.len != input.len {
+				return false;
+			}
+			var i = 0;
+			while i < decoded.len {
+				if not _byte_eq(decoded[i], input[i]) {
+					return false;
+				}
+				i = i + 1;
+			}
+			return true;
+		},
+		Err(e) => {
+			return false;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	// Tiny input
+	val small = _seq_bytes(43);
+	if not _check_round_trip(&small) {
+		return _fail(1);
+	}
+
+	// Mid input — crosses the IO chunk boundary inside the shim's read loop
+	// (chunk is 1 MiB; mid is much smaller, but exercises non-trivial size)
+	val mid = _seq_bytes(8192);
+	if not _check_round_trip(&mid) {
+		return _fail(2);
+	}
+
+	// Larger input — 256 KiB, exercises the decode buffer grow loop
+	// (initial cap 4 KiB, geometric growth to ≥ output size).
+	val large = _seq_bytes(262144);
+	if not _check_round_trip(&large) {
+		return _fail(3);
+	}
+
+	cons.println("ok");
+	return 0;
+}

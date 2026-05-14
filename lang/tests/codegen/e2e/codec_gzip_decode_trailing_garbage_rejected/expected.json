@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip_decode rejects valid gzip + trailing bytes (and concatenated members) as gzip-bad-data — also pins that the avail_in check happens before inflateEnd",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

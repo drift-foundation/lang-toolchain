@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip_decode of a fixture produced by external python3 gzip.compress — cross-implementation compatibility check",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

@@ -1,5 +1,128 @@
 # Drift development history
 
+## 2026-05-14 (`std.codec.gzip_*` — first stdlib native dependency)
+- **`std.codec` gains gzip encode + decode backed by libz** (release
+  0.31.77, ABI unchanged at 14).  New public surface:
+
+  ```drift
+  pub fn gzip_encode(bytes: &Array<Byte>) nothrow -> Array<Byte>;
+  pub fn gzip_encode_level(bytes: &Array<Byte>, level: Int)
+      nothrow -> core.Result<Array<Byte>, CodecError>;
+  pub fn gzip_decode(bytes: &Array<Byte>)
+      nothrow -> core.Result<Array<Byte>, CodecError>;
+  pub const GZIP_DECODE_MAX_OUTPUT: Int = 268435456;  // 256 MiB cap
+  ```
+
+  - Output is RFC 1952 gzip (browser-compatible
+    `Content-Encoding: gzip`).  Strict on both sides: decode rejects
+    zlib-wrapped input.
+  - `gzip_encode` uses zlib's default compression level — opaque
+    "default", treat the specific number as zlib's call.
+  - `gzip_encode_level` accepts `-1` (default) or `0..9`.  Other
+    values return `Err(CodecError{tag = "gzip-invalid-level",
+    offset = level})` without invoking the codec.
+  - `gzip_decode` caps output at `GZIP_DECODE_MAX_OUTPUT` (256 MiB)
+    to defend against decompression bombs; exceeding the cap returns
+    `Err(CodecError{tag = "gzip-output-too-large"})`.
+  - Error tag family: `gzip-truncated`, `gzip-bad-data`,
+    `gzip-output-too-large`, `gzip-invalid-level`.  The convention
+    `<codec>-<reason>` is set up to extend cleanly when zstd lands
+    later (`zstd-truncated`, etc.).
+  - Synchronous CPU work — both calls block the current virtual
+    thread for the full duration.  Callers processing large payloads
+    should consider running on a dedicated worker thread to avoid
+    stalling the scheduler.
+
+  **Architecture.**  The gzip codec is implemented as a tiny C shim
+  (`lang/language_runtime/codec_gzip_runtime.c`, ~290 LOC) that
+  hides zlib's `z_stream` entirely behind three functions —
+  `drift_codec_gzip_encode`, `drift_codec_gzip_decode`,
+  `drift_codec_copy_bytes` — plus a shared `drift_codec_free`.  The
+  shim is in the runtime archive (`libdrift_rt_abi14.a`) alongside
+  `string_runtime.c`, `array_runtime.c`, etc.; Drift never sees the
+  `z_stream` struct or any zlib type.  Internal failure inside zlib
+  (Z_MEM_ERROR / Z_STREAM_ERROR) aborts the process at the C level,
+  matching the existing runtime convention for invariant violations
+  (compare `array_runtime.c` on alloc failure).  Input-shaped
+  failures (truncated stream, bad CRC, bad header) surface as
+  `Err(CodecError)`.
+
+  **Native dependency — first for stdlib.**  This is the first
+  stdlib module to declare a native library dependency.  The
+  `tools/deploy/steps/stdlib.py` build now passes `--native-link-lib
+  z` to the stdlib package emit, which adds `{"lib": "z"}` to the
+  `.dmp` manifest's `native_deps.link_libs`.  Consumers loading
+  stdlib auto-link `-lz` via the existing native-deps mechanism (see
+  `driftc.py:11951-11965`).  E2e tests build against stdlib source
+  rather than the .dmp, so `lang/tests/codegen/e2e/runner.py` also
+  passes `-lz` explicitly.
+
+  **Link-contract reality** (different from the initial design
+  expectation):
+
+  | Claim | Actual |
+  |---|---|
+  | "Every Drift binary needs `-lz` at link time" | **TRUE.**  libz-dev becomes a hard build-time dep for every Drift program on x86_64 Linux (the only supported target). |
+  | "Every Drift binary will have `libz.so.1` in `DT_NEEDED`" | **TRUE.**  Stdlib is compiled monolithically; `std.codec.gzip_*` wrappers get emitted into every binary's IR (whether called or not); they reference `codec_gzip_runtime.o`; that .o references libz.  `-Wl,--as-needed` can't help — the references are real. |
+  | "Only gzip-using binaries pay the runtime libz dep" | **FALSE** in the current monolithic-stdlib model.  Acceptable: libz is universally available on Linux x86_64; libz.so load adds microseconds at process start. |
+
+  `-Wl,--gc-sections` + `-ffunction-sections` does cut binary size
+  dramatically for non-gzip-using programs (~6.5× reduction in a
+  hello-world test) by stripping unused stdlib functions, but
+  doesn't drop the libz `NEEDED` entry — gold linker preserves the
+  `.dynsym` undef entries.  This is a known cost of choosing a
+  monolithic stdlib package over per-module subpackages.
+
+  **Family shape for future codecs.**  The C-shim file structure
+  generalizes to additional codecs without rewrites:
+
+  - `lang/language_runtime/codec_runtime.h` — shared header
+    (codec-agnostic return codes, `drift_codec_free`).
+  - `lang/language_runtime/codec_gzip_runtime.c` — gzip
+    implementation.
+  - Future `lang/language_runtime/codec_zstd_runtime.c` will mirror
+    the gzip file with `zstd` substitutions; same shared header,
+    same `drift_codec_free`, same `DRIFT_CODEC_*` return codes.
+    No `pub enum Codec { Gzip, Zstd }` dispatch layer — each codec
+    is its own per-name function pair.
+
+  **Compatibility verification.**  An e2e test
+  (`lang/tests/codegen/e2e/codec_gzip_decode_external_fixture/`)
+  embeds a gzip stream produced by external Python
+  `gzip.compress(...)` and decodes it to the original bytes,
+  proving cross-implementation compatibility with browser /
+  `gzip` CLI / nginx output.
+
+  **Test coverage.**
+  - `codec_gzip_round_trip` — small (43 B) / mid (8 KiB) / large
+    (256 KiB) encode+decode identity.
+  - `codec_gzip_decode_external_fixture` — decode python-gzip output.
+  - `codec_gzip_decode_errors` — bad magic, truncated stream, CRC
+    mismatch, empty input.
+  - `codec_gzip_level_validation` — invalid levels rejected with
+    `gzip-invalid-level`; valid levels (-1, 0, 1, 6, 9) round-trip.
+  - `codec_gzip_empty_input` — empty encode produces valid frame;
+    raw empty decode returns `gzip-truncated`.
+  - All five e2e cases pass under `DRIFT_MEMCHECK=1` valgrind with
+    zero leaks and zero errors across success + error paths.
+  - `lang/tests/driver/test_codec_gzip_native_deps.py` — pins the
+    wiring contract (shim in runtime sources, deploy step passes
+    `--native-link-lib z`, e2e runner passes `-lz`, expected symbols
+    present in shim, gzip exports in `std.codec`).
+
+  **ABI rationale.**  ABI stays at 14.  No existing runtime
+  signature, data layout, calling convention, or ownership/drop
+  contract changed.  Adding new C symbols to the runtime archive
+  plus a new native-deps entry is a toolchain packaging-contract
+  change — visible to consumers via their `.dmp` manifest — but
+  does not interact with the runtime ABI surface.
+
+  **Out of scope.**  Streaming (incremental encode/decode), gzip
+  member concatenation, custom dictionaries, `Content-Encoding:
+  deflate` (raw deflate), and zstd — all deferred.  Archive
+  formats (ZIP, tar) explicitly belong in a future `std.archive`
+  module, not `std.codec`.
+
 ## 2026-05-14 (`&T → T` slot coverage completed for owned destinations)
 - **Every owned-value destination slot now accepts `&T` when T is
   Copy or proves ConstShare, with the checker inserting a HIR-

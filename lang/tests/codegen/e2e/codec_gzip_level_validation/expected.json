@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip_encode_level — invalid levels rejected with gzip-invalid-level, valid levels round-trip",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

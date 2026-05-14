@@ -1,0 +1,109 @@
+module main;
+
+// Regression: a valid gzip stream followed by trailing garbage bytes
+// must be rejected with gzip-bad-data. RFC 1952 allows concatenated
+// gzip members; we explicitly accept exactly one member and reject
+// any bytes after the trailer (callers that need concat semantics
+// should drive it themselves).
+//
+// This test also pins that the trailing-input state is captured
+// *before* inflateEnd — earlier the check read strm.avail_in after
+// inflateEnd had already torn down the stream, which is undefined
+// behavior. Without the fix this test could pass by luck and fail
+// under valgrind / a different libz version.
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+fn _make_input() nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	val s = "the quick brown fox jumps over the lazy dog";
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		b.push(core.string_byte_at(&s, i));
+		i = i + 1;
+	}
+	return move b;
+}
+
+fn _append_byte(b: &mut Array<Byte>, v: Int) nothrow -> Void {
+	b.push(cast<Byte>(v));
+}
+
+fn main() nothrow -> Int {
+	val input = _make_input();
+	val valid = codec.gzip_encode(&input);
+
+	// Concatenate valid gzip + 4 trailing bytes (a non-gzip suffix).
+	var corrupted: Array<Byte> = [];
+	var i = 0;
+	while i < valid.len {
+		corrupted.push(valid[i]);
+		i = i + 1;
+	}
+	_append_byte(&mut corrupted, 0x41);  // 'A'
+	_append_byte(&mut corrupted, 0x42);  // 'B'
+	_append_byte(&mut corrupted, 0x43);  // 'C'
+	_append_byte(&mut corrupted, 0x44);  // 'D'
+
+	match codec.gzip_decode(&corrupted) {
+		Ok(b) => {
+			cons.eprintln("FAIL: trailing garbage accepted");
+			return 1;
+		},
+		Err(e) => {
+			val expected: String = "gzip-bad-data";
+			if e.tag != expected {
+				cons.eprintln("FAIL: trailing garbage wrong tag");
+				return 2;
+			}
+		}
+	}
+
+	// Sanity check: the unmodified valid gzip still decodes.
+	match codec.gzip_decode(&valid) {
+		Ok(decoded) => {
+			if decoded.len != input.len {
+				cons.eprintln("FAIL: valid decode length mismatch");
+				return 3;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: valid gzip rejected");
+			return 4;
+		}
+	}
+
+	// Also pin the boundary: a SECOND complete gzip member appended
+	// to the first is still trailing garbage from our perspective (we
+	// don't accept member concatenation in v1).
+	var two_members: Array<Byte> = [];
+	var j = 0;
+	while j < valid.len {
+		two_members.push(valid[j]);
+		j = j + 1;
+	}
+	var k = 0;
+	while k < valid.len {
+		two_members.push(valid[k]);
+		k = k + 1;
+	}
+	match codec.gzip_decode(&two_members) {
+		Ok(b) => {
+			cons.eprintln("FAIL: two members accepted");
+			return 5;
+		},
+		Err(e) => {
+			val expected2: String = "gzip-bad-data";
+			if e.tag != expected2 {
+				cons.eprintln("FAIL: two members wrong tag");
+				return 6;
+			}
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

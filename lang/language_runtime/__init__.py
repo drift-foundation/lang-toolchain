@@ -38,6 +38,17 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "posix" / "assert_runtime.c",
 		base / "random_runtime.c",
 		base / "env_runtime.c",
+		# gzip codec shim. Calls into libz (deflate/inflate). Note: because
+		# stdlib is compiled monolithically, std.codec's gzip wrapper
+		# functions are emitted into every Drift binary's IR (whether
+		# called or not), they reference symbols in this .o, so the linker
+		# pulls codec_gzip_runtime.o in unconditionally. Every Drift binary
+		# therefore links -lz at build time AND carries libz.so.1 in
+		# DT_NEEDED at runtime — `-Wl,--as-needed` cannot strip it because
+		# the references are real. Accepted cost: libz is universal on
+		# x86_64 Linux. The stdlib package declares --native-link-lib z so
+		# consumer auto-link picks it up via native_deps.link_libs.
+		base / "codec_gzip_runtime.c",
 		# ABI version stamp for link-time compatibility guard.
 		# Also carries the paired runtime identity sentinels (variant gated
 		# by -DDRIFT_RT_MODE_DEBUG) so they ride into every linked binary

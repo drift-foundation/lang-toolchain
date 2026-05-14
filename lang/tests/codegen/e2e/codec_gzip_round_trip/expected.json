@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip_encode / gzip_decode round-trip — small/mid/large inputs",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

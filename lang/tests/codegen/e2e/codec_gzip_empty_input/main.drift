@@ -1,0 +1,72 @@
+module main;
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+fn main() nothrow -> Int {
+	// Encode empty input — gzip produces ~20 bytes (header + empty
+	// deflate block + CRC32(empty) + ISIZE=0). At minimum a valid
+	// gzip frame, must round-trip to zero-length output.
+	var empty: Array<Byte> = [];
+	val gz_empty = codec.gzip_encode(&empty);
+	if gz_empty.len < 18 {
+		cons.eprintln("FAIL: empty-encode too small");
+		return 1;
+	}
+	// gzip magic bytes
+	var b0 = cast<Int>(gz_empty[0]);
+	var b1 = cast<Int>(gz_empty[1]);
+	if b0 < 0 { b0 = b0 + 256; }
+	if b1 < 0 { b1 = b1 + 256; }
+	if b0 != 31 or b1 != 139 {
+		cons.eprintln("FAIL: empty-encode bad magic");
+		return 2;
+	}
+
+	// Decode of empty-encoded output -> 0-length array
+	match codec.gzip_decode(&gz_empty) {
+		Ok(decoded) => {
+			if decoded.len != 0 {
+				cons.eprintln("FAIL: empty round-trip len");
+				return 3;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: empty round-trip err");
+			return 4;
+		}
+	}
+
+	// Decode of raw empty input -> Err(gzip-truncated)
+	match codec.gzip_decode(&empty) {
+		Ok(b) => {
+			cons.eprintln("FAIL: empty decode should err");
+			return 5;
+		},
+		Err(e) => {
+			val expected: String = "gzip-truncated";
+			if e.tag != expected {
+				cons.eprintln("FAIL: empty decode wrong tag");
+				return 6;
+			}
+		}
+	}
+
+	// gzip_encode_level on empty input also works (default level).
+	match codec.gzip_encode_level(&empty, -1) {
+		Ok(g) => {
+			if g.len < 18 {
+				cons.eprintln("FAIL: empty encode_level too small");
+				return 7;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: empty encode_level err");
+			return 8;
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

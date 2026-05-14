@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.codec.gzip — empty input encode produces valid frame, round-trips to 0 bytes; raw empty input decode is gzip-truncated",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

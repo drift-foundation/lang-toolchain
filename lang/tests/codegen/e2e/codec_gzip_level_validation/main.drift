@@ -1,0 +1,104 @@
+module main;
+
+import std.core as core;
+import std.codec as codec;
+import std.console as cons;
+
+fn _make_input() nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	val s = "the quick brown fox jumps over the lazy dog";
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		b.push(core.string_byte_at(&s, i));
+		i = i + 1;
+	}
+	return move b;
+}
+
+fn _expect_err_invalid_level(level: Int) nothrow -> Bool {
+	val input = _make_input();
+	match codec.gzip_encode_level(&input, level) {
+		Ok(b) => {
+			return false;
+		},
+		Err(e) => {
+			val expected: String = "gzip-invalid-level";
+			return e.tag == expected and e.offset == level;
+		}
+	}
+}
+
+fn _expect_ok_round_trip_at_level(level: Int) nothrow -> Bool {
+	val input = _make_input();
+	match codec.gzip_encode_level(&input, level) {
+		Ok(encoded) => {
+			match codec.gzip_decode(&encoded) {
+				Ok(decoded) => {
+					if decoded.len != input.len {
+						return false;
+					}
+					var i = 0;
+					while i < decoded.len {
+						if decoded[i] != input[i] {
+							return false;
+						}
+						i = i + 1;
+					}
+					return true;
+				},
+				Err(e) => {
+					return false;
+				}
+			}
+		},
+		Err(e) => {
+			return false;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	// Invalid levels — only -1 and 0..9 are valid.
+	if not _expect_err_invalid_level(-2) {
+		cons.eprintln("FAIL: -2 should be invalid");
+		return 1;
+	}
+	if not _expect_err_invalid_level(10) {
+		cons.eprintln("FAIL: 10 should be invalid");
+		return 2;
+	}
+	if not _expect_err_invalid_level(42) {
+		cons.eprintln("FAIL: 42 should be invalid");
+		return 3;
+	}
+	if not _expect_err_invalid_level(-100) {
+		cons.eprintln("FAIL: -100 should be invalid");
+		return 4;
+	}
+
+	// Valid levels round-trip cleanly.
+	if not _expect_ok_round_trip_at_level(-1) {
+		cons.eprintln("FAIL: level -1 (default) round-trip");
+		return 5;
+	}
+	if not _expect_ok_round_trip_at_level(0) {
+		cons.eprintln("FAIL: level 0 (stored) round-trip");
+		return 6;
+	}
+	if not _expect_ok_round_trip_at_level(1) {
+		cons.eprintln("FAIL: level 1 round-trip");
+		return 7;
+	}
+	if not _expect_ok_round_trip_at_level(6) {
+		cons.eprintln("FAIL: level 6 round-trip");
+		return 8;
+	}
+	if not _expect_ok_round_trip_at_level(9) {
+		cons.eprintln("FAIL: level 9 round-trip");
+		return 9;
+	}
+
+	cons.println("ok");
+	return 0;
+}
