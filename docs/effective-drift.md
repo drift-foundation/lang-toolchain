@@ -1873,3 +1873,185 @@ fn extract(borrowed: &String) nothrow -> String {
 `clone()` is an O(1) refcount increment (`drift_string_retain`), not a
 byte-by-byte copy. Don’t write manual byte-rebuild helpers — they allocate
 a new buffer for no benefit.
+
+## Named patterns: what looks like a restriction but is a design choice
+
+Three rules below look like "the compiler won't let me do X" but are
+deliberate shape choices in the language. Each has a small, local
+pattern that captures the intent. These are migration heuristics —
+when you hit one of these compile errors, the workaround isn't a
+workaround, it's the supported shape.
+
+### Typed-catch binders are projection views, not addressable structs
+
+In a typed catch arm (`catch ParseError(e) { … }`), the binder `e` is
+*not* an in-memory struct. It's a thin view over the error envelope
+plus the declared schema: each field access lowers to a compiler-owned
+helper that decodes the relevant slice of the canonical params JSON
+on demand. There is no offset / tag / line slot to take the address
+of — those values are computed at the moment of access.
+
+Valid: read scalar fields by value, including the envelope methods
+that *do* exist on the Error itself.
+
+```drift
+try {
+    ...
+} catch ParseError(e) {
+    val line = e.line;
+    val tag  = e.tag;
+    val env  = e.encode_compact();   // envelope JSON method
+    log.error("parse-failed", {"tag": tag, "line": line, "env": env});
+}
+```
+
+Invalid: take the address of the binder or one of its declared
+fields.
+
+```drift
+try {
+    ...
+} catch ParseError(e) {
+    val line_ref: &Int    = &e.line;    // no addressable storage
+    val binder_ref: &ParseError = &e;   // binder is not a struct
+}
+```
+
+Pattern when you need a borrow: bind to a local first. The local has
+real storage, the borrow is well-defined.
+
+```drift
+} catch ParseError(e) {
+    val line = e.line;                  // materialize
+    val line_ref: &Int = &line;         // borrow the local
+    consume(line_ref);
+}
+```
+
+### A function returning `&T` must derive that `&T` from a `&T` parameter (MVP escape policy)
+
+Drift's MVP doesn't have a full lifetime model. Instead, ref-escape
+soundness is enforced by a simpler rule: when a function returns
+`&T`, the returned reference must be traceable back to a `&T` (or
+`&mut T`) *parameter* of the same function. A `&T` constructed from
+a global / a local / a registry lookup has no parameter to bound its
+lifetime to, so the compiler rejects the return.
+
+Valid: the returned ref comes from a ref param.
+
+```drift
+fn first_byte(s: &String) nothrow -> &Byte {
+    return s.byte_at(0);                // derived from `&s`
+}
+
+fn project(req: &Request) nothrow -> &String {
+    return &req.body;                   // derived from `&req`
+}
+```
+
+Invalid: return a `&T` synthesized inside the function with no ref
+parameter to anchor it.
+
+```drift
+fn current_config() nothrow -> &Config {
+    val cfg = global_registry().get<type Config>();
+    return &cfg;                        // no &param to bound this ref
+}
+```
+
+Patterns when you can't pass a `&Registry` (or similar) as a
+parameter:
+
+- **Return by value** for small `Copy` types. The caller owns the
+  value; lifetime is its own problem.
+
+  ```drift
+  fn current_log_level() nothrow -> log.Level {
+      return global_registry().get<type log.Level>();
+  }
+  ```
+
+- **Pass the source ref in** when the caller already holds it.
+
+  ```drift
+  fn timeout_from(cfg: &Config) nothrow -> &conc.Duration {
+      return &cfg.request_timeout;
+  }
+  ```
+
+- **Hand back an Arc / handle** for shared ownership of non-Copy
+  data. The Arc carries its own lifetime.
+
+  ```drift
+  fn current_logger() nothrow -> conc.Arc<log.Logger> {
+      return global_registry().get_arc<type log.Logger>();
+  }
+  ```
+
+A full lifetime model that would lift this restriction is a planned
+follow-up, not something teams should code around with workarounds
+today.
+
+### Expression-position `match` arms are value-only
+
+`match` in expression position is Drift's multi-way value
+expression — shaped like a ternary, generalized over patterns.
+Every arm must evaluate to a normal value. Control-flow statements
+(`return`, `throw`, `break`, `continue`, `rethrow`) are not
+permitted inside expression-position arms; if a branch needs to
+exit the enclosing function, use statement-position `match`
+instead.
+
+Valid: every arm produces a value of the match's result type.
+
+```drift
+val x: Int = match opt {
+    Some(v) => { v },
+    None    => { 0 }
+};
+```
+
+Invalid: an arm exits via control flow instead of producing a value.
+
+```drift
+val x: Int = match opt {
+    Some(v) => { v },
+    None    => { return 0; }            // not allowed
+};
+
+val y: Int = match r {
+    Ok(v)  => { v },
+    Err(e) => { throw e; }              // not allowed
+};
+```
+
+Pattern for control flow in arms: use **statement-position `match`**.
+
+```drift
+match opt {
+    Some(v) => { return v; },
+    None    => { return 0; }
+}
+
+match r {
+    Ok(v)  => { return v; },
+    Err(e) => { throw e; }
+}
+```
+
+Pattern for "assign in some arms, control-flow in others" — combine
+statement-position `match` with a `var` declared before it.
+
+```drift
+var x: Int = 0;
+match r {
+    Ok(v)  => { x = v; },
+    Err(e) => { throw e; }
+}
+return x;
+```
+
+The mental model: expression `match` is a *value* (like a ternary,
+or a `let … in` in expression-oriented languages); statement
+`match` is a control-flow construct. Don't try to make one play
+the other's role.
