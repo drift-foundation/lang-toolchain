@@ -1,0 +1,7 @@
+{
+  "description": "e2e: uuid.v3_from_string — pinned bookkeeper vector; equality with v3_from_bytes of the same string's UTF-8 bytes; version stamping; determinism",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

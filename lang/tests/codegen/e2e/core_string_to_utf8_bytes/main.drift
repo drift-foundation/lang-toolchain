@@ -1,0 +1,108 @@
+module main;
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+
+fn _bytes_eq(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Bool {
+	if a.len != b.len {
+		return false;
+	}
+	var i = 0;
+	while i < a.len {
+		if a[i] != b[i] {
+			return false;
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// Reconstruct a String from an Array<Byte> using the existing pointer-based
+// intrinsic — this is what proves the round-trip closes cleanly with the
+// new string_to_utf8_bytes accessor.
+fn _string_from_array(bytes: &Array<Byte>) nothrow -> String {
+	if bytes.len == 0 {
+		return "";
+	}
+	val ptr = unsafe { mem.ptr_from_ref<type Byte>(&bytes[0]) };
+	return core.string_from_utf8_bytes(ptr, bytes.len);
+}
+
+fn main() nothrow -> Int {
+	// 1. ASCII round-trip — pinned bookkeeper input.
+	val ascii: String = "bookkeeper-test-01";
+	val a_bytes = core.string_to_utf8_bytes(&ascii);
+	if a_bytes.len != ascii.byte_length() {
+		cons.eprintln("ascii length mismatch");
+		return 1;
+	}
+	if a_bytes.len != 18 {  // "bookkeeper-test-01" is 18 ASCII chars
+		cons.eprintln("ascii expected len 18");
+		return 2;
+	}
+	val a_back = _string_from_array(&a_bytes);
+	if a_back != ascii {
+		cons.eprintln("ascii round-trip mismatch");
+		return 3;
+	}
+
+	// 2. Non-ASCII UTF-8 — proves byte length and character count differ.
+	//    "héllo" — 'é' is U+00E9, encoded as two bytes 0xC3 0xA9.
+	//    5 chars but 6 bytes.
+	val mixed: String = "héllo";
+	val m_bytes = core.string_to_utf8_bytes(&mixed);
+	if m_bytes.len != 6 {
+		cons.eprintln("héllo expected 6 bytes");
+		return 4;
+	}
+	// Verify exact byte sequence: 'h' 0xC3 0xA9 'l' 'l' 'o' = 104, 195, 169, 108, 108, 111.
+	var expected: Array<Byte> = [];
+	expected.push(cast<Byte>(104));
+	expected.push(cast<Byte>(195));  // 0xC3
+	expected.push(cast<Byte>(169));  // 0xA9
+	expected.push(cast<Byte>(108));
+	expected.push(cast<Byte>(108));
+	expected.push(cast<Byte>(111));
+	if not _bytes_eq(&m_bytes, &expected) {
+		cons.eprintln("héllo byte sequence wrong");
+		return 5;
+	}
+	val m_back = _string_from_array(&m_bytes);
+	if m_back != mixed {
+		cons.eprintln("héllo round-trip mismatch");
+		return 6;
+	}
+
+	// 3. Deeper multibyte — 3- and 4-byte UTF-8 sequences.
+	//    "あ" (U+3042) is 3 bytes: 0xE3 0x81 0x82.
+	//    "🦀" (U+1F980) is 4 bytes: 0xF0 0x9F 0xA6 0x80.
+	//    Together: 7 bytes total.
+	val deep: String = "あ🦀";
+	val d_bytes = core.string_to_utf8_bytes(&deep);
+	if d_bytes.len != 7 {
+		cons.eprintln("multibyte expected 7 bytes");
+		return 7;
+	}
+	val d_back = _string_from_array(&d_bytes);
+	if d_back != deep {
+		cons.eprintln("multibyte round-trip mismatch");
+		return 8;
+	}
+
+	// 4. Empty string — degenerate case.
+	val empty: String = "";
+	val e_bytes = core.string_to_utf8_bytes(&empty);
+	if e_bytes.len != 0 {
+		cons.eprintln("empty should produce 0 bytes");
+		return 9;
+	}
+	val e_back = _string_from_array(&e_bytes);
+	if e_back != empty {
+		cons.eprintln("empty round-trip mismatch");
+		return 10;
+	}
+
+	cons.println("ok");
+	return 0;
+}

@@ -1,0 +1,7 @@
+{
+  "description": "e2e: core.string_to_utf8_bytes — ASCII + multibyte UTF-8 round-trip through string_from_utf8_bytes; byte_length vs character count",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

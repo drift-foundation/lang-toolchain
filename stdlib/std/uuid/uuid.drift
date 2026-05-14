@@ -19,6 +19,7 @@ export {
 	namespace_x500,
 	v3,
 	v3_from_bytes,
+	v3_from_string,
 	v5,
 	v4,
 	version
@@ -307,6 +308,17 @@ pub fn v3_from_bytes(bytes: &Array<Byte>) nothrow -> Uuid {
 	var hash = crypto.md5(bytes);
 	_stamp_version_and_variant(&mut hash, 3);
 	return _uuid_from_16_bytes(&hash);
+}
+
+/// Convenience pairing of `core.string_to_utf8_bytes` and
+/// `v3_from_bytes` — matches `java.util.UUID.nameUUIDFromBytes(
+/// s.getBytes(StandardCharsets.UTF_8))`, which is the bookkeeper
+/// migration shape.  Use this rather than the `v3(namespace, name)`
+/// form when you need Java-compatible UUIDs (no RFC namespace prefix
+/// in the hash input).
+pub fn v3_from_string(s: &String) nothrow -> Uuid {
+	val bytes = core.string_to_utf8_bytes(s);
+	return v3_from_bytes(&bytes);
 }
 
 // ─── v5 (name-based, SHA-1) ────────────────────────────────────────

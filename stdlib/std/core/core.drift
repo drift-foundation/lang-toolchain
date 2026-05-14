@@ -81,6 +81,7 @@ export {
 	STRING_CONTAINER_ID,
 	string_byte_at,
 	string_from_utf8_bytes,
+	string_to_utf8_bytes,
 	ErrorParamsView,
 	ErrorContextView,
 	JsonCursor,
@@ -678,6 +679,31 @@ pub const STRING_CONTAINER_ID: String = "std.core:String";
 /// bytes are valid UTF-8.  Use `text.utf8_from_bytes` for the
 /// validating, safe form.
 @intrinsic pub fn string_from_utf8_bytes(ptr: mem.Ptr<Byte>, len: Int) nothrow -> String;
+
+/// Returns the raw UTF-8 bytes of `s` as an `Array<Byte>`.
+///
+/// Preserves embedded NUL bytes and multibyte sequences exactly —
+/// one Byte per UTF-8 byte.  The returned array's `len` equals
+/// `s.byte_length()`, which is *not* the same as the Unicode
+/// character count for non-ASCII text.
+///
+/// Symmetric public pair to `string_from_utf8_bytes`:
+/// `string_from_utf8_bytes` (via pointer + length) reconstructs the
+/// original string from this array's bytes, with no validation step
+/// (the input was already a valid Drift `String`).
+///
+/// **See also:** `string_from_utf8_bytes`, `string_byte_at`,
+/// `text.utf8_from_bytes` (validating decode of arbitrary bytes).
+pub fn string_to_utf8_bytes(s: &String) nothrow -> Array<Byte> {
+	val n = byte_length(s);
+	var out: Array<Byte> = [];
+	var i = 0;
+	while i < n {
+		out.push(string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move out;
+}
 
 implement String {
 	/// Returns the string's length in bytes (not characters).

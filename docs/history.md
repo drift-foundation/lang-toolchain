@@ -1,5 +1,56 @@
 # Drift development history
 
+## 2026-05-14 (`core.string_to_utf8_bytes` + `uuid.v3_from_string`)
+- **`std.core` gains the symmetric public pair to
+  `string_from_utf8_bytes`** (release 0.31.79, ABI unchanged at 14,
+  no toolchain change).  Tiny stdlib API addition driven by the
+  bookkeeper UUID migration shape.
+
+  ```drift
+  // std.core
+  pub fn string_to_utf8_bytes(s: &String) nothrow -> Array<Byte>;
+
+  // std.uuid
+  pub fn v3_from_string(s: &String) nothrow -> Uuid;
+  ```
+
+  - `core.string_to_utf8_bytes` returns the raw UTF-8 bytes of `s` —
+    one `Byte` per UTF-8 byte, preserving embedded NULs and
+    multibyte sequences exactly.  Output array's `len` equals
+    `s.byte_length()`, which is *not* the same as the Unicode
+    character count for non-ASCII text (e.g. `"héllo"` is 5 chars
+    but 6 bytes).  Symmetric public pair to the existing
+    `string_from_utf8_bytes(ptr, len)` intrinsic.
+  - `uuid.v3_from_string(s)` is sugar for
+    `v3_from_bytes(&core.string_to_utf8_bytes(s))` — matches
+    `java.util.UUID.nameUUIDFromBytes(s.getBytes(StandardCharsets.UTF_8))`,
+    the bookkeeper migration shape.  Distinct from
+    `v3(namespace, name)` (no RFC 4122 namespace prefix in the
+    hash input).
+
+  **Pinned vectors** (unchanged from the prior slice):
+  - `v3_from_string("bookkeeper-test-01") ==
+    0655ee6e-92dd-3c59-af2d-b002138e7409` (identical to the
+    previously-pinned `v3_from_bytes` vector — `v3_from_string`
+    delegates to it after a UTF-8 extraction).
+
+  **Test coverage.**
+  - `lang/tests/codegen/e2e/core_string_to_utf8_bytes/` — ASCII
+    round-trip ("bookkeeper-test-01"), 2-byte multibyte ("héllo"
+    = 6 bytes exact byte sequence pinned), 3+4-byte multibyte
+    ("あ🦀" = 7 bytes), empty-string degenerate case.  Each
+    round-trips through `string_from_utf8_bytes`.
+  - `lang/tests/codegen/e2e/uuid_v3_from_string/` — bookkeeper
+    pinned vector; equality with `v3_from_bytes` of the same
+    string's UTF-8 bytes (proves the convenience really delegates
+    without double-hashing or UTF-8 round-trip artifact); version
+    stamping; determinism; non-ASCII input differs from ASCII.
+  - All ten existing uuid + new core tests pass under
+    `DRIFT_MEMCHECK=1` valgrind with zero leaks and zero errors.
+
+  **ABI / packaging.**  No ABI change.  Stdlib version bump only
+  (compiler 0.31.78 → 0.31.79).  Pure Drift; no native deps.
+
 ## 2026-05-14 (`std.uuid` — pure-Drift RFC 4122 UUIDs)
 - **New stdlib module `std.uuid`** ships in release 0.31.78 (ABI
   unchanged at 14, no toolchain change).  Pure Drift, built on

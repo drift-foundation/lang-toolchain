@@ -1,0 +1,77 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn _string_bytes(s: &String) nothrow -> Array<Byte> {
+	var b: Array<Byte> = [];
+	val n = s.byte_length();
+	var i = 0;
+	while i < n {
+		b.push(core.string_byte_at(s, i));
+		i = i + 1;
+	}
+	return move b;
+}
+
+fn _uuid_bytes_eq(a: &uuid.Uuid, b: &uuid.Uuid) nothrow -> Bool {
+	val ab = uuid.to_bytes(a);
+	val bb = uuid.to_bytes(b);
+	if ab.len != bb.len { return false; }
+	var i = 0;
+	while i < ab.len {
+		if ab[i] != bb[i] { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn main() nothrow -> Int {
+	// Pinned vector: v3_from_string("bookkeeper-test-01") matches the
+	// bookkeeper ask vector — i.e. it's identical to v3_from_bytes of
+	// the same string's UTF-8 bytes (the Java
+	// UUID.nameUUIDFromBytes(s.getBytes(UTF_8)) shape).
+	val s: String = "bookkeeper-test-01";
+	val u = uuid.v3_from_string(&s);
+	val expected: String = "0655ee6e-92dd-3c59-af2d-b002138e7409";
+	val actual = uuid.to_string(&u);
+	if actual != expected {
+		cons.eprintln("v3_from_string mismatch");
+		return 1;
+	}
+
+	// Equality with the manually-built v3_from_bytes path: proves the
+	// convenience really delegates to v3_from_bytes after a UTF-8
+	// extraction (no double-hashing, no UTF-8 round-trip artifact).
+	val manual_bytes = _string_bytes(&s);
+	val u_manual = uuid.v3_from_bytes(&manual_bytes);
+	if not _uuid_bytes_eq(&u, &u_manual) {
+		cons.eprintln("v3_from_string != v3_from_bytes(utf8)");
+		return 2;
+	}
+
+	// Non-ASCII input still produces a valid v3 UUID.  We don't pin a
+	// specific multibyte vector here (no Python reference handy in the
+	// test); just verify version stamping and determinism.
+	val multi: String = "héllo";
+	val um = uuid.v3_from_string(&multi);
+	if uuid.version(&um) != 3 {
+		cons.eprintln("v3_from_string multibyte wrong version");
+		return 3;
+	}
+	val um_again = uuid.v3_from_string(&multi);
+	if not _uuid_bytes_eq(&um, &um_again) {
+		cons.eprintln("v3_from_string not deterministic");
+		return 4;
+	}
+
+	// And it should differ from the ASCII vector (different input → different hash).
+	if _uuid_bytes_eq(&u, &um) {
+		cons.eprintln("v3_from_string collision (impossible w/ MD5)");
+		return 5;
+	}
+
+	cons.println("ok");
+	return 0;
+}
