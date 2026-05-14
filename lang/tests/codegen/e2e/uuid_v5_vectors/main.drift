@@ -1,0 +1,56 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn main() nothrow -> Int {
+	// Cross-checked against CPython's uuid.uuid5 (SHA-1):
+	//   v5(NS_DNS, "python.org") == 886313e1-3b8a-5372-9b90-0c9aee199e5d
+	val u1 = uuid.v5(&uuid.namespace_dns(), &("python.org"));
+	val e1: String = "886313e1-3b8a-5372-9b90-0c9aee199e5d";
+	val s1 = uuid.to_string(&u1);
+	if s1 != e1 {
+		cons.eprintln("v5(dns, python.org) mismatch");
+		return 1;
+	}
+
+	// Cross-checked against CPython:
+	//   v5(NS_DNS, "example.com") == cfbff0d1-9375-5685-968c-48ce8b15ae17
+	val u2 = uuid.v5(&uuid.namespace_dns(), &("example.com"));
+	val e2: String = "cfbff0d1-9375-5685-968c-48ce8b15ae17";
+	val s2 = uuid.to_string(&u2);
+	if s2 != e2 {
+		cons.eprintln("v5(dns, example.com) mismatch");
+		return 2;
+	}
+
+	// Version stamping (5) and variant bits (10b).
+	if uuid.version(&u1) != 5 { return 3; }
+	if uuid.version(&u2) != 5 { return 4; }
+	val bytes = uuid.to_bytes(&u1);
+	var b8 = cast<Int>(bytes[8]);
+	if b8 < 0 { b8 = b8 + 256; }
+	if b8 / 64 != 2 {
+		cons.eprintln("v5 wrong variant bits");
+		return 5;
+	}
+
+	// Determinism — same inputs → same output.
+	val u_again = uuid.v5(&uuid.namespace_dns(), &("python.org"));
+	if uuid.to_string(&u_again) != s1 {
+		cons.eprintln("v5 not deterministic");
+		return 6;
+	}
+
+	// Distinct from the v3 of the same inputs (different hash family,
+	// different version nibble).
+	val u3 = uuid.v3(&uuid.namespace_dns(), &("python.org"));
+	if uuid.to_string(&u3) == s1 {
+		cons.eprintln("v3 and v5 should differ");
+		return 7;
+	}
+
+	cons.println("ok");
+	return 0;
+}

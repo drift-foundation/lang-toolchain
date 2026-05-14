@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.uuid parse / to_string / from_bytes / to_bytes round-trip + case-insensitive parse",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

@@ -1,5 +1,130 @@
 # Drift development history
 
+## 2026-05-14 (`std.uuid` — pure-Drift RFC 4122 UUIDs)
+- **New stdlib module `std.uuid`** ships in release 0.31.78 (ABI
+  unchanged at 14, no toolchain change).  Pure Drift, built on
+  existing `std.crypto.md5` / `std.crypto.sha1` /
+  `std.random.random_secure_bytes`.  No native dependencies.
+
+  Public surface:
+
+  ```drift
+  pub struct Uuid { hi: Uint64, lo: Uint64 }    // private fields
+  pub error UuidError { tag: String, message: String }
+
+  pub fn parse(s: &String) nothrow -> core.Result<Uuid, UuidError>;
+  pub fn from_bytes(b: &Array<Byte>) nothrow -> core.Result<Uuid, UuidError>;
+  pub fn to_string(u: &Uuid) nothrow -> String;
+  pub fn to_bytes(u: &Uuid) nothrow -> Array<Byte>;
+
+  pub fn nil() nothrow -> Uuid;
+  pub fn namespace_dns() nothrow -> Uuid;
+  pub fn namespace_url() nothrow -> Uuid;
+  pub fn namespace_oid() nothrow -> Uuid;
+  pub fn namespace_x500() nothrow -> Uuid;
+
+  pub fn v3(namespace: &Uuid, name: &String) nothrow -> Uuid;
+  pub fn v3_from_bytes(bytes: &Array<Byte>) nothrow -> Uuid;
+  pub fn v5(namespace: &Uuid, name: &String) nothrow -> Uuid;
+  pub fn v4() nothrow -> core.Result<Uuid, UuidError>;
+
+  pub fn version(u: &Uuid) nothrow -> Int;
+  ```
+
+  **Design notes.**
+
+  - **Fixed-size repr.**  Internally `Uuid` is a `{hi: Uint64, lo:
+    Uint64}` struct — not `Array<Byte>` — so it is genuinely
+    16 bytes, Copy, trivially passable by value, and free of any
+    "wrong length" failure mode at the boundary between fields.
+    Fields are private (no `pub`); construction goes through
+    `from_bytes` / `parse` / the generators.
+  - **`v4` is fallible.**  `random_secure_bytes` can fail (very
+    early boot, missing OS RNG); `v4 -> Result` surfaces that
+    rather than hiding it behind an abort.  `UuidError{tag =
+    "uuid-os-random-failed"}` is the failure form.
+  - **`v3` vs `v3_from_bytes`.**  `v3(namespace, name)` is RFC 4122
+    §4.3 (MD5 of namespace bytes ‖ name UTF-8).
+    `v3_from_bytes(bytes)` is the Java
+    `UUID.nameUUIDFromBytes(byte[])` shape — MD5 of the raw input
+    with no namespace prefix.  Both stamp version-3 and the RFC
+    variant bits.  The Java compat form is for migrating
+    Java-generated UUIDs without rebuilding inputs.
+  - **`v5` truncates SHA-1.**  RFC 4122 §4.3 says SHA-1's 20-byte
+    output is truncated to 16; the version (5) and variant (10b)
+    nibbles are then stamped.
+  - **Parser accepts canonical form only.**  36 chars, lowercase or
+    uppercase hex (case-insensitive), hyphens at positions 8, 13,
+    18, 23.  No braced (`{...}`) or `urn:uuid:` prefix support in
+    v1 — add later if needed.
+  - **Formatter emits lowercase canonical form.**  No uppercase
+    output option in v1 (matches RFC 4122 §3 "preferred form" and
+    every modern UUID library).
+  - **`tag` not `kind`.**  Matches the existing stdlib error
+    convention (`CodecError`, `RandomError`, etc.) rather than
+    `NetError`'s older `kind` field.
+  - **`pub const Uuid = ...` not supported in v1.**  Niladic struct
+    values can't appear as const initializers, so the four RFC §C
+    namespaces ship as `nothrow` functions
+    (`namespace_dns()` etc.), returning the same constant
+    every call.  Cheap — two `Uint64` literals into a struct
+    literal, no allocation.
+
+  **Pinned test vectors** (all cross-checked against CPython's
+  `uuid` module):
+
+  | Input | Output |
+  |---|---|
+  | `v3(namespace_dns(), "www.python.org")` | `7ffc9d67-9009-37fc-827f-5d088dabcca2` |
+  | `v3(namespace_dns(), "example.com")` | `9073926b-929f-31c2-abc9-fad77ae3e8eb` |
+  | `v3(namespace_url(), "https://www.google.com")` | `d39a36cc-b262-3c67-a6ca-0168e948bdd4` |
+  | `v3_from_bytes("bookkeeper-test-01")` | `0655ee6e-92dd-3c59-af2d-b002138e7409` |
+  | `v5(namespace_dns(), "python.org")` | `886313e1-3b8a-5372-9b90-0c9aee199e5d` |
+  | `v5(namespace_dns(), "example.com")` | `cfbff0d1-9375-5685-968c-48ce8b15ae17` |
+  | `nil()` | `00000000-0000-0000-0000-000000000000` |
+  | `namespace_dns()` | `6ba7b810-9dad-11d1-80b4-00c04fd430c8` |
+  | `namespace_url()` | `6ba7b811-9dad-11d1-80b4-00c04fd430c8` |
+  | `namespace_oid()` | `6ba7b812-9dad-11d1-80b4-00c04fd430c8` |
+  | `namespace_x500()` | `6ba7b814-9dad-11d1-80b4-00c04fd430c8` |
+
+  The `python.org` v3 and `bookkeeper-test-01` v3_from_bytes vectors
+  are the ones called out in the bookkeeper/singular ask.
+
+  **Test coverage** (under
+  `lang/tests/codegen/e2e/uuid_*/`):
+  - `uuid_round_trip` — `parse` ↔ `to_string`, `from_bytes` ↔
+    `to_bytes`, case-insensitive parse normalizes to lowercase
+    output.
+  - `uuid_v3_vectors` — three v3 vectors including the
+    python.org pin.
+  - `uuid_v3_from_bytes_vector` — bookkeeper-test-01 pin +
+    distinct-from-`v3(ns, name)` (proves the namespace prefix is
+    really skipped).
+  - `uuid_v5_vectors` — two v5 vectors + distinct-from-v3
+    (different hash family, different version nibble).
+  - `uuid_v4_shape` — version = 4, variant = 10b, 16 bytes /
+    36-char canonical form, parse round-trip, distinct
+    consecutive draws.
+  - `uuid_namespaces` — all four RFC §C namespaces + nil.
+  - `uuid_parse_errors` — `uuid-bad-length`, `uuid-bad-format`,
+    `uuid-bad-hex`, `from_bytes` wrong-length variants.
+  - `uuid_version` — `version()` over nil / v3 / v3_from_bytes /
+    v5 / v4 / parsed-v5.
+  - All eight e2e cases pass under `DRIFT_MEMCHECK=1` valgrind
+    with zero leaks and zero errors.
+
+  **ABI / packaging.**  No ABI change.  Stdlib version bump only
+  (compiler 0.31.77 → 0.31.78).  No new native dependencies; the
+  module is pure Drift.
+
+  **Out of scope for v1.**  v1 / v2 (timestamp + node) — usually
+  unwanted on modern systems and harder to get right than v4.
+  v6 / v7 / v8 (RFC 9562 / draft-peabody-dispatch-new-uuid-format)
+  — defer until there is a concrete ask.  Microsoft GUID byte
+  order (mixed-endian) — defer; v1 is strictly RFC 4122 network
+  byte order.  Braced (`{...}`) and `urn:uuid:` parse forms —
+  defer; add when a consumer needs them.
+
 ## 2026-05-14 (`std.codec.gzip_*` — first stdlib native dependency)
 - **`std.codec` gains gzip encode + decode backed by libz** (release
   0.31.77, ABI unchanged at 14).  New public surface:

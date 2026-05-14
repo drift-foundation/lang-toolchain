@@ -1,0 +1,96 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn _expect_err(s: &String, expected_tag: &String, code: Int) nothrow -> Int {
+	match uuid.parse(s) {
+		Ok(u) => {
+			cons.eprintln("expected Err");
+			return code;
+		},
+		Err(e) => {
+			if e.tag != *expected_tag {
+				cons.eprintln("wrong error tag");
+				return code + 100;
+			}
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val len_tag: String = "uuid-bad-length";
+	val fmt_tag: String = "uuid-bad-format";
+	val hex_tag: String = "uuid-bad-hex";
+
+	// Empty input → bad length
+	val empty: String = "";
+	val r1 = _expect_err(&empty, &len_tag, 1);
+	if r1 != 0 { return r1; }
+
+	// Wrong length → bad length
+	val short: String = "550e8400-e29b-41d4-a716";
+	val r2 = _expect_err(&short, &len_tag, 2);
+	if r2 != 0 { return r2; }
+
+	// 36 chars but hyphens in wrong place → bad format
+	val no_hyphens: String = "550e8400xe29bx41d4xa716x446655440000";
+	val r3 = _expect_err(&no_hyphens, &fmt_tag, 3);
+	if r3 != 0 { return r3; }
+
+	// 36 chars, hyphens correct, but non-hex char → bad hex
+	val bad_hex: String = "550e8400-e29b-41d4-a716-44665544000g";
+	val r4 = _expect_err(&bad_hex, &hex_tag, 4);
+	if r4 != 0 { return r4; }
+
+	// Length 36 but hyphen at position 8 missing (replaced with 'x') →
+	// bad format. (Bytes are otherwise valid hex.)
+	val misplaced: String = "550e8400xe29b-41d4-a716-446655440000";
+	val r5 = _expect_err(&misplaced, &fmt_tag, 5);
+	if r5 != 0 { return r5; }
+
+	// from_bytes with wrong length → bad length
+	var b15: Array<Byte> = [];
+	var i = 0;
+	while i < 15 {
+		b15.push(cast<Byte>(0));
+		i = i + 1;
+	}
+	match uuid.from_bytes(&b15) {
+		Ok(u) => {
+			cons.eprintln("from_bytes(15) should err");
+			return 6;
+		},
+		Err(e) => {
+			if e.tag != len_tag {
+				cons.eprintln("from_bytes wrong err tag");
+				return 7;
+			}
+		}
+	}
+
+	// from_bytes with 17 bytes → bad length
+	var b17: Array<Byte> = [];
+	var j = 0;
+	while j < 17 {
+		b17.push(cast<Byte>(0));
+		j = j + 1;
+	}
+	match uuid.from_bytes(&b17) {
+		Ok(u) => {
+			cons.eprintln("from_bytes(17) should err");
+			return 8;
+		},
+		Err(e) => {
+			if e.tag != len_tag {
+				cons.eprintln("from_bytes(17) wrong tag");
+				return 9;
+			}
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

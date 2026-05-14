@@ -1,0 +1,80 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn main() nothrow -> Int {
+	// Generate a v4 — must succeed under normal OS RNG conditions.
+	match uuid.v4() {
+		Ok(u) => {
+			// Version nibble must be exactly 4.
+			if uuid.version(&u) != 4 {
+				cons.eprintln("v4 wrong version");
+				return 1;
+			}
+
+			// Variant bits (byte 8 high two bits) must be 10b per RFC 4122 §4.4.
+			val bytes = uuid.to_bytes(&u);
+			if bytes.len != 16 {
+				cons.eprintln("v4 not 16 bytes");
+				return 2;
+			}
+			var b8 = cast<Int>(bytes[8]);
+			if b8 < 0 { b8 = b8 + 256; }
+			if b8 / 64 != 2 {
+				cons.eprintln("v4 wrong variant bits");
+				return 3;
+			}
+
+			// Canonical string form must be exactly 36 chars.
+			val s = uuid.to_string(&u);
+			if s.byte_length() != 36 {
+				cons.eprintln("v4 string not 36 chars");
+				return 4;
+			}
+
+			// Round-trip: parse(to_string(u)) == u (byte-equal).
+			match uuid.parse(&s) {
+				Ok(reparsed) => {
+					val rb = uuid.to_bytes(&reparsed);
+					var i = 0;
+					while i < 16 {
+						if rb[i] != bytes[i] {
+							cons.eprintln("v4 parse round-trip mismatch");
+							return 5;
+						}
+						i = i + 1;
+					}
+				},
+				Err(e) => {
+					cons.eprintln("v4 parse round-trip err");
+					return 6;
+				}
+			}
+
+			// Two consecutive v4s must (with overwhelming probability) differ.
+			// This catches a totally-broken RNG; a healthy RNG gives a collision
+			// rate of 2^-122 per pair which is effectively never.
+			match uuid.v4() {
+				Ok(u2) => {
+					if uuid.to_string(&u) == uuid.to_string(&u2) {
+						cons.eprintln("v4 collision (RNG broken?)");
+						return 7;
+					}
+				},
+				Err(e) => {
+					cons.eprintln("second v4 failed");
+					return 8;
+				}
+			}
+		},
+		Err(e) => {
+			cons.eprintln("v4 failed under healthy OS RNG");
+			return 9;
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

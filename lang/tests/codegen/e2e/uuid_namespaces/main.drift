@@ -1,0 +1,66 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn _check(actual: &uuid.Uuid, expected: &String, code: Int) nothrow -> Int {
+	val s = uuid.to_string(actual);
+	if s != *expected {
+		cons.eprintln("namespace mismatch");
+		return code;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// Nil UUID — RFC 4122 §4.1.7.
+	val n = uuid.nil();
+	val nil_expected: String = "00000000-0000-0000-0000-000000000000";
+	val r0 = _check(&n, &nil_expected, 1);
+	if r0 != 0 { return r0; }
+
+	// RFC 4122 Appendix C — well-known namespace IDs.
+	val dns = uuid.namespace_dns();
+	val dns_expected: String = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+	val r1 = _check(&dns, &dns_expected, 2);
+	if r1 != 0 { return r1; }
+
+	val url = uuid.namespace_url();
+	val url_expected: String = "6ba7b811-9dad-11d1-80b4-00c04fd430c8";
+	val r2 = _check(&url, &url_expected, 3);
+	if r2 != 0 { return r2; }
+
+	val oid = uuid.namespace_oid();
+	val oid_expected: String = "6ba7b812-9dad-11d1-80b4-00c04fd430c8";
+	val r3 = _check(&oid, &oid_expected, 4);
+	if r3 != 0 { return r3; }
+
+	val x500 = uuid.namespace_x500();
+	val x500_expected: String = "6ba7b814-9dad-11d1-80b4-00c04fd430c8";
+	val r4 = _check(&x500, &x500_expected, 5);
+	if r4 != 0 { return r4; }
+
+	// Each namespace also round-trips through parse.
+	match uuid.parse(&dns_expected) {
+		Ok(parsed) => {
+			val pb = uuid.to_bytes(&parsed);
+			val nb = uuid.to_bytes(&dns);
+			var i = 0;
+			while i < 16 {
+				if pb[i] != nb[i] {
+					cons.eprintln("DNS ns parse round-trip mismatch");
+					return 6;
+				}
+				i = i + 1;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("DNS ns parse err");
+			return 7;
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

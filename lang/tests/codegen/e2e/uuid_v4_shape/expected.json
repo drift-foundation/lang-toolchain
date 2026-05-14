@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.uuid.v4 — version=4 nibble, variant=10b, 16-byte / 36-char form, parse round-trip, distinct consecutive draws",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

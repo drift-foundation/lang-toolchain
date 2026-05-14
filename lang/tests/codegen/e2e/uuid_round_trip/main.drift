@@ -1,0 +1,88 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn _string_eq(a: &String, b: &String) nothrow -> Bool {
+	return *a == *b;
+}
+
+fn main() nothrow -> Int {
+	// Parse → to_string round-trip for a known canonical value.
+	val canonical: String = "550e8400-e29b-41d4-a716-446655440000";
+	match uuid.parse(&canonical) {
+		Ok(u) => {
+			val s = uuid.to_string(&u);
+			if not _string_eq(&s, &canonical) {
+				cons.eprintln("FAIL: parse/to_string round-trip");
+				return 1;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: parse of canonical");
+			return 2;
+		}
+	}
+
+	// Case-insensitive parse should normalize to lowercase output.
+	val upper: String = "550E8400-E29B-41D4-A716-446655440000";
+	val lower: String = "550e8400-e29b-41d4-a716-446655440000";
+	match uuid.parse(&upper) {
+		Ok(u) => {
+			val s = uuid.to_string(&u);
+			if not _string_eq(&s, &lower) {
+				cons.eprintln("FAIL: case-insensitive parse → lowercase output");
+				return 3;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: parse of uppercase");
+			return 4;
+		}
+	}
+
+	// from_bytes → to_bytes byte-level round-trip.
+	var bytes: Array<Byte> = [];
+	val raw_bytes = [
+		0x55, 0x0e, 0x84, 0x00,
+		0xe2, 0x9b, 0x41, 0xd4,
+		0xa7, 0x16, 0x44, 0x66,
+		0x55, 0x44, 0x00, 0x00
+	];
+	var i = 0;
+	while i < 16 {
+		bytes.push(cast<Byte>(raw_bytes[i]));
+		i = i + 1;
+	}
+	match uuid.from_bytes(&bytes) {
+		Ok(u) => {
+			val out = uuid.to_bytes(&u);
+			if out.len != 16 {
+				cons.eprintln("FAIL: to_bytes length");
+				return 5;
+			}
+			var j = 0;
+			while j < 16 {
+				if out[j] != bytes[j] {
+					cons.eprintln("FAIL: byte mismatch");
+					return 6;
+				}
+				j = j + 1;
+			}
+			// And the byte form should serialize to the canonical string too.
+			val s = uuid.to_string(&u);
+			if not _string_eq(&s, &lower) {
+				cons.eprintln("FAIL: from_bytes -> to_string");
+				return 7;
+			}
+		},
+		Err(e) => {
+			cons.eprintln("FAIL: from_bytes");
+			return 8;
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

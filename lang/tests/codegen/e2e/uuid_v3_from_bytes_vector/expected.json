@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.uuid.v3_from_bytes (Java UUID.nameUUIDFromBytes compat) — pinned bookkeeper vector and distinct-from-v3(ns,name) check",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

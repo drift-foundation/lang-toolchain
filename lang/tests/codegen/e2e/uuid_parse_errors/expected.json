@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.uuid.parse / from_bytes error paths — uuid-bad-length / uuid-bad-format / uuid-bad-hex",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

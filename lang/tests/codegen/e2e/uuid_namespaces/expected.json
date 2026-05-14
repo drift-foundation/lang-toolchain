@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std.uuid namespace constants match RFC 4122 Appendix C (DNS, URL, OID, X.500) and nil UUID",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

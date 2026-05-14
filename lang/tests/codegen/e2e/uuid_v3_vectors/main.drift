@@ -1,0 +1,52 @@
+module main;
+
+import std.core as core;
+import std.uuid as uuid;
+import std.console as cons;
+
+fn _check(actual: &uuid.Uuid, expected: &String, code: Int) nothrow -> Int {
+	val s = uuid.to_string(actual);
+	if s != *expected {
+		cons.eprintln("v3 vector mismatch");
+		return code;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// Pinned vector from the bookkeeper/singular ask:
+	//   v3(NS_DNS, "www.python.org") == 7ffc9d67-9009-37fc-827f-5d088dabcca2
+	val u1 = uuid.v3(&uuid.namespace_dns(), &("www.python.org"));
+	val e1: String = "7ffc9d67-9009-37fc-827f-5d088dabcca2";
+	val r1 = _check(&u1, &e1, 1);
+	if r1 != 0 { return r1; }
+
+	// Cross-checked against CPython's uuid.uuid3:
+	//   v3(NS_DNS, "example.com") == 9073926b-929f-31c2-abc9-fad77ae3e8eb
+	val u2 = uuid.v3(&uuid.namespace_dns(), &("example.com"));
+	val e2: String = "9073926b-929f-31c2-abc9-fad77ae3e8eb";
+	val r2 = _check(&u2, &e2, 2);
+	if r2 != 0 { return r2; }
+
+	// Cross-checked against CPython's uuid.uuid3:
+	//   v3(NS_URL, "https://www.google.com") == d39a36cc-b262-3c67-a6ca-0168e948bdd4
+	val u3 = uuid.v3(&uuid.namespace_url(), &("https://www.google.com"));
+	val e3: String = "d39a36cc-b262-3c67-a6ca-0168e948bdd4";
+	val r3 = _check(&u3, &e3, 3);
+	if r3 != 0 { return r3; }
+
+	// Determinism: same inputs → same output.
+	val u4 = uuid.v3(&uuid.namespace_dns(), &("www.python.org"));
+	if uuid.to_string(&u4) != uuid.to_string(&u1) {
+		cons.eprintln("v3 not deterministic");
+		return 4;
+	}
+
+	// Version nibble of every v3 should be 3.
+	if uuid.version(&u1) != 3 { return 5; }
+	if uuid.version(&u2) != 3 { return 6; }
+	if uuid.version(&u3) != 3 { return 7; }
+
+	cons.println("ok");
+	return 0;
+}
