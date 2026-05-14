@@ -1,5 +1,84 @@
 # Drift development history
 
+## 2026-05-14 (shallow checker: `Byte` and `Float` comparisons infer `Bool`)
+- **LANGUAGE_BUG fix.**  Release 0.31.80, ABI unchanged at 14.
+  Reported by the bookkeeper team while exercising the new
+  `std.codec.gzip_*` / `std.uuid` modules.
+
+  **Symptom (customer-visible).**  An unannotated `val ok = byte ==
+  byte and byte == byte` failed to compile, with
+  `E-AUTO-84b36a12 — if condition must be Bool` firing at the
+  downstream `if ok { ... }` site rather than at the binding.
+  Customer workaround was `val ok: Bool = ...` — the declared
+  type masked the shallow-inference miss.
+
+  **Root cause.**  The shallow inference path
+  (`lang/driftc/checker/__init__.py::_TypingContext._infer_expr_type`)
+  ran a per-scalar comparison whitelist (Bool / Int / Uint /
+  Uint64 / String) but did *not* include Byte or Float.  A single
+  `bytes[0] == cast<Byte>(65)` therefore inferred `None`; chaining
+  with `and` cascaded the `None` through the boolean reducer; the
+  unannotated `val` was recorded as Unknown; and the `if` condition
+  validator correctly rejected the Unknown but reported it at the
+  use site, hiding the upstream miss.  The fall-through diagnostic
+  inside that same function already claimed Float was supported for
+  `==/!=`, so this was specifically a code-doesn't-match-docstring
+  drift.
+
+  **Fix.**  Three lines in `_TypingContext`'s scalar setup
+  (cache a `_byte_type`) and two new branches in the HBinary
+  inference path (`Byte == Byte`/comparison → `Bool`;
+  `Float ==/!=/</<=/>/>=` → `Bool`, arithmetic → `Float`).  Net
+  ~15 lines.  No ABI implications; no codegen change; no
+  primary-checker change — the primary type-checker has always
+  accepted these comparisons and codegen has always lowered them
+  correctly.  The bug was purely in the secondary "shallow"
+  inference path used to seed `val`-binding types when no
+  annotation was provided.
+
+  **What's intentionally NOT fixed.**  Int32 / Uint32 also fail
+  the shallow inference for the same reason, but they additionally
+  ICE at LLVM codegen v1
+  (`integer binop requires matching Int/Uint operands (have i32,
+  i32)`), so they're effectively unsupported end-to-end and adding
+  them to the shallow whitelist would just convert a checker
+  diagnostic into a less actionable codegen ICE.  Tracked
+  separately — out of scope for this slice.
+
+  **Regression coverage.**  Regression-first per project policy:
+  - `lang/tests/checker/test_byte_float_comparison_inference.py`
+    (4 unit tests) — single `Byte == Byte` binding, chained `and`
+    over Byte equalities, Float equality, and a *negative* pin
+    that `Array<Byte> == Array<Byte>` stays rejected (extending
+    Byte must not widen the accepted-equality surface).
+  - `lang/tests/codegen/e2e/checker_chained_byte_equality_inference/`
+    (e2e) — pins the exact customer shapes: unannotated
+    `bytes.len == 3 and bytes[0..2] == cast<Byte>(...)`,
+    parenthesized form (rules out precedence), gzip magic-byte
+    check (`bytes[0] == cast<Byte>(0x1F) and bytes[1] == cast<Byte>(0x8B)`),
+    single byte equality bound to a val, and `Float == Float`.
+
+  Verified regression-first: with the new tests applied against
+  unfixed 0.31.79, three of the four unit tests fail with exactly
+  `E-AUTO-84b36a12 — if condition must be Bool`, and the e2e case
+  fails to compile.  Applying the checker fix makes them all
+  pass.  Full 189-test checker + type_checker suite remains green;
+  representative sample of existing e2e tests (FFI, codec, uuid,
+  pub-error) also passes.
+
+  **Diagnostic improvement deferred.**  K's ask included
+  "improve the fallback diagnostic only if the expression still
+  cannot be inferred after the type-rule fix."  With the rule fix
+  in place, the original customer shape no longer trips
+  `E-AUTO-84b36a12` at all; the misleading at-the-use-site
+  surface is masked.  Improving the diagnostic for the
+  remaining-Unknown class of cases (e.g. ill-typed RHS with no
+  matching scalar branch) is worth doing but is a separate
+  follow-up — it would touch the `if` validator's "Unknown
+  condition" path rather than the inference rule, and the design
+  question of "what to say when the binding *itself* cannot be
+  typed" is non-trivial.  Not blocking the customer fix.
+
 ## 2026-05-14 (`core.string_to_utf8_bytes` + `uuid.v3_from_string`)
 - **`std.core` gains the symmetric public pair to
   `string_from_utf8_bytes`** (release 0.31.79, ABI unchanged at 14,

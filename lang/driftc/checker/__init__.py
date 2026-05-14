@@ -384,6 +384,7 @@ class Checker:
 		self._string_type = _find_named(TypeKind.SCALAR, "String") or self._type_table.ensure_string()
 		self._uint_type = _find_named(TypeKind.SCALAR, "Uint") or self._type_table.ensure_uint()
 		self._uint64_type = _find_named(TypeKind.SCALAR, "Uint64") or self._type_table.ensure_uint64()
+		self._byte_type = _find_named(TypeKind.SCALAR, "Byte") or self._type_table.ensure_byte()
 		self._void_type = _find_named(TypeKind.VOID, "Void") or self._type_table.ensure_void()
 		self._error_type = _find_named(TypeKind.ERROR, "Error") or self._type_table.ensure_error()
 		# Slice 7c-3 (ABI 14): `self._dv` and `TypeKind.DIAGNOSTICVALUE` deleted.
@@ -1979,6 +1980,23 @@ class Checker:
 					if expr.op in comparison_ops:
 						return checker._bool_type
 					return checker._uint64_type
+				# Byte: comparison only (no arithmetic in v1; callers cast to
+				# Int/Uint first). Closing the gap that made magic-byte checks
+				# (`bytes[0] == cast<Byte>(0x1F) and ...`) infer Unknown and
+				# misreport `if condition must be Bool` at the use site
+				# instead of at the val binding.
+				if left_ty == checker._byte_type and right_ty == checker._byte_type:
+					if expr.op in comparison_ops:
+						return checker._bool_type
+					return None
+				# Float: comparison + arithmetic. The fall-through rejection
+				# diagnostic below already claimed Float was supported for
+				# ==/!=; this aligns the shallow inference with that claim
+				# and with the primary type-checker.
+				if left_ty == checker._float_type and right_ty == checker._float_type:
+					if expr.op in comparison_ops:
+						return checker._bool_type
+					return checker._float_type
 				if expr.op in (H.BinaryOp.EQ, H.BinaryOp.NE) and left_ty is not None and right_ty is not None and left_ty == right_ty:
 					left_def = self.table.get(left_ty)
 					if left_def.kind in (TypeKind.VARIANT, TypeKind.INTERFACE, TypeKind.ARRAY, TypeKind.RAW_PTR, TypeKind.FNRESULT):

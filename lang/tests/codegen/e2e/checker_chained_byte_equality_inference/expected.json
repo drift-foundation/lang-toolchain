@@ -1,0 +1,7 @@
+{
+  "description": "e2e regression: bookkeeper customer report — unannotated `val ok = byte == byte and byte == byte` infers Bool (shallow checker now handles Byte and Float comparisons; was E-AUTO-84b36a12 'if condition must be Bool' in 0.31.79)",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

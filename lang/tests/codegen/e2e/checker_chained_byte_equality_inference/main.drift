@@ -1,0 +1,85 @@
+module main;
+
+// Regression for the bookkeeper customer report (0.31.79):
+// Unannotated `val v3_ok = bytes.len == 3 and bytes[0] == cast<Byte>(65) and ...`
+// failed with `E-AUTO-84b36a12 — if condition must be Bool` at the
+// downstream `if v3_ok` site, because the shallow checker's binary-op
+// inference didn't handle `Byte == Byte` and the val therefore
+// inferred Unknown. Adding `val v3_ok: Bool = ...` was the customer
+// workaround; the fix makes the annotation unnecessary.
+//
+// This file is the exact customer shape — unannotated chained `and`
+// over `Byte == Byte` predicates. If this stops compiling, the shallow
+// inference whitelist for scalar comparisons has regressed.
+
+import std.core as core;
+import std.console as cons;
+
+fn main() nothrow -> Int {
+	val src: String = "ABC";
+	val bytes = core.string_to_utf8_bytes(&src);
+
+	// 1. Unannotated chained byte equality — the headline case.
+	val v3_ok =
+		bytes.len == 3
+		and bytes[0] == cast<Byte>(65)
+		and bytes[1] == cast<Byte>(66)
+		and bytes[2] == cast<Byte>(67);
+	if not v3_ok {
+		cons.eprintln("FAIL: chained byte equality should be true");
+		return 1;
+	}
+
+	// 2. Parenthesized form — the customer noted this also failed,
+	//    ruling out operator-precedence as the cause.
+	val parened =
+		(bytes.len == 3)
+		and (bytes[0] == cast<Byte>(65))
+		and (bytes[1] == cast<Byte>(66))
+		and (bytes[2] == cast<Byte>(67));
+	if not parened {
+		cons.eprintln("FAIL: parenthesized form should be true");
+		return 2;
+	}
+
+	// 3. Magic-byte / signature-check shape — gzip header
+	//    (this is one of the canonical use cases the report named).
+	var gz: Array<Byte> = [];
+	gz.push(cast<Byte>(31));   // 0x1F
+	gz.push(cast<Byte>(-117)); // 0x8B (signed)
+	gz.push(cast<Byte>(8));    // method = deflate
+	val is_gzip = gz[0] == cast<Byte>(0x1F) and gz[1] == cast<Byte>(0x8B);
+	if not is_gzip {
+		cons.eprintln("FAIL: gzip header check");
+		return 3;
+	}
+
+	// 4. Single byte equality bound to a val — the narrowed case
+	//    (the bug fires even on a single Byte == Byte, before any
+	//    `and` chaining).
+	val first_is_A = bytes[0] == cast<Byte>(65);
+	if not first_is_A {
+		cons.eprintln("FAIL: single byte equality");
+		return 4;
+	}
+
+	// 5. Negative path — confirm the comparison actually reports
+	//    false correctly (not just "compiles to a constant true").
+	val wrong = bytes[0] == cast<Byte>(66);
+	if wrong {
+		cons.eprintln("FAIL: byte inequality should be false");
+		return 5;
+	}
+
+	// 6. Float == Float was also missing from the shallow path even
+	//    though the existing fall-through diagnostic claimed it was
+	//    supported. Pin that fix too.
+	val pi_eq = 3.14 == 3.14;
+	if not pi_eq {
+		cons.eprintln("FAIL: float equality");
+		return 6;
+	}
+
+	cons.println("ok");
+	return 0;
+}
