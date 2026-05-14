@@ -1,5 +1,80 @@
 # Drift development history
 
+## 2026-05-14 (`&T → T` slot coverage completed for owned destinations)
+- **Every owned-value destination slot now accepts `&T` when T is
+  Copy or proves ConstShare, with the checker inserting a HIR-
+  visible owned-value conversion (release 0.31.76, ABI unchanged at
+  14).**  Closes two LANGUAGE_BUGs the drift-web app team caught
+  while verifying 0.31.75:
+  - **Bug A (silent miscompile, HIGH severity):**
+    `Variant::Case(s_ref)` where the payload field was `String` and
+    the arg was `&String` was accepted by the type-checker without
+    inserting the deref+retain.  HIR→MIR lowered the ref as a raw
+    `load %DriftString, ptr %s` — no `drift_string_retain` — so the
+    variant payload aliased the caller's String buffer.  Each
+    subsequent scope-exit release decremented the same refcount →
+    heap corruption (`malloc(): unaligned tcache chunk detected`,
+    SIGABRT under repeated use).  No compile-time signal.
+  - **Bug B (codegen ICE):** `obj.field = s_ref` with target field
+    `String` and RHS `&String` crashed LLVM lowering at
+    `llvm_codegen.py:_lower_instr` with `StoreRef value type
+    mismatch (have ptr, expected %DriftString)`.
+
+  **Contract restated.**  After this release, the compiler
+  guarantee is:
+
+  > Any destination slot requiring owned `T` accepts `&T` / `&mut T`
+  > when `T` is Copy or proves ConstShare.  The checker inserts a
+  > lowering-visible owned-value conversion (`HUnary(DEREF, …)` +
+  > optional `HMethodCall(method_name="const_share")` wrap), so
+  > HIR→MIR / codegen always see a matched-type slot.
+
+  Slots in the complete family (each covered by a compile-and-run
+  regression):
+  - call arguments (0.31.68)
+  - declared `let`/`var` init (0.31.75)
+  - `return` expression (0.31.75)
+  - comparison binops `==` / `!=` / `<` / `<=` / `>` / `>=` (0.31.75)
+  - **field assignment RHS** (new in 0.31.76)
+  - **local-variable assignment RHS** (new in 0.31.76)
+  - **indexed assignment RHS** (new in 0.31.76)
+  - **variant constructor payload** (positional + kwargs; new in 0.31.76)
+  - **struct constructor field** (positional + named; new in 0.31.76)
+
+  Non-Copy non-ConstShare types (e.g. `Destructible`-bearing
+  structs) still reject cleanly at type-check at every slot — pinned
+  by negative probes.
+
+  Implementation: the existing `_ref_to_value_coerce_applies` +
+  `_rewrite_ref_to_value` helpers in `type_checker.py` (introduced
+  0.31.75) are reused at three new sites:
+  - `type_checker.py` HAssign handler — covers field, local, and
+    indexed assignment in one place via the existing place-vs-target
+    typing.
+  - `checker/call_resolver.py` variant ctor result handling
+    (line ~5189) — walks `expr.args` per `ctor_arg_field_indices`,
+    rewriting any `&T` slot whose field type is `T` Copy/ConstShare.
+  - `checker/call_resolver.py` struct ctor inner type-check loop
+    (lines ~1597 positional, ~1654 named) — symmetric: insert the
+    coercion before falling through to the existing `field type
+    mismatch` diagnostic.
+
+  Helpers exposed on the resolver context: `ref_to_value_coerce_applies`
+  and `rewrite_ref_to_value` are plumbed through `make_call_ctx` so
+  any future owned-destination slot can adopt the same pattern
+  without adding new helpers.
+
+  Regression coverage:
+  `lang/tests/driver/test_ref_to_value_ctor_and_field_slots.py` —
+  10 compile-and-run probes covering each new slot with a String
+  case (catches missing retain / double-free) plus negative
+  Destructible cases that must still reject.  The variant-payload
+  probe runs a 10-iteration loop with per-iteration payload access
+  to surface the aliasing pre-fix.
+
+  ABI unchanged.  Pure checker/resolver changes; bump is compiler-
+  only (0.31.75 → 0.31.76).
+
 ## 2026-05-14 (`&T → T` coercion extended: let-init, return, binop `==`)
 - **`&T → T` auto-dup now applies in let/var init, `return`
   expressions, and binary-op operand positions (release

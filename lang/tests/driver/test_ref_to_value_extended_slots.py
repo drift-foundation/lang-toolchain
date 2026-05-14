@@ -298,6 +298,55 @@ fn main() nothrow -> Int {
 	assert run.returncode == 1
 
 
+def test_le_coerces_ref_int_lhs(tmp_path: Path) -> None:
+	"""`n_ref <= 42` — exercises the `<=` ordering op with the ref
+	on the lhs.  `42 <= 42` → true → tag = 1.
+	"""
+	run = _compile_and_run(
+		tmp_path,
+		"""
+module main;
+
+fn at_or_below(n: &Int) nothrow -> Int {
+	var tag: Int = 0;
+	if n <= 42 { tag = 1; }
+	return tag;
+}
+
+fn main() nothrow -> Int {
+	val src: Int = 42;
+	return at_or_below(&src);
+}
+""".lstrip(),
+	)
+	assert run.returncode == 1
+
+
+def test_ge_coerces_ref_int_rhs(tmp_path: Path) -> None:
+	"""`100 >= n_ref` — exercises the `>=` ordering op with the
+	ref on the rhs (complementary direction to the `<=` probe).
+	`100 >= 42` → true → tag = 1.
+	"""
+	run = _compile_and_run(
+		tmp_path,
+		"""
+module main;
+
+fn ceiling_ok(n: &Int) nothrow -> Int {
+	var tag: Int = 0;
+	if 100 >= n { tag = 1; }
+	return tag;
+}
+
+fn main() nothrow -> Int {
+	val src: Int = 42;
+	return ceiling_ok(&src);
+}
+""".lstrip(),
+	)
+	assert run.returncode == 1
+
+
 def test_eq_negative_case_compiles_and_returns_false(tmp_path: Path) -> None:
 	"""Sanity: `s_ref == "different"` compiles + returns false
 	when the values genuinely differ.  Guards against a

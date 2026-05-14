@@ -602,6 +602,8 @@ class MethodResolverContext:
 	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	find_thunk_spec_by_id: Callable[[FunctionId], object | None]
 	fnptr_consts_by_node_id: dict
+	ref_to_value_coerce_applies: Callable[[TypeId | None, TypeId | None], bool]
+	rewrite_ref_to_value: Callable[[object, TypeId], object | None]
 	infer_receiver_arg_type: Callable[[object, TypeId, bool, bool], TypeId]
 	instantiate_sig_with_subst: Callable[..., InferResult]
 	apply_autoborrow_args: Callable[..., tuple[list[TypeId], bool]]
@@ -668,6 +670,8 @@ class ResolverContext:
 	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	find_thunk_spec_by_id: Callable[[FunctionId], object | None]
 	fnptr_consts_by_node_id: dict
+	ref_to_value_coerce_applies: Callable[[TypeId | None, TypeId | None], bool]
+	rewrite_ref_to_value: Callable[[object, TypeId], object | None]
 	self_mode_from_sig: Callable[[FnSignature], object]
 	match_impl_type_args: Callable[..., object]
 	module_ids_by_name: dict
@@ -739,6 +743,8 @@ class CallResolverContext:
 	can_ref_to_value_coerce: Callable[[list[TypeId], list[TypeId]], bool]
 	find_thunk_spec_by_id: Callable[[FunctionId], object | None]
 	fnptr_consts_by_node_id: dict
+	ref_to_value_coerce_applies: Callable[[TypeId | None, TypeId | None], bool]
+	rewrite_ref_to_value: Callable[[object, TypeId], object | None]
 	infer_receiver_arg_type: Callable[[object, TypeId, bool, bool], TypeId]
 	instantiate_sig_with_subst: Callable[..., InferResult]
 	apply_autoborrow_args: Callable[..., tuple[list[TypeId], bool]]
@@ -793,14 +799,14 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 	base.update(overrides)
 	return ResolverContext(**base)
 
 
 def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None) -> MethodResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 
 
 def make_call_ctx(**kwargs) -> CallResolverContext:
@@ -1588,6 +1594,14 @@ def resolve_struct_ctor(
 					# circuits instead of falling through to free-fn / kwargs
 					# resolution and emitting unrelated cascade noise.
 					return _STRUCT_CTOR_ERRORED
+				# `&T → T` coercion at struct ctor positional slots.
+				if ctx.ref_to_value_coerce_applies(have, want):
+					_rewritten_sc_pos = ctx.rewrite_ref_to_value(arg_exprs[idx], want)
+					if _rewritten_sc_pos is not None:
+						arg_exprs[idx] = _rewritten_sc_pos
+						ctor_args[idx] = _rewritten_sc_pos
+						arg_types[idx] = want
+						continue
 				want_def = ctx.type_table.get(want)
 				have_def = ctx.type_table.get(have)
 				if want_def.kind is TypeKind.INTERFACE:
@@ -1636,6 +1650,13 @@ def resolve_struct_ctor(
 					continue
 				if _wrap_res.is_rejected:
 					return _STRUCT_CTOR_ERRORED
+				# `&T → T` coercion at struct ctor named slots.
+				if ctx.ref_to_value_coerce_applies(have, want):
+					_rewritten_sc_nam = ctx.rewrite_ref_to_value(ctor_args[idx], want)
+					if _rewritten_sc_nam is not None:
+						ctor_args[idx] = _rewritten_sc_nam
+						arg_types[idx] = want
+						continue
 				want_def = ctx.type_table.get(want)
 				have_def = ctx.type_table.get(have)
 				if want_def.kind is TypeKind.INTERFACE:
@@ -5178,6 +5199,33 @@ def resolve_call_expr(
 			expr.args = list(ctor_res.ctor_args)
 			expr.kwargs = []
 			expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+			# `&T → T` coercion at ctor positional / kwarg slots
+			# (mirrors the 0.31.75 let-init / return / binop paths
+			# and the 0.31.68 call-arg path).  Without this, a
+			# `Node::Tagged(s)` where `s: &String` and the payload
+			# field is `String` was silently miscompiled: HIR→MIR
+			# lowered the ref as a raw `load %DriftString, ptr %s`
+			# with no `drift_string_retain`, the variant payload
+			# aliased the caller's String buffer, and each subsequent
+			# scope-exit release decremented the same refcount →
+			# heap corruption (`malloc(): unaligned tcache chunk`).
+			# The CallTarget metadata at this site carries
+			# `ctor_arg_field_indices`, so each positional arg maps
+			# unambiguously to its field type in `inst_params`.
+			for _idx, _arg in enumerate(expr.args):
+				if _idx >= len(expr.ctor_arg_field_indices):
+					break
+				_field_idx = expr.ctor_arg_field_indices[_idx]
+				if _field_idx < 0 or _field_idx >= len(inst_params):
+					continue
+				_field_ty = inst_params[_field_idx]
+				_arg_ty = arg_types[_idx] if _idx < len(arg_types) else None
+				if ctx.ref_to_value_coerce_applies(_arg_ty, _field_ty):
+					_rewritten = ctx.rewrite_ref_to_value(_arg, _field_ty)
+					if _rewritten is not None:
+						expr.args[_idx] = _rewritten
+						if _idx < len(arg_types):
+							arg_types[_idx] = _field_ty
 			ctor_mod = getattr(qm.base_type_expr, "module_id", None) or getattr(qm.base_type_expr, "module_alias", None) or current_module_name
 			# Replace qualified member with a plain name to satisfy typed-mode invariants.
 			expr.fn = H.HVar(name=qm.member, module_id=ctor_mod)
@@ -5507,9 +5555,31 @@ def resolve_call_expr(
 				expr.args = list(ctor_res.ctor_args)
 				expr.kwargs = []
 				expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
+				# `&T → T` coercion at struct ctor positional / kwarg
+				# slots — symmetric with the variant-ctor handling
+				# above (line ~5189).  Without this, `Holder(field =
+				# s_ref)` where the field is `String` and the arg is
+				# `&String` would silently miscompile via the same
+				# raw-load-without-retain path that hit the variant
+				# case.
+				_inst_params_sc = list(ctor_res.inst_params)
+				for _idx, _arg in enumerate(expr.args):
+					if _idx >= len(expr.ctor_arg_field_indices):
+						break
+					_field_idx = expr.ctor_arg_field_indices[_idx]
+					if _field_idx < 0 or _field_idx >= len(_inst_params_sc):
+						continue
+					_field_ty = _inst_params_sc[_field_idx]
+					_arg_ty = arg_types[_idx] if _idx < len(arg_types) else None
+					if ctx.ref_to_value_coerce_applies(_arg_ty, _field_ty):
+						_rewritten = ctx.rewrite_ref_to_value(_arg, _field_ty)
+						if _rewritten is not None:
+							expr.args[_idx] = _rewritten
+							if _idx < len(arg_types):
+								arg_types[_idx] = _field_ty
 				if drift_debug.enabled("call_resolve") and expr.fn.name in ("VirtualThread", "Busy", "Timeout", "Failed"):
 					print(f"[call_resolve] struct/ctor resolved {expr.fn.name} csid={getattr(expr, 'callsite_id', None)} return={ctor_res.inst_return}", file=_debug_stderr)
-				record_call_info(expr, param_types=list(ctor_res.inst_params), return_type=ctor_res.inst_return, can_throw=False, target=CallTarget.constructor_struct(ctor_res.inst_return, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
+				record_call_info(expr, param_types=_inst_params_sc, return_type=ctor_res.inst_return, can_throw=False, target=CallTarget.constructor_struct(ctor_res.inst_return, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
 				return record_expr(expr, ctor_res.inst_return)
 		def _resolve_free_call_with_require_local(*, name: str, module_name: str | None, arg_types: list[TypeId], call_type_args: list[TypeId] | None = None, call_type_args_span: Span | None = None, expected_type: TypeId | None = None) -> tuple[CallableDecl, CallableSignature, Subst | None, ResolutionError | None]:
 			def _dedupe_by_key(items: list[tuple], key_fn) -> list[tuple]:
