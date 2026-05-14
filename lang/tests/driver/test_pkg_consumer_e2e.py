@@ -810,14 +810,27 @@ fn main() nothrow -> Int {
 
 # ---------------------------------------------------------------------------
 # Cross-package callback-wrap + OK-wrap thunk preservation
-# (0.31.71 fix for the bookkeeper/web-rest report).
+# (0.31.72 fix for the bookkeeper/web-rest report).
 #
 # 0.31.70 forced `can_throw = True` for every `is_exported_entrypoint`
-# fn ref in `_call_sig_for_fn_ref`, which broke
-# `core.callback{N}(pkg.fn)` over a declared-nothrow exported function.
-# 0.31.71 removes the override; the OK-wrap thunk at the call boundary
-# still reads `sig.declared_can_throw` directly, so the FnResult ABI
-# adaptation for direct cross-package calls remains intact.
+# fn ref in `_call_sig_for_fn_ref` so the fn-reference TypeId
+# reflected the OK-wrap thunk's `FnResult`-based cross-package ABI.
+# That kept direct fn-ref call sites (`val fp = pkg.f; try fp(1)
+# catch {...}`) working but broke `core.callback{N}(pkg.fn)` over a
+# declared-nothrow exported function — the callback intrinsic's
+# `fn_throws` check rejected the wrap as "requires a nothrow
+# function", cascading into Unknown-typed downstream calls.
+#
+# 0.31.72 keeps the override (direct-call semantics preserved) and
+# fixes the callback path at the resolver: when the side-table entry
+# in `fnptr_consts_by_node_id` has `kind=THUNK_OK_WRAP`, the
+# `callback{N}` resolver looks up the underlying function via
+# `ctx.find_thunk_spec_by_id` and rewrites the entry in place to
+# point at the impl with the declared (unwrapped) signature.
+# `_apply_fnptr_consts` then materializes an `HFnPtrConst` against
+# the original function, so HIR→MIR's `ConstructIface` targets the
+# impl rather than `__thunk_ok_wrap::<callee>` (which codegen has
+# no rule for).
 #
 # The same-workspace cross-module shape is pinned by
 # `test_cross_module_callback_named_fn.py`; this test pins the
@@ -829,10 +842,15 @@ fn main() nothrow -> Int {
 
 def test_pkg_callback_wrap_named_fn_ref_compiles_and_runs(stdlib_package, tmp_path: Path) -> None:
 	"""Cross-package `core.callback{N}(pkg.fn)` over a declared-nothrow
-	exported function.  Pre-0.31.71 the consumer compile failed with
+	exported function.  Pre-0.31.72 the consumer compile failed with
 	"callback3 requires a nothrow function" because the published-fn's
-	`is_exported_entrypoint=True` flipped its TypeId-side `can_throw`
-	to True, even though the user declared `nothrow`.
+	`is_exported_entrypoint=True` flipped its fn-reference TypeId-side
+	`can_throw` to True (a deliberate choice to reflect the OK-wrap
+	thunk's FnResult ABI for direct call sites), and the callback
+	intrinsic's `fn_throws` check rejected the wrap.  0.31.72 keeps
+	the type-side override and rewrites the wrapped fn_ref to the
+	underlying impl at the callback resolver instead, so direct-call
+	and callback-wrap paths each see the shape they need.
 	"""
 	library_lib_drift = """\
 module web.cb_wrap_repro;
@@ -904,7 +922,7 @@ fn main() nothrow -> Int {
 		cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert "callback1 requires a nothrow function" not in res.stderr, (
-		"consumer compile must not fire the pre-0.31.71 false-positive; "
+		"consumer compile must not fire the pre-0.31.72 false-positive; "
 		f"stderr:\n{res.stderr[:1500]}"
 	)
 	assert "callback2 requires a nothrow function" not in res.stderr, res.stderr[:1500]
@@ -925,10 +943,10 @@ def test_pkg_direct_call_ok_wrap_thunk_preserved(stdlib_package, tmp_path: Path)
 	FnResult ABI wrapper (`_ensure_ok_wrap_thunk`) so the consumer
 	receives the unwrapped bare return value.
 
-	The 0.31.71 patch removed the `can_throw = True` override from
-	the fn-reference TypeId path, but did NOT touch the thunk
-	machinery — `_ensure_ok_wrap_thunk` continues to fire because
-	the construction-site check at type_checker.py:3395-3400 reads
+	The 0.31.72 patch keeps the `can_throw = True` override on the
+	fn-reference TypeId path AND keeps the thunk-installation site
+	at type_checker.py:3395-3400 unchanged — the
+	`_ensure_ok_wrap_thunk` invocation still reads
 	`sig.declared_can_throw` directly.  This test pins that
 	direct cross-package calls of `pub fn foo() nothrow -> Int`
 	still produce a usable `Int` (not a leaked `FnResult` shape).

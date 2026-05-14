@@ -3,7 +3,7 @@
 ## 2026-05-13 (Cross-module callback-wrap nothrow fix)
 - **`core.callback{N}(other_mod.fn)` over a declared-nothrow
   exported function no longer rejects with "callback{N} requires
-  a nothrow function" (release 0.31.71, ABI unchanged at 14).**
+  a nothrow function" (release 0.31.72, ABI unchanged at 14).**
   Closes the diagnostic + cascade reported by the drift-web app
   team against bookkeeper's `auth_middleware` /
   `task_middleware`: `core.callback3(routes_common.auth_middleware)`
@@ -18,22 +18,45 @@
   poisoned the result type and every downstream call cascaded.
 
   Root cause: `_call_sig_for_fn_ref` in
-  `type_checker.py:3306-3307` forced `can_throw = True` for every
-  `is_exported_entrypoint` / `is_extern` signature.  The override
-  reflected the OK-wrap-thunk's `FnResult`-based cross-package
-  ABI (set up at lines 3395-3400) but conflated two layers: the
-  thunk-adapted call-boundary shape vs. the user-declared
-  function-value shape that `core.callback{N}(...)` reasons over.
-  Downstream, the callback intrinsic at `call_resolver.py:5002`
-  read the (wrongly can-throw) fn-ref TypeId and rejected the
-  wrap; the rejection's `record_expr(expr, ctx.unknown_ty)` is
-  what produced the `Unknown` that the team observed.
+  `type_checker.py:3317` forces `can_throw = True` for every
+  `is_exported_entrypoint` / `is_extern` signature so the
+  fn-reference TypeId reflects the OK-wrap-thunk's `FnResult`-
+  based cross-package ABI (the thunk is installed at lines
+  3395-3400).  That override is correct for direct fn-ref call
+  sites — `val fp = a.id; try fp(1) catch { ... }` relies on the
+  FnResult unwrap.  But it also reaches the callback intrinsic at
+  `call_resolver.py:5005`, which reads the (now can-throw)
+  TypeId and rejected `core.callback{N}(pkg.fn)` with
+  "callback{N} requires a nothrow function".  The rejection's
+  `record_expr(expr, ctx.unknown_ty)` is what produced the
+  `Unknown` arg type the team observed.
 
-  Fix: delete the two-line override.  The function-reference
-  TypeId now carries the user-declared `can_throw` unchanged.
-  The thunk machinery at lines 3395-3400 reads
-  `sig.declared_can_throw` directly to decide which thunk to
-  install, so the type-side and lowering-side stay aligned.
+  Fix: two layers.
+  - **Type-checker layer (unchanged behavior):** the
+    `can_throw = True` override stays.  Comment expanded to
+    spell out that the callback-wrap path is handled separately;
+    direct-call semantics through the FnResult-wrapping thunk
+    are preserved.
+  - **Callback resolver layer (new):** the `callback{N}`
+    intrinsic in `call_resolver.py` now detects the case before
+    the `fn_throws` rejection.  When the side-table entry in
+    `fnptr_consts_by_node_id` for the arg has
+    `kind=THUNK_OK_WRAP`, the resolver looks up the underlying
+    `ThunkSpec` via `ctx.find_thunk_spec_by_id` (new accessor on
+    the type-checker) and rewrites the entry in place to point
+    at the original function — `FunctionRefKind.IMPL` plus a
+    fresh `CallSig` carrying the declared (unwrapped) param /
+    return / `can_throw=False`.  The fn_throws check then
+    passes, and the later `_apply_fnptr_consts` pass installs an
+    `HFnPtrConst` against the original function so HIR→MIR
+    emits `ConstructIface` with the impl `FunctionRefId` rather
+    than the `__thunk_ok_wrap::<callee>` symbol (which codegen
+    has no rule for).
+
+  No change to the thunk-installation site (lines 3395-3400).
+  Direct fn-ref values still get the OK-wrap thunk so their
+  `try fp(1) catch { ... }` semantics work; only the callback-
+  wrap path bypasses it.
 
   Narrowing (each axis independent of the bug):
   - Universal across `callback1` / `callback2` / `callback3` —
@@ -64,7 +87,7 @@
     accidentally accepting actually-throwing functions.
 
   ABI unchanged.  Pure type-checker change.  Bump is
-  compiler-only (0.31.70 → 0.31.71).
+  compiler-only (0.31.70 → 0.31.72).
 
 ## 2026-05-13 (Friendly use-move + `ptid` opt-in)
 - **MIR by-value-arg validator now emits friendly `use move`

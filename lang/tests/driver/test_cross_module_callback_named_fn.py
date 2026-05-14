@@ -1,14 +1,13 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Cross-module `core.callback{N}(other_mod.fn)` named-fn wrap.
 
-Pre-0.31.71 the resolver overrode `can_throw = True` for every
-`is_exported_entrypoint` / `is_extern` signature in
-`_call_sig_for_fn_ref` (type_checker.py:3306-3307).  That reflected
-the OK-wrap thunk's FnResult-based ABI but stomped the function's
-user-declared `nothrow` bit on the resulting function-reference
-TypeId.  When the fn ref flowed into `callback{N}(...)`, the
-intrinsic resolver (call_resolver.py:5002) saw `fn_throws=True` on
-a nothrow function and rejected the wrap as
+Pre-0.31.72 the resolver let the fn-reference TypeId carry the
+OK-wrap thunk's `can_throw=True` (set in `_call_sig_for_fn_ref`
+at type_checker.py:3317 for every `is_exported_entrypoint` /
+`is_extern` signature so direct-call sites see the FnResult ABI).
+That same TypeId flowed into the `callback{N}` intrinsic at
+`call_resolver.py`, where the `fn_throws` check rejected the
+wrap as
 
     error: callback{N} requires a nothrow function [E-AUTO-...]
 
@@ -16,10 +15,18 @@ cascading into an Unknown type for the `callback{N}` result so
 downstream calls (e.g. `add_route_group_middleware`) failed with
 "no matching overload ... [3]" (3 = Unknown).
 
-After fix: `_call_sig_for_fn_ref` returns the declared `can_throw`
-unchanged.  The thunk machinery at the fn_ref construction site
-(type_checker.py:3395-3400) still adapts the bare nothrow return
-into FnResult — the user-facing nothrow shape is preserved.
+After fix (0.31.72): the type-checker's `can_throw = True`
+override is unchanged — direct-call semantics through the
+OK-wrap thunk are preserved (pinned by
+`lang/tests/codegen/e2e/fnptr_cross_module_wrapper`).  The
+`callback{N}` resolver detects the wrapped entry in
+`fnptr_consts_by_node_id` (kind=`THUNK_OK_WRAP`), looks up the
+underlying function via `ctx.find_thunk_spec_by_id`, and
+rewrites the side-table entry in place to point at the impl
+with the declared (unwrapped) signature.  The fn_throws check
+then passes, and `_apply_fnptr_consts` installs an HFnPtrConst
+against the original function so HIR→MIR's `ConstructIface`
+targets the impl rather than `__thunk_ok_wrap::<callee>`.
 
 Pins arity 1 / 2 / 3 of the cross-module wrap.  Same-module
 references were never broken; the bug was specific to a named-fn
