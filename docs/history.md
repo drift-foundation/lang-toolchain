@@ -1,5 +1,115 @@
 # Drift development history
 
+## 2026-05-14 (RUNTIME_BUG fix: `conc.sleep` double-registered its wake timer)
+- **RUNTIME_BUG fix.** Release 0.31.83, ABI unchanged at 14.
+  Reported by the mariadb team (managed-connection spike,
+  Issue #3 in
+  `~/src/pushcoin/work/managed-connection-spike/v1_implementation_blockers.md`).
+  Blocked the v1 keepalive certification for `mariadb-rpc`.
+
+  **Symptom (customer-visible).** A spawned VT calling
+  `conc.sleep(Duration(millis = N))` either spin-looped at
+  thousands of iterations per second or never ran. Worse: even
+  *main* exhibited an alternating bug — sequential 100ms sleeps
+  measured `100ms / 0ms / 100ms / 0ms`. The second of any pair of
+  sleeps returned instantly.
+
+  **Root cause.** `std.concurrent.sleep` registered the wake
+  timer **twice**:
+
+  ```drift
+  thread.reactor_register_timer(deadline, vt);   // ← Drift-side
+  thread.vt_park_until(deadline);                // ← C side
+                                                 //   ALSO calls
+                                                 //   reactor_register_timer
+                                                 //   internally
+  ```
+
+  The C function `drift_thread_park_until` (in
+  `lang/language_runtime/posix/thread_runtime.c:1863`) registers
+  the wake-timer itself. So `sleep` registered one wake at the
+  Drift level and *another identical wake* via `vt_park_until`.
+  Both timers fired, both produced `unpark` calls. The first hit
+  `state == DRIFT_VT_PARKED` and took the enqueue path
+  (harmless). The second hit `state == DRIFT_VT_READY` (state was
+  already advanced by the first) and took the fallback path,
+  which **bumps `park_token`**. The next `sleep` call entered
+  with a stale token > 0, decremented it, and early-returned
+  without parking.
+
+  Each park-and-wake cycle leaked an extra `park_token++`. Over
+  multiple sleeps the token accumulated (`1, 0, 2, 1, 3, ...`),
+  which is why the customer's spawned-VT loop sometimes
+  spin-looped (every sleep token-bypassed) and sometimes never
+  ran (the VT got "delivered" enough spurious wakes that the
+  scheduler enqueued it ahead of its work — depending on
+  scheduling jitter).
+
+  **Fix.** One line removed from `stdlib/std/concurrent/concurrent.drift`:
+
+  ```drift
+  -    thread.reactor_register_timer(deadline, vt);
+       thread.vt_park_until(deadline);
+  ```
+
+  Plus a multi-line comment at the call site explaining the
+  double-registration trap and why `vt_park_until` is the
+  authoritative timer registration point. No C-side changes —
+  the runtime behavior was correct; only the stdlib was
+  duplicating the registration.
+
+  **Verification.** With the fix, four sequential 100ms sleeps
+  on main each measure ~100ms. The customer's spawned-VT
+  scenario ticks 5 times in 550ms, deterministically across 5
+  consecutive runs (replacing the customer's 3/5 spin-loop +
+  2/5 no-run flake).
+
+  **Regression tests.** Both checked in:
+
+  - `lang/tests/codegen/e2e/conc_sleep_sequential_main/` — four
+    sequential 100ms sleeps on main, each expected at 80..500ms
+    (allowing scheduling jitter). Pre-fix: sleeps #2/#4 fail
+    with elapsed `0ms`.
+  - `lang/tests/codegen/e2e/conc_sleep_in_spawned_vt/` — the
+    customer's exact shape: spawn VT loop of `sleep(100ms) +
+    counter.fetch_add`, main sleeps 550ms, assert counter in
+    4..7. Pre-fix: ticks either `0` (VT never ran) or thousands
+    (spin loop).
+
+  **Out of scope / follow-ups (Issues 1 + 2 from the same
+  report).**
+
+  - **Issue 1 — `arc.get().field` projection on non-Copy fields
+    fails.** Customer worked around via `val inner_ref =
+    arc.get();` then `.field` on the named local. Triaged as the
+    same family as the earlier returned-ref chain bug, but for
+    field projection on rvalue ref-returning receivers. Separate
+    slice.
+  - **Issue 2 — `captures(share x)` then later `move x` crashes
+    SSA with "load before store".** Customer report says either
+    the pattern is legal and must lower, or the checker must
+    reject before SSA. Reported by customer; needs minimal repro
+    — the variants I tried in this slice (`Arc<T>` / no-Arc,
+    bare `Callback0` / `conc.spawn`, with and without
+    closure-body use of `x`, return-construct / `val w =`) all
+    compile cleanly. Separate slice once a minimal failing
+    program is in hand.
+  - **Audit follow-up (caught in code review of this fix): timed
+    I/O waits double-register their wake timer too.** The same
+    pattern that broke `sleep` is also present in
+    `stdlib/std/{net,io,concurrent}.drift` — each calls
+    `thread.reactor_register_io(fd, interest, vt, deadline_ms)`
+    followed by `thread.vt_park_until(deadline_ms)`. C's
+    `drift_reactor_register_io` registers a timer internally
+    when `deadline_ms > 0`
+    (`lang/language_runtime/posix/thread_runtime.c:2293-2295`),
+    and `vt_park_until` then registers another. Less
+    customer-visible than the `sleep` bug — manifests as "I/O
+    timeout returned earlier than expected" rather than 0ms
+    sleeps. Not folded into this slice to keep the patch narrow
+    around the reported blocker; queued as the next runtime
+    audit item.
+
 ## 2026-05-14 (driftc default link includes `-lz` — codec_gzip_runtime.o is always in the runtime archive)
 - **Follow-up patch to the 0.31.77 std.codec.gzip slice** (release
   0.31.82, ABI unchanged at 14). Surfaced by a post-cert test

@@ -1,0 +1,7 @@
+{
+  "description": "e2e RUNTIME regression: four sequential 100ms sleeps on main must each elapse ~100ms. Pre-0.31.83: alternating 100ms / 0ms / 100ms / 0ms due to double timer registration in conc.sleep (Drift-side reactor_register_timer + C-side vt_park_until's internal registration both fired). Mariadb team report 2026-05-14.",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

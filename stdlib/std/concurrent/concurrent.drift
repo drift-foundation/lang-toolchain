@@ -1184,7 +1184,15 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 		thread.vt_park_until(d.millis);
 		return core.Result::Ok(core.void_value());
 	}
-	thread.reactor_register_timer(deadline, vt);
+	// `vt_park_until` registers the wake-timer with the reactor itself
+	// (see `drift_thread_park_until` in lang/language_runtime/posix/
+	// thread_runtime.c) and then swaps to the scheduler. Calling
+	// `reactor_register_timer` here as well would register the SAME
+	// wake twice — both fire, both unpark the VT, and the second
+	// unpark hits a VT that's already READY → falls through to the
+	// fallback path which bumps `park_token`. The next `sleep` call
+	// then early-returns by consuming the stale token, producing the
+	// alternating-instant-sleep pattern the bookkeeper team reported.
 	thread.vt_park_until(deadline);
 	return core.Result::Ok(core.void_value());
 }

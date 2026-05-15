@@ -1,0 +1,66 @@
+module main;
+
+// RUNTIME regression for the double-timer-registration bug in
+// `conc.sleep` (mariadb team report, 2026-05-14).
+//
+// Pre-fix behavior: `conc.sleep` registered the wake-timer twice —
+// once via `thread.reactor_register_timer(deadline, vt)` at the
+// Drift level, and once internally inside `thread.vt_park_until`
+// (C function `drift_thread_park_until` in
+// lang/language_runtime/posix/thread_runtime.c). Both timers fired,
+// both produced unpark calls. The first hit state=PARKED → enqueue
+// path (harmless). The second hit state=READY → fallback path,
+// `park_token++`. The next `sleep` call consumed the stale token
+// and returned immediately — producing an alternating
+// 100ms / 0ms / 100ms / 0ms pattern for sequential sleeps on main.
+//
+// This test pins the fix: four sequential 100ms sleeps on main
+// must each take at least ~80ms (allowing for scheduling jitter).
+//
+// If the bug returns, sleeps #2 and #4 will measure ~0ms and the
+// test fails.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+import std.time as time;
+import std.format as fmt;
+
+fn _check(label: &String, elapsed: Int, code: Int) nothrow -> Int {
+	if elapsed < 80 {
+		cons.eprintln(*label + ": expected >= 80ms, got "
+			+ fmt.format_int(elapsed));
+		return code;
+	}
+	if elapsed > 500 {
+		cons.eprintln(*label + ": expected <= 500ms, got "
+			+ fmt.format_int(elapsed));
+		return code + 100;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val t1 = time.now_monotonic();
+	val _r1 = conc.sleep(conc.Duration(millis = 100));
+	val r1 = _check(&"sleep#1", time.elapsed_ms(&t1), 1);
+	if r1 != 0 { return r1; }
+
+	val t2 = time.now_monotonic();
+	val _r2 = conc.sleep(conc.Duration(millis = 100));
+	val r2 = _check(&"sleep#2", time.elapsed_ms(&t2), 2);
+	if r2 != 0 { return r2; }
+
+	val t3 = time.now_monotonic();
+	val _r3 = conc.sleep(conc.Duration(millis = 100));
+	val r3 = _check(&"sleep#3", time.elapsed_ms(&t3), 3);
+	if r3 != 0 { return r3; }
+
+	val t4 = time.now_monotonic();
+	val _r4 = conc.sleep(conc.Duration(millis = 100));
+	val r4 = _check(&"sleep#4", time.elapsed_ms(&t4), 4);
+	if r4 != 0 { return r4; }
+
+	cons.println("ok");
+	return 0;
+}

@@ -1,0 +1,81 @@
+module main;
+
+// RUNTIME regression for the customer-reported "spawned VT
+// keepalive loop doesn't park" symptom — the exact shape the
+// mariadb team's managed-connection spike needed for the
+// keepalive scenario (5-run flake: 3/5 spin-loop ~5000 ticks/sec,
+// 2/5 VT didn't run at all). Both manifestations were the same
+// underlying double-timer bug in conc.sleep — see
+// `conc_sleep_sequential_main` for the root-cause narrative.
+//
+// This test pins the spawned-VT shape end-to-end: spawn a VT
+// that loops `sleep(100ms) + increment shared counter`, main
+// sleeps 550ms, then read the counter. With a correctly-parking
+// VT we expect 4-7 ticks (within scheduling jitter). 0 means
+// the VT never ran; >10 means it's spin-looping.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+import std.sync as sync;
+import std.time as time;
+import std.format as fmt;
+
+fn _seq_cst() nothrow -> sync.MemoryOrder {
+	return sync.MemoryOrder::SeqCst();
+}
+
+fn main() nothrow -> Int {
+	val counter: core.Arc<sync.AtomicInt> = core.arc<type sync.AtomicInt>(sync.atomic_int(0));
+	val counter_for_vt = counter.clone();
+
+	var vt = conc.spawn<type Int>(core.callback0(| | captures(move counter_for_vt) => {
+		var i = 0;
+		while i < 100 {
+			match conc.sleep(conc.Duration(millis = 100)) {
+				Ok(_) => { },
+				Err(e) => { return -1; }
+			}
+			val _ = counter_for_vt.get().fetch_add(1, _seq_cst());
+			i = i + 1;
+		}
+		return 0;
+	}));
+
+	val t = time.now_monotonic();
+	match conc.sleep(conc.Duration(millis = 550)) {
+		Ok(_) => { },
+		Err(e) => { cons.eprintln("main 550ms sleep err"); return 1; }
+	}
+	val main_elapsed = time.elapsed_ms(&t);
+	val ticks = counter.get().load(_seq_cst());
+
+	vt.cancel();
+
+	// Main's 550ms sleep must really take ~550ms.
+	if main_elapsed < 500 {
+		cons.eprintln("FAIL: main sleep too short, got "
+			+ fmt.format_int(main_elapsed) + "ms");
+		return 2;
+	}
+
+	// Spawned VT ticked ~5 times (one per 100ms slot in 550ms).
+	// Allow 4..7 for scheduling jitter at the edges.
+	if ticks == 0 {
+		cons.eprintln("FAIL: VT never ran (counter still 0)");
+		return 3;
+	}
+	if ticks > 20 {
+		cons.eprintln("FAIL: VT spin-looped ("
+			+ fmt.format_int(ticks) + " ticks in 550ms)");
+		return 4;
+	}
+	if ticks < 4 or ticks > 7 {
+		cons.eprintln("FAIL: ticks out of expected 4..7, got "
+			+ fmt.format_int(ticks));
+		return 5;
+	}
+
+	cons.println("ok");
+	return 0;
+}

@@ -1,0 +1,7 @@
+{
+  "description": "e2e RUNTIME regression: spawned VT loop of sleep(100ms)+counter.fetch_add. Main sleeps 550ms, then asserts counter is in 4..7. Pre-0.31.83 the customer reported a 5-run flake (3/5 spin-loop, 2/5 VT didn't run) caused by double-timer-registration in conc.sleep — see conc_sleep_sequential_main for root-cause narrative.",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}
