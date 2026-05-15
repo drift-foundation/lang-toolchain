@@ -42,7 +42,7 @@ chosen value back into `os.environ` so child processes inherit it.
    keeping) belong in the repo (`work/`, `build/`), not under
    `$DRIFT_TMP_ROOT`.
 
-## Helper (`lang/test_support/drift_tmp.py`)
+## Python helper (`lang/test_support/drift_tmp.py`)
 
 ```python
 from lang.test_support.drift_tmp import (
@@ -52,6 +52,77 @@ from lang.test_support.drift_tmp import (
     drift_mkstemp,   # mkstemp(dir=...)
 )
 ```
+
+Pytest tests should keep using `tmp_path` / `tmp_path_factory` — the
+top-level `conftest.py` sets `PYTEST_DEBUG_TEMPROOT=$DRIFT_TMP_ROOT/pytest`
+and `tempfile.tempdir = session_root()` so these land inside the
+Drift namespace automatically.  Non-pytest tooling (deploy steps, ad
+hoc CLIs) MUST use the explicit `dir=session_root()` form — conftest.py
+does not run for those.
+
+## Drift helper (`std.env.drift_tmp_path`)
+
+Compiled Drift programs do NOT inherit Python's `tempfile.tempdir` or
+pytest's `PYTEST_DEBUG_TEMPROOT` — those redirections live in the
+Python harness, not in the compiled binary.  Drift code that needs
+scratch storage must derive the path from `$DRIFT_TMP_ROOT` itself:
+
+```drift
+import std.env as env;
+import std.io as io;
+
+fn main() nothrow -> Int {
+    val path = env.drift_tmp_path("my_test_output.bin");
+    val w = io.file_builder(path).read(false).write(true)...
+    ...
+}
+```
+
+`env.drift_tmp_path(name)` returns `$DRIFT_TMP_ROOT/<name>` when the
+env var is set (the normal case under pytest / the e2e runner / any
+process launched via Drift tooling) and falls back to `/tmp/<name>`
+for direct manual invocation outside a Drift session.
+
+## Static audit
+
+`lang/tests/test_tmp_root_compliance.py` enforces this convention in
+CI.  It fails on:
+
+- Any `/tmp/` reference in active source (Python, Drift, shell,
+  justfile) — scans full lines, not just quoted substrings, so
+  heredocs / embedded shell commands / docstrings are covered.
+- `tempfile.mkdtemp()`, `mkstemp()`, `TemporaryDirectory()`, and
+  `NamedTemporaryFile()` calls without a `dir=` keyword.
+- Any `tempfile.mktemp()` call — forbidden outright (deprecated;
+  TOCTOU race between path return and file create, and no `dir=`
+  API surface).
+
+There is **no file-level allow-list** — per-line markers are the
+only opt-out.  Earlier drafts had a file-level allow-list which was
+too coarse: a future real /tmp write inside an "exempt" file would
+slip through.  Per-line markers force the contributor to acknowledge
+each specific safe literal, and a reviewer can see exactly which
+lines are exempted in the diff.
+
+**Per-line opt-out marker** (comment-syntax-agnostic — works in
+Python `#`, Drift `//`, shell `#`, etc.):
+
+```
+# drift-tmp-root-audit: allow <reason>
+// drift-tmp-root-audit: allow <reason>
+```
+
+Use **only** for genuinely safe cases:
+
+| Case | Example |
+|---|---|
+| Documentation / docstring prose | `--manifest /tmp/foo.json` in a README |
+| Mock return value, never written | `return Path("/tmp/fake.a")` in a test |
+| Path-rejection negative test | `assert raises(ValueError, abs_path="/tmp/x.drift")` |
+| The namespace origin itself | `drift_tmp.py`'s default session-root construction |
+| The janitor's sweep target | `tools/drift_janitor.sh`'s hard-coded base |
+
+Any other use is a regression.
 
 ## Setup (interactive shells, agents, downstream projects)
 

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,7 @@ class TestSignWithEnvelope:
 		"""sign_package_v0 with author_profile_path produces envelope_version: 1."""
 		from lang.drift.sign import SignOptions, sign_package_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg.write_bytes(b"fake package bytes")
@@ -98,7 +99,7 @@ class TestSignWithEnvelope:
 		"""sign_package_v0 without author_profile_path produces legacy sidecar."""
 		from lang.drift.sign import SignOptions, sign_package_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg.write_bytes(b"fake package bytes")
@@ -134,7 +135,7 @@ class TestEnvelopeVerification:
 		)
 		from lang.drift.envelope import build_envelope
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg.write_bytes(pkg_bytes)
@@ -195,7 +196,7 @@ class TestEnvelopeVerification:
 		)
 		from lang.drift.envelope import build_envelope
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg.write_bytes(b"package")
@@ -242,7 +243,7 @@ class TestEnvelopeVerification:
 		)
 		from lang.drift.envelope import build_envelope
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg.write_bytes(b"package")
@@ -284,7 +285,7 @@ class TestEnvelopeVerification:
 			verify_ed25519,
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			pkg = td / "test.dmp"
 			pkg_bytes = b"package for downgrade test"
@@ -337,7 +338,7 @@ class TestProfilePackageField:
 		)
 		bound = replace(profile, package="net-tls")
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / ".author-profile"
 			write_author_profile(bound, path)
 			loaded = load_author_profile(path)
@@ -354,7 +355,7 @@ class TestProfilePackageField:
 			pubkey_raw=pub_raw, name="Test", namespaces=["test.*"],
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / ".author-profile"
 			write_author_profile(profile, path)
 			loaded = load_author_profile(path)
@@ -373,7 +374,7 @@ class TestTrustFlowSignatureVerification:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			# Create a "legitimate" signed package + profile.
@@ -414,7 +415,7 @@ class TestTrustFlowSignatureVerification:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			# Create a key + profile.
@@ -454,7 +455,7 @@ class TestTrustFlowSignatureVerification:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			seed = Ed25519PrivateKey.generate().private_bytes_raw()
@@ -495,7 +496,7 @@ class TestTrustFlowSignatureVerification:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			seed = Ed25519PrivateKey.generate().private_bytes_raw()
@@ -542,7 +543,7 @@ class TestTrustFlowSignatureVerification:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			# Key A — the actual signer.

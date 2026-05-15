@@ -1,0 +1,5 @@
+{
+  "description": "Pins the `std.env.drift_tmp_path` defensive sanitization — names containing path separators or parent-directory traversal must NOT escape $DRIFT_TMP_ROOT. Without this, `drift_tmp_path('../etc/passwd')` would resolve outside the session root after kernel path normalization. Runs four cases: clean filename (unchanged); `../etc/passwd` (must not contain `..` in result); `foo/bar.bin` (must stay under root); `a..b/c` (mixed; both rules apply).",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}

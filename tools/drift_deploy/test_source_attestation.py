@@ -228,7 +228,7 @@ class TestCanonicalPaths:
 	def test_absolute_path_rejected(self) -> None:
 		with pytest.raises(ValueError, match="absolute"):
 			compute_source_content_id(_basic_inputs(modules=[
-				("/tmp/escape.drift", "a" * 64),
+				("/tmp/escape.drift", "a" * 64),  # drift-tmp-root-audit: allow path-rejection negative test, never written
 			]))
 
 	def test_dotdot_rejected(self) -> None:

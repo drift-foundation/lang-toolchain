@@ -67,7 +67,7 @@ def _capture(runner_module, env_overrides: dict[str, str], call):
 
 	def fake_archive(root, *, clang, variant):
 		captured_variant["variant"] = variant
-		return Path("/tmp/fake_runtime_archive.a")
+		return Path("/tmp/fake_runtime_archive.a")  # drift-tmp-root-audit: allow mock return, never written
 
 	def fake_run(cmd, *args, **kwargs):
 		captured_cmds.append(list(cmd))

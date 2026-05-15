@@ -1,0 +1,73 @@
+module main;
+
+// Pins the contract of `std.env.drift_tmp_path` — names with path
+// separators (`/`, `\`) or parent-directory traversal (`..`) must
+// NOT be able to escape `$DRIFT_TMP_ROOT`.
+//
+// Without this defense, a caller who accidentally built the name
+// from untrusted input could end up writing to a path outside the
+// session scratch root (the kernel resolves `<root>/../etc/passwd`
+// to `/etc/passwd`), defeating the entire janitor-safety story.
+//
+// Sanitization rule (defense-in-depth — callers still MUST pass
+// clean filenames; this is a backstop, not a license):
+//   `..`  →  `__`
+//   `/`   →  `_`
+//   `\`   →  `_`
+// Applied in that order so the `..` → `__` substitution does not
+// interact with a subsequent `/` pass.
+
+import std.core as core;
+import std.console as cons;
+import std.env as env;
+import std.text as text;
+
+fn _assert_contains(haystack: String, needle: String, tag: String) nothrow -> Int {
+	if not text.contains(&haystack, &needle) {
+		cons.eprintln("FAIL " + tag + ": " + haystack + " missing " + needle);
+		return 1;
+	}
+	return 0;
+}
+
+fn _assert_no_dotdot(s: String, tag: String) nothrow -> Int {
+	val dotdot = "..";
+	if text.contains(&s, &dotdot) {
+		cons.eprintln("FAIL " + tag + ": result still contains '..' — sanitizer broken: " + s);
+		return 1;
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	// Set a stable DRIFT_TMP_ROOT for assertions below.  The e2e
+	// runner sets it via the harness — we read whatever's there.
+	val root_opt = env.get("DRIFT_TMP_ROOT");
+	val root: String = match root_opt {
+		Optional::Some(s) => { s },
+		default => { "/tmp" }
+	};
+
+	// Clean name — unchanged.
+	val a = env.drift_tmp_path("clean.bin");
+	if _assert_contains(a, "clean.bin", "clean") != 0 { return 1; }
+
+	// Parent-dir traversal — must be sanitized to NOT contain "..".
+	val b = env.drift_tmp_path("../etc/passwd");
+	if _assert_no_dotdot(b, "dotdot-escape") != 0 { return 2; }
+
+	// Path separator — sanitized.
+	val c = env.drift_tmp_path("foo/bar.bin");
+	if _assert_no_dotdot(c, "slash-only") != 0 { return 3; }
+	// Result should still START with the session root prefix, so a
+	// caller can't redirect writes to /etc, /home, etc.
+	if _assert_contains(c, root, "slash-stays-in-root") != 0 { return 4; }
+
+	// Mixed: ".." next to "/" segments.
+	val d = env.drift_tmp_path("a..b/c");
+	if _assert_no_dotdot(d, "mixed") != 0 { return 5; }
+	if _assert_contains(d, root, "mixed-stays-in-root") != 0 { return 6; }
+
+	cons.println("ok");
+	return 0;
+}

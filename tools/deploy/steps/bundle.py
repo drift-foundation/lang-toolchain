@@ -309,8 +309,8 @@ _EXAMPLES_README = """\
 Compile and run:
 
 ```bash
-driftc examples/hello.drift -o /tmp/hello
-/tmp/hello
+driftc examples/hello.drift -o /tmp/hello   # drift-tmp-root-audit: allow docstring example
+/tmp/hello                                   # drift-tmp-root-audit: allow docstring example
 ```
 
 Expected output: `hello, drift!` with exit code 0.

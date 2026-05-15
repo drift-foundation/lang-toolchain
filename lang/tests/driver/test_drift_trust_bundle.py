@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -107,7 +108,7 @@ class TestProfileRoundtrip:
 			url="https://x.y",
 			namespaces=["acme.*", "acme.crypto"],
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "test.author-profile"
 			write_author_profile(profile, path)
 			loaded = load_author_profile(path)
@@ -120,21 +121,21 @@ class TestProfileRoundtrip:
 		assert loaded.namespaces == ["acme.*", "acme.crypto"]
 
 	def test_rejects_wrong_format(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({"format": "wrong", "version": 0}))
 			with pytest.raises(ValueError, match="not an author profile"):
 				load_author_profile(path)
 
 	def test_rejects_bad_version(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({"format": "author-profile", "version": 99}))
 			with pytest.raises(ValueError, match="unsupported.*version"):
 				load_author_profile(path)
 
 	def test_rejects_bad_pubkey(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
@@ -147,7 +148,7 @@ class TestProfileRoundtrip:
 
 	def test_rejects_kid_mismatch(self) -> None:
 		_seed, pub_raw, _kid = _make_key()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
@@ -160,7 +161,7 @@ class TestProfileRoundtrip:
 
 	def test_rejects_empty_namespaces(self) -> None:
 		_seed, pub_raw, kid = _make_key()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
@@ -173,7 +174,7 @@ class TestProfileRoundtrip:
 
 	def test_rejects_both_name_and_org_empty(self) -> None:
 		_seed, pub_raw, kid = _make_key()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "bad.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
@@ -186,7 +187,7 @@ class TestProfileRoundtrip:
 
 	def test_loads_org_only_profile(self) -> None:
 		_seed, pub_raw, kid = _make_key()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "org.author-profile"
 			path.write_text(json.dumps({
 				"format": "author-profile", "version": 0,
@@ -206,7 +207,7 @@ class TestApplyProfile:
 	def test_applies_to_empty_store(self) -> None:
 		_seed, pub_raw, kid = _make_key()
 		profile = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["acme.*"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			trust_path = Path(tmpdir) / "drift" / "trust.json"
 			report = apply_author_profile_to_trust_store(profile, trust_path)
 			assert report["kid"] == kid
@@ -219,7 +220,7 @@ class TestApplyProfile:
 	def test_idempotent(self) -> None:
 		_seed, pub_raw, kid = _make_key()
 		profile = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["acme.*"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			trust_path = Path(tmpdir) / "drift" / "trust.json"
 			apply_author_profile_to_trust_store(profile, trust_path)
 			report = apply_author_profile_to_trust_store(profile, trust_path)
@@ -230,7 +231,7 @@ class TestApplyProfile:
 		_seed, pub_raw, kid = _make_key()
 		p1 = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["acme.*"])
 		p2 = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["acme.*", "acme.crypto.*"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			trust_path = Path(tmpdir) / "drift" / "trust.json"
 			apply_author_profile_to_trust_store(p1, trust_path)
 			report = apply_author_profile_to_trust_store(p2, trust_path)
@@ -240,7 +241,7 @@ class TestApplyProfile:
 	def test_creates_store_if_missing(self) -> None:
 		_seed, pub_raw, _kid = _make_key()
 		profile = create_author_profile(pubkey_raw=pub_raw, name="Alice", namespaces=["acme.*"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			trust_path = Path(tmpdir) / "new" / "deep" / "trust.json"
 			assert not trust_path.exists()
 			apply_author_profile_to_trust_store(profile, trust_path)
@@ -254,7 +255,7 @@ class TestInitCLI:
 	def test_init_noninteractive_roundtrip(self) -> None:
 		"""drift init --yes produces a valid .author-profile."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "test.author-profile"
 			rc = drift_main([
@@ -276,7 +277,7 @@ class TestInitCLI:
 	def test_init_org_only(self) -> None:
 		"""drift init --org without --name produces valid org-only profile."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "org.author-profile"
 			rc = drift_main([
@@ -295,7 +296,7 @@ class TestInitCLI:
 	def test_init_neither_name_nor_org_fails(self) -> None:
 		"""drift init without --name and --org fails."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "bad.author-profile"
 			rc = drift_main([
@@ -311,7 +312,7 @@ class TestInitCLI:
 	def test_init_generates_key_when_missing(self) -> None:
 		"""drift init --yes without existing key auto-generates one."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			keys_dir = Path(tmpdir) / "keys"
 			out_path = Path(tmpdir) / "test.author-profile"
 			old_env = os.environ.get("DRIFT_SIGN_KEY_FILE")
@@ -344,7 +345,7 @@ class TestTrustProfileCLI:
 	def test_trust_profile_noninteractive(self) -> None:
 		"""drift trust <profile> --yes updates the trust store."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			seed = Ed25519PrivateKey.generate().private_bytes_raw()
 			priv = Ed25519PrivateKey.from_private_bytes(seed)
 			pub_raw = ed25519_public_bytes_raw(priv.public_key())
@@ -372,7 +373,7 @@ class TestTrustProfileCLI:
 	def test_trust_subcommand_not_confused_with_profile(self) -> None:
 		"""drift trust list should NOT be treated as a profile file."""
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			trust_path = Path(tmpdir) / "drift" / "trust.json"
 			rc = drift_main(["trust", "list", "--trust-store", str(trust_path)])
 			assert rc == 0
@@ -403,7 +404,7 @@ class TestNamespaceWording:
 class TestKeyResolution:
 	def test_cli_key_overrides_env(self) -> None:
 		from lang.drift.cli import _resolve_signing_key_path
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			cli_key = Path(tmpdir) / "cli.seed"
 			env_key = Path(tmpdir) / "env.seed"
 			cli_key.write_text("x")
@@ -421,7 +422,7 @@ class TestKeyResolution:
 
 	def test_env_used_when_no_cli_key(self) -> None:
 		from lang.drift.cli import _resolve_signing_key_path
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			env_key = Path(tmpdir) / "env.seed"
 			env_key.write_text("x")
 			old = os.environ.get("DRIFT_SIGN_KEY_FILE")
@@ -453,7 +454,7 @@ class TestKeyResolution:
 class TestOverwriteProtection:
 	def test_fresh_output_succeeds(self) -> None:
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "new.author-profile"
 			assert not out_path.exists()
@@ -471,7 +472,7 @@ class TestOverwriteProtection:
 	def test_noninteractive_rejects_overwrite_without_yes(self) -> None:
 		from lang.drift.cli import _init_noninteractive
 		import argparse
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "existing.author-profile"
 			out_path.write_text('{"existing": true}')
@@ -486,7 +487,7 @@ class TestOverwriteProtection:
 
 	def test_noninteractive_yes_permits_overwrite(self) -> None:
 		from lang.drift.cli import main as drift_main
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "existing.author-profile"
 			out_path.write_text('{"old": true}')
@@ -505,7 +506,7 @@ class TestOverwriteProtection:
 	def test_no_partial_file_on_refusal(self) -> None:
 		from lang.drift.cli import _init_noninteractive
 		import argparse
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			key_path = _make_seed_file(tmpdir)
 			out_path = Path(tmpdir) / "existing.author-profile"
 			original = '{"format": "author-profile", "version": 0, "preserved": true}\n'

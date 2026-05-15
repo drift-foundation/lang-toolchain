@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -164,7 +165,7 @@ class TestResolutionLock:
 	def test_no_deps_produces_empty(self) -> None:
 		"""Artifact with no package_deps returns empty resolution."""
 		art = _art("my.pkg")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			result = _resolve_artifact_deps(
 				art,
@@ -177,7 +178,7 @@ class TestResolutionLock:
 	def test_missing_lock_raises(self) -> None:
 		"""Artifact with deps but no lock → error directing to drift prepare."""
 		art = _art("my.pkg", deps=[PackageDep("ext.lib", "^1.0.0")])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			with pytest.raises(DeployError, match="drift prepare"):
 				_resolve_artifact_deps(
@@ -189,7 +190,7 @@ class TestResolutionLock:
 
 	def test_missing_lock_entry_raises(self) -> None:
 		"""Artifact in manifest but not in lock → error directing to drift prepare."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			write_lock(lock_path, {"other.pkg": {
 				"dep.x": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct"),
@@ -218,7 +219,7 @@ class TestResolutionLock:
 			"dep.a": ResolvedDep(version="1.0.0", sha256="aa", dep_type="direct"),
 			# dep.b missing
 		}}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			with pytest.raises(DeployError, match="dep.b.*drift prepare"):
 				_resolve_artifact_deps(
@@ -244,7 +245,7 @@ class TestResolutionLock:
 				author_key="ed25519:test",
 			),
 		}}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			dmp = Path(tmpdir) / "dep.a-0.1.3.dmp"
 			dmp.write_bytes(b"fake")
@@ -283,7 +284,7 @@ class TestResolutionLock:
 				author_key="ed25519:OLD_KEY",
 			),
 		}}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			dmp = Path(tmpdir) / "dep.a-0.1.3.dmp"
 			dmp.write_bytes(b"fake")
@@ -322,7 +323,7 @@ class TestResolutionLock:
 				author_key="ed25519:test",
 			),
 		}}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = _drift_subdir(tmpdir) / "lock.json"
 			with patch("tools.drift_deploy.drift_deploy.build_package_index") as mock_idx:
 				mock_idx.return_value = {}  # empty — dep.a not on disk
@@ -348,7 +349,7 @@ class TestProvenanceInDeploy:
 		from tools.drift_deploy.provenance import build_provenance, write_provenance
 
 		compiler = CompilerInfo(version="0.27.93", abi=6, commit="abc1234")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "myapp.provenance.json"
 			prov_bytes = build_provenance(
 				artifact_name="myapp",
@@ -382,7 +383,7 @@ class TestStagedTrust:
 	def test_empty_baseline(self) -> None:
 		from tools.drift_deploy.staged_trust import build_staged_trust
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			out = Path(tmpdir) / "trust.json"
 			# Fake 32-byte pubkey.
 			pubkey = b"\x01" * 32
@@ -403,7 +404,7 @@ class TestStagedTrust:
 	def test_overlay_on_baseline(self) -> None:
 		from tools.drift_deploy.staged_trust import build_staged_trust
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			baseline = Path(tmpdir) / "baseline.json"
 			baseline.write_text(json.dumps({
 				"format": "drift-trust",
@@ -477,7 +478,7 @@ class TestCleanEnv:
 
 class TestUnsafeField:
 	def test_unsafe_default_false(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -495,7 +496,7 @@ class TestUnsafeField:
 			assert m.artifacts[0].unsafe is False
 
 	def test_unsafe_true(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -516,7 +517,7 @@ class TestUnsafeField:
 
 	def test_unsafe_non_bool_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -575,7 +576,7 @@ class TestBuildSubprocessWiring:
 		"""_build_package must pass env= with PYTHONPATH removed."""
 		monkeypatch.setenv("PYTHONPATH", "/poisoned")
 		art = _make_art()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_package(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -598,7 +599,7 @@ class TestBuildSubprocessWiring:
 			description="App", license="MIT",
 			entry_module="src/main.drift", modules=["src/"],
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_app(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -617,7 +618,7 @@ class TestBuildSubprocessWiring:
 		"""_run_baseline_smoke_package must pass env= with PYTHONPATH removed."""
 		monkeypatch.setenv("PYTHONPATH", "/poisoned")
 		art = _make_art()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			_run_baseline_smoke_package(
@@ -638,7 +639,7 @@ class TestBuildSubprocessWiring:
 	) -> None:
 		"""_build_package with unsafe=True must pass --allow-unsafe to driftc."""
 		art = _make_art(unsafe=True)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_package(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -654,7 +655,7 @@ class TestBuildSubprocessWiring:
 	) -> None:
 		"""_build_package with unsafe=False must NOT pass --allow-unsafe."""
 		art = _make_art(unsafe=False)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_package(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -675,7 +676,7 @@ class TestBuildSubprocessWiring:
 			entry_module="src/main.drift", modules=["src/"],
 			unsafe=True,
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_app(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -699,7 +700,7 @@ class TestModuleNamespace:
 
 	def test_default_derives_from_name(self) -> None:
 		"""Hyphens in name are converted to underscores by default."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -718,7 +719,7 @@ class TestModuleNamespace:
 			assert m.artifacts[0].module_namespace == "net_tls"
 
 	def test_explicit_overrides_default(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -738,7 +739,7 @@ class TestModuleNamespace:
 
 	def test_no_hyphens_identity(self) -> None:
 		"""Name without hyphens: module_namespace == name."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -757,7 +758,7 @@ class TestModuleNamespace:
 
 	def test_invalid_rejected(self) -> None:
 		from tools.drift_deploy.manifest import ManifestError
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _drift_subdir(tmpdir) / "manifest.json"
 			path.write_text(json.dumps({
 				"schema_version": 2,
@@ -786,7 +787,7 @@ class TestModuleNamespace:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			_run_baseline_smoke_package(
@@ -806,7 +807,7 @@ class TestModuleNamespace:
 	def test_staged_trust_uses_module_namespace(self) -> None:
 		"""Trust namespace should be net_tls.*, not net-tls.*."""
 		from tools.drift_deploy.staged_trust import build_staged_trust
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			out = Path(tmpdir) / "trust.json"
 			build_staged_trust(
 				baseline_trust_path=None,
@@ -824,7 +825,7 @@ class TestModuleNamespace:
 	def test_staged_trust_authorizes_dep_namespaces(self) -> None:
 		"""Smoke trust must authorize dependency namespaces, not just the artifact's own."""
 		from tools.drift_deploy.staged_trust import build_staged_trust
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			out = Path(tmpdir) / "trust.json"
 			build_staged_trust(
 				baseline_trust_path=None,
@@ -885,7 +886,7 @@ class TestSmokeConsumerSource:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			_run_baseline_smoke_package(
@@ -914,7 +915,7 @@ class TestSmokeConsumerSource:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="net.tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			_run_baseline_smoke_package(
@@ -975,20 +976,20 @@ class TestNativeLibPaths:
 		assert args.native_lib_path == [Path("/opt/ssl/lib"), Path("/usr/local/lib")]
 
 	def test_cli_only(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args("--native-lib-path", "/a", "--native-lib-path", "/b")
 			result = _resolve_native_lib_paths(args, Path(tmpdir))
 			assert result == [Path("/a"), Path("/b")]
 
 	def test_env_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/env/a:/env/b")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args()
 			result = _resolve_native_lib_paths(args, Path(tmpdir))
 			assert result == [Path("/env/a"), Path("/env/b")]
 
 	def test_config_only(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/cfg/x", "/cfg/y"]}))
@@ -999,7 +1000,7 @@ class TestNativeLibPaths:
 	def test_precedence_env_config_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""All three sources merge: env first (lowest), config middle, CLI last (highest)."""
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/env")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/cfg"]}))
@@ -1009,19 +1010,19 @@ class TestNativeLibPaths:
 
 	def test_empty_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args()
 			result = _resolve_native_lib_paths(args, Path(tmpdir))
 			assert result == []
 
 	def test_no_config_file_ok(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args()
 			result = _resolve_native_lib_paths(args, Path(tmpdir))
 			assert result == []
 
 	def test_bad_config_raises(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text("not json")
@@ -1030,7 +1031,7 @@ class TestNativeLibPaths:
 				_resolve_native_lib_paths(args, drift_dir)
 
 	def test_config_bad_type_raises(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": "not-a-list"}))
@@ -1041,7 +1042,7 @@ class TestNativeLibPaths:
 	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
 	def test_build_package_passes_link_search(self, mock_run: MagicMock) -> None:
 		art = _make_art(native_deps=["ssl"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_package(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -1061,7 +1062,7 @@ class TestNativeLibPaths:
 			description="App", license="MIT",
 			entry_module="src/main.drift", modules=["src/"],
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_app(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -1079,7 +1080,7 @@ class TestNativeLibPaths:
 	@patch("tools.drift_deploy.drift_deploy.subprocess.run", side_effect=_fake_run_ok)
 	def test_smoke_passes_link_search(self, mock_run: MagicMock) -> None:
 		art = _make_art(native_deps=["ssl"])
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			_run_baseline_smoke_package(
@@ -1099,7 +1100,7 @@ class TestNativeLibPaths:
 	def test_no_native_lib_paths_no_link_search(self, mock_run: MagicMock) -> None:
 		"""When no native_lib_paths, no --link-search flags should appear."""
 		art = _make_art()
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			_build_package(
 				art, driftc=Path("/fake/driftc"), target="x86_64-linux-gnu",
@@ -1112,14 +1113,14 @@ class TestNativeLibPaths:
 	def test_relative_path_in_env_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Relative path in $DRIFT_NATIVE_LIB_PATH must be rejected early."""
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "relative/lib")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args()
 			with pytest.raises(DeployError, match="absolute paths are required"):
 				_resolve_native_lib_paths(args, Path(tmpdir))
 
 	def test_relative_path_in_config_rejected(self) -> None:
 		"""Relative path in drift/deploy-config.json must be rejected early."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["relative/lib"]}))
@@ -1129,7 +1130,7 @@ class TestNativeLibPaths:
 
 	def test_relative_path_in_cli_rejected(self) -> None:
 		"""Relative path via --native-lib-path must be rejected early."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			args = self._make_args("--native-lib-path", "relative/lib")
 			with pytest.raises(DeployError, match="absolute paths are required"):
 				_resolve_native_lib_paths(args, Path(tmpdir))
@@ -1137,7 +1138,7 @@ class TestNativeLibPaths:
 	def test_absolute_paths_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Absolute paths from all three sources should be accepted normally."""
 		monkeypatch.setenv("DRIFT_NATIVE_LIB_PATH", "/abs/env")
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			drift_dir = _drift_subdir(tmpdir)
 			config = drift_dir / "deploy-config.json"
 			config.write_text(json.dumps({"native_lib_paths": ["/abs/cfg"]}))
@@ -1198,7 +1199,7 @@ class TestBuildSelfExclusion:
 			unsafe=True,
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Simulate dest with prior published version.
@@ -1297,7 +1298,7 @@ class TestBuildSelfExclusion:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="my_pkg",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 			dest = tmpdir_p / "dest"
 			dest.mkdir()
@@ -1377,7 +1378,7 @@ class TestBuildSelfExclusion:
 			unsafe=True,
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Dest with prior version.
@@ -1469,7 +1470,7 @@ class TestBuildSelfExclusion:
 			unsafe=True,
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Dest with prior version AND stale version being built.
@@ -1555,7 +1556,7 @@ class TestBuildSelfExclusion:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="web.jwt",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Shared library root with unrelated package.
@@ -1639,7 +1640,7 @@ class TestBuildSelfExclusion:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="web.jwt",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Shared library root with unrelated package.
@@ -1739,7 +1740,7 @@ class TestSmokeRootIncludesFullArtifactSet:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="web.jwt",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 			dest = tmpdir_p / "dest"
 			dest.mkdir()
@@ -1847,7 +1848,7 @@ class TestSmokeRootExcludesOldSelfVersions:
 			entry_module="src/lib.drift", modules=["src/"],
 			module_namespace="net.tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			# Dest already has an older version with a v1-signed .sig.
@@ -1929,7 +1930,7 @@ class TestIntraProjectDeps:
 		"""_resolve_artifact_deps reads deps from existing lock."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			# Simulate a .dmp for integrity verification.
 			dmp = Path(tmpdir) / "net-crypto.dmp"
 			dmp.write_bytes(b"fake-dmp-content")
@@ -2002,7 +2003,7 @@ class TestDeploySourceRebuild:
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			dmp = Path(tmpdir) / "net-crypto.dmp"
 			dmp.write_bytes(b"orch-rebuilt-bytes")
 			rebuilt_sha = hashlib.sha256(b"orch-rebuilt-bytes").hexdigest()
@@ -2078,7 +2079,7 @@ class TestDeploySourceRebuild:
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			dmp = Path(tmpdir) / "net-crypto.dmp"
 			dmp.write_bytes(b"rebuilt")
 			rebuilt_sha = hashlib.sha256(b"rebuilt").hexdigest()
@@ -2137,7 +2138,7 @@ class TestDeploySourceRebuild:
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			dmp = Path(tmpdir) / "net-crypto.dmp"
 			dmp.write_bytes(b"different-bytes")
 			drift_sha = hashlib.sha256(b"different-bytes").hexdigest()
@@ -2983,7 +2984,7 @@ class TestDeployLockRangeResolution:
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			dmp = Path(tmpdir) / "dep-a.dmp"
 			dmp.write_bytes(b"fake-dmp-content")
 			real_sha = hashlib.sha256(b"fake-dmp-content").hexdigest()
@@ -3043,7 +3044,7 @@ class TestExtractDepNamespaces:
 
 	@patch("lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0")
 	def test_extracts_module_ids(self, mock_load: MagicMock) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			pkg_dir = staged / "net-crypto" / "0.1.0"
 			pkg_dir.mkdir(parents=True)
@@ -3062,7 +3063,7 @@ class TestExtractDepNamespaces:
 			assert "net.crypto.aes" in ns
 
 	def test_missing_package_returns_empty(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			staged = Path(tmpdir) / "staged"
 			staged.mkdir()
 			ns = _extract_dep_namespaces("nonexistent", staged)
@@ -3114,7 +3115,7 @@ class TestSmokeDepPinning:
 			m.stderr = ""
 			return m
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			base = Path(tmpdir)
 			stage_dir = base / "staging"
 			staged_pkg_root = stage_dir / "_pkg_root"
@@ -3198,7 +3199,7 @@ class TestSmokeDepPinning:
 			m.stderr = ""
 			return m
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			base = Path(tmpdir)
 			stage_dir = base / "staging"
 			staged_pkg_root = stage_dir / "_pkg_root"
@@ -3283,7 +3284,7 @@ class TestAuthorProfilePublish:
 	def test_missing_profile_declaration_fails_deploy(self) -> None:
 		"""No project.author_profile → deploy fails with clear message."""
 		from tools.drift_deploy.drift_deploy import run
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(Path(tmpdir))
 			dest = Path(tmpdir) / "dest"
 			dest.mkdir()
@@ -3296,7 +3297,7 @@ class TestAuthorProfilePublish:
 	def test_declared_but_missing_file_fails_deploy(self) -> None:
 		"""project.author_profile declared but file doesn't exist → deploy fails."""
 		from tools.drift_deploy.drift_deploy import run
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(
 				Path(tmpdir), author_profile="missing.author-profile",
 			)
@@ -3314,7 +3315,7 @@ class TestAuthorProfilePublish:
 		from lang.drift.author_profile import create_author_profile, write_author_profile
 		from dataclasses import replace as _dc_replace
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			# Create a fake .dmp.
 			dmp = td / "test.pkg.dmp"
@@ -3352,7 +3353,7 @@ class TestAuthorProfilePublish:
 		"""_sign_artifact without author_profile_path produces legacy v0 sidecar."""
 		from tools.drift_deploy.drift_deploy import _sign_artifact
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			dmp = td / "test.pkg.dmp"
 			dmp.write_bytes(b"fake package bytes")
@@ -3411,7 +3412,7 @@ class TestLoadSigningKeySeed:
 	def test_canonical_base64_seed_loads(self) -> None:
 		import base64
 		from tools.drift_deploy.staged_trust import load_signing_key_seed
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "ok.key"
 			p.write_text(base64.b64encode(bytes(range(32))).decode("ascii") + "\n")
 			seed = load_signing_key_seed(p)
@@ -3420,7 +3421,7 @@ class TestLoadSigningKeySeed:
 	def test_raw_bytes_seed_rejected(self) -> None:
 		"""Raw 32 bytes (not base64 text) → invalid base64."""
 		from tools.drift_deploy.staged_trust import load_signing_key_seed
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "raw.key"
 			p.write_bytes(bytes(range(32)))
 			with pytest.raises(ValueError, match="signing key"):
@@ -3435,7 +3436,7 @@ class TestLoadSigningKeySeed:
 		which our loader must inherit."""
 		from tools.drift_deploy.staged_trust import load_signing_key_seed
 		import base64
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "mangled.key"
 			# Take a real base64-encoded 32-byte seed, then splice in
 			# `!` characters (not in the base64 alphabet).
@@ -3449,7 +3450,7 @@ class TestLoadSigningKeySeed:
 		"""Valid base64 but wrong byte length (not 32)."""
 		from tools.drift_deploy.staged_trust import load_signing_key_seed
 		import base64
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "short.key"
 			p.write_text(base64.b64encode(b"\x00" * 16).decode("ascii"))
 			with pytest.raises(ValueError, match="32 bytes"):
@@ -3550,7 +3551,7 @@ class TestSourceAttestationEmission:
 			module_namespace="net_tls",
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 
 			dest = tmpdir_p / "dest"
@@ -3683,7 +3684,7 @@ class TestSourceAttestationEmission:
 			modules=["src/lib.drift"],
 			module_namespace="net_tls",
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			tmpdir_p = Path(tmpdir)
 			dest = tmpdir_p / "dest"
 			dest.mkdir()

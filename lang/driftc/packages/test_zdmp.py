@@ -57,9 +57,12 @@ class TestCache:
 				assert "pkg" in str(p) and "v0" in str(p)
 
 	def test_cache_path_respects_env(self) -> None:
-		with patch.dict("os.environ", {"DRIFT_CACHE_DIR": "/tmp/test-drift-cache"}):
+		# String-only path-derivation test — `zdmp_cache_path` is pure
+		# computation, never writes to the path; /tmp/test-drift-cache  # drift-tmp-root-audit: allow comment describing the negative test
+		# is a fake env var value, not a real directory.
+		with patch.dict("os.environ", {"DRIFT_CACHE_DIR": "/tmp/test-drift-cache"}):  # drift-tmp-root-audit: allow string-only path test
 			p = zdmp_cache_path("aabb")
-			assert str(p).startswith("/tmp/test-drift-cache")
+			assert str(p).startswith("/tmp/test-drift-cache")  # drift-tmp-root-audit: allow string-only path test
 			assert p.name == "aabb.dmp"
 
 	def test_load_zdmp_cached_populates_cache(self) -> None:

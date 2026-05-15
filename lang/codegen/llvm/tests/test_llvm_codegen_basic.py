@@ -23,7 +23,8 @@ def _verify_ir_with_llvm_as(ir: str) -> None:
 	if llvm_as is None:
 		import pytest
 		pytest.skip("llvm-as not available — cannot verify IR")
-	with tempfile.NamedTemporaryFile(suffix=".ll", mode="w", delete=False) as f:
+	from lang.test_support.drift_tmp import session_root as _drift_session_root
+	with tempfile.NamedTemporaryFile(suffix=".ll", mode="w", delete=False, dir=str(_drift_session_root())) as f:
 		f.write(ir)
 		f.flush()
 		result = subprocess.run(

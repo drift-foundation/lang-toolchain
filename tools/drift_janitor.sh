@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # drift_janitor.sh — sweep stale Drift session-scoped scratch dirs from /tmp.
 #
-# Drift processes write scratch under /tmp/drift-$USER/session-* so that
+# Drift processes write scratch under /tmp/drift-$USER/session-* so that  # drift-tmp-root-audit: allow janitor docstring
 # interrupted/OOM-killed sessions can be reclaimed safely. /tmp is tmpfs on
 # most Linux setups, so unswept scratch costs RAM, not disk.
 #
@@ -20,7 +20,7 @@ set -euo pipefail
 MINUTES=360
 APPLY=0
 USER_NAME="${USER:-${LOGNAME:-unknown}}"
-BASE="/tmp/drift-${USER_NAME}"
+BASE="/tmp/drift-${USER_NAME}"  # drift-tmp-root-audit: allow janitor target namespace
 
 usage() {
 	cat <<EOF
@@ -32,7 +32,7 @@ Options:
   --apply         Actually delete matching session dirs. Without this flag,
                   the script prints what it would delete and exits.
   --minutes N     Only consider session dirs older than N minutes. Default: 360 (6h).
-  --base DIR      Override the parent dir. Default: /tmp/drift-\$USER.
+  --base DIR      Override the parent dir. Default: /tmp/drift-\$USER.  drift-tmp-root-audit: allow janitor help text
   -h, --help      Show this help.
 
 The match pattern is hard-coded to 'session-*' under \$BASE so this script

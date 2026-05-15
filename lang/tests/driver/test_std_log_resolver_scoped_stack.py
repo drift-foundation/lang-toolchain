@@ -6,7 +6,7 @@ context storage is `rt.ScopedStack<log.LogContext>` in a thread-local
 registry can implement the resolver without an owned-context round
 trip.  The owned variant (0.27.202) forced a `LogContext.clone()`
 that stdlib did not provide — the app team hit this wall and filed
-`/tmp/stdlib-log-context-resolver-clone-gap.md`.
+`/tmp/stdlib-log-context-resolver-clone-gap.md`.  # drift-tmp-root-audit: allow historical doc reference in module docstring
 
 This test is the app-shape pin for the borrowed API.  It covers:
 

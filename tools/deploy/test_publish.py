@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 from tools.deploy.steps.publish import publish_flat
@@ -34,7 +35,7 @@ def _make_staged(stage: Path) -> Path:
 
 def test_publish_flat_creates_flat_layout() -> None:
 	"""After publish, bin/lib/doc live directly under dest — no inner subdirs."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dist = _make_staged(tmp / "stage")
 		dest = tmp / "deployed"
@@ -58,7 +59,7 @@ def test_publish_flat_creates_flat_layout() -> None:
 
 def test_publish_flat_no_versioned_subdir() -> None:
 	"""No drift-VERSION+abiN/ directory under dest."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dist = _make_staged(tmp / "stage")
 		dest = tmp / "deployed"
@@ -72,7 +73,7 @@ def test_publish_flat_no_versioned_subdir() -> None:
 
 def test_publish_flat_replaces_via_rename() -> None:
 	"""publish_flat replaces an existing deploy via directory rename."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dest = tmp / "deployed"
 
@@ -95,7 +96,7 @@ def test_publish_flat_replaces_via_rename() -> None:
 
 def test_publish_flat_path_resolution_depth() -> None:
 	"""bin/driftc -> parent.parent gives dest root (2-level resolution)."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dist = _make_staged(tmp / "stage")
 		dest = tmp / "deployed"
@@ -112,7 +113,7 @@ def test_publish_flat_path_resolution_depth() -> None:
 def test_publish_flat_is_single_rename() -> None:
 	"""The staged dist directory becomes dest via a single rename, not
 	by moving children one-by-one (which would expose partial state)."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dist = _make_staged(tmp / "stage")
 		dest = tmp / "deployed"
@@ -126,7 +127,7 @@ def test_publish_flat_is_single_rename() -> None:
 
 def test_publish_flat_rollback_on_failure() -> None:
 	"""If the new publish fails, the old deployment is restored."""
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		tmp = Path(tmpdir)
 		dest = tmp / "deployed"
 

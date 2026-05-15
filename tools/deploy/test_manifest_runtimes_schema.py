@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_manifest_declares_normal_and_debug_runtimes() -> None:
 	"""lib/manifest.json must declare both runtimes.normal.lib and runtimes.debug.lib."""
 	from lang.language_runtime import runtime_archive_name
 
-	with tempfile.TemporaryDirectory() as tmpdir:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 		dist = Path(tmpdir) / "dist"
 		dist.mkdir()
 

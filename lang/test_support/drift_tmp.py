@@ -46,14 +46,16 @@ def session_root() -> Path:
 
 	If $DRIFT_TMP_ROOT is already set (parent shell, agent harness, or an
 	earlier call in this process), reuse it verbatim.  Otherwise pick
-	``/tmp/drift-$USER/session-$PID-$timestamp`` and export it so child
+	``/tmp/drift-$USER/session-$PID-$timestamp`` and export it so child  ## drift-tmp-root-audit: allow namespace docstring
 	processes inherit the same root.
 
 	The returned directory is created (parents=True, exist_ok=True).
 	"""
 	root = os.environ.get(_ENV)
 	if not root:
-		root = f"/tmp/drift-{_resolve_user()}/session-{os.getpid()}-{int(time.time())}"
+		# The one legitimate hard-coded /tmp/ literal in the repo: this  # drift-tmp-root-audit: allow namespace origin comment
+		# helper IS the source of truth for the DRIFT_TMP_ROOT namespace.
+		root = f"/tmp/drift-{_resolve_user()}/session-{os.getpid()}-{int(time.time())}"  # drift-tmp-root-audit: allow namespace origin
 		os.environ[_ENV] = root
 	p = Path(root)
 	p.mkdir(parents=True, exist_ok=True)

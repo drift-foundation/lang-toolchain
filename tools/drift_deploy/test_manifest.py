@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,7 @@ def _minimal_manifest(**overrides: object) -> dict:
 
 class TestManifestValid:
 	def test_minimal_package(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), _minimal_manifest())
 			m = load_manifest(path)
 			assert m.schema_version == 2
@@ -73,7 +74,7 @@ class TestManifestValid:
 	def test_author_profile_parsed(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["project"]["author_profile"] = "acme.author-profile"
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.project.author_profile == "acme.author-profile"
@@ -81,7 +82,7 @@ class TestManifestValid:
 	def test_author_profile_empty_string_rejected(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["project"]["author_profile"] = ""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="author_profile"):
 				load_manifest(path)
@@ -90,7 +91,7 @@ class TestManifestValid:
 		"""Legacy 'kind: package' is accepted, normalized to library, and warns."""
 		manifest = _minimal_manifest()
 		assert manifest["artifacts"][0]["kind"] == "package"
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.artifacts[0].kind == "library"
@@ -102,7 +103,7 @@ class TestManifestValid:
 		"""kind: library is accepted without deprecation warning."""
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["kind"] = "library"
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.artifacts[0].kind == "library"
@@ -129,7 +130,7 @@ class TestManifestValid:
 				"smoke_command": ["just", "smoke-net-tls"],
 			}
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			art = m.artifacts[0]
@@ -162,7 +163,7 @@ class TestManifestValid:
 				"package_deps": [{"name": "net.tls", "version": "0.3"}],
 			},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert len(m.artifacts) == 2
@@ -182,7 +183,7 @@ class TestManifestValid:
 				"entry_point": "pushcoin.bookkeeper::main",
 			}
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.artifacts[0].entry_point == "pushcoin.bookkeeper::main"
@@ -200,7 +201,7 @@ class TestManifestValid:
 				"modules": ["src/"],
 			}
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.artifacts[0].entry_point == ""
@@ -212,7 +213,7 @@ class TestManifestInvalid:
 			load_manifest(Path("/nonexistent/drift/manifest.json"))
 
 	def test_wrong_schema_version(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
 				"schema_version": 99,
 				"project": {"name": "x", "license": "MIT"},
@@ -222,7 +223,7 @@ class TestManifestInvalid:
 				load_manifest(path)
 
 	def test_missing_project(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
 				"schema_version": 2,
 				"artifacts": [{"kind": "package", "name": "x", "version": "1.0.0",
@@ -232,7 +233,7 @@ class TestManifestInvalid:
 				load_manifest(path)
 
 	def test_empty_artifacts(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
 				"schema_version": 2,
 				"project": {"name": "x", "license": "MIT"},
@@ -244,7 +245,7 @@ class TestManifestInvalid:
 	def test_invalid_kind(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["kind"] = "unknown_kind"
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="kind"):
 				load_manifest(path)
@@ -252,7 +253,7 @@ class TestManifestInvalid:
 	def test_duplicate_artifact_name(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["artifacts"].append(manifest["artifacts"][0].copy())
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="duplicate"):
 				load_manifest(path)
@@ -278,7 +279,7 @@ class TestManifestInvalid:
 				"package_deps": [{"name": "my-app", "version": "1.0"}],
 			},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="cannot depend on app"):
 				load_manifest(path)
@@ -286,7 +287,7 @@ class TestManifestInvalid:
 	def test_empty_smoke_command(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["smoke_command"] = []
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="smoke_command"):
 				load_manifest(path)
@@ -294,7 +295,7 @@ class TestManifestInvalid:
 	def test_entry_point_on_package_rejected(self) -> None:
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["entry_point"] = "my.pkg::main"
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="only valid for app"):
 				load_manifest(path)
@@ -312,7 +313,7 @@ class TestManifestInvalid:
 				"entry_point": "just_a_function",
 			}
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			with pytest.raises(ManifestError, match="module::fn"):
 				load_manifest(path)
@@ -345,21 +346,21 @@ class TestManifestV2DepVersions:
 
 	def test_mn_range_accepted(self) -> None:
 		"""`"0.3"` (M.N range) loads cleanly."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3"))
 			m = load_manifest(path)
 			assert m.artifacts[0].package_deps[0].version == "0.3"
 
 	def test_major_only_range_accepted(self) -> None:
 		"""`"1"` (major-only range — any 1.x.x) loads cleanly."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("1"))
 			m = load_manifest(path)
 			assert m.artifacts[0].package_deps[0].version == "1"
 
 	def test_three_part_exact_pin_rejected(self) -> None:
 		"""`"0.3.14"` → targeted diagnostic pointing at `"0.3"`."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3.14"))
 			with pytest.raises(ManifestError) as exc:
 				load_manifest(path)
@@ -371,7 +372,7 @@ class TestManifestV2DepVersions:
 
 	def test_caret_range_rejected(self) -> None:
 		"""`"^0.3.0"` → targeted diagnostic about `^` removal."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("^0.3.0"))
 			with pytest.raises(ManifestError) as exc:
 				load_manifest(path)
@@ -381,7 +382,7 @@ class TestManifestV2DepVersions:
 
 	def test_tilde_range_rejected(self) -> None:
 		"""`"~0.3.14"` → targeted diagnostic about `~` removal."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("~0.3.14"))
 			with pytest.raises(ManifestError) as exc:
 				load_manifest(path)
@@ -390,21 +391,21 @@ class TestManifestV2DepVersions:
 
 	def test_garbage_version_rejected(self) -> None:
 		"""Non-matching string → generic rejection with guidance."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("latest"))
 			with pytest.raises(ManifestError, match="declared acceptable range"):
 				load_manifest(path)
 
 	def test_four_part_rejected(self) -> None:
 		"""`"0.3.14.1"` must be rejected."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0.3.14.1"))
 			with pytest.raises(ManifestError, match="declared acceptable range"):
 				load_manifest(path)
 
 	def test_dotted_zero_rejected(self) -> None:
 		"""`"0."` (trailing dot) must be rejected."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version("0."))
 			with pytest.raises(ManifestError, match="declared acceptable range"):
 				load_manifest(path)
@@ -415,7 +416,7 @@ class TestManifestV2DepVersions:
 		compatibility is the owner's choice.  Keep 'compatible' /
 		'compatibility' out of the authored-manifest error text."""
 		for ver in ("0.3.14", "^0.3.0", "latest"):
-			with tempfile.TemporaryDirectory() as tmpdir:
+			with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 				path = _write_manifest(Path(tmpdir), self._manifest_with_dep_version(ver))
 				with pytest.raises(ManifestError) as exc:
 					load_manifest(path)
@@ -440,7 +441,7 @@ class TestManifestV1Rejection:
 	exact-pin form."""
 
 	def test_v1_schema_version_rejected_with_migrate_pointer(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), {
 				"schema_version": 1,
 				"project": {"name": "x", "license": "MIT"},

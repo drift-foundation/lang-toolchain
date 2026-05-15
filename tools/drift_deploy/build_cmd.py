@@ -220,7 +220,8 @@ def project_root_for(manifest_dir: Path) -> Path:
 	``<project_root>/drift/src/lib.drift``.
 
 	If the manifest's containing dir is NOT named ``drift`` (e.g. a
-	non-standard manifest location passed via ``--manifest /tmp/foo.json``),
+	non-standard manifest location passed via ``--manifest /tmp/foo.json``),  # drift-tmp-root-audit: allow docstring example
+
 	the project root collapses to the manifest dir itself, so the legacy
 	"sources next to manifest" interpretation still works for one-off use.
 	"""

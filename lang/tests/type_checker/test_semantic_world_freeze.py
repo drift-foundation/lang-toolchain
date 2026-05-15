@@ -462,7 +462,8 @@ def test_parser_rejects_conflicting_type_table() -> None:
 	world = SemanticWorld(type_table=tt_world)
 	world.advance_to(WorldPhase.PACKAGES_READY)
 
-	src = Path(tempfile.mktemp(suffix=".drift"))
+	from lang.test_support.drift_tmp import drift_mkdtemp as _drift_mkdtemp
+	src = Path(_drift_mkdtemp(prefix="semworld_freeze_")) / ("source" + ".drift")
 	src.write_text("module m;\nfn main() nothrow -> Int { return 0; }\n")
 	try:
 		with pytest.raises(RuntimeError, match="conflicting type_table"):

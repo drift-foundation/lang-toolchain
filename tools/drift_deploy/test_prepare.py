@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -75,7 +76,7 @@ class TestPrepareResolve:
 		mock_resolve.return_value = {
 			"ext.lib": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -108,7 +109,7 @@ class TestPrepareResolve:
 
 	def test_no_deps_is_noop(self) -> None:
 		"""drift prepare with no package_deps does nothing."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -144,7 +145,7 @@ class TestPrepareResolve:
 		mock_resolve.return_value = {
 			"ext.lib": ResolvedDep(version="2.0.0", sha256="aabbcc", dep_type="direct", package_id="ext.lib", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -184,7 +185,7 @@ class TestPrepareResolve:
 	) -> None:
 		"""Resolution failure propagates as PrepareError."""
 		mock_index.return_value = {}  # empty index → resolution will fail
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -261,7 +262,7 @@ class TestPrepareResolve:
 			"mylib": [mylib],
 		}
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -308,7 +309,7 @@ class TestFullPrepareReplace:
 		mock_resolve.return_value = {
 			"dep.a": ResolvedDep(version="1.0.0", sha256="aabbcc", dep_type="direct", package_id="dep.a", author_key="ed25519:test", source_content_id="sha256:" + "a"*64, source_attestation_key="ed25519:test"),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -345,7 +346,7 @@ class TestCoArtifactResolution:
 
 	def test_co_artifact_resolves_without_published_dmp(self) -> None:
 		"""web-rest depends on web-jwt; both in same manifest. No external packages needed."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -381,7 +382,7 @@ class TestCoArtifactResolution:
 
 	def test_co_artifact_with_external_dep(self) -> None:
 		"""Co-artifact + external dep: both resolved correctly."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			# Create a fake external package.
 			pkg_root = Path(tmpdir) / "pkgs"
 			pkg_root.mkdir()
@@ -442,7 +443,7 @@ class TestCoArtifactResolution:
 
 	def test_co_artifact_version_mismatch_errors(self) -> None:
 		"""Co-artifact exists but version doesn't satisfy constraint."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -472,7 +473,7 @@ class TestCoArtifactResolution:
 
 	def test_co_artifact_transitive_deps(self) -> None:
 		"""Co-artifact's own package_deps are resolved transitively."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest = {
 				"schema_version": 2,
@@ -535,7 +536,7 @@ class TestPrepareCheck:
 				source_attestation_key="ed25519:test",
 			),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -569,7 +570,7 @@ class TestPrepareCheck:
 				package_id="ext.lib", author_key="ed25519:test",
 				source_content_id="sha256:" + "b"*64, source_attestation_key="ed25519:test")},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -598,7 +599,7 @@ class TestPrepareCheck:
 		unequal.  drift-web hit this because its manifest has co-
 		artifacts (web-jwt is a co-artifact of web-rest, etc.), which
 		blocked them from wiring `drift prepare --check` into CI."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -633,7 +634,7 @@ class TestPrepareCheck:
 		"""--check without a lock on disk is a hard error, not a
 		silent success.  The contract is "lock matches current
 		resolution"; "no lock" is not "matches"."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -699,7 +700,7 @@ class TestPrepareSourceAttestationGate:
 				source_attestation_key="",
 			),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -738,7 +739,7 @@ class TestPrepareSourceAttestationGate:
 				source_attestation_key="",  # half-empty → fail
 			),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -760,7 +761,7 @@ class TestPrepareSourceAttestationGate:
 		prepare time (the .source-attestation hasn't been built yet —
 		it's emitted later in the same deploy run).  The fail-fast
 		gate must skip them by `dep_type == "co-artifact"`."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,
@@ -858,7 +859,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-key",
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			# Write lock.
@@ -919,7 +920,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-key",
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -966,7 +967,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-B",  # <- drifted
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1012,7 +1013,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-key",
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1069,7 +1070,7 @@ class TestPrepareCheckSourceRebuild:
 				),
 			},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1112,7 +1113,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-key",
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1162,7 +1163,7 @@ class TestPrepareCheckSourceRebuild:
 				source_attestation_key="ed25519:attest-key",
 			)},
 		]
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1256,7 +1257,7 @@ class TestPrepareCheckSourceRebuild:
 					source_attestation_key="ed25519:attest-key",
 				)},
 			]
-			with tempfile.TemporaryDirectory() as tmpdir:
+			with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 				manifest_path = self._write_manifest(tmpdir)
 				p = build_arg_parser()
 				assert _run_impl(p.parse_args(["--manifest", str(manifest_path)])) == 0
@@ -1293,7 +1294,7 @@ class TestPrepareCheckSourceRebuild:
 		# deterministic).
 		mock_resolve.return_value = {"ext.lib": unsigned_dep}
 		mock_sr_resolve.return_value = {"ext.lib": unsigned_dep}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			# Write path: unsigned opt-in still allowed (the prepare-
@@ -1399,7 +1400,7 @@ class TestPrepareCheckSourceRebuild:
 		and strict.  Accepting it on write would let orch / humans
 		believe they'd regenerated a 'source-rebuild-aware' lock when
 		in fact the flag was silently ignored — review finding #2."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = self._write_manifest(tmpdir)
 			p = build_arg_parser()
 			# No --check.  Should raise PrepareError before doing any
@@ -1436,7 +1437,7 @@ class TestPrepareCheckSourceRebuild:
 					source_attestation_key="ed25519:attest-key",
 				),
 			}
-			with tempfile.TemporaryDirectory() as tmpdir:
+			with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 				manifest_path = self._write_manifest(tmpdir)
 				p = build_arg_parser()
 				# No --check, no --source-rebuild on CLI, env var set:
@@ -1451,7 +1452,7 @@ class TestPrepareCheckSourceRebuild:
 		been built yet; the lock's entry is synthesised by
 		_run_impl's co-artifact override).  Source-rebuild mode must
 		not log spurious "drift" for these."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
 			manifest_path.write_text(json.dumps({
 				"schema_version": 2,

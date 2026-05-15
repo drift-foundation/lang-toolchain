@@ -6,6 +6,7 @@ import signal
 import sys
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 from unittest import mock
 
@@ -74,7 +75,7 @@ def _make_case_dir(tmp: Path, name: str = "fake_case", timeout_s: int | None = N
 
 def test_worker_timeout_returns_named_failure() -> None:
 	"""A timeout during _run_case produces (case_name, 'FAIL (timeout ...)')."""
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		case_dir = _make_case_dir(Path(tmp), "timeout_case")
 		def _raise_timeout(*a, **kw):
 			raise TimeoutError("timeout after 5s")
@@ -110,7 +111,7 @@ def test_late_timeout_in_cleanup_returns_named_failure_and_disarms() -> None:
 		return original_signal_fn(signum, handler)
 
 	sentinel_handler = signal.getsignal(signal.SIGALRM)
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		case_dir = _make_case_dir(Path(tmp), "late_alarm_case")
 		with mock.patch("lang.tests.codegen.e2e.runner._run_case", side_effect=_fake_run_case):
 			with mock.patch("lang.tests.codegen.e2e.runner.signal.signal", side_effect=_patched_signal):
@@ -143,7 +144,7 @@ def test_late_timeout_does_not_contaminate_next_case() -> None:
 			raise TimeoutError("timeout after 5s")
 		return original_signal_fn(signum, handler)
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		case_a = _make_case_dir(Path(tmp), "late_alarm_case")
 		case_b = _make_case_dir(Path(tmp), "clean_case")
 		with mock.patch("lang.tests.codegen.e2e.runner._run_case", side_effect=_patched_run_case):
@@ -158,7 +159,7 @@ def test_late_timeout_does_not_contaminate_next_case() -> None:
 
 def test_chunk_catches_escaped_worker_exception() -> None:
 	"""_run_case_chunk returns a named failure even if _run_case_worker raises."""
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		case_dir = _make_case_dir(Path(tmp), "exploding_case")
 		def _raise_runtime(*a, **kw):
 			raise RuntimeError("unexpected boom")
@@ -180,7 +181,7 @@ def test_chunk_continues_after_failed_case() -> None:
 			raise RuntimeError("first case boom")
 		return "ok"
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		case_a = _make_case_dir(Path(tmp), "case_a")
 		case_b = _make_case_dir(Path(tmp), "case_b")
 		with mock.patch("lang.tests.codegen.e2e.runner._run_case", side_effect=_alternating_run_case):

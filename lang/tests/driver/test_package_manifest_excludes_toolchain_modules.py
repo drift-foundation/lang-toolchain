@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 from lang.tests.driver.test_driftc_package_v0 import _emit_lib_pkg
@@ -8,7 +9,7 @@ from lang.driftc.packages.provider_v0 import load_package_v0
 
 
 def test_package_manifest_excludes_toolchain_modules() -> None:
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as td:
 		tmp = Path(td)
 		pkg_path = _emit_lib_pkg(tmp, module_id="acme.lib")
 		pkg = load_package_v0(pkg_path)
