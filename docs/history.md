@@ -1,5 +1,193 @@
 # Drift development history
 
+## 2026-05-14 (RUNTIME_BUG fix: timed I/O wait double-registered its wake timer)
+- **RUNTIME_BUG fix.** Release 0.31.86, ABI unchanged at 14.
+  Symmetric to the 0.31.83 `conc.sleep` fix; closes the audit
+  follow-up flagged at the time.  Reported by the mariadb team
+  with sharp diagnostic data — `main.sleep(550)` returned in ~1ms
+  after `rpc.connect()`, while the same scenario without
+  `net.connect()` worked fine and a trivial spawn+join also
+  worked.
+
+  **Symptom (customer-visible).** A keepalive VT spawned from a
+  helper *appeared* to never run.  Real cause: main's `conc.sleep`
+  *after* a `net.connect()` returned in ~1ms instead of the
+  requested 550ms, so the keepalive VT genuinely had no time to
+  tick.  Inserting a trivial `conc.spawn(...).join()` before the
+  keepalive made the keepalive run (and segfault on its own
+  separate bug) — but only because the prime burned a stale
+  `park_token` that the I/O wait had left behind.
+
+  **Root cause.**  Same shape as the 0.31.83 sleep bug, different
+  call site:
+
+  ```drift
+  // net.drift, io.drift, concurrent.drift all do this pattern
+  // for timed I/O waits:
+  thread.reactor_register_io(fd, interest, vt, deadline_ms);  // ← C side registers a timer
+  thread.vt_park_until(deadline_ms);                          // ← C side registers ANOTHER timer
+  ```
+
+  C's `drift_reactor_register_io` registered a wake timer when
+  `deadline_ms > 0`
+  (`lang/language_runtime/posix/thread_runtime.c:2293-2295`), and
+  `drift_thread_park_until` then registered the same timer
+  internally.
+
+  Trigger condition: the **timeout case** of a timed I/O wait
+  (deadline expires before any I/O event arrives).  In the
+  fast-I/O case, the reactor's I/O dispatch path proactively
+  removes every timer for the woken VT from the timer list before
+  unparking — both duplicates get cleaned up.  In the timeout
+  case, both duplicates survive to `drift_reactor_collect_timers`,
+  both come back ready in the same reactor iteration, and the
+  dispatch loop calls `drift_thread_unpark` for each.  First
+  unpark hits `state == DRIFT_VT_PARKED` (enqueue path,
+  harmless).  Second hits `state == DRIFT_VT_READY` (advanced by
+  the first) and takes the fallback `park_token++` branch.  The
+  stale token then short-circuits the *next* `conc.sleep` on the
+  same VT — exactly the alternating-instant-sleep pattern from
+  0.31.83, but triggered specifically by I/O timeouts instead of
+  by sequential sleeps.
+
+  Customer-visible path: their `rpc.connect()` internally did a
+  timed I/O read that hit its deadline (the deadline was
+  computed against the overall `rpc.connect` timeout, not the
+  individual read), leaving the stale token; main's subsequent
+  `sleep(550)` then instant-returned.
+
+  **Fix.**  Removed the internal timer registration from
+  `drift_reactor_register_io`; `drift_thread_park_until` remains
+  the single timer-registration authority.  Two-line C change
+  (replace the conditional `drift_reactor_register_timer` call
+  with a `(void)deadline_ms;` plus an explanatory comment).  No
+  Drift-side changes — the three stdlib call sites
+  (`stdlib/std/net/net.drift:166`, `stdlib/std/io/io.drift:732`,
+  `stdlib/std/concurrent/concurrent.drift:1255`) already do the
+  right thing: register the I/O watch, then `vt_park_until` for
+  the deadline.  `deadline_ms` is now a vestigial parameter on
+  `reactor_register_io` (its sole consumer is the
+  `vt_park_until` call that follows).  Worth dropping the
+  argument in a future cleanup; out of scope here to keep the
+  patch narrow.
+
+  **Verification.**
+
+  Regression-first proven: the regression test FAILS on the
+  unfixed toolchain (sleep instant-returns, exit 10) and PASSES
+  post-fix (sleep parks for ~100ms).  Tested by reverting only
+  the C-side change and confirming the test exit code flips.
+
+  **Regression tests.**
+
+  - `lang/tests/codegen/e2e/conc_sleep_after_timed_io_wait/` —
+    root-cause regression using the **timeout** trigger.
+    `net.accept(listener, 100ms)` with no connector running →
+    accept times out → both stale timers fire in the same reactor
+    iteration → duplicate unpark → stale token left on the VT.
+    The immediately-following `conc.sleep(100ms)` must elapse in
+    80..500ms.  Pre-fix: ~0ms (stale token consumed it).  Caught
+    in code review by K: earlier versions used `net.connect`
+    followed by sleep, which doesn't exercise the buggy path
+    (connect takes the C fast path through
+    `drift_connect_to_addr` and never enters `_block_on_io`),
+    then was tightened to use accept with a *fast* connector,
+    which also doesn't trigger the bug because the I/O dispatch
+    path proactively removes the duplicate timers when an I/O
+    event arrives before the deadline.  The timeout case is the
+    precise trigger.
+
+  **Why this was an audit item, not a 0.31.83 inclusion.**  At
+  the time of the sleep fix I flagged the I/O wait's parallel
+  pattern in `docs/history.md` and queued it as the next runtime
+  audit item — deliberately not folding it in to keep the sleep
+  patch narrow around the reported blocker.  The mariadb team
+  hit it in production three days later (a `keepalive VT not
+  scheduled` report whose underlying cause turned out to be
+  exactly this).  Filed as a learning: when an audit item names
+  a specific known-broken pattern in customer-facing code, the
+  cost of letting customers hit it is higher than the cost of
+  widening the original patch.
+
+  **Process learning — coverage matters.**  The first round of
+  regression tests for this fix didn't actually exercise the
+  buggy path.  Caught in code review.  Filed as a second
+  learning: for runtime bugs, prove the regression test by
+  reverting the fix locally and confirming the test fails.  A
+  test that passes both pre-fix and post-fix proves nothing.
+
+## 2026-05-14 (parser diagnostic: `if` is statement-only in v1 → `match` Bool)
+- **Parser diagnostic improvement.** Release 0.31.85, ABI unchanged
+  at 14.  Reported by the mariadb team while migrating the
+  managed-connection spike.
+
+  **Symptom.** Programs that try `if`-as-expression — either as
+  a `val`/`var` RHS, a call argument, a `return` value, a struct
+  field initializer, or an array element — fail with a cryptic
+  Lark `Unexpected token Token('IF', 'if')` followed by a raw
+  parser expected-set dump (`NOT, CAST, LSQB, LPAR, ...`).  The
+  user's mental fix is "use `match`", but the diagnostic doesn't
+  tell them that.
+
+  **Root cause.** Drift v1's grammar has only `if_stmt: IF
+  if_cond block else_clause?`; nothing in the expression grammar
+  admits `if`.  The customer's bug report was partly misframed —
+  they thought val-RHS accepted `if` while call-arg position
+  rejected it.  Both fail with the same error from the same
+  grammar gap.  Verified on current trunk: both
+  `val n = if v { 1 } else { 0 };` and
+  `fmt.format_int(if v { 1 } else { 0 })` report the same
+  unexpected-token error at column 10 (right after `=` and
+  right after `(`).
+
+  **Fix (this slice).**  Keep `if` statement-only — adding
+  `if`-as-expression is a real language extension (grammar rule,
+  AST node, HIR lowering via `HMatchExpr` over Bool, type-check
+  both branches yield same type, LLVM lowering) and was
+  deliberately deferred.  Instead, add a Drift-specific
+  diagnostic so users find the v1 idiom (`match Bool { true =>
+  ..., false => ... }`) immediately:
+
+      <source>:N:C: error: `if` is a statement in Drift v1, not
+      an expression — it cannot appear as a `val`/`var`
+      initializer, a call argument, a `return` value, a struct
+      field initializer, or an array element. Use `match` over
+      a Bool for conditional values: `match cond { true => { a
+      }, false => { b } }`. `match` is an expression and works
+      in every expression position. [E_IF_NOT_AN_EXPRESSION]
+
+  Implementation: ~25 lines in `lang/driftc/parser/__init__.py`
+  — a new `_is_if_in_expression_position_error` predicate
+  (keys on `IF` token + `NAME` in expected set, which is the
+  cheapest proxy for "expression expected here"), a new
+  `E_IF_NOT_AN_EXPRESSION` code, and the message body.  Plumbs
+  through the existing `_parse_error_code` /
+  `_parse_error_message` infrastructure that already handles
+  `E-TRAIT-PROP-VALUE-POS`, `E_EXPR_BLOCK_MISSING_VALUE`, etc.
+
+  Doc note in `docs/effective-drift.md` ("Conditional values:
+  use `match`, not `if`") covers the idiom in prose and shows
+  the canonical pattern.
+
+  **Regression tests** (parser-level, `lang/tests/parser/test_parser_if_not_an_expression.py`):
+  - val-RHS, call-arg, return-expr, struct-field-init,
+    array-element positions all fire `E_IF_NOT_AN_EXPRESSION`.
+  - Statement-form `if { ... } else { ... }` still parses
+    cleanly (negative pin).
+  - Predicate doesn't false-positive on unrelated unexpected-`if`
+    shapes (e.g. `val if = 1;` — `if` as a binder name).
+
+  All 7 regressions pass.
+
+  **Out of scope (deferred):** `if`-as-expression as a real
+  language feature.  K's original recommendation; rescoped to
+  diagnostic-only after the customer report turned out to be
+  misframed (both halves fail; the val-RHS form they thought
+  "works" actually never has).  See
+  `work/if-not-expression/reply-mariadb-if-not-expression.md`
+  for the customer reply explaining the misframe and the v1
+  idiom.
+
 ## 2026-05-14 (post-0.31.83 cleanup: fat-Arc construction `!dbg`, test contract drift)
 - **Two post-cert test failures**, addressed in 0.31.84. ABI
   unchanged at 14.

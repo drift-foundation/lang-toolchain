@@ -2290,9 +2290,24 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		ev.data.fd = (int)fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
 	}
-	if (deadline_ms > 0) {
-		drift_reactor_register_timer(deadline_ms, vt);
-	}
+	/* `deadline_ms` is intentionally NOT used here to register a wake
+	 * timer: that responsibility belongs to the caller's
+	 * `vt_park_until(deadline_ms)` call which is the single timer-
+	 * registration authority.  Registering the timer twice (once
+	 * here, once inside `vt_park_until`) produces two wakes per
+	 * deadline.  In the FAST-I/O case the reactor's I/O dispatch
+	 * path proactively removes every timer for the woken VT from the
+	 * timer list before unparking, so the duplicate is silently
+	 * cleaned up.  In the TIMEOUT case the duplicates both survive
+	 * to the timer collect, both fire, and the second unpark hits a
+	 * non-PARKED VT (the first one advanced it to READY) and takes
+	 * the fallback `park_token++` branch.  The stale token then
+	 * short-circuits the VT's next park, producing the customer-
+	 * visible "main's sleep(550) returns in ~1ms after rpc.connect()"
+	 * symptom (their handshake internally hit a timed-I/O timeout
+	 * path).  Symmetric to the 0.31.83 sleep fix in
+	 * std.concurrent.sleep; see `docs/history.md`. */
+	(void)deadline_ms;
 #else
 	(void)fd;
 	(void)interest;

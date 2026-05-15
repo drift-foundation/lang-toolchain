@@ -1,0 +1,118 @@
+module main;
+
+// RUNTIME regression for the timed-I/O double-timer-registration bug
+// (mariadb team report, 2026-05-14). Symmetric to the 0.31.83 sleep
+// fix at `conc_sleep_sequential_main`.
+//
+// Pre-fix (0.31.85 and earlier): `_block_on_io` registered two wake
+// timers for the same deadline — one in
+// `drift_reactor_register_io` (C side, when `deadline_ms > 0`) and
+// one in `drift_thread_park_until`.
+//
+// In the FAST-I/O case (event arrives before deadline) the reactor's
+// I/O dispatch path proactively REMOVES every timer for the woken VT
+// from the timer list before calling unpark, so the duplicate timer
+// is silently cleaned up and the bug doesn't manifest.
+//
+// In the TIMEOUT case (deadline expires before any I/O event) BOTH
+// duplicate timers are still in the list when `drift_reactor_collect_
+// timers` runs.  They both come back ready in the same reactor
+// iteration; the dispatch loop calls `drift_thread_unpark` for each.
+// First unpark hits `state == DRIFT_VT_PARKED` → enqueue path,
+// harmless.  Second unpark hits `state == DRIFT_VT_READY` (already
+// advanced by the first) → FALLTHROUGH branch → `park_token++`.
+// The stale token then short-circuits the VT's NEXT `conc.sleep`.
+//
+// Customer-reported symptom shape: their `rpc.connect()` internally
+// did a timed I/O wait that hit its deadline (or hit a fast-then-slow
+// race where the second wake-event was racing with the deadline),
+// leaving a stale token; main's subsequent `sleep(550)` then
+// instant-returned in ~1ms.
+//
+// Fix: removed the internal timer registration from
+// `drift_reactor_register_io` (C side); `drift_thread_park_until`
+// is now the single timer-registration authority.
+//
+// This test pins the FIXED path directly:
+//   - main calls `net.accept(listener, Duration(100ms))` with NO
+//     connector running; the accept must time out at the deadline.
+//   - the timeout triggers both stale timers in the same reactor
+//     iteration, producing the duplicate unpark.
+//   - main, on the same VT, immediately calls `conc.sleep(100ms)`.
+//     Pre-fix: `park_token == 1` from the duplicate unpark → sleep
+//     decrements and early-returns in ~0ms.  Post-fix:
+//     `park_token == 0` → sleep parks for ~100ms.
+//
+// NB (code review note): an earlier version of this test used
+// `net.connect` followed by sleep, then was tightened to use
+// `accept` with a fast connector.  Neither actually exercised the
+// buggy path — `net.connect` skips `_block_on_io` entirely (takes
+// the C fast path through `drift_connect_to_addr`), and a fast
+// I/O wake clears the duplicate timer via the I/O dispatch path.
+// Caught in code review by K.  The timeout case is the precise
+// trigger.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+import std.time as time;
+import std.format as fmt;
+import std.net as net;
+
+fn _run() nothrow -> Int {
+	val addr = net.socket_addr("127.0.0.1", 0);
+	match net.listen(&addr, conc.Duration(millis = 1000)) {
+		Err(e) => { cons.eprintln("listen err"); return 1; },
+		Ok(listener) => {
+			// Step 1: accept with a SHORT deadline and NO connector.
+			// The accept will time out at the deadline.  Pre-fix this
+			// is where the duplicate-timer fire happens and the stale
+			// `park_token` gets left behind.
+			//
+			// Pinning the error kind is load-bearing: only the
+			// `WOULD_BLOCK` path went through `_block_on_io` and
+			// produced the duplicate-timer trigger.  An unexpected
+			// `REQUIRES_VTHREAD` (synthetic immediate error) or
+			// `ERRNO` (something broke at the syscall level) would
+			// skip `_block_on_io` entirely, the stale token would
+			// not be left, and the later sleep would pass for the
+			// wrong reason.  Accept only `WOULD_BLOCK` here.
+			match net.accept(&listener, conc.Duration(millis = 100)) {
+				Ok(_stream) => { cons.eprintln("unexpected accept Ok"); return 2; },
+				Err(e) => {
+					if e.kind != net.NET_ERROR_KIND_WOULD_BLOCK {
+						cons.eprintln("FAIL: accept errored with kind=" + e.kind + ", expected " + net.NET_ERROR_KIND_WOULD_BLOCK);
+						return 20;
+					}
+				}
+			}
+			// Step 2: HEART OF THE TEST.  Same VT that just consumed
+			// the timed I/O wait's deadline.  Pre-fix:
+			// `park_token == 1` → instant-return (~0ms).  Post-fix:
+			// `park_token == 0` → real park (~100ms).
+			val t0 = time.now_monotonic();
+			match conc.sleep(conc.Duration(millis = 100)) {
+				Ok(_) => { },
+				Err(e) => { cons.eprintln("sleep err"); return 3; }
+			}
+			val elapsed = time.elapsed_ms(&t0);
+			if elapsed < 80 {
+				cons.eprintln("FAIL: post-timeout sleep was " + fmt.format_int(elapsed) + "ms, expected >=80ms (stale park_token consumed it)");
+				return 10;
+			}
+			if elapsed > 500 {
+				cons.eprintln("FAIL: post-timeout sleep was " + fmt.format_int(elapsed) + "ms, expected <=500ms");
+				return 11;
+			}
+			return 0;
+		}
+	}
+}
+
+fn main() nothrow -> Int {
+	val rc = _run();
+	if rc == 0 {
+		cons.println("ok");
+	}
+	return rc;
+}

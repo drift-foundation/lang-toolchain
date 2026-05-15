@@ -2,6 +2,46 @@
 
 Common idioms for programs that won’t ghost you in prod.
 
+## Conditional values: use `match`, not `if`
+
+`if` is a **statement** in Drift v1 — it does not produce a value
+and cannot appear in expression position (val/var initializer, call
+argument, return expression, struct field initializer, array
+element). Programs that try
+
+```drift
+val n = if v { 1 } else { 0 };                   // REJECTED
+return fmt.format_int(if v { 1 } else { 0 });    // REJECTED
+```
+
+both fail with `E_IF_NOT_AN_EXPRESSION`. The v1 idiom for
+conditional values is `match` over a Bool, which is an expression
+and works in every expression position:
+
+```drift
+val n = match v {
+    true  => { 1 },
+    false => { 0 }
+};
+return fmt.format_int(match v {
+    true  => { 1 },
+    false => { 0 }
+});
+```
+
+Stdlib uses this pattern throughout — e.g.
+`stdlib/std/log/log.drift:1463` for `Optional<Level>` defaulting and
+many similar shapes.  For mutable two-step assignment, statement-form
+`if` is still the right answer:
+
+```drift
+var n: Int = 0;
+if v { n = 1; }
+```
+
+(`if`-as-expression as a real language feature is on the roadmap but
+deferred behind higher-priority work; see history for status.)
+
 ## copy vs. move vs. share — when each spelling is right
 
 Drift's three by-value capture spellings are not synonyms. The

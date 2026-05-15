@@ -1,0 +1,7 @@
+{
+  "description": "e2e RUNTIME regression: after a timed I/O wait that TIMED OUT (here: net.accept with a 100ms deadline and NO connector running — the timed wait runs through _block_on_io and the deadline expires), the same VT's next conc.sleep(100ms) must actually park for ~100ms. The accept is required to return Err(WOULD_BLOCK) specifically; any other error skips _block_on_io and would let the next sleep pass for the wrong reason. Pre-0.31.86: sleep returned ~0ms due to double-timer registration in std.net's I/O wait path (drift_reactor_register_io registered a timer, drift_thread_park_until then registered the same timer again; in the timeout case both stale timers fire in the same reactor iteration, the second unpark bumps park_token, next sleep early-returns). Symmetric to the 0.31.83 std.concurrent.sleep fix. Customer report (mariadb managed-connection spike): main's sleep(550) returned in ~1ms after rpc.connect() did a handshake read that hit its inner deadline. NB: an earlier version of this test used a fast connector to wake the accept; that didn't exercise the bug because the reactor's I/O dispatch path proactively removes duplicate timers when an I/O event arrives before the deadline. The timeout case is the precise trigger. Caught in code review by K.",
+  "exit_code": 0,
+  "stdout": "ok\n",
+  "stderr": "",
+  "compiler_flags": ["--allow-unsafe"]
+}

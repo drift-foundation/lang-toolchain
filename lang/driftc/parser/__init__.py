@@ -1116,6 +1116,37 @@ def _is_expr_block_missing_value_error(err: UnexpectedInput) -> bool:
 	return bool(expected & expr_starters)
 
 
+def _is_if_in_expression_position_error(err: UnexpectedInput) -> bool:
+	"""Detect `if` appearing where an expression is expected.
+
+	Drift v1's grammar has `if` as a statement only — there is no
+	`if`-as-expression. Users coming from Rust/Swift/etc. routinely
+	write `val n = if cond { a } else { b };` or
+	`f(if cond { a } else { b })` and get a cryptic Lark "Unexpected
+	token Token('IF', 'if'). Expected: NOT, CAST, LSQB, ..." error.
+	This predicate identifies that case so we can swap in a
+	Drift-specific message pointing at the `match Bool { ... }`
+	idiom that stdlib uses for the same purpose.
+
+	Signature: unexpected token is `IF`, AND the expected set
+	contains at least one canonical expression-start token (we
+	check `NAME`, which appears in every expression-start position).
+	The expected-set check avoids false-positives where `IF` is
+	wrong for a non-expression reason (e.g., inside a context that
+	expects a specific keyword).
+	"""
+	token = getattr(err, "token", None)
+	if token is None or getattr(token, "type", None) != "IF":
+		return False
+	expected = set(getattr(err, "expected", None) or [])
+	if not expected:
+		return False
+	# `NAME` is allowed at every expression-start position in the
+	# grammar; its presence in the expected set is the cheapest
+	# proxy for "expression expected here."
+	return "NAME" in expected
+
+
 def _parse_error_code(err: UnexpectedInput) -> str | None:
 	expected = getattr(err, "expected", None)
 	token = getattr(err, "token", None)
@@ -1123,6 +1154,8 @@ def _parse_error_code(err: UnexpectedInput) -> str | None:
 		return "E-TRAIT-PROP-VALUE-POS"
 	if _is_expr_block_missing_value_error(err):
 		return "E_EXPR_BLOCK_MISSING_VALUE"
+	if _is_if_in_expression_position_error(err):
+		return "E_IF_NOT_AN_EXPRESSION"
 	if expected and "COMMA" in expected:
 		token_type = getattr(token, "type", None) if token is not None else None
 		if token_type in {"NAME", "DEFAULT"}:
@@ -1139,6 +1172,14 @@ def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 		return "trait propositions are only allowed in require clauses or if guards"
 	if code == "E_EXPR_BLOCK_MISSING_VALUE":
 		return "expression block must end with a value expression; return is not allowed in expression-form blocks"
+	if code == "E_IF_NOT_AN_EXPRESSION":
+		return (
+			"`if` is a statement in Drift v1, not an expression — it cannot appear as "
+			"a `val`/`var` initializer, a call argument, a `return` value, a struct "
+			"field initializer, or an array element. Use `match` over a Bool for "
+			"conditional values: `match cond { true => { a }, false => { b } }`. "
+			"`match` is an expression and works in every expression position."
+		)
 	raw = str(err)
 	expected = set(getattr(err, "expected", None) or [])
 	top_level_kws = {"MODULE", "STRUCT", "FN_KW", "VARIANT", "IMPORT", "TRAIT", "IMPLEMENT", "EXCEPTION"}
