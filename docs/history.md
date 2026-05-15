@@ -1,5 +1,68 @@
 # Drift development history
 
+## 2026-05-14 (driftc default link includes `-lz` — codec_gzip_runtime.o is always in the runtime archive)
+- **Follow-up patch to the 0.31.77 std.codec.gzip slice** (release
+  0.31.82, ABI unchanged at 14). Surfaced by a post-cert test
+  failure in `lang/tests/stage2/test_maybe_uninit_local_lowering.py`
+  — the test compiles a Drift program to a binary via `python -m
+  lang.driftc.driftc` and failed at the link step with undefined
+  `deflate` / `inflate` references from `codec_gzip_runtime.o`.
+
+  **Root cause.** `codec_gzip_runtime.o` is unconditionally in the
+  runtime archive `libdrift_rt_abi14.a` (correctly — std.codec's
+  Drift-level gzip wrappers are emitted into every binary's IR
+  whether called or not, so they reference the .o, and the linker
+  pulls it in). The .o has unresolved `deflate` / `inflate`
+  references, requiring `-lz` at link time. There are three paths
+  that produce a driftc link command:
+
+  1. **Production driftc with a stdlib `.dmp`** — gets `-lz` via
+     the package native_deps auto-link in `driftc.py:11951-11965`
+     (the entry the 0.31.77 work wired up). ✅
+  2. **e2e test runner** — got `_link_flags_for_lib("z")` in
+     `lang/tests/codegen/e2e/runner.py` as part of the 0.31.77 slice.
+     ✅
+  3. **`driftc` itself in `--stdlib-root` source mode** —
+     including direct `python -m lang.driftc.driftc ...`
+     invocations from any test that bypasses the e2e runner
+     (stage2 tests, packages tests, anyone driving driftc by hand
+     against a source-tree stdlib). **Did NOT get `-lz`.** 0.31.77
+     oversight.
+
+  Net: any driftc invocation that didn't load a pre-built stdlib
+  `.dmp` and didn't go through the e2e runner failed at link. The
+  customer-visible production CLI path was fine; this only hit
+  source-mode users (and the test infrastructure that mostly is
+  source-mode).
+
+  **Fix.** Add `_link_flags_for_lib("z")` unconditionally to
+  `link_libs` in `lang/driftc/driftc.py` (right after the existing
+  debug-style backtrace libs).  Mirrors the e2e-runner fix exactly,
+  in the same place that already special-cases libdw / libunwind /
+  libelf. Two lines plus a 14-line comment explaining the
+  three-path link-contract picture.
+
+  **Regression test.** New `test_driftc_links_libz` in
+  `lang/tests/driver/test_codec_gzip_native_deps.py` —
+  source-greps `driftc.py` for `_link_flags_for_lib("z")` exactly
+  as the existing `test_e2e_runner_links_libz` does for the e2e
+  runner. Prevents this exact oversight from recurring.
+
+  **Verification.** The originally-failing test
+  (`test_maybe_uninit_int_local_emits_zero_init_and_round_trips`)
+  now passes. Full
+  `lang/tests/stage2/test_maybe_uninit_local_lowering.py` (2
+  tests) passes.  Native-deps wiring suite (7 tests, including
+  the new one) passes.
+
+  **ABI unchanged.** Build-system / link-command change only.
+
+  **Note for downstream cert consumers.** 0.31.81 was certified
+  with the missing `-lz` in the source-mode driftc path; any
+  consumer that re-bundles the toolchain and exercises tests in
+  source mode would have hit this. 0.31.82 is the correct
+  baseline for source-mode toolchain re-bundling.
+
 ## 2026-05-14 (`mem.replace` accepts named `&mut T` values, not just inline borrows)
 - **LANGUAGE_BUG fix.** Release 0.31.81, ABI unchanged at 14.
   Reported by the mariadb team (managed-connection spike, see

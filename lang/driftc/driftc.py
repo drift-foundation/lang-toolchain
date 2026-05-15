@@ -11828,6 +11828,22 @@ def main(argv: list[str] | None = None) -> int:
 		link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
 	else:
 		link_libs = []
+	# std.codec.gzip_* calls into libz via the gzip shim in
+	# codec_gzip_runtime.o (part of the runtime archive). Because
+	# stdlib is compiled monolithically, std.codec's gzip wrapper
+	# functions are emitted into every Drift binary's IR (whether
+	# called or not), they reference symbols in codec_gzip_runtime.o,
+	# and the linker pulls that .o in unconditionally. So every
+	# driftc-emitted binary needs -lz at link time, regardless of
+	# whether the source touches std.codec. (`-Wl,--as-needed` below
+	# cannot strip libz because the references are real.) The package
+	# native_deps auto-link path also adds -lz when a stdlib .dmp is
+	# loaded, but `--stdlib-root` source-mode builds (the e2e runner,
+	# stage2 tests, and any user driving driftc directly without a
+	# pre-built .dmp) need it here. Universal on x86_64 Linux — the
+	# only supported target — so the find-by-search behaviour gives
+	# us a graceful fallback if libz is somehow absent.
+	link_libs = link_libs + _link_flags_for_lib("z")
 	def _select_linker() -> str:
 		if args.linker == "ld":
 			return "ld"

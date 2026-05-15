@@ -3,20 +3,39 @@
 
 The gzip codec calls into libz via a runtime/toolchain-owned C shim
 (`lang/language_runtime/codec_gzip_runtime.c`). For the link contract
-to hold end-to-end, three things must be in place:
+to hold end-to-end, four things must be in place:
 
   1. The shim's .c source is in the runtime archive's source list,
      so codec_gzip_runtime.o ends up inside libdrift_rt_abi<N>.a.
 
   2. The stdlib package build (tools/deploy/steps/stdlib.py) declares
-     -lz via `--native-link-lib z`, so consumer auto-link picks it up.
+     -lz via `--native-link-lib z`, so consumer auto-link picks it up
+     when a consumer loads the production stdlib `.dmp`.
 
-  3. The e2e test runner passes -lz too (tests build against stdlib
-     source, not the production .dmp, so they bypass path #2).
+  3. driftc itself (lang/driftc/driftc.py) adds -lz to its default
+     link command, so `--stdlib-root` source-mode invocations
+     (stage2 tests + direct `python -m lang.driftc.driftc ...` use
+     without a pre-built `.dmp`) link cleanly. This path bypasses
+     the `.dmp` native_deps mechanism, so #2 alone isn't enough.
+
+  4. The e2e test runner passes -lz too (tests build against stdlib
+     source, not the production .dmp, so they bypass path #2 as well;
+     the runner has its own link command independent of driftc.py).
 
 The general native-deps auto-link mechanism is exercised by
 `lang/tests/driver/test_driftc_package_v0.py::TestConsumerAutoLink`
 with synthetic libs. These tests pin the *stdlib-specific* wiring.
+
+NOTE on test technique. The driftc + e2e-runner pins below are
+source greps for `_link_flags_for_lib("z")` — a weak structural
+guard that catches a deletion but not a refactor (e.g. rename of
+the helper, switch to a different mechanism). A future cleanup
+could replace the grep with a helper that constructs / inspects
+the link args directly (e.g. import the link-args builder from
+driftc.py and assert the resulting list contains `-lz`). Worth
+doing if/when that helper becomes easy to factor; until then the
+grep is the cheap belt-and-suspenders that prevents the exact
+0.31.81→0.31.82 regression from recurring.
 """
 
 from __future__ import annotations
@@ -92,6 +111,31 @@ def test_e2e_runner_links_libz() -> None:
 		"lang/tests/codegen/e2e/runner.py must include "
 		"_link_flags_for_lib(\"z\") in its link_libs, otherwise gzip-using "
 		"e2e tests will fail at link time with undefined deflate/inflate refs."
+	)
+
+
+def test_driftc_links_libz() -> None:
+	"""driftc.py itself must add -lz to its link command — the runtime
+	archive unconditionally contains codec_gzip_runtime.o, which
+	references libz symbols. Production driftc invocations using a
+	stdlib .dmp get -lz via the native_deps auto-link mechanism; but
+	`--stdlib-root` source-mode builds (stage2 tests, the e2e runner,
+	and any user driving driftc without a pre-built .dmp) need driftc
+	to add -lz itself.
+
+	This was a real oversight caught after the 0.31.81 cert: the e2e
+	runner had the flag but driftc.py did not, so
+	`test_maybe_uninit_local_lowering.py` (and any other stage2 test
+	that compiles to a binary) failed at link with undefined
+	deflate/inflate references.
+	"""
+	driftc_src = (ROOT / "lang" / "driftc" / "driftc.py").read_text(encoding="utf-8")
+	pat = re.compile(r'_link_flags_for_lib\(\s*"z"\s*\)', re.DOTALL)
+	assert pat.search(driftc_src) is not None, (
+		"lang/driftc/driftc.py must include _link_flags_for_lib(\"z\") "
+		"in its link_libs, otherwise every driftc-emitted binary will "
+		"fail at link with undefined deflate / inflate references "
+		"(codec_gzip_runtime.o is always in the runtime archive)."
 	)
 
 
