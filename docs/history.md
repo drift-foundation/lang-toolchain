@@ -1,5 +1,60 @@
 # Drift development history
 
+## 2026-05-14 (post-0.31.83 cleanup: fat-Arc construction `!dbg`, test contract drift)
+- **Two post-cert test failures**, addressed in 0.31.84. ABI
+  unchanged at 14.
+
+  **1. LLVM verifier rejection on debug-enabled IR** —
+  `test_compiler_provenance_survives_link` failed at link time with:
+
+  ```
+  inlinable function call in a function with debug info must have a !dbg location
+      call void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr %arc_ctrl12)
+  ```
+
+  Root cause: the synthesized fat-`Arc<I>` construction in
+  `_lower_arc_as_interface` (`lang/codegen/llvm/llvm_codegen.py`,
+  the `ArcAsInterface` instr handler) emitted its strong-bump
+  call without attaching `!dbg`. LLVM's IR verifier rejects
+  inlinable calls without `!dbg` when the enclosing function has
+  debug info. Production driftc didn't surface the bug because
+  the CLI path defaults to `debug_enabled=False`; the test path
+  uses `compile_to_llvm_ir_for_tests` which defaults to
+  `debug_enabled=True`. Latent since the fat-`Arc<I>` work
+  landed (0.28.0); only fires when *anything* in the IR forces
+  debug info on AND stdlib's `std.log` fat-Arc construction is
+  emitted into the binary (which it always is post-monolithic
+  stdlib).
+
+  Fix: attach the standard `call_dbg_suffix` to the bump call,
+  matching the pattern already used by `_emit_drop_value` and
+  every other debug-aware call emission in the codegen. No-op
+  when `debug_enabled=False` (the empty-string branch).
+
+  Also: the test built its own link command via custom
+  `_link_flags_for_lib(...)` and was missing `-lz` — the same
+  oversight that hit `test_maybe_uninit_local_lowering.py`
+  before 0.31.82. Added `_link_flags_for_lib("z")` to the test's
+  link_libs list. Driftc itself already includes `-lz` in its
+  default link path (0.31.82); this is a test-side parity fix.
+
+  **2. Stale `E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED` contract
+  test** — `test_intrinsic_call_issues_replace_mut_borrow_required`
+  was expected fallout from 0.31.81's `mem.replace` fix. The
+  syntactic shape-check was intentionally removed from
+  `call_contract.py` because it duplicated work the call
+  resolver's *type* check does correctly AND produced false
+  positives on named `&mut T` values. The test was still
+  asserting that the now-removed contract issue fires. Updated
+  to assert the opposite: the contract issue must NOT fire
+  (rejection of clearly-wrong first arguments like literal ints
+  is the call resolver's job, exercised separately by
+  `lang/tests/codegen/e2e/mem_replace_rejects_shared_ref/`).
+
+  Reframed the test docstring and assertion message so a future
+  reader who sees the failure understands which is the active
+  contract and how the rejection path now works.
+
 ## 2026-05-14 (RUNTIME_BUG fix: `conc.sleep` double-registered its wake timer)
 - **RUNTIME_BUG fix.** Release 0.31.83, ABI unchanged at 14.
   Reported by the mariadb team (managed-connection spike,

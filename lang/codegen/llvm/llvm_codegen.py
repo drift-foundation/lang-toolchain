@@ -6889,9 +6889,24 @@ class _FuncBuilder:
 		# different LLVM module (typical for user code), the
 		# module-render pass emits the matching `declare void
 		# @"..."(ptr)` so opaque-pointer verification has a prototype.
+		#
+		# Attach !dbg when the enclosing function has debug info —
+		# the LLVM verifier rejects "inlinable function call in a
+		# function with debug info" without a !dbg location. Mirrors
+		# the same suffix construction used in `_emit_drop_value` and
+		# elsewhere. Without this the test path (which defaults to
+		# `debug_enabled=True`) fails at clang verifier time with:
+		#   inlinable function call in a function with debug info
+		#   must have a !dbg location
+		#     call void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(...)
 		self.module.needs_arc_fat_bump_helper = True
 		bump_sym = _llvm_fn_sym("std.core.arc::_arc_fat_bump_strong_via_ctrl")
-		self.lines.append(f"  call void {bump_sym}(ptr {ctrl})")
+		bump_dbg_suffix = ""
+		if self.module.debug_enabled and self._dbg_subprogram_id is not None:
+			loc_id = self._dbg_location_for_span(self._dbg_last_span or self._dbg_default_span)
+			if loc_id is not None:
+				bump_dbg_suffix = f", !dbg !{loc_id}"
+		self.lines.append(f"  call void {bump_sym}(ptr {ctrl}){bump_dbg_suffix}")
 
 		# Step 3: data = GEP ArcBox<T>, ptr ctrl, i32 0, i32 1.
 		data = self._fresh("arc_data")

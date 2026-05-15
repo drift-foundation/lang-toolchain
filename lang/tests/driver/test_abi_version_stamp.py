@@ -452,7 +452,19 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 	ir_path = tmp_path / "provenance.ll"
 	bin_path = tmp_path / "provenance.out"
 	ir_path.write_text(ir)
-	link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
+	# `-lz` is required for every Drift binary post-0.31.77 — the
+	# runtime archive unconditionally contains codec_gzip_runtime.o,
+	# which references libz. Production driftc adds this in its link
+	# path (lang/driftc/driftc.py); test-paths that build their own
+	# link command must add it explicitly. Same shape as the e2e
+	# runner's link_libs and driftc's default link_libs.
+	link_libs = (
+		_link_flags_for_lib("dw")
+		+ _link_flags_for_lib("unwind")
+		+ _link_flags_for_lib("unwind-x86_64")
+		+ _link_flags_for_lib("elf")
+		+ _link_flags_for_lib("z")
+	)
 	link_cmd = [
 		clang, "-pthread",
 		"-x", "ir", str(ir_path),

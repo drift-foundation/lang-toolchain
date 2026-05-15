@@ -77,13 +77,34 @@ def test_intrinsic_call_issues_swap_mut_borrow_required() -> None:
 	assert "requires &mut place operands" in mut_issues[0].message
 
 
-def test_intrinsic_call_issues_replace_mut_borrow_required() -> None:
-	"""replace with non-&mut first arg → E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED."""
+def test_intrinsic_call_issues_replace_mut_borrow_no_longer_in_contract() -> None:
+	"""The `E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED` contract issue was
+	removed in 0.31.81 (mariadb-team report: `mem.replace` rejected
+	named `&mut T` values whose resolved type was correct).  That
+	syntactic shape-check duplicated work the call resolver's type
+	check (`replace expects &mut T as the first argument`) already
+	does correctly, AND it produced false-positives on named refs.
+
+	The correctness criterion for replace's first argument — must be
+	`&mut T` — is now enforced solely at the call resolver
+	(`lang/driftc/checker/call_resolver.py`, the `mut_inner is None`
+	branch around line 4668), which inspects the *resolved type*
+	rather than the *expression form*.
+
+	This test pins the removal: the syntactic contract issue must NOT
+	fire even when the first argument is a literal int (which clearly
+	isn't `&mut T`).  Rejection of the literal-int case is the call
+	resolver's job, exercised separately by
+	`lang/tests/codegen/e2e/mem_replace_rejects_shared_ref/`.
+	"""
 	call = _make_call(args=[H.HLiteralInt(value=1), H.HLiteralInt(value=2)])
 	issues = intrinsic_call_issues(IntrinsicKind.REPLACE, call, kwargs=[])
 	mut_issues = [i for i in issues if i.code == "E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED"]
-	assert mut_issues
-	assert "requires &mut place target" in mut_issues[0].message
+	assert not mut_issues, (
+		"E_INTRINSIC_REPLACE_MUT_BORROW_REQUIRED was removed in 0.31.81; "
+		"if it has returned, the named-`&mut T` mem.replace fix is at "
+		f"risk of regression.  Issues: {[i.code for i in issues]}"
+	)
 
 
 def test_intrinsic_arity_table_covers_all_kinds() -> None:
