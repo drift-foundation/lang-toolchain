@@ -1,0 +1,87 @@
+module main;
+
+// maria-v1 Issue 1 — method receiver autoborrow through a ref-returning
+// rvalue base + field projection.
+//
+// Sibling to `borrow_chained_ref_projection_noncopy` (which pins the
+// explicit-borrow form `&w.get().handle`). This case pins the implicit
+// method-receiver autoborrow form `w.get().handle.peek()` where:
+//   - `get(self: &Wrapper) -> &Inner` returns a ref
+//   - `.handle` projects a non-Copy Handle field through the ref
+//   - `peek(self: &Handle)` requires an autoborrow of the projected place
+//
+// Pre-fix this rejected with E-AUTO-e0f26505 "cannot copy value of type
+// Handle (use move <expr>)" because the HBorrow rvalue-subject branch in
+// type_checker.py typed the chained subject with the default
+// `used_as_value=True`, tripping the value-copy gate on the non-Copy
+// field projection before stage1 borrow_materialize had a chance to
+// lift the rvalue base into a temp via `_split_lift_place_chain`.
+//
+// Fix (type_checker.py HBorrow rvalue-subject branch): pass
+// `used_as_value=False` when re-typing the borrow subject, so the
+// projection is interpreted as a place read, not a value read. Combined
+// with the widened `_ultimate_base_is_rvalue_call` predicate at the
+// three SELF_BY_REF autoborrow gates (which recognizes HField chains
+// over HCall/HMethodCall/HInvoke bases), the existing
+// `_split_lift_place_chain` handles the lift cleanly.
+//
+// Scope cut (out of slice): the HIndex variant
+// `w.handles_ref()[i].method()` hits a separate v1 MIR-lowering
+// limitation in `_visit_expr_HIndex` ("array index read requires
+// Copy element type; borrow not supported in v1"); the explicit form
+// `&w.handles_ref()[i]` works (sibling e2e covers it), but the
+// implicit autoborrow form needs MIR work beyond this slice. Filed as
+// a separate follow-up.
+
+import std.core as core;
+import std.console as cons;
+
+pub struct Handle { pub raw: Int }
+implement core.Destructible for Handle {
+	pub fn destroy(var self: Handle) nothrow -> Void { return; }
+}
+implement Handle {
+	pub fn peek(self: &Handle) nothrow -> Int { return self.raw; }
+}
+
+pub struct Inner { pub handle: Handle }
+implement core.Destructible for Inner {
+	pub fn destroy(var self: Inner) nothrow -> Void { return; }
+}
+
+pub struct Wrapper { pub inner: Inner }
+implement core.Destructible for Wrapper {
+	pub fn destroy(var self: Wrapper) nothrow -> Void { return; }
+}
+
+implement Wrapper {
+	pub fn get(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+}
+
+// Bare ref-returning function — proves the bug is about the ref-rvalue
+// base + projection + autoborrow shape, not Wrapper/Arc specifically.
+pub fn get_inner_ref(i: &Inner) nothrow -> &Inner { return i; }
+
+pub fn main() nothrow -> Int {
+	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)));
+
+	// === Customer-critical shape: HField on HMethodCall returning &T ===
+	// w.get() -> &Inner; .handle projects &Handle; .peek() autoborrows.
+	val n1 = w.get().handle.peek();
+	if n1 != 42 { return 1; }
+
+	// === Bare ref-returning function — stack-only, no methods on the base.
+	val inner = Inner(handle = Handle(raw = 7));
+	val n2 = get_inner_ref(&inner).handle.peek();
+	if n2 != 7 { return 2; }
+
+	// === Lowering-equivalent baseline still compiles ===
+	// This is the shape `_split_lift_place_chain` produces internally for
+	// the chained form above; it must keep compiling unchanged.
+	val r = w.get();
+	val n3 = r.handle.peek();
+	if n3 != 42 { return 3; }
+
+	cons.println("ok");
+	return 0;
+}

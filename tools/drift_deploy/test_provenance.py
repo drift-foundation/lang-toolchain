@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -133,7 +134,7 @@ class TestBuildProvenance:
 class TestWriteProvenance:
 	def test_write_and_sha256(self) -> None:
 		data = b'{"test": true}'
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "prov.json"
 			write_provenance(path, data)
 			assert path.read_bytes() == data
@@ -191,7 +192,7 @@ class TestSignVerifyWithProvenance:
 			sha256_hex,
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 
@@ -247,7 +248,7 @@ class TestSignVerifyWithProvenance:
 			sha256_hex,
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, _ = self._make_key(td)
 
@@ -294,7 +295,7 @@ class TestSignVerifyWithProvenance:
 			sha256_hex,
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, _ = self._make_key(td)
 
@@ -337,7 +338,7 @@ class TestSignVerifyWithProvenance:
 			_build_envelope,
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			seed = os.urandom(32)
 			key_path = td / "key.seed"
@@ -452,7 +453,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Sign a package, modify provenance.json on disk, verification must fail."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -488,7 +489,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Sign a package, modify the artifact bytes, verification must fail."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -525,7 +526,7 @@ class TestVerifierProvenanceIntegrity:
 		from lang.drift.sign import SignOptions, sign_package_v0
 		from lang.driftc.packages.signature_v0 import load_sig_sidecar, sha256_hex
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, _ = self._make_key(td)
 
@@ -573,7 +574,7 @@ class TestVerifierProvenanceIntegrity:
 		assert obj["artifact_kind"] == "app"
 		assert obj["artifact_sha256"] == app_sha
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			# Write app binary and provenance bundle.
@@ -614,7 +615,7 @@ class TestVerifierProvenanceIntegrity:
 		"""If .sig says provenance is in the envelope, the file must exist on disk."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -651,7 +652,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Provenance present and matching signed digest → verification succeeds."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -684,7 +685,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Sign with .provenance.zst, verification succeeds."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -719,7 +720,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Tampered .provenance.zst → verification fails."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -760,7 +761,7 @@ class TestVerifierProvenanceIntegrity:
 		"""Missing .provenance.zst → verification fails."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -843,7 +844,7 @@ class TestProvenanceBundle:
 		raw = build_provenance_bundle(prov, dep_prov, dep_keys)
 		compressed = compress_provenance_bundle(raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "test.provenance.zst"
 			write_provenance_bundle(path, compressed)
 
@@ -860,7 +861,7 @@ class TestProvenanceBundle:
 		raw = build_provenance_bundle(prov, {}, {})
 		compressed = compress_provenance_bundle(raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = Path(tmpdir) / "my-pkg.provenance.zst"
 			write_provenance_bundle(path, compressed)
 			assert path.exists()
@@ -872,7 +873,7 @@ class TestProvenanceBundle:
 		from lang.drift.sign import SignOptions, sign_package_v0
 		from lang.driftc.packages.signature_v0 import load_sig_sidecar, sha256_hex
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			seed = os.urandom(32)
 			key_path = td / "key.seed"
@@ -916,7 +917,7 @@ class TestProvenanceBundle:
 		"""Verifier finds .provenance.zst by convention when no explicit path given."""
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			seed = os.urandom(32)
 			key_path = td / "key.seed"
@@ -1021,7 +1022,7 @@ class TestAuthorProfileIntegrity:
 		from lang.drift.sign import SignOptions, sign_package_v0
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -1072,7 +1073,7 @@ class TestAuthorProfileIntegrity:
 		from lang.drift.sign import SignOptions, sign_package_v0
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -1122,7 +1123,7 @@ class TestAuthorProfileIntegrity:
 		from lang.drift.sign import SignOptions, sign_package_v0
 		from lang.driftc.packages.signature_v0 import verify_package_signatures
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			key_path, seed = self._make_key(td)
 			trust = self._make_trust(td, seed)
@@ -1245,7 +1246,7 @@ class TestAppProvenanceBundle:
 		bundle_raw = build_provenance_bundle(prov_obj, {}, {})
 		compressed = compress_provenance_bundle(bundle_raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 
 			# Write app binary.
@@ -1357,7 +1358,7 @@ class TestAppSigning:
 
 	def test_app_sig_emitted(self) -> None:
 		"""App signing produces .sig file."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, _, _, _ = self._setup(td)
 			sig_path = self._sign_app(td, key_path, app_path, prov_path)
@@ -1366,7 +1367,7 @@ class TestAppSigning:
 	def test_app_envelope_includes_binary_digest(self) -> None:
 		"""App .sig records app binary sha256."""
 		from lang.driftc.packages.signature_v0 import load_sig_sidecar, sha256_hex
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, app_bytes, _, _ = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1376,7 +1377,7 @@ class TestAppSigning:
 	def test_app_envelope_includes_provenance_digest(self) -> None:
 		"""App .sig records provenance bundle sha256."""
 		from lang.driftc.packages.signature_v0 import load_sig_sidecar, sha256_hex
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, _, compressed, _ = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1387,7 +1388,7 @@ class TestAppSigning:
 	def test_app_envelope_has_no_author_profile(self) -> None:
 		"""App .sig does not include author-profile digest."""
 		from lang.driftc.packages.signature_v0 import load_sig_sidecar
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, _, _, _ = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1397,7 +1398,7 @@ class TestAppSigning:
 	def test_app_verification_succeeds(self) -> None:
 		"""Matching binary + matching provenance → verify_app_signatures passes."""
 		from lang.driftc.packages.signature_v0 import verify_app_signatures
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, app_bytes, _, trust = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1410,7 +1411,7 @@ class TestAppSigning:
 	def test_app_verification_rejects_modified_binary(self) -> None:
 		"""Tampered binary → verify_app_signatures fails."""
 		from lang.driftc.packages.signature_v0 import verify_app_signatures
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, _, _, trust = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1423,7 +1424,7 @@ class TestAppSigning:
 	def test_app_verification_rejects_modified_provenance(self) -> None:
 		"""Tampered provenance → verify_app_signatures fails."""
 		from lang.driftc.packages.signature_v0 import verify_app_signatures
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, app_bytes, _, trust = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1441,7 +1442,7 @@ class TestAppSigning:
 	def test_app_verification_rejects_missing_provenance(self) -> None:
 		"""Missing provenance → verify_app_signatures fails."""
 		from lang.driftc.packages.signature_v0 import verify_app_signatures
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, key_path, app_bytes, _, trust = self._setup(td)
 			self._sign_app(td, key_path, app_path, prov_path)
@@ -1455,7 +1456,7 @@ class TestAppSigning:
 	def test_app_verification_rejects_missing_sig(self) -> None:
 		"""Missing .sig → verify_app_signatures fails."""
 		from lang.driftc.packages.signature_v0 import verify_app_signatures
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			td = Path(tmpdir)
 			app_path, prov_path, _, app_bytes, _, trust = self._setup(td)
 			# Don't sign.

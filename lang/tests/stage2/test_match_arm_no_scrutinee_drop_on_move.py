@@ -74,105 +74,109 @@ def test_match_ok_arm_no_scrutinee_drop_for_destructible_payload() -> None:
 		import pytest
 		pytest.skip("stdlib not available")
 
-	import tempfile
-	tmp = Path(tempfile.mkdtemp())
-	src = tmp / "main.drift"
-	src.write_text(SOURCE)
+	from lang.test_support.drift_tmp import drift_mkdtemp
+	import shutil
+	tmp = Path(drift_mkdtemp(prefix="match-arm-drop-"))
+	try:
+		src = tmp / "main.drift"
+		src.write_text(SOURCE)
 
-	modules, type_table, exc_catalog, module_exports, deps, diags = parse_drift_workspace_to_hir(
-		paths=[src],
-		stdlib_root=stdlib,
-	)
-	assert not any(d.severity == "error" for d in diags), \
-		f"parse errors: {[d.message for d in diags if d.severity == 'error']}"
+		modules, type_table, exc_catalog, module_exports, deps, diags = parse_drift_workspace_to_hir(
+			paths=[src],
+			stdlib_root=stdlib,
+		)
+		assert not any(d.severity == "error" for d in diags), \
+			f"parse errors: {[d.message for d in diags if d.severity == 'error']}"
 
-	hirs = {}
-	sigs = {}
-	for mid, mod in modules.items():
-		hirs.update(mod.func_hirs)
-		sigs.update(mod.signatures_by_id)
+		hirs = {}
+		sigs = {}
+		for mid, mod in modules.items():
+			hirs.update(mod.func_hirs)
+			sigs.update(mod.signatures_by_id)
 
-	mir_funcs, checked = compile_stubbed_funcs(
-		func_hirs=hirs,
-		signatures=sigs,
-		exc_env=exc_catalog,
-		module_exports=module_exports,
-		module_deps=deps,
-		return_checked=True,
-		type_table=type_table,
-		prelude_enabled=True,
-		entry_module="main",
-		entry_name="main",
-	)
+		mir_funcs, checked = compile_stubbed_funcs(
+			func_hirs=hirs,
+			signatures=sigs,
+			exc_env=exc_catalog,
+			module_exports=module_exports,
+			module_deps=deps,
+			return_checked=True,
+			type_table=type_table,
+			prelude_enabled=True,
+			entry_module="main",
+			entry_name="main",
+		)
 
-	# Find the main function's MIR.
-	main_fn_id = FunctionId(module="main", name="main", ordinal=0)
-	main_func = mir_funcs.get(main_fn_id)
-	assert main_func is not None, "main function not found in MIR"
+		# Find the main function's MIR.
+		main_fn_id = FunctionId(module="main", name="main", ordinal=0)
+		main_func = mir_funcs.get(main_fn_id)
+		assert main_func is not None, "main function not found in MIR"
 
-	# The Ok arm must use MoveOut (not CopyValue) to extract the Server
-	# payload from the Result scrutinee.  MoveOut means arm_scrut_payload_moved
-	# is True, which prevents the hir_to_mir match-arm scrutinee drop (line
-	# 1117-1124 in hir_to_mir.py).  CopyValue means the payload was treated
-	# as Copy — the bug.
-	#
-	# Note: string_arc may emit its own DropValue for the scrutinee local at
-	# return blocks — this is correct because the variant drop checks the tag
-	# and only drops the active arm's fields (which were zeroed for the moved
-	# Ok payload).  The bug is specifically when CopyValue is used instead of
-	# MoveOut, leaving the Ok payload un-zeroed in the scrutinee.
-	has_moveout_for_server = False
-	has_copyvalue_for_server = False
-	server_tid = None
-	for tid in range(1, type_table._next_id):
-		try:
-			td = type_table.get(tid)
-			if td.kind is TypeKind.STRUCT and td.name == "Server" and td.module_id == "main":
-				server_tid = tid
-				break
-		except Exception:
-			continue
-	assert server_tid is not None, "Server type not found"
+		# The Ok arm must use MoveOut (not CopyValue) to extract the Server
+		# payload from the Result scrutinee.  MoveOut means arm_scrut_payload_moved
+		# is True, which prevents the hir_to_mir match-arm scrutinee drop (line
+		# 1117-1124 in hir_to_mir.py).  CopyValue means the payload was treated
+		# as Copy — the bug.
+		#
+		# Note: string_arc may emit its own DropValue for the scrutinee local at
+		# return blocks — this is correct because the variant drop checks the tag
+		# and only drops the active arm's fields (which were zeroed for the moved
+		# Ok payload).  The bug is specifically when CopyValue is used instead of
+		# MoveOut, leaving the Ok payload un-zeroed in the scrutinee.
+		has_moveout_for_server = False
+		has_copyvalue_for_server = False
+		server_tid = None
+		for tid in range(1, type_table._next_id):
+			try:
+				td = type_table.get(tid)
+				if td.kind is TypeKind.STRUCT and td.name == "Server" and td.module_id == "main":
+					server_tid = tid
+					break
+			except Exception:
+				continue
+		assert server_tid is not None, "Server type not found"
 
-	for block in main_func.blocks.values():
-		for instr in block.instructions:
-			if isinstance(instr, M.MoveOut) and getattr(instr, "ty", None) == server_tid:
-				has_moveout_for_server = True
-			if isinstance(instr, M.CopyValue) and getattr(instr, "ty", None) == server_tid:
-				has_copyvalue_for_server = True
-			# string_arc expands MoveOut to LoadLocal — check for the
-			# __match_field_move pattern which is the MoveOut expansion.
-			if isinstance(instr, M.StoreLocal):
-				local = getattr(instr, "local", "")
-				if "__match_field_move" in local:
-					# This indicates the non-Copy MoveOut path was taken.
-					local_ty = main_func.local_types.get(local)
-					if local_ty == server_tid:
-						has_moveout_for_server = True
+		for block in main_func.blocks.values():
+			for instr in block.instructions:
+				if isinstance(instr, M.MoveOut) and getattr(instr, "ty", None) == server_tid:
+					has_moveout_for_server = True
+				if isinstance(instr, M.CopyValue) and getattr(instr, "ty", None) == server_tid:
+					has_copyvalue_for_server = True
+				# string_arc expands MoveOut to LoadLocal — check for the
+				# __match_field_move pattern which is the MoveOut expansion.
+				if isinstance(instr, M.StoreLocal):
+					local = getattr(instr, "local", "")
+					if "__match_field_move" in local:
+						# This indicates the non-Copy MoveOut path was taken.
+						local_ty = main_func.local_types.get(local)
+						if local_ty == server_tid:
+							has_moveout_for_server = True
 
-	assert has_moveout_for_server, (
-		f"Server payload must be extracted via MoveOut (not CopyValue). "
-		f"MoveOut={has_moveout_for_server}, CopyValue={has_copyvalue_for_server}. "
-		f"If CopyValue was used, copy_status(Server) returned True (bug)."
-	)
-	assert not has_copyvalue_for_server, (
-		f"Server payload must NOT be extracted via CopyValue — Server is "
-		f"non-Copy (contains Arc/Destructible). CopyValue causes the "
-		f"scrutinee drop to destroy the un-moved payload."
-	)
+		assert has_moveout_for_server, (
+			f"Server payload must be extracted via MoveOut (not CopyValue). "
+			f"MoveOut={has_moveout_for_server}, CopyValue={has_copyvalue_for_server}. "
+			f"If CopyValue was used, copy_status(Server) returned True (bug)."
+		)
+		assert not has_copyvalue_for_server, (
+			f"Server payload must NOT be extracted via CopyValue — Server is "
+			f"non-Copy (contains Arc/Destructible). CopyValue causes the "
+			f"scrutinee drop to destroy the un-moved payload."
+		)
 
-	# Verify Server is non-Copy (sanity check for the test setup).
-	server_tid = None
-	for tid in range(1, type_table._next_id):
-		try:
-			td = type_table.get(tid)
-			if td.kind is TypeKind.STRUCT and td.name == "Server" and td.module_id == "main":
-				server_tid = tid
-				break
-		except Exception:
-			continue
-	assert server_tid is not None, "Server type not found in type table"
-	assert type_table.copy_status(server_tid) is not True, (
-		f"Server must not be Copy — it contains Arc (Destructible). "
-		f"copy_status returned {type_table.copy_status(server_tid)}"
-	)
+		# Verify Server is non-Copy (sanity check for the test setup).
+		server_tid = None
+		for tid in range(1, type_table._next_id):
+			try:
+				td = type_table.get(tid)
+				if td.kind is TypeKind.STRUCT and td.name == "Server" and td.module_id == "main":
+					server_tid = tid
+					break
+			except Exception:
+				continue
+		assert server_tid is not None, "Server type not found in type table"
+		assert type_table.copy_status(server_tid) is not True, (
+			f"Server must not be Copy — it contains Arc (Destructible). "
+			f"copy_status returned {type_table.copy_status(server_tid)}"
+		)
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)

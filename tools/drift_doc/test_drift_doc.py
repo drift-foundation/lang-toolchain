@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 from tools.drift_doc.drift_doc import extract_module_doc, generate_docs, render_module_markdown
@@ -124,7 +125,7 @@ pub fn helper() nothrow -> Int {
 	return 0;
 }
 '''
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		src_dir = Path(tmp) / "src"
 		src_dir.mkdir()
 		(src_dir / "lib.drift").write_text(source, encoding="utf-8")
@@ -153,7 +154,7 @@ def test_generate_docs_for_real_std_text() -> None:
 	if not stdlib_text.exists():
 		return  # skip if not in repo root
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		out_dir = Path(tmp) / "doc"
 		modules = generate_docs(source_root=stdlib_text, output_dir=out_dir)
 
@@ -199,7 +200,7 @@ def test_generate_docs_for_real_std_core_includes_builtin_type_methods() -> None
 	if not stdlib_core.exists():
 		return  # skip if not in repo root
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		out_dir = Path(tmp) / "doc"
 		modules = generate_docs(source_root=stdlib_core, output_dir=out_dir)
 
@@ -265,7 +266,7 @@ def test_drift_doc_cli_subcommand() -> None:
 	if not stdlib_text.exists():
 		return
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		out_dir = Path(tmp) / "doc"
 		rc = cli_main(["doc", str(stdlib_text), "-o", str(out_dir)])
 		assert rc == 0
@@ -277,7 +278,7 @@ def test_bundle_docs_produces_stdlib_docs() -> None:
 	"""bundle_docs_and_examples generates doc/stdlib/ with real content."""
 	from tools.deploy.steps.bundle import bundle_docs_and_examples
 
-	with tempfile.TemporaryDirectory() as tmp:
+	with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 		dist = Path(tmp) / "dist"
 		dist.mkdir()
 		bundle_docs_and_examples(dist)

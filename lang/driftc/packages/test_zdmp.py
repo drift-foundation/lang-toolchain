@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,7 +68,7 @@ class TestCache:
 		sha = hashlib.sha256(raw).hexdigest()
 		compressed = compress_to_zdmp(raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			cache_dir = Path(tmpdir) / "cache"
 			zdmp_file = Path(tmpdir) / "test.zdmp"
 			zdmp_file.write_bytes(compressed)
@@ -92,7 +93,7 @@ class TestCache:
 		raw = b"no-hash data " * 30
 		compressed = compress_to_zdmp(raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			cache_dir = Path(tmpdir) / "cache"
 			zdmp_file = Path(tmpdir) / "test.zdmp"
 			zdmp_file.write_bytes(compressed)
@@ -108,7 +109,7 @@ class TestCache:
 		raw = b"some data"
 		compressed = compress_to_zdmp(raw)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			cache_dir = Path(tmpdir) / "cache"
 			zdmp_file = Path(tmpdir) / "test.zdmp"
 			zdmp_file.write_bytes(compressed)
@@ -118,7 +119,7 @@ class TestCache:
 					load_zdmp_cached(zdmp_file, expected_sha256="0000bad")
 
 	def test_clear_cache(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			with patch.dict("os.environ", {"DRIFT_CACHE_DIR": str(tmpdir)}):
 				# Populate some cache files.
 				cache_base = Path(tmpdir) / "pkg" / "v0"
@@ -131,7 +132,7 @@ class TestCache:
 				assert not any(cache_base.iterdir())
 
 	def test_clear_cache_empty(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			with patch.dict("os.environ", {"DRIFT_CACHE_DIR": str(tmpdir)}):
 				count = clear_cache()
 				assert count == 0

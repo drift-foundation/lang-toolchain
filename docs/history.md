@@ -1,5 +1,147 @@
 # Drift development history
 
+## 2026-05-15 (LANGUAGE_BUG fix: method-receiver autoborrow through a ref-returning rvalue base + field projection; companion soundness fix rejecting value-self consumption through a borrowed projection)
+- **LANGUAGE_BUG fix + soundness tightening.** Release 0.31.88, ABI unchanged at 14.
+  Follow-up to 0.31.87's `&w.get().handle` fix.  The maria team reported
+  on 0.31.87 that the address-of form `&arc.get().field` now works
+  (0.31.87 partial fix) but the chained method-call form
+  `arc.get().field.method()` — used internally by their
+  `_inner_stop_flag` / `_inner_keepalive_ms` helpers — still rejected
+  with `E-AUTO-e0f26505 "cannot copy value of type Handle (use move
+  <expr>)"`.  Same root cause, different gate: 0.31.87 fixed the
+  explicit-borrow path (HBorrow rewriter); the implicit method-receiver
+  autoborrow gate at `type_checker.py` was the second site that needed
+  the same split-lift place-chain treatment.
+
+  **Customer report.**  In the maria-v1 keepalive helpers:
+
+  ```drift
+  // arc: Arc<Inner>, where Inner has a non-Copy AtomicBool field
+  val ok = arc.get().stop_flag.load();   // peek-like; load(self: &AtomicBool)
+  ```
+
+  rejected at type-check as `cannot copy value of type 'AtomicBool'`,
+  even though `arc.get()` returns `&Inner`, `.stop_flag` projects a
+  borrowed `&AtomicBool`, and `.load()` only needs `&self`.  The
+  workaround the team used: bind an intermediate
+  `val r: &Inner = arc.get();` then `r.stop_flag.load()`.
+
+  **Root cause.**  The SELF_BY_REF method-receiver autoborrow gate at
+  `type_checker.py:~8591` recognised direct rvalue calls as receivers
+  (the 0.31.87 escape hatch `allow_rvalue_receiver = isinstance(expr.receiver,
+  (HCall, HMethodCall, HInvoke))`) but did NOT recognise an HField
+  projection over an rvalue call.  When the receiver was
+  `HField(HMethodCall_returning_&T, name)`, autoborrow fell through to
+  the value-copy path, which then tripped `_require_copy_value` for the
+  non-Copy projected field.  The dual problem in the HBorrow handler at
+  `type_checker.py:~7791`: typing the borrow subject with the default
+  `used_as_value=True` instead of `False`, which fired the same copy
+  gate from the HField type-checker handler at `:~8920`.
+
+  **Fix.**  Two surgical edits to `lang/driftc/type_checker.py`:
+
+  1. New module-level helper `_ultimate_base_is_rvalue_call(rcv)` that
+     walks an HField projection chain and returns True iff the ultimate
+     base is `HCall` / `HMethodCall` / `HInvoke`.  Replaces the three
+     narrow `isinstance` predicates at the SELF_BY_REF method-receiver
+     autoborrow gates.  When the predicate fires, the receiver is
+     wrapped in `HBorrow(allow_rvalue=True)` — stage1
+     `borrow_materialize._split_lift_place_chain` then lifts the rvalue
+     base into a hidden temp, identical to the lowering the user would
+     have written manually:
+
+     ```drift
+     val __tmp = arc.get();         // &Inner   (hidden lift)
+     __tmp.stop_flag.load();        // borrow lands on a real place
+     ```
+
+  2. The HBorrow rvalue-subject branch types its subject with
+     `used_as_value=False` (was unspecified, defaulting to True), so the
+     recursive HField typing does not trip the value-copy gate.  The
+     subject is being borrowed, not read as a value.
+
+  **Scope: HField only.**  The helper intentionally does NOT walk
+  through `HIndex` or `HUnary(DEREF)`.  Their MIR lowering for the
+  borrowed-projection-through-rvalue-base shape is not implemented in
+  v1 — `_visit_expr_HIndex` raises `NotImplementedError("array index
+  read requires Copy element type; borrow not supported in v1")`.
+  Admitting those shapes at the type-check gate would only push the
+  error from a clean type-check diagnostic to an ICE-shaped
+  `NotImplementedError` inside hir_to_mir.  Negative regression:
+  `test_method_receiver_autoborrow_through_ref_rvalue_hindex_rejects`
+  pins that `w.handles_ref()[i].peek()` still rejects at type-check.
+  The explicit-borrow form (`&w.handles_ref()[i]` / `&*w.inner_ref()`)
+  already works for HIndex and DEREF — see the sibling 0.31.87 e2e
+  `borrow_chained_ref_projection_noncopy`.  When MIR coverage lands,
+  widen `_ultimate_base_is_rvalue_call` to include those arms and
+  flip the negative regression to a positive e2e.
+
+  **Companion soundness fix: value-self consumption through a borrowed
+  projection.**  During triage of the chained-method-call slice, we
+  discovered that `w.get().handle.consume()` — where
+  `consume(self: Handle)` takes ownership and `Handle` is non-Copy —
+  was silently ACCEPTED pre-0.31.88.  The compiler emitted an implicit
+  move out of `w.inner.handle` (a location read through `&Inner`) plus
+  drop-flag rescue to suppress the subsequent field-drop in `Wrapper`'s
+  destructor.  Runtime was sound (drop flags carried the move), but the
+  source-level shape was: silent partial-move from a borrowed location,
+  with no user signal that `w` was now invalid for the moved field.
+  K's review on the chained-method-call slice flagged this as
+  potentially unsound and called for a coherent release boundary: shared
+  receiver autoborrow through projected borrowed storage is allowed;
+  owned receiver consumption from projected borrowed storage is
+  rejected.
+
+  Fix: at the method-call dispatch site, when `decl_self_mode` is
+  `SelfMode.SELF_BY_VALUE`, the receiver type is non-Copy, the receiver
+  is not a direct rvalue call (`HCall`/`HMethodCall`/`HInvoke`), not
+  wrapped in explicit `move`, and `_expr_reads_through_ref_projection`
+  reports that the projection chain crosses a borrow at any level,
+  emit `E_CONSUME_THROUGH_BORROWED_PROJECTION`:
+
+  ```
+  cannot consume non-Copy value of type 'Handle' through a borrowed
+  projection: the method receiver would move out of a location read
+  through a borrow.  Refactor the method to take `self: &Handle`
+  (borrow), clone the value explicitly before calling, or arrange for
+  the source to be owned (move it in, or use an owned-returning helper).
+  ```
+
+  The predicate (`_expr_reads_through_ref_projection`) is the same one
+  the HField/HIndex value-copy gates use — it walks
+  `HField`/`HIndex`/`HPlaceExpr` chains and returns True if any subject
+  types as `&T`.  Crucially, this catches BOTH the inline-chain form
+  `w.get().handle.consume()` AND the lowering-equivalent named form
+  `val r = w.get(); r.handle.consume()` (where `r: &Inner` is an HVar
+  whose type is `&Inner`).  An earlier draft of this fix keyed on
+  `_ultimate_base_is_rvalue_call` and would have been bypassable via
+  the named form — caught in review.
+
+  Direct rvalue calls (`make_owned().consume()`) remain allowed — the
+  receiver IS an owned rvalue, not a projection through a borrow.
+  Explicit `move <expr>` remains allowed and is validated by the
+  ownership checker.  Receivers whose type the type-table classifies
+  as Copy bypass the guard — bitwise copy through a borrowed projection
+  is sound.
+
+  **Pinned by.**  Driver: 9 tests in
+  `lang/tests/driver/test_autoborrow_receiver_place.py` (5 pre-existing
+  + 4 new: customer-critical positive + address-of pin + bare
+  ref-returning-function variant + named-intermediate baseline +
+  owned-self negative + HIndex negative).  E2E:
+  `lang/tests/codegen/e2e/autoborrow_method_receiver_through_ref_rvalue_chain`
+  proves type-check + lowering + runtime agree (returns 42 from three
+  shapes of the chained autoborrow form).  Regression slice:
+  `borrow|autoborrow|method_call|copy` driver keyword sweep: 147 passed,
+  1 xfailed (pre-existing, unrelated); full stage2 suite: 273 passed.
+
+  **Known follow-ups.**  HIndex method-receiver autoborrow blocks on a
+  MIR v1 limitation — widen helper + add e2e when MIR lands.  The
+  duplicate-emission of `E-AUTO-e0f26505` on a single span (pre-fix
+  behaviour) is moot for this shape now that the spurious gate no
+  longer fires; other paths that may still double-emit are not
+  investigated here.
+
 ## 2026-05-15 (LANGUAGE_BUG fix: chained borrow projection through a ref-returning call rejected as copy)
 - **LANGUAGE_BUG fix.** Release 0.31.87, ABI unchanged at 14.
   Deferred CORE_BUG #1 from the mariadb team's two-blocker report;

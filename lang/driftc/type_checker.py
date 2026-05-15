@@ -57,6 +57,45 @@ FIXED_WIDTH_TYPE_NAMES = {
 	"Float32",
 	"Float64",
 }
+def _ultimate_base_is_rvalue_call(rcv) -> bool:
+	"""Return True when `rcv` is `HCall`/`HMethodCall`/`HInvoke`, or a chain
+	of `HField` projections whose ultimate base is one of those.
+
+	Used by the SELF_BY_REF method-receiver autoborrow gates below to
+	recognize chained shapes like `w.get().handle.peek()` — non-addressable
+	field projections through a ref-returning rvalue base.  Without this,
+	the autoborrow path falls through to the value-copy check and rejects
+	with `cannot copy value of type 'T'` for any non-Copy projected field.
+
+	Wrapping the chained receiver in `HBorrow(allow_rvalue=True)` lets
+	stage1 `borrow_materialize._split_lift_place_chain` lift the rvalue
+	base into a hidden temp, keeping the field projection as part of the
+	borrow's place expression — semantically identical to:
+
+	    val __tmp = w.get();      // &Inner
+	    __tmp.handle.peek();      // receiver borrowed as &Handle
+
+	**Scope: HField only.**  HIndex and HUnary(DEREF) over a ref-returning
+	rvalue base are intentionally excluded.  The MIR lowering for those
+	shapes (array-element borrow through a rvalue base; deref-of-rvalue
+	borrow through a method receiver) is not implemented in v1 — admitting
+	them at the type-check gate would only push the error from a clear
+	type-check diagnostic to a `NotImplementedError` inside hir_to_mir,
+	which is a worse UX.  When MIR coverage lands, widen this helper to
+	include those arms and add the matching e2e cases.  The explicit-
+	borrow form (`&w.handles_ref()[i]` / `&*w.inner_ref()`) already works
+	for HIndex and DEREF — see `borrow_chained_ref_projection_noncopy`.
+	"""
+	cur = rcv
+	while True:
+		if isinstance(cur, (H.HCall, H.HMethodCall, H.HInvoke)):
+			return True
+		if isinstance(cur, H.HField):
+			cur = cur.subject
+			continue
+		return False
+
+
 def _tc_diag(*args, **kwargs):
 	if "phase" not in kwargs:
 		if len(args) >= 3:
@@ -7747,7 +7786,17 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-					inner_ty = type_expr(expr.subject)
+					# Borrowing an rvalue subject: do not treat it as a value
+					# read. Otherwise, a non-Copy field projection through a
+					# ref-returning rvalue base (e.g. `&w.get().handle` or the
+					# method-receiver autoborrow form `w.get().handle.peek()`)
+					# trips the value-copy gate even though the subject IS being
+					# borrowed. Mirrors `_split_lift_place_chain` in stage1
+					# borrow materialize, which lifts the rvalue base into a
+					# temp so the projection becomes a valid place — but that
+					# pass runs after the type-checker, so this branch must
+					# pre-suppress the spurious copy diagnostic.
+					inner_ty = type_expr(expr.subject, used_as_value=False)
 					ref_ty = self.type_table.ensure_ref(inner_ty) if inner_ty is not None else self._unknown
 					return record_expr(expr, ref_ty)
 
@@ -8539,6 +8588,58 @@ class TypeChecker:
 					if method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 						decl_self_mode = getattr(method_res.resolution.decl, "self_mode", None)
 						autoborrow_mode = getattr(method_res.resolution, "receiver_autoborrow", None)
+						# Reject value-self method call on a non-Copy receiver
+						# that reads through a borrow at any level of its
+						# projection chain — covers both the inline-chain
+						# form `w.get().handle.consume()` and the
+						# lowering-equivalent named-intermediate form
+						# `val r = w.get(); r.handle.consume();` (where
+						# `r: &Inner`).  Both shapes would have to move
+						# `Handle` out of a location read through a borrow
+						# to satisfy ownership of `self: Handle`, which is
+						# not legal — but pre-0.31.88 the compiler silently
+						# accepted them and emitted an implicit move plus
+						# drop-flag rescue (sound at runtime but left the
+						# borrowed source partially-moved with no user
+						# signal).
+						#
+						# Detection: reuse `_expr_reads_through_ref_projection`
+						# (the same helper the HField/HIndex value-copy
+						# gates use, defined below) — it walks
+						# HField/HIndex/HPlaceExpr chains and returns True
+						# if any subject types as `&T`.  Excludes:
+						#   * direct rvalue calls — receiver IS an owned
+						#     rvalue, not a projection through a borrow
+						#   * explicit `move <expr>` — user is signalling
+						#     intent; ownership checker validates the move
+						#   * receivers whose type the checker has already
+						#     classified as Copy (bitwise copy is fine)
+						if (
+							decl_self_mode is SelfMode.SELF_BY_VALUE
+							and not isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+							and not isinstance(expr.receiver, getattr(H, "HMove", ()))
+							and _expr_reads_through_ref_projection(expr.receiver)
+						):
+							_recv_ty_check = type_expr(expr.receiver, used_as_value=False)
+							if _recv_ty_check is not None and self.type_table.copy_status(_recv_ty_check) is not True:
+								_pretty_recv = self._pretty_type_name(_recv_ty_check, current_module=current_module_name)
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"cannot consume non-Copy value of type '{_pretty_recv}' "
+											f"through a borrowed projection: the method receiver "
+											f"would move out of a location read through a borrow. "
+											f"Refactor the method to take `self: &{_pretty_recv}` "
+											f"(borrow), clone the value explicitly before calling, "
+											f"or arrange for the source to be owned (move it in, "
+											f"or use an owned-returning helper)."
+										),
+										code="E_CONSUME_THROUGH_BORROWED_PROJECTION",
+										severity="error",
+										phase="typecheck",
+										span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
+									)
+								)
 						if decl_self_mode is SelfMode.SELF_BY_REF and autoborrow_mode is None:
 							recv_place = place_expr_from_lvalue_expr(expr.receiver)
 							# Allow rvalue ref-returning calls as
@@ -8550,7 +8651,7 @@ class TypeChecker:
 							# (lines ~8505) which permits HCall /
 							# HMethodCall / HInvoke rvalues for the
 							# shared receiver shape.
-							allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+							allow_rvalue_receiver = _ultimate_base_is_rvalue_call(expr.receiver)
 							if recv_place is None and not allow_rvalue_receiver and not isinstance(expr.receiver, H.HBorrow):
 								diagnostics.append(
 									_tc_diag(
@@ -8565,7 +8666,7 @@ class TypeChecker:
 						is_mut = receiver_mode is SelfMode.SELF_BY_REF_MUT
 						if not is_mut:
 							recv_place_expr = place_expr_from_lvalue_expr(expr.receiver)
-							allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+							allow_rvalue_receiver = _ultimate_base_is_rvalue_call(expr.receiver)
 							if recv_place_expr is None and not allow_rvalue_receiver and not isinstance(expr.receiver, H.HBorrow):
 								diagnostics.append(
 									_tc_diag(
@@ -8599,7 +8700,7 @@ class TypeChecker:
 											)
 										)
 									else:
-										allow_rvalue_receiver = isinstance(expr.receiver, (H.HCall, H.HMethodCall, H.HInvoke))
+										allow_rvalue_receiver = _ultimate_base_is_rvalue_call(expr.receiver)
 										if allow_rvalue_receiver:
 											borrow_expr = H.HBorrow(subject=expr.receiver, is_mut=False, allow_rvalue=True)
 											_assign_node_id(borrow_expr)

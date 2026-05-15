@@ -12,6 +12,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DRIFTC = [sys.executable, "-m", "lang.driftc.driftc", "--dev", "--stdlib-root", str(ROOT / "stdlib"), "--entry", "main::main"]
 
+sys.path.insert(0, str(ROOT))
+from lang.test_support.drift_tmp import session_root
+
+_SCRATCH = session_root() / "robustness-probe"
+_SCRATCH.mkdir(parents=True, exist_ok=True)
+
 
 def classify(rc: int, stdout: str, stderr: str, timed_out: bool) -> tuple[str, str]:
 	"""Return (failure_shape, phase_guess)."""
@@ -58,9 +64,9 @@ def classify(rc: int, stdout: str, stderr: str, timed_out: bool) -> tuple[str, s
 
 
 def run(label: str, source: str, timeout: int = 30) -> dict:
-	tmp = Path("/tmp/robustness_probe.drift")
+	tmp = _SCRATCH / "robustness_probe.drift"
 	tmp.write_text(source)
-	out = Path("/tmp/robustness_probe.bin")
+	out = _SCRATCH / "robustness_probe.bin"
 	cmd = DRIFTC + [str(tmp), "-o", str(out)]
 	timed_out = False
 	try:

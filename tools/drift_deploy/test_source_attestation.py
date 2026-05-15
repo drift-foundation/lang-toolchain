@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -258,14 +259,14 @@ class TestCanonicalPaths:
 
 class TestHashFile:
 	def test_known_content(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.drift"
 			p.write_bytes(b"hello\n")
 			# Pre-computed: sha256(b"hello\n")
 			assert hash_file(p) == "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
 
 	def test_chunked_read(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "big.drift"
 			# Write 200KB to force chunked reads.
 			p.write_bytes(b"x" * 200_000)
@@ -320,7 +321,7 @@ class TestSignVerify:
 
 class TestSidecarIO:
 	def test_round_trip(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "net-tls.source-attestation"
 			body = _basic_body()
 			original = sign_attestation(body, signing_key_seed=_TEST_SEED)
@@ -336,7 +337,7 @@ class TestSidecarIO:
 
 	def test_sidecar_is_canonical_on_disk(self) -> None:
 		"""On-disk bytes are canonical JSON so two runs produce identical files."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p1 = Path(tmpdir) / "a.source-attestation"
 			p2 = Path(tmpdir) / "b.source-attestation"
 			s1 = sign_attestation(_basic_body(), signing_key_seed=_TEST_SEED)
@@ -347,7 +348,7 @@ class TestSidecarIO:
 
 	def test_tampered_body_rejected(self) -> None:
 		"""Hand-edit the body field — body_sha256 self-check fires before signature verify."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			sidecar = sign_attestation(_basic_body(), signing_key_seed=_TEST_SEED)
 			write_attestation_sidecar(p, sidecar)
@@ -359,7 +360,7 @@ class TestSidecarIO:
 
 	def test_tampered_body_sha256_then_verify_fails(self) -> None:
 		"""Edit body AND body_sha256 to keep self-check happy → signature verify fails."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			sidecar = sign_attestation(_basic_body(), signing_key_seed=_TEST_SEED)
 			write_attestation_sidecar(p, sidecar)
@@ -376,7 +377,7 @@ class TestSidecarIO:
 
 	def test_kid_pubkey_mismatch_rejected(self) -> None:
 		"""Mismatched kid vs pubkey caught at load time."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			sidecar = sign_attestation(_basic_body(), signing_key_seed=_TEST_SEED)
 			write_attestation_sidecar(p, sidecar)
@@ -387,7 +388,7 @@ class TestSidecarIO:
 				read_attestation_sidecar(p)
 
 	def test_unknown_format_rejected(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			p.write_text(json.dumps({
 				"format": "drift-something-else",
@@ -400,7 +401,7 @@ class TestSidecarIO:
 				read_attestation_sidecar(p)
 
 	def test_unknown_version_rejected(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			p.write_text(json.dumps({
 				"format": SOURCE_ATTESTATION_SIDECAR_FORMAT,
@@ -413,7 +414,7 @@ class TestSidecarIO:
 				read_attestation_sidecar(p)
 
 	def test_invalid_json_rejected(self) -> None:
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			p.write_text("not json", encoding="utf-8")
 			with pytest.raises(ValueError, match="invalid JSON"):
@@ -493,7 +494,7 @@ class TestStrictShaValidator:
 
 	def test_load_rejects_malformed_body_source_content_id(self) -> None:
 		"""On-disk body with uppercase id is rejected at load."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			p = Path(tmpdir) / "x.source-attestation"
 			# Build a sidecar manually with an uppercase id to bypass sign-time check.
 			body_obj = {

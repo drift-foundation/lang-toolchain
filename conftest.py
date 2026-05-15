@@ -25,7 +25,30 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from lang.test_support.drift_tmp import session_root as _drift_session_root
+
+# ── Janitor-safe scratch root ─────────────────────────────────────────
+#
+# Initialize the Drift session root at module import time — before pytest's
+# TempPathFactory is constructed — so every tmp_path / tmp_path_factory and
+# every bare tempfile.* call lands inside the Drift namespace.
+#
+# Three knobs are exported:
+#   $DRIFT_TMP_ROOT            primary contract; child processes inherit it
+#   $PYTEST_DEBUG_TEMPROOT     pytest's tmpdir parent (relocates tmp_path)
+#   $TMPDIR + tempfile.tempdir catch bare tempfile.* and subprocess mktemp
+#
+# Rationale: /tmp is tmpfs; SIGKILL/OOM skips cleanup hooks. A predictable
+# Drift-owned namespace lets the janitor reclaim space safely later.
+_DRIFT_TMP_ROOT = _drift_session_root()
+_PYTEST_TMP = _DRIFT_TMP_ROOT / "pytest"
+_PYTEST_TMP.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", str(_PYTEST_TMP))
+os.environ.setdefault("TMPDIR", str(_DRIFT_TMP_ROOT))
+tempfile.tempdir = str(_DRIFT_TMP_ROOT)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -50,11 +73,13 @@ def _other_sentinel(lane: str) -> str:
 
 # Test build roots that may contain produced binaries.  Walked at session
 # end by the sentinel audit.  Order matters only for output stability.
+#
+# The pytest tree now lives under $DRIFT_TMP_ROOT/pytest/pytest-of-<user>/
+# (see PYTEST_DEBUG_TEMPROOT wiring at module top), so we resolve relative
+# to _DRIFT_TMP_ROOT rather than hard-coding /tmp.
 _AUDIT_ROOTS = (
-	# pytest tmp_path (per-session): /tmp/pytest-of-<user>/pytest-current/
-	# We resolve the canonical "current" symlink lazily so cleaned-up
-	# previous runs do not pollute the count.
-	"/tmp/pytest-of-{user}/pytest-current",
+	# pytest tmp_path per-session, relocated under the Drift session root.
+	str(_PYTEST_TMP / "pytest-of-{user}" / "pytest-current"),
 	# Repo-local test build artifacts (e.g. lang/tests/codegen/e2e cases).
 	"build/tests",
 )

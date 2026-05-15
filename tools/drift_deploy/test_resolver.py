@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from lang.test_support.drift_tmp import session_root
 from pathlib import Path
 
 import pytest
@@ -259,7 +260,7 @@ class TestResolverConflict:
 			)
 
 		# Only artifact A goes into the lock — B must not appear.
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			artifacts = {"app-a": result_a}
 			# B is NOT added because resolution raised.
@@ -367,7 +368,7 @@ class TestLockFile:
 			),
 		}
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			write_lock(lock_path, {"app-a": deps_a, "app-b": deps_b})
 
@@ -621,7 +622,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(bad_lock))
 			with pytest.raises(ValueError) as exc:
@@ -716,7 +717,7 @@ class TestLockFile:
 				package_id="web.jwt", author_key="",
 			),
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			write_lock(lock_path, {"app": deps})
 
@@ -757,7 +758,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v2_lock))
 			with pytest.raises(ValueError) as exc:
@@ -780,7 +781,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v1_lock))
 			with pytest.raises(ValueError, match="schema v1.*prepare"):
@@ -807,7 +808,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v3_lock))
 			with pytest.raises(ValueError) as exc:
@@ -838,7 +839,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v4_lock))
 			with pytest.raises(ValueError, match="author_key"):
@@ -866,7 +867,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v4_lock))
 			with pytest.raises(ValueError, match="source_content_id"):
@@ -894,7 +895,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v4_lock))
 			with pytest.raises(ValueError, match="source_attestation_key"):
@@ -920,7 +921,7 @@ class TestLockFile:
 				}
 			}
 		}
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			lock_path = Path(tmpdir) / "lock.json"
 			lock_path.write_text(json.dumps(v4_lock))
 			with pytest.raises(ValueError, match="sha256"):
@@ -942,7 +943,7 @@ class TestBuildPackageIndexDedup:
 		"""Same .dmp reachable via symlink and direct path → indexed once."""
 		import os
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			base = Path(tmpdir)
 			dest = base / "dest"
 			staged = base / "staged"
@@ -979,7 +980,7 @@ class TestBuildPackageIndexDedup:
 
 	def test_real_duplicates_in_same_root_still_error(self) -> None:
 		"""Two distinct physical files with same pkg@version in same root → error."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			base = Path(tmpdir)
 			root = base / "packages"
 			root.mkdir()
@@ -1002,7 +1003,7 @@ class TestBuildPackageIndexDedup:
 
 	def test_same_pkg_version_in_different_roots_first_wins(self) -> None:
 		"""Same pkg@version in two roots (distinct files) → first root wins, no error."""
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			base = Path(tmpdir)
 			root1 = base / "root1"
 			root2 = base / "root2"
@@ -1041,7 +1042,7 @@ class TestBuildPackageIndexDedup:
 		"""
 		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir)
 
 			# Write a valid .dmp using the real container format.
@@ -1089,7 +1090,7 @@ class TestBuildPackageIndexDedup:
 		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 		from lang.driftc.packages.zdmp import compress_to_zdmp
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir)
 
 			# Valid .dmp sibling (v3-shape metadata).
@@ -1138,7 +1139,7 @@ class TestBuildPackageIndexDedup:
 		local development and older test fixtures."""
 		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir)
 			manifest_obj = {
 				"format": "dmir-pkg",
@@ -1179,7 +1180,7 @@ class TestBuildPackageIndexDedup:
 		"""
 		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir)
 			# Construct a valid v0 container whose MANIFEST still
 			# carries the pre-0.29 `package_deps` key.
@@ -1220,7 +1221,7 @@ class TestBuildPackageIndexDedup:
 		producer and has to be republished."""
 		from lang.driftc.packages.dmir_pkg_v0 import write_dmir_pkg_v0
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir)
 			manifest_obj = {
 				"format": "dmir-pkg",
@@ -2066,7 +2067,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 		core_trust = TrustStore(
 			keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set(),
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			dmp = root / "mariadb-wire-proto-0.3.0.dmp"
@@ -2135,7 +2136,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 		core_trust = TrustStore(
 			keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set(),
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			dmp = root / "mariadb-wire-proto-0.3.0.dmp"
@@ -2187,7 +2188,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 				),
 			},
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			dmp = root / "net-tls-0.4.1.dmp"
@@ -2231,7 +2232,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 				),
 			},
 		)
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			dmp = root / "net-tls-0.4.1.dmp"
@@ -2264,7 +2265,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 		from tools.drift_deploy.resolver import build_package_index
 		from tools.drift_deploy.run_snapshot import RunSnapshot
 		snapshot = RunSnapshot(run_id="test-run", packages={})
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			(root / "net-tls-0.4.1.dmp").write_bytes(b"fake-dmp")
@@ -2318,7 +2319,7 @@ class TestVerifyV4SourceIdentityEnforcement:
 			},
 		)
 
-		with tempfile.TemporaryDirectory() as tmpdir:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			root = Path(tmpdir) / "packages"
 			root.mkdir()
 			# Three packages on disk.
@@ -2528,7 +2529,7 @@ class TestReadSourceAttestationMeta:
 	def test_absent_sidecar_returns_empty(self) -> None:
 		"""Legacy package with no sidecar at all → empty (drift prepare
 		surfaces this as fail-fast for non-co-artifact deps)."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			dmp_path, manifest = self._make_dmp(Path(tmp))
 			scid, kid = _read_source_attestation_meta(dmp_path, manifest)
 			assert scid == "" and kid == ""
@@ -2536,7 +2537,7 @@ class TestReadSourceAttestationMeta:
 	def test_matching_sidecar_returns_scid_and_kid(self) -> None:
 		"""All cross-binding fields match → returns body's source_content_id
 		and the verified signer kid."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			scid_value = "sha256:" + "a"*64
 			dmp_path, manifest = self._make_dmp(tmp_p, source_content_id=scid_value)
@@ -2548,7 +2549,7 @@ class TestReadSourceAttestationMeta:
 	def test_mismatched_package_id_returns_empty(self, capsys) -> None:
 		"""Sidecar body says it's for package-X, .dmp manifest says
 		package-Y → cross-binding fails, empty result, stderr warning."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(tmp_p, pkg_id="net-tls")
 			self._write_sidecar(dmp_path, body_overrides={"package_id": "other-pkg"})
@@ -2558,7 +2559,7 @@ class TestReadSourceAttestationMeta:
 			assert "package_id" in err
 
 	def test_mismatched_version_returns_empty(self, capsys) -> None:
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(tmp_p, version="0.4.0")
 			self._write_sidecar(dmp_path, body_overrides={"version": "0.4.1"})
@@ -2568,7 +2569,7 @@ class TestReadSourceAttestationMeta:
 
 	def test_mismatched_target_class_returns_empty(self, capsys) -> None:
 		"""Cross-target attestation substitution → caught."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(tmp_p, target="linux-x86_64")
 			self._write_sidecar(dmp_path, body_overrides={"target_class": "linux-aarch64"})
@@ -2580,7 +2581,7 @@ class TestReadSourceAttestationMeta:
 		"""When the .dmp manifest carries a source_content_id stamp
 		(Phase A producer wired), it must equal the sidecar body's
 		value — otherwise the producer was inconsistent."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(tmp_p, source_content_id="sha256:" + "a"*64)
 			self._write_sidecar(dmp_path, body_overrides={
@@ -2596,7 +2597,7 @@ class TestReadSourceAttestationMeta:
 		package depends on).  Note: stamp must be present (Phase B.2
 		requires it) for the helper to reach the required_deps check."""
 		from tools.drift_deploy.source_attestation import RequiredDepEntry
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(
 				tmp_p,
@@ -2623,7 +2624,7 @@ class TestReadSourceAttestationMeta:
 		verifies, all body fields cross-bind to the manifest fields
 		that DO exist — but the manifest has no source_content_id
 		stamp, so the helper rejects."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			# Note: NO source_content_id passed → manifest stamp absent.
 			dmp_path, manifest = self._make_dmp(tmp_p)
@@ -2641,7 +2642,7 @@ class TestReadSourceAttestationMeta:
 		strict-shape validator at the trust boundary refuses to let
 		programmatic callers smuggle a non-canonical id into a
 		signed lock entry."""
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(
 				tmp_p,
@@ -2662,7 +2663,7 @@ class TestReadSourceAttestationMeta:
 			SOURCE_ATTESTATION_SIDECAR_VERSION,
 		)
 		import hashlib as _hl
-		with tempfile.TemporaryDirectory() as tmp:
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmp:
 			tmp_p = Path(tmp)
 			dmp_path, manifest = self._make_dmp(tmp_p)
 			self._write_sidecar(dmp_path)
