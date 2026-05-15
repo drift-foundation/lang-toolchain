@@ -36,6 +36,7 @@ export {
 	Executor,
 	Mutex,
 	MutexGuard,
+	Condvar,
 	VirtualThread,
 	Future,
 	FutureGroup,
@@ -43,6 +44,8 @@ export {
 	mutex,
 	lock,
 	mutex_guard_get_mut,
+	condvar,
+	CONCURRENCY_KIND_REQUIRES_VTHREAD,
 	executor_policy_builder,
 	build_executor,
 	atomic_bool,
@@ -163,6 +166,12 @@ pub const CONCURRENCY_KIND_BUSY: String = "busy";
 
 /// `ConcurrencyError.kind` discriminator: wraps a deeper failure.
 pub const CONCURRENCY_KIND_FAILED: String = "failed";
+
+/// `ConcurrencyError.kind` discriminator: operation requires a VT
+/// context but was called outside one.  Used by `Condvar.wait` /
+/// `wait_timeout` / `wait_until` when invoked from a non-VT
+/// caller (analogue of `std.net`'s `NET_ERROR_KIND_REQUIRES_VTHREAD`).
+pub const CONCURRENCY_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
 
 /// Constructs an atomic `Bool` cell initialized to `v`.
 ///
@@ -528,6 +537,302 @@ implement<T> core.Destructible for MutexGuard<T> {
 		// happened on a drop path; if a caller leaks a guard while
 		// unlocked-for-condvar, the leak is the bug, not the
 		// destructor.
+	}
+}
+
+
+// ─── Condvar ────────────────────────────────────────────────────────
+//
+// POSIX/Mesa-style condition variable.  Used in the standard
+// while-loop-around-predicate pattern:
+//
+//   var guard = mtx.lock();
+//   while not predicate(&guard) {
+//       cv.wait(&mut guard);
+//   }
+//   // do work with the guard held
+//
+// `wait` atomically (from the caller's view) releases the mutex,
+// parks the calling VT, and reacquires the mutex on wake.  The
+// "atomicity" comes from the underlying `vt_park` / `vt_unpark`
+// wake-token protocol: if `signal_one` fires between the waiter's
+// enqueue and its park, the wake token is recorded and the
+// subsequent park returns immediately — no missed wake.
+//
+// Stale-token avoidance is the load-bearing internal invariant:
+// `vt_unpark(handle)` is only ever called after a successful
+// `Waiter.active.compare_exchange(true, false)`.  Both the signal
+// path and the wake path follow this discipline so a timed-out
+// waiter's stale handle does not later leak an unpark onto a VT
+// that has moved on to other work.
+//
+// See `docs/conventions/tmp-root.md` companion doc and
+// `work/stdlib-condvar/plan.md` for the design rationale.
+
+
+// Per-waiter record.  `active` is the CAS coordination point:
+// signal/close paths CAS true→false before unpark; the waiter
+// CAS's itself before returning on any wake path.  Exactly one
+// side wins; the other skips its unpark.
+struct PoolWaiter {
+	vt: thread.VtHandle,
+	active: atomic.AtomicBool,
+}
+
+// Internal state — held inside an Arc so Condvar handles are
+// cheaply borrowable by all parties.
+struct CondvarState {
+	list_lock: Mutex<Array<core.Arc<PoolWaiter>>>,
+	closed: atomic.AtomicBool,
+}
+
+/// Condition variable for parking a VT until a signal arrives.
+///
+/// Constructed via `condvar()`.  Pair with a `Mutex<T>` that
+/// guards your predicate; `wait` releases the mutex and parks
+/// the calling VT; `signal_one` / `signal_all` wake parked
+/// waiters; `close` is a one-way shutdown (wakes all waiters with
+/// `CLOSED`, makes future `wait` calls fail-fast).
+///
+/// **Always loop:** wakes may be spurious; the caller MUST
+/// re-check the predicate after `wait` returns and re-park if
+/// the predicate still does not hold.
+///
+/// **See also:** `condvar`, `Mutex`, `MutexGuard`.
+pub struct Condvar {
+	state: core.Arc<CondvarState>
+}
+
+/// Constructs a fresh Condvar.
+///
+/// **See also:** `Condvar`.
+pub fn condvar() nothrow -> Condvar {
+	val empty: Array<core.Arc<PoolWaiter>> = [];
+	val state = CondvarState(
+		list_lock = mutex(empty),
+		closed = atomic_bool(false)
+	);
+	return Condvar(state = core.arc(state));
+}
+
+implement Condvar {
+	/// Wakes one waiter.  No-op if no waiter is currently parked.
+	/// Wakes "some waiter" — ordering is unspecified.
+	///
+	/// **Thread-safe.**  Does NOT require holding the predicate's
+	/// mutex.  Callers typically signal while holding the predicate
+	/// mutex (so the predicate update + signal happen atomically
+	/// from the waiter's view), but this is caller discipline, not
+	/// a Condvar requirement.
+	pub fn signal_one(self: &Condvar) nothrow -> Void {
+		// Pop records under the lock; CAS each until we successfully
+		// claim one or the list empties.  Skip-on-CAS-fail handles
+		// the dead-record case (waiter timed out / self-cancelled
+		// before we got here).
+		val claimed = _claim_one(&self.state.list_lock);
+		match claimed {
+			Optional::Some(w) => { thread.vt_unpark(w.get().vt); },
+			default => { }
+		}
+	}
+
+	/// Wakes all currently-parked waiters.  Future waiters (those
+	/// who call `wait` after `signal_all` returns) are unaffected.
+	///
+	/// Same thread-safety as `signal_one` — does not require the
+	/// predicate's mutex.
+	pub fn signal_all(self: &Condvar) nothrow -> Void {
+		val claimed = _drain_active(&self.state.list_lock);
+		_unpark_all(&claimed);
+	}
+
+	/// Wakes all currently-parked waiters with `CLOSED`; future
+	/// `wait` / `wait_timeout` / `wait_until` calls return
+	/// `Err(CLOSED)` immediately without parking.
+	///
+	/// **One-way.**  A closed Condvar is not reusable.
+	///
+	/// **Drift extension, not POSIX condvar semantics.**  POSIX
+	/// condvars do not own lifecycle; the equivalent pattern is
+	/// "set a separate closed flag + broadcast".  Drift's `close`
+	/// is sugar for that pattern — combined into a single
+	/// primitive because getting the flag/broadcast ordering wrong
+	/// is a common source of pool / channel / shutdown bugs.
+	pub fn close(self: &Condvar) nothrow -> Void {
+		self.state.closed.store(true, atomic.MemoryOrder::Release());
+		val claimed = _drain_active(&self.state.list_lock);
+		_unpark_all(&claimed);
+	}
+
+	/// Atomically (from the caller's view) releases `guard`, parks
+	/// the calling VT, and reacquires the lock on wake.
+	///
+	/// Returns `Ok(())` on a normal wake (signal or spurious — the
+	/// caller MUST loop and re-check the predicate either way).
+	/// Returns `Err(ConcurrencyError(kind=CLOSED))` if the Condvar
+	/// was closed (either before this call or while we were
+	/// parked).  Returns
+	/// `Err(ConcurrencyError(kind=REQUIRES_VTHREAD))` if called
+	/// outside a VT context — does NOT park.
+	pub fn wait<T>(self: &Condvar, guard: &mut MutexGuard<T>) nothrow -> core.Result<Void, ConcurrencyError> {
+		return _wait_inner(self, guard, 0);
+	}
+
+	/// Like `wait`, but returns `Err(TIMEOUT)` if `d` elapses
+	/// before a signal arrives.
+	pub fn wait_timeout<T>(self: &Condvar, guard: &mut MutexGuard<T>, d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
+		val deadline = thread.now_ms() + d.millis;
+		return _wait_inner(self, guard, deadline);
+	}
+
+	/// Absolute-deadline variant of `wait_timeout`.  `deadline_ms`
+	/// is monotonic-clock absolute time (compare against
+	/// `thread.now_ms()`).
+	pub fn wait_until<T>(self: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) nothrow -> core.Result<Void, ConcurrencyError> {
+		return _wait_inner(self, guard, deadline_ms);
+	}
+}
+
+
+// Common wait body shared by wait / wait_timeout / wait_until.
+//
+// `deadline_ms`: 0 = park indefinitely (vt_park(0)).  Positive =
+// absolute deadline (vt_park_until).
+fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) nothrow -> core.Result<Void, ConcurrencyError> {
+	// Off-VT guard.  Must surface before any state mutation: an
+	// off-VT caller cannot park (no vt_park target), and we don't
+	// want to enqueue a Waiter { vt: 0 } that signal paths would
+	// then issue vt_unpark(0) on.
+	val me = thread.vt_current();
+	if me == 0 {
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_REQUIRES_VTHREAD,
+			code = 0
+		));
+	}
+
+	// Fast path: closed.  No point enqueuing only to drain.
+	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_CLOSED,
+			code = -3
+		));
+	}
+
+	// Deadline already passed?  Fail-fast.
+	if deadline_ms > 0 and thread.now_ms() >= deadline_ms {
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_TIMEOUT,
+			code = -1
+		));
+	}
+
+	val waiter = core.arc(PoolWaiter(
+		vt = me,
+		active = atomic_bool(true)
+	));
+
+	// Push waiter record onto the list (under the list-lock).
+	{
+		var lg = cv.state.list_lock.lock();
+		val list = lg.get_mut();
+		list.push(waiter.share());
+	}
+
+	// Re-check closed AFTER push — closes the race where close()
+	// flipped the flag and drained the list between our pre-check
+	// above and our push.  If we lose the race, self-CAS and
+	// return CLOSED.
+	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+		if waiter.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
+			return core.Result::Err(ConcurrencyError(
+				kind = CONCURRENCY_KIND_CLOSED,
+				code = -3
+			));
+		}
+		// CAS failed: a signal beat us; fall through and consume
+		// the wake normally.
+	}
+
+	// Release the predicate mutex and park.
+	guard.unlock_for_condvar();
+	if deadline_ms == 0 {
+		thread.vt_park(0);
+	} else {
+		thread.vt_park_until(deadline_ms);
+	}
+	guard.relock_for_condvar();
+
+	// *** Self-CAS — runs on EVERY wake path. ***
+	// CAS success: we self-claimed; no signal will issue a stale
+	// unpark for our record.  CAS failure: a signal already
+	// claimed us.
+	val self_won = waiter.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire());
+
+	// Classify return.  Order: closed > timeout > normal/spurious.
+	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_CLOSED,
+			code = -3
+		));
+	}
+	if self_won and deadline_ms > 0 and thread.now_ms() >= deadline_ms {
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_TIMEOUT,
+			code = -1
+		));
+	}
+	// self_won && deadline elapsed → TIMEOUT (handled above).
+	// self_won && no deadline → spurious wake; return Ok and let
+	//   caller's loop re-check predicate + call wait again.
+	// !self_won → a signal claimed us; return Ok.
+	return core.Result::Ok(core.void_value());
+}
+
+
+// Pop and try to claim one active waiter from the list.  Returns
+// the claimed Arc<Waiter> (caller calls vt_unpark), or None if
+// the list is empty.  Skip-on-CAS-fail handles dead records left
+// by timed-out / self-cancelled waiters.
+fn _claim_one(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Optional<core.Arc<PoolWaiter>> {
+	var lg = list_lock.lock();
+	val list = lg.get_mut();
+	while list.len() > 0 {
+		var w = list.remove(0);
+		if w.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
+			return Optional::Some(move w);
+		}
+		// CAS failed: dead record; drop w (Arc decref) and try next.
+	}
+	return Optional::None();
+}
+
+// Drain all active waiters from the list under the lock; release
+// the lock; return them in an array for the caller to unpark.
+// Splitting the drain from the unparks avoids thundering-herd
+// contention on the list_lock when many wakers try to relock the
+// list (they don't — but the woken VTs may call back into Condvar
+// for unrelated reasons; holding the list_lock across unparks
+// would serialize them unnecessarily).
+fn _drain_active(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Array<core.Arc<PoolWaiter>> {
+	var claimed: Array<core.Arc<PoolWaiter>> = [];
+	var lg = list_lock.lock();
+	val list = lg.get_mut();
+	while list.len() > 0 {
+		var w = list.remove(0);
+		if w.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
+			claimed.push(move w);
+		}
+		// CAS failed: dead record; drop w.
+	}
+	return move claimed;
+}
+
+fn _unpark_all(claimed: &Array<core.Arc<PoolWaiter>>) nothrow -> Void {
+	var i = 0;
+	while i < claimed.len() {
+		thread.vt_unpark(claimed[i].get().vt);
+		i = i + 1;
 	}
 }
 
