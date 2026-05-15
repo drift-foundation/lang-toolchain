@@ -11,6 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Route this tool's scratch under $DRIFT_TMP_ROOT so it's janitor-safe
+# even when run outside pytest (which would otherwise relocate via
+# PYTEST_DEBUG_TEMPROOT).  See docs/conventions/tmp-root.md.
+sys.path.insert(0, str(ROOT))
+from lang.test_support.drift_tmp import session_root as _drift_session_root
+
 
 def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None, timeout: int = 30) -> subprocess.CompletedProcess[str]:
 	return subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True, timeout=timeout)
@@ -72,7 +78,7 @@ def main() -> int:
 	# eliminates a flake observed under `just lang-driver-test` where two
 	# workers concurrently rebuilt `build/runtime_libs/debug/...` and one
 	# of them observed the other's in-progress ar(1) write.
-	with tempfile.TemporaryDirectory(prefix="drift_deps_") as tmp:
+	with tempfile.TemporaryDirectory(prefix="drift_deps_", dir=str(_drift_session_root())) as tmp:
 		tmp_dir = Path(tmp)
 		src = tmp_dir / "assert_deps.drift"
 		out = tmp_dir / "assert_deps_bin"

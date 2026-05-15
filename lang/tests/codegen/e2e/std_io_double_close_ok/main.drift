@@ -3,10 +3,11 @@ module m;
 import std.core as core;
 import std.io as io;
 import std.concurrent as conc;
+import std.env as env;
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 1000);
-	val r = io.file_builder("/tmp/drift_std_io_double_close.bin").read(true).write(true).create(true).truncate(true).timeout(t).build();
+	val r = io.file_builder(env.drift_tmp_path("drift_std_io_double_close.bin")).read(true).write(true).create(true).truncate(true).timeout(t).build();
 	match r {
 		Ok(f) => {
 			val c1 = f.close();

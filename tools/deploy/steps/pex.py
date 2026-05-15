@@ -12,6 +12,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Route this step's scratch under $DRIFT_TMP_ROOT so deploy runs are
+# janitor-safe (deploy is not a pytest path; conftest.py's relocation
+# does not apply).  See docs/conventions/tmp-root.md.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(_REPO_ROOT))
+from lang.test_support.drift_tmp import session_root as _drift_session_root
+
 
 def read_pinned_version(repo_root: Path, package: str, *, allow_gte: bool = False) -> str:
 	"""Read a pinned version from requirements.txt.
@@ -62,7 +70,7 @@ def build_driftc_pex(repo_root: Path, dist: Path) -> Path:
 	python_version = detect_python_version(venv)
 
 	# Stage entry point in a temp directory.
-	entry_dir = Path(tempfile.mkdtemp())
+	entry_dir = Path(tempfile.mkdtemp(dir=str(_drift_session_root()), prefix="pex_entry_"))
 	try:
 		shutil.copy2(
 			str(repo_root / "tools" / "deploy" / "pex_entry.py"),
@@ -107,7 +115,7 @@ def build_drift_pex(repo_root: Path, dist: Path) -> Path:
 	python_version = detect_python_version(venv)
 
 	# Stage entry point + tools.drift_deploy package in temp directory.
-	entry_dir = Path(tempfile.mkdtemp())
+	entry_dir = Path(tempfile.mkdtemp(dir=str(_drift_session_root()), prefix="pex_entry_"))
 	try:
 		# Entry point.
 		shutil.copy2(

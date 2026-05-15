@@ -3,10 +3,11 @@ module m_main;
 import std.io as io;
 import std.core as core;
 import std.concurrent as conc;
+import std.env as env;
 
 fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 1000);
-	val w = io.file_builder("/tmp/drift_std_io_file_builder_read_write_api.bin").read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
+	val w = io.file_builder(env.drift_tmp_path("drift_std_io_file_builder_read_write_api.bin")).read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
 	match w {
 		Ok(fw) => {
 			var buf = io.buffer(3);
@@ -29,7 +30,7 @@ fn main() nothrow -> Int {
 		Err(_) => { return 4; },
 		default => { return 5; }
 	}
-	val r = io.file_builder("/tmp/drift_std_io_file_builder_read_write_api.bin").read(true).write(false).timeout(t).build();
+	val r = io.file_builder(env.drift_tmp_path("drift_std_io_file_builder_read_write_api.bin")).read(true).write(false).timeout(t).build();
 	match r {
 		Ok(fr) => {
 			var buf2 = io.buffer(3);

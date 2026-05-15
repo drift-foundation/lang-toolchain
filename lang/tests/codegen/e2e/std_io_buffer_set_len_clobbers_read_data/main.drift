@@ -2,9 +2,10 @@ module m;
 import std.io as io;
 import std.mem as mem;
 import lang.thread as thread;
+import std.env as env;
 
 pub fn main() nothrow -> Int {
-	val path = "/tmp/drift_e2e_set_len_clobber.bin";
+	val path = env.drift_tmp_path("drift_e2e_set_len_clobber.bin");
 	// O_WRONLY|O_CREAT|O_TRUNC = 1|64|512 = 577
 	val wfd = thread.io_open(path, 577, 420);
 	if wfd < 0 { return 1; }
