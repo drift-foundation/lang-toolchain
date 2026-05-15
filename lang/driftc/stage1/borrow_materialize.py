@@ -144,6 +144,84 @@ class BorrowMaterializeRewriter:
 		"""
 		return place_expr_from_lvalue_expr(expr)
 
+	def _split_lift_place_chain(
+		self, expr: H.HExpr, *, is_mut: bool
+	) -> Tuple[List[H.HStmt], H.HPlaceExpr] | None:
+		"""
+		Walk a place-projection chain (`HField`/`HIndex`/`HUnary(DEREF)`) and
+		lift the deepest rvalue base into a hidden temp, keeping the field /
+		index / deref projections as part of the place expression.
+
+		Example: `&w.get().handle` (an `HField` whose subject is the rvalue
+		`HMethodCall w.get()`) is rewritten as
+		    val __tmp1 = w.get();   // tmp holds the &Inner result
+		    &__tmp1.handle          // borrow the field via the temp
+		instead of the legacy
+		    val __tmp1 = w.get().handle;  // FAILS when .handle is non-Copy
+		    &__tmp1
+
+		Lifting only the rvalue base avoids forcing a copy through non-Copy
+		field projections, while preserving the existing whole-expression
+		materialization shape for the no-projection case (`&compute()`).
+
+		Returns `(prefix_stmts, place_expr)` on success.  Returns `None` only
+		when the expression contains an explicit `move` somewhere in the chain
+		(in which case the caller must keep the original HBorrow shape so the
+		typed checker can emit a targeted diagnostic).
+		"""
+		# Already a place — nothing to lift.
+		direct = place_expr_from_lvalue_expr(expr)
+		if direct is not None:
+			return [], direct
+		if isinstance(expr, H.HField):
+			sub = self._split_lift_place_chain(expr.subject, is_mut=is_mut)
+			if sub is None:
+				return None
+			pfx, base_place = sub
+			return pfx, H.HPlaceExpr(
+				base=base_place.base,
+				projections=[*base_place.projections, H.HPlaceField(name=expr.name)],
+				loc=getattr(expr, "loc", base_place.loc),
+			)
+		if isinstance(expr, H.HIndex):
+			sub = self._split_lift_place_chain(expr.subject, is_mut=is_mut)
+			if sub is None:
+				return None
+			pfx_s, base_place = sub
+			pfx_i, idx = self._rewrite_expr(expr.index)
+			return pfx_s + pfx_i, H.HPlaceExpr(
+				base=base_place.base,
+				projections=[*base_place.projections, H.HPlaceIndex(index=idx)],
+				loc=getattr(expr, "loc", base_place.loc),
+			)
+		if isinstance(expr, H.HUnary) and expr.op is H.UnaryOp.DEREF:
+			sub = self._split_lift_place_chain(expr.expr, is_mut=is_mut)
+			if sub is None:
+				return None
+			pfx, base_place = sub
+			return pfx, H.HPlaceExpr(
+				base=base_place.base,
+				projections=[*base_place.projections, H.HPlaceDeref()],
+				loc=getattr(expr, "loc", base_place.loc),
+			)
+		# Rvalue base: caller already guarded against explicit `move`;
+		# defend here too for direct entries from sub-recursion.
+		if self._contains_move(expr):
+			return None
+		tmp = self._fresh("__tmp_borrow_mut" if is_mut else "__tmp_borrow")
+		return (
+			[
+				H.HLet(
+					name=tmp,
+					value=expr,
+					declared_type_expr=None,
+					binding_id=None,
+					is_mutable=bool(is_mut),
+				)
+			],
+			H.HPlaceExpr(base=H.HVar(tmp), projections=[], loc=getattr(expr, "loc", Span())),
+		)
+
 	def _contains_move(self, expr: H.HExpr) -> bool:
 		"""
 		Conservatively detect explicit `move` inside an expression.
@@ -315,32 +393,24 @@ class BorrowMaterializeRewriter:
 			return pfx_c + pfx_t + pfx_e, H.HTernary(cond=cond, then_expr=then, else_expr=els, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HBorrow):
 			pfx, subj = self._rewrite_expr(expr.subject)
-			place = self._to_place(subj)
-			# Materialize rvalue borrows into a hidden temp so borrow checking and
-			# MIR lowering can treat borrow operands as places.
-			if place is None:
-				# Guardrail: do not materialize borrows of expressions that contain an
-				# explicit `move`. The typed checker is responsible for rejecting these
-				# with a targeted diagnostic.
-				if self._contains_move(subj):
-					return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
-				tmp = self._fresh("__tmp_borrow_mut" if expr.is_mut else "__tmp_borrow")
-				return (
-					pfx
-					+ [
-						H.HLet(
-							name=tmp,
-							value=subj,
-							declared_type_expr=None,
-							binding_id=None,
-							is_mutable=bool(expr.is_mut),
-						)
-					],
-					H.HBorrow(subject=H.HPlaceExpr(base=H.HVar(tmp), projections=[]), is_mut=expr.is_mut),
-				)
-			# Canonicalize to a place expression when possible; this makes later
-			# phases less dependent on re-deriving place structure from trees.
-			return pfx, H.HBorrow(subject=place if place is not None else subj, is_mut=expr.is_mut)
+			# Guardrail: do not materialize borrows of expressions that contain an
+			# explicit `move`. The typed checker is responsible for rejecting these
+			# with a targeted diagnostic.
+			if self._contains_move(subj):
+				return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
+			# Lift the deepest rvalue base of any HField/HIndex/HUnary(DEREF) chain
+			# into a hidden temp, keeping the projections as part of the borrow's
+			# place expression.  This avoids the legacy whole-expression
+			# materialization that copied the leaf value into the temp — which
+			# breaks `&w.get().handle` when `.handle` is non-Copy.  Behaviour for
+			# the already-a-place case and the no-projection rvalue case is
+			# unchanged (the helper returns the same shapes the legacy code
+			# produced for those inputs).
+			split = self._split_lift_place_chain(subj, is_mut=expr.is_mut)
+			if split is None:
+				return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
+			lift_pfx, place = split
+			return pfx + lift_pfx, H.HBorrow(subject=place, is_mut=expr.is_mut)
 		if isinstance(expr, getattr(H, "HMove", ())):
 			pfx, subj = self._rewrite_expr(expr.subject)
 			return pfx, H.HMove(

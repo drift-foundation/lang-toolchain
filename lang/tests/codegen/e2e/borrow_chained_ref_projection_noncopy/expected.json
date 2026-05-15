@@ -1,0 +1,5 @@
+{
+  "description": "e2e regression (mariadb team, 2026-05-14): `&recv.method().<proj>` where method returns a ref (or owned non-Copy value) and <proj> is a non-Copy field / array element / deref must compile.  Pre-fix the stage1 borrow_materialize pass lifted the whole projection chain into a hidden temp (`val __tmp = recv.method().field; &__tmp`) which forced a copy of the leaf and was rejected as 'cannot copy value of type T (use move <expr>)'.  Fix: lift ONLY the deepest rvalue base into the temp, keep field/index/deref projections as part of the borrow place expression.  This case pins all three arms of `_split_lift_place_chain`: HField (`&w.get().handle`, `&_build().handle`), HIndex (`&w.handles_ref()[i]`), and HUnary(DEREF) (`&*w.inner_ref()`).",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}

@@ -1,0 +1,96 @@
+module main;
+
+// LANGUAGE_BUG regression (mariadb team, 2026-05-14):
+// `&recv.method().field` was rejected as "cannot copy value of type T
+// (use move <expr>)" when the method returns `&Outer` and `.field` is
+// a non-Copy nested type.
+//
+// Root cause: `borrow_materialize` (stage1) lifted the entire HField
+// chain into a hidden temp:
+//   val __tmp_borrow = recv.method().field;  // copies non-Copy .field
+//   &__tmp_borrow
+// — which forced a copy of the leaf field through the synthetic
+// `val`.  Fix: when the borrow subject is an HField/HIndex/HUnary(DEREF)
+// chain whose deepest base is an rvalue (call/method-call), lift ONLY
+// the rvalue base and keep the projections as part of the borrow's
+// place expression:
+//   val __tmp_borrow = recv.method();   // tmp holds the &Outer result
+//   &__tmp_borrow.field                 // borrow the field via the temp
+//
+// This file pins all three arms of `_split_lift_place_chain`:
+//   - HField  via `&w.get().handle` and `&_build().handle`
+//   - HIndex  via `&w.handles_ref()[i]`
+//   - HUnary(DEREF) via `&*w.inner_ref()`
+// Pre-fix every case failed at type-check with the "cannot copy"
+// diagnostic; post-fix they compile and the borrow round-trips.
+
+import std.core as core;
+import std.console as cons;
+
+pub struct Handle { pub raw: Int }
+implement core.Destructible for Handle {
+	pub fn destroy(var self: Handle) nothrow -> Void { return; }
+}
+
+pub struct Inner { pub handle: Handle }
+implement core.Destructible for Inner {
+	pub fn destroy(var self: Inner) nothrow -> Void { return; }
+}
+
+pub struct Wrapper { pub inner: Inner, pub handles: Array<Handle> }
+implement core.Destructible for Wrapper {
+	pub fn destroy(var self: Wrapper) nothrow -> Void { return; }
+}
+
+implement Wrapper {
+	pub fn get(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+	pub fn inner_ref(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+	pub fn handles_ref(self: &Wrapper) nothrow -> &Array<Handle> { return &self.handles; }
+}
+
+fn _peek(h: &Handle) nothrow -> Int { return h.raw; }
+fn _peek_inner(i: &Inner) nothrow -> Int { return i.handle.raw; }
+
+// Owned-return variant of the same shape: function returns Inner by
+// value (non-Copy owned).  Pre-fix this also failed because the
+// whole-chain lift tried to copy the leaf Handle.  Post-fix the
+// rvalue Inner is lifted into the temp, then the field is borrowed
+// from the temp.
+fn _build() nothrow -> Inner { return Inner(handle = Handle(raw = 99)); }
+
+fn main() nothrow -> Int {
+	var handles: Array<Handle> = [];
+	handles.push(Handle(raw = 10));
+	handles.push(Handle(raw = 20));
+	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)), handles = move handles);
+
+	// === HField branch through rvalue base ===
+	// Ref-returning method case: get() returns &Inner.
+	val n1 = _peek(&w.get().handle);
+	if n1 != 42 { return 1; }
+	// Owned-returning function case: _build() returns Inner.
+	val n2 = _peek(&_build().handle);
+	if n2 != 99 { return 2; }
+
+	// === HIndex branch through rvalue base ===
+	// handles_ref() returns &Array<Handle>; indexing it gives Handle.
+	// Pre-fix this hit the same whole-expression-lift path and was
+	// rejected for trying to copy Handle into __tmp_borrow.  Post-fix
+	// the array reference is lifted into the temp; indexing happens
+	// through the place expression.
+	val n3 = _peek(&w.handles_ref()[0]);
+	if n3 != 10 { return 3; }
+	val n4 = _peek(&w.handles_ref()[1]);
+	if n4 != 20 { return 4; }
+
+	// === HUnary(DEREF) branch through rvalue base ===
+	// `&*inner_ref()` derefs the returned &Inner and immediately
+	// re-borrows it.  Exercises the HUnary(DEREF) arm of
+	// _split_lift_place_chain: the method call is lifted into the
+	// temp, the deref is kept as part of the place expression.
+	val n5 = _peek_inner(&*w.inner_ref());
+	if n5 != 42 { return 5; }
+
+	cons.println("ok");
+	return 0;
+}

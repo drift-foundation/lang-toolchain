@@ -1,5 +1,119 @@
 # Drift development history
 
+## 2026-05-15 (LANGUAGE_BUG fix: chained borrow projection through a ref-returning call rejected as copy)
+- **LANGUAGE_BUG fix.** Release 0.31.87, ABI unchanged at 14.
+  Deferred CORE_BUG #1 from the mariadb team's two-blocker report;
+  picked up after the timed-I/O fix landed.  Workaround the team
+  used in the meantime: bind an intermediate `val r: &Inner = arc.get();`
+  then `&r.slot`.
+
+  **Customer report.**  `val v: &Mutex<T> = &arc.get().slot;`
+  rejected at type-check as
+  `cannot copy value of type 'Mutex<T>' (use move <expr>) [E-AUTO-...]`,
+  even though the user wanted a borrow (not a copy) and `arc.get()`
+  returns `&Inner` (a place chain through a ref).  Minimal repro
+  reduced to the same shape with a plain non-Copy struct field:
+
+  ```drift
+  pub struct Handle { pub raw: Int }        // non-Copy (Destructible)
+  pub struct Inner  { pub handle: Handle }  // non-Copy (Destructible)
+  implement Wrapper {
+    pub fn get(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+  }
+  ...
+  val n = _peek(&w.get().handle);  // rejected as "cannot copy Handle"
+  ```
+
+  **Root cause.**  Stage1 borrow-materialization
+  (`lang/driftc/stage1/borrow_materialize.py::_rewrite_expr` for
+  `HBorrow`) handles `&<rvalue>` by lifting the subject into a
+  hidden temp and borrowing the temp.  Its `_to_place` helper
+  (`place_expr.place_expr_from_lvalue_expr`) recognised
+  `HVar` / `HField` / `HIndex` / `HUnary(DEREF)` chains as places
+  only if the deepest base was already a place.  When the base
+  was an rvalue call (`HMethodCall` / `HCall`), it returned `None`
+  and the whole chain was lifted as a single value:
+
+  ```python
+  # legacy whole-expression materialization
+  val __tmp_borrow = w.get().handle  # ← copies non-Copy .handle: fails type-check
+  &__tmp_borrow
+  ```
+
+  For a non-Copy leaf field (`Handle`, `Mutex<T>`, any
+  `Destructible`), the synthetic `val __tmp = <chain>` was
+  rejected by `_require_copy_value` because it forced a copy
+  through the destination slot — exactly the diagnostic the user
+  saw.  The customer's `&arc.get().slot` hit this on a `Mutex<T>`
+  field; the language reduction hit it on a plain non-Copy struct
+  field.
+
+  The whole-expression lift was always semantically wrong for any
+  non-Copy field projection — it was just *invisible* for Copy
+  leaves because `val tmp = copy_value; &tmp` happens to produce
+  the right pointer.  The bug surface scaled exactly with how
+  much non-Copy state customers projected through ref-returning
+  methods, which is to say "fat-Arc-shaped state."
+
+  **Fix.**  Lift only the deepest *rvalue base* of the chain into
+  a temp, keep the field / index / deref projections as part of
+  the borrow's place expression:
+
+  ```python
+  # post-fix split lift
+  val __tmp_borrow = w.get()      # tmp holds &Inner (a Copy reference)
+  &__tmp_borrow.handle            # borrow the field via the temp
+  ```
+
+  Helper: `BorrowMaterializeRewriter._split_lift_place_chain`
+  (stage1 `borrow_materialize.py`).  Walks an `HField` / `HIndex`
+  / `HUnary(DEREF)` chain top-down; for each layer recurses on
+  the subject and appends the corresponding projection
+  (`HPlaceField` / `HPlaceIndex` / `HPlaceDeref`) to the resulting
+  `HPlaceExpr`; for the leaf rvalue lifts that single expression
+  into a hidden temp (`__tmp_borrow{,_mut}<N>`) and returns
+  `HPlaceExpr(base=HVar(tmp), projections=[])`.  The HBorrow
+  rewrite now always delegates to this helper (after the existing
+  `_contains_move` guard) instead of branching on `_to_place`
+  success; the already-a-place case and the no-projection rvalue
+  case go through `place_expr_from_lvalue_expr` and reproduce the
+  same shapes the legacy code emitted.
+
+  Note: this also fixes `&compute().field` where `compute()`
+  returns owned non-Copy `T` — the rvalue `compute()` is lifted
+  to a local, then `&tmp.field` is a standard field-of-local
+  borrow.  Pre-fix this *also* errored with the same "cannot copy"
+  message; we just hadn't had a customer hit it because it's a
+  rarer shape than ref-returning methods.
+
+  **Regression-first.**  Bisected to the diagnostic site via
+  `traceback.print_stack` inserted into `_require_copy_value`
+  (uav=True only) and the HField branch at `type_checker.py:8873`.
+  The trace showed `type_stmt → type_expr(stmt.value)` going
+  *directly* to HField — there was no parent HBorrow / HCall on
+  the stack because the borrow had already been rewritten by
+  stage1 into `val __tmp_borrow = w.get().handle`.  That pointed
+  cleanly at `borrow_materialize`'s whole-expression lift.
+
+  New e2e regression at
+  `lang/tests/codegen/e2e/borrow_chained_ref_projection_noncopy/`
+  pins both the ref-returning-method case (`&w.get().handle`,
+  `get(self: &Wrapper) -> &Inner`) and the owned-returning case
+  (`&_build().handle`, `_build() -> Inner`).  Verified
+  regression-first: stashing `borrow_materialize.py` reverts the
+  fix and the e2e fails with `FAIL (unexpected checker
+  diagnostics)`; restoring the fix returns `ok`.
+
+  **Scope.**  Stage1 only; no MIR / SSA / borrow-checker / codegen
+  changes.  The lifted temp's drop ordering is whatever
+  surrounding-scope drops the existing materialization path
+  already used (the temp is a normal `val`-bound local from every
+  downstream pass's point of view).  Valgrind-clean on both
+  the ref-returning and owned-returning repros.
+
+  Targeted regression run (stage1 + checker + borrow-checker +
+  16 ref/borrow e2e cases) clean.
+
 ## 2026-05-14 (RUNTIME_BUG fix: timed I/O wait double-registered its wake timer)
 - **RUNTIME_BUG fix.** Release 0.31.86, ABI unchanged at 14.
   Symmetric to the 0.31.83 `conc.sleep` fix; closes the audit
