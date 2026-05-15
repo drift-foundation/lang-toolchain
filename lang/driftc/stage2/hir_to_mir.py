@@ -5319,6 +5319,10 @@ class HIRToMIR:
 			"extend",
 			"truncate",
 			"remove_range",
+			"len",
+			"cap",
+			"capacity",
+			"gen",
 		):
 			return False, None
 
@@ -5328,7 +5332,14 @@ class HIRToMIR:
 		recv_def = self._type_table.get(recv_ty)
 		array_ty = recv_ty
 		recv_ptr: M.ValueId | None = None
-		recv_is_mut = name not in ("get", "range")
+		# Read-only intrinsic methods: do not take an exclusive borrow
+		# of the receiver place.  `len`/`cap`/`capacity`/`gen` are
+		# field-access magic in the type checker and produce Int with
+		# no array mutation; lowering them with `is_mut=True` would
+		# reject `val arr` receivers and conflict with any outstanding
+		# shared borrow.  Matches the field-access form (`arr.len`)
+		# which never takes an exclusive borrow.
+		recv_is_mut = name not in ("get", "range", "len", "cap", "capacity", "gen")
 		if name == "range_mut":
 			recv_is_mut = True
 		if name == "range":
@@ -5378,6 +5389,32 @@ class HIRToMIR:
 			dest = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=dest, struct_ty=ret_ty, args=[recv_ptr, gen_val]))
 			self._local_types[dest] = ret_ty
+			return True, dest
+
+		# Bug 1 fix: method-call form of the Array length / capacity /
+		# generation accessors lowers identically to the field-access
+		# form (see the `expr.name in ("len","cap","capacity","gen")`
+		# field-lowering branch above in this file).  All four return
+		# Int and read-only.  The checker side at
+		# `call_resolver.py` (the `len/cap/capacity/gen` arm just
+		# above the `push/pop/...` arm) already typed this as Int.
+		if name == "len":
+			if not want_value:
+				return True, None
+			dest = self.b.new_temp()
+			self.b.emit(M.ArrayLen(dest=dest, array=array_val))
+			return True, dest
+		if name in ("cap", "capacity"):
+			if not want_value:
+				return True, None
+			dest = self.b.new_temp()
+			self.b.emit(M.ArrayCap(dest=dest, array=array_val))
+			return True, dest
+		if name == "gen":
+			if not want_value:
+				return True, None
+			dest = self.b.new_temp()
+			self.b.emit(M.ArrayGen(dest=dest, array=array_val))
 			return True, dest
 
 		if name == "get":

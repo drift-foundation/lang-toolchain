@@ -97,6 +97,38 @@ pub fn main() nothrow -> Int {
 		return 24;
 	}
 
+	// (3) Destructor non-double-unlock — drop the original guard
+	// `g` here (it goes out of scope at the end of main) AFTER
+	// running through unlock_for_condvar + relock_for_condvar at
+	// least once, so the destructor takes the locked=true path.
+	// Now exercise the OTHER destructor path: take a fresh guard,
+	// unlock_for_condvar it, drop without relock.  The mutex should
+	// stay unlocked (no double-unlock corrupting state).  Confirm
+	// by acquiring it again from a fresh lock() — if the destructor
+	// double-unlocked, this lock() would observe whatever garbage
+	// state the second unlock left, and a subsequent concurrent
+	// locker would race past.  Spin-CAS Mutex semantics: a clean
+	// "false" (unlocked) is what we want after a drop-while-unlocked.
+	{
+		var g2 = m.get().lock();
+		g2.unlock_for_condvar();
+		// g2 goes out of scope here.  Destructor takes the
+		// locked=false branch — does NOT call atomic_store(false).
+		// If it incorrectly double-unlocked, the spin-CAS lock
+		// state would be left "false" anyway (idempotent), but
+		// the lock state machine is fragile under concurrent
+		// access; the assertion is that we don't corrupt the
+		// invariant.
+	}
+	// After the dropped-while-unlocked guard, the mutex should be
+	// re-lockable cleanly.
+	var g3 = m.get().lock();
+	val recovered = *g3.get_mut();
+	if recovered != 99 {
+		cons.eprintln("FAIL: after drop-while-unlocked, lock observed " + fmt.format_int(recovered) + " (expected 99 — destructor may have corrupted state)");
+		return 25;
+	}
+
 	cons.println("ok");
 	return 0;
 }

@@ -94,6 +94,20 @@ def _attach_ledger(func: M.MirFunc) -> None:
 	setattr(func, "_ownership_ledger", ledger)
 
 
+def _run_cleanup_then_attach_ledger(func: M.MirFunc, type_table: TypeTable) -> None:
+	"""Post Bug 2 architecture flip helper: build ledger, run
+	cleanup_authoring (which emits MoveOut+DropValue at CleanupHook
+	positions — guarded, edge-elaborated, or unguarded — depending on
+	verdict and flag-managed status), then rebuild the ledger so
+	string_arc consults the post-authoring per-instruction state.
+
+	Matches the production driver order at `driftc.py`."""
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
+	_attach_ledger(func)
+	author_cleanup(func, type_table=type_table)
+	_attach_ledger(func)
+
+
 def _build_one_flagged_one_unflagged(type_table: TypeTable) -> M.MirFunc:
 	"""Function with two destructible locals at the same Return:
 	  - `flagged`: gets a 3C flag (user move on a conditional arm).
@@ -124,7 +138,15 @@ def _build_one_flagged_one_unflagged(type_table: TypeTable) -> M.MirFunc:
 	then_block.instructions.append(M.MoveOut(dest="t_move", local="flagged", ty=drop_ty))
 	then_block.instructions.append(M.StoreLocal(local="t", value="t_move"))
 	then_block.terminator = M.Goto(target="if_join")
+	# Post Bug 2 architecture flip: cleanup_authoring is the sole
+	# cleanup-drop emitter, driven by CleanupHook markers HIR→MIR
+	# emits at scope-exit positions.  This fixture mirrors that by
+	# placing a CleanupHook at the start of the function-exit block,
+	# listing both candidates in reverse-decl order.
 	join_block = M.BasicBlock(name="if_join")
+	join_block.instructions.append(
+		M.CleanupHook(scope_id=0, candidates=[("unflagged", drop_ty), ("flagged", drop_ty)])
+	)
 	join_block.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
 	return func
@@ -172,7 +194,7 @@ def test_site3_skips_flagged_local_at_return() -> None:
 	# Confirm 3C added a flag for `flagged`.
 	assert is_flag_managed(func, "flagged"), "test setup: 3C did not flag `flagged`"
 	assert not is_flag_managed(func, "unflagged"), "test setup: `unflagged` was unexpectedly flagged"
-	_attach_ledger(func)
+	_run_cleanup_then_attach_ledger(func, type_table)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
 	# Count drops for `flagged`: 3C's drop block contributes exactly
 	# one `MoveOut(flagged) + DropValue` pair; site 3 must contribute
@@ -201,7 +223,7 @@ def test_site3_still_drops_unflagged_destructible_at_same_return() -> None:
 	type_table = TypeTable()
 	func = _build_one_flagged_one_unflagged(type_table)
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
-	_attach_ledger(func)
+	_run_cleanup_then_attach_ledger(func, type_table)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
 	unflagged_drops = _all_drop_destructible_pairs_for(func, "unflagged")
 	assert len(unflagged_drops) >= 1, (
@@ -227,7 +249,7 @@ def test_no_second_drop_pair_for_flagged_local_outside_3c_drop_block() -> None:
 	type_table = TypeTable()
 	func = _build_one_flagged_one_unflagged(type_table)
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
-	_attach_ledger(func)
+	_run_cleanup_then_attach_ledger(func, type_table)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
 	pairs = _all_drop_destructible_pairs_for(func, "flagged")
 	allowed_blocks = {"if_then"}
@@ -492,7 +514,7 @@ def test_site3_widens_path_dependent_variant_into_init_set() -> None:
 	type_table = TypeTable()
 	vty = _declare_destructible_variant(type_table)
 	func = _build_conditional_variant_init(type_table, vty)
-	_attach_ledger(func)
+	_run_cleanup_then_attach_ledger(func, type_table)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
 	# A drop sequence for `v` must appear in the join block (or
 	# expanded out of `_drop_destructible_local` in any block).
@@ -530,7 +552,7 @@ def test_site3_does_not_widen_non_variant_path_dependent_local() -> None:
 	join_block = M.BasicBlock(name="if_join")
 	join_block.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
-	_attach_ledger(func)
+	_run_cleanup_then_attach_ledger(func, type_table)
 	insert_string_arc(func, type_table=type_table, fn_infos={})
 	drops = _all_drop_destructible_pairs_for(func, "s")
 	assert not drops, (

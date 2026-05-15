@@ -7054,31 +7054,77 @@ def compile_stubbed_funcs(
 				_author_match_cleanup(func, type_table=shared_type_table)
 				ledger = _ol_build(func, drop_policy=lambda _t: None)
 				setattr(func, "_ownership_ledger", ledger)
+		# Phase 3C — runtime drop-flag PLANNING / INSTRUMENTATION pass.
+		# Bug 2 architecture flip (2026-05-15): drop_flags now runs
+		# BEFORE cleanup_authoring as a planning-only pass.  It
+		# selects flag-managed locals (function-exit liveness OR
+		# non-variant PathDependent at any CleanupHook), allocates
+		# flag locals, inserts entry init + set-on-StoreLocal +
+		# clear-on-MoveOut bookkeeping, and attaches
+		# `_drop_flag_managed_locals` + `_drop_flag_for_local`
+		# metadata.  It emits NO cleanup drops; that work moved into
+		# cleanup_authoring at the CleanupHook positions HIR→MIR
+		# already emits.  See `lang/driftc/stage2/drop_flags.py`.
+		_drop_flags_mutated_fns: list[FunctionId] = []
+		if shared_type_table is not None:
+			with _timed("drop_flags"):
+				from lang.driftc.stage2.drop_flags import insert_drop_flags as _insert_drop_flags
+				from lang.driftc.stage2.drop_policy_compute import compute_drop_policy as _compute_drop_policy
+				_drop_policy_callable = lambda ty: _compute_drop_policy(shared_type_table, ty)
+				for fn_id, func in mir_funcs_by_id.items():
+					_new_func, _mutated = _insert_drop_flags(
+						func,
+						type_table=shared_type_table,
+						drop_policy=_drop_policy_callable,
+					)
+					mir_funcs_by_id[fn_id] = _new_func
+					if _mutated:
+						_drop_flags_mutated_fns.append(fn_id)
+			# Rebuild the ownership ledger AFTER drop_flags planning
+			# FOR THE FUNCTIONS IT MUTATED.  Planning inserts entry
+			# init + per-StoreLocal/MoveOut set/clear bookkeeping,
+			# which shifts every subsequent `(block, idx)` key.  The
+			# next pass (cleanup_authoring) consults the ledger via
+			# `verdict_at((block, idx), local, ...)` at each
+			# CleanupHook position; without this rebuild it reads
+			# stale state and may emit wrong drops (or none at all).
+			# Mandatory per K's architecture review (2026-05-15).
+			#
+			# Narrowing: un-mutated functions returned early at the
+			# no-flag-locals branch — their pre-existing ledger is
+			# still index-aligned.  Common case (most functions have
+			# no path-dependent destructible locals).
+			with _timed("ledger_rebuild_post_drop_flags"):
+				for fn_id in _drop_flags_mutated_fns:
+					func = mir_funcs_by_id[fn_id]
+					ledger = _ol_build(func, drop_policy=lambda _t: None)
+					setattr(func, "_ownership_ledger", ledger)
 		# Phase 4 site-1 — cleanup re-authoring pass.  All HIR→MIR
 		# scope-drop sites (function-exit, `lower_function_body` /
 		# `lower_block` fall-through, lambda-block exits, `HBreak` /
 		# `HContinue`) emit `M.CleanupHook` markers.  This pass walks
 		# each block, queries `verdict_at` for every candidate, and
-		# emits the canonical `MoveOut + DropValue` sequences.  Site 1
-		# drop authority is now `verdict_at`; HIR-side `_moved_locals`
-		# / `_mark_moved` / `_scope_drop_verdict` / `_emit_scope_drops`
-		# all retired in patch 6c (2026-04-24).  See
-		# `lang/driftc/stage2/cleanup_authoring.py`.
+		# emits the canonical `MoveOut + DropValue` sequences — guarded
+		# or unguarded depending on the ledger verdict and whether the
+		# local is flag-managed by the drop_flags planning pass above.
+		# Site 1 drop authority is `verdict_at`; HIR-side
+		# `_moved_locals` / `_mark_moved` / `_scope_drop_verdict` /
+		# `_emit_scope_drops` all retired in patch 6c (2026-04-24).
+		# See `lang/driftc/stage2/cleanup_authoring.py`.
 		if shared_type_table is not None:
 			from lang.driftc.stage2.cleanup_authoring import (
 				author_cleanup as _author_cleanup,
 			)
 			for fn_id, func in mir_funcs_by_id.items():
 				_author_cleanup(func, type_table=shared_type_table)
-				# Patch 3 re-enables nested-scope `lower_block`
-				# fall-through migration to `M.CleanupHook`, which
-				# expands the set of CleanupHooks `_author_cleanup`
-				# rewrites.  Rebuild the ledger so downstream consumers
-				# (string_arc, drop_flags, site-2 trim) see the
+				# Rebuild the ledger so string_arc sees the
 				# post-authoring per-instruction state instead of the
-				# stale pre-authoring snapshot.  Stale state caused
-				# site-4 tripwire fires under patch 3 before the
-				# rebuild was added.
+				# stale pre-authoring snapshot.  Required for both
+				# the original patch-3 nested-scope expansion AND the
+				# Bug 2 architecture flip's block-splitting guarded
+				# emissions.  string_arc consults `verdict_at` at
+				# every `drop_before_overwrite` site; stale state
+				# causes site-4 tripwire fires.
 				ledger = _ol_build(func, drop_policy=lambda _t: None)
 				setattr(func, "_ownership_ledger", ledger)
 		if drift_debug.enabled("ownership_ledger"):
@@ -7142,58 +7188,15 @@ def compile_stubbed_funcs(
 					needs_drop=_needs_drop,
 					emit=_ol_stderr_emit,
 				)
-		# Phase 3C — runtime drop-flag insertion for path-dependent
-		# destructible locals.  Runs between HIR→MIR and string_arc.
-		_drop_flags_mutated_fns: list[FunctionId] = []
-		with _timed("drop_flags"):
-			from lang.driftc.stage2.drop_flags import insert_drop_flags as _insert_drop_flags
-			from lang.driftc.stage2.drop_policy_compute import compute_drop_policy as _compute_drop_policy
-			_drop_policy_callable = lambda ty: _compute_drop_policy(shared_type_table, ty)
-			for fn_id, func in mir_funcs_by_id.items():
-				_new_func, _mutated = _insert_drop_flags(
-					func,
-					type_table=shared_type_table,
-					drop_policy=_drop_policy_callable,
-				)
-				mir_funcs_by_id[fn_id] = _new_func
-				if _mutated:
-					_drop_flags_mutated_fns.append(fn_id)
-		# Rebuild the ownership ledger AFTER drop_flags FOR THE
-		# FUNCTIONS IT MUTATED.  The ledger attached by
-		# `cleanup_authoring` is keyed by `(block, idx)` pairs from the
-		# pre-drop_flags MIR.  When drop_flags inserts drop-flag init
-		# instructions (`ConstBool(__df*, False)` +
-		# `StoreLocal(__drop_flag_*, __df*)`) at block heads, every
-		# subsequent index shifts.  string_arc then consults the
-		# ledger using POST-drop_flags indices via
-		# `_ledger.verdict_at((block, idx), local, ...)`, so without a
-		# rebuild it reads stale state.  In particular, the verdict at
-		# the first `StoreLocal(L, …)` for a freshly-declared
-		# destructible local can come from a different instruction's
-		# post-state and return `MUST_DROP` over an UNINIT slot —
-		# string_arc then emits drop-before-overwrite reading uninit
-		# memory and SSA crashes.  Pinned by
-		# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
-		# Originally introduced by 0.31.9 Phase 3B step-1
-		# (commit 94a9c44d "step 3 done"); the comment in
-		# `string_arc.py:911-919` claiming "drop-before-overwrite
-		# decisions only depend on per-local state at StoreLocal points
-		# within the function body — none of those points are mutated
-		# by drop_flags" was wrong: drop_flags shifts the indices.
-		#
-		# Narrowing: `insert_drop_flags` returns `(func, mutated)`.
-		# Only mutated functions need the rebuild; un-mutated ones
-		# returned early at the no-flag-locals branch and their
-		# pre-existing ledger is still index-aligned.  This is the
-		# common case (most functions have no path-dependent
-		# destructible locals); the unconditional rebuild was 60-90 %
-		# overhead vs the changed-only rebuild on representative
-		# compiles.
-		with _timed("ledger_rebuild_post_drop_flags"):
-			for fn_id in _drop_flags_mutated_fns:
-				func = mir_funcs_by_id[fn_id]
-				ledger = _ol_build(func, drop_policy=lambda _t: None)
-				setattr(func, "_ownership_ledger", ledger)
+		# Bug 2 architecture flip (2026-05-15): the Phase 3C drop_flags
+		# pass moved BEFORE cleanup_authoring.  Its pre-flip position
+		# here (between observe-gate and string_arc) emitted Step-5
+		# Return-block guarded drops; that work migrated into
+		# cleanup_authoring at the CleanupHook positions, so this
+		# slot is intentionally empty.  See the drop_flags planning
+		# call above (after match_cleanup_authoring) for the new
+		# placement, and `work/stdlib-condvar/pr2_handoff.md` for
+		# the architecture rationale.
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				mir_funcs_by_id[fn_id] = insert_string_arc(

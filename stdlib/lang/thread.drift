@@ -104,19 +104,34 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_current() nothrow -> VtHandle;
 
 /// Returns `1` if the current VT has been cancelled (via
-/// `vt_cancel` from another VT or from `std.concurrent` cancellation
-/// paths), `0` otherwise.  Returns `0` when called outside a VT
-/// context.
+/// `VirtualThread.cancel` / `vt_cancel` from another VT), `0`
+/// otherwise.  Returns `0` when called outside a VT context.
 ///
-/// Primary use: after `vt_park` / `vt_park_until` returns, stdlib
-/// parking primitives (`std.concurrent.Condvar`, channel `recv`,
-/// etc.) read this flag to distinguish a cancellation-driven wake
-/// from a normal signal / timeout, so they can surface a typed
-/// `CANCELLED` error rather than silently returning Ok.
+/// **Intended use: compute-loop cooperative cancellation.**  A
+/// long-running CPU-bound loop voluntarily polls this flag at
+/// safe-point granularity and exits early when it observes
+/// cancellation:
+///
+/// ```
+/// while not thread.vt_is_cancelled() and not done(work) {
+///     work = step(work);
+/// }
+/// ```
+///
+/// **Not useful from parking primitives.**  The runtime's
+/// scheduler kills parked VTs at worker-dispatch time when their
+/// `cancelled` flag is set
+/// (`lang/language_runtime/posix/thread_runtime.c:858-872`).  A
+/// VT parked inside `vt_park` / `vt_park_until` that gets
+/// cancelled by another thread is reaped at re-dispatch BEFORE
+/// any post-park user code runs — so `Condvar.wait` and similar
+/// primitives have no opportunity to read this flag and surface
+/// a `CANCELLED` error.  Future runtime work to let cancelled
+/// VTs run a cleanup epilogue may change this; until then,
+/// parking primitives surface CLOSED / TIMEOUT instead.
 ///
 /// Backed by the runtime's per-VT `cancelled` atomic which the
-/// cancel path (`vt_cancel`) sets before bumping `park_token` to
-/// wake the parked VT.
+/// cancel path (`vt_cancel`) sets.
 @intrinsic pub fn vt_is_cancelled() nothrow -> Int;
 @intrinsic pub fn vt_park(reason: Int) nothrow -> Void;
 @intrinsic pub fn vt_park_until(deadline_ms: Int) nothrow -> Void;

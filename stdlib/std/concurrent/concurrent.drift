@@ -448,6 +448,7 @@ pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
 ///
 /// **See also:** `MutexGuard.get_mut`, `lock`.
 pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
+	assert(g.locked, "mutex_guard_get_mut called on unlocked guard (Condvar unlock_for_condvar without matching relock?)");
 	unsafe {
 		return mem.ptr_as_mut_ref<type T>(g.value_ptr);
 	}
@@ -471,8 +472,16 @@ implement<T> MutexGuard<T> {
 	///
 	/// The reference is valid until the guard is dropped.
 	///
+	/// **Asserts that the guard is currently locked.**  Calling
+	/// after `unlock_for_condvar` without a matching
+	/// `relock_for_condvar` is a contract violation and panics —
+	/// otherwise the caller could read/mutate the protected value
+	/// while the underlying lock is not held, breaking mutual
+	/// exclusion.
+	///
 	/// **See also:** `mutex_guard_get_mut`, `Mutex.lock`.
 	pub fn get_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
+		assert(self.locked, "MutexGuard.get_mut called on unlocked guard (Condvar unlock_for_condvar without matching relock?)");
 		unsafe {
 			return mem.ptr_as_mut_ref<type T>(self.value_ptr);
 		}
@@ -518,6 +527,7 @@ implement<T> MutexGuard<T> {
 
 implement<T> core.BorrowMut<T> for MutexGuard<T> {
 	pub fn borrow_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
+		// Inherits the locked-state assertion from get_mut.
 		return self.get_mut();
 	}
 }
@@ -629,7 +639,7 @@ implement Condvar {
 		// claim one or the list empties.  Skip-on-CAS-fail handles
 		// the dead-record case (waiter timed out / self-cancelled
 		// before we got here).
-		val claimed = _claim_one(&self.state.list_lock);
+		val claimed = _claim_one(&self.state.get().list_lock);
 		match claimed {
 			Optional::Some(w) => { thread.vt_unpark(w.get().vt); },
 			default => { }
@@ -642,7 +652,7 @@ implement Condvar {
 	/// Same thread-safety as `signal_one` — does not require the
 	/// predicate's mutex.
 	pub fn signal_all(self: &Condvar) nothrow -> Void {
-		val claimed = _drain_active(&self.state.list_lock);
+		val claimed = _drain_active(&self.state.get().list_lock);
 		_unpark_all(&claimed);
 	}
 
@@ -659,8 +669,8 @@ implement Condvar {
 	/// primitive because getting the flag/broadcast ordering wrong
 	/// is a common source of pool / channel / shutdown bugs.
 	pub fn close(self: &Condvar) nothrow -> Void {
-		self.state.closed.store(true, atomic.MemoryOrder::Release());
-		val claimed = _drain_active(&self.state.list_lock);
+		self.state.get().closed.store(true, atomic.MemoryOrder::Release());
+		val claimed = _drain_active(&self.state.get().list_lock);
 		_unpark_all(&claimed);
 	}
 
@@ -675,30 +685,53 @@ implement Condvar {
 	/// `Err(ConcurrencyError(kind=REQUIRES_VTHREAD))` if called
 	/// outside a VT context — does NOT park.
 	pub fn wait<T>(self: &Condvar, guard: &mut MutexGuard<T>) nothrow -> core.Result<Void, ConcurrencyError> {
-		return _wait_inner(self, guard, 0);
+		return _wait_inner(self, guard, false, 0);
 	}
 
 	/// Like `wait`, but returns `Err(TIMEOUT)` if `d` elapses
 	/// before a signal arrives.
+	///
+	/// Returns `Err(ConcurrencyError(kind=FAILED))` if `d.millis`
+	/// is negative — matches the `_check_duration` contract used
+	/// elsewhere in `std.concurrent` (`sleep` / `join_timeout`).
 	pub fn wait_timeout<T>(self: &Condvar, guard: &mut MutexGuard<T>, d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
+		match _check_duration(d) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(_) => { }
+		}
 		val deadline = thread.now_ms() + d.millis;
-		return _wait_inner(self, guard, deadline);
+		return _wait_inner(self, guard, true, deadline);
 	}
 
 	/// Absolute-deadline variant of `wait_timeout`.  `deadline_ms`
 	/// is monotonic-clock absolute time (compare against
 	/// `thread.now_ms()`).
+	///
+	/// A `deadline_ms` already in the past (including 0 or
+	/// negative) returns `Err(TIMEOUT)` immediately without
+	/// parking.  This contrasts with `wait()` which is always
+	/// indefinite — there is no overload via a "0 means forever"
+	/// sentinel.  Use `wait()` for indefinite waits; use this
+	/// when you have an absolute deadline.
 	pub fn wait_until<T>(self: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) nothrow -> core.Result<Void, ConcurrencyError> {
-		return _wait_inner(self, guard, deadline_ms);
+		return _wait_inner(self, guard, true, deadline_ms);
 	}
 }
 
 
 // Common wait body shared by wait / wait_timeout / wait_until.
 //
-// `deadline_ms`: 0 = park indefinitely (vt_park(0)).  Positive =
-// absolute deadline (vt_park_until).
-fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) nothrow -> core.Result<Void, ConcurrencyError> {
+// `has_deadline=false` → park indefinitely (`vt_park(0)`); the
+// `deadline_ms` arg is ignored.
+// `has_deadline=true` → park until `deadline_ms` (absolute
+// monotonic).  A deadline already in the past (including 0 or
+// negative) returns TIMEOUT immediately without parking.
+//
+// We use an explicit flag rather than a sentinel value because 0
+// is a valid (already-expired) absolute deadline; using it as a
+// sentinel for indefinite-park caused a real bug pre-fix where
+// `wait_until(0)` parked forever instead of returning TIMEOUT.
+fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, has_deadline: Bool, deadline_ms: Int) nothrow -> core.Result<Void, ConcurrencyError> {
 	// Off-VT guard.  Must surface before any state mutation: an
 	// off-VT caller cannot park (no vt_park target), and we don't
 	// want to enqueue a Waiter { vt: 0 } that signal paths would
@@ -712,15 +745,17 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) not
 	}
 
 	// Fast path: closed.  No point enqueuing only to drain.
-	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+	if cv.state.get().closed.load(atomic.MemoryOrder::Acquire()) {
 		return core.Result::Err(ConcurrencyError(
 			kind = CONCURRENCY_KIND_CLOSED,
 			code = -3
 		));
 	}
 
-	// Deadline already passed?  Fail-fast.
-	if deadline_ms > 0 and thread.now_ms() >= deadline_ms {
+	// Deadline already passed?  Fail-fast.  Applies only when the
+	// caller specified a deadline — wait() (has_deadline=false)
+	// is always indefinite and never falls through here.
+	if has_deadline and thread.now_ms() >= deadline_ms {
 		return core.Result::Err(ConcurrencyError(
 			kind = CONCURRENCY_KIND_TIMEOUT,
 			code = -1
@@ -734,17 +769,27 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) not
 
 	// Push waiter record onto the list (under the list-lock).
 	{
-		var lg = cv.state.list_lock.lock();
+		var lg = cv.state.get().list_lock.lock();
 		val list = lg.get_mut();
 		list.push(waiter.share());
 	}
 
 	// Re-check closed AFTER push — closes the race where close()
 	// flipped the flag and drained the list between our pre-check
-	// above and our push.  If we lose the race, self-CAS and
-	// return CLOSED.
-	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+	// above and our push.  If we lose the race, self-CAS, prune
+	// our record from the list, and return CLOSED.
+	//
+	// K-review finding (2026-05-15): without the prune, the
+	// self-claimed waiter stays in the list forever — close() has
+	// already happened so no subsequent signal/drain will visit
+	// the list to remove it, AND the condvar's other waiters (if
+	// any) are also drained, so no other waker will iterate the
+	// list either.  `_prune_inactive` is O(n) over the current
+	// list; under contention this branch is rare (close racing
+	// with our push), so the cost is bounded.
+	if cv.state.get().closed.load(atomic.MemoryOrder::Acquire()) {
 		if waiter.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
+			_prune_inactive(&cv.state.get().list_lock);
 			return core.Result::Err(ConcurrencyError(
 				kind = CONCURRENCY_KIND_CLOSED,
 				code = -3
@@ -756,10 +801,10 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) not
 
 	// Release the predicate mutex and park.
 	guard.unlock_for_condvar();
-	if deadline_ms == 0 {
-		thread.vt_park(0);
-	} else {
+	if has_deadline {
 		thread.vt_park_until(deadline_ms);
+	} else {
+		thread.vt_park(0);
 	}
 	guard.relock_for_condvar();
 
@@ -769,14 +814,29 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) not
 	// claimed us.
 	val self_won = waiter.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire());
 
+	// Self-prune to prevent unbounded list growth.  Without this,
+	// a workload of pure timeouts (many wait_timeout calls, no
+	// signals) leaves dead waiter records in the list — they're
+	// only pruned by later signal_one / signal_all CAS-fail-skip,
+	// and never if no signal arrives.  We walk under the
+	// list_lock and remove all inactive records — our own (which
+	// we just self-claimed) and any others left over from earlier
+	// self-claims.  O(n) per wake, bounded by current waiter
+	// count.  Skipped when self_won is false: a signal claimed
+	// us, which means signal_one already pulled our record out of
+	// the list before unparking us.
+	if self_won {
+		_prune_inactive(&cv.state.get().list_lock);
+	}
+
 	// Classify return.  Order: closed > timeout > normal/spurious.
-	if cv.state.closed.load(atomic.MemoryOrder::Acquire()) {
+	if cv.state.get().closed.load(atomic.MemoryOrder::Acquire()) {
 		return core.Result::Err(ConcurrencyError(
 			kind = CONCURRENCY_KIND_CLOSED,
 			code = -3
 		));
 	}
-	if self_won and deadline_ms > 0 and thread.now_ms() >= deadline_ms {
+	if self_won and has_deadline and thread.now_ms() >= deadline_ms {
 		return core.Result::Err(ConcurrencyError(
 			kind = CONCURRENCY_KIND_TIMEOUT,
 			code = -1
@@ -797,7 +857,7 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, deadline_ms: Int) not
 fn _claim_one(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Optional<core.Arc<PoolWaiter>> {
 	var lg = list_lock.lock();
 	val list = lg.get_mut();
-	while list.len() > 0 {
+	while list.len > 0 {
 		var w = list.remove(0);
 		if w.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
 			return Optional::Some(move w);
@@ -818,7 +878,7 @@ fn _drain_active(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Arra
 	var claimed: Array<core.Arc<PoolWaiter>> = [];
 	var lg = list_lock.lock();
 	val list = lg.get_mut();
-	while list.len() > 0 {
+	while list.len > 0 {
 		var w = list.remove(0);
 		if w.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
 			claimed.push(move w);
@@ -828,9 +888,31 @@ fn _drain_active(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Arra
 	return move claimed;
 }
 
+// Walk the list under list_lock and drop every inactive record.
+// Called from _wait_inner after a self-claimed wake.  Bounds the
+// list size for workloads with many timeouts and no signals.
+//
+// Iteration: scan from index 0; if active is false, remove and
+// re-scan from same index (since remove shifts subsequent
+// entries left).  If active is true, advance.  O(n) worst case
+// per call; n is bounded by current waiter count.
+fn _prune_inactive(list_lock: &Mutex<Array<core.Arc<PoolWaiter>>>) nothrow -> Void {
+	var lg = list_lock.lock();
+	val list = lg.get_mut();
+	var i = 0;
+	while i < list.len {
+		if list[i].get().active.load(atomic.MemoryOrder::Acquire()) {
+			i = i + 1;
+		} else {
+			val _ = list.remove(i);
+			// Don't increment i — the entry at i+1 has shifted to i.
+		}
+	}
+}
+
 fn _unpark_all(claimed: &Array<core.Arc<PoolWaiter>>) nothrow -> Void {
 	var i = 0;
-	while i < claimed.len() {
+	while i < claimed.len {
 		thread.vt_unpark(claimed[i].get().vt);
 		i = i + 1;
 	}

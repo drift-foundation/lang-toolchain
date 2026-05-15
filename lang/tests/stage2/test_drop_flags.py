@@ -151,19 +151,37 @@ def _build_terminating_arm_fixture() -> tuple[M.MirFunc, TypeTable, int]:
 	return func, type_table, drop_ty
 
 
-def test_terminating_arm_leak_shape_inserts_flag_guarded_drop_at_trailing_return() -> None:
+def test_terminating_arm_leak_shape_allocates_flag_and_attaches_metadata() -> None:
+	"""Post Bug 2 architecture flip: `insert_drop_flags` is a pure
+	planning pass.  It allocates the flag, instruments entry init and
+	set/clear, and attaches metadata — but emits NO cleanup drops.
+
+	The flag-guarded drop at the scope-exit `CleanupHook` is emitted by
+	`cleanup_authoring.author_cleanup` (the sole emission point per the
+	architecture).  End-to-end coverage of the emission shape lives in
+	`test_cleanup_authoring_flag_guarded.py` plus the destructor-order
+	e2e.  This test pins the planning contract."""
 	func, type_table, _ = _build_terminating_arm_fixture()
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
-	# Flag local allocated.
-	assert "__drop_flag_x" in func.locals
-	# Both Return-terminating blocks (then with `return move x`, join
-	# with `return`) get a flag-guarded drop sequence — uniform per the
-	# design.  We look for at least one new drop-block per Return.
-	drop_block_names = [n for n in func.blocks if n.startswith("if_join_drop_x") or n.startswith("if_then_drop_x")]
-	assert any(n.startswith("if_join_drop_x") for n in drop_block_names), (
-		"flag-guarded drop block missing at trailing if_join Return — "
-		"this is the bucket-6 leak shape; without the new drop block, "
-		"x leaks on the b=false runtime path"
+	assert "__drop_flag_x" in func.locals, "flag local must be allocated for bucket-6 carrier"
+	managed = getattr(func, "_drop_flag_managed_locals", set())
+	assert "x" in managed, (
+		"_drop_flag_managed_locals must include `x` — this is the metadata "
+		"cleanup_authoring consults to decide guarded vs unguarded emission"
+	)
+	flag_for = getattr(func, "_drop_flag_for_local", {})
+	assert flag_for.get("x") == "__drop_flag_x", (
+		"_drop_flag_for_local must map `x` → its allocated flag local; "
+		"cleanup_authoring uses this for `LoadLocal(flag)` and must not "
+		"reconstruct the name from `flag_local_name_for` (collision-unsafe)"
+	)
+	# Planning ONLY: NO drop blocks should be inserted.  The Step-5
+	# Return-block emission was retired in the Bug 2 architecture flip.
+	drop_block_names = [n for n in func.blocks if "_drop_x" in n]
+	assert drop_block_names == [], (
+		f"insert_drop_flags must NOT emit cleanup drops post-flip; "
+		f"got drop blocks: {drop_block_names}.  Cleanup drops are emitted "
+		f"by cleanup_authoring at the CleanupHook positions HIR→MIR emits."
 	)
 
 
@@ -222,46 +240,44 @@ def _build_non_terminating_fixture() -> tuple[M.MirFunc, TypeTable, int]:
 	return func, type_table, drop_ty
 
 
-def test_non_terminating_conditional_move_inserts_flag_guarded_drop_at_join() -> None:
+def test_non_terminating_conditional_move_allocates_flag_and_attaches_metadata() -> None:
+	"""Post Bug 2 architecture flip: planning only.  See
+	`test_terminating_arm_leak_shape_allocates_flag_and_attaches_metadata`
+	for the contract.  Emission shape coverage is in
+	`test_cleanup_authoring_flag_guarded.py`."""
 	func, type_table, _ = _build_non_terminating_fixture()
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
 	assert "__drop_flag_x" in func.locals
-	# A new drop-block exists for x at the trailing if_join Return.
-	drop_blocks_for_x = [n for n in func.blocks if n.startswith("if_join_drop_x")]
-	assert drop_blocks_for_x, (
-		"flag-guarded drop block missing at if_join Return — "
-		"on the b=false path (x not moved), x would leak"
-	)
-	# The if_join block's terminator should now be an IfTerminator on
-	# the flag, not the original Return.
+	flag_for = getattr(func, "_drop_flag_for_local", {})
+	assert flag_for.get("x") == "__drop_flag_x"
+	# The if_join terminator must be unchanged (planning does NOT
+	# rewrite terminators).
 	join_term = func.blocks["if_join"].terminator
-	assert isinstance(join_term, M.IfTerminator), (
-		"if_join terminator should be flag-IfTerminator after pass; got "
-		f"{type(join_term).__name__}"
+	assert isinstance(join_term, M.Return), (
+		"planning must NOT rewrite the Return terminator — the architecture "
+		"flip moved emission into cleanup_authoring at the CleanupHook "
+		f"position; got {type(join_term).__name__}"
 	)
 
 
 # -- RAII invariant ---------------------------------------------------------
 
 
-def test_raii_invariant_drops_at_original_scope_exit_point() -> None:
-	"""The flag-guarded drop must be inserted at the same source scope-
-	exit point (i.e. immediately preceding the original terminator),
-	NOT pushed earlier into a predecessor arm.  This preserves RAII:
-	for a Mutex<T> local conditionally moved, the unlock fires at the
-	source scope-exit boundary regardless of which path was taken."""
+def test_raii_invariant_planning_does_not_rewrite_terminators() -> None:
+	"""Post-flip RAII invariant: planning does NOT rewrite terminators.
+	The original `Goto(if_join)` from if_then must survive; rewriting
+	it would imply cleanup was pushed earlier — RAII violation.
+
+	End-to-end RAII timing (drop emitted at the original scope-exit
+	point) is covered by `test_cleanup_authoring_flag_guarded.py` and
+	the destructor-order e2e under
+	`lang/tests/codegen/e2e/conditional_move_loop_destructor_order/`."""
 	func, type_table, drop_ty = _build_non_terminating_fixture()
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
-	# The drop block for x must be reachable ONLY from the flag-
-	# guarded IfTerminator at if_join — NOT from the if_then arm
-	# (which would mean the drop was pushed earlier into the predecessor).
-	# Also verify the if_then's terminator is still its Goto into the
-	# if_join (unchanged).
 	then_term = func.blocks["if_then"].terminator
 	assert isinstance(then_term, M.Goto), (
 		"if_then terminator should remain Goto(if_join) after pass; "
-		"if it changed (e.g. into a drop-block), the pass pushed cleanup "
-		"earlier — RAII violation"
+		"if it changed, the pass pushed cleanup earlier — RAII violation"
 	)
 	assert then_term.target == "if_join", (
 		f"if_then's Goto target should be if_join; got {then_term.target} — "

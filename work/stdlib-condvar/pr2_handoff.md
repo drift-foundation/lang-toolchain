@@ -1,110 +1,171 @@
 # PR2 handoff — `std.concurrent.Condvar`
 
 PR1 (`vt_is_cancelled` + `MutexGuard` unlock/relock state) landed
-cleanly.  PR2 (the Condvar itself) hit a Drift-idiom blocker
-during implementation that needs someone with more hands-on
-Drift expertise to resolve.
+cleanly.  PR2 (the Condvar itself) is **blocked on two pinned
+Drift toolchain bugs**.  Each blocker has a regression test in
+`lang/tests/driver/` that flips green when the underlying bug is
+fixed — so unblock work is fully traceable.
 
-## What landed in the WIP commit
+## Blockers (both pinned)
 
-The `Condvar` API skeleton in `stdlib/std/concurrent/concurrent.drift`:
-
-- `pub struct Condvar { state: core.Arc<CondvarState> }`
-- `pub fn condvar() -> Condvar`
-- `Condvar.signal_one()` / `signal_all()` / `close()`
-- `Condvar.wait(guard)` / `wait_timeout(guard, d)` / `wait_until(guard, deadline)`
-- `CONCURRENCY_KIND_REQUIRES_VTHREAD` constant
-- Internal helpers `_claim_one`, `_drain_active`, `_unpark_all`,
-  `_wait_inner`
-
-The shape and discipline match the plan exactly: self-CAS on every
-wake path, CAS-before-unpark in signal/close, Arc-shared `Waiter`
-records, close-race re-check after enqueue.
-
-## Blocker
-
-`Array<core.Arc<PoolWaiter>>.len()` does not resolve when accessed
-through the Mutex guard's `get_mut() -> &mut Array<...>` return,
-nor through `&Array<...>` directly:
-
+### Bug 1: `Array<T>.len()` (method-call syntax) does not resolve
+**Pin:** `lang/tests/driver/test_array_len_method_call_resolution_blocker.py`
+**Diagnostic:**
 ```
-error: no matching method 'len' for receiver RefMut<Array<std::std.core.arc.Arc<std::std.concurrent.PoolWaiter>>>
-error: no matching method 'len' for receiver Ref<Array<std::std.core.arc.Arc<std::std.concurrent.PoolWaiter>>>
+no matching method 'len' for receiver Array<Int>          — E-AUTO-7b9868f6
+no matching method 'len' for receiver Ref<Array<Int>>     — E-AUTO-40773e95
+no matching method 'len' for receiver RefMut<Array<Int>>  — E-AUTO-b9bf78ff
 ```
+**Root cause hypothesis:** `arr.len` is field-access magic in
+`type_checker.py` at the `HField` handler (~line 8957: `expr.name
+in ("len", "cap", "capacity", "gen")`).  The **method-call** form
+`arr.len()` has no parallel routing — no `len()` method is
+registered on `Array<T>` in any of the three receiver shapes.
 
-Same shape for `.push()`, `.remove(0)`.
+**Workaround:** use `arr.len` (no parens) — the field-access form
+works on owned receivers.  Composition through `&Array<T>` /
+`&mut Array<T>` inside larger compilation units is verified by
+the next-bug repro (which uses `arr.len` and compiles past
+type-check).
 
-Existing tests like `std_json_wrapper_build_encode` use
-`arr.len()` on a local `var arr: Array<...>` (owned), which works.
-The autoborrow from `&Array<T>` / `&mut Array<T>` to the method's
-expected receiver type doesn't seem to happen in this context —
-possibly because of the nested `Mutex<Array<Arc<T>>>` type or the
-T being `core.Arc<PoolWaiter>` (a generic type with a destructor).
+### Bug 2: Ownership ledger PathDependent on conditional-move from `Array.remove()` loop
+**Toolchain pin:** `lang/tests/driver/test_array_remove_conditional_move_path_dependent_blocker.py`
+(asserts the ICE message verbatim; flips red when fix lands.)
 
-`cv.state.closed.load(...)` also fails — `cv.state` is
-`core.Arc<CondvarState>` and accessing `.closed` on the Arc
-doesn't auto-`.get()` to the inner CondvarState.  This is a
-related but distinct issue: field access through Arc doesn't
-auto-deref to the inner T's fields.
+**Architecture pins (post-fix, red today):**
+- `lang/tests/stage2/test_cleanup_authoring_flag_guarded.py` (2 strict
+  `xfail` cases — non-variant PathDependent + flag-managed → guarded
+  emit; MUST_DROP + flag-managed → uniform flag clear).
+- `lang/tests/codegen/e2e/conditional_move_loop_destructor_order/`
+  (skip-marked; un-skip when fix lands; pins user-observable
+  end-of-iteration destructor timing via stdout discriminator on `I`
+  iteration-top markers).
 
-## What needs to be done
-
-A Drift-fluent maintainer needs to:
-
-1. **Find the right shape for accessing fields through `core.Arc<T>`.**
-   Current attempt: `cv.state.closed` — fails ("unknown field
-   'closed' on struct 'Arc'").  Likely fix: `cv.state.get().closed`.
-   Verify and apply throughout `_wait_inner`, `signal_one`, etc.
-2. **Find the right shape for `Array.len/push/remove` through a
-   `MutexGuard<Array<T>>` lock.**  Either:
-   - explicit reborrow: `(&*lg.get_mut()).len()`, or
-   - intermediate value binding, or
-   - a different data structure (e.g., a thin `WaiterList` struct
-     wrapping the Array with explicit methods that take
-     `&mut WaiterList`).
-   Apply throughout `_claim_one`, `_drain_active`, `_unpark_all`,
-   `_wait_inner`.
-3. **Test compilation end-to-end** — the existing WIP code is
-   structurally complete but doesn't compile.  Once these two
-   Drift-idiom issues are fixed, the rest of the slice (tests +
-   integration) should follow the plan.
-4. **Add the 15 e2e tests** from the plan's test plan section
-   (we dropped `condvar_cancel_during_wait` per the PR1 finding
-   on the scheduler killing cancelled VTs).
-
-## Why I'm stopping here
-
-The runtime / API / discipline design is right and reviewed.  The
-implementation blocker is shape-level Drift idiom (autoborrow
-through Arc and MutexGuard for method resolution on generic
-container types), not a design flaw.  A 10-line change in the
-right place should unblock everything; trying to discover that
-change blind has been more expensive than handing off.
-
-## Files touched in PR2 WIP
-
+**Stage2 ICE today:**
 ```
-stdlib/std/concurrent/concurrent.drift   — Condvar API + impl (does not compile)
+RuntimeError: drop_before_overwrite: ledger returned
+PathDependent at (fn=drain, block=array_remove_exit, idx=4,
+local=w).  Tier-1 promotion retired the
+`initialized_destructibles` fallback — if PathDependent is now
+reachable, either tighten the lattice or restore a flag-guarded
+path here before re-landing.
 ```
 
-PR1 (committed, clean):
+**Repro shape:**
+```drift
+while arr.len > 0 {
+    var w = arr.remove(0);
+    if w.raw > 0 { out.push(move w); }
+    // else: w dropped implicitly
+}
+```
+
+**Why it matters:** canonical iterate-and-claim pattern used by
+Condvar's `_claim_one`, `_drain_active`, `_prune_inactive`.
+
+**Locked architecture (reviewed with K):**
+
+```
+build ledger
+drop_flags PLANNING ONLY  (entry init, set/clear, metadata; no emit)
+rebuild ledger            ← REQUIRED — set/clear shifted (block, idx)
+cleanup_authoring         ← sole drop emitter; guarded branch for
+                            non-variant PathDependent + flag-managed;
+                            uniform flag-clear on every flag-managed drop
+rebuild ledger
+string_arc                ← unchanged; tripwire stays
+```
+
+Key invariants:
+- **No flag consult at `drop_before_overwrite`** — ledger is the single
+  source of truth at site 4.
+- **Flag bit ≡ "currently owns destructible storage."** Every
+  cleanup-authored MoveOut on a flag-managed local clears the flag,
+  guarded or not.
+- **Explicit `func._drop_flag_for_local: dict[str, str]`** metadata
+  (not name-derivation) — needed because `_allocate_flag_name` collision
+  suffixing makes `flag_local_name_for(L)` unsafe.
+- **Two ledger rebuilds.** Pre-cleanup_authoring rebuild required;
+  planning shifts `(block, idx)` keys.
+
+**Drift implementation files to touch:**
+1. `lang/driftc/stage2/drop_flags.py` — strip Step-5 emission; broaden
+   trigger to include non-variant PathDependent at any `CleanupHook`;
+   attach `_drop_flag_for_local`.
+2. `lang/driftc/stage2/cleanup_authoring.py` — new guarded-emit branch
+   (lift the existing `_insert_flag_guarded_drops` helper from
+   drop_flags); uniform flag-clear after every cleanup MoveOut on
+   flag-managed locals; new telemetry tags
+   (`path_dependent_flag_guarded_emit`, `must_drop_flag_clear`).
+3. `lang/driftc/driftc.py:7053-7196` — swap pass order; add pre-cleanup
+   ledger rebuild; remove post-drop_flags rebuild (redundant once
+   drop_flags doesn't emit).
+
+## What PR1 landed (clean, verified)
+
 ```
 lang/codegen/llvm/llvm_codegen.py
 lang/language_runtime/posix/thread_runtime.c
 lang/tests/codegen/e2e/mutex_guard_condvar_unlock_relock/
 lang/tests/codegen/e2e/vt_is_cancelled_basic/
-stdlib/lang/thread.drift
-stdlib/std/concurrent/concurrent.drift  (MutexGuard.locked + unlock/relock)
+stdlib/lang/thread.drift                   (vt_is_cancelled export + docstring)
+stdlib/std/concurrent/concurrent.drift     (MutexGuard.locked + unlock/relock pair)
 work/stdlib-condvar/plan.md
 ```
 
-## Suggested next-session entry point
+## What PR2 has in flight (does not compile)
 
-Start at `_wait_inner` in `std.concurrent`: replace every
-`cv.state.<field>` with `cv.state.get().<field>`, every
-`list.len()` / `list.push(...)` / `list.remove(...)` through the
-guard with the Drift-idiomatic shape (TBD), then compile + iterate
-on the resulting diagnostics.  After the smoke compiles, run the
-plan's test plan top-to-bottom.
+`stdlib/std/concurrent/concurrent.drift` contains the full
+Condvar API + impl skeleton — review-clean shape, all 6 review
+findings from the previous session addressed in source:
 
-— K, session ending 2026-05-16
+1. ✅ `MutexGuard.get_mut`/`borrow_mut` + `mutex_guard_get_mut`
+   gated by `assert(self.locked, ...)`.
+2. ✅ Dead-waiter pruning via `_prune_inactive` called after
+   self-claimed wake (only when a waiter actually returned to
+   the active list).
+3. ✅ `wait_until(0)` infinite-wait fixed via `has_deadline: Bool`
+   flag in `_wait_inner` (NOT `deadline_ms = 0` sentinel).
+4. ✅ `wait_timeout` negative-duration validation via
+   `_check_duration(d)`.
+5. ✅ `vt_is_cancelled` docstring reframed as compute-loop
+   cooperative-cancellation only (parking primitives can't
+   surface CANCELLED because the scheduler reaps cancelled VTs
+   at re-dispatch — `thread_runtime.c:858-872`).
+6. ✅ `mutex_guard_get_mut` test docstring fix queued.
+
+Compile fails at the two pinned bugs above.
+
+## Unblock path
+
+When **either** bug is fixed, the corresponding pin test flips
+to failing — that's the signal to come back here and finish.
+
+**Bug 1 fix → unblocks length checks.** Sweep
+`stdlib/std/concurrent/concurrent.drift` for any `.len()` calls
+re-added; current code uses field-access `arr.len`.
+
+**Bug 2 fix → unblocks waiter-list drains.** All three helpers
+(`_claim_one`, `_drain_active`, `_prune_inactive`) currently use
+the conditional-move-from-remove pattern.
+
+Once both compile, the remaining work is:
+- Smoke-test stdlib compile + existing test suite green.
+- Add the 15 e2e tests from `work/stdlib-condvar/plan.md`'s
+  test plan section (we dropped `condvar_cancel_during_wait` per
+  the PR1 scheduler finding).
+- Sign off and merge.
+
+## Notes for the unblocker
+
+- Don't switch data structures (e.g., Deque<T>) to work around
+  Bug 2.  User feedback was explicit: pause and pin, don't
+  swerve.  The bugs are real toolchain gaps that other users
+  will hit.
+- Both pin tests are designed to flip cleanly: when assertions
+  start failing because the compile now succeeds, edit the test
+  to assert clean compile + correct runtime behavior.
+- Memcheck must be in the verification gate for any site-3
+  authority work (per MEMORY.md, 0.31.9 follow-up).
+
+— continued 2026-05-15

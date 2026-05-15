@@ -1,51 +1,53 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Phase 3C — runtime drop-flag insertion for path-dependent destructible
-locals.
+Phase 3C — runtime drop-flag PLANNING / INSTRUMENTATION for
+path-dependent destructible locals.
 
-Pipeline placement: between HIR→MIR and `string_arc`.  Gated on whether
-the function has any path-dependent destructible local; when none (the
-common case per Task #5 triage), the pass is a no-op.
+Pipeline placement (Bug 2 architecture, 2026-05-15): BEFORE
+`cleanup_authoring`, between `build_ledger` and the pre-cleanup
+ledger rebuild.  The pass plans flags and inserts the bookkeeping
+instrumentation; `cleanup_authoring` is the sole emitter of cleanup
+drops (guarded or unguarded) and consults this pass's metadata to
+decide which CleanupHooks need flag-guarded emission.
 
-Contract: see `work/ownership-ledger/3c-design.md` "Implementation
-strategy: runtime drop flags."  Summary:
+Gated on whether the function has any path-dependent destructible
+local; when none (the common case per Task #5 triage), the pass is
+a no-op.
 
-  - Identify path-dependent destructible locals via the 3A ledger
-    (raw state `MaybeUninit` at any program point AND
-    `DropPolicy.needs_drop = True`).
-  - Allocate a Bool flag local for each.
+What this pass does:
+
+  - Identify path-dependent destructible locals via the ledger.
+    Trigger fires when EITHER (a) the local is potentially live at
+    a function exit (the original bucket-6 carrier — `return move
+    L` on one path, fall-through on another), OR (b) the ledger
+    reports non-variant `PathDependent` at any reachable
+    `CleanupHook` for the local (Bug 2: conditional move inside a
+    loop body where the cleanup hook is mid-function, not at
+    Return).
+  - Allocate a Bool flag local for each tracked local.
   - Init flag at function entry: `true` for params (live at entry),
     `false` for declared locals (uninitialized at entry).
-  - After every `StoreLocal(L, _)`: insert `StoreLocal(flag, true)`.
-  - After every `MoveOut(_, L, _)`: insert `StoreLocal(flag, false)`.
-  - At every Return / Unreachable terminator block, before the
-    terminator: insert a flag-guarded drop sequence
-    `if flag { MoveOut(t, L); DropValue(t); }` — IfTerminator on the
-    flag plus a drop-block plus a join-block.
+  - After every user `StoreLocal(L, _)`: insert `StoreLocal(flag,
+    true)`.
+  - After every user `MoveOut(_, L, _)`: insert `StoreLocal(flag,
+    false)`.
+  - Attach `func._drop_flag_managed_locals` (set of source local
+    names) and `func._drop_flag_for_local` (explicit `local →
+    flag_local` mapping; collision-safe, used by
+    `cleanup_authoring` to emit `LoadLocal(flag)` reliably without
+    name reconstruction).
 
-The pass DOES NOT move drops earlier than their source-syntactic
-scope-exit point.  It does NOT touch locals that are not path-
-dependent.  It is uniform: every path-dependent destructible local
-gets the same plumbing; no terminating-arm or same-arm-as-scope-exit
-optimizations.
+What this pass does NOT do (the Bug 2 architecture flip):
 
-For correctness on the bucket-6 carrier shapes:
-
-  Shape 1 — `if b { return move s; } return "fresh";`
-    The lattice's per-instruction state at the trailing return is
-    PathDependent (Live on b=false, MovedOut on b=true), and the
-    cleanup-authoring path skips emission for non-variant
-    PathDependent.  This pass inserts a flag-guarded drop at that
-    return: on b=false the flag is true (no MoveOut on this path)
-    → drop fires; on b=true the return inside the if executes
-    before reaching the trailing return, so the inserted drop is
-    unreachable.
-
-  Shape 2 — `if b { val t = move s; } return "fresh";`
-    Same poisoning; trailing return skips drop.  This pass inserts
-    a flag-guarded drop at the trailing return: on b=true the move
-    cleared the flag → drop skipped; on b=false the flag stayed
-    true → drop fires.
+  - It does NOT emit cleanup drops.  The pre-flip Step 5 (function-
+    exit flag-guarded MoveOut + DropValue at Return blocks) is
+    retired; that work moved into `cleanup_authoring` at the
+    CleanupHook positions that HIR→MIR already emits at every
+    scope exit (including function exit).  Single emit point ≡
+    single RAII timing rule.
+  - It does NOT move drops earlier than their source-syntactic
+    scope-exit point.
+  - It does NOT touch locals that are not path-dependent.
 """
 
 from __future__ import annotations
@@ -54,7 +56,8 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Set
 
 from lang.driftc.core.types_core import TypeId, TypeTable
 from . import mir_nodes as M
-from .ownership_ledger import LiveState, build_ledger
+from .drop_policy_compute import compute_drop_policy
+from .ownership_ledger import DropVerdict, LiveState, build_ledger
 
 if TYPE_CHECKING:
 	from .hir_to_mir import DropPolicy
@@ -116,38 +119,53 @@ def insert_drop_flags(
 			continue
 		if not policy.needs_drop:
 			continue
-		# Trigger criteria (BOTH must hold):
+		# Trigger criteria.  Criterion (1) is mandatory; EITHER (2a)
+		# OR (2b) must also hold.
 		#
 		#   (1) The local has at least one USER `move L` expression
 		#       (a MoveOut whose dest is consumed by something OTHER
-		#       than an immediately-following DropValue).  This is
-		#       the direct cause of the bucket-6 LANGUAGE_BUG class:
-		#       a user move on one path makes the trailing scope-exit's
-		#       lattice state PathDependent (Live on the no-move path,
-		#       MovedOut on the move path), and cleanup-authoring's
-		#       non-variant PathDependent skip means no drop fires
-		#       on the no-move path without this pass.
+		#       than an immediately-following DropValue).  Without a
+		#       user move, the local is never PathDependent — every
+		#       reachable cleanup site sees Live.
 		#
-		#   (2) The local is potentially live (Live or MaybeUninit
-		#       state) at the pre-terminator point of at least one
-		#       Return / Unreachable block.  If at every exit the
-		#       ledger proves the local is MovedOut / Tombstoned /
-		#       Uninit, the move was unconditional and no flag is
-		#       needed — the existing scope-drop emission is correct.
+		#   (2a) FUNCTION-EXIT carrier (the original bucket-6 class).
+		#       The local is potentially live at the pre-terminator
+		#       point of at least one Return / Unreachable block.
+		#       Bug-6 shape: `if b { return move L; } return "fresh";`
+		#       — the trailing return sees PathDependent for L.
 		#
-		# Together these criteria pick out exactly the bucket-6
-		# carrier shapes (user-conditional moves where some exit
-		# still owns the value) and exclude (a) compiler-internal
-		# scope-drop MoveOuts on locals with no user moves, and
-		# (b) unconditional user moves whose only exit is the move
-		# point itself (e.g. `return move out;` in `_hash_sha256`).
-		# Without (b), the pass would emit flag-guarded drops at
-		# Return blocks for every destructible local with a user
-		# move — wasteful and triggers downstream codegen errors
-		# on address-taken locals.
+		#   (2b) CLEANUP-HOOK carrier (Bug 2, 2026-05-15).  The
+		#       ledger reports non-variant `PathDependent` at some
+		#       reachable `CleanupHook` for the local.  This covers
+		#       the loop-iteration shape: `while ... { var w =
+		#       arr.remove(0); if w.raw > 0 { out.push(move w); } }`
+		#       — the end-of-iteration CleanupHook sees PathDependent
+		#       for w (moved on one branch, not on the other), but
+		#       w is loop-local and never reaches a Return block.
+		#       Without (2b) such locals would not get flagged and
+		#       `cleanup_authoring` would silently skip emission
+		#       (`path_dependent_non_variant_skip` tripwire), leaving
+		#       `string_arc.drop_before_overwrite` to crash on the
+		#       next iteration.
+		#
+		# Together these criteria pick out every shape where
+		# cleanup_authoring needs a runtime flag to decide whether
+		# to drop on the non-move branch.  They exclude (a)
+		# compiler-internal scope-drop MoveOuts on locals with no
+		# user moves, and (b) unconditional user moves whose only
+		# exit is the move point itself (e.g. `return move out;`).
 		if not _has_user_moveout(func, name):
 			continue
-		if not _is_potentially_live_at_some_exit(ledger, func, name):
+		if not (
+			_is_potentially_live_at_some_exit(ledger, func, name)
+			or _has_non_variant_path_dependent_at_cleanup_hook(
+				ledger=ledger,
+				func=func,
+				type_table=type_table,
+				drop_policy=drop_policy,
+				local_name=name,
+			)
+		):
 			continue
 		flag_for[name] = _allocate_flag_name(name, all_locals + list(flag_for.values()))
 	if not flag_for:
@@ -206,54 +224,87 @@ def insert_drop_flags(
 				new_instrs.append(M.ConstBool(dest=const_dest, value=False))
 				new_instrs.append(M.StoreLocal(local=flag_name, value=const_dest))
 		blk.instructions = new_instrs
-	# Step 5: insert flag-guarded drops at every Return / Unreachable
-	# terminator block.  For each tracked local L that does NOT already
-	# have an existing drop emission in this block, split the block
-	# and emit:
+	# Step 5 (REMOVED 2026-05-15, Bug 2 architecture flip): flag-
+	# guarded drops at Return blocks have moved into
+	# `cleanup_authoring.author_cleanup`.  The HIR→MIR pass already
+	# emits a `M.CleanupHook` at every scope exit (including
+	# function exit via `_emit_function_exit_cleanup_hook`), so
+	# `cleanup_authoring` now owns the sole emission point for
+	# cleanup drops — guarded or unguarded.  This pass is pure
+	# planning: instrumentation + metadata only.
 	#
-	#     ... pre-existing instructions ...
-	#     load flag → t_flag
-	#     if t_flag:
-	#         drop_block:
-	#             MoveOut(t, L)
-	#             DropValue(t)
-	#             goto join_block
-	#         else:
-	#             goto join_block
-	#     join_block:
-	#         <original terminator>
+	# Attach explicit metadata so cleanup_authoring can decide
+	# emission and emit `LoadLocal(flag)` reliably:
 	#
-	# We process locals in deterministic order so the resulting block
-	# graph is reproducible.
-	# Insert flag-guarded drops only at Return terminators.  Unreachable
-	# terminators are statically dead — cleanup there is by definition
-	# never executed and would only add wasted MIR + downstream codegen
-	# pressure on locals appearing in spurious Live states at those
-	# blocks (see `_is_potentially_live_at_some_exit` rationale).
-	exit_blocks = [
-		(name, blk)
-		for name, blk in list(func.blocks.items())
-		if isinstance(blk.terminator, M.Return)
-	]
-	for orig_block_name, exit_block in exit_blocks:
-		_insert_flag_guarded_drops(
-			func=func,
-			block=exit_block,
-			flag_for=flag_for,
-			new_temp=_new_temp,
-		)
-	# Attach explicit metadata listing the source locals this pass
-	# chose to flag.  Phase 3B consumers (e.g. `string_arc_return` /
-	# site 3) consult this set via `is_flag_managed(func, L)` to
-	# decide "this local is 3C's responsibility — skip my own
-	# emission."  Name-parsing (`__drop_flag_<L>` prefix probe) is
-	# unsafe here: when `_allocate_flag_name` resolves a collision by
-	# suffixing `_1`, the resulting flag-local name is
-	# indistinguishable from "the canonical flag for a local named
-	# `<L>_1`."  Explicit metadata removes the ambiguity.
-	existing: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()
-	setattr(func, "_drop_flag_managed_locals", existing | set(flag_for.keys()))
+	#   `_drop_flag_managed_locals` — set of SOURCE local names
+	#   this pass chose to flag.  Existing consumers (e.g.
+	#   `string_arc_return`'s site 3) consult via
+	#   `is_flag_managed(func, L)`.
+	#
+	#   `_drop_flag_for_local` — explicit `local → flag_local`
+	#   mapping.  Required because `_allocate_flag_name` may emit
+	#   `_<n>`-suffixed flag names on collision, so
+	#   `flag_local_name_for(L)` is unsafe as a direct lookup.
+	#
+	# Name-parsing (`__drop_flag_<L>` prefix probe) is unsafe here:
+	# when `_allocate_flag_name` resolves a collision by suffixing
+	# `_1`, the resulting flag-local name is indistinguishable from
+	# "the canonical flag for a local named `<L>_1`."  Explicit
+	# metadata removes the ambiguity.
+	existing_managed: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()
+	setattr(func, "_drop_flag_managed_locals", existing_managed | set(flag_for.keys()))
+	existing_map: Dict[str, str] = getattr(func, "_drop_flag_for_local", None) or {}
+	merged_map = dict(existing_map)
+	merged_map.update(flag_for)
+	setattr(func, "_drop_flag_for_local", merged_map)
 	return func, True
+
+
+def _has_non_variant_path_dependent_at_cleanup_hook(
+	*,
+	ledger,
+	func: M.MirFunc,
+	type_table: TypeTable,
+	drop_policy: Callable[[TypeId], "DropPolicy"],
+	local_name: str,
+) -> bool:
+	# Lazy import to break the drop_flags ↔ string_arc cycle
+	# (string_arc imports `is_flag_managed` from drop_flags).
+	from .string_arc import variant_zero_tag_drop_safe
+	"""Bug 2 trigger criterion (2b).  True iff the ledger reports a
+	non-variant `PathDependent` verdict for `local_name` at some
+	reachable `M.CleanupHook` for which the local is a candidate.
+
+	The variant zero-tag widening case is excluded: those PathDependent
+	hooks already emit unguarded in cleanup_authoring (tag=0 destructor
+	is a no-op on uninit paths).  Only non-variant PathDependent needs
+	a runtime flag, because the struct destructor would crash on PHI-
+	zero data if invoked unconditionally.
+	"""
+	for blk in func.blocks.values():
+		for idx, ins in enumerate(blk.instructions):
+			if not isinstance(ins, M.CleanupHook):
+				continue
+			for cand_local, cand_ty in ins.candidates:
+				if cand_local != local_name:
+					continue
+				try:
+					policy = drop_policy(cand_ty)
+				except Exception:
+					policy = None
+				needs_drop_axis = bool(policy.needs_drop) if policy is not None else False
+				try:
+					verdict = ledger.verdict_at(
+						(blk.name, idx),
+						cand_local,
+						needs_drop=needs_drop_axis,
+					)
+				except Exception:
+					continue
+				if verdict is DropVerdict.PATH_DEPENDENT:
+					if not variant_zero_tag_drop_safe(cand_ty, type_table):
+						return True
+	return False
 
 
 def flag_local_name_for(local_name: str) -> str:

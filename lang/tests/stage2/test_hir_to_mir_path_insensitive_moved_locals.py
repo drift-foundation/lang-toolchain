@@ -155,15 +155,23 @@ def _build_repro_func():
 	# passes (see driftc.py), and `insert_drop_flags` reads
 	# `func.local_types` to identify destructible locals.
 	builder.func.local_types = dict(lowerer._local_types)
-	# Run Phase 3C drop-flag insertion — the post-HIR→MIR pass that
-	# fixes the bucket-6 bug class.  In the production driver this
-	# runs between HIR→MIR and string_arc; the acceptance regressions
-	# invoke it directly so the test exercises the integrated behavior.
+	# Run the full Bug 2 cleanup pipeline (drop_flags planning →
+	# ledger rebuild → cleanup_authoring) matching the production
+	# driver order at `driftc.py`.  Post-fix, drop_flags is planning
+	# only; `cleanup_authoring` emits the cleanup drops (per-arm
+	# elaborated at predecessor edges or flag-guarded at the hook).
 	insert_drop_flags(
 		builder.func,
 		type_table=type_table,
 		drop_policy=lambda ty: compute_drop_policy(type_table, ty),
 	)
+	# Build ledger after planning's set/clear instrumentation, then
+	# author cleanup.  Matches driftc.py:7053-7083 ordering.
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
+	ledger = build_ledger(builder.func, drop_policy=lambda _t: None)
+	setattr(builder.func, "_ownership_ledger", ledger)
+	author_cleanup(builder.func, type_table=type_table)
 	return builder.func
 
 
@@ -313,12 +321,19 @@ def _build_non_terminating_move_func():
 	)
 	lowerer.lower_block(hir)
 	builder.func.local_types = dict(lowerer._local_types)
-	# Phase 3C drop-flag insertion (matches production pipeline).
+	# Full cleanup pipeline (matches driftc.py production order
+	# post Bug 2 architecture flip: planning → ledger rebuild →
+	# cleanup_authoring).
 	insert_drop_flags(
 		builder.func,
 		type_table=type_table,
 		drop_policy=lambda ty: compute_drop_policy(type_table, ty),
 	)
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.cleanup_authoring import author_cleanup
+	ledger = build_ledger(builder.func, drop_policy=lambda _t: None)
+	setattr(builder.func, "_ownership_ledger", ledger)
+	author_cleanup(builder.func, type_table=type_table)
 	return builder.func
 
 
@@ -424,6 +439,46 @@ def test_non_terminating_conditional_move_no_silent_wrong_mir() -> None:
 			return True
 		return dfs(entry_name, False)
 
+	def _drop_block_is_path_conditional(target: str) -> bool:
+		"""Per Bug 2 architecture flip (2026-05-15): a drop is
+		path-conditional iff EITHER
+		  (a) every entry→target path crosses a flag-load
+		      IfTerminator (runtime drop-flag baseline), OR
+		  (b) at least one entry→<exit/Return> path BYPASSES the
+		      target block entirely (cleanup_authoring per-arm edge
+		      elaboration onto the no-move arm).
+
+		Either form proves the drop fires only on the no-move
+		runtime path.  (b) catches the per-arm-split shape where the
+		gate is the user's IfTerminator, not a flag-load.
+		"""
+		if _every_path_from_entry_passes_flag_branch(target):
+			return True
+		# Check (b): is there an entry→Return path that does NOT
+		# pass through target?
+		from lang.driftc.stage2 import Return as _Return, IfTerminator as _If, Goto as _GotoTerm
+		entry_name = func.entry
+		def reaches_return_skipping_target(node: str, visited: set) -> bool:
+			if node == target:
+				return False
+			if node in visited:
+				return False
+			visited.add(node)
+			blk = func.blocks[node]
+			t = blk.terminator
+			if isinstance(t, _Return):
+				return True
+			succs: list[str] = []
+			if isinstance(t, _If):
+				succs = [t.then_target, t.else_target]
+			elif isinstance(t, _GotoTerm):
+				succs = [t.target]
+			for s in succs:
+				if reaches_return_skipping_target(s, set(visited)):
+					return True
+			return False
+		return reaches_return_skipping_target(entry_name, set())
+
 	drop_blocks: list[str] = []
 	for name, blk in func.blocks.items():
 		if _block_has_drop_for_s(blk):
@@ -438,7 +493,7 @@ def test_non_terminating_conditional_move_no_silent_wrong_mir() -> None:
 		"no-move arm OR compile-time fail-stop."
 	)
 	for db in drop_blocks:
-		assert _every_path_from_entry_passes_flag_branch(db), (
+		assert _drop_block_is_path_conditional(db), (
 			f"3C acceptance failure (non-terminating conditional move, "
 			f"shape (d)): the drop for `s` in block {db!r} is reachable "
 			f"from function entry without passing through a flag-guarded "

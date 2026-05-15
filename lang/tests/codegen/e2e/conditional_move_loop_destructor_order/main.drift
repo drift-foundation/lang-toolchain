@@ -1,0 +1,91 @@
+module m;
+
+// Bug 2 destructor-timing regression — see
+// `lang/tests/driver/test_array_remove_conditional_move_path_dependent_blocker.py`
+// for the toolchain-level pin, and
+// `lang/tests/stage2/test_cleanup_authoring_flag_guarded.py` for
+// the cleanup_authoring shape pin.
+//
+// This test pins user-observable destructor timing: a destructible
+// local conditionally moved inside a loop must run its destructor
+// AT END OF ITERATION on the non-move branch, NOT at the next
+// iteration's StoreLocal overwrite.
+//
+// Per-iteration tracing:
+//   "I"     — printed at the TOP of the loop body, BEFORE
+//             `var w = arr.remove(0)`.  Acts as the discriminator:
+//             if the destructor fires at next-overwrite (buggy
+//             implementation), D<raw> appears AFTER the next "I";
+//             if it fires at end-of-iteration (correct RAII timing),
+//             D<raw> appears BEFORE the next "I".
+//   "S<n>"  — printed after `var w = ...`, before the conditional.
+//   "D<n>"  — printed inside `Holder.destroy` (the destructor).
+//
+// Input arr = [Holder(raw=1), Holder(raw=0), Holder(raw=2)]:
+//   iter 1: I S1 → push raw=1 into out (no destroy fires).
+//   iter 2: I S0 → no push.
+//                ⤷ end of iteration → CleanupHook → D0.
+//   iter 3: I S2 → push raw=2 into out.
+//
+// After drain returns, main prints "M2" (kept.len = 2) and then
+// drains `kept` via an unconditional-move loop (no PathDependent),
+// producing D1 D2 in order.
+//
+// EXPECTED STDOUT (end-of-iteration timing, the correct semantics):
+//
+//   I S1 I S0 D0 I S2 M2 D1 D2
+//
+// BUGGY STDOUT (next-overwrite timing, would also indicate the
+// flag-guarded drop landed at the wrong CFG position):
+//
+//   I S1 I S0 I D0 S2 M2 D1 D2
+//                 ^^ D0 after I instead of before
+//
+// Today the test fails at compile (Bug 2 ICE in `_drain`).  When
+// the drop_flags split + cleanup_authoring flag-guarded extension
+// lands, compile succeeds and stdout matches the expected order.
+
+import std.core as core;
+import std.format as fmt;
+import lang.thread as thread;
+
+struct Holder { raw: Int }
+
+implement core.Destructible for Holder {
+	pub fn destroy(var self: Holder) nothrow -> Void {
+		thread.console_writeln("D" + fmt.format_int(self.raw));
+		return;
+	}
+}
+
+fn drain_conditional(arr: &mut Array<Holder>) nothrow -> Array<Holder> {
+	var out: Array<Holder> = [];
+	while arr.len > 0 {
+		thread.console_writeln("I");
+		var w = arr.remove(0);
+		thread.console_writeln("S" + fmt.format_int(w.raw));
+		if w.raw > 0 {
+			out.push(move w);
+		}
+		// else: w dropped implicitly at end of iteration (CleanupHook)
+		// → D<raw> printed BEFORE next "I" if RAII timing is correct.
+	}
+	return move out;
+}
+
+pub fn main() nothrow -> Int {
+	var arr: Array<Holder> = [];
+	arr.push(Holder(raw = 1));
+	arr.push(Holder(raw = 0));
+	arr.push(Holder(raw = 2));
+	var kept = drain_conditional(&mut arr);
+	val kept_count = kept.len;
+	thread.console_writeln("M" + fmt.format_int(kept_count));
+	// Drain `kept` via an unconditional-move loop.  No conditional
+	// move → no PathDependent → no Bug 2 hit here.
+	while kept.len > 0 {
+		val _consumed = kept.remove(0);
+		// _consumed dropped at end of iter → D<raw> printed in order.
+	}
+	return kept_count;
+}

@@ -1,0 +1,5 @@
+{
+  "description": "Bug 2 regression: destructible local conditionally moved inside a loop runs its destructor at end-of-iteration (correct RAII timing), not at next-overwrite.  Discriminator is the position of D0 relative to the third 'I' (iter 3's top-of-body marker).",
+  "exit_code": 2,
+  "stdout": "I\nS1\nI\nS0\nD0\nI\nS2\nM2\nD1\nD2\n"
+}

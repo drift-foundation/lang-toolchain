@@ -2038,6 +2038,21 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			info = _call_info([recv_ty], recv_nominal, False, _intrinsic_method_fn_id(expr.method_name))
 			return MethodCallResult(recv_nominal, info)
 
+	# Bug 1 fix: route the method-call form `arr.len()` /
+	# `.cap()` / `.capacity()` / `.gen()` through the same Array
+	# intrinsic dispatch the field-access form (`arr.len`) uses.
+	# Pre-fix, only the field-access path was wired in the checker
+	# and `arr.len()` reported "no matching method 'len' for
+	# receiver Array<T>" (and the same for `Ref<Array<T>>` and
+	# `RefMut<Array<T>>`).  The lowering side mirrors this in
+	# `_lower_array_intrinsic_method`.
+	if expr.method_name in ("len", "cap", "capacity", "gen") and not expr.args:
+		recv_nominal = _unwrap_ref_type(recv_ty)
+		recv_def = ctx.type_table.get(recv_nominal)
+		if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
+			info = _call_info([recv_ty], ctx.int_ty, False, _intrinsic_method_fn_id(expr.method_name))
+			return MethodCallResult(ctx.int_ty, info)
+
 	if expr.method_name in ("push", "pop", "insert", "remove", "swap_remove", "swap", "clear", "reserve", "shrink_to_fit", "range", "range_mut", "get", "set", "extend", "truncate", "remove_range"):
 		recv_nominal = _unwrap_ref_type(recv_ty)
 		recv_def = ctx.type_table.get(recv_nominal)
