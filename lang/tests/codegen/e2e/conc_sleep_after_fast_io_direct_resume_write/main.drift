@@ -1,0 +1,72 @@
+module main;
+
+// RUNTIME regression for the FAST-I/O direct-resume stale park_token
+// bug — WRITE side (line ~688 in thread_runtime.c).
+//
+// Companion to `conc_sleep_after_fast_io_direct_resume` which
+// exercises the symmetric READ side (line ~665).  The bug existed
+// independently at both sites, so both need deterministic coverage.
+//
+// Pre-fix: the write-side direct-resume branch did `park_token++`
+// alongside its swapcontext-resume — the same shape as the read-side
+// branch.  This test forces exactly one FAST-I/O direct-resume on the
+// WRITE branch by registering EPOLLOUT interest on a freshly-created
+// eventfd.  An eventfd starts writable (counter == 0), so the kernel
+// reports an EPOLLOUT edge as soon as the fd is added to the epoll
+// set via EPOLL_CTL_ADD.  The reactor's dispatch loop sees that edge,
+// resolves it against `w->write_vt` (the slave VT), and direct-resumes
+// the VT via swapcontext.
+//
+// Interest constant `4` matches `EPOLLOUT` as used elsewhere in stdlib
+// (`std.net._block_on_io(fd, 4, deadline)` for write waits, etc.).
+//
+// Deterministic regression — fails 5/5 pre-fix, passes 5/5 post-fix.
+
+import std.concurrent as conc;
+import std.console as cons;
+import std.core as core;
+import std.format as fmt;
+import std.time as time;
+import lang.thread as thread;
+
+pub fn main() nothrow -> Int {
+	val fd = thread.test_eventfd_create();
+	if fd == 0 {
+		cons.eprintln("FAIL: test_eventfd_create returned 0");
+		return 99;
+	}
+	var t = conc.spawn_cb(core.callback0(| | captures(copy fd) nothrow => {
+		var vt = thread.vt_current();
+		// Register EPOLLOUT (interest=4) on the eventfd.  An eventfd
+		// starts writable (counter=0 < UINT64_MAX), so kernel reports
+		// an EPOLLOUT edge on the next epoll_wait after EPOLL_CTL_ADD.
+		// That edge drives the reactor's FAST-I/O direct-resume through
+		// the write-side branch (the bug site).
+		thread.reactor_register_io(fd, 4, vt, 0);
+		thread.vt_park(0);
+		// Now just-resumed via the WRITE-side direct-resume branch.
+		// Pre-fix: park_token == 1 (spurious bump from line 688).
+		// Post-fix: park_token == 0.
+		val t0 = time.now_monotonic();
+		thread.vt_park_until(thread.now_ms() + 100);
+		val elapsed = time.elapsed_ms(&t0);
+		return elapsed;
+	}));
+	var res = t.join();
+	match res {
+		Ok(elapsed) => {
+			if elapsed < 80 {
+				cons.eprintln("FAIL: post-FAST-I/O-WRITE sleep was " + fmt.format_int(elapsed) + "ms, expected >=80ms (stale park_token from line 688 consumed it)");
+				return 1;
+			}
+			if elapsed > 500 {
+				cons.eprintln("FAIL: post-FAST-I/O-WRITE sleep was " + fmt.format_int(elapsed) + "ms, expected <=500ms");
+				return 2;
+			}
+			cons.println("ok");
+			return 0;
+		},
+		Err(_) => { cons.eprintln("FAIL: slave VT errored"); return 3; },
+		default => { return 4; }
+	}
+}

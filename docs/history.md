@@ -1,5 +1,103 @@
 # Drift development history
 
+## 2026-05-16 (RUNTIME fix: FAST-I/O direct-resume stale park_token — sleep returned in 0ms after wire.query+drain)
+- **RUNTIME fix.** Release 0.31.89, ABI unchanged at 14.  Resolves
+  the maria-team v1 release blocker (Issue 3): `conc.sleep` returned
+  in ~0ms after a `wire.connect + SELECT 1 + drain` sequence, even
+  with single-query workloads.  Deterministic 5/5 reproduction in
+  `drift-mariadb-client/packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`.
+
+  **Customer signal that pointed straight at the runtime.**  The
+  bug was held by the open connection state — closing the socket
+  (which removes its fd from the reactor's epoll set) IMMEDIATELY
+  restored normal `conc.sleep` behaviour on the same VT:
+
+  ```
+  baseline sleep(50ms) elapsed=50            // before any I/O
+  [after wire.connect + SELECT 1 + drain]
+  sleep(550ms) elapsed=0                     // bug
+  [after wire.close]
+  sleep(550ms) elapsed=550                   // close repaired it
+  ```
+
+  That ruled out a globally corrupted scheduler timer and put the
+  trigger squarely in the live fd / reactor watch state.
+
+  **Root cause.**  The reactor's FAST-I/O direct-resume dispatch at
+  `lang/language_runtime/posix/thread_runtime.c` lines ~665 and ~688
+  did BOTH `park_token++` AND a `swapcontext` direct resume of the
+  parked VT in the same step.  The swapcontext IS the wake — the
+  `park_token++` left an unconsumed token on the resumed VT.  The
+  VT's NEXT `park_until` call's first check (line ~1873) saw
+  `park_token > 0`, decremented to 0, set state RUNNING, and
+  returned immediately — masquerading as "sleep finished in 0ms."
+
+  Symmetric to the enqueue dispatch path (line ~1108) which does NOT
+  do `park_token++` — it sets state=READY + enqueues the VT and lets
+  the worker dequeue + swapcontext as the wake mechanism.  Only the
+  FAST path was double-delivering.
+
+  Why this hid for so long: most I/O sequences immediately call
+  `_block_on_io` again (next read/write) which consumes the stale
+  token before user code can observe it.  The maria fixture trips
+  the bug deterministically because the LAST `wire.next_event`
+  returns with the terminal OK packet already buffered — no
+  follow-up `_block_on_io` — so the stale token survives until the
+  user-code `conc.sleep(550ms)`.  Same shape as 0.31.83's sleep fix
+  and 0.31.86's timed-I/O double-timer fix, different I/O surface.
+
+  **Fix.**  Removed the `park_token++` from the FAST-I/O direct-resume
+  branches at lines 665 and 688.  The swapcontext-resume below is
+  sufficient wake delivery.  Race-window protection is unchanged: if
+  another unpark fires between the dispatch's `state=RUNNING` and the
+  swapcontext, that unpark sees `state != PARKED` and takes the
+  fallback at `drift_thread_unpark` (~line 1944) which bumps
+  `park_token`, and the VT's next park consumes that token — exactly
+  the same protocol as before, minus the spurious +1 from the FAST
+  path itself.
+
+  Full audit of every `park_token++` site classified the remaining
+  bumps as:
+  - `drift_worker_vt_finish` (~line 534), cancellation cleanup (~lines
+    834, 850, 914, 1411), `drift_thread_drop` (~line 2055),
+    `drift_thread_cancel` (~lines 2082, 2092) — defensive deferred-wake
+    tokens for cv-waiters on VTs being destroyed; the VT is leaving
+    the system, the token is harmless.
+  - `drift_thread_unpark` fallback (~line 1944) when `state != PARKED`
+    — the deferred-wake delivery channel used when there is no
+    swapcontext-resume in play.  Valid.
+
+  **Pinned by — both sides of the fix have deterministic regressions:**
+
+  - `lang/tests/codegen/e2e/conc_sleep_after_fast_io_direct_resume` —
+    READ-side branch (line 665).  Uses `test_eventfd_create` +
+    `test_eventfd_write` to register EPOLLIN, park, fire the
+    eventfd, and assert the post-resume `vt_park_until(100ms)`
+    actually parks (elapsed in [80, 500]).
+  - `lang/tests/codegen/e2e/conc_sleep_after_fast_io_direct_resume_write` —
+    WRITE-side branch (line 688).  Uses `test_eventfd_create` +
+    `reactor_register_io(fd, 4=EPOLLOUT, vt, 0)` on a fresh eventfd
+    (writable from counter=0, so kernel delivers an immediate
+    EPOLLOUT edge on EPOLL_CTL_ADD).  Same post-resume assertion.
+
+  Both **fail 5/5 pre-fix (elapsed=0ms every run)** and **pass 5/5
+  post-fix (elapsed≈100ms)**.  No TCP timing, no external service,
+  no loopback variability — a single eventfd controlled by one VT
+  triggers exactly the dispatch path under test.
+
+  Companion e2e `conc_sleep_after_timed_io_wait` (0.31.86 TIMEOUT-case
+  fix) continues to pass — proves the duplicate-timer fix is not
+  regressed.  `concurrent_reactor_eventfd_unpark` and
+  `concurrent_reactor_timerfd_unpark` continue to pass — proves the
+  basic FAST direct-resume wake-delivery still works (the fix only
+  removes the spurious token bump, not the wake itself).  7 other
+  scheduler/IO e2e cases (`conc_sleep_*`, `et_*`) all continue to
+  pass — confirms the queued wake path is unaffected.
+
+  Customer proof:
+  `drift-mariadb-client/packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`
+  goes from elapsed=0 (5/5) pre-fix to elapsed=550 post-fix.
+
 ## 2026-05-15 (LANGUAGE_BUG fix: method-receiver autoborrow through a ref-returning rvalue base + field projection; companion soundness fix rejecting value-self consumption through a borrowed projection)
 - **LANGUAGE_BUG fix + soundness tightening.** Release 0.31.88, ABI unchanged at 14.
   Follow-up to 0.31.87's `&w.get().handle` fix.  The maria team reported

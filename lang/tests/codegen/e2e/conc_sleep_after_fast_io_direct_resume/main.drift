@@ -1,0 +1,91 @@
+module main;
+
+// RUNTIME regression for the FAST-I/O direct-resume stale park_token
+// bug (mariadb team report, 2026-05-15; deterministic 5/5 customer
+// reproduction at
+// `drift-mariadb-client/packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`).
+//
+// **Pre-fix repro intent:** if the FAST-I/O dispatch path in
+// `lang/language_runtime/posix/thread_runtime.c` does
+// `park_token++` alongside its swapcontext-resume of a parked VT, the
+// VT's NEXT `park_until` call consumes the unconsumed token and
+// instant-returns — masquerading as "sleep finished in 0ms."
+//
+// **This test deterministically forces the FAST-I/O direct-resume
+// path** by using the runtime test-harness `test_eventfd_create` /
+// `test_eventfd_write` primitives.  No TCP timing, no external
+// service, no loopback variability — a single eventfd controlled by
+// one VT triggers exactly one direct-resume on a spawned VT.
+//
+// Trigger:
+//   1. main creates an eventfd
+//   2. main spawns slave VT
+//   3. slave registers EPOLLIN on the eventfd and parks
+//   4. main sleeps a brief tick to ensure slave has parked, then
+//      writes to the eventfd — this is the I/O event
+//   5. reactor's FAST-I/O dispatch direct-resumes slave via
+//      swapcontext (the bug site: pre-fix this also did
+//      `park_token++`)
+//   6. slave, immediately after resume, calls vt_park_until for
+//      100ms.  Pre-fix: stale token → fast-return → elapsed ~0ms.
+//      Post-fix: token==0 → real park → elapsed ~100ms.
+//
+// Companion to `conc_sleep_after_timed_io_wait` (0.31.86 TIMEOUT-case
+// regression) — that one pins the duplicate-timer flavor of the
+// stale-token bug; this one pins the FAST-I/O direct-resume flavor.
+// Both are needed: the bug class is "stale park_token from any
+// dispatch path that does not balance ++/--".
+
+import std.concurrent as conc;
+import std.console as cons;
+import std.core as core;
+import std.format as fmt;
+import std.time as time;
+import lang.thread as thread;
+
+pub fn main() nothrow -> Int {
+	val fd = thread.test_eventfd_create();
+	if fd == 0 {
+		cons.eprintln("FAIL: test_eventfd_create returned 0 (eventfd unsupported?)");
+		return 99;
+	}
+	var t = conc.spawn_cb(core.callback0(| | captures(copy fd) nothrow => {
+		var vt = thread.vt_current();
+		// Park on EPOLLIN for this eventfd.  When main writes to it
+		// (below), the reactor's FAST-I/O dispatch path direct-resumes
+		// this VT via swapcontext.
+		thread.reactor_register_io(fd, 1, vt, 0);
+		thread.vt_park(0);
+		// We are NOW just-resumed via FAST-I/O direct-resume.
+		// Pre-fix: park_token == 1 (spurious bump from dispatch).
+		// Post-fix: park_token == 0 (swapcontext alone delivered the wake).
+		// Sleep 100ms and report elapsed.
+		val t0 = time.now_monotonic();
+		thread.vt_park_until(thread.now_ms() + 100);
+		val elapsed = time.elapsed_ms(&t0);
+		return elapsed;
+	}));
+	// Give the slave VT time to register and park.  10ms is comfortable;
+	// the slave is a single VT doing two intrinsic calls plus a park,
+	// so it's parked well before 10ms.
+	thread.vt_park_until(thread.now_ms() + 10);
+	// Fire the eventfd — slave's reactor watch sees EPOLLIN.
+	thread.test_eventfd_write(fd, 1);
+	var res = t.join();
+	match res {
+		Ok(elapsed) => {
+			if elapsed < 80 {
+				cons.eprintln("FAIL: post-FAST-I/O sleep was " + fmt.format_int(elapsed) + "ms, expected >=80ms (stale park_token consumed it — FAST-I/O direct-resume regression)");
+				return 1;
+			}
+			if elapsed > 500 {
+				cons.eprintln("FAIL: post-FAST-I/O sleep was " + fmt.format_int(elapsed) + "ms, expected <=500ms");
+				return 2;
+			}
+			cons.println("ok");
+			return 0;
+		},
+		Err(_) => { cons.eprintln("FAIL: slave VT errored"); return 3; },
+		default => { return 4; }
+	}
+}

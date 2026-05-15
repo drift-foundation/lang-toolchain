@@ -1,0 +1,5 @@
+{
+  "description": "RUNTIME regression: FAST-I/O direct-resume must not leave a stale park_token. Pre-fix (0.31.87/0.31.88-staged) the reactor's direct-resume dispatch at thread_runtime.c:665/688 did park_token++ alongside a swapcontext-resume — the swapcontext is the wake, the token++ leaked +1 onto the resumed VT, and the VT's next park_until consumed it spuriously (customer-visible: `wire.query + drain + conc.sleep(550ms)` showed elapsed=0). Deterministic regression: uses test_eventfd_create + test_eventfd_write to force exactly one FAST-I/O direct-resume on a spawned VT, then asserts the VT's immediate vt_park_until(100ms) actually parks (elapsed >= 80ms). Verified to fail 5/5 pre-fix (elapsed=0ms) and pass 5/5 post-fix. Companion to `conc_sleep_after_timed_io_wait` which pins the TIMEOUT-case duplicate-timer leak (0.31.86 fix).",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}

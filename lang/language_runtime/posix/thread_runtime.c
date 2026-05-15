@@ -662,7 +662,39 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 								} else { tp = tc; }
 								tc = tn;
 							}
-							rv->park_token++;
+							/* FAST-I/O direct-resume: the swapcontext below
+							 * IS the wake — do NOT also bump park_token, or
+							 * the unconsumed token short-circuits the VT's
+							 * next park_until call (customer-visible
+							 * "sleep(550ms) elapsed=0" after a single
+							 * wire.query+drain; see docs/history.md
+							 * 2026-05-16 and the maria-team reduction
+							 * fixture
+							 * `packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`
+							 * in drift-mariadb-client which deterministically
+							 * reproduces 5/5).
+							 *
+							 * Where park_token *is* the wake mechanism: the
+							 * `drift_thread_unpark` fallback (~line 1944)
+							 * when state != PARKED — no swapcontext-resume
+							 * possible, the next park consumes the token —
+							 * and defensive cv-signal bumps in shutdown /
+							 * cancel paths (`drift_worker_vt_finish`,
+							 * `drift_thread_drop`, `drift_thread_cancel`).
+							 * The enqueue dispatch path (~line 1108) does
+							 * NOT mint a token; it sets state=READY and
+							 * enqueues the VT for the worker to dequeue,
+							 * which then swapcontext-resumes — wake is
+							 * delivered by the dequeue+swapcontext, no
+							 * token needed.
+							 *
+							 * Race-window protection (another unpark fires
+							 * between state=RUNNING below and the
+							 * swapcontext) is unchanged: the racing unpark
+							 * sees state != PARKED, takes the
+							 * drift_thread_unpark fallback which bumps
+							 * park_token, and the VT's next park consumes
+							 * that token. */
 							atomic_store(&rv->state, DRIFT_VT_RUNNING);
 							direct_vt = rv;
 						}
@@ -685,7 +717,8 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 								tc = tn;
 							}
 							if (!direct_vt) {
-								wv->park_token++;
+								/* FAST-I/O direct-resume — see read-side
+								 * comment above; no park_token bump. */
 								atomic_store(&wv->state, DRIFT_VT_RUNNING);
 								direct_vt = wv;
 							} else if (wv != direct_vt) {

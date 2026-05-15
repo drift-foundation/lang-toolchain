@@ -1,0 +1,5 @@
+{
+  "description": "RUNTIME regression: FAST-I/O direct-resume WRITE-side branch (line 688 in thread_runtime.c) must not leave a stale park_token. Companion to `conc_sleep_after_fast_io_direct_resume` which covers the symmetric READ-side branch (line 665). The bug existed independently at both sites. Uses test_eventfd_create + reactor_register_io(fd, 4=EPOLLOUT, vt, 0) on a fresh eventfd (writable from counter=0), which delivers an immediate EPOLLOUT edge on EPOLL_CTL_ADD and drives the write-side direct-resume. Verified to fail 5/5 pre-fix (elapsed=0ms) and pass 5/5 post-fix.",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}
