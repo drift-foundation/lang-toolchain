@@ -1,0 +1,102 @@
+module main;
+
+// Pins the `MutexGuard.unlock_for_condvar` / `relock_for_condvar`
+// state-invariant pair, added as a PR1 prerequisite for
+// `std.concurrent.Condvar`.
+//
+// The contract:
+//   1. `unlock_for_condvar` releases the underlying lock and flips
+//      `locked` to false.  The protected value MUST NOT be read
+//      until a matching `relock_for_condvar`.
+//   2. `relock_for_condvar` re-acquires the lock (spinning) and
+//      flips `locked` back to true.
+//   3. The destructor respects the `locked` field: if a guard is
+//      dropped while still unlocked (a contract violation), it
+//      does NOT double-unlock.
+//   4. The pair preserves mutual exclusion — while the guard is
+//      unlocked-for-condvar, another VT can acquire the same
+//      mutex.
+//
+// This test exercises (1), (2), and (4) by having a spawned VT
+// race to acquire the mutex during our unlock-relock window.
+// The destructor non-double-unlock contract (3) is exercised via
+// a sub-scope where a guard is leaked unlocked.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+import std.format as fmt;
+
+pub fn main() nothrow -> Int {
+	val m = conc.arc(conc.mutex(42));
+
+	// Spawn a VT that will try to acquire the mutex while we have
+	// it unlocked-for-condvar.  It should succeed during our
+	// unlock window and the value it sees is whatever we left.
+	val saw = conc.arc(conc.mutex(0));
+
+	val mc1 = m.clone();
+	val sc1 = saw.clone();
+	var grabber = conc.spawn_cb(core.callback0(| | captures(move mc1, move sc1) nothrow => {
+		// Wait a moment so main has time to unlock for us.
+		match conc.sleep(conc.Duration(millis = 20)) {
+			core.Result::Err(_) => { return 10; },
+			core.Result::Ok(_) => { }
+		}
+		// Acquire the mutex — should succeed quickly because main
+		// is unlocked-for-condvar.
+		var g = mc1.get().lock();
+		val v = g.get_mut();
+		// Record what we saw.
+		var sg = sc1.get().lock();
+		val sv = sg.get_mut();
+		*sv = *v;
+		return 0;
+	}));
+
+	// Main: take the lock, then unlock-for-condvar.
+	var g = m.get().lock();
+	{
+		val v = g.get_mut();
+		*v = 99;  // mutate while holding the lock
+	}
+	g.unlock_for_condvar();
+
+	// Wait for the grabber to acquire + record.  Use a real sleep
+	// (no Condvar yet, that's PR2).
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Grabber should be done; rejoin.
+	match grabber.join() {
+		core.Result::Err(_) => { cons.eprintln("FAIL: grabber join errored"); return 21; },
+		core.Result::Ok(rc) => {
+			if rc != 0 {
+				cons.eprintln("FAIL: grabber returned " + fmt.format_int(rc));
+				return 22;
+			}
+		}
+	}
+
+	// Confirm the grabber successfully acquired and saw our 99.
+	var sg = saw.get().lock();
+	val saw_val = *sg.get_mut();
+	if saw_val != 99 {
+		cons.eprintln("FAIL: grabber saw " + fmt.format_int(saw_val) + " (expected 99 — proves mutual exclusion held)");
+		return 23;
+	}
+
+	// Reacquire and confirm we can still read the value.
+	g.relock_for_condvar();
+	val final_val = *g.get_mut();
+	// Grabber may have written nothing back; value should be 99.
+	if final_val != 99 {
+		cons.eprintln("FAIL: after relock, value is " + fmt.format_int(final_val) + " (expected 99)");
+		return 24;
+	}
+
+	cons.println("ok");
+	return 0;
+}

@@ -1,0 +1,5 @@
+{
+  "description": "Pins lang.thread.vt_is_cancelled() for its two observable contract surfaces: off-VT returns 0, fresh non-cancelled VT returns 0. The 'cancelled VT observes its own cancellation' case is intentionally NOT covered — the scheduler's pre-dispatch cancelled-check kills parked VTs before user code can run (see runtime thread_runtime.c:858-872), so vt_is_cancelled is useful for compute-loop cooperative cancellation but NOT for parking primitives like Condvar. Condvar surfaces CLOSED + TIMEOUT errors instead of CANCELLED.",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}

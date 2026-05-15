@@ -384,10 +384,18 @@ pub struct Mutex<T> {
 /// Implements `core.BorrowMut<T>` so the guard composes with `&mut T`
 /// receivers via UFCS.
 ///
+/// The `locked` field tracks whether the guard currently owns the
+/// underlying lock.  It is normally `true` for the guard's whole
+/// lifetime; `Condvar.wait` (and only Condvar) flips it via
+/// `unlock_for_condvar` / `relock_for_condvar` around the park.
+/// The destructor respects the flag so a guard that was unlocked
+/// for Condvar but never relocked does not double-unlock.
+///
 /// **See also:** `Mutex`, `MutexGuard.get_mut`, `mutex_guard_get_mut`.
 pub struct MutexGuard<T> {
 	mtx: &Mutex<T>,
-	value_ptr: mem.Ptr<T>
+	value_ptr: mem.Ptr<T>,
+	locked: Bool
 }
 
 // `arc<T>()` factory, the Stage 2 `_arc_*_impl<T>` helpers,
@@ -419,7 +427,7 @@ pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
 	}
 	unsafe {
 		val vp = mem.ptr_from_ref<type T>(&m.value);
-		return MutexGuard<type T>(mtx = m, value_ptr = vp);
+		return MutexGuard<type T>(mtx = m, value_ptr = vp, locked = true);
 	}
 }
 
@@ -443,7 +451,7 @@ implement<T> Mutex<T> {
 		}
 		unsafe {
 			val vp = mem.ptr_from_ref<type T>(&self.value);
-			return MutexGuard<type T>(mtx = self, value_ptr = vp);
+			return MutexGuard<type T>(mtx = self, value_ptr = vp, locked = true);
 		}
 	}
 }
@@ -460,6 +468,43 @@ implement<T> MutexGuard<T> {
 			return mem.ptr_as_mut_ref<type T>(self.value_ptr);
 		}
 	}
+
+	/// **Internal — for `std.concurrent.Condvar` only.**
+	///
+	/// Releases the underlying lock without dropping the guard.
+	/// Must be paired with a matching `relock_for_condvar` call
+	/// before the guard is dropped or any guarded value is read.
+	///
+	/// Asserts at runtime that the guard is currently locked —
+	/// calling on an already-unlocked guard is a contract
+	/// violation.  The state invariant guarantees that:
+	///   - The destructor does not double-unlock if a guard is
+	///     dropped while unlocked-for-condvar (a contract
+	///     violation that we surface via the leftover lock rather
+	///     than by corrupting the mutex).
+	///   - `relock_for_condvar` cannot be accidentally called
+	///     without a matching prior unlock.
+	pub fn unlock_for_condvar(self: &mut MutexGuard<T>) nothrow -> Void {
+		assert(self.locked, "unlock_for_condvar on already-unlocked guard");
+		atomic.atomic_store_bool(&self.mtx.locked, false, 2);
+		self.locked = false;
+	}
+
+	/// **Internal — for `std.concurrent.Condvar` only.**
+	///
+	/// Reacquires the lock after a matching `unlock_for_condvar`
+	/// call.  Spins until the lock is uncontended (same discipline
+	/// as `Mutex.lock`).
+	///
+	/// Asserts at runtime that the guard is currently unlocked —
+	/// calling without a matching prior `unlock_for_condvar` is a
+	/// contract violation.
+	pub fn relock_for_condvar(self: &mut MutexGuard<T>) nothrow -> Void {
+		assert(not self.locked, "relock_for_condvar on already-locked guard");
+		while not atomic.atomic_compare_exchange_bool(&self.mtx.locked, false, true, 1, 0) {
+		}
+		self.locked = true;
+	}
 }
 
 implement<T> core.BorrowMut<T> for MutexGuard<T> {
@@ -470,7 +515,19 @@ implement<T> core.BorrowMut<T> for MutexGuard<T> {
 
 implement<T> core.Destructible for MutexGuard<T> {
 	pub fn destroy(self: MutexGuard<T>) nothrow -> Void {
-		atomic.atomic_store_bool(&self.mtx.locked, false, 2);
+		if self.locked {
+			atomic.atomic_store_bool(&self.mtx.locked, false, 2);
+		}
+		// else: the guard was left unlocked via `unlock_for_condvar`
+		// without a matching `relock_for_condvar` — a contract
+		// violation.  We drop the unlock here to avoid double-unlock
+		// (which on a spin-CAS lock would race a concurrent locker
+		// into a corrupted "false but held" state).  The mutex stays
+		// unlocked (since unlock_for_condvar already released it),
+		// which is the correct end-state if the contract violation
+		// happened on a drop path; if a caller leaks a guard while
+		// unlocked-for-condvar, the leak is the bug, not the
+		// destructor.
 	}
 }
 

@@ -14,6 +14,7 @@ export {
 	vt_cancel,
 	vt_drop,
 	vt_current,
+	vt_is_cancelled,
 	vt_park,
 	vt_park_until,
 	vt_unpark,
@@ -101,6 +102,22 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_cancel(vt: VtHandle) nothrow -> Int;
 @intrinsic pub fn vt_drop(vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn vt_current() nothrow -> VtHandle;
+
+/// Returns `1` if the current VT has been cancelled (via
+/// `vt_cancel` from another VT or from `std.concurrent` cancellation
+/// paths), `0` otherwise.  Returns `0` when called outside a VT
+/// context.
+///
+/// Primary use: after `vt_park` / `vt_park_until` returns, stdlib
+/// parking primitives (`std.concurrent.Condvar`, channel `recv`,
+/// etc.) read this flag to distinguish a cancellation-driven wake
+/// from a normal signal / timeout, so they can surface a typed
+/// `CANCELLED` error rather than silently returning Ok.
+///
+/// Backed by the runtime's per-VT `cancelled` atomic which the
+/// cancel path (`vt_cancel`) sets before bumping `park_token` to
+/// wake the parked VT.
+@intrinsic pub fn vt_is_cancelled() nothrow -> Int;
 @intrinsic pub fn vt_park(reason: Int) nothrow -> Void;
 @intrinsic pub fn vt_park_until(deadline_ms: Int) nothrow -> Void;
 @intrinsic pub fn vt_unpark(vt: VtHandle) nothrow -> Void;

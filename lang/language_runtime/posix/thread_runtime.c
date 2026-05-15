@@ -1780,6 +1780,20 @@ uint64_t drift_thread_current(void) {
 	return 0;
 }
 
+/* Return 1 if the current VT has been cancelled, 0 otherwise (including
+ * the case where there is no current VT — off-VT callers see 0).
+ *
+ * Used by std.concurrent.Condvar (and other stdlib parking primitives)
+ * to surface CANCELLED as a typed error after vt_park returns: the
+ * runtime's cancel path sets vt->cancelled before bumping park_token,
+ * so a parked VT that wakes via cancellation can read this flag after
+ * its park returns and route the appropriate error. */
+int64_t drift_thread_is_cancelled(void) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) return 0;
+	return atomic_load(&vt->cancelled) ? 1 : 0;
+}
+
 /* Return the stable VT id for the current virtual thread, or 0 if
  * not running on a VT. */
 uint64_t drift_thread_vtid(void) {

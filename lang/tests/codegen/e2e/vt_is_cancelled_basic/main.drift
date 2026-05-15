@@ -1,0 +1,69 @@
+module main;
+
+// Pins the `lang.thread.vt_is_cancelled()` intrinsic added as a PR1
+// prerequisite for `std.concurrent.Condvar`-track primitives.
+//
+// Two observable states:
+//
+//   1. Off-VT (called from the root thread before any spawn) →
+//      returns 0 (false-equivalent).
+//   2. On a fresh VT that has NOT been cancelled → returns 0.
+//
+// **What this test does NOT cover (by design):**  The "cancelled
+// VT observes its own cancellation" case is NOT testable through
+// the standard scheduler path.  When `vt_cancel(handle)` is called
+// on a parked VT, the runtime sets the cancelled flag, but the
+// next time the scheduler picks the VT off the run queue
+// (e.g. after a timer-driven unpark), the worker's pre-dispatch
+// cancelled-check kills the VT before any user code runs.  See
+// `lang/language_runtime/posix/thread_runtime.c:858-872`.
+//
+// So `vt_is_cancelled()` is useful in two contexts:
+//
+//   - Compute-bound user loops that voluntarily check the flag
+//     and exit gracefully — but ONLY if they never yield to the
+//     scheduler, OR run on a multi-worker executor where the
+//     check can race ahead of the kill.
+//   - Off-VT contexts where it always returns 0 (the "no current
+//     VT to be cancelled" semantic).
+//
+// `std.concurrent.Condvar` does NOT use `vt_is_cancelled` to
+// surface a CANCELLED error from `wait`, precisely because the
+// scheduler kills the parked VT before that code path can run.
+// Condvar surfaces `CLOSED` (via `close()`) and `TIMEOUT` (via
+// `wait_timeout`) instead.  Future runtime work to allow user
+// code to observe cancellation cleanly is a separate slice; until
+// then, this intrinsic is a primitive for compute-loop authors.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+import std.format as fmt;
+import lang.thread as thread;
+
+pub fn main() nothrow -> Int {
+	// Case 1: off-VT (caller is the root thread, no VT yet).
+	val off = thread.vt_is_cancelled();
+	if off != 0 {
+		cons.eprintln("FAIL case 1: off-VT vt_is_cancelled returned " + fmt.format_int(off) + " (expected 0)");
+		return 1;
+	}
+
+	// Case 2: a fresh VT that completes normally observes 0.
+	var normal = conc.spawn(| | nothrow => {
+		val c = thread.vt_is_cancelled();
+		return c;
+	});
+	match normal.join() {
+		core.Result::Err(_) => { cons.eprintln("FAIL case 2: normal VT join errored"); return 2; },
+		core.Result::Ok(v) => {
+			if v != 0 {
+				cons.eprintln("FAIL case 2: fresh VT vt_is_cancelled returned " + fmt.format_int(v) + " (expected 0)");
+				return 3;
+			}
+		}
+	}
+
+	cons.println("ok");
+	return 0;
+}

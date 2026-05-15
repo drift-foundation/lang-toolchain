@@ -1502,6 +1502,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_vtid()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_cancelled()",
 					"",
 				]
 			)
@@ -4167,6 +4168,20 @@ class _FuncBuilder:
 					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
+			if instr.fn_id.name == "vt_is_cancelled":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: vt_is_cancelled expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_is_cancelled result must be captured")
+				self.module.needs_thread_runtime = True
+				if instr.can_throw:
+					raw = self._fresh("vic_raw")
+					self.lines.append(f"  {raw} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_cancelled()")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="vic_ok")
+				else:
+					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_cancelled()")
+					self.value_types[dest] = DRIFT_INT_TYPE
+				return
 			if instr.fn_id.name == "vt_park":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: vt_park expects 1 arg, got {len(instr.args)}")
@@ -5429,6 +5444,15 @@ class _FuncBuilder:
 					raise NotImplementedError("LLVM codegen v1: vt_current result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()")
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_is_cancelled":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: vt_is_cancelled expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_is_cancelled result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_cancelled()")
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "vt_id":

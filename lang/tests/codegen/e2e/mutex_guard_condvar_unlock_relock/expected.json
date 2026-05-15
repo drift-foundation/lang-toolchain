@@ -1,0 +1,5 @@
+{
+  "description": "Pins MutexGuard.unlock_for_condvar / relock_for_condvar — the state-invariant pair added as PR1 prerequisite for std.concurrent.Condvar. Confirms (a) unlock_for_condvar releases the underlying lock so another VT can acquire it, (b) relock_for_condvar re-acquires, (c) the protected value survives the unlock/relock cycle. Mutual exclusion validated by a spawned grabber VT that records what it sees during our unlock window.",
+  "exit_code": 0,
+  "stdout": "ok\n"
+}

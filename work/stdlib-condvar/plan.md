@@ -66,8 +66,16 @@ implement Condvar {
     ///
     /// Returns `Ok(())` on normal wake.  Returns
     /// `Err(ConcurrencyError(kind=CLOSED))` if the Condvar has been
-    /// closed.  Returns `Err(ConcurrencyError(kind=CANCELLED))` if
-    /// the VT was cancelled while parked.
+    /// closed.  Returns `Err(ConcurrencyError(kind=REQUIRES_VTHREAD))`
+    /// if called outside a VT context.
+    ///
+    /// **Note:** Condvar does NOT surface `CANCELLED` from
+    /// `vt_cancel`.  The runtime's scheduler kills parked VTs at
+    /// worker-dispatch time after cancellation, before any
+    /// user-code wake handler can run; consequently a cancelled
+    /// waiter never returns from `wait` at all — its VT is reaped.
+    /// Use `close()` for coordinated shutdown (see below); use
+    /// `wait_timeout` for time-bound waits.
     ///
     /// **Spurious wakes are permitted.**  Callers MUST loop around
     /// the predicate:
@@ -596,7 +604,7 @@ the `lang.thread.test_eventfd_*` harness pattern where helpful
 | `condvar_wait_until_absolute_deadline` | wait_until matches wait_timeout shape; deadline passed → Err(TIMEOUT) without parking |
 | `condvar_stale_token_no_leak_plain_wait` | **plain wait** wakes spuriously (no signal), then waiter does unrelated `conc.sleep` → sleep parks for real duration, not 0ms.  Pins that plain `wait` also performs the self-CAS. |
 | `condvar_stale_token_no_leak_timeout` | wait_timeout times out, then unrelated signal_one runs, waiter does unrelated `conc.sleep` → sleep parks for real duration. |
-| `condvar_cancel_during_wait` | wait, external vt_cancel → Err(CANCELLED) |
+| ~~`condvar_cancel_during_wait`~~ | removed: scheduler kills cancelled parked VTs before wait can return; no testable CANCELLED surface |
 | `condvar_spurious_wake_predicate_loop` | wake without signal, predicate fails → caller's loop re-parks |
 | `condvar_off_vt_returns_requires_vthread` | call wait from a non-VT context → Err(REQUIRES_VTHREAD) without parking |
 | `condvar_mutex_guard_invariant_holds` | unlock_for_condvar / relock_for_condvar pair preserves locked state; double-unlock panics; drop-after-unlock-without-relock doesn't double-unlock |
@@ -818,6 +826,30 @@ in-package stopgap.
 ---
 
 ## Revision history
+
+**2026-05-16 v4** — PR1 implementation findings:
+
+1. **`CANCELLED` dropped from Condvar's error surface.**  PR1
+   implementation work revealed that the runtime scheduler's
+   worker-dispatch cancelled-check
+   (`thread_runtime.c:858-872`) kills parked VTs before any
+   user code runs after a wake.  Concretely: a VT parked inside
+   `vt_park_until`, then cancelled by another VT, is reaped at
+   the next worker re-dispatch (timer-driven unpark → enqueue →
+   worker pulls → sees `cancelled` set → kills) WITHOUT giving
+   the VT's code a chance to call `vt_is_cancelled` and route
+   the error.  So `Condvar.wait` cannot surface `CANCELLED` via
+   the planned `vt_is_cancelled()` post-wake classification.
+   The intrinsic is still useful for compute-loop cooperative
+   cancellation (the test pins this), but is removed from
+   Condvar's contract.  `wait` and `wait_timeout` surface only
+   `CLOSED`, `TIMEOUT`, and `REQUIRES_VTHREAD`.
+2. Implementation choice: `MutexGuard<T>` now carries `locked: Bool`
+   (not AtomicBool — the guard is owned by one VT at a time, no
+   cross-VT access).  `unlock_for_condvar` and `relock_for_condvar`
+   shipped; both assert against double-unlock / double-relock.
+   Destructor respects the flag and skips the unlock if the guard
+   was left in the unlocked-for-condvar state.
 
 **2026-05-16 v3** — final review pass before kickoff:
 
