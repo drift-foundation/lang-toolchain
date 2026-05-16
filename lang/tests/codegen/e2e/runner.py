@@ -38,6 +38,20 @@ from lang.driftc.parser import (
 	parse_drift_workspace_to_hir,
 	stdlib_root,
 )
+from lang.test_support.drift_tmp import session_root as _drift_session_root
+
+# Bootstrap DRIFT_TMP_ROOT for direct-invocation runs.  When this runner
+# is launched via pytest, the root `conftest.py` already initialized
+# `DRIFT_TMP_ROOT` (see conftest.py line ~46).  But invoking the runner
+# directly (`python -m lang.tests.codegen.e2e.runner ...`) bypasses
+# conftest, so the env var is unset — and the compiled Drift binary's
+# `env.drift_tmp_path()` falls back to bare `/tmp/<name>`, polluting
+# the tmpfs root outside the janitor-sweepable namespace.  Calling
+# session_root() here writes `/tmp/drift-$USER/session-$PID-$ts` into
+# os.environ, so every subprocess.run(..., env=os.environ.copy())
+# below inherits it and the test binary takes the proper-namespace
+# branch in env.drift_tmp_path.
+_drift_session_root()
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.driftc import compile_to_llvm_ir_for_tests, ReservedNamespacePolicy
 from lang.driftc.env_flags import env_true as _env_true
