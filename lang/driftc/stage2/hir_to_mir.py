@@ -5539,6 +5539,24 @@ class HIRToMIR:
 			raise AssertionError("array method receiver type unknown in MIR lowering (checker bug)")
 		recv_def = self._type_table.get(recv_ty)
 		array_ty = recv_ty
+		# Resolve through one REF hop without emitting any MIR.  The
+		# receiver type can be `&Array<T>` when the typechecker autoborrows
+		# a value-context receiver; we still need to inspect the underlying
+		# `Array<T>` here to decide whether this method actually targets an
+		# array intrinsic.
+		if recv_def.kind is TypeKind.REF and recv_def.param_types:
+			array_ty = recv_def.param_types[0]
+		# Pre-emission kind guard: the intrinsic-name set above includes
+		# names that also exist as user-defined methods on non-Array types
+		# (e.g. `FileBuilder::truncate`).  Any MIR emitted before this guard
+		# would be left dead in the function body when we bail out — for
+		# chained owned-builder receivers (`builder().truncate(...)`) that
+		# means the entire receiver chain gets lowered twice, leaking each
+		# allocation in the abandoned prefix.  Determine eligibility from
+		# the type alone, then lower the receiver only when committed.
+		array_def = self._type_table.get(array_ty)
+		if array_def.kind is not TypeKind.ARRAY or not array_def.param_types:
+			return False, None
 		recv_ptr: M.ValueId | None = None
 		# Read-only intrinsic methods: do not take an exclusive borrow
 		# of the receiver place.  `len`/`cap`/`capacity`/`gen` are
@@ -5553,7 +5571,6 @@ class HIRToMIR:
 		if name == "range":
 			recv_is_mut = False
 		if recv_def.kind is TypeKind.REF and recv_def.param_types:
-			array_ty = recv_def.param_types[0]
 			recv_ptr = self.lower_expr(expr.receiver)
 		else:
 			place_expr = place_expr_from_lvalue_expr(expr.receiver)
@@ -5565,9 +5582,6 @@ class HIRToMIR:
 			)
 		if recv_ptr is None:
 			raise AssertionError("array method missing receiver address (checker bug)")
-		array_def = self._type_table.get(array_ty)
-		if array_def.kind is not TypeKind.ARRAY or not array_def.param_types:
-			return False, None
 		elem_ty = array_def.param_types[0]
 
 		array_val = self.b.new_temp()
