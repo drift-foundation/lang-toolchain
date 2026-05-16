@@ -1,0 +1,41 @@
+module m;
+
+// Condvar e2e #3 — wait_timeout returns Err(TIMEOUT) when no
+// signal arrives before the deadline elapses.
+//
+// Spawn a VT that calls `wait_timeout(50 ms)`.  Main does NOT
+// signal.  The waiter's wait should park, the 50 ms timer should
+// fire, and the wait should return `Err(ConcurrencyError(kind =
+// CONCURRENCY_KIND_TIMEOUT, ...))`.  Waiter returns 0 on TIMEOUT,
+// non-zero on any other outcome.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		// Single-shot wait_timeout — do NOT loop on spurious wake,
+		// because we want the deadline-elapses path to be the only
+		// outcome (no signal will arrive in this test).
+		match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 50)) {
+			core.Result::Ok(_) => { return 91; },  // unexpected wake
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+				return 92;  // wrong error kind
+			}
+		}
+	}));
+
+	// Wait long enough for the timeout to fire + the VT to rejoin.
+	match waiter.join() {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+	return 0;
+}

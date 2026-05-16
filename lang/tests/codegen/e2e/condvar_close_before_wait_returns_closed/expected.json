@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #5: close before any wait → subsequent wait returns Err(CLOSED) immediately via the fast-path closed-check at top of _wait_inner; no parking.",
+  "exit_code": 0
+}

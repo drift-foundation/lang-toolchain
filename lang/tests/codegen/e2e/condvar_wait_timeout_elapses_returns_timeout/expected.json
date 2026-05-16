@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #3: wait_timeout returns Err(TIMEOUT) when the deadline elapses with no signal.  Pins the park-with-deadline → timer-wake → TIMEOUT error path.",
+  "exit_code": 0
+}

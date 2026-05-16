@@ -2499,6 +2499,45 @@ class HIRToMIR:
 		referenced storage and returns it as the borrow result.
 		"""
 		if not (hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr"))):
+			# LANGUAGE_BUG fix (2026-05-15): if the subject is an
+			# HField (or HField chain) rooted at an rvalue call that
+			# returns `&T`, the whole-expression materialization below
+			# would COPY the leaf field value (an AtomicBool, a Mutex
+			# guard, …) into the temp and return `&temp` — silently
+			# breaking `&self` interior-mutation methods on the leaf.
+			# This is the `arc.get().flag.store(true, Release)` shape
+			# pinned at
+			# `lang/tests/driver/test_arc_get_field_atomic_store_persistence_blocker.py`.
+			#
+			# Instead: walk the projection chain looking for the
+			# deepest rvalue base.  If that base is a call that
+			# returns `&T`, lower the call once to its `&T` value
+			# and walk the remaining HField chain emitting
+			# `AddrOfField` (and `LoadRef` for any intermediate REF
+			# field) directly against that pointer — the same place-
+			# chain shape `_lower_addr_of_place` produces, but
+			# rooted at a call result instead of a local's address.
+			# (`_lower_addr_of_place` itself is not reused: it takes
+			# an `HPlaceExpr` and starts from `AddrOfLocal`, which
+			# this rvalue-rooted subject doesn't have.)
+			# `_lift_rvalue_ref_base_for_borrow` splits this into a
+			# pure-inspection validator (`_validate_lifted_chain`)
+			# and an emitter, so a structural mismatch returns None
+			# without leaving any MIR behind — the caller falls back
+			# to the whole-expression materialization below over the
+			# same untouched subject.  This mirrors the stage1
+			# `BorrowMaterializeRewriter._split_lift_place_chain`
+			# strategy for `&w.get().handle`, applied here at MIR
+			# lowering because the type checker injects this
+			# specific HBorrow shape AFTER stage1 normalization runs
+			# (see `type_checker.py` autoborrow-on-rvalue-call
+			# branch ~line 8704).
+			lifted = self._lift_rvalue_ref_base_for_borrow(
+				expr.subject, is_mut=expr.is_mut
+			)
+			if lifted is not None:
+				return lifted
+
 			if expr.is_mut:
 				raise AssertionError("non-canonical &mut borrow operand reached MIR lowering (normalize/typechecker bug)")
 			inner_ty = self._infer_expr_type(expr.subject)
@@ -2514,6 +2553,175 @@ class HIRToMIR:
 			return ptr
 		ptr, _inner = self._lower_addr_of_place(expr.subject, is_mut=expr.is_mut)
 		return ptr
+
+	def _lift_rvalue_ref_base_for_borrow(
+		self, subject: H.HExpr, *, is_mut: bool
+	) -> "M.ValueId | None":
+		"""LANGUAGE_BUG-fix helper (2026-05-15).  Detect the
+		`HField(... HCall/HMethodCall_returning_ref, field1, ...)`
+		shape — a borrow subject that's a field-projection chain
+		rooted at a call returning `&T` — and lower it correctly so
+		`&self` interior-mutation methods on the leaf field mutate
+		the actual storage instead of a temp-local copy.
+
+		## Atomicity contract (K-review, 2026-05-15)
+
+		On `None` return, this function MUST have emitted zero MIR
+		instructions.  All structural validation (the call's return
+		type, every intermediate field type, mutability against
+		each REF intermediate) happens BEFORE `lower_expr` is
+		called on the base or any `AddrOfField` is emitted.  This
+		keeps the caller's fallback path (whole-expression
+		materialization) clean: when this returns None, the
+		fallback emits its own MIR over the same untouched
+		subject, with no stranded prefix instructions.
+
+		## Supported chain shape
+
+		Validated by `_validate_lifted_chain`:
+
+		1. The outermost subject is `HField`, repeatedly walked
+		   inward through nested `HField` projections.
+		2. The innermost base is `HCall` / `HMethodCall` /
+		   `HInvoke` whose inferred type is `&T` (or `&mut T`).
+		3. Every intermediate field's type, after auto-dereffing
+		   any ref hops, resolves to a `TypeKind.STRUCT` so the
+		   next field name can be looked up.
+		4. Every field name is found by `struct_field` on its
+		   containing struct.
+		5. For `&mut` borrows: every REF hop must be `ref_mut`
+		   (mirrors `_lower_addr_of_place`'s mutability rule at
+		   line ~10468).
+
+		Anything that fails validation returns None without
+		emission.  Caller's fallback handles those subjects via
+		the legacy whole-expr materialization.
+
+		## Mirrored auto-deref / mutability rules
+
+		Mirrors the field-projection auto-deref at
+		`_lower_addr_of_place` lines ~10466-10475: if a field's
+		current type is `Ref<T>`, emit a `LoadRef` to follow the
+		ref before projecting the next field.  The mutability
+		check at line ~10469 (`is_mut and not td.ref_mut →
+		AssertionError`) is replaced here by a soft-fail return-
+		None in the validator (the caller's fallback can still
+		handle the operand, even if it ultimately also rejects
+		it; emission-side bugs masquerade as miscompiles, so we
+		prefer to fall through than to assert mid-emission).
+		"""
+		plan = self._validate_lifted_chain(subject, is_mut=is_mut)
+		if plan is None:
+			return None
+		base_call_expr, projections = plan
+		# Validation passed.  Safe to emit.
+		ref_val = self.lower_expr(base_call_expr)
+		cur_ptr = ref_val
+		for step in projections:
+			# A step is either a "deref" (REF intermediate) or a
+			# "field" (struct field projection).  Deref emits
+			# LoadRef; field emits AddrOfField.
+			step_kind, step_arg = step
+			if step_kind == "deref":
+				inner_ref_ty = step_arg  # the Ref<T> type at this point
+				loaded = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=loaded, ptr=cur_ptr, inner_ty=inner_ref_ty))
+				cur_ptr = loaded
+			elif step_kind == "field":
+				struct_ty, field_idx, field_ty = step_arg
+				next_ptr = self.b.new_temp()
+				self.b.emit(M.AddrOfField(
+					dest=next_ptr,
+					base_ptr=cur_ptr,
+					struct_ty=struct_ty,
+					field_index=field_idx,
+					field_ty=field_ty,
+					is_mut=is_mut,
+				))
+				cur_ptr = next_ptr
+			else:
+				# Defensive: validator only emits the two step kinds
+				# above.  An unknown kind here means the validator
+				# and the emitter are out of sync — fail loud
+				# (we're past the no-emission boundary already).
+				raise AssertionError(
+					f"_lift_rvalue_ref_base_for_borrow: unknown step kind "
+					f"{step_kind!r} from validator (compiler bug)"
+				)
+		return cur_ptr
+
+	def _validate_lifted_chain(
+		self, subject: H.HExpr, *, is_mut: bool
+	) -> "tuple[H.HExpr, list[tuple[str, object]]] | None":
+		"""Validate the projection chain for
+		`_lift_rvalue_ref_base_for_borrow`.  Pure inspection — emits
+		zero MIR instructions.  On success returns
+		`(base_call_expr, projections)` where `projections` is the
+		ordered list of (`"deref"|"field"`, payload) steps the
+		emitter executes against the base's `&T` result.  On any
+		structural mismatch — non-field outer chain, non-call
+		innermost, non-ref call return, non-struct intermediate,
+		unknown field name, &mut through non-&mut REF hop —
+		returns None and leaves the MIR state untouched.
+
+		Walks types, never expressions.  `self._infer_expr_type` is
+		the only type-table consultation; it does not emit MIR.
+		`self._type_table.get` / `.struct_field` are pure lookups.
+		"""
+		field_names: list[str] = []
+		cur = subject
+		while isinstance(cur, H.HField):
+			field_names.append(cur.name)
+			cur = cur.subject
+		if not field_names:
+			return None
+		# Innermost base must be a callable rvalue.  HVar /
+		# HPlaceExpr already-place cases are handled by the
+		# caller's HPlaceExpr branch.
+		if not isinstance(cur, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ()))):
+			return None
+		# Base must return a reference type.  Owned-rvalue bases
+		# fall through to whole-expr materialization — see
+		# `lang/tests/codegen/e2e/autoborrow_owned_rvalue_field_method_unchanged/`
+		# for the pinned over-fire guard.
+		base_ty = self._infer_expr_type(cur)
+		if base_ty is None:
+			return None
+		base_def = self._type_table.get(base_ty)
+		if base_def.kind is not TypeKind.REF or not base_def.param_types:
+			return None
+		if is_mut and not getattr(base_def, "ref_mut", False):
+			# `&mut place.field` over a base that returned `&T`
+			# (not `&mut T`) cannot produce a `&mut` field
+			# pointer.  Defer to caller's fallback / diagnostic.
+			return None
+		# Walk the field chain innermost-first against the
+		# pointed-to struct type.  Build the step list for the
+		# emitter as we go.
+		field_names.reverse()
+		projections: list[tuple[str, object]] = []
+		cur_pointee_ty = base_def.param_types[0]
+		for field_name in field_names:
+			# Auto-deref ref intermediates: mirrors
+			# `_lower_addr_of_place`'s REF-then-field branch.
+			pointee_def = self._type_table.get(cur_pointee_ty)
+			while pointee_def.kind is TypeKind.REF and pointee_def.param_types:
+				if is_mut and not getattr(pointee_def, "ref_mut", False):
+					return None
+				projections.append(("deref", cur_pointee_ty))
+				cur_pointee_ty = pointee_def.param_types[0]
+				pointee_def = self._type_table.get(cur_pointee_ty)
+			if pointee_def.kind is not TypeKind.STRUCT:
+				return None
+			field_info = self._type_table.struct_field(cur_pointee_ty, field_name)
+			if field_info is None:
+				return None
+			field_idx, field_ty = field_info
+			projections.append(
+				("field", (cur_pointee_ty, field_idx, field_ty))
+			)
+			cur_pointee_ty = field_ty
+		return cur, projections
 
 	def _visit_expr_HCopy(self, expr: H.HCopy) -> M.ValueId:
 		"""

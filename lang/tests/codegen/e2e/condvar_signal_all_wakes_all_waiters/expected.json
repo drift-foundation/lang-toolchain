@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #2: signal_all wakes all 4 parked waiters; each observes the predicate flip and increments a shared counter to 4.",
+  "exit_code": 0
+}

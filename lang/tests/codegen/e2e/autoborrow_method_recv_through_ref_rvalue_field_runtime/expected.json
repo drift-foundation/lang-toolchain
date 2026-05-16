@@ -1,0 +1,4 @@
+{
+  "description": "Runtime pin for the general &self-method-via-ref-rvalue-field shape.  `wrapper.get().handle.peek()` where get() -> &Inner and Handle is non-Copy non-atomic returns the actual field value (42), proving the inline-chain receiver-lowering fix (hir_to_mir.py::_lift_rvalue_ref_base_for_borrow) is not atomic-specific.",
+  "exit_code": 0
+}

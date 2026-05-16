@@ -1,0 +1,54 @@
+module m;
+
+// Guard pin (companion to
+// `test_arc_get_field_atomic_store_persistence_blocker.py`): the
+// new `_lift_rvalue_ref_base_for_borrow` path in
+// `hir_to_mir.py::_visit_expr_HBorrow` must fire ONLY when the
+// ultimate rvalue base returns a reference (`&T` / `&mut T`).  An
+// owned-rvalue base (function returns `Box` by value, not `&Box`)
+// must NOT take the new path — it should fall through to the
+// existing whole-expression materialization (which copies the
+// owned rvalue into a temp local and borrows the temp).
+//
+// Why this matters: the new path lifts the base ONCE and emits
+// `AddrOfField` against the call's `&T` result, assuming the
+// pointer is stable storage.  An owned rvalue's storage exists
+// only as a temp local; semantically the field-method on an
+// owned-rvalue projection is borrowing through a value the
+// caller doesn't own past the statement.  The pre-fix
+// whole-expr materialization (with explicit temp + borrow) is
+// the correct lowering for that case.
+//
+// This test exercises the owned-rvalue shape and confirms it
+// still compiles + produces the correct result.  If the new path
+// were to swallow the owned-rvalue case, it would either
+// miscompile (AddrOfField on a temp whose lifetime ended) or
+// emit a NotImplementedError.  Neither occurs.
+
+import std.core as core;
+
+pub struct Handle { pub raw: Int }
+implement core.Destructible for Handle {
+	pub fn destroy(var self: Handle) nothrow -> Void { return; }
+}
+implement Handle {
+	pub fn peek(self: &Handle) nothrow -> Int { return self.raw; }
+}
+
+pub struct Inner { pub handle: Handle }
+
+// Returns Inner BY VALUE (owned), NOT &Inner.  This is the
+// shape that must NOT trigger the new `_lift_rvalue_ref_base_for_borrow`
+// path (since base_def.kind is STRUCT, not REF).
+fn make_inner() nothrow -> Inner {
+	return Inner(handle = Handle(raw = 7));
+}
+
+pub fn main() nothrow -> Int {
+	// `make_inner()` returns OWNED Inner.  `.handle.peek()` should
+	// take the existing whole-expr materialization path: copy the
+	// Inner into a temp, project the field, borrow, call peek.
+	val v = make_inner().handle.peek();
+	if v != 7 { return v; }
+	return 0;
+}

@@ -1,0 +1,60 @@
+module m;
+
+// Condvar e2e #1 — smallest executable path through `cv.wait`.
+//
+// Spawn a VT that locks the predicate mutex and calls
+// `cv.wait(&mut guard)`.  Main gives the waiter ~50 ms to park,
+// flips the predicate to true, then `signal_one()`.  Waiter wakes,
+// re-checks the predicate (now true), and exits Ok.  Main joins
+// and returns 0.
+//
+// Why this is the unblock pin: prior to the compiler fix at
+// `call_resolver.py:5256` (LANGUAGE_BUG: qualified variant ctor
+// in generic-fn body), `cv.wait` couldn't be reached because
+// `_wait_inner<T>`'s `atomic.MemoryOrder::Acquire()` calls failed
+// to resolve.  This is the smallest program that exercises the
+// full wait path: park, signal, unpark, predicate re-check.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 99; }
+			}
+		}
+		return 0;
+	}));
+
+	// Give the waiter time to park.
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Set predicate, then signal_one.  Predicate flip happens
+	// under the lock so the waiter observes it on wake.
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_one();
+
+	// Waiter must observe predicate=true and exit Ok.
+	match waiter.join() {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return 21; } }
+	}
+	return 0;
+}

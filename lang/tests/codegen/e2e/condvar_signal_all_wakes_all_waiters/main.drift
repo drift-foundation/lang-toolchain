@@ -1,0 +1,129 @@
+module m;
+
+// Condvar e2e #2 — signal_all wakes every parked waiter.
+//
+// Spawn 4 VTs, each locks the predicate mutex and waits.  Main
+// gives them time to park, flips the predicate, and calls
+// `signal_all()`.  All four waiters must wake, observe
+// predicate=true, and exit cleanly.  Each spawned VT contributes
+// 1 to the `woke_count` shared counter on success; main asserts
+// the counter is exactly 4.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+	val woke_count = conc.arc(conc.mutex(0));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	val wc1 = woke_count.clone();
+	var w1 = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1, move wc1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 91; }
+			}
+		}
+		var wg = wc1.get().lock();
+		val wv = wg.get_mut();
+		*wv = *wv + 1;
+		return 0;
+	}));
+
+	val cv2 = cv_arc.clone();
+	val m2 = pred_lock.clone();
+	val wc2 = woke_count.clone();
+	var w2 = conc.spawn_cb(core.callback0(| | captures(move cv2, move m2, move wc2) nothrow => {
+		var g = m2.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv2.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 92; }
+			}
+		}
+		var wg = wc2.get().lock();
+		val wv = wg.get_mut();
+		*wv = *wv + 1;
+		return 0;
+	}));
+
+	val cv3 = cv_arc.clone();
+	val m3 = pred_lock.clone();
+	val wc3 = woke_count.clone();
+	var w3 = conc.spawn_cb(core.callback0(| | captures(move cv3, move m3, move wc3) nothrow => {
+		var g = m3.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv3.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 93; }
+			}
+		}
+		var wg = wc3.get().lock();
+		val wv = wg.get_mut();
+		*wv = *wv + 1;
+		return 0;
+	}));
+
+	val cv4 = cv_arc.clone();
+	val m4 = pred_lock.clone();
+	val wc4 = woke_count.clone();
+	var w4 = conc.spawn_cb(core.callback0(| | captures(move cv4, move m4, move wc4) nothrow => {
+		var g = m4.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv4.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 94; }
+			}
+		}
+		var wg = wc4.get().lock();
+		val wv = wg.get_mut();
+		*wv = *wv + 1;
+		return 0;
+	}));
+
+	// Let all 4 park.
+	match conc.sleep(conc.Duration(millis = 100)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Set predicate, signal_all.
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_all();
+
+	// All four must rejoin Ok.
+	match w1.join() {
+		core.Result::Err(_) => { return 21; },
+		core.Result::Ok(rc) => { if rc != 0 { return 30 + rc; } }
+	}
+	match w2.join() {
+		core.Result::Err(_) => { return 22; },
+		core.Result::Ok(rc) => { if rc != 0 { return 40 + rc; } }
+	}
+	match w3.join() {
+		core.Result::Err(_) => { return 23; },
+		core.Result::Ok(rc) => { if rc != 0 { return 50 + rc; } }
+	}
+	match w4.join() {
+		core.Result::Err(_) => { return 24; },
+		core.Result::Ok(rc) => { if rc != 0 { return 60 + rc; } }
+	}
+
+	// Confirm exactly 4 waiters woke.
+	var wg = woke_count.get().lock();
+	val wv = wg.get_mut();
+	if *wv != 4 { return 70 + *wv; }
+	return 0;
+}

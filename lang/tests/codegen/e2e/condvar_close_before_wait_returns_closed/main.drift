@@ -1,0 +1,46 @@
+module m;
+
+// Condvar e2e #5 — close before wait returns Err(CLOSED) immediately
+// without parking.
+//
+// Unblocked 2026-05-15 by the inline-chained atomic-store fix at
+// `hir_to_mir.py::_lift_rvalue_ref_base_for_borrow` (pin:
+// `lang/tests/driver/test_arc_get_field_atomic_store_persistence_blocker.py`).
+// Before that fix, `cv.state.get().closed.store(true, Release)`
+// in `Condvar.close()` mutated a copy of the AtomicBool, leaving
+// the underlying atomic at false, and `_wait_inner`'s fast-path
+// closed-check would never fire.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	cv_arc.get().close();
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		match cv1.get().wait(&mut g) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+				cons.eprintln("FAIL: wait returned non-CLOSED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+
+	match waiter.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(e) => {
+			cons.eprintln("FAIL: join_timeout error kind=" + e.kind);
+			return 20;
+		},
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+	return 0;
+}

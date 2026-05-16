@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #1: signal_one wakes a single parked waiter that observes predicate=true and returns cleanly.  Smallest executable path through cv.wait — unblocked by the qualified variant ctor resolution fix in call_resolver.py:5256.",
+  "exit_code": 0
+}

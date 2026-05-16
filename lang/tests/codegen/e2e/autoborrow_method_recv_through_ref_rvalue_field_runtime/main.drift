@@ -1,0 +1,41 @@
+module m;
+
+// Runtime companion to test_autoborrow_receiver_place.py's
+// `test_autoborrow_shared_receiver_through_ref_rvalue_field_projection`
+// (which is compile-only via --json).  Proves the post-fix
+// HIR→MIR lowering of `wrapper.get().handle.peek()` doesn't just
+// type-check — it actually invokes `peek(&self)` on the SAME
+// Handle storage that lives inside the Wrapper.
+//
+// Companion to the atomic-store pin
+// (`test_arc_get_field_atomic_store_persistence_blocker.py`),
+// which exercises the interior-mutation side (`.store(...)` on
+// AtomicBool through Arc::get().field).  This test covers the
+// general non-atomic non-Copy `&self`-method-on-projected-field
+// shape so the fix is documented as a generic receiver/place
+// fix, not an atomic-specific patch.
+
+import std.core as core;
+
+pub struct Handle { pub raw: Int }
+implement core.Destructible for Handle {
+	pub fn destroy(var self: Handle) nothrow -> Void { return; }
+}
+implement Handle {
+	pub fn peek(self: &Handle) nothrow -> Int { return self.raw; }
+}
+
+pub struct Inner { pub handle: Handle }
+pub struct Wrapper { pub inner: Inner }
+implement Wrapper {
+	pub fn get(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+}
+
+pub fn main() nothrow -> Int {
+	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)));
+	// Inline chain: w.get() returns &Inner, .handle projects the
+	// non-Copy Handle field, .peek(&Handle) reads its `raw`.
+	val v = w.get().handle.peek();
+	if v != 42 { return v; }
+	return 0;
+}

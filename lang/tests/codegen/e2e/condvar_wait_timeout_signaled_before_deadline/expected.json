@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #4: wait_timeout returns Ok when signal_one arrives before the deadline.  Pins the signal-before-timeout path (claim via signal, no timer wake).",
+  "exit_code": 0
+}

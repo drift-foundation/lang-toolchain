@@ -1,0 +1,51 @@
+module m;
+
+// Condvar e2e #4 — wait_timeout returns Ok when a signal arrives
+// before the deadline.
+//
+// Spawn a waiter with a 500 ms timeout.  Main sleeps 30 ms (well
+// under the deadline) and signals.  Waiter wakes, observes
+// predicate=true, returns 0.  Total wall time well under 500 ms.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 500)) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(e) => {
+					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 91; }
+					return 92;
+				}
+			}
+		}
+		return 0;
+	}));
+
+	// Sleep well under the 500 ms timeout, then signal.
+	match conc.sleep(conc.Duration(millis = 30)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_one();
+
+	match waiter.join() {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+	return 0;
+}
