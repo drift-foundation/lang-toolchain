@@ -1,5 +1,98 @@
 # Drift development history
 
+## 2026-05-16 (LANGUAGE_BUG fix: `__borrow_tmp` synthesized for rvalue receiver borrows was not registered for scope cleanup — String-owning chain receivers leaked at function-exit reached from inside a loop)
+- **LANGUAGE_BUG fix.**  Release 0.31.91, ABI unchanged at 14.  Closes
+  a path-dependent leak in MIR lowering where the synthetic
+  `__borrow_tmp` local that materializes an rvalue receiver for a
+  chained method call's `&self` borrow was an OWNING local but was
+  never registered for scope cleanup.  The slot was therefore
+  invisible to `_emit_scope_cleanup_hook` (which walks
+  `_scope_stack` for CleanupHook candidates), and any function-exit
+  reached from inside a loop or nested control-flow block emitted a
+  cleanup hook with no candidate for the slot — the inner
+  refcounted fields (e.g. an owned `String` inside a `Builder` rvalue
+  receiver) leaked.
+
+  **Surface.**  6 of 7 std_io_* memcheck fixtures fixed by the prior
+  `drift_io_open` C-side release (same-day family work); the 7th —
+  `std_io_file_builder_chunked_large` — kept leaking ~50 B from
+  `drift_string_concat → drift_tmp_path → m::main`.  Minimal non-IO
+  repro:
+
+  ```drift
+  val r1 = new_builder("AAA" + "AAA").finish();
+  match r1 { Ok(_) => {}, default => return 1; }
+  val r2 = new_builder("BBB" + "BBB").finish();
+  match r2 {
+      Ok(d2) => {
+          var k = 0;
+          while k < 3 { k += 1; }
+          return d2.touch();
+      },
+      default => return 2;
+  }
+  ```
+
+  Pre-fix: 25 B leak.  Post-fix: memcheck-clean.
+
+  **Why a loop is the trigger.**  A `return` inside the loop-exit
+  basic block reaches the scope-0 cleanup hook through a CFG edge
+  that's outside the match-arm's local cleanup path.  Without the
+  borrow-tmp on the scope stack, `_emit_scope_cleanup_hook(scope_index=0)`
+  produces a candidate list missing the slot.  Returns from a
+  non-loop arm body don't expose this — a different mechanism
+  (match-arm cleanup authoring) emitted compensating drops for the
+  direct match-exit paths.  Loops just route the return through a
+  path none of the compensating mechanisms cover.
+
+  **Fix.**  In `lang/driftc/stage2/hir_to_mir.py::_visit_expr_HBorrow`
+  rvalue fallback, add `self._register_drop_local(tmp_local, inner_ty)`
+  alongside the existing `ensure_local` + `_local_types` + `StoreLocal`
+  trio.  `inner_ty` is the temp's actual local type (the OWNED
+  value's type from `_infer_expr_type(expr.subject)`), not the
+  reference type returned to the caller.
+  `_register_drop_local` is internally idempotent and gated by
+  `_needs_runtime_drop` / `_type_is_destructible`, so unconditional
+  call is safe for trivially-droppable `inner_ty` (Int, Bool) — the
+  registration just no-ops.
+
+  Mirrors the Arc-fat (`_lower_arc_fat_intrinsic_call`,
+  ~hir_to_mir.py:9312) and Arc-as-interface
+  (`_lower_arc_as_interface_op`, ~hir_to_mir.py:9509)
+  materialization sites which already register their borrow temps
+  for the same reason.  The rule: **any synthetic local created to
+  materialize an rvalue (or to bind a payload) is an OWNING local
+  and must participate in scope cleanup.**
+
+  **Diagnostic trail.**  `DRIFT_COMPILER_DEBUG='{"cleanup_trace": true}'`
+  (instrumentation removed after the fix landed) printed each
+  CleanupHook's candidate list with verdicts; the smoking gun was
+  the `__bb_loop_exit` cleanup hook missing `__borrow_tmpt27`
+  entirely (not even reaching the ledger query).  Post-fix the
+  same hook lists `__borrow_tmpt27 verdict=MUST_DROP kind=unguarded`
+  and the IR emits a `MoveOut + DropValue` of the slot before the
+  `ret`.
+
+  **Sibling-site audit.**  31 `ensure_local + StoreLocal` shapes
+  without `_register_drop_local` within an 80-line window
+  inventoried in
+  `project_chunked_loop_conditional_break_path_drop.md`.  ~17 are
+  confirmed non-owning or already covered by separate register
+  sites (HLet, HAssign, match-binder bind path at ~L1742, Arc
+  intrinsic sites, addr-of-place helpers callers must register).
+  14 are flagged NEEDS REVIEW for future slices — owning shapes
+  that could expose the same leak under specific control flow but
+  aren't currently exercised by the memcheck suite.  No bulk fix
+  this session because each needs per-site reasoning about whether
+  the local is consumed inline (e.g. `_emit_diagnostic_owning_throw`'s
+  `struct_local` is consumed by the throw itself — extra register
+  would double-drop).
+
+  **Regression pin.**  New e2e fixture
+  `lang/tests/codegen/e2e/borrow_tmp_match_loop_outer_scope_drop/`
+  — non-IO, 25 B leak without the fix, memcheck-clean with.
+  Verified by reverting the one-line fix and re-running.
+
 ## 2026-05-15 (LANGUAGE_BUG fix: `&place` on `HField(...HCall_returning_&T)` chain copied the leaf field — `&self` interior-mutation methods mutated a temp)
 - **LANGUAGE_BUG fix.** Release 0.31.90, ABI unchanged at 14.  Closes
   a silent miscompile in MIR borrow lowering where
