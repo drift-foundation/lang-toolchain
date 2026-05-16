@@ -110,7 +110,12 @@ from lang.driftc.core.types_core import TypeId, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import ownership_ledger_events as _ledger_events
-from .ownership_ledger import DropVerdict, LiveState, LiveStateMap, build_ledger as _build_ledger
+from .ledger_cache import (
+	build_and_attach_ledger,
+	mark_ledger_dirty,
+	maybe_fresh_ledger,
+)
+from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .drop_policy_compute import compute_drop_policy
 from .string_arc import variant_zero_tag_drop_safe
 
@@ -234,7 +239,12 @@ def author_cleanup(
 	    behaviour; signals any shape that drop_flags planning did
 	    not select).
 	"""
-	ledger: Optional[LiveStateMap] = getattr(func, "_ownership_ledger", None)
+	# Pass-entry consumer site.  Use `maybe_fresh_ledger` (soft form)
+	# because cleanup_authoring legitimately no-ops when no ledger is
+	# attached — exercised by tests and by toolchain paths that skip
+	# the ledger build entirely.  A *stale* ledger is still an
+	# assertion (the soft form only soft-handles missing, not dirty).
+	ledger: Optional[LiveStateMap] = maybe_fresh_ledger(func, "cleanup_authoring")
 	if ledger is None:
 		return 0
 	emitted_drops = 0
@@ -322,8 +332,11 @@ def author_cleanup(
 		`state_post` likewise).  Both miscompile.  Rebuild after every
 		mutation that could shift indices or create new blocks."""
 		nonlocal ledger
-		ledger = _build_ledger(func, drop_policy=lambda _t: None)
-		setattr(func, "_ownership_ledger", ledger)
+		ledger = build_and_attach_ledger(
+			func,
+			drop_policy=lambda _t: None,
+			reason="cleanup_authoring.in_pass_rebuild",
+		)
 
 	while worklist:
 		blk = worklist.pop(0)
@@ -407,6 +420,8 @@ def author_cleanup(
 			if resolved:
 				for nb in new_blocks:
 					func.blocks[nb.name] = nb
+				if new_blocks:
+					mark_ledger_dirty(func, "cleanup_authoring.per_arm_elaboration_block_insert")
 				# Refresh predecessor map.  Edge splits added new
 				# blocks whose predecessor entries are now part of
 				# the hook block's incoming set; the original
@@ -476,6 +491,7 @@ def author_cleanup(
 			block_mutated = (new_instrs != blk.instructions)
 			blk.instructions = new_instrs
 			if block_mutated:
+				mark_ledger_dirty(func, "cleanup_authoring.replace_hook_with_drops")
 				# Index shifts in this block invalidate ledger entries
 				# at every (blk.name, idx) past the original hook_idx.
 				# Subsequent hooks in this same block (or in any block
@@ -518,19 +534,28 @@ def author_cleanup(
 			flag_load_dest = _new_temp()
 			current_instrs.append(M.LoadLocal(dest=flag_load_dest, local=flag_local))
 
+			# drop_blk is brand-new (not yet inserted into func.blocks);
+			# mutations to it cannot affect the attached ledger.  The
+			# block-list insert at line 571 (below) is the operation
+			# that actually invalidates the ledger; mark_ledger_dirty
+			# there.
 			drop_blk = M.BasicBlock(name=_new_block_name(func, f"{blk.name}_cleanup_drop_{local}", new_blocks))
 			tmp = _new_temp()
-			drop_blk.instructions.append(M.MoveOut(dest=tmp, local=local, ty=ty))
-			drop_blk.instructions.append(M.DropValue(value=tmp, ty=ty))
+			drop_blk.instructions.append(M.MoveOut(dest=tmp, local=local, ty=ty))  # ledger-cache-safety-audit: allow new-block
+			drop_blk.instructions.append(M.DropValue(value=tmp, ty=ty))  # ledger-cache-safety-audit: allow new-block
 			func.local_types[tmp] = ty
 			clear_dest = _new_temp()
-			drop_blk.instructions.append(M.ConstBool(dest=clear_dest, value=False))
-			drop_blk.instructions.append(M.StoreLocal(local=flag_local, value=clear_dest))
+			drop_blk.instructions.append(M.ConstBool(dest=clear_dest, value=False))  # ledger-cache-safety-audit: allow new-block
+			drop_blk.instructions.append(M.StoreLocal(local=flag_local, value=clear_dest))  # ledger-cache-safety-audit: allow new-block
 
 			post_blk = M.BasicBlock(name=_new_block_name(func, f"{blk.name}_cleanup_post_{local}", new_blocks))
-			drop_blk.terminator = M.Goto(target=post_blk.name)
+			drop_blk.terminator = M.Goto(target=post_blk.name)  # ledger-cache-safety-audit: allow new-block
 
+			# current_blk IS in func.blocks; the next two mutations
+			# (instructions replacement + terminator) DO invalidate
+			# the attached ledger.
 			current_blk.instructions = list(current_instrs)
+			mark_ledger_dirty(func, "cleanup_authoring.emit_guarded_drop")
 			current_blk.terminator = M.IfTerminator(
 				cond=flag_load_dest,
 				then_target=drop_blk.name,
@@ -549,10 +574,13 @@ def author_cleanup(
 		current_instrs.extend(post_hook)
 		current_blk.instructions = current_instrs
 		current_blk.terminator = original_term
+		mark_ledger_dirty(func, "cleanup_authoring.emit_unguarded_drop_tail")
 
 		# Register the new blocks.
 		for nb in new_blocks:
 			func.blocks[nb.name] = nb
+		if new_blocks:
+			mark_ledger_dirty(func, "cleanup_authoring.register_new_blocks")
 
 		# Rebuild ledger after block-split mutation: the original
 		# block's instructions/terminator changed, new blocks were
@@ -720,7 +748,7 @@ def _try_per_arm_elaboration(
 		edge_blk_name = alloc_block_name(f"{pred_name}_edge_cleanup_to_{hook_blk.name}")
 		edge_blk = M.BasicBlock(name=edge_blk_name)
 		emitted_pairs += _emit_cleanup_into(edge_blk.instructions)
-		edge_blk.terminator = M.Goto(target=hook_blk.name)
+		edge_blk.terminator = M.Goto(target=hook_blk.name)  # ledger-cache-safety-audit: allow new-block
 		new_blocks.append(edge_blk)
 
 		term = pred_blk.terminator

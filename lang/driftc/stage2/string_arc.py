@@ -19,6 +19,7 @@ from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import ownership_ledger_events as _ledger_events
 from . import ownership_ledger_reporter as _ledger_reporter
+from .ledger_cache import mark_ledger_dirty, maybe_fresh_ledger
 from .ownership_ledger import DropVerdict as _DropVerdict
 from .drop_policy_compute import compute_drop_policy as _compute_drop_policy
 from .drop_flags import is_flag_managed as _is_flag_managed
@@ -65,7 +66,11 @@ def insert_string_arc(
 	# canonical `DropPolicy.needs_drop` via `_compute_drop_policy` —
 	# NOT the raw `TypeTable.has_drop` query that the 3A reporter
 	# uses (the quarantined approximation in driftc.py).
-	_ledger = getattr(func, "_ownership_ledger", None)
+	# Pass-entry consumer site.  Use `maybe_fresh_ledger` (soft form)
+	# because string_arc legitimately runs against MIR without an
+	# attached ledger in pass-local testing.  A *stale* ledger still
+	# asserts; that is the bug class we are catching.
+	_ledger = maybe_fresh_ledger(func, "string_arc")
 	def _ledger_needs_drop(local: str) -> bool:
 		ty = local_types.get(local)
 		if ty is None:
@@ -1682,12 +1687,14 @@ def insert_string_arc(
 			if hasattr(term, "span"):
 				setattr(new_term, "span", getattr(term, "span"))
 			block.terminator = new_term
+			mark_ledger_dirty(func, "string_arc.rewrite_return_terminator")
 		elif block.terminator is not None:
 			for val in _iter_term_used(block.terminator):
 				if _is_string_value(val) and not _is_local_name(val):
 					_note_use(val, consume=False)
 
 		block.instructions = new_instrs
+		mark_ledger_dirty(func, "string_arc.rewrite_block")
 
 	return func
 

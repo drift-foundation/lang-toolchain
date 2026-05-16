@@ -57,6 +57,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Set
 from lang.driftc.core.types_core import TypeId, TypeTable
 from . import mir_nodes as M
 from .drop_policy_compute import compute_drop_policy
+from .ledger_cache import mark_ledger_dirty
 from .ownership_ledger import DropVerdict, LiveState, build_ledger
 
 if TYPE_CHECKING:
@@ -202,6 +203,7 @@ def insert_drop_flags(
 		init_instrs.append(M.ConstBool(dest=const_dest, value=init_value))
 		init_instrs.append(M.StoreLocal(local=flag_name, value=const_dest))
 	entry.instructions = init_instrs + entry.instructions
+	mark_ledger_dirty(func, "drop_flags.entry_prepend")
 	# Step 4: walk every block; after each StoreLocal/MoveOut for a
 	# tracked local, insert flag-set/clear.
 	for blk in func.blocks.values():
@@ -224,6 +226,7 @@ def insert_drop_flags(
 				new_instrs.append(M.ConstBool(dest=const_dest, value=False))
 				new_instrs.append(M.StoreLocal(local=flag_name, value=const_dest))
 		blk.instructions = new_instrs
+		mark_ledger_dirty(func, "drop_flags.insert_flag_set_clear")
 	# Step 5 (REMOVED 2026-05-15, Bug 2 architecture flip): flag-
 	# guarded drops at Return blocks have moved into
 	# `cleanup_authoring.author_cleanup`.  The HIR→MIR pass already
@@ -422,19 +425,6 @@ def _is_potentially_live_at_some_exit(ledger, func: M.MirFunc, local_name: str) 
 	return False
 
 
-def _has_maybe_uninit(ledger, local_name: str) -> bool:
-	for state_dict in ledger.post_instr.values():
-		if state_dict.get(local_name) is LiveState.MAYBE_UNINIT:
-			return True
-	for state_dict in ledger.block_in.values():
-		if state_dict.get(local_name) is LiveState.MAYBE_UNINIT:
-			return True
-	for state_dict in ledger.block_out.values():
-		if state_dict.get(local_name) is LiveState.MAYBE_UNINIT:
-			return True
-	return False
-
-
 def _allocate_flag_name(local_name: str, taken: List[str]) -> str:
 	"""Generate a flag local name that does not collide with existing
 	function locals or other allocated flag names.  Suffix-handling
@@ -450,103 +440,3 @@ def _allocate_flag_name(local_name: str, taken: List[str]) -> str:
 		i += 1
 
 
-def _block_already_drops(block: M.BasicBlock, local_name: str) -> bool:
-	"""Detect whether `block` already contains a `MoveOut(t, local) +
-	DropValue(t)` pair.  HIR→MIR emits this pair at scope-drop sites;
-	if it's already there for `local_name`, this pass must NOT add
-	another flag-guarded drop or it would double-drop."""
-	moveout_dests: Set[str] = set()
-	for ins in block.instructions:
-		if isinstance(ins, M.MoveOut) and getattr(ins, "local", None) == local_name:
-			dest = getattr(ins, "dest", None)
-			if isinstance(dest, str):
-				moveout_dests.add(dest)
-		elif isinstance(ins, M.DropValue) and getattr(ins, "value", None) in moveout_dests:
-			return True
-	return False
-
-
-def _insert_flag_guarded_drops(
-	*,
-	func: M.MirFunc,
-	block: M.BasicBlock,
-	flag_for: Dict[str, str],
-	new_temp: Callable[[], str],
-) -> None:
-	"""Wrap `block`'s terminator with flag-guarded drop sequences for
-	every tracked local that doesn't already have a drop emission in
-	this block.  Mutates `func.blocks` to add new drop/join blocks."""
-	tracked = [name for name in sorted(flag_for) if not _block_already_drops(block, name)]
-	if not tracked:
-		return
-	original_term = block.terminator
-	# Process locals in reverse so the first-tracked local ends up
-	# being the OUTERMOST guard (executed first); later locals nest
-	# inside.  Equivalent to a left-to-right sequence of guards
-	# leading into the original terminator.
-	#
-	# Sequence after rewrite, conceptually:
-	#   block: ...orig instrs...
-	#          load flag_A → tA
-	#          if tA goto drop_A else goto post_A
-	#   drop_A: MoveOut + DropValue; goto post_A
-	#   post_A: load flag_B → tB
-	#           if tB goto drop_B else goto post_B
-	#   drop_B: MoveOut + DropValue; goto post_B
-	#   post_B: <original terminator>
-	#
-	# Because we mutate `block` in place, the cleanest way is to work
-	# from the end backwards: the LAST tracked local's post-block
-	# becomes the original-terminator block.  Then for each preceding
-	# local, allocate a new "current" block whose terminator is an If
-	# branching to drop and post; the post becomes the next iteration's
-	# "current" entry point.  Finally, append the first guard's load+
-	# if-terminator to `block`.
-	#
-	# We retain `block`'s original instructions; only its terminator
-	# changes, and any earlier guards' drop/post blocks are appended
-	# to func.blocks.
-	cur_post: M.BasicBlock = M.BasicBlock(name=_new_block_name(func, f"{block.name}_dropfinal"))
-	cur_post.terminator = original_term
-	func.blocks[cur_post.name] = cur_post
-	# Process tracked locals in REVERSE so the first one ends up
-	# nearest the original block's tail (outermost).
-	for local_name in reversed(tracked):
-		flag_name = flag_for[local_name]
-		ty = func.local_types.get(local_name)
-		if ty is None:
-			continue
-		drop_block = M.BasicBlock(name=_new_block_name(func, f"{block.name}_drop_{local_name}"))
-		moveout_dest = new_temp()
-		drop_block.instructions.append(M.MoveOut(dest=moveout_dest, local=local_name, ty=ty))
-		drop_block.instructions.append(M.DropValue(value=moveout_dest, ty=ty))
-		drop_block.terminator = M.Goto(target=cur_post.name)
-		func.blocks[drop_block.name] = drop_block
-		guard_block: M.BasicBlock
-		if local_name == tracked[0]:
-			# Outermost guard — emit into `block` itself, replacing its
-			# terminator with the IfTerminator.
-			guard_block = block
-		else:
-			guard_block = M.BasicBlock(name=_new_block_name(func, f"{block.name}_guard_{local_name}"))
-			func.blocks[guard_block.name] = guard_block
-		flag_load = new_temp()
-		guard_block.instructions.append(M.LoadLocal(dest=flag_load, local=flag_name))
-		guard_block.terminator = M.IfTerminator(
-			cond=flag_load,
-			then_target=drop_block.name,
-			else_target=cur_post.name,
-		)
-		# The guard becomes the next iteration's post.
-		cur_post = guard_block
-
-
-def _new_block_name(func: M.MirFunc, base: str) -> str:
-	if base not in func.blocks:
-		return base
-	i = 1
-	while True:
-		name = f"{base}_{i}"
-		if name not in func.blocks:
-			return name
-		i += 1

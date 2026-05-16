@@ -7026,10 +7026,16 @@ def compile_stubbed_funcs(
 		# across the consumers that read it.  Observe-mode telemetry
 		# (disagreement records to stderr) is still gated separately on
 		# `DRIFT_COMPILER_DEBUG='{"ownership_ledger":true}'`.
-		from lang.driftc.stage2.ownership_ledger import build_ledger as _ol_build
+		from lang.driftc.stage2.ledger_cache import (
+			build_and_attach_ledger as _ol_build_and_attach,
+			require_fresh_ledger as _ol_require_fresh,
+		)
 		for fn_id, func in mir_funcs_by_id.items():
-			ledger = _ol_build(func, drop_policy=lambda _t: None)
-			setattr(func, "_ownership_ledger", ledger)
+			_ol_build_and_attach(
+				func,
+				drop_policy=lambda _t: None,
+				reason="driftc.initial_build",
+			)
 		# Phase 4 site-2 patch 5 — per-field match-cleanup authoring.
 		# HIR→MIR emits `M.MatchCleanupHook` at each arm's partial-move
 		# cleanup point with pre-allocated `__match_partial_drop_N`
@@ -7052,8 +7058,11 @@ def compile_stubbed_funcs(
 			)
 			for fn_id, func in mir_funcs_by_id.items():
 				_author_match_cleanup(func, type_table=shared_type_table)
-				ledger = _ol_build(func, drop_policy=lambda _t: None)
-				setattr(func, "_ownership_ledger", ledger)
+				_ol_build_and_attach(
+					func,
+					drop_policy=lambda _t: None,
+					reason="driftc.rebuild_after_match_cleanup_authoring",
+				)
 		# Phase 3C — runtime drop-flag PLANNING / INSTRUMENTATION pass.
 		# Bug 2 architecture flip (2026-05-15): drop_flags now runs
 		# BEFORE cleanup_authoring as a planning-only pass.  It
@@ -7097,8 +7106,11 @@ def compile_stubbed_funcs(
 			with _timed("ledger_rebuild_post_drop_flags"):
 				for fn_id in _drop_flags_mutated_fns:
 					func = mir_funcs_by_id[fn_id]
-					ledger = _ol_build(func, drop_policy=lambda _t: None)
-					setattr(func, "_ownership_ledger", ledger)
+					_ol_build_and_attach(
+						func,
+						drop_policy=lambda _t: None,
+						reason="driftc.rebuild_after_drop_flags",
+					)
 		# Phase 4 site-1 — cleanup re-authoring pass.  All HIR→MIR
 		# scope-drop sites (function-exit, `lower_function_body` /
 		# `lower_block` fall-through, lambda-block exits, `HBreak` /
@@ -7125,8 +7137,11 @@ def compile_stubbed_funcs(
 				# emissions.  string_arc consults `verdict_at` at
 				# every `drop_before_overwrite` site; stale state
 				# causes site-4 tripwire fires.
-				ledger = _ol_build(func, drop_policy=lambda _t: None)
-				setattr(func, "_ownership_ledger", ledger)
+				_ol_build_and_attach(
+					func,
+					drop_policy=lambda _t: None,
+					reason="driftc.rebuild_after_cleanup_authoring",
+				)
 		if drift_debug.enabled("ownership_ledger"):
 			# Phase 3A observational: drain the decision events
 			# recorded by sites 1/2 during HIR→MIR and emit
@@ -7143,7 +7158,7 @@ def compile_stubbed_funcs(
 				events = log.drain()
 				if not events:
 					continue
-				ledger = getattr(func, "_ownership_ledger")
+				ledger = _ol_require_fresh(func, "driftc.observe_reporter")
 				# QUARANTINED 3A APPROXIMATION — DO NOT REUSE IN 3B.
 				# This callable answers the ledger reporter's
 				# `needs_drop(local)` question with the raw

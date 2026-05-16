@@ -52,6 +52,7 @@ from typing import Dict, List, Optional, Tuple
 from lang.driftc.core.types_core import TypeId, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
+from .ledger_cache import mark_ledger_dirty, maybe_fresh_ledger
 from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .drop_policy_compute import compute_drop_policy
 
@@ -75,7 +76,10 @@ def author_match_cleanup(
 	`MatchCleanupHook` instructions remain in place in that case — a
 	downstream pass would surface them as a fail-loud signal.
 	"""
-	ledger: Optional[LiveStateMap] = getattr(func, "_ownership_ledger", None)
+	# Pass-entry consumer site.  Use `maybe_fresh_ledger` (soft form)
+	# because test harnesses legitimately build MIR without driver
+	# wiring (see docstring above).  A *stale* ledger still asserts.
+	ledger: Optional[LiveStateMap] = maybe_fresh_ledger(func, "match_cleanup_authoring")
 	if ledger is None:
 		return 0
 
@@ -231,6 +235,7 @@ def author_match_cleanup(
 		if trailing_key in arm_end_insert:
 			new_instrs.extend(arm_end_insert[trailing_key])
 		blk.instructions = new_instrs
+		mark_ledger_dirty(func, "match_cleanup_authoring.emit_arm_drops")
 	return emitted
 
 

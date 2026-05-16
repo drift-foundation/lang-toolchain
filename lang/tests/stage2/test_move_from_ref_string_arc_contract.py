@@ -46,8 +46,8 @@ from lang.driftc.core.types_core import (
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.checker import FnInfo  # noqa: F401  (signature requires the type even when {})
 from lang.driftc.stage2 import mir_nodes as M
+from lang.driftc.stage2.ledger_cache import build_and_attach_ledger
 from lang.driftc.stage2.match_cleanup_authoring import author_match_cleanup
-from lang.driftc.stage2.ownership_ledger import build_ledger
 from lang.driftc.stage2.string_arc import insert_string_arc
 
 
@@ -190,11 +190,15 @@ def _run_authoring_then_string_arc(
 ) -> M.MirFunc:
 	"""Run the production pipeline order: ledger build → authoring →
 	ledger rebuild → string_arc."""
-	ledger = build_ledger(func, drop_policy=lambda _t: None)
-	setattr(func, "_ownership_ledger", ledger)
+	build_and_attach_ledger(
+		func, drop_policy=lambda _t: None, reason="test.initial_build"
+	)
 	author_match_cleanup(func, type_table=type_table)
-	ledger = build_ledger(func, drop_policy=lambda _t: None)
-	setattr(func, "_ownership_ledger", ledger)
+	build_and_attach_ledger(
+		func,
+		drop_policy=lambda _t: None,
+		reason="test.rebuild_after_match_cleanup_authoring",
+	)
 	# Note: site-1 cleanup_authoring would normally run here too; for
 	# pin #3 we exercise it via the test that includes the early-exit
 	# CleanupHook.  string_arc is the consumer that decides whether
