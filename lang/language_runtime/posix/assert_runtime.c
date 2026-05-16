@@ -117,6 +117,14 @@ static void drift_debug_print_stacktrace(void) {
 }
 #endif /* DRIFT_RT_MODE_DEBUG */
 
+/* drift-owned-string-audit: allow read-only-borrow -- file, expr, msg
+ * `assert(cond, msg)` is a language built-in; its Drift IR call site
+ * does NOT pre-retain before the extern call (unlike the normal
+ * function-call extern pattern used by env.get / io.file_builder /
+ * cons.println).  The caller releases its own stake AFTER the call.
+ * If this function also released, it would double-free the stake and
+ * UAF on heap-allocated msg.  Verified by /tmp/probe_assert_heap.drift
+ * regression during the DRIFT_OWNED_STRING slice (2026-05-16). */
 void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString expr, DriftString msg) {
 	if (cond) {
 		return;

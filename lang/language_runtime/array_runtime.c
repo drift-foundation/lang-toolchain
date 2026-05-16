@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* string_runtime.h must precede error_dummy.h: diagnostic_runtime.h
+ * (transitively pulled by error_dummy.h) declares `struct DriftString`
+ * under `#ifndef DRIFT_STRING_RUNTIME_H` -- without our header first
+ * the typedef in string_runtime.h conflicts with the bare struct decl. */
+#include "string_runtime.h"  /* DRIFT_OWNED_STRING + drift_string_release */
 #include "../compiler_infra/error_dummy.h"
 
 typedef struct DriftArrayHeader {
@@ -94,6 +99,15 @@ void drift_array_byte_commit_init_len(DriftArrayHeader *arr, drift_isize len) {
 	arr->len = len;
 }
 
+/* drift-owned-string-audit: allow read-only-borrow -- container_id
+ * Drift compiler emits bounds_check inline at every array index
+ * site (intrinsic lowering) and passes a static-flagged literal
+ * container_id without pre-retain.  Callee must NOT release: there's
+ * no stake to release for static, and a heap-allocated container_id
+ * (hypothetical future use) would still follow the intrinsic
+ * borrow convention -- caller manages release post-call.  Same
+ * pattern as drift_assert_loc -- see assert_runtime.c for the
+ * convention discovery context. */
 void drift_bounds_check(struct DriftString container_id, drift_isize idx, drift_isize len) {
 	if (idx < 0 || idx >= len) {
 		drift_bounds_check_fail(container_id, idx, len);
@@ -134,6 +148,10 @@ static size_t drift_bcf_json_escape_byte(unsigned char b, char *out) {
 // -1 on overflow / -2 on bad inputs.  Factored out of
 // `drift_bounds_check_fail` so the escape contract is testable from
 // outside the throwing path.  See array_runtime.h.
+/* drift-owned-string-audit: allow read-only-borrow -- container_id
+ * Reads container_id.len and container_id.data to build the escaped
+ * JSON payload; never releases.  The refcount stake stays with the
+ * caller (drift_bounds_check_fail's frame). */
 drift_isize drift_bounds_check_params_json_build(
 	struct DriftString container_id,
 	drift_isize idx,
@@ -178,6 +196,11 @@ drift_isize drift_bounds_check_params_json_build(
 }
 
 // Bounds check failure helper; for now, print and abort.
+/* drift-owned-string-audit: allow consumed-by-noreturn-callee -- container_id
+ * Ends in abort() via the diagnostic-throw path; cleanup never fires
+ * on a noreturn frame, and the process dies before any leak matters.
+ * Ownership of the container_id stake transfers in from the caller
+ * (typically drift_bounds_check) and is implicitly consumed here. */
 __attribute__((noreturn))
 void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, drift_isize len) {
 	(void)len;

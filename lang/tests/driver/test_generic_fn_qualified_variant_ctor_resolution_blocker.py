@@ -96,57 +96,6 @@ pub fn main() nothrow -> Int {
 """
 
 
-# K-spec'd variant-via-alias minimal repro (separate fixture).
-# Covers the case where a `pub type` alias lives in the SAME module
-# as the variant and qualified-member ctor resolution must go
-# through the alias.  Decoupled from the lang.atomic-import shape
-# so a fix can be tested orthogonally.
-_REPRO_LOCAL_ALIAS = """\
-module m;
-
-pub variant E {
-	A,
-	B
-}
-
-pub type Alias = E;
-
-fn via_original() nothrow -> E {
-	return E::A();
-}
-
-fn via_alias_same_module() nothrow -> Alias {
-	return Alias::A();
-}
-
-pub fn main() nothrow -> Int {
-	val x = via_alias_same_module();
-	val y = via_original();
-	return 0;
-}
-"""
-
-
-# K-spec'd imported-alias minimal repro (separate fixture).
-# Covers the case where the variant is in module A, a `pub type`
-# alias is in module B, and a user file imports B and calls
-# `Alias::Ctor()`.  Decoupled from the generic-fn shape so we can
-# isolate the alias-only failure mode.
-_REPRO_GENERIC_IMPORTED_ALIAS = """\
-module m;
-import std.sync as sync;
-
-fn use_in_generic<T>() nothrow -> sync.MemoryOrder {
-	return sync.MemoryOrder::Acquire();
-}
-
-pub fn main() nothrow -> Int {
-	val mo = use_in_generic<type Int>();
-	return 0;
-}
-"""
-
-
 def _compile_subprocess(src_text: str, tmp_path: Path) -> subprocess.CompletedProcess:
 	"""Run driftc as a subprocess with `-o` so the full pipeline
 	(checker → MIR lowering → codegen) runs and any generic-fn
@@ -272,31 +221,3 @@ pub fn main() nothrow -> Int {
 	)
 
 
-@pytest.mark.xfail(
-	strict=False,
-	reason=(
-		"K-spec'd imported-alias arm.  In a STANDALONE user module, "
-		"`sync.MemoryOrder::Acquire()` in a generic fn currently "
-		"compiles cleanly — the bug surfaces only inside "
-		"stdlib/std/concurrent/concurrent.drift::_wait_inner<T>.  "
-		"The in-stdlib-context trigger is not yet isolated.  Soft "
-		"xfail tracks the imported-alias dimension without gating."
-	),
-)
-def test_qualified_variant_ctor_via_imported_alias_in_generic_fn(tmp_path: Path) -> None:
-	res = _compile_subprocess(_REPRO_GENERIC_IMPORTED_ALIAS, tmp_path)
-	assert res.returncode != 0, "imported-alias generic-fn case is expected to fail per K-spec"
-
-
-@pytest.mark.xfail(
-	strict=False,
-	reason=(
-		"K-spec'd same-module-alias arm.  Variant + `pub type Alias "
-		"= E;` in the SAME module + `Alias::A()`.  Standalone repro "
-		"currently compiles cleanly; the in-stdlib trigger is not "
-		"yet isolated.  Soft xfail tracks this dimension."
-	),
-)
-def test_qualified_variant_ctor_via_same_module_alias(tmp_path: Path) -> None:
-	res = _compile_subprocess(_REPRO_LOCAL_ALIAS, tmp_path)
-	assert res.returncode != 0, "same-module-alias case is expected to fail per K-spec"

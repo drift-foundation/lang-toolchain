@@ -24,31 +24,38 @@ Recent failures:
   leaked the path String.
 - `drift_env_get` / `drift_env_has` (same slice) — same shape, masked in
   fixtures by static-flagged string literal args.
-- `drift_assert_loc` — happy-path early return skips release on
-  `file`/`expr`/`msg` (open audit note, low priority).
-- `drift_bounds_check` — happy-path early return skips release on
-  `container_id` (open audit note, low priority).
+- `drift_assert_loc` — pre-slice audit suspected the happy-path
+  early return skipped a release; mid-slice probe showed convention-B
+  semantics instead (no release expected; caller manages stake).
+  Re-classified during the slice -- see "Convention discovery" below.
+- `drift_bounds_check` — same re-classification.
 
 The convention is implicit; reviewer memory is the only safeguard.  This
 slice replaces convention with `__attribute__((cleanup(...)))` for
-automatic release at scope exit AND a static lint that requires every
-by-value receiver to either use the macro or carry an explicit allow
-marker.
+automatic release at scope exit on convention-A receivers AND a static
+lint that requires every by-value receiver to either use the macro or
+carry an explicit allow marker.
 
 ---
 
 ## Deliverables
 
 1. `DRIFT_OWNED_STRING` macro in `string_runtime.h`.
-2. Convert all by-value `DriftString` receivers in
-   `console_runtime.c`, `env_runtime.c`, `posix/io_runtime.c`,
-   `posix/assert_runtime.c`, `array_runtime.c` to the macro form, with
-   careful handling for delegating wrappers (see "Console family"
-   below).
-3. Static audit test `lang/tests/lang_runtime/test_drift_owned_string_audit.py`
-   that scans .c/.h files under `lang/language_runtime/` and requires
-   every by-value `DriftString` receiver to use the macro OR carry an
-   explicit allow marker.
+2. Convert **Convention-A** by-value `DriftString` receivers in
+   `console_runtime.c`, `env_runtime.c`, `posix/io_runtime.c` to
+   the macro form, with careful handling for delegating wrappers
+   (see "Console family" below).  **Convention-B** receivers
+   (`drift_assert_loc` in `posix/assert_runtime.c`;
+   `drift_bounds_check` family in `array_runtime.c`) do NOT use
+   the macro -- they carry `read-only-borrow` /
+   `consumed-by-noreturn-callee` allow markers instead.  See
+   "Convention discovery" below for the rationale.
+3. Static audit test `lang/tests/driver/test_drift_owned_string_audit.py`
+   that scans `.c` definitions under `lang/language_runtime/` and
+   requires every by-value `DriftString` receiver to use the macro
+   OR carry an explicit allow marker (no warning-only escape).
+   Header files are not enforcement targets (declarations have no
+   body to check); optionally walked for inventory only.
 4. `docs/history.md` entry; `lang/versions.py` minor bump.
 
 ---
@@ -67,7 +74,7 @@ marker.
  * exit -- no per-return-path drift_string_release() calls needed.
  *
  * Adoption is enforced by
- * lang/tests/lang_runtime/test_drift_owned_string_audit.py, which
+ * lang/tests/driver/test_drift_owned_string_audit.py, which
  * fails CI if a by-value DriftString receiver lacks either the macro
  * or an explicit allow marker. */
 static inline void _drift_string_cleanup(DriftString *s) {
@@ -79,6 +86,66 @@ static inline void _drift_string_cleanup(DriftString *s) {
 Headers stay unchanged — parameters remain `DriftString` at the ABI
 boundary.  The `_in → DRIFT_OWNED_STRING local` copy is the call-site
 boilerplate.
+
+---
+
+## Convention discovery (mid-slice)
+
+The Drift→C ABI for by-value `DriftString` parameters is NOT uniform.
+There are TWO conventions, distinguished by the Drift IR caller's
+pattern around the extern call:
+
+**Convention A** (normal function-call externs).  Caller emits:
+
+```
+__arc = drift_string_retain(s)   ; extra stake for the callee
+call extern(__arc, ...)
+... later: drift_string_release(s)  ; caller's own stake at scope exit
+```
+
+The callee MUST release the transferred stake exactly once before
+returning.  Without the release, every call from a heap-allocated
+String arg leaks one refcount.  DRIFT_OWNED_STRING is the right tool
+for these.
+
+Applies to:
+- `drift_console_write` / `_writeln` / `_eprint` / `_eprintln`
+- `drift_env_get` / `drift_env_has`
+- `drift_io_open`
+
+**Convention B** (language built-in / intrinsic call sites).  Caller
+emits:
+
+```
+call extern(s, ...)              ; no pre-retain
+drift_string_release(s)          ; caller releases own stake AFTER
+```
+
+The callee MUST NOT release: there's no transferred stake.  Adding
+DRIFT_OWNED_STRING here double-frees and UAFs on heap inputs.  These
+sites carry `read-only-borrow` or `consumed-by-noreturn-callee` allow
+markers instead.
+
+Applies to:
+- `drift_assert_loc` (the `assert(cond, msg)` language form)
+- `drift_bounds_check` (compiler-emitted at every array index site)
+- `drift_bounds_check_fail` (noreturn drain target)
+- `drift_bounds_check_params_json_build` (helper of bounds_check_fail)
+
+**How the bug surfaced.**  Mid-slice attempt to convert
+`drift_assert_loc` triggered a UAF probe (`assert(true, "x" + "y")`).
+The Drift IR for assert showed no pre-call retain and a post-call
+release, confirming convention-B.  The conversion was reverted; the
+function got a `read-only-borrow` allow marker documenting the
+distinction.  See history.md entry for the same slice.
+
+**Decision rule for new sites.**  If the Drift compiler invokes the
+extern through the standard call-resolution path (any `extern fn` or
+`fn` whose body lowers to a direct call), it's Convention A.  If the
+extern is invoked by a built-in form (`assert`, array indexing,
+intrinsic), it's Convention B.  When in doubt, write a tiny heap-arg
+probe (`"x" + "y"` to force a real refcount, NOT a static literal)
+and run it under valgrind both with and without the macro.
 
 ---
 
@@ -104,51 +171,69 @@ int64_t drift_io_open(DriftString path_in, int64_t flags, int64_t mode) {
 explicit `drift_string_release(name)` line, add the cleanup attribute on
 a local copy.
 
-### Multi-param shape
+### Convention-B (allow marker, no conversion)
+
+The following functions take by-value `DriftString` but are called
+through Drift built-in / intrinsic lowering, NOT the normal extern
+call protocol.  Their callers do NOT pre-retain, and release after
+the call instead.  Adding `DRIFT_OWNED_STRING` would double-free
+(UAF on heap inputs).  Each gets an explicit allow marker; signature
+stays unchanged.
 
 `posix/assert_runtime.c::drift_assert_loc(int cond, DriftString file,
 drift_isize line, DriftString expr, DriftString msg)`:
 
 ```c
-void drift_assert_loc(int cond,
-                      DriftString file_in, drift_isize line,
-                      DriftString expr_in, DriftString msg_in) {
-    DRIFT_OWNED_STRING DriftString file = file_in;
-    DRIFT_OWNED_STRING DriftString expr = expr_in;
-    DRIFT_OWNED_STRING DriftString msg  = msg_in;
-    if (cond) {
-        return;  /* cleanup fires here -- closes the happy-path leak */
-    }
-    /* ... existing failure-path code unchanged ... abort() at the end. */
+/* drift-owned-string-audit: allow read-only-borrow -- file, expr, msg
+ * `assert(cond, msg)` is a language built-in; its Drift IR call site
+ * does NOT pre-retain before the extern call (unlike the normal
+ * function-call extern pattern used by env.get / io.file_builder /
+ * cons.println).  The caller releases its own stake AFTER the call.
+ * If this function also released, it would double-free the stake and
+ * UAF on heap-allocated msg.  Verified by /tmp/probe_assert_heap.drift
+ * regression during the DRIFT_OWNED_STRING slice (2026-05-16). */
+void drift_assert_loc(int cond, DriftString file, drift_isize line,
+                      DriftString expr, DriftString msg) {
+    /* ... body unchanged ... */
 }
 ```
-
-Closes the audit note: the previously-leaking happy-path return now
-automatically releases all three strings.  The failure path ends in
-`abort()`; `cleanup` does not fire on abort, but the process is dying
-so the leak is moot — keep `abort()` unchanged.
 
 `array_runtime.c::drift_bounds_check(struct DriftString container_id,
 drift_isize idx, drift_isize len)`:
 
 ```c
-void drift_bounds_check(struct DriftString container_id_in,
-                        drift_isize idx, drift_isize len) {
-    DRIFT_OWNED_STRING DriftString container_id = container_id_in;
-    if (idx < 0 || idx >= len) {
-        drift_bounds_check_fail(container_id, idx, len);
-        /* unreachable: drift_bounds_check_fail is noreturn */
-    }
-    /* happy path falls through to scope exit -> cleanup fires. */
+/* drift-owned-string-audit: allow read-only-borrow -- container_id
+ * Drift compiler emits bounds_check inline at every array index
+ * site (intrinsic lowering) and passes a static-flagged literal
+ * container_id without pre-retain.  Callee must NOT release: there's
+ * no stake to release for static, and a heap-allocated container_id
+ * (hypothetical future use) would still follow the intrinsic
+ * borrow convention -- caller manages release post-call.  Same
+ * pattern as drift_assert_loc -- see assert_runtime.c for the
+ * convention discovery context. */
+void drift_bounds_check(struct DriftString container_id, drift_isize idx, drift_isize len) {
+    /* ... body unchanged ... */
 }
 ```
 
-Note: `drift_bounds_check_fail` is `__attribute__((noreturn))`, so the
-cleanup attribute does NOT fire on the failure path (control never
-returns to drift_bounds_check's frame).  This matches the current
-behavior — the failure path's `container_id` is consumed by
-`drift_bounds_check_fail` which never returns; the process dies via the
-diagnostic-throw machinery downstream.
+`array_runtime.c::drift_bounds_check_fail(struct DriftString
+container_id, drift_isize idx, drift_isize len)`:
+
+`__attribute__((noreturn))` drain target reached from
+`drift_bounds_check`.  Cleanup attribute does not fire on noreturn
+paths anyway; ownership of the stake transfers from
+`drift_bounds_check`'s frame and is implicitly consumed when the
+process dies via the diagnostic-throw machinery.  Marker:
+`consumed-by-noreturn-callee`.
+
+`array_runtime.c::drift_bounds_check_params_json_build(struct
+DriftString container_id, drift_isize idx, char *out_buf, drift_isize
+out_cap)`:
+
+Reads `container_id.len` and `container_id.data` while building the
+escaped JSON payload, never releases.  Refcount stake stays with the
+caller (the parent `drift_bounds_check_fail`).  Marker:
+`read-only-borrow`.
 
 ### Console family — CAREFUL (delegation hazard)
 
@@ -229,10 +314,14 @@ Allow marker.
 
 ## Static audit
 
-New test `lang/tests/lang_runtime/test_drift_owned_string_audit.py`.
+New test `lang/tests/driver/test_drift_owned_string_audit.py`.
 
-**Scope:** `.c` files under `lang/language_runtime/` (not headers — the
-declarations don't have bodies to enforce against).
+**Scope:** `.c` definitions under `lang/language_runtime/`.  Headers
+are NOT enforcement targets — declarations have no body to check.
+Optional secondary scan of `.h` for inventory/reporting purposes only
+(prints a "by-value receivers declared but not defined in scanned
+files" list, fails nothing).  Hard-gate behavior applies to `.c`
+definitions exclusively.
 
 **Algorithm:**
 1. For each `.c` file, scan for function definitions whose signature
@@ -268,12 +357,15 @@ void drift_bounds_check_fail(struct DriftString container_id, ...) { ... }
 static void _drift_console_write_borrowed(DriftString s) { ... }
 ```
 
-Allowed reason vocabulary (lint enforces — typos fail):
+Allowed reason vocabulary (lint enforces — typos fail; no warning-only
+escape hatch).  Audit is a **hard gate**: every by-value receiver
+either uses the macro or carries one of these reasons.  No
+`audit-pending` or similar deferral marker; every site must be decided
+in this slice.
 - `refcount-primitive` — function IS the retain/release/concat/free primitive
-- `read-only-borrow` — pure read; refcount unchanged
+- `read-only-borrow` — pure read; refcount unchanged; caller retains stake
 - `consumed-by-noreturn-callee` — passed to a `noreturn` function that consumes it
 - `internal-borrowed-helper` — static helper whose callers own the release
-- `audit-pending` — temporary escape; lint emits warning (not error) for these; track in issue list
 
 **Implementation:** regex-based scanner; ~120 LOC including the marker
 parser and a small fixture suite that exercises positive
@@ -312,15 +404,15 @@ Hook into CI via `just test` (will auto-pick-up under the existing
 | `lang/language_runtime/console_runtime.c` | extract `_drift_console_write_borrowed` and `_drift_console_eprint_borrowed`; rewrite the 4 public entry points to use the borrowed helper + `DRIFT_OWNED_STRING` |
 | `lang/language_runtime/env_runtime.c` | convert `drift_env_get`, `drift_env_has` |
 | `lang/language_runtime/posix/io_runtime.c` | convert `drift_io_open` (drop the explicit release line landed this slice's family) |
-| `lang/language_runtime/posix/assert_runtime.c` | convert `drift_assert_loc` (3 params); closes the happy-path audit note |
-| `lang/language_runtime/array_runtime.c` | convert `drift_bounds_check`; allow marker on `drift_bounds_check_fail` |
-| `lang/tests/lang_runtime/test_drift_owned_string_audit.py` | new file, ~120 LOC |
+| `lang/language_runtime/posix/assert_runtime.c` | allow marker `read-only-borrow` on `drift_assert_loc` (convention-B; do NOT convert -- would UAF) |
+| `lang/language_runtime/array_runtime.c` | allow markers on `drift_bounds_check` (read-only-borrow, convention-B), `drift_bounds_check_fail` (consumed-by-noreturn-callee), `drift_bounds_check_params_json_build` (read-only-borrow) |
+| `lang/tests/driver/test_drift_owned_string_audit.py` | new file, ~120 LOC |
 | `docs/history.md` | new top entry |
 | `lang/versions.py` | minor bump (`0.31.91 → 0.31.92`); ABI unchanged at 14 |
 
 **Patch size estimate:**
 - Macro + helper: ~10 LOC.
-- Per-function conversion: ~3 LOC each × 8 converted functions = ~25 LOC.
+- Per-function conversion: ~3 LOC each × 7 converted functions = ~22 LOC.
 - Console borrowed-helper extraction: net +15 LOC (2 helpers added, 4 entries simplified).
 - Allow markers on string_runtime primitives + bounds_check_fail: ~8 LOC.
 - Static audit test: ~120 LOC.

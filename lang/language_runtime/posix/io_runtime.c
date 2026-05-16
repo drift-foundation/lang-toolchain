@@ -13,17 +13,16 @@
 
 static int drift_set_nonblocking(int fd);
 
-int64_t drift_io_open(DriftString path, int64_t flags, int64_t mode) {
-	/* `path` arrives with a transferred refcount: the Drift caller
+int64_t drift_io_open(DriftString path_in, int64_t flags, int64_t mode) {
+	/* `path_in` arrives with a transferred refcount: the Drift caller
 	 * `_file_open` does `drift_string_retain(path)` before this call,
-	 * so we own that stake.  Release it before returning, otherwise
-	 * the path String's refcount never hits zero and every
-	 * `io.file_builder(...).build()` leaks the allocated path. */
+	 * so we own that stake.  DRIFT_OWNED_STRING auto-releases at
+	 * scope exit -- see lang/language_runtime/string_runtime.h. */
+	DRIFT_OWNED_STRING DriftString path = path_in;
 	char *cstr = drift_string_to_cstr(path);
 	int fd = open(cstr, (int)flags, (mode_t)mode);
 	int err = errno;
 	free(cstr);
-	drift_string_release(path);
 	errno = err;
 	return (int64_t)fd;
 }

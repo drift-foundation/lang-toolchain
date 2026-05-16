@@ -1,5 +1,91 @@
 # Drift development history
 
+## 2026-05-16 (runtime hygiene: `DRIFT_OWNED_STRING` macro + static audit; convention-A by-value `DriftString` receivers now auto-release at scope exit; convention-B receivers documented and marker-locked)
+- **Runtime hygiene slice.**  Release 0.31.92, ABI unchanged at 14.
+  Replaces the implicit Drift→C "by-value DriftString = callee
+  releases" convention with `__attribute__((cleanup(...)))` for
+  automatic release at scope exit, plus a hard-gate static audit
+  (`lang/tests/driver/test_drift_owned_string_audit.py`) that
+  requires every by-value receiver under `lang/language_runtime/`
+  to either use the macro or carry an explicit allow marker.
+
+  **Macro placement.**  `lang/language_runtime/string_runtime.h`
+  defines `DRIFT_OWNED_STRING` next to `drift_string_release`.
+  Headers stay unchanged at the ABI boundary; converted functions
+  use the `_in → DRIFT_OWNED_STRING DriftString local = _in;`
+  shadow pattern.
+
+  **Conversions (7 functions, Convention A — caller pre-retains
+  via Drift IR; callee owns the transferred stake):**
+  - `drift_console_write` / `_writeln` / `_eprint` / `_eprintln`
+    via extracted internal helpers `_drift_console_write_borrowed`
+    and `_drift_console_eprint_borrowed` (avoids the double-release
+    that would otherwise hit when writeln delegates to write).
+  - `drift_env_get` / `drift_env_has` (drops the explicit release
+    landed in the previous family; closes the heap-key leak shape
+    that was masked by static-flagged literal callers).
+  - `drift_io_open` (drops the explicit release).
+
+  An 8th attempt -- `drift_assert_loc` -- was made and **reverted**
+  when a probe (`assert(true, "x" + "y")`) UAF'd at runtime; that
+  function turned out to be convention-B and is now marker-locked
+  (see below).
+
+  **Convention-B finding (mid-slice).**  The Drift→C ABI is NOT
+  uniform.  Language built-ins / intrinsic call sites (`assert`,
+  `bounds_check`) lower differently from normal function calls
+  (`env.get`, `io.file_builder`, `cons.println`):
+  - **Convention A** — caller emits `retain(s); extern(s); release(s)`
+    around the extern.  Callee MUST release the retained stake.
+    Applies to all 7 conversions above.
+  - **Convention B** — caller passes the existing stake direct
+    (no pre-retain) and releases its local AFTER the call.
+    Callee MUST NOT release; the stake passes through.  Applies
+    to `drift_assert_loc`, `drift_bounds_check`, and (transitively)
+    `drift_bounds_check_fail` / `drift_bounds_check_params_json_build`.
+
+  Both convention-B functions are marked with `read-only-borrow`
+  (or `consumed-by-noreturn-callee` for the noreturn drain).  The
+  audit doc covers this distinction so future authors don't repeat
+  the assert UAF discovery the hard way.
+
+  **Allow markers** (4 reasons in the audit vocabulary; typos fail):
+  - `refcount-primitive` — function IS retain/release/free.
+  - `read-only-borrow` — pure read; refcount unchanged.  Covers
+    string primitives (eq/cmp/concat/to_cstr) AND convention-B
+    Drift built-in receivers.
+  - `consumed-by-noreturn-callee` — noreturn drain target.
+  - `internal-borrowed-helper` — static helper wrapped by a
+    public DRIFT_OWNED_STRING caller.
+
+  **Static audit (`test_drift_owned_string_audit.py`).**  Scans
+  `.c` definitions under `lang/language_runtime/`; for each
+  function with one or more by-value `DriftString` params,
+  requires either a `DRIFT_OWNED_STRING DriftString <local> =
+  <param>;` shadow within the first ~12 lines of the body OR an
+  allow marker (`/* drift-owned-string-audit: allow <reason> --
+  <params> */`) within the first ~12 lines OR in the lines
+  immediately above the signature.  Hard gate, no warning-only
+  escape (no `audit-pending`).  Self-verified by removing a
+  marker and confirming the audit fails, then restoring.
+
+  **Verification.**  11 e2e fixtures (std_io_*, env_*,
+  borrow_tmp_match_loop_outer_scope_drop, mutex_guard_condvar_*,
+  array_*) memcheck-clean.  24 driver tests pass including the
+  new audit + the 4 sibling audit-test-checks for the
+  ledger-cache-safety analog.  Heap-arg probes for the
+  previously-masked cases (`env_get` with `"HO" + "ME"`,
+  `assert(true, "x" + "y")`, `bounds_check` via `arr[0]`) all
+  clean post-slice.
+
+  **Cleanup follow-up.**  Removed two strict=False xfail tests
+  in `test_generic_fn_qualified_variant_ctor_resolution_blocker.py`
+  that pinned K-speculated alias-dimension bugs that never
+  reproduced standalone (the original bug from `00c5d8db` is
+  still pinned by the two non-xfail tests).  Net -79 lines.
+
+  **Plan file:** `work/drift-owned-string/plan.md`.
+
 ## 2026-05-16 (LANGUAGE_BUG fix: `__borrow_tmp` synthesized for rvalue receiver borrows was not registered for scope cleanup — String-owning chain receivers leaked at function-exit reached from inside a loop)
 - **LANGUAGE_BUG fix.**  Release 0.31.91, ABI unchanged at 14.  Closes
   a path-dependent leak in MIR lowering where the synthetic

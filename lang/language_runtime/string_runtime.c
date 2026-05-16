@@ -151,6 +151,11 @@ DriftString drift_string_literal(const char *data, drift_isize len) {
 	return s;
 }
 
+/* drift-owned-string-audit: allow read-only-borrow -- a, b
+ * Reads a.len/a.data and b.len/b.data to build a fresh allocation.
+ * Does NOT release a or b; the originating Drift IR emits explicit
+ * `drift_string_release(a); drift_string_release(b);` after the
+ * concat call to drop the input stakes. */
 DriftString drift_string_concat(DriftString a, DriftString b) {
 	if ((size_t)-1 - (size_t)a.len < (size_t)b.len) {
 		abort();
@@ -177,6 +182,10 @@ DriftString drift_string_concat(DriftString a, DriftString b) {
 	return s;
 }
 
+/* drift-owned-string-audit: allow refcount-primitive -- s
+ * This IS the retain primitive; bumps the refcount and returns the
+ * same handle.  Deliberately keeps the caller's stake AND adds one
+ * for the returned value. */
 DriftString drift_string_retain(DriftString s) {
 	if (s.data == NULL) {
 		return s;
@@ -189,6 +198,9 @@ DriftString drift_string_retain(DriftString s) {
 	return s;
 }
 
+/* drift-owned-string-audit: allow refcount-primitive -- s
+ * This IS the release primitive; do NOT wrap in DRIFT_OWNED_STRING
+ * (would recurse on every call). */
 void drift_string_release(DriftString s) {
 	if (s.data == NULL) {
 		return;
@@ -212,10 +224,16 @@ void drift_string_release(DriftString s) {
 	}
 }
 
+/* drift-owned-string-audit: allow refcount-primitive -- s
+ * Thin alias for drift_string_release (same release semantics). */
 void drift_string_free(DriftString s) {
 	drift_string_release(s);
 }
 
+/* drift-owned-string-audit: allow read-only-borrow -- s
+ * Pure read: copies s.data bytes into a freshly malloc'd cstring.
+ * Does NOT release; caller retains the stake (typically released
+ * after the returned cstring is consumed). */
 char *drift_string_to_cstr(DriftString s) {
 	size_t len = (size_t)s.len;
 	char *buf = (char *)malloc(len + 1);
@@ -229,6 +247,8 @@ char *drift_string_to_cstr(DriftString s) {
 	return buf;
 }
 
+/* drift-owned-string-audit: allow read-only-borrow -- a, b
+ * Pure read: compares bytes; does not touch refcounts. */
 int drift_string_eq(DriftString a, DriftString b) {
 	if (a.len != b.len) {
 		return 0;
@@ -242,6 +262,8 @@ int drift_string_eq(DriftString a, DriftString b) {
 	return memcmp(a.data, b.data, (size_t)a.len) == 0;
 }
 
+/* drift-owned-string-audit: allow read-only-borrow -- a, b
+ * Pure read: byte-lex compare; does not touch refcounts. */
 int drift_string_cmp(DriftString a, DriftString b) {
 	const size_t a_len = (size_t)a.len;
 	const size_t b_len = (size_t)b.len;
