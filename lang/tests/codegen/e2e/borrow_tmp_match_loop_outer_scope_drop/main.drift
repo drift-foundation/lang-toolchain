@@ -1,0 +1,71 @@
+// LANGUAGE_BUG regression: an `__borrow_tmp` synthesized at MIR
+// lowering for the receiver of a rvalue method-call chain is an
+// OWNING local (holds the materialized owned value) and must
+// participate in scope cleanup at every function-exit edge.
+//
+// Pre-fix: `_visit_expr_HBorrow`'s rvalue fallback in `hir_to_mir.py`
+// did `ensure_local + _local_types[tmp] = ty + StoreLocal` but never
+// `_register_drop_local(tmp, ty)`.  The slot was therefore invisible
+// to `_emit_scope_cleanup_hook` (which walks `_scope_stack` for
+// CleanupHook candidates).  When the function exits via a `return`
+// that lives inside a loop or nested control-flow block, the cleanup
+// hook at that return point has no candidate for the borrow temp and
+// no drop is emitted — the slot's inner refcounted fields (e.g. an
+// owned `String` inside a Builder rvalue) leak.
+//
+// Shape that triggers the leak:
+//   - two `match { Ok(_) => ... default => return ... }` over rvalue
+//     chains whose receivers own a heap String;
+//   - the second match's Ok arm contains a `while` loop with a
+//     terminating `return` reached via the loop-exit edge;
+//   - both `__borrow_tmp` slots live in main's top-level scope.
+//
+// Without the fix the second chain's String leaks (~one alloc not
+// freed at memcheck exit).  See sibling memory note
+// `project_chunked_loop_conditional_break_path_drop.md` for the
+// surface report and full diagnostic trail.
+//
+// Pinned by the std_io_file_builder_chunked_large e2e too, but
+// this fixture isolates the bug from std.io and the `drift_io_open`
+// extern-leak family.
+module m;
+
+import std.core as core;
+
+pub struct Done { name: String, n: Int }
+pub struct Builder { name: String, n: Int }
+
+implement core.Copy for Builder { }
+
+pub error BuilderErr { code: Int }
+
+implement Builder {
+	pub fn finish(self: &Builder) nothrow -> core.Result<Done, BuilderErr> {
+		return core.Result::Ok(Done(name = self.name, n = self.n));
+	}
+}
+
+implement Done {
+	pub fn touch(self: &Done) nothrow -> Int { return self.n; }
+}
+
+pub fn new_builder(name: String) nothrow -> Builder {
+	return Builder(name = name, n = 0);
+}
+
+pub fn main() nothrow -> Int {
+	val r1 = new_builder("BBBBBBBB" + "BBBBBBBB").finish();
+	match r1 {
+		core.Result::Ok(_d1) => { },
+		default => { return 1; }
+	}
+	val r2 = new_builder("CCCC" + "CCCC").finish();
+	match r2 {
+		core.Result::Ok(d2) => {
+			var k = 0;
+			while k < 3 { k += 1; }
+			return d2.touch();
+		},
+		default => { return 2; }
+	}
+}

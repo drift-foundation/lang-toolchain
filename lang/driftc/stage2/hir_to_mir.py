@@ -2546,6 +2546,30 @@ class HIRToMIR:
 			tmp_local = f"__borrow_tmp{self.b.new_temp()}"
 			self.b.ensure_local(tmp_local)
 			self._local_types[tmp_local] = inner_ty
+			# Any synthetic local created to materialize an rvalue for
+			# borrowing is an OWNING local: `tmp_local` holds the
+			# materialized owned value of `expr.subject` (the rvalue),
+			# and the borrow result is `&tmp_local`.  It MUST participate
+			# in scope cleanup so its inner refcounted fields are
+			# released at function-exit paths.  Register with the temp's
+			# actual local type (`inner_ty` — the OWNED value's type,
+			# not the reference type returned to the caller).
+			# `_register_drop_local` is internally idempotent and gated
+			# by `_needs_runtime_drop`/`_type_is_destructible`, so
+			# unconditional call here is safe for trivially-droppable
+			# `inner_ty` (e.g. Int) — the registration just no-ops.
+			# Mirrors the Arc-fat (`_lower_arc_fat_intrinsic_call`,
+			# ~hir_to_mir.py:9312) and Arc-as-interface
+			# (`_lower_arc_as_interface_op`, ~hir_to_mir.py:9509)
+			# materialization sites which already do this for the same
+			# reason.  Pinned by `std_io_file_builder_chunked_large`
+			# memcheck and the minimal repro
+			# `lang/tests/codegen/e2e/borrow_tmp_match_loop_outer_scope_drop`:
+			# without the registration, the cleanup hook at any
+			# function-exit reached from inside a loop / nested arm
+			# does not see this slot as a candidate and the inner
+			# String / refcounted field is not released.
+			self._register_drop_local(tmp_local, inner_ty)
 			val = self.lower_expr(expr.subject)
 			self.b.emit(M.StoreLocal(local=tmp_local, value=val))
 			ptr = self.b.new_temp()

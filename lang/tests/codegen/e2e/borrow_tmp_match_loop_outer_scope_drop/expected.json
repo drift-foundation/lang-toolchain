@@ -1,0 +1,4 @@
+{
+  "description": "Pins the `__borrow_tmp` outer-scope cleanup fix. Pre-fix, the second chain's __borrow_tmp slot was not a CleanupHook candidate at the function-exit reached from inside a loop, and its inner String leaked at scope-0 cleanup. Memcheck-clean asserts both the runtime return value (Done.n == 0 from the freshly-built Done) AND that the second chain's allocated String is released by scope-exit drop. See `_visit_expr_HBorrow` rvalue fallback in `lang/driftc/stage2/hir_to_mir.py`.",
+  "exit_code": 0
+}
