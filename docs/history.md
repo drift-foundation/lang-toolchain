@@ -1,5 +1,108 @@
 # Drift development history
 
+## 2026-05-15 (LANGUAGE_BUG fix: `&place` on `HField(...HCall_returning_&T)` chain copied the leaf field — `&self` interior-mutation methods mutated a temp)
+- **LANGUAGE_BUG fix.** Release 0.31.90, ABI unchanged at 14.  Closes
+  a silent miscompile in MIR borrow lowering where
+  `arc.get().field.atomic_method(...)` and shape-equivalent chains
+  silently dropped the effect: the inline `&self`-method call
+  mutated a temp-local copy of the field instead of the underlying
+  storage.  Caught while bringing up the std.concurrent.Condvar e2e
+  suite — case #5 (`close-before-wait`) hung because
+  `cv.state.get().closed.store(true, Release)` inside `Condvar.close()`
+  never persisted.
+
+  **Behavioral evidence.**  Identical sequence on `Box { flag: AtomicBool }`:
+
+  | Receiver shape                                       | Persists? |
+  |------------------------------------------------------|-----------|
+  | direct local: `var b = Box(...); b.flag.store(...)`  | ✓ |
+  | named ref:   `val r = b_arc.get(); r.flag.store(...)` | ✓ |
+  | helper fn:   `fn h(b: &Box) { b.flag.store(...) }`    | ✓ |
+  | **inline:    `b_arc.get().flag.store(...)`**          | **✗** |
+
+  Identical machine code expected for all four; only the inline form
+  silently dropped the store.  Bisected to MIR lowering of
+  `&place` borrows whose subject was an `HField(...,
+  HCall_returning_&T, ...)`: the whole-expression materialization
+  path (originally written for owned-rvalue bases) copied the field
+  into a temp local and returned `&temp`, so `store(&self, ...)`
+  mutated the copy.
+
+  **Why the checker accepted this.**  Type-checker autoborrow
+  injects this specific `HBorrow(HField(call_returning_&T, ...))`
+  shape AFTER stage1 normalization runs — stage1's
+  `BorrowMaterializeRewriter._split_lift_place_chain` (which already
+  handles the `&w.get().handle` pattern at the source level) never
+  sees it.  Pre-fix, MIR lowering's `_visit_expr_HBorrow` had no
+  path-aware branch for an rvalue-rooted projection chain, so it
+  fell through to whole-expression materialization.
+
+  **Fix.**  New `_lift_rvalue_ref_base_for_borrow` helper in
+  `lang/driftc/stage2/hir_to_mir.py::_visit_expr_HBorrow` detects
+  the shape — `HField` chain rooted at a call returning `&T` — and
+  walks the projection chain emitting `AddrOfField` (and `LoadRef`
+  for any intermediate REF field) directly against the call's `&T`
+  result.  This is the same place-chain shape `_lower_addr_of_place`
+  produces, but rooted at a call result instead of an
+  `AddrOfLocal`.  Owned-rvalue bases continue to take the existing
+  whole-expression materialization path (pinned by
+  `condvar_close_before_wait_returns_closed`'s sibling owned-rvalue
+  guard).
+
+  **Atomicity invariant on the lift helper (K-review).**  The first
+  draft of the helper emitted MIR for the base call before
+  validating downstream field projections — a structural mismatch
+  mid-walk could return `None` after stranding instructions in the
+  current block.  Refactored into a pure-inspection
+  `_validate_lifted_chain` (no `lower_expr`, no `self.b.emit`, no
+  MIR ctor references) that returns either a complete emission
+  plan or `None`; the emitter half consumes the plan.  Single
+  `return None` in the whole helper, structurally placed BEFORE any
+  MIR is emitted, so the caller's fallback path runs over a clean
+  block.  Mechanically pinned by
+  `test_lift_rvalue_ref_base_no_partial_emission_invariant.py`
+  which AST-parses the helper and asserts the invariant — any
+  future regression that reintroduces partial emission fails the
+  test with a line-numbered diagnostic.
+
+  **Auto-deref / mutability.**  Mirrors `_lower_addr_of_place`'s
+  REF intermediate handling at line 10658: when a field's type is
+  `Ref<T>`, emit a `LoadRef` (with `inner_ty=ref_type`, matching
+  the existing primitive's contract) before projecting the next
+  field.  `&mut` borrows require `ref_mut` at every hop including
+  the base — failures soft-return `None` (no assertion mid-emission),
+  letting the caller fall back to the legacy path.
+
+  **Pinned by:**
+  - `lang/tests/driver/test_arc_get_field_atomic_store_persistence_blocker.py`
+    — both legs of the inline-vs-named-intermediate table above.
+  - `lang/tests/driver/test_lift_rvalue_ref_base_no_partial_emission_invariant.py`
+    — structural invariant on the helper itself + the validator.
+  - `lang/tests/codegen/e2e/autoborrow_method_recv_through_ref_rvalue_field_runtime/`
+    — runtime pin for the general (non-atomic) `wrapper.get().handle.peek()`
+    shape, proving the fix isn't atomic-specific.
+  - `lang/tests/codegen/e2e/autoborrow_owned_rvalue_field_method_unchanged/`
+    — over-fire guard: owned-rvalue field method calls (base type
+    `T`, not `&T`) MUST still take the legacy whole-expression
+    materialization path.
+
+  **Tagging-grade Condvar e2e suite lands as part of this release.**
+  16 cases covering signal_one / signal_all correctness, all three
+  wait-API timeout/deadline edges (including negative-duration and
+  past-deadline-0 regressions for tasks #44 / #45), full close
+  before/during/after-push matrix, idempotent close, signal_one on
+  an empty list, dead-record skip via task #43's self-prune-on-wake,
+  exactly-K-of-N waiter wake, and a 30-item 1-producer / 3-consumer
+  contention test.  18/18 pass under `DRIFT_MEMCHECK=1 -j 16`
+  (16 condvar + 2 autoborrow guards).  K's tagging matrix is fully
+  green: signal_one/signal_all correctness, timeout & wait_until
+  edge cases, close before/during/after-push, stale-token/no-leak,
+  contention across VTs, memcheck-clean run.
+
+  No ABI change.  Compiler-internal refactor + new tests; one comment
+  drift in `hir_to_mir.py` (stale "routes through `_lower_addr_of_place`"
+  description) updated to describe the actual implementation.
+
 ## 2026-05-16 (RUNTIME fix: FAST-I/O direct-resume stale park_token — sleep returned in 0ms after wire.query+drain)
 - **RUNTIME fix.** Release 0.31.89, ABI unchanged at 14.  Resolves
   the maria-team v1 release blocker (Issue 3): `conc.sleep` returned
