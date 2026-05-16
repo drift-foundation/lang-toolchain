@@ -4997,7 +4997,7 @@ class TypeChecker:
 			expected_type: TypeId | None = None,
 		) -> tuple[CallableDecl, CallableSignature, Subst | None]:
 			if callable_registry is None:
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5000] for function '{name}' with args {arg_types}")
 			include_private = current_module if module_name is None else None
 			candidates = callable_registry.get_free_candidates(
 				name=name,
@@ -5133,7 +5133,7 @@ class TypeChecker:
 							f"type arguments require a typed signature for function '{name}'",
 							span=call_type_args_span,
 						)
-					raise ResolutionError(f"no matching overload for function '{name}' with provided type arguments")
+					raise ResolutionError(f"no matching overload [TC5136] for function '{name}' with provided type arguments")
 				if saw_infer_incomplete and infer_failures:
 					failure = infer_failures[0]
 					ctx = failure.context or InferContext(
@@ -5171,7 +5171,7 @@ class TypeChecker:
 					)
 					msg, notes = _format_infer_failure(ctx, res)
 					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5174] for function '{name}' with args {arg_types}")
 			world = None
 			applicable: List[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			require_info: dict[object, tuple[parser_ast.TraitExpr, dict[object, object], str, dict[TypeParamId, tuple[str, int]]]] = {}
@@ -5422,7 +5422,7 @@ class TypeChecker:
 							notes=_requirement_notes(failure),
 						)
 					raise ResolutionError(f"trait requirements not met for function '{name}'")
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5425] for function '{name}' with args {arg_types}")
 			applicable = _dedupe_by_key(applicable, lambda item: _candidate_key_for_decl(item[0]))
 			if len(applicable) == 1:
 				return applicable[0][0], applicable[0][1], applicable[0][2]

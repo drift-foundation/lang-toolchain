@@ -125,7 +125,7 @@ def resolve_function_call(
 		if all(p == a for p, a in zip(params, arg_types)):
 			viable.append(decl)
 	if not viable:
-		raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+		raise ResolutionError(f"no matching overload [MR128] for function '{name}' with args {arg_types}")
 	if len(viable) > 1:
 		raise ResolutionError(f"ambiguous call to function '{name}' with args {arg_types}")
 	return viable[0]

@@ -5252,8 +5252,32 @@ def resolve_call_expr(
 						if _idx < len(arg_types):
 							arg_types[_idx] = _field_ty
 			ctor_mod = getattr(qm.base_type_expr, "module_id", None) or getattr(qm.base_type_expr, "module_alias", None) or current_module_name
-			# Replace qualified member with a plain name to satisfy typed-mode invariants.
-			expr.fn = H.HVar(name=qm.member, module_id=ctor_mod)
+			# Pre-2026-05-15: this site rewrote `expr.fn` to
+			# `H.HVar(name=qm.member, module_id=ctor_mod)` "to satisfy
+			# typed-mode invariants."  That rewrite lost the
+			# syntactic-category info (HCall has a qualified-member
+			# constructor callee) needed by `normalize_hir`'s
+			# rewriters to re-route through this same qmem branch
+			# during generic instantiation: stage1 rebuilds HCall
+			# objects without dynamic attrs (`_resolved_ctor_info`
+			# / `_resolved_ctor_return`), so the instantiation pass
+			# saw `expr.fn = HVar` with no cache and fell through to
+			# the free-function lookup in the HVar branch — which
+			# treated the ctor name (e.g. "Acquire") as a bare free
+			# function and failed with E-AUTO-3e8a49cf "no matching
+			# overload for function 'Acquire'".
+			#
+			# Pinned by
+			# `lang/tests/driver/test_generic_fn_qualified_variant_ctor_resolution_blocker.py`
+			# (LANGUAGE_BUG).  Keep `expr.fn` as `HQualifiedMember`
+			# so re-resolution during instantiation re-enters this
+			# branch and resolves cleanly.  The HVar-branch cache
+			# attrs (`_resolved_ctor_info` / `_resolved_ctor_return`)
+			# are no longer the load-bearing fast-path for ctor
+			# calls — `record_call_info` + `record_expr` below carry
+			# the resolution into typed side tables for downstream
+			# consumers in the SAME pass; future visits re-resolve
+			# through this qmem branch.
 			setattr(expr, "_resolved_ctor_return", inst_return)
 			setattr(expr, "_resolved_ctor_info", (tuple(inst_params), inst_return, tuple(ctor_res.ctor_arg_field_indices), qm.member))
 			intent.arg_expected_types = _expected_arg_types_for_call(list(inst_params), len(arg_exprs))
