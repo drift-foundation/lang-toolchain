@@ -1,7 +1,4 @@
 {
-  "description": "returning &T as owned T must be rejected with a clear diagnostic",
-  "exit_code": 1,
-  "diagnostics": [
-    {"message_contains": "cannot return reference as owned", "severity": "error"}
-  ]
+  "description": "Variant binder of type &String returned from a String-returning function compiles via the implicit ref-to-value coercion (Copy / ConstShare T are allowed at owned destinations, including return position). The runtime path exercises the None arm; the Some arm exists only to pin the compile-time shape that previously rejected. Negative coverage (non-Copy non-ConstShare types still rejected) lives in lang/tests/driver/test_ref_to_value_extended_slots.py::test_return_negative_destructible_still_rejected.",
+  "exit_code": 0
 }

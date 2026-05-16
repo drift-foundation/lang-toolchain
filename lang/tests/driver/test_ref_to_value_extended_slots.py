@@ -419,3 +419,75 @@ fn main() nothrow -> Int {
 		f"Resource (non-Copy non-ConstShare) must not auto-dup; "
 		f"compile unexpectedly succeeded.\nstderr: {res.stderr[:500]}"
 	)
+
+
+def test_return_negative_destructible_still_rejected(tmp_path: Path) -> None:
+	"""Companion to `test_let_init_negative_destructible_still_rejected`
+	covering the RETURN-position slot.  `return r` where `r: &Resource`
+	and the function returns owned `Resource` must reject — the
+	implicit ref-to-value coercion is gated on Copy / ConstShare for T,
+	and a user-`Destructible` struct is neither.  Without this guard,
+	the auto-deref would silently bitcopy the struct and run the
+	user destructor twice on the same heap state.
+
+	Pinned alongside the now-passing `ref_variant_binder_return_owned`
+	codegen e2e (which exercises the positive Copy-T return path that
+	the variant-binder shape produces) to lock in the asymmetry:
+	return slot accepts &T → T for Copy/ConstShare T, rejects for any
+	other T.
+
+	Asserts both a nonzero exit AND the specific Copy-gate diagnostic so
+	the test can't pass for an unrelated parser / import / entry failure
+	— the rejection MUST come from the non-Copy / non-ConstShare gate
+	this test is meant to protect.  Both the stable error code
+	(`E-AUTO-9cc3ceb9`) and the human-readable shape
+	(`cannot copy value of type 'Resource'`) are checked.
+	"""
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"""
+module main;
+
+import std.core as core;
+
+pub struct Resource { pub tag: Int }
+
+implement core.Destructible for Resource {
+	pub fn destroy(var self: Resource) nothrow -> Void { return; }
+}
+
+fn extract(r: &Resource) nothrow -> Resource {
+	return r;
+}
+
+fn main() nothrow -> Int {
+	return 0;
+}
+""".lstrip(),
+		encoding="utf-8",
+	)
+	stdlib = stdlib_root() or (ROOT / "stdlib")
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
+		 "--stdlib-root", str(stdlib),
+		 str(src), "--entry", "main::main"],
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(60),
+	)
+	assert res.returncode != 0, (
+		f"return of &Resource as owned Resource (non-Copy "
+		f"non-ConstShare) must not auto-dup; compile unexpectedly "
+		f"succeeded.\nstderr: {res.stderr[:500]}"
+	)
+	diag = res.stderr or ""
+	assert "cannot copy value of type 'Resource'" in diag, (
+		"compile rejected, but not via the non-Copy / non-ConstShare "
+		"return-slot gate this test pins.  Expected diagnostic text "
+		"\"cannot copy value of type 'Resource'\" was not in stderr — "
+		"the failure may be from an unrelated parser / import / entry "
+		f"error.\nstderr: {diag[:1000]}"
+	)
+	assert "[E-AUTO-9cc3ceb9]" in diag, (
+		"compile rejected with the right human-readable message but the "
+		"stable error code `E-AUTO-9cc3ceb9` was missing — the "
+		"diagnostic identity may have shifted.\nstderr: {diag[:1000]}"
+	)

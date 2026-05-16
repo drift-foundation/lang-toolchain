@@ -54,55 +54,66 @@ pub fn main() nothrow -> Int {
 		return 0;
 	}));
 
-	// Main: take the lock, then unlock-for-condvar.
-	var g = m.get().lock();
+	// Sections (1) + (2): unlock_for_condvar releases the lock,
+	// grabber acquires it under our window, we relock and confirm
+	// the value survives.  All operations live in their own scope
+	// so the guard `g` is dropped (locked=true destructor branch)
+	// before section (3) takes a fresh guard on the same mutex —
+	// otherwise `g` would still hold the lock and section (3)'s
+	// `m.get().lock()` would deadlock against itself (Drift v1
+	// guards live to their declaring scope; no NLL early-drop).
 	{
-		val v = g.get_mut();
-		*v = 99;  // mutate while holding the lock
-	}
-	g.unlock_for_condvar();
+		var g = m.get().lock();
+		{
+			val v = g.get_mut();
+			*v = 99;  // mutate while holding the lock
+		}
+		g.unlock_for_condvar();
 
-	// Wait for the grabber to acquire + record.  Use a real sleep
-	// (no Condvar yet, that's PR2).
-	match conc.sleep(conc.Duration(millis = 50)) {
-		core.Result::Err(_) => { return 20; },
-		core.Result::Ok(_) => { }
-	}
+		// Wait for the grabber to acquire + record.  Use a real sleep
+		// (no Condvar yet, that's PR2).
+		match conc.sleep(conc.Duration(millis = 50)) {
+			core.Result::Err(_) => { return 20; },
+			core.Result::Ok(_) => { }
+		}
 
-	// Grabber should be done; rejoin.
-	match grabber.join() {
-		core.Result::Err(_) => { cons.eprintln("FAIL: grabber join errored"); return 21; },
-		core.Result::Ok(rc) => {
-			if rc != 0 {
-				cons.eprintln("FAIL: grabber returned " + fmt.format_int(rc));
-				return 22;
+		// Grabber should be done; rejoin.
+		match grabber.join() {
+			core.Result::Err(_) => { cons.eprintln("FAIL: grabber join errored"); return 21; },
+			core.Result::Ok(rc) => {
+				if rc != 0 {
+					cons.eprintln("FAIL: grabber returned " + fmt.format_int(rc));
+					return 22;
+				}
 			}
 		}
+
+		// Confirm the grabber successfully acquired and saw our 99.
+		// `sg` lives in this inner scope only — its scope-end drop
+		// must precede section (3) too, for the same reason as `g`.
+		{
+			var sg = saw.get().lock();
+			val saw_val = *sg.get_mut();
+			if saw_val != 99 {
+				cons.eprintln("FAIL: grabber saw " + fmt.format_int(saw_val) + " (expected 99 — proves mutual exclusion held)");
+				return 23;
+			}
+		}
+
+		// Reacquire and confirm we can still read the value.
+		g.relock_for_condvar();
+		val final_val = *g.get_mut();
+		// Grabber may have written nothing back; value should be 99.
+		if final_val != 99 {
+			cons.eprintln("FAIL: after relock, value is " + fmt.format_int(final_val) + " (expected 99)");
+			return 24;
+		}
+		// Block exits here → `g` destructor (locked=true branch)
+		// releases the underlying lock cleanly.
 	}
 
-	// Confirm the grabber successfully acquired and saw our 99.
-	var sg = saw.get().lock();
-	val saw_val = *sg.get_mut();
-	if saw_val != 99 {
-		cons.eprintln("FAIL: grabber saw " + fmt.format_int(saw_val) + " (expected 99 — proves mutual exclusion held)");
-		return 23;
-	}
-
-	// Reacquire and confirm we can still read the value.
-	g.relock_for_condvar();
-	val final_val = *g.get_mut();
-	// Grabber may have written nothing back; value should be 99.
-	if final_val != 99 {
-		cons.eprintln("FAIL: after relock, value is " + fmt.format_int(final_val) + " (expected 99)");
-		return 24;
-	}
-
-	// (3) Destructor non-double-unlock — drop the original guard
-	// `g` here (it goes out of scope at the end of main) AFTER
-	// running through unlock_for_condvar + relock_for_condvar at
-	// least once, so the destructor takes the locked=true path.
-	// Now exercise the OTHER destructor path: take a fresh guard,
-	// unlock_for_condvar it, drop without relock.  The mutex should
+	// (3) Destructor non-double-unlock — take a fresh guard,
+	// unlock_for_condvar it, drop without relock.  The mutex must
 	// stay unlocked (no double-unlock corrupting state).  Confirm
 	// by acquiring it again from a fresh lock() — if the destructor
 	// double-unlocked, this lock() would observe whatever garbage
