@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #8 — close() wakes a parked waiter; the waiter's wait() returns Err(CLOSED).  Exercises Condvar.close()'s drain-and-unpark path.",
+  "exit_code": 0
+}

@@ -1,0 +1,106 @@
+module m;
+
+// Condvar e2e #9 — close() after signal_all (with the list emptied
+// of waiters) is well-formed, and a subsequent wait() returns
+// Err(CLOSED) without parking.
+//
+// This covers the "close-after-push" leg of K's tagging matrix:
+//   #5 close-before-push   — done in condvar_close_before_wait_returns_closed
+//   #8 close-during-push   — done in condvar_close_during_wait_wakes_parked_with_closed
+//   #9 close-after-push    — this test (waiters left cleanly first)
+//
+// Sequence:
+//   1. Spawn 2 waiters, each predicate-looping on a Bool.
+//   2. Main flips the predicate, signal_all → both wake, both return Ok.
+//   3. Main calls close() — list is empty, but the closed flag must
+//      still be set and a subsequent wait MUST see Err(CLOSED).
+//   4. Spawn a 3rd waiter that calls wait() — must return Err(CLOSED)
+//      immediately (no parking).
+//
+// Exercises Condvar.close()'s drain-on-empty-list path: claimed is
+// an empty Array<Arc<PoolWaiter>>, and _unpark_all walks zero
+// iterations.  The closed flag must still be observable to a
+// subsequent _wait_inner's fast-path check.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var w1 = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 81; }
+			}
+		}
+		return 0;
+	}));
+
+	val cv2 = cv_arc.clone();
+	val m2 = pred_lock.clone();
+	var w2 = conc.spawn_cb(core.callback0(| | captures(move cv2, move m2) nothrow => {
+		var g = m2.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv2.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 82; }
+			}
+		}
+		return 0;
+	}));
+
+	// Let both park.
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Flip predicate + wake everyone.
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_all();
+
+	match w1.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 21; },
+		core.Result::Ok(rc) => { if rc != 0 { return 30 + rc; } }
+	}
+	match w2.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 22; },
+		core.Result::Ok(rc) => { if rc != 0 { return 40 + rc; } }
+	}
+
+	// Both waiters have left.  Close on the empty list.
+	cv_arc.get().close();
+
+	// New waiter must see CLOSED on the fast path.
+	val cv3 = cv_arc.clone();
+	val m3 = pred_lock.clone();
+	var w3 = conc.spawn_cb(core.callback0(| | captures(move cv3, move m3) nothrow => {
+		var g = m3.get().lock();
+		match cv3.get().wait(&mut g) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+				cons.eprintln("FAIL: post-close wait returned non-CLOSED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+	match w3.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 23; },
+		core.Result::Ok(rc) => { if rc != 0 { return 50 + rc; } }
+	}
+	return 0;
+}

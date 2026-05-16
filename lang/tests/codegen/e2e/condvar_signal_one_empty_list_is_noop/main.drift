@@ -1,0 +1,57 @@
+module m;
+
+// Condvar e2e #15 — signal_one on an empty waiter list is a safe
+// no-op (no crash, no leak, no effect on subsequent waits).
+//
+// Then verifies that a subsequent wait + signal_one still works
+// correctly, proving the no-op didn't corrupt internal state.
+//
+// Pins _claim_one's "list empty → return None" path and signal_one's
+// outer "Optional::Some/default" match.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	// signal_one with NO waiters — must be a clean no-op.
+	cv_arc.get().signal_one();
+	cv_arc.get().signal_one();
+	cv_arc.get().signal_one();
+
+	// Now spawn one waiter and signal it.  If the prior no-ops
+	// corrupted state, this wait will hang.
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(_) => { return 91; }
+			}
+		}
+		return 0;
+	}));
+
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_one();
+
+	match waiter.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return 30 + rc; } }
+	}
+	return 0;
+}

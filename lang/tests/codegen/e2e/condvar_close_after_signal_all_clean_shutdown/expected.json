@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #9 — close-after-push leg: 2 waiters wake via signal_all and return cleanly; close() on the empty list still flips the closed flag; a subsequent wait() returns Err(CLOSED) on the fast path.",
+  "exit_code": 0
+}

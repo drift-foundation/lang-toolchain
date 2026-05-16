@@ -1,0 +1,48 @@
+module m;
+
+// Condvar e2e #14 — close() is idempotent.  Calling close() twice
+// is safe (no crash, no double-drain, no atomic-state corruption),
+// and a wait() after the second close still returns Err(CLOSED).
+//
+// The implementation uses an AtomicBool with `store(true, Release)`
+// for the closed flag — a second store(true) is a no-op on the
+// atomic.  The drain path may run twice but operates on the list
+// under the list_lock; the second pass finds an already-drained
+// list and returns an empty array, so `_unpark_all` walks zero
+// iterations.
+//
+// This test:
+//   1. close()
+//   2. close() again
+//   3. spawn a waiter — must return Err(CLOSED) immediately
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	cv_arc.get().close();
+	cv_arc.get().close();   // idempotent second call
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		match cv1.get().wait(&mut g) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+				cons.eprintln("FAIL: double-closed wait returned non-CLOSED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+	match waiter.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+	return 0;
+}

@@ -1,0 +1,102 @@
+module m;
+
+// Condvar e2e #10 — stale/dead waiter records do not break
+// signal_one.
+//
+// Pins task #43 (self-prune-on-wake) and the _claim_one
+// skip-on-CAS-fail path in signal_one (see _claim_one in
+// std.concurrent).
+//
+// Sequence:
+//   1. Run N=5 sequential wait_timeout(40 ms) cycles.  Each waiter
+//      times out, self-CASes, self-prunes.  At each wake the list
+//      should drain back to empty (or near-empty); over the 5
+//      cycles, total list growth should be bounded.
+//   2. After the timeout loop, spawn one final waiter that calls
+//      wait() (indefinite).
+//   3. Sleep 50 ms so the final waiter parks.
+//   4. Main calls signal_one.  Final waiter MUST wake with Ok.
+//
+// What this proves:
+//   - The list_lock-protected array does not get corrupted by
+//     repeated timeout self-prunes.
+//   - signal_one's _claim_one finds the live waiter even after the
+//     list has been churned by 5 timeout cycles.
+//   - No deadlock or leak when alternating timeout-self-prune and
+//     signal-claim paths.
+//
+// Note: we don't try to ASSERT zero dead records in the list (the
+// internal list isn't exposed).  Instead, we assert end-to-end
+// behavior: signal_one wakes the final waiter, period.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	// 5 rounds of wait_timeout(40 ms), each must time out cleanly.
+	var i = 0;
+	while i < 5 {
+		val cvr = cv_arc.clone();
+		val mr = pred_lock.clone();
+		var w = conc.spawn_cb(core.callback0(| | captures(move cvr, move mr) nothrow => {
+			var g = mr.get().lock();
+			match cvr.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 40)) {
+				core.Result::Ok(_) => { return 81; },
+				core.Result::Err(e) => {
+					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+					cons.eprintln("FAIL: timeout-round did not return TIMEOUT");
+					return 82;
+				}
+			}
+		}));
+		match w.join_timeout(conc.Duration(millis = 1000)) {
+			core.Result::Err(_) => { return 10 + i; },
+			core.Result::Ok(rc) => { if rc != 0 { return 20 + rc; } }
+		}
+		i = i + 1;
+	}
+
+	// Final live waiter — must be woken by signal_one.
+	val cv_f = cv_arc.clone();
+	val m_f = pred_lock.clone();
+	val waker_done = conc.arc(conc.mutex(false));
+	val wd_f = waker_done.clone();
+	var w_final = conc.spawn_cb(core.callback0(| | captures(move cv_f, move m_f, move wd_f) nothrow => {
+		var g = m_f.get().lock();
+		match cv_f.get().wait(&mut g) {
+			core.Result::Ok(_) => {
+				var wg = wd_f.get().lock();
+				val wv = wg.get_mut();
+				*wv = true;
+				return 0;
+			},
+			core.Result::Err(_) => { return 91; }
+		}
+	}));
+
+	// Park.
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 30; },
+		core.Result::Ok(_) => { }
+	}
+
+	cv_arc.get().signal_one();
+
+	match w_final.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => {
+			cons.eprintln("FAIL: signal_one did not wake the live waiter after the timeout cycles");
+			return 40;
+		},
+		core.Result::Ok(rc) => { if rc != 0 { return 50 + rc; } }
+	}
+
+	// Defensive: confirm the waiter actually advanced through Ok.
+	var wg = waker_done.get().lock();
+	val wv = wg.get_mut();
+	if not *wv { return 60; }
+	return 0;
+}

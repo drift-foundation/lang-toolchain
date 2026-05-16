@@ -1,0 +1,134 @@
+module m;
+
+// Condvar e2e #13 — signal_one called K times wakes EXACTLY K of N
+// waiters (where N > K).
+//
+// Spawn 4 waiters that all loop on the same predicate.  Main flips
+// the predicate (allows wake-and-exit) and calls signal_one 2x.
+// Then close() to release the remaining 2 — they observe CLOSED
+// and exit.
+//
+// We assert:
+//   - All 4 waiters return.
+//   - Exactly 2 returned with `signal_won = true` (predicate-true
+//     path), exactly 2 returned with the closed path.
+//
+// This is a structural correctness pin for signal_one (no
+// "phantom" wakes — signal_one wakes at most one waiter, never
+// more, never zero when there's a waiter to claim).
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub struct Counters {
+	pub signal_won: conc.Mutex<Int>,
+	pub closed_path: conc.Mutex<Int>,
+}
+implement core.Destructible for Counters {
+	pub fn destroy(var self: Counters) nothrow -> Void { return; }
+}
+
+fn make_waiter(cv_arc: core.Arc<conc.Condvar>, pred_lock: core.Arc<conc.Mutex<Bool>>, c_arc: core.Arc<Counters>) nothrow -> conc.VirtualThread<Int> {
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	val c1 = c_arc.clone();
+	return conc.spawn_cb(core.callback0(| | captures(move cv1, move m1, move c1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		while not *v {
+			match cv1.get().wait(&mut g) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(e) => {
+					if e.kind == conc.CONCURRENCY_KIND_CLOSED {
+						var cg = c1.get().closed_path.lock();
+						val cv = cg.get_mut();
+						*cv = *cv + 1;
+						return 0;
+					}
+					return 91;
+				}
+			}
+		}
+		// Predicate-satisfied wake (signal_one path).
+		var sg = c1.get().signal_won.lock();
+		val sv = sg.get_mut();
+		*sv = *sv + 1;
+		return 0;
+	}));
+}
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+	val counters = conc.arc(Counters(
+		signal_won = conc.mutex(0),
+		closed_path = conc.mutex(0)
+	));
+
+	var w1 = make_waiter(cv_arc.clone(), pred_lock.clone(), counters.clone());
+	var w2 = make_waiter(cv_arc.clone(), pred_lock.clone(), counters.clone());
+	var w3 = make_waiter(cv_arc.clone(), pred_lock.clone(), counters.clone());
+	var w4 = make_waiter(cv_arc.clone(), pred_lock.clone(), counters.clone());
+
+	// Let everyone park.
+	match conc.sleep(conc.Duration(millis = 100)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Flip predicate then signal_one twice.  Only 2 of the 4
+	// waiters should advance to the predicate-true exit path.
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_one();
+	// Brief gap so the first claim+unpark settles before the second
+	// signal_one races for a new waiter.
+	match conc.sleep(conc.Duration(millis = 30)) {
+		core.Result::Err(_) => { return 11; },
+		core.Result::Ok(_) => { }
+	}
+	cv_arc.get().signal_one();
+	match conc.sleep(conc.Duration(millis = 30)) {
+		core.Result::Err(_) => { return 12; },
+		core.Result::Ok(_) => { }
+	}
+
+	// Release the remaining 2 via close().
+	cv_arc.get().close();
+
+	match w1.join_timeout(conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { return 21; },
+		core.Result::Ok(rc) => { if rc != 0 { return 30 + rc; } }
+	}
+	match w2.join_timeout(conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { return 22; },
+		core.Result::Ok(rc) => { if rc != 0 { return 40 + rc; } }
+	}
+	match w3.join_timeout(conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { return 23; },
+		core.Result::Ok(rc) => { if rc != 0 { return 50 + rc; } }
+	}
+	match w4.join_timeout(conc.Duration(millis = 2000)) {
+		core.Result::Err(_) => { return 24; },
+		core.Result::Ok(rc) => { if rc != 0 { return 60 + rc; } }
+	}
+
+	// Assertions: signal_won == 2, closed_path == 2.
+	var sg = counters.get().signal_won.lock();
+	val sv = sg.get_mut();
+	if *sv != 2 {
+		cons.eprintln("FAIL: signal_won count not 2");
+		return 70;
+	}
+	var cg = counters.get().closed_path.lock();
+	val cv = cg.get_mut();
+	if *cv != 2 {
+		cons.eprintln("FAIL: closed_path count not 2");
+		return 71;
+	}
+	return 0;
+}

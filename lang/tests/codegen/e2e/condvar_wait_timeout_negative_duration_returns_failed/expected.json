@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #7 — wait_timeout(Duration(millis = -1)) and wait_timeout(Duration(millis = -1000)) both return Err(kind=FAILED) immediately, NOT TIMEOUT.  Regression pin for the negative-duration validation added in task #45.",
+  "exit_code": 0
+}

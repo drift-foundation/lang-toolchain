@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #11 — high-contention producer/consumer with 1 producer + 3 consumers + 30 items, using the canonical predicate-loop pattern.  Asserts the sum of items consumed across all three consumers equals 30, and no consumer hangs (5 s join_timeout).  Stress / liveness check for signal_one under contention.",
+  "exit_code": 0
+}

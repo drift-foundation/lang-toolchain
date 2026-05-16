@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #10 — stale/dead waiter records (left by timed-out wait_timeout cycles) do not break a subsequent signal_one + live wait().  5 rounds of timeout self-prune are followed by a live waiter that must be woken by signal_one within the 1 s join_timeout.",
+  "exit_code": 0
+}

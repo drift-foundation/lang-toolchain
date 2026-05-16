@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #14 — close() called twice is idempotent; a subsequent wait() still returns Err(CLOSED).  No crash, no corruption.",
+  "exit_code": 0
+}

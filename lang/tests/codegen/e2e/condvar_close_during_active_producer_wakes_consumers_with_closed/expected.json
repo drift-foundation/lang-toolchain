@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #12 — close() called by an active producer wakes parked consumers with Err(CLOSED).  Producer pushes 10 items then close()s; both consumers return cleanly; total consumed is in [0, 10] (close doesn't drain remaining counter items).",
+  "exit_code": 0
+}

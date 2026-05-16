@@ -1,0 +1,61 @@
+module m;
+
+// Condvar e2e #8 — close() wakes a currently-parked waiter with
+// Err(CLOSED).
+//
+// This is the "close-during-wait" case (#5 covers close-before-wait):
+//   1. Waiter VT enters wait() and parks.
+//   2. Main calls close().
+//   3. Waiter wakes — wait() returns Err(CLOSED).
+//
+// Exercises the drain-and-unpark path inside `Condvar.close()`:
+//   `_drain_active(&self.state.get().list_lock)` followed by
+//   `_unpark_all(&claimed)`.  After unparking, the waiter's
+//   `_wait_inner` re-checks `cv.state.get().closed.load(Acquire)`
+//   and returns CLOSED.
+//
+// The ordering is: main sleeps 50 ms (enough for waiter to park
+// under lock and call vt_park), then close().  Waiter has a
+// generous join_timeout(2 s) — if close() fails to wake it, join
+// will report timeout (not the test exit code).
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		// Single wait() — no predicate loop, because the only legal
+		// outcome here is CLOSED (close() arrives while we're parked).
+		match cv1.get().wait<type Bool>(&mut g) {
+			core.Result::Ok(_) => { return 91; },  // spurious wake not expected here
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+				cons.eprintln("FAIL: wait returned non-CLOSED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+
+	// Give the waiter time to acquire the predicate lock, enqueue,
+	// release the lock, and call vt_park.  50 ms is conservative on
+	// a non-overloaded test host.
+	conc.sleep(conc.Duration(millis = 50));
+
+	cv_arc.get().close();
+
+	match waiter.join_timeout(conc.Duration(millis = 2000)) {
+		core.Result::Err(e) => {
+			cons.eprintln("FAIL: close() did not wake parked waiter (join kind=" + e.kind + ")");
+			return 20;
+		},
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+	return 0;
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #13 — signal_one called 2x wakes EXACTLY 2 of 4 waiters via the predicate-true path; close() then drains the remaining 2 via CLOSED.  Asserts signal_won == 2 and closed_path == 2.",
+  "exit_code": 0
+}

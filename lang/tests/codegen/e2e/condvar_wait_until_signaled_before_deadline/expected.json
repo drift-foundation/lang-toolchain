@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #16 — wait_until(now + 2 s) returns Ok when a signal arrives ~50 ms later (well before deadline).  Total elapsed is asserted under 1500 ms — proving the signal, not the deadline, drove the wake.",
+  "exit_code": 0
+}

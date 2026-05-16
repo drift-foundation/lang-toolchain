@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #6 — wait_until with a past deadline (0, negative, or now - 1000) returns Err(TIMEOUT) immediately without parking.  Regression pin for the wait_until(0) infinite-wait bug (task #44).  All three past-deadline shapes complete within the 1 s join_timeout, proving no parking occurred.",
+  "exit_code": 0
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Condvar e2e #15 — signal_one called 3x with no waiters is a safe no-op; a subsequent wait + signal_one still functions normally.",
+  "exit_code": 0
+}

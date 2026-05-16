@@ -1,0 +1,66 @@
+module m;
+
+// Condvar e2e #7 — wait_timeout(Duration(millis = -K)) returns
+// Err(ConcurrencyError(kind = FAILED)) immediately without parking.
+//
+// Per the API contract in stdlib (concurrent.drift, fn wait_timeout):
+//   "Returns `Err(ConcurrencyError(kind=FAILED))` if `d.millis` is
+//    negative — matches the `_check_duration` contract used
+//    elsewhere in `std.concurrent` (`sleep` / `join_timeout`)."
+//
+// This pins the negative-duration validation added in task #45 to
+// the wait_timeout entry path.  Pre-fix, `wait_timeout(-1)` would
+// pass through to `_wait_inner` with deadline_ms = now + (-1) and
+// the past-deadline check would (correctly, by accident) return
+// TIMEOUT — but TIMEOUT is the wrong error kind for a programmer
+// error.  Post-fix, the entry check rejects negative durations
+// with FAILED before the deadline math runs.
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	// Two negative-duration shapes: small (-1) and larger (-1000).
+	// Both must return FAILED, NOT TIMEOUT.
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter1 = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = -1)) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_FAILED { return 0; }
+				cons.eprintln("FAIL: wait_timeout(-1) returned non-FAILED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+	match waiter1.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return rc; } }
+	}
+
+	val cv2 = cv_arc.clone();
+	val m2 = pred_lock.clone();
+	var waiter2 = conc.spawn_cb(core.callback0(| | captures(move cv2, move m2) nothrow => {
+		var g = m2.get().lock();
+		match cv2.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = -1000)) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_FAILED { return 0; }
+				cons.eprintln("FAIL: wait_timeout(-1000) returned non-FAILED kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+	match waiter2.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => { return 30; },
+		core.Result::Ok(rc) => { if rc != 0 { return rc + 100; } }
+	}
+
+	return 0;
+}

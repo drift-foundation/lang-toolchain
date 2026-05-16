@@ -1,0 +1,127 @@
+module m;
+
+// Condvar e2e #12 — close() during an active producer/consumer
+// cycle wakes parked consumers with Err(CLOSED).
+//
+// Variant of #11 (high-contention producer/consumer) but the
+// producer ENDS by calling close() instead of signal_all-with-done-
+// flag.  Verifies the shutdown semantics: a running pipeline can
+// be torn down by close(), and every consumer eventually returns
+// with Err(CLOSED) (either from a parked wait that got woken by
+// close, or from a fast-path closed check on the next iteration).
+//
+// Producer pushes 10 items, then close().  Consumers loop on
+// counter > 0; when wait returns Err(CLOSED), they exit cleanly.
+// Some items may not be consumed (close arrives while items are
+// still in the counter — drains are not part of close semantics).
+// We assert only: every consumer returned cleanly, total consumed
+// is between 0 and 10 inclusive.
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val counter = conc.arc(conc.mutex(0));
+	val totals = conc.arc(conc.mutex(0));
+
+	val cv1 = cv_arc.clone();
+	val cnt1 = counter.clone();
+	val tot1 = totals.clone();
+	var c1 = conc.spawn_cb(core.callback0(| | captures(move cv1, move cnt1, move tot1) nothrow => {
+		var consumed = 0;
+		while true {
+			var g = cnt1.get().lock();
+			val c = g.get_mut();
+			while *c == 0 {
+				match cv1.get().wait<type Int>(&mut g) {
+					core.Result::Ok(_) => { },
+					core.Result::Err(e) => {
+						if e.kind == conc.CONCURRENCY_KIND_CLOSED {
+							{
+								var tg = tot1.get().lock();
+								val t = tg.get_mut();
+								*t = *t + consumed;
+							}
+							return 0;
+						}
+						return 91;
+					}
+				}
+			}
+			*c = *c - 1;
+			consumed = consumed + 1;
+		}
+		return 0;
+	}));
+
+	val cv2 = cv_arc.clone();
+	val cnt2 = counter.clone();
+	val tot2 = totals.clone();
+	var c2 = conc.spawn_cb(core.callback0(| | captures(move cv2, move cnt2, move tot2) nothrow => {
+		var consumed = 0;
+		while true {
+			var g = cnt2.get().lock();
+			val c = g.get_mut();
+			while *c == 0 {
+				match cv2.get().wait<type Int>(&mut g) {
+					core.Result::Ok(_) => { },
+					core.Result::Err(e) => {
+						if e.kind == conc.CONCURRENCY_KIND_CLOSED {
+							{
+								var tg = tot2.get().lock();
+								val t = tg.get_mut();
+								*t = *t + consumed;
+							}
+							return 0;
+						}
+						return 92;
+					}
+				}
+			}
+			*c = *c - 1;
+			consumed = consumed + 1;
+		}
+		return 0;
+	}));
+
+	val cv_p = cv_arc.clone();
+	val cnt_p = counter.clone();
+	var prod = conc.spawn_cb(core.callback0(| | captures(move cv_p, move cnt_p) nothrow => {
+		var i = 0;
+		while i < 10 {
+			{
+				var g = cnt_p.get().lock();
+				val c = g.get_mut();
+				*c = *c + 1;
+				cv_p.get().signal_one();
+			}
+			match conc.sleep(conc.Duration(millis = 3)) {
+				core.Result::Err(_) => { return -81; },
+				core.Result::Ok(_) => { }
+			}
+			i = i + 1;
+		}
+		cv_p.get().close();
+		return 0;
+	}));
+
+	match prod.join_timeout(conc.Duration(millis = 5000)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(rc) => { if rc != 0 { return 20 - rc; } }
+	}
+	match c1.join_timeout(conc.Duration(millis = 5000)) {
+		core.Result::Err(_) => { return 31; },
+		core.Result::Ok(rc) => { if rc != 0 { return 40 + rc; } }
+	}
+	match c2.join_timeout(conc.Duration(millis = 5000)) {
+		core.Result::Err(_) => { return 32; },
+		core.Result::Ok(rc) => { if rc != 0 { return 50 + rc; } }
+	}
+
+	var tg = totals.get().lock();
+	val t = tg.get_mut();
+	if *t < 0 { return 60; }
+	if *t > 10 { return 70; }
+	return 0;
+}

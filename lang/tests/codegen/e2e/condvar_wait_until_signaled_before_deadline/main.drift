@@ -1,0 +1,73 @@
+module m;
+
+// Condvar e2e #16 — wait_until with a future deadline returns Ok
+// when a signal arrives before the deadline elapses.  Rounds out
+// the wait_until matrix:
+//   #6 past-deadline → Err(TIMEOUT) immediately
+//   #16 future-deadline + signal → Ok before deadline
+//
+// Spawn a waiter that calls wait_until(now + 2000 ms).  Main sleeps
+// 50 ms, flips the predicate under the lock, and calls signal_one.
+// Waiter must return Ok (predicate-true path) well before the 2 s
+// deadline.  Total runtime should be ~100 ms, not 2 s.
+
+import std.core as core;
+import std.concurrent as conc;
+import lang.thread as thread;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+	val started_ms = thread.now_ms();
+
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
+		var g = m1.get().lock();
+		val v = g.get_mut();
+		// deadline = now + 2 s.  Captured here so each wait round
+		// uses the same absolute deadline (canonical wait_until
+		// pattern).
+		val deadline = thread.now_ms() + 2000;
+		while not *v {
+			match cv1.get().wait_until<type Bool>(&mut g, deadline) {
+				core.Result::Ok(_) => { },
+				core.Result::Err(e) => {
+					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT {
+						return 81;  // deadline elapsed — fail
+					}
+					return 91;
+				}
+			}
+		}
+		return 0;
+	}));
+
+	match conc.sleep(conc.Duration(millis = 50)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(_) => { }
+	}
+	{
+		var g = pred_lock.get().lock();
+		val v = g.get_mut();
+		*v = true;
+	}
+	cv_arc.get().signal_one();
+
+	match waiter.join_timeout(conc.Duration(millis = 2500)) {
+		core.Result::Err(_) => { return 20; },
+		core.Result::Ok(rc) => { if rc != 0 { return 30 + rc; } }
+	}
+
+	// Defensive timing check: total elapsed should be well under
+	// 2 s (the deadline).  Allow a generous 1500 ms ceiling for
+	// slow CI hosts — anything close to 2 s suggests we waited for
+	// the deadline instead of the signal.
+	val elapsed = thread.now_ms() - started_ms;
+	if elapsed >= 1500 {
+		cons.eprintln("FAIL: wait_until took too long; signal may not have unblocked the wait");
+		return 40;
+	}
+	return 0;
+}

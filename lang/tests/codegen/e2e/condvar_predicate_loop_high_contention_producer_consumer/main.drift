@@ -1,0 +1,148 @@
+module m;
+
+// Condvar e2e #11 — high-contention producer/consumer.
+//
+// Covers K's "contention across VTs" tagging requirement.  Uses the
+// canonical predicate-loop pattern:
+//   - Consumers: lock; while counter == 0, wait; counter -= 1; unlock.
+//   - Producers: lock; counter += 1; signal_one (under lock); unlock.
+//
+// Topology: 1 producer pushes ITEM_COUNT items; 3 consumers each
+// pull until they observe `producer_done` AND `counter == 0`.  Each
+// consumer counts what it consumed; main asserts the per-consumer
+// totals sum to ITEM_COUNT.
+//
+// ITEM_COUNT = 30; per-consumer expected total = ITEM_COUNT / 3 = 10
+// in the ideal-fair case, but actual distribution may vary (signal_one
+// "wakes some waiter" — ordering unspecified).  We only assert the
+// SUM, not the per-consumer distribution.
+//
+// This is a stress / liveness check rather than a fairness check:
+// if signal_one ever fails to wake a parked consumer when there's
+// work available, the test will hang (caught by the 5 s
+// join_timeout on each consumer).
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as cons;
+
+pub struct Shared {
+	pub counter: conc.Mutex<Int>,
+	pub producer_done: conc.Mutex<Bool>,
+	pub consumed_1: conc.Mutex<Int>,
+	pub consumed_2: conc.Mutex<Int>,
+	pub consumed_3: conc.Mutex<Int>,
+}
+implement core.Destructible for Shared {
+	pub fn destroy(var self: Shared) nothrow -> Void { return; }
+}
+
+fn make_consumer(cv_arc: core.Arc<conc.Condvar>, s_arc: core.Arc<Shared>, slot: Int) nothrow -> conc.VirtualThread<Int> {
+	val cv1 = cv_arc.clone();
+	val s1 = s_arc.clone();
+	return conc.spawn_cb(core.callback0(| | captures(move cv1, move s1, copy slot) nothrow => {
+		var consumed = 0;
+		while true {
+			var g = s1.get().counter.lock();
+			val c = g.get_mut();
+			while *c == 0 {
+				// Check exit condition.  We must NOT hold the
+				// producer_done MutexGuard across the wait call —
+				// `wait` releases the counter guard `g` but cannot
+				// release `dg`, so a producer trying to set
+				// producer_done would deadlock against us.  Scope
+				// `dg` to a sub-block so it drops before wait().
+				var done_now = false;
+				{
+					var dg = s1.get().producer_done.lock();
+					val d = dg.get_mut();
+					done_now = *d;
+				}
+				if done_now { return consumed; }
+				match cv1.get().wait<type Int>(&mut g) {
+					core.Result::Ok(_) => { },
+					core.Result::Err(_) => { return -91; }
+				}
+			}
+			*c = *c - 1;
+			consumed = consumed + 1;
+		}
+		return consumed;
+	}));
+}
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val s_arc = conc.arc(Shared(
+		counter = conc.mutex(0),
+		producer_done = conc.mutex(false),
+		consumed_1 = conc.mutex(0),
+		consumed_2 = conc.mutex(0),
+		consumed_3 = conc.mutex(0)
+	));
+
+	var c1 = make_consumer(cv_arc.clone(), s_arc.clone(), 1);
+	var c2 = make_consumer(cv_arc.clone(), s_arc.clone(), 2);
+	var c3 = make_consumer(cv_arc.clone(), s_arc.clone(), 3);
+
+	// Producer: 30 items, signaling one consumer per push.  Tiny
+	// sleep between pushes encourages real parking on the consumer
+	// side instead of always finding counter>0.
+	val cv_p = cv_arc.clone();
+	val s_p = s_arc.clone();
+	var prod = conc.spawn_cb(core.callback0(| | captures(move cv_p, move s_p) nothrow => {
+		var i = 0;
+		while i < 30 {
+			{
+				var g = s_p.get().counter.lock();
+				val c = g.get_mut();
+				*c = *c + 1;
+				// signal_one under the lock — canonical pattern.
+				cv_p.get().signal_one();
+			}
+			match conc.sleep(conc.Duration(millis = 2)) {
+				core.Result::Err(_) => { return -81; },
+				core.Result::Ok(_) => { }
+			}
+			i = i + 1;
+		}
+		// Set done flag + wake everyone so consumers can observe.
+		{
+			var dg = s_p.get().producer_done.lock();
+			val d = dg.get_mut();
+			*d = true;
+		}
+		cv_p.get().signal_all();
+		return 0;
+	}));
+
+	match prod.join_timeout(conc.Duration(millis = 5000)) {
+		core.Result::Err(_) => { return 10; },
+		core.Result::Ok(rc) => { if rc != 0 { return 20 - rc; } }
+	}
+
+	val r1 = c1.join_timeout(conc.Duration(millis = 5000));
+	val r2 = c2.join_timeout(conc.Duration(millis = 5000));
+	val r3 = c3.join_timeout(conc.Duration(millis = 5000));
+	var t1 = 0;
+	var t2 = 0;
+	var t3 = 0;
+	match r1 {
+		core.Result::Err(_) => { return 31; },
+		core.Result::Ok(v) => { if v < 0 { return 40 - v; } t1 = v; }
+	}
+	match r2 {
+		core.Result::Err(_) => { return 32; },
+		core.Result::Ok(v) => { if v < 0 { return 50 - v; } t2 = v; }
+	}
+	match r3 {
+		core.Result::Err(_) => { return 33; },
+		core.Result::Ok(v) => { if v < 0 { return 60 - v; } t3 = v; }
+	}
+	val total = t1 + t2 + t3;
+	if total != 30 {
+		cons.eprintln("FAIL: consumed total != 30");
+		return 70;
+	}
+	return 0;
+}

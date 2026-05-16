@@ -1,0 +1,73 @@
+module m;
+
+// Condvar e2e #6 — wait_until with a deadline already in the past
+// returns Err(TIMEOUT) immediately without parking.
+//
+// Per the API contract in stdlib (concurrent.drift, fn wait_until):
+//   "A `deadline_ms` already in the past (including 0 or negative)
+//    returns `Err(TIMEOUT)` immediately without parking.  This
+//    contrasts with `wait()` which is always indefinite."
+//
+// Regression pin for the wait_until(0) infinite-wait bug fixed in
+// task #44.  Pre-fix, `wait_until(0)` parked forever because the
+// implementation used `deadline_ms != 0` as the "has deadline"
+// sentinel; deadline 0 was misread as "no deadline".  Post-fix, the
+// has_deadline flag is explicit (see `_wait_inner`'s
+// has_deadline:Bool parameter).
+//
+// This test exercises THREE past-deadline shapes to pin the fix:
+//   (a) deadline_ms = 0          — the original bug trigger
+//   (b) deadline_ms = -1         — explicitly negative
+//   (c) deadline_ms = now - 1000 — recently-past concrete value
+// All three must return Err(TIMEOUT) and the join_timeout(1s) must
+// succeed (proving no parking happened).
+
+import std.core as core;
+import std.concurrent as conc;
+import lang.thread as thread;
+import std.console as cons;
+
+fn try_past_deadline(cv_arc: core.Arc<conc.Condvar>, pred_lock: core.Arc<conc.Mutex<Bool>>, deadline_ms: Int, label_code: Int) nothrow -> Int {
+	val cv1 = cv_arc.clone();
+	val m1 = pred_lock.clone();
+	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1, copy deadline_ms) nothrow => {
+		var g = m1.get().lock();
+		match cv1.get().wait_until<type Bool>(&mut g, deadline_ms) {
+			core.Result::Ok(_) => { return 91; },
+			core.Result::Err(e) => {
+				if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
+				cons.eprintln("FAIL: wait_until past-deadline returned non-TIMEOUT kind=" + e.kind);
+				return 92;
+			}
+		}
+	}));
+
+	match waiter.join_timeout(conc.Duration(millis = 1000)) {
+		core.Result::Err(_) => {
+			cons.eprintln("FAIL: waiter never returned (past-deadline did not return immediately)");
+			return 20 + label_code;
+		},
+		core.Result::Ok(rc) => { if rc != 0 { return rc + label_code; } }
+	}
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	val cv_arc = conc.arc(conc.condvar());
+	val pred_lock = conc.arc(conc.mutex(false));
+
+	// (a) deadline_ms = 0 (the bug trigger).
+	val rc_a = try_past_deadline(cv_arc.clone(), pred_lock.clone(), 0, 0);
+	if rc_a != 0 { return rc_a; }
+
+	// (b) explicitly negative.
+	val rc_b = try_past_deadline(cv_arc.clone(), pred_lock.clone(), -1, 100);
+	if rc_b != 0 { return rc_b; }
+
+	// (c) recently past concrete value.
+	val now = thread.now_ms();
+	val rc_c = try_past_deadline(cv_arc.clone(), pred_lock.clone(), now - 1000, 200);
+	if rc_c != 0 { return rc_c; }
+
+	return 0;
+}
