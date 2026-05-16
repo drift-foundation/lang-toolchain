@@ -837,6 +837,89 @@ class HIRToMIR:
 			return
 		scope.append(local_name)
 
+	def _materialize_owned_temp(
+		self,
+		*,
+		name_prefix: str,
+		ty: TypeId,
+		value: "M.ValueId | Callable[[], M.ValueId]",
+	) -> str:
+		"""The blessed way to allocate a synthetic local that stores
+		an OWNED value across any control flow.  Encapsulates the
+		four steps that must always go together:
+
+		  1. `ensure_local(local)`              -- alloca'd in the function
+		  2. `_local_types[local] = ty`         -- type table for SSA/codegen
+		  3. `_register_drop_local(local, ty)`  -- scope-exit cleanup
+		  4. `emit(StoreLocal(local, value))`   -- initialize the slot
+
+		Returns the synthesized local name.  Caller emits
+		`AddrOfLocal` or further reads/writes against the returned
+		name as needed.
+
+		`value` may be either:
+		  - an `M.ValueId` (a `str`): used directly as the
+		    StoreLocal value;
+		  - a zero-arg callable that produces an `M.ValueId`:
+		    invoked AFTER the temp slot is allocated (steps 1-3)
+		    but BEFORE the StoreLocal emit.  Use this when the
+		    value computation needs `b.new_temp()` calls of its
+		    own -- e.g. `lambda: self.lower_expr(expr.subject)`
+		    in the HBorrow rvalue fallback.  Preserves
+		    byte-identical IR with the pre-helper hand-rolled
+		    pattern (slot id allocated FIRST, then value's temps).
+
+		Use this anywhere the synthesized local will hold a
+		materialized owned value that must participate in scope
+		cleanup (i.e. its inner refcounted fields must be released
+		when the enclosing scope exits).  Do NOT use for ephemeral
+		SSA-style temps that are consumed immediately within the
+		same expression -- those have no scope-cleanup concern and
+		use `b.new_temp()` directly.
+
+		Forgetting `_register_drop_local` at hand-rolled sites is
+		the recurring leak class fixed across `__borrow_tmp`
+		(2026-05-16), `__exc_params_view_*` (Cluster 1, 2026-05-06),
+		and `__cap_move_*` -- the helper makes it structurally
+		impossible to forget.  Adoption is enforced by
+		`lang/tests/driver/test_owned_temp_materialization_audit.py`.
+
+		`_register_drop_local` is internally idempotent and gated
+		by `_needs_runtime_drop` / `_type_is_destructible`, so
+		unconditional call here is safe for trivially-droppable `ty`
+		(Int, Bool, etc.) -- the registration just no-ops.
+		"""
+		local = f"{name_prefix}{self.b.new_temp()}"
+		self.b.ensure_local(local)
+		self._local_types[local] = ty
+		self._register_drop_local(local, ty)
+		val: M.ValueId = value() if callable(value) else value
+		self.b.emit(M.StoreLocal(local=local, value=val))
+		return local
+
+	def _materialize_owned_temp_for_borrow(
+		self,
+		*,
+		ty: TypeId,
+		value: "M.ValueId | Callable[[], M.ValueId]",
+		is_mut: bool = False,
+	) -> M.ValueId:
+		"""`_materialize_owned_temp` + `AddrOfLocal`.  Returns the
+		borrow pointer.  This is the HBorrow rvalue fallback's whole
+		job -- the canonical use case this helper exists for.  Also
+		used by the Arc-fat and Arc-as-interface chained-rvalue
+		receiver materialization sites.
+
+		`value` accepts the same forms as `_materialize_owned_temp`
+		(eager `ValueId` or zero-arg callable for lazy
+		evaluation between slot alloc and StoreLocal)."""
+		local = self._materialize_owned_temp(
+			name_prefix="__borrow_tmp", ty=ty, value=value,
+		)
+		ptr = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=ptr, local=local, is_mut=is_mut))
+		return ptr
+
 	def _register_captured_local(self, *, binding_id: int, local_name: str, source_name: str, capture_name: str) -> None:
 		if not self._capture_scope_stack:
 			return
@@ -1449,11 +1532,20 @@ class HIRToMIR:
 					nonlocal arm_scrut_local, arm_scrut_ptr
 					if arm_scrut_ptr is not None:
 						return
+					# materialize-audit: allow registered via explicit
+					# M.CleanupHook emission at line ~1990 of this file
+					# (whole-scrutinee drop path).  Match-arm machinery
+					# tracks scrutinee + source-local cleanup through the
+					# match_cleanup_authoring pass, not scope_stack.
 					arm_scrut_local = f"__match_scrut_tmp{self.b.new_temp()}"
 					self.b.ensure_local(arm_scrut_local)
 					self._local_types[arm_scrut_local] = scrut_ty
 					source_local = scrut_source_local
 					if source_local is None and not self._should_copy_value(scrut_ty):
+						# materialize-audit: allow registered same match-
+						# arm CleanupHook path as arm_scrut_local above;
+						# source_local is moved out into arm_scrut_local
+						# before the hook fires.
 						source_local = f"__match_scrut_src{self.b.new_temp()}"
 						self.b.ensure_local(source_local)
 						self._local_types[source_local] = scrut_ty
@@ -1662,6 +1754,11 @@ class HIRToMIR:
 									)
 								)
 								self._local_types[field_val] = binder_ty
+								# materialize-audit: allow non-owning
+								# Ref-typed binder (scrut_is_ref branch:
+								# binder_ty is Ref<bty> at line 1741);
+								# Ref locals are not droppable so no
+								# scope cleanup needed.
 								self.b.ensure_local(bname)
 								self._local_types[bname] = binder_ty
 								self.b.emit(M.StoreLocal(local=bname, value=field_val))
@@ -1697,6 +1794,11 @@ class HIRToMIR:
 										self._local_types[copy_dest] = bty
 										field_moved = copy_dest
 									else:
+										# materialize-audit: allow consumed
+										# tmp_local is immediately MoveOut'd
+										# on the next line; the value transfers
+										# into move_dest and tmp_local is no
+										# longer live for scope cleanup.
 										tmp_local = f"__match_field_move_{self.b.new_temp()}"
 										self.b.ensure_local(tmp_local)
 										self._local_types[tmp_local] = bty
@@ -2543,38 +2645,18 @@ class HIRToMIR:
 			inner_ty = self._infer_expr_type(expr.subject)
 			if inner_ty is None:
 				raise AssertionError("borrow operand type unknown in MIR lowering (checker bug)")
-			tmp_local = f"__borrow_tmp{self.b.new_temp()}"
-			self.b.ensure_local(tmp_local)
-			self._local_types[tmp_local] = inner_ty
-			# Any synthetic local created to materialize an rvalue for
-			# borrowing is an OWNING local: `tmp_local` holds the
-			# materialized owned value of `expr.subject` (the rvalue),
-			# and the borrow result is `&tmp_local`.  It MUST participate
-			# in scope cleanup so its inner refcounted fields are
-			# released at function-exit paths.  Register with the temp's
-			# actual local type (`inner_ty` — the OWNED value's type,
-			# not the reference type returned to the caller).
-			# `_register_drop_local` is internally idempotent and gated
-			# by `_needs_runtime_drop`/`_type_is_destructible`, so
-			# unconditional call here is safe for trivially-droppable
-			# `inner_ty` (e.g. Int) — the registration just no-ops.
-			# Mirrors the Arc-fat (`_lower_arc_fat_intrinsic_call`,
-			# ~hir_to_mir.py:9312) and Arc-as-interface
-			# (`_lower_arc_as_interface_op`, ~hir_to_mir.py:9509)
-			# materialization sites which already do this for the same
-			# reason.  Pinned by `std_io_file_builder_chunked_large`
-			# memcheck and the minimal repro
-			# `lang/tests/codegen/e2e/borrow_tmp_match_loop_outer_scope_drop`:
-			# without the registration, the cleanup hook at any
-			# function-exit reached from inside a loop / nested arm
-			# does not see this slot as a candidate and the inner
-			# String / refcounted field is not released.
-			self._register_drop_local(tmp_local, inner_ty)
-			val = self.lower_expr(expr.subject)
-			self.b.emit(M.StoreLocal(local=tmp_local, value=val))
-			ptr = self.b.new_temp()
-			self.b.emit(M.AddrOfLocal(dest=ptr, local=tmp_local, is_mut=False))
-			return ptr
+			# The synthetic local holds the materialized owned value of
+			# the rvalue subject; the borrow result is its address.  Use
+			# the canonical materialize helper so steps stay together
+			# (alloc + type + register-drop + store + addr).  Lazy `value`
+			# callable preserves the byte-identical IR shape: the temp
+			# slot id is allocated FIRST (counter call before lower_expr),
+			# then lower_expr's own temps are emitted, then the StoreLocal.
+			return self._materialize_owned_temp_for_borrow(
+				ty=inner_ty,
+				value=lambda: self.lower_expr(expr.subject),
+				is_mut=False,
+			)
 		ptr, _inner = self._lower_addr_of_place(expr.subject, is_mut=expr.is_mut)
 		return ptr
 
@@ -2823,6 +2905,10 @@ class HIRToMIR:
 		loaded = self.b.new_temp()
 		self.b.emit(M.LoadRef(dest=loaded, ptr=ptr, inner_ty=inner_ty))
 		self._local_types[loaded] = inner_ty
+		# materialize-audit: allow consumed
+		# tmp_local is immediately MoveOut'd two lines below; the
+		# value transfers into moved_val and tmp_local is no longer
+		# live for scope cleanup.
 		tmp_local = f"__cap_move_{self.b.new_temp()}"
 		self.b.ensure_local(tmp_local)
 		self._local_types[tmp_local] = inner_ty
@@ -2866,6 +2952,9 @@ class HIRToMIR:
 		right_expr = expr.right
 		if expr.op in (H.BinaryOp.AND, H.BinaryOp.OR):
 			left = self.lower_expr(left_expr)
+			# materialize-audit: allow non-owning Bool short-circuit
+			# holds the AND/OR result.  Bool is bitcopy + non-droppable;
+			# no scope cleanup needed.
 			temp_local = f"__logic_tmp{self.b.new_temp()}"
 			self.b.ensure_local(temp_local)
 			self._local_types[temp_local] = self._bool_type
@@ -3158,9 +3247,16 @@ class HIRToMIR:
 		join_block = self.b.new_block("idx_join")
 		self.b.set_terminator(M.IfTerminator(cond=oob, then_target=err_block.name, else_target=ok_block.name))
 
+		# materialize-audit: allow registered explicit
+		# _register_drop_local call below
+		# tmp_local is alloc'd up-top and stored INSIDE the ok_block
+		# (after the bounds-check branch), so the helper's
+		# all-in-one alloc+store doesn't fit cleanly.  Hand-roll
+		# the 4 steps with explicit register-drop.
 		tmp_local = f"__idx_tmp{self.b.new_temp()}"
 		self.b.ensure_local(tmp_local)
 		self._local_types[tmp_local] = elem_ty
+		self._register_drop_local(tmp_local, elem_ty)
 
 		self.b.set_block(err_block)
 		self._emit_index_error_throw(index_val=index)
@@ -3463,6 +3559,12 @@ class HIRToMIR:
 
 		insert_info = self._resolve_map_insert_call_info(map_ty=map_ty, key_ty=key_ty, value_ty=value_ty)
 
+		# materialize-audit: allow consumed
+		# map_local is built up via iterative inserts then MoveOut'd
+		# to the caller via the explicit MoveOut at the end of this
+		# function; the slot's stake transfers out, no scope cleanup
+		# needed.  Cleanup_authoring's ledger walker sees the MoveOut
+		# and would suppress any drop anyway.
 		map_local = f"__maplit{self.b.new_temp()}"
 		self.b.ensure_local(map_local)
 		self._local_types[map_local] = map_ty
@@ -4908,6 +5010,12 @@ class HIRToMIR:
 		This avoids invalid φ nodes for helper locals that do not need SSA
 		renaming (e.g., loop indices in intrinsic lowering).
 		"""
+		# materialize-audit: allow non-owning
+		# Every caller of this helper passes `self._int_type` (loop
+		# counters for array intrinsic lowering); Int is non-droppable
+		# so scope cleanup is moot.  If a future caller needs to use
+		# this helper for a droppable type, route through
+		# `_materialize_owned_temp` instead.
 		local = f"{name_hint}{self.b.new_temp()}"
 		self.b.ensure_local(local)
 		self._local_types[local] = ty
@@ -4994,10 +5102,13 @@ class HIRToMIR:
 		self.b.emit(M.ErrorEventFqn(dest=fqn_val, error=recv_val))
 		self._local_types[fqn_val] = self._string_type
 		# Materialize fqn for `&String` borrow into _json_quote_string.
-		fqn_local = f"__exc_fqn_{self.b.new_temp()}"
-		self.b.ensure_local(fqn_local)
-		self._local_types[fqn_local] = self._string_type
-		self.b.emit(M.StoreLocal(local=fqn_local, value=fqn_val))
+		# Use the canonical owned-temp helper so the slot's String
+		# stake is auto-released at scope exit.
+		fqn_local = self._materialize_owned_temp(
+			name_prefix="__exc_fqn_",
+			ty=self._string_type,
+			value=fqn_val,
+		)
 		fqn_addr = self.b.new_temp()
 		self.b.emit(M.AddrOfLocal(dest=fqn_addr, local=fqn_local, is_mut=False))
 		fqn_quoted = self.b.new_temp()
@@ -5144,6 +5255,10 @@ class HIRToMIR:
 			# drop the local after the call: throw-site unwind bypasses
 			# normal scope-drop, so the LoadLocal-staked refcount on
 			# the captured local would otherwise leak.
+			# materialize-audit: allow consumed
+			# Inline DropValue ~10 lines below handles release at the
+			# throw-bypass site; scope cleanup is intentionally
+			# bypassed here (would not fire on the unwind path anyway).
 			str_local = f"__throw_ctx_str_{self.b.new_temp()}"
 			self.b.ensure_local(str_local)
 			self._local_types[str_local] = self._string_type
@@ -5675,9 +5790,17 @@ class HIRToMIR:
 			zero = self._const_int(0)
 
 			opt_ty = self._optional_variant_type(self._type_table.ensure_ref(elem_ty))
+			# materialize-audit: allow registered explicit
+			# _register_drop_local call below
+			# res_local holds Optional<T> stored conditionally
+			# across in-range / out-of-range branches; final
+			# LoadLocal at function exit produces the return value.
+			# Helper's all-in-one alloc+store doesn't fit because of
+			# the conditional store; hand-roll with explicit register.
 			res_local = f"__array_get_res{self.b.new_temp()}"
 			self.b.ensure_local(res_local)
 			self._local_types[res_local] = opt_ty
+			self._register_drop_local(res_local, opt_ty)
 
 			neg_cond = self.b.new_temp()
 			self.b.emit(M.BinaryOpInstr(dest=neg_cond, op=H.BinaryOp.LT, left=idx_val, right=zero))
@@ -5754,9 +5877,15 @@ class HIRToMIR:
 			if not want_value:
 				return True, None
 			opt_ty = self._optional_variant_type(elem_ty)
+			# materialize-audit: allow registered explicit
+			# _register_drop_local call below
+			# Same pattern as __array_get_res above: conditional
+			# stores across non-empty / empty branches; final
+			# LoadLocal returns.  Hand-roll with explicit register.
 			res_local = f"__array_pop_res{self.b.new_temp()}"
 			self.b.ensure_local(res_local)
 			self._local_types[res_local] = opt_ty
+			self._register_drop_local(res_local, opt_ty)
 
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
@@ -5904,9 +6033,17 @@ class HIRToMIR:
 			ok_block = self.b.new_block("array_cap_ok")
 			grow_block = self.b.new_block("array_cap_grow")
 			join_block = self.b.new_block("array_cap_join2")
+			# materialize-audit: allow registered explicit
+			# _register_drop_local call below
+			# arr_local holds the (possibly grown) Array<T>; stored
+			# conditionally across ok/grow branches, then loaded after
+			# the join.  Hand-roll with explicit register so the slot
+			# participates in scope cleanup.
 			arr_local = f"__array_cap_arr{self.b.new_temp()}"
 			self.b.ensure_local(arr_local)
 			self._local_types[arr_local] = array_ty
+			self._register_drop_local(arr_local, array_ty)
+			# materialize-audit: allow non-owning Bool grew-flag local
 			grew_local = f"__array_cap_grew{self.b.new_temp()}"
 			self.b.ensure_local(grew_local)
 			self._local_types[grew_local] = self._bool_type
@@ -6843,6 +6980,11 @@ class HIRToMIR:
 		))
 		# Materialize the struct in a named local so we can take its
 		# address (`AddrOfLocal` requires a named local, not a temp).
+		# materialize-audit: allow consumed
+		# Inline DropValue ~30 lines below handles release at the
+		# throw-bypass site (throw propagation unwinds via gotos --
+		# normal scope-drop does NOT fire on throw-lowered locals).
+		# See the leak-fix comment block below the DropValue.
 		struct_local = f"__throw_diag_{self.b.new_temp()}"
 		self.b.ensure_local(struct_local)
 		self._local_types[struct_local] = struct_ty
@@ -6933,6 +7075,12 @@ class HIRToMIR:
 		hidden local and reloads it at the join. SSA will place φs as needed.
 		"""
 		# Allocate a hidden local for the ternary result.
+		# materialize-audit: allow registered explicit
+		# _register_drop_local call below
+		# temp_local holds the ternary result -- stored conditionally
+		# across then/else branches, loaded at the join.  Helper's
+		# all-in-one alloc+store doesn't fit (conditional store).
+		# Register so droppable result types participate in cleanup.
 		temp_local = f"__tern_tmp{self.b.new_temp()}"
 		self.b.ensure_local(temp_local)
 		tern_ty = self._infer_expr_type(expr.then_expr)
@@ -6941,6 +7089,7 @@ class HIRToMIR:
 		if tern_ty is None:
 			tern_ty = self._unknown_type
 		self._local_types[temp_local] = tern_ty
+		self._register_drop_local(temp_local, tern_ty)
 
 		# Evaluate condition in the current block.
 		cond_val = self.lower_expr(expr.cond)
@@ -7125,6 +7274,11 @@ class HIRToMIR:
 				self._local_types[err_again] = error_ty
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block, arm.result)
 				binder_local = self._canonical_local(binder_id, arm.binder)
+				# materialize-audit: allow consumed
+				# Explicit MoveOut + DropValue at lines ~7295-7299
+				# below handles release at try-expr arm exit; scope
+				# cleanup would not fire on the arm-exit path anyway
+				# (try-expr semantics route through the join block).
 				self.b.ensure_local(binder_local)
 				self._local_types[binder_local] = self._type_table.ensure_error()
 				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
@@ -7683,16 +7837,24 @@ class HIRToMIR:
 				if td.kind is TypeKind.REF and td.param_types:
 					val_ty = self._infer_expr_type(stmt.value)
 					if val_ty is not None and val_ty == base_ty:
+						# materialize-audit: allow registered via HLet
+						# path (_visit_stmt_HLet calls
+						# _register_drop_local at the original
+						# declaration); HAssign just stores into the
+						# existing slot.
 						local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 						self.b.ensure_local(local_name)
 						self.b.emit(M.StoreLocal(local=local_name, value=val))
 						return
+					# materialize-audit: allow registered via HLet path
+					# (same rationale -- existing slot, declared earlier)
 					local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 					self.b.ensure_local(local_name)
 					ptr_val = self.b.new_temp()
 					self.b.emit(M.LoadLocal(dest=ptr_val, local=local_name))
 					self._emit_assign_store_ref(ptr=ptr_val, value=val, inner_ty=td.param_types[0])
 					return
+			# materialize-audit: allow registered via HLet path (same)
 			local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 			self.b.ensure_local(local_name)
 			val_ty = self._infer_expr_type(stmt.value)
@@ -7814,6 +7976,10 @@ class HIRToMIR:
 
 		# Trivial local case: keep locals in SSA-friendly `LoadLocal`/`StoreLocal` form.
 		if not stmt.target.projections:
+			# materialize-audit: allow registered via HLet path
+			# (HAugAssign rewrites x op= rhs as x = x op rhs into
+			# the existing local; declaration site _visit_stmt_HLet
+			# already called _register_drop_local).
 			local_name = self._canonical_local(getattr(stmt.target.base, "binding_id", None), stmt.target.base.name)
 			self.b.ensure_local(local_name)
 			base_ty = self._infer_expr_type(stmt.target.base)
@@ -8421,6 +8587,10 @@ class HIRToMIR:
 				self._local_types[err_again] = error_ty
 				binder_id = self._find_binder_binding_id(arm.binder, arm.block)
 				binder_local = self._canonical_local(binder_id, arm.binder)
+				# materialize-audit: allow consumed
+				# Explicit MoveOut + DropValue at lines ~8608-8612
+				# below handles release at catch-arm exit.  Same
+				# pattern as the HTryExpr binder above.
 				self.b.ensure_local(binder_local)
 				self._local_types[binder_local] = self._type_table.ensure_error()
 				self.b.emit(M.StoreLocal(local=binder_local, value=err_again))
@@ -9330,14 +9500,17 @@ class HIRToMIR:
 					# that routes a fat-Arc rvalue through this
 					# branch would silently leak without the
 					# scope-drop registration.
-					tmp_local = f"__borrow_tmp{self.b.new_temp()}"
-					self.b.ensure_local(tmp_local)
-					self._local_types[tmp_local] = recv_ty
-					self._register_drop_local(tmp_local, recv_ty)
-					val = self.lower_expr(expr.receiver)
-					self.b.emit(M.StoreLocal(local=tmp_local, value=val))
-					recv_val = self.b.new_temp()
-					self.b.emit(M.AddrOfLocal(dest=recv_val, local=tmp_local, is_mut=False))
+					# Materialize the rvalue fat-Arc<I> receiver via the
+					# canonical helper -- preserves the always-together
+					# alloc + type + register-drop + store invariant.
+					# Lazy `value` callable keeps lower_expr's temp
+					# allocations sequenced after the slot id (matches
+					# the original counter ordering, alpha-equivalent IR).
+					recv_val = self._materialize_owned_temp_for_borrow(
+						ty=recv_ty,
+						value=lambda: self.lower_expr(expr.receiver),
+						is_mut=False,
+					)
 					self._local_types[recv_val] = self._type_table.new_ref(recv_ty, is_mut=False)
 		else:
 			recv_val = self._lower_call_arg(expr.receiver, arc_iface_ty)
@@ -9527,14 +9700,15 @@ class HIRToMIR:
 				# hardening rather than a currently-load-bearing
 				# fix.  Kept to guard against future normalization
 				# changes that may stop covering every shape.
-				tmp_local = f"__borrow_tmp{self.b.new_temp()}"
-				self.b.ensure_local(tmp_local)
-				self._local_types[tmp_local] = recv_ty
-				self._register_drop_local(tmp_local, recv_ty)
-				val = self.lower_expr(expr.receiver)
-				self.b.emit(M.StoreLocal(local=tmp_local, value=val))
-				recv_val = self.b.new_temp()
-				self.b.emit(M.AddrOfLocal(dest=recv_val, local=tmp_local, is_mut=False))
+				# Materialize the rvalue Arc<T> receiver via the
+				# canonical helper -- same shape as the fat-Arc
+				# (`_lower_arc_fat_intrinsic_call`) and HBorrow
+				# rvalue fallback sites.
+				recv_val = self._materialize_owned_temp_for_borrow(
+					ty=recv_ty,
+					value=lambda: self.lower_expr(expr.receiver),
+					is_mut=False,
+				)
 				self._local_types[recv_val] = self._type_table.new_ref(recv_ty, is_mut=False)
 				src_arc_ty = recv_ty
 			else:
@@ -9722,12 +9896,23 @@ class HIRToMIR:
 				# `lang/tests/memcheck/test_pub_error_params_view_drop.py::
 				# test_pub_error_params_encode_compact_no_leak` and the
 				# 7 e2e fixtures listed in the bug report.
+				# View value is computed eagerly (already a ValueId
+				# by the time we get here), so the eager value form
+				# of the helper applies.  Helper sequence:
+				# alloc + type + register-drop + store; AddrOfLocal
+				# emitted separately by this site.  Register-drop now
+				# fires BEFORE StoreLocal (the helper's invariant)
+				# rather than AFTER (the pre-conversion order); this
+				# is a scope-stack append order shift only, and
+				# `_register_drop_local`'s semantics are
+				# StoreLocal-independent so it's safe.  Pinned by
+				# `test_pub_error_params_view_drop` family.
 				view_val = self._lower_synthesized_error_params_view(expr.receiver, recv_ty)
-				view_local = f"__exc_params_view_{self.b.new_temp()}"
-				self.b.ensure_local(view_local)
-				self._local_types[view_local] = recv_ty
-				self.b.emit(M.StoreLocal(local=view_local, value=view_val))
-				self._register_drop_local(view_local, recv_ty)
+				view_local = self._materialize_owned_temp(
+					name_prefix="__exc_params_view_",
+					ty=recv_ty,
+					value=view_val,
+				)
 				addr_dest = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr_dest, local=view_local, is_mut=False))
 				receiver_arg = addr_dest
@@ -10642,10 +10827,13 @@ class HIRToMIR:
 					raise AssertionError("address-of projected module const reached MIR lowering (checker bug)")
 				const_ty, _ = const_val
 				init_value = self.lower_expr(expr.base, expected_type=const_ty)
-				local = f"__const_{expr.base.name}_{self.b.new_temp()}"
-				self.b.ensure_local(local)
-				self._local_types[local] = const_ty
-				self.b.emit(M.StoreLocal(local=local, value=init_value))
+				# Use the canonical owned-temp helper -- const can be
+				# owning (e.g. String const).
+				local = self._materialize_owned_temp(
+					name_prefix=f"__const_{expr.base.name}_",
+					ty=const_ty,
+					value=init_value,
+				)
 				addr = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
 				return addr, const_ty
@@ -10655,10 +10843,12 @@ class HIRToMIR:
 			if bid in self._local_consts:
 				const_ty, _ = self._local_consts[bid]
 				init_value = self._emit_local_const(bid)
-				local = f"__lconst_{expr.base.name}_{self.b.new_temp()}"
-				self.b.ensure_local(local)
-				self._local_types[local] = const_ty
-				self.b.emit(M.StoreLocal(local=local, value=init_value))
+				# Same shape as the module-const branch above.
+				local = self._materialize_owned_temp(
+					name_prefix=f"__lconst_{expr.base.name}_",
+					ty=const_ty,
+					value=init_value,
+				)
 				addr = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
 				return addr, const_ty

@@ -1,5 +1,109 @@
 # Drift development history
 
+## 2026-05-16 (compiler hygiene: `_materialize_owned_temp` helper + hard-gate audit over `hir_to_mir.py`; canonical owning synthetic-local pattern enforced structurally)
+- **Compiler hygiene slice.**  Release 0.31.93, ABI unchanged at 14.
+  Replaces the implicit 4-step "synthesize an owning local" pattern
+  (`ensure_local` + `_local_types` + `_register_drop_local` +
+  `StoreLocal`) with a `_materialize_owned_temp` helper on
+  `HIRToMIR`, plus a hard-gate static audit
+  (`lang/tests/driver/test_owned_temp_materialization_audit.py`)
+  that requires every synthetic owning local in `hir_to_mir.py` to
+  EITHER use the helper, OR carry an explicit `_register_drop_local`
+  call, OR carry an allow marker with a recognized reason keyword.
+
+  **Why the helper.**  Forgetting step 3 (`_register_drop_local`)
+  is the recurring leak class fixed across three slices:
+  - `__borrow_tmp` (2026-05-16, the chunked-loop conditional-break
+    bug; pinned by `borrow_tmp_match_loop_outer_scope_drop`).
+  - `__exc_params_view_*` (Cluster 1, 2026-05-06).
+  - `__cap_move_*` (lambda capture move-out, original site).
+
+  Each leak was found after the fact via memcheck; the structural
+  enforcement makes the bug class impossible to ship.
+
+  **Helper API.**
+
+      _materialize_owned_temp(*, name_prefix, ty, value) -> str
+      _materialize_owned_temp_for_borrow(*, ty, value, is_mut=False) -> M.ValueId
+
+  Both accept `value` as either an `M.ValueId` (eager) OR a zero-arg
+  callable (lazy -- invoked AFTER slot alloc but BEFORE StoreLocal).
+  The lazy form preserves byte-identical IR with the hand-rolled
+  pattern when value computation needs `b.new_temp()` calls of its
+  own (e.g. `lambda: self.lower_expr(expr.subject)` in the HBorrow
+  rvalue fallback).
+
+  **Conversions (4 known-correct sites; IR-diff verified
+  alpha-equivalent on each):**
+  - `_visit_expr_HBorrow` rvalue fallback (the canonical use case
+    -- the leak that motivated the whole helper).
+  - `_lower_arc_fat_intrinsic_call` (rvalue fat-Arc<I> receiver).
+  - `_lower_arc_as_interface_op` (rvalue Arc<T> receiver).
+  - `_emit_synthesized_error_params_view` call site (eager-value
+    form, since the view value is computed up-front).
+
+  **Acceptance criterion** for each conversion: IR diff against
+  pre-conversion baseline normalized for SSA-version renumbering
+  and PHI-operand-order swaps (LLVM-semantic-identical) must be
+  empty.  HBorrow conversion produced ~5600 raw diff lines but
+  normalized to **zero** -- all renaming + PHI predecessor list
+  reordering with identical operand sets.
+
+  **Audit-driven NEEDS REVIEW triage (22 sites in `hir_to_mir.py`):**
+  - Converted to helper (3 sites): `_lower_error_encode_compact::fqn_local`,
+    `_lower_addr_of_place::__const_*`, `_lower_addr_of_place::__lconst_*`.
+  - Explicit `_register_drop_local` added (5 sites):
+    `_visit_expr_HIndex::tmp_local`, `_visit_expr_HTernary::temp_local`,
+    `_lower_array_intrinsic_method::__array_get_res`,
+    `_lower_array_intrinsic_method::__array_pop_res`,
+    `ensure_capacity::arr_local`.
+  - `registered` marker (6 sites, via separate mechanism):
+    `_ensure_arm_scrut_ptr::arm_scrut_local`,
+    `_ensure_arm_scrut_ptr::source_local` (both registered via
+    `match_cleanup_authoring`'s explicit `M.CleanupHook` emission);
+    three `_visit_stmt_HAssign::local_name` sites and one
+    `_visit_stmt_HAugAssign::local_name` site (all assigning into
+    HLet-declared locals registered at the declaration site).
+  - `consumed` marker (7 sites, inline MoveOut / DropValue handles
+    release): `_ensure_arm_scrut_ptr::tmp_local` (match field move);
+    `_move_from_callback_capture_slot::tmp_local`;
+    `_project_capture_to_json_text::str_local`;
+    `_emit_diagnostic_owning_throw::struct_local`;
+    `_visit_expr_HTryExpr::binder_local`;
+    `_visit_stmt_HTry::binder_local`;
+    `_visit_expr_HMapLiteral::map_local`.
+  - `non-owning` marker (4 sites, Bool / Ref / Int):
+    `_visit_expr_HBinary::temp_local` (short-circuit Bool);
+    `_ensure_arm_scrut_ptr::bname` (Ref-typed binder branch);
+    `_addr_taken_local::local` (Int loop counters);
+    `ensure_capacity::grew_local` (Bool flag).
+
+  Total: 25 sites decided in-slice.  Zero `audit-pending`,
+  zero `audit-deferred`, zero deferrals -- per the slice contract.
+
+  **Allow marker vocabulary** (5 keywords; typos fail):
+  `non-owning`, `consumed`, `registered`, `synthesized`,
+  `intentional`.
+
+  **Static audit** (`test_owned_temp_materialization_audit.py`)
+  scans `hir_to_mir.py` for the canonical
+  `ensure_local + _local_types + StoreLocal` triple within a
+  30-line forward window and rejects any candidate site missing
+  EITHER helper-body-name match (the lone canonical inline site is
+  `_materialize_owned_temp` itself), OR explicit
+  `_register_drop_local` in the forward window, OR a recognized
+  allow marker within 10 lines either side.  5 parser self-tests
+  exercise the matchers on synthetic snippets (helper-body
+  excluded, explicit-register passes, marker-with-recognized-reason
+  passes, unmarked+unregistered fails, bad-reason fails).
+
+  **Verification.**  15 e2e memcheck fixtures clean
+  (`std_io_*`, `env_*`, `mutex_guard_*`, `borrow_tmp_*`,
+  `array_*`, `pub_error_*`, `arc_get_in_move_capture_lambda`).
+  298 stage2 + driver tests pass.
+
+  **Plan file:** `work/materialize-owned-temp/plan.md`.
+
 ## 2026-05-16 (runtime hygiene: `DRIFT_OWNED_STRING` macro + static audit; convention-A by-value `DriftString` receivers now auto-release at scope exit; convention-B receivers documented and marker-locked)
 - **Runtime hygiene slice.**  Release 0.31.92, ABI unchanged at 14.
   Replaces the implicit Drift→C "by-value DriftString = callee
