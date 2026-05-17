@@ -1,5 +1,125 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: synthesized `<Variant>::ConstShare::const_share` crashed SSA when two arms shared a payload binder name -- per-arm binder localization added to `_build_const_share_hir_variant`)
+- **Compiler fix.**  Release 0.31.97, ABI unchanged at 14.
+  Fixes the 2026-05-17 sgw-stub blocker:
+
+      RuntimeError: SSA: load before store for local 'key__b<N>'
+        in multi-block rename
+        (fn=FunctionId(module='variant_repro',
+                       name='Kind::ConstShare::const_share',
+                       ordinal=0)
+         block=match_dispatch_next<M>)
+
+  on any `pub variant` whose arms shared a payload binder name
+  (e.g. `MissingKey(key: String)` + `BadType(key: String,
+  expected: String)`) AND that flowed through a `core.Diagnostic`
+  / const-share infrastructure path.  High severity: app team
+  could work around at source level (rename binders unique per
+  arm) but that's an ergonomic tax on every variant declaration
+  and exactly the kind of thing future contributors silently
+  reintroduce.
+
+  **Root cause.**  `lang/driftc/const_share_synth.py::
+  _build_const_share_hir_variant` (~line 1080) emitted raw
+  schema field names as `HMatchArm.binders` and raw
+  `HVar(name=field_name)` references in the result-side ctor
+  reconstruction, never going through the per-arm rename-to-
+  `__match_binder_<N>_<orig>` pass that user-source match arms
+  get in `stage1/ast_to_hir.py::lower_match_expr` (lines 1145-
+  1204).  Without the rename:
+   - the typechecker assigned DIFFERENT `binding_id`s to each
+     arm's same-named binder (e.g., `key` in arm A got id 3,
+     `key` in arm B got id 6);
+   - MIR pattern-binding stored into the raw local `key` for
+     both arms (`stage2/hir_to_mir.py:1762-1764`, store-side
+     uses `bname` directly);
+   - MIR result-expression reads routed through
+     `_canonical_local(binding_id, name)`
+     (`stage2/hir_to_mir.py:2577`), which suffixes the second
+     arm to `key__b6` because the name `key` was already
+     reserved;
+   - SSA multi-block rename then saw a load of `key__b6` with
+     no preceding store and raised.
+
+  User-source match arms with the same name in two arms work
+  because `ast_to_hir.py` rewrites every binder to a globally-
+  unique `__match_binder_<N>_<orig>` name and renames the
+  block + result uses to match.  `_canonical_local` at
+  `stage2/hir_to_mir.py:1123-1125` recognizes that prefix and
+  skips the binding-id-suffix path entirely, so store and use
+  sides agree.  The synth bypassed `ast_to_hir` and never got
+  the rename.
+
+  **Fix.**  Replicate the per-arm-localization pattern inside
+  `_build_const_share_hir_variant`.  For each arm, allocate a
+  fresh unique internal name per binder using the
+  `__match_binder_<N>_<orig>` shape (~6 LOC), and construct the
+  result-side HVars from the internal names directly.  Counter
+  local to the synth call (names just need uniqueness within
+  the synthesized fn; no cross-pass coupling required).
+
+  Naming format is load-bearing: the `__match_binder_*` prefix
+  is what `_canonical_local` recognizes to skip the binding-id
+  suffix path.  Any other prefix would re-hit the collision.
+
+  **What this fix did NOT change.**
+  - No change to `HMatchArm` schema, `_canonical_local` logic,
+    or MIR lowering store-side.  Pure local fix in
+    `const_share_synth`.
+  - Does not require source-level unique binder names (the
+    explicit app-team goal).
+  - Does not affect the non-variant `_build_const_share_hir`
+    path (struct fields have distinct names by construction;
+    no shared-name collision possible).
+
+  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md`
+  process for LANGUAGE_BUG fixes: scanned the registered
+  triggers (borrow-checker walker consolidation; DMIR
+  discriminator promotion; DMIR collision check; drop-aware
+  mem.write; borrow-checker span tracking).  **No match.**  The
+  bug is "synthesizer bypasses canonical per-arm binder
+  localization done by `ast_to_hir`" -- no registered trigger
+  covers that shape.  Not filing a new trigger either:
+  `const_share_synth` is the only synth I've seen that emits
+  user-style match arms with potentially-colliding binders;
+  the rest either don't produce matches or only handle
+  struct-field shapes (distinct names by construction).  If
+  another synth path with the same hazard surfaces later, that
+  would be the ≥2-user trigger to consolidate the
+  `__match_binder_<N>_<orig>` allocation into a shared helper.
+
+  **Regression test.**
+  `lang/tests/driver/test_const_share_synth_shared_binder_name.py`
+  -- single-fixture test using the app-team's verbatim
+  `/tmp/sgw-stub/variant_repro.drift` source (4-arm variant,
+  two arms binding `key`).  Uses `subprocess.run` (same pattern
+  as the blocker-2 Void-lambda test) because the pre-fix bug
+  surfaces as an uncaught `RuntimeError` that would bubble to
+  the pytest worker.  Asserts a three-strings stderr signature
+  (`SSA: load before store`, `Kind::ConstShare::const_share`,
+  and a `__b<N>` suffix on a binder name) to pin the failure
+  shape specifically to this bug.  `--test-build-only`
+  intentionally NOT passed -- the bug surfaces during SSA
+  rename which is downstream of stage1/2.  Verified the test
+  catches the bug by temporarily reverting the fix: failure
+  shape bit-identical to the app team's report
+  (`'key__b6' ... Kind::ConstShare::const_share`).
+
+  **Verification gate.**
+  - 1/1 new test_const_share_synth_shared_binder_name.py
+  - 186/186 combined: full const_share regression set
+    (`test_const_share_phase1_*`, `_phase2_*`, `_phase3_*`,
+    `_phase4_variants*`, `_phase5_*`, `_substrate`), full
+    match suite (`test_match_*`), Diagnostic-impl-related
+    tests (`test_dv_public_removed`, `test_pub_error_*`,
+    `test_recursive_value_struct_diagnostic`), plus
+    prior-slice regressions
+    (`test_lambda_void_callback_throw_check`,
+    `test_fat_arc_interface_views`,
+    `test_owned_temp_materialization_audit`).
+  - 201s parallel (-n 16).  No regressions in any path.
+
 ## 2026-05-17 (compiler fix: Void-returning callback lambda crashed throw_checks -- MIR emits `Return(value=None)` for nothrow Void lambdas, type-env stops skipping Void terminator seeding for nothrow paths)
 - **Compiler fix.**  Release 0.31.96, ABI unchanged at 14.
   Fixes the 2026-05-17 sgw-stub `with_event_sink` blocker:

@@ -1072,20 +1072,50 @@ def _build_const_share_hir_variant(
 
 	self_var = H.HVar(name="self", loc=span)
 	arms: List[H.HMatchArm] = []
+	# Per-arm binder localization counter -- mirrors
+	# `lang/driftc/stage1/ast_to_hir.py::lower_match_expr`'s
+	# `self._match_binder_counter` so each binder gets a globally-
+	# unique internal name within this synthesized fn.  Required:
+	# user-source match arms with the same binder name in two arms
+	# (e.g. `MissingKey(key)` + `BadType(key, expected)`) get this
+	# rename in `ast_to_hir`; const_share synth bypasses that pass
+	# and must replicate it, otherwise the typechecker assigns
+	# different binding_ids to the two `key` binders and MIR
+	# lowering ends up with an asymmetry between the pattern-binding
+	# store (uses raw `bname`) and the result-expression read (uses
+	# `_canonical_local`, which suffixes to `key__b<N>` on the
+	# second arm).  SSA multi-block rename then fails with "load
+	# before store for local 'key__b<N>'" -- the sgw-stub
+	# 2026-05-17 `variant_repro.drift` regression.  Counter is
+	# local because the names just need to be unique within this
+	# synthesized fn; no need to share across compilations.
+	#
+	# The `__match_binder_*` shape is load-bearing: `_canonical_local`
+	# at `lang/driftc/stage2/hir_to_mir.py:1123-1125` recognizes this
+	# prefix and skips the binding-id-based suffix path entirely --
+	# the same special-case that keeps user-source binders safe.
+	# Using any other prefix would re-hit the suffix bug.
+	binder_counter = 0
 	for arm_data, arm_paths in zip(cand.variant_arms, variant_arm_paths):
-		# Stable binder names from the schema's payload field names.
-		# User source typically uses pattern-binder names that match
-		# field names; mirroring that keeps the synthesized HIR
-		# easy to read in any debug dump.
-		binders: List[str] = list(arm_data.field_names)
+		# Binder names: localize per-arm.  Each binder gets a fresh
+		# globally-unique internal name; the original schema field
+		# name is retained as the suffix for debug readability
+		# (so `__match_binder_3_key` is easy to trace back to the
+		# `BadType(key, ...)` arm in any IR dump).
+		orig_binders: List[str] = list(arm_data.field_names)
+		internal_binders: List[str] = []
+		for orig in orig_binders:
+			internal_binders.append(f"__match_binder_{binder_counter}_{orig}")
+			binder_counter += 1
 		# Per-binder result-side value: `binder.const_share()` for
 		# ConstShare-path fields, plain `HVar(binder)` for
 		# Copy+Frozen-path fields (HIR→MIR's borrowed-Copy auto-
 		# copy machinery handles the duplication at lowering time,
 		# the same way `self.f` reads through a borrowed match
-		# arm in user source).
+		# arm in user source).  HVar references use the localized
+		# internal name to match the binder declaration.
 		ctor_args: List[H.HExpr] = []
-		for binder_name, path in zip(binders, arm_paths):
+		for binder_name, path in zip(internal_binders, arm_paths):
 			binder_var: H.HExpr = H.HVar(name=binder_name, loc=span)
 			if path == "const_share":
 				ctor_args.append(H.HMethodCall(
@@ -1113,16 +1143,16 @@ def _build_const_share_hir_variant(
 		# Pattern arg form: zero-payload arms use "paren" with empty
 		# binders to match `V::A()` ctor shape; payload arms use
 		# positional matching.
-		if not binders:
+		if not internal_binders:
 			pattern_arg_form = "paren"
 			binder_field_indices: List[int] = []
 		else:
 			pattern_arg_form = "positional"
-			binder_field_indices = list(range(len(binders)))
+			binder_field_indices = list(range(len(internal_binders)))
 		arms.append(H.HMatchArm(
 			ctor=arm_data.name,
 			ctor_base=variant_te,
-			binders=binders,
+			binders=internal_binders,
 			binder_is_mutable=None,
 			binder_fields=None,
 			pattern_arg_form=pattern_arg_form,
