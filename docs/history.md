@@ -83,15 +83,33 @@
        but may throw`); codegen assertion only fires if the
        checker rule regresses.
 
-  Note on impl's effective vs. surface can-throw: the surface
-  declaration mismatch (impl written WITHOUT `nothrow` but body
-  provably doesn't throw against a `nothrow` interface) is
-  intentionally accepted by the checker -- it normalizes the
-  impl's effective can-throw to nothrow.  Codegen sees the
-  normalized bit on `FnInfo` and emits matched-nothrow code,
-  the safe path.  Only impls whose body actually throws against
-  a nothrow contract are rejected (and would trip the codegen
-  assertion if they somehow slipped through).
+  Crucial: `impl_can_throw` reads
+  `FnInfo.declared_can_throw` (the EFFECTIVE bit), NOT
+  `FnInfo.signature.declared_can_throw` (the surface bit).
+  Body emission at `_FuncBuilder::Return` (~line 7310) reads
+  the same effective bit; the thunk MUST match.  The checker
+  normalizes the effective bit based on body analysis: an
+  impl written without `nothrow` against a `nothrow`
+  interface, but whose body provably doesn't throw, gets
+  effective-nothrow on FnInfo and the body is emitted as
+  plain return (i64 / etc., not FnResult).  If the thunk
+  read the surface bit instead, it would emit a FnResult-
+  expecting `call` against the plain-return body -- the
+  same shape of mismatch that produced the original sgw-stub
+  SIGSEGV, just on the surface-vs-effective axis.  This was
+  flagged in K-review 2026-05-17 and corrected before
+  landing; V10 in the regression test pins the surface-
+  mismatch case.
+
+  Surface mismatch (impl written WITHOUT `nothrow` but body
+  proves nothrow against a `nothrow` interface) is
+  intentionally accepted by the checker -- the impl's
+  effective can-throw normalizes to False on `FnInfo`.
+  Codegen sees the normalized bit and emits matched-nothrow
+  code, the safe path.  Only impls whose body actually
+  throws against a nothrow contract are rejected
+  (E-AUTO-3b328370), and would trip the codegen
+  assertion if they somehow slipped through.
 
   **What this fix did NOT change.**
    - Vtable layout (`[drop, m0, m1, ...]` per linearization).
@@ -118,7 +136,7 @@
 
   **Regression test.**
   `lang/tests/driver/test_arc_interface_get_dispatch_segfault.py`
-  -- 9 carriers, all run the produced binary (compile-only
+  -- 10 carriers, all run the produced binary (compile-only
   validation would miss this bug entirely; IR compiles + links
   cleanly today, the failure fires only at runtime first
   dispatch):
@@ -137,11 +155,21 @@
      different field shapes) -- pins per-T vtable distinction.
    - V7: matched-nothrow ABI -- pins the matched branch of the
      two-bit decision in the thunk emitter.
-   - V8: matched-can-throw ABI -- pins the other matched branch.
+   - V8: matched-can-throw ABI -- impl has a real throw path
+     on an unreachable branch (`if value < 0 throw`) to FORCE
+     effective can-throw; prevents the checker from silently
+     normalizing the impl to nothrow and turning this into a
+     duplicate of V3's adapter branch.
    - V9: NEGATIVE compile test -- impl that actually throws
      against a nothrow interface MUST be rejected by the
      checker (`E-AUTO-3b328370`).  Defense-in-depth for the
      codegen assertion.
+   - V10: surface mismatch -- impl written WITHOUT `nothrow`
+     against a `nothrow` interface, body proves nothrow.
+     Checker accepts and normalizes to effective-nothrow on
+     FnInfo.  Thunk MUST read the effective bit to match the
+     body's emitted ABI; pins the surface-vs-effective fix
+     correction from K-review 2026-05-17.
 
   Verified the test catches the bug by running pre-fix:
   V3-V6 all SIGSEGV with bit-identical shape; V1, V2 pass;

@@ -529,11 +529,20 @@ def test_v7_matched_nothrow_thunk_passes_through(tmp_path: Path) -> None:
 	)
 
 
-# ─── V8: matched ABI -- both can-throw ──────────────────────────────
+# ─── V8: matched ABI -- both can-throw (forced effective can-throw) ──
 #
-# Same as V7 but for the matched-can-throw side of the matrix.
-# Interface and impl both declare implicitly can-throw (no nothrow
-# keyword).  Thunk should pass FnResult through unchanged.
+# Same as V7 but for the matched-can-throw side of the matrix.  The
+# impl body has a real throw path on a branch the runtime input
+# never takes (`value < 0`); this forces the checker's effective-
+# can-throw analysis to classify the impl as can-throw rather than
+# silently normalizing it to nothrow (which would turn this test
+# into a silent duplicate of V3's adapter branch -- the original V8
+# had this exact flaw flagged in K-review 2026-05-17).
+#
+# The throw branch is unreachable at runtime (value=42, never < 0),
+# so the call still returns 42 -- but the IR has the impl emitted
+# with the can-throw ABI and the thunk goes through the matched
+# pass-through branch.
 
 _V8_BOTH_CAN_THROW = """\
 module v8_both_can_throw;
@@ -541,42 +550,133 @@ module v8_both_can_throw;
 import std.core as core;
 import std.core.arc as arc;
 
+pub error V8Err { tag: Int }
+
 pub interface Greeter { fn greet(self: &Self) -> Int }
 struct G { value: Int }
 implement Greeter for G {
-\tpub fn greet(self: &G) -> Int { return self.value; }
+	pub fn greet(self: &G) -> Int {
+		if self.value < 0 { throw V8Err(tag = 1); }
+		return self.value;
+	}
 }
 
 pub fn main() nothrow -> Int {
-\tval g: arc.Arc<G> = arc.arc(G(value = 42));
-\tval gw: arc.Arc<Greeter> = g.as_interface<type Greeter>();
-\ttry { return gw.get().greet(); } catch e { return 99; }
+	val g: arc.Arc<G> = arc.arc(G(value = 42));
+	val gw: arc.Arc<Greeter> = g.as_interface<type Greeter>();
+	try { return gw.get().greet(); } catch e { return 99; }
 }
 """
 
 
 def test_v8_matched_can_throw_thunk_passes_through(tmp_path: Path) -> None:
-	"""Matched ABI (both can-throw): thunk passes FnResult through
-	unchanged, no Ok-wrapping needed.  The impl's body doesn't
-	actually throw, but its declared signature is can-throw, so
-	codegen treats it as the can-throw ABI.
+	"""Matched ABI (both can-throw, effective): thunk passes
+	FnResult through unchanged, no Ok-wrapping needed.
 
-	Note: the checker's effective-can-throw analysis MAY normalize
-	this impl back to nothrow (because the body provably doesn't
-	throw).  In that case this test silently covers the adapter
-	branch (V3) instead of the matched-can-throw branch.  Either
-	way the returned value must be 42.
+	The impl body has a real throw path (`if self.value < 0 throw`)
+	to force the checker's effective-can-throw analysis to classify
+	the impl as can-throw -- prevents silent normalization to
+	nothrow that would make this test a duplicate of V3's adapter
+	branch.  The throw branch is unreachable at runtime (value=42),
+	so the call still returns 42.
 
-	Expected: 42."""
+	Expected: 42 (the value, NOT 99 from the catch)."""
 	cc_rc, cc_err, run_err, run_rc = _compile_and_run(
 		tmp_path, "v8_both_can_throw", _V8_BOTH_CAN_THROW,
 	)
 	assert cc_rc == 0, f"V8 compile failed:\n{cc_err[-1500:]}"
 	assert run_rc not in (-11, 139), (
-		f"V8 SIGSEGV.\nrun stderr: {run_err[-500:]}"
+		f"V8 SIGSEGV -- matched-can-throw path regressed.\n"
+		f"run stderr: {run_err[-500:]}"
 	)
 	assert run_rc == 42, (
-		f"V8 (matched can-throw) returned {run_rc}, expected 42.\n"
+		f"V8 (matched can-throw) returned {run_rc}, expected 42 "
+		f"(the value field; rc=99 would indicate the throw branch "
+		f"unexpectedly fired or the caught-error path triggered).\n"
+		f"run stderr: {run_err[-500:]}"
+	)
+
+
+# ─── V10: surface mismatch (impl WITHOUT nothrow, body proves nothrow) ─
+#
+# The checker accepts an impl whose surface declaration says
+# can-throw (no `nothrow` keyword) against a nothrow interface
+# IF the body provably never throws -- it normalizes the impl's
+# EFFECTIVE can-throw to False on `FnInfo.declared_can_throw`,
+# even though `FnInfo.signature.declared_can_throw` remains True.
+#
+# Codegen body emission (`_FuncBuilder::Return` ~line 7310) reads
+# the EFFECTIVE bit, so the impl is emitted as nothrow ABI
+# (returns i64, not FnResult).  The thunk MUST also read the
+# effective bit, otherwise it would emit a mis-typed `call`
+# expecting FnResult -- the same shape that produced the original
+# sgw-stub SIGSEGV, just on the surface-vs-effective axis.
+#
+# Pre-fix (using signature.declared_can_throw): SIGSEGV on
+# dispatch because the thunk emits FnResult-return inner call
+# against an i64-returning body.
+# Post-fix (using fn_info.declared_can_throw): thunk matches
+# body's actual ABI; returns 42 cleanly.
+
+_V10_SURFACE_MISMATCH = """\
+module v10_surface_mismatch;
+
+import std.core as core;
+import std.core.arc as arc;
+
+pub interface Greeter { fn greet(self: &Self) nothrow -> Int }
+struct G { value: Int }
+implement Greeter for G {
+	pub fn greet(self: &G) -> Int { return self.value; }
+}
+
+pub fn main() nothrow -> Int {
+	val g: arc.Arc<G> = arc.arc(G(value = 42));
+	val gw: arc.Arc<Greeter> = g.as_interface<type Greeter>();
+	return gw.get().greet();
+}
+"""
+
+
+def test_v10_surface_can_throw_effective_nothrow_impl(tmp_path: Path) -> None:
+	"""Impl declared WITHOUT `nothrow` but body provably doesn't
+	throw, against a `nothrow` interface.  The checker accepts
+	this and normalizes the impl's effective can-throw to False
+	on `FnInfo`.  Codegen body emission reads the effective bit
+	from `FnInfo`, so the impl is emitted as nothrow ABI.
+
+	The thunk MUST also read the effective bit (from
+	`impl_info.declared_can_throw`, not
+	`impl_info.signature.declared_can_throw`), otherwise it emits
+	a mis-typed inner call (expects FnResult, body returns i64).
+
+	No `try`/`catch` -- the interface contract says it can't
+	throw, so the call site doesn't wrap.  Pre-fix
+	(signature-bit): SIGSEGV at dispatch (same shape as V3 on
+	the surface-vs-effective axis).
+	Post-fix (effective-bit): returns 42.
+
+	Expected: 42."""
+	cc_rc, cc_err, run_err, run_rc = _compile_and_run(
+		tmp_path, "v10_surface_mismatch", _V10_SURFACE_MISMATCH,
+	)
+	assert cc_rc == 0, (
+		f"V10 compile failed -- if 'declared nothrow but may throw' "
+		f"diagnostic appears, the checker has tightened to surface-"
+		f"level rejection and the test source needs adjusting:\n"
+		f"{cc_err[-1500:]}"
+	)
+	assert run_rc not in (-11, 139), (
+		f"V10 SIGSEGV -- the thunk inner-call ABI is reading the "
+		f"SURFACE bit (`impl_info.signature.declared_can_throw`) "
+		f"instead of the EFFECTIVE bit "
+		f"(`impl_info.declared_can_throw`).  Body emission reads "
+		f"the effective bit at `_FuncBuilder::Return` (~line 7310); "
+		f"thunk must match.\n"
+		f"run stderr: {run_err[-500:]}"
+	)
+	assert run_rc == 42, (
+		f"V10 returned {run_rc}, expected 42.\n"
 		f"run stderr: {run_err[-500:]}"
 	)
 

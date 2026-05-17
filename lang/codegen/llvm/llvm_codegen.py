@@ -6577,14 +6577,28 @@ class _FuncBuilder:
 		if self_def.kind is not TypeKind.REF:
 			raise NotImplementedError("interface method self param must be &Self or &mut Self in v1")
 
-		# Resolve the impl's actual can-throw bit.  Default to
-		# `iface_can_throw` if `fn_infos` doesn't have an entry --
-		# matches the legacy single-bit behavior so we never silently
-		# emit a mis-typed call on an unknown-shape impl.
+		# Resolve the impl's actual can-throw bit.  Read the
+		# EFFECTIVE bit from `FnInfo.declared_can_throw`, NOT the
+		# surface bit from `FnInfo.signature.declared_can_throw`:
+		# the checker normalizes the effective bit based on body
+		# analysis (e.g. an impl whose body provably doesn't throw
+		# gets effective-nothrow even when written without
+		# `nothrow`).  Body emission at
+		# `_FuncBuilder._emit_terminator::Return` (~line 7310) reads
+		# the same `fn_info.declared_can_throw` to decide whether to
+		# emit `ret %FnResult_<...>` or `ret <bare>`.  Reading the
+		# surface bit here would let the thunk's inner call disagree
+		# with the actual body emission -- the same shape of mismatch
+		# that produced the original sgw-stub SIGSEGV, just on a
+		# different axis.
+		#
+		# Default to `iface_can_throw` if `fn_infos` doesn't have an
+		# entry -- matches the legacy single-bit behavior so we never
+		# silently emit a mis-typed call on an unknown-shape impl.
 		impl_info = self.fn_infos.get(fn_id)
 		impl_can_throw = (
-			bool(impl_info.signature.declared_can_throw)
-			if impl_info is not None and impl_info.signature is not None
+			bool(impl_info.declared_can_throw)
+			if impl_info is not None
 			else iface_can_throw
 		)
 
