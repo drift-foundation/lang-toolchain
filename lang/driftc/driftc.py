@@ -6623,17 +6623,36 @@ def compile_stubbed_funcs(
 			if local_name not in builder.func.local_types:
 				builder.func.local_types[local_name] = unknown_ty
 		if builder.block.terminator is None:
-			if ret_val is None:
-				_ret_def = shared_type_table.get(spec.return_type_id) if shared_type_table is not None else None
-				if _ret_def is not None and _ret_def.kind is TypeKind.VOID:
-					ret_val = lower._void_value()
-				else:
-					raise AssertionError("hidden lambda block must end with a value or return")
+			_ret_def = shared_type_table.get(spec.return_type_id) if shared_type_table is not None else None
+			_is_void_return = _ret_def is not None and _ret_def.kind is TypeKind.VOID
+			if ret_val is None and not _is_void_return:
+				raise AssertionError("hidden lambda block must end with a value or return")
 			if spec.can_throw:
+				# Can-throw lambdas (even Void-returning ones) need an
+				# `Ok` carrier wrapping their return value.  For
+				# Void-returning can-throw, synthesize an explicit Void
+				# value to wrap (matches the can-throw `Result<Void, E>`
+				# ABI contract).
+				if ret_val is None and _is_void_return:
+					ret_val = lower._void_value()
 				ok_dest = builder.new_temp()
 				builder.emit(M.ConstructResultOk(dest=ok_dest, value=ret_val))
 				ret_val = ok_dest
-			builder.set_terminator(M.Return(value=ret_val))
+				builder.set_terminator(M.Return(value=ret_val))
+			elif _is_void_return:
+				# Nothrow Void-returning lambda: emit `Return(value=None)`,
+				# the same shape regular Void-returning fns produce when
+				# they fall off the end (`_visit_stmt_HReturn` /
+				# `lower_function_body`).  Emitting a synthesized
+				# `_void_value()` here would make MIR carry a Void
+				# terminator value that (a) violates the LLVM lowering
+				# contract ("Void function must not return a value
+				# (MIR bug)"), and (b) lands unkeyed in the SSA type env,
+				# producing the 2026-05-17 `__lambda_cb_*` KeyError in
+				# `throw_checks::enforce_fnresult_returns_typeaware`.
+				builder.set_terminator(M.Return(value=None))
+			else:
+				builder.set_terminator(M.Return(value=ret_val))
 		mir_funcs_by_id[spec.fn_id] = builder.func
 	if _timing_enabled and hidden_lambda_start is not None:
 		import time as _timing_time

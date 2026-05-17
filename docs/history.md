@@ -1,5 +1,114 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: Void-returning callback lambda crashed throw_checks -- MIR emits `Return(value=None)` for nothrow Void lambdas, type-env stops skipping Void terminator seeding for nothrow paths)
+- **Compiler fix.**  Release 0.31.96, ABI unchanged at 14.
+  Fixes the 2026-05-17 sgw-stub `with_event_sink` blocker:
+
+      KeyError: (FunctionId(module='lambda_repro',
+                            name='__lambda_cb_main_0_0',
+                            ordinal=0), 't3')
+      at throw_checks.py:316 in enforce_fnresult_returns_typeaware
+
+  on every `core.callback{N}(|...| => { ... })` constructing
+  `Callback{N}<..., Void>` -- the event-sink shape.  No app-side
+  workaround.  12-line minimal repro:
+
+      module lambda_repro;
+      import std.core as core;
+      pub variant SingularEvent { Ping, Pong(tag: String) }
+
+      pub fn main() nothrow -> Int {
+          val sink: core.Callback1<SingularEvent, Void> =
+              core.callback1(|ev: SingularEvent| => { val _ = 0; });
+          return 0;
+      }
+
+  **Root cause -- two bugs, defense-in-depth fix.**
+
+  *Bug 1 (root, structural).*
+  Hidden-lambda body lowering at `driftc.py::6625` for nothrow
+  Void-returning lambdas emitted `M.Return(value=<synth_void>)`
+  where `<synth_void>` was a fresh SSA value from `_void_value()`
+  -- not `M.Return(value=None)` like regular Void-returning
+  functions.  That malformed MIR violated the LLVM lowering
+  contract ("Void function must not return a value (MIR bug)")
+  and left the synth value unkeyed in the SSA type env.  Can-throw
+  Void lambdas were unaffected because they need the `Ok(Void)`
+  carrier and the `ConstructResultOk` produces a typed dest.
+
+  *Bug 2 (secondary, reinforcing).*
+  `Checker.build_type_env_from_ssa` (`checker/__init__.py::4995`)
+  gated terminator return-type seeding on `if not fn_is_void:` --
+  every Void function's terminator value was unconditionally skipped,
+  so even if Bug 1 didn't exist, any Void terminator carrying a
+  value would have left the value unkeyed in the type env and
+  surfaced the same KeyError later.
+
+  Together: Bug 1 was the one actually firing on the reported
+  shape; Bug 2 was a latent gap that would have surfaced on the
+  next Void-terminator path that ever showed up.
+
+  **Fix.**
+
+  *MIR layer (`driftc.py::6625`).*  Nothrow Void-returning lambdas
+  now emit `M.Return(value=None)` -- shape-identical to regular
+  Void functions falling off the end (`_visit_stmt_HReturn` /
+  `lower_function_body`).  Can-throw Void lambdas keep the
+  `Ok(Void)` carrier path verbatim; the only change there is
+  routing through an explicit branch so the Void/non-Void/
+  can-throw matrix is readable.
+
+  *Type-env layer (`checker/__init__.py::4995`).*  Replaced the
+  over-broad `if not fn_is_void:` guard with the precise gate
+  `if fn_is_void and fn_is_can_throw: continue`.  Now:
+   - nothrow Void: seed terminator value as Void (structural fix
+     for the latent Bug 2);
+   - can-throw Void (incl. `declared_terminal_throws`): still
+     skip, because first-pass inference has already typed the
+     terminator as `FnResult<Void, Error>` and re-seeding to bare
+     Void would overwrite it and produce false "non-FnResult
+     type 1" diagnostics against stdlib `throw_self` impls
+     (verified mid-fix when an unguarded version was tried);
+   - non-Void: unchanged.
+
+  No special-case for Void in `throw_checks` (the user-preferred
+  direction over adding a "skip-if-Void" guard at the lookup
+  site, which would have created an implicit invariant).
+
+  **Regression test.**
+  `lang/tests/driver/test_lambda_void_callback_throw_check.py`
+  parametrizes 5 carriers (V1 empty body, V2 app-team-exact body,
+  V3 conditional Void return, V4 `Callback0<Void>`, V5
+  `Callback2<A, B, Void>`).  Uses `subprocess.run` rather than
+  in-process `driftc_main` because the pre-fix bug surfaces as an
+  uncaught `KeyError` that bubbles to the pytest worker; subprocess
+  isolation lets the test inspect stderr for the precise failure
+  signature (`KeyError` + `__lambda_cb_main_` + `throw_checks`
+  must all appear together).  `--test-build-only` is intentionally
+  NOT passed -- that flag short-circuits before `throw_checks`
+  runs and would have made the bug invisible.
+
+  Verified the test catches the bug by running it pre-fix: failure
+  shape bit-identical to the app team's report.
+
+  **Verification.**
+  - 5/5 new `test_lambda_void_callback_throw_check.py`
+  - 25/25 lambda + throw test suites
+    (`test_lambda_result_ctor_nothrow`,
+    `test_lambda_return_inference`,
+    `test_lambda_nothrow_diagnostics`,
+    `test_callback_dynamic_dispatch`,
+    `test_throws_typed_catch_phase4d`,
+    `test_throws_trait_terminal_phase3_5`)
+  - 25/25 prior-slice regression set
+    (`test_fat_arc_interface_views`,
+    `test_owned_temp_materialization_audit`,
+    `test_drift_owned_string_audit`)
+  - 55/55 combined parallel run (`-n 16`, 80s)
+
+  No regressions in any lambda, throw, callback, fat-Arc, or
+  audit path.  Defense-in-depth holds.
+
 ## 2026-05-17 (compiler fix: package-consumer `Arc<T>::as_interface<type I>()` link error -- `_arc_fat_bump_strong_via_ctrl` reachability seed added; helper stays private)
 - **Compiler fix.**  Release 0.31.95, ABI unchanged at 14.
   Fixes the 2026-05-17 sgw-stub package-consumer link failure:

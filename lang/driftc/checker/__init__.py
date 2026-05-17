@@ -4991,64 +4991,98 @@ class Checker:
 					term = block.terminator
 					if hasattr(term, "value") and getattr(term, "value") is not None:
 						val = term.value
-						# Seed return types even if they were previously Unknown.
-						if not fn_is_void:
-							existing = value_types.get((fn_id, val))
-							if fn_return_parts is not None:
-								desired = self._type_table.ensure_fnresult(fn_return_parts[0], fn_return_parts[1])
-							elif sig and sig.return_type_id is not None:
-								desired = sig.return_type_id
-							else:
-								desired = self._unknown_type
-							if existing is not None and existing != self._unknown_type and existing != desired:
-								if diagnostics is not None and (fn_id, val) not in reported_return_mismatch:
-									reported_return_mismatch.add((fn_id, val))
+						# Seed return types even if they were previously
+						# Unknown.
+						#
+						# Gate: we seed for any function shape that
+						# yields a meaningful `desired` type for this
+						# terminator value -- that is, non-Void
+						# functions OR nothrow Void functions.  We
+						# specifically EXCLUDE can-throw Void
+						# (including `declared_terminal_throws`):
+						# those functions' synthesized terminator
+						# values are already typed `FnResult<Void,
+						# Error>` by first-pass inference, and the
+						# seeding would compute `desired = Void`
+						# (since `fn_return_parts` is None for
+						# terminal-throws) and overwrite the correct
+						# FnResult typing -- producing false
+						# `non-FnResult type 1` diagnostics out of
+						# `throw_checks::enforce_fnresult_returns_typeaware`
+						# against stdlib `throw_self` impls.
+						#
+						# The nothrow-Void branch is the load-bearing
+						# fix for the 2026-05-17 sgw-stub
+						# `with_event_sink` regression: lambdas like
+						# `core.callback1(|ev| => { ... })` synthesize
+						# a Void terminator value that the first pass
+						# can't recognize, leaving it unkeyed and
+						# producing
+						#   `KeyError: (FunctionId(...
+						#     name='__lambda_cb_*'), 't<N>')`
+						# at `throw_checks::enforce_fnresult_returns_typeaware`'s
+						# `type_env.type_of_ssa_value(fn_id, term.value)`
+						# lookup.  No special-case for Void in
+						# throw_checks; record the type here, the way
+						# every other terminator gets recorded.
+						if fn_is_void and fn_is_can_throw:
+							continue
+						existing = value_types.get((fn_id, val))
+						if fn_return_parts is not None:
+							desired = self._type_table.ensure_fnresult(fn_return_parts[0], fn_return_parts[1])
+						elif sig and sig.return_type_id is not None:
+							desired = sig.return_type_id
+						else:
+							desired = self._unknown_type
+						if existing is not None and existing != self._unknown_type and existing != desired:
+							if diagnostics is not None and (fn_id, val) not in reported_return_mismatch:
+								reported_return_mismatch.add((fn_id, val))
+								allow_int_uint = False
+								allow_fnresult_unknown_err = False
+								try:
+									existing_def = self._type_table.get(existing)
+									desired_def = self._type_table.get(desired)
+									if (
+										existing_def.kind is TypeKind.FNRESULT
+										and desired_def.kind is TypeKind.FNRESULT
+										and existing_def.param_types
+										and desired_def.param_types
+										and existing_def.param_types[0] == desired_def.param_types[0]
+									):
+										existing_err = existing_def.param_types[1]
+										desired_err = desired_def.param_types[1]
+										if (
+											self._type_table.get(existing_err).kind is TypeKind.UNKNOWN
+											and self._type_table.get(desired_err).kind is TypeKind.ERROR
+										):
+											allow_fnresult_unknown_err = True
+									if (
+										existing_def.kind is TypeKind.SCALAR
+										and desired_def.kind is TypeKind.SCALAR
+										and {existing_def.name, desired_def.name} <= {"Int", "Uint"}
+									):
+										allow_int_uint = True
+								except KeyError:
 									allow_int_uint = False
-									allow_fnresult_unknown_err = False
-									try:
-										existing_def = self._type_table.get(existing)
-										desired_def = self._type_table.get(desired)
-										if (
-											existing_def.kind is TypeKind.FNRESULT
-											and desired_def.kind is TypeKind.FNRESULT
-											and existing_def.param_types
-											and desired_def.param_types
-											and existing_def.param_types[0] == desired_def.param_types[0]
-										):
-											existing_err = existing_def.param_types[1]
-											desired_err = desired_def.param_types[1]
-											if (
-												self._type_table.get(existing_err).kind is TypeKind.UNKNOWN
-												and self._type_table.get(desired_err).kind is TypeKind.ERROR
-											):
-												allow_fnresult_unknown_err = True
-										if (
-											existing_def.kind is TypeKind.SCALAR
-											and desired_def.kind is TypeKind.SCALAR
-											and {existing_def.name, desired_def.name} <= {"Int", "Uint"}
-										):
-											allow_int_uint = True
-									except KeyError:
-										allow_int_uint = False
-									if allow_int_uint or allow_fnresult_unknown_err:
-										value_types[(fn_id, val)] = desired
-										changed = True
-										continue
-									diagnostics.append(
-										_chk_diag(
-											message=(
-													"typecheck contract failure: SSA return type does not match declared signature "
-												f"for {function_symbol(fn_id)} in {block_name} "
-												f"({existing} vs {desired})"
-											),
-											severity="error",
-										)
+								if allow_int_uint or allow_fnresult_unknown_err:
+									value_types[(fn_id, val)] = desired
+									changed = True
+									continue
+								diagnostics.append(
+									_chk_diag(
+										message=(
+												"typecheck contract failure: SSA return type does not match declared signature "
+											f"for {function_symbol(fn_id)} in {block_name} "
+											f"({existing} vs {desired})"
+										),
+										severity="error",
 									)
-								value_types[(fn_id, val)] = desired
-								changed = True
-							elif existing is None or existing == self._unknown_type:
-								value_types[(fn_id, val)] = desired
-								changed = True
+								)
+							value_types[(fn_id, val)] = desired
+							changed = True
+						elif existing is None or existing == self._unknown_type:
+							value_types[(fn_id, val)] = desired
+							changed = True
 
 		if not value_types:
 			return None
