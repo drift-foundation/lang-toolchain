@@ -621,18 +621,31 @@ def test_fat_arc_destroy_ir_shape(tmp_path: Path) -> None:
 		"wrapper is not forwarding through the ctrl-only drop path"
 	)
 
-	# `_arc_fat_bump_strong_via_ctrl` must have a prototype visible at
-	# the call site — either a `declare` (package-consumer build where
-	# the helper's body lives in an upstream module) OR a `define`
-	# (single-module / dev build where stdlib compiles inline; LLVM
-	# rejects both in one module even with identical prototypes).
-	# And the call MUST use the `_llvm_fn_sym` spelling — same
-	# escaping as every other Drift symbol.
-	_bump_declared = 'declare void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr)' in ir
-	_bump_defined = 'define void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(' in ir
-	assert _bump_declared or _bump_defined, (
-		"`_arc_fat_bump_strong_via_ctrl` has neither a declare nor a "
-		"define in IR — the Stage 3 fat-Arc bump helper is not linked"
+	# `_arc_fat_bump_strong_via_ctrl` must be **defined** in the IR --
+	# a bare `declare` is the bug shape that produced the 2026-05-17
+	# `undefined reference at link` failure (sgw-stub regression).
+	#
+	# Before the reachability seed fix in `driftc.py`, the
+	# `ArcAsInterface` codegen emitted a call to the bump helper
+	# without any MIR-level `M.Call` -- so BFS reachability missed
+	# the helper and only `llvm_codegen.py`'s declare-emit fired.  In
+	# dev/source builds the helper's body landed in the IR via
+	# whole-stdlib inline compilation regardless, masking the bug
+	# locally; in package-consumer builds the IR shipped with a
+	# declare-only reference and the link failed.
+	#
+	# Both branches (local-source AND package-consumer) must now
+	# produce a `define` -- the seed in `driftc.py::compile_to_llvm_ir`
+	# pulls the helper body into the reachable set whenever
+	# `M.ArcAsInterface` is in scope, so consumer-mode behaves the
+	# same as dev-mode.  The package-consumer side is independently
+	# verified by `test_pkg_fat_arc_as_interface_helper_body_pulled_in`
+	# below.
+	assert 'define void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(' in ir, (
+		"`_arc_fat_bump_strong_via_ctrl` has no `define` in IR -- "
+		"only a `declare` would mean the helper body wasn't reachable "
+		"and the link will fail with `undefined reference` (regressed "
+		"on 2026-05-17 against the sgw-stub package-consumer build)."
 	)
 	assert 'call void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr' in ir, (
 		"`_arc_fat_bump_strong_via_ctrl` linked but never called — "
@@ -788,4 +801,184 @@ fn main() nothrow -> Int {
 		"shared `ArcBox<NoContextResolver>` at strong=2 forever "
 		"(drop_thunk never fires; 24 bytes leaked per invocation).\n\n"
 		f"config_builder__impl body (first 2000 chars):\n{impl_body[:2000]}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# Package-consumer regression for the sgw-stub 2026-05-17 link failure.
+#
+# Local-source (`--stdlib-root` / `--dev`) compiles already pulled
+# `_arc_fat_bump_strong_via_ctrl` into the IR because the whole stdlib was
+# compiled inline -- the bump helper's `define` landed in the consumer's
+# LLVM module regardless of reachability.  That masked a real bug: the
+# `ArcAsInterface` codegen at `llvm_codegen.py::_emit_arc_as_interface`
+# emits the bump call **directly in LLVM IR** with no MIR-level `M.Call`,
+# so the BFS reachability walker at `driftc.py::compile_to_llvm_ir` never
+# visited the helper.  In package-consumer mode (stdlib loaded as a signed
+# `.dmp`, only reachable functions get monomorphized into the consumer's
+# IR), this left the consumer with a `declare`-only reference, and the
+# link failed:
+#
+#     undefined reference to `std.core.arc::_arc_fat_bump_strong_via_ctrl`
+#
+# Fix: a symmetric reachability seed in `driftc.py` -- when any
+# `M.ArcAsInterface` is in the reachable MIR set, also pull the bump
+# helper's FunctionId into reachable, mirroring the existing
+# `reachable.add(fat_drop_fn_id)` in `_synthesize_fat_arc_destructor_wrappers`.
+#
+# This regression specifically pins the package-consumer path because the
+# dev/source path was already green pre-fix.  Running this test through
+# `_compile_consumer` (which uses `--package-root` + `--dep std@VERSION`
+# instead of `--stdlib-root`) is what proves the seed actually works for
+# the failing pipeline.
+# ---------------------------------------------------------------------------
+
+
+_PKG_CONSUMER_ARC_AS_INTERFACE_SOURCE = """\
+module m;
+
+import std.core as core;
+import std.core.arc as arc;
+
+pub interface Greeter {
+\tfn greet(self: &Self) -> Int
+}
+
+struct Hello require Self is core.Destructible {
+\tmsg: String
+}
+
+implement Greeter for Hello {
+\tpub fn greet(self: &Hello) nothrow -> Int {
+\t\treturn 42;
+\t}
+}
+
+implement core.Destructible for Hello {
+\tpub fn destroy(var self: Hello) nothrow -> Void {}
+}
+
+pub fn main() nothrow -> Int {
+\tval inst = Hello(msg = "hi");
+\tval inst_arc: arc.Arc<Hello> = arc.arc(move inst);
+\tval gw: arc.Arc<Greeter> = inst_arc.as_interface<type Greeter>();
+\ttry {
+\t\tval n = gw.get().greet();
+\t\treturn n - 42;
+\t} catch e {
+\t\treturn 99;
+\t}
+}
+"""
+
+
+def test_pkg_fat_arc_as_interface_helper_body_pulled_in(stdlib_package, tmp_path: Path) -> None:
+	"""Package-consumer build of `Arc<T>::as_interface<type I>()` must
+	pull the `_arc_fat_bump_strong_via_ctrl` helper body into the
+	consumer's LLVM IR -- not just a `declare`.
+
+	A `declare`-only reference is the bug shape that produced the
+	2026-05-17 sgw-stub link failure.  The local-source path
+	(`--stdlib-root`) is already covered by
+	`test_arc_as_interface_destroy_routes_through_fat_wrapper_in_ir`
+	above; this test exists specifically because local-source success
+	did NOT imply package-consumer success.
+
+	Verifies (compile + link + IR shape).  Runtime execution is OUT
+	OF SCOPE for this regression -- there is a separate runtime
+	issue in the `Arc<Interface>` path that reproduces under BOTH
+	local-source and package-consumer builds (verified 2026-05-17
+	with a minimal `as_interface` + `.get().method()` repro), and
+	the link / IR fix here is orthogonal to it.  This test pins the
+	"helper body is pulled into consumer IR/link" contract; the
+	runtime crash is tracked separately.
+
+	Checks:
+	  1. compile + link succeed (no `undefined reference`)
+	  2. consumer IR contains `define void @"...::_arc_fat_bump_strong_via_ctrl"`
+	     (the helper body, not just a `declare`)
+	  3. consumer IR contains at least one call to the helper
+	     (so the seed isn't pulling in dead code)
+	"""
+	import shutil
+	import subprocess
+	import sys
+
+	src_dir = tmp_path / "src"
+	src_dir.mkdir()
+	(src_dir / "main.drift").write_text(_PKG_CONSUMER_ARC_AS_INTERFACE_SOURCE)
+
+	out_bin = tmp_path / "test_bin"
+	ll_path = out_bin.with_suffix(".ll")
+	empty_stdlib = tmp_path / "_empty_stdlib"
+	empty_stdlib.mkdir()
+	repo_root = Path(__file__).resolve().parents[3]
+
+	cmd = [
+		sys.executable, "-m", "lang.driftc.driftc",
+		str(src_dir / "main.drift"),
+		"--stdlib-root", str(empty_stdlib),
+		"--target-word-bits", "64",
+		"--package-root", str(stdlib_package.pkg_root),
+		"--dep", f"std@{stdlib_package.version}",
+		"--trust-store", str(stdlib_package.trust_path),
+		"--dev", "--dev-core-trust-store", str(stdlib_package.trust_path),
+		"--entry", "m::main",
+		"-o", str(out_bin),
+	]
+
+	# Guard: this test must NOT be using --stdlib-root pointing at the
+	# real stdlib source.  Local-source success masked the bug; we are
+	# specifically testing the package-consumer pipeline.
+	assert str(stdlib_package.stdlib_root) not in " ".join(cmd), (
+		"package-consumer regression must not pass --stdlib-root pointing "
+		"at the real stdlib source tree -- that is the dev/source path "
+		"and it was already green before the fix"
+	)
+
+	res = subprocess.run(
+		cmd, cwd=str(repo_root), capture_output=True, text=True, timeout=120,
+	)
+	assert res.returncode == 0, (
+		f"package-consumer compile + link failed -- if stderr says "
+		f"`undefined reference to ...::_arc_fat_bump_strong_via_ctrl`, "
+		f"the reachability seed in driftc.py::compile_to_llvm_ir was "
+		f"reverted or never landed:\n\nSTDERR:\n{res.stderr[:1500]}"
+	)
+	assert out_bin.exists(), "binary not produced"
+	assert ll_path.exists(), (
+		f"expected IR alongside binary at {ll_path} -- driftc usually "
+		f"emits a .ll next to the -o target"
+	)
+
+	ir = ll_path.read_text(encoding="utf-8")
+
+	# (2) Helper body MUST be in the consumer IR.  `declare`-only is
+	# the bug shape.  We require `define`; the presence of `declare`
+	# in addition is fine (LLVM tolerates it for forward references,
+	# but the module-render path skips the declare when a define is
+	# in self.funcs -- so in practice only `define` should be here).
+	_bump_lines = [
+		line for line in ir.split("\n")
+		if "_arc_fat_bump_strong_via_ctrl" in line
+	]
+	assert 'define void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(' in ir, (
+		"package-consumer IR has no `define` for `_arc_fat_bump_strong_via_ctrl` "
+		"-- the reachability seed in driftc.py did not pull the helper "
+		"body into the consumer's reachable set.  This is the 2026-05-17 "
+		"sgw-stub link-failure bug shape.\n\n"
+		"First 5 occurrences of `_arc_fat_bump_strong_via_ctrl` in IR:\n  "
+		+ "\n  ".join(_bump_lines[:5])
+	)
+
+	# (3) The helper must actually be called -- otherwise the seed
+	# would be pulling in dead code, and the test would be a tautology
+	# (always passing because the seed unconditionally drops a define
+	# even when ArcAsInterface lowering doesn't fire).
+	assert 'call void @"std.core.arc::_arc_fat_bump_strong_via_ctrl"(ptr' in ir, (
+		"`_arc_fat_bump_strong_via_ctrl` defined but never called -- "
+		"`ArcAsInterface` lowering is not emitting the strong-bump "
+		"call, OR the consumer code path is reaching the helper define "
+		"through some unrelated reachability seed (which would make "
+		"this regression a tautology)."
 	)

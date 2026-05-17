@@ -1,5 +1,104 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: package-consumer `Arc<T>::as_interface<type I>()` link error -- `_arc_fat_bump_strong_via_ctrl` reachability seed added; helper stays private)
+- **Compiler fix.**  Release 0.31.95, ABI unchanged at 14.
+  Fixes the 2026-05-17 sgw-stub package-consumer link failure:
+
+      undefined reference to `std.core.arc::_arc_fat_bump_strong_via_ctrl`
+
+  reported on `arc.arc(impl).as_interface<type I>()` builds where
+  stdlib arrived as a signed `.dmp` package rather than via
+  `--stdlib-root`.  Load-bearing for Arc<Interface> sharing in any
+  package-consumer pipeline.
+
+  **Root cause.**  `ArcAsInterface` lowering at
+  `lang/codegen/llvm/llvm_codegen.py::_emit_arc_as_interface` emits
+  the bump-helper call DIRECTLY in LLVM IR (step 2 of the five-step
+  fat-Arc materialization) with no MIR-level `M.Call` -- bypassing
+  the BFS reachability walker at
+  `lang/driftc/driftc.py::compile_to_llvm_ir`.  The walker therefore
+  never visited `_arc_fat_bump_strong_via_ctrl`; in package-consumer
+  builds (where only reachable functions get monomorphized into the
+  consumer IR) the helper body was left out and only a `declare`
+  landed in the IR.  Link failed.
+
+  Dev/source builds (`--stdlib-root`) were green pre-fix because
+  the whole stdlib compiled inline regardless of reachability -- the
+  helper `define` landed in the IR through the bulk-compile path,
+  masking the bug locally.
+
+  The sibling `_arc_fat_drop_via_ctrl` already had a symmetric seed
+  at `_synthesize_fat_arc_destructor_wrappers` (driftc.py:1804,
+  `reachable.add(fat_drop_fn_id)`).  Drop worked; bump didn't.
+
+  **Fix.**  Add a symmetric reachability seed for the bump helper
+  in `driftc.py::compile_to_llvm_ir` (~line 11583), adjacent to the
+  existing impl-method seed pass.  The scan for `M.ArcAsInterface`
+  runs **after** the impl-method seed completes -- a newly seeded
+  impl method may itself contain `M.ArcAsInterface` in its body,
+  which would have been invisible to a pre-impl-seeding scan and
+  regressed the seed back to the original `declare`-only shape.
+  When any `M.ArcAsInterface` is in the final (post-impl-seeding)
+  reachable MIR set, look up
+  `std.core.arc._arc_fat_bump_strong_via_ctrl` (local sig table
+  first, then `external_signatures_by_id` for the package-consumer
+  shape) and add its FunctionId to `_reachable`, plus a defensive
+  BFS from it for any future helper-body changes that introduce a
+  real `M.Call`.
+
+  **What this did NOT do.**
+  - Helper stays **non-`pub`**.  Visibility / ABI surface unchanged.
+    The seed approach is structurally aligned with how the drop
+    helper already works; no `pub` exposure, no
+    `linkonce_odr`-with-set-tracker refactor.
+  - Did not move the helper to the runtime archive
+    (`libdrift_rt_abi14.a`).  Its body remains in
+    `stdlib/std/core/arc.drift:180` and is monomorphized into each
+    consumer's IR through the reachability set.
+
+  **Test tightening.**
+  `lang/tests/driver/test_fat_arc_interface_views.py` previously
+  accepted EITHER a `declare` OR a `define` of the bump helper
+  (line 631-636).  The `declare`-only branch was the bug shape --
+  the assertion gave false confidence.  Tightened to require
+  `define`; comment now points at the 2026-05-17 regression.
+
+  **New package-consumer regression.**
+  `test_pkg_fat_arc_as_interface_helper_body_pulled_in` in the same
+  file builds stdlib as a signed `.dmp`, compiles a consumer that
+  does `Arc<Hello>::as_interface<type Greeter>()`, and asserts (a)
+  compile + link succeed (no `undefined reference`), (b) consumer
+  IR carries the `define` for the bump helper, (c) the helper is
+  called.  Runtime exec is OUT OF SCOPE for this test -- there is a
+  separate runtime issue in the `Arc<Interface>` `.get().method()`
+  path that reproduces under BOTH local-source and package-consumer
+  builds (verified with a minimal repro 2026-05-17); the link / IR
+  fix here is orthogonal to it and that runtime issue is tracked
+  separately.
+
+  Verified the test catches the bug by temporarily disabling the
+  seed: failure shape is exactly `undefined reference to
+  std.core.arc::_arc_fat_bump_strong_via_ctrl` -- bit-identical to
+  the app team's report.
+
+  **Stale comments fixed.**
+  Two comments in `lang/codegen/llvm/llvm_codegen.py`
+  (`_emit_module` declare-emit guard ~line 1589 and
+  `_emit_arc_as_interface` step 2 ~line 6919) said the helper's body
+  lives in `stdlib/std/concurrent/concurrent.drift`.  It actually
+  lives in `stdlib/std/core/arc.drift` (relocated at ABI 11).  Both
+  updated to point at the right file and to mention the
+  reachability seed.
+
+  **Verification.**
+  - 11/11 `test_fat_arc_interface_views.py` (was 10; +1 for the new
+    package-consumer regression).
+  - Owned-temp + DRIFT_OWNED_STRING audits: 14/14 pass.
+  - app team's sgw-stub variant_repro / blocker 3 path: no longer
+    link-fails (verified with the minimal repro at
+    `/tmp/sgw-stub/arc_iface_repro.drift` -- link succeeds; runtime
+    crash is separate).
+
 ## 2026-05-16 (compiler hot-fix: `__array_get_res` / `__array_pop_res` were not scope-owned -- `_register_drop_local` removed; audit vocabulary gains `result-staging` to encode "ownership leaves via LoadLocal")
 - **Compiler hot-fix.**  Release 0.31.94, ABI unchanged at 14.
   Fixes a double-free regression introduced by 0.31.93's slice 2

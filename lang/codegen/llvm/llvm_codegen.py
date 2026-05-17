@@ -1587,14 +1587,23 @@ class LlvmModuleBuilder:
 			# emits a direct `call` to this non-generic stdlib helper
 			# (one symbol serves every `Arc<I>` — I is erased at
 			# refcount time).  The helper's body lives in
-			# `stdlib/std/concurrent/concurrent.drift`; when its
-			# definition is NOT in the current LLVM module (package-
-			# consumer build), emit a prototype so the call site has a
-			# matching signature for opaque-pointer verification.
-			# When the definition IS in this module (dev/source
-			# build where stdlib compiles inline), skip the declare —
-			# LLVM rejects `declare` + `define` for the same symbol
-			# even with identical prototypes.
+			# `stdlib/std/core/arc.drift` (relocated from
+			# `std/concurrent` at ABI 11); when its definition is NOT
+			# in the current LLVM module, emit a prototype so the call
+			# site has a matching signature for opaque-pointer
+			# verification.  Note: in package-consumer builds the
+			# reachability pass at `driftc.py::compile_to_llvm_ir`
+			# explicitly seeds `_arc_fat_bump_strong_via_ctrl` into
+			# the reachable set when any `M.ArcAsInterface` is in
+			# scope, so the helper's body IS pulled into the consumer
+			# IR and the `define` branch is taken there too -- the
+			# declare-only branch is reserved for the rare case where
+			# the seed cannot resolve the helper (e.g. tests that
+			# bypass the consumer pipeline).  When the definition IS
+			# in this module (dev/source build or seed-pulled
+			# package-consumer build), skip the declare -- LLVM
+			# rejects `declare` + `define` for the same symbol even
+			# with identical prototypes.
 			#
 			# Definition detection is a literal-prefix search over
 			# `self.funcs` (each entry is the full IR text of one
@@ -6907,12 +6916,16 @@ class _FuncBuilder:
 		# The helper is a Drift symbol (module-qualified, quoted) — use
 		# the standard `_llvm_fn_sym` spelling rather than a raw
 		# literal so the same escaping rules as every other Drift
-		# symbol apply.  Flag the module as needing a declare: the
-		# helper's definition lives in `stdlib/std/concurrent/
-		# concurrent.drift`, and when the caller compiles in a
-		# different LLVM module (typical for user code), the
-		# module-render pass emits the matching `declare void
-		# @"..."(ptr)` so opaque-pointer verification has a prototype.
+		# symbol apply.  Flag the module as needing the helper: the
+		# helper's definition lives in `stdlib/std/core/arc.drift`
+		# (relocated from `std/concurrent` at ABI 11), and the
+		# module-render pass in `_emit_module` decides whether to
+		# emit a `declare` (no in-module `define`) or skip the
+		# declare (define is in this module — LLVM rejects both
+		# together).  Package-consumer builds reach the `define`
+		# branch via the reachability seed at
+		# `driftc.py::compile_to_llvm_ir` that adds the helper to the
+		# reachable set whenever ArcAsInterface is in scope.
 		#
 		# Attach !dbg when the enclosing function has debug info —
 		# the LLVM verifier rejects "inlinable function call in a

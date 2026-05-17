@@ -11586,6 +11586,21 @@ def main(argv: list[str] | None = None) -> int:
 		# that references `impl I for T` methods — the impl fns have no
 		# MIR call instruction, so BFS from the caller never reaches
 		# them.  Seed them here so the vtable symbols resolve at link.
+		#
+		# ArcAsInterface additionally emits a direct LLVM call to the
+		# non-generic `_arc_fat_bump_strong_via_ctrl` helper at codegen
+		# time (`llvm_codegen.py::_emit_arc_as_interface`, step 2).  That
+		# call also has no MIR `M.Call` instruction, so the helper's
+		# body is invisible to BFS too — in package-consumer mode that
+		# leaves the IR with a `declare` and no `define`, producing
+		# `undefined reference` at link time.  Seed the bump helper
+		# below, mirroring the existing drop-helper seed inside
+		# `_synthesize_fat_arc_destructor_wrappers`.  The seed scan
+		# runs AFTER impl-method seeding so a newly-seeded impl method
+		# whose body itself contains `M.ArcAsInterface` is honored too
+		# (the impl BFS may pull in additional functions; the "any
+		# ArcAsInterface in the final reachable set" question can only
+		# be answered after that BFS completes).
 		_iface_value_tys: set[int] = set()
 		for _fid in list(_reachable):
 			_fn = src_mir.get(_fid)
@@ -11614,6 +11629,79 @@ def main(argv: list[str] | None = None) -> int:
 							if _callee in src_mir and _callee not in _reachable:
 								_reachable.add(_callee)
 								_bfs_queue.append(_callee)
+		# Now rescan the (post-impl-seeding) reachable set for any
+		# `M.ArcAsInterface`.  Doing the rescan here -- not in the
+		# original scan above -- closes the gap where a newly seeded
+		# impl method's body itself contains an ArcAsInterface op: that
+		# op would have been invisible to the pre-impl-seeding scan and
+		# the bump-helper seed would have skipped, regressing to the
+		# original `declare`-only / `undefined reference` shape.
+		_needs_fat_bump_helper = False
+		for _fid in _reachable:
+			_fn = src_mir.get(_fid)
+			if _fn is None:
+				continue
+			for _blk in _fn.blocks.values():
+				for _instr in _blk.instructions:
+					if isinstance(_instr, M.ArcAsInterface):
+						_needs_fat_bump_helper = True
+						break
+				if _needs_fat_bump_helper:
+					break
+			if _needs_fat_bump_helper:
+				break
+		if _needs_fat_bump_helper:
+			# Look up the non-generic ctrl-bump helper.  Same shape as
+			# the drop-helper lookup in
+			# `_synthesize_fat_arc_destructor_wrappers`: try the local
+			# sig table first (dev / source build), fall back to the
+			# external table (package-consumer build).
+			_fat_bump_fn_id: FunctionId | None = None
+			for _fid, _sig in signatures_by_id_all.items():
+				if (
+					_fid.module == "std.core.arc"
+					and _fid.name == "_arc_fat_bump_strong_via_ctrl"
+					and not bool(getattr(_sig, "is_method", False))
+				):
+					_fat_bump_fn_id = _fid
+					break
+			if _fat_bump_fn_id is None:
+				for _fid, _sig in external_signatures_by_id.items():
+					if (
+						_fid.module == "std.core.arc"
+						and _fid.name == "_arc_fat_bump_strong_via_ctrl"
+						and not bool(getattr(_sig, "is_method", False))
+					):
+						_fat_bump_fn_id = _fid
+						break
+			if _fat_bump_fn_id is None:
+				raise AssertionError(
+					"ArcAsInterface lowering reached but stdlib helper "
+					"`std.core.arc._arc_fat_bump_strong_via_ctrl` is "
+					"missing from both local and external signature "
+					"tables — the Stage 3 fat-Arc primitive is "
+					"missing or mis-declared"
+				)
+			if _fat_bump_fn_id not in _reachable:
+				_reachable.add(_fat_bump_fn_id)
+				# BFS from the helper to pull in any transitive
+				# callees that aren't reachable through other paths.
+				# The helper's body uses mostly intrinsics
+				# (`mem.rawbuffer_from_parts`, `atomic.*`) which lower
+				# directly to LLVM ops with no MIR-level call, but
+				# walking the call graph here keeps us defensive
+				# against future helper-body changes that introduce a
+				# real `M.Call`.
+				_bfs_queue = [_fat_bump_fn_id]
+				while _bfs_queue:
+					_cur = _bfs_queue.pop()
+					_cur_fn = src_mir.get(_cur)
+					if _cur_fn is None:
+						continue
+					for _callee in _called_funcs_in_mir(_cur_fn):
+						if _callee in src_mir and _callee not in _reachable:
+							_reachable.add(_callee)
+							_bfs_queue.append(_callee)
 		# Discover and synthesize missing wrappers using the shared helper
 		# (same logic as _build_package_consumer_unit).
 		_wrapper_target_map: dict[FunctionId, FunctionId] = {}
