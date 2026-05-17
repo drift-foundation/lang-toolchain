@@ -103,6 +103,30 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 				_scan_block(arm.block)
 				if arm.result is not None:
 					_scan_expr(arm.result)
+		elif hasattr(H, "HLambda") and isinstance(expr, getattr(H, "HLambda")):
+			# Sgw 2026-05-17 #4 fix: descend into lambda params + body
+			# to compute `max_id` correctly.  Without this, lambda
+			# params' binding_ids (assigned upstream by the parser /
+			# ast_to_hir from the same per-fn counter as outer locals)
+			# are invisible here, `max_id` is stale, and the
+			# `next_id = max_id + 1` allocation downstream collides
+			# with a lambda param's binding_id when assigning to a
+			# `__tmp_borrowN` temp.  The borrow-checker then sees two
+			# bindings with the same local_id, its
+			# `_bases_by_binding[local_id]` lookup returns the
+			# WRONG-kind PlaceBase, the place-state dict lookup misses
+			# (dataclass equality fails on `kind`), and the borrow
+			# query falls back to UNINIT -- producing
+			# `cannot borrow from moved or uninitialized
+			# '__tmp_borrowN' [E-AUTO-e57d22a5]` at the literal-borrow
+			# site whenever a `callbackN`-with-N>=1 follows.
+			for p in expr.params:
+				if getattr(p, "binding_id", None) is not None:
+					max_id = max(max_id, int(p.binding_id))
+			if getattr(expr, "body_expr", None) is not None:
+				_scan_expr(expr.body_expr)
+			if getattr(expr, "body_block", None) is not None:
+				_scan_block(expr.body_block)
 
 	def _scan_block(b: H.HBlock) -> None:
 		nonlocal max_id

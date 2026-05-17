@@ -1,5 +1,147 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: `&"literal"` borrow + `callbackN(|...|=>{...})` in same fn body crashed borrow-check with `cannot borrow from moved or uninitialized '__tmp_borrowN'` -- HLambda body invisible to `_assign_missing_binding_ids`; lambda params + outer fn locals collided on binding_id)
+- **Compiler fix.**  Release 0.31.101, ABI unchanged at 14.
+  Fixes app-team `compiler-findings.md` #4: 14-line single-file
+  deterministic repro (`/tmp/sgw-repro4/REPRO.drift`) fails 100%
+  on 0.31.100 with:
+
+      <source>:30:5: error: cannot borrow from moved or
+        uninitialized '__tmp_borrow1' [E-AUTO-e57d22a5]
+
+  Trigger recipe (per 12-row bisect table in
+  `/home/sl/src/pushcoin/work/singular-gateway/compiler-findings-reply-2.md`):
+    1. `&"literal"` into a method/function call (anonymous
+       `__tmp_borrowN` temp materialization).
+    2. `core.callbackN(|...|=>{...})` with N>=1 later in the
+       same function body.
+
+  Both must be present, in that source order.  `callback0` is
+  exempt (no params).  Bound-named-local borrow is exempt
+  (no anonymous temp).  Order matters: closure-then-borrow is
+  fine.
+
+  **Root cause** -- shared binding_id collision between
+  lambda params and stage1-synthesized borrow temps:
+
+   - `BorrowMaterializeRewriter` (`stage1/borrow_materialize.py`)
+     rewrites `&(rvalue)` into `val __tmp_borrowN: T = <rvalue>;
+     &__tmp_borrowN`.  The synthesized `HLet` is constructed
+     with `binding_id=None`; a later pass assigns one.
+   - That pass is `_assign_missing_binding_ids` in
+     `stage1/normalize.py`.  It scans the HIR for the maximum
+     existing `binding_id`, then allocates the next from there.
+   - The scan (`_scan_expr` recursion) had branches for nearly
+     every HExpr kind -- but **none for `HLambda`**.  When a
+     lambda was encountered, the recursion returned without
+     descending into its params or body.
+   - Lambda params get their `binding_id`s assigned upstream
+     (parser / ast_to_hir) from the SAME per-fn counter that
+     outer-fn locals use.  Since `_assign_missing_binding_ids`'s
+     scan missed them, `max_id` was stale (smaller than the
+     highest binding_id actually in use).
+   - Result: `next_id = max_id + 1` collided with a lambda
+     param's binding_id.  In the V1 repro, both the lambda
+     param `i` AND the synthesized `__tmp_borrow1` ended up
+     with `local_id=4`.
+
+  **Downstream symptom chain:**
+
+   - Borrow-checker's `_bases_by_binding` is built as
+     `{pb.local_id: pb for pb in self.fn_types.keys()}` --
+     last-wins on duplicate keys.  The param's `PlaceBase`
+     (kind=PARAM) won over the local's (kind=LOCAL).
+   - The borrow site's `place_from_expr` produced a query
+     `PlaceBase(kind=PARAM, local_id=4, name='__tmp_borrow1')`
+     -- WRONG kind (PARAM, inherited from the colliding
+     binding) but RIGHT name.
+   - The place-state dict had the entry stored under
+     `PlaceBase(kind=LOCAL, local_id=4, name='__tmp_borrow1')`
+     (kind=LOCAL, from the HLet store).
+   - Dataclass equality fails on `kind` mismatch -> dict lookup
+     misses -> `_state_for` falls back to `PlaceState.UNINIT`.
+   - `_borrow_place` sees UNINIT -> emits
+     E-AUTO-e57d22a5 against the literal-borrow site.
+
+  Bisect axes explain naturally:
+   - `callback0` exempt: 0 params -> no lambda binding_ids
+     allocated -> no collision possible.
+   - `&named_local` exempt: no `__tmp_borrowN` synthesis ->
+     no `binding_id=None` HLet -> no collision target.
+   - Closure-then-borrow exempt: scan happens before
+     allocation; if the literal's HLet is allocated FIRST,
+     `max_id` already accounts for it before reaching the
+     lambda's pre-existing binding_id.
+   - `callbackN(N>=1)` triggers: any N>=1 means at least one
+     lambda param consumes a binding_id from the shared
+     counter, increasing the gap that the broken scan misses.
+   - Captures don't matter, throw mode doesn't matter, param
+     type doesn't matter: all just affect what's inside the
+     lambda body / signature, but the SCAN missing the
+     params is the same regardless.
+
+  **Fix** (single-file, ~25 LOC including the comment block):
+  add an `HLambda` branch to `_scan_expr` in
+  `stage1/normalize.py::_assign_missing_binding_ids`.  Descend
+  into the lambda's params (update `max_id` from each param's
+  `binding_id`) and into the body (`body_expr` for
+  expression-form lambdas, `body_block` for block-form).
+  After the fix, `max_id` correctly accounts for lambda
+  params and `next_id` allocation never collides.
+
+  No changes to:
+   - `BorrowMaterializeRewriter` (still emits `binding_id=None`;
+     the assignment pass now correctly skips reserved ids).
+   - Borrow checker (last-wins
+     `_bases_by_binding` is now correct because there ARE no
+     duplicate binding_ids in the function-wide pool).
+   - HIR shape, MIR shape, codegen.  Pure stage1 fix.
+
+  **Refactor-triggers scan.**  Scanned
+  `docs/refactor_triggers.md`; no match.  Considered whether
+  "scan-pass missing a node kind" is a recurring pattern worth
+  filing as a trigger.  Decision: NOT yet.  This is the first
+  instance I'm aware of where the visitor-pattern gap caused
+  a real bug; one occurrence below the threshold for filing a
+  generic "exhaustive-visitor coverage check" trigger.  If a
+  second occurrence shows up, the pattern would justify a
+  trigger entry for "audit all stage1 visitors for HLambda /
+  HTryExpr / HUnsafeExpr / HMatchExpr coverage."
+
+  **Regression test.**
+  `lang/tests/driver/test_tmp_borrow_callback_collision.py`
+  -- 7 carriers using `subprocess.run` + binary execution:
+
+   - **V1**: THE BUG (literal borrow + callback1 after).
+     Pre-fix E-AUTO-e57d22a5; post-fix compiles + runs.
+   - **V2**: let-bind workaround (app team's pattern).
+     Positive control; always worked.
+   - **V3**: callback0 -- exempt (no thunk args).
+     Positive control.
+   - **V4**: swap order (closure BEFORE borrow).
+     Positive control; pins that order-dependent allocation
+     stays correct.
+   - **V5**: `&named_local` -- exempt (no anonymous temp).
+     Positive control.
+   - **V6**: callback2 -- also triggers (any N>=1).
+     Post-fix passes; pins the fix covers all N>=1.
+   - **V7**: `callback_throw1` -- also triggers (throw mode
+     doesn't matter).  Post-fix passes.
+
+  Verified the test catches the bug by instrumenting the
+  borrow-checker mid-investigation: failure shape
+  bit-identical to the app team's report
+  (`__tmp_borrow1` UNINIT due to wrong-kind PlaceBase
+  in the lookup).
+
+  **Verification gate.**
+   - 7/7 new test_tmp_borrow_callback_collision.py.
+   - Broader callback / lambda / match suite + prior-slice
+     regressions: all green.
+   - App-team `gateway.drift` -- the 5 let-binding
+     workarounds (`val key_pool: String = "pool";` etc.) can
+     be removed; literals can be borrowed inline.
+
 ## 2026-05-17 (compiler fix: `&e.field` on typed catch binder failed with E-AUTO-69eb9f81 -- typed binders now materialize a parallel struct view that's addressable for field borrows)
 - **Compiler fix.**  Release 0.31.100, ABI unchanged at 14
   (codegen-internals only: new lowering path + storage
