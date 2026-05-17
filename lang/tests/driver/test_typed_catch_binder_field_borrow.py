@@ -38,7 +38,7 @@ binders:
     falls through to `td.kind is not TypeKind.STRUCT` check,
     emits `field access requires a struct value`.
 
-**Fix** (landed in 0.31.99 / option-(b) materialized model):
+**Fix** (landed in 0.31.100 / option-(b) materialized model):
 
 Two-part fix per K-review direction (option b, materialize a
 parallel native struct local):

@@ -5496,11 +5496,18 @@ class HIRToMIR:
 		# Decode each declared field from the envelope.  Scalar fields
 		# go through the same `_typed_params_field_<scalar>` helpers
 		# the legacy per-access path uses.  Non-scalar fields are
-		# zero-initialized; the checker rejects user-code projection
-		# of non-scalar typed-catch fields with
-		# E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE, so these slots are
-		# unreachable from user code (we zero them only so the
-		# struct value is fully formed).
+		# UNREACHABLE here: the type-checker rejects any borrow on a
+		# typed catch binder whose schema contains a non-scalar field
+		# with `E_TYPED_CATCH_BORROW_MIXED_SCHEMA` BEFORE
+		# materialization runs.  Reaching the non-scalar branch below
+		# would mean a checker-rule regression -- we hard-assert
+		# rather than silently zero-init, because zero-initializing a
+		# non-scalar slot and then registering the whole struct for
+		# scope drop would run that field type's destructor on
+		# garbage memory at scope exit (silent UB).  See K-review
+		# 2026-05-17 HIGH: an earlier draft of this helper used
+		# `ZeroValue` here, and the resulting drop-of-garbage was
+		# exactly the soundness hole the assertion now prevents.
 		int_ty = self._type_table.ensure_int()
 		uint_ty = self._type_table.ensure_uint()
 		bool_ty = self._type_table.ensure_bool()
