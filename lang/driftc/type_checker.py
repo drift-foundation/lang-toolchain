@@ -9175,6 +9175,81 @@ class TypeChecker:
 								raise AssertionError("std.core:ErrorContextView not found in type table (compiler invariant)")
 							cur = ecv_ty
 							continue
+						# Typed catch binder field projection -- parallel to
+						# the HField fast-path at lines ~9020-9100.  Reached
+						# when the base is a typed catch binder and we're
+						# projecting a declared schema field through
+						# HPlaceExpr (e.g. inside a borrow `&e.tag`).
+						# Without this branch, the borrow case fell through
+						# to the `not STRUCT` check below and emitted
+						# `E-AUTO-69eb9f81` (sgw 2026-05-17 #2).
+						#
+						# Annotates the OUTER HPlaceExpr with
+						# `typed_proj_event_fqn` so HIR->MIR lowering
+						# routes via the materialized typed-catch-binder
+						# struct local rather than the legacy per-access
+						# JSON decode.  Single-projection only (scalar
+						# field at the leaf); chained projections through
+						# a scalar field would have failed the
+						# supported-scalars check anyway.
+						if td.kind is TypeKind.ERROR:
+							base_bid = expr.base.binding_id if isinstance(expr.base, H.HVar) else None
+							if (
+								base_bid is not None
+								and base_bid in self._typed_catch_binders
+								and len(expr.projections) == 1
+							):
+								event_fqn = self._typed_catch_binders[base_bid]
+								tcb_struct_id = None
+								if ":" in event_fqn:
+									tcb_mod_id, tcb_type_name = event_fqn.split(":", 1)
+									tcb_struct_id = self.type_table.get_nominal(
+										kind=TypeKind.STRUCT,
+										module_id=tcb_mod_id,
+										name=tcb_type_name,
+									)
+								if tcb_struct_id is not None:
+									tcb_field_info = _resolve_struct_field_type(tcb_struct_id, proj.name)
+									if tcb_field_info is not None:
+										_, tcb_field_ty = tcb_field_info
+										tcb_supported = (
+											self._int,
+											self._uint,
+											self._bool,
+											self._float,
+											self._string,
+										)
+										if tcb_field_ty in tcb_supported:
+											# Annotate the HPlaceExpr so
+											# HBorrow lowering (and HField
+											# lowering when reached through
+											# this path) knows to route
+											# through the binder's typed
+											# storage local.
+											expr.typed_proj_event_fqn = event_fqn
+											expr.typed_proj_field_name = proj.name
+											cur = tcb_field_ty
+											continue
+										# Same diagnostic as the HField
+										# path -- non-scalar typed-catch
+										# projections are deferred.
+										tcb_pretty = self._pretty_type_name(tcb_field_ty, current_module=current_module_name)
+										diagnostics.append(
+											_tc_diag(
+												message=(
+													f"typed catch projection for field '{proj.name}' "
+													f"of `pub error` type '{event_fqn}' is unsupported "
+													f"in this release (field type '{tcb_pretty}' is not "
+													f"one of the supported scalars: Int / Uint / Bool / "
+													f"Float / String).  Collection / nested-error / "
+													f"struct field projection is a follow-up"
+												),
+												severity="error",
+												code="E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE",
+												span=getattr(expr, "loc", Span()),
+											)
+										)
+										return record_expr(expr, self._unknown)
 						if td.kind is not TypeKind.STRUCT:
 							diagnostics.append(_tc_diag(message="field access requires a struct value", severity="error", span=getattr(expr, "loc", Span())))
 							return record_expr(expr, self._unknown)

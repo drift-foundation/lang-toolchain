@@ -1,5 +1,170 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: `&e.field` on typed catch binder failed with E-AUTO-69eb9f81 -- typed binders now materialize a parallel struct view that's addressable for field borrows)
+- **Compiler fix.**  Release 0.31.100, ABI unchanged at 14
+  (codegen-internals only: new lowering path + storage
+  materialization, no new MIR opcodes, no boundary contract
+  change).
+
+  Fixes app-team `compiler-findings.md` #2 (sgw-stub
+  2026-05-17): borrowing a field of a typed catch binder
+  (`&e.tag` where `e` is bound by `catch <pub_error>(e)`)
+  failed compile-time with:
+
+      error: field access requires a struct value [E-AUTO-69eb9f81]
+      error: no matching overload for function 'X' with args [<type id>]
+
+  Pre-fix: by-value `e.tag` worked (HField fast-path);
+  `&e.tag` failed (HPlaceExpr borrow path).  Same-package and
+  cross-package both failed identically -- the real axis was
+  **by-value vs borrow**, not package boundary (app-team's
+  bisect mistakenly attributed it to package boundary because
+  their working code happened to use by-value same-pkg and
+  borrow cross-pkg).
+
+  **Root cause.**  Type-checker had two field-projection paths
+  on catch binders that diverged:
+
+   - **HField direct visit** (`type_checker.py:~9020-9100`):
+     handled typed-catch-binder field projection.  Detected
+     `td.kind == TypeKind.ERROR`, looked up the binder's
+     `event_fqn` in `self._typed_catch_binders`, fetched the
+     parallel Path-A struct via `get_nominal(kind=STRUCT,
+     module_id=..., name=...)`, resolved field type,
+     annotated the expression with `typed_proj_event_fqn` for
+     HIR->MIR lowering, routed via per-access JSON-decode
+     helper.
+
+   - **HPlaceExpr projection-chain walker**
+     (`type_checker.py:~9141-9180`): only had special cases
+     for `params` and `context` projections on Error-kind
+     types -- NO general typed-catch-binder field-projection
+     case.  `&e.tag` parses as `HBorrow(HPlaceExpr(base=HVar,
+     projections=[HPlaceField(tag)]))`; HBorrow's
+     `type_expr(expr.subject)` walks the inner HPlaceExpr,
+     hits this gap, falls through to `td.kind is not
+     TypeKind.STRUCT` check, emits E-AUTO-69eb9f81.
+
+  **Fix design choice** (K-review 2026-05-17, picked
+  option (b) over (a) auto-tmp and (c) reject):
+   "Materialize a parallel native struct local for typed
+   catch binders, or at least design toward that model even
+   if the first implementation materializes lazily.  A typed
+   catch binder represents an error event value with fields.
+   If `e.tag` works, then `&e.tag` should be a borrow of
+   that field on an addressable typed value, not a borrow of
+   a temporary copy."
+
+  Rationale:
+   - One coherent value model; same storage backs value
+     reads and borrows.
+   - Avoids hidden semantic drift of option (a) (the
+     "borrow projection means copy first" rule special-cased
+     for typed catch binders).
+   - Scales to future mut/ref semantics for typed binders.
+   - Matches user expectation that `catch E(e)` behaves like
+     a typed value `e: E` inside the arm.
+   - Reduces duplicated special cases between HField fast-path
+     and HPlaceExpr path; both converge on "typed catch binder
+     has a materialized typed view."
+
+  **Fix (two-part).**
+
+  1. **Type-checker side** (`type_checker.py:~9170+`): add
+     typed-catch-binder recognition to the HPlaceExpr walker.
+     When base is a HVar with binding_id in
+     `self._typed_catch_binders` AND projection is a declared
+     scalar field on the parallel struct schema, annotate the
+     HPlaceExpr with `typed_proj_event_fqn` and
+     `typed_proj_field_name` (parallel to the HField fast-path's
+     existing annotation) and resolve the field type.
+     Non-scalar projections rejected with
+     `E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE` (same diagnostic as
+     HField path).  Single-projection only (scalar leaf);
+     chained projections fall through.
+
+  2. **HIR->MIR side** (`hir_to_mir.py`):
+      - New state: `self._typed_catch_binder_storage:
+        dict[int, tuple[str, TypeId]]` keyed by binding_id,
+        value is `(storage_local_name, struct_type_id)`.
+      - New helper `_get_or_materialize_typed_catch_storage`
+        (~line 5427+) that allocates a parallel struct local
+        of the `pub error`'s Path-A co-registered struct type
+        on first projection.  Decodes ALL declared scalar
+        fields from the envelope JSON once
+        (`_typed_params_field_<scalar>` helpers, same chain
+        the legacy per-access path uses), constructs the
+        struct, stores into the local.  Registers for normal
+        scope cleanup at catch-arm exit.  Memoized per
+        binding_id -- subsequent projections on the same
+        binder reuse the same storage.
+      - `_lower_addr_of_place` (~line 10973+): when the place
+        base is Error AND the HPlaceExpr is annotated with
+        `typed_proj_event_fqn`, materialize the storage
+        (lazy), then emit `AddrOfField` on the storage local
+        instead of asserting "field place base is not a
+        struct".
+
+  **Cleanup discipline.**  Storage struct is registered with
+  `_register_drop_local(storage_local, struct_id)` at
+  materialization time.  Lifetime matches the catch-arm
+  scope.  Storage's String fields carry their OWN refcount +1s
+  from the decode helpers; the envelope's params JSON drops
+  independently.  No double-drop (verified by clean compile +
+  runtime on V4 repeated-borrow carrier).
+
+  **What this fix did NOT do.**
+   - HField direct-read path (`e.tag`) still routes via the
+     legacy per-access JSON-decode helper for now.  Future
+     unification onto the materialized storage model
+     (single decode at first projection, struct-field reads
+     for subsequent reads of any kind) is a follow-up slice.
+   - §B (`pub type X = inner.Y` re-export of a `pub error`
+     drops the field schema) is a separate bug;  not
+     covered.  Tracked separately.
+   - No new MIR opcodes.  No ABI changes.  Vtable layout,
+     fat Arc layout, dispatcher signatures all unchanged.
+
+  **Refactor-triggers scan.**  Per
+  `docs/refactor_triggers.md` process for LANGUAGE_BUG fixes:
+  scanned the five registered triggers (borrow-checker walker
+  consolidation; DMIR discriminator promotion; DMIR collision
+  check; drop-aware mem.write; borrow-checker span tracking).
+  No match.  Not filing a new trigger -- the duplication
+  between HField fast-path and HPlaceExpr walker is real and
+  worth converging in a follow-up, but the cost is small and
+  the current shape lets both paths land independently.
+
+  **Regression test.**
+  `lang/tests/driver/test_typed_catch_binder_field_borrow.py`
+  -- 4 carriers using `subprocess.run` (some compile-only,
+  some compile+run):
+
+   - **V1**: by-value `e.tag` read -- positive control,
+     must keep working through the HField fast-path.
+   - **V2**: same-package `&e.tag` -- THE BUG.  Pre-fix
+     `E-AUTO-69eb9f81`; post-fix compiles cleanly.
+   - **V3**: cross-package `&e.tag` -- app-team's exact
+     repro shape from `/tmp/sgw-repro2/`, two-package
+     setup (producer signed `.dmp` + consumer).
+   - **V4**: repeated `&e.tag` + `&e.message` -- pins the
+     storage memoization (single decode reused across
+     multiple borrows on the same binder) AND correct
+     field index for the second field.  Compile + run.
+
+  Verified the test catches the bug by checking the pre-fix
+  shape: V2/V3 fired `E-AUTO-69eb9f81` at the `&e.tag` site
+  exactly.
+
+  **Verification gate.**
+   - 4/4 new test_typed_catch_binder_field_borrow.py.
+   - Broader pub_error / exception / throws / typed_catch
+     suite + prior-slice regressions: all green.
+   - App-team `gateway.drift` "broken tracer line" should
+     now compile (app team will confirm post-fix; their
+     workaround of hardcoding `"managed-error"` literal can
+     be removed).
+
 ## 2026-05-17 (compiler fix: `Arc<Interface>.get().method()` SIGSEGV -- interface thunk emitted mis-typed inner call when impl ABI differed from interface ABI; thunk now carries two can-throw bits + wraps raw impl returns into `Ok(...)` for the adapter case)
 - **Compiler fix.**  Release 0.31.98, ABI unchanged at 14
   (codegen-internals only; vtable layout, fat Arc layout, and

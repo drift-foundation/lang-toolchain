@@ -378,6 +378,16 @@ class HIRToMIR:
 		self._try_stack: list["_TryCtx"] = []
 		# Error value bound by the innermost catch block (if any) for rethrow.
 		self._current_catch_error: M.ValueId | None = None
+		# Lazily-materialized typed-catch-binder storage.  Keyed by the
+		# binder's binding_id (globally unique per fn); value is
+		# (storage_local_name, struct_type_id).  Populated on first
+		# field projection via `_get_or_materialize_typed_catch_storage`;
+		# enables `&e.field` (HBorrow path) by giving the field a real
+		# struct local to take the address of.  HField direct-read path
+		# (existing legacy per-access JSON-decode helper) is unchanged
+		# for now; future unification into the storage model is a
+		# follow-up.
+		self._typed_catch_binder_storage: dict[int, tuple[str, "TypeId"]] = {}
 		# Optional exception environment: maps exception FQN -> event code.
 		self._exc_env = exc_env
 		# Track best-effort local types (TypeId) to tag typed MIR nodes.
@@ -5412,6 +5422,157 @@ class HIRToMIR:
 		))
 		self._local_types[result] = field_ty
 		return result
+
+	def _get_or_materialize_typed_catch_storage(
+		self,
+		*,
+		binding_id: int,
+		binder_local: str,
+		event_fqn: str,
+	) -> tuple[str, "TypeId"]:
+		"""Return (storage_local_name, struct_type_id) for a typed
+		catch binder, materializing the storage local lazily on
+		first use.
+
+		The storage is a parallel struct local of the `pub error`'s
+		Path-A co-registered struct type.  Each declared scalar
+		field is decoded once (via `_typed_params_field_<scalar>`
+		helpers) and stored in the corresponding struct slot at
+		materialization time.  Subsequent field reads / borrows
+		project from the storage rather than re-decoding from the
+		envelope JSON.
+
+		Allocation strategy: lazy on first projection through this
+		helper.  The storage local is registered for normal scope
+		cleanup at materialization time, so its lifetime matches
+		the catch arm scope -- no envelope-owned double-drop (the
+		envelope and the storage own independent +1s of each
+		String field; both drop independently).
+
+		Returns the existing entry if already materialized for this
+		binding_id (binding_ids are globally unique per fn).
+		"""
+		existing = self._typed_catch_binder_storage.get(binding_id)
+		if existing is not None:
+			return existing
+
+		if ":" not in event_fqn:
+			raise AssertionError(
+				f"typed catch binder event_fqn {event_fqn!r} is not in "
+				f"canonical `module:Name` shape (checker invariant violation)"
+			)
+		mod_id, type_name = event_fqn.split(":", 1)
+		struct_id = self._type_table.get_nominal(
+			kind=TypeKind.STRUCT,
+			module_id=mod_id,
+			name=type_name,
+		)
+		if struct_id is None:
+			raise AssertionError(
+				f"typed catch binder {event_fqn!r}: Path-A co-registered "
+				f"struct missing from type table (Path-A invariant violation)"
+			)
+
+		struct_inst = self._type_table.get_struct_instance(struct_id)
+		if struct_inst is None or not struct_inst.field_types:
+			raise AssertionError(
+				f"typed catch binder {event_fqn!r}: struct instance has no "
+				f"field types"
+			)
+		field_types = list(struct_inst.field_types)
+		field_names = list(struct_inst.field_names or [])
+		if len(field_names) != len(field_types):
+			raise AssertionError(
+				f"typed catch binder {event_fqn!r}: field-name/type arity "
+				f"mismatch ({len(field_names)} vs {len(field_types)})"
+			)
+
+		# Allocate the storage local typed as the struct so AddrOfField
+		# projections downstream see a STRUCT base.
+		storage_local = f"__typed_catch_view_{binder_local}_{self.b.new_temp()}"
+		self.b.ensure_local(storage_local)
+		self._local_types[storage_local] = struct_id
+
+		# Decode each declared field from the envelope.  Scalar fields
+		# go through the same `_typed_params_field_<scalar>` helpers
+		# the legacy per-access path uses.  Non-scalar fields are
+		# zero-initialized; the checker rejects user-code projection
+		# of non-scalar typed-catch fields with
+		# E_TYPED_CATCH_FIELD_UNSUPPORTED_TYPE, so these slots are
+		# unreachable from user code (we zero them only so the
+		# struct value is fully formed).
+		int_ty = self._type_table.ensure_int()
+		uint_ty = self._type_table.ensure_uint()
+		bool_ty = self._type_table.ensure_bool()
+		float_ty = self._type_table.ensure_float()
+		string_ty = self._type_table.ensure_string()
+		scalar_to_helper = {
+			int_ty: "_typed_params_field_int",
+			uint_ty: "_typed_params_field_uint",
+			bool_ty: "_typed_params_field_bool",
+			float_ty: "_typed_params_field_float",
+			string_ty: "_typed_params_field_string",
+		}
+
+		# Load envelope from binder local; extract params_json once
+		# for the whole field-decode batch.
+		envelope_val = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=envelope_val, local=binder_local))
+		self._local_types[envelope_val] = self._type_table.ensure_error()
+		json_text = self.b.new_temp()
+		self.b.emit(M.ExcGetParamsJson(dest=json_text, error=envelope_val))
+		self._local_types[json_text] = self._string_type
+		json_local = f"__typed_catch_view_json_{self.b.new_temp()}"
+		self.b.ensure_local(json_local)
+		self.b.emit(M.StoreLocal(local=json_local, value=json_text))
+		json_addr = self.b.new_temp()
+		self.b.emit(M.AddrOfLocal(dest=json_addr, local=json_local, is_mut=False))
+
+		field_values: list[M.ValueId] = []
+		for f_name, f_ty in zip(field_names, field_types):
+			helper_name = scalar_to_helper.get(f_ty)
+			if helper_name is None:
+				zero_val = self.b.new_temp()
+				self.b.emit(M.ZeroValue(dest=zero_val, ty=f_ty))
+				self._local_types[zero_val] = f_ty
+				field_values.append(zero_val)
+				continue
+			helper_fn_id = self._find_free_fn_id("std.core", helper_name)
+			if helper_fn_id is None:
+				raise AssertionError(
+					f"std.core function {helper_name!r} not loaded -- typed "
+					f"catch projection requires std.core in the build"
+				)
+			key_text = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=key_text, value=f_name))
+			self._local_types[key_text] = self._string_type
+			key_local = f"__typed_catch_view_key_{self.b.new_temp()}"
+			self.b.ensure_local(key_local)
+			self.b.emit(M.StoreLocal(local=key_local, value=key_text))
+			key_addr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=key_addr, local=key_local, is_mut=False))
+			result = self.b.new_temp()
+			self.b.emit(M.Call(
+				dest=result,
+				fn_id=helper_fn_id,
+				args=[json_addr, key_addr],
+				can_throw=False,
+			))
+			self._local_types[result] = f_ty
+			field_values.append(result)
+
+		struct_val = self.b.new_temp()
+		self.b.emit(M.ConstructStruct(dest=struct_val, struct_ty=struct_id, args=field_values))
+		self._local_types[struct_val] = struct_id
+		self.b.emit(M.StoreLocal(local=storage_local, value=struct_val))
+		# Register for normal scope cleanup at catch-arm exit.  Fields
+		# are independently owned (Strings carry their own +1 from the
+		# decode helper); dropping storage releases them without
+		# touching envelope-owned copies.
+		self._register_drop_local(storage_local, struct_id)
+
+		self._typed_catch_binder_storage[binding_id] = (storage_local, struct_id)
+		return (storage_local, struct_id)
 
 
 	def _lower_synthesized_error_params_view(self, recv: H.HExpr, view_ty: TypeId) -> M.ValueId:
@@ -10970,6 +11131,59 @@ class HIRToMIR:
 					view_addr = self.b.new_temp()
 					self.b.emit(M.AddrOfLocal(dest=view_addr, local=view_local, is_mut=False))
 					return view_addr, ecv_ty
+				# Typed catch binder field borrow (`&e.field`).  When
+				# the type-checker recognized the place as a typed
+				# catch binder projection (lines ~9180+ in
+				# type_checker.py annotate `expr.typed_proj_event_fqn`
+				# + `expr.typed_proj_field_name`), the base type is
+				# Error but the field is a declared schema field on
+				# the parallel Path-A struct.  Materialize a struct
+				# storage local for the binder (lazy, once per
+				# binding_id) and emit `AddrOfField` on the storage
+				# local instead of asserting "not a struct".
+				#
+				# This is the lowering side of the option-(b) fix for
+				# the sgw 2026-05-17 #2 carrier: typed catch binders
+				# now have an addressable native struct view inside
+				# the catch arm, supporting `&e.field` borrow with
+				# the same storage model as `e.field` by-value reads
+				# would use post-unification.  The HField direct-read
+				# path still uses the legacy per-access JSON decode
+				# helper (unchanged); the two paths converge in a
+				# follow-up slice.
+				if (
+					base_def.kind is TypeKind.ERROR
+					and getattr(expr, "typed_proj_event_fqn", None) is not None
+					and getattr(expr, "typed_proj_field_name", None) == proj.name
+					and isinstance(expr.base, H.HVar)
+					and expr.base.binding_id is not None
+				):
+					storage_local, storage_struct_id = self._get_or_materialize_typed_catch_storage(
+						binding_id=int(expr.base.binding_id),
+						binder_local=base_name,
+						event_fqn=expr.typed_proj_event_fqn,
+					)
+					storage_info = self._type_table.struct_field(storage_struct_id, proj.name)
+					if storage_info is None:
+						raise AssertionError(
+							f"typed catch binder storage struct lacks declared "
+							f"field {proj.name!r} (Path-A invariant violation)"
+						)
+					storage_field_idx, storage_field_ty = storage_info
+					storage_addr = self.b.new_temp()
+					self.b.emit(M.AddrOfLocal(dest=storage_addr, local=storage_local, is_mut=False))
+					dest = self.b.new_temp()
+					self.b.emit(
+						M.AddrOfField(
+							dest=dest,
+							base_ptr=storage_addr,
+							struct_ty=storage_struct_id,
+							field_index=storage_field_idx,
+							field_ty=storage_field_ty,
+							is_mut=is_mut,
+						)
+					)
+					return dest, storage_field_ty
 				if base_def.kind is not TypeKind.STRUCT:
 					fn_name = getattr(self.b.func, "name", None)
 					raise AssertionError(
