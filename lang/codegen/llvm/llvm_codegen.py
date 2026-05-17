@@ -6538,8 +6538,36 @@ class _FuncBuilder:
 		fn_id: FunctionId,
 		param_types: list[TypeId],
 		user_ret_type: TypeId,
-		can_throw: bool,
+		iface_can_throw: bool,
 	) -> None:
+		"""Emit the per-interface-method dispatcher thunk that the
+		vtable slot points at.
+
+		The thunk has TWO distinct ABI surfaces:
+
+		  * **Outer** -- the thunk's own signature.  Matches the
+		    *interface* method's ABI (the vtable dispatcher reads
+		    this).  `iface_can_throw` drives it.
+
+		  * **Inner** -- the `call` to the impl symbol `fn_id`.  Must
+		    match the *impl* method's actual ABI.  Looked up from
+		    `self.fn_infos[fn_id].signature.declared_can_throw`.
+
+		When the two bits agree, the thunk is a one-line pass-through.
+		When they disagree (a `nothrow` impl satisfying a can-throw
+		interface contract -- a permitted subtype relationship), the
+		thunk wraps the impl's raw return into an `Ok(...)` FnResult
+		to bridge to the interface's ABI.
+
+		Previously (pre-2026-05-17) only one bit was carried and used
+		for both surfaces, producing a mis-typed inner call when the
+		bits disagreed.  At runtime the caller read the impl's plain
+		return as a `FnResult` struct -- garbage in is_err / err_ptr
+		slots -- and dereferenced the garbage err pointer.  SIGSEGV
+		on every dispatch through `Arc<Interface>.get().method()` in
+		the sgw-stub repro; pinned by
+		`test_arc_interface_get_dispatch_segfault.py::V3-V6`.
+		"""
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: interface thunks require a TypeTable")
 		if not param_types:
@@ -6548,15 +6576,55 @@ class _FuncBuilder:
 		self_def = self.type_table.get(self_ty)
 		if self_def.kind is not TypeKind.REF:
 			raise NotImplementedError("interface method self param must be &Self or &mut Self in v1")
-		ret_tid = user_ret_type
-		if can_throw:
-			err_tid = self.type_table.ensure_error()
-			ret_tid = self.type_table.ensure_fnresult(user_ret_type, err_tid)
-		if not can_throw and self.type_table.is_void(ret_tid):
-			ret_llty = "void"
+
+		# Resolve the impl's actual can-throw bit.  Default to
+		# `iface_can_throw` if `fn_infos` doesn't have an entry --
+		# matches the legacy single-bit behavior so we never silently
+		# emit a mis-typed call on an unknown-shape impl.
+		impl_info = self.fn_infos.get(fn_id)
+		impl_can_throw = (
+			bool(impl_info.signature.declared_can_throw)
+			if impl_info is not None and impl_info.signature is not None
+			else iface_can_throw
+		)
+
+		# !iface_can_throw && impl_can_throw means the impl is
+		# LESS strict than the interface contract -- a checker bug
+		# that should have been rejected upstream.  Refuse to emit
+		# unsafe IR.
+		if not iface_can_throw and impl_can_throw:
+			raise AssertionError(
+				f"interface thunk emission: impl `{function_symbol(fn_id)}` "
+				f"is declared can-throw but its interface method is "
+				f"declared nothrow.  An impl MUST be at least as "
+				f"strict as the interface contract; reaching codegen "
+				f"with this shape is a checker bug.  Refusing to "
+				f"emit a thunk that would discard the impl's error "
+				f"return."
+			)
+
+		err_tid = self.type_table.ensure_error()
+
+		# Outer thunk return type -- matches interface ABI.
+		if iface_can_throw:
+			outer_ret_tid = self.type_table.ensure_fnresult(user_ret_type, err_tid)
+			outer_ret_llty = self._llvm_type_for_typeid(outer_ret_tid)
+		elif self.type_table.is_void(user_ret_type):
+			outer_ret_llty = "void"
 		else:
-			ret_llty = self._llvm_type_for_typeid(ret_tid)
-		emit_ret_llty = self._llty(ret_llty)
+			outer_ret_llty = self._llvm_type_for_typeid(user_ret_type)
+		emit_outer_ret_llty = self._llty(outer_ret_llty)
+
+		# Inner call return type -- matches impl ABI.
+		if impl_can_throw:
+			inner_ret_tid = self.type_table.ensure_fnresult(user_ret_type, err_tid)
+			inner_ret_llty = self._llvm_type_for_typeid(inner_ret_tid)
+		elif self.type_table.is_void(user_ret_type):
+			inner_ret_llty = "void"
+		else:
+			inner_ret_llty = self._llvm_type_for_typeid(user_ret_type)
+		emit_inner_ret_llty = self._llty(inner_ret_llty)
+
 		arg_defs = ["ptr %data"]
 		call_args: list[str] = []
 		for idx, ty_id in enumerate(param_types[1:]):
@@ -6565,18 +6633,49 @@ class _FuncBuilder:
 			arg_defs.append(f"{llty} {arg_name}")
 			call_args.append(f"{llty} {arg_name}")
 		lines: list[str] = []
-		lines.append(f"define internal {emit_ret_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
+		lines.append(f"define internal {emit_outer_ret_llty} @{thunk_name}({', '.join(arg_defs)}) {{")
 		lines.append("__bb_entry:")
 		self_llty = self._llty(self._llvm_type_for_typeid(self_ty))
 		self_arg = "%data"
 		call_args.insert(0, f"{self_llty} {self_arg}")
 		target_sym = function_symbol(fn_id)
-		if ret_llty == "void":
-			lines.append(f"  call {emit_ret_llty} {_llvm_fn_sym(target_sym)}({', '.join(call_args)})")
-			lines.append("  ret void")
+		target_call_sym = _llvm_fn_sym(target_sym)
+		args_str = ", ".join(call_args)
+
+		if iface_can_throw == impl_can_throw:
+			# Matched ABI: pass through unchanged.
+			if outer_ret_llty == "void":
+				lines.append(f"  call {emit_outer_ret_llty} {target_call_sym}({args_str})")
+				lines.append("  ret void")
+			else:
+				lines.append(f"  %res = call {emit_outer_ret_llty} {target_call_sym}({args_str})")
+				lines.append(f"  ret {emit_outer_ret_llty} %res")
 		else:
-			lines.append(f"  %res = call {emit_ret_llty} {_llvm_fn_sym(target_sym)}({', '.join(call_args)})")
-			lines.append(f"  ret {emit_ret_llty} %res")
+			# iface_can_throw && !impl_can_throw -- adapter case.
+			# Call impl with its plain ABI, wrap raw return in
+			# Ok(...) FnResult to bridge to the interface's ABI.
+			#
+			# Inline the insertvalue chain (mirrors
+			# `_wrap_ok_fnresult` shape).  Don't call that helper
+			# directly here: it appends to `self.lines` (the active
+			# function body), but this thunk emits into a LOCAL
+			# `lines` buffer that's flushed via
+			# `self.module.emit_func` at the end.  Mixing the two
+			# scribbles thunk IR into the wrong function.
+			if inner_ret_llty == "void":
+				# impl returns void; wrap as Ok(Void).
+				# zeroinitializer already supplies is_err=0 (i8 0
+				# at slot 0) and err_ptr=null (ptr null at slot 2);
+				# Void's ok-payload slot is an i8 placeholder that
+				# stays zero from the initializer.
+				lines.append(f"  call {emit_inner_ret_llty} {target_call_sym}({args_str})")
+				lines.append(f"  ret {emit_outer_ret_llty} zeroinitializer")
+			else:
+				lines.append(f"  %raw = call {emit_inner_ret_llty} {target_call_sym}({args_str})")
+				lines.append(f"  %ok0 = insertvalue {emit_outer_ret_llty} zeroinitializer, i8 0, 0")
+				lines.append(f"  %ok1 = insertvalue {emit_outer_ret_llty} %ok0, {emit_inner_ret_llty} %raw, 1")
+				lines.append(f"  %ok2 = insertvalue {emit_outer_ret_llty} %ok1, ptr null, 2")
+				lines.append(f"  ret {emit_outer_ret_llty} %ok2")
 		lines.append("}")
 		self.module.emit_func("\n".join(lines))
 
@@ -6645,7 +6744,7 @@ class _FuncBuilder:
 						fn_id,
 						param_types=param_types,
 						user_ret_type=user_ret_type,
-						can_throw=not bool(m.declared_nothrow),
+						iface_can_throw=not bool(m.declared_nothrow),
 					)
 					self.module.iface_thunks[thunk_key] = thunk_name
 				owner_inst_id = inst_map.get(owner_id)

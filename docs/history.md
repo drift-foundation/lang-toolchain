@@ -1,5 +1,173 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: `Arc<Interface>.get().method()` SIGSEGV -- interface thunk emitted mis-typed inner call when impl ABI differed from interface ABI; thunk now carries two can-throw bits + wraps raw impl returns into `Ok(...)` for the adapter case)
+- **Compiler fix.**  Release 0.31.98, ABI unchanged at 14
+  (codegen-internals only; vtable layout, fat Arc layout, and
+  iface dispatcher signatures unchanged).
+  Fixes the 2026-05-17 sgw-stub fourth blocker: every method
+  dispatch through `gw.get().greet()` on
+  `gw: arc.Arc<Greeter>` built via `as_interface<type Greeter>()`
+  segfaulted at first call -- the load-bearing pattern for any
+  `Arc<SingularGateway>` shape.
+
+  **Three-way discriminator from the app team's bisect**
+  (verified pre-fix on 0.31.97):
+
+  - `g.get().greet()` on concrete `arc.Arc<G>` -- works (rc=42)
+  - `g.as_interface<type Greeter>()` construction alone -- works
+  - `gw.get().greet()` on `arc.Arc<Greeter>` -- SIGSEGV
+
+  Layout, vtable, and the bump-helper reachability fix from
+  0.31.97 were all NOT implicated.  The bug was purely in the
+  interface thunk emission ABI.
+
+  **Root cause.**  `_emit_iface_method_thunk` at
+  `lang/codegen/llvm/llvm_codegen.py` (~line 6535) carried a
+  single `can_throw` bit derived from the INTERFACE method's
+  `declared_nothrow` flag (caller at line 6648:
+  `can_throw=not bool(m.declared_nothrow)`).  The same bit was
+  used for BOTH:
+    1. The thunk's outer return type / vtable-dispatcher ABI
+       (correct -- vtable consumers expect the interface ABI).
+    2. The inner `call` to the impl symbol `fn_id` (WRONG when
+       the impl's actual ABI differs from the interface's).
+
+  For the minimal repro -- interface `fn greet(self: &Self) -> Int`
+  (default can-throw) implemented by `pub fn greet(self: &G)
+  nothrow -> Int` -- the thunk emitted:
+
+      define internal %FnResult_Int_Error @__drift_iface_thunk_<h>(ptr %data) {
+        %res = call %FnResult_Int_Error @"minimal::G::Greeter::greet"(ptr %data)
+        ret %FnResult_Int_Error %res
+      }
+
+  but the impl is defined as `define i64 @"minimal::G::Greeter::greet"(ptr %self)`.
+  With opaque pointers, LLVM accepts the call IR (the caller's
+  declared signature wins at the call boundary).  At runtime the
+  impl returned `i64` in `%rax`; the call site decoded the
+  register state as `%FnResult_Int_Error = { i8 is_err, i64 ok,
+  ptr err }`.  Garbage `is_err` ≈ non-zero → branch to err
+  dispatch → dereference garbage `err` ptr → SIGSEGV.
+
+  Always-segfault when impl and interface ABIs differ; never
+  segfault when they match.  Pre-fix V3-V6 of the regression test
+  ALL failed identically.  No slot-index issue, no per-T-vtable
+  issue -- one mis-named bit at the thunk-emission boundary.
+
+  **Fix.**  `_emit_iface_method_thunk` now carries two distinct
+  can-throw bits:
+    - `iface_can_throw` (parameter, renamed from `can_throw`) --
+      drives the OUTER thunk ABI: return type, vtable dispatcher
+      contract.
+    - `impl_can_throw` (looked up from
+      `self.fn_infos[fn_id].signature.declared_can_throw`) --
+      drives the INNER call to the impl symbol.
+
+  Three branches:
+    1. `iface_can_throw == impl_can_throw` -- matched ABI;
+       thunk is a one-line pass-through (preserves the legacy
+       behavior for the common case).
+    2. `iface_can_throw && !impl_can_throw` -- adapter case;
+       call impl with its plain ABI, wrap raw return into
+       `Ok(...)` FnResult via inline insertvalue chain (mirrors
+       `_wrap_ok_fnresult` shape, inlined locally to avoid
+       writing into `self.lines` of the active function body --
+       the thunk uses a local `lines` buffer flushed via
+       `module.emit_func`).
+    3. `!iface_can_throw && impl_can_throw` -- impl is LESS
+       strict than interface contract; checker bug if reached.
+       Raises `AssertionError` with a clear pointer rather than
+       emitting unsafe IR.  Defense in depth: the checker
+       primary-rejects this with
+       `E-AUTO-3b328370` (`function ... is declared nothrow
+       but may throw`); codegen assertion only fires if the
+       checker rule regresses.
+
+  Note on impl's effective vs. surface can-throw: the surface
+  declaration mismatch (impl written WITHOUT `nothrow` but body
+  provably doesn't throw against a `nothrow` interface) is
+  intentionally accepted by the checker -- it normalizes the
+  impl's effective can-throw to nothrow.  Codegen sees the
+  normalized bit on `FnInfo` and emits matched-nothrow code,
+  the safe path.  Only impls whose body actually throws against
+  a nothrow contract are rejected (and would trip the codegen
+  assertion if they somehow slipped through).
+
+  **What this fix did NOT change.**
+   - Vtable layout (`[drop, m0, m1, ...]` per linearization).
+   - Fat Arc<I> layout (`{ctrl, data, vtable}`).
+   - `_emit_arc_as_interface` (construction is correct).
+   - `_lower_arc_fat_get` (extracts data/vtable correctly).
+   - `_lower_call_iface` (dispatcher correctly reflects iface ABI).
+   - Thunk OUTER signature -- ABI for vtable dispatchers is
+     stable.  Pure codegen-internals fix.
+
+  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md`
+  process for LANGUAGE_BUG fixes: scanned the five registered
+  triggers (borrow-checker walker consolidation; DMIR
+  discriminator promotion; DMIR collision check; drop-aware
+  mem.write; borrow-checker span tracking).  No match.
+
+  Not filing a new trigger.  Considered "ABI-adapter thunks at
+  cross-contract boundaries" as a possible repeated pattern --
+  precedent: `_ensure_nothrow_wrap_thunk` does similar wrapping
+  for callback fn-ptr coercion.  Both sites are small and
+  self-contained; consolidating into a shared
+  "build-ok-wrapping-thunk" helper would have low ROI right now.
+  Would justify a trigger if a third ABI-adapter site appears.
+
+  **Regression test.**
+  `lang/tests/driver/test_arc_interface_get_dispatch_segfault.py`
+  -- 9 carriers, all run the produced binary (compile-only
+  validation would miss this bug entirely; IR compiles + links
+  cleanly today, the failure fires only at runtime first
+  dispatch):
+
+   - V1: direct `Arc<G>.get().greet()` -- positive control
+     (no-regression on the working path).
+   - V2: `as_interface` construction without dispatch --
+     positive control.
+   - V3: THE BUG, `Arc<Greeter>.get().greet()` -- pre-fix
+     SIGSEGV; post-fix returns 42.
+   - V4: dispatch with non-trivial body (`self.base +
+     self.multiplier * n`) -- pins `self` resolution.
+   - V5: dispatch through second method on same interface --
+     pins vtable slot indexing.
+   - V6: second implementor of same interface (`G1` + `G2`,
+     different field shapes) -- pins per-T vtable distinction.
+   - V7: matched-nothrow ABI -- pins the matched branch of the
+     two-bit decision in the thunk emitter.
+   - V8: matched-can-throw ABI -- pins the other matched branch.
+   - V9: NEGATIVE compile test -- impl that actually throws
+     against a nothrow interface MUST be rejected by the
+     checker (`E-AUTO-3b328370`).  Defense-in-depth for the
+     codegen assertion.
+
+  Verified the test catches the bug by running pre-fix:
+  V3-V6 all SIGSEGV with bit-identical shape; V1, V2 pass;
+  V7-V9 added with fix.
+
+  Verified the test catches the bug by temporary
+  iface-can-throw-only revert reproduces the original
+  `_emit_iface_method_thunk` mis-typed call.
+
+  **Verification gate.**
+   - 9/9 new test_arc_interface_get_dispatch_segfault.py.
+   - Broader arc + iface + callback regression set
+     (test_arc_as_interface_require, test_arc_intrinsic_bridge,
+     test_arc_relocation, test_arc_rejects_interface_t,
+     test_borrowed_interface_dispatch,
+     test_callback_dynamic_dispatch,
+     test_callback_generic_typeapp_codegen,
+     test_callback_generic_typeapp_nothrow,
+     test_fat_arc_interface_views,
+     test_interface_method_calls,
+     test_interface_owned_storage_regression,
+     test_interface_ufcs_callinfo_hole) + prior-slice
+     regressions (test_const_share_synth_shared_binder_name,
+     test_lambda_void_callback_throw_check,
+     test_owned_temp_materialization_audit) -- all green.
+
 ## 2026-05-17 (compiler fix: synthesized `<Variant>::ConstShare::const_share` crashed SSA when two arms shared a payload binder name -- per-arm binder localization added to `_build_const_share_hir_variant`)
 - **Compiler fix.**  Release 0.31.97, ABI unchanged at 14.
   Fixes the 2026-05-17 sgw-stub blocker:
