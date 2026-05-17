@@ -9029,10 +9029,28 @@ class TypeChecker:
 				#   * declared field name → typed projection from envelope
 				#     params (type read from the Path-A co-registered struct)
 				#   * unknown field → real diagnostic, not Unknown
-				# The binder remains storage-typed Error (no separate native
-				# struct local).  Per K's clarified model (spec §24): there
-				# is no native exception object after throw — the binder IS
-				# the envelope plus typed schema projection.
+				# In this direct-HField path the binder remains storage-
+				# typed Error with no separate native struct local; each
+				# read decodes from the envelope JSON per access.  Per
+				# K's clarified model (spec §24): there is no native
+				# exception object after throw -- the binder IS the
+				# envelope plus typed schema projection.
+				#
+				# NOTE (2026-05-17, sgw #2 fix): the BORROW path
+				# (`&e.field` via HPlaceExpr walker ~9170+) DOES
+				# materialize a parallel native struct local so the
+				# field can be addressable; see
+				# `_get_or_materialize_typed_catch_storage` in
+				# hir_to_mir.py.  That model is gated to
+				# scalars-only schemas; mixed schemas reject with
+				# E_TYPED_CATCH_BORROW_MIXED_SCHEMA.  HField direct-
+				# read here is unchanged -- still per-access decode,
+				# so it works for mixed schemas too.  Future
+				# convergence onto the storage model (single decode
+				# at first projection, both reads and borrows
+				# project from the same struct local) is a follow-
+				# up that requires extending the storage to handle
+				# non-scalar fields.
 				if inner_def.kind is TypeKind.ERROR:
 					bid = expr.subject.binding_id if isinstance(expr.subject, H.HVar) else None
 					if bid is not None and bid in self._typed_catch_binders:
@@ -9220,6 +9238,69 @@ class TypeChecker:
 											self._string,
 										)
 										if tcb_field_ty in tcb_supported:
+											# Mixed-schema check.  The borrow
+											# path materializes a parallel
+											# struct storage local for the
+											# whole `pub error` schema (not
+											# just the borrowed field), and
+											# registers the storage for scope
+											# cleanup.  If ANY field on the
+											# schema is non-scalar (nested
+											# error, struct, variant, array,
+											# optional, etc.), the materializer
+											# would have to either decode it
+											# (no helper exists today) or
+											# zero-init it.  Zero-initialized
+											# non-scalar slots that later flow
+											# into the scope drop would invoke
+											# the field type's destructor on
+											# garbage memory -- silently UB.
+											#
+											# Reject up-front with a clear
+											# diagnostic.  Long-term fix:
+											# implement full typed-payload
+											# materialization (or a different
+											# storage model that doesn't
+											# require fully-formed sibling
+											# slots).  Until then, the borrow
+											# path is gated to schemas that
+											# are scalars-only.  The HField
+											# direct-read path is unaffected
+											# -- it decodes per-access and
+											# never builds a sibling struct,
+											# so mixed schemas still work for
+											# by-value reads.
+											tcb_inst_check = self.type_table.get_struct_instance(tcb_struct_id)
+											tcb_mixed_field: tuple[str, TypeId] | None = None
+											if tcb_inst_check is not None and tcb_inst_check.field_types:
+												tcb_names_check = list(tcb_inst_check.field_names or [])
+												for _i, _ft in enumerate(tcb_inst_check.field_types):
+													if _ft not in tcb_supported:
+														_fname = tcb_names_check[_i] if _i < len(tcb_names_check) else f"<field {_i}>"
+														tcb_mixed_field = (_fname, _ft)
+														break
+											if tcb_mixed_field is not None:
+												_mname, _mty = tcb_mixed_field
+												_mpretty = self._pretty_type_name(_mty, current_module=current_module_name)
+												diagnostics.append(
+													_tc_diag(
+														message=(
+															f"cannot borrow field '{proj.name}' of `pub error` "
+															f"type '{event_fqn}': borrow materialization for "
+															f"typed catch binders requires every schema field to "
+															f"be a supported scalar (Int / Uint / Bool / Float / "
+															f"String), but field '{_mname}' has unsupported type "
+															f"'{_mpretty}'.  Workaround: use by-value reads "
+															f"(`val t: String = e.{proj.name};`); the borrow path "
+															f"can be re-enabled once typed-payload materialization "
+															f"supports non-scalar field shapes"
+														),
+														severity="error",
+														code="E_TYPED_CATCH_BORROW_MIXED_SCHEMA",
+														span=getattr(expr, "loc", Span()),
+													)
+												)
+												return record_expr(expr, self._unknown)
 											# Annotate the HPlaceExpr so
 											# HBorrow lowering (and HField
 											# lowering when reached through

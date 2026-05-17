@@ -125,6 +125,35 @@
    - No new MIR opcodes.  No ABI changes.  Vtable layout,
      fat Arc layout, dispatcher signatures all unchanged.
 
+  **Mixed-schema gate (K-review HIGH, applied 2026-05-17).**
+  The borrow path's storage materialization constructs the
+  ENTIRE `pub error` schema (not just the borrowed field) and
+  registers the storage struct for scope drop.  Initial draft
+  zero-initialized non-scalar field slots; on scope drop the
+  field type's destructor would have run on garbage memory --
+  silently UB.  K caught this.
+
+  Fix: at type-check time in the HPlaceExpr typed-catch-binder
+  branch, scan the schema; if ANY field has a non-scalar type
+  (nested error, struct, variant, array, optional, ref, etc.),
+  reject the borrow with explicit diagnostic
+  `E_TYPED_CATCH_BORROW_MIXED_SCHEMA` naming the offending
+  field.  Message points the user at the by-value workaround
+  (HField direct-read still works on mixed schemas because it
+  decodes per-access and never builds a sibling struct).
+  Long-term fix is typed-payload materialization for non-scalar
+  fields; until then, borrow path is gated to scalars-only
+  schemas.
+
+  Defense in depth: the materialization helper
+  (`_get_or_materialize_typed_catch_storage`) raises
+  `AssertionError` if any non-scalar field is encountered --
+  unreachable post-checker, surfaces a clear compiler bug if
+  the checker rule ever regresses.
+
+  V5 (mixed-schema reject) + V6 (mixed-schema by-value still
+  works) regression carriers pin both directions.
+
   **Refactor-triggers scan.**  Per
   `docs/refactor_triggers.md` process for LANGUAGE_BUG fixes:
   scanned the five registered triggers (borrow-checker walker
@@ -137,7 +166,7 @@
 
   **Regression test.**
   `lang/tests/driver/test_typed_catch_binder_field_borrow.py`
-  -- 4 carriers using `subprocess.run` (some compile-only,
+  -- 6 carriers using `subprocess.run` (some compile-only,
   some compile+run):
 
    - **V1**: by-value `e.tag` read -- positive control,
@@ -151,6 +180,16 @@
      storage memoization (single decode reused across
      multiple borrows on the same binder) AND correct
      field index for the second field.  Compile + run.
+   - **V5**: mixed-schema rejection (per K-review HIGH).
+     `pub error Outer { tag: String, cause: InnerError }`,
+     consumer borrows `&e.tag`.  Must reject at compile
+     with `E_TYPED_CATCH_BORROW_MIXED_SCHEMA`; pins that
+     we don't silently zero-init the non-scalar `cause`
+     slot and trigger UB on scope drop.
+   - **V6**: mixed-schema by-value control.  Same schema
+     as V5, but reads `val t: String = e.tag;` (no
+     borrow).  Must continue to compile (HField path
+     unaffected by the borrow-path gating).
 
   Verified the test catches the bug by checking the pre-fix
   shape: V2/V3 fired `E-AUTO-69eb9f81` at the `&e.tag` site

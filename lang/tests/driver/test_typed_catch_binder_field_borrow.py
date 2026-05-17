@@ -497,3 +497,160 @@ def test_v4_repeated_and_two_field_borrow(tmp_path: Path) -> None:
 		f"(second field projected through wrong slot).\n"
 		f"stderr: {run.stderr[-500:]}"
 	)
+
+
+# ─── V5: mixed-schema rejection ────────────────────────────────────
+#
+# K-review 2026-05-17 (HIGH): when the pub_error schema contains
+# any non-scalar field (nested error, struct, variant, array,
+# optional, etc.), the borrow path's materialization would have
+# to either decode the non-scalar (no helper exists today) or
+# zero-init it.  Zero-init + later scope-drop would invoke the
+# field type's destructor on garbage memory -- silently UB.
+#
+# Fix: reject at type-check with E_TYPED_CATCH_BORROW_MIXED_SCHEMA.
+# By-value reads through HField direct-visit are UNAFFECTED (they
+# decode per-access and never build a sibling struct), so mixed
+# schemas still work for value reads -- only the borrow path is
+# gated.
+#
+# Long-term: implement non-scalar typed-payload materialization
+# (decode helpers for nested error / struct / etc.); the
+# diagnostic message points at this as the workaround path.
+
+_V5_MIXED_SCHEMA_BORROW_REJECTED = """\
+module v5_mixed;
+
+import std.core as core;
+
+pub error InnerError {
+	code: Int
+}
+
+pub error Outer {
+	tag: String,
+	cause: InnerError
+}
+
+fn _take(s: &String) nothrow -> String { return *s; }
+
+fn do_throw() -> Void {
+	throw Outer(
+		tag = "boom",
+		cause = InnerError(code = 7)
+	);
+}
+
+fn run() -> Int {
+	try {
+		do_throw();
+		return 1;
+	} catch Outer(e) {
+		val t: String = _take(&e.tag);
+		if t.byte_length() > 0 { return 0; }
+		return 2;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	try { return run(); } catch any { return 99; }
+}
+"""
+
+
+def test_v5_mixed_schema_borrow_rejected_at_compile(tmp_path: Path) -> None:
+	"""`&e.tag` on a typed catch binder whose schema contains a
+	non-scalar field (here: `cause: InnerError`) must be rejected
+	at compile-time with E_TYPED_CATCH_BORROW_MIXED_SCHEMA, NOT
+	silently materialize a struct with zero-initialized
+	non-scalar slots that later get dropped (UB).
+
+	The user is only borrowing the SCALAR sibling `&e.tag`, but
+	the materialization model would need to construct the full
+	struct value -- including the non-scalar `cause` slot --
+	and register it for scope drop.  Zero-init + drop of a
+	non-scalar slot would invoke `InnerError`'s destructor on
+	garbage memory.
+
+	Post-fix expectation: compile fails with explicit diagnostic
+	`E_TYPED_CATCH_BORROW_MIXED_SCHEMA` naming the offending
+	non-scalar field.  By-value reads (`val t = e.tag;`) on the
+	same schema continue to work through the HField direct-visit
+	path -- not tested here, but covered by V1's pattern."""
+	res = _compile_via_subprocess(tmp_path, "v5_mixed", _V5_MIXED_SCHEMA_BORROW_REJECTED)
+	assert res.returncode != 0, (
+		f"V5 compile UNEXPECTEDLY SUCCEEDED.  Borrowing `&e.tag` "
+		f"on a typed catch binder whose schema has a non-scalar "
+		f"field (`cause: InnerError`) must be rejected.  If "
+		f"materialization silently zero-init'd the non-scalar "
+		f"slot and registered the struct for drop, the destructor "
+		f"would run on garbage memory at scope exit (UB).  See "
+		f"`_get_or_materialize_typed_catch_storage` defense-in-"
+		f"depth assertion."
+	)
+	assert "E_TYPED_CATCH_BORROW_MIXED_SCHEMA" in res.stderr, (
+		f"V5 compile failed but NOT with the expected "
+		f"E_TYPED_CATCH_BORROW_MIXED_SCHEMA diagnostic.  Something "
+		f"else is wrong:\n{res.stderr[-1500:]}"
+	)
+
+
+# ─── V6: by-value reads on mixed schema still work ─────────────────
+#
+# Confirms the rejection in V5 is scoped to the BORROW path; the
+# HField direct-read path is unaffected because it decodes
+# per-access and never materializes a sibling struct.
+
+_V6_MIXED_SCHEMA_BYVALUE_OK = """\
+module v6_mixed_byvalue;
+
+import std.core as core;
+
+pub error InnerError {
+	code: Int
+}
+
+pub error Outer {
+	tag: String,
+	cause: InnerError
+}
+
+fn do_throw() -> Void {
+	throw Outer(
+		tag = "boom",
+		cause = InnerError(code = 7)
+	);
+}
+
+fn run() -> Int {
+	try {
+		do_throw();
+		return 1;
+	} catch Outer(e) {
+		val t: String = e.tag;
+		if t.byte_length() > 0 { return 0; }
+		return 2;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	try { return run(); } catch any { return 99; }
+}
+"""
+
+
+def test_v6_mixed_schema_byvalue_read_still_works(tmp_path: Path) -> None:
+	"""By-value read `e.tag` on a typed catch binder with a mixed
+	schema (scalar tag + non-scalar cause) must continue to work
+	post-fix.  The HField direct-visit path decodes per-access
+	via `_typed_params_field_<scalar>` helpers and never builds
+	a sibling struct, so non-scalar schema fields don't trip
+	the materialization invariant.
+
+	Pin so the V5 rejection doesn't accidentally over-fire on
+	the value-read path too."""
+	res = _compile_via_subprocess(tmp_path, "v6_mixed_byvalue", _V6_MIXED_SCHEMA_BYVALUE_OK)
+	assert res.returncode == 0, (
+		f"V6 compile failed -- by-value read on mixed-schema pub_error "
+		f"binder regressed:\n{res.stderr[-1500:]}"
+	)

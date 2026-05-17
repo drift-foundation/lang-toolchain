@@ -5532,11 +5532,20 @@ class HIRToMIR:
 		for f_name, f_ty in zip(field_names, field_types):
 			helper_name = scalar_to_helper.get(f_ty)
 			if helper_name is None:
-				zero_val = self.b.new_temp()
-				self.b.emit(M.ZeroValue(dest=zero_val, ty=f_ty))
-				self._local_types[zero_val] = f_ty
-				field_values.append(zero_val)
-				continue
+				# Defense in depth: the type-checker rejects typed-catch
+				# borrow on schemas with any non-scalar field via
+				# E_TYPED_CATCH_BORROW_MIXED_SCHEMA before this
+				# materialization runs.  Reaching here means a checker
+				# bug -- silently zero-initializing the slot and then
+				# registering the whole struct for scope drop would
+				# invoke the field's destructor on garbage memory (UB).
+				# Refuse to emit unsafe IR; surface as compiler bug.
+				raise AssertionError(
+					f"typed catch binder {event_fqn!r}: schema field "
+					f"{f_name!r} has non-scalar type {f_ty} but reached "
+					f"borrow-path storage materialization.  Checker should "
+					f"have rejected with E_TYPED_CATCH_BORROW_MIXED_SCHEMA."
+				)
 			helper_fn_id = self._find_free_fn_id("std.core", helper_name)
 			if helper_fn_id is None:
 				raise AssertionError(
