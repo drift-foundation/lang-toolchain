@@ -30,20 +30,40 @@ and still ship.
 Allowed reason keywords (typos fail; lint validates against this
 set):
 
-  - `non-owning`   -- synthesized local holds a non-droppable value
-                      (Bool short-circuit, Int ephemeral, etc.)
-  - `consumed`     -- owning value consumed inline by a following
-                      MoveOut / DropValue / Call; never reaches
-                      scope-exit cleanup
-  - `registered`   -- owning value registered via a different
-                      mechanism (match_cleanup_authoring, drop_flags,
-                      binder bind path, explicit M.CleanupHook).
-                      Marker must name the registration site.
-  - `synthesized`  -- owning struct/variant assembled inline and
-                      consumed by the same expression (e.g.
-                      diagnostic owning throw)
-  - `intentional`  -- reviewed and deliberately hand-rolled for a
-                      specific reason (rare; marker must explain)
+  - `non-owning`     -- synthesized local holds a non-droppable value
+                        (Bool short-circuit, Int ephemeral, etc.)
+  - `consumed`       -- owning value consumed inline by a following
+                        MoveOut / DropValue / Call; never reaches
+                        scope-exit cleanup
+  - `registered`     -- owning value registered via a different
+                        mechanism (match_cleanup_authoring, drop_flags,
+                        binder bind path, explicit M.CleanupHook).
+                        Marker must name the registration site.
+  - `synthesized`    -- owning struct/variant assembled inline and
+                        consumed by the same expression (e.g.
+                        diagnostic owning throw)
+  - `result-staging` -- owning value held only long enough for a
+                        following `LoadLocal` to expose it as the
+                        expression result; ownership leaves through
+                        the SSA value, so scope cleanup would
+                        double-drop.  Distinct from `consumed`: there
+                        is no MoveOut at the staging local; the bits
+                        flow outward via the LoadLocal duplicate, and
+                        the receiving SSA value carries the drop
+                        obligation.  Use this for conditional-store
+                        result slots that have no MoveOut.
+  - `intentional`    -- reviewed and deliberately hand-rolled for a
+                        specific reason (rare; marker must explain)
+
+Crucial distinction `_register_drop_local` vs `result-staging`:
+`_register_drop_local` is only correct for locals that remain
+scope-owned until cleanup runs.  Locals that temporarily hold an
+owned value but then transfer ownership out via `LoadLocal` (no
+MoveOut emitted on the local) MUST NOT be registered, or the slot's
+inner refcounted payload is dropped twice -- once at scope exit and
+once again through whatever consumes the loaded SSA value.  This was
+the 2026-05-16 `__array_get_res` / `__array_pop_res` over-
+registration regression (commit 8352f3aa).
 
 Hard gate.  No `audit-pending`, no `audit-deferred`, no warning-only
 escape.  If a site cannot be classified within slice scope, stop
@@ -66,6 +86,7 @@ ALLOWED_REASONS = frozenset({
 	"consumed",
 	"registered",
 	"synthesized",
+	"result-staging",
 	"intentional",
 })
 
@@ -267,6 +288,29 @@ def test_audit_self_marker_with_recognized_reason_passes() -> None:
 	)
 	violations = _find_violations_in_text(src)
 	assert not violations, f"recognized marker must pass; got: {violations}"
+
+
+def test_audit_self_result_staging_marker_passes() -> None:
+	"""A site that stores Optional<T> across branches and exposes the
+	result via LoadLocal MUST NOT register a drop (the LoadLocal
+	duplicate carries ownership outward; scope cleanup would double-
+	drop).  The `result-staging` marker is the precise classification
+	for this shape -- this self-test pins the keyword's recognition."""
+	src = (
+		"def _lower_array_pop(self, ty, array_val):\n"
+		"\t# materialize-audit: allow result-staging Optional<T>\n"
+		"\t# loaded via LoadLocal as expression result; ownership\n"
+		"\t# transfers via SSA value, scope cleanup would double-drop\n"
+		"\tlocal = f'__array_pop_res{self.b.new_temp()}'\n"
+		"\tself.b.ensure_local(local)\n"
+		"\tself._local_types[local] = ty\n"
+		"\tself.b.emit(M.StoreLocal(local=local, value=v_none))\n"
+		"\tself.b.emit(M.StoreLocal(local=local, value=v_some))\n"
+		"\tout = self.b.new_temp()\n"
+		"\tself.b.emit(M.LoadLocal(dest=out, local=local))\n"
+	)
+	violations = _find_violations_in_text(src)
+	assert not violations, f"result-staging marker must pass; got: {violations}"
 
 
 def test_audit_self_unmarked_unregistered_fails() -> None:

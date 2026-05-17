@@ -5790,17 +5790,19 @@ class HIRToMIR:
 			zero = self._const_int(0)
 
 			opt_ty = self._optional_variant_type(self._type_table.ensure_ref(elem_ty))
-			# materialize-audit: allow registered explicit
-			# _register_drop_local call below
-			# res_local holds Optional<T> stored conditionally
-			# across in-range / out-of-range branches; final
-			# LoadLocal at function exit produces the return value.
-			# Helper's all-in-one alloc+store doesn't fit because of
-			# the conditional store; hand-roll with explicit register.
+			# Ownership of the Optional<&T> payload transfers outward
+			# through the SSA value produced by `LoadLocal` at the
+			# join below; the staging local must NOT be registered
+			# for scope-exit drop, or its payload double-drops (one
+			# drop here, one through whatever consumes the loaded
+			# value).  Conditional stores across negative / in-range /
+			# out-of-range branches mean the helper's all-in-one
+			# alloc+store doesn't fit; bare `ensure_local + StoreLocal`
+			# is the intentional shape.
+			# materialize-audit: allow result-staging Optional<&T> loaded out via LoadLocal at the join
 			res_local = f"__array_get_res{self.b.new_temp()}"
 			self.b.ensure_local(res_local)
 			self._local_types[res_local] = opt_ty
-			self._register_drop_local(res_local, opt_ty)
 
 			neg_cond = self.b.new_temp()
 			self.b.emit(M.BinaryOpInstr(dest=neg_cond, op=H.BinaryOp.LT, left=idx_val, right=zero))
@@ -5877,15 +5879,19 @@ class HIRToMIR:
 			if not want_value:
 				return True, None
 			opt_ty = self._optional_variant_type(elem_ty)
-			# materialize-audit: allow registered explicit
-			# _register_drop_local call below
-			# Same pattern as __array_get_res above: conditional
-			# stores across non-empty / empty branches; final
-			# LoadLocal returns.  Hand-roll with explicit register.
+			# Same shape as `__array_get_res` above: conditional
+			# stores across empty / non-empty branches, final
+			# `LoadLocal` at the join transfers the popped Optional<T>
+			# payload outward via the SSA value.  Registering the
+			# staging local for drop was the 2026-05-16 array_pop /
+			# std_regex_* memcheck regression -- caused a double-free
+			# (scope cleanup AND the consumer both freed the popped
+			# element's inner refcounted content).  Bare ensure_local
+			# + StoreLocal is intentional; do not register.
+			# materialize-audit: allow result-staging Optional<T> loaded out via LoadLocal at the join
 			res_local = f"__array_pop_res{self.b.new_temp()}"
 			self.b.ensure_local(res_local)
 			self._local_types[res_local] = opt_ty
-			self._register_drop_local(res_local, opt_ty)
 
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))

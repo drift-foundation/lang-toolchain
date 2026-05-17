@@ -1,5 +1,86 @@
 # Drift development history
 
+## 2026-05-16 (compiler hot-fix: `__array_get_res` / `__array_pop_res` were not scope-owned -- `_register_drop_local` removed; audit vocabulary gains `result-staging` to encode "ownership leaves via LoadLocal")
+- **Compiler hot-fix.**  Release 0.31.94, ABI unchanged at 14.
+  Fixes a double-free regression introduced by 0.31.93's slice 2
+  (`8352f3aa`).  Two of slice 2's "explicit `_register_drop_local`
+  added" sites in `_lower_array_intrinsic_method` --
+  `__array_get_res` and `__array_pop_res` -- were not scope-owned
+  locals.  They are RESULT-STAGING slots whose value transfers
+  outward through the SSA value produced by the final `LoadLocal`
+  at the join.  Registering them for scope-exit drop made the
+  inner refcounted payload free twice: once by scope cleanup, once
+  through whatever consumed the loaded value.
+
+  **How it surfaced.**  Memcheck lane (`DRIFT_MEMCHECK=1`) reported
+  `Invalid free()` in 15 fixtures: `array_pop_move_out_non_copy` +
+  all 14 `std_regex_*` cases (regex engine builds compiled-pattern
+  arrays via push + pop, so the pop staging slot is hit on every
+  `find` / `compile` call).  Heap summary on
+  `array_pop_move_out_non_copy`: 16 allocs / 19 frees, three extra
+  frees, all from `drift_alloc_array`.  Bisected to the two added
+  registers in `__array_get_res` (hir_to_mir.py:5803) and
+  `__array_pop_res` (hir_to_mir.py:5888).
+
+  **Fix.**
+  - Removed the `_register_drop_local` call at both sites.
+  - Replaced each site's `registered` allow marker with
+    `result-staging` and rewrote the comment body to document
+    *why* the bare `ensure_local + StoreLocal` is intentional
+    (so the next reader doesn't "fix" the missing register).
+  - Audit vocabulary gains a 6th reason keyword:
+    `result-staging`.  Used for synthesized owning locals whose
+    payload transfers out via `LoadLocal` (no `MoveOut` emitted
+    on the local).  Distinct from `consumed` (which requires a
+    visible MoveOut/DropValue/Call); the bits flow out through
+    the load's duplicate and the receiving SSA value carries the
+    drop obligation.
+  - Audit docstring extended with the crucial distinction:
+    `_register_drop_local` is only correct for locals that
+    remain scope-owned until cleanup runs; locals that
+    temporarily hold an owned value but transfer ownership out
+    via `LoadLocal` MUST NOT be registered.
+  - New parser self-test
+    `test_audit_self_result_staging_marker_passes` pins the new
+    keyword.  Audit now ships 8 self-tests (was 7).
+
+  **What this did NOT change.**  The third site slice 2 added a
+  register to -- `ensure_capacity::__array_cap_arr` -- is left
+  registered.  Verified independently: that local IS scope-owned
+  in shape, but the final `MoveOut` (hir_to_mir.py:6071) updates
+  the ownership lattice so `cleanup_authoring.verdict_at` returns
+  `MOVED_OUT` and suppresses the scope-exit drop.  All push-heavy
+  fixtures (`array_push_*`, `array_insert_*`, every
+  `std_regex_*`) pass memcheck cleanly with the register in place,
+  which is what would have caught a `MoveOut`-doesn't-cancel-drop
+  bug if one existed.  The other 22 slice-2 triage classifications
+  stand unchanged; the helper / audit / 4 known-correct
+  conversions in 0.31.93 are unaffected.
+
+  **Process catch.**  Slice 2's allow-marker vocabulary had no
+  way to express "ownership leaves through a `LoadLocal`, not a
+  `MoveOut`" -- so the wrong sites got bucketed under `registered`
+  and the wrong call (`_register_drop_local`) followed.  Adding
+  `result-staging` as an explicit vocabulary item turns the same
+  decision for the next contributor into a one-line lookup:
+  `consumed` (visible MoveOut/DropValue), `result-staging` (final
+  LoadLocal), or `registered` (scope-owned + external mechanism).
+
+  **Verification gate.**
+  - `lang/tests/driver/test_owned_temp_materialization_audit.py`:
+    8/8 pass (was 7/7; +1 for `result-staging` self-test).
+  - `array_pop_move_out_non_copy` under `DRIFT_MEMCHECK=1`: ok
+    (was: invalid free × 3).
+  - 14 × `std_regex_*` under `DRIFT_MEMCHECK=1`: all ok.
+  - 62-fixture cluster (`arc_get_in_move_capture_lambda`,
+    `array_*` × 51, `borrow_tmp_*`, `env_*` × 5,
+    `mutex_guard_*`, `pub_error_*` × 3): all ok.
+  - 23-fixture `std_io_*` cluster: 22 ok, 1 pre-existing
+    `skipped (memcheck)` policy skip.
+  - Push-heavy half (`array_push_*`, `array_insert_*`, every
+    `std_regex_*`) is the independent verification gate for the
+    `__array_cap_arr` register staying.
+
 ## 2026-05-16 (compiler hygiene: `_materialize_owned_temp` helper + hard-gate audit over `hir_to_mir.py`; canonical owning synthetic-local pattern enforced structurally)
 - **Compiler hygiene slice.**  Release 0.31.93, ABI unchanged at 14.
   Replaces the implicit 4-step "synthesize an owning local" pattern
