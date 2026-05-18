@@ -127,21 +127,26 @@ import std.core as core;
 
 pub struct Foo { pub n: Int }
 
-// Generic free fn with `move v` on a TypeVar.  At the generic body's
-// own type-check, `v: T` is a TypeVar -- NOT TypeKind.REF -- so the
+// Generic free fn with `move v` on a TypeVar at value position (a
+// `let`-binder consumes the move).  At the generic body's own type-
+// check, `v: T` is a TypeVar -- NOT TypeKind.REF -- so the
 // move-of-ref check at type_checker.py:8097 does not fire.  When
 // `--entry` triggers full elaboration and the body is re-type-checked
 // for T = &mut Foo (instantiation), `v: &mut Foo` is REF -- and the
 // strict check fires on stdlib-style helper code the user wrote
-// once, generically.
-pub fn take<T>(v: T) nothrow -> T {
-	return move v;
+// once, generically.  Body doesn't return the moved ref (would hit
+// the MVP escape-rule for ref returns through a generic, unrelated
+// to this bug); a `_y = move v` binder is enough to exercise HMove
+// on the TypeVar.
+pub fn consume<T>(v: T) nothrow -> Int {
+	val _y = move v;
+	return 1;
 }
 
 pub fn main() nothrow -> Int {
 	var x: Foo = Foo(n = 42);
-	val r: &mut Foo = take<type &mut Foo>(&mut x);
-	return r.n;
+	val _n: Int = consume<type &mut Foo>(&mut x);
+	return x.n;
 }
 """
 
@@ -181,7 +186,7 @@ def test_v1_generic_move_on_ref_instantiation(tmp_path: Path) -> None:
 	out_bin = tmp_path / "main_bin"
 	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
 	assert run.returncode == 42, (
-		f"V1 binary exited {run.returncode}; expected 42 (Foo.n)"
+		f"V1 binary exited {run.returncode}; expected 42 (x.n after move-then-drop)"
 	)
 
 
@@ -196,19 +201,19 @@ pub struct Foo { pub n: Int }
 
 pub error MyErr { tag: String }
 
-// Mirror of the maria team's `lease.conn(): Result<&mut Conn, _>` shape.
-// Returning a `Result<&mut Foo, MyErr>` and unwrapping it via
-// `.or_throw()` was the original failing call path.  The
+// Mirror of the maria team's `lease.conn(): Result<&mut Conn, _>`
+// shape.  Returning a `Result<&mut Foo, MyErr>` and unwrapping it
+// via `.or_throw()` was the original failing call path.  The
 // monomorphized `Result<&mut Foo, MyErr>::or_throw` body has
 // `match self { Ok(v) => { return move v; }, ... }` with
 // `v: &mut Foo` -- the exact stdlib code the move-of-ref check
 // was firing on at `<source>:333:27`.  Post-fix: this carrier
-// compiles + links + runs end-to-end.
+// compiles + links + runs end-to-end.  Type inference on `Result
+// ::Ok(...)` figures out the result type from the return-type
+// annotation, matching how stdlib code constructs Results.
 pub fn maybe_lease(x: &mut Foo, want: Bool) nothrow -> core.Result<&mut Foo, MyErr> {
-	if want {
-		return core.Result<type &mut Foo, type MyErr>::Ok(x);
-	}
-	return core.Result<type &mut Foo, type MyErr>::Err(MyErr(tag = "no"));
+	if want { return core.Result::Ok(x); }
+	return core.Result::Err(MyErr(tag = "no"));
 }
 
 pub fn doit(x: &mut Foo) throws MyErr -> Int {
