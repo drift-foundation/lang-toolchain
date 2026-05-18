@@ -14,3 +14,4 @@ work/ownership-ledger
 # The ignore rule below is a backstop in case a helper regresses —
 # the primary fix is to keep artifact paths out of `lang/tests/`.
 lang/tests/codegen/e2e/*/.triage_build
+vgcore.*

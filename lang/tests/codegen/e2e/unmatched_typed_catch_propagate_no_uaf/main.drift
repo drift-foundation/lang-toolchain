@@ -1,0 +1,44 @@
+// REGRESSION: heap corruption after a thrown event crosses an inner
+// unmatched typed catch arm and propagates to an outer catch.
+//
+// Filed 2026-05-18 by app-team (singular gateway live e2e, scenarios
+// 10 / 11b / wrong-owner).  Root cause: the MIR lowering of
+// `try { ... } catch SomeEvent(e) { ... }` for the no-match dispatch
+// path used `LoadLocal` (a snapshot, not a consume) of the hidden
+// `error_local` slot, then called `_propagate_error` which emits a
+// function-exit `CleanupHook`.  The hook saw `error_local` as still-
+// owning and emitted a `DropValue` that called `drift_error_release`
+// on the envelope -- but the SAME pointer was simultaneously wrapped
+// into the returned `FnResult.Err` for the caller, who then called
+// `drift_error_release` on the freed envelope.  Result: UAF read of
+// the envelope's `event_fqn`/`params_json`/`context_json` fields plus
+// a double `free()` of the envelope, surfacing as `malloc():
+// unaligned tcache chunk detected` or `double free or corruption
+// (fasttop)` -- variant depending on which malloc call hits the
+// corrupted chunk first.  Fix in
+// `lang/driftc/stage2/hir_to_mir.py::_visit_stmt_HTry`: emit
+// `M.MoveOut` at the propagation site so `error_local` is consumed
+// and the cleanup hook skips it.
+//
+// This carrier deliberately uses the smallest shape that exhibits
+// the bug: two empty `pub error` types and no destructible locals
+// inside the inner try.  The bug is independent of payload shape
+// (variants, Strings, Int fields, or empty errors all crash equally
+// pre-fix) and independent of any helper frame.
+//
+// Exit 0 = the inner unmatched typed-catch + outer binder-less catch
+// runs without heap corruption.  Pre-fix the process aborts after
+// returning from main; post-fix the process exits cleanly.
+
+module main;
+
+pub error A {}
+pub error B {}
+
+fn inner() -> Int {
+	try { throw A(); } catch B(e) { return 999; }
+}
+
+fn main() nothrow -> Int {
+	return try inner() catch { 0 };
+}

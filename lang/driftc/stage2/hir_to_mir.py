@@ -7437,13 +7437,34 @@ class HIRToMIR:
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				self._propagate_error(err_tmp)
+				# Consume `error_local` via MoveOut before propagating.
+				# `err_tmp` above was a LoadLocal SNAPSHOT used only for
+				# the event-code comparison; ownership is still nominally
+				# in `error_local`.  See the parallel comment in
+				# `_visit_stmt_HTry` -- without this MoveOut, the
+				# function-exit cleanup hook (or an outer-try error_local
+				# store) double-drops the same envelope pointer that the
+				# caller's FnResult.Err release path will hit.  Expression-
+				# form mirror of the statement-form fix.  Reproducer:
+				#   pub error A {} pub error B {}
+				#   fn fail() -> Int { throw A(); }
+				#   fn inner() -> Int { val x = try fail() catch B(e) { 999 }; return x; }
+				#   fn main() nothrow -> Int { return try inner() catch { 0 }; }
+				# Fixed 2026-05-18.
+				consumed_tmp = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=consumed_tmp, local=error_local, ty=error_ty))
+				self._local_types[consumed_tmp] = error_ty
+				self._propagate_error(consumed_tmp)
 		else:
 			self.b.set_block(dispatch_block)
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				self._propagate_error(err_tmp)
+				# Same ownership transfer as the event-arms branch above.
+				consumed_tmp = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=consumed_tmp, local=error_local, ty=error_ty))
+				self._local_types[consumed_tmp] = error_ty
+				self._propagate_error(consumed_tmp)
 
 		# Lower catch arms: bind error if requested, evaluate body+result, jump to join.
 		for arm, cb in catch_blocks:
@@ -8749,14 +8770,37 @@ class HIRToMIR:
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				self._propagate_error(err_tmp)
+				# Consume `error_local` via MoveOut before propagating.
+				# `err_tmp` above was a LoadLocal SNAPSHOT used only for
+				# the event-code comparison; ownership is still nominally
+				# in `error_local`.  The propagation path ahead either
+				# stores the value into an outer try's error_local OR
+				# wraps it into FnResult.Err via ConstructResultErr — in
+				# BOTH cases ownership transfers out, so the function-
+				# exit cleanup hook (or any inner-try drop verdict) must
+				# see `error_local` as consumed.  Without this MoveOut,
+				# the cleanup hook drops the same pointer the caller is
+				# about to release, causing UAF / double-free.
+				# Reproducer:
+				#   pub error A {} pub error B {}
+				#   fn inner() -> Int { try { throw A() } catch B(e) { return 999 } }
+				#   fn main() nothrow -> Int { return try inner() catch { 0 } }
+				# Fixed 2026-05-18.
+				consumed_tmp = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=consumed_tmp, local=error_local, ty=error_ty))
+				self._local_types[consumed_tmp] = error_ty
+				self._propagate_error(consumed_tmp)
 		else:
 			# No event-specific arms: either jump to catch-all or propagate.
 			self.b.set_block(dispatch_block)
 			if catch_all_block is not None:
 				self.b.set_terminator(M.Goto(target=catch_all_block.name))
 			else:
-				self._propagate_error(err_tmp)
+				# Same ownership transfer as the event-arms branch above.
+				consumed_tmp = self.b.new_temp()
+				self.b.emit(M.MoveOut(dest=consumed_tmp, local=error_local, ty=error_ty))
+				self._local_types[consumed_tmp] = error_ty
+				self._propagate_error(consumed_tmp)
 
 		# Lower each catch arm: bind error if requested, emit ErrorEvent for handler logic, then body.
 		for arm_idx, (arm, cb) in enumerate(catch_blocks):

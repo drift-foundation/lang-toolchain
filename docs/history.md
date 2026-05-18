@@ -1,5 +1,165 @@
 # Drift development history
 
+## 2026-05-18 (LANGUAGE_BUG fix: heap corruption / double-free of the `DriftError` envelope when a thrown event crosses an inner unmatched typed catch arm and propagates to an outer catch -- MIR lowering of the typed-catch dispatch's no-match propagation path emitted `LoadLocal` instead of `MoveOut` on the hidden `error_local`, so the function-exit `CleanupHook` and the caller's `FnResult.Err` consumer both released the same pointer)
+- **Compiler/runtime fix.**  Release 0.31.107, ABI unchanged at 14.
+  Reported by app team via singular gateway live e2e scenarios 10 /
+  11b / wrong-owner paths
+  (`/home/sl/src/pushcoin/work/singular-gateway/repro-catch-heap/`).
+  Surface: after `try ... catch { ... }` runs over a throwing call
+  whose thrown event does NOT match an inner typed catch arm, the
+  process aborts with one of:
+
+      malloc(): unaligned tcache chunk detected
+      malloc_consolidate(): unaligned fastbin chunk detected
+      tcache_thread_shutdown(): unaligned tcache chunk detected
+      double free or corruption (fasttop)
+
+  The variant depended on which malloc call hit the corrupted chunk
+  first.  Valgrind confirmed the underlying error class: `Invalid
+  read of size 8 ... drift_error_release ... Block was alloc'd at
+  drift_error_new` -- a double-free + UAF read of the freed
+  `DriftError` envelope.
+
+  **Reduction.**  The app-team carrier (`probe10.drift`) wrapped the
+  bug in a full singular gateway flow with a `pub error
+  SingularException { kind: RuntimeErrorKind }` where
+  `RuntimeErrorKind` carried a `RpcServer(message: String)` variant,
+  a `LeasedConn` destructible, a helper frame, and the MariaDB SP.
+  Reduced step by step to a 7-line carrier with two empty pub-error
+  types and no destructibles, proving the bug is independent of (a)
+  payload shape -- variant-with-String, plain String, Int, and empty
+  pub-error all reproduce equally; (b) helper frames -- inlining
+  preserves the crash; (c) destructible locals -- no locals alive at
+  throw time still crashes; (d) the carrier's cross-package import
+  shape.
+
+  Canonical regression carrier:
+
+      pub error A {}
+      pub error B {}
+
+      fn inner() -> Int {
+          try { throw A(); } catch B(e) { return 999; }
+      }
+
+      fn main() nothrow -> Int {
+          return try inner() catch { 0 };
+      }
+
+  Pre-fix this aborted after main returned; post-fix it exits 0.
+
+  **Root cause.**  `lang/driftc/stage2/hir_to_mir.py::_visit_stmt_HTry`
+  builds a hidden `error_local` slot that the throw path stores into;
+  the dispatch block loads the event-code from `error_local` and
+  branches into either a matching catch arm or the propagation path.
+  The dispatch's load was `M.LoadLocal(dest=err_tmp, local=error_local)`
+  -- a SNAPSHOT, not a consume -- so `error_local` still nominally
+  owned the pointer after the load.  The propagation path then called
+  `_propagate_error(err_tmp)`, which (when the function can throw and
+  has no outer try on the stack) emits a function-exit `CleanupHook`
+  for ALL drop-registered locals before wrapping the error into
+  `FnResult.Err`.  The cleanup hook saw `error_local` as still-owning
+  and emitted `DropValue` -> `drift_error_release`, freeing the
+  envelope.  The SAME pointer was then handed to
+  `ConstructResultErr` and returned to the caller, whose own
+  `drift_error_release` call on the FnResult.Err pointer hit the
+  freed memory.
+
+  Symmetric path: when the propagation goes to an outer try (instead
+  of escaping the function), `_propagate_error` stores `err_val` into
+  the outer's `error_local`.  Without the consume, the inner's
+  `error_local` and the outer's `error_local` both nominally owned
+  the same pointer -- a double-drop waiting for the outer's later
+  release path.  The fix covers this case too.
+
+  **Why scenarios 1-9 didn't trip it.**  Per app-team report: none
+  of scenarios 1-9 in `live_gateway_test.drift` throw into a `try`
+  whose catch arm doesn't match the thrown event.  Scenario 11 uses
+  `renew`, whose SP returns `result_code=2` (NotOwner) instead of
+  signaling -- no throw.  Scenarios 10 / 11b are the first paths
+  that exercise throw-into-unmatched-typed-catch.
+
+  Adjacent existing tests that don't hit this:
+  `pub_error_manual_diagnostic_redaction`,
+  `result_or_throw_pub_error_envelope`,
+  `exception_heap_string_uaf`,
+  `pub_error_synthesized_variant_field_projection` -- all of which
+  throw + catch via a MATCHING typed arm (or rely on the catch-all
+  path).  None constructs the unmatched-typed-arm-then-propagate
+  shape this bug targets.
+
+  **Fix.**  Mirror sites in BOTH the statement-form lowering
+  (`_visit_stmt_HTry`) and the expression-form lowering
+  (`_visit_expr_HTryExpr`) -- the bug exists symmetrically in both
+  paths.  At each propagation site (the event-arms-final-else and the
+  no-arms-with-no-catch-all branches, four total emission sites),
+  emit `M.MoveOut(dest=consumed_tmp, local=error_local, ty=error_ty)`
+  before calling `_propagate_error(consumed_tmp)`.  The MoveOut
+  records `error_local` as consumed in MIR's verdict tracking, so
+  the function-exit `CleanupHook`'s `verdict_at` query returns
+  "moved, no drop" for `error_local` -- the cleanup hook skips the
+  envelope, and ownership transfers cleanly through the FnResult.Err
+  (or the outer try's error_local store).  No runtime change; no ABI
+  change; the fix is pure MIR lowering.
+
+  Expression-form reproducer (parallel to the statement-form one
+  above):
+
+      pub error A {}
+      pub error B {}
+
+      fn fail() -> Int { throw A(); }
+
+      fn inner() -> Int {
+          val x = try fail() catch B(e) { 999 };
+          return x;
+      }
+
+      fn main() nothrow -> Int {
+          return try inner() catch { 0 };
+      }
+
+  The `err_tmp` snapshot value (used only for the event-code
+  comparison) and the `consumed_tmp` move both reference the same
+  pointer at runtime -- the MIR `MoveOut` is bookkeeping for the
+  cleanup-authoring pass, not a runtime copy.
+
+  **Audit -- existing catch-arm paths unchanged.**  The matched-arm
+  paths (`if arm.binder` branch and the binder-less branch at
+  `_visit_stmt_HTry` lines ~8762-8794) already correctly consume
+  `error_local` via `MoveOut` (with-binder) or via an explicit
+  `MoveOut` + `DropValue` pair at arm exit (binder-less).  The fix
+  only changes the no-match propagation path -- the asymmetry that
+  caused the bug.
+
+  Verified by valgrind on six independent carriers spanning the
+  reduction sequence: empty pub-errors, String field, Int field,
+  inline throw, helper-frame variant, and a no-`_do` direct-from-main
+  variant.  All exit 0 with zero valgrind-reported errors and zero
+  leaks post-fix.  Pre-fix all six crash with various malloc
+  diagnostics.
+
+  **Files touched:**
+  - `lang/driftc/stage2/hir_to_mir.py` -- four `M.MoveOut` emissions,
+    two each in `_visit_stmt_HTry` and `_visit_expr_HTryExpr`
+    (event-arms-final-else and no-arms-with-no-catch-all branches in
+    both), with inline comments naming the reproducers and noting
+    both transfer destinations (outer try error_local OR
+    FnResult.Err).
+  - `lang/versions.py` -- 0.31.106 -> 0.31.107.
+  - `lang/tests/codegen/e2e/unmatched_typed_catch_propagate_no_uaf/`
+    (NEW: `main.drift` + `expected.json`) -- exit-0 behavioral
+    regression.
+  - `lang/tests/memcheck/test_unmatched_typed_catch_propagate_no_uaf.py`
+    (NEW) -- three valgrind-checked carriers (empty pub-errors,
+    String payload, Int payload) pinning the no-UAF / no-double-free
+    guarantee under `valgrind --error-exitcode=97`.
+
+  **Sequenced next (NOT in this slice):**
+  No follow-up.  The fix is local and the symmetric MoveOut on the
+  outer-try-store path was already verified clean by the existing
+  binder-and-binder-less catch arm paths.
+
 ## 2026-05-18 (cross-package narrow-throws contract: producer-side enforcement of `pub fn f() throws E` against the body's actual escape set, declaration-side alias canonicalization, and `FnSignature.declared_throws_event_fqns` round-trip through package metadata -- closes the V3/V4 runtime-xfails and makes `throws E` a binding contract across package boundaries instead of an unverified producer claim)
 - **Compiler contract change.**  Release 0.31.106, ABI unchanged at 14.
   Pre-slice, `pub fn f() throws E -> T` was a producer-side claim the
