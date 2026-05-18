@@ -188,7 +188,15 @@ def _run_driftc_subprocess(
 	"""
 	runner = tmp_path / "_driftc_runner.py"
 	runner.write_text(_SUBPROCESS_RUNNER, encoding="utf-8")
-	env = {**os.environ, **(env_override or {})}
+	# Inject PYTHONPATH=repo_root so the spawned `python _driftc_runner.py`
+	# can import `lang.*`.  Without this, sys.path[0] in the subprocess is
+	# the script's dir (tmp_path) -- `lang/` is not there, and
+	# `from lang.driftc.packages import trust_v0` fails with
+	# `ModuleNotFoundError: No module named 'lang'`.  Mirrors the
+	# `env["PYTHONPATH"] = str(repo_root)` shape used by the stdlib_pkg
+	# fixture in this directory's `conftest.py`.
+	repo_root = Path(__file__).resolve().parents[3]
+	env = {**os.environ, "PYTHONPATH": str(repo_root), **(env_override or {})}
 	return subprocess.run(
 		[sys.executable, str(runner), str(core_trust_path)] + extra_argv,
 		capture_output=True,
