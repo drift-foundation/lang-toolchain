@@ -116,6 +116,7 @@ from lang.driftc.mir_validate import (
 	validate_mir_concrete_layout_types,
 	validate_mir_iface_init_invariants,
 	validate_mir_variant_field_invariants,
+	validate_mir_void_return_shape,
 	validate_mir_wrapping_u64_invariants,
 )
 from lang.driftc.checker.type_env_builder import build_minimal_checker_type_env
@@ -7186,6 +7187,7 @@ def compile_stubbed_funcs(
 					("validate_mir_iface_init_invariants", lambda: validate_mir_iface_init_invariants(mir_funcs_by_id, signatures_by_id, shared_type_table)),
 					("validate_mir_array_copy_invariants", lambda: validate_mir_array_copy_invariants(mir_funcs_by_id, shared_type_table)),
 					("validate_mir_call_byvalue_moves", lambda: validate_mir_call_byvalue_moves(mir_funcs_by_id, signatures_by_id, shared_type_table, diagnostics=checked.diagnostics)),
+					("validate_mir_void_return_shape", lambda: validate_mir_void_return_shape(mir_funcs_by_id, signatures_by_id, shared_type_table)),
 				]
 			)
 		for validator_name, validator_action in validator_plan:

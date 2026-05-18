@@ -1,5 +1,89 @@
 # Drift development history
 
+## 2026-05-18 (MIR validator tier 1 #1 of 3: backstop for nothrow `-> Void` return shape -- catches `M.Return(value=<synth_void>)` immediately after MIR build instead of letting it surface as an opaque `KeyError` deep in `throw_checks`)
+- **Compiler hygiene.**  Release 0.31.105, ABI unchanged at 14.
+  First validator from the parked MIR-validators tier-1 plan
+  (`work/mir-validators-tier1/plan.md`).  The originating bug was
+  the 2026-05-17 Void-callback-lambda crash already fixed at two
+  layers (`driftc.py` ~6625, `checker/__init__.py` ~4995).  This
+  validator adds a third defense: any future synthesis pass that
+  re-introduces the bad MIR shape (`M.Return(value=<some_ssa>)`
+  on a nothrow `-> Void` fn) trips a targeted MIR-boundary
+  diagnostic instead of bubbling up as an opaque
+  `KeyError: (FunctionId(...), 't<N>')` from inside
+  `stage4/throw_checks.py::enforce_fnresult_returns_typeaware`.
+
+  **Scope:** new validator `validate_mir_void_return_shape`
+  added to `lang/driftc/mir_validate.py`.  Filters: skip fns
+  with no signature, skip non-Void return types
+  (`TypeTable.is_void`), skip `declared_can_throw=True`
+  (their `Ok(Void)` carrier built upstream by
+  `M.ConstructResultOk` legitimately fills `term.value`).
+  Remaining set: nothrow `-> Void` fns.  For each, every
+  `M.Return` terminator must carry `value=None`; else raise
+  `AssertionError` with a diagnostic that names the fn, block,
+  and the offending ssa value -- and points at the canonical
+  lowering shape in `driftc.py` for the fix.
+
+  **Why an AssertionError (not a `Diagnostic`):** the original
+  bug class is a *compiler bug*, not user code.  No user source
+  can produce this MIR shape; only a buggy lowering pass can.
+  The `_run_mir_validator` driver in `driftc.py` already wraps
+  `AssertionError` with a boundary contract diag, so failures
+  still surface as a `phase=mir_validate` user diagnostic rather
+  than an uncaught traceback -- the developer-facing channel for
+  compiler-internal invariant violations is the right shape here.
+
+  **Pipeline placement:** runs in the
+  `if shared_type_table is not None:` validator-plan block in
+  `driftc.py::compile_stubbed_funcs`, immediately after the
+  existing typed-table-dependent validators (iface_init,
+  array_copy, call_byvalue_moves) -- well before
+  `lower_module_to_llvm` and *also* before the
+  `stage4/throw_checks.py` pass that surfaced the original
+  KeyError.  Confirmed `compile_stubbed_funcs` (which routes
+  through this plan) runs strictly before LLVM lowering at
+  `driftc.py:7551 / :7678`.
+
+  **Audit -- no pre-existing violations:**
+  - All 282 `lang/tests/stage2/` unit tests pass.
+  - All 8 driver tests in the originating-bug carriers
+    (`test_lambda_void_callback_throw_check.py` x5 +
+    `test_mir_validate_boundary_diagnostics.py` x2 +
+    `test_const_share_synth_shared_binder_name.py` x1) pass.
+  - All 45 codegen e2e fixtures matching `*void*|*lambda*|*callback*`
+    pass (the natural carrier population for this bug class).
+  - Minimal stdlib-using compile and a Void-callback-lambda repro
+    both compile + link cleanly.
+
+  Per the plan's acceptance criterion #4 (don't ship a validator
+  that fails on current main), the validator is NOT gated behind
+  `DRIFT_STRICT_MIR_VALIDATE=1` -- the audit ruled that gate
+  unnecessary.
+
+  **Files touched:**
+  - `lang/driftc/mir_validate.py` -- new
+    `validate_mir_void_return_shape` validator (~40 LOC, almost
+    half docstring); inserted after `validate_mir_basic_hygiene`.
+  - `lang/driftc/driftc.py` -- import + one-line wire-up in the
+    `validator_plan` extend block at ~line 7184.
+  - `lang/tests/stage2/test_mir_validate_void_return_shape.py`
+    (NEW) -- 5 unit tests: (a) nothrow Void + `Return(None)`
+    accepted, (b) nothrow Void + `Return(value)` rejected with
+    AssertionError pinning the message prefix, (c) can-throw
+    Void + `Return(ok_carrier)` accepted, (d) non-Void return
+    accepted regardless of value, (e) fn missing from
+    `signatures_by_id` skipped without error.
+  - `lang/versions.py` -- 0.31.104 -> 0.31.105.
+
+  **Sequenced next (NOT in this slice):**
+  Tier 1 validator #2 -- `validate_mir_match_arm_binder_uniqueness`
+  -- still pending the feasibility check on whether the checker
+  or `stage1/ast_to_hir.py::lower_match_expr` is the canonical
+  enforcement site.  See `work/mir-validators-tier1/plan.md`
+  section 2.  Land independently per the plan's
+  "one validator per commit" rule.
+
 ## 2026-05-17 (compiler fix: `--entry` full elaboration silently fired `cannot move from a reference type` at stdlib internals -- generic body's `move v` was re-type-checked under monomorphization with `T = &mut Conn`, triggering a strictness check the original source had already cleared)
 - **Compiler fix.**  Release 0.31.104, ABI unchanged at 14.
   Reported as app-team `compiler-findings.md` #3 (reply 5,

@@ -304,6 +304,45 @@ def validate_mir_basic_hygiene(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
 			elif isinstance(term, M.IfTerminator):
 				_check_value(term.cond, "IfTerminator", "cond")
 
+
+def validate_mir_void_return_shape(
+	funcs: Mapping[FunctionId, M.MirFunc],
+	signatures_by_id: Mapping[FunctionId, FnSignature],
+	type_table: TypeTable,
+) -> None:
+	"""Nothrow `-> Void` fns must terminate with `M.Return(value=None)`.
+
+	Catches the 2026-05-17 Void-callback-lambda bug class
+	(`M.Return(value=<synth_void>)` on a nothrow Void fn).  LLVM
+	lowering already asserts the same invariant; this validator
+	fires immediately after MIR build so the diagnostic points at
+	the lowering site instead of surfacing as an opaque `KeyError`
+	deep in `throw_checks`.  Can-throw Void fns are excluded —
+	they legitimately return an `Ok(Void)` carrier built by
+	`M.ConstructResultOk` upstream of this pass.
+	"""
+	for fn_id, func in funcs.items():
+		sig = signatures_by_id.get(fn_id)
+		if sig is None or sig.return_type_id is None:
+			continue
+		if not type_table.is_void(sig.return_type_id):
+			continue
+		if sig.declared_can_throw:
+			continue
+		for block in func.blocks.values():
+			term = block.terminator
+			if isinstance(term, M.Return) and term.value is not None:
+				raise AssertionError(
+					f"MIR invariant violation: nothrow Void fn "
+					f"{function_symbol(fn_id)} block '{block.name}' "
+					f"emits M.Return(value='{term.value}') — expected "
+					f"M.Return(value=None) (likely a lowering site that "
+					f"forgot to drop the synthesized Void carrier; see "
+					f"`lang/driftc/driftc.py` Void-lambda lowering for "
+					f"the canonical shape)"
+				)
+
+
 def validate_mir_call_invariants(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
 	"""Ensure MIR call instructions carry explicit can_throw flags and stable ids."""
 	for fn_id, func in funcs.items():
