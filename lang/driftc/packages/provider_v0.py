@@ -365,7 +365,12 @@ def _validate_package_interfaces(pkg: LoadedPackage) -> None:
 					raise _err(f"module '{mid}' trait_metadata[{idx}] missing name")
 				if name != trait_name:
 					raise _err(f"module '{mid}' trait_metadata[{idx}] trait_id name mismatch")
-				if name not in traits:
+				# `pub trait` and `pub interface` both participate in the
+				# dispatch-metadata path (both are `implement`'d for target
+				# types).  Accept either as the source of a trait_metadata
+				# entry.  See `_encode_trait_metadata_for_module` for the
+				# emitter-side union.
+				if name not in traits and name not in type_interfaces:
 					raise _err(f"module '{mid}' trait_metadata[{idx}] refers to non-exported trait '{name}'")
 				if name in seen_traits:
 					raise _err(f"module '{mid}' trait_metadata contains duplicate trait '{name}'")

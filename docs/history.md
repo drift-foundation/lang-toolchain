@@ -1,5 +1,174 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: cross-package method dispatch through `pub interface` fired `ResolutionError: missing trait metadata for '<pkg.Interface>'` at the call resolver -- producer-side package emission only included `pub trait` names in `trait_metadata`; `pub interface` was silently dropped from the dispatch surface)
+- **Compiler fix.**  Release 0.31.102, ABI unchanged at 14.
+  Fixes app-team `compiler-findings.md` #1: `pool.close()` on
+  a concrete `mariadb.rpc.pool.ConnectionPool` whose `close`
+  comes from `implement mariadb.rpc.managed.ConnectionSource
+  for ConnectionPool` (interface declared in a sibling sub-
+  package) failed at compile with:
+
+      lang.driftc.method_resolver.ResolutionError:
+        missing trait metadata for
+        'mariadb-rpc::mariadb.rpc.managed.ConnectionSource'
+        at call_resolver.py:2694
+
+  Reduced to a 2-package self-contained repro: pkg A exports
+  `pub interface Doer { fn do_thing(self: &mut Self) -> Int }`,
+  pkg B `implement A.Doer for Thing`, consumer calls
+  `t.do_thing()` on a `&mut B.Thing`.  Pinned as driver test
+  `test_cross_pkg_interface_trait_metadata.py` (V1: minimal
+  scalar method, V2: interface method with non-scalar param
+  `&Req` + return `Status` referencing other pkg-A exports).
+
+  **Root cause -- three-layer mismatch on `pub interface` vs
+  `pub trait` at the package boundary:**
+
+  Drift has TWO surface keywords that produce `implement`-able
+  dispatch surfaces:
+    - `pub trait T { ... }` — name lands in
+      `exports.traits`.
+    - `pub interface I { ... }` — name lands in
+      `exports.types.interfaces`.
+
+  At the in-memory dispatch layer (type-checker /
+  `trait_world.traits` + `type_table.interface_bases`), both
+  produce TraitDef-style records and are uniformly
+  `implement`'d.  At the PACKAGE EMISSION layer, the two
+  diverged:
+
+   1. **Encoder** (`driftc.py:11080` →
+      `_encode_trait_metadata_for_module`).  Filtered
+      `trait_world.traits` by `name in exported`, where
+      `exported = set(exports.traits)`.  Interfaces failed the
+      filter even when `implement`'d, so `trait_metadata` was
+      EMPTY for interface names.  Compounding: interface method
+      signatures don't live in `trait_world.traits` at all --
+      they live in `type_table.interface_bases` as
+      `InterfaceSchema` with `GenericTypeExpr`-typed params.
+      So even unioning the name set wouldn't have surfaced any
+      methods to encode.
+   2. **Loader** (`driftc.py:2150` →
+      `_load_trait_defs_and_impl_metas`).  Scanned only
+      `exports.traits` for "expected trait names" and
+      cross-checked with `trait_metadata`.  Interfaces weren't
+      in that set, so even if the encoder HAD emitted entries,
+      the loader's seen/missing reconciliation would never have
+      asked for them.
+   3. **Package validator** (`provider_v0.py:368`).  Rejected
+      `trait_metadata` entries whose `name` wasn't in
+      `exports.traits` with
+      `trait_metadata[N] refers to non-exported trait 'X'` --
+      so a naive encoder-only fix bounced off the
+      package-format validator at write time.
+
+  Downstream, the consumer-side guard at `driftc.py:9474`
+  (the K26 workaround) explicitly marked every external impl's
+  `trait_key` as MISSING when the trait wasn't found in
+  `external_trait_defs` -- which was ALWAYS the case for
+  interfaces, since they never made it into the trait-metadata
+  encoder in the first place.  That mark drove
+  `trait_index.is_missing(Doer) → True` at
+  `call_resolver.py:2693`, raising `ResolutionError` for any
+  cross-package interface call on a concrete receiver.
+
+  **Why same-package dispatch was fine:** within the producer
+  package's own compilation, both `trait_world.traits` and
+  `type_table.interface_bases` carry the surface forms
+  correctly, and the `implement Iface for Thing` lowering wires
+  the impl method as a method-on-Thing regardless of which
+  keyword declared the interface.  The bug was purely at the
+  cross-package serialization boundary.
+
+  **Why the maria team hit this only now:** the v0 maria call
+  patterns mostly went through `var src: pool.ConnectionSource
+  = ...` (interface-type local) where dispatch uses the
+  separate interface-instance path at
+  `call_resolver.py:1954`.  The new v1 patterns store the
+  CONCRETE struct (`var pool: pool.ConnectionPool = ...`) and
+  call `pool.close()` directly -- that path goes through
+  trait-impl candidate gathering, which is where the missing
+  metadata showed up.
+
+  **Fix shape (option (a) -- "union interfaces into the
+  dispatch-metadata path", per K direction 2026-05-17):**
+
+   1. **Emitter** -- new `_encode_generic_type_expr_for_iface`
+      helper in `driftc.py:1919` mirrors `encode_type_expr` but
+      reads `GenericTypeExpr` (resolves `param_index` against
+      interface-level + method-level type-param names);
+      `_encode_trait_metadata_for_module` now takes an
+      `interface_schemas` arg and emits a parallel set of
+      `trait_metadata` entries for every exported interface
+      whose name is in the unioned dispatch-name set.  Caller
+      at `driftc.py:11080` builds
+      `exported_dispatch_names = exports.traits ∪
+      exports.types.interfaces` and supplies the
+      `type_table.interface_bases`-filtered schemas for the
+      module.
+   2. **Loader** -- `_load_trait_defs_and_impl_metas` at
+      `driftc.py:2150` unions `exports.types.interfaces` into
+      `exported_traits` so the seen/missing reconciliation
+      treats interfaces as expected dispatch-metadata names.
+   3. **Validator** -- `provider_v0.py:368` widens the
+      "trait_metadata refers to non-exported trait" check to
+      accept either `exports.traits` or
+      `exports.types.interfaces`.
+   4. **Call resolver** -- interfaces are implicitly in
+      trait-scope when their defining module is visible (you
+      can't `use trait` on a `pub interface` -- the parser
+      rejects).  Carved out at `call_resolver.py:2699`:
+      bypass the `trait_in_scope` check when
+      `type_table.get_interface_base(trait_key.module,
+      trait_key.name)` returns a base id.
+   5. **K26 workaround removal** -- the
+      "mark-all-interface-trait-keys-missing" guard at
+      `driftc.py:9470` is no longer needed (and is actively
+      harmful, since interfaces now DO have trait_metadata).
+      Replaced with a comment explaining the surviving check
+      is a stale-impl guard for genuine package-metadata gaps.
+
+  `exports.types.interfaces` is left intact as a separate
+  export namespace -- consumers that inspect it today continue
+  to work.  The package format itself doesn't change: only the
+  CONTENT of `trait_metadata` (now includes interface entries)
+  and the loader's interpretation of the existing
+  `exports.types.interfaces` namespace.  ABI 14 unchanged.
+
+  **Files touched:**
+  - `lang/driftc/driftc.py` -- new
+    `_encode_generic_type_expr_for_iface` helper and local
+    `_BUILTIN_TYPE_NAMES_FOR_IFACE` mirror set; extended
+    `_encode_trait_metadata_for_module` signature to take
+    `interface_schemas`; caller-site union of dispatch names
+    + iface schema gather; loader-side union of
+    `exports.types.interfaces` into `exported_traits`;
+    K26-workaround comment replaced with stale-impl-guard
+    note.
+  - `lang/driftc/packages/provider_v0.py` -- non-exported-
+    trait validator widened to accept interfaces.
+  - `lang/driftc/checker/call_resolver.py` -- trait-in-scope
+    gate carve-out for interface trait keys.
+  - `lang/versions.py` -- 0.31.101 → 0.31.102.
+  - `lang/tests/driver/test_cross_pkg_interface_trait_metadata.py`
+    (NEW) -- V1 minimal interface dispatch across packages;
+    V2 interface method with non-scalar param/return.
+
+  **K-review HIGH considered:**
+   - Could a `pub trait T` and `pub interface T` ever collide
+     in the same module under the same name?  Parser rejects
+     (single namespace for type-like decls), so the encoder's
+     `encoded_trait_names` skip is purely defensive.
+   - Does the in-scope carve-out widen visibility too much?
+     No -- a struct that doesn't implement the interface has
+     no entry in `trait_impl_index`'s
+     `_by_trait_target_method[(iface_key, struct_base, ...)]`
+     so candidate gathering returns empty even with the
+     carve-out.  The carve-out only matters when an impl
+     exists; ergonomically that matches user expectation
+     ("if I imported the interface and the struct implements
+     it, I should be able to call the method").
+
 ## 2026-05-17 (compiler fix: `&"literal"` borrow + `callbackN(|...|=>{...})` in same fn body crashed borrow-check with `cannot borrow from moved or uninitialized '__tmp_borrowN'` -- HLambda body invisible to `_assign_missing_binding_ids`; lambda params + outer fn locals collided on binding_id)
 - **Compiler fix.**  Release 0.31.101, ABI unchanged at 14.
   Fixes app-team `compiler-findings.md` #4: 14-line single-file

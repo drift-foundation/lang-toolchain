@@ -2693,10 +2693,25 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if trait_key_for_cand is not None and ctx.trait_index is not None and ctx.trait_index.is_missing(trait_key_for_cand):
 					raise ResolutionError(f"missing trait metadata for '{_trait_label(trait_key_for_cand)}'", span=getattr(expr, "loc", Span()))
 				if trait_key_for_cand is not None:
+					# Interfaces (`pub interface`) are implicitly in scope when
+					# their defining module is visible -- they're part of the
+					# structural API of a type, unlike `pub trait` which requires
+					# explicit `use trait` to bring methods into scope.  Without
+					# this carve-out, `t.iface_method()` on a concrete struct
+					# that implements a cross-package interface would always
+					# fail the trait-in-scope gate (since `use trait` only
+					# accepts `pub trait` names, not `pub interface`).
+					_is_interface_trait = False
+					if ctx.type_table is not None:
+						_iface_base = ctx.type_table.get_interface_base(
+							module_id=getattr(trait_key_for_cand, "module", None),
+							name=getattr(trait_key_for_cand, "name", None),
+						)
+						_is_interface_trait = _iface_base is not None
 					# Trait-in-scope gate: compiler-generated calls (wrapper_call,
 					# for_iter, for_next) bypass because they target known-valid
 					# methods from the package compilation context.
-					if not (ignore_visibility or trait_key_for_cand in traits_in_scope_set):
+					if not (ignore_visibility or _is_interface_trait or trait_key_for_cand in traits_in_scope_set):
 						continue
 					# Module visibility: for user-written code, also require
 					# the impl-defining module is visible (K36 ensures package

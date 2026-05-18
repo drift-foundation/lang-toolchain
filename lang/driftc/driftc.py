@@ -173,6 +173,7 @@ from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, w
 from lang.driftc.core.function_key import FunctionKey, function_key_from_obj, function_key_str
 from lang.driftc.id_registry import IdRegistry
 from lang.driftc.packages.provisional_dmir_v0 import (
+	_BUILTIN_TYPE_NAMES,
 	decode_hir_funcs,
 	decode_generic_templates,
 	decode_trait_expr,
@@ -1916,20 +1917,91 @@ def _find_dependency_main(loaded_pkgs: list["LoadedPackage"]) -> tuple[str, Path
 	return None
 
 
+def _encode_generic_type_expr_for_iface(
+	expr: object,
+	*,
+	default_module: str | None,
+	type_param_names: list[str],
+) -> dict[str, object] | None:
+	"""Encode a `GenericTypeExpr` (interface-method param/return types
+	from `type_table.interface_bases`) into the same dict shape that
+	`encode_type_expr` produces for `parser_ast.TypeExpr`.
+
+	Differences from `encode_type_expr`: GenericTypeExpr uses
+	`param_index` for type-parameter references (resolved via the
+	supplied `type_param_names` list — interface-level params come
+	first, then method-level), and `Self` is a regular named node
+	(`name == "Self"`).  The output is decoded by the existing
+	`decode_type_expr` consumer.
+
+	Uses the SAME `_BUILTIN_TYPE_NAMES` set as `encode_type_expr`
+	(imported from `packages/provisional_dmir_v0.py`) so the
+	`module` injection rule for non-builtin names is identical
+	between the two encoders.  Diverging this set would mis-encode
+	interface method signatures that mention a builtin not in the
+	local copy (e.g., `FnResult`).
+	"""
+	if expr is None:
+		return None
+	param_index = getattr(expr, "param_index", None)
+	if param_index is not None:
+		idx = int(param_index)
+		if 0 <= idx < len(type_param_names):
+			return {"param": type_param_names[idx]}
+		return None
+	name = getattr(expr, "name", None)
+	if not isinstance(name, str) or not name:
+		return None
+	if name == "Self":
+		return {"param": "Self"}
+	module_id = getattr(expr, "module_id", None)
+	if module_id is None:
+		if name == "Optional":
+			module_id = "lang.core"
+		elif default_module and name not in _BUILTIN_TYPE_NAMES:
+			module_id = default_module
+	args_obj: list[object] = []
+	for arg in list(getattr(expr, "args", []) or []):
+		args_obj.append(
+			_encode_generic_type_expr_for_iface(
+				arg,
+				default_module=default_module,
+				type_param_names=type_param_names,
+			)
+		)
+	out: dict[str, object] = {"name": name}
+	if module_id:
+		out["module"] = module_id
+	if name == "fn":
+		out["can_throw"] = bool(getattr(expr, "fn_throws", True))
+	if args_obj:
+		out["args"] = args_obj
+	return out
+
+
 def _encode_trait_metadata_for_module(
 	*,
 	package_id: str,
 	module_id: str,
 	exported_traits: list[str],
 	trait_world: object | None,
+	interface_schemas: list[object] | None = None,
 ) -> list[dict[str, object]]:
-	if not exported_traits or trait_world is None:
-		return []
-	traits = getattr(trait_world, "traits", None)
-	if not isinstance(traits, dict):
-		return []
-	exported = set(exported_traits)
+	"""Emit trait-metadata entries for every exported `pub trait` AND
+	`pub interface` in `module_id`.
+
+	`exported_traits` is the union `exports.traits ∪ exports.types.interfaces`
+	(both surface forms participate in cross-package method dispatch via
+	`implement X for T` and must round-trip through `trait_metadata`).
+	`interface_schemas` is the slice of `type_table.interface_bases` whose
+	`module_id` matches this module — passed by the caller so this encoder
+	doesn't need to know about the global type table.
+	"""
+	exported = set(exported_traits or [])
 	out: list[dict[str, object]] = []
+	traits = getattr(trait_world, "traits", None) if trait_world is not None else None
+	if not isinstance(traits, dict):
+		traits = {}
 	for trait_def in traits.values():
 		key = getattr(trait_def, "key", None)
 		if key is None or getattr(key, "module", None) != module_id:
@@ -2000,6 +2072,82 @@ def _encode_trait_metadata_for_module(
 					type_param_names=trait_type_params,
 				),
 				"span": encode_span(getattr(trait_def, "loc", None)),
+			}
+		)
+
+	# Interfaces participate in cross-package method dispatch the same
+	# way `pub trait` does (both can be `implement`'d for a target type).
+	# Emit a parallel set of trait_metadata entries for interfaces whose
+	# name is in the exported set, so the consumer-side trait index has
+	# the dispatch surface registered.  Without this, the call resolver's
+	# `trait_index.is_missing(trait_key)` check at `call_resolver.py:2694`
+	# fires for any cross-package interface call.
+	#
+	# Source: `type_table.interface_bases` carries `InterfaceSchema`
+	# (with `InterfaceMethodSchema` and `GenericTypeExpr`-typed params).
+	# Mapped to the same encoded shape consumed by the loader at
+	# `_load_trait_defs_and_impl_metas` so no decoder changes are needed.
+	encoded_trait_names = {getattr(entry, "get", lambda _k, _d=None: _d)("name") for entry in out}
+	encoded_trait_names = {str(n) for n in encoded_trait_names if isinstance(n, str)}
+	for iface_schema in list(interface_schemas or []):
+		schema_module = getattr(iface_schema, "module_id", None)
+		schema_name = getattr(iface_schema, "name", None)
+		if schema_module != module_id or not isinstance(schema_name, str):
+			continue
+		if schema_name not in exported:
+			continue
+		if schema_name in encoded_trait_names:
+			# Defensive: a name appearing in BOTH `pub trait` and
+			# `pub interface` shouldn't exist (parser rejects), but
+			# don't double-emit if it ever does.
+			continue
+		iface_type_params = list(getattr(iface_schema, "type_params", []) or [])
+		methods: list[dict[str, object]] = []
+		for method in list(getattr(iface_schema, "methods", []) or []):
+			method_type_params = list(getattr(method, "type_params", []) or [])
+			combined_tp_names = iface_type_params + method_type_params
+			params: list[dict[str, object]] = []
+			for param in list(getattr(method, "params", []) or []):
+				params.append(
+					{
+						"name": getattr(param, "name", ""),
+						"type": _encode_generic_type_expr_for_iface(
+							getattr(param, "type_expr", None),
+							default_module=module_id,
+							type_param_names=combined_tp_names,
+						),
+					}
+				)
+			methods.append(
+				{
+					"name": getattr(method, "name", ""),
+					"type_params": method_type_params,
+					"params": params,
+					"return_type": _encode_generic_type_expr_for_iface(
+						getattr(method, "return_type", None),
+						default_module=module_id,
+						type_param_names=combined_tp_names,
+					),
+					"require": None,
+					"span": encode_span(None),
+					"declared_nothrow": bool(getattr(method, "declared_nothrow", False)),
+					"declared_throws": bool(getattr(method, "declared_throws", False)),
+					"declared_terminal_throws": bool(getattr(method, "declared_terminal_throws", False)),
+				}
+			)
+		trait_id_obj = {
+			"package_id": package_id,
+			"module": module_id,
+			"name": schema_name,
+		}
+		out.append(
+			{
+				"trait_id": trait_id_obj,
+				"name": schema_name,
+				"type_params": iface_type_params,
+				"methods": methods,
+				"require": None,
+				"span": encode_span(None),
 			}
 		)
 	return out
@@ -2148,6 +2296,26 @@ def _collect_external_trait_and_impl_metadata(
 				traits = exports.get("traits")
 				if isinstance(traits, list):
 					exported_traits = {t for t in traits if isinstance(t, str)}
+				# Union `pub interface` exports into the dispatch-name set.
+				# Mirrors the emitter at `_encode_trait_metadata_for_module`
+				# caller site -- interfaces are dispatched via `implement
+				# X for T` and are expected to round-trip through
+				# `trait_metadata` for cross-package method resolution.
+				# Without this union, an interface declared by package A
+				# and `implement`'d by package B would have its dispatch
+				# metadata emitted but never "expected" by the loader, so
+				# the seen/missing reconciliation would silently drop it.
+				# Keep `exports.types.interfaces` populated as a separate
+				# namespace (consumers may still inspect it independently);
+				# this only widens the dispatch-name set, not the export
+				# classification.
+				types_obj = exports.get("types")
+				if isinstance(types_obj, dict):
+					iface_names = types_obj.get("interfaces")
+					if isinstance(iface_names, list):
+						for nm in iface_names:
+							if isinstance(nm, str):
+								exported_traits.add(nm)
 
 			trait_meta = iface.get("trait_metadata")
 			seen_trait_names: set[str] = set()
@@ -9282,10 +9450,15 @@ def main(argv: list[str] | None = None) -> int:
 			id_registry=id_registry,
 		)
 
-		# K26: Interface types (e.g., Sink) don't appear in trait_metadata
-		# because they're registered in the type table, not the trait world.
-		# Mark their trait_keys as "missing" so trait index validation doesn't
-		# reject impl references to interface-based traits.
+		# Stale-impl guard: if a loaded package references a trait_key whose
+		# definition is NOT in `external_trait_defs` (neither as a `pub
+		# trait` nor `pub interface` in any loaded package), mark it missing
+		# so the call resolver fails loudly instead of silently dispatching
+		# against an unknown signature.  Both surface forms now round-trip
+		# through `trait_metadata` (see `_encode_trait_metadata_for_module`),
+		# so this fires only for genuine package-metadata gaps -- the K26
+		# workaround that used to mark ALL interface trait_keys missing here
+		# has been removed.
 		_trait_def_keys = {getattr(td, "key", None) for td in external_trait_defs}
 		for impl in external_impl_metas:
 			tk = getattr(impl, "trait_key", None)
@@ -11077,11 +11250,31 @@ def main(argv: list[str] | None = None) -> int:
 					requires_by_symbol[function_symbol(fn_id)] = req_expr
 			if package_id is None:
 				raise ValueError("package_id is required to emit module payloads")
+			# Union `pub interface` exports into the dispatch-metadata path:
+			# both `pub trait` and `pub interface` can be `implement`'d for
+			# a target type, so both must round-trip through `trait_metadata`
+			# for cross-package method dispatch.  Without this union, the
+			# call resolver's `trait_index.is_missing(...)` check fires at
+			# `call_resolver.py:2694` for any cross-package interface call.
+			# Mirror in the loader (`_load_trait_defs_and_impl_metas`).
+			exported_dispatch_names = list(
+				dict.fromkeys(list(exported_traits) + list(exported_types["interfaces"]))
+			)
+			# Source for interface method signatures: type-table interface
+			# schemas filtered to this module.  Carried as a list (not a
+			# dict by base_id) since the encoder only needs sequence access.
+			module_iface_schemas: list[object] = []
+			if type_table is not None:
+				_iface_bases = getattr(type_table, "interface_bases", {}) or {}
+				for _schema in _iface_bases.values():
+					if getattr(_schema, "module_id", None) == mid:
+						module_iface_schemas.append(_schema)
 			trait_metadata = _encode_trait_metadata_for_module(
 				package_id=package_id,
 				module_id=mid,
-				exported_traits=exported_traits,
+				exported_traits=exported_dispatch_names,
 				trait_world=trait_world,
+				interface_schemas=module_iface_schemas,
 			)
 			impl_headers = _encode_impl_headers_for_module(
 				module_id=mid,
