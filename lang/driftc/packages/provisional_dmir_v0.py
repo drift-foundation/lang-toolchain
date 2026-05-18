@@ -923,6 +923,38 @@ def type_table_fingerprint(table_obj: Mapping[str, Any]) -> str:
 	return sha256_hex(canonical_json_bytes(dict(table_obj)))
 
 
+def decode_declared_throws_event_fqns(
+	raw: object, *, signature_name: str = "<unknown>",
+) -> list[str] | None:
+	"""Validate + decode a `declared_throws_event_fqns` field from a
+	foreign package signature payload.
+
+	Shape contract: `None` (or missing — old packages pre-this-slice)
+	maps to `None`; a `list[str]` is accepted; anything else is a
+	corrupt/malformed payload and raises `ValueError`.  Old packages
+	emitted before this field existed simply omit the key, so callers
+	pass the result of `dict.get("declared_throws_event_fqns")` which
+	is `None` in that case — forward-compat OK.
+
+	Fail-closed: this is package metadata, not user source.  Silent
+	best-effort would let a corrupt `.dmp` produce a `["m", ":", "E"]`-
+	from-string list and silently break narrow-throws coverage.
+
+	Centralized so both consumer-decode sites in `driftc.py` and the
+	round-trip test (`test_pkg_round_trip_narrow_throws.py`) exercise
+	the same validator.
+	"""
+	if raw is None:
+		return None
+	if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+		return list(raw)
+	raise ValueError(
+		f"invalid declared_throws_event_fqns in foreign signature "
+		f"{signature_name!r}: expected list[str] or null, got "
+		f"{type(raw).__name__}"
+	)
+
+
 def encode_signatures(
 	signatures: Mapping[str, FnSignature],
 	*,
@@ -1102,6 +1134,19 @@ def encode_signatures(
 			# fields to False for forward compatibility with old packages.
 			"declared_throws": bool(getattr(sig, "declared_throws", False)),
 			"declared_terminal_throws": bool(getattr(sig, "declared_terminal_throws", False)),
+			# Narrow `throws E1, E2, ...` declarations. None when the
+			# producer had no narrow list (generic-throws semantics).
+			# Empty list is preserved distinctly from None.  FQNs are
+			# already canonicalized to the underlying pub-error's
+			# defining-module form by `_resolve_declared_throws_types`,
+			# so the consumer can subset-check against `caught_events`
+			# directly.  Source order is preserved (set conversion
+			# happens consumer-side at the subset check).
+			"declared_throws_event_fqns": (
+				list(sig.declared_throws_event_fqns)
+				if getattr(sig, "declared_throws_event_fqns", None) is not None
+				else None
+			),
 			"declared_unsafe": bool(getattr(sig, "declared_unsafe", False)),
 			"is_exported_entrypoint": bool(getattr(sig, "is_exported_entrypoint", False)),
 			"is_extern_c": bool(getattr(sig, "is_extern_c", False)),

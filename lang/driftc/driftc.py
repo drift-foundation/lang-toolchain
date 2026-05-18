@@ -175,6 +175,7 @@ from lang.driftc.core.function_key import FunctionKey, function_key_from_obj, fu
 from lang.driftc.id_registry import IdRegistry
 from lang.driftc.packages.provisional_dmir_v0 import (
 	_BUILTIN_TYPE_NAMES,
+	decode_declared_throws_event_fqns,
 	decode_hir_funcs,
 	decode_generic_templates,
 	decode_trait_expr,
@@ -9346,6 +9347,10 @@ def main(argv: list[str] | None = None) -> int:
 					is_intrinsic = bool(sd.get("is_intrinsic", False)) or intrinsic_kind is not None
 
 					_is_inst = "__inst__" in name and not type_params and not impl_type_params
+					_narrow_fqns: list[str] | None = decode_declared_throws_event_fqns(
+						sd.get("declared_throws_event_fqns"),
+						signature_name=str(sd.get("name", "?")),
+					)
 					sig = FnSignature(
 						name=name,
 						module=module_name,
@@ -9362,6 +9367,7 @@ def main(argv: list[str] | None = None) -> int:
 						# for forward compatibility.
 						declared_throws=bool(sd.get("declared_throws", False)),
 						declared_terminal_throws=bool(sd.get("declared_terminal_throws", False)),
+						declared_throws_event_fqns=_narrow_fqns,
 						declared_unsafe=bool(sd.get("declared_unsafe", False)) or None,
 						is_intrinsic=is_intrinsic,
 						intrinsic_kind=intrinsic_kind,
@@ -10011,6 +10017,10 @@ def main(argv: list[str] | None = None) -> int:
 							raw_ret = sd.get("return_type_id")
 							if isinstance(raw_ret, int):
 								ret_tid = tid_map.get(raw_ret, raw_ret)
+						_narrow_fqns2: list[str] | None = decode_declared_throws_event_fqns(
+							sd.get("declared_throws_event_fqns"),
+							signature_name=str(sd.get("name", "?")),
+						)
 						sig = FnSignature(
 							name=str(sd.get("name") or sname),
 							module=sd.get("module"),
@@ -10019,6 +10029,7 @@ def main(argv: list[str] | None = None) -> int:
 							param_type_ids=resolved_ptids,
 							return_type_id=ret_tid,
 							declared_can_throw=sd.get("declared_can_throw"),
+							declared_throws_event_fqns=_narrow_fqns2,
 							is_method=bool(sd.get("is_method", False)),
 							self_mode=sd.get("self_mode"),
 							# Slice 7b (2026-05-06): trait identity round-trip.

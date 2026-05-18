@@ -308,6 +308,67 @@ def test_v2_same_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	)
 
 
+# ─── V0: cross-package, no alias ──────────────────────────────────
+
+
+# V0 isolates the cross-package narrow-throws metadata round-trip
+# (Steps C/D/E of the cross-pkg-narrow-throws-contract slice) from §B
+# alias canonicalization.  Producer single-module, NO `pub type` alias.
+# If V0 fails but V2 passes, the failure is in the package metadata
+# round-trip.  If V0 passes but V3 fails, the failure is in §B alias
+# canonicalization at package-metadata boundary.
+
+_V0_PRODUCER_SRC = """\
+module producer_pkg;
+import std.core as core;
+export { Inner, do_throw };
+
+pub error Inner { tag: String }
+
+pub fn do_throw() throws Inner -> Int { throw Inner(tag = "hit"); }
+"""
+
+_V0_CONSUMER_SRC = """\
+module main;
+import std.core as core;
+import producer_pkg as producer_pkg;
+
+pub fn main() nothrow -> Int {
+	try {
+		val n = producer_pkg.do_throw();
+		return 99;
+	} catch producer_pkg:Inner(e) {
+		if e.tag == "hit" { return 0; }
+		return 1;
+	}
+}
+"""
+
+
+def test_v0_cross_package_catch_no_alias(tmp_path: Path) -> None:
+	"""V0: cross-package typed catch of the underlying `pub error` name.
+	Pins narrow-throws metadata round-trip independently of alias
+	canonicalization.
+
+	Post-slice expectation: compile + run; binary returns 0."""
+	pkg_root, trust_path, _priv = _build_and_sign_pkg(
+		tmp_path, "producer_pkg", {"producer.drift": _V0_PRODUCER_SRC},
+	)
+	res = _compile_consumer(
+		tmp_path, pkg_root, trust_path,
+		deps=[("producer_pkg", "0.1.0")],
+		source=_V0_CONSUMER_SRC,
+	)
+	assert res.returncode == 0, (
+		f"V0 cross-package narrow-throws metadata round-trip broken; "
+		f"consumer cannot see producer's declared_throws_event_fqns.\n\n"
+		f"{res.stderr[-1500:]}"
+	)
+	out_bin = tmp_path / "main_bin"
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	assert run.returncode == 0, f"V0 binary exited {run.returncode}; expected 0"
+
+
 # ─── V3: THE BUG (cross-package alias of pub-error) ────────────────
 
 
@@ -345,13 +406,6 @@ pub fn main() nothrow -> Int {
 """
 
 
-# Signature of the known cross-package typed-throws metadata gap
-# (orthogonal to §B, pre-existing).  Used by V3/V4 to runtime-xfail
-# the test ONLY when this specific upstream gap is what's blocking
-# them -- so an actual §B regression still fails loud.
-_KNOWN_CROSS_PKG_THROWS_GAP_MARKER = "is declared nothrow but may throw"
-
-
 def test_v3_cross_package_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	"""THE BUG (cross-package, single-module producer): same shape as
 	V2, but the `pub type Alias = Inner` re-export lives in a producer
@@ -363,17 +417,9 @@ def test_v3_cross_package_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	in-source aliases but the package-metadata round-trip drops
 	alias-target identity.
 
-	Note on test layout: decorator-level `@pytest.mark.xfail` was
-	intentionally NOT used here because it would mask a real §B
-	regression -- if the alias schema lookup regressed back to
-	`E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA`, a strict-xfail test would
-	still report xfail (the test "failed as expected") instead of a
-	real failure.  Instead we ASSERT the §B-specific shape FIRST,
-	then runtime-xfail only when the failure matches the known
-	upstream gap.
-
-	Post-fix expectation (once cross-pkg narrow-throws metadata
-	slice lands): compile + run; binary returns 0."""
+	2026-05-18: cross-pkg narrow-throws metadata slice landed; the
+	runtime-xfail block for the orthogonal cross-pkg throws gap is
+	removed.  The §B-specific assertion stays as a regression guard."""
 	pkg_root, trust_path, _priv = _build_and_sign_pkg(
 		tmp_path, "producer_pkg", {"producer.drift": _V3_PRODUCER_SRC},
 	)
@@ -382,8 +428,7 @@ def test_v3_cross_package_catch_via_pub_type_alias(tmp_path: Path) -> None:
 		deps=[("producer_pkg", "0.1.0")],
 		source=_V3_CONSUMER_SRC,
 	)
-	# §B-specific assertion FIRST.  If this fires, the alias schema
-	# lookup regressed -- the test must fail loud, not xfail.
+	# §B regression guard.
 	assert "E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA" not in res.stderr, (
 		f"V3 §B REGRESSION: cross-package alias schema lookup broken "
 		f"(`pub type Alias = Inner` re-export drops the underlying "
@@ -394,25 +439,7 @@ def test_v3_cross_package_catch_via_pub_type_alias(tmp_path: Path) -> None:
 		f"_canonical_event_fqn_for_alias` was reverted or never "
 		f"covered the cross-pkg path.\n\n{res.stderr[-1500:]}"
 	)
-	# Known orthogonal gap: cross-package typed-throws coverage gap
-	# (producer's `throws Inner` declaration not round-tripped through
-	# package metadata).  Runtime-xfail only when the failure matches
-	# THIS specific signature, so other unexpected failures still
-	# show up as hard failures.  Verified 2026-05-17 by re-running
-	# with `catch producer_pkg:Inner(e)` (direct, no alias) -- SAME
-	# failure shape, confirming this is independent of §B.  Drop the
-	# xfail and the marker check below when the cross-pkg narrow-
-	# throws metadata slice lands.
-	if res.returncode != 0 and _KNOWN_CROSS_PKG_THROWS_GAP_MARKER in res.stderr:
-		pytest.xfail(
-			"cross-package typed-throws metadata gap (orthogonal "
-			"to §B alias canonicalization)"
-		)
-	assert res.returncode == 0, (
-		f"V3 compile failed with an unexpected shape (not the §B "
-		f"alias schema bug, not the known cross-pkg throws gap):\n"
-		f"{res.stderr[-1500:]}"
-	)
+	assert res.returncode == 0, f"V3 compile failed:\n{res.stderr[-1500:]}"
 	out_bin = tmp_path / "main_bin"
 	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
 	assert run.returncode == 0, f"V3 binary exited {run.returncode}; expected 0"
@@ -473,12 +500,9 @@ def test_v4_facade_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	it's a stricter test than V3 (single-module producer) because
 	the alias's `module_id` and the pub-error's `module_id` differ.
 
-	See V3 docstring for the runtime-xfail-vs-decorator-xfail
-	rationale: §B-specific assertion runs first so regressions
-	can't hide behind the orthogonal cross-pkg throws gap.
-
-	Post-fix expectation (once cross-pkg narrow-throws metadata
-	slice lands): compile + run; binary returns 0."""
+	2026-05-18: cross-pkg narrow-throws metadata slice landed; the
+	runtime-xfail block for the orthogonal cross-pkg throws gap is
+	removed.  The §B-specific assertion stays as a regression guard."""
 	pkg_root, trust_path, _priv = _build_and_sign_pkg(
 		tmp_path, "producer_pkg",
 		{
@@ -491,8 +515,7 @@ def test_v4_facade_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 		deps=[("producer_pkg", "0.1.0")],
 		source=_V4_CONSUMER_SRC,
 	)
-	# §B-specific assertion FIRST -- a regression here must fail
-	# loud, not get masked by the orthogonal cross-pkg gap.
+	# §B regression guard.
 	assert "E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA" not in res.stderr, (
 		f"V4 §B REGRESSION: facade-module typed-catch through "
 		f"`pub type` re-export drops the underlying Path-A struct "
@@ -503,15 +526,7 @@ def test_v4_facade_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 		f"`_alias_to_pub_error_fqn` / `_canonical_event_fqn_for_alias`.\n"
 		f"\n{res.stderr[-1500:]}"
 	)
-	if res.returncode != 0 and _KNOWN_CROSS_PKG_THROWS_GAP_MARKER in res.stderr:
-		pytest.xfail(
-			"cross-package typed-throws metadata gap (orthogonal "
-			"to §B alias canonicalization) -- same root as V3"
-		)
-	assert res.returncode == 0, (
-		f"V4 compile failed with an unexpected shape:\n"
-		f"{res.stderr[-1500:]}"
-	)
+	assert res.returncode == 0, f"V4 compile failed:\n{res.stderr[-1500:]}"
 	out_bin = tmp_path / "main_bin"
 	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
 	assert run.returncode == 0, f"V4 binary exited {run.returncode}; expected 0"

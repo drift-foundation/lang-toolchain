@@ -261,6 +261,14 @@ class FnInfo:
 	declared_can_throw: bool
 	signature: Optional[FnSignature] = None
 	inferred_may_throw: bool = False
+	# Per-function body-escape set: every event FQN the body can escape
+	# (out past any enclosing try/catch).  `None` (sentinel) represents
+	# an untyped/generic escape that only a catch-all can cover.  Used
+	# by the narrow-throws coverage diagnostic to check that a function
+	# declared `throws E` does not escape events outside its declared
+	# set.  Populated by `_function_may_throw` in lockstep with
+	# `inferred_may_throw`.
+	inferred_escape_events: set = field(default_factory=set)
 
 	# Optional fields reserved for the real checker; left as None here.
 	declared_events: Optional[FrozenSet[str]] = None
@@ -915,7 +923,7 @@ class Checker:
 				if not callinfo_ok_by_fn.get(fn_id, True):
 					continue
 				call_info_by_callsite_id = self._call_info_by_callsite_id.get(fn_id)
-				may_throw, throw_span, throw_note, callinfo_diags = self._function_may_throw(
+				may_throw, throw_span, throw_note, callinfo_diags, escape_events = self._function_may_throw(
 					hir_block,
 					fn_infos,
 					fn_id,
@@ -926,8 +934,12 @@ class Checker:
 				if throw_note:
 					first_throw_note_by_fn.setdefault(fn_id, throw_note)
 				old_inferred = info.inferred_may_throw
+				old_escape = info.inferred_escape_events
 				info.inferred_may_throw = may_throw
+				info.inferred_escape_events = escape_events
 				if may_throw and not old_inferred:
+					changed = True
+				if escape_events != old_escape:
 					changed = True
 				explicit = info.signature.declared_can_throw if info.signature is not None else None
 				# Legacy test shim: `declared_can_throw` map is treated as an explicit
@@ -960,6 +972,44 @@ class Checker:
 						notes=notes,
 					)
 				)
+			# Narrow-throws body-coverage check (Q0.1/Q0.2/Q0.3).
+			# When a function declared a narrow `throws E1, E2, ...` list,
+			# its body must not escape any event outside that set.  The
+			# escape set is conservatively wide (calls without narrow
+			# metadata contribute the `None` sentinel — generic escape),
+			# so legitimate narrow declarations either prove containment
+			# in-source or use a catch-all to convert escapes.
+			declared = getattr(info.signature, "declared_throws_event_fqns", None)
+			if declared is not None and info.inferred_escape_events:
+				declared_set = set(declared)
+				excess = {e for e in info.inferred_escape_events if e is None or e not in declared_set}
+				if excess:
+					note_lines: list[str] = []
+					if None in excess:
+						note_lines.append(
+							"body may escape an untyped/generic event; "
+							"either declare `throws` (no list) or wrap the "
+							"offending call in a catch-all"
+						)
+					named = sorted(e for e in excess if e is not None)
+					if named:
+						declared_str = ", ".join(sorted(declared_set)) if declared_set else "<empty>"
+						note_lines.append(
+							f"body may escape events outside declared set "
+							f"{{{declared_str}}}: {', '.join(named)}"
+						)
+					diagnostics.append(
+						_chk_diag(
+							message=(
+								f"function {function_symbol(fn_id)} declares narrow "
+								f"throws but body may escape events outside the declared set"
+							),
+							code="E_NARROW_THROWS_ESCAPE_OUTSIDE_DECLARED_SET",
+							severity="error",
+							span=first_throw_span_by_fn.get(fn_id, Span()),
+							notes=note_lines,
+						)
+					)
 
 		# Terminal-flow checks (Phase 0 + Phase 2 of the terminal-`throws` work).
 		# Phase 0: every non-Void value-returning function must terminate on
@@ -1108,7 +1158,7 @@ class Checker:
 		*,
 		unknown_calls_throw: bool = False,
 		indexing_throws: bool = False,
-	) -> tuple[bool, Span, str | None, list[Diagnostic]]:  # type: ignore[name-defined]
+	) -> tuple[bool, Span, str | None, list[Diagnostic], set]:  # type: ignore[name-defined]
 		"""
 		Walk a HIR block and conservatively decide if it may throw.
 
@@ -1122,12 +1172,39 @@ class Checker:
 		`caught_events` (typed catch arms), the call counts as covered without
 		requiring a catch-all.  Generic-throws calls (no narrow declaration)
 		still require catch-all to claim coverage.
+
+		Returns a 5-tuple `(may_throw, first_span, first_note, missing_callinfo_diags, escape_events)`.
+		`escape_events` is a set of event FQNs (str) that the body can escape
+		past any enclosing try/catch, plus the sentinel `None` to represent
+		an untyped/generic escape (one that only a catch-all can cover).
+		Used by the narrow-throws coverage diagnostic to check that a
+		function declared `throws E` does not escape events outside its
+		declared set.
 		"""
 		from lang.driftc import stage1 as H
 		may_throw = False
 		first_span: Span | None = None
 		first_note: str | None = None
 		missing_callinfo_diags: list[Diagnostic] = []
+		# Per-event escape set.  See docstring.
+		escape_events: set = set()
+
+		def _record_escape(narrow: list[str] | None, caught_events_set: set[str] | None) -> None:
+			"""Record what events escape past the current catch coverage.
+
+			Called when `_is_call_throws_covered` returned False for a call
+			site.  Generic-throws callees (narrow is None) record the `None`
+			sentinel.  Typed-throws callees record only the entries of
+			`narrow` that are NOT in `caught_events_set` (i.e. what actually
+			propagates past the enclosing try).
+			"""
+			if narrow is None:
+				escape_events.add(None)
+				return
+			caught = caught_events_set or set()
+			for fqn in narrow:
+				if fqn not in caught:
+					escape_events.add(fqn)
 
 		def _call_narrow_throws_fqns(info: "CallInfo") -> list[str] | None:
 			"""Slice 5: return the callee's `declared_throws_event_fqns` (if any).
@@ -1268,6 +1345,8 @@ class Checker:
 							break
 				if call_can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 					may_throw = True
+					if not catch_all:
+						_record_escape(_call_narrow_throws_fqns(info), caught_events)
 					if first_span is None:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
 					if first_note is None:
@@ -1288,6 +1367,7 @@ class Checker:
 					)
 					# Conservative: treat as may-throw when CallInfo is unavailable.
 					may_throw = True
+					escape_events.add(None)
 					walk_expr(expr.receiver, caught_events, catch_all)
 					for arg in expr.args:
 						walk_expr(arg, caught_events, catch_all)
@@ -1304,6 +1384,7 @@ class Checker:
 					)
 					# Conservative: treat as may-throw when CallInfo is unavailable.
 					may_throw = True
+					escape_events.add(None)
 					walk_expr(expr.receiver, caught_events, catch_all)
 					for arg in expr.args:
 						walk_expr(arg, caught_events, catch_all)
@@ -1338,6 +1419,8 @@ class Checker:
 									call_can_throw = False
 				if call_can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 					may_throw = True
+					if not catch_all:
+						_record_escape(_call_narrow_throws_fqns(info), caught_events)
 					if first_span is None:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
 					if first_note is None:
@@ -1370,6 +1453,8 @@ class Checker:
 				else:
 					if info.sig.can_throw and not _is_call_throws_covered(info, caught_events, catch_all):
 						may_throw = True
+						if not catch_all:
+							_record_escape(_call_narrow_throws_fqns(info), caught_events)
 						if first_span is None:
 							first_span = Span.from_loc(getattr(expr, "loc", None))
 						if first_note is None:
@@ -1416,6 +1501,7 @@ class Checker:
 				walk_expr(expr.index, caught_events, catch_all)
 				if indexing_throws and not catch_all:
 					may_throw = True
+					escape_events.add(None)
 					if first_span is None:
 						first_span = Span.from_loc(getattr(expr, "loc", None))
 					if first_note is None:
@@ -1438,18 +1524,22 @@ class Checker:
 					if catch_all:
 						continue
 					may_throw = True
+					escape_events.add(None)
 					if first_span is None:
 						first_span = Span.from_loc(getattr(stmt, "loc", None))
 					continue
 				if isinstance(stmt, H.HThrow):
 					# If we know this throw's event is caught locally, do not mark may_throw.
+					escaped_event: str | None = None
 					if isinstance(stmt.value, H.HExceptionInit):
 						event_fqn = stmt.value.event_fqn
 						if catch_all or (caught is not None and event_fqn in caught):
 							continue
+						escaped_event = event_fqn
 					elif catch_all:
 						continue
 					may_throw = True
+					escape_events.add(escaped_event)
 					if first_span is None:
 						first_span = Span.from_loc(getattr(stmt, "loc", None))
 					continue
@@ -1505,7 +1595,7 @@ class Checker:
 			# other statements (HBreak/HContinue): continue
 
 		walk_block(block)
-		return may_throw, (first_span or Span()), first_note, missing_callinfo_diags
+		return may_throw, (first_span or Span()), first_note, missing_callinfo_diags, escape_events
 
 	def _expr_may_throw(
 		self,
@@ -1520,7 +1610,7 @@ class Checker:
 		from lang.driftc import stage1 as H
 
 		block = H.HBlock(statements=[H.HExprStmt(expr=expr)])
-		may_throw, _span, _note, _callinfo_diags = self._function_may_throw(
+		may_throw, _span, _note, _callinfo_diags, _escape = self._function_may_throw(
 			block,
 			fn_infos,
 			current_fn,

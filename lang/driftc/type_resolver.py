@@ -400,6 +400,47 @@ def _throws_from_decl(decl: object) -> Tuple[str, ...]:
 	return tuple(throws)
 
 
+def _resolve_alias_chain_to_pub_error(
+	table: object,
+	mod_id: str | None,
+	name: str,
+	known_pub_errors: set[str],
+) -> str | None:
+	"""Walk `table.type_aliases` from (mod_id, name) until the chain
+	terminates at a known pub-error FQN. Returns the canonical underlying
+	FQN, or None if the chain dead-ends, has generic params, or cycles.
+
+	Mirrors `Checker._alias_to_pub_error_fqn` in checker/__init__.py for
+	the catch-arm side. Declaration-side (this) consumer needs the same
+	walk, single-shot, no caching.
+	"""
+	type_aliases = getattr(table, "type_aliases", None)
+	if not isinstance(type_aliases, dict) or not mod_id:
+		return None
+	seen: set[tuple[str, str]] = set()
+	cur_mod, cur_name = mod_id, name
+	while True:
+		if (cur_mod, cur_name) in seen:
+			return None
+		seen.add((cur_mod, cur_name))
+		entry = type_aliases.get((cur_mod, cur_name))
+		if entry is None:
+			return None
+		type_params, target_te, _loc = entry
+		if type_params:
+			return None
+		next_name = getattr(target_te, "name", None)
+		if not isinstance(next_name, str) or not next_name:
+			return None
+		next_mod = getattr(target_te, "module_id", None)
+		if not isinstance(next_mod, str) or not next_mod:
+			next_mod = cur_mod
+		candidate = f"{next_mod}:{next_name}"
+		if candidate in known_pub_errors:
+			return candidate
+		cur_mod, cur_name = next_mod, next_name
+
+
 def _resolve_declared_throws_types(
 	*,
 	decl: object,
@@ -416,15 +457,25 @@ def _resolve_declared_throws_types(
 	  * `[fqn, ...]` — each TypeExpr resolved to its event FQN, validated
 	    to exist in `table.exception_schemas`.
 
-	Validation: a type in the throws clause that doesn't resolve to an
-	error/exception kind (i.e. not in `exception_schemas`) emits
-	`E_THROWS_NOT_ERROR_TYPE` and is dropped from the resolved list.
+	Resolution order for each clause type:
+	  1. Direct lookup `<mod_id>:<name>` in `exception_schemas`.
+	  2. Bare-name fallback (unique `endswith(":<name>")` in schemas).
+	  3. Alias-chain walk through `type_aliases` to an underlying
+	     pub-error FQN. Closes Q0.5 (`throws Alias` where
+	     `pub type Alias = E`).
+	  4. Otherwise emit `E_THROWS_NOT_ERROR_TYPE` and drop the entry.
+
+	The resolved FQN is always the underlying pub-error's defining-module
+	form, matching the canonical form `exception_schemas` uses and the
+	form the consumer's catch-coverage `caught_events` set uses after §B
+	`_canonical_event_fqn` resolution. Preserves the Q0.6 invariant.
 	"""
 	throws_types = getattr(decl, "declared_throws_types", None)
 	if not throws_types:
 		return None
 	# `exception_schemas: dict[str, tuple[str, list[str]]]` keyed by FQN.
 	schemas = getattr(table, "exception_schemas", {}) or {}
+	known_pub_errors: set[str] = set(schemas.keys())
 	resolved: list[str] = []
 	for ty_expr in throws_types:
 		# A throws-type is a TypeExpr at the surface.  We resolve to its
@@ -443,8 +494,14 @@ def _resolve_declared_throws_types(
 			if len(alt_keys) == 1:
 				fqn = alt_keys[0]
 			else:
-				diagnostics.append(_p_diag_throws_not_error(decl, ty_expr, name))
-				continue
+				alias_fqn = _resolve_alias_chain_to_pub_error(
+					table, mod_id, name, known_pub_errors,
+				)
+				if alias_fqn is not None:
+					fqn = alias_fqn
+				else:
+					diagnostics.append(_p_diag_throws_not_error(decl, ty_expr, name))
+					continue
 		resolved.append(fqn)
 	return resolved
 

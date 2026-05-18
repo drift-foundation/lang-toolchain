@@ -53,6 +53,14 @@ class GlobalTraitIndex:
 				(trait_key, method.name),
 				TraitMethodSig(trait=trait_key, name=method.name, loc=Span.from_loc(getattr(method, "loc", None))),
 			)
+		# A trait that's now present can't simultaneously be "missing".
+		# Without this, a build that imports stdlib from source AND loads
+		# packages whose interface-metadata mentions the same trait would
+		# leave the missing-mark stuck even after the source-side
+		# `add_trait` populates traits_by_id, and `is_missing` would
+		# fire spuriously at call-resolution time.  See discussion of
+		# cross-pkg + catch-all producer builds (2026-05-18).
+		self.missing_traits.discard(trait_key)
 
 	@classmethod
 	def from_trait_worlds(cls, trait_worlds: Dict[str, TraitWorld] | None) -> "GlobalTraitIndex":
@@ -68,9 +76,25 @@ class GlobalTraitIndex:
 		return (trait_key, name) in self.trait_methods
 
 	def mark_missing(self, trait_key: TraitKey) -> None:
+		# A trait that's present in `traits_by_id` is, by construction,
+		# NOT missing — its def has been loaded, regardless of which
+		# source/package contributed it.  Without this guard, a build
+		# that loads stdlib from source AND processes package
+		# interface-metadata that references the same trait can race
+		# the two writes and leave the missing-mark stuck, firing
+		# `is_missing` spuriously at call-resolution time.  See
+		# 2026-05-18 cross-pkg + catch-all producer build investigation.
+		if trait_key in self.traits_by_id:
+			return
 		self.missing_traits.add(trait_key)
 
 	def is_missing(self, trait_key: TraitKey) -> bool:
+		# Defensive: even if the missing-mark was set before the trait's
+		# def landed in `traits_by_id`, treat a present trait as
+		# not-missing.  Keeps the answer consistent regardless of
+		# add_trait / mark_missing ordering.
+		if trait_key in self.traits_by_id:
+			return False
 		return trait_key in self.missing_traits
 
 

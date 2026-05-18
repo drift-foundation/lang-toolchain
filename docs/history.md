@@ -1,5 +1,216 @@
 # Drift development history
 
+## 2026-05-18 (cross-package narrow-throws contract: producer-side enforcement of `pub fn f() throws E` against the body's actual escape set, declaration-side alias canonicalization, and `FnSignature.declared_throws_event_fqns` round-trip through package metadata -- closes the V3/V4 runtime-xfails and makes `throws E` a binding contract across package boundaries instead of an unverified producer claim)
+- **Compiler contract change.**  Release 0.31.106, ABI unchanged at 14.
+  Pre-slice, `pub fn f() throws E -> T` was a producer-side claim the
+  compiler never verified (a function declared `throws E` could escape
+  any unrelated event `F` at runtime), and the narrow throws list was
+  silently dropped at the package metadata boundary so cross-package
+  consumers could never claim typed-catch coverage of a narrow-declared
+  callee.  This slice closes both halves atomically so consumers may
+  trust the producer's narrow declaration *because* producer package
+  compilation now makes lying impossible.
+
+  **Phase 0 audit -- recorded gaps.**
+  `work/cross-pkg-narrow-throws-metadata/phase0-enforcement-audit.md`
+  captures the read-only investigation that drove the design.  Verdicts:
+  - Q0.1 (body escapes event outside set): NO -- no diagnostic existed.
+  - Q0.2 (body calls same-pkg generic without catch-all): NO -- same root.
+  - Q0.3 (body calls cross-pkg generic without catch-all): NO -- same root.
+  - Q0.4 (typed catch covers only its event): YES.
+  - Q0.5 (`throws Alias` resolves through alias chain): NO -- declaration
+    side never consulted `type_aliases`; emitted `E_THROWS_NOT_ERROR_TYPE`.
+  - Q0.6 (declared FQNs are canonical underlying form): YES, but
+    Q0.5's rejection made the alias case moot pre-slice.
+
+  Audit ran with one empirical confirmation (Q0.1's `throw F` inside
+  `throws E` body compiles + binary takes the F arm at runtime today --
+  fully unverified producer claim).
+
+  **Combined-slice decision (chicken-and-egg).**  A sequential
+  "enforcement first, metadata second" sequence has a window where any
+  cross-package `throws E` consumer (e.g. `mariadb.rpc` typed-wrap
+  helpers) would falsely fail enforcement: post-enforcement-pre-metadata,
+  the foreign signature's narrow throws list is still dropped at the
+  boundary, so every cross-pkg callee looks generic-throws, and the
+  consumer's `throws E` body would be flagged as escaping an untyped
+  event.  The combined slice lands enforcement and metadata
+  round-trip in the same change, so there is no intermediate state
+  where the contract is unverified or where the consumer-side
+  conservative behavior causes false-positives.
+
+  **Step A -- producer body-coverage diagnostic.**
+  `lang/driftc/checker/__init__.py::_function_may_throw` now returns a
+  per-event escape set (`set[Optional[str]]`, where the `None` sentinel
+  represents an untyped/generic escape that only catch-all can cover)
+  alongside the existing `may_throw: bool`.  Every `may_throw = True`
+  site (HCall, HMethodCall, HInvoke, HIndex, HRethrow, HThrow, and the
+  two missing-CallInfo conservative paths) records an entry into the
+  set; the `_record_escape(narrow, caught_events)` helper computes
+  narrow-minus-caught so an enclosing typed-arm coverage correctly
+  shaves what propagates outward.  `FnInfo` carries
+  `inferred_escape_events` alongside `inferred_may_throw`; the
+  inference-loop convergence now also tracks escape-set changes.  The
+  new diagnostic `E_NARROW_THROWS_ESCAPE_OUTSIDE_DECLARED_SET` fires
+  in the tail loop when
+  `info.signature.declared_throws_event_fqns is not None and not
+  body_escape_set.issubset(declared_set)`, with notes that name the
+  specific events outside the declared set and (when present) the
+  generic-sentinel.  Source order in the declared list is preserved;
+  the subset check converts to set at compare-time.
+
+  Catch-all semantics preserved: `try { generic_call() } catch _ {
+  throw E(...) }` inside a `pub fn f() throws E` body legitimately
+  compiles, because the catch-all absorbs the generic escape and the
+  rewrap produces only `E` — pinned by both same-pkg and cross-pkg
+  positive controls.
+
+  **Step B -- declaration-side alias canonicalization.**
+  `lang/driftc/type_resolver.py::_resolve_declared_throws_types` now
+  consults `table.type_aliases` as a third fallback after the direct
+  `<mod>:<name>` lookup and the bare-name `endswith` fallback, via the
+  new `_resolve_alias_chain_to_pub_error` helper.  The walker mirrors
+  the §B (2026-05-17) catch-side `_alias_to_pub_error_fqn` in the
+  checker -- same chain traversal with seen-set cycle guard -- so
+  declaration- and catch-side resolution land in the same canonical
+  string-space.  Pre-slice `pub fn f() throws Alias` (where
+  `pub type Alias = E`) rejected with `E_THROWS_NOT_ERROR_TYPE`; post-
+  slice it accepts and the `FnSignature` carries the underlying
+  `[<mod>:E]` form, preserving the Q0.6 canonical-FQN invariant.
+
+  **Steps C/D/E -- producer emit + consumer decode.**
+  `lang/driftc/packages/provisional_dmir_v0.py::encode_signatures` emits
+  a new `declared_throws_event_fqns` field on each signature entry
+  next to `declared_throws`/`declared_terminal_throws`: `null` when
+  the producer had no narrow list (generic-throws semantics) and a
+  `list[str]` otherwise.  Empty list is preserved distinctly from
+  null.  The decode helper `decode_declared_throws_event_fqns(raw, *,
+  signature_name)` is centralized in the same module and called from
+  both consumer-decode sites in `driftc.py` (the foreign-signature
+  rebuild at ~9349 and the parallel decode at ~10022).  Fail-closed
+  shape validation: missing/null → None (forward-compat for pre-slice
+  packages), `list[str]` accepted, anything else raises `ValueError`
+  -- no silent best-effort on untrusted package metadata.  The same
+  helper is exercised directly by the malformed-input test so a
+  future regression in the validator fails LOUD.
+
+  **Trait-index defensive-consistency fix (side-effect of Step A
+  exposure).**  The catch-all-plus-throw producer pattern surfaced a
+  pre-existing race in `lang/driftc/trait_index.py::GlobalTraitIndex`:
+  in a build that loads stdlib from source *and* processes a
+  cross-package dependency, the same trait (`std.core.Diagnostic` in
+  the original repro) could land in `traits_by_id` (from source-built
+  trait_world) and also in `missing_traits` (from later
+  package-metadata processing of an unrelated dep that references
+  Diagnostic in its trait-scope), with the result that
+  `is_missing(Diagnostic)` returned True for a trait whose def was
+  fully loaded.  Defense-in-depth fix on three methods:
+  - `add_trait` discards the key from `missing_traits` (a trait whose
+    def has been added cannot simultaneously be "missing").
+  - `mark_missing` is a no-op when the key is already in
+    `traits_by_id` (the missing flag must not regress over a
+    previously-loaded def).
+  - `is_missing` returns False if the key is in `traits_by_id` (any
+    leftover missing-mark is overruled by present-state observation).
+
+  Without this fix, `pub fn f() throws E` whose body wraps a cross-pkg
+  generic-throws call in `catch _ { throw E(...) }` would fail
+  producer build with a `ResolutionError: missing trait metadata for
+  'std.core.Diagnostic'` at `call_resolver.py:2693` -- the slice's
+  recommended downstream remediation pattern would be unusable.
+  Reproducible with a `nothrow` producer too, so the trait-index bug
+  pre-dates this slice; surfacing it via the slice's acceptance bar
+  forced the fix.
+
+  **Six-case proof matrix -- acceptance gates.**
+  | # | Case | Status |
+  | - | ---- | ------ |
+  | 1 | Same-pkg positive (V1 + positive controls) | pass |
+  | 2 | Same-pkg negative (Q0.1/Q0.2) | rejects with new diag |
+  | 3 | Cross-pkg positive (V0 NEW, V2) | pass |
+  | 4 | Cross-pkg producer-side negative | producer build rejects |
+  | 5 | Cross-pkg consumer-side negative | rejects (existing behavior pinned) |
+  | 6 | Alias case (V3, V4) | no longer xfailing |
+
+  **V3 / V4 runtime-xfails dropped.**
+  `lang/tests/driver/test_typed_catch_through_pub_type_alias.py` no
+  longer carries the runtime `pytest.xfail(...)` block keyed on
+  `_KNOWN_CROSS_PKG_THROWS_GAP_MARKER`; the constant and the marker
+  check are removed.  The §B-specific
+  `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` regression guard remains in V3
+  and V4.
+
+  **Audit -- no regressions.**
+  - 16/16 slice tests pass (six-case matrix + alias-decl + round-trip
+    + V0/V1/V2/V3/V4 alias + Case 5 consumer-side conservative).
+  - 27-test adjacent regression (lambda-nothrow, lambda-result-ctor,
+    arc-interface dispatch x10, V1-V4 alias) all pass.
+  - 33-test wider throws regression (pub_error_or_throw,
+    pub_error_decl, throws_terminal_body_flow_phase2 x21,
+    auto_try_lambda_boundary x5) all pass.
+  - Total confirmed regression coverage ~76 tests, all green.
+
+  **Downstream impact.**  Maria-rpc and any other downstream producer
+  with `throws E` bodies that call cross-pkg generic-throws callees
+  without catch-all will newly fail compilation -- this is the slice
+  honoring the contract.  Resolution paths: (a) populate the called
+  function with a narrow `throws TYPE_LIST` declaration so its
+  metadata carries forward; (b) wrap the call in a catch-all that
+  rewraps as the declared event; (c) drop the narrow declaration and
+  use generic-throws.  Old `.dmp` files keep working; the new field
+  is optional and absent-decodes-as-None for forward compatibility,
+  so packages built before 0.31.106 decode cleanly with degraded
+  (catch-all-required) coverage.
+
+  **Out of scope (explicitly).**
+  - Interface / trait method narrow-throws metadata.  Slice fixes
+    `FnSignature` round-trip only; interface descriptors are a
+    separate carrier if a real consumer ever needs them.
+  - Producer-side alias-in-throws-clause beyond declaration site (e.g.,
+    `throws Alias` where Alias chains through multiple aliases that
+    cross packages).  V0/V3/V4 carriers use single-step aliases;
+    deeper chains are theoretically supported by the cycle-guarded
+    walker but not exercised.
+  - Section 6 kill-switch (remove `throws E` entirely).  Documented
+    in `plan.md` as the alternative path; the team chose enforcement.
+
+  **Files touched:**
+  - `lang/driftc/checker/__init__.py` -- per-event escape-set tracker
+    in `_function_may_throw` + new diagnostic; `FnInfo` field
+    `inferred_escape_events`.
+  - `lang/driftc/type_resolver.py` -- new
+    `_resolve_alias_chain_to_pub_error` helper; declaration-side
+    alias consultation in `_resolve_declared_throws_types`.
+  - `lang/driftc/packages/provisional_dmir_v0.py` -- emit
+    `declared_throws_event_fqns` in `encode_signatures`; new
+    `decode_declared_throws_event_fqns` helper.
+  - `lang/driftc/driftc.py` -- two foreign-signature decode sites
+    now call the shared helper instead of inlining validation.
+  - `lang/driftc/trait_index.py` -- defense-in-depth on
+    `add_trait`/`mark_missing`/`is_missing` to enforce the invariant
+    `is_missing(k) iff k not in traits_by_id and k in missing_traits`.
+  - `lang/versions.py` -- 0.31.105 → 0.31.106.
+  - `lang/tests/driver/test_typed_catch_through_pub_type_alias.py` --
+    new V0 cross-pkg-no-alias carrier; removed V3/V4 runtime-xfail
+    blocks and `_KNOWN_CROSS_PKG_THROWS_GAP_MARKER` constant.
+  - `lang/tests/driver/test_narrow_throws_enforcement_same_pkg.py`
+    (NEW) -- Q0.1, Q0.2 negative carriers + positive controls.
+  - `lang/tests/driver/test_narrow_throws_enforcement_cross_pkg.py`
+    (NEW) -- Case 4 producer-side negative + positive control.
+  - `lang/tests/driver/test_narrow_throws_consumer_generic_callee.py`
+    (NEW) -- Case 5 consumer-side conservative regression guard +
+    catch-all positive control.
+  - `lang/tests/driver/test_throws_alias_decl.py` (NEW) -- Q0.5
+    declaration-side alias canonicalization + positive control.
+  - `lang/tests/driver/test_pkg_round_trip_narrow_throws.py` (NEW) --
+    raw payload inspection (Step C), shared-helper decode round-trip
+    (Steps D/E), malformed-input drive against the production
+    validator, and copy-defensiveness check.
+  - `work/cross-pkg-narrow-throws-metadata/plan.md`,
+    `work/cross-pkg-narrow-throws-metadata/phase0-enforcement-audit.md`
+    -- combined-slice plan + Phase 0 audit with post-implementation
+    STATUS section.
+
 ## 2026-05-18 (MIR validator tier 1 #1 of 3: backstop for nothrow `-> Void` return shape -- catches `M.Return(value=<synth_void>)` immediately after MIR build instead of letting it surface as an opaque `KeyError` deep in `throw_checks`)
 - **Compiler hygiene.**  Release 0.31.105, ABI unchanged at 14.
   First validator from the parked MIR-validators tier-1 plan
