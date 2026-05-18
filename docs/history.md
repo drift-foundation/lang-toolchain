@@ -1,5 +1,137 @@
 # Drift development history
 
+## 2026-05-18 (deploy-toolchain bug fix: `drift deploy` staged trust overlay shadowed broader baseline grants for cross-publisher dependencies -- `build_staged_trust`'s dep-namespace loop stamped only the new signer's kid on sub-namespace entries, so driftc's longest-prefix-wins matcher picked the more-specific shadow entry over the broader baseline `mariadb.rpc.*` grant and rejected Foundation-signed deps under a PushCoin-signed app)
+- **Deploy-toolchain fix.**  Release 0.31.108, ABI unchanged at 14.
+  Reported by app team (PushCoin / singular 0.3.0 cross-publisher
+  deploy);
+  `/home/sl/src/pushcoin/work/drift-deploy-trust-overlay-bug/README.md`
+  is the canonical report.  Surface: `drift deploy` of a package
+  whose **signer is a different publisher than its deps' signer**
+  fails with:
+
+      error: build failed for package 'singular':
+      stderr: <package>:?:?: error: package signatures are not trusted
+      for module 'mariadb.rpc.managed'
+
+  `drift build` (without deploy) of the exact same source against the
+  exact same package-root compiles cleanly.  The defect is specific
+  to `drift deploy`'s staged-trust generation.
+
+  **Root cause.**  `tools/drift_deploy/staged_trust.py::build_staged_trust`
+  enumerates each dep submodule and adds the new signer's kid to a
+  fresh exact + wildcard namespace entry per submodule
+  (`mariadb.rpc.managed`, `mariadb.rpc.managed.*`, `mariadb.rpc.pool`,
+  `mariadb.rpc.pool.*`, ...) without inheriting the kids that the
+  baseline's broader pattern (`mariadb.rpc.*`) already granted.  The
+  resulting staged trust contains, e.g.:
+
+      "mariadb.rpc.*":         [foundation_kid]          # baseline preserved
+      "mariadb.rpc.managed":   [pushcoin_kid]            # NEW; shadows foundation
+      "mariadb.rpc.managed.*": [pushcoin_kid]            # NEW; shadows foundation
+      "mariadb.rpc.pool":      [pushcoin_kid]            # NEW; shadows foundation
+      "mariadb.rpc.pool.*":    [pushcoin_kid]            # NEW; shadows foundation
+
+  `TrustStore.allowed_kids_for_module` (in
+  `lang/driftc/packages/trust_v0.py`) implements longest-prefix-wins
+  MVP rules:
+
+  > - exact match: "acme.crypto" matches module "acme.crypto"
+  > - prefix match: "acme.*" matches module ids starting with "acme."
+  > - choose the most specific (longest) matching namespace key(s)
+
+  For module `mariadb.rpc.managed`, the matcher finds
+  `mariadb.rpc.managed.*` (prefix length 19) and stops -- never
+  consults the broader `mariadb.rpc.*` (length 11).  The shadow
+  entry contains only `pushcoin_kid`, but `mariadb-rpc`'s `.sig`
+  was signed by `foundation_kid`.  Trust verification fails.
+
+  Bug is latent for in-house Foundation deploys (everything signed
+  by one kid -- the shadow stamps redundantly with the same kid
+  baseline already authorized) and surfaces the moment a different
+  publisher tries to depend on a Foundation-signed package.
+
+  **Reduction.**  Reproduced at the unit level without a full deploy:
+  call `build_staged_trust` with a baseline that grants `foundation_kid`
+  -> `mariadb.rpc.*` and a different signer; load the resulting trust
+  through the same `TrustStore.allowed_kids_for_module` the verifier
+  uses; assert `foundation_kid` is still in the resolved set for
+  `mariadb.rpc.managed`.  Pre-fix the assertion fails (set is
+  `{pushcoin_kid}` only); post-fix the set is
+  `{foundation_kid, pushcoin_kid}`.
+
+  **Fix.**  In `staged_trust.py::build_staged_trust`, when creating a
+  more-specific namespace entry for a dep submodule, INHERIT the kids
+  the baseline's broader pattern would have matched for that
+  submodule (same longest-prefix-wins query the verifier uses), then
+  add the new signer on top.  Equivalent to user-reported option 2
+  ("merge inherited kids") with the new signer added unconditionally
+  to preserve the original intent of supporting co-deploy scenarios.
+  Cross-publisher ends up with `[foundation_kid, new_kid]`; co-deploy
+  with no broader baseline ends up with `[new_kid]` (same as before
+  the fix); same-publisher with baseline grant ends up with
+  `[same_kid]` after de-dup (same effective trust).
+
+  Implementation: a small `_effective_baseline_kids_for_module(...)`
+  helper mirrors the compiler-side matcher's rules locally in the
+  deploy tool (no new dependency on the compiler's TrustStore
+  loader).  Called twice per dep: once with the dep's exact id (for
+  the exact-match entry), once with `<dep_ns>.__staged_overlay_inherit_probe__`
+  (a guaranteed-not-a-real-module probe id for the `.*` pattern
+  entry, so the longest match falls back to the broader baseline
+  pattern rather than to anything the loop might add later).
+
+  **Audit -- no pre-existing violations.**
+  - 105/105 `tools/drift_deploy/test_deploy.py` tests pass; the two
+    pre-existing staged-trust tests (`test_empty_baseline`,
+    `test_overlay_on_baseline`, `test_staged_trust_uses_module_namespace`,
+    `test_staged_trust_authorizes_dep_namespaces`) are unchanged and
+    green.
+  - The existing dep-namespaces test
+    (`test_staged_trust_authorizes_dep_namespaces`) intentionally
+    has an empty baseline -- it pins the co-deploy intent.  Still
+    green post-fix because no broader baseline pattern means
+    nothing to inherit and the new signer is added as before.
+  - Two new tests pin the fix and prevent regression:
+    `test_dep_submodule_does_not_shadow_broader_baseline_grant`
+    (the bug case, asserts foundation_kid survives in the resolved
+    set for `mariadb.rpc.managed` and `mariadb.rpc.pool`) and
+    `test_dep_submodule_overlay_co_deploy_case_still_works`
+    (the original-intent case, asserts the new signer is
+    authorized for the dep's namespace when no baseline grant
+    exists to inherit).
+
+  **Why the compiler matcher isn't being changed.**  Longest-prefix-
+  wins is the documented MVP semantics for namespace resolution.
+  The bug is the overlay generator producing entries that
+  semantically narrow trust; the matcher is doing exactly what it
+  says on the tin.  Changing the matcher to "union all matches
+  regardless of specificity" would be a separate, larger design
+  decision (and would weaken the precision intent of the rules).
+  The narrow fix is correct: don't narrow.
+
+  **Workaround NOT applied.**  Per
+  `feedback_compiler_bugs.md` policy, the obvious project-side
+  workaround (singular's `drift/trust.json` enumerates every dep
+  sub-namespace with `foundation_kid` so the overlay loop merges
+  into populated lists) was DECLINED.  That would have bloated the
+  project trust with names that semantically belong to the dep's
+  publisher and masked the underlying defect.  Singular 0.3.0
+  publishing was blocked until this slice landed.
+
+  **Files touched:**
+  - `tools/drift_deploy/staged_trust.py` -- new
+    `_effective_baseline_kids_for_module` helper; dep-namespace loop
+    inherits baseline kids before adding the new signer.
+  - `tools/drift_deploy/test_deploy.py` -- two new tests in
+    `TestModuleNamespace`:
+    `test_dep_submodule_does_not_shadow_broader_baseline_grant` and
+    `test_dep_submodule_overlay_co_deploy_case_still_works`.
+  - `lang/versions.py` -- 0.31.107 -> 0.31.108.
+
+  **Sequenced next (NOT in this slice):**
+  No follow-up.  The fix is local to the deploy tool.  Compiler
+  trust-store matcher semantics are unchanged.
+
 ## 2026-05-18 (LANGUAGE_BUG fix: heap corruption / double-free of the `DriftError` envelope when a thrown event crosses an inner unmatched typed catch arm and propagates to an outer catch -- MIR lowering of the typed-catch dispatch's no-match propagation path emitted `LoadLocal` instead of `MoveOut` on the hidden `error_local`, so the function-exit `CleanupHook` and the caller's `FnResult.Err` consumer both released the same pointer)
 - **Compiler/runtime fix.**  Release 0.31.107, ABI unchanged at 14.
   Reported by app team via singular gateway live e2e scenarios 10 /

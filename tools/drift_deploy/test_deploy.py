@@ -848,6 +848,119 @@ class TestModuleNamespace:
 			assert kid in data["namespaces"]["net.crypto.*"]
 			assert kid in data["namespaces"]["acme.util.*"]
 
+	def test_dep_submodule_does_not_shadow_broader_baseline_grant(self) -> None:
+		"""LANGUAGE/DEPLOY BUG (2026-05-18, PushCoin/singular cross-publisher):
+		when a baseline grants foundation_kid -> mariadb.rpc.*, and we stage
+		trust for a new pushcoin-signed package whose deps live under
+		mariadb.rpc.managed / mariadb.rpc.pool, the staged overlay's
+		per-submodule entries must NOT shadow the broader foundation grant.
+		`TrustStore.allowed_kids_for_module` uses longest-prefix-wins, so a
+		more-specific overlay entry that drops foundation_kid causes the
+		Foundation-signed dep to fail trust verification.
+
+		Pre-fix: dep sub-namespaces (`mariadb.rpc.managed.*` etc.) only
+		carry the new signer's kid, shadowing the broader
+		`mariadb.rpc.*` -> [foundation_kid] entry from the baseline.
+		Cross-publisher deploys fail with "package signatures are not
+		trusted for module 'mariadb.rpc.managed'".
+
+		Post-fix: dep sub-namespace entries inherit the kids that the
+		baseline already authorized for that namespace (via the same
+		longest-prefix-wins logic the verifier uses), then add the new
+		signer.  Cross-publisher deploys succeed.
+
+		Reported in
+		`/home/sl/src/pushcoin/work/drift-deploy-trust-overlay-bug/README.md`.
+		"""
+		import base64
+		import hashlib
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		from lang.driftc.packages.trust_v0 import load_trust_store_json
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			# Baseline grants foundation_kid -> mariadb.rpc.*.  Use a real
+			# 32-byte pubkey + matching kid so load_trust_store_json
+			# validates cleanly.
+			baseline = Path(tmpdir) / "baseline.json"
+			foundation_pubkey = b"\xaa" * 32
+			foundation_kid = "ed25519:" + base64.b64encode(
+				hashlib.sha256(foundation_pubkey).digest()
+			).decode("ascii")
+			foundation_pubkey_b64 = base64.b64encode(foundation_pubkey).decode("ascii")
+			baseline.write_text(json.dumps({
+				"format": "drift-trust",
+				"version": 0,
+				"keys": {
+					foundation_kid: {"algo": "ed25519", "pubkey": foundation_pubkey_b64},
+				},
+				"namespaces": {
+					"mariadb.rpc.*": [foundation_kid],
+				},
+				"revoked": {},
+			}))
+
+			out = Path(tmpdir) / "staged.json"
+			# Different publisher's signing key.
+			pushcoin_pubkey = b"\x42" * 32
+			build_staged_trust(
+				baseline_trust_path=baseline,
+				signer_pubkey_raw=pushcoin_pubkey,
+				artifact_namespace="singular",
+				out_path=out,
+				dep_namespaces=["mariadb.rpc.managed", "mariadb.rpc.pool"],
+			)
+
+			# Load the staged trust through the same verifier the compiler
+			# uses, and ask "who can sign mariadb.rpc.managed?".  The
+			# foundation_kid must be in the answer; otherwise the
+			# foundation-signed dep .sig would fail verification.
+			staged = load_trust_store_json(out)
+			allowed_managed = staged.allowed_kids_for_module("mariadb.rpc.managed")
+			assert foundation_kid in allowed_managed, (
+				f"foundation_kid was shadowed by per-submodule overlay for "
+				f"mariadb.rpc.managed.  Resolved kids: {allowed_managed!r}.  "
+				f"Staged namespaces: {dict(staged.allowed_kids_by_namespace)!r}"
+			)
+			# Same check for the .* leaf shape.
+			allowed_managed_leaf = staged.allowed_kids_for_module("mariadb.rpc.managed.helper")
+			assert foundation_kid in allowed_managed_leaf, (
+				f"foundation_kid was shadowed by per-submodule overlay for "
+				f"mariadb.rpc.managed.helper (leaf).  Resolved: {allowed_managed_leaf!r}"
+			)
+			# And for the other dep.
+			allowed_pool = staged.allowed_kids_for_module("mariadb.rpc.pool")
+			assert foundation_kid in allowed_pool, (
+				f"foundation_kid was shadowed for mariadb.rpc.pool.  "
+				f"Resolved: {allowed_pool!r}"
+			)
+
+	def test_dep_submodule_overlay_co_deploy_case_still_works(self) -> None:
+		"""Companion to the cross-publisher test: same-publisher / co-
+		deploy must still authorize the new signer for dep namespaces.
+		This is the original intent of the dep_namespaces loop (smoke-
+		compile verifies just-signed sibling packages).  Pin that the
+		fix doesn't regress this case."""
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		from lang.driftc.packages.trust_v0 import load_trust_store_json
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			# No baseline (or baseline doesn't pre-authorize anything for
+			# the dep -- the co-deploy case where the dep is being signed
+			# by the same kid in the same session).
+			out = Path(tmpdir) / "staged.json"
+			pubkey = b"\x01" * 32
+			build_staged_trust(
+				baseline_trust_path=None,
+				signer_pubkey_raw=pubkey,
+				artifact_namespace="net.tls",
+				out_path=out,
+				dep_namespaces=["net.crypto"],
+			)
+			data = json.loads(out.read_text())
+			kid = list(data["keys"].keys())[0]
+			staged = load_trust_store_json(out)
+			# New signer authorized for the co-deployed sibling.
+			assert kid in staged.allowed_kids_for_module("net.crypto")
+			assert kid in staged.allowed_kids_for_module("net.crypto.cipher")
+
 
 # ── Target default regression ────────────────────────────────────────
 
