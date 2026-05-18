@@ -309,6 +309,20 @@ class TypeChecker:
 		# a `catch <fqn>(<binder>) { ... }` arm is type-checked.  Used by
 		# HField on Error to route between schema field projection and
 		# Error envelope methods.  See spec §24 (slice 3 of impl).
+		#
+		# §B fix (2026-05-17): the FQN stored here is the CANONICAL
+		# pub-error FQN — i.e. with any `pub type Alias = inner.PubError`
+		# re-export chain followed to the underlying `pub error` decl
+		# (see `_canonical_pub_error_fqn` below).  This single
+		# canonicalization at registration time means downstream
+		# consumers (type-checker field-schema lookup at
+		# `type_checker.py:9061` / `:9224`, MIR's typed-catch storage
+		# materialization at `hir_to_mir.py:5426`, MIR's params-decode
+		# helper at `:5290`) all see the same key.  Without it, lookups
+		# in `type_table.get_nominal(...)` against the alias module
+		# return None, the field-schema check falls through, and the
+		# user sees `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` for fields that
+		# ARE declared on the underlying pub-error.
 		self._typed_catch_binders: dict[int, str] = {}
 		# Binding ids (params and locals) share a single id-space.
 		self._next_binding_id: int = 1
@@ -319,6 +333,75 @@ class TypeChecker:
 		# Package modules that need unsafe permission (producer already
 		# validated) but NOT full toolchain trust (no rawbuffer intrinsics).
 		self._pkg_unsafe_modules = set(pkg_unsafe_modules or [])
+
+	def _canonical_pub_error_fqn(self, event_fqn: str | None) -> str | None:
+		"""Resolve a typed-catch arm's event FQN through any
+		`pub type Alias = inner.PubError` chain to the underlying
+		`pub error` decl's FQN.
+
+		`event_fqn` is shaped `"<module_id>:<type_name>"`.  If
+		(module_id, type_name) names a `pub type` alias whose target
+		ultimately resolves to a STRUCT (the Path-A face of a
+		`pub error`), return that struct's
+		`"<def_module>:<def_name>"`.  Otherwise return the input
+		unchanged.
+
+		Follows alias chains (alias → alias → struct) with a seen-set
+		guard to break cycles.  Returns the input on:
+		  * malformed FQN (no colon)
+		  * alias has type parameters (generic aliases not supported
+		    in typed-catch position)
+		  * alias target name is missing/non-string
+		  * underlying name is already a known struct (the common
+		    fast path: no alias to follow)
+
+		Mirrors `_resolve_alias_target_struct` in
+		`parser/__init__.py:4688`, which handles the same chain for
+		exported-ctor resolution.  Kept inside the type-checker (not
+		shared) because the seen-set semantics and the "return-input-
+		on-failure" fallback are typed-catch-specific.
+		"""
+		if not event_fqn or ":" not in event_fqn:
+			return event_fqn
+		mod_id, type_name = event_fqn.split(":", 1)
+		# Fast path: if the (mod, name) already names a known STRUCT,
+		# no alias resolution is needed.  Avoids walking the alias
+		# table for every typed-catch arm in source code that doesn't
+		# use re-export aliases.
+		if self.type_table.get_nominal(
+			kind=TypeKind.STRUCT,
+			module_id=mod_id,
+			name=type_name,
+		) is not None:
+			return event_fqn
+		seen: set[tuple[str, str]] = set()
+		cur_mod, cur_name = mod_id, type_name
+		while True:
+			if (cur_mod, cur_name) in seen:
+				return event_fqn
+			seen.add((cur_mod, cur_name))
+			alias_def = self.type_table.lookup_type_alias(
+				module_id=cur_mod, name=cur_name,
+			)
+			if alias_def is None:
+				return event_fqn
+			type_params, target_te, _loc = alias_def
+			if type_params:
+				return event_fqn
+			target_name = getattr(target_te, "name", None)
+			if not isinstance(target_name, str) or not target_name:
+				return event_fqn
+			target_mod = getattr(target_te, "module_id", None)
+			if not isinstance(target_mod, str) or not target_mod:
+				target_mod = cur_mod
+			if self.type_table.get_nominal(
+				kind=TypeKind.STRUCT,
+				module_id=target_mod,
+				name=target_name,
+			) is not None:
+				return f"{target_mod}:{target_name}"
+			cur_mod, cur_name = target_mod, target_name
+
 	def _is_toolchain_trusted_module(self, module_name: str | None) -> bool:
 		return bool(module_name) and module_name in self._unsafe_trusted_modules
 	def _is_pkg_unsafe_allowed(self, module_name: str | None) -> bool:
@@ -8422,7 +8505,7 @@ class TypeChecker:
 							# the expression-form arm even though `e` IS the
 							# immediate catch binder.
 							if arm.event_fqn is not None:
-								self._typed_catch_binders[bid] = arm.event_fqn
+								self._typed_catch_binders[bid] = self._canonical_pub_error_fqn(arm.event_fqn)
 						type_block_in_scope(arm.block)
 						if arm.result is not None:
 							type_expr(arm.result, expected_type=result_ty)
@@ -11130,7 +11213,7 @@ class TypeChecker:
 							binding_mutable[bid] = False
 							binding_place_kind[bid] = PlaceKind.LOCAL
 							if arm.event_fqn is not None:
-								self._typed_catch_binders[bid] = arm.event_fqn
+								self._typed_catch_binders[bid] = self._canonical_pub_error_fqn(arm.event_fqn)
 						type_block(arm.block)
 					finally:
 						scope_env.pop()

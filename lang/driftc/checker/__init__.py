@@ -361,6 +361,14 @@ class Checker:
 		# Use shared TypeTable when supplied; otherwise create a local one.
 		self._type_table = type_table or TypeTable()
 		self._ensure_core_types()
+		# §B fix (2026-05-17): `pub type Alias = inner.PubError`
+		# re-export alias → underlying pub-error FQN map.  Built lazily
+		# from `type_table.type_aliases` on first access (see
+		# `_alias_to_pub_error_fqn`).  Used by the throws-coverage
+		# walker to recognize `catch api:Alias(e) { ... }` as catching
+		# the underlying `pub error`, and by the catch-event validator
+		# at line ~458 to accept alias FQNs as known events.
+		self._pub_error_alias_map: dict[str, str] | None = None
 
 	def _ensure_core_types(self) -> None:
 		if hasattr(self, "_int_type") and hasattr(self, "_string_type"):
@@ -422,6 +430,77 @@ class Checker:
 			decl_ids = list(fn_decls_by_id)
 		return checker.check_by_id(decl_ids)
 
+	def _canonical_event_fqn(self, fqn: str | None) -> str | None:
+		"""Resolve a catch-arm event FQN through any `pub type` alias
+		chain to the underlying `pub error` FQN.  Returns the input
+		unchanged when no alias mapping applies (the common fast
+		path) or when the alias map is empty.
+
+		Requires `_alias_to_pub_error_fqn` to have been populated;
+		`check_by_id` calls it before the inference loop runs."""
+		if fqn is None:
+			return None
+		alias_map = self._pub_error_alias_map or {}
+		return alias_map.get(fqn, fqn)
+
+	def _alias_to_pub_error_fqn(self, known_pub_errors: Set[str]) -> dict[str, str]:
+		"""Build a {alias-FQN: underlying-pub-error-FQN} map for every
+		`pub type Alias = inner.PubError` re-export chain in the type
+		table.  Cached on the Checker instance after first build.
+
+		The chain (alias → alias → pub-error) is walked with a seen-
+		set guard; an alias whose chain doesn't terminate at a
+		known pub-error is omitted.  `known_pub_errors` is the union
+		of `exception_catalog.keys()` and `type_table.exception_schemas
+		.keys()` -- the gate "is this a real pub-error FQN?".
+
+		§B follow-up to app-team `compiler-findings.md`: prior to
+		this map, the throws-coverage walker and catch-event
+		validator both stringly-matched arm event_fqns, so an alias
+		FQN never matched the underlying pub-error.  Mirrors
+		`_canonical_pub_error_fqn` in type_checker.py (same chain
+		logic, different consumer).
+		"""
+		if self._pub_error_alias_map is not None:
+			return self._pub_error_alias_map
+		out: dict[str, str] = {}
+		type_aliases = getattr(self._type_table, "type_aliases", None)
+		if not isinstance(type_aliases, dict) or not known_pub_errors:
+			self._pub_error_alias_map = out
+			return out
+		for (alias_mod, alias_name), payload in type_aliases.items():
+			if not isinstance(alias_mod, str) or not isinstance(alias_name, str):
+				continue
+			type_params, _target_te, _loc = payload
+			if type_params:
+				# Generic aliases not supported in typed-catch.
+				continue
+			seen_chain: set[tuple[str, str]] = set()
+			cur_mod, cur_name = alias_mod, alias_name
+			while True:
+				if (cur_mod, cur_name) in seen_chain:
+					break
+				seen_chain.add((cur_mod, cur_name))
+				next_alias = type_aliases.get((cur_mod, cur_name))
+				if next_alias is None:
+					break
+				next_params, next_target, _ = next_alias
+				if next_params:
+					break
+				next_name = getattr(next_target, "name", None)
+				if not isinstance(next_name, str) or not next_name:
+					break
+				next_mod = getattr(next_target, "module_id", None)
+				if not isinstance(next_mod, str) or not next_mod:
+					next_mod = cur_mod
+				candidate_fqn = f"{next_mod}:{next_name}"
+				if candidate_fqn in known_pub_errors:
+					out[f"{alias_mod}:{alias_name}"] = candidate_fqn
+					break
+				cur_mod, cur_name = next_mod, next_name
+		self._pub_error_alias_map = out
+		return out
+
 	def _normalize_and_collect_catch_arms(
 		self,
 		hir_blocks: Mapping[FunctionId, "H.HBlock"],
@@ -454,6 +533,23 @@ class Checker:
 		exc_schemas = getattr(self._type_table, "exception_schemas", None)
 		if isinstance(exc_schemas, dict):
 			known_events.update(exc_schemas.keys())
+		# §B fix (2026-05-17): `pub type Alias = inner.PubError`
+		# re-exports are valid catch-arm event names -- `catch
+		# api:Alias(e) { ... }` should resolve through the alias
+		# chain to the underlying `pub error`.  Build (once per
+		# Checker instance) the alias → underlying-pub-error FQN
+		# map and union the alias FQNs into `known_events` so the
+		# `validate_catch_arms` gate accepts them.  The throws-
+		# coverage walker (`_function_may_throw`) ALSO consults
+		# this map to canonicalize catch-arm event_fqns when
+		# building its `caught_events` set, so a `throw Inner(...)`
+		# inside `try { } catch api:Alias(e) {}` is recognized as
+		# handled.  Same canonicalization also lands on the type-
+		# checker side at `type_checker.py:_canonical_pub_error_fqn`
+		# for the field-schema lookup -- the three halves dovetail.
+		alias_map = self._alias_to_pub_error_fqn(known_events)
+		if alias_map:
+			known_events.update(alias_map.keys())
 		callinfo_ok_by_fn: Dict[FunctionId, bool] = {}
 		skip_validation: Set[FunctionId] = set()
 
@@ -1287,7 +1383,11 @@ class Checker:
 				# Expression-form try/catch creates a local handler scope for the
 				# attempt expression. A catch-all arm handles any propagated throw.
 				catch_all_local = any(arm.event_fqn is None for arm in expr.arms)
-				caught_local = {arm.event_fqn for arm in expr.arms if arm.event_fqn is not None}
+				# §B (2026-05-17): canonicalize arm event_fqns through
+				# `pub type` alias chain so an arm naming an alias still
+				# matches a throw of the underlying pub-error.  See
+				# `_canonical_event_fqn` / `_alias_to_pub_error_fqn`.
+				caught_local = {self._canonical_event_fqn(arm.event_fqn) for arm in expr.arms if arm.event_fqn is not None}
 				walk_expr(expr.attempt, caught_local, catch_all_local)
 				for arm in expr.arms:
 					# Catch-arm bodies are *not* within the local handler scope; throws
@@ -1355,7 +1455,8 @@ class Checker:
 					continue
 				if isinstance(stmt, H.HTry):
 					catch_all_local = any(arm.event_fqn is None for arm in stmt.catches)
-					caught_events = {arm.event_fqn for arm in stmt.catches if arm.event_fqn is not None}
+					# §B (2026-05-17): canonicalize through alias chain.
+					caught_events = {self._canonical_event_fqn(arm.event_fqn) for arm in stmt.catches if arm.event_fqn is not None}
 					walk_block(stmt.body, caught_events, catch_all_local)
 					for arm in stmt.catches:
 						# Catch blocks still live within the outer try context (if any),

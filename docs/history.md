@@ -1,5 +1,162 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: typed-catch through `pub type Alias = inner.PubError` re-export lost the underlying Path-A struct schema -- `catch outer:Alias(e) { val t = e.tag; }` rejected with `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` for fields that ARE declared on the underlying pub-error)
+- **Compiler fix.**  Release 0.31.103, ABI unchanged at 14.
+  Bisected by the mariadb-rpc team alongside app-team `compiler-findings.md`
+  #2; called out by the user as §B follow-up after #2 landed.  Same-
+  package and cross-package shapes both reproduced pre-fix.
+
+  **Shape (pre-fix carrier verified deterministic at 0.31.102):**
+
+      pub error Inner { tag: String }
+      pub type Alias = Inner;
+
+      try { ... }
+      catch main:Alias(e) {
+          val t = e.tag;          // E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA
+      }
+
+  Diagnostic:
+
+      <source>:N:M: error: field 'tag' is not declared on `pub error`
+        type 'main:Alias' and is not an Error envelope method/field
+        [E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA]
+
+  Note the FQN: `main:Alias`, not the underlying `main:Inner`.
+
+  **Root cause -- alias canonicalization missing at three sites:**
+
+  Drift's typed-catch path threads a catch arm's event FQN through
+  several stages.  Each stage built its own lookup keyed by the
+  arm's literal FQN string (`main:Alias`), but the schema /
+  exception-code lookups all use the UNDERLYING pub-error's FQN
+  (`main:Inner`).  No stage walked the `pub type` alias chain,
+  so cross-stage lookups silently missed:
+
+   1. **Type-checker field-schema lookup** (`type_checker.py:9061`
+      and `:9224`).  `get_nominal(STRUCT, mod, name)` against the
+      alias module returns None; control falls through to
+      `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` even though the field IS
+      declared on the underlying pub-error's Path-A struct face.
+   2. **Catch-arm event validator** (`checker/__init__.py:453` →
+      `catch_arms.validate_catch_arms:92`).  `known_events` is
+      built from `exception_catalog.keys()` + `exception_schemas
+      .keys()` -- the alias name isn't in either, so the arm is
+      rejected with `unknown catch event main:Alias`.
+   3. **Throws-coverage walker** (`checker/__init__.py:1338,
+      1407`).  Builds `caught_events = {arm.event_fqn ...}` --
+      string-matches against `HThrow.event_fqn`.  A throw of
+      `Inner` has event_fqn `main:Inner`, NOT in `{main:Alias}`,
+      so the throw is treated as uncaught → `function main is
+      declared nothrow but may throw`.
+
+  Downstream, MIR's catch-arm dispatch (`hir_to_mir.py:11280`,
+  `_lookup_catch_event_code`) consulted `_exc_env` for the alias
+  FQN, returned 0 (fallback), emitted a comparison against event
+  code 0 that NEVER matches a real throw -- so even if the upstream
+  gates accepted the alias, the catch block would silently never
+  run and the error would escape the try/catch, aborting at runtime
+  with SIGABRT.
+
+  **Fix (one canonicalization helper per stage, all sharing the
+  same alias-chain walk):**
+
+   1. **Type-checker registration site**
+      (`type_checker.py:_canonical_pub_error_fqn` -- new helper).
+      Called from BOTH typed-catch-binder registration sites
+      (`:8508` expression-form, `:11216` statement-form):
+      `self._typed_catch_binders[bid] =
+      self._canonical_pub_error_fqn(arm.event_fqn)`.  Single
+      canonicalization at registration; downstream consumers
+      (field-schema lookup at `:9061`/`:9224`, `expr.typed_proj_
+      event_fqn` annotation propagated to MIR's
+      `_lower_typed_catch_field_proj` and
+      `_get_or_materialize_typed_catch_storage`) all see the
+      canonical FQN.  Diagnostic strings that interpolate the
+      FQN now show the underlying pub-error's name -- arguably
+      more useful for the user (points at the actual schema)
+      than the alias they wrote.
+   2. **Checker-side validator + walker**
+      (`checker/__init__.py:_alias_to_pub_error_fqn` -- new
+      helper, cached on the Checker instance).  Builds an
+      `{alias-fqn: underlying-pub-error-fqn}` map by walking
+      `type_table.type_aliases` with a seen-set cycle guard.
+      Union of alias FQNs is added to `known_events` so the
+      validate-catch-arms gate accepts alias arms.  Throws-
+      coverage walker's `caught_events` set construction at
+      `:1338` and `:1407` is canonicalized via a thin wrapper
+      `_canonical_event_fqn(fqn)` that consults the map.
+   3. **MIR-side catch-arm dispatch**
+      (`hir_to_mir.py:_lookup_catch_event_code`).  Extended to
+      fall through the same alias chain when the direct
+      `_exc_env` lookup misses, so the emitted event-code
+      comparison matches the underlying pub-error's runtime
+      code.  Without this, the SIGABRT at runtime persists
+      even though the type-checker accepts the program.
+
+  All three helpers walk the SAME alias-chain logic (with-cycle-
+  guard, generic-aliases-rejected, target-name/module-strict);
+  the three live in their respective modules to avoid cross-layer
+  imports.  Each one is a copy of the same ~25 lines of chain-
+  following code -- explicit duplication kept rather than
+  factored into a shared helper, since the consumers differ in
+  what they return on the no-match fallback (input FQN vs None
+  vs zero code) and the duplication makes each layer's intent
+  clearer.
+
+  **Regression carriers** (`lang/tests/driver/test_typed_catch_
+  through_pub_type_alias.py`, NEW):
+
+   - V1.  Control: same-module, catch via direct `pub error`
+     name.  Must pass on both pre- and post-fix.  Locks the
+     failure axis to the alias path.
+   - V2.  THE BUG (same-module): `pub type Alias = Inner`
+     then `catch main:Alias(e) { e.tag }`.  Pre-fix:
+     `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA`.  Post-fix: compile +
+     run; binary exits 0.
+   - V3.  Cross-package version of V2 (xfail strict).
+     Tested with both `producer_pkg:Alias` and direct
+     `producer_pkg:Inner`; BOTH fail with `function main is
+     declared nothrow but may throw`.  Root cause is NOT the
+     alias canonicalization -- it's a SEPARATE pre-existing gap
+     where the producer's `throws Inner` declaration is not
+     round-tripped through package metadata into the consumer's
+     view (`declared_throws_event_fqns=None` consumer-side).
+     When the cross-package narrow-throws metadata slice lands,
+     drop the xfail and this carrier becomes the cross-pkg
+     alias-canonicalization pin.
+   - V4.  Facade-module shape (maria's actual
+     `mariadb.rpc.managed` + `mariadb.rpc.api` carrier),
+     xfail strict for the same reason as V3.
+
+  **Files touched:**
+  - `lang/driftc/type_checker.py` -- new
+    `_canonical_pub_error_fqn` helper + 2 registration-site
+    callers; updated `_typed_catch_binders` docstring.
+  - `lang/driftc/checker/__init__.py` -- new
+    `_alias_to_pub_error_fqn` + `_canonical_event_fqn`
+    helpers; `_pub_error_alias_map` lazy cache field;
+    `known_events` extension at line 453 area; canonicalization
+    at the two `caught_events`-construction sites in
+    `_function_may_throw`.
+  - `lang/driftc/stage2/hir_to_mir.py` --
+    `_lookup_catch_event_code` extended with alias-chain
+    fallback + new `_canonical_event_fqn_for_alias` helper.
+  - `lang/versions.py` -- 0.31.102 → 0.31.103.
+  - `lang/tests/driver/test_typed_catch_through_pub_type_alias.py`
+    (NEW) -- V1 control + V2 THE BUG + V3 xfail (cross-pkg
+    single-module) + V4 xfail (facade-module).
+
+  **Known follow-up (NOT addressed in this slice):**
+  Cross-package typed-throws coverage gap.  The producer's
+  `throws Inner` declaration is computed by `type_resolver.py:
+  _resolve_declared_throws_types` but never serialized into the
+  package payload.  Consumer-side, every cross-package call to
+  a typed-throws function looks like generic throws, requiring
+  catch-all for coverage.  Separately discussable; would unlock
+  V3/V4 alongside enabling typed catch arms to satisfy `nothrow`
+  callers across package boundaries.
+
 ## 2026-05-17 (compiler fix: cross-package method dispatch through `pub interface` fired `ResolutionError: missing trait metadata for '<pkg.Interface>'` at the call resolver -- producer-side package emission only included `pub trait` names in `trait_metadata`; `pub interface` was silently dropped from the dispatch surface)
 - **Compiler fix.**  Release 0.31.102, ABI unchanged at 14.
   Fixes app-team `compiler-findings.md` #1: `pool.close()` on

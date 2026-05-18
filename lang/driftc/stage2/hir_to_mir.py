@@ -11283,10 +11283,66 @@ class HIRToMIR:
 
 		Uses the same exception env mapping (name -> code) as throw lowering;
 		fallback to 0 if unknown.
+
+		§B fix (2026-05-17): if the supplied `event_fqn` is a
+		`pub type Alias = inner.PubError` re-export and the direct
+		lookup misses, follow the alias chain in `type_table.type_aliases`
+		and look up the underlying pub-error's FQN.  Without this,
+		`catch api:Alias(e) { ... }` would emit a comparison against
+		event code 0 (the fallback), which never matches a real throw
+		-- the catch arm would silently never run and the error
+		would escape the try/catch, aborting at runtime.  The
+		checker-side gate (`_canonical_event_fqn`) handles the
+		throws-coverage analysis; this is the MIR-side mirror so
+		catch arm dispatch ALSO matches the underlying event code.
 		"""
-		if self._exc_env is not None:
-			return self._exc_env.get(event_fqn, 0)
+		if self._exc_env is None:
+			return 0
+		code = self._exc_env.get(event_fqn, None)
+		if code is not None:
+			return code
+		canonical = self._canonical_event_fqn_for_alias(event_fqn)
+		if canonical is not None and canonical != event_fqn:
+			return self._exc_env.get(canonical, 0)
 		return 0
+
+	def _canonical_event_fqn_for_alias(self, event_fqn: str) -> str | None:
+		"""Resolve a catch-arm event FQN through any `pub type` alias
+		chain in `type_table.type_aliases` to the underlying name.
+		Returns the input on no-alias / cycle / generic-alias.  Mirrors
+		the same-named helper in `checker/__init__.py` and
+		`type_checker.py:_canonical_pub_error_fqn` -- kept inline
+		here so MIR doesn't need to import from the checker layers."""
+		if not event_fqn or ":" not in event_fqn:
+			return event_fqn
+		type_aliases = getattr(self._type_table, "type_aliases", None)
+		if not isinstance(type_aliases, dict):
+			return event_fqn
+		mod, name = event_fqn.split(":", 1)
+		seen: set[tuple[str, str]] = set()
+		cur_mod, cur_name = mod, name
+		while True:
+			if (cur_mod, cur_name) in seen:
+				return event_fqn
+			seen.add((cur_mod, cur_name))
+			payload = type_aliases.get((cur_mod, cur_name))
+			if payload is None:
+				return event_fqn
+			type_params, target_te, _loc = payload
+			if type_params:
+				return event_fqn
+			next_name = getattr(target_te, "name", None)
+			if not isinstance(next_name, str) or not next_name:
+				return event_fqn
+			next_mod = getattr(target_te, "module_id", None)
+			if not isinstance(next_mod, str) or not next_mod:
+				next_mod = cur_mod
+			next_fqn = f"{next_mod}:{next_name}"
+			# Termination: if next_fqn names a known exception in `_exc_env`,
+			# return it.  Otherwise keep walking the chain.
+			if self._exc_env is not None and next_fqn in self._exc_env:
+				return next_fqn
+			cur_mod, cur_name = next_mod, next_name
 
 
 __all__ = ["MirBuilder", "HIRToMIR"]
