@@ -1,7 +1,7 @@
 # Drift development history
 
-## 2026-05-18 (deploy-toolchain bug fix: `drift deploy` staged trust overlay shadowed broader baseline grants for cross-publisher dependencies -- `build_staged_trust`'s dep-namespace loop stamped only the new signer's kid on sub-namespace entries, so driftc's longest-prefix-wins matcher picked the more-specific shadow entry over the broader baseline `mariadb.rpc.*` grant and rejected Foundation-signed deps under a PushCoin-signed app)
-- **Deploy-toolchain fix.**  Release 0.31.108, ABI unchanged at 14.
+## 2026-05-18 (deploy-toolchain fix + API redesign: `drift deploy` staged trust overlay shadowed broader baseline grants for cross-publisher dependencies AND over-authorized the deploy signer on external certified deps -- `build_staged_trust`'s flat `dep_namespaces=` parameter conflated co-deployed siblings with already-published external deps; the redesign splits them into two explicit inputs and structurally prevents the deploy signer from being authorized over namespaces it has no business signing)
+- **Deploy-toolchain fix + API redesign.**  Release 0.31.108, ABI unchanged at 14.
   Reported by app team (PushCoin / singular 0.3.0 cross-publisher
   deploy);
   `/home/sl/src/pushcoin/work/drift-deploy-trust-overlay-bug/README.md`
@@ -59,46 +59,98 @@
   `{pushcoin_kid}` only); post-fix the set is
   `{foundation_kid, pushcoin_kid}`.
 
-  **Fix.**  In `staged_trust.py::build_staged_trust`, when creating a
-  more-specific namespace entry for a dep submodule, INHERIT the kids
-  the baseline's broader pattern would have matched for that
-  submodule (same longest-prefix-wins query the verifier uses), then
-  add the new signer on top.  Equivalent to user-reported option 2
-  ("merge inherited kids") with the new signer added unconditionally
-  to preserve the original intent of supporting co-deploy scenarios.
-  Cross-publisher ends up with `[foundation_kid, new_kid]`; co-deploy
-  with no broader baseline ends up with `[new_kid]` (same as before
-  the fix); same-publisher with baseline grant ends up with
-  `[same_kid]` after de-dup (same effective trust).
+  **Two-stage fix.**  An initial narrow fix kept the flat
+  `dep_namespaces=` API and merely inherited baseline kids when
+  writing per-submodule overlay entries.  That closed the shadowing
+  symptom but left a deeper policy hole: the deploy signer was still
+  authorized for external certified dep namespaces (e.g. PushCoin's
+  kid listed as a valid signer for `mariadb.rpc.managed`).  App-team
+  review flagged this as not-clean even though the staged trust is
+  ephemeral.
 
-  Implementation: a small `_effective_baseline_kids_for_module(...)`
-  helper mirrors the compiler-side matcher's rules locally in the
-  deploy tool (no new dependency on the compiler's TrustStore
-  loader).  Called twice per dep: once with the dep's exact id (for
-  the exact-match entry), once with `<dep_ns>.__staged_overlay_inherit_probe__`
-  (a guaranteed-not-a-real-module probe id for the `.*` pattern
-  entry, so the longest match falls back to the broader baseline
-  pattern rather than to anything the loop might add later).
+  The landed fix is an **API redesign** that closes both holes
+  structurally.  `build_staged_trust` now takes two distinct lists
+  in place of the flat `dep_namespaces=`:
 
-  **Audit -- no pre-existing violations.**
-  - 105/105 `tools/drift_deploy/test_deploy.py` tests pass; the two
-    pre-existing staged-trust tests (`test_empty_baseline`,
-    `test_overlay_on_baseline`, `test_staged_trust_uses_module_namespace`,
-    `test_staged_trust_authorizes_dep_namespaces`) are unchanged and
-    green.
-  - The existing dep-namespaces test
-    (`test_staged_trust_authorizes_dep_namespaces`) intentionally
-    has an empty baseline -- it pins the co-deploy intent.  Still
-    green post-fix because no broader baseline pattern means
-    nothing to inherit and the new signer is added as before.
-  - Two new tests pin the fix and prevent regression:
-    `test_dep_submodule_does_not_shadow_broader_baseline_grant`
-    (the bug case, asserts foundation_kid survives in the resolved
-    set for `mariadb.rpc.managed` and `mariadb.rpc.pool`) and
-    `test_dep_submodule_overlay_co_deploy_case_still_works`
-    (the original-intent case, asserts the new signer is
-    authorized for the dep's namespace when no baseline grant
-    exists to inherit).
+  - `co_deployed_namespaces`: sibling artifacts signed by the SAME
+    staged signer in this deploy session.  Each gets the staged
+    signer added on top of any baseline inheritance.
+  - `external_dependency_namespaces`: already-published deps
+    consumed from the staged package-root, signed by their original
+    (different) publisher.  Baseline trust is authoritative; the
+    staged signer is NOT added.  No overlay entry is written --
+    the verifier's longest-prefix-wins matcher resolves these via
+    the baseline naturally.
+
+  Callers in `drift_deploy.py` (both the build-trust overlay site
+  ~970 and the smoke-trust overlay site ~1240) already had the
+  classification information available -- `dep_namespace_map` is
+  built from the manifest's artifacts, so any `dep_pkg_id` IN that
+  map is co-deployed and any `dep_pkg_id` NOT in it is external.
+  The API split surfaces that classification at the boundary
+  instead of flattening it.  The duplicated classification logic at
+  the two call sites is consolidated into a named helper
+  `_classify_deps_for_trust_overlay(...)` so it can be pinned by
+  one test rather than copy-pasted (and so future drift between
+  the two sites is structurally prevented).
+
+  Implementation: small `_effective_baseline_kids_for_module(...)`
+  helper mirrors the compiler-side matcher's longest-prefix-wins
+  rules locally in the deploy tool (no new dependency on the
+  compiler's TrustStore loader).  Used for:
+
+  - Inheriting baseline kids when the artifact's or a co-deployed
+    sibling's namespace happens to live under a broader baseline
+    pattern (preserves grants like a Foundation-signed root that
+    also signs a co-deployed sub-namespace).
+  - Verifying that every external dep namespace has SOME baseline
+    coverage; if not, raise `ValueError` early instead of producing
+    a staged trust that will later fail with an opaque "package
+    signatures not trusted" during smoke.
+
+  Two probe forms: query with the dep's exact id (for the exact-
+  match entry / external coverage check), and query with
+  `<ns>.__staged_overlay_inherit_probe__` (a guaranteed-not-a-real-
+  module probe id for the `.*` pattern entry, so the longest match
+  falls back to the broader baseline pattern rather than to anything
+  the loop might add later).
+
+  **Audit -- 112/112 deploy tests pass.**
+  - Pre-existing tests carried through with minimal renames:
+    `test_empty_baseline`, `test_overlay_on_baseline`,
+    `test_staged_trust_uses_module_namespace` unchanged;
+    `test_staged_trust_authorizes_dep_namespaces` renamed to
+    `test_staged_trust_authorizes_co_deployed_namespaces` (its
+    intent was always co-deploy; the new name surfaces that).
+  - Four new tests pin the trust-semantics half of the redesign:
+    - `test_external_dep_preserves_baseline_grant_no_shadow` --
+      the shadowing case (`foundation_kid` survives in the
+      resolved set for `mariadb.rpc.managed` after staging).
+    - `test_external_dep_does_not_authorize_deploy_signer` --
+      the policy-hole closure (`pushcoin_kid` is NOT in the
+      resolved set for `mariadb.rpc.managed`; only
+      `foundation_kid` via baseline inheritance).
+    - `test_external_dep_without_baseline_coverage_raises` --
+      fail-loud when baseline has no coverage for an external
+      dep.
+    - `test_mixed_co_deployed_and_external_deps` -- end-to-end
+      policy split (deploy signer authorized for artifact +
+      co-deployed sibling; foundation kid only for external dep).
+  - Five new tests pin the caller-classification half (`TestClassifyDepsForTrustOverlay`):
+    - `test_manifest_sibling_classified_co_deployed` --
+      manifest siblings land in `co_deployed_namespaces`;
+      `_extract_dep_namespaces` is NOT called for them.
+    - `test_external_dep_classified_external` -- non-manifest
+      deps land in `external_dependency_namespaces` via
+      `_extract_dep_namespaces`.
+    - `test_mixed_classification` -- PushCoin/singular shape:
+      one manifest sibling + one external certified dep;
+      asserts no external namespace leaks into the co-deployed
+      bucket and vice versa.
+    - `test_none_namespace_map_treats_all_as_external` -- app
+      deploys with no co-deployed siblings.
+    - `test_duplicates_deduped` -- shared sub-namespaces across
+      multiple external deps don't produce duplicates.
 
   **Why the compiler matcher isn't being changed.**  Longest-prefix-
   wins is the documented MVP semantics for namespace resolution.
@@ -118,14 +170,43 @@
   publisher and masked the underlying defect.  Singular 0.3.0
   publishing was blocked until this slice landed.
 
+  **App-team artifact audit -- published state is clean.**
+  The over-authorization lived ENTIRELY inside the ephemeral
+  `.drift-deploy-staging.*/drift/trust.json` written by `drift deploy`
+  for smoke compilation and deleted at the end of the session.  It
+  did NOT embed into published artifacts (`.zdmp`, `.sig`,
+  `.source-attestation`, `.author-profile`).  PushCoin's published
+  `singular/0.3.0`:
+  - `singular.author-profile` correctly declares PushCoin's
+    namespaces as `["singular.*"]` only.
+  - `bookkeeper/drift/trust.json` maps each kid to its own
+    namespace only (Foundation owns Foundation namespaces; PushCoin
+    owns `singular.*`).
+  - `singular/drift/trust.json` grants Foundation for
+    `mariadb.rpc.*` / `mariadb.wire.proto.*` only; PushCoin's kid
+    appears nowhere (PushCoin is the signer here, not a
+    trusted-consumer entry).
+
+  No artifact repair / redeploy is required.  This release is a
+  correctness/design cleanup for `drift deploy`'s staging behavior.
+
   **Files touched:**
-  - `tools/drift_deploy/staged_trust.py` -- new
-    `_effective_baseline_kids_for_module` helper; dep-namespace loop
-    inherits baseline kids before adding the new signer.
-  - `tools/drift_deploy/test_deploy.py` -- two new tests in
-    `TestModuleNamespace`:
-    `test_dep_submodule_does_not_shadow_broader_baseline_grant` and
-    `test_dep_submodule_overlay_co_deploy_case_still_works`.
+  - `tools/drift_deploy/staged_trust.py` -- redesign:
+    `_effective_baseline_kids_for_module` helper;
+    `_authorize_namespace_for_staged_signer` inner helper for the
+    artifact and co-deployed siblings; external-dep coverage check
+    with fail-loud `ValueError`.  API: `dep_namespaces=` removed,
+    replaced by `co_deployed_namespaces=` and
+    `external_dependency_namespaces=`.
+  - `tools/drift_deploy/drift_deploy.py` -- new
+    `_classify_deps_for_trust_overlay(resolved, dep_namespace_map,
+    staged_pkg_root) -> (co, ext)` helper consolidates the
+    classification.  Both `build_staged_trust` call sites (~970
+    build-trust, ~1240 smoke-trust) call the helper and pass the
+    two lists separately.
+  - `tools/drift_deploy/test_deploy.py` -- pre-existing test rename
+    (`...authorizes_co_deployed_namespaces`), four new tests pinning
+    the redesign (see audit above).
   - `lang/versions.py` -- 0.31.107 -> 0.31.108.
 
   **Sequenced next (NOT in this slice):**

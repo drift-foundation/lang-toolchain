@@ -21,6 +21,7 @@ from tools.drift_deploy.drift_deploy import (
 	DeployError,
 	_build_app,
 	_build_package,
+	_classify_deps_for_trust_overlay,
 	_clean_env,
 	_deploy_artifact,
 	_extract_dep_namespaces,
@@ -822,8 +823,10 @@ class TestModuleNamespace:
 			assert "net-tls.*" not in data["namespaces"]
 			assert "net-tls" not in data["namespaces"]
 
-	def test_staged_trust_authorizes_dep_namespaces(self) -> None:
-		"""Smoke trust must authorize dependency namespaces, not just the artifact's own."""
+	def test_staged_trust_authorizes_co_deployed_namespaces(self) -> None:
+		"""Smoke trust must authorize co-deployed sibling namespaces
+		(packages being signed by the SAME staged signer in this
+		session), not just the artifact's own."""
 		from tools.drift_deploy.staged_trust import build_staged_trust
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			out = Path(tmpdir) / "trust.json"
@@ -832,13 +835,13 @@ class TestModuleNamespace:
 				signer_pubkey_raw=b"\x01" * 32,
 				artifact_namespace="net.tls",
 				out_path=out,
-				dep_namespaces=["net.crypto", "acme.util"],
+				co_deployed_namespaces=["net.crypto", "acme.util"],
 			)
 			data = json.loads(out.read_text())
 			# Own namespace authorized.
 			assert "net.tls.*" in data["namespaces"]
 			assert "net.tls" in data["namespaces"]
-			# Dependency namespaces authorized.
+			# Co-deployed sibling namespaces authorized.
 			assert "net.crypto.*" in data["namespaces"]
 			assert "net.crypto" in data["namespaces"]
 			assert "acme.util.*" in data["namespaces"]
@@ -848,26 +851,21 @@ class TestModuleNamespace:
 			assert kid in data["namespaces"]["net.crypto.*"]
 			assert kid in data["namespaces"]["acme.util.*"]
 
-	def test_dep_submodule_does_not_shadow_broader_baseline_grant(self) -> None:
-		"""LANGUAGE/DEPLOY BUG (2026-05-18, PushCoin/singular cross-publisher):
-		when a baseline grants foundation_kid -> mariadb.rpc.*, and we stage
-		trust for a new pushcoin-signed package whose deps live under
-		mariadb.rpc.managed / mariadb.rpc.pool, the staged overlay's
-		per-submodule entries must NOT shadow the broader foundation grant.
-		`TrustStore.allowed_kids_for_module` uses longest-prefix-wins, so a
-		more-specific overlay entry that drops foundation_kid causes the
-		Foundation-signed dep to fail trust verification.
+	def test_external_dep_preserves_baseline_grant_no_shadow(self) -> None:
+		"""DEPLOY-TOOLCHAIN BUG (2026-05-18, PushCoin/singular cross-
+		publisher): when a baseline grants foundation_kid -> mariadb.rpc.*,
+		staging trust for a pushcoin-signed package that DEPENDS on
+		mariadb.rpc.managed must not shadow the broader foundation grant.
 
-		Pre-fix: dep sub-namespaces (`mariadb.rpc.managed.*` etc.) only
-		carry the new signer's kid, shadowing the broader
-		`mariadb.rpc.*` -> [foundation_kid] entry from the baseline.
-		Cross-publisher deploys fail with "package signatures are not
-		trusted for module 'mariadb.rpc.managed'".
+		Pre-redesign the staged overlay wrote per-submodule entries
+		stamped with the deploy signer only, narrowing trust under
+		driftc's longest-prefix-wins matcher.  Cross-publisher deploys
+		failed with "package signatures are not trusted for module
+		'mariadb.rpc.managed'".
 
-		Post-fix: dep sub-namespace entries inherit the kids that the
-		baseline already authorized for that namespace (via the same
-		longest-prefix-wins logic the verifier uses), then add the new
-		signer.  Cross-publisher deploys succeed.
+		Post-redesign external deps are inherit-only: the staged overlay
+		writes NO entry for them, and the verifier resolves their kids
+		via the baseline's broader pattern naturally.
 
 		Reported in
 		`/home/sl/src/pushcoin/work/drift-deploy-trust-overlay-bug/README.md`.
@@ -877,9 +875,7 @@ class TestModuleNamespace:
 		from tools.drift_deploy.staged_trust import build_staged_trust
 		from lang.driftc.packages.trust_v0 import load_trust_store_json
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
-			# Baseline grants foundation_kid -> mariadb.rpc.*.  Use a real
-			# 32-byte pubkey + matching kid so load_trust_store_json
-			# validates cleanly.
+			# Baseline grants foundation_kid -> mariadb.rpc.*.
 			baseline = Path(tmpdir) / "baseline.json"
 			foundation_pubkey = b"\xaa" * 32
 			foundation_kid = "ed25519:" + base64.b64encode(
@@ -899,67 +895,189 @@ class TestModuleNamespace:
 			}))
 
 			out = Path(tmpdir) / "staged.json"
-			# Different publisher's signing key.
 			pushcoin_pubkey = b"\x42" * 32
 			build_staged_trust(
 				baseline_trust_path=baseline,
 				signer_pubkey_raw=pushcoin_pubkey,
 				artifact_namespace="singular",
 				out_path=out,
-				dep_namespaces=["mariadb.rpc.managed", "mariadb.rpc.pool"],
+				external_dependency_namespaces=["mariadb.rpc.managed", "mariadb.rpc.pool"],
 			)
 
-			# Load the staged trust through the same verifier the compiler
-			# uses, and ask "who can sign mariadb.rpc.managed?".  The
-			# foundation_kid must be in the answer; otherwise the
-			# foundation-signed dep .sig would fail verification.
+			# foundation_kid must be the kid that verifies mariadb.rpc.managed.
 			staged = load_trust_store_json(out)
 			allowed_managed = staged.allowed_kids_for_module("mariadb.rpc.managed")
 			assert foundation_kid in allowed_managed, (
-				f"foundation_kid was shadowed by per-submodule overlay for "
-				f"mariadb.rpc.managed.  Resolved kids: {allowed_managed!r}.  "
+				f"foundation_kid was shadowed.  Resolved: {allowed_managed!r}.  "
 				f"Staged namespaces: {dict(staged.allowed_kids_by_namespace)!r}"
 			)
-			# Same check for the .* leaf shape.
-			allowed_managed_leaf = staged.allowed_kids_for_module("mariadb.rpc.managed.helper")
-			assert foundation_kid in allowed_managed_leaf, (
-				f"foundation_kid was shadowed by per-submodule overlay for "
-				f"mariadb.rpc.managed.helper (leaf).  Resolved: {allowed_managed_leaf!r}"
+			# Same check for leaf modules.
+			allowed_leaf = staged.allowed_kids_for_module("mariadb.rpc.managed.helper")
+			assert foundation_kid in allowed_leaf, (
+				f"foundation_kid was shadowed for the .* leaf shape.  "
+				f"Resolved: {allowed_leaf!r}"
 			)
-			# And for the other dep.
 			allowed_pool = staged.allowed_kids_for_module("mariadb.rpc.pool")
-			assert foundation_kid in allowed_pool, (
-				f"foundation_kid was shadowed for mariadb.rpc.pool.  "
-				f"Resolved: {allowed_pool!r}"
-			)
+			assert foundation_kid in allowed_pool
 
-	def test_dep_submodule_overlay_co_deploy_case_still_works(self) -> None:
-		"""Companion to the cross-publisher test: same-publisher / co-
-		deploy must still authorize the new signer for dep namespaces.
-		This is the original intent of the dep_namespaces loop (smoke-
-		compile verifies just-signed sibling packages).  Pin that the
-		fix doesn't regress this case."""
+	def test_external_dep_does_not_authorize_deploy_signer(self) -> None:
+		"""Policy-hole closure (2026-05-18 redesign): the deploy signer
+		must NOT be authorized for external dependency namespaces.
+
+		Even with the shadowing fix, the previous flat dep_namespaces=
+		API still stamped the deploy signer on every dep's namespace,
+		quietly listing the app signer as a trusted signer for
+		Foundation-owned deps.  The split API (co_deployed vs external)
+		structurally prevents this: external deps are inherit-only.
+
+		Asserts the negative: pushcoin_kid is NOT in the resolved kid
+		set for `mariadb.rpc.managed` after staging.  Only the
+		foundation_kid (via the baseline `mariadb.rpc.*` grant) should
+		appear."""
+		import base64
+		import hashlib
 		from tools.drift_deploy.staged_trust import build_staged_trust
 		from lang.driftc.packages.trust_v0 import load_trust_store_json
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
-			# No baseline (or baseline doesn't pre-authorize anything for
-			# the dep -- the co-deploy case where the dep is being signed
-			# by the same kid in the same session).
+			baseline = Path(tmpdir) / "baseline.json"
+			foundation_pubkey = b"\xaa" * 32
+			foundation_kid = "ed25519:" + base64.b64encode(
+				hashlib.sha256(foundation_pubkey).digest()
+			).decode("ascii")
+			foundation_pubkey_b64 = base64.b64encode(foundation_pubkey).decode("ascii")
+			baseline.write_text(json.dumps({
+				"format": "drift-trust",
+				"version": 0,
+				"keys": {
+					foundation_kid: {"algo": "ed25519", "pubkey": foundation_pubkey_b64},
+				},
+				"namespaces": {
+					"mariadb.rpc.*": [foundation_kid],
+				},
+				"revoked": {},
+			}))
+
 			out = Path(tmpdir) / "staged.json"
-			pubkey = b"\x01" * 32
+			pushcoin_pubkey = b"\x42" * 32
+			pushcoin_kid = "ed25519:" + base64.b64encode(
+				hashlib.sha256(pushcoin_pubkey).digest()
+			).decode("ascii")
 			build_staged_trust(
-				baseline_trust_path=None,
-				signer_pubkey_raw=pubkey,
-				artifact_namespace="net.tls",
+				baseline_trust_path=baseline,
+				signer_pubkey_raw=pushcoin_pubkey,
+				artifact_namespace="singular",
 				out_path=out,
-				dep_namespaces=["net.crypto"],
+				external_dependency_namespaces=["mariadb.rpc.managed", "mariadb.rpc.pool"],
 			)
-			data = json.loads(out.read_text())
-			kid = list(data["keys"].keys())[0]
 			staged = load_trust_store_json(out)
-			# New signer authorized for the co-deployed sibling.
-			assert kid in staged.allowed_kids_for_module("net.crypto")
-			assert kid in staged.allowed_kids_for_module("net.crypto.cipher")
+			# Pushcoin signer authorized for its own artifact namespace.
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular")
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular.api")
+			# But NOT for the external Foundation-owned dep namespaces.
+			for dep in ("mariadb.rpc.managed", "mariadb.rpc.managed.helper",
+						"mariadb.rpc.pool", "mariadb.rpc.pool.inner"):
+				allowed = staged.allowed_kids_for_module(dep)
+				assert pushcoin_kid not in allowed, (
+					f"deploy signer {pushcoin_kid!r} leaked into authorized "
+					f"set for external dep namespace {dep!r}: {allowed!r}.  "
+					f"Staged namespaces: {dict(staged.allowed_kids_by_namespace)!r}"
+				)
+				# Foundation kid must still be there.
+				assert foundation_kid in allowed
+			# Raw JSON sanity: no overlay entry for any mariadb.* leaf.
+			data = json.loads(out.read_text())
+			for key in list(data["namespaces"].keys()):
+				assert not key.startswith("mariadb.rpc.managed"), (
+					f"external dep namespace {key!r} should not have an "
+					f"overlay entry (inherit-only policy).  Map: "
+					f"{data['namespaces']!r}"
+				)
+				assert not key.startswith("mariadb.rpc.pool"), (
+					f"external dep namespace {key!r} should not have an "
+					f"overlay entry (inherit-only policy).  Map: "
+					f"{data['namespaces']!r}"
+				)
+
+	def test_external_dep_without_baseline_coverage_raises(self) -> None:
+		"""If an external dep has no baseline trust coverage, the
+		staged overlay must fail loudly rather than produce a trust
+		store that will reject the dep's `.sig` later with an opaque
+		'package signatures not trusted' error during smoke."""
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			# Baseline has no namespaces at all -- nothing covers the
+			# external dep.
+			baseline = Path(tmpdir) / "baseline.json"
+			baseline.write_text(json.dumps({
+				"format": "drift-trust",
+				"version": 0,
+				"keys": {},
+				"namespaces": {},
+				"revoked": {},
+			}))
+			out = Path(tmpdir) / "staged.json"
+			with pytest.raises(ValueError) as excinfo:
+				build_staged_trust(
+					baseline_trust_path=baseline,
+					signer_pubkey_raw=b"\x42" * 32,
+					artifact_namespace="singular",
+					out_path=out,
+					external_dependency_namespaces=["mariadb.rpc.managed"],
+				)
+			msg = str(excinfo.value)
+			assert "mariadb.rpc.managed" in msg
+			assert "baseline" in msg.lower()
+
+	def test_mixed_co_deployed_and_external_deps(self) -> None:
+		"""End-to-end shape: a deploy with BOTH a co-deployed sibling
+		artifact (signed by us) AND an external Foundation-signed dep.
+		Verifies the policy split end-to-end: staged signer authorized
+		for the artifact + co-deployed sibling; foundation_kid (only)
+		authorized for the external dep."""
+		import base64
+		import hashlib
+		from tools.drift_deploy.staged_trust import build_staged_trust
+		from lang.driftc.packages.trust_v0 import load_trust_store_json
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			baseline = Path(tmpdir) / "baseline.json"
+			foundation_pubkey = b"\xaa" * 32
+			foundation_kid = "ed25519:" + base64.b64encode(
+				hashlib.sha256(foundation_pubkey).digest()
+			).decode("ascii")
+			foundation_pubkey_b64 = base64.b64encode(foundation_pubkey).decode("ascii")
+			baseline.write_text(json.dumps({
+				"format": "drift-trust",
+				"version": 0,
+				"keys": {
+					foundation_kid: {"algo": "ed25519", "pubkey": foundation_pubkey_b64},
+				},
+				"namespaces": {
+					"mariadb.rpc.*": [foundation_kid],
+				},
+				"revoked": {},
+			}))
+			out = Path(tmpdir) / "staged.json"
+			pushcoin_pubkey = b"\x42" * 32
+			pushcoin_kid = "ed25519:" + base64.b64encode(
+				hashlib.sha256(pushcoin_pubkey).digest()
+			).decode("ascii")
+			build_staged_trust(
+				baseline_trust_path=baseline,
+				signer_pubkey_raw=pushcoin_pubkey,
+				artifact_namespace="singular",
+				out_path=out,
+				co_deployed_namespaces=["singular.shared"],
+				external_dependency_namespaces=["mariadb.rpc.managed"],
+			)
+			staged = load_trust_store_json(out)
+			# Artifact + co-deployed sibling: deploy signer authorized.
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular")
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular.api")
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular.shared")
+			assert pushcoin_kid in staged.allowed_kids_for_module("singular.shared.leaf")
+			# External dep: deploy signer NOT authorized, foundation IS.
+			assert pushcoin_kid not in staged.allowed_kids_for_module("mariadb.rpc.managed")
+			assert foundation_kid in staged.allowed_kids_for_module("mariadb.rpc.managed")
 
 
 # ── Target default regression ────────────────────────────────────────
@@ -3181,6 +3299,153 @@ class TestExtractDepNamespaces:
 			staged.mkdir()
 			ns = _extract_dep_namespaces("nonexistent", staged)
 			assert ns == []
+
+
+# ── Trust-overlay dep classification ────────────────────────────────
+
+
+class TestClassifyDepsForTrustOverlay:
+	"""DEPLOY-TOOLCHAIN BUG (2026-05-18 follow-up): the
+	`_classify_deps_for_trust_overlay` helper feeds
+	`build_staged_trust`'s two-list API.  Both `_deploy_artifact` call
+	sites (build-time overlay and smoke-time overlay) go through this
+	helper, so a single pin here prevents the duplicated classification
+	logic from drifting apart.  Pins the policy:
+
+	  - dep_pkg_id in dep_namespace_map (manifest sibling)
+	      -> co_deployed_namespaces (staged signer authorized)
+	  - dep_pkg_id NOT in dep_namespace_map (already-published external)
+	      -> external_dependency_namespaces (baseline-inherit only;
+	         deploy signer NOT authorized)
+
+	If this regresses, the deploy signer leaks into authorized sets for
+	Foundation-owned dep namespaces -- the original PushCoin/singular
+	cross-publisher bug.
+	"""
+
+	@patch("tools.drift_deploy.drift_deploy._extract_dep_namespaces")
+	def test_manifest_sibling_classified_co_deployed(
+		self, mock_extract: MagicMock,
+	) -> None:
+		"""A dep present in `dep_namespace_map` (manifest's
+		co-deployed library) lands in `co_deployed_namespaces` using
+		the namespace the manifest declares.  `_extract_dep_namespaces`
+		is NOT called for it (the manifest is the source of truth)."""
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			staged_pkg_root = Path(tmpdir) / "staged"
+			staged_pkg_root.mkdir()
+			# Resolved: one dep that's a manifest sibling.
+			resolved = {"sibling-pkg": object()}
+			dep_namespace_map = {"sibling-pkg": "sibling_ns"}
+			co, ext = _classify_deps_for_trust_overlay(
+				resolved, dep_namespace_map, staged_pkg_root,
+			)
+			assert co == ["sibling_ns"]
+			assert ext == []
+			mock_extract.assert_not_called()
+
+	@patch("tools.drift_deploy.drift_deploy._extract_dep_namespaces")
+	def test_external_dep_classified_external(
+		self, mock_extract: MagicMock,
+	) -> None:
+		"""A dep NOT in `dep_namespace_map` lands in
+		`external_dependency_namespaces`, with its namespaces
+		discovered from the staged package root via
+		`_extract_dep_namespaces`."""
+		mock_extract.return_value = ["mariadb.rpc.managed", "mariadb.rpc.pool"]
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			staged_pkg_root = Path(tmpdir) / "staged"
+			staged_pkg_root.mkdir()
+			resolved = {"mariadb-rpc": object()}
+			# Empty manifest map -- nothing co-deployed.
+			co, ext = _classify_deps_for_trust_overlay(
+				resolved, {}, staged_pkg_root,
+			)
+			assert co == []
+			assert ext == ["mariadb.rpc.managed", "mariadb.rpc.pool"]
+			mock_extract.assert_called_once_with("mariadb-rpc", staged_pkg_root)
+
+	@patch("tools.drift_deploy.drift_deploy._extract_dep_namespaces")
+	def test_mixed_classification(self, mock_extract: MagicMock) -> None:
+		"""PushCoin/singular shape end-to-end: one manifest sibling
+		(`bookkeeper-shared` -> `bookkeeper_shared`) plus one external
+		certified dep (`mariadb-rpc` -> [`mariadb.rpc.managed`,
+		`mariadb.rpc.pool`]).  Verifies the helper buckets each into
+		its correct list and that NO external namespace leaks into
+		`co_deployed_namespaces`."""
+		def fake_extract(dep_pkg_id: str, _root: Path) -> list[str]:
+			if dep_pkg_id == "mariadb-rpc":
+				return ["mariadb.rpc.managed", "mariadb.rpc.pool"]
+			return []
+		mock_extract.side_effect = fake_extract
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			staged_pkg_root = Path(tmpdir) / "staged"
+			staged_pkg_root.mkdir()
+			resolved = {
+				"bookkeeper-shared": object(),  # manifest sibling
+				"mariadb-rpc": object(),         # external certified
+			}
+			dep_namespace_map = {"bookkeeper-shared": "bookkeeper_shared"}
+			co, ext = _classify_deps_for_trust_overlay(
+				resolved, dep_namespace_map, staged_pkg_root,
+			)
+			assert co == ["bookkeeper_shared"], (
+				f"co_deployed expected exactly [bookkeeper_shared], got {co!r}"
+			)
+			assert ext == ["mariadb.rpc.managed", "mariadb.rpc.pool"], (
+				f"external expected [mariadb.rpc.managed, mariadb.rpc.pool], got {ext!r}"
+			)
+			# Critical negative: no external namespace must appear in
+			# the co-deployed bucket.  If it did, the deploy signer
+			# would land on a Foundation-owned namespace in the
+			# staged trust overlay.
+			for ext_ns in ("mariadb.rpc.managed", "mariadb.rpc.pool"):
+				assert ext_ns not in co, (
+					f"external namespace {ext_ns!r} leaked into "
+					f"co_deployed_namespaces -- deploy signer would be "
+					f"authorized for a Foundation-owned namespace"
+				)
+			# And the manifest sibling must not appear in external.
+			assert "bookkeeper_shared" not in ext
+
+	@patch("tools.drift_deploy.drift_deploy._extract_dep_namespaces")
+	def test_none_namespace_map_treats_all_as_external(
+		self, mock_extract: MagicMock,
+	) -> None:
+		"""When `dep_namespace_map` is None (app deploys with no
+		co-deployed siblings), every resolved dep is external."""
+		mock_extract.return_value = ["ext.foo"]
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			staged_pkg_root = Path(tmpdir) / "staged"
+			staged_pkg_root.mkdir()
+			resolved = {"some-pkg": object()}
+			co, ext = _classify_deps_for_trust_overlay(
+				resolved, None, staged_pkg_root,
+			)
+			assert co == []
+			assert ext == ["ext.foo"]
+
+	@patch("tools.drift_deploy.drift_deploy._extract_dep_namespaces")
+	def test_duplicates_deduped(self, mock_extract: MagicMock) -> None:
+		"""Two external deps that happen to share a sub-namespace
+		shouldn't produce duplicate entries (de-dup keeps debugging
+		clean and avoids redundant lookups in build_staged_trust)."""
+		def fake_extract(dep_pkg_id: str, _root: Path) -> list[str]:
+			# Both deps register some overlapping namespaces (rare in
+			# practice, but possible when two packages share a parent
+			# namespace via re-export).
+			return ["shared.parent.a", "shared.parent.b"]
+		mock_extract.side_effect = fake_extract
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			staged_pkg_root = Path(tmpdir) / "staged"
+			staged_pkg_root.mkdir()
+			resolved = {"pkg-x": object(), "pkg-y": object()}
+			co, ext = _classify_deps_for_trust_overlay(
+				resolved, {}, staged_pkg_root,
+			)
+			assert ext == ["shared.parent.a", "shared.parent.b"], (
+				f"expected dedup; got {ext!r}"
+			)
 
 
 # ── Smoke dep pinning ────────────────────────────────────────────────

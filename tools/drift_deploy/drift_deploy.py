@@ -566,6 +566,53 @@ def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
 	return sorted(namespaces)
 
 
+def _classify_deps_for_trust_overlay(
+	resolved: "dict[str, object]",
+	dep_namespace_map: dict[str, str] | None,
+	staged_pkg_root: Path,
+) -> tuple[list[str], list[str]]:
+	"""Split a resolved dep map into the two buckets `build_staged_trust`
+	requires: co-deployed siblings (signed by us in this session) and
+	already-published external deps.
+
+	A dep is "co-deployed" iff its package_id appears in
+	`dep_namespace_map`, which is built from this manifest's library
+	artifacts (`drift_deploy._run_impl` populates it at module scope).
+	Anything else is external and its module namespaces are extracted
+	from the staged package-root's `.dmp` / `.zdmp` files via
+	`_extract_dep_namespaces`.
+
+	Returned as `(co_deployed_namespaces, external_dependency_namespaces)`
+	to feed directly into `build_staged_trust(co_deployed_namespaces=...,
+	external_dependency_namespaces=...)`.  Both lists are de-duplicated
+	but order is otherwise preserved -- callers don't depend on order
+	because the verifier converts each entry to a set, but stable order
+	keeps debugging tractable.
+
+	Pinning this as a named helper makes the classification testable
+	independent of the rest of `_deploy_artifact` and prevents the two
+	`build_staged_trust` call sites (build-time and smoke-time overlay)
+	from drifting apart.  See test_deploy.py's
+	`TestClassifyDepsForTrustOverlay` for the regression carriers.
+	"""
+	co_deployed_ns: list[str] = []
+	external_dep_ns: list[str] = []
+	seen_co: set[str] = set()
+	seen_ext: set[str] = set()
+	for dep_pkg_id in resolved:
+		if dep_namespace_map and dep_pkg_id in dep_namespace_map:
+			ns = dep_namespace_map[dep_pkg_id]
+			if ns not in seen_co:
+				seen_co.add(ns)
+				co_deployed_ns.append(ns)
+		else:
+			for ns in _extract_dep_namespaces(dep_pkg_id, staged_pkg_root):
+				if ns not in seen_ext:
+					seen_ext.add(ns)
+					external_dep_ns.append(ns)
+	return co_deployed_ns, external_dep_ns
+
+
 # ── Provenance bundle collection ─────────────────────────────────────
 
 
@@ -958,20 +1005,16 @@ def _deploy_artifact(
 		try:
 			pubkey = extract_pubkey_from_seed(sign_key)
 			build_trust_path = stage_dir / "drift" / "trust.json"
-			dep_ns_list: list[str] = []
-			for dep_pkg_id in resolved:
-				if dep_namespace_map and dep_pkg_id in dep_namespace_map:
-					dep_ns_list.append(dep_namespace_map[dep_pkg_id])
-				else:
-					dep_ns_list.extend(
-						_extract_dep_namespaces(dep_pkg_id, staged_pkg_root)
-					)
+			co_deployed_ns, external_dep_ns = _classify_deps_for_trust_overlay(
+				resolved, dep_namespace_map, staged_pkg_root,
+			)
 			build_staged_trust(
 				baseline_trust_path=baseline_trust,
 				signer_pubkey_raw=pubkey,
 				artifact_namespace=art.module_namespace,
 				out_path=build_trust_path,
-				dep_namespaces=dep_ns_list,
+				co_deployed_namespaces=co_deployed_ns,
+				external_dependency_namespaces=external_dep_ns,
 			)
 		except Exception as e:
 			raise DeployError(f"build-time trust overlay generation failed for '{art.name}': {e}")
@@ -1220,27 +1263,16 @@ def _deploy_artifact(
 		try:
 			pubkey = extract_pubkey_from_seed(sign_key)
 			staged_trust_path = stage_dir / "drift" / "trust.json"
-			# Collect dependency namespaces for smoke trust authorization.
-			# Two sources: (1) co-deployed artifacts from this manifest,
-			# (2) already-published deps discovered from .dmp module_ids.
-			dep_ns_list: list[str] = []
-			if resolved:
-				for dep_pkg_id in resolved:
-					# Co-deployed dep: namespace known from manifest.
-					if dep_namespace_map and dep_pkg_id in dep_namespace_map:
-						dep_ns_list.append(dep_namespace_map[dep_pkg_id])
-					else:
-						# Already-published dep: extract module namespaces
-						# from the .dmp in the staged package root.
-						dep_ns_list.extend(
-							_extract_dep_namespaces(dep_pkg_id, staged_pkg_root)
-						)
+			co_deployed_ns, external_dep_ns = _classify_deps_for_trust_overlay(
+				resolved or {}, dep_namespace_map, staged_pkg_root,
+			)
 			build_staged_trust(
 				baseline_trust_path=baseline_trust,
 				signer_pubkey_raw=pubkey,
 				artifact_namespace=art.module_namespace,
 				out_path=staged_trust_path,
-				dep_namespaces=dep_ns_list,
+				co_deployed_namespaces=co_deployed_ns,
+				external_dependency_namespaces=external_dep_ns,
 			)
 		except Exception as e:
 			raise DeployError(f"staged trust generation failed: {e}")
