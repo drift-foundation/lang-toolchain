@@ -32,22 +32,73 @@ same function body):
   - Order matters: borrow-then-closure fails;
     closure-then-borrow is fine.
 
-**App-team hypothesis** (~repro reply, K's read):
+**Root cause** (confirmed via mid-investigation instrumented
+borrow-checker, NOT the SSA/codegen-temp-slot theory the
+original app-team report hypothesized):
 
-The `callbackN`-with-`N>=1` constructor synthesizes a typed-
-erasure thunk that takes an `(args, env)` tuple.  Codegen for
-the thunk introduces an SSA temp slot index that COLLIDES
-with `__tmp_borrowN` from the earlier literal borrow.  The
-borrow-checker's flow analysis then sees the literal's storage
-as reused / no-longer-live at the borrow site and emits
-E-AUTO-e57d22a5.
+Shared binding_id collision between lambda params and
+stage1-synthesized borrow temps.
 
-`callback0` is exempt because its thunk has no args -- no
-temp slot to collide.
+  * `BorrowMaterializeRewriter` (`stage1/borrow_materialize.py`)
+    rewrites `&(rvalue)` into `val __tmp_borrowN: T = <rvalue>;
+    &__tmp_borrowN`; the synthesized `HLet` has
+    `binding_id=None`.
+  * `_assign_missing_binding_ids` in `stage1/normalize.py`
+    scans the HIR for the maximum existing `binding_id` and
+    allocates `next_id = max_id + 1` for missing ones.
+  * The scan's `_scan_expr` covered nearly every HExpr kind
+    -- HBinary, HUnary, HCall, HField, HBorrow, HTryExpr,
+    HMatchExpr, ... -- but NOT `HLambda`.  Lambda params
+    have `binding_id`s assigned upstream (parser /
+    ast_to_hir) from the SAME per-fn counter as outer
+    locals.  Scan missed them; `max_id` was stale; `next_id`
+    collided with a lambda param's pre-existing binding_id.
 
-`&named_local` is exempt because the borrow points at an
-addressable place with its own SSA slot, not an anonymous
-`__tmp_borrowN`.
+Downstream symptom chain that produced the
+"`__tmp_borrowN` is moved/uninitialized" diagnostic:
+
+  * Borrow-checker's `_bases_by_binding` is
+    `{pb.local_id: pb for pb in self.fn_types.keys()}` --
+    last-wins on duplicate keys; the param's `PlaceBase`
+    (kind=PARAM) won over the local's (kind=LOCAL).
+  * Borrow site's `place_from_expr` produced a query with
+    `kind=PARAM, name='__tmp_borrowN'` (wrong kind inherited
+    from the colliding binding, right name from the source).
+  * Place-state dict had the entry stored with `kind=LOCAL`;
+    dataclass equality failed on `kind`; `_state_for` fell
+    back to `PlaceState.UNINIT`; `_borrow_place` emitted
+    E-AUTO-e57d22a5.
+
+Bisect axes explain naturally:
+  * `callback0` exempt: 0 params -> no lambda binding_ids
+    consumed -> no collision.
+  * `&named_local` exempt: no `__tmp_borrowN` synthesis ->
+    no `binding_id=None` HLet -> no allocation target.
+  * Closure-then-borrow exempt: literal's HLet binding_id
+    allocated FIRST -> `max_id` accounts for it before
+    reaching the lambda's pre-existing binding_id.
+  * Captures / throw mode / param type all irrelevant: they
+    only affect what's inside the lambda body or signature,
+    not the scan-misses-params root cause.
+
+**Original app-team hypothesis was SUPERSEDED**: their reply
+guessed at "codegen for the callbackN typed-erasure thunk
+introduces an SSA temp slot index that collides with
+`__tmp_borrowN`."  That model fits the symptom shape and the
+bisect axes, but the actual collision is one layer earlier --
+at HIR binding_id assignment, not at MIR/SSA temp allocation
+or codegen.  Their bisect was correct on which axes matter;
+their guess at which compiler subsystem was at fault wasn't.
+
+**Fix** (`stage1/normalize.py`): add an HLambda branch to
+`_scan_expr` that descends into the lambda's params and body
+(`body_expr` for expression-form lambdas, `body_block` for
+block-form) to update `max_id`.  The parent's `_assign_expr`
+intentionally does NOT descend into lambda bodies -- lambda
+bodies are normalized separately later with their own pass.
+The fix only adjusts the parent's `max_id` accounting; it
+does not assign binding_ids inside the lambda body from the
+parent context.
 
 This test pins the FAILURE shape (V1) and each axis the
 bisect identified as either-triggering (V6 callback2, V7
