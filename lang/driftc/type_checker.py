@@ -8095,14 +8095,45 @@ class TypeChecker:
 				if inner_ty is not None:
 					td = self.type_table.get(inner_ty)
 					if td.kind is TypeKind.REF:
-						diagnostics.append(
-							_tc_diag(
-								message="cannot move from a reference type; move requires owned storage",
-								severity="error",
-								span=move_span,
-							)
+						# Skip the move-of-ref check in generic-instantiation
+						# bodies.  The same `HMove` expression was already
+						# accepted during the original generic body's
+						# type-check (where the subject had a TypeVar type,
+						# not REF).  Re-firing the check now that the
+						# TypeVar has been monomorphized to a REF would
+						# reject programs that the generic body *was*
+						# type-checked to accept -- silently turning
+						# `--entry` (full elaboration) into a strict
+						# superset of `compile-check`.  Concrete carrier
+						# (sgw 2026-05-17 #3): stdlib's
+						# `Result<T, E>::or_throw` has
+						# `Ok(v) => { return move v; }`; when the caller
+						# does `lease.conn().or_throw()` where
+						# `lease.conn(): Result<&mut Conn, ManagedError>`,
+						# `T` instantiates to `&mut Conn` and the move
+						# fires this branch at stdlib core.drift:333:27.
+						# The original `move v` in the generic body is
+						# semantically a no-op when `T = &mut Conn` (refs
+						# are bit-patterns); skipping the strictness check
+						# in instantiations preserves the user-source rule
+						# (non-generic `move <ref>` still rejects, see
+						# `move_from_ref_rejected` fixture) while letting
+						# stdlib-generic monomorphizations through.
+						_outer_sig = (
+							signatures_by_id.get(fn_id)
+							if signatures_by_id is not None
+							else None
 						)
-						return record_expr(expr, self._unknown)
+						_in_instantiation = bool(getattr(_outer_sig, "is_instantiation", False)) if _outer_sig is not None else False
+						if not _in_instantiation:
+							diagnostics.append(
+								_tc_diag(
+									message="cannot move from a reference type; move requires owned storage",
+									severity="error",
+									span=move_span,
+								)
+							)
+							return record_expr(expr, self._unknown)
 				return record_expr(expr, inner_ty)
 
 			# Explicit copy.

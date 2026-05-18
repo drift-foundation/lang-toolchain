@@ -1,5 +1,91 @@
 # Drift development history
 
+## 2026-05-17 (compiler fix: `--entry` full elaboration silently fired `cannot move from a reference type` at stdlib internals -- generic body's `move v` was re-type-checked under monomorphization with `T = &mut Conn`, triggering a strictness check the original source had already cleared)
+- **Compiler fix.**  Release 0.31.104, ABI unchanged at 14.
+  Reported as app-team `compiler-findings.md` #3 (reply 5,
+  2026-05-17).  Reproduced cleanly against the user's
+  singular workspace using the dev tree's driftc -- compile-check
+  passes, `--entry singular.tests.unit.uuid_test::main` fails with:
+
+      <source>:333:27: error: cannot move from a reference type;
+        move requires owned storage [E-AUTO-578aa66a]
+
+  **Phantom diagnostic position decoded:** the user noted that
+  `<source>:333:27` doesn't move when content shifts in
+  `gateway.drift`.  Instrumenting the rejection site at
+  `type_checker.py:8097` confirmed the Span's `file` attribute
+  was `stdlib/std/core/core.drift` -- the diagnostic format at
+  `driftc.py:8901` unconditionally renders the file as
+  `<source>` via `_source_label()` even when the Span has a real
+  file.  Diagnostic-quality issue separately worth fixing; the
+  Span itself was correct.
+
+  `stdlib/std/core/core.drift:333` (col 27) is `Ok(v) => { return
+  move v; }` inside `Result<T, E>::or_throw`.
+
+  **Root cause:** the move-of-ref check at
+  `type_checker.py:8097-8104` rejects every `HMove` whose subject
+  has `TypeKind.REF`.  Originally intended to block user code
+  like `var r = &x; val y = move r;` (see existing
+  `move_from_ref_rejected` fixture), the check fires
+  UNCONDITIONALLY -- even inside a generic body that was already
+  accepted at its non-monomorphized type-check (where the
+  subject's type was a TypeVar, not REF).
+
+  Concrete trigger chain:
+
+   1. User code: `val conn: &mut RpcConnection =
+      lease.conn().or_throw();`
+   2. `lease.conn(): Result<&mut RpcConnection, ManagedError>`.
+   3. `.or_throw()` resolves to
+      `Result<T, E>::or_throw<T=&mut RpcConnection, E=...>`.
+   4. `--entry` triggers full elaboration → generic body
+      monomorphizes:
+      `match self { Ok(v) => { return move v; }, ... }` with
+      `v: &mut RpcConnection`.
+   5. Instantiated body is re-type-checked.  The `move v` arm
+      hits `td.kind is TypeKind.REF` (ref_mut=True) → diagnostic
+      fires with the stdlib-body's Span.
+
+  This silently turned `--entry` (full elaboration) into a
+  STRICTER SUPERSET of `compile-check`: source that
+  compile-check accepted failed at entry-point elaboration with
+  a diagnostic pointing at stdlib internals the user never
+  wrote.
+
+  **Fix (one-line, instantiation-scoped):**
+  At the move-of-ref check, look up the current `FnSignature`
+  via `signatures_by_id.get(fn_id)` and skip the diagnostic
+  when `sig.is_instantiation` is True.  The original generic
+  body's type-check already validated the program; re-firing
+  the strictness check on a monomorphization is a UX bug
+  (user can't fix stdlib).
+
+  Non-generic user source still rejects -- the
+  `move_from_ref_rejected` codegen fixture is non-generic, so
+  `is_instantiation` is False there and the check still fires.
+  A second regression carrier (V2 of the new driver test) pins
+  the narrowing explicitly so a future over-eager relaxation
+  can't silently widen.
+
+  **Files touched:**
+  - `lang/driftc/type_checker.py` -- move-of-ref check at line
+    8097 gains an `is_instantiation` guard (5 LOC + 25 LOC
+    of comment).  No other behavior changes.
+  - `lang/versions.py` -- 0.31.103 → 0.31.104.
+  - `lang/tests/driver/test_generic_move_ref_instantiation.py`
+    (NEW) -- V1 generic body monomorphized to REF (THE BUG),
+    V2 non-generic user-source move-of-ref (control; STILL
+    rejects).
+
+  **Known follow-up (NOT in this slice):**
+  Diagnostic format renders `<source>:LINE:COL` instead of the
+  actual file path even when `diag.span.file` is populated.
+  See `_source_label()` use at `driftc.py:8901` and several
+  other call sites.  Worth fixing -- diagnostics that point at
+  stdlib internals are even more confusing when they look like
+  they point at the user's source.
+
 ## 2026-05-17 (compiler fix: typed-catch through `pub type Alias = inner.PubError` re-export lost the underlying Path-A struct schema -- `catch outer:Alias(e) { val t = e.tag; }` rejected with `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` for fields that ARE declared on the underlying pub-error)
 - **Compiler fix.**  Release 0.31.103, ABI unchanged at 14.
   Bisected by the mariadb-rpc team alongside app-team `compiler-findings.md`
