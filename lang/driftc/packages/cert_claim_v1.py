@@ -41,7 +41,6 @@ claim.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -51,6 +50,9 @@ from lang.drift.crypto import (
 	compute_ed25519_kid,
 	ed25519_sign_from_seed,
 	verify_ed25519,
+)
+from lang.driftc.packages.sidecar_naming import (
+	cert_claim_filename as _shared_cert_claim_filename,
 )
 from lang.driftc.packages.source_content_id import (
 	canonical_json_bytes,
@@ -695,50 +697,13 @@ def _parse_signature(obj: Any, idx: int) -> CertSignature:
 # ── Sidecar filename (O1) ──────────────────────────────────────────
 
 
-# A kid character that is safe in any reasonable filename.  ed25519
-# kids look like `ed25519:<base64-with-padding>`; the `:` and `=`
-# need filesystem-safe escaping on some hosts.  For the canonical
-# v1 filename we URL-encode the offending bytes so the FS sees a
-# benign string while readers parse the trust kid from the file
-# body, not from the filename.
-_FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
-
-
-def _filename_escape(s: str) -> str:
-	"""Percent-encode any character outside the filesystem-safe set
-	`[A-Za-z0-9._-]`.  Pure-ASCII alphanumerics + `._-` pass through
-	for readability; everything else becomes `%HH`.  Defense-in-depth
-	for filenames so package ids or kids containing `/`, `:`, `=`,
-	spaces, or path traversal characters can't escape the
-	intended directory.
-	"""
-	def _enc(c: str) -> str:
-		return f"%{ord(c):02X}"
-	return "".join(_enc(c) if _FILENAME_UNSAFE.match(c) else c for c in s)
-
-
-def cert_claim_filename(package_id: str, certifier_kid: str) -> str:
-	"""Canonical per-certifier sidecar filename: `<pkg>.cert-claim.<kid>.json`.
-
-	BOTH `package_id` and `certifier_kid` are URL-encoded for
-	filesystem safety so characters like `/`, `:`, `=`, or spaces
-	cannot turn the filename into a path or break naming on hosts
-	that reject them.  Pure-ASCII alphanumerics + `._-` pass
-	through unchanged.
-
-	`<kid>` is the FULL kid (no short prefix) so per-certifier
-	files for different certifiers cannot collide.  Readers MUST
-	parse the canonical kid and package_id from the file body —
-	the filename is purely a disambiguator for multiple certifiers
-	on disk, not a trust input.
-	"""
-	if not isinstance(package_id, str) or not package_id:
-		raise ValueError("cert_claim_filename: package_id must be a non-empty string")
-	if not isinstance(certifier_kid, str) or not certifier_kid:
-		raise ValueError("cert_claim_filename: certifier_kid must be a non-empty string")
-	safe_pkg = _filename_escape(package_id)
-	safe_kid = _filename_escape(certifier_kid)
-	return f"{safe_pkg}.cert-claim.{safe_kid}.json"
+# Canonical sidecar filename helper.  Delegates to the shared module
+# (`sidecar_naming`) so emit and discovery agree on escaping rules —
+# previously each half had its own escaping policy and discovery
+# silently missed files whose package_id contained `/` or other
+# unsafe characters.  Re-exported here for backward-compat of the
+# `cert_claim_v1.cert_claim_filename` import surface.
+cert_claim_filename = _shared_cert_claim_filename
 
 
 # ── Signature verification (low-level) ─────────────────────────────
