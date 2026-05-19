@@ -1,55 +1,60 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-drift/lock.json read / write / verify (schema v4).
+drift/lock.json read / write / verify (schema v4 with v1-trust
+semantics in v4 field slots; v5 rename deferred).
 
 The lock records, per artifact, the **exact resolved artifact** for
-every dependency in the transitive graph.  Under the v4
-two-identity model each entry carries:
+every dependency in the transitive graph.  Under the v1 trust
+model each entry carries:
 
   - artifact identity: `M.N.P` version + `sha256` of the `.dmp`
-    file + `author_key` (signer kid).  Load-bearing for default
-    byte-exact consumption.
+    file + `author_key` (NOW SEMANTICALLY: the cert-claim signer
+    kid -- the certifier who attested the artifact bytes).  Load-
+    bearing for default byte-exact consumption.
   - source identity: `source_content_id` (canonical hash of
-    declared source/build inputs, see
-    `tools.drift_deploy.source_attestation.compute_source_content_id`)
-    + `source_attestation_key` (kid that signed the
-    `.source-attestation` body).  Load-bearing for source-rebuild
-    certification, where the rebuilt `.dmp` bytes legitimately
-    differ from the author's original artifact but the source the
-    rebuild was made from must match what the owner attested.
+    declared source/build inputs; computed by
+    `lang.driftc.packages.source_content_id.compute_source_content_id`)
+    + `source_attestation_key` (NOW SEMANTICALLY: the author-claim
+    signer kid -- the author who attested release intent).  Load-
+    bearing for source-rebuild certification.
+
+The v4 field names persist while the SEMANTICS shift: `author_key`
+holds a cert kid and `source_attestation_key` holds an author
+kid.  A future lockfile-v5 bump renames the slots to `cert_kid`
+and `author_kid` respectively.  Diagnostics emitted to users have
+already been migrated to v1 terminology.
 
 The authored manifest (drift/manifest.json) carries the owner's
 declared acceptable range; the lock is downstream of resolution.
 `drift prepare` is the only sanctioned writer.
 
 Verifier modes (`verify_lock_compatibility`):
-  - **strict** (default): re-checks `(version, sha256, author_key,
-    source_content_id, source_attestation_key)` against the
-    on-disk package + its `.source-attestation` sidecar.  Both
-    halves of the v4 identity are enforced.
+  - **strict** (default): re-checks `(version, sha256, cert_kid,
+    source_content_id, author_kid)` against the on-disk package +
+    its v1 sidecars (`<pkg>.author-claim` +
+    `<pkg>.cert-claim.<kid>.json`).  Both halves of the identity
+    are enforced.
   - **source_rebuild** (Phase D opt-in): re-checks `(version,
-    source_content_id, source_attestation_key)` only; tolerates
-    `sha256` and `author_key` drift because the rebuilt artifact
-    is expected to differ in bytes and may have been signed by
-    a different key.  Per-package sha drift is recorded as run
-    evidence (caller-supplied `sha_drift_log` list).  Missing
-    source attestation on disk is a hard fail with republish-
-    required guidance — no silent fallback to strict.
+    source_content_id, author_kid)` only; tolerates `sha256` and
+    `cert_kid` drift because the rebuilt artifact is expected to
+    differ in bytes and may have been certified by a different
+    certifier.  Per-package sha drift is recorded as run evidence
+    (caller-supplied `sha_drift_log` list).  Missing v1 author
+    claim on disk is a hard fail with republish-required guidance.
 
 `drift prepare` enforces source identity at write time as well:
-non-co-artifact resolved deps without a valid attestation cause
-a fail-fast `PrepareError` with republish-required guidance, so
-v4 locks on disk are guaranteed to carry signed, cross-bound
-source identity.
+non-co-artifact resolved deps without a valid author claim cause
+a fail-fast `PrepareError` with republish-required guidance.
 
 Schema history:
 - v1 — exact version + `integrity: "sha256:<hex>"` (pre-0.27 era).
 - v2 — major.minor range + author_key; sha was discarded.
 - v3 — exact M.N.P + sha256 + author_key + dep_type (0.29.0).
 - v4 — v3 + source_content_id + source_attestation_key (0.30.0+).
+  Field SEMANTICS migrated to v1 trust roles; field names retained.
 
 v1, v2, and v3 locks are rejected at load; `drift prepare`
-regenerates as v4.  No silent migration — a stale lock must not
+regenerates as v4.  No silent migration -- a stale lock must not
 quietly reinterpret a range entry as an exact pin or pretend a
 byte-only-pinned entry has a verified source identity.
 """
@@ -65,11 +70,12 @@ from tools.drift_deploy.resolver import ResolvedDep
 
 # Imported for the VERIFY_MODE_SOURCE_REBUILD disk-kid trust gate.
 # Callers provide a merged project+core trust store so the verifier
-# can assert that the disk's artifact signer and source-attestation
-# signer are both in the package's namespace allowlist and neither
-# is revoked — this replaces lock-kid equality as the source-rebuild
+# can assert that the disk's certifier kid (artifact signer) and
+# author kid (release-intent signer) are both in the package's
+# namespace allowlist under their respective roles, and neither is
+# revoked -- this replaces lock-kid equality as the source-rebuild
 # trust anchor.
-from lang.driftc.packages.trust_v0 import TrustStore
+from lang.driftc.packages.trust_v1 import TrustStore
 
 
 LOCK_SCHEMA_VERSION = 4
@@ -262,8 +268,8 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 				# prepare` is the path to refresh a v3 lock or one
 				# whose attestation sidecars are missing on disk.
 				if dep_author_key != "unsigned":
-					from tools.drift_deploy.source_attestation import (
-						validate_sha256_hex_id,
+					from lang.driftc.packages.source_content_id import (
+						validate_sci as validate_sha256_hex_id,
 					)
 					try:
 						validate_sha256_hex_id(
@@ -275,18 +281,18 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 						raise ValueError(
 							f"{e}.  v4 lock requires a strict-shape source "
 							f"identity for every signed non-co-artifact dep; "
-							f"the package must be republished with toolchain "
-							f">= 0.30.0 (so its `.source-attestation` sidecar "
-							f"exists), then `drift prepare` re-run."
+							f"the package must be republished with a v1 author "
+							f"claim (`drift-author publish`), then `drift "
+							f"prepare` re-run."
 						) from None
 					if not isinstance(dep_sak, str) or not dep_sak.startswith("ed25519:"):
 						raise ValueError(
 							f"drift/lock.json artifact '{art_name}' dep '{pkg_id}' "
 							f"missing 'source_attestation_key' (expected "
-							f"'ed25519:<kid>') — v4 records the signer of the "
-							f"source attestation as the trust root for source-"
-							f"rebuild verification.  Republish the package "
-							f"with toolchain >= 0.30.0 and re-run `drift prepare`."
+							f"'ed25519:<kid>') -- v4 records the v1 author-claim "
+							f"signer kid here as the source-identity trust root.  "
+							f"Republish the package with `drift-author publish` "
+							f"and re-run `drift prepare`."
 						)
 			resolved[pkg_id] = ResolvedDep(
 				version=version,
@@ -742,50 +748,54 @@ def verify_lock_compatibility(
 			assert trust_store is not None  # enforced above
 			disk_module_ids = getattr(disk, "module_ids", ()) or ()
 			disk_kid_rejected = False
+			# `disk.author_key` now sources from the v1 cert-claim
+			# sidecar (per resolver._read_author_key); the trust
+			# check therefore routes to the CERTIFIER role.
 			if disk_module_ids:
 				for mid in disk_module_ids:
-					allowed = trust_store.allowed_kids_for_module(mid)
+					allowed = trust_store.allowed_certifiers_for_module(mid)
 					if disk.author_key not in allowed:
 						errors.append(
 							f"locked dependency '{pkg_id}@{dep.version}' "
-							f"disk `author_key` {disk.author_key!r} is not "
-							f"in the trust store's namespace allowlist "
+							f"disk certifier kid {disk.author_key!r} is not "
+							f"in the trust store's certifier allowlist "
 							f"for module '{mid}'.  Update trust store to "
-							f"authorise the kid for '{mid}.*', or "
-							f"republish under an already-trusted kid."
+							f"authorise the kid as a certifier for "
+							f"'{mid}.*', or republish under an already-"
+							f"trusted certifier kid."
 						)
 						disk_kid_rejected = True
 						break
 				if not disk_kid_rejected and disk.author_key in trust_store.revoked_kids:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `author_key` {disk.author_key!r} is "
+						f"disk certifier kid {disk.author_key!r} is "
 						f"REVOKED in the current trust store.  "
-						f"Republish under a non-revoked kid."
+						f"Republish under a non-revoked certifier kid."
 					)
 					disk_kid_rejected = True
-			elif trust_store.allowed_kids_for_module(pkg_id):
+			elif trust_store.allowed_certifiers_for_module(pkg_id):
 				# No module_ids on disk (parse-only index path) BUT
 				# the caller's trust store has an explicit allowlist
 				# entry keyed by pkg_id.  This is the fallback for
-				# test fixtures that configure trust via pkg_id —
+				# test fixtures that configure trust via pkg_id --
 				# verify there, but do not fail for "no namespace
 				# match" since pkg_id may not be a valid module
 				# namespace.
-				allowed = trust_store.allowed_kids_for_module(pkg_id)
+				allowed = trust_store.allowed_certifiers_for_module(pkg_id)
 				if disk.author_key not in allowed:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `author_key` {disk.author_key!r} is not "
-						f"in the trust store's namespace allowlist "
+						f"disk certifier kid {disk.author_key!r} is not "
+						f"in the trust store's certifier allowlist "
 						f"for '{pkg_id}'.  Update trust store or "
-						f"republish under an already-trusted kid."
+						f"republish under an already-trusted certifier kid."
 					)
 					disk_kid_rejected = True
 				elif disk.author_key in trust_store.revoked_kids:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `author_key` {disk.author_key!r} is "
+						f"disk certifier kid {disk.author_key!r} is "
 						f"REVOKED in the current trust store."
 					)
 					disk_kid_rejected = True
@@ -814,23 +824,24 @@ def verify_lock_compatibility(
 			if mode == VERIFY_MODE_SOURCE_REBUILD:
 				errors.append(
 					f"locked dependency '{pkg_id}@{dep.version}' has no "
-					f"valid source attestation on disk — source-rebuild "
-					f"mode requires the `.source-attestation` sidecar to "
-					f"be present and signature-valid (the installed "
-					f"package must be verifiable as a signed artifact "
-					f"from a trusted owner).  Republish the package "
-					f"with toolchain >= 0.30.0 (or reinstall, if the "
-					f"sidecar was lost), then retry.  Source-rebuild "
-					f"does NOT silently fall back to byte-only "
-					f"verification."
+					f"valid v1 author claim on disk -- source-rebuild "
+					f"mode requires the `<pkg>.author-claim` sidecar to "
+					f"be present, well-formed, and cross-bound to the "
+					f"package's manifest stamps (the installed package "
+					f"must be verifiable as authored by a trusted owner).  "
+					f"Re-run `drift-author publish` for the package "
+					f"(or reinstall if the sidecar was lost), then retry.  "
+					f"Source-rebuild does NOT silently fall back to "
+					f"byte-only verification."
 				)
 			else:
 				errors.append(
 					f"locked dependency '{pkg_id}@{dep.version}' has no "
-					f"valid source attestation on disk (sidecar missing, "
-					f"unbound, or signature failed); run `drift prepare` "
-					f"to refresh against current packages or republish "
-					f"with toolchain >= 0.30.0"
+					f"valid v1 author claim on disk (sidecar missing, "
+					f"unbound, or fails cross-binding to the package "
+					f"manifest); run `drift prepare` to refresh against "
+					f"current packages or republish via `drift-author "
+					f"publish`."
 				)
 			continue
 		if mode == VERIFY_MODE_STRICT:
@@ -847,66 +858,78 @@ def verify_lock_compatibility(
 			if dep.source_attestation_key != disk.source_attestation_key:
 				errors.append(
 					f"locked dependency '{pkg_id}@{dep.version}' "
-					f"source_attestation_key changed\n"
+					f"author kid changed\n"
 					f"  locked:   {dep.source_attestation_key}\n"
 					f"  on-disk:  {disk.source_attestation_key}\n"
-					f"  the source attestation was re-signed by a different key; "
-					f"run `drift prepare` to accept the new key"
+					f"  the v1 author claim was re-signed by a different "
+					f"key; run `drift prepare` to accept the new author "
+					f"kid"
 				)
 				continue
 		else:
-			# Disk source-attestation signer trust gate — same
-			# defence-in-depth pattern as the artifact-signer gate
-			# above.  Primary gate is `build_package_index` +
-			# `_read_source_attestation_meta` (already verifies the
-			# sidecar signature).  This layer's check is by-namespace
-			# (per module_id) when available, else by pkg_id if the
-			# trust store was configured that way.
+			# Disk author-claim signer trust gate -- same defence-
+			# in-depth pattern as the artifact-signer gate above.
+			# In v1 the primary cryptographic verification happens
+			# at the consumer load path via
+			# `provider_v1.load_package_v1_with_policy` (which
+			# invokes the full `verify_v1.compose_verify` per
+			# module).  `_read_source_attestation_meta` here only
+			# LOADS the v1 author claim and cross-binds shape
+			# (package_id / version / SCI agreement with the
+			# manifest); it does NOT verify the signature.  This
+			# layer adds the by-namespace allowlist check (per
+			# module_id when available, else by pkg_id if the trust
+			# store was configured that way), so a kid that loads
+			# fine but isn't authorised for the namespace is
+			# rejected here.
 			assert trust_store is not None  # enforced at function top
 			disk_module_ids = getattr(disk, "module_ids", ()) or ()
 			sak_rejected = False
+			# `disk.source_attestation_key` now sources from the v1
+			# author-claim sidecar (per resolver._read_source_attestation_meta);
+			# the trust check therefore routes to the AUTHOR role.
 			if disk_module_ids:
 				for mid in disk_module_ids:
-					allowed = trust_store.allowed_kids_for_module(mid)
+					allowed = trust_store.allowed_authors_for_module(mid)
 					if disk.source_attestation_key not in allowed:
 						errors.append(
 							f"locked dependency '{pkg_id}@{dep.version}' "
-							f"disk `source_attestation_key` "
+							f"disk author kid "
 							f"{disk.source_attestation_key!r} is not in "
-							f"the trust store's namespace allowlist for "
-							f"module '{mid}'.  The sidecar was signed by "
-							f"a kid the trust store does not authorise "
-							f"for this namespace; accepting it would "
-							f"defeat source-rebuild's owner-continuity "
-							f"trust root.  Update trust store or "
-							f"republish under an authorised kid."
+							f"the trust store's author allowlist for "
+							f"module '{mid}'.  The author claim was "
+							f"signed by a kid the trust store does not "
+							f"authorise for this namespace; accepting it "
+							f"would defeat the owner-continuity trust "
+							f"root.  Update trust store or republish "
+							f"under an authorised author kid."
 						)
 						sak_rejected = True
 						break
 				if not sak_rejected and disk.source_attestation_key in trust_store.revoked_kids:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `source_attestation_key` "
+						f"disk author kid "
 						f"{disk.source_attestation_key!r} is REVOKED.  "
-						f"Republish the `.source-attestation` under a "
+						f"Re-run `drift-author publish` under a "
 						f"non-revoked kid."
 					)
 					sak_rejected = True
-			elif trust_store.allowed_kids_for_module(pkg_id):
-				allowed = trust_store.allowed_kids_for_module(pkg_id)
+			elif trust_store.allowed_authors_for_module(pkg_id):
+				allowed = trust_store.allowed_authors_for_module(pkg_id)
 				if disk.source_attestation_key not in allowed:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `source_attestation_key` "
+						f"disk author kid "
 						f"{disk.source_attestation_key!r} is not in "
-						f"the trust store's namespace allowlist for "
+						f"the trust store's author allowlist for "
 						f"'{pkg_id}'."
 					)
 					sak_rejected = True
 				elif disk.source_attestation_key in trust_store.revoked_kids:
 					errors.append(
 						f"locked dependency '{pkg_id}@{dep.version}' "
-						f"disk `source_attestation_key` "
+						f"disk author kid "
 						f"{disk.source_attestation_key!r} is REVOKED."
 					)
 					sak_rejected = True

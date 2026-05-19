@@ -154,7 +154,7 @@ def load_run_snapshot(path: Path) -> RunSnapshot:
 	# not later as an opaque mismatch.  Matches the discipline on
 	# every other signed / canonical surface that records sha ids
 	# and signer kids.
-	from tools.drift_deploy.source_attestation import validate_sha256_hex_id
+	from lang.driftc.packages.source_content_id import validate_sci as validate_sha256_hex_id
 	for key, entry_obj in pkgs_obj.items():
 		if not isinstance(key, str) or "|" not in key:
 			raise ValueError(

@@ -2,20 +2,16 @@
 """
 Permissive trust-store shim for `tools/drift_deploy/` tests.
 
-The 0.31.1 source-rebuild trust-anchor work made `verify_lock_
-compatibility` and `_compare_locks_for_check` require a caller-
-supplied `TrustStore` whenever source-rebuild mode is selected.
-Most existing deploy-side tests fabricate kids (`ed25519:rebuilder`,
-`ed25519:test`, ...) without wiring a real trust store.
-
-`PermissiveTrustStore` is a duck-typed stand-in whose
-`allowed_kids_for_module` returns a set-shaped sentinel that
-contains every kid, and whose `revoked_kids` is an empty set — so
-the trust gate becomes a pass-through for any disk kid.
+Used by tests that pre-date the trust-v1 cutover and still build
+locks against fabricated kids (`ed25519:rebuilder`, `ed25519:test`,
+...).  The v1 trust store exposes role-tagged methods
+(`allowed_authors_for_module`, `allowed_certifiers_for_module`);
+this shim returns an every-kid-OK sentinel for BOTH roles so the
+trust gate becomes a pass-through.
 
 Tests that specifically pin trust-gate rejection (untrusted kid,
-revoked kid, etc.) must build their own `TrustStore` (or a stricter
-shim) — do NOT use `PermissiveTrustStore` for those.
+revoked kid, wrong role) must build their own `TrustStore` (or a
+stricter shim) -- do NOT use `PermissiveTrustStore` for those.
 """
 
 from __future__ import annotations
@@ -32,11 +28,13 @@ _EVERY_KID_OK = _EveryKidOkSet()
 
 
 class PermissiveTrustStore:
-	"""Duck-typed `TrustStore` stand-in — allowlists every kid.
+	"""Duck-typed v1 `TrustStore` stand-in -- allowlists every kid for
+	both author and certifier roles.
 
 	Does NOT subclass the real frozen-dataclass `TrustStore`; the
-	verifier only touches `.allowed_kids_for_module(pkg_id)` and
-	`.revoked_kids`, so a duck-typed shim is sufficient.
+	verifier only touches `.allowed_authors_for_module(...)`,
+	`.allowed_certifiers_for_module(...)`, and `.revoked_kids`, so
+	a duck-typed shim is sufficient.
 	"""
 
 	__slots__ = ("revoked_kids",)
@@ -44,5 +42,8 @@ class PermissiveTrustStore:
 	def __init__(self) -> None:
 		self.revoked_kids: set[str] = set()
 
-	def allowed_kids_for_module(self, _module_id: str) -> set[str]:
+	def allowed_authors_for_module(self, _module_id: str) -> set[str]:
+		return _EVERY_KID_OK
+
+	def allowed_certifiers_for_module(self, _module_id: str) -> set[str]:
 		return _EVERY_KID_OK

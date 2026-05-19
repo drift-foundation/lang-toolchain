@@ -132,24 +132,49 @@ def _sha256_file(path: Path) -> str:
 
 
 def _read_author_key(dmp_path: Path) -> str:
-	"""Extract the first signing key id from the .sig sidecar adjacent to a .dmp/.zdmp."""
-	for suffix in (".sig",):
-		sig_path = dmp_path.with_suffix(suffix)
-		if not sig_path.exists():
-			# Try .zdmp sibling
-			zdmp_sibling = dmp_path.with_suffix(".zdmp")
-			sig_path = zdmp_sibling.with_suffix(suffix)
-		if not sig_path.exists():
+	"""Extract the first cert-claim signer kid from v1 sidecars adjacent
+	to a `.dmp` / `.zdmp`.
+
+	The lockfile field is historically called `author_key` (v0
+	terminology) but in the v1 trust model this slot records the
+	**certifier** kid -- whichever party attested the artifact
+	bytes.  Re-using the field name keeps the v4 lock schema
+	stable while the semantics shift; the lockfile-v5 bump
+	(future) renames it to `cert_kid` for clarity.
+
+	Returns `""` when no cert claim sidecar is present (legacy
+	packages); drift_prepare turns the empty value into a fail-fast
+	republish-required error for non-co-artifact deps.
+	"""
+	from lang.driftc.packages.sidecar_naming import cert_claim_filename_prefix
+	from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
+
+	# Try both .dmp and .zdmp siblings.
+	candidate_dirs = [dmp_path.parent]
+	# Build the cert-claim prefix from package_id, which we don't have
+	# at this call site -- fall back to scanning by suffix.  The
+	# canonical sidecar name is `<pkg>.cert-claim.<kid>.json`; pick
+	# the first one whose first signature kid loads cleanly.
+	pkg_stem = dmp_path.stem
+	# Strip a trailing `.zdmp`-derived suffix if the input was `.dmp`
+	# named after the package id.  Cert-claim filenames percent-encode
+	# the package_id, so we match by prefix-startswith on the .dmp
+	# stem (which equals the package_id in standard layouts).
+	try:
+		prefix = cert_claim_filename_prefix(pkg_stem)
+	except ValueError:
+		return ""
+	for d in candidate_dirs:
+		if not d.is_dir():
 			continue
-		try:
-			data = json.loads(sig_path.read_text())
-			sigs = data.get("signatures", [])
-			if sigs and isinstance(sigs, list):
-				kid = sigs[0].get("kid", "")
-				if isinstance(kid, str) and kid:
-					return kid
-		except (json.JSONDecodeError, OSError, KeyError):
-			pass
+		for entry in sorted(d.iterdir()):
+			if entry.is_file() and entry.name.startswith(prefix) and entry.name.endswith(".json"):
+				try:
+					claim = load_cert_claim_json(entry.read_text(encoding="utf-8"))
+				except Exception:
+					continue
+				if claim.signatures:
+					return claim.signatures[0].kid
 	return ""
 
 
@@ -157,99 +182,78 @@ def _read_source_attestation_meta(
 	dmp_path: Path,
 	manifest: dict[str, Any],
 ) -> tuple[str, str]:
-	"""Extract `(source_content_id, source_attestation_key)` from the
-	`.source-attestation` sidecar adjacent to a `.dmp` / `.zdmp`,
-	cross-bound to the package's own `.dmp` manifest and with the
-	signature verified.
+	"""Extract `(source_content_id, author_kid)` from the v1 author-claim
+	sidecar adjacent to a `.dmp` / `.zdmp`.
 
-	Returns `("", "")` if any of the following:
-	  - sidecar is absent (legacy package; drift_prepare turns this
-	    into a fail-fast republish-required error for non-co-artifact
-	    deps when it sees the empty fields);
-	  - sidecar fails structural load (format/version/body shape/
-	    body_sha256 self-check);
-	  - sidecar signature does not verify with the carried pubkey;
-	  - sidecar body does not bind to the .dmp it sits next to:
-	    `package_id`, `version`, `target_class`, `required_deps`,
-	    or `source_content_id` (when the manifest carries a stamp)
-	    don't match.
+	The lockfile field is historically called `source_attestation_key`
+	(v0 terminology) but in the v1 model this slot records the
+	**author** kid -- whichever party attested source identity.
+	The v1 author claim's `body.source_content_id` and the manifest's
+	`source_content_id` stamp must agree, mirroring the v0
+	cross-binding contract.
 
-	Cross-binding is the load-bearing trust check.  A validly
-	signed attestation for some other package/version/target placed
-	next to a `.dmp` would otherwise get locked as that .dmp's
-	source identity, defeating the whole "rebuilder cannot sign as
-	the package owner" contract.  Mismatch → log on stderr (so the
-	user knows which package's sidecar is misbound) and return
-	empty so the caller can treat the package as un-attested.
+	Returns `("", "")` when:
+	  - the author-claim sidecar is absent (legacy package);
+	  - the sidecar fails to load or has no signatures;
+	  - the body's package_id / version don't match the manifest
+	    (cross-binding violation);
+	  - the body's SCI doesn't match the manifest's stamp.
 
-	Hard fail at prepare time (not here): drift_prepare iterates
-	resolved deps and refuses to write a v4 lock whose non-co-
-	artifact entries have empty source identity.  Doing the fail-
-	fast at the per-package index walk would block unrelated builds
-	on one corrupt sidecar; doing it at prepare time scopes the
-	error to packages the consumer actually needs.
+	drift_prepare turns the empty result into a fail-fast
+	republish-required error for non-co-artifact deps.
 	"""
-	from tools.drift_deploy.source_attestation import (
-		read_attestation_sidecar,
-		verify_attestation,
-	)
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.sidecar_naming import author_claim_filename
 	import sys
-	# Adjacent to either .dmp or .zdmp; try both.
-	candidates = [
-		dmp_path.with_suffix(".source-attestation"),
-		dmp_path.with_suffix(".zdmp").with_suffix(".source-attestation"),
-	]
+
+	manifest_pkg_id = manifest.get("package_id")
+	if not isinstance(manifest_pkg_id, str) or not manifest_pkg_id:
+		return ("", "")
+
+	# Sidecar lives next to either .dmp or .zdmp; check both stems.
+	candidates: list[Path] = []
+	try:
+		canon = author_claim_filename(manifest_pkg_id)
+	except ValueError:
+		return ("", "")
+	candidates.append(dmp_path.parent / canon)
+	# Author-claim sidecars do NOT include the artifact extension in
+	# their filename (per O8 the sidecar is per-release singleton)
+	# so the same path serves .dmp and .zdmp siblings.
 	sidecar_path: Path | None = None
 	for path in candidates:
-		if path.exists():
+		if path.is_file():
 			sidecar_path = path
 			break
 	if sidecar_path is None:
 		return ("", "")
 
 	def _warn(reason: str) -> tuple[str, str]:
-		# stderr-warn instead of raising so a single corrupt
-		# sidecar in the package root doesn't take down the entire
-		# index walk for unrelated builds.  drift_prepare turns the
-		# empty result into a fail-fast republish-required error
-		# for any RESOLVED non-co-artifact dep — scoped to the
-		# packages the consumer actually needs.
 		print(
-			f"warning: source attestation at '{sidecar_path}' rejected: "
-			f"{reason} — package will be treated as un-attested.  "
+			f"warning: v1 author claim at '{sidecar_path}' rejected: "
+			f"{reason} -- package will be treated as un-attested.  "
 			f"`drift prepare` will fail if this package is a non-co-"
-			f"artifact dep; republish with toolchain >= 0.30.0.",
+			f"artifact dep; re-run `drift-author publish` and republish.",
 			file=sys.stderr,
 		)
 		return ("", "")
 
 	try:
-		sidecar = read_attestation_sidecar(sidecar_path)
+		claim = load_author_claim_json(sidecar_path.read_text(encoding="utf-8"))
 	except (ValueError, OSError) as e:
 		return _warn(f"sidecar will not load ({e})")
-
-	if not sidecar.signatures:
+	if not claim.signatures:
 		return _warn("no signatures present")
-	kid = sidecar.signatures[0].kid
+	kid = claim.signatures[0].kid
 
-	# Signature verification BEFORE recording the kid — otherwise
-	# the lock would carry a kid whose signature does not actually
-	# verify, and the strict verifier would have to re-validate
-	# every load.  Verifying once at index time, before the value
-	# is written into a lock, keeps the "lock entries are
-	# internally signed and coherent" invariant.
-	try:
-		verify_attestation(sidecar, expected_signer_kid=kid)
-	except ValueError as e:
-		return _warn(f"signature does not verify ({e})")
-
-	# Cross-binding: the sidecar body must describe THIS .dmp.
-	body = sidecar.body
-	manifest_pkg_id = manifest.get("package_id")
+	# Cross-binding: author claim's body must describe THIS .dmp.
+	# (Signature verification against trust happens at the v1
+	# verify_v1.compose_verify gate; here we just check shape +
+	# stamp agreement so the lock entry doesn't carry a misbound
+	# kid.)
+	body = claim.body
 	manifest_version = manifest.get("package_version")
-	manifest_target = manifest.get("target")
-	manifest_scid = manifest.get("source_content_id")  # Phase A stamp; may be None for legacy
-	manifest_required_deps = manifest.get("required_deps") or []
+	manifest_scid = manifest.get("source_content_id")
 
 	if body.package_id != manifest_pkg_id:
 		return _warn(
@@ -261,56 +265,21 @@ def _read_source_attestation_meta(
 			f"body.version {body.version!r} != "
 			f".dmp manifest['package_version'] {manifest_version!r}"
 		)
-	if body.target_class != manifest_target:
-		return _warn(
-			f"body.target_class {body.target_class!r} != "
-			f".dmp manifest['target'] {manifest_target!r}"
-		)
-	# Under v4 the .dmp manifest stamp is REQUIRED.  Republishing
-	# a package with toolchain >= 0.30.0 always emits the stamp;
-	# its absence means the package was published with an older
-	# toolchain and is not source-mode certifiable, full stop.
-	# Allowing a sidecar to substitute for a missing stamp would
-	# let an old package be retroactively "upgraded" into source-
-	# mode by dropping a sidecar next to it on disk — the artifact
-	# itself would never declare the source identity it was built
-	# from, and the trust chain would rest on adjacency alone.
-	from tools.drift_deploy.source_attestation import validate_sha256_hex_id
+	# v1 packages MUST stamp source_content_id in the manifest -- this
+	# is the same invariant as v0 (Phase A), enforced here so the lock
+	# never carries a kid that signed a different SCI than the
+	# manifest stamps.
 	if not isinstance(manifest_scid, str) or not manifest_scid:
 		return _warn(
-			"`.dmp` manifest has no `source_content_id` stamp; the "
-			"package must be republished with toolchain >= 0.30.0 so "
-			"the artifact itself records the source identity it was "
-			"built from (a sidecar alone is not enough — that would "
-			"let an old package be 'upgraded' into source-mode by "
-			"adjacency)"
+			"`.dmp` manifest has no `source_content_id` stamp; v1 "
+			"packages MUST carry the SCI (see "
+			"`lang.driftc.packages.source_content_id`).  Republish "
+			"after re-running `drift prepare`."
 		)
-	try:
-		validate_sha256_hex_id(
-			manifest_scid,
-			field="`.dmp` manifest['source_content_id'] stamp",
-		)
-	except ValueError as e:
-		return _warn(str(e))
 	if body.source_content_id != manifest_scid:
 		return _warn(
 			f"body.source_content_id {body.source_content_id!r} != "
 			f".dmp manifest['source_content_id'] {manifest_scid!r}"
-		)
-	# required_deps must match exactly (set-of-pairs comparison so
-	# ordering doesn't matter; the wire shape is a list).
-	body_rd = {(d.name, d.version) for d in body.required_deps}
-	manifest_rd: set[tuple[str, str]] = set()
-	for entry in manifest_required_deps:
-		if isinstance(entry, dict):
-			n = entry.get("name")
-			v = entry.get("version")
-			if isinstance(n, str) and isinstance(v, str):
-				manifest_rd.add((n, v))
-	if body_rd != manifest_rd:
-		return _warn(
-			f"body.required_deps {sorted(body_rd)} != "
-			f".dmp manifest['required_deps'] {sorted(manifest_rd)}"
 		)
 
 	return (body.source_content_id, kid)
@@ -421,35 +390,93 @@ def build_package_index(
 		)
 	_load_verifier = None  # deferred import; only wired if trust_store provided
 	if trust_store is not None:
-		from lang.driftc.packages.signature_v0 import verify_package_signatures as _vps
-		from lang.driftc.packages.trust_v0 import TrustStore as _TrustStore
-		import sys as _sys
+		import hashlib as _hl
+		from lang.driftc.packages.verify_v1 import (
+			PackageIdentity as _PackageIdentity,
+			verify_package_from_sidecars as _verify_v1,
+		)
 		# Callers that pass only a merged store can use it for both
-		# roles — `verify_package_signatures` differentiates the two
-		# only for reserved namespaces (`std.*`, `lang.*`, `drift.*`),
-		# which downstream deploy-side packages don't declare.
+		# roles -- the v1 verifier reads role-tagged trust per
+		# module, but the reserved-namespace check only fires for
+		# `std.*` / `lang.*` / `drift.*` modules which the deploy
+		# pipeline never indexes here.  Falling back to the user
+		# trust store for `core_trust_store` keeps the v0 caller
+		# contract intact.
 		if core_trust_store is None:
 			core_trust_store = trust_store
 
 		def _load_verifier(path: Path, manifest: dict[str, Any]) -> str | None:  # type: ignore[misc]
-			"""Return None on success, an error message on failure."""
+			"""Return None on success, an error message on failure.
+
+			This is the INDEX-TIME shallow gate, not full consumer
+			verification.  It runs `verify_package_from_sidecars`
+			with `resolved_closure=[]`, which means the cert claim's
+			dep_graph cover check passes vacuously: index time has
+			no view of the consumer's resolved closure (the index is
+			being built before the resolver picks deps), so the only
+			things checked here are:
+
+			  - sidecars (`<pkg>.author-claim`,
+			    `<pkg>.cert-claim.<kid>.json`) exist next to `path`
+			    and parse cleanly;
+			  - signatures verify against the trust store for the
+			    package's declared modules;
+			  - artifact_sha256 / source_content_id stamps agree
+			    between the author claim, the manifest, and the
+			    cert claim.
+
+			O3 (dep_graph closure) is NOT enforced here -- it is
+			enforced at consumer load time by
+			`provider_v1.load_package_v1_with_policy`, which has the
+			consumer's real closure built via
+			`driftc.py:_build_closure_for`.  Returning early here
+			before that check fires is intentional, not a gap.
+			"""
 			if path.suffix == ".zdmp":
 				from lang.driftc.packages.zdmp import decompress_zdmp
 				pkg_bytes = decompress_zdmp(path.read_bytes())
 			else:
 				pkg_bytes = path.read_bytes()
-			try:
-				_vps(
-					pkg_path=path,
-					pkg_bytes=pkg_bytes,
-					pkg_manifest=manifest,
-					trust=trust_store,
-					core_trust=core_trust_store,
-					require_signatures=True,
-					allow_unsigned_roots=[],  # no unsigned allowance in source-rebuild
+			pkg_id = manifest.get("package_id")
+			pkg_ver = manifest.get("package_version")
+			sci = manifest.get("source_content_id")
+			if not isinstance(pkg_id, str) or not isinstance(pkg_ver, str):
+				return "manifest missing package_id/package_version"
+			if not isinstance(sci, str) or not sci.startswith("sha256:"):
+				return (
+					f"package {pkg_id}@{pkg_ver}: manifest missing "
+					f"source_content_id stamp (v1 requires SCI on every "
+					f"published package)"
 				)
-			except ValueError as e:
-				return str(e)
+			identity = _PackageIdentity(
+				package_id=pkg_id,
+				version=pkg_ver,
+				source_content_id=sci,
+				artifact_sha256="sha256:" + _hl.sha256(pkg_bytes).hexdigest(),
+			)
+			sidecar_dir = path.parent
+			modules = manifest.get("modules", [])
+			module_ids: list[str] = []
+			if isinstance(modules, list):
+				for m in modules:
+					if isinstance(m, dict):
+						mid = m.get("module_id")
+						if isinstance(mid, str) and mid and not mid.endswith(".__instantiations"):
+							module_ids.append(mid)
+			for module_id in module_ids:
+				_reserved = module_id in ("std", "lang", "drift") or any(
+					module_id.startswith(p) for p in ("std.", "lang.", "drift.")
+				)
+				_trust = core_trust_store if _reserved else trust_store
+				res = _verify_v1(
+					sidecar_dir=sidecar_dir,
+					package_identity=identity,
+					module_id=module_id,
+					trust=_trust,
+					resolved_closure=[],
+				)
+				if not res.ok:
+					return f"module {module_id!r}: {res.reason}"
 			return None
 	# `PackageMetadataError` is the loader's distinguished signal for
 	# "container loaded fine, but the metadata violates the v3
@@ -667,8 +694,15 @@ def build_package_index(
 							mod_ids.append(_mid)
 			trust_mod_ids: list[str] = []
 			if _load_verifier is not None:
-				from lang.driftc.packages.signature_v0 import iter_trust_module_ids
-				trust_mod_ids = list(iter_trust_module_ids(manifest))
+				# v1: same trust-module predicate as in provider_v1 /
+				# resolver._load_verifier above -- exclude
+				# `*.__instantiations` and other internal suffixes
+				# that aren't user-visible modules.
+				for _m in (manifest.get("modules") or []):
+					if isinstance(_m, dict):
+						_mid = _m.get("module_id")
+						if isinstance(_mid, str) and _mid and not _mid.endswith(".__instantiations"):
+							trust_mod_ids.append(_mid)
 			# Cryptographic trust gate when a trust store is wired
 			# in.  Failure is a HARD ERROR, not a silent prune —
 			# dropping the offending package from the index would
@@ -755,23 +789,25 @@ def build_package_index(
 				if sak:
 					for mid in trust_mod_ids:
 						is_core = mid.startswith(("std.", "lang.", "drift."))
+						# `sak` sources from the v1 author-claim sidecar
+						# (per resolver._read_source_attestation_meta),
+						# so the trust check routes to the AUTHOR role.
 						allowed_for_mid = (
-							core_trust_store.allowed_kids_for_module(mid)
+							core_trust_store.allowed_authors_for_module(mid)
 							if is_core
-							else trust_store.allowed_kids_for_module(mid)
+							else trust_store.allowed_authors_for_module(mid)
 						)
 						if sak not in allowed_for_mid:
 							raise ResolutionError(
-								f"package at '{dmp_path}' `.source-"
-								f"attestation` signer {sak!r} is not "
-								f"in the trust store's namespace "
-								f"allowlist for module '{mid}'.  "
-								f"Source-rebuild requires the "
-								f"attestation signer to be trusted "
-								f"for every module the package "
-								f"declares; update the trust store "
-								f"or republish the sidecar under an "
-								f"already-trusted kid."
+								f"package at '{dmp_path}' v1 author claim "
+								f"signer {sak!r} is not in the trust "
+								f"store's author allowlist for module "
+								f"'{mid}'.  Source-rebuild requires the "
+								f"author kid to be trusted for every "
+								f"module the package declares; update "
+								f"the trust store or republish the "
+								f"author claim under an already-trusted "
+								f"kid."
 							)
 						# Revocation check against BOTH layers —
 						# a kid revoked in either core or project

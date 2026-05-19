@@ -27,7 +27,7 @@ from tools.drift_deploy.lockfile import write_lock
 # signature.  Imported lazily at call time in `_run_impl` to avoid a
 # hard dependency at module load for CLI paths that never enter the
 # source-rebuild branch.
-from lang.driftc.packages.trust_v0 import TrustStore  # noqa: F401
+from lang.driftc.packages.trust_v1 import TrustStore  # noqa: F401
 from tools.drift_deploy.manifest import (
 	Manifest,
 	ManifestError,

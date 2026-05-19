@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lang.driftc.packages.trust_v0 import (
+from lang.driftc.packages.trust_v1 import (
 	TrustStore,
 	load_core_trust_store,
 	load_trust_store_json,

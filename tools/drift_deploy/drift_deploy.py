@@ -525,94 +525,6 @@ def _build_app(
 	return out_bin
 
 
-# ── Dependency namespace discovery ───────────────────────────────────
-
-
-def _extract_dep_namespaces(pkg_id: str, staged_pkg_root: Path) -> list[str]:
-	"""
-	Extract module namespaces from a dependency's package files.
-
-	Scans staged_pkg_root/<pkg_id>/ for .zdmp and .dmp files and reads
-	their module_id entries to discover which namespaces need trust
-	authorization.
-	"""
-	namespaces: set[str] = set()
-	pkg_dir = staged_pkg_root / pkg_id
-	if not pkg_dir.exists():
-		return []
-	import os
-	for dirpath, _, filenames in os.walk(str(pkg_dir), followlinks=True):
-		for fname in filenames:
-			if not fname.endswith(".zdmp") and not fname.endswith(".dmp"):
-				continue
-			pkg_path = Path(dirpath) / fname
-			try:
-				if pkg_path.suffix == ".zdmp":
-					from lang.driftc.packages.zdmp import decompress_zdmp
-					from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0_from_bytes
-					raw = decompress_zdmp(pkg_path.read_bytes())
-					pkg = load_dmir_pkg_v0_from_bytes(raw, source_path=pkg_path)
-				else:
-					from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
-					pkg = load_dmir_pkg_v0(pkg_path)
-				modules = pkg.manifest.get("modules", [])
-				for m in modules:
-					if isinstance(m, dict):
-						mid = m.get("module_id")
-						if isinstance(mid, str) and mid:
-							namespaces.add(mid)
-			except Exception:
-				continue
-	return sorted(namespaces)
-
-
-def _classify_deps_for_trust_overlay(
-	resolved: "dict[str, object]",
-	dep_namespace_map: dict[str, str] | None,
-	staged_pkg_root: Path,
-) -> tuple[list[str], list[str]]:
-	"""Split a resolved dep map into the two buckets `build_staged_trust`
-	requires: co-deployed siblings (signed by us in this session) and
-	already-published external deps.
-
-	A dep is "co-deployed" iff its package_id appears in
-	`dep_namespace_map`, which is built from this manifest's library
-	artifacts (`drift_deploy._run_impl` populates it at module scope).
-	Anything else is external and its module namespaces are extracted
-	from the staged package-root's `.dmp` / `.zdmp` files via
-	`_extract_dep_namespaces`.
-
-	Returned as `(co_deployed_namespaces, external_dependency_namespaces)`
-	to feed directly into `build_staged_trust(co_deployed_namespaces=...,
-	external_dependency_namespaces=...)`.  Both lists are de-duplicated
-	but order is otherwise preserved -- callers don't depend on order
-	because the verifier converts each entry to a set, but stable order
-	keeps debugging tractable.
-
-	Pinning this as a named helper makes the classification testable
-	independent of the rest of `_deploy_artifact` and prevents the two
-	`build_staged_trust` call sites (build-time and smoke-time overlay)
-	from drifting apart.  See test_deploy.py's
-	`TestClassifyDepsForTrustOverlay` for the regression carriers.
-	"""
-	co_deployed_ns: list[str] = []
-	external_dep_ns: list[str] = []
-	seen_co: set[str] = set()
-	seen_ext: set[str] = set()
-	for dep_pkg_id in resolved:
-		if dep_namespace_map and dep_pkg_id in dep_namespace_map:
-			ns = dep_namespace_map[dep_pkg_id]
-			if ns not in seen_co:
-				seen_co.add(ns)
-				co_deployed_ns.append(ns)
-		else:
-			for ns in _extract_dep_namespaces(dep_pkg_id, staged_pkg_root):
-				if ns not in seen_ext:
-					seen_ext.add(ns)
-					external_dep_ns.append(ns)
-	return co_deployed_ns, external_dep_ns
-
-
 # ── Provenance bundle collection ─────────────────────────────────────
 
 
@@ -687,31 +599,492 @@ def _collect_dep_keys(
 	return result
 
 
-# ── Sign ─────────────────────────────────────────────────────────────
+# ── v1 cert / author claim emit ──────────────────────────────────────
 
 
-def _sign_artifact(
+def _read_co_artifact_identity(
+	staged_pkg_root: Path,
+	dep_pkg_id: str,
+	dep_version: str,
+) -> tuple[str, str, str, str] | None:
+	"""Return `(artifact_sha256, source_content_id, author_kid,
+	cert_kid)` for a co-artifact dep by reading its just-emitted v1
+	sidecars.  Returns None if any required piece is missing or if
+	the sidecar bodies do not bind to `(dep_pkg_id, dep_version)`;
+	caller fails closed.
+
+	Binding validation (load-bearing):
+	  - author_claim.body.package_id == dep_pkg_id
+	  - author_claim.body.version == dep_version
+	  - cert_claim.body.package_id   == dep_pkg_id
+	  - cert_claim.body.version      == dep_version
+	  - author_claim.body.source_content_id == cert_claim.body.source_content_id
+
+	Without these checks a stale/corrupt sibling sidecar whose body
+	bound to a different (package_id, version) would silently leak
+	its `artifact_sha256` + `source_content_id` into the dependent's
+	`dep_graph`.  Downstream consumers might catch the mismatch at
+	verify time, but the deploy must refuse to sign a dependent
+	cert claim with a misbound sibling identity in the first place.
+
+	Failures are noted on stderr (with the specific mismatch) so the
+	operator has a breadcrumb to which sibling sidecar is broken;
+	the caller turns the None return into a DeployError listing all
+	affected co-artifacts.
+
+	This is the only place in C.2 where the deploy pipeline reads
+	identity from "next-to-the-artifact" files.  Safe because the
+	files were emitted by the SAME deploy run a few iterations
+	earlier and live inside our own staged tree -- not a network-
+	provided value.
+	"""
+	import sys
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
+	from lang.driftc.packages.sidecar_naming import (
+		author_claim_filename,
+		cert_claim_filename_prefix,
+	)
+
+	def _warn(reason: str) -> None:
+		print(
+			f"warning: co-artifact identity rejected for "
+			f"{dep_pkg_id}@{dep_version}: {reason}",
+			file=sys.stderr,
+		)
+
+	dep_dir = staged_pkg_root / dep_pkg_id / dep_version
+	if not dep_dir.is_dir():
+		return None
+
+	# Author claim: per-release singleton, canonical filename.
+	author_path = dep_dir / author_claim_filename(dep_pkg_id)
+	if not author_path.is_file():
+		return None
+	try:
+		author_claim = load_author_claim_json(author_path.read_text(encoding="utf-8"))
+	except Exception as e:
+		_warn(f"author claim at {author_path} will not load ({e})")
+		return None
+	if not author_claim.signatures:
+		_warn(f"author claim at {author_path} has no signatures")
+		return None
+	if author_claim.body.package_id != dep_pkg_id:
+		_warn(
+			f"author claim at {author_path} body.package_id "
+			f"{author_claim.body.package_id!r} != expected "
+			f"{dep_pkg_id!r}"
+		)
+		return None
+	if author_claim.body.version != dep_version:
+		_warn(
+			f"author claim at {author_path} body.version "
+			f"{author_claim.body.version!r} != expected "
+			f"{dep_version!r}"
+		)
+		return None
+	author_kid = author_claim.signatures[0].kid
+
+	# Cert claim: per-certifier; the deploy run produced exactly one
+	# (the deploy's own certifier kid).  If somehow several are
+	# present, pick the first by sorted filename so the dep_graph
+	# entry is deterministic.
+	cert_prefix = cert_claim_filename_prefix(dep_pkg_id)
+	cert_path: Path | None = None
+	for entry in sorted(dep_dir.iterdir()):
+		if entry.is_file() and entry.name.startswith(cert_prefix) and entry.name.endswith(".json"):
+			cert_path = entry
+			break
+	if cert_path is None:
+		return None
+	try:
+		cert_claim = load_cert_claim_json(cert_path.read_text(encoding="utf-8"))
+	except Exception as e:
+		_warn(f"cert claim at {cert_path} will not load ({e})")
+		return None
+	if not cert_claim.signatures:
+		_warn(f"cert claim at {cert_path} has no signatures")
+		return None
+	cert_kid = cert_claim.signatures[0].kid
+
+	body = cert_claim.body
+	if body.package_id != dep_pkg_id:
+		_warn(
+			f"cert claim at {cert_path} body.package_id "
+			f"{body.package_id!r} != expected {dep_pkg_id!r}"
+		)
+		return None
+	if body.version != dep_version:
+		_warn(
+			f"cert claim at {cert_path} body.version "
+			f"{body.version!r} != expected {dep_version!r}"
+		)
+		return None
+	# SCI agreement between the two sidecars.  v1 invariant: the
+	# author and cert claim attest the SAME source identity for the
+	# same release.  A disagreement here means one of the two
+	# sidecars is stale -- propagating either value into the
+	# dependent's dep_graph would tie its cert claim to a
+	# self-contradictory upstream attestation set.
+	if author_claim.body.source_content_id != body.source_content_id:
+		_warn(
+			f"co-artifact SCI mismatch between author claim and "
+			f"cert claim: author {author_claim.body.source_content_id!r} "
+			f"vs cert {body.source_content_id!r}"
+		)
+		return None
+	# Both stamps must be present and well-shaped.
+	if not isinstance(body.artifact_sha256, str) or not body.artifact_sha256.startswith("sha256:"):
+		_warn(
+			f"cert claim at {cert_path} body.artifact_sha256 is "
+			f"malformed: {body.artifact_sha256!r}"
+		)
+		return None
+	if not isinstance(body.source_content_id, str) or not body.source_content_id.startswith("sha256:"):
+		_warn(
+			f"cert claim at {cert_path} body.source_content_id is "
+			f"malformed: {body.source_content_id!r}"
+		)
+		return None
+	return (body.artifact_sha256, body.source_content_id, author_kid, cert_kid)
+
+
+def _attach_author_claim_to_artifact(
+	*,
+	package_id: str,
+	package_version: str,
+	source_content_id: str,
+	manifest_dir: Path,
+	staged_install: Path,
+) -> Path:
+	"""Discover the pre-signed author claim for this release, validate
+	it binds to the artifact being certified, and stage it next to
+	the artifact.
+
+	Per the trust-v1 role split (and the author-key-out-of-orch hard
+	gate enforced by `lang/tests/packages/test_author_key_boundary.py`),
+	the deploy pipeline NEVER signs author claims itself.  The author
+	publishes the claim from their workstation via `drift-author
+	publish`; deploy only locates that file, verifies it matches THIS
+	release, and copies it into the staged install directory.
+
+	The binding check is load-bearing: without it, a stale
+	`<pkg>.author-claim` for `demo@1.0.0` left in `drift/` would
+	silently get attached to a `demo@1.0.1` build, and the certifier
+	would sign a cert claim referencing an author intent that
+	predates (and may not cover) the actual source bytes being
+	released.  Hard-fail when:
+
+	  - the file is missing;
+	  - the body's package_id / version / source_content_id do not
+	    match the artifact arguments;
+	  - the file fails to parse as a v1 author claim.
+
+	Source location: `<manifest_dir>/drift/<pkg>.author-claim` (the
+	canonical name produced by `tools.drift_author.sign_and_write_author_claim`).
+	"""
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.sidecar_naming import author_claim_filename
+
+	src_dir = manifest_dir / "drift"
+	canonical_name = author_claim_filename(package_id)
+	src = src_dir / canonical_name
+	if not src.is_file():
+		raise DeployError(
+			f"artifact '{package_id}': pre-signed author claim not "
+			f"found at {src}.  v1 release flow requires the author "
+			f"to publish the claim via `drift-author publish` BEFORE "
+			f"drift_deploy runs; the deploy pipeline never holds the "
+			f"author key (see tools/drift_author/ for the publish "
+			f"command).  Without the author claim the deploy cannot "
+			f"emit a meaningful cert claim."
+		)
+	try:
+		claim = load_author_claim_json(src.read_text(encoding="utf-8"))
+	except (ValueError, OSError) as e:
+		raise DeployError(
+			f"artifact '{package_id}': author claim at {src} "
+			f"failed to parse as a v1 author claim ({e}).  "
+			f"Re-run `drift-author publish` to regenerate."
+		) from e
+	body = claim.body
+	if body.package_id != package_id:
+		raise DeployError(
+			f"author claim at {src} binds package_id "
+			f"{body.package_id!r}, but this build is for "
+			f"{package_id!r}.  Re-run `drift-author publish` for "
+			f"{package_id!r} (or remove the stale claim from "
+			f"{src_dir})."
+		)
+	if body.version != package_version:
+		raise DeployError(
+			f"author claim at {src} binds version {body.version!r}, "
+			f"but this build is for {package_version!r}.  Stale "
+			f"claims from a previous release must NOT be reused: "
+			f"the certifier signs (artifact bytes + dep_graph + "
+			f"cert_suite) but the AUTHOR's release intent is "
+			f"version-specific.  Re-run `drift-author publish "
+			f"--version {package_version}` and republish."
+		)
+	if body.source_content_id != source_content_id:
+		raise DeployError(
+			f"author claim at {src} binds source_content_id "
+			f"{body.source_content_id!r}, but this build's source "
+			f"hashed to {source_content_id!r}.  The source tree has "
+			f"changed since the author signed; re-run `drift-author "
+			f"publish` with the current source to refresh the claim."
+		)
+	dst = staged_install / canonical_name
+	staged_install.mkdir(parents=True, exist_ok=True)
+	shutil.copy2(str(src), str(dst))
+	return dst
+
+
+def _emit_cert_claim_for_artifact(
 	artifact_path: Path,
 	*,
-	sign_key: Path,
-	author_profile_path: Path | None = None,
-	provenance_path: Path | None = None,
+	cert_key: Path,
+	package_id: str,
+	package_version: str,
+	target: str,
+	compiler_info: "CompilerInfo",
+	source_content_id: str,
+	artifact_sha256: str,
+	resolved_deps: dict[str, "ResolvedDep"],
+	direct_dep_ids: set[str],
+	staged_pkg_root: Path,
+	provenance_path: Path | None,
 ) -> Path:
-	"""Sign an artifact (package or app) and produce .sig sidecar. Returns path to sidecar."""
-	from lang.drift.sign import SignOptions, sign_package_v0
+	"""Sign a v1 cert claim for `artifact_path` and write the sidecar.
 
-	sig_path = artifact_path.parent / f"{artifact_path.stem}.sig"
-	sign_package_v0(SignOptions(
-		package_path=artifact_path,
-		key_seed_path=sign_key,
-		key_seed_text=None,
-		out_path=sig_path,
-		add_signature=False,
-		include_pubkey=True,
-		author_profile_path=author_profile_path,
-		provenance_path=provenance_path,
+	The cert claim binds artifact bytes + toolchain identity + the
+	full resolved transitive dep_graph + the cert-suite result (per
+	O3 / O4).  Returns the sidecar path.
+
+	Cert-suite identity defaults to `drift-deploy/v1` with result
+	`pass`; production deployments override via the env vars
+	`DRIFT_DEPLOY_CERT_SUITE_ID`, `DRIFT_DEPLOY_CERT_SUITE_VERSION`,
+	`DRIFT_DEPLOY_CERT_SUITE_RESULT`, `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`
+	so the same deploy CLI surfaces multiple gate identities (smoke,
+	full-suite, etc.) without code changes.
+
+	Each `resolved_deps` entry contributes a `DepGraphEntry` -- the
+	consumer's closure at load time must be exactly this set for
+	the cert claim to cover O3 at verify time.  For ORDINARY deps
+	(external packages already resolved into the lock), all four
+	identity fields (artifact_sha256, source_content_id, author_kid,
+	cert_kid) come directly from the `ResolvedDep`.  For CO-ARTIFACT
+	deps (sibling packages built earlier in this same deploy run
+	via `_topo_sort_artifacts`'s deps-before-dependents ordering),
+	the lock has empty fields by construction, so we read the
+	identity back from the sibling's just-emitted sidecars in
+	`staged_pkg_root/<pkg>/<version>/` -- this is NOT the silent-
+	null peek path K flagged: missing sibling sidecars at this
+	point indicate a deploy-order bug or a failed sibling build,
+	both of which must fail closed.
+
+	`direct_dep_ids` is the set of package ids the artifact's own
+	manifest declares as direct deps (from `art.package_deps`).
+	Entries in `resolved_deps` matching this set get
+	`dep_kind="direct"`; the rest are `dep_kind="transitive"`.
+	Without this split the cert claim would mislabel every dep as
+	direct and lose the (informational but contract-visible)
+	classification the v1 schema carries.
+
+	Every transitive dep MUST contribute a non-empty
+	`source_content_id`.  Falling back to a synthetic sentinel
+	(e.g. `sha256:000...`) would let the certifier sign a guessed
+	value the consumer can never reproduce from real source -- a
+	silent O3 escape.  Hard-fail before signing.
+	"""
+	import hashlib as _hl
+	import os
+	import uuid as _uuid
+
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody,
+		CertSuite,
+		DepGraphEntry,
+		Toolchain,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions,
+		load_cert_seed32,
+		sign_and_write_cert_claim,
+	)
+
+	seed = load_cert_seed32(cert_key)
+
+	# Build the dep_graph from the consumer's resolved closure.
+	#
+	# Each `DepGraphEntry` must carry the EXACT upstream identity
+	# set the certifier vouches for: artifact_sha256 + SCI + the
+	# kids that signed the dep's own author/cert claims.  Sourcing
+	# the kids from the resolved lock (NOT best-effort sidecar
+	# scanning) ties the cert claim to the same identity set the
+	# resolver locked, so the cover check at consumer verify time
+	# can compare apples to apples.  Fail closed for any non-co-
+	# artifact dep whose identity is incomplete: silent fallback
+	# to `author_kid=None` / `cert_kid=None` (the old peek path)
+	# would let the certifier sign an entry whose attestation
+	# chain isn't actually known to the deploy at cert time,
+	# defeating O3 even when SCI is present.
+	#
+	# Field-name swap reminder: under the v4 lock schema the slot
+	# called `author_key` carries the CERT kid (the artifact signer
+	# in v0; the cert-claim signer in v1) and `source_attestation_key`
+	# carries the AUTHOR kid (the source-attestation signer in v0;
+	# the author-claim signer in v1).  The lockfile-v5 rename
+	# (deferred) will flip the spelling; the semantics are already
+	# v1.
+	missing_sci: list[str] = []
+	missing_kids: list[str] = []
+	co_artifact_unbuilt: list[str] = []
+	dep_graph: list[DepGraphEntry] = []
+	for dep_pkg_id in sorted(resolved_deps.keys()):
+		dep = resolved_deps[dep_pkg_id]
+		dep_type = getattr(dep, "dep_type", "") or "transitive"
+		if dep_type == "co-artifact":
+			# Sibling in this same deploy run.  Per
+			# `_topo_sort_artifacts`'s deps-before-dependents
+			# ordering, the sibling was deployed in an earlier
+			# iteration and its v1 sidecars now sit at
+			# `staged_pkg_root/<pkg>/<version>/`.  Read identity
+			# back from the just-emitted cert-claim sidecar (the
+			# sibling we just signed): it's the only authoritative
+			# source -- the lock leaves co-artifact fields empty
+			# by construction.  Missing sidecars here mean either
+			# a topo-sort regression or a failed sibling build;
+			# both are hard errors.
+			co_identity = _read_co_artifact_identity(
+				staged_pkg_root, dep_pkg_id, dep.version,
+			)
+			if co_identity is None:
+				co_artifact_unbuilt.append(f"{dep_pkg_id}@{dep.version}")
+				continue
+			co_sha, co_sci, co_author_kid, co_cert_kid = co_identity
+			dep_graph.append(DepGraphEntry(
+				package_id=dep_pkg_id,
+				version=dep.version,
+				artifact_sha256=co_sha,
+				source_content_id=co_sci,
+				author_kid=co_author_kid,
+				cert_kid=co_cert_kid,
+				# A co-artifact is by definition a sibling the
+				# manifest declares as a dep, so it is necessarily
+				# direct (manifest.package_deps is the source).
+				dep_kind="direct" if dep_pkg_id in direct_dep_ids else "transitive",
+			))
+			continue
+		dep_sci = getattr(dep, "source_content_id", "") or ""
+		if not (isinstance(dep_sci, str) and dep_sci.startswith("sha256:") and len(dep_sci) == 7 + 64):
+			missing_sci.append(f"{dep_pkg_id}@{dep.version}")
+			continue
+		dep_author_kid = getattr(dep, "source_attestation_key", "") or ""
+		dep_cert_kid = getattr(dep, "author_key", "") or ""
+		if not dep_author_kid or not dep_cert_kid:
+			missing_kids.append(
+				f"{dep_pkg_id}@{dep.version} "
+				f"(author_kid={dep_author_kid!r}, cert_kid={dep_cert_kid!r})"
+			)
+			continue
+		dep_graph.append(DepGraphEntry(
+			package_id=dep_pkg_id,
+			version=dep.version,
+			artifact_sha256=dep.sha256 if dep.sha256.startswith("sha256:") else f"sha256:{dep.sha256}",
+			source_content_id=dep_sci,
+			author_kid=dep_author_kid,
+			cert_kid=dep_cert_kid,
+			# Honor the lock's classification first; fall back to
+			# the manifest's direct-dep set for entries that
+			# pre-date the dep_type field (older locks).
+			dep_kind=dep_type if dep_type in ("direct", "transitive") else (
+				"direct" if dep_pkg_id in direct_dep_ids else "transitive"
+			),
+		))
+	if co_artifact_unbuilt:
+		raise DeployError(
+			f"cert claim for {package_id!r}@{package_version!r} "
+			f"cannot be signed: the following co-artifact deps are "
+			f"missing their just-emitted v1 sidecars in the staged "
+			f"package root (expected at "
+			f"`{staged_pkg_root}/<pkg>/<version>/`):\n  - "
+			+ "\n  - ".join(co_artifact_unbuilt)
+			+ f"\nThis indicates the sibling artifact failed to "
+			f"build or sign, or the topological deploy order is "
+			f"broken.  A cert claim that omits an actual sibling "
+			f"dep cannot pass the consumer-side closure cover check "
+			f"(O3), so we refuse to sign rather than ship a "
+			f"verifiable-only-by-luck bundle."
+		)
+	if missing_sci:
+		raise DeployError(
+			f"cert claim for {package_id!r}@{package_version!r} "
+			f"cannot be signed: the following resolved deps lack a "
+			f"source_content_id stamp:\n  - "
+			+ "\n  - ".join(missing_sci)
+			+ f"\nThe certifier must not sign a guessed or sentinel "
+			f"SCI for a dependency (O3).  Re-run `drift prepare` "
+			f"against republished v1 deps so every resolved dep "
+			f"contributes a real identity to the dep_graph."
+		)
+	if missing_kids:
+		raise DeployError(
+			f"cert claim for {package_id!r}@{package_version!r} "
+			f"cannot be signed: the following resolved deps lack a "
+			f"known author kid and/or cert kid in the lock:\n  - "
+			+ "\n  - ".join(missing_kids)
+			+ f"\nThe certifier must record the exact upstream "
+			f"identities it is attesting (O3); silent null kids "
+			f"would defeat the dep_graph cover check at consumer "
+			f"verify time.  Re-run `drift prepare` against deps "
+			f"whose v1 author + cert sidecars resolve cleanly."
+		)
+
+	cert_suite = CertSuite(
+		id=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID", "drift-deploy/v1"),
+		version=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_VERSION", "1.0"),
+		result=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT", "pass"),
+		result_evidence_sha256=os.environ.get(
+			"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256",
+			"sha256:" + _hl.sha256(b"drift-deploy-v1-default-evidence").hexdigest(),
+		),
+	)
+
+	# `evidence_sha256` binds the provenance bundle to the cert claim
+	# without re-signing it -- the bundle stays unsigned but its bytes
+	# are pinned by the cert claim's body.
+	if provenance_path is not None and provenance_path.is_file():
+		evidence_sha = "sha256:" + _hl.sha256(provenance_path.read_bytes()).hexdigest()
+	else:
+		evidence_sha = "sha256:" + _hl.sha256(b"").hexdigest()
+
+	body = CertClaimBody(
+		schema_version=1,
+		package_id=package_id,
+		version=package_version,
+		artifact_sha256=artifact_sha256,
+		source_content_id=source_content_id,
+		target=target,
+		toolchain=Toolchain(
+			driftc_version=compiler_info.version,
+			drift_rt_abi=int(compiler_info.abi),
+			driftc_commit=compiler_info.commit,
+		),
+		dep_graph=tuple(dep_graph),
+		cert_suite=cert_suite,
+		run_id=os.environ.get("DRIFT_DEPLOY_RUN_ID", str(_uuid.uuid4())),
+		run_started_utc=os.environ.get(
+			"DRIFT_DEPLOY_RUN_STARTED_UTC",
+			"1970-01-01T00:00:00Z",
+		),
+		evidence_sha256=evidence_sha,
+	)
+	return sign_and_write_cert_claim(SignCertClaimOptions(
+		body=body,
+		seed32=seed,
+		sidecar_dir=artifact_path.parent,
 	))
-	return sig_path
 
 
 # ── Assets ───────────────────────────────────────────────────────────
@@ -991,33 +1364,14 @@ def _deploy_artifact(
 	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
 	staged_install = stage_dir / art.name / art.version
 
-	# ── Step 0: Build trust overlay for co-artifact verification ──
-	# When building an artifact that depends on a co-artifact (signed in a
-	# previous iteration), driftc needs a trust store authorizing the
-	# signer's key for the co-artifact's namespace.  Build the same overlay
-	# used for smoke and pass it to the build step.
-	build_trust_path: Path | None = None
-	if sign_key is not None and resolved:
-		from tools.drift_deploy.staged_trust import (
-			build_staged_trust,
-			extract_pubkey_from_seed,
-		)
-		try:
-			pubkey = extract_pubkey_from_seed(sign_key)
-			build_trust_path = stage_dir / "drift" / "trust.json"
-			co_deployed_ns, external_dep_ns = _classify_deps_for_trust_overlay(
-				resolved, dep_namespace_map, staged_pkg_root,
-			)
-			build_staged_trust(
-				baseline_trust_path=baseline_trust,
-				signer_pubkey_raw=pubkey,
-				artifact_namespace=art.module_namespace,
-				out_path=build_trust_path,
-				co_deployed_namespaces=co_deployed_ns,
-				external_dependency_namespaces=external_dep_ns,
-			)
-		except Exception as e:
-			raise DeployError(f"build-time trust overlay generation failed for '{art.name}': {e}")
+	# v1 has no build-time trust overlay step.  Co-artifact verification
+	# during the build flows through the same path as production
+	# consumer verification: the project's trust store + author/cert
+	# sidecars discovered next to each .zdmp.  When a deploy invocation
+	# builds multiple artifacts in a single run, each one's sidecars
+	# land in `staged_pkg_root/<name>/<version>/` and the NEXT
+	# artifact's build picks them up from that location automatically.
+	build_trust_path: Path | None = baseline_trust
 
 	# ── Step 1: Build ──
 	# Build a per-artifact package root containing ONLY resolved
@@ -1042,7 +1396,7 @@ def _deploy_artifact(
 	source_content_id: str | None = None
 	if art.kind == "library":
 		from tools.drift_deploy.build_cmd import project_root_for
-		from tools.drift_deploy.source_attestation import (
+		from lang.driftc.packages.source_content_id import (
 			compute_artifact_source_content_id,
 		)
 		# Phase A is additive: compute source_content_id from on-disk
@@ -1097,9 +1451,13 @@ def _deploy_artifact(
 			trust_store=build_trust_path,
 		)
 
-	# ── Step 2: Stage author profile + sign (package only) ──
+	# ── Step 2: Stage author profile + v1 trust sidecars (package only) ──
+	#
+	# `sig_path` is a v1 cert-claim sidecar in this flow (kept as the
+	# variable name for back-compat with downstream smoke env wiring
+	# that still spells it DRIFT_STAGED_SIG).  No staged_trust_path:
+	# v1 has no overlay -- smoke uses the project's baseline trust.
 	sig_path: Path | None = None
-	staged_trust_path: Path | None = None
 	staged_profile: Path | None = None
 
 	if art.kind == "library":
@@ -1156,61 +1514,65 @@ def _deploy_artifact(
 		provenance_path = staged_install / f"{art.name}.provenance.zst"
 		write_provenance_bundle(provenance_path, bundle_compressed)
 
-		sig_path = _sign_artifact(
-			dmp_path, sign_key=sign_key,
-			author_profile_path=staged_profile,
+		# v1 trust flow: discover the pre-signed author claim (the
+		# author published it via `drift-author publish` BEFORE running
+		# drift_deploy; the orch never holds the author key) and emit a
+		# fresh cert claim bound to (artifact_sha256, source_content_id,
+		# dep_graph, cert_suite).
+		#
+		# `source_content_id` is REQUIRED here -- v1 cert claims attest
+		# source identity by comparing stamps with the author claim, so
+		# a missing SCI means the deploy cannot produce a meaningful
+		# cert claim.  Hard error rather than the v0 "skip silently"
+		# graceful path.
+		if source_content_id is None:
+			raise DeployError(
+				f"artifact '{art.name}': source_content_id was not "
+				f"computed for this build; v1 cert claims require the "
+				f"SCI to attest source identity.  Re-run with the "
+				f"source-tree available so `compute_artifact_source_content_id` "
+				f"can stamp the manifest."
+			)
+		author_claim_path = _attach_author_claim_to_artifact(
+			package_id=art.name,
+			package_version=art.version,
+			source_content_id=source_content_id,
+			manifest_dir=manifest_dir,
+			staged_install=staged_install,
+		)
+		cert_claim_path = _emit_cert_claim_for_artifact(
+			dmp_path,
+			cert_key=sign_key,
+			package_id=art.name,
+			package_version=art.version,
+			target=target,
+			compiler_info=compiler_info,
+			source_content_id=source_content_id,
+			artifact_sha256=dmp_sha256,
+			resolved_deps=resolved,
+			# direct deps come from the artifact's own manifest;
+			# anything in `resolved` not in this set is a transitive
+			# pull added by the resolver.
+			direct_dep_ids={d.name for d in art.package_deps},
+			# `staged_pkg_root` is needed so co-artifact deps can
+			# read their identities back from sibling sidecars
+			# (the lock leaves co-artifact fields empty by
+			# construction); topo-sort guarantees siblings are
+			# already signed by the time we reach this artifact.
+			staged_pkg_root=staged_pkg_root,
 			provenance_path=provenance_path,
 		)
+		# Back-compat alias for code further down that still reads
+		# `sig_path` to wire authenticated siblings into smoke / dest.
+		# In v1 this points at the cert claim; the author claim
+		# travels under `author_claim_path`.
+		sig_path = cert_claim_path
+		attestation_path: Path | None = None  # source-attestation is gone in v1
 
-		# Source attestation sidecar — author-signed binding between
-		# (package_id, version) and the canonical source identity that
-		# produced these bytes.  Trust anchor for source-rebuild
-		# certification: a downstream rebuild can prove it built from
-		# the same source the owner attested without requiring byte
-		# equality on the rebuilt .dmp.  Signed with the same key as
-		# the artifact today (single signer); the lock records this
-		# key separately as `source_attestation_key` so the two roles
-		# can diverge later (e.g. long-lived org identity key signs
-		# source, ephemeral build key signs artifacts).
-		#
-		# Skipped silently when source_content_id could not be computed
-		# (Phase A graceful path; Phase C tightens to hard error in
-		# source-rebuild mode).
-		attestation_path: Path | None = None
-		if source_content_id is not None:
-			from tools.drift_deploy.source_attestation import (
-				SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
-				RequiredDepEntry,
-				SourceAttestationBody,
-				sign_attestation,
-				write_attestation_sidecar,
-			)
-			attestation_body = SourceAttestationBody(
-				schema_version=SOURCE_ATTESTATION_BODY_SCHEMA_VERSION,
-				package_id=art.name,
-				version=art.version,
-				source_content_id=source_content_id,
-				required_deps=[
-					RequiredDepEntry(name=d.name, version=d.version)
-					for d in art.package_deps
-				],
-				target_class=target,
-			)
-			from tools.drift_deploy.staged_trust import load_signing_key_seed
-			try:
-				_sign_seed = load_signing_key_seed(sign_key)
-			except ValueError as e:
-				raise DeployError(
-					f"--sign-key-file {sign_key}: {e}"
-				) from e
-			attestation_sidecar = sign_attestation(
-				attestation_body, signing_key_seed=_sign_seed,
-			)
-			attestation_path = staged_install / f"{art.name}.source-attestation"
-			write_attestation_sidecar(attestation_path, attestation_sidecar)
-
-		# Compress the signed .dmp → .zdmp for distribution.
-		# Signature covers the uncompressed bytes (already signed above).
+		# Compress .dmp → .zdmp for distribution.  The cert claim binds
+		# the decompressed bytes' sha256, which equals the .dmp bytes
+		# we already hashed above (sha256 is over the canonical
+		# uncompressed payload, same as v0).
 		from lang.driftc.packages.zdmp import compress_to_zdmp
 		raw_bytes = dmp_path.read_bytes()
 		zdmp_bytes = compress_to_zdmp(raw_bytes)
@@ -1244,38 +1606,27 @@ def _deploy_artifact(
 				shutil.rmtree(str(smoke_pkg_dir))
 		smoke_pkg_dir.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(str(zdmp_path), str(smoke_pkg_dir / zdmp_path.name))
+		# v1 sidecars travel with the artifact: cert claim + author claim
+		# must both reach the smoke pkg root so the smoke verifier can
+		# clear the trust gate the same way a real consumer will.
 		if sig_path:
 			shutil.copy2(str(sig_path), str(smoke_pkg_dir / sig_path.name))
-		# Copy the full authenticated artifact set so the smoke consumer's
-		# verifier finds all required siblings (.provenance.zst, .author-profile).
+		if 'author_claim_path' in locals() and author_claim_path is not None:
+			shutil.copy2(str(author_claim_path), str(smoke_pkg_dir / author_claim_path.name))
+		# Provenance + author-profile remain as informational artifacts
+		# (the v1 verifier reads neither; they're carried through for
+		# downstream tooling such as `drift inspect` / provenance audit).
 		if provenance_path and provenance_path.exists():
 			shutil.copy2(str(provenance_path), str(smoke_pkg_dir / provenance_path.name))
 		if staged_profile and staged_profile.exists():
 			shutil.copy2(str(staged_profile), str(smoke_pkg_dir / staged_profile.name))
-		if attestation_path is not None and attestation_path.exists():
-			shutil.copy2(str(attestation_path), str(smoke_pkg_dir / attestation_path.name))
 
-		# Build staged trust overlay.
-		from tools.drift_deploy.staged_trust import (
-			build_staged_trust,
-			extract_pubkey_from_seed,
-		)
-		try:
-			pubkey = extract_pubkey_from_seed(sign_key)
-			staged_trust_path = stage_dir / "drift" / "trust.json"
-			co_deployed_ns, external_dep_ns = _classify_deps_for_trust_overlay(
-				resolved or {}, dep_namespace_map, staged_pkg_root,
-			)
-			build_staged_trust(
-				baseline_trust_path=baseline_trust,
-				signer_pubkey_raw=pubkey,
-				artifact_namespace=art.module_namespace,
-				out_path=staged_trust_path,
-				co_deployed_namespaces=co_deployed_ns,
-				external_dependency_namespaces=external_dep_ns,
-			)
-		except Exception as e:
-			raise DeployError(f"staged trust generation failed: {e}")
+		# v1 has no "staged trust overlay" step.  The smoke compile
+		# uses the project's normal trust store (passed in via
+		# `--trust-store`), which the user must populate with both
+		# author and cert role kids for the namespaces being built.
+		# Without that, the smoke verify fails -- exactly what would
+		# happen at consumer-load time, so the smoke is honest.
 
 	# ── Step 3: Assets ──
 	_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
@@ -1321,12 +1672,13 @@ def _deploy_artifact(
 		provenance_path = staged_install / f"{art.name}.provenance.zst"
 		write_provenance_bundle(provenance_path, bundle_compressed)
 
-		# Sign the app binary + provenance bundle (no author-profile for apps).
-		if sign_key is not None:
-			sig_path = _sign_artifact(
-				app_bin_path, sign_key=sign_key,
-				provenance_path=provenance_path,
-			)
+		# v1: app artifacts do not currently produce a cert claim --
+		# app verification flows through binary signing in a separate
+		# subsystem (`drift sign` for distributable binaries).  The
+		# v1 cutover affects PACKAGE artifacts; app signing remains a
+		# follow-up.  Provenance bundle still emits unsigned so app
+		# `drift inspect` remains useful.
+		pass
 
 	# ── Step 5: Smoke ──
 	# Build a filtered smoke package root containing only the artifact
@@ -1357,12 +1709,16 @@ def _deploy_artifact(
 		print(f"  warning: --skip-smoke: smoke skipped for '{art.name}'", file=sys.stderr)
 	else:
 		if art.kind == "library":
+			# v1: smoke uses the project's normal trust store
+			# (`baseline_trust`).  No overlay -- the cert + author
+			# sidecars travel with the artifact and are discovered
+			# next to each .zdmp.
 			_run_baseline_smoke_package(
 				art,
 				driftc=driftc,
 				staged_install=staged_install,
 				staged_pkg_root=smoke_pkg_root,
-				staged_trust=staged_trust_path,
+				staged_trust=baseline_trust,
 				resolved=resolved,
 				native_lib_paths=native_lib_paths,
 			)
@@ -1382,14 +1738,15 @@ def _deploy_artifact(
 		})
 		if art.kind == "library":
 			smoke_env["DRIFT_STAGED_PKG"] = str(zdmp_path)
+			# `DRIFT_STAGED_SIG` is preserved for backward-compat
+			# with smoke scripts that look for an artifact-signature
+			# sidecar.  In v1 it points at the cert claim.
 			if sig_path:
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
 		else:
 			smoke_env["DRIFT_STAGED_BIN"] = str(staged_install / art.name)
 			if sig_path:
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
-		if staged_trust_path:
-			smoke_env["DRIFT_STAGED_TRUST"] = str(staged_trust_path)
 
 		_run_custom_smoke(art, env=smoke_env)
 
