@@ -166,23 +166,63 @@ class AuthorClaim:
 # ── Body canonicalization (signed bytes) ───────────────────────────
 
 
+def validate_body_shape(body: AuthorClaimBody) -> None:
+	"""Enforce v1 value-shape rules on a dataclass-constructed body.
+
+	The JSON loader (`_parse_body`) runs equivalent checks when
+	parsing an untrusted document.  Without this function a
+	hand-built dataclass with malformed values (empty strings,
+	bad SCI shape, schema_version != 1) would sign canonical
+	bytes that the loader would later refuse.  Called from
+	`body_signing_bytes` and `_body_to_canonical_dict` so emit and
+	load enforce the same contract.
+	"""
+	if body.schema_version != _BODY_SCHEMA_VERSION:
+		raise ValueError(
+			f"author claim body.schema_version must be {_BODY_SCHEMA_VERSION}; "
+			f"got {body.schema_version!r}"
+		)
+	if not isinstance(body.package_id, str) or not body.package_id:
+		raise ValueError("author claim body.package_id must be a non-empty string")
+	if not isinstance(body.version, str) or not body.version:
+		raise ValueError("author claim body.version must be a non-empty string")
+	if not body.namespaces:
+		raise ValueError("author claim body.namespaces must be a non-empty list")
+	for idx, ns in enumerate(body.namespaces):
+		if not isinstance(ns, str) or not ns:
+			raise ValueError(
+				f"author claim body.namespaces[{idx}] must be a non-empty string; got {ns!r}"
+			)
+	from lang.driftc.packages.source_content_id import validate_sci as _validate_sci
+	_validate_sci(body.source_content_id, field="author claim body.source_content_id")
+	if not isinstance(body.target_class, str) or not body.target_class:
+		raise ValueError("author claim body.target_class must be a non-empty string")
+	if not isinstance(body.release_utc, str) or not body.release_utc:
+		raise ValueError("author claim body.release_utc must be a non-empty string")
+	for idx, d in enumerate(body.required_deps):
+		if not isinstance(d.name, str) or not d.name:
+			raise ValueError(
+				f"author claim body.required_deps[{idx}].name must be a non-empty string"
+			)
+		if not isinstance(d.version_range, str) or not d.version_range:
+			raise ValueError(
+				f"author claim body.required_deps[{idx}].version_range must be a non-empty string"
+			)
+
+
 def _body_to_canonical_dict(body: AuthorClaimBody) -> dict[str, Any]:
 	"""Convert the body dataclass to a canonical-shaped dict.
 
-	Field order in the dict is irrelevant — `canonical_json_bytes`
-	sort-keys before hashing.  `required_deps` is converted to a list
-	of `{"name": ..., "version_range": ...}` objects and sorted by
-	name for determinism (so two equivalent author claims that differ
-	only in the order of `required_deps` produce identical signing
-	bytes).
+	Runs `validate_body_shape` first so emit and load enforce the
+	same value contract.
 
+	`required_deps` is converted to a list of
+	`{"name": ..., "version_range": ...}` objects sorted by name.
 	Duplicate dep names are REJECTED here too (in addition to the
-	load-time check in `_parse_body`).  A hand-built dataclass with
-	two `RequiredDep` entries sharing a name would otherwise produce
-	canonical bytes that depend on stable-sort tie-break order —
-	the signature would still verify but the canonical form would
-	silently drop one of the conflicting entries.  Fail closed.
+	load-time check in `_parse_body`); the canonical sort would
+	otherwise tie-break on input order.
 	"""
+	validate_body_shape(body)
 	seen_names: set[str] = set()
 	for d in body.required_deps:
 		if d.name in seen_names:
@@ -518,23 +558,51 @@ def verify_author_claim_for_module(
 	claim: AuthorClaim,
 	trust: TrustStore,
 	module_id: str,
+	*,
+	expected_package_id: str,
+	expected_version: str,
 ) -> AuthorClaimVerifyResult:
 	"""Full author-claim verification for one module_id.
 
-	Composes:
-	  1. namespace coverage: at least one entry in `claim.body.namespaces`
-	     must cover `module_id`.
-	  2. signature: at least one signature must verify AND the signer's
+	Composes (in order):
+	  1. `claim.body.package_id == expected_package_id` AND
+	     `claim.body.version == expected_version` — pins this claim
+	     to THIS package release.  Without this gate an attacker
+	     could substitute an author claim for an unrelated package
+	     and have it pass verification for a module whose namespace
+	     happens to match.
+	  2. namespace coverage: at least one entry in
+	     `claim.body.namespaces` must cover `module_id`.
+	  3. signature: at least one signature must verify AND the signer's
 	     kid must be in `trust.allowed_authors_for_module(module_id)`.
 
 	Revocation is handled inside `allowed_authors_for_module` (revoked
 	kids are excluded there).
 
 	Returns an `AuthorClaimVerifyResult` with a structured outcome.
-	The caller (verifier composition in slice 4) uses `ok` + the
-	accepted_kid for diagnostic chaining; `reason` carries a
-	human-readable description on failure.
 	"""
+	# Gate 1: package identity pinning.
+	if claim.body.package_id != expected_package_id:
+		return AuthorClaimVerifyResult(
+			ok=False,
+			accepted_kid=None,
+			reason=(
+				f"author claim body.package_id ({claim.body.package_id!r}) "
+				f"does not match expected package_id ({expected_package_id!r}); "
+				f"this claim is for a different package"
+			),
+		)
+	if claim.body.version != expected_version:
+		return AuthorClaimVerifyResult(
+			ok=False,
+			accepted_kid=None,
+			reason=(
+				f"author claim body.version ({claim.body.version!r}) does not "
+				f"match expected version ({expected_version!r}); this claim is "
+				f"for a different release of {expected_package_id!r}"
+			),
+		)
+
 	# Namespace coverage.
 	covering = [n for n in claim.body.namespaces if _namespace_covers(n, module_id)]
 	if not covering:

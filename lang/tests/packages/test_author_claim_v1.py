@@ -469,7 +469,7 @@ def test_verify_for_module_happy_path() -> None:
 	claim = make_author_claim(_example_body(), seed)
 	kid = _kid_for_seed(seed)
 	trust = _trust_with_author(kid=kid, pubkey_raw=_pubkey_for_seed(seed), namespace="singular.*")
-	result = verify_author_claim_for_module(claim, trust, "singular.api")
+	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is True
 	assert result.accepted_kid == kid
 	assert result.reason == ""
@@ -485,7 +485,7 @@ def test_verify_for_module_rejects_namespace_mismatch() -> None:
 		pubkey_raw=_pubkey_for_seed(seed),
 		namespace="singular.*",
 	)
-	result = verify_author_claim_for_module(claim, trust, "other.foo")
+	result = verify_author_claim_for_module(claim, trust, "other.foo", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is False
 	assert "does not cover module" in result.reason
 
@@ -503,7 +503,7 @@ def test_verify_for_module_rejects_untrusted_author_kid() -> None:
 		pubkey_raw=_pubkey_for_seed(trusted_seed),
 		namespace="singular.*",
 	)
-	result = verify_author_claim_for_module(claim, trust, "singular.api")
+	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is False
 	# Crypto verification fails because the trust store doesn't have
 	# the interloper's pubkey.  The early "no signature verifies"
@@ -531,7 +531,7 @@ def test_verify_for_module_rejects_signer_with_wrong_role() -> None:
 		},
 		revoked_kids=frozenset(),
 	)
-	result = verify_author_claim_for_module(claim, trust, "singular.api")
+	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is False
 	# Trust authorizes no author-role kids for the namespace.
 	assert "no author-role kids" in result.reason
@@ -552,7 +552,7 @@ def test_verify_for_module_rejects_revoked_author() -> None:
 		},
 		revoked_kids=frozenset({kid}),
 	)
-	result = verify_author_claim_for_module(claim, trust, "singular.api")
+	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is False
 	# Revocation removes the kid from allowed_authors_for_module →
 	# no author-role kids left for this namespace.
@@ -573,7 +573,7 @@ def test_verify_for_module_multi_signature_first_trusted_wins() -> None:
 		pubkey_raw=_pubkey_for_seed(trusted_seed),
 		namespace="singular.*",
 	)
-	result = verify_author_claim_for_module(claim, trust, "singular.api")
+	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is True
 	assert result.accepted_kid == _kid_for_seed(trusted_seed)
 
@@ -591,7 +591,7 @@ def test_verify_for_module_exact_namespace_match() -> None:
 		pubkey_raw=_pubkey_for_seed(seed),
 		namespace="singular",
 	)
-	result = verify_author_claim_for_module(claim, trust, "singular")
+	result = verify_author_claim_for_module(claim, trust, "singular", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is True
 
 
@@ -739,6 +739,114 @@ def test_strict_v1_rejects_v2_envelope() -> None:
 		load_author_claim_json(json.dumps(envelope))
 
 
+# ── Package identity pinning (HIGH security pin) ──────────────────
+
+
+def test_verify_rejects_package_id_mismatch() -> None:
+	"""HIGH SECURITY PIN: an author claim for package 'evil' must not
+	pass verification when the caller expects package 'singular',
+	even if other gates align.  Without this gate a replay/substitution
+	attack could pass off an unrelated package's claim for the
+	target module."""
+	seed = _seed("pushcoin_author")
+	# Claim is for package "evil".
+	claim = make_author_claim(_example_body(package_id="evil"), seed)
+	kid = _kid_for_seed(seed)
+	trust = _trust_with_author(kid=kid, pubkey_raw=_pubkey_for_seed(seed))
+	# Caller expects "singular" → reject.
+	result = verify_author_claim_for_module(
+		claim, trust, "singular.api",
+		expected_package_id="singular", expected_version="0.3.0",
+	)
+	assert result.ok is False
+	assert "package_id" in result.reason
+	assert "evil" in result.reason
+
+
+def test_verify_rejects_version_mismatch() -> None:
+	"""HIGH SECURITY PIN: a claim for an older version must not pass
+	verification when the caller expects a newer version (downgrade
+	attack)."""
+	seed = _seed("pushcoin_author")
+	# Claim is for v0.2.0; caller expects v0.3.0.
+	claim = make_author_claim(_example_body(version="0.2.0"), seed)
+	kid = _kid_for_seed(seed)
+	trust = _trust_with_author(kid=kid, pubkey_raw=_pubkey_for_seed(seed))
+	result = verify_author_claim_for_module(
+		claim, trust, "singular.api",
+		expected_package_id="singular", expected_version="0.3.0",
+	)
+	assert result.ok is False
+	assert "version" in result.reason
+	assert "0.2.0" in result.reason
+
+
+# ── validate_body_shape (emit-side contract) ───────────────────────
+
+
+def test_sign_rejects_invalid_schema_version() -> None:
+	"""Hand-built dataclass with schema_version != 1 fails at sign
+	time (caller cannot smuggle a malformed body past the
+	signature)."""
+	bad_body = AuthorClaimBody(
+		schema_version=0,  # invalid
+		package_id="x", version="0.1.0", namespaces=("x",),
+		source_content_id="sha256:" + ("a" * 64),
+		required_deps=(),
+		target_class="release", release_utc="2026-05-18T00:00:00Z",
+	)
+	with pytest.raises(ValueError, match="schema_version"):
+		body_signing_bytes(bad_body)
+
+
+def test_sign_rejects_empty_package_id() -> None:
+	bad_body = AuthorClaimBody(
+		schema_version=1, package_id="",  # empty
+		version="0.1.0", namespaces=("x",),
+		source_content_id="sha256:" + ("a" * 64),
+		required_deps=(),
+		target_class="release", release_utc="2026-05-18T00:00:00Z",
+	)
+	with pytest.raises(ValueError, match="package_id"):
+		body_signing_bytes(bad_body)
+
+
+def test_sign_rejects_bad_sci_shape() -> None:
+	bad_body = AuthorClaimBody(
+		schema_version=1, package_id="x", version="0.1.0",
+		namespaces=("x",),
+		source_content_id="not-a-sha",   # malformed
+		required_deps=(),
+		target_class="release", release_utc="2026-05-18T00:00:00Z",
+	)
+	with pytest.raises(ValueError, match="source_content_id"):
+		body_signing_bytes(bad_body)
+
+
+def test_sign_rejects_empty_namespaces() -> None:
+	bad_body = AuthorClaimBody(
+		schema_version=1, package_id="x", version="0.1.0",
+		namespaces=(),   # empty
+		source_content_id="sha256:" + ("a" * 64),
+		required_deps=(),
+		target_class="release", release_utc="2026-05-18T00:00:00Z",
+	)
+	with pytest.raises(ValueError, match="namespaces"):
+		body_signing_bytes(bad_body)
+
+
+def test_sign_rejects_empty_dep_version_range() -> None:
+	bad_body = AuthorClaimBody(
+		schema_version=1, package_id="x", version="0.1.0",
+		namespaces=("x",),
+		source_content_id="sha256:" + ("a" * 64),
+		required_deps=(RequiredDep(name="foo", version_range=""),),
+		target_class="release", release_utc="2026-05-18T00:00:00Z",
+	)
+	with pytest.raises(ValueError, match="version_range"):
+		body_signing_bytes(bad_body)
+
+
 # ── End-to-end via sidecar text ────────────────────────────────────
 
 
@@ -757,5 +865,5 @@ def test_end_to_end_via_json_sidecar(tmp_path: Path) -> None:
 		pubkey_raw=_pubkey_for_seed(seed),
 		namespace="singular.*",
 	)
-	result = verify_author_claim_for_module(reloaded, trust, "singular.api")
+	result = verify_author_claim_for_module(reloaded, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is True
