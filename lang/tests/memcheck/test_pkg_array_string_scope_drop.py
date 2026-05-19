@@ -234,7 +234,7 @@ def _sign_package(pkg_path: Path, pkg_id: str, version: str, tmp_path: Path, tru
 	"""Sign a .dmp and write .sig sidecar. Returns (kid, pub_b64)."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key()

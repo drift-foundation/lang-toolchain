@@ -52,9 +52,9 @@ def test_hir_funcs_exact_coverage(tmp_path: Path) -> None:
 	with an HIR body available. This test computes the eligible set from
 	the package signatures and asserts exact membership.
 	"""
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 	pkg_path = _build_stdlib_package(tmp_path)
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 
 	missing = []
 	extra = []
@@ -99,9 +99,9 @@ def test_hir_funcs_exact_coverage(tmp_path: Path) -> None:
 
 def test_hir_funcs_round_trip_decode(tmp_path: Path) -> None:
 	"""HIR function bodies survive encode→decode round-trip."""
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 	pkg_path = _build_stdlib_package(tmp_path)
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	decoded_total = 0
 	failed = []
 	for mid, mod in pkg.modules_by_id.items():
@@ -120,10 +120,10 @@ def test_hir_funcs_round_trip_decode(tmp_path: Path) -> None:
 
 def test_hir_funcs_format_int_structure(tmp_path: Path) -> None:
 	"""format_int HIR has expected structure (block with statements)."""
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 	from lang.driftc.stage1 import hir_nodes as H
 	pkg_path = _build_stdlib_package(tmp_path)
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	for mid, mod in pkg.modules_by_id.items():
 		if "format" not in mid:
 			continue
@@ -139,9 +139,9 @@ def test_hir_funcs_format_int_structure(tmp_path: Path) -> None:
 
 def test_hir_funcs_excludes_generics_and_wrappers(tmp_path: Path) -> None:
 	"""hir_funcs does not contain generic or wrapper functions."""
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 	pkg_path = _build_stdlib_package(tmp_path)
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	for mid, mod in pkg.modules_by_id.items():
 		hir = mod.payload.get("hir_funcs", {})
 		for sym in hir:

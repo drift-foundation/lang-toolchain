@@ -191,14 +191,14 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	type_table_fingerprint,
 )
 from lang.driftc.packages.type_table_link_v0 import decode_type_table_obj, import_type_tables_and_build_typeid_maps
-from lang.driftc.packages.provider_v0 import (
+from lang.driftc.packages.provider_v1 import (
 	PackageTrustPolicy,
 	collect_external_exports,
 	discover_package_files,
-	load_package_v0,
-	load_package_v0_with_policy,
+	load_package_v1,
+	load_package_v1_with_policy,
 )
-from lang.driftc.packages.trust_v0 import (
+from lang.driftc.packages.trust_v1 import (
 	TrustStore,
 	load_core_trust_store,
 	load_trust_store_json,
@@ -8080,7 +8080,7 @@ def main(argv: list[str] | None = None) -> int:
 		# - user-level trust store is an optional convenience layer
 		# - `driftc` is the final gatekeeper: verification happens at use time
 		project_trust_path = args.trust_store or (Path.cwd() / "drift" / "trust.json")
-		project_trust = TrustStore(keys_by_kid={}, allowed_kids_by_namespace={}, revoked_kids=set())
+		project_trust = TrustStore(keys_by_kid={}, roles_by_namespace={}, revoked_kids=frozenset())
 		if project_trust_path.exists():
 			project_trust = load_trust_store_json(project_trust_path)
 		elif args.trust_store is not None:
@@ -8167,17 +8167,29 @@ def main(argv: list[str] | None = None) -> int:
 				user_trust = load_trust_store_json(user_path)
 				merged_trust = merge_trust_stores(project_trust, user_trust)
 
-		allow_unsigned_roots: list[Path] = []
-		# Default local unsigned outputs directory (pinned).
-		allow_unsigned_roots.append((Path.cwd() / "build" / "drift" / "localpkgs").resolve())
+		allow_unverified_roots: list[Path] = []
+		# Default local unverified outputs directory (pinned): packages
+		# produced by this build itself, before they could possibly carry
+		# v1 sidecars, are loaded without trust verification.
+		allow_unverified_roots.append((Path.cwd() / "build" / "drift" / "localpkgs").resolve())
 		for p in list(args.allow_unsigned_from or []):
-			allow_unsigned_roots.append(p.resolve())
+			allow_unverified_roots.append(p.resolve())
 
+		# v1 policy: require_signatures is strict-on-by-default.  The
+		# legacy `--require-signatures` CLI flag (a `store_true` whose
+		# default was False under v0's silent-accept semantics) is
+		# ignored on the v1 path: the only scoped bypass is
+		# `allow_unverified_roots` (explicit path prefixes via
+		# `--allow-unsigned-from` and the implicit
+		# `build/drift/localpkgs` development location).  Honoring the
+		# flag would re-introduce the v0 default-unsafe behavior K
+		# flagged in the trust-v1 audit.  See work/drift-trust-model-audit
+		# for the strict-by-default rationale.
 		policy = PackageTrustPolicy(
 			trust_store=merged_trust,
 			core_trust_store=core_trust,
-			require_signatures=bool(args.require_signatures),
-			allow_unsigned_roots=allow_unsigned_roots,
+			require_signatures=True,
+			allow_unverified_roots=allow_unverified_roots,
 		)
 
 		# ── Parse --dep before discovery ──────────────────────────────
@@ -8320,11 +8332,155 @@ def main(argv: list[str] | None = None) -> int:
 				continue  # self-exclusion (source build of this package)
 			_candidate_files.append(_pf)
 
+		# ── v1 trust pre-pass: build per-package resolved closures ────
+		# The v1 cert-claim verifier enforces O3 by checking that the
+		# certifier's `dep_graph` covers the consumer's actual resolved
+		# closure for each package.  driftc is an exact loader, so the
+		# consumer's closure for a package P is the identities of P's
+		# transitive `required_deps` -- every such dep is already in
+		# `_candidate_files` (the transitive sanity check below verifies
+		# the allowlist is complete; here we just stamp identities and
+		# walk the declared `required_deps`).
+		#
+		# Pass 1 below loads each candidate format-only via
+		# `load_package_v1` (no trust gate) so we have its manifest +
+		# bytes; pass 2 calls `load_package_v1_with_policy` with the
+		# pre-computed `resolved_closure` so the cert-claim verifier
+		# can run a real closure check.  Without this, the closure
+		# falls back to `[]` and O3 is effectively unenforced -- the
+		# blocker K identified.
+		from lang.driftc.packages.cert_claim_v1 import ResolvedDep as _ResolvedDep
+		from lang.driftc.packages.closure_walk import build_resolved_closure as _build_resolved_closure
+		from lang.driftc.packages.provider_v1 import load_package_v1 as _load_pkg_v1_no_policy
+
+		# (package_id, version) -> (LoadedPackage, bytes, ResolvedDep|None)
+		_prepass: dict[tuple[str, str], tuple[object, bytes, "_ResolvedDep | None"]] = {}
+		# (package_id, version) -> Path  (so we can report per-path errors)
+		_prepass_path: dict[tuple[str, str], Path] = {}
+
 		for pkg_path in _candidate_files:
-			# Integrity + trust verification happens here, only for
-			# packages that matched the --dep allowlist.
+			# Best-effort pre-pass: any load error here is deliberately
+			# swallowed and re-surfaced by the verify pass below.  This
+			# keeps a corrupt candidate from short-circuiting closure
+			# stamping for the OTHER candidates and preserves callers
+			# that mock `load_package_v1_with_policy` (the verify-pass
+			# entrypoint) without also needing to mock the pre-pass.
 			try:
-				_loaded = load_package_v0_with_policy(pkg_path, policy=policy)
+				_pre_pkg = _load_pkg_v1_no_policy(pkg_path)
+			except Exception:
+				continue
+			# Compute uncompressed bytes for sha256 (re-used by the
+			# verify pass via `pkg_bytes=`).
+			if pkg_path.suffix == ".zdmp":
+				from lang.driftc.packages.zdmp import load_zdmp_cached as _load_zdmp
+				try:
+					_pre_data = _load_zdmp(pkg_path, expected_sha256=None)
+				except Exception:
+					_dmp_sib = pkg_path.with_suffix(".dmp")
+					if _dmp_sib.exists():
+						try:
+							_pre_data = _dmp_sib.read_bytes()
+						except OSError:
+							continue
+					else:
+						continue
+			else:
+				try:
+					_pre_data = pkg_path.read_bytes()
+				except OSError:
+					continue
+			_pre_pid = _pre_pkg.manifest.get("package_id")
+			_pre_ver = _pre_pkg.manifest.get("package_version")
+			_pre_sci = _pre_pkg.manifest.get("source_content_id")
+			if not isinstance(_pre_pid, str) or not isinstance(_pre_ver, str):
+				continue
+			# Identity is only stamped when SCI is present in the manifest.
+			# Packages under `allow_unverified_roots` may lack SCI and won't
+			# be verified through the closure path anyway -- the closure
+			# walker treats a missing identity as a defensive skip, matching
+			# the unverified-bypass semantics in `provider_v1`.
+			import hashlib as _hl
+			_pre_sha = "sha256:" + _hl.sha256(_pre_data).hexdigest()
+			_pre_rd: "_ResolvedDep | None"
+			if isinstance(_pre_sci, str) and _pre_sci.startswith("sha256:"):
+				_pre_rd = _ResolvedDep(
+					package_id=_pre_pid,
+					version=_pre_ver,
+					artifact_sha256=_pre_sha,
+					source_content_id=_pre_sci,
+				)
+			else:
+				_pre_rd = None
+			_prepass[(_pre_pid, _pre_ver)] = (_pre_pkg, _pre_data, _pre_rd)
+			_prepass_path[(_pre_pid, _pre_ver)] = pkg_path
+
+		def _build_closure_for(start_pkg: object) -> list[_ResolvedDep]:
+			"""Wrap `lang.driftc.packages.closure_walk.build_resolved_closure`
+			against this driftc invocation's `_prepass` and `_version_pins`.
+
+			The walker logic lives in a separate module so the
+			HIGH #4 fail-closed contract (raise on missing pin /
+			missing pre-pass entry / missing SCI) can be exercised
+			by a direct regression test without spinning up the
+			full compiler driver.
+			"""
+			_start_pid = (
+				start_pkg.manifest.get("package_id", "?")
+				if isinstance(getattr(start_pkg, "manifest", None), dict)
+				else "?"
+			)
+			return _build_resolved_closure(
+				start_pkg_id=_start_pid,
+				start_required_deps=getattr(start_pkg, "required_deps", []) or [],
+				prepass=_prepass,
+				version_pins=_version_pins,
+				self_pkg_id=_self_pkg_id,
+			)
+
+		for pkg_path in _candidate_files:
+			# Verify pass: trust gate runs with a real resolved_closure
+			# computed from the pre-pass so the cert-claim verifier can
+			# enforce O3.  `pkg_bytes` re-uses the pre-pass-decompressed
+			# data so we don't read .zdmp twice.
+			# Locate this candidate's pre-pass entry (if any) so we can
+			# reuse the decompressed bytes and pass a real
+			# resolved_closure.  When the pre-pass dropped the
+			# candidate (corrupt file / missing manifest fields), we
+			# LEAVE `resolved_closure` ABSENT from `_v1_kwargs` so
+			# provider_v1 receives the kwarg-default `None`.  That
+			# triggers provider_v1's missing-closure fail-closed for
+			# any package declaring required_deps; leaf packages
+			# (no required_deps) accept the None and load normally.
+			# Substituting an explicit `[]` here would defeat the
+			# fail-closed guard entirely.
+			_pre_key: tuple[str, str] | None = None
+			for _k, _p in _prepass_path.items():
+				if _p == pkg_path:
+					_pre_key = _k
+					break
+			try:
+				_v1_kwargs: dict = {}
+				if _pre_key is not None:
+					_pre_pkg_obj, _pre_data_for, _ = _prepass[_pre_key]
+					_v1_kwargs["pkg_bytes"] = _pre_data_for
+					# _build_closure_for raises ValueError when the
+					# closure can't be fully resolved (missing pin,
+					# missing pre-pass entry, or a dep loaded without
+					# SCI under allow_unverified_roots).  The raise is
+					# caught in the same try block as the trust-gate
+					# below so the user sees one consistent
+					# package-error diagnostic.
+					_v1_kwargs["resolved_closure"] = _build_closure_for(_pre_pkg_obj)
+				# Otherwise: leave `resolved_closure` ABSENT (do NOT
+				# substitute `[]`).  provider_v1 reads a missing
+				# closure as "caller did not compute one" and fails
+				# closed for any package declaring required_deps;
+				# silently passing `[]` would let a deps-having
+				# package whose pre-pass dropped (corrupt artifact /
+				# missing manifest fields) escape O3 entirely.  Leaf
+				# packages (no required_deps) accept the None-default
+				# and load normally.
+				_loaded = load_package_v1_with_policy(pkg_path, policy=policy, **_v1_kwargs)
 			except (ValueError, OSError) as err:
 				msg = str(err)
 				if args.json:

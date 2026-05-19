@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import main as driftc_main
-from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from lang.drift.crypto import compute_ed25519_kid
 from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
 from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
 

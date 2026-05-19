@@ -23,7 +23,7 @@ import pytest
 
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import main as driftc_main
-from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from lang.drift.crypto import compute_ed25519_kid
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization

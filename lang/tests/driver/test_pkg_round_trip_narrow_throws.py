@@ -2,7 +2,7 @@
 """Pin the producer→consumer round-trip of `FnSignature.declared_throws_event_fqns`.
 
 Builds a tiny producer package with `pub fn f() throws E -> Int` and:
-  1. Loads the emitted `.dmp` via `load_package_v0`, finds the signature
+  1. Loads the emitted `.dmp` via `load_package_v1`, finds the signature
      entry for `f` in the module payload, and asserts the raw
      `declared_throws_event_fqns` field reflects the producer's
      `[<producer_pkg>:E]`.  Exercises producer-emit (Step C).
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 from lang.driftc.packages.provisional_dmir_v0 import (
 	decode_declared_throws_event_fqns,
 )
@@ -39,7 +39,7 @@ def _build_producer_pkg(tmp_path: Path) -> Path:
 	"""Build (and sign) a one-module producer pkg containing
 	`pub fn f() throws E`.  Returns the `.dmp` path."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	lib_dir = tmp_path / "producer_src"
 	lib_dir.mkdir(exist_ok=True)
@@ -112,7 +112,7 @@ def test_emit_carries_narrow_throws_event_fqns_in_payload(tmp_path: Path) -> Non
 	signature payload directly.  Asserts the field made it into the
 	encoded bytes -- not via any consumer-side compilation."""
 	dmp = _build_producer_pkg(tmp_path)
-	loaded = load_package_v0(dmp)
+	loaded = load_package_v1(dmp)
 	sd = _find_signature_for(loaded, "f")
 	raw = sd.get("declared_throws_event_fqns")
 	assert isinstance(raw, list), (
@@ -133,7 +133,7 @@ def test_decode_helper_round_trips_emitted_payload(tmp_path: Path) -> None:
 	use.  A regression in the validator (e.g., a future refactor that
 	loosens the shape check) fails this test."""
 	dmp = _build_producer_pkg(tmp_path)
-	loaded = load_package_v0(dmp)
+	loaded = load_package_v1(dmp)
 	sd = _find_signature_for(loaded, "f")
 	decoded = decode_declared_throws_event_fqns(
 		sd.get("declared_throws_event_fqns"),

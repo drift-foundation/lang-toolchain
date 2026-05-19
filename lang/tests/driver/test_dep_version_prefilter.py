@@ -67,7 +67,7 @@ class TestDepVersionPrefilter:
 		With the bug: compiler loads 1.0.0, fails on it.
 		With the fix: compiler only loads 2.0.0, never touches 1.0.0.
 
-		We verify by patching load_package_v0_with_policy to record which
+		We verify by patching load_package_v1_with_policy to record which
 		paths are loaded.
 		"""
 		pkg_root = tmp_path / "libs"
@@ -104,7 +104,7 @@ class TestDepVersionPrefilter:
 			"--emit-ir", str(ir_path),
 		]
 
-		with patch("lang.driftc.driftc.load_package_v0_with_policy", side_effect=_tracking_load):
+		with patch("lang.driftc.driftc.load_package_v1_with_policy", side_effect=_tracking_load):
 			rc = driftc_mod.main(argv)
 
 		# The build will fail because load raises — that's expected.

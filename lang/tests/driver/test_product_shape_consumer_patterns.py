@@ -117,7 +117,7 @@ def _emit_signed_package(
 	`<dest_pkg_root>/<package_id>/<package_version>/`. Writes (or merges
 	into) a trust file at `dest_trust_path`. Returns the dmp path."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	lib_dir = tmp_path / module_dir_name
 	lib_dir.mkdir(parents=True, exist_ok=True)

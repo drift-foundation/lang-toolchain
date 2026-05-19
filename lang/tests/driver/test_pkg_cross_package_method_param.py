@@ -176,7 +176,7 @@ def _b64(data: bytes) -> str:
 def _built_lib(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 	"""Build and sign mylib package once for the module."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	base = tmp_path_factory.mktemp("cross_pkg_method")
 	lib_dir = base / "lib"

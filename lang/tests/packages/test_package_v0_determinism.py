@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lang.driftc.driftc import main as driftc_main, host_word_bits
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -65,7 +65,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	assert b1 == b2
 
 	# Sanity: the artifact contains a deterministic manifest with the pinned markers.
-	pkg = load_package_v0(out1)
+	pkg = load_package_v1(out1)
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
 	assert pkg.manifest["payload_version"] == 2
 	assert pkg.manifest["unstable_format"] is True
@@ -85,7 +85,7 @@ fn main() nothrow -> Int{
 	out = tmp_path / "p.dmp"
 	assert driftc_main(["-M", str(tmp_path), str(tmp_path / "main.drift"), *_emit_pkg_args("test.inline-bytes"), "--emit-package", str(out)]) == 0
 
-	pkg = load_package_v0(out)
+	pkg = load_package_v1(out)
 	abi = pkg.manifest.get("abi_fingerprint")
 	assert isinstance(abi, dict)
 	expected_inline = (host_word_bits() // 8) * 4

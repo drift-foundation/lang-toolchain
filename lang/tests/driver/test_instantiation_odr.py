@@ -14,7 +14,7 @@ from lang.driftc.core.types_core import TypeTable
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.instantiation.key import build_instantiation_key, instantiation_key_str
 from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 
 
 def _emit_pkg_args(package_id: str) -> list[str]:
@@ -288,7 +288,7 @@ pub fn make() -> Box<Int> {{
 
 
 def _strip_generic_templates(pkg_path: Path, *, module_id: str) -> None:
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id[module_id]
 	iface_obj = dict(mod.interface)
 	payload_obj = dict(mod.payload)

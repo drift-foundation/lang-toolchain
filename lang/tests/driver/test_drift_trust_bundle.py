@@ -62,7 +62,7 @@ class TestCreateProfile:
 
 	def test_kid_matches_compiler(self) -> None:
 		"""KID in profile matches what the compiler verifier produces."""
-		from lang.driftc.packages.signature_v0 import compute_ed25519_kid as compiler_kid
+		from lang.drift.crypto import compute_ed25519_kid as compiler_kid
 		_seed, pub_raw, _kid = _make_key()
 		profile = create_author_profile(pubkey_raw=pub_raw, name="Test", namespaces=["test.*"])
 		assert profile.kid == compiler_kid(pub_raw)

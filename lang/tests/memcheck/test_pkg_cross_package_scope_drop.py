@@ -140,7 +140,7 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	"""Build, sign, and set up a package. Returns (pkg_root, trust_path)."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	lib_dir = tmp_path / "lib_src"
 	lib_dir.mkdir()

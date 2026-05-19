@@ -37,7 +37,7 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 	import base64
 	import json
 	import shutil

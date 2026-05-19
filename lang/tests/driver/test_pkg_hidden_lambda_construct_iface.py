@@ -56,7 +56,7 @@ def test_pkg_hidden_lambda_construct_iface_resolved(tmp_path: Path) -> None:
 
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	# Step 1: Build library package
 	lib_dir = tmp_path / "lib_src"

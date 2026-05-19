@@ -307,7 +307,7 @@ def _publish_pkg_with_inner_struct(tmp_path: Path) -> tuple[Path, str, str]:
 		return base64.b64encode(data).decode("ascii")
 
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	lib_dir = tmp_path / "producer_src"
 	lib_dir.mkdir(parents=True, exist_ok=True)

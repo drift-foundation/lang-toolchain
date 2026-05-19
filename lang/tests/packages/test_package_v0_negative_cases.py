@@ -7,7 +7,7 @@ import pytest
 
 from lang.driftc.driftc import main as driftc_main, host_word_bits
 from lang.driftc.packages import dmir_pkg_v0
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 
 
 def _patch_file_bytes(path: Path, offset: int, patch: bytes) -> None:
@@ -128,7 +128,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	pkg.write_bytes(bytes(corrupted))
 
 	with pytest.raises(ValueError, match="blob sha256 mismatch"):
-		load_package_v0(pkg)
+		load_package_v1(pkg)
 
 
 def test_driftc_rejects_duplicate_module_id_across_packages(tmp_path: Path) -> None:

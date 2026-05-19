@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lang.driftc.driftc import main as driftc_main
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -42,7 +42,7 @@ pub fn add(a: Int, b: Int) -> Int {
 	argv = ["-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "lib" / "lib.drift"), "--package-id", "test.loader", "--package-version", "0.0.0", "--package-target", "test-target", "--emit-package", str(out)]
 	assert driftc_main(argv) == 0
 
-	pkg = load_package_v0(out)
+	pkg = load_package_v1(out)
 	assert pkg.manifest["format"] == "dmir-pkg"
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
 	assert "lib" in pkg.modules_by_id

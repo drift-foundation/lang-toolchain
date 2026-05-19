@@ -29,7 +29,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	"""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	stdlib_files = sorted(str(p) for p in STDLIB_DIR.rglob("*.drift"))
 	assert stdlib_files, "no stdlib .drift files"

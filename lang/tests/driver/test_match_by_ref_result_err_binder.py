@@ -236,7 +236,7 @@ def _build_errpkg(tmp_path: Path) -> tuple[Path, Path]:
 	and a `Result`-returning function.  Returns (pkg_root,
 	trust_path)."""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	lib_dir = tmp_path / "errpkg_src"
 	lib_dir.mkdir()

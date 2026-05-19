@@ -12,10 +12,10 @@ import pytest
 from lang.codegen.llvm.test_utils import host_word_bits
 from lang.driftc.driftc import _abi_fingerprint, main as driftc_main
 from lang.driftc.packages import dmir_pkg_v0
-from lang.driftc.packages.provider_v0 import discover_package_files
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import discover_package_files
+from lang.driftc.packages.provider_v1 import load_package_v1
 from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
-from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from lang.drift.crypto import compute_ed25519_kid
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -652,7 +652,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 
 	assert out1.read_bytes() == out2.read_bytes()
 
-	pkg = load_package_v0(out1)
+	pkg = load_package_v1(out1)
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
 	assert pkg.manifest["payload_version"] == 2
 	assert pkg.manifest["unstable_format"] is True
@@ -925,7 +925,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 		]
 	) == 0
 
-	pkg = load_package_v0(out)
+	pkg = load_package_v1(out)
 	assert pkg.manifest["payload_kind"] == "provisional-dmir"
 	assert set(pkg.modules_by_id.keys()) >= {"lib", "main"}
 
@@ -964,7 +964,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	)
 
 	# Load once to discover a concrete blob offset, then corrupt the blob bytes.
-	pkg_ok = load_package_v0(pkg_path)
+	pkg_ok = load_package_v1(pkg_path)
 	assert pkg_ok.toc, "package should have at least one blob"
 	blob = pkg_ok.toc[0]
 	# Flip one byte at the start of the blob.
@@ -972,7 +972,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_patch_file_bytes(pkg_path, blob.offset, bytes([orig[0] ^ 0xFF]))
 
 	with pytest.raises(ValueError, match="blob sha256 mismatch for"):
-		load_package_v0(pkg_path)
+		load_package_v1(pkg_path)
 
 
 def test_load_package_rejects_bad_manifest_hash(tmp_path: Path) -> None:
@@ -1005,7 +1005,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 
 	_patch_pkg_header(pkg_path, manifest_sha256=b"\0" * 32)
 	with pytest.raises(ValueError, match="manifest sha256 mismatch"):
-		load_package_v0(pkg_path)
+		load_package_v1(pkg_path)
 
 
 def test_load_package_rejects_bad_toc_hash(tmp_path: Path) -> None:
@@ -1038,7 +1038,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 
 	_patch_pkg_header(pkg_path, toc_sha256=b"\0" * 32)
 	with pytest.raises(ValueError, match="toc sha256 mismatch"):
-		load_package_v0(pkg_path)
+		load_package_v1(pkg_path)
 
 
 def test_load_package_rejects_duplicate_toc_blob_hash(tmp_path: Path) -> None:
@@ -1095,7 +1095,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 	_patch_pkg_header(pkg_path, toc_sha256=dmir_pkg_v0.sha256_bytes(toc_bytes))
 
 	with pytest.raises(ValueError, match="duplicate blob sha256 in toc"):
-		load_package_v0(pkg_path)
+		load_package_v1(pkg_path)
 
 
 def test_driftc_rejects_duplicate_module_id_across_packages(tmp_path: Path) -> None:
@@ -1940,7 +1940,7 @@ fn main() nothrow -> Int{
 
 def test_driftc_rejects_signature_missing_module_in_strict_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
 	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badmod")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badmod"]
 
 	iface_obj = dict(mod.interface)
@@ -3068,7 +3068,7 @@ def test_driftc_rejects_package_with_exported_value_missing_entrypoint_flag(tmp_
 	payload signature for `add` is not marked as an exported entrypoint.
 	"""
 	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badiface")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badiface"]
 
 	iface_obj = dict(mod.interface)
@@ -3163,7 +3163,7 @@ def test_driftc_rejects_package_with_exported_value_missing_interface_signature(
 	Interface table tightening: exported values must have interface signature entries.
 	"""
 	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badiface2")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badiface2"]
 
 	iface_obj = dict(mod.interface)
@@ -3248,7 +3248,7 @@ def test_driftc_rejects_package_with_exports_mismatch_between_interface_and_payl
 	Interface table tightening: interface exports must match payload exports exactly.
 	"""
 	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badiface3")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badiface3"]
 
 	iface_obj = dict(mod.interface)
@@ -3339,7 +3339,7 @@ def test_driftc_rejects_package_with_exported_exception_missing_schema(tmp_path:
 Interface completeness: exported exceptions must have interface schema entries.
 	"""
 	pkg_path = _emit_exception_pkg(tmp_path, module_id="acme.badexc")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badexc"]
 
 	iface_obj = dict(mod.interface)
@@ -3423,7 +3423,7 @@ def test_driftc_rejects_package_with_exported_variant_missing_schema(tmp_path: P
 Interface completeness: exported variants must have interface schema entries.
 	"""
 	pkg_path = _emit_optional_variant_pkg(tmp_path, module_id="acme.badvar")
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["acme.badvar"]
 
 	iface_obj = dict(mod.interface)
@@ -3538,7 +3538,7 @@ fn dummy() nothrow -> Int { return 0; }
 		)
 		== 0
 	)
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	mod = pkg.modules_by_id["m"]
 	iface_obj = dict(mod.interface)
 	payload_obj = dict(mod.payload)
@@ -4348,7 +4348,7 @@ def test_native_deps_manifest_roundtrip(tmp_path: Path) -> None:
 		]
 	)
 	assert rc == 0, "emit-package with --native-link-lib should succeed"
-	loaded = load_package_v0(pkg_path)
+	loaded = load_package_v1(pkg_path)
 	assert len(loaded.native_deps) == 2
 	assert loaded.native_deps[0].lib == "ssl"
 	assert loaded.native_deps[1].lib == "crypto"
@@ -4362,7 +4362,7 @@ def test_native_deps_manifest_roundtrip(tmp_path: Path) -> None:
 def test_native_deps_absent_is_empty(tmp_path: Path) -> None:
 	"""Load a package without native_deps — defaults to empty list."""
 	pkg_path = _emit_lib_pkg(tmp_path)
-	loaded = load_package_v0(pkg_path)
+	loaded = load_package_v1(pkg_path)
 	assert loaded.native_deps == []
 
 
@@ -4391,7 +4391,7 @@ def test_required_deps_manifest_roundtrip(tmp_path: Path) -> None:
 		]
 	)
 	assert rc == 0, "emit-package with --package-dep should succeed"
-	loaded = load_package_v0(pkg_path)
+	loaded = load_package_v1(pkg_path)
 	# LoadedPackage.required_deps (v3 field name).
 	assert len(loaded.required_deps) == 2
 	assert loaded.required_deps[0].name == "net.tls"
@@ -4546,7 +4546,7 @@ class TestConsumerAutoLink:
 def test_required_deps_absent_is_empty(tmp_path: Path) -> None:
 	"""Load a package without required_deps — defaults to empty list."""
 	pkg_path = _emit_lib_pkg(tmp_path)
-	loaded = load_package_v0(pkg_path)
+	loaded = load_package_v1(pkg_path)
 	assert loaded.required_deps == []
 
 
@@ -4595,7 +4595,7 @@ def test_native_deps_and_required_deps_combined(tmp_path: Path) -> None:
 		]
 	)
 	assert rc == 0
-	loaded = load_package_v0(pkg_path)
+	loaded = load_package_v1(pkg_path)
 	assert len(loaded.native_deps) == 1
 	assert loaded.native_deps[0].lib == "ssl"
 	assert len(loaded.required_deps) == 1
@@ -5735,7 +5735,7 @@ def test_required_deps_legacy_package_deps_key_rejected(tmp_path: Path) -> None:
 	write_dmir_pkg_v0(pkg_path, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
 
 	with pytest.raises(ValueError) as exc:
-		load_package_v0(pkg_path)
+		load_package_v1(pkg_path)
 	msg = str(exc.value)
 	assert "legacy `package_deps`" in msg
 	assert "0.29.0" in msg
@@ -5771,7 +5771,7 @@ def test_required_deps_malformed_range_rejected_at_load(tmp_path: Path) -> None:
 		}
 		write_dmir_pkg_v0(pkg_path, manifest_obj=manifest_obj, blobs={}, blob_types={}, blob_names={})
 		with pytest.raises(ValueError) as exc:
-			load_package_v0(pkg_path)
+			load_package_v1(pkg_path)
 		msg = str(exc.value)
 		assert "required_deps" in msg, (
 			f"diagnostic for bad version '{bad_ver}' must mention "

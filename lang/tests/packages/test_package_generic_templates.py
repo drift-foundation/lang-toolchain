@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from lang.driftc.driftc import main as driftc_main
-from lang.driftc.packages.provider_v0 import load_package_v0
+from lang.driftc.packages.provider_v1 import load_package_v1
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -79,7 +79,7 @@ implement<T> Show for Box<T> {
 	]
 	assert driftc_main(argv) == 0
 
-	pkg = load_package_v0(out)
+	pkg = load_package_v1(out)
 	lib_payload = pkg.modules_by_id["lib"].payload
 	templates = lib_payload.get("generic_templates")
 	assert isinstance(templates, list)

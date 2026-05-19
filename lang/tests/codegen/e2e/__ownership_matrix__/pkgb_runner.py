@@ -464,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
 		return 0
 
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	start = time.monotonic()
 	run_id = os.getpid()

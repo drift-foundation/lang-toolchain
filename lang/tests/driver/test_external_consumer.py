@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 
 from lang.driftc.driftc import main as driftc_main
-from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+from lang.drift.crypto import compute_ed25519_kid
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -1697,9 +1697,9 @@ def test_ext_cross_package_throw_impl_metadata(
 	thrower_pkg = _build_signed_thrower_pkg(tmp_path, keys)
 	_ = capsys.readouterr()
 
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 
-	pkg = load_package_v0(thrower_pkg)
+	pkg = load_package_v1(thrower_pkg)
 	mod = pkg.modules_by_id.get("acme.thrower")
 	assert mod is not None, "acme.thrower module not in package"
 	iface = mod.interface

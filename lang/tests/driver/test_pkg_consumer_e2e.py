@@ -154,7 +154,7 @@ def _publish_library_package(
 	from hashlib import sha256
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	src_dir = tmp_path / f"src_{package_id}"
 	src_dir.mkdir(parents=True, exist_ok=True)

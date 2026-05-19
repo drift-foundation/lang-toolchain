@@ -133,7 +133,7 @@ def _publish_signed_pkg(
 	dest_trust_path: Path,
 ) -> None:
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.driftc.packages.signature_v0 import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid
 
 	pkg_path = lib_dir / f"{package_id}.dmp"
 	rc = subprocess.run(

@@ -427,9 +427,9 @@ def _corrupt_pkg_payload(
 	from lang.driftc.packages.dmir_pkg_v0 import (
 		canonical_json_bytes, sha256_hex, write_dmir_pkg_v0,
 	)
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	manifest = dict(pkg.manifest)
 
 	# Find the payload blob sha for the target module.
@@ -694,11 +694,11 @@ def test_k4_stdlib_self_deploy_fingerprint_stability(
 		decode_trait_expr,
 		decode_type_expr,
 	)
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 
 	pkg_path = _build_stdlib_package(tmp_path)
 	_ = capsys.readouterr()  # drain captured output from build
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 
 	assert "std.containers" in pkg.modules_by_id, (
 		f"std.containers not found in package; modules: {list(pkg.modules_by_id.keys())}"
@@ -824,13 +824,13 @@ def test_k4_stdlib_deploy_consume_no_fingerprint_mismatch(
 		decode_generic_templates,
 		decode_type_expr,
 	)
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 
 	pkg_path = _build_stdlib_package(tmp_path)
 	_ = capsys.readouterr()  # drain build output
 
 	# Layer 1: directly verify HashSetIter…next fingerprint roundtrips.
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 	payload = pkg.modules_by_id["std.containers"].payload
 	templates = decode_generic_templates(payload.get("generic_templates"))
 	target_entry = None
@@ -1170,12 +1170,12 @@ def test_k11_tombstone_schema_preserved_after_link(
 	None on the host side even though the package schema has it.
 	"""
 	from lang.driftc.core.types_core import TypeTable
-	from lang.driftc.packages.provider_v0 import load_package_v0
+	from lang.driftc.packages.provider_v1 import load_package_v1
 	from lang.driftc.packages.type_table_link_v0 import import_type_tables_and_build_typeid_maps
 
 	pkg_path = _emit_tombstone_variant_pkg(tmp_path)
 	_ = capsys.readouterr()
-	pkg = load_package_v0(pkg_path)
+	pkg = load_package_v1(pkg_path)
 
 	# Extract the raw type_table dict from the package payload
 	# (same as driftc.py does when collecting pkg_tt_objs).
