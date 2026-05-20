@@ -1057,3 +1057,120 @@ def test_missing_suite_evidence_env_fails_closed(tmp_path: Path) -> None:
 	finally:
 		if prev is not None:
 			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev
+
+
+def test_suite_empty_evidence_requires_explicit_opt_in(tmp_path: Path) -> None:
+	"""Setting `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` to the empty-
+	bytes sentinel WITHOUT the explicit
+	`DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` opt-in is a
+	misconfiguration -- the deploy must refuse rather than stamp
+	the zero hash into a signed cert claim silently.
+	"""
+	import hashlib as _hl
+	from tools.drift_deploy.drift_deploy import DeployError
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	empty_sha = "sha256:" + _hl.sha256(b"").hexdigest()
+	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	prev_opt_in = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = empty_sha
+	deploy_cert_seed = _seed(0x44)
+	staged_pkg_root = tmp_path / "staged_pkg_root"
+	staged_pkg_root.mkdir(parents=True, exist_ok=True)
+	artifact_path = tmp_path / "staged_install" / "app.dmp"
+	artifact_path.parent.mkdir(parents=True, exist_ok=True)
+	artifact_path.write_bytes(b"placeholder")
+	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
+	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
+	try:
+		with pytest.raises(DeployError, match="DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"):
+			_emit_cert_claim_for_artifact(
+				artifact_path,
+				cert_key=cert_key_path,
+				package_id="app",
+				package_version="1.0.0",
+				target="linux-x86_64",
+				compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
+				source_content_id="sha256:" + ("a" * 64),
+				artifact_sha256="sha256:" + ("b" * 64),
+				resolved_deps=resolved_deps,
+				direct_dep_ids={"net.tls"},
+				staged_pkg_root=staged_pkg_root,
+				provenance_path=artifact_path.parent / "app.provenance.zst",
+			)
+	finally:
+		if prev_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_evidence
+		if prev_opt_in is not None:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_opt_in
+
+
+def test_suite_empty_evidence_accepted_with_explicit_opt_in(tmp_path: Path) -> None:
+	"""With BOTH `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256=<empty-sha>`
+	AND `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`, the deploy emits
+	the cert claim and logs a visible warning.  The resulting
+	cert claim carries the empty-bytes hash in
+	`cert_suite.result_evidence_sha256`.
+	"""
+	import hashlib as _hl
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	empty_sha = "sha256:" + _hl.sha256(b"").hexdigest()
+	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	prev_opt_in = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE")
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = empty_sha
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = "1"
+	deploy_cert_seed = _seed(0x55)
+	staged_pkg_root = tmp_path / "staged_pkg_root"
+	staged_pkg_root.mkdir(parents=True, exist_ok=True)
+	artifact_path = tmp_path / "staged_install" / "app.dmp"
+	artifact_path.parent.mkdir(parents=True, exist_ok=True)
+	artifact_path.write_bytes(b"placeholder")
+	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
+	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
+	try:
+		cert_claim_path = _emit_cert_claim_for_artifact(
+			artifact_path,
+			cert_key=cert_key_path,
+			package_id="app",
+			package_version="1.0.0",
+			target="linux-x86_64",
+			compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
+			source_content_id="sha256:" + ("a" * 64),
+			artifact_sha256="sha256:" + ("b" * 64),
+			resolved_deps=resolved_deps,
+			direct_dep_ids={"net.tls"},
+			staged_pkg_root=staged_pkg_root,
+			provenance_path=artifact_path.parent / "app.provenance.zst",
+		)
+		cc = load_cert_claim_json(cert_claim_path.read_text(encoding="utf-8"))
+		assert cc.body.cert_suite.result_evidence_sha256 == empty_sha
+	finally:
+		if prev_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_evidence
+		if prev_opt_in is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_opt_in

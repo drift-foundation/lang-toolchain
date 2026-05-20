@@ -1085,6 +1085,19 @@ def _emit_cert_claim_for_artifact(
 	# `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`; otherwise the cert
 	# claim would attest a suite ran with evidence that doesn't
 	# exist.
+	#
+	# The empty-bytes sentinel `sha256(b"")` is permitted, but ONLY
+	# when the operator explicitly opts in via
+	# `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`.  Naked-env supply of
+	# the sentinel is rejected so an operator who genuinely forgot to
+	# wire suite evidence can't silently ship "no evidence" by
+	# typing the zero hash.  When the opt-in is active, the deploy
+	# emits a clearly-labeled WARNING line to stderr so the choice
+	# is visible in the build log -- the policy is "suite chose no
+	# suite evidence," not "default no evidence."  `body.evidence_
+	# sha256` (the provenance-bundle digest) is unaffected and still
+	# fail-closed -- the sentinel here is suite-specific.
+	_EMPTY_SHA = "sha256:" + _hl.sha256(b"").hexdigest()
 	suite_evidence_env = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
 	if not suite_evidence_env:
 		raise DeployError(
@@ -1093,12 +1106,40 @@ def _emit_cert_claim_for_artifact(
 			f"is the sha256:<hex> digest of the cert suite's own "
 			f"evidence artifact (test logs / coverage report / vendor "
 			f"cert PDF / ...).  v1 cert claims do not accept a "
-			f"synthetic default in a signed body -- set the env var to "
-			f"the real digest of the evidence this suite produced, or "
-			f"to `sha256:" + _hl.sha256(b"").hexdigest() + f"` if and "
-			f"only if the suite explicitly produces no evidence "
-			f"artifact (rare; document the choice in your release "
-			f"runbook)."
+			f"synthetic default in a signed body.  Either set the env "
+			f"var to the real digest of the evidence this suite "
+			f"produced, OR -- when the suite legitimately produces no "
+			f"artifact -- set `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` "
+			f"AND `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256={_EMPTY_SHA}` "
+			f"together (the explicit opt-in)."
+		)
+	if suite_evidence_env == _EMPTY_SHA:
+		# The empty-bytes sentinel is permitted, but only with the
+		# explicit opt-in.  An operator who set the env var to the
+		# zero hash without the opt-in is treated as a misconfiguration
+		# rather than a legitimate "no evidence" assertion.
+		if os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE") != "1":
+			raise DeployError(
+				f"cert claim emission for '{package_id}@{package_version}': "
+				f"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256 was set to the "
+				f"empty-bytes sentinel ({_EMPTY_SHA}), but the explicit "
+				f"opt-in `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` is not "
+				f"set.  v1 treats this as a misconfiguration: the "
+				f"signed cert claim would carry a no-evidence sentinel "
+				f"without the operator visibly asserting that the "
+				f"suite genuinely produces no evidence.  Either supply "
+				f"the real evidence digest, or set "
+				f"DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1 to opt into the "
+				f"sentinel."
+			)
+		print(
+			f"warning: cert suite '{os.environ.get('DRIFT_DEPLOY_CERT_SUITE_ID', 'drift-deploy/v1')}' "
+			f"is being signed with the empty-evidence sentinel "
+			f"({_EMPTY_SHA}).  The cert claim will record 'suite "
+			f"chose no suite evidence' -- inspectors will see the "
+			f"zero hash in `cert_suite.result_evidence_sha256`.  "
+			f"Document this choice in the release runbook.",
+			file=sys.stderr,
 		)
 	cert_suite = CertSuite(
 		id=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID", "drift-deploy/v1"),

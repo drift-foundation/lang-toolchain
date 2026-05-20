@@ -685,6 +685,45 @@ the cryptographic anchor; a separate signature would just
 duplicate the same property at the cost of a second sidecar
 file.  Verification on the consumer side never reads the bundle.
 
+#### Suite-evidence digest vs. provenance-bundle digest
+
+`cert_suite.result_evidence_sha256` is a **separate** field from
+`body.evidence_sha256`.  The two carry independent digests:
+
+| Field                              | Digest of                                                        |
+| ---------------------------------- | ---------------------------------------------------------------- |
+| `body.evidence_sha256`             | the on-disk `.provenance.zst` (the run-level evidence bundle)    |
+| `body.cert_suite.result_evidence_sha256` | the suite's OWN evidence artifact (test logs, coverage report, vendor cert PDF, ...) |
+
+The provenance-bundle digest is enforced unconditionally and
+fail-closed (the run produced a provenance bundle; we bind its
+bytes).  The suite-evidence digest is provided by the operator
+via `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`.  v1 deliberately
+refuses to default this field to a synthetic constant — a signed
+cert claim that records "the suite ran with evidence" must point
+at a real evidence digest the operator supplied.
+
+For suites that legitimately produce no artifact (rare; some
+manual-review or attestation-only suites), the operator opts in
+explicitly:
+
+```text
+DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256=sha256:<empty-bytes-hash>
+DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1
+```
+
+Both env vars must be set together.  When the opt-in is active,
+the deploy logs a clearly-labeled warning ("cert suite ... is
+being signed with the empty-evidence sentinel") to stderr so the
+choice is visible in the build log.  Setting the env to the
+empty hash *without* the opt-in is treated as a misconfiguration
+and the deploy refuses.  The policy line: "suite chose no suite
+evidence," never "default no evidence."
+
+The two fields are independent: the provenance-bundle binding is
+on every cert claim and cannot be turned off; the suite-evidence
+sentinel only governs `result_evidence_sha256`.
+
 ---
 
 ## 4. Runtime enforcement: how the consumer verifies
