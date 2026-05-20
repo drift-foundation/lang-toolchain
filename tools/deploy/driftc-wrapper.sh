@@ -65,7 +65,21 @@ DRIFTC_ARGS=(--package-root "${DIST_ROOT}/lib/stdlib")
 if [[ -f "${STDLIB_DEP_FILE}" ]]; then
 	DRIFTC_ARGS+=(--dep "$(cat "${STDLIB_DEP_FILE}")")
 fi
-if [[ -n "${DRIFT_TRUST_STORE:-}" && -f "${DRIFT_TRUST_STORE}" ]]; then
+# Exists-before-injecting -- matches tools/deploy/pex_entry.py and
+# tools/drift_deploy/drift_deploy.py::_resolve_trust_store.
+#   - DRIFT_TRUST_STORE set + file exists -> forward.
+#   - DRIFT_TRUST_STORE set + file missing -> fail loud.  The env
+#     var is explicit intent; silently dropping it masked the
+#     cert-host net-tls staging failure.
+#   - DRIFT_TRUST_STORE unset -> do nothing; driftc picks up the
+#     ~/.config/drift/trust.json user-trust layer on its own
+#     (gated on existence in lang/driftc/driftc.py).
+if [[ -n "${DRIFT_TRUST_STORE:-}" ]]; then
+	if [[ ! -f "${DRIFT_TRUST_STORE}" ]]; then
+		echo "error: \$DRIFT_TRUST_STORE points at a path that does not exist: ${DRIFT_TRUST_STORE}" >&2
+		echo "hint: unset DRIFT_TRUST_STORE to let driftc fall through to its default user-trust layer, or repair the path." >&2
+		exit 1
+	fi
 	DRIFTC_ARGS+=(--trust-store "${DRIFT_TRUST_STORE}")
 fi
 

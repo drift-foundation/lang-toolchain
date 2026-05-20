@@ -142,10 +142,32 @@ def main() -> None:
 			stdlib_prefix.extend(["--dep", _stdlib_dep])
 		args = stdlib_prefix + args
 
-	# Forward optional user trust store.
+	# Forward optional user trust store.  Exists-before-injecting:
+	#   - DRIFT_TRUST_STORE set + file exists -> forward.
+	#   - DRIFT_TRUST_STORE set + file missing -> fail loud (env was
+	#     an explicit intent; silently dropping it masked the cert-
+	#     host net-tls bug).
+	#   - DRIFT_TRUST_STORE unset -> do nothing.  driftc has its own
+	#     `~/.config/drift/trust.json` user-trust merge (gated on
+	#     exists in `lang/driftc/driftc.py`); conflating that into
+	#     a `--trust-store` flag here would forward a non-existent
+	#     path to driftc on a clean host.
 	trust_store = os.environ.get("DRIFT_TRUST_STORE", "")
-	if trust_store and Path(trust_store).is_file():
-		args = ["--trust-store", trust_store] + args
+	if trust_store:
+		trust_path = Path(trust_store).expanduser()
+		if not trust_path.is_file():
+			print(
+				f"error: $DRIFT_TRUST_STORE points at a path that does "
+				f"not exist: {trust_path}",
+				file=sys.stderr,
+			)
+			print(
+				"hint: unset DRIFT_TRUST_STORE to let driftc fall through "
+				"to its default user-trust layer, or repair the path.",
+				file=sys.stderr,
+			)
+			sys.exit(1)
+		args = ["--trust-store", str(trust_path)] + args
 
 	from lang.driftc.driftc import main as driftc_main
 

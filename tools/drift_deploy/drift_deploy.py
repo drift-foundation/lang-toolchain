@@ -183,11 +183,52 @@ def _resolve_sign_key(args: argparse.Namespace) -> Path | None:
 
 
 def _resolve_trust_store(args: argparse.Namespace) -> Path | None:
+	"""Resolve the project trust store path, exists-before-injecting.
+
+	Contract (matches the deploy wrapper / pex_entry rule so the
+	whole toolchain behaves the same way):
+
+	  - Explicit `--trust-store`: caller asserted intent.  The path
+	    MUST exist; missing -> `DeployError` with a clear diagnostic.
+	    Silently forwarding a path that the driftc subprocess will
+	    reject is exactly the symptom the cert team flagged on the
+	    net-tls staging host.
+
+	  - `$DRIFT_TRUST_STORE` env var: env is an explicit intent too
+	    (the operator chose to set it).  Same rule: file must exist
+	    or we fail loud with the path that was set.
+
+	  - Neither: return `None`.  Do NOT default to
+	    `~/.config/drift/trust.json` or any other ambient location
+	    -- driftc itself reads the user-trust layer at compile time
+	    (gated on `Path.exists()` in `lang/driftc/driftc.py`).
+	    Conflating the user layer into the `--trust-store` flag we
+	    forward would force a non-existent path into the subprocess
+	    cmd line on a clean host, which is exactly what we're fixing.
+	"""
 	if args.trust_store:
-		return args.trust_store
-	env_path = os.environ.get("DRIFT_TRUST_STORE")
-	if env_path:
-		return Path(env_path)
+		path = Path(args.trust_store).expanduser()
+		if not path.exists():
+			raise DeployError(
+				f"--trust-store path does not exist: {path}.  "
+				f"Pass a path to an existing trust store JSON, or omit "
+				f"the flag to let driftc fall through to its default "
+				f"user-trust layer (~/.config/drift/trust.json, picked "
+				f"up automatically when it exists)."
+			)
+		return path
+	env_raw = os.environ.get("DRIFT_TRUST_STORE")
+	if env_raw:
+		path = Path(env_raw).expanduser()
+		if not path.exists():
+			raise DeployError(
+				f"$DRIFT_TRUST_STORE points at a path that does not "
+				f"exist: {path}.  The env var is treated as explicit "
+				f"intent -- unset it or repair the path.  (We do not "
+				f"silently fall through to the default; that masked the "
+				f"cert-host net-tls failure.)"
+			)
+		return path
 	return None
 
 

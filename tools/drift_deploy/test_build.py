@@ -2575,6 +2575,113 @@ class TestTildeExpansionDeploy:
 		assert "~" not in str(args.dest)
 
 
+class TestTrustStoreResolution:
+	"""Pin the exists-before-injecting contract for `_resolve_trust_store`.
+
+	Triggered by the cert-host net-tls staging failure: `drift deploy`
+	had been silently forwarding `--trust-store <missing-path>` to the
+	driftc subprocess, causing every package build to fail on a clean
+	host (no `~/.config/drift/trust.json`).  Contract per cert-team
+	spec:
+
+	  - explicit `--trust-store <missing>` -> DeployError (loud).
+	  - `$DRIFT_TRUST_STORE` set, path missing -> DeployError (loud).
+	  - both unset -> return None; driftc itself merges user trust
+	    from `~/.config/drift/trust.json` (gated on exists inside
+	    `lang/driftc/driftc.py`).
+	"""
+
+	def _parse(self, *argv: str):
+		from tools.drift_deploy.drift_deploy import build_arg_parser
+		return build_arg_parser().parse_args(list(argv))
+
+	def test_explicit_missing_path_raises(self, tmp_path: Path, monkeypatch):
+		"""--trust-store <missing> -> DeployError, NOT silent forward."""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store, DeployError
+		monkeypatch.delenv("DRIFT_TRUST_STORE", raising=False)
+		missing = tmp_path / "trust.json"
+		assert not missing.exists()
+		args = self._parse(f"--trust-store={missing}")
+		with pytest.raises(DeployError, match="does not exist"):
+			_resolve_trust_store(args)
+
+	def test_explicit_existing_path_returned(self, tmp_path: Path, monkeypatch):
+		"""--trust-store <existing> -> path returned untouched."""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store
+		monkeypatch.delenv("DRIFT_TRUST_STORE", raising=False)
+		trust_path = tmp_path / "trust.json"
+		trust_path.write_text('{"format": "drift-trust", "version": 1}', encoding="utf-8")
+		args = self._parse(f"--trust-store={trust_path}")
+		assert _resolve_trust_store(args) == trust_path
+
+	def test_env_missing_path_raises(self, tmp_path: Path, monkeypatch):
+		"""$DRIFT_TRUST_STORE <missing> -> DeployError; env was explicit intent."""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store, DeployError
+		missing = tmp_path / "no_such.json"
+		assert not missing.exists()
+		monkeypatch.setenv("DRIFT_TRUST_STORE", str(missing))
+		args = self._parse()
+		with pytest.raises(DeployError, match=r"DRIFT_TRUST_STORE.*does not exist"):
+			_resolve_trust_store(args)
+
+	def test_env_existing_path_returned(self, tmp_path: Path, monkeypatch):
+		"""$DRIFT_TRUST_STORE <existing> -> path returned."""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store
+		trust_path = tmp_path / "trust.json"
+		trust_path.write_text('{"format": "drift-trust", "version": 1}', encoding="utf-8")
+		monkeypatch.setenv("DRIFT_TRUST_STORE", str(trust_path))
+		args = self._parse()
+		assert _resolve_trust_store(args) == trust_path
+
+	def test_no_explicit_no_env_returns_none(self, monkeypatch):
+		"""Neither flag nor env -> None; do NOT default to ~/.config/drift/trust.json."""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store
+		monkeypatch.delenv("DRIFT_TRUST_STORE", raising=False)
+		args = self._parse()
+		assert _resolve_trust_store(args) is None
+
+	def test_clean_host_no_trust_store_flag_in_driftc_cmd(
+		self, tmp_path: Path, monkeypatch,
+	):
+		"""End-to-end regression: clean HOME + no env -> no `--trust-store`
+		token in the driftc cmd assembled by `build_package_cmd`.
+
+		Simulates a no-dep library deploy on a fresh cert host (the
+		net-tls staging scenario): HOME points at an empty tmp dir
+		(no `~/.config/drift/trust.json`) and `DRIFT_TRUST_STORE` is
+		unset.  `_resolve_trust_store` must return `None`, and the
+		driftc cmd must NOT carry `--trust-store`.
+		"""
+		from tools.drift_deploy.drift_deploy import _resolve_trust_store
+		from tools.drift_deploy.build_cmd import build_package_cmd
+		clean_home = tmp_path / "home"
+		clean_home.mkdir()
+		monkeypatch.setenv("HOME", str(clean_home))
+		monkeypatch.delenv("DRIFT_TRUST_STORE", raising=False)
+		# Sanity: clean host really is clean.
+		assert not (clean_home / ".config" / "drift" / "trust.json").exists()
+		args = self._parse()
+		resolved = _resolve_trust_store(args)
+		assert resolved is None, (
+			f"clean host with no flag + no env must yield None; "
+			f"got {resolved!r}"
+		)
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=tmp_path / "out.dmp",
+			manifest_dir=tmp_path,
+			package_roots=[],
+			trust_store=resolved,
+		)
+		assert "--trust-store" not in cmd, (
+			f"clean host: driftc cmd must not include --trust-store; got: {cmd}"
+		)
+
+
 class TestTildeExpansionPrepare:
 	def test_prepare_dest_tilde(self):
 		from tools.drift_deploy.drift_prepare import build_arg_parser
