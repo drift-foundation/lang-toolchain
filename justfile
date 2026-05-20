@@ -333,14 +333,20 @@ test-memcheck:
 	fi
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest -xvs lang/tests/memcheck
 
-# Drift deploy/build tooling tests (manifest, resolver, lockfile, build, deploy, prepare).
+# Drift deploy/build tooling tests (manifest, lockfile, build, prepare, resolver units).
+#
+# trust-v1: the legacy v0 deploy test files were deleted (their security
+# half is now covered by the v1 contract suite in `lang/tests/packages/`
+# -- test_author_claim_v1, test_cert_claim_v1, test_verify_v1,
+# test_v1_adversarial, test_c3_invariants).  The non-trust unit pieces
+# (semver + resolver-conflict) live in `test_resolver_unit.py`.
 drift-deploy-test:
 	# Ensure pytest is available in the venv
 	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v tools/drift_deploy/test_build.py tools/drift_deploy/test_deploy.py tools/drift_deploy/test_manifest.py tools/drift_deploy/test_prepare.py tools/drift_deploy/test_provenance.py tools/drift_deploy/test_resolver.py
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -v tools/drift_deploy/test_build.py tools/drift_deploy/test_drift_lock.py tools/drift_deploy/test_manifest.py tools/drift_deploy/test_prepare.py tools/drift_deploy/test_resolver_unit.py
 
 # External consumer fleet (signed package path, K4/K10-K14 guards).
 ext-consumer-test:
