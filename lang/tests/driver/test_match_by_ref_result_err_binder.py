@@ -270,9 +270,10 @@ pub fn open(host: String) nothrow -> core.Result<Int, inner.MyError> {
 }
 """)
 
-	pkg_root = tmp_path / "pkg_root" / "errpkg" / "0.1.0"
-	pkg_root.mkdir(parents=True)
-	dmp = pkg_root / "errpkg.dmp"
+	pkg_root_dir = tmp_path / "pkg_root" / "errpkg" / "0.1.0"
+	pkg_root_dir.mkdir(parents=True)
+	dmp = pkg_root_dir / "errpkg.dmp"
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	res = subprocess.run(
 		[
 			sys.executable, "-m", "lang.driftc",
@@ -280,34 +281,27 @@ pub fn open(host: String) nothrow -> core.Result<Int, inner.MyError> {
 			str(lib_dir / "inner.drift"), str(lib_dir / "lib.drift"),
 			"--package-id", "errpkg", "--package-version", "0.1.0",
 			"--package-target", "drift-dev",
+			"--source-content-id", _TEST_SCI,
 			"--emit-package", str(dmp), "--test-build-only",
 		],
 		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
 	)
 	assert res.returncode == 0, f"producer build failed:\n{res.stderr[-1500:]}"
 
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = dmp.read_bytes()
-	(dmp.with_suffix(".sig")).write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}, separators=(",", ":"), sort_keys=True))
-
+	# v1: sign + trust via shared helper.
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
+	trust_obj = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+	info = sign_v1_pkg_into_root(
+		pkg_path=dmp, package_id="errpkg", package_version="0.1.0",
+		namespace_glob="errpkg.*",
+		dest_pkg_root=tmp_path / "pkg_root",
+		merge_into_trust=trust_obj,
+	)
+	trust_obj["namespaces"]["std.*"] = {
+		"authors": [info["kid"]], "certifiers": [info["kid"]],
+	}
 	trust_path = tmp_path / "trust.json"
-	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 1,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"errpkg.*": [kid], "std.*": [kid]},
-		"revoked": [],
-	}, separators=(",", ":"), sort_keys=True))
+	trust_path.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))
 
 	return tmp_path / "pkg_root", trust_path
 

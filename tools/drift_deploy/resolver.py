@@ -306,19 +306,22 @@ def build_package_index(
 	Three mutually-exclusive verification modes:
 
 	**(1) Parse-only** (default): `trust_store=None`,
-	`run_snapshot=None`.  Read `.sig` / `.source-attestation`
-	fields without cryptographic verification; return whatever
-	discovery finds.  Used by strict mode (`drift build` /
-	`drift deploy` / `drift prepare` default), where the lock is
-	the authoritative trust root.
+	`run_snapshot=None`.  Read v1 author / cert claim sidecars
+	(`<pkg>.author-claim`, `<pkg>.cert-claim.<kid>.json`) for
+	their kid fields without running the full cryptographic
+	verification chain; return whatever discovery finds.  Used by
+	strict mode (`drift build` / `drift deploy` / `drift prepare`
+	default), where the lock is the authoritative trust root and
+	the consumer-side compiler load path re-verifies on its own.
 
 	**(2) Trust-store (producer / staging)**: `trust_store=...`.
 	Per-package cryptographic verification against orch's own
-	trust store.  Used by ORCH when staging packages into the run
-	libs root.  Failure is a HARD ERROR (`ResolutionError`) — the
-	package is not silently pruned, because fallback to an older
-	trusted in-range version would mask the exact package orch
-	staged for certification.
+	trust store via `verify_v1.verify_package_from_sidecars`.
+	Used by ORCH when staging packages into the run libs root.
+	Failure is a HARD ERROR (`ResolutionError`) -- the package is
+	not silently pruned, because fallback to an older trusted
+	in-range version would mask the exact package orch staged for
+	certification.
 
 	Three gates fire in order for each discovered `.dmp` / `.zdmp`
 	under this mode:

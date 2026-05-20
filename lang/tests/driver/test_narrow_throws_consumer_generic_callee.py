@@ -44,38 +44,35 @@ def _build_and_sign_pkg(
 	]
 	for fname in sources:
 		cmd.append(str(lib_dir / fname))
+	# v1 fixture: stamp SCI then delegate sign + trust to shared helper.
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd += [
 		"--package-id", pkg_id,
 		"--package-version", "0.1.0",
 		"--package-target", "drift-dev",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
 	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
 	assert res.returncode == 0, f"build of {pkg_id} failed:\n{res.stderr[-1500:]}"
 
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = dmp.read_bytes()
-	sig = priv.sign(pkg_bytes)
-	(dmp.with_suffix(".sig")).write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(sig).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}, separators=(",", ":"), sort_keys=True))
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
 	trust_path = tmp_path / "trust.json"
-	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {f"{pkg_id}.*": [kid], "dep_pkg.*": [kid], "std.*": [kid]},
-		"revoked": [],
-	}, separators=(",", ":"), sort_keys=True))
+	trust_obj = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+	info = sign_v1_pkg_into_root(
+		pkg_path=dmp, package_id=pkg_id, package_version="0.1.0",
+		namespace_glob=f"{pkg_id}.*",
+		dest_pkg_root=tmp_path / "pkg_root",
+		merge_into_trust=trust_obj,
+	)
+	# Add dep_pkg + std namespace coverage under the same kid (this
+	# fixture is same-key bootstrap; cross-pkg builds need all
+	# namespaces granted to the test kid).
+	kid_ = info["kid"]
+	for ns in ("dep_pkg.*", "std.*"):
+		trust_obj["namespaces"][ns] = {"authors": [kid_], "certifiers": [kid_]}
+	trust_path.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))
 	return tmp_path / "pkg_root", trust_path
 
 

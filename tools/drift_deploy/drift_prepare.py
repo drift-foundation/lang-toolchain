@@ -227,12 +227,12 @@ def _run_impl(args: argparse.Namespace) -> int:
 
 	# Build package index.  When the run is a `--check --source-
 	# rebuild` verification, load the trust store once and thread it
-	# into `build_package_index` so the `.sig` cryptographic
-	# verification + per-module-namespace allowlist enforcement
-	# runs before any resolved dep reaches `_compare_locks_for_check`.
-	# The write path (no `--check`) does not take the flag and keeps
-	# the parse-only index — the lock-author's identity is the trust
-	# anchor there.
+	# into `build_package_index` so the v1 author + cert claim
+	# cryptographic verification + per-module-namespace role-tagged
+	# allowlist enforcement runs before any resolved dep reaches
+	# `_compare_locks_for_check`.  The write path (no `--check`)
+	# does not take the flag and keeps the parse-only index -- the
+	# lock-author's identity is the trust anchor there.
 	# Source-rebuild `--check`: the orch-produced run snapshot is
 	# the trust authority.  Load it here so the same snapshot is
 	# shared across artifacts in a single --check invocation.  No

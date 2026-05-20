@@ -57,6 +57,11 @@ pub fn f() throws E -> Int { throw E(tag = "x"); }
 	pkg_root_dir = tmp_path / "pkg_root" / "producer_pkg" / "0.1.0"
 	pkg_root_dir.mkdir(parents=True, exist_ok=True)
 	dmp = pkg_root_dir / "producer_pkg.dmp"
+	# This test loads the .dmp via `load_package_v1` (the format-
+	# only loader, no trust gate), so v1 sidecars / trust JSON are
+	# not needed.  We still stamp `--source-content-id` so the
+	# manifest is v1-shape -- defensive in case downstream tests
+	# share this fixture and DO go through the trust gate.
 	cmd = [
 		sys.executable, "-m", "lang.driftc",
 		"--dev", "-M", str(lib_dir), "--stdlib-root", str(ROOT / "stdlib"),
@@ -64,27 +69,12 @@ pub fn f() throws E -> Int { throw E(tag = "x"); }
 		"--package-id", "producer_pkg",
 		"--package-version", "0.1.0",
 		"--package-target", "drift-dev",
+		"--source-content-id", "sha256:" + ("0" * 64),
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
 	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
 	assert res.returncode == 0, f"build of producer_pkg failed:\n{res.stderr[-1500:]}"
-
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = dmp.read_bytes()
-	sig = priv.sign(pkg_bytes)
-	(dmp.with_suffix(".sig")).write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(sig).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}, separators=(",", ":"), sort_keys=True))
 	return dmp
 
 

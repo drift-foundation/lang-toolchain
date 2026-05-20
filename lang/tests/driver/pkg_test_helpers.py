@@ -437,6 +437,7 @@ def sign_v1_pkg_into_root(
 	package_id: str,
 	package_version: str = "0.0.0",
 	namespace_glob: str | None = None,
+	extra_namespaces: tuple = (),
 	dest_pkg_root: Path,
 	dest_trust_path: Path | None = None,
 	merge_into_trust: dict | None = None,
@@ -543,12 +544,20 @@ def sign_v1_pkg_into_root(
 			dep_kind="direct",
 		))
 
+	# Author claim namespaces include the primary `namespace_glob`
+	# plus any `extra_namespaces` the caller passes (e.g. stdlib
+	# packages cover `std.*`, `lang.*`, `drift.*` together).  The
+	# v1 author-claim verifier requires the claim to cover every
+	# module the package exposes -- a `std.dmp` whose claim only
+	# names `std.*` fails when the consumer loads `lang.atomic`.
+	primary_ns = (namespace_glob,) if namespace_glob.endswith(".*") else (
+		namespace_glob, f"{namespace_glob}.*",
+	)
+	all_namespaces = tuple(primary_ns) + tuple(extra_namespaces)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
 		body=AuthorClaimBody(
 			schema_version=1, package_id=package_id, version=package_version,
-			namespaces=(namespace_glob,) if namespace_glob.endswith(".*") else (
-				namespace_glob, f"{namespace_glob}.*",
-			),
+			namespaces=all_namespaces,
 			source_content_id=sci,
 			required_deps=required_deps, target_class="library",
 			release_utc="2026-05-19T00:00:00Z",

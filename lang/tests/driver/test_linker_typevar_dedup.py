@@ -43,33 +43,15 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 	import shutil
 	from hashlib import sha256
 
-	priv = Ed25519PrivateKey.generate()
-	pub = priv.public_key()
-	pub_raw = pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-
 	empty_stdlib = tmp_path / "_empty_stdlib"
 	empty_stdlib.mkdir()
 	stdlib_dir = Path(str(stdlib))
-
-	def sign_and_stage(pkg_path, pkg_id, version):
-		dest = pkg_root / pkg_id / version
-		dest.mkdir(parents=True, exist_ok=True)
-		shutil.copy2(str(pkg_path), str(dest / f"{pkg_id}.dmp"))
-		pb = (dest / f"{pkg_id}.dmp").read_bytes()
-		(dest / f"{pkg_id}.sig").write_text(json.dumps({
-			"format": "dmir-pkg-sig", "version": 0,
-			"package_sha256": f"sha256:{sha256(pb).hexdigest()}",
-			"signatures": [{"algo": "ed25519", "kid": kid,
-				"sig": base64.b64encode(priv.sign(pb)).decode("ascii"),
-				"pubkey": pub_b64}],
-		}, separators=(",", ":"), sort_keys=True))
-
 	pkg_root = tmp_path / "libs"
 	pkg_root.mkdir()
 
-	# Build std package
+	_TEST_SCI = "sha256:" + ("0" * 64)
+
+	# Build std package with SCI stamp.
 	stdlib_files = sorted(str(p) for p in stdlib_dir.rglob("*.drift"))
 	std_pkg = tmp_path / "std.dmp"
 	res = subprocess.run(
@@ -78,23 +60,43 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 		 *stdlib_files,
 		 "--package-id", "std", "--package-version", "0.0.0-test",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(std_pkg), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=180,
 	)
 	assert res.returncode == 0, f"std build: {res.stderr[:300]}"
-	sign_and_stage(std_pkg, "std", "0.0.0-test")
 
+	# v1: sign + stage via shared helper (single kid plays author
+	# + certifier for both std.* and mylib.*).  The merged trust
+	# dict accumulates each package's namespace coverage so a
+	# single trust file authorises every package the consumer
+	# loads.
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
+	core_trust_obj = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+	std_info = sign_v1_pkg_into_root(
+		pkg_path=std_pkg, package_id="std", package_version="0.0.0-test",
+		namespace_glob="std.*",
+		# Stdlib also exposes `lang.*` and `drift.*` modules
+		# (e.g. lang.atomic).  The author claim must cover every
+		# namespace the package exposes or v1 verify rejects loads
+		# of uncovered modules.
+		extra_namespaces=("lang.*", "drift.*"),
+		target="test-target",
+		dest_pkg_root=pkg_root, merge_into_trust=core_trust_obj,
+	)
+	kid = std_info["kid"]
+	# Stdlib's bootstrap key also covers `lang.*` and `drift.*`.
+	for ns in ("lang.*", "drift.*"):
+		core_trust_obj["namespaces"][ns] = {
+			"authors": [kid], "certifiers": [kid],
+		}
 	core_trust = tmp_path / "core_trust.json"
-	core_trust.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "lang.*": [kid], "drift.*": [kid]},
-		"revoked": [],
-	}))
+	core_trust.write_text(json.dumps(core_trust_obj, separators=(",", ":"), sort_keys=True))
 
 	# Build lib that uses std.log (which internally uses Handle<Byte>
-	# in _enqueue_with_policy — the exact function that triggers the
-	# Copy proof failure when TypeVars are deduplicated incorrectly).
+	# in _enqueue_with_policy -- the exact function that triggers
+	# the Copy proof failure when TypeVars are deduplicated
+	# incorrectly).
 	lib_dir = tmp_path / "lib_src"
 	lib_dir.mkdir()
 	(lib_dir / "mylib.drift").write_text(
@@ -115,19 +117,29 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 		 "--target-word-bits", "64",
 		 "--package-id", "mylib", "--package-version", "0.1.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(lib_pkg), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=180,
 	)
 	assert res.returncode == 0, f"mylib build: {res.stderr[:300]}"
-	sign_and_stage(lib_pkg, "mylib", "0.1.0")
 
+	# Sign mylib via the same kid; merge into a fresh trust file
+	# that covers both std.* and mylib.*.
+	trust_obj = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+	# Reuse the same bootstrap kid for mylib by using the same priv
+	# seed -- but the helper generates a new key each call.  We
+	# accept different kids here because the consumer trust file
+	# below merges BOTH.
+	mylib_info = sign_v1_pkg_into_root(
+		pkg_path=lib_pkg, package_id="mylib", package_version="0.1.0",
+		namespace_glob="mylib.*", target="test-target",
+		dest_pkg_root=pkg_root, merge_into_trust=trust_obj,
+	)
+	# Authorise the std kid for std.* in the consumer's trust file.
+	trust_obj["keys"][kid] = {"algo": "ed25519", "pubkey": std_info["pub_b64"]}
+	trust_obj["namespaces"]["std.*"] = {"authors": [kid], "certifiers": [kid]}
 	trust = tmp_path / "trust.json"
-	trust.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "mylib.*": [kid]},
-		"revoked": [],
-	}))
+	trust.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))
 
 	# Consumer: loads both packages. The borrow checker runs on std.log
 	# functions recompiled from HIR. If Handle<T>'s Copy impl has a

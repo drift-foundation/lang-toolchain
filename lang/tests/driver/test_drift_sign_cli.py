@@ -213,13 +213,14 @@ pub fn add(a: Int, b: Int) -> Int {
 
 	trust = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {
 			kid: {"algo": "ed25519", "pubkey": base64.b64encode(pub_raw).decode("ascii")},
 		},
 		"namespaces": {
-			"lib.*": [kid],
+			"lib.*": {"authors": [kid], "certifiers": [kid]},
 		},
+		"revoked": [],
 	}
 	trust_path = tmp_path / "trust.json"
 	trust_path.write_text(json.dumps(trust, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
