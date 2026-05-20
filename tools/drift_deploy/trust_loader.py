@@ -4,9 +4,9 @@ Trust-store loading helper for drift deploy-side tools.
 
 `verify_lock_compatibility` and `_compare_locks_for_check` require a
 resolved `TrustStore` in `VERIFY_MODE_SOURCE_REBUILD` so the disk's
-artifact-signer and source-attestation-signer kids can be verified
-against the package's namespace allowlist (and against the revocation
-set).  This helper packages the same layering driftc itself uses
+v1 author-claim signer and cert-claim signer kids can be verified
+against the package's namespace allowlist per role (and against the
+revocation set).  This helper packages the same layering driftc itself uses
 (core + project + optional user), so every caller of the source-
 rebuild lane applies the same trust policy.
 

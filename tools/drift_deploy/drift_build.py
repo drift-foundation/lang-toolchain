@@ -603,6 +603,45 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 		if args.target is None:
 			args.target = "drift-dev"
 
+	# v1 requires every library's manifest to carry `source_content_id`.
+	# Compute it from declared sources here so library builds via
+	# `drift build` (not just `drift deploy`) emit a stamped .dmp the
+	# v1 verifier can consume.  Apps don't need SCI (no closure walk).
+	#
+	# Graceful fallback (matching `drift_deploy.py`): when the source
+	# tree isn't fully resolvable (test mocks, partial trees), log a
+	# warning and proceed without an SCI stamp.  The v1 verifier
+	# requires the stamp at consume time, but the build itself doesn't
+	# need it -- callers that rely on v1 verification will see the
+	# missing stamp surfaced as a consumer-side error.
+	sci: str | None = None
+	if art.kind == "library":
+		from lang.driftc.packages.source_content_id import (
+			compute_artifact_source_content_id,
+		)
+		project_root = manifest_dir.parent
+		try:
+			sci = compute_artifact_source_content_id(
+				kind="library",
+				package_id=art.name,
+				version=art.version,
+				module_namespace=(art.module_namespace or art.name),
+				entry_module=art.entry_module,
+				module_paths=sorted(art.modules),
+				package_deps=[(d.name, d.version) for d in (art.package_deps or [])],
+				native_deps=[],
+				unsafe=getattr(art, "unsafe", False),
+				asset_paths=[],
+				target_class=args.target,
+				source_root=project_root,
+			)
+		except (FileNotFoundError, ValueError) as e:
+			print(
+				f"warning: source_content_id skipped for '{art.name}': {e}",
+				file=sys.stderr,
+			)
+			sci = None
+
 	# Build command.
 	if art.kind == "library":
 		cmd = build_package_cmd(
@@ -615,6 +654,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 			package_roots=package_roots,
 			native_lib_paths=native_lib_paths,
 			extra_flags=extra_flags or None,
+			source_content_id=sci,
 		)
 	else:
 		cmd = build_app_cmd(

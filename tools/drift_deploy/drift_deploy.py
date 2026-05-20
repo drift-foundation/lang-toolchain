@@ -455,9 +455,11 @@ def _build_package(
 
 	`source_content_id`, if provided, is stamped verbatim into the
 	emitted .dmp manifest.  Computed by the caller from stable source
-	inputs (see `source_attestation.compute_artifact_source_content_id`)
+	inputs (see
+	`lang/driftc/packages/source_content_id.compute_artifact_source_content_id`)
 	so the same value can later be reused when emitting the
-	`.source-attestation` sidecar without re-walking the source tree.
+	v1 author + cert claim sidecars without re-walking the source
+	tree.
 	"""
 	out_dmp = staged_install / f"{art.name}.dmp"
 	staged_install.mkdir(parents=True, exist_ok=True)
@@ -572,11 +574,9 @@ def _collect_dep_keys(
 	"""Collect dependency-signer kids from v1 sidecars for the
 	provenance bundle.
 
-	v0 stored pubkey bytes inline in the `.sig` envelope so this
-	helper used to return `kid -> {algo, kid, pubkey}`.  Under v1
-	pubkeys live in the trust store, NOT in sidecars: author /
+	v1 pubkeys live in the trust store, NOT in sidecars: author /
 	cert claims carry kids + signatures but reference pubkeys
-	indirectly.  The provenance bundle is informational (the
+	indirectly.  This helper returns the kids alone.  The provenance bundle is informational (the
 	cert claim's `dep_graph` is the load-bearing record of who
 	attested each dep), so it's enough to record the kids and
 	roles here -- consumers that need pubkey bytes resolve them
@@ -966,10 +966,9 @@ def _emit_cert_claim_for_artifact(
 	# defeating O3 even when SCI is present.
 	#
 	# Field-name swap reminder: under the v4 lock schema the slot
-	# called `author_key` carries the CERT kid (the artifact signer
-	# in v0; the cert-claim signer in v1) and `source_attestation_key`
-	# carries the AUTHOR kid (the source-attestation signer in v0;
-	# the author-claim signer in v1).  The lockfile-v5 rename
+	# called `author_key` carries the CERT kid (the cert-claim
+	# signer in v1) and `source_attestation_key` carries the AUTHOR
+	# kid (the author-claim signer in v1).  The lockfile-v5 rename
 	# (deferred) will flip the spelling; the semantics are already
 	# v1.
 	missing_sci: list[str] = []
@@ -1076,23 +1075,63 @@ def _emit_cert_claim_for_artifact(
 			f"whose v1 author + cert sidecars resolve cleanly."
 		)
 
+	# `cert_suite.result_evidence_sha256` is the digest of the *suite*'s
+	# own evidence artifact (test logs, coverage report, vendor cert
+	# PDF, ...).  It is separate from `body.evidence_sha256`, which
+	# binds the run-level `.provenance.zst` bundle (§3.6 of trust-v1).
+	# Fail closed: a signed cert claim must NOT carry a synthetic
+	# constant in either evidence field.  Callers (or the operator
+	# environment) must supply
+	# `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`; otherwise the cert
+	# claim would attest a suite ran with evidence that doesn't
+	# exist.
+	suite_evidence_env = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	if not suite_evidence_env:
+		raise DeployError(
+			f"cert claim emission for '{package_id}@{package_version}': "
+			f"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256 is required.  This "
+			f"is the sha256:<hex> digest of the cert suite's own "
+			f"evidence artifact (test logs / coverage report / vendor "
+			f"cert PDF / ...).  v1 cert claims do not accept a "
+			f"synthetic default in a signed body -- set the env var to "
+			f"the real digest of the evidence this suite produced, or "
+			f"to `sha256:" + _hl.sha256(b"").hexdigest() + f"` if and "
+			f"only if the suite explicitly produces no evidence "
+			f"artifact (rare; document the choice in your release "
+			f"runbook)."
+		)
 	cert_suite = CertSuite(
 		id=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID", "drift-deploy/v1"),
 		version=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_VERSION", "1.0"),
 		result=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT", "pass"),
-		result_evidence_sha256=os.environ.get(
-			"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256",
-			"sha256:" + _hl.sha256(b"drift-deploy-v1-default-evidence").hexdigest(),
-		),
+		result_evidence_sha256=suite_evidence_env,
 	)
 
-	# `evidence_sha256` binds the provenance bundle to the cert claim
-	# without re-signing it -- the bundle stays unsigned but its bytes
-	# are pinned by the cert claim's body.
-	if provenance_path is not None and provenance_path.is_file():
-		evidence_sha = "sha256:" + _hl.sha256(provenance_path.read_bytes()).hexdigest()
-	else:
-		evidence_sha = "sha256:" + _hl.sha256(b"").hexdigest()
+	# `evidence_sha256` cryptographically binds the on-disk provenance
+	# bundle bytes (`.provenance.zst` as written, i.e. the compressed
+	# bytes the consumer receives) into the cert claim's signed body.
+	# The bundle stays UNSIGNED on disk; its bytes are pinned through
+	# the cert claim's signature.  Without this binding a hostile
+	# mirror could substitute the provenance bundle while leaving the
+	# cert claim intact, and an inspector would read attacker-chosen
+	# evidence under a trusted certifier's name (see Scenario E /
+	# attack-coverage matrix in trust-v1.md).
+	#
+	# Fail closed: if the deploy did not produce a provenance bundle,
+	# we refuse to emit the cert claim.  The cert suite asserts the
+	# certifier ran a suite WITH evidence; pinning an empty / sentinel
+	# digest would let the cert claim attest evidence that doesn't
+	# actually exist on disk.
+	if provenance_path is None or not provenance_path.is_file():
+		raise DeployError(
+			f"cert claim emission for '{package_id}@{package_version}': "
+			f"required provenance bundle is missing "
+			f"(expected at {provenance_path!r}).  v1 cert claims bind "
+			f"`evidence_sha256` to the on-disk `.provenance.zst` bytes; "
+			f"there is no acceptable empty-evidence sentinel.  Re-run "
+			f"the deploy with the provenance build step intact."
+		)
+	evidence_sha = "sha256:" + _hl.sha256(provenance_path.read_bytes()).hexdigest()
 
 	body = CertClaimBody(
 		schema_version=1,

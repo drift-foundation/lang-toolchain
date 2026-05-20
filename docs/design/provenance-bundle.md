@@ -1,5 +1,13 @@
 # Provenance Bundle
 
+> **Historical document — pre-v1 trust model.**  The `.sig` /
+> `.author-profile` envelope described here was replaced by the
+> trust-v1 author-claim / cert-claim sidecar pair.  The current,
+> authoritative trust contract is
+> [`docs/design/trust-v1.md`](trust-v1.md); the v0 envelope shape
+> below is retained only as a historical reference and is no
+> longer emitted, verified, or accepted by the toolchain.
+
 ## Overview
 
 The provenance bundle is a zstd-compressed JSON document emitted alongside every

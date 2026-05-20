@@ -181,6 +181,7 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 	empty_stdlib = build_dir / "_empty_stdlib"
 	empty_stdlib.mkdir(parents=True, exist_ok=True)
 
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd = [
 		sys.executable, "-m", "lang.driftc.driftc",
 		"--dev",
@@ -190,6 +191,7 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 		"--package-id", "std",
 		"--package-version", _STD_PACKAGE_VERSION,
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(pkg_path),
 		"--test-build-only",
 	]
@@ -199,7 +201,8 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 		print(res.stderr[:2000], file=sys.stderr)
 		raise RuntimeError(f"stdlib build failed (rc={res.returncode})")
 
-	# 2. Generate ephemeral Ed25519 key
+	# 2. Generate ephemeral Ed25519 key (Foundation-bootstrap pattern:
+	#    same kid plays authors + certifiers for the reserved namespaces).
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key()
 	if hasattr(pub, "public_bytes_raw"):
@@ -209,27 +212,26 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
 
-	# 3. Sign package + write .sig sidecar
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	pkg_sha_hex = sha256(pkg_bytes).hexdigest()
+	# 3. Emit v1 author + cert claim sidecars next to std.dmp.
+	from lang.tests.driver.pkg_test_helpers import emit_v1_sidecars_inline
+	emit_v1_sidecars_inline(
+		pkg_path,
+		package_id="std",
+		package_version=_STD_PACKAGE_VERSION,
+		priv=priv,
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 
-	sig_sidecar = pkg_path.with_suffix(".sig")
-	sig_obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{pkg_sha_hex}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": base64.b64encode(sig_raw).decode("ascii"), "pubkey": pub_b64}],
-	}
-	sig_sidecar.write_text(json.dumps(sig_obj, separators=(",", ":"), sort_keys=True))
-
-	# 4. Write trust stores
+	# 4. Write v1 role-tagged trust stores.
 	core_trust_path = build_dir / "core_trust.json"
 	core_trust_obj = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "lang.*": [kid], "drift.*": [kid]},
+		"namespaces": {
+			ns: {"authors": [kid], "certifiers": [kid]}
+			for ns in ("std.*", "lang.*", "drift.*")
+		},
 		"revoked": [],
 	}
 	core_trust_path.write_text(json.dumps(core_trust_obj, separators=(",", ":"), sort_keys=True))
@@ -237,9 +239,9 @@ def _build_signed_stdlib(build_dir: Path) -> tuple[Path, Path, Path, Path]:
 	trust_path = build_dir / "trust.json"
 	trust_obj = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid]},
+		"namespaces": {"std.*": {"authors": [kid], "certifiers": [kid]}},
 		"revoked": [],
 	}
 	trust_path.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))

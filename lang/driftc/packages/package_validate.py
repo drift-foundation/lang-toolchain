@@ -7,11 +7,10 @@ against the format/interface invariants of `dmir_pkg_v0` and the
 shape of `interface` / `payload` JSON inside each module.  No
 signature or trust-store lookup happens here.
 
-Both `provider_v0` (v0 trust path) and `provider_v1` (v1 trust
-path) call into these helpers after their respective trust gates
-accept the package.  When the v0 modules are deleted in a later
-sub-boundary, this file remains the canonical home for these
-checks.
+`provider_v1` calls into these helpers after the trust gate
+accepts the package.  These format-level checks are the canonical
+home for shape validation; nothing here touches trust or
+signatures.
 
 Helpers:
   - `_validate_type_expr_obj` — recursive shape check for serialized

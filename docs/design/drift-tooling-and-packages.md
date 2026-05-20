@@ -1,5 +1,16 @@
 # Drift tooling, build, and package ecosystem – hybrid specification
 
+> **Trust model is now v1.**  This document still describes the
+> pre-v1 `.sig` / `pkg.dmp.sig` envelope shape for the trust /
+> signature half.  The authoritative trust contract has moved to
+> [`docs/design/trust-v1.md`](trust-v1.md): author signing is in
+> `drift-author publish`, consumer-side verification reads
+> `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json` against a
+> role-tagged trust store, and the v0 sidecar surface is gone.
+> The sections of this spec that mention `.sig` describe historical
+> behavior; treat trust-v1 as the source of truth where the two
+> conflict.
+
 This document describes the **Drift toolchain surface** and the machinery behind it:
 - project and target configuration
 - builds and outputs

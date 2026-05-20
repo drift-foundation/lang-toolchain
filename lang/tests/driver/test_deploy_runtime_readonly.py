@@ -27,6 +27,87 @@ def _write_file(path: Path, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
+def _pre_publish_stdlib_author_claim(
+	stdlib_dir: Path,
+	scratch_dir: Path,
+	*,
+	version: str,
+) -> tuple[Path, str]:
+	"""Simulate Foundation's offline author-signing flow before the
+	deploy step runs.
+
+	Returns `(author_claim_path, author_pubkey_b64)` -- the inputs
+	`build_and_install_stdlib` requires.  This test fixture stands
+	in for Foundation's out-of-band author-signing service: it
+	generates an author keypair, runs `drift-author publish`
+	against the stdlib SCI, and discards the seed.  The author
+	private key never enters any code path under
+	`tools/deploy/` or `tools/drift_deploy/` -- the boundary check
+	(`lang/tests/packages/test_author_key_boundary.py`) verifies
+	that statically.
+	"""
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+	from cryptography.hazmat.primitives import serialization
+	from lang.driftc.packages.source_content_id import (
+		compute_artifact_source_content_id,
+	)
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+
+	# Stdlib SCI must match what `build_stdlib_package` will compute;
+	# we mirror the same input set (every `.drift` file under stdlib).
+	stdlib_files = sorted(stdlib_dir.rglob("*.drift"))
+	module_paths_rel = sorted(str(p.relative_to(ROOT)) for p in stdlib_files)
+	sci = compute_artifact_source_content_id(
+		kind="library",
+		package_id="std",
+		version=version,
+		module_namespace="std",
+		entry_module="std",
+		module_paths=module_paths_rel,
+		package_deps=[],
+		native_deps=[],
+		unsafe=False,
+		asset_paths=[],
+		target_class="drift-dev",
+		source_root=ROOT,
+	)
+
+	priv = Ed25519PrivateKey.generate()
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	pub_raw = priv.public_key().public_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PublicFormat.Raw,
+	)
+	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
+
+	sidecar_dir = scratch_dir / "foundation_author_signing"
+	sidecar_dir.mkdir(parents=True, exist_ok=True)
+	author_claim_path = sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1,
+			package_id="std",
+			version=version,
+			namespaces=("std.*", "lang.*", "drift.*"),
+			source_content_id=sci,
+			required_deps=(),
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=sidecar_dir,
+	))
+	# Foundation analog discards the seed once the claim is signed.
+	del priv, priv_seed
+	return author_claim_path, pub_b64
+
+
 @_skip_no_pex
 def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(
 	tmp_path: Path, pex_scie_base: Path,
@@ -55,7 +136,17 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(
 		# Build, sign, and install stdlib + core trust store.
 		stage = tmp_path / "stage"
 		stage.mkdir(parents=True, exist_ok=True)
-		build_and_install_stdlib(ROOT, stage, dist, "0.0.0-test")
+		# Pre-publish the stdlib author claim out-of-band (fixture
+		# stands in for Foundation's offline signing); the deploy
+		# step itself never holds the author key.
+		author_claim_path, author_pubkey_b64 = _pre_publish_stdlib_author_claim(
+			ROOT / "stdlib", tmp_path, version="0.0.0-test",
+		)
+		build_and_install_stdlib(
+			ROOT, stage, dist, "0.0.0-test",
+			stdlib_author_claim_path=author_claim_path,
+			stdlib_author_pubkey_b64=author_pubkey_b64,
+		)
 	finally:
 		if old_sign_key is None:
 			os.environ.pop("DRIFT_SIGN_KEY_FILE", None)
@@ -173,7 +264,14 @@ def test_deployed_wrapper_repairs_poisoned_runtime_cache(
 		bundle_docs_and_examples(dist)
 		stage = tmp_path / "stage"
 		stage.mkdir(parents=True, exist_ok=True)
-		build_and_install_stdlib(ROOT, stage, dist, "0.0.0-test")
+		author_claim_path, author_pubkey_b64 = _pre_publish_stdlib_author_claim(
+			ROOT / "stdlib", tmp_path, version="0.0.0-test",
+		)
+		build_and_install_stdlib(
+			ROOT, stage, dist, "0.0.0-test",
+			stdlib_author_claim_path=author_claim_path,
+			stdlib_author_pubkey_b64=author_pubkey_b64,
+		)
 	finally:
 		if old_sign_key is None:
 			os.environ.pop("DRIFT_SIGN_KEY_FILE", None)

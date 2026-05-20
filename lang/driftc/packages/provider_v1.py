@@ -3,15 +3,12 @@
 Package provider (v1) — discovers, loads, and verifies packages
 via the trust-v1 model.
 
-Companion to (and eventual replacement of) `provider_v0.py`.
-
   - Package format (`.dmp` / `.zdmp` bytes) is UNCHANGED.  This
     module reuses `dmir_pkg_v0`'s loader and `package_validate`'s
     interface checks.
-  - Trust binding moves from `.sig` envelope (v0) to
-    `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json` sidecars
-    (v1).  Verification flows through `verify_v1.compose_verify`
-    per module.
+  - Trust binding is carried by `<pkg>.author-claim` +
+    `<pkg>.cert-claim.<kid>.json` sidecars.  Verification flows
+    through `verify_v1.compose_verify` per module.
 
 Why per-module verification: role-tagged trust maps
 `module_id → {authors, certifiers}` per namespace, and a package
@@ -20,8 +17,8 @@ sidecars are per-package (not per-module), but the consumer must
 re-check that each declared module's namespace is covered by the
 same sidecars.
 
-Pre-v1 acceptance is a hard product boundary.  No `.sig`
-fallback, no `trust_v0` import, no role-agnostic kid lookup.  If a
+Pre-v1 acceptance is a hard product boundary.  There is no
+untagged-trust fallback and no role-agnostic kid lookup.  If a
 package on disk lacks v1 sidecars, loading fails (unless its
 filesystem location is explicitly allow-listed by the policy as
 an unverified dev root).

@@ -74,12 +74,14 @@ class SnapshotEntry:
 
 	Fields:
 	- `source_content_id`: canonical hash of declared source/build
-	  inputs, from the package's `.source-attestation` sidecar.
-	  EQUALITY GATE for source-rebuild consumption.
-	- `author_key`: kid that signed the package (`.sig` sidecar).
+	  inputs, mirrored from the v1 author claim / cert claim
+	  `source_content_id` field.  EQUALITY GATE for source-rebuild
+	  consumption.
+	- `author_key`: kid carried in the package's `<pkg>.author-claim`
+	  sidecar.  EQUALITY GATE.
+	- `source_attestation_key`: kid carried in the package's
+	  `<pkg>.cert-claim.<kid>.json` sidecar (the certifier).
 	  EQUALITY GATE.
-	- `source_attestation_key`: kid that signed the `.source-
-	  attestation` body.  EQUALITY GATE.
 	- `sha256`: bytes digest of the `.dmp`, evidence only (rebuilt
 	  artifacts may legitimately differ in bytes while source
 	  identity is stable).  Carried in the snapshot so orch logs
@@ -171,7 +173,7 @@ def load_run_snapshot(path: Path) -> RunSnapshot:
 		sha = entry_obj.get("sha256", "")
 		# `source_content_id`: strict `sha256:<64 lowercase hex>`.
 		# Uses the shared validator so the snapshot loader and the
-		# `.source-attestation` loader enforce identical shape.
+		# v1 author/cert claim loaders enforce identical shape.
 		try:
 			validate_sha256_hex_id(
 				scid,
@@ -302,7 +304,7 @@ def verify_disk_entry_against_snapshot(
 			f"mismatch vs. run snapshot:\n"
 			f"  snapshot: {entry.source_attestation_key}\n"
 			f"  on-disk:  {disk_source_attestation_key}\n"
-			f"  source-attestation signer differs from the one orch "
+			f"  cert-claim signer differs from the one orch "
 			f"recorded at staging time."
 		)
 	return None

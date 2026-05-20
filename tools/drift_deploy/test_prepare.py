@@ -718,8 +718,8 @@ class TestPrepareSourceAttestationGate:
 				_run_impl(p.parse_args(["--manifest", str(manifest_path)]))
 			msg = str(exc.value)
 			assert "my.pkg -> ext.lib@1.0.0" in msg
-			assert "republish" in msg.lower()
-			assert "0.30.0" in msg
+			# v1 wording: prepare points the user at `drift-author publish`.
+			assert "drift-author publish" in msg
 			# Lock file must NOT have been written.
 			assert not (_drift_subdir(tmpdir) / "lock.json").exists()
 
@@ -758,8 +758,8 @@ class TestPrepareSourceAttestationGate:
 
 	def test_co_artifact_dep_does_not_require_attestation(self) -> None:
 		"""Co-artifacts legitimately have empty source identity at
-		prepare time (the .source-attestation hasn't been built yet —
-		it's emitted later in the same deploy run).  The fail-fast
+		prepare time (the v1 cert claim hasn't been emitted yet —
+		it's signed later in the same deploy run).  The fail-fast
 		gate must skip them by `dep_type == "co-artifact"`."""
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			manifest_path = _drift_subdir(tmpdir) / "manifest.json"
@@ -943,9 +943,10 @@ class TestPrepareCheckSourceRebuild:
 		"""Source-rebuild mode logs `source_attestation_key` drift as
 		evidence and passes `--check`.  Trust-root substitution (an
 		unauthorised key re-signing a package) is caught at package-
-		index time by `signature_v0.py::verify_package_signatures`
-		against the trust store's namespace allowlist — NOT by
-		per-dep lock equality here.  Enforcing equality at the
+		index time by the v1 trust gate (`provider_v1` /
+		`verify_v1.compose_verify`) against the trust store's role-
+		tagged namespace allowlist — NOT by per-dep lock equality
+		here.  Enforcing equality at the
 		downstream lock would mean every legitimate upstream rotation
 		(kid retirement with a still-allowlisted successor) stales
 		every downstream lock, violating the Lock-v2 compatible-patch

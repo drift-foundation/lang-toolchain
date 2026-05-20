@@ -231,26 +231,28 @@ pub fn main() nothrow -> Int {
 
 
 def _sign_package(pkg_path: Path, pkg_id: str, version: str, tmp_path: Path, trust_path: Path | None = None) -> tuple[str, str]:
-	"""Sign a .dmp and write .sig sidecar. Returns (kid, pub_b64)."""
+	"""Emit v1 author + cert claim sidecars next to `.dmp`.
+	Returns `(kid, pub_b64)`.  Foundation-bootstrap pattern: the
+	same kid plays both `authors` and `certifiers` roles.
+	"""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.drift.crypto import compute_ed25519_kid
+	from lang.tests.driver.pkg_test_helpers import emit_v1_sidecars_inline
 
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key()
 	pub_raw = pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = pkg_path.read_bytes()
 
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64}],
-	}, separators=(",", ":"), sort_keys=True))
+	emit_v1_sidecars_inline(
+		pkg_path,
+		package_id=pkg_id,
+		package_version=version,
+		priv=priv,
+		namespaces=[f"{pkg_id}.*"],
+	)
 	return kid, pub_b64
 
 
@@ -261,6 +263,7 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	(lib_dir / "pathlib.drift").write_text(LIB_SOURCE)
 
 	pkg_path = tmp_path / "pathlib.dmp"
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	res = subprocess.run(
 		[sys.executable, "-m", "lang.driftc.driftc",
 		 "-M", str(lib_dir), str(lib_dir / "pathlib.drift"),
@@ -268,6 +271,7 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 		 "--target-word-bits", "64",
 		 "--package-id", "pathlib", "--package-version", "0.1.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(pkg_path), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=120,
 	)
@@ -279,9 +283,10 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	kid, pub_b64 = _sign_package(pkg_root / "pathlib.dmp", "pathlib", "0.1.0", tmp_path)
 
 	(tmp_path / "trust.json").write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"pathlib.*": [kid]}, "revoked": [],
+		"namespaces": {"pathlib.*": {"authors": [kid], "certifiers": [kid]}},
+		"revoked": [],
 	}))
 	return tmp_path / "libs", tmp_path / "trust.json"
 
@@ -305,6 +310,7 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 
 	std_pkg_path = tmp_path / "std_build" / "std.dmp"
 	std_pkg_path.parent.mkdir(parents=True, exist_ok=True)
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	res = subprocess.run(
 		[sys.executable, "-m", "lang.driftc.driftc",
 		 "--dev", "-M", str(STDLIB_DIR),
@@ -313,6 +319,7 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		 "--package-id", "std",
 		 "--package-version", STD_VERSION,
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(std_pkg_path),
 		 "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=180,
@@ -335,9 +342,12 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	# Core trust for stdlib namespace
 	core_trust_path = tmp_path / "core_trust.json"
 	core_trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {std_kid: {"algo": "ed25519", "pubkey": std_pub}},
-		"namespaces": {"std.*": [std_kid], "lang.*": [std_kid], "drift.*": [std_kid]},
+		"namespaces": {
+			ns: {"authors": [std_kid], "certifiers": [std_kid]}
+			for ns in ("std.*", "lang.*", "drift.*")
+		},
 		"revoked": [],
 	}, separators=(",", ":"), sort_keys=True))
 
@@ -353,6 +363,7 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		 "--target-word-bits", "64",
 		 "--package-id", "pathlib", "--package-version", "0.1.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(pathlib_pkg_path),
 		 "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=180,
@@ -367,14 +378,14 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	# Trust store covering both namespaces
 	trust_path = tmp_path / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {
 			std_kid: {"algo": "ed25519", "pubkey": std_pub},
 			pathlib_kid: {"algo": "ed25519", "pubkey": pathlib_pub},
 		},
 		"namespaces": {
-			"std.*": [std_kid],
-			"pathlib.*": [pathlib_kid],
+			"std.*":     {"authors": [std_kid],     "certifiers": [std_kid]},
+			"pathlib.*": {"authors": [pathlib_kid], "certifiers": [pathlib_kid]},
 		},
 		"revoked": [],
 	}, separators=(",", ":"), sort_keys=True))

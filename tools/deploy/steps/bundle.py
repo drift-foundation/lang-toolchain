@@ -187,17 +187,24 @@ driftc my_program.drift -o my_program
 ## Drift CLI tool
 
 `bin/drift` is a self-contained PEX --scie eager executable providing
-the Drift tooling CLI (publishing identity setup, package signing,
-trust management, and deploy).  It bundles its own Python interpreter
-and runtime dependencies (cryptography, zstandard).
+the Drift consumer-side tooling CLI (publishing identity setup,
+trust management, build, prepare, deploy).  It bundles its own
+Python interpreter and runtime dependencies (cryptography, zstandard).
+
+Author-side signing lives in a separate CLI, `drift-author`,
+which is intentionally NOT bundled here -- the role split
+(see `docs/design/trust-v1.md`) keeps author key material out of
+the consumer toolchain.
 
 ```bash
 drift init                        # set up publishing identity + author profile
-drift sign my-pkg.dmp --key signing.seed
+drift trust <publisher>.author-profile   # consumer: trust an author kid
+drift trust add --namespace acme.crypto.* \
+    --pubkey-b64 <base64> --kid <kid> --role both
+drift trust import <pkg>.author-claim    # bulk-import kids from a v1 sidecar
+drift trust revoke --kid <kid> --reason "compromised CI host"
 drift prepare --manifest drift/manifest.json --dest ~/opt/drift/libs
 drift deploy --manifest drift/manifest.json --dest ~/opt/drift/libs --driftc driftc
-drift trust publisher.author-profile   # consumer: trust an author
-drift trust list --trust-store drift/trust.json
 ```
 
 The compiler sources, runtime archives, and signed stdlib package live in
@@ -222,10 +229,14 @@ See `doc/stdlib/authoring.md` for how to write doc comments that
 
 ### Stdlib integrity
 
-The standard library is shipped as a signed DMIR package (`lib/stdlib/std.dmp`)
-with a detached signature sidecar (`lib/stdlib/std.sig`).  The compiler
-verifies the signature against the bundled core trust store at compile time.
-Tampered or unsigned stdlib packages are rejected.
+The standard library is shipped as a DMIR package
+(`lib/stdlib/std.dmp`) plus the trust-v1 sidecar pair:
+`lib/stdlib/std.author-claim` (Foundation's author kid) and
+`lib/stdlib/std.cert-claim.<kid>.json` (Foundation's certifier
+kid).  The compiler verifies both claims against the bundled
+core trust store at compile time (see
+`docs/design/trust-v1.md`).  Tampered or unsigned stdlib
+packages are rejected.
 
 ### Flags
 

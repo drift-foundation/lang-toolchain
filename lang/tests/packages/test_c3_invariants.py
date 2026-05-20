@@ -38,6 +38,7 @@ production deploys use.
 from __future__ import annotations
 
 import base64
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -215,9 +216,17 @@ def _emit_app_cert_claim(
 	direct_dep_ids: set[str] | None = None,
 	staged_pkg_root: Path | None = None,
 	deploy_cert_seed: bytes | None = None,
+	provenance_bytes: bytes | None = None,
+	omit_provenance: bool = False,
 ) -> tuple[Path, str]:
 	"""Drive the real `_emit_cert_claim_for_artifact` over a
 	synthetic fixture.  Returns `(cert_claim_path, deploy_cert_kid)`.
+
+	A synthetic `.provenance.zst` is written next to the artifact by
+	default so `_emit_cert_claim_for_artifact` can bind its sha256
+	into `body.evidence_sha256` (the fail-closed contract).  Tests
+	exercising the missing-provenance rejection path pass
+	`omit_provenance=True`.
 	"""
 	if deploy_cert_seed is None:
 		deploy_cert_seed = _seed(0x01)
@@ -234,20 +243,47 @@ def _emit_app_cert_claim(
 
 	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
 
-	cert_claim_path = _emit_cert_claim_for_artifact(
-		artifact_path,
-		cert_key=cert_key_path,
-		package_id=app_name,
-		package_version=app_version,
-		target=app_target,
-		compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
-		source_content_id=app_sci,
-		artifact_sha256=app_artifact_sha,
-		resolved_deps=resolved_deps,
-		direct_dep_ids=direct_dep_ids,
-		staged_pkg_root=staged_pkg_root,
-		provenance_path=None,
-	)
+	if omit_provenance:
+		provenance_path = None
+	else:
+		provenance_path = artifact_path.parent / f"{app_name}.provenance.zst"
+		if provenance_bytes is None:
+			# Synthetic stand-in for the compressed provenance bundle.
+			# Real builds emit a zstd-compressed JSON envelope here;
+			# for binding-only tests the bytes content is opaque -- we
+			# only care that its sha256 ends up in evidence_sha256.
+			provenance_bytes = b"synthetic-provenance-bundle-bytes"
+		provenance_path.write_bytes(provenance_bytes)
+
+	# v1 cert claims do not accept a synthetic default in the suite
+	# evidence digest.  Tests must supply a real-shape sha256 for the
+	# *suite's own* evidence artifact (separate from the provenance
+	# bundle pinned via `evidence_sha256`).  Use a stable hash so the
+	# emitted cert claim is reproducible across runs.
+	import hashlib as _hl
+	_suite_evidence = "sha256:" + _hl.sha256(b"test-suite-evidence-marker").hexdigest()
+	_prev_suite_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = _suite_evidence
+	try:
+		cert_claim_path = _emit_cert_claim_for_artifact(
+			artifact_path,
+			cert_key=cert_key_path,
+			package_id=app_name,
+			package_version=app_version,
+			target=app_target,
+			compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
+			source_content_id=app_sci,
+			artifact_sha256=app_artifact_sha,
+			resolved_deps=resolved_deps,
+			direct_dep_ids=direct_dep_ids,
+			staged_pkg_root=staged_pkg_root,
+			provenance_path=provenance_path,
+		)
+	finally:
+		if _prev_suite_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = _prev_suite_evidence
 	return cert_claim_path, _kid_for(deploy_cert_seed)
 
 
@@ -869,3 +905,155 @@ def test_co_artifact_missing_sidecar_fails_closed(tmp_path: Path) -> None:
 	# The diagnostic must say WHY we refuse to sign, not just that
 	# we did.
 	assert "closure cover" in msg or "topological" in msg or "failed" in msg
+
+
+# ── Invariant: provenance bundle is cryptographically bound by cert ───
+
+
+def test_evidence_sha256_pins_provenance_bundle_bytes(tmp_path: Path) -> None:
+	"""The cert claim's `body.evidence_sha256` MUST equal
+	sha256(`<pkg>.provenance.zst` on-disk bytes).
+
+	Without this binding, a hostile mirror could swap the unsigned
+	provenance bundle and an operator inspecting it would read
+	attacker-chosen evidence under the certifier's name.  The cert
+	claim is the only signed artifact, so the only honest path is
+	for it to pin the provenance bundle's bytes.
+	"""
+	import hashlib
+	bundle_bytes = b"deploy-evidence-bundle-v1-payload-bytes"
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	cert_claim_path, _ = _emit_app_cert_claim(
+		tmp_path,
+		resolved_deps=resolved_deps,
+		provenance_bytes=bundle_bytes,
+	)
+	cc = load_cert_claim_json(cert_claim_path.read_text(encoding="utf-8"))
+	expected = "sha256:" + hashlib.sha256(bundle_bytes).hexdigest()
+	assert cc.body.evidence_sha256 == expected, (
+		f"cert claim must pin provenance bundle bytes via evidence_sha256:\n"
+		f"  expected: {expected}\n"
+		f"  got:      {cc.body.evidence_sha256}"
+	)
+
+
+def test_evidence_sha256_changes_when_provenance_bytes_change(tmp_path: Path) -> None:
+	"""Different provenance bundle bytes MUST produce a different
+	`evidence_sha256` on the cert claim.  A hostile mirror that
+	substitutes the bundle without rewriting the cert claim must
+	fail an inspector's sha256 comparison.
+	"""
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	cc_a_path, _ = _emit_app_cert_claim(
+		tmp_path / "run-a",
+		resolved_deps=resolved_deps,
+		provenance_bytes=b"bundle-A",
+	)
+	cc_b_path, _ = _emit_app_cert_claim(
+		tmp_path / "run-b",
+		resolved_deps=resolved_deps,
+		provenance_bytes=b"bundle-B-differs",
+	)
+	cc_a = load_cert_claim_json(cc_a_path.read_text(encoding="utf-8"))
+	cc_b = load_cert_claim_json(cc_b_path.read_text(encoding="utf-8"))
+	assert cc_a.body.evidence_sha256 != cc_b.body.evidence_sha256, (
+		"provenance binding leaked: different bundle bytes produced "
+		"the same evidence_sha256"
+	)
+
+
+def test_missing_provenance_bundle_fails_closed(tmp_path: Path) -> None:
+	"""When the deploy does not produce a provenance bundle, cert
+	claim emission MUST fail rather than fall back to a sentinel
+	digest.  The cert suite asserts that the certifier observed
+	evidence; an empty / synthetic sentinel would let the cert
+	claim attest evidence that doesn't exist on disk."""
+	from tools.drift_deploy.drift_deploy import DeployError
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	with pytest.raises(DeployError, match="provenance bundle is missing"):
+		_emit_app_cert_claim(
+			tmp_path,
+			resolved_deps=resolved_deps,
+			omit_provenance=True,
+		)
+
+
+def test_missing_suite_evidence_env_fails_closed(tmp_path: Path) -> None:
+	"""When `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` is unset, cert
+	claim emission MUST fail rather than stamp a synthetic constant
+	into a signed claim.  v1 does not accept "default evidence" in
+	a body the certifier signs.
+	"""
+	from tools.drift_deploy.drift_deploy import DeployError
+	resolved_deps = {
+		"net.tls": LockResolvedDep(
+			version="0.5.0",
+			sha256="sha256:" + ("d" * 64),
+			dep_type="direct",
+			package_id="net.tls",
+			author_key="ed25519:" + ("c" * 22),
+			source_content_id="sha256:" + ("e" * 64),
+			source_attestation_key="ed25519:" + ("a" * 22),
+		),
+	}
+	# Force the env var unset so the suite-evidence gate fires.
+	prev = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+	# Inline call (do NOT go through `_emit_app_cert_claim`; that
+	# helper sets the env explicitly to keep the other tests green).
+	deploy_cert_seed = _seed(0x33)
+	staged_pkg_root = tmp_path / "staged_pkg_root"
+	staged_pkg_root.mkdir(parents=True, exist_ok=True)
+	artifact_path = tmp_path / "staged_install" / "app.dmp"
+	artifact_path.parent.mkdir(parents=True, exist_ok=True)
+	artifact_path.write_bytes(b"placeholder")
+	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
+	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
+	try:
+		with pytest.raises(DeployError, match="DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"):
+			_emit_cert_claim_for_artifact(
+				artifact_path,
+				cert_key=cert_key_path,
+				package_id="app",
+				package_version="1.0.0",
+				target="linux-x86_64",
+				compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
+				source_content_id="sha256:" + ("a" * 64),
+				artifact_sha256="sha256:" + ("b" * 64),
+				resolved_deps=resolved_deps,
+				direct_dep_ids={"net.tls"},
+				staged_pkg_root=staged_pkg_root,
+				provenance_path=artifact_path.parent / "app.provenance.zst",
+			)
+	finally:
+		if prev is not None:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev

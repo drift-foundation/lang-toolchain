@@ -47,11 +47,11 @@ Pipeline (identical for all three callers):
        non-co-artifact deps must have `author_key != "unsigned"`
        AND non-empty `source_content_id` /
        `source_attestation_key` on disk.  These catch cases the
-       snapshot gate cannot (unsigned packages have no `.sig`
-       and can't be snapshot-gated; a missing `.source-
-       attestation` yields empty identity at index time but
-       technically could match an all-empty snapshot entry, so
-       we reject empty identity structurally).
+       snapshot gate cannot (unsigned packages have no v1 author
+       claim and can't be snapshot-gated; a missing v1 cert
+       claim yields empty identity at index time but technically
+       could match an all-empty snapshot entry, so we reject
+       empty identity structurally).
     5. Compare the fresh-resolved graph to the existing lock's
        per-artifact graph.  Any shape or per-field drift becomes
        EVIDENCE (`SourceRebuildEvidence`), not an error — the
@@ -150,9 +150,9 @@ class SourceRebuildResult:
 	    entries and mismatches raise `ResolutionError` at index
 	    time (never reach this result).
 	  * Author trust is attested by the snapshot, not re-verified
-	    here: orch's producer/staging step validated `.sig` +
-	    `.source-attestation` signers against orch's own trust
-	    store before writing each snapshot entry.  The consumer
+	    here: orch's producer/staging step validated v1 author +
+	    cert claim signers against orch's own trust store before
+	    writing each snapshot entry.  The consumer
 	    DOES NOT re-run that verification, and the consumer's
 	    local `drift/trust.json` is NOT consulted.
 	  * Every non-co-artifact entry has non-empty
@@ -300,18 +300,18 @@ def apply_structural_trust_gates(
 	source_attestation_key)` against the snapshot entry for
 	`(pkg_id, version)`.  It cannot gate on:
 	  * `author_key == "unsigned"` — the unsigned dev-opt-in; there's
-	    no `.sig` on disk, and if the snapshot had somehow entered
-	    `"unsigned"` as its author_key it would nominally match.
-	    Rejected here because source-rebuild's contract requires
-	    real signed artifacts.
+	    no v1 author claim on disk, and if the snapshot had somehow
+	    entered `"unsigned"` as its author_key it would nominally
+	    match.  Rejected here because source-rebuild's contract
+	    requires real signed artifacts.
 	  * empty `source_content_id` / `source_attestation_key` — a
-	    missing `.source-attestation` sidecar yields empty identity
-	    at index time.  A malformed snapshot with empty-string
-	    fields is rejected at snapshot load via strict field
-	    validation (`run_snapshot.load_run_snapshot`), but this
-	    structural check is defence-in-depth against any caller
-	    that bypasses the loader (e.g. tests that construct a
-	    snapshot programmatically).
+	    missing v1 cert claim sidecar yields empty identity at
+	    index time.  A malformed snapshot with empty-string fields
+	    is rejected at snapshot load via strict field validation
+	    (`run_snapshot.load_run_snapshot`), but this structural
+	    check is defence-in-depth against any caller that bypasses
+	    the loader (e.g. tests that construct a snapshot
+	    programmatically).
 	Co-artifact entries (same-manifest libraries built later in the
 	same run) are exempt.
 	"""
@@ -319,7 +319,7 @@ def apply_structural_trust_gates(
 		if dep.dep_type == "co-artifact" or pkg_id in co_artifact_names:
 			continue
 		# Reject BOTH the dev-opt-in `"unsigned"` sentinel AND an
-		# empty `author_key` (no `.sig` sidecar).  Defence-in-depth
+		# empty `author_key` (no v1 author claim sidecar).  Defence-in-depth
 		# for callers that bypass the snapshot-gated index (tests
 		# injecting mocked `PackageEntry` objects, older producer
 		# paths).  Under the 0.31.3 model the snapshot gate is the
@@ -332,28 +332,27 @@ def apply_structural_trust_gates(
 				f"artifact '{art_name}' dep '{pkg_id}': resolved "
 				f"entry has no verifiable signer "
 				f"(author_key={dep.author_key!r}); source-rebuild "
-				f"requires every disk package to have a signed "
-				f"`.sig` sidecar AND a matching run-snapshot entry.  "
-				f"Sign and republish (toolchain >= 0.30.0) under a "
-				f"kid the snapshot authorises for this package."
+				f"requires every disk package to have a v1 author "
+				f"claim sidecar AND a matching run-snapshot entry.  "
+				f"Run `drift-author publish` for the package under a "
+				f"kid the snapshot authorises."
 			)
 			continue
 		if not dep.source_content_id:
 			errors.append(
 				f"artifact '{art_name}' dep '{pkg_id}': resolved "
 				f"entry has empty `source_content_id` on disk; "
-				f"source-rebuild requires a non-empty source "
-				f"attestation (the trust gate has nothing to verify "
-				f"otherwise).  Republish with toolchain >= 0.30.0 "
-				f"so the `.source-attestation` sidecar is emitted."
+				f"source-rebuild requires a non-empty v1 cert claim "
+				f"(the trust gate has nothing to verify otherwise).  "
+				f"Re-run cert-claim emission via `drift-deploy`."
 			)
 		if not dep.source_attestation_key:
 			errors.append(
 				f"artifact '{art_name}' dep '{pkg_id}': resolved "
 				f"entry has empty `source_attestation_key` on disk; "
-				f"source-rebuild requires a non-empty source-"
-				f"attestation signer.  Republish with toolchain "
-				f">= 0.30.0."
+				f"source-rebuild requires a non-empty v1 cert-claim "
+				f"certifier kid.  Re-run cert-claim emission via "
+				f"`drift-deploy`."
 			)
 
 

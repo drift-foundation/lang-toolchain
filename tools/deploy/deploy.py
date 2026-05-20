@@ -56,17 +56,20 @@ def main(argv: list[str] | None = None) -> int:
 		help="Deploy destination root (flat: bin/, lib/, etc. placed directly here)")
 	parser.add_argument("--python", type=Path, default=None,
 		help="Python interpreter (optional; for smoke/prereq checks)")
+	parser.add_argument("--stdlib-author-claim", type=Path, required=True,
+		help="Path to the externally-produced std.author-claim sidecar "
+		"(emitted out-of-band by Foundation's offline author-signing "
+		"flow).  This deploy step VALIDATES this artifact against the "
+		"build but does NOT generate one.  Author private keys never "
+		"enter the deploy host.")
+	parser.add_argument("--stdlib-author-pubkey-b64", type=str, required=True,
+		help="Base64-encoded 32-byte Ed25519 public key of the "
+		"Foundation author kid that signed --stdlib-author-claim.  "
+		"Recorded in core_trust_v1.json under the `authors` role.")
 	args = parser.parse_args(argv)
 
 	repo_root = Path(__file__).resolve().parent.parent.parent
 	dest = args.dest.expanduser().resolve()
-
-	# ── Signing key ──────────────────────────────────────────────────
-	if not os.environ.get("DRIFT_SIGN_KEY_FILE") and not os.environ.get("DRIFT_SIGN_KEY_CMD"):
-		print("error: package signing key required.", file=sys.stderr)
-		print("  set DRIFT_SIGN_KEY_FILE=/path/to/seed.key", file=sys.stderr)
-		print("  or  DRIFT_SIGN_KEY_CMD=\"command\"", file=sys.stderr)
-		return 1
 
 	# ── Python override ──────────────────────────────────────────────
 	if args.python:
@@ -111,7 +114,15 @@ def main(argv: list[str] | None = None) -> int:
 		bundle_docs_and_examples(dist)
 
 		# ── Step 3: Stdlib ───────────────────────────────────────────
-		build_and_install_stdlib(repo_root, stage, dist, meta.driftc_version)
+		# Author claim is an INPUT to this step (see
+		# `tools/deploy/steps/stdlib.py` module docstring +
+		# `docs/design/trust-v1.md` §7.5).  Deploy never holds the
+		# Foundation author private key.
+		build_and_install_stdlib(
+			repo_root, stage, dist, meta.driftc_version,
+			stdlib_author_claim_path=args.stdlib_author_claim.expanduser().resolve(),
+			stdlib_author_pubkey_b64=args.stdlib_author_pubkey_b64,
+		)
 
 		# ── Step 4: Smoke ────────────────────────────────────────────
 		run_smoke_test(dist, repo_root, stage)

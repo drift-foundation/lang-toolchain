@@ -474,7 +474,9 @@ def test_author_revoked() -> None:
 		self_verify=True, self_verify_sci=_SCI,
 	)
 	assert res.ok is False
-	assert "no author-role kids" in res.reason
+	# Revocation: the diagnostic names the revoked kid explicitly.
+	assert "revoked kid(s)" in res.reason
+	assert a_kid in res.reason
 
 
 def test_author_claim_signer_with_wrong_role() -> None:

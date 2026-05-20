@@ -146,6 +146,8 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	lib_dir.mkdir()
 	(lib_dir / "mylib.drift").write_text(LIB_SOURCE)
 
+	from lang.tests.driver.pkg_test_helpers import emit_v1_sidecars_inline
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	pkg_path = tmp_path / "mylib.dmp"
 	res = subprocess.run(
 		[sys.executable, "-m", "lang.driftc.driftc",
@@ -154,6 +156,7 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 		 "--target-word-bits", "64",
 		 "--package-id", "mylib", "--package-version", "0.1.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(pkg_path), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True, timeout=120,
 	)
@@ -164,22 +167,20 @@ def _build_signed_package(tmp_path: Path) -> tuple[Path, Path]:
 	pub_raw = pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = pkg_path.read_bytes()
 
 	pkg_root = tmp_path / "libs" / "mylib" / "0.1.0"
 	pkg_root.mkdir(parents=True)
 	shutil.copy2(str(pkg_path), str(pkg_root / "mylib.dmp"))
-	(pkg_root / "mylib.sig").write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64}],
-	}, separators=(",", ":"), sort_keys=True))
+	emit_v1_sidecars_inline(
+		pkg_root / "mylib.dmp",
+		package_id="mylib", package_version="0.1.0",
+		priv=priv, namespaces=["mylib.*"],
+	)
 	(tmp_path / "trust.json").write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"mylib.*": [kid]}, "revoked": [],
+		"namespaces": {"mylib.*": {"authors": [kid], "certifiers": [kid]}},
+		"revoked": [],
 	}))
 	return tmp_path / "libs", tmp_path / "trust.json"
 

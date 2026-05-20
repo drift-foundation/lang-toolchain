@@ -80,14 +80,30 @@ def _public_key_bytes(pub):
 	)
 
 
-def _write_sig(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str) -> None:
-	sig = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{_sha(pkg_bytes)}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	pkg_path.with_suffix(".sig").write_text(json.dumps(sig, separators=(",", ":"), sort_keys=True))
+def _write_sig(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str, priv=None, package_id: str | None = None, package_version: str = "0.0.0", namespaces: list[str] | None = None) -> None:
+	"""v1 migration shim: emits author + cert claim sidecars next to
+	the .dmp instead of the v0 `.sig` envelope.  Legacy positional
+	args (`pkg_bytes`, `kid`, `sig_raw`, `pub_b64`) are
+	accepted-and-ignored; callers must pass `priv=<Ed25519PrivateKey>`,
+	`package_id=...`, and `namespaces=[...]` for the emit to succeed.
+	"""
+	from lang.tests.driver.pkg_test_helpers import emit_v1_sidecars_inline
+	assert priv is not None, (
+		"v1 migration: _write_sig now requires `priv=...` (Ed25519PrivateKey)"
+	)
+	if package_id is None:
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
+		peeked = peek_package_id(pkg_path)
+		package_id = peeked if peeked else pkg_path.stem
+	if namespaces is None:
+		namespaces = [f"{package_id}.*"]
+	emit_v1_sidecars_inline(
+		pkg_path,
+		package_id=package_id,
+		package_version=package_version,
+		priv=priv,
+		namespaces=namespaces,
+	)
 
 
 def _build_signed_stdlib(build_dir: Path, *, priv, kid: str, pub_b64: str) -> Path:
@@ -102,6 +118,7 @@ def _build_signed_stdlib(build_dir: Path, *, priv, kid: str, pub_b64: str) -> Pa
 	empty_stdlib = build_dir / "_empty_stdlib"
 	empty_stdlib.mkdir(parents=True, exist_ok=True)
 
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd = [
 		sys.executable, "-m", "lang.driftc.driftc",
 		"--dev",
@@ -111,6 +128,7 @@ def _build_signed_stdlib(build_dir: Path, *, priv, kid: str, pub_b64: str) -> Pa
 		"--package-id", "std",
 		"--package-version", STD_VERSION,
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(std_pkg),
 		"--test-build-only",
 	]
@@ -120,8 +138,11 @@ def _build_signed_stdlib(build_dir: Path, *, priv, kid: str, pub_b64: str) -> Pa
 		print(res.stderr[:2000], file=sys.stderr)
 		raise RuntimeError("stdlib build failed")
 
-	sig_raw = priv.sign(std_pkg.read_bytes())
-	_write_sig(std_pkg, pkg_bytes=std_pkg.read_bytes(), kid=kid, sig_raw=sig_raw, pub_b64=pub_b64)
+	_write_sig(
+		std_pkg, pkg_bytes=b"", kid=kid, sig_raw=b"", pub_b64=pub_b64,
+		priv=priv, package_id="std", package_version=STD_VERSION,
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 	return empty_stdlib
 
 
@@ -170,6 +191,7 @@ def _build_signed_producer(
 
 	uses_stdlib = _producer_imports_stdlib(producer_src)
 
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd = [
 		sys.executable, "-m", "lang.driftc.driftc",
 		"--dev",
@@ -179,25 +201,33 @@ def _build_signed_producer(
 		"--package-id", PRODUCER_PKG_ID,
 		"--package-version", PRODUCER_VERSION,
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(prod_pkg),
 		"--test-build-only",
 	]
 	if uses_stdlib:
 		# Producer uses std.* or lang.* — compile against the signed
-		# stdlib package, with trust stores so --package-root resolution
-		# succeeds.  Write temp trusts alongside the case build dir.
+		# stdlib package, with v1 trust stores so --package-root
+		# resolution succeeds.  Write temp trusts alongside the case
+		# build dir.
 		core_trust = case_build / "core_trust.json"
 		core_trust.write_text(json.dumps({
-			"format": "drift-trust", "version": 0,
+			"format": "drift-trust", "version": 1,
 			"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-			"namespaces": {"std.*": [kid], "lang.*": [kid], "drift.*": [kid]},
+			"namespaces": {
+				ns: {"authors": [kid], "certifiers": [kid]}
+				for ns in ("std.*", "lang.*", "drift.*")
+			},
 			"revoked": [],
 		}, separators=(",", ":"), sort_keys=True))
 		trust = case_build / "trust.json"
 		trust.write_text(json.dumps({
-			"format": "drift-trust", "version": 0,
+			"format": "drift-trust", "version": 1,
 			"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-			"namespaces": {"std.*": [kid], "acme.*": [kid]},
+			"namespaces": {
+				ns: {"authors": [kid], "certifiers": [kid]}
+				for ns in ("std.*", "acme.*")
+			},
 			"revoked": [],
 		}, separators=(",", ":"), sort_keys=True))
 		cmd.extend([
@@ -212,8 +242,10 @@ def _build_signed_producer(
 		raise RuntimeError(
 			f"producer build failed (rc={res.returncode}):\n{res.stderr[:1500]}\n{res.stdout[:500]}"
 		)
-	sig_raw = priv.sign(prod_pkg.read_bytes())
-	_write_sig(prod_pkg, pkg_bytes=prod_pkg.read_bytes(), kid=kid, sig_raw=sig_raw, pub_b64=pub_b64)
+	_write_sig(
+		prod_pkg, pkg_bytes=b"", kid=kid, sig_raw=b"", pub_b64=pub_b64,
+		priv=priv, package_id=PRODUCER_PKG_ID, package_version=PRODUCER_VERSION,
+	)
 	return prod_pkg
 
 
@@ -508,16 +540,22 @@ def main(argv: list[str] | None = None) -> int:
 
 	core_trust_path = build_root / "core_trust.json"
 	core_trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "lang.*": [kid], "drift.*": [kid]},
+		"namespaces": {
+			ns: {"authors": [kid], "certifiers": [kid]}
+			for ns in ("std.*", "lang.*", "drift.*")
+		},
 		"revoked": [],
 	}, separators=(",", ":"), sort_keys=True))
 	trust_path = build_root / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "acme.*": [kid]},
+		"namespaces": {
+			ns: {"authors": [kid], "certifiers": [kid]}
+			for ns in ("std.*", "acme.*")
+		},
 		"revoked": [],
 	}, separators=(",", ":"), sort_keys=True))
 

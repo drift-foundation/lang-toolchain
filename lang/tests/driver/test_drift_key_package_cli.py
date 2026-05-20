@@ -69,77 +69,9 @@ def test_drift_key_list_inspect_match_signer(tmp_path: Path) -> None:
 	assert match.get("matches") == []
 
 
-def test_drift_package_inspect_signers_sig_dmp_index(tmp_path: Path) -> None:
-	_write_file(
-		tmp_path / "lib" / "lib.drift",
-		"""
-module lib;
-
-export { add };
-
-pub fn add(a: Int, b: Int) -> Int {
-	return a + b;
-}
-""".lstrip(),
-	)
-	pkg = tmp_path / "lib.dmp"
-	build = subprocess.run(
-		with_target_word_bits(
-			[
-				sys.executable,
-				"-m",
-				"lang.driftc.driftc",
-				"-M",
-				str(tmp_path),
-				str(tmp_path / "lib" / "lib.drift"),
-				"--package-id",
-				"lib",
-				"--package-version",
-				"0.0.0",
-				"--package-target",
-				"test-target",
-				"--emit-package",
-				str(pkg),
-				"--json",
-			]
-		),
-		check=False,
-		capture_output=True,
-		text=True,
-	)
-	assert build.returncode == 0, build.stderr
-
-	key = tmp_path / "default.seed"
-	cp = _run_drift(["keygen", "--out", str(key), "--print-kid"])
-	assert cp.returncode == 0, cp.stderr
-	kid = (cp.stdout or "").strip()
-	assert kid.startswith("ed25519:")
-
-	cp = _run_drift(["sign", str(pkg), "--key", str(key), "--include-pubkey"])
-	assert cp.returncode == 0, cp.stderr
-	sig = pkg.with_suffix(".sig")
-	assert sig.exists()
-
-	cp = _run_drift(["package", "inspect-signers", str(sig), "--json"])
-	assert cp.returncode == 0, cp.stderr
-	obj = json.loads(cp.stdout or "{}")
-	assert obj.get("source") == "sidecar"
-	assert obj.get("signers") == [kid]
-
-	cp = _run_drift(["package", "inspect-signers", str(pkg), "--json"])
-	assert cp.returncode == 0, cp.stderr
-	obj = json.loads(cp.stdout or "{}")
-	assert obj.get("source") == "package-sidecar"
-	assert obj.get("signers") == [kid]
-
-	repo = tmp_path / "repo"
-	cp = _run_drift(["publish", "--dest-dir", str(repo), str(pkg)])
-	assert cp.returncode == 0, cp.stderr
-
-	cp = _run_drift(["package", "inspect-signers", str(repo / "index.json"), "--package-id", "lib", "--json"])
-	assert cp.returncode == 0, cp.stderr
-	obj = json.loads(cp.stdout or "{}")
-	assert obj.get("source") == "index"
-	assert obj.get("package_id") == "lib"
-	assert obj.get("signers") == [kid]
-	assert obj.get("signed") is True
+# Pre-v1 `drift sign` / `drift publish` / `drift package inspect-signers`
+# were removed in the trust-v1 cutover.  Author-side signing now lives in
+# `drift-author publish`; signer kids surface through the v1 author /
+# cert claim sidecars instead of a CLI inspector.  The signer-inspect
+# contract is covered by the adversarial suite in
+# `lang/tests/packages/test_v1_adversarial.py`.

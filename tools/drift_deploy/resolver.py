@@ -30,9 +30,9 @@ class PackageEntry:
 	lock-exact pins.
 
 	`source_content_id` and `source_attestation_key` are read from
-	the `.source-attestation` sidecar (or empty if no sidecar is
-	present — Phase B graceful path, Phase C tightens for source-
-	rebuild mode).  These together pin the package's *source*
+	the v1 author claim / cert claim sidecars (or empty if the
+	sidecars are absent — Phase B graceful path, Phase C tightens
+	for source-rebuild mode).  These together pin the package's *source*
 	identity and the key that attested it, decoupled from the
 	`.dmp` byte sha256 — required for source-rebuild certification
 	where rebuilt bytes are expected to differ from the author's
@@ -43,9 +43,9 @@ class PackageEntry:
 	path: Path
 	sha256: str
 	required_deps: list[tuple[str, str]]  # [(dep_name, range_string), ...]
-	author_key: str = ""  # "ed25519:<kid>" from signature sidecar
-	source_content_id: str = ""  # "sha256:<hex>" from .source-attestation body
-	source_attestation_key: str = ""  # "ed25519:<kid>" of attestation signer
+	author_key: str = ""  # "ed25519:<kid>" from v1 author-claim sidecar
+	source_content_id: str = ""  # "sha256:<hex>" from v1 author/cert claim body
+	source_attestation_key: str = ""  # "ed25519:<kid>" of v1 cert-claim signer
 	# Module ids carried inside this `.dmp`'s manifest (the `modules[i]
 	# .module_id` list).  Load-bearing for trust verification: the trust
 	# store's namespace allowlist is keyed by MODULE namespace
@@ -68,15 +68,15 @@ class ConstraintEntry:
 class ResolvedDep:
 	"""A single resolved dependency entry as it appears in a lock v4.
 
-	Under the 0.30 source-attestation model the lock records two
-	independent identities for each dep:
+	Under the v1 trust model the lock records two independent
+	identities for each dep:
 	  - artifact identity: `sha256` (byte fingerprint of `.dmp`) +
-	    `author_key` (kid that signed the artifact).
+	    `author_key` (kid that signed the v1 author claim).
 	  - source identity: `source_content_id` (canonical hash of the
 	    declared source/build inputs, see
-	    `tools/drift_deploy/source_attestation.compute_source_content_id`)
-	    + `source_attestation_key` (kid that signed the
-	    `.source-attestation` body).
+	    `lang/driftc/packages/source_content_id.py`)
+	    + `source_attestation_key` (kid that signed the v1 cert
+	    claim).
 
 	Default-strict consumption (`drift build` / `drift deploy` with
 	no flags) requires ALL of `(version, sha256, author_key,
@@ -87,7 +87,7 @@ class ResolvedDep:
 	Source-rebuild mode (Phase D) tolerates `sha256` drift as long
 	as the source-identity half (`source_content_id` +
 	`source_attestation_key`) re-verifies; the trust root in that
-	mode is the source-attestation key, never the rebuilt artifact
+	mode is the v1 cert-claim signer, never the rebuilt artifact
 	signer.
 
 	Co-artifact entries leave `sha256`, `author_key`,
@@ -102,7 +102,7 @@ class ResolvedDep:
 	package_id: str = ""  # package name
 	author_key: str = ""  # "ed25519:<kid>" of artifact signer
 	source_content_id: str = ""  # "sha256:<hex>" — canonical source identity
-	source_attestation_key: str = ""  # "ed25519:<kid>" of source-attestation signer
+	source_attestation_key: str = ""  # "ed25519:<kid>" of v1 cert-claim signer
 
 
 class ResolutionError(Exception):
@@ -326,26 +326,28 @@ def build_package_index(
 	Three gates fire in order for each discovered `.dmp` / `.zdmp`
 	under this mode:
 
-	  a. **Missing `.sig` is fatal.**  An on-disk package with no
-	     `.sig` sidecar (empty `author_key`) raises.  Unsigned
-	     packages have nothing for the trust gate to verify
-	     against.  (The dev-opt-in `allow_unsigned_roots` path
-	     from `signature_v0.verify_package_signatures` is NOT
+	  a. **Missing v1 author claim is fatal.**  An on-disk package
+	     with no `<pkg>.author-claim` sidecar (empty `author_key`)
+	     raises.  Unsigned packages have nothing for the trust gate
+	     to verify against.  (The dev-opt-in `allow_unsigned_roots`
+	     bypass that exists on the consumer load path is NOT
 	     applied here; source-rebuild callers never set it.)
-	  b. **`.sig` cryptographic verify + per-module-namespace
-	     trust.**  Delegated to `verify_package_signatures`, which
-	     (a) verifies the canonical envelope-over-sha256 Ed25519
-	     signature against the trust store's pubkey, and (b)
-	     enforces per-module namespace trust using each
+	  b. **v1 author claim cryptographic verify + per-module-
+	     namespace trust.**  Delegated to the v1 claim verifier in
+	     `provider_v1` / `verify_v1.compose_verify`, which
+	     (a) verifies the author + cert claim signatures against
+	     the trust store's pubkeys, and (b) enforces per-module
+	     namespace trust (role-tagged) using each
 	     `module_id` from the manifest's `modules` list against
 	     `trust_store.allowed_kids_for_module(module_id)`.
 	     Namespaces follow MODULE ids (e.g. `net_tls.*`), NOT
 	     package ids.
-	  c. **`.source-attestation` signer allowlist + revocation.**
-	     `_read_source_attestation_meta` verifies the sidecar body
-	     cross-binding and self-signature; this gate adds the
-	     per-module-namespace allowlist check on the sidecar's
-	     recorded signer kid AND the revocation check against BOTH
+	  c. **v1 cert-claim signer allowlist + revocation.**
+	     `_read_source_attestation_meta` verifies the v1 author +
+	     cert claim cross-binding and self-signature; this gate
+	     adds the per-module-namespace allowlist check (certifiers
+	     role) on the cert-claim's recorded signer kid AND the
+	     revocation check against BOTH
 	     trust layers.
 
 	**(3) Run-snapshot (downstream source-rebuild consumer)**:
@@ -660,16 +662,16 @@ def build_package_index(
 				req_deps.append((name, ver))
 
 			sha = _sha256_file(dmp_path)
-			# Extract author_key from adjacent .sig sidecar.
+			# Extract author_key from adjacent v1 author-claim sidecar.
 			ak = _read_author_key(dmp_path)
-			# Extract source identity + attestation signer from
-			# the adjacent .source-attestation sidecar.  The helper
-			# cross-binds the sidecar body to the .dmp's own
-			# manifest fields and verifies the signature before
-			# returning a non-empty kid; absent or unbound sidecar
-			# yields ("", "") and `drift prepare` later refuses to
-			# write a v4 lock entry without source identity for any
-			# RESOLVED non-co-artifact dep.
+			# Extract source identity + certifier kid from the
+			# adjacent v1 author + cert claim sidecars.  The helper
+			# cross-binds the claim bodies to the .dmp's own
+			# manifest fields and verifies the signatures before
+			# returning a non-empty kid; an absent or unbound
+			# sidecar yields ("", "") and `drift prepare` later
+			# refuses to write a v4 lock entry without source
+			# identity for any RESOLVED non-co-artifact dep.
 			scid, sak = _read_source_attestation_meta(dmp_path, manifest)
 			# Extract module_ids (the canonical trust-namespace keys)
 			# from the manifest — trust allowlist is keyed by MODULE
@@ -679,14 +681,14 @@ def build_package_index(
 			# `TrustStore.allowed_kids_for_module`.
 			#
 			# Skip rules (non-string module_id, `*.__instantiations`)
-			# come from the shared
-			# `signature_v0.iter_trust_module_ids` predicate — same
-			# source of truth as the `.sig` signer trust gate, so
-			# the two cannot drift again.  PackageEntry retains
+			# come from the shared trust-module-id predicate the v1
+			# verifier uses (see provider_v1), so the cert-claim
+			# allowlist gate here and the author-claim namespace
+			# gate inside `compose_verify` share a single source of
+			# truth and cannot drift.  PackageEntry retains
 			# ALL module_ids from the manifest (for caller
 			# introspection) but only the trust-participating subset
-			# is used for the source-attestation allowlist gate
-			# below.
+			# is used for the v1 cert-claim allowlist gate below.
 			mod_ids: list[str] = []
 			_modules = manifest.get("modules")
 			if isinstance(_modules, list):
@@ -718,23 +720,26 @@ def build_package_index(
 			# invisible.
 			#
 			# Three gates run here when `trust_store` is supplied:
-			#   (a) `.sig` exists and `author_key` is non-empty.
-			#       Missing `.sig` in source-rebuild is a hard
-			#       error — the trust gate has nothing to verify
-			#       against an unsigned disk package.  Skipping
-			#       this would let a package with no `.sig` but
-			#       a seemingly-valid `.source-attestation` pass,
-			#       which violates the "installed artifact signer
+			#   (a) v1 author claim exists and `author_key` is
+			#       non-empty.  Missing author claim in source-
+			#       rebuild is a hard error — the trust gate has
+			#       nothing to verify against an unsigned disk
+			#       package.  Skipping this would let a package
+			#       with no author claim but a seemingly-valid
+			#       cert claim pass, which violates the "installed
+			#       artifact signer
 			#       must verify against the trust store" contract.
-			#   (b) `.sig` cryptographically verifies against the
-			#       trust store's pubkeys AND every module_id the
-			#       package declares maps to an allowlisted signer.
-			#       Delegated to `verify_package_signatures`.
-			#   (c) `source_attestation_key` is allowlisted for
-			#       every module namespace AND not revoked.
-			#       `_read_source_attestation_meta` already
-			#       verifies the sidecar's self-signature; this
-			#       step adds the namespace / revocation gate
+			#   (b) v1 author + cert claims cryptographically verify
+			#       against the trust store's pubkeys AND every
+			#       module_id the package declares maps to an
+			#       allowlisted signer (per role).  Delegated to
+			#       `_load_verifier` (provider_v1's
+			#       compose_verify-backed loader).
+			#   (c) `source_attestation_key` (the cert-claim signer)
+			#       is allowlisted for every module namespace AND
+			#       not revoked.  `_read_source_attestation_meta`
+			#       already verifies the sidecar's self-signature;
+			#       this step adds the namespace / revocation gate
 			#       the sidecar alone can't enforce.
 			if _load_verifier is not None:
 				# Gate (a): missing v1 cert claim in source-rebuild
@@ -780,17 +785,17 @@ def build_package_index(
 					)
 				# Gate (c): source_attestation_key allowlist +
 				# revocation.  Applied per-module_id, matching the
-				# .sig-kid gate in signature_v0.verify_package_
-				# signatures EXACTLY — the module-id iteration
-				# comes from the shared
-				# `signature_v0.iter_trust_module_ids` predicate
-				# (populated into `trust_mod_ids` above), so the
-				# skip rules (`.__instantiations`, non-string) are
+				# v1 author-claim allowlist gate inside
+				# `provider_v1` / `verify_v1.compose_verify` exactly
+				# — the module-id iteration comes from the shared
+				# trust-module-id predicate (populated into
+				# `trust_mod_ids` above), so the skip rules
+				# (`.__instantiations`, non-string) are
 				# single-sourced and the two gates cannot drift.
 				# Missing this predicate in the original patch
 				# caused orch's MariaDB rebuild to fail on a
-				# package whose `.sig` verified cleanly (orch
-				# report 2026-04-21).
+				# package whose author claim verified cleanly
+				# (orch report 2026-04-21).
 				if sak:
 					for mid in trust_mod_ids:
 						is_core = mid.startswith(("std.", "lang.", "drift."))

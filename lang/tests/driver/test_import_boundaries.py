@@ -158,11 +158,28 @@ def test_driftc_does_not_import_drift_layer() -> None:
 
 
 def test_drift_layer_does_not_import_driftc_internals() -> None:
-	# `lang/drift/` does not exist yet in the repo; once it does, this test
-	# starts enforcing the pinned boundary automatically.
+	# `lang/drift/` is the user-facing CLI layer.  It cannot reach
+	# into compiler internals (parser/IR/codegen).
+	#
+	# Exception list: the v1 trust contract intentionally couples
+	# the CLI to a small, stable set of v1 sidecar parsers / naming
+	# helpers in `lang.driftc.packages`.  These modules carry the
+	# on-disk format of v1 author / cert claims and are explicit
+	# integration points (NOT compiler internals -- they sit at
+	# the format layer, used by `provider_v1` on the consumer side
+	# and by `drift-author publish` on the producer side).  The
+	# CLI reads them so `drift trust import <author-claim>` can
+	# parse the same file shape the consumer verifies.
+	v1_sidecar_format_allow = frozenset({
+		"lang.driftc.packages.author_claim_v1",
+		"lang.driftc.packages.cert_claim_v1",
+		"lang.driftc.packages.sidecar_naming",
+	})
 	violations: list[ImportRef] = []
 	for py_path in _collect_py_files(Path("lang/drift")):
 		for imp in _collect_imports(py_path):
+			if imp.target in v1_sidecar_format_allow:
+				continue
 			if imp.target == "lang.driftc" or imp.target.startswith("lang.driftc."):
 				violations.append(imp)
 	assert not violations, "\n".join(

@@ -202,6 +202,7 @@ def publish_v1_pkg(
 	core_trust_for_build: Path | None = None,
 	required_deps: tuple = (),
 	stdlib_root_override: Path | None = None,
+	priv_seed: bytes | None = None,
 ) -> dict:
 	"""Build + sign a library package end-to-end with v1 trust artifacts.
 
@@ -315,15 +316,21 @@ def publish_v1_pkg(
 		f"stdout: {res.stdout[:500]}\nstderr: {res.stderr[:1500]}"
 	)
 
-	priv = Ed25519PrivateKey.generate()
+	# Allow callers to provide a pre-existing 32-byte seed (e.g. the
+	# trust-CLI tests need the published package's signer kid to match
+	# the kid in an `.author-profile` they already created).  Default
+	# is a freshly generated ephemeral key.
+	if priv_seed is None:
+		_priv = Ed25519PrivateKey.generate()
+		priv_seed = _priv.private_bytes(
+			encoding=serialization.Encoding.Raw,
+			format=serialization.PrivateFormat.Raw,
+			encryption_algorithm=serialization.NoEncryption(),
+		)
+	priv = Ed25519PrivateKey.from_private_bytes(priv_seed)
 	pub_raw = priv.public_key().public_bytes(
 		encoding=serialization.Encoding.Raw,
 		format=serialization.PublicFormat.Raw,
-	)
-	priv_seed = priv.private_bytes(
-		encoding=serialization.Encoding.Raw,
-		format=serialization.PrivateFormat.Raw,
-		encryption_algorithm=serialization.NoEncryption(),
 	)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
@@ -640,3 +647,111 @@ def sign_v1_pkg_into_root(
 		"artifact_sha256": artifact_sha256,
 		"priv_seed": priv_seed,
 	}
+
+
+# ── Thin v1 emit helpers for inline-fixture migration ─────────────
+
+
+_INLINE_TEST_SCI = "sha256:" + ("0" * 64)
+
+
+def write_v1_trust_store_inline(
+	path: Path,
+	*,
+	kid: str,
+	pub_b64: str,
+	namespaces: list[str],
+	revoked: list[str] | None = None,
+) -> None:
+	"""Write a v1 role-tagged trust store at `path`.
+
+	Convenience helper for test fixtures that previously emitted a
+	v0 flat-list trust JSON inline.  The Foundation-bootstrap
+	pattern (same kid in `authors` and `certifiers` for each
+	namespace) is hard-coded here because every caller wants it;
+	production trust stores split the roles explicitly via
+	`drift trust add --role`.
+	"""
+	revoked = revoked or []
+	obj = {
+		"format": "drift-trust",
+		"version": 1,
+		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
+		"namespaces": {
+			ns: {"authors": [kid], "certifiers": [kid]}
+			for ns in namespaces
+		},
+		"revoked": revoked,
+	}
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+
+
+def emit_v1_sidecars_inline(
+	pkg_path: Path,
+	*,
+	package_id: str,
+	package_version: str,
+	priv,
+	namespaces: list[str],
+	target: str = "test-target",
+	sci: str = _INLINE_TEST_SCI,
+) -> None:
+	"""Emit `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json`
+	next to `pkg_path` using `priv` (Ed25519PrivateKey) as both
+	the author and certifier kid (Foundation-bootstrap pattern).
+
+	Replaces the v0 `.sig` envelope emit pattern that several test
+	fixture files were using before the trust-v1 cutover.  Callers
+	must have built the `.dmp` with `--source-content-id <sci>` so
+	the manifest stamp matches the sidecar bodies (v1 verify
+	checks three-way equality on SCI).
+	"""
+	from hashlib import sha256
+	from cryptography.hazmat.primitives import serialization
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	artifact_sha256 = "sha256:" + sha256(pkg_path.read_bytes()).hexdigest()
+
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			namespaces=tuple(namespaces),
+			source_content_id=sci,
+			required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			artifact_sha256=artifact_sha256, source_content_id=sci,
+			target=target,
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))

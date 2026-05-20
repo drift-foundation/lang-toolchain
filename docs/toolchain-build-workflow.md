@@ -1,5 +1,12 @@
 # Drift Build & Package Workflow
 
+> **Trust-model v1 cutover.**  The package trust model is defined in
+> [`docs/design/trust-v1.md`](design/trust-v1.md).  Author signing
+> lives in `drift-author publish`; the consumer-side verifier
+> reads `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json`
+> against a role-tagged `drift/trust.json`.  Pre-v1 `drift sign`,
+> `.sig` sidecars, and the v0 envelope are gone.
+
 This guide is a practical, end-to-end workflow for new developers:
 
 1. Bootstrap and validate toolchain/compiler infra on a fresh clone.
@@ -375,13 +382,14 @@ and publishes all artifacts plus a bound copy of the declared author profile.
 Deploy is read-only with respect to tracked project files — it does not
 rewrite `drift/lock.json` or other repo-managed metadata.
 
-Published layout for a package:
+Published layout for a package (trust-v1):
 
 ```text
 ~/opt/drift/libs/net-tls/0.3.4/
 ├── assets/
 ├── net-tls.author-profile
-├── net-tls.sig
+├── net-tls.author-claim                 # author claim (drift-author publish)
+├── net-tls.cert-claim.<kid>.json        # cert claim (drift-deploy cert emit)
 └── net-tls.zdmp
 ```
 
@@ -480,30 +488,49 @@ $DRIFTC -M sandbox/app \
   sandbox/app/main.drift -o sandbox/app/my_app
 ```
 
-### 6.4 Sign a package manually
+### 6.4 Sign a package manually (trust-v1)
+
+Author claim emission (signs source identity, *not* artifact bytes):
 
 ```bash
-$DRIFT_TOOL sign sandbox/libmath/acme.math.dmp --key ~/.config/drift/keys/default.seed --include-pubkey
+drift-author publish                   \
+    --sidecar-dir sandbox/libmath/     \
+    --package-id acme.math             \
+    --version 0.1.0                    \
+    --namespace acme.math.*            \
+    --source-content-id sha256:<hex>   \
+    --target-class library             \
+    --release-utc 2026-05-19T00:00:00Z \
+    --key-file ~/.config/drift/keys/default.seed
 ```
 
-Standalone `drift sign` signs the package bytes only. The stronger
-package+author-profile binding is added by `drift deploy`.
+This produces `acme.math.author-claim` next to the `.dmp`.  Cert
+claim emission (signs artifact bytes + dep graph + cert suite)
+happens through `drift deploy` (the certifier role); manual
+single-package cert emission is intentionally not exposed because
+the cert claim is meaningful only as the output of a certifier
+pipeline that observed the build and ran a suite.
+
+See [`docs/design/trust-v1.md`](design/trust-v1.md) §7 for the
+full author / certifier workflow.
 
 ## 7. Command checklist
 
 **Publisher setup:**
 - Initialize publishing identity: `drift init`
-- Sign package: `drift sign <pkg.dmp> --key <seed>`
+- Sign source identity: `drift-author publish --sidecar-dir <pkg-dir> --package-id <id> --version <ver> --namespace <glob> --source-content-id sha256:<hex> --release-utc <iso> --key-file <seed>`
 
 **Project build (manifest-driven):**
 - Build artifact: `drift build <artifact> --manifest drift/manifest.json --driftc <driftc>`
 
 **Release workflow:**
 - Prepare lock: `drift prepare --manifest drift/manifest.json --dest <dest>`
-- Deploy: `drift deploy --manifest drift/manifest.json --dest <dest> --driftc <driftc>`
+- Deploy + emit cert claim: `drift deploy --manifest drift/manifest.json --dest <dest> --driftc <driftc>`
 
 **Consumer trust:**
-- Trust an author: `drift trust <file>.author-profile`
+- Trust an author profile: `drift trust <file>.author-profile`
+- Grant role manually: `drift trust add --namespace <glob> --pubkey-b64 <b64> --kid <kid> --role author|certifier|both`
+- Bulk-import from a v1 author claim: `drift trust import <pkg>.author-claim [--role author|both]`
 - List trust store: `drift trust list --trust-store <path>`
 - Revoke a key: `drift trust revoke --trust-store <path> --kid <kid>`
 

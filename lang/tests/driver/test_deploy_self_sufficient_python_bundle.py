@@ -48,25 +48,77 @@ def _public_key_bytes(pub) -> bytes:
 
 
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[str]) -> None:
+	"""v1 role-tagged trust store; bootstrap kid covers both roles."""
 	obj = {
 		"format": "drift-trust",
 		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {ns: [kid] for ns in namespaces},
+		"namespaces": {ns: {"authors": [kid], "certifiers": [kid]} for ns in namespaces},
 		"revoked": [],
 	}
 	_write_file(path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
 
 
-def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str) -> None:
-	sidecar = pkg_path.with_suffix(".sig")
-	obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{_sha256_hex(pkg_bytes)}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	_write_file(sidecar, json.dumps(obj, separators=(",", ":"), sort_keys=True))
+_TEST_SCI = "sha256:" + ("0" * 64)
+
+
+def _emit_v1_sidecars(
+	pkg_path: Path,
+	*,
+	package_id: str,
+	package_version: str,
+	priv: Ed25519PrivateKey,
+	target: str,
+	namespaces: list[str],
+) -> None:
+	"""Emit `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json` next
+	to the .dmp.  Same shape `tools.deploy.steps.stdlib` writes for
+	production deploys, just inlined for self-contained tests.
+	"""
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import CertClaimBody, CertSuite, Toolchain
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	artifact_sha256 = "sha256:" + _sha256_hex(pkg_path.read_bytes())
+
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			namespaces=tuple(namespaces),
+			source_content_id=_TEST_SCI,
+			required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			artifact_sha256=artifact_sha256, source_content_id=_TEST_SCI,
+			target=target,
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))
 
 
 def _gen_keys() -> tuple[Ed25519PrivateKey, str, str]:
@@ -103,6 +155,7 @@ pub const ANSWER: Int = 42;
 		"--package-id", "std",
 		"--package-version", "0.0.0-test",
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(pkg_path),
 	])
 	assert rc == 0, "failed to build std package"
@@ -145,10 +198,14 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(
 
 	priv, kid, pub_b64 = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=priv.sign(pkg_bytes), pub_b64=pub_b64)
+	_emit_v1_sidecars(
+		pkg_path, package_id="std", package_version="0.0.0-test",
+		priv=priv, target="test-target",
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
+	# v1 loader reads `core_trust_v1.json`.
 	_write_trust_store(
-		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust.json",
+		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust_v1.json",
 		kid=kid,
 		pub_b64=pub_b64,
 		namespaces=["std.*", "lang.*", "drift.*"],

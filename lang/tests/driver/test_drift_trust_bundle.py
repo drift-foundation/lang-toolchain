@@ -215,7 +215,11 @@ class TestApplyProfile:
 			assert report["already_trusted"] == []
 			store = json.loads(trust_path.read_text())
 			assert kid in store["keys"]
-			assert kid in store["namespaces"]["acme.*"]
+			# v1 namespace entries are role-tagged dicts (profile flow
+			# grants both author and certifier roles).
+			ns_entry = store["namespaces"]["acme.*"]
+			assert kid in ns_entry["authors"]
+			assert kid in ns_entry["certifiers"]
 
 	def test_idempotent(self) -> None:
 		_seed, pub_raw, kid = _make_key()
@@ -363,7 +367,10 @@ class TestTrustProfileCLI:
 			assert trust_path.exists()
 			store = json.loads(trust_path.read_text())
 			assert profile.kid in store["keys"]
-			assert profile.kid in store["namespaces"]["test.*"]
+			# v1 namespace entries are role-tagged dicts.
+			ns_entry = store["namespaces"]["test.*"]
+			assert profile.kid in ns_entry["authors"]
+			assert profile.kid in ns_entry["certifiers"]
 
 	def test_trust_nonexistent_profile_errors(self) -> None:
 		from lang.drift.cli import main as drift_main

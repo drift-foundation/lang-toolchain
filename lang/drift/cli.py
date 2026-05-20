@@ -12,19 +12,19 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from lang.drift.crypto import compute_ed25519_kid, ed25519_public_bytes_raw
-from lang.drift.fetch import FetchOptions, fetch_v0
 from lang.drift.doctor import DoctorOptions, doctor_exit_code, doctor_v0
-from lang.drift.index_v0 import load_index
-from lang.drift.publish import PublishOptions, publish_packages_v0
-from lang.drift.sign import SignOptions, load_sig_sidecar_v0, sign_package_v0
 from lang.drift.trust import (
+	TrustAddKeyOptions,
+	TrustImportOptions,
 	TrustListOptions,
 	TrustRevokeOptions,
+	add_key_to_trust_store,
+	import_sidecar_keys_to_trust_store,
 	list_trust_store,
+	plan_trust_import,
 	revoke_kid_in_trust_store,
 )
 from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
-from lang.drift.vendor import VendorOptions, vendor_v0
 
 
 def _UserPath(s: str) -> Path:
@@ -285,86 +285,15 @@ def _trust_profile_flow(profile_path_str: str, extra_argv: list[str]) -> int:
 		print(f"error: {e}", file=sys.stderr)
 		return 1
 
-	# ── Verify profile binding ──
-	# When the profile declares a package, we must verify the full chain:
-	#   1. Profile digest matches sidecar's author_profile_sha256
-	#   2. At least one Ed25519 signature in the sidecar verifies against
-	#      the reconstructed envelope (which includes the profile digest)
-	# Without step 2, an attacker could forge both the profile and sidecar.
+	# Profile-to-package binding in v1 is carried by the
+	# `<pkg>.author-claim` sidecar that `drift-author publish` emits
+	# next to the `.dmp`.  This CLI no longer reconstructs / verifies
+	# any v0 `.sig` envelope -- the v1 trust gate verifies the author
+	# claim at `driftc`/`drift_deploy` consumption time.  Surfacing
+	# `binding_status = "unbound"` here is deliberate: this command's
+	# job is to grant trust for the kid; artifact binding is a
+	# downstream concern.
 	binding_status = "unbound"
-	if profile.package:
-		sig_path = profile_path.parent / f"{profile.package}.sig"
-		if not sig_path.exists():
-			print(f"error: profile declares package '{profile.package}' but sidecar not found: {sig_path}", file=sys.stderr)
-			return 1
-		from lang.drift.crypto import sha256_hex, verify_ed25519
-		from lang.drift.sign import load_sig_sidecar
-		from lang.drift.envelope import build_envelope
-		try:
-			sf = load_sig_sidecar(sig_path)
-		except ValueError as e:
-			print(f"error: failed to read sidecar: {e}", file=sys.stderr)
-			return 1
-		if sf.envelope_version >= 1 and sf.author_profile_sha256_hex:
-			# Step 1: verify profile digest matches sidecar.
-			actual_hex = sha256_hex(profile_path.read_bytes())
-			if actual_hex != sf.author_profile_sha256_hex:
-				print(f"error: author profile has been modified since signing", file=sys.stderr)
-				print(f"  expected sha256: {sf.author_profile_sha256_hex}", file=sys.stderr)
-				print(f"  actual sha256:   {actual_hex}", file=sys.stderr)
-				return 1
-			# Step 2: verify at least one signature over the envelope,
-			# signed by the same key described in the profile.
-			from lang.drift.crypto import b64_decode as _b64_decode
-			envelope = build_envelope(
-				package_sha256_hex=sf.package_sha256_hex,
-				author_profile_sha256_hex=sf.author_profile_sha256_hex,
-			)
-			profile_pubkey_raw = _b64_decode(profile.pubkey_b64)
-			any_verified = False
-			for entry in sf.signatures:
-				if entry.pubkey_raw is None:
-					continue
-				# The verified signer must be the same key the profile declares.
-				if entry.kid != profile.kid:
-					continue
-				if entry.pubkey_raw != profile_pubkey_raw:
-					continue
-				try:
-					if verify_ed25519(pubkey_raw=entry.pubkey_raw, message=envelope, signature_raw=entry.sig_raw):
-						any_verified = True
-						break
-				except Exception:
-					continue
-			if not any_verified:
-				print(f"error: no valid signature by profile key over the package+profile envelope", file=sys.stderr)
-				return 1
-
-			# Step 3: verify actual package bytes on disk match sidecar digest.
-			pkg_dmp = profile_path.parent / f"{profile.package}.dmp"
-			pkg_zdmp = profile_path.parent / f"{profile.package}.zdmp"
-			if pkg_dmp.exists():
-				actual_pkg_sha = sha256_hex(pkg_dmp.read_bytes())
-				if actual_pkg_sha != sf.package_sha256_hex:
-					print(f"error: package bytes do not match sidecar digest", file=sys.stderr)
-					print(f"  expected sha256: {sf.package_sha256_hex}", file=sys.stderr)
-					print(f"  actual sha256:   {actual_pkg_sha}", file=sys.stderr)
-					return 1
-				binding_status = "bound"
-			elif pkg_zdmp.exists():
-				import zstandard
-				raw = zstandard.ZstdDecompressor().decompress(pkg_zdmp.read_bytes())
-				actual_pkg_sha = sha256_hex(raw)
-				if actual_pkg_sha != sf.package_sha256_hex:
-					print(f"error: package bytes do not match sidecar digest", file=sys.stderr)
-					print(f"  expected sha256: {sf.package_sha256_hex}", file=sys.stderr)
-					print(f"  actual sha256:   {actual_pkg_sha}", file=sys.stderr)
-					return 1
-				binding_status = "bound"
-			else:
-				# Envelope signature is valid, but we cannot verify the package
-				# artifact itself because it is not present on disk.
-				binding_status = "signature-only"
 
 	# Display profile contents.
 	print(f"\ndrift trust — review author profile\n")
@@ -458,73 +387,16 @@ def _resolve_key_path(name_or_path: str, keys_dir: Path) -> Path:
 	raise ValueError(f"key not found: {name_or_path} (searched {candidate} and {candidate2})")
 
 
-def _inspect_signers(path: Path, package_id: str | None) -> dict[str, object]:
-	if path.suffix == ".sig":
-		sf = load_sig_sidecar_v0(path)
-		return {
-			"source": "sidecar",
-			"path": str(path),
-			"package_sha256": sf.package_sha256,
-			"signers": sorted({s.kid for s in sf.signatures}),
-		}
-	if path.suffix in (".dmp", ".zdmp"):
-		sig_path = path.with_suffix(".sig")
-		if not sig_path.exists():
-			raise ValueError(f"missing sidecar for package: {sig_path}")
-		sf = load_sig_sidecar_v0(sig_path)
-		return {
-			"source": "package-sidecar",
-			"path": str(sig_path),
-			"package_sha256": sf.package_sha256,
-			"signers": sorted({s.kid for s in sf.signatures}),
-		}
-	if path.name == "index.json":
-		if not package_id:
-			raise ValueError("--package-id is required when inspecting index.json")
-		idx = load_index(path)
-		pkgs = idx.get("packages") or {}
-		if not isinstance(pkgs, dict):
-			raise ValueError("invalid index: packages must be an object")
-		raw = pkgs.get(package_id)
-		if not isinstance(raw, dict):
-			raise ValueError(f"package_id not found in index: {package_id}")
-		signers = raw.get("signers") or []
-		if not isinstance(signers, list):
-			raise ValueError(f"invalid signers for package_id: {package_id}")
-		return {
-			"source": "index",
-			"path": str(path),
-			"package_id": package_id,
-			"signers": sorted({str(s) for s in signers}),
-			"signed": bool(raw.get("signed", False)),
-		}
-	raise ValueError("unsupported input path: expected .dmp, .zdmp, .sig, or index.json")
-
-
 def _build_parser() -> argparse.ArgumentParser:
-	p = argparse.ArgumentParser(prog="drift", description="Drift tooling (package signing, publishing, etc.)")
+	p = argparse.ArgumentParser(
+		prog="drift",
+		description=(
+			"Drift tooling.  Author-side signing in v1 lives in "
+			"`drift-author publish` (separate CLI, author-key isolated "
+			"from the deploy pipeline)."
+		),
+	)
 	sub = p.add_subparsers(dest="cmd", required=True)
-
-	sign = sub.add_parser("sign", help="Sign a DMIR-PKG package (.dmp) by writing a .sig sidecar")
-	sign.add_argument("package", type=_UserPath, help="Path to pkg.dmp")
-	sign.add_argument(
-		"--key",
-		type=_UserPath,
-		required=False,
-		default=None,
-		help="Path to base64-encoded Ed25519 private seed (32 bytes). If omitted, uses DRIFT_SIGN_KEY_FILE or DRIFT_SIGN_KEY_CMD.",
-	)
-	sign.add_argument("--out", type=_UserPath, default=None, help="Output sidecar path (default: <pkg>.sig)")
-	sign.add_argument(
-		"--add-signature",
-		action="store_true",
-		help="Append a signature to an existing sidecar (fails if the sidecar is missing or mismatched)",
-	)
-	sign.add_argument(
-		"--include-pubkey",
-		action="store_true",
-		help="Include the public key bytes in the sidecar (driftc still verifies only against trust-store keys)",
-	)
 
 	keygen = sub.add_parser("keygen", help="Generate an Ed25519 private seed key file (base64)")
 	keygen.add_argument("--out", type=_UserPath, required=True, help="Output path for key seed file")
@@ -583,32 +455,54 @@ def _build_parser() -> argparse.ArgumentParser:
 	trust_revoke.add_argument("--kid", type=str, required=True, help="Key id (kid) to revoke")
 	trust_revoke.add_argument("--reason", type=str, default=None, help="Optional revocation reason")
 
-	publish = sub.add_parser("publish", help="Publish package(s) to a local directory repository (index.json)")
-	publish.add_argument("--dest-dir", type=_UserPath, required=True, help="Destination directory (repository root)")
-	publish.add_argument("packages", nargs="+", type=_UserPath, help="One or more pkg.dmp files to publish")
-	publish.add_argument("--force", action="store_true", help="Replace existing entry/files for the same package_id")
-	publish.add_argument(
-		"--allow-unsigned",
-		action="store_true",
-		help="Allow publishing unsigned packages (no .sig sidecar)",
+	trust_add = trust_sub.add_parser(
+		"add",
+		help="Grant a pubkey the author and/or certifier role for a namespace",
+	)
+	trust_add.add_argument(
+		"--trust-store",
+		type=_UserPath,
+		default=Path("drift") / "trust.json",
+		help="Path to trust store file (default: ./drift/trust.json)",
+	)
+	trust_add.add_argument("--namespace", type=str, required=True, help="Module-id namespace glob (e.g. acme.crypto.*)")
+	trust_add.add_argument("--pubkey-b64", type=str, required=True, help="Base64-encoded 32-byte Ed25519 public key")
+	trust_add.add_argument("--kid", type=str, default=None, help="Optional kid override (derived from pubkey if omitted)")
+	trust_add.add_argument(
+		"--role",
+		choices=["author", "certifier", "both"],
+		default="both",
+		help="Role(s) to grant the kid (default: both -- Foundation-bootstrap pattern; production setups should pass author or certifier explicitly)",
 	)
 
-	fetch = sub.add_parser("fetch", help="Fetch packages from local sources into a project cache")
-	fetch.add_argument("--sources", type=_UserPath, required=True, help="Path to drift/sources.json")
-	fetch.add_argument(
-		"--cache-dir",
-		type=_UserPath,
-		default=Path("cache") / "driftpm",
-		help="Cache directory (default: ./cache/driftpm)",
+	trust_import = trust_sub.add_parser(
+		"import",
+		help="Import author kids from a v1 <pkg>.author-claim sidecar",
 	)
-	fetch.add_argument("--force", action="store_true", help="Replace conflicting entries in cache index")
-	fetch.add_argument(
-		"--lock",
+	trust_import.add_argument(
+		"--trust-store",
 		type=_UserPath,
-		default=Path("drift") / "sources.lock.json",
-		help="Lockfile path; if it exists, fetch reproduces it exactly (default: ./drift/sources.lock.json)",
+		default=Path("drift") / "trust.json",
+		help="Path to trust store file (default: ./drift/trust.json)",
 	)
-	fetch.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
+	trust_import.add_argument(
+		"source",
+		type=_UserPath,
+		help="Path to a .author-claim sidecar or a .dmp / .zdmp (canonical sidecar resolved relative to it)",
+	)
+	trust_import.add_argument(
+		"--namespace",
+		type=str,
+		default=None,
+		help="Override the namespace granted to the imported kids (defaults to the claim's first declared namespace, else <package_id>.*)",
+	)
+	trust_import.add_argument(
+		"--role",
+		choices=["author", "certifier", "both"],
+		default="author",
+		help="Role(s) to grant the imported kids (default: author -- author-claim sidecars carry author kids)",
+	)
+	trust_import.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
 
 	doctor = sub.add_parser("doctor", help="Sanity checks for sources/index/trust/lock configuration")
 	doctor.add_argument("--sources", type=_UserPath, default=Path("drift") / "sources.json", help="Path to drift/sources.json")
@@ -639,41 +533,6 @@ def _build_parser() -> argparse.ArgumentParser:
 		default="fatal",
 		help="Exit non-zero on this severity (fatal always exits 2; degraded exits 1 when selected)",
 	)
-
-	vendor = sub.add_parser("vendor", help="Vendor cached packages into vendor/driftpkgs and write a lockfile")
-	vendor.add_argument(
-		"--cache-dir",
-		type=_UserPath,
-		default=Path("cache") / "driftpm",
-		help="Cache directory (default: ./cache/driftpm)",
-	)
-	vendor.add_argument(
-		"--dest-dir",
-		type=_UserPath,
-		default=Path("vendor") / "driftpkgs",
-		help="Vendored package directory (default: ./vendor/driftpkgs)",
-	)
-	vendor.add_argument(
-		"--lock",
-		type=_UserPath,
-		default=Path("drift") / "sources.lock.json",
-		help="Lockfile output path (default: ./drift/sources.lock.json)",
-	)
-	vendor.add_argument(
-		"--package-id",
-		dest="package_ids",
-		action="append",
-		default=None,
-		help="Restrict vendoring to specific package_id (repeatable); defaults to all cached packages",
-	)
-	vendor.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
-
-	pkg = sub.add_parser("package", help="Package inspection helpers")
-	pkg_sub = pkg.add_subparsers(dest="pkg_cmd", required=True)
-	pkg_signers = pkg_sub.add_parser("inspect-signers", help="Inspect signer kids from .sig/.dmp sidecar or index.json")
-	pkg_signers.add_argument("path", type=_UserPath, help="Path to .sig, .dmp, or index.json")
-	pkg_signers.add_argument("--package-id", type=str, default=None, help="Required when path is index.json")
-	pkg_signers.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
 	doc = sub.add_parser("doc", help="Generate API reference documentation from .drift source files")
 	doc.add_argument("source", type=_UserPath, help="A .drift file or directory of .drift files to document")
@@ -801,40 +660,6 @@ def main(argv: list[str] | None = None) -> int:
 	p = _build_parser()
 	args = p.parse_args(argv)
 
-	if args.cmd == "sign":
-		pkg_path: Path = args.package
-		out: Path = args.out if args.out is not None else pkg_path.with_suffix(".sig")
-		key_seed_path: Path | None = None
-		key_seed_text: str | None = None
-		if args.key is not None:
-			key_seed_path = args.key
-		elif os.environ.get("DRIFT_SIGN_KEY_FILE"):
-			key_seed_path = Path(str(os.environ["DRIFT_SIGN_KEY_FILE"])).expanduser()
-		elif os.environ.get("DRIFT_SIGN_KEY_CMD"):
-			cmd = str(os.environ["DRIFT_SIGN_KEY_CMD"])
-			cp = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-			if cp.returncode != 0:
-				p.error(f"DRIFT_SIGN_KEY_CMD failed (exit {cp.returncode}): {(cp.stderr or '').strip()}")
-				return 2
-			key_seed_text = cp.stdout or ""
-		else:
-			p.error("missing signing key: pass --key, or set DRIFT_SIGN_KEY_FILE, or set DRIFT_SIGN_KEY_CMD")
-			return 2
-		opts = SignOptions(
-			package_path=pkg_path,
-			key_seed_path=key_seed_path,
-			key_seed_text=key_seed_text,
-			out_path=out,
-			add_signature=bool(args.add_signature),
-			include_pubkey=bool(args.include_pubkey),
-		)
-		try:
-			sign_package_v0(opts)
-			return 0
-		except Exception as err:
-			p.error(str(err))
-			return 2
-
 	if args.cmd == "keygen":
 		opts = KeygenOptions(out_path=args.out, print_pubkey=bool(args.print_pubkey), print_kid=bool(args.print_kid))
 		try:
@@ -923,33 +748,46 @@ def main(argv: list[str] | None = None) -> int:
 				p.error(str(err))
 				return 2
 
+		if args.trust_cmd == "add":
+			opts = TrustAddKeyOptions(
+				trust_store_path=args.trust_store,
+				namespace=args.namespace,
+				pubkey_b64=args.pubkey_b64,
+				kid=args.kid,
+				role=args.role,
+			)
+			try:
+				add_key_to_trust_store(opts)
+				return 0
+			except Exception as err:
+				p.error(str(err))
+				return 2
+
+		if args.trust_cmd == "import":
+			opts = TrustImportOptions(
+				trust_store_path=args.trust_store,
+				namespace=args.namespace,
+				source_path=args.source,
+				role=args.role,
+			)
+			try:
+				report = import_sidecar_keys_to_trust_store(opts)
+				if args.json:
+					print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+				else:
+					print(f"imported from: {report['source']}")
+					print(f"  namespace:        {report['namespace']}")
+					print(f"  package_id:       {report['package_id']}")
+					print(f"  imported_kids:    {report['imported_kids']}")
+					if report["missing_pubkeys"]:
+						print(f"  missing_pubkeys:  {report['missing_pubkeys']}")
+						print("  (kids whose pubkey is not in the trust store yet; run `drift trust add` for each)")
+				return 0
+			except Exception as err:
+				p.error(str(err))
+				return 2
+
 		raise AssertionError("unreachable")
-
-	if args.cmd == "publish":
-		opts = PublishOptions(
-			dest_dir=args.dest_dir,
-			package_paths=list(args.packages),
-			force=bool(args.force),
-			allow_unsigned=bool(args.allow_unsigned),
-		)
-		try:
-			publish_packages_v0(opts)
-			return 0
-		except Exception as err:
-			p.error(str(err))
-			return 2
-
-	if args.cmd == "fetch":
-		opts = FetchOptions(sources_path=args.sources, cache_dir=args.cache_dir, force=bool(args.force), lock_path=args.lock)
-		report = fetch_v0(opts)
-		if args.json:
-			print(json.dumps(report.to_dict(), sort_keys=True, separators=(",", ":")))
-			return 0 if report.ok else 2
-		if report.ok:
-			return 0
-		for err in report.errors:
-			print(err.format_human(), file=sys.stderr)
-		return 2
 
 	if args.cmd == "doctor":
 		opts = DoctorOptions(
@@ -987,35 +825,6 @@ def main(argv: list[str] | None = None) -> int:
 			):
 				print(f"  - {finding.format_human()}", file=stream)
 		return code
-
-	if args.cmd == "vendor":
-		opts = VendorOptions(
-			cache_dir=args.cache_dir,
-			dest_dir=args.dest_dir,
-			lock_path=args.lock,
-			package_ids=list(args.package_ids) if args.package_ids else None,
-			json=bool(args.json),
-		)
-		try:
-			return int(vendor_v0(opts))
-		except Exception as err:
-			p.error(str(err))
-			return 2
-
-	if args.cmd == "package":
-		if args.pkg_cmd == "inspect-signers":
-			try:
-				report = _inspect_signers(args.path, args.package_id)
-				if args.json:
-					print(json.dumps(report, sort_keys=True, separators=(",", ":")))
-				else:
-					for signer in report.get("signers", []):
-						print(signer)
-				return 0
-			except Exception as err:
-				p.error(str(err))
-				return 2
-		raise AssertionError("unreachable")
 
 	if args.cmd == "doc":
 		from tools.drift_doc.drift_doc import generate_docs

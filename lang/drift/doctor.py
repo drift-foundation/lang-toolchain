@@ -434,12 +434,12 @@ def _check_trust_store(path: Path) -> DoctorCheckResult:
 			summary="trust store parse error",
 			findings=[DriftError(reason_code="TRUST_PARSE_ERROR", message=str(err), mode="doctor", artifact_path=str(path))],
 		)
-	if not isinstance(obj, dict) or obj.get("format") != "drift-trust" or obj.get("version") != 0:
+	if not isinstance(obj, dict) or obj.get("format") != "drift-trust" or obj.get("version") != 1:
 		return DoctorCheckResult(
 			check_id="trust",
 			status="fatal",
 			summary="trust store schema invalid",
-			findings=[DriftError(reason_code="TRUST_SCHEMA_INVALID", message="unsupported trust store format/version", mode="doctor", artifact_path=str(path))],
+			findings=[DriftError(reason_code="TRUST_SCHEMA_INVALID", message="unsupported trust store format/version (expected drift-trust v1)", mode="doctor", artifact_path=str(path))],
 		)
 
 	findings: list[DriftError] = []
@@ -452,9 +452,10 @@ def _check_trust_store(path: Path) -> DoctorCheckResult:
 		)
 		return DoctorCheckResult(check_id="trust", status="fatal", summary="trust store schema invalid", findings=findings)
 
-	if revoked is not None and not isinstance(revoked, (dict, list)):
+	# v1: revoked is a flat list of kid strings.
+	if revoked is not None and not isinstance(revoked, list):
 		findings.append(
-			DriftError(reason_code="TRUST_SCHEMA_INVALID", message="trust store revoked must be object or list", mode="doctor", artifact_path=str(path))
+			DriftError(reason_code="TRUST_SCHEMA_INVALID", message="trust store revoked must be a list of kid strings (v1)", mode="doctor", artifact_path=str(path))
 		)
 
 	for kid, k in keys.items():
@@ -511,10 +512,19 @@ def _check_trust_store(path: Path) -> DoctorCheckResult:
 			findings.append(
 				DriftError(reason_code="TRUST_NAMESPACE_INVALID", message="wildcard namespaces must end with '.*' (or be '*')", mode="doctor", artifact_path=str(path))
 			)
-		if not isinstance(kids, list) or any(not isinstance(k, str) or not k for k in kids):
+		# v1: namespace values are role-tagged objects, not flat lists.
+		# Shape: `{"authors": ["<kid>", ...], "certifiers": ["<kid>", ...]}`.
+		if not isinstance(kids, dict):
 			findings.append(
-				DriftError(reason_code="TRUST_NAMESPACE_INVALID", message="namespace values must be arrays of kids", mode="doctor", artifact_path=str(path))
+				DriftError(reason_code="TRUST_NAMESPACE_INVALID", message="namespace values must be role-tagged objects with 'authors'/'certifiers' lists (v1)", mode="doctor", artifact_path=str(path))
 			)
+			continue
+		for role_key in ("authors", "certifiers"):
+			role_list = kids.get(role_key, [])
+			if not isinstance(role_list, list) or any(not isinstance(k, str) or not k for k in role_list):
+				findings.append(
+					DriftError(reason_code="TRUST_NAMESPACE_INVALID", message=f"namespace {role_key!r} must be a list of kid strings", mode="doctor", artifact_path=str(path))
+				)
 
 	status: DoctorStatus = "ok"
 	summary = "trust store ok"

@@ -17,10 +17,9 @@ Cache:
 - Location: $DRIFT_CACHE_DIR/pkg/v0/<sha256>.dmp
   (default: ~/.cache/drift/pkg/v0/)
 - Cache is populated after successful decompression + hash verification.
-- Cache hit returns raw bytes without re-decompressing; signature
-  verification still happens in the caller (load_package_v1_with_policy
-  in the v1 compiler path; provider_v0 still uses the v0 envelope while
-  the deploy pipeline migration is pending).
+- Cache hit returns raw bytes without re-decompressing; trust
+  verification still happens in the caller
+  (`load_package_v1_with_policy`).
 """
 
 from __future__ import annotations

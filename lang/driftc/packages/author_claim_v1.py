@@ -47,8 +47,7 @@ package claims to own — "any one within the array" suffices per O5.
 Per the v1 product-boundary directive: this module accepts EXACTLY
 `format: "drift-author-claim"` with `version: 1`.  Any other shape
 is rejected with a clear "unsupported format version" diagnostic.
-There is no v0 author-claim, no fallback, and no relationship to
-the (slice-4-deleted) `.source-attestation`.
+There is no fallback to a pre-v1 source-attestation format.
 """
 
 from __future__ import annotations
@@ -627,9 +626,24 @@ def verify_author_claim_for_module(
 			),
 		)
 
-	# Author-role-trusted kids for this module.
+	# Author-role-trusted kids for this module.  Surface revocation
+	# explicitly: if a signer kid would have been allowed but for the
+	# trust store's `revoked` list, name the revoked kid so the user
+	# can correlate it with the `drift trust revoke` call.
 	allowed_authors = trust.allowed_authors_for_module(module_id)
+	revoked_signers = cryptographically_verified & trust.revoked_kids
 	if not allowed_authors:
+		if revoked_signers:
+			return AuthorClaimVerifyResult(
+				ok=False,
+				accepted_kid=None,
+				reason=(
+					f"author claim was signed by revoked kid(s) "
+					f"{sorted(revoked_signers)!r}; the trust store has these "
+					f"listed in `revoked` and module {module_id!r} has no other "
+					f"author-role kids"
+				),
+			)
 		return AuthorClaimVerifyResult(
 			ok=False,
 			accepted_kid=None,
@@ -642,6 +656,17 @@ def verify_author_claim_for_module(
 
 	accepted = sorted(cryptographically_verified & allowed_authors)
 	if not accepted:
+		if revoked_signers:
+			return AuthorClaimVerifyResult(
+				ok=False,
+				accepted_kid=None,
+				reason=(
+					f"author claim was signed by revoked kid(s) "
+					f"{sorted(revoked_signers)!r}; module {module_id!r} has "
+					f"other author-role kids but the claim is not co-signed "
+					f"by any of them"
+				),
+			)
 		return AuthorClaimVerifyResult(
 			ok=False,
 			accepted_kid=None,

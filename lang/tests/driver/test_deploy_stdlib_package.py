@@ -52,31 +52,90 @@ def _public_key_bytes(pub) -> bytes:
 
 
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[str], revoked: list[str] | None = None) -> None:
+	"""Write a v1 role-tagged trust store. Foundation-bootstrap: the
+	`kid` plays both author and certifier roles for every namespace
+	(matches the dev shape the stdlib tests need).
+	"""
 	revoked = revoked or []
 	obj = {
 		"format": "drift-trust",
 		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {ns: [kid] for ns in namespaces},
+		"namespaces": {ns: {"authors": [kid], "certifiers": [kid]} for ns in namespaces},
 		"revoked": revoked,
 	}
 	_write_file(path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
 
 
-def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str | None = None) -> Path:
-	pkg_sha_hex = _sha256_hex(pkg_bytes)
-	entry: dict = {"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw)}
-	if pub_b64 is not None:
-		entry["pubkey"] = pub_b64
-	sidecar = pkg_path.with_suffix(".sig")
-	obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{pkg_sha_hex}",
-		"signatures": [entry],
-	}
-	_write_file(sidecar, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-	return sidecar
+# Sentinel SCI used by every test in this file -- the v1 invariant
+# is that the manifest stamp and the author/cert claim bodies all
+# carry the SAME `source_content_id` string.  None of these tests
+# assert anything about source-identity contents, so a constant
+# value satisfies the verifier without source-tree hashing.
+_TEST_SCI = "sha256:" + ("0" * 64)
+
+
+def _emit_v1_sidecars(
+	pkg_path: Path,
+	*,
+	package_id: str,
+	package_version: str,
+	priv: Ed25519PrivateKey,
+	target: str,
+	namespaces: list[str],
+) -> tuple[Path, Path]:
+	"""Emit `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json`
+	sidecars next to the .dmp.  Replaces the v0 `_write_sig_sidecar`
+	helper; the v1 trust gate verifies these instead of the gone
+	`.sig` envelope.
+	"""
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import CertClaimBody, CertSuite, Toolchain
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	artifact_sha256 = "sha256:" + _sha256_hex(pkg_path.read_bytes())
+
+	author = sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			namespaces=tuple(namespaces),
+			source_content_id=_TEST_SCI,
+			required_deps=(),
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))
+	cert = sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			artifact_sha256=artifact_sha256,
+			source_content_id=_TEST_SCI,
+			target=target,
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed,
+		sidecar_dir=pkg_path.parent,
+	))
+	return author, cert
 
 
 @dataclass(frozen=True)
@@ -125,6 +184,7 @@ pub const ANSWER: Int = 42;
 		"--package-id", "std",
 		"--package-version", "0.0.0-test",
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(pkg_path),
 	])
 	assert rc == 0, "failed to build std package"
@@ -163,12 +223,12 @@ def _run_driftc_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> tup
 _SUBPROCESS_RUNNER = """\
 import sys, json
 from pathlib import Path
-from lang.driftc.packages import trust_v0
+from lang.driftc.packages import trust_v1
 _core_path = Path(sys.argv[1])
-_orig = trust_v0.load_core_trust_store
+_orig = trust_v1.load_core_trust_store
 def _patched():
-    return trust_v0.load_trust_store_json(_core_path)
-trust_v0.load_core_trust_store = _patched
+    return trust_v1.load_trust_store_json(_core_path)
+trust_v1.load_core_trust_store = _patched
 from lang.driftc.driftc import main
 sys.exit(main(sys.argv[2:]))
 """
@@ -191,7 +251,7 @@ def _run_driftc_subprocess(
 	# Inject PYTHONPATH=repo_root so the spawned `python _driftc_runner.py`
 	# can import `lang.*`.  Without this, sys.path[0] in the subprocess is
 	# the script's dir (tmp_path) -- `lang/` is not there, and
-	# `from lang.driftc.packages import trust_v0` fails with
+	# `from lang.driftc.packages import trust_v1` fails with
 	# `ModuleNotFoundError: No module named 'lang'`.  Mirrors the
 	# `env["PYTHONPATH"] = str(repo_root)` shape used by the stdlib_pkg
 	# fixture in this directory's `conftest.py`.
@@ -218,9 +278,11 @@ def test_signed_stdlib_package_compiles(
 
 	keys = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_emit_v1_sidecars(
+		pkg_path, package_id="std", package_version="0.0.0-test",
+		priv=keys.priv, target="test-target",
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 
 	core_trust_path = tmp_path / "core_trust.json"
 	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
@@ -305,11 +367,16 @@ def test_tampered_stdlib_package_rejected(
 
 	keys = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)
+	_emit_v1_sidecars(
+		pkg_path, package_id="std", package_version="0.0.0-test",
+		priv=keys.priv, target="test-target",
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
 
-	# Tamper: flip a byte in the package after signing.
+	# Tamper: flip a byte in the package after signing.  The cert
+	# claim was signed over the original artifact bytes; the v1
+	# verifier should reject the byte-mismatch.
 	tampered = bytearray(pkg_bytes)
 	tampered[-1] ^= 0xFF
 	pkg_path.write_bytes(bytes(tampered))
@@ -412,9 +479,11 @@ def test_deploy_wrapper_integration(
 
 	keys = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_emit_v1_sidecars(
+		pkg_path, package_id="std", package_version="0.0.0-test",
+		priv=keys.priv, target="test-target",
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 
 	core_trust_path = tmp_path / "core_trust.json"
 	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
@@ -465,11 +534,15 @@ def test_deploy_wrapper_tampered_rejected_integration(
 
 	keys = _gen_keys()
 	pkg_path = _build_std_package(tmp_path)
+	_emit_v1_sidecars(
+		pkg_path, package_id="std", package_version="0.0.0-test",
+		priv=keys.priv, target="test-target",
+		namespaces=["std.*", "lang.*", "drift.*"],
+	)
 	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
 
-	# Tamper after signing.
+	# Tamper after signing — the cert claim's `artifact_sha256`
+	# field no longer matches; v1 verify must reject.
 	tampered = bytearray(pkg_bytes)
 	tampered[-1] ^= 0xFF
 	pkg_path.write_bytes(bytes(tampered))

@@ -338,8 +338,8 @@ def _run_impl(args: argparse.Namespace) -> int:
 			# build time after the co-artifact is staged.  Same skip
 			# applies to `source_content_id` and
 			# `source_attestation_key` — both are left "" until the
-			# co-artifact's `.source-attestation` sidecar is emitted
-			# later in the same deploy run.
+			# co-artifact's v1 cert claim sidecar is emitted later
+			# in the same deploy run.
 			for pkg_id in list(resolved):
 				if pkg_id in co_artifact_names:
 					old = resolved[pkg_id]
@@ -374,7 +374,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# empty there (the authoritative resolve lives in the `--check`
 	# branch via `resolve_source_rebuild`, whose
 	# `apply_structural_trust_gates` pass enforces the same gate).
-	# Empty fields here mean the package's `.source-attestation`
+	# Empty fields here mean the package's v1 author claim
 	# sidecar was missing or failed cross-binding / signature
 	# verification at index time (see
 	# `resolver._read_source_attestation_meta` for the per-package
@@ -388,7 +388,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 			if dep.dep_type == "co-artifact":
 				continue
 			# Unsigned dev opt-in: if the package itself is unsigned
-			# (`author_key == "unsigned"`), its `.source-attestation`
+			# (`author_key == "unsigned"`), its v1 cert claim
 			# sidecar cannot exist either (signing infra governs both),
 			# so source identity is implicitly empty too.  Skip the
 			# gate for these — the unsigned escape hatch is preserved

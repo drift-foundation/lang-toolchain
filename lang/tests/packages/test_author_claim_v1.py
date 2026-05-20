@@ -554,9 +554,11 @@ def test_verify_for_module_rejects_revoked_author() -> None:
 	)
 	result = verify_author_claim_for_module(claim, trust, "singular.api", expected_package_id="singular", expected_version="0.3.0")
 	assert result.ok is False
-	# Revocation removes the kid from allowed_authors_for_module →
-	# no author-role kids left for this namespace.
-	assert "no author-role kids" in result.reason
+	# Revocation: the diagnostic names the revoked kid explicitly so a
+	# user reading the error can correlate it with the `drift trust
+	# revoke` call that produced this state.
+	assert "revoked kid(s)" in result.reason
+	assert kid in result.reason
 
 
 def test_verify_for_module_multi_signature_first_trusted_wins() -> None:

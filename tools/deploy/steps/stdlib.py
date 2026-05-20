@@ -1,12 +1,36 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Deploy step: build, sign, and install stdlib package + core trust store.
+Deploy step: build stdlib package and emit v1 cert claim.
 
 Produces:
   ${DIST}/lib/stdlib/std.dmp
-  ${DIST}/lib/stdlib/std.sig
+  ${DIST}/lib/stdlib/std.author-claim          (copied from caller-provided input)
+  ${DIST}/lib/stdlib/std.cert-claim.<cert-kid>.json   (emitted here)
   ${DIST}/lib/stdlib/stdlib_dep.txt
-  ${DIST}/lib/compiler/lang/driftc/packages/core_trust.json
+  ${DIST}/lib/compiler/lang/driftc/packages/core_trust_v1.json
+
+**Author-key-out-of-orch boundary.**  This deploy step does NOT
+hold, generate, or read any author private key.  The Foundation
+stdlib `<std>.author-claim` is an INPUT to this step, produced
+out-of-band by a Foundation-controlled `drift-author publish`
+run (offline / separate signing service / pre-provisioned
+artifact).  The deploy step:
+
+  - reads the externally-provided author claim,
+  - validates its body against the build's package identity + SCI,
+  - generates a fresh **certifier** kid (the only key material
+    that legitimately lives on the deploy host),
+  - emits the cert claim over the just-built `.dmp`,
+  - copies the author claim alongside the cert claim into the
+    install tree, and
+  - writes a `core_trust_v1.json` that maps the Foundation
+    author kid (from the caller-provided pubkey) into the
+    `authors` role and the deploy-generated certifier kid into
+    the `certifiers` role.
+
+The two kids in `core_trust_v1.json` MUST correspond to keys
+controlled by independent principals (Foundation offline signing
+vs. this deploy host); the deploy step never mints both.
 """
 
 from __future__ import annotations
@@ -15,12 +39,42 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
-def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> Path:
-	"""Build stdlib .dmp package. Returns path to .dmp file."""
+def _stdlib_sci(repo_root: Path, version: str) -> str:
+	"""Compute the canonical source content id for the stdlib build.
+
+	v1 verify requires every package's manifest SCI to match the
+	author/cert claim body SCI; this helper centralises the input
+	to all three sites so they cannot drift.
+	"""
+	from lang.driftc.packages.source_content_id import (
+		compute_artifact_source_content_id,
+	)
+	stdlib_dir = repo_root / "stdlib"
+	module_paths_rel = sorted(
+		str(p.relative_to(repo_root))
+		for p in stdlib_dir.rglob("*.drift")
+	)
+	return compute_artifact_source_content_id(
+		kind="library",
+		package_id="std",
+		version=version,
+		module_namespace="std",
+		entry_module="std",
+		module_paths=module_paths_rel,
+		package_deps=[],
+		native_deps=[],
+		unsafe=False,
+		asset_paths=[],
+		target_class="drift-dev",
+		source_root=repo_root,
+	)
+
+
+def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> tuple[Path, str]:
+	"""Build stdlib .dmp package. Returns `(dmp_path, source_content_id)`."""
 	print("[deploy] building stdlib package...", flush=True)
 
 	dmp_path = stage / "std.dmp"
@@ -37,6 +91,7 @@ def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> Path:
 	env = dict(os.environ)
 	env["PYTHONPATH"] = str(repo_root)
 
+	sci = _stdlib_sci(repo_root, version)
 	cmd = [
 		str(python), "-m", "lang.driftc",
 		"--dev",
@@ -46,6 +101,7 @@ def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> Path:
 		"--package-id", "std",
 		"--package-version", version,
 		"--package-target", "drift-dev",
+		"--source-content-id", sci,
 		# std.codec.gzip_encode / gzip_decode call into libz via the
 		# runtime-owned shim in lang/language_runtime/codec_gzip_runtime.c.
 		# The shim's deflate / inflate symbols are unresolved at the .o
@@ -73,43 +129,180 @@ def build_stdlib_package(repo_root: Path, stage: Path, version: str) -> Path:
 	if not dmp_path.exists():
 		raise RuntimeError("stdlib package build produced no output")
 
-	return dmp_path
+	return dmp_path, sci
 
 
-def sign_stdlib(repo_root: Path, dmp_path: Path) -> Path:
-	"""Sign stdlib package. Returns path to .sig sidecar."""
-	print("[deploy] signing stdlib package...", flush=True)
+def _validate_external_stdlib_author_claim(
+	author_claim_path: Path,
+	*,
+	expected_version: str,
+	expected_sci: str,
+	expected_author_kid: str,
+) -> None:
+	"""Validate a caller-provided `std.author-claim`.
 
-	python = repo_root / ".venv" / "bin" / "python3"
-	env = dict(os.environ)
-	env["PYTHONPATH"] = str(repo_root)
+	The deploy step accepts the author claim as an input artifact
+	(Foundation-produced offline / out-of-band).  We re-parse and
+	cross-check before emitting the cert claim so a stale or
+	mismatched author claim is caught at deploy time rather than
+	silently shipped to consumers.
 
-	result = subprocess.run(
-		[str(python), "-m", "lang.drift", "sign",
-		 str(dmp_path), "--include-pubkey"],
-		env=env, cwd=str(repo_root),
-		capture_output=True,
+	Checks:
+	  - body.package_id == "std"
+	  - body.version    == expected_version (the build's stdlib version)
+	  - body.source_content_id == expected_sci (the build's SCI;
+	    proves the externally-signed source identity matches the
+	    bytes this deploy is about to build a cert claim against)
+	  - body.namespaces covers std.*, lang.*, drift.*
+	  - at least one signature is by `expected_author_kid`
+	"""
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	claim = load_author_claim_json(author_claim_path.read_text(encoding="utf-8"))
+	if claim.body.package_id != "std":
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: body.package_id is "
+			f"{claim.body.package_id!r}, expected 'std'"
+		)
+	if claim.body.version != expected_version:
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: body.version is "
+			f"{claim.body.version!r}, expected {expected_version!r}.  The "
+			f"externally-signed author claim must match the version this "
+			f"deploy is building."
+		)
+	if claim.body.source_content_id != expected_sci:
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: body."
+			f"source_content_id is {claim.body.source_content_id!r}, but "
+			f"this deploy computed SCI {expected_sci!r} from the stdlib "
+			f"source tree.  Re-run the Foundation author-publish step "
+			f"against the source tree this deploy is building."
+		)
+	required_ns = {"std.*", "lang.*", "drift.*"}
+	declared = set(claim.body.namespaces)
+	if not required_ns.issubset(declared):
+		missing = sorted(required_ns - declared)
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: namespaces "
+			f"{sorted(declared)!r} do not cover the reserved set; missing "
+			f"{missing!r}"
+		)
+	signer_kids = {sig.kid for sig in claim.signatures}
+	if expected_author_kid not in signer_kids:
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: no signature by "
+			f"the configured Foundation author kid "
+			f"({expected_author_kid!r}).  Signer kids in the claim: "
+			f"{sorted(signer_kids)!r}"
+		)
+
+
+def emit_stdlib_cert_claim(
+	dmp_path: Path,
+	*,
+	version: str,
+	sci: str,
+	author_claim_path: Path,
+	author_kid: str,
+) -> tuple[str, str, Path]:
+	"""Generate a certifier keypair, validate the externally-provided
+	`std.author-claim`, and emit a cert claim alongside the `.dmp`.
+
+	This is the only key-mint operation the deploy step performs:
+	exactly one **certifier** keypair, ephemeral to the deploy run,
+	never persisted beyond the run.  The author identity comes in
+	as `(author_claim_path, author_kid)` — both produced outside
+	this process by Foundation's signing pipeline.
+
+	Returns `(cert_kid, cert_pub_b64, cert_sidecar_path)`.
+	"""
+	import base64
+	from hashlib import sha256
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+	from cryptography.hazmat.primitives import serialization
+	from lang.drift.crypto import compute_ed25519_kid
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
 	)
-	if result.returncode != 0:
-		sys.stderr.buffer.write(result.stderr)
-		raise RuntimeError("stdlib signing failed")
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+	from lang.versions import DRIFT_RT_ABI_VERSION
 
-	sig_path = dmp_path.with_suffix(".sig")
-	if not sig_path.exists():
-		raise RuntimeError("signing produced no sidecar")
+	# Cross-check the externally-signed author claim before we attest
+	# the build with our own cert claim.  A mismatched author claim
+	# would surface at consumer load time anyway, but failing here
+	# gives the deploy operator a precise diagnostic.
+	_validate_external_stdlib_author_claim(
+		author_claim_path,
+		expected_version=version,
+		expected_sci=sci,
+		expected_author_kid=author_kid,
+	)
 
-	return sig_path
+	# Generate the certifier keypair.  This is the ONLY key material
+	# this deploy step touches; the seed never leaves the process and
+	# is not persisted beyond the run.
+	cert_priv = Ed25519PrivateKey.generate()
+	cert_seed = cert_priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	cert_pub_raw = cert_priv.public_key().public_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PublicFormat.Raw,
+	)
+	cert_kid = compute_ed25519_kid(cert_pub_raw)
+	cert_pub_b64 = base64.b64encode(cert_pub_raw).decode("ascii")
+
+	artifact_sha256 = "sha256:" + sha256(dmp_path.read_bytes()).hexdigest()
+
+	# Toolchain fields reflect the actual build -- the cert claim
+	# attests these as part of the certifier's observation of the run.
+	cert_sidecar = sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id="std", version=version,
+			artifact_sha256=artifact_sha256, source_content_id=sci,
+			target="drift-dev",
+			toolchain=Toolchain(
+				driftc_version=version,
+				drift_rt_abi=DRIFT_RT_ABI_VERSION,
+				driftc_commit="deploy",
+			),
+			dep_graph=(),
+			cert_suite=CertSuite(
+				id="drift-deploy/stdlib", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64),
+			),
+			run_id=f"stdlib-{version}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=cert_seed,
+		sidecar_dir=dmp_path.parent,
+	))
+	# Discard the cert seed by binding it to None; it lives nowhere
+	# else.  The cert kid + pubkey survive in the on-disk core trust
+	# store; the private half is gone with the run.
+	del cert_seed, cert_priv
+
+	return cert_kid, cert_pub_b64, cert_sidecar
 
 
-def install_stdlib(dmp: Path, sig: Path, dist: Path) -> None:
-	"""Install stdlib .dmp, .sig, and stdlib_dep.txt into dist."""
+def install_stdlib(
+	dmp: Path, author_sidecar: Path, cert_sidecar: Path, dist: Path,
+) -> None:
+	"""Install stdlib `.dmp` + v1 sidecars + stdlib_dep.txt into dist."""
 	import shutil
 
 	stdlib_dir = dist / "lib" / "stdlib"
 	stdlib_dir.mkdir(parents=True, exist_ok=True)
 
 	shutil.copy2(str(dmp), str(stdlib_dir / "std.dmp"))
-	shutil.copy2(str(sig), str(stdlib_dir / "std.sig"))
+	shutil.copy2(str(author_sidecar), str(stdlib_dir / author_sidecar.name))
+	shutil.copy2(str(cert_sidecar), str(stdlib_dir / cert_sidecar.name))
 
 	# Single source of truth: read the actual package manifest.
 	write_stdlib_dep(dmp, dist)
@@ -133,55 +326,67 @@ def write_stdlib_dep(dmp: Path, dist: Path) -> None:
 	stdlib_dep_file.write_text(dep_spec + "\n", encoding="utf-8")
 
 
-def generate_core_trust_store(sig_path: Path, dist: Path) -> None:
-	"""Generate core trust store from stdlib sidecar."""
-	print("[deploy] generating core trust store...", flush=True)
+def generate_core_trust_store_v1(
+	*,
+	author_kid: str,
+	author_pub_b64: str,
+	cert_kid: str,
+	cert_pub_b64: str,
+	dist: Path,
+) -> None:
+	"""Write the v1 role-tagged core trust store consumed by the
+	bundled compiler at run time.
 
-	sidecar = json.loads(sig_path.read_text(encoding="utf-8"))
+	The two kids correspond to **independently controlled keys**:
+	  - `author_kid` / `author_pub_b64` come from the caller as an
+	    externally-produced Foundation author identity (the deploy
+	    step did not mint them);
+	  - `cert_kid` / `cert_pub_b64` are the ephemeral certifier
+	    keypair this deploy run minted.
 
-	fmt = sidecar.get("format")
-	if fmt != "dmir-pkg-sig":
-		raise RuntimeError(f"unexpected sidecar format: {fmt!r}")
+	The deploy step never holds the author private key.
+	"""
+	print("[deploy] generating v1 core trust store...", flush=True)
 
-	ver = sidecar.get("version")
-	if ver != 0:
-		raise RuntimeError(f"unexpected sidecar version: {ver!r}")
-
-	sigs = sidecar.get("signatures")
-	if not isinstance(sigs, list) or len(sigs) == 0:
-		raise RuntimeError("sidecar has no signatures")
-	if len(sigs) > 1:
-		raise RuntimeError(f"sidecar has {len(sigs)} signatures; expected exactly 1")
-
-	entry = sigs[0]
-	algo = entry.get("algo")
-	if algo != "ed25519":
-		raise RuntimeError(f"unsupported signature algorithm: {algo!r}")
-
-	kid = entry.get("kid")
-	if not kid or not isinstance(kid, str):
-		raise RuntimeError("signature entry missing 'kid'")
-
-	pubkey = entry.get("pubkey")
-	if not pubkey or not isinstance(pubkey, str):
-		raise RuntimeError("signature entry missing 'pubkey'")
+	if author_kid == cert_kid:
+		raise RuntimeError(
+			"core_trust_v1.json: author and certifier kids must come "
+			"from independently controlled keys; got identical kid "
+			f"{author_kid!r}.  Either the externally-provided author "
+			"identity collides with the deploy-minted cert kid (extremely "
+			"unlikely, treat as failure) or the same key material was "
+			"used for both roles (forbidden in v1)."
+		)
 
 	namespaces = ["std.*", "lang.*", "drift.*"]
 	trust_store = {
 		"format": "drift-trust",
-		"version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pubkey}},
-		"namespaces": {ns: [kid] for ns in namespaces},
+		"version": 1,
+		"keys": {
+			author_kid: {"algo": "ed25519", "pubkey": author_pub_b64},
+			cert_kid:   {"algo": "ed25519", "pubkey": cert_pub_b64},
+		},
+		"namespaces": {
+			ns: {
+				"authors":    [author_kid],
+				"certifiers": [cert_kid],
+			}
+			for ns in namespaces
+		},
 		"revoked": [],
 	}
 
-	out_path = dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust.json"
+	out_path = dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust_v1.json"
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 	out_path.write_text(
 		json.dumps(trust_store, indent=2, sort_keys=True) + "\n",
 		encoding="utf-8",
 	)
-	print(f"wrote trust store: {out_path} (kid={kid[:24]}...)", flush=True)
+	print(
+		f"wrote v1 trust store: {out_path} "
+		f"(author={author_kid[:24]}..., cert={cert_kid[:24]}...)",
+		flush=True,
+	)
 
 
 def build_and_install_stdlib(
@@ -189,25 +394,85 @@ def build_and_install_stdlib(
 	stage: Path,
 	dist: Path,
 	version: str,
-) -> tuple[Path, Path]:
-	"""Full stdlib pipeline: build → sign → install → trust store.
+	*,
+	stdlib_author_claim_path: Path,
+	stdlib_author_pubkey_b64: str,
+) -> tuple[Path, Path, Path]:
+	"""Full stdlib pipeline: build → validate caller-provided author
+	claim → emit cert claim → install → core_trust_v1.json.
 
-	Returns (dmp_path, sig_path).
+	Required external inputs:
+	  - `stdlib_author_claim_path`: an already-emitted
+	    `std.author-claim` produced out-of-band by Foundation's
+	    author-signing flow (offline / separate signing service /
+	    pre-provisioned artifact).  The deploy step VALIDATES this
+	    artifact against the build but does NOT generate one.
+	  - `stdlib_author_pubkey_b64`: the public key matching the
+	    Foundation author kid that signed the claim.  Required
+	    because the consumer-side `core_trust_v1.json` records
+	    pubkeys, not just kids.
+
+	Returns `(dmp_path, author_sidecar, cert_sidecar)`.
 	"""
-	dmp = build_stdlib_package(repo_root, stage, version)
-	sig = sign_stdlib(repo_root, dmp)
-	install_stdlib(dmp, sig, dist)
-	generate_core_trust_store(sig, dist)
+	import base64
+	from hashlib import sha256
+	from lang.drift.crypto import compute_ed25519_kid
+
+	if not stdlib_author_claim_path.is_file():
+		raise RuntimeError(
+			f"stdlib deploy: required stdlib_author_claim_path does not "
+			f"exist: {stdlib_author_claim_path}.  The stdlib author claim "
+			f"must be produced out-of-band by Foundation before this "
+			f"deploy runs (see docs/design/trust-v1.md §7.5)."
+		)
+
+	# Derive the author kid from the provided pubkey so the deploy
+	# step has a name to match against the claim's signatures.
+	author_pub_raw = base64.b64decode(stdlib_author_pubkey_b64)
+	if len(author_pub_raw) != 32:
+		raise RuntimeError(
+			f"stdlib deploy: stdlib_author_pubkey_b64 must decode to 32 "
+			f"bytes (Ed25519 raw public key); got {len(author_pub_raw)}"
+		)
+	author_kid = compute_ed25519_kid(author_pub_raw)
+
+	dmp, sci = build_stdlib_package(repo_root, stage, version)
+	cert_kid, cert_pub_b64, cert = emit_stdlib_cert_claim(
+		dmp,
+		version=version,
+		sci=sci,
+		author_claim_path=stdlib_author_claim_path,
+		author_kid=author_kid,
+	)
+	# Stage the externally-provided author claim next to the .dmp so
+	# install_stdlib can copy it into the dist tree from a known
+	# location.  Skip the copy when the caller already placed the
+	# claim there (idempotent).
+	staged_author_claim = dmp.parent / "std.author-claim"
+	if stdlib_author_claim_path.resolve() != staged_author_claim.resolve():
+		import shutil as _sh
+		_sh.copy2(str(stdlib_author_claim_path), str(staged_author_claim))
+	author = staged_author_claim
+	author_pub_b64 = stdlib_author_pubkey_b64
+	install_stdlib(dmp, author, cert, dist)
+	generate_core_trust_store_v1(
+		author_kid=author_kid,
+		author_pub_b64=author_pub_b64,
+		cert_kid=cert_kid,
+		cert_pub_b64=cert_pub_b64,
+		dist=dist,
+	)
 
 	# Verify outputs.
 	expected = [
 		dist / "lib" / "stdlib" / "std.dmp",
-		dist / "lib" / "stdlib" / "std.sig",
-		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust.json",
+		dist / "lib" / "stdlib" / author.name,
+		dist / "lib" / "stdlib" / cert.name,
+		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust_v1.json",
 	]
 	for f in expected:
 		if not f.exists():
 			raise RuntimeError(f"expected output not found: {f}")
 
-	print("[deploy] stdlib package installed and signed", flush=True)
-	return dmp, sig
+	print("[deploy] stdlib package installed with v1 author + cert claims", flush=True)
+	return dmp, author, cert

@@ -200,14 +200,21 @@ def apply_author_profile_to_trust_store(
 	store = _load_or_init_trust_store(trust_store_path)
 	ns_obj = store.get("namespaces", {})
 
+	# v1 trust store entries are role-tagged dicts:
+	#   `{"authors": [...], "certifiers": [...]}`.
+	# A profile already counts as trusted when the kid is present in
+	# BOTH roles (the profile flow adds with role="both").
 	already: list[str] = []
 	added: list[str] = []
 	for ns in profile.namespaces:
-		ns_kids = ns_obj.get(ns, [])
-		if isinstance(ns_kids, list) and profile.kid in ns_kids:
-			already.append(ns)
-		else:
-			added.append(ns)
+		entry = ns_obj.get(ns)
+		if isinstance(entry, dict):
+			authors = entry.get("authors") or []
+			certifiers = entry.get("certifiers") or []
+			if profile.kid in authors and profile.kid in certifiers:
+				already.append(ns)
+				continue
+		added.append(ns)
 
 	for ns in profile.namespaces:
 		add_key_to_trust_store(TrustAddKeyOptions(

@@ -1704,9 +1704,9 @@ class TestLockCompatibility:
 		prepared against.  A compatible upstream patch legitimately
 		shifts the dep's scid without the downstream having touched
 		its own lock.  Trust comes from the namespace-allowlist check
-		at package-index time (`signature_v0.py::verify_package_
-		signatures`), not per-dep scid equality with the lock.  See
-		`docs/history.md` 2026-04-21 for the full rationale."""
+		at package-index time (v1 `provider_v1` / `verify_v1.
+		compose_verify`), not per-dep scid equality with the lock.
+		See `docs/history.md` 2026-04-21 for the full rationale."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib
@@ -1804,7 +1804,8 @@ class TestLockCompatibility:
 		assert result == 1
 		err = capsys.readouterr().err
 		assert "source-rebuild requires" in err
-		assert "republish" in err.lower()
+		# v1 wording: the diagnostic now names the v1 sidecar emitters.
+		assert "drift-author publish" in err or "drift-deploy" in err
 
 	def test_default_strict_still_rejects_sha_drift_without_flag(self, tmp_path, capsys):
 		"""Phase D regression: WITHOUT `--source-rebuild`, the default

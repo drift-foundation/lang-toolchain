@@ -17,6 +17,7 @@ from pathlib import Path
 
 from lang.drift.crypto import compute_ed25519_kid
 from lang.tests.driver.driver_cli_helpers import with_target_word_bits
+from lang.tests.driver.pkg_test_helpers import publish_v1_pkg
 
 
 def _write_file(path: Path, text: str) -> None:
@@ -25,9 +26,19 @@ def _write_file(path: Path, text: str) -> None:
 
 
 def test_drift_trust_revoke_blocks_package_consumption(tmp_path: Path) -> None:
-	"""Full round-trip: init → sign → trust → consume → revoke → reject."""
+	"""Full round-trip: publish (v1) → init → trust → consume → revoke → reject.
+
+	The v0 `.sig` envelope flow is gone in v1; this test uses the v1
+	publish helper so the package ships with the author+cert claim
+	sidecars next to the `.dmp`.  The kid signing those sidecars must
+	match the kid in the `.author-profile` that `drift trust` reads,
+	so we generate the seed first and feed it into both the publisher
+	helper and `drift init`.
+	"""
+	lib_src = tmp_path / "lib"
+	lib_src.mkdir()
 	_write_file(
-		tmp_path / "lib" / "lib.drift",
+		lib_src / "lib.drift",
 		"""
 module lib;
 
@@ -38,39 +49,32 @@ pub fn add(a: Int, b: Int) -> Int {
 }
 """.lstrip(),
 	)
-	pkg = tmp_path / "lib.dmp"
 	repo_root = Path.cwd()
 
-	build_pkg = subprocess.run(
-		with_target_word_bits(
-			[
-				sys.executable, "-m", "lang.driftc.driftc",
-				"-M", str(tmp_path),
-				str(tmp_path / "lib" / "lib.drift"),
-				"--package-id", "test.pkg",
-				"--package-version", "0.0.0",
-				"--package-target", "test-target",
-				"--emit-package", str(pkg),
-				"--json",
-			]
-		),
-		cwd=str(repo_root), check=False, capture_output=True, text=True,
-	)
-	assert build_pkg.returncode == 0, build_pkg.stderr
-
+	# Shared key material: the publisher's claim signer kid MUST
+	# match the kid `drift trust <profile>` adds to the trust store.
 	seed32 = os.urandom(32)
 	key_path = tmp_path / "key.seed"
 	key_path.write_text(base64.b64encode(seed32).decode("ascii") + "\n", encoding="utf-8")
 
-	# Sign the package.
-	sign = subprocess.run(
-		[
-			sys.executable, "-m", "lang.drift",
-			"sign", str(pkg), "--key", str(key_path), "--include-pubkey",
-		],
-		cwd=str(repo_root), check=False, capture_output=True, text=True,
+	pkg_root = tmp_path / "pkg_root"
+	pkg_root.mkdir()
+
+	# v1 publish: builds `.dmp` (with sentinel SCI stamp), then emits
+	# `<pkg>.author-claim` and `<pkg>.cert-claim.<kid>.json` next to
+	# it, and stages all three under `<pkg_root>/test.pkg/0.0.0/`.
+	# `priv_seed=seed32` ensures the package's signer kid matches the
+	# `.author-profile` kid below.
+	pub_info = publish_v1_pkg(
+		lib_dir=lib_src,
+		src_files=[lib_src / "lib.drift"],
+		package_id="test.pkg",
+		package_version="0.0.0",
+		namespace_glob="lib.*",
+		dest_pkg_root=pkg_root,
+		target="test-target",
+		priv_seed=seed32,
 	)
-	assert sign.returncode == 0, sign.stderr
 
 	# Create publisher profile via drift init.
 	profile_path = tmp_path / "test.author-profile"
@@ -88,6 +92,10 @@ pub fn add(a: Int, b: Int) -> Int {
 	)
 	assert init_cmd.returncode == 0, init_cmd.stderr
 	assert profile_path.exists()
+
+	# Sanity check: profile kid matches the publisher kid (same seed).
+	profile_obj = json.loads(profile_path.read_text(encoding="utf-8"))
+	assert profile_obj["key"]["kid"] == pub_info["kid"]
 
 	# Consumer trusts the profile.
 	trust_path = tmp_path / "drift" / "trust.json"
@@ -127,7 +135,7 @@ fn main() nothrow -> Int{
 				[
 					sys.executable, "-m", "lang.driftc.driftc",
 					"-M", str(tmp_path),
-					"--package-root", str(tmp_path),
+					"--package-root", str(pkg_root),
 					"--dep", "test.pkg@0.0.0",
 					"--require-signatures",
 					"--trust-store", str(trust_path),
@@ -210,4 +218,7 @@ def test_drift_init_then_trust_profile_adds_key_to_namespace(tmp_path: Path) -> 
 
 	trust_obj = json.loads(trust_path.read_text(encoding="utf-8"))
 	assert kid in trust_obj.get("keys", {})
-	assert kid in (trust_obj.get("namespaces", {}).get("test.pkg.*") or [])
+	# v1 namespaces are role-tagged dicts: {"authors": [...], "certifiers": [...]}.
+	ns_entry = trust_obj.get("namespaces", {}).get("test.pkg.*") or {}
+	assert kid in ns_entry.get("authors", [])
+	assert kid in ns_entry.get("certifiers", [])

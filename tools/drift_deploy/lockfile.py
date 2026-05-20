@@ -253,7 +253,7 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 				# v4: source identity fields are required for SIGNED
 				# non-co-artifact entries.  The unsigned dev opt-in
 				# (`author_key == "unsigned"`) propagates: an unsigned
-				# package has no `.source-attestation` sidecar (signing
+				# package has no v1 author/cert claim sidecars (signing
 				# infra governs both halves of the v4 identity), so
 				# both `source_content_id` and `source_attestation_key`
 				# are also allowed to be empty for those entries.  The
@@ -312,11 +312,12 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 #
 #   Trust root (both modes):
 #     namespace owner-continuity via trust store — the installed
-#     package's artifact-signer kid AND source-attestation-signer
-#     kid must each be in the trust store's namespace allowlist for
-#     every `module_id` the package declares, AND neither may be
-#     revoked, AND the `.sig` must cryptographically verify against
-#     the trust store's pubkey.  Primary gate lives at index time in
+#     package's author-claim signer kid AND cert-claim signer kid
+#     must each be in the trust store's namespace allowlist (in the
+#     right role: authors / certifiers) for every `module_id` the
+#     package declares, AND neither may be revoked, AND each claim
+#     must cryptographically verify against the trust store's
+#     pubkey.  Primary gate lives at index time in
 #     `tools.drift_deploy.resolver.build_package_index(trust_store=...)`
 #     — which hard-fails (raises `ResolutionError`) on any trust-
 #     verification failure, rather than silently pruning.  Source-
@@ -351,11 +352,11 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 #       differ from disk, NOT treated as failure — the lock records
 #       the downstream repo's last-prepared state, not the currently
 #       selected rebuild inputs.
-#     * the disk-side trust gate (cryptographic `.sig` verify +
-#       per-module-namespace allowlist + non-revocation for both
-#       signer kids) runs at index time via `build_package_index
-#       (trust_store=...)` → fail-fast `ResolutionError` on any
-#       violation.
+#     * the disk-side trust gate (cryptographic v1 author + cert
+#       claim verify + per-module-namespace allowlist + non-
+#       revocation for both signer kids) runs at index time via
+#       `build_package_index(trust_store=...)` → fail-fast
+#       `ResolutionError` on any violation.
 #     * structural per-dep gates (unsigned reject, empty source
 #       identity reject) run via `apply_structural_trust_gates`
 #       in the authority.
@@ -394,11 +395,12 @@ trust/signature requirements that also gate
 - exact `author_key` kid match with lock
 - exact `source_content_id` match with lock
 - exact `source_attestation_key` kid match with lock
-- installed `.dmp` signature verifies
-- installed `.source-attestation` verifies
-- installed artifact signer kid is trusted for the package namespace
-- installed source-attestation signer kid is trusted for the package
-  namespace
+- installed `.dmp` is covered by a v1 author claim that verifies
+- installed `.dmp` is covered by a v1 cert claim that verifies
+- installed author-claim signer kid is trusted (authors role) for
+  the package namespace
+- installed cert-claim signer kid is trusted (certifiers role) for
+  the package namespace
 - neither installed signer kid is revoked
 - package is not unsigned
 
@@ -431,20 +433,19 @@ compatibility` call path.
   satisfied structurally)
 - resolved graph satisfies producer `required_deps` during
   resolution (same resolver-time constraint)
-- every on-disk package has a `.sig` sidecar (empty `author_key`
-  is a hard error — source-rebuild's trust root has nothing to
-  verify against an unsigned disk package)
-- every `.sig` cryptographically verifies against the trust
+- every on-disk package has a `<pkg>.author-claim` sidecar (empty
+  `author_key` is a hard error — source-rebuild's trust root has
+  nothing to verify against an unsigned disk package)
+- every author claim cryptographically verifies against the trust
   store's pubkeys AND every module_id the package declares maps
-  to an allowlisted signer kid
-- every `.source-attestation` sidecar is present, structurally
-  valid, cross-bound to the `.dmp` manifest, and self-verifies
-  (enforced by `_read_source_attestation_meta`); its recorded
-  signer kid also passes the namespace-allowlist + non-revocation
-  check at index time
-- neither signer kid (artifact or source-attestation) is in the
-  trust store's revoked_kids set (core trust store OR project
-  trust store)
+  to an allowlisted author kid for that namespace
+- every `<pkg>.cert-claim.<kid>.json` sidecar is present,
+  structurally valid, cross-bound to the `.dmp` artifact, and
+  self-verifies; its recorded certifier kid also passes the
+  namespace-allowlist (certifiers role) + non-revocation check at
+  index time
+- neither signer kid (author or certifier) is in the trust store's
+  revoked_kids set (core trust store OR project trust store)
 - no co-artifact status on externally-discovered packages (co-
   artifact is only valid for same-manifest library siblings)
 
@@ -526,7 +527,7 @@ def verify_lock_compatibility(
 	`trust_store` is REQUIRED when `mode == VERIFY_MODE_SOURCE_
 	REBUILD` — source-rebuild replaces lock-kid equality with a
 	live namespace-allowlist + non-revoked check against the disk's
-	artifact signer and source-attestation signer.  `build_package_
+	author-claim signer and cert-claim signer.  `build_package_
 	index` does not consult the trust store, so the verifier cannot
 	assume an earlier pass has already rejected untrusted kids.
 	Passing `None` in source-rebuild raises `ValueError` to fail
@@ -549,8 +550,8 @@ def verify_lock_compatibility(
 		# any kid would defeat the whole point.
 		raise ValueError(
 			"verify_lock_compatibility mode=VERIFY_MODE_SOURCE_REBUILD "
-			"requires a `trust_store` — the disk-side artifact signer "
-			"and source-attestation signer kids must each be verified "
+			"requires a `trust_store` — the disk-side author-claim and "
+			"cert-claim signer kids must each be verified "
 			"against the trust store's namespace allowlist (not revoked), "
 			"and this verifier cannot delegate that check to any earlier "
 			"pass.  Callers should load the merged project+core trust "
@@ -617,19 +618,18 @@ def verify_lock_compatibility(
 		disk = exact_matches[0]
 
 		# ── Unsigned dev opt-in incompatible with source-rebuild ──
-		# Source-rebuild mode REQUIRES a signed source attestation
-		# as its trust root.  Unsigned packages have neither a
-		# `.sig` NOR a `.source-attestation`, so there is nothing
-		# to verify against — hard fail.  This is the only place
-		# the unsigned opt-in is rejected outright.
+		# Source-rebuild mode REQUIRES v1 author + cert claims as its
+		# trust root.  Unsigned packages have neither sidecar, so
+		# there is nothing to verify against — hard fail.  This is
+		# the only place the unsigned opt-in is rejected outright.
 		if dep.author_key == "unsigned" and mode == VERIFY_MODE_SOURCE_REBUILD:
 			errors.append(
 				f"locked dependency '{pkg_id}@{dep.version}' is marked "
 				f"`author_key: \"unsigned\"`, but source-rebuild mode "
-				f"requires a signed source attestation as the trust "
-				f"root.  Unsigned packages have no `.source-"
-				f"attestation` sidecar to verify against; sign and "
-				f"republish (toolchain >= 0.30.0) before using "
+				f"requires v1 author + cert claims as the trust "
+				f"root.  Unsigned packages have no v1 claim sidecars "
+				f"to verify against; run `drift-author publish` and "
+				f"`drift-deploy` cert-claim emit before using "
 				f"source-rebuild certification on this dep."
 			)
 			continue
@@ -679,20 +679,21 @@ def verify_lock_compatibility(
 
 		# ── Artifact-signer + source-identity halves ──
 		# The unsigned dev opt-in skips both: unsigned packages have
-		# no `.sig` (so author_key on disk is empty) and no
-		# `.source-attestation` (so source identity is empty).  Byte
-		# identity (above) is still enforced; this branch governs
-		# the SIGNATURE-anchored checks only.
+		# no v1 author claim (so author_key on disk is empty) and no
+		# v1 cert claim (so source identity is empty).  Byte identity
+		# (above) is still enforced; this branch governs the
+		# SIGNATURE-anchored checks only.
 		if dep.author_key == "unsigned":
 			continue
 
 		# Strict mode: artifact-signer must match the lock.
 		# Source-rebuild mode: kid drift is evidence — the trust
 		# anchor is namespace owner-continuity enforced at package-
-		# index time (see `signature_v0.py::verify_package_signatures`),
-		# not lock equality.  The only hard gate here for source-
-		# rebuild is "package must be signed on disk" (unsigned is
-		# already rejected for source-rebuild earlier in this loop).
+		# index time via the v1 author + cert claim verifier in
+		# `provider_v1` / `verify_v1.compose_verify`, not lock
+		# equality.  The only hard gate here for source-rebuild is
+		# "package must be signed on disk" (unsigned is already
+		# rejected for source-rebuild earlier in this loop).
 		if mode == VERIFY_MODE_STRICT:
 			if not disk.author_key:
 				errors.append(
@@ -726,12 +727,13 @@ def verify_lock_compatibility(
 			# Disk-kid trust gate (source-rebuild): defence-in-depth
 			# against a caller that passed `build_package_index(trust_
 			# store=None)` before reaching here.  The PRIMARY gate is
-			# `build_package_index` + `signature_v0.verify_package_
-			# signatures`, which cryptographically verifies each
-			# `.sig` AND enforces the per-module-namespace allowlist
-			# using `module_id` from the manifest (NOT the package id
-			# — hyphenated ids like `net-tls` are never valid module
-			# namespaces).  Call sites in source-rebuild mode
+			# `build_package_index` + `provider_v1` /
+			# `verify_v1.compose_verify`, which cryptographically
+			# verifies each v1 author + cert claim AND enforces the
+			# per-module-namespace allowlist using `module_id` from
+			# the manifest (NOT the package id — hyphenated ids like
+			# `net-tls` are never valid module namespaces).  Call
+			# sites in source-rebuild mode
 			# (`drift build --source-rebuild` / `drift deploy` /
 			# `drift prepare --check --source-rebuild`) all wire
 			# `trust_store=` into `build_package_index`.
@@ -813,10 +815,10 @@ def verify_lock_compatibility(
 		# the trust anchor; equality is the gate.
 		#
 		# Source-rebuild mode: the disk sidecar must be present /
-		# valid (hard gate — "installed .source-attestation
-		# verifies" per the `VERIFY_MODE_SOURCE_REBUILD` docstring),
-		# but equality with the lock's recorded `source_content_id`
-		# and `source_attestation_key` is NOT a gate.  Drift is
+		# valid (hard gate — "installed v1 author claim verifies"
+		# per the `VERIFY_MODE_SOURCE_REBUILD` docstring), but
+		# equality with the lock's recorded `source_content_id` and
+		# `source_attestation_key` is NOT a gate.  Drift is
 		# evidence.  Trust comes from index-time namespace allowlist
 		# verification (same mechanism as the artifact-signer half
 		# above).
