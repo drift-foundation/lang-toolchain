@@ -66,10 +66,45 @@ def main(argv: list[str] | None = None) -> int:
 		help="Base64-encoded 32-byte Ed25519 public key of the "
 		"Foundation author kid that signed --stdlib-author-claim.  "
 		"Recorded in core_trust_v1.json under the `authors` role.")
+	parser.add_argument("--certifier-key-file", type=Path, default=None,
+		help="Path to the certifier private-key seed file (base64-"
+		"encoded 32-byte Ed25519 seed) the deploy host uses to sign "
+		"`std.cert-claim`.  Falls back to $DRIFT_SIGN_KEY_FILE when "
+		"omitted.  It is policy-allowed for this to be the same "
+		"physical file used by the Foundation `drift-author publish` "
+		"step earlier in the pipeline -- the role separation is about "
+		"which claim body is signed at which step, not about forcing "
+		"two distinct on-disk keys.")
 	args = parser.parse_args(argv)
 
 	repo_root = Path(__file__).resolve().parent.parent.parent
 	dest = args.dest.expanduser().resolve()
+
+	# ── Certifier key resolution ─────────────────────────────────────
+	# Explicit --certifier-key-file wins; fall back to DRIFT_SIGN_KEY_FILE.
+	# Fail closed with a clear pointer if neither is set: the deploy
+	# step does not mint cert seeds.
+	if args.certifier_key_file is not None:
+		certifier_key_path = args.certifier_key_file.expanduser().resolve()
+	else:
+		env_path = os.environ.get("DRIFT_SIGN_KEY_FILE")
+		if not env_path:
+			print(
+				"error: no certifier key available for `std.cert-claim`. "
+				"Either pass --certifier-key-file <path> or set "
+				"DRIFT_SIGN_KEY_FILE=<path>.  The deploy step does not "
+				"generate certifier seeds -- it consumes one already "
+				"provisioned for this host.",
+				file=sys.stderr,
+			)
+			return 1
+		certifier_key_path = Path(env_path).expanduser().resolve()
+	if not certifier_key_path.is_file():
+		print(
+			f"error: certifier key path does not exist: {certifier_key_path}",
+			file=sys.stderr,
+		)
+		return 1
 
 	# ── Python override ──────────────────────────────────────────────
 	if args.python:
@@ -122,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
 			repo_root, stage, dist, meta.driftc_version,
 			stdlib_author_claim_path=args.stdlib_author_claim.expanduser().resolve(),
 			stdlib_author_pubkey_b64=args.stdlib_author_pubkey_b64,
+			certifier_key_path=certifier_key_path,
 		)
 
 		# ── Step 4: Smoke ────────────────────────────────────────────

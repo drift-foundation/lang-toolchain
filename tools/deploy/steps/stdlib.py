@@ -9,28 +9,36 @@ Produces:
   ${DIST}/lib/stdlib/stdlib_dep.txt
   ${DIST}/lib/compiler/lang/driftc/packages/core_trust_v1.json
 
-**Author-key-out-of-orch boundary.**  This deploy step does NOT
-hold, generate, or read any author private key.  The Foundation
-stdlib `<std>.author-claim` is an INPUT to this step, produced
-out-of-band by a Foundation-controlled `drift-author publish`
-run (offline / separate signing service / pre-provisioned
-artifact).  The deploy step:
+**Author-key-out-of-orch boundary.**  This deploy step performs the
+certifier role only.  It does NOT hold, generate, or read any
+author private key.  The Foundation stdlib `<std>.author-claim`
+is an INPUT to this step, produced out-of-band by a Foundation-
+controlled `drift-author publish` run (offline / separate signing
+service / pre-provisioned artifact).  The deploy step:
 
   - reads the externally-provided author claim,
   - validates its body against the build's package identity + SCI,
-  - generates a fresh **certifier** kid (the only key material
-    that legitimately lives on the deploy host),
-  - emits the cert claim over the just-built `.dmp`,
+  - **loads** the certifier seed from the operator-supplied path
+    (`--certifier-key-file` / `$DRIFT_SIGN_KEY_FILE`).  The deploy
+    step does not generate certifier seeds either; it consumes
+    a key the operator already provisioned for this host,
+  - signs the cert claim over the just-built `.dmp` with that
+    certifier seed,
   - copies the author claim alongside the cert claim into the
     install tree, and
   - writes a `core_trust_v1.json` that maps the Foundation
-    author kid (from the caller-provided pubkey) into the
-    `authors` role and the deploy-generated certifier kid into
-    the `certifiers` role.
+    author kid (from the caller-supplied pubkey) into the
+    `authors` role and the certifier kid (derived from the
+    loaded seed) into the `certifiers` role.
 
-The two kids in `core_trust_v1.json` MUST correspond to keys
-controlled by independent principals (Foundation offline signing
-vs. this deploy host); the deploy step never mints both.
+The two roles in `core_trust_v1.json` are recorded
+independently.  An organization MAY choose to use the same key
+for both roles in a given release -- the trust store will list
+that kid in both role lists, and `compose_verify` will see it
+satisfy both role checks.  The toolchain neither requires nor
+forbids this; the role separation is about which claim body is
+signed at which step, not about forcing two distinct on-disk
+keys.
 """
 
 from __future__ import annotations
@@ -204,28 +212,36 @@ def emit_stdlib_cert_claim(
 	sci: str,
 	author_claim_path: Path,
 	author_kid: str,
+	cert_key_path: Path,
 ) -> tuple[str, str, Path]:
-	"""Generate a certifier keypair, validate the externally-provided
-	`std.author-claim`, and emit a cert claim alongside the `.dmp`.
+	"""Validate the externally-provided `std.author-claim`, then sign
+	a cert claim alongside the `.dmp` using the operator-supplied
+	certifier key.
 
-	This is the only key-mint operation the deploy step performs:
-	exactly one **certifier** keypair, ephemeral to the deploy run,
-	never persisted beyond the run.  The author identity comes in
-	as `(author_claim_path, author_kid)` — both produced outside
-	this process by Foundation's signing pipeline.
+	The deploy step is **certifier-role only**: it does not mint
+	the cert seed, it loads it from `cert_key_path`.  An operator
+	can legitimately point `cert_key_path` at the same physical
+	file used by `drift-author publish` earlier in the pipeline --
+	the role separation in v1 is about WHAT GETS SIGNED (author
+	claim vs cert claim), not necessarily about which on-disk seed
+	file the operator chose for each role.  Foundation may
+	organizationally play both roles using one key in staging;
+	production setups should split.
+
+	Author identity comes in as `(author_claim_path, author_kid)`
+	— both produced outside this process by Foundation's author-
+	signing flow.  The author seed is NEVER read here.
 
 	Returns `(cert_kid, cert_pub_b64, cert_sidecar_path)`.
 	"""
 	import base64
 	from hashlib import sha256
-	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from cryptography.hazmat.primitives import serialization
-	from lang.drift.crypto import compute_ed25519_kid
+	from lang.drift.crypto import compute_ed25519_kid, ed25519_sign_from_seed
 	from lang.driftc.packages.cert_claim_v1 import (
 		CertClaimBody, CertSuite, Toolchain,
 	)
 	from tools.drift_deploy.cert_emit import (
-		SignCertClaimOptions, sign_and_write_cert_claim,
+		SignCertClaimOptions, load_cert_seed32, sign_and_write_cert_claim,
 	)
 	from lang.versions import DRIFT_RT_ABI_VERSION
 
@@ -240,19 +256,12 @@ def emit_stdlib_cert_claim(
 		expected_author_kid=author_kid,
 	)
 
-	# Generate the certifier keypair.  This is the ONLY key material
-	# this deploy step touches; the seed never leaves the process and
-	# is not persisted beyond the run.
-	cert_priv = Ed25519PrivateKey.generate()
-	cert_seed = cert_priv.private_bytes(
-		encoding=serialization.Encoding.Raw,
-		format=serialization.PrivateFormat.Raw,
-		encryption_algorithm=serialization.NoEncryption(),
-	)
-	cert_pub_raw = cert_priv.public_key().public_bytes(
-		encoding=serialization.Encoding.Raw,
-		format=serialization.PublicFormat.Raw,
-	)
+	# Load the certifier seed from the operator-supplied file.  The
+	# deploy step does NOT generate seeds; it consumes one already
+	# provisioned for this host.  `load_cert_seed32` is the same
+	# loader the rest of `drift_deploy`'s cert-emit path uses.
+	cert_seed = load_cert_seed32(cert_key_path)
+	_sig, cert_pub_raw = ed25519_sign_from_seed(priv_seed32=cert_seed, message=b"")
 	cert_kid = compute_ed25519_kid(cert_pub_raw)
 	cert_pub_b64 = base64.b64encode(cert_pub_raw).decode("ascii")
 
@@ -283,10 +292,10 @@ def emit_stdlib_cert_claim(
 		seed32=cert_seed,
 		sidecar_dir=dmp_path.parent,
 	))
-	# Discard the cert seed by binding it to None; it lives nowhere
-	# else.  The cert kid + pubkey survive in the on-disk core trust
-	# store; the private half is gone with the run.
-	del cert_seed, cert_priv
+	# Drop the in-memory seed; the on-disk file (cert_key_path)
+	# remains under the operator's control.  The cert kid + pubkey
+	# are recorded in the v1 core trust store written below.
+	del cert_seed
 
 	return cert_kid, cert_pub_b64, cert_sidecar
 
@@ -337,35 +346,39 @@ def generate_core_trust_store_v1(
 	"""Write the v1 role-tagged core trust store consumed by the
 	bundled compiler at run time.
 
-	The two kids correspond to **independently controlled keys**:
-	  - `author_kid` / `author_pub_b64` come from the caller as an
-	    externally-produced Foundation author identity (the deploy
-	    step did not mint them);
-	  - `cert_kid` / `cert_pub_b64` are the ephemeral certifier
-	    keypair this deploy run minted.
+	The two role grants come from independent inputs:
+	  - `author_kid` / `author_pub_b64` from the caller-supplied
+	    Foundation author identity (the deploy step does not mint
+	    them; the author claim was signed earlier, out-of-band);
+	  - `cert_kid` / `cert_pub_b64` from the operator-supplied
+	    certifier key file (`--certifier-key-file` or
+	    `$DRIFT_SIGN_KEY_FILE`) that this deploy used to sign the
+	    cert claim.
 
-	The deploy step never holds the author private key.
+	The two kids MAY resolve to the same value when an
+	organization chooses to use the same key for both roles in
+	the current release.  The toolchain neither requires nor
+	forbids this; the trust store naturally lists the same kid
+	in both role lists, which is what longest-prefix lookup will
+	see.  If a future release splits the keys, the same code path
+	emits two distinct entries with no change here.
 	"""
 	print("[deploy] generating v1 core trust store...", flush=True)
 
-	if author_kid == cert_kid:
-		raise RuntimeError(
-			"core_trust_v1.json: author and certifier kids must come "
-			"from independently controlled keys; got identical kid "
-			f"{author_kid!r}.  Either the externally-provided author "
-			"identity collides with the deploy-minted cert kid (extremely "
-			"unlikely, treat as failure) or the same key material was "
-			"used for both roles (forbidden in v1)."
-		)
-
 	namespaces = ["std.*", "lang.*", "drift.*"]
+	# `keys` is a kid-keyed dict; collapsing the (author_kid, cert_kid)
+	# pair into a single entry when they match is correct by JSON
+	# shape -- two list entries with identical kid in different role
+	# lists are still a valid v1 trust store.
+	keys: dict[str, dict[str, str]] = {
+		author_kid: {"algo": "ed25519", "pubkey": author_pub_b64},
+	}
+	if cert_kid != author_kid:
+		keys[cert_kid] = {"algo": "ed25519", "pubkey": cert_pub_b64}
 	trust_store = {
 		"format": "drift-trust",
 		"version": 1,
-		"keys": {
-			author_kid: {"algo": "ed25519", "pubkey": author_pub_b64},
-			cert_kid:   {"algo": "ed25519", "pubkey": cert_pub_b64},
-		},
+		"keys": keys,
 		"namespaces": {
 			ns: {
 				"authors":    [author_kid],
@@ -397,9 +410,11 @@ def build_and_install_stdlib(
 	*,
 	stdlib_author_claim_path: Path,
 	stdlib_author_pubkey_b64: str,
+	certifier_key_path: Path,
 ) -> tuple[Path, Path, Path]:
 	"""Full stdlib pipeline: build → validate caller-provided author
-	claim → emit cert claim → install → core_trust_v1.json.
+	claim → sign cert claim with the operator-supplied certifier
+	key → install → core_trust_v1.json.
 
 	Required external inputs:
 	  - `stdlib_author_claim_path`: an already-emitted
@@ -411,11 +426,18 @@ def build_and_install_stdlib(
 	    Foundation author kid that signed the claim.  Required
 	    because the consumer-side `core_trust_v1.json` records
 	    pubkeys, not just kids.
+	  - `certifier_key_path`: the certifier seed file the deploy
+	    host uses to sign the cert claim.  Resolved by the caller
+	    via `--certifier-key-file` flag (preferred) or the
+	    `DRIFT_SIGN_KEY_FILE` env fallback.  It is policy-allowed
+	    for this seed to be the same physical file used by the
+	    earlier `drift-author publish` -- the role separation is
+	    about which claim body is signed at which step, not about
+	    forcing two distinct on-disk keys.
 
 	Returns `(dmp_path, author_sidecar, cert_sidecar)`.
 	"""
 	import base64
-	from hashlib import sha256
 	from lang.drift.crypto import compute_ed25519_kid
 
 	if not stdlib_author_claim_path.is_file():
@@ -424,6 +446,13 @@ def build_and_install_stdlib(
 			f"exist: {stdlib_author_claim_path}.  The stdlib author claim "
 			f"must be produced out-of-band by Foundation before this "
 			f"deploy runs (see docs/design/trust-v1.md §7.5)."
+		)
+	if not certifier_key_path.is_file():
+		raise RuntimeError(
+			f"stdlib deploy: required certifier_key_path does not exist: "
+			f"{certifier_key_path}.  Set --certifier-key-file or "
+			f"DRIFT_SIGN_KEY_FILE to a base64-encoded 32-byte Ed25519 "
+			f"private seed.  The deploy step does not mint cert seeds."
 		)
 
 	# Derive the author kid from the provided pubkey so the deploy
@@ -443,6 +472,7 @@ def build_and_install_stdlib(
 		sci=sci,
 		author_claim_path=stdlib_author_claim_path,
 		author_kid=author_kid,
+		cert_key_path=certifier_key_path,
 	)
 	# Stage the externally-provided author claim next to the .dmp so
 	# install_stdlib can copy it into the dist tree from a known

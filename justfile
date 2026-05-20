@@ -462,21 +462,34 @@ runtime-libs CLANG="":
 
 # Deploy a versioned, self-contained Drift distribution.
 #
-# trust-v1: the stdlib author claim is a REQUIRED INPUT to deploy
-# (the deploy host never holds the Foundation author private key --
-# see docs/design/trust-v1.md §7.5).  Pass:
-#   --stdlib-author-claim    <path>     # produced out-of-band by Foundation
+# trust-v1: deploy plays the **certifier role only**.  Required inputs:
+#
+#   --stdlib-author-claim    <path>     # externally-produced std.author-claim
+#                                       # (the deploy host never holds the
+#                                       # author private key)
 #   --stdlib-author-pubkey-b64 <base64>  # matching Foundation author pubkey
+#   --certifier-key-file     <path>     # OPTIONAL: certifier seed used to
+#                                       # sign std.cert-claim; falls back to
+#                                       # $DRIFT_SIGN_KEY_FILE when omitted
+#
+# The same on-disk seed MAY be used for both `drift-author publish` and the
+# certifier step here -- v1's role split is about which claim body is
+# signed at which step, not about forcing two distinct keys (see
+# docs/design/trust-v1.md §7.5).
 #
 # Examples:
-#   # Production: use Foundation's released artifacts
+#   # Production: Foundation-released author artifacts + a release-host
+#   # certifier seed configured via env.
+#   export DRIFT_SIGN_KEY_FILE=/var/lib/drift-deploy/certifier.seed
 #   just deploy --dest ~/opt/drift \
 #       --stdlib-author-claim ~/.config/drift/foundation/std.author-claim \
 #       --stdlib-author-pubkey-b64 <base64-32-bytes>
 #
 #   # Dev: pre-publish locally via `just deploy-prepublish-stdlib-author`
 #   # (see below), then run `just deploy --dest ...` without re-typing
-#   # the long flags (the helper exports the paths for you).
+#   # the long flags (the helper exports the paths for you).  The certifier
+#   # key can either point at DRIFT_SIGN_KEY_FILE or share the same seed
+#   # the helper used for `drift-author publish` -- both are policy-allowed.
 deploy *ARGS:
 	#!/usr/bin/env bash
 	set -euo pipefail

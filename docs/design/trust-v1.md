@@ -1145,15 +1145,38 @@ What is **not** acceptable:
 - documenting any of the above as a "bootstrap exception."
 
 Mechanically: `tools/deploy/steps/stdlib.build_and_install_stdlib`
-takes the stdlib author claim path and the matching author
-pubkey as **required inputs**.  It validates the claim
-(package_id, version, SCI, namespaces, signer kid match the
-build), mints a fresh **certifier** keypair, emits the cert
-claim, writes `core_trust_v1.json` with the Foundation author
-kid in the `authors` list and the deploy-minted certifier kid in
-the `certifiers` list, and the run ends.  The certifier seed is
-in-process only; the author seed never appears in the deploy
-process at all.
+takes three **required inputs**:
+
+  - `stdlib_author_claim_path` — the externally-produced
+    `std.author-claim`;
+  - `stdlib_author_pubkey_b64` — the matching Foundation author
+    pubkey;
+  - `certifier_key_path` — the path to the certifier seed file
+    the deploy host uses to sign `std.cert-claim`.  Resolved
+    from `--certifier-key-file <path>` (preferred) or the
+    `DRIFT_SIGN_KEY_FILE` env fallback.  The deploy step does
+    **not** mint cert seeds; it loads one already provisioned
+    for this host through the same key-loader the rest of the
+    cert-emit code path uses.
+
+It then validates the claim (package_id, version, SCI,
+namespaces, signer kid match the build), loads the cert seed,
+signs `std.cert-claim` under the resulting cert kid, writes
+`core_trust_v1.json` with the Foundation author kid in the
+`authors` list and the cert kid in the `certifiers` list, and
+the run ends.  No author key material ever appears in the deploy
+process.
+
+**Two-kid invariant.**  The two role grants in
+`core_trust_v1.json` are recorded independently from independent
+inputs.  An organization MAY choose to use the same physical
+key for both roles in a given release; the trust store will list
+that kid in both role lists, and `compose_verify` will see it
+satisfy both role checks.  The toolchain neither requires nor
+forbids this — the role separation is about which claim body is
+signed at which step, not about forcing two distinct on-disk
+keys.  If a future release splits Foundation's keys, the same
+code path emits two distinct entries with no change here.
 
 The role-separation check in
 `lang/tests/packages/test_author_key_boundary.py` enforces the
