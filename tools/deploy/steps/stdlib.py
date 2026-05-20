@@ -205,6 +205,41 @@ def _validate_external_stdlib_author_claim(
 		)
 
 
+def _build_stdlib_evidence_manifest_bytes(
+	*,
+	version: str,
+	sci: str,
+	artifact_sha256: str,
+	drift_rt_abi: int,
+	driftc_commit: str,
+	run_id: str,
+	run_started_utc: str,
+) -> bytes:
+	"""Serialise the stdlib build evidence into canonical JSON bytes.
+
+	The returned bytes are what gets hashed into both
+	`body.evidence_sha256` and `cert_suite.result_evidence_sha256`,
+	and what gets written to disk as `std.build-manifest.json` next
+	to the `.dmp`.  Centralising the serialisation here guarantees
+	on-disk bytes and signed digest stay in lockstep.
+	"""
+	manifest = {
+		"kind": "drift-deploy/stdlib",
+		"package_id": "std",
+		"version": version,
+		"source_content_id": sci,
+		"artifact_sha256": artifact_sha256,
+		"toolchain": {
+			"driftc_version": version,
+			"drift_rt_abi": drift_rt_abi,
+			"driftc_commit": driftc_commit,
+		},
+		"run_id": run_id,
+		"run_started_utc": run_started_utc,
+	}
+	return (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
 def emit_stdlib_cert_claim(
 	dmp_path: Path,
 	*,
@@ -213,7 +248,9 @@ def emit_stdlib_cert_claim(
 	author_claim_path: Path,
 	author_kid: str,
 	cert_key_path: Path,
-) -> tuple[str, str, Path]:
+	run_started_utc: str,
+	driftc_commit: str,
+) -> tuple[str, str, Path, Path]:
 	"""Validate the externally-provided `std.author-claim`, then sign
 	a cert claim alongside the `.dmp` using the operator-supplied
 	certifier key.
@@ -232,7 +269,26 @@ def emit_stdlib_cert_claim(
 	— both produced outside this process by Foundation's author-
 	signing flow.  The author seed is NEVER read here.
 
-	Returns `(cert_kid, cert_pub_b64, cert_sidecar_path)`.
+	`run_started_utc` is captured by the caller at the start of the
+	overall deploy.  It is signed into the cert claim body and into
+	the on-disk build manifest -- a synthetic constant in this
+	field would attest a deploy that didn't actually run at that
+	time, which §3.6 of trust-v1 forbids.
+
+	Evidence binding: this function writes a real
+	`std.build-manifest.json` next to the `.dmp` capturing the build
+	identity (package id, version, SCI, .dmp hash, toolchain, run
+	id, start time).  Both `body.evidence_sha256` and
+	`cert_suite.result_evidence_sha256` are bound to that artifact's
+	bytes.  The two fields use the same digest by design: for the
+	stdlib deploy, the deploy IS the cert suite, and the build
+	manifest IS the suite's evidence -- there is no separate suite
+	report.  An external suite (test report, coverage PDF, vendor
+	cert) would belong to a different deploy path; the stdlib path
+	never accepts a hardcoded sentinel here.
+
+	Returns `(cert_kid, cert_pub_b64, cert_sidecar_path,
+	build_manifest_path)`.
 	"""
 	import base64
 	from hashlib import sha256
@@ -267,8 +323,23 @@ def emit_stdlib_cert_claim(
 
 	artifact_sha256 = "sha256:" + sha256(dmp_path.read_bytes()).hexdigest()
 
-	# Toolchain fields reflect the actual build -- the cert claim
-	# attests these as part of the certifier's observation of the run.
+	run_id = f"stdlib-{version}-{run_started_utc}"
+
+	# Generate and persist the build manifest BEFORE signing so the
+	# on-disk bytes are the exact bytes we hash into the cert claim.
+	manifest_bytes = _build_stdlib_evidence_manifest_bytes(
+		version=version,
+		sci=sci,
+		artifact_sha256=artifact_sha256,
+		drift_rt_abi=DRIFT_RT_ABI_VERSION,
+		driftc_commit=driftc_commit,
+		run_id=run_id,
+		run_started_utc=run_started_utc,
+	)
+	manifest_path = dmp_path.parent / "std.build-manifest.json"
+	manifest_path.write_bytes(manifest_bytes)
+	evidence_sha = "sha256:" + sha256(manifest_bytes).hexdigest()
+
 	cert_sidecar = sign_and_write_cert_claim(SignCertClaimOptions(
 		body=CertClaimBody(
 			schema_version=1, package_id="std", version=version,
@@ -277,17 +348,17 @@ def emit_stdlib_cert_claim(
 			toolchain=Toolchain(
 				driftc_version=version,
 				drift_rt_abi=DRIFT_RT_ABI_VERSION,
-				driftc_commit="deploy",
+				driftc_commit=driftc_commit,
 			),
 			dep_graph=(),
 			cert_suite=CertSuite(
 				id="drift-deploy/stdlib", version="1.0",
 				result="pass",
-				result_evidence_sha256="sha256:" + ("f" * 64),
+				result_evidence_sha256=evidence_sha,
 			),
-			run_id=f"stdlib-{version}",
-			run_started_utc="2026-05-19T00:00:00Z",
-			evidence_sha256="sha256:" + ("0" * 64),
+			run_id=run_id,
+			run_started_utc=run_started_utc,
+			evidence_sha256=evidence_sha,
 		),
 		seed32=cert_seed,
 		sidecar_dir=dmp_path.parent,
@@ -297,13 +368,26 @@ def emit_stdlib_cert_claim(
 	# are recorded in the v1 core trust store written below.
 	del cert_seed
 
-	return cert_kid, cert_pub_b64, cert_sidecar
+	return cert_kid, cert_pub_b64, cert_sidecar, manifest_path
 
 
 def install_stdlib(
-	dmp: Path, author_sidecar: Path, cert_sidecar: Path, dist: Path,
+	dmp: Path,
+	author_sidecar: Path,
+	cert_sidecar: Path,
+	dist: Path,
+	*,
+	build_manifest: Path,
 ) -> None:
-	"""Install stdlib `.dmp` + v1 sidecars + stdlib_dep.txt into dist."""
+	"""Install stdlib `.dmp` + v1 sidecars + build manifest + stdlib_dep.txt
+	into dist.
+
+	The build manifest is the inspectable evidence artifact bound by
+	the cert claim's `evidence_sha256` (and by
+	`cert_suite.result_evidence_sha256`); installing it next to the
+	`.dmp` lets a consumer / auditor verify the digest without
+	re-running the deploy.
+	"""
 	import shutil
 
 	stdlib_dir = dist / "lib" / "stdlib"
@@ -312,6 +396,7 @@ def install_stdlib(
 	shutil.copy2(str(dmp), str(stdlib_dir / "std.dmp"))
 	shutil.copy2(str(author_sidecar), str(stdlib_dir / author_sidecar.name))
 	shutil.copy2(str(cert_sidecar), str(stdlib_dir / cert_sidecar.name))
+	shutil.copy2(str(build_manifest), str(stdlib_dir / build_manifest.name))
 
 	# Single source of truth: read the actual package manifest.
 	write_stdlib_dep(dmp, dist)
@@ -411,6 +496,7 @@ def build_and_install_stdlib(
 	stdlib_author_claim_path: Path,
 	stdlib_author_pubkey_b64: str,
 	certifier_key_path: Path,
+	driftc_commit: str,
 ) -> tuple[Path, Path, Path]:
 	"""Full stdlib pipeline: build → validate caller-provided author
 	claim → sign cert claim with the operator-supplied certifier
@@ -434,11 +520,28 @@ def build_and_install_stdlib(
 	    earlier `drift-author publish` -- the role separation is
 	    about which claim body is signed at which step, not about
 	    forcing two distinct on-disk keys.
+	  - `driftc_commit`: short git SHA of the source the deploy is
+	    building, recorded in the cert claim's `toolchain.driftc_commit`
+	    and the build manifest's `toolchain.driftc_commit`.  The deploy
+	    orchestrator (`tools/deploy/deploy.py`) reads this from
+	    `DeployMetadata.git_commit`; the in-process
+	    `lang.versions.DRIFTC_GIT_SHA` is empty in the source tree
+	    (the bundle step stamps it into the deployed copy only), so
+	    the value must be threaded in by the caller rather than read
+	    here.
 
 	Returns `(dmp_path, author_sidecar, cert_sidecar)`.
 	"""
 	import base64
+	import datetime as _dt
 	from lang.drift.crypto import compute_ed25519_kid
+
+	# Capture the run-start timestamp at deploy entry, BEFORE the
+	# stdlib build runs.  This is what gets signed into both the
+	# cert claim body and the on-disk build manifest -- a synthetic
+	# constant here would attest a deploy that didn't run at that
+	# time (§3.6 of trust-v1).
+	run_started_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 	if not stdlib_author_claim_path.is_file():
 		raise RuntimeError(
@@ -466,13 +569,15 @@ def build_and_install_stdlib(
 	author_kid = compute_ed25519_kid(author_pub_raw)
 
 	dmp, sci = build_stdlib_package(repo_root, stage, version)
-	cert_kid, cert_pub_b64, cert = emit_stdlib_cert_claim(
+	cert_kid, cert_pub_b64, cert, build_manifest = emit_stdlib_cert_claim(
 		dmp,
 		version=version,
 		sci=sci,
 		author_claim_path=stdlib_author_claim_path,
 		author_kid=author_kid,
 		cert_key_path=certifier_key_path,
+		run_started_utc=run_started_utc,
+		driftc_commit=driftc_commit,
 	)
 	# Stage the externally-provided author claim next to the .dmp so
 	# install_stdlib can copy it into the dist tree from a known
@@ -484,7 +589,7 @@ def build_and_install_stdlib(
 		_sh.copy2(str(stdlib_author_claim_path), str(staged_author_claim))
 	author = staged_author_claim
 	author_pub_b64 = stdlib_author_pubkey_b64
-	install_stdlib(dmp, author, cert, dist)
+	install_stdlib(dmp, author, cert, dist, build_manifest=build_manifest)
 	generate_core_trust_store_v1(
 		author_kid=author_kid,
 		author_pub_b64=author_pub_b64,
@@ -498,6 +603,7 @@ def build_and_install_stdlib(
 		dist / "lib" / "stdlib" / "std.dmp",
 		dist / "lib" / "stdlib" / author.name,
 		dist / "lib" / "stdlib" / cert.name,
+		dist / "lib" / "stdlib" / build_manifest.name,
 		dist / "lib" / "compiler" / "lang" / "driftc" / "packages" / "core_trust_v1.json",
 	]
 	for f in expected:

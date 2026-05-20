@@ -158,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
 			stdlib_author_claim_path=args.stdlib_author_claim.expanduser().resolve(),
 			stdlib_author_pubkey_b64=args.stdlib_author_pubkey_b64,
 			certifier_key_path=certifier_key_path,
+			driftc_commit=meta.git_commit,
 		)
 
 		# ── Step 4: Smoke ────────────────────────────────────────────

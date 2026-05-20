@@ -40,6 +40,7 @@ from cryptography.hazmat.primitives import serialization
 
 from lang.drift.crypto import compute_ed25519_kid
 from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
 from lang.driftc.packages.sidecar_naming import cert_claim_filename
 from lang.driftc.packages.source_content_id import (
 	compute_artifact_source_content_id,
@@ -188,6 +189,7 @@ def _build_and_assert_trust_shape(
 		stdlib_author_claim_path=author_claim_path,
 		stdlib_author_pubkey_b64=author_pubkey_b64,
 		certifier_key_path=cert_seed_path,
+		driftc_commit="test-commit-stub",
 	)
 
 	# ── Inspect core_trust_v1.json structure ─────────────────────
@@ -288,6 +290,154 @@ def test_stdlib_deploy_same_kid_path(tmp_path: Path) -> None:
 			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
 		else:
 			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_no_evidence
+
+
+# The placeholder values the cert claim used to ship with before the
+# evidence-binding fix.  Listed here verbatim so a regression that
+# accidentally restores any one of them lights this test red.
+_PLACEHOLDER_RESULT_EVIDENCE = "sha256:" + ("f" * 64)
+_PLACEHOLDER_EVIDENCE        = "sha256:" + ("0" * 64)
+_PLACEHOLDER_RUN_STARTED_UTC = "2026-05-19T00:00:00Z"
+
+
+@pytest.mark.skipif(
+	not (STDLIB_DIR / "std").is_dir(),
+	reason="stdlib source tree not available",
+)
+def test_stdlib_cert_claim_evidence_is_real_not_placeholder(tmp_path: Path) -> None:
+	"""Pin the no-synthetic-constants rule for the stdlib cert claim.
+
+	Before the build-manifest fix the cert claim used to ship with
+	``cert_suite.result_evidence_sha256 = sha256:ffff…ffff``,
+	``evidence_sha256 = sha256:0000…0000``, and a hardcoded
+	``run_started_utc = "2026-05-19T00:00:00Z"``.  All three were
+	synthetic constants in a signed body -- the deploy step was
+	attesting evidence that did not exist on disk and a deploy time
+	that was not the actual time.  trust-v1 §3.6 forbids this.
+
+	This test runs the real `build_and_install_stdlib` path and
+	asserts:
+	  - ``body.evidence_sha256`` is NOT the historical placeholder;
+	  - ``body.evidence_sha256`` matches sha256 of the on-disk
+	    `std.build-manifest.json`;
+	  - ``cert_suite.result_evidence_sha256`` is also bound to the
+	    manifest (same hash, by design -- the stdlib deploy IS the
+	    cert suite);
+	  - ``body.run_started_utc`` is NOT the historical placeholder;
+	  - ``body.run_started_utc`` parses as ISO-8601 UTC and falls
+	    within a recent window (sanity check against a clock-set-to-
+	    epoch regression).
+	"""
+	from datetime import datetime, timezone, timedelta
+	import shutil as _sh
+
+	# Pre-publish + build using the same shared-seed path the
+	# `same_kid` test exercises.  The placeholder check is
+	# orthogonal to role split.
+	shared_seed_path = tmp_path / "shared.seed"
+	shared_seed, _, shared_kid, shared_pub_b64 = _generate_seed_file(shared_seed_path)
+
+	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	prev_no_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE")
+	empty_sha = "sha256:" + sha256(b"").hexdigest()
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = empty_sha
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = "1"
+	t_before = datetime.now(timezone.utc)
+	try:
+		dist = _build_and_assert_trust_shape(
+			tmp_path,
+			author_seed=shared_seed,
+			author_pubkey_b64=shared_pub_b64,
+			author_kid=shared_kid,
+			cert_seed_path=shared_seed_path,
+			expected_cert_kid=shared_kid,
+			expected_same_kid=True,
+		)
+	finally:
+		if prev_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_evidence
+		if prev_no_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_no_evidence
+	t_after = datetime.now(timezone.utc)
+
+	# Locate the cert claim sidecar in the deployed tree and parse it.
+	cert_path = dist / "lib" / "stdlib" / cert_claim_filename("std", shared_kid)
+	claim = load_cert_claim_json(cert_path.read_text(encoding="utf-8"))
+	body = claim.body
+
+	# Build manifest must be installed alongside .dmp + sidecars.
+	manifest_path = dist / "lib" / "stdlib" / "std.build-manifest.json"
+	assert manifest_path.is_file(), (
+		f"build manifest must be installed at {manifest_path}; this is "
+		f"the on-disk evidence artifact the cert claim signs over"
+	)
+	manifest_bytes = manifest_path.read_bytes()
+	manifest_sha = "sha256:" + sha256(manifest_bytes).hexdigest()
+
+	# ── 1. evidence_sha256 ──────────────────────────────────────
+	assert body.evidence_sha256 != _PLACEHOLDER_EVIDENCE, (
+		f"regression: body.evidence_sha256 is back to the historical "
+		f"zero-hash placeholder ({_PLACEHOLDER_EVIDENCE!r}).  The stdlib "
+		f"deploy must bind evidence_sha256 to real on-disk bytes."
+	)
+	assert body.evidence_sha256 == manifest_sha, (
+		f"body.evidence_sha256 ({body.evidence_sha256!r}) must equal "
+		f"sha256(std.build-manifest.json) ({manifest_sha!r}); otherwise "
+		f"an inspector who recomputes the digest from the on-disk "
+		f"evidence artifact will see a mismatch."
+	)
+
+	# ── 2. cert_suite.result_evidence_sha256 ────────────────────
+	assert body.cert_suite.result_evidence_sha256 != _PLACEHOLDER_RESULT_EVIDENCE, (
+		f"regression: cert_suite.result_evidence_sha256 is back to the "
+		f"historical f...f placeholder ({_PLACEHOLDER_RESULT_EVIDENCE!r}).  "
+		f"For the stdlib deploy the build manifest IS the suite evidence; "
+		f"this field must carry the manifest hash."
+	)
+	assert body.cert_suite.result_evidence_sha256 == manifest_sha, (
+		f"cert_suite.result_evidence_sha256 "
+		f"({body.cert_suite.result_evidence_sha256!r}) must equal "
+		f"sha256(std.build-manifest.json) ({manifest_sha!r}); the stdlib "
+		f"deploy is the cert suite and the manifest is its evidence."
+	)
+
+	# ── 3. run_started_utc ──────────────────────────────────────
+	assert body.run_started_utc != _PLACEHOLDER_RUN_STARTED_UTC, (
+		f"regression: body.run_started_utc is back to the historical "
+		f"hardcoded value {_PLACEHOLDER_RUN_STARTED_UTC!r}.  trust-v1 "
+		f"§3.6 requires this field to reflect the actual deploy time."
+	)
+	# Must parse as ISO-8601 UTC.
+	try:
+		parsed = datetime.strptime(body.run_started_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+	except ValueError as exc:
+		raise AssertionError(
+			f"body.run_started_utc {body.run_started_utc!r} does not parse as "
+			f"ISO-8601 UTC %Y-%m-%dT%H:%M:%SZ: {exc}"
+		) from exc
+	# And it should sit inside the window of this test run (with a
+	# generous slack for clock skew / driftc compile time).
+	window_lo = t_before - timedelta(seconds=5)
+	window_hi = t_after + timedelta(seconds=5)
+	assert window_lo <= parsed <= window_hi, (
+		f"body.run_started_utc ({body.run_started_utc!r} -> {parsed.isoformat()!r}) "
+		f"falls outside the test window [{window_lo.isoformat()!r}, "
+		f"{window_hi.isoformat()!r}].  Likely a clock-set-to-epoch or "
+		f"reverted-to-placeholder regression."
+	)
+
+	# Bonus: run_id should be derived from version + run_started_utc,
+	# not a fixed sentinel.  Light check -- exact format isn't pinned,
+	# but the timestamp portion must appear somewhere in it.
+	assert body.run_started_utc in body.run_id, (
+		f"body.run_id ({body.run_id!r}) should embed the actual run "
+		f"timestamp ({body.run_started_utc!r}); otherwise rerun audit "
+		f"trails collapse onto the same id."
+	)
 
 
 @pytest.mark.skipif(

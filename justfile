@@ -462,7 +462,10 @@ runtime-libs CLANG="":
 
 # Deploy a versioned, self-contained Drift distribution.
 #
-# trust-v1: deploy plays the **certifier role only**.  Required inputs:
+# trust-v1: deploy plays the **certifier role only**.  The author role
+# is invoked separately by `just deploy-prepublish-stdlib-author` (the
+# compiler-team release shortcut) or by Foundation's offline signing
+# flow.  Required cert-side input:
 #
 #   --stdlib-author-claim    <path>     # externally-produced std.author-claim
 #                                       # (the deploy host never holds the
@@ -472,24 +475,28 @@ runtime-libs CLANG="":
 #                                       # sign std.cert-claim; falls back to
 #                                       # $DRIFT_SIGN_KEY_FILE when omitted
 #
-# The same on-disk seed MAY be used for both `drift-author publish` and the
-# certifier step here -- v1's role split is about which claim body is
-# signed at which step, not about forcing two distinct keys (see
-# docs/design/trust-v1.md §7.5).
+# Compiler-team release shortcut: if neither --stdlib-author-claim nor
+# $DRIFT_STDLIB_AUTHOR_CLAIM is set, this recipe explicitly invokes
+# `just deploy-prepublish-stdlib-author` first -- two role actions in
+# sequence using the same DRIFT_SIGN_KEY_FILE seed (Foundation-author
+# step, then certifier step).  This is NOT the production toolchain
+# contract; tools/deploy/deploy.py itself never signs author claims.
+# Explicit CLI flags or DRIFT_STDLIB_AUTHOR_CLAIM env always win and
+# skip the auto-prepublish (Foundation hand-off path stays strict).
 #
 # Examples:
-#   # Production: Foundation-released author artifacts + a release-host
-#   # certifier seed configured via env.
+#   # Compiler-team shortcut (this checkout's release flow): one seed,
+#   # two explicit role steps.
+#   export DRIFT_SIGN_KEY_FILE=/var/lib/drift-deploy/release.seed
+#   just deploy --dest ~/opt/drift
+#
+#   # Production: Foundation-released author artifacts + release-host
+#   # certifier seed configured via env.  Explicit flags skip the
+#   # auto-prepublish.
 #   export DRIFT_SIGN_KEY_FILE=/var/lib/drift-deploy/certifier.seed
 #   just deploy --dest ~/opt/drift \
 #       --stdlib-author-claim ~/.config/drift/foundation/std.author-claim \
 #       --stdlib-author-pubkey-b64 <base64-32-bytes>
-#
-#   # Dev: pre-publish locally via `just deploy-prepublish-stdlib-author`
-#   # (see below), then run `just deploy --dest ...` without re-typing
-#   # the long flags (the helper exports the paths for you).  The certifier
-#   # key can either point at DRIFT_SIGN_KEY_FILE or share the same seed
-#   # the helper used for `drift-author publish` -- both are policy-allowed.
 deploy *ARGS:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -498,11 +505,11 @@ deploy *ARGS:
 	if [[ ${#args[@]} -gt 0 && "${args[0]}" == "--" ]]; then
 		args=("${args[@]:1}")
 	fi
-	# Pick up dev-published author identity from env ONLY when the
-	# caller didn't pass the corresponding flag explicitly.  Explicit
-	# CLI args always win -- argparse uses the LAST occurrence of a
-	# repeated flag, so appending env values unconditionally would
-	# silently override the user's explicit choice.
+	# Pick up author identity from env ONLY when the caller didn't
+	# pass the corresponding flag explicitly.  Explicit CLI args
+	# always win -- argparse uses the LAST occurrence of a repeated
+	# flag, so appending env values unconditionally would silently
+	# override the user's explicit choice.
 	have_claim_flag=0
 	have_pubkey_flag=0
 	for a in "${args[@]}"; do
@@ -513,6 +520,23 @@ deploy *ARGS:
 				have_pubkey_flag=1 ;;
 		esac
 	done
+	# Compiler-team shortcut: if no explicit author claim has been
+	# provided (neither --stdlib-author-claim nor $DRIFT_STDLIB_AUTHOR_CLAIM),
+	# run the author-side prepublish step now using DRIFT_SIGN_KEY_FILE.
+	# This keeps the two roles explicit -- author step here, certifier
+	# step inside deploy.py -- without implicit author signing inside
+	# the orch surface.
+	if [[ ${have_claim_flag} -eq 0 && -z "${DRIFT_STDLIB_AUTHOR_CLAIM:-}" ]]; then
+		if [[ -z "${DRIFT_SIGN_KEY_FILE:-}" ]]; then
+			echo "error: just deploy needs either an explicit --stdlib-author-claim / DRIFT_STDLIB_AUTHOR_CLAIM," >&2
+			echo "       or DRIFT_SIGN_KEY_FILE so the recipe can run the author-side prepublish step." >&2
+			exit 1
+		fi
+		just deploy-prepublish-stdlib-author
+		DRIFT_STDLIB_AUTHOR_CLAIM="$(pwd)/build/release-sidecars/std.author-claim"
+		DRIFT_STDLIB_AUTHOR_PUBKEY_B64="$(cat "$(pwd)/build/release-sidecars/author.pubkey.b64")"
+		export DRIFT_STDLIB_AUTHOR_CLAIM DRIFT_STDLIB_AUTHOR_PUBKEY_B64
+	fi
 	if [[ ${have_claim_flag} -eq 0 && -n "${DRIFT_STDLIB_AUTHOR_CLAIM:-}" ]]; then
 		args+=( --stdlib-author-claim "${DRIFT_STDLIB_AUTHOR_CLAIM}" )
 	fi
@@ -522,27 +546,46 @@ deploy *ARGS:
 	PYTHONPATH=. exec ./.venv/bin/python3 tools/deploy/deploy.py "${args[@]}"
 
 
-# Dev helper: pre-publish a stdlib author claim using an *ephemeral
-# local* Foundation-stand-in key.  Writes the claim + pubkey to
-# `build/foundation-stub/`, prints export lines for the env vars
-# `just deploy` consumes.  The seed is discarded after signing.
+# Compiler-team release shortcut: explicit author-side prepublish.
 #
-# This recipe is for DEV ONLY.  Production releases must use a real
-# Foundation author identity produced outside this checkout (offline
-# signing, signing service, or pre-committed release artifact).
+# Loads the seed from DRIFT_SIGN_KEY_FILE (the same seed `just deploy`
+# uses as the certifier key), computes the stdlib SCI, then invokes
+# `python -m tools.drift_author publish` to sign the author claim.
+# Writes both the claim and the matching base64 pubkey under
+# `build/release-sidecars/` so `just deploy` can pick them up by path.
+#
+# This is the compiler-team self-distribution path (same kid in both
+# the author and certifier role lists; pinned by
+# `test_stdlib_deploy_same_kid_path`).  Production Foundation releases
+# should run `drift-author publish` out-of-band with their own author
+# key and hand the resulting claim + pubkey to `just deploy` via env
+# or CLI flags -- which skips this recipe entirely.
 deploy-prepublish-stdlib-author:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	mkdir -p build/foundation-stub
-	PYTHONPATH=. ./.venv/bin/python3 - <<'PY'
-	import base64, os
+	if [[ -z "${DRIFT_SIGN_KEY_FILE:-}" ]]; then
+		echo "error: deploy-prepublish-stdlib-author needs DRIFT_SIGN_KEY_FILE" >&2
+		echo "       (base64-encoded 32-byte Ed25519 private seed file)" >&2
+		exit 1
+	fi
+	out_dir="$(pwd)/build/release-sidecars"
+	mkdir -p "${out_dir}"
+	# Compute the stdlib SCI + derive the pubkey + pick the release
+	# version/timestamp.  These are all inputs `drift-author publish`
+	# needs.  Output is a sourceable bash env file so the surrounding
+	# recipe can read them without `eval` injection risk.
+	env_file="${out_dir}/.prepublish.env"
+	PYTHONPATH=. ./.venv/bin/python3 - "${DRIFT_SIGN_KEY_FILE}" "${env_file}" <<'PY'
+	import base64, datetime as _dt, shlex, sys
 	from pathlib import Path
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.driftc.packages.source_content_id import compute_artifact_source_content_id
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
-	from tools.drift_author.author_publish import SignAuthorClaimOptions, sign_and_write_author_claim
 	from lang.versions import DRIFTC_VERSION
+	from tools.drift_author.key_loader import load_author_seed32
+
+	seed_path = Path(sys.argv[1])
+	env_path = Path(sys.argv[2])
 
 	root = Path.cwd()
 	stdlib = root / "stdlib"
@@ -554,35 +597,50 @@ deploy-prepublish-stdlib-author:
 		package_deps=[], native_deps=[], unsafe=False, asset_paths=[],
 		target_class="drift-dev", source_root=root,
 	)
-	priv = Ed25519PrivateKey.generate()
-	seed = priv.private_bytes(
-		encoding=serialization.Encoding.Raw,
-		format=serialization.PrivateFormat.Raw,
-		encryption_algorithm=serialization.NoEncryption(),
-	)
+	seed = load_author_seed32(seed_path)
+	priv = Ed25519PrivateKey.from_private_bytes(seed)
 	pub_raw = priv.public_key().public_bytes(
 		encoding=serialization.Encoding.Raw,
 		format=serialization.PublicFormat.Raw,
 	)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	out_dir = root / "build" / "foundation-stub"
-	out_dir.mkdir(parents=True, exist_ok=True)
-	claim_path = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="std", version=DRIFTC_VERSION,
-			namespaces=("std.*", "lang.*", "drift.*"),
-			source_content_id=sci, required_deps=(),
-			target_class="library", release_utc="2026-05-19T00:00:00Z",
-		),
-		seed32=seed, sidecar_dir=out_dir,
-	))
-	(out_dir / "author.pubkey.b64").write_text(pub_b64 + "\n", encoding="utf-8")
+	# Per-invocation release timestamp -- not load-bearing for SCI,
+	# but it's the honest value for the signed claim body.
+	release_utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+	env_path.write_text(
+		f"SCI={shlex.quote(sci)}\n"
+		f"PUB_B64={shlex.quote(pub_b64)}\n"
+		f"DRIFTC_VERSION={shlex.quote(DRIFTC_VERSION)}\n"
+		f"RELEASE_UTC={shlex.quote(release_utc)}\n",
+		encoding="utf-8",
+	)
 	del priv, seed
-	print(f"# Foundation author claim (DEV STUB) written to: {claim_path}")
-	print(f"# Pubkey saved to: {out_dir / 'author.pubkey.b64'}")
-	print(f"export DRIFT_STDLIB_AUTHOR_CLAIM={claim_path}")
-	print(f"export DRIFT_STDLIB_AUTHOR_PUBKEY_B64={pub_b64}")
 	PY
+	# shellcheck source=/dev/null
+	source "${env_file}"
+	# Author step: drift-author publish, signed with DRIFT_SIGN_KEY_FILE.
+	# --overwrite is correct for a release recipe -- each invocation is
+	# the canonical claim for the current source/version pair.
+	PYTHONPATH=. ./.venv/bin/python3 -m tools.drift_author publish \
+		--key-file "${DRIFT_SIGN_KEY_FILE}" \
+		--sidecar-dir "${out_dir}" \
+		--package-id std \
+		--version "${DRIFTC_VERSION}" \
+		--namespace 'std.*' \
+		--namespace 'lang.*' \
+		--namespace 'drift.*' \
+		--source-content-id "${SCI}" \
+		--target-class library \
+		--release-utc "${RELEASE_UTC}" \
+		--overwrite
+	# Write the matching pubkey alongside (consumed by `just deploy`
+	# via on-disk path; standalone users get the export line below).
+	printf '%s\n' "${PUB_B64}" > "${out_dir}/author.pubkey.b64"
+	rm -f "${env_file}"
+	echo "# stdlib author claim written to: ${out_dir}/std.author-claim"
+	echo "# pubkey saved to: ${out_dir}/author.pubkey.b64"
+	echo "export DRIFT_STDLIB_AUTHOR_CLAIM=${out_dir}/std.author-claim"
+	echo "export DRIFT_STDLIB_AUTHOR_PUBKEY_B64=${PUB_B64}"
 
 # Print shell env lines for an existing deployment.
 deploy-print-env DEST:

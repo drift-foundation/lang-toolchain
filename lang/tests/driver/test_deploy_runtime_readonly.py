@@ -147,6 +147,7 @@ def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(
 			stdlib_author_claim_path=author_claim_path,
 			stdlib_author_pubkey_b64=author_pubkey_b64,
 			certifier_key_path=key_path,
+			driftc_commit="test-commit-stub",
 		)
 	finally:
 		if old_sign_key is None:
@@ -273,6 +274,7 @@ def test_deployed_wrapper_repairs_poisoned_runtime_cache(
 			stdlib_author_claim_path=author_claim_path,
 			stdlib_author_pubkey_b64=author_pubkey_b64,
 			certifier_key_path=key_path,
+			driftc_commit="test-commit-stub",
 		)
 	finally:
 		if old_sign_key is None:
