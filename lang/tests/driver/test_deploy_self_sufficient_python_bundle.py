@@ -50,7 +50,7 @@ def _public_key_bytes(pub) -> bytes:
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[str]) -> None:
 	obj = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
 		"namespaces": {ns: [kid] for ns in namespaces},
 		"revoked": [],

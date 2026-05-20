@@ -734,44 +734,46 @@ def build_package_index(
 			#       step adds the namespace / revocation gate
 			#       the sidecar alone can't enforce.
 			if _load_verifier is not None:
-				# Gate (a): missing .sig in source-rebuild is a
-				# hard error for non-co-artifacts.  Co-artifacts
-				# are injected post-index by the prepare caller,
-				# not discovered here, so any .dmp reaching this
-				# point is either a published package (must be
-				# signed) or a dev-opt-in unsigned package (which
+				# Gate (a): missing v1 cert claim in source-rebuild
+				# is a hard error for non-co-artifacts.  Co-artifacts
+				# are injected post-index by the prepare caller, not
+				# discovered here, so any .dmp reaching this point
+				# is either a published package (must carry v1
+				# sidecars) or a dev-opt-in unsigned package (which
 				# source-rebuild rejects by contract).
 				if not ak:
 					raise ResolutionError(
-						f"package at '{dmp_path}' has no `.sig` "
-						f"sidecar (empty author_key) — source-"
-						f"rebuild requires every disk package to "
-						f"cryptographically verify against the "
-						f"trust store's namespace allowlist.  "
-						f"An unsigned package has nothing to "
-						f"verify; accepting it would bypass the "
-						f"owner-namespace trust root.  Sign and "
-						f"republish under a trusted kid before "
-						f"using source-rebuild on this package."
+						f"package at '{dmp_path}' has no v1 cert "
+						f"claim sidecar (empty certifier kid) -- "
+						f"source-rebuild requires every disk package "
+						f"to cryptographically verify against the "
+						f"trust store's namespace allowlist.  An "
+						f"unsigned package has nothing to verify; "
+						f"accepting it would bypass the owner-"
+						f"namespace trust root.  Run `drift-deploy "
+						f"cert publish` under a trusted certifier "
+						f"kid before using source-rebuild on this "
+						f"package."
 					)
-				# Gate (b): .sig verification + .sig-kid allowlist.
+				# Gate (b): v1 author + cert claim verification +
+				# kid allowlist.
 				err = _load_verifier(dmp_path, manifest)
 				if err is not None:
 					raise ResolutionError(
 						f"package at '{dmp_path}' failed source-"
-						f"rebuild trust verification: {err}.  The "
-						f"`.sig` did not cryptographically verify "
-						f"against the trust store's namespace "
-						f"allowlist for this package's modules.  "
-						f"Cannot silently fall back to an older "
-						f"trusted in-range version — that would "
-						f"mask the staged package orch intended to "
-						f"certify.  Fix: update `drift/trust.json` "
-						f"(or the user trust store) to authorise "
-						f"the kid for the package's module "
-						f"namespaces, or republish under an "
-						f"already-trusted kid, then re-run the "
-						f"source-rebuild pipeline."
+						f"rebuild trust verification: {err}.  The v1 "
+						f"author + cert sidecars did not "
+						f"cryptographically verify against the trust "
+						f"store's namespace allowlist for this "
+						f"package's modules.  Cannot silently fall "
+						f"back to an older trusted in-range version "
+						f"-- that would mask the staged package orch "
+						f"intended to certify.  Fix: update "
+						f"`drift/trust.json` (or the user trust "
+						f"store) to authorise the kid for the "
+						f"package's module namespaces, or republish "
+						f"under an already-trusted kid, then re-run "
+						f"the source-rebuild pipeline."
 					)
 				# Gate (c): source_attestation_key allowlist +
 				# revocation.  Applied per-module_id, matching the

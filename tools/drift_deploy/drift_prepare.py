@@ -399,24 +399,24 @@ def _run_impl(args: argparse.Namespace) -> int:
 				missing_attestation.append((art_name, pkg_id, dep.version))
 	if missing_attestation:
 		lines = [
-			"drift prepare: cannot write v4 lock — these resolved "
-			"dependencies have no valid source attestation:",
+			"drift prepare: cannot write v4 lock -- these resolved "
+			"dependencies have no valid v1 author claim:",
 		]
 		for art_name, pkg_id, ver in missing_attestation:
 			lines.append(f"  {art_name} -> {pkg_id}@{ver}")
 		lines.append(
-			"Republish each listed package with toolchain >= 0.30.0 "
-			"so its `.source-attestation` sidecar is emitted, then "
+			"Re-run `drift-author publish` for each listed package "
+			"so its `<pkg>.author-claim` sidecar is emitted, then "
 			"re-run `drift prepare`.  Per-package stderr warnings "
 			"above (if any) name the specific failure mode for "
 			"sidecars that were present-but-rejected (mismatched "
-			"package_id/version/target_class/required_deps/"
-			"source_content_id, or signature verification failure); "
-			"a missing sidecar produces no warning — it just shows "
-			"up here.  The v4 lock format requires source identity "
-			"for every non-co-artifact dep so source-rebuild "
-			"certification has a signed source identity to verify "
-			"against — silently allowing empty fields would defeat "
+			"package_id / version / source_content_id, or signature "
+			"verification failure); a missing sidecar produces no "
+			"warning -- it just shows up here.  The v4 lock format "
+			"requires source identity for every non-co-artifact dep "
+			"so source-rebuild certification has a signed source "
+			"identity to verify against -- silently allowing empty "
+			"fields would defeat "
 			"the trust boundary."
 		)
 		raise PrepareError("\n".join(lines))

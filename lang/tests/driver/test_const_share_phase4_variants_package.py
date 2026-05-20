@@ -39,6 +39,28 @@ If this test fails, the regression is in:
 from __future__ import annotations
 
 import json
+from lang.driftc.packages.author_claim_v1 import AuthorClaimBody as _V1_AuthorClaimBody
+from lang.driftc.packages.cert_claim_v1 import (
+	CertClaimBody as _V1_CertClaimBody,
+	CertSuite as _V1_CertSuite,
+	Toolchain as _V1_Toolchain,
+)
+from lang.driftc.packages.sidecar_naming import (
+	author_claim_filename as _v1_author_claim_filename,
+	cert_claim_filename as _v1_cert_claim_filename,
+)
+from lang.driftc.packages.cert_claim_v1 import sign_body as _v1_cert_sign_body
+from lang.driftc.packages.author_claim_v1 import sign_body as _v1_author_sign_body
+from tools.drift_author.author_publish import (
+	SignAuthorClaimOptions as _V1_SignAuthorClaimOptions,
+	sign_and_write_author_claim as _v1_sign_and_write_author_claim,
+)
+from tools.drift_deploy.cert_emit import (
+	SignCertClaimOptions as _V1_SignCertClaimOptions,
+	sign_and_write_cert_claim as _v1_sign_and_write_cert_claim,
+)
+from lang.drift.crypto import compute_ed25519_kid as _v1_compute_ed25519_kid, ed25519_sign_from_seed as _v1_ed25519_sign_from_seed
+from cryptography.hazmat.primitives import serialization as _v1_serialization
 import os
 import shutil
 import subprocess
@@ -146,6 +168,7 @@ def _publish_signed_pkg(
 			"--package-id", package_id,
 			"--package-version", package_version,
 			"--package-target", "drift-dev",
+			"--source-content-id", "sha256:" + ("0" * 64),
 			"--emit-package", str(pkg_path),
 			"--json",
 		],
@@ -154,24 +177,46 @@ def _publish_signed_pkg(
 	)
 	assert rc.returncode == 0, f"lib '{package_id}' build failed:\n{rc.stdout}\n---\n{rc.stderr[:1000]}"
 
+	# v1 sidecars: replace `.sig` envelope with author + cert claims.
 	priv = Ed25519PrivateKey.generate()
 	pub_raw = priv.public_key().public_bytes_raw()
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = _b64(pub_raw)
+	priv_seed = priv.private_bytes(
+		encoding=_v1_serialization.Encoding.Raw,
+		format=_v1_serialization.PrivateFormat.Raw,
+		encryption_algorithm=_v1_serialization.NoEncryption(),
+	)
 	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps(sidecar, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+	_TEST_SCI = "sha256:" + ("0" * 64)
+	_v1_sign_and_write_author_claim(_V1_SignAuthorClaimOptions(
+		body=_V1_AuthorClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			namespaces=(package_id, f"{package_id}.*"),
+			source_content_id=_TEST_SCI, required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed, sidecar_dir=lib_dir,
+	))
+	_v1_sign_and_write_cert_claim(_V1_SignCertClaimOptions(
+		body=_V1_CertClaimBody(
+			schema_version=1, package_id=package_id, version=package_version,
+			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
+			source_content_id=_TEST_SCI, target="drift-dev",
+			toolchain=_V1_Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=_V1_CertSuite(id="drift-deploy/test", version="1.0", result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{package_id}", run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed, sidecar_dir=lib_dir,
+	))
 
 	trust = {
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {namespace_glob: [kid]},
+		"namespaces": {namespace_glob: {"authors": [kid], "certifiers": [kid]}},
 		"revoked": [],
 	}
 	dest_trust_path.write_text(json.dumps(trust, separators=(",", ":"), sort_keys=True), encoding="utf-8")
@@ -179,7 +224,11 @@ def _publish_signed_pkg(
 	dest_dir = dest_pkg_root / package_id / package_version
 	dest_dir.mkdir(parents=True, exist_ok=True)
 	shutil.copy2(str(pkg_path), str(dest_dir / f"{package_id}.dmp"))
-	shutil.copy2(str(sig_path), str(dest_dir / f"{package_id}.sig"))
+	# v1 sidecars travel with the artifact.
+	author_sidecar = lib_dir / _v1_author_claim_filename(package_id)
+	shutil.copy2(str(author_sidecar), str(dest_dir / author_sidecar.name))
+	cert_sidecar = lib_dir / _v1_cert_claim_filename(package_id, kid)
+	shutil.copy2(str(cert_sidecar), str(dest_dir / cert_sidecar.name))
 
 
 @pytest.fixture(scope="module")

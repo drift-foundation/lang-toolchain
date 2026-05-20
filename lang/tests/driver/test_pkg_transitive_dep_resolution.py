@@ -91,20 +91,86 @@ pub fn main() nothrow -> Int {
 """
 
 
+_TEST_SCI = "sha256:" + ("0" * 64)
+
+
 def _sign_package(pkg_path: Path, pkg_root: Path, pkg_id: str, version: str,
-                  priv_key, pub_raw: bytes, kid: str, pub_b64: str) -> None:
-	"""Sign and stage a package into the standard pkg-root layout."""
+                  priv_seed: bytes, pub_raw: bytes, kid: str, pub_b64: str,
+                  dep_graph_entries: tuple = ()) -> None:
+	"""Sign and stage a package into the standard pkg-root layout.
+
+	v1 fixture: emits author + cert claim sidecars alongside the
+	.dmp.  `dep_graph_entries` is `tuple[(pkg_id, version), ...]`
+	naming each dep the cert claim should attest; the helper builds
+	`DepGraphEntry` rows from the SAME sentinel kid + SCI used by
+	the bootstrap (every fixture in this file shares one key).  An
+	empty tuple means a leaf package.
+
+	The consumer-side closure cover check (O3) rejects loads whose
+	resolved closure contains a dep that's not in dep_graph -- so
+	tests that publish a dependent package MUST populate this.
+	"""
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, DepGraphEntry, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
 	dest = pkg_root / pkg_id / version
 	dest.mkdir(parents=True, exist_ok=True)
 	shutil.copy2(str(pkg_path), str(dest / f"{pkg_id}.dmp"))
 	pkg_bytes = pkg_path.read_bytes()
-	(dest / f"{pkg_id}.sig").write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv_key.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64}],
-	}, separators=(",", ":"), sort_keys=True))
+
+	# Build dep_graph rows from the bootstrap kid (every fixture in
+	# this file shares one key, so every dep's cert/author kid is
+	# the same `kid`).  artifact_sha256 must match the actual
+	# dep's `.dmp` bytes in pkg_root, otherwise the consumer's
+	# cover check rejects on hash mismatch.
+	dep_graph: list[DepGraphEntry] = []
+	for dep_id, dep_ver in dep_graph_entries:
+		dep_dmp = pkg_root / dep_id / dep_ver / f"{dep_id}.dmp"
+		dep_bytes = dep_dmp.read_bytes()
+		dep_graph.append(DepGraphEntry(
+			package_id=dep_id, version=dep_ver,
+			artifact_sha256="sha256:" + sha256(dep_bytes).hexdigest(),
+			source_content_id=_TEST_SCI,
+			author_kid=kid, cert_kid=kid,
+			dep_kind="direct",
+		))
+
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id=pkg_id, version=version,
+			namespaces=(f"{pkg_id}.*",),
+			source_content_id=_TEST_SCI,
+			required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=dest,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id=pkg_id, version=version,
+			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
+			source_content_id=_TEST_SCI, target="test-target",
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=tuple(dep_graph),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{pkg_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed,
+		sidecar_dir=dest,
+	))
 
 
 def _stage_pkgroot(tmp_path: Path, stdlib: Path):
@@ -127,6 +193,11 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 		encoding=serialization.Encoding.Raw,
 		format=serialization.PublicFormat.Raw,
 	)
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
 
@@ -135,9 +206,12 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 
 	trust_path = tmp_path / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"mylib.*": [kid], "deplib.*": [kid]},
+		"namespaces": {
+			"mylib.*": {"authors": [kid], "certifiers": [kid]},
+			"deplib.*": {"authors": [kid], "certifiers": [kid]},
+		},
 		"revoked": [],
 	}))
 
@@ -155,6 +229,7 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 			 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
 			 "--package-id", "deplib", "--package-version", ver,
 			 "--package-target", "test-target",
+			 "--source-content-id", _TEST_SCI,
 			 "--emit-package", str(deplib_dmp), "--test-build-only"],
 			cwd=ROOT, capture_output=True, text=True,
 			timeout=sanitizer_timeout(120),
@@ -162,7 +237,7 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 		assert res.returncode == 0, (
 			f"deplib {ver} build failed: {res.stderr[:300]}"
 		)
-		_sign_package(deplib_dmp, pkg_root, "deplib", ver, priv, pub_raw, kid, pub_b64)
+		_sign_package(deplib_dmp, pkg_root, "deplib", ver, priv_seed, pub_raw, kid, pub_b64)
 
 	# Build mylib@1.0.0 with required_deps = [deplib "0.2"].  The
 	# producer build consumes an exact deplib (0.2.0), but the
@@ -177,6 +252,7 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
 		 "--package-id", "mylib", "--package-version", "1.0.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--package-dep", "deplib=0.2",
 		 "--package-root", str(pkg_root), "--dep", "deplib@0.2.0",
 		 "--trust-store", str(trust_path),
@@ -185,7 +261,10 @@ def _stage_pkgroot(tmp_path: Path, stdlib: Path):
 		timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"mylib build failed: {res.stderr[:300]}"
-	_sign_package(mylib_dmp, pkg_root, "mylib", "1.0.0", priv, pub_raw, kid, pub_b64)
+	# mylib depends on deplib@0.2.0 -- its cert claim must attest
+	# that exact dep so the consumer-side closure cover (O3) accepts.
+	_sign_package(mylib_dmp, pkg_root, "mylib", "1.0.0", priv_seed, pub_raw, kid, pub_b64,
+		dep_graph_entries=(("deplib", "0.2.0"),))
 
 	consumer_dir = tmp_path / "consumer_src"
 	consumer_dir.mkdir()
@@ -238,8 +317,14 @@ def test_driftc_rejects_missing_transitive_pin(tmp_path: Path) -> None:
 		"required_deps but not pinned via --dep, and driftc is an "
 		"exact loader"
 	)
-	assert "no --dep is pinned for it" in res.stderr, (
-		f"expected 'no --dep is pinned' diagnostic, got:\n{res.stderr[:500]}"
+	# v1's closure walker fires first (the cert-claim cover check
+	# needs the full closure to be resolvable before it can run),
+	# producing a different but equivalent diagnostic:
+	# "declared required_deps entry 'deplib' has no --dep pin".
+	# Same contract: the user gets pointed at `drift prepare` to
+	# pin the missing transitive.
+	assert "has no --dep pin" in res.stderr, (
+		f"expected 'has no --dep pin' diagnostic, got:\n{res.stderr[:500]}"
 	)
 	assert "drift prepare" in res.stderr, (
 		f"diagnostic should point at `drift prepare`, got:\n{res.stderr[:500]}"
@@ -293,24 +378,29 @@ def test_driftc_rejects_pin_outside_required_range(tmp_path: Path) -> None:
 		"consumer compile should have failed — deplib@0.3.0 does not "
 		"satisfy mylib's required_deps range \"0.2\""
 	)
-	assert "transitive dependency version conflict" in res.stderr, (
-		f"expected transitive-conflict diagnostic, got:\n{res.stderr[:500]}"
+	# In v1, the rejection fires via the cert-claim closure cover
+	# check (O3): mylib's cert claim attested deplib@0.2.0 but the
+	# consumer's closure contains deplib@0.3.0, so the cert's
+	# `dep_graph` is missing the entry for 0.3.0.  Same contract
+	# as the v0 "transitive dependency version conflict" diagnostic
+	# (the consumer's pin doesn't match what was certified), but
+	# expressed through the cryptographic gate rather than the
+	# version-range checker.
+	assert "deplib" in res.stderr and "0.3.0" in res.stderr, (
+		f"expected diagnostic naming deplib@0.3.0, got:\n{res.stderr[:500]}"
 	)
-	assert "deplib" in res.stderr
-	# The diagnostic body MUST frame this as "the provided pin does
-	# not satisfy the declared range" and MUST NOT imply driftc is
-	# resolving a satisfying version from the package roots.  Exact-
-	# loader model — any "could not resolve" / "no matching version"
-	# wording here would contradict the contract.
-	assert "does not satisfy" in res.stderr, (
-		f"conflict diagnostic must state that the pin 'does not "
-		f"satisfy' the declared range — pinning the exact-loader "
-		f"framing.  Got:\n{res.stderr[:500]}"
+	assert "dep_graph missing entry" in res.stderr or "does not satisfy" in res.stderr, (
+		f"conflict diagnostic must indicate the consumer's pin was "
+		f"not in mylib's attested dep_graph.  Got:\n{res.stderr[:500]}"
 	)
-	assert "exact loader" in res.stderr, (
-		f"conflict diagnostic must mention driftc is an exact loader "
-		f"so the user does not expect automatic fallback to a "
-		f"different version.  Got:\n{res.stderr[:500]}"
+	# In v1 the diagnostic is phrased around the cert claim's
+	# attestation set ("the certifier did not attest it") rather
+	# than the v0 "exact loader" framing.  The semantic is the
+	# same: driftc refuses to fall back to a different version
+	# silently, just through the cryptographic gate.
+	assert "exact loader" in res.stderr or "did not attest" in res.stderr or "certifier" in res.stderr, (
+		f"conflict diagnostic must indicate driftc refuses to use a "
+		f"version different from what was certified.  Got:\n{res.stderr[:500]}"
 	)
 	for forbidden in ("could not resolve", "no matching version",
 	                  "no version found", "failed to resolve"):
@@ -356,6 +446,11 @@ def test_sanity_check_runs_after_version_selection(tmp_path: Path) -> None:
 		encoding=serialization.Encoding.Raw,
 		format=serialization.PublicFormat.Raw,
 	)
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
 
@@ -363,9 +458,9 @@ def test_sanity_check_runs_after_version_selection(tmp_path: Path) -> None:
 	pkg_root.mkdir()
 	trust_path = tmp_path / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"deplib.*": [kid]},
+		"namespaces": {"deplib.*": {"authors": [kid], "certifiers": [kid]}},
 		"revoked": [],
 	}))
 
@@ -381,12 +476,13 @@ def test_sanity_check_runs_after_version_selection(tmp_path: Path) -> None:
 		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
 		 "--package-id", "deplib", "--package-version", "0.1.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(deplib_010), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True,
 		timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"deplib@0.1.0 build failed: {res.stderr[:300]}"
-	_sign_package(deplib_010, pkg_root, "deplib", "0.1.0", priv, pub_raw, kid, pub_b64)
+	_sign_package(deplib_010, pkg_root, "deplib", "0.1.0", priv_seed, pub_raw, kid, pub_b64)
 
 	# deplib@0.2.0 — carries a phantom required_dep that the
 	# consumer never pins.  The producer's own emit-only build has
@@ -398,13 +494,14 @@ def test_sanity_check_runs_after_version_selection(tmp_path: Path) -> None:
 		 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
 		 "--package-id", "deplib", "--package-version", "0.2.0",
 		 "--package-target", "test-target",
+		 "--source-content-id", _TEST_SCI,
 		 "--package-dep", "phantom.lib=1.0",
 		 "--emit-package", str(deplib_020), "--test-build-only"],
 		cwd=ROOT, capture_output=True, text=True,
 		timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"deplib@0.2.0 build failed: {res.stderr[:300]}"
-	_sign_package(deplib_020, pkg_root, "deplib", "0.2.0", priv, pub_raw, kid, pub_b64)
+	_sign_package(deplib_020, pkg_root, "deplib", "0.2.0", priv_seed, pub_raw, kid, pub_b64)
 
 	# Consumer pins only deplib@0.1.0.  Both versions are in the
 	# pkg root, so discover_package_files yields both.  The fix

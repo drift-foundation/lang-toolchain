@@ -337,6 +337,7 @@ pub struct Inner {
 			"--package-id", "producer-lib",
 			"--package-version", "1.0.0",
 			"--package-target", "drift-dev",
+			"--source-content-id", "sha256:" + ("0" * 64),
 			"--emit-package", str(pkg_path),
 			"--json",
 		],
@@ -347,25 +348,64 @@ pub struct Inner {
 		"producer-lib build failed:\n" + rc.stdout + "\n---\n" + rc.stderr[:1000]
 	)
 
-	# Sign + place at canonical location.
+	# v1 sidecars: replace v0 `.sig` envelope with author + cert claims.
 	priv = Ed25519PrivateKey.generate()
 	pub_raw = priv.public_key().public_bytes_raw()
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = _b64(pub_raw)
 	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps(sidecar, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+	_TEST_SCI = "sha256:" + ("0" * 64)
+
+	from cryptography.hazmat.primitives import serialization as _v1_serialization
+	priv_seed = priv.private_bytes(
+		encoding=_v1_serialization.Encoding.Raw,
+		format=_v1_serialization.PrivateFormat.Raw,
+		encryption_algorithm=_v1_serialization.NoEncryption(),
+	)
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from lang.driftc.packages.sidecar_naming import (
+		author_claim_filename, cert_claim_filename,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id="producer-lib", version="1.0.0",
+			namespaces=("producer.*",), source_content_id=_TEST_SCI,
+			required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed, sidecar_dir=lib_dir,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id="producer-lib", version="1.0.0",
+			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
+			source_content_id=_TEST_SCI, target="drift-dev",
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id="test-producer-lib",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed, sidecar_dir=lib_dir,
+	))
 
 	trust = {
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"producer.*": [kid]},
+		"namespaces": {"producer.*": {"authors": [kid], "certifiers": [kid]}},
 		"revoked": [],
 	}
 	trust_path = tmp_path / "trust.json"
@@ -375,7 +415,12 @@ pub struct Inner {
 	dest_dir = pkg_root / "producer-lib" / "1.0.0"
 	dest_dir.mkdir(parents=True, exist_ok=True)
 	shutil.copy2(str(pkg_path), str(dest_dir / "producer-lib.dmp"))
-	shutil.copy2(str(sig_path), str(dest_dir / "producer-lib.sig"))
+	# v1 sidecars travel with the artifact.
+	for src in (
+		lib_dir / author_claim_filename("producer-lib"),
+		lib_dir / cert_claim_filename("producer-lib", kid),
+	):
+		shutil.copy2(str(src), str(dest_dir / src.name))
 
 	return pkg_root, trust_path, "producer-lib", "1.0.0"
 

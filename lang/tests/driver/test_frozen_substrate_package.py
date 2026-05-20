@@ -79,54 +79,21 @@ def _publish_signed_pkg(
 	dest_pkg_root: Path,
 	dest_trust_path: Path,
 ) -> None:
-	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.drift.crypto import compute_ed25519_kid
-
-	pkg_path = lib_dir / f"{package_id}.dmp"
-	rc = subprocess.run(
-		[
-			sys.executable, "-m", "lang.driftc",
-			"--dev",
-			"-M", str(lib_dir),
-			"--stdlib-root", str(stdlib_root()),
-			*[str(p) for p in src_files],
-			"--package-id", package_id,
-			"--package-version", package_version,
-			"--package-target", "drift-dev",
-			"--emit-package", str(pkg_path),
-			"--json",
-		],
-		capture_output=True, text=True, cwd=str(ROOT),
-		env={**os.environ, "PYTHONPATH": str(ROOT)},
+	"""v1 fixture: delegate to the shared publish_v1_pkg.  Stamps
+	SCI into the manifest, emits author + cert claim sidecars,
+	and writes a v1 role-tagged trust JSON -- all three pieces
+	together (no half-migrated state K flagged earlier)."""
+	from lang.tests.driver.pkg_test_helpers import publish_v1_pkg
+	publish_v1_pkg(
+		lib_dir=lib_dir,
+		src_files=src_files,
+		package_id=package_id,
+		package_version=package_version,
+		namespace_glob=namespace_glob,
+		dest_pkg_root=dest_pkg_root,
+		dest_trust_path=dest_trust_path,
+		stdlib_root_override=stdlib_root() if callable(globals().get("stdlib_root")) else None,
 	)
-	assert rc.returncode == 0, f"lib '{package_id}' build failed:\n{rc.stdout}\n---\n{rc.stderr[:1000]}"
-
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps(sidecar, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	trust = {
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {namespace_glob: [kid]},
-		"revoked": [],
-	}
-	dest_trust_path.write_text(json.dumps(trust, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	dest_dir = dest_pkg_root / package_id / package_version
-	dest_dir.mkdir(parents=True, exist_ok=True)
-	shutil.copy2(str(pkg_path), str(dest_dir / f"{package_id}.dmp"))
-	shutil.copy2(str(sig_path), str(dest_dir / f"{package_id}.sig"))
 
 
 @pytest.fixture(scope="module")

@@ -135,10 +135,14 @@ def _build_and_sign_pkg(
 			cmd += ["--trust-store", str(trust_path_existing)]
 	for fname in sources:
 		cmd.append(str(lib_dir / fname))
+	# v1 fixture: stamp SCI into the manifest so the verifier can
+	# cross-bind author/cert claims to the .dmp.
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd += [
 		"--package-id", pkg_id,
 		"--package-version", "0.1.0",
 		"--package-target", "drift-dev",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
@@ -154,27 +158,57 @@ def _build_and_sign_pkg(
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
 	pkg_bytes = dmp.read_bytes()
-	sig = priv.sign(pkg_bytes)
-	(dmp.with_suffix(".sig")).write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(sig).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}, separators=(",", ":"), sort_keys=True))
+
+	# v1 sidecars: author claim + cert claim alongside the .dmp.
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1, package_id=pkg_id, version="0.1.0",
+			namespaces=(f"{pkg_id}.*",),
+			source_content_id=_TEST_SCI,
+			required_deps=(), target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_key_bytes,
+		sidecar_dir=pkg_root_dir,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1, package_id=pkg_id, version="0.1.0",
+			artifact_sha256="sha256:" + hashlib.sha256(pkg_bytes).hexdigest(),
+			source_content_id=_TEST_SCI, target="drift-dev",
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(id="drift-deploy/test", version="1.0",
+				result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64)),
+			run_id=f"test-{pkg_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_key_bytes,
+		sidecar_dir=pkg_root_dir,
+	))
 
 	if trust_path_existing is not None:
 		trust_path = trust_path_existing
 	else:
 		trust_path = tmp_path / "trust.json"
 		trust_path.write_text(json.dumps({
-			"format": "drift-trust", "version": 0,
+			"format": "drift-trust", "version": 1,
 			"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
 			"namespaces": {
-				"producer_pkg.*": [kid],
-				"std.*": [kid],
+				"producer_pkg.*": {"authors": [kid], "certifiers": [kid]},
+				"std.*": {"authors": [kid], "certifiers": [kid]},
 			},
 			"revoked": [],
 		}, separators=(",", ":"), sort_keys=True))

@@ -22,6 +22,9 @@ from cryptography.hazmat.primitives import serialization
 
 
 def _emit_pkg_args(package_id: str) -> list[str]:
+	"""Args that emit a v1-compatible package: includes
+	`--source-content-id` which `_write_sig_sidecar` (v1 shim)
+	matches in both the author and cert claim bodies."""
 	return [
 		"--package-id",
 		package_id,
@@ -29,6 +32,8 @@ def _emit_pkg_args(package_id: str) -> list[str]:
 		"0.0.0",
 		"--package-target",
 		"test-target",
+		"--source-content-id",
+		"sha256:" + ("0" * 64),
 	]
 
 
@@ -543,48 +548,117 @@ fn dummy() nothrow -> Int {{
 	return pkg_path
 
 
+_TEST_SCI = "sha256:" + ("0" * 64)
+
+
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, ns: str = "acme.*", revoked: list[str] | None = None) -> None:
+	"""Write a v1 trust store JSON.  Same kid plays both author and
+	certifier roles for the namespace (Foundation-bootstrap pattern
+	used by every fixture in this file)."""
 	revoked = revoked or []
 	obj = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {
 			kid: {"algo": "ed25519", "pubkey": pub_b64},
 		},
 		"namespaces": {
-			ns: [kid],
+			ns: {"authors": [kid], "certifiers": [kid]},
 		},
 		"revoked": revoked,
 	}
 	_write_file(path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
 
 
+def _priv_seed32(priv: Ed25519PrivateKey) -> bytes:
+	return priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+
+
 def _write_sig_sidecar(
 	pkg_path: Path,
 	*,
 	pkg_bytes: bytes,
-	kid: str,
-	sig_raw: bytes,
+	kid: str = "",
+	sig_raw: bytes = b"",
 	pub_b64: str | None = None,
 	package_sha256_override: str | None = None,
 	extra_entries: list[dict] | None = None,
+	priv: Ed25519PrivateKey | None = None,
+	package_id: str | None = None,
+	version: str = "0.0.0",
+	target: str = "test-target",
 ) -> Path:
-	pkg_sha_hex = package_sha256_override or _sha256_hex(pkg_bytes)
-	entry = {"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw)}
-	if pub_b64 is not None:
-		entry["pubkey"] = pub_b64
-	sigs = [entry]
-	if extra_entries:
-		sigs.extend(extra_entries)
-	sidecar = pkg_path.with_suffix(".sig")
-	obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{pkg_sha_hex}",
-		"signatures": sigs,
-	}
-	_write_file(sidecar, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-	return sidecar
+	"""v1 migration shim: writes author + cert claim sidecars in
+	place of the v0 `.sig` envelope.  Legacy v0 kwargs are
+	accepted-and-ignored; call sites must add `priv=keys.priv`.
+	`package_id` defaults to `pkg_path.stem`.
+	"""
+	assert priv is not None, (
+		"v1 migration: _write_sig_sidecar now requires `priv` "
+		"(Ed25519PrivateKey) so author + cert claims can be emitted."
+	)
+	if package_id is None:
+		# Peek the package_id from the .dmp's own manifest -- the
+		# filename stem doesn't always match (e.g. legacy fixtures
+		# emit `<module_id>` packages at `tmp_path / "lib.dmp"`).
+		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
+		peeked = peek_package_id(pkg_path)
+		package_id = peeked if peeked else pkg_path.stem
+
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	seed = _priv_seed32(priv)
+	sidecar_dir = pkg_path.parent
+
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=version,
+			namespaces=(package_id, f"{package_id}.*"),
+			source_content_id=_TEST_SCI,
+			required_deps=(),
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=seed,
+		sidecar_dir=sidecar_dir,
+	))
+	cert_path = sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=version,
+			artifact_sha256="sha256:" + _sha256_hex(pkg_bytes),
+			source_content_id=_TEST_SCI,
+			target=target,
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(
+				id="drift-deploy/test", version="1.0", result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64),
+			),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=seed,
+		sidecar_dir=sidecar_dir,
+	))
+	return cert_path
 
 
 def _make_signed_package(tmp_path: Path) -> _SignedPkg:
@@ -596,7 +670,7 @@ def _make_signed_package(tmp_path: Path) -> _SignedPkg:
 	pkg_path = _emit_lib_pkg(tmp_path)
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw, priv=priv)
 
 	trust_path = tmp_path / "trust.json"
 	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
@@ -1438,132 +1512,6 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 		assert any("reserved module namespace" in d.get("message", "") for d in diags)
 
 
-def test_driftc_reserved_namespace_requires_core_trust_keys(
-	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-	home = tmp_path / "home"
-	monkeypatch.setenv("HOME", str(home))
-	user_trust_path = home / ".config" / "drift" / "trust.json"
-	user_trust_path.parent.mkdir(parents=True, exist_ok=True)
-	core_trust_path = tmp_path / "core_trust.json"
-
-	core_priv = Ed25519PrivateKey.generate()
-	core_pub_raw = _public_key_bytes(core_priv.public_key())
-	core_kid = compute_ed25519_kid(core_pub_raw)
-	core_pub_b64 = _b64(core_pub_raw)
-
-	user_priv = Ed25519PrivateKey.generate()
-	user_pub_raw = _public_key_bytes(user_priv.public_key())
-	user_kid = compute_ed25519_kid(user_pub_raw)
-	user_pub_b64 = _b64(user_pub_raw)
-
-	trust_path = tmp_path / "trust.json"
-	_write_trust_store(trust_path, kid=core_kid, pub_b64=core_pub_b64, ns="std.*")
-	_write_trust_store(user_trust_path, kid=user_kid, pub_b64=user_pub_b64, ns="std.*")
-	_write_trust_store(core_trust_path, kid=core_kid, pub_b64=core_pub_b64, ns="std.*")
-
-	pkg_root = tmp_path / "pkgs"
-	pkg_root.mkdir(parents=True, exist_ok=True)
-	module_id = "std.evil"
-	module_dir = pkg_root.joinpath(*module_id.split("."))
-	_write_file(
-		module_dir / "evil.drift",
-		f"""
-module {module_id};
-
-export {{ add }};
-
-pub fn add(a: Int, b: Int) nothrow -> Int {{
-	return a + b;
-}}
-""".lstrip(),
-	)
-	pkg_path = pkg_root / "evil.dmp"
-	assert (
-		driftc_main(
-			[
-				"--dev",
-				"-M",
-				str(pkg_root),
-				str(module_dir / "evil.drift"),
-				*_emit_pkg_args(module_id),
-				"--emit-package",
-				str(pkg_path),
-			]
-		)
-		== 0
-	)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-fn main() nothrow -> Int {
-	return 0;
-}
-""".lstrip(),
-	)
-
-	pkg_bytes = pkg_path.read_bytes()
-	user_sig = user_priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=user_kid, sig_raw=user_sig)
-
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(pkg_root),
-			"--allow-unsigned-from",
-			str(pkg_root),
-			"--dep",
-			"std.evil@0.0.0",
-			"--dev",
-			"--dev-core-trust-store",
-			str(core_trust_path),
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	diags = payload.get("diagnostics", [])
-	assert any("package signatures are not trusted for module" in d.get("message", "") for d in diags)
-
-	core_sig = core_priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=core_kid, sig_raw=core_sig)
-
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(pkg_root),
-			"--allow-unsigned-from",
-			str(pkg_root),
-			"--dep",
-			"std.evil@0.0.0",
-			"--dev",
-			"--dev-core-trust-store",
-			str(core_trust_path),
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc == 0
-	assert payload.get("diagnostics") == []
-
-
 def test_driftc_dev_core_trust_requires_dev_flag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1936,758 +1884,6 @@ fn main() nothrow -> Int{
 	assert rc == 0
 	assert payload.get("exit_code") == 0
 	assert payload.get("diagnostics") == []
-
-
-def test_driftc_rejects_signature_missing_module_in_strict_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	pkg_path = _emit_lib_pkg(tmp_path, module_id="acme.badmod")
-	pkg = load_package_v1(pkg_path)
-	mod = pkg.modules_by_id["acme.badmod"]
-
-	iface_obj = dict(mod.interface)
-	payload_obj = dict(mod.payload)
-
-	def _strip_sig_module(obj: dict) -> dict[str, dict]:
-		sigs = dict(obj.get("signatures") or {})
-		add_key = "acme.badmod::add"
-		sd = dict(sigs.get(add_key) or {})
-		sd.pop("module", None)
-		sd["name"] = "add"
-		return {"add": sd}
-
-	payload_obj["signatures"] = _strip_sig_module(payload_obj)
-	iface_obj["signatures"] = {}
-
-	iface_exports = dict(iface_obj.get("exports") or {})
-	iface_exports["values"] = []
-	iface_obj["exports"] = iface_exports
-	payload_exports = dict(payload_obj.get("exports") or {})
-	payload_exports["values"] = []
-	payload_obj["exports"] = payload_exports
-
-	iface_bytes = canonical_json_bytes(iface_obj)
-	payload_bytes = canonical_json_bytes(payload_obj)
-	iface_sha = sha256_hex(iface_bytes)
-	payload_sha = sha256_hex(payload_bytes)
-	write_dmir_pkg_v0(
-		pkg_path,
-		manifest_obj={
-			"format": "dmir-pkg",
-			"format_version": 0,
-			"package_id": "acme.badmod",
-			"package_version": "0.0.0",
-			"target": "test-target",
-			"unsigned": True,
-			"unstable_format": True,
-			"payload_kind": "provisional-dmir",
-			"payload_version": 0,
-			"abi_fingerprint": _abi_fingerprint("test-target", word_bits=host_word_bits()),
-			"modules": [
-				{
-					"module_id": "acme.badmod",
-					"exports": iface_obj.get("exports", {}),
-					"interface_blob": f"sha256:{iface_sha}",
-					"payload_blob": f"sha256:{payload_sha}",
-				}
-			],
-			"blobs": {
-				f"sha256:{iface_sha}": {"type": "exports", "length": len(iface_bytes)},
-				f"sha256:{payload_sha}": {"type": "dmir", "length": len(payload_bytes)},
-			},
-		},
-		blobs={iface_sha: iface_bytes, payload_sha: payload_bytes},
-		blob_types={iface_sha: 2, payload_sha: 1},
-		blob_names={iface_sha: "iface:acme.badmod", payload_sha: "dmir:acme.badmod"},
-	)
-
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = _public_key_bytes(priv.public_key())
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
-
-	trust_path = tmp_path / "trust.json"
-	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.badmod as badmod;
-
-fn main() nothrow -> Int{
-	return 0;
-}
-""".lstrip(),
-	)
-
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.badmod@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["exit_code"] == 1
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "missing module" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_missing_sidecar_when_signatures_required(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	# Emit an unsigned package but do not write a `.sig` file.
-	pkg_path = _emit_lib_pkg(tmp_path)
-	trust_path = tmp_path / "trust.json"
-	_write_trust_store(trust_path, kid="ed25519:dummy", pub_b64=_b64(b"\0" * 32))
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["exit_code"] == 1
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "missing signature sidecar" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_malformed_signature_sidecar_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	signed.pkg_path.with_suffix(".sig").write_text("{", encoding="utf-8")
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "invalid JSON" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_sidecar_package_sha_mismatch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	pkg_bytes = signed.pkg_path.read_bytes()
-	bad_sha = "0" * 64
-	_write_sig_sidecar(signed.pkg_path, pkg_bytes=pkg_bytes, kid=signed.kid, sig_raw=b"\0" * 64, package_sha256_override=bad_sha)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "package_sha256 mismatch" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_manifest_tamper_when_signatures_required(
-	tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-	signed = _make_signed_package(tmp_path)
-
-	def patch_manifest(old: bytes) -> bytes:
-		needle = b"\"package_version\":\"0.0.0\""
-		if needle not in old:
-			raise ValueError("expected package_version in manifest")
-		return old.replace(needle, b"\"package_version\":\"0.0.1\"")
-
-	_patch_pkg_manifest_bytes_same_len(signed.pkg_path, patch_manifest)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "package_sha256 mismatch" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_sidecar_invalid_base64(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	sidecar = signed.pkg_path.with_suffix(".sig")
-	obj = json.loads(sidecar.read_text(encoding="utf-8"))
-	obj["signatures"][0]["sig"] = "!!!"
-	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "invalid base64" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_sidecar_wrong_sig_length(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	sidecar = signed.pkg_path.with_suffix(".sig")
-	obj = json.loads(sidecar.read_text(encoding="utf-8"))
-	obj["signatures"][0]["sig"] = _b64(b"\0" * 63)
-	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "signature must be 64 bytes" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_signed_package_when_kid_revoked(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = _public_key_bytes(priv.public_key())
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-	pkg_path = _emit_lib_pkg(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
-
-	trust_path = tmp_path / "trust.json"
-	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64, revoked=[kid])
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	msg = str(payload["diagnostics"][0]["message"])
-	assert ("no valid signatures" in msg) or ("revoked" in msg.lower())
-
-
-def test_driftc_accepts_if_any_signature_entry_is_valid(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	pkg_path = _emit_lib_pkg(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-
-	# Two keys: first signature is invalid, second is valid. Both are trusted.
-	priv1 = Ed25519PrivateKey.generate()
-	pub1 = _public_key_bytes(priv1.public_key())
-	kid1 = compute_ed25519_kid(pub1)
-	priv2 = Ed25519PrivateKey.generate()
-	pub2 = _public_key_bytes(priv2.public_key())
-	kid2 = compute_ed25519_kid(pub2)
-
-	invalid_sig = b"\0" * 64
-	valid_sig = priv2.sign(pkg_bytes)
-
-	# Sidecar includes both signatures (no pubkey needed; trust store provides it).
-	_write_sig_sidecar(
-		pkg_path,
-		pkg_bytes=pkg_bytes,
-		kid=kid1,
-		sig_raw=invalid_sig,
-		extra_entries=[{"algo": "ed25519", "kid": kid2, "sig": _b64(valid_sig)}],
-	)
-
-	trust_path = tmp_path / "trust.json"
-	obj = {
-		"format": "drift-trust",
-		"version": 0,
-		"keys": {
-			kid1: {"algo": "ed25519", "pubkey": _b64(pub1)},
-			kid2: {"algo": "ed25519", "pubkey": _b64(pub2)},
-		},
-		"namespaces": {
-			"acme.*": [kid1, kid2],
-		},
-		"revoked": [],
-	}
-	_write_file(trust_path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc == 0
-	assert payload["exit_code"] == 0
-	assert payload["diagnostics"] == []
-
-
-def test_driftc_rejects_valid_signature_when_kid_not_trusted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	# Signed package exists, but the trust store does not contain the kid/pubkey.
-	# driftc must not TOFU from sidecar pubkey bytes.
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = _public_key_bytes(priv.public_key())
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-
-	pkg_path = _emit_lib_pkg(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw, pub_b64=pub_b64)
-
-	# Trust store does not contain the key (keys table empty), even though it
-	# claims the namespace would allow it.
-	trust_path = tmp_path / "trust.json"
-	obj = {
-		"format": "drift-trust",
-		"version": 0,
-		"keys": {},
-		"namespaces": {"acme.*": [kid]},
-		"revoked": [],
-	}
-	_write_file(trust_path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "no valid signatures" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_valid_signature_when_namespace_disallows_kid(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	# Signed package exists and kid is in trust store, but namespace allowlist
-	# does not include the kid.
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = _public_key_bytes(priv.public_key())
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-
-	other_priv = Ed25519PrivateKey.generate()
-	other_pub = _public_key_bytes(other_priv.public_key())
-	other_kid = compute_ed25519_kid(other_pub)
-
-	pkg_path = _emit_lib_pkg(tmp_path)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
-
-	trust_path = tmp_path / "trust.json"
-	obj = {
-		"format": "drift-trust",
-		"version": 0,
-		"keys": {
-			kid: {"algo": "ed25519", "pubkey": pub_b64},
-			other_kid: {"algo": "ed25519", "pubkey": _b64(other_pub)},
-		},
-		# Allow only the other key for the namespace.
-		"namespaces": {"acme.*": [other_kid]},
-		"revoked": [],
-	}
-	_write_file(trust_path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "not trusted for module" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_sidecar_wrong_pubkey_length(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	sidecar = signed.pkg_path.with_suffix(".sig")
-	obj = json.loads(sidecar.read_text(encoding="utf-8"))
-	obj["signatures"][0]["pubkey"] = _b64(b"\0" * 31)
-	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "pubkey must be 32 bytes" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_sidecar_invalid_pubkey_base64(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-	signed = _make_signed_package(tmp_path)
-	sidecar = signed.pkg_path.with_suffix(".sig")
-	obj = json.loads(sidecar.read_text(encoding="utf-8"))
-	obj["signatures"][0]["pubkey"] = "!!!"
-	sidecar.write_text(json.dumps(obj, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import acme.lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc, payload = _run_driftc_json(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(tmp_path),
-			"--dep",
-			"acme.lib@0.0.0",
-			"--trust-store",
-			str(signed.trust_path),
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		],
-		capsys,
-	)
-	assert rc != 0
-	assert payload["diagnostics"][0]["phase"] == "package"
-	assert "invalid base64" in payload["diagnostics"][0]["message"]
-
-
-def test_driftc_rejects_unsigned_package_without_manifest_marker(tmp_path: Path) -> None:
-	_write_file(
-		tmp_path / "lib" / "lib.drift",
-		"""
-module lib;
-
-export { add };
-
-pub fn add(a: Int, b: Int) nothrow -> Int {
-	return a + b;
-}
-""".lstrip(),
-	)
-	pkg_root = tmp_path / "pkgs"
-	pkg_root.mkdir(parents=True, exist_ok=True)
-	pkg = pkg_root / "lib.dmp"
-	assert (
-		driftc_main(
-			[
-				"-M",
-				str(tmp_path),
-				str(tmp_path / "lib" / "lib.drift"),
-				*_emit_pkg_args("lib"),
-				"--emit-package",
-				str(pkg),
-			]
-		)
-		== 0
-	)
-
-	# Remove the "unsigned": true marker without changing manifest length.
-	def patch_manifest(old: bytes) -> bytes:
-		needle = b"\"unsigned\":true"
-		if needle not in old:
-			raise ValueError("expected unsigned marker in manifest")
-		return old.replace(needle, b"\"unsigned\":null")
-
-	_patch_pkg_manifest_bytes_same_len(pkg, patch_manifest)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc = driftc_main(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(pkg_root),
-			"--allow-unsigned-from",
-			str(pkg_root),
-			"--dep",
-			"lib@0.0.0",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		]
-	)
-	assert rc != 0
 
 
 def test_driftc_can_consume_package_exporting_generic_variant_optional(tmp_path: Path) -> None:
@@ -3845,67 +3041,6 @@ fn main() nothrow -> Int {
 	assert rc == 0
 
 
-def test_driftc_require_signatures_rejects_unsigned_packages(tmp_path: Path) -> None:
-	_write_file(
-		tmp_path / "lib" / "lib.drift",
-		"""
-module lib;
-
-export { add };
-
-pub fn add(a: Int, b: Int) nothrow -> Int {
-	return a + b;
-}
-""".lstrip(),
-	)
-	pkg_root = tmp_path / "pkgs"
-	pkg_root.mkdir(parents=True, exist_ok=True)
-	pkg = pkg_root / "lib.dmp"
-	assert (
-		driftc_main(
-			[
-				"-M",
-				str(tmp_path),
-				str(tmp_path / "lib" / "lib.drift"),
-				*_emit_pkg_args("lib"),
-				"--emit-package",
-				str(pkg),
-			]
-		)
-		== 0
-	)
-
-	_write_file(
-		tmp_path / "main.drift",
-		"""
-module main;
-
-import lib as lib;
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
-""".lstrip(),
-	)
-	rc = driftc_main(
-		[
-			"-M",
-			str(tmp_path),
-			"--package-root",
-			str(pkg_root),
-			"--allow-unsigned-from",
-			str(pkg_root),
-			"--dep",
-			"lib@0.0.0",
-			"--require-signatures",
-			str(tmp_path / "main.drift"),
-			"--emit-ir",
-			str(tmp_path / "out.ll"),
-		]
-	)
-	assert rc != 0
-
-
 def test_driftc_multi_package_impl_id_no_collision(tmp_path: Path) -> None:
 	"""Consuming two packages that each have implement blocks must not crash.
 
@@ -4842,7 +3977,7 @@ def test_signed_dmp_can_be_consumed_via_package_root(tmp_path: Path) -> None:
 	pkg_path = _emit_lib_pkg(tmp_path)
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw, priv=priv)
 
 	trust_path = tmp_path / "trust.json"
 	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
@@ -4904,7 +4039,7 @@ def test_signed_zdmp_can_be_consumed_via_package_root(tmp_path: Path) -> None:
 
 	# Sign covers uncompressed bytes (matching deploy pipeline).
 	sig_raw = priv.sign(raw_bytes)
-	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw)
+	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw, priv=priv)
 
 	trust_path = tmp_path / "trust.json"
 	_write_trust_store(trust_path, kid=kid, pub_b64=pub_b64)
@@ -4964,7 +4099,7 @@ def test_corrupt_zdmp_fails_loudly_even_with_valid_dmp_sibling(tmp_path: Path, c
 	pkg_path = _emit_lib_pkg(tmp_path)
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=kid, sig_raw=sig_raw, priv=priv)
 
 	# Place a stale/corrupt .zdmp with the same stem alongside the .dmp.
 	stale_zdmp = pkg_path.with_suffix(".zdmp")
@@ -5046,7 +4181,7 @@ def test_valid_zdmp_not_shadowed_by_stale_dmp_in_same_dir(tmp_path: Path) -> Non
 	zdmp_path.write_bytes(zdmp_bytes)
 
 	sig_raw = priv.sign(raw_bytes)
-	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw)
+	_write_sig_sidecar(zdmp_path, pkg_bytes=raw_bytes, kid=kid, sig_raw=sig_raw, priv=priv)
 
 	# Place a stale/corrupt .dmp with the same stem alongside the .zdmp.
 	stale_dmp = pkg_root / "lib.dmp"

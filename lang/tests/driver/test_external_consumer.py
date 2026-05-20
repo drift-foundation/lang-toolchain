@@ -60,32 +60,166 @@ def _public_key_bytes(pub) -> bytes:
 	return pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
 
 
+# Sentinel SCI used by every fixture package built in this test file.
+# A constant value is acceptable here because none of these tests
+# assert anything about source identity -- they exercise the
+# *consumer-side* compile flow.  The manifest stamp, author claim,
+# and cert claim all agree because they all reference this same
+# string, which is what the v1 verifier requires.
+_TEST_SCI = "sha256:" + ("0" * 64)
+
+
 def _write_trust_store(path: Path, *, kid: str, pub_b64: str, namespaces: list[str], revoked: list[str] | None = None) -> None:
+	"""Write a v1 trust store JSON.
+
+	`kid` plays BOTH the author and certifier roles for every
+	listed namespace -- this is the Foundation-bootstrap pattern
+	from the audit doc: in test fixtures (and stdlib in dev), the
+	same key signs both the author claim and the cert claim, so a
+	single trust entry covers both roles.
+	"""
 	revoked = revoked or []
 	obj = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {ns: [kid] for ns in namespaces},
+		"namespaces": {
+			ns: {"authors": [kid], "certifiers": [kid]}
+			for ns in namespaces
+		},
 		"revoked": revoked,
 	}
 	_write_file(path, json.dumps(obj, separators=(",", ":"), sort_keys=True))
 
 
-def _write_sig_sidecar(pkg_path: Path, *, pkg_bytes: bytes, kid: str, sig_raw: bytes, pub_b64: str | None = None) -> Path:
-	pkg_sha_hex = _sha256_hex(pkg_bytes)
-	entry: dict = {"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw)}
-	if pub_b64 is not None:
-		entry["pubkey"] = pub_b64
-	sidecar = pkg_path.with_suffix(".sig")
-	obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{pkg_sha_hex}",
-		"signatures": [entry],
-	}
-	_write_file(sidecar, json.dumps(obj, separators=(",", ":"), sort_keys=True))
-	return sidecar
+def _priv_seed32(priv: Ed25519PrivateKey) -> bytes:
+	"""Extract the raw 32-byte ed25519 seed from a cryptography priv key."""
+	return priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+
+
+def _write_v1_sidecars(
+	pkg_path: Path,
+	*,
+	pkg_bytes: bytes,
+	priv: Ed25519PrivateKey,
+	package_id: str,
+	version: str = "0.0.0",
+	target: str = "test-target",
+	namespaces: tuple[str, ...] | None = None,
+	required_deps: tuple = (),
+) -> tuple[Path, Path]:
+	"""Replace the v0 `<pkg>.sig` envelope with v1 author + cert
+	claim sidecars next to `pkg_path`.
+
+	Returns `(author_claim_path, cert_claim_path)`.
+
+	`namespaces` defaults to `(package_id,)` -- override when the
+	package's actual module namespace differs (e.g. hyphenated
+	package ids whose modules use the underscored form).
+	"""
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+
+	seed = _priv_seed32(priv)
+	sidecar_dir = pkg_path.parent
+	# Default to (`<pkg>`, `<pkg>.*`) so the claim covers both a
+	# bare module named `<pkg>` (the package's root namespace) AND
+	# any descendant module (e.g. `std` package + `std.testlib`
+	# module).  Callers override when a package's modules live in
+	# a different namespace than its id (e.g. `net-tls` →
+	# `net_tls.*`).
+	ns = namespaces if namespaces is not None else (
+		package_id, f"{package_id}.*",
+	)
+
+	author_path = sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=version,
+			namespaces=ns,
+			source_content_id=_TEST_SCI,
+			required_deps=required_deps,
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=seed,
+		sidecar_dir=sidecar_dir,
+	))
+	cert_path = sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=version,
+			artifact_sha256="sha256:" + _sha256_hex(pkg_bytes),
+			source_content_id=_TEST_SCI,
+			target=target,
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(
+				id="drift-deploy/test", version="1.0", result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64),
+			),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=seed,
+		sidecar_dir=sidecar_dir,
+	))
+	return author_path, cert_path
+
+
+# Compatibility shim: legacy call sites still using
+# `_write_sig_sidecar` now produce v1 sidecars instead.  The
+# `kid`/`sig_raw`/`pub_b64` args are unused (those came from v0's
+# .sig envelope shape); callers will be cleaned up to call
+# `_write_v1_sidecars` directly in a follow-up sweep.
+def _write_sig_sidecar(
+	pkg_path: Path, *, pkg_bytes: bytes, kid: str = "",
+	sig_raw: bytes = b"", pub_b64: str | None = None,
+	priv: Ed25519PrivateKey | None = None,
+	package_id: str | None = None,
+	version: str = "0.0.0",
+) -> Path:
+	"""v1 migration shim.  Call sites still spell `_write_sig_sidecar`
+	but get v1 author + cert claim sidecars instead.
+
+	Call-site contract: must pass `priv=keys.priv`.  `package_id`
+	defaults to `pkg_path.stem` (the filename without `.dmp`),
+	which matches the naming convention every fixture in this
+	file uses (`acme.util` → `acme.util.dmp`).  Override only when
+	the on-disk filename differs from the package id.
+
+	The legacy v0-shaped `kid` / `sig_raw` / `pub_b64` kwargs are
+	accepted-and-ignored so the migration is purely additive at
+	call sites.
+	"""
+	assert priv is not None, (
+		"v1 migration: _write_sig_sidecar now requires `priv` (the "
+		"Ed25519PrivateKey that built the v0 signature) so it can "
+		"emit v1 author + cert claims.  Pass priv=keys.priv at the "
+		"call site."
+	)
+	if package_id is None:
+		package_id = pkg_path.stem
+	_, cert_path = _write_v1_sidecars(
+		pkg_path, pkg_bytes=pkg_bytes, priv=priv,
+		package_id=package_id, version=version,
+	)
+	return cert_path
 
 
 @dataclass(frozen=True)
@@ -110,10 +244,14 @@ def _empty_stdlib_root(tmp_path: Path) -> Path:
 
 
 def _emit_pkg_args(package_id: str) -> list[str]:
+	"""Args that build a v1-compatible package: includes
+	`--source-content-id`, which `_write_v1_sidecars` matches in
+	both the author and cert claim bodies."""
 	return [
 		"--package-id", package_id,
 		"--package-version", "0.0.0",
 		"--package-target", "test-target",
+		"--source-content-id", _TEST_SCI,
 	]
 
 
@@ -195,7 +333,7 @@ def _build_signed_acme_pkg(tmp_path: Path) -> _SignedPkg:
 	keys = _gen_keys()
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 	core_trust_path = tmp_path / "core_trust.json"
 	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
@@ -673,7 +811,7 @@ pub fn install_process_preamble() nothrow -> Bool {
 	assert rc == 0, "failed to build std.io package fixture"
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 	return pkg_path
 
 
@@ -800,14 +938,33 @@ fn main() nothrow -> Int {
 def test_ext_unsigned_package_rejected(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-	"""An unsigned .dmp without sidecar must be rejected via signed path."""
+	"""A package without v1 trust sidecars must be rejected.
+
+	In v0 this was "delete the `.sig` envelope"; in v1 the
+	equivalent is "delete the author-claim AND every cert-claim
+	sidecar."  The verifier must reject because the author claim
+	is required for every package load (see
+	`verify_v1.compose_verify` -- the author-claim gate fires
+	first), and a missing author claim is the canonical "unsigned
+	package" state in the trust-v1 model.
+	"""
 	monkeypatch.setenv("HOME", str(tmp_path / "home"))
 	pkg = _build_signed_acme_pkg(tmp_path)
 	_ = capsys.readouterr()
 
-	# Remove .sig sidecar to make package unsigned.
-	sig_path = pkg.pkg_path.with_suffix(".sig")
-	sig_path.unlink()
+	# Remove all v1 trust sidecars to make the package unsigned.
+	from lang.driftc.packages.sidecar_naming import (
+		author_claim_filename,
+		cert_claim_filename_prefix,
+	)
+	pkg_dir = pkg.pkg_path.parent
+	author_path = pkg_dir / author_claim_filename("acme.util")
+	if author_path.is_file():
+		author_path.unlink()
+	cert_prefix = cert_claim_filename_prefix("acme.util")
+	for entry in pkg_dir.iterdir():
+		if entry.is_file() and entry.name.startswith(cert_prefix) and entry.name.endswith(".json"):
+			entry.unlink()
 
 	rc, payload, messages, _stderr = _compile_consumer(
 		tmp_path, capsys, pkg=pkg,
@@ -823,7 +980,12 @@ fn main() nothrow -> Int {
 """,
 	)
 	assert rc != 0, "unsigned package should be rejected"
-	assert "sidecar" in messages.lower() or "signature" in messages.lower() or "unsigned" in messages.lower(), f"expected sidecar/signature rejection, got: {messages}"
+	# v1 rejection diagnostic names the missing author claim or
+	# the missing sidecar generically.
+	rejection_terms = ("author-claim", "author claim", "sidecar", "signature", "unsigned", "trust verification")
+	assert any(t in messages.lower() for t in rejection_terms), (
+		f"expected v1 sidecar-missing rejection, got: {messages}"
+	)
 
 
 def test_ext_tampered_package_rejected(
@@ -1043,7 +1205,7 @@ def _build_signed_acme_vis_pkg(tmp_path: Path) -> _SignedPkg:
 	keys = _gen_keys()
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 	core_trust_path = tmp_path / "core_trust.json"
 	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
@@ -1201,7 +1363,7 @@ def _build_signed_generic_pkg(tmp_path: Path) -> _SignedPkg:
 	keys = _gen_keys()
 	pkg_bytes = pkg_path.read_bytes()
 	sig_raw = keys.priv.sign(pkg_bytes)
-	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+	_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 	core_trust_path = tmp_path / "core_trust_gen.json"
 	_write_trust_store(core_trust_path, kid=keys.kid, pub_b64=keys.pub_b64, namespaces=["std.*", "lang.*", "drift.*"])
@@ -1306,7 +1468,7 @@ class TestSourceWinsOverPackage:
 		# Sign acme.util.
 		util_bytes = util_pkg_path.read_bytes()
 		sig_raw = keys.priv.sign(util_bytes)
-		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 		# 2. Build acme.other package (truly external dep).
 		build_other = tmp_path / "build_other"
@@ -1334,7 +1496,7 @@ pub fn helper() nothrow -> Int {
 		# Sign acme.other.
 		other_bytes = other_pkg_path.read_bytes()
 		sig_raw = keys.priv.sign(other_bytes)
-		_write_sig_sidecar(other_pkg_path, pkg_bytes=other_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+		_write_sig_sidecar(other_pkg_path, pkg_bytes=other_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 		# 3. Write trust stores.
 		core_trust = tmp_path / "core_trust.json"
@@ -1408,7 +1570,7 @@ fn main() nothrow -> Int {
 		_ = capsys.readouterr()
 		util_bytes = util_pkg_path.read_bytes()
 		sig_raw = keys.priv.sign(util_bytes)
-		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+		_write_sig_sidecar(util_pkg_path, pkg_bytes=util_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 		# Trust stores.
 		core_trust = tmp_path / "core_trust.json"
@@ -1487,7 +1649,7 @@ pub fn helper() nothrow -> Int {
 		_ = capsys.readouterr()
 		pkg_bytes = pkg_path.read_bytes()
 		sig_raw = keys.priv.sign(pkg_bytes)
-		_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+		_write_sig_sidecar(pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 		# Build and sign acme.local (will conflict with source).
 		build_local = tmp_path / "build_local"
@@ -1513,7 +1675,7 @@ pub fn local_fn() nothrow -> Int {
 		_ = capsys.readouterr()
 		local_bytes = local_pkg_path.read_bytes()
 		sig_raw = keys.priv.sign(local_bytes)
-		_write_sig_sidecar(local_pkg_path, pkg_bytes=local_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64)
+		_write_sig_sidecar(local_pkg_path, pkg_bytes=local_bytes, kid=keys.kid, sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv)
 
 		# Trust stores.
 		core_trust = tmp_path / "core_trust.json"
@@ -1680,7 +1842,7 @@ def _build_signed_thrower_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
 	sig_raw = keys.priv.sign(pkg_bytes)
 	_write_sig_sidecar(
 		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
-		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv,
 	)
 	return pkg_path
 
@@ -2070,7 +2232,7 @@ def _build_signed_cell_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
 	sig_raw = keys.priv.sign(pkg_bytes)
 	_write_sig_sidecar(
 		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
-		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv,
 	)
 	return pkg_path
 
@@ -2201,7 +2363,7 @@ def _build_signed_diagcarrier_pkg(tmp_path: Path, keys: _DeployKeys) -> Path:
 	sig_raw = keys.priv.sign(pkg_bytes)
 	_write_sig_sidecar(
 		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
-		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv,
 	)
 	return pkg_path
 
@@ -2371,7 +2533,7 @@ def _build_signed_manual_diag_error_pkg(tmp_path: Path, keys: _DeployKeys) -> Pa
 	sig_raw = keys.priv.sign(pkg_bytes)
 	_write_sig_sidecar(
 		pkg_path, pkg_bytes=pkg_bytes, kid=keys.kid,
-		sig_raw=sig_raw, pub_b64=keys.pub_b64,
+		sig_raw=sig_raw, pub_b64=keys.pub_b64, priv=keys.priv,
 	)
 	return pkg_path
 

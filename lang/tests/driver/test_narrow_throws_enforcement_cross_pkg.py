@@ -57,10 +57,13 @@ def _build_and_sign_pkg(
 			cmd += ["--trust-store", str(trust_path_existing)]
 	for fname in sources:
 		cmd.append(str(lib_dir / fname))
+	# v1 fixture: stamp SCI then sign via shared helper.
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	cmd += [
 		"--package-id", pkg_id,
 		"--package-version", "0.1.0",
 		"--package-target", "drift-dev",
+		"--source-content-id", _TEST_SCI,
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
@@ -70,32 +73,50 @@ def _build_and_sign_pkg(
 
 	assert res.returncode == 0, f"build of {pkg_id} failed:\n{res.stderr[-1500:]}"
 
-	priv = Ed25519PrivateKey.generate()
-	priv_key_bytes = priv.private_bytes_raw()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = dmp.read_bytes()
-	sig = priv.sign(pkg_bytes)
-	(dmp.with_suffix(".sig")).write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(sig).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}, separators=(",", ":"), sort_keys=True))
+	# Sign via shared helper.  When `trust_path_existing` is set we
+	# merge in (multi-package fixture shares one trust file);
+	# otherwise we write a fresh trust JSON.
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
 	if trust_path_existing is not None:
+		trust_obj = json.loads(trust_path_existing.read_text())
+		info = sign_v1_pkg_into_root(
+			pkg_path=dmp, package_id=pkg_id, package_version="0.1.0",
+			namespace_glob=f"{pkg_id}.*",
+			dest_pkg_root=tmp_path / "pkg_root",
+			merge_into_trust=trust_obj,
+		)
+		# Some fixtures also expect dep_pkg.* and std.* trust entries
+		# under the same key; add them so cross-pkg builds work.
+		kid_ = info["kid"]
+		for ns in ("dep_pkg.*", "std.*"):
+			trust_obj["namespaces"].setdefault(
+				ns, {"authors": [], "certifiers": []},
+			)
+			if isinstance(trust_obj["namespaces"][ns], list):
+				trust_obj["namespaces"][ns] = {
+					"authors": list(trust_obj["namespaces"][ns]),
+					"certifiers": list(trust_obj["namespaces"][ns]),
+				}
+			if kid_ not in trust_obj["namespaces"][ns]["authors"]:
+				trust_obj["namespaces"][ns]["authors"].append(kid_)
+				trust_obj["namespaces"][ns]["certifiers"].append(kid_)
+		trust_path_existing.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))
 		trust_path = trust_path_existing
 	else:
 		trust_path = tmp_path / "trust.json"
-		trust_path.write_text(json.dumps({
-			"format": "drift-trust", "version": 0,
-			"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-			"namespaces": {f"{pkg_id}.*": [kid], "dep_pkg.*": [kid], "std.*": [kid]},
-			"revoked": [],
-		}, separators=(",", ":"), sort_keys=True))
+		trust_obj = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+		info = sign_v1_pkg_into_root(
+			pkg_path=dmp, package_id=pkg_id, package_version="0.1.0",
+			namespace_glob=f"{pkg_id}.*",
+			dest_pkg_root=tmp_path / "pkg_root",
+			merge_into_trust=trust_obj,
+		)
+		kid_ = info["kid"]
+		for ns in (f"{pkg_id}.*", "dep_pkg.*", "std.*"):
+			trust_obj["namespaces"].setdefault(
+				ns, {"authors": [kid_], "certifiers": [kid_]},
+			)
+		trust_path.write_text(json.dumps(trust_obj, separators=(",", ":"), sort_keys=True))
 	return tmp_path / "pkg_root", trust_path, res
 
 

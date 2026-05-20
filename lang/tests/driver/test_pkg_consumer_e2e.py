@@ -189,11 +189,16 @@ def _publish_library_package(
 	assert res.returncode == 0, (
 		f"library '{package_id}' --emit-package failed:\n{res.stderr[:1500]}"
 	)
-	# Sign the library package and place it next to stdlib in a unified
-	# pkg_root.
+	# Sign the library package with v1 author + cert claims and
+	# place it next to stdlib in a unified pkg_root.
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key().public_bytes(
 		encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw,
+	)
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
 	)
 	kid = compute_ed25519_kid(pub)
 	pub_b64 = base64.b64encode(pub).decode("ascii")
@@ -209,26 +214,85 @@ def _publish_library_package(
 	lib_dest.mkdir(parents=True, exist_ok=True)
 	import shutil
 	shutil.copy2(str(out_dmp), str(lib_dest / f"{package_id}.dmp"))
-	(lib_dest / f"{package_id}.sig").write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64}],
-	}, separators=(",", ":"), sort_keys=True))
-	# Build a unified trust store that covers stdlib namespaces + the new
-	# library's namespace.
+
+	# v1 sidecars: author claim + cert claim alongside the .dmp.
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody, CertSuite, Toolchain,
+	)
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions, sign_and_write_author_claim,
+	)
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions, sign_and_write_cert_claim,
+	)
+	_TEST_SCI = "sha256:" + ("0" * 64)
+	# The author claim's namespaces must cover the module ids the
+	# package publishes.  `module_namespace` overrides when the
+	# package's modules live under a different namespace than its
+	# id (e.g. `net-tls` package → `net_tls.*` modules).
+	ns = module_namespace if module_namespace else package_id
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=package_version,
+			namespaces=(ns, f"{ns}.*"),
+			source_content_id=_TEST_SCI,
+			required_deps=(),
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed,
+		sidecar_dir=lib_dest,
+	))
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1,
+			package_id=package_id,
+			version=package_version,
+			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
+			source_content_id=_TEST_SCI,
+			target="drift-dev",
+			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
+			dep_graph=(),
+			cert_suite=CertSuite(
+				id="drift-deploy/test", version="1.0", result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64),
+			),
+			run_id=f"test-{package_id}",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed,
+		sidecar_dir=lib_dest,
+	))
+
+	# Build a unified v1 trust store that covers stdlib namespaces +
+	# the new library's namespace.  Same kid plays author + certifier
+	# for the library (test fixture).
 	stdlib_trust = json.loads(stdlib_pkg.trust_path.read_text())
-	ns_glob = f"{module_namespace}.*" if module_namespace else f"{package_id}.*"
+	ns_glob = f"{ns}.*"
 	merged_trust_path = tmp_path / "merged_trust.json"
 	merged = {
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": dict(stdlib_trust.get("keys", {})),
 		"namespaces": dict(stdlib_trust.get("namespaces", {})),
 		"revoked": list(stdlib_trust.get("revoked", [])),
 	}
 	merged["keys"][kid] = {"algo": "ed25519", "pubkey": pub_b64}
-	merged["namespaces"].setdefault(ns_glob, []).append(kid)
+	merged["namespaces"].setdefault(
+		ns_glob, {"authors": [], "certifiers": []},
+	)
+	if isinstance(merged["namespaces"][ns_glob], list):
+		# Defensive: if a stale v0-shape entry crept in via merge,
+		# upgrade to v1 role-tagged shape.
+		merged["namespaces"][ns_glob] = {
+			"authors": list(merged["namespaces"][ns_glob]),
+			"certifiers": list(merged["namespaces"][ns_glob]),
+		}
+	merged["namespaces"][ns_glob]["authors"].append(kid)
+	merged["namespaces"][ns_glob]["certifiers"].append(kid)
 	merged_trust_path.write_text(json.dumps(merged))
 	return pkg_root, merged_trust_path
 

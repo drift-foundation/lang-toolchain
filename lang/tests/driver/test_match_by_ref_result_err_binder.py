@@ -303,7 +303,7 @@ pub fn open(host: String) nothrow -> core.Result<Int, inner.MyError> {
 
 	trust_path = tmp_path / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
 		"namespaces": {"errpkg.*": [kid], "std.*": [kid]},
 		"revoked": [],

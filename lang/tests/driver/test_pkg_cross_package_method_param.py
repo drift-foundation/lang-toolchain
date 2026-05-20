@@ -185,6 +185,12 @@ def _built_lib(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 	(lib_dir / "inner.drift").write_text(LIB_INNER_SOURCE, encoding="utf-8")
 	(lib_dir / "mylib.drift").write_text(LIB_SOURCE, encoding="utf-8")
 
+	# v1 fixture: build with SCI stamp, then sign via shared
+	# `sign_v1_pkg_into_root` (writes author + cert sidecars and
+	# v1 role-tagged trust JSON, copies all three to the canonical
+	# pkg-root layout).
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	pkg_path = base / "mylib.dmp"
 	rc = subprocess.run(
 		[
@@ -196,6 +202,7 @@ def _built_lib(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 			"--package-id", "mylib",
 			"--package-version", "1.0.0",
 			"--package-target", "drift-dev",
+			"--source-content-id", _TEST_SCI,
 			"--emit-package", str(pkg_path),
 			"--json",
 		],
@@ -204,34 +211,15 @@ def _built_lib(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 	)
 	assert rc.returncode == 0, f"lib build failed:\n{rc.stdout}"
 
-	# Sign.
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps(sidecar, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	trust = {
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"mylib.*": [kid]},
-		"revoked": [],
-	}
 	trust_path = base / "trust.json"
-	trust_path.write_text(json.dumps(trust, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	pkg_root = base / "pkg_root" / "mylib" / "1.0.0"
-	pkg_root.mkdir(parents=True, exist_ok=True)
-	shutil.copy2(str(pkg_path), str(pkg_root / "mylib.dmp"))
-	shutil.copy2(str(sig_path), str(pkg_root / "mylib.sig"))
+	sign_v1_pkg_into_root(
+		pkg_path=pkg_path,
+		package_id="mylib",
+		package_version="1.0.0",
+		namespace_glob="mylib.*",
+		dest_pkg_root=base / "pkg_root",
+		dest_trust_path=trust_path,
+	)
 
 	return base / "pkg_root", trust_path
 

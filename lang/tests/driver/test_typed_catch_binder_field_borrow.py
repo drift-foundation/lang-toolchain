@@ -259,12 +259,15 @@ def test_v2_samepkg_field_borrow_compiles(tmp_path: Path) -> None:
 
 def _build_errpkg(tmp_path: Path) -> tuple[Path, Path]:
 	"""Build + sign a producer package mirroring app team's errpkg.
-	Returns (pkg_root, trust_path)."""
-	import base64
-	import hashlib
-	import json
-	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from lang.drift.crypto import compute_ed25519_kid
+	Returns (pkg_root, trust_path).
+
+	v1 fixture: uses the shared `publish_v1_pkg` helper which
+	stamps SCI into the manifest and emits both author + cert
+	claim sidecars alongside the .dmp, plus a v1 role-tagged
+	trust store -- one semantic publisher instead of the inline
+	dmir-pkg-sig + v0 trust pattern.
+	"""
+	from lang.tests.driver.pkg_test_helpers import publish_v1_pkg
 
 	lib_dir = tmp_path / "errpkg_src"
 	lib_dir.mkdir()
@@ -298,50 +301,33 @@ pub fn open(host: String) nothrow -> core.Result<Int, inner.ManagedError> {
 }
 """)
 
-	pkg_root = tmp_path / "pkg_root" / "errpkg" / "0.1.0"
-	pkg_root.mkdir(parents=True)
-	dmp = pkg_root / "errpkg.dmp"
-
-	res = subprocess.run(
-		[
-			sys.executable, "-m", "lang.driftc",
-			"--dev", "-M", str(lib_dir), "--stdlib-root", str(ROOT / "stdlib"),
-			str(lib_dir / "inner.drift"), str(lib_dir / "lib.drift"),
-			"--package-id", "errpkg", "--package-version", "0.1.0",
-			"--package-target", "drift-dev",
-			"--emit-package", str(dmp), "--test-build-only",
-		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
-	)
-	assert res.returncode == 0, f"producer build failed:\n{res.stderr[-1500:]}"
-
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-	pkg_bytes = dmp.read_bytes()
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{hashlib.sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{
-			"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64,
-		}],
-	}
-	(dmp.with_suffix(".sig")).write_text(
-		json.dumps(sidecar, separators=(",", ":"), sort_keys=True)
-	)
-
+	pkg_root = tmp_path / "pkg_root"
 	trust_path = tmp_path / "trust.json"
-	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"errpkg.*": [kid], "std.*": [kid]},
-		"revoked": [],
-	}, separators=(",", ":"), sort_keys=True))
+	# `std.*` is added to the same trust file alongside `errpkg.*`
+	# because the consumer compile loads stdlib too.  publish_v1_pkg
+	# writes the errpkg entry, then we merge an std.* entry in for
+	# the same kid (Foundation-bootstrap pattern shared by the test
+	# suite).
+	pub_info = publish_v1_pkg(
+		lib_dir=lib_dir,
+		src_files=[lib_dir / "inner.drift", lib_dir / "lib.drift"],
+		package_id="errpkg",
+		package_version="0.1.0",
+		namespace_glob="errpkg.*",
+		dest_pkg_root=pkg_root,
+		dest_trust_path=trust_path,
+		stdlib_root_override=ROOT / "stdlib",
+	)
+	# Merge stdlib namespace coverage in (this test compiles
+	# consumer code that imports std.core).
+	import json as _json
+	trust = _json.loads(trust_path.read_text())
+	trust["namespaces"]["std.*"] = {
+		"authors": [pub_info["kid"]], "certifiers": [pub_info["kid"]],
+	}
+	trust_path.write_text(_json.dumps(trust, separators=(",", ":"), sort_keys=True))
 
-	return tmp_path / "pkg_root", trust_path
+	return pkg_root, trust_path
 
 
 _V3_CROSSPKG_BORROW = """\

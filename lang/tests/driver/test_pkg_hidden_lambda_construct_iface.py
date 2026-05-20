@@ -54,67 +54,29 @@ def test_pkg_hidden_lambda_construct_iface_resolved(tmp_path: Path) -> None:
 	if stdlib is None:
 		pytest.skip("stdlib not available")
 
-	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-	from cryptography.hazmat.primitives import serialization
-	from lang.drift.crypto import compute_ed25519_kid
+	from lang.tests.driver.pkg_test_helpers import publish_v1_pkg
 
-	# Step 1: Build library package
+	# Step 1: Build + sign library package via the shared v1
+	# publisher (stamps SCI into the manifest and emits both
+	# author and cert claim sidecars next to the .dmp).
 	lib_dir = tmp_path / "lib_src"
 	lib_dir.mkdir()
 	(lib_dir / "mylib.drift").write_text(LIB_SOURCE)
 
-	pkg_path = tmp_path / "mylib.dmp"
-	cmd = [
-		sys.executable, "-m", "lang.driftc.driftc",
-		"-M", str(lib_dir),
-		str(lib_dir / "mylib.drift"),
-		"--stdlib-root", str(stdlib),
-		"--target-word-bits", "64",
-		"--package-id", "mylib",
-		"--package-version", "0.1.0",
-		"--package-target", "test-target",
-		"--emit-package", str(pkg_path),
-		"--test-build-only",
-	]
-	res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
-	assert res.returncode == 0, f"library package build failed: {res.stderr[:500]}"
-
-	# Step 2: Sign with ephemeral key
-	priv = Ed25519PrivateKey.generate()
-	pub = priv.public_key()
-	pub_raw = pub.public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
-
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	pkg_sha_hex = sha256(pkg_bytes).hexdigest()
-
-	# Step 3: Set up package root
-	pkg_root = tmp_path / "libs" / "mylib" / "0.1.0"
-	pkg_root.mkdir(parents=True)
-	import shutil
-	shutil.copy2(str(pkg_path), str(pkg_root / "mylib.dmp"))
-
-	sig_sidecar = pkg_root / "mylib.sig"
-	sig_obj = {
-		"format": "dmir-pkg-sig",
-		"version": 0,
-		"package_sha256": f"sha256:{pkg_sha_hex}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": base64.b64encode(sig_raw).decode("ascii"), "pubkey": pub_b64}],
-	}
-	sig_sidecar.write_text(json.dumps(sig_obj, separators=(",", ":"), sort_keys=True))
-
-	# Step 4: Write trust store
+	pkg_libs_root = tmp_path / "libs"
 	trust_path = tmp_path / "trust.json"
-	trust_obj = {
-		"format": "drift-trust",
-		"version": 0,
-		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"mylib.*": [kid]},
-		"revoked": [],
-	}
-	trust_path.write_text(json.dumps(trust_obj))
+	publish_v1_pkg(
+		lib_dir=lib_dir,
+		src_files=[lib_dir / "mylib.drift"],
+		package_id="mylib",
+		package_version="0.1.0",
+		namespace_glob="mylib.*",
+		dest_pkg_root=pkg_libs_root,
+		dest_trust_path=trust_path,
+		target="test-target",
+		stdlib_root_override=stdlib,
+	)
+	pkg_root = pkg_libs_root / "mylib" / "0.1.0"
 
 	# Step 5: Compile consumer against the signed library package
 	consumer_dir = tmp_path / "consumer_src"

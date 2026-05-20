@@ -20,7 +20,7 @@ def _run_drift(argv: list[str]) -> subprocess.CompletedProcess[str]:
 
 def _write_trust_store(path: Path) -> Path:
 	path.parent.mkdir(parents=True, exist_ok=True)
-	path.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
+	path.write_text(json.dumps({"format": "drift-trust", "version": 1, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
 	return path
 
 
@@ -44,7 +44,7 @@ def test_drift_doctor_json_is_strict_json_only_and_sorted(tmp_path: Path) -> Non
 
 	trust = tmp_path / "drift" / "trust.json"
 	trust.parent.mkdir(parents=True, exist_ok=True)
-	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
+	trust.write_text(json.dumps({"format": "drift-trust", "version": 1, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
 
 	lock = tmp_path / "drift" / "sources.lock.json"
 	lock.parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +97,7 @@ def test_drift_doctor_json_failure_missing_package_file_deep(tmp_path: Path) -> 
 	)
 	trust = tmp_path / "drift" / "trust.json"
 	trust.parent.mkdir(parents=True, exist_ok=True)
-	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
+	trust.write_text(json.dumps({"format": "drift-trust", "version": 1, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
 	lock = tmp_path / "drift" / "sources.lock.json"
 	lock.parent.mkdir(parents=True, exist_ok=True)
 	lock.write_text(json.dumps({"format": "drift-lock", "version": 0, "packages": {}}), encoding="utf-8")
@@ -118,7 +118,7 @@ def test_drift_doctor_exit_code_degraded_vs_fatal(tmp_path: Path) -> None:
 	# Missing sources file is degraded by default.
 	trust = tmp_path / "drift" / "trust.json"
 	trust.parent.mkdir(parents=True, exist_ok=True)
-	trust.write_text(json.dumps({"format": "drift-trust", "version": 0, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
+	trust.write_text(json.dumps({"format": "drift-trust", "version": 1, "namespaces": {}, "keys": {}, "revoked": {}}), encoding="utf-8")
 	lock = tmp_path / "drift" / "sources.lock.json"
 	lock.parent.mkdir(parents=True, exist_ok=True)
 	lock.write_text(json.dumps({"format": "drift-lock", "version": 0, "packages": {}}), encoding="utf-8")

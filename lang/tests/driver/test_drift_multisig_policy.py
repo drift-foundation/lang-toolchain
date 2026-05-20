@@ -113,12 +113,12 @@ pub fn add(a: Int, b: Int) -> Int {
 	# Trust both keys for lib.*, but revoke one of them.
 	trust = {
 		"format": "drift-trust",
-		"version": 0,
+		"version": 1,
 		"keys": {
 			kid1: {"algo": "ed25519", "pubkey": base64.b64encode(pub1_raw).decode("ascii")},
 			kid2: {"algo": "ed25519", "pubkey": base64.b64encode(pub2_raw).decode("ascii")},
 		},
-		"namespaces": {"lib.*": [kid1, kid2]},
+		"namespaces": {"lib.*": {"authors": [kid1, kid2], "certifiers": [kid1, kid2]}},
 		"revoked": {kid1: {"reason": "test"}},
 	}
 	trust_path = tmp_path / "drift" / "trust.json"

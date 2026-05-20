@@ -49,30 +49,63 @@ class StdlibPackage:
 
 @pytest.fixture(scope="session")
 def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
-	"""Build a signed stdlib package once per session.
+	"""Build a v1-signed stdlib package once per session.
 
 	This exercises the same code path as the PEX/deploy pipeline:
 	consumers use --package-root + --dep std@VERSION instead of
 	--stdlib-root.  The type table state differs from source compilation
 	and can expose bugs in has_drop, destructor_fns, and scope drop
 	emission that are invisible to --stdlib-root tests.
+
+	v1 trust layout produced here:
+	  - `std/<version>/std.dmp` with `source_content_id` stamped into
+	    its manifest;
+	  - `std/<version>/std.author-claim` -- v1 author claim binding
+	    source identity;
+	  - `std/<version>/std.cert-claim.<kid>.json` -- v1 cert claim
+	    binding artifact bytes + dep_graph + cert_suite;
+	  - `trust.json` (v1 shape) trusting the same kid as both
+	    author and certifier for `std.*` and `lang.*` (Foundation
+	    bootstrap pattern from the audit doc -- the same kid can
+	    play both roles for stdlib in dev).
 	"""
 	from lang.drift.crypto import compute_ed25519_kid
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.versions import DRIFTC_VERSION
+	from lang.driftc.packages.source_content_id import compute_artifact_source_content_id
 
 	tmp = tmp_path_factory.mktemp("stdlib_pkg")
 	repo_root = Path(__file__).resolve().parents[3]
 	stdlib_dir = repo_root / "stdlib"
 	version = DRIFTC_VERSION
 
-	# Build stdlib .dmp (same as deploy pipeline).
+	# Compute SCI before driftc emits so we can pass it via
+	# --source-content-id and have the manifest carry the stamp.
+	# Source files are project-root-relative for the SCI computation
+	# (matches the canonical layout the deploy pipeline uses).
+	sources = sorted(p for p in stdlib_dir.rglob("*.drift"))
+	assert sources, "no .drift files found under stdlib/"
+	module_paths_rel = sorted(str(p.relative_to(repo_root)) for p in sources)
+	sci = compute_artifact_source_content_id(
+		kind="library",
+		package_id="std",
+		version=version,
+		module_namespace="std",
+		entry_module="std",
+		module_paths=module_paths_rel,
+		package_deps=[],
+		native_deps=[],
+		unsafe=False,
+		asset_paths=[],
+		target_class="drift-dev",
+		source_root=repo_root,
+	)
+
+	# Build stdlib .dmp with SCI stamped into the manifest.
 	dmp_path = tmp / "std.dmp"
 	empty_stdlib = tmp / "_empty_stdlib"
 	empty_stdlib.mkdir()
-	sources = sorted(str(p) for p in stdlib_dir.rglob("*.drift"))
-	assert sources, "no .drift files found under stdlib/"
 
 	env = dict(os.environ)
 	env["PYTHONPATH"] = str(repo_root)
@@ -81,10 +114,11 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 		"--dev",
 		"--stdlib-root", str(empty_stdlib),
 		"-M", "stdlib",
-	] + sources + [
+	] + [str(p) for p in sources] + [
 		"--package-id", "std",
 		"--package-version", version,
 		"--package-target", "drift-dev",
+		"--source-content-id", sci,
 		"--emit-package", str(dmp_path),
 		"--test-build-only",
 	]
@@ -93,37 +127,104 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 	assert res.returncode == 0, f"stdlib package build failed: {res.stderr[:500]}"
 	assert dmp_path.exists(), "stdlib .dmp not produced"
 
-	# Sign.
+	# Generate the Foundation-bootstrap key (same kid plays author and
+	# certifier roles for stdlib in dev; production stdlib release
+	# would use separate keys via `drift-author publish` +
+	# `drift-deploy cert publish`).
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key()
 	pub_raw = pub.public_bytes(
 		encoding=serialization.Encoding.Raw,
 		format=serialization.PublicFormat.Raw,
 	)
+	priv_seed_raw = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
 	kid = compute_ed25519_kid(pub_raw)
 	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
 	pkg_bytes = dmp_path.read_bytes()
+	artifact_sha256 = "sha256:" + sha256(pkg_bytes).hexdigest()
 
-	# Standard layout: <root>/std/<version>/std.dmp
+	# Standard layout: <root>/std/<version>/std.dmp + v1 sidecars.
 	pkg_root = tmp / "libs"
 	dest = pkg_root / "std" / version
 	dest.mkdir(parents=True)
 	import shutil
 	shutil.copy2(str(dmp_path), str(dest / "std.dmp"))
-	(dest / "std.sig").write_text(json.dumps({
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid,
-			"sig": base64.b64encode(priv.sign(pkg_bytes)).decode("ascii"),
-			"pubkey": pub_b64}],
-	}, separators=(",", ":"), sort_keys=True))
 
-	# Trust store.
+	# v1 author claim -- attests source identity for the release.
+	from tools.drift_author.author_publish import (
+		SignAuthorClaimOptions,
+		sign_and_write_author_claim,
+	)
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	# Author claim binds every module namespace the stdlib package
+	# exposes; the verifier checks that each module under load is
+	# covered by the claim's `namespaces` list.  Pin both `std.*`
+	# (the stdlib's own modules) and `lang.*` (toolchain-shipped
+	# helpers also under the stdlib package).
+	sign_and_write_author_claim(SignAuthorClaimOptions(
+		body=AuthorClaimBody(
+			schema_version=1,
+			package_id="std",
+			version=version,
+			namespaces=("std.*", "lang.*"),
+			source_content_id=sci,
+			required_deps=(),
+			target_class="library",
+			release_utc="2026-05-19T00:00:00Z",
+		),
+		seed32=priv_seed_raw,
+		sidecar_dir=dest,
+	))
+
+	# v1 cert claim -- attests artifact bytes + (empty) dep_graph +
+	# cert_suite result.  Same kid for the bootstrap.
+	from tools.drift_deploy.cert_emit import (
+		SignCertClaimOptions,
+		sign_and_write_cert_claim,
+	)
+	from lang.driftc.packages.cert_claim_v1 import (
+		CertClaimBody,
+		CertSuite,
+		Toolchain,
+	)
+	sign_and_write_cert_claim(SignCertClaimOptions(
+		body=CertClaimBody(
+			schema_version=1,
+			package_id="std",
+			version=version,
+			artifact_sha256=artifact_sha256,
+			source_content_id=sci,
+			target="drift-dev",
+			toolchain=Toolchain(
+				driftc_version=version, drift_rt_abi=1, driftc_commit="test",
+			),
+			dep_graph=(),  # stdlib has no upstream deps
+			cert_suite=CertSuite(
+				id="drift-deploy/test", version="1.0", result="pass",
+				result_evidence_sha256="sha256:" + ("f" * 64),
+			),
+			run_id="stdlib-test",
+			run_started_utc="2026-05-19T00:00:00Z",
+			evidence_sha256="sha256:" + ("0" * 64),
+		),
+		seed32=priv_seed_raw,
+		sidecar_dir=dest,
+	))
+
+	# v1 trust store: same kid trusted as both author and certifier
+	# for the namespaces the stdlib covers.
 	trust_path = tmp / "trust.json"
 	trust_path.write_text(json.dumps({
-		"format": "drift-trust", "version": 0,
+		"format": "drift-trust", "version": 1,
 		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
-		"namespaces": {"std.*": [kid], "lang.*": [kid]},
+		"namespaces": {
+			"std.*":  {"authors": [kid], "certifiers": [kid]},
+			"lang.*": {"authors": [kid], "certifiers": [kid]},
+		},
 		"revoked": [],
 	}))
 

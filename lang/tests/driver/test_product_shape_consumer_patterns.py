@@ -128,6 +128,11 @@ def _emit_signed_package(
 		p.write_text(content, encoding="utf-8")
 		src_files.append(str(p))
 
+	# v1 fixture: build with SCI stamp then sign via the shared
+	# helper.  Trust is merged into the existing file when one
+	# exists so multi-package fixtures share one trust JSON.
+	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
+	_TEST_SCI = "sha256:" + ("0" * 64)
 	pkg_path = lib_dir / f"{package_id}.dmp"
 	rc = subprocess.run(
 		[
@@ -139,6 +144,7 @@ def _emit_signed_package(
 			"--package-id", package_id,
 			"--package-version", package_version,
 			"--package-target", "drift-dev",
+			"--source-content-id", _TEST_SCI,
 			"--emit-package", str(pkg_path),
 			"--json",
 		],
@@ -150,33 +156,21 @@ def _emit_signed_package(
 	)
 	assert pkg_path.exists(), f"{pkg_path} not produced"
 
-	priv = Ed25519PrivateKey.generate()
-	pub_raw = priv.public_key().public_bytes_raw()
-	kid = compute_ed25519_kid(pub_raw)
-	pub_b64 = _b64(pub_raw)
-	pkg_bytes = pkg_path.read_bytes()
-	sig_raw = priv.sign(pkg_bytes)
-	sidecar = {
-		"format": "dmir-pkg-sig", "version": 0,
-		"package_sha256": f"sha256:{sha256(pkg_bytes).hexdigest()}",
-		"signatures": [{"algo": "ed25519", "kid": kid, "sig": _b64(sig_raw), "pubkey": pub_b64}],
-	}
-	sig_path = pkg_path.with_suffix(".sig")
-	sig_path.write_text(json.dumps(sidecar, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	# Merge into existing trust file if present, else write fresh.
+	# Multi-package shared trust: load existing trust if present,
+	# pass to helper for in-place merge.
 	if dest_trust_path.exists():
-		trust = json.loads(dest_trust_path.read_text())
+		existing_trust = json.loads(dest_trust_path.read_text())
 	else:
-		trust = {"format": "drift-trust", "version": 0, "keys": {}, "namespaces": {}, "revoked": []}
-	trust["keys"][kid] = {"algo": "ed25519", "pubkey": pub_b64}
-	trust["namespaces"].setdefault(namespace_glob, []).append(kid)
-	dest_trust_path.write_text(json.dumps(trust, separators=(",", ":"), sort_keys=True), encoding="utf-8")
-
-	dest_dir = dest_pkg_root / package_id / package_version
-	dest_dir.mkdir(parents=True, exist_ok=True)
-	shutil.copy2(str(pkg_path), str(dest_dir / f"{package_id}.dmp"))
-	shutil.copy2(str(sig_path), str(dest_dir / f"{package_id}.sig"))
+		existing_trust = {"format": "drift-trust", "version": 1, "keys": {}, "namespaces": {}, "revoked": []}
+	sign_v1_pkg_into_root(
+		pkg_path=pkg_path,
+		package_id=package_id,
+		package_version=package_version,
+		namespace_glob=namespace_glob,
+		dest_pkg_root=dest_pkg_root,
+		merge_into_trust=existing_trust,
+	)
+	dest_trust_path.write_text(json.dumps(existing_trust, separators=(",", ":"), sort_keys=True), encoding="utf-8")
 	return pkg_path
 
 

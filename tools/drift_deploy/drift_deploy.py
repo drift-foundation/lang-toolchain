@@ -569,33 +569,68 @@ def _collect_dep_keys(
 	resolved: dict[str, ResolvedDep],
 	staged_pkg_root: Path,
 ) -> dict[str, dict[str, str]]:
-	"""Collect public keys from resolved dependency signature sidecars.
+	"""Collect dependency-signer kids from v1 sidecars for the
+	provenance bundle.
 
-	Scans staged_pkg_root/<dep_name>/<version>/<dep_name>.sig for
-	pubkey entries. Returns a dict mapping kid → key metadata.
+	v0 stored pubkey bytes inline in the `.sig` envelope so this
+	helper used to return `kid -> {algo, kid, pubkey}`.  Under v1
+	pubkeys live in the trust store, NOT in sidecars: author /
+	cert claims carry kids + signatures but reference pubkeys
+	indirectly.  The provenance bundle is informational (the
+	cert claim's `dep_graph` is the load-bearing record of who
+	attested each dep), so it's enough to record the kids and
+	roles here -- consumers that need pubkey bytes resolve them
+	through their own trust store.
+
+	Returns a dict mapping kid -> {algo, kid, role} where role is
+	`"author"` for author-claim signers and `"certifier"` for
+	cert-claim signers.  When a kid plays both roles (common in
+	the Foundation bootstrap), the dict carries `"role": "author+certifier"`.
 	"""
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
+	from lang.driftc.packages.sidecar_naming import (
+		author_claim_filename, cert_claim_filename_prefix,
+	)
+
 	result: dict[str, dict[str, str]] = {}
+
+	def _add(kid: str, role: str) -> None:
+		entry = result.get(kid)
+		if entry is None:
+			result[kid] = {"algo": "ed25519", "kid": kid, "role": role}
+			return
+		# Merge roles when the same kid signed both author and cert.
+		existing = entry.get("role", "")
+		if role not in existing.split("+"):
+			merged = "+".join(sorted(set(existing.split("+") + [role])))
+			entry["role"] = merged
+
 	for dep_name, dep in sorted(resolved.items()):
 		dep_dir = staged_pkg_root / dep_name / dep.version
-		sig_path = dep_dir / f"{dep_name}.sig"
-		if not sig_path.exists():
-			continue
-		try:
-			sig_obj = json.loads(sig_path.read_text(encoding="utf-8"))
-			for entry in sig_obj.get("signatures", []):
-				if not isinstance(entry, dict):
+		# Author claim is per-release singleton at the canonical name.
+		author_path = dep_dir / author_claim_filename(dep_name)
+		if author_path.is_file():
+			try:
+				claim = load_author_claim_json(author_path.read_text(encoding="utf-8"))
+				for sig in claim.signatures:
+					_add(sig.kid, "author")
+			except Exception:
+				pass
+		# Cert claims: per-certifier; scan by prefix.
+		cert_prefix = cert_claim_filename_prefix(dep_name)
+		if dep_dir.is_dir():
+			for entry in sorted(dep_dir.iterdir()):
+				if not entry.is_file():
 					continue
-				kid = entry.get("kid")
-				algo = entry.get("algo")
-				pubkey = entry.get("pubkey")
-				if kid and algo and pubkey and kid not in result:
-					result[kid] = {
-						"algo": algo,
-						"kid": kid,
-						"pubkey": pubkey,
-					}
-		except Exception:
-			continue
+				if not (entry.name.startswith(cert_prefix) and entry.name.endswith(".json")):
+					continue
+				try:
+					cc = load_cert_claim_json(entry.read_text(encoding="utf-8"))
+					for sig in cc.signatures:
+						_add(sig.kid, "certifier")
+				except Exception:
+					continue
 	return result
 
 
