@@ -2682,6 +2682,139 @@ class TestTrustStoreResolution:
 		)
 
 
+class TestAttachAuthorClaimLookupPath:
+	"""Regression: `_attach_author_claim_to_artifact` used to join
+	`manifest_dir` with an extra `"drift"` segment.  Under the
+	canonical layout (`<repo>/drift/manifest.json`) `manifest_dir` is
+	already `<repo>/drift`, so the bogus join produced
+	`<repo>/drift/drift/<pkg>.author-claim` and rejected every
+	correctly-placed claim.  Cert team flagged this on the net-tls
+	staging run; the diagnostic said
+	`drift/drift/net-tls.author-claim`.
+
+	Pin:
+	  - lookup finds `<manifest_dir>/<pkg>.author-claim`;
+	  - lookup does NOT find a claim placed under the bogus
+	    `<manifest_dir>/drift/<pkg>.author-claim` (no v0 fallback);
+	  - missing-file diagnostic names the correct path (no double
+	    `drift/drift/`).
+	"""
+
+	def _sign_claim_at(
+		self, target_path: Path, *,
+		package_id: str, version: str, sci: str,
+	) -> None:
+		"""Sign an author claim and write it directly at `target_path`
+		(not through `sidecar_dir`-based helpers — the test owns
+		layout choice)."""
+		import base64
+		from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+		from cryptography.hazmat.primitives import serialization
+		from lang.driftc.packages.author_claim_v1 import (
+			AuthorClaimBody, dump_author_claim_json, make_author_claim,
+		)
+		priv = Ed25519PrivateKey.generate()
+		seed = priv.private_bytes(
+			encoding=serialization.Encoding.Raw,
+			format=serialization.PrivateFormat.Raw,
+			encryption_algorithm=serialization.NoEncryption(),
+		)
+		body = AuthorClaimBody(
+			schema_version=1, package_id=package_id, version=version,
+			namespaces=(package_id.replace("-", "_") + ".*",),
+			source_content_id=sci, required_deps=(),
+			target_class="library", release_utc="2026-05-20T21:00:00Z",
+		)
+		claim = make_author_claim(body, seed)
+		target_path.write_text(dump_author_claim_json(claim), encoding="utf-8")
+
+	def _layout(self, tmp_path: Path) -> Path:
+		"""Build the canonical `<repo>/drift/manifest.json` layout and
+		return `manifest_dir = <repo>/drift/`."""
+		manifest_dir = tmp_path / "myrepo" / "drift"
+		manifest_dir.mkdir(parents=True)
+		(manifest_dir / "manifest.json").write_text("{}", encoding="utf-8")
+		return manifest_dir
+
+	def test_lookup_finds_claim_next_to_manifest(self, tmp_path: Path):
+		"""Canonical placement: `<manifest_dir>/<pkg>.author-claim`."""
+		from tools.drift_deploy.drift_deploy import _attach_author_claim_to_artifact
+		from lang.driftc.packages.sidecar_naming import author_claim_filename
+		manifest_dir = self._layout(tmp_path)
+		staged_install = tmp_path / "stage"
+		sci = "sha256:" + "a" * 64
+		claim_path = manifest_dir / author_claim_filename("net-tls")
+		self._sign_claim_at(
+			claim_path, package_id="net-tls", version="0.5.0", sci=sci,
+		)
+		dst = _attach_author_claim_to_artifact(
+			package_id="net-tls",
+			package_version="0.5.0",
+			source_content_id=sci,
+			manifest_dir=manifest_dir,
+			staged_install=staged_install,
+		)
+		assert dst == staged_install / author_claim_filename("net-tls")
+		assert dst.is_file()
+
+	def test_lookup_ignores_legacy_double_drift_location(self, tmp_path: Path):
+		"""No fallback to `<manifest_dir>/drift/<pkg>.author-claim`.
+
+		A claim placed at the bogus nested-`drift/` path (the location
+		the buggy code used to probe) must NOT satisfy the lookup --
+		otherwise we'd be honoring a layout the v1 contract never
+		blessed and masking misconfigured client repos.
+		"""
+		from tools.drift_deploy.drift_deploy import _attach_author_claim_to_artifact, DeployError
+		from lang.driftc.packages.sidecar_naming import author_claim_filename
+		manifest_dir = self._layout(tmp_path)
+		bogus_dir = manifest_dir / "drift"
+		bogus_dir.mkdir()
+		sci = "sha256:" + "b" * 64
+		self._sign_claim_at(
+			bogus_dir / author_claim_filename("net-tls"),
+			package_id="net-tls", version="0.5.0", sci=sci,
+		)
+		with pytest.raises(DeployError, match="pre-signed author claim not found"):
+			_attach_author_claim_to_artifact(
+				package_id="net-tls",
+				package_version="0.5.0",
+				source_content_id=sci,
+				manifest_dir=manifest_dir,
+				staged_install=tmp_path / "stage",
+			)
+
+	def test_missing_diagnostic_names_correct_path(self, tmp_path: Path):
+		"""Diagnostic must point at `<manifest_dir>/<pkg>.author-claim`,
+		NOT `<manifest_dir>/drift/<pkg>.author-claim`.
+		"""
+		from tools.drift_deploy.drift_deploy import _attach_author_claim_to_artifact, DeployError
+		from lang.driftc.packages.sidecar_naming import author_claim_filename
+		manifest_dir = self._layout(tmp_path)
+		expected_path = manifest_dir / author_claim_filename("net-tls")
+		with pytest.raises(DeployError) as excinfo:
+			_attach_author_claim_to_artifact(
+				package_id="net-tls",
+				package_version="0.5.0",
+				source_content_id="sha256:" + "c" * 64,
+				manifest_dir=manifest_dir,
+				staged_install=tmp_path / "stage",
+			)
+		msg = str(excinfo.value)
+		assert str(expected_path) in msg, (
+			f"diagnostic must name the correct expected path "
+			f"{expected_path}; got: {msg}"
+		)
+		# The historical double-drift/ shape must NOT appear in the
+		# diagnostic.  Catching this as a substring is exact: any
+		# `<...>/drift/drift/...` path printed here would mean the
+		# bug regressed.
+		assert "/drift/drift/" not in msg, (
+			f"diagnostic must not reference the bogus double-drift/ "
+			f"path; got: {msg}"
+		)
+
+
 class TestTildeExpansionPrepare:
 	def test_prepare_dest_tilde(self):
 		from tools.drift_deploy.drift_prepare import build_arg_parser

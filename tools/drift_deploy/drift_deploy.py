@@ -856,15 +856,21 @@ def _attach_author_claim_to_artifact(
 	    match the artifact arguments;
 	  - the file fails to parse as a v1 author claim.
 
-	Source location: `<manifest_dir>/drift/<pkg>.author-claim` (the
-	canonical name produced by `tools.drift_author.sign_and_write_author_claim`).
+	Source location: `<manifest_dir>/<pkg>.author-claim` (the canonical
+	name produced by `tools.drift_author.sign_and_write_author_claim`).
+	`manifest_dir` is the directory holding the project's
+	`manifest.json` -- by convention `<repo>/drift/` -- so the author
+	claim sits as a sibling of the manifest, not under an additional
+	`drift/` subdir.  An earlier version of this helper added a
+	redundant `/drift` segment here, which made the lookup probe
+	`<repo>/drift/drift/<pkg>.author-claim` and rejected every
+	correctly-placed claim.
 	"""
 	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
 	from lang.driftc.packages.sidecar_naming import author_claim_filename
 
-	src_dir = manifest_dir / "drift"
 	canonical_name = author_claim_filename(package_id)
-	src = src_dir / canonical_name
+	src = manifest_dir / canonical_name
 	if not src.is_file():
 		raise DeployError(
 			f"artifact '{package_id}': pre-signed author claim not "
@@ -890,7 +896,7 @@ def _attach_author_claim_to_artifact(
 			f"{body.package_id!r}, but this build is for "
 			f"{package_id!r}.  Re-run `drift-author publish` for "
 			f"{package_id!r} (or remove the stale claim from "
-			f"{src_dir})."
+			f"{manifest_dir})."
 		)
 	if body.version != package_version:
 		raise DeployError(
