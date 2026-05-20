@@ -609,3 +609,34 @@ def test_stdlib_shape_role_tagged_per_o2() -> None:
 	assert store.allowed_certifiers_for_module("std.io") == {fdn}
 	assert store.allowed_authors_for_module("lang.test") == {fdn}
 	assert store.allowed_certifiers_for_module("drift.rt") == {fdn}
+
+
+# ── Regression: empty-string namespace key is rejected at load ─────
+
+
+def test_load_rejects_empty_string_namespace_key() -> None:
+	"""`namespaces: {"": {...}}` would match every module_id at
+	length 0 under longest-prefix-wins lookup -- effectively a
+	wildcard grant on the non-reserved space.  The loader must
+	reject the empty key at parse time so no trust store with this
+	shape can enter the verifier.
+	"""
+	from lang.driftc.packages.trust_v1 import load_trust_store_json
+	import base64, json, tempfile, pytest
+	from pathlib import Path
+
+	# 32-byte zero pubkey is fine for shape-only test.
+	pub_b64 = base64.b64encode(b"\x00" * 32).decode("ascii")
+	kid = "ed25519:test-kid"
+	bad = {
+		"format": "drift-trust",
+		"version": 1,
+		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
+		"namespaces": {"": {"authors": [kid], "certifiers": [kid]}},
+		"revoked": [],
+	}
+	with tempfile.TemporaryDirectory() as tmpdir:
+		p = Path(tmpdir) / "trust.json"
+		p.write_text(json.dumps(bad), encoding="utf-8")
+		with pytest.raises(ValueError, match="namespace pattern must be a non-empty string"):
+			load_trust_store_json(p)

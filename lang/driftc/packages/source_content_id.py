@@ -271,6 +271,51 @@ def hash_file(path: Path) -> str:
 	return h.hexdigest()
 
 
+def _resolve_source_path(
+	source_root: Path, rel: str, *, kind: str,
+) -> Path:
+	"""Resolve `source_root / rel` and require the resolved path
+	stays under `source_root`.
+
+	Rejects symlinks (and parent-directory symlinks) that escape the
+	project tree.  The threat: a project that includes
+	`src/foo.drift -> /opt/upstream/foo.drift` would have SCI hash
+	the upstream bytes under the logical project-relative path,
+	letting an attacker who controls the upstream file silently
+	change the project's SCI without touching anything inside the
+	source tree.  v1 forbids this: every byte the SCI commits to
+	must live under the declared source_root.
+
+	`kind` is "module" or "asset" for the error message.
+	"""
+	full = source_root / rel
+	if not full.is_file():
+		raise FileNotFoundError(
+			f"source {kind} '{rel}' not found at {full}; cannot compute "
+			f"source_content_id"
+		)
+	# `resolve(strict=True)` follows every symlink in the chain and
+	# raises FileNotFoundError if any link is dangling.  We then
+	# require the resolved real path to live under source_root's
+	# resolved real path.
+	try:
+		resolved = full.resolve(strict=True)
+		root_resolved = source_root.resolve(strict=True)
+		resolved.relative_to(root_resolved)
+	except (FileNotFoundError, ValueError, OSError) as e:
+		raise ValueError(
+			f"source {kind} '{rel}' (full={full}) resolves outside the "
+			f"declared source_root ({source_root}): {e}.  v1 does not "
+			f"accept source/asset paths that escape the project tree, "
+			f"even through symlinks -- the SCI would otherwise commit "
+			f"to bytes that an attacker outside the project could "
+			f"change without touching the project itself.  Either "
+			f"materialize the file inside source_root, or restructure "
+			f"the source_root to include the symlink target."
+		)
+	return full
+
+
 def compute_artifact_source_content_id(
 	*,
 	kind: str,
@@ -290,30 +335,40 @@ def compute_artifact_source_content_id(
 	on-disk source/asset files.
 
 	`source_root` is the project root that `module_paths` and
-	`asset_paths` are relative to.  Each path is hashed with
-	`hash_file` and fed into `compute_source_content_id`.
+	`asset_paths` are relative to.
+
+	**Stated semantics for symlinks (deliberate, not accidental):**
+
+	- SCI hashes the **resolved target bytes** (`hash_file` opens
+	  the file via Python's IO which follows symlinks).
+	- SCI records the **logical project-relative path** (`rel`),
+	  NOT the resolved real path.  Two source trees that produce
+	  the same `rel -> bytes` mapping yield the same SCI even if
+	  one uses regular files and the other uses in-tree symlinks
+	  to alias content.
+
+	- Symlinks that resolve OUTSIDE `source_root` are REJECTED
+	  (`_resolve_source_path` raises `ValueError`).  Without that
+	  rejection, an attacker controlling bytes outside the project
+	  tree could silently change SCI by writing through a
+	  project-internal symlink target.
+	- Symlinks whose resolved real path stays INSIDE `source_root`
+	  are permitted.  Use case: a project that aliases the same
+	  source file under two logical paths for build purposes.  The
+	  project owns the target's bytes; the alias is just a name.
 
 	Missing files raise `FileNotFoundError` — silent dropping would
 	let a deleted module produce a different id than the same source
 	at consumption time, breaking the rebuild equivalence claim.
+	Paths that resolve outside `source_root` raise `ValueError`.
 	"""
 	module_entries: list[tuple[str, str]] = []
 	for rel in module_paths:
-		full = source_root / rel
-		if not full.is_file():
-			raise FileNotFoundError(
-				f"source module '{rel}' not found at {full}; cannot compute "
-				f"source_content_id"
-			)
+		full = _resolve_source_path(source_root, rel, kind="module")
 		module_entries.append((rel, hash_file(full)))
 	asset_entries: list[tuple[str, str]] = []
 	for rel in asset_paths:
-		full = source_root / rel
-		if not full.is_file():
-			raise FileNotFoundError(
-				f"asset '{rel}' not found at {full}; cannot compute "
-				f"source_content_id"
-			)
+		full = _resolve_source_path(source_root, rel, kind="asset")
 		asset_entries.append((rel, hash_file(full)))
 	return compute_source_content_id(SourceContentInputs(
 		kind=kind,

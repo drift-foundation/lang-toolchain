@@ -567,7 +567,7 @@ Body fields:
 | `version`                   | must match the package's manifest                                        |
 | `artifact_sha256`           | `"sha256:<hex>"` of the `.dmp` bytes the cert claim covers               |
 | `source_content_id`         | must equal the author claim's `source_content_id`                        |
-| `target`                    | e.g. `"drift-dev"`                                                       |
+| `target`                    | e.g. `"drift-dev"` — **signed audit metadata, not enforced.** See note below. |
 | `toolchain`                 | `{driftc_version, drift_rt_abi, driftc_commit}`                          |
 | `dep_graph`                 | full resolved closure (see §3.5)                                         |
 | `cert_suite`                | `{id, version, result, result_evidence_sha256}`                          |
@@ -579,6 +579,22 @@ kid is the *primary* signer the sidecar represents.  Additional
 signatures inside the same file are extra signers under that
 primary identity (key-rotation / multi-region operation).
 Independent certifiers always emit separate sidecar files.
+
+**Note on `body.target`.**  The cert claim's `target` field
+records the build target the certifier compiled the artifact for
+(e.g. `"linux-x86_64"`, `"darwin-aarch64"`, `"drift-dev"`).  v1's
+consumer-side `compose_verify` does **not** compare this field
+against the consumer's own build target — `target` is signed
+audit metadata, useful to inspectors that want to confirm "this
+artifact was certified for the target I think it was."  The
+underlying cross-target safety guarantee comes from
+`artifact_sha256` instead: a `.dmp` built for one target has
+different bytes than the same source built for another, so the
+artifact-bytes binding already prevents cross-target swap.  If a
+future policy needs "certified target must equal consumer
+target," it should grow an `expected_target=...` parameter on
+`compose_verify` and gate explicitly; today the field is
+informational.
 
 ### 3.4 Trust store (`drift/trust.json`)
 
@@ -642,6 +658,48 @@ cert_kid, dep_kind)`.  The closure walker in
 [`closure_walk.py`](../../lang/driftc/packages/closure_walk.py)
 fails closed on any missing dep identity rather than emitting a
 sentinel — see §6 (attack 4: transitive dep swap).
+
+**What `check_dep_graph_covers` actually pins.**  At consumer
+verify time, the cover check compares each consumer-resolved
+dep against the parent cert claim's `dep_graph` entry on
+**`(package_id, version, artifact_sha256, source_content_id)`**
+only.  The entry's `author_kid`, `cert_kid`, and `dep_kind`
+fields are **signed audit metadata**: they record what the
+certifier observed for that dep at certification time, but they
+are not load-bearing in the parent's trust gate.  Per-dep trust
+is enforced when the consumer loads each dep individually
+(every dep flows through its own `compose_verify`), so the
+recorded kids cannot be used to bypass per-dep verification.
+If a future requirement is "the parent's view of the dep's kids
+must exactly match the consumer's local view," `ResolvedDep`
+needs to grow kid fields and the cover check needs to compare
+them; today neither happens.
+
+**SCI canonicalization.**  Deliberate semantics:
+
+- **Bytes follow the symlink, path stays logical.**  SCI hashes
+  the resolved target bytes (`hash_file` reads through symlinks)
+  but records the **logical project-relative path** (`rel`),
+  not the resolved real path.  Two source trees that produce the
+  same `rel -> bytes` mapping yield the same SCI even if one
+  uses regular files and the other uses in-tree symlinks to
+  alias content.
+- **Symlinks that escape `source_root` are rejected.**
+  `_resolve_source_path` raises `ValueError` for any
+  module/asset whose resolved real path falls outside the
+  declared source root.  This closes the attack where bytes
+  controlled by something outside the project tree change SCI
+  through a project-internal symlink target.
+- **In-tree symlinks are permitted.**  A symlink whose resolved
+  target still lives under `source_root` is treated as an alias
+  for in-tree content; the project owns the bytes, the symlink
+  is just another name for them.
+
+The behavior is pinned by three tests in
+[`test_source_content_id.py`](../../lang/tests/packages/test_source_content_id.py):
+`test_sci_rejects_module_symlink_outside_source_root`,
+`test_sci_accepts_symlink_inside_source_root`, and
+`test_sci_symlink_alias_matches_direct_file_with_same_bytes`.
 
 ### 3.6 Evidence bundle and the cert-claim binding
 
@@ -884,6 +942,17 @@ bytes back to the author's source identity.
   A self-verify pass is consistent with the rebuilder producing
   a totally different `.dmp` byte sequence from the author's
   original — bit-for-bit reproducibility is not in scope.
+- It does NOT run the cert claim's `dep_graph` cover check.
+  Self-verify's `compose_verify` returns OK on author-SCI match
+  alone; `check_dep_graph_covers` is in the cert-claim path,
+  which self-verify skips by design.  This is coherent only
+  because self-verify trusts the caller's local resolve — every
+  dep the caller loads still flows through its own per-dep
+  `compose_verify`, so a malicious resolved closure cannot
+  smuggle in an untrusted dep.  Self-verify is incompatible with
+  `--require-certifier` / `--require-cert-suite` for the same
+  reason: those flags pin a certifier-shortcut decision the
+  self-verify path doesn't make.
 - It does NOT prove the resolved dep graph is the same one any
   *other* certifier attested.  The local resolve at rebuild time
   is the dep graph in this mode.
