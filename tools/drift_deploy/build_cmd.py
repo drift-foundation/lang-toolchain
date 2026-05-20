@@ -268,8 +268,8 @@ def build_package_cmd(
 	If `source_content_id` is provided, it is stamped into the emitted
 	`.dmp` manifest via `--source-content-id`.  The id is computed
 	by drift_deploy from stable source inputs (see
-	`source_attestation.compute_artifact_source_content_id`); driftc
-	just records the value verbatim, it does not derive it.
+	`lang.driftc.packages.source_content_id.compute_artifact_source_content_id`);
+	driftc just records the value verbatim, it does not derive it.
 	"""
 	cmd = [
 		str(driftc),

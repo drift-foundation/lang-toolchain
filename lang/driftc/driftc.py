@@ -7957,10 +7957,10 @@ def main(argv: list[str] | None = None) -> int:
 		help=(
 			"Canonical source-content id for the artifact, computed by "
 			"drift_deploy from stable source inputs (see "
-			"tools.drift_deploy.source_attestation.compute_artifact_source_content_id). "
+			"lang.driftc.packages.source_content_id.compute_artifact_source_content_id). "
 			"Stamped verbatim into the .dmp manifest as 'source_content_id'. "
-			"Required for source-rebuild certification; optional for byte-only "
-			"consumption."
+			"Required for source-rebuild certification and for any "
+			"package that wants to be consumed under v1 trust verification."
 		),
 	)
 	parser.add_argument("-g", "--debug-info", action="store_true", help="Emit debug info in generated LLVM (DWARF)")

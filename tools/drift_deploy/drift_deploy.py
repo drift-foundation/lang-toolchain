@@ -1787,12 +1787,14 @@ def _deploy_artifact(
 		provenance_path = staged_install / f"{art.name}.provenance.zst"
 		write_provenance_bundle(provenance_path, bundle_compressed)
 
-		# v1: app artifacts do not currently produce a cert claim --
-		# app verification flows through binary signing in a separate
-		# subsystem (`drift sign` for distributable binaries).  The
-		# v1 cutover affects PACKAGE artifacts; app signing remains a
-		# follow-up.  Provenance bundle still emits unsigned so app
-		# `drift inspect` remains useful.
+		# v1: app artifacts do not currently produce a cert claim.
+		# Package artifacts get the full v1 trust-v1 sidecar pair
+		# (author + cert claim); app artifacts are out of scope for
+		# the trust-v1 slice -- if/when binary signing for
+		# distributable apps is added, it will be a separate
+		# subsystem, not the v0 `drift sign` envelope (gone).  The
+		# unsigned provenance bundle is still emitted so app
+		# inspection tooling continues to work.
 		pass
 
 	# ── Step 5: Smoke ──

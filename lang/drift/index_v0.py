@@ -1,12 +1,19 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Drift package repository index (v0).
+Drift package repository index (v0) — legacy distribution-audit module.
 
-This is a deliberately tiny, deterministic JSON index used by `drift publish`
-and `drift fetch`. It is not a registry protocol; it's a local/offline format
-for directory-based repositories.
+Originally the JSON index that `drift publish` wrote and `drift fetch`
+read.  Both CLI surfaces were removed in the trust-v1 cutover; this
+module survives ONLY as input to `drift doctor`'s legacy install-
+layout audit (it can still inspect repos written by an older
+toolchain).  No live trust path consumes it.
 
-Pinned MVP rule: a repository contains at most one version per package_id.
+A future v1 distribution slice will replace this with a v1 repo
+format (carrying author + cert claim sidecars per package).  Until
+that lands, treat this module as read-only legacy.
+
+Pinned MVP rule: a v0 repository contains at most one version per
+package_id.
 """
 
 from __future__ import annotations

@@ -96,7 +96,15 @@ test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-
 	@echo "lang test-shard-3: Success."
 
 # Local build/release prep (no implicit full test run).
-build: runtime-libs dist-publish-stdlib
+#
+# trust-v1: the legacy `dist-publish-stdlib` step is gone -- it
+# depended on `drift sign` / `drift publish` (deleted v0 CLI
+# surface).  Local stdlib distribution returns when the v1 fetch /
+# vendor slice lands.  For now `just build` just prebuilds the
+# runtime archives; a full self-contained distribution comes from
+# `just deploy` (which consumes a pre-signed Foundation author
+# claim).
+build: runtime-libs
 
 lang-stage1-test:
 	# Ensure pytest is available in the venv
@@ -282,12 +290,14 @@ lang-codegen-test-pex:
 	fi
 	echo "[pex-e2e] building PEX artifact in ${STAGING}..."
 	PYTHONPATH=. DEPLOY_DIST="${STAGING}" ./.venv/bin/python3 -c 'import os; from pathlib import Path; from tools.deploy.steps.pex import build_driftc_pex, build_drift_pex; from tools.deploy.steps.bundle import bundle_compiler, bundle_runtime_archives; repo = Path(".").resolve(); dist = Path(os.environ["DEPLOY_DIST"]); build_driftc_pex(repo, dist); build_drift_pex(repo, dist); bundle_compiler(repo, dist); bundle_runtime_archives(repo, dist)'
-	# Write a minimal empty core trust store so the PEX binary does not
-	# fail on load_core_trust_store().  The local PEX e2e uses --stdlib-root
-	# (source mode, not signed packages), so no real trust entries are needed.
+	# Write a minimal empty v1 core trust store so the PEX binary
+	# does not fail on `load_core_trust_store()`.  The local PEX e2e
+	# uses `--stdlib-root` (source mode, not signed packages), so no
+	# real trust entries are needed.  Filename is `core_trust_v1.json`
+	# per the v1 loader (`lang/driftc/packages/trust_v1.py:337`).
 	mkdir -p "${STAGING}/lib/compiler/lang/driftc/packages"
-	printf '{"format":"drift-trust","version":0,"keys":{},"namespaces":{},"revoked":[]}' \
-		> "${STAGING}/lib/compiler/lang/driftc/packages/core_trust.json"
+	printf '{"format":"drift-trust","version":1,"keys":{},"namespaces":{},"revoked":[]}' \
+		> "${STAGING}/lib/compiler/lang/driftc/packages/core_trust_v1.json"
 	echo "[pex-e2e] running e2e suite through PEX artifact..."
 	rm -rf build/tests/pex_e2e
 	PEX_E2E_JOBS="${PEX_E2E_JOBS:-$(( $(nproc 2>/dev/null || echo 4) / 2 ))}"
@@ -422,32 +432,13 @@ make-examples:
 		just make-example "$(basename "${d}")"
 	done
 
-# Local package distribution repo scaffold (dev convenience).
-dist-init:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	mkdir -p dist/release
-	echo "initialized local repo: dist/release"
-
-dist-publish PKG:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	pkg="{{PKG}}"
-	if [[ ! -f "${pkg}" ]]; then
-		echo "missing package file: ${pkg}" >&2
-		exit 1
-	fi
-	mkdir -p dist/release
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned "${pkg}"
-
-dist-index:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	if [[ ! -f dist/release/index.json ]]; then
-		echo "dist/release/index.json not found (publish at least one package first)" >&2
-		exit 1
-	fi
-	cat dist/release/index.json
+# `dist-init` / `dist-publish` / `dist-index` recipes deleted in the
+# trust-v1 cutover: they drove the v0 local-repo distribution flow
+# (`dist/release/index.json` + `drift sign` + `drift publish`),
+# all of which depended on now-deleted CLI surface.  Local stdlib
+# distribution returns when the v1 fetch / vendor slice lands;
+# until then, use `just deploy --dest <path>` (which produces a
+# self-contained Drift distribution with v1 trust artifacts).
 
 # Prebuild runtime archives used by driftc/e2e archive-link mode.
 runtime-libs CLANG="":
@@ -463,36 +454,11 @@ runtime-libs CLANG="":
 	fi
 	DRIFT_RUNTIME_CLANG="${clang_bin}" PYTHONPATH=. ./.venv/bin/python3 -c "from pathlib import Path; import os; from lang.language_runtime import build_runtime_archive; root=Path('.').resolve(); clang=os.environ['DRIFT_RUNTIME_CLANG']; [print(build_runtime_archive(root, clang=clang, variant=v)) for v in ('default','debug','asan','alloc_track','optimized')]"
 
-# Build stdlib package and publish into local dist/release repo (signed by default).
-# Key resolution priority: explicit SIGN_KEY arg, then DRIFT_SIGN_KEY_FILE.
-dist-publish-stdlib SIGN_KEY="" VERSION="0.1.0-dev" TARGET="drift-dev":
-	#!/usr/bin/env bash
-	set -euo pipefail
-	sign_key="{{SIGN_KEY}}"
-	if [[ -z "${sign_key}" ]]; then
-		sign_key="${DRIFT_SIGN_KEY_FILE:-}"
-	fi
-	if [[ -z "${sign_key}" ]]; then
-		echo "missing signing key: pass SIGN_KEY or set DRIFT_SIGN_KEY_FILE" >&2
-		exit 1
-	fi
-	if [[ ! -f "${sign_key}" ]]; then
-		echo "missing signing key: ${sign_key}" >&2
-		exit 1
-	fi
-	mkdir -p build/pkg dist/release
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
-	rm -f build/pkg/std.sig
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift sign build/pkg/std.dmp --key "${sign_key}" --include-pubkey
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --force --dest-dir dist/release build/pkg/std.dmp
-
-# Local fallback for early dev only (publishes unsigned std package).
-dist-publish-stdlib-unsigned VERSION="0.1.0-dev" TARGET="drift-dev":
-	#!/usr/bin/env bash
-	set -euo pipefail
-	mkdir -p build/pkg dist/release
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc -M stdlib $(rg --files stdlib | rg '\.drift$') --package-id std --package-version "{{VERSION}}" --package-target "{{TARGET}}" --emit-package build/pkg/std.dmp --json
-	PYTHONPATH=. ./.venv/bin/python3 -m lang.drift publish --dest-dir dist/release --allow-unsigned build/pkg/std.dmp
+# `dist-publish-stdlib` / `dist-publish-stdlib-unsigned` recipes
+# deleted in the trust-v1 cutover: both invoked `drift sign` /
+# `drift publish` (gone v0 CLI).  Stdlib distribution is produced
+# by `just deploy --dest <path>`, which consumes a Foundation
+# author claim as input and emits v1 sidecars on the deploy side.
 
 # Deploy a versioned, self-contained Drift distribution.
 #

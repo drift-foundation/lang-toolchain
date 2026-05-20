@@ -51,8 +51,9 @@ def main() -> None:
 	dist_root = exe.parent.parent
 
 	# Prepend compiler sources to sys.path so lang.driftc is importable.
-	# This directory also contains the .lark grammar, core_trust.json, and
-	# C/H/S runtime source files — all resolved via __file__ relative paths.
+	# This directory also contains the .lark grammar, core_trust_v1.json
+	# (the v1 role-tagged core trust store), and C/H/S runtime source
+	# files — all resolved via __file__ relative paths.
 	compiler_lib = str(dist_root / "lib" / "compiler")
 	if compiler_lib not in sys.path:
 		sys.path.insert(0, compiler_lib)
