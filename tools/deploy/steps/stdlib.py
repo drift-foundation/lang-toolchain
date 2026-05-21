@@ -76,7 +76,6 @@ def _stdlib_sci(repo_root: Path, version: str) -> str:
 		native_deps=[],
 		unsafe=False,
 		asset_paths=[],
-		target_class="drift-dev",
 		source_root=repo_root,
 	)
 

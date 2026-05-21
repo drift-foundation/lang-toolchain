@@ -137,7 +137,6 @@ def _author_body(
 		namespaces=namespaces,
 		source_content_id=source_content_id,
 		required_deps=(),
-		target_class="release",
 		release_utc="2026-05-18T12:00:00Z",
 	)
 

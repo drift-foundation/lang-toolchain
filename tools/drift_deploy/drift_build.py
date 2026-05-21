@@ -616,25 +616,9 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# missing stamp surfaced as a consumer-side error.
 	sci: str | None = None
 	if art.kind == "library":
-		from lang.driftc.packages.source_content_id import (
-			compute_artifact_source_content_id,
-		)
-		project_root = manifest_dir.parent
+		from tools.drift_deploy.build_cmd import compute_artifact_sci
 		try:
-			sci = compute_artifact_source_content_id(
-				kind="library",
-				package_id=art.name,
-				version=art.version,
-				module_namespace=(art.module_namespace or art.name),
-				entry_module=art.entry_module,
-				module_paths=sorted(art.modules),
-				package_deps=[(d.name, d.version) for d in (art.package_deps or [])],
-				native_deps=[],
-				unsafe=getattr(art, "unsafe", False),
-				asset_paths=[],
-				target_class=args.target,
-				source_root=project_root,
-			)
+			sci = compute_artifact_sci(art, manifest_dir=manifest_dir)
 		except (FileNotFoundError, ValueError) as e:
 			print(
 				f"warning: source_content_id skipped for '{art.name}': {e}",

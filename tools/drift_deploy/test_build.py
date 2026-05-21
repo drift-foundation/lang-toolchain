@@ -2723,7 +2723,7 @@ class TestAttachAuthorClaimLookupPath:
 			schema_version=1, package_id=package_id, version=version,
 			namespaces=(package_id.replace("-", "_") + ".*",),
 			source_content_id=sci, required_deps=(),
-			target_class="library", release_utc="2026-05-20T21:00:00Z",
+			release_utc="2026-05-20T21:00:00Z",
 		)
 		claim = make_author_claim(body, seed)
 		target_path.write_text(dump_author_claim_json(claim), encoding="utf-8")

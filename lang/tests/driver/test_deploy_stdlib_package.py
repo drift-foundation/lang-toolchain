@@ -111,7 +111,6 @@ def _emit_v1_sidecars(
 			namespaces=tuple(namespaces),
 			source_content_id=_TEST_SCI,
 			required_deps=(),
-			target_class="library",
 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed,

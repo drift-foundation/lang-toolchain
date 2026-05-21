@@ -161,8 +161,7 @@ def _publish_signed_pkg(
 		body=_V1_AuthorClaimBody(
 			schema_version=1, package_id=package_id, version=package_version,
 			namespaces=(package_id, f"{package_id}.*"),
-			source_content_id=_TEST_SCI, required_deps=(), target_class="library",
-			release_utc="2026-05-19T00:00:00Z",
+			source_content_id=_TEST_SCI, required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed, sidecar_dir=lib_dir,
 	))

@@ -98,7 +98,6 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 		native_deps=[],
 		unsafe=False,
 		asset_paths=[],
-		target_class="drift-dev",
 		source_root=repo_root,
 	)
 
@@ -173,7 +172,6 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 			namespaces=("std.*", "lang.*"),
 			source_content_id=sci,
 			required_deps=(),
-			target_class="library",
 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed_raw,

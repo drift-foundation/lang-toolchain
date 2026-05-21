@@ -595,7 +595,7 @@ deploy-prepublish-stdlib-author:
 		module_namespace="std", entry_module="std",
 		module_paths=module_paths_rel,
 		package_deps=[], native_deps=[], unsafe=False, asset_paths=[],
-		target_class="drift-dev", source_root=root,
+		source_root=root,
 	)
 	seed = load_author_seed32(seed_path)
 	priv = Ed25519PrivateKey.from_private_bytes(seed)
@@ -618,10 +618,15 @@ deploy-prepublish-stdlib-author:
 	PY
 	# shellcheck source=/dev/null
 	source "${env_file}"
-	# Author step: drift-author publish, signed with DRIFT_SIGN_KEY_FILE.
-	# --overwrite is correct for a release recipe -- each invocation is
+	# Author step: drift-author publish-raw, signed with DRIFT_SIGN_KEY_FILE.
+	# We use the raw mode (not the manifest-aware default `publish`)
+	# because the stdlib has no drift/manifest.json -- its SCI is
+	# computed over the toolchain's own `stdlib/` tree above and
+	# threaded through here as --source-content-id.  Regular package
+	# authors should use `publish` (manifest-aware) instead.
+	# --overwrite is correct for a release recipe: each invocation is
 	# the canonical claim for the current source/version pair.
-	PYTHONPATH=. ./.venv/bin/python3 -m tools.drift_author publish \
+	PYTHONPATH=. ./.venv/bin/python3 -m tools.drift_author publish-raw \
 		--key-file "${DRIFT_SIGN_KEY_FILE}" \
 		--sidecar-dir "${out_dir}" \
 		--package-id std \
@@ -630,7 +635,6 @@ deploy-prepublish-stdlib-author:
 		--namespace 'lang.*' \
 		--namespace 'drift.*' \
 		--source-content-id "${SCI}" \
-		--target-class library \
 		--release-utc "${RELEASE_UTC}" \
 		--overwrite
 	# Write the matching pubkey alongside (consumed by `just deploy`

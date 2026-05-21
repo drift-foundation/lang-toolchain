@@ -4,9 +4,13 @@ Author claim — `drift-author-claim` v1.
 
 The author claim binds the author's identity to a package
 **release**: source identity (source_content_id), declared deps,
-target class, namespaces.  Per O6 (sign-off 2026-05-18) the author
-claim NEVER binds artifact bytes — that role is exclusively the
-certifier/distributor's via `.cert-claim`.
+namespaces.  Per O6 (sign-off 2026-05-18) the author claim NEVER
+binds artifact bytes — that role is exclusively the certifier/
+distributor's via `.cert-claim`.  Per the v1 spec correction
+(2026-05-20) the author claim ALSO does not bind target / build
+class — that field belongs on the certifier's claim
+(`cert_claim.body.target`), so one author claim can cover the same
+source release across multiple build targets.
 
 Role invariant:
     Author role answers "who authorized this source release?"
@@ -23,7 +27,6 @@ Body schema (signed-over):
       "namespaces": ["<pattern>", ...],
       "source_content_id": "sha256:<hex>",
       "required_deps": [{"name": "<str>", "version_range": "<str>"}, ...],
-      "target_class": "<str>",
       "release_utc": "<ISO 8601>"
     }
 
@@ -89,7 +92,6 @@ _BODY_KEYS = frozenset({
 	"namespaces",
 	"source_content_id",
 	"required_deps",
-	"target_class",
 	"release_utc",
 })
 _REQUIRED_DEP_KEYS = frozenset({"name", "version_range"})
@@ -136,14 +138,19 @@ class RequiredDep:
 
 @dataclass(frozen=True)
 class AuthorClaimBody:
-	"""Signed payload of an author claim."""
+	"""Signed payload of an author claim.
+
+	No `target_class`: target / build environment is certifier
+	metadata (`cert_claim.body.target`), not source identity.  One
+	author claim can therefore cover the same source release across
+	multiple build targets; each target gets its own cert claim.
+	"""
 	schema_version: int  # always 1
 	package_id: str
 	version: str
 	namespaces: tuple[str, ...]
 	source_content_id: str  # "sha256:<hex>"
 	required_deps: tuple[RequiredDep, ...]
-	target_class: str
 	release_utc: str  # ISO 8601
 
 
@@ -194,8 +201,6 @@ def validate_body_shape(body: AuthorClaimBody) -> None:
 			)
 	from lang.driftc.packages.source_content_id import validate_sci as _validate_sci
 	_validate_sci(body.source_content_id, field="author claim body.source_content_id")
-	if not isinstance(body.target_class, str) or not body.target_class:
-		raise ValueError("author claim body.target_class must be a non-empty string")
 	if not isinstance(body.release_utc, str) or not body.release_utc:
 		raise ValueError("author claim body.release_utc must be a non-empty string")
 	for idx, d in enumerate(body.required_deps):
@@ -242,7 +247,6 @@ def _body_to_canonical_dict(body: AuthorClaimBody) -> dict[str, Any]:
 		"namespaces": sorted(body.namespaces),
 		"source_content_id": body.source_content_id,
 		"required_deps": deps_dicts,
-		"target_class": body.target_class,
 		"release_utc": body.release_utc,
 	}
 
@@ -429,9 +433,6 @@ def _parse_body(obj: dict) -> AuthorClaimBody:
 		seen_dep_names.add(name)
 		required_deps.append(RequiredDep(name=name, version_range=rng))
 
-	target_class = obj.get("target_class")
-	if not isinstance(target_class, str) or not target_class:
-		raise ValueError("author claim body.target_class must be a non-empty string")
 	release_utc = obj.get("release_utc")
 	if not isinstance(release_utc, str) or not release_utc:
 		raise ValueError("author claim body.release_utc must be a non-empty string")
@@ -443,7 +444,6 @@ def _parse_body(obj: dict) -> AuthorClaimBody:
 		namespaces=tuple(namespaces),
 		source_content_id=sci,
 		required_deps=tuple(required_deps),
-		target_class=target_class,
 		release_utc=release_utc,
 	)
 

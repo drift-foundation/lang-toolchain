@@ -71,7 +71,6 @@ def _pre_publish_stdlib_author_claim(
 		native_deps=[],
 		unsafe=False,
 		asset_paths=[],
-		target_class="drift-dev",
 		source_root=ROOT,
 	)
 
@@ -97,7 +96,6 @@ def _pre_publish_stdlib_author_claim(
 			namespaces=("std.*", "lang.*", "drift.*"),
 			source_content_id=sci,
 			required_deps=(),
-			target_class="library",
 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed,

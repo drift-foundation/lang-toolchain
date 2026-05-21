@@ -148,7 +148,6 @@ def _author_body(
 		namespaces=(package_id, f"{package_id}.*"),
 		source_content_id=sci,
 		required_deps=required_deps,
-		target_class="library",
 		release_utc="2026-05-19T00:00:00Z",
 	)
 

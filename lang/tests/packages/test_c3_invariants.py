@@ -156,7 +156,6 @@ def _publish_dep_sidecars(
 		namespaces=(pkg_id,),
 		source_content_id=sci,
 		required_deps=(),
-		target_class="library",
 		release_utc="2026-05-19T00:00:00Z",
 	)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
@@ -407,7 +406,6 @@ def test_full_transitive_dep_graph_covers_consumer_closure(tmp_path: Path) -> No
 			required_deps=(
 				RequiredDep(name="net.tls", version_range="^0.5"),
 			),
-			target_class="library",
 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=author_seed,
@@ -528,8 +526,7 @@ def test_cert_claim_missing_a_transitive_entry_is_rejected_by_verifier() -> None
 	author_body = AuthorClaimBody(
 		schema_version=1, package_id="app", version="1.0.0",
 		namespaces=("app",), source_content_id=app_sci,
-		required_deps=(), target_class="library",
-		release_utc="2026-05-19T00:00:00Z",
+		required_deps=(), 		release_utc="2026-05-19T00:00:00Z",
 	)
 	author_claim = make_author_claim(author_body, author_seed)
 
@@ -606,8 +603,7 @@ def _emit_and_verify_app(
 		body=AuthorClaimBody(
 			schema_version=1, package_id="app", version="1.0.0",
 			namespaces=("app",), source_content_id=app_sci,
-			required_deps=(), target_class="library",
-			release_utc="2026-05-19T00:00:00Z",
+			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=author_seed,
 		sidecar_dir=sidecar_dir,
@@ -784,7 +780,6 @@ def test_mariadb_shape_sibling_plus_external_dep(tmp_path: Path) -> None:
 			required_deps=(
 				RequiredDep(name="mariadb.rpc.managed", version_range="^2"),
 			),
-			target_class="library",
 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=author_seed,

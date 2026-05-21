@@ -232,25 +232,40 @@ The role split is enforced in three load-bearing places:
 Concrete trace of one release passing through all three principals.
 
 **Alice (author)** maintains `acme.crypto` and is about to release
-version `0.4.0`.  On her laptop she runs:
+version `0.4.0`.  Her project already has a v2 `drift/manifest.json`
+declaring the artifact's source, namespace, deps, etc.  On her
+laptop she runs:
 
 ```text
-drift-author publish                   \
-    --sidecar-dir build/               \
-    --package-id acme.crypto           \
-    --version 0.4.0                    \
-    --namespace acme.crypto.*          \
-    --source-content-id sha256:71f3…   \
-    --required-dep std=^0              \
-    --target-class library             \
-    --release-utc 2026-05-19T00:00:00Z \
+drift-author publish                                  \
+    --manifest drift/manifest.json                    \
     --key-file ~/.config/drift/keys/alice.seed
 ```
 
+That's it.  `drift-author publish` reads the manifest, computes
+the canonical `source_content_id` over the declared source/asset
+bytes via the shared
+[`compute_artifact_sci`](../../lang/driftc/packages/manifest.py)
+helper, derives `package_id` / `version` / `required_deps` /
+`namespaces` from the manifest, captures `release_utc` as now,
+and signs.  The SCI it signs is **byte-identical** to what
+`drift build` / `drift deploy` will later stamp into the `.dmp`
+manifest, so the trust-v1 §3.5 three-way equality holds by
+construction.
+
 Her private key never leaves her laptop.  The resulting
-`acme.crypto.author-claim` says (in essence): *"Alice's kid
-attests that source content `71f3…` is `acme.crypto 0.4.0`, owns
-the namespace `acme.crypto.*`, and requires `std=^0`."*
+`drift/acme.crypto.author-claim` (default sidecar location:
+next to `manifest.json`) says (in essence): *"Alice's kid attests
+that source content `<sci>` is `acme.crypto 0.4.0`, owns the
+namespace `acme.crypto.*`, and requires `std=0` (or whatever ranges
+the manifest declared)."*
+
+Toolchain releases (the stdlib in this repo) use the
+`publish-raw` subcommand instead, because the stdlib has no
+`drift/manifest.json` — its SCI is computed over the toolchain's
+own `stdlib/` tree.  Regular package authors should never need
+`publish-raw`; hand-entering SCI on the command line is a footgun
+that breaks consumer verification on the slightest input drift.
 
 **Carlos (certifier)** runs the release pipeline on a CI host.
 He receives Alice's `.dmp` + author-claim, builds the artifact,
@@ -531,8 +546,12 @@ Body fields:
 | `namespaces`          | list of module-id glob patterns the package claims to own        |
 | `source_content_id`   | `"sha256:<hex>"` of canonical source/asset bytes                 |
 | `required_deps`       | list of `{"name", "version_range"}`                              |
-| `target_class`        | e.g. `"library"` / `"app"`                                       |
 | `release_utc`         | ISO-8601 release timestamp                                       |
+
+The author claim **does not bind** target / build environment: that
+field belongs on the certifier's claim (`cert_claim.body.target`).
+One author claim therefore covers the same source release across
+multiple build targets, while each target gets its own cert claim.
 
 Signatures are stored as a JSON array; each entry has `algo`, `kid`,
 and `sig`.  Pubkey bytes are NOT carried inline — they live in the
@@ -639,7 +658,11 @@ namespaces always resolve to the core kid set.
 
 SCI is a `sha256:<hex>` stamp over a canonical encoding of the
 package's declared source/asset bytes plus build-relevant metadata
-(target class, declared deps, unsafe flag).  It lives in
+(declared deps, native dep names, unsafe flag, module namespace,
+entry module).  It explicitly does NOT bind target / build
+environment — that lives on the cert claim
+(`cert_claim.body.target`), so the same source release produces the
+same SCI regardless of which target is built.  Definition lives in
 [`source_content_id.py`](../../lang/driftc/packages/source_content_id.py).
 The same SCI value appears in three places that v1 verify checks for
 equality:
@@ -1010,15 +1033,45 @@ regression.
 Author-side signing lives entirely in `tools/drift_author/` and is
 intentionally walled off from the certifier/deploy pipeline.
 
+**Default flow (the publish command for humans):**
+
 ```text
-drift-author publish               \
+drift-author publish                                  \
+    --manifest <repo>/drift/manifest.json             \
+    --key-file <author.seed>
+```
+
+`drift-author publish` reads the manifest, computes SCI via the
+shared
+[`compute_artifact_sci`](../../lang/driftc/packages/manifest.py)
+helper, derives `package_id` / `version` / `required_deps` /
+`namespaces` from the artifact entry, captures `release_utc` as
+now, and signs into `<repo>/drift/<pkg>.author-claim` (the
+location `drift deploy` will look for it).  Operators with
+multiple library artifacts in one manifest pass `--artifact
+<name>` to disambiguate; operators owning additional namespace
+patterns (e.g. namespace federations) pass `--namespace <glob>`
+repeatedly.
+
+**Internal / test tooling — `publish-raw`.**  The toolchain's own
+stdlib release uses this because the stdlib has no
+`drift/manifest.json` — its SCI is computed over the toolchain's
+`stdlib/` tree directly by the deploy step in
+`tools/deploy/steps/stdlib.py`.  Authors of regular packages
+should NOT use `publish-raw`; hand-entering SCI on the command
+line is a footgun that breaks consumer verification on the
+slightest input drift (trust-v1.md §3.5 three-way equality is
+hard-checked at consumer load time).
+
+```text
+# publish-raw — for toolchain release flows only, not authors.
+drift-author publish-raw           \
     --sidecar-dir <pkg-dir>        \
     --package-id <id>              \
     --version <ver>                \
     --namespace <glob>             \   # repeatable
     --source-content-id sha256:... \
     --required-dep <name>=<range>  \   # repeatable
-    --target-class library         \
     --release-utc 2026-05-19T00:00:00Z \
     --key-file <author.seed>
 ```

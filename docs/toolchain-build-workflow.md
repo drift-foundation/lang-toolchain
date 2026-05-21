@@ -490,26 +490,35 @@ $DRIFTC -M sandbox/app \
 
 ### 6.4 Sign a package manually (trust-v1)
 
-Author claim emission (signs source identity, *not* artifact bytes):
+Author claim emission (signs source identity, *not* artifact bytes).
+The CLI is manifest-aware: it reads `drift/manifest.json` and
+computes SCI itself, so the digest in the author claim is
+byte-identical to the one `drift build` / `drift deploy` will
+stamp into the `.dmp` (trust-v1.md §3.5 three-way equality):
 
 ```bash
-drift-author publish                   \
-    --sidecar-dir sandbox/libmath/     \
-    --package-id acme.math             \
-    --version 0.1.0                    \
-    --namespace acme.math.*            \
-    --source-content-id sha256:<hex>   \
-    --target-class library             \
-    --release-utc 2026-05-19T00:00:00Z \
+drift-author publish                                  \
+    --manifest sandbox/libmath/drift/manifest.json    \
     --key-file ~/.config/drift/keys/default.seed
 ```
 
-This produces `acme.math.author-claim` next to the `.dmp`.  Cert
-claim emission (signs artifact bytes + dep graph + cert suite)
-happens through `drift deploy` (the certifier role); manual
-single-package cert emission is intentionally not exposed because
-the cert claim is meaningful only as the output of a certifier
-pipeline that observed the build and ran a suite.
+This produces `sandbox/libmath/drift/acme.math.author-claim` (next
+to the manifest, which is also where `drift deploy` looks for it).
+Optional flags: `--artifact <name>` when the manifest declares
+multiple library artifacts; `--namespace <glob>` (repeatable) to
+override the default `<art.module_namespace>.*`; `--release-utc
+<iso>` to pin the timestamp (default: now); `--sidecar-dir <dir>`
+to override the output location; `--overwrite` to replace.
+
+Cert claim emission (signs artifact bytes + dep graph + cert
+suite) happens through `drift deploy` (the certifier role);
+manual single-package cert emission is intentionally not exposed
+because the cert claim is meaningful only as the output of a
+certifier pipeline that observed the build and ran a suite.
+
+The `publish-raw` subcommand still exists for the toolchain's
+own stdlib release (which computes SCI outside the v2 manifest
+machinery) — package authors should never reach for it.
 
 See [`docs/design/trust-v1.md`](design/trust-v1.md) §7 for the
 full author / certifier workflow.
@@ -518,7 +527,7 @@ full author / certifier workflow.
 
 **Publisher setup:**
 - Initialize publishing identity: `drift init`
-- Sign source identity: `drift-author publish --sidecar-dir <pkg-dir> --package-id <id> --version <ver> --namespace <glob> --source-content-id sha256:<hex> --release-utc <iso> --key-file <seed>`
+- Sign source identity: `drift-author publish --manifest drift/manifest.json --key-file <seed>` (reads the manifest, computes SCI via the shared helper, derives body fields, signs)
 
 **Project build (manifest-driven):**
 - Build artifact: `drift build <artifact> --manifest drift/manifest.json --driftc <driftc>`

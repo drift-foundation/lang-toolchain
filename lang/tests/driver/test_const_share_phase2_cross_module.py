@@ -380,8 +380,7 @@ pub struct Inner {
 		body=AuthorClaimBody(
 			schema_version=1, package_id="producer-lib", version="1.0.0",
 			namespaces=("producer.*",), source_content_id=_TEST_SCI,
-			required_deps=(), target_class="library",
-			release_utc="2026-05-19T00:00:00Z",
+			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed, sidecar_dir=lib_dir,
 	))

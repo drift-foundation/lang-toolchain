@@ -6,7 +6,7 @@ Canonical `source_content_id` computation (v1 trust model).
 identity: kind, package_id, version, module_namespace, entry_module,
 sorted module (path, sha256) tuples, sorted package_deps (name,
 version_range) tuples, sorted native_deps, unsafe flag, sorted
-assets (path, sha256), target_class.
+assets (path, sha256).
 
 It is signed by the author in `.author-claim` (binding "I, the
 author, authorized this exact source release") and re-stated by the
@@ -25,23 +25,29 @@ What's IN the canonical hash:
 - native dep names
 - unsafe flag
 - asset paths + content shas
-- target class
 
 What's OUT (non-canonical):
 - build epoch, compiler version, ABI fingerprint
 - absolute paths, file mtimes
 - compiler-produced payload bytes
 - signatures
+- **target / build class** (e.g. `drift-dev`, `library`, `app`).
+  Target is a CERTIFIER concern (which build environment produced
+  the artifact bytes) and lives on `cert_claim.body.target`, not
+  on source identity.  One author claim can therefore cover the
+  same source release across multiple build targets, while each
+  target/artifact gets its own cert claim.  See trust-v1.md
+  §3 (role split) and the project_target_class_removed memory.
 
 Anything that varies across legitimate rebuilds of the same source
 is excluded by construction.
 
 This module is the canonical home for SCI in the v1 trust model.
-`tools/drift_deploy/source_attestation.py` carries an identical
-implementation today (slice 2 additive constraint); slice 4
-deletes that duplicate.  The two MUST stay in lockstep until then
-— if you change one, change the other, or the verifier will see
-stamped-SCI mismatch on identical source.
+The `tools/drift_deploy/source_attestation.py` duplicate that
+existed during the additive transition was deleted in slice 4;
+all callers now route through `compute_artifact_source_content_id`
+(or the `tools/drift_deploy/build_cmd.compute_artifact_sci`
+manifest-aware wrapper).
 """
 
 from __future__ import annotations
@@ -153,8 +159,9 @@ class SourceContentInputs:
 	`kind`, `name` (→ `package_id` for the package manifest),
 	`version`, `module_namespace`, `entry_module`, `modules`,
 	`package_deps`, `native_deps`, `assets`, `unsafe`.
-	`target_class` comes from the build invocation (compiler
-	`--package-target`).
+
+	**No `target_class`.**  Target/build environment is certifier
+	metadata (`cert_claim.body.target`), not source identity.
 	"""
 	kind: str  # "library" or "app"
 	package_id: str
@@ -166,7 +173,6 @@ class SourceContentInputs:
 	native_deps: list[str]
 	unsafe: bool
 	assets: list[tuple[str, str]]        # [(relative_path, sha256_hex), ...]
-	target_class: str
 
 
 # ── Public computation ────────────────────────────────────────────
@@ -257,7 +263,6 @@ def compute_source_content_id(inputs: SourceContentInputs) -> str:
 			],
 			key=lambda e: e["path"],
 		),
-		"target_class": inputs.target_class,
 	}
 	return "sha256:" + _sha256_hex(canonical_json_bytes(canonical))
 
@@ -328,7 +333,6 @@ def compute_artifact_source_content_id(
 	native_deps: list[str],
 	unsafe: bool,
 	asset_paths: list[str],
-	target_class: str,
 	source_root: Path,
 ) -> str:
 	"""Compute `source_content_id` for an artifact by hashing its
@@ -381,5 +385,4 @@ def compute_artifact_source_content_id(
 		native_deps=list(native_deps),
 		unsafe=unsafe,
 		assets=asset_entries,
-		target_class=target_class,
 	))

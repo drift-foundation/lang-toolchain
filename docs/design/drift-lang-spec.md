@@ -4076,9 +4076,12 @@ split*):
 
 - **Author claim** (`<pkg>.author-claim`) — emitted by
   `drift-author publish`; signs over `(package_id, version,
-  namespaces, source_content_id, required_deps, target_class,
-  release_utc)`.  One sidecar file per package; multiple signatures
-  in the file are reserved for multi-author cosign.
+  namespaces, source_content_id, required_deps, release_utc)`.
+  Does NOT bind target / build environment; that lives on the cert
+  claim (`target`) so one author claim covers the same source
+  release across multiple build targets.  One sidecar file per
+  package; multiple signatures in the file are reserved for
+  multi-author cosign.
 - **Cert claim** (`<pkg>.cert-claim.<kid>.json`) — emitted by
   `drift-deploy` (cert-emit side); signs over `(package_id,
   version, artifact_sha256, source_content_id, target, toolchain,

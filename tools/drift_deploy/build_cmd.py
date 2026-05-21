@@ -208,26 +208,15 @@ def resolve_driftc(explicit: Path | None = None) -> Path | None:
 	return None
 
 
-def project_root_for(manifest_dir: Path) -> Path:
-	"""Return the project root for a manifest at ``manifest_dir / manifest.json``.
-
-	Under the canonical post-rename layout, the manifest lives at
-	``<project_root>/drift/manifest.json``, so the project root is the
-	parent of the manifest directory.  Source paths, asset paths, and the
-	build output directory are all resolved relative to the project root,
-	not the manifest dir — users write ``entry_module: "src/lib.drift"``
-	expecting it to point at ``<project_root>/src/lib.drift``, not
-	``<project_root>/drift/src/lib.drift``.
-
-	If the manifest's containing dir is NOT named ``drift`` (e.g. a
-	non-standard manifest location passed via ``--manifest /tmp/foo.json``),  # drift-tmp-root-audit: allow docstring example
-
-	the project root collapses to the manifest dir itself, so the legacy
-	"sources next to manifest" interpretation still works for one-off use.
-	"""
-	if manifest_dir.name == "drift":
-		return manifest_dir.parent
-	return manifest_dir
+# `project_root_for` and `compute_artifact_sci` live in
+# `lang/driftc/packages/manifest.py` so both `drift-author` (author
+# tool) and this module (orch / deploy) can import them without
+# crossing the author/deploy boundary in either direction.  Re-export
+# here for back-compat with the many existing in-repo imports.
+from lang.driftc.packages.manifest import (
+	compute_artifact_sci,
+	project_root_for,
+)
 
 
 def build_source_args(art: Artifact, manifest_dir: Path) -> list[str]:

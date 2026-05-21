@@ -1557,31 +1557,15 @@ def _deploy_artifact(
 
 	source_content_id: str | None = None
 	if art.kind == "library":
-		from tools.drift_deploy.build_cmd import project_root_for
-		from lang.driftc.packages.source_content_id import (
-			compute_artifact_source_content_id,
-		)
-		# Phase A is additive: compute source_content_id from on-disk
-		# source/asset bytes when they all resolve, otherwise log and
-		# proceed without source-mode metadata (skipping the .source-
-		# attestation emission below).  Phase C will tighten this:
-		# once source-rebuild mode is enforced, missing source files
-		# become a hard error instead of a graceful skip.
+		from tools.drift_deploy.build_cmd import compute_artifact_sci
+		# Shared SCI helper (see `build_cmd.compute_artifact_sci`):
+		# the same Artifact + manifest_dir + target MUST produce the
+		# same digest here and in `drift_build`, otherwise the three-
+		# way SCI equality check at consumer verify time
+		# (`package_manifest.sci == author_claim.body.sci ==
+		# cert_claim.body.sci`, trust-v1.md §3.5) rejects the package.
 		try:
-			source_content_id = compute_artifact_source_content_id(
-				kind=art.kind,
-				package_id=art.name,
-				version=art.version,
-				module_namespace=art.module_namespace,
-				entry_module=art.entry_module,
-				module_paths=list(art.modules),
-				package_deps=[(d.name, d.version) for d in art.package_deps],
-				native_deps=[d.lib for d in art.native_deps],
-				unsafe=art.unsafe,
-				asset_paths=list(art.assets),
-				target_class=target,
-				source_root=project_root_for(manifest_dir),
-			)
+			source_content_id = compute_artifact_sci(art, manifest_dir=manifest_dir)
 		except (FileNotFoundError, ValueError) as e:
 			print(
 				f"warning: source attestation skipped for '{art.name}': {e}",

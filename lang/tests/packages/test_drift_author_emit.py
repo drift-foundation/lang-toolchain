@@ -68,7 +68,6 @@ def _sample_body(package_id: str = "demo.lib", version: str = "1.0.0") -> Author
 		namespaces=("demo.lib",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(RequiredDep(name="std", version_range="^1"),),
-		target_class="library",
 		release_utc="2026-01-01T00:00:00Z",
 	)
 

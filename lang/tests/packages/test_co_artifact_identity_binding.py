@@ -100,7 +100,6 @@ def _make_sibling(
 		namespaces=(author_pkg_id_body,),
 		source_content_id=author_sci,
 		required_deps=(),
-		target_class="library",
 		release_utc="2026-05-19T00:00:00Z",
 	)
 	# Write under whatever filename the writer derives from the

@@ -101,7 +101,7 @@ def _pre_publish_author_claim(
 		module_namespace="std", entry_module="std",
 		module_paths=module_paths_rel,
 		package_deps=[], native_deps=[], unsafe=False, asset_paths=[],
-		target_class="drift-dev", source_root=ROOT,
+		source_root=ROOT,
 	)
 	sidecar_dir = scratch / "foundation_author_signing"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
@@ -110,7 +110,7 @@ def _pre_publish_author_claim(
 			schema_version=1, package_id="std", version=version,
 			namespaces=("std.*", "lang.*", "drift.*"),
 			source_content_id=sci, required_deps=(),
-			target_class="library", release_utc="2026-05-19T00:00:00Z",
+			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=author_seed, sidecar_dir=sidecar_dir,
 	))

@@ -32,7 +32,6 @@ def _example_inputs(**overrides) -> SourceContentInputs:
 		native_deps=["ssl"],
 		unsafe=False,
 		assets=[],
-		target_class="release",
 	)
 	defaults.update(overrides)
 	return SourceContentInputs(**defaults)
@@ -128,7 +127,6 @@ def test_sci_rejects_module_symlink_outside_source_root(tmp_path):
 			native_deps=[],
 			unsafe=False,
 			asset_paths=[],
-			target_class="test-target",
 			source_root=proj,
 		)
 
@@ -161,7 +159,6 @@ def test_sci_accepts_symlink_inside_source_root(tmp_path):
 		native_deps=[],
 		unsafe=False,
 		asset_paths=[],
-		target_class="test-target",
 		source_root=proj,
 	)
 	assert sci.startswith("sha256:")
@@ -202,8 +199,7 @@ def test_sci_symlink_alias_matches_direct_file_with_same_bytes(tmp_path):
 		module_namespace="proj", entry_module="proj",
 		module_paths=["src/helper.drift"],
 		package_deps=[], native_deps=[], unsafe=False,
-		asset_paths=[], target_class="test-target",
-	)
+		asset_paths=[], 	)
 	sci_a = compute_artifact_source_content_id(source_root=proj_a, **args)
 	sci_b = compute_artifact_source_content_id(source_root=proj_b, **args)
 	assert sci_a == sci_b, (

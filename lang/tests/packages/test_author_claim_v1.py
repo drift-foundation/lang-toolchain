@@ -93,7 +93,6 @@ def _example_body(
 	required_deps: tuple[RequiredDep, ...] = (
 		RequiredDep(name="mariadb-rpc", version_range="^0.5.0"),
 	),
-	target_class: str = "release",
 	release_utc: str = "2026-05-18T12:00:00Z",
 ) -> AuthorClaimBody:
 	return AuthorClaimBody(
@@ -103,7 +102,6 @@ def _example_body(
 		namespaces=namespaces,
 		source_content_id=source_content_id,
 		required_deps=required_deps,
-		target_class=target_class,
 		release_utc=release_utc,
 	)
 
@@ -268,7 +266,6 @@ def test_reject_empty_signatures() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	text = _wrap_envelope(body=body_dict, signatures=[])
@@ -284,7 +281,6 @@ def test_reject_bad_body_schema_version() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
@@ -301,7 +297,6 @@ def test_reject_bad_sci_shape() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "not-prefixed-hex",
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
@@ -318,7 +313,6 @@ def test_reject_empty_namespaces() -> None:
 		"namespaces": [],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
@@ -336,7 +330,6 @@ def test_reject_wrong_sig_length() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 32)}]
@@ -353,7 +346,6 @@ def test_reject_non_ed25519_algo() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "rsa", "kid": "rsa:k", "sig": b64_encode(b"\x00" * 64)}]
@@ -370,7 +362,6 @@ def test_reject_required_deps_with_missing_version_range() -> None:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [{"name": "foo"}],   # version_range missing
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
@@ -609,7 +600,6 @@ def _valid_body_dict() -> dict:
 		"namespaces": ["x"],
 		"source_content_id": "sha256:" + ("a" * 64),
 		"required_deps": [],
-		"target_class": "release",
 		"release_utc": "2026-05-18T00:00:00Z",
 	}
 
@@ -639,6 +629,24 @@ def test_strict_v1_rejects_unknown_field_in_body() -> None:
 	body["future_v2_field"] = "not yet"
 	text = _wrap_envelope(body=body, signatures=[_valid_sig_record()])
 	with pytest.raises(ValueError, match="unknown field"):
+		load_author_claim_json(text)
+
+
+def test_strict_v1_rejects_target_class_in_author_body() -> None:
+	"""SPEC PIN (2026-05-20): author claim must NOT bind target / build
+	environment.  Target lives on the certifier's claim
+	(`cert_claim.body.target`), so one author claim covers the same
+	source release across multiple build targets.
+
+	The loader previously accepted `body.target_class` as a v1 field.
+	Under the spec correction it must be rejected as an unknown key
+	(otherwise a stale claim signed under the old schema could load
+	silently and confuse role-split audits).
+	"""
+	body = _valid_body_dict()
+	body["target_class"] = "library"
+	text = _wrap_envelope(body=body, signatures=[_valid_sig_record()])
+	with pytest.raises(ValueError, match="unknown field.*target_class"):
 		load_author_claim_json(text)
 
 
@@ -795,7 +803,7 @@ def test_sign_rejects_invalid_schema_version() -> None:
 		package_id="x", version="0.1.0", namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
-		target_class="release", release_utc="2026-05-18T00:00:00Z",
+		release_utc="2026-05-18T00:00:00Z",
 	)
 	with pytest.raises(ValueError, match="schema_version"):
 		body_signing_bytes(bad_body)
@@ -807,7 +815,7 @@ def test_sign_rejects_empty_package_id() -> None:
 		version="0.1.0", namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
-		target_class="release", release_utc="2026-05-18T00:00:00Z",
+		release_utc="2026-05-18T00:00:00Z",
 	)
 	with pytest.raises(ValueError, match="package_id"):
 		body_signing_bytes(bad_body)
@@ -819,7 +827,7 @@ def test_sign_rejects_bad_sci_shape() -> None:
 		namespaces=("x",),
 		source_content_id="not-a-sha",   # malformed
 		required_deps=(),
-		target_class="release", release_utc="2026-05-18T00:00:00Z",
+		release_utc="2026-05-18T00:00:00Z",
 	)
 	with pytest.raises(ValueError, match="source_content_id"):
 		body_signing_bytes(bad_body)
@@ -831,7 +839,7 @@ def test_sign_rejects_empty_namespaces() -> None:
 		namespaces=(),   # empty
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
-		target_class="release", release_utc="2026-05-18T00:00:00Z",
+		release_utc="2026-05-18T00:00:00Z",
 	)
 	with pytest.raises(ValueError, match="namespaces"):
 		body_signing_bytes(bad_body)
@@ -843,7 +851,7 @@ def test_sign_rejects_empty_dep_version_range() -> None:
 		namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(RequiredDep(name="foo", version_range=""),),
-		target_class="release", release_utc="2026-05-18T00:00:00Z",
+		release_utc="2026-05-18T00:00:00Z",
 	)
 	with pytest.raises(ValueError, match="version_range"):
 		body_signing_bytes(bad_body)
