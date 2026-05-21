@@ -15,12 +15,17 @@ from lang.drift.crypto import compute_ed25519_kid, ed25519_public_bytes_raw
 from lang.drift.doctor import DoctorOptions, doctor_exit_code, doctor_v0
 from lang.drift.trust import (
 	TrustAddKeyOptions,
+	TrustBootstrapOptions,
+	TrustCheckOptions,
 	TrustImportOptions,
 	TrustListOptions,
 	TrustRevokeOptions,
 	add_key_to_trust_store,
+	bootstrap_trust_from_manifest,
+	check_trust_for_manifest,
 	import_sidecar_keys_to_trust_store,
 	list_trust_store,
+	plan_trust_bootstrap,
 	plan_trust_import,
 	revoke_kid_in_trust_store,
 )
@@ -504,6 +509,84 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 	trust_import.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
 
+	trust_bootstrap = trust_sub.add_parser(
+		"bootstrap",
+		help=(
+			"Setup / repair project trust from checked-in <pkg>.author-claim "
+			"sidecars (reads drift/manifest.json + drift/<pkg>.author-claim + "
+			"drift/<pkg>.author-pubkey.b64 per artifact)"
+		),
+	)
+	trust_bootstrap.add_argument(
+		"--manifest",
+		type=_UserPath,
+		default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (default: ./drift/manifest.json)",
+	)
+	trust_bootstrap.add_argument(
+		"--trust-store",
+		type=_UserPath,
+		default=Path("drift") / "trust.json",
+		help="Path to trust store file (default: ./drift/trust.json)",
+	)
+	trust_bootstrap.add_argument(
+		"--allow-reserved",
+		action="store_true",
+		help=(
+			"Permit grants in reserved namespaces (std.*/lang.*/drift.*).  "
+			"Project trust stores must NEVER do this; this flag is for the "
+			"toolchain's own stdlib release flow only."
+		),
+	)
+	trust_bootstrap.add_argument(
+		"--dry-run",
+		action="store_true",
+		help="Print the grants that would be made without writing the trust store",
+	)
+	trust_bootstrap.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
+
+	trust_check = trust_sub.add_parser(
+		"check",
+		help=(
+			"Read-only preflight: is this repo trust-v1 ready before "
+			"`drift deploy`?  Validates author claims, SCI equality, "
+			"trust grants, and the absence of pre-v1 sidecars."
+		),
+	)
+	trust_check.add_argument(
+		"--manifest",
+		type=_UserPath,
+		default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (default: ./drift/manifest.json)",
+	)
+	trust_check.add_argument(
+		"--trust-store",
+		type=_UserPath,
+		default=Path("drift") / "trust.json",
+		help="Path to trust store file (default: ./drift/trust.json)",
+	)
+	trust_check.add_argument(
+		"--certifier-key-file",
+		type=_UserPath,
+		default=None,
+		help=(
+			"Optional: path to the certifier seed file the deploy will "
+			"use to sign cert claims.  When supplied, the preflight "
+			"verifies that kid is granted `certifiers` for the artifact "
+			"namespace."
+		),
+	)
+	trust_check.add_argument(
+		"--certifier-kid",
+		type=str,
+		default=None,
+		help=(
+			"Optional: expected certifier kid (e.g. ed25519:<base64>).  "
+			"Wins over --certifier-key-file when both are passed."
+		),
+	)
+	trust_check.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
+
 	doctor = sub.add_parser("doctor", help="Sanity checks for sources/index/trust/lock configuration")
 	doctor.add_argument("--sources", type=_UserPath, default=Path("drift") / "sources.json", help="Path to drift/sources.json")
 	doctor.add_argument(
@@ -786,6 +869,82 @@ def main(argv: list[str] | None = None) -> int:
 			except Exception as err:
 				p.error(str(err))
 				return 2
+
+		if args.trust_cmd == "bootstrap":
+			opts = TrustBootstrapOptions(
+				manifest_path=args.manifest,
+				trust_store_path=args.trust_store,
+				allow_reserved=bool(args.allow_reserved),
+			)
+			try:
+				# Always print the plan before writing so the operator
+				# sees exactly what's about to be granted -- the team
+				# explicitly asked for this UX ("print exactly what it
+				# will grant before writing").
+				plans = plan_trust_bootstrap(opts)
+				if args.json:
+					if args.dry_run:
+						print(json.dumps({"dry_run": True, "plan": plans},
+							sort_keys=True, separators=(",", ":")))
+						return 0
+				else:
+					print(f"trust bootstrap plan (from {args.manifest}):")
+					for plan in plans:
+						print(f"  {plan['package_id']}@{plan['version']}")
+						print(f"    claim:      {plan['claim_path']}")
+						print(f"    pubkey:     {plan['pubkey_path']}")
+						print(f"    kid:        {plan['kid']}")
+						print(f"    namespaces: {plan['namespaces']}")
+						print(f"    role grant: authors")
+						if plan["reserved"]:
+							print(f"    reserved:   {plan['reserved_hits']}  (refused unless --allow-reserved)")
+					if args.dry_run:
+						print(f"\n(dry-run: trust store {args.trust_store} NOT written)")
+						return 0
+				# Actually write.
+				report = bootstrap_trust_from_manifest(opts)
+				if args.json:
+					print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+				else:
+					print(f"\nwrote {report['trust_store']}")
+				return 0
+			except Exception as err:
+				p.error(str(err))
+				return 2
+
+		if args.trust_cmd == "check":
+			opts = TrustCheckOptions(
+				manifest_path=args.manifest,
+				trust_store_path=args.trust_store,
+				certifier_key_file=args.certifier_key_file,
+				certifier_kid=args.certifier_kid,
+			)
+			try:
+				report = check_trust_for_manifest(opts)
+			except Exception as err:
+				p.error(str(err))
+				return 2
+			if args.json:
+				print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+			else:
+				if report["ok"]:
+					print(f"OK: {args.manifest} is trust-v1 ready")
+					for entry in report["checked"]:
+						mark = "✓" if entry["ok"] else "✗"
+						print(f"  {mark} {entry['artifact']}")
+				else:
+					print(f"FAIL: {args.manifest} is NOT trust-v1 ready")
+				if report["warnings"]:
+					print("\nwarnings:")
+					for w in report["warnings"]:
+						loc = f"[{w['artifact']}] " if w["artifact"] else ""
+						print(f"  {loc}{w['code']}: {w['message']}")
+				if report["errors"]:
+					print("\nerrors:")
+					for e in report["errors"]:
+						loc = f"[{e['artifact']}] " if e["artifact"] else ""
+						print(f"  {loc}{e['code']}: {e['message']}")
+			return 0 if report["ok"] else 1
 
 		raise AssertionError("unreachable")
 

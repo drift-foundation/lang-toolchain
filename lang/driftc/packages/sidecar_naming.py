@@ -39,6 +39,7 @@ import re
 _FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 _AUTHOR_CLAIM_SUFFIX = ".author-claim"
+_AUTHOR_PUBKEY_SUFFIX = ".author-pubkey.b64"
 _CERT_CLAIM_INFIX = ".cert-claim."
 
 
@@ -69,6 +70,30 @@ def author_claim_filename(package_id: str) -> str:
 	"""
 	_require_non_empty("author_claim_filename: package_id", package_id)
 	return f"{filename_escape_segment(package_id)}{_AUTHOR_CLAIM_SUFFIX}"
+
+
+def author_pubkey_filename(package_id: str) -> str:
+	"""Canonical author-pubkey companion filename:
+	`<safe_pkg>.author-pubkey.b64`.
+
+	The author claim itself does not carry pubkey bytes inline — kids
+	resolve through the trust store -- so `drift-author publish`
+	writes this companion file next to the claim so downstream
+	tools (`drift trust bootstrap`) can build a v1 trust store
+	from the on-disk artifacts alone, without round-tripping the
+	pubkey through a separate manual step.
+
+	The file contains exactly one line: the base64-encoded 32-byte
+	Ed25519 pubkey of the FIRST signer.  Multi-author cosign cases
+	(rare per O8) keep using `drift trust add` for additional
+	cosigners; the companion is for the common single-signer case.
+
+	Pubkeys are public; this file is safe to commit alongside the
+	`.author-claim` and helps any downstream consumer derive the kid
+	+ pubkey deterministically.
+	"""
+	_require_non_empty("author_pubkey_filename: package_id", package_id)
+	return f"{filename_escape_segment(package_id)}{_AUTHOR_PUBKEY_SUFFIX}"
 
 
 def cert_claim_filename(package_id: str, certifier_kid: str) -> str:

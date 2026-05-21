@@ -370,6 +370,89 @@ Every publishable project must declare its author profile in `drift/manifest.jso
 (see section 2.1). Deploy will fail if `project.author_profile` is missing or the
 file does not exist.
 
+### 4.2a Author-publish + project trust bootstrap (one-time)
+
+`drift deploy` consumes — it does not produce — the project's
+author claims and trust store.  Each library artifact needs two
+committed files in `drift/`:
+
+```text
+drift/<pkg>.author-claim          # signed body (drift-author publish)
+drift/<pkg>.author-pubkey.b64     # base64 pubkey of the signer
+```
+
+Both are emitted together by:
+
+```bash
+drift-author publish --manifest drift/manifest.json --key-file <author.seed>
+```
+
+(Repeat with `--overwrite` after any manifest change that affects
+source identity, e.g. version bumps, module renames, asset
+additions.  See `drift trust check` below — it surfaces stale
+claims with the `version_mismatch` / `sci_mismatch` codes.)
+
+**Migrating an existing repo** whose author claims were minted
+before the pubkey-companion was emitted: re-run
+`drift-author publish --manifest drift/manifest.json --overwrite`
+for each artifact, or hand-write the companion:
+
+```bash
+echo "<base64-32-byte-pubkey>" > drift/<pkg>.author-pubkey.b64
+```
+
+The kid derived from the companion must match a signer of the
+existing claim; bootstrap will refuse a mismatched pair.
+
+Once both files exist, set up the project trust store:
+
+```bash
+drift trust bootstrap --manifest drift/manifest.json
+```
+
+This derives `drift/trust.json` from the on-disk sidecars and
+grants the **author** role for the claim's namespaces.
+
+Then add the **certifier** role separately — `bootstrap`
+deliberately does not grant certifier, because the kid that signs
+cert claims (`DRIFT_SIGN_KEY_FILE` or whatever the deploy uses)
+is a deploy-time concern, not an author-time one:
+
+```bash
+# Same-key team (operator's seed plays both roles)
+drift trust add --trust-store drift/trust.json \
+    --namespace '<art-namespace>.*'            \
+    --pubkey-b64 "$(cat drift/<pkg>.author-pubkey.b64)" \
+    --role certifier
+
+# Split-key team (orch certifier is a different identity)
+drift trust add --trust-store drift/trust.json \
+    --namespace '<art-namespace>.*'            \
+    --pubkey-b64 <orch-certifier-pubkey-b64>   \
+    --role certifier
+```
+
+Preflight (read-only) before any deploy attempt:
+
+```bash
+# Bare form — catches missing/stale author claims + trust store.
+# Does NOT require the pubkey companion (only bootstrap does).
+drift trust check --manifest drift/manifest.json
+
+# Recommended form for orch and CI:
+# also verifies the expected certifier kid is granted `certifiers`,
+# so a missing cert-role grant fails preflight instead of at smoke.
+drift trust check --manifest drift/manifest.json \
+    --certifier-key-file "$DRIFT_SIGN_KEY_FILE"
+```
+
+Exit code is `0` when ready, `1` when not — gate the deploy on
+the return code.  Errors carry stable `code` strings
+(`trust_store_missing`, `version_mismatch`, `sci_mismatch`,
+`author_not_trusted`, `certifier_not_trusted`,
+`legacy_sig_present`, ...) so CI matchers can act on specific
+failure modes.
+
 ### 4.3 Deploy (build, sign, smoke, publish)
 
 ```bash

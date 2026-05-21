@@ -1154,10 +1154,128 @@ side-by-side sidecars; this is the intended multi-cert pattern.
 
 ### 7.3 Trust granting
 
-Trust is granted per namespace, per role.  The CLI surface is the
-`drift trust` family — `add`, `revoke`, `list`, plus the
-`drift init` / `drift trust <profile>` profile pipeline for the
-common "trust an author's published kid" workflow:
+Trust is granted per namespace, per role.  The `drift trust`
+family has three layers of UX:
+
+  - **Bootstrap / preflight (the team-facing fast path).**  Most
+    projects never hand-edit `drift/trust.json`; the bootstrap
+    command derives it from the manifest + author claims.  See
+    §7.3.1.
+  - **Imperative grant** (`drift trust add`).  Used to add a
+    *certifier* role (bootstrap only grants authors) or to manually
+    grant a kid that is not declared in any author claim.  See
+    §7.3.2.
+  - **Maintenance** (`drift trust list`, `drift trust revoke`).
+
+#### 7.3.1 Manifest-driven setup (`drift trust bootstrap` / `check`)
+
+After `drift-author publish` mints the author claim, **two files**
+are committed to the repo:
+
+```
+drift/<pkg>.author-claim          # signed body (the claim itself)
+drift/<pkg>.author-pubkey.b64     # base64 pubkey of the signer
+```
+
+The pubkey companion is what makes `drift trust bootstrap`
+self-contained — the author claim deliberately does not carry
+pubkey bytes inline (kids resolve through the trust store at
+verify time), so without the companion bootstrap would need an
+out-of-band pubkey input.  The companion is public-key material;
+it is safe to commit and SHOULD be committed alongside the claim.
+
+**Migration note for repos that already minted claims before this
+companion existed.**  Run `drift-author publish --overwrite`
+against the current manifest to re-emit the claim + write the
+companion alongside it.  Alternatively, hand-create the file:
+```text
+echo "<base64-32-byte-pubkey>" > drift/<pkg>.author-pubkey.b64
+```
+The kid derived from this file MUST match a signer of the existing
+claim; bootstrap will refuse otherwise.
+
+Then:
+
+```text
+# One-shot setup (or repair after a manifest version bump):
+drift trust bootstrap --manifest drift/manifest.json
+
+# Read-only preflight before `drift deploy`:
+drift trust check --manifest drift/manifest.json
+```
+
+`bootstrap` grants the author kid the **`authors`** role for every
+namespace declared in the claim body.  It does NOT grant any
+certifier role — see §7.3.2 for that step.  `bootstrap` refuses
+reserved namespaces (`std.*` / `lang.*` / `drift.*`) unless
+`--allow-reserved` is passed (which is only correct for the
+toolchain's own stdlib release; a project trust store must never
+grant a reserved namespace).
+
+`check` is read-only.  It does NOT require the pubkey companion;
+it only needs the trust store + the claim's signer kid.  It
+validates:
+
+  - every library artifact has `drift/<pkg>.author-claim`;
+  - claim package_id / version / required_deps / source_content_id
+    match the manifest;
+  - the claim's signer kid is granted `authors` for at least one
+    of its declared namespaces in `drift/trust.json`;
+  - no pre-v1 `.sig` / `.source-attestation` sidecars are present;
+  - optional: an expected certifier kid is granted `certifiers`
+    (see §7.3.2).
+
+Exit code: `0` if ready, `1` otherwise — CI and orch can gate the
+deploy on the return code without parsing the report.
+
+#### 7.3.2 Certifier role: not bootstrapped automatically
+
+`drift trust bootstrap` grants authors only.  Cert claim emission
+happens at `drift deploy` time; the kid that signs the cert claim
+(the certifier) must be granted `certifiers` separately so that
+consumer-side `compose_verify` can route through the certifier
+shortcut.  Two well-tested patterns:
+
+  - **Same-key team (compiler-team self-distribution).**  The
+    operator's local seed plays both roles.  Add it manually:
+
+    ```text
+    drift trust add --trust-store drift/trust.json   \
+        --namespace acme.crypto.*                    \
+        --pubkey-b64 $(cat drift/<pkg>.author-pubkey.b64) \
+        --role certifier
+    ```
+
+    (Or pass `--role both` on the original add — but the spec
+    correction recommends keeping the roles explicit.)
+
+  - **Split-key team (Foundation author + orch certifier).**  The
+    operator adds the orch certifier's pubkey separately:
+
+    ```text
+    drift trust add --trust-store drift/trust.json   \
+        --namespace acme.crypto.*                    \
+        --pubkey-b64 <orch-certifier-pubkey-b64>     \
+        --role certifier
+    ```
+
+To make this gap impossible to ship past silently, pass the
+expected certifier kid to `check`:
+
+```text
+drift trust check --manifest drift/manifest.json   \
+    --certifier-key-file "$DRIFT_SIGN_KEY_FILE"
+# or:
+drift trust check --manifest drift/manifest.json   \
+    --certifier-kid ed25519:<expected-kid>
+```
+
+Either form makes `check` exit non-zero with
+`certifier_not_trusted` when the deploy signer is missing from
+the namespace's `certifiers` list, **before** `drift deploy`
+gets a chance to fail at smoke time.
+
+#### 7.3.3 Imperative `drift trust add`
 
 ```text
 drift trust add                            \

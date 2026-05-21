@@ -40,7 +40,10 @@ from lang.driftc.packages.author_claim_v1 import (
 	load_author_claim_json,
 	make_author_claim,
 )
-from lang.driftc.packages.sidecar_naming import author_claim_filename
+from lang.driftc.packages.sidecar_naming import (
+	author_claim_filename,
+	author_pubkey_filename,
+)
 
 
 @dataclass(frozen=True)
@@ -78,7 +81,16 @@ def _claim_path(sidecar_dir: Path, package_id: str) -> Path:
 
 def sign_and_write_author_claim(opts: SignAuthorClaimOptions) -> Path:
 	"""Build a single-signature author claim and write it to the
-	canonical sidecar path.  Returns the written path.
+	canonical sidecar path.  Returns the written claim path.
+
+	Also writes a sibling `<pkg>.author-pubkey.b64` companion file
+	carrying the base64-encoded 32-byte Ed25519 pubkey of the signer.
+	The author claim itself does NOT carry pubkey bytes inline (kids
+	resolve through the trust store at verify time), so this
+	companion is what makes `drift trust bootstrap` able to derive
+	the trust store from on-disk sidecars without an extra manual
+	step.  Pubkeys are public; the file is safe to commit alongside
+	the claim.
 
 	Raises FileExistsError when a sidecar already exists and
 	`overwrite=False`.  Validates the body shape before signing so
@@ -99,6 +111,19 @@ def sign_and_write_author_claim(opts: SignAuthorClaimOptions) -> Path:
 		)
 	claim = make_author_claim(opts.body, opts.seed32)
 	out_path.write_text(dump_author_claim_json(claim), encoding="utf-8")
+
+	# Derive + write the pubkey companion next to the claim.  The kid
+	# is computable from the pubkey via `compute_ed25519_kid`, so we
+	# don't need to write it separately.  Use a fresh sign with empty
+	# message just to recover pub_raw (the canonical pubkey-from-seed
+	# helper in `lang.drift.crypto`).
+	import base64
+	from lang.drift.crypto import ed25519_sign_from_seed
+	_sig, pub_raw = ed25519_sign_from_seed(priv_seed32=opts.seed32, message=b"")
+	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
+	pubkey_path = opts.sidecar_dir / author_pubkey_filename(opts.body.package_id)
+	pubkey_path.write_text(pub_b64 + "\n", encoding="utf-8")
+
 	return out_path
 
 

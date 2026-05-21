@@ -164,16 +164,24 @@ def test_drift_layer_does_not_import_driftc_internals() -> None:
 	# Exception list: the v1 trust contract intentionally couples
 	# the CLI to a small, stable set of v1 sidecar parsers / naming
 	# helpers in `lang.driftc.packages`.  These modules carry the
-	# on-disk format of v1 author / cert claims and are explicit
-	# integration points (NOT compiler internals -- they sit at
-	# the format layer, used by `provider_v1` on the consumer side
-	# and by `drift-author publish` on the producer side).  The
-	# CLI reads them so `drift trust import <author-claim>` can
-	# parse the same file shape the consumer verifies.
+	# on-disk format of v1 author / cert claims (and the neutral
+	# manifest + SCI helper extracted in the deploy/author boundary
+	# work) -- explicit integration points, NOT compiler internals,
+	# used by `provider_v1` on the consumer side, by
+	# `drift-author publish` on the producer side, and by
+	# `drift trust bootstrap` / `drift trust check` on the
+	# project-preflight side.
 	v1_sidecar_format_allow = frozenset({
 		"lang.driftc.packages.author_claim_v1",
 		"lang.driftc.packages.cert_claim_v1",
 		"lang.driftc.packages.sidecar_naming",
+		# Neutral manifest parser + Artifact→SCI helper.  Lives in
+		# `lang.driftc.packages` so both `tools/drift_deploy` (orch)
+		# and `tools/drift_author` (author tool) AND `lang/drift`
+		# (CLI / preflight) can share the same definition without
+		# crossing the author/deploy boundary.  See
+		# `test_author_key_boundary.py` for the symmetric guard.
+		"lang.driftc.packages.manifest",
 	})
 	violations: list[ImportRef] = []
 	for py_path in _collect_py_files(Path("lang/drift")):
