@@ -199,6 +199,8 @@ def publish_v1_pkg(
 	trust_store_for_build: Path | None = None,
 	core_trust_for_build: Path | None = None,
 	required_deps: tuple = (),
+	package_deps: tuple[tuple[str, str], ...] = (),
+	dep_pins: tuple[tuple[str, str], ...] = (),
 	stdlib_root_override: Path | None = None,
 	priv_seed: bytes | None = None,
 ) -> dict:
@@ -299,6 +301,20 @@ def publish_v1_pkg(
 	]
 	for r in (package_root_overrides or []):
 		cmd.extend(["--package-root", str(r)])
+	# `--package-dep NAME=RANGE` stamps the dep into the published
+	# package's manifest `required_deps` field (what the v1 closure
+	# walker reads from `LoadedPackage.required_deps`).  `RANGE` is
+	# the owner-declared range shape — `"M"` (any M.x.x) or `"M.N"`
+	# (any M.N.x), per the v2 dep grammar; the manifest-emit boundary
+	# rejects exact pins and `^`/`~` shapes here.
+	for dep_name, dep_range in package_deps:
+		cmd.extend(["--package-dep", f"{dep_name}={dep_range}"])
+	# `--dep NAME@VERSION` pins the resolver to an exact (`M.N.P`)
+	# version for each consumed dep.  driftc requires this for every
+	# consumed dep when `--package-root` is set.  Range form is the
+	# manifest stamp above; exact form is the build-time pin here.
+	for dep_name, dep_exact in dep_pins:
+		cmd.extend(["--dep", f"{dep_name}@{dep_exact}"])
 	if trust_store_for_build is not None:
 		cmd.extend(["--trust-store", str(trust_store_for_build)])
 	if core_trust_for_build is not None:

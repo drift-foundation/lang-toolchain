@@ -8354,9 +8354,37 @@ def main(argv: list[str] | None = None) -> int:
 		from lang.driftc.packages.provider_v1 import load_package_v1 as _load_pkg_v1_no_policy
 
 		# (package_id, version) -> (LoadedPackage, bytes, ResolvedDep|None)
+		# Used by the closure walker to resolve transitive deps by
+		# identity.  First-occurrence wins on duplicate keys because
+		# the walker only needs ONE entry per (pkg, version) to stamp
+		# a resolved dep -- any duplicate path under another
+		# `--package-root` is REQUIRED to carry the same package
+		# identity (same artifact_sha256 + source_content_id), and
+		# `_prepass_conflicts` below catches duplicates that disagree.
 		_prepass: dict[tuple[str, str], tuple[object, bytes, "_ResolvedDep | None"]] = {}
-		# (package_id, version) -> Path  (so we can report per-path errors)
-		_prepass_path: dict[tuple[str, str], Path] = {}
+		# Path -> (LoadedPackage, bytes, ResolvedDep|None)
+		# Used by the verify pass below so EVERY candidate path -- even
+		# duplicates of the same (pkg, version) sitting under two
+		# `--package-root` directories -- gets its own resolved_closure
+		# at trust-gate time.  Earlier this side keyed by (pkg, version)
+		# too, which silently dropped duplicate paths; the verify pass
+		# for the dropped path then ran without resolved_closure and
+		# tripped O3 fail-closed (LANGUAGE_BUG: drift-web preflight
+		# regression flagged 2026-05-21).
+		_prepass_by_path: dict[Path, tuple[object, bytes, "_ResolvedDep | None"]] = {}
+		# (package_id, version) -> set of distinct (artifact_sha256,
+		# source_content_id) identities observed for that key.  A set
+		# with >1 element means two files under the same package
+		# identity disagree on their content -- byte divergence under
+		# the same (pkg, version) label.  Allowing the walker to
+		# silently pick one would attest the wrong identity for the
+		# duplicate that lost the first-write race; we fail closed
+		# after the loop so the error message names all conflicting
+		# paths at once.
+		_prepass_conflicts: dict[tuple[str, str], set[tuple[str, str]]] = {}
+		# (package_id, version) -> list of paths seen, for the conflict
+		# diagnostic.  Populated alongside `_prepass_by_path`.
+		_prepass_paths_for_key: dict[tuple[str, str], list[Path]] = {}
 
 		for pkg_path in _candidate_files:
 			# Best-effort pre-pass: any load error here is deliberately
@@ -8411,8 +8439,74 @@ def main(argv: list[str] | None = None) -> int:
 				)
 			else:
 				_pre_rd = None
-			_prepass[(_pre_pid, _pre_ver)] = (_pre_pkg, _pre_data, _pre_rd)
-			_prepass_path[(_pre_pid, _pre_ver)] = pkg_path
+			# `_prepass` (by id+version) is first-write-wins so the
+			# walker sees a stable identity-keyed view; `_prepass_by_path`
+			# always records every candidate file so the verify pass
+			# below can reach its closure for duplicates too.  First-
+			# write-wins is only safe when duplicates are byte-identical
+			# under the same (pkg, version) label; `_prepass_conflicts`
+			# captures every distinct identity per key so the
+			# post-loop check below can fail closed on genuine byte
+			# divergence.
+			_prepass.setdefault((_pre_pid, _pre_ver), (_pre_pkg, _pre_data, _pre_rd))
+			_prepass_by_path[pkg_path] = (_pre_pkg, _pre_data, _pre_rd)
+			_prepass_paths_for_key.setdefault((_pre_pid, _pre_ver), []).append(pkg_path)
+			if _pre_rd is not None:
+				_prepass_conflicts.setdefault((_pre_pid, _pre_ver), set()).add(
+					(_pre_rd.artifact_sha256, _pre_rd.source_content_id)
+				)
+
+		# Fail closed on conflicting duplicates: two files under the
+		# same (pkg, version) label but with different artifact bytes
+		# OR different source_content_id.  Without this guard the
+		# `_prepass.setdefault` above silently keeps the first-seen
+		# identity and the walker would attest one identity for
+		# duplicates whose bytes don't actually match.  Mirrored
+		# duplicates (the common case: same `.zdmp` copied across two
+		# `--package-root` dirs) hit the same (sha, sci) pair so the
+		# set has size 1 and this guard is a no-op.
+		for _conflict_key, _idents in _prepass_conflicts.items():
+			if len(_idents) > 1:
+				_paths_for_key = _prepass_paths_for_key.get(_conflict_key, [])
+				_paths_list = "\n  - ".join(str(p) for p in _paths_for_key)
+				_idents_list = "\n  - ".join(
+					f"artifact_sha256={sha}, source_content_id={sci}"
+					for (sha, sci) in sorted(_idents)
+				)
+				_pid, _ver = _conflict_key
+				_conflict_msg = (
+					f"package '{_pid}'@'{_ver}' appears in multiple "
+					f"`--package-root` directories with CONFLICTING "
+					f"identities (different artifact_sha256 or "
+					f"source_content_id under the same package id + "
+					f"version label).  v1 verify refuses to attest one "
+					f"identity for files whose bytes don't match.\n"
+					f"  paths:\n  - {_paths_list}\n"
+					f"  observed identities:\n  - {_idents_list}\n"
+					f"Reconcile the duplicates to byte-identical copies, "
+					f"or remove one of the `--package-root` paths."
+				)
+				if args.json:
+					print(
+						json.dumps(
+							{
+								"exit_code": 1,
+								"diagnostics": [
+									{
+										"phase": "package",
+										"message": _conflict_msg,
+										"severity": "error",
+										"file": "<package>",
+										"line": None,
+										"column": None,
+									}
+								],
+							}
+						)
+					)
+				else:
+					print(f"{_package_label()}:?:?: error: {_conflict_msg}", file=sys.stderr)
+				return 1
 
 		def _build_closure_for(start_pkg: object) -> list[_ResolvedDep]:
 			"""Wrap `lang.driftc.packages.closure_walk.build_resolved_closure`
@@ -8453,15 +8547,17 @@ def main(argv: list[str] | None = None) -> int:
 			# (no required_deps) accept the None and load normally.
 			# Substituting an explicit `[]` here would defeat the
 			# fail-closed guard entirely.
-			_pre_key: tuple[str, str] | None = None
-			for _k, _p in _prepass_path.items():
-				if _p == pkg_path:
-					_pre_key = _k
-					break
+			#
+			# Path-keyed lookup is load-bearing: when two
+			# `--package-root` dirs both contain the same (pkg,
+			# version), each candidate file still has its own entry
+			# here, so both verify with their own resolved_closure
+			# instead of one of them silently losing the kwarg.
+			_pre_entry = _prepass_by_path.get(pkg_path)
 			try:
 				_v1_kwargs: dict = {}
-				if _pre_key is not None:
-					_pre_pkg_obj, _pre_data_for, _ = _prepass[_pre_key]
+				if _pre_entry is not None:
+					_pre_pkg_obj, _pre_data_for, _ = _pre_entry
 					_v1_kwargs["pkg_bytes"] = _pre_data_for
 					# _build_closure_for raises ValueError when the
 					# closure can't be fully resolved (missing pin,
