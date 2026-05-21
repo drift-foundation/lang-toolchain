@@ -82,7 +82,10 @@ from tools.drift_deploy.cert_emit import (
 	SignCertClaimOptions,
 	sign_and_write_cert_claim,
 )
-from tools.drift_deploy.drift_deploy import _emit_cert_claim_for_artifact
+from tools.drift_deploy.drift_deploy import (
+	CertSuiteOptions,
+	_emit_cert_claim_for_artifact,
+)
 from tools.drift_deploy.provenance import CompilerInfo
 from tools.drift_deploy.resolver import ResolvedDep as LockResolvedDep
 
@@ -261,28 +264,35 @@ def _emit_app_cert_claim(
 	# emitted cert claim is reproducible across runs.
 	import hashlib as _hl
 	_suite_evidence = "sha256:" + _hl.sha256(b"test-suite-evidence-marker").hexdigest()
-	_prev_suite_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
-	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = _suite_evidence
-	try:
-		cert_claim_path = _emit_cert_claim_for_artifact(
-			artifact_path,
-			cert_key=cert_key_path,
-			package_id=app_name,
-			package_version=app_version,
-			target=app_target,
-			compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
-			source_content_id=app_sci,
-			artifact_sha256=app_artifact_sha,
-			resolved_deps=resolved_deps,
-			direct_dep_ids=direct_dep_ids,
-			staged_pkg_root=staged_pkg_root,
-			provenance_path=provenance_path,
-		)
-	finally:
-		if _prev_suite_evidence is None:
-			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
-		else:
-			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = _prev_suite_evidence
+	# Honor env-driven cert-suite identity overrides (`monkeypatch.setenv`
+	# in callers) — some tests inject a custom suite id to exercise
+	# `--require-cert-suite` policy at verify time.  The id/version/result
+	# fields here mirror the env-fallback shape of
+	# `_resolve_cert_suite_options`; this test helper is intentionally
+	# the env path so the helper itself stays explicit about what it
+	# signs.
+	cert_suite_options = CertSuiteOptions(
+		id=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID", "drift-deploy/v1"),
+		version=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_VERSION", "1.0"),
+		result=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT", "pass"),
+		result_evidence_sha256=_suite_evidence,
+		no_evidence_sentinel=False,
+	)
+	cert_claim_path = _emit_cert_claim_for_artifact(
+		artifact_path,
+		cert_key=cert_key_path,
+		package_id=app_name,
+		package_version=app_version,
+		target=app_target,
+		compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
+		source_content_id=app_sci,
+		artifact_sha256=app_artifact_sha,
+		resolved_deps=resolved_deps,
+		direct_dep_ids=direct_dep_ids,
+		staged_pkg_root=staged_pkg_root,
+		provenance_path=provenance_path,
+		cert_suite_options=cert_suite_options,
+	)
 	return cert_claim_path, _kid_for(deploy_cert_seed)
 
 
@@ -1003,105 +1013,70 @@ def test_missing_provenance_bundle_fails_closed(tmp_path: Path) -> None:
 		)
 
 
-def test_missing_suite_evidence_env_fails_closed(tmp_path: Path) -> None:
-	"""When `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` is unset, cert
-	claim emission MUST fail rather than stamp a synthetic constant
-	into a signed claim.  v1 does not accept "default evidence" in
-	a body the certifier signs.
+# ── Cert-suite options resolver ───────────────────────────────────
+#
+# These tests target `_resolve_cert_suite_options(args)` directly --
+# the choke point where CLI flags > env vars > hard-error resolution
+# happens.  They replace earlier tests that drove the env-var
+# fallback through `_emit_cert_claim_for_artifact`; the contract is
+# unchanged (missing evidence -> DeployError; empty-sentinel without
+# opt-in -> DeployError; empty-sentinel with opt-in -> accepted)
+# but the resolver function is the right place to pin it now that
+# the resolution happens once up front in `_run_impl` rather than
+# inside the per-artifact emitter.
+
+
+def _fake_deploy_args(**overrides) -> Any:
+	"""Build a synthetic `argparse.Namespace`-ish object for the
+	cert-suite resolver.  Defaults to all-None CLI flags; tests
+	override individual fields to exercise specific paths.
 	"""
-	from tools.drift_deploy.drift_deploy import DeployError
-	resolved_deps = {
-		"net.tls": LockResolvedDep(
-			version="0.5.0",
-			sha256="sha256:" + ("d" * 64),
-			dep_type="direct",
-			package_id="net.tls",
-			author_key="ed25519:" + ("c" * 22),
-			source_content_id="sha256:" + ("e" * 64),
-			source_attestation_key="ed25519:" + ("a" * 22),
-		),
-	}
-	# Force the env var unset so the suite-evidence gate fires.
+	import types
+	defaults = dict(
+		cert_suite_id=None,
+		cert_suite_version=None,
+		cert_suite_result=None,
+		cert_suite_evidence_sha256=None,
+		cert_suite_no_evidence=False,
+	)
+	defaults.update(overrides)
+	return types.SimpleNamespace(**defaults)
+
+
+def test_resolver_missing_suite_evidence_fails_closed() -> None:
+	"""Neither CLI flag nor env var: hard DeployError.  v1 does not
+	accept a synthetic default in a signed body.
+	"""
+	from tools.drift_deploy.drift_deploy import (
+		DeployError, _resolve_cert_suite_options,
+	)
 	prev = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
-	# Inline call (do NOT go through `_emit_app_cert_claim`; that
-	# helper sets the env explicitly to keep the other tests green).
-	deploy_cert_seed = _seed(0x33)
-	staged_pkg_root = tmp_path / "staged_pkg_root"
-	staged_pkg_root.mkdir(parents=True, exist_ok=True)
-	artifact_path = tmp_path / "staged_install" / "app.dmp"
-	artifact_path.parent.mkdir(parents=True, exist_ok=True)
-	artifact_path.write_bytes(b"placeholder")
-	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
-	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
 	try:
-		with pytest.raises(DeployError, match="DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"):
-			_emit_cert_claim_for_artifact(
-				artifact_path,
-				cert_key=cert_key_path,
-				package_id="app",
-				package_version="1.0.0",
-				target="linux-x86_64",
-				compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
-				source_content_id="sha256:" + ("a" * 64),
-				artifact_sha256="sha256:" + ("b" * 64),
-				resolved_deps=resolved_deps,
-				direct_dep_ids={"net.tls"},
-				staged_pkg_root=staged_pkg_root,
-				provenance_path=artifact_path.parent / "app.provenance.zst",
-			)
+		with pytest.raises(DeployError, match=r"cert.*evidence|--cert-suite-evidence-sha256"):
+			_resolve_cert_suite_options(_fake_deploy_args())
 	finally:
 		if prev is not None:
 			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev
 
 
-def test_suite_empty_evidence_requires_explicit_opt_in(tmp_path: Path) -> None:
-	"""Setting `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` to the empty-
-	bytes sentinel WITHOUT the explicit
-	`DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` opt-in is a
-	misconfiguration -- the deploy must refuse rather than stamp
-	the zero hash into a signed cert claim silently.
+def test_resolver_env_empty_sentinel_requires_explicit_opt_in() -> None:
+	"""Env empty-sha WITHOUT `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`
+	is a misconfiguration -- refuse rather than silently sign a
+	zero-hash evidence digest.  (CLI users pass
+	`--cert-suite-no-evidence` instead; the legacy env-pair shape
+	is only honored when no CLI flag is present.)
 	"""
 	import hashlib as _hl
-	from tools.drift_deploy.drift_deploy import DeployError
-	resolved_deps = {
-		"net.tls": LockResolvedDep(
-			version="0.5.0",
-			sha256="sha256:" + ("d" * 64),
-			dep_type="direct",
-			package_id="net.tls",
-			author_key="ed25519:" + ("c" * 22),
-			source_content_id="sha256:" + ("e" * 64),
-			source_attestation_key="ed25519:" + ("a" * 22),
-		),
-	}
+	from tools.drift_deploy.drift_deploy import (
+		DeployError, _resolve_cert_suite_options,
+	)
 	empty_sha = "sha256:" + _hl.sha256(b"").hexdigest()
 	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
 	prev_opt_in = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
 	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = empty_sha
-	deploy_cert_seed = _seed(0x44)
-	staged_pkg_root = tmp_path / "staged_pkg_root"
-	staged_pkg_root.mkdir(parents=True, exist_ok=True)
-	artifact_path = tmp_path / "staged_install" / "app.dmp"
-	artifact_path.parent.mkdir(parents=True, exist_ok=True)
-	artifact_path.write_bytes(b"placeholder")
-	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
-	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
 	try:
 		with pytest.raises(DeployError, match="DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"):
-			_emit_cert_claim_for_artifact(
-				artifact_path,
-				cert_key=cert_key_path,
-				package_id="app",
-				package_version="1.0.0",
-				target="linux-x86_64",
-				compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
-				source_content_id="sha256:" + ("a" * 64),
-				artifact_sha256="sha256:" + ("b" * 64),
-				resolved_deps=resolved_deps,
-				direct_dep_ids={"net.tls"},
-				staged_pkg_root=staged_pkg_root,
-				provenance_path=artifact_path.parent / "app.provenance.zst",
-			)
+			_resolve_cert_suite_options(_fake_deploy_args())
 	finally:
 		if prev_evidence is None:
 			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
@@ -1111,55 +1086,23 @@ def test_suite_empty_evidence_requires_explicit_opt_in(tmp_path: Path) -> None:
 			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_opt_in
 
 
-def test_suite_empty_evidence_accepted_with_explicit_opt_in(tmp_path: Path) -> None:
-	"""With BOTH `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256=<empty-sha>`
-	AND `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`, the deploy emits
-	the cert claim and logs a visible warning.  The resulting
-	cert claim carries the empty-bytes hash in
-	`cert_suite.result_evidence_sha256`.
+def test_resolver_env_empty_sentinel_with_opt_in_accepted() -> None:
+	"""Env empty-sha + `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` -> the
+	resolved options carry the empty-bytes hash and the
+	`no_evidence_sentinel` flag (the emitter then prints the visible
+	stderr warning).
 	"""
 	import hashlib as _hl
-	resolved_deps = {
-		"net.tls": LockResolvedDep(
-			version="0.5.0",
-			sha256="sha256:" + ("d" * 64),
-			dep_type="direct",
-			package_id="net.tls",
-			author_key="ed25519:" + ("c" * 22),
-			source_content_id="sha256:" + ("e" * 64),
-			source_attestation_key="ed25519:" + ("a" * 22),
-		),
-	}
+	from tools.drift_deploy.drift_deploy import _resolve_cert_suite_options
 	empty_sha = "sha256:" + _hl.sha256(b"").hexdigest()
 	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
 	prev_opt_in = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE")
 	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = empty_sha
 	os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = "1"
-	deploy_cert_seed = _seed(0x55)
-	staged_pkg_root = tmp_path / "staged_pkg_root"
-	staged_pkg_root.mkdir(parents=True, exist_ok=True)
-	artifact_path = tmp_path / "staged_install" / "app.dmp"
-	artifact_path.parent.mkdir(parents=True, exist_ok=True)
-	artifact_path.write_bytes(b"placeholder")
-	(artifact_path.parent / "app.provenance.zst").write_bytes(b"bundle")
-	cert_key_path = _seed_file(tmp_path, "deploy.cert.seed", deploy_cert_seed)
 	try:
-		cert_claim_path = _emit_cert_claim_for_artifact(
-			artifact_path,
-			cert_key=cert_key_path,
-			package_id="app",
-			package_version="1.0.0",
-			target="linux-x86_64",
-			compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
-			source_content_id="sha256:" + ("a" * 64),
-			artifact_sha256="sha256:" + ("b" * 64),
-			resolved_deps=resolved_deps,
-			direct_dep_ids={"net.tls"},
-			staged_pkg_root=staged_pkg_root,
-			provenance_path=artifact_path.parent / "app.provenance.zst",
-		)
-		cc = load_cert_claim_json(cert_claim_path.read_text(encoding="utf-8"))
-		assert cc.body.cert_suite.result_evidence_sha256 == empty_sha
+		opts = _resolve_cert_suite_options(_fake_deploy_args())
+		assert opts.result_evidence_sha256 == empty_sha
+		assert opts.no_evidence_sentinel is True
 	finally:
 		if prev_evidence is None:
 			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
@@ -1169,3 +1112,197 @@ def test_suite_empty_evidence_accepted_with_explicit_opt_in(tmp_path: Path) -> N
 			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
 		else:
 			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_opt_in
+
+
+def test_resolver_cli_evidence_sha256_wins_over_env() -> None:
+	"""When both `--cert-suite-evidence-sha256` and the env var are
+	set, the CLI flag wins.  Signed certifier metadata belongs in
+	the deploy command, not in ambient shell state.
+	"""
+	import hashlib as _hl
+	from tools.drift_deploy.drift_deploy import _resolve_cert_suite_options
+	cli_sha = "sha256:" + _hl.sha256(b"cli-evidence").hexdigest()
+	env_sha = "sha256:" + _hl.sha256(b"env-evidence").hexdigest()
+	prev_env = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = env_sha
+	try:
+		opts = _resolve_cert_suite_options(_fake_deploy_args(
+			cert_suite_evidence_sha256=cli_sha,
+		))
+		assert opts.result_evidence_sha256 == cli_sha, (
+			f"CLI flag must win over env; got {opts.result_evidence_sha256!r}"
+		)
+		assert opts.no_evidence_sentinel is False
+	finally:
+		if prev_env is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_env
+
+
+def test_resolver_cli_no_evidence_is_self_contained_opt_in() -> None:
+	"""`--cert-suite-no-evidence` IS the explicit opt-in.  Unlike the
+	legacy env-pair shape, the CLI form does NOT require a separate
+	`DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` to fire.
+	"""
+	import hashlib as _hl
+	from tools.drift_deploy.drift_deploy import _resolve_cert_suite_options
+	empty_sha = "sha256:" + _hl.sha256(b"").hexdigest()
+	# Ensure NO env var is set so we can verify the CLI flag stands alone.
+	prev_evidence = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+	prev_opt_in = os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE", None)
+	try:
+		opts = _resolve_cert_suite_options(_fake_deploy_args(
+			cert_suite_no_evidence=True,
+		))
+		assert opts.result_evidence_sha256 == empty_sha
+		assert opts.no_evidence_sentinel is True
+	finally:
+		if prev_evidence is not None:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_evidence
+		if prev_opt_in is not None:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE"] = prev_opt_in
+
+
+def test_resolver_cli_id_version_result_override_env() -> None:
+	"""CLI metadata flags (--cert-suite-id, --cert-suite-version,
+	--cert-suite-result) override the matching env vars and the
+	hardcoded defaults.
+	"""
+	import hashlib as _hl
+	from tools.drift_deploy.drift_deploy import _resolve_cert_suite_options
+	cli_sha = "sha256:" + _hl.sha256(b"x").hexdigest()
+	prev = {
+		k: os.environ.get(k)
+		for k in (
+			"DRIFT_DEPLOY_CERT_SUITE_ID",
+			"DRIFT_DEPLOY_CERT_SUITE_VERSION",
+			"DRIFT_DEPLOY_CERT_SUITE_RESULT",
+		)
+	}
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_ID"] = "env-id"
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_VERSION"] = "9.9"
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_RESULT"] = "fail"
+	try:
+		opts = _resolve_cert_suite_options(_fake_deploy_args(
+			cert_suite_id="cli-id",
+			cert_suite_version="2.0",
+			cert_suite_result="pass",
+			cert_suite_evidence_sha256=cli_sha,
+		))
+		assert opts.id == "cli-id"
+		assert opts.version == "2.0"
+		assert opts.result == "pass"
+	finally:
+		for k, v in prev.items():
+			if v is None:
+				os.environ.pop(k, None)
+			else:
+				os.environ[k] = v
+
+
+def test_resolver_argparse_enforces_mutual_exclusivity() -> None:
+	"""Argparse rejects passing both --cert-suite-evidence-sha256 AND
+	--cert-suite-no-evidence on the same command line (the resolver
+	itself never sees a colliding pair).
+	"""
+	from tools.drift_deploy.drift_deploy import build_arg_parser
+	parser = build_arg_parser()
+	with pytest.raises(SystemExit):
+		parser.parse_args([
+			"--dest", "/tmp/x",
+			"--cert-suite-evidence-sha256", "sha256:" + ("a" * 64),
+			"--cert-suite-no-evidence",
+		])
+
+
+# ── Value validation (fail fast before any artifact build) ───────
+
+
+def test_resolver_argparse_rejects_invalid_result_choice() -> None:
+	"""Argparse enforces choices=('pass','fail') on --cert-suite-result.
+	A typo / arbitrary string is rejected at parse time."""
+	from tools.drift_deploy.drift_deploy import build_arg_parser
+	parser = build_arg_parser()
+	with pytest.raises(SystemExit):
+		parser.parse_args([
+			"--dest", "/tmp/x",
+			"--cert-suite-result", "passsss",
+			"--cert-suite-evidence-sha256", "sha256:" + ("a" * 64),
+		])
+
+
+def test_resolver_rejects_invalid_env_result_value() -> None:
+	"""Argparse only guards CLI; the env-fallback path can still inject
+	an arbitrary string into `DRIFT_DEPLOY_CERT_SUITE_RESULT`.  The
+	resolver MUST reject those before signing.
+	"""
+	from tools.drift_deploy.drift_deploy import (
+		DeployError, _resolve_cert_suite_options,
+	)
+	import hashlib as _hl
+	prev_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	prev_result = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT")
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = (
+		"sha256:" + _hl.sha256(b"e").hexdigest()
+	)
+	os.environ["DRIFT_DEPLOY_CERT_SUITE_RESULT"] = "PASS"  # wrong case
+	try:
+		with pytest.raises(DeployError, match=r"cert suite result.*not valid|`pass`.*`fail`"):
+			_resolve_cert_suite_options(_fake_deploy_args())
+	finally:
+		if prev_evidence is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev_evidence
+		if prev_result is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_RESULT", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_RESULT"] = prev_result
+
+
+def test_resolver_rejects_malformed_cli_evidence_sha256() -> None:
+	"""Malformed `--cert-suite-evidence-sha256` (wrong shape, missing
+	prefix, non-hex, wrong length) must be caught at deploy startup,
+	not buried inside cert claim body assembly.  The diagnostic must
+	name the CLI flag so the operator sees where the bad value came
+	from.
+	"""
+	from tools.drift_deploy.drift_deploy import (
+		DeployError, _resolve_cert_suite_options,
+	)
+	for bad in (
+		"not-a-sha",                       # no prefix
+		"sha256:abc",                      # too short
+		"md5:" + ("a" * 64),               # wrong algo
+		"sha256:" + ("g" * 64),            # non-hex chars
+		"sha256:" + ("A" * 64),            # uppercase rejected
+	):
+		with pytest.raises(DeployError, match=r"--cert-suite-evidence-sha256.*malformed"):
+			_resolve_cert_suite_options(_fake_deploy_args(
+				cert_suite_evidence_sha256=bad,
+			))
+
+
+def test_resolver_rejects_malformed_env_evidence_sha256() -> None:
+	"""Same fail-fast contract for the env-fallback path: a
+	malformed `$DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` is rejected
+	before signing, and the diagnostic names the env var so the
+	operator sees the source.
+	"""
+	from tools.drift_deploy.drift_deploy import (
+		DeployError, _resolve_cert_suite_options,
+	)
+	prev = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	try:
+		os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = "not-a-sha"
+		with pytest.raises(
+			DeployError,
+			match=r"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256.*malformed",
+		):
+			_resolve_cert_suite_options(_fake_deploy_args())
+	finally:
+		if prev is None:
+			os.environ.pop("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256", None)
+		else:
+			os.environ["DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256"] = prev

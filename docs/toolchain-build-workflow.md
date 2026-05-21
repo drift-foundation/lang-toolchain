@@ -389,7 +389,7 @@ Published layout for a package (trust-v1):
 ├── assets/
 ├── net-tls.author-profile
 ├── net-tls.author-claim                 # author claim (drift-author publish)
-├── net-tls.cert-claim.<kid>.json        # cert claim (drift-deploy cert emit)
+├── net-tls.cert-claim.<kid>.json        # cert claim (emitted by `drift deploy`)
 └── net-tls.zdmp
 ```
 

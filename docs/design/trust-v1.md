@@ -270,18 +270,34 @@ that breaks consumer verification on the slightest input drift.
 **Carlos (certifier)** runs the release pipeline on a CI host.
 He receives Alice's `.dmp` + author-claim, builds the artifact,
 runs the `drift-deploy/release-2026` cert suite against it, and
-emits a cert claim:
+emits a cert claim through the normal `drift deploy` surface:
 
 ```text
-drift-deploy cert emit                       \
-    --pkg build/acme.crypto.dmp              \
-    --author-claim build/acme.crypto.author-claim \
-    --target drift-dev                       \
-    --cert-suite drift-deploy/release-2026   \
-    --key-file /var/lib/drift-deploy/keys/release-2026.seed
+export DRIFT_SIGN_KEY_FILE=/var/lib/drift-deploy/keys/release-2026.seed
+drift deploy                                                       \
+    --dest /var/lib/drift-pkg/                                     \
+    --cert-suite-id drift-deploy/release-2026                      \
+    --cert-suite-evidence-sha256 sha256:<digest-of-suite-evidence>
 ```
 
-The pipeline produces `acme.crypto.cert-claim.<carlos-kid>.json`.
+`drift deploy` reads `drift/manifest.json` + the
+`drift/acme.crypto.author-claim` Alice published, builds
+the artifact, signs `acme.crypto.cert-claim.<carlos-kid>.json`
+with Carlos's certifier key, and binds:
+- the artifact bytes (`artifact_sha256`),
+- the source identity (`source_content_id`, equal to the
+  author-claim and on-disk manifest SCI),
+- the full resolved transitive `dep_graph`,
+- the cert-suite identity and evidence digest above.
+
+For cert suites that legitimately produce no artifact, swap the
+last flag for `--cert-suite-no-evidence` (the explicit opt-in
+fires a visible stderr warning so the choice is auditable in
+the build log).  Argparse rejects passing both evidence flags
+together.  The legacy `DRIFT_DEPLOY_CERT_SUITE_*` env vars still
+work as a compatibility fallback for orch hosts that drive
+deploy from env; CLI flags win when both are set.
+
 Carlos's CI host only ever holds Carlos's *certifier* private key;
 it never sees Alice's author seed.
 
@@ -778,28 +794,53 @@ file.  Verification on the consumer side never reads the bundle.
 
 The provenance-bundle digest is enforced unconditionally and
 fail-closed (the run produced a provenance bundle; we bind its
-bytes).  The suite-evidence digest is provided by the operator
-via `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`.  v1 deliberately
-refuses to default this field to a synthetic constant — a signed
-cert claim that records "the suite ran with evidence" must point
-at a real evidence digest the operator supplied.
+bytes).  The suite-evidence digest is supplied to `drift deploy`
+as first-class CLI flags — these values are signed certifier
+metadata and belong in the release command/config, not in
+ambient shell state:
+
+```text
+drift deploy --dest <dest>                                        \
+    --cert-suite-id <suite-id>                                    \
+    --cert-suite-evidence-sha256 sha256:<real-digest>             \
+    ...
+```
+
+`--cert-suite-id`, `--cert-suite-version`, and
+`--cert-suite-result` are optional (defaulting to `drift-deploy/v1`
+/ `1.0` / `pass`); the evidence digest is required.  v1
+deliberately refuses to default the evidence field to a synthetic
+constant — a signed cert claim that records "the suite ran with
+evidence" must point at a real evidence digest the operator
+supplied.
 
 For suites that legitimately produce no artifact (rare; some
 manual-review or attestation-only suites), the operator opts in
-explicitly:
+explicitly with a single flag:
 
 ```text
-DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256=sha256:<empty-bytes-hash>
-DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1
+drift deploy --dest <dest>                                        \
+    --cert-suite-id <suite-id>                                    \
+    --cert-suite-no-evidence                                      \
+    ...
 ```
 
-Both env vars must be set together.  When the opt-in is active,
-the deploy logs a clearly-labeled warning ("cert suite ... is
-being signed with the empty-evidence sentinel") to stderr so the
-choice is visible in the build log.  Setting the env to the
-empty hash *without* the opt-in is treated as a misconfiguration
-and the deploy refuses.  The policy line: "suite chose no suite
-evidence," never "default no evidence."
+`--cert-suite-evidence-sha256` and `--cert-suite-no-evidence` are
+mutually exclusive; argparse rejects passing both.  When the
+sentinel opt-in is active, the deploy logs a clearly-labeled
+warning ("cert suite ... is being signed with the empty-evidence
+sentinel") to stderr so the choice is visible in the build log.
+The policy line: "suite chose no suite evidence," never "default
+no evidence."
+
+The CLI flags take precedence over the legacy
+`DRIFT_DEPLOY_CERT_SUITE_*` env vars (which remain as a
+compatibility fallback for orch hosts that still drive deploy from
+env: `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` for the digest,
+plus `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` paired with the
+empty-bytes hash for the legacy sentinel shape).  New release
+runbooks should teach the CLI flags; only ambient-env operations
+that already exist should rely on the env fallback.
 
 The two fields are independent: the provenance-bundle binding is
 on every cert claim and cannot be turned off; the suite-evidence

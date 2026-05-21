@@ -9,12 +9,14 @@ package and app artifacts from a drift/manifest.json manifest.
 from __future__ import annotations
 
 import argparse
+import hashlib as _hl
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +127,61 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"without carrying upstream author trust in local "
 			"`drift/trust.json`."
 		))
+
+	# ── Cert-suite evidence (signed certifier metadata) ─────────────
+	#
+	# These three flags carry the cert-suite identity + evidence
+	# digest that get signed into `cert_claim.body.cert_suite`.  They
+	# are first-class CLI flags (not just env vars) because the values
+	# are signed certifier metadata and belong in the deploy command /
+	# release config, not in ambient shell state.  Env vars
+	# (`DRIFT_DEPLOY_CERT_SUITE_*`) remain as a compatibility fallback
+	# for orch hosts that still drive deploy from env; CLI flags win
+	# when both are set.
+	#
+	# `--cert-suite-evidence-sha256` and `--cert-suite-no-evidence`
+	# are mutually exclusive.  Missing both (and no env-var fallback)
+	# is a hard error -- a signed cert claim must NOT carry a synthetic
+	# evidence digest by default.
+	p.add_argument("--cert-suite-id", type=str, default=None,
+		help=(
+			"Cert-suite identity recorded in cert_claim.body.cert_suite.id.  "
+			"Defaults to `drift-deploy/v1` if neither this flag nor "
+			"$DRIFT_DEPLOY_CERT_SUITE_ID is set."
+		))
+	p.add_argument("--cert-suite-version", type=str, default=None,
+		help=(
+			"Cert-suite version recorded in cert_claim.body.cert_suite.version.  "
+			"Defaults to `1.0` if neither this flag nor "
+			"$DRIFT_DEPLOY_CERT_SUITE_VERSION is set."
+		))
+	p.add_argument("--cert-suite-result", type=str, default=None,
+		choices=("pass", "fail"),
+		help=(
+			"Cert-suite result (`pass` | `fail`) recorded in "
+			"cert_claim.body.cert_suite.result.  Defaults to `pass` if "
+			"neither this flag nor $DRIFT_DEPLOY_CERT_SUITE_RESULT is set.  "
+			"A `fail` claim is well-formed but rejected by default at "
+			"consumer verify time."
+		))
+	suite_evid = p.add_mutually_exclusive_group()
+	suite_evid.add_argument("--cert-suite-evidence-sha256", type=str, default=None,
+		dest="cert_suite_evidence_sha256",
+		help=(
+			"sha256:<hex> digest of the cert suite's own evidence artifact "
+			"(test logs / coverage report / vendor cert PDF / ...).  Mutually "
+			"exclusive with --cert-suite-no-evidence.  Wins over "
+			"$DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256."
+		))
+	suite_evid.add_argument("--cert-suite-no-evidence", action="store_true",
+		help=(
+			"Opt-in: the cert suite legitimately produces no evidence "
+			"artifact (records sha256(\"\") as result_evidence_sha256 and "
+			"emits a stderr warning so the choice is visible in the build "
+			"log).  Mutually exclusive with --cert-suite-evidence-sha256.  "
+			"Use this only when the suite genuinely has no artifact; do not "
+			"use to silence the missing-evidence error."
+		))
 	return p
 
 
@@ -230,6 +287,186 @@ def _resolve_trust_store(args: argparse.Namespace) -> Path | None:
 			)
 		return path
 	return None
+
+
+# Empty-bytes SHA — published as the "no evidence" sentinel for the
+# cert-suite evidence digest.  Hoisted so both the CLI/env resolver
+# and the cert-claim emitter reference the same canonical value.
+_EMPTY_EVIDENCE_SHA = "sha256:" + _hl.sha256(b"").hexdigest()
+
+
+@dataclass(frozen=True)
+class CertSuiteOptions:
+	"""Resolved cert-suite metadata that gets signed into
+	`cert_claim.body.cert_suite`.
+
+	`result_evidence_sha256` carries the digest of the cert suite's
+	OWN evidence artifact (test logs, coverage report, vendor cert
+	PDF, ...).  This is **separate** from `body.evidence_sha256`,
+	which binds the run-level `.provenance.zst` bundle (trust-v1.md
+	§3.6) -- one digest per concern.
+
+	`no_evidence_sentinel` is True iff the operator opted into the
+	empty-bytes sentinel (either via `--cert-suite-no-evidence` or
+	the env-fallback `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` pair).
+	When set, the emitter prints a visible stderr warning so the
+	choice is auditable in the build log.
+	"""
+	id: str
+	version: str
+	result: str
+	result_evidence_sha256: str
+	no_evidence_sentinel: bool
+
+
+def _resolve_cert_suite_options(args: argparse.Namespace) -> CertSuiteOptions:
+	"""Resolve cert-suite identity + evidence from CLI flags, with
+	env vars as compatibility fallback.
+
+	Contract (matches the team-stated UX rules):
+
+	  - `--cert-suite-evidence-sha256` and `--cert-suite-no-evidence`
+	    are mutually exclusive (argparse-enforced at parse time).
+	  - `--cert-suite-no-evidence` records `sha256("")` as
+	    `result_evidence_sha256`; the emitter prints a visible
+	    warning so the choice is auditable.
+	  - Missing both (no CLI flag, no env fallback) is a hard
+	    `DeployError` -- a signed cert claim must NOT carry a
+	    synthetic evidence digest by default.
+	  - CLI flags take precedence over the legacy env vars
+	    (`DRIFT_DEPLOY_CERT_SUITE_{ID,VERSION,RESULT,EVIDENCE_SHA256,NO_EVIDENCE}`),
+	    which remain as a compatibility fallback for orch hosts
+	    that still drive deploy from env.
+	"""
+	# id / version / result: CLI > env > hardcoded default.
+	suite_id = (
+		args.cert_suite_id
+		or os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID")
+		or "drift-deploy/v1"
+	)
+	suite_version = (
+		args.cert_suite_version
+		or os.environ.get("DRIFT_DEPLOY_CERT_SUITE_VERSION")
+		or "1.0"
+	)
+	suite_result = (
+		args.cert_suite_result
+		or os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT")
+		or "pass"
+	)
+	# Argparse enforces `choices=("pass","fail")` on the CLI surface,
+	# but the env-fallback path can still inject an arbitrary string.
+	# Validate here so malformed values fail at deploy startup rather
+	# than deep inside cert claim body assembly.
+	if suite_result not in ("pass", "fail"):
+		raise DeployError(
+			f"cert suite result {suite_result!r} is not valid; must be "
+			f"`pass` or `fail`.  Source was "
+			f"{'--cert-suite-result' if args.cert_suite_result else '$DRIFT_DEPLOY_CERT_SUITE_RESULT'}."
+		)
+
+	# Local closure that mirrors `lang.driftc.packages.source_content_id.validate_sci`
+	# but with cert-suite-specific error context.  The deploy-startup
+	# guarantee is "malformed CLI/env values fail before any artifact
+	# build" — generic SCI-shape errors deeper in the cert claim body
+	# would erode that.
+	from lang.driftc.packages.source_content_id import validate_sci as _validate_sci
+	def _validate_evidence(value: str, *, source: str) -> str:
+		try:
+			return _validate_sci(value, field="cert suite evidence digest")
+		except ValueError as e:
+			raise DeployError(
+				f"cert suite evidence digest from {source} is malformed: "
+				f"{e}.  Expected shape `sha256:<64-lowercase-hex>` (the "
+				f"sha256 of the cert suite's own evidence artifact)."
+			) from e
+
+	# Evidence resolution — three CLI inputs, two env-fallback inputs:
+	#   1. `--cert-suite-evidence-sha256 <sha>` -> use sha directly.
+	#   2. `--cert-suite-no-evidence`            -> use empty-bytes
+	#      sentinel + flag warning (no env opt-in needed; the CLI
+	#      flag IS the explicit opt-in).
+	#   3. Neither CLI flag set -> fall back to the env-driven path:
+	#        - `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256` REQUIRED.
+	#        - If env says empty-sha, require
+	#          `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` (legacy
+	#          opt-in pair).
+	#        - Else: fail closed.
+	if args.cert_suite_evidence_sha256:
+		# Explicit real digest via CLI.
+		validated = _validate_evidence(
+			args.cert_suite_evidence_sha256,
+			source="--cert-suite-evidence-sha256",
+		)
+		return CertSuiteOptions(
+			id=suite_id,
+			version=suite_version,
+			result=suite_result,
+			result_evidence_sha256=validated,
+			no_evidence_sentinel=False,
+		)
+	if args.cert_suite_no_evidence:
+		# Explicit opt-in via CLI — the flag itself IS the opt-in
+		# (no separate `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`
+		# pairing required; the env-fallback path keeps that
+		# legacy shape).  No shape validation needed: the sentinel
+		# is a module-level constant we construct ourselves.
+		return CertSuiteOptions(
+			id=suite_id,
+			version=suite_version,
+			result=suite_result,
+			result_evidence_sha256=_EMPTY_EVIDENCE_SHA,
+			no_evidence_sentinel=True,
+		)
+	# Env-fallback path.
+	env_evidence = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
+	if not env_evidence:
+		raise DeployError(
+			f"cert claim emission requires the cert suite's evidence "
+			f"digest.  Pass one of:\n"
+			f"  --cert-suite-evidence-sha256 sha256:<hex>   (the real "
+			f"digest of the suite's evidence artifact)\n"
+			f"  --cert-suite-no-evidence                    (opt-in "
+			f"sentinel when the suite legitimately produces no artifact)\n"
+			f"or (legacy env-driven shape) set DRIFT_DEPLOY_CERT_SUITE_"
+			f"EVIDENCE_SHA256, paired with DRIFT_DEPLOY_CERT_SUITE_NO_"
+			f"EVIDENCE=1 if using the empty-bytes sentinel ({_EMPTY_EVIDENCE_SHA}).  "
+			f"v1 cert claims do not accept a synthetic default in a "
+			f"signed body."
+		)
+	if env_evidence == _EMPTY_EVIDENCE_SHA:
+		if os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE") != "1":
+			raise DeployError(
+				f"$DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256 was set to the "
+				f"empty-bytes sentinel ({_EMPTY_EVIDENCE_SHA}), but the "
+				f"explicit opt-in DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1 "
+				f"is not set.  v1 treats this as a misconfiguration: the "
+				f"signed cert claim would carry a no-evidence sentinel "
+				f"without the operator visibly asserting that the suite "
+				f"genuinely produces no evidence.  Either supply the real "
+				f"evidence digest, pass --cert-suite-no-evidence, or set "
+				f"DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1 to opt into the "
+				f"sentinel."
+			)
+		return CertSuiteOptions(
+			id=suite_id,
+			version=suite_version,
+			result=suite_result,
+			result_evidence_sha256=_EMPTY_EVIDENCE_SHA,
+			no_evidence_sentinel=True,
+		)
+	# Env-supplied non-empty digest — validate shape before signing.
+	validated_env = _validate_evidence(
+		env_evidence,
+		source="$DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256",
+	)
+	return CertSuiteOptions(
+		id=suite_id,
+		version=suite_version,
+		result=suite_result,
+		result_evidence_sha256=validated_env,
+		no_evidence_sentinel=False,
+	)
 
 
 def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> list[Path]:
@@ -936,6 +1173,7 @@ def _emit_cert_claim_for_artifact(
 	direct_dep_ids: set[str],
 	staged_pkg_root: Path,
 	provenance_path: Path | None,
+	cert_suite_options: CertSuiteOptions,
 ) -> Path:
 	"""Sign a v1 cert claim for `artifact_path` and write the sidecar.
 
@@ -943,12 +1181,13 @@ def _emit_cert_claim_for_artifact(
 	full resolved transitive dep_graph + the cert-suite result (per
 	O3 / O4).  Returns the sidecar path.
 
-	Cert-suite identity defaults to `drift-deploy/v1` with result
-	`pass`; production deployments override via the env vars
-	`DRIFT_DEPLOY_CERT_SUITE_ID`, `DRIFT_DEPLOY_CERT_SUITE_VERSION`,
-	`DRIFT_DEPLOY_CERT_SUITE_RESULT`, `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`
-	so the same deploy CLI surfaces multiple gate identities (smoke,
-	full-suite, etc.) without code changes.
+	`cert_suite_options` is the resolved cert-suite metadata from
+	`_resolve_cert_suite_options` -- CLI flags (`--cert-suite-id`,
+	`--cert-suite-evidence-sha256`, `--cert-suite-no-evidence`, ...)
+	win over the legacy `DRIFT_DEPLOY_CERT_SUITE_*` env vars.  The
+	field values here are signed into `cert_claim.body.cert_suite`,
+	so we keep the input plumbing explicit at the deploy-command
+	level rather than ambient shell state.
 
 	Each `resolved_deps` entry contributes a `DepGraphEntry` -- the
 	consumer's closure at load time must be exactly this set for
@@ -1126,73 +1365,31 @@ def _emit_cert_claim_for_artifact(
 	# own evidence artifact (test logs, coverage report, vendor cert
 	# PDF, ...).  It is separate from `body.evidence_sha256`, which
 	# binds the run-level `.provenance.zst` bundle (§3.6 of trust-v1).
-	# Fail closed: a signed cert claim must NOT carry a synthetic
-	# constant in either evidence field.  Callers (or the operator
-	# environment) must supply
-	# `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256`; otherwise the cert
-	# claim would attest a suite ran with evidence that doesn't
-	# exist.
 	#
-	# The empty-bytes sentinel `sha256(b"")` is permitted, but ONLY
-	# when the operator explicitly opts in via
-	# `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1`.  Naked-env supply of
-	# the sentinel is rejected so an operator who genuinely forgot to
-	# wire suite evidence can't silently ship "no evidence" by
-	# typing the zero hash.  When the opt-in is active, the deploy
-	# emits a clearly-labeled WARNING line to stderr so the choice
-	# is visible in the build log -- the policy is "suite chose no
-	# suite evidence," not "default no evidence."  `body.evidence_
-	# sha256` (the provenance-bundle digest) is unaffected and still
-	# fail-closed -- the sentinel here is suite-specific.
-	_EMPTY_SHA = "sha256:" + _hl.sha256(b"").hexdigest()
-	suite_evidence_env = os.environ.get("DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256")
-	if not suite_evidence_env:
-		raise DeployError(
-			f"cert claim emission for '{package_id}@{package_version}': "
-			f"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256 is required.  This "
-			f"is the sha256:<hex> digest of the cert suite's own "
-			f"evidence artifact (test logs / coverage report / vendor "
-			f"cert PDF / ...).  v1 cert claims do not accept a "
-			f"synthetic default in a signed body.  Either set the env "
-			f"var to the real digest of the evidence this suite "
-			f"produced, OR -- when the suite legitimately produces no "
-			f"artifact -- set `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` "
-			f"AND `DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256={_EMPTY_SHA}` "
-			f"together (the explicit opt-in)."
-		)
-	if suite_evidence_env == _EMPTY_SHA:
-		# The empty-bytes sentinel is permitted, but only with the
-		# explicit opt-in.  An operator who set the env var to the
-		# zero hash without the opt-in is treated as a misconfiguration
-		# rather than a legitimate "no evidence" assertion.
-		if os.environ.get("DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE") != "1":
-			raise DeployError(
-				f"cert claim emission for '{package_id}@{package_version}': "
-				f"DRIFT_DEPLOY_CERT_SUITE_EVIDENCE_SHA256 was set to the "
-				f"empty-bytes sentinel ({_EMPTY_SHA}), but the explicit "
-				f"opt-in `DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1` is not "
-				f"set.  v1 treats this as a misconfiguration: the "
-				f"signed cert claim would carry a no-evidence sentinel "
-				f"without the operator visibly asserting that the "
-				f"suite genuinely produces no evidence.  Either supply "
-				f"the real evidence digest, or set "
-				f"DRIFT_DEPLOY_CERT_SUITE_NO_EVIDENCE=1 to opt into the "
-				f"sentinel."
-			)
+	# Resolution happens upstream in `_resolve_cert_suite_options`:
+	# CLI flags (`--cert-suite-id`, `--cert-suite-evidence-sha256`,
+	# `--cert-suite-no-evidence`, ...) take precedence over the
+	# legacy `DRIFT_DEPLOY_CERT_SUITE_*` env vars; missing both forms
+	# is a hard error there (a signed cert claim must NOT carry a
+	# synthetic default).  By the time we get here `cert_suite_options`
+	# is fully resolved, including any no-evidence-sentinel opt-in.
+	# The visible warning lives here, alongside the actual emission,
+	# so it can't be silently elided by a future refactor.
+	if cert_suite_options.no_evidence_sentinel:
 		print(
-			f"warning: cert suite '{os.environ.get('DRIFT_DEPLOY_CERT_SUITE_ID', 'drift-deploy/v1')}' "
-			f"is being signed with the empty-evidence sentinel "
-			f"({_EMPTY_SHA}).  The cert claim will record 'suite "
-			f"chose no suite evidence' -- inspectors will see the "
-			f"zero hash in `cert_suite.result_evidence_sha256`.  "
+			f"warning: cert suite '{cert_suite_options.id}' is being "
+			f"signed with the empty-evidence sentinel "
+			f"({_EMPTY_EVIDENCE_SHA}).  The cert claim will record "
+			f"'suite chose no suite evidence' -- inspectors will see "
+			f"the zero hash in `cert_suite.result_evidence_sha256`.  "
 			f"Document this choice in the release runbook.",
 			file=sys.stderr,
 		)
 	cert_suite = CertSuite(
-		id=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_ID", "drift-deploy/v1"),
-		version=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_VERSION", "1.0"),
-		result=os.environ.get("DRIFT_DEPLOY_CERT_SUITE_RESULT", "pass"),
-		result_evidence_sha256=suite_evidence_env,
+		id=cert_suite_options.id,
+		version=cert_suite_options.version,
+		result=cert_suite_options.result,
+		result_evidence_sha256=cert_suite_options.result_evidence_sha256,
 	)
 
 	# `evidence_sha256` cryptographically binds the on-disk provenance
@@ -1519,6 +1716,9 @@ def _deploy_artifact(
 	dry_run: bool,
 	compiler_info: CompilerInfo,
 	staged_pkg_root: Path,
+	# Required for library artifacts (cert claim emission); None
+	# permitted for app-only deploys (no cert claim is signed).
+	cert_suite_options: CertSuiteOptions | None,
 	native_lib_paths: list[Path] | None = None,
 	dep_namespace_map: dict[str, str] | None = None,
 	author_profile_path: Path | None = None,
@@ -1686,6 +1886,15 @@ def _deploy_artifact(
 			manifest_dir=manifest_dir,
 			staged_install=staged_install,
 		)
+		# `_run_impl` always resolves cert_suite_options up front when
+		# `has_packages` is True; reaching this branch with no options
+		# would be an internal contract bug, not a user-facing error.
+		assert cert_suite_options is not None, (
+			"library artifact reached cert-claim emission without "
+			"resolved cert_suite_options -- `_run_impl` must call "
+			"`_resolve_cert_suite_options` whenever the manifest has "
+			"a library artifact"
+		)
 		cert_claim_path = _emit_cert_claim_for_artifact(
 			dmp_path,
 			cert_key=sign_key,
@@ -1707,6 +1916,7 @@ def _deploy_artifact(
 			# already signed by the time we reach this artifact.
 			staged_pkg_root=staged_pkg_root,
 			provenance_path=provenance_path,
+			cert_suite_options=cert_suite_options,
 		)
 		# Back-compat alias for code further down that still reads
 		# `sig_path` to wire authenticated siblings into smoke / dest.
@@ -1987,6 +2197,16 @@ def _run_impl(args: argparse.Namespace) -> int:
 	baseline_trust = _resolve_trust_store(args)
 	compiler_info = _get_compiler_info(driftc)
 
+	# Resolve cert-suite identity + evidence (CLI > env > error).  We
+	# resolve it once up front -- before any artifact build -- so a
+	# missing/conflicting CLI+env config fails the run fast, not
+	# halfway through the build.  Skip the resolution when there are
+	# no package artifacts to certify: app-only deploys do not emit
+	# cert claims, so the evidence digest is unused.
+	cert_suite_options: CertSuiteOptions | None = None
+	if has_packages:
+		cert_suite_options = _resolve_cert_suite_options(args)
+
 	# Package roots: default to --dest.
 	package_roots = args.package_root or ([args.dest] if args.dest else [])
 
@@ -2138,6 +2358,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				dry_run=args.dry_run,
 				compiler_info=compiler_info,
 				staged_pkg_root=staged_pkg_root,
+				cert_suite_options=cert_suite_options,
 				native_lib_paths=native_lib_paths,
 				dep_namespace_map=dep_namespace_map,
 				author_profile_path=author_profile_path,
