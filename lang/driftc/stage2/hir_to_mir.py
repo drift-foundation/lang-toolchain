@@ -10267,6 +10267,15 @@ class HIRToMIR:
 			self._emit_captured_locals(err_val)
 			ctx = self._try_stack[-1]
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			# LANGUAGE_BUG #102 (auto-unwind edge): a can-throw call whose
+			# FnResult.Err branches into this `call_err` block is exactly
+			# the same kind of throw-edge as an explicit `throw` — the
+			# only difference is the throw originates in the callee.
+			# Without this hook, Destructible locals declared in the try
+			# body between try-entry and this call site leak when the
+			# callee returns Err.  Singular's `_call_operation_sp` → err
+			# → `__bb_call_err3` was the production manifestation.
+			self._emit_scope_cleanup_hook(scope_index=ctx.scope_index_at_entry)
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
 			self._propagate_error(err_val)
@@ -10344,6 +10353,8 @@ class HIRToMIR:
 				self._emit_captured_locals(err_val)
 				ctx = self._try_stack[-1]
 				self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+				# LANGUAGE_BUG #102 (auto-unwind edge — terminal-throws).
+				self._emit_scope_cleanup_hook(scope_index=ctx.scope_index_at_entry)
 				self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 			else:
 				self._propagate_error(err_val)
@@ -10374,6 +10385,8 @@ class HIRToMIR:
 			self._emit_captured_locals(err_val)
 			ctx = self._try_stack[-1]
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			# LANGUAGE_BUG #102 (auto-unwind edge — statement-form call).
+			self._emit_scope_cleanup_hook(scope_index=ctx.scope_index_at_entry)
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
 			self._propagate_error(err_val)

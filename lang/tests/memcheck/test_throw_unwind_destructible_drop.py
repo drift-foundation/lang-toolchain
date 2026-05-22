@@ -66,21 +66,34 @@ import std.console as console;
 pub error CaughtKind {}
 pub error UncaughtKind { code: Int }
 
+pub struct Conn {
+\tpub seq: Int,
+}
+
 // Heap-allocated payload owned by the Lease.  If the Lease's destroy
 // is not run on the throw-unwind path, this Array<Byte> is leaked.
 pub struct Lease {
-\tlabel: String,
-\tpayload: Array<Byte>,
+\tpub label: String,
+\tpub payload: Array<Byte>,
+\tpub inner: Conn,
 }
 
 implement core.Destructible for Lease {
 \tpub fn destroy(var self: Lease) nothrow -> Void {
-\t\t// Observable side effect: marks that destroy() ran.  Independent
-\t\t// of memcheck — if the throw-unwind path skips Destructible
-\t\t// dispatch, this line is absent from stdout.
 \t\tconsole.print("LEASE_DESTROYED\\n");
 \t\treturn;
 \t}
+}
+
+implement Lease {
+\t// Mirrors `lease.conn()` in singular: returns a borrow into self.
+\tpub fn conn(self: &Lease) nothrow -> &Conn {
+\t\treturn &self.inner;
+\t}
+}
+
+pub struct ArgsBag {
+\tpub items: Array<String>,
 }
 
 fn _make_payload() nothrow -> Array<Byte> {
@@ -93,27 +106,52 @@ fn _make_payload() nothrow -> Array<Byte> {
 \treturn move a;
 }
 
-fn _acquire() -> Lease {
+pub error AcquireKind { tag: String }
+
+// Can-throw acquire — mirrors singular's `_acquire_lease`, which is
+// can-throw (throws `SingularException(PoolAcquire)` on pool error
+// inside an inner match's Err arm).
+fn _acquire(flag: Int) -> Lease {
+\tif flag == -1 {
+\t\tthrow AcquireKind(tag = "pool_error");
+\t}
 \treturn Lease(
 \t\tlabel = "ACQUIRED_LABEL_PAYLOAD_LONG_ENOUGH_TO_HEAP_ALLOC",
-\t\tpayload = _make_payload()
+\t\tpayload = _make_payload(),
+\t\tinner = Conn(seq = 0)
 \t);
 }
 
-// Shape mirrors singular.gateway::SingularImpl::complete:
-//   - `var lease` is a Destructible local declared in the try body,
-//   - the `throw` is nested inside an if/else-if/else chain so the
-//     throw site is one nested block deeper than the try body scope,
-//   - the local typed catch matches a DIFFERENT event (CaughtKind),
-//     not the one we throw (UncaughtKind), so the throw propagates
-//     out of the function past the catch dispatch.
+fn _new_args() nothrow -> ArgsBag {
+\tvar v: Array<String> = [];
+\treturn ArgsBag(items = move v);
+}
+
+// Can-throw — mirrors `_call_operation_sp` in singular.
+fn _do_call(conn: &Conn, sp: &String, args: ArgsBag, flag: Int) -> Int {
+\tif flag == -2 {
+\t\tthrow AcquireKind(tag = "rpc_error");
+\t}
+\treturn conn.seq + args.items.len + sp.byte_length();
+}
+
+// Shape mirrors singular.gateway::SingularImpl::complete more
+// closely than the simple variant: a Destructible local `lease`, a
+// borrow `conn` taken into the lease via `lease.conn()`, an owned
+// `args` consumed by `move`, and a throw nested inside if/else-if/else.
 fn inner(code: Int) -> Int {
 \ttry {
-\t\tvar lease = _acquire();
+\t\tvar lease = _acquire(code);
+\t\tval conn: &Conn = lease.conn();
+\t\tvar args = _new_args();
+\t\targs.items.push("a");
+\t\targs.items.push("b");
+\t\tval sp: String = "sp_singular_complete";
+\t\tval row = _do_call(conn, &sp, move args, code);
 \t\tif code == 1 {
-\t\t\treturn 1;
+\t\t\treturn 1 + row;
 \t\t} else if code == 2 {
-\t\t\treturn 2;
+\t\t\treturn 2 + row;
 \t\t} else {
 \t\t\tthrow UncaughtKind(code = code);
 \t\t}
