@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# flocker — host-local slot wrapper for arbitrary commands
+# Copyright (C) 2026 The Drift Language Foundation
+# License GPL-3.0-or-later
+
+set -euo pipefail
+
+FLOCKER_VERSION="0.1.0"
+
+usage() {
+	cat <<'EOF'
+flocker: host-local slot wrapper for arbitrary commands
+
+Usage:
+  flocker --key KEY -j N -- COMMAND [ARGS...]
+  flocker -k KEY -j N -- COMMAND [ARGS...]
+  flocker --help
+  flocker --version
+
+Options:
+  -k, --key KEY     Pool name. Processes sharing this KEY share one N-slot
+                    pool on this host.
+  -j N              Pool size. The first caller for a given KEY fixes N;
+                    later callers requesting a different N get a warning
+                    and use the original size.
+  --help            Show this help.
+  --version         Show version, copyright, license.
+
+Examples:
+  flocker -k drift-jobs -j 8 -- driftc --target ... foo.drift
+
+  for i in 1 2 3 4 5; do
+      flocker -k mypool -j 2 -- sleep 5 &
+  done
+  wait
+
+Contract:
+  Host-local; key-scoped; first -j wins. No cross-host coordination.
+  Blocks until a slot is free, then execs COMMAND, replacing this
+  process. The slot stays held for the lifetime of the wrapped process
+  and is released by the kernel when COMMAND exits for any reason.
+  COMMAND's exit code is propagated. Pool state lives under FLOCKER_DIR
+  (default: $TMPDIR/flocker or /tmp/flocker).
+
+Dependencies:
+  bash 4.1+ (for {fd}-style descriptor assignment), flock(1) from
+  util-linux, and GNU coreutils sleep (for fractional seconds). The
+  wrapped command must not close inherited file descriptors >= 3.
+EOF
+}
+
+version() {
+	cat <<EOF
+flocker ${FLOCKER_VERSION}
+Copyright (C) 2026 The Drift Language Foundation
+License GPL-3.0-or-later
+EOF
+}
+
+die() {
+	echo "flocker: $*" >&2
+	exit 2
+}
+
+key=""
+slots=""
+while (( $# > 0 )); do
+	case "$1" in
+		--help)    usage; exit 0 ;;
+		--version) version; exit 0 ;;
+		-k|--key)
+			(( $# >= 2 )) || die "--key requires an argument"
+			key="$2"; shift 2 ;;
+		--key=*)
+			key="${1#--key=}"; shift ;;
+		-j)
+			(( $# >= 2 )) || die "-j requires an argument"
+			slots="$2"; shift 2 ;;
+		-j*)
+			slots="${1#-j}"; shift ;;
+		--)
+			shift; break ;;
+		-*)
+			die "unknown option: $1" ;;
+		*)
+			die "unexpected positional argument before '--': $1 (use '--' to separate flocker options from COMMAND)" ;;
+	esac
+done
+
+[[ -n "${key}"   ]] || die "--key/-k is required"
+[[ -n "${slots}" ]] || die "-j is required"
+[[ "${slots}" =~ ^[1-9][0-9]*$ ]] || die "-j must be a positive integer (got: ${slots})"
+(( $# > 0 )) || die "no COMMAND specified"
+[[ "${key}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--key must match [A-Za-z0-9_.-]+ (got: ${key})"
+
+base="${FLOCKER_DIR:-${TMPDIR:-/tmp}/flocker}"
+slot_dir="${base}/${key}"
+lock_file="${base}/${key}.init.lock"
+
+mkdir -p "${base}"
+
+# ── Init phase: serialize pool creation, recover from dead initializers ──
+#
+# The init lock is on a file that lives OUTSIDE slot_dir so that the
+# token-file cleanup below cannot touch it. We acquire it blocking; the
+# kernel releases it automatically if a holder dies, so a dead initializer
+# does not strand callers. Absence of .size inside slot_dir means
+# provisioning did not complete (fresh, or prior initializer crashed) —
+# we clear any half-created tokens and recreate from scratch. Once .size
+# exists, no one mutates the pool.
+
+exec {lock_fd}>"${lock_file}"
+flock "${lock_fd}"
+
+if [[ ! -f "${slot_dir}/.size" ]]; then
+	mkdir -p "${slot_dir}"
+	rm -f "${slot_dir}"/[0-9]*
+	for (( i=1; i<=slots; i++ )); do
+		: > "${slot_dir}/${i}"
+	done
+	printf '%s\n' "${slots}" > "${slot_dir}/.size"
+fi
+persisted_slots=$(< "${slot_dir}/.size")
+
+flock -u "${lock_fd}"
+exec {lock_fd}<&-
+
+[[ "${persisted_slots}" =~ ^[1-9][0-9]*$ ]] || die "pool '${key}' has invalid .size: ${persisted_slots}"
+
+if [[ "${persisted_slots}" != "${slots}" ]]; then
+	echo "flocker: warning: key '${key}' pool sized at ${persisted_slots} (requested ${slots})" >&2
+fi
+
+# ── Acquire phase ──
+#
+# Scan tokens in a randomly-offset order to reduce stampeding on low-
+# numbered tokens when many waiters arrive simultaneously. exec replaces
+# this bash process with COMMAND; the locked fd is inherited and the
+# kernel releases the lock when COMMAND terminates.
+
+start_offset=$(( RANDOM % persisted_slots ))
+
+while true; do
+	for (( off=0; off < persisted_slots; off++ )); do
+		idx=$(( ((start_offset + off) % persisted_slots) + 1 ))
+		token="${slot_dir}/${idx}"
+		exec {fd}<"${token}"
+		if flock -n "${fd}"; then
+			exec "$@"
+		fi
+		exec {fd}<&-
+	done
+	sleep 0.05
+done

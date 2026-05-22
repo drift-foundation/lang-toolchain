@@ -36,6 +36,7 @@ from tools.deploy.steps.bundle import (
 	bundle_compiler,
 	bundle_docs_and_examples,
 	bundle_runtime_archives,
+	install_flocker,
 )
 from tools.deploy.steps.metadata import load_deploy_metadata
 from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
@@ -142,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 		# ── Step 1: PEX executables ──────────────────────────────────
 		build_driftc_pex(repo_root, dist)
 		build_drift_pex(repo_root, dist)
+		install_flocker(repo_root, dist)
 
 		# ── Step 2: Bundle ───────────────────────────────────────────
 		bundle_compiler(repo_root, dist)

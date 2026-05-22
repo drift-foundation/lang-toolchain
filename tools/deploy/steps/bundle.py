@@ -23,6 +23,24 @@ NATIVE_EXTENSIONS = frozenset({".c", ".h", ".S"})
 RUNTIME_VARIANTS = ("default", "debug", "asan", "alloc_track")
 
 
+def install_flocker(repo_root: Path, dist: Path) -> None:
+	"""Copy the flocker host-local slot wrapper into dist/bin.
+
+	flocker is a generic bash utility (no Drift coupling) used by
+	certification runners that need a global concurrency cap across
+	multiple test lanes. Ships in bin/ so it lands on PATH alongside
+	drift/driftc post-deploy.
+	"""
+	src = repo_root / "bin" / "flocker"
+	if not src.exists():
+		raise RuntimeError(f"{src} not found in source tree")
+	out = dist / "bin" / "flocker"
+	out.parent.mkdir(parents=True, exist_ok=True)
+	shutil.copy2(str(src), str(out))
+	out.chmod(0o755)
+	print(f"[deploy] installed: {out}", flush=True)
+
+
 def bundle_compiler(repo_root: Path, dist: Path) -> None:
 	"""Copy compiler Python sources and non-Python assets into dist."""
 	compiler_lib = dist / "lib" / "compiler"
