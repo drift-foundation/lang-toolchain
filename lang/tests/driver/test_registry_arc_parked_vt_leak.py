@@ -30,6 +30,7 @@ valgrind reports zero definitely-lost blocks under `--leak-check=full`.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,10 @@ from pathlib import Path
 import pytest
 
 from lang.codegen.llvm.test_utils import sanitizer_timeout
+
+
+def _asan_active() -> bool:
+	return os.environ.get("DRIFT_ASAN") in ("1", "true", "True")
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -165,6 +170,11 @@ def test_registered_arc_with_parked_vt_exits_clean(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(shutil.which("valgrind") is None,
 	reason="valgrind not installed — leak check requires memcheck")
+@pytest.mark.skipif(_asan_active(),
+	reason="ASan-instrumented binaries cannot run under Valgrind: "
+	"shadow-memory ranges interleave and ASan aborts before exit. "
+	"This leak check belongs to the non-ASan lane; the ASan lane gets "
+	"its own coverage via test_registered_arc_with_parked_vt_exits_clean.")
 def test_registered_arc_with_parked_vt_no_leak(tmp_path: Path) -> None:
 	"""Under valgrind --leak-check=full, all heap blocks must be freed.
 
