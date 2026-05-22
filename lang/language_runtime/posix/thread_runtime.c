@@ -859,8 +859,22 @@ static void *drift_exec_worker(void *arg) {
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
 		}
-		atomic_store(&vt->started, 1);
-		if (atomic_load(&vt->cancelled)) {
+		/* Use atomic_exchange to distinguish "first pickup" (was_started=0)
+		 * from "re-pickup after park" (was_started=1).  On first pickup the
+		 * fiber stack is virgin; if cancelled, dropping the cb is safe.  On
+		 * re-pickup the fiber has executed user code, may hold owning values
+		 * on its stack (e.g., Arc clones moved into a function parameter
+		 * from the closure env, see std.concurrent::_keepalive_loop), and
+		 * MUST be resumed so its cooperative-cancellation safe points can
+		 * unwind those locals.  Dropping the cb here would free the closure
+		 * env but the moved-out captures live on the fiber's stack — when
+		 * the stack is later torn down by drift_worker_vt_finish those
+		 * captures leak.  Symptom (filed 2026-05-22 from bookkeeper
+		 * shutdown-hang repro post-fix): registered `Arc<Pooled>` whose
+		 * destroy joins a parked VT leaks the `Arc<PoolInner>` clone the
+		 * keepalive closure captured. */
+		int was_started = atomic_exchange(&vt->started, 1);
+		if (atomic_load(&vt->cancelled) && !was_started) {
 			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
 			pthread_mutex_lock(&vt->mu);
 			if (!atomic_exchange(&vt->completed, 1)) {
