@@ -7410,6 +7410,7 @@ class HIRToMIR:
 				error_local=error_local,
 				dispatch_block_name=dispatch_block.name,
 				cont_block_name=join_block.name,
+				scope_index_at_entry=len(self._scope_stack),
 			)
 		)
 
@@ -8606,6 +8607,17 @@ class HIRToMIR:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			# LANGUAGE_BUG #102: emit cleanup for every in-flight local
+			# in scopes pushed since this try was entered, so the
+			# throw-unwind edge drops Destructible locals (e.g. a pool
+			# `lease`) even when the dispatch's typed catch arm doesn't
+			# match and the throw eventually propagates out of the
+			# function.  Without this hook, the body's scopes are popped
+			# by `lower_block(body)`'s normal return before the dispatch
+			# block is lowered, so the dispatch-else's
+			# `_emit_function_exit_cleanup_hook()` cannot see them.  See
+			# `lang/tests/memcheck/test_throw_unwind_destructible_drop.py`.
+			self._emit_scope_cleanup_hook(scope_index=ctx.scope_index_at_entry)
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 			return
 
@@ -8643,6 +8655,19 @@ class HIRToMIR:
 			ctx = self._try_stack[-1]
 			self.b.ensure_local(ctx.error_local)
 			self.b.emit(M.StoreLocal(local=ctx.error_local, value=err_val))
+			# LANGUAGE_BUG #102 (continued): when propagating to an
+			# outer try, drop any in-flight locals declared since the
+			# outer try was entered before the Goto.  This covers two
+			# distinct call shapes that both land here:
+			#   - a dispatch's "no event-arm matches" else propagating
+			#     from an inner try's dispatch block to an outer try
+			#     (inner body scopes are already popped, outer body
+			#     scopes are still live);
+			#   - a `rethrow` inside an inner catch arm whose enclosing
+			#     try sits inside an outer try.
+			# Function-exit propagation (else branch below) is already
+			# covered by `_emit_function_exit_cleanup_hook` (scope_index=0).
+			self._emit_scope_cleanup_hook(scope_index=ctx.scope_index_at_entry)
 			self.b.set_terminator(M.Goto(target=ctx.dispatch_block_name))
 		else:
 			if self._fn_can_throw() is not True:
@@ -8740,6 +8765,7 @@ class HIRToMIR:
 				error_local=error_local,
 				dispatch_block_name=dispatch_block.name,
 				cont_block_name=cont_block.name,
+				scope_index_at_entry=len(self._scope_stack),
 			)
 		)
 
@@ -11416,11 +11442,22 @@ class _TryCtx:
 	error_local: hidden local where the thrown Error is stored.
 	dispatch_block_name: block that projects the event code and dispatches to arms.
 	cont_block_name: continuation block after the try/catch completes.
+	scope_index_at_entry: `len(_scope_stack)` at the moment this try was
+	    entered (BEFORE `lower_block(body)` pushed the body scope).  Used
+	    by `_visit_stmt_HThrow` / `_propagate_error` to emit a
+	    `CleanupHook` covering exactly the in-flight locals between the
+	    throw site (or propagation hop) and this try's entry, so a throw
+	    that routes through the dispatch's "no event-arm matches" else
+	    still drops every Destructible local declared inside the body.
+	    Pinned by `lang/tests/memcheck/test_throw_unwind_destructible_drop.py`
+	    (LANGUAGE_BUG #102; surfaced 2026-05-22 via singular gateway
+	    LeasedConn leak through non-matching typed catch).
 	"""
 
 	error_local: str
 	dispatch_block_name: str
 	cont_block_name: str
+	scope_index_at_entry: int = 0
 
 
 @dataclass
