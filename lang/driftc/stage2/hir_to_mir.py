@@ -1740,6 +1740,22 @@ class HIRToMIR:
 							if not self._should_copy_value(f_ty):
 								need_addr_binders = True
 								break
+							# Copy-classified payload that still has refcount
+							# (or other runtime-drop) semantics — e.g. String,
+							# Array<X>, struct-with-drop — must take the
+							# materialization path so the rvalue variant temp
+							# gets a scope drop after the match.  Without
+							# this, in a value-producing inline match like
+							#
+							#     val s = match env.get("X") { Some(v) => move v, ... };
+							#
+							# the SSA variant temp has its +1 on the payload
+							# field but is never released, leaking the
+							# payload buffer.  Pinned by
+							# `lang/tests/memcheck/test_inline_match_rvalue_string_payload_leak.py`.
+							if self._needs_runtime_drop(f_ty):
+								need_addr_binders = True
+								break
 						if (not scrut_is_ref) and arm.binders and need_addr_binders:
 							_ensure_arm_scrut_ptr()
 						for bname, fidx in zip(arm.binders, field_indices):
