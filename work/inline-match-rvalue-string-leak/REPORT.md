@@ -82,7 +82,7 @@ Even within "String + this shape", the bug is uncommon in stdlib internals — t
 
 ## Test coverage
 
-`lang/tests/memcheck/test_inline_match_rvalue_string_payload_leak.py` — 5 cases under valgrind `--leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=97`:
+`lang/tests/memcheck/test_inline_match_rvalue_string_payload_leak.py` — 8 cases under valgrind `--leak-check=full --show-leak-kinds=definite,indirect --error-exitcode=97`:
 
 | Shape | Description | Pre-fix | Post-fix |
 |---|---|---|---|
@@ -90,9 +90,21 @@ Even within "String + this shape", the bug is uncommon in stdlib internals — t
 | A (None arm) | same shape, env unset (None arm taken) | clean | clean |
 | B | two-step `val opt = env.get(K); match opt { … }` | clean | clean |
 | C | statement-form `var s = lit; match … { Some(v) => { s = move v }, None => {} }` | clean | clean |
-| D | inline match on user fn returning `Optional<String>::Some(format_int(…))` (allocated payload) | LEAK | clean |
+| D | inline match on user fn `Optional<String>::Some(fmt.format_int(N))` (allocated payload, NOT env.get) | LEAK | clean |
+| E | inline match on user fn returning `Result<String, E>::Ok(fmt.format_int(N))` | LEAK | clean |
+| F | multi-field ctor `Filled(label: String, count: Int)` — binds both String and Int | LEAK | clean |
+| G | discarded result `val _ = match … { Some(v) => move v, None => lit }` | LEAK | clean |
 
-Shapes B, C, D act as positive controls — they were already clean and the fix must not regress them. Shape A was the failing case before; now passes.
+Shapes A (None arm), B, C act as positive controls — already clean before the fix and must stay clean. Shapes A (Some arm), D, E, F, G all failed before the fix and pass after.
+
+**Note on an earlier false-positive control.** An initial version of Shape D used `"literal".clone()` for the payload, but Drift's static-string optimization makes the literal-clone STATIC (no refcount ops, no leak surface). That made the case clean even on the buggy compiler — not because the fix worked, but because the code path the fix touches was never exercised. Replaced with `fmt.format_int(N)` which produces a real heap-allocated refcounted String. Caught by reviewing the bug class definition: "Copy + runtime-drop payload" is the trigger, not "any payload in an inline match".
+
+Shape coverage spans:
+- Two variant families (Optional, Result) → fix is not variant-name-specific.
+- Single-field and multi-field ctors → fix's per-field loop break-on-first-hit works.
+- Named result (`val x = match …`) and discarded result (`val _ = match …`) → drop chain works in both.
+- env.get and user fn scrutinees → fix is not env.get-specific.
+- Some/Ok arm taken (heap allocated) AND None/Err arm taken (no allocation) → both arms get correct scope cleanup.
 
 ## Drive-by cleanup (in same patch)
 

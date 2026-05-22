@@ -110,17 +110,26 @@ pub fn main() nothrow -> Int {
 }
 """
 
-# Shape D — CLEAN today.  Inline match on a user fn returning
-# Optional<String> with a literal-clone payload.  Same SURFACE shape as
-# Shape A but the scrutinee isn't env.get, and this does NOT leak.
-# Proves the bug is in the env.get composition path, not generic
-# rvalue-Optional payload-move tracking.
-SHAPE_D_CLEAN = """\
+# Shape D — was failing before the fix (same path as Shape A).  Inline
+# match on a user fn that returns Optional<String> with a *heap-allocated*
+# payload (fmt.format_int produces a fresh refcounted String, not a
+# static literal).  This is the non-env.get variant of the bug — proves
+# the fix is type-shape-driven (Copy + runtime-drop payload in a
+# value-producing inline match arm), NOT env.get-specific.
+#
+# An earlier version of this case used `"…".clone()` for the payload,
+# but Drift's static-string optimization makes the literal-clone STATIC
+# (no refcount ops, no leak surface).  That made the case a false
+# positive control — it was clean BEFORE the fix because the path the
+# fix touches was never exercised.  fmt.format_int produces a real
+# allocated String with refcount=1, which IS what the fix protects.
+SHAPE_D_USERFN_ALLOCATED = """\
 module main;
 import std.core as core;
+import std.format as fmt;
 
 fn _produce() nothrow -> Optional<String> {
-\treturn Optional<type String>::Some("payload-from-user-fn".clone());
+\treturn Optional<type String>::Some(fmt.format_int(2147483648));
 }
 
 pub fn main() nothrow -> Int {
@@ -129,6 +138,79 @@ pub fn main() nothrow -> Int {
 \t\tOptional::None    => { "default" }
 \t};
 \tif secret.byte_length() == 0 { return 1; }
+\treturn 0;
+}
+"""
+
+# Shape E — same bug class, different variant.  Result<String, E>
+# returned by a user fn, with Ok(v) binding the heap-allocated String
+# payload via inline value-producing match.  If the materialization gate
+# only saw `Optional` and missed `Result`, this would leak.  Pins the
+# fix's type-shape generality (any variant with a Copy + runtime-drop
+# payload, not just Optional).
+SHAPE_E_RESULT_VARIANT = """\
+module main;
+import std.core as core;
+import std.format as fmt;
+
+pub error E { tag: String }
+
+fn _produce() nothrow -> core.Result<String, E> {
+\treturn core.Result::Ok(fmt.format_int(99999));
+}
+
+pub fn main() nothrow -> Int {
+\tval value: String = match _produce() {
+\t\tcore.Result::Ok(v)  => { move v },
+\t\tcore.Result::Err(_) => { "fallback" }
+\t};
+\tif value.byte_length() == 0 { return 1; }
+\treturn 0;
+}
+"""
+
+# Shape F — multi-field ctor.  The Some-equivalent arm binds both an
+# allocated String AND a non-drop Int field.  Pins that the
+# materialization gate fires even when only one of several fields needs
+# drop work (the loop's break-on-first-hit logic).
+SHAPE_F_MULTIFIELD_CTOR = """\
+module main;
+import std.core as core;
+import std.format as fmt;
+
+pub variant Pair {
+\tFilled(label: String, count: Int),
+\tEmpty
+}
+
+fn _produce() nothrow -> Pair {
+\treturn Pair::Filled(label = fmt.format_int(777), count = 42);
+}
+
+pub fn main() nothrow -> Int {
+\tval label: String = match _produce() {
+\t\tPair::Filled(l, c) => { val _ = c; move l },
+\t\tPair::Empty        => { "none" }
+\t};
+\tif label.byte_length() == 0 { return 1; }
+\treturn 0;
+}
+"""
+
+# Shape G — discarded match result.  `val _ = match … { Some(v) => move v, None => lit }`.
+# The binder is moved out and the entire match expression is then
+# discarded.  Pins that the drop chain works even when the result is
+# never named.  Same materialization gate must fire.
+SHAPE_G_DISCARDED_RESULT = """\
+module main;
+import std.core as core;
+import std.env as env;
+
+pub fn main() nothrow -> Int {
+\tval _ = match env.get("DRIFT_TEST_INLINE_MATCH_PROBE") {
+\t\tOptional::Some(v) => { move v },
+\t\tOptional::None    => { "default" }
+\t};
 \treturn 0;
 }
 """
@@ -236,14 +318,54 @@ def test_statement_form_conditional_move_no_leak(tmp_path: Path) -> None:
 	_assert_clean(lost, vg_log, label="shape_c_conditional", payload="hello-world-canary")
 
 
-def test_inline_match_user_fn_optional_string_no_leak(tmp_path: Path) -> None:
-	"""Shape D — same surface syntax as Shape A but the scrutinee is a
-	user fn returning Optional<String>::Some("literal".clone()) instead
-	of env.get.  Already clean; proves the bug is in the env.get
-	composition path, not in generic inline-match-rvalue payload-move
-	tracking."""
+def test_inline_match_user_fn_allocated_payload_no_leak(tmp_path: Path) -> None:
+	"""Shape D — same bug path as Shape A but the scrutinee is a user fn
+	returning Optional<String>::Some(fmt.format_int(N)) instead of
+	env.get.  The payload IS a real heap-allocated refcounted String
+	(format_int's return value), not a static literal — so this case
+	exercises the same Copy + runtime-drop materialization gate the
+	fix touches.  Before the fix this leaks; after the fix it's clean.
+	Proves the bug class is type-shape-driven, not env.get-specific."""
 	lost, vg_log = _compile_and_valgrind(
-		tmp_path, SHAPE_D_CLEAN,
-		label="shape_d_user_fn", env_value=None,
+		tmp_path, SHAPE_D_USERFN_ALLOCATED,
+		label="shape_d_user_fn_allocated", env_value=None,
 	)
-	_assert_clean(lost, vg_log, label="shape_d_user_fn", payload=None)
+	_assert_clean(lost, vg_log, label="shape_d_user_fn_allocated", payload="format_int(2147483648)")
+
+
+def test_inline_match_result_variant_no_leak(tmp_path: Path) -> None:
+	"""Shape E — same bug class, different variant family.  Result<String, E>
+	with Ok(v) binding the allocated String payload.  If the
+	materialization gate only saw `Optional` (or had a hardcoded variant
+	list), this would still leak.  Pins type-shape generality of the
+	fix — `_needs_runtime_drop(f_ty)` is variant-agnostic."""
+	lost, vg_log = _compile_and_valgrind(
+		tmp_path, SHAPE_E_RESULT_VARIANT,
+		label="shape_e_result_ok", env_value=None,
+	)
+	_assert_clean(lost, vg_log, label="shape_e_result_ok", payload="format_int(99999)")
+
+
+def test_inline_match_multifield_ctor_no_leak(tmp_path: Path) -> None:
+	"""Shape F — multi-field ctor `Filled(label: String, count: Int)`.
+	The arm binds both an allocated String AND a non-drop Int.  Pins
+	that the materialization gate (a per-field loop with break-on-first
+	-Copy+drop hit) correctly fires for the mixed-field ctor case."""
+	lost, vg_log = _compile_and_valgrind(
+		tmp_path, SHAPE_F_MULTIFIELD_CTOR,
+		label="shape_f_multifield", env_value=None,
+	)
+	_assert_clean(lost, vg_log, label="shape_f_multifield", payload="format_int(777)")
+
+
+def test_inline_match_discarded_result_no_leak(tmp_path: Path) -> None:
+	"""Shape G — discarded result.  `val _ = match … { Some(v) => move v,
+	None => lit }`.  The binder is moved out and the entire match
+	expression is then dropped without naming.  Pins that the
+	materialized variant + the discarded binder both get scope-drop
+	cleanup correctly even without a named result owner."""
+	lost, vg_log = _compile_and_valgrind(
+		tmp_path, SHAPE_G_DISCARDED_RESULT,
+		label="shape_g_discarded", env_value="discarded-canary-payload",
+	)
+	_assert_clean(lost, vg_log, label="shape_g_discarded", payload="discarded-canary-payload")
