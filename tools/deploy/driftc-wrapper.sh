@@ -20,32 +20,22 @@ export PYTHONPATH="${DIST_ROOT}/lib/python_vendor:${DIST_ROOT}/lib/compiler"
 # a repo checkout that also has a lang/ package).
 export PYTHONSAFEPATH=1
 
-# Runtime archive cache: use a writable user-local cache so that missing
-# variants can be built on demand even when the install tree is read-only.
-# Pre-built archives from the install tree are copied (not symlinked) so
-# they survive install-tree relocation.
+# Runtime archive resolution: point driftc directly at this deployment
+# tree's `lib/runtime/`.  The .a files there are pre-built, signed
+# alongside the rest of the toolchain, and serve as the single source
+# of truth for this deployment.  `ld.gold` opens the archive read-only,
+# so a 0444 install tree is fine — no copy, no chmod, no user-local
+# cache.
+#
+# No `~/.cache/drift/runtime/`: a process-wide writable cache that
+# survives toolchain upgrades is a silent-Frankenstein hazard.  Each
+# deployment is self-contained.  An operator-provided env var still
+# wins (CI scratch dir under /tmp); the default just points at the
+# install tree's read-only artifact.
 if [[ -z "${DRIFT_RUNTIME_LIB_CACHE_DIR:-}" ]]; then
-	_DRIFT_RT_CACHE="${HOME}/.cache/drift/runtime"
-	mkdir -p "${_DRIFT_RT_CACHE}"
-	_INSTALL_RT="${DIST_ROOT}/lib/runtime"
-	if [[ -d "${_INSTALL_RT}" ]]; then
-		for _vdir in "${_INSTALL_RT}"/*/; do
-			[[ -d "${_vdir}" ]] || continue
-			_vname="$(basename "${_vdir}")"
-			# ABI-versioned archive name (libdrift_rt_abiN.a).
-			for _archive in "${_vdir}"libdrift_rt_abi*.a; do
-				[[ -f "${_archive}" ]] || continue
-				_ar_basename="$(basename "${_archive}")"
-				_cache_vdir="${_DRIFT_RT_CACHE}/${_vname}"
-				mkdir -p "${_cache_vdir}"
-				_cache_archive="${_cache_vdir}/${_ar_basename}"
-				if [[ ! -f "${_cache_archive}" ]]; then
-					cp "${_archive}" "${_cache_archive}" 2>/dev/null || true
-				fi
-			done
-		done
+	if [[ -d "${DIST_ROOT}/lib/runtime" ]]; then
+		export DRIFT_RUNTIME_LIB_CACHE_DIR="${DIST_ROOT}/lib/runtime"
 	fi
-	export DRIFT_RUNTIME_LIB_CACHE_DIR="${_DRIFT_RT_CACHE}"
 fi
 
 # Locate Python — prefer python3, accept python.

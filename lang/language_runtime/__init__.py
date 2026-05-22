@@ -171,13 +171,25 @@ def _needs_rebuild(archive_path: Path, deps: List[Path]) -> bool:
 def build_runtime_archive(root: Path, *, clang: str, variant: str) -> Path:
 	if variant not in _VALID_VARIANTS:
 		raise ValueError(f"unknown runtime archive variant '{variant}'")
+	cache_root = runtime_archive_cache_root(root)
+	build_root = cache_root / variant
+	archive_path = build_root / runtime_archive_name(variant)
+	# Deployed-toolchain path: the archive ships pre-built inside the
+	# install tree and the directory is read-only (0444).  Never attempt
+	# to rebuild — the linker just reads the archive in place.  This
+	# guard makes deployed mode resilient to mtime quirks (PEX zip
+	# extract times, cross-host clock skew, etc.) that would otherwise
+	# make `_needs_rebuild` falsely flag the archive stale and trigger
+	# a write to the read-only install tree.
+	#
+	# In-repo dev path: build_root is under `<repo>/build/runtime_libs/`
+	# (writable per checkout); falls through to the full rebuild logic.
+	if archive_path.is_file() and not os.access(str(build_root), os.W_OK):
+		return archive_path
 	ar_bin = shutil.which("llvm-ar") or shutil.which("ar")
 	if ar_bin is None:
 		raise RuntimeError("ar/llvm-ar not available")
-	cache_root = runtime_archive_cache_root(root)
-	build_root = cache_root / variant
 	obj_dir = build_root / "objs"
-	archive_path = build_root / runtime_archive_name(variant)
 	lock_path = build_root / ".build.lock"
 	deps = _runtime_deps(root)
 	# ABI version constant also drives rebuild (change → force recompile).

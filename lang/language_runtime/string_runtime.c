@@ -6,8 +6,52 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <stddef.h>
+#include <execinfo.h>
+#include <pthread.h>
+#include <unistd.h>
 
 #include "ryu/ryu.h"
+
+/* DRIFT_STR_TRACE: env-gated diagnostic for refcount-race investigations.
+ * Logs every retain/release on heap-allocated (non-static) DriftStrings
+ * to stderr with: header ptr, refcount transition, len, first 32 bytes
+ * of content, thread id, and a 6-frame backtrace.
+ *
+ * Set DRIFT_STR_TRACE=1 to enable.  Optional DRIFT_STR_TRACE_FILTER=<substr>
+ * narrows to events whose String content contains the substring (case-
+ * sensitive prefix match on the first 32 bytes); useful for isolating
+ * a specific allocation (e.g. "memcheck-secret") from the broader noise
+ * of an app run.  Filtering is per-event; the alloc-time trace at
+ * drift_string_alloc / drift_string_from_cstr always fires unfiltered
+ * (so you see the original allocation that anchors all later events).
+ *
+ * Zero cost when the env var is unset (one getenv per call, all sites
+ * short-circuit before any formatting).  Investigation aid; not for
+ * production use. */
+static void drift_str_trace_event(const char *what, void *hdr,
+		const char *data, long len, uint64_t prev_rc, uint64_t new_rc) {
+	const char *want = getenv("DRIFT_STR_TRACE_FILTER");
+	if (want && *want) {
+		if (!data || len <= 0) return;
+		size_t wlen = strlen(want);
+		size_t scan = (size_t)len < 32 ? (size_t)len : 32;
+		if (wlen > scan) return;
+		int hit = 0;
+		for (size_t i = 0; i + wlen <= scan; i++) {
+			if (memcmp(data + i, want, wlen) == 0) { hit = 1; break; }
+		}
+		if (!hit) return;
+	}
+	fprintf(stderr, "[str] %s ptr=%p rc=%lu->%lu len=%ld tid=%lu val=\"%.32s\"\n",
+		what, hdr, (unsigned long)prev_rc, (unsigned long)new_rc,
+		len, (unsigned long)pthread_self(), data ? data : "");
+	void *bt[7];
+	int n = backtrace(bt, 7);
+	/* Skip frame 0 (this helper) and frame 1 (the caller's prologue
+	 * stub if any) so the first printed frame is the actual call site. */
+	if (n > 1) backtrace_symbols_fd(bt + 1, n - 1, STDERR_FILENO);
+	fflush(stderr);
+}
 
 typedef struct DriftStringHeader {
 	_Atomic uint64_t refcount;
@@ -194,7 +238,10 @@ DriftString drift_string_retain(DriftString s) {
 	if (hdr->flags & DRIFT_STRING_FLAG_STATIC) {
 		return s;
 	}
-	atomic_fetch_add_explicit(&hdr->refcount, 1, memory_order_relaxed);
+	uint64_t prev = atomic_fetch_add_explicit(&hdr->refcount, 1, memory_order_relaxed);
+	if (getenv("DRIFT_STR_TRACE")) {
+		drift_str_trace_event("retain", hdr, s.data, (long)s.len, prev, prev + 1);
+	}
 	return s;
 }
 

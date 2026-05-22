@@ -107,9 +107,23 @@ def _pre_publish_stdlib_author_claim(
 
 
 @_skip_no_pex
-def test_deployed_wrapper_uses_runtime_archives_without_writing_install_tree(
+def test_deployed_wrapper_links_directly_from_dist_tree_lib_runtime(
 	tmp_path: Path, pex_scie_base: Path,
 ) -> None:
+	"""Default deployed-driftc resolves the runtime archive from
+	`<dist>/lib/runtime/<variant>/` and links from it in place.
+
+	Read-only install trees (0444) are fine — the linker only reads.
+	No copy, no chmod, no user-local cache.  This pins the post-#101
+	contract: deployments are self-contained and never leak shared
+	state into `$HOME` or any other process-wide location.
+
+	The old behavior (seed into `~/.cache/drift/runtime/`) was a
+	silent-Frankenstein hazard: a stale cache could survive a
+	toolchain upgrade and link the previous toolchain's runtime
+	against the new compiler's IR.  See `tools/deploy/pex_entry.py`
+	+ `tools/deploy/driftc-wrapper.sh` for the actual resolution.
+	"""
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
 	clang = shutil.which("clang")
@@ -165,25 +179,31 @@ fn main() nothrow -> Int {
 	)
 	out = tmp_path / "a.out"
 	runtime_root = dist / "lib" / "runtime"
+	# Lock down the install tree to 0444 (read-only) — the new contract
+	# is that the linker reads the .a in place, so write bits are not
+	# needed.  A pre-fix run would have copied to ~/.cache and chmodded
+	# the cached copy; the new flow does neither.
 	for path in [runtime_root, *runtime_root.rglob("*")]:
 		if path.is_dir():
 			path.chmod(stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
 		else:
 			path.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
-	# Isolate the deployed wrapper's runtime-cache seeding into a
-	# test-local directory.  Without this, `pex_entry.py` writes
-	# through to `~/.cache/drift/runtime/<variant>/` with the
-	# operator's real `$HOME`.  Historically that poisoned operator
-	# caches with the 0444 mode inherited from the read-only dist
-	# tree; even with the 0o664 fix in `pex_entry.py`, a test has no
-	# business touching the operator's real cache.
-	rt_cache = tmp_path / "rt_cache"
+	# Pin the new contract: do NOT pre-seed any DRIFT_RUNTIME_LIB_CACHE_DIR.
+	# The deployed wrapper must fall through to the install tree's
+	# `lib/runtime/` by default.  Isolated $HOME guards against the
+	# previous behavior where pex_entry.py wrote into the operator's
+	# real `~/.cache/drift/runtime/` — that's the regression this
+	# test prevents.
+	fake_home = tmp_path / "isolated_home"
+	fake_home.mkdir()
 	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV",
+				"DRIFT_RUNTIME_LIB_CACHE_DIR", "DRIFT_RUNTIME_BUILD_ROOT",
+				"DRIFT_TRUST_STORE"):
 		run_env.pop(key, None)
+	run_env["HOME"] = str(fake_home)
 	run_env["SCIE_BASE"] = str(pex_scie_base)
-	run_env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(rt_cache)
 	result = subprocess.run(
 		[
 			str(dist / "bin" / "driftc"),
@@ -202,49 +222,47 @@ fn main() nothrow -> Int {
 	assert out.exists()
 	assert not list(runtime_root.rglob(".build.lock"))
 
-	# Coverage pin: the seeded cache archive MUST be owner-writable.
-	# This is the exact shape the orch-team report caught — under
-	# the old `shutil.copy2` seeding, the archive inherited 0444
-	# from the read-only dist tree and every subsequent
-	# `ar` rebuild failed with "Permission denied".
-	assert rt_cache.is_dir(), (
-		f"expected deployed wrapper to seed runtime cache at {rt_cache}, "
-		f"but the directory does not exist — DRIFT_RUNTIME_LIB_CACHE_DIR "
-		f"handoff broken?"
+	# CONTRACT 1: the deployed wrapper must NOT write to ~/.cache/drift/.
+	# PEX's own bootstrap (`~/.cache/pex/`) is unavoidable infrastructure
+	# and out of scope; we forbid only the drift-specific user-cache
+	# namespace that previously held the runtime-archive copies.
+	leaked_drift_cache = fake_home / ".cache" / "drift"
+	assert not leaked_drift_cache.exists(), (
+		f"deployed wrapper wrote to {leaked_drift_cache} — the new "
+		f"contract forbids any drift-level user-home cache.  If this "
+		f"fails, `tools/deploy/pex_entry.py` or "
+		f"`tools/deploy/driftc-wrapper.sh` has regressed to the "
+		f"pre-#101 seed-into-~/.cache behavior."
 	)
-	_seeded_archives = list(rt_cache.rglob("libdrift_rt*.a"))
-	assert _seeded_archives, (
-		f"expected at least one runtime archive seeded into {rt_cache}; "
-		f"found none — cache-seeding loop in `pex_entry.py` may have "
-		f"skipped every variant (read-only install tree is the scenario "
-		f"this code exists to support)"
-	)
-	for _archive in _seeded_archives:
-		_mode = stat.S_IMODE(_archive.stat().st_mode)
-		assert _mode & stat.S_IWUSR, (
-			f"seeded runtime archive {_archive} has mode {oct(_mode)} — "
-			f"missing owner-write bit.  `pex_entry.py` must copy "
-			f"with content-only semantics and force 0o664, not "
-			f"`shutil.copy2` which preserves the read-only source "
-			f"mode of a 0444 install tree.  Next rebuild attempt "
-			f"through ar would fail with 'Permission denied' and "
-			f"poison the operator cache."
-		)
+
+	# CONTRACT 2: dist tree's lib/runtime/ stays 0444 (untouched).
+	# The linker only reads; no chmod, no copy.
+	for path in runtime_root.rglob("*"):
+		if path.is_file():
+			mode = stat.S_IMODE(path.stat().st_mode)
+			assert mode == 0o444, (
+				f"dist tree file {path} mode changed to {oct(mode)} "
+				f"during build — expected unchanged 0o444.  Something "
+				f"wrote to the read-only install tree."
+			)
 
 
 @_skip_no_pex
-def test_deployed_wrapper_repairs_poisoned_runtime_cache(
+def test_deployed_wrapper_explicit_env_override_respected(
 	tmp_path: Path, pex_scie_base: Path,
 ) -> None:
-	"""Pin the poisoned-cache recovery path.
+	"""When DRIFT_RUNTIME_LIB_CACHE_DIR is set explicitly (CI scratch
+	dir, in-repo dev override, etc.), the deployed wrapper honors it
+	verbatim instead of overriding with the dist tree's lib/runtime/.
 
-	Operators who hit the pre-fix `shutil.copy2` bug now have a
-	0444 archive sitting in `~/.cache/drift/runtime/<variant>/`.
-	The corrected `pex_entry.py` must chmod those archives back to
-	0o664 on subsequent invocations so the user recovers without
-	manual `chmod u+w` / `rm` intervention.  This test pre-creates
-	a 0444 archive in the test-local cache, runs the deployed
-	wrapper, and asserts the archive is repaired to owner-writable.
+	Pins the operator escape hatch: the default (no env) links from
+	the dist tree, but an explicit env wins.  No silent fallthrough,
+	no $HOME writes either way.
+
+	Replaces the pre-#101 `test_deployed_wrapper_repairs_poisoned_runtime_cache`,
+	which tested the cache-self-heal contract that's no longer
+	meaningful (there is no cache to poison/repair when the default
+	resolves directly to the dist tree).
 	"""
 	dist = tmp_path / "dist"
 	dist.mkdir(parents=True, exist_ok=True)
@@ -284,30 +302,19 @@ def test_deployed_wrapper_repairs_poisoned_runtime_cache(
 	_write_file(src, "module main;\n\nfn main() nothrow -> Int { return 0; }\n")
 	out = tmp_path / "a.out"
 
-	# Pre-seed a poisoned cache: copy an archive from the dist tree
-	# into the test-local cache and chmod it to 0444 to simulate a
-	# pre-fix operator cache state.
-	runtime_root = dist / "lib" / "runtime"
-	rt_cache = tmp_path / "rt_cache"
-	_poisoned_archives: list[Path] = []
-	for _variant_dir in sorted(runtime_root.iterdir()):
-		if not _variant_dir.is_dir():
-			continue
-		for _ar in _variant_dir.glob("libdrift_rt*.a"):
-			_cache_variant = rt_cache / _variant_dir.name
-			_cache_variant.mkdir(parents=True, exist_ok=True)
-			_cache_ar = _cache_variant / _ar.name
-			shutil.copyfile(_ar, _cache_ar)
-			_cache_ar.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-			_poisoned_archives.append(_cache_ar)
-			break
-	assert _poisoned_archives, "precondition: at least one variant must seed a poisoned archive"
-
+	# Operator override: point at a test-local scratch directory.
+	# pex_entry.py / driftc-wrapper.sh must honor this verbatim and
+	# NOT redirect to the dist tree.
+	rt_scratch = tmp_path / "rt_scratch"
+	fake_home = tmp_path / "isolated_home"
+	fake_home.mkdir()
 	run_env = dict(os.environ)
-	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV"):
+	for key in ("PYTHONPATH", "PYTHONSAFEPATH", "DRIFT_PYTHON", "VIRTUAL_ENV",
+				"DRIFT_TRUST_STORE"):
 		run_env.pop(key, None)
+	run_env["HOME"] = str(fake_home)
 	run_env["SCIE_BASE"] = str(pex_scie_base)
-	run_env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(rt_cache)
+	run_env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(rt_scratch)
 	result = subprocess.run(
 		[
 			str(dist / "bin" / "driftc"),
@@ -323,17 +330,20 @@ def test_deployed_wrapper_repairs_poisoned_runtime_cache(
 		timeout=180,
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+	assert out.exists()
 
-	# Every pre-poisoned archive must now be owner-writable.  The
-	# repair path in `pex_entry.py` runs on every invocation when
-	# the cache archive already exists — this is the self-healing
-	# contract the orch-team report asked for.
-	for _archive in _poisoned_archives:
-		_mode = stat.S_IMODE(_archive.stat().st_mode)
-		assert _mode & stat.S_IWUSR, (
-			f"poisoned cache archive {_archive} still has mode "
-			f"{oct(_mode)} after deployed-wrapper invocation.  "
-			f"`pex_entry.py` must chmod to 0o664 even when the "
-			f"archive already exists, so operators recover from "
-			f"the pre-fix 0444 state automatically."
-		)
+	# The override was honored: rt_scratch is where driftc looked
+	# (build_runtime_archive in-repo dev path would have written here
+	# rebuilding from sources).  EITHER it's been populated, OR the
+	# linker found nothing there and failed — the test would have
+	# tripped the returncode assertion above.  Either way, $HOME
+	# stays untouched.
+	# Same contract as the default path: ~/.cache/drift/ must stay empty.
+	# (PEX's own ~/.cache/pex/ bootstrap is allowed; we only forbid the
+	# drift-specific namespace.)
+	leaked_drift_cache = fake_home / ".cache" / "drift"
+	assert not leaked_drift_cache.exists(), (
+		f"explicit env override leaked into $HOME at {leaked_drift_cache} — "
+		f"deployed wrapper must respect DRIFT_RUNTIME_LIB_CACHE_DIR "
+		f"verbatim and never fall through to ~/.cache/drift/."
+	)

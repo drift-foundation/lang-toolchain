@@ -66,67 +66,26 @@ def main() -> None:
 	if compiler_lib not in sys.path:
 		sys.path.insert(0, compiler_lib)
 
-	# Runtime archive resolution: use a writable user-local cache so that
-	# missing variants (e.g. asan) can be built on demand even when the
-	# install tree is read-only.  Pre-built archives from the install tree
-	# are copied into the cache on first run.
+	# Runtime archive resolution: point driftc directly at the deployment
+	# tree's `lib/runtime/` directory.  The .a files there are pre-built,
+	# signed alongside the rest of the toolchain, and serve as the
+	# single source of truth for this deployment.  `ld.gold` opens the
+	# archive O_RDONLY (verified via strace), so a 0444 read-only install
+	# tree is fine — no copy, no chmod, no user-local cache.
 	#
-	# Copies (not symlinks) are used because symlinks break when the install
-	# tree is relocated or when tests use ephemeral temp directories.
-	import shutil as _shutil
-	from lang.language_runtime import runtime_archive_name as _rt_ar_name
-	_install_runtime = dist_root / "lib" / "runtime"
-	# Resolve the cache path — operator-provided env var wins; default
-	# is the user-local `~/.cache` location.  Seed and permission-
-	# repair run against the resolved path regardless of whether the
-	# env var was pre-set: a poisoned archive is a poisoned archive
-	# wherever it lives, and the self-healing contract must not be
-	# conditional on the operator's invocation shape.
-	_env_cache = os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR")
-	if _env_cache:
-		_cache_runtime = Path(_env_cache)
-	else:
-		_cache_runtime = Path.home() / ".cache" / "drift" / "runtime"
-	_cache_runtime.mkdir(parents=True, exist_ok=True)
-	# Seed pre-built archives from the install tree.  Each variant subdir
-	# has a variant-specific archive filename — the debug variant carries
-	# the explicit `_debug` infix per the dual-runtime contract.
-	if _install_runtime.is_dir():
-		for _variant_dir in sorted(_install_runtime.iterdir()):
-			if not _variant_dir.is_dir():
-				continue
-			_ar_name = _rt_ar_name(_variant_dir.name)
-			_archive = _variant_dir / _ar_name
-			if not _archive.is_file():
-				continue
-			_cache_variant = _cache_runtime / _variant_dir.name
-			_cache_variant.mkdir(parents=True, exist_ok=True)
-			_cache_archive = _cache_variant / _ar_name
-			# Seed the user-local cache with a WRITABLE copy of
-			# the install-tree archive.  `shutil.copy2` would
-			# preserve source mode — fine for writable installs
-			# but catastrophic for read-only installs (system-
-			# wide /usr/local deploys, 0444 dist trees), where
-			# the cache inherits 0444 and ar fails to rebuild
-			# the archive on the next cache miss.  Use
-			# `copyfile` (content only) and force 0o664
-			# explicitly.  Also repair a pre-existing
-			# poisoned cache archive: if the file is already
-			# present but read-only, chmod it back to 0o664
-			# so operators who hit the old bug recover on
-			# next invocation without manual intervention.
-			if not _cache_archive.is_file():
-				try:
-					_shutil.copyfile(str(_archive), str(_cache_archive))
-					_cache_archive.chmod(0o664)
-				except OSError:
-					pass  # Best-effort; build will recreate if needed.
-			else:
-				try:
-					_cache_archive.chmod(0o664)
-				except OSError:
-					pass
-	os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(_cache_runtime)
+	# Why no `~/.cache/drift/runtime/`: a process-wide writable cache that
+	# survives toolchain upgrades is a silent-Frankenstein hazard.  Each
+	# deployment must be self-contained; two installed toolchains coexist
+	# only if neither writes into shared user state.  Filed 2026-05-22.
+	#
+	# An operator-provided DRIFT_RUNTIME_LIB_CACHE_DIR (typically a CI
+	# scratch dir under /tmp) still wins — that's an explicit override,
+	# not a default.  The fall-through to `lib/runtime/` only fires when
+	# the env var is unset.
+	if not os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR"):
+		_install_runtime = dist_root / "lib" / "runtime"
+		if _install_runtime.is_dir():
+			os.environ["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(_install_runtime)
 
 	# Build driftc argument list.
 	args = list(sys.argv[1:])
