@@ -191,10 +191,12 @@ static void drift_runtime_registry_cleanup_atexit(void) {
 	if (atomic_exchange_explicit(&drift_runtime_registry_cleaned, 1, memory_order_acq_rel) != 0) {
 		return;
 	}
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] atexit: drift_runtime_registry_cleanup begin\n");
 	pthread_mutex_lock(&drift_runtime_registry_mu);
 	drift_runtime_registry_entry_list_cleanup(&drift_runtime_registry_head);
 	pthread_mutex_unlock(&drift_runtime_registry_mu);
 	drift_runtime_registry_entry_list_cleanup(&drift_runtime_thread_registry_head);
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] atexit: drift_runtime_registry_cleanup end\n");
 }
 
 void drift_runtime_registry_cleanup_now(void) {
@@ -254,6 +256,7 @@ static void drift_vt_destroy(DriftVt *h) {
 }
 
 static void drift_vt_registry_cleanup_atexit(void) {
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] atexit: drift_vt_registry_cleanup begin\n");
 	/* Ensure no executor workers are concurrently mutating VT lifetime/registry
 	 * while process-exit VT cleanup walks and tears down the registry list. */
 	drift_exec_shutdown_all_atexit();
@@ -283,6 +286,7 @@ static void drift_vt_registry_cleanup_atexit(void) {
 		free(cur);
 		cur = next;
 	}
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] atexit: drift_vt_registry_cleanup end\n");
 }
 
 __attribute__((constructor))
@@ -1401,11 +1405,14 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 	exec->shutting_down = 1;
 	pthread_cond_broadcast(&exec->cv);
 	pthread_mutex_unlock(&exec->mu);
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] exec_destroy: shutting_down=1 broadcast done; %d workers to join\n", exec->threads_count);
 	/* Wake worker if it is in poll mode (epoll_wait). */
 	Reactor *r = drift_default_reactor_ptr;
 	if (r) drift_reactor_wake(r);
 	for (int i = 0; i < exec->threads_count; i++) {
+		if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] exec_destroy: joining worker %d\n", i);
 		pthread_join(exec->threads[i], NULL);
+		if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] exec_destroy: worker %d joined\n", i);
 	}
 	pthread_mutex_lock(&exec->mu);
 	ExecNode *node = exec->head;
@@ -2241,8 +2248,28 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	 * By shutting down the executor here, worker TLS destructors fire
 	 * while third-party libraries are still initialized.  The executor
 	 * and reactor atexit handlers become no-ops. */
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] root vt joined; running registry cleanup\n");
+	/* Drain the global runtime registry while the executor + reactor are
+	 * still alive.  Registry entries may be Drift `Arc<T>` values whose
+	 * `T` implements `core.Destructible`; firing those droppers can
+	 * legitimately call stdlib primitives that need a live runtime
+	 * (e.g. joining a keepalive VT inside `pool.close()`).  If we deferred
+	 * this to libc atexit -- AFTER reactor + executor are torn down --
+	 * any such dropper hangs because the worker that would run its
+	 * waiter no longer exists.  Symptom (filed 2026-05-21 from bookkeeper
+	 * shutdown-hang repro): single-threaded `futex_do_wait` on the main
+	 * thread, last log line user code emitted is the post-`main` marker
+	 * but the process never exits.
+	 *
+	 * `drift_runtime_registry_cleanup_now` is idempotent (atomic
+	 * exchange flag); the registry-cleanup atexit handler runs second
+	 * and no-ops. */
+	drift_runtime_registry_cleanup_now();
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] registry cleanup done; calling reactor shutdown\n");
 	drift_reactor_shutdown_default_atexit();
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] reactor shutdown done; calling exec shutdown\n");
 	drift_exec_shutdown_default_atexit();
+	if (getenv("DRIFT_SHUTDOWN_TRACE")) fprintf(stderr, "[trace] exec shutdown done; returning from drift_run_main_on_vt\n");
 
 	return drift_root_vt_result;
 }
