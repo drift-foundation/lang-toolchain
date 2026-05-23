@@ -21,6 +21,21 @@ if str(_REPO_ROOT) not in sys.path:
 from lang.test_support.drift_tmp import session_root as _drift_session_root
 
 
+# Every `tools.<pkg>` package that the deployed `drift` PEX dispatches
+# to at runtime, either via `deploy_pex_entry.py`'s pre-argparse
+# dispatch (drift_deploy) or via `lang/drift/cli.py`'s subcommand
+# dispatchers (drift_author, drift_doc).  Adding a new
+# `from tools.<X> import ...` line in `lang/drift/cli.py` requires
+# extending this list -- the contract test
+# `tools/deploy/test_pex_bundling.py` enforces it so the deployed PEX
+# does not silently raise ModuleNotFoundError on first invocation.
+BUNDLED_TOOLS_PACKAGES: tuple[str, ...] = (
+	"drift_deploy",
+	"drift_author",
+	"drift_doc",
+)
+
+
 def read_pinned_version(repo_root: Path, package: str, *, allow_gte: bool = False) -> str:
 	"""Read a pinned version from requirements.txt.
 
@@ -114,7 +129,8 @@ def build_drift_pex(repo_root: Path, dist: Path) -> Path:
 	zstd_req = read_pinned_version(repo_root, "zstandard", allow_gte=True)
 	python_version = detect_python_version(venv)
 
-	# Stage entry point + tools.drift_deploy package in temp directory.
+	# Stage entry point + tools.* packages (see BUNDLED_TOOLS_PACKAGES
+	# above) in a temp directory.
 	entry_dir = Path(tempfile.mkdtemp(dir=str(_drift_session_root()), prefix="pex_entry_"))
 	try:
 		# Entry point.
@@ -123,7 +139,7 @@ def build_drift_pex(repo_root: Path, dist: Path) -> Path:
 			str(entry_dir / "deploy_pex_entry.py"),
 		)
 
-		# tools.drift_deploy package (exclude tests).
+		# tools namespace package + __init__.
 		tools_dir = entry_dir / "tools"
 		tools_dir.mkdir()
 		tools_init = repo_root / "tools" / "__init__.py"
@@ -132,18 +148,21 @@ def build_drift_pex(repo_root: Path, dist: Path) -> Path:
 		else:
 			(tools_dir / "__init__.py").touch()
 
-		dd_dir = tools_dir / "drift_deploy"
-		dd_dir.mkdir()
-		for f in sorted((repo_root / "tools" / "drift_deploy").iterdir()):
-			if f.suffix == ".py" and not f.name.startswith("test_"):
-				shutil.copy2(str(f), str(dd_dir / f.name))
-
-		# tools.drift_doc package (docs generator).
-		doc_dir = tools_dir / "drift_doc"
-		doc_dir.mkdir()
-		for f in sorted((repo_root / "tools" / "drift_doc").iterdir()):
-			if f.suffix == ".py" and not f.name.startswith("test_"):
-				shutil.copy2(str(f), str(doc_dir / f.name))
+		# Stage every tools.* package the deployed `drift` CLI dispatches
+		# to at runtime.  This list is the bundle contract; keep it in
+		# sync with the `from tools.<pkg> import ...` lines in
+		# `lang/drift/cli.py`.  `tools/deploy/test_pex_bundling.py`
+		# enforces that contract -- if you add a new dispatcher in
+		# cli.py and forget to extend `BUNDLED_TOOLS_PACKAGES`, the
+		# deployed PEX will raise ModuleNotFoundError on first
+		# invocation (as happened in 0.32.16 when `drift author`
+		# shipped without `tools.drift_author` bundled).
+		for pkg_name in BUNDLED_TOOLS_PACKAGES:
+			pkg_dir = tools_dir / pkg_name
+			pkg_dir.mkdir()
+			for f in sorted((repo_root / "tools" / pkg_name).iterdir()):
+				if f.suffix == ".py" and not f.name.startswith("test_"):
+					shutil.copy2(str(f), str(pkg_dir / f.name))
 
 		out = dist / "bin" / "drift"
 		out.parent.mkdir(parents=True, exist_ok=True)

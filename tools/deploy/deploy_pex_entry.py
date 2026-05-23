@@ -17,9 +17,12 @@ Resource layout assumed (relative to the executable at <dist>/bin/drift):
   <dist>/lib/compiler/     — compiler Python sources (lang/ tree)
 
 The PEX itself bundles the Python interpreter (--scie eager), third-party
-dependencies (cryptography, zstandard), and the tools.drift_deploy package.
-The compiler sources in lib/compiler/ provide the lang.drift.* CLI modules
-and deferred imports used by drift deploy at runtime.
+dependencies (cryptography, zstandard), and the tools.drift_deploy /
+tools.drift_author / tools.drift_doc packages (the latter two reached
+indirectly through lang/drift/cli.py dispatchers for `drift author` and
+`drift doc`).  The compiler sources in lib/compiler/ provide the
+lang.drift.* CLI modules and deferred imports used by drift deploy at
+runtime.
 """
 
 from __future__ import annotations

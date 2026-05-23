@@ -15,6 +15,7 @@ Coverage:
   4. Signed stdlib package loading/verification works through the artifact
   5. Runtime archive link path works through the staged artifact
   6. Deploy-root resolution works correctly through symlinked entry paths
+  7. Public drift CLI subcommands backed by tools/ packages are bundled
 
 Out of scope:
 
@@ -303,6 +304,36 @@ def test_pex_deployed_self_sufficient_no_ambient_python(
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out_ir.exists()
+
+
+@_skip_no_pex
+@_skip_deploy_disabled
+def test_pex_deployed_drift_author_subcommand_is_bundled(
+	tmp_path: Path, _shared_deploy_dist: Path, _shared_scie_base: Path,
+) -> None:
+	"""The deployed `drift` PEX must bundle tools.drift_author.
+
+	Regression: drift 0.32.16 shipped the public `drift author`
+	dispatcher in lang.drift.cli, but the deployed PEX omitted the
+	backing tools.drift_author package and failed with ModuleNotFoundError.
+	"""
+	run_env = _pex_run_env(_shared_scie_base)
+	result = subprocess.run(
+		[
+			str(_shared_deploy_dist / "bin" / "drift"),
+			"author",
+			"--help",
+		],
+		text=True,
+		capture_output=True,
+		env=run_env,
+		cwd=tmp_path,
+		timeout=180,
+	)
+	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+	assert "drift author" in result.stdout
+	assert "--manifest" in result.stdout
+	assert "ModuleNotFoundError" not in result.stderr
 
 
 @_skip_no_pex
