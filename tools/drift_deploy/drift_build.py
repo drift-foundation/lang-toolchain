@@ -27,6 +27,7 @@ import sys
 from typing import Any
 from pathlib import Path
 
+from lang.driftc import _events as _events
 from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import read_lock, verify_lock_compatibility
 from tools.drift_deploy.manifest import (
@@ -105,6 +106,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--debug", action="store_true",
 		help="Produce a debug-style build (links the `_debug` runtime variant; "
 		     "equivalent to setting DRIFT_DEBUG=1)")
+	p.add_argument("--timing", action="store_true",
+		help=(
+			"Collect per-phase compile timings from driftc and print a "
+			"`[drift:timing]` summary to stderr after each artifact's "
+			"build.  Forward the flag to the underlying driftc invocation; "
+			"the data is intended for the toolchain-perf data-gathering "
+			"release (see `docs/timing.md`).  No effect on compile output."
+		))
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
 			"Source-rebuild certification mode: compile against the "
@@ -626,6 +635,37 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 			)
 			sci = None
 
+	# Hierarchical timing.  When `--timing` is set, this wrapper owns
+	# the build session: it installs an EventSink for the artifact,
+	# brackets the compile subprocess with `events.timed("compile")`,
+	# asks driftc to write its structured timings to a side-channel
+	# file via `--timing-out`, then merges those into the wrapper
+	# sink under the `compile.*` prefix.  Final consolidated summary
+	# is printed below as `[drift:timing][<art>] ...`.  The outermost
+	# command owns the user-facing summary; driftc suppresses its
+	# own stderr summary when `--timing-out` is set (see
+	# `lang/driftc/driftc.py::main`).
+	build_timing_enabled = bool(getattr(args, "timing", False))
+	wrapper_sink: "_events.EventSink | None" = None
+	timing_out_path: Path | None = None
+	combined_extra = list(extra_flags or [])
+	if build_timing_enabled:
+		wrapper_sink = _events.EventSink()
+		import tempfile as _tf
+		# mkstemp returns (fd, path); close the fd to avoid leaking
+		# descriptors across repeated build invocations.  driftc will
+		# overwrite the file via Path.write_text() once the compile
+		# finishes.
+		_fd, _path = _tf.mkstemp(
+			prefix=f"drift-build-{art.name}-",
+			suffix=".timing.json",
+		)
+		os.close(_fd)
+		timing_out_path = Path(_path)
+		# Pass --timing-out to driftc; --timing-out implies --timing
+		# on the child side.
+		combined_extra.extend(["--timing-out", str(timing_out_path)])
+
 	# Build command.
 	if art.kind == "library":
 		cmd = build_package_cmd(
@@ -637,7 +677,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 			manifest_dir=manifest_dir,
 			package_roots=package_roots,
 			native_lib_paths=native_lib_paths,
-			extra_flags=extra_flags or None,
+			extra_flags=combined_extra or None,
 			source_content_id=sci,
 		)
 	else:
@@ -650,7 +690,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 			manifest_dir=manifest_dir,
 			package_roots=package_roots,
 			native_lib_paths=native_lib_paths,
-			extra_flags=extra_flags or None,
+			extra_flags=combined_extra or None,
 		)
 
 	# Execute.
@@ -681,7 +721,52 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 		# CLI flag normalizes to the env so the underlying compiler sees a
 		# single canonical source of truth.
 		subprocess_env["DRIFT_DEBUG"] = "1"
-	result = subprocess.run(cmd, capture_output=True, text=True, env=subprocess_env)
+
+	# Wrap the subprocess in the wrapper sink so the wrapper's
+	# total_wall reflects the full subprocess cost (not just child's
+	# own measured compile).
+	if wrapper_sink is not None:
+		_sink_ctx = _events.install_sink(wrapper_sink)
+	else:
+		from contextlib import nullcontext
+		_sink_ctx = nullcontext()
+
+	with _sink_ctx:
+		if wrapper_sink is not None:
+			wrapper_sink.begin_compile()
+		try:
+			with _events.timed("compile"):
+				result = subprocess.run(cmd, capture_output=True, text=True, env=subprocess_env)
+		finally:
+			# Print the wrapper summary in the SAME finally that
+			# closes the sink, so failed compiles still report timing
+			# (those are the exact runs users will most often send
+			# back during adoption -- and the child driftc summary is
+			# suppressed by --timing-out, so without this they'd see
+			# nothing).
+			if wrapper_sink is not None:
+				wrapper_sink.close_all_open_phases()
+				wrapper_sink.end_compile()
+				if timing_out_path is not None:
+					try:
+						child_summary = json.loads(
+							timing_out_path.read_text(encoding="utf-8")
+						)
+					except (OSError, json.JSONDecodeError):
+						child_summary = None
+					finally:
+						try:
+							timing_out_path.unlink(missing_ok=True)
+						except OSError:
+							pass
+					if isinstance(child_summary, dict):
+						wrapper_sink.merge_subprocess_timings(
+							"compile", child_summary,
+						)
+				_print_wrapper_timing_summary(
+					art.name, wrapper_sink.timings_summary(),
+				)
+
 	if result.returncode != 0:
 		print(f"build failed for {art.kind} '{art.name}':", file=sys.stderr)
 		if result.stderr:
@@ -690,6 +775,17 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 
 	print(f"  output: {output_path}")
 	return 0
+
+
+def _print_wrapper_timing_summary(label: str, summary: dict) -> None:
+	"""Operator-facing timing block.  Same shape across drift build
+	and drift deploy: one `total_wall` line, phase lines sorted
+	descending by elapsed."""
+	total = float(summary.get("total_wall", 0.0))
+	phases = dict(summary.get("phases", {}))
+	print(f"[drift:timing][{label}] total_wall={total:.3f}s", file=sys.stderr)
+	for k, v in sorted(phases.items(), key=lambda kv: (-float(kv[1]), kv[0])):
+		print(f"[drift:timing][{label}]   {k:<28s} = {float(v):.3f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":

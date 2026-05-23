@@ -37,6 +37,7 @@ from pathlib import Path
 from dataclasses import replace, dataclass, fields, is_dataclass
 from typing import Any, Dict, Mapping, List, Tuple, Callable
 from lang.driftc import debug as drift_debug
+from lang.driftc import _events
 from lang.driftc.env_flags import env_true as _env_true
 
 # Repository root (lang lives under this).
@@ -2929,25 +2930,44 @@ def compile_stubbed_funcs(
 	"""
 	func_hirs_by_id, signatures_by_id, fn_ids_by_name = _normalize_func_maps(func_hirs, signatures)
 	_timing_enabled = drift_debug.enabled("timing")
-	def _timed(label: str):
-		if not _timing_enabled:
-			class _Noop:
-				def __enter__(self_inner):  # type: ignore[no-untyped-def]
-					return None
-				def __exit__(self_inner, exc_type, exc, tb):  # type: ignore[no-untyped-def]
-					return False
-			return _Noop()
+	# `_timed` is the legacy per-phase wrapper.  It delegates to the
+	# scoped EventSink (`lang/driftc/_events.py`) for structured
+	# capture; when `DRIFT_COMPILER_DEBUG` carries `timing` it also
+	# writes the human-readable `[drift:debug][timing] label=Xs`
+	# stderr line.
+	#
+	# Hot-path contract: when neither timing channel is enabled (no
+	# sink installed AND debug timing off -- the default for normal
+	# in-process compiles), `_timed("label")` must do NO clock reads
+	# and allocate nothing beyond what `events.timed` already does
+	# (one ContextVar.get() returning None, bare yield).  The
+	# stderr-emission path is gated behind `_timing_enabled` so the
+	# `time.monotonic()` calls only fire when the debug channel is
+	# actually on.
+	if _timing_enabled:
 		import time as _timing_time
-		start = _timing_time.perf_counter()
-		class _Timing:
-			def __enter__(self_inner):  # type: ignore[no-untyped-def]
-				return None
-			def __exit__(self_inner, exc_type, exc, tb):  # type: ignore[no-untyped-def]
-				elapsed = _timing_time.perf_counter() - start
-				import sys as _timing_sys
-				print(f"[drift:debug][timing] {label}={elapsed:.3f}s", file=_timing_sys.stderr)
-				return False
-		return _Timing()
+		import sys as _timing_sys
+		from contextlib import contextmanager as _cm
+		def _timed(label: str):
+			@_cm
+			def _scope():
+				start = _timing_time.monotonic()
+				with _events.timed(label):
+					try:
+						yield
+					finally:
+						elapsed = _timing_time.monotonic() - start
+						print(
+							f"[drift:debug][timing] {label}={elapsed:.3f}s",
+							file=_timing_sys.stderr,
+						)
+			return _scope()
+	else:
+		def _timed(label: str):
+			# Cheap path: no clock reads, no allocations beyond what
+			# events.timed itself does (which is also zero when no
+			# sink is installed).
+			return _events.timed(label)
 	if drift_debug.enabled("try_auto"):
 		import sys as _try_auto_sys
 		for fn_id, sig in signatures_by_id.items():
@@ -7556,6 +7576,15 @@ def compile_to_llvm_ir_for_tests(
 	`entry`) returning `Int`, `String`, or `FnResult<Int, Error>` and uses the
 	v1 ABI.
 	Returns IR text and the CheckedProgramById so callers can assert diagnostics.
+
+	Phase timing (`lang/driftc/_events.py`): this helper does NOT install
+	its own sink.  Callers that want a `timings_summary()` install one
+	BEFORE calling and read it after the call returns; `events.timed(...)`
+	inside the pipeline picks up the installed sink automatically.  When
+	no sink is installed (the common case for the in-process driver test
+	suite), every `events.timed(...)` site is a single
+	`ContextVar.get()` returning `None` plus a bare yield -- no
+	allocations, no clock reads -- so the hot test path pays nothing.
 	"""
 	func_hirs_by_id, signatures_by_id, fn_ids_by_name = _normalize_func_maps(func_hirs, signatures)
 	shared_type_table = type_table or TypeTable()
@@ -7909,8 +7938,143 @@ def _trust_label() -> str:
 
 
 
-@_with_compile_recursion_headroom
 def main(argv: list[str] | None = None) -> int:
+	"""CLI entry.
+
+	Thin wrapper around `_run_compile_cli` that owns the per-compile
+	event-sink lifecycle (see `lang/driftc/_events.py`) when the user
+	opted into timing collection via `--timing`.  Without `--timing`,
+	no sink is installed and the in-process `events.timed` calls are
+	cheap no-ops.
+
+	Callers that already installed a sink (e.g. the e2e runner or any
+	test harness that wants to read structured phase timings) are
+	honoured -- this wrapper detects an existing sink via
+	`events.current_sink()` and does not double-install regardless of
+	the `--timing` flag.
+	"""
+	if _events.current_sink() is not None:
+		# Caller installed a sink and is responsible for begin/end.
+		return _run_compile_cli(argv)
+	# Detect timing flags before argparse so the sink covers the full
+	# compile.  Cheap argv scan; doesn't conflict with the rest of
+	# argparse downstream.
+	raw_argv = argv if argv is not None else sys.argv[1:]
+	timing_requested = "--timing" in raw_argv
+	# --timing-out <path> implies --timing.  Parent wrappers
+	# (drift build / drift deploy) use this to ingest child timings
+	# without parsing stdout.  Support both argparse forms:
+	#   --timing-out /tmp/x.json
+	#   --timing-out=/tmp/x.json
+	timing_out_path: Path | None = None
+	for _i, _arg in enumerate(raw_argv):
+		if _arg == "--timing-out" and _i + 1 < len(raw_argv):
+			timing_out_path = Path(raw_argv[_i + 1])
+			timing_requested = True
+			break
+		if _arg.startswith("--timing-out="):
+			timing_out_path = Path(_arg[len("--timing-out="):])
+			timing_requested = True
+			break
+	if not timing_requested:
+		# No timing requested: no sink installed.  `events.timed` is a
+		# cheap no-op everywhere; the `--json` payload omits the
+		# `timings` field; text mode prints no summary.
+		return _run_compile_cli(argv)
+	own_sink = _events.EventSink()
+	with _events.install_sink(own_sink):
+		own_sink.begin_compile()
+		try:
+			rc = _run_compile_cli(argv)
+		finally:
+			# Drain any still-open manual phase markers (early-return
+			# error paths from trust_pre_pass / trust_verify_loop /
+			# emit_package may have skipped their phase_end).  Idempotent
+			# w.r.t. _emit_compile_json, which already did the same on
+			# the JSON path.
+			own_sink.close_all_open_phases()
+			# Idempotent; the _emit_compile_json helper may have called
+			# end_compile already at each JSON-emission site, which is
+			# fine (last call sets _wall_end).
+			own_sink.end_compile()
+		_summary = own_sink.timings_summary()
+		# Side-channel write for parent wrappers.  Best-effort: an I/O
+		# failure here mustn't change the compile's exit code (the
+		# user-facing compile already succeeded or failed on its own).
+		if timing_out_path is not None:
+			try:
+				timing_out_path.parent.mkdir(parents=True, exist_ok=True)
+				timing_out_path.write_text(
+					json.dumps(_summary), encoding="utf-8",
+				)
+			except OSError as _e:
+				print(
+					f"[drift:timing] warning: failed to write "
+					f"--timing-out {timing_out_path}: {_e}",
+					file=sys.stderr,
+				)
+		# Text-mode timing summary: only when --timing was set AND
+		# --json was not AND no wrapper is collecting via --timing-out.
+		# The --timing-out gate avoids duplicate summaries when a
+		# parent wrapper will print its own consolidated block.
+		if "--json" not in raw_argv and timing_out_path is None:
+			_print_text_timing_summary(_summary)
+		return rc
+
+
+def _print_text_timing_summary(summary: dict) -> None:
+	"""Human-readable timing summary printed to stderr at end of a
+	`driftc --timing` compile.  Format is deliberately stable so
+	teams can grep / awk it from CI logs without an XML/JSON parser.
+
+	Example:
+	  [drift:timing] total_wall=4.213s
+	  [drift:timing]   parse           = 1.852s
+	  [drift:timing]   trust_pre_pass  = 0.107s
+	  [drift:timing]   trust_verify_loop = 0.094s
+	  [drift:timing]   codegen         = 1.512s
+	  [drift:timing]   link            = 0.624s
+	"""
+	import sys as _sys
+	total = float(summary.get("total_wall", 0.0))
+	phases: dict[str, float] = dict(summary.get("phases", {}))
+	print(f"[drift:timing] total_wall={total:.3f}s", file=_sys.stderr)
+	# Stable order: descending by elapsed (biggest first), tie-break by name.
+	for label, secs in sorted(
+		phases.items(), key=lambda kv: (-float(kv[1]), kv[0])
+	):
+		print(f"[drift:timing]   {label:<24s} = {float(secs):.3f}s", file=_sys.stderr)
+
+
+def _emit_compile_json(payload: dict) -> None:
+	"""Emit a terminal `--json` payload, surfacing the active sink's
+	timings as `{"timings": {"total_wall": float, "phases": {...}}}`.
+
+	Idempotent re: `end_compile`: each terminal JSON site here marks
+	the wall-clock boundary at the point of emission, so the
+	`total_wall` reported is "time from compile start to the emit
+	site" -- which is the right semantics for early-return error
+	paths as well as success.
+	"""
+	sink = _events.current_sink()
+	if sink is not None:
+		# Close any phases still open: error-return paths from manual
+		# `phase_start` sites (trust_pre_pass / trust_verify_loop /
+		# emit_package) may have skipped their matching `phase_end`.
+		# Capturing their elapsed time here means the `--json --timing`
+		# error payload still reports which phase was running when the
+		# compile bailed.
+		sink.close_all_open_phases()
+		sink.end_compile()
+		payload["timings"] = sink.timings_summary()
+	# Direct stdout write -- the auto-rewrite that turned every
+	# `print(json.dumps(...))` into `_emit_compile_json(...)`
+	# would recurse if we used the same pattern here.
+	sys.stdout.write(json.dumps(payload) + "\n")
+
+
+@_with_compile_recursion_headroom
+def _run_compile_cli(argv: list[str] | None = None) -> int:
 	"""
 	Minimal CLI: parses a Drift file, type checks, then borrow checks. If any stage
 	emits errors, compilation fails.
@@ -8014,6 +8178,35 @@ def main(argv: list[str] | None = None) -> int:
 		"--json",
 		action="store_true",
 		help="Emit diagnostics as JSON (phase/message/severity/file/line/column)",
+	)
+	parser.add_argument(
+		"--timing",
+		action="store_true",
+		help=(
+			"Collect per-phase wall-clock timings for this compile.  "
+			"With --json: adds a top-level `timings` field "
+			"(`{total_wall, phases: {label: seconds}}`) to the payload. "
+			"Without --json: prints `[drift:timing]` summary lines to "
+			"stderr at the end of the compile."
+		),
+	)
+	parser.add_argument(
+		"--timing-out",
+		type=Path,
+		default=None,
+		help=(
+			"Write the compile's structured timings as JSON to <path> "
+			"(shape: `{total_wall, phases: {label: seconds}}`).  "
+			"Implies `--timing`.  Intended for parent wrappers "
+			"(`drift build` / `drift deploy`) that want to merge child "
+			"compiler timings into a wrapper-level summary -- avoids "
+			"the parent having to parse driftc's stderr text or "
+			"--json stdout.  When `--timing-out` is set, driftc "
+			"suppresses its own stderr `[drift:timing]` summary "
+			"(the wrapper prints the consolidated summary instead) "
+			"unless `--json` is also set, in which case the JSON "
+			"payload's `timings` field is still emitted on stdout."
+		),
 	)
 	parser.add_argument(
 		"--prelude",
@@ -8125,8 +8318,7 @@ def main(argv: list[str] | None = None) -> int:
 			# Explicit trust store path is required to exist.
 			msg = f"trust store not found: {_trust_label()}"
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -8141,7 +8333,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"{_trust_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -8149,8 +8340,7 @@ def main(argv: list[str] | None = None) -> int:
 		if args.dev_core_trust_store is not None and not args.dev:
 			msg = "--dev-core-trust-store requires --dev"
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -8165,7 +8355,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"error: {msg}", file=sys.stderr)
 			return 1
@@ -8179,8 +8368,7 @@ def main(argv: list[str] | None = None) -> int:
 		except ValueError as err:
 			msg = str(err)
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -8195,7 +8383,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"error: {msg}", file=sys.stderr)
 			return 1
@@ -8239,7 +8426,7 @@ def main(argv: list[str] | None = None) -> int:
 			if "@" not in _pin_spec:
 				msg = f"--dep requires PKG@VERSION format, got: {_pin_spec}"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
 				else:
 					print(f"error: {msg}", file=sys.stderr)
 				return 1
@@ -8247,14 +8434,14 @@ def main(argv: list[str] | None = None) -> int:
 			if not _pin_name or not _pin_ver:
 				msg = f"--dep requires non-empty PKG and VERSION, got: {_pin_spec}"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
 				else:
 					print(f"error: {msg}", file=sys.stderr)
 				return 1
 			if _pin_name in _version_pins:
 				msg = f"--dep specified twice for '{_pin_name}'"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
 				else:
 					print(f"error: {msg}", file=sys.stderr)
 				return 1
@@ -8263,7 +8450,7 @@ def main(argv: list[str] | None = None) -> int:
 		if not _version_pins:
 			msg = "--package-root requires at least one --dep PKG@VERSION"
 			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]}))
+				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
 			else:
 				print(f"error: {msg}", file=sys.stderr)
 			return 1
@@ -8279,7 +8466,8 @@ def main(argv: list[str] | None = None) -> int:
 		# Unrelated packages and non-matching versions are never loaded,
 		# never trust-verified, and cannot fail or collide with the build.
 		from lang.driftc.packages.dmir_pkg_v0 import peek_package_id
-		package_files = discover_package_files(list(args.package_roots))
+		with _events.timed("package_discovery"):
+			package_files = discover_package_files(list(args.package_roots))
 		_candidate_files: list[Path] = []
 		for _pf in package_files:
 			_peeked_id = peek_package_id(_pf)
@@ -8303,7 +8491,7 @@ def main(argv: list[str] | None = None) -> int:
 					f"skip.  Reinstall or republish this package."
 				)
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(_pf), "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": str(_pf), "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8326,7 +8514,7 @@ def main(argv: list[str] | None = None) -> int:
 					f"'{_peeked_id}' in manifest (expected '{_fs_grandparent}')"
 				)
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8362,7 +8550,7 @@ def main(argv: list[str] | None = None) -> int:
 							f"'{_manifest_ver}' in manifest (expected '{_fs_ver}')"
 						)
 						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 						else:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -8431,6 +8619,7 @@ def main(argv: list[str] | None = None) -> int:
 		# diagnostic.  Populated alongside `_prepass_by_path`.
 		_prepass_paths_for_key: dict[tuple[str, str], list[Path]] = {}
 
+		_events.phase_start("trust_pre_pass")
 		for pkg_path in _candidate_files:
 			# Best-effort pre-pass: any load error here is deliberately
 			# swallowed and re-surfaced by the verify pass below.  This
@@ -8536,8 +8725,7 @@ def main(argv: list[str] | None = None) -> int:
 					f"`--package-root` paths."
 				)
 				if args.json:
-					print(
-						json.dumps(
+					_emit_compile_json(
 							{
 								"exit_code": 1,
 								"diagnostics": [
@@ -8552,7 +8740,6 @@ def main(argv: list[str] | None = None) -> int:
 								],
 							}
 						)
-					)
 				else:
 					print(f"{_package_label()}:?:?: error: {_conflict_msg}", file=sys.stderr)
 				return 1
@@ -8667,6 +8854,7 @@ def main(argv: list[str] | None = None) -> int:
 			_candidate_files = [
 				_p for _p in _candidate_files if _p not in _variance_dropped
 			]
+		_events.phase_end("trust_pre_pass")
 
 		def _build_closure_for(start_pkg: object) -> list[_ResolvedDep]:
 			"""Wrap `lang.driftc.packages.closure_walk.build_resolved_closure`
@@ -8691,6 +8879,7 @@ def main(argv: list[str] | None = None) -> int:
 				self_pkg_id=_self_pkg_id,
 			)
 
+		_events.phase_start("trust_verify_loop")
 		for pkg_path in _candidate_files:
 			# Verify pass: trust gate runs with a real resolved_closure
 			# computed from the pre-pass so the cert-claim verifier can
@@ -8740,8 +8929,7 @@ def main(argv: list[str] | None = None) -> int:
 			except (ValueError, OSError) as err:
 				msg = str(err)
 				if args.json:
-					print(
-						json.dumps(
+					_emit_compile_json(
 							{
 								"exit_code": 1,
 								"diagnostics": [
@@ -8756,15 +8944,13 @@ def main(argv: list[str] | None = None) -> int:
 								],
 							}
 						)
-					)
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 			except Exception as err:
 				msg = f"failed to load package '{pkg_path}': {err}"
 				if args.json:
-					print(
-						json.dumps(
+					_emit_compile_json(
 							{
 								"exit_code": 1,
 								"diagnostics": [
@@ -8779,12 +8965,12 @@ def main(argv: list[str] | None = None) -> int:
 								],
 							}
 						)
-					)
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 
 			loaded_pkgs.append(_loaded)
+		_events.phase_end("trust_verify_loop")
 
 		# Determinism: package discovery order (filenames, rglob ordering, CLI
 		# `--package-root` ordering) must not affect compilation results. Sort loaded
@@ -8817,7 +9003,7 @@ def main(argv: list[str] | None = None) -> int:
 						_available = sorted({p.manifest.get("package_version", "?") for p in _pkg_list})
 						msg = f"package '{_pid}' version '{_want_ver}' not found under package roots (available: {', '.join(_available)})"
 						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 						else:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -8833,7 +9019,7 @@ def main(argv: list[str] | None = None) -> int:
 				for _upin in sorted(_unmatched_pins):
 					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8847,7 +9033,7 @@ def main(argv: list[str] | None = None) -> int:
 				for _upin in sorted(_all_unmatched):
 					msg = f"package '{_upin}' version '{_version_pins[_upin]}' not found under package roots"
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8899,7 +9085,7 @@ def main(argv: list[str] | None = None) -> int:
 						f"transitive graph reaches driftc as exact --dep pins."
 					)
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -8923,7 +9109,7 @@ def main(argv: list[str] | None = None) -> int:
 						f"regenerate a consistent lock."
 					)
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -8949,7 +9135,7 @@ def main(argv: list[str] | None = None) -> int:
 			if not isinstance(pkg_id, str) or not isinstance(pkg_ver, str) or not isinstance(pkg_target, str):
 				msg = f"package {_package_label()} missing package identity fields"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8965,7 +9151,7 @@ def main(argv: list[str] | None = None) -> int:
 					f"'{prev_ver}' ({prev_target}) and '{pkg_ver}' ({pkg_target}) across distinct package artifacts"
 				)
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8981,7 +9167,7 @@ def main(argv: list[str] | None = None) -> int:
 			if not isinstance(abi, dict):
 				msg = f"package '{pkg.manifest.get('package_id')}' missing abi_fingerprint"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -8991,7 +9177,7 @@ def main(argv: list[str] | None = None) -> int:
 			if abi != abi_expected:
 				msg = "ABI fingerprint mismatch across packages in build"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -9000,7 +9186,7 @@ def main(argv: list[str] | None = None) -> int:
 			if not isinstance(target, str):
 				msg = "ABI fingerprint missing target"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -9008,7 +9194,7 @@ def main(argv: list[str] | None = None) -> int:
 			if local_abi != abi_expected:
 				msg = "ABI fingerprint mismatch between toolchain target and loaded packages"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -9024,8 +9210,7 @@ def main(argv: list[str] | None = None) -> int:
 				elif prev != pkg.path:
 					msg = f"module '{mid}' provided by multiple packages"
 					if args.json:
-						print(
-							json.dumps(
+						_emit_compile_json(
 								{
 									"exit_code": 1,
 									"diagnostics": [
@@ -9040,7 +9225,6 @@ def main(argv: list[str] | None = None) -> int:
 									],
 								}
 							)
-						)
 					else:
 						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -9050,7 +9234,7 @@ def main(argv: list[str] | None = None) -> int:
 				pkg_id, pkg_path, _sym_name = dep_main
 				msg = f"illegal entrypoint 'main' in dependency package {pkg_id}; entrypoints are only allowed in the root package"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 				else:
 					print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -9199,7 +9383,7 @@ def main(argv: list[str] | None = None) -> int:
 				if not isinstance(tt, dict):
 					msg = f"package {_package_label()} module '{mid}' is missing type_table"
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 					else:
 						print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -9209,7 +9393,7 @@ def main(argv: list[str] | None = None) -> int:
 					if type_table_fingerprint(tt) != type_table_fingerprint(_pkg_tt_obj):
 						msg = f"package {_package_label()} contains inconsistent type_table across modules"
 						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 						else:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9223,7 +9407,7 @@ def main(argv: list[str] | None = None) -> int:
 			except ValueError as err:
 				msg = f"failed to import package types: {err}"
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 				else:
 					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -9260,19 +9444,20 @@ def main(argv: list[str] | None = None) -> int:
 	# ── Source parsing ───────────────────────────────────────────────
 	semantic_world.advance_to(WorldPhase.SOURCE_INGRESS)
 	package_id = str(args.package_id) if args.package_id else None
-	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
-		source_paths,
-		module_paths=module_paths,
-		external_module_exports=external_exports,
-		external_module_packages=external_module_packages,
-		external_exception_schemas=external_exception_schemas or None,
-		external_diagnostic_targets=external_diagnostic_targets,
-		package_id=package_id,
-		stdlib_root=args.stdlib_root,
-		test_build_only=bool(getattr(args, "test_build_only", False)),
-		word_bits=getattr(args, "target_word_bits", None),
-		semantic_world=semantic_world,
-	)
+	with _events.timed("parse"):
+		modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
+			source_paths,
+			module_paths=module_paths,
+			external_module_exports=external_exports,
+			external_module_packages=external_module_packages,
+			external_exception_schemas=external_exception_schemas or None,
+			external_diagnostic_targets=external_diagnostic_targets,
+			package_id=package_id,
+			stdlib_root=args.stdlib_root,
+			test_build_only=bool(getattr(args, "test_build_only", False)),
+			word_bits=getattr(args, "target_word_bits", None),
+			semantic_world=semantic_world,
+		)
 	# Update world with parser outputs.
 	semantic_world.type_table = type_table
 	semantic_world.module_exports = module_exports
@@ -9313,7 +9498,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "parser", source_path) for d in parse_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 		else:
 			for d in parse_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -9356,7 +9541,7 @@ def main(argv: list[str] | None = None) -> int:
 			diags = _reserved_namespace_diags(reserved)
 			_assert_all_phased(diags, context="package")
 			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [_diag_to_json(d, "package", source_path) for d in diags]}))
+				_emit_compile_json({"exit_code": 1, "diagnostics": [_diag_to_json(d, "package", source_path) for d in diags]})
 			else:
 				for d in diags:
 					print(f"{_source_label()}:?:?: {d.severity}: {d.message}", file=sys.stderr)
@@ -9385,8 +9570,7 @@ def main(argv: list[str] | None = None) -> int:
 	if wrapper_errors:
 		for msg in wrapper_errors:
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -9394,7 +9578,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -9485,8 +9668,7 @@ def main(argv: list[str] | None = None) -> int:
 					if "__impl" in name:
 						msg = f"package signature references private symbol {name}; packages must expose only public entrypoints"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9501,7 +9683,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9511,8 +9692,7 @@ def main(argv: list[str] | None = None) -> int:
 					if module_name is None:
 						msg = f"package signature '{name}' missing module; signatures must include module"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9527,7 +9707,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9536,8 +9715,7 @@ def main(argv: list[str] | None = None) -> int:
 					if "is_pub" not in sd:
 						msg = f"package signature '{name}' missing is_pub; signatures must include is_pub"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9552,7 +9730,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9569,8 +9746,7 @@ def main(argv: list[str] | None = None) -> int:
 					if bool(sd.get("is_wrapper", False)) and wraps_fn_id is None:
 						msg = f"package signature '{name}' is marked wrapper but missing wraps_target_fn_id"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9585,7 +9761,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9595,8 +9770,7 @@ def main(argv: list[str] | None = None) -> int:
 					if fn_id is None:
 						msg = f"package signature '{name}' missing fn_id; signatures must include fn_id"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9611,15 +9785,13 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					if module_name is not None and fn_id.module != module_name:
 						msg = f"package signature '{name}' fn_id module mismatch ({fn_id.module} vs {module_name})"
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9634,7 +9806,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9920,7 +10091,7 @@ def main(argv: list[str] | None = None) -> int:
 					if not isinstance(entry, dict):
 						msg = f"generic_templates entry is not a dict in package {pkg_id}"
 						if args.json:
-							print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+							_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 						else:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -9936,8 +10107,7 @@ def main(argv: list[str] | None = None) -> int:
 
 					def _template_import_error(msg: str) -> int:
 						if args.json:
-							print(
-								json.dumps(
+							_emit_compile_json(
 									{
 										"exit_code": 1,
 										"diagnostics": [
@@ -9952,7 +10122,6 @@ def main(argv: list[str] | None = None) -> int:
 										],
 									}
 								)
-							)
 						else:
 							print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 						return 1
@@ -10230,7 +10399,7 @@ def main(argv: list[str] | None = None) -> int:
 						if prev != (remapped_tid, val):
 							msg = f"const '{sym}' provided by multiple sources with different values"
 							if args.json:
-								print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]}))
+								_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<package>", "line": None, "column": None}]})
 							else:
 								print(f"{_package_label()}:?:?: error: {msg}", file=sys.stderr)
 							return 1
@@ -10280,8 +10449,7 @@ def main(argv: list[str] | None = None) -> int:
 			if origin_entry is None:
 				msg = f"re-exported const '{dst_sym}' refers to missing const '{origin_sym}'"
 				if args.json:
-					print(
-						json.dumps(
+					_emit_compile_json(
 							{
 								"exit_code": 1,
 								"diagnostics": [
@@ -10296,7 +10464,6 @@ def main(argv: list[str] | None = None) -> int:
 								],
 							}
 						)
-					)
 				else:
 					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 				return 1
@@ -10306,8 +10473,7 @@ def main(argv: list[str] | None = None) -> int:
 				if prev != (origin_tid, origin_val):
 					msg = f"const '{dst_sym}' defined with a different value than re-export target '{origin_sym}'"
 					if args.json:
-						print(
-							json.dumps(
+						_emit_compile_json(
 								{
 									"exit_code": 1,
 									"diagnostics": [
@@ -10322,7 +10488,6 @@ def main(argv: list[str] | None = None) -> int:
 									],
 								}
 							)
-						)
 					else:
 						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -11133,7 +11298,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in type_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 			return 1
 		else:
 			for d in type_diags:
@@ -11169,7 +11334,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in lambda_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 		else:
 			for d in lambda_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -11204,7 +11369,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in checked.diagnostics],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 		else:
 			for d in checked.diagnostics:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -11319,7 +11484,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in trait_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 		else:
 			for d in trait_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -11337,7 +11502,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in intrinsic_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 			return 1
 		else:
 			for d in intrinsic_diags:
@@ -11365,7 +11530,7 @@ def main(argv: list[str] | None = None) -> int:
 				"exit_code": 1,
 				"diagnostics": [_diag_to_json(d, "borrowcheck", source_path) for d in borrow_diags],
 			}
-			print(json.dumps(payload))
+			_emit_compile_json(payload)
 			return 1
 		else:
 			for d in borrow_diags:
@@ -11377,11 +11542,11 @@ def main(argv: list[str] | None = None) -> int:
 	# Package emission mode (Milestone 4): produce an unsigned package artifact
 	# containing provisional DMIR payloads for all modules in the workspace.
 	if args.emit_package is not None:
+		_events.phase_start("emit_package")
 		if not args.package_id or not args.package_version or not args.package_target:
 			msg = "--emit-package requires --package-id, --package-version, and --package-target"
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -11396,15 +11561,13 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		if package_id is None:
 			msg = "--emit-package requires a non-empty package id"
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -11419,7 +11582,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -11458,7 +11620,7 @@ def main(argv: list[str] | None = None) -> int:
 					"exit_code": 1,
 					"diagnostics": [_diag_to_json(d, "stage4", source_path) for d in checked_pkg.diagnostics],
 				}
-				print(json.dumps(payload))
+				_emit_compile_json(payload)
 			else:
 				for d in checked_pkg.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -11739,8 +11901,7 @@ def main(argv: list[str] | None = None) -> int:
 						if origin_sig is None:
 							msg = f"internal: missing signature metadata for re-export target '{origin_sym}'"
 							if args.json:
-								print(
-									json.dumps(
+								_emit_compile_json(
 										{
 											"exit_code": 1,
 											"diagnostics": [
@@ -11755,7 +11916,6 @@ def main(argv: list[str] | None = None) -> int:
 											],
 										}
 									)
-								)
 							else:
 								print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 							return 1
@@ -11830,8 +11990,7 @@ def main(argv: list[str] | None = None) -> int:
 				if not isinstance(sd, dict):
 					msg = f"internal: missing signature metadata for exported value '{sym}' while emitting package"
 					if args.json:
-						print(
-							json.dumps(
+						_emit_compile_json(
 								{
 									"exit_code": 1,
 									"diagnostics": [
@@ -11846,7 +12005,6 @@ def main(argv: list[str] | None = None) -> int:
 									],
 								}
 							)
-						)
 					else:
 						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 					return 1
@@ -11971,7 +12129,7 @@ def main(argv: list[str] | None = None) -> int:
 				if "=" not in dep_str:
 					msg = f"--package-dep requires NAME=VERSION format, got: {dep_str}"
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
 					else:
 						print(f"error: {msg}", file=sys.stderr)
 					return 1
@@ -11986,7 +12144,7 @@ def main(argv: list[str] | None = None) -> int:
 						f"package the consumer-side loader rejects)."
 					)
 					if args.json:
-						print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
 					else:
 						print(f"error: {msg}", file=sys.stderr)
 					return 1
@@ -12026,7 +12184,7 @@ def main(argv: list[str] | None = None) -> int:
 					f"got {scid!r}"
 				)
 				if args.json:
-					print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]}))
+					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
 				else:
 					print(f"error: {msg}", file=sys.stderr)
 				return 1
@@ -12039,15 +12197,16 @@ def main(argv: list[str] | None = None) -> int:
 			blob_types=blob_types,
 			blob_names=blob_names,
 		)
-	
+		_events.phase_end("emit_package")
+
 		if args.json:
-			print(json.dumps({"exit_code": 0, "diagnostics": []}))
+			_emit_compile_json({"exit_code": 0, "diagnostics": []})
 		return 0
 	
 	# If no codegen requested, acknowledge success.
 	if args.output is None and args.emit_ir is None:
 		if args.json:
-			print(json.dumps({"exit_code": 0, "diagnostics": []}))
+			_emit_compile_json({"exit_code": 0, "diagnostics": []})
 		return 0
 
 	if loaded_pkgs:
@@ -12137,7 +12296,7 @@ def main(argv: list[str] | None = None) -> int:
 					"exit_code": 1,
 					"diagnostics": [_diag_to_json(d, "stage4", source_path) for d in checked_src.diagnostics],
 				}
-				print(json.dumps(payload))
+				_emit_compile_json(payload)
 			else:
 				for d in checked_src.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -12424,18 +12583,19 @@ def main(argv: list[str] | None = None) -> int:
 						else:
 							exp["impls"] = [impl]
 		try:
-			ir = _emit_codegen(
-				unit,
-				module_exports=combined_exports,
-				word_bits=_target_word_bits(args.target_word_bits),
-				debug_enabled=debug_enabled,
-				provenance_git_sha=_toolchain_git_sha(),
-				provenance_build_profile=_build_profile,
-			)
+			with _events.timed("codegen"):
+				ir = _emit_codegen(
+					unit,
+					module_exports=combined_exports,
+					word_bits=_target_word_bits(args.target_word_bits),
+					debug_enabled=debug_enabled,
+					provenance_git_sha=_toolchain_git_sha(),
+					provenance_build_profile=_build_profile,
+				)
 		except AssertionError as err:
 			msg = f"internal: LLVM lowering contract failure ({err})"
 			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -12460,7 +12620,7 @@ def main(argv: list[str] | None = None) -> int:
 					"exit_code": 1,
 					"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in _checked.diagnostics],
 				}
-				print(json.dumps(payload))
+				_emit_compile_json(payload)
 			else:
 				for d in _checked.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
@@ -12491,14 +12651,14 @@ def main(argv: list[str] | None = None) -> int:
 	# If only IR emission requested, we are done.
 	if args.output is None:
 		if args.json:
-			print(json.dumps({"exit_code": 0, "diagnostics": []}))
+			_emit_compile_json({"exit_code": 0, "diagnostics": []})
 		return 0
 
 	clang = shutil.which("clang")
 	if clang is None:
 		msg = "clang not available for code generation"
 		if args.json:
-			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
 			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 		return 1
@@ -12506,8 +12666,7 @@ def main(argv: list[str] | None = None) -> int:
 		if package_id is None:
 			msg = "--emit-package requires a non-empty package id"
 			if args.json:
-				print(
-					json.dumps(
+				_emit_compile_json(
 						{
 							"exit_code": 1,
 							"diagnostics": [
@@ -12522,7 +12681,6 @@ def main(argv: list[str] | None = None) -> int:
 							],
 						}
 					)
-				)
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -12633,7 +12791,7 @@ def main(argv: list[str] | None = None) -> int:
 	except Exception as ex:
 		msg = f"runtime archive build failed: {ex}"
 		if args.json:
-			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
 			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 		return 1
@@ -12659,7 +12817,7 @@ def main(argv: list[str] | None = None) -> int:
 		if ir_compile.returncode != 0:
 			msg = f"clang failed: {ir_compile.stderr.strip()}"
 			if args.json:
-				print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 			else:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
@@ -12717,7 +12875,8 @@ def main(argv: list[str] | None = None) -> int:
 		for _plib in _pkg_native_libs:
 			link_cmd.extend([f"-l{_plib}"])
 	print("[driftc] link:", " ".join(link_cmd), file=sys.stderr)
-	link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
+	with _events.timed("link"):
+		link_res = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	if link_res.returncode != 0:
 		msg = f"clang failed: {link_res.stderr.strip()}"
 		abi_hint = ""
@@ -12732,7 +12891,7 @@ def main(argv: list[str] | None = None) -> int:
 		if _native_dep_hints:
 			abi_hint += "\n" + "\n".join(_native_dep_hints)
 		if args.json:
-			print(json.dumps({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg + abi_hint, "severity": "error", "file": "<source>", "line": None, "column": None}]}))
+			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg + abi_hint, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
 			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			if abi_hint:
@@ -12740,7 +12899,7 @@ def main(argv: list[str] | None = None) -> int:
 		return 1
 
 	if args.json:
-		print(json.dumps({"exit_code": 0, "diagnostics": []}))
+		_emit_compile_json({"exit_code": 0, "diagnostics": []})
 	return 0
 
 

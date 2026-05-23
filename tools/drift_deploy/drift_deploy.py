@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from lang.driftc import _events as _events
 from tools.drift_deploy.build_cmd import UserPath, build_app_cmd, build_package_cmd, resolve_driftc
 from tools.drift_deploy.lockfile import (
 	expand_to_dep_flags,
@@ -102,6 +103,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		help="Skip all smoke tests (CI escape hatch)")
 	p.add_argument("--dry-run", action="store_true",
 		help="Build + sign + smoke but do not publish")
+	p.add_argument("--timing", action="store_true",
+		help=(
+			"Collect per-phase compile timings from each underlying "
+			"driftc invocation and print `[drift:timing][<artifact>]` "
+			"summary lines to stderr after each artifact's build.  "
+			"Forwards `--timing` to the driftc subprocess; intended for "
+			"the toolchain-perf data-gathering release "
+			"(see `docs/timing.md`).  No effect on deploy output."
+		))
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
 			"Source-rebuild certification mode (downstream consumer "
@@ -716,6 +726,40 @@ def _resolve_artifact_deps(
 # ── Build ────────────────────────────────────────────────────────────
 
 
+def _merge_and_cleanup_child_timings(
+	timing_out_path: "Path | None", prefix: str,
+) -> None:
+	"""Read the child driftc's `--timing-out` file, merge its
+	structured timings into the currently-installed wrapper sink
+	under `prefix`, then unlink the file.
+
+	Best-effort -- I/O failures (corrupt file, child crashed before
+	writing) are silently swallowed; the wrapper summary just won't
+	include child phase data for the failed call.  ALWAYS called
+	from a `finally` so failed child compiles still contribute their
+	phase data to the wrapper summary (users adopting --timing will
+	often share failure logs; without this they'd see only the
+	wrapper's own `<prefix>` wall time, not the per-phase breakdown).
+	"""
+	if timing_out_path is None:
+		return
+	child_summary: "dict | None" = None
+	try:
+		child_summary = json.loads(
+			timing_out_path.read_text(encoding="utf-8")
+		)
+	except (OSError, json.JSONDecodeError):
+		child_summary = None
+	finally:
+		try:
+			timing_out_path.unlink(missing_ok=True)
+		except OSError:
+			pass
+	sink = _events.current_sink()
+	if sink is not None and isinstance(child_summary, dict):
+		sink.merge_subprocess_timings(prefix, child_summary)
+
+
 def _build_package(
 	art: Artifact,
 	*,
@@ -728,6 +772,8 @@ def _build_package(
 	native_lib_paths: list[Path] | None = None,
 	trust_store: Path | None = None,
 	source_content_id: str | None = None,
+	timing: bool = False,
+	timing_prefix: str = "build.compile",
 ) -> Path:
 	"""Build a package artifact. Returns path to staged .dmp.
 
@@ -738,9 +784,31 @@ def _build_package(
 	so the same value can later be reused when emitting the
 	v1 author + cert claim sidecars without re-walking the source
 	tree.
+
+	`timing`: pass `--timing-out` to driftc, read the child's
+	structured timings JSON, and merge into the currently-installed
+	wrapper sink (via `events.current_sink()`) under `timing_prefix`
+	(default `build.compile`).  `_run_baseline_smoke_package` passes
+	a different prefix (`smoke.compile`) so the wrapper summary can
+	distinguish the two.  No stderr re-emission -- the outer wrapper
+	is the only thing that prints.
 	"""
 	out_dmp = staged_install / f"{art.name}.dmp"
 	staged_install.mkdir(parents=True, exist_ok=True)
+
+	extra_flags: list[str] = []
+	timing_out_path: Path | None = None
+	if timing:
+		# mkstemp returns (fd, path); close the fd to avoid leaking
+		# descriptors across artifacts.  driftc overwrites the file
+		# via Path.write_text() once the child compile finishes.
+		_fd, _path = tempfile.mkstemp(
+			prefix=f"drift-deploy-{art.name}-{timing_prefix.replace('.', '-')}-",
+			suffix=".timing.json",
+		)
+		os.close(_fd)
+		timing_out_path = Path(_path)
+		extra_flags.extend(["--timing-out", str(timing_out_path)])
 
 	cmd = build_package_cmd(
 		art,
@@ -753,15 +821,22 @@ def _build_package(
 		native_lib_paths=native_lib_paths,
 		trust_store=trust_store,
 		source_content_id=source_content_id,
+		extra_flags=extra_flags or None,
 	)
 
-	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
-	if result.returncode != 0:
-		raise DeployError(
-			f"build failed for package '{art.name}':\n"
-			f"command: {' '.join(cmd)}\n"
-			f"stderr: {result.stderr.strip()}"
-		)
+	with _events.timed(timing_prefix):
+		result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
+	try:
+		if result.returncode != 0:
+			raise DeployError(
+				f"build failed for package '{art.name}':\n"
+				f"command: {' '.join(cmd)}\n"
+				f"stderr: {result.stderr.strip()}"
+			)
+	finally:
+		# Merge BEFORE re-raising so failed compiles still contribute
+		# their phase data to the wrapper's summary.
+		_merge_and_cleanup_child_timings(timing_out_path, timing_prefix)
 
 	return out_dmp
 
@@ -777,10 +852,31 @@ def _build_app(
 	package_roots: list[Path],
 	native_lib_paths: list[Path] | None = None,
 	trust_store: Path | None = None,
+	timing: bool = False,
+	timing_prefix: str = "build.compile",
 ) -> Path:
-	"""Build an app artifact. Returns path to staged binary."""
+	"""Build an app artifact. Returns path to staged binary.
+
+	`timing` / `timing_prefix`: see `_build_package`.  Same
+	side-channel-via-`--timing-out` shape; merges child driftc
+	timings into the currently-installed wrapper sink.
+	"""
 	out_bin = staged_install / art.name
 	staged_install.mkdir(parents=True, exist_ok=True)
+
+	extra_flags: list[str] = []
+	timing_out_path: Path | None = None
+	if timing:
+		# mkstemp returns (fd, path); close the fd to avoid leaking
+		# descriptors across artifacts.  driftc overwrites the file
+		# via Path.write_text() once the child compile finishes.
+		_fd, _path = tempfile.mkstemp(
+			prefix=f"drift-deploy-{art.name}-{timing_prefix.replace('.', '-')}-",
+			suffix=".timing.json",
+		)
+		os.close(_fd)
+		timing_out_path = Path(_path)
+		extra_flags.extend(["--timing-out", str(timing_out_path)])
 
 	cmd = build_app_cmd(
 		art,
@@ -792,15 +888,22 @@ def _build_app(
 		package_roots=package_roots,
 		native_lib_paths=native_lib_paths,
 		trust_store=trust_store,
+		extra_flags=extra_flags or None,
 	)
 
-	result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
-	if result.returncode != 0:
-		raise DeployError(
-			f"build failed for app '{art.name}':\n"
-			f"command: {' '.join(cmd)}\n"
-			f"stderr: {result.stderr.strip()}"
-		)
+	with _events.timed(timing_prefix):
+		result = subprocess.run(cmd, capture_output=True, text=True, env=_clean_env())
+	try:
+		if result.returncode != 0:
+			raise DeployError(
+				f"build failed for app '{art.name}':\n"
+				f"command: {' '.join(cmd)}\n"
+				f"stderr: {result.stderr.strip()}"
+			)
+	finally:
+		# Merge BEFORE re-raising so failed compiles still contribute
+		# their phase data to the wrapper's summary.
+		_merge_and_cleanup_child_timings(timing_out_path, timing_prefix)
 
 	return out_bin
 
@@ -1498,8 +1601,18 @@ def _run_baseline_smoke_package(
 	staged_trust: Path | None,
 	resolved: dict[str, ResolvedDep] | None = None,
 	native_lib_paths: list[Path] | None = None,
+	timing: bool = False,
 ) -> None:
-	"""Built-in baseline smoke for package artifacts."""
+	"""Built-in baseline smoke for package artifacts.
+
+	`timing`: pass `--timing-out` to the smoke driftc invocation;
+	merge child timings into the active wrapper sink under
+	`smoke.compile.*`.  Time the wrapper-Python compile and run
+	steps via `events.timed("smoke.compile")` and
+	`events.timed("smoke.run")`, so the wrapper summary attributes
+	wall-clock between subprocess overhead, compile work, and run
+	work distinctly.
+	"""
 	# Generate a trivial consumer that imports the staged package.
 	smoke_dir = staged_install.parent / f"_smoke_{art.name}"
 	smoke_dir.mkdir(parents=True, exist_ok=True)
@@ -1539,23 +1652,41 @@ def _run_baseline_smoke_package(
 		cmd.extend(["--link-search", str(nlp)])
 	cmd.append(str(consumer_src))
 
+	# Side-channel timings file for the smoke compile.  Close the
+	# mkstemp fd immediately to avoid leaking descriptors across
+	# repeated invocations; driftc overwrites the file via
+	# Path.write_text() when the child compile finishes.
+	timing_out_path: Path | None = None
+	if timing:
+		_fd, _path = tempfile.mkstemp(
+			prefix=f"drift-deploy-{art.name}-smoke-compile-",
+			suffix=".timing.json",
+		)
+		os.close(_fd)
+		timing_out_path = Path(_path)
+		cmd.extend(["--timing-out", str(timing_out_path)])
+
 	has_native = bool(art.native_deps)
 
 	clean = _clean_env()
 
 	if has_native:
 		# Compile + link + run.
-		result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
+		with _events.timed("smoke.compile"):
+			result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 		if result.returncode != 0:
+			_merge_and_cleanup_child_timings(timing_out_path, "smoke.compile")
 			raise DeployError(
 				f"baseline smoke failed for '{art.name}' (compile+link):\n"
 				f"{result.stderr.strip()}"
 			)
+		_merge_and_cleanup_child_timings(timing_out_path, "smoke.compile")
 		# Run.
-		run_result = subprocess.run(
-			[str(consumer_bin)], capture_output=True, text=True,
-			timeout=30, env=clean,
-		)
+		with _events.timed("smoke.run"):
+			run_result = subprocess.run(
+				[str(consumer_bin)], capture_output=True, text=True,
+				timeout=30, env=clean,
+			)
 		if run_result.returncode != 0:
 			raise DeployError(
 				f"baseline smoke failed for '{art.name}' (run):\n"
@@ -1564,16 +1695,20 @@ def _run_baseline_smoke_package(
 	else:
 		# Compile only (--test-build-only if available, else just compile).
 		cmd.append("--test-build-only")
-		result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
+		with _events.timed("smoke.compile"):
+			result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 		if result.returncode != 0:
 			# Retry without --test-build-only in case it's not supported.
 			cmd.remove("--test-build-only")
-			result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
+			with _events.timed("smoke.compile"):
+				result = subprocess.run(cmd, capture_output=True, text=True, env=clean)
 			if result.returncode != 0:
+				_merge_and_cleanup_child_timings(timing_out_path, "smoke.compile")
 				raise DeployError(
 					f"baseline smoke failed for '{art.name}' (compile):\n"
 					f"{result.stderr.strip()}"
 				)
+		_merge_and_cleanup_child_timings(timing_out_path, "smoke.compile")
 
 
 def _run_baseline_smoke_app(
@@ -1715,6 +1850,116 @@ def _deploy_artifact(
 	baseline_trust: Path | None,
 	skip_smoke: bool,
 	dry_run: bool,
+	compiler_info: "CompilerInfo",
+	staged_pkg_root: Path,
+	cert_suite_options: "CertSuiteOptions | None",
+	native_lib_paths: list[Path] | None = None,
+	dep_namespace_map: dict[str, str] | None = None,
+	author_profile_path: Path | None = None,
+	timing: bool = False,
+) -> None:
+	"""Per-artifact deploy entry.  Owns the wrapper-level timing
+	session when `timing` is set: installs an EventSink for the
+	artifact, lets the inner pipeline emit phases via
+	`events.timed(...)` and `_build_package` / `_build_app` /
+	`_run_baseline_smoke_package` merge child driftc timings under
+	the right prefix, then prints the consolidated
+	`[drift:timing][<art.name>] ...` block.  Without `timing`,
+	straight passthrough to the impl -- no sink, no overhead.
+	"""
+	if not timing:
+		return _deploy_artifact_impl(
+			art,
+			driftc=driftc,
+			target=target,
+			resolved=resolved,
+			stage_dir=stage_dir,
+			manifest_dir=manifest_dir,
+			package_roots=package_roots,
+			dest=dest,
+			app_dest=app_dest,
+			sign_key=sign_key,
+			baseline_trust=baseline_trust,
+			skip_smoke=skip_smoke,
+			dry_run=dry_run,
+			compiler_info=compiler_info,
+			staged_pkg_root=staged_pkg_root,
+			cert_suite_options=cert_suite_options,
+			native_lib_paths=native_lib_paths,
+			dep_namespace_map=dep_namespace_map,
+			author_profile_path=author_profile_path,
+			timing=False,
+		)
+	wrapper_sink = _events.EventSink()
+	with _events.install_sink(wrapper_sink):
+		wrapper_sink.begin_compile()
+		try:
+			_deploy_artifact_impl(
+				art,
+				driftc=driftc,
+				target=target,
+				resolved=resolved,
+				stage_dir=stage_dir,
+				manifest_dir=manifest_dir,
+				package_roots=package_roots,
+				dest=dest,
+				app_dest=app_dest,
+				sign_key=sign_key,
+				baseline_trust=baseline_trust,
+				skip_smoke=skip_smoke,
+				dry_run=dry_run,
+				compiler_info=compiler_info,
+				staged_pkg_root=staged_pkg_root,
+				cert_suite_options=cert_suite_options,
+				native_lib_paths=native_lib_paths,
+				dep_namespace_map=dep_namespace_map,
+				author_profile_path=author_profile_path,
+				timing=True,
+			)
+		finally:
+			# Print the wrapper summary in the SAME finally that
+			# closes the sink so failed deploys still report timing
+			# (those are the runs users will most often send back
+			# during adoption -- and child driftc summaries are
+			# suppressed by --timing-out, so without this they'd see
+			# no timing block at all).
+			wrapper_sink.close_all_open_phases()
+			wrapper_sink.end_compile()
+			# Outermost emit -- only the wrapper prints.  Same shape
+			# as drift_build's `_print_wrapper_timing_summary` (kept
+			# independent so deploy doesn't import build's private
+			# helper).
+			_summary = wrapper_sink.timings_summary()
+			_total = float(_summary.get("total_wall", 0.0))
+			_phases = dict(_summary.get("phases", {}))
+			print(
+				f"[drift:timing][{art.name}] total_wall={_total:.3f}s",
+				file=sys.stderr,
+			)
+			for _k, _v in sorted(
+				_phases.items(), key=lambda kv: (-float(kv[1]), kv[0]),
+			):
+				print(
+					f"[drift:timing][{art.name}]   {_k:<28s} = {float(_v):.3f}s",
+					file=sys.stderr,
+				)
+
+
+def _deploy_artifact_impl(
+	art: Artifact,
+	*,
+	driftc: Path,
+	target: str,
+	resolved: dict[str, ResolvedDep],
+	stage_dir: Path,
+	manifest_dir: Path,
+	package_roots: list[Path],
+	dest: Path | None,
+	app_dest: Path | None,
+	sign_key: Path | None,
+	baseline_trust: Path | None,
+	skip_smoke: bool,
+	dry_run: bool,
 	compiler_info: CompilerInfo,
 	staged_pkg_root: Path,
 	# Required for library artifacts (cert claim emission); None
@@ -1723,8 +1968,14 @@ def _deploy_artifact(
 	native_lib_paths: list[Path] | None = None,
 	dep_namespace_map: dict[str, str] | None = None,
 	author_profile_path: Path | None = None,
+	timing: bool = False,
 ) -> None:
-	"""Full pipeline for one artifact: build → sign → assets → smoke → publish."""
+	"""Full pipeline for one artifact: build → sign → assets → smoke → publish.
+
+	`timing`: forward `--timing` to the underlying driftc build, and
+	re-emit `[drift:timing][<art.name>] ...` lines from driftc's
+	stderr.  No effect on artifact bytes or sign/cert output.
+	"""
 	staged_install = stage_dir / art.name / art.version
 
 	# v1 has no build-time trust overlay step.  Co-artifact verification
@@ -1784,6 +2035,7 @@ def _deploy_artifact(
 			native_lib_paths=native_lib_paths,
 			trust_store=build_trust_path,
 			source_content_id=source_content_id,
+			timing=timing,
 		)
 	else:
 		bin_path = _build_app(
@@ -1796,6 +2048,7 @@ def _deploy_artifact(
 			package_roots=[build_pkg_root],
 			native_lib_paths=native_lib_paths,
 			trust_store=build_trust_path,
+			timing=timing,
 		)
 
 	# ── Step 2: Stage author profile + v1 trust sidecars (package only) ──
@@ -1880,13 +2133,14 @@ def _deploy_artifact(
 				f"source-tree available so `compute_artifact_source_content_id` "
 				f"can stamp the manifest."
 			)
-		author_claim_path = _attach_author_claim_to_artifact(
-			package_id=art.name,
-			package_version=art.version,
-			source_content_id=source_content_id,
-			manifest_dir=manifest_dir,
-			staged_install=staged_install,
-		)
+		with _events.timed("attach_author_claim"):
+			author_claim_path = _attach_author_claim_to_artifact(
+				package_id=art.name,
+				package_version=art.version,
+				source_content_id=source_content_id,
+				manifest_dir=manifest_dir,
+				staged_install=staged_install,
+			)
 		# `_run_impl` always resolves cert_suite_options up front when
 		# `has_packages` is True; reaching this branch with no options
 		# would be an internal contract bug, not a user-facing error.
@@ -1896,29 +2150,30 @@ def _deploy_artifact(
 			"`_resolve_cert_suite_options` whenever the manifest has "
 			"a library artifact"
 		)
-		cert_claim_path = _emit_cert_claim_for_artifact(
-			dmp_path,
-			cert_key=sign_key,
-			package_id=art.name,
-			package_version=art.version,
-			target=target,
-			compiler_info=compiler_info,
-			source_content_id=source_content_id,
-			artifact_sha256=dmp_sha256,
-			resolved_deps=resolved,
-			# direct deps come from the artifact's own manifest;
-			# anything in `resolved` not in this set is a transitive
-			# pull added by the resolver.
-			direct_dep_ids={d.name for d in art.package_deps},
-			# `staged_pkg_root` is needed so co-artifact deps can
-			# read their identities back from sibling sidecars
-			# (the lock leaves co-artifact fields empty by
-			# construction); topo-sort guarantees siblings are
-			# already signed by the time we reach this artifact.
-			staged_pkg_root=staged_pkg_root,
-			provenance_path=provenance_path,
-			cert_suite_options=cert_suite_options,
-		)
+		with _events.timed("cert_emit"):
+			cert_claim_path = _emit_cert_claim_for_artifact(
+				dmp_path,
+				cert_key=sign_key,
+				package_id=art.name,
+				package_version=art.version,
+				target=target,
+				compiler_info=compiler_info,
+				source_content_id=source_content_id,
+				artifact_sha256=dmp_sha256,
+				resolved_deps=resolved,
+				# direct deps come from the artifact's own manifest;
+				# anything in `resolved` not in this set is a transitive
+				# pull added by the resolver.
+				direct_dep_ids={d.name for d in art.package_deps},
+				# `staged_pkg_root` is needed so co-artifact deps can
+				# read their identities back from sibling sidecars
+				# (the lock leaves co-artifact fields empty by
+				# construction); topo-sort guarantees siblings are
+				# already signed by the time we reach this artifact.
+				staged_pkg_root=staged_pkg_root,
+				provenance_path=provenance_path,
+				cert_suite_options=cert_suite_options,
+			)
 		# Back-compat alias for code further down that still reads
 		# `sig_path` to wire authenticated siblings into smoke / dest.
 		# In v1 this points at the cert claim; the author claim
@@ -2080,9 +2335,11 @@ def _deploy_artifact(
 				staged_trust=baseline_trust,
 				resolved=resolved,
 				native_lib_paths=native_lib_paths,
+				timing=timing,
 			)
 		else:
-			_run_baseline_smoke_app(art, staged_bin=staged_install / art.name)
+			with _events.timed("smoke.app"):
+				_run_baseline_smoke_app(art, staged_bin=staged_install / art.name)
 
 		# Smoke env for custom command.
 		smoke_env = dict(os.environ)
@@ -2107,23 +2364,25 @@ def _deploy_artifact(
 			if sig_path:
 				smoke_env["DRIFT_STAGED_SIG"] = str(sig_path)
 
-		_run_custom_smoke(art, env=smoke_env)
+		with _events.timed("smoke.custom"):
+			_run_custom_smoke(art, env=smoke_env)
 
 	# ── Step 6: Publish ──
 	if dry_run:
 		print(f"  dry-run: skipping publish for '{art.name}'")
 		return
 
-	if art.kind == "library":
-		if dest is None:
-			raise DeployError("--dest required for package artifacts")
-		pub = _publish_package(art, staged_install=staged_install, dest=dest)
-		print(f"  published: {pub}")
-	else:
-		if app_dest is None:
-			raise DeployError("--app-dest required for app artifacts")
-		pub = _publish_app(art, staged_install=staged_install, app_dest=app_dest)
-		print(f"  published: {pub}")
+	with _events.timed("publish"):
+		if art.kind == "library":
+			if dest is None:
+				raise DeployError("--dest required for package artifacts")
+			pub = _publish_package(art, staged_install=staged_install, dest=dest)
+			print(f"  published: {pub}")
+		else:
+			if app_dest is None:
+				raise DeployError("--app-dest required for app artifacts")
+			pub = _publish_app(art, staged_install=staged_install, app_dest=app_dest)
+			print(f"  published: {pub}")
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -2363,6 +2622,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 				native_lib_paths=native_lib_paths,
 				dep_namespace_map=dep_namespace_map,
 				author_profile_path=author_profile_path,
+				timing=getattr(args, "timing", False),
 			)
 
 	finally:
