@@ -504,21 +504,275 @@ pub fn main() nothrow -> Int {
 	if stdout:
 		try:
 			diag = json.loads(stdout)
-			msgs = [d.get("message", "")[:600] for d in diag.get("diagnostics", [])]
+			msgs = [d.get("message", "")[:1500] for d in diag.get("diagnostics", [])]
 		except json.JSONDecodeError:
-			msgs = [stdout[:600]]
+			msgs = [stdout[:1500]]
 	combined = "\n".join(msgs)
 	assert res.returncode != 0, (
 		f"conflicting duplicate accepted silently (rc=0); the prepass "
 		f"guard should have rejected it.  diagnostics: {msgs!r}"
 	)
-	assert "CONFLICTING identit" in combined, (
+	assert "different source_content_id" in combined, (
 		f"expected the conflict-guard diagnostic to name "
-		f"'CONFLICTING identit...'; got: {combined!r}"
+		f"'different source_content_id...'; got: {combined!r}"
 	)
 	# The diagnostic must list BOTH paths (so the operator can
 	# tell which copies disagree).
 	assert str(libs_a) in combined and str(libs_b) in combined, (
 		f"expected the conflict-guard diagnostic to name both "
 		f"`--package-root` paths; got: {combined!r}"
+	)
+
+
+def test_envelope_variance_same_sci_resolves_via_argv_precedence(
+	tmp_path: Path,
+) -> None:
+	"""Same `(package_id, version, source_content_id)` under two
+	`--package-root` dirs but with DIFFERENT `artifact_sha256` (envelope
+	variance from independent sign/build runs over the same source) is
+	NOT a hard conflict.  The prepass must:
+
+	  1. accept the compile (envelope variance is the steady state for
+	     two-lane staging vs certified consumption, re-deploys, and
+	     consumer-side gate tests that pass both a tmp build root and
+	     `$DRIFT_PKG_ROOT`);
+	  2. select the artifact from the argv-first `--package-root` and
+	     drop the others from the candidate set BEFORE the verify loop,
+	     so a lower-precedence same-SCI loser cannot break the selected
+	     winner (its trust-gate result is never consulted because it
+	     never reaches the verify loop -- no fallback in either
+	     direction: if the argv-first winner fails verification, the
+	     compile fails);
+	  3. emit an operator-visible diagnostic naming the chosen path and
+	     the dropped path(s).
+
+	Swapping argv order must flip the chosen winner -- pinning that
+	selection is argv-precedence, not sort-by-path.
+
+	Pins the web-team-reported bug
+	(drift-web `tools/run-consumer-tests.sh` consumer-check):
+	the same `web-client@0.4.1` was present in both
+	`/home/.../certified/...` and a `/tmp/...` build root with the same
+	SCI but different artifact_sha256, and the prepass refused the
+	compile.
+	"""
+	stdlib = stdlib_root()
+	if stdlib is None:
+		pytest.skip("stdlib not available")
+
+	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+	from cryptography.hazmat.primitives import serialization
+	from lang.drift.crypto import compute_ed25519_kid
+
+	priv = Ed25519PrivateKey.generate()
+	pub_raw = priv.public_key().public_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PublicFormat.Raw,
+	)
+	priv_seed = priv.private_bytes(
+		encoding=serialization.Encoding.Raw,
+		format=serialization.PrivateFormat.Raw,
+		encryption_algorithm=serialization.NoEncryption(),
+	)
+	kid = compute_ed25519_kid(pub_raw)
+	pub_b64 = base64.b64encode(pub_raw).decode("ascii")
+
+	libs_a = tmp_path / "libs_a"
+	libs_b = tmp_path / "libs_b"
+	libs_a.mkdir()
+	libs_b.mkdir()
+	trust_path = tmp_path / "trust.json"
+	trust_path.write_text(json.dumps({
+		"format": "drift-trust", "version": 1,
+		"keys": {kid: {"algo": "ed25519", "pubkey": pub_b64}},
+		"namespaces": {
+			"child.*":  {"authors": [kid], "certifiers": [kid]},
+		},
+		"revoked": [],
+	}))
+
+	# Build child@0.0.0 twice with the SAME `--source-content-id`
+	# sentinel but from two source trees that differ in a way driftc's
+	# emit captures into the artifact bytes (varying source body via a
+	# trailing comment changes parsed spans, which the emitted dmir
+	# reflects).  This produces:
+	#   - identical manifest `source_content_id` (we stamp it via the
+	#     CLI flag, per the existing fixture's note at line 393);
+	#   - different `.dmp` bytes => different `artifact_sha256`;
+	# which is exactly the envelope-variance shape.  No hand-mutation
+	# of .dmp internals -- both artifacts go through the public driftc
+	# emit + drift-deploy sign path.
+	def _build_variant(src_text: str, variant_name: str) -> Path:
+		src_dir = tmp_path / f"child_src_{variant_name}"
+		src_dir.mkdir()
+		(src_dir / "child.drift").write_text(src_text)
+		dmp = tmp_path / f"child_{variant_name}.dmp"
+		r = subprocess.run(
+			[sys.executable, "-m", "lang.driftc.driftc",
+			 "-M", str(src_dir), str(src_dir / "child.drift"),
+			 "--stdlib-root", str(stdlib), "--target-word-bits", "64",
+			 "--package-id", "child", "--package-version", "0.0.0",
+			 "--package-target", "test-target",
+			 "--source-content-id", _TEST_SCI,
+			 "--emit-package", str(dmp), "--test-build-only"],
+			cwd=ROOT, capture_output=True, text=True,
+			timeout=sanitizer_timeout(120),
+		)
+		assert r.returncode == 0, (
+			f"child variant {variant_name} build failed: {r.stderr[:500]}"
+		)
+		return dmp
+
+	dmp_a = _build_variant(CHILD_SRC, "a")
+	dmp_b = _build_variant(
+		CHILD_SRC + "\n// envelope-variance-marker: variant-b\n",
+		"b",
+	)
+
+	# Test premise: two artifact files for the same authored identity.
+	a_bytes = dmp_a.read_bytes()
+	b_bytes = dmp_b.read_bytes()
+	assert sha256(a_bytes).hexdigest() != sha256(b_bytes).hexdigest(), (
+		"test premise broken: the two child.dmp artifact files hash "
+		"identically; this test needs envelope variance (different "
+		"artifact_sha256 under uniform source_content_id).  If driftc "
+		"changed to not capture the comment into the emitted dmir, "
+		"adjust the variant input to vary something the emit DOES "
+		"capture (e.g. an additional pub fn that's never imported)."
+	)
+
+	# Manifest SCI uniformity check (independent of the prepass under
+	# test): peek both manifests directly.
+	from lang.driftc.packages.dmir_pkg_v0 import load_dmir_pkg_v0
+	pkg_a = load_dmir_pkg_v0(dmp_a)
+	pkg_b = load_dmir_pkg_v0(dmp_b)
+	assert pkg_a.manifest.get("source_content_id") == _TEST_SCI
+	assert pkg_b.manifest.get("source_content_id") == _TEST_SCI
+
+	_sign_into_root(
+		pkg_path=dmp_a, pkg_root=libs_a, pkg_id="child", version="0.0.0",
+		priv_seed=priv_seed, kid=kid,
+	)
+	_sign_into_root(
+		pkg_path=dmp_b, pkg_root=libs_b, pkg_id="child", version="0.0.0",
+		priv_seed=priv_seed, kid=kid,
+	)
+
+	consumer_dir = tmp_path / "consumer_src"
+	consumer_dir.mkdir()
+	(consumer_dir / "consumer.drift").write_text("""\
+module consumer;
+
+import child;
+
+pub fn main() nothrow -> Int {
+	return child.hello();
+}
+""")
+
+	def _compile_with_roots(*roots: Path) -> tuple[int, list[str], str]:
+		cmd = [
+			sys.executable, "-m", "lang.driftc.driftc",
+			str(consumer_dir / "consumer.drift"),
+			"--stdlib-root", str(stdlib),
+			"--target-word-bits", "64",
+		]
+		for r in roots:
+			cmd.extend(["--package-root", str(r)])
+		cmd.extend([
+			"--dep", "child@0.0.0",
+			"--trust-store", str(trust_path),
+			"--entry", "consumer::main",
+			"--emit-ir", str(tmp_path / f"consumer_{'_'.join(p.name for p in roots)}.ll"),
+			"--test-build-only",
+			"--json",
+		])
+		res = subprocess.run(
+			cmd, cwd=ROOT, capture_output=True, text=True,
+			timeout=sanitizer_timeout(120),
+		)
+		# Stdout under `--json` must be a single parseable JSON object
+		# (or empty if the driver chose not to emit a terminal payload).
+		# The envelope-variance info diagnostic is operator-facing and
+		# is emitted to stderr to avoid producing concatenated JSON
+		# objects on stdout, which would break parsers.
+		stdout = res.stdout.strip()
+		stdout_diag: dict | None = None
+		if stdout:
+			stdout_diag = json.loads(stdout)  # raises if not valid JSON
+		return res.returncode, stdout_diag, res.stderr
+
+	winner_path_a = libs_a / "child" / "0.0.0" / "child.dmp"
+	loser_path_b = libs_b / "child" / "0.0.0" / "child.dmp"
+
+	# Round 1: libs_a first.  argv-first artifact (libs_a copy) should win.
+	rc1, stdout_diag1, stderr1 = _compile_with_roots(libs_a, libs_b)
+	assert rc1 == 0, (
+		f"envelope variance compile (libs_a first) failed; rc={rc1}; "
+		f"stdout_diag: {stdout_diag1!r}; stderr: {stderr1!r}"
+	)
+	# JSON stdout payload must be present and report success cleanly
+	# -- no errors leaked into it, and no `info` packets either (the
+	# variance info goes to stderr).
+	assert stdout_diag1 is not None and stdout_diag1.get("exit_code") == 0, (
+		f"expected clean success JSON payload; got: {stdout_diag1!r}"
+	)
+	assert not stdout_diag1.get("diagnostics"), (
+		f"unexpected JSON diagnostics in success payload "
+		f"(variance info should be on stderr): {stdout_diag1!r}"
+	)
+	# Operator-visible info diagnostic must be in stderr, naming chosen + dropped.
+	assert "envelope variance" in stderr1, (
+		f"expected envelope-variance info diagnostic on stderr; "
+		f"stderr was: {stderr1!r}"
+	)
+	assert "argv precedence" in stderr1
+	import re as _re
+	_chosen1 = _re.search(r"chosen:\s*(\S+)", stderr1)
+	_dropped1 = _re.search(r"dropped:\s*\n\s*-\s*(\S+)", stderr1)
+	assert _chosen1 is not None and _dropped1 is not None, (
+		f"variance info diagnostic shape unexpected; stderr: {stderr1!r}"
+	)
+	assert _chosen1.group(1) == str(winner_path_a), (
+		f"expected libs_a path as chosen in argv-first round; "
+		f"got chosen={_chosen1.group(1)!r}; stderr: {stderr1!r}"
+	)
+	assert _dropped1.group(1) == str(loser_path_b), (
+		f"expected libs_b path as dropped in argv-first round; "
+		f"got dropped={_dropped1.group(1)!r}; stderr: {stderr1!r}"
+	)
+
+	# Round 2: argv order swapped.  libs_b wins now.
+	rc2, stdout_diag2, stderr2 = _compile_with_roots(libs_b, libs_a)
+	assert rc2 == 0, (
+		f"envelope variance compile (libs_b first) failed; rc={rc2}; "
+		f"stdout_diag: {stdout_diag2!r}; stderr: {stderr2!r}"
+	)
+	assert stdout_diag2 is not None and stdout_diag2.get("exit_code") == 0, (
+		f"expected clean success JSON payload (swapped order); "
+		f"got: {stdout_diag2!r}"
+	)
+	assert not stdout_diag2.get("diagnostics"), (
+		f"unexpected JSON diagnostics in success payload "
+		f"(swapped order): {stdout_diag2!r}"
+	)
+	assert "envelope variance" in stderr2, (
+		f"expected envelope-variance info diagnostic on stderr "
+		f"(swapped order); stderr was: {stderr2!r}"
+	)
+	# Selection must be argv-order, not sort-by-path: libs_b is now the chosen winner.
+	# Locate the chosen/dropped lines explicitly to avoid the trivial
+	# "both paths appear somewhere in the message" false-positive.
+	_chosen_match = _re.search(r"chosen:\s*(\S+)", stderr2)
+	_dropped_match = _re.search(r"dropped:\s*\n\s*-\s*(\S+)", stderr2)
+	assert _chosen_match is not None and _dropped_match is not None, (
+		f"variance info diagnostic shape unexpected; stderr: {stderr2!r}"
+	)
+	assert _chosen_match.group(1) == str(loser_path_b), (
+		f"expected libs_b path as chosen in swapped round; "
+		f"got chosen={_chosen_match.group(1)!r}; stderr: {stderr2!r}"
+	)
+	assert _dropped_match.group(1) == str(winner_path_a), (
+		f"expected libs_a path as dropped in swapped round; "
+		f"got dropped={_dropped_match.group(1)!r}; stderr: {stderr2!r}"
 	)
