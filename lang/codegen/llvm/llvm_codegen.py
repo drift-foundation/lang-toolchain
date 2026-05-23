@@ -1322,6 +1322,7 @@ class LlvmModuleBuilder:
 			return
 		self._compiler_provenance_emitted = True
 		from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+		from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
 		if not build_utc:
 			import datetime
 			build_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1334,6 +1335,15 @@ class LlvmModuleBuilder:
 			fields.append(f"git {git_sha}")
 		if build_profile:
 			fields.append(f"profile {build_profile}")
+		# Vendor / license are constants of this toolchain build; emit
+		# AFTER profile so they sit next to it as app-visible
+		# toolchain-identity metadata, and BEFORE build_utc so the
+		# wall-clock stamp stays last (matches the field ordering used
+		# in `driftc --version` and the user-facing example).
+		if DRIFTC_VENDOR:
+			fields.append(f"vendor {DRIFTC_VENDOR}")
+		if DRIFTC_LICENSE:
+			fields.append(f"license {DRIFTC_LICENSE}")
 		fields.append(f"build_utc {build_utc}")
 		payload = " | ".join(fields)
 		self._compiler_provenance_payload = payload

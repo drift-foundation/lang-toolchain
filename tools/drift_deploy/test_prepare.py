@@ -718,8 +718,8 @@ class TestPrepareSourceAttestationGate:
 				_run_impl(p.parse_args(["--manifest", str(manifest_path)]))
 			msg = str(exc.value)
 			assert "my.pkg -> ext.lib@1.0.0" in msg
-			# v1 wording: prepare points the user at `drift-author publish`.
-			assert "drift-author publish" in msg
+			# v1 wording: prepare points the user at `drift author`.
+			assert "drift author" in msg
 			# Lock file must NOT have been written.
 			assert not (_drift_subdir(tmpdir) / "lock.json").exists()
 

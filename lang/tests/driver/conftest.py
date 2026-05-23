@@ -147,7 +147,7 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 	artifact_sha256 = "sha256:" + sha256(pkg_bytes).hexdigest()
 
 	# Standard layout: <root>/std/<version>/std.dmp + v1 sidecars.
-	pkg_root = tmp / "libs"
+	pkg_root = tmp / "lib"
 	dest = pkg_root / "std" / version
 	dest.mkdir(parents=True)
 	import shutil

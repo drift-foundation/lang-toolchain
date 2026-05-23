@@ -12,7 +12,7 @@ the lock's resolved versions to `driftc` without parsing JSON on the
 bash side:
 
     DEP_FLAGS=$(drift lock emit --artifact singular)
-    driftc $DEP_FLAGS --package-root <libs> tests/foo_test.drift -o build/foo
+    driftc $DEP_FLAGS --package-root <lib> tests/foo_test.drift -o build/foo
 
 Why this exists (0.31.7):
 
@@ -44,7 +44,7 @@ Caller responsibility: the flags are only useful if every pinned
 package is visible under `--package-root`.  For co-artifacts —
 packages built by the same manifest — this means the runner must
 have built those co-artifacts first (or be running after a
-`drift deploy` that published them to a shared libs tree).
+`drift deploy` that published them to a shared `lib/` tree).
 Calling `drift lock emit` on a manifest that declares multiple
 library artifacts and passing the flags to `driftc` against an
 empty package root will produce "package not found" errors for

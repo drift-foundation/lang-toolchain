@@ -363,3 +363,191 @@ class TestPublishFromManifest:
 		]) == 0
 		raw = json.loads((drift / author_claim_filename("myrepo")).read_text())
 		assert "target_class" not in raw["body"]
+
+
+class TestDriftAuthorSubcommandSurface:
+	"""Pin the **public** `drift author …` entry point that
+	`lang/drift/cli.py` dispatches to.
+
+	The trust-v1 role split is `drift author` (this command) → mint
+	the author claim; `drift deploy` → build artifact + cert claim;
+	`drift trust` → consumer trust-store maintenance.  The public
+	surface is a single-purpose command (no inner subcommand level);
+	internally it dispatches to the same `_cmd_publish` handler as
+	the legacy `python -m tools.drift_author publish` flow, so the
+	manifest-driven mint behaviour is bit-identical between the two.
+	"""
+
+	def _layout(self, tmp_path: Path) -> tuple[Path, Path]:
+		# Same shape as `TestPublishManifestAware._layout`, inlined
+		# here so this test class can be read on its own.
+		project_root = tmp_path / "myrepo"
+		drift = project_root / "drift"
+		drift.mkdir(parents=True)
+		(project_root / "src").mkdir()
+		(project_root / "src" / "lib.drift").write_text(
+			"module myrepo;\n", encoding="utf-8",
+		)
+		manifest = {
+			"schema_version": 2,
+			"project": {"name": "myrepo", "license": "MIT"},
+			"artifacts": [{
+				"kind": "library",
+				"name": "myrepo",
+				"version": "0.1.0",
+				"description": "demo",
+				"entry_module": "src/lib.drift",
+				"modules": ["src/lib.drift"],
+			}],
+		}
+		(drift / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+		return drift, project_root
+
+	def _seed_file(self, tmp_path: Path) -> Path:
+		seed = tmp_path / "k.seed"
+		seed.write_text(_seed_b64() + "\n", encoding="utf-8")
+		return seed
+
+	def test_run_author_subcommand_mints_sidecar(self, tmp_path: Path) -> None:
+		"""`drift author --manifest … --key-file … --overwrite` writes
+		the author-claim sidecar at the canonical name and exits 0.
+		"""
+		from tools.drift_author.cli import run_author_subcommand
+		drift, _ = self._layout(tmp_path)
+		seed = self._seed_file(tmp_path)
+		rc = run_author_subcommand([
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+			"--overwrite",
+		])
+		assert rc == 0
+		sidecar = drift / author_claim_filename("myrepo")
+		assert sidecar.is_file(), (
+			f"`drift author` must write the author-claim sidecar at "
+			f"{sidecar} (manifest-dir default)"
+		)
+		# Body shape sanity: same fields as the legacy publish path.
+		claim = load_author_claim_json(sidecar.read_text(encoding="utf-8"))
+		assert claim.body.package_id == "myrepo"
+		assert claim.body.version == "0.1.0"
+
+	def test_run_author_subcommand_is_thin_wrapper_over_cmd_publish(
+		self, tmp_path: Path,
+	) -> None:
+		"""Bit-identical body output between the public `drift author …`
+		surface and the legacy `python -m tools.drift_author publish …`
+		surface.  Pinning this so the two entry points cannot drift
+		apart silently (e.g. a flag added to one but not the other).
+		"""
+		from tools.drift_author.cli import run_author_subcommand
+		drift, _ = self._layout(tmp_path)
+		seed = self._seed_file(tmp_path)
+		# Public surface.
+		assert run_author_subcommand([
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+			"--release-utc", "2026-05-23T00:00:00Z",
+			"--overwrite",
+		]) == 0
+		body_public = json.loads(
+			(drift / author_claim_filename("myrepo")).read_text(encoding="utf-8")
+		)["body"]
+		# Wipe and redo via the legacy subcommand surface.
+		(drift / author_claim_filename("myrepo")).unlink()
+		assert author_cli_main([
+			"publish",
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+			"--release-utc", "2026-05-23T00:00:00Z",
+		]) == 0
+		body_legacy = json.loads(
+			(drift / author_claim_filename("myrepo")).read_text(encoding="utf-8")
+		)["body"]
+		assert body_public == body_legacy, (
+			f"`drift author` and `python -m tools.drift_author publish` "
+			f"emitted divergent author-claim bodies; the public surface "
+			f"must stay a thin wrapper over _cmd_publish.\n"
+			f"public={body_public!r}\nlegacy={body_legacy!r}"
+		)
+
+	def test_run_author_subcommand_refuses_overwrite_by_default(
+		self, tmp_path: Path,
+	) -> None:
+		"""Second invocation without `--overwrite` exits non-zero.
+		Same protection as the legacy surface; verifies the flag is
+		actually wired through and not silently ignored.
+		"""
+		from tools.drift_author.cli import run_author_subcommand
+		drift, _ = self._layout(tmp_path)
+		seed = self._seed_file(tmp_path)
+		assert run_author_subcommand([
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+		]) == 0
+		rc = run_author_subcommand([
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+		])
+		assert rc != 0, "second mint without --overwrite must fail"
+
+	def test_drift_author_dispatches_via_lang_drift_cli(
+		self, tmp_path: Path,
+	) -> None:
+		"""`drift author …` argv must reach `run_author_subcommand`
+		through `lang/drift/cli.py`'s intercept-before-argparse path.
+		Verifies the top-level dispatch wiring without spawning a
+		subprocess.
+		"""
+		from lang.drift.cli import main as drift_main
+		drift, _ = self._layout(tmp_path)
+		seed = self._seed_file(tmp_path)
+		rc = drift_main([
+			"author",
+			"--manifest", str(drift / "manifest.json"),
+			"--key-file", str(seed),
+			"--overwrite",
+		])
+		assert rc == 0
+		assert (drift / author_claim_filename("myrepo")).is_file()
+
+	def test_drift_author_defaults_manifest_to_drift_subdir(
+		self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+	) -> None:
+		"""`drift author` (no `--manifest`) defaults to
+		`./drift/manifest.json`, matching the `drift build` /
+		`drift prepare` / `drift deploy` lifecycle commands.
+
+		Pins the UX contract: a first-class public lifecycle command
+		should not require an explicit `--manifest` flag in the
+		common-case repo layout.
+		"""
+		from tools.drift_author.cli import run_author_subcommand
+		drift, project_root = self._layout(tmp_path)
+		seed = self._seed_file(tmp_path)
+		# Run from the project root so the relative default resolves.
+		monkeypatch.chdir(project_root)
+		rc = run_author_subcommand([
+			"--key-file", str(seed),
+			"--overwrite",
+		])
+		assert rc == 0, (
+			"`drift author` with no --manifest must resolve "
+			"./drift/manifest.json relative to cwd"
+		)
+		assert (drift / author_claim_filename("myrepo")).is_file()
+
+	def test_drift_author_help_exits_cleanly(
+		self, capsys: pytest.CaptureFixture[str],
+	) -> None:
+		"""`drift author --help` exits 0 and the help banner names the
+		public flag surface (no hidden subcommand level)."""
+		from tools.drift_author.cli import run_author_subcommand
+		with pytest.raises(SystemExit) as exc:
+			run_author_subcommand(["--help"])
+		assert exc.value.code == 0
+		captured = capsys.readouterr()
+		# Help text must teach the manifest-driven flow and the three
+		# sidecar outputs / non-outputs called out in the user's spec.
+		assert "--manifest" in captured.out
+		assert "--key-file" in captured.out
+		assert "--overwrite" in captured.out

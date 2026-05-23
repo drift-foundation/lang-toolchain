@@ -396,9 +396,12 @@ def _build_parser() -> argparse.ArgumentParser:
 	p = argparse.ArgumentParser(
 		prog="drift",
 		description=(
-			"Drift tooling.  Author-side signing in v1 lives in "
-			"`drift-author publish` (separate CLI, author-key isolated "
-			"from the deploy pipeline)."
+			"Drift tooling.  Trust-v1 role split: `drift author` "
+			"mints the package author claim, `drift deploy` produces "
+			"the artifact + cert claim, `drift trust` manages the "
+			"consumer trust store.  Author-key material is loaded "
+			"through a separately-imported module that the deploy / "
+			"certifier code paths cannot reach."
 		),
 	)
 	sub = p.add_subparsers(dest="cmd", required=True)
@@ -621,6 +624,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	doc.add_argument("source", type=_UserPath, help="A .drift file or directory of .drift files to document")
 	doc.add_argument("-o", "--output", type=_UserPath, default=Path("doc"), help="Output directory for generated Markdown (default: doc/)")
 
+	sub.add_parser("author", help="Mint or refresh this package's author claim from drift/manifest.json (see: drift author --help)")
 	sub.add_parser("build", help="Build Drift artifacts from drift/manifest.json (see: drift build --help)")
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
@@ -631,7 +635,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _version_string() -> str:
 	"""Build the drift --version output, matching driftc contract."""
-	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION, DRIFTC_GIT_SHA
+	# Vendor + license come from lang.versions so the same constants
+	# stamp `--version`, `meta.compiler_info()`, and any deploy-time
+	# provenance probe -- no second source of truth.
+	from lang.versions import (
+		DRIFTC_VERSION, DRIFT_RT_ABI_VERSION, DRIFTC_GIT_SHA,
+		DRIFTC_VENDOR, DRIFTC_LICENSE,
+	)
 
 	# Prefer the build-time stamp; fall back to runtime git only in dev.
 	git_sha = DRIFTC_GIT_SHA
@@ -654,8 +664,10 @@ def _version_string() -> str:
 	]
 	if git_sha:
 		parts.append(f"git {git_sha}")
-	parts.append("license GPL-3.0")
-	parts.append("The Drift Language Foundation")
+	if DRIFTC_LICENSE:
+		parts.append(f"license {DRIFTC_LICENSE}")
+	if DRIFTC_VENDOR:
+		parts.append(DRIFTC_VENDOR)
 	return " | ".join(parts)
 
 
@@ -667,7 +679,11 @@ def main(argv: list[str] | None = None) -> int:
 		print(_version_string())
 		return 0
 
-	# Intercept "prepare" and "deploy" before argparse — they have their own arg parsers.
+	# Intercept "author"/"prepare"/"deploy"/"build" before argparse — they have their own arg parsers.
+	if effective_argv and effective_argv[0] == "author":
+		from tools.drift_author.cli import run_author_subcommand
+		return run_author_subcommand(effective_argv[1:])
+
 	if effective_argv and effective_argv[0] == "prepare":
 		from tools.drift_deploy.drift_prepare import run as prepare_run
 		return prepare_run(effective_argv[1:])

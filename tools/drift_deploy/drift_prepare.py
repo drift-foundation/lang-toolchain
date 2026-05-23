@@ -405,7 +405,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 		for art_name, pkg_id, ver in missing_attestation:
 			lines.append(f"  {art_name} -> {pkg_id}@{ver}")
 		lines.append(
-			"Re-run `drift-author publish` for each listed package "
+			"Re-run `drift author` for each listed package "
 			"so its `<pkg>.author-claim` sidecar is emitted, then "
 			"re-run `drift prepare`.  Per-package stderr warnings "
 			"above (if any) name the specific failure mode for "

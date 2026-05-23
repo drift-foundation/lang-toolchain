@@ -347,8 +347,12 @@ def test_abi_mismatch_driver_hint(tmp_path: Path) -> None:
 
 
 def test_driftc_version_output() -> None:
-	"""§11: driftc --version prints all required metadata fields."""
+	"""§11: driftc --version prints all required metadata fields,
+	sourced from `lang/versions.py` constants -- single source of
+	truth with `meta.compiler_info()`.
+	"""
 	from lang.driftc.driftc import main as driftc_main
+	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
 	import io
 	import contextlib
 	buf = io.StringIO()
@@ -358,8 +362,12 @@ def test_driftc_version_output() -> None:
 	out = buf.getvalue().strip()
 	assert "driftc" in out
 	assert f"abi {DRIFT_RT_ABI_VERSION}" in out
-	assert "GPL-3.0" in out
-	assert "The Drift Language Foundation" in out
+	assert DRIFTC_LICENSE in out, (
+		f"--version output must carry DRIFTC_LICENSE; got: {out!r}"
+	)
+	assert DRIFTC_VENDOR in out, (
+		f"--version output must carry DRIFTC_VENDOR; got: {out!r}"
+	)
 
 
 def _decode_provenance_payload(ir: str) -> str:
@@ -431,6 +439,62 @@ def test_compiler_provenance_grammar(tmp_path: Path) -> None:
 
 	missing = required_keys - found_keys
 	assert not missing, f"missing required keys {missing} in provenance: {payload!r}"
+
+
+def test_compiler_provenance_values(tmp_path: Path) -> None:
+	"""Pin the literal values of the app-facing identity fields in
+	`meta.compiler_info()`.
+
+	`vendor` + `license` are constants of this toolchain build; a fork
+	rebuilding under a different vendor/license must change
+	DRIFTC_VENDOR / DRIFTC_LICENSE in `lang/versions.py`, and this
+	test surfaces the change as a deliberate diff.
+
+	`profile` is environment-driven; this test gates on the normal
+	lane (no DRIFT_DEBUG / DRIFT_ASAN / DRIFT_UBSAN) so it can assert
+	the literal `optimized` -- the app-facing wording that
+	differentiates the regular release lane from sanitizer / debug
+	lanes.  Under any sanitizer or DRIFT_DEBUG lane the test skips
+	with a one-line note; the lane-agnostic shape contract still
+	lives in `test_compiler_provenance_grammar` above.
+	"""
+	import os
+	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
+
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	payload = _decode_provenance_payload(ir)
+	assert payload, "provenance payload is empty"
+
+	# Parse into key->value (first space splits).
+	pairs: dict[str, str] = {}
+	for seg in payload.split(" | "):
+		idx = seg.find(" ")
+		if idx > 0:
+			pairs[seg[:idx]] = seg[idx + 1:]
+
+	# Vendor / license are unconditional in the Foundation build.
+	assert pairs.get("vendor") == DRIFTC_VENDOR, (
+		f"vendor mismatch: provenance has {pairs.get('vendor')!r}, "
+		f"DRIFTC_VENDOR is {DRIFTC_VENDOR!r}"
+	)
+	assert pairs.get("license") == DRIFTC_LICENSE, (
+		f"license mismatch: provenance has {pairs.get('license')!r}, "
+		f"DRIFTC_LICENSE is {DRIFTC_LICENSE!r}"
+	)
+
+	# Normal-lane profile pin.  Skip when an env override would have
+	# selected a different label upstream (the resolution lives in
+	# lang/driftc/driftc.py::_resolve_build_profile).
+	def _env_true(name: str) -> bool:
+		return os.environ.get(name, "").lower() in ("1", "true", "yes")
+
+	if _env_true("DRIFT_ASAN") or _env_true("DRIFT_UBSAN") or _env_true("DRIFT_DEBUG"):
+		import pytest
+		pytest.skip("profile value pin only applies to the normal compiler lane")
+	assert pairs.get("profile") == "optimized", (
+		f"profile mismatch on normal lane: provenance has "
+		f"{pairs.get('profile')!r}, expected 'optimized'"
+	)
 
 
 def _link_flags_for_lib(name: str) -> list[str]:

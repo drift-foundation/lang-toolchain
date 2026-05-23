@@ -209,20 +209,21 @@ the Drift consumer-side tooling CLI (publishing identity setup,
 trust management, build, prepare, deploy).  It bundles its own
 Python interpreter and runtime dependencies (cryptography, zstandard).
 
-Author-side signing lives in a separate CLI, `drift-author`,
-which is intentionally NOT bundled here -- the role split
-(see `docs/design/trust-v1.md`) keeps author key material out of
-the consumer toolchain.
+Author-side signing has its own subcommand, `drift author`
+(the surface inside `bin/drift`), backed by a separately-loaded
+key-handling module so author key material stays out of the
+consumer-side code paths (see `docs/design/trust-v1.md`).
 
 ```bash
 drift init                        # set up publishing identity + author profile
+drift author --manifest drift/manifest.json --key-file <author.seed>  # mint/refresh author claim
 drift trust <publisher>.author-profile   # consumer: trust an author kid
 drift trust add --namespace acme.crypto.* \
     --pubkey-b64 <base64> --kid <kid> --role both
 drift trust import <pkg>.author-claim    # bulk-import kids from a v1 sidecar
 drift trust revoke --kid <kid> --reason "compromised CI host"
-drift prepare --manifest drift/manifest.json --dest ~/opt/drift/libs
-drift deploy --manifest drift/manifest.json --dest ~/opt/drift/libs --driftc driftc
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/lib
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/lib --driftc driftc
 ```
 
 The compiler sources, runtime archives, and signed stdlib package live in

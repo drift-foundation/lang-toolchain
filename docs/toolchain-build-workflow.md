@@ -2,10 +2,19 @@
 
 > **Trust-model v1 cutover.**  The package trust model is defined in
 > [`docs/design/trust-v1.md`](design/trust-v1.md).  Author signing
-> lives in `drift-author publish`; the consumer-side verifier
+> lives in `drift author`; the consumer-side verifier
 > reads `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json`
 > against a role-tagged `drift/trust.json`.  Pre-v1 `drift sign`,
 > `.sig` sidecars, and the v0 envelope are gone.
+>
+> **Package-pool directory convention.**  The pool directory is
+> `lib/` (matching the standard `bin/lib` split), NOT `libs/`.
+> Earlier examples and certified pools may still use the plural
+> form; that path keeps working because `drift prepare --package-root`
+> is path-agnostic, but all new docs / scripts / orchestration
+> should use `lib/`.  Pool operators wanting to roll over an
+> existing `libs/` layout can publish to both for a transition
+> window or symlink `lib → libs`.
 
 This guide is a practical, end-to-end workflow for new developers:
 
@@ -228,7 +237,7 @@ All paths must be absolute.
 ### 2.3 Selective overlay (staging → certified)
 
 Short-term migration overlap — for example, an app team consuming
-`certified/current/libs` while another team has shipped a patch to
+`certified/current/lib` while another team has shipped a patch to
 `staging/` that the app team needs to integrate against before the next
 certification cycle — is the supported overlay use case. Order
 `DRIFT_PACKAGE_ROOT` (or the equivalent config / CLI layer) so the
@@ -236,7 +245,7 @@ staging root precedes the certified root, then regenerate the lock:
 
 ```bash
 # 1. Set ordered roots (staging first, certified second).
-export DRIFT_PACKAGE_ROOT=/abs/path/to/staging/libs:/abs/path/to/certified/current/libs
+export DRIFT_PACKAGE_ROOT=/abs/path/to/staging/lib:/abs/path/to/certified/current/lib
 
 # 2. Regenerate the lock against the overlayed roots.  drift-web (or
 #    whichever package staging publishes) pins to staging's exact
@@ -355,7 +364,7 @@ The release workflow separates state preparation from publishing:
 ### 4.1 Prepare (resolve dependencies, write lock)
 
 ```bash
-drift prepare --manifest drift/manifest.json --dest ~/opt/drift/libs
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/lib
 ```
 
 This resolves all package dependencies and writes `drift/lock.json`.
@@ -377,14 +386,14 @@ author claims and trust store.  Each library artifact needs two
 committed files in `drift/`:
 
 ```text
-drift/<pkg>.author-claim          # signed body (drift-author publish)
+drift/<pkg>.author-claim          # signed body (drift author)
 drift/<pkg>.author-pubkey.b64     # base64 pubkey of the signer
 ```
 
 Both are emitted together by:
 
 ```bash
-drift-author publish --manifest drift/manifest.json --key-file <author.seed>
+drift author --manifest drift/manifest.json --key-file <author.seed>
 ```
 
 (Repeat with `--overwrite` after any manifest change that affects
@@ -394,7 +403,7 @@ claims with the `version_mismatch` / `sci_mismatch` codes.)
 
 **Migrating an existing repo** whose author claims were minted
 before the pubkey-companion was emitted: re-run
-`drift-author publish --manifest drift/manifest.json --overwrite`
+`drift author --manifest drift/manifest.json --overwrite`
 for each artifact, or hand-write the companion:
 
 ```bash
@@ -456,7 +465,7 @@ failure modes.
 ### 4.3 Deploy (build, sign, smoke, publish)
 
 ```bash
-drift deploy --manifest drift/manifest.json --dest ~/opt/drift/libs --driftc driftc
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/lib --driftc driftc
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
@@ -468,10 +477,10 @@ rewrite `drift/lock.json` or other repo-managed metadata.
 Published layout for a package (trust-v1):
 
 ```text
-~/opt/drift/libs/net-tls/0.3.4/
+~/opt/drift/lib/net-tls/0.3.4/
 ├── assets/
 ├── net-tls.author-profile
-├── net-tls.author-claim                 # author claim (drift-author publish)
+├── net-tls.author-claim                 # author claim (drift author)
 ├── net-tls.cert-claim.<kid>.json        # cert claim (emitted by `drift deploy`)
 └── net-tls.zdmp
 ```
@@ -495,7 +504,7 @@ rewrite the tracked project profile file after commit.
 The consumer obtains the publisher's deployed author profile and trusts it:
 
 ```bash
-$DRIFT_TOOL trust ~/opt/drift/libs/acme-math/0.1.0/acme-math.author-profile --trust-store drift/trust.json
+$DRIFT_TOOL trust ~/opt/drift/lib/acme-math/0.1.0/acme-math.author-profile --trust-store drift/trust.json
 ```
 
 This displays the author's identity, key fingerprint, and namespace claims,
@@ -580,7 +589,7 @@ byte-identical to the one `drift build` / `drift deploy` will
 stamp into the `.dmp` (trust-v1.md §3.5 three-way equality):
 
 ```bash
-drift-author publish                                  \
+drift author                                          \
     --manifest sandbox/libmath/drift/manifest.json    \
     --key-file ~/.config/drift/keys/default.seed
 ```
@@ -599,9 +608,11 @@ manual single-package cert emission is intentionally not exposed
 because the cert claim is meaningful only as the output of a
 certifier pipeline that observed the build and ran a suite.
 
-The `publish-raw` subcommand still exists for the toolchain's
-own stdlib release (which computes SCI outside the v2 manifest
-machinery) — package authors should never reach for it.
+The internal `python -m tools.drift_author publish-raw` entry
+point still exists for the toolchain's own stdlib release (which
+computes SCI outside the v2 manifest machinery) and for
+co-signing (`python -m tools.drift_author cosign`).  Package
+authors should always reach for `drift author` instead.
 
 See [`docs/design/trust-v1.md`](design/trust-v1.md) §7 for the
 full author / certifier workflow.
@@ -610,7 +621,7 @@ full author / certifier workflow.
 
 **Publisher setup:**
 - Initialize publishing identity: `drift init`
-- Sign source identity: `drift-author publish --manifest drift/manifest.json --key-file <seed>` (reads the manifest, computes SCI via the shared helper, derives body fields, signs)
+- Mint author claim: `drift author --manifest drift/manifest.json --key-file <seed>` (reads the manifest, computes SCI via the shared helper, derives body fields, signs)
 
 **Project build (manifest-driven):**
 - Build artifact: `drift build <artifact> --manifest drift/manifest.json --driftc <driftc>`

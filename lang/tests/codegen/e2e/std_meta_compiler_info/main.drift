@@ -52,5 +52,27 @@ fn main() nothrow -> Int {
 	if !contains(&info, &k_build_utc) {
 		return 4;
 	}
+	// `profile` is the app-visible build-profile tag.  The normal
+	// compiler lane stamps "optimized" (DRIFT_DEBUG => "debug";
+	// sanitizer modes => "asan"/"ubsan"/"asan_ubsan").  We only
+	// assert presence here so this test stays lane-agnostic.
+	val k_profile = "profile";
+	if !contains(&info, &k_profile) {
+		return 5;
+	}
+	// `vendor` and `license` are constants of this toolchain build
+	// (DRIFTC_VENDOR / DRIFTC_LICENSE in lang/versions.py).  Pinning
+	// the literal values here -- a fork that rebuilt under a
+	// different vendor/license should change these constants; this
+	// test will surface that as a fail, which is what we want for the
+	// canonical Drift Foundation build.
+	val k_vendor = "vendor The Drift Language Foundation";
+	if !contains(&info, &k_vendor) {
+		return 6;
+	}
+	val k_license = "license GPL-3.0";
+	if !contains(&info, &k_license) {
+		return 7;
+	}
 	return 0;
 }

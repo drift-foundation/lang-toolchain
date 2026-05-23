@@ -1638,7 +1638,7 @@ def test_discover_package_files_follows_symlinked_dirs(tmp_path: Path) -> None:
 	Path.rglob() does not follow symlinks, so packages reachable only
 	through symlinked directories were invisible to the compiler.
 	"""
-	# Real package location (e.g. ~/opt/drift/libs/web-jwt/0.1.0/).
+	# Real package location (e.g. ~/opt/drift/lib/web-jwt/0.1.0/).
 	real_dir = tmp_path / "real" / "web-jwt" / "0.1.0"
 	real_dir.mkdir(parents=True)
 	dmp = real_dir / "web-jwt.dmp"

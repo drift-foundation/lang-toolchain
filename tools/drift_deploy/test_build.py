@@ -1805,7 +1805,7 @@ class TestLockCompatibility:
 		err = capsys.readouterr().err
 		assert "source-rebuild requires" in err
 		# v1 wording: the diagnostic now names the v1 sidecar emitters.
-		assert "drift-author publish" in err or "drift-deploy" in err
+		assert "drift author" in err or "drift-deploy" in err
 
 	def test_default_strict_still_rejects_sha_drift_without_flag(self, tmp_path, capsys):
 		"""Phase D regression: WITHOUT `--source-rebuild`, the default
@@ -2525,7 +2525,7 @@ class TestTildeExpansionBuild:
 	def test_build_package_root_tilde(self, tmp_path):
 		from tools.drift_deploy.drift_build import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--package-root=~/libs"])
+		args = p.parse_args(["--package-root=~/lib"])
 		assert "~" not in str(args.package_root[0])
 
 	def test_build_native_lib_path_tilde(self, tmp_path):
@@ -2540,7 +2540,7 @@ class TestTildeExpansionDeploy:
 		"""drift deploy --dest=~/... expands tilde."""
 		from tools.drift_deploy.drift_deploy import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--dest=~/opt/drift/libs"])
+		args = p.parse_args(["--dest=~/opt/drift/lib"])
 		assert "~" not in str(args.dest)
 
 	def test_deploy_manifest_tilde(self):
@@ -2571,7 +2571,7 @@ class TestTildeExpansionDeploy:
 		"""drift deploy --dest ~/... (space-separated) also expands."""
 		from tools.drift_deploy.drift_deploy import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--dest", "~/opt/drift/libs"])
+		args = p.parse_args(["--dest", "~/opt/drift/lib"])
 		assert "~" not in str(args.dest)
 
 
@@ -2819,13 +2819,13 @@ class TestTildeExpansionPrepare:
 	def test_prepare_dest_tilde(self):
 		from tools.drift_deploy.drift_prepare import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--dest=~/opt/drift/libs"])
+		args = p.parse_args(["--dest=~/opt/drift/lib"])
 		assert "~" not in str(args.dest)
 
 	def test_prepare_package_root_tilde(self):
 		from tools.drift_deploy.drift_prepare import build_arg_parser
 		p = build_arg_parser()
-		args = p.parse_args(["--package-root=~/libs"])
+		args = p.parse_args(["--package-root=~/lib"])
 		assert "~" not in str(args.package_root[0])
 
 

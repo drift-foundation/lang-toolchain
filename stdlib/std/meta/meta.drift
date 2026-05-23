@@ -59,7 +59,10 @@ implement Caller {
 /// Returns the compiler's identity string.
 ///
 /// Format: space-separated `key value` pairs joined by ` | ` (e.g.
-/// `"name driftc | version 0.27.199 | abi 9 | git <sha>"`).  Use
+/// `"driftc 0.32.16 | abi 14 | word 64 | git <sha> | profile optimized | vendor <org> | license <spdx> | build_utc <iso>"`).
+/// Field set: `driftc`, `abi`, `word`, optionally `git`, optionally
+/// `profile`, optionally `vendor`, optionally `license`, `build_utc`.
+/// Keys are stable; values change per release / build.  Use
 /// `compiler_info_pairs()` to parse into structured form.
 @intrinsic pub fn compiler_info() nothrow -> String;
 

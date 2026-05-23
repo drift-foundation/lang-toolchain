@@ -334,7 +334,7 @@ def apply_structural_trust_gates(
 				f"(author_key={dep.author_key!r}); source-rebuild "
 				f"requires every disk package to have a v1 author "
 				f"claim sidecar AND a matching run-snapshot entry.  "
-				f"Run `drift-author publish` for the package under a "
+				f"Run `drift author` for the package under a "
 				f"kid the snapshot authorises."
 			)
 			continue

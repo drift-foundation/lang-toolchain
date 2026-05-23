@@ -97,7 +97,7 @@ def _publish(manifest_path: Path, seed: Path, *, artifact: str | None = None,
 
 
 def test_publish_writes_author_pubkey_companion(tmp_path: Path) -> None:
-	"""`drift-author publish` MUST emit `<pkg>.author-pubkey.b64`
+	"""`drift author` MUST emit `<pkg>.author-pubkey.b64`
 	next to the claim.  `drift trust bootstrap` depends on this
 	companion to derive the trust store from the on-disk sidecars
 	alone.
@@ -107,7 +107,7 @@ def test_publish_writes_author_pubkey_companion(tmp_path: Path) -> None:
 	_publish(mf, seed)
 	companion = drift / "net-tls.author-pubkey.b64"
 	assert companion.is_file(), (
-		f"`drift-author publish` did not write the pubkey companion at "
+		f"`drift author` did not write the pubkey companion at "
 		f"{companion}; downstream `drift trust bootstrap` cannot work."
 	)
 	# File must contain a base64-decoded 32-byte pubkey on a single line.
@@ -190,7 +190,7 @@ class TestBootstrap:
 	def test_bootstrap_fails_without_pubkey_companion(self, tmp_path: Path) -> None:
 		"""If the `<pkg>.author-pubkey.b64` companion is missing
 		(e.g. claim minted by an older toolchain), bootstrap fails
-		with a diagnostic pointing the operator at `drift-author publish`.
+		with a diagnostic pointing the operator at `drift author`.
 		"""
 		drift, mf = _layout(tmp_path)
 		seed = _write_seed(tmp_path / "k.seed", _seed_b64())
@@ -230,7 +230,7 @@ class TestCheck:
 		kid alone.  The `<pkg>.author-pubkey.b64` companion is a
 		bootstrap input, not a check input -- repos that already have
 		a trust store from before the companion existed must still
-		pass preflight without re-running `drift-author publish`.
+		pass preflight without re-running `drift author`.
 		"""
 		drift, mf = _layout(tmp_path)
 		seed = _write_seed(tmp_path / "k.seed", _seed_b64())

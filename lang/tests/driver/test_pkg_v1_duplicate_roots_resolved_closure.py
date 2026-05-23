@@ -11,7 +11,7 @@ and `load_package_v1_with_policy` is called WITHOUT
 
 This is exactly the shape the drift-web preflight regression
 flagged on 2026-05-21: web-client@0.4.1 sat under both the local
-project lib root and the orch run's `--package-root .../libs`,
+project lib root and the orch run's `--package-root .../lib`,
 and the dropped-prepass duplicate failed the closure gate.
 
 The fix (driftc.py): add a path-keyed `_prepass_by_path` next to

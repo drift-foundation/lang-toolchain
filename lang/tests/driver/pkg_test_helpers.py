@@ -53,7 +53,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	stdlib_files = sorted(STDLIB_DIR.rglob("*.drift"))
 	assert stdlib_files, "no stdlib .drift files"
 
-	pkg_dir = tmp_path / "libs"
+	pkg_dir = tmp_path / "lib"
 	pkg_dir.mkdir(parents=True, exist_ok=True)
 	empty_stdlib = tmp_path / "_empty_stdlib"
 	empty_stdlib.mkdir(parents=True, exist_ok=True)

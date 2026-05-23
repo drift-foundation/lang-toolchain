@@ -5,7 +5,7 @@ Supported contract for test runners / ad-hoc compile paths that need
 the resolved dependency graph:
 
     DEP_FLAGS=$(drift lock emit --artifact <name>)
-    driftc $DEP_FLAGS --package-root <libs> tests/foo.drift -o build/foo
+    driftc $DEP_FLAGS --package-root <lib> tests/foo.drift -o build/foo
 
 Tests pin:
   - happy path emits sorted, space-separated `--dep` flags on stdout
@@ -158,7 +158,7 @@ class TestLockEmitHappyPath:
 		header): the runner must ensure co-artifact packages are
 		visible under its `--package-root` — typically by building
 		them first, or by running after `drift deploy` publishes
-		them to a shared libs tree.  Single-artifact libraries
+		them to a shared `lib/` tree.  Single-artifact libraries
 		(the common case) never have co-artifact entries and don't
 		hit this."""
 		from tools.drift_deploy.drift_lock import run

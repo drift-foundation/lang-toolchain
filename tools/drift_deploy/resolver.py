@@ -233,7 +233,7 @@ def _read_source_attestation_meta(
 			f"warning: v1 author claim at '{sidecar_path}' rejected: "
 			f"{reason} -- package will be treated as un-attested.  "
 			f"`drift prepare` will fail if this package is a non-co-"
-			f"artifact dep; re-run `drift-author publish` and republish.",
+			f"artifact dep; re-run `drift author` and republish.",
 			file=sys.stderr,
 		)
 		return ("", "")
@@ -317,7 +317,7 @@ def build_package_index(
 	**(2) Trust-store (producer / staging)**: `trust_store=...`.
 	Per-package cryptographic verification against orch's own
 	trust store via `verify_v1.verify_package_from_sidecars`.
-	Used by ORCH when staging packages into the run libs root.
+	Used by ORCH when staging packages into the run `lib/` root.
 	Failure is a HARD ERROR (`ResolutionError`) -- the package is
 	not silently pruned, because fallback to an older trusted
 	in-range version would mask the exact package orch staged for

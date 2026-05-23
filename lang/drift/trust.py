@@ -219,7 +219,7 @@ def revoke_kid_in_trust_store(opts: TrustRevokeOptions) -> None:
 class TrustImportOptions:
 	"""Import a v1 author-claim sidecar's signer kids into the trust
 	store.  Pre-v1 `.sig` imports are no longer supported; use
-	`drift-author publish` to produce a v1 author claim, then
+	`drift author` to produce a v1 author claim, then
 	import it here.
 	"""
 	trust_store_path: Path
@@ -237,8 +237,7 @@ def plan_trust_import(opts: TrustImportOptions) -> tuple[Path, str]:
 
 	The namespace defaults to `<package_id>.*` read from the
 	claim body when not provided.  Pre-v1 `.sig` imports are
-	rejected -- explicit error pointing the user at `drift-author
-	publish`.
+	rejected -- explicit error pointing the user at `drift author`.
 	"""
 	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
 	from lang.driftc.packages.sidecar_naming import author_claim_filename
@@ -248,7 +247,7 @@ def plan_trust_import(opts: TrustImportOptions) -> tuple[Path, str]:
 	if source.suffix == ".sig":
 		raise ValueError(
 			"pre-v1 `.sig` sidecars are no longer supported by "
-			"`drift trust import`.  Re-run `drift-author publish` "
+			"`drift trust import`.  Re-run `drift author` "
 			"to produce a v1 author claim, then import that file."
 		)
 	claim_path: Path
@@ -259,7 +258,7 @@ def plan_trust_import(opts: TrustImportOptions) -> tuple[Path, str]:
 		if not claim_path.is_file():
 			raise ValueError(
 				f"v1 author claim sidecar not found next to package: "
-				f"{claim_path}.  Run `drift-author publish` for "
+				f"{claim_path}.  Run `drift author` for "
 				f"{ident.package_id}@{ident.version} first."
 			)
 	else:
@@ -382,10 +381,10 @@ def _read_author_pubkey(sidecar_dir: Path, package_id: str) -> str:
 	if not path.is_file():
 		raise ValueError(
 			f"author pubkey companion not found for {package_id!r}: "
-			f"{path}.  `drift-author publish` writes this file next to "
+			f"{path}.  `drift author` writes this file next to "
 			f"the `.author-claim` so `drift trust bootstrap` can derive "
 			f"the trust store without an extra manual step.  Re-run "
-			f"`drift-author publish --manifest {sidecar_dir / 'manifest.json'} "
+			f"`drift author --manifest {sidecar_dir / 'manifest.json'} "
 			f"--key-file <author.seed>` to refresh it."
 		)
 	return path.read_text(encoding="utf-8").strip()
@@ -427,7 +426,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 		if not claim_path.is_file():
 			raise ValueError(
 				f"author claim missing for artifact {art.name!r}: "
-				f"{claim_path}.  Run `drift-author publish --manifest "
+				f"{claim_path}.  Run `drift author --manifest "
 				f"{manifest_path} [--artifact {art.name}] --key-file "
 				f"<seed>` to produce it before bootstrapping trust."
 			)
@@ -438,7 +437,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 			raise ValueError(
 				f"author pubkey companion for {art.name!r} did not "
 				f"decode to 32 bytes (got {len(pub_raw)}).  Re-run "
-				f"`drift-author publish` to regenerate it."
+				f"`drift author` to regenerate it."
 			)
 		derived_kid = compute_ed25519_kid(pub_raw)
 		# The kid must match a signer in the claim — otherwise we'd be
@@ -451,7 +450,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 				f"{derived_kid!r}) does not appear in the claim's "
 				f"signatures (signer kids: {sorted(signer_kids)!r}).  "
 				f"The companion file and the claim came from different "
-				f"keys; re-run `drift-author publish` so they agree."
+				f"keys; re-run `drift author` so they agree."
 			)
 		# Reserved-namespace guard: any namespace under std.*, lang.*,
 		# drift.* belongs to the toolchain's core_trust_v1.json, not
@@ -589,7 +588,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 
 	The function NEVER writes; it is a preflight, not a fixer.  If
 	the answer is "no", the operator runs `drift trust bootstrap`
-	(for trust setup) or `drift-author publish` (for claim
+	(for trust setup) or `drift author` (for claim
 	regeneration after manifest changes).
 	"""
 	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
@@ -630,7 +629,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 			"message": (
 				f"trust store not found: {opts.trust_store_path}.  Run "
 				f"`drift trust bootstrap --manifest {manifest_path}` "
-				f"after running `drift-author publish` for each artifact."
+				f"after running `drift author` for each artifact."
 			)})
 	else:
 		try:
@@ -648,7 +647,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 			"message": (
 				f"pre-v1 sidecar present: {p}.  v1 verify ignores "
 				f"`.sig`; remove the file and replace with a v1 "
-				f"author claim via `drift-author publish`."
+				f"author claim via `drift author`."
 			)})
 	for p in legacy_att:
 		errors.append({"artifact": None, "code": "legacy_attestation_present",
@@ -675,7 +674,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 		if not claim_path.is_file():
 			errors.append({"artifact": art.name, "code": "author_claim_missing",
 				"message": (
-					f"missing {claim_path}.  Run `drift-author publish "
+					f"missing {claim_path}.  Run `drift author "
 					f"--manifest {manifest_path} --artifact {art.name} "
 					f"--key-file <seed>`."
 				)})
@@ -703,7 +702,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 				"message": (
 					f"author claim body.version is {claim.body.version!r}, "
 					f"manifest declares {art.version!r}.  Re-run "
-					f"`drift-author publish` for {art.name}@{art.version}."
+					f"`drift author` for {art.name}@{art.version}."
 				)})
 			report["ok"] = False
 		# Declared deps: claim must list the same set the manifest does
@@ -716,7 +715,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 					f"required_deps differ between manifest and author "
 					f"claim.  Manifest: {sorted(manifest_deps.items())!r}; "
 					f"author claim: {sorted(claim_deps.items())!r}.  "
-					f"Re-run `drift-author publish` to regenerate the claim."
+					f"Re-run `drift author` to regenerate the claim."
 				)})
 			report["ok"] = False
 		# 3c. Recomputed SCI matches the claim body.
@@ -739,7 +738,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 					f"{claim.body.source_content_id!r}, but recomputing "
 					f"from the on-disk source tree yielded "
 					f"{recomputed_sci!r}.  Source has changed since the "
-					f"claim was signed; re-run `drift-author publish`."
+					f"claim was signed; re-run `drift author`."
 				)})
 			report["ok"] = False
 		# 3d. Namespace coverage in the project trust store

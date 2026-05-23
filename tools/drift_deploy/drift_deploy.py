@@ -1077,9 +1077,9 @@ def _attach_author_claim_to_artifact(
 	Per the trust-v1 role split (and the author-key-out-of-orch hard
 	gate enforced by `lang/tests/packages/test_author_key_boundary.py`),
 	the deploy pipeline NEVER signs author claims itself.  The author
-	publishes the claim from their workstation via `drift-author
-	publish`; deploy only locates that file, verifies it matches THIS
-	release, and copies it into the staged install directory.
+	publishes the claim from their workstation via `drift author`;
+	deploy only locates that file, verifies it matches THIS release,
+	and copies it into the staged install directory.
 
 	The binding check is load-bearing: without it, a stale
 	`<pkg>.author-claim` for `demo@1.0.0` left in `drift/` would
@@ -1112,7 +1112,7 @@ def _attach_author_claim_to_artifact(
 		raise DeployError(
 			f"artifact '{package_id}': pre-signed author claim not "
 			f"found at {src}.  v1 release flow requires the author "
-			f"to publish the claim via `drift-author publish` BEFORE "
+			f"to publish the claim via `drift author` BEFORE "
 			f"drift_deploy runs; the deploy pipeline never holds the "
 			f"author key (see tools/drift_author/ for the publish "
 			f"command).  Without the author claim the deploy cannot "
@@ -1124,14 +1124,14 @@ def _attach_author_claim_to_artifact(
 		raise DeployError(
 			f"artifact '{package_id}': author claim at {src} "
 			f"failed to parse as a v1 author claim ({e}).  "
-			f"Re-run `drift-author publish` to regenerate."
+			f"Re-run `drift author` to regenerate."
 		) from e
 	body = claim.body
 	if body.package_id != package_id:
 		raise DeployError(
 			f"author claim at {src} binds package_id "
 			f"{body.package_id!r}, but this build is for "
-			f"{package_id!r}.  Re-run `drift-author publish` for "
+			f"{package_id!r}.  Re-run `drift author` for "
 			f"{package_id!r} (or remove the stale claim from "
 			f"{manifest_dir})."
 		)
@@ -1142,16 +1142,17 @@ def _attach_author_claim_to_artifact(
 			f"claims from a previous release must NOT be reused: "
 			f"the certifier signs (artifact bytes + dep_graph + "
 			f"cert_suite) but the AUTHOR's release intent is "
-			f"version-specific.  Re-run `drift-author publish "
-			f"--version {package_version}` and republish."
+			f"version-specific.  Bump the manifest's artifact version "
+			f"to {package_version!r} and re-run `drift author "
+			f"--overwrite` and republish."
 		)
 	if body.source_content_id != source_content_id:
 		raise DeployError(
 			f"author claim at {src} binds source_content_id "
 			f"{body.source_content_id!r}, but this build's source "
 			f"hashed to {source_content_id!r}.  The source tree has "
-			f"changed since the author signed; re-run `drift-author "
-			f"publish` with the current source to refresh the claim."
+			f"changed since the author signed; re-run `drift author "
+			f"--overwrite` with the current source to refresh the claim."
 		)
 	dst = staged_install / canonical_name
 	staged_install.mkdir(parents=True, exist_ok=True)
@@ -1861,7 +1862,7 @@ def _deploy_artifact(
 		write_provenance_bundle(provenance_path, bundle_compressed)
 
 		# v1 trust flow: discover the pre-signed author claim (the
-		# author published it via `drift-author publish` BEFORE running
+		# author published it via `drift author` BEFORE running
 		# drift_deploy; the orch never holds the author key) and emit a
 		# fresh cert claim bound to (artifact_sha256, source_content_id,
 		# dep_graph, cert_suite).

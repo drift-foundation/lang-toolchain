@@ -237,12 +237,12 @@ declaring the artifact's source, namespace, deps, etc.  On her
 laptop she runs:
 
 ```text
-drift-author publish                                  \
+drift author                                          \
     --manifest drift/manifest.json                    \
     --key-file ~/.config/drift/keys/alice.seed
 ```
 
-That's it.  `drift-author publish` reads the manifest, computes
+That's it.  `drift author` reads the manifest, computes
 the canonical `source_content_id` over the declared source/asset
 bytes via the shared
 [`compute_artifact_sci`](../../lang/driftc/packages/manifest.py)
@@ -1074,15 +1074,15 @@ regression.
 Author-side signing lives entirely in `tools/drift_author/` and is
 intentionally walled off from the certifier/deploy pipeline.
 
-**Default flow (the publish command for humans):**
+**Default flow (the author-claim mint command for humans):**
 
 ```text
-drift-author publish                                  \
+drift author                                          \
     --manifest <repo>/drift/manifest.json             \
     --key-file <author.seed>
 ```
 
-`drift-author publish` reads the manifest, computes SCI via the
+`drift author` reads the manifest, computes SCI via the
 shared
 [`compute_artifact_sci`](../../lang/driftc/packages/manifest.py)
 helper, derives `package_id` / `version` / `required_deps` /
@@ -1106,7 +1106,7 @@ hard-checked at consumer load time).
 
 ```text
 # publish-raw — for toolchain release flows only, not authors.
-drift-author publish-raw           \
+python -m tools.drift_author publish-raw \
     --sidecar-dir <pkg-dir>        \
     --package-id <id>              \
     --version <ver>                \
@@ -1117,10 +1117,12 @@ drift-author publish-raw           \
     --key-file <author.seed>
 ```
 
-For multi-author releases (O8), append signatures with `cosign`:
+For multi-author releases (O8), append signatures with `cosign`
+(internal entry point — no public `drift` subcommand for cosign
+yet):
 
 ```text
-drift-author cosign            \
+python -m tools.drift_author cosign \
     --sidecar-dir <pkg-dir>    \
     --package-id <id>          \
     --key-file <co-author.seed>
@@ -1169,7 +1171,7 @@ family has three layers of UX:
 
 #### 7.3.1 Manifest-driven setup (`drift trust bootstrap` / `check`)
 
-After `drift-author publish` mints the author claim, **two files**
+After `drift author` mints the author claim, **two files**
 are committed to the repo:
 
 ```
@@ -1185,7 +1187,7 @@ out-of-band pubkey input.  The companion is public-key material;
 it is safe to commit and SHOULD be committed alongside the claim.
 
 **Migration note for repos that already minted claims before this
-companion existed.**  Run `drift-author publish --overwrite`
+companion existed.**  Run `drift author --overwrite`
 against the current manifest to re-emit the claim + write the
 companion alongside it.  Alternatively, hand-create the file:
 ```text
@@ -1339,7 +1341,7 @@ author-key custody.  Acceptable shapes for that step:
 - a pre-signed `std.author-claim` checked into a Foundation-
   controlled release repository and fetched by the deploy
   pipeline as an input artifact;
-- an offline `drift-author publish` run on a Foundation
+- an offline `drift author` run on a Foundation
   signing workstation (the seed never leaves that machine)
   producing the artifact, which is then handed to the deploy
   pipeline through normal file-transfer channels;
@@ -1415,7 +1417,7 @@ in sync if you rename or split a module.
 | SCI computation                  | [`lang/driftc/packages/source_content_id.py`](../../lang/driftc/packages/source_content_id.py)  |
 | Consumer-side load               | [`lang/driftc/packages/provider_v1.py`](../../lang/driftc/packages/provider_v1.py)              |
 | Format-level shape validators    | [`lang/driftc/packages/package_validate.py`](../../lang/driftc/packages/package_validate.py)    |
-| `drift-author publish` / cosign  | [`tools/drift_author/`](../../tools/drift_author/)                                              |
+| `drift author` (+ internal cosign) | [`tools/drift_author/`](../../tools/drift_author/) (+ [`lang/drift/cli.py`](../../lang/drift/cli.py) dispatch) |
 | `drift-deploy` cert-claim emit   | [`tools/drift_deploy/cert_emit.py`](../../tools/drift_deploy/cert_emit.py)                      |
 | `drift trust` CLI                | [`lang/drift/trust.py`](../../lang/drift/trust.py) + [`lang/drift/cli.py`](../../lang/drift/cli.py) |
 | Adversarial test suite           | [`lang/tests/packages/test_v1_adversarial.py`](../../lang/tests/packages/test_v1_adversarial.py)|
@@ -1430,7 +1432,7 @@ gone.  The trust-v1 cutover deletes the v0 modules
 (`signature_v0.py`, `trust_v0.py`, `provider_v0.py`) and the v0 CLI
 surfaces (`drift sign`, `drift publish`, `drift package
 inspect-signers`).  Tooling that previously emitted v0 envelopes
-must move to `drift-author publish` + `drift-deploy` cert-claim
+must move to `drift author` + `drift deploy` cert-claim
 emission; consumers that previously consumed `.sig` sidecars get
 v1 author + cert claims for the same packages.
 

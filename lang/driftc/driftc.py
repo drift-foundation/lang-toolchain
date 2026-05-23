@@ -74,9 +74,38 @@ def _toolchain_git_sha() -> str:
 	return DRIFTC_GIT_SHA or _git_short_sha()
 
 
+def _resolve_build_profile(debug_style_runtime: bool) -> str:
+	"""App-visible build-profile label stamped into `meta.compiler_info()`.
+
+	Sanitizer test modes take precedence over the dual-runtime
+	normal/debug-style distinction; the unsanitized lane records
+	"debug" when DRIFT_DEBUG=1 is set and "optimized" otherwise.
+
+	"optimized" is what app teams reading `meta.compiler_info()` see;
+	the internal lane name `default` (the runtime-archive subdir)
+	is deliberately not surfaced -- app logs should report what the
+	binary IS, not which compiler lane built it.
+
+	Shared between the CLI codegen path and the test helper
+	`compile_to_llvm_ir_for_tests` so e2e fixtures see the same
+	`profile` value the real binary would carry.
+	"""
+	if _env_true("DRIFT_ASAN") and _env_true("DRIFT_UBSAN"):
+		return "asan_ubsan"
+	if _env_true("DRIFT_ASAN"):
+		return "asan"
+	if _env_true("DRIFT_UBSAN"):
+		return "ubsan"
+	return "debug" if debug_style_runtime else "optimized"
+
+
 def _version_string() -> str:
 	"""Build the driftc --version output."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	# Vendor + license come from lang.versions so the same constants
+	# stamp `--version`, `meta.compiler_info()`, and any deploy-time
+	# provenance probe -- no second source of truth.
+	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
 	git_sha = _toolchain_git_sha()
 	parts = [
 		f"driftc {DRIFTC_VERSION}",
@@ -84,8 +113,10 @@ def _version_string() -> str:
 	]
 	if git_sha:
 		parts.append(f"git {git_sha}")
-	parts.append("license GPL-3.0")
-	parts.append("The Drift Language Foundation")
+	if DRIFTC_LICENSE:
+		parts.append(f"license {DRIFTC_LICENSE}")
+	if DRIFTC_VENDOR:
+		parts.append(DRIFTC_VENDOR)
 	return " | ".join(parts)
 
 
@@ -7689,6 +7720,13 @@ def compile_to_llvm_ir_for_tests(
 			word_bits=host_word_bits(),
 			debug_enabled=debug_enabled,
 			provenance_git_sha=_toolchain_git_sha(),
+			# Mirror the CLI's build-profile resolution so e2e fixtures
+			# observe the same `profile` value the real binary carries.
+			# The lane signal comes from DRIFT_DEBUG (not the local
+			# `debug_enabled` parameter, which controls IR-level debug
+			# info and defaults to True even on optimized runs); same
+			# logic as the CLI path at line 8033's `debug_style_runtime`.
+			provenance_build_profile=_resolve_build_profile(_env_true("DRIFT_DEBUG")),
 		)
 	except AssertionError as err:
 		_append_boundary_contract_diag(
@@ -12368,18 +12406,7 @@ def main(argv: list[str] | None = None) -> int:
 				for flag, (dep_mod, dep_name) in ENTRY_WRAPPER_IMPLICIT_DEPS.items()
 			},
 		)
-		# Build-profile provenance label.  Sanitizer test modes take
-		# precedence over the dual-runtime normal/debug-style binary
-		# distinction; the unsanitized lane records "debug" when
-		# DRIFT_DEBUG=1 is set and "default" otherwise.
-		if _env_true("DRIFT_ASAN") and _env_true("DRIFT_UBSAN"):
-			_build_profile = "asan_ubsan"
-		elif _env_true("DRIFT_ASAN"):
-			_build_profile = "asan"
-		elif _env_true("DRIFT_UBSAN"):
-			_build_profile = "ubsan"
-		else:
-			_build_profile = "debug" if debug_style_runtime else "default"
+		_build_profile = _resolve_build_profile(debug_style_runtime)
 		# K26: Inject external_impl_metas into combined_exports so that
 		# _build_interface_impl_index can find trait impls for vtable
 		# emission during codegen.  This must happen AFTER type-checking

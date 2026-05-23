@@ -419,3 +419,83 @@ def main(argv: Optional[list[str]] = None) -> int:
 	parser = _build_parser()
 	args = parser.parse_args(argv)
 	return args.func(args)
+
+
+def _build_author_subcommand_parser() -> argparse.ArgumentParser:
+	"""Flat (no inner subcommand) parser for the public `drift author`
+	command.
+
+	`drift author` is the **author-role** step of the trust-v1
+	lifecycle:
+
+	  drift author   →  refresh the author claim (this command)
+	  drift deploy   →  build artifact + cert claim
+	  drift trust    →  consumer trust store bootstrap/check/add
+
+	Single-purpose by design: no further subcommand level (everything
+	below was previously surfaced as `python -m tools.drift_author
+	publish`).  Specialised flows that don't go through
+	`drift/manifest.json` (notably the toolchain's own stdlib release)
+	keep using the internal `python -m tools.drift_author publish-raw`
+	entry point; co-signing additional authors keeps using
+	`python -m tools.drift_author cosign`.
+	"""
+	p = argparse.ArgumentParser(
+		prog="drift author",
+		description=(
+			"Mint or refresh this package's author claim.  Reads "
+			"`drift/manifest.json`, computes source_content_id via the "
+			"shared manifest helper, signs, and writes "
+			"`drift/<pkg>.author-claim` (plus `drift/<pkg>.author-pubkey.b64`).  "
+			"Does NOT build artifacts, does NOT deploy, does NOT emit "
+			"cert claims, does NOT write package roots."
+		),
+	)
+	p.add_argument("--manifest", type=Path,
+		default=Path("drift") / "manifest.json",
+		help=(
+			"Path to drift/manifest.json (the file, not the "
+			"directory).  Default: ./drift/manifest.json -- matches "
+			"the lifecycle commands (`drift build`, `drift prepare`, "
+			"`drift deploy`)."
+		))
+	p.add_argument("--artifact", type=str, default=None,
+		help=(
+			"Pick a specific library artifact by name when the manifest "
+			"declares more than one.  Required in the multi-library case."
+		))
+	p.add_argument(
+		"--namespace", type=str, action="append",
+		help=(
+			"Override declared namespaces (repeatable).  Default: a "
+			"single glob `<art.module_namespace>.*`."
+		))
+	p.add_argument("--release-utc", type=str, default=None,
+		help="Release timestamp (ISO 8601); default is now (UTC).")
+	p.add_argument("--sidecar-dir", type=Path, default=None,
+		help=(
+			"Where to write the .author-claim sidecar.  Default: the "
+			"manifest's own directory (`<repo>/drift/`), which is where "
+			"`drift deploy` will look for it."
+		))
+	p.add_argument("--overwrite", action="store_true",
+		help="Replace any existing sidecar; discards prior signatures")
+	p.add_argument("--json", action="store_true",
+		help="Emit machine-readable JSON to stdout")
+	_add_key_args(p)
+	return p
+
+
+def run_author_subcommand(argv: list[str]) -> int:
+	"""Entry point for `drift author …`.
+
+	Wired from `lang/drift/cli.py` (intercept-before-argparse, next to
+	`build`/`prepare`/`deploy`).  Thin wrapper that builds the flat
+	parser above and dispatches to the same `_cmd_publish` handler the
+	internal `python -m tools.drift_author publish` entry point uses,
+	so the manifest-driven mint behaviour is bit-identical between the
+	two surfaces.
+	"""
+	parser = _build_author_subcommand_parser()
+	args = parser.parse_args(argv)
+	return _cmd_publish(args)

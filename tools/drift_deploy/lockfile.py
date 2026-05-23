@@ -282,7 +282,7 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 							f"{e}.  v4 lock requires a strict-shape source "
 							f"identity for every signed non-co-artifact dep; "
 							f"the package must be republished with a v1 author "
-							f"claim (`drift-author publish`), then `drift "
+							f"claim (`drift author`), then `drift "
 							f"prepare` re-run."
 						) from None
 					if not isinstance(dep_sak, str) or not dep_sak.startswith("ed25519:"):
@@ -291,7 +291,7 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 							f"missing 'source_attestation_key' (expected "
 							f"'ed25519:<kid>') -- v4 records the v1 author-claim "
 							f"signer kid here as the source-identity trust root.  "
-							f"Republish the package with `drift-author publish` "
+							f"Republish the package with `drift author` "
 							f"and re-run `drift prepare`."
 						)
 			resolved[pkg_id] = ResolvedDep(
@@ -628,7 +628,7 @@ def verify_lock_compatibility(
 				f"`author_key: \"unsigned\"`, but source-rebuild mode "
 				f"requires v1 author + cert claims as the trust "
 				f"root.  Unsigned packages have no v1 claim sidecars "
-				f"to verify against; run `drift-author publish` and "
+				f"to verify against; run `drift author` and "
 				f"`drift-deploy` cert-claim emit before using "
 				f"source-rebuild certification on this dep."
 			)
@@ -831,7 +831,7 @@ def verify_lock_compatibility(
 					f"be present, well-formed, and cross-bound to the "
 					f"package's manifest stamps (the installed package "
 					f"must be verifiable as authored by a trusted owner).  "
-					f"Re-run `drift-author publish` for the package "
+					f"Re-run `drift author` for the package "
 					f"(or reinstall if the sidecar was lost), then retry.  "
 					f"Source-rebuild does NOT silently fall back to "
 					f"byte-only verification."
@@ -842,8 +842,7 @@ def verify_lock_compatibility(
 					f"valid v1 author claim on disk (sidecar missing, "
 					f"unbound, or fails cross-binding to the package "
 					f"manifest); run `drift prepare` to refresh against "
-					f"current packages or republish via `drift-author "
-					f"publish`."
+					f"current packages or republish via `drift author`."
 				)
 			continue
 		if mode == VERIFY_MODE_STRICT:
@@ -913,7 +912,7 @@ def verify_lock_compatibility(
 						f"locked dependency '{pkg_id}@{dep.version}' "
 						f"disk author kid "
 						f"{disk.source_attestation_key!r} is REVOKED.  "
-						f"Re-run `drift-author publish` under a "
+						f"Re-run `drift author` under a "
 						f"non-revoked kid."
 					)
 					sak_rejected = True
