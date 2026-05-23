@@ -143,6 +143,14 @@ to zoom in.
 | `pkg_resolve` | Post-trust: version selection, transitive sanity, dedup, ABI checks, external module / signature / schema extraction over the loaded package set. |
 | `link_pkg_types` | Heavy O(packages × modules × types) graph walk: deserialise every loaded package's type table + build the consumer-side TypeId remap. Often the largest bucket on multi-package consumer builds. |
 | `parse` | `parse_drift_workspace_to_hir` — tokenizer + LALR parse + initial HIR construction across the workspace. |
+| `flatten_post_parse` | `flatten_modules` + `_inject_prelude` + per-function origin-path collection. Single-pass over the parsed module tree. |
+| `pkg_sig_import` | Per-loaded-package signature import: TypeExpr resolution, impl_type_param canonicalization, template HIR decode + normalize, fingerprint checks. Scales (packages × modules × sigs); often the second-largest bucket on dep-rich consumer builds after `link_pkg_types`. |
+| `normalize_hirs_cli` | The per-function `normalize_hir` dict comprehension over all source functions (CLI-side, distinct from the inner `normalize_hir` label that fires inside `compile_stubbed_funcs`). |
+| `type_checker_init` | `TypeChecker` construction + the two `_register_signatures_in_callable_registry` passes that intern every source + external signature. Scales with total signature count. |
+| `typecheck_funcs` | The per-function `type_checker.check_function()` loop over normalized HIRs (CLI-side, distinct from the inner `typecheck` label inside `compile_stubbed_funcs`). CPU-bound; dominant on type-heavy code. |
+| `post_check_analysis` | Post-typecheck infrastructure: `analyze_non_retaining_params`, stdlib escape annotations, lambda escape validation, `Checker.run_by_id`, `_install_destructor_fns`, struct-requires enforcement, variant re-finalization, intrinsic-call validation. Type-table heavy; scales with trait/impl count. **Does NOT include borrow checking** (see `borrow_check_cli`). |
+| `borrow_check_cli` | The per-function CLI-side `BorrowChecker.from_typed_fn` + `check_block` pass. Distinct from the inner `borrow_check` label that fires inside `compile_stubbed_funcs` (MIR-side check on a different shape). |
+| `pre_csf_setup` | (Consumer-build path only) combined-exports merge, destructor install, visibility provenance build, and `Pass1State` construction just before `compile_stubbed_funcs`. |
 | `normalize_hir`, `typecheck`, `checker`, `borrow_check`, `mir_validate`, `drop_flags`, `ledger_rebuild_post_drop_flags`, `string_arc`, `ssa`, `throw_checks` | Pre-existing inner phases inside `compile_stubbed_funcs`. Each one may nest, so their sum can exceed the outer `check`/`mir` block they sit inside — that's expected. |
 | `codegen` | Outer codegen scope (wraps `codegen.lower` + `codegen.render` + small wrapper-emit work). |
 | `codegen.lower` | `lower_module_to_llvm` — MIR / SSA → in-memory LLVM module. |
@@ -215,10 +223,13 @@ influence.
 (`package_discovery`, `parse`, `codegen`, `codegen.lower`,
 `codegen.render`, `link`, `trust_pre_pass`, `trust_verify_loop`,
 `pkg_resolve`, `link_pkg_types`, `write_ir`, `runtime_archive_build`,
-`emit_package`, the inner `compile_stubbed_funcs` labels) and wrapper
-labels (`compile.*`, `build.compile.*`, `smoke.compile.*`,
-`smoke.run`, `smoke.custom`, `smoke.app`, `cert_emit`,
-`attach_author_claim`, `publish`) are the ones we plan to keep. New
+`emit_package`, `flatten_post_parse`, `pkg_sig_import`,
+`normalize_hirs_cli`, `type_checker_init`, `typecheck_funcs`,
+`post_check_analysis`, `borrow_check_cli`, `pre_csf_setup`, the
+inner `compile_stubbed_funcs` labels) and wrapper labels
+(`compile.*`, `build.compile.*`, `smoke.compile.*`, `smoke.run`,
+`smoke.custom`, `smoke.app`, `cert_emit`, `attach_author_claim`,
+`publish`) are the ones we plan to keep. New
 labels may appear (finer breakdowns inside existing phases). Removed
 labels would be a deliberate breaking change and would land with a
 release note. JSON consumers should treat `phases` as an open dict —

@@ -9481,6 +9481,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	semantic_world.module_exports = module_exports
 	semantic_world.module_deps = module_deps
 
+	_events.phase_start("flatten_post_parse")
 	func_hirs, signatures, fn_ids_by_name = flatten_modules(modules)
 	origin_by_fn_id: dict[FunctionId, Path] = {}
 	for mod in modules.values():
@@ -9489,6 +9490,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	prelude_injected = _should_inject_prelude(bool(args.prelude), module_deps)
 	if prelude_injected:
 		_inject_prelude(signatures, fn_ids_by_name, type_table)
+	_events.phase_end("flatten_post_parse")
 	func_hirs_by_id = func_hirs
 	base_signatures_by_id = MappingProxyType(dict(signatures))
 	derived_signatures_by_id: dict[FunctionId, FnSignature] = {}
@@ -9668,6 +9670,13 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 
 	# If package roots were provided, merge package signatures into the signature
 	# environment so type checking can validate calls to imported functions.
+	#
+	# `pkg_sig_import` covers: per-package signature TypeExpr resolution,
+	# impl_type_param canonicalization, template HIR decode+normalize,
+	# fingerprint checks, exported-const merge.  Scales with
+	# (loaded_pkgs × modules × sigs); biggest unattributed bucket on
+	# bookkeeper-shaped consumer builds.
+	_events.phase_start("pkg_sig_import")
 	if loaded_pkgs:
 		local_display_names = set(fn_ids_by_name.keys())
 		for pkg in loaded_pkgs:
@@ -10511,11 +10520,13 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 					return 1
 				continue
 			type_table.define_const(module_id=exporting_mid, name=local_name, type_id=origin_tid, value=origin_val)
+	_events.phase_end("pkg_sig_import")
 
 	# Normalize HIR before any further analysis so:
 	# - sugar does not leak into later stages, and
 	# - borrow materialization runs before borrow checking.
-	normalized_hirs_by_id = {fn_id: normalize_hir(block) for fn_id, block in func_hirs_by_id.items()}
+	with _events.timed("normalize_hirs_cli"):
+		normalized_hirs_by_id = {fn_id: normalize_hir(block) for fn_id, block in func_hirs_by_id.items()}
 
 	# Run capture discovery on normalized HIR so HLambda.captures is populated
 	# BEFORE the pre-typecheck snapshot.  Without this, package consumers
@@ -10686,6 +10697,12 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		for mod_id in module_exports.keys():
 			if isinstance(mod_id, str):
 				unsafe_trusted_modules.add(mod_id)
+	# `type_checker_init` covers TypeChecker construction + callable
+	# registry population.  The two `_register_signatures_in_callable_registry`
+	# calls below intern every source + external signature into the
+	# registry; scales with (modules × sigs).  Often the third-biggest
+	# unattributed bucket on consumer builds.
+	_events.phase_start("type_checker_init")
 	# Option B: package modules need unsafe-block permission (the producer
 	# already validated unsafe at build time) but NOT full toolchain trust
 	# (rawbuffer intrinsics, typed_validator privileges).  Track them in a
@@ -10851,6 +10868,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 
 	_register_signatures_in_callable_registry(signatures_by_id)
 	_register_signatures_in_callable_registry(external_signatures_by_id, is_external=True, skip_modules=modules)
+	_events.phase_end("type_checker_init")
 
 	# ── World is ready ───────────────────────────────────────────────
 	semantic_world.callable_registry = callable_registry
@@ -11255,6 +11273,11 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	typed_fns: dict[FunctionId, object] = {}
 	# Use signatures_by_id_all (includes external/package sigs) so package
 	# HIR functions find their param types and return types.
+	# `typecheck_funcs` covers the per-function `type_checker.check_function()`
+	# loop.  CPU-bound; scales with total source function count.  Distinct
+	# from the inner `typecheck` label inside `compile_stubbed_funcs`
+	# (which runs post-MIR re-checks).
+	_events.phase_start("typecheck_funcs")
 	_typecheck_sigs = signatures_by_id_all if signatures_by_id_all else signatures_by_id
 	for fn_id, hir_block in list(normalized_hirs_by_id.items()):
 		# Build param type map from signatures when available.
@@ -11301,6 +11324,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		)
 		type_diags.extend(result.diagnostics)
 		typed_fns[fn_id] = result.typed_fn
+	_events.phase_end("typecheck_funcs")
 	# (boundary markers already cleared pre-type-check above)
 	if _pkg_hir_loaded and drift_debug.enabled("pkg_hir"):
 		print(f"[pkg-hir] {len(_pkg_hir_loaded)} compiled from HIR, 0 fell back to MIR", file=sys.stderr)
@@ -11325,6 +11349,12 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
+	# `post_check_analysis` covers post-typecheck infrastructure work:
+	# non-retaining param analysis, stdlib escape annotations, lambda
+	# escape validation, Checker.run_by_id, _install_destructor_fns.
+	# Not per-function but type-table heavy; trait/impl validation
+	# dominates on dep-rich consumer builds.
+	_events.phase_start("post_check_analysis")
 	# Compute non-retaining metadata for callable parameters before lambda validation.
 	signatures_by_id_all = analyze_non_retaining_params(
 		typed_fns,
@@ -11528,7 +11558,15 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
+	_events.phase_end("post_check_analysis")
 
+	# `borrow_check_cli` covers the CLI-side per-function borrow check
+	# pass.  Distinct from the inner `borrow_check` label that fires
+	# inside `compile_stubbed_funcs` (which runs an MIR-side
+	# borrow-check on a different shape).  Worth isolating as its own
+	# bucket -- it's a real compiler phase and a likely candidate for
+	# bookkeeper's residual gap.
+	_events.phase_start("borrow_check_cli")
 	# Borrow check each typed function (mandatory stage).
 	borrow_diags: list[Diagnostic] = []
 	for _fn_id, typed_fn in typed_fns.items():
@@ -11556,6 +11594,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
+	_events.phase_end("borrow_check_cli")
 
 	# Package emission mode (Milestone 4): produce an unsigned package artifact
 	# containing provisional DMIR payloads for all modules in the workspace.
@@ -12228,6 +12267,12 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		return 0
 
 	if loaded_pkgs:
+		# `pre_csf_setup` covers combined_exports merge, destructor
+		# install, variant re-finalize, visibility provenance build,
+		# and Pass1State construction.  All on the consumer-build path
+		# only (no-packages path is much smaller).  Pure setup before
+		# the inner compile_stubbed_funcs phases fire.
+		_events.phase_start("pre_csf_setup")
 		# Compile source functions through the normal pipeline to get MIR+SSA.
 		combined_exports: dict[str, dict[str, object]] | None = None
 		if module_exports or external_exports:
@@ -12280,6 +12325,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			visibility_provenance_by_id=_p1_vis_prov_by_id,
 			lambda_fn_specs=dict(type_checker._lambda_fn_specs) if type_checker._lambda_fn_specs else None,
 		)
+		_events.phase_end("pre_csf_setup")
 		src_mir, checked_src, ssa_src = compile_stubbed_funcs(
 			func_hirs=normalized_hirs_by_id,
 			signatures=signatures_by_id_all,
