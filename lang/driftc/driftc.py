@@ -1548,24 +1548,26 @@ def _emit_codegen(
 					elem_td = unit.type_table.get(td.param_types[0])
 					if elem_td.name == "String":
 						argv_wrapper = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
-	module = lower_module_to_llvm(
-		unit.mir_funcs,
-		unit.ssa_funcs,
-		unit.fn_infos,
-		type_table=unit.type_table,
-		module_exports=module_exports,
-		rename_map=unit.rename_map,
-		argv_wrapper=argv_wrapper,
-		word_bits=word_bits,
-		debug_enabled=debug_enabled,
-		provenance_git_sha=provenance_git_sha,
-		provenance_build_profile=provenance_build_profile,
-	)
-	module.emit_abi_stamp()
-	if unit.entry_id is not None and argv_wrapper is None:
-		entry_sym = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
-		module.emit_entry_wrapper(entry_sym, **unit.wrapper_dep_flags)
-	return module.render()
+	with _events.timed("codegen.lower"):
+		module = lower_module_to_llvm(
+			unit.mir_funcs,
+			unit.ssa_funcs,
+			unit.fn_infos,
+			type_table=unit.type_table,
+			module_exports=module_exports,
+			rename_map=unit.rename_map,
+			argv_wrapper=argv_wrapper,
+			word_bits=word_bits,
+			debug_enabled=debug_enabled,
+			provenance_git_sha=provenance_git_sha,
+			provenance_build_profile=provenance_build_profile,
+		)
+		module.emit_abi_stamp()
+		if unit.entry_id is not None and argv_wrapper is None:
+			entry_sym = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
+			module.emit_entry_wrapper(entry_sym, **unit.wrapper_dep_flags)
+	with _events.timed("codegen.render"):
+		return module.render()
 
 
 def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
@@ -7738,25 +7740,26 @@ def compile_to_llvm_ir_for_tests(
 		return "", checked
 
 	try:
-		module = lower_module_to_llvm(
-			mir_funcs,
-			ssa_funcs,
-			fn_infos,
-			type_table=checked.type_table,
-			module_exports=module_exports,
-			rename_map=rename_map,
-			argv_wrapper=argv_wrapper,
-			word_bits=host_word_bits(),
-			debug_enabled=debug_enabled,
-			provenance_git_sha=_toolchain_git_sha(),
-			# Mirror the CLI's build-profile resolution so e2e fixtures
-			# observe the same `profile` value the real binary carries.
-			# The lane signal comes from DRIFT_DEBUG (not the local
-			# `debug_enabled` parameter, which controls IR-level debug
-			# info and defaults to True even on optimized runs); same
-			# logic as the CLI path at line 8033's `debug_style_runtime`.
-			provenance_build_profile=_resolve_build_profile(_env_true("DRIFT_DEBUG")),
-		)
+		with _events.timed("codegen.lower"):
+			module = lower_module_to_llvm(
+				mir_funcs,
+				ssa_funcs,
+				fn_infos,
+				type_table=checked.type_table,
+				module_exports=module_exports,
+				rename_map=rename_map,
+				argv_wrapper=argv_wrapper,
+				word_bits=host_word_bits(),
+				debug_enabled=debug_enabled,
+				provenance_git_sha=_toolchain_git_sha(),
+				# Mirror the CLI's build-profile resolution so e2e fixtures
+				# observe the same `profile` value the real binary carries.
+				# The lane signal comes from DRIFT_DEBUG (not the local
+				# `debug_enabled` parameter, which controls IR-level debug
+				# info and defaults to True even on optimized runs); same
+				# logic as the CLI path at line 8033's `debug_style_runtime`.
+				provenance_build_profile=_resolve_build_profile(_env_true("DRIFT_DEBUG")),
+			)
 	except AssertionError as err:
 		_append_boundary_contract_diag(
 			checked,
@@ -7784,7 +7787,8 @@ def compile_to_llvm_ir_for_tests(
 	if argv_wrapper is None and entry_id is not None and (enforce_entrypoint or entry_name == "drift_main"):
 		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
 		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available, root_vt=root_vt)
-	return module.render(), checked
+	with _events.timed("codegen.render"):
+		return module.render(), checked
 
 
 def _fake_decls_from_hirs(hirs: Mapping[FunctionId, H.HBlock]) -> list[object]:
@@ -8972,6 +8976,13 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			loaded_pkgs.append(_loaded)
 		_events.phase_end("trust_verify_loop")
 
+		# `pkg_resolve` covers version selection, transitive sanity,
+		# dedup, ABI checks, and external module / signature / schema
+		# extraction over the loaded_pkgs set.  Heavy on large
+		# multi-package consumer builds; surfaces the cost separately
+		# from the parse + trust phases.
+		_events.phase_start("pkg_resolve")
+
 		# Determinism: package discovery order (filenames, rglob ordering, CLI
 		# `--package-root` ordering) must not affect compilation results. Sort loaded
 		# packages by the module ids they provide, which is a content-derived key and
@@ -9315,6 +9326,12 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# parser resolved types against an incomplete TypeTable and then a
 	# post-parse linking step patched up the gaps.  With early linking
 	# the parser sees the full type universe from the start.
+	_events.phase_end("pkg_resolve")
+	# Heavy O(packages × modules × types) graph walk: deserialises
+	# every loaded package's type table and builds the consumer-side
+	# TypeId remap.  Often the single biggest bucket on multi-package
+	# consumer builds; see docs/timing.md.
+	_events.phase_start("link_pkg_types")
 	pkg_typeid_maps: dict[Path, dict[int, int]] = {}
 	pkg_tid_universes: dict[Path, frozenset[int]] = {}
 	pre_linked_type_table: TypeTable | None = None
@@ -9440,6 +9457,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	)
 	if loaded_pkgs:
 		semantic_world.advance_to(WorldPhase.PACKAGES_READY)
+	_events.phase_end("link_pkg_types")
 
 	# ── Source parsing ───────────────────────────────────────────────
 	semantic_world.advance_to(WorldPhase.SOURCE_INGRESS)
@@ -12645,8 +12663,9 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 
 	# Emit IR if requested.
 	if args.emit_ir is not None:
-		args.emit_ir.parent.mkdir(parents=True, exist_ok=True)
-		args.emit_ir.write_text(ir)
+		with _events.timed("write_ir"):
+			args.emit_ir.parent.mkdir(parents=True, exist_ok=True)
+			args.emit_ir.write_text(ir)
 
 	# If only IR emission requested, we are done.
 	if args.output is None:
@@ -12685,9 +12704,17 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 
-	args.output.parent.mkdir(parents=True, exist_ok=True)
-	ir_path = args.output.with_suffix(".ll")
-	ir_path.write_text(ir)
+	# Normal-link path: the IR is written to disk so clang can consume
+	# it.  Same `write_ir` label as the explicit `--emit-ir` site
+	# above; the two are mutually exclusive paths in practice (one
+	# emits IR-only, the other emits IR-then-links) and operators
+	# want the same bucket to capture "IR text on disk" cost either
+	# way.  Closes the bookkeeper-flagged gap where this large write
+	# was unattributed.
+	with _events.timed("write_ir"):
+		args.output.parent.mkdir(parents=True, exist_ok=True)
+		ir_path = args.output.with_suffix(".ll")
+		ir_path.write_text(ir)
 
 	runtime_sources = [str(p) for p in get_runtime_sources(ROOT)]
 	runtime_root = (ROOT / "lang" / "language_runtime").resolve()
@@ -12787,7 +12814,8 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		alloc_track_enabled=False,
 	)
 	try:
-		archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)
+		with _events.timed("runtime_archive_build"):
+			archive_path = build_runtime_archive(ROOT, clang=clang, variant=variant)
 	except Exception as ex:
 		msg = f"runtime archive build failed: {ex}"
 		if args.json:

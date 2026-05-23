@@ -140,9 +140,15 @@ to zoom in.
 | `package_discovery` | `os.walk` of every `--package-root`, finding `.zdmp` / `.dmp` candidates. |
 | `trust_pre_pass` | First scan over discovered package candidates: format-only load, manifest peek, SCI-conflict / envelope-variance resolution. |
 | `trust_verify_loop` | Per-candidate trust-gate run: cert-claim / author-claim verification, closure walk. |
+| `pkg_resolve` | Post-trust: version selection, transitive sanity, dedup, ABI checks, external module / signature / schema extraction over the loaded package set. |
+| `link_pkg_types` | Heavy O(packages × modules × types) graph walk: deserialise every loaded package's type table + build the consumer-side TypeId remap. Often the largest bucket on multi-package consumer builds. |
 | `parse` | `parse_drift_workspace_to_hir` — tokenizer + LALR parse + initial HIR construction across the workspace. |
 | `normalize_hir`, `typecheck`, `checker`, `borrow_check`, `mir_validate`, `drop_flags`, `ledger_rebuild_post_drop_flags`, `string_arc`, `ssa`, `throw_checks` | Pre-existing inner phases inside `compile_stubbed_funcs`. Each one may nest, so their sum can exceed the outer `check`/`mir` block they sit inside — that's expected. |
-| `codegen` | `lower_module_to_llvm` — SSA / MIR → LLVM IR text. |
+| `codegen` | Outer codegen scope (wraps `codegen.lower` + `codegen.render` + small wrapper-emit work). |
+| `codegen.lower` | `lower_module_to_llvm` — MIR / SSA → in-memory LLVM module. |
+| `codegen.render` | `module.render()` — in-memory LLVM module → IR text. Distinct from `codegen.lower` so stdlib-heavy builds can see how much is text assembly vs lowering. |
+| `write_ir` | Writing generated LLVM IR to disk — either the explicit `--emit-ir` output, or the normal link path's temporary `.ll` file that clang consumes. The two paths are mutually exclusive per compile; operators get one bucket either way. |
+| `runtime_archive_build` | `build_runtime_archive` — synchronous build of `libdrift_rt*.a`. Cold-cache cost can dominate first build of the day; warm runs are sub-100ms. |
 | `link` | The `clang` subprocess that produces the final binary. |
 | `emit_package` | The `.dmp` / `.zdmp` write at the end of `--emit-package` mode. |
 
@@ -206,7 +212,9 @@ diagnostics, same exit codes. The sink only observes; it doesn't
 influence.
 
 **Will the phases stay stable?** Current top-level phase labels
-(`parse`, `codegen`, `link`, `trust_pre_pass`, `trust_verify_loop`,
+(`package_discovery`, `parse`, `codegen`, `codegen.lower`,
+`codegen.render`, `link`, `trust_pre_pass`, `trust_verify_loop`,
+`pkg_resolve`, `link_pkg_types`, `write_ir`, `runtime_archive_build`,
 `emit_package`, the inner `compile_stubbed_funcs` labels) and wrapper
 labels (`compile.*`, `build.compile.*`, `smoke.compile.*`,
 `smoke.run`, `smoke.custom`, `smoke.app`, `cert_emit`,
