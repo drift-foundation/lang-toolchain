@@ -73,7 +73,8 @@ class TestEventSinkSurface:
 		assert events.current_sink() is None
 
 	def test_phase_accumulation(self) -> None:
-		"""Sequential same-label `timed` blocks accumulate."""
+		"""Sequential same-label `timed` blocks accumulate both time
+		AND the per-label invocation count."""
 		sink = events.EventSink()
 		with events.install_sink(sink):
 			sink.begin_compile()
@@ -89,6 +90,84 @@ class TestEventSinkSurface:
 		# both (lower bound: same magnitude as one iteration; tighter
 		# floor would race with timer resolution on fast machines).
 		assert summary["total_wall"] >= 0
+		# Counts contract: every phase that fired carries its
+		# invocation count in the sibling `counts` map.  Pinning this
+		# directly so the JSON contract can't silently drift apart
+		# from the docs.
+		assert "counts" in summary, "timings_summary() must include counts"
+		assert summary["counts"].get("a") == 2, (
+			f"counts['a'] should be 2 after two same-label timed blocks; "
+			f"got {summary['counts']!r}"
+		)
+
+	def test_counts_in_summary_match_phase_keys(self) -> None:
+		"""Every key in `phases` must have a matching `counts` entry,
+		and `counts` for an un-fired label is absent.  Pins the
+		"sibling map" contract documented in `lang/driftc/_events.py`
+		and `docs/timing.md`."""
+		sink = events.EventSink()
+		with events.install_sink(sink):
+			sink.begin_compile()
+			with events.timed("alpha"):
+				pass
+			with events.timed("beta"):
+				with events.timed("beta_inner"):
+					pass
+			sink.end_compile()
+		summary = sink.timings_summary()
+		# Every phases key has a counts entry.
+		for label in summary["phases"]:
+			assert label in summary["counts"], (
+				f"label {label!r} present in phases but missing from counts"
+			)
+		# Single-fire labels are count=1.
+		assert summary["counts"]["alpha"] == 1
+		assert summary["counts"]["beta"] == 1
+		assert summary["counts"]["beta_inner"] == 1
+		# Un-fired label not present.
+		assert "never_fired" not in summary["counts"]
+
+	def test_merge_subprocess_timings_merges_counts_additively(self) -> None:
+		"""Wrapper-side merge: child driftc's counts merge into the
+		wrapper sink additively under the prefix.  Two sequential
+		merges with the same prefix stack."""
+		sink = events.EventSink()
+		# Two independent child summaries (e.g. drift deploy calling
+		# driftc once for build, once for smoke).
+		sink.merge_subprocess_timings("compile", {
+			"total_wall": 1.5,
+			"phases": {"parse": 0.7, "codegen": 0.6},
+			"counts": {"parse": 1, "codegen": 1},
+		})
+		sink.merge_subprocess_timings("compile", {
+			"total_wall": 2.0,
+			"phases": {"parse": 0.9, "codegen": 0.8},
+			"counts": {"parse": 1, "codegen": 1},
+		})
+		summary = sink.timings_summary()
+		# Phases stack (1.5 + 2.0 = 3.5 for total_wall, etc.).
+		assert abs(summary["phases"]["compile.total_wall"] - 3.5) < 1e-6
+		assert abs(summary["phases"]["compile.parse"] - 1.6) < 1e-6
+		# Counts stack additively.
+		assert summary["counts"]["compile.parse"] == 2
+		assert summary["counts"]["compile.codegen"] == 2
+		assert summary["counts"]["compile.total_wall"] == 2
+
+	def test_merge_subprocess_timings_defaults_missing_counts(self) -> None:
+		"""Backcompat: older driftc summaries omit the `counts`
+		sibling.  The merge must default each observed phase to
+		count=1 so the parent always sees at least one invocation
+		per phase."""
+		sink = events.EventSink()
+		sink.merge_subprocess_timings("legacy", {
+			"total_wall": 0.5,
+			"phases": {"parse": 0.3, "codegen": 0.2},
+			# `counts` deliberately omitted (older driftc).
+		})
+		summary = sink.timings_summary()
+		assert summary["counts"]["legacy.parse"] == 1
+		assert summary["counts"]["legacy.codegen"] == 1
+		assert summary["counts"]["legacy.total_wall"] == 1
 
 	def test_nested_phases_unwind_cleanly(self) -> None:
 		"""Nested `timed` blocks each contribute to their own label."""

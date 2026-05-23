@@ -1932,6 +1932,7 @@ def _deploy_artifact(
 			_summary = wrapper_sink.timings_summary()
 			_total = float(_summary.get("total_wall", 0.0))
 			_phases = dict(_summary.get("phases", {}))
+			_counts = dict(_summary.get("counts", {}))
 			print(
 				f"[drift:timing][{art.name}] total_wall={_total:.3f}s",
 				file=sys.stderr,
@@ -1939,8 +1940,9 @@ def _deploy_artifact(
 			for _k, _v in sorted(
 				_phases.items(), key=lambda kv: (-float(kv[1]), kv[0]),
 			):
+				_c = _counts.get(_k, 0)
 				print(
-					f"[drift:timing][{art.name}]   {_k:<28s} = {float(_v):.3f}s",
+					f"[drift:timing][{art.name}]   {_k:<28s} = {float(_v):.3f}s  count={_c}",
 					file=sys.stderr,
 				)
 

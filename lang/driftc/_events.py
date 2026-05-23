@@ -72,6 +72,7 @@ class EventSink:
 
 	__slots__ = (
 		"_phases",
+		"_counts",
 		"_stack",
 		"_wall_start",
 		"_wall_end",
@@ -80,6 +81,12 @@ class EventSink:
 
 	def __init__(self, *, stream_writer: Callable[[dict], None] | None = None) -> None:
 		self._phases: dict[str, float] = {}
+		# Sibling map: how many times each label fired (incremented per
+		# phase_start).  Lets `timings_summary()` answer "one slow call
+		# vs many small calls" -- e.g. `normalize_hir count=500`
+		# signals per-function overhead vs `trust_verify_loop count=1`
+		# pointing at one large pass.
+		self._counts: dict[str, int] = {}
 		# Stack of (label, monotonic_start) so nested phases unwind correctly
 		# even when the same label nests (rare, but defended against).
 		self._stack: list[tuple[str, float]] = []
@@ -101,6 +108,7 @@ class EventSink:
 	def phase_start(self, label: str) -> None:
 		t = time.monotonic()
 		self._stack.append((label, t))
+		self._counts[label] = self._counts.get(label, 0) + 1
 		if self._stream_writer is not None:
 			self._stream_writer({"event": "phase_start", "phase": label})
 
@@ -148,6 +156,23 @@ class EventSink:
 					continue
 				full_key = f"{prefix}.{k}"
 				self._phases[full_key] = self._phases.get(full_key, 0.0) + _v
+		# Counts merge additively under the same prefix.  If the child
+		# omits `counts` (older driftc) we default each merged phase to
+		# count=1 so the parent sees at least one invocation per
+		# observed phase.
+		counts = sub_timings.get("counts")
+		if isinstance(counts, dict):
+			for k, c in counts.items():
+				try:
+					_c = int(c)
+				except (TypeError, ValueError):
+					continue
+				full_key = f"{prefix}.{k}"
+				self._counts[full_key] = self._counts.get(full_key, 0) + _c
+		elif isinstance(phases, dict):
+			for k in phases.keys():
+				full_key = f"{prefix}.{k}"
+				self._counts[full_key] = self._counts.get(full_key, 0) + 1
 		tw = sub_timings.get("total_wall")
 		if tw is not None:
 			try:
@@ -157,6 +182,7 @@ class EventSink:
 			if _tw is not None:
 				tw_key = f"{prefix}.total_wall"
 				self._phases[tw_key] = self._phases.get(tw_key, 0.0) + _tw
+				self._counts[tw_key] = self._counts.get(tw_key, 0) + 1
 
 	def close_all_open_phases(self) -> None:
 		"""Pop every still-open phase off the stack, recording its
@@ -192,7 +218,19 @@ class EventSink:
 	def timings_summary(self) -> dict[str, Any]:
 		"""Return the compile's timing summary.
 
-		Shape: `{"total_wall": float, "phases": {label: seconds, ...}}`.
+		Shape:
+		    {
+		      "total_wall": float,
+		      "phases":     {label: seconds, ...},
+		      "counts":     {label: invocations, ...},
+		    }
+
+		`counts` carries one entry per `phases` key: how many times
+		`phase_start(label)` fired during the compile.  Lets readers
+		spot per-call overhead vs single-large-call cost without
+		re-instrumenting (`smoke.compile count=2` is the canonical
+		retry-detection signal).
+
 		`total_wall` is 0.0 if `begin_compile`/`end_compile` weren't
 		both called (a caller-side bug -- the driver entry points
 		ensure this in production).
@@ -201,7 +239,11 @@ class EventSink:
 			total_wall = self._wall_end - self._wall_start
 		else:
 			total_wall = 0.0
-		return {"total_wall": total_wall, "phases": dict(self._phases)}
+		return {
+			"total_wall": total_wall,
+			"phases": dict(self._phases),
+			"counts": dict(self._counts),
+		}
 
 
 def current_sink() -> EventSink | None:

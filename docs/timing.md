@@ -29,6 +29,23 @@ driftc --json --timing <source>
 
 ## What you get
 
+**Invocation counts.** Every phase line now carries `count=N` (in
+text mode) and a sibling `timings.counts` dict (in JSON mode) — the
+number of times `events.phase_start(<label>)` fired during the
+compile. Lets you distinguish one slow call from many small ones
+without re-instrumenting:
+
+  - `smoke.compile = 40s  count=2` → likely a retry/double-invoke.
+  - `normalize_hir = 2s   count=500` → per-function overhead.
+  - `trust_verify_loop = 3s  count=1` → one large pass.
+  - `package_discovery = 0.8s  count=12` → repeated discovery,
+    not a single slow walk.
+
+For subprocess-wrapper paths (`drift build` / `drift deploy`),
+child driftc counts merge additively into the wrapper sink under
+the prefix used for the timings (e.g. child `codegen.lower`
+count=1 becomes parent `compile.codegen.lower` count += 1).
+
 ### Text mode (the default — read these in your terminal / CI logs)
 
 The **outermost command owns the timing session**: `driftc` reports
@@ -41,11 +58,11 @@ wrapper-level steps (cert emit, smoke, publish, etc.).
 
 ```
 [drift:timing] total_wall=4.213s
-[drift:timing]   parse                    = 1.852s
-[drift:timing]   trust_pre_pass           = 0.107s
-[drift:timing]   trust_verify_loop        = 0.094s
-[drift:timing]   codegen                  = 1.512s
-[drift:timing]   link                     = 0.624s
+[drift:timing]   parse                    = 1.852s  count=1
+[drift:timing]   trust_pre_pass           = 0.107s  count=1
+[drift:timing]   trust_verify_loop        = 0.094s  count=1
+[drift:timing]   codegen                  = 1.512s  count=1
+[drift:timing]   link                     = 0.624s  count=1
 ```
 
 #### `drift build --timing` (build session)
