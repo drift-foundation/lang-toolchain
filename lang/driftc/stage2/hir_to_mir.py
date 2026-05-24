@@ -7335,16 +7335,62 @@ class HIRToMIR:
 		schema = self._type_table.get_variant_schema(base_tid)
 		if schema is None:
 			raise AssertionError("missing variant schema for qualified member (type table bug)")
-		type_arg_exprs = list(getattr(base_te, "args", []) or [])
-		if schema.type_params:
-			if len(type_arg_exprs) != len(schema.type_params):
-				raise AssertionError("qualified member missing type arguments in typed mode (checker bug)")
-			type_arg_ids = [resolve_opaque_type(a, self._type_table, module_id=getattr(base_te, "module_id", None) or cur_mod) for a in type_arg_exprs]
-			inst_id = self._type_table.ensure_variant_instantiated(base_tid, type_arg_ids)
+		# Prefer the checker's recorded expression type.  The checker accepts a
+		# no-fields qualified-member ref by short-circuiting to `expected_type`
+		# (see `type_checker.py` HQualifiedMember branch, the short-circuit
+		# guarded on `expected_type is not None and not arm_schema.fields`).
+		# Re-resolving `base_te → base_tid` and calling
+		# `ensure_variant_instantiated` here would arrive at a *different* type
+		# identity than the one the checker handed back — and for a
+		# user-declared generic variant whose base is not pre-registered in the
+		# generic-instance machinery, `ensure_variant_instantiated` will
+		# ValueError.  Consume the recorded type when it's shaped as a VARIANT
+		# instance over the same base; fall through to the re-resolve path only
+		# when no recorded type applies (untyped lowering / recover mode).
+		# Compute the schema base id for this qualified-member's variant base.
+		# `base_tid` from `resolve_opaque_type(base_te, allow_generic_base=True)`
+		# can be either:
+		#   - the schema base TypeId (when base_te has no args), or
+		#   - an already-instantiated variant TypeId (when base_te has args —
+		#     `resolve_opaque_type` eagerly instantiates).
+		# `variant_instances[<inst_id>].base_id` is the canonical schema base.
+		schema_base_id: TypeId | None = None
+		if base_tid in self._type_table.variant_schemas:
+			schema_base_id = base_tid
 		else:
-			if type_arg_exprs:
-				raise AssertionError("qualified member has type arguments for non-generic variant (checker bug)")
-			inst_id = base_tid
+			base_inst = self._type_table.get_variant_instance(base_tid)
+			if base_inst is not None:
+				schema_base_id = base_inst.base_id
+		inst_id: TypeId | None = None
+		recorded = self._expr_types.get(expr.node_id) if self._typed_mode != "none" else None
+		if recorded is not None and schema_base_id is not None:
+			try:
+				recorded_def = self._type_table.get(recorded)
+			except Exception:
+				recorded_def = None
+			if recorded_def is not None and recorded_def.kind is TypeKind.VARIANT:
+				recorded_inst = self._type_table.get_variant_instance(recorded)
+				if recorded_inst is not None and recorded_inst.base_id == schema_base_id:
+					inst_id = recorded
+		if inst_id is None:
+			type_arg_exprs = list(getattr(base_te, "args", []) or [])
+			if schema.type_params:
+				if len(type_arg_exprs) != len(schema.type_params):
+					raise AssertionError("qualified member missing type arguments in typed mode (checker bug)")
+				type_arg_ids = [resolve_opaque_type(a, self._type_table, module_id=getattr(base_te, "module_id", None) or cur_mod) for a in type_arg_exprs]
+				# Use the canonical schema base for instantiation — `base_tid`
+				# may already be the instance TypeId (when `base_te` carries
+				# args, `resolve_opaque_type` eagerly instantiates), and
+				# `ensure_variant_instantiated` requires a *declared schema
+				# base* TypeId (ValueErrors otherwise).  This matches the
+				# happy-path schema-base derivation above.
+				if schema_base_id is None:
+					raise AssertionError("qualified member base has no derivable schema base id (type table bug)")
+				inst_id = self._type_table.ensure_variant_instantiated(schema_base_id, type_arg_ids)
+			else:
+				if type_arg_exprs:
+					raise AssertionError("qualified member has type arguments for non-generic variant (checker bug)")
+				inst_id = base_tid
 		inst = self._type_table.get_variant_instance(inst_id)
 		if inst is None:
 			raise AssertionError("variant instance missing for qualified member (type table bug)")

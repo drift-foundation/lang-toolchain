@@ -603,11 +603,25 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 			cmd.append("--dev")
 		if allow_reserved:
 			cmd.insert(3, "--dev")
-		res = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+		try:
+			res = subprocess.run(
+				cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout_s,
+			)
+		except subprocess.TimeoutExpired:
+			return f"FAIL (driftc --json hung past {timeout_s}s for compile-error case)"
 		try:
 			payload = json.loads(res.stdout)
 		except json.JSONDecodeError as err:
-			return f"FAIL (expected JSON diagnostics, got parse error: {err})"
+			# Widened diagnostic: parse-error alone is uninformative.  Capture
+			# returncode, stdout-was-empty signal, and the tail of stderr so a
+			# parallel-load flake leaves enough evidence to diagnose without
+			# re-running the suite.
+			stderr_tail = "\n".join((res.stderr or "").splitlines()[-10:]) or "<empty>"
+			return (
+				f"FAIL (expected JSON diagnostics, got parse error: {err}; "
+				f"rc={res.returncode}, stdout_len={len(res.stdout)}; "
+				f"stderr tail:\n{stderr_tail})"
+			)
 		exit_expected = expected.get("exit_code", 1)
 		if payload.get("exit_code") != exit_expected:
 			return f"FAIL (exit {payload.get('exit_code')} != expected {exit_expected})"

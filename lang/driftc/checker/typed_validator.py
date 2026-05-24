@@ -90,9 +90,10 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 					try:
 						td = type_table.get(expr_type_id)
 						inst = None
-						if td.kind is TypeKind.VARIANT_INSTANCE:
-							inst = type_table.get_variant_instance(expr_type_id)
-						elif td.kind is TypeKind.VARIANT:
+						# Only `TypeKind.VARIANT` exists; the prior
+						# `TypeKind.VARIANT_INSTANCE` branch was a stale
+						# reference (raised AttributeError on access).
+						if td.kind is TypeKind.VARIANT:
 							inst = type_table.get_variant_instance(expr_type_id)
 						if inst is not None:
 							arm = inst.arms_by_name.get(getattr(node, "member", ""))

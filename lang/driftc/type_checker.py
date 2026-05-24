@@ -6945,11 +6945,20 @@ class TypeChecker:
 					)
 					return record_expr(expr, self._unknown)
 				if expected_type is not None and not arm_schema.fields:
-					try:
-						exp_def = self.type_table.get(expected_type)
-					except Exception:
-						exp_def = None
-					if exp_def is not None and exp_def.kind is TypeKind.VARIANT_INSTANCE and exp_def.base_type_id == base_tid:
+					# Short-circuit: when `expected_type` is exactly the variant
+					# type the qualified member resolves to (same TypeId — the
+					# concrete instance), accept it and record that type for the
+					# expr.  `resolve_opaque_type(base_te, allow_generic_base=
+					# True)` returns the instantiated variant TypeId when
+					# base_te carries type args, so `expected_type == base_tid`
+					# is the right same-shape predicate.  Pre-fix this line
+					# referenced `TypeKind.VARIANT_INSTANCE` (does not exist —
+					# only `TypeKind.VARIANT`) and `TypeDef.base_type_id` (no
+					# such attribute); every no-fields qualified-member ref
+					# typed with an expected variant type crashed with
+					# AttributeError.  See
+					# `test_qualified_member_no_fields_with_expected_type.py`.
+					if expected_type == base_tid:
 						return record_expr(expr, expected_type)
 
 				type_params: list[TypeParam] = []
