@@ -909,6 +909,8 @@ def resolve_nonvariant_qualified_static_call(
 			impl_subst = ctx.match_impl_type_args(template_args=impl_target_type_args, recv_args=list(base_args), impl_type_params=impl_type_params)
 			if impl_subst is None:
 				continue
+		if impl_subst is None and impl_type_params and len(impl_type_params) == len(base_args):
+			impl_subst = Subst(owner=impl_type_params[0].id.owner, args=list(base_args))
 		if impl_subst is None and base_args and list(_impl_args) != list(base_args):
 			continue
 		if impl_subst is not None:

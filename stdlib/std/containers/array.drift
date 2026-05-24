@@ -190,6 +190,47 @@ implement<T> Array<T> {
 		}
 		return move out;
 	}
+
+	/// Returns an owned element-wise duplicate of this array.
+	///
+	/// Unlike `String.clone()` — which is a cheap refcount-bump on
+	/// shared backing storage — `Array<T>.clone()` performs an O(n)
+	/// element-wise copy into a freshly-allocated buffer.  The cost
+	/// is intentionally visible at the call site: arrays are not
+	/// `Copy`, so value-flow sites do not silently duplicate buffers.
+	///
+	/// Requires `T is core.Copy` so each element is duplicated with
+	/// value-semantics.  For non-Copy `T` (typically `Destructible`
+	/// resource types) cloning is not well-defined here and remains
+	/// the caller's responsibility.
+	///
+	/// **Typical use case:** producing an owned per-iteration value
+	/// to move-capture into a closure, e.g. cross-VT fan-out where
+	/// each spawned task needs its own owned copy of a small buffer
+	/// (UUID bytes, key material, etc.).  Example:
+	///
+	///     val key = compute_key(&input);   // Array<Byte>
+	///     var i = 0;
+	///     while i < n {
+	///         val k = key.clone();
+	///         var t = conc.spawn(|| captures(move k) nothrow => {
+	///             return do_work(&k);
+	///         });
+	///         i = i + 1;
+	///     }
+	///
+	/// **Returns:** an owned `Array<T>` with the same `len` and
+	/// element sequence as `self`; capacity equals `len` (no
+	/// over-allocation beyond what `with_capacity(len)` reserves).
+	pub fn clone(self: &Array<T>) nothrow -> Array<T> require T is core.Copy {
+		var out: Array<T> = Array<T>::with_capacity(self.len);
+		var i = 0;
+		while i < self.len {
+			out.push(self[i]);
+			i = i + 1;
+		}
+		return move out;
+	}
 }
 
 implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {

@@ -243,6 +243,7 @@ class CheckerInputsById:
 	hir_blocks_by_id: Mapping[FunctionId, "H.HBlock"]  # type: ignore[name-defined]
 	signatures_by_id: Mapping[FunctionId, FnSignature]
 	call_info_by_callsite_id: Mapping[FunctionId, Mapping[int, CallInfo]]
+	preseed_type_params_by_id: Mapping[FunctionId, Mapping[str, TypeId]] = field(default_factory=dict)
 
 
 @dataclass
@@ -277,6 +278,7 @@ class FnInfo:
 	error_type: Optional[Any] = None   # legacy placeholder (to be TypeId)
 	return_type_id: Optional[TypeId] = None
 	error_type_id: Optional[TypeId] = None
+	preseed_type_params: Mapping[str, TypeId] = field(default_factory=dict)
 
 
 def make_fn_info(
@@ -349,6 +351,7 @@ class Checker:
 		hir_blocks_by_id: Mapping[FunctionId, "H.HBlock"] | None = None,  # type: ignore[name-defined]
 		type_table: "TypeTable" | None = None,
 		call_info_by_callsite_id: Mapping[FunctionId, Mapping[int, CallInfo]] | None = None,
+		preseed_type_params_by_id: Mapping[FunctionId, Mapping[str, TypeId]] | None = None,
 	) -> None:
 		declared_by_id = declared_can_throw_by_id or {}
 		signatures = signatures_by_id or {}
@@ -364,6 +367,10 @@ class Checker:
 		}
 		for fn_id in self._hir_blocks_by_id.keys():
 			self._call_info_by_callsite_id.setdefault(fn_id, {})
+		self._preseed_type_params_by_id = {
+			fn_id: dict(params)
+			for fn_id, params in (preseed_type_params_by_id or {}).items()
+		}
 		self._catch_arms = self._normalize_and_collect_catch_arms(self._hir_blocks_by_id)
 		self._exception_catalog = dict(exception_catalog) if exception_catalog else None
 		# Use shared TypeTable when supplied; otherwise create a local one.
@@ -431,6 +438,7 @@ class Checker:
 			hir_blocks_by_id=inputs.hir_blocks_by_id,
 			type_table=type_table,
 			call_info_by_callsite_id=inputs.call_info_by_callsite_id,
+			preseed_type_params_by_id=inputs.preseed_type_params_by_id,
 		)
 		if fn_decls_by_id is None:
 			decl_ids = list(checker._hir_blocks_by_id.keys())
@@ -887,6 +895,7 @@ class Checker:
 				return_type=return_type,  # legacy/raw
 				return_type_id=return_type_id,
 				error_type_id=error_type_id,
+				preseed_type_params=self._preseed_type_params_by_id.get(fn_id, {}),
 			)
 
 		# TODO: real checker will:
@@ -1635,6 +1644,17 @@ class Checker:
 		cache: Dict[int, Optional[TypeId]] = field(default_factory=dict)
 		suppress_index_copy_check_expr_ids: set[int] = field(default_factory=set)
 
+		def type_param_map(self) -> dict[str, TypeParamId | TypeId]:
+			sig = getattr(self.current_fn, "signature", None) if self.current_fn is not None else None
+			preseed = dict(getattr(self.current_fn, "preseed_type_params", None) or {}) if self.current_fn is not None else {}
+			if sig is None:
+				return preseed
+			out: dict[str, TypeParamId | TypeId] = {}
+			for p in list(getattr(sig, "impl_type_params", []) or []) + list(getattr(sig, "type_params", []) or []):
+				out[p.name] = p.id
+			out.update(preseed)
+			return out
+
 		def infer(self, expr: "H.HExpr") -> Optional[TypeId]:
 			"""
 			Best-effort expression typing with shallow recursion.
@@ -1978,11 +1998,11 @@ class Checker:
 					for p in lam.params:
 						ptype = None
 						if getattr(p, "type", None) is not None:
-							ptype = checker._resolve_typeexpr(p.type, module_id=mod)
+							ptype = checker._resolve_typeexpr(p.type, module_id=mod, type_params=self.type_param_map())
 						self.locals[p.name] = ptype
 					expected_ret: TypeId | None = None
 					if getattr(lam, "ret_type", None) is not None:
-						expected_ret = checker._resolve_typeexpr(lam.ret_type, module_id=mod)
+						expected_ret = checker._resolve_typeexpr(lam.ret_type, module_id=mod, type_params=self.type_param_map())
 					if lam.body_expr is not None:
 						body_ty = self._infer_expr_type(lam.body_expr)
 						if expected_ret is not None and body_ty is not None and body_ty != expected_ret:
@@ -2042,7 +2062,7 @@ class Checker:
 				mod = None
 				if self.current_fn is not None and self.current_fn.signature is not None:
 					mod = getattr(self.current_fn.signature, "module", None)
-				base_ty = checker._resolve_typeexpr(expr.fn.base_type_expr, module_id=mod)
+				base_ty = checker._resolve_typeexpr(expr.fn.base_type_expr, module_id=mod, type_params=self.type_param_map())
 				td = self.table.get(base_ty)
 				if td.kind is not TypeKind.VARIANT:
 					return None
@@ -2226,7 +2246,7 @@ class Checker:
 				if te is not None:
 					mod = getattr(getattr(self.current_fn, "signature", None), "module", None) if self.current_fn and self.current_fn.signature else None
 					try:
-						return checker._resolve_typeexpr(te, module_id=mod)
+						return checker._resolve_typeexpr(te, module_id=mod, type_params=self.type_param_map())
 					except (KeyError, AttributeError, TypeError):
 						pass
 				return None
@@ -3216,14 +3236,14 @@ class Checker:
 			return self._error_type
 		return resolve_opaque_type(val, self._type_table)
 
-	def _resolve_typeexpr(self, raw: object, *, module_id: str | None = None) -> TypeId:
+	def _resolve_typeexpr(self, raw: object, *, module_id: str | None = None, type_params: dict[str, TypeParamId | TypeId] | None = None) -> TypeId:
 		"""
 		Map a parser TypeExpr-like object (name/args) or simple string/tuple into a
 		TypeId using the shared TypeTable. This mirrors the resolver and is used for
 		declared local types. The len/cap rule (Array/String → Int) is centralized
 		in the type resolver; this helper simply resolves declared type names.
 		"""
-		return resolve_opaque_type(raw, self._type_table, module_id=module_id)
+		return resolve_opaque_type(raw, self._type_table, module_id=module_id, type_params=type_params)
 
 	def _len_cap_result_type(self, subj_ty: TypeId) -> Optional[TypeId]:
 		"""Return Int when length/capacity is requested on Array or String; otherwise None."""
@@ -3371,7 +3391,7 @@ class Checker:
 				decl_ty = None
 				if getattr(stmt, "declared_type_expr", None) is not None:
 					mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
-					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
+					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod, type_params=ctx.type_param_map())
 					if decl_ty is not None and stmt.binding_id is not None:
 						ctx.locals[int(stmt.binding_id)] = decl_ty
 				# Validate the initializer is a compile-time literal.
@@ -3399,7 +3419,7 @@ class Checker:
 				decl_ty: Optional[TypeId] = None
 				if getattr(stmt, "declared_type_expr", None) is not None:
 					mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
-					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
+					decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod, type_params=ctx.type_param_map())
 				value_ty = ctx.infer(stmt.value)
 
 				def _iface_assignable(src: TypeId, dst: TypeId) -> bool:
@@ -4694,7 +4714,7 @@ class Checker:
 			decl_ty = None
 			if getattr(stmt, "declared_type_expr", None) is not None:
 				mod = getattr(ctx.current_fn.signature, "module", None) if ctx.current_fn and ctx.current_fn.signature else None
-				decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod)
+				decl_ty = self._resolve_typeexpr(stmt.declared_type_expr, module_id=mod, type_params=ctx.type_param_map())
 			if is_void(decl_ty):
 				ctx._append_diag(
 					_chk_diag(

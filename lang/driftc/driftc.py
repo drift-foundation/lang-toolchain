@@ -5221,16 +5221,21 @@ def compile_stubbed_funcs(
 		# Stage “checker”: obtain declared_can_throw from the checker stub so the
 		# driver path mirrors the real compiler layering once a proper checker exists.
 		call_info_by_callsite_id: dict[FunctionId, dict[int, CallInfo]] = {}
+		preseed_type_params_by_id: dict[FunctionId, dict[str, TypeId]] = {}
 		for fn_id, typed_fn in typed_fns_by_id.items():
 			call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
 			if isinstance(call_info, dict):
 				call_info_by_callsite_id[fn_id] = dict(call_info)
 			else:
 				call_info_by_callsite_id.setdefault(fn_id, {})
+			preseed = getattr(typed_fn, "preseed_type_params", None)
+			if isinstance(preseed, dict) and preseed:
+				preseed_type_params_by_id[fn_id] = dict(preseed)
 		check_inputs = CheckerInputsById(
 			hir_blocks_by_id=normalized_hirs_by_id,
 			signatures_by_id=signatures_by_id,
 			call_info_by_callsite_id=call_info_by_callsite_id,
+			preseed_type_params_by_id=preseed_type_params_by_id,
 		)
 		if drift_debug.enabled("local_types_trace"):
 			for fn_id, typed_fn in typed_fns_by_id.items():
@@ -11431,17 +11436,22 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# Checker (stub) enforces language-level rules (e.g., nothrow) after typecheck
 	# so we can use CallInfo for method-call throw analysis.
 	call_info_by_callsite_id: dict[FunctionId, dict[int, CallInfo]] = {}
+	preseed_type_params_by_id: dict[FunctionId, dict[str, TypeId]] = {}
 	for fn_id, typed_fn in typed_fns.items():
 		call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
 		if isinstance(call_info, dict):
 			call_info_by_callsite_id[fn_id] = dict(call_info)
 		else:
 			call_info_by_callsite_id.setdefault(fn_id, {})
+		preseed = getattr(typed_fn, "preseed_type_params", None)
+		if isinstance(preseed, dict) and preseed:
+			preseed_type_params_by_id[fn_id] = dict(preseed)
 	checked = Checker.run_by_id(
 		CheckerInputsById(
 			hir_blocks_by_id=normalized_hirs_by_id,
 			signatures_by_id=signatures_by_id_all,
 			call_info_by_callsite_id=call_info_by_callsite_id,
+			preseed_type_params_by_id=preseed_type_params_by_id,
 		),
 		exception_catalog=exception_catalog,
 		type_table=type_table,
