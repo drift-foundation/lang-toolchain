@@ -185,6 +185,7 @@ to zoom in.
 | `generic_instantiation` | Template HIR collection, method-wrapper synthesis, and three `_drain_instantiations()` rounds — the work between `typecheck` and `checker` inside CSF. Often a large bucket on generic-heavy code. |
 | `hir_to_mir` | The per-function HIR → MIR lowering loop inside CSF. Scales with source function count; one of the largest CSF buckets on real builds. |
 | `hidden_lambda_lowering` | Hidden-lambda body lowering (closures synthesized during HIR→MIR). Sized to lambda density in the source. |
+| `cleanup_authoring` | Per-function cleanup-emission pass + post-author ledger rebuild. Runs after `ledger_rebuild_post_drop_flags`, before `string_arc`. On `docs/perf-analysis-bookkeeper-profile.md`'s workload this was ~17s cumulative — biggest single source of previously-unattributed CSF time. |
 | `normalize_hir`, `typecheck`, `checker`, `borrow_check`, `mir_validate`, `drop_flags`, `ledger_rebuild_post_drop_flags`, `string_arc`, `ssa`, `throw_checks` | Pre-existing inner phases inside `compile_stubbed_funcs`. Each one may nest, so their sum can exceed the outer `check`/`mir` block they sit inside — that's expected. |
 | `codegen` | Outer codegen scope (wraps `codegen.lower` + `codegen.render` + small wrapper-emit work). |
 | `codegen.lower` | `lower_module_to_llvm` — MIR / SSA → in-memory LLVM module. |
@@ -261,7 +262,8 @@ influence.
 `normalize_hirs_cli`, `type_checker_init`, `typecheck_funcs`,
 `post_check_analysis`, `borrow_check_cli`, `pre_csf_setup`,
 `csf_entry_setup`, `generic_instantiation`, `hir_to_mir`,
-`hidden_lambda_lowering`, the inner `compile_stubbed_funcs`
+`hidden_lambda_lowering`, `cleanup_authoring`, the inner
+`compile_stubbed_funcs`
 labels) and wrapper labels (`compile.*`, `build.compile.*`,
 `smoke.compile.*`, `smoke.run`, `smoke.custom`, `smoke.app`,
 `cert_emit`, `attach_author_claim`, `publish`) are the ones we

@@ -7380,21 +7380,30 @@ def compile_stubbed_funcs(
 			from lang.driftc.stage2.cleanup_authoring import (
 				author_cleanup as _author_cleanup,
 			)
-			for fn_id, func in mir_funcs_by_id.items():
-				_author_cleanup(func, type_table=shared_type_table)
-				# Rebuild the ledger so string_arc sees the
-				# post-authoring per-instruction state instead of the
-				# stale pre-authoring snapshot.  Required for both
-				# the original patch-3 nested-scope expansion AND the
-				# Bug 2 architecture flip's block-splitting guarded
-				# emissions.  string_arc consults `verdict_at` at
-				# every `drop_before_overwrite` site; stale state
-				# causes site-4 tripwire fires.
-				_ol_build_and_attach(
-					func,
-					drop_policy=lambda _t: None,
-					reason="driftc.rebuild_after_cleanup_authoring",
-				)
+			# Wrapped in its own bucket so the per-function
+			# author_cleanup + _rebuild_ledger loop stops hiding in
+			# the unattributed CSF gap between
+			# `ledger_rebuild_post_drop_flags` and `string_arc`.
+			# Profile (docs/perf-analysis-bookkeeper-profile.md)
+			# attributed ~17s of cumulative time here on a
+			# stdlib-regex workload; bookkeeper's residual
+			# unattributed budget likely includes the same loop.
+			with _events.timed("cleanup_authoring"):
+				for fn_id, func in mir_funcs_by_id.items():
+					_author_cleanup(func, type_table=shared_type_table)
+					# Rebuild the ledger so string_arc sees the
+					# post-authoring per-instruction state instead of the
+					# stale pre-authoring snapshot.  Required for both
+					# the original patch-3 nested-scope expansion AND the
+					# Bug 2 architecture flip's block-splitting guarded
+					# emissions.  string_arc consults `verdict_at` at
+					# every `drop_before_overwrite` site; stale state
+					# causes site-4 tripwire fires.
+					_ol_build_and_attach(
+						func,
+						drop_policy=lambda _t: None,
+						reason="driftc.rebuild_after_cleanup_authoring",
+					)
 		if drift_debug.enabled("ownership_ledger"):
 			# Phase 3A observational: drain the decision events
 			# recorded by sites 1/2 during HIR→MIR and emit
