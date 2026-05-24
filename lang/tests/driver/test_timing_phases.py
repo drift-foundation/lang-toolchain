@@ -13,7 +13,8 @@ What these tests pin:
    - WITHOUT `--timing`: exactly one JSON object on stdout, no
      `timings` field.
    - WITH `--timing`: exactly one JSON object on stdout, `timings`
-     field carries `total_wall` (float) and `phases` (dict).
+     field carries `total_wall` (float), `phases` (dict of
+     label→seconds), and `counts` (dict of label→invocations).
    - No `[drift:timing]` text on stdout under `--json` (text summary
      suppressed in JSON mode).
 3. driftc text mode + `--timing`: stderr `[drift:timing]` summary
@@ -293,15 +294,43 @@ class TestDriftcJsonInvariants:
 
 	def test_text_mode_timing_summary_on_stderr(self, trivial_source: Path) -> None:
 		"""`--timing` without `--json` prints the
-		`[drift:timing]` summary on stderr."""
+		`[drift:timing]` summary on stderr.  Pins the documented
+		text format including the percent + count columns so the
+		shape can't silently regress."""
+		import re as _re
 		res = _run_driftc(_common_driftc_args(trivial_source) + ["--timing"])
 		assert res.returncode == 0, f"compile failed: {res.stderr!r}"
-		assert "[drift:timing] total_wall=" in res.stderr, (
-			f"expected `[drift:timing] total_wall=` on stderr; "
+		# Header line with total_wall.
+		_header_re = _re.compile(r"^\[drift:timing\] total_wall=\d+\.\d{3}s$")
+		_per_phase_re = _re.compile(
+			# `[drift:timing]   <label>    =   N.NNNs  NN.N%  count=N`
+			# Label may contain alphanumerics, underscores, dots (for
+			# `compile.lower` style).  Counts are non-negative ints.
+			r"^\[drift:timing\]\s{3}\S+\s+=\s+\d+\.\d{3}s\s+\d+\.\d%\s+count=\d+$"
+		)
+		header_seen = False
+		phase_lines = 0
+		for ln in res.stderr.splitlines():
+			if ln.startswith("[drift:timing] total_wall="):
+				assert _header_re.match(ln), (
+					f"header line {ln!r} doesn't match expected shape "
+					f"`[drift:timing] total_wall=N.NNNs`"
+				)
+				header_seen = True
+				continue
+			if ln.startswith("[drift:timing]   "):
+				assert _per_phase_re.match(ln), (
+					f"phase line {ln!r} doesn't match expected shape "
+					f"`[drift:timing]   <label> = N.NNNs  NN.N%  count=N`"
+				)
+				phase_lines += 1
+		assert header_seen, (
+			f"missing `[drift:timing] total_wall=` header on stderr; "
 			f"got: {res.stderr!r}"
 		)
-		# Per-phase lines must be present.
-		assert "[drift:timing]   " in res.stderr
+		assert phase_lines >= 1, (
+			f"expected >= 1 phase line on stderr; got 0.  stderr: {res.stderr!r}"
+		)
 
 
 # ── In-process sink lifecycle ─────────────────────────────────────

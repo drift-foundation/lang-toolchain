@@ -20,7 +20,9 @@ queried for its summary at the end:
         finally:
             sink.end_compile()
     summary = sink.timings_summary()
-    # summary == {"total_wall": float, "phases": {label: seconds, ...}}
+    # summary == {"total_wall": float,
+    #             "phases": {label: seconds, ...},
+    #             "counts": {label: invocations, ...}}
 
 Design constraints (deliberate):
 
@@ -28,8 +30,10 @@ Design constraints (deliberate):
     `events.timed(label)`.
   * No stderr-parsing for tooling -- callers read structured data via
     `EventSink.timings_summary()`.
-  * Cheap when disabled -- with no sink installed, `events.timed` is a
-    one `ContextVar.get()` call plus a bare yield.  No allocations.
+  * Cheap when disabled -- with no sink installed, `events.timed` is
+    one `ContextVar.get()` call that returns `None`, after which the
+    function returns the module-level `_NOOP_TIMED` singleton context
+    manager.  No allocations per call.
   * No broad global mutable state -- the sink lives in a `ContextVar`
     scoped to the active `install_sink` block.  Two in-process compiles
     (sequential in one worker, or in parallel xdist subprocess workers)
@@ -132,9 +136,9 @@ class EventSink:
 		under a label prefix.
 
 		`sub_timings` is the dict shape `EventSink.timings_summary()`
-		produces -- `{"total_wall": float, "phases": {label: secs}}`
-		-- typically read back from a child driftc invocation's
-		`--timing-out <path>` JSON file.
+		produces -- `{"total_wall": float, "phases": {label: secs},
+		"counts": {label: invocations}}` -- typically read back from a
+		child driftc invocation's `--timing-out <path>` JSON file.
 
 		Each child phase `<label>` becomes `<prefix>.<label>` in this
 		sink's `phases` dict; the child's `total_wall` becomes

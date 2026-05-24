@@ -781,16 +781,20 @@ def _print_wrapper_timing_summary(label: str, summary: dict) -> None:
 	"""Operator-facing timing block.  Same shape across drift build
 	and drift deploy: one `total_wall` line, phase lines sorted
 	descending by elapsed.  Each phase line carries `count=N` (number
-	of times the label fired) so retries / duplicate invocations are
-	visible without re-instrumenting."""
+	of times the label fired) and a percent-of-total column.
+	Percentages can sum above 100% because nested labels overlap;
+	read each as "percent of total wall represented by this label,"
+	not a partition."""
 	total = float(summary.get("total_wall", 0.0))
 	phases = dict(summary.get("phases", {}))
 	counts = dict(summary.get("counts", {}))
 	print(f"[drift:timing][{label}] total_wall={total:.3f}s", file=sys.stderr)
 	for k, v in sorted(phases.items(), key=lambda kv: (-float(kv[1]), kv[0])):
 		c = counts.get(k, 0)
+		_v = float(v)
+		_pct = (_v / total * 100.0) if total > 0 else 0.0
 		print(
-			f"[drift:timing][{label}]   {k:<28s} = {float(v):.3f}s  count={c}",
+			f"[drift:timing][{label}]   {k:<28s} = {_v:7.3f}s  {_pct:5.1f}%  count={c}",
 			file=sys.stderr,
 		)
 

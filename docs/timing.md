@@ -58,12 +58,18 @@ wrapper-level steps (cert emit, smoke, publish, etc.).
 
 ```
 [drift:timing] total_wall=4.213s
-[drift:timing]   parse                    = 1.852s  count=1
-[drift:timing]   trust_pre_pass           = 0.107s  count=1
-[drift:timing]   trust_verify_loop        = 0.094s  count=1
-[drift:timing]   codegen                  = 1.512s  count=1
-[drift:timing]   link                     = 0.624s  count=1
+[drift:timing]   parse                    =   1.852s   43.9%  count=1
+[drift:timing]   trust_pre_pass           =   0.107s    2.5%  count=1
+[drift:timing]   trust_verify_loop        =   0.094s    2.2%  count=1
+[drift:timing]   codegen                  =   1.512s   35.9%  count=1
+[drift:timing]   link                     =   0.624s   14.8%  count=1
 ```
+
+The percent column is each label's elapsed as a percent of
+`total_wall`. **Percentages can sum above 100%** because nested
+labels overlap — read each as "percent of total wall represented by
+this label," not a partition. (A 3.2s phase reads very differently
+in a 6s compile vs a 60s one; the percent makes that obvious.)
 
 #### `drift build --timing` (build session)
 
@@ -71,12 +77,12 @@ Wrapper owns `total_wall`. Compiler phases nested under `compile.*`:
 
 ```
 [drift:timing][web-client] total_wall=4.213s
-[drift:timing][web-client]   compile.total_wall       = 4.120s
-[drift:timing][web-client]   compile.parse            = 1.852s
-[drift:timing][web-client]   compile.codegen          = 1.512s
-[drift:timing][web-client]   compile.link             = 0.624s
-[drift:timing][web-client]   compile.trust_pre_pass   = 0.107s
-[drift:timing][web-client]   compile.trust_verify_loop = 0.094s
+[drift:timing][web-client]   compile.total_wall           =   4.120s   97.8%  count=1
+[drift:timing][web-client]   compile.parse                =   1.852s   43.9%  count=1
+[drift:timing][web-client]   compile.codegen              =   1.512s   35.9%  count=1
+[drift:timing][web-client]   compile.link                 =   0.624s   14.8%  count=1
+[drift:timing][web-client]   compile.trust_pre_pass       =   0.107s    2.5%  count=1
+[drift:timing][web-client]   compile.trust_verify_loop    =   0.094s    2.2%  count=1
 ```
 
 #### `drift deploy --timing` (deploy session, per artifact)
@@ -88,18 +94,18 @@ under `build.compile.*`; smoke-side compiler phases land under
 
 ```
 [drift:timing][web-client] total_wall=8.213s
-[drift:timing][web-client]   build.compile.total_wall  = 4.120s
-[drift:timing][web-client]   build.compile.parse       = 1.852s
-[drift:timing][web-client]   build.compile.codegen     = 1.512s
-[drift:timing][web-client]   build.compile.link        = 0.624s
-[drift:timing][web-client]   cert_emit                 = 0.140s
-[drift:timing][web-client]   attach_author_claim       = 0.022s
-[drift:timing][web-client]   smoke.compile.total_wall  = 2.010s
-[drift:timing][web-client]   smoke.compile.parse       = 0.812s
-[drift:timing][web-client]   smoke.compile.codegen     = 0.704s
-[drift:timing][web-client]   smoke.run                 = 0.080s
-[drift:timing][web-client]   smoke.custom              = 0.000s
-[drift:timing][web-client]   publish                   = 0.210s
+[drift:timing][web-client]   build.compile.total_wall    =   4.120s   50.2%  count=1
+[drift:timing][web-client]   build.compile.parse         =   1.852s   22.5%  count=1
+[drift:timing][web-client]   build.compile.codegen       =   1.512s   18.4%  count=1
+[drift:timing][web-client]   build.compile.link          =   0.624s    7.6%  count=1
+[drift:timing][web-client]   cert_emit                   =   0.140s    1.7%  count=1
+[drift:timing][web-client]   attach_author_claim         =   0.022s    0.3%  count=1
+[drift:timing][web-client]   smoke.compile.total_wall    =   2.010s   24.5%  count=1
+[drift:timing][web-client]   smoke.compile.parse         =   0.812s    9.9%  count=1
+[drift:timing][web-client]   smoke.compile.codegen       =   0.704s    8.6%  count=1
+[drift:timing][web-client]   smoke.run                   =   0.080s    1.0%  count=1
+[drift:timing][web-client]   smoke.custom                =   0.000s    0.0%  count=1
+[drift:timing][web-client]   publish                     =   0.210s    2.6%  count=1
 ```
 
 ### Reading the numbers
@@ -137,6 +143,13 @@ under `build.compile.*`; smoke-side compiler phases land under
       "trust_verify_loop": 0.094,
       "codegen": 1.512,
       "link": 0.624
+    },
+    "counts": {
+      "parse": 1,
+      "trust_pre_pass": 1,
+      "trust_verify_loop": 1,
+      "codegen": 1,
+      "link": 1
     }
   }
 }
@@ -168,6 +181,10 @@ to zoom in.
 | `post_check_analysis` | Post-typecheck infrastructure: `analyze_non_retaining_params`, stdlib escape annotations, lambda escape validation, `Checker.run_by_id`, `_install_destructor_fns`, struct-requires enforcement, variant re-finalization, intrinsic-call validation. Type-table heavy; scales with trait/impl count. **Does NOT include borrow checking** (see `borrow_check_cli`). |
 | `borrow_check_cli` | The per-function CLI-side `BorrowChecker.from_typed_fn` + `check_block` pass. Distinct from the inner `borrow_check` label that fires inside `compile_stubbed_funcs` (MIR-side check on a different shape). |
 | `pre_csf_setup` | (Consumer-build path only) combined-exports merge, destructor install, visibility provenance build, and `Pass1State` construction just before `compile_stubbed_funcs`. |
+| `csf_entry_setup` | CSF-internal setup before `normalize_hir`: signature-map normalization, module-info processing, the upfront type-table dance every CSF call performs. Stable bucket — present on every CSF invocation. |
+| `generic_instantiation` | Template HIR collection, method-wrapper synthesis, and three `_drain_instantiations()` rounds — the work between `typecheck` and `checker` inside CSF. Often a large bucket on generic-heavy code. |
+| `hir_to_mir` | The per-function HIR → MIR lowering loop inside CSF. Scales with source function count; one of the largest CSF buckets on real builds. |
+| `hidden_lambda_lowering` | Hidden-lambda body lowering (closures synthesized during HIR→MIR). Sized to lambda density in the source. |
 | `normalize_hir`, `typecheck`, `checker`, `borrow_check`, `mir_validate`, `drop_flags`, `ledger_rebuild_post_drop_flags`, `string_arc`, `ssa`, `throw_checks` | Pre-existing inner phases inside `compile_stubbed_funcs`. Each one may nest, so their sum can exceed the outer `check`/`mir` block they sit inside — that's expected. |
 | `codegen` | Outer codegen scope (wraps `codegen.lower` + `codegen.render` + small wrapper-emit work). |
 | `codegen.lower` | `lower_module_to_llvm` — MIR / SSA → in-memory LLVM module. |
@@ -184,9 +201,9 @@ Phases that aren't reached on a given compile (e.g. `link` for
 
 `--timing` is **opt-in**. When not set, the in-process event sink is
 not installed; every `events.timed(...)` call is one
-`ContextVar.get()` returning `None` plus a bare `yield` — no
-allocations, no clock reads, no I/O. The default compile path is
-unchanged.
+`ContextVar.get()` returning `None` and then returning a
+module-level singleton no-op context manager — no allocations, no
+clock reads, no I/O. The default compile path is unchanged.
 
 ## What to send back
 
@@ -220,12 +237,12 @@ Example message:
 >
 > ```
 > [drift:timing][bookkeeper] total_wall=8.213s
-> [drift:timing][bookkeeper]   compile.total_wall       = 8.110s
-> [drift:timing][bookkeeper]   compile.parse            = 3.852s
-> [drift:timing][bookkeeper]   compile.trust_verify_loop = 1.521s
-> [drift:timing][bookkeeper]   compile.codegen          = 1.812s
-> [drift:timing][bookkeeper]   compile.link             = 0.624s
-> [drift:timing][bookkeeper]   compile.trust_pre_pass   = 0.207s
+> [drift:timing][bookkeeper]   compile.total_wall          =   8.110s   98.7%  count=1
+> [drift:timing][bookkeeper]   compile.parse               =   3.852s   46.9%  count=1
+> [drift:timing][bookkeeper]   compile.trust_verify_loop   =   1.521s   18.5%  count=1
+> [drift:timing][bookkeeper]   compile.codegen             =   1.812s   22.0%  count=1
+> [drift:timing][bookkeeper]   compile.link                =   0.624s    7.6%  count=1
+> [drift:timing][bookkeeper]   compile.trust_pre_pass      =   0.207s    2.5%  count=1
 > ```
 
 That's enough for the team to start prioritising.
@@ -242,11 +259,13 @@ influence.
 `pkg_resolve`, `link_pkg_types`, `write_ir`, `runtime_archive_build`,
 `emit_package`, `flatten_post_parse`, `pkg_sig_import`,
 `normalize_hirs_cli`, `type_checker_init`, `typecheck_funcs`,
-`post_check_analysis`, `borrow_check_cli`, `pre_csf_setup`, the
-inner `compile_stubbed_funcs` labels) and wrapper labels
-(`compile.*`, `build.compile.*`, `smoke.compile.*`, `smoke.run`,
-`smoke.custom`, `smoke.app`, `cert_emit`, `attach_author_claim`,
-`publish`) are the ones we plan to keep. New
+`post_check_analysis`, `borrow_check_cli`, `pre_csf_setup`,
+`csf_entry_setup`, `generic_instantiation`, `hir_to_mir`,
+`hidden_lambda_lowering`, the inner `compile_stubbed_funcs`
+labels) and wrapper labels (`compile.*`, `build.compile.*`,
+`smoke.compile.*`, `smoke.run`, `smoke.custom`, `smoke.app`,
+`cert_emit`, `attach_author_claim`, `publish`) are the ones we
+plan to keep. New
 labels may appear (finer breakdowns inside existing phases). Removed
 labels would be a deliberate breaking change and would land with a
 release note. JSON consumers should treat `phases` as an open dict —
@@ -255,7 +274,8 @@ present keys are stable, but new ones may show up.
 **Can I always-on it?** Yes — wrap your normal commands. Cost is
 negligible (single-digit microseconds per phase boundary). When no
 sink is installed, `events.timed` is a single `ContextVar.get()`
-returning `None` plus a bare yield — no allocations, no clock reads.
+returning `None` and then returning a module-level singleton no-op
+context manager — no allocations, no clock reads.
 
 **`--json-lines` / NDJSON?** Not yet. The event sink supports
 progressive emission internally, so we can add `--json-lines` later

@@ -2942,7 +2942,8 @@ def compile_stubbed_funcs(
 	# sink installed AND debug timing off -- the default for normal
 	# in-process compiles), `_timed("label")` must do NO clock reads
 	# and allocate nothing beyond what `events.timed` already does
-	# (one ContextVar.get() returning None, bare yield).  The
+	# (one ContextVar.get() returning None, then return the
+	# module-level _NOOP_TIMED singleton context manager).  The
 	# stderr-emission path is gated behind `_timing_enabled` so the
 	# `time.monotonic()` calls only fire when the debug channel is
 	# actually on.
@@ -2970,223 +2971,224 @@ def compile_stubbed_funcs(
 			# events.timed itself does (which is also zero when no
 			# sink is installed).
 			return _events.timed(label)
-	if drift_debug.enabled("try_auto"):
-		import sys as _try_auto_sys
-		for fn_id, sig in signatures_by_id.items():
-			if getattr(fn_id, "module", None) == "m":
-				print(f"[try_auto] precheck sig {function_symbol(fn_id)} declared_throws={getattr(sig, 'declared_throws', None)}", file=_try_auto_sys.stderr)
-	_required_modules: set[str] = {fid.module for fid in func_hirs_by_id.keys() if isinstance(fid, FunctionId)}
-	_required_modules.update({fid.module for fid in signatures_by_id.keys() if isinstance(fid, FunctionId)})
-	if module_exports:
-		_required_modules.update({m for m in module_exports.keys() if isinstance(m, str)})
-	if module_deps:
-		_required_modules.update({m for m in module_deps.keys() if isinstance(m, str)})
-	for deps in (module_deps or {}).values():
-		_required_modules.update({m for m in deps if isinstance(m, str)})
-	declared_can_throw_by_id: Dict[FunctionId, bool] | None = None
-	if declared_can_throw:
-		declared_can_throw_by_id = {}
-		for key, val in declared_can_throw.items():
-			if isinstance(key, FunctionId):
-				declared_can_throw_by_id[key] = bool(val)
-				continue
-			if isinstance(key, str):
-				ids = fn_ids_by_name.get(key)
-				if not ids:
-					raise AssertionError(f"declared_can_throw provided for unknown function '{key}'")
-				if len(ids) > 1:
-					raise AssertionError(f"declared_can_throw name '{key}' is ambiguous")
-				declared_can_throw_by_id[ids[0]] = bool(val)
-				continue
-			raise AssertionError(f"declared_can_throw key must be FunctionId or str, got {type(key)!r}")
-	from lang.driftc import stage1 as H
+	with _events.timed("csf_entry_setup"):
+		if drift_debug.enabled("try_auto"):
+			import sys as _try_auto_sys
+			for fn_id, sig in signatures_by_id.items():
+				if getattr(fn_id, "module", None) == "m":
+					print(f"[try_auto] precheck sig {function_symbol(fn_id)} declared_throws={getattr(sig, 'declared_throws', None)}", file=_try_auto_sys.stderr)
+		_required_modules: set[str] = {fid.module for fid in func_hirs_by_id.keys() if isinstance(fid, FunctionId)}
+		_required_modules.update({fid.module for fid in signatures_by_id.keys() if isinstance(fid, FunctionId)})
+		if module_exports:
+			_required_modules.update({m for m in module_exports.keys() if isinstance(m, str)})
+		if module_deps:
+			_required_modules.update({m for m in module_deps.keys() if isinstance(m, str)})
+		for deps in (module_deps or {}).values():
+			_required_modules.update({m for m in deps if isinstance(m, str)})
+		declared_can_throw_by_id: Dict[FunctionId, bool] | None = None
+		if declared_can_throw:
+			declared_can_throw_by_id = {}
+			for key, val in declared_can_throw.items():
+				if isinstance(key, FunctionId):
+					declared_can_throw_by_id[key] = bool(val)
+					continue
+				if isinstance(key, str):
+					ids = fn_ids_by_name.get(key)
+					if not ids:
+						raise AssertionError(f"declared_can_throw provided for unknown function '{key}'")
+					if len(ids) > 1:
+						raise AssertionError(f"declared_can_throw name '{key}' is ambiguous")
+					declared_can_throw_by_id[ids[0]] = bool(val)
+					continue
+				raise AssertionError(f"declared_can_throw key must be FunctionId or str, got {type(key)!r}")
+		from lang.driftc import stage1 as H
 
-	# Adapter: when semantic_world is provided, use it as the primary source
-	# for stores that it owns.  Explicit parameters are kept for backward
-	# compatibility (test paths that don't use a world).
-	if semantic_world is not None:
-		semantic_world.assert_ready()
-		# Consistency: explicitly passed stores must match the world's references.
-		if type_table is not None and semantic_world.type_table is not None and type_table is not semantic_world.type_table:
-			raise RuntimeError("conflicting type_table: explicit argument differs from semantic_world.type_table")
-		if module_deps is not None and semantic_world.module_deps is not None and module_deps is not semantic_world.module_deps:
-			raise RuntimeError("conflicting module_deps: explicit argument differs from semantic_world.module_deps")
-		if external_trait_defs is not None and semantic_world.external_trait_defs is not None and external_trait_defs is not semantic_world.external_trait_defs:
-			raise RuntimeError("conflicting external_trait_defs: explicit argument differs from semantic_world.external_trait_defs")
-		if external_impl_metas is not None and semantic_world.external_impl_metas is not None and external_impl_metas is not semantic_world.external_impl_metas:
-			raise RuntimeError("conflicting external_impl_metas: explicit argument differs from semantic_world.external_impl_metas")
-		if external_missing_traits is not None and semantic_world.external_missing_traits is not None and external_missing_traits is not semantic_world.external_missing_traits:
-			raise RuntimeError("conflicting external_missing_traits: explicit argument differs from semantic_world.external_missing_traits")
-		# Unpack world-owned stores, falling back to explicit args.
-		if type_table is None and semantic_world.type_table is not None:
-			type_table = semantic_world.type_table
-		if module_deps is None and semantic_world.module_deps is not None:
-			module_deps = semantic_world.module_deps
-		if external_trait_defs is None and semantic_world.external_trait_defs is not None:
-			external_trait_defs = semantic_world.external_trait_defs
-		if external_impl_metas is None and semantic_world.external_impl_metas is not None:
-			external_impl_metas = semantic_world.external_impl_metas
-		if external_missing_traits is None and semantic_world.external_missing_traits is not None:
-			external_missing_traits = semantic_world.external_missing_traits
+		# Adapter: when semantic_world is provided, use it as the primary source
+		# for stores that it owns.  Explicit parameters are kept for backward
+		# compatibility (test paths that don't use a world).
+		if semantic_world is not None:
+			semantic_world.assert_ready()
+			# Consistency: explicitly passed stores must match the world's references.
+			if type_table is not None and semantic_world.type_table is not None and type_table is not semantic_world.type_table:
+				raise RuntimeError("conflicting type_table: explicit argument differs from semantic_world.type_table")
+			if module_deps is not None and semantic_world.module_deps is not None and module_deps is not semantic_world.module_deps:
+				raise RuntimeError("conflicting module_deps: explicit argument differs from semantic_world.module_deps")
+			if external_trait_defs is not None and semantic_world.external_trait_defs is not None and external_trait_defs is not semantic_world.external_trait_defs:
+				raise RuntimeError("conflicting external_trait_defs: explicit argument differs from semantic_world.external_trait_defs")
+			if external_impl_metas is not None and semantic_world.external_impl_metas is not None and external_impl_metas is not semantic_world.external_impl_metas:
+				raise RuntimeError("conflicting external_impl_metas: explicit argument differs from semantic_world.external_impl_metas")
+			if external_missing_traits is not None and semantic_world.external_missing_traits is not None and external_missing_traits is not semantic_world.external_missing_traits:
+				raise RuntimeError("conflicting external_missing_traits: explicit argument differs from semantic_world.external_missing_traits")
+			# Unpack world-owned stores, falling back to explicit args.
+			if type_table is None and semantic_world.type_table is not None:
+				type_table = semantic_world.type_table
+			if module_deps is None and semantic_world.module_deps is not None:
+				module_deps = semantic_world.module_deps
+			if external_trait_defs is None and semantic_world.external_trait_defs is not None:
+				external_trait_defs = semantic_world.external_trait_defs
+			if external_impl_metas is None and semantic_world.external_impl_metas is not None:
+				external_impl_metas = semantic_world.external_impl_metas
+			if external_missing_traits is None and semantic_world.external_missing_traits is not None:
+				external_missing_traits = semantic_world.external_missing_traits
 
-	# Guard: signatures with TypeIds must come with a shared TypeTable so TypeKind
-	# queries stay coherent end-to-end.  This runs after the adapter so that
-	# type_table unpacked from semantic_world satisfies the requirement.
-	if signatures_by_id and type_table is None:
-		for sig in signatures_by_id.values():
-			if sig.return_type_id is not None or sig.param_type_ids is not None:
-				raise ValueError("signatures with TypeIds require a shared type_table")
+		# Guard: signatures with TypeIds must come with a shared TypeTable so TypeKind
+		# queries stay coherent end-to-end.  This runs after the adapter so that
+		# type_table unpacked from semantic_world satisfies the requirement.
+		if signatures_by_id and type_table is None:
+			for sig in signatures_by_id.values():
+				if sig.return_type_id is not None or sig.param_type_ids is not None:
+					raise ValueError("signatures with TypeIds require a shared type_table")
 
-	# Important: run the checker on normalized HIR so it sees canonical forms
-	# (structural-only rewrites). We preserve node_ids and then re-use the typed
-	# HIR to keep CallInfo alignment; checker-injected annotations (e.g. match
-	# binder indices) are preserved during normalization.
+		# Important: run the checker on normalized HIR so it sees canonical forms
+		# (structural-only rewrites). We preserve node_ids and then re-use the typed
+		# HIR to keep CallInfo alignment; checker-injected annotations (e.g. match
+		# binder indices) are preserved during normalization.
 
-	# If no signatures were supplied, resolve basic signatures from the original HIR.
-	shared_type_table = type_table
-	if shared_type_table is not None and not hasattr(shared_type_table, "_destructible_query"):
-		def _fallback_destructible(_tid: int) -> bool | None:
-			return None
-		shared_type_table.set_destructible_query(_fallback_destructible, allow_fallback=True)
-	if pass1_state is not None and signatures_by_id:
-		# Phase 4 (converge-one-pipeline): signatures from the driver are already
-		# resolved with TypeIds and can_throw.  Skip the expensive resolution loop
-		# but fill missing error_type_id for can-throw sigs (package signatures
-		# don't serialize error_type_id).
-		_p4_resolved: dict[FunctionId, FnSignature] = {}
-		for fn_id, sig in signatures_by_id.items():
-			err_id = sig.error_type_id
-			if sig.declared_can_throw is not False and err_id is None:
-				err_id = shared_type_table.ensure_error()
-				_p4_resolved[fn_id] = replace(sig, error_type_id=err_id)
-		if _p4_resolved:
-			base_signatures_by_id = dict(signatures_by_id)
-			base_signatures_by_id.update(_p4_resolved)
+		# If no signatures were supplied, resolve basic signatures from the original HIR.
+		shared_type_table = type_table
+		if shared_type_table is not None and not hasattr(shared_type_table, "_destructible_query"):
+			def _fallback_destructible(_tid: int) -> bool | None:
+				return None
+			shared_type_table.set_destructible_query(_fallback_destructible, allow_fallback=True)
+		if pass1_state is not None and signatures_by_id:
+			# Phase 4 (converge-one-pipeline): signatures from the driver are already
+			# resolved with TypeIds and can_throw.  Skip the expensive resolution loop
+			# but fill missing error_type_id for can-throw sigs (package signatures
+			# don't serialize error_type_id).
+			_p4_resolved: dict[FunctionId, FnSignature] = {}
+			for fn_id, sig in signatures_by_id.items():
+				err_id = sig.error_type_id
+				if sig.declared_can_throw is not False and err_id is None:
+					err_id = shared_type_table.ensure_error()
+					_p4_resolved[fn_id] = replace(sig, error_type_id=err_id)
+			if _p4_resolved:
+				base_signatures_by_id = dict(signatures_by_id)
+				base_signatures_by_id.update(_p4_resolved)
+			else:
+				base_signatures_by_id = dict(signatures_by_id)
+		elif not signatures_by_id:
+			shared_type_table, base_signatures_by_id, _ffi_diags = resolve_program_signatures(
+				_fake_decls_from_hirs(func_hirs_by_id),
+				table=shared_type_table,
+			)
 		else:
-			base_signatures_by_id = dict(signatures_by_id)
-	elif not signatures_by_id:
-		shared_type_table, base_signatures_by_id, _ffi_diags = resolve_program_signatures(
-			_fake_decls_from_hirs(func_hirs_by_id),
-			table=shared_type_table,
-		)
-	else:
-		# Ensure TypeIds are resolved on supplied signatures using a shared table.
-		if shared_type_table is None:
-			shared_type_table = TypeTable()
+			# Ensure TypeIds are resolved on supplied signatures using a shared table.
+			if shared_type_table is None:
+				shared_type_table = TypeTable()
+			if drift_debug.enabled("type_prov") and shared_type_table is not None:
+				shared_type_table.enable_type_provenance()
+			resolved_signatures: dict[FunctionId, FnSignature] = {}
+			for fn_id, sig in signatures_by_id.items():
+				type_param_map: dict[str, object] = {}
+				if getattr(sig, "impl_type_params", None) or getattr(sig, "type_params", None):
+					for p in (list(getattr(sig, "impl_type_params", []) or []) + list(getattr(sig, "type_params", []) or [])):
+						type_param_map[p.name] = p.id
+				ret_id = sig.return_type_id
+				if sig.return_type is not None and (type_param_map or ret_id is None or shared_type_table.get(ret_id).kind is TypeKind.UNKNOWN):
+					ret_id = resolve_opaque_type(sig.return_type, shared_type_table, module_id=getattr(sig, "module", None), type_params=type_param_map or None)
+				param_ids = sig.param_type_ids
+				if sig.param_types is not None and (type_param_map or param_ids is None):
+					param_ids = [resolve_opaque_type(p, shared_type_table, module_id=getattr(sig, "module", None), type_params=type_param_map or None) for p in sig.param_types]
+				if param_ids is None and sig.param_types is None:
+					param_ids = []
+				err_id = sig.error_type_id
+				if err_id is None and ret_id is not None:
+					td = shared_type_table.get(ret_id)
+					if td.kind is TypeKind.FNRESULT and len(td.param_types) >= 2:
+						err_id = td.param_types[1]
+				declared_can_throw = sig.declared_can_throw
+				if declared_can_throw is None and declared_can_throw_by_id is not None:
+					if fn_id in declared_can_throw_by_id:
+						declared_can_throw = bool(declared_can_throw_by_id[fn_id])
+				if declared_can_throw is None:
+					declared_can_throw = True
+				if declared_can_throw is not False and err_id is None:
+					err_id = shared_type_table.ensure_error()
+				resolved_signatures[fn_id] = replace(
+					sig,
+					param_type_ids=param_ids,
+					return_type_id=ret_id,
+					error_type_id=err_id,
+					declared_can_throw=bool(declared_can_throw),
+				)
+			base_signatures_by_id = resolved_signatures
+
 		if drift_debug.enabled("type_prov") and shared_type_table is not None:
 			shared_type_table.enable_type_provenance()
-		resolved_signatures: dict[FunctionId, FnSignature] = {}
-		for fn_id, sig in signatures_by_id.items():
-			type_param_map: dict[str, object] = {}
-			if getattr(sig, "impl_type_params", None) or getattr(sig, "type_params", None):
-				for p in (list(getattr(sig, "impl_type_params", []) or []) + list(getattr(sig, "type_params", []) or [])):
-					type_param_map[p.name] = p.id
-			ret_id = sig.return_type_id
-			if sig.return_type is not None and (type_param_map or ret_id is None or shared_type_table.get(ret_id).kind is TypeKind.UNKNOWN):
-				ret_id = resolve_opaque_type(sig.return_type, shared_type_table, module_id=getattr(sig, "module", None), type_params=type_param_map or None)
-			param_ids = sig.param_type_ids
-			if sig.param_types is not None and (type_param_map or param_ids is None):
-				param_ids = [resolve_opaque_type(p, shared_type_table, module_id=getattr(sig, "module", None), type_params=type_param_map or None) for p in sig.param_types]
-			if param_ids is None and sig.param_types is None:
-				param_ids = []
-			err_id = sig.error_type_id
-			if err_id is None and ret_id is not None:
-				td = shared_type_table.get(ret_id)
-				if td.kind is TypeKind.FNRESULT and len(td.param_types) >= 2:
-					err_id = td.param_types[1]
-			declared_can_throw = sig.declared_can_throw
-			if declared_can_throw is None and declared_can_throw_by_id is not None:
-				if fn_id in declared_can_throw_by_id:
-					declared_can_throw = bool(declared_can_throw_by_id[fn_id])
-			if declared_can_throw is None:
-				declared_can_throw = True
-			if declared_can_throw is not False and err_id is None:
-				err_id = shared_type_table.ensure_error()
-			resolved_signatures[fn_id] = replace(
-				sig,
-				param_type_ids=param_ids,
-				return_type_id=ret_id,
-				error_type_id=err_id,
-				declared_can_throw=bool(declared_can_throw),
-			)
-		base_signatures_by_id = resolved_signatures
 
-	if drift_debug.enabled("type_prov") and shared_type_table is not None:
-		shared_type_table.enable_type_provenance()
+		derived_signatures_by_id: dict[FunctionId, FnSignature] = {}
+		base_signatures_by_id = MappingProxyType(dict(base_signatures_by_id))
 
-	derived_signatures_by_id: dict[FunctionId, FnSignature] = {}
-	base_signatures_by_id = MappingProxyType(dict(base_signatures_by_id))
+		def _record_signature_provenance(fn_id: FunctionId, sig: FnSignature) -> None:
+			if shared_type_table is None or not shared_type_table.type_provenance_enabled():
+				return
+			span = getattr(sig, "loc", None)
+			note = function_symbol(fn_id)
+			for tid in sig.param_type_ids or []:
+				shared_type_table.record_type_provenance(
+					tid,
+					phase="signature",
+					kind="sig_param",
+					span=span,
+					note=note,
+				)
+			if sig.return_type_id is not None:
+				shared_type_table.record_type_provenance(
+					sig.return_type_id,
+					phase="signature",
+					kind="sig_return",
+					span=span,
+					note=note,
+				)
+			if sig.error_type_id is not None:
+				shared_type_table.record_type_provenance(
+					sig.error_type_id,
+					phase="signature",
+					kind="sig_error",
+					span=span,
+					note=note,
+				)
 
-	def _record_signature_provenance(fn_id: FunctionId, sig: FnSignature) -> None:
-		if shared_type_table is None or not shared_type_table.type_provenance_enabled():
-			return
-		span = getattr(sig, "loc", None)
-		note = function_symbol(fn_id)
-		for tid in sig.param_type_ids or []:
-			shared_type_table.record_type_provenance(
-				tid,
-				phase="signature",
-				kind="sig_param",
-				span=span,
-				note=note,
-			)
-		if sig.return_type_id is not None:
-			shared_type_table.record_type_provenance(
-				sig.return_type_id,
-				phase="signature",
-				kind="sig_return",
-				span=span,
-				note=note,
-			)
-		if sig.error_type_id is not None:
-			shared_type_table.record_type_provenance(
-				sig.error_type_id,
-				phase="signature",
-				kind="sig_error",
-				span=span,
-				note=note,
-			)
+		if shared_type_table is not None and shared_type_table.type_provenance_enabled():
+			for fn_id, sig in base_signatures_by_id.items():
+				_record_signature_provenance(fn_id, sig)
+		_ensure_module_packages(
+			shared_type_table,
+			modules=_required_modules,
+			package_id=package_id,
+			allow_fill=True,
+			context="compile_stubbed_funcs",
+		)
+		signatures_by_id: Mapping[FunctionId, FnSignature] = ChainMap(
+			derived_signatures_by_id,
+			base_signatures_by_id,
+		)
+		_assert_signature_map_split(
+			base_signatures_by_id=base_signatures_by_id,
+			derived_signatures_by_id=derived_signatures_by_id,
+			context="compile_stubbed_funcs pre-synthesis",
+		)
 
-	if shared_type_table is not None and shared_type_table.type_provenance_enabled():
-		for fn_id, sig in base_signatures_by_id.items():
+		def _register_derived_signature_precheck(fn_id: FunctionId, sig: FnSignature) -> None:
+			existing = derived_signatures_by_id.get(fn_id) or base_signatures_by_id.get(fn_id)
+			if existing is not None:
+				if existing != sig:
+					if fn_id in base_signatures_by_id:
+						return
+					raise AssertionError(f"signature collision for '{function_symbol(fn_id)}'")
+				return
 			_record_signature_provenance(fn_id, sig)
-	_ensure_module_packages(
-		shared_type_table,
-		modules=_required_modules,
-		package_id=package_id,
-		allow_fill=True,
-		context="compile_stubbed_funcs",
-	)
-	signatures_by_id: Mapping[FunctionId, FnSignature] = ChainMap(
-		derived_signatures_by_id,
-		base_signatures_by_id,
-	)
-	_assert_signature_map_split(
-		base_signatures_by_id=base_signatures_by_id,
-		derived_signatures_by_id=derived_signatures_by_id,
-		context="compile_stubbed_funcs pre-synthesis",
-	)
+			derived_signatures_by_id[fn_id] = sig
 
-	def _register_derived_signature_precheck(fn_id: FunctionId, sig: FnSignature) -> None:
-		existing = derived_signatures_by_id.get(fn_id) or base_signatures_by_id.get(fn_id)
-		if existing is not None:
-			if existing != sig:
-				if fn_id in base_signatures_by_id:
-					return
-				raise AssertionError(f"signature collision for '{function_symbol(fn_id)}'")
-			return
-		_record_signature_provenance(fn_id, sig)
-		derived_signatures_by_id[fn_id] = sig
-
-	if pass1_state is not None:
-		# Phase 4 (converge-one-pipeline): wrapper signatures are already in
-		# base_signatures_by_id (flattened from the driver's ChainMap), so
-		# injection would return empty specs.  Reuse the driver's specs for
-		# downstream wrapper MIR synthesis.
-		method_wrapper_specs = pass1_state.method_wrapper_specs
-	else:
-		# Option B: no boundary wrapper injection.
-		method_wrapper_specs = []
+		if pass1_state is not None:
+			# Phase 4 (converge-one-pipeline): wrapper signatures are already in
+			# base_signatures_by_id (flattened from the driver's ChainMap), so
+			# injection would return empty specs.  Reuse the driver's specs for
+			# downstream wrapper MIR synthesis.
+			method_wrapper_specs = pass1_state.method_wrapper_specs
+		else:
+			# Option B: no boundary wrapper injection.
+			method_wrapper_specs = []
 
 	if pass1_state is not None:
 		# Phase 4 (converge-one-pipeline): the driver already normalized HIR
@@ -4094,684 +4096,565 @@ def compile_stubbed_funcs(
 		assign_callsite_ids(block, start=1)
 		return block
 
-	template_hirs_by_key: dict[FunctionKey, H.HBlock] = {}
-	if isinstance(generic_templates_by_key, dict):
-		template_hirs_by_key.update(generic_templates_by_key)
+	with _events.timed("generic_instantiation"):
+		template_hirs_by_key: dict[FunctionKey, H.HBlock] = {}
+		if isinstance(generic_templates_by_key, dict):
+			template_hirs_by_key.update(generic_templates_by_key)
 
-	def _clear_var_binding_ids(block: H.HBlock) -> None:
-		def walk_expr(expr: H.HExpr) -> None:
-			if isinstance(expr, H.HVar):
-				if expr.binding_id is not None:
-					expr.binding_id = None
-				return
-			if isinstance(expr, getattr(H, "HPlaceExpr", ())):
-				walk_expr(expr.base)
-				for proj in expr.projections:
-					if isinstance(proj, H.HPlaceIndex):
-						walk_expr(proj.index)
-				return
-			if isinstance(expr, H.HCall):
-				walk_expr(expr.fn)
-				for arg in expr.args:
-					walk_expr(arg)
-				for kw in getattr(expr, "kwargs", []) or []:
-					walk_expr(kw.value)
-				return
-			if isinstance(expr, H.HMethodCall):
-				walk_expr(expr.receiver)
-				for arg in expr.args:
-					walk_expr(arg)
-				for kw in getattr(expr, "kwargs", []) or []:
-					walk_expr(kw.value)
-				return
-			if isinstance(expr, H.HField):
-				walk_expr(expr.subject)
-				return
-			if isinstance(expr, H.HIndex):
-				walk_expr(expr.subject)
-				walk_expr(expr.index)
-				return
-			if isinstance(expr, H.HArrayLiteral):
-				for elem in expr.elements:
-					walk_expr(elem)
-				return
-			if isinstance(expr, H.HFString):
-				for hole in expr.holes:
-					walk_expr(hole.expr)
-				return
-			if isinstance(expr, H.HLambda):
-				for param in expr.params:
-					if param.binding_id is not None:
-						param.binding_id = None
-				for cap in expr.explicit_captures or []:
-					if cap.binding_id is not None:
-						cap.binding_id = None
-				if expr.body_expr is not None:
-					walk_expr(expr.body_expr)
-				if expr.body_block is not None:
-					walk_block(expr.body_block)
-				return
-			if isinstance(expr, H.HResultOk):
-				walk_expr(expr.value)
-				return
-			if isinstance(expr, H.HExceptionInit):
-				for arg in expr.pos_args:
-					walk_expr(arg)
-				for kw in expr.kw_args:
-					walk_expr(kw.value)
-				return
-			if isinstance(expr, H.HTryExpr):
-				walk_expr(expr.attempt)
-				for arm in expr.arms:
-					walk_block(arm.block)
-					if arm.result is not None:
-						walk_expr(arm.result)
-				return
-			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
-				walk_block(expr.body)
-				walk_expr(expr.result)
-				return
-			if isinstance(expr, H.HMatchExpr):
-				walk_expr(expr.scrutinee)
-				for arm in expr.arms:
-					walk_block(arm.block)
-					if arm.result is not None:
-						walk_expr(arm.result)
-				return
+		def _clear_var_binding_ids(block: H.HBlock) -> None:
+			def walk_expr(expr: H.HExpr) -> None:
+				if isinstance(expr, H.HVar):
+					if expr.binding_id is not None:
+						expr.binding_id = None
+					return
+				if isinstance(expr, getattr(H, "HPlaceExpr", ())):
+					walk_expr(expr.base)
+					for proj in expr.projections:
+						if isinstance(proj, H.HPlaceIndex):
+							walk_expr(proj.index)
+					return
+				if isinstance(expr, H.HCall):
+					walk_expr(expr.fn)
+					for arg in expr.args:
+						walk_expr(arg)
+					for kw in getattr(expr, "kwargs", []) or []:
+						walk_expr(kw.value)
+					return
+				if isinstance(expr, H.HMethodCall):
+					walk_expr(expr.receiver)
+					for arg in expr.args:
+						walk_expr(arg)
+					for kw in getattr(expr, "kwargs", []) or []:
+						walk_expr(kw.value)
+					return
+				if isinstance(expr, H.HField):
+					walk_expr(expr.subject)
+					return
+				if isinstance(expr, H.HIndex):
+					walk_expr(expr.subject)
+					walk_expr(expr.index)
+					return
+				if isinstance(expr, H.HArrayLiteral):
+					for elem in expr.elements:
+						walk_expr(elem)
+					return
+				if isinstance(expr, H.HFString):
+					for hole in expr.holes:
+						walk_expr(hole.expr)
+					return
+				if isinstance(expr, H.HLambda):
+					for param in expr.params:
+						if param.binding_id is not None:
+							param.binding_id = None
+					for cap in expr.explicit_captures or []:
+						if cap.binding_id is not None:
+							cap.binding_id = None
+					if expr.body_expr is not None:
+						walk_expr(expr.body_expr)
+					if expr.body_block is not None:
+						walk_block(expr.body_block)
+					return
+				if isinstance(expr, H.HResultOk):
+					walk_expr(expr.value)
+					return
+				if isinstance(expr, H.HExceptionInit):
+					for arg in expr.pos_args:
+						walk_expr(arg)
+					for kw in expr.kw_args:
+						walk_expr(kw.value)
+					return
+				if isinstance(expr, H.HTryExpr):
+					walk_expr(expr.attempt)
+					for arm in expr.arms:
+						walk_block(arm.block)
+						if arm.result is not None:
+							walk_expr(arm.result)
+					return
+				if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+					walk_block(expr.body)
+					walk_expr(expr.result)
+					return
+				if isinstance(expr, H.HMatchExpr):
+					walk_expr(expr.scrutinee)
+					for arm in expr.arms:
+						walk_block(arm.block)
+						if arm.result is not None:
+							walk_expr(arm.result)
+					return
 
-		def walk_stmt(stmt: H.HStmt) -> None:
-			if isinstance(stmt, H.HLocalConst):
-				return  # literal value
-			if isinstance(stmt, H.HLet):
-				walk_expr(stmt.value)
-				return
-			if isinstance(stmt, H.HAssign):
-				walk_expr(stmt.target)
-				walk_expr(stmt.value)
-				return
-			if hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
-				walk_expr(stmt.target)
-				walk_expr(stmt.value)
-				return
-			if isinstance(stmt, H.HExprStmt):
-				walk_expr(stmt.expr)
-				return
-			if isinstance(stmt, H.HReturn):
-				if stmt.value is not None:
+			def walk_stmt(stmt: H.HStmt) -> None:
+				if isinstance(stmt, H.HLocalConst):
+					return  # literal value
+				if isinstance(stmt, H.HLet):
 					walk_expr(stmt.value)
-				return
-			if isinstance(stmt, H.HIf):
-				walk_expr(stmt.cond)
-				walk_block(stmt.then_block)
-				if stmt.else_block is not None:
-					walk_block(stmt.else_block)
-				return
-			if isinstance(stmt, H.HLoop):
-				walk_block(stmt.body)
-				return
-			if isinstance(stmt, H.HBlock):
-				walk_block(stmt)
-				return
-			if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
-				walk_block(stmt.block)
-				return
-			if isinstance(stmt, H.HTry):
-				walk_block(stmt.body)
-				for arm in stmt.catches:
-					walk_block(arm.block)
-				return
-			if isinstance(stmt, H.HThrow):
-				walk_expr(stmt.value)
-				return
+					return
+				if isinstance(stmt, H.HAssign):
+					walk_expr(stmt.target)
+					walk_expr(stmt.value)
+					return
+				if hasattr(H, "HAugAssign") and isinstance(stmt, getattr(H, "HAugAssign")):
+					walk_expr(stmt.target)
+					walk_expr(stmt.value)
+					return
+				if isinstance(stmt, H.HExprStmt):
+					walk_expr(stmt.expr)
+					return
+				if isinstance(stmt, H.HReturn):
+					if stmt.value is not None:
+						walk_expr(stmt.value)
+					return
+				if isinstance(stmt, H.HIf):
+					walk_expr(stmt.cond)
+					walk_block(stmt.then_block)
+					if stmt.else_block is not None:
+						walk_block(stmt.else_block)
+					return
+				if isinstance(stmt, H.HLoop):
+					walk_block(stmt.body)
+					return
+				if isinstance(stmt, H.HBlock):
+					walk_block(stmt)
+					return
+				if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
+					walk_block(stmt.block)
+					return
+				if isinstance(stmt, H.HTry):
+					walk_block(stmt.body)
+					for arm in stmt.catches:
+						walk_block(arm.block)
+					return
+				if isinstance(stmt, H.HThrow):
+					walk_expr(stmt.value)
+					return
 
-		def walk_block(block: H.HBlock) -> None:
-			for stmt in block.statements:
-				walk_stmt(stmt)
+			def walk_block(block: H.HBlock) -> None:
+				for stmt in block.statements:
+					walk_stmt(stmt)
 
-		walk_block(block)
-	if isinstance(generic_templates_by_id, dict):
-		for fn_id, hir in generic_templates_by_id.items():
+			walk_block(block)
+		if isinstance(generic_templates_by_id, dict):
+			for fn_id, hir in generic_templates_by_id.items():
+				key = function_keys_by_fn_id.get(fn_id)
+				if key is None:
+					continue
+				template_hirs_by_key.setdefault(key, hir)
+		for fn_id, block in normalized_hirs_by_id.items():
+			sig = signatures_by_id.get(fn_id)
+			if sig and (sig.type_params or getattr(sig, "impl_type_params", [])):
+				key = function_keys_by_fn_id.get(fn_id)
+				if key is None:
+					continue
+				template_hirs_by_key.setdefault(key, block)
+		if method_wrapper_specs and shared_type_table is not None:
+			for spec in method_wrapper_specs:
+				wrap_sig = signatures_by_id.get(spec.wrapper_fn_id)
+				if wrap_sig is None:
+					continue
+				if not (getattr(wrap_sig, "type_params", None) or getattr(wrap_sig, "impl_type_params", None)):
+					continue
+				key = function_keys_by_fn_id.get(spec.wrapper_fn_id)
+				if key is None or key in template_hirs_by_key:
+					continue
+				template_hirs_by_key[key] = _make_wrapper_template_hir(wrap_sig)
+
+		template_sigs_by_key: dict[FunctionKey, FnSignature] = {}
+		for fn_id, sig in signatures_by_id.items():
+			if not (sig.type_params or getattr(sig, "impl_type_params", [])):
+				continue
 			key = function_keys_by_fn_id.get(fn_id)
 			if key is None:
 				continue
-			template_hirs_by_key.setdefault(key, hir)
-	for fn_id, block in normalized_hirs_by_id.items():
-		sig = signatures_by_id.get(fn_id)
-		if sig and (sig.type_params or getattr(sig, "impl_type_params", [])):
-			key = function_keys_by_fn_id.get(fn_id)
-			if key is None:
-				continue
-			template_hirs_by_key.setdefault(key, block)
-	if method_wrapper_specs and shared_type_table is not None:
-		for spec in method_wrapper_specs:
-			wrap_sig = signatures_by_id.get(spec.wrapper_fn_id)
-			if wrap_sig is None:
-				continue
-			if not (getattr(wrap_sig, "type_params", None) or getattr(wrap_sig, "impl_type_params", None)):
-				continue
-			key = function_keys_by_fn_id.get(spec.wrapper_fn_id)
-			if key is None or key in template_hirs_by_key:
-				continue
-			template_hirs_by_key[key] = _make_wrapper_template_hir(wrap_sig)
+			template_sigs_by_key.setdefault(key, sig)
 
-	template_sigs_by_key: dict[FunctionKey, FnSignature] = {}
-	for fn_id, sig in signatures_by_id.items():
-		if not (sig.type_params or getattr(sig, "impl_type_params", [])):
-			continue
-		key = function_keys_by_fn_id.get(fn_id)
-		if key is None:
-			continue
-		template_sigs_by_key.setdefault(key, sig)
+		template_fn_id_by_key: dict[FunctionKey, FunctionId] = {}
+		for fn_id, key in function_keys_by_fn_id.items():
+			template_fn_id_by_key.setdefault(key, fn_id)
 
-	template_fn_id_by_key: dict[FunctionKey, FunctionId] = {}
-	for fn_id, key in function_keys_by_fn_id.items():
-		template_fn_id_by_key.setdefault(key, fn_id)
+		def _inst_can_throw(sig: FnSignature | None) -> bool:
+			if sig is None:
+				return True
+			return _sig_declared_can_throw(sig)
 
-	def _inst_can_throw(sig: FnSignature | None) -> bool:
-		if sig is None:
-			return True
-		return _sig_declared_can_throw(sig)
+		def _inst_key(fn_key: FunctionKey, type_args: tuple[TypeId, ...]) -> InstantiationKey:
+			return build_instantiation_key(
+				fn_key,
+				type_args,
+				type_table=shared_type_table,
+				can_throw=_inst_can_throw(template_sigs_by_key.get(fn_key)),
+			)
 
-	def _inst_key(fn_key: FunctionKey, type_args: tuple[TypeId, ...]) -> InstantiationKey:
-		return build_instantiation_key(
-			fn_key,
-			type_args,
-			type_table=shared_type_table,
-			can_throw=_inst_can_throw(template_sigs_by_key.get(fn_key)),
-		)
+		def _inst_hash(key: InstantiationKey) -> str:
+			return instantiation_key_hash(key)
 
-	def _inst_hash(key: InstantiationKey) -> str:
-		return instantiation_key_hash(key)
+		def _diag_key(diag: Diagnostic) -> tuple[str, tuple[object, object, object, object, object]]:
+			span = getattr(diag, "span", None) or Span()
+			span_key = (span.file, span.line, span.column, span.end_line, span.end_column)
+			return (diag.message, span_key)
 
-	def _diag_key(diag: Diagnostic) -> tuple[str, tuple[object, object, object, object, object]]:
-		span = getattr(diag, "span", None) or Span()
-		span_key = (span.file, span.line, span.column, span.end_line, span.end_column)
-		return (diag.message, span_key)
+		def _apply_inst_subst(ty: TypeId, impl_subst: Subst | None, fn_subst: Subst | None) -> TypeId:
+			out = ty
+			if impl_subst is not None:
+				out = apply_subst(out, impl_subst, shared_type_table)
+			if fn_subst is not None:
+				out = apply_subst(out, fn_subst, shared_type_table)
+			return out
 
-	def _apply_inst_subst(ty: TypeId, impl_subst: Subst | None, fn_subst: Subst | None) -> TypeId:
-		out = ty
-		if impl_subst is not None:
-			out = apply_subst(out, impl_subst, shared_type_table)
-		if fn_subst is not None:
-			out = apply_subst(out, fn_subst, shared_type_table)
-		return out
+		def _subst_call_info(info: CallInfo, impl_subst: Subst | None, fn_subst: Subst | None) -> CallInfo:
+			sig = info.sig
+			new_params = tuple(_apply_inst_subst(t, impl_subst, fn_subst) for t in sig.param_types)
+			new_ret = _apply_inst_subst(sig.user_ret_type, impl_subst, fn_subst)
+			new_sig = CallSig(param_types=new_params, user_ret_type=new_ret, can_throw=sig.can_throw, includes_callee=sig.includes_callee, declared_terminal_throws=sig.declared_terminal_throws)
+			target = info.target
+			if target.kind is CallTargetKind.CONSTRUCTOR:
+				if target.variant_type_id is not None:
+					new_variant = _apply_inst_subst(target.variant_type_id, impl_subst, fn_subst)
+					target = replace(target, variant_type_id=new_variant)
+				elif target.struct_type_id is not None:
+					new_struct = _apply_inst_subst(target.struct_type_id, impl_subst, fn_subst)
+					target = replace(target, struct_type_id=new_struct)
+			return CallInfo(target=target, sig=new_sig)
 
-	def _subst_call_info(info: CallInfo, impl_subst: Subst | None, fn_subst: Subst | None) -> CallInfo:
-		sig = info.sig
-		new_params = tuple(_apply_inst_subst(t, impl_subst, fn_subst) for t in sig.param_types)
-		new_ret = _apply_inst_subst(sig.user_ret_type, impl_subst, fn_subst)
-		new_sig = CallSig(param_types=new_params, user_ret_type=new_ret, can_throw=sig.can_throw, includes_callee=sig.includes_callee, declared_terminal_throws=sig.declared_terminal_throws)
-		target = info.target
-		if target.kind is CallTargetKind.CONSTRUCTOR:
-			if target.variant_type_id is not None:
-				new_variant = _apply_inst_subst(target.variant_type_id, impl_subst, fn_subst)
-				target = replace(target, variant_type_id=new_variant)
-			elif target.struct_type_id is not None:
-				new_struct = _apply_inst_subst(target.struct_type_id, impl_subst, fn_subst)
-				target = replace(target, struct_type_id=new_struct)
-		return CallInfo(target=target, sig=new_sig)
+		def _subst_with_owner_map(ty: TypeId, param_map: dict[TypeParamId, TypeId]) -> TypeId:
+			if not param_map:
+				return ty
+			by_owner: dict[FunctionId, dict[int, TypeId]] = {}
+			for param_id, concrete in param_map.items():
+				owner_map = by_owner.setdefault(param_id.owner, {})
+				owner_map[param_id.index] = concrete
+			out = ty
+			for owner, owner_map in by_owner.items():
+				max_idx = max(owner_map.keys(), default=-1)
+				args: list[TypeId] = []
+				for idx in range(max_idx + 1):
+					if idx in owner_map:
+						args.append(owner_map[idx])
+					else:
+						args.append(shared_type_table.ensure_typevar(TypeParamId(owner=owner, index=idx)))
+				out = apply_subst(out, Subst(owner=owner, args=args), shared_type_table)
+			return out
 
-	def _subst_with_owner_map(ty: TypeId, param_map: dict[TypeParamId, TypeId]) -> TypeId:
-		if not param_map:
-			return ty
-		by_owner: dict[FunctionId, dict[int, TypeId]] = {}
-		for param_id, concrete in param_map.items():
-			owner_map = by_owner.setdefault(param_id.owner, {})
-			owner_map[param_id.index] = concrete
-		out = ty
-		for owner, owner_map in by_owner.items():
-			max_idx = max(owner_map.keys(), default=-1)
-			args: list[TypeId] = []
-			for idx in range(max_idx + 1):
-				if idx in owner_map:
-					args.append(owner_map[idx])
-				else:
-					args.append(shared_type_table.ensure_typevar(TypeParamId(owner=owner, index=idx)))
-			out = apply_subst(out, Subst(owner=owner, args=args), shared_type_table)
-		return out
+		@dataclass
+		class InstantiationHandle:
+			key: InstantiationKey
+			template_key: FunctionKey
+			type_args: tuple[TypeId, ...]
+			fn_id: FunctionId
+			status: str  # "pending"|"emitted"|"failed"
 
-	@dataclass
-	class InstantiationHandle:
-		key: InstantiationKey
-		template_key: FunctionKey
-		type_args: tuple[TypeId, ...]
-		fn_id: FunctionId
-		status: str  # "pending"|"emitted"|"failed"
+		inst_cache: dict[InstantiationKey, InstantiationHandle] = {}
+		inst_queue: deque[InstantiationHandle] = deque()
 
-	inst_cache: dict[InstantiationKey, InstantiationHandle] = {}
-	inst_queue: deque[InstantiationHandle] = deque()
-
-	def _request_instantiation(template_key: FunctionKey, type_args: tuple[TypeId, ...]) -> InstantiationHandle:
-		key = _inst_key(template_key, tuple(type_args))
-		handle = inst_cache.get(key)
-		if handle is not None:
+		def _request_instantiation(template_key: FunctionKey, type_args: tuple[TypeId, ...]) -> InstantiationHandle:
+			key = _inst_key(template_key, tuple(type_args))
+			handle = inst_cache.get(key)
+			if handle is not None:
+				return handle
+			inst_name = f"{template_key.name}__inst__{_inst_hash(key)}"
+			inst_fn_id = FunctionId(module=template_key.module_path, name=inst_name, ordinal=0)
+			handle = InstantiationHandle(
+				key=key,
+				template_key=template_key,
+				type_args=tuple(type_args),
+				fn_id=inst_fn_id,
+				status="pending",
+			)
+			inst_cache[key] = handle
+			inst_queue.append(handle)
 			return handle
-		inst_name = f"{template_key.name}__inst__{_inst_hash(key)}"
-		inst_fn_id = FunctionId(module=template_key.module_path, name=inst_name, ordinal=0)
-		handle = InstantiationHandle(
-			key=key,
-			template_key=template_key,
-			type_args=tuple(type_args),
-			fn_id=inst_fn_id,
-			status="pending",
-		)
-		inst_cache[key] = handle
-		inst_queue.append(handle)
-		return handle
 
-	# Seed from pre-installed destructor_fns so we don't lose entries
-	# registered during the early pre-install phase (before _build_linked_world).
-	destructor_fns: dict[TypeId, FunctionId] = dict(getattr(shared_type_table, "destructor_fns", None) or {}) if shared_type_table is not None else {}
-	# K39: Track generic Destructible impls for post-instantiation rescan.
-	# At this point struct_instances may not yet contain all concrete types
-	# (e.g. ScopeGuard<Int>) — those are created during _drain_instantiations.
-	_generic_destructible_impls: list[tuple[TypeId, FunctionId]] = []  # (base_id, template_destroy_fn_id)
-	if shared_type_table is not None and linked_world is not None:
-		destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
-		if destructible_key is not None:
-			# Collect all ImplMeta objects: from module_exports + external_impl_metas.
-			_all_impls: list[ImplMeta] = []
-			if module_exports is not None:
-				for exp in module_exports.values():
-					if not isinstance(exp, dict):
-						continue
-					impls = exp.get("impls")
-					if not isinstance(impls, list):
-						continue
-					for impl in impls:
+		# Seed from pre-installed destructor_fns so we don't lose entries
+		# registered during the early pre-install phase (before _build_linked_world).
+		destructor_fns: dict[TypeId, FunctionId] = dict(getattr(shared_type_table, "destructor_fns", None) or {}) if shared_type_table is not None else {}
+		# K39: Track generic Destructible impls for post-instantiation rescan.
+		# At this point struct_instances may not yet contain all concrete types
+		# (e.g. ScopeGuard<Int>) — those are created during _drain_instantiations.
+		_generic_destructible_impls: list[tuple[TypeId, FunctionId]] = []  # (base_id, template_destroy_fn_id)
+		if shared_type_table is not None and linked_world is not None:
+			destructible_key = _find_trait_key(linked_world.global_world, module="std.core", name="Destructible")
+			if destructible_key is not None:
+				# Collect all ImplMeta objects: from module_exports + external_impl_metas.
+				_all_impls: list[ImplMeta] = []
+				if module_exports is not None:
+					for exp in module_exports.values():
+						if not isinstance(exp, dict):
+							continue
+						impls = exp.get("impls")
+						if not isinstance(impls, list):
+							continue
+						for impl in impls:
+							if isinstance(impl, ImplMeta):
+								_all_impls.append(impl)
+				# K39: Also scan external_impl_metas — package Destructible impls
+				# (e.g. ScopeGuard<T>::destroy) live here, not in module_exports.
+				if external_impl_metas:
+					for impl in external_impl_metas:
 						if isinstance(impl, ImplMeta):
 							_all_impls.append(impl)
-			# K39: Also scan external_impl_metas — package Destructible impls
-			# (e.g. ScopeGuard<T>::destroy) live here, not in module_exports.
-			if external_impl_metas:
-				for impl in external_impl_metas:
-					if isinstance(impl, ImplMeta):
-						_all_impls.append(impl)
-			for impl in _all_impls:
-				if impl.trait_key != destructible_key:
-					continue
-				target_type_id = getattr(impl, "target_type_id", None)
-				if not isinstance(target_type_id, int):
-					continue
-				method_fn_id: FunctionId | None = None
-				for method in impl.methods:
-					if method.name == "destroy":
-						method_fn_id = method.fn_id
-						break
-				if method_fn_id is None:
-					continue
-				# Arc runtime boundary: when the destroy method is
-				# `@intrinsic` (e.g. Arc<T>::destroy with
-				# intrinsic_kind = ARC_DESTROY), redirect the
-				# monomorphization target to the matching
-				# `_arc_destroy_impl<T>` helper.  Without this the
-				# Destructible scan would queue the bodyless template
-				# and surface an undefined symbol at link time.
-				# Concrete-T destruction behavior is carried by the
-				# helper body; Stage 3 replaces this redirect with a
-				# direct compiler-emitted ARC_DESTROY lowering.
-				#
-				# Stage 3 fat-layout split: fat `Arc<I>` instances
-				# (where `I` is an interface, layout specialized to
-				# `{ctrl, data, vtable}`) do NOT go through the thin
-				# `_arc_destroy_impl<T>` template.  The scan below
-				# **skips** each such instance via
-				# `is_arc_fat_layout_instance(inst_id)`, so no thin
-				# `destructor_fns[inst_id]` entry is ever written
-				# for a fat `Arc<I>`.  The per-I fat destructor
-				# wrapper is instead synthesized late by
-				# `_synthesize_fat_arc_destructor_wrappers` and is
-				# the sole `destructor_fns` entry for the fat
-				# instance.
-				method_sig = signatures_by_id.get(method_fn_id) if signatures_by_id is not None else None
-				if method_sig is not None and bool(getattr(method_sig, "is_intrinsic", False)):
-					_helper_name = None
-					_intrinsic_kind = getattr(method_sig, "intrinsic_kind", None)
-					if _intrinsic_kind is not None and getattr(_intrinsic_kind, "value", None) == "arc_destroy":
-						_helper_name = "_arc_destroy_impl"
-					if _helper_name is None:
+				for impl in _all_impls:
+					if impl.trait_key != destructible_key:
 						continue
-					helper_fn_id: FunctionId | None = None
-					for fid, sig in signatures_by_id.items():
-						if fid.module == "std.core.arc" and fid.name == _helper_name and not bool(getattr(sig, "is_method", False)):
-							helper_fn_id = fid
+					target_type_id = getattr(impl, "target_type_id", None)
+					if not isinstance(target_type_id, int):
+						continue
+					method_fn_id: FunctionId | None = None
+					for method in impl.methods:
+						if method.name == "destroy":
+							method_fn_id = method.fn_id
 							break
-					if helper_fn_id is None:
+					if method_fn_id is None:
 						continue
-					method_fn_id = helper_fn_id
-				if shared_type_table.has_typevar(target_type_id):
-					base_id: TypeId | None = None
-					inst = shared_type_table.get_struct_instance(target_type_id)
-					if inst is not None:
-						base_id = inst.base_id
-					else:
-						base_id = target_type_id
-					_generic_destructible_impls.append((base_id, method_fn_id))
-					for inst_id, inst in shared_type_table.struct_instances.items():
-						if inst.base_id != base_id:
+					# Arc runtime boundary: when the destroy method is
+					# `@intrinsic` (e.g. Arc<T>::destroy with
+					# intrinsic_kind = ARC_DESTROY), redirect the
+					# monomorphization target to the matching
+					# `_arc_destroy_impl<T>` helper.  Without this the
+					# Destructible scan would queue the bodyless template
+					# and surface an undefined symbol at link time.
+					# Concrete-T destruction behavior is carried by the
+					# helper body; Stage 3 replaces this redirect with a
+					# direct compiler-emitted ARC_DESTROY lowering.
+					#
+					# Stage 3 fat-layout split: fat `Arc<I>` instances
+					# (where `I` is an interface, layout specialized to
+					# `{ctrl, data, vtable}`) do NOT go through the thin
+					# `_arc_destroy_impl<T>` template.  The scan below
+					# **skips** each such instance via
+					# `is_arc_fat_layout_instance(inst_id)`, so no thin
+					# `destructor_fns[inst_id]` entry is ever written
+					# for a fat `Arc<I>`.  The per-I fat destructor
+					# wrapper is instead synthesized late by
+					# `_synthesize_fat_arc_destructor_wrappers` and is
+					# the sole `destructor_fns` entry for the fat
+					# instance.
+					method_sig = signatures_by_id.get(method_fn_id) if signatures_by_id is not None else None
+					if method_sig is not None and bool(getattr(method_sig, "is_intrinsic", False)):
+						_helper_name = None
+						_intrinsic_kind = getattr(method_sig, "intrinsic_kind", None)
+						if _intrinsic_kind is not None and getattr(_intrinsic_kind, "value", None) == "arc_destroy":
+							_helper_name = "_arc_destroy_impl"
+						if _helper_name is None:
 							continue
-						if shared_type_table.has_typevar(inst_id):
+						helper_fn_id: FunctionId | None = None
+						for fid, sig in signatures_by_id.items():
+							if fid.module == "std.core.arc" and fid.name == _helper_name and not bool(getattr(sig, "is_method", False)):
+								helper_fn_id = fid
+								break
+						if helper_fn_id is None:
 							continue
-						# Fat-layout skip (ABI 10): fat `Arc<I>` instances
-						# get a compiler-synthesized per-I destructor
-						# wrapper installed by the late fat-Arc
-						# synthesis pass.  Queuing `_arc_destroy_impl<I>`
-						# here would instantiate a template whose body
-						# (`self.buf`) is structurally invalid against
-						# the live `{ctrl, data, vtable}` layout.
-						if shared_type_table.is_arc_fat_layout_instance(inst_id):
-							continue
-						key = function_keys_by_fn_id.get(method_fn_id)
-						if key is None:
-							continue
-						handle = _request_instantiation(key, tuple(inst.type_args))
-						destructor_fns[inst_id] = handle.fn_id
+						method_fn_id = helper_fn_id
+					if shared_type_table.has_typevar(target_type_id):
+						base_id: TypeId | None = None
+						inst = shared_type_table.get_struct_instance(target_type_id)
+						if inst is not None:
+							base_id = inst.base_id
+						else:
+							base_id = target_type_id
+						_generic_destructible_impls.append((base_id, method_fn_id))
+						for inst_id, inst in shared_type_table.struct_instances.items():
+							if inst.base_id != base_id:
+								continue
+							if shared_type_table.has_typevar(inst_id):
+								continue
+							# Fat-layout skip (ABI 10): fat `Arc<I>` instances
+							# get a compiler-synthesized per-I destructor
+							# wrapper installed by the late fat-Arc
+							# synthesis pass.  Queuing `_arc_destroy_impl<I>`
+							# here would instantiate a template whose body
+							# (`self.buf`) is structurally invalid against
+							# the live `{ctrl, data, vtable}` layout.
+							if shared_type_table.is_arc_fat_layout_instance(inst_id):
+								continue
+							key = function_keys_by_fn_id.get(method_fn_id)
+							if key is None:
+								continue
+							handle = _request_instantiation(key, tuple(inst.type_args))
+							destructor_fns[inst_id] = handle.fn_id
+						continue
+					destructor_fns[target_type_id] = method_fn_id
+		if destructor_fns and shared_type_table is not None:
+			shared_type_table.destructor_fns = destructor_fns
+
+		# Arc runtime boundary — shared intrinsic-template predicate.
+		# Used in `_queue_instantiations` and `_rewrite_call_targets`
+		# below to skip templates whose sig is `@intrinsic` (no body
+		# to monomorphize; call sites route through
+		# `_lower_method_call_with_info`'s helper-redirect for
+		# concrete T).
+		def _template_fn_id_for_key(template_key: "FunctionKey") -> "FunctionId | None":
+			if signatures_by_id is None:
+				return None
+			for _fid, _sig in signatures_by_id.items():
+				if _fid.module != template_key.module_path:
 					continue
-				destructor_fns[target_type_id] = method_fn_id
-	if destructor_fns and shared_type_table is not None:
-		shared_type_table.destructor_fns = destructor_fns
-
-	# Arc runtime boundary — shared intrinsic-template predicate.
-	# Used in `_queue_instantiations` and `_rewrite_call_targets`
-	# below to skip templates whose sig is `@intrinsic` (no body
-	# to monomorphize; call sites route through
-	# `_lower_method_call_with_info`'s helper-redirect for
-	# concrete T).
-	def _template_fn_id_for_key(template_key: "FunctionKey") -> "FunctionId | None":
-		if signatures_by_id is None:
+				if _fid.name != template_key.name:
+					continue
+				return _fid
 			return None
-		for _fid, _sig in signatures_by_id.items():
-			if _fid.module != template_key.module_path:
-				continue
-			if _fid.name != template_key.name:
-				continue
-			return _fid
-		return None
 
-	def _template_is_intrinsic_generic(template_key: "FunctionKey") -> bool:
-		_fid = _template_fn_id_for_key(template_key)
-		if _fid is None or signatures_by_id is None:
-			return False
-		_sig = signatures_by_id.get(_fid)
-		return _sig is not None and bool(getattr(_sig, "is_intrinsic", False))
+		def _template_is_intrinsic_generic(template_key: "FunctionKey") -> bool:
+			_fid = _template_fn_id_for_key(template_key)
+			if _fid is None or signatures_by_id is None:
+				return False
+			_sig = signatures_by_id.get(_fid)
+			return _sig is not None and bool(getattr(_sig, "is_intrinsic", False))
 
-	# Arc runtime boundary (Stage 2) — helper-template mapping.
-	# Each `@intrinsic` Arc method (ARC_CLONE / ARC_GET / ARC_DESTROY)
-	# has a private generic helper carrying the concrete-T body.  When
-	# an intrinsic-template call site is instantiated with a concrete
-	# T, we redirect the instantiation to the helper template; the
-	# bodyless intrinsic template itself is never monomorphized.
-	_ARC_HELPER_NAME_BY_KIND_VALUE: dict[str, str] = {
-		"arc_clone": "_arc_clone_impl",
-		"arc_get": "_arc_get_impl",
-		"arc_destroy": "_arc_destroy_impl",
-	}
+		# Arc runtime boundary (Stage 2) — helper-template mapping.
+		# Each `@intrinsic` Arc method (ARC_CLONE / ARC_GET / ARC_DESTROY)
+		# has a private generic helper carrying the concrete-T body.  When
+		# an intrinsic-template call site is instantiated with a concrete
+		# T, we redirect the instantiation to the helper template; the
+		# bodyless intrinsic template itself is never monomorphized.
+		_ARC_HELPER_NAME_BY_KIND_VALUE: dict[str, str] = {
+			"arc_clone": "_arc_clone_impl",
+			"arc_get": "_arc_get_impl",
+			"arc_destroy": "_arc_destroy_impl",
+		}
 
-	def _arc_helper_template_key_for_intrinsic(template_key: "FunctionKey") -> "FunctionKey | None":
-		_fid = _template_fn_id_for_key(template_key)
-		if _fid is None or signatures_by_id is None:
+		def _arc_helper_template_key_for_intrinsic(template_key: "FunctionKey") -> "FunctionKey | None":
+			_fid = _template_fn_id_for_key(template_key)
+			if _fid is None or signatures_by_id is None:
+				return None
+			_sig = signatures_by_id.get(_fid)
+			if _sig is None or not bool(getattr(_sig, "is_intrinsic", False)):
+				return None
+			_kind = getattr(_sig, "intrinsic_kind", None)
+			_kind_val = getattr(_kind, "value", None) if _kind is not None else None
+			_helper_name = _ARC_HELPER_NAME_BY_KIND_VALUE.get(_kind_val) if _kind_val is not None else None
+			if _helper_name is None:
+				return None
+			for _helper_fid, _helper_key in function_keys_by_fn_id.items():
+				if _helper_fid.module != "std.core.arc":
+					continue
+				if _helper_fid.name != _helper_name:
+					continue
+				return _helper_key
 			return None
-		_sig = signatures_by_id.get(_fid)
-		if _sig is None or not bool(getattr(_sig, "is_intrinsic", False)):
-			return None
-		_kind = getattr(_sig, "intrinsic_kind", None)
-		_kind_val = getattr(_kind, "value", None) if _kind is not None else None
-		_helper_name = _ARC_HELPER_NAME_BY_KIND_VALUE.get(_kind_val) if _kind_val is not None else None
-		if _helper_name is None:
-			return None
-		for _helper_fid, _helper_key in function_keys_by_fn_id.items():
-			if _helper_fid.module != "std.core.arc":
-				continue
-			if _helper_fid.name != _helper_name:
-				continue
-			return _helper_key
-		return None
 
-	# Arc runtime boundary — call-site → helper-instantiation map.
-	# Populated below during `_queue_instantiations` and consumed by
-	# `hir_to_mir._lower_method_call_with_info`'s INTRINSIC path so
-	# the lowering knows which concrete `_arc_*_impl__inst__<T>` to
-	# call without having to re-derive T itself.
-	arc_helper_inst_fn_by_callsite: dict[tuple[FunctionId, int], FunctionId] = {}
+		# Arc runtime boundary — call-site → helper-instantiation map.
+		# Populated below during `_queue_instantiations` and consumed by
+		# `hir_to_mir._lower_method_call_with_info`'s INTRINSIC path so
+		# the lowering knows which concrete `_arc_*_impl__inst__<T>` to
+		# call without having to re-derive T itself.
+		arc_helper_inst_fn_by_callsite: dict[tuple[FunctionId, int], FunctionId] = {}
 
-	def _is_fat_arc_intrinsic_type_args(type_args: tuple[TypeId, ...]) -> bool:
-		"""Stage 3 fat-layout predicate for Arc intrinsic call sites.
+		def _is_fat_arc_intrinsic_type_args(type_args: tuple[TypeId, ...]) -> bool:
+			"""Stage 3 fat-layout predicate for Arc intrinsic call sites.
 
-		Arc intrinsic templates (`arc_clone`/`arc_get`/`arc_destroy`)
-		have a single type parameter which at a concrete call site is
-		the `T` in `Arc<T>`.  Returns True when that T is an interface
-		AND the Stage 3 activation flag is on — which matches
-		hir_to_mir's `is_arc_fat_layout_instance` gate: on the fat
-		path, `_lower_arc_fat_intrinsic_call` emits direct MIR
-		(bump/drop via the Slice 1 non-generic helpers plus
-		`ArcFatGet`) with no generic `_arc_*_impl<I>` helper needed.
-		"""
-		if not STAGE3_FAT_ARC_ACTIVE:
-			return False
-		if shared_type_table is None or len(type_args) != 1:
-			return False
-		t_def = shared_type_table.get(type_args[0])
-		return t_def.kind is TypeKind.INTERFACE
+			Arc intrinsic templates (`arc_clone`/`arc_get`/`arc_destroy`)
+			have a single type parameter which at a concrete call site is
+			the `T` in `Arc<T>`.  Returns True when that T is an interface
+			AND the Stage 3 activation flag is on — which matches
+			hir_to_mir's `is_arc_fat_layout_instance` gate: on the fat
+			path, `_lower_arc_fat_intrinsic_call` emits direct MIR
+			(bump/drop via the Slice 1 non-generic helpers plus
+			`ArcFatGet`) with no generic `_arc_*_impl<I>` helper needed.
+			"""
+			if not STAGE3_FAT_ARC_ACTIVE:
+				return False
+			if shared_type_table is None or len(type_args) != 1:
+				return False
+			t_def = shared_type_table.get(type_args[0])
+			return t_def.kind is TypeKind.INTERFACE
 
-	def _queue_instantiations(caller_fn_id: "FunctionId", typed_fn: object) -> None:
-		inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
-		if not isinstance(inst_map, dict):
-			inst_map = {}
-		inst_map_by_node = getattr(typed_fn, "instantiations_by_node_id", None)
-		if not isinstance(inst_map_by_node, dict):
-			inst_map_by_node = {}
-		# Callsite-keyed items route to the Arc helper map; node-keyed
-		# items (which include non-method sites without callsite_id)
-		# are only relevant to normal monomorphization.
-		for csid, inst in list(inst_map.items()):
-			type_args = tuple(getattr(inst, "type_args", ()) or ())
-			if not type_args:
-				continue
-			template_key = getattr(inst, "target_key", None)
-			if not isinstance(template_key, FunctionKey):
-				continue
-			if _template_is_intrinsic_generic(template_key):
-				# Arc runtime boundary: redirect to helper template.
-				# The bodyless intrinsic template itself is never
-				# monomorphized; the helper carries the concrete-T
-				# implementation.  Record the helper-inst fn_id so
-				# hir_to_mir can emit a direct call to it.
-				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
-				if _helper_key is not None:
-					# Stage 3 fat-layout split — when receiver T is an
-					# interface and the activation flag is on, the
-					# fat lowering emits direct MIR and no thin
-					# `_arc_*_impl<I>` helper is needed or wanted.
-					# Skip the queue entirely — queuing it would
-					# attempt to monomorphize the thin helper body
-					# against a fat-layout Arc<I>, which would
-					# type-check fail on the `buf` field access.
-					if _is_fat_arc_intrinsic_type_args(type_args):
-						continue
-					_helper_handle = _request_instantiation(_helper_key, type_args)
-					if isinstance(csid, int):
-						arc_helper_inst_fn_by_callsite[(caller_fn_id, csid)] = _helper_handle.fn_id
-				continue
-			_request_instantiation(template_key, type_args)
-		for inst in list(inst_map_by_node.values()):
-			type_args = tuple(getattr(inst, "type_args", ()) or ())
-			if not type_args:
-				continue
-			template_key = getattr(inst, "target_key", None)
-			if not isinstance(template_key, FunctionKey):
-				continue
-			if _template_is_intrinsic_generic(template_key):
-				# Node-id path: also redirect (no callsite mapping to
-				# record — node-id records belong to non-method shapes
-				# which currently do not reach Arc intrinsics, but we
-				# still want the helper queued if one ever does).
-				_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
-				if _helper_key is not None:
-					# Mirror the callsite-keyed fat-Arc skip.
-					if _is_fat_arc_intrinsic_type_args(type_args):
-						continue
-					_request_instantiation(_helper_key, type_args)
-				continue
-			_request_instantiation(template_key, type_args)
+		def _queue_instantiations(caller_fn_id: "FunctionId", typed_fn: object) -> None:
+			inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
+			if not isinstance(inst_map, dict):
+				inst_map = {}
+			inst_map_by_node = getattr(typed_fn, "instantiations_by_node_id", None)
+			if not isinstance(inst_map_by_node, dict):
+				inst_map_by_node = {}
+			# Callsite-keyed items route to the Arc helper map; node-keyed
+			# items (which include non-method sites without callsite_id)
+			# are only relevant to normal monomorphization.
+			for csid, inst in list(inst_map.items()):
+				type_args = tuple(getattr(inst, "type_args", ()) or ())
+				if not type_args:
+					continue
+				template_key = getattr(inst, "target_key", None)
+				if not isinstance(template_key, FunctionKey):
+					continue
+				if _template_is_intrinsic_generic(template_key):
+					# Arc runtime boundary: redirect to helper template.
+					# The bodyless intrinsic template itself is never
+					# monomorphized; the helper carries the concrete-T
+					# implementation.  Record the helper-inst fn_id so
+					# hir_to_mir can emit a direct call to it.
+					_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
+					if _helper_key is not None:
+						# Stage 3 fat-layout split — when receiver T is an
+						# interface and the activation flag is on, the
+						# fat lowering emits direct MIR and no thin
+						# `_arc_*_impl<I>` helper is needed or wanted.
+						# Skip the queue entirely — queuing it would
+						# attempt to monomorphize the thin helper body
+						# against a fat-layout Arc<I>, which would
+						# type-check fail on the `buf` field access.
+						if _is_fat_arc_intrinsic_type_args(type_args):
+							continue
+						_helper_handle = _request_instantiation(_helper_key, type_args)
+						if isinstance(csid, int):
+							arc_helper_inst_fn_by_callsite[(caller_fn_id, csid)] = _helper_handle.fn_id
+					continue
+				_request_instantiation(template_key, type_args)
+			for inst in list(inst_map_by_node.values()):
+				type_args = tuple(getattr(inst, "type_args", ()) or ())
+				if not type_args:
+					continue
+				template_key = getattr(inst, "target_key", None)
+				if not isinstance(template_key, FunctionKey):
+					continue
+				if _template_is_intrinsic_generic(template_key):
+					# Node-id path: also redirect (no callsite mapping to
+					# record — node-id records belong to non-method shapes
+					# which currently do not reach Arc intrinsics, but we
+					# still want the helper queued if one ever does).
+					_helper_key = _arc_helper_template_key_for_intrinsic(template_key)
+					if _helper_key is not None:
+						# Mirror the callsite-keyed fat-Arc skip.
+						if _is_fat_arc_intrinsic_type_args(type_args):
+							continue
+						_request_instantiation(_helper_key, type_args)
+					continue
+				_request_instantiation(template_key, type_args)
 
-	for _fn_id, typed_fn in sorted(typed_fns_by_id.items(), key=lambda kv: function_symbol(kv[0])):
-		_queue_instantiations(_fn_id, typed_fn)
+		for _fn_id, typed_fn in sorted(typed_fns_by_id.items(), key=lambda kv: function_symbol(kv[0])):
+			_queue_instantiations(_fn_id, typed_fn)
 
-	def _drain_instantiations() -> None:
-		while inst_queue:
-			handle = inst_queue.popleft()
-			if handle.status == "emitted":
-				raise AssertionError(
-					f"duplicate instantiation emission for '{function_key_str(handle.template_key)}' ({instantiation_key_str(handle.key)})"
-				)
-			if handle.status != "pending":
-				raise AssertionError(f"unexpected instantiation status: {handle.status}")
-			template_key = handle.template_key
-			type_args = handle.type_args
-			sig = template_sigs_by_key.get(template_key)
-			template_fn_id = template_fn_id_by_key.get(template_key)
-			if sig is None or template_fn_id is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"generic instantiation missing signature for '{function_key_str(template_key)}'",
-						code="E_MISSING_TEMPLATE_SIG",
-						severity="error",
-						phase="typecheck",
-						span=None,
+		def _drain_instantiations() -> None:
+			while inst_queue:
+				handle = inst_queue.popleft()
+				if handle.status == "emitted":
+					raise AssertionError(
+						f"duplicate instantiation emission for '{function_key_str(handle.template_key)}' ({instantiation_key_str(handle.key)})"
 					)
-				)
-				handle.status = "failed"
-				continue
-			impl_count = len(getattr(sig, "impl_type_params", []) or [])
-			fn_count = len(getattr(sig, "type_params", []) or [])
-			if len(type_args) != impl_count + fn_count:
-				type_diags.append(
-					Diagnostic(
-						message=(
-							"generic instantiation type argument mismatch for "
-							f"'{function_key_str(template_key)}' (expected {impl_count + fn_count}, got {len(type_args)})"
-						),
-						code="E_INSTANTIATION_TYPEARGS",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
-					)
-				)
-				handle.status = "failed"
-				continue
-			if sig.param_type_ids is None or sig.return_type_id is None:
-				type_diags.append(
-					Diagnostic(
-						message=f"generic instantiation missing type ids for '{function_key_str(template_key)}'",
-						code="E_MISSING_TEMPLATE_SIG",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
-					)
-				)
-				handle.status = "failed"
-				continue
-			impl_args = type_args[:impl_count]
-			fn_args = type_args[impl_count:]
-			inst_fn_id = handle.fn_id
-			inst_param_ids = list(sig.param_type_ids)
-			inst_ret_id = sig.return_type_id
-			inst_impl_target_id = sig.impl_target_type_id
-			impl_subst = None
-			fn_subst = None
-			if impl_args:
-				impl_owner = sig.impl_type_params[0].id.owner
-				impl_subst = Subst(owner=impl_owner, args=list(impl_args))
-				inst_param_ids = [apply_subst(t, impl_subst, shared_type_table) for t in inst_param_ids]
-				inst_ret_id = apply_subst(inst_ret_id, impl_subst, shared_type_table)
-				if inst_impl_target_id is not None:
-					inst_impl_target_id = apply_subst(inst_impl_target_id, impl_subst, shared_type_table)
-			if fn_args:
-				fn_subst = Subst(owner=template_fn_id, args=list(fn_args))
-				inst_param_ids = [apply_subst(t, fn_subst, shared_type_table) for t in inst_param_ids]
-				inst_ret_id = apply_subst(inst_ret_id, fn_subst, shared_type_table)
-				if inst_impl_target_id is not None:
-					inst_impl_target_id = apply_subst(inst_impl_target_id, fn_subst, shared_type_table)
-			inst_impl_target_args = None
-			if sig.impl_target_type_args is not None:
-				inst_impl_target_args = list(sig.impl_target_type_args)
-				if impl_args:
-					impl_owner = sig.impl_type_params[0].id.owner
-					impl_subst = Subst(owner=impl_owner, args=list(impl_args))
-					inst_impl_target_args = [
-						apply_subst(t, impl_subst, shared_type_table) for t in inst_impl_target_args
-					]
-			param_map: dict[TypeParamId, TypeId] = {}
-			if getattr(sig, "impl_type_params", None):
-				for idx, tp in enumerate(sig.impl_type_params or []):
-					if idx < len(impl_args):
-						param_map[tp.id] = impl_args[idx]
-			if getattr(sig, "type_params", None):
-				for idx, tp in enumerate(sig.type_params or []):
-					if idx < len(fn_args):
-						param_map[tp.id] = fn_args[idx]
-			if sig.impl_target_type_args is not None and inst_impl_target_args is not None:
-				for template_arg, concrete_arg in zip(sig.impl_target_type_args, inst_impl_target_args):
-					template_def = shared_type_table.get(template_arg)
-					if template_def.kind is TypeKind.TYPEVAR and template_def.type_param_id is not None:
-						param_map[template_def.type_param_id] = concrete_arg
-			if inst_impl_target_id is not None:
-				inst = shared_type_table.struct_instances.get(inst_impl_target_id)
-				if inst is not None:
-					schema = shared_type_table.struct_bases.get(inst.base_id)
-					if schema is not None and schema.type_params:
-						for tp, concrete_arg in zip(schema.type_params, inst.type_args):
-							param_map[tp.id] = concrete_arg
-			if param_map:
-				inst_param_ids = [_subst_with_owner_map(t, param_map) for t in inst_param_ids]
-				inst_ret_id = _subst_with_owner_map(inst_ret_id, param_map)
-				if inst_impl_target_id is not None:
-					inst_impl_target_id = _subst_with_owner_map(inst_impl_target_id, param_map)
-			_inst_wraps_target = getattr(sig, "wraps_target_fn_id", None)
-			# For wrapper instantiations, resolve wraps_target_fn_id to
-			# the instantiated target.  The target was instantiated by
-			# a previous drain with the same type_args but a different
-			# FunctionKey (different name → different hash).  Look up
-			# the target instantiation in inst_cache by computing the
-			# target's _inst_key with the same type_args.
-			if _inst_wraps_target is not None and getattr(sig, "is_wrapper", False):
-				_target_template_key = function_keys_by_fn_id.get(_inst_wraps_target)
-				if _target_template_key is not None:
-					_target_inst_key = _inst_key(_target_template_key, handle.type_args)
-					_target_handle = inst_cache.get(_target_inst_key)
-					if _target_handle is not None:
-						_inst_wraps_target = _target_handle.fn_id
-			inst_sig = replace(
-				sig,
-				name=function_symbol(inst_fn_id),
-				param_type_ids=inst_param_ids,
-				return_type_id=inst_ret_id,
-				impl_target_type_id=inst_impl_target_id,
-				impl_target_type_args=inst_impl_target_args,
-				type_params=[],
-				impl_type_params=[],
-				param_types=None,
-				return_type=None,
-				is_exported_entrypoint=False,
-				is_instantiation=True,
-				wraps_target_fn_id=_inst_wraps_target,
-			)
-			_register_derived_signature_precheck(inst_fn_id, inst_sig)
-			if require_env is not None and template_fn_id is not None:
-				req_expr = require_env.requires_by_fn.get(template_fn_id)
-				if req_expr is not None:
-					require_env.requires_by_fn[inst_fn_id] = req_expr
-			template_hir = template_hirs_by_key.get(template_key)
-			if template_hir is None:
-				wrap_sig = signatures_by_id.get(inst_fn_id)
-				if wrap_sig is not None and getattr(wrap_sig, "is_wrapper", False):
-					template_hir = _make_wrapper_template_hir(wrap_sig)
-					template_hirs_by_key[template_key] = template_hir
-			if template_hir is None:
+				if handle.status != "pending":
+					raise AssertionError(f"unexpected instantiation status: {handle.status}")
+				template_key = handle.template_key
+				type_args = handle.type_args
+				sig = template_sigs_by_key.get(template_key)
+				template_fn_id = template_fn_id_by_key.get(template_key)
+				if sig is None or template_fn_id is None:
 					type_diags.append(
 						Diagnostic(
-							message=f"generic instantiation requires a template body for '{function_key_str(template_key)}'",
-							code="E_MISSING_TEMPLATE_BODY",
+							message=f"generic instantiation missing signature for '{function_key_str(template_key)}'",
+							code="E_MISSING_TEMPLATE_SIG",
+							severity="error",
+							phase="typecheck",
+							span=None,
+						)
+					)
+					handle.status = "failed"
+					continue
+				impl_count = len(getattr(sig, "impl_type_params", []) or [])
+				fn_count = len(getattr(sig, "type_params", []) or [])
+				if len(type_args) != impl_count + fn_count:
+					type_diags.append(
+						Diagnostic(
+							message=(
+								"generic instantiation type argument mismatch for "
+								f"'{function_key_str(template_key)}' (expected {impl_count + fn_count}, got {len(type_args)})"
+							),
+							code="E_INSTANTIATION_TYPEARGS",
 							severity="error",
 							phase="typecheck",
 							span=getattr(sig, "loc", None),
@@ -4779,464 +4662,584 @@ def compile_stubbed_funcs(
 					)
 					handle.status = "failed"
 					continue
-			inst_hir = normalize_hir(template_hir)
-			_clear_var_binding_ids(inst_hir)
-			normalized_hirs_by_id[inst_fn_id] = inst_hir
-			mod_name = getattr(inst_fn_id, "module", None) or "main"
-			current_mod = _module_id_with_visibility(mod_name)
-			visible_mods = None
-			if module_deps is not None:
-				visible = set(visible_module_names_by_name.get(mod_name, {mod_name}))
-				def _collect_type_modules(tid: TypeId) -> None:
-					try:
-						td = shared_type_table.get(tid)
-					except Exception:
-						return
-					if td.kind in {TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.ERROR, TypeKind.INTERFACE}:
-						if td.module_id:
-							visible.add(td.module_id)
-					for child in td.param_types or []:
-						_collect_type_modules(child)
-				for _tid in list(impl_args) + list(fn_args):
-					_collect_type_modules(_tid)
-				visible_mods = tuple(sorted(_module_id_with_visibility(m) for m in visible))
-			_sync_visibility_provenance()
-			current_file = None
-			if origin_by_fn_id is not None and template_fn_id in origin_by_fn_id:
-				current_file = str(origin_by_fn_id.get(template_fn_id))
-			elif sig is not None:
-				current_file = Span.from_loc(getattr(sig, "loc", None)).file
-			param_mutable = None
-			if sig is not None and sig.param_names is not None and sig.param_mutable is not None:
-				if len(sig.param_names) == len(sig.param_mutable):
-					param_mutable = {pname: bool(flag) for pname, flag in zip(sig.param_names, sig.param_mutable)}
-			inst_result = type_checker.check_function(
-				inst_fn_id,
-				inst_hir,
-				param_types={pname: pty for pname, pty in zip(sig.param_names or [], inst_param_ids)},
-				param_mutable=param_mutable,
-				return_type=inst_ret_id,
-				preseed_type_params={**{tp.name: impl_args[idx] for idx, tp in enumerate(sig.impl_type_params or [])}, **{tp.name: fn_args[idx] for idx, tp in enumerate(sig.type_params or [])}},
-				preseed_scope_bindings=getattr(inst_hir, "param_binding_ids", None),
-				signatures_by_id=signatures_by_id,
-				function_keys_by_fn_id=function_keys_by_fn_id,
-				callable_registry=callable_registry,
-				impl_index=impl_index,
-				trait_index=trait_index,
-				trait_impl_index=trait_impl_index,
-				trait_scope_by_module=trait_scope_by_module,
-				linked_world=linked_world,
-				require_env=require_env,
-				visible_modules=visible_mods,
-				current_module=current_mod,
-				visibility_provenance=visibility_provenance_by_id,
-			)
-			if impl_subst is not None or fn_subst is not None:
-				new_call_info: dict[int, CallInfo] = {}
-				for csid, info in inst_result.typed_fn.call_info_by_callsite_id.items():
-					new_call_info[csid] = _subst_call_info(info, impl_subst, fn_subst)
-				inst_result.typed_fn.call_info_by_callsite_id = new_call_info
-			type_diags.extend(inst_result.diagnostics)
-			deferred = deferred_guard_diags_by_template.get(template_key)
-			guard_outcomes = getattr(inst_result, "guard_outcomes", None)
-			if deferred and isinstance(guard_outcomes, dict):
-				existing = {_diag_key(d) for d in inst_result.diagnostics}
-				for guard_key, status in guard_outcomes.items():
-					branch = None
-					if status is ProofStatus.PROVED:
-						branch = "then"
-					elif status is ProofStatus.REFUTED:
-						branch = "else"
-					if branch is None:
-						continue
-					for diag in deferred.get((guard_key, branch), []):
-						key = _diag_key(diag)
-						if key in existing:
-							continue
-						inst_result.diagnostics.append(diag)
-						type_diags.append(diag)
-						existing.add(key)
-			typed_fns_by_id[inst_fn_id] = inst_result.typed_fn
-			_queue_instantiations(inst_fn_id, inst_result.typed_fn)
-			handle.status = "emitted"
-
-	_drain_instantiations()
-	# Arc runtime boundary — publish callsite → helper-instantiation map.
-	# `hir_to_mir._lower_method_call_with_info` reads
-	# `type_table.arc_helper_inst_fn_by_callsite` to lower
-	# `INTRINSIC(ARC_*)` call sites as direct calls to the appropriate
-	# monomorphized `_arc_*_impl__inst__<T>` helper.  The map is keyed
-	# by `(containing_fn_id, callsite_id)` so it survives template
-	# instantiation (each Arc<T> usage in a generic caller gets its
-	# own entry once the caller itself is monomorphized).
-	if shared_type_table is not None:
-		setattr(shared_type_table, "arc_helper_inst_fn_by_callsite", arc_helper_inst_fn_by_callsite)
-	def _rewrite_call_targets(typed_fn: object, block: H.HBlock) -> None:
-		call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
-		if not isinstance(call_info_map, dict):
-			return
-		inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
-		if not isinstance(inst_map, dict):
-			return
-		def _set_call_info(csid: int | None, info: CallInfo) -> None:
-			if csid is not None:
-				call_info_map[csid] = info
-		for key, inst in inst_map.items():
-			template_key = getattr(inst, "target_key", None)
-			type_args = tuple(getattr(inst, "type_args", ()) or ())
-			if not isinstance(template_key, FunctionKey) or not type_args:
-				continue
-			# Arc runtime boundary: skip intrinsic templates — their
-			# call sites keep the `CallTarget.intrinsic(...)` target
-			# from method resolution, and `_lower_method_call_with_info`
-			# redirects to the `_arc_*_impl<T>` helper.  Forcing a
-			# Direct-target rewrite here would replace the intrinsic
-			# dispatch with a reference to a bodyless template.
-			if _template_is_intrinsic_generic(template_key):
-				continue
-			handle = inst_cache.get(_inst_key(template_key, type_args))
-			if handle is None:
-				handle = _request_instantiation(template_key, type_args)
-			if handle.status != "emitted":
-				_drain_instantiations()
-			if handle.status != "emitted":
-				continue
-			# Only true callsite ids are eligible for CallInfo target rewrite.
-			# Non-call instantiations (map literals/type applications) are tracked
-			# separately to avoid node_id collisions with callsite_id integers.
-			csid = key if isinstance(key, int) else None
-			info = call_info_map.get(csid) if csid is not None else None
-			if info is None:
-				continue
-			inst_sig = signatures_by_id.get(handle.fn_id)
-			if inst_sig is None or inst_sig.param_type_ids is None or inst_sig.return_type_id is None:
-				new_info = CallInfo(target=CallTarget.direct(handle.fn_id), sig=info.sig)
-			else:
-				new_info = CallInfo(
-					target=CallTarget.direct(handle.fn_id),
-					sig=CallSig(
-						param_types=tuple(inst_sig.param_type_ids),
-						user_ret_type=inst_sig.return_type_id,
-						can_throw=_inst_can_throw(inst_sig),
-						declared_terminal_throws=bool(getattr(inst_sig, "declared_terminal_throws", False)),
-					),
-				)
-			_set_call_info(csid, new_info)
-
-	for fn_id, typed_fn in typed_fns_by_id.items():
-		block = getattr(typed_fn, "body", None)
-		if isinstance(block, H.HBlock):
-			_rewrite_call_targets(typed_fn, block)
-	if drift_debug.enabled("local_types_trace"):
-		seen_expr_objs: dict[int, tuple[FunctionId, str, object]] = {}
-		for fn_id, block in normalized_hirs_by_id.items():
-			if not isinstance(block, H.HBlock):
-				continue
-			def _walk_shared(obj: object) -> None:
-				if isinstance(obj, H.HExpr):
-					obj_id = id(obj)
-					kind = type(obj).__name__
-					span = getattr(obj, "loc", Span())
-					prev = seen_expr_objs.get(obj_id)
-					if prev is None:
-						seen_expr_objs[obj_id] = (fn_id, kind, span)
-					else:
-						prev_fn, prev_kind, prev_span = prev
-						if (getattr(prev_fn, "module", None), getattr(prev_fn, "name", None)) == ("main", "run") or (getattr(fn_id, "module", None), getattr(fn_id, "name", None)) == ("main", "run"):
-							import sys as _dbg_sys
-							print(f"[drift:debug][local_types_trace] shared_expr_obj id={obj_id} prev_fn={prev_fn} prev_kind={prev_kind} prev_span={prev_span} now_fn={fn_id} now_kind={kind} now_span={span}", file=_dbg_sys.stderr)
-				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
-					return
-				if is_dataclass(obj):
-					for f in fields(obj):
-						_walk_shared(getattr(obj, f.name))
-					return
-				if isinstance(obj, (list, tuple)):
-					for item in obj:
-						_walk_shared(item)
-					return
-				if isinstance(obj, dict):
-					for key in sorted(obj.keys(), key=repr):
-						_walk_shared(obj[key])
-					return
-			_walk_shared(block)
-		for fn_id, typed_fn in typed_fns_by_id.items():
-			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
-				continue
-			block = getattr(typed_fn, "body", None)
-			if not isinstance(block, H.HBlock):
-				continue
-			import sys as _dbg_sys
-			print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_instantiation", file=_dbg_sys.stderr)
-			seen_expr_ids: dict[int, tuple[str, object]] = {}
-			def _walk_expr_ids(obj: object) -> None:
-				if isinstance(obj, H.HExpr):
-					node_id = getattr(obj, "node_id", 0)
-					if node_id == 0:
-						return
-					kind = type(obj).__name__
-					span = getattr(obj, "loc", Span())
-					prev = seen_expr_ids.get(node_id)
-					if prev is None:
-						seen_expr_ids[node_id] = (kind, span)
-					else:
-						prev_kind, prev_span = prev
-						if prev_kind != kind:
-							print(f"[drift:debug][local_types_trace] fn={fn_id} post_instantiation_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
-				if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
-					return
-				if is_dataclass(obj):
-					for f in fields(obj):
-						_walk_expr_ids(getattr(obj, f.name))
-					return
-				if isinstance(obj, (list, tuple)):
-					for item in obj:
-						_walk_expr_ids(item)
-					return
-				if isinstance(obj, dict):
-					for key in sorted(obj.keys(), key=repr):
-						_walk_expr_ids(obj[key])
-					return
-			_walk_expr_ids(block)
-
-	# K39: Post-instantiation rescan for generic Destructible impls.
-	# After all _drain_instantiations() rounds, struct_instances may contain
-	# new concrete types (e.g. ScopeGuard<Int>) that weren't present during
-	# the initial destructor_fns population.  Re-scan and register them.
-	if _generic_destructible_impls and shared_type_table is not None:
-		_k39_added = 0
-		for base_id, method_fn_id in _generic_destructible_impls:
-			for inst_id, inst in shared_type_table.struct_instances.items():
-				if inst.base_id != base_id:
-					continue
-				if shared_type_table.has_typevar(inst_id):
-					continue
-				if inst_id in destructor_fns:
-					continue
-				# Fat-layout skip — same rationale as the initial
-				# destructible scan: the thin `_arc_destroy_impl<I>`
-				# template is structurally invalid against the fat
-				# layout, and the late fat-Arc synthesizer installs
-				# these entries instead.
-				if shared_type_table.is_arc_fat_layout_instance(inst_id):
-					continue
-				key = function_keys_by_fn_id.get(method_fn_id)
-				if key is None:
-					continue
-				handle = _request_instantiation(key, tuple(inst.type_args))
-				destructor_fns[inst_id] = handle.fn_id
-				_k39_added += 1
-		if _k39_added > 0:
-			_drain_instantiations()
-			shared_type_table.destructor_fns = destructor_fns
-
-	if emit_instantiation_index is not None:
-		entries: list[dict[str, object]] = []
-		for handle in inst_cache.values():
-			if handle.status != "emitted":
-				continue
-			entries.append(
-				{
-					"key": instantiation_key_str(handle.key),
-					"symbol": function_symbol(handle.fn_id),
-					"can_throw": bool(handle.key.abi.can_throw),
-					"linkage": "linkonce_odr",
-					"comdat": True,
-				}
-			)
-		entries.sort(key=lambda e: str(e.get("key", "")))
-		emit_instantiation_index.write_text(
-			json.dumps(entries, sort_keys=True),
-			encoding="utf-8",
-		)
-
-	method_wrapper_by_target: dict[FunctionId, FunctionId] = {}
-	for sig_id, sig in signatures_by_id.items():
-		if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
-			method_wrapper_by_target[sig.wraps_target_fn_id] = sig_id
-
-	def _ensure_method_call_info() -> None:
-		for fn_id, typed_fn in typed_fns_by_id.items():
-			call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
-			if not isinstance(call_info_map, dict):
-				continue
-			call_resolutions = getattr(typed_fn, "call_resolutions", None)
-			if not isinstance(call_resolutions, dict):
-				continue
-			caller_mod = fn_id.module
-			node_to_callsites: dict[int, list[int]] = {}
-			for expr in _collect_call_nodes_by_id(getattr(typed_fn, "body", H.HBlock(statements=[]))).values():
-				csid = getattr(expr, "callsite_id", None)
-				if isinstance(csid, int):
-					node_to_callsites.setdefault(expr.node_id, []).append(csid)
-			for node_id, res in call_resolutions.items():
-				csid_list = node_to_callsites.get(node_id) or []
-				if len(csid_list) != 1:
-					continue
-				csid = csid_list[0]
-				info_key = csid
-				if isinstance(res, MethodResolution):
-					if info_key in call_info_map:
-						info = call_info_map.get(info_key)
-						if info is not None and info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
-							continue
-					decl = res.decl
-					target_fn_id = decl.fn_id
-					if target_fn_id is None:
-						continue
-					params = list(decl.signature.param_types)
-					ret = res.result_type or decl.signature.result_type
-					sig_for_throw = signatures_by_id.get(target_fn_id)
-					call_can_throw = True
-					if sig_for_throw is not None and sig_for_throw.declared_can_throw is not None:
-						call_can_throw = bool(sig_for_throw.declared_can_throw)
-					if sig_for_throw is not None and sig_for_throw.is_pub and target_fn_id.module != caller_mod:
-						wrapper_id = method_wrapper_by_target.get(target_fn_id)
-						if wrapper_id is not None:
-							target_fn_id = wrapper_id
-							call_can_throw = True
-						elif not call_can_throw:
-							call_can_throw = True
-					call_info_map[info_key] = CallInfo(
-						target=CallTarget.direct(target_fn_id),
-						sig=CallSig(
-							param_types=tuple(params),
-							user_ret_type=ret,
-							can_throw=bool(call_can_throw),
-							declared_terminal_throws=bool(getattr(sig_for_throw, "declared_terminal_throws", False)),
-						),
-					)
-
-	_ensure_method_call_info()
-
-	for fn_id, sig in signatures_by_id.items():
-		if not (sig.type_params or getattr(sig, "impl_type_params", [])):
-			continue
-		# Templates are never lowered to MIR/SSA/LLVM.
-		normalized_hirs_by_id.pop(fn_id, None)
-
-	def _has_typevar(tid: TypeId) -> bool:
-		return bool(shared_type_table.has_typevar(tid))
-
-	for fn_id in sorted(normalized_hirs_by_id.keys(), key=function_symbol):
-		name = function_symbol(fn_id)
-		sig = signatures_by_id.get(fn_id)
-		if sig is not None:
-			if sig.type_params or getattr(sig, "impl_type_params", []):
-				continue
-			for tid in sig.param_type_ids or []:
-				if _has_typevar(tid):
+				if sig.param_type_ids is None or sig.return_type_id is None:
 					type_diags.append(
 						Diagnostic(
-							message=f"generic instantiation required: function '{name}' has an unresolved type parameter in its signature",
+							message=f"generic instantiation missing type ids for '{function_key_str(template_key)}'",
+							code="E_MISSING_TEMPLATE_SIG",
 							severity="error",
 							phase="typecheck",
 							span=getattr(sig, "loc", None),
 						)
 					)
-					break
-			if sig.return_type_id is not None and _has_typevar(sig.return_type_id):
-				type_diags.append(
-					Diagnostic(
-						message=f"generic instantiation required: function '{name}' has an unresolved type parameter in its return type",
-						severity="error",
-						phase="typecheck",
-						span=getattr(sig, "loc", None),
-					)
+					handle.status = "failed"
+					continue
+				impl_args = type_args[:impl_count]
+				fn_args = type_args[impl_count:]
+				inst_fn_id = handle.fn_id
+				inst_param_ids = list(sig.param_type_ids)
+				inst_ret_id = sig.return_type_id
+				inst_impl_target_id = sig.impl_target_type_id
+				impl_subst = None
+				fn_subst = None
+				if impl_args:
+					impl_owner = sig.impl_type_params[0].id.owner
+					impl_subst = Subst(owner=impl_owner, args=list(impl_args))
+					inst_param_ids = [apply_subst(t, impl_subst, shared_type_table) for t in inst_param_ids]
+					inst_ret_id = apply_subst(inst_ret_id, impl_subst, shared_type_table)
+					if inst_impl_target_id is not None:
+						inst_impl_target_id = apply_subst(inst_impl_target_id, impl_subst, shared_type_table)
+				if fn_args:
+					fn_subst = Subst(owner=template_fn_id, args=list(fn_args))
+					inst_param_ids = [apply_subst(t, fn_subst, shared_type_table) for t in inst_param_ids]
+					inst_ret_id = apply_subst(inst_ret_id, fn_subst, shared_type_table)
+					if inst_impl_target_id is not None:
+						inst_impl_target_id = apply_subst(inst_impl_target_id, fn_subst, shared_type_table)
+				inst_impl_target_args = None
+				if sig.impl_target_type_args is not None:
+					inst_impl_target_args = list(sig.impl_target_type_args)
+					if impl_args:
+						impl_owner = sig.impl_type_params[0].id.owner
+						impl_subst = Subst(owner=impl_owner, args=list(impl_args))
+						inst_impl_target_args = [
+							apply_subst(t, impl_subst, shared_type_table) for t in inst_impl_target_args
+						]
+				param_map: dict[TypeParamId, TypeId] = {}
+				if getattr(sig, "impl_type_params", None):
+					for idx, tp in enumerate(sig.impl_type_params or []):
+						if idx < len(impl_args):
+							param_map[tp.id] = impl_args[idx]
+				if getattr(sig, "type_params", None):
+					for idx, tp in enumerate(sig.type_params or []):
+						if idx < len(fn_args):
+							param_map[tp.id] = fn_args[idx]
+				if sig.impl_target_type_args is not None and inst_impl_target_args is not None:
+					for template_arg, concrete_arg in zip(sig.impl_target_type_args, inst_impl_target_args):
+						template_def = shared_type_table.get(template_arg)
+						if template_def.kind is TypeKind.TYPEVAR and template_def.type_param_id is not None:
+							param_map[template_def.type_param_id] = concrete_arg
+				if inst_impl_target_id is not None:
+					inst = shared_type_table.struct_instances.get(inst_impl_target_id)
+					if inst is not None:
+						schema = shared_type_table.struct_bases.get(inst.base_id)
+						if schema is not None and schema.type_params:
+							for tp, concrete_arg in zip(schema.type_params, inst.type_args):
+								param_map[tp.id] = concrete_arg
+				if param_map:
+					inst_param_ids = [_subst_with_owner_map(t, param_map) for t in inst_param_ids]
+					inst_ret_id = _subst_with_owner_map(inst_ret_id, param_map)
+					if inst_impl_target_id is not None:
+						inst_impl_target_id = _subst_with_owner_map(inst_impl_target_id, param_map)
+				_inst_wraps_target = getattr(sig, "wraps_target_fn_id", None)
+				# For wrapper instantiations, resolve wraps_target_fn_id to
+				# the instantiated target.  The target was instantiated by
+				# a previous drain with the same type_args but a different
+				# FunctionKey (different name → different hash).  Look up
+				# the target instantiation in inst_cache by computing the
+				# target's _inst_key with the same type_args.
+				if _inst_wraps_target is not None and getattr(sig, "is_wrapper", False):
+					_target_template_key = function_keys_by_fn_id.get(_inst_wraps_target)
+					if _target_template_key is not None:
+						_target_inst_key = _inst_key(_target_template_key, handle.type_args)
+						_target_handle = inst_cache.get(_target_inst_key)
+						if _target_handle is not None:
+							_inst_wraps_target = _target_handle.fn_id
+				inst_sig = replace(
+					sig,
+					name=function_symbol(inst_fn_id),
+					param_type_ids=inst_param_ids,
+					return_type_id=inst_ret_id,
+					impl_target_type_id=inst_impl_target_id,
+					impl_target_type_args=inst_impl_target_args,
+					type_params=[],
+					impl_type_params=[],
+					param_types=None,
+					return_type=None,
+					is_exported_entrypoint=False,
+					is_instantiation=True,
+					wraps_target_fn_id=_inst_wraps_target,
 				)
-		typed_fn = typed_fns_by_id.get(fn_id)
-		call_info = getattr(typed_fn, "call_info_by_callsite_id", None) if typed_fn is not None else None
-		if isinstance(call_info, dict):
-			# Arc runtime boundary — post-pass normalization.
-			#
-			# Any DIRECT target pointing at an `@intrinsic` generic
-			# template (Arc.clone, Arc.get, Arc::Destructible::destroy,
-			# Arc.as_interface) gets rewritten to INTRINSIC here,
-			# regardless of which upstream writer produced it.
-			# Centralizes the invariant "intrinsic templates never
-			# appear as Direct call targets after typecheck" in a
-			# single pass so we don't have to patch every call-info
-			# writer.
-			for csid, info in list(call_info.items()):
-				if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
-					continue
-				_target_sig = signatures_by_id.get(info.target.symbol) if signatures_by_id is not None else None
-				if _target_sig is None or not bool(getattr(_target_sig, "is_intrinsic", False)):
-					continue
-				_intrinsic_kind = getattr(_target_sig, "intrinsic_kind", None)
-				if _intrinsic_kind is None:
-					continue
-				from lang.driftc.stage1.call_info import CallTarget as _CT, CallSig as _CS
-				# The DIRECT CallInfo came from a generic-template
-				# lookup; some writers default `can_throw=True` when
-				# `sig.declared_can_throw` wasn't threaded in.  For
-				# @intrinsic runtime-boundary methods
-				# (Arc.clone/get/destroy/as_interface), the target
-				# sig's `declared_can_throw` IS authoritative — all
-				# four are `nothrow`.  Re-derive here so the nothrow
-				# checker sees the correct `can_throw` when it walks
-				# the rewritten INTRINSIC call.
-				_declared = getattr(_target_sig, "declared_can_throw", None)
-				_can_throw = bool(info.sig.can_throw) if _declared is None else bool(_declared)
-				_sig = info.sig
-				if _can_throw != bool(info.sig.can_throw):
-					_sig = _CS(
-						param_types=info.sig.param_types,
-						user_ret_type=info.sig.user_ret_type,
-						can_throw=_can_throw,
-						includes_callee=info.sig.includes_callee,
-						declared_terminal_throws=info.sig.declared_terminal_throws,
-					)
-				call_info[csid] = CallInfo(
-					target=_CT.intrinsic(_intrinsic_kind),
-					sig=_sig,
+				_register_derived_signature_precheck(inst_fn_id, inst_sig)
+				if require_env is not None and template_fn_id is not None:
+					req_expr = require_env.requires_by_fn.get(template_fn_id)
+					if req_expr is not None:
+						require_env.requires_by_fn[inst_fn_id] = req_expr
+				template_hir = template_hirs_by_key.get(template_key)
+				if template_hir is None:
+					wrap_sig = signatures_by_id.get(inst_fn_id)
+					if wrap_sig is not None and getattr(wrap_sig, "is_wrapper", False):
+						template_hir = _make_wrapper_template_hir(wrap_sig)
+						template_hirs_by_key[template_key] = template_hir
+				if template_hir is None:
+						type_diags.append(
+							Diagnostic(
+								message=f"generic instantiation requires a template body for '{function_key_str(template_key)}'",
+								code="E_MISSING_TEMPLATE_BODY",
+								severity="error",
+								phase="typecheck",
+								span=getattr(sig, "loc", None),
+							)
+						)
+						handle.status = "failed"
+						continue
+				inst_hir = normalize_hir(template_hir)
+				_clear_var_binding_ids(inst_hir)
+				normalized_hirs_by_id[inst_fn_id] = inst_hir
+				mod_name = getattr(inst_fn_id, "module", None) or "main"
+				current_mod = _module_id_with_visibility(mod_name)
+				visible_mods = None
+				if module_deps is not None:
+					visible = set(visible_module_names_by_name.get(mod_name, {mod_name}))
+					def _collect_type_modules(tid: TypeId) -> None:
+						try:
+							td = shared_type_table.get(tid)
+						except Exception:
+							return
+						if td.kind in {TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.ERROR, TypeKind.INTERFACE}:
+							if td.module_id:
+								visible.add(td.module_id)
+						for child in td.param_types or []:
+							_collect_type_modules(child)
+					for _tid in list(impl_args) + list(fn_args):
+						_collect_type_modules(_tid)
+					visible_mods = tuple(sorted(_module_id_with_visibility(m) for m in visible))
+				_sync_visibility_provenance()
+				current_file = None
+				if origin_by_fn_id is not None and template_fn_id in origin_by_fn_id:
+					current_file = str(origin_by_fn_id.get(template_fn_id))
+				elif sig is not None:
+					current_file = Span.from_loc(getattr(sig, "loc", None)).file
+				param_mutable = None
+				if sig is not None and sig.param_names is not None and sig.param_mutable is not None:
+					if len(sig.param_names) == len(sig.param_mutable):
+						param_mutable = {pname: bool(flag) for pname, flag in zip(sig.param_names, sig.param_mutable)}
+				inst_result = type_checker.check_function(
+					inst_fn_id,
+					inst_hir,
+					param_types={pname: pty for pname, pty in zip(sig.param_names or [], inst_param_ids)},
+					param_mutable=param_mutable,
+					return_type=inst_ret_id,
+					preseed_type_params={**{tp.name: impl_args[idx] for idx, tp in enumerate(sig.impl_type_params or [])}, **{tp.name: fn_args[idx] for idx, tp in enumerate(sig.type_params or [])}},
+					preseed_scope_bindings=getattr(inst_hir, "param_binding_ids", None),
+					signatures_by_id=signatures_by_id,
+					function_keys_by_fn_id=function_keys_by_fn_id,
+					callable_registry=callable_registry,
+					impl_index=impl_index,
+					trait_index=trait_index,
+					trait_impl_index=trait_impl_index,
+					trait_scope_by_module=trait_scope_by_module,
+					linked_world=linked_world,
+					require_env=require_env,
+					visible_modules=visible_mods,
+					current_module=current_mod,
+					visibility_provenance=visibility_provenance_by_id,
 				)
-			for info in call_info.values():
-				# Arc bridge intrinsics intentionally carry the
-				# template-level sig (with typevar params/return);
-				# they lower via hir_to_mir's helper-redirect, not
-				# via monomorphization.  Every OTHER intrinsic kind
-				# must still pass the generic-survived check —
-				# narrowly scoped exemption, see
-				# `_typevar_callinfo_diags` at line ~1023.
-				if (
-					info.target.kind is CallTargetKind.INTRINSIC
-					and info.target.intrinsic in _ARC_BRIDGE_INTRINSIC_KINDS
-				):
+				if impl_subst is not None or fn_subst is not None:
+					new_call_info: dict[int, CallInfo] = {}
+					for csid, info in inst_result.typed_fn.call_info_by_callsite_id.items():
+						new_call_info[csid] = _subst_call_info(info, impl_subst, fn_subst)
+					inst_result.typed_fn.call_info_by_callsite_id = new_call_info
+				type_diags.extend(inst_result.diagnostics)
+				deferred = deferred_guard_diags_by_template.get(template_key)
+				guard_outcomes = getattr(inst_result, "guard_outcomes", None)
+				if deferred and isinstance(guard_outcomes, dict):
+					existing = {_diag_key(d) for d in inst_result.diagnostics}
+					for guard_key, status in guard_outcomes.items():
+						branch = None
+						if status is ProofStatus.PROVED:
+							branch = "then"
+						elif status is ProofStatus.REFUTED:
+							branch = "else"
+						if branch is None:
+							continue
+						for diag in deferred.get((guard_key, branch), []):
+							key = _diag_key(diag)
+							if key in existing:
+								continue
+							inst_result.diagnostics.append(diag)
+							type_diags.append(diag)
+							existing.add(key)
+				typed_fns_by_id[inst_fn_id] = inst_result.typed_fn
+				_queue_instantiations(inst_fn_id, inst_result.typed_fn)
+				handle.status = "emitted"
+
+		_drain_instantiations()
+		# Arc runtime boundary — publish callsite → helper-instantiation map.
+		# `hir_to_mir._lower_method_call_with_info` reads
+		# `type_table.arc_helper_inst_fn_by_callsite` to lower
+		# `INTRINSIC(ARC_*)` call sites as direct calls to the appropriate
+		# monomorphized `_arc_*_impl__inst__<T>` helper.  The map is keyed
+		# by `(containing_fn_id, callsite_id)` so it survives template
+		# instantiation (each Arc<T> usage in a generic caller gets its
+		# own entry once the caller itself is monomorphized).
+		if shared_type_table is not None:
+			setattr(shared_type_table, "arc_helper_inst_fn_by_callsite", arc_helper_inst_fn_by_callsite)
+		def _rewrite_call_targets(typed_fn: object, block: H.HBlock) -> None:
+			call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
+			if not isinstance(call_info_map, dict):
+				return
+			inst_map = getattr(typed_fn, "instantiations_by_callsite_id", None)
+			if not isinstance(inst_map, dict):
+				return
+			def _set_call_info(csid: int | None, info: CallInfo) -> None:
+				if csid is not None:
+					call_info_map[csid] = info
+			for key, inst in inst_map.items():
+				template_key = getattr(inst, "target_key", None)
+				type_args = tuple(getattr(inst, "type_args", ()) or ())
+				if not isinstance(template_key, FunctionKey) or not type_args:
 					continue
-				if any(_has_typevar(t) for t in info.sig.param_types) or _has_typevar(info.sig.user_ret_type):
+				# Arc runtime boundary: skip intrinsic templates — their
+				# call sites keep the `CallTarget.intrinsic(...)` target
+				# from method resolution, and `_lower_method_call_with_info`
+				# redirects to the `_arc_*_impl<T>` helper.  Forcing a
+				# Direct-target rewrite here would replace the intrinsic
+				# dispatch with a reference to a bodyless template.
+				if _template_is_intrinsic_generic(template_key):
+					continue
+				handle = inst_cache.get(_inst_key(template_key, type_args))
+				if handle is None:
+					handle = _request_instantiation(template_key, type_args)
+				if handle.status != "emitted":
+					_drain_instantiations()
+				if handle.status != "emitted":
+					continue
+				# Only true callsite ids are eligible for CallInfo target rewrite.
+				# Non-call instantiations (map literals/type applications) are tracked
+				# separately to avoid node_id collisions with callsite_id integers.
+				csid = key if isinstance(key, int) else None
+				info = call_info_map.get(csid) if csid is not None else None
+				if info is None:
+					continue
+				inst_sig = signatures_by_id.get(handle.fn_id)
+				if inst_sig is None or inst_sig.param_type_ids is None or inst_sig.return_type_id is None:
+					new_info = CallInfo(target=CallTarget.direct(handle.fn_id), sig=info.sig)
+				else:
+					new_info = CallInfo(
+						target=CallTarget.direct(handle.fn_id),
+						sig=CallSig(
+							param_types=tuple(inst_sig.param_type_ids),
+							user_ret_type=inst_sig.return_type_id,
+							can_throw=_inst_can_throw(inst_sig),
+							declared_terminal_throws=bool(getattr(inst_sig, "declared_terminal_throws", False)),
+						),
+					)
+				_set_call_info(csid, new_info)
+
+		for fn_id, typed_fn in typed_fns_by_id.items():
+			block = getattr(typed_fn, "body", None)
+			if isinstance(block, H.HBlock):
+				_rewrite_call_targets(typed_fn, block)
+		if drift_debug.enabled("local_types_trace"):
+			seen_expr_objs: dict[int, tuple[FunctionId, str, object]] = {}
+			for fn_id, block in normalized_hirs_by_id.items():
+				if not isinstance(block, H.HBlock):
+					continue
+				def _walk_shared(obj: object) -> None:
+					if isinstance(obj, H.HExpr):
+						obj_id = id(obj)
+						kind = type(obj).__name__
+						span = getattr(obj, "loc", Span())
+						prev = seen_expr_objs.get(obj_id)
+						if prev is None:
+							seen_expr_objs[obj_id] = (fn_id, kind, span)
+						else:
+							prev_fn, prev_kind, prev_span = prev
+							if (getattr(prev_fn, "module", None), getattr(prev_fn, "name", None)) == ("main", "run") or (getattr(fn_id, "module", None), getattr(fn_id, "name", None)) == ("main", "run"):
+								import sys as _dbg_sys
+								print(f"[drift:debug][local_types_trace] shared_expr_obj id={obj_id} prev_fn={prev_fn} prev_kind={prev_kind} prev_span={prev_span} now_fn={fn_id} now_kind={kind} now_span={span}", file=_dbg_sys.stderr)
+					if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+						return
+					if is_dataclass(obj):
+						for f in fields(obj):
+							_walk_shared(getattr(obj, f.name))
+						return
+					if isinstance(obj, (list, tuple)):
+						for item in obj:
+							_walk_shared(item)
+						return
+					if isinstance(obj, dict):
+						for key in sorted(obj.keys(), key=repr):
+							_walk_shared(obj[key])
+						return
+				_walk_shared(block)
+			for fn_id, typed_fn in typed_fns_by_id.items():
+				if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+					continue
+				block = getattr(typed_fn, "body", None)
+				if not isinstance(block, H.HBlock):
+					continue
+				import sys as _dbg_sys
+				print(f"[drift:debug][local_types_trace] fn={fn_id} scan=post_instantiation", file=_dbg_sys.stderr)
+				seen_expr_ids: dict[int, tuple[str, object]] = {}
+				def _walk_expr_ids(obj: object) -> None:
+					if isinstance(obj, H.HExpr):
+						node_id = getattr(obj, "node_id", 0)
+						if node_id == 0:
+							return
+						kind = type(obj).__name__
+						span = getattr(obj, "loc", Span())
+						prev = seen_expr_ids.get(node_id)
+						if prev is None:
+							seen_expr_ids[node_id] = (kind, span)
+						else:
+							prev_kind, prev_span = prev
+							if prev_kind != kind:
+								print(f"[drift:debug][local_types_trace] fn={fn_id} post_instantiation_dup_node_id={node_id} prev={prev_kind} now={kind} prev_span={prev_span} now_span={span}", file=_dbg_sys.stderr)
+					if not (is_dataclass(obj) or isinstance(obj, (list, tuple, dict))):
+						return
+					if is_dataclass(obj):
+						for f in fields(obj):
+							_walk_expr_ids(getattr(obj, f.name))
+						return
+					if isinstance(obj, (list, tuple)):
+						for item in obj:
+							_walk_expr_ids(item)
+						return
+					if isinstance(obj, dict):
+						for key in sorted(obj.keys(), key=repr):
+							_walk_expr_ids(obj[key])
+						return
+				_walk_expr_ids(block)
+
+		# K39: Post-instantiation rescan for generic Destructible impls.
+		# After all _drain_instantiations() rounds, struct_instances may contain
+		# new concrete types (e.g. ScopeGuard<Int>) that weren't present during
+		# the initial destructor_fns population.  Re-scan and register them.
+		if _generic_destructible_impls and shared_type_table is not None:
+			_k39_added = 0
+			for base_id, method_fn_id in _generic_destructible_impls:
+				for inst_id, inst in shared_type_table.struct_instances.items():
+					if inst.base_id != base_id:
+						continue
+					if shared_type_table.has_typevar(inst_id):
+						continue
+					if inst_id in destructor_fns:
+						continue
+					# Fat-layout skip — same rationale as the initial
+					# destructible scan: the thin `_arc_destroy_impl<I>`
+					# template is structurally invalid against the fat
+					# layout, and the late fat-Arc synthesizer installs
+					# these entries instead.
+					if shared_type_table.is_arc_fat_layout_instance(inst_id):
+						continue
+					key = function_keys_by_fn_id.get(method_fn_id)
+					if key is None:
+						continue
+					handle = _request_instantiation(key, tuple(inst.type_args))
+					destructor_fns[inst_id] = handle.fn_id
+					_k39_added += 1
+			if _k39_added > 0:
+				_drain_instantiations()
+				shared_type_table.destructor_fns = destructor_fns
+
+		if emit_instantiation_index is not None:
+			entries: list[dict[str, object]] = []
+			for handle in inst_cache.values():
+				if handle.status != "emitted":
+					continue
+				entries.append(
+					{
+						"key": instantiation_key_str(handle.key),
+						"symbol": function_symbol(handle.fn_id),
+						"can_throw": bool(handle.key.abi.can_throw),
+						"linkage": "linkonce_odr",
+						"comdat": True,
+					}
+				)
+			entries.sort(key=lambda e: str(e.get("key", "")))
+			emit_instantiation_index.write_text(
+				json.dumps(entries, sort_keys=True),
+				encoding="utf-8",
+			)
+
+		method_wrapper_by_target: dict[FunctionId, FunctionId] = {}
+		for sig_id, sig in signatures_by_id.items():
+			if getattr(sig, "is_wrapper", False) and getattr(sig, "wraps_target_fn_id", None) is not None:
+				method_wrapper_by_target[sig.wraps_target_fn_id] = sig_id
+
+		def _ensure_method_call_info() -> None:
+			for fn_id, typed_fn in typed_fns_by_id.items():
+				call_info_map = getattr(typed_fn, "call_info_by_callsite_id", None)
+				if not isinstance(call_info_map, dict):
+					continue
+				call_resolutions = getattr(typed_fn, "call_resolutions", None)
+				if not isinstance(call_resolutions, dict):
+					continue
+				caller_mod = fn_id.module
+				node_to_callsites: dict[int, list[int]] = {}
+				for expr in _collect_call_nodes_by_id(getattr(typed_fn, "body", H.HBlock(statements=[]))).values():
+					csid = getattr(expr, "callsite_id", None)
+					if isinstance(csid, int):
+						node_to_callsites.setdefault(expr.node_id, []).append(csid)
+				for node_id, res in call_resolutions.items():
+					csid_list = node_to_callsites.get(node_id) or []
+					if len(csid_list) != 1:
+						continue
+					csid = csid_list[0]
+					info_key = csid
+					if isinstance(res, MethodResolution):
+						if info_key in call_info_map:
+							info = call_info_map.get(info_key)
+							if info is not None and info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None:
+								continue
+						decl = res.decl
+						target_fn_id = decl.fn_id
+						if target_fn_id is None:
+							continue
+						params = list(decl.signature.param_types)
+						ret = res.result_type or decl.signature.result_type
+						sig_for_throw = signatures_by_id.get(target_fn_id)
+						call_can_throw = True
+						if sig_for_throw is not None and sig_for_throw.declared_can_throw is not None:
+							call_can_throw = bool(sig_for_throw.declared_can_throw)
+						if sig_for_throw is not None and sig_for_throw.is_pub and target_fn_id.module != caller_mod:
+							wrapper_id = method_wrapper_by_target.get(target_fn_id)
+							if wrapper_id is not None:
+								target_fn_id = wrapper_id
+								call_can_throw = True
+							elif not call_can_throw:
+								call_can_throw = True
+						call_info_map[info_key] = CallInfo(
+							target=CallTarget.direct(target_fn_id),
+							sig=CallSig(
+								param_types=tuple(params),
+								user_ret_type=ret,
+								can_throw=bool(call_can_throw),
+								declared_terminal_throws=bool(getattr(sig_for_throw, "declared_terminal_throws", False)),
+							),
+						)
+
+		_ensure_method_call_info()
+
+		for fn_id, sig in signatures_by_id.items():
+			if not (sig.type_params or getattr(sig, "impl_type_params", [])):
+				continue
+			# Templates are never lowered to MIR/SSA/LLVM.
+			normalized_hirs_by_id.pop(fn_id, None)
+
+		def _has_typevar(tid: TypeId) -> bool:
+			return bool(shared_type_table.has_typevar(tid))
+
+		for fn_id in sorted(normalized_hirs_by_id.keys(), key=function_symbol):
+			name = function_symbol(fn_id)
+			sig = signatures_by_id.get(fn_id)
+			if sig is not None:
+				if sig.type_params or getattr(sig, "impl_type_params", []):
+					continue
+				for tid in sig.param_type_ids or []:
+					if _has_typevar(tid):
+						type_diags.append(
+							Diagnostic(
+								message=f"generic instantiation required: function '{name}' has an unresolved type parameter in its signature",
+								severity="error",
+								phase="typecheck",
+								span=getattr(sig, "loc", None),
+							)
+						)
+						break
+				if sig.return_type_id is not None and _has_typevar(sig.return_type_id):
 					type_diags.append(
 						Diagnostic(
-							message=f"generic instantiation required: call in '{name}' has unresolved type parameters",
+							message=f"generic instantiation required: function '{name}' has an unresolved type parameter in its return type",
 							severity="error",
 							phase="typecheck",
-							span=None,
+							span=getattr(sig, "loc", None),
 						)
 					)
-					break
+			typed_fn = typed_fns_by_id.get(fn_id)
+			call_info = getattr(typed_fn, "call_info_by_callsite_id", None) if typed_fn is not None else None
+			if isinstance(call_info, dict):
+				# Arc runtime boundary — post-pass normalization.
+				#
+				# Any DIRECT target pointing at an `@intrinsic` generic
+				# template (Arc.clone, Arc.get, Arc::Destructible::destroy,
+				# Arc.as_interface) gets rewritten to INTRINSIC here,
+				# regardless of which upstream writer produced it.
+				# Centralizes the invariant "intrinsic templates never
+				# appear as Direct call targets after typecheck" in a
+				# single pass so we don't have to patch every call-info
+				# writer.
+				for csid, info in list(call_info.items()):
+					if info.target.kind is not CallTargetKind.DIRECT or info.target.symbol is None:
+						continue
+					_target_sig = signatures_by_id.get(info.target.symbol) if signatures_by_id is not None else None
+					if _target_sig is None or not bool(getattr(_target_sig, "is_intrinsic", False)):
+						continue
+					_intrinsic_kind = getattr(_target_sig, "intrinsic_kind", None)
+					if _intrinsic_kind is None:
+						continue
+					from lang.driftc.stage1.call_info import CallTarget as _CT, CallSig as _CS
+					# The DIRECT CallInfo came from a generic-template
+					# lookup; some writers default `can_throw=True` when
+					# `sig.declared_can_throw` wasn't threaded in.  For
+					# @intrinsic runtime-boundary methods
+					# (Arc.clone/get/destroy/as_interface), the target
+					# sig's `declared_can_throw` IS authoritative — all
+					# four are `nothrow`.  Re-derive here so the nothrow
+					# checker sees the correct `can_throw` when it walks
+					# the rewritten INTRINSIC call.
+					_declared = getattr(_target_sig, "declared_can_throw", None)
+					_can_throw = bool(info.sig.can_throw) if _declared is None else bool(_declared)
+					_sig = info.sig
+					if _can_throw != bool(info.sig.can_throw):
+						_sig = _CS(
+							param_types=info.sig.param_types,
+							user_ret_type=info.sig.user_ret_type,
+							can_throw=_can_throw,
+							includes_callee=info.sig.includes_callee,
+							declared_terminal_throws=info.sig.declared_terminal_throws,
+						)
+					call_info[csid] = CallInfo(
+						target=_CT.intrinsic(_intrinsic_kind),
+						sig=_sig,
+					)
+				for info in call_info.values():
+					# Arc bridge intrinsics intentionally carry the
+					# template-level sig (with typevar params/return);
+					# they lower via hir_to_mir's helper-redirect, not
+					# via monomorphization.  Every OTHER intrinsic kind
+					# must still pass the generic-survived check —
+					# narrowly scoped exemption, see
+					# `_typevar_callinfo_diags` at line ~1023.
+					if (
+						info.target.kind is CallTargetKind.INTRINSIC
+						and info.target.intrinsic in _ARC_BRIDGE_INTRINSIC_KINDS
+					):
+						continue
+					if any(_has_typevar(t) for t in info.sig.param_types) or _has_typevar(info.sig.user_ret_type):
+						type_diags.append(
+							Diagnostic(
+								message=f"generic instantiation required: call in '{name}' has unresolved type parameters",
+								severity="error",
+								phase="typecheck",
+								span=None,
+							)
+						)
+						break
 
-	# Stage “checker”: obtain declared_can_throw from the checker stub so the
-	# driver path mirrors the real compiler layering once a proper checker exists.
-	call_info_by_callsite_id: dict[FunctionId, dict[int, CallInfo]] = {}
-	for fn_id, typed_fn in typed_fns_by_id.items():
-		call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
-		if isinstance(call_info, dict):
-			call_info_by_callsite_id[fn_id] = dict(call_info)
-		else:
-			call_info_by_callsite_id.setdefault(fn_id, {})
-	check_inputs = CheckerInputsById(
-		hir_blocks_by_id=normalized_hirs_by_id,
-		signatures_by_id=signatures_by_id,
-		call_info_by_callsite_id=call_info_by_callsite_id,
-	)
-	if drift_debug.enabled("local_types_trace"):
+		# Stage “checker”: obtain declared_can_throw from the checker stub so the
+		# driver path mirrors the real compiler layering once a proper checker exists.
+		call_info_by_callsite_id: dict[FunctionId, dict[int, CallInfo]] = {}
 		for fn_id, typed_fn in typed_fns_by_id.items():
-			if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
-				continue
-			block = getattr(typed_fn, "body", None)
-			norm_block = normalized_hirs_by_id.get(fn_id)
-			import sys as _dbg_sys
-			print(f"[drift:debug][local_types_trace] fn={fn_id} pre_checker_body_shared={block is norm_block}", file=_dbg_sys.stderr)
+			call_info = getattr(typed_fn, "call_info_by_callsite_id", None)
+			if isinstance(call_info, dict):
+				call_info_by_callsite_id[fn_id] = dict(call_info)
+			else:
+				call_info_by_callsite_id.setdefault(fn_id, {})
+		check_inputs = CheckerInputsById(
+			hir_blocks_by_id=normalized_hirs_by_id,
+			signatures_by_id=signatures_by_id,
+			call_info_by_callsite_id=call_info_by_callsite_id,
+		)
+		if drift_debug.enabled("local_types_trace"):
+			for fn_id, typed_fn in typed_fns_by_id.items():
+				if getattr(fn_id, "module", None) != "main" or getattr(fn_id, "name", None) != "run":
+					continue
+				block = getattr(typed_fn, "body", None)
+				norm_block = normalized_hirs_by_id.get(fn_id)
+				import sys as _dbg_sys
+				print(f"[drift:debug][local_types_trace] fn={fn_id} pre_checker_body_shared={block is norm_block}", file=_dbg_sys.stderr)
 	with _timed("checker"):
 		checked = Checker.run_by_id(
 			check_inputs,
@@ -7592,7 +7595,8 @@ def compile_to_llvm_ir_for_tests(
 	inside the pipeline picks up the installed sink automatically.  When
 	no sink is installed (the common case for the in-process driver test
 	suite), every `events.timed(...)` site is a single
-	`ContextVar.get()` returning `None` plus a bare yield -- no
+	`ContextVar.get()` returning `None` followed by a return of the
+	module-level `_NOOP_TIMED` singleton context manager -- no
 	allocations, no clock reads -- so the hot test path pays nothing.
 	"""
 	func_hirs_by_id, signatures_by_id, fn_ids_by_name = _normalize_func_maps(func_hirs, signatures)
@@ -8040,15 +8044,20 @@ def _print_text_timing_summary(summary: dict) -> None:
 
 	Example:
 	  [drift:timing] total_wall=4.213s
-	  [drift:timing]   parse              = 1.852s  count=1
-	  [drift:timing]   trust_pre_pass     = 0.107s  count=1
-	  [drift:timing]   normalize_hir      = 0.500s  count=500
-	  [drift:timing]   codegen            = 1.512s  count=1
-	  [drift:timing]   link               = 0.624s  count=1
+	  [drift:timing]   parse              =   1.852s   43.9%  count=1
+	  [drift:timing]   trust_pre_pass     =   0.107s    2.5%  count=1
+	  [drift:timing]   normalize_hir      =   0.500s   11.9%  count=500
+	  [drift:timing]   codegen            =   1.512s   35.9%  count=1
+	  [drift:timing]   link               =   0.624s   14.8%  count=1
 
 	`count=N` is the number of times `events.phase_start(label)` fired
 	during the compile -- lets readers distinguish one slow call from
 	many small ones without re-instrumenting.
+
+	`<pct>%` is the label's elapsed time as a percent of `total_wall`.
+	**Percentages can sum above 100%** because nested labels overlap
+	-- read each as "percent of total wall represented by this
+	label," not a partition.
 	"""
 	import sys as _sys
 	total = float(summary.get("total_wall", 0.0))
@@ -8060,15 +8069,18 @@ def _print_text_timing_summary(summary: dict) -> None:
 		phases.items(), key=lambda kv: (-float(kv[1]), kv[0])
 	):
 		c = counts.get(label, 0)
+		_secs = float(secs)
+		_pct = (_secs / total * 100.0) if total > 0 else 0.0
 		print(
-			f"[drift:timing]   {label:<24s} = {float(secs):.3f}s  count={c}",
+			f"[drift:timing]   {label:<24s} = {_secs:7.3f}s  {_pct:5.1f}%  count={c}",
 			file=_sys.stderr,
 		)
 
 
 def _emit_compile_json(payload: dict) -> None:
 	"""Emit a terminal `--json` payload, surfacing the active sink's
-	timings as `{"timings": {"total_wall": float, "phases": {...}}}`.
+	timings as `{"timings": {"total_wall": float, "phases": {...},
+	"counts": {...}}}`.
 
 	Idempotent re: `end_compile`: each terminal JSON site here marks
 	the wall-clock boundary at the point of emission, so the
@@ -8205,7 +8217,8 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		help=(
 			"Collect per-phase wall-clock timings for this compile.  "
 			"With --json: adds a top-level `timings` field "
-			"(`{total_wall, phases: {label: seconds}}`) to the payload. "
+			"(`{total_wall, phases: {label: seconds}, counts: {label: int}}`) "
+			"to the payload. "
 			"Without --json: prints `[drift:timing]` summary lines to "
 			"stderr at the end of the compile."
 		),
@@ -8216,7 +8229,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		default=None,
 		help=(
 			"Write the compile's structured timings as JSON to <path> "
-			"(shape: `{total_wall, phases: {label: seconds}}`).  "
+			"(shape: `{total_wall, phases: {label: seconds}, counts: {label: int}}`).  "
 			"Implies `--timing`.  Intended for parent wrappers "
 			"(`drift build` / `drift deploy`) that want to merge child "
 			"compiler timings into a wrapper-level summary -- avoids "

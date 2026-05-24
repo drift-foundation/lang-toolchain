@@ -1941,8 +1941,10 @@ def _deploy_artifact(
 				_phases.items(), key=lambda kv: (-float(kv[1]), kv[0]),
 			):
 				_c = _counts.get(_k, 0)
+				_vs = float(_v)
+				_pct = (_vs / _total * 100.0) if _total > 0 else 0.0
 				print(
-					f"[drift:timing][{art.name}]   {_k:<28s} = {float(_v):.3f}s  count={_c}",
+					f"[drift:timing][{art.name}]   {_k:<28s} = {_vs:7.3f}s  {_pct:5.1f}%  count={_c}",
 					file=sys.stderr,
 				)
 
