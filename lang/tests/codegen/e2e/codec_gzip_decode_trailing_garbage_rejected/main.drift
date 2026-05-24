@@ -37,12 +37,7 @@ fn main() nothrow -> Int {
 	val valid = codec.gzip_encode(&input);
 
 	// Concatenate valid gzip + 4 trailing bytes (a non-gzip suffix).
-	var corrupted: Array<Byte> = [];
-	var i = 0;
-	while i < valid.len {
-		corrupted.push(valid[i]);
-		i = i + 1;
-	}
+	var corrupted = valid.clone_with_capacity(valid.len + 4);
 	_append_byte(&mut corrupted, 0x41);  // 'A'
 	_append_byte(&mut corrupted, 0x42);  // 'B'
 	_append_byte(&mut corrupted, 0x43);  // 'C'
@@ -79,12 +74,7 @@ fn main() nothrow -> Int {
 	// Also pin the boundary: a SECOND complete gzip member appended
 	// to the first is still trailing garbage from our perspective (we
 	// don't accept member concatenation in v1).
-	var two_members: Array<Byte> = [];
-	var j = 0;
-	while j < valid.len {
-		two_members.push(valid[j]);
-		j = j + 1;
-	}
+	var two_members = valid.clone_with_capacity(valid.len * 2);
 	var k = 0;
 	while k < valid.len {
 		two_members.push(valid[k]);

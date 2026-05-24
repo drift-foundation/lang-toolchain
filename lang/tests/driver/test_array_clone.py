@@ -135,6 +135,79 @@ def test_array_int_clone_and_empty_clone(tmp_path: Path) -> None:
 	)
 
 
+_SOURCE_CLONE_WITH_CAPACITY = """
+module m;
+
+pub fn main() nothrow -> Int {
+	var src: Array<Byte> = [];
+	src.push(cast<Byte>(0x10));
+	src.push(cast<Byte>(0x20));
+	src.push(cast<Byte>(0x30));
+
+	// Clone with extra headroom — every src element lands AND the
+	// returned cap reflects the requested capacity (the entire point
+	// of this method vs plain clone()).
+	val dup_big = src.clone_with_capacity(src.len + 64);
+	if dup_big.len != src.len { return 30; }
+	var i = 0;
+	while i < src.len {
+		if dup_big[i] != src[i] { return 31; }
+		i = i + 1;
+	}
+	// Cap contract: `out.cap >= max(self.len, capacity)` = src.len + 64.
+	// A future regression where clone_with_capacity() silently became plain
+	// clone() (cap == len) would fail right here, even though len/elements
+	// would still match.
+	if dup_big.cap < src.len + 64 { return 32; }
+
+	// Capacity smaller than len degrades to plain clone() behavior:
+	// every element still copies; no truncation; cap floored at len.
+	val dup_small = src.clone_with_capacity(1);
+	if dup_small.len != src.len { return 33; }
+	if dup_small[0] != src[0] { return 34; }
+	if dup_small[2] != src[2] { return 35; }
+	if dup_small.cap < src.len { return 36; }
+
+	// Zero capacity degrades to clone() (cap floored at len).
+	val dup_zero = src.clone_with_capacity(0);
+	if dup_zero.len != src.len { return 37; }
+	if dup_zero.cap < src.len { return 38; }
+
+	// Negative capacity also degrades to clone() — must not error,
+	// must not under-allocate.
+	val dup_neg = src.clone_with_capacity(-5);
+	if dup_neg.len != src.len { return 39; }
+	if dup_neg.cap < src.len { return 40; }
+
+	// Empty source + non-zero capacity: len stays 0 AND cap honors
+	// the request (this is the case where len/elements alone would
+	// fail to distinguish clone_with_capacity from clone).
+	val empty: Array<Int> = [];
+	val empty_dup = empty.clone_with_capacity(16);
+	if empty_dup.len != 0 { return 41; }
+	if empty_dup.cap < 16 { return 42; }
+
+	// Mutate src; dup_big must not observe the change.
+	src.push(cast<Byte>(0xFF));
+	if dup_big.len == src.len { return 43; }
+
+	return 0;
+}
+"""
+
+
+def test_array_clone_with_capacity(tmp_path: Path) -> None:
+	build, run = _compile_and_run(tmp_path, _SOURCE_CLONE_WITH_CAPACITY)
+	assert build.returncode == 0, (
+		f"compile failed:\n--- stdout ---\n{build.stdout}\n--- stderr ---\n{build.stderr}"
+	)
+	assert run is not None
+	assert run.returncode == 0, (
+		f"program exit {run.returncode} indicates clone_with_capacity failure:\n"
+		f"--- stdout ---\n{run.stdout}\n--- stderr ---\n{run.stderr}"
+	)
+
+
 _SOURCE_STRING_ROUND_TRIP = """
 module m;
 

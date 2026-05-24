@@ -288,12 +288,7 @@ fn _append_name_bytes(out: &mut Array<Byte>, name: &String) nothrow -> Void {
 /// `v5` (same shape but SHA-1).
 pub fn v3(namespace: &Uuid, name: &String) nothrow -> Uuid {
 	val ns_bytes = to_bytes(namespace);
-	var combined: Array<Byte> = [];
-	var i = 0;
-	while i < ns_bytes.len {
-		combined.push(ns_bytes[i]);
-		i = i + 1;
-	}
+	var combined = ns_bytes.clone_with_capacity(ns_bytes.len + name.byte_length());
 	_append_name_bytes(&mut combined, name);
 	var hash = crypto.md5(&combined);
 	_stamp_version_and_variant(&mut hash, 3);
@@ -329,12 +324,7 @@ pub fn v3_from_string(s: &String) nothrow -> Uuid {
 /// nibbles are then stamped per RFC.
 pub fn v5(namespace: &Uuid, name: &String) nothrow -> Uuid {
 	val ns_bytes = to_bytes(namespace);
-	var combined: Array<Byte> = [];
-	var i = 0;
-	while i < ns_bytes.len {
-		combined.push(ns_bytes[i]);
-		i = i + 1;
-	}
+	var combined = ns_bytes.clone_with_capacity(ns_bytes.len + name.byte_length());
 	_append_name_bytes(&mut combined, name);
 	val full_hash = crypto.sha1(&combined);
 	var hash: Array<Byte> = [];

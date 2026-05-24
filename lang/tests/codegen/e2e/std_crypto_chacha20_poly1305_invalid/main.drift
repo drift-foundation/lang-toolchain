@@ -84,12 +84,7 @@ pub fn main() nothrow -> Int {
 
 	// 5. Auth failure: tampered ciphertext
 	val ct_good = _hex_bytes("f7628bd23adce962340b6fd6a0a4d1fe736f29456f");
-	var ct_tampered: Array<Byte> = [];
-	var ti = 0;
-	while ti < ct_good.len {
-		ct_tampered.push(ct_good[ti]);
-		ti = ti + 1;
-	}
+	var ct_tampered = ct_good.clone();
 	ct_tampered[0] = cast<Byte>(cast<Uint>(ct_tampered[0]) ^ cast<Uint>(1));
 	val r5 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &empty, &ct_tampered);
 	match r5 {
@@ -100,12 +95,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// 6. Auth failure: tampered tag
-	var ct_bad_tag: Array<Byte> = [];
-	ti = 0;
-	while ti < ct_good.len {
-		ct_bad_tag.push(ct_good[ti]);
-		ti = ti + 1;
-	}
+	var ct_bad_tag = ct_good.clone();
 	val last_idx = ct_bad_tag.len - 1;
 	ct_bad_tag[last_idx] = cast<Byte>(cast<Uint>(ct_bad_tag[last_idx]) ^ cast<Uint>(1));
 	val r6 = crypto.chacha20_poly1305_decrypt(&good_key, &good_nonce, &empty, &ct_bad_tag);

@@ -109,12 +109,7 @@ const SHA256_K: Array<Uint> = [
 ///
 /// **See also:** `sha384`, `sha512`, `hmac_sha256`.
 pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
-	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
-	var i = 0;
-	while i < bytes.len {
-		msg.push(bytes[i]);
-		i = i + 1;
-	}
+	var msg = bytes.clone_with_capacity(bytes.len + 72);
 	val mlen = msg.len;
 	val bit_len = cast<Uint>(mlen) * cast<Uint>(8);
 	msg.push(cast<Byte>(128));
@@ -223,11 +218,7 @@ pub fn hmac_sha256(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> 
 	if key.len > 64 {
 		effective_key = sha256(key);
 	} else {
-		var ki = 0;
-		while ki < key.len {
-			effective_key.push(key[ki]);
-			ki = ki + 1;
-		}
+		effective_key = key.clone_with_capacity(64);
 	}
 	while effective_key.len < 64 {
 		effective_key.push(cast<Byte>(0));
@@ -262,12 +253,7 @@ pub fn hmac_sha256(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> 
 ///
 /// **See also:** `sha256`, `md5`.
 pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
-	var msg = Array<type Byte>::with_capacity(bytes.len + 72);
-	var i = 0;
-	while i < bytes.len {
-		msg.push(bytes[i]);
-		i = i + 1;
-	}
+	var msg = bytes.clone_with_capacity(bytes.len + 72);
 	val mlen = msg.len;
 	val bit_len = cast<Uint>(mlen) * cast<Uint>(8);
 	msg.push(cast<Byte>(128));
@@ -427,12 +413,7 @@ const SHA512_K: Array<Uint64> = [
 ];
 
 fn _sha512_core(bytes: &Array<Byte>, iv0: Uint64, iv1: Uint64, iv2: Uint64, iv3: Uint64, iv4: Uint64, iv5: Uint64, iv6: Uint64, iv7: Uint64) nothrow -> Array<Uint64> {
-	var msg = Array<type Byte>::with_capacity(bytes.len + 144);
-	var i = 0;
-	while i < bytes.len {
-		msg.push(bytes[i]);
-		i = i + 1;
-	}
+	var msg = bytes.clone_with_capacity(bytes.len + 144);
 	val mlen = msg.len;
 	val bit_len = cast<Uint64>(mlen) * 8u64;
 	msg.push(cast<Byte>(128));
@@ -606,12 +587,7 @@ pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothr
 	var prev: Array<Byte> = [];
 	var counter = 1;
 	while counter <= n {
-		var hmac_input = Array<type Byte>::with_capacity(prev.len + info.len + 1);
-		var pi = 0;
-		while pi < prev.len {
-			hmac_input.push(prev[pi]);
-			pi = pi + 1;
-		}
+		var hmac_input = prev.clone_with_capacity(prev.len + info.len + 1);
 		var ii = 0;
 		while ii < info.len {
 			hmac_input.push(info[ii]);
@@ -678,12 +654,7 @@ fn _chacha20_block(key: &Array<Byte>, counter: Uint, nonce: &Array<Byte>) nothro
 	state.push(_load_u32_le(nonce, 4));
 	state.push(_load_u32_le(nonce, 8));
 
-	var working = Array<type Uint>::with_capacity(16);
-	var ci = 0;
-	while ci < 16 {
-		working.push(state[ci]);
-		ci = ci + 1;
-	}
+	var working = state.clone();
 
 	var round = 0;
 	while round < 10 {
@@ -922,12 +893,7 @@ fn _append_u64_le(out: &mut Array<Byte>, v: Uint64) nothrow -> Void {
 }
 
 fn _poly1305_construct_data(aad: &Array<Byte>, ciphertext: &Array<Byte>) nothrow -> Array<Byte> {
-	var mac_data = Array<type Byte>::with_capacity(aad.len + 16 + ciphertext.len + 16 + 16);
-	var ai = 0;
-	while ai < aad.len {
-		mac_data.push(aad[ai]);
-		ai = ai + 1;
-	}
+	var mac_data = aad.clone_with_capacity(aad.len + 16 + ciphertext.len + 16 + 16);
 	_pad16(&mut mac_data, aad.len);
 	var ci = 0;
 	while ci < ciphertext.len {
@@ -976,12 +942,7 @@ pub fn chacha20_poly1305_encrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &A
 	val mac_data = _poly1305_construct_data(aad, &ciphertext);
 	val tag = _poly1305_mac(&poly_key, &mac_data);
 
-	var out = Array<type Byte>::with_capacity(ciphertext.len + 16);
-	var ci = 0;
-	while ci < ciphertext.len {
-		out.push(ciphertext[ci]);
-		ci = ci + 1;
-	}
+	var out = ciphertext.clone_with_capacity(ciphertext.len + 16);
 	var ti = 0;
 	while ti < 16 {
 		out.push(tag[ti]);
@@ -1095,12 +1056,7 @@ fn _append_u32_le(out: &mut Array<Byte>, x: Uint) nothrow -> Void {
 ///
 /// **See also:** `sha1`, `sha256`.
 pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
-	var msg = Array<type Byte>::with_capacity(data.len + 72);
-	var i = 0;
-	while i < data.len {
-		msg.push(data[i]);
-		i = i + 1;
-	}
+	var msg = data.clone_with_capacity(data.len + 72);
 
 	val orig_len = msg.len;
 	val bit_len = cast<Uint64>(orig_len) * 8u64;
@@ -1136,7 +1092,7 @@ pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
 		var c = c0;
 		var d = d0;
 
-		i = 0;
+		var i = 0;
 		while i < 64 {
 			var f: Uint = cast<Uint>(0);
 			var g = 0;

@@ -231,6 +231,60 @@ implement<T> Array<T> {
 		}
 		return move out;
 	}
+
+	/// Returns an owned element-wise duplicate of this array, with at
+	/// least `capacity` **elements of `T`** reserved up-front.
+	///
+	/// Same element-wise semantics as `clone()`, but takes a single
+	/// allocation when the caller knows the final size needed —
+	/// useful for the common "clone prefix, then append suffix"
+	/// pattern.  Equivalent to `clone()` followed by `reserve(n)`,
+	/// minus the second allocation:
+	///
+	///     // two allocations:
+	///     var msg = bytes.clone();
+	///     msg.reserve(bytes.len + 72);
+	///
+	///     // one allocation:
+	///     var msg = bytes.clone_with_capacity(bytes.len + 72);
+	///
+	/// ### Unit
+	///
+	/// `capacity` is an **element count** (the count of `T`-sized
+	/// slots), not a byte count — matching `with_capacity(n)` and
+	/// `reserve(n)`.  For `Array<Byte>` an element happens to be one
+	/// byte; for `Array<Uint>` or `Array<MyStruct>` it is one
+	/// `T`-sized slot.  The total backing buffer cost is implicitly
+	/// `capacity * sizeof(T)`.
+	///
+	/// ### Floor behavior
+	///
+	/// `capacity` is a *minimum* — the implementation **floors it to
+	/// `self.len`** before allocating.  Passing a value `<= self.len`
+	/// (including zero or negative) is **not an error**: every
+	/// element of `self` still lands in the result, the returned
+	/// `len == self.len`, and the returned `cap >= self.len`.  The
+	/// only thing a too-small `capacity` loses is the single-
+	/// allocation headroom benefit — the method degrades to plain
+	/// `clone()` behavior in that case.
+	///
+	/// **Parameters:**
+	/// - `capacity` — minimum total capacity to reserve, in elements
+	///   of `T`.  Silently floored to `self.len` when smaller.
+	///
+	/// **Returns:** an owned `Array<T>` with the same `len` and
+	/// element sequence as `self`; `cap >= max(self.len, capacity)`.
+	pub fn clone_with_capacity(self: &Array<T>, capacity: Int) nothrow -> Array<T> require T is core.Copy {
+		var need = self.len;
+		if capacity > need { need = capacity; }
+		var out: Array<T> = Array<T>::with_capacity(need);
+		var i = 0;
+		while i < self.len {
+			out.push(self[i]);
+			i = i + 1;
+		}
+		return move out;
+	}
 }
 
 implement<T> iter.SinglePassIterator<&T> for ArrayBorrowIter<T> {

@@ -59,12 +59,7 @@ fn main() nothrow -> Int {
 
 	// 3. CRC mismatch — encode then flip a payload byte in the middle.
 	// The CRC32 at the end won't match -> gzip-bad-data.
-	var corrupted: Array<Byte> = [];
-	var j = 0;
-	while j < full.len {
-		corrupted.push(full[j]);
-		j = j + 1;
-	}
+	var corrupted = full.clone();
 	// Flip one bit in the compressed payload (skip 10-byte header).
 	val midx = 15;
 	val orig = cast<Int>(corrupted[midx]);

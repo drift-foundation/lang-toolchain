@@ -15,10 +15,8 @@ fn _ascii_bytes(s: &String) nothrow -> Array<Byte> {
 }
 
 fn _concat(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Array<Byte> {
-	var out: Array<Byte> = [];
+	var out = a.clone_with_capacity(a.len + b.len);
 	var i = 0;
-	while i < a.len { out.push(a[i]); i = i + 1; }
-	i = 0;
 	while i < b.len { out.push(b[i]); i = i + 1; }
 	return move out;
 }
