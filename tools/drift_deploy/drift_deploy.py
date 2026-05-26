@@ -758,6 +758,22 @@ def _merge_and_cleanup_child_timings(
 	sink = _events.current_sink()
 	if sink is not None and isinstance(child_summary, dict):
 		sink.merge_subprocess_timings(prefix, child_summary)
+		# Workload counters merge under the same prefix
+		# (e.g. `build.compile.*` / `smoke.compile.*`).  Additive: a
+		# retried child contributes both its phase time and its
+		# workload denominators twice, keeping per-unit elapsed
+		# comparable across retries.  Child's `workload_schema` is
+		# forwarded explicitly so a mismatch with the parent sink's
+		# schema is refused at the sink boundary and surfaced via a
+		# `<prefix>.workload_schema_mismatch` marker -- preventing
+		# mislabeled counters when the parent and child run different
+		# toolchain versions.
+		_child_workload = child_summary.get("workload")
+		_child_schema = child_summary.get("workload_schema")
+		if isinstance(_child_workload, dict):
+			sink.merge_subprocess_workload(
+				prefix, _child_workload, sub_schema=_child_schema,
+			)
 
 
 def _build_package(
@@ -1947,6 +1963,25 @@ def _deploy_artifact(
 					f"[drift:timing][{art.name}]   {_k:<28s} = {_vs:7.3f}s  {_pct:5.1f}%  count={_c}",
 					file=sys.stderr,
 				)
+			# Workload block (`[drift:workload][<art>] ...`) follows the
+			# timing block when the merged sink carries any workload
+			# counters.  Keys appear under `build.compile.*` /
+			# `smoke.compile.*` prefixes courtesy of
+			# `_merge_and_cleanup_child_timings` -- which now merges
+			# the child's workload dict via the sibling
+			# `merge_subprocess_workload`.
+			_workload = dict(_summary.get("workload", {}))
+			if _workload:
+				_schema = int(_summary.get("workload_schema", 0))
+				print(
+					f"[drift:workload][{art.name}] workload_schema={_schema}",
+					file=sys.stderr,
+				)
+				for _wk in sorted(_workload.keys()):
+					print(
+						f"[drift:workload][{art.name}]   {_wk}={int(_workload[_wk])}",
+						file=sys.stderr,
+					)
 
 
 def _deploy_artifact_impl(

@@ -1548,6 +1548,25 @@ def _emit_codegen(
 					elem_td = unit.type_table.get(td.param_types[0])
 					if elem_td.name == "String":
 						argv_wrapper = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
+	# Codegen input snapshot: what is ACTUALLY being lowered, after
+	# reachability filtering / wrapper synthesis upstream changed the
+	# MIR-pass output.  Recorded here (not from `mir.processed.*`)
+	# because `_emit_codegen` may receive a smaller or larger set than
+	# `compile_stubbed_funcs` produced.  Add-mode: every codegen.lower
+	# invocation contributes its denominator alongside the phase
+	# time.  Gated on sink presence so the no-`--timing` path pays
+	# nothing for the MIR-shape traversal.  See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_cg_blocks = 0
+		_cg_instructions = 0
+		for _fn in unit.mir_funcs.values():
+			_blocks = getattr(_fn, "blocks", None) or {}
+			_cg_blocks += len(_blocks)
+			for _blk in _blocks.values():
+				_cg_instructions += len(getattr(_blk, "instructions", []) or [])
+		_events.add_workload("codegen.input_mir.functions", len(unit.mir_funcs))
+		_events.add_workload("codegen.input_mir.blocks", _cg_blocks)
+		_events.add_workload("codegen.input_mir.instructions", _cg_instructions)
 	with _events.timed("codegen.lower"):
 		module = lower_module_to_llvm(
 			unit.mir_funcs,
@@ -1567,7 +1586,18 @@ def _emit_codegen(
 			entry_sym = unit.rename_map.get(unit.entry_id, function_symbol(unit.entry_id))
 			module.emit_entry_wrapper(entry_sym, **unit.wrapper_dep_flags)
 	with _events.timed("codegen.render"):
-		return module.render()
+		_ir_text = module.render()
+	# Final artifact size: UTF-8 byte length of the rendered IR text.
+	# Set-mode -- this is a snapshot of the produced artifact, not
+	# repeated work.  If a session intentionally renders multiple
+	# modules under one timing umbrella, the LAST render wins; callers
+	# that want per-module IR bytes should run separate sessions.
+	# Gated on sink presence so the no-`--timing` path skips the
+	# UTF-8 re-encode of the entire IR (large for real builds; the
+	# render itself returned `str` already).  See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_events.set_workload("llvm.ir.utf8_bytes", len(_ir_text.encode("utf-8")))
+	return _ir_text
 
 
 def _called_funcs_in_mir(fn: M.MirFunc) -> set[FunctionId]:
@@ -5245,6 +5275,29 @@ def compile_stubbed_funcs(
 				norm_block = normalized_hirs_by_id.get(fn_id)
 				import sys as _dbg_sys
 				print(f"[drift:debug][local_types_trace] fn={fn_id} pre_checker_body_shared={block is norm_block}", file=_dbg_sys.stderr)
+	# Processed-work counter (add semantics): count of generic
+	# FUNCTION instantiations actually emitted by the just-exited
+	# `generic_instantiation` phase.  `inst_cache` is the
+	# authoritative tracker (entries with status == "emitted" are the
+	# ones the phase synthesized into concrete bodies; "pending" /
+	# "failed" / never-drained entries are excluded).  Recorded
+	# OUTSIDE the `with _events.timed("generic_instantiation"):`
+	# scope so the telemetry walk's cost doesn't inflate the very
+	# phase time it's meant to normalize -- matches the MIR / IR
+	# capture sites which all sit outside their measured phases.
+	# Add-mode so a session that re-enters this phase via a repeated
+	# `compile_stubbed_funcs` invocation accumulates the denominator
+	# alongside the accumulated phase time.  Gated on sink presence
+	# so the no-`--timing` path skips the `inst_cache` walk entirely.
+	# See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_emitted_inst_count = sum(
+			1 for _h in inst_cache.values()
+			if getattr(_h, "status", None) == "emitted"
+		)
+		_events.add_workload(
+			"generics.instances_emitted", _emitted_inst_count,
+		)
 	with _timed("checker"):
 		checked = Checker.run_by_id(
 			check_inputs,
@@ -7570,6 +7623,32 @@ def compile_stubbed_funcs(
 		)
 	_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
 
+	# Processed-work counters: the MIR shape this CSF invocation
+	# produced, recorded once just before returning successfully.
+	# Add-mode so that two CSF invocations in one session contribute
+	# both their phase time AND their work counters twice (timing and
+	# denominator scale together).  Fatal errors above raise out via
+	# `raise ValueError(...)` and skip this record -- which is
+	# correct: a failed CSF didn't produce a stable MIR shape.
+	# `mir.processed.*` is the input denominator for the MIR pipeline
+	# (hir_to_mir, cleanup, throw_checks); the codegen pipeline gets
+	# its OWN `codegen.input_mir.*` counters at the lowering call
+	# sites because reachability filtering / wrapper synthesis can
+	# change the codegen unit.  Gated on sink presence so the
+	# no-`--timing` path skips the whole-MIR traversal (one of the
+	# largest per-call costs on real builds).  See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_mir_blocks = 0
+		_mir_instructions = 0
+		for _fn in mir_funcs_by_id.values():
+			_blocks = getattr(_fn, "blocks", None) or {}
+			_mir_blocks += len(_blocks)
+			for _blk in _blocks.values():
+				_mir_instructions += len(getattr(_blk, "instructions", []) or [])
+		_events.add_workload("mir.processed.functions", len(mir_funcs_by_id))
+		_events.add_workload("mir.processed.blocks", _mir_blocks)
+		_events.add_workload("mir.processed.instructions", _mir_instructions)
+
 	if return_checked and return_ssa:
 		return mir_funcs_by_id, checked, ssa_funcs
 	if return_checked:
@@ -7764,6 +7843,24 @@ def compile_to_llvm_ir_for_tests(
 		_assert_all_phased(checked.diagnostics, context="compile_to_llvm_ir_for_tests")
 		return "", checked
 
+	# Codegen input snapshot: same shape as the CLI path's
+	# `_emit_codegen` site -- count the MIR funcs/blocks/instructions
+	# actually being passed to LLVM lowering.  Add-mode keeps
+	# denominators paired with phase time across repeated test-helper
+	# invocations under one EventSink.  Gated so test runs without a
+	# caller-installed sink skip the whole-MIR traversal.  See
+	# `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_cg_blocks_t = 0
+		_cg_instructions_t = 0
+		for _fn in mir_funcs.values():
+			_blocks_t = getattr(_fn, "blocks", None) or {}
+			_cg_blocks_t += len(_blocks_t)
+			for _blk_t in _blocks_t.values():
+				_cg_instructions_t += len(getattr(_blk_t, "instructions", []) or [])
+		_events.add_workload("codegen.input_mir.functions", len(mir_funcs))
+		_events.add_workload("codegen.input_mir.blocks", _cg_blocks_t)
+		_events.add_workload("codegen.input_mir.instructions", _cg_instructions_t)
 	try:
 		with _events.timed("codegen.lower"):
 			module = lower_module_to_llvm(
@@ -7813,7 +7910,15 @@ def compile_to_llvm_ir_for_tests(
 		entry_sym = rename_map.get(entry_id, function_symbol(entry_id) if entry_id is not None else f"{entry_module}::{entry_name}")
 		module.emit_entry_wrapper(entry_sym, install_process_preamble=install_process_preamble_available, root_vt=root_vt)
 	with _events.timed("codegen.render"):
-		return module.render(), checked
+		_ir_text_t = module.render()
+	# Final artifact size (same shape as the CLI path's `_emit_codegen`
+	# site).  Set-mode snapshot of the produced IR for this helper
+	# invocation; if a session intentionally renders multiple modules
+	# under one umbrella, last render wins.  Gated to skip the IR
+	# UTF-8 re-encode on the no-sink path.  See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_events.set_workload("llvm.ir.utf8_bytes", len(_ir_text_t.encode("utf-8")))
+	return _ir_text_t, checked
 
 
 def _fake_decls_from_hirs(hirs: Mapping[FunctionId, H.HBlock]) -> list[object]:
@@ -8072,6 +8177,13 @@ def _print_text_timing_summary(summary: dict) -> None:
 	**Percentages can sum above 100%** because nested labels overlap
 	-- read each as "percent of total wall represented by this
 	label," not a partition.
+
+	When the sink recorded any workload counters, a `[drift:workload]`
+	block follows the timing block.  Format is one line per key in
+	stable alphabetical order so CI greps stay stable across releases.
+	`workload_schema=N` is printed first so readers can detect a
+	schema bump before parsing keys.  See `docs/timing.md` for the
+	key inventory.
 	"""
 	import sys as _sys
 	total = float(summary.get("total_wall", 0.0))
@@ -8089,6 +8201,15 @@ def _print_text_timing_summary(summary: dict) -> None:
 			f"[drift:timing]   {label:<24s} = {_secs:7.3f}s  {_pct:5.1f}%  count={c}",
 			file=_sys.stderr,
 		)
+	workload: dict[str, int] = dict(summary.get("workload", {}))
+	if workload:
+		schema = int(summary.get("workload_schema", 0))
+		print(f"[drift:workload] workload_schema={schema}", file=_sys.stderr)
+		for key in sorted(workload.keys()):
+			print(
+				f"[drift:workload]   {key}={int(workload[key])}",
+				file=_sys.stderr,
+			)
 
 
 def _emit_compile_json(payload: dict) -> None:
@@ -9019,6 +9140,27 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			loaded_pkgs.append(_loaded)
 		_events.phase_end("trust_verify_loop")
 
+		# Compilation-unit snapshot: loaded artifacts + their module
+		# counts BEFORE pkg_resolve runs version-selection / dedup.
+		# Captures what trust verification accepted; the post-resolve
+		# input to downstream linking would differ if dedup drops
+		# duplicates -- a future `packages.post_resolve.*` slice can
+		# be added under additive new keys without a schema bump.
+		# Gated on sink presence so the no-`--timing` path skips both
+		# the per-package `modules_by_id` sum and the two
+		# `ContextVar.get()` lookups.  See `docs/timing.md`.
+		if _events.current_sink() is not None:
+			_events.set_workload(
+				"packages.pre_resolve.artifacts", len(loaded_pkgs),
+			)
+			_events.set_workload(
+				"packages.pre_resolve.modules",
+				sum(
+					len(getattr(_pkg, "modules_by_id", {}) or {})
+					for _pkg in loaded_pkgs
+				),
+			)
+
 		# `pkg_resolve` covers version selection, transitive sanity,
 		# dedup, ABI checks, and external module / signature / schema
 		# extraction over the loaded_pkgs set.  Heavy on large
@@ -9534,6 +9676,16 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	if prelude_injected:
 		_inject_prelude(signatures, fn_ids_by_name, type_table)
 	_events.phase_end("flatten_post_parse")
+	# Compilation-unit snapshot: post-flatten module/function/signature
+	# shape.  Combined user+stdlib for v1 (the source.input.* /
+	# source.implicit_stdlib.* split already exposes the bytes/token
+	# breakdown).  Gated on sink presence so the no-`--timing` path
+	# does not even pay for the three `len()` calls + three
+	# `ContextVar.get()` lookups.  See `docs/timing.md`.
+	if _events.current_sink() is not None:
+		_events.set_workload("hir.modules", len(modules))
+		_events.set_workload("hir.functions", len(func_hirs))
+		_events.set_workload("hir.signatures", len(signatures))
 	func_hirs_by_id = func_hirs
 	base_signatures_by_id = MappingProxyType(dict(signatures))
 	derived_signatures_by_id: dict[FunctionId, FnSignature] = {}

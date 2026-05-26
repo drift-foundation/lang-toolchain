@@ -17,6 +17,7 @@ from lark.exceptions import UnexpectedInput
 from . import parser as _parser
 from . import ast as parser_ast
 from lang.driftc.stage0 import ast as s0
+from lang.driftc import _events as _events
 from lang.driftc.stage1 import AstToHIR
 from lang.driftc.stage1.call_info import IntrinsicKind
 from lang.driftc import stage1 as H
@@ -2492,10 +2493,44 @@ def parse_drift_workspace_to_hir(
 	def _effective_module_id(p: parser_ast.Program) -> str:
 		return getattr(p, "module", None) or "main"
 
+	# Workload classification: explicit compile inputs vs files the
+	# driver implicitly appended from `stdlib_root`.  `user_path_set`
+	# was snapshotted ABOVE before stdlib expansion, so membership is
+	# the authoritative split (no path heuristics).  Tokens are
+	# tallied only for files that successfully parse -- failed files
+	# contribute their bytes/files but not tokens, since
+	# `_PARSER.parse(...)` raised before producing a tree.  See
+	# `docs/timing.md`.
+	#
+	# Cheap-disabled-path contract: the per-file `path.resolve()` /
+	# `source.encode("utf-8")` / per-class accumulation cost is paid
+	# ONLY when a workload sink is installed.  Without `--timing`,
+	# `_collect_workload` stays False and the parse loop skips every
+	# counter side-effect (the parse and `source_manager.add` already
+	# read+keep the source; the workload path adds nothing extra in
+	# that case).
+	_collect_workload = _events.current_sink() is not None
+	_src_input_files = 0
+	_src_input_bytes = 0
+	_src_input_tokens = 0
+	_src_stdlib_files = 0
+	_src_stdlib_bytes = 0
+	_src_stdlib_tokens = 0
+
 	# Parse all files first.
 	parsed: list[tuple[Path, parser_ast.Program]] = []
 	for path in paths:
 		source = path.read_text()
+		_is_input_file = False
+		if _collect_workload:
+			_is_input_file = path.resolve() in user_path_set
+			_src_bytes = len(source.encode("utf-8"))
+			if _is_input_file:
+				_src_input_files += 1
+				_src_input_bytes += _src_bytes
+			else:
+				_src_stdlib_files += 1
+				_src_stdlib_bytes += _src_bytes
 		file_id = source_manager.add(str(path), source)
 		try:
 			prog = _parser.parse_program(source, filename=str(path), file_id=file_id)
@@ -2525,7 +2560,34 @@ def parse_drift_workspace_to_hir(
 			)
 			diagnostics.append(_p_diag(message=message, severity="error", span=span, code=code))
 			continue
+		# Tokens are stamped onto prog by `parse_program` ONLY when a
+		# sink is installed -- mirror that gate so we don't read a
+		# never-set attribute or do per-file classification work on
+		# the no-sink path.
+		if _collect_workload:
+			_tok = int(getattr(prog, "_parse_tree_token_count", 0))
+			if _is_input_file:
+				_src_input_tokens += _tok
+			else:
+				_src_stdlib_tokens += _tok
 		parsed.append((path, prog))
+
+	# Workload snapshot: emit AFTER the parse loop completes so every
+	# downstream return path (including the parse-error short-circuit
+	# below) carries the observed source-side counters.  Gated by the
+	# same sink check used above so the no-sink path skips the six
+	# `set_workload` calls entirely (each is itself a cheap no-op, but
+	# avoiding the six `ContextVar.get()` lookups keeps the cost
+	# stratum lower-bounded by "nothing").
+	if _collect_workload:
+		_events.set_workload("source.input.files", _src_input_files)
+		_events.set_workload("source.input.utf8_bytes", _src_input_bytes)
+		_events.set_workload("source.input.parse_tree_tokens", _src_input_tokens)
+		_events.set_workload("source.implicit_stdlib.files", _src_stdlib_files)
+		_events.set_workload("source.implicit_stdlib.utf8_bytes", _src_stdlib_bytes)
+		_events.set_workload(
+			"source.implicit_stdlib.parse_tree_tokens", _src_stdlib_tokens,
+		)
 
 	if any(d.severity == "error" for d in diagnostics):
 		_relabel_diagnostics(diagnostics, label_by_path_all)

@@ -829,6 +829,15 @@ def _validate_identifier_lengths(tree: Tree) -> None:
 	is escaped into the LLVM IR text and clang's IR parser rejects the
 	result with an opaque `1 error generated.` message that does not point
 	at the offending source location.
+
+	Cheap-disabled-path companion: this is the no-sink variant.  When a
+	workload sink IS installed, `parse_program` calls the sibling
+	`_validate_identifier_lengths_and_count_tokens` instead so the same
+	walk also tallies parse-tree token leaves for
+	`source.*.parse_tree_tokens`.  Keeping the two as separate functions
+	avoids paying for the `token_count` increment and the Program-side
+	`setattr` on the hot in-process / test-harness path that never
+	enables `--timing`.
 	"""
 	stack: list[object] = [tree]
 	while stack:
@@ -842,12 +851,41 @@ def _validate_identifier_lengths(tree: Tree) -> None:
 				)
 			continue
 		if isinstance(node, Tree):
-			# Iterate children; reverse so the first child is popped first
-			# (matches the order a recursive walk would visit them, which
-			# affects which violation is reported first when there are
-			# multiple).
 			for child in reversed(node.children):
 				stack.append(child)
+
+
+def _validate_identifier_lengths_and_count_tokens(tree: Tree) -> int:
+	"""Same walk as `_validate_identifier_lengths`, plus a tally of
+	`lark.Token` leaves visited.
+
+	Used by `parse_program` ONLY when an `_events` sink is installed
+	(see the workload contract in `docs/timing.md`).  The split keeps
+	the no-sink path free of per-token integer-increment work and
+	the post-build `setattr` on the Program object; the sink path
+	pays for both because the tally is the parser-visible work proxy
+	for `source.*.parse_tree_tokens`.
+
+	Token count is compiler/grammar-version-scoped -- not promised to
+	equal a raw lexical-token count.
+	"""
+	token_count = 0
+	stack: list[object] = [tree]
+	while stack:
+		node = stack.pop()
+		if isinstance(node, Token):
+			token_count += 1
+			if node.type == "NAME" and len(node.value) > PARSER_MAX_IDENTIFIER_LENGTH:
+				loc = _loc_from_token(node)
+				raise ParserIdentifierLengthError(
+					f"identifier length exceeds {PARSER_MAX_IDENTIFIER_LENGTH} (got {len(node.value)})",
+					loc=loc,
+				)
+			continue
+		if isinstance(node, Tree):
+			for child in reversed(node.children):
+				stack.append(child)
+	return token_count
 
 
 def parse_program(source: str, *, filename: str | None = None, file_id: int | None = None) -> Program:
@@ -875,8 +913,29 @@ def parse_program(source: str, *, filename: str | None = None, file_id: int | No
         # Robustness matrix row #12: reject pathologically long identifiers
         # before they reach the AST builder / codegen / clang. The walk is
         # iterative and runs in O(N) over the parse tree.
-        _validate_identifier_lengths(tree)
-        return _build_program(tree)
+        #
+        # Cheap-disabled-path contract (`docs/timing.md`): the workload
+        # token tally is collected only when an `_events` sink is
+        # installed.  Without a sink, the validation walk runs alone --
+        # no per-token integer increment, no Program-side `setattr`.
+        # Single `ContextVar.get()` decides which walk to use.  Lazy
+        # import keeps the parser module free of an unconditional
+        # top-level dependency on the driver-side event subsystem.
+        from lang.driftc import _events as _ev_mod
+        if _ev_mod.current_sink() is not None:
+            token_count = _validate_identifier_lengths_and_count_tokens(tree)
+            prog = _build_program(tree)
+            try:
+                setattr(prog, "_parse_tree_token_count", int(token_count))
+            except (AttributeError, TypeError):
+                # Defensive: Program is a plain dataclass-ish object; setattr
+                # is expected to work, but a stricter __slots__ replacement
+                # in the future shouldn't break the parse path.
+                pass
+        else:
+            _validate_identifier_lengths(tree)
+            prog = _build_program(tree)
+        return prog
     finally:
         _CURRENT_FILE = prev_file
         _CURRENT_FILE_ID = prev_file_id

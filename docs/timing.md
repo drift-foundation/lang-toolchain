@@ -301,3 +301,305 @@ wrapper JSON output.
 **Will the timings be different inside CI vs my laptop?** Yes,
 obviously — please report what you see; "my CI takes 4 minutes" is
 informative even without normalisation.
+
+---
+
+## Workload vector
+
+Elapsed time alone doesn't tell you whether one compile is "harder"
+than another. A small file that triggers heavy generic specialisation
+can take longer than a large file that doesn't, and elapsed time
+across machines (or across releases that re-tune internal phases)
+isn't directly comparable. The **workload vector** is a parallel set
+of machine-neutral counters that lets you reason about *what changed*
+in a compile, not just *how long it took*.
+
+`--timing` populates a `workload` map alongside `phases`/`counts` in
+both the JSON payload and the text summary. A `workload_schema`
+integer ships with it so consumers can detect a semantic break before
+parsing keys.
+
+### Why a vector, not a single complexity score
+
+A single weighted score would mix parser, generic-expansion,
+dependency, and codegen costs using assumptions that change between
+compiler releases. The vector keeps the dimensions separate so you
+can read which one moved:
+
+- Different `source.input.parse_tree_tokens`, similar
+  `mir.processed.instructions` → source/parsing complexity moved,
+  but the actual MIR pipeline saw the same shape of work.
+- Similar tokens, very different `generics.instances_emitted` or
+  `mir.processed.instructions` → specialisation expansion moved.
+- Similar MIR, very different `llvm.ir.utf8_bytes` → lowering /
+  rendering expansion moved.
+- Similar workload on different machines → elapsed-time delta is
+  primarily host/environment.
+
+### Snapshot vs processed-work counters
+
+Two write modes coexist, mirroring how each metric is generated:
+
+- **Snapshot** (`events.set_workload(key, value)`): describes the
+  compilation unit or final artifact once. Last writer wins.
+  Examples: `source.input.utf8_bytes`, `hir.functions`,
+  `llvm.ir.utf8_bytes`.
+- **Processed work** (`events.add_workload(key, delta)`): counts
+  work completed by a timed pass, and **accumulates if the pass
+  runs more than once in a session**. The matching phase time also
+  accumulates — pairing them keeps per-unit elapsed comparable
+  across retries. Examples: `generics.instances_emitted`,
+  `mir.processed.instructions`, `codegen.input_mir.instructions`.
+
+Snapshot keys describe the *thing* being compiled. Processed-work
+keys describe the *work attempted on it* — and both must scale
+together when the work runs twice, otherwise the per-unit
+denominator is wrong.
+
+### v1 key inventory (workload_schema = 1)
+
+Source-side (snapshot). The `source.input.*` / `source.implicit_stdlib.*`
+split is the load-bearing classification: a small file against a
+large stdlib would otherwise look identical to a large file with
+no stdlib backdrop.
+
+- `source.input.files` — explicit compile-input files read
+- `source.input.utf8_bytes` — UTF-8 bytes of explicit inputs
+- `source.input.parse_tree_tokens` — parser-visible tokens from
+  successfully parsed explicit inputs
+- `source.implicit_stdlib.files` — files added by `--stdlib-root`
+  expansion
+- `source.implicit_stdlib.utf8_bytes` — UTF-8 bytes of those files
+- `source.implicit_stdlib.parse_tree_tokens` — tokens from those
+  files
+
+HIR / packages (snapshot). Combined user+stdlib for v1; the
+source-side split above already exposes the per-origin
+breakdown of bytes/tokens.
+
+- `hir.modules`, `hir.functions`, `hir.signatures` — post-flatten
+  compilation-unit shape
+- `packages.pre_resolve.artifacts`, `packages.pre_resolve.modules`
+  — loaded packages and their dependency-module counts as accepted
+  by trust verification, captured BEFORE `pkg_resolve` runs version
+  selection / deduplication. These measure trust-verification input,
+  not the post-dedup compilation input — a future
+  `packages.post_resolve.*` slice can be added under additive new
+  keys without bumping the schema if duplicate-input scenarios
+  become relevant.
+
+Processed work (accumulating):
+
+- `generics.instances_emitted` — count of generic FUNCTION
+  instantiations that the `generic_instantiation` phase actually
+  synthesized into concrete bodies (entries with status `"emitted"`
+  in the phase's `inst_cache`). Pending / failed / never-drained
+  template requests are excluded. This is NOT the post-phase
+  population of the type table's instance dicts: that population
+  also grows from non-generic struct/variant/interface use
+  elsewhere and would overstate what the phase emitted.
+- `mir.processed.functions`, `mir.processed.blocks`,
+  `mir.processed.instructions` — MIR shape produced by each
+  successful `compile_stubbed_funcs` invocation. Denominator for
+  the MIR pipeline phases (`hir_to_mir`, `cleanup_authoring`,
+  `mir_validate`, etc.).
+- `codegen.input_mir.functions`, `codegen.input_mir.blocks`,
+  `codegen.input_mir.instructions` — what is actually being passed
+  to LLVM lowering. Separate from `mir.processed.*` because
+  reachability filtering / wrapper synthesis between MIR and
+  codegen can change the unit. Denominator for `codegen.lower`.
+
+Final artifact (snapshot):
+
+- `llvm.ir.utf8_bytes` — UTF-8 byte length of the rendered IR text.
+
+### Token definition
+
+`source.*.parse_tree_tokens` counts every `lark.Token` leaf in the
+parse tree returned by the Drift parser, after Drift post-lex
+processing and Lark filtering. It is parser-visible work, not raw
+lexical tokens — counts are compiler/grammar-version-scoped (the
+counter is meaningful for comparing two compiles with the same
+toolchain, not for cross-release comparison). A file that fails to
+parse contributes its bytes/files but not its tokens, since the
+parser raised before producing a tree.
+
+### Cross-process aggregation
+
+`drift build` and `drift deploy` collect the child driftc's workload
+the same way they collect phase timings: via the `--timing-out` JSON
+side-channel, merged into the wrapper sink under a prefix.
+
+- `drift build` merges under `compile.*` (e.g.
+  `compile.mir.processed.instructions`).
+- `drift deploy` merges build and smoke compiles separately under
+  `build.compile.*` and `smoke.compile.*`.
+
+Merge is additive under each prefix. If a child compile is invoked
+more than once under the same prefix in one wrapper session (e.g.
+a retried compile that the wrapper re-runs), both its phase time
+and its processed-work denominators accumulate together —
+per-unit elapsed stays comparable across the retried invocations.
+
+The build and smoke compiles inside `drift deploy` are
+deliberately NOT retries of each other — they land under
+**separate** prefixes (`build.compile.*` vs `smoke.compile.*`) so
+the two compiles' workload stays distinguishable in the
+consolidated summary. The additive-accumulation behavior described
+above only applies WITHIN one prefix.
+
+### Schema bumps
+
+Adding a new key under the existing semantics is additive and does
+NOT bump `workload_schema`. Removing a key, renaming one, or
+redefining what a key counts requires bumping the schema and
+shipping a release note.
+
+### Output shape
+
+JSON (`driftc --json --timing`):
+
+```
+{
+  "timings": {
+    "total_wall": 4.213,
+    "phases": { "...": 0.0 },
+    "counts": { "...": 1 },
+    "workload_schema": 1,
+    "workload": {
+      "source.input.parse_tree_tokens": 1840,
+      "source.implicit_stdlib.parse_tree_tokens": 84165,
+      "hir.functions": 1226,
+      "generics.instances_emitted": 103,
+      "mir.processed.instructions": 58806,
+      "codegen.input_mir.instructions": 58808,
+      "llvm.ir.utf8_bytes": 5591847
+    }
+  }
+}
+```
+
+Text (`driftc --timing`):
+
+```
+[drift:timing] total_wall=4.213s
+[drift:timing]   parse  =   1.852s   43.9%  count=1
+...
+[drift:workload] workload_schema=1
+[drift:workload]   codegen.input_mir.instructions=58808
+[drift:workload]   generics.instances_emitted=103
+[drift:workload]   hir.functions=1226
+...
+```
+
+Wrapper (`drift build --timing` / `drift deploy --timing`):
+
+```
+[drift:timing][app] total_wall=12.041s
+[drift:timing][app]   compile.parse  =   1.852s   15.4%  count=1
+...
+[drift:workload][app] workload_schema=1
+[drift:workload][app]   build.compile.mir.processed.instructions=58806
+[drift:workload][app]   smoke.compile.mir.processed.instructions=214
+...
+```
+
+Workload lines are sorted alphabetically by key so CI greps stay
+stable across releases (new keys slot in without disturbing
+existing ones).
+
+### Schema validation across processes
+
+When a wrapper (`drift build` / `drift deploy`) merges a child
+compile's workload, it forwards the child's `workload_schema` field
+explicitly. The merge has four possible outcomes, each producing
+a stable observable in the wrapper's workload output:
+
+**Valid matching schema** — child's `workload_schema` is an
+integer equal to the parent sink's `WORKLOAD_SCHEMA`. Child
+counters merge under `<prefix>.<key>` and no marker is published.
+This is the normal path.
+
+**Schema mismatch** — child's `workload_schema` is a positive
+integer (`>= 1`) but does not match the parent. The merge is
+REFUSED and the wrapper publishes:
+
+```
+<prefix>.workload_schema_mismatch=<child_schema>
+```
+
+The value is the child's reported schema, so operators can identify
+which toolchain version produced the dropped data. Semantics may
+have shifted between toolchain versions; mislabeling counters under
+the wrong schema would contaminate dashboards. To merge across
+schemas deliberately (e.g. backfill from older releases), compare
+schema floors in the analysis code rather than calling the merge
+API.
+
+**Schema missing or malformed** — child's `workload_schema` is
+absent, `null`, not an integer (string, bool, float, dict,
+list — including coercible values like `"1"`, `True`, `1.5`,
+which the strict-type check rejects to prevent silent
+mislabeling), or an integer `< 1` (zero, negative — schemas start
+at 1 and we don't support pre-v1 or negative schema range; such
+values are corruption, not a meaningful alternate schema, and
+routing them to the unknown marker keeps negative numbers out
+of the workload output). The merge is REFUSED and the wrapper
+publishes:
+
+```
+<prefix>.workload_schema_unknown=1
+```
+
+The value is always `1` (a presence flag, not a schema value, since
+no valid schema was reported). This marker signals a wrapper-side
+diagnostic problem, not a normal cross-version situation — every
+producer in this toolchain stamps a valid integer
+`workload_schema`, so an unknown marker indicates either a corrupt
+`--timing-out` JSON, a wrapper bug, or a downstream tool that
+forgot to forward the field. The child's counters were NOT
+merged. Investigate the child's summary JSON when this marker
+appears.
+
+Empty child workload (no counter keys) merges as a no-op with no
+markers, regardless of schema — this is the legitimate "child ran
+but did no workload instrumentation" case.
+
+**Malformed counter value (matching schema)** — the child's
+schema is valid, but one or more counter VALUES are invalid: not
+a strict `int` (`"58806"`, `True`, `1.5`, dict, list, null), or
+an `int` that is negative. Every v1 counter is a count or a byte
+size, so neither type-coerced-int values nor negative values are
+legitimate. The valid entries in the payload merge as usual, the
+invalid entries are dropped, and the wrapper publishes:
+
+```
+<prefix>.workload_payload_invalid=<count>
+```
+
+The value counts merge events that had at least one invalid
+counter (NOT the number of bad counters in a single payload), and
+it accumulates additively across multiple corrupt merges under
+the same prefix — a wrapper that retried a corrupt child twice
+shows `=2`. The marker exists so that a published vector with
+some keys missing is distinguishable from a child that
+legitimately measured fewer dimensions. Without it, a child
+summary like `{"source.input.files": "1",
+"mir.processed.instructions": 58806}` would publish as a valid
+vector with one dimension silently lost — the same
+silent-mislabeling failure mode that schema-level rejection
+guards against. Investigate the child's summary JSON when this
+marker appears; valid producers in this toolchain emit only
+non-negative integer counter values.
+
+### Cost when disabled
+
+Without `--timing`, no sink is installed and the workload path is
+gated at each production collection site: the per-token tally in
+the parser walk, per-source UTF-8 byte counting in
+`parse_drift_workspace_to_hir`, the MIR-shape traversals in
+`compile_stubbed_funcs` and the codegen sites, and the IR UTF-8
+re-encode in `_emit_codegen` all check `events.current_sink()` and
+skip the compute when no sink is installed. The check itself is a
+single `ContextVar.get()` returning `None`. No traversals, no
+allocations, no UTF-8 re-encodes happen on the no-`--timing` path.

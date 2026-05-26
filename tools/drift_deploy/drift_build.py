@@ -763,6 +763,25 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 						wrapper_sink.merge_subprocess_timings(
 							"compile", child_summary,
 						)
+						# Workload counters merge under the SAME
+						# `compile` prefix.  Additive merge: if the
+						# compile retries, both its phase time and
+						# its workload denominators accumulate, so
+						# per-unit elapsed stays comparable.  Child's
+						# `workload_schema` is forwarded explicitly --
+						# a mismatch with the parent sink's schema is
+						# refused at the sink boundary and surfaced
+						# via a `<prefix>.workload_schema_mismatch`
+						# marker (so the wrapper run doesn't publish
+						# mislabeled counters when the child runs a
+						# different toolchain).
+						_child_workload = child_summary.get("workload")
+						_child_schema = child_summary.get("workload_schema")
+						if isinstance(_child_workload, dict):
+							wrapper_sink.merge_subprocess_workload(
+								"compile", _child_workload,
+								sub_schema=_child_schema,
+							)
 				_print_wrapper_timing_summary(
 					art.name, wrapper_sink.timings_summary(),
 				)
@@ -784,7 +803,13 @@ def _print_wrapper_timing_summary(label: str, summary: dict) -> None:
 	of times the label fired) and a percent-of-total column.
 	Percentages can sum above 100% because nested labels overlap;
 	read each as "percent of total wall represented by this label,"
-	not a partition."""
+	not a partition.
+
+	When the merged sink contains workload counters (compiler child
+	merged its `workload` dict under the `compile.*` prefix), a
+	`[drift:workload][<label>]` block follows with one line per key
+	in stable alphabetical order.  See `docs/timing.md` for the key
+	inventory."""
 	total = float(summary.get("total_wall", 0.0))
 	phases = dict(summary.get("phases", {}))
 	counts = dict(summary.get("counts", {}))
@@ -797,6 +822,18 @@ def _print_wrapper_timing_summary(label: str, summary: dict) -> None:
 			f"[drift:timing][{label}]   {k:<28s} = {_v:7.3f}s  {_pct:5.1f}%  count={c}",
 			file=sys.stderr,
 		)
+	workload = dict(summary.get("workload", {}))
+	if workload:
+		schema = int(summary.get("workload_schema", 0))
+		print(
+			f"[drift:workload][{label}] workload_schema={schema}",
+			file=sys.stderr,
+		)
+		for k in sorted(workload.keys()):
+			print(
+				f"[drift:workload][{label}]   {k}={int(workload[k])}",
+				file=sys.stderr,
+			)
 
 
 if __name__ == "__main__":
