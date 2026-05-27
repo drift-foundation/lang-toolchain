@@ -1,0 +1,4 @@
+{
+  "description": "e2e: is_complete is false while cancellation is pending under atomic busy-loop blocker; true after cb finishes; join returns CANCELLED",
+  "exit_code": 0
+}

@@ -1,0 +1,120 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* Path 1: send/recv preserves the Arc and the inner Tracked
+	 * is destructed exactly once when the LAST Arc clone dies. */
+	{
+		var halves = conc.channel<type arc.Arc<Tracked>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+
+		val inner = Tracked(id = 1, destruct_count = ctr.clone());
+		val payload_arc: arc.Arc<Tracked> = arc.arc(inner);
+		val _ = sender.send(payload_arc.clone());
+
+		match receiver.recv() {
+			Ok(got) => {
+				if got.get().id != 1 { return 10; }
+				/* `got` (one Arc clone) drops at arm end → refcount-- */
+			},
+			Err(_) => { return 11; },
+			default => { return 12; }
+		}
+		{ val _ = move payload_arc; }  /* drop the local clone */
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+		/* After the channel's Arcs all drop and our payload_arc
+		 * drops, refcount→0 → Tracked::destroy fires once. */
+	}
+	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n1 != 1 { return 100 + n1; }
+
+	/* Path 2: queued Arc<Tracked> destroyed exactly once on
+	 * receiver drop. */
+	{
+		var halves = conc.channel<type arc.Arc<Tracked>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val a = arc.arc(Tracked(id = 2, destruct_count = ctr.clone()));
+		val b = arc.arc(Tracked(id = 3, destruct_count = ctr.clone()));
+		val _ = sender.send(move a);
+		val _ = sender.send(move b);
+		/* Both Arcs now ONLY in the channel queue (we moved them
+		 * out of local).  Drop receiver — queue drained, each Arc
+		 * refcount drops to 0 → Tracked::destroy fires per id. */
+		{ val _ = move receiver; }
+		/* Send after receiver drop returns CLOSED; moved-in Arc
+		 * dropped on the rejected-send path. */
+		val c = arc.arc(Tracked(id = 4, destruct_count = ctr.clone()));
+		match sender.send(move c) {
+			Err(e) => {
+				if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; }
+			},
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* Expected: previous 1 + 3 new (a, b, c) = 4 */
+	if n2 != 4 { return 200 + n2; }
+
+	/* Path 3: multi-Arc<Sender> producers send unique payloads
+	 * + receiver consumes all → no loss/duplication. */
+	{
+		var halves = conc.channel<type arc.Arc<Tracked>>();
+		val sender_arc = core.arc(halves.take_sender());
+		var receiver = halves.take_receiver();
+		val s_a = sender_arc.clone();
+		val s_b = sender_arc.clone();
+		val s_c = sender_arc.clone();
+		val _ = s_a.get().send(arc.arc(Tracked(id = 100, destruct_count = ctr.clone())));
+		val _ = s_b.get().send(arc.arc(Tracked(id = 200, destruct_count = ctr.clone())));
+		val _ = s_c.get().send(arc.arc(Tracked(id = 300, destruct_count = ctr.clone())));
+		var got_sum: Int = 0;
+		var got_count: Int = 0;
+		while got_count < 3 {
+			match receiver.recv() {
+				Ok(p) => {
+					got_sum = got_sum + p.get().id;
+					got_count = got_count + 1;
+				},
+				Err(_) => { return 30; },
+				default => { return 31; }
+			}
+		}
+		if got_sum != 600 { return 32; }  /* 100+200+300 */
+		{ val _a = move s_a; val _b = move s_b; val _c = move s_c; val _root = move sender_arc; }
+		match receiver.recv() {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 33; } },
+			Ok(_) => { return 34; },
+			default => { return 35; }
+		}
+		{ val _ = move receiver; }
+	}
+	val n3 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* Expected: previous 4 + 3 = 7 */
+	if n3 != 7 { return 300 + n3; }
+
+	return 0;
+}

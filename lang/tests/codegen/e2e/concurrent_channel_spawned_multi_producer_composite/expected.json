@@ -1,0 +1,4 @@
+{
+  "description": "e2e: 3 spawned producer VTs each send a different composite arm through Arc<Sender>; main parks on recv between sends and consumes each",
+  "exit_code": 0
+}

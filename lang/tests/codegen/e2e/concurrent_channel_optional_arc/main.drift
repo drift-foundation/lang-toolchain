@@ -1,0 +1,86 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* Path 1: send/recv Some(Arc<U>) + None cycling */
+	{
+		var halves = conc.channel<type Optional<arc.Arc<Tracked>>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val t1 = arc.arc(Tracked(id = 1, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::Some(move t1));
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::None());
+		val t2 = arc.arc(Tracked(id = 2, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::Some(move t2));
+
+		var some_count: Int = 0;
+		var none_count: Int = 0;
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(p) => {
+					match p {
+						Some(a) => {
+							if a.get().id <= 0 { return 10; }
+							some_count = some_count + 1;
+						},
+						None => { none_count = none_count + 1; },
+						default => { return 11; }
+					}
+				},
+				Err(_) => { return 12; },
+				default => { return 13; }
+			}
+			i = i + 1;
+		}
+		if some_count != 2 or none_count != 1 { return 14; }
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+	}
+	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n1 != 2 { return 100 + n1; }
+
+	/* Path 2: queued Some(Arc) destroyed on receiver drop */
+	{
+		var halves = conc.channel<type Optional<arc.Arc<Tracked>>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val a = arc.arc(Tracked(id = 3, destruct_count = ctr.clone()));
+		val b = arc.arc(Tracked(id = 4, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::Some(move a));
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::None());
+		val _ = sender.send(Optional<type arc.Arc<Tracked>>::Some(move b));
+		{ val _ = move receiver; }
+		val c = arc.arc(Tracked(id = 5, destruct_count = ctr.clone()));
+		match sender.send(Optional<type arc.Arc<Tracked>>::Some(move c)) {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; } },
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* prev 2 + 3 new (a, b queued+drained, c rejected-send) = 5 */
+	if n2 != 5 { return 200 + n2; }
+
+	return 0;
+}

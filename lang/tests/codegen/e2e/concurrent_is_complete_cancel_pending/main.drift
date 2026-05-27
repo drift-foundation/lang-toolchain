@@ -1,0 +1,72 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Sigs {
+	pub started: conc.AtomicBool,
+	pub release: conc.AtomicBool
+}
+
+pub fn main() nothrow -> Int {
+	var b = conc.executor_policy_builder();
+	b.min_threads(1);
+	b.max_threads(1);
+	val cb_exec = b.build_executor();
+
+	val sigs: arc.Arc<Sigs> = arc.arc(Sigs(
+		started = conc.atomic_bool(false),
+		release = conc.atomic_bool(false)
+	));
+	val sigs_cb = sigs.clone();
+
+	val cb: core.Callback0<Int> = core.callback0(
+		| | captures(move sigs_cb) => {
+			atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+			while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+				/* tight spin — no park, no cancellation safe point */
+			}
+			return 42;
+		}
+	);
+	var res = conc.spawn_on(cb_exec, move cb);
+	match res {
+		Ok(v) => {
+			var vt = move v;
+
+			var spins: Int = 0;
+			while !atomic.atomic_load_bool(&sigs.get().started, 1) {
+				val _ = conc.sleep(conc.Duration(millis = 5));
+				spins = spins + 1;
+				if spins > 200 { return 82; }
+			}
+
+			vt.cancel();
+
+			/* cancellation request alone is not completion */
+			if vt.is_complete() { return 1; }
+
+			atomic.atomic_store_bool(&sigs.get().release, true, 2);
+
+			var spins2: Int = 0;
+			while !vt.is_complete() {
+				val _ = conc.sleep(conc.Duration(millis = 5));
+				spins2 = spins2 + 1;
+				if spins2 > 200 { return 83; }
+			}
+
+			match vt.join() {
+				Err(e) => {
+					if e.kind == conc.CONCURRENCY_KIND_CANCELLED { return 0; }
+					return 2;
+				},
+				Ok(_) => { return 3; },
+				default => { return 4; }
+			}
+		},
+		Err(_) => { return 80; },
+		default => { return 81; }
+	}
+}

@@ -40,6 +40,112 @@ blocking an OS thread:
 - Cancellation is cooperative: cancelled-but-started VTs run to completion
   unless the task observes cancellation and returns early.
 
+## Supervised async primitives (`channel<T>` + `is_complete`, 0.33.2)
+
+The supervisor-primitives slice adds two stdlib facilities for the
+bookkeeper-team supervised-async pattern: a typed completion channel
+for the channel-driven reaper shape, and a non-blocking
+terminal-state predicate for the polling-driven reaper shape.
+
+### `channel<T>` — unbounded MPSC typed channel
+
+```drift
+pub fn channel<T>() nothrow -> ChannelHalves<T>
+
+pub struct Sender<T>      // move-only; share via Arc<Sender<T>>
+pub struct Receiver<T>    // move-only; single consumer
+pub struct ChannelHalves<T> {
+    pub sender:   Optional<Sender<T>>,
+    pub receiver: Optional<Receiver<T>>
+}
+
+impl<T> ChannelHalves<T>:
+    fn take_sender(&mut self) -> Sender<T>
+    fn take_receiver(&mut self) -> Receiver<T>
+
+impl<T> Sender<T>:
+    fn send(&self, var v: T) nothrow -> Result<Void, ConcurrencyError>
+
+impl<T> Receiver<T>:
+    fn recv(&mut self) nothrow -> Result<T, ConcurrencyError>
+    fn recv_timeout(&mut self, d: Duration) nothrow -> Result<T, ConcurrencyError>
+```
+
+**Extraction shape.**  Drift does not permit `move self.field`
+partial moves; `channel<T>()` returns a `ChannelHalves<T>` whose
+fields are `Optional<...>` slots, and the `take_*` methods
+`mem.replace` them out.  Calling either `take_*` twice asserts.
+
+**Internals.**  One `Mutex<ChannelState<T>>` protects the entire
+state — `queue: Array<T>`, `sender_closed: Bool`, `receiver_closed:
+Bool` — so `send` / `recv` / sender-close (last `Sender` drop) /
+receiver-close (receiver drop) linearize against each other.  A
+`Condvar` parks blocked receivers; senders signal one after each
+push.
+
+**Close semantics.**
+- Last `Sender<T>` drop (or last `Arc<Sender<T>>` if shared) sets
+  `sender_closed = true` and broadcasts the condvar.  `recv`
+  drains any queued values before returning `Err(CLOSED)`.
+- `Receiver<T>` drop sets `receiver_closed = true` and **detaches**
+  the queued values out of the channel state under the mutex via
+  `mem.replace` (O(1) array-handoff pointer swap — no user-code
+  execution while the lock is held).  The lock is then released,
+  and the detached local array drops at fn-exit, running each
+  queued `T`'s `Destructible` **outside** the channel state mutex.
+  This is the load-bearing detach: a queued `T` whose destructor
+  releases the last `Arc<Sender<T>>` for this channel (or
+  otherwise re-enters the channel) must not execute under the
+  state mutex, or `Sender::destroy` would spin-CAS forever trying
+  to re-acquire it.  No signal needed in v1 (unbounded channel
+  has no blocked senders).  Subsequent `send` returns
+  `Err(CLOSED)`; the moved-in `var v: T` is dropped at fn-exit
+  via T's `Destructible`.
+
+**No `T` bound in v1.**  The channel transfers ownership of each
+`T`, not clones — `Share` is the wrong gate.  A `T: Send` trait
+when one exists will be the correct constraint; until then,
+`channel<T>()` publishes with no bound.
+
+**No bounded buffer, `try_send` / `try_recv`, `select`, or
+`detach` in v1.**  These can be added later if a consumer asks;
+the unbounded MPSC shape covers the bookkeeper-team's
+supervised-reaper pattern (one send per completed worker).
+
+### `is_complete` — non-blocking terminal-state predicate
+
+```drift
+impl<T> VirtualThread<T>: fn is_complete(&self) nothrow -> Bool
+impl<T> Future<T>:        fn is_complete(&self) nothrow -> Bool
+```
+
+Returns `true` iff the handle has reached a terminal state:
+- `joined == true` (handle already consumed by `.join`), OR
+- `submit_error != 0` (deferred error queued to surface from
+  `.join`), OR
+- `handle == 0` (out-of-band runtime teardown), OR
+- `thread.vt_is_completed(handle) != 0` (runtime has marked the
+  task complete).
+
+Returns `false` while the task is still running, **including** the
+case where `.cancel()` has been requested but the runtime has not
+yet observed the task complete — a cancellation *request* is not
+completion.  This avoids the silent false-positive in a polling
+reaper that would call `.join()` on a cancelled-but-still-running
+handle.
+
+**Canonical usage** (polling reaper, alternative to channel-driven):
+
+```drift
+while !vt.is_complete() {
+    val _ = conc.sleep(conc.Duration(millis = 1));
+}
+match vt.join() {
+    Ok(v)  => { /* completed normally */ },
+    Err(e) => { /* CANCELLED, FAILED, etc. */ }
+}
+```
+
 ## VirtualThread result-ownership protocol (Drift-side, 0.33.1)
 
 The `VirtualThread<T>` value's `state` field is an

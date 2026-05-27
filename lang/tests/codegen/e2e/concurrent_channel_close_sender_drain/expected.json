@@ -1,0 +1,4 @@
+{
+  "description": "e2e: channel drains queue before reporting CLOSED",
+  "exit_code": 60
+}

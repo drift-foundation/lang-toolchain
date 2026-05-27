@@ -63,7 +63,11 @@ export {
 	default_executor,
 	set_default_executor,
 	ProcessSignal,
-	await_signal
+	await_signal,
+	Sender,
+	Receiver,
+	ChannelHalves,
+	channel
 };
 
 // Source compatibility for `Arc<T>` / `arc()`.  These moved to
@@ -976,6 +980,368 @@ fn _unpark_all(claimed: &Array<core.Arc<PoolWaiter>>) nothrow -> Void {
 }
 
 
+// ─── channel<T> — supervised async completion notification ───────────
+//
+// Unbounded multi-producer / single-consumer typed channel.
+// Closure semantics:
+//   * Sender dropped (last `Arc<Sender<T>>` ref gone if shared)
+//     → `sender_closed = true`; blocked `recv` wakes with CLOSED
+//     after draining queued values.
+//   * Receiver dropped → `receiver_closed = true`; future `send`
+//     calls return CLOSED; any queued undelivered values are
+//     destroyed in-place (run their `Destructible`).
+//
+// All state (queue + flags) lives under one mutex.  This linearizes
+// send / recv / sender-close / receiver-close against each other —
+// see plan §2.1 for the linearization argument that closes the
+// receiver-close-vs-send race.  No `try_send` / `try_recv` / `len()`
+// / bounded buffering / `select` in v1.
+
+struct ChannelState<T> {
+	queue: Array<T>,
+	sender_closed: Bool,
+	receiver_closed: Bool
+}
+
+struct ChannelInner<T> {
+	state: Mutex<ChannelState<T>>,
+	not_empty: Condvar
+}
+
+/// Send-side handle for a `channel<T>()`.  Move-only.  Share across
+/// multiple producers via `core.Arc<Sender<T>>`.  When the last
+/// `Sender<T>` instance is dropped (or its last `Arc` reference),
+/// the channel's send-side closes: any blocked `recv` wakes with
+/// `Err(CLOSED)` once the queue is empty; later sends — there
+/// won't be any if you respect ownership — observe a closed
+/// receiver and return `Err(CLOSED)`.
+///
+/// **See also:** `channel`, `Receiver`, `Sender.send`.
+pub struct Sender<T> {
+	inner: core.Arc<ChannelInner<T>>
+}
+
+/// Receive-side handle for a `channel<T>()`.  Move-only and
+/// single-consumer (do NOT share through `Arc`; only one receiver
+/// per channel).  Dropping the receiver closes the receive side:
+/// any subsequent `send` returns `Err(CLOSED)`, and any values
+/// currently queued are destroyed in-place.
+///
+/// **See also:** `channel`, `Sender`, `Receiver.recv`.
+pub struct Receiver<T> {
+	inner: core.Arc<ChannelInner<T>>
+}
+
+/// Return shape for `channel<T>()`.  Drift does not allow
+/// `move self.field` partial moves, so the halves live in
+/// `Optional<...>` slots and are extracted via the
+/// `take_sender` / `take_receiver` methods that `mem.replace`
+/// them out:
+///
+/// ```drift
+/// var halves = conc.channel<type Int>();
+/// var sender = halves.take_sender();
+/// var receiver = halves.take_receiver();
+/// ```
+///
+/// Each `take_*` may be called at most once.  Calling either a
+/// second time aborts via `assert` — the user has already moved
+/// the half out and the slot is `None`.
+pub struct ChannelHalves<T> {
+	pub sender: Optional<Sender<T>>,
+	pub receiver: Optional<Receiver<T>>
+}
+
+// Sentinel "closed" channel used as the unreachable-return value
+// from the asserting `take_*` methods.  Building a fresh closed
+// channel makes the type checker happy without exposing any
+// user-observable garbage: even if the assert were ever bypassed,
+// the returned sender/receiver would refuse all operations with
+// `CLOSED`.
+fn _closed_channel_inner<T>() nothrow -> core.Arc<ChannelInner<T>> {
+	var empty_q: Array<T> = [];
+	var st = ChannelState<type T>(
+		queue = move empty_q,
+		sender_closed = true,
+		receiver_closed = true
+	);
+	var ci = ChannelInner<type T>(
+		state = mutex(move st),
+		not_empty = condvar()
+	);
+	return core.arc(move ci);
+}
+
+implement<T> ChannelHalves<T> {
+	/// Moves the `Sender<T>` half out of the `ChannelHalves`.
+	/// **Asserts** that the sender has not already been taken.
+	/// Typical use immediately after `channel<T>()`:
+	///
+	/// ```drift
+	/// var halves = conc.channel<type Int>();
+	/// var sender = halves.take_sender();
+	/// var receiver = halves.take_receiver();
+	/// ```
+	pub fn take_sender(self: &mut ChannelHalves<T>) nothrow -> Sender<T> {
+		var taken = mem.replace(
+			&mut self.sender,
+			Optional<type Sender<T>>::None()
+		);
+		match taken {
+			Some(s) => { return move s; },
+			None => {
+				assert(false, "ChannelHalves.take_sender called twice");
+				return Sender<type T>(inner = _closed_channel_inner<type T>());
+			},
+			default => {
+				return Sender<type T>(inner = _closed_channel_inner<type T>());
+			}
+		}
+	}
+
+	/// Moves the `Receiver<T>` half out of the `ChannelHalves`.
+	/// **Asserts** that the receiver has not already been taken.
+	pub fn take_receiver(self: &mut ChannelHalves<T>) nothrow -> Receiver<T> {
+		var taken = mem.replace(
+			&mut self.receiver,
+			Optional<type Receiver<T>>::None()
+		);
+		match taken {
+			Some(r) => { return move r; },
+			None => {
+				assert(false, "ChannelHalves.take_receiver called twice");
+				return Receiver<type T>(inner = _closed_channel_inner<type T>());
+			},
+			default => {
+				return Receiver<type T>(inner = _closed_channel_inner<type T>());
+			}
+		}
+	}
+}
+
+/// Constructs a fresh unbounded `channel<T>` and returns its
+/// sender / receiver halves bound together in a `ChannelHalves<T>`.
+///
+/// **Move-only halves.**  The returned `Sender<T>` and `Receiver<T>`
+/// are not `Copy` — use `core.arc(sender)` to share the send side
+/// across multiple producers.  Cloning the receiver is not
+/// supported (single-consumer channel).
+///
+/// **Closure semantics:**
+///   * The last `Sender<T>` drop marks the send side closed;
+///     `recv` drains any pending values before returning
+///     `Err(CLOSED)`.
+///   * The `Receiver<T>` drop marks the receive side closed; any
+///     subsequent `send` returns `Err(CLOSED)`, and the receiver's
+///     destructor drains and destroys any undelivered queued
+///     values.
+///
+/// **No `T: Share` bound in v1.**  The channel transfers
+/// ownership of each `T` from sender to receiver — that's a move,
+/// not a clone, so `Share` is not the right gate.  A `T: Send`
+/// trait (when one exists) would be the appropriate constraint;
+/// until then, the channel publishes with no `T` bound.
+///
+/// **See also:** `Sender`, `Receiver`, `ChannelHalves`,
+/// `Sender.send`, `Receiver.recv`, `Receiver.recv_timeout`.
+pub fn channel<T>() nothrow -> ChannelHalves<T> {
+	var initial_queue: Array<T> = [];
+	var st = ChannelState<type T>(
+		queue = move initial_queue,
+		sender_closed = false,
+		receiver_closed = false
+	);
+	var inner = ChannelInner<type T>(
+		state = mutex(move st),
+		not_empty = condvar()
+	);
+	var arc_inner = core.arc(move inner);
+	val send_side = Sender<type T>(inner = arc_inner.clone());
+	val recv_side = Receiver<type T>(inner = move arc_inner);
+	return ChannelHalves<type T>(
+		sender = Optional<type Sender<T>>::Some(move send_side),
+		receiver = Optional<type Receiver<T>>::Some(move recv_side)
+	);
+}
+
+implement<T> Sender<T> {
+	/// Enqueues `v` on the channel.  Linearizes through the
+	/// channel's state mutex.
+	///
+	/// **Returns:** `Ok(void)` when the value is enqueued.
+	/// `Err(ConcurrencyError(kind = CLOSED))` if the receiver has
+	/// already been dropped — the moved-in `v` is destroyed in the
+	/// return path (its `Destructible` runs as the binding goes
+	/// out of scope).
+	pub fn send(self: &Sender<T>, var v: T) nothrow -> core.Result<Void, ConcurrencyError> {
+		{
+			var guard = self.inner.get().state.lock();
+			val s = guard.get_mut();
+			if s.receiver_closed {
+				// `v` drops at fn-exit; `T::destroy` runs.
+				return core.Result::Err(ConcurrencyError(
+					kind = CONCURRENCY_KIND_CLOSED,
+					code = -3
+				));
+			}
+			s.queue.push(move v);
+		}
+		self.inner.get().not_empty.signal_one();
+		return core.Result::Ok(core.void_value());
+	}
+}
+
+implement<T> core.Destructible for Sender<T> {
+	/// Closes the send side.  Marks `sender_closed = true` under the
+	/// state mutex and wakes all blocked receivers via the
+	/// `not_empty` Condvar so they can observe the closed flag and
+	/// return `Err(CLOSED)` once the queue is drained.
+	pub fn destroy(var self: Sender<T>) nothrow -> Void {
+		{
+			var guard = self.inner.get().state.lock();
+			val s = guard.get_mut();
+			s.sender_closed = true;
+		}
+		self.inner.get().not_empty.signal_all();
+		// `self.inner` Arc clone drops at fn-exit; when the
+		// Receiver's Arc clone also drops, ChannelInner dies and
+		// any remaining queue contents are destroyed via Array's
+		// own Destructible.
+	}
+}
+
+implement<T> Receiver<T> {
+	/// Blocks until a value is available or the send side closes.
+	///
+	/// **Returns:** `Ok(T)` with the next queued value.
+	/// `Err(ConcurrencyError(kind = CLOSED))` only when the queue
+	/// is empty AND the last sender has dropped.  Spurious wakes
+	/// are tolerated: the loop re-checks queue/closed state on
+	/// every wake.
+	pub fn recv(self: &mut Receiver<T>) nothrow -> core.Result<T, ConcurrencyError> {
+		var guard = self.inner.get().state.lock();
+		while true {
+			{
+				val s = guard.get_mut();
+				if s.queue.len > 0 {
+					var v = s.queue.remove(0);
+					return core.Result::Ok(move v);
+				}
+				if s.sender_closed {
+					return core.Result::Err(ConcurrencyError(
+						kind = CONCURRENCY_KIND_CLOSED,
+						code = -3
+					));
+				}
+			}
+			val res = self.inner.get().not_empty.wait(&mut guard);
+			match res {
+				Err(e) => { return core.Result::Err(e); },
+				Ok(_) => { }
+			}
+		}
+		// Unreachable; appease type checker.
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_CLOSED,
+			code = -3
+		));
+	}
+
+	/// Bounded variant of `recv`.  Returns
+	/// `Err(ConcurrencyError(kind = TIMEOUT))` if no value arrives
+	/// before `d` elapses.  Same drain-then-CLOSED contract as
+	/// `recv` when the senders are gone.
+	pub fn recv_timeout(self: &mut Receiver<T>, d: Duration) nothrow -> core.Result<T, ConcurrencyError> {
+		var ok = _check_duration(d);
+		match ok {
+			Err(err) => { return core.Result::Err(err); },
+			Ok(_) => { }
+		}
+		val deadline = thread.now_ms() + d.millis;
+		var guard = self.inner.get().state.lock();
+		while true {
+			{
+				val s = guard.get_mut();
+				if s.queue.len > 0 {
+					var v = s.queue.remove(0);
+					return core.Result::Ok(move v);
+				}
+				if s.sender_closed {
+					return core.Result::Err(ConcurrencyError(
+						kind = CONCURRENCY_KIND_CLOSED,
+						code = -3
+					));
+				}
+			}
+			if thread.now_ms() >= deadline {
+				return core.Result::Err(ConcurrencyError(
+					kind = CONCURRENCY_KIND_TIMEOUT,
+					code = -1
+				));
+			}
+			val res = self.inner.get().not_empty.wait_until(&mut guard, deadline);
+			match res {
+				Err(e) => {
+					if e.kind == CONCURRENCY_KIND_TIMEOUT {
+						return core.Result::Err(ConcurrencyError(
+							kind = CONCURRENCY_KIND_TIMEOUT,
+							code = -1
+						));
+					}
+					return core.Result::Err(e);
+				},
+				Ok(_) => { }
+			}
+		}
+		return core.Result::Err(ConcurrencyError(
+			kind = CONCURRENCY_KIND_TIMEOUT,
+			code = -1
+		));
+	}
+}
+
+implement<T> core.Destructible for Receiver<T> {
+	/// Closes the receive side.  Marks `receiver_closed = true`
+	/// under the state mutex, **detaches** the queued values into
+	/// a local array under the same lock, then releases the lock
+	/// and lets the local array drop — every queued value's
+	/// `Destructible` runs *outside* the channel state mutex.
+	///
+	/// **Why detach.**  A queued `T`'s destructor is arbitrary
+	/// user code; in particular it may drop the last
+	/// `Arc<Sender<T>>` for *this* channel (or otherwise call
+	/// back into the channel), which would try to re-acquire the
+	/// same state mutex and deadlock.  Detaching uses
+	/// `mem.replace` to swap the live queue array out for a fresh
+	/// empty array — an O(1) array-handoff pointer swap — so the
+	/// close step under the lock executes no user code.  Each
+	/// queued `T::destroy` runs after the guard scope exits,
+	/// when the detached local array drops at fn-exit.
+	///
+	/// No signal needed in v1 (unbounded channel has no blocked
+	/// senders).
+	pub fn destroy(var self: Receiver<T>) nothrow -> Void {
+		var detached: Array<T> = [];
+		{
+			var guard = self.inner.get().state.lock();
+			val s = guard.get_mut();
+			s.receiver_closed = true;
+			val empty_replacement: Array<T> = [];
+			detached = mem.replace(&mut s.queue, move empty_replacement);
+		}
+		// Lock released here.  `detached` drops at fn-exit; each
+		// `T`'s `Destructible` runs without holding the channel
+		// state mutex.  This is the load-bearing detach: a queued
+		// `T`'s destructor that releases the last `Arc<Sender<T>>`
+		// for *this* channel (or otherwise re-enters the channel)
+		// must NOT execute under the channel state mutex, or it
+		// will deadlock when `Sender::destroy` tries to relock
+		// (Drift's `Mutex` is spin-CAS, so the observable failure
+		// mode is an infinite CPU spin rather than a futex wait).
+	}
+}
+
+
 /// Returns a fresh `ExecutorPolicyBuilder` with conservative defaults
 /// (1 worker thread, no queue limit, immediate timeout, return-busy on
 /// saturation, 256 KiB stack).
@@ -1558,6 +1924,46 @@ implement<T> VirtualThread<T> {
 		}
 		return;
 	}
+
+	/// Non-blocking terminal-state predicate.
+	///
+	/// **Returns:** `true` iff this handle has reached a terminal
+	/// state — `.join` has already consumed it (`joined = true`),
+	/// the original submission failed and the deferred error is
+	/// queued to surface from `.join` (`submit_error != 0`), or
+	/// the runtime has marked the task complete
+	/// (`thread.vt_is_completed(handle) != 0`).  Returns `false`
+	/// while the task is still running, and **also** returns
+	/// `false` for a task that has had `.cancel()` requested but
+	/// has not yet been observed complete by the runtime — a
+	/// cancellation *request* is not completion.
+	///
+	/// **Use:** the polling alternative to a channel-driven
+	/// reaper.  A loop of
+	/// `while !vt.is_complete() { conc.sleep(...); }` followed by
+	/// `vt.join()` is a correctness-safe sweep pattern: every
+	/// non-terminal value is returned from this method as `false`
+	/// (so the caller spins) and every terminal one returns `true`
+	/// (so the caller commits to `.join` without risk of blocking
+	/// forever).
+	///
+	/// **See also:** `VirtualThread.join`, `VirtualThread.cancel`,
+	/// `Future.is_complete`.
+	pub fn is_complete(self: &VirtualThread<T>) nothrow -> Bool {
+		if self.joined {
+			return true;
+		}
+		if self.submit_error != 0 {
+			return true;
+		}
+		if self.handle == 0 {
+			// No live handle and no submit-error sentinel; the
+			// handle was already torn down via an out-of-band
+			// path.  Treat as terminal to avoid an infinite poll.
+			return true;
+		}
+		return thread.vt_is_completed(self.handle) != 0;
+	}
 }
 
 implement<T> core.Destructible for VirtualThread<T> {
@@ -1621,6 +2027,12 @@ implement<T> Future<T> {
 	/// **See also:** `Future.join`, `Future.join_timeout`.
 	pub fn is_done(self: &Future<T>) nothrow -> Bool {
 		return self.vt.joined;
+	}
+
+	/// Method form of `VirtualThread.is_complete`.  Delegates to
+	/// the inner VT; see that method for full semantics.
+	pub fn is_complete(self: &Future<T>) nothrow -> Bool {
+		return self.vt.is_complete();
 	}
 }
 

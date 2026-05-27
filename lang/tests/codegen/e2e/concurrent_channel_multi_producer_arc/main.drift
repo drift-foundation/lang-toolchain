@@ -1,0 +1,43 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+
+pub fn main() nothrow -> Int {
+	var halves = conc.channel<type Int>();
+	val sender_arc: arc.Arc<conc.Sender<Int>> = arc.arc(halves.take_sender());
+	var receiver = halves.take_receiver();
+
+	val a = sender_arc.clone();
+	val b = sender_arc.clone();
+	val c = sender_arc.clone();
+	val _ = a.get().send(1);
+	val _ = b.get().send(2);
+	val _ = c.get().send(3);
+	val _ = sender_arc.get().send(4);
+
+	var got: Int = 0;
+	var count: Int = 0;
+	while count < 4 {
+		match receiver.recv() {
+			Ok(v) => { got = got + v; count = count + 1; },
+			Err(_) => { return 80 + count; },
+			default => { return 90 + count; }
+		}
+	}
+	{
+		val _a = move a;
+		val _b = move b;
+		val _c = move c;
+		val _root = move sender_arc;
+	}
+	match receiver.recv() {
+		Err(e) => {
+			if e.kind == conc.CONCURRENCY_KIND_CLOSED { return got; }
+			return 70;
+		},
+		Ok(_) => { return 71; },
+		default => { return 72; }
+	}
+}

@@ -1,0 +1,16 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var vt = conc.spawn(| | => { return 5; });
+	match vt.join() {
+		Ok(_) => {},
+		Err(_) => { return 71; },
+		default => { return 72; }
+	}
+	/* After join, joined=true → is_complete must return true. */
+	if vt.is_complete() { return 0; }
+	return 1;
+}

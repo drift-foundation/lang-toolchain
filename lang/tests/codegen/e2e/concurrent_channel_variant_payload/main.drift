@@ -1,0 +1,136 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub variant Msg {
+	Text(s: String),
+	Shared(a: arc.Arc<Tracked>),
+	Status(code: Int)
+}
+
+fn heap_str(suffix: String) nothrow -> String {
+	val prefix: String = "msg-";
+	return prefix + suffix;
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* Path 1: send/recv each arm intact */
+	{
+		var halves = conc.channel<type Msg>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+
+		val _ = sender.send(Msg::Text(s = heap_str("AAA")));
+		val t1 = arc.arc(Tracked(id = 1, destruct_count = ctr.clone()));
+		val _ = sender.send(Msg::Shared(a = move t1));
+		val _ = sender.send(Msg::Status(code = 42));
+
+		var seen_text: Int = 0;
+		var seen_shared: Int = 0;
+		var seen_status: Int = 0;
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(m) => {
+					match m {
+						Text(_s) => { seen_text = seen_text + 1; },
+						Shared(a) => {
+							if a.get().id != 1 { return 10; }
+							seen_shared = seen_shared + 1;
+						},
+						Status(c) => {
+							if c != 42 { return 11; }
+							seen_status = seen_status + 1;
+						},
+						default => { return 12; }
+					}
+				},
+				Err(_) => { return 13; },
+				default => { return 14; }
+			}
+			i = i + 1;
+		}
+		if seen_text != 1 or seen_shared != 1 or seen_status != 1 { return 15; }
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+	}
+	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n1 != 1 { return 100 + n1; }
+
+	/* Path 2: receiver drop drains mixed-arm queue */
+	{
+		var halves = conc.channel<type Msg>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val _ = sender.send(Msg::Text(s = heap_str("BBB")));
+		val t2 = arc.arc(Tracked(id = 2, destruct_count = ctr.clone()));
+		val _ = sender.send(Msg::Shared(a = move t2));
+		val _ = sender.send(Msg::Status(code = 7));
+		val t3 = arc.arc(Tracked(id = 3, destruct_count = ctr.clone()));
+		val _ = sender.send(Msg::Shared(a = move t3));
+		{ val _ = move receiver; }
+		/* send-after-close drops rejected payload (Shared arm). */
+		val t4 = arc.arc(Tracked(id = 4, destruct_count = ctr.clone()));
+		match sender.send(Msg::Shared(a = move t4)) {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; } },
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* prev 1 + 3 new (t2 drained, t3 drained, t4 rejected) = 4 */
+	if n2 != 4 { return 200 + n2; }
+
+	/* Path 3: multi-Arc<Sender> producers sending different arms */
+	{
+		var halves = conc.channel<type Msg>();
+		val sender_arc = core.arc(halves.take_sender());
+		var receiver = halves.take_receiver();
+		val s_a = sender_arc.clone();
+		val s_b = sender_arc.clone();
+		val s_c = sender_arc.clone();
+		val _ = s_a.get().send(Msg::Text(s = heap_str("DDD")));
+		val t5 = arc.arc(Tracked(id = 5, destruct_count = ctr.clone()));
+		val _ = s_b.get().send(Msg::Shared(a = move t5));
+		val _ = s_c.get().send(Msg::Status(code = 99));
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(_m) => { i = i + 1; },
+				Err(_) => { return 30; },
+				default => { return 31; }
+			}
+		}
+		{ val _a = move s_a; val _b = move s_b; val _c = move s_c; val _root = move sender_arc; }
+		match receiver.recv() {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 32; } },
+			Ok(_) => { return 33; },
+			default => { return 34; }
+		}
+		{ val _ = move receiver; }
+	}
+	val n3 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* prev 4 + 1 (t5 received-and-arm-dropped) = 5 */
+	if n3 != 5 { return 300 + n3; }
+
+	return 0;
+}

@@ -1,0 +1,90 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+fn heap_str(suffix: String) nothrow -> String {
+	val prefix: String = "opt-str-";
+	return prefix + suffix;
+}
+
+pub fn main() nothrow -> Int {
+	/* Path 1: send Some+None, recv intact */
+	{
+		var halves = conc.channel<type Optional<String>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val _ = sender.send(Optional<type String>::Some(heap_str("AAAAA")));
+		val _ = sender.send(Optional<type String>::None());
+		val _ = sender.send(Optional<type String>::Some(heap_str("BBBBB")));
+
+		var seen_some: Int = 0;
+		var seen_none: Int = 0;
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(p) => {
+					match p {
+						Some(_s) => { seen_some = seen_some + 1; },
+						None => { seen_none = seen_none + 1; },
+						default => { return 10; }
+					}
+				},
+				Err(_) => { return 11; },
+				default => { return 12; }
+			}
+			i = i + 1;
+		}
+		if seen_some != 2 { return 13; }
+		if seen_none != 1 { return 14; }
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+	}
+
+	/* Path 2: queued Some<heap-String> destroyed on receiver drop */
+	{
+		var halves = conc.channel<type Optional<String>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val _ = sender.send(Optional<type String>::Some(heap_str("CCCCC")));
+		val _ = sender.send(Optional<type String>::None());
+		val _ = sender.send(Optional<type String>::Some(heap_str("DDDDD")));
+		{ val _ = move receiver; }
+		/* send-after-close drops rejected payload */
+		match sender.send(Optional<type String>::Some(heap_str("EEEEE"))) {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; } },
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+
+	/* Path 3: multi-Arc<Sender> producers + receiver consumes */
+	{
+		var halves = conc.channel<type Optional<String>>();
+		val sender_arc = core.arc(halves.take_sender());
+		var receiver = halves.take_receiver();
+		val a = sender_arc.clone();
+		val b = sender_arc.clone();
+		val _ = a.get().send(Optional<type String>::Some(heap_str("FFFFF")));
+		val _ = b.get().send(Optional<type String>::None());
+		val _ = sender_arc.get().send(Optional<type String>::Some(heap_str("GGGGG")));
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(_) => { i = i + 1; },
+				Err(_) => { return 30; },
+				default => { return 31; }
+			}
+		}
+		{ val _a = move a; val _b = move b; val _root = move sender_arc; }
+		match receiver.recv() {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 32; } },
+			Ok(_) => { return 33; },
+			default => { return 34; }
+		}
+		{ val _ = move receiver; }
+	}
+
+	return 0;
+}

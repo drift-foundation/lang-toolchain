@@ -1,5 +1,127 @@
 # Drift development history
 
+## 2026-05-26 (stdlib addition: `std.concurrent.channel<T>` + `VirtualThread<T>::is_complete()` / `Future<T>::is_complete()` — supervisor-primitives slice; no runtime/ABI churn)
+- **Supervisor primitives in `std.concurrent`.**  Release 0.33.2, ABI
+  unchanged at 14.  Implements the bookkeeper-team-requested slice
+  documented in `work/stdlib-concurrency/plan.md` §2.  Two additions,
+  both pure Drift-side on top of the now-stable result-ownership
+  protocol (R1-R8 closed at 0.33.1; see prior entry).
+  
+  **`channel<T>` — primary addition.**
+  - `pub fn channel<T>() nothrow -> ChannelHalves<T>` — constructs
+    a fresh unbounded MPSC channel.  Returns a `ChannelHalves<T>`
+    bag holding `Optional<Sender<T>>` and `Optional<Receiver<T>>`;
+    use `halves.take_sender()` / `halves.take_receiver()` to
+    extract.  (Drift does not permit `move self.field` partial
+    moves; the Optional-slot pattern with `mem.replace` is the
+    canonical extraction shape.)
+  - `pub struct Sender<T>` — move-only.  Share across producers
+    via `core.Arc<Sender<T>>`.  `Sender::send(&self, var v: T) ->
+    Result<Void, ConcurrencyError>`.
+  - `pub struct Receiver<T>` — move-only, single consumer.
+    `Receiver::recv(&mut self) -> Result<T, ConcurrencyError>` and
+    `Receiver::recv_timeout(&mut self, d: Duration)`.
+  - State (`queue`, `sender_closed`, `receiver_closed`) lives
+    under a single `Mutex<ChannelState<T>>` so `send` / `recv` /
+    sender drop / receiver drop linearize against each other.
+    No `try_send` / `try_recv` / `len()` / bounded buffer /
+    `select` in v1.
+  - **Close semantics.**  Last `Sender<T>` drop sets
+    `sender_closed = true` and `Condvar.signal_all`s any blocked
+    receiver; `recv` drains queued values before returning
+    `Err(CLOSED)`.  Receiver drop sets `receiver_closed = true`
+    and **detaches** the queued values out of the channel state
+    under the mutex via `mem.replace` (O(1) array-handoff
+    pointer swap — no user-code execution while the lock is
+    held); the lock is then released and the detached local
+    array drops at fn-exit, running each queued `T`'s
+    `Destructible` **outside** the channel state mutex.  This
+    avoids self-deadlock when a queued payload's destructor
+    re-enters the channel (e.g. by releasing the last
+    `Arc<Sender<T>>` for the same channel — Drift's `Mutex<T>`
+    is spin-CAS, so the failure mode would have been an
+    infinite CPU spin).  Any subsequent `send` returns
+    `Err(CLOSED)` with the moved-in `var v: T` dropped at fn-exit
+    via T's `Destructible`.
+  - **Eventual `T: Send` bound.**  No `T` bound in v1 (the
+    channel transfers ownership, not clones — `T: Share` is the
+    wrong gate).  A `T: Send` trait would be the correct
+    constraint once Drift has it; documented in the type's
+    doc-comment.
+  
+  **`is_complete()` — secondary addition.**
+  - `pub fn VirtualThread<T>::is_complete(&self) nothrow -> Bool`.
+  - `pub fn Future<T>::is_complete(&self) nothrow -> Bool` —
+    delegates to the inner `VirtualThread<T>`.
+  - **Terminal-state predicate.**  Returns `true` iff the handle
+    has reached a terminal state: `joined`, `submit_error != 0`,
+    `handle == 0` (out-of-band teardown), or the runtime has
+    marked the task complete (`thread.vt_is_completed`).  Returns
+    `false` while the task is running, **including** the case
+    where `.cancel()` has been requested but the runtime has not
+    yet observed the task complete — a cancellation request is
+    not completion.
+  - Documented as the polling alternative to a channel-driven
+    reaper; the loop `while !vt.is_complete() { conc.sleep(...);
+    }` followed by `vt.join()` is the canonical correctness-safe
+    sweep pattern.
+  
+  **Test gate.**
+  - Channel e2e suite covering scalar Int payload + 6 composite
+    payload shapes (`String`, `Arc<U>`, `Optional<String>`,
+    `Optional<Arc<U>>`, variant with String/Arc/Status arms, and
+    `Optional<Variant>` nested composite).  Each composite case
+    exercises: (a) send/recv preserves the value, (b) queued
+    values destroyed exactly once on receiver drop, (c)
+    send-after-receiver-close returns `Err(CLOSED)` with the
+    rejected payload destroyed exactly once, (d) multi-`Arc<Sender>`
+    producers preserve unique payload identities without loss or
+    duplication.  All cases run under both the normal lane and
+    `DRIFT_MEMCHECK=1` valgrind memcheck.
+  - `is_complete` e2e suite covering live-then-complete spin/join,
+    after-join terminal, submit-error terminal, and
+    cancellation-pending via a deterministic atomic busy-loop
+    blocker (the cb does NOT park, so cancellation's cv broadcast
+    does NOT wake it — the only way out is the test releasing the
+    atomic flag).
+  - Concurrent close-race regression at
+    `lang/tests/driver/test_channel_close_race.py`: 4 producer
+    VTs × 25 sends each (100 payloads) racing the receiver drop.
+    Conservation invariant: each constructed Payload's
+    `Destructible::destroy` fires exactly once (no double-release,
+    no stranded payload).  Verified clean under both
+    uninstrumented and valgrind memcheck.
+  - All `concurrent_*` / `conc_*` e2e cases (78 total after
+    additions = 59 pre-existing + 19 new across this slice) pass
+    under both normal and `DRIFT_MEMCHECK=1` lanes; R1-R8
+    result-ownership matrix (8 regressions) still green.
+  - Receiver-destroy-deadlock regression at
+    `lang/tests/driver/test_channel_destructor_deadlock.py`: a
+    payload whose `Destructible::destroy` releases the last
+    `Arc<Sender<T>>` for this channel — i.e. re-enters the
+    channel state mutex — would spin-CAS-forever under the
+    naive "drop-queued-under-the-lock" shape.  The Receiver
+    destructor `mem.replace`s the queue out under the lock,
+    releases the guard, and lets the detached array drop at
+    fn-exit so payload destructors run *outside* the channel
+    state mutex.
+  - Cross-VT blocking coverage: parked `recv()` woken by a
+    spawned producer sending a heap-backed nested composite
+    payload (`concurrent_channel_parked_recv_woken_by_spawned_sender`);
+    parked `recv()` woken with `CLOSED` when the last
+    `Arc<Sender<T>>` drops on a separate VT
+    (`concurrent_channel_parked_recv_closed_by_last_sender_drop`);
+    3-spawned-producer composite multi-producer
+    (`concurrent_channel_spawned_multi_producer_composite`).
+  
+  **No runtime/ABI changes.**  Both additions live entirely in
+  `stdlib/std/concurrent/concurrent.drift` on top of `Mutex<T>`,
+  `Condvar`, `core.Arc<T>`, `mem.replace`, and the existing
+  `thread.vt_is_completed` substrate.  `DRIFT_RT_ABI_VERSION`
+  stays at 14.
+  
+  - `lang/versions.py` — 0.33.1 → 0.33.2.
+
 ## 2026-05-26 (LANGUAGE_BUG fix: `VirtualThread<T>` result-ownership protocol redesign — closes the R1-R8 ownership matrix in one Drift-side `Arc<Mutex<ResultState<T>>>` change plus targeted `FutureGroup.join_any` hardening; no runtime/ABI churn)
 - **Result-ownership redesign in `std.concurrent`.** Release 0.33.1, ABI unchanged at 14.
   Reported by PushCoin bookkeeper team while designing the supervised-async

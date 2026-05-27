@@ -1,0 +1,107 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+/* Build a heap-backed String via concat (literals would be static
+ * refcount no-ops and wouldn't exercise retain/release). */
+fn heap_str(i: Int) nothrow -> String {
+	val a: String = "channel-string-";
+	if i == 0 { return a + "AAAAAAAAAA"; }
+	if i == 1 { return a + "BBBBBBBBBB"; }
+	if i == 2 { return a + "CCCCCCCCCC"; }
+	if i == 3 { return a + "DDDDDDDDDD"; }
+	return a + "ZZZZZZZZZZ";
+}
+
+/* Sum the ASCII codepoints in s so we can compare without escaping
+ * String comparison semantics. */
+fn ascii_sum(s: &String) nothrow -> Int {
+	val bytes = core.string_to_utf8_bytes(*s);
+	var sum: Int = 0;
+	var i: Int = 0;
+	while i < bytes.len {
+		sum = sum + cast<Int>(bytes[i]);
+		i = i + 1;
+	}
+	return sum;
+}
+
+pub fn main() nothrow -> Int {
+	/* Path 1: send/recv successfully preserves the value */
+	{
+		var halves = conc.channel<type String>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val payload = heap_str(0);
+		val expected = ascii_sum(&payload);
+		val _ = sender.send(payload);
+		match receiver.recv() {
+			Ok(got) => {
+				val got_sum = ascii_sum(&got);
+				if got_sum != expected { return 10; }
+				/* got drops at arm end → drift_string_release */
+			},
+			Err(_) => { return 11; },
+			default => { return 12; }
+		}
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+	}
+
+	/* Path 2: queued-when-receiver-drops is destroyed */
+	{
+		var halves = conc.channel<type String>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val _ = sender.send(heap_str(0));
+		val _ = sender.send(heap_str(1));
+		val _ = sender.send(heap_str(2));
+		/* Drop receiver with 3 queued → all 3 must drift_string_release */
+		{ val _ = move receiver; }
+		/* Subsequent send must observe receiver_closed and drop the
+		 * moved-in value via the rejected-send path. */
+		match sender.send(heap_str(3)) {
+			Err(e) => {
+				if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; }
+			},
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+
+	/* Path 3: multi-producer Arc<Sender> + receive all + close */
+	{
+		var halves = conc.channel<type String>();
+		val sender_arc = core.arc(halves.take_sender());
+		var receiver = halves.take_receiver();
+		val a = sender_arc.clone();
+		val b = sender_arc.clone();
+		val _ = a.get().send(heap_str(0));
+		val _ = b.get().send(heap_str(1));
+		val _ = sender_arc.get().send(heap_str(2));
+		var got_count: Int = 0;
+		while got_count < 3 {
+			match receiver.recv() {
+				Ok(s) => {
+					if ascii_sum(&s) <= 0 { return 30; }
+					got_count = got_count + 1;
+				},
+				Err(_) => { return 31; },
+				default => { return 32; }
+			}
+		}
+		{ val _a = move a; val _b = move b; val _root = move sender_arc; }
+		match receiver.recv() {
+			Err(e) => {
+				if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 33; }
+			},
+			Ok(_) => { return 34; },
+			default => { return 35; }
+		}
+		{ val _ = move receiver; }
+	}
+
+	return 0;
+}

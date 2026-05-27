@@ -1,0 +1,82 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub variant Msg {
+	Text(s: String),
+	Shared(a: arc.Arc<Tracked>),
+	Status(code: Int)
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	var halves = conc.channel<type Optional<Msg>>();
+	val sender_arc = core.arc(halves.take_sender());
+	var receiver = halves.take_receiver();
+
+	/* Producer VT delays 30ms before sending a complex nested
+	 * payload.  Main's recv() will park on the not_empty Condvar
+	 * and be woken by the producer's send. */
+	val s_for_prod = sender_arc.clone();
+	val ctr_for_prod = ctr.clone();
+	val prod_cb: core.Callback0<Int> = core.callback0(
+		| | captures(move s_for_prod, move ctr_for_prod) => {
+			val _ = conc.sleep(conc.Duration(millis = 30));
+			val t = arc.arc(Tracked(id = 7, destruct_count = ctr_for_prod.clone()));
+			val _ = s_for_prod.get().send(
+				Optional<type Msg>::Some(Msg::Shared(a = move t))
+			);
+			return 0;
+		}
+	);
+	var prod = conc.spawn(move prod_cb);
+
+	/* Main parks here on recv() until the producer signals. */
+	var got_id: Int = 0;
+	match receiver.recv() {
+		Ok(p) => {
+			match p {
+				Some(m) => {
+					match m {
+						Shared(a) => { got_id = a.get().id; },
+						Text(_) => { return 10; },
+						Status(_) => { return 11; },
+						default => { return 12; }
+					}
+				},
+				None => { return 13; },
+				default => { return 14; }
+			}
+		},
+		Err(_) => { return 15; },
+		default => { return 16; }
+	}
+	if got_id != 7 { return 17; }
+
+	/* Join producer and clean up. */
+	val _ = prod.join();
+	{ val _root = move sender_arc; }
+	{ val _ = move receiver; }
+
+	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	/* Expected: 1 (the single Tracked, dropped at arm end after recv). */
+	if n != 1 { return 100 + n; }
+	return 0;
+}

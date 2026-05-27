@@ -1,0 +1,4 @@
+{
+  "description": "e2e: parked recv() woken with CLOSED when the last Arc<Sender<T>> drops on a separate VT",
+  "exit_code": 0
+}

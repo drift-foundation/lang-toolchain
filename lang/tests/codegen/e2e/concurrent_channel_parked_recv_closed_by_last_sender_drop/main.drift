@@ -1,0 +1,45 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+
+pub fn main() nothrow -> Int {
+	var halves = conc.channel<type Int>();
+	val sender_arc = core.arc(halves.take_sender());
+	var receiver = halves.take_receiver();
+
+	/* Producer VT that delays briefly then drops its sender clone.
+	 * Combined with main also dropping its sender clone before the
+	 * recv() call, the last-sender drop is the producer's drop —
+	 * which fires Sender::destroy → signal_all on the empty
+	 * channel → wakes main's parked recv with Err(CLOSED). */
+	val s_for_prod = sender_arc.clone();
+	val prod_cb: core.Callback0<Int> = core.callback0(
+		| | captures(move s_for_prod) => {
+			val _ = conc.sleep(conc.Duration(millis = 30));
+			{ val _ = move s_for_prod; }  /* drop producer's sender */
+			return 0;
+		}
+	);
+	var prod = conc.spawn(move prod_cb);
+
+	/* Main drops its own sender clone BEFORE recv, so the producer
+	 * holds the only remaining clone.  When the producer drops it,
+	 * sender_count goes to 0 → sender_closed = true → signal_all
+	 * wakes recv. */
+	{ val _root = move sender_arc; }
+
+	match receiver.recv() {
+		Err(e) => {
+			if e.kind == conc.CONCURRENCY_KIND_CLOSED {
+				val _ = prod.join();
+				{ val _ = move receiver; }
+				return 0;
+			}
+			return 11;
+		},
+		Ok(_) => { return 12; },
+		default => { return 13; }
+	}
+}

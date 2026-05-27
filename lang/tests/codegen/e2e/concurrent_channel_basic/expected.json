@@ -1,0 +1,4 @@
+{
+  "description": "e2e: channel basic send/recv (7+35=42)",
+  "exit_code": 42
+}

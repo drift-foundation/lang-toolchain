@@ -1,0 +1,4 @@
+{
+  "description": "e2e: channel<Arc<U>> — refcount preserved across send/recv; inner U destructed exactly once across paths",
+  "exit_code": 0
+}

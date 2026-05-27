@@ -1,0 +1,4 @@
+{
+  "description": "e2e: channel recv_timeout returns TIMEOUT on empty channel",
+  "exit_code": 0
+}

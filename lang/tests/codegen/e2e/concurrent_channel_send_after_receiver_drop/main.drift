@@ -1,0 +1,20 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var halves = conc.channel<type Int>();
+	var sender = halves.take_sender();
+	var receiver = halves.take_receiver();
+	val _ = sender.send(1);
+	{ val _ = move receiver; }  /* drop receiver */
+	match sender.send(2) {
+		Err(e) => {
+			if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }
+			return 11;
+		},
+		Ok(_) => { return 12; },
+		default => { return 13; }
+	}
+}

@@ -1,0 +1,29 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var vt = conc.spawn(| | => {
+		val _ = conc.sleep(conc.Duration(millis = 30));
+		return 17;
+	});
+	/* Right after spawn, before the cb has time to finish: not
+	 * complete (most likely). */
+	if vt.is_complete() {
+		/* Possible race — if the runtime completed the cb before
+		 * we got here, accept and move on. */
+	}
+	/* Spin until complete, then join. */
+	var spins: Int = 0;
+	while !vt.is_complete() {
+		val _ = conc.sleep(conc.Duration(millis = 5));
+		spins = spins + 1;
+		if spins > 200 { return 80; }
+	}
+	match vt.join() {
+		Ok(v) => { return v; },
+		Err(_) => { return 81; },
+		default => { return 82; }
+	}
+}

@@ -1,0 +1,35 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	var halves = conc.channel<type Int>();
+	var sender = halves.take_sender();
+	var receiver = halves.take_receiver();
+	val _ = sender.send(10);
+	val _ = sender.send(20);
+	val _ = sender.send(30);
+	/* Drop sender — sender_closed=true; queue not yet drained. */
+	{ val _ = move sender; }
+
+	/* recv drains in order, then returns CLOSED. */
+	var got: Int = 0;
+	var count: Int = 0;
+	while count < 3 {
+		match receiver.recv() {
+			Ok(v) => { got = got + v; count = count + 1; },
+			Err(_) => { return 80 + count; },
+			default => { return 90 + count; }
+		}
+	}
+	/* Now queue empty + closed → CLOSED. */
+	match receiver.recv() {
+		Err(e) => {
+			if e.kind == conc.CONCURRENCY_KIND_CLOSED { return got; }
+			return 70;
+		},
+		Ok(_) => { return 71; },
+		default => { return 72; }
+	}
+}

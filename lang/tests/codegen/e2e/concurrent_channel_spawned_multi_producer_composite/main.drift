@@ -1,0 +1,131 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub variant Msg {
+	Text(s: String),
+	Shared(a: arc.Arc<Tracked>),
+	Status(code: Int)
+}
+
+fn heap_str(suffix: String) nothrow -> String {
+	val p: String = "spawned-";
+	return p + suffix;
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	var halves = conc.channel<type Optional<Msg>>();
+	val sender_arc = core.arc(halves.take_sender());
+	var receiver = halves.take_receiver();
+
+	/* Three spawned producers, each sending a DIFFERENT composite
+	 * arm.  Test that all three payloads transfer correctly across
+	 * VTs through the Arc<Sender> share. */
+	val s_a = sender_arc.clone();
+	val a_cb: core.Callback0<Int> = core.callback0(
+		| | captures(move s_a) => {
+			val _ = conc.sleep(conc.Duration(millis = 5));
+			val _ = s_a.get().send(
+				Optional<type Msg>::Some(Msg::Text(s = heap_str("alpha")))
+			);
+			return 0;
+		}
+	);
+	var p_a = conc.spawn(move a_cb);
+
+	val s_b = sender_arc.clone();
+	val ctr_b = ctr.clone();
+	val b_cb: core.Callback0<Int> = core.callback0(
+		| | captures(move s_b, move ctr_b) => {
+			val _ = conc.sleep(conc.Duration(millis = 10));
+			val t = arc.arc(Tracked(id = 42, destruct_count = ctr_b.clone()));
+			val _ = s_b.get().send(
+				Optional<type Msg>::Some(Msg::Shared(a = move t))
+			);
+			return 0;
+		}
+	);
+	var p_b = conc.spawn(move b_cb);
+
+	val s_c = sender_arc.clone();
+	val c_cb: core.Callback0<Int> = core.callback0(
+		| | captures(move s_c) => {
+			val _ = conc.sleep(conc.Duration(millis = 15));
+			val _ = s_c.get().send(
+				Optional<type Msg>::Some(Msg::Status(code = 99))
+			);
+			return 0;
+		}
+	);
+	var p_c = conc.spawn(move c_cb);
+
+	/* Main parks on recv three times — one per producer.  Each
+	 * recv blocks then is woken by the next producer's send. */
+	var saw_text: Int = 0;
+	var saw_shared: Int = 0;
+	var saw_status: Int = 0;
+	var i: Int = 0;
+	while i < 3 {
+		match receiver.recv() {
+			Ok(p) => {
+				match p {
+					Some(m) => {
+						match m {
+							Text(_s) => { saw_text = saw_text + 1; },
+							Shared(a) => {
+								if a.get().id != 42 { return 20; }
+								saw_shared = saw_shared + 1;
+							},
+							Status(c) => {
+								if c != 99 { return 21; }
+								saw_status = saw_status + 1;
+							},
+							default => { return 22; }
+						}
+					},
+					None => { return 23; },
+					default => { return 24; }
+				}
+			},
+			Err(_) => { return 25; },
+			default => { return 26; }
+		}
+		i = i + 1;
+	}
+	if saw_text != 1 or saw_shared != 1 or saw_status != 1 { return 27; }
+
+	/* Drop all sender Arc clones; recv → CLOSED. */
+	val _ = p_a.join();
+	val _ = p_b.join();
+	val _ = p_c.join();
+	{ val _root = move sender_arc; }
+	match receiver.recv() {
+		Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 30; } },
+		Ok(_) => { return 31; },
+		default => { return 32; }
+	}
+	{ val _ = move receiver; }
+
+	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	/* Expected: 1 (the single Tracked, dropped at arm end after recv). */
+	if n != 1 { return 100 + n; }
+	return 0;
+}

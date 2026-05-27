@@ -1,0 +1,131 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+pub struct Tracked
+	require Self is core.Destructible
+{
+	pub id: Int,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for Tracked {
+	pub fn destroy(var self: Tracked) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub variant Msg {
+	Text(s: String),
+	Shared(a: arc.Arc<Tracked>),
+	Status(code: Int)
+}
+
+fn heap_str(suffix: String) nothrow -> String {
+	val prefix: String = "nested-";
+	return prefix + suffix;
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* Path 1: send/recv mixed Some(Msg::*) + None */
+	{
+		var halves = conc.channel<type Optional<Msg>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Text(s = heap_str("AAA"))));
+		val _ = sender.send(Optional<type Msg>::None());
+		val t1 = arc.arc(Tracked(id = 1, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Shared(a = move t1)));
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Status(code = 5)));
+
+		var i: Int = 0;
+		while i < 4 {
+			match receiver.recv() {
+				Ok(p) => {
+					match p {
+						Some(m) => {
+							match m {
+								Text(_) => {},
+								Shared(a) => { if a.get().id != 1 { return 10; } },
+								Status(c) => { if c != 5 { return 11; } },
+								default => { return 12; }
+							}
+						},
+						None => {},
+						default => { return 13; }
+					}
+				},
+				Err(_) => { return 14; },
+				default => { return 15; }
+			}
+			i = i + 1;
+		}
+		{ val _ = move sender; }
+		{ val _ = move receiver; }
+	}
+	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n1 != 1 { return 100 + n1; }
+
+	/* Path 2: receiver drop drains nested values */
+	{
+		var halves = conc.channel<type Optional<Msg>>();
+		var sender = halves.take_sender();
+		var receiver = halves.take_receiver();
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Text(s = heap_str("CCC"))));
+		val t2 = arc.arc(Tracked(id = 2, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Shared(a = move t2)));
+		val _ = sender.send(Optional<type Msg>::None());
+		val t3 = arc.arc(Tracked(id = 3, destruct_count = ctr.clone()));
+		val _ = sender.send(Optional<type Msg>::Some(Msg::Shared(a = move t3)));
+		{ val _ = move receiver; }
+		val t4 = arc.arc(Tracked(id = 4, destruct_count = ctr.clone()));
+		match sender.send(Optional<type Msg>::Some(Msg::Shared(a = move t4))) {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 20; } },
+			Ok(_) => { return 21; },
+			default => { return 22; }
+		}
+		{ val _ = move sender; }
+	}
+	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* prev 1 + 3 new (t2/t3 drained, t4 rejected-send) = 4 */
+	if n2 != 4 { return 200 + n2; }
+
+	/* Path 3: multi-Arc<Sender> producers + mixed nested values */
+	{
+		var halves = conc.channel<type Optional<Msg>>();
+		val sender_arc = core.arc(halves.take_sender());
+		var receiver = halves.take_receiver();
+		val s_a = sender_arc.clone();
+		val s_b = sender_arc.clone();
+		val _ = s_a.get().send(Optional<type Msg>::Some(Msg::Text(s = heap_str("DDD"))));
+		val t5 = arc.arc(Tracked(id = 5, destruct_count = ctr.clone()));
+		val _ = s_b.get().send(Optional<type Msg>::Some(Msg::Shared(a = move t5)));
+		val _ = sender_arc.get().send(Optional<type Msg>::None());
+		var i: Int = 0;
+		while i < 3 {
+			match receiver.recv() {
+				Ok(_) => { i = i + 1; },
+				Err(_) => { return 30; },
+				default => { return 31; }
+			}
+		}
+		{ val _a = move s_a; val _b = move s_b; val _root = move sender_arc; }
+		match receiver.recv() {
+			Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CLOSED { return 32; } },
+			Ok(_) => { return 33; },
+			default => { return 34; }
+		}
+		{ val _ = move receiver; }
+	}
+	val n3 = atomic.atomic_load_int(&ctr.get(), 1);
+	/* prev 4 + 1 (t5 received-and-arm-dropped) = 5 */
+	if n3 != 5 { return 300 + n3; }
+
+	return 0;
+}

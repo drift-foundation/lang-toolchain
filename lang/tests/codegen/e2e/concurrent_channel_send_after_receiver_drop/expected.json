@@ -1,0 +1,4 @@
+{
+  "description": "e2e: channel send returns CLOSED after receiver drop",
+  "exit_code": 0
+}
