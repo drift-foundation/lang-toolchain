@@ -1,5 +1,134 @@
 # Drift development history
 
+## 2026-05-27 (LANGUAGE_BUG fix: match-arm binder not visible to closure captured/used inside the arm body — `HMatchArm` gains persistent `binder_ids`, `_rename_expr` learns `HLambda`, `for`-desugaring + diagnostic hygiene aligned)
+- **Release 0.33.4, ABI unchanged at 14.**  Reported by the PushCoin
+  bookkeeper team (filed 2026-05-27 at
+  `~/src/pushcoin/work/drift-match-arm-capture-bug.md`).  Surface: a
+  lambda defined inside a `match` arm cannot reference the arm's
+  binder.  Minimal shape:
+  ```drift
+  match move opt {
+      Some(worker_tx) => {
+          val cb = core.callback0(| | captures(move worker_tx)
+              nothrow => { return worker_tx.v; });
+          ...
+      },
+      None => { ... }
+  }
+  ```
+  Pre-fix diagnostic: `error: unknown name 'worker_tx'` at the
+  body's reference, even though `worker_tx` is the arm binder used
+  in `captures(move worker_tx)`.  The bookkeeper workaround
+  (`var worker_tx = move wtx;` re-bind through a let inside the
+  arm) bypasses the broken path.
+
+  **Two stacked structural gaps.**
+  1.  `_rename_expr` in `lang/driftc/stage1/ast_to_hir.py` had no
+      `HLambda` branch.  `lower_match` alpha-renames every arm
+      binder to `__match_binder_<N>_<source>` so binders are
+      function-scope unique, but the rename walker did not descend
+      into a lambda's `explicit_captures.name` / body `HVar.name`
+      — so the lambda kept source-name references while the
+      enclosing arm exposed only the renamed binder.
+  2.  Match-arm binders had no first-class HIR binding identity.
+      Identity was reconstructed lazily by the type-checker on
+      arm entry, which gave a fresh `binding_id` that did not
+      match what `_rename_expr` had stamped on the lambda's
+      capture / body / `share_value`.  Even after wiring up the
+      HLambda rename, the lambda's captures landed on different
+      IDs than the binder, so the body's `HVar` still resolved to
+      `binding_id=None` and the checker emitted `E-AUTO-6a0c5a69`
+      `unknown name`.
+
+  **Fix shape.**
+  - `HMatchArm` now carries `binder_ids: list[BindingId]` parallel
+    to `binders` (`lang/driftc/stage1/hir_nodes.py`).
+  - `lower_match` pushes a fresh scope and allocates each binder's
+    persistent ID BEFORE lowering the arm block / result so any
+    nested lambda picks up the correct `binding_id` natively in
+    captures, body, and synthesized `share_value`.  `_rename_expr`
+    grew an `HLambda` branch that renames explicit_captures /
+    body HVars / body block while respecting param/local shadowing
+    (lambda params override the rename map for the lambda body
+    only).
+  - The `for`-desugaring (`_visit_stmt_ForStmt`) was already
+    synthesizing a `Some(iter_var)` HMatchArm; it now applies the
+    same scope-before-body discipline AND threads `binder_ids`
+    through, covering both the untyped (binder = user name) and
+    typed (binder = `__for_item_<N>`, plus `decl_let` for the
+    user-visible typed variable) shapes.
+  - The type-checker's arm-entry binder loop (around
+    `lang/driftc/type_checker.py:7660`) consumes the persisted IDs
+    when present and falls back to `_alloc_local_id()` only when
+    `binder_ids` is empty (legacy/late-synthesized arms).
+  - HIR reconstructors (`borrow_materialize.py`,
+    `place_canonicalize.py`, the HMatchExpr rebuild inside
+    `_rename_expr` itself) preserve the new `binder_ids` field.
+  - Binding-ID max scans were taught about `arm.binder_ids` in
+    `lang/driftc/stage1/normalize.py::_assign_missing_binding_ids`
+    and `lang/driftc/type_checker.py::_seed_binding_id_counter`.
+    Without these, an unused persisted binder ID could collide
+    with a freshly-allocated normalization temp or borrow temp,
+    surfacing downstream as a MIR-lowering
+    `TypeKind.SCALAR for <bid>` struct-vs-scalar mismatch in any
+    function that mixed match-arms with `&struct.field` patterns
+    inside lambdas.
+
+  **Diagnostic hygiene.**  The new HIR rename means `cap.name` on
+  an explicit match-arm capture may be the internal
+  `__match_binder_<N>_<source>` form.  `E-CAPTURE-SHARE-NOT-SHARE`
+  and the capture-is-shared diagnostic now route through
+  `user_facing_binding_name(...)` (see
+  `lang/driftc/checker/__init__.py:36`) so error messages spell the
+  source binder.  The `HExplicitCapture` HIR contract
+  (`lang/driftc/stage1/hir_nodes.py`) now states that any
+  capture-name surfaced in a diagnostic MUST route through this
+  helper.
+
+  **Test gate.**
+  - `lang/tests/driver/test_match_arm_lambda_capture.py` (8 cases,
+    all run under the normal lane):
+      * the primary `match move opt { Some(worker_tx) => callback0(
+        |...| captures(move worker_tx) ... => worker_tx ...) }`
+        repro;
+      * `captures(share <arm_binder>)` on `Arc<T>` exercising the
+        lower-time `share_value` synthesis against the persisted
+        binder identity;
+      * untyped `for item in xs { callback0(|...|
+        captures(copy item) ...) }` to pin the for-desugared
+        HMatchArm;
+      * typed `for Int item in xs { callback0(...) }` to cover
+        the typed branch (synthetic binder + decl-let identity
+        wiring);
+      * lambda-param-shadowing-arm-binder positive control;
+      * arm-body-local-shadowing-arm-binder positive control;
+      * the diagnostic-hygiene negative case
+        (`captures(share b)` on a Copy struct asserting the
+        emitted message references the source name `b` and
+        contains no `__match_binder_` substring);
+      * an uncaptured-outer-binding negative control.
+  - All 4 cases in `test_match_binder_diagnostic_hygiene.py`
+    remain green.
+  - 12 / 12 pass under the normal lane after the fix.  R1-R8
+    `VirtualThread<T>` result-ownership matrix still green.
+
+  Files touched (compiler):
+  - `lang/driftc/stage1/hir_nodes.py` (`HMatchArm.binder_ids`,
+    `HExplicitCapture` contract).
+  - `lang/driftc/stage1/ast_to_hir.py` (`lower_match`,
+    `_visit_stmt_ForStmt`, `_rename_expr` HLambda branch +
+    HMatchExpr rebuild).
+  - `lang/driftc/stage1/normalize.py` (max_id walk).
+  - `lang/driftc/stage1/borrow_materialize.py`,
+    `lang/driftc/stage1/place_canonicalize.py` (HMatchArm
+    reconstruction preserves `binder_ids`).
+  - `lang/driftc/type_checker.py` (max_id walk, arm-entry binder
+    binding-id consumption, diagnostic hygiene through
+    `user_facing_binding_name`).
+  - `lang/versions.py` — 0.33.3 → 0.33.4.
+
+  No runtime / ABI change.  `DRIFT_RT_ABI_VERSION` stays at 14.
+
 ## 2026-05-27 (STDLIB regression fix: `VirtualThread<T>` result-ownership protocol fails to compile for move-only generic `T`; replace 5 `val _ = v;` discard sites with `core.drop_value<T>(move v)`)
 - **Generic-stdlib copy-check regression introduced in 0.33.1.**  Release
   0.33.3, ABI unchanged at 14.  Reported by PushCoin bookkeeper team

@@ -1075,12 +1075,66 @@ class AstToHIR:
 							binder_is_mutable=getattr(arm, "binder_is_mutable", None),
 							binder_fields=getattr(arm, "binder_fields", None),
 							binder_field_indices=getattr(arm, "binder_field_indices", []),
+							binder_ids=list(getattr(arm, "binder_ids", []) or []),
 							block=renamed_block,
 							result=renamed_result,
 							loc=arm.loc,
 						)
 					)
 				return H.HMatchExpr(scrutinee=_rename_expr(e.scrutinee, mapping), arms=renamed_arms, loc=e.loc)
+			if isinstance(e, H.HLambda):
+				# A lambda constructed inside a match arm must follow
+				# the arm-binder alpha-rename for cross-arm name
+				# uniqueness in function-scoped HIR locals.  Binding
+				# IDs are allocated by `lower_match` itself and seeded
+				# into the arm lexical scope BEFORE the arm block is
+				# lowered, so `HExplicitCapture.binding_id` and
+				# `HVar.binding_id` inside the lambda are already
+				# correctly set during initial lowering — this branch
+				# only renames the names (the IDs persist through
+				# rename) so the user-spelled `worker_tx` becomes
+				# `__match_binder_N_worker_tx` in both the captures
+				# clause's `name` and the body's HVar references.
+				# Lambda parameters shadow the mapping inside the body
+				# (a `| x | => x` lambda must not have its parameter
+				# rewritten when the arm binder happens to share the
+				# name).
+				inner_map = dict(mapping)
+				for p in (getattr(e, "params", None) or []):
+					p_name = getattr(p, "name", None)
+					if p_name is not None:
+						inner_map.pop(p_name, None)
+				new_explicit_caps = None
+				if e.explicit_captures is not None:
+					rebuilt_caps: list[H.HExplicitCapture] = []
+					for cap in e.explicit_captures:
+						cap_new_name = mapping.get(cap.name, cap.name)
+						cap_share = getattr(cap, "share_value", None)
+						cap_new_share = _rename_expr(cap_share, mapping) if cap_share is not None else None
+						rebuilt_caps.append(
+							H.HExplicitCapture(
+								name=cap_new_name,
+								kind=cap.kind,
+								binding_id=getattr(cap, "binding_id", None),
+								span=getattr(cap, "span", Span()),
+								share_value=cap_new_share,
+							)
+						)
+					new_explicit_caps = rebuilt_caps
+				new_body_expr = _rename_expr(e.body_expr, inner_map) if e.body_expr is not None else None
+				new_body_block = None
+				if e.body_block is not None:
+					new_body_block, _ = _rename_block(e.body_block, inner_map)
+				return H.HLambda(
+					params=e.params,
+					ret_type=e.ret_type,
+					body_expr=new_body_expr,
+					body_block=new_body_block,
+					explicit_captures=new_explicit_caps,
+					declared_nothrow=e.declared_nothrow,
+					captures=e.captures,
+					span=getattr(e, "span", Span()),
+				)
 			if isinstance(e, H.HCast):
 				return H.HCast(target_type_expr=e.target_type_expr, value=_rename_expr(e.value, mapping), loc=e.loc)
 			if isinstance(e, H.HResultOk):
@@ -1149,6 +1203,7 @@ class AstToHIR:
 			rename_map: dict[str, str] = {}
 			new_binders: list[str] = []
 			new_binder_is_mutable: list[bool] = []
+			binder_ids: list[H.BindingId] = []
 			for b in list(getattr(arm, "binders", []) or []):
 				self._match_binder_counter += 1
 				internal = f"__match_binder_{self._match_binder_counter}_{b}"
@@ -1158,22 +1213,30 @@ class AstToHIR:
 			if binder_is_mutable:
 				new_binder_is_mutable = binder_is_mutable
 
-			arm_result: Optional[H.HExpr] = None
-			stmts = list(arm.block)
-			if stmts and isinstance(stmts[-1], ast.ExprStmt):
-				last_expr_stmt = stmts[-1]
-				last_expr = last_expr_stmt.expr
-				last_name = type(last_expr).__name__
-				if last_name == "YieldExpr":
-					if value_context:
+			self._push_scope()
+			try:
+				for src_name in list(getattr(arm, "binders", []) or []):
+					bid = self._alloc_binding(src_name)
+					binder_ids.append(bid)
+
+				arm_result: Optional[H.HExpr] = None
+				stmts = list(arm.block)
+				if stmts and isinstance(stmts[-1], ast.ExprStmt):
+					last_expr_stmt = stmts[-1]
+					last_expr = last_expr_stmt.expr
+					last_name = type(last_expr).__name__
+					if last_name == "YieldExpr":
+						if value_context:
+							stmts.pop()
+							arm_result = self.lower_expr(last_expr.value)
+						else:
+							stmts[-1] = ast.ExprStmt(expr=last_expr.value, loc=getattr(last_expr_stmt, "loc", None))
+					elif value_context:
 						stmts.pop()
-						arm_result = self.lower_expr(last_expr.value)
-					else:
-						stmts[-1] = ast.ExprStmt(expr=last_expr.value, loc=getattr(last_expr_stmt, "loc", None))
-				elif value_context:
-					stmts.pop()
-					arm_result = self.lower_expr(last_expr)
-			arm_block = self.lower_block(stmts)
+						arm_result = self.lower_expr(last_expr)
+				arm_block = self.lower_block(stmts)
+			finally:
+				self._pop_scope()
 			if rename_map:
 				arm_block, after_map = _rename_block(arm_block, rename_map)
 				if arm_result is not None:
@@ -1197,6 +1260,7 @@ class AstToHIR:
 						and getattr(arm, "pattern_arg_form", "positional") not in ("bare", "paren", "named")
 						else []
 					),
+					binder_ids=binder_ids,
 					block=arm_block,
 					result=arm_result,
 					loc=Span.from_loc(arm.loc),
@@ -1452,30 +1516,48 @@ class AstToHIR:
 			args=[iter_arg],
 			origin="for_next",
 		)
-		body_block = self.lower_block(stmt.body)
+		# Decide the binder shape BEFORE lowering the body so the binder
+		# binding ID is in scope for any nested lambda capture-list /
+		# body reference inside `stmt.body`.  Mirrors the
+		# `lower_match` discipline: push a fresh scope, allocate the
+		# arm binder IDs, THEN lower the arm block.  Without this,
+		# `for item in xs { val cb = callback0(| | captures(move item)
+		# ... => item); ... }` would lower with `item` invisible to
+		# the lambda, repeating the match-arm capture LANGUAGE_BUG in
+		# desugared-loop shape.
 		binder_name = stmt.iter_var
+		typed_iter = getattr(stmt, "iter_var_type", None) is not None
 		binder_mut_flags: list[bool] | None = None
-		if bool(getattr(stmt, "iter_var_mutable", False)):
+		if bool(getattr(stmt, "iter_var_mutable", False)) and not typed_iter:
 			binder_mut_flags = [True]
-		if getattr(stmt, "iter_var_type", None) is not None:
-			tmp_name = self._fresh_temp("__for_item")
-			tmp_bid = self._alloc_binding(tmp_name)
-			binder_name = tmp_name
+		decl_let: H.HLet | None = None
+		if typed_iter:
+			binder_name = self._fresh_temp("__for_item")
 			binder_mut_flags = [False]
-			decl_bid = self._alloc_binding(stmt.iter_var)
-			decl_let = H.HLet(
-				name=stmt.iter_var,
-				value=H.HVar(tmp_name, binding_id=tmp_bid),
-				declared_type_expr=getattr(stmt, "iter_var_type", None),
-				binding_id=decl_bid,
-				is_mutable=bool(getattr(stmt, "iter_var_mutable", False)),
-				loc=self._as_span(getattr(stmt, "loc", None)),
-			)
-			body_block = H.HBlock(statements=[decl_let, *body_block.statements])
+		binder_ids: list[H.BindingId] = []
+		self._push_scope()
+		try:
+			binder_bid = self._alloc_binding(binder_name)
+			binder_ids.append(binder_bid)
+			if typed_iter:
+				decl_bid = self._alloc_binding(stmt.iter_var)
+				decl_let = H.HLet(
+					name=stmt.iter_var,
+					value=H.HVar(binder_name, binding_id=binder_bid),
+					declared_type_expr=getattr(stmt, "iter_var_type", None),
+					binding_id=decl_bid,
+					is_mutable=bool(getattr(stmt, "iter_var_mutable", False)),
+					loc=self._as_span(getattr(stmt, "loc", None)),
+				)
+			body_block = self.lower_block(stmt.body)
+			if decl_let is not None:
+				body_block = H.HBlock(statements=[decl_let, *body_block.statements])
+		finally:
+			self._pop_scope()
 		arms: list[H.HMatchArm] = [
 			# `for` desugaring matches `Optional<T>::Some(value: T)` positionally,
 			# so the single binder always maps to field index 0.
-			H.HMatchArm(ctor="Some", ctor_base=None, binders=[binder_name], binder_field_indices=[0], block=body_block, result=None, binder_is_mutable=binder_mut_flags),
+			H.HMatchArm(ctor="Some", ctor_base=None, binders=[binder_name], binder_ids=binder_ids, binder_field_indices=[0], block=body_block, result=None, binder_is_mutable=binder_mut_flags),
 			H.HMatchArm(ctor=None, ctor_base=None, binders=[], block=H.HBlock(statements=[H.HBreak()]), result=None),
 		]
 		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms)

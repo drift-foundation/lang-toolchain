@@ -100,6 +100,18 @@ def _assign_missing_binding_ids(block: H.HBlock) -> None:
 		elif hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 			_scan_expr(expr.scrutinee)
 			for arm in expr.arms:
+				# Match-arm binders now carry persistent HIR binding
+				# IDs allocated by `lower_match` in `ast_to_hir.py`
+				# BEFORE the arm block is lowered.  Include them in
+				# the max_id scan so the `next_id = max_id + 1`
+				# allocation below does not collide with a persisted
+				# arm binder ID when normalization introduces a new
+				# temp (`__tmp_borrowN`, etc.) -- the collision shows
+				# up downstream as a borrow-checker base-kind mismatch
+				# or as a MIR-lowering struct-vs-scalar mismatch.
+				for _abid in getattr(arm, "binder_ids", []) or []:
+					if isinstance(_abid, int):
+						max_id = max(max_id, _abid)
 				_scan_block(arm.block)
 				if arm.result is not None:
 					_scan_expr(arm.result)

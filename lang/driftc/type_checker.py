@@ -506,6 +506,7 @@ class TypeChecker:
 				max_id = bid
 
 		def walk_expr(expr: H.HExpr) -> None:
+			nonlocal max_id
 			bump(expr)
 			if isinstance(expr, H.HVar):
 				return
@@ -602,6 +603,21 @@ class TypeChecker:
 			if isinstance(expr, H.HMatchExpr):
 				walk_expr(expr.scrutinee)
 				for arm in expr.arms:
+					# Include match-arm binder IDs in the max_id scan so
+					# the type-checker's own `_alloc_local_id()`
+					# counter starts above any lower-time-allocated arm
+					# binder ID.  Without this, subsequent type-checker
+					# allocations for temps (`__tmp_borrow*` from
+					# `borrow_materialize`, etc.) collide with the
+					# persistent arm binder IDs and the type-checker
+					# overwrites `binding_types[bid]` for those IDs
+					# with stale types — observable downstream at
+					# `hir_to_mir.py:11351` as
+					# `TypeKind.SCALAR for <bid>` where a struct was
+					# expected.
+					for _abid in getattr(arm, "binder_ids", []) or []:
+						if isinstance(_abid, int) and _abid > max_id:
+							max_id = _abid
 					walk_block(arm.block)
 					if arm.result is not None:
 						walk_expr(arm.result)
@@ -6582,6 +6598,16 @@ class TypeChecker:
 										is_copy = bool(self.type_table.copy_status(root_ty))
 									except Exception:
 										is_copy = False
+									# Diagnostic-name hygiene: `cap.name` may be the
+									# internal `__match_binder_<N>_<source>` form when
+									# the lambda lives inside a match-arm body and the
+									# capture references an arm binder (rewritten by
+									# `_rename_expr`'s HLambda branch in
+									# `stage1/ast_to_hir.py`).  User-facing messages
+									# must spell the source name -- see
+									# `lang/driftc/checker/__init__.py:36` and
+									# `lang/tests/driver/test_match_binder_diagnostic_hygiene.py`.
+									user_cap_name = user_facing_binding_name(cap.name)
 									if is_copy:
 										diagnostics.append(
 											_tc_diag(
@@ -6589,7 +6615,7 @@ class TypeChecker:
 													f"E-CAPTURE-SHARE-NOT-SHARE: type "
 													f"'{ty_name}' is `Copy`, not `Share`. "
 													f"For value-like capture, use "
-													f"`captures(copy {cap.name})`. `share` "
+													f"`captures(copy {user_cap_name})`. `share` "
 													f"is for non-Copy shared-owner types."
 												),
 												severity="error",
@@ -6604,7 +6630,7 @@ class TypeChecker:
 													f"'{ty_name}' does not implement "
 													f"`std.core.shareable.Share`. To "
 													f"transfer ownership, use "
-													f"`captures(move {cap.name})`. To enable "
+													f"`captures(move {user_cap_name})`. To enable "
 													f"share-capture for '{ty_name}', "
 													f"implement `std.core.shareable.Share` "
 													f"for it (an inherent `.share()` method "
@@ -6645,11 +6671,12 @@ class TypeChecker:
 										_share_ty_name = self.type_table.get(root_ty).name or f"typeid={root_ty}"
 									except Exception:
 										_share_ty_name = f"typeid={root_ty}"
+									_share_user_name = user_facing_binding_name(cap.name)
 									diagnostics.append(
 										_tc_diag(
 											message=(
 												f"internal: failed to type-check "
-												f"synthesized `Share::share(&{cap.name})` "
+												f"synthesized `Share::share(&{_share_user_name})` "
 												f"for type '{_share_ty_name}': "
 												f"{type(_share_exc).__name__}: {_share_exc}"
 											),
@@ -7628,7 +7655,20 @@ class TypeChecker:
 								binder_muts = list(getattr(arm, "binder_is_mutable", []) or [])
 								if len(binder_muts) != len(arm.binders):
 									binder_muts = [False for _ in arm.binders]
-								for (bname, fidx, is_mut) in zip(arm.binders, field_indices, binder_muts):
+								# Use persistent binder IDs allocated at lower time
+								# (`lower_match` in `lang/driftc/stage1/ast_to_hir.py`)
+								# when available, so nested lambdas constructed in the
+								# arm body — whose `HExplicitCapture.binding_id` and
+								# `HVar.binding_id` were set against these IDs during
+								# initial lowering — resolve through a single
+								# persistent identity instead of relying on
+								# post-arm-scope name lookups that the deferred
+								# lambda-typing path can no longer satisfy.  Fall back
+								# to fresh allocation only if the arm was constructed
+								# without IDs (e.g., by an HIR reconstructor that
+								# bypasses `lower_match`).
+								persisted_ids = list(getattr(arm, "binder_ids", []) or [])
+								for _bi, (bname, fidx, is_mut) in enumerate(zip(arm.binders, field_indices, binder_muts)):
 									if fidx < 0 or fidx >= len(field_types):
 										continue
 									bty = field_types[fidx]
@@ -7649,7 +7689,10 @@ class TypeChecker:
 											print(f"[debug] match binder {bname} type={self._pretty_type_name(bty, current_module=current_module_name)} in {function_symbol(fn_id)} ctor={arm.ctor}", file=sys.stderr)
 										except Exception:
 											pass
-									bid = self._alloc_local_id()
+									if _bi < len(persisted_ids):
+										bid = persisted_ids[_bi]
+									else:
+										bid = self._alloc_local_id()
 									locals.append(bid)
 									scope_env[-1][bname] = bty
 									scope_bindings[-1][bname] = bid
@@ -10679,9 +10722,10 @@ class TypeChecker:
 				if cap_bid is not None and cap_name is not None:
 					cap_kind = _explicit_capture_kind(cap_bid)
 					if cap_kind == "ref":
+						_user_cap_name = user_facing_binding_name(cap_name)
 						diagnostics.append(
 							_tc_diag(
-								message=f"capture '{cap_name}' is shared; capture &mut {cap_name} to mutate",
+								message=f"capture '{_user_cap_name}' is shared; capture &mut {_user_cap_name} to mutate",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
 							)
@@ -10852,9 +10896,10 @@ class TypeChecker:
 				if cap_bid is not None and cap_name is not None:
 					cap_kind = _explicit_capture_kind(cap_bid)
 					if cap_kind == "ref":
+						_user_cap_name = user_facing_binding_name(cap_name)
 						diagnostics.append(
 							_tc_diag(
-								message=f"capture '{cap_name}' is shared; capture &mut {cap_name} to mutate",
+								message=f"capture '{_user_cap_name}' is shared; capture &mut {_user_cap_name} to mutate",
 								severity="error",
 								span=getattr(stmt, "loc", Span()),
 							)

@@ -326,13 +326,29 @@ class HExplicitCapture(HNode):
 	`side_effect()` before `Share::share(&x)`, matching the source.
 
 	The user-spelled name and binding id remain on `name` / `binding_id`
-	(no rewrite) so:
+	in the general case (no rewrite) so:
 	  - The lambda body's `HVar(<name>, binding_id)` resolves through
 	    the standard capture-slot mechanism into the env field that
 	    holds the share-result.
 	  - The checker's focused `E-CAPTURE-SHARE-NOT-SHARE` diagnostic
 	    reads the user-spelled type/name directly off `binding_id` and
 	    `name` — no auxiliary `desugar_origin_*` plumbing required.
+
+	Exception — match-arm binder captures: when a lambda appears inside
+	a `match` arm and explicitly captures one of the arm binders,
+	`lower_match`'s alpha-rename pass (`_rename_expr` HLambda branch
+	in `ast_to_hir.py`) rewrites the capture `name` to the internal
+	`__match_binder_<N>_<source>` form and propagates the binder's
+	persistent `binding_id` (allocated by `lower_match` BEFORE the arm
+	block is lowered) to keep the capture, the body's `HVar`, and the
+	synthesized `share_value`'s subject all referring to the same
+	binding identity.  This rewrite is internal HIR plumbing only:
+	any diagnostic that surfaces a capture name MUST route the string
+	through `lang/driftc/checker/__init__.py::user_facing_binding_name`
+	so the source spelling is recovered.  Pinned by
+	`lang/tests/driver/test_match_binder_diagnostic_hygiene.py` and
+	the negative match-arm `captures(share x)` cases in
+	`lang/tests/driver/test_match_arm_lambda_capture.py`.
 	"""
 	name: str
 	kind: str  # "ref", "ref_mut", "copy", "move", "share"
@@ -515,6 +531,19 @@ class HMatchArm(HNode):
 	# Normalized mapping from binders to field indices, parallel to `binders`.
 	# Filled by the typed checker once the scrutinee type is known.
 	binder_field_indices: list[int] = field(default_factory=list)
+	# Persistent HIR binding identity for each arm binder, parallel to
+	# `binders`.  Allocated by `lower_match` in `ast_to_hir.py` BEFORE
+	# the arm block is lowered, so any nested lambda inside the arm
+	# constructs its `HExplicitCapture` / `HVar` references with the
+	# correct `binding_id` from the start (rather than relying on
+	# post-lowering name-based repair, which fails for deferred
+	# lambda type-check passes that run after the arm scope has been
+	# popped).  The type checker uses these IDs at arm entry instead
+	# of allocating fresh ones.  Empty list for HMatchArm values
+	# constructed by reconstructors that don't run through
+	# `lower_match` (those paths should set `binder_ids` parallel to
+	# `binders` if they want first-class scope semantics).
+	binder_ids: list[BindingId] = field(default_factory=list)
 	loc: Span = field(default_factory=Span)
 
 

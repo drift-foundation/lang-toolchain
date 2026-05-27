@@ -472,6 +472,7 @@ class BorrowMaterializeRewriter:
 						binder_fields=getattr(arm, "binder_fields", None),
 						binder_field_indices=getattr(arm, "binder_field_indices", []),
 						binder_is_mutable=getattr(arm, "binder_is_mutable", None),
+						binder_ids=list(getattr(arm, "binder_ids", []) or []),
 						block=arm_block,
 						result=arm_result,
 						loc=arm.loc,
