@@ -194,12 +194,13 @@ avoiding. `is_complete` is therefore not blocked by §5.
 
 **Hard ordering, per repo regression-first policy. No deferral was
 requested.** The VT-drop UAF was an active LANGUAGE_BUG when this
-sequencing was written (see §5);
-the channel slice exists to *supervise* `VirtualThread<T>` handles, so
-its implementation and tests must be built on a sound handle-lifetime
-contract. Shipping supervisor primitives while drop-of-an-unjoined-
-running-task was known-unsafe would have given the app team an attractive
-API built over an unresolved memory-safety defect.
+sequencing was written (see §5).  Because the channel slice was
+specifically designed to *supervise* `VirtualThread<T>` handles, its
+implementation and tests had to be built on a sound handle-lifetime
+contract; shipping supervisor primitives while
+drop-of-an-unjoined-running-task was known-unsafe would have given
+the app team an attractive API built over an unresolved
+memory-safety defect.
 
 **Steps in order:**
 

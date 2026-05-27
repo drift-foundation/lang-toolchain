@@ -73,9 +73,13 @@ Cases:
        `joined` skip), parks 1 ms, repeats indefinitely.  No
        valgrind shape — pure liveness defect.
 
-All eight regressions fail on the pre-fix tree (each reproduces
-under valgrind memcheck; R8 is a pure liveness defect verified
-uninstrumented with a tight timeout) and pass post-fix at 0.33.1.
+All eight regressions failed on the pre-fix tree and pass post-fix
+at 0.33.1.  R1-R7 ran under valgrind memcheck (memory-safety
+defects: UAF / double-free / leak / uninit-read / double-release).
+R8 is the outlier — a pure liveness defect, verified
+uninstrumented against a tight subprocess timeout (`vt_is_completed`
+spins forever on `handle == 0`, so there is no memcheck shape to
+catch; the test fails when the polling loop fails to terminate).
 The fix is option (d) from plan §5.3 — Drift-side
 `Arc<Mutex<ResultState<T>>>` shared between VT handle and cb thunk,
 with `ResultState<T>::destroy` as the single deallocation point —
