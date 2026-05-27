@@ -1,0 +1,4 @@
+{
+  "description": "e2e: VirtualThread<Optional<OwnedResult>> submit-error path — ResultState::destroy must compile + run cleanly for move-only nested T even when !initialized (cb never ran)",
+  "exit_code": 0
+}

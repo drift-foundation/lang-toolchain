@@ -1,0 +1,58 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+import lang.thread as thread;
+
+pub struct OwnedResult
+	require Self is core.Destructible
+{
+	pub label: String,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for OwnedResult {
+	pub fn destroy(var self: OwnedResult) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* ─── M6: spawn submit-failure ────────────────────────────────
+	 * Force every exec_submit to fail.  The cb is dropped without
+	 * running (so no OwnedResult is ever constructed).  The VT
+	 * returns with submit_error != 0 and handle = 0; the Arc<
+	 * Mutex<ResultState<Optional<OwnedResult>>>> still exists and
+	 * its destructor MUST compile + run for move-only nested T —
+	 * even though `initialized == false` means no value drop
+	 * fires, the generic monomorphization site for
+	 * ResultState::destroy is still instantiated and must accept
+	 * move-only `T`. */
+	thread.exec_submit_test_override(1);
+	{
+		val ctr_cb = ctr.clone();
+		var t = conc.spawn<type Optional<OwnedResult>>(
+			| | captures(move ctr_cb) nothrow => {
+				val p: String = "should-not-";
+				val s: String = p + "run-X";
+				return Optional<type OwnedResult>::Some(OwnedResult(
+					label = s,
+					destruct_count = ctr_cb.clone()
+				));
+			}
+		);
+		/* Drop t without .join() — the submit-error destructor
+		 * path runs, exercising ResultState::destroy at this
+		 * monomorphization. */
+	}
+	thread.exec_submit_test_override(0);
+
+	/* No OwnedResult was ever constructed; counter must be 0. */
+	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	if n != 0 { return 100 + n; }
+	return 0;
+}

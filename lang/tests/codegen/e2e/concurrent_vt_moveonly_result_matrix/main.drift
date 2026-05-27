@@ -1,0 +1,295 @@
+module m;
+
+import std.concurrent as conc;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+/* Move-only nested result.  Heap-backed `label` via concat so the
+ * destructor frees real heap; counter-tracked so every destruction
+ * site is observable. */
+pub struct OwnedResult
+	require Self is core.Destructible
+{
+	pub label: String,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for OwnedResult {
+	pub fn destroy(var self: OwnedResult) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+fn make_result(ctr: arc.Arc<conc.AtomicInt>, suffix: String) nothrow -> OwnedResult {
+	val p: String = "owned-";
+	return OwnedResult(label = p + suffix, destruct_count = move ctr);
+}
+
+pub struct Sigs {
+	pub started: conc.AtomicBool,
+	pub release: conc.AtomicBool
+}
+
+fn make_sigs() nothrow -> arc.Arc<Sigs> {
+	return arc.arc(Sigs(
+		started = conc.atomic_bool(false),
+		release = conc.atomic_bool(false)
+	));
+}
+
+fn wait_started(s: arc.Arc<Sigs>) nothrow -> Bool {
+	var spins: Int = 0;
+	while !atomic.atomic_load_bool(&s.get().started, 1) {
+		val _ = conc.sleep(conc.Duration(millis = 2));
+		spins = spins + 1;
+		if spins > 1000 { return false; }
+	}
+	return true;
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* ─── Atomic busy-spin gate (M3-M5): test-only synchronization ─
+	 *
+	 * The cancellation-pending semantics of
+	 * `VirtualThread::is_complete()` and the cancel-discards-published-
+	 * result semantics of `.join()` / `.join_timeout()` cannot be
+	 * deterministically pinned with any park-based blocker because
+	 * `cancel()`'s cv broadcast wakes parked VTs — a `conc.sleep` /
+	 * `Condvar.wait` / blocking channel `recv()` blocker would race
+	 * the cancellation observation.  The only blocker that holds the
+	 * cb in a known state across a `cancel()` call is an atomic flag
+	 * the cb spins on without yielding to the scheduler.
+	 *
+	 * Constraints this idiom relies on (all hold in this test):
+	 *   1. **Distinct native carrier.**  The cb runs on `cb_exec`,
+	 *      built via `executor_policy_builder()` + `build_executor()`,
+	 *      which calls `pthread_create` for its worker (verified in
+	 *      `lang/language_runtime/posix/thread_runtime.c:1380-1387`).
+	 *      The cb's spin runs on a different OS thread from the root
+	 *      VT's carrier (default exec), so the OS scheduler preempts
+	 *      between them regardless of core count — main can store to
+	 *      `release` while the cb is spinning.
+	 *   2. **No locks or shared resources between spinner and
+	 *      releaser.**  The cb reads only `sigs.started` and
+	 *      `sigs.release` (atomics); main writes only `sigs.release`.
+	 *      No Mutex, no channel, no other shared mutable state on the
+	 *      release path.
+	 *   3. **Exactly one spinner alive at a time.**  M3, M4, M5 each
+	 *      run inside their own block, complete a full
+	 *      spawn → cancel/drop → release → wait-for-complete cycle,
+	 *      and finalize before the next case begins.  The shared
+	 *      `cb_exec` carrier is never contended between cases.
+	 *   4. **Timeout-bounded.**  The codegen e2e runner enforces a
+	 *      per-case timeout (`--timeout` flag); each `wait_started`
+	 *      and `while !is_complete()` loop has its own internal spin
+	 *      cap that returns a distinguishable error code instead of
+	 *      looping forever.
+	 *
+	 * This is test-only synchronization to expose
+	 * cancellation-insensitive blocking — NOT a production concurrency
+	 * idiom.  Application code should use park-aware primitives
+	 * (`conc.sleep`, `Condvar.wait_timeout`, channel `recv_timeout`)
+	 * which integrate with cancellation per
+	 * `docs/design/drift-concurrency.md`. */
+	var b = conc.executor_policy_builder();
+	b.min_threads(1);
+	b.max_threads(1);
+	val cb_exec = b.build_executor();
+
+	/* ─── M1: spawn + join Ok ────────────────────────────────────
+	 * Deterministic by construction — .join() waits for completion. */
+	{
+		val ctr_cb = ctr.clone();
+		var t = conc.spawn<type Optional<OwnedResult>>(
+			| | captures(move ctr_cb) nothrow => {
+				return Optional<type OwnedResult>::Some(
+					make_result(ctr_cb.clone(), "M1-AAA")
+				);
+			}
+		);
+		match t.join() {
+			Ok(opt) => {
+				match move opt {
+					Some(r) => {
+						if r.label.byte_length() < 5 { return 10; }
+						/* r drops at arm end → counter +1 */
+					},
+					None => { return 11; },
+					default => { return 12; }
+				}
+			},
+			Err(_) => { return 13; },
+			default => { return 14; }
+		}
+	}
+	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n1 != 1 { return 100 + n1; }
+
+	/* ─── M2: completed-unjoined drop cleanup ────────────────────
+	 * Spin on is_complete() until the runtime has marked the VT
+	 * complete — that proves the cb has published — THEN drop. */
+	{
+		val ctr_cb = ctr.clone();
+		var t = conc.spawn<type Optional<OwnedResult>>(
+			| | captures(move ctr_cb) nothrow => {
+				return Optional<type OwnedResult>::Some(
+					make_result(ctr_cb.clone(), "M2-BBB")
+				);
+			}
+		);
+		var spins: Int = 0;
+		while !t.is_complete() {
+			val _ = conc.sleep(conc.Duration(millis = 2));
+			spins = spins + 1;
+			if spins > 1000 { return 80; }
+		}
+		{ var local_t = move t; }
+	}
+	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n2 != 2 { return 200 + n2; }
+
+	/* ─── M3: cancel + cb publishes + join → CANCELLED ────────────
+	 * Sequence: wait for started → cancel() → assert !is_complete()
+	 * while release == false → release → wait for completion →
+	 * verify .join() returns CANCELLED. */
+	{
+		val ctr_cb = ctr.clone();
+		val sigs = make_sigs();
+		val sigs_cb = sigs.clone();
+		match conc.spawn_on<type Optional<OwnedResult>>(
+			cb_exec,
+			core.callback0(
+				| | captures(move ctr_cb, move sigs_cb) nothrow => {
+					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+					}
+					return Optional<type OwnedResult>::Some(
+						make_result(ctr_cb.clone(), "M3-CCC")
+					);
+				}
+			)
+		) {
+			Ok(v) => {
+				var t = move v;
+				if !wait_started(sigs.clone()) { return 81; }
+				t.cancel();
+				/* cancellation request is NOT completion. */
+				if t.is_complete() { return 82; }
+				atomic.atomic_store_bool(&sigs.get().release, true, 2);
+				var spins: Int = 0;
+				while !t.is_complete() {
+					val _ = conc.sleep(conc.Duration(millis = 2));
+					spins = spins + 1;
+					if spins > 1000 { return 83; }
+				}
+				match t.join() {
+					Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CANCELLED { return 30; } },
+					Ok(_) => { return 31; },
+					default => { return 32; }
+				}
+			},
+			Err(_) => { return 84; },
+			default => { return 85; }
+		}
+	}
+	val n3 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n3 != 3 { return 300 + n3; }
+
+	/* ─── M4: same shape via .join_timeout() ──────────────────────
+	 * Hits the join_timeout cancellation cleanup site (separate
+	 * generic instantiation from .join()). */
+	{
+		val ctr_cb = ctr.clone();
+		val sigs = make_sigs();
+		val sigs_cb = sigs.clone();
+		match conc.spawn_on<type Optional<OwnedResult>>(
+			cb_exec,
+			core.callback0(
+				| | captures(move ctr_cb, move sigs_cb) nothrow => {
+					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+					}
+					return Optional<type OwnedResult>::Some(
+						make_result(ctr_cb.clone(), "M4-DDD")
+					);
+				}
+			)
+		) {
+			Ok(v) => {
+				var t = move v;
+				if !wait_started(sigs.clone()) { return 86; }
+				t.cancel();
+				if t.is_complete() { return 87; }
+				atomic.atomic_store_bool(&sigs.get().release, true, 2);
+				var spins: Int = 0;
+				while !t.is_complete() {
+					val _ = conc.sleep(conc.Duration(millis = 2));
+					spins = spins + 1;
+					if spins > 1000 { return 88; }
+				}
+				match t.join_timeout(conc.Duration(millis = 100)) {
+					Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CANCELLED { return 40; } },
+					Ok(_) => { return 41; },
+					default => { return 42; }
+				}
+			},
+			Err(_) => { return 89; },
+			default => { return 90; }
+		}
+	}
+	val n4 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n4 != 4 { return 400 + n4; }
+
+	/* ─── M5: drop-while-running / abandoned-publish ──────────────
+	 * Sequence: wait for started → drop t while cb still spinning →
+	 * release → cb wakes, publishes via _publish_or_drop which sees
+	 * abandoned and drops `v` locally. */
+	{
+		val ctr_cb = ctr.clone();
+		val sigs = make_sigs();
+		val sigs_cb = sigs.clone();
+		match conc.spawn_on<type Optional<OwnedResult>>(
+			cb_exec,
+			core.callback0(
+				| | captures(move ctr_cb, move sigs_cb) nothrow => {
+					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+					}
+					return Optional<type OwnedResult>::Some(
+						make_result(ctr_cb.clone(), "M5-EEE")
+					);
+				}
+			)
+		) {
+			Ok(v) => {
+				var t = move v;
+				if !wait_started(sigs.clone()) { return 91; }
+				/* Drop t while the cb is still spinning. */
+				{ var local_t = move t; }
+				/* Release the cb; _publish_or_drop sees abandoned
+				 * (set by VT::destroy under the lock) and drops `v`
+				 * locally — the abandoned-publish branch IS the
+				 * destruction event we're testing, so observing the
+				 * counter increment is the only correct
+				 * memcheck/load-tolerant proof.  A fixed sleep here
+				 * would be racy under instrumentation. */
+				atomic.atomic_store_bool(&sigs.get().release, true, 2);
+				var spins5: Int = 0;
+				while atomic.atomic_load_int(&ctr.get(), 1) < 5 {
+					val _ = conc.sleep(conc.Duration(millis = 2));
+					spins5 = spins5 + 1;
+					if spins5 > 5000 { return 94; }
+				}
+			},
+			Err(_) => { return 92; },
+			default => { return 93; }
+		}
+	}
+	val n5 = atomic.atomic_load_int(&ctr.get(), 1);
+	if n5 != 5 { return 500 + n5; }
+
+	return 0;
+}

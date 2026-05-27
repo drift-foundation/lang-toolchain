@@ -1,0 +1,4 @@
+{
+  "description": "e2e: Deque<VirtualThread<Optional<OwnedResult>>> — PushCoin consumer shape; move-only nested generic VT compiles and runs through Deque push/pop, .join() returns Some(OwnedResult) intact, each destructed exactly once",
+  "exit_code": 0
+}

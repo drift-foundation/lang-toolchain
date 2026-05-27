@@ -1,0 +1,89 @@
+module m;
+
+import std.concurrent as conc;
+import std.containers as containers;
+import std.core as core;
+import std.core.arc as arc;
+import lang.atomic as atomic;
+
+/* PushCoin-style consumer shape: a `Deque<VirtualThread<Optional<T>>>`
+ * where `T` contains heap-backed `String` (move-only).  This is the
+ * exact instantiation chain reported in
+ * `pushcoin/work/drift-0.33.2-deque-copy-regression.md`: the deque
+ * is innocent, but propagating the generic VirtualThread<Optional<T>>
+ * through it must compile cleanly. */
+
+pub struct OwnedResult
+	require Self is core.Destructible
+{
+	pub label: String,
+	pub destruct_count: arc.Arc<conc.AtomicInt>
+}
+
+implement core.Destructible for OwnedResult {
+	pub fn destroy(var self: OwnedResult) nothrow -> Void {
+		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+	}
+}
+
+fn make_result(ctr: arc.Arc<conc.AtomicInt>, suffix: String) nothrow -> OwnedResult {
+	val p: String = "deque-";
+	return OwnedResult(label = p + suffix, destruct_count = move ctr);
+}
+
+pub fn main() nothrow -> Int {
+	val ctr: arc.Arc<conc.AtomicInt> = arc.arc(conc.atomic_int(0));
+
+	/* Push 3 spawned VTs into a deque, then pop and join each. */
+	var tasks = containers.deque<type conc.VirtualThread<Optional<OwnedResult>>>();
+
+	val ctr_a = ctr.clone();
+	tasks.push_back(conc.spawn<type Optional<OwnedResult>>(
+		| | captures(move ctr_a) nothrow => {
+			return Optional<type OwnedResult>::Some(make_result(ctr_a.clone(), "A"));
+		}
+	));
+	val ctr_b = ctr.clone();
+	tasks.push_back(conc.spawn<type Optional<OwnedResult>>(
+		| | captures(move ctr_b) nothrow => {
+			return Optional<type OwnedResult>::Some(make_result(ctr_b.clone(), "B"));
+		}
+	));
+	val ctr_c = ctr.clone();
+	tasks.push_back(conc.spawn<type Optional<OwnedResult>>(
+		| | captures(move ctr_c) nothrow => {
+			return Optional<type OwnedResult>::Some(make_result(ctr_c.clone(), "C"));
+		}
+	));
+
+	var consumed: Int = 0;
+	while tasks.len() > 0 {
+		match tasks.pop_front() {
+			Some(var t) => {
+				match t.join() {
+					Ok(opt) => {
+						match move opt {
+							Some(r) => {
+								if r.label.byte_length() < 5 { return 10; }
+								consumed = consumed + 1;
+								/* r drops at arm end → counter +1 */
+							},
+							None => { return 11; },
+							default => { return 12; }
+						}
+					},
+					Err(_) => { return 13; },
+					default => { return 14; }
+				}
+			},
+			None => { return 15; },
+			default => { return 16; }
+		}
+	}
+
+	if consumed != 3 { return 20; }
+	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	/* Each consumed OwnedResult was destructed exactly once. */
+	if n != 3 { return 100 + n; }
+	return 0;
+}

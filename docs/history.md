@@ -1,5 +1,121 @@
 # Drift development history
 
+## 2026-05-27 (STDLIB regression fix: `VirtualThread<T>` result-ownership protocol fails to compile for move-only generic `T`; replace 5 `val _ = v;` discard sites with `core.drop_value<T>(move v)`)
+- **Generic-stdlib copy-check regression introduced in 0.33.1.**  Release
+  0.33.3, ABI unchanged at 14.  Reported by PushCoin bookkeeper team
+  against 0.33.2; see
+  `~/src/pushcoin/work/drift-0.33.2-deque-copy-regression.md`.
+  Surface: compiling user code that instantiates a `VirtualThread<T>`
+  (directly or transitively via `Deque<VirtualThread<T>>`,
+  `Future<T>`, `channel<VirtualThread<T>>`, etc.) where `T` is move-only (non-Copy)
+  fails with `error: cannot copy 'v': type '<T>' is not Copy (use
+  move v)` at 4 generic-instantiation positions inside the stdlib.
+  
+  **Root cause.**  The 0.33.1 `ResultState<T>` redesign introduced
+  five `val _ = v;` discard sites for the `var v = mem.read<type T>(...)`
+  cleanup pattern in the new result-ownership protocol.  `val _ = v`
+  *copies* `v` into the discard binding — fine for `T: Copy`, fails to
+  compile for move-only `T`.  The R1-R8 result-ownership regression
+  matrix used `T = String` (Copy-with-retain), so the bug never
+  exercised a move-only monomorphisation; consumer code with
+  `T = Optional<OwnedResult>` (heap-backed `String` field inside an
+  owned struct) exposed it immediately.
+  
+  **Fix.**  Five sites in `stdlib/std/concurrent/concurrent.drift`
+  replaced:
+  - `ResultState<T>::destroy` initialized-result drop.
+  - `_publish_or_drop<T>` abandoned-branch drop (closes R1 path).
+  - `VirtualThread<T>::join` cancellation-cleanup drop (R4 path).
+  - `VirtualThread<T>::join_timeout` cancellation-cleanup drop
+    (R5 path; the uninstantiated sibling the app team flagged).
+  - `VirtualThread<T>::destroy` initialized-result drop (R3 path).
+  
+  Each `val _ = v;` rewritten to `core.drop_value<type T>(move v);`.
+  `core.drop_value<T>` is the canonical intrinsic for "consume + run
+  T's Destructible if any"; it was already in stdlib for Arc internals
+  but had not been adopted by the result-ownership cleanup paths.
+  
+  **Coverage gap that allowed this to ship.**  The 0.33.1/0.33.2
+  result-ownership matrix (R1-R8) used `T = String` because String
+  is the canonical heap-bearing payload the app team tracks for
+  ownership/leak regressions, but String is also `Copy` (with
+  retain/release).  The R-matrix compiled and passed; move-only
+  generic `T` was not exercised.  Going forward the result-ownership
+  test gate is **augmented with an explicit move-only nested-result
+  matrix** so future redesigns of the same path can't silently break
+  consumer-realistic generic monomorphisations.
+  
+  **Test gate added.**  All five paths verified via a shared
+  counter-based destruction ledger.  Two distinct loop categories,
+  bounded differently:
+    * **Observation polls** in main (`wait_started`, the
+      `is_complete()` poll between cancel and release, the
+      counter-reaches-expected poll in M5) yield via short
+      `conc.sleep`s and have explicit per-loop spin caps that
+      return distinguishable error codes if they don't observe
+      the awaited state.  These replace the prior timing-based
+      waits so the matrix remains deterministic under
+      `DRIFT_MEMCHECK=1` / loaded host.
+    * **Callback gates** in the spawned cb (`while !release { }`
+      busy-spin in M3/M4/M5) are intentionally non-yielding and
+      carry NO internal cap — capping a callback gate would
+      defeat the cancellation-insensitivity guarantee that makes
+      atomic-gate handshakes the only correct mechanism for this
+      test class (`cancel()`'s cv broadcast would wake any
+      park-aware blocker).  Callback gates are bounded by the
+      e2e runner's per-case `--timeout` (and the `cb_exec`'s
+      dedicated pthread carrier ensures main can always store
+      `release = true` regardless of the gate's CPU spin).
+  - `concurrent_vt_moveonly_result_matrix` — single e2e covering
+    `VirtualThread<Optional<OwnedResult>>` across five paths
+    sequentially:
+      * **M1** `.join() → Ok` returns the value; consumer arm
+        drop counts +1.
+      * **M2** spawn → poll on `is_complete()` until terminal →
+        drop unjoined → VT::destroy mem.reads the published `T`
+        and drops it; counter +1.
+      * **M3** atomic-gate handshake (started/release flags, cb
+        spinning on dedicated `cb_exec` carrier) → wait_started
+        → `.cancel()` → assert `!is_complete()` while gated →
+        release → poll `is_complete()` → `.join() → CANCELLED`;
+        cancellation cleanup mem.reads and drops; counter +1.
+      * **M4** same handshake shape via `.join_timeout()`; pins
+        the previously-uninstantiated sibling cleanup site;
+        counter +1.
+      * **M5** same handshake; drop `t` while cb still spinning;
+        release; poll the destruction counter until it observes
+        the late drop (the abandoned-publish branch's
+        `_publish_or_drop` discard IS the destruction event, so
+        observing the counter increment is the correct
+        memcheck/load-tolerant proof); counter +1.
+  - `concurrent_vt_moveonly_submit_error` — separate case (needs
+    `thread.exec_submit_test_override`) exercising the
+    submit-failure path's `ResultState<T>::destroy` monomorphisation
+    for move-only nested `T` with `initialized = false`; ensures
+    the generic compiles cleanly even when no value is ever
+    constructed.
+  - `concurrent_deque_vt_moveonly_integration` —
+    `Deque<VirtualThread<Optional<OwnedResult>>>` integration case
+    matching the PushCoin reported consumer shape (the deque
+    propagates the generic VT through push/pop and `.join()`
+    extracts move-only `Some(OwnedResult)`; each destructed
+    exactly once).
+  - All three cases run under both normal and `DRIFT_MEMCHECK=1`
+    lanes.
+  - R1-R8 result-ownership matrix still green; existing channel +
+    `is_complete` slice still green; all `concurrent_*` / `conc_*`
+    e2e cases (81 total after additions = 59 pre-existing + 22 new
+    across 0.33.1-0.33.3) pass under both lanes.
+  
+  **No runtime/ABI changes.**  Fix lives entirely in
+  `stdlib/std/concurrent/concurrent.drift`.  `DRIFT_RT_ABI_VERSION`
+  stays at 14.  No other stdlib module is affected.  The app team's
+  initial Deque hypothesis was correct in symptom but wrong in
+  location — `Deque<VirtualThread<...>>` simply propagated the
+  generic instantiation; `Deque` itself is unchanged from 0.33.0.
+  
+  - `lang/versions.py` — 0.33.2 → 0.33.3.
+
 ## 2026-05-26 (stdlib addition: `std.concurrent.channel<T>` + `VirtualThread<T>::is_complete()` / `Future<T>::is_complete()` — supervisor-primitives slice; no runtime/ABI churn)
 - **Supervisor primitives in `std.concurrent`.**  Release 0.33.2, ABI
   unchanged at 14.  Implements the bookkeeper-team-requested slice

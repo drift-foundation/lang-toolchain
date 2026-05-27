@@ -343,10 +343,14 @@ implement<T> core.Destructible for ResultState<T> {
 		unsafe {
 			if self.initialized {
 				var v = mem.read<type T>(&mut self.buf, 0);
-				// `v` drops at end of scope; `T`'s `Destructible`
-				// runs.  Closes R3 (drop-after-completed) and the
+				// Drop the consumed `T` via `core.drop_value` so
+				// the generic monomorphisation works for move-only
+				// `T` (the `val _ = v` shape attempts to *copy* and
+				// fails to compile when `T` is not Copy — STDLIB
+				// regression observed by the app team in 0.33.2).
+				// Closes R3 (drop-after-completed) and the
 				// post-thunk-publish branches of R1.
-				val _ = v;
+				core.drop_value<type T>(move v);
 			}
 			val ptr = mem.rawbuffer_ptr<type T>(&self.buf);
 			val cap = mem.rawbuffer_cap<type T>(&self.buf);
@@ -1539,8 +1543,9 @@ fn _publish_or_drop<T>(state: &core.Arc<Mutex<ResultState<T>>>, var v: T) nothro
 	var guard = state.get().lock();
 	val rs = guard.get_mut();
 	if rs.abandoned {
-		// `v` drops at fn-exit; `T`'s `Destructible` runs locally.
-		val _ = v;
+		// Drop `v` via `core.drop_value` (generic over move-only
+		// `T`).  Closes the abandoned-publish branch of R1.
+		core.drop_value<type T>(move v);
 		return;
 	}
 	unsafe {
@@ -1799,7 +1804,9 @@ implement<T> VirtualThread<T> {
 				if rs.initialized {
 					unsafe {
 						var v = mem.read<type T>(&mut rs.buf, 0);
-						val _ = v;
+						// `core.drop_value` instead of `val _ = v`
+						// so generic move-only `T` compiles.
+						core.drop_value<type T>(move v);
 					}
 					rs.initialized = false;
 				}
@@ -1865,7 +1872,9 @@ implement<T> VirtualThread<T> {
 				if rs.initialized {
 					unsafe {
 						var v = mem.read<type T>(&mut rs.buf, 0);
-						val _ = v;
+						// `core.drop_value` instead of `val _ = v`
+						// so generic move-only `T` compiles.
+						core.drop_value<type T>(move v);
 					}
 					rs.initialized = false;
 				}
@@ -1984,7 +1993,9 @@ implement<T> core.Destructible for VirtualThread<T> {
 			if rs.initialized {
 				unsafe {
 					var v = mem.read<type T>(&mut rs.buf, 0);
-					val _ = v;
+					// `core.drop_value` instead of `val _ = v` so
+					// generic move-only `T` compiles.
+					core.drop_value<type T>(move v);
 				}
 				rs.initialized = false;
 			}
