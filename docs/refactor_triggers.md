@@ -377,33 +377,66 @@ opportunistic uplifts)" for the full rule.
   the "implicit move is flow-state-only" assumption.  Net cost
   ~3-5 days; current narrow fix holds in the meantime.
 
-- **Triggers:**
+- **Triggers.**  As of 0.33.6, `_lower_owning_consume` and the
+  other potentially-vulnerable non-call-arg consume sites
+  (HReturn, HLet RHS, HAssign RHS) are NOT live bug paths: the
+  type checker rejects bare non-Copy HVar use in those positions
+  with `cannot copy 'X': type is not Copy (use move X)`
+  (`E-AUTO-c38540ff`, `type_checker.py:3161`).  Users are
+  forced to write explicit `move`, which routes through
+  `_visit_expr_HMove` — already correct for callback captures
+  (the env-slot zero-back has shipped since the original lambda
+  capture lowering).  Only the call-arg position permits bare
+  HVar implicit-move, and that's the patched site.  The
+  asymmetric type-checker discipline is the load-bearing
+  invariant keeping the un-refactored shape correct.
 
-  - **Mechanical:** any reported OR review-discovered
-    double-drop or refcount-UAF against a callback closure body
-    where the captured value is consumed through a path that
-    ISN'T the call-arg site (e.g. `val x = <move-capture>`
-    HLet, `return <move-capture>` HReturn,
-    `MyStruct(field = <move-capture>)` ctor arg, etc.).  The
-    narrow 0.33.6 fix doesn't cover these; the symptom would be
-    the SAME atexit / cb-drop chain over-drop pattern as
+  The structural refactor fires if ANY of the following becomes
+  true:
+
+  - **Type-checker relaxation.**  The implicit-move rule at
+    `type_checker.py:3135-3170` is loosened to accept bare
+    non-Copy HVar at HReturn, HLet RHS, HAssign RHS, or other
+    non-call-arg consume positions.  Once accepted, the
+    currently-dead `_lower_owning_consume` capture-aware path
+    becomes live and silently double-drops callback captures
+    in the same shape as the 0.33.6-fixed bookkeeper UAF.
+    Pointer from the type-check-relaxation slice goes here.
+  - **New consuming-position site added.**  Any new
+    consume-position lowering in `hir_to_mir.py` (or a new
+    syntactic form whose lowering consumes a non-Copy local
+    via bare HVar — `select` arm-body, pattern-match
+    consume, async / generator points, etc.) that does NOT
+    route through `_lower_call_arg` AND does NOT require
+    explicit `HMove` from the source.  At that point the
+    structural rewrite is cheaper than duplicating
+    `_move_from_callback_capture_slot` routing at the new
+    site.
+  - **Another callback-capture over-drop reported or
+    review-discovered outside the call-arg path.**  Same
+    atexit / cb-drop trace shape as
     `drift-vt-drop-atexit-use-after-free.md` but with a
-    different consume site in the trace.  The pointer from such
-    a finding goes directly to this entry — whether it comes
-    from a fresh app-team filing or surfaces in a slice review.
-  - **Second special-case site:** `_lower_call_arg`'s
-    capture-aware branch is already the first per-site
-    work-around.  The MOMENT a second consuming position
-    (HReturn, HLet RHS, ctor field, etc.) needs the same
-    `_move_from_callback_capture_slot` routing duplicated,
-    escalate to this entry rather than duplicating again.  Two
-    sites carrying the same hand-rolled
-    re-derivation-of-borrow-checker-state is enough evidence
-    the structural fix is overdue.
-  - **Borrow-checker walker consolidation lands first** (see
-    "Consolidate borrow-checker walkers" above) — that refactor
-    introduces span/provenance return shapes that this pass can
-    consume directly, lowering the implementation cost.
+    consume site in the trace that's NOT
+    `_lower_call_arg` (or the unified `_lower_call` arg loop
+    that funnels into it).  Whether the finding comes from a
+    fresh app-team filing or surfaces in a slice review, it
+    confirms the type-checker enforcement has a hole the
+    structural rewrite would close at the source rather than
+    per-site.
+
+  **Borrow-checker walker consolidation lands first** (see
+  "Consolidate borrow-checker walkers" above) — that refactor
+  introduces span/provenance return shapes that this pass can
+  consume directly, lowering the implementation cost.  Not a
+  fire trigger; a sequencing preference.
+
+  **Confirmation pass result (2026-05-27).**  Drafted minimal
+  regressions for HReturn / HAssign / HLet of a callback-
+  captured `Arc<T>` against 0.33.6.  All three were rejected by
+  the type checker before reaching MIR lowering, confirming the
+  un-patched `_lower_owning_consume` branch is unreachable on
+  the current language surface.  Cert remains unblocked; trigger
+  parked.
 
 - **Scope when triggered:** ~3-5 days.
   1. Add `lang/driftc/stage1/implicit_move_materialize.py` —
