@@ -6119,6 +6119,49 @@ def compile_stubbed_funcs(
 					bid = getattr(obj, "binding_id", None)
 					if bid is not None:
 						max_existing = max(max_existing, int(bid))
+					# `HMatchArm.binder_ids` (added in 0.33.4 to give
+					# match-arm binders first-class HIR binding
+					# identity) is a list of bare `int`s.  Walking
+					# `obj.__dict__.values()` discovers the list, but
+					# the recursive call on a bare `int` finds no
+					# `binding_id` attribute, so the binder IDs would
+					# silently fail to bump `max_existing`.  Hidden
+					# lambda capture-ID allocation (`next_id =
+					# max_existing + 1` below) would then issue
+					# capture IDs that collide with the lambda body's
+					# persisted arm binder IDs, and the subsequent
+					# `_remap_ids` pass would rewrite arm-binder HVars
+					# to point at the capture's env-slot type
+					# (typically `Arc<...>` from a `share` capture)
+					# instead of the arm-binder's actual variant
+					# payload type.  The collision surfaces at MIR
+					# lowering as
+					# "unknown struct field reached MIR lowering
+					# (checker bug)" when the user's arm body accesses
+					# a field on the rewritten binder.  Regression:
+					# `lang/tests/driver/test_hidden_lambda_arm_binder_collision.py`.
+					#
+					# `HMatchArm` is not an HExpr / HStmt / HBlock /
+					# list / dict either, so without an explicit
+					# branch the walker stops here and never descends
+					# into `arm.block` / `arm.result`.  That hides
+					# every binding ID stamped on HLet / HVar /
+					# nested arms inside an arm body from
+					# `max_existing`, which would reintroduce the
+					# same collision class for arm-body locals even
+					# after the `binder_ids` bump above.  Descend
+					# explicitly.
+					if isinstance(obj, H.HMatchArm):
+						for _abid in getattr(obj, "binder_ids", []) or []:
+							if isinstance(_abid, int):
+								max_existing = max(max_existing, _abid)
+						_arm_block = getattr(obj, "block", None)
+						if _arm_block is not None:
+							_scan_binding_ids(_arm_block)
+						_arm_result = getattr(obj, "result", None)
+						if _arm_result is not None:
+							_scan_binding_ids(_arm_result)
+						return
 					if isinstance(obj, H.HExpr):
 						for child in obj.__dict__.values():
 							_scan_binding_ids(child)
@@ -6186,6 +6229,27 @@ def compile_stubbed_funcs(
 									base.binding_id = capture_id_map[int(bid)]
 								else:
 									base.binding_id = None
+					# Mirror the `_scan_binding_ids` HMatchArm
+					# branch: HMatchArm is not HExpr/HStmt/HBlock/
+					# list/dict, so without an explicit recursion
+					# capture-id remapping would never reach HVars
+					# inside an arm body.  A capture used inside a
+					# match arm (e.g. `match x { Some(v) =>
+					# captured_outer.method(v) }`) would keep its
+					# outer-fn binding ID, point at nothing in the
+					# hidden fn, and fail downstream.  Descend into
+					# `arm.block` and `arm.result`; do NOT walk
+					# `arm.binder_ids` — those are local arm
+					# binders, not outer captures, and must not be
+					# rewritten into capture slots.
+					if isinstance(obj, H.HMatchArm):
+						_arm_block_r = getattr(obj, "block", None)
+						if _arm_block_r is not None:
+							_remap_ids(_arm_block_r)
+						_arm_result_r = getattr(obj, "result", None)
+						if _arm_result_r is not None:
+							_remap_ids(_arm_result_r)
+						return
 					if isinstance(obj, H.HExpr):
 						for child in obj.__dict__.values():
 							_remap_ids(child)
@@ -6229,6 +6293,25 @@ def compile_stubbed_funcs(
 						elif isinstance(obj, H.HMatchArm):
 							for name in obj.binders:
 								local_names.add(name)
+							# HMatchArm is not HExpr / HStmt / HBlock
+							# / list / dict, so the dispatch chain
+							# below would never descend into
+							# `arm.block` / `arm.result`.  Any
+							# `HLet` / `HLocalConst` / nested
+							# arm-binder declared inside an arm body
+							# would be invisible to `local_names`,
+							# and a capture name that happens to
+							# match such an inner local would
+							# falsely escape the
+							# "capture name collides with a local
+							# binding" check.  Descend explicitly.
+							_arm_block_c = getattr(obj, "block", None)
+							if _arm_block_c is not None:
+								_collect_local_names(_arm_block_c)
+							_arm_result_c = getattr(obj, "result", None)
+							if _arm_result_c is not None:
+								_collect_local_names(_arm_result_c)
+							return
 						elif isinstance(obj, H.HCatchArm):
 							if obj.binder:
 								local_names.add(obj.binder)
@@ -6282,6 +6365,24 @@ def compile_stubbed_funcs(
 								and base.name in capture_name_to_id
 							):
 								base.binding_id = capture_name_to_id[base.name]
+						# HMatchArm is not HExpr/HStmt/HBlock/list/
+						# dict, so the dispatch below would never
+						# descend into an arm's body.  Name-based
+						# capture-id repair for HVars inside an arm
+						# body would then silently skip those HVars
+						# — defensive: the ID-based `_remap_ids`
+						# walker should have already handled them,
+						# but mirror the traversal here so an
+						# orphan-ID arm-body HVar gets its capture
+						# slot rebound by name as well.
+						if isinstance(obj, H.HMatchArm):
+							_arm_block_an = getattr(obj, "block", None)
+							if _arm_block_an is not None:
+								_apply_capture_names(_arm_block_an)
+							_arm_result_an = getattr(obj, "result", None)
+							if _arm_result_an is not None:
+								_apply_capture_names(_arm_result_an)
+							return
 						if isinstance(obj, H.HExpr):
 							for child in obj.__dict__.values():
 								_apply_capture_names(child)
@@ -6332,6 +6433,18 @@ def compile_stubbed_funcs(
 						_apply_capture_names_post(obj.body_expr, name_map)
 					if obj.body_block is not None:
 						_apply_capture_names_post(obj.body_block, name_map)
+				elif isinstance(obj, H.HMatchArm):
+					# Mirror the `_apply_capture_names` HMatchArm
+					# branch above: this post-pass also has to
+					# descend into arm bodies for name-based
+					# capture-id rebinding.
+					_arm_block_anp = getattr(obj, "block", None)
+					if _arm_block_anp is not None:
+						_apply_capture_names_post(_arm_block_anp, name_map)
+					_arm_result_anp = getattr(obj, "result", None)
+					if _arm_result_anp is not None:
+						_apply_capture_names_post(_arm_result_anp, name_map)
+					return
 				elif isinstance(obj, H.HExpr):
 					for child in obj.__dict__.values():
 						_apply_capture_names_post(child, name_map)

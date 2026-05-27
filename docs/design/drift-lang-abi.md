@@ -492,12 +492,57 @@ The compiler and runtime use a link-time ABI compatibility guard to fail determi
 
 ### When to bump
 
-Bump `DRIFT_RT_ABI_VERSION` when changing any compiler/runtime boundary contract:
+`DRIFT_RT_ABI_VERSION` is the **compatibility promise for previously-built artifacts**.  A new compiler / toolchain advertising the same ABI MUST compile and link against existing dependency artifacts built under that ABI without rebuilding the dependency world.
 
-* Runtime-exported helper signatures consumed by codegen
-* Data layouts crossing the boundary (struct/variant/frame payload ABI)
-* Calling convention or return packing between generated code and runtime
-* Ownership/drop contract changes that alter boundary behavior
+Bump `DRIFT_RT_ABI_VERSION` when a change requires dependencies or consumers to be rebuilt in order to compose correctly.  This includes:
+
+* Runtime or binary layout changes (struct / variant / frame payload ABI).
+* Calling convention, vtable, symbol, intrinsic, or interface representation changes.
+* Package / DMIR / artifact format changes that make existing artifacts unreadable or invalid.
+* Compiler changes that intentionally alter emitted artifact contracts such that old same-ABI artifacts must be regenerated.
+
+Do **NOT** bump the ABI for an ordinary compiler defect where existing valid source or same-ABI artifacts fail due to a bug in the new compiler.  In that case:
+
+1. Add a regression reproducing the failure.
+2. Fix the compiler.
+3. Keep the ABI unchanged.
+4. Confirm the fixed compiler consumes the existing artifact set successfully.
+
+#### Worked examples
+
+* `0.33.4` ICEs on valid bookkeeper source because of a bug in new match-arm / lambda lowering — **fix the compiler, ABI stays 14**.
+* `0.33.4` cannot use `0.33.3` ABI-14 dependency artifacts until mariadb-rpc, web-rest, singular, etc. are rebuilt because their artifact contract changed — **bump ABI and rebuild through certification**.
+
+#### Certification implication
+
+A same-ABI toolchain candidate **MUST be tested against the previously-certified artifact bundle before rebuilding dependencies**.  Rebuilding first hides compatibility breaks.  If the old bundle fails because a rebuild is required, either fix the compatibility regression and keep the ABI, or bump the ABI before certifying.
+
+#### Stable ABI Artifact Rule
+
+The Drift ABI version covers **the complete compiled-artifact contract**: calls, returns, exceptions, data layouts, interfaces / vtables, closures / captures, ownership / destruction behavior across boundaries, runtime intrinsics, exported symbols, generic linkage, and `.zdmp` representation and consumption.  For any two toolchains advertising the same ABI, a valid `.zdmp` emitted by the older toolchain MUST remain loadable, type-correct, linkable, and executable when consumed by the newer toolchain, without rebuilding that artifact or its transitive dependencies.  **This guarantee has no compiler-version time limit.**  A ten-year-old `.zdmp` carrying the current ABI must be consumable by the current compiler.
+
+If a valid existing `.zdmp` built under the advertised ABI must be rebuilt to work with a newer toolchain, **the ABI has changed** — unless the failure is a defect fixed before release.  Any unintentional failure to consume same-ABI artifacts is a compiler bug to fix under the existing ABI.  Artifact corruption, malformed input, unsupported pre-ABI artifacts, and artifacts already marked with an older ABI may be rejected without violating this promise.
+
+#### Signing and verification compatibility
+
+The compiled-artifact compatibility guarantee includes the artifact signing, attestation, trust, and verification path required to consume `.zdmp` files.  A valid, properly signed artifact accepted under an earlier toolchain with the same ABI must remain verifiable and consumable by later same-ABI toolchains without re-signing or rebuilding.
+
+Any intentional change that requires existing valid artifacts to be regenerated, re-signed, re-attested, or republished requires an ABI compatibility bump **unless** the new toolchain continues to support the earlier valid verification form.
+
+**Examples requiring an ABI bump (unless backward-compatible):**
+
+* Changing the `.zdmp` signature or author-claim encoding so old signed artifacts no longer verify.
+* Changing which signed content / hash is covered in a way that requires artifacts to be reissued.
+* Changing trust metadata or attestation schema required by the package consumer.
+* Changing verification rules so previously valid same-ABI packages are rejected.
+* Requiring re-signing or republishing dependency artifacts during toolchain upgrade.
+
+**Examples NOT requiring an ABI bump:**
+
+* Adding support for a new signature algorithm while continuing to accept old valid signatures.
+* Key rotation where artifacts signed by still-trusted older keys remain accepted under the documented trust policy.
+* Fixing a verifier bug that incorrectly rejected valid same-ABI artifacts.
+* Tightening validation only for malformed, corrupted, forged, revoked, or previously invalid artifacts.
 
 Do **not** bump for pure internal refactors with no boundary change.
 

@@ -1,5 +1,150 @@
 # Drift development history
 
+## 2026-05-27 (LANGUAGE_BUG follow-up fix: hidden-lambda capture-id allocator collided with persistent `HMatchArm.binder_ids` — bookkeeper 0.33.4 MIR-lowering "unknown struct field" regression closed; ABI stays at 14)
+- **Release 0.33.5, ABI unchanged at 14.**  Reported by the PushCoin bookkeeper team
+  (`~/src/pushcoin/work/drift-0.33.4-mir-lowering-regression.md`),
+  filed against the same release that introduced the persistent
+  `HMatchArm.binder_ids` field.  Bookkeeper (which compiled cleanly
+  on 0.33.3) failed on 0.33.4 with:
+  ```
+  internal: MIR lowering contract failure (unknown struct field
+  reached MIR lowering (checker bug)) [E-AUTO-faa62b04]
+  ```
+  Instrumented form pinned the failure to a hidden lambda:
+  ```
+  field='status' subj_ty=<Arc-TypeId> struct='Arc' module='std.core.arc'
+  known_fields=[] fn='__lambda_cb_*_*'
+  ```
+
+  **Root cause.**  Hidden-lambda lowering in
+  `lang/driftc/driftc.py` walks the lambda body to compute
+  `max_existing` (the high-water mark of binding IDs already in
+  use), then issues capture IDs starting at `max_existing + 1`.
+  The walk (`_scan_binding_ids`) discovers binding IDs by checking
+  each visited object's `binding_id` attribute.  Match-arm binder
+  IDs are stored in `HMatchArm.binder_ids` — a bare `list[int]`
+  introduced in 0.33.4.  Bare `int`s don't carry a `binding_id`
+  attribute, so the walker silently skipped them.  `max_existing`
+  was then computed as if those IDs were free, and the capture
+  allocator handed out IDs that collided with arm-binder IDs
+  already stamped on body HVars by `lower_match`.  The follow-up
+  `_remap_ids` pass rewrote those colliding HVars to point at the
+  capture's env-slot type — typically
+  `std.core.arc.Arc<T>` from a `captures(share <arc_local>)` — and
+  the user's arm body's `<binder>.<field>` access (e.g.
+  `resp.status` in a `match &result { Ok(resp) => resp.status }`)
+  then tripped the MIR contract assertion because `Arc<T>` is a
+  struct with no `<field>` member.
+
+  Trigger surface in bookkeeper: the `_serve` middleware lambda at
+  `src/app.drift:50-76` shaped as
+  `rest.add_middleware(b, |req, ctx, next| captures(share app) =>
+  { ... match &result { Ok(resp) => ...resp.status... } ... })`.
+
+  **Fix.**  Five sibling walkers in
+  `lang/driftc/driftc.py` (`_scan_binding_ids`, `_remap_ids`,
+  `_collect_local_names`, `_apply_capture_names`,
+  `_apply_capture_names_post`) all dispatched recursion based
+  on `isinstance` against HExpr / HStmt / HBlock / list / dict.
+  `HMatchArm` is none of these, so on reaching an HMatchArm the
+  walkers ran their (binder-aware) per-arm logic and then
+  stopped — they never descended into `arm.block` or
+  `arm.result`.  Every binding ID stamped on HLet / HVar /
+  nested arm-binders inside an arm body was therefore invisible
+  to `max_existing`, capture-id remapping never touched HVars
+  inside arm bodies, the capture-vs-local collision check could
+  not see arm-body locals, and name-based capture-id repair
+  could not rebind arm-body HVars that arrived without an ID.
+  Fix: each walker grew an explicit `HMatchArm` branch that
+  recurses into `arm.block` and `arm.result`; for the scanner
+  that branch also bumps `max_existing` for each persisted
+  `int` in `arm.binder_ids`; for the remapper the branch
+  intentionally does NOT walk `binder_ids` (those are local arm
+  binders, not outer captures, and must not be rewritten into
+  capture slots).
+
+  **Diagnostic robustness.**  Both MIR lowering "unknown struct
+  field" contract assertions in `lang/driftc/stage2/hir_to_mir.py`
+  (the direct-read HField path AND the place-projection
+  AddrOfField path) now include the failing field name, struct
+  name, owning module, known-field list, and function name on
+  the error message — the place-projection site additionally
+  includes the place base name.  Pre-fix both assertions fired
+  with no context, making the failing site impossible to
+  identify without source patching; the additional context cost
+  ~6 lines at each already-failing path.
+
+  **ABI implication.**  This is a compiler defect that broke valid
+  existing same-ABI source — fix the compiler, keep ABI at 14.
+  Per the policy now codified in
+  `docs/design/drift-lang-abi.md` §"Stable ABI Artifact Rule" /
+  §"Signing and verification compatibility": ABI equality is a
+  promise across the **complete** compiled-artifact contract
+  (calls, returns, exceptions, data layouts, interfaces / vtables,
+  closures / captures, ownership / destruction behavior, runtime
+  intrinsics, exported symbols, generic linkage, `.zdmp`
+  representation and consumption, signing / attestation / trust /
+  verification).  No part of the bookkeeper artifact set required
+  rebuilding to consume the fixed compiler.  Pre-existing
+  ABI-14 `.zdmp`s (mariadb-rpc, web-rest, singular, etc.)
+  continue to load unchanged.
+
+  **Test gate.**  `lang/tests/driver/test_hidden_lambda_arm_binder_collision.py`
+  pins three shapes:
+    1. The minimal bookkeeper repro — `core.callback0(| |
+       captures(share arc_local) ... => { match &result {
+       Ok(resp) => resp.status } })` — confirms the field-access
+       symptom is gone.
+    2. Capture USED INSIDE an arm body —
+       `captures(share cfg, move opt) ... => match opt {
+       Some(v) => cfg.get().bias + v }` — pins the
+       `_remap_ids` arm-body traversal so the captured `cfg`'s
+       HVar inside the arm body gets its outer-fn binding id
+       rewritten to the hidden lambda's capture slot.
+    3. Arm-body local SHADOWING an explicit capture name —
+       `captures(share inner, move opt) ... => match opt {
+       Some(v) => { val inner: Int = v; inner } }` — asserts
+       the `E_CAPTURE_NAME_COLLIDES_WITH_LOCAL` diagnostic
+       fires naming `inner`.  This is the diagnostic-positive
+       form that pins arm-body locals being visible to the
+       `_collect_local_names` walker — without the
+       arm.block descent, the inner `val inner` would stay
+       invisible to the collision check, the diagnostic would
+       not fire, and the fix would not be observable.
+  Pre-fix shapes 1 + 2 reproduce the exact bookkeeper failure
+  (or the analogous "value used in closure body is not listed
+  in captures(...)" symptom); shape 3 pre-fix silently passes
+  the collision check (false-negative).  Post-fix shapes 1 + 2
+  compile + run cleanly returning the expected values; shape 3
+  fails compile with the expected
+  `E_CAPTURE_NAME_COLLIDES_WITH_LOCAL` diagnostic.  15/15 in
+  the combined match-arm / hidden-lambda / diagnostic-hygiene
+  suite green under the normal lane.  Bookkeeper re-verified
+  end-to-end against the same dep-artifact set.
+
+  Files touched (compiler):
+  - `lang/driftc/driftc.py` (`_scan_binding_ids` HMatchArm branch).
+  - `lang/driftc/stage2/hir_to_mir.py` (improved diagnostic
+    context on the HField struct-field-lookup assertion).
+  - `lang/tests/driver/test_hidden_lambda_arm_binder_collision.py`
+    (regression gate).
+  - `lang/versions.py` — 0.33.4 → 0.33.5.
+
+  Also adopted in this release: explicit ABI policy in
+  `docs/design/drift-lang-abi.md` — `DRIFT_RT_ABI_VERSION` is now
+  formally the compatibility promise for the **complete**
+  compiled-artifact contract (calls, returns, exceptions, data
+  layouts, interfaces / vtables, closures / captures, ownership /
+  destruction behavior, runtime intrinsics, exported symbols,
+  generic linkage, `.zdmp` representation + consumption, and
+  signing / attestation / trust / verification).  Same-ABI
+  `.zdmp`s must remain consumable across compiler versions with no
+  compiler-version time limit; rebuilding deps to make a same-ABI
+  release work is prohibited as a compatibility fix because it
+  conceals an ABI break.  Compiler defects on valid same-ABI
+  source are fixed under the existing ABI (this release is a
+  worked example).
+
 ## 2026-05-27 (LANGUAGE_BUG fix: match-arm binder not visible to closure captured/used inside the arm body — `HMatchArm` gains persistent `binder_ids`, `_rename_expr` learns `HLambda`, `for`-desugaring + diagnostic hygiene aligned)
 - **Release 0.33.4, ABI unchanged at 14.**  Reported by the PushCoin
   bookkeeper team (filed 2026-05-27 at

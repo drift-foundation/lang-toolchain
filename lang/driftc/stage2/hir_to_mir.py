@@ -3208,7 +3208,14 @@ class HIRToMIR:
 			raise NotImplementedError(f"field access is only supported on structs in v1 (have {sub_def.kind})")
 		info = self._type_table.struct_field(subj_ty, expr.name)
 		if info is None:
-			raise AssertionError("unknown struct field reached MIR lowering (checker bug)")
+			_fn_name = getattr(self.b.func, "name", None)
+			_sd = self._type_table.get(subj_ty)
+			_field_list = [getattr(f, "name", None) for f in getattr(_sd, "fields", []) or []]
+			raise AssertionError(
+				"unknown struct field reached MIR lowering (checker bug): "
+				f"field={expr.name!r} subj_ty={subj_ty} struct={getattr(_sd, 'name', None)!r} "
+				f"module={getattr(_sd, 'module_id', None)!r} known_fields={_field_list} fn={_fn_name!r}"
+			)
 		field_idx, field_ty = info
 		dest = self.b.new_temp()
 		self.b.emit(
@@ -11353,7 +11360,15 @@ class HIRToMIR:
 					)
 				info = self._type_table.struct_field(cur_ty, proj.name)
 				if info is None:
-					raise AssertionError("unknown struct field reached MIR lowering (checker bug)")
+					_fn_name_pp = getattr(self.b.func, "name", None)
+					_sd_pp = self._type_table.get(cur_ty)
+					_field_list_pp = [getattr(f, "name", None) for f in getattr(_sd_pp, "fields", []) or []]
+					raise AssertionError(
+						"unknown struct field reached MIR lowering (checker bug): "
+						f"field={proj.name!r} subj_ty={cur_ty} struct={getattr(_sd_pp, 'name', None)!r} "
+						f"module={getattr(_sd_pp, 'module_id', None)!r} known_fields={_field_list_pp} "
+						f"base={base_name!r} fn={_fn_name_pp!r}"
+					)
 				field_idx, field_ty = info
 				dest = self.b.new_temp()
 				self.b.emit(
