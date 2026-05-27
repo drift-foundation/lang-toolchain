@@ -332,6 +332,134 @@ opportunistic uplifts)" for the full rule.
   6. ABI bump — new compiler→runtime intrinsic surface (verify
      against `AGENTS.md` § "Boundary Contract Guardrails").
 
+## Carry implicit-move classification structurally from borrow-check to MIR lowering
+
+- **Improvement:** the borrow checker's implicit-move
+  classification for non-Copy consuming-position reads currently
+  lives only in flow state — `borrow_checker_pass.py::
+  _force_move_place_use_implicit` updates `PlaceState.MOVED` for
+  diagnostics but does NOT rewrite the HIR.  MIR lowering then
+  re-derives "is this consuming?" at each potential consume site
+  (call-arg-of-by-value-non-Copy-param, HLet RHS, HReturn value,
+  variant/struct ctor field, etc.) by re-reading the
+  Copy-status and param-type signal.  Promote the classification
+  into the HIR itself: a post-borrow-check pass walks the HIR
+  using the same flow analysis the borrow checker already
+  produced and rewrites every consuming-position `HVar` into
+  `HMove(subject=HPlaceExpr(HVar, []), is_implicit=True)`.  Every
+  consuming path then naturally hits `_visit_expr_HMove`'s
+  established zero-back-on-env-slot emission discipline; no
+  per-site re-derivation, no per-site capture-awareness branch.
+
+  The pass would also enable the **borrow-checker classification
+  is authoritative** invariant the user pinned in the
+  `drift-vt-drop-atexit-use-after-free` review:
+
+  > If checker decides an expression consumes ownership, lowering
+  > must see that decision structurally.
+
+  Sister invariants already enforced (binder_ids in HMatchArm
+  carry persistent identity from `lower_match` → checker →
+  hir_to_mir; HExplicitCapture.binding_id carries identity to
+  lambda lifting) all follow the same shape.  Implicit moves are
+  the remaining flow-state-only signal that lowering currently
+  has to re-derive.
+
+- **Why deferred (2026-05-27):** the 0.33.6 fix at
+  `_lower_call_arg` (with `_lower_call`'s arg loop unified) closes
+  the reported bookkeeper UAF (atexit cleanup race against a
+  callback drop-thunk over-drop on env captures).  The narrow
+  fix is small, targeted, and observably correct against both
+  consuming and non-consuming regression cases.  The
+  architectural rewrite is larger scope — touches all
+  consuming-position paths in MIR lowering plus introduces a new
+  HIR pass — and would also touch tests that currently encode
+  the "implicit move is flow-state-only" assumption.  Net cost
+  ~3-5 days; current narrow fix holds in the meantime.
+
+- **Triggers:**
+
+  - **Mechanical:** any reported OR review-discovered
+    double-drop or refcount-UAF against a callback closure body
+    where the captured value is consumed through a path that
+    ISN'T the call-arg site (e.g. `val x = <move-capture>`
+    HLet, `return <move-capture>` HReturn,
+    `MyStruct(field = <move-capture>)` ctor arg, etc.).  The
+    narrow 0.33.6 fix doesn't cover these; the symptom would be
+    the SAME atexit / cb-drop chain over-drop pattern as
+    `drift-vt-drop-atexit-use-after-free.md` but with a
+    different consume site in the trace.  The pointer from such
+    a finding goes directly to this entry — whether it comes
+    from a fresh app-team filing or surfaces in a slice review.
+  - **Second special-case site:** `_lower_call_arg`'s
+    capture-aware branch is already the first per-site
+    work-around.  The MOMENT a second consuming position
+    (HReturn, HLet RHS, ctor field, etc.) needs the same
+    `_move_from_callback_capture_slot` routing duplicated,
+    escalate to this entry rather than duplicating again.  Two
+    sites carrying the same hand-rolled
+    re-derivation-of-borrow-checker-state is enough evidence
+    the structural fix is overdue.
+  - **Borrow-checker walker consolidation lands first** (see
+    "Consolidate borrow-checker walkers" above) — that refactor
+    introduces span/provenance return shapes that this pass can
+    consume directly, lowering the implementation cost.
+
+- **Scope when triggered:** ~3-5 days.
+  1. Add `lang/driftc/stage1/implicit_move_materialize.py` —
+     new pass that runs AFTER the borrow checker and BEFORE
+     MIR lowering.  Walks each function's HIR, re-runs the
+     borrow-checker classification (or reads from a borrow-
+     checker-emitted side-table if the consolidation refactor
+     above has shipped), and rewrites consuming `HVar` nodes
+     into `HMove(is_implicit=True)`.
+  2. Remove the per-consuming-site re-derivation in
+     `hir_to_mir.py`: the capture-aware branch in
+     `_lower_call_arg`, and any equivalent branches at HLet /
+     HReturn / ctor-arg sites that get added as new bugs land.
+     `_visit_expr_HMove` becomes the SOLE site emitting the
+     consume-implies-zero-back contract.
+  3. Update tests:
+     `test_vt_capture_implicit_move_atexit_uaf.py` should
+     still pass unchanged (the bug is still caught, just
+     through HMove now).  Add a test verifying the pass'
+     output HIR shape — every implicit-consume reads HMove —
+     so a future regression in the rewrite pass is loud rather
+     than silent.
+  4. ABI: codegen-internal pass, no boundary change.  No bump.
+
+- **Concrete plan when triggered (drafted 2026-05-27, parked
+  pending trigger).**  Single new file
+  `lang/driftc/stage1/implicit_move_materialize.py` with three
+  layers:
+
+  1. **Visitor.**  Reuses the borrow checker's
+     `_FlowState` / `_consume_place_value` /
+     `_force_move_place_use_implicit` classification — same
+     traversal order, same per-expression consume signal — but
+     instead of just updating flow state, records each consuming
+     `HVar` node by identity (object id) in a per-function set.
+  2. **Rewriter.**  Second pass over the HIR that wraps each
+     recorded `HVar` in `HMove(subject=HPlaceExpr(base=HVar,
+     projections=[]), is_implicit=True)`.  Preserves
+     `binding_id` / `name` / `loc` from the original HVar.
+     Span: copy the HVar's source span onto the synthetic
+     HMove so diagnostics reading off HMove still point at
+     the original consume site.
+  3. **Driver hook.**  Run after `borrow_check_cli` in
+     `compile_stubbed_funcs`; mark the function's ledger
+     dirty (`mark_ledger_dirty(func,
+     "implicit_move_materialize")`) so downstream passes
+     re-derive ownership state from the rewritten HIR.
+
+  Open question — whether the rewrite should also happen for
+  function-frame locals (currently handled correctly by the
+  `MoveOut(local=name)` emission at `_lower_call_arg`'s
+  non-capture branch and by cleanup-authoring's drop-flag
+  pass).  Default to YES for uniformity: rewrite both, let
+  `_visit_expr_HMove` handle both, retire the per-site
+  re-derivation entirely.
+
 ## Add span / provenance to existing borrow-checker walkers
 
 - **Improvement:** existing walkers return `bool` or `set[int]` — by
