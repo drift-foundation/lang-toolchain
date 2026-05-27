@@ -304,21 +304,78 @@ pub struct Executor {
 implement core.Copy for Executor {
 }
 
+// `ResultState<T>` — co-owned buffer for `VirtualThread<T>` result.
+// Shared between the returned handle and the spawn thunk via
+// `core.Arc<Mutex<ResultState<T>>>`.  Closes the R1-R8
+// result-ownership matrix (see `work/stdlib-concurrency/plan.md`
+// §5.2; R1-R5 are the original ownership-protocol family that this
+// type addresses, R6-R8 are an adjacent `FutureGroup.join_any`
+// cluster fixed in the same slice):
+//
+//   * `buf` — the storage; allocated once in `spawn*`.
+//   * `initialized` — `true` iff the cb thunk has published a `T`
+//     into `buf`.  Set by the thunk under the lock; cleared by any
+//     consumer (join Ok / join Cancelled / VT destroy) that
+//     `mem.read`s the value out.
+//   * `abandoned` — `true` iff the `VirtualThread<T>` handle has
+//     been dropped (or join consumed it).  Read by the thunk to
+//     decide publish-vs-drop-locally.
+//
+// **Single deallocation point.**  `Destructible for ResultState<T>`
+// is the only site that calls `mem.dealloc<T>(buf)`.  It runs when
+// the last `Arc` clone (held by either the handle or the cb thunk)
+// dies.  Join / cancel / destroy paths only consume any published
+// `T` (running its destructor) and set `initialized = false`; they
+// never free the buffer themselves.  This invariant rules out
+// double-free (R2) and aliasing-between-spawn-and-destructor (R1).
+struct ResultState<T> {
+	buf: mem.RawBuffer<T>,
+	initialized: Bool,
+	abandoned: Bool
+}
+
+implement<T> core.Destructible for ResultState<T> {
+	pub fn destroy(var self: ResultState<T>) nothrow -> Void {
+		unsafe {
+			if self.initialized {
+				var v = mem.read<type T>(&mut self.buf, 0);
+				// `v` drops at end of scope; `T`'s `Destructible`
+				// runs.  Closes R3 (drop-after-completed) and the
+				// post-thunk-publish branches of R1.
+				val _ = v;
+			}
+			val ptr = mem.rawbuffer_ptr<type T>(&self.buf);
+			val cap = mem.rawbuffer_cap<type T>(&self.buf);
+			var b = mem.rawbuffer_from_parts<type T>(ptr, cap);
+			mem.dealloc<type T>(b);
+		}
+	}
+}
+
 /// Handle to an in-flight virtual-thread task that produces a value
 /// of type `T`.
 ///
 /// Construct via `spawn` (default executor), `spawn_cb`, or
 /// `spawn_on` (specific executor).  Use `.join` (blocking) or
 /// `.join_timeout(d)` (bounded) to wait for the result.  `.cancel()`
-/// requests cooperative cancellation.  The `Destructible` impl drops
-/// any unjoined handle and frees the result buffer.
+/// requests cooperative cancellation.
+///
+/// **Result-buffer ownership protocol:** the result storage is held
+/// in an `Arc<Mutex<ResultState<T>>>` (`state` field) shared between
+/// this handle and the cb thunk.  Drop, join, and cancel paths
+/// linearize through the mutex; only `ResultState`'s `Destructible`
+/// frees the buffer, exactly once when the last `Arc` clone dies.
+/// This closes the R1-R8 ownership matrix documented in
+/// `work/stdlib-concurrency/plan.md` §5 (R1-R5 are the original
+/// ownership family on `VirtualThread<T>`; R6-R8 are the adjacent
+/// `FutureGroup.join_any` cluster).
 ///
 /// **See also:** `spawn`, `Future`, `VirtualThread.join`,
 /// `VirtualThread.join_timeout`, `VirtualThread.cancel`.
 pub struct VirtualThread<T> {
 	joined: Bool,
 	handle: Int,
-	result: mem.RawBuffer<T>,
+	state: core.Arc<Mutex<ResultState<T>>>,
 	cancelled: Bool,
 	submit_error: Int
 }
@@ -1100,6 +1157,48 @@ pub fn set_default_executor(exec: Executor) nothrow -> Void {
 	return;
 }
 
+// Internal helper: invoked by the cb thunk after `cb.call()` produces
+// `v`.  Under the state lock, either publishes `v` into the shared
+// buffer (handle still attached) or drops `v` locally (handle was
+// abandoned).  Closes the R1 (drop-while-running) UAF: a destructor
+// that sets `abandoned = true` before broadcasting cv reliably steers
+// the late-publishing thunk into the drop-locally branch.
+fn _publish_or_drop<T>(state: &core.Arc<Mutex<ResultState<T>>>, var v: T) nothrow -> Void {
+	// `state` is borrowed, not moved.  This keeps the cb thunk's
+	// captured Arc clone alive in the thunk env across this call,
+	// so the runtime's drop path (drift_drop_callback at process
+	// exit / executor shutdown for parked-mid-cb VTs) reliably
+	// runs the Arc's Destructible — closing the parked-cb leak
+	// shape from the 0.32.8 fix family.
+	var guard = state.get().lock();
+	val rs = guard.get_mut();
+	if rs.abandoned {
+		// `v` drops at fn-exit; `T`'s `Destructible` runs locally.
+		val _ = v;
+		return;
+	}
+	unsafe {
+		mem.write<type T>(&mut rs.buf, 0, move v);
+	}
+	rs.initialized = true;
+	return;
+}
+
+// Internal helper: constructs the shared state Arc.  Allocates the
+// raw buffer, wraps it in `ResultState<T>`, then `Mutex<...>`, then
+// `Arc<...>`.  Called by every `spawn*` path.
+fn _make_result_state<T>() nothrow -> core.Arc<Mutex<ResultState<T>>> {
+	unsafe {
+		var buf = mem.alloc_uninit<type T>(1);
+		var rs = ResultState<type T>(
+			buf = move buf,
+			initialized = false,
+			abandoned = false
+		);
+		return core.arc(mutex(move rs));
+	}
+}
+
 /// Spawns `cb` on the default executor and returns a
 /// `VirtualThread<T>` handle for joining the result.
 ///
@@ -1119,31 +1218,37 @@ pub fn set_default_executor(exec: Executor) nothrow -> Void {
 /// **Example:** `examples/sync_mpsc_queue/main.drift`.
 pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	var exec = default_executor();
-	unsafe {
-		var buf = mem.alloc_uninit<type T>(1);
-		val ptr = mem.rawbuffer_ptr<type T>(&buf);
-		val cap = mem.rawbuffer_cap<type T>(&buf);
-		var buf_for_cb = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var buf_for_join = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var thunk: core.Callback0<Void> = core.callback0(| | captures(move cb, move buf_for_cb) => {
-			unsafe {
-				var v = cb.call();
-				mem.write(&mut buf_for_cb, 0, move v);
-			}
+	var state = _make_result_state<type T>();
+	val state_for_cb = state.clone();
+	var thunk: core.Callback0<Void> = core.callback0(
+		| | captures(move cb, move state_for_cb) => {
+			_publish_or_drop(&state_for_cb, cb.call());
 			return;
-		});
-		var h = thread.vt_spawn(thunk, exec.handle);
-		val submit_code = thread.exec_submit(exec.handle, h);
-		if submit_code != 0 {
-			val ptr2 = mem.rawbuffer_ptr<type T>(&buf_for_join);
-			val cap2 = mem.rawbuffer_cap<type T>(&buf_for_join);
-			var buf2 = mem.rawbuffer_from_parts<type T>(ptr2, cap2);
-			mem.dealloc<type T>(buf2);
-			thread.vt_drop(h);
-			return VirtualThread<type T>(joined = false, handle = 0, result = move buf_for_join, cancelled = false, submit_error = submit_code);
 		}
-		return VirtualThread<type T>(joined = false, handle = h, result = move buf_for_join, cancelled = false, submit_error = 0);
+	);
+	var h = thread.vt_spawn(thunk, exec.handle);
+	val submit_code = thread.exec_submit(exec.handle, h);
+	if submit_code != 0 {
+		// Buffer ownership stays with `state`; the returned handle's
+		// Destructible (and ultimately `ResultState::destroy` on the
+		// last-Arc transition) handles cleanup.  No manual dealloc
+		// here — that was the R2 double-free.
+		thread.vt_drop(h);
+		return VirtualThread<type T>(
+			joined = false,
+			handle = 0,
+			state = move state,
+			cancelled = false,
+			submit_error = submit_code
+		);
 	}
+	return VirtualThread<type T>(
+		joined = false,
+		handle = h,
+		state = move state,
+		cancelled = false,
+		submit_error = 0
+	);
 }
 
 /// Compatibility alias for `spawn`.  Identical behavior; retained for
@@ -1152,31 +1257,33 @@ pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 /// **See also:** `spawn`.
 pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	var exec = default_executor();
-	unsafe {
-		var buf = mem.alloc_uninit<type T>(1);
-		val ptr = mem.rawbuffer_ptr<type T>(&buf);
-		val cap = mem.rawbuffer_cap<type T>(&buf);
-		var buf_for_cb = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var buf_for_join = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var thunk: core.Callback0<Void> = core.callback0(| | captures(move cb, move buf_for_cb) => {
-			unsafe {
-				var v = cb.call();
-				mem.write(&mut buf_for_cb, 0, move v);
-			}
+	var state = _make_result_state<type T>();
+	val state_for_cb = state.clone();
+	var thunk: core.Callback0<Void> = core.callback0(
+		| | captures(move cb, move state_for_cb) => {
+			_publish_or_drop(&state_for_cb, cb.call());
 			return;
-		});
-		var h = thread.vt_spawn(thunk, exec.handle);
-		val submit_code = thread.exec_submit(exec.handle, h);
-		if submit_code != 0 {
-			val ptr2 = mem.rawbuffer_ptr<type T>(&buf_for_join);
-			val cap2 = mem.rawbuffer_cap<type T>(&buf_for_join);
-			var buf2 = mem.rawbuffer_from_parts<type T>(ptr2, cap2);
-			mem.dealloc<type T>(buf2);
-			thread.vt_drop(h);
-			return VirtualThread<type T>(joined = false, handle = 0, result = move buf_for_join, cancelled = false, submit_error = submit_code);
 		}
-		return VirtualThread<type T>(joined = false, handle = h, result = move buf_for_join, cancelled = false, submit_error = 0);
+	);
+	var h = thread.vt_spawn(thunk, exec.handle);
+	val submit_code = thread.exec_submit(exec.handle, h);
+	if submit_code != 0 {
+		thread.vt_drop(h);
+		return VirtualThread<type T>(
+			joined = false,
+			handle = 0,
+			state = move state,
+			cancelled = false,
+			submit_error = submit_code
+		);
 	}
+	return VirtualThread<type T>(
+		joined = false,
+		handle = h,
+		state = move state,
+		cancelled = false,
+		submit_error = 0
+	);
 }
 
 /// Spawns `cb` on the supplied executor and surfaces submission
@@ -1197,40 +1304,42 @@ pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 /// **See also:** `spawn`, `spawn_future_on`, `Executor`,
 /// `SaturationPolicy`.
 pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
-	unsafe {
-		var buf = mem.alloc_uninit<type T>(1);
-		val ptr = mem.rawbuffer_ptr<type T>(&buf);
-		val cap = mem.rawbuffer_cap<type T>(&buf);
-		var buf_for_cb = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var buf_for_join = mem.rawbuffer_from_parts<type T>(ptr, cap);
-		var thunk: core.Callback0<Void> = core.callback0(| | captures(move cb, move buf_for_cb) => {
-			unsafe {
-				var v = cb.call();
-				mem.write(&mut buf_for_cb, 0, move v);
-			}
+	var state = _make_result_state<type T>();
+	val state_for_cb = state.clone();
+	var thunk: core.Callback0<Void> = core.callback0(
+		| | captures(move cb, move state_for_cb) => {
+			_publish_or_drop(&state_for_cb, cb.call());
 			return;
-		});
-		var h = thread.vt_spawn(thunk, exec.handle);
-		var submit_code = thread.exec_submit(exec.handle, h);
-		if submit_code == 0 {
-			return core.Result::Ok(VirtualThread<type T>(joined = false, handle = h, result = move buf_for_join, cancelled = false, submit_error = 0));
 		}
-		val ptr2 = mem.rawbuffer_ptr<type T>(&buf_for_join);
-		val cap2 = mem.rawbuffer_cap<type T>(&buf_for_join);
-		var buf2 = mem.rawbuffer_from_parts<type T>(ptr2, cap2);
-		mem.dealloc<type T>(buf2);
-		thread.vt_drop(h);
-		if submit_code == 1 {
-			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4));
-		}
-		if submit_code == 2 {
-			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
-		}
-		try {
-			throw ExecSubmitFailed(code = submit_code);
-		} catch e {
-			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
-		}
+	);
+	var h = thread.vt_spawn(thunk, exec.handle);
+	var submit_code = thread.exec_submit(exec.handle, h);
+	if submit_code == 0 {
+		return core.Result::Ok(VirtualThread<type T>(
+			joined = false,
+			handle = h,
+			state = move state,
+			cancelled = false,
+			submit_error = 0
+		));
+	}
+	// On submit failure, `state` (and its `ResultState<T>`) goes out
+	// of scope here; `Destructible for ResultState<T>` deallocs the
+	// buffer exactly once when the last Arc clone dies.  The thunk's
+	// state-for-cb clone gets dropped via `vt_drop`'s pre-start
+	// cleanup branch (or by the runtime's cb-drop logic on a queued
+	// task), and our own `state` drops at the end of this scope.
+	thread.vt_drop(h);
+	if submit_code == 1 {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4));
+	}
+	if submit_code == 2 {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
+	}
+	try {
+		throw ExecSubmitFailed(code = submit_code);
+	} catch e {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
 	}
 }
 
@@ -1315,23 +1424,31 @@ implement<T> VirtualThread<T> {
 			thread.vt_join(self.handle);
 			self.joined = true;
 			self.handle = 0;
-			unsafe {
-				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-				val cap = mem.rawbuffer_cap<type T>(&self.result);
-				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-				mem.dealloc<type T>(buf);
+			// Discard any published result under the lock.  No
+			// dealloc — `ResultState::destroy` (last-Arc) handles
+			// that.  Closes R4.
+			{
+				var guard = self.state.get().lock();
+				val rs = guard.get_mut();
+				if rs.initialized {
+					unsafe {
+						var v = mem.read<type T>(&mut rs.buf, 0);
+						val _ = v;
+					}
+					rs.initialized = false;
+				}
 			}
 			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -2));
 		}
 		thread.vt_join(self.handle);
 		self.joined = true;
 		self.handle = 0;
+		// Move the published result out under the lock and return it.
+		var guard = self.state.get().lock();
+		val rs = guard.get_mut();
 		unsafe {
-			var v = mem.read<type T>(&mut self.result, 0);
-			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-			val cap = mem.rawbuffer_cap<type T>(&self.result);
-			var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-			mem.dealloc<type T>(buf);
+			var v = mem.read<type T>(&mut rs.buf, 0);
+			rs.initialized = false;
 			return core.Result::Ok(move v);
 		}
 	}
@@ -1375,11 +1492,17 @@ implement<T> VirtualThread<T> {
 			thread.vt_join(self.handle);
 			self.joined = true;
 			self.handle = 0;
-			unsafe {
-				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-				val cap = mem.rawbuffer_cap<type T>(&self.result);
-				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-				mem.dealloc<type T>(buf);
+			// Discard any published result under the lock.  Closes R5.
+			{
+				var guard = self.state.get().lock();
+				val rs = guard.get_mut();
+				if rs.initialized {
+					unsafe {
+						var v = mem.read<type T>(&mut rs.buf, 0);
+						val _ = v;
+					}
+					rs.initialized = false;
+				}
 			}
 			return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -2));
 		}
@@ -1388,12 +1511,11 @@ implement<T> VirtualThread<T> {
 			thread.vt_join(self.handle);
 			self.joined = true;
 			self.handle = 0;
+			var guard = self.state.get().lock();
+			val rs = guard.get_mut();
 			unsafe {
-				var v = mem.read<type T>(&mut self.result, 0);
-				val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-				val cap = mem.rawbuffer_cap<type T>(&self.result);
-				var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-				mem.dealloc<type T>(buf);
+				var v = mem.read<type T>(&mut rs.buf, 0);
+				rs.initialized = false;
 				return core.Result::Ok(move v);
 			}
 		}
@@ -1406,12 +1528,11 @@ implement<T> VirtualThread<T> {
 		}
 		self.joined = true;
 		self.handle = 0;
+		var guard = self.state.get().lock();
+		val rs = guard.get_mut();
 		unsafe {
-			var v = mem.read<type T>(&mut self.result, 0);
-			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-			val cap = mem.rawbuffer_cap<type T>(&self.result);
-			var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-			mem.dealloc<type T>(buf);
+			var v = mem.read<type T>(&mut rs.buf, 0);
+			rs.initialized = false;
 			return core.Result::Ok(move v);
 		}
 	}
@@ -1444,15 +1565,30 @@ implement<T> core.Destructible for VirtualThread<T> {
 		if self.joined {
 			return;
 		}
+		// Under the state lock: mark abandoned (so a late-publishing
+		// thunk drops its `v` locally instead of writing to the
+		// buffer — closes R1), and consume any already-published `T`
+		// to run its `Destructible` (closes R3).  No dealloc here;
+		// `ResultState::destroy` on the last Arc transition handles
+		// that.
+		{
+			var guard = self.state.get().lock();
+			val rs = guard.get_mut();
+			rs.abandoned = true;
+			if rs.initialized {
+				unsafe {
+					var v = mem.read<type T>(&mut rs.buf, 0);
+					val _ = v;
+				}
+				rs.initialized = false;
+			}
+		}
 		if self.handle != 0 {
 			thread.vt_drop(self.handle);
 		}
-		unsafe {
-			val ptr = mem.rawbuffer_ptr<type T>(&self.result);
-			val cap = mem.rawbuffer_cap<type T>(&self.result);
-			var buf = mem.rawbuffer_from_parts<type T>(ptr, cap);
-			mem.dealloc<type T>(buf);
-		}
+		// `self.state`'s Arc clone drops at fn-exit.  When the cb
+		// thunk's Arc clone also drops, the last Arc dies and
+		// `ResultState::destroy` deallocates the buffer.
 	}
 }
 
@@ -1553,13 +1689,56 @@ implement<T> FutureGroup<T> require T is core.Copy {
 					i += 1;
 					continue;
 				}
+				// Terminal: submit failed.  `handle == 0`, so
+				// `vt_is_completed` would return 0 forever and the
+				// polling loop would never terminate.  Delegate to
+				// `.join()` which routes through the submit-error
+				// path and returns `Err(FAILED)`.  Closes R8.
+				if f.vt.submit_error != 0 {
+					return f.vt.join();
+				}
 				pending = true;
 				var done = thread.vt_is_completed(f.vt.handle);
 				if done != 0 {
-					unsafe {
-						var v = mem.read<type T>(&mut f.vt.result, 0);
-						return core.Result::Ok(v);
+					// Runtime says the VT is complete, but that does
+					// NOT prove a value was published: a future
+					// cancelled before its callback starts also
+					// reaches completed=1, with the result slot
+					// still uninitialized.  Check `rs.initialized`
+					// under the lock to distinguish:
+					//
+					//   * `initialized == true`  — peek via Copy.
+					//   * `initialized == false` — delegate to
+					//     `f.vt.join()` so the cancellation path
+					//     handles cleanup and returns Err(CANCELLED)
+					//     without reading uninitialised memory
+					//     (closes R7).
+					//
+					// `T: core.Copy` (required at the impl header)
+					// — see R6 design note: Copy does NOT imply
+					// "no destructor"; `String` is Copy with
+					// retain/release.  We read with Copy semantics
+					// via `*mem.ptr_at_ref` so retain fires and the
+					// buffered ownership stake survives for any
+					// subsequent `join_all`.
+					var has_value: Bool = false;
+					{
+						var guard = f.vt.state.get().lock();
+						val rs = guard.get_mut();
+						has_value = rs.initialized;
+						if has_value {
+							unsafe {
+								val v_ref = mem.ptr_at_ref<type T>(&rs.buf, 0);
+								return core.Result::Ok(*v_ref);
+							}
+						}
 					}
+					// Completed but never published — typically
+					// cancelled before start.  Route through the
+					// normal join() cancellation cleanup; the lock
+					// is released here so join() can acquire its
+					// own.
+					return f.vt.join();
 				}
 				i += 1;
 			}

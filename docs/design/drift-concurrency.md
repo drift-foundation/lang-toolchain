@@ -40,6 +40,82 @@ blocking an OS thread:
 - Cancellation is cooperative: cancelled-but-started VTs run to completion
   unless the task observes cancellation and returns early.
 
+## VirtualThread result-ownership protocol (Drift-side, 0.33.1)
+
+The `VirtualThread<T>` value's `state` field is an
+`Arc<Mutex<ResultState<T>>>` co-owned by the returned handle and the
+spawn-thunk closure.  `ResultState<T>` carries the underlying
+`mem.RawBuffer<T>` plus two flags (`initialized`, `abandoned`).
+
+**Single deallocation point.**  `Destructible for ResultState<T>` is
+the only site that calls `mem.dealloc<T>` on the result buffer.  It
+runs exactly once, when the last `Arc` clone dies — typically when
+both the cb thunk has run to completion AND the handle has been
+joined/dropped.  Other paths (`join` Ok, `join` cancelled,
+`join_timeout` Ok / cancelled, `VirtualThread::destroy`) may
+`mem.read` an initialized `T` out and run its `Destructible`, then
+set `initialized = false`, but never deallocate the buffer
+themselves.
+
+**Coordination flow:**
+- Cb thunk, terminal step: take state lock; if `abandoned` is true,
+  drop the produced `T` locally (closes the drop-while-running UAF);
+  otherwise `mem.write` to the buffer and set `initialized = true`.
+- `VirtualThread::destroy`: take state lock; set `abandoned = true`;
+  if `initialized`, `mem.read` the published `T` and let it drop;
+  then `thread.vt_drop(handle)`.  The buffer survives until the
+  cb thunk also drops its `Arc` clone and `ResultState::destroy`
+  fires.
+- `join` (and `join_timeout`) success path: `vt_join`, take lock,
+  `mem.read` out the published `T`, set `initialized = false`,
+  return `Ok(v)`.  Buffer dealloc happens when both Arcs go.
+- `join` / `join_timeout` cancelled branch: `vt_join`, take lock,
+  if `initialized` consume + drop the published `T`, set
+  `initialized = false`, return `Err(CANCELLED)`.
+- `FutureGroup.join_any`: per-future probe with three terminal cases.
+  (1) `submit_error != 0` → delegate to `.join()` which routes the
+  deferred submit error as `Err(FAILED)`; the polling loop never
+  spins on `handle == 0` (R8).
+  (2) `vt_is_completed != 0` AND `ResultState.initialized == true` →
+  take an `&T` to the slot via `mem.ptr_at_ref` and Copy through the
+  deref (legacy peek-without-consume; does not set
+  `initialized = false`).  In Drift, `T: Copy` does **not** imply
+  "no destructor" — `String` is Copy with retain/release semantics
+  — so the read MUST route through `T`'s real Copy lowering
+  (`drift_string_retain` for `String`, bitwise for trivial types)
+  rather than a raw `mem.read` that would silently move the single
+  ownership stake (R6).
+  (3) `vt_is_completed != 0` AND `ResultState.initialized == false`
+  → release the lock and delegate to `.join()`, which routes through
+  the cancellation cleanup path and returns `Err(CANCELLED)` without
+  reading uninitialised slot bytes (R7).
+
+This design closes the R1-R8 ownership matrix
+(`work/stdlib-concurrency/plan.md` §5.2):
+- R1 (drop-while-running UAF): `abandoned` flag steers late-publishing
+  thunk into drop-locally branch.
+- R2 (submit-error double-free): spawn no longer manually deallocs;
+  Destructible-for-ResultState is the unique free site.
+- R3 (completed-unjoined drop leak): destructor mem.read+drops any
+  initialized T.
+- R4 / R5 (cancel-publish join-CANCELLED / join_timeout-CANCELLED
+  leak): cancellation branches now consume the published T before
+  returning Err.
+- R6 (FutureGroup<String>::join_any double-release): `join_any`
+  reads via `*ref` (Copy semantics) instead of raw `mem.read`, so
+  Copy's retain fires and the buffered stake stays intact for
+  subsequent `join_all`.
+- R7 (FutureGroup<T>::join_any uninit-read for cancel-before-start):
+  the peek path is gated by `ResultState.initialized`; cancelled
+  futures route through `.join()` instead of dereferencing
+  uninitialised slot bytes.
+- R8 (FutureGroup<T>::join_any hang on submit-error future): the
+  per-future probe checks `submit_error != 0` first and delegates to
+  `.join()`, bypassing the unreachable `vt_is_completed(0)` probe.
+
+No runtime ABI changes — the entire protocol is in
+`stdlib/std/concurrent/concurrent.drift`.
+
 ## VirtualThread lifecycle (runtime view)
 
 Virtual threads are modeled as task records with explicit states. The runtime

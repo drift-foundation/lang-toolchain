@@ -1,5 +1,133 @@
 # Drift development history
 
+## 2026-05-26 (LANGUAGE_BUG fix: `VirtualThread<T>` result-ownership protocol redesign — closes the R1-R8 ownership matrix in one Drift-side `Arc<Mutex<ResultState<T>>>` change plus targeted `FutureGroup.join_any` hardening; no runtime/ABI churn)
+- **Result-ownership redesign in `std.concurrent`.** Release 0.33.1, ABI unchanged at 14.
+  Reported by PushCoin bookkeeper team while designing the supervised-async
+  primitives slice (channel + is_complete); see
+  `work/stdlib-concurrency/plan.md` §5 for the full design.
+  Classified as **active LANGUAGE_BUG** on 2026-05-26.  Eight failing
+  regressions pinned the bug class before the fix:
+  - R1 — drop-while-cb-running heap-use-after-free on the result
+    buffer (the originally-reported defect).  Cb writes into a buffer
+    the Drift-side destructor already `mem.dealloc`'d.
+  - R2 — drop of a `submit_error != 0` VT double-frees the result
+    buffer.  `spawn`'s submit-error path deallocs, then
+    `Destructible::destroy` deallocs the same 16-byte block again.
+  - R3 — drop of an already-completed unjoined `VirtualThread<String>`
+    leaks the unobserved owned result.  `mem.dealloc<T>` lowers to
+    `drift_free_array(ptr)` (layout-only, no T destructor on contents).
+  - R4 — `cancel()` followed by cb-publishing + `join()` returning
+    `CANCELLED` leaks the discarded `T`.  The cancellation branch
+    deallocs without `mem.read`-ing the buffer first.
+  - R5 — same as R4 but via `join_timeout()` (duplicated
+    dealloc-without-read shape).
+  - R6 — `FutureGroup<T>::join_any()` for `T = String` (or any other
+    `T: Copy` whose Copy implementation has retain/release
+    semantics).  Legacy `mem.read`-as-peek moved the single
+    ownership stake out of the slot while leaving the buffer
+    claiming to own it; subsequent `join_all` (or future
+    destruction) double-released the same DriftString backing
+    storage and the process aborted in `drift_string_release`'s
+    refcount-underflow guard.  Fix in `join_any` only: replace the
+    raw `mem.read` with `mem.ptr_at_ref<T>(...) + *deref`, which
+    routes through `T`'s real Copy lowering
+    (`drift_string_retain` for `String`).  The legacy
+    peek-without-consume contract is preserved — both `join_any`
+    and a subsequent `join_all` continue to observe the value.
+  - R7 — `FutureGroup<T>::join_any()` read uninitialised result
+    storage for a future cancelled before its callback started.
+    Cancel-before-start completes the VT (worker drops the cb in
+    the `cancelled && !started` pickup branch and sets
+    `completed = 1`) but the result slot was never written.  The
+    legacy `done != 0` check treated completion as proof of
+    publication; the peek `*ref` read uninit bytes, observable to
+    memcheck as "Conditional jump or move depends on uninitialised"
+    inside `drift_string_release` on the returned garbage `String`.
+    Fix in `join_any` only: under the lock, check
+    `ResultState.initialized` after `vt_is_completed`.  If
+    `initialized == false`, release the lock and delegate to
+    `f.vt.join()` which routes through the proper cancellation
+    cleanup and returns `Err(CANCELLED)`.
+  - R8 — `FutureGroup<T>::join_any()` hung forever on a future
+    whose submission failed (`handle == 0` carried via
+    `submit_error != 0`).  `thread.vt_is_completed(0)` returns 0
+    forever; `join_any`'s polling loop has no terminal check for
+    this case and re-parked indefinitely.  Fix in `join_any` only:
+    at the top of each per-future probe, if `submit_error != 0`,
+    delegate to `f.vt.join()` which routes through the submit-error
+    path and returns `Err(FAILED)`.
+  
+  **Root cause.**  The result-buffer ownership protocol between
+  `spawn` / `Destructible::destroy` / `join` / `join_timeout` /
+  `FutureGroup.join_any` / the cb thunk in
+  `stdlib/std/concurrent/concurrent.drift` was incoherent: multiple
+  uncoordinated free sites + no read-before-dealloc discipline + the
+  cb thunk wrote into a buffer aliased with the handle's
+  `result: RawBuffer<T>` field with no synchronization.
+  
+  **Fix shape — option (d) Drift-side redesign.**  Earlier candidates
+  proposed runtime-side fixes (synchronous join in `drift_thread_drop`
+  / per-T drop thunk + ABI bump); both were rejected as either unsafe
+  (runtime invariant at `thread_runtime.c:858` makes blocking join
+  hang-prone) or wider than necessary.  The ownership-matrix review
+  on 2026-05-26 reframed: this is a pure Drift-side protocol bug.
+  
+  New types in `concurrent.drift`:
+    - `struct ResultState<T> { buf: mem.RawBuffer<T>, initialized: Bool, abandoned: Bool }`.
+    - `implement<T> core.Destructible for ResultState<T>` is the
+      **single deallocation point** for the result buffer; runs when
+      the last `Arc` clone dies.
+    - `VirtualThread<T>` now holds
+      `state: core.Arc<Mutex<ResultState<T>>>` instead of
+      `result: mem.RawBuffer<T>` — the cb thunk holds a clone of the
+      same Arc and they linearize through the inner mutex.
+  
+  Protocol:
+    - `spawn`/`spawn_cb`/`spawn_on` allocate one `ResultState<T>`,
+      wrap in `Mutex` then `Arc`, clone for the cb thunk, capture the
+      clone in the thunk via `move`.  Submit-error path drops the
+      runtime VT handle; ownership of the buffer stays with the
+      `Arc` — no manual dealloc anywhere.
+    - Cb thunk's terminal step: under the lock, if `abandoned` is set
+      drop `v` locally (R1); else `mem.write` and set
+      `initialized = true`.
+    - `Destructible for VirtualThread<T>`: under the lock, set
+      `abandoned = true`; if `initialized`, `mem.read` the published
+      `T` and drop it (R3); never deallocs.  Then `vt_drop(handle)`.
+    - `join` (Ok): `vt_join` + lock + `mem.read` + `initialized = false`
+      + return `Ok(v)`.
+    - `join` and `join_timeout` (cancelled branch): `vt_join` + lock +
+      conditionally `mem.read`-and-drop + return `Err(CANCELLED)`
+      (R4/R5).
+    - `join` / `join_timeout` (success path): `mem.read` under lock,
+      set `initialized = false`, return `Ok(v)`.
+    - `FutureGroup.join_any`: reads under the lock (legacy `T: Copy`
+      peek-without-consume semantics preserved).
+  
+  **Test gate.**
+    - R1 regression at `lang/tests/driver/test_vt_drop_started_running_uaf.py`.
+    - R2/R3/R4/R5/R6/R7/R8 regressions at
+      `lang/tests/driver/test_vt_result_ownership_matrix.py`.
+    - All 8 fail on the pre-fix tree and pass post-fix (1 ASAN-lane
+      test env-gated; valgrind memcheck for R1-R7; R8 is a pure
+      liveness defect — uninstrumented binary with a tight timeout).
+    - 59 existing `concurrent_*` / `conc_*` e2e cases continue to
+      pass under both normal and `DRIFT_MEMCHECK=1` lanes.
+  
+  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md` process
+  for LANGUAGE_BUG fixes: scanned all 5 entries.  Partial structural
+  match against `## Drop-aware RawBuffer / Ptr write variants`
+  (`mem.write_drop` / `mem.ptr_write_drop` family).  Match was to the
+  rejected option (b) (runtime-side per-T drop thunk).  Since (d) is
+  the chosen shape and lives entirely on top of existing primitives,
+  the trigger does not apply; no escalation.
+  
+  **ABI unchanged.**  `DRIFT_RT_ABI_VERSION` stays at 14; no new
+  runtime symbols, no boundary contract change.  All work is in
+  `stdlib/std/concurrent/concurrent.drift`.
+  
+  - `lang/versions.py` — 0.33.0 → 0.33.1.
+
 ## 2026-05-18 (deploy-toolchain fix + API redesign: `drift deploy` staged trust overlay shadowed broader baseline grants for cross-publisher dependencies AND over-authorized the deploy signer on external certified deps -- `build_staged_trust`'s flat `dep_namespaces=` parameter conflated co-deployed siblings with already-published external deps; the redesign splits them into two explicit inputs and structurally prevents the deploy signer from being authorized over namespaces it has no business signing)
 - **Deploy-toolchain fix + API redesign.**  Release 0.31.108, ABI unchanged at 14.
   Reported by app team (PushCoin / singular 0.3.0 cross-publisher
