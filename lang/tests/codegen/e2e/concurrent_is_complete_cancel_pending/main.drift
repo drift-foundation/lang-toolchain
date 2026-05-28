@@ -4,10 +4,16 @@ import std.concurrent as conc;
 import std.core as core;
 import std.core.arc as arc;
 import lang.atomic as atomic;
+import lang.thread as thread;
 
 pub struct Sigs {
 	pub started: conc.AtomicBool,
-	pub release: conc.AtomicBool
+	pub release: conc.AtomicBool,
+	/* Set by the worker iff its busy-spin hit the monotonic deadline
+	 * instead of observing `release`.  Main checks it before asserting
+	 * the join outcome so a deadline expiry is a VISIBLE failure (code
+	 * 5), never a silent false pass. */
+	pub timed_out: conc.AtomicBool
 }
 
 pub fn main() nothrow -> Int {
@@ -18,15 +24,31 @@ pub fn main() nothrow -> Int {
 
 	val sigs: arc.Arc<Sigs> = arc.arc(Sigs(
 		started = conc.atomic_bool(false),
-		release = conc.atomic_bool(false)
+		release = conc.atomic_bool(false),
+		timed_out = conc.atomic_bool(false)
 	));
 	val sigs_cb = sigs.clone();
 
 	val cb: core.Callback0<Int> = core.callback0(
 		| | captures(move sigs_cb) => {
 			atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+			/* Bounded busy-spin: cancellation-insensitive (no park, no
+			 * cancellation safe point — holds the cb across cancel()), but
+			 * hard-capped by a monotonic `thread.now_ms()` deadline.  On
+			 * deadline the worker self-terminates AND records `timed_out`
+			 * so main can tell a deadline expiry apart from a real
+			 * `release`.  Without the bound, a main-side early return before
+			 * setting `release` (e.g. the `is_complete()`-after-cancel
+			 * assertion `return 1`, or the `started`-wait timeout
+			 * `return 82`) would leave this worker spinning forever, block
+			 * executor teardown at exit, and mask the real return code as a
+			 * runner timeout. */
+			val cb_deadline = thread.now_ms() + 20000;
 			while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
-				/* tight spin — no park, no cancellation safe point */
+				if thread.now_ms() > cb_deadline {
+					atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+					break;
+				}
 			}
 			return 42;
 		}
@@ -56,6 +78,11 @@ pub fn main() nothrow -> Int {
 				spins2 = spins2 + 1;
 				if spins2 > 200 { return 83; }
 			}
+
+			/* The worker must have observed `release`, not hit its
+			 * deadline — a deadline expiry means we never held the cb
+			 * across cancel() as intended (false pass otherwise). */
+			if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 5; }
 
 			match vt.join() {
 				Err(e) => {

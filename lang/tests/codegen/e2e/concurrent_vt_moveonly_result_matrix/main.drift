@@ -4,6 +4,7 @@ import std.concurrent as conc;
 import std.core as core;
 import std.core.arc as arc;
 import lang.atomic as atomic;
+import lang.thread as thread;
 
 /* Move-only nested result.  Heap-backed `label` via concat so the
  * destructor frees real heap; counter-tracked so every destruction
@@ -28,13 +29,22 @@ fn make_result(ctr: arc.Arc<conc.AtomicInt>, suffix: String) nothrow -> OwnedRes
 
 pub struct Sigs {
 	pub started: conc.AtomicBool,
-	pub release: conc.AtomicBool
+	pub release: conc.AtomicBool,
+	/* Set by the worker iff its busy-spin hit the monotonic deadline
+	 * instead of observing `release`.  Main inspects this after its
+	 * waits and fails with a distinct code so a deadline expiry is a
+	 * VISIBLE failure, never a silent false pass (a timed-out worker
+	 * may still publish and drive the destruct counter, which would
+	 * otherwise look like success without exercising the intended
+	 * cancel / abandoned-publish path). */
+	pub timed_out: conc.AtomicBool
 }
 
 fn make_sigs() nothrow -> arc.Arc<Sigs> {
 	return arc.arc(Sigs(
 		started = conc.atomic_bool(false),
-		release = conc.atomic_bool(false)
+		release = conc.atomic_bool(false),
+		timed_out = conc.atomic_bool(false)
 	));
 }
 
@@ -82,11 +92,23 @@ pub fn main() nothrow -> Int {
 	 *      spawn → cancel/drop → release → wait-for-complete cycle,
 	 *      and finalize before the next case begins.  The shared
 	 *      `cb_exec` carrier is never contended between cases.
-	 *   4. **Timeout-bounded.**  The codegen e2e runner enforces a
-	 *      per-case timeout (`--timeout` flag); each `wait_started`
-	 *      and `while !is_complete()` loop has its own internal spin
-	 *      cap that returns a distinguishable error code instead of
-	 *      looping forever.
+	 *   4. **Every spin self-terminates AND records timeout.**  The
+	 *      main-side `wait_started` and `while !is_complete()` loops
+	 *      have spin-count caps that return a distinguishable error
+	 *      code.  The worker-side `while !release` busy-spin is hard-
+	 *      capped by a monotonic `thread.now_ms()` deadline; on expiry
+	 *      it sets `sigs.timed_out` and breaks.  Main checks
+	 *      `timed_out` after each phase's waits and fails with a
+	 *      distinct code (33 / 43 / 95) so a deadline expiry is a
+	 *      VISIBLE failure, never a silent false pass — a timed-out
+	 *      worker can still publish/drop and drive the destruct
+	 *      counter, which would otherwise look like success without
+	 *      exercising the intended cancel / abandoned-publish path.
+	 *      The bound also stops the spinning cb from outliving main
+	 *      and blocking executor teardown at process exit (which the
+	 *      runner would report as an opaque timeout).  The runner's
+	 *      per-case timeout is now only a backstop, not the primary
+	 *      bound.
 	 *
 	 * This is test-only synchronization to expose
 	 * cancellation-insensitive blocking — NOT a production concurrency
@@ -164,7 +186,24 @@ pub fn main() nothrow -> Int {
 			core.callback0(
 				| | captures(move ctr_cb, move sigs_cb) nothrow => {
 					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					/* Bounded busy-spin: cancellation-insensitive (never
+					 * parks/yields to the scheduler, so it holds the cb in a
+					 * known state across cancel()), but hard-capped by a
+					 * monotonic `thread.now_ms()` deadline.  On deadline the
+					 * worker self-terminates AND records `timed_out` so the
+					 * main side can tell a deadline expiry apart from a real
+					 * `release` — without that, a timed-out worker could
+					 * still publish/drop and drive the destruct counter,
+					 * silently converting a hang into a FALSE PASS that never
+					 * exercised the intended cancel / abandoned-publish path.
+					 * The bound also keeps the worker from outliving main and
+					 * blocking executor teardown at process exit. */
+					val cb_deadline = thread.now_ms() + 20000;
 					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+						if thread.now_ms() > cb_deadline {
+							atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+							break;
+						}
 					}
 					return Optional<type OwnedResult>::Some(
 						make_result(ctr_cb.clone(), "M3-CCC")
@@ -185,6 +224,10 @@ pub fn main() nothrow -> Int {
 					spins = spins + 1;
 					if spins > 1000 { return 83; }
 				}
+				/* The worker's busy-spin must have observed `release`, not
+				 * hit its deadline — a deadline expiry means we never held
+				 * the cb across cancel() as intended. */
+				if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 33; }
 				match t.join() {
 					Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CANCELLED { return 30; } },
 					Ok(_) => { return 31; },
@@ -210,7 +253,24 @@ pub fn main() nothrow -> Int {
 			core.callback0(
 				| | captures(move ctr_cb, move sigs_cb) nothrow => {
 					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					/* Bounded busy-spin: cancellation-insensitive (never
+					 * parks/yields to the scheduler, so it holds the cb in a
+					 * known state across cancel()), but hard-capped by a
+					 * monotonic `thread.now_ms()` deadline.  On deadline the
+					 * worker self-terminates AND records `timed_out` so the
+					 * main side can tell a deadline expiry apart from a real
+					 * `release` — without that, a timed-out worker could
+					 * still publish/drop and drive the destruct counter,
+					 * silently converting a hang into a FALSE PASS that never
+					 * exercised the intended cancel / abandoned-publish path.
+					 * The bound also keeps the worker from outliving main and
+					 * blocking executor teardown at process exit. */
+					val cb_deadline = thread.now_ms() + 20000;
 					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+						if thread.now_ms() > cb_deadline {
+							atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+							break;
+						}
 					}
 					return Optional<type OwnedResult>::Some(
 						make_result(ctr_cb.clone(), "M4-DDD")
@@ -230,6 +290,7 @@ pub fn main() nothrow -> Int {
 					spins = spins + 1;
 					if spins > 1000 { return 88; }
 				}
+				if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 43; }
 				match t.join_timeout(conc.Duration(millis = 100)) {
 					Err(e) => { if e.kind != conc.CONCURRENCY_KIND_CANCELLED { return 40; } },
 					Ok(_) => { return 41; },
@@ -256,7 +317,24 @@ pub fn main() nothrow -> Int {
 			core.callback0(
 				| | captures(move ctr_cb, move sigs_cb) nothrow => {
 					atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+					/* Bounded busy-spin: cancellation-insensitive (never
+					 * parks/yields to the scheduler, so it holds the cb in a
+					 * known state across cancel()), but hard-capped by a
+					 * monotonic `thread.now_ms()` deadline.  On deadline the
+					 * worker self-terminates AND records `timed_out` so the
+					 * main side can tell a deadline expiry apart from a real
+					 * `release` — without that, a timed-out worker could
+					 * still publish/drop and drive the destruct counter,
+					 * silently converting a hang into a FALSE PASS that never
+					 * exercised the intended cancel / abandoned-publish path.
+					 * The bound also keeps the worker from outliving main and
+					 * blocking executor teardown at process exit. */
+					val cb_deadline = thread.now_ms() + 20000;
 					while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+						if thread.now_ms() > cb_deadline {
+							atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+							break;
+						}
 					}
 					return Optional<type OwnedResult>::Some(
 						make_result(ctr_cb.clone(), "M5-EEE")
@@ -279,6 +357,12 @@ pub fn main() nothrow -> Int {
 				atomic.atomic_store_bool(&sigs.get().release, true, 2);
 				var spins5: Int = 0;
 				while atomic.atomic_load_int(&ctr.get(), 1) < 5 {
+					/* If the worker hit its deadline it did NOT observe the
+					 * intended drop-then-release sequence, so this is not the
+					 * abandoned-publish path under test.  A timed-out worker
+					 * can still publish/drop and push the counter to 5, which
+					 * would be a false pass — fail explicitly instead. */
+					if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 95; }
 					val _ = conc.sleep(conc.Duration(millis = 2));
 					spins5 = spins5 + 1;
 					if spins5 > 5000 { return 94; }
