@@ -83,7 +83,7 @@ fn use_wrap(var w: Wrap) nothrow -> Void { return; }
 fn inner_consume() throws -> Void {
 \ttry { throw E1(); }
 \tcatch e {
-\t\tval w: Wrap = Wrap::Here(e);
+\t\tval w: Wrap = Wrap::Here(move e);
 \t\tuse_wrap(move w);
 \t\tthrow E2();
 \t}
@@ -174,13 +174,16 @@ def test_caught_error_no_consume_outer_try_releases_once(tmp_path: Path) -> None
 
 
 def test_caught_error_consume_outer_try_no_double_release(tmp_path: Path) -> None:
-	"""K pin (1): catch body consumes `e` via a variant constructor +
-	by-value call.  The pre-6b inline check uses `_moved_locals` to
-	skip emission; post-6b the CleanupHook's `verdict_at` returns
-	`MOVED_OUT` (the constructor + call emitted MoveOuts in MIR) and
-	skips.  Either way: NO release of `e`'s storage in `inner_consume`'s
-	frame at the throw point — the consume already transferred it.
-	Verifies we do not regress to a double-release."""
+	"""K pin (1): catch body consumes `e` via an explicit `move` into
+	a variant constructor (`Wrap::Here(move e)`), then a by-value call.
+	`e: Error` is non-`Copy`, so the explicit-transfer rule (spec §1.3)
+	requires `move e` at the constructor field slot.  The pre-6b inline
+	check uses `_moved_locals` to skip emission; post-6b the
+	CleanupHook's `verdict_at` returns `MOVED_OUT` (the constructor +
+	call emitted MoveOuts in MIR) and skips.  Either way: NO release of
+	`e`'s storage in `inner_consume`'s frame at the throw point — the
+	consume already transferred it.  Verifies we do not regress to a
+	double-release."""
 	ir = _compile_to_ir(tmp_path, _PROLOGUE + _FIXTURE_CONSUME_OUTER_TRY)
 	body = _function_body(ir, "inner_consume")
 	count = _release_count_in(body)

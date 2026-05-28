@@ -147,7 +147,7 @@ implement Box {
 
 fn main() nothrow -> Int {
 \tval app = conc.arc(Box(v = 11));
-\tval opt = Optional<type conc.Arc<Box>>::Some(app);
+\tval opt = Optional<type conc.Arc<Box>>::Some(move app);
 \tmatch opt {
 \t\tSome(b) => {
 \t\t\tval cb: core.Callback0<Int> = core.callback0(| | captures(share b) nothrow => {

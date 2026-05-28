@@ -382,7 +382,7 @@ implement StateMachine {
 pub fn arc<T>(value: T) nothrow -> Arc<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type ArcInner<T>>(1);
-		mem.write<type ArcInner<T>>(&mut buf, 0, ArcInner(refcnt = 1, value = value));
+		mem.write<type ArcInner<T>>(&mut buf, 0, ArcInner(refcnt = 1, value = move value));
 		return Arc(buf = buf);
 	}
 }
@@ -474,7 +474,7 @@ fn on_x(e: Event) nothrow -> Void {
 
 fn drift_main() nothrow -> Int {
 	var m: conc.Mutex<conc.StateMachine> = conc.mutex(conc.StateMachine(count = 0));
-	var sm: conc.Arc<conc.Mutex<conc.StateMachine>> = conc.arc(m);
+	var sm: conc.Arc<conc.Mutex<conc.StateMachine>> = conc.arc(move m);
 	var e = Event(v = 41, state = sm.clone());
 	var cb = core.callback1(on_x);
 	cb.call(move e);

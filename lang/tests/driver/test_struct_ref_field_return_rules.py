@@ -75,7 +75,7 @@ struct Statement(session: &mut Session);
 
 fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	val st = Statement(session = s);
-	val out: core.Result<Statement, Int> = core.Result::Ok(st);
+	val out: core.Result<Statement, Int> = core.Result::Ok(move st);
 	return move out;
 }
 

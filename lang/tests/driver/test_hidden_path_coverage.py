@@ -72,7 +72,7 @@ def test_generic_impl_array_literal_fuzz_fixed_seed(tmp_path: Path, capsys: pyte
 				[
 					f"fn use_{idx}() -> Int {{",
 					f"\tvar items: Array<{ty}> = [];",
-					f"\tvar b: Box<{ty}> = Box(items = items);",
+					f"\tvar b: Box<{ty}> = Box(items = move items);",
 					"\tvar v = b.make();",
 					"\treturn v;",
 					"}",
