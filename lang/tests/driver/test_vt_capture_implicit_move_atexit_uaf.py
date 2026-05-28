@@ -60,10 +60,15 @@ existing ABI-14 dependency artifacts remain consumable unchanged.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _env_true(name: str) -> bool:
+	return os.environ.get(name, "").lower() in ("1", "true", "yes")
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -153,7 +158,26 @@ def test_vt_capture_explicit_move_no_atexit_uaf(tmp_path: Path) -> None:
 	zero-back and valgrind is clean.
 
 	Skips when valgrind is unavailable.
+
+	Also skips under the ASan / UBSan sanitizer lanes: those lanes
+	build the binary with `-fsanitize=address`/`undefined`, and an
+	ASan-instrumented binary CANNOT run under valgrind — ASan's
+	shadow-memory range interleaves with valgrind's mappings and the
+	process aborts at startup ("Shadow memory range interleaves with
+	an existing memory mapping. ASan cannot proceed correctly.
+	ABORTING."), returning non-zero before `main` runs.  The UAF this
+	test pins is exercised by valgrind on the NORMAL / DRIFT_MEMCHECK
+	lanes; the sanitizer lanes do their own UAF detection on the
+	binary directly, so wrapping their instrumented binary in valgrind
+	here is both incompatible and redundant.
 	"""
+	if _env_true("DRIFT_ASAN") or _env_true("DRIFT_UBSAN"):
+		import pytest
+		pytest.skip(
+			"sanitizer-instrumented binary cannot run under valgrind "
+			"(ASan shadow-memory interleave aborts at startup); the "
+			"normal / memcheck lanes pin this UAF via valgrind"
+		)
 	valgrind = shutil.which("valgrind")
 	if valgrind is None:
 		import pytest

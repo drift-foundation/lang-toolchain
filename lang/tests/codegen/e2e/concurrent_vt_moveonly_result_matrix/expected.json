@@ -1,4 +1,5 @@
 {
   "description": "e2e: VirtualThread<Optional<OwnedResult>> move-only nested result — M1 join Ok / M2 completed-unjoined drop / M3 cancel+publish+join / M4 cancel+publish+join_timeout / M5 abandoned-publish; counter conservation at each step",
-  "exit_code": 0
+  "exit_code": 0,
+  "timeout_s": 80
 }
