@@ -1418,7 +1418,7 @@ implement<K, B> HashSetCore<K, B>
 	/// as the underlying `HashMapIter`.
 	pub fn iter(self: &HashSetCore<K, B>) nothrow -> HashSetIter<K, B> {
 		val inner = self.map.iter();
-		return HashSetIter<type K, B>(inner = inner);
+		return HashSetIter<type K, B>(inner = move inner);
 	}
 }
 
@@ -2505,7 +2505,7 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 	/// Same invalidation contract as `TreeMap.iter`.
 	pub fn iter(self: &TreeSet<K>) -> TreeSetIter<K> {
 		val inner = self.map.iter();
-		return TreeSetIter<type K>(inner = inner);
+		return TreeSetIter<type K>(inner = move inner);
 	}
 }
 

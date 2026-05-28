@@ -9307,6 +9307,11 @@ class HIRToMIR:
 		  - INDIRECT-target HCall — function-VALUE calls `f(x)`
 		    where `f` is a function value (positional + keyword,
 		    routed here via `_lower_indirect_call`);
+		  - CONSTRUCTOR-target HCall — struct + variant constructor
+		    field args (positional + keyword), routed here via
+		    `_lower_constructor_call`.  Spec §1.3 names constructors
+		    explicitly: a bare named non-`Copy` owner is never
+		    silently transferred into a field;
 		  - HInvoke (callable-value invocation node; positional +
 		    keyword).
 		The gate runs BEFORE this lowering, so a user-source bare

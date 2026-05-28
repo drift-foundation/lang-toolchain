@@ -20,5 +20,5 @@ fn main() nothrow -> Int {
 	var x = Impl();
 	var t: Take = x;
 	val b = Blob(xs = [1]);
-	return t.take(b);
+	return t.take(move b);
 }

@@ -483,7 +483,7 @@ pub struct MutexGuard<T> {
 ///
 /// **See also:** `Mutex`, `lock`, `Arc`.
 pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
-	return Mutex<type T>(locked = atomic_bool(false), value = value);
+	return Mutex<type T>(locked = atomic_bool(false), value = move value);
 }
 
 /// Acquires the mutex, spinning until it is uncontended.
@@ -1731,8 +1731,8 @@ pub fn spawn_future<T>(var cb: core.Callback0<T>) nothrow -> Future<T> {
 pub fn spawn_future_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Result<Future<T>, ConcurrencyError> {
 	var res = spawn_on<type T>(exec, move cb);
 	return match res {
-		Ok(vt) => { core.Result::Ok(Future<type T>(vt)) },
-		Err(err) => { core.Result::Err(err) },
+		Ok(vt) => { core.Result::Ok(Future<type T>(move vt)) },
+		Err(err) => { core.Result::Err(move err) },
 		default => { core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4)) }
 	};
 }
@@ -2076,12 +2076,12 @@ implement<T> FutureGroup<T> require T is core.Copy {
 			var res = self.items[i].join();
 			match res {
 				Ok(v) => { out.push(v); },
-				Err(err) => { return core.Result::Err(err); },
+				Err(err) => { return core.Result::Err(move err); },
 				default => { return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4)); }
 			}
 			i += 1;
 		}
-		return core.Result::Ok(out);
+		return core.Result::Ok(move out);
 	}
 
 	/// Returns the result of the first ready future in the group,

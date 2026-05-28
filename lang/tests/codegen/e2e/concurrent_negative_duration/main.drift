@@ -27,11 +27,11 @@ fn is_failed_int(res: core.Result<Int, conc.ConcurrencyError>) nothrow -> Bool {
 
 fn main() nothrow -> Int {
 	var sd = conc.sleep(conc.Duration(millis = -1));
-	var ok_sleep = is_failed_void(sd);
+	var ok_sleep = is_failed_void(move sd);
 
 	var t = conc.spawn(| | => { return 1; });
 	var jd = t.join_timeout(conc.Duration(millis = -1));
-	var ok_join = is_failed_int(jd);
+	var ok_join = is_failed_int(move jd);
 
 	if ok_sleep {
 		if ok_join {

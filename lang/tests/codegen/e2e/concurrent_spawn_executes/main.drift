@@ -8,7 +8,7 @@ import lang.thread as thread;
 fn main() nothrow -> Int {
 	var cb = core.callback0(| | => { console.eprintln("spawned"); return; });
 	var exec = thread.exec_default_get();
-	var h = thread.vt_spawn(cb, exec);
+	var h = thread.vt_spawn(move cb, exec);
 	val _rc = thread.exec_submit(exec, h);
 	thread.vt_join(h);
 	console.println("done");

@@ -237,7 +237,7 @@ pub fn null_handle<T>() nothrow -> Handle<T> {
 /// **See also:** `AtomicHandle`, `handle`.
 pub fn atomic_handle<T>(v: Handle<T>) nothrow -> AtomicHandle<T> {
 	val x = atomic.atomic_uint(v.raw);
-	return AtomicHandle<type T>(inner = x);
+	return AtomicHandle<type T>(inner = move x);
 }
 
 /// Constructs a `RefToken<T>` wrapping the raw `Uint` slot.
@@ -261,7 +261,7 @@ pub fn null_ref_token<T>() nothrow -> RefToken<T> {
 /// **See also:** `AtomicRef`, `ref_token`.
 pub fn atomic_ref<T>(v: RefToken<T>) nothrow -> AtomicRef<T> {
 	val a = atomic_handle<type T>(v.inner);
-	return AtomicRef<type T>(inner = a);
+	return AtomicRef<type T>(inner = move a);
 }
 
 /// Constructs an empty `MpscQueue<T>` with the given capacity.

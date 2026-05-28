@@ -12620,6 +12620,42 @@ class TypeChecker:
 							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
 						)
 					return
+				if call_info.target.kind is CallTargetKind.CONSTRUCTOR:
+					# Struct / variant constructor (`Config(ap)`,
+					# `Some(ap)`).  `_decl_and_sig_for_call` returns
+					# (None, None) for constructors, so the decl/sig path
+					# above is skipped.  Constructor args lower through
+					# `_lower_constructor_call` -> `_lower_call_arg`, which
+					# would silent-move a bare non-Copy HVar into the field
+					# slot — the same explicit-ownership-transfer hole this
+					# patch closes for plain calls.  Spec §1.3 names
+					# constructors explicitly: a bare named non-Copy owner
+					# is never silently transferred into a field; the source
+					# must spell `move x`.
+					#
+					# `call_info.sig.param_types` holds the field types in
+					# FIELD order; `target.ctor_arg_field_indices` maps each
+					# arg to its field index in the resolver's construction
+					# order (positional args first, else keyword args — the
+					# two are mutually exclusive at a constructor call).
+					# Combine the args in that same order and resolve each
+					# slot's field type, mirroring `_lower_constructor_call`.
+					_ctor_field_types = list(call_info.sig.param_types)
+					_ctor_field_indices = call_info.target.ctor_arg_field_indices
+					_ctor_args = list(expr.args) + [kw.value for kw in expr.kwargs]
+					if _ctor_field_indices is not None and len(_ctor_field_indices) == len(_ctor_args):
+						for _i, _arg in enumerate(_ctor_args):
+							_field_idx = _ctor_field_indices[_i]
+							if _field_idx < 0 or _field_idx >= len(_ctor_field_types):
+								continue
+							_check_explicit_move_required_at_call_arg(
+								arg_expr=_arg,
+								param_ty=_ctor_field_types[_field_idx],
+								target_name="constructor",
+								param_label=f"field #{_field_idx}",
+								span=getattr(_arg, "loc", getattr(expr, "loc", Span())),
+							)
+					return
 				if call_info.target.kind is not CallTargetKind.INTRINSIC:
 					return
 				if call_info.target.intrinsic not in {

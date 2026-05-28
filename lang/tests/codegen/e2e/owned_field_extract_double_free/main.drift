@@ -5,7 +5,7 @@ struct Config(protocols: Array<String>);
 
 fn build(builder: Builder) nothrow -> Config {
     val ap = builder.protocols;
-    return Config(ap);
+    return Config(move ap);
 }
 
 fn main() nothrow -> Int {
@@ -15,7 +15,7 @@ fn main() nothrow -> Int {
         protos.push("h2");
         protos.push("http/1.1");
         val b = Builder(move protos, 42);
-        val cfg = build(b);
+        val cfg = build(move b);
         if cfg.protocols.len != 2 { return 97; }
         i = i + 1;
     }

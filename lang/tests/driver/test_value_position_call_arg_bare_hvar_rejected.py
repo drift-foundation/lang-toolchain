@@ -340,3 +340,130 @@ def test_interface_method_invoke_with_move_compiles(tmp_path: Path) -> None:
 	)
 	rc, payload = _compile_json(tmp_path, src, stem="iface_move")
 	assert rc == 0, payload
+
+
+_STRUCT_CTOR_POSITIONAL_SOURCE = """\
+module main;
+
+struct Config(protocols: Array<String>);
+
+fn main() nothrow -> Int {
+\tvar ap: Array<String> = [];
+\tap.push("h2");
+\t// Struct constructor, POSITIONAL by-value non-Copy field arg.
+\t// Spec §1.3 names constructors explicitly: a bare named non-Copy
+\t// owner is never silently transferred into a field — bare `ap`
+\t// here must be rejected with the friendly use-move diag.
+\tval cfg = Config(ap);
+\treturn cfg.protocols.len;
+}
+"""
+
+
+_STRUCT_CTOR_KEYWORD_SOURCE = """\
+module main;
+
+struct Config(protocols: Array<String>);
+
+fn main() nothrow -> Int {
+\tvar ap: Array<String> = [];
+\tap.push("h2");
+\t// Struct constructor, KEYWORD/field by-value non-Copy arg — same
+\t// rule as positional (spec §1.3); bare `ap` must be rejected.
+\tval cfg = Config(protocols = ap);
+\treturn cfg.protocols.len;
+}
+"""
+
+
+_VARIANT_CTOR_POSITIONAL_SOURCE = """\
+module main;
+
+variant Box {
+\tFull(payload: Array<String>),
+\tEmpty
+}
+
+fn main() nothrow -> Int {
+\tvar ap: Array<String> = [];
+\tap.push("h2");
+\t// Variant constructor, POSITIONAL by-value non-Copy arg — routes
+\t// through the same `_lower_constructor_call` -> `_lower_call_arg`
+\t// path as struct ctors; bare `ap` must be rejected (spec §1.3).
+\tval b = Box::Full(ap);
+\tmatch b {
+\t\tBox::Full(p) => { return p.len; },
+\t\tdefault => { return 0; }
+\t}
+}
+"""
+
+
+def test_struct_ctor_positional_bare_hvar_rejected(tmp_path: Path) -> None:
+	"""`Config(ap)` — struct constructor with a bare non-Copy named
+	owner at a positional field slot.  Must fail with the friendly
+	`cannot copy 'ap' ... use move ap` diag.  Pins that the gate
+	covers CONSTRUCTOR-target HCall positional args, which lower
+	through `_lower_constructor_call` -> `_lower_call_arg` and would
+	otherwise silent-move the field source (spec §1.3 names
+	constructors explicitly).
+	"""
+	rc, payload = _compile_json(tmp_path, _STRUCT_CTOR_POSITIONAL_SOURCE, stem="ctor_pos")
+	assert rc != 0, (
+		"struct-ctor positional bare HVar at by-value field arg "
+		"compiled — violates spec §1.3.\npayload: " + str(payload)
+	)
+	_assert_friendly_use_move(payload, binder="ap")
+
+
+def test_struct_ctor_keyword_bare_hvar_rejected(tmp_path: Path) -> None:
+	"""`Config(protocols = ap)` — struct constructor with a bare
+	non-Copy named owner at a keyword/field slot.  Must fail with the
+	friendly diag.  Pins keyword/field constructor args are gated the
+	same as positional.
+	"""
+	rc, payload = _compile_json(tmp_path, _STRUCT_CTOR_KEYWORD_SOURCE, stem="ctor_kw")
+	assert rc != 0, (
+		"struct-ctor keyword bare HVar at by-value field arg "
+		"compiled — violates spec §1.3.\npayload: " + str(payload)
+	)
+	_assert_friendly_use_move(payload, binder="ap")
+
+
+def test_variant_ctor_positional_bare_hvar_rejected(tmp_path: Path) -> None:
+	"""`Box::Full(ap)` — variant constructor with a bare non-Copy
+	named owner at a positional field slot.  Must fail with the
+	friendly diag.  Pins that variant constructors (which route
+	through the same CONSTRUCTOR lowering path as struct ctors) are
+	gated too.
+	"""
+	rc, payload = _compile_json(tmp_path, _VARIANT_CTOR_POSITIONAL_SOURCE, stem="var_ctor_pos")
+	assert rc != 0, (
+		"variant-ctor positional bare HVar at by-value field arg "
+		"compiled — violates spec §1.3.\npayload: " + str(payload)
+	)
+	_assert_friendly_use_move(payload, binder="ap")
+
+
+def test_ctor_with_move_compiles(tmp_path: Path) -> None:
+	"""Positive companion: writing `move ap` at struct (positional +
+	keyword) and variant constructor field slots compiles.  Pins the
+	diagnostic's prescription is sound across all three constructor
+	arg shapes.
+	"""
+	src = _STRUCT_CTOR_POSITIONAL_SOURCE.replace(
+		"val cfg = Config(ap);", "val cfg = Config(move ap);"
+	)
+	rc, payload = _compile_json(tmp_path, src, stem="ctor_pos_move")
+	assert rc == 0, payload
+	src = _STRUCT_CTOR_KEYWORD_SOURCE.replace(
+		"val cfg = Config(protocols = ap);",
+		"val cfg = Config(protocols = move ap);",
+	)
+	rc, payload = _compile_json(tmp_path, src, stem="ctor_kw_move")
+	assert rc == 0, payload
+	src = _VARIANT_CTOR_POSITIONAL_SOURCE.replace(
+		"val b = Box::Full(ap);", "val b = Box::Full(move ap);"
+	)
+	rc, payload = _compile_json(tmp_path, src, stem="var_ctor_pos_move")
+	assert rc == 0, payload

@@ -44,6 +44,17 @@
       (`_decl_and_sig_for_call` returns `(None, None)` for
       these; lowering routes them through
       `_lower_indirect_call`); gated via `call_info.sig.param_types`;
+    * CONSTRUCTOR-target HCall args — struct + variant
+      constructor field slots (positional + keyword/field),
+      `Config(ap)` / `Some(ap)`
+      (`_decl_and_sig_for_call` also returns `(None, None)`
+      for constructors; lowering routes them through
+      `_lower_constructor_call` -> `_lower_call_arg`).  Field
+      types come from `call_info.sig.param_types` (FIELD order)
+      mapped per-arg through `target.ctor_arg_field_indices`,
+      mirroring `_lower_constructor_call`'s arg→field map.  Spec
+      §1.3 names constructors explicitly: a bare named non-`Copy`
+      owner is never silently transferred into a field;
     * HInvoke args (callable-value invocation node) — same
       `call_info.sig.param_types` gate + walker recursion so
       nested HInvoke args are reached.
@@ -121,13 +132,30 @@
          `_lower_indirect_call` would otherwise silent-move.
       7. `f(move x)` — must compile clean.  Function-value
          positive companion.
+      8. `t.absorb(x)` where `t` is an INTERFACE value
+         (HMethodCall INDIRECT target → `_lower_iface_call`) —
+         must fail with friendly diag; pins interface-method
+         dispatch coverage.
+      9. `t.absorb(move x)` — must compile clean.  Interface
+         positive companion.
+     10. `Config(ap)` (struct constructor, POSITIONAL field
+         arg, non-Copy `Array<String>`) — HCall CONSTRUCTOR
+         target — must fail with friendly diag.
+     11. `Config(protocols = ap)` (struct constructor,
+         KEYWORD/field arg) — must fail with friendly diag;
+         pins keyword field args gated the same as positional.
+     12. `Box::Full(ap)` (variant constructor, POSITIONAL field
+         arg) — must fail with friendly diag; pins variants
+         route through the same CONSTRUCTOR lowering path.
+     13. (10)+(11)+(12) with explicit `move ap` — must compile
+         clean.  Constructor positive companion.
   - Existing
     `lang/tests/driver/test_use_move_call_arg_friendly_diag.py`
     (statement-form) still passes — the MIR validator gate
     remains as a defense-in-depth backstop.
-  - 14 existing driver tests required source updates to add
-    explicit `move` keywords at by-value call args of non-Copy
-    HVar arguments — these tests pre-dated the
+  - 16 existing driver-test fixtures required source updates to
+    add explicit `move` keywords at by-value call args of
+    non-Copy HVar arguments — these tests pre-dated the
     explicit-transfer contract and exercised the silent
     implicit-move acceptance.  Updated tests:
     `test_borrow_read_diagnostics_span.py`,
@@ -138,11 +166,13 @@
     `test_mir_invariants.py`,
     `test_mode_equivalence.py`,
     `test_pkg_consumer_e2e.py`,
-    `test_implicit_move_var_requirement.py`,
+    `test_implicit_move_var_requirement.py` (direct + indirect +
+    interface call shapes),
     `test_noncopy_field_projection_from_borrow.py`,
     `test_pkg_hir_scope_reconstruction.py`,
     `test_std_log_api_smoke.py`,
-    `test_pkg_typetable_copy_status_divergence.py`.  All passing.
+    `test_pkg_typetable_copy_status_divergence.py`,
+    `test_fat_arc_interface_views.py`.  All passing.
   - Stdlib source updates (same shape — explicit `move` at
     by-value call args of non-Copy locals):
     `stdlib/std/concurrent/concurrent.drift`
@@ -151,6 +181,28 @@
     `stdlib/std/log/log.drift`
     (`_alloc_runtime_state(st)`).  Test fixtures using
     `log.create_logger(..., cfg)` updated similarly.
+  - Stdlib CONSTRUCTOR-arg updates (the constructor-gate
+    extension — explicit `move` at by-value non-`Copy` field
+    args of struct/variant constructors; all are
+    construct-then-return / construct-then-match with the local
+    or binder unused afterward):
+    `stdlib/std/sync/sync.drift`
+    (`atomic_handle`: `AtomicHandle(inner = move x)`;
+    `atomic_ref`: `AtomicRef(inner = move a)`),
+    `stdlib/std/concurrent/concurrent.drift`
+    (`spawn_future_on`: `Future(move vt)` + `Result::Err(move err)`;
+    `join_all`: `Result::Err(move err)` + `Result::Ok(move out)`;
+    `mutex`: `Mutex(..., value = move value)`),
+    `stdlib/std/containers/array.drift`
+    (`HashSetCore.iter`: `HashSetIter(inner = move inner)`;
+    `TreeSet.iter`: `TreeSetIter(inner = move inner)`).
+    `Handle<T>`-field constructor sites (`ref_token`,
+    `null_ref_token`) were correctly NOT touched — `Handle<T>`
+    is `Copy`, so the gate skips them.  Verified clean via a
+    broad-import probe across all stdlib modules (rc 0, no
+    diagnostics); generic-instantiation sites (e.g. `mutex<T>`
+    with non-`Copy` `T`) surface only under monomorphization and
+    are exercised by the full test suite.
 
   **ABI implication.**  Codegen-internal — no runtime symbol,
   layout, calling-convention, `.zdmp` schema, or signing path
@@ -162,12 +214,18 @@
   Files touched (compiler):
   - `lang/driftc/type_checker.py` (new helper
     `_check_explicit_move_required_at_call_arg` + wiring into
-    `_check_call_expr_boundaries` for HCall positional/keyword
-    AND HMethodCall positional/keyword non-receiver args).
+    `_check_call_expr_boundaries` for HCall positional/keyword,
+    HMethodCall positional/keyword non-receiver args, HCall
+    INDIRECT/CONSTRUCTOR targets, and the HInvoke walker branch).
+    The CONSTRUCTOR branch resolves each arg's field type from
+    `call_info.sig.param_types` via
+    `target.ctor_arg_field_indices`, mirroring
+    `_lower_constructor_call`.
   - `lang/driftc/stage2/hir_to_mir.py` (`_lower_call_arg`
     docstring + comment rewritten — the `MoveOut` branch is now
     documented as an internal backstop, not the user-facing
-    semantic; no behavior change).
+    semantic; constructor coverage added to the enumerated
+    gated-shape list; no behavior change).
   - `lang/versions.py` — 0.33.6 → 0.33.7.
   - `docs/design/drift-lang-spec.md` (§1.3.2 "known compiler
     gap" removed — the gap is now closed; spec is fully

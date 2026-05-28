@@ -1,18 +1,25 @@
 // Negative contract companion to the Token axis of the ownership
-// matrix.  A non-Copy `core.Destructible` HVar consumed at a
-// transfer site (with or without an explicit `move`) must be
-// flagged as "use after move" on any subsequent reference.
+// matrix.  A non-Copy `core.Destructible` HVar transferred at a
+// by-value call site via explicit `move` must be flagged as "use
+// after move" on any subsequent reference.
 //
-// Drift permits IMPLICIT move at last-use for non-Copy HVar — no
-// keyword required at the call site.  What the borrow checker
-// DOES require is "move exactly once": once the HVar has been
-// transferred into a destination container / consumed by a
-// by-value call, any subsequent read must be rejected.  This
-// locks in that contract for Token as a non-Copy destructor-
-// bearing type.
+// Drift requires EXPLICIT ownership transfer (spec §1.3): a bare
+// non-Copy named owner at a by-value call arg is a compile error
+// ("cannot copy 'x': type ... is not Copy (use move x)").  The
+// borrow checker additionally enforces "move exactly once": once
+// the HVar has been transferred (via `move`) into a destination
+// container / consumed by a by-value call, any subsequent
+// reference is a use-after-move.  This fixture consumes `tok`
+// with an explicit `move`, then references it again with another
+// explicit `move` — the second `move tok` is the use-after-move
+// the borrow checker rejects.  (Using bare `tok` for the second
+// reference would instead trip the earlier type-check
+// explicit-move gate; we want the borrow-checker's
+// use-after-move contract here, so both consume sites spell
+// `move`.)
 //
-// Positive matrix companion: om_fn_arg_token/ (the same `sink(tok)`
-// call — only there, the second use is absent so the program
+// Positive matrix companion: om_fn_arg_token/ (a single
+// `sink(move tok)` — the second use is absent so the program
 // compiles and runs).
 
 module m;
@@ -37,7 +44,7 @@ fn sink(t: Token) nothrow -> Void { return; }
 fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	val tok: Token = make_token(&mut sess);
-	sink(tok);   // first consume (implicit move) — legal.
-	sink(tok);   // second consume — must be rejected as use-after-move.
+	sink(move tok);   // first consume (explicit move) — legal.
+	sink(move tok);   // second consume — use-after-move (borrowcheck).
 	return 0;
 }
