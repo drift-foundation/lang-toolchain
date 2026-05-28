@@ -31,7 +31,14 @@
   `_check_call_expr_boundaries` for ALL call shapes that route
   args through `_lower_call_arg` at lowering:
     * free-function direct HCall args (positional + keyword);
-    * HMethodCall non-receiver args (positional + keyword);
+    * HMethodCall declared-method non-receiver args
+      (positional + keyword);
+    * HMethodCall intrinsic-fallback non-receiver args
+      (positional; method keyword args are non-v1);
+    * HMethodCall INDIRECT-target non-receiver args —
+      INTERFACE-method dispatch (`t.take(x)` where `t` is an
+      interface value, routed via `_lower_iface_call`) and
+      indirect method dispatch (positional);
     * INDIRECT-target HCall args — function-VALUE calls
       `f(x)` where `f` is a function value
       (`_decl_and_sig_for_call` returns `(None, None)` for

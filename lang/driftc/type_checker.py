@@ -12736,7 +12736,32 @@ class TypeChecker:
 						)
 					return
 				call_info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
-				if call_info is None or call_info.target.kind is not CallTargetKind.INTRINSIC:
+				if call_info is None:
+					return
+				if call_info.target.kind is CallTargetKind.INDIRECT:
+					# Interface-method dispatch (`t.take(x)` where `t` is an
+					# interface value) and indirect method dispatch both
+					# carry an INDIRECT target and lower their NON-receiver
+					# args through `_lower_iface_call` / `_lower_indirect_call`
+					# -> `_lower_call_arg` (which would silent-move a bare
+					# non-Copy HVar).  `_decl_and_sig_for_call` returns
+					# (None, None) for these (no concrete decl), so the
+					# declared-method path above is skipped.  Gate the args
+					# here.  The indirect/iface call sig indexes args
+					# directly (`sig.param_types[idx]`, NO receiver offset --
+					# matches `_lower_iface_call`).
+					_indirect_param_types = list(call_info.sig.param_types)
+					for idx, arg in enumerate(expr.args):
+						param_ty = _indirect_param_types[idx] if idx < len(_indirect_param_types) else None
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=arg,
+							param_ty=param_ty,
+							target_name=expr.method_name,
+							param_label=f"parameter #{idx}",
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
+					return
+				if call_info.target.kind is not CallTargetKind.INTRINSIC:
 					return
 				intr_name = call_info.target.intrinsic.name if call_info.target.intrinsic is not None else "intrinsic"
 				param_types = list(call_info.sig.param_types)

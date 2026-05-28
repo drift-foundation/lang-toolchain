@@ -279,3 +279,64 @@ def test_function_value_invoke_with_move_compiles(tmp_path: Path) -> None:
 	)
 	rc, payload = _compile_json(tmp_path, src, stem="invoke_move")
 	assert rc == 0, payload
+
+
+_INTERFACE_METHOD_INVOKE_SOURCE = """\
+module main;
+
+import std.core as core;
+import std.core.arc as arc;
+
+pub struct Gateway {
+\tpub name: String
+}
+
+interface Sink {
+\tfn absorb(self: &Self, g: arc.Arc<Gateway>) nothrow -> Int;
+}
+
+pub struct Impl {}
+
+implement Sink for Impl {
+\tfn absorb(self: &Impl, g: arc.Arc<Gateway>) nothrow -> Int {
+\t\tval a = g.get();
+\t\treturn 7;
+\t}
+}
+
+fn main() nothrow -> Int {
+\tvar imp = Impl();
+\tvar t: Sink = imp;
+\tval x = arc.arc(Gateway(name = "t"));
+\t// Interface-method dispatch (INDIRECT target).  Bare non-Copy
+\t// named owner at the by-value arg must be rejected (spec 1.3).
+\tval r = t.absorb(x);
+\treturn r;
+}
+"""
+
+
+def test_interface_method_invoke_bare_hvar_rejected(tmp_path: Path) -> None:
+	"""`t.absorb(x)` where `t` is an interface value (INDIRECT
+	method dispatch) and `x` is a bare non-Copy named owner at a
+	by-value arg.  Must fail with the friendly diag.  Pins that
+	the gate covers interface-method dispatch — `_lower_iface_call`
+	routes args through `_lower_call_arg` and would otherwise
+	silent-move them.
+	"""
+	rc, payload = _compile_json(tmp_path, _INTERFACE_METHOD_INVOKE_SOURCE, stem="iface")
+	assert rc != 0, (
+		"interface-method bare HVar at by-value arg compiled — "
+		"violates spec §1.3.\npayload: " + str(payload)
+	)
+	_assert_friendly_use_move(payload, binder="x")
+
+
+def test_interface_method_invoke_with_move_compiles(tmp_path: Path) -> None:
+	"""Positive companion: `t.absorb(move x)` through an interface
+	value compiles."""
+	src = _INTERFACE_METHOD_INVOKE_SOURCE.replace(
+		"val r = t.absorb(x);", "val r = t.absorb(move x);"
+	)
+	rc, payload = _compile_json(tmp_path, src, stem="iface_move")
+	assert rc == 0, payload

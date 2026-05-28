@@ -9300,6 +9300,10 @@ class HIRToMIR:
 		    (positional only — method keyword args are non-v1 and
 		    rejected earlier, so the intrinsic fallback has no
 		    keyword path to gate);
+		  - HMethodCall INDIRECT-target non-receiver args —
+		    interface-method dispatch (`t.take(x)` where `t` is an
+		    interface value, routed via `_lower_iface_call`) and
+		    indirect method dispatch (positional);
 		  - INDIRECT-target HCall — function-VALUE calls `f(x)`
 		    where `f` is a function value (positional + keyword,
 		    routed here via `_lower_indirect_call`);

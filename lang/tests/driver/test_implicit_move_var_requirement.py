@@ -72,7 +72,7 @@ fn take(v: Blob) nothrow -> Int {
 fn main() nothrow -> Int {
 	val b = Blob(xs = [1]);
 	var f = take;
-	return f(b);
+	return f(move b);
 }
 """,
 	)
@@ -106,7 +106,7 @@ fn main() nothrow -> Int {
 	var x = Impl();
 	var t: Take = x;
 	val b = Blob(xs = [1]);
-	return t.take(b);
+	return t.take(move b);
 }
 """,
 	)
