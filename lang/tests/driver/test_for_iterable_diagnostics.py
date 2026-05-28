@@ -327,7 +327,7 @@ fn consume(xs: Array<Int>) nothrow -> Int { return 0; }
 
 fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
-	consume(arr);
+	consume(move arr);
 	arr.push(2);
 	return 0;
 }

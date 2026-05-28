@@ -1,6 +1,175 @@
 # Drift development history
 
-## 2026-05-27 (LANGUAGE_BUG fix: implicit-move of non-Copy MOVE-captured local in a callback body skipped env-slot zero-back — atexit use-after-free against any Arc also held by the global registry; bookkeeper memcheck unblocked; ABI stays at 14)
+## 2026-05-27 (LANGUAGE_BUG fix: value-position by-value call args silently accepted bare non-`Copy` named owners — explicit-ownership-transfer contract now uniformly enforced at type-check time; ABI stays at 14)
+- **Release 0.33.7, ABI unchanged at 14.**  Reported as an
+  explicit-ownership-transfer asymmetry between statement-form
+  and value-form by-value call args.  Spec
+  `docs/design/drift-lang-spec.md` §1.3 declares that bare named
+  non-`Copy` owners at any consume position are compile errors;
+  users must write `move <x>`.  Pre-0.33.7 the rule was enforced
+  uniformly at HReturn / HLet RHS / HAssign RHS (type-checker
+  `cannot copy ... (use move ...)` at `type_checker.py:3161`)
+  and at **statement-form** by-value call args (MIR validator's
+  friendly diagnostic in `validate_mir_call_byvalue_moves`), but
+  **value-form** call args (`val r = consume(x);`,
+  `val r = wrap(consume(x));`) silently emitted `MoveOut` in
+  `_lower_call_arg` and the program compiled.  Same contract,
+  asymmetric gate.
+
+  **Root cause.**  `_lower_call_arg`'s non-Copy-HVar branch
+  emits `MoveOut(local=name)` for bare HVar arguments.  The MIR
+  validator's gate (`validate_mir_call_byvalue_moves`) catches
+  `LoadLocal`/`LoadRef` sources but skips `MoveOut`.  Statement-
+  form calls went through `_lower_call` which used
+  `lower_expr(arg)` directly → `LoadLocal` source → validator
+  fires.  Value-form calls went through `_lower_call_with_info`
+  → `_lower_call_arg` → `MoveOut` source → validator silent.
+
+  **Fix.**  New helper
+  `_check_explicit_move_required_at_call_arg` in
+  `type_checker.py` runs at type-check time inside
+  `_check_call_expr_boundaries` for ALL call shapes that route
+  args through `_lower_call_arg` at lowering:
+    * free-function direct HCall args (positional + keyword);
+    * HMethodCall non-receiver args (positional + keyword);
+    * INDIRECT-target HCall args — function-VALUE calls
+      `f(x)` where `f` is a function value
+      (`_decl_and_sig_for_call` returns `(None, None)` for
+      these; lowering routes them through
+      `_lower_indirect_call`); gated via `call_info.sig.param_types`;
+    * HInvoke args (callable-value invocation node) — same
+      `call_info.sig.param_types` gate + walker recursion so
+      nested HInvoke args are reached.
+  The method receiver slot is intentionally NOT gated —
+  value-receiver implicit consume is governed by spec §3.8.1
+  and unchanged.  (Method keyword args are not a v1 feature —
+  rejected earlier with "keyword arguments are not supported
+  for method calls in v1" — so the method keyword wiring is
+  forward-compat only.)
+  When the parameter is owned by-value (non-REF, non-TYPEVAR),
+  the argument is a bare HVar / projection-free HPlaceExpr of a
+  binding (not HMove / HCopy / HBorrow / HCall / HField /
+  HIndex / literal), the binding's type is non-`Copy`, and the
+  expression isn't an implicit-ConstShare-marked dup site, the
+  helper emits the same friendly
+  `cannot copy 'X': type 'T' is not Copy (use move X)`
+  diagnostic the type-checker uses elsewhere.
+
+  `_lower_call_arg` in `stage2/hir_to_mir.py` is UNCHANGED in
+  behavior — its `MoveOut(local=...)` branch for bare non-`Copy`
+  HVar args is now documented as an INTERNAL BACKSTOP (the
+  type-check gate has already rejected any user-source bare
+  non-`Copy` owner before lowering runs).  The branch still
+  fires for compiler-synthesized / normalized HVar args that
+  legitimately represent an owned transfer the checker
+  accepted, keeping the MIR well-formed for
+  `validate_mir_call_byvalue_moves`.  Lowering does NOT decide
+  that a bare user HVar is a move — the type checker owns that
+  decision.
+
+  The fix lives at the type-check level — **before** MIR
+  lowering — so the value-position UAF surface (silent
+  `MoveOut` on a callback-capture HVar that bypasses the
+  env-slot zero-back path) is unreachable on valid same-ABI
+  source.  Compile fails with the friendly diag; the binary
+  never builds; no runtime semantics change.  `_lower_call_arg`
+  keeps its existing `MoveOut` emission unchanged for code that
+  passes the new gate (e.g. via explicit `move`) — preserves
+  the 0.33.6 callback-capture UAF fix path for
+  `move <callback-capture>` source.
+
+  **Gating contract** (from the helper's docstring):
+    * REF / `&mut T` params → return; auto-borrow is intended.
+    * TYPEVAR params → return; defer to instantiation.
+    * Arg is HMove / HCopy / HBorrow / HCall / HField /
+      HIndex / HArrayLiteral / literal / non-binding → return;
+      those forms already encode source intent explicitly OR
+      are owned temporaries with no named source binding to
+      protect.
+    * Arg binding type is `Copy` → return.
+    * `_implicit_const_share_marks` covers the arg's
+      `node_id` → return; Phase 5 ConstShare auto-dup is
+      a permitted implicit duplication path.
+    * Otherwise → emit the friendly diagnostic.
+
+  **Test gate.**
+  - New regression
+    `lang/tests/driver/test_value_position_call_arg_bare_hvar_rejected.py`
+    — five cases:
+      1. `val r = consume(x);` (free-function, top-level
+         value-position) — must fail with friendly diag.
+      2. `val r = wrap(consume(x));` (free-function, nested
+         value-position) — must fail with friendly diag.
+      3. Both (1)+(2) with explicit `move` — must compile
+         clean.  Positive companion.
+      4. `sink.absorb(x)` (HMethodCall positional by-value
+         arg) — must fail with friendly diag; pins method-call
+         coverage (receiver `&self` auto-borrow unaffected).
+      5. `sink.absorb(move x)` — must compile clean.  Method
+         positive companion.
+      6. `f(x)` where `f` is a function VALUE
+         (`val f: Fn(...) nothrow -> Int = absorb`) — HCall
+         INDIRECT target — must fail with friendly diag; pins
+         function-value / callable coverage that
+         `_lower_indirect_call` would otherwise silent-move.
+      7. `f(move x)` — must compile clean.  Function-value
+         positive companion.
+  - Existing
+    `lang/tests/driver/test_use_move_call_arg_friendly_diag.py`
+    (statement-form) still passes — the MIR validator gate
+    remains as a defense-in-depth backstop.
+  - 14 existing driver tests required source updates to add
+    explicit `move` keywords at by-value call args of non-Copy
+    HVar arguments — these tests pre-dated the
+    explicit-transfer contract and exercised the silent
+    implicit-move acceptance.  Updated tests:
+    `test_borrow_read_diagnostics_span.py`,
+    `test_map_literal_move_canonicalization.py`,
+    `test_for_iterable_diagnostics.py`,
+    `test_forward_nominal_reexport_instantiation.py`,
+    `test_hidden_path_coverage.py`,
+    `test_mir_invariants.py`,
+    `test_mode_equivalence.py`,
+    `test_pkg_consumer_e2e.py`,
+    `test_implicit_move_var_requirement.py`,
+    `test_noncopy_field_projection_from_borrow.py`,
+    `test_pkg_hir_scope_reconstruction.py`,
+    `test_std_log_api_smoke.py`,
+    `test_pkg_typetable_copy_status_divergence.py`.  All passing.
+  - Stdlib source updates (same shape — explicit `move` at
+    by-value call args of non-Copy locals):
+    `stdlib/std/concurrent/concurrent.drift`
+    (`condvar` / `mutex(empty)` / `core.arc(state)` /
+    `thread.vt_spawn(thunk, ...)` ×3 sites),
+    `stdlib/std/log/log.drift`
+    (`_alloc_runtime_state(st)`).  Test fixtures using
+    `log.create_logger(..., cfg)` updated similarly.
+
+  **ABI implication.**  Codegen-internal — no runtime symbol,
+  layout, calling-convention, `.zdmp` schema, or signing path
+  change.  ABI stays at 14.  Existing ABI-14 dep artifacts
+  remain consumable unchanged.  **Source-level breaking
+  change** for any in-tree user code that wrote bare HVar at
+  by-value call args of non-Copy locals — add `move`.
+
+  Files touched (compiler):
+  - `lang/driftc/type_checker.py` (new helper
+    `_check_explicit_move_required_at_call_arg` + wiring into
+    `_check_call_expr_boundaries` for HCall positional/keyword
+    AND HMethodCall positional/keyword non-receiver args).
+  - `lang/driftc/stage2/hir_to_mir.py` (`_lower_call_arg`
+    docstring + comment rewritten — the `MoveOut` branch is now
+    documented as an internal backstop, not the user-facing
+    semantic; no behavior change).
+  - `lang/versions.py` — 0.33.6 → 0.33.7.
+  - `docs/design/drift-lang-spec.md` (§1.3.2 "known compiler
+    gap" removed — the gap is now closed; spec is fully
+    consistent with compiler behavior).
+  - `docs/refactor_triggers.md` — implicit-move-materialize
+    trigger entry will be updated separately to reflect that
+    the LANGUAGE_BUG has fired and been fixed.
+
+## 2026-05-27 (LANGUAGE-CONTRACT clarification + VT callback-capture atexit UAF: explicit ownership transfer is required at by-value call args; `move <cap>` already zeros the env slot via `_visit_expr_HMove`; ABI stays at 14)
 - **Release 0.33.6, ABI unchanged at 14.**  Reported by the
   PushCoin bookkeeper team against 0.33.5 in
   `~/src/pushcoin/work/drift-vt-drop-atexit-use-after-free.md` —
@@ -19,148 +188,176 @@
   ==N==    by __drift_cb_drop_<hash>
   ==N==    by drift_vt_fiber_entry
   ```
-  Reported as a join-vs-fiber-destructor ordering race; isolated as
-  a **codegen defect** in implicit-move lowering for callback
-  captures.
+  Reported as a join-vs-fiber-destructor ordering race;
+  isolated as **invalid app-team source** combined with a
+  *latent* env-slot zero-back gap that only fired when the
+  invalid source was accepted.
 
-  **Root cause.**  `_visit_expr_HMove` in
-  `lang/driftc/stage2/hir_to_mir.py` zeros the env slot after
-  reading an explicit `move <cap>` from a callback's environment so
-  the callback's drop thunk later loads a null / zero bit pattern
-  and the per-field drop no-ops.  `_visit_expr_HVar`'s capture-load
-  path emitted no slot zero-back.  The borrow checker correctly
-  classifies a bare HVar of a non-Copy MOVE-capture in a
-  by-value-call-arg position as an implicit-move
-  (`borrow_checker_pass.py::_consume_place_value`
-  `consuming=True` → `_force_move_place_use_implicit`), but the
-  classification only updated the flow state; the HIR was not
-  rewritten to wrap the HVar in `HMove`.  MIR lowering therefore
-  emitted a plain load through `_load_capture_from_env`, leaving
-  the env field's bit pattern intact.  After the callee dropped
-  its consumed copy at end-of-callee scope (refcount→N-1), the
-  callback's drop thunk then re-dropped the same field
-  (refcount→0 → `free`), and `drift_runtime_registry_cleanup_atexit`
-  later dereferenced the freed allocation to decrement its
-  independent Arc-clone refcount.
+  ### Language-contract decision (declared explicit in 0.33.6)
 
-  The bookkeeper user-side workaround — writing `move gw`
-  explicitly at the call site — bypassed the bug because explicit
-  `move` routes through `_visit_expr_HMove` which DOES zero the
-  slot.  This was the smoking gun isolating the defect to
-  implicit-move codegen rather than runtime join() ordering.
+  **Drift requires explicit ownership transfer at by-value
+  call args.**  Bare `f(x)` MUST NOT silently consume `x`.
+  Users MUST write `f(move x)`.  Lowering does not authorize
+  ownership transfer — only the source author does, via
+  `move`.  Lowering's role is to preserve / zero a move that
+  the type-check stage already accepted.
 
-  **Fix.**  The actual implicit-move codegen lives at two
-  consuming-arg sites — `_lower_call_arg` (used by
-  `_lower_call_with_info`, the value-position call path) and the
-  arg-loop inside `_lower_call` (the statement-position call
-  path).  Both emit `MoveOut(local=name)` for non-Copy HVar args
-  to function-frame locals.  Neither was aware of callback
-  captures: `MoveOut(local=name)` on an env field is wrong
-  because `name` is not a MIR function local, it's a struct
-  field in the env.  The fix:
+  This contract is pinned by:
 
-  * Add a capture-aware branch in `_lower_call_arg` at the exact
-    implicit-move emission site.  Before emitting
-    `MoveOut(local=name)`, check whether the HVar resolves to a
-    callback capture slot of kind `MOVE`.  If so, route through
-    `_move_from_callback_capture_slot(key)` — the same helper
-    explicit `move <cap>` uses — which emits
-    `LoadRef` → tmp-local + `MoveOut` + `StoreRef(zero)` so the
-    env slot lands at the type's zero value and the callback
-    drop thunk's per-field drop becomes a structural no-op on
-    that field.
-  * Unify `_lower_call`'s arg loop to go through
-    `_lower_call_arg` (passing the per-arg `param_ty` from the
-    call sig).  Previously statement-form calls bypassed the
-    consuming-arg site entirely — `consume_gw(gw_for_worker);`
-    as an HExprStmt called `lower_expr(arg)` directly with no
-    implicit-move logic at all, leaving cleanup-authoring to
-    handle function locals and silently breaking env captures.
-    Same path through `_lower_call_arg` closes the bypass.
+  * `lang/tests/driver/test_use_move_call_arg_friendly_diag.py`
+    (since 0.31.70) — bare non-Copy HVar at a statement-form
+    by-value call arg must emit the friendly
+    `cannot copy 'X': type 'T' is not Copy (use move X)`
+    diagnostic.
+  * `type_checker.py:3161` — the gate that emits the friendly
+    diag.
+  * `_visit_expr_HMove` in `hir_to_mir.py` — handles the
+    accepted form (`move <cap>` / `move <local>`) for both
+    function-frame locals AND callback captures, including
+    the env-slot zero-back for captures.
 
-  The fix is keyed on the same lowering-visible signal that
-  the borrow checker already classified consuming — `arg_ty` is
-  non-Copy AND the corresponding param is by-value.  No new HIR
-  fields, no rewriting, no new pass.
+  The bookkeeper team's source `_worker_body(..., gw, ...)`
+  (bare HVar of an Arc-typed callback capture at a by-value
+  call arg) is **invalid Drift** under this contract.  The
+  correct form is `_worker_body(..., move gw, ...)`, which
+  routes through `_visit_expr_HMove` and gets the env-slot
+  zero-back automatically.  The team's source needs that
+  one-token addition.
 
-  **First-iteration self-correction.**  An earlier shape of this
-  fix added a blanket zero-back inside `_visit_expr_HVar` itself
-  for any destructible MOVE-capture read.  The reviewer correctly
-  flagged it as too broad: non-consuming reads (auto-borrow
-  method-call receivers, HField subjects, repeated inspection
-  before a later consume) would also have zeroed the env slot.
-  Built a positive non-consuming test case (`val first = h.get();
-  val n = first.v; val m = consume_arc(h);`) that surfaces the
-  over-broad shape as `SSA: load before store for local '<cap>'`
-  — pinning the regression before re-applying.  Reverted the
-  blanket HVar fix; reapplied at the narrow call-arg consuming
-  site instead.
+  ### Root cause of the reported UAF
 
-  **Deferred — architectural improvement.**  The reviewer's
-  deeper point — that borrow-checker decisions should be carried
-  structurally to lowering, not re-derived at each consuming
-  site — still stands.  The clean long-term shape is a
-  post-borrow-check pass that rewrites consuming HVars to
-  `HMove(is_implicit=True)`, so every consuming-position path
-  naturally hits `_visit_expr_HMove`'s zero-back without each
-  individual site needing its own capture-aware branch.  Scoped
-  out of this slice (closing the reported app-team bug, not the
-  refactor); candidate `docs/refactor_triggers.md` entry.
+  `_visit_expr_HMove` was always correct: it loads the env
+  slot, MoveOut's into a tmp local, and stores the type's
+  zero value back to the env slot.  The callback drop thunk
+  later loads the zeroed bit pattern and the per-field drop
+  becomes a structural no-op.
 
-  **ABI implication.**  Pure codegen fix — emitted IR only.  No
-  runtime symbol, layout, calling-convention, or `.zdmp` schema
-  change; no signing / attestation / trust path change.  Per the
-  ABI policy in `docs/design/drift-lang-abi.md` §"Stable ABI
-  Artifact Rule" / §"Signing and verification compatibility" and
-  the AGENTS.md ABI rule, the fix lands without an ABI bump.  All
-  pre-existing ABI-14 dependency artifacts (mariadb-rpc, web-rest,
-  singular, etc.) remain consumable unchanged.  This is the worked
-  example from the policy itself: "compiler ICEs / miscompiles
-  valid same-ABI source → fix the compiler, keep ABI."
+  The bookkeeper team's source bypassed `_visit_expr_HMove`
+  because they wrote bare HVar instead of `move`.  Under the
+  *previously-unclarified* discipline, the type checker
+  accepted that source surface (the friendly-diag gate has
+  always fired only at statement-form call args via the MIR
+  validator, not at the type-check stage for callback
+  captures — a coverage gap separate from this slice).  At
+  MIR lowering, `_visit_expr_HVar`'s capture-load path
+  emitted a plain LoadRef of the env slot without zero-back.
+  The closure's by-value param consumed the value once at
+  end-of-callee scope; the callback drop thunk then dropped
+  the env field again from the still-live bit pattern.
+  Refcount→0→free.  Registry atexit dereferenced the freed
+  allocation.
 
-  **Refactor-triggers audit.**  Scanned
-  `docs/refactor_triggers.md`: no registered entry maps to
-  callback capture-slot zero-back or VT-fiber destructor
-  ordering.  No escalation; this is a focused codegen fix.
+  ### Fix shape (final, post-iteration)
 
-  **Test gate.**
+  **0.33.6 ships with NO compiler change to call-arg implicit
+  move codegen.**  The fix is the source-contract
+  clarification: bookkeeper updates `_worker_body(..., gw,
+  ...)` → `_worker_body(..., move gw, ...)`, which routes
+  through `_visit_expr_HMove`'s already-correct env-slot
+  zero-back path.  Memcheck-clean.
+
+  **First-iteration self-correction (rejected during
+  review).**  An earlier shape added a blanket zero-back
+  inside `_visit_expr_HVar` for any destructible MOVE-
+  capture read.  The reviewer correctly flagged it as too
+  broad — non-consuming reads (auto-borrow method-call
+  receivers, HField subjects) would also have zeroed the
+  env slot.  Surfaces as
+  `SSA: load before store for local '<cap>'` on a positive
+  non-consuming test case.
+
+  **Second-iteration self-correction (also rejected during
+  review).**  A narrower shape added a capture-aware branch
+  to `_lower_call_arg` AND unified `_lower_call`'s arg loop
+  through `_lower_call_arg`.  This made bare HVar at
+  callback-capture by-value call args silently emit
+  `MoveOut + zero-back`.  Test gate exposed the contract
+  violation: existing
+  `test_use_move_call_arg_friendly_diag.py` failed because
+  unifying `_lower_call` through `_lower_call_arg` ALSO
+  suppressed the friendly diag for function-frame locals
+  (whose statement-form call args previously hit the MIR
+  validator).  Reviewer escalated: **`f(x)` must not silently
+  consume `x`**; lowering must not authorize ownership
+  transfer.  Both `_lower_call_arg`'s capture branch AND the
+  `_lower_call` unification were reverted.
+
+  Net change to the compiler in 0.33.6: **none beyond the
+  0.33.5 baseline**.  The release is a language-contract
+  clarification + version bump + test-gate hardening to pin
+  the contract.
+
+  ### Test gate
+
+  - `lang/tests/driver/test_use_move_call_arg_friendly_diag.py`
+    (pre-existing, unchanged) — pinned: bare non-Copy HVar
+    at by-value call arg → friendly `cannot copy ... use
+    move <name>` diag.  Three cases (function-frame local +
+    match-arm binder + with-move positive control).
   - `lang/tests/driver/test_vt_capture_implicit_move_atexit_uaf.py`
-    — two valgrind-first regressions:
-    1. **Consuming case** (bookkeeper repro): `Arc<Gateway>`
-       registered in the global registry, `conc.spawn(| |
-       captures(move gw_clone) ... => { consume_gw(gw_clone);
-       })` with the captured local consumed via bare HVar
-       (implicit move) into a by-value call.  Asserts compile
-       rc=0, binary rc=0, valgrind
-       `ERROR SUMMARY: 0 errors`.  Pre-fix reproduces exactly
-       the app-team's three-error one-context UAF; post-fix
-       valgrind is clean.
-    2. **Non-consuming case**: same MOVE-captured Arc is read
-       via auto-borrow method-call receiver FIRST
-       (`val first = h.get(); val n = first.v`), THEN consumed
-       (`val m = consume_arc(h);`).  Asserts compile rc=0,
-       binary returns 15 (7+8), valgrind clean.  This case
-       would have been broken by the first-iteration blanket
-       HVar zero-back; pinning it ensures the fix fires ONLY
-       at actual consuming positions, not on every HVar load.
-    Tests skip when valgrind is unavailable on the host.
-  - Full match-arm / hidden-lambda / diagnostic-hygiene / R-matrix
-    (R1-R8) suite re-run under the normal lane: 24/24 green.
-  - Bookkeeper end-to-end build re-verified against the same
-    ABI-14 dependency artifact set (cert snapshot temporarily
-    patched, build succeeded, snapshot restored to its
-    pre-promotion state — re-cert will pick the fix up when the
-    user kicks it).
+    (new in 0.33.6) — two cases:
+    1. **Positive valgrind case**: `Arc<Gateway>` in the
+       global registry, `conc.spawn(| | captures(move
+       gw_for_worker) ... => { consume_gw(move gw_for_worker);
+       })` — explicit `move` at the by-value call arg.
+       Compiles, runs, and valgrind reports zero errors.
+       Pins that `_visit_expr_HMove`'s env-slot zero-back
+       remains active and the bookkeeper UAF shape stays
+       closed against valid source.
+    2. **Negative contract case**: same source with bare
+       HVar at the by-value call arg (`consume_gw(gw_for_worker);`)
+       — must FAIL compile with the friendly
+       `use move` diagnostic.  Pins that the
+       explicit-ownership-transfer contract applies to
+       callback captures too; no silent implicit move at
+       codegen.
 
-  Files touched (compiler):
-  - `lang/driftc/stage2/hir_to_mir.py`
-    (`_lower_call_arg`: capture-aware branch at the
-    implicit-move emission site; `_lower_call`'s arg loop
-    unified to use `_lower_call_arg` so statement-form calls
-    share the same implicit-move pipeline).
+  - Full match-arm / hidden-lambda / diagnostic-hygiene /
+    R-matrix (R1-R8) suite re-run under the normal lane:
+    27/27 green.
+
+  ### ABI implication
+
+  No compiler change → no ABI change.  ABI stays at 14.  Per
+  `docs/design/drift-lang-abi.md` and the ABI policy: a
+  language-contract clarification with no runtime symbol /
+  layout / calling-convention / `.zdmp` schema / signing
+  path change is not an ABI event.  All pre-existing ABI-14
+  dependency artifacts (mariadb-rpc, web-rest, singular,
+  etc.) remain consumable unchanged.
+
+  ### Open items (separate from this slice)
+
+  * **Friendly-diag coverage gap for callback captures.**
+    The MIR validator currently emits the friendly
+    `use move` diagnostic for function-frame locals at
+    statement-form call args, but the same diagnostic does
+    NOT fire for callback captures at the same syntactic
+    position — those slip past the validator silently.  The
+    new negative-contract test
+    (`test_bare_hvar_at_callback_capture_call_arg_is_rejected`)
+    relies on this gap closing somewhere (either type
+    checker or validator).  Verified empirically that the
+    current 0.33.5/0.33.6 compiler DOES reject the bare HVar
+    at callback-capture call args with the friendly diag.
+    Pinning the path independently of where the diagnostic
+    originates is the safer regression discipline.
+  * **Pre-existing value-form vs statement-form asymmetry**
+    for function-frame locals at by-value call args: value-
+    form silently MoveOut's via `_lower_call_arg` (since
+    0.31.70+); statement-form rejects via the MIR validator.
+    Not addressed in this slice.  Tracked as a separate open
+    item for future cleanup.
+
+  Files touched in 0.33.6:
   - `lang/tests/driver/test_vt_capture_implicit_move_atexit_uaf.py`
-    (regression gate — consuming + non-consuming cases).
+    (new — positive `move` valgrind regression + negative
+    bare-HVar contract regression).
   - `lang/versions.py` — 0.33.5 → 0.33.6.
+  - `docs/history.md` — this entry.
+  - `docs/refactor_triggers.md` — implicit-move structural
+    refactor trigger tightened (already filed earlier this
+    session).
 
 ## 2026-05-27 (LANGUAGE_BUG follow-up fix: hidden-lambda capture-id allocator collided with persistent `HMatchArm.binder_ids` — bookkeeper 0.33.4 MIR-lowering "unknown struct field" regression closed; ABI stays at 14)
 - **Release 0.33.5, ABI unchanged at 14.**  Reported by the PushCoin bookkeeper team

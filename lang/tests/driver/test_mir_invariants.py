@@ -30,7 +30,7 @@ fn take(x: Box) nothrow -> Int {
 
 fn main() nothrow -> Int {
 	var s = Box(s = "hi");
-	var n = take(s);
+	var n = take(move s);
 	return n;
 }
 """,

@@ -118,7 +118,7 @@ fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
-	val y = take(w);
+	val y = take(move w);
 	return y.xs.len;
 }
 """
@@ -224,7 +224,7 @@ fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
-	return take(w);
+	return take(move w);
 }
 """
 	)

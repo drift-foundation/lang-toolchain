@@ -47,7 +47,7 @@ fn take(v: Blob) nothrow -> Int {
 
 	fn main() nothrow -> Int {
 		val b = Blob(xs = [1]);
-		return take(b);
+		return take(move b);
 	}
 """,
 	)

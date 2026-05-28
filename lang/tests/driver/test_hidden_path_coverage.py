@@ -200,7 +200,7 @@ fn run_cb<T>(cb: core.Callback0<T>) nothrow -> core.Result<T, Int> {
 
 fn main() nothrow -> Int {
 	val cb: core.Callback0<Void> = core.callback0(| | => { return; });
-	match run_cb(cb) {
+	match run_cb(move cb) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1; }
 	}

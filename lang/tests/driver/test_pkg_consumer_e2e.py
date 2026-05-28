@@ -461,7 +461,7 @@ fn main() nothrow -> Int {
 \tcfg_builder.min_level(log.Level::Debug());
 \tcfg_builder.sink(log.stderr_sink());
 \tval cfg = cfg_builder.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 \tlogger.info("ev", {"k": 1});
 \treturn 0;
 }
@@ -502,7 +502,7 @@ fn main() nothrow -> Int {
 \tcfg_builder.min_level(log.Level::Debug());
 \tcfg_builder.sink(log.stderr_sink());
 \tval cfg = cfg_builder.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 \treturn 0;
 }
 """

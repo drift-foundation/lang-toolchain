@@ -19,17 +19,84 @@ Drift avoids the foot-guns that plague many systems languages:
 - No raw pointers in userland.
 - No pointer arithmetic.
 - Clear ownership and deterministic destruction (RAII).
-- Explicit copies; moves are implicit in consuming positions.
+- Explicit ownership transfer: ownership of a named non-`Copy` binding moves only when the source writes `move x`.  Bare `x` never silently gives ownership away (see §1.3 below).
 
-Yet it doesn’t enforce safety by making everything slow or hiding costs behind a garbage collector.
+Yet it doesn't enforce safety by making everything slow or hiding costs behind a garbage collector.
 
 ### 1.2. Escape hatches when you ask for them
 
 High-level code stays high-level by default. Low-level control appears only when you deliberately reach for the tooling (`lang.abi`, `lang.internals`, `@unsafe`).
 
-### 1.3. Move semantics everywhere
+### 1.3. Ownership and move semantics — the rule
 
-Passing by value consumes unless the type is `Copy` (in which case the compiler may duplicate implicitly). Moves are implicit in consuming positions; duplication is explicit.
+This is the authoritative ownership rule.  Every later example, ABI clause, and tutorial in the Drift documentation must be consistent with it.  Read this section once and you should be able to predict the compiler's verdict on any of the four shapes below.
+
+**The rules:**
+
+- **Every owned value has one current owner.**  When the owner goes out of scope, the value is destroyed (RAII).
+- **`copy x`** — for `Copy` types only — creates a value duplicate.  `x` remains usable; the duplicate is an independent owner of a fresh value.
+- **`move x`** — for any owned binding — transfers ownership of a *named* owner.  After `move x`, the source `x` is unusable for the rest of its scope.
+- **`share x`** — for `Share` types only — creates a second owner of the same shared value.  Aliasing is explicit at the source.
+- **`&x` / `&mut x`** — borrows — do not transfer ownership.  The owner remains the owner; the borrow temporarily restricts what the owner can do (`&` forbids mutation while borrowed; `&mut` forbids any other use while borrowed).  When the borrow ends, the owner can be moved or rebound again.
+- **A bare named non-`Copy` owner is never silently moved.**  Not by a call, not by a return, not by an assignment, not by a constructor.  The source must write `move` to transfer ownership.
+- **Owned temporaries can flow into by-value parameters without `move`.**  An rvalue temporary (the result of `f()`, an unbound constructor call, an arithmetic expression) has no named source binding to protect — there is no `x` left after the call that anything could "steal from."
+
+**What this predicts** (memorize these four):
+
+```drift
+consume(x);        // error if x is a named non-Copy owner
+                   //   (compiler emits: cannot copy 'x': type 'T'
+                   //    is not Copy (use move x))
+consume(move x);   // transfers ownership; x is unusable afterward
+borrow(&x);        // keeps ownership with x; x stays usable
+share x            // explicit second owner — only if T implements Share
+```
+
+If you can predict the verdict on those four, you understand Drift's ownership model.  Every other ownership behavior in the language follows from them — Copy types duplicate implicitly because rule 2 lets the compiler duplicate freely; method calls with `self: T` are special only at the *call site* (the receiver expression must obey the same rules); closures that `captures(move x)` move from the outer binding at the spawn site (named owner → `move`), and explicit `move` inside the closure body transfers from the env slot.
+
+**Why this matters.**  Drift's ownership transfer is locally readable.  Every transfer of a named owner is visible at the source site as the literal token `move`.  Lowering / codegen are not allowed to silently authorize an ownership transfer that the source did not write — the compiler's role is to enforce the rules and preserve (or zero) an explicit `move` that the type checker already accepted.  This is what makes RAII deterministic and audit-able: a reader can grep for `move` and find every transfer of every named owner in the program.
+
+#### 1.3.1. `share x` — opt-in to shared ownership
+
+> **`share x` is the explicit opt-in from unique ownership to shared ownership.  It does not borrow and it does not move; it creates a second owner of the same underlying resource, so aliasing and synchronization responsibilities become part of the program's contract.**
+
+Drift's default ownership model is **unique**: at any moment exactly one binding owns a value, and the value is destroyed when that owner goes out of scope.  `share x` is the source-level keyword that says *I want a second owner*.  After `share x`:
+
+- The original `x` remains an owner — same binding, same scope, same RAII drop.
+- The result is a **second owner** of the **same underlying resource** (not a copy of the value).
+- The resource's lifetime is now jointly managed.  For the built-in `Arc<T>`, that means refcounted shared ownership: drop runs when the last owner goes out of scope.  User types that implement `std.core.shareable.Share` define their own joint-management discipline.
+- **Aliasing becomes real and visible.**  Both owners observe writes through either one.  If the closure escapes to another thread / task / callback that mutates through its captured owner, *you* are now responsible for synchronization — typically by wrapping the inner resource in `Mutex<T>`, by using atomics, or by relying on the type's documented interior-mutability discipline.  Mutation safety no longer comes from unique ownership; it comes from the synchronization primitives you pick.
+
+`share x` is type-gated.  Only types that `implement std.core.shareable.Share for T` may be the operand.  For `Copy` types use `copy x`; for non-`Share` non-`Copy` types use `move x`.  The compiler emits `E-SHARE-EXPR-NOT-SHARE` if the type rule is violated, parallel to `E-CAPTURE-SHARE-NOT-SHARE` in capture lists.
+
+##### How the four spellings compare
+
+| Spelling | Effect on the source owner | Effect on the value | Type requirement | When to reach for it |
+|---|---|---|---|---|
+| `copy x` | `x` remains usable | New value-identity; no shared state | `T: Copy` | Cheap O(1) duplications where the new owner is conceptually independent. |
+| `move x` | `x` becomes invalid for the rest of its scope | Same identity; ownership transferred | any owned `T` | Transfer the sole owner; consume-once APIs (`File::close(self: File)`, builder `build`s, etc.). |
+| `share x` | `x` remains usable | Same identity; **second** owner of the same resource | `T: Share` | The closure / callee needs to keep the resource alive alongside the caller — e.g. spawned VTs sharing an `Arc<Config>`. |
+| `&x` / `&mut x` | `x` remains the owner; restricted while borrowed | Same identity; **no** new owner — temporary access only | any `T` | The callee only inspects (`&T`) or mutates (`&mut T`) without taking ownership. |
+
+##### The predict-the-verdict drill
+
+This is the same drill from the top of §1.3, now expanded with `share`:
+
+```drift
+consume(x);           // error if x is a named non-Copy owner
+                      //   (compiler emits: cannot copy 'x': type 'T'
+                      //    is not Copy (use move x))
+consume(move x);      // transfers ownership; x is unusable afterward
+borrow(&x);           // keeps ownership with x; x stays usable; no
+                      //   second owner is created
+share x               // requires T: Share; creates a second owner of
+                      //   the same resource; x stays usable; aliasing
+                      //   and synchronization are now your problem
+copy x                // requires T: Copy; duplicates the value; x
+                      //   stays usable; no shared identity
+```
+
+`share x` is **not** a way to get around `move`'s strictness for non-`Share` types — those types are deliberately one-owner-only.  If your design needs aliasing, the choice is at the *type level* (`Arc<T>`, user `Share` impl), not at the use site.
 
 ### 1.4. Zero-cost abstractions
 
@@ -532,17 +599,17 @@ Restriction: `move` operands must be addressable local/parameter bindings. Movin
 ### 4.1. Core rules
 | Aspect | Description |
 |---------|-------------|
-| **Move target** | Must be an owned binding (`val` or `var`). |
-| **Copy types** | `x` copies; `move x` moves. |
-| **Non-copyable types** | Consuming positions move; `copy x` is a compile error. |
-| **Immutable (`val`)** | Cannot rebind; may be moved/consumed. |
-| **Borrowed (`&`, `&mut`)** | Cannot move from non-owning references. |
+| **Move target** | Must be an addressable named owner (`val` / `var` local or parameter). |
+| **`Copy` types** | Bare `x` duplicates (implicit copy); `move x` still transfers (invalidates source); `copy x` is the explicit duplicate form. |
+| **Non-`Copy` types** | Bare `x` at a by-value consume site is a compile error (`cannot copy 'x': type 'T' is not Copy (use move x)`); `move x` is the only way to transfer.  Owned temporaries (no named source binding) flow through by-value parameters directly without `move`. |
+| **Immutable (`val`)** | Cannot rebind; can be moved by writing `move x`. |
+| **Borrowed (`&`, `&mut`)** | Borrows do not transfer ownership; cannot move from a reference, and cannot move out of an owner while it is borrowed. |
 
 ---
 
 ### 4.2. Default: move-only types
 
-Every type is **move-only by default**. If you define a struct and do nothing else, the compiler will refuse to copy it; passing or assigning it by value consumes it. `move x` is the explicit form.
+Every type is **move-only by default**. If you define a struct and do nothing else, the compiler will refuse to copy it.  Transferring ownership requires the explicit `move` keyword at the use site — a bare named use of a non-`Copy` owner is a compile error (see §1.3).
 
 ```drift
 // Move-only by default
@@ -550,19 +617,22 @@ struct File {
     fd: Int
 }
 
-var f = open("log.txt");
+var f = open("log.txt");      // f owns the File
 
-var g = f; // ✅ moves ownership
-use_file(f); // ❌ error: use after move
-var h = move g; // ✅ explicit move ownership
+var g = f;                    // ❌ error: cannot copy 'f': type 'File'
+                              //    is not Copy (use move f)
+var g = move f;               // ✅ explicit ownership transfer; f is now invalid
+use_file(f);                  // ❌ error: use after move
 
 fn use_file(x: File) -> Void { ... }
 
-use_file(f); // ✅ consumes f (implicit move)
-use_file(move h); // ✅ explicit move into the call
+use_file(g);                  // ❌ error: cannot copy 'g'
+                              //    (use move g)
+use_file(move g);             // ✅ explicit move into the call
+use_file(open("log.txt"));    // ✅ owned temporary — no named source to protect
 ```
 
-This design keeps ownership explicit: you opt *out* of move-only semantics only when cheap copies are well-defined.
+This design keeps ownership transfer locally readable.  Every transfer of a named owner is a literal `move` token at the source site — you can grep for `move` and find every ownership transfer in the program.
 
 ### 4.3. Opting into copying
 
@@ -579,7 +649,9 @@ var b = a; // ✅ copies `a` because Job is Copy
 
 ### 4.4. Explicit copy expression
 
-Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. The operand must be an **lvalue/place** (local/param/field/index). This works anywhere an expression is allowed (call arguments, closure captures, `val`/`var` bindings) and leaves the original binding usable. By-value passing **does** implicitly move non-`Copy` values in consuming positions; `copy` is how you make the intent to duplicate explicit.
+Use the `copy <expr>` expression to force a duplicate of a `Copy` value. It fails at compile time if the operand is not `Copy`. The operand must be an **lvalue/place** (local/param/field/index). This works anywhere an expression is allowed (call arguments, closure captures, `val`/`var` bindings) and leaves the original binding usable.
+
+For non-`Copy` types, by-value passing of a named owner is *not* an implicit move — see §1.3 and §4.2.  The compiler rejects bare `f(x)` for non-`Copy` `x` with `cannot copy 'x': type 'T' is not Copy (use move x)`; users must write `f(move x)` to transfer ownership.  `copy x` is the explicit duplication form for `Copy` types; `move x` is the explicit transfer form for any owned type.
 
 Copying still respects ownership rules: `self: &T` indicates the value is borrowed for the duration of the copy, after which both the original and the newly returned value remain valid.
 
@@ -626,8 +698,11 @@ This pattern distinguishes cheap, implicit copies (`Copy`) from explicit, potent
 
 ### 4.6. Example — copy vs move
 
+`Job` is a `Copy` type below; bare `process(j)` is an implicit duplication, not a transfer.
+
 ```drift
 struct Job { id: Int }
+implement std.core.Copy for Job {}   // Job opts in to Copy
 
 fn process(job: Job) -> Void {
     print("processing job ", job.id);
@@ -635,10 +710,13 @@ fn process(job: Job) -> Void {
 
 var j = Job(id = 1);
 
-process(j); // ✅ copy (Job is copyable)
-process(move j); // ✅ move; j now invalid
-process(j); // ❌ error: j was moved
+process(j);       // ✅ Copy — implicit duplication; j stays usable
+process(copy j);  // ✅ same as above, with explicit duplication intent
+process(move j);  // ✅ explicit ownership transfer; j now invalid
+process(j);       // ❌ error: j was moved
 ```
+
+If `Job` did NOT implement `std.core.Copy`, the very first `process(j)` would be an error (`cannot copy 'j': type 'Job' is not Copy (use move j)`).  This is the §1.3 rule in action.
 
 ---
 
@@ -652,8 +730,8 @@ fn upload(f: File) -> Void {
 }
 
 var f = File();
-upload(move f); // ✅ move ownership
-upload(f); // ❌ cannot copy non-copyable type
+upload(move f); // ✅ explicit ownership transfer
+upload(f);      // ❌ error: cannot copy 'f': type 'File' is not Copy (use move f)
 ```
 
 ---

@@ -14,7 +14,7 @@ pub fn main() nothrow -> Int {
 	cb.sink(log.stderr_sink());
 	cb.min_level(log.Level::Error());
 	val cfg = cb.build();
-	val logger = log.create_logger("test", cfg);
+	val logger = log.create_logger("test", move cfg);
 
 	// This map literal + logger.info is the exact bookkeeper pattern.
 	// format_int creates a heap-allocated string.

@@ -32,6 +32,10 @@ def _compile(tmp_path: Path, source: str):
 
 
 def test_use_after_move_reports_span(tmp_path: Path) -> None:
+	# Source uses explicit `move xs` at the consume site (required
+	# by spec §1.3 — bare HVar at by-value owned call arg is a
+	# compile error since 0.33.7).  Borrow-checker's use-after-move
+	# diagnostic still fires on the subsequent `xs.len` read.
 	checked = _compile(
 		tmp_path,
 		"""
@@ -43,7 +47,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 
 fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
-	val _ = consume(xs);
+	val _ = consume(move xs);
 	return xs.len;
 }
 """,
@@ -113,7 +117,7 @@ fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val r = &xs;
 	val y = move xs;
-	return consume(y) + r.len;
+	return consume(move y) + r.len;
 }
 """,
 	)
@@ -136,7 +140,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 
 fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
-	val _ = consume(xs);
+	val _ = consume(move xs);
 	val r = &xs;
 	return r.len;
 }

@@ -9188,17 +9188,7 @@ class HIRToMIR:
 		target_fn_id = info.target.symbol
 		if not isinstance(expr.fn, H.HVar):
 			raise NotImplementedError("Only direct function-name calls are supported in MIR lowering")
-		# Route arg lowering through `_lower_call_arg` so the
-		# implicit-move-of-callback-capture handling at that site
-		# (see comments there) fires for statement-form calls too —
-		# `consume_gw(gw_for_worker);` as an HExprStmt enters via
-		# `_lower_call`, not `_lower_call_with_info`, and previously
-		# bypassed the consuming-position env-slot zero-back.
-		_param_types = list(getattr(info.sig, "param_types", []) or [])
-		arg_vals = [
-			self._lower_call_arg(a, _param_types[i] if i < len(_param_types) else None)
-			for i, a in enumerate(expr.args)
-		]
+		arg_vals = [self.lower_expr(a) for a in expr.args]
 		expr_span = Span.from_loc(getattr(expr, "loc", None))
 		cur_span = self._current_stmt_span
 		call_span = expr_span if expr_span != Span() else (cur_span if cur_span is not None else Span())
@@ -9291,11 +9281,46 @@ class HIRToMIR:
 
 	def _lower_call_arg(self, arg: H.HExpr, param_ty: TypeId | None) -> M.ValueId:
 		"""
-		Lower a call argument, moving out of locals for non-Copy params.
+		Lower a call argument.
 
-		MVP rule: passing a non-Copy local by value consumes it. We only move
-		out of plain locals (HVar) here; projected places must be moved
-		explicitly via `move`.
+		`&T` / `&mut T` params auto-borrow (delegated to `lower_expr`).
+
+		For owned by-value non-`Copy` params, Drift's
+		explicit-ownership-transfer contract (spec §1.3) requires the
+		SOURCE to write `move x` — a bare named non-`Copy` owner at a
+		by-value call arg is a compile error.  That rule is enforced
+		at TYPE-CHECK time by
+		`type_checker.py::_check_explicit_move_required_at_call_arg`,
+		wired into `_check_call_expr_boundaries` for EVERY call shape
+		whose args reach this method at lowering:
+		  - direct free-function HCall (positional + keyword);
+		  - HMethodCall declared-method non-receiver args
+		    (positional + keyword);
+		  - HMethodCall intrinsic-fallback non-receiver args
+		    (positional only — method keyword args are non-v1 and
+		    rejected earlier, so the intrinsic fallback has no
+		    keyword path to gate);
+		  - INDIRECT-target HCall — function-VALUE calls `f(x)`
+		    where `f` is a function value (positional + keyword,
+		    routed here via `_lower_indirect_call`);
+		  - HInvoke (callable-value invocation node; positional +
+		    keyword).
+		The gate runs BEFORE this lowering, so a user-source bare
+		HVar of a non-`Copy` local never reaches this method through
+		any of those shapes — it is rejected with the friendly
+		`cannot copy 'x' ... use move x` diagnostic and the binary
+		never builds.  (The method receiver slot is intentionally
+		NOT gated; value-receiver implicit consume is spec §3.8.1.)
+
+		The `MoveOut(local=...)` branch below is therefore an INTERNAL
+		BACKSTOP, not the user-facing semantic.  It still fires for
+		compiler-synthesized / normalized HVar args that legitimately
+		represent an owned transfer at this slot (e.g. desugarings
+		that produce a bare-HVar arg the checker accepted), keeping
+		the MIR well-formed (non-`Copy` by-value args must originate
+		from a `MoveOut`, per `validate_mir_call_byvalue_moves`).  It
+		is NOT the place that decides a bare user HVar is a move — the
+		type checker owns that decision.
 		"""
 		if param_ty is not None:
 			ptd = self._type_table.get(param_ty)
@@ -9314,45 +9339,9 @@ class HIRToMIR:
 						arg_ty = param_ty
 				if arg_ty is not None:
 					if not self._should_copy_value(arg_ty):
-						# Implicit-move-out-of-local at the consuming
-						# call-arg site.  This is the SINGLE
-						# lowering-visible signal that the borrow
-						# checker's implicit-move classification
-						# matters at codegen — the bare HVar arrived
-						# here precisely because it's being consumed.
-						# For function-frame locals `MoveOut(local=name)`
-						# is correct (the SSA layer + cleanup-authoring
-						# track liveness via the standard local-name
-						# bookkeeping).  For callback CAPTURE slots
-						# (env fields, NOT function locals), we have to
-						# route through `_move_from_callback_capture_slot`
-						# instead — same shape as explicit `move <cap>`
-						# — so the env slot gets zeroed and the
-						# callback's drop thunk later no-ops on that
-						# field.  Without this, the callee's by-value
-						# param drop decrements the refcount once at
-						# end-of-callee scope and the env-drop thunk
-						# decrements it AGAIN from the still-live env
-						# bit pattern; the second drop hits refcount 0
-						# and frees an allocation that other Arc clones
-						# (e.g. the global-registry clone) still expect
-						# to share.  Surfaces as an atexit
-						# use-after-free.  Reported against 0.33.5 by
-						# the bookkeeper team in
-						# `drift-vt-drop-atexit-use-after-free.md`;
-						# pinned by
-						# `lang/tests/driver/test_vt_capture_implicit_move_atexit_uaf.py`.
-						if self._lambda_capture_slots is not None:
-							_cap_key = self._capture_key_for_expr(base)
-							if _cap_key is not None and _cap_key in self._lambda_capture_slots:
-								_cap_slot = self._lambda_capture_slots[_cap_key]
-								_cap_kind = None
-								if self._lambda_capture_kinds is not None and _cap_slot < len(self._lambda_capture_kinds):
-									_cap_kind = self._lambda_capture_kinds[_cap_slot]
-								if _cap_kind is C.HCaptureKind.MOVE:
-									_moved_cap = self._move_from_callback_capture_slot(_cap_key)
-									if _moved_cap is not None:
-										return _moved_cap
+						# Internal backstop (see docstring): the
+						# type checker has already rejected any
+						# user-source bare non-Copy owner here.
 						subj_name = self._canonical_local(getattr(base, "binding_id", None), base.name)
 						self.b.ensure_local(subj_name)
 						moved_val = self.b.new_temp()

@@ -68,7 +68,7 @@ pub fn main() nothrow -> Int {
 \tcb.sink(log.stderr_sink());
 \tcb.min_level(log.Level::Error());
 \tval cfg = cb.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 
 \t// Exact bookkeeper pattern: format_int in map literal to logger.info.
 \t// min_level=Error, so info is filtered — early exit path in _emit.
@@ -94,7 +94,7 @@ pub fn main() nothrow -> Int {
 \tcb.sink(log.stderr_sink());
 \tcb.min_level(log.Level::Debug());
 \tval cfg = cb.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 
 \t// Info level enabled — full emit path taken.
 \t// HashMap goes through _emit_throwing, then core.drop_value(move attrs).

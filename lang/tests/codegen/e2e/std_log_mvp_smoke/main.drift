@@ -10,7 +10,7 @@ fn run() -> Int {
 	cfg_builder.backpressure_policy(log.BackpressurePolicy::BlockWithTimeout());
 	cfg_builder.sink(log.stderr_sink());
 	val cfg = cfg_builder.build();
-	val main_logger = log.create_logger("main", cfg);
+	val main_logger = log.create_logger("main", move cfg);
 
 	main_logger.info("auth-failed", {"attempts": 3, "status": 401});
 

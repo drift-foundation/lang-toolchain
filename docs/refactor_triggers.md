@@ -334,84 +334,107 @@ opportunistic uplifts)" for the full rule.
 
 ## Carry implicit-move classification structurally from borrow-check to MIR lowering
 
-- **Improvement:** the borrow checker's implicit-move
-  classification for non-Copy consuming-position reads currently
-  lives only in flow state — `borrow_checker_pass.py::
-  _force_move_place_use_implicit` updates `PlaceState.MOVED` for
-  diagnostics but does NOT rewrite the HIR.  MIR lowering then
-  re-derives "is this consuming?" at each potential consume site
-  (call-arg-of-by-value-non-Copy-param, HLet RHS, HReturn value,
-  variant/struct ctor field, etc.) by re-reading the
-  Copy-status and param-type signal.  Promote the classification
-  into the HIR itself: a post-borrow-check pass walks the HIR
-  using the same flow analysis the borrow checker already
-  produced and rewrites every consuming-position `HVar` into
-  `HMove(subject=HPlaceExpr(HVar, []), is_implicit=True)`.  Every
-  consuming path then naturally hits `_visit_expr_HMove`'s
-  established zero-back-on-env-slot emission discipline; no
-  per-site re-derivation, no per-site capture-awareness branch.
+- **Status (2026-05-27, post-0.33.6 language-contract clarification):
+  this refactor's premise is largely retired.**  See `Triggers`
+  below for the live conditions that would revive it.  Entry kept
+  in the registry per the "record what was tried / considered"
+  discipline.
 
-  The pass would also enable the **borrow-checker classification
-  is authoritative** invariant the user pinned in the
-  `drift-vt-drop-atexit-use-after-free` review:
+- **Improvement (as originally proposed):**  the borrow
+  checker's implicit-move classification for non-Copy
+  consuming-position reads lives in flow state only —
+  `borrow_checker_pass.py::_force_move_place_use_implicit`
+  updates `PlaceState.MOVED` for diagnostics but does NOT
+  rewrite the HIR.  MIR lowering then re-derives "is this
+  consuming?" at each potential consume site.  Promote the
+  classification into the HIR itself: a post-borrow-check pass
+  rewrites every consuming-position `HVar` into
+  `HMove(subject=HPlaceExpr(HVar, []), is_implicit=True)` so
+  every consuming path naturally hits `_visit_expr_HMove`'s
+  zero-back-on-env-slot emission discipline.
 
-  > If checker decides an expression consumes ownership, lowering
-  > must see that decision structurally.
+- **Why the premise retired (2026-05-27).**  The
+  language-contract clarification that landed in 0.33.6 makes
+  Drift's ownership transfer **explicit at the source**: bare
+  `f(x)` for a named non-`Copy` owner is a compile error
+  (`cannot copy 'x': type 'T' is not Copy (use move x)`).  Users
+  MUST write `f(move x)` to transfer ownership.  See
+  `docs/design/drift-lang-spec.md` §1.3 and §4.2 for the rule.
+  Under that contract, **there are no implicit moves at named
+  call args** — every source-level ownership transfer becomes
+  an `HMove` at the AST/HIR level (parser sees `move`, lowers
+  to `HMove`), so MIR lowering's `_visit_expr_HMove` already
+  handles every transfer site uniformly.  Lowering's role is to
+  preserve / zero an explicit `move`, never to authorize one.
+  The flow-state-only "implicit move" classification in the
+  borrow checker has become INTERNAL diagnostic state — it
+  never escapes to lowering because the type checker rejects
+  the source surfaces that would have required it.
 
-  Sister invariants already enforced (binder_ids in HMatchArm
-  carry persistent identity from `lower_match` → checker →
-  hir_to_mir; HExplicitCapture.binding_id carries identity to
-  lambda lifting) all follow the same shape.  Implicit moves are
-  the remaining flow-state-only signal that lowering currently
-  has to re-derive.
+- **Why deferred (2026-05-27):** under the post-0.33.6 contract,
+  the refactor is no longer needed for callback-capture UAFs
+  (the reported bookkeeper bug — see
+  `drift-vt-drop-atexit-use-after-free.md` — was closed by the
+  source-side fix `_worker_body(..., move gw, ...)`; the
+  compiler shipped no change in 0.33.6).  Net cost was estimated
+  at ~3-5 days; cost is now mostly moot until/unless one of the
+  triggers below fires.
 
-- **Why deferred (2026-05-27):** the 0.33.6 fix at
-  `_lower_call_arg` (with `_lower_call`'s arg loop unified) closes
-  the reported bookkeeper UAF (atexit cleanup race against a
-  callback drop-thunk over-drop on env captures).  The narrow
-  fix is small, targeted, and observably correct against both
-  consuming and non-consuming regression cases.  The
-  architectural rewrite is larger scope — touches all
-  consuming-position paths in MIR lowering plus introduces a new
-  HIR pass — and would also touch tests that currently encode
-  the "implicit move is flow-state-only" assumption.  Net cost
-  ~3-5 days; current narrow fix holds in the meantime.
+- **Brief 0.33.6 fix-iteration history.**  Two non-shipping
+  shapes were tried before the language-contract decision:
+  (1) blanket zero-back in `_visit_expr_HVar` for every
+  destructible MOVE-capture read — rejected by review as
+  over-broad (would zero non-consuming reads too,
+  `SSA: load before store` on positive non-consuming test);
+  (2) capture-aware branch in `_lower_call_arg` plus
+  `_lower_call` arg-loop unification — rejected because it
+  silently allowed bare HVar at by-value call args, regressing
+  the 0.31.70 friendly-diag contract pinned by
+  `test_use_move_call_arg_friendly_diag.py`.  The user-level
+  decision after iteration (2): `f(x)` must not silently
+  consume `x` — language-contract clarification, no compiler
+  change.
 
-- **Triggers.**  As of 0.33.6, `_lower_owning_consume` and the
-  other potentially-vulnerable non-call-arg consume sites
-  (HReturn, HLet RHS, HAssign RHS) are NOT live bug paths: the
-  type checker rejects bare non-Copy HVar use in those positions
-  with `cannot copy 'X': type is not Copy (use move X)`
-  (`E-AUTO-c38540ff`, `type_checker.py:3161`).  Users are
-  forced to write explicit `move`, which routes through
-  `_visit_expr_HMove` — already correct for callback captures
-  (the env-slot zero-back has shipped since the original lambda
-  capture lowering).  Only the call-arg position permits bare
-  HVar implicit-move, and that's the patched site.  The
-  asymmetric type-checker discipline is the load-bearing
-  invariant keeping the un-refactored shape correct.
+- **Triggers.**  Under the 0.33.6 language-contract
+  clarification (`drift-lang-spec.md` §1.3), all named non-`Copy`
+  ownership transfers must spell `move` at the source.  The type
+  checker rejects bare HVar at every consuming position (HReturn,
+  HLet RHS, HAssign RHS, HCall by-value arg, ctor field, ...)
+  with `cannot copy 'X': type 'T' is not Copy (use move X)`
+  (`E-AUTO-c38540ff`, `type_checker.py:3161`) plus the MIR
+  validator's equivalent friendly diagnostic at the call-arg
+  site.  Every accepted transfer source then arrives at MIR
+  lowering as `HMove`, which routes through `_visit_expr_HMove`'s
+  env-slot zero-back path — already correct for both function-
+  frame locals and callback captures.  The pre-existing
+  `_lower_call_arg`-emits-`MoveOut`-for-non-Copy-HVar fallback
+  path remains for non-statement-form call sites pre-dating
+  0.31.70's validator, but those sites also fall under the
+  source-level "must write `move`" rule and the friendly diag
+  fires at any new statement-form regression.
 
   The structural refactor fires if ANY of the following becomes
   true:
 
-  - **Type-checker relaxation.**  The implicit-move rule at
-    `type_checker.py:3135-3170` is loosened to accept bare
-    non-Copy HVar at HReturn, HLet RHS, HAssign RHS, or other
-    non-call-arg consume positions.  Once accepted, the
-    currently-dead `_lower_owning_consume` capture-aware path
-    becomes live and silently double-drops callback captures
-    in the same shape as the 0.33.6-fixed bookkeeper UAF.
-    Pointer from the type-check-relaxation slice goes here.
+  - **Type-checker / validator relaxation.**  Either the type
+    checker at `type_checker.py:3135-3170` OR the MIR
+    validator's friendly-diag gate is loosened to accept bare
+    non-`Copy` HVar at a consume position (any of HReturn,
+    HLet RHS, HAssign RHS, by-value call arg).  At that point
+    the spec contract no longer holds at the source surface
+    and the compiler needs the structural rewrite to keep
+    callback captures from silently double-dropping under
+    the newly-accepted shapes.  The trigger pointer goes here
+    from the type-check / validator relaxation slice.
   - **New consuming-position site added.**  Any new
     consume-position lowering in `hir_to_mir.py` (or a new
-    syntactic form whose lowering consumes a non-Copy local
-    via bare HVar — `select` arm-body, pattern-match
+    syntactic form whose lowering consumes a non-`Copy`
+    local via bare HVar — `select` arm-body, pattern-match
     consume, async / generator points, etc.) that does NOT
-    route through `_lower_call_arg` AND does NOT require
-    explicit `HMove` from the source.  At that point the
-    structural rewrite is cheaper than duplicating
-    `_move_from_callback_capture_slot` routing at the new
-    site.
+    require explicit `HMove` from the source.  At that point
+    duplicating `_move_from_callback_capture_slot` routing at
+    the new site is more expensive than landing the
+    structural rewrite.
   - **Another callback-capture over-drop reported or
     review-discovered outside the call-arg path.**  Same
     atexit / cb-drop trace shape as
@@ -433,10 +456,12 @@ opportunistic uplifts)" for the full rule.
   **Confirmation pass result (2026-05-27).**  Drafted minimal
   regressions for HReturn / HAssign / HLet of a callback-
   captured `Arc<T>` against 0.33.6.  All three were rejected by
-  the type checker before reaching MIR lowering, confirming the
-  un-patched `_lower_owning_consume` branch is unreachable on
-  the current language surface.  Cert remains unblocked; trigger
-  parked.
+  the type checker before reaching MIR lowering, confirming
+  that every named non-`Copy` ownership transfer must spell
+  `move` at the source.  After that finding, the language-
+  contract clarification was adopted as the 0.33.6 release
+  shape: no compiler change, source-side `move` keyword
+  required.  Cert remains unblocked; trigger parked.
 
 - **Scope when triggered:** ~3-5 days.
   1. Add `lang/driftc/stage1/implicit_move_materialize.py` —

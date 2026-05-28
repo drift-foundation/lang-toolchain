@@ -1,14 +1,17 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """LANGUAGE_BUG regression: VT-spawned closure that consumes a
-non-Copy move-captured local via an IMPLICIT move (bare HVar in a
-by-value call arg, no explicit `move` keyword) double-drops the
-capture — once at the implicit consume site and again from the
-callback's drop thunk.  Surfaces as a use-after-free at atexit when
-the same allocation also lives in the global registry.
+non-Copy move-captured local via an EXPLICIT `move <cap>` must emit
+an env-slot zero-back so the callback's drop thunk no-ops on that
+field at exit.  Without the zero-back, the callee's by-value param
+drops the captured value once at end-of-callee scope and the
+callback drop thunk drops it AGAIN from the still-live env bit
+pattern; the second drop hits refcount 0 and frees an allocation
+that other Arc clones (e.g. the global-registry clone) still
+expect to share.  Surfaces as an atexit use-after-free.
 
-Reported by the PushCoin bookkeeper team (filed against 0.33.5 in
-`~/src/pushcoin/work/drift-vt-drop-atexit-use-after-free.md`).
-Original valgrind shape:
+Reported by the PushCoin bookkeeper team against 0.33.5 in
+`~/src/pushcoin/work/drift-vt-drop-atexit-use-after-free.md`.
+Valgrind shape:
 ```
 Invalid read of size 8
    at drift_atomic_fetch_sub_int
@@ -23,41 +26,37 @@ Block was 0 bytes inside a block of size N free'd
    by drift_vt_fiber_entry
 ```
 
-**Root cause** (compiler, not runtime).  `_visit_expr_HMove` in
-`lang/driftc/stage2/hir_to_mir.py` zeros the env slot for explicit
-`move <cap>` reads (so the callback's drop thunk later loads a
-zero / null value for that field and the per-field drop becomes a
-no-op).  `_visit_expr_HVar`'s capture-load path emits no zero-back
-— so an IMPLICIT consume (the borrow checker silently inserts a
-move-in-consuming-position when the user wrote a bare HVar in an
-owned-arg call site) leaves the env slot pointing at the original
-Arc backing.  The closure body's consumed copy drops the Arc once
-at end-of-callee scope, and the callback drop thunk drops the env
-field again — the second drop hits refcount 0 and frees the
-backing.  The global registry's atexit cleanup then dereferences
-the freed block to decrement its own (independent) Arc-clone
-refcount.
+**Language contract (made explicit in 0.33.6).**  Drift requires
+explicit ownership transfer at by-value call args: `f(x)` MUST NOT
+silently consume `x`.  Users MUST write `f(move x)`.  The
+0.31.70 MIR validator (`validate_mir_call_byvalue_moves`) is the
+gate for function-frame locals — bare non-Copy HVar at a
+statement-form by-value call arg fires the friendly
+`cannot copy 'x': type 'T' is not Copy (use move x)` diagnostic.
+Pinned by `test_use_move_call_arg_friendly_diag.py`.
 
-The user-side workaround is to write `move gw` explicitly at the
-call site; same source compiles + runs clean.  That confirms the
-defect is in implicit-move codegen for callback move-captures, not
-in the application's ownership flow.
+This regression test exercises ONLY the explicit-`move` form
+(`consume_gw(move gw_for_worker)`).  That path routes through
+`_visit_expr_HMove` in `hir_to_mir.py`, which emits
+`LoadRef → tmp-local → MoveOut → StoreRef(zero)` on the env slot.
+Without the zero-back, the callback drop thunk's per-field drop
+loads the original live Arc bit pattern and re-drops it — the
+UAF.
 
-The fix mirrors `_visit_expr_HMove`'s slot-zero treatment in
-`_visit_expr_HVar`'s capture-load path: when reading a non-Copy
-MOVE-captured local, also store the type's zero value back to the
-env slot so the callback's drop thunk no-ops on that field.
+The fix surface in 0.33.6 is `_visit_expr_HMove`'s pre-existing
+env-slot zero-back logic; this test pins that it stays active and
+that the bookkeeper UAF shape stays closed against explicit
+`move` source.
 
-**ABI implication.**  Pure codegen fix — emitted IR only.  No
-runtime ABI surface changes, no `.zdmp` schema change, no signing
-path change.  Per
-`docs/design/drift-lang-abi.md` §"When to bump" / §"Stable ABI
-Artifact Rule" this lands without an ABI bump; existing ABI-14
-dependency artifacts remain consumable unchanged.
+Bare-HVar implicit-move at by-value call args remains an
+EXPLICIT LANGUAGE ERROR (per the contract above) — the bookkeeper
+team's original source `_worker_body(..., gw, ...)` was invalid
+Drift; the correct form is `_worker_body(..., move gw, ...)`.
 
-This test compiles a minimal repro and runs it under valgrind
-(memcheck).  Pre-fix valgrind reports the same invalid-read +
-freed-by-cb_drop shape.  Post-fix valgrind is clean (0 errors).
+**ABI implication.**  Codegen-internal — no runtime ABI surface
+changes, no `.zdmp` schema change, no signing path change.  Per
+`docs/design/drift-lang-abi.md` this lands without an ABI bump;
+existing ABI-14 dependency artifacts remain consumable unchanged.
 """
 from __future__ import annotations
 
@@ -105,10 +104,15 @@ fn _run() -> Int {
 \t}
 \tval gw_for_worker = rt.expect<type arc.Arc<Gateway>>(rt.global_registry(), "missing-gw").clone();
 \tvar vt = conc.spawn(| | captures(move gw_for_worker) nothrow => {
-\t\t// IMPLICIT move (no `move` keyword) — bare HVar in a
-\t\t// by-value call arg.  This is the failing shape from
-\t\t// bookkeeper's customers_snapshot.drift worker spawn.
-\t\tconsume_gw(gw_for_worker);
+\t\t// EXPLICIT `move` — the only valid form per Drift's
+\t\t// explicit-ownership-transfer contract.  Routes through
+\t\t// `_visit_expr_HMove` which emits the env-slot zero-back
+\t\t// so the callback drop thunk no-ops on this field at
+\t\t// exit.  Without that zero-back, the callee's
+\t\t// by-value param drop + callback drop thunk double-drop
+\t\t// the captured Arc → atexit UAF against the
+\t\t// global-registry clone.
+\t\tconsume_gw(move gw_for_worker);
 \t\treturn 0;
 \t});
 \tmatch vt.join() {
@@ -136,103 +140,19 @@ def _compile(tmp_path: Path) -> tuple[int, str, Path]:
 	return res.returncode, res.stderr, out
 
 
-_NON_CONSUMING_THEN_CONSUMING_SOURCE = """\
-module main;
+def test_vt_capture_explicit_move_no_atexit_uaf(tmp_path: Path) -> None:
+	"""`Arc<Gateway>` stored in the global registry; cloned into a
+	`conc.spawn` move-captured local; consumed inside the closure
+	via explicit `move gw_for_worker` at a by-value call arg.
+	Asserts compile rc=0, binary rc=0, valgrind
+	`ERROR SUMMARY: 0 errors`.
 
-import std.core as core;
-import std.core.arc as arc;
-import std.concurrent as conc;
+	Pre-fix the env-slot zero-back was absent and valgrind
+	reported the bookkeeper UAF (three errors, one context).
+	Post-fix `_visit_expr_HMove`'s capture-aware path emits the
+	zero-back and valgrind is clean.
 
-pub struct Holder {
-\tpub v: Int
-}
-
-fn consume_arc(a: arc.Arc<Holder>) nothrow -> Int {
-\treturn a.get().v + 1;
-}
-
-fn main() nothrow -> Int {
-\tval h = arc.arc(Holder(v = 7));
-\tvar vt = conc.spawn(| | captures(move h) nothrow => {
-\t\t// Non-consuming method-call receiver auto-borrow on a MOVE
-\t\t// capture.  This must NOT zero the env slot — the subsequent
-\t\t// `consume_arc(h)` needs to find a live Arc in the env.
-\t\tval first = h.get();
-\t\tval n = first.v;
-\t\tval m = consume_arc(h);
-\t\treturn n + m;
-\t});
-\tmatch vt.join() {
-\t\tcore.Result::Ok(r) => { return r; },
-\t\tcore.Result::Err(_) => { return 99; }
-\t}
-}
-"""
-
-
-def test_non_consuming_move_capture_read_does_not_zero_env_slot(tmp_path: Path) -> None:
-	"""Positive regression: a MOVE-captured Arc<T> is read
-	non-consumingly (auto-borrow method-call receiver) and THEN
-	consumed by a by-value call.  This pattern was broken by the
-	first iteration of the fix (which blanket-zeroed every HVar
-	read of a destructible MOVE capture); pinned to ensure
-	implicit-move zero-back fires ONLY at actual consuming
-	positions (call-arg of a non-Copy-typed by-value param), not
-	on every HVar load.
-
-	Expected: compile rc=0, binary returns 15 (7 + 8), and
-	(if valgrind is available) no errors at exit.
-	"""
-	src = tmp_path / "main.drift"
-	src.write_text(_NON_CONSUMING_THEN_CONSUMING_SOURCE)
-	out = tmp_path / "repro_non_consume"
-	compile_res = subprocess.run(
-		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
-		 "--stdlib-root", str(ROOT / "stdlib"),
-		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
-	)
-	assert compile_res.returncode == 0, (
-		f"compile failed (rc={compile_res.returncode}):\n"
-		f"stderr: {compile_res.stderr[:1000]}"
-	)
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
-	assert run.returncode == 15, (
-		f"non-consuming-then-consuming MOVE-capture read returned "
-		f"{run.returncode}, expected 15 (7 + 8).  Implicit-move "
-		f"zero-back is firing on the first non-consuming read; "
-		f"the consume sees a zeroed env slot.\n"
-		f"stderr: {run.stderr[-400:]}"
-	)
-	valgrind = shutil.which("valgrind")
-	if valgrind is None:
-		return
-	vg = subprocess.run(
-		[valgrind, "--tool=memcheck", "--error-exitcode=97",
-		 "--leak-check=full", "--errors-for-leak-kinds=all",
-		 str(out)],
-		capture_output=True, text=True, timeout=60,
-	)
-	# Valgrind passes the binary's exit code through on clean runs;
-	# rc=97 is the error-exitcode escalation.  Binary's own success
-	# code is 15 (the n+m result) which propagates here.
-	assert vg.returncode != 97, (
-		"non-consuming-then-consuming MOVE-capture read triggered "
-		"valgrind errors — the env slot is being mishandled "
-		"between the two reads.\n"
-		f"valgrind output (last 1500 chars):\n{vg.stderr[-1500:]}"
-	)
-	assert "ERROR SUMMARY: 0 errors" in vg.stderr, (
-		f"valgrind error tally non-zero.\n"
-		f"valgrind output (last 1000 chars):\n{vg.stderr[-1000:]}"
-	)
-
-
-def test_vt_capture_implicit_move_no_atexit_uaf(tmp_path: Path) -> None:
-	"""Compile the minimal Arc-in-registry / VT-captures-clone /
-	closure-consumes-via-implicit-move repro and run it under
-	valgrind.  Assert: compile rc=0, binary rc=0, valgrind
-	error-count = 0.
+	Skips when valgrind is unavailable.
 	"""
 	valgrind = shutil.which("valgrind")
 	if valgrind is None:
@@ -249,23 +169,100 @@ def test_vt_capture_implicit_move_no_atexit_uaf(tmp_path: Path) -> None:
 		 str(out)],
 		capture_output=True, text=True, timeout=60,
 	)
-	# Bare-program return code is in res.returncode; valgrind
-	# substitutes 97 if it found errors.
 	if res.returncode == 97:
 		raise AssertionError(
-			"valgrind reported errors — VT capture implicit-move "
-			"atexit UAF still present.\n"
+			"valgrind reported errors — VT capture explicit-move "
+			"atexit UAF reproduces (env-slot zero-back is missing "
+			"in `_visit_expr_HMove`'s callback-capture path).\n"
 			f"valgrind output (last 2000 chars):\n{res.stderr[-2000:]}"
 		)
 	assert res.returncode == 0, (
 		f"binary returned {res.returncode}, expected 0 (success).\n"
 		f"valgrind stderr (last 1000 chars):\n{res.stderr[-1000:]}"
 	)
-	# Defensive: the `--error-exitcode` flag already turns errors
-	# into rc=97, but pin the "ERROR SUMMARY: 0 errors" line in
-	# case valgrind ever drops the exit-code escalation.
 	assert "ERROR SUMMARY: 0 errors" in res.stderr, (
 		"valgrind ran clean exit but error-summary tally is "
 		f"non-zero.\nvalgrind stderr (last 1000 chars):\n"
 		f"{res.stderr[-1000:]}"
+	)
+
+
+_BARE_HVAR_REJECT_SOURCE = """\
+module main;
+
+import std.core as core;
+import std.core.arc as arc;
+import std.concurrent as conc;
+import std.runtime as rt;
+
+pub struct Gateway {
+\tpub name: String
+}
+
+fn consume_gw(gw: arc.Arc<Gateway>) nothrow -> Void {
+\tval _ = gw;
+\treturn;
+}
+
+fn _run() -> Int {
+\tval gw = arc.arc(Gateway(name = "test"));
+\tvar vt = conc.spawn(| | captures(move gw) nothrow => {
+\t\t// BARE HVar at by-value call arg — Drift's explicit-
+\t\t// ownership-transfer contract REJECTS this.  Compiler
+\t\t// must emit the friendly `cannot copy ... use move`
+\t\t// diagnostic.  Pinned to prevent a future regression
+\t\t// where implicit move at call args is silently accepted
+\t\t// for callback captures (the 0.33.6-first-iteration shape
+\t\t// the user explicitly rejected — `f(x)` must not silently
+\t\t// consume `x`).
+\t\tconsume_gw(gw);
+\t\treturn 0;
+\t});
+\tmatch vt.join() {
+\t\tcore.Result::Ok(_) => { return 0; },
+\t\tcore.Result::Err(_) => { return 2; }
+\t}
+}
+
+fn main() nothrow -> Int {
+\treturn try _run() catch { 99 };
+}
+"""
+
+
+def test_bare_hvar_at_callback_capture_call_arg_is_rejected(tmp_path: Path) -> None:
+	"""Negative regression pinning the language contract: even
+	for callback captures, a bare HVar at a by-value call arg is
+	an EXPLICIT LANGUAGE ERROR.  Users must write
+	`f(move <cap>)`, never `f(<cap>)`.
+
+	Asserts the compiler emits the friendly `cannot copy ...`
+	`use move <name>` diagnostic — same shape as for
+	function-frame locals (pinned by
+	`test_use_move_call_arg_friendly_diag.py`).  No silent
+	implicit move at codegen.
+	"""
+	src = tmp_path / "main.drift"
+	src.write_text(_BARE_HVAR_REJECT_SOURCE)
+	out = tmp_path / "repro_bare"
+	res = subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
+		 "--stdlib-root", str(ROOT / "stdlib"),
+		 str(src), "--entry", "main::main", "-o", str(out)],
+		cwd=ROOT, capture_output=True, text=True, timeout=120,
+	)
+	assert res.returncode != 0, (
+		"bare HVar at callback-capture by-value call arg was "
+		"accepted — this VIOLATES Drift's explicit-ownership-"
+		"transfer contract.  `f(x)` must not silently consume "
+		"a non-Copy `x`.\n"
+		f"stderr: {res.stderr[:800]}"
+	)
+	# The friendly diag's exact phrasing comes from
+	# `type_checker.py:3161` / the MIR validator's friendly
+	# format.  We just pin that SOME `use move`-shaped error
+	# fires and rejects the program.
+	assert "use move" in res.stderr or "cannot copy" in res.stderr, (
+		"compile failed but without the expected friendly diag.\n"
+		f"stderr: {res.stderr[:800]}"
 	)

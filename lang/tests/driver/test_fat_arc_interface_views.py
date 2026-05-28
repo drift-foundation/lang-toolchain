@@ -525,7 +525,7 @@ fn main() nothrow -> Int {
 	val r = conc.arc(MyResolver(tag = 7));
 	val view = r.as_interface<type log.ContextResolver>();
 	var b = log.config_builder();
-	b.context_resolver(view);
+	b.context_resolver(move view);
 	return 0;
 }
 """.lstrip()

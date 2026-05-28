@@ -1597,7 +1597,7 @@ pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 			return;
 		}
 	);
-	var h = thread.vt_spawn(thunk, exec.handle);
+	var h = thread.vt_spawn(move thunk, exec.handle);
 	val submit_code = thread.exec_submit(exec.handle, h);
 	if submit_code != 0 {
 		// Buffer ownership stays with `state`; the returned handle's
@@ -1636,7 +1636,7 @@ pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 			return;
 		}
 	);
-	var h = thread.vt_spawn(thunk, exec.handle);
+	var h = thread.vt_spawn(move thunk, exec.handle);
 	val submit_code = thread.exec_submit(exec.handle, h);
 	if submit_code != 0 {
 		thread.vt_drop(h);
@@ -1683,7 +1683,7 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 			return;
 		}
 	);
-	var h = thread.vt_spawn(thunk, exec.handle);
+	var h = thread.vt_spawn(move thunk, exec.handle);
 	var submit_code = thread.exec_submit(exec.handle, h);
 	if submit_code == 0 {
 		return core.Result::Ok(VirtualThread<type T>(

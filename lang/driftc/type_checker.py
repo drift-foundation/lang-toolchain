@@ -12411,6 +12411,120 @@ class TypeChecker:
 				)
 			)
 
+		def _check_explicit_move_required_at_call_arg(
+			*,
+			arg_expr: H.HExpr,
+			param_ty: Optional[TypeId],
+			target_name: str,
+			param_label: str,
+			span: Span,
+		) -> None:
+			"""Enforce Drift's explicit-ownership-transfer rule at by-
+			value owned call-arg slots.
+
+			Per `docs/design/drift-lang-spec.md` §1.3: a bare named
+			non-`Copy` owner at a by-value call-arg slot is a compile
+			error.  Users must write `move <x>` (or `copy x` for Copy
+			types, `share x` for Share types, `&x` / `&mut x` for
+			borrows) to make the ownership intent explicit.  Owned
+			temporaries (HCall, HArrayLiteral, ctor calls, etc.) at
+			the same slot remain accepted — there is no named source
+			binding to protect.
+
+			This helper is the type-check-time gate that lands the
+			rule UNIFORMLY at every call-arg position.  Pre-0.33.7
+			the rule was enforced ONLY at statement-form (via the MIR
+			validator's friendly diag) while value-position call args
+			(`val r = consume(x);`, `val r = wrap(consume(x));`)
+			silently emitted `MoveOut` in `_lower_call_arg`.  The
+			validator only catches `LoadLocal` / `LoadRef` sources;
+			moving the gate up to type-check time closes the
+			asymmetry without touching MIR lowering.
+
+			Gating contract:
+			  * REF params (`&T`, `&mut T`) → return.  Auto-borrow
+			    / auto-mut-borrow at call sites is intentional and
+			    well-defined; ownership does not transfer.
+			  * Param type is a TYPEVAR (generic) → return.  Defer
+			    the check to instantiation; the instantiated call
+			    sites get the check.
+			  * Arg is anything OTHER than a bare `HVar`/projection-
+			    free `HPlaceExpr` of a binding (e.g. `HMove`,
+			    `HCopy`, `HBorrow`, `HCall`, `HField`, `HIndex`,
+			    `HArrayLiteral`, literal) → return.  Those forms
+			    already encode the source's transfer intent
+			    explicitly (or are owned temporaries with no named
+			    source binding to protect).
+			  * Arg's binding type is `Copy` → return.  Implicit
+			    duplication is the documented Copy behavior.
+			  * `_implicit_const_share_marks` already covers the
+			    arg's `node_id` → return.  Phase 5 auto-`ConstShare`
+			    duplication is a permitted implicit duplication
+			    path; the parent slot wraps the marked node into
+			    `Share::share(&x)`.
+			  * Otherwise → emit the friendly
+			    `cannot copy 'X': type 'T' is not Copy (use move X)`
+			    diagnostic.
+
+			Pinned by
+			`lang/tests/driver/test_value_position_call_arg_bare_hvar_rejected.py`
+			(value-position) and the pre-existing
+			`test_use_move_call_arg_friendly_diag.py` (statement-
+			position; still relies on the MIR validator's
+			downstream check as a defense-in-depth backstop).
+			"""
+			if param_ty is None:
+				return
+			param_td = self.type_table.get(param_ty)
+			if param_td.kind is TypeKind.REF:
+				return
+			if param_td.kind is TypeKind.TYPEVAR:
+				return
+			# Unwrap a projection-free HPlaceExpr to its HVar base.
+			base = arg_expr
+			if hasattr(H, "HPlaceExpr") and isinstance(arg_expr, getattr(H, "HPlaceExpr")):
+				if getattr(arg_expr, "projections", None):
+					return
+				base = arg_expr.base
+			if not isinstance(base, H.HVar):
+				return
+			# Phase 5 implicit ConstShare duplication marker — if
+			# the type-checker already accepted this node for
+			# implicit duplication, do not re-emit "use move".
+			if getattr(base, "node_id", None) in _implicit_const_share_marks:
+				return
+			bid = getattr(base, "binding_id", None)
+			arg_ty: TypeId | None = None
+			if bid is not None:
+				arg_ty = binding_types.get(int(bid))
+			if arg_ty is None:
+				arg_ty = expr_types.get(getattr(base, "node_id", None))
+			if arg_ty is None:
+				return
+			arg_td = self.type_table.get(arg_ty)
+			if arg_td.kind is TypeKind.REF:
+				return
+			if arg_td.kind is TypeKind.TYPEVAR:
+				return
+			copy_status = self.type_table.copy_status(arg_ty)
+			if copy_status is True:
+				return
+			if copy_status is None:
+				return
+			user_name = user_facing_binding_name(base.name) if base.name else base.name
+			pretty = self._pretty_type_name(arg_ty, current_module=current_module_name)
+			msg = (
+				f"cannot copy '{user_name}': type '{pretty}' is not "
+				f"Copy (use move {user_name})"
+			)
+			diagnostics.append(
+				_tc_diag(
+					message=msg,
+					severity="error",
+					span=span,
+				)
+			)
+
 		def _check_call_expr_boundaries(expr: H.HExpr) -> None:
 			if isinstance(expr, H.HCall):
 				decl, sig = _decl_and_sig_for_call(expr)
@@ -12428,15 +12542,22 @@ class TypeChecker:
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"
 						_check_borrowed_arg_boundary(
-						arg_expr=arg,
-						param_ty=param_ty,
-						nonretaining_state=nonret_state,
-						retaining_default=retaining_default,
-						target_name=decl.fn_id.name,
-						target_module=decl.fn_id.module,
-						param_label=param_label,
-						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
-					)
+							arg_expr=arg,
+							param_ty=param_ty,
+							nonretaining_state=nonret_state,
+							retaining_default=retaining_default,
+							target_name=decl.fn_id.name,
+							target_module=decl.fn_id.module,
+							param_label=param_label,
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=arg,
+							param_ty=param_ty,
+							target_name=decl.fn_id.name,
+							param_label=param_label,
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
 					for kw in expr.kwargs:
 						param_index = _param_index_for_call(sig, kw_name=kw.name)
 						param_ty = None
@@ -12450,18 +12571,54 @@ class TypeChecker:
 							if sig.param_names and param_index < len(sig.param_names):
 								param_label = f"parameter '{sig.param_names[param_index]}'"
 						_check_borrowed_arg_boundary(
-						arg_expr=kw.value,
-						param_ty=param_ty,
-						nonretaining_state=nonret_state,
-						retaining_default=retaining_default,
-						target_name=decl.fn_id.name,
-						target_module=decl.fn_id.module,
-						param_label=param_label,
-						span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
-					)
+							arg_expr=kw.value,
+							param_ty=param_ty,
+							nonretaining_state=nonret_state,
+							retaining_default=retaining_default,
+							target_name=decl.fn_id.name,
+							target_module=decl.fn_id.module,
+							param_label=param_label,
+							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+						)
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=kw.value,
+							param_ty=param_ty,
+							target_name=decl.fn_id.name,
+							param_label=param_label,
+							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+						)
 					return
 				call_info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
 				if call_info is None:
+					return
+				if call_info.target.kind is CallTargetKind.INDIRECT:
+					# Function-value / callable call (`f(x)` where `f` is
+					# a function VALUE).  `_decl_and_sig_for_call` returns
+					# (None, None) for these (no declared callee), so the
+					# decl/sig path above is skipped.  Lowering routes the
+					# args through `_lower_indirect_call` ->
+					# `_lower_call_arg`, which would silent-move a bare
+					# non-Copy HVar — the same explicit-ownership-transfer
+					# hole this patch closes.  Gate the args here using the
+					# resolved indirect-call signature's param types.
+					_indirect_param_types = list(call_info.sig.param_types)
+					for idx, arg in enumerate(expr.args):
+						param_ty = _indirect_param_types[idx] if idx < len(_indirect_param_types) else None
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=arg,
+							param_ty=param_ty,
+							target_name="callable",
+							param_label=f"parameter #{idx}",
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
+					for kw in expr.kwargs:
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=kw.value,
+							param_ty=None,
+							target_name="callable",
+							param_label=f"parameter '{kw.name}'",
+							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+						)
 					return
 				if call_info.target.kind is not CallTargetKind.INTRINSIC:
 					return
@@ -12541,6 +12698,13 @@ class TypeChecker:
 							param_label=param_label,
 							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
 						)
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=arg,
+							param_ty=param_ty,
+							target_name=decl.fn_id.name,
+							param_label=param_label,
+							span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+						)
 					for kw in expr.kwargs:
 						param_index = _param_index_for_call(sig, kw_name=kw.name)
 						param_ty = None
@@ -12560,6 +12724,13 @@ class TypeChecker:
 							retaining_default=retaining_default,
 							target_name=decl.fn_id.name,
 							target_module=decl.fn_id.module,
+							param_label=param_label,
+							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+						)
+						_check_explicit_move_required_at_call_arg(
+							arg_expr=kw.value,
+							param_ty=param_ty,
+							target_name=decl.fn_id.name,
 							param_label=param_label,
 							span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
 						)
@@ -12592,6 +12763,43 @@ class TypeChecker:
 						param_label=f"parameter #{idx + 1}",
 						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
 					)
+					_check_explicit_move_required_at_call_arg(
+						arg_expr=arg,
+						param_ty=param_ty,
+						target_name=intr_name,
+						param_label=f"parameter #{idx + 1}",
+						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+					)
+			elif hasattr(H, "HInvoke") and isinstance(expr, getattr(H, "HInvoke")):
+				# Function-value / callable invocation (`fn_value(x)`,
+				# `cb.call(...)` lowered to HInvoke, etc.).  Lowering
+				# routes HInvoke args through `_lower_call_arg`, which
+				# would emit a silent `MoveOut` for a bare non-Copy
+				# HVar — same explicit-ownership-transfer hole this
+				# patch closes for HCall / HMethodCall.  Gate the
+				# positional + keyword args here at type-check time
+				# using the resolved call signature's param types.
+				call_info = call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
+				if call_info is None:
+					return
+				param_types = list(call_info.sig.param_types)
+				for idx, arg in enumerate(expr.args):
+					param_ty = param_types[idx] if idx < len(param_types) else None
+					_check_explicit_move_required_at_call_arg(
+						arg_expr=arg,
+						param_ty=param_ty,
+						target_name="callable",
+						param_label=f"parameter #{idx}",
+						span=getattr(arg, "loc", getattr(expr, "loc", Span())),
+					)
+				for kw in getattr(expr, "kwargs", []) or []:
+					_check_explicit_move_required_at_call_arg(
+						arg_expr=kw.value,
+						param_ty=None,
+						target_name="callable",
+						param_label=f"parameter '{kw.name}'",
+						span=getattr(kw.value, "loc", getattr(expr, "loc", Span())),
+					)
 
 		def _walk_expr_for_borrowed_boundaries(expr: H.HExpr) -> None:
 			_check_call_expr_boundaries(expr)
@@ -12603,6 +12811,12 @@ class TypeChecker:
 					_walk_expr_for_borrowed_boundaries(kw.value)
 			elif isinstance(expr, H.HMethodCall):
 				_walk_expr_for_borrowed_boundaries(expr.receiver)
+				for a in expr.args:
+					_walk_expr_for_borrowed_boundaries(a)
+				for kw in expr.kwargs:
+					_walk_expr_for_borrowed_boundaries(kw.value)
+			elif hasattr(H, "HInvoke") and isinstance(expr, getattr(H, "HInvoke")):
+				_walk_expr_for_borrowed_boundaries(expr.callee)
 				for a in expr.args:
 					_walk_expr_for_borrowed_boundaries(a)
 				for kw in expr.kwargs:

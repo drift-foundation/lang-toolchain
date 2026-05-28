@@ -656,7 +656,7 @@ pub fn create_logger(name: String, config: LoggerConfig) nothrow -> Logger {
 	val reg = runtime.global_registry();
 	val _ = io.install_process_stdio(reg);
 	val st = _runtime_state_from_cfg(&config, _resolve_stderr_cap(reg));
-	val h = _alloc_runtime_state(st);
+	val h = _alloc_runtime_state(move st);
 	return Logger(name = name, min_level = config.min_level, state = h);
 }
 

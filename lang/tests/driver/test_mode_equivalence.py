@@ -87,7 +87,7 @@ pub fn main() nothrow -> Int {
 \tcb.sink(log.stderr_sink());
 \tcb.min_level(log.Level::Error());
 \tval cfg = cb.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 \tlogger.info("test", {"k": fmt.format_int(42)});
 
 \treturn 0;

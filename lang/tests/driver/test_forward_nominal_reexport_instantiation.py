@@ -140,7 +140,7 @@ def test_pub_type_alias_through_callback_param(tmp_path: Path) -> None:
 		"}\n"
 		"pub fn main() nothrow -> Int {\n"
 		"\tval cb = core.callback2(_health);\n"
-		"\tmatch api.register_handler(cb, \"/health\", 200) {\n"
+		"\tmatch api.register_handler(move cb, \"/health\", 200) {\n"
 		"\t\tcore.Result::Err(_) => { return 1; },\n"
 		"\t\tcore.Result::Ok(r) => { return r.code; }\n"
 		"\t}\n"

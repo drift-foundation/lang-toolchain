@@ -48,7 +48,7 @@ fn main() nothrow -> Int {
 	cfg_builder.sink(log.stderr_sink());
 	cfg_builder.formatter(log.FormatterKind::JsonIso8601());
 	val cfg = cfg_builder.build();
-	val root = log.create_logger("main", cfg);
+	val root = log.create_logger("main", move cfg);
 
 	root.info("auth-failed", {"attempts": 3, "status": 401});
 
