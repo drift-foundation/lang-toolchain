@@ -14,14 +14,14 @@ pub fn main() nothrow -> Int {
 		}
 		return;
 	});
-	val h1 = thread.vt_spawn(cb1, exec);
+	val h1 = thread.vt_spawn(move cb1, exec);
 	val s1 = thread.exec_submit(exec, h1);
 	if s1 != 0 {
 		return 11;
 	}
 	thread.vt_park_until(1);
 	val cb2: core.Callback0<Void> = core.callback0(| | => { return; });
-	val h2 = thread.vt_spawn(cb2, exec);
+	val h2 = thread.vt_spawn(move cb2, exec);
 	val s2 = thread.exec_submit(exec, h2);
 	if s2 == 1 {
 		return 0;
