@@ -13,7 +13,7 @@ implement<T> Box<T> {
 
 fn main() nothrow -> Int {
 	var items: Array<Int> = [];
-	var b: Box<Int> = Box(items = items);
+	var b: Box<Int> = Box(items = move items);
 	var arr = b.make();
 	return arr;
 }

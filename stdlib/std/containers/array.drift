@@ -579,7 +579,7 @@ implement<T> Deque<T> {
 				self.head = 0;
 			}
 			self.gen = self.gen + 1;
-			return Optional::Some(v);
+			return Optional::Some(move v);
 		}
 	}
 
@@ -602,7 +602,7 @@ implement<T> Deque<T> {
 				self.head = 0;
 			}
 			self.gen = self.gen + 1;
-			return Optional::Some(v);
+			return Optional::Some(move v);
 		}
 	}
 
@@ -1390,7 +1390,7 @@ implement<K, B> HashSetCore<K, B>
 	///
 	/// **See also:** `HashSetCore.remove`.
 	pub fn insert(self: &mut HashSetCore<K, B>, key: K) nothrow -> Bool {
-		val res = self.map.insert(key, true);
+		val res = self.map.insert(move key, true);
 		return match res {
 			None => { true },
 			Some(_v) => { false }
@@ -1862,7 +1862,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		val v = self.read_value(idx);
 		unsafe { mem.write<type Int>(&mut self.free_next, idx, self.free_head); }
 		self.free_head = idx;
-		return v;
+		return move v;
 	}
 
 	fn set_left(self: &mut TreeMap<K, V>, parent: Int, child: Int) -> Void {
@@ -2101,7 +2101,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 	}
 
 	fn insert_at(self: &mut TreeMap<K, V>, parent: Int, cmp_val: Int, key: K, value: V) -> Int {
-		val idx = self.alloc_node(key, value);
+		val idx = self.alloc_node(move key, move value);
 		if parent < 0 {
 			self.root = idx;
 		} else {
@@ -2159,7 +2159,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		val removed = self.free_node(z_idx);
 		self.len = self.len - 1;
 		self.gen = self.gen + 1;
-		return removed;
+		return move removed;
 	}
 
 	/// Returns the number of (key, value) entries in the map.
@@ -2275,9 +2275,9 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 		if res.found {
 			val old = self.read_value(res.idx);
 			unsafe { mem.write<type V>(&mut self.values, res.idx, value); }
-			return Optional::Some(old);
+			return Optional::Some(move old);
 		}
-		self.insert_at(res.parent, res.cmp, key, value);
+		self.insert_at(res.parent, res.cmp, move key, move value);
 		return Optional::None();
 	}
 
@@ -2294,7 +2294,7 @@ implement<K, V> TreeMap<K, V> require K is cmp.Comparable {
 			return Optional::None();
 		}
 		val v = self.remove_at(res.idx);
-		return Optional::Some(v);
+		return Optional::Some(move v);
 	}
 
 	/// Returns a `TreeMapIter<K, V>` yielding `TreeMapItemRef` values
@@ -2331,9 +2331,9 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 		if self.found {
 			val old = self.map.read_value(self.idx);
 			unsafe { mem.write<type V>(&mut self.map.values, self.idx, value); }
-			return Optional::Some(old);
+			return Optional::Some(move old);
 		}
-		self.map.insert_at(self.parent, self.cmp, key, value);
+		self.map.insert_at(self.parent, self.cmp, move key, move value);
 		return Optional::None();
 	}
 
@@ -2347,7 +2347,7 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 		if self.found {
 			return false;
 		}
-		self.map.insert_at(self.parent, self.cmp, key, value);
+		self.map.insert_at(self.parent, self.cmp, move key, move value);
 		return true;
 	}
 
@@ -2361,7 +2361,7 @@ implement<K, V> TreeMapEntryMut<K, V> require K is cmp.Comparable {
 			return Optional::None();
 		}
 		val v = self.map.remove_at(self.idx);
-		return Optional::Some(v);
+		return Optional::Some(move v);
 	}
 }
 
@@ -2480,7 +2480,7 @@ implement<K> TreeSet<K> require K is cmp.Comparable {
 	/// **Returns:** `true` if the key was newly inserted; `false` if
 	/// it was already present.
 	pub fn insert(self: &mut TreeSet<K>, key: K) -> Bool {
-		val res = self.map.insert(key, true);
+		val res = self.map.insert(move key, true);
 		match res {
 			None => { return true; },
 			Some(_v) => { return false; }

@@ -14,7 +14,7 @@ fn make() nothrow -> Wrapper {
 	try {
 		throw Boom();
 	} catch e {
-		return Wrapper::Fail(e);
+		return Wrapper::Fail(move e);
 	}
 }
 

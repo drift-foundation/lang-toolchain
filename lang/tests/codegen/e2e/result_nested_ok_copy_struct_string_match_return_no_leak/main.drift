@@ -8,7 +8,7 @@ struct Payload {
 
 fn make() nothrow -> core.Result<core.Result<Payload, Int>, Int> {
 	val inner: core.Result<Payload, Int> = core.Result::Ok(Payload(msg = "inner"));
-	return core.Result::Ok(inner);
+	return core.Result::Ok(move inner);
 }
 
 fn main() nothrow -> Int {

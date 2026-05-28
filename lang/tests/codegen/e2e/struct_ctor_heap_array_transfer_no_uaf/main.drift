@@ -5,10 +5,12 @@ module m;
 //
 // Struct construction is a DISTINCT ownership-transfer path from the
 // recently-audited push/insert/set MIR lowering.  A source local
-// `names: Array<String>` flowed into `Session(names = names)` must
-// transfer ownership of the array (and its element refcounts) to the
-// struct field; the source local must not double-drop at scope exit.
-// Same story one level up: `Outer(session = Session(names = names))`.
+// `names: Array<String>` flowed into `Session(names = move names)`
+// must transfer ownership of the array (and its element refcounts) to
+// the struct field; the source local must not double-drop at scope
+// exit.  The explicit `move` is required by spec §1.3 — a bare named
+// non-Copy owner is never silently transferred into a field.
+// Same story one level up: `Outer(session = Session(names = move names))`.
 //
 // The drift-net-tls certification crash was at the consumer side of
 // this exact shape wrapped in Result::Ok; this fixture isolates the
@@ -43,7 +45,7 @@ fn build_heap_names() nothrow -> Array<String> {
 // --- direct field transfer ---
 fn exercise_direct_field() nothrow -> Int {
 	val names = build_heap_names();
-	val session = Session(names = names);
+	val session = Session(names = move names);
 	// `names` local is now "moved" into session.names.  Reading
 	// session.names must see intact String payloads.
 	if session.names.len != 3 { return 1; }
@@ -57,7 +59,7 @@ fn exercise_direct_field() nothrow -> Int {
 fn exercise_nested_field() nothrow -> Int {
 	val names = build_heap_names();
 	val tag = heap_str("outer-tag");
-	val outer = Outer(session = Session(names = names), tag = tag);
+	val outer = Outer(session = Session(names = move names), tag = tag);
 	if outer.session.names.len != 3 { return 10; }
 	if outer.session.names[0].byte_length() != 7 { return 11; }
 	if outer.session.names[1].byte_length() != 6 { return 12; }
@@ -71,7 +73,7 @@ fn exercise_nested_field() nothrow -> Int {
 // --- independent ownership of the ORIGINAL names.
 fn exercise_direct_field_var_reassign() nothrow -> Int {
 	var names = build_heap_names();
-	val session = Session(names = names);
+	val session = Session(names = move names);
 	// Reassign the source var — struct field must keep the old array.
 	names = build_heap_names();
 	if session.names.len != 3 { return 20; }

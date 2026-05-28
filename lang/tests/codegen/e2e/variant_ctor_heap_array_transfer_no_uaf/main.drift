@@ -45,7 +45,7 @@ fn build_heap_names() nothrow -> Array<String> {
 // --- (a) custom variant carrying Array<String> directly ---
 fn exercise_variant_array() nothrow -> Int {
 	val names = build_heap_names();
-	val msg = Msg::Names(list = names);
+	val msg = Msg::Names(list = move names);
 	match msg {
 		Msg::Names(list) => {
 			if list.len != 3 { return 1; }
@@ -61,7 +61,7 @@ fn exercise_variant_array() nothrow -> Int {
 // --- (b) custom variant carrying Session { names: Array<String> } ---
 fn exercise_variant_session() nothrow -> Int {
 	val names = build_heap_names();
-	val msg = Msg::WithSession(s = Session(names = names));
+	val msg = Msg::WithSession(s = Session(names = move names));
 	match msg {
 		Msg::WithSession(s) => {
 			if s.names.len != 3 { return 10; }
@@ -77,7 +77,7 @@ fn exercise_variant_session() nothrow -> Int {
 // --- (c) Result::Ok(Session{...}) — drift-net-tls cert shape ---
 fn build_session_ok() nothrow -> core.Result<Session, Int> {
 	val names = build_heap_names();
-	return core.Result::Ok(Session(names = names));
+	return core.Result::Ok(Session(names = move names));
 }
 
 fn exercise_result_ok() nothrow -> Int {
@@ -97,7 +97,7 @@ fn exercise_result_ok() nothrow -> Int {
 // --- (d) Result::Err(Session{...}) — Err arm mirror ---
 fn build_session_err() nothrow -> core.Result<Int, Session> {
 	val names = build_heap_names();
-	return core.Result::Err(Session(names = names));
+	return core.Result::Err(Session(names = move names));
 }
 
 fn exercise_result_err() nothrow -> Int {

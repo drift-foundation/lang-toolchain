@@ -62,7 +62,7 @@ fn collect_names() nothrow -> Array<String> {
 
 fn build_session() nothrow -> core.Result<Session, Int> {
 	val names = collect_names();
-	return core.Result::Ok(Session(names = names));
+	return core.Result::Ok(Session(names = move names));
 }
 
 pub fn main() nothrow -> Int {

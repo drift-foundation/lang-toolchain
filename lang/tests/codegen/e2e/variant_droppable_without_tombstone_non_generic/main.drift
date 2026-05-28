@@ -16,7 +16,7 @@ fn main() nothrow -> Int {
 	val a = 5;
 	val p = Point(x = 7, y = a * 3, label = "pt");
 	val v1 = Choice::IntVal(a);
-	val v2 = Choice::PointVal(p);
+	val v2 = Choice::PointVal(move p);
 	val v3 = Choice::None();
 	match v1 {
 		IntVal(value) => { if value != 5 { return 1; } },
