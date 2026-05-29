@@ -231,10 +231,15 @@ pub fn main() nothrow -> Int {
 """
 
 
-def _sign_package(pkg_path: Path, pkg_id: str, version: str, tmp_path: Path, trust_path: Path | None = None) -> tuple[str, str]:
+def _sign_package(pkg_path: Path, pkg_id: str, version: str, tmp_path: Path, trust_path: Path | None = None, namespaces: list[str] | None = None) -> tuple[str, str]:
 	"""Emit v1 author + cert claim sidecars next to `.dmp`.
 	Returns `(kid, pub_b64)`.  Foundation-bootstrap pattern: the
 	same kid plays both `authors` and `certifiers` roles.
+
+	`namespaces` overrides the claimed author namespaces; defaults to
+	`["{pkg_id}.*"]`.  The `std` bundle re-exports `lang.*` (and
+	`drift.*`) modules, so signing it requires claiming those too —
+	otherwise modules like `lang.atomic` fail trust verification.
 	"""
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
@@ -252,7 +257,7 @@ def _sign_package(pkg_path: Path, pkg_id: str, version: str, tmp_path: Path, tru
 		package_id=pkg_id,
 		package_version=version,
 		priv=priv,
-		namespaces=[f"{pkg_id}.*"],
+		namespaces=namespaces if namespaces is not None else [f"{pkg_id}.*"],
 	)
 	return kid, pub_b64
 
@@ -330,7 +335,8 @@ def _build_two_layer_packages(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	std_dest = pkg_dir / "std" / STD_VERSION
 	std_dest.mkdir(parents=True)
 	shutil.copy2(str(std_pkg_path), str(std_dest / "std.dmp"))
-	std_kid, std_pub = _sign_package(std_dest / "std.dmp", "std", STD_VERSION, tmp_path)
+	std_kid, std_pub = _sign_package(std_dest / "std.dmp", "std", STD_VERSION, tmp_path,
+		namespaces=["std.*", "lang.*", "drift.*"])
 
 	# 2. Build pathlib package against stdlib-as-package
 	lib_dir = tmp_path / "lib_src"

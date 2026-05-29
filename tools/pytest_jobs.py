@@ -6,8 +6,17 @@ Override order (highest to lowest):
      Set this to control concurrency across every test runner the just
      recipes invoke (pytest-managed suites, codegen e2e runner, package
      consumer runner, pex e2e runner). Accepts a positive integer.
-  2. Physical CPU count from /proc/cpuinfo.
-  3. `os.cpu_count() // 2` final fallback.
+  2. Protocol default: `ceil(nproc / 2)` — each test lane self-limits to
+     half the host's cores. `nproc` is the physical core count from
+     /proc/cpuinfo (logical `os.cpu_count()` as fallback).
+
+Why half, not all: lanes do not run in isolation. The cross-lane /
+cross-process budget is enforced by `flocker` (see docs/flocker.md), a
+host-local slot cap keyed per resource. With each lane at ceil(nproc/2)
+and flocker capping the shared pool, several lanes (plain / ASAN /
+valgrind) can run concurrently without their per-lane counts multiplying
+past the host's RAM. A lane that claimed all cores would oversubscribe
+the moment a second lane started.
 
 The justfile pipes this script's output into `pytest -n` for every
 parallel pytest recipe, so a single env var change here propagates to
@@ -21,6 +30,7 @@ controls them too.
 """
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -52,7 +62,7 @@ def _physical_cpu_count_linux() -> int | None:
 
 
 def recommended_workers() -> int:
-	# 1. Unified env var first.
+	# 1. Unified env var first — explicit operator override, honored as-is.
 	env_jobs = os.environ.get("DRIFT_TEST_JOBS", "").strip()
 	if env_jobs:
 		try:
@@ -61,13 +71,11 @@ def recommended_workers() -> int:
 				return n
 		except ValueError:
 			pass
-	# 2. Physical CPU count.
-	physical = _physical_cpu_count_linux()
-	if physical is not None and physical > 0:
-		return max(1, physical)
-	# 3. Final fallback.
-	logical = os.cpu_count() or 1
-	return max(1, logical // 2)
+	# 2. Protocol default: ceil(nproc / 2).  Physical core count when we can
+	#    read it, logical count otherwise.  flocker enforces the cross-lane
+	#    cap, so each lane self-limits to half the cores.
+	nproc = _physical_cpu_count_linux() or os.cpu_count() or 1
+	return max(1, math.ceil(nproc / 2))
 
 
 def main() -> int:

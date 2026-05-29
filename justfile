@@ -341,7 +341,20 @@ test-memcheck:
 		echo "error: valgrind not found in PATH" >&2
 		exit 1
 	fi
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest -xvs lang/tests/memcheck
+	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then
+		echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)" >&2
+		exit 1
+	fi
+	# Concurrency is controlled by the single DRIFT_TEST_JOBS knob
+	# (tools/pytest_jobs.py reads it; {{PYTEST_AUTO_JOBS}} is its computed
+	# value).  The fixtures are single-threaded leak programs, so parallel
+	# valgrind has no scheduling-starvation risk; peak RAM is no longer a
+	# constraint on this host.
+	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then
+		PYTHONPATH=. ./.venv/bin/python3 -m pytest -n {{PYTEST_AUTO_JOBS}} --dist=worksteal -v lang/tests/memcheck
+	else
+		PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/memcheck
+	fi
 
 # Drift deploy/build tooling tests (manifest, lockfile, build, prepare, resolver units).
 #
