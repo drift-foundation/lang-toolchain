@@ -96,7 +96,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 
 
 def _asan_active() -> bool:
@@ -412,10 +412,19 @@ import std.core.arc as arc;
 import std.concurrent as conc;
 import std.console as console;
 import lang.atomic as atomic;
+import lang.thread as thread;
 
 pub struct Sigs {
 \tpub blocker_started: conc.AtomicBool,
-\tpub blocker_stop: conc.AtomicBool
+\tpub blocker_stop: conc.AtomicBool,
+\t/* Set by the blocker iff its carrier-holding busy-spin hit the
+\t * deadline instead of observing `blocker_stop`.  A non-cooperative
+\t * spin is the only way to keep the single carrier occupied (parking
+\t * would hand it to the queued target and start it), but an UNBOUNDED
+\t * spin masks a logic regression as a teardown hang / runner timeout.
+\t * Bounded + checked → a deadline expiry is a distinct visible failure
+\t * (exit 5), never a silent false pass. */
+\tpub blocker_timed_out: conc.AtomicBool
 }
 
 fn main() nothrow -> Int {
@@ -429,22 +438,33 @@ fn main() nothrow -> Int {
 
 \tval sigs: arc.Arc<Sigs> = arc.arc(Sigs(
 \t\tblocker_started = conc.atomic_bool(false),
-\t\tblocker_stop = conc.atomic_bool(false)
+\t\tblocker_stop = conc.atomic_bool(false),
+\t\tblocker_timed_out = conc.atomic_bool(false)
 \t));
 \tval sigs_for_blocker = sigs.clone();
 
-\t/* CPU-bound blocker holds the single carrier on its fiber so
-\t * the subsequently-spawned target stays queued (un-started)
-\t * until we explicitly release the blocker. */
+\t/* CPU-bound blocker holds the single carrier on its fiber so the
+\t * subsequently-spawned target stays queued (un-started) until we
+\t * release it.  Non-cooperative busy-spin (no park/yield) so the
+\t * carrier is never handed back to run the queued target — hard-capped
+\t * by a monotonic deadline so a regression that never releases it
+\t * surfaces as a distinct `blocker_timed_out` failure (exit 5) rather
+\t * than a masked teardown hang. */
 \tval blocker_cb: core.Callback0<Int> = core.callback0(
 \t\t| | captures(move sigs_for_blocker) => {
 \t\t\tatomic.atomic_store_bool(
 \t\t\t\t&sigs_for_blocker.get().blocker_started, true, 2
 \t\t\t);
+\t\t\tval deadline = thread.now_ms() + 20000;
 \t\t\twhile !atomic.atomic_load_bool(
 \t\t\t\t&sigs_for_blocker.get().blocker_stop, 1
 \t\t\t) {
-\t\t\t\t/* spin */
+\t\t\t\tif thread.now_ms() > deadline {
+\t\t\t\t\tatomic.atomic_store_bool(
+\t\t\t\t\t\t&sigs_for_blocker.get().blocker_timed_out, true, 2
+\t\t\t\t\t);
+\t\t\t\t\tbreak;
+\t\t\t\t}
 \t\t\t}
 \t\t\treturn 0;
 \t\t}
@@ -452,11 +472,23 @@ fn main() nothrow -> Int {
 \tvar blocker = conc.spawn(move blocker_cb);
 \tconsole.eprintln("repro:blocker-spawned");
 
+\t/* Wait until the blocker's cb is on the carrier (it sets
+\t * `blocker_started` as its first act).  Poll with conc.sleep — a
+\t * real yield that relinquishes the OS thread — never a tight VT spin:
+\t * under Valgrind's serialized scheduler a tight spin here would
+\t * starve the very worker we are waiting on.  This is a condition
+\t * wait, not a fixed delay; the bounded `spins` guard only converts a
+\t * never-starts regression into a distinct exit code (10), and always
+\t * releases the blocker first so its spin cannot outlive main. */
 \tvar spins: Int = 0;
 \twhile !atomic.atomic_load_bool(&sigs.get().blocker_started, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 5));
 \t\tspins = spins + 1;
-\t\tif spins > 500 { return 10; }
+\t\tif spins > 5000 {
+\t\t\tatomic.atomic_store_bool(&sigs.get().blocker_stop, true, 2);
+\t\t\tval _j = blocker.join();
+\t\t\treturn 10;
+\t\t}
 \t}
 \tconsole.eprintln("repro:blocker-running");
 
@@ -476,13 +508,30 @@ fn main() nothrow -> Int {
 \ttarget_future.cancel();
 \tconsole.eprintln("repro:target-cancelled");
 
+\t/* Release the blocker so the carrier is freed to process the
+\t * cancelled target's cancel-drop branch. */
 \tatomic.atomic_store_bool(&sigs.get().blocker_stop, true, 2);
 \tval _ = blocker.join();
 \tconsole.eprintln("repro:blocker-joined");
 
-\t/* Give the carrier time to process the cancelled target's
-\t * cancel-drop branch and mark completed=1. */
-\tval _ = conc.sleep(conc.Duration(millis = 50));
+\tif atomic.atomic_load_bool(&sigs.get().blocker_timed_out, 1) {
+\t\tconsole.eprintln("repro:blocker-timed-out");
+\t\treturn 5;
+\t}
+
+\t/* Establish the R7 precondition by STATE, not a fixed sleep: wait
+\t * until the runtime has observed the cancelled queued target as
+\t * terminal (completed == 1).  ResultState.initialized stays false
+\t * because the callback never ran — exactly the case join_any must
+\t * not mistake for a published value.  Same condition-wait shape and
+\t * bounded guard (exit 11) as above. */
+\tvar spins2: Int = 0;
+\twhile !target_future.is_complete() {
+\t\tval _ = conc.sleep(conc.Duration(millis = 5));
+\t\tspins2 = spins2 + 1;
+\t\tif spins2 > 5000 { return 11; }
+\t}
+\tconsole.eprintln("repro:target-complete");
 
 \tvar g = conc.future_group<type String>();
 \tg.add(move target_future);
@@ -626,8 +675,8 @@ def test_r2_submit_error_drop_double_free(tmp_path: Path) -> None:
 	buffer when dropped without join()."""
 	binary = _compile(tmp_path, _SOURCE_R2)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--error-exitcode=77",
-		 "--track-origins=yes", str(binary)],
+		valgrind_cmd("--error-exitcode=77", "--track-origins=yes",
+			str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -661,9 +710,8 @@ def test_r3_completed_unjoined_drop_no_leak(tmp_path: Path) -> None:
 	destroy the unobserved owned result rather than leak it."""
 	binary = _compile(tmp_path, _SOURCE_R3)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite", "--error-exitcode=77",
-		 str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=77", str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -695,9 +743,8 @@ def test_r4_cancel_publish_join_cancelled_no_leak(tmp_path: Path) -> None:
 	`T` rather than leak it."""
 	binary = _compile(tmp_path, _SOURCE_R4)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite", "--error-exitcode=77",
-		 str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=77", str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -733,9 +780,8 @@ def test_r5_cancel_publish_join_timeout_cancelled_no_leak(tmp_path: Path) -> Non
 	rather than leak it."""
 	binary = _compile(tmp_path, _SOURCE_R5)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite", "--error-exitcode=77",
-		 str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=77", str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -772,9 +818,8 @@ def test_r6_future_group_join_any_string_double_release(tmp_path: Path) -> None:
 	Copy=retain/release contract for `String`."""
 	binary = _compile(tmp_path, _SOURCE_R6)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite", "--error-exitcode=77",
-		 str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=77", str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -830,11 +875,27 @@ def test_r7_future_group_join_any_cancelled_before_start_no_uninit_read(tmp_path
 	pickup branch drops the cb without running it), but the result
 	slot was never written.  `join_any` must detect this case via
 	`ResultState.initialized = false` and route through
-	`.join()`'s cancellation cleanup."""
+	`.join()`'s cancellation cleanup.
+
+	Scheduling note: the fixture holds the single executor carrier
+	with a non-cooperative busy-spin (the only way to keep the queued
+	target un-started — parking would hand the carrier over and start
+	it).  Under Valgrind's DEFAULT scheduler that spin can monopolise
+	the one serialized execution slot and starve `main`, so `main`
+	intermittently failed to drive the scenario within the subprocess
+	budget.  `--fair-sched=yes` forces fair round-robin scheduling so
+	`main` gets regular slices and the scenario completes in well under
+	a second.  This is a determinism fix, not a budget bump; the
+	fixture itself establishes every step by STATE (blocker-on-carrier
+	handshake, then `is_complete()` for the cancelled target) rather
+	than by fixed sleeps."""
 	binary = _compile(tmp_path, _SOURCE_R7)
+	# valgrind_cmd() supplies --fair-sched=yes by default: the blocker's
+	# non-cooperative carrier-holding spin would otherwise monopolize
+	# Valgrind's serialized scheduler and starve main (the original flake).
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--error-exitcode=77",
-		 "--track-origins=yes", str(binary)],
+		valgrind_cmd("--error-exitcode=77", "--track-origins=yes",
+			str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(30),
 	)
@@ -852,8 +913,20 @@ def test_r7_future_group_join_any_cancelled_before_start_no_uninit_read(tmp_path
 	assert "repro:blocker-running" in combined, (
 		"blocker handshake never fired — test premise broken."
 	)
+	assert "repro:blocker-timed-out" not in combined, (
+		"blocker busy-spin hit its 20s deadline before main released it "
+		"(exit 5): main was starved while holding the carrier.  Expected "
+		"--fair-sched=yes to keep main scheduled — a regression here means "
+		"the scheduling guarantee broke, not the join_any fix.\n"
+		f"{combined[-1500:]}"
+	)
 	assert "repro:target-cancelled" in combined, (
 		"target was not cancelled — test premise broken."
+	)
+	assert "repro:target-complete" in combined, (
+		"cancelled target never reached the terminal (completed) state — "
+		"the R7 precondition was not established.\n"
+		f"{combined[-1500:]}"
 	)
 	assert "repro:got-cancelled" in combined, (
 		"join_any did not return CANCELLED for the cancel-before-start "

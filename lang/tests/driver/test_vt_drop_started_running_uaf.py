@@ -65,7 +65,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 
 
 def _asan_active() -> bool:
@@ -246,8 +246,8 @@ def test_started_running_vt_drop_no_uaf_under_valgrind(tmp_path: Path) -> None:
 	independent second witness alongside the ASan lane."""
 	binary = _compile(tmp_path)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--error-exitcode=77",
-		 "--track-origins=yes", str(binary)],
+		valgrind_cmd("--error-exitcode=77", "--track-origins=yes",
+			str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(60),
 	)

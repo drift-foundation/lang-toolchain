@@ -38,7 +38,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 
 
 def _asan_active() -> bool:
@@ -186,8 +186,8 @@ def test_registered_arc_with_parked_vt_no_leak(tmp_path: Path) -> None:
 	repro the leak is the 48-byte `ArcBox<PoolInner>` itself."""
 	binary = _compile(tmp_path)
 	res = subprocess.run(
-		["valgrind", "--leak-check=full", "--show-leak-kinds=definite",
-		 "--error-exitcode=99", str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=99", str(binary)),
 		capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	# Two valgrind shapes count as "no leaks": either it skips LEAK SUMMARY

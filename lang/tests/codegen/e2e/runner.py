@@ -38,6 +38,7 @@ from lang.driftc.parser import (
 	parse_drift_workspace_to_hir,
 	stdlib_root,
 )
+from lang.codegen.llvm.test_utils import valgrind_cmd
 from lang.test_support.drift_tmp import session_root as _drift_session_root
 
 # Bootstrap DRIFT_TMP_ROOT for direct-invocation runs.  When this runner
@@ -332,9 +333,7 @@ def _run_ir_with_clang(
 			if fiber_suppressions_enabled:
 				valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 			run_timeout_s = max(timeout_s, 30) * 10
-			run_cmd = [
-				"valgrind",
-				"--tool=memcheck",
+			run_cmd = valgrind_cmd(
 				"--leak-check=full",
 				"--show-leak-kinds=definite,indirect,possible,reachable",
 				"--errors-for-leak-kinds=definite,indirect",
@@ -342,20 +341,19 @@ def _run_ir_with_clang(
 				*valgrind_suppressions,
 				f"--log-file={str(build_dir / 'valgrind-memcheck.log')}",
 				*run_cmd,
-			]
+			)
 		elif massif_enabled:
 			valgrind_suppressions = []
 			if fiber_suppressions_enabled:
 				valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 			run_timeout_s = max(timeout_s, 30) * 6
-			run_cmd = [
-				"valgrind",
-				"--tool=massif",
+			run_cmd = valgrind_cmd(
 				*valgrind_suppressions,
 				f"--massif-out-file={str(build_dir / 'valgrind-massif.out')}",
 				f"--log-file={str(build_dir / 'valgrind-massif.log')}",
 				*run_cmd,
-			]
+				tool="massif",
+			)
 		run_res = subprocess.run(
 			run_cmd,
 			input=stdin_data,

@@ -111,6 +111,7 @@ def _link_and_run(
 		build_runtime_archive,
 		runtime_archive_variant,
 	)
+	from lang.codegen.llvm.test_utils import valgrind_cmd
 
 	clang = shutil.which("clang")
 	if clang is None:
@@ -197,9 +198,7 @@ def _link_and_run(
 		if fiber_suppressions_enabled and _VALGRIND_FIBER_SUPPRESSIONS.exists():
 			valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 		run_timeout_s = max(timeout_s, 30) * 10
-		run_cmd = [
-			"valgrind",
-			"--tool=memcheck",
+		run_cmd = valgrind_cmd(
 			"--leak-check=full",
 			"--show-leak-kinds=definite,indirect,possible,reachable",
 			"--errors-for-leak-kinds=definite,indirect",
@@ -207,20 +206,19 @@ def _link_and_run(
 			*valgrind_suppressions,
 			f"--log-file={str(build_dir / 'valgrind-memcheck.log')}",
 			*run_cmd,
-		]
+		)
 	elif massif_enabled:
 		valgrind_suppressions = []
 		if fiber_suppressions_enabled and _VALGRIND_FIBER_SUPPRESSIONS.exists():
 			valgrind_suppressions = [f"--suppressions={str(_VALGRIND_FIBER_SUPPRESSIONS)}"]
 		run_timeout_s = max(timeout_s, 30) * 6
-		run_cmd = [
-			"valgrind",
-			"--tool=massif",
+		run_cmd = valgrind_cmd(
 			*valgrind_suppressions,
 			f"--massif-out-file={str(build_dir / 'valgrind-massif.out')}",
 			f"--log-file={str(build_dir / 'valgrind-massif.log')}",
 			*run_cmd,
-		]
+			tool="massif",
+		)
 	try:
 		run_res = subprocess.run(
 			run_cmd, capture_output=True, text=True, timeout=run_timeout_s,

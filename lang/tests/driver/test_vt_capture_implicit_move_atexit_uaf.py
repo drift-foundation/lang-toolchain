@@ -66,6 +66,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import valgrind_cmd
+
 
 def _env_true(name: str) -> bool:
 	return os.environ.get(name, "").lower() in ("1", "true", "yes")
@@ -178,8 +180,7 @@ def test_vt_capture_explicit_move_no_atexit_uaf(tmp_path: Path) -> None:
 			"(ASan shadow-memory interleave aborts at startup); the "
 			"normal / memcheck lanes pin this UAF via valgrind"
 		)
-	valgrind = shutil.which("valgrind")
-	if valgrind is None:
+	if shutil.which("valgrind") is None:
 		import pytest
 		pytest.skip("valgrind not installed; cannot pin atexit UAF")
 
@@ -188,9 +189,8 @@ def test_vt_capture_explicit_move_no_atexit_uaf(tmp_path: Path) -> None:
 	assert out.exists()
 
 	res = subprocess.run(
-		[valgrind, "--tool=memcheck", "--error-exitcode=97",
-		 "--leak-check=full", "--errors-for-leak-kinds=all",
-		 str(out)],
+		valgrind_cmd("--error-exitcode=97", "--leak-check=full",
+			"--errors-for-leak-kinds=all", str(out)),
 		capture_output=True, text=True, timeout=60,
 	)
 	if res.returncode == 97:

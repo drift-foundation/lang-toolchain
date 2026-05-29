@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 
 
 def _asan_active() -> bool:
@@ -294,9 +294,8 @@ def test_channel_close_race_valgrind_clean(tmp_path: Path) -> None:
 	from the closed-while-sending race."""
 	binary = _compile(tmp_path)
 	res = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite", "--error-exitcode=77",
-		 str(binary)],
+		valgrind_cmd("--leak-check=full", "--show-leak-kinds=definite",
+			"--error-exitcode=77", str(binary)),
 		capture_output=True, text=True,
 		timeout=sanitizer_timeout(120),
 	)

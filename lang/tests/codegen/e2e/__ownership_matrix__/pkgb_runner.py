@@ -286,6 +286,7 @@ def _link_and_run(ir_path: Path, case_build: Path) -> tuple[int, str]:
 	runs under valgrind memcheck with --error-exitcode=97.
 	"""
 	from lang.language_runtime import build_runtime_archive, runtime_archive_variant
+	from lang.codegen.llvm.test_utils import valgrind_cmd
 
 	clang = shutil.which("clang")
 	if clang is None:
@@ -342,11 +343,10 @@ def _link_and_run(ir_path: Path, case_build: Path) -> tuple[int, str]:
 	if asan:
 		run_env["ASAN_OPTIONS"] = "detect_leaks=0:halt_on_error=1"
 	if memcheck:
-		valgrind = shutil.which("valgrind")
-		if valgrind is None:
+		if shutil.which("valgrind") is None:
 			return 1, "valgrind not available"
-		run_cmd = [valgrind, "--tool=memcheck", "--leak-check=full",
-			"--error-exitcode=97", str(bin_path)]
+		run_cmd = valgrind_cmd("--leak-check=full",
+			"--error-exitcode=97", str(bin_path))
 		timeout = 120
 	else:
 		run_cmd = [str(bin_path)]
