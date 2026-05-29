@@ -73,7 +73,7 @@ pub fn main() nothrow -> Int {{
 \tcb.sink(log.stderr_sink());
 \tcb.min_level(log.Level::Debug());
 \tval cfg = cb.build();
-\tval logger = log.create_logger("test", cfg);
+\tval logger = log.create_logger("test", move cfg);
 
 \tval _ = logger.info("startup", {{"port": fmt.format_int(18100)}});
 \tval _ = logger.info("listening", {{"port": fmt.format_int(18100)}});
