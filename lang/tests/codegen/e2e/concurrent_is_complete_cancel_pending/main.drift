@@ -8,11 +8,18 @@ import lang.thread as thread;
 
 pub struct Sigs {
 	pub started: conc.AtomicBool,
+	/* Two-phase gate.  Worker sets `started`, then waits for `armed`
+	 * with NO deadline (main may be starved before it cancels — the
+	 * worker must keep holding the cb, not complete early, else
+	 * `is_complete()`-after-cancel sees a stale completion).  Main sets
+	 * `armed` immediately before `cancel()`; only then does the worker
+	 * arm its monotonic deadline for the short post-arm hold. */
+	pub armed: conc.AtomicBool,
 	pub release: conc.AtomicBool,
-	/* Set by the worker iff its busy-spin hit the monotonic deadline
-	 * instead of observing `release`.  Main checks it before asserting
-	 * the join outcome so a deadline expiry is a VISIBLE failure (code
-	 * 5), never a silent false pass. */
+	/* Set by the worker iff its post-arm busy-spin hit the deadline
+	 * instead of observing `release`.  Main checks it and fails with a
+	 * distinct code (5) so a deadline expiry is a VISIBLE failure,
+	 * never a silent false pass. */
 	pub timed_out: conc.AtomicBool
 }
 
@@ -24,6 +31,7 @@ pub fn main() nothrow -> Int {
 
 	val sigs: arc.Arc<Sigs> = arc.arc(Sigs(
 		started = conc.atomic_bool(false),
+		armed = conc.atomic_bool(false),
 		release = conc.atomic_bool(false),
 		timed_out = conc.atomic_bool(false)
 	));
@@ -32,22 +40,26 @@ pub fn main() nothrow -> Int {
 	val cb: core.Callback0<Int> = core.callback0(
 		| | captures(move sigs_cb) => {
 			atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
-			/* Bounded busy-spin: cancellation-insensitive (no park, no
-			 * cancellation safe point — holds the cb across cancel()), but
-			 * hard-capped by a monotonic `thread.now_ms()` deadline.  On
-			 * deadline the worker self-terminates AND records `timed_out`
-			 * so main can tell a deadline expiry apart from a real
-			 * `release`.  Without the bound, a main-side early return before
-			 * setting `release` (e.g. the `is_complete()`-after-cancel
-			 * assertion `return 1`, or the `started`-wait timeout
-			 * `return 82`) would leave this worker spinning forever, block
-			 * executor teardown at exit, and mask the real return code as a
-			 * runner timeout. */
-			val cb_deadline = thread.now_ms() + 20000;
-			while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
-				if thread.now_ms() > cb_deadline {
-					atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
-					break;
+			/* Phase 1: wait until main arms us (about to cancel) or
+			 * releases us early on a failure path.  NO deadline — main may
+			 * be starved by the suite before it cancels, and the worker
+			 * must keep holding the cb (not complete) until then, or the
+			 * `is_complete()`-after-cancel assertion sees a stale early
+			 * completion. */
+			while !atomic.atomic_load_bool(&sigs_cb.get().armed, 1) and !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+			}
+			/* Phase 2: armed — hold the cb across cancel(),
+			 * cancellation-insensitive (no park/yield) but hard-capped by a
+			 * monotonic deadline that starts NOW (not at spawn).  On expiry
+			 * record `timed_out` so main fails with a distinct code (5)
+			 * instead of a false pass / runner timeout. */
+			if atomic.atomic_load_bool(&sigs_cb.get().armed, 1) {
+				val cb_deadline = thread.now_ms() + 20000;
+				while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+					if thread.now_ms() > cb_deadline {
+						atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+						break;
+					}
 				}
 			}
 			return 42;
@@ -62,13 +74,29 @@ pub fn main() nothrow -> Int {
 			while !atomic.atomic_load_bool(&sigs.get().started, 1) {
 				val _ = conc.sleep(conc.Duration(millis = 5));
 				spins = spins + 1;
-				if spins > 200 { return 82; }
+				if spins > 200 {
+					atomic.atomic_store_bool(&sigs.get().release, true, 2);
+					var _j = vt.join();
+					return 82;
+				}
 			}
+
+			/* Arm the worker (start its deadline) immediately before the
+			 * tested cancel, so the deadline cannot expire while main is
+			 * starved BEFORE the cancel. */
+			atomic.atomic_store_bool(&sigs.get().armed, true, 2);
 
 			vt.cancel();
 
 			/* cancellation request alone is not completion */
-			if vt.is_complete() { return 1; }
+			if vt.is_complete() {
+				atomic.atomic_store_bool(&sigs.get().release, true, 2);
+				var _j = vt.join();
+				/* Distinguish a real "cancel completed it" bug (1) from a
+				 * worker-deadline expiry under suite starvation (5). */
+				if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 5; }
+				return 1;
+			}
 
 			atomic.atomic_store_bool(&sigs.get().release, true, 2);
 
@@ -79,9 +107,6 @@ pub fn main() nothrow -> Int {
 				if spins2 > 200 { return 83; }
 			}
 
-			/* The worker must have observed `release`, not hit its
-			 * deadline — a deadline expiry means we never held the cb
-			 * across cancel() as intended (false pass otherwise). */
 			if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 5; }
 
 			match vt.join() {

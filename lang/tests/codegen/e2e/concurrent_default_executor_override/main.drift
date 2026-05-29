@@ -20,14 +20,23 @@ import lang.thread as thread;
  * under load the executor saw capacity and accepted the second task
  * (intermittent exit 1).  This version blocks the worker with a
  * bounded, cancellation-insensitive busy-spin (never parks/yields),
- * gated by `started`/`release` so the second submit provably happens
- * while the worker is occupied. */
+ * gated by a two-phase `started`/`armed`/`release` handshake (with a
+ * `timed_out` deadline flag): main waits for `started`, sets `armed`
+ * immediately before submitting t2, and the worker's deadline starts
+ * only at `armed` — so the second submit provably happens while the
+ * worker is occupied, even if the suite starves main beforehand. */
 pub struct Sigs {
 	pub started: conc.AtomicBool,
+	/* Two-phase gate.  t1 sets `started`, then waits for `armed` with
+	 * NO deadline (main may be starved before it submits t2 — t1 must
+	 * keep occupying the worker until then).  Main sets `armed`
+	 * immediately before submitting t2; only then does t1 arm its
+	 * monotonic deadline for the short post-arm hold. */
+	pub armed: conc.AtomicBool,
 	pub release: conc.AtomicBool,
-	/* Set iff the occupying task's spin hit its monotonic deadline
-	 * instead of being released — surfaces as a distinct failure code
-	 * (95) rather than a silent false pass or runner timeout. */
+	/* Set iff t1's post-arm spin hit its monotonic deadline instead of
+	 * being released — surfaces as a distinct failure code (95) rather
+	 * than a silent false pass or runner timeout. */
 	pub timed_out: conc.AtomicBool
 }
 
@@ -42,6 +51,7 @@ pub fn main() nothrow -> Int {
 
 	val sigs: arc.Arc<Sigs> = arc.arc(Sigs(
 		started = conc.atomic_bool(false),
+		armed = conc.atomic_bool(false),
 		release = conc.atomic_bool(false),
 		timed_out = conc.atomic_bool(false)
 	));
@@ -52,11 +62,21 @@ pub fn main() nothrow -> Int {
 	var t1 = conc.spawn_cb(core.callback0(
 		| | captures(move sigs_cb) nothrow => {
 			atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
-			val cb_deadline = thread.now_ms() + 20000;
-			while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
-				if thread.now_ms() > cb_deadline {
-					atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
-					break;
+			/* Phase 1: occupy the worker, waiting for main to arm us
+			 * (about to submit t2) or release us early on a failure path.
+			 * NO deadline — main may be starved before it submits, and t1
+			 * must keep `running == 1` until then. */
+			while !atomic.atomic_load_bool(&sigs_cb.get().armed, 1) and !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+			}
+			/* Phase 2: armed — keep occupying the worker across the t2
+			 * submit, hard-capped by a monotonic deadline that starts NOW. */
+			if atomic.atomic_load_bool(&sigs_cb.get().armed, 1) {
+				val cb_deadline = thread.now_ms() + 20000;
+				while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+					if thread.now_ms() > cb_deadline {
+						atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+						break;
+					}
 				}
 			}
 			return 1;
@@ -75,22 +95,37 @@ pub fn main() nothrow -> Int {
 		}
 	}
 
+	/* Arm t1 (start its deadline) immediately before the tested submit. */
+	atomic.atomic_store_bool(&sigs.get().armed, true, 2);
+
 	/* Worker occupied + queue_limit == 1 → this submit saturates the
-	 * overridden default executor → ReturnBusy → Err.  Reaching the
-	 * overridden executor at all is the routing proof. */
+	 * overridden default executor → rejected.  Reaching the overridden
+	 * executor at all is the routing proof.
+	 *
+	 * A rejected `spawn_cb` records `submit_error` on the handle, so
+	 * `join_timeout` returns `Err(kind = FAILED)` IMMEDIATELY (no
+	 * blocking).  If instead t2 were ACCEPTED (the bug), it would be
+	 * queued behind the busy-spinning t1 and `join_timeout` would hit
+	 * its short deadline → `Err(kind = TIMEOUT)`.  We must NOT use a
+	 * plain `join()` here: an accepted t2 would block behind t1 until
+	 * t1's 20s deadline, blowing the runner timeout.  Distinguish the
+	 * two by error kind, not by "any Err". */
 	var t2 = conc.spawn_cb(core.callback0(| | nothrow => { return 2; }));
-	var res2 = t2.join();
-	var ok = match res2 {
-		Err(_e) => { true },
-		Ok(_v) => { false },
-		default => { false }
-	};
+	var res2 = t2.join_timeout(conc.Duration(millis = 500));
 
 	/* Release t1's spin and reap it. */
 	atomic.atomic_store_bool(&sigs.get().release, true, 2);
 	var _ = t1.join();
 
 	if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 95; }
+
+	/* Only a deferred submit failure (FAILED) means t2 was rejected as
+	 * expected.  TIMEOUT = accepted-but-blocked; Ok = accepted-and-ran. */
+	var ok = match res2 {
+		Err(e) => { e.kind == conc.CONCURRENCY_KIND_FAILED },
+		Ok(_v) => { false },
+		default => { false }
+	};
 	if ok {
 		return 0;
 	}
