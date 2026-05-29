@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from lang.codegen.llvm.test_utils import valgrind_cmd
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -61,12 +62,12 @@ def test_dv_string_owned_temp_no_leak(tmp_path: Path) -> None:
 
 	vg_log = tmp_path / "valgrind.log"
 	vg = subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite,indirect",
-		 "--errors-for-leak-kinds=definite,indirect",
-		 "--error-exitcode=97",
-		 f"--log-file={vg_log}",
-		 str(out_bin)],
+		valgrind_cmd("--leak-check=full",
+			"--show-leak-kinds=definite,indirect",
+			"--errors-for-leak-kinds=definite,indirect",
+			"--error-exitcode=97",
+			f"--log-file={vg_log}",
+			str(out_bin)),
 		capture_output=True, text=True, timeout=120,
 	)
 	vg_output = vg_log.read_text() if vg_log.exists() else ""

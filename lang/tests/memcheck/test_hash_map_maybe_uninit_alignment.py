@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from lang.codegen.llvm.test_utils import valgrind_cmd
 
 import pytest
 
@@ -191,12 +192,12 @@ def _compile_and_valgrind(tmp_path: Path, source: str, *, label: str) -> tuple[i
 
 	vg_log = tmp_path / f"valgrind_{label}.log"
 	subprocess.run(
-		["valgrind", "--tool=memcheck", "--leak-check=full",
-		 "--show-leak-kinds=definite,indirect",
-		 "--errors-for-leak-kinds=definite,indirect",
-		 "--error-exitcode=97",
-		 f"--log-file={vg_log}",
-		 str(out_bin)],
+		valgrind_cmd("--leak-check=full",
+			"--show-leak-kinds=definite,indirect",
+			"--errors-for-leak-kinds=definite,indirect",
+			"--error-exitcode=97",
+			f"--log-file={vg_log}",
+			str(out_bin)),
 		capture_output=True, text=True, timeout=180,
 	)
 	vg_output = vg_log.read_text() if vg_log.exists() else ""

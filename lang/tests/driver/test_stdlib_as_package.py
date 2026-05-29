@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -87,7 +87,7 @@ def _compile_consumer(
 def _run_valgrind(binary: Path) -> int:
 	"""Run binary under Valgrind. Asserts clean exit, returns definitely-lost bytes."""
 	vg = subprocess.run(
-		["valgrind", "--leak-check=full", "--error-exitcode=42", str(binary)],
+		valgrind_cmd("--leak-check=full", "--error-exitcode=42", str(binary)),
 		capture_output=True, text=True, timeout=30,
 	)
 	# The binary itself must exit 0.  Valgrind uses exit code 42 for

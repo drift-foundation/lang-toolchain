@@ -41,6 +41,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from lang.codegen.llvm.test_utils import valgrind_cmd
 
 import pytest
 
@@ -110,15 +111,14 @@ def test_drift_error_phase1_helpers(tmp_path: Path, runtime_archive: Path) -> No
 
 	vg_log = tmp_path / "valgrind.log"
 	vg_res = subprocess.run(
-		[
-			"valgrind",
+		valgrind_cmd(
 			"--leak-check=full",
 			"--show-leak-kinds=all",
 			"--errors-for-leak-kinds=definite,indirect",
 			"--error-exitcode=66",
 			f"--log-file={vg_log}",
 			str(out_bin),
-		],
+		),
 		capture_output=True,
 		text=True,
 		timeout=120,

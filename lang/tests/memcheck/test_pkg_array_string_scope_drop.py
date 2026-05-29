@@ -25,6 +25,7 @@ import subprocess
 import sys
 from hashlib import sha256
 from pathlib import Path
+from lang.codegen.llvm.test_utils import valgrind_cmd
 
 import pytest
 
@@ -431,7 +432,7 @@ def test_library_internal_array_scope_drop(tmp_path: Path) -> None:
 
 	# Run under Valgrind
 	vg = subprocess.run(
-		["valgrind", "--leak-check=full", "--error-exitcode=42", str(out_bin)],
+		valgrind_cmd("--leak-check=full", "--error-exitcode=42", str(out_bin)),
 		capture_output=True, text=True, timeout=30,
 	)
 	no_leaks = "no leaks are possible" in vg.stderr or "All heap blocks were freed" in vg.stderr
@@ -484,7 +485,7 @@ def test_two_layer_package_array_scope_drop(tmp_path: Path) -> None:
 	assert run.returncode == 0, f"binary returned {run.returncode}, expected 0"
 
 	vg = subprocess.run(
-		["valgrind", "--leak-check=full", "--error-exitcode=42", str(out_bin)],
+		valgrind_cmd("--leak-check=full", "--error-exitcode=42", str(out_bin)),
 		capture_output=True, text=True, timeout=30,
 	)
 	no_leaks = "no leaks are possible" in vg.stderr or "All heap blocks were freed" in vg.stderr

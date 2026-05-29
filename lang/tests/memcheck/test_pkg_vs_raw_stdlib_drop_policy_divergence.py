@@ -52,6 +52,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from lang.codegen.llvm.test_utils import valgrind_cmd
 
 import pytest
 
@@ -88,7 +89,7 @@ _LEAK_RE = re.compile(rb"definitely lost: (\d+) bytes")
 
 def _valgrind_lost_bytes(binary: Path) -> tuple[int, str]:
 	res = subprocess.run(
-		["valgrind", "--leak-check=full", "--error-exitcode=99", str(binary)],
+		valgrind_cmd("--leak-check=full", "--error-exitcode=99", str(binary)),
 		capture_output=True, timeout=120,
 	)
 	m = _LEAK_RE.search(res.stderr)
