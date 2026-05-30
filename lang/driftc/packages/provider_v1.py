@@ -26,7 +26,6 @@ an unverified dev root).
 
 from __future__ import annotations
 
-import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,10 +42,16 @@ from lang.driftc.packages.package_validate import (
 	validate_package_interfaces,
 )
 from lang.driftc.packages.trust_v1 import TrustStore
+from lang.driftc.packages.verify_harness_v1 import (
+	build_package_identity,
+	first_failure,
+	iter_trust_module_ids,
+	module_is_reserved,
+	verify_package_modules,
+)
 from lang.driftc.packages.verify_v1 import (
 	PackageIdentity,
 	VerifyResult,
-	verify_package_from_sidecars,
 )
 
 
@@ -197,22 +202,15 @@ class PackageTrustPolicy:
 # ── Verification gate ──────────────────────────────────────────────
 
 
-_RESERVED_NAMESPACE_PREFIXES = ("std.", "lang.", "drift.")
-
-
-def _module_is_reserved(module_id: str) -> bool:
-	"""Reserved namespaces verify against `core_trust_store`.
-
-	`std`, `lang`, `drift` (exact match) and any dotted child
-	(`std.io`, `lang.compiler`, `drift.rpc`) qualify.
-	"""
-	if module_id in ("std", "lang", "drift"):
-		return True
-	return any(module_id.startswith(p) for p in _RESERVED_NAMESPACE_PREFIXES)
+# The reserved-namespace predicate is owned by `verify_harness_v1`
+# (the shared harness routes reserved modules to core trust).  Kept
+# under the historical private name so the predicate's existing callers
+# don't have to change.
+_module_is_reserved = module_is_reserved
 
 
 def _trust_for_module(policy: PackageTrustPolicy, module_id: str) -> TrustStore:
-	if _module_is_reserved(module_id):
+	if module_is_reserved(module_id):
 		return policy.core_trust_store
 	return policy.trust_store
 
@@ -226,49 +224,15 @@ def _path_is_under(p: Path, root: Path) -> bool:
 
 
 def _iter_trust_module_ids(pkg: LoadedPackage) -> list[str]:
-	"""Return module ids that must satisfy trust for this package.
-
-	Excludes `*.__instantiations` and other internal suffixes that
-	aren't user-visible modules.
-	"""
-	modules = pkg.manifest.get("modules", [])
-	out: list[str] = []
-	if not isinstance(modules, list):
-		return out
-	for m in modules:
-		if isinstance(m, dict):
-			mid = m.get("module_id")
-			if isinstance(mid, str) and mid and not mid.endswith(".__instantiations"):
-				out.append(mid)
-	return out
+	"""Module ids that must satisfy trust for this package (manifest
+	enumeration shared with the deploy/CLI gates)."""
+	return iter_trust_module_ids(pkg.manifest)
 
 
 def _package_identity(pkg: LoadedPackage, decompressed_bytes: bytes) -> PackageIdentity:
-	"""Build PackageIdentity from manifest stamps + computed artifact sha.
-
-	G1: SCI is read from the manifest (NEVER recomputed from binary
-	bytes in normal mode -- there is no source available here).
-	"""
-	pkg_id = pkg.manifest.get("package_id")
-	pkg_ver = pkg.manifest.get("package_version")
-	sci = pkg.manifest.get("source_content_id")
-	if not isinstance(pkg_id, str) or not pkg_id:
-		raise ValueError("package manifest missing package_id")
-	if not isinstance(pkg_ver, str) or not pkg_ver:
-		raise ValueError("package manifest missing package_version")
-	if not isinstance(sci, str) or not sci.startswith("sha256:"):
-		raise ValueError(
-			f"package manifest missing source_content_id stamp for "
-			f"{pkg_id!r}@{pkg_ver!r}; v1 packages MUST carry the SCI in "
-			f"the manifest so the verifier can compare stamps (G1)"
-		)
-	artifact_sha = "sha256:" + hashlib.sha256(decompressed_bytes).hexdigest()
-	return PackageIdentity(
-		package_id=pkg_id,
-		version=pkg_ver,
-		source_content_id=sci,
-		artifact_sha256=artifact_sha,
-	)
+	"""Build PackageIdentity from manifest stamps + computed artifact sha
+	(shared builder; G1: SCI read from the manifest, never recomputed)."""
+	return build_package_identity(pkg.manifest, decompressed_bytes)
 
 
 def load_package_v1_with_policy(
@@ -375,24 +339,24 @@ def load_package_v1_with_policy(
 			f"without at least one module to bind trust to"
 		)
 
-	for module_id in module_ids:
-		trust = _trust_for_module(policy, module_id)
-		result = verify_package_from_sidecars(
-			sidecar_dir=sidecar_dir,
-			package_identity=identity,
-			module_id=module_id,
-			trust=trust,
-			resolved_closure=closure,
-			require_certifier=policy.require_certifier,
-			require_cert_suite=policy.require_cert_suite,
-			self_verify=policy.self_verify,
+	results = verify_package_modules(
+		sidecar_dir=sidecar_dir,
+		identity=identity,
+		module_ids=module_ids,
+		trust_store=policy.trust_store,
+		core_trust_store=policy.core_trust_store,
+		resolved_closure=closure,
+		require_certifier=policy.require_certifier,
+		require_cert_suite=policy.require_cert_suite,
+		self_verify=policy.self_verify,
+	)
+	failed = first_failure(results)
+	if failed is not None:
+		raise ValueError(
+			f"package {identity.package_id!r}@{identity.version!r} "
+			f"failed v1 trust verification for module {failed.module_id!r}: "
+			f"{failed.result.reason}"
 		)
-		if not result.ok:
-			raise ValueError(
-				f"package {identity.package_id!r}@{identity.version!r} "
-				f"failed v1 trust verification for module {module_id!r}: "
-				f"{result.reason}"
-			)
 
 	validate_package_interfaces(pkg)
 	return pkg

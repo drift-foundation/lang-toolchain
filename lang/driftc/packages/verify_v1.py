@@ -98,6 +98,15 @@ class VerifyResult:
 	set iff a cert claim was accepted.  Useful for diagnostics
 	and for logging which exact trust paths were used.
 
+	`accepted_cert_claim` is the EXACT cert claim the verifier
+	accepted on the certifier-shortcut path (None on self-verify or
+	rejection).  Callers that need to act on the accepted claim — e.g.
+	binding a provenance bundle to its signed `body.evidence_sha256`,
+	or surfacing the dev/no-evidence sentinel — MUST read it from here
+	rather than re-locating a claim by signer kid: a kid may sign more
+	than one cert claim in the sidecar dir, and only the verifier knows
+	which one actually passed every gate.
+
 	The mode string MUST be present in the diagnostic so callers
 	(and audit logs) cannot misread a stamped-SCI comparison as
 	an independent source-identity proof.  See G1.
@@ -107,6 +116,7 @@ class VerifyResult:
 	author_kid: Optional[str]
 	certifier_kid: Optional[str]
 	reason: str   # empty on ok
+	accepted_cert_claim: Optional[CertClaim] = None
 
 
 # ── Sidecar discovery ──────────────────────────────────────────────
@@ -388,6 +398,7 @@ def compose_verify(
 				author_kid=author_kid,
 				certifier_kid=cert_result.accepted_kid,
 				reason="",
+				accepted_cert_claim=cc,
 			)
 		# Tag the failure with which certifier was being tried for
 		# clearer diagnostics when multiple cert claims exist.

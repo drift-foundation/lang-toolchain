@@ -182,6 +182,13 @@ def test_drift_layer_does_not_import_driftc_internals() -> None:
 		# crossing the author/deploy boundary.  See
 		# `test_author_key_boundary.py` for the symmetric guard.
 		"lang.driftc.packages.manifest",
+		# Deployed-package verification facade for `drift trust
+		# verify-package`.  A single, stable surface that wraps the v1
+		# composition verifier so the CLI verifies a published artifact
+		# WITHOUT reaching into the verifier engine / trust loader /
+		# container reader directly.  The operator-facing analog of
+		# `provider_v1`'s consumer-side use of the same engine.
+		"lang.driftc.packages.verify_deployed_v1",
 	})
 	violations: list[ImportRef] = []
 	for py_path in _collect_py_files(Path("lang/drift")):

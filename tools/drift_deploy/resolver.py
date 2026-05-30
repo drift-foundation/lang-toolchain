@@ -395,10 +395,11 @@ def build_package_index(
 		)
 	_load_verifier = None  # deferred import; only wired if trust_store provided
 	if trust_store is not None:
-		import hashlib as _hl
-		from lang.driftc.packages.verify_v1 import (
-			PackageIdentity as _PackageIdentity,
-			verify_package_from_sidecars as _verify_v1,
+		from lang.driftc.packages.verify_harness_v1 import (
+			build_package_identity as _build_identity,
+			first_failure as _first_failure,
+			iter_trust_module_ids as _iter_module_ids,
+			verify_package_modules as _verify_modules,
 		)
 		# Callers that pass only a merged store can use it for both
 		# roles -- the v1 verifier reads role-tagged trust per
@@ -414,12 +415,16 @@ def build_package_index(
 			"""Return None on success, an error message on failure.
 
 			This is the INDEX-TIME shallow gate, not full consumer
-			verification.  It runs `verify_package_from_sidecars`
-			with `resolved_closure=[]`, which means the cert claim's
-			dep_graph cover check passes vacuously: index time has
-			no view of the consumer's resolved closure (the index is
-			being built before the resolver picks deps), so the only
-			things checked here are:
+			verification.  It runs the SHARED verification harness
+			(`verify_harness_v1`) with `resolved_closure=[]`, the same
+			engine + trust routing the consumer load gate and the
+			`drift trust verify-package` CLI use, so the index-time
+			gate cannot drift from how packages are actually trusted.
+			With `resolved_closure=[]` the cert claim's dep_graph cover
+			check passes vacuously: index time has no view of the
+			consumer's resolved closure (the index is being built
+			before the resolver picks deps), so the only things checked
+			here are:
 
 			  - sidecars (`<pkg>.author-claim`,
 			    `<pkg>.cert-claim.<kid>.json`) exist next to `path`
@@ -442,46 +447,21 @@ def build_package_index(
 				pkg_bytes = decompress_zdmp(path.read_bytes())
 			else:
 				pkg_bytes = path.read_bytes()
-			pkg_id = manifest.get("package_id")
-			pkg_ver = manifest.get("package_version")
-			sci = manifest.get("source_content_id")
-			if not isinstance(pkg_id, str) or not isinstance(pkg_ver, str):
-				return "manifest missing package_id/package_version"
-			if not isinstance(sci, str) or not sci.startswith("sha256:"):
-				return (
-					f"package {pkg_id}@{pkg_ver}: manifest missing "
-					f"source_content_id stamp (v1 requires SCI on every "
-					f"published package)"
-				)
-			identity = _PackageIdentity(
-				package_id=pkg_id,
-				version=pkg_ver,
-				source_content_id=sci,
-				artifact_sha256="sha256:" + _hl.sha256(pkg_bytes).hexdigest(),
+			try:
+				identity = _build_identity(manifest, pkg_bytes)
+			except ValueError as err:
+				return str(err)
+			results = _verify_modules(
+				sidecar_dir=path.parent,
+				identity=identity,
+				module_ids=_iter_module_ids(manifest),
+				trust_store=trust_store,
+				core_trust_store=core_trust_store,
+				resolved_closure=[],
 			)
-			sidecar_dir = path.parent
-			modules = manifest.get("modules", [])
-			module_ids: list[str] = []
-			if isinstance(modules, list):
-				for m in modules:
-					if isinstance(m, dict):
-						mid = m.get("module_id")
-						if isinstance(mid, str) and mid and not mid.endswith(".__instantiations"):
-							module_ids.append(mid)
-			for module_id in module_ids:
-				_reserved = module_id in ("std", "lang", "drift") or any(
-					module_id.startswith(p) for p in ("std.", "lang.", "drift.")
-				)
-				_trust = core_trust_store if _reserved else trust_store
-				res = _verify_v1(
-					sidecar_dir=sidecar_dir,
-					package_identity=identity,
-					module_id=module_id,
-					trust=_trust,
-					resolved_closure=[],
-				)
-				if not res.ok:
-					return f"module {module_id!r}: {res.reason}"
+			failed = _first_failure(results)
+			if failed is not None:
+				return f"module {failed.module_id!r}: {failed.result.reason}"
 			return None
 	# `PackageMetadataError` is the loader's distinguished signal for
 	# "container loaded fine, but the metadata violates the v3
