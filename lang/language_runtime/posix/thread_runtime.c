@@ -38,8 +38,10 @@
 #endif
 
 #include "string_runtime.h"
+#include "posix/liveness_runtime.h"
 #ifdef __linux__
 #include "posix/drift_context.h"
+#include <sys/syscall.h>
 #endif
 
 /* When running under Valgrind, fall back to glibc swapcontext/makecontext.
@@ -115,6 +117,14 @@ typedef struct DriftVt {
 	int64_t io_bytes_since_yield;   /* ET fairness: cumulative successful IO since last yield */
 	uint64_t join_waiter;           /* VT handle to unpark on completion, or 0 */
 	uint64_t vtid;                  /* Process-unique VT id, assigned at spawn (1-based). 0 = not on a VT. */
+	/* Liveness interrogator bookkeeping (Slice 1).  All best-effort, read
+	 * lock-free by the liveness thread; correctness of the program does not
+	 * depend on them. */
+	atomic_int wait_kind;               /* enum DriftWaitKind; refines DRIFT_VT_PARKED */
+	atomic_uint_fast64_t wait_id;       /* opaque wait-object id (joined vtid / condvar / channel) */
+	atomic_int_fast64_t state_since_ms; /* monotonic ms at last RUNNING/PARKED transition */
+	atomic_uint_fast64_t carrier_tid;   /* OS tid currently running this VT, 0 if none */
+	atomic_uint_fast64_t last_progress; /* progress counter snapshot at last resume */
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -347,6 +357,39 @@ static atomic_int drift_signal_delivered_signo = 0;
  * for "not running on a VT". */
 static atomic_uint_fast64_t drift_vtid_counter = 1;
 
+/* Liveness interrogator counters (Slice 1).  drift_progress_counter is bumped
+ * on every observable scheduler advance (VT resume, VT completion); sampling
+ * it twice tells an operator whether the runtime is making progress at all.
+ * drift_completed_counter is the process-wide finished-VT total. */
+static atomic_uint_fast64_t drift_progress_counter = 0;
+static atomic_uint_fast64_t drift_completed_counter = 0;
+
+/* Relaxed accessors for best-effort liveness bookkeeping. These fields and
+ * counters carry no synchronization meaning — the liveness reader tolerates a
+ * slightly-stale heartbeat — so they use memory_order_relaxed to keep the
+ * seq_cst default off the scheduler hot path (drift_vt_tls_set / park). */
+static inline void lv_set_i(atomic_int *p, int v) { atomic_store_explicit(p, v, memory_order_relaxed); }
+static inline void lv_set_u(atomic_uint_fast64_t *p, uint64_t v) { atomic_store_explicit(p, v, memory_order_relaxed); }
+static inline void lv_set_t(atomic_int_fast64_t *p, int64_t v) { atomic_store_explicit(p, v, memory_order_relaxed); }
+static inline uint64_t lv_bump(atomic_uint_fast64_t *p) { return atomic_fetch_add_explicit(p, 1, memory_order_relaxed) + 1; }
+static inline int lv_get_i(atomic_int *p) { return atomic_load_explicit(p, memory_order_relaxed); }
+static inline uint64_t lv_get_u(atomic_uint_fast64_t *p) { return atomic_load_explicit(p, memory_order_relaxed); }
+static inline int64_t lv_get_t(atomic_int_fast64_t *p) { return atomic_load_explicit(p, memory_order_relaxed); }
+
+/* Per-thread cached kernel TID.  gettid() is a bare syscall on glibc, so cache
+ * it to keep the context-switch hot path cheap. */
+#ifdef __linux__
+static __thread uint64_t drift_cached_tid = 0;
+static uint64_t drift_self_tid(void) {
+	if (drift_cached_tid == 0) {
+		drift_cached_tid = (uint64_t)syscall(SYS_gettid);
+	}
+	return drift_cached_tid;
+}
+#else
+static uint64_t drift_self_tid(void) { return 0; }
+#endif
+
 static void drift_reactor_forget_vt(DriftVt *vt) {
 #ifdef __linux__
 	Reactor *r = (Reactor *)atomic_load(&drift_default_reactor);
@@ -501,12 +544,39 @@ static int64_t drift_now_ms(void) {
 	return (int64_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
 }
 
+/* Transition a VT to READY, re-stamping liveness state_since_ms so the dump
+ * reports a fresh ready-queue age (not the stale age of its prior PARKED/
+ * RUNNING state).  Keeps the diagnostic for "ready queue stuck / scheduler not
+ * draining" honest.  `state` stays seq_cst (it has scheduler-visible meaning);
+ * the timestamp is relaxed best-effort. */
+static inline void drift_vt_set_ready(DriftVt *vt) {
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
+	atomic_store(&vt->state, DRIFT_VT_READY);
+}
+
 static void drift_vt_tls_init_once(void) {
 	pthread_key_create(&drift_vt_tls_key, NULL);
 }
 
 static void drift_vt_tls_set(DriftVt *vt) {
 	pthread_once(&drift_vt_tls_once, drift_vt_tls_init_once);
+	/* Liveness bookkeeping: this is the single chokepoint every VT
+	 * resume/suspend passes through, so attribute the carrier here.
+	 * Non-NULL => the calling carrier is about to run `vt`; NULL => the
+	 * carrier just suspended whatever VT it was running. */
+	if (vt) {
+		uint64_t prog = lv_bump(&drift_progress_counter);
+		lv_set_u(&vt->carrier_tid, drift_self_tid());
+		lv_set_u(&vt->last_progress, prog);
+		lv_set_t(&vt->state_since_ms, drift_now_ms());
+		lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+		lv_set_u(&vt->wait_id, 0);
+	} else {
+		DriftVt *cur = (DriftVt *)pthread_getspecific(drift_vt_tls_key);
+		if (cur) {
+			lv_set_u(&cur->carrier_tid, 0);
+		}
+	}
 	pthread_setspecific(drift_vt_tls_key, vt);
 }
 
@@ -530,6 +600,9 @@ static void drift_worker_vt_finish(DriftVt *vt) {
 	}
 	pthread_mutex_lock(&vt->mu);
 	atomic_store(&vt->completed, 1);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
+	lv_bump(&drift_completed_counter);
+	lv_bump(&drift_progress_counter);
 	int dropped_after_finish = atomic_load(&vt->dropped);
 	vt->park_token++;
 	uint64_t waiter = vt->join_waiter;
@@ -722,7 +795,7 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 								atomic_store(&wv->state, DRIFT_VT_RUNNING);
 								direct_vt = wv;
 							} else if (wv != direct_vt) {
-								atomic_store(&wv->state, DRIFT_VT_READY);
+								drift_vt_set_ready(wv);
 								enqueue_vt = wv;
 							}
 						}
@@ -1167,7 +1240,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 							tc = tn;
 						}
 						if (atomic_load(&rv->state) == DRIFT_VT_PARKED) {
-							atomic_store(&rv->state, DRIFT_VT_READY);
+							drift_vt_set_ready(rv);
 							read_io_vt = rv;
 						}
 					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
@@ -1189,7 +1262,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 							tc = tn;
 						}
 						if (atomic_load(&wv->state) == DRIFT_VT_PARKED) {
-							atomic_store(&wv->state, DRIFT_VT_READY);
+							drift_vt_set_ready(wv);
 							write_io_vt = wv;
 						}
 					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
@@ -1643,6 +1716,11 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->io_bytes_since_yield = 0;
 	vt->join_waiter = 0;
 	vt->vtid = atomic_fetch_add(&drift_vtid_counter, 1);
+	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+	lv_set_u(&vt->wait_id, 0);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
+	lv_set_u(&vt->carrier_tid, 0);
+	lv_set_u(&vt->last_progress, 0);
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -1677,6 +1755,9 @@ void drift_thread_join(uint64_t vt) {
 			h->join_waiter = (uint64_t)caller;
 			pthread_mutex_unlock(&h->mu);
 
+			/* Liveness: label this park as a join on the target's id. */
+			lv_set_i(&caller->wait_kind, DRIFT_WAIT_JOIN);
+			lv_set_u(&caller->wait_id, h->vtid);
 			drift_thread_park(0);  /* context-swap to scheduler */
 
 			if (atomic_load(&h->completed)) {
@@ -1818,11 +1899,37 @@ uint64_t drift_thread_vtid(void) {
 	return 0;
 }
 
-/* Return the POSIX pthread handle as an integer.
- * This is pthread_self() cast to int64_t — it identifies the carrier
- * thread by its pthread handle, NOT the kernel TID (gettid()). */
-int64_t drift_thread_ptid(void) {
-	return (int64_t)(uintptr_t)pthread_self();
+/* Return the OS kernel thread id (gettid()) of the calling carrier thread —
+ * the same value liveness reports as carrier_tid, and the id that
+ * top/ps/proc/perf/strace use.  This is what std.log emits as `tid`. */
+int64_t drift_thread_tid(void) {
+	return (int64_t)drift_self_tid();
+}
+
+/* Liveness annotation hook, called by stdlib sync primitives immediately
+ * before they park the current VT (condvar, channel, sleep).  Records the
+ * wait kind + an opaque wait-object id so the liveness dump can report what a
+ * parked VT is waiting on.  No-op off a VT.  Cleared automatically on resume
+ * (drift_vt_tls_set / non-VT wake path).  Additive runtime/stdlib ABI symbol. */
+void drift_thread_set_wait(uint64_t kind, uint64_t id) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) {
+		return;
+	}
+	lv_set_i(&vt->wait_kind, (int)kind);
+	lv_set_u(&vt->wait_id, id);
+}
+
+/* Clear best-effort wait metadata and re-stamp running-since.  Call on every
+ * resume / fast-return / early-return path that leaves a VT RUNNING without
+ * going through drift_vt_tls_set (park_token fast paths, cancelled returns,
+ * invalid-deadline returns).  Without this, wait_kind/wait_id can stay JOIN /
+ * TIMER / CONDVAR while the VT is actually running, so the liveness dump would
+ * misreport what a running VT is waiting on. */
+static inline void drift_vt_resume_clear(DriftVt *vt) {
+	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+	lv_set_u(&vt->wait_id, 0);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
 }
 
 void drift_thread_park(uint64_t reason) {
@@ -1833,18 +1940,22 @@ void drift_thread_park(uint64_t reason) {
 		return;
 	}
 	if (atomic_load(&vt->cancelled)) {
+		drift_vt_resume_clear(vt);
 		return;
 	}
 #ifdef __linux__
 	if (drift_sched_ctx) {
 		if (vt->park_token > 0) {
 			vt->park_token--;
+			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
+		lv_set_t(&vt->state_since_ms, drift_now_ms());
 		atomic_store(&vt->state, DRIFT_VT_PARKED);
 		if (vt->park_token > 0) {
 			vt->park_token--;
+			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
@@ -1858,6 +1969,7 @@ void drift_thread_park(uint64_t reason) {
 	}
 #endif
 	pthread_mutex_lock(&vt->mu);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_PARKED);
 	while (vt->park_token == 0 && !atomic_load(&vt->cancelled)) {
 		pthread_cond_wait(&vt->cv, &vt->mu);
@@ -1866,6 +1978,9 @@ void drift_thread_park(uint64_t reason) {
 		vt->park_token--;
 	}
 	vt->io_bytes_since_yield = 0;
+	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+	lv_set_u(&vt->wait_id, 0);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	pthread_mutex_unlock(&vt->mu);
 }
@@ -1885,7 +2000,7 @@ void drift_thread_yield(void) {
 			drift_exec_enqueue(vt->exec, vt);
 			pthread_mutex_unlock(&vt->exec->mu);
 		}
-		atomic_store(&vt->state, DRIFT_VT_READY);
+		drift_vt_set_ready(vt);
 		if (drift_valgrind_mode)
 			swapcontext(&vt->ctx_uc, drift_sched_ctx_uc);
 		else
@@ -1901,6 +2016,9 @@ void drift_thread_yield(void) {
 void drift_thread_park_until(int64_t deadline_ms) {
 	DriftVt *vt = drift_vt_tls_get();
 	if (deadline_ms <= 0) {
+		/* Invalid/elapsed deadline: caller already tagged the wait (e.g.
+		 * TIMER/CONDVAR) — clear it so a running VT isn't shown as waiting. */
+		if (vt) drift_vt_resume_clear(vt);
 		return;
 	}
 	if (!vt) {
@@ -1911,19 +2029,23 @@ void drift_thread_park_until(int64_t deadline_ms) {
 		return;
 	}
 	if (atomic_load(&vt->cancelled)) {
+		drift_vt_resume_clear(vt);
 		return;
 	}
 #ifdef __linux__
 	if (drift_sched_ctx) {
 		if (vt->park_token > 0) {
 			vt->park_token--;
+			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
+		lv_set_t(&vt->state_since_ms, drift_now_ms());
 		atomic_store(&vt->state, DRIFT_VT_PARKED);
 		drift_reactor_register_timer((uint64_t)deadline_ms, (uint64_t)vt);
 		if (vt->park_token > 0) {
 			vt->park_token--;
+			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
@@ -1949,6 +2071,7 @@ void drift_thread_park_until(int64_t deadline_ms) {
 		ts.tv_nsec -= 1000000000L;
 	}
 	pthread_mutex_lock(&vt->mu);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_PARKED);
 	while (vt->park_token == 0 && !atomic_load(&vt->cancelled)) {
 		int rc = pthread_cond_timedwait(&vt->cv, &vt->mu, &ts);
@@ -1960,6 +2083,9 @@ void drift_thread_park_until(int64_t deadline_ms) {
 		vt->park_token--;
 	}
 	vt->io_bytes_since_yield = 0;
+	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+	lv_set_u(&vt->wait_id, 0);
+	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_RUNNING);
 	pthread_mutex_unlock(&vt->mu);
 }
@@ -1973,7 +2099,7 @@ void drift_thread_unpark(uint64_t vt) {
 		return;
 	}
 	if (atomic_load(&h->state) == DRIFT_VT_PARKED && h->exec) {
-		atomic_store(&h->state, DRIFT_VT_READY);
+		drift_vt_set_ready(h);
 		pthread_mutex_lock(&h->exec->mu);
 		drift_exec_enqueue(h->exec, h);
 		pthread_mutex_unlock(&h->exec->mu);
@@ -1982,7 +2108,7 @@ void drift_thread_unpark(uint64_t vt) {
 		if (r) drift_reactor_wake(r);
 		return;
 	}
-	atomic_store(&h->state, DRIFT_VT_READY);
+	drift_vt_set_ready(h);
 	pthread_mutex_lock(&h->mu);
 	h->park_token++;
 	pthread_cond_signal(&h->cv);
@@ -2031,7 +2157,7 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 	if (atomic_load(&h->cancelled)) {
 		return 0;
 	}
-	atomic_store(&h->state, DRIFT_VT_READY);
+	drift_vt_set_ready(h);
 	pthread_mutex_lock(&ex->mu);
 	if (ex->queue_limit > 0) {
 		int running = atomic_load(&ex->running);
@@ -2192,6 +2318,163 @@ int64_t drift_signal_await(void) {
 #endif
 }
 
+/* ---- Liveness interrogator collection (Slice 1) ----------------------- *
+ * Implemented here because it reads the VT/exec/reactor structs and their
+ * mutexes, all private to this translation unit.  Formatting (text/JSON) and
+ * the dedicated signal thread live in liveness_runtime.c. */
+
+static atomic_int_fast64_t drift_runtime_start_ms = 0;
+
+void drift_liveness_set_start_ms(int64_t start_ms) {
+	atomic_store(&drift_runtime_start_ms, start_ms);
+}
+
+/* Bounded trylock: retry briefly so a momentary lock holder doesn't force a
+ * degraded section, but a wedged holder never blocks the dump.  Returns 0 with
+ * the lock held, or -1 after giving up (~100ms). */
+static int drift_liveness_trylock(pthread_mutex_t *mu) {
+	for (int i = 0; i < 500; i++) {
+		if (pthread_mutex_trylock(mu) == 0) {
+			return 0;
+		}
+		struct timespec ts;
+		ts.tv_sec = 0;
+		ts.tv_nsec = 200000L;  /* 200us */
+		nanosleep(&ts, NULL);
+	}
+	return -1;
+}
+
+void drift_liveness_collect(DriftLivenessSnapshot *out, int reason) {
+	memset(out, 0, sizeof(*out));
+	out->reason = reason;
+	out->pid = (int)getpid();
+	int64_t now = drift_now_ms();
+	out->now_ms = now;
+	int64_t start = atomic_load(&drift_runtime_start_ms);
+	out->uptime_ms = (start > 0 && now >= start) ? (now - start) : 0;
+	out->progress_counter = lv_get_u(&drift_progress_counter);
+	out->exec_completed = lv_get_u(&drift_completed_counter);
+	out->reactor_next_deadline_ms = -1;
+
+	/* Phase 1: reactor — copy timer/watch -> VT mappings into temp arrays so
+	 * we can resolve per-VT wait targets without holding the reactor lock
+	 * across the VT walk (different lock, avoids ordering hazards). */
+	struct { uint64_t vt; int64_t deadline; } timers[DRIFT_LIVENESS_MAX_TIMERS];
+	int n_timers = 0;
+	struct { uint64_t vt; int fd; uint32_t events; } watches[DRIFT_LIVENESS_MAX_WATCHES];
+	int n_watches = 0;
+#ifdef __linux__
+	Reactor *r = drift_default_reactor_ptr;
+	if (r) {
+		out->reactor_present = 1;
+		if (drift_liveness_trylock(&r->mu) == 0) {
+			int64_t next = -1;
+			for (ReactorTimer *t = r->timers; t; t = t->next) {
+				out->reactor_timers++;
+				if (next < 0 || t->deadline_ms < next) {
+					next = t->deadline_ms;
+				}
+				if (n_timers < DRIFT_LIVENESS_MAX_TIMERS) {
+					timers[n_timers].vt = t->vt;
+					timers[n_timers].deadline = t->deadline_ms;
+					n_timers++;
+				}
+			}
+			out->reactor_next_deadline_ms = next;
+			for (ReactorWatch *w = r->watches; w; w = w->next) {
+				if (w->read_vt || w->write_vt) {
+					out->reactor_fd_waiters++;
+				}
+				if (w->read_vt && n_watches < DRIFT_LIVENESS_MAX_WATCHES) {
+					watches[n_watches].vt = w->read_vt;
+					watches[n_watches].fd = w->fd;
+					watches[n_watches].events = w->events;
+					n_watches++;
+				}
+				if (w->write_vt && n_watches < DRIFT_LIVENESS_MAX_WATCHES) {
+					watches[n_watches].vt = w->write_vt;
+					watches[n_watches].fd = w->fd;
+					watches[n_watches].events = w->events;
+					n_watches++;
+				}
+			}
+			pthread_mutex_unlock(&r->mu);
+		} else {
+			out->degraded_reactor = 1;
+		}
+	}
+#endif
+
+	/* Phase 2: executor (default = first registry entry).  exec fields read
+	 * lock-free while holding the registry lock (which pins `ex` against
+	 * concurrent removal/free); racy ints are acceptable for a snapshot. */
+	if (drift_liveness_trylock(&drift_exec_registry_mu) == 0) {
+		DriftExec *ex = drift_exec_registry_head;
+		if (ex) {
+			out->exec_present = 1;
+			out->exec_workers = ex->threads_count;
+			out->exec_running = atomic_load(&ex->running);
+			out->exec_ready_queue_len = ex->queue_len;
+			out->exec_shutting_down = ex->shutting_down;
+		}
+		pthread_mutex_unlock(&drift_exec_registry_mu);
+	} else {
+		out->degraded_exec_registry = 1;
+	}
+
+	/* Phase 3: VT registry walk. */
+	if (drift_liveness_trylock(&drift_vt_registry_mu) == 0) {
+		for (DriftVt *vt = drift_vt_registry_head; vt; vt = vt->reg_next) {
+			if (out->vt_count >= DRIFT_LIVENESS_MAX_VTS) {
+				out->vt_truncated = 1;
+				break;
+			}
+			DriftVtSnapshot *s = &out->vts[out->vt_count++];
+			s->vtid = vt->vtid;
+			s->state = atomic_load(&vt->state);
+			s->wait_kind = lv_get_i(&vt->wait_kind);
+			s->wait_id = lv_get_u(&vt->wait_id);
+			s->state_since_ms = lv_get_t(&vt->state_since_ms);
+			s->carrier_tid = lv_get_u(&vt->carrier_tid);
+			s->last_progress = lv_get_u(&vt->last_progress);
+			s->timer_deadline_ms = -1;
+			s->io_fd = -1;
+			s->io_events = 0;
+			switch (s->state) {
+				case DRIFT_VT_RUNNING:   out->tally_running++; break;
+				case DRIFT_VT_READY:     out->tally_ready++; break;
+				case DRIFT_VT_PARKED:    out->tally_parked++; break;
+				case DRIFT_VT_FINISHED:  out->tally_finished++; break;
+				case DRIFT_VT_CANCELLED: out->tally_cancelled++; break;
+				default: break;
+			}
+			if (s->wait_kind >= 0 && s->wait_kind < 6) {
+				out->tally_wait[s->wait_kind]++;
+			}
+			if (s->wait_kind == DRIFT_WAIT_TIMER) {
+				for (int i = 0; i < n_timers; i++) {
+					if (timers[i].vt == (uint64_t)vt) {
+						s->timer_deadline_ms = timers[i].deadline;
+						break;
+					}
+				}
+			} else if (s->wait_kind == DRIFT_WAIT_IO) {
+				s->io_fd = (int)s->wait_id;
+				for (int i = 0; i < n_watches; i++) {
+					if (watches[i].vt == (uint64_t)vt) {
+						s->io_events = watches[i].events;
+						break;
+					}
+				}
+			}
+		}
+		pthread_mutex_unlock(&drift_vt_registry_mu);
+	} else {
+		out->degraded_vt_registry = 1;
+	}
+}
+
 int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	/* Ignore SIGPIPE globally.  Socket/TLS write failures on closed peers
 	 * must return EPIPE through normal error handling, not terminate the
@@ -2201,7 +2484,14 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 
 	/* Block SIGINT/SIGTERM in the main thread.  All subsequently created
 	 * threads (executor workers, reactor, blocking pool) inherit this mask.
-	 * signalfd becomes the sole consumer of these signals. */
+	 * signalfd becomes the sole consumer of these signals.
+	 *
+	 * SIGUSR2 is also blocked here, BEFORE any carrier/reactor/app thread is
+	 * created, so no thread ever carries the default SIGUSR2 disposition
+	 * (which would terminate the process).  The dedicated liveness thread is
+	 * the sole consumer of SIGUSR2 via sigwait.  Ordering is a correctness
+	 * requirement: the block must precede executor/reactor startup. */
+	drift_liveness_set_start_ms(drift_now_ms());
 #ifdef __linux__
 	{
 		sigset_t mask;
@@ -2210,7 +2500,16 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 		sigaddset(&mask, SIGTERM);
 		sigprocmask(SIG_BLOCK, &mask, NULL);
 		drift_signal_fd = signalfd(-1, &mask, SFD_NONBLOCK);
+
+		sigset_t usr2;
+		sigemptyset(&usr2);
+		sigaddset(&usr2, SIGUSR2);
+		sigprocmask(SIG_BLOCK, &usr2, NULL);
 	}
+	/* Start the liveness interrogator thread.  If it cannot start it leaves
+	 * SIGUSR2 blocked (never re-armed to default-terminate) and warns once;
+	 * the feature is simply unavailable.  See drift_liveness_thread_start. */
+	drift_liveness_thread_start();
 #endif
 
 	drift_root_vt_fn = user_main;
@@ -2330,6 +2629,10 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) {
 			return;
 		}
+		/* Liveness: label the imminent park (by stdlib _block_on_io) as an
+		 * IO wait on this fd.  Cleared on resume. */
+		lv_set_i(&h->wait_kind, DRIFT_WAIT_IO);
+		lv_set_u(&h->wait_id, fd);
 	}
 	if (!r) {
 		return;
@@ -2448,7 +2751,7 @@ int64_t drift_reactor_io_charge(int64_t fd, int64_t direction, int64_t bytes) {
 	/* Re-enqueue self and yield to scheduler. */
 	DriftExec *exec = vt->exec;
 	if (!exec || !drift_sched_ctx) return 0;
-	atomic_store(&vt->state, DRIFT_VT_READY);
+	drift_vt_set_ready(vt);
 	pthread_mutex_lock(&exec->mu);
 	drift_exec_enqueue(exec, vt);
 	pthread_mutex_unlock(&exec->mu);

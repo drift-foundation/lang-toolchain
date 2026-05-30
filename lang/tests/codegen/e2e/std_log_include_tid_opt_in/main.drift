@@ -1,5 +1,5 @@
-// Pins the `LoggerConfigBuilder.include_ptid(true)` opt-in path.
-// Default JsonIso8601 omits `ptid` because under VT scheduling the
+// Pins the `LoggerConfigBuilder.include_tid(true)` opt-in path.
+// Default JsonIso8601 omits `tid` because under VT scheduling the
 // OS thread is shared across many virtual threads and is not
 // meaningful at app granularity (see `std_log_resolver_active`).
 // Runtime / scheduler debugging contexts that DO care about the
@@ -12,11 +12,11 @@ import std.log as log;
 fn run() -> Int {
 	var b = log.config_builder();
 	b.min_level(log.Level::Debug());
-	b.include_ptid(true);
+	b.include_tid(true);
 	val main = log.create_logger("svc", b.build());
-	main.info("ptid-on-info");
-	main.debug("ptid-on-debug");
-	main.error("ptid-on-error");
+	main.info("tid-on-info");
+	main.debug("tid-on-debug");
+	main.error("tid-on-error");
 	return 0;
 }
 

@@ -1461,6 +1461,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_current()",
 					f"declare void @drift_thread_park({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_thread_park_until({self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_thread_set_wait({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_thread_unpark({self._llty(DRIFT_INT_TYPE)})",
 					"declare void @drift_thread_yield()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_default_get()",
@@ -1511,7 +1512,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_signal_await()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_vtid()",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_tid()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_thread_is_cancelled()",
 					"",
 				]
@@ -4223,6 +4224,18 @@ class _FuncBuilder:
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
 				return
+			if instr.fn_id.name == "vt_set_wait":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: vt_set_wait expects 2 args, got {len(instr.args)}")
+				kind_val = self._map_value(instr.args[0])
+				id_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_set_wait({self._llty(DRIFT_INT_TYPE)} {kind_val}, {self._llty(DRIFT_INT_TYPE)} {id_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vsw_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_set_wait returns Void; result cannot be captured")
+				return
 			if instr.fn_id.name == "vt_unpark":
 				if len(instr.args) != 1:
 					raise NotImplementedError(f"LLVM codegen v1: vt_unpark expects 1 arg, got {len(instr.args)}")
@@ -5112,12 +5125,12 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
-			if instr.fn_id.name == "posix_thread_id":
+			if instr.fn_id.name == "kernel_thread_id":
 				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: posix_thread_id result must be captured")
+					raise NotImplementedError("LLVM codegen v1: kernel_thread_id result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()"
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_tid()"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
@@ -5483,12 +5496,12 @@ class _FuncBuilder:
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
-			if instr.fn_id.name == "posix_thread_id":
+			if instr.fn_id.name == "kernel_thread_id":
 				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: posix_thread_id result must be captured")
+					raise NotImplementedError("LLVM codegen v1: kernel_thread_id result must be captured")
 				self.module.needs_thread_runtime = True
 				self.lines.append(
-					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_ptid()"
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_thread_tid()"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return
@@ -5774,6 +5787,18 @@ class _FuncBuilder:
 					self._wrap_ok_fnresult(None, "i8", dest, hint="vpu_ok")
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_set_wait":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: vt_set_wait expects 2 args, got {len(instr.args)}")
+				kind_val = self._map_value(instr.args[0])
+				id_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_thread_set_wait({self._llty(DRIFT_INT_TYPE)} {kind_val}, {self._llty(DRIFT_INT_TYPE)} {id_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vsw_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_set_wait returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_unpark":
 				if len(instr.args) != 1:

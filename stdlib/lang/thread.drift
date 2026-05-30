@@ -17,6 +17,7 @@ export {
 	vt_is_cancelled,
 	vt_park,
 	vt_park_until,
+	vt_set_wait,
 	vt_unpark,
 	vt_yield,
 	now_ms,
@@ -135,6 +136,13 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_is_cancelled() nothrow -> Int;
 @intrinsic pub fn vt_park(reason: Int) nothrow -> Void;
 @intrinsic pub fn vt_park_until(deadline_ms: Int) nothrow -> Void;
+/// Liveness annotation: record what the current VT is about to wait on, so the
+/// runtime liveness interrogator (`kill -USR2 <pid>`) can report it.  Call
+/// immediately before a `vt_park`/`vt_park_until` in a blocking primitive.
+/// `kind` is a `DriftWaitKind` value (see `std.concurrent`); `id` is an opaque
+/// wait-object id (0 if none).  No-op off a VT; cleared automatically on
+/// resume.  Best-effort: never affects scheduling or correctness.
+@intrinsic pub fn vt_set_wait(kind: Int, id: Int) nothrow -> Void;
 @intrinsic pub fn vt_unpark(vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn vt_yield() nothrow -> Void;
 @intrinsic pub fn now_ms() nothrow -> Int;
@@ -196,4 +204,7 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn env_has_raw(name: String) nothrow -> Int;
 @intrinsic pub fn signal_await() nothrow -> Int;
 @intrinsic pub fn vt_id() nothrow -> Int;
-@intrinsic pub fn posix_thread_id() nothrow -> Int;
+/// OS kernel thread id (`gettid()`) of the calling carrier thread — the same
+/// value the liveness interrogator reports as `carrier_tid`, and the id used by
+/// `top`/`ps`/`/proc`/`perf`/`strace`.  `std.log` emits this as `tid`.
+@intrinsic pub fn kernel_thread_id() nothrow -> Int;

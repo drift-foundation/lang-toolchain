@@ -40,6 +40,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - Tooling, build system, and packages: [docs/design/drift-tooling-and-packages.md](docs/design/drift-tooling-and-packages.md) — module/package inputs, build targets, repositories, and deterministic offline builds.
 - Borrowing/reference model revision: [docs/design/drift_borrowing_and_reference_model_revision.md](docs/design/drift_borrowing_and_reference_model_revision.md)
 - Drift concurrency: [docs/design/drift-concurrency.md](docs/design/drift-concurrency.md)
+- Runtime liveness interrogator (diagnosing a stuck process via `kill -USR2`): [docs/liveness.md](docs/liveness.md)
 - Virtual threads/concurrency spec change: [docs/design/spec-change-requests/virtual_threads_concurrency_spec.md](docs/design/spec-change-requests/virtual_threads_concurrency_spec.md) — proposal for lightweight threads, schedulers, and structured scopes.
 - Module merge/artifact generation: [docs/design/spec-change-requests/module_merge_and_artifact_generation.md](docs/design/spec-change-requests/module_merge_and_artifact_generation.md) — design for merging multi-file modules, enforcing duplicate rules, and emitting executables vs signed modules.
 - Iteration model: [docs/design/drift-loops-and-iterators.md](docs/design/drift-loops-and-iterators.md)

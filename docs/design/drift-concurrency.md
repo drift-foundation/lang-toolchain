@@ -253,6 +253,14 @@ tracks the lifecycle to support scheduling, parking, and cancellation.
 - Phase 1 uses OS threads for execution; the state machine is still valid and is
   the basis for a future VT scheduler/reactor backend.
 
+### Operator diagnostics
+
+This lifecycle state, plus per-VT wait reasons and carrier-thread attribution,
+is observable at runtime. Send `SIGUSR2` to a Drift process to dump a live
+snapshot of the scheduler (carriers, VT states, what each parked VT is waiting
+on, and whether the runtime is making progress) for diagnosing a stuck process
+in production. See [Runtime liveness interrogator](../liveness.md).
+
 ## Public API (MVP surface)
 
 Module: `std.concurrent`

@@ -177,6 +177,16 @@ pub const CONCURRENCY_KIND_FAILED: String = "failed";
 /// caller (analogue of `std.net`'s `NET_ERROR_KIND_REQUIRES_VTHREAD`).
 pub const CONCURRENCY_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
 
+// Wait-kind tags passed to `thread.vt_set_wait` so the runtime liveness
+// interrogator (`kill -USR2 <pid>`) can report what a parked VT is waiting on.
+// These MUST match `enum DriftWaitKind` in
+// `lang/language_runtime/posix/liveness_runtime.h`.  Only the kinds annotated
+// from Drift are listed here; JOIN/IO are tagged in the C runtime, and Mutex
+// is absent (it spins, so contention surfaces as a long-RUNNING VT).  Channel
+// waits surface as CONDVAR since the channel blocks on an internal condvar.
+const WAIT_KIND_TIMER: Int = 1;
+const WAIT_KIND_CONDVAR: Int = 4;
+
 /// Constructs an atomic `Bool` cell initialized to `v`.
 ///
 /// **See also:** `AtomicBool`, `atomic_int`.
@@ -866,6 +876,8 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, has_deadline: Bool, d
 
 	// Release the predicate mutex and park.
 	guard.unlock_for_condvar();
+	// Liveness: label this park as a condvar wait (cleared on resume).
+	thread.vt_set_wait(WAIT_KIND_CONDVAR, 0);
 	if has_deadline {
 		thread.vt_park_until(deadline_ms);
 	} else {
@@ -2239,6 +2251,8 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	// fallback path which bumps `park_token`. The next `sleep` call
 	// then early-returns by consuming the stale token, producing the
 	// alternating-instant-sleep pattern the bookkeeper team reported.
+	// Liveness: label this park as a timer wait (cleared on resume).
+	thread.vt_set_wait(WAIT_KIND_TIMER, 0);
 	thread.vt_park_until(deadline);
 	return core.Result::Ok(core.void_value());
 }

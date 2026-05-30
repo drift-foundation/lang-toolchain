@@ -1,5 +1,67 @@
 # Drift development history
 
+## 2026-05-30 (Runtime liveness interrogator, Slice 1 — passive dump plumbing; logger thread-id moved to kernel TID; ABI 14 → 15)
+- **Release 0.33.10, ABI 14 → 15.**  Adds an operator-facing way to look
+  inside the VT scheduler of a running process — `kill -USR2 <pid>` emits a
+  bounded `[drift:liveness]` stderr summary plus a full `drift.liveness.v1`
+  JSON dump (default `/tmp/drift-runtime.<pid>.liveness.json`).  Diagnoses both
+  failure modes: **hot stuck** (a VT pegged `RUNNING` on a carrier, e.g. a
+  contended spin-`Mutex<T>` or tight loop) and **cold stuck** (VTs parked
+  forever on a timer/IO/join/condvar wake).  Interrogation only this slice;
+  the fail-fast watchdog (dump-then-abort) is Slices 3–4.  Full design +
+  staged roadmap in `work/liveness-watchdog-interogator/`; operator guide in
+  `docs/liveness.md`.
+- **Design: runtime-owned and wedge-independent.**  A dedicated thread
+  (spawned in `drift_run_main_on_vt`, `sigwait` on `SIGUSR2`, blocked
+  process-wide before any carrier/reactor/app thread is created) emits the
+  dump using only raw `open(2)`/`write(2)` — never the reactor, executor,
+  app loggers, or Drift IO, any of which may be the wedged component.  It
+  walks the VT/exec/reactor registries with bounded `pthread_mutex_trylock`,
+  so a carrier wedged *while holding a lock* yields a `degraded` section in
+  the dump instead of hanging it.  If the liveness thread can't start, SIGUSR2
+  stays blocked (never re-armed to default-terminate) and the feature is a
+  no-op.  Dump file is `0600 | O_NOFOLLOW`; a failed JSON write still emits one
+  stderr error line even when `DRIFT_LIVENESS_TEXT=0`.
+- **Runtime bookkeeping** (`thread_runtime.c`): per-VT `wait_kind`/`wait_id`,
+  `state_since_ms`, `carrier_tid` (kernel TID via cached `gettid()`),
+  `last_progress`; a global `drift_progress_counter` (heartbeat) +
+  `drift_completed_counter`.  All best-effort (`memory_order_relaxed`); the
+  registry is the source for live inventory, the counters for the lock-free
+  heartbeat.  Wait kinds: TIMER/IO/JOIN annotated in the C runtime,
+  CONDVAR/CHANNEL annotated by stdlib via the new `drift_thread_set_wait`
+  helper (the runtime-exported helper consumed by stdlib that motivates the
+  ABI bump).  No parked-mutex state — `Mutex<T>` spins, so mutex contention is
+  a long-`RUNNING` VT.  Every resume / fast-return / READY transition
+  re-stamps `state_since_ms` and clears stale wait metadata so a `RUNNING` VT
+  never misreports a wait and ready-queue age is honest.
+- **ABI 15 surface change: `vt_set_wait` intrinsic.**  `lang.thread` vt_*
+  intrinsics are hand-lowered by name in `llvm_codegen.py`; added
+  `kernel_thread_id` and `vt_set_wait`, bumped `DRIFT_RT_ABI_VERSION` 14 → 15
+  and `DRIFTC_VERSION` 0.33.9 → 0.33.10 (both bumped together per the
+  boundary-change rule), regression in
+  `lang/tests/driver/test_abi_version_stamp.py`.
+- **Logger thread-identity: `ptid` → `tid` (kernel TID).**  `std.log`'s old
+  `ptid` was `pthread_self()` cast to int — a pointer-sized value that lines
+  up with nothing operators use.  Replaced with `tid` from the new
+  `thread.kernel_thread_id()` intrinsic → runtime `drift_thread_tid()`
+  (`gettid()`), the **same kernel TID liveness reports as `carrier_tid`** and
+  that `top`/`ps`/`/proc`/`perf`/`strace` use.  `LoggerConfigBuilder`
+  `include_ptid` → `include_tid` (opt-in, default off).  The old public
+  `posix_thread_id()` intrinsic + `drift_thread_ptid()` runtime helper +
+  their lowering were **removed** (folded into this ABI-15 slice) so the
+  operationally-wrong id is no longer shipped.  Field/spelling alignment for
+  log↔liveness correlation: app logs emit `vtid` + opt-in `tid`; liveness VT
+  entries emit `vtid` (was `vt_id`) + `carrier_tid` (JSON was
+  `carrier_thread`); text summary uses `vtid=`/`carrier_tid=`.
+- **Tests**: `lang/tests/driver/test_liveness_interrogator.py` (parked-state
+  dump across TIMER/JOIN/CONDVAR, RUNNING-never-waiting invariant,
+  text-disabled-still-writes-JSON, and the JSON-write-failure forced-error
+  pin via a regular-file-as-parent `ENOTDIR` path); `test_log_vtid_ptid.py` →
+  `test_log_vtid_tid.py` (kernel-TID `< 2^31` sanity, no-legacy-`ptid` guard);
+  e2e `std_log_include_ptid_opt_in` → `std_log_include_tid_opt_in`; Valgrind
+  suppression `drift_liveness_thread_tls_dtv` for the daemon-thread TLS.
+  Cross-links added in `docs/design/drift-concurrency.md` and `README.md`.
+
 ## 2026-05-27 (LANGUAGE_BUG fix: value-position by-value call args silently accepted bare non-`Copy` named owners — explicit-ownership-transfer contract now uniformly enforced at type-check time; ABI stays at 14)
 - **Release 0.33.7, ABI unchanged at 14.**  Reported as an
   explicit-ownership-transfer asymmetry between statement-form
