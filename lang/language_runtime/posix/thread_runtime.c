@@ -2540,6 +2540,12 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	 * since the OS main thread has no VT TLS set. */
 	drift_thread_join(root_vt);
 
+	/* Stop + join the SIGUSR2 liveness thread FIRST, so no runtime-owned
+	 * thread survives into the registry/reactor/executor teardown and the
+	 * subsequent atexit/TLS cleanup (the runtime's standing shutdown
+	 * invariant).  Must precede drift_runtime_registry_cleanup_now(). */
+	drift_liveness_thread_shutdown();
+
 	/* Tear down runtime threads before returning to @main.
 	 *
 	 * Under ABI 5, user main returned on the OS main thread with no

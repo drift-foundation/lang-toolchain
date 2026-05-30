@@ -386,21 +386,3 @@
 	Memcheck:Value8
 	fun:pthread_setspecific*
 }
-
-# --- liveness interrogator thread (daemon, never joined) ---
-# drift_run_main_on_vt spawns a dedicated SIGUSR2/liveness thread that blocks
-# in sigwait for the process lifetime and is never joined. At exit it is still
-# alive, so glibc's per-thread DTV/TLS block is unreachable and reported as
-# "possibly lost". This is a benign daemon-thread artifact, not a leak: the
-# liveness emit path itself (malloc snapshot -> collect -> write -> free) is
-# definitely/indirectly-lost clean.
-
-{
-	drift_liveness_thread_tls_dtv
-	Memcheck:Leak
-	match-leak-kinds: possible
-	fun:calloc
-	...
-	fun:pthread_create*
-	fun:drift_liveness_thread_start_once
-}

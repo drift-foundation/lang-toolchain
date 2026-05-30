@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -373,6 +374,8 @@ void drift_liveness_emit(int reason) {
 #ifdef __linux__
 static pthread_t drift_liveness_tid;
 static pthread_once_t drift_liveness_once = PTHREAD_ONCE_INIT;
+static atomic_int drift_liveness_started = 0;   /* 1 once the thread is running */
+static atomic_int drift_liveness_stopping = 0;  /* set by shutdown to make the thread exit */
 
 static void *drift_liveness_thread_main(void *arg) {
 	(void)arg;
@@ -389,6 +392,11 @@ static void *drift_liveness_thread_main(void *arg) {
 			nanosleep(&ts, NULL);
 			continue;
 		}
+		/* Shutdown wakes us with pthread_kill(SIGUSR2); exit without dumping
+		 * so no runtime thread survives into drift_run_main_on_vt teardown. */
+		if (atomic_load_explicit(&drift_liveness_stopping, memory_order_acquire)) {
+			break;
+		}
 		if (signo == SIGUSR2) {
 			drift_liveness_emit(DRIFT_LIVENESS_REASON_OPERATOR_SIGNAL);
 		}
@@ -397,7 +405,9 @@ static void *drift_liveness_thread_main(void *arg) {
 }
 
 static void drift_liveness_thread_start_once(void) {
-	if (pthread_create(&drift_liveness_tid, NULL, drift_liveness_thread_main, NULL) != 0) {
+	if (pthread_create(&drift_liveness_tid, NULL, drift_liveness_thread_main, NULL) == 0) {
+		atomic_store_explicit(&drift_liveness_started, 1, memory_order_release);
+	} else {
 		/* Fail-safe: SIGUSR2 stays blocked (never re-armed to default-
 		 * terminate); the feature is simply unavailable. */
 		static const char msg[] =
@@ -409,6 +419,31 @@ static void drift_liveness_thread_start_once(void) {
 void drift_liveness_thread_start(void) {
 	pthread_once(&drift_liveness_once, drift_liveness_thread_start_once);
 }
+
+/* Stop and join the liveness thread.  Called from drift_run_main_on_vt before
+ * registry/reactor/executor teardown so no runtime-owned thread is alive during
+ * process/atexit cleanup (the runtime's standing shutdown invariant).
+ * Idempotent. */
+void drift_liveness_thread_shutdown(void) {
+	if (atomic_exchange_explicit(&drift_liveness_started, 0, memory_order_acq_rel) != 1) {
+		return;  /* never started, or already shut down */
+	}
+	atomic_store_explicit(&drift_liveness_stopping, 1, memory_order_release);
+	/* Wake the blocked sigwait; SIGUSR2 is blocked so it pends on the thread
+	 * and is delivered to sigwait even if a dump is in progress.  Only join if
+	 * the wake succeeded: if pthread_kill failed the thread is still parked in
+	 * sigwait, so joining would hang shutdown forever — warn and skip it
+	 * instead (the process is exiting anyway). */
+	int rc = pthread_kill(drift_liveness_tid, SIGUSR2);
+	if (rc == 0) {
+		(void)pthread_join(drift_liveness_tid, NULL);
+	} else {
+		static const char msg[] =
+			"[drift:liveness] warning: could not wake liveness thread to stop; skipping join\n";
+		(void)write(2, msg, sizeof(msg) - 1);
+	}
+}
 #else
 void drift_liveness_thread_start(void) {}
+void drift_liveness_thread_shutdown(void) {}
 #endif

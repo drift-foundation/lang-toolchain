@@ -115,5 +115,6 @@ void drift_liveness_set_start_ms(int64_t start_ms);
 /* Implemented in liveness_runtime.c. */
 void drift_liveness_emit(int reason);     /* collect, then write text + JSON */
 void drift_liveness_thread_start(void);   /* spawn the dedicated sigwait thread (idempotent) */
+void drift_liveness_thread_shutdown(void); /* stop + join the sigwait thread (idempotent) */
 
 #endif /* DRIFT_LIVENESS_RUNTIME_H */
