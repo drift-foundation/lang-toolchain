@@ -106,6 +106,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--debug", action="store_true",
 		help="Produce a debug-style build (links the `_debug` runtime variant; "
 		     "equivalent to setting DRIFT_DEBUG=1)")
+	p.add_argument("--sanitize", type=str, default=None, metavar="LIST",
+		help="Select sanitizer instrumentation (comma list: address, undefined, "
+		     "none). Forwarded verbatim to driftc as `--sanitize`; the explicit, "
+		     "reproducible alternative to exporting DRIFT_ASAN. Validated by "
+		     "driftc.")
 	p.add_argument("--timing", action="store_true",
 		help=(
 			"Collect per-phase compile timings from driftc and print a "
@@ -649,6 +654,13 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	wrapper_sink: "_events.EventSink | None" = None
 	timing_out_path: Path | None = None
 	combined_extra = list(extra_flags or [])
+	# Sanitizer selection is forwarded as an EXPLICIT driftc flag (not an
+	# env overlay): build variation stays in argv, and driftc owns token
+	# validation + the runtime-archive variant selection.  This is the
+	# `drift build` surface drift-web's job plans target instead of
+	# exporting DRIFT_ASAN.
+	if getattr(args, "sanitize", None):
+		combined_extra.extend(["--sanitize", args.sanitize])
 	if build_timing_enabled:
 		wrapper_sink = _events.EventSink()
 		import tempfile as _tf

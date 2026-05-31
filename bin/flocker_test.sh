@@ -161,5 +161,53 @@ echo "-3" > "${FLOCKER_DIR}/t9/.size"
 "${FLOCKER}" -k t9 -j 2 -- true 2>/dev/null && fail "9" ".size=-3 accepted"
 pass "corrupted .size produces clear diagnostic"
 
+# ── 10: --heartbeat off by default — no extra output, exit code preserved ─
+echo "test 10: no --heartbeat ⇒ byte-identical (no ticks)"
+rc=0
+out=$("${FLOCKER}" -k t10 -j 1 -- bash -c 'echo only-this; exit 5' 2>/dev/null) || rc=$?
+[[ "${out}" == "only-this" ]] || fail "10" "unexpected stdout without --heartbeat: '${out}'"
+[[ "${rc}" == "5" ]]          || fail "10" "exit not preserved: got '${rc}'"
+[[ "${out}" != *"[flocker]"* ]] || fail "10" "heartbeat line leaked with flag absent"
+pass "default off: no ticks, exit code preserved"
+
+# ── 11: --heartbeat emits ticks for a long job, preserves exit code ───────
+echo "test 11: --heartbeat emits progress + preserves exit"
+rc=0
+out=$("${FLOCKER}" -k t11 -j 2 --heartbeat 1 -- bash -c 'sleep 2.5; exit 0' 2>/dev/null) || rc=$?
+hb_count=$(grep -c "^\[flocker\] key=t11" <<< "${out}" || true)
+(( hb_count >= 2 )) || fail "11" "expected >=2 heartbeat lines over ~2.5s at 1s cadence, got ${hb_count}: '${out}'"
+[[ "${rc}" == "0" ]] || fail "11" "exit not preserved through heartbeat: '${rc}'"
+# The status line reports real pool state (held includes our own slot).
+[[ "${out}" == *"slot="*"/2"* ]] || fail "11" "status line missing slot field: '${out}'"
+[[ "${out}" == *"held="* ]]      || fail "11" "status line missing held field: '${out}'"
+# Nonzero exit must also propagate through the fork-wait path.
+rc=0
+"${FLOCKER}" -k t11 -j 2 --heartbeat 1 -- bash -c 'sleep 1.5; exit 13' >/dev/null 2>&1 || rc=$?
+[[ "${rc}" == "13" ]] || fail "11" "nonzero exit not propagated through heartbeat: got '${rc}'"
+pass "heartbeat ticks (${hb_count} lines) + exit preserved (0 and 13)"
+
+# ── 12: --heartbeat forwards SIGTERM ⇒ child dies, slot released ──────────
+echo "test 12: --heartbeat SIGTERM teardown releases slot"
+"${FLOCKER}" -k t12 -j 1 --heartbeat 1 -- sleep 30 &
+hb_pid=$!
+sleep 0.5
+kill -TERM "${hb_pid}"
+wait "${hb_pid}" 2>/dev/null || true
+# Slot must be free immediately — a fresh -j 1 caller acquires promptly.
+start=$(date +%s%N)
+"${FLOCKER}" -k t12 -j 1 -- true
+end=$(date +%s%N)
+elapsed_ms=$(( (end - start) / 1000000 ))
+(( elapsed_ms < 1000 )) || fail "12" "slot not released after heartbeat-mode SIGTERM (${elapsed_ms}ms)"
+pass "heartbeat SIGTERM tears down child + releases slot (${elapsed_ms}ms)"
+
+# ── 13: --heartbeat argument validation ──────────────────────────────────
+echo "test 13: --heartbeat validation"
+"${FLOCKER}" -k t13 -j 1 --heartbeat 0 -- true 2>/dev/null && fail "13" "--heartbeat 0 accepted"
+"${FLOCKER}" -k t13 -j 1 --heartbeat -2 -- true 2>/dev/null && fail "13" "--heartbeat -2 accepted"
+"${FLOCKER}" -k t13 -j 1 --heartbeat abc -- true 2>/dev/null && fail "13" "--heartbeat abc accepted"
+"${FLOCKER}" -k t13 -j 1 --heartbeat -- true 2>/dev/null && fail "13" "--heartbeat consuming '--' accepted"
+pass "--heartbeat validation"
+
 echo
 echo "all tests passed"

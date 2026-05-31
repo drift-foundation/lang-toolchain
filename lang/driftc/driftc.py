@@ -100,6 +100,36 @@ def _resolve_build_profile(debug_style_runtime: bool) -> str:
 	return "debug" if debug_style_runtime else "optimized"
 
 
+_VALID_SANITIZERS = ("address", "undefined", "none")
+
+
+def _parse_sanitize(value: str):
+	"""argparse `type=` for `--sanitize=<comma-list>`.
+
+	Returns a `frozenset[str]` of the selected sanitizer tokens (excluding the
+	`none` sentinel).  `none` means "no sanitizers" and may not be combined with
+	other tokens.  Unknown tokens are a usage error.
+
+	The flag is the supported, documented selector; `DRIFT_ASAN` / `DRIFT_UBSAN`
+	remain deprecated env aliases (see `_run_compile_cli`, where the flag — when
+	given — is authoritative over the env).
+	"""
+	import argparse as _ap
+	tokens = [t.strip() for t in value.split(",") if t.strip()]
+	unknown = sorted({t for t in tokens if t not in _VALID_SANITIZERS})
+	if unknown:
+		raise _ap.ArgumentTypeError(
+			f"unknown sanitizer(s): {', '.join(unknown)}; "
+			f"valid: {', '.join(_VALID_SANITIZERS)}"
+		)
+	non_none = {t for t in tokens if t != "none"}
+	if "none" in tokens and non_none:
+		raise _ap.ArgumentTypeError(
+			"'none' cannot be combined with other sanitizers"
+		)
+	return frozenset(non_none)
+
+
 def _version_string() -> str:
 	"""Build the driftc --version output."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
@@ -8511,6 +8541,22 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		),
 	)
 	parser.add_argument(
+		"--sanitize",
+		type=_parse_sanitize,
+		default=None,
+		metavar="LIST",
+		help=(
+			"Select sanitizer instrumentation as an explicit, comma-separated "
+			"list: address, undefined, none (e.g. --sanitize=address or "
+			"--sanitize=address,undefined).  This is the supported, "
+			"reproducible selector — the emitted binary is fully determined by "
+			"argv.  DRIFT_ASAN / DRIFT_UBSAN remain as DEPRECATED env aliases; "
+			"when --sanitize is given it is authoritative and the env vars are "
+			"ignored.  Selecting a sanitizer also links the matching "
+			"instrumented runtime archive."
+		),
+	)
+	parser.add_argument(
 		"--prelude",
 		dest="prelude",
 		action="store_true",
@@ -8569,6 +8615,19 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		debug_enabled = False
 	if args.debug_info:
 		debug_enabled = True
+	# Sanitizer selection: `--sanitize` is the explicit, reproducible
+	# selector; `DRIFT_ASAN` / `DRIFT_UBSAN` are deprecated env aliases.
+	# When the flag is given it is authoritative — normalize it into the
+	# canonical env vars (and clear the ones it didn't select) so the three
+	# downstream consumers — `_resolve_build_profile`, the runtime-archive
+	# `variant`, and the `-fsanitize` link flags — all read one source of
+	# truth.  This mirrors how `drift build --debug` normalizes to
+	# `DRIFT_DEBUG=1` on the driftc subprocess (explicit flag in, env as the
+	# single internal channel).  When the flag is omitted, the env vars are
+	# read as before (alias path, unchanged behavior).
+	if args.sanitize is not None:
+		os.environ["DRIFT_ASAN"] = "1" if "address" in args.sanitize else "0"
+		os.environ["DRIFT_UBSAN"] = "1" if "undefined" in args.sanitize else "0"
 	if args.stdlib_root is None:
 		from lang.driftc.parser import stdlib_root as _stdlib_root
 		args.stdlib_root = _stdlib_root()

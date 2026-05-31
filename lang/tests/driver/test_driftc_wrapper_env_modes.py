@@ -475,3 +475,97 @@ def test_build_runtime_archive_default_carries_o2_and_normal_sentinel(tmp_path: 
 	assert nm.returncode == 0
 	assert "__drift_rt_mode_normal" in nm.stdout
 	assert "__drift_rt_mode_debug" not in nm.stdout
+
+
+# ── `--sanitize` flag (explicit selector; DRIFT_ASAN/UBSAN are deprecated env
+#    aliases).  drift-web request: build output determined by argv, not ambient
+#    env.  The flag is authoritative over the env when both are present.
+
+def _write_min_main(tmp_path: Path) -> Path:
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"\n".join(
+			[
+				"module main;",
+				"import std.core;",
+				"fn main() nothrow -> Int {",
+				"\treturn 0;",
+				"}",
+				"",
+			]
+		),
+		encoding="utf-8",
+	)
+	return src
+
+
+def _compile_with(tmp_path: Path, *flags: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	src = _write_min_main(tmp_path)
+	out = tmp_path / "a.out"
+	return _run_wrapper(
+		["--target-word-bits", "64", "-M", str(tmp_path), str(src), "-o", str(out), *flags],
+		env=env,
+	)
+
+
+def _skip_if_asan_unavailable(result: subprocess.CompletedProcess) -> None:
+	stderr = result.stderr or ""
+	if result.returncode != 0 and (
+		"runtime archive build failed" in stderr
+		or ("fsanitize" in stderr and "not found" in stderr)
+	):
+		pytest.skip(f"asan toolchain unavailable: {stderr[:200]}")
+
+
+def test_sanitize_flag_address_adds_sanitize_flags(tmp_path: Path) -> None:
+	# No DRIFT_ASAN in env; the flag alone drives instrumentation.
+	env = _clean_env()
+	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
+	result = _compile_with(tmp_path, "--sanitize=address", env=env)
+	_skip_if_asan_unavailable(result)
+	assert result.returncode == 0, result.stderr
+	assert "-fsanitize=address" in result.stderr
+	# Matching instrumented runtime archive must be linked, not just the flag.
+	assert "/asan/" in result.stderr
+
+
+def test_sanitize_flag_wins_over_env(tmp_path: Path) -> None:
+	# DRIFT_ASAN=1 in env, but --sanitize=none must win (explicit > ambient).
+	env = _clean_env()
+	env["DRIFT_ASAN"] = "1"
+	result = _compile_with(tmp_path, "--sanitize=none", env=env)
+	assert result.returncode == 0, result.stderr
+	assert "-fsanitize=address" not in result.stderr
+	# Falls back to the production default runtime variant.
+	assert "/default/" in result.stderr
+
+
+def test_sanitize_flag_address_undefined_selects_combined_variant(tmp_path: Path) -> None:
+	env = _clean_env()
+	env.pop("DRIFT_ASAN", None)
+	env.pop("DRIFT_UBSAN", None)
+	result = _compile_with(tmp_path, "--sanitize=address,undefined", env=env)
+	_skip_if_asan_unavailable(result)
+	assert result.returncode == 0, result.stderr
+	assert "-fsanitize=address" in result.stderr
+	assert "-fsanitize=undefined" in result.stderr
+	assert "/asan_ubsan/" in result.stderr
+
+
+def test_sanitize_flag_unknown_token_is_usage_error(tmp_path: Path) -> None:
+	env = _clean_env()
+	result = _compile_with(tmp_path, "--sanitize=bogus", env=env)
+	assert result.returncode == 2, result.stderr
+	assert "unknown sanitizer" in result.stderr
+
+
+def test_env_alias_still_works_without_flag(tmp_path: Path) -> None:
+	# Deprecated DRIFT_ASAN path: still honored when --sanitize is absent.
+	env = _clean_env()
+	env["DRIFT_ASAN"] = "1"
+	result = _compile_with(tmp_path, env=env)
+	_skip_if_asan_unavailable(result)
+	assert result.returncode == 0, result.stderr
+	assert "-fsanitize=address" in result.stderr
+	assert "/asan/" in result.stderr

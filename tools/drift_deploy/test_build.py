@@ -370,6 +370,24 @@ class TestBuildAppCmd:
 		)
 		assert "--entry" not in cmd
 
+	def test_app_cmd_forwards_sanitize_via_extra_flags(self):
+		"""`drift build --sanitize=address` appends `--sanitize address` to the
+		extra flags; build_app_cmd must carry it through to driftc verbatim
+		(driftc owns token validation + runtime-variant selection)."""
+		art = _make_artifact(kind="app", name="my-app")
+		cmd = build_app_cmd(
+			art,
+			driftc=Path("/usr/bin/driftc"),
+			target="drift-dev",
+			resolved_deps={},
+			output_path=Path("/build/my-app"),
+			manifest_dir=Path("/proj"),
+			package_roots=[],
+			extra_flags=["--sanitize", "address"],
+		)
+		idx = cmd.index("--sanitize")
+		assert cmd[idx + 1] == "address"
+
 
 # ── drift_build.run() tests ─────────────────────────────────────────
 

@@ -1,5 +1,69 @@
 # Drift development history
 
+## 2026-05-31 (`flocker --heartbeat`: opt-in liveness heartbeat for orchestration — flocker 0.2.0)
+- **`flocker --heartbeat <secs>`** (default OFF) emits a periodic `[flocker]`
+  status line to stdout while the wrapped command runs, so a long silent job (an
+  ~18s+ compile, a memcheck run grinding under valgrind) keeps a cert
+  orchestrator's stdout-inactivity watchdog (≤60s cadence) satisfied.  The party
+  that enforces the watchdog contract now ships the one correct way to meet it,
+  instead of every participating team (drift-web, mariadb, net) hand-rolling a
+  background heartbeat loop — a class of fiddly plumbing whose bugs cause false
+  cert failures.  Requested by drift-web (orchestration-primitives packet, the
+  single net ask after the rest collapsed into existing flocker semantics).
+- **Strictly additive — flag absent ⇒ byte-identical to before.** Without
+  `--heartbeat`, flocker still `exec`s the command (zero-overhead fast path, no
+  extra output).  With it, flocker cannot exec (nothing would be left to tick),
+  so it forks the command and stays alive holding the slot fd, emitting ticks and
+  forwarding SIGTERM/SIGINT so killing flocker still tears down the job and
+  releases the slot.  The tick reports *real* pool state (slot index, held/total,
+  elapsed) read from the pool dir — not a synthetic pulse — since flocker already
+  observes both parallelism and liveness.  Status goes to stdout by design (it
+  resets a stdout watchdog); not for jobs whose stdout is captured as data.
+- Tests: `bin/flocker_test.sh` +4 (default-off no-output + exit-code preserved;
+  ticks emitted + exit 0/13 propagated through the fork-wait path; SIGTERM
+  teardown releases the slot; `--heartbeat` arg validation).  `flocker` 0.1.0 →
+  0.2.0.  Bash tool, no toolchain version/ABI impact.
+- The larger runner/plan-format promotion stays a **separate, on-hold RFC**
+  (`drift-web/docs/parallel-runner-spec.md`); this is just the one shared
+  primitive landing on the tool that already owns host-global concurrency.
+
+## 2026-05-31 (`--sanitize` flag: explicit, reproducible sanitizer selection — no ABI change)
+- **`driftc --sanitize=<list>`** (tokens `address`, `undefined`, `none`,
+  comma-separated) is now the explicit, documented selector for sanitizer
+  instrumentation.  The emitted binary is fully determined by argv rather than
+  ambient env — for a *certified* compiler, identical argv producing identical
+  output matters for cert evidence, build caching, and reproducible builds
+  (drift-web request, `work/sanitize-flag/plan.md`).  `--sanitize=address`
+  selects ASAN, `--sanitize=address,undefined` adds UBSAN, `--sanitize=none` is
+  the explicit "no sanitizers" spelling; unknown tokens are a usage error
+  (exit 2).
+- **Mechanism — flag normalizes into the canonical env once.**  The compiler
+  already consumed `DRIFT_ASAN`/`DRIFT_UBSAN` at three points (build-profile
+  label, runtime-archive `variant` selection, and the `-fsanitize` link flags).
+  Rather than re-thread a resolved tuple through all three certified-path sites,
+  `--sanitize` (when given) is normalized into those env vars at the
+  `_run_compile_cli` entry, so every downstream reader sees one source of truth.
+  This is the same pattern `drift build --debug` uses to drive `DRIFT_DEBUG=1`.
+  Selecting a sanitizer also links the matching instrumented runtime archive
+  (`asan` / `asan_ubsan`) — not just the clang flag — so an instrumented
+  frontend never links an uninstrumented runtime.
+- **`drift build --sanitize=<list>`** forwards the flag verbatim to the driftc
+  subprocess (explicit argv, not an env overlay).  This is the surface job
+  runners target, consistent with "users go through `drift`, not `driftc`";
+  driftc owns token validation + variant selection (single source of truth).
+- **Deprecation path:** `DRIFT_ASAN` / `DRIFT_UBSAN` remain working as
+  **deprecated env aliases** (≥1 release); when both are present, the flag wins
+  (explicit > ambient).  No version/ABI bump — pure driver/CLI surface addition,
+  no compiler/runtime-boundary shape change.
+- Regression: `lang/tests/driver/test_driftc_wrapper_env_modes.py` (flag adds
+  `-fsanitize` + selects the `asan`/`asan_ubsan` archive; flag-wins-over-env;
+  unknown-token usage error; env alias still works without the flag) and
+  `tools/drift_deploy/test_build.py` (`drift build` forwards `--sanitize`).
+- **Decoupled (separate RFC):** drift-web's bundled pitch to promote their
+  generic job-runner + plan format into the toolchain alongside `flocker` is its
+  own design review (ownership, format stability, overlap with
+  `tools/pytest_jobs.py`); the `--sanitize` flag stands alone.
+
 ## 2026-05-30 (Runtime liveness interrogator, Slice 1 — passive dump plumbing; logger thread-id moved to kernel TID; ABI 14 → 15)
 - **Release 0.33.10, ABI 14 → 15.**  Adds an operator-facing way to look
   inside the VT scheduler of a running process — `kill -USR2 <pid>` emits a

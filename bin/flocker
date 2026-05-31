@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-FLOCKER_VERSION="0.1.0"
+FLOCKER_VERSION="0.2.0"
 
 usage() {
 	cat <<'EOF'
@@ -23,6 +23,13 @@ Options:
   -j N              Pool size. The first caller for a given KEY fixes N;
                     later callers requesting a different N get a warning
                     and use the original size.
+  --heartbeat SECS  Opt-in liveness heartbeat. Default OFF. When set to a
+                    positive integer SECS, flocker emits a periodic status
+                    line to STDOUT every SECS while the wrapped command
+                    runs, so a long silent job (a compile, a memcheck run)
+                    keeps a stdout-inactivity watchdog satisfied. When the
+                    flag is ABSENT, flocker behaves byte-identically to
+                    before (no extra output, exec fast path).
   --help            Show this help.
   --version         Show version, copyright, license.
 
@@ -34,13 +41,23 @@ Examples:
   done
   wait
 
+  # Feed a 60s-cadence watchdog while a silent compile runs:
+  flocker -k drift-jobs -j 8 --heartbeat 10 -- drift build my-app
+
 Contract:
   Host-local; key-scoped; first -j wins. No cross-host coordination.
-  Blocks until a slot is free, then execs COMMAND, replacing this
-  process. The slot stays held for the lifetime of the wrapped process
-  and is released by the kernel when COMMAND exits for any reason.
-  COMMAND's exit code is propagated. Pool state lives under FLOCKER_DIR
-  (default: $TMPDIR/flocker or /tmp/flocker).
+  Blocks until a slot is free, then runs COMMAND. The slot stays held for
+  the lifetime of the wrapped process and is released by the kernel when
+  COMMAND exits for any reason. COMMAND's exit code is propagated. Pool
+  state lives under FLOCKER_DIR (default: $TMPDIR/flocker or /tmp/flocker).
+
+  Without --heartbeat, flocker execs COMMAND, replacing this process (zero
+  overhead). With --heartbeat, flocker instead forks COMMAND and stays
+  alive holding the slot so it can emit status lines; it forwards SIGTERM/
+  SIGINT to COMMAND, so killing flocker still tears down the job and
+  releases the slot. The heartbeat line goes to STDOUT (it exists to reset
+  a stdout-inactivity watchdog) — do not enable it on a job whose stdout
+  you capture as data.
 
 Dependencies:
   bash 4.1+ (for {fd}-style descriptor assignment), flock(1) from
@@ -64,6 +81,7 @@ die() {
 
 key=""
 slots=""
+heartbeat=""
 while (( $# > 0 )); do
 	case "$1" in
 		--help)    usage; exit 0 ;;
@@ -78,6 +96,11 @@ while (( $# > 0 )); do
 			slots="$2"; shift 2 ;;
 		-j*)
 			slots="${1#-j}"; shift ;;
+		--heartbeat)
+			(( $# >= 2 )) || die "--heartbeat requires an argument"
+			heartbeat="$2"; shift 2 ;;
+		--heartbeat=*)
+			heartbeat="${1#--heartbeat=}"; shift ;;
 		--)
 			shift; break ;;
 		-*)
@@ -92,6 +115,9 @@ done
 [[ "${slots}" =~ ^[1-9][0-9]*$ ]] || die "-j must be a positive integer (got: ${slots})"
 (( $# > 0 )) || die "no COMMAND specified"
 [[ "${key}" =~ ^[A-Za-z0-9_.-]+$ ]] || die "--key must match [A-Za-z0-9_.-]+ (got: ${key})"
+if [[ -n "${heartbeat}" ]]; then
+	[[ "${heartbeat}" =~ ^[1-9][0-9]*$ ]] || die "--heartbeat must be a positive integer (got: ${heartbeat})"
+fi
 
 base="${FLOCKER_DIR:-${TMPDIR:-/tmp}/flocker}"
 slot_dir="${base}/${key}"
@@ -131,12 +157,80 @@ if [[ "${persisted_slots}" != "${slots}" ]]; then
 	echo "flocker: warning: key '${key}' pool sized at ${persisted_slots} (requested ${slots})" >&2
 fi
 
+# ── Run COMMAND under the heartbeat, holding the slot fd ──
+#
+# Used only when --heartbeat is set.  flocker keeps its own process alive
+# (it cannot exec, or there would be nothing left to tick) holding the
+# locked token fd, forks COMMAND, and emits a status line every
+# ${heartbeat}s.  SIGTERM/SIGINT are forwarded to COMMAND so killing
+# flocker tears the job down and releases the slot.  COMMAND's exit code
+# is propagated.  The status line goes to STDOUT, which is the whole point
+# (it resets a stdout-inactivity watchdog); per --help, don't enable this
+# on a job whose stdout is captured as data.
+run_with_heartbeat() {
+	local held_idx="$1"; shift
+	local started_at; started_at=$(date +%s)
+
+	"$@" &
+	local child=$!
+
+	# Forward termination to the child; the EXIT trap is not enough
+	# because we block in `wait`.  On signal, pass it on and let the
+	# subsequent `wait` reap the child + surface its code.
+	trap 'kill -TERM "${child}" 2>/dev/null || true' TERM
+	trap 'kill -INT  "${child}" 2>/dev/null || true' INT
+
+	# Heartbeat loop: wait for the child with a bounded timeout so we wake
+	# up every ${heartbeat}s to emit progress, without a busy-poll.  `wait
+	# -n` returns when the child exits OR the timeout sleeper does; we
+	# distinguish by checking whether the child is still alive.
+	while kill -0 "${child}" 2>/dev/null; do
+		sleep "${heartbeat}" &
+		local ticker=$!
+		# Wake on whichever finishes first (child or ticker).
+		wait -n "${child}" "${ticker}" 2>/dev/null || true
+		if kill -0 "${child}" 2>/dev/null; then
+			# Child still running → the ticker fired.  Emit real state
+			# read from the pool dir: how many of the N tokens are
+			# currently held (lock present) vs free.
+			local now elapsed held=0 free=0 t tfd
+			now=$(date +%s); elapsed=$(( now - started_at ))
+			for (( t=1; t<=persisted_slots; t++ )); do
+				exec {tfd}<"${slot_dir}/${t}"
+				if flock -n "${tfd}"; then
+					free=$(( free + 1 )); flock -u "${tfd}"
+				else
+					held=$(( held + 1 ))
+				fi
+				exec {tfd}<&-
+			done
+			printf '[flocker] key=%s slot=%d/%d held=%d/%d elapsed=%ds cmd=%s\n' \
+				"${key}" "${held_idx}" "${persisted_slots}" \
+				"${held}" "${persisted_slots}" "${elapsed}" "$1"
+		else
+			# Child exited → stop the ticker and leave the loop.
+			kill "${ticker}" 2>/dev/null || true
+			break
+		fi
+	done
+
+	wait "${child}"
+	return $?
+}
+
 # ── Acquire phase ──
 #
 # Scan tokens in a randomly-offset order to reduce stampeding on low-
-# numbered tokens when many waiters arrive simultaneously. exec replaces
-# this bash process with COMMAND; the locked fd is inherited and the
-# kernel releases the lock when COMMAND terminates.
+# numbered tokens when many waiters arrive simultaneously.
+#
+# Without --heartbeat: exec replaces this bash process with COMMAND; the
+# locked fd is inherited and the kernel releases the lock when COMMAND
+# terminates (zero-overhead fast path, unchanged behavior).
+#
+# With --heartbeat: flocker must stay alive to emit ticks, so it keeps the
+# locked fd open in THIS process and runs COMMAND as a child via
+# run_with_heartbeat.  The slot is released when flocker exits (the fd
+# closes), which happens right after COMMAND is reaped.
 
 start_offset=$(( RANDOM % persisted_slots ))
 
@@ -146,7 +240,11 @@ while true; do
 		token="${slot_dir}/${idx}"
 		exec {fd}<"${token}"
 		if flock -n "${fd}"; then
-			exec "$@"
+			if [[ -z "${heartbeat}" ]]; then
+				exec "$@"
+			fi
+			run_with_heartbeat "${idx}" "$@"
+			exit $?
 		fi
 		exec {fd}<&-
 	done
