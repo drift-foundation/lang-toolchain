@@ -1885,6 +1885,66 @@ Limitations:
   existing generic dispatch path; trait-bound disambiguation
   (`require T is Trait`) still works there.
 
+## Interfaces can't overload — canonical method plus concrete-type sugar
+
+The overload resolution above applies to methods declared in `implement`
+blocks. It does **not** extend to `interface` declarations: an interface may
+declare each method name only once. Declaring the same name twice — at any
+arity or parameter type — is a hard error, because the restriction is purely
+name-based:
+
+```drift
+pub interface Source {
+    fn acquire(self: &Self) nothrow -> Int;
+    fn acquire(self: &Self, wait: Wait) nothrow -> Int;   // error: duplicate method 'acquire' in interface 'Source'
+}
+```
+
+When you want both a low-typing default form and a parameterized form under one
+name, put the **single canonical method on the interface** and add the
+convenience **overload on the concrete type**. Concrete `implement` blocks
+*can* overload, and the extra overload may delegate to the interface method:
+
+```drift
+pub variant Wait { UseDefault, Forever, For(ms: Int) }
+
+pub struct Pool { /* ... */ }
+
+pub interface Source {
+    fn acquire(self: &Self, wait: Wait) nothrow -> Int;   // the one canonical form
+}
+
+implement Source for Pool {
+    pub fn acquire(self: &Pool, wait: Wait) nothrow -> Int { /* ... */ }
+}
+
+// Concrete-only convenience overload — not on the interface:
+implement Pool {
+    pub fn acquire(self: &Pool) nothrow -> Int { return self.acquire(Wait::UseDefault()); }
+}
+
+val p = Pool(/* ... */);
+p.acquire();                    // concrete no-arg sugar
+p.acquire(Wait::For(ms = 5));   // canonical form
+```
+
+The no-arg overload (from `implement Pool`) and the canonical method (from
+`implement Source for Pool`) coexist, and `self.acquire(...)` / `p.acquire(...)`
+resolve across both by the usual rules.
+
+The trade-off: the no-arg sugar lives on the concrete type, so a value typed as
+the **interface** must use the canonical form (`src.acquire(Wait::UseDefault())`).
+That is usually fine — callers typically hold the concrete type they built.
+
+Prefer a **variant parameter** over a pile of overloads when the forms are
+semantically distinct modes (here: use-default / forever / finite). The variant
+is exhaustively matchable, names each mode (no sentinel values like `0 =
+forever`), and expresses cases arity-overloading can't. The concrete overload
+then only buys the no-arg spelling — keep it as thin sugar, not the contract.
+
+The same one-name-per-method rule applies to `trait` declarations
+(`duplicate method '…' in trait '…'`).
+
 ## Call-site auto-borrow for `&T` parameters
 
 When a function or method parameter is declared `&T` (a shared borrow), the
