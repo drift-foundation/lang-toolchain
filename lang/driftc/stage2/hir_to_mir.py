@@ -4830,7 +4830,8 @@ class HIRToMIR:
 			if lower.b.block.terminator is not None:
 				lower._pop_scope()
 				return None
-		if isinstance(last, H.HExprStmt):
+		lam_is_void = lower._ret_type is not None and lower._type_table.is_void(lower._ret_type)
+		if isinstance(last, H.HExprStmt) and not lam_is_void:
 			val = lower.lower_expr(last.expr)
 			if lower.b.block.terminator is None:
 				# Phase 4 site-1 patch 4b.1: lambda-block exit
@@ -4843,6 +4844,19 @@ class HIRToMIR:
 				lower._emit_scope_cleanup_hook(scope_index=len(lower._scope_stack) - 1)
 			lower._pop_scope()
 			return val
+		# Void-returning lambda/callback: the tail expression is in
+		# statement context (side effects only), exactly like a named
+		# function body's final ExprStmt (`lower_function_body` discards
+		# the result of a void fn's trailing expression).  Lowering it as
+		# a *value* would route void-producing tails — a Void free-call
+		# `f(x)` or a `match` with a Void/empty arm — through value-context
+		# paths in `_visit_expr_HCall`/`_lower_match` that assert
+		# ("Void-returning call used in expression context" /
+		# "value-producing match arm must yield a value or terminate").
+		# `lower_stmt` lowers the expression with `want_value=False`, which
+		# both forms already handle, so the two ICEs disappear and behavior
+		# matches the named-function tail (see the `disp(ev)` / inline-match
+		# regressions in test_closure_void_tail_lowering.py).
 		lower.lower_stmt(last)
 		if lower.b.block.terminator is None:
 			# Phase 4 site-1 patch 4b.1: lambda-block exit

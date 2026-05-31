@@ -7294,13 +7294,34 @@ def compile_stubbed_funcs(
 			if local_name not in builder.func.local_types:
 				builder.func.local_types[local_name] = unknown_ty
 		if builder.block.terminator is None:
-			if ret_val is None:
+			_ret_def = shared_type_table.get(lambda_ret_type) if shared_type_table is not None else None
+			_is_void_return = _ret_def is not None and _ret_def.kind is TypeKind.VOID
+			# `_lower_lambda_block` intentionally returns `ret_val is None`
+			# for a Void-returning lambda whose tail is lowered in statement
+			# context (the closure Void-tail fix).  Mirror the hidden
+			# callback-lambda finalize above (near line 7029): only a
+			# non-Void lambda with no value/return is a genuine bug.
+			if ret_val is None and not _is_void_return:
 				raise AssertionError("captureless lambda block must end with a value or return")
 			if spec.can_throw:
+				# Can-throw lambdas (including Void-returning ones) need an
+				# `Ok` carrier.  For Void can-throw, synthesize the Void
+				# value to wrap, matching the `Result<Void, E>` ABI.
+				if ret_val is None and _is_void_return:
+					ret_val = lower._void_value()
 				ok_dest = builder.new_temp()
 				builder.emit(M.ConstructResultOk(dest=ok_dest, value=ret_val))
 				ret_val = ok_dest
-			builder.set_terminator(M.Return(value=ret_val))
+				builder.set_terminator(M.Return(value=ret_val))
+			elif _is_void_return:
+				# Nothrow Void-returning captureless lambda: emit
+				# `Return(value=None)` — same shape as a regular Void fn
+				# falling off the end.  Synthesizing a `_void_value()` here
+				# would make MIR carry a Void terminator value (violates the
+				# LLVM "Void function must not return a value" contract).
+				builder.set_terminator(M.Return(value=None))
+			else:
+				builder.set_terminator(M.Return(value=ret_val))
 		mir_funcs_by_id[spec.fn_id] = builder.func
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
