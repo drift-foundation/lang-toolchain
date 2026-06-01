@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Route this tool's scratch under $DRIFT_TMP_ROOT so it's janitor-safe
 # even when run outside pytest (which would otherwise relocate via
-# PYTEST_DEBUG_TEMPROOT).  See docs/conventions/tmp-root.md.
+# PYTEST_DEBUG_TEMPROOT).  See doc/conventions/tmp-root.md.
 sys.path.insert(0, str(ROOT))
 from lang.test_support.drift_tmp import session_root as _drift_session_root
 

@@ -174,7 +174,7 @@
   sanitizer defaults) plus a real driftc compile-and-run smoke.  Pure dev/CI
   tooling — no toolchain version/ABI impact.  Placement is `tools/` (a dev/CI
   tool, not a project-build op); a `drift test-run` subcommand wrapper can follow
-  if wanted.  Docs: `docs/test-run.md`.  First reduction target per the RFC: the
+  if wanted.  Docs: `doc/test-run.md`.  First reduction target per the RFC: the
   standalone e2e runners under `lang/tests/`; teams migrate off their forks one
   at a time against the stable plan-format contract.
 
@@ -202,7 +202,7 @@
   teardown releases the slot; `--heartbeat` arg validation).  `flocker` 0.1.0 →
   0.2.0.  Bash tool, no toolchain version/ABI impact.
 - The larger runner/plan-format promotion stays a **separate, on-hold RFC**
-  (`drift-web/docs/parallel-runner-spec.md`); this is just the one shared
+  (`drift-web/doc/parallel-runner-spec.md`); this is just the one shared
   primitive landing on the tool that already owns host-global concurrency.
 
 ## 2026-05-31 (`--sanitize` flag: explicit, reproducible sanitizer selection — no ABI change)
@@ -252,7 +252,7 @@
   forever on a timer/IO/join/condvar wake).  Interrogation only this slice;
   the fail-fast watchdog (dump-then-abort) is Slices 3–4.  Full design +
   staged roadmap in `work/liveness-watchdog-interogator/`; operator guide in
-  `docs/liveness.md`.
+  `doc/liveness.md`.
 - **Design: runtime-owned and wedge-independent.**  A dedicated thread
   (spawned in `drift_run_main_on_vt`, `sigwait` on `SIGUSR2`, blocked
   process-wide before any carrier/reactor/app thread is created) emits the
@@ -302,13 +302,13 @@
   `test_log_vtid_tid.py` (kernel-TID `< 2^31` sanity, no-legacy-`ptid` guard);
   e2e `std_log_include_ptid_opt_in` → `std_log_include_tid_opt_in`; Valgrind
   suppression `drift_liveness_thread_tls_dtv` for the daemon-thread TLS.
-  Cross-links added in `docs/design/drift-concurrency.md` and `README.md`.
+  Cross-links added in `doc/design/drift-concurrency.md` and `README.md`.
 
 ## 2026-05-27 (LANGUAGE_BUG fix: value-position by-value call args silently accepted bare non-`Copy` named owners — explicit-ownership-transfer contract now uniformly enforced at type-check time; ABI stays at 14)
 - **Release 0.33.7, ABI unchanged at 14.**  Reported as an
   explicit-ownership-transfer asymmetry between statement-form
   and value-form by-value call args.  Spec
-  `docs/design/drift-lang-spec.md` §1.3 declares that bare named
+  `doc/design/drift-lang-spec.md` §1.3 declares that bare named
   non-`Copy` owners at any consume position are compile errors;
   users must write `move <x>`.  Pre-0.33.7 the rule was enforced
   uniformly at HReturn / HLet RHS / HAssign RHS (type-checker
@@ -531,10 +531,10 @@
     semantic; constructor coverage added to the enumerated
     gated-shape list; no behavior change).
   - `lang/versions.py` — 0.33.6 → 0.33.7.
-  - `docs/design/drift-lang-spec.md` (§1.3.2 "known compiler
+  - `doc/design/drift-lang-spec.md` (§1.3.2 "known compiler
     gap" removed — the gap is now closed; spec is fully
     consistent with compiler behavior).
-  - `docs/refactor_triggers.md` — implicit-move-materialize
+  - `doc/refactor_triggers.md` — implicit-move-materialize
     trigger entry will be updated separately to reflect that
     the LANGUAGE_BUG has fired and been fixed.
 
@@ -688,7 +688,7 @@
   ### ABI implication
 
   No compiler change → no ABI change.  ABI stays at 14.  Per
-  `docs/design/drift-lang-abi.md` and the ABI policy: a
+  `doc/design/drift-lang-abi.md` and the ABI policy: a
   language-contract clarification with no runtime symbol /
   layout / calling-convention / `.zdmp` schema / signing
   path change is not an ABI event.  All pre-existing ABI-14
@@ -723,8 +723,8 @@
     (new — positive `move` valgrind regression + negative
     bare-HVar contract regression).
   - `lang/versions.py` — 0.33.5 → 0.33.6.
-  - `docs/history.md` — this entry.
-  - `docs/refactor_triggers.md` — implicit-move structural
+  - `doc/history.md` — this entry.
+  - `doc/refactor_triggers.md` — implicit-move structural
     refactor trigger tightened (already filed earlier this
     session).
 
@@ -805,7 +805,7 @@
   **ABI implication.**  This is a compiler defect that broke valid
   existing same-ABI source — fix the compiler, keep ABI at 14.
   Per the policy now codified in
-  `docs/design/drift-lang-abi.md` §"Stable ABI Artifact Rule" /
+  `doc/design/drift-lang-abi.md` §"Stable ABI Artifact Rule" /
   §"Signing and verification compatibility": ABI equality is a
   promise across the **complete** compiled-artifact contract
   (calls, returns, exceptions, data layouts, interfaces / vtables,
@@ -859,7 +859,7 @@
   - `lang/versions.py` — 0.33.4 → 0.33.5.
 
   Also adopted in this release: explicit ABI policy in
-  `docs/design/drift-lang-abi.md` — `DRIFT_RT_ABI_VERSION` is now
+  `doc/design/drift-lang-abi.md` — `DRIFT_RT_ABI_VERSION` is now
   formally the compatibility promise for the **complete**
   compiled-artifact contract (calls, returns, exceptions, data
   layouts, interfaces / vtables, closures / captures, ownership /
@@ -1354,7 +1354,7 @@
     - 59 existing `concurrent_*` / `conc_*` e2e cases continue to
       pass under both normal and `DRIFT_MEMCHECK=1` lanes.
   
-  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md` process
+  **Refactor-triggers scan.**  Per `doc/refactor_triggers.md` process
   for LANGUAGE_BUG fixes: scanned all 5 entries.  Partial structural
   match against `## Drop-aware RawBuffer / Ptr write variants`
   (`mem.write_drop` / `mem.ptr_write_drop` family).  Match was to the
@@ -2546,7 +2546,7 @@
    - HIR shape, MIR shape, codegen.  Pure stage1 fix.
 
   **Refactor-triggers scan.**  Scanned
-  `docs/refactor_triggers.md`; no match.  Considered whether
+  `doc/refactor_triggers.md`; no match.  Considered whether
   "scan-pass missing a node kind" is a recurring pattern worth
   filing as a trigger.  Decision: NOT yet.  This is the first
   instance I'm aware of where the visitor-pattern gap caused
@@ -2745,7 +2745,7 @@
   works) regression carriers pin both directions.
 
   **Refactor-triggers scan.**  Per
-  `docs/refactor_triggers.md` process for LANGUAGE_BUG fixes:
+  `doc/refactor_triggers.md` process for LANGUAGE_BUG fixes:
   scanned the five registered triggers (borrow-checker walker
   consolidation; DMIR discriminator promotion; DMIR collision
   check; drop-aware mem.write; borrow-checker span tracking).
@@ -2914,7 +2914,7 @@
    - Thunk OUTER signature -- ABI for vtable dispatchers is
      stable.  Pure codegen-internals fix.
 
-  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md`
+  **Refactor-triggers scan.**  Per `doc/refactor_triggers.md`
   process for LANGUAGE_BUG fixes: scanned the five registered
   triggers (borrow-checker walker consolidation; DMIR
   discriminator promotion; DMIR collision check; drop-aware
@@ -3063,7 +3063,7 @@
     path (struct fields have distinct names by construction;
     no shared-name collision possible).
 
-  **Refactor-triggers scan.**  Per `docs/refactor_triggers.md`
+  **Refactor-triggers scan.**  Per `doc/refactor_triggers.md`
   process for LANGUAGE_BUG fixes: scanned the registered
   triggers (borrow-checker walker consolidation; DMIR
   discriminator promotion; DMIR collision check; drop-aware
@@ -4238,7 +4238,7 @@
 
   **Why this was an audit item, not a 0.31.83 inclusion.**  At
   the time of the sleep fix I flagged the I/O wait's parallel
-  pattern in `docs/history.md` and queued it as the next runtime
+  pattern in `doc/history.md` and queued it as the next runtime
   audit item — deliberately not folding it in to keep the sleep
   patch narrow around the reported blocker.  The mariadb team
   hit it in production three days later (a `keepalive VT not
@@ -4304,7 +4304,7 @@
   `_parse_error_message` infrastructure that already handles
   `E-TRAIT-PROP-VALUE-POS`, `E_EXPR_BLOCK_MISSING_VALUE`, etc.
 
-  Doc note in `docs/effective-drift.md` ("Conditional values:
+  Doc note in `doc/effective-drift.md` ("Conditional values:
   use `match`, not `if`") covers the idiom in prose and shows
   the canonical pattern.
 
@@ -5545,7 +5545,7 @@
   - `lang/tests/memcheck/test_ref_to_value_arg_coercion_memcheck.py`
     — String retain/release balance on the deref-rewrite path.
 
-  Docs: `docs/effective-drift.md` gains a "Call-site auto-dup for
+  Docs: `doc/effective-drift.md` gains a "Call-site auto-dup for
   value parameters from `&T` / `&mut T`" section next to the
   existing `T → &T` auto-borrow.  Auto-dup is for Copy / ConstShare;
   the `share x` expression form remains the explicit path for types
@@ -5613,7 +5613,7 @@
   - `lang/tests/driver/_tmp_check_result_order.drift` updated to
     new ctor shape.
 
-  Doc updates: `docs/effective-drift.md` stdlib-behavior section
+  Doc updates: `doc/effective-drift.md` stdlib-behavior section
   rewritten — the "JsonErrorData throws JsonError" wrap is gone;
   every stdlib Result Err carrier is its own catchable event now.
 
@@ -6640,7 +6640,7 @@
   lookup) are all additive and ABI-neutral.
 
   **Spec edits.**
-    - `docs/design/drift-lang-spec.md`
+    - `doc/design/drift-lang-spec.md`
         - §5.13.7 `Diagnostic` trait — projection target
           changes from `DiagnosticValue` to `JsonNode`; method
           renamed `to_diag` → `to_json` returning `JsonNode`.
@@ -6677,7 +6677,7 @@
           reserved during the migration but flagged as
           internal-only.
 
-    - `docs/design/drift-lang-abi.md`
+    - `doc/design/drift-lang-abi.md`
         - §2 Error ABI — `void *attrs / size_t attr_count` and
           `void *frames / size_t frame_count` removed.  New
           shape: `DriftString params_json` (RFC-8259 UTF-8 JSON
@@ -7617,7 +7617,7 @@
   serialized from real-hazard-where-both-sides-serialize
   without per-class serialization-side metadata that doesn't
   exist.  The structural fix (module-qualified discriminators,
-  filed in `docs/refactor_triggers.md`) sidesteps the
+  filed in `doc/refactor_triggers.md`) sidesteps the
   question entirely by making the discriminator unambiguous;
   until that lands, the registry stays on disciplined
   registration order.
@@ -7631,7 +7631,7 @@
      work, here's why" note for future-me.
   2. `lang/tests/packages/test_dmir_registry_collision.py`
      — deleted.  No assertion to test.
-  3. `docs/refactor_triggers.md` — strike-through the
+  3. `doc/refactor_triggers.md` — strike-through the
      "Defensive collision check for DMIR registry" entry
      with a 16+-class audit, the lesson learned ("the right
      question is 'could a serialized instance of one shape
@@ -7673,7 +7673,7 @@
   so the field-richer `stage0` variant wins; that
   registration-order discipline is fragile and the underlying
   bare-name discriminator design is filed in
-  `docs/refactor_triggers.md` § "Promote DMIR `_to_jsonable`
+  `doc/refactor_triggers.md` § "Promote DMIR `_to_jsonable`
   discriminators to module-qualified names".  This patch turns
   a future silent recurrence into a hard `AssertionError` that
   names both colliding qualified-classes, the diverging field
@@ -7688,7 +7688,7 @@
   **Verification.**  Compiler version bumped to `0.31.36` per
   AGENTS.md "Compiler versioning rule" (behavior-changing
   internal tightening, no boundary shape change → no ABI bump).
-  No `docs/refactor_triggers.md` entries closed — the
+  No `doc/refactor_triggers.md` entries closed — the
   collision-check entry's trigger is "the assertion fires," not
   "the assertion lands"; it stays parked.  No test edits;
   unrelated tests untouched.
@@ -7901,7 +7901,7 @@
   - Memcheck regression (drop-bearing payload via shared
     by-ref): clean.
 
-  **Spec doc updated** at `docs/match_by_ref_variant.md` with
+  **Spec doc updated** at `doc/match_by_ref_variant.md` with
   the full mut semantics + history entry.
 
   **Known v1 limitations.**
@@ -8031,7 +8031,7 @@
   Broader driver + checker + stage1 + stage2 gate:
   **1568 passed, 0 failed**.
 
-  **Spec doc updated** at `docs/match_by_ref_variant.md` to call
+  **Spec doc updated** at `doc/match_by_ref_variant.md` to call
   out the Copy-payload match-ergonomics.
 
   **What is still NOT certified.**
@@ -8111,7 +8111,7 @@
   | borrow escape into outer var, then mutate scrutinee   | rejected (F2) |
   | `match &mut Variant` certification                    | deferred — separate patch |
 
-  **Documentation.**  Spec at `docs/match_by_ref_variant.md`.
+  **Documentation.**  Spec at `doc/match_by_ref_variant.md`.
 
   **Tests.**
   - `lang/tests/driver/test_match_by_ref_variant.py` — 12 tests:
@@ -11714,7 +11714,7 @@
       types without dedicated domain exceptions throw `ResultError` fallback.
 
   Docs and tests:
-    - `docs/effective-drift.md` documents the two `throws` forms, terminal
+    - `doc/effective-drift.md` documents the two `throws` forms, terminal
       calls as local terminators, typed `.or_throw()` through `Throw`, custom
       `Throw` impls, and the owned-only result-unwrapping contract.
     - Certified toolchain distributions now ship checked-in official docs under
@@ -12043,7 +12043,7 @@
       would hide flag-drop bugs like the impl-block regression
       caught in v2 review.
   - Source scrubs from v2 are reverted. The 14 `.drift` files +
-    4 `.py` test files + `docs/effective-drift.md` instances of
+    4 `.py` test files + `doc/effective-drift.md` instances of
     `fn ... throws -> Int { ... }` are all RESTORED to their
     original form. The auto-try semantic is preserved.
   - Validated (compilation, parsing, in-memory plumbing only —
@@ -13266,7 +13266,7 @@
     - parser regression coverage for the legacy counted form remains in:
       `lang/tests/parser/test_parser_for_looping.py`
     - language spec updated in:
-      `docs/design/drift-lang-spec.md`
+      `doc/design/drift-lang-spec.md`
 
 - **Improve logging thread identity under virtual threads: split `tid` into `vtid` and `ptid` (0.27.151, ABI 8)**:
   Logging under the VT runtime no longer emits a single ambiguous `tid`
@@ -16023,7 +16023,7 @@
   - Packaging/docs:
     - deployment packaging now installs `bin/drift` instead of
       `bin/drift-deploy`
-    - bundled deployment docs/examples were updated to use the unified command
+    - bundled deployment doc/examples were updated to use the unified command
       surface and corrected to the six-step deploy pipeline
 
 - **Packaged `drift-deploy` as a self-contained PEX tool (0.27.64)**:
@@ -16935,7 +16935,7 @@
 - Bumped compiler version to `0.27.7-dev`; ABI remains `4`.
 
 ## 2026-03-05 (deploy prereq fix)
-- Downstream rollout fix: deployed toolchain docs/checks now include Python `cryptography` as a required prerequisite for signed-package verification paths.
+- Downstream rollout fix: deployed toolchain doc/checks now include Python `cryptography` as a required prerequisite for signed-package verification paths.
   - Updated deployed README generation in `tools/deploy/step_bundle.sh`:
     - prerequisites table now lists `cryptography`,
     - environment verify snippet now imports `lark`, `llvmlite`, and `cryptography`.
@@ -17006,8 +17006,8 @@
   - `Go raw TCP`: `113,636 req/s`, `Go net/http`: `45,871 req/s`,
   - `Drift baseline-vt`: `121,951 req/s`, `Drift baseline-health`: `79,365 req/s`,
   - result: Drift now leads on both measured paths in this benchmark setup.
-- Added `docs/design/drift-runtime-targets.md`: documents the current VT runtime support boundary (x86_64 Linux only), how it is enforced (host-based gating in `__init__.py`), why host-based gating is insufficient for cross-compilation, and what target-triple-based selection will require.
-- Updated `docs/design/drift-concurrency.md` with a cross-reference noting the concrete implementation boundary of the concurrency model described there.
+- Added `doc/design/drift-runtime-targets.md`: documents the current VT runtime support boundary (x86_64 Linux only), how it is enforced (host-based gating in `__init__.py`), why host-based gating is insufficient for cross-compilation, and what target-triple-based selection will require.
+- Updated `doc/design/drift-concurrency.md` with a cross-reference noting the concrete implementation boundary of the concurrency model described there.
 
 ## 2026-03-03
 - Implemented Phase A worker-side polling in `lang/language_runtime/posix/thread_runtime.c` for the single-worker executor case:
@@ -17207,7 +17207,7 @@
   - Shared `validate_const_value()` in `types_core.py` eliminates parser/checker const validation duplication.
   - 18 e2e tests: 7 positive (suffix, const arrays, nospace subtraction, max boundary, cast truncation pin) + 11 negative (overflow, type mismatch, empty array, non-literal, string elements).
 - Item 4: Stdlib cleanup — removed `_ror32` forced type annotations, replaced 64-branch `_sha256_k()` if-chain with `const SHA256_K: Array<Uint>` table lookup, eliminated `U32_MOD` constant (replaced with bitwise `& U32_MASK` / `>> 32`). All 10 crypto/codec e2e vectors pass byte-identical.
-- Spec updates: added Numeric Conversion Policy (`docs/design/spec-change-requests/drift-numeric-conversion-policy.md`) and applied to `drift-lang-spec.md` — §2.y (cast semantics), §3.1.1 (conversion policy), §3.9 (const rules, u-suffix, const arrays). Uint64 exempted from fixed-width reservation for user code.
+- Spec updates: added Numeric Conversion Policy (`doc/design/spec-change-requests/drift-numeric-conversion-policy.md`) and applied to `drift-lang-spec.md` — §2.y (cast semantics), §3.1.1 (conversion policy), §3.9 (const rules, u-suffix, const arrays). Uint64 exempted from fixed-width reservation for user code.
 - ABI version stamping: link-time guard between compiler and runtime. Single source of truth in `lang/driftc/driftc_versions.py` (`DRIFT_RT_ABI_VERSION = 1`). Runtime exports `__drift_rt_abi_version_N` symbol (all archive variants). Codegen entry wrapper emits required call to same symbol. On mismatch, linker fails with unresolved symbol instead of runtime crash. Driver appends compatibility hint when detecting ABI mismatch in linker output. Documented in `drift-lang-abi.md` §7.1. Regression tests: IR presence, mismatch link failure, hint detection (`test_abi_version_stamp.py`).
 - Added `driftc --version` (`-V`): outputs compiler version, ABI version, git SHA, license, and supervising body. Version constants (`DRIFTC_VERSION`, `DRIFT_RT_ABI_VERSION`) live in `lang/driftc/driftc_versions.py`.
 - ABI stamping plan closeout (`work/compiler-ver-stamping/plan.md`): Phases A-D completed plus `§11` (`--version`). Kept Phase C hint regression at predicate-level (real mismatch stderr contains `__drift_rt_abi_version_`) by design; full driver interception test was intentionally deferred due to disproportionate harness complexity.
@@ -17224,7 +17224,7 @@
 - Added CLI e2e coverage for both success and rejection paths: basic parse flow, help request, unknown option, missing required option/positional, invalid int option, duplicate option, unsupported short clusters, and double-dash positional mode.
 - Fixed method-signature metadata classification so only receiver-bearing impl functions are tagged `is_method`, while impl-associated static functions still preserve `impl_target_type_id` for qualified-static resolution.
 - Updated type/call resolution to match the metadata contract (`impl_target_type_id`-based qualified static lookup), and validated with driver/e2e regressions for positive and negative qualified-static behaviors.
-- Added runnable CLI example `examples/cli/main.drift` and documented `std.cli` usage in `docs/effective-drift.md` with API-accurate parse/access patterns.
+- Added runnable CLI example `examples/cli/main.drift` and documented `std.cli` usage in `doc/effective-drift.md` with API-accurate parse/access patterns.
 
 ## 2026-01-06
 - Optional consolidation: inventoried Optional-specific logic, locked arm order `None=0`/`Some=1`, and removed MIR OptionalIsSome/OptionalValue ops across stage2/ARC/codegen.
@@ -17346,13 +17346,13 @@
 - Hardened comment and error conventions: grammar now allows both `//` line comments and `/* ... */` block comments (non-nesting) so we can annotate examples without fighting terminator insertion. Documented a standard `IndexError(container, index)` event for out-of-bounds accesses to make future bounds checks report consistent payloads instead of ad-hoc errors.
 - Elevated error declarations to first-class language items with an `exception` keyword, aligning them with structs so constructors are typed and usable from the interpreter. Fixed the parser to ignore non-Tree nodes when assembling parameter lists, preventing stray tokens/comments from polluting function signatures.
 - Tightened tooling guardrails: the draft linter now enforces tabs (default) vs spaces and checks snake_case/PascalCase across functions, parameters, bindings, structs, and exceptions to keep examples consistent with the style guide. The `just` recipes parse examples to catch grammar regressions immediately; we deliberately stayed with a lightweight custom linter instead of a full formatter while the syntax is still in flux.
-- Worked through module signing requirements and concluded the pipeline should canonically sign an ANF-like DMIR and lower to SSA MIR for optimization/codegen; added an overview of that split to `docs/design-first-afm-then-ssa.md`.
+- Worked through module signing requirements and concluded the pipeline should canonically sign an ANF-like DMIR and lower to SSA MIR for optimization/codegen; added an overview of that split to `doc/design-first-afm-then-ssa.md`.
 - Adopted a policy of fully monomorphizing generics (no shared reified bodies) so DMIR/SSA always see concrete types; watch for code-size blowups in heavily polymorphic code, but favor optimizer simplicity and performance first.
 ## 2025-11-23
 - Added a DMIR draft spec and cleaned up primitive notes (ConsoleOut treated as runtime-provided only). Expanded control surface with ternary `?:`, plus try/catch and inline try/else support wired through grammar, parser, checker, interpreter, linter, and new runtime tests (including a ternary test case in `tests/`).
 - Runtime now enforces array bounds with `IndexError(container, index)` and prints errors in the spec’s structured format with a simple call-stack capture; added runtime tests for out-of-bounds and error reporting.
 - Documented DMIR canonicalization rules (naming, ordering, kwarg normalization) and added surface→DMIR examples for ternary, try/else, and constructors to stabilize the signing format. Approved SSA MIR control-flow model and value/ownership rules (monomorphized, move-only by default, explicit error edges, drops in MIR).
-- Documented the SSA MIR instruction palette (const/move/copy/call with normal+error edges, struct/array ops, unary/binary, drop) in `docs/dmir-spec.md`; TODO updated accordingly.
+- Documented the SSA MIR instruction palette (const/move/copy/call with normal+error edges, struct/array ops, unary/binary, drop) in `doc/dmir-spec.md`; TODO updated accordingly.
 - Added end-to-end surface→DMIR→SSA MIR examples (ternary, inline try/else with fallback) to ground the IR design.
 - Added SSA MIR terminology/conventions (block labels, params-as-φ, SSA defs, explicit call successors, ownership rules).
 - Added a CFG block notation alongside the ternary SSA example to visualize control flow and φ-like params.

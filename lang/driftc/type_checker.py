@@ -12422,7 +12422,7 @@ class TypeChecker:
 			"""Enforce Drift's explicit-ownership-transfer rule at by-
 			value owned call-arg slots.
 
-			Per `docs/design/drift-lang-spec.md` §1.3: a bare named
+			Per `doc/design/drift-lang-spec.md` §1.3: a bare named
 			non-`Copy` owner at a by-value call-arg slot is a compile
 			error.  Users must write `move <x>` (or `copy x` for Copy
 			types, `share x` for Share types, `&x` / `&mut x` for

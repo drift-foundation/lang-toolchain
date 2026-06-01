@@ -651,7 +651,7 @@ implement<T> core.Destructible for MutexGuard<T> {
 // waiter's stale handle does not later leak an unpark onto a VT
 // that has moved on to other work.
 //
-// See `docs/conventions/tmp-root.md` companion doc and
+// See `doc/conventions/tmp-root.md` companion doc and
 // `work/stdlib-condvar/plan.md` for the design rationale.
 
 

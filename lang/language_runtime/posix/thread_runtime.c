@@ -740,7 +740,7 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 							 * the unconsumed token short-circuits the VT's
 							 * next park_until call (customer-visible
 							 * "sleep(550ms) elapsed=0" after a single
-							 * wire.query+drain; see docs/history.md
+							 * wire.query+drain; see doc/history.md
 							 * 2026-05-16 and the maria-team reduction
 							 * fixture
 							 * `packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`
@@ -2692,7 +2692,7 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 	 * visible "main's sleep(550) returns in ~1ms after rpc.connect()"
 	 * symptom (their handshake internally hit a timed-I/O timeout
 	 * path).  Symmetric to the 0.31.83 sleep fix in
-	 * std.concurrent.sleep; see `docs/history.md`. */
+	 * std.concurrent.sleep; see `doc/history.md`. */
 	(void)deadline_ms;
 #else
 	(void)fd;

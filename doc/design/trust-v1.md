@@ -2,7 +2,7 @@
 
 This document is the durable contract for Drift's package trust model.
 It supersedes the pre-v1 `.sig` / `.source-attestation` envelope shape
-described in `docs/design/provenance-bundle.md`, which is retained only
+described in `doc/design/provenance-bundle.md`, which is retained only
 as a historical reference.
 
 The trust-v1 cutover is a **hard product boundary**: there is no

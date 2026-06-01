@@ -11,8 +11,8 @@
 > ABI 14 surface is `params_json` + `context_json` (canonical JSON
 > text), with diagnostic projection owned by
 > `core.Diagnostic.to_json_text(&E) -> String`.  See
-> `docs/design/drift-lang-abi.md` §2 for the live error shape and
-> `docs/design/drift-lang-spec.md` §5.13.8 for the public diagnostic
+> `doc/design/drift-lang-abi.md` §2 for the live error shape and
+> `doc/design/drift-lang-spec.md` §5.13.8 for the public diagnostic
 > surface.  This document is preserved as the historical design
 > record; do not implement against it.
 

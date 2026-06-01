@@ -860,7 +860,7 @@ def _validate_identifier_lengths_and_count_tokens(tree: Tree) -> int:
 	`lark.Token` leaves visited.
 
 	Used by `parse_program` ONLY when an `_events` sink is installed
-	(see the workload contract in `docs/timing.md`).  The split keeps
+	(see the workload contract in `doc/timing.md`).  The split keeps
 	the no-sink path free of per-token integer-increment work and
 	the post-build `setattr` on the Program object; the sink path
 	pays for both because the tally is the parser-visible work proxy
@@ -914,7 +914,7 @@ def parse_program(source: str, *, filename: str | None = None, file_id: int | No
         # before they reach the AST builder / codegen / clang. The walk is
         # iterative and runs in O(N) over the parse tree.
         #
-        # Cheap-disabled-path contract (`docs/timing.md`): the workload
+        # Cheap-disabled-path contract (`doc/timing.md`): the workload
         # token tally is collected only when an `_events` sink is
         # installed.  Without a sink, the validation walk runs alone --
         # no per-token integer increment, no Program-side `setattr`.

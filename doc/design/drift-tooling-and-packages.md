@@ -3,7 +3,7 @@
 > **Trust model is now v1.**  This document still describes the
 > pre-v1 `.sig` / `pkg.dmp.sig` envelope shape for the trust /
 > signature half.  The authoritative trust contract has moved to
-> [`docs/design/trust-v1.md`](trust-v1.md): author signing is in
+> [`doc/design/trust-v1.md`](trust-v1.md): author signing is in
 > `drift author`, consumer-side verification reads
 > `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json` against a
 > role-tagged trust store, and the v0 sidecar surface is gone.
@@ -310,7 +310,7 @@ Signature policy:
   - `pkg.dmp` (DMIR-PKG container bytes)
   - `pkg.dmp.sig` (JSON signature metadata)
 - `drift` signs artifacts for distribution; `driftc` verifies signatures **at use time** (gatekeeper) using only local trust configuration.
-- For the normative container and sidecar schema, see `docs/design/drift-lang-spec.md` (Chapter “DMIR-PKG v0”).
+- For the normative container and sidecar schema, see `doc/design/drift-lang-spec.md` (Chapter “DMIR-PKG v0”).
 
 ---
 

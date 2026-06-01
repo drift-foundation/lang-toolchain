@@ -33,7 +33,7 @@ retired alongside the runtime symbols they exercised.  This
 file now pins the JSON-only helper ownership contract that
 survives at ABI 14.
 
-See `docs/design/drift-lang-abi.md` §2.3 (helper ownership
+See `doc/design/drift-lang-abi.md` §2.3 (helper ownership
 contract).
 """
 from __future__ import annotations

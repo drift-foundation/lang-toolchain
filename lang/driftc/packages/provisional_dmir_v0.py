@@ -86,7 +86,7 @@ def build_dataclass_registry(*modules: Any) -> dict[str, type]:
 	``parser_ast.TypeNameRef`` vs ``stage0.ast.TypeNameRef``) are resolved
 	last-wins, on purpose: callers register modules in dependency order so
 	the canonical (typically wider, HIR-bearing) variant wins.  See
-	``docs/refactor_triggers.md`` § "Promote DMIR ``_to_jsonable``
+	``doc/refactor_triggers.md`` § "Promote DMIR ``_to_jsonable``
 	discriminators to module-qualified names" for the standing structural
 	fix; a 0.31.36 attempt at a runtime defensive check false-fired on the
 	16+ legitimate parser/stage0 divergences and was reverted in 0.31.37.

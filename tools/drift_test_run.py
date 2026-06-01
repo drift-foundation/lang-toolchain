@@ -16,16 +16,16 @@ jobs concurrently (bounded by the flocker pool) and serial jobs one-at-a-time
 per named group.
 
 Concurrency budget (load-bearing): the parallel pool size N is sourced from the
-`pytest_jobs.py` protocol (`DRIFT_TEST_JOBS`, else `ceil(nproc/2)`) — never
+`pytest_jobs.py` protocol (`DRIFT_TEST_JOBS`, else full physical cores) — never
 hardcoded — and every job is wrapped in `flocker --key <pool> -j N`, so several
 concurrent runs/lanes on one host stay bounded by the *single* host-global
-flocker semaphore instead of multiplying past RAM.  See docs/test-run.md and
-docs/flocker.md.
+flocker semaphore instead of multiplying past RAM.  See doc/test-run.md and
+doc/flocker.md.
 
 Usage:
   tools/drift_test_run.py --plan PATH --work-dir DIR [options]
 
-The plan format and a worked example are documented in docs/test-run.md.
+The plan format and a worked example are documented in doc/test-run.md.
 """
 from __future__ import annotations
 
@@ -414,14 +414,14 @@ def main(argv: list[str] | None = None) -> int:
 
 	p = argparse.ArgumentParser(
 		prog="drift_test_run.py",
-		description="Scenario-agnostic parallel job executor (see docs/test-run.md).",
+		description="Scenario-agnostic parallel job executor (see doc/test-run.md).",
 	)
 	p.add_argument("--plan", type=Path, required=True, help="Path to the plan JSON file")
 	p.add_argument("--work-dir", type=Path, required=True,
 	               help="Work dir for {work} substitution + job logs")
 	p.add_argument("--jobs", type=int, default=None,
 	               help="Parallel pool size N. Default: the pytest_jobs.py protocol "
-	                    "(DRIFT_TEST_JOBS, else ceil(nproc/2)). Do not hardcode in plans.")
+	                    "(DRIFT_TEST_JOBS, else full physical cores). Do not hardcode in plans.")
 	p.add_argument("--driftc", type=str, default=None, help="Path to driftc ({driftc})")
 	p.add_argument("--drift", type=str, default=None, help="Path to drift ({drift})")
 	p.add_argument("--flocker", type=str, default=None, help="Path to flocker")

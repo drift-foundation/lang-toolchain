@@ -7,7 +7,7 @@ A single `Arc<Concrete>` allocation must be shareable as multiple
 `Arc<Interface>` handles, where every handle holds the SAME
 control block (and therefore the same strong refcount) but carries
 a T-as-I vtable for dispatch.  These tests pin the invariants
-from the 0.28.0 / ABI 10 cutover (`docs/history.md` 2026-04-18).
+from the 0.28.0 / ABI 10 cutover (`doc/history.md` 2026-04-18).
 
 The `STAGE3_FAT_ARC_ACTIVE` flag is on; every `Arc<I>` instance
 now uses the fat `{ctrl, data, vtable}` layout and is constructed

@@ -1724,7 +1724,7 @@ class TestLockCompatibility:
 		its own lock.  Trust comes from the namespace-allowlist check
 		at package-index time (v1 `provider_v1` / `verify_v1.
 		compose_verify`), not per-dep scid equality with the lock.
-		See `docs/history.md` 2026-04-21 for the full rationale."""
+		See `doc/history.md` 2026-04-21 for the full rationale."""
 		from tools.drift_deploy.resolver import PackageEntry
 		from tools.drift_deploy.semver import parse_version
 		import hashlib

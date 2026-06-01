@@ -51,7 +51,7 @@ def install_flocker(repo_root: Path, dist: Path) -> None:
 DEV_TOOLS = (
 	("tools/drift_test_run.py", "drift_test_run.py"),
 	# Budget protocol that drift_test_run.py sibling-imports
-	# (DRIFT_TEST_JOBS / ceil(nproc/2)).  Renamed with the drift_ prefix in the
+	# (DRIFT_TEST_JOBS / full physical cores).  Renamed with the drift_ prefix in the
 	# bundle; the runner imports `drift_pytest_jobs` first, falling back to the
 	# source-tree name `pytest_jobs`.  Both land in lib/tools/ together.
 	("tools/pytest_jobs.py", "drift_pytest_jobs.py"),
@@ -184,7 +184,7 @@ def bundle_docs_and_examples(dist: Path) -> None:
 	# consumers can read the language guide, design/spec docs, and toolchain
 	# workflow docs after deployment.
 	_ROOT = Path(__file__).resolve().parents[3]
-	docs_src = _ROOT / "docs"
+	docs_src = _ROOT / "doc"
 	if docs_src.is_dir():
 		for src in sorted(docs_src.rglob("*")):
 			if not src.is_file():
@@ -253,7 +253,7 @@ Python interpreter and runtime dependencies (cryptography, zstandard).
 Author-side signing has its own subcommand, `drift author`
 (the surface inside `bin/drift`), backed by a separately-loaded
 key-handling module so author key material stays out of the
-consumer-side code paths (see `docs/design/trust-v1.md`).
+consumer-side code paths (see `doc/design/trust-v1.md`).
 
 ```bash
 drift init                        # set up publishing identity + author profile
@@ -295,7 +295,7 @@ The standard library is shipped as a DMIR package
 `lib/stdlib/std.cert-claim.<kid>.json` (Foundation's certifier
 kid).  The compiler verifies both claims against the bundled
 core trust store at compile time (see
-`docs/design/trust-v1.md`).  Tampered or unsigned stdlib
+`doc/design/trust-v1.md`).  Tampered or unsigned stdlib
 packages are rejected.
 
 ### Flags

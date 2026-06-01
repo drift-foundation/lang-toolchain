@@ -4,7 +4,7 @@ Regression: Phase 2a fix for the `match Optional<String>` double-drop UAF
 (fix/ownership-drop-ledger track, 0.31.0).
 
 The bug and its runtime manifestation are documented extensively in
-`docs/history.md`'s 0.31.0 entry; this file pins the compiler-side
+`doc/history.md`'s 0.31.0 entry; this file pins the compiler-side
 emission fix.  Pre-0.31.0, `_ensure_arm_scrut_ptr`'s Copy-store branch
 (reached whenever the scrutinee's `_should_copy_value` returns True)
 emitted a bare `StoreLocal(arm_scrut_local, scrut_val)` — a bitcopy of

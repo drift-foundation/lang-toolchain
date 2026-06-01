@@ -27,4 +27,4 @@ The old `drift.py` entrypoint has been deleted. To run programs, use the SSA/LLV
 - Keyword arguments are only honored by builtin functions.
 - The removed interpreter used a straightforward tree walk and raised on the first runtime error; current execution goes through SSA + LLVM instead.
 
-See `docs/drift-draft.md` for the broader design goals.
+See `doc/drift-draft.md` for the broader design goals.

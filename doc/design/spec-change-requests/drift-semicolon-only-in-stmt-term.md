@@ -238,7 +238,7 @@ Assert:
 
 ## Documentation updates
 
-Update all Drift docs/spec examples to reflect `;` requirements:
+Update all Drift doc/spec examples to reflect `;` requirements:
 
 * Add `;` after simple statements in code fences.
 * Ensure compound statements are not shown with trailing `;`.

@@ -110,7 +110,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"summary lines to stderr after each artifact's build.  "
 			"Forwards `--timing` to the driftc subprocess; intended for "
 			"the toolchain-perf data-gathering release "
-			"(see `docs/timing.md`).  No effect on deploy output."
+			"(see `doc/timing.md`).  No effect on deploy output."
 		))
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(

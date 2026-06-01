@@ -117,7 +117,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 			"`[drift:timing]` summary to stderr after each artifact's "
 			"build.  Forward the flag to the underlying driftc invocation; "
 			"the data is intended for the toolchain-perf data-gathering "
-			"release (see `docs/timing.md`).  No effect on compile output."
+			"release (see `doc/timing.md`).  No effect on compile output."
 		))
 	p.add_argument("--source-rebuild", action="store_true",
 		help=(
@@ -820,7 +820,7 @@ def _print_wrapper_timing_summary(label: str, summary: dict) -> None:
 	When the merged sink contains workload counters (compiler child
 	merged its `workload` dict under the `compile.*` prefix), a
 	`[drift:workload][<label>]` block follows with one line per key
-	in stable alphabetical order.  See `docs/timing.md` for the key
+	in stable alphabetical order.  See `doc/timing.md` for the key
 	inventory."""
 	total = float(summary.get("total_wall", 0.0))
 	phases = dict(summary.get("phases", {}))

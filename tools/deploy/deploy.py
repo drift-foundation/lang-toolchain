@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 		# ── Step 3: Stdlib ───────────────────────────────────────────
 		# Author claim is an INPUT to this step (see
 		# `tools/deploy/steps/stdlib.py` module docstring +
-		# `docs/design/trust-v1.md` §7.5).  Deploy never holds the
+		# `doc/design/trust-v1.md` §7.5).  Deploy never holds the
 		# Foundation author private key.
 		build_and_install_stdlib(
 			repo_root, stage, dist, meta.driftc_version,

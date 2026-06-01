@@ -1544,7 +1544,7 @@ def insert_string_arc(
 				# correctly via `destructible_locals`.
 				#
 				# Architectural rule (Share Slice 1 / 0.31.14 close-out;
-				# see `docs/history.md` 2026-04-26): ledger authority
+				# see `doc/history.md` 2026-04-26): ledger authority
 				# is valid only for ownership effects visible in the
 				# MIR snapshot used to build the ledger.  Any late
 				# pass that creates/releases refcount stakes remains

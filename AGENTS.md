@@ -113,13 +113,13 @@ Some compiler design improvements are deferred because the cost is not justified
 
 **Process rule (mandatory):**
 
-When starting any LANGUAGE_BUG fix, scan `docs/refactor_triggers.md`. For each registered entry, ask: does the current bug match its trigger condition? If yes, the bug fix's deliverable is the larger refactor, not the minimal patch. If no, proceed with the minimal fix.
+When starting any LANGUAGE_BUG fix, scan `doc/refactor_triggers.md`. For each registered entry, ask: does the current bug match its trigger condition? If yes, the bug fix's deliverable is the larger refactor, not the minimal patch. If no, proceed with the minimal fix.
 
 This is an explicit "stop and consult" step parallel to the LANGUAGE_BUG stop-and-confirm rule above — both fire at the start of bug investigation.
 
 **Adding entries:**
 
-When a refactor is identified but not currently justified, append an entry to `docs/refactor_triggers.md` with:
+When a refactor is identified but not currently justified, append an entry to `doc/refactor_triggers.md` with:
 
 1. The improvement (one paragraph).
 2. Why deferred (cost vs current value, dated).

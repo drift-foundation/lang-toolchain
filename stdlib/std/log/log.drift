@@ -348,7 +348,7 @@ pub struct LoggerConfigBuilder {
 /// runtime state).  Logging methods (`info` / `debug` / `error` and
 /// their `(ev, &ctx)` and `(ev, &ctx, attrs)` overloads) are
 /// best-effort and return `Void` — see "Logging is best-effort" in
-/// `docs/effective-drift.md` for the design rationale.
+/// `doc/effective-drift.md` for the design rationale.
 ///
 /// `Logger` implements `core.Destructible`; the destructor releases
 /// the underlying runtime-state allocation when the last clone goes
@@ -1291,7 +1291,7 @@ implement Logger {
 	/// Best-effort, fire-and-continue: returns `Void` regardless of
 	/// queue acceptance.  Filtered out at the call site if the
 	/// logger's `min_level` is above `Info`.  See "Logging is
-	/// best-effort" in `docs/effective-drift.md` for the contract
+	/// best-effort" in `doc/effective-drift.md` for the contract
 	/// rationale.
 	///
 	/// If the logger is configured with a context resolver

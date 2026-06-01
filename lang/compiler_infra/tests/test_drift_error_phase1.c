@@ -23,7 +23,7 @@
 // ownership contract only.
 //
 // Run under valgrind from `lang/tests/memcheck/test_drift_error_phase1_helpers.py`.
-// See `docs/design/drift-lang-abi.md` §2.3 for the canonical helper
+// See `doc/design/drift-lang-abi.md` §2.3 for the canonical helper
 // ownership contract and `memory/project_dv_to_json_diagnostics.md` for
 // the multi-phase migration plan.
 

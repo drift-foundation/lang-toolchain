@@ -126,7 +126,7 @@ class TestManifestValid:
 					{"lib": "ssl"},
 					{"lib": "crypto"},
 				],
-				"assets": ["docs/"],
+				"assets": ["doc/"],
 				"smoke_command": ["just", "smoke-net-tls"],
 			}
 		]

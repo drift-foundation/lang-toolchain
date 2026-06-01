@@ -31,9 +31,9 @@ Run it with the host interpreter, e.g. `python3 <root>/lib/tools/drift_test_run.
 From either location it locates `bin/{flocker,driftc,drift}` by walking up to the
 toolchain/distribution root, so no path flags are needed in the common case.
 
-See also: `docs/flocker.md` (the concurrency primitive), `docs/certifiable-test-gates.md`
+See also: `doc/flocker.md` (the concurrency primitive), `doc/certifiable-test-gates.md`
 (the methodology this implements), and the budget helper above (the host
-concurrency-budget contract: `DRIFT_TEST_JOBS`, else `ceil(nproc/2)`).
+concurrency-budget contract: `DRIFT_TEST_JOBS`, else the full physical core count).
 
 ## Model
 
@@ -51,11 +51,21 @@ concurrency-budget contract: `DRIFT_TEST_JOBS`, else `ceil(nproc/2)`).
 ## Concurrency budget (load-bearing)
 
 The parallel pool size `N` is sourced from the **budget-helper protocol**
-(`DRIFT_TEST_JOBS`, else `ceil(nproc/2)`) — never hardcoded in a plan. Every job
-is wrapped in `flocker --key <pool> -j N`, so several concurrent runs or lanes on
-one host stay bounded by the *single* host-global flocker semaphore rather than
-multiplying past RAM. Override with `--jobs N` only as a deliberate operator
-choice.
+(`DRIFT_TEST_JOBS`, else the host's **full physical core count**) — never
+hardcoded in a plan. Every job is wrapped in `flocker --key <pool> -j N`, so
+several concurrent runs or lanes on one host stay bounded by the *single*
+host-global flocker semaphore rather than multiplying past RAM. Because that
+shared semaphore is what bounds concurrency, the per-lane default can safely be
+the whole box; trim it only when you have a reason to.
+
+The direction of the override matters: `DRIFT_TEST_JOBS` (and `--jobs N`) exist
+to **trim down**, not to raise. A RAM-heavy lane (e.g. valgrind on a small host)
+that OOMs at full cores sets a smaller `DRIFT_TEST_JOBS`, or marks the offending
+job `mode: serial` so it can't stack. Don't set it to "max cores" to go faster —
+that's the default already, and a per-team "use all cores" override is exactly
+the reinvention this protocol removes. (Default flipped from `ceil(nproc/2)` to
+full physical cores in 0.33.17; the half-default left half the box idle once
+flocker already bounded cross-lane concurrency.)
 
 ## Usage
 
@@ -131,6 +141,15 @@ failed job's log is printed in the summary.
   flags** (`--sanitize address`, not `DRIFT_ASAN=1`); `env` is the rare escape
   hatch. `--sanitize` on `driftc` also selects the matching runtime archive, so a
   sanitizer build is a plain `{driftc}` job — no driver hop needed.
+
+  > Don't confuse this with the `DRIFT_ASAN=1` / `DRIFT_MEMCHECK=1` **env
+  > lanes**. Those are a *whole-process* sweep switch (e.g. `DRIFT_ASAN=1 just
+  > test` rebuilds and runs an entire suite under one sanitizer, once per mode).
+  > A plan instead pins the sanitizer **per job** via `--sanitize`, so one run of
+  > the executor can build and check `plain`, `asan`, and `memcheck` variants
+  > side by side. Both are correct; they're different entry points — env lane for
+  > the broad sweep, `--sanitize` for per-job selection inside a plan. Inside a
+  > plan, prefer the flag.
 - `mode` — `parallel` (default) or `serial`.
 - `group` (serial only; `key` accepted as an alias) — jobs sharing a group run
   one-at-a-time on that named resource. Default: the job's own id.
@@ -183,3 +202,19 @@ ambient environment) already sets them. Harmless for non-sanitized binaries.
   those — it just runs the jobs the harness sandwiches.
 
 The plan format is the stable contract; forks can migrate one at a time.
+
+## A loop of `driftc` is a plan
+
+The subtlest migration trap is to move only the *gate's tests* onto the executor
+and leave compiles that hide elsewhere on a serial path. Any harness step that
+itself compiles — a consumer/downstream check that builds N small programs
+against published artifacts, a fixture pre-builder, a matrix smoke — is a build
+phase, not a `for`-loop of raw `{driftc}`. A serial loop pins those compiles to
+one core while the rest of the box sits idle, and it silently becomes the gate's
+wall-clock sink.
+
+**Rule of thumb: if a script calls `driftc` / `drift build` in a loop, that loop
+is a plan.** Emit one build job per iteration and let the executor fan them out
+under the flocker pool; keep only the genuinely sequential harness work (deploy,
+stage, measure) outside. The line is *compilation* (parallelizable, executor-owned)
+versus *orchestration* (a resource lifecycle or ordering the harness owns).

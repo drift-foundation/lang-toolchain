@@ -209,7 +209,7 @@ memory-safety defect.
    §5.1 traces a verifiable UAF between `concurrent.drift:1442` and
    `thread_runtime.c:2087`. Add a project memory entry tagged
    LANGUAGE_BUG so `[[]]` cross-refs from future work land here.
-2. **Audit `docs/refactor_triggers.md`** for any applicable trigger
+2. **Audit `doc/refactor_triggers.md`** for any applicable trigger
    (per the "scan refactor_triggers when starting any LANGUAGE_BUG
    fix" rule in `AGENTS.md`). If the VT lifetime / Destructible-for-
    VT shape matches a registered trigger, the deliverable escalates
@@ -227,9 +227,9 @@ memory-safety defect.
    `stdlib/std/concurrent/concurrent.drift`; no runtime ABI change.
 5. **Implement the runtime/toolchain fix; confirm the regression
    flips to passing.** Carries its own `DRIFTC_VERSION` bump and
-   `docs/history.md` entry (see §6); if it changes the
+   `doc/history.md` entry (see §6); if it changes the
    compiler/runtime boundary, also `DRIFT_RT_ABI_VERSION` bump and
-   ABI-mismatch regression updates per `docs/design/drift-lang-abi.md`.
+   ABI-mismatch regression updates per `doc/design/drift-lang-abi.md`.
 6. **Then proceed with the §2 stdlib slice** (channel<T> primary,
    `is_complete` secondary). Send back to the app team at this
    point for contract confirmation against the now-settled surface.
@@ -361,8 +361,8 @@ adjacent `join_any`-only fixes:
   and delegate to `.join()`, eliminating the `vt_is_completed(0)`
   infinite-poll hang.
 ABI unchanged at 14; no runtime modifications.  See
-`docs/history.md` 2026-05-26 for the release entry and
-`docs/design/drift-concurrency.md` for the public protocol
+`doc/history.md` 2026-05-26 for the release entry and
+`doc/design/drift-concurrency.md` for the public protocol
 documentation.
 
 Sections 5.1-5.3 below are the diagnosis/design that fed into the
@@ -378,14 +378,14 @@ the classification. Per the sequencing rule in §3, this LANGUAGE_BUG
 fix lands **before** the §2 stdlib slice.
 
 **First investigation step before writing the regression:** audit
-`docs/refactor_triggers.md` for any registered trigger that matches
+`doc/refactor_triggers.md` for any registered trigger that matches
 the VT-lifetime / `Destructible-for-VirtualThread<T>` shape. If a
 matching trigger exists, the deliverable escalates to that refactor
 per the `AGENTS.md` rule; if not, file the audit result ("scanned;
 no match") in the eventual `history.md` entry alongside the fix.
 This is the same discipline applied to every LANGUAGE_BUG fix in
 recent history (see the "Refactor-triggers scan" lines in
-`docs/history.md`).
+`doc/history.md`).
 
 ### 5.1 Repro path
 
@@ -714,12 +714,12 @@ retaining handles is still the supported supervisory pattern."
 
 Public stdlib surface addition. The slice requires:
 
-- **`docs/history.md`** entry under the date the slice lands, in the
+- **`doc/history.md`** entry under the date the slice lands, in the
   established format (`## YYYY-MM-DD (stdlib addition: ...)` followed
   by the `lang/versions.py` bump line). Lists `channel<T>` /
   `Sender<T>` / `Receiver<T>` / `is_complete` as additive (no
   removed / changed contracts).
-- **`docs/design/drift-concurrency.md`** updated with the new
+- **`doc/design/drift-concurrency.md`** updated with the new
   primitives' design rationale (closed-state-under-mutex,
   no-`T:Share` v1, terminal `is_complete` semantics). This is the
   canonical cross-reference for the public API surface.
@@ -737,7 +737,7 @@ fix shape chosen):**
 
 - The runtime fix is itself a behavior-changing landed commit. It
   requires its **own `DRIFTC_VERSION` bump** in `lang/versions.py`
-  and its own `docs/history.md` entry under the standard
+  and its own `doc/history.md` entry under the standard
   `## YYYY-MM-DD (LANGUAGE_BUG fix: …)` heading.
 - If the selected fix changes the compiler/runtime boundary contract
   — option (b)'s per-T drop-thunk registry is the prototypical case
@@ -748,7 +748,7 @@ fix shape chosen):**
   - an ABI-mismatch regression update under the existing
     abi-version-stamp test path so the new version-mismatch surface
     is exercised;
-  - a `docs/design/drift-lang-abi.md` entry documenting the new
+  - a `doc/design/drift-lang-abi.md` entry documenting the new
     boundary contract (per the rules at the top of that file).
 - Option (a) — synchronous join in drop — does not change the
   symbol/signature surface. `DRIFT_RT_ABI_VERSION` stays put for

@@ -10,7 +10,7 @@ Positive calls intentionally omitted at this stage: they would
 typecheck and then fail at MIR/LLVM lowering with an unhelpful
 "missing intrinsic lowering" message.  Those land in Stage 3.
 
-See `docs/history.md` 2026-04-18 (fat `Arc<Interface>` 0.28.0,
+See `doc/history.md` 2026-04-18 (fat `Arc<Interface>` 0.28.0,
 ABI 10) for the full cutover context.
 """
 from __future__ import annotations

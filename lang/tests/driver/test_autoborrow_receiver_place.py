@@ -162,7 +162,7 @@ fn main() nothrow -> Int {
 # autoborrow form `w.get().handle.peek()` and adds a companion soundness
 # rejection for value-self consumption through a borrowed projection
 # (`w.get().handle.consume()` and the named-intermediate equivalent
-# `val r = w.get(); r.handle.consume();`).  See `docs/history.md`
+# `val r = w.get(); r.handle.consume();`).  See `doc/history.md`
 # 2026-05-15 entries for the cumulative picture.
 # ─────────────────────────────────────────────────────────────────────────────
 

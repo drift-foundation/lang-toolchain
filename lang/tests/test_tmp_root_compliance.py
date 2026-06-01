@@ -10,7 +10,7 @@ by $USER under /tmp" — too broad, with a real risk of deleting the
 user's unrelated work.
 
 The fix: the `/tmp/drift-$USER/session-*` namespace plus a janitor
-that can sweep stale sessions safely (see `docs/conventions/tmp-root.md`
+that can sweep stale sessions safely (see `doc/conventions/tmp-root.md`
 and `tools/drift_janitor.sh`).  But a convention is only a convention
 until enforced — without a guard rail, regressions are inevitable.
 
@@ -65,7 +65,7 @@ _AUDIT_SELF = "lang/tests/test_tmp_root_compliance.py"
 
 # Directories to walk.  Tests/tools/docs are in scope.  Vendored or
 # generated dirs are not.
-_WALK_ROOTS = ("lang", "tools", "stdlib", "docs", "conftest.py", "examples", "tests", "work")
+_WALK_ROOTS = ("lang", "tools", "stdlib", "doc", "conftest.py", "examples", "tests", "work")
 
 # Paths under these prefixes are excluded entirely (vendored, build
 # artifacts, caches).
@@ -73,7 +73,7 @@ _EXCLUDE_PREFIXES = (
 	".venv/", "build/", "staged/", ".git/", "__pycache__/",
 	"node_modules/", "dist/",
 	# History entry contains illustrative literals in prose; safe.
-	"docs/history.md",
+	"doc/history.md",
 )
 
 # Per-line opt-out marker.  Comment-syntax agnostic — works in Python
@@ -115,7 +115,7 @@ def test_no_hardcoded_writable_tmp_paths() -> None:
 	"""No `/tmp/<x>` text in active source unless explicitly allowed
 	per-line.  Scans for `/tmp/` ANYWHERE — quoted, in heredocs,
 	docstrings, embedded shell — because heredocs were exactly the
-	originally-missed failure mode.  See `docs/conventions/tmp-root.md`."""
+	originally-missed failure mode.  See `doc/conventions/tmp-root.md`."""
 	violations: list[str] = []
 	for path in _walk_source_files():
 		rel = path.relative_to(_REPO_ROOT).as_posix()

@@ -173,7 +173,7 @@ pub trait Diagnostic {
 /// `Result.or_throw`).
 ///
 /// **See also:** `Result.or_throw`, the auto-try contract in
-/// `docs/effective-drift.md`.
+/// `doc/effective-drift.md`.
 pub trait Throw {
 	fn throw_self(self: Self) throws;
 }
@@ -296,7 +296,7 @@ pub interface CallbackThrow6<A, B, C, D, E, F2, R> {
 /// `pub variant`) must be unwrapped via explicit `match`.
 ///
 /// **See also:** `Result.or_throw`, `Result.on_error`, the auto-try
-/// contract in `docs/effective-drift.md`.
+/// contract in `doc/effective-drift.md`.
 pub variant Result<T, E> {
 	Ok(value: T),
 	Err(err: E),
@@ -310,7 +310,7 @@ implement<T, E> Result<T, E> {
 /// The single user-facing explicit-unwrap operation on `Result`.
 /// Inside `throws` functions and `try {}` blocks, the compiler-owned
 /// auto-try contract synthesizes `or_throw()` automatically — see
-/// `docs/effective-drift.md`.
+/// `doc/effective-drift.md`.
 ///
 /// **Slice 5 (Phase 5a) contract:** `E` MUST be a `pub error` type.
 /// The compiler synthesizes `implement core.Throw for E` for every

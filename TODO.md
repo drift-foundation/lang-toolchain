@@ -110,7 +110,7 @@
 [Variants]
   - Module-qualified constructor syntax: consider `Optional.Some(...)` ergonomics once namespacing rules are pinned (keep current `TypeRef::Ctor(...)`).
   - Variant pattern ergonomics: consider rest/wildcard patterns and richer exhaustiveness diagnostics (named-field construction + named binders are implemented in MVP).
-  - Variant external ABI: freeze and document a stable ABI in `docs/design/drift-lang-abi.md` once FFI/packages demand it (currently compiler-private).
+  - Variant external ABI: freeze and document a stable ABI in `doc/design/drift-lang-abi.md` once FFI/packages demand it (currently compiler-private).
 
 [Tooling / Packages]
 - Phase 5 polish (highest leverage):

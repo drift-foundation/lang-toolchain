@@ -366,7 +366,7 @@ def read_lock(path: Path) -> dict[str, dict[str, ResolvedDep]]:
 #       the lock and the fresh graph is evidence.
 #
 # DO NOT reintroduce `source_content_id` equality as a hard gate
-# in source-rebuild mode.  See `docs/history.md` 2026-04-21 for
+# in source-rebuild mode.  See `doc/history.md` 2026-04-21 for
 # the bug this prevents (orch-selected source graph stale-locked
 # by downstream repos whose `drift prepare` had not yet caught up
 # to a compatible upstream patch).  The operational consequence of
@@ -467,7 +467,7 @@ verified live.  If an exact-source rebuild is needed, pin the
 desired source commits in the source selection file (`run-all-
 latest.json` or equivalent) or use strict mode.
 
-**Bug this mode was created to prevent** (see `docs/history.md`
+**Bug this mode was created to prevent** (see `doc/history.md`
 2026-04-21): the 0.30.0 source-rebuild implementation required
 `source_content_id` equality with the downstream lock as a hard
 gate.  That check presumed "the downstream lock is the source

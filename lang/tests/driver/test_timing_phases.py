@@ -105,7 +105,7 @@ class TestEventSinkSurface:
 		"""Every key in `phases` must have a matching `counts` entry,
 		and `counts` for an un-fired label is absent.  Pins the
 		"sibling map" contract documented in `lang/driftc/_events.py`
-		and `docs/timing.md`."""
+		and `doc/timing.md`."""
 		sink = events.EventSink()
 		with events.install_sink(sink):
 			sink.begin_compile()

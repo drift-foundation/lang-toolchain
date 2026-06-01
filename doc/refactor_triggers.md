@@ -52,7 +52,7 @@ opportunistic uplifts)" for the full rule.
 
   - Taint propagation for indirect arm-binder escape (the v1
     false-negative documented in 0.31.35
-    `docs/match_by_ref_variant.md`). Adding taint flow to current
+    `doc/match_by_ref_variant.md`). Adding taint flow to current
     walkers means a sixth walker; consolidating becomes natural.
   - Exclusive owner-borrow lifetime extension for `&mut` (deferred
     from 0.31.35; would replace conservative-loan-retention with
@@ -359,7 +359,7 @@ opportunistic uplifts)" for the full rule.
   `f(x)` for a named non-`Copy` owner is a compile error
   (`cannot copy 'x': type 'T' is not Copy (use move x)`).  Users
   MUST write `f(move x)` to transfer ownership.  See
-  `docs/design/drift-lang-spec.md` §1.3 and §4.2 for the rule.
+  `doc/design/drift-lang-spec.md` §1.3 and §4.2 for the rule.
   Under that contract, **there are no implicit moves at named
   call args** — every source-level ownership transfer becomes
   an `HMove` at the AST/HIR level (parser sees `move`, lowers

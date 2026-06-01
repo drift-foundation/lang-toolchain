@@ -2,7 +2,7 @@
 
 DMIR (Drift Module Intermediate Representation) is the canonical, signed, compiler-facing representation of Drift programs. It captures fully type-checked semantics in a normalized, ANF-like, structured form. DMIR is stable across compiler versions; SSA (Static Single Assignment) MIR and backend IR are free to change.
 
-See also: `docs/design-first-afm-then-ssa.md` for the design path that led to this split (ANF-like DMIR for signing, SSA MIR for optimization/codegen).
+See also: `doc/design-first-afm-then-ssa.md` for the design path that led to this split (ANF-like DMIR for signing, SSA MIR for optimization/codegen).
 
 ## Goals
 - Stable “semantic identity” for signing/distribution.
@@ -13,7 +13,7 @@ See also: `docs/design-first-afm-then-ssa.md` for the design path that led to th
 
 ## Scope & status
 - Status: draft; format may still evolve before first signing milestone.
-- Source of truth: this doc + `docs/design-first-afm-then-ssa.md`.
+- Source of truth: this doc + `doc/design-first-afm-then-ssa.md`.
 - Consumers: Drift toolchain, verifiers, bundlers, and third-party analyzers.
 
 ## Module shape
@@ -69,7 +69,7 @@ and dependencies by id; it does not prescribe how the toolchain locates modules.
 
 ## Errors & exceptions
 
-> **Deprecation note (Slice 7c-3, ABI 14, 2026-05-06).** The DV-shaped error model documented in this section — `DriftDiagnosticValue` / `DriftErrorAttr` / `attrs[count]` / `frames[count]` — is HISTORICAL.  The canonical ABI 14 surface is the JSON-text envelope: `params_json` + `context_json` + `event_fqn` + `code` (see `docs/design/drift-lang-abi.md` §2 for the live shape and helper contract).  Diagnostic projection is owned by `core.Diagnostic.to_json_text(&E) -> String`, with `pub error E { ... }` synthesizing the impl by default.  Below is preserved as the original DMIR design intent; live code should follow the ABI doc.
+> **Deprecation note (Slice 7c-3, ABI 14, 2026-05-06).** The DV-shaped error model documented in this section — `DriftDiagnosticValue` / `DriftErrorAttr` / `attrs[count]` / `frames[count]` — is HISTORICAL.  The canonical ABI 14 surface is the JSON-text envelope: `params_json` + `context_json` + `event_fqn` + `code` (see `doc/design/drift-lang-abi.md` §2 for the live shape and helper contract).  Diagnostic projection is owned by `core.Diagnostic.to_json_text(&E) -> String`, with `pub error E { ... }` synthesizing the impl by default.  Below is preserved as the original DMIR design intent; live code should follow the ABI doc.
 
 - Single `Error` type; exceptions are event + attrs (typed `DiagnosticValue`) lowered to an `Error` value.
 - DMIR is **value-based** for error propagation:

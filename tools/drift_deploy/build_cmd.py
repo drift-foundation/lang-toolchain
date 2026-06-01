@@ -96,7 +96,7 @@ def cert_mode_from_env() -> str | None:
 			"--run-snapshot)\n"
 			"Normal local `just test` / `drift build` / `drift "
 			"deploy` do NOT set this env — leave it unset for "
-			"standard strict-lock behaviour.  See docs/history.md "
+			"standard strict-lock behaviour.  See doc/history.md "
 			"entry 0.31.5 for the redesign rationale."
 		)
 	raw = os.environ.get("DRIFT_CERT_MODE", "").strip()

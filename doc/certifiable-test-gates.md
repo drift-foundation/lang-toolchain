@@ -147,6 +147,31 @@ long. The silent stretches are exactly the long jobs the slot pool already wraps
   scenarios that share an exclusive resource run serial under one `-j 1 --key
   <resource>`; independent scenarios run in parallel.
 
+## What the executor can't do — the harness brackets it
+
+A parallel job executor runs a fixed set of jobs and reports their exit codes.
+Two things sit outside that contract, and a gate that needs either must keep that
+part in its own harness, *wrapped around* the executor — not pushed into the plan:
+
+- **Threading one job's output into another job's input.** A performance gate
+  often measures a Drift binary *relative to* a baseline (another toolchain's
+  build, a prior commit). The baseline's result (rps, ns/op) becomes an input —
+  an env var, a threshold — to the Drift measurement. The executor won't pipe one
+  job's stdout into another's environment; it only launches jobs. So the harness
+  computes/threads the derived value; the executor still owns the parallel
+  *compile* of every binary (baselines included — they're just build jobs).
+- **Owning an external resource's lifecycle.** A stress gate needs a server / DB
+  / queue *started, waited-ready, and torn down* around the runs. Start-ready-stop
+  is orchestration with ordering and health-checks the executor doesn't model.
+  The harness owns that lifecycle; the executor runs the scenario binaries inside
+  it (parallel where independent, `mode: serial` on a shared `--key` where they
+  contend for the resource).
+
+The split is the same in both cases: **compilation is the executor's** (always
+parallelizable, always worth fanning out); the **measurement/lifecycle wrapper is
+the harness's**. Bracket, don't inline — putting a server boot or a cross-job env
+hand-off "into the plan" is the anti-pattern.
+
 ## Authoring shape
 
 A gate is three separable steps so a private run can chain them and an

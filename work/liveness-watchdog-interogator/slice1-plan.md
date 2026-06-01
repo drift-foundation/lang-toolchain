@@ -25,8 +25,8 @@ plan below, all intentional:
 - Files landed: `posix/liveness_runtime.{c,h}` (new), `thread_runtime.c` (VT
   fields/set-points/`drift_thread_set_wait`/SIGUSR2 thread/`drift_liveness_collect`),
   `__init__.py`, `llvm_codegen.py`, `thread.drift`, `concurrent.drift`,
-  `versions.py` (ABI 15). Docs: `docs/liveness.md` + cross-links in
-  `docs/design/drift-concurrency.md` and `README.md`.
+  `versions.py` (ABI 15). Docs: `doc/liveness.md` + cross-links in
+  `doc/design/drift-concurrency.md` and `README.md`.
 - Tests: `lang/tests/driver/test_liveness_interrogator.py` (3 pass). Regression:
   ABI stamp suite (17 pass, incl. new v15 mismatch), 99 concurrency/condvar e2e
   cases, VT/signal driver tests — all green.

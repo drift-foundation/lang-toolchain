@@ -4,7 +4,7 @@
 LLVM codegen entrypoint for lang (SSA-first).
 
 This package will lower SSA/MIR to LLVM IR following the v1 ABI defined in
-`docs/design/drift-lang-abi.md`. The initial scope is intentionally small:
+`doc/design/drift-lang-abi.md`. The initial scope is intentionally small:
 scalars (`Int`, `Bool`), `Error`, and `FnResult<Int, Error>` for can-throw
 functions. Additional types and calling conventions will be added
 incrementally as the backend grows.

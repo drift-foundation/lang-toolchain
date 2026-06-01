@@ -201,7 +201,7 @@ class ArcAsInterface(MInstr):
 	  independent of which fat view holds the final strong
 	  reference.
 
-	See `docs/history.md` 2026-04-18 (fat `Arc<Interface>`, 0.28.0,
+	See `doc/history.md` 2026-04-18 (fat `Arc<Interface>`, 0.28.0,
 	ABI 10) for the representation soundness argument.
 	"""
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Route this step's scratch under $DRIFT_TMP_ROOT so deploy runs are
 # janitor-safe (deploy is not a pytest path; conftest.py's relocation
-# does not apply).  See docs/conventions/tmp-root.md.
+# does not apply).  See doc/conventions/tmp-root.md.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(_REPO_ROOT))

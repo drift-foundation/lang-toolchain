@@ -28,7 +28,7 @@ queried for its summary at the end:
 
 Workload counters (see `set_workload` / `add_workload`) pair with
 phase timings so two compiles can be compared on both elapsed time
-and "amount of compiler work attempted."  See `docs/timing.md` for
+and "amount of compiler work attempted."  See `doc/timing.md` for
 the v1 key inventory + units.
 
 Design constraints (deliberate):
@@ -118,7 +118,7 @@ class EventSink:
 		#     the work runs twice its phase time accumulates twice;
 		#     the workload denominator must too, so elapsed-per-unit
 		#     stays comparable across retries.
-		# See `docs/timing.md` for the full key inventory + units.
+		# See `doc/timing.md` for the full key inventory + units.
 		self._workload: dict[str, int] = {}
 		# Stack of (label, monotonic_start) so nested phases unwind correctly
 		# even when the same label nests (rare, but defended against).

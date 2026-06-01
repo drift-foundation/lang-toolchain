@@ -40,7 +40,7 @@ disjoint from arm-binder IDs.
 
 ABI implication: this is a compiler defect that breaks valid existing
 ABI-14 source compilation; per the Drift ABI policy
-(`docs/design/drift-lang-abi.md` §"When to bump", §"Stable ABI
+(`doc/design/drift-lang-abi.md` §"When to bump", §"Stable ABI
 Artifact Rule") the fix lands in 0.33.4-followup without an ABI
 bump.
 """

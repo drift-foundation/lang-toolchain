@@ -1,6 +1,6 @@
 // Minimal array runtime helpers for lang codegen tests.
 // NOTE: Test-only runtime (but alignment is honored to catch layout bugs).
-// This mirrors the ABI in docs/design/spec-change-requests/drift-array-lowering.md.
+// This mirrors the ABI in doc/design/spec-change-requests/drift-array-lowering.md.
 
 #include <inttypes.h>
 #include <stddef.h>

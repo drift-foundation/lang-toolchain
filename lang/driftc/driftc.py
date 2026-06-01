@@ -1585,7 +1585,7 @@ def _emit_codegen(
 	# `compile_stubbed_funcs` produced.  Add-mode: every codegen.lower
 	# invocation contributes its denominator alongside the phase
 	# time.  Gated on sink presence so the no-`--timing` path pays
-	# nothing for the MIR-shape traversal.  See `docs/timing.md`.
+	# nothing for the MIR-shape traversal.  See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_cg_blocks = 0
 		_cg_instructions = 0
@@ -1624,7 +1624,7 @@ def _emit_codegen(
 	# that want per-module IR bytes should run separate sessions.
 	# Gated on sink presence so the no-`--timing` path skips the
 	# UTF-8 re-encode of the entire IR (large for real builds; the
-	# render itself returned `str` already).  See `docs/timing.md`.
+	# render itself returned `str` already).  See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_events.set_workload("llvm.ir.utf8_bytes", len(_ir_text.encode("utf-8")))
 	return _ir_text
@@ -5319,7 +5319,7 @@ def compile_stubbed_funcs(
 	# `compile_stubbed_funcs` invocation accumulates the denominator
 	# alongside the accumulated phase time.  Gated on sink presence
 	# so the no-`--timing` path skips the `inst_cache` walk entirely.
-	# See `docs/timing.md`.
+	# See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_emitted_inst_count = sum(
 			1 for _h in inst_cache.values()
@@ -7606,7 +7606,7 @@ def compile_stubbed_funcs(
 			# author_cleanup + _rebuild_ledger loop stops hiding in
 			# the unattributed CSF gap between
 			# `ledger_rebuild_post_drop_flags` and `string_arc`.
-			# Profile (docs/perf-analysis-bookkeeper-profile.md)
+			# Profile (doc/perf-analysis-bookkeeper-profile.md)
 			# attributed ~17s of cumulative time here on a
 			# stdlib-regex workload; bookkeeper's residual
 			# unattributed budget likely includes the same loop.
@@ -7800,7 +7800,7 @@ def compile_stubbed_funcs(
 	# sites because reachability filtering / wrapper synthesis can
 	# change the codegen unit.  Gated on sink presence so the
 	# no-`--timing` path skips the whole-MIR traversal (one of the
-	# largest per-call costs on real builds).  See `docs/timing.md`.
+	# largest per-call costs on real builds).  See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_mir_blocks = 0
 		_mir_instructions = 0
@@ -8013,7 +8013,7 @@ def compile_to_llvm_ir_for_tests(
 	# denominators paired with phase time across repeated test-helper
 	# invocations under one EventSink.  Gated so test runs without a
 	# caller-installed sink skip the whole-MIR traversal.  See
-	# `docs/timing.md`.
+	# `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_cg_blocks_t = 0
 		_cg_instructions_t = 0
@@ -8079,7 +8079,7 @@ def compile_to_llvm_ir_for_tests(
 	# site).  Set-mode snapshot of the produced IR for this helper
 	# invocation; if a session intentionally renders multiple modules
 	# under one umbrella, last render wins.  Gated to skip the IR
-	# UTF-8 re-encode on the no-sink path.  See `docs/timing.md`.
+	# UTF-8 re-encode on the no-sink path.  See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_events.set_workload("llvm.ir.utf8_bytes", len(_ir_text_t.encode("utf-8")))
 	return _ir_text_t, checked
@@ -8346,7 +8346,7 @@ def _print_text_timing_summary(summary: dict) -> None:
 	block follows the timing block.  Format is one line per key in
 	stable alphabetical order so CI greps stay stable across releases.
 	`workload_schema=N` is printed first so readers can detect a
-	schema bump before parsing keys.  See `docs/timing.md` for the
+	schema bump before parsing keys.  See `doc/timing.md` for the
 	key inventory.
 	"""
 	import sys as _sys
@@ -9341,7 +9341,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		# be added under additive new keys without a schema bump.
 		# Gated on sink presence so the no-`--timing` path skips both
 		# the per-package `modules_by_id` sum and the two
-		# `ContextVar.get()` lookups.  See `docs/timing.md`.
+		# `ContextVar.get()` lookups.  See `doc/timing.md`.
 		if _events.current_sink() is not None:
 			_events.set_workload(
 				"packages.pre_resolve.artifacts", len(loaded_pkgs),
@@ -9708,7 +9708,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# Heavy O(packages × modules × types) graph walk: deserialises
 	# every loaded package's type table and builds the consumer-side
 	# TypeId remap.  Often the single biggest bucket on multi-package
-	# consumer builds; see docs/timing.md.
+	# consumer builds; see doc/timing.md.
 	_events.phase_start("link_pkg_types")
 	pkg_typeid_maps: dict[Path, dict[int, int]] = {}
 	pkg_tid_universes: dict[Path, frozenset[int]] = {}
@@ -9874,7 +9874,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# source.implicit_stdlib.* split already exposes the bytes/token
 	# breakdown).  Gated on sink presence so the no-`--timing` path
 	# does not even pay for the three `len()` calls + three
-	# `ContextVar.get()` lookups.  See `docs/timing.md`.
+	# `ContextVar.get()` lookups.  See `doc/timing.md`.
 	if _events.current_sink() is not None:
 		_events.set_workload("hir.modules", len(modules))
 		_events.set_workload("hir.functions", len(func_hirs))

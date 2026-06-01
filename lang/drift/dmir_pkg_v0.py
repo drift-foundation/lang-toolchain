@@ -28,7 +28,7 @@ MAGIC = b"DMIRPKG\0"
 VERSION = 0
 
 # Keep the binary layout pinned to the tooling spec. See
-# `docs/design/drift-tooling-and-packages.md`.
+# `doc/design/drift-tooling-and-packages.md`.
 _HEADER_STRUCT = struct.Struct("<8sHHI Q 32s Q I 32s 64s")
 HEADER_SIZE_V0 = _HEADER_STRUCT.size
 

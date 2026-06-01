@@ -1,7 +1,7 @@
 # Drift Build & Package Workflow
 
 > **Trust-model v1 cutover.**  The package trust model is defined in
-> [`docs/design/trust-v1.md`](design/trust-v1.md).  Author signing
+> [`doc/design/trust-v1.md`](design/trust-v1.md).  Author signing
 > lives in `drift author`; the consumer-side verifier
 > reads `<pkg>.author-claim` + `<pkg>.cert-claim.<kid>.json`
 > against a role-tagged `drift/trust.json`.  Pre-v1 `drift sign`,
@@ -614,7 +614,7 @@ computes SCI outside the v2 manifest machinery) and for
 co-signing (`python -m tools.drift_author cosign`).  Package
 authors should always reach for `drift author` instead.
 
-See [`docs/design/trust-v1.md`](design/trust-v1.md) §7 for the
+See [`doc/design/trust-v1.md`](design/trust-v1.md) §7 for the
 full author / certifier workflow.
 
 ## 7. Command checklist

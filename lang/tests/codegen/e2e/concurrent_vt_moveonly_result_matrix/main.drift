@@ -128,7 +128,7 @@ pub fn main() nothrow -> Int {
 	 * idiom.  Application code should use park-aware primitives
 	 * (`conc.sleep`, `Condvar.wait_timeout`, channel `recv_timeout`)
 	 * which integrate with cancellation per
-	 * `docs/design/drift-concurrency.md`. */
+	 * `doc/design/drift-concurrency.md`. */
 	var b = conc.executor_policy_builder();
 	b.min_threads(1);
 	b.max_threads(1);

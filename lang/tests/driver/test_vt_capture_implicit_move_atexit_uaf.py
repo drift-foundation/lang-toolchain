@@ -55,7 +55,7 @@ Drift; the correct form is `_worker_body(..., move gw, ...)`.
 
 **ABI implication.**  Codegen-internal — no runtime ABI surface
 changes, no `.zdmp` schema change, no signing path change.  Per
-`docs/design/drift-lang-abi.md` this lands without an ABI bump;
+`doc/design/drift-lang-abi.md` this lands without an ABI bump;
 existing ABI-14 dependency artifacts remain consumable unchanged.
 """
 from __future__ import annotations

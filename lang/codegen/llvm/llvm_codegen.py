@@ -17,7 +17,7 @@ Scope (v1 bring-up):
   are currently rejected.
   - Control flow: straight-line, if/else, and loops/backedges (general CFGs).
 
-ABI (from docs/design/drift-lang-abi.md):
+ABI (from doc/design/drift-lang-abi.md):
   - %DriftError is modeled in LLVM as the stable prefix used by codegen:
     { u64 code, %DriftString event_fqn,
       i8* legacy_attrs, usize legacy_attr_count,

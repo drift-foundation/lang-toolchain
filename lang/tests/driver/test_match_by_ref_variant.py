@@ -195,7 +195,7 @@ def test_f2_simple_escape_no_mutation_compiles_under_owner_extension(
 	"""F2 — chosen path.  Arm binder escapes via `Optional::Some(x)`
 	to an outer `Optional<&Resp>`, scrutinee is never mutated, and
 	the escaped borrow is read after the match.  Per the spec
-	(`docs/match_by_ref_variant.md`), this compiles cleanly: the
+	(`doc/match_by_ref_variant.md`), this compiles cleanly: the
 	borrow checker extends the live-borrow lifetime on the
 	scrutinee for as long as the escaped pointer is reachable, so
 	the form is safe by construction.  The companion test

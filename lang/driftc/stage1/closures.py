@@ -15,8 +15,8 @@ class HCaptureKind(Enum):
 	`SHARE` (added 0.31.14): the closure construction emits
 	`Call(Share::share, [&local])` and move-captures the returned
 	owned value.  Outer binding remains usable.  Type must implement
-	`std.core.shareable.Share`.  See `docs/design/drift-lang-spec.md` and
-	`docs/effective-drift.md`.
+	`std.core.shareable.Share`.  See `doc/design/drift-lang-spec.md` and
+	`doc/effective-drift.md`.
 	"""
 
 	REF = auto()

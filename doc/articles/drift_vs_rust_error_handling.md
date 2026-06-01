@@ -76,7 +76,7 @@ struct Error {
 }
 ```
 
-> **Migration note (Slice 7c-3, ABI 14, 2026-05-06).** Earlier drafts of this article showed `attrs: Map<String, DiagnosticValue>` and a separate `ctx_frames` array. Both were retired by the DV→JSON migration (Slices 7a–7c-3). The shape above is the live ABI 14 surface; see `docs/design/drift-lang-abi.md` §2 for the helper contract.
+> **Migration note (Slice 7c-3, ABI 14, 2026-05-06).** Earlier drafts of this article showed `attrs: Map<String, DiagnosticValue>` and a separate `ctx_frames` array. Both were retired by the DV→JSON migration (Slices 7a–7c-3). The shape above is the live ABI 14 surface; see `doc/design/drift-lang-abi.md` §2 for the helper contract.
 
 Key properties:
 

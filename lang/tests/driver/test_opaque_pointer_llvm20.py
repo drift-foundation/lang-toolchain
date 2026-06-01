@@ -6,7 +6,7 @@ LLVM removed typed-pointer support (i8*, %Struct*, etc.) in LLVM 17.
 driftc's emitter must use opaque pointers (ptr) so the generated IR
 is valid under LLVM 15+ / mandatory under LLVM 17+.
 
-Bug report: drift-web/docs/bugs/driftc-llvm20-typed-pointers.md
+Bug report: drift-web/doc/bugs/driftc-llvm20-typed-pointers.md
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 
 Pins the v1 contract for mutable by-reference variant matching.
 All tests are load-bearing regressions; failure here means a
-certification break.  See `docs/match_by_ref_variant.md` for the
+certification break.  See `doc/match_by_ref_variant.md` for the
 user-facing semantics this suite enforces.
 
 Coverage:

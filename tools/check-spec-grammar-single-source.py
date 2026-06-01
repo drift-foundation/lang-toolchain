@@ -10,8 +10,8 @@ import sys
 
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
-    spec = root / "docs" / "design" / "drift-lang-spec.md"
-    grammar = root / "docs" / "design" / "drift-lang-grammar.md"
+    spec = root / "doc" / "design" / "drift-lang-spec.md"
+    grammar = root / "doc" / "design" / "drift-lang-grammar.md"
 
     errors: list[str] = []
 

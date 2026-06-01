@@ -547,7 +547,7 @@ def build_and_install_stdlib(
 			f"stdlib deploy: required stdlib_author_claim_path does not "
 			f"exist: {stdlib_author_claim_path}.  The stdlib author claim "
 			f"must be produced out-of-band by Foundation before this "
-			f"deploy runs (see docs/design/trust-v1.md §7.5)."
+			f"deploy runs (see doc/design/trust-v1.md §7.5)."
 		)
 	if not certifier_key_path.is_file():
 		raise RuntimeError(

@@ -467,6 +467,6 @@ No special `for`-specific borrowing rules are required; the global rules in this
 
 If you decide to adopt this model, the next step is to:
 
-1. Copy this document into your repo as `docs/drift_borrowing_and_reference_model_revision.md`.
+1. Copy this document into your repo as `doc/drift_borrowing_and_reference_model_revision.md`.
 2. Update `drift-lang-spec.md` and `drift-lang-grammar.md` according to §6 and §7.
 3. Then we can finalize the iteration chapter with the assumption that this borrow model is in effect.

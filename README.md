@@ -11,8 +11,8 @@ Drift is a systems programming language focused on deterministic resource manage
 - **Interop without foot-guns** – precise binary layouts and opaque ABI handles keep FFI predictable.
 - **Signed modules** – compiled modules are cryptographically signed so imports can be verified everywhere.
 
-📖 **Full specification:** [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md)
-📜 **Formal grammar:** [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md)
+📖 **Full specification:** [doc/design/drift-lang-spec.md](doc/design/drift-lang-spec.md)
+📜 **Formal grammar:** [doc/design/drift-lang-grammar.md](doc/design/drift-lang-grammar.md)
 
 ## Release-1 objectives
 - Modules/imports
@@ -31,24 +31,24 @@ Drift is a systems programming language focused on deterministic resource manage
 
 ## References
 
-- Error handling comparison for Rustaceans: [docs/articles/drift_vs_rust_error_handling.md](docs/articles/drift_vs_rust_error_handling.md)
-- Effective Drift: [docs/effective-drift.md](docs/effective-drift.md)
-- Build/package quickstart workflow: [docs/toolchain-build-workflow.md](docs/toolchain-build-workflow.md)
-- Tooling/build/package ecosystem: [docs/design/drift-tooling-and-packages.md](docs/design/drift-tooling-and-packages.md) — compiler and tooling responsibilities, offline builds, package distribution, and trust model.
-- DMIR/SSA design: [docs/articles/design-first-afm-then-ssa.md](docs/articles/design-first-afm-then-ssa.md)
-- DMIR specification: [docs/design/dmir-spec.md](docs/design/dmir-spec.md)
-- Tooling, build system, and packages: [docs/design/drift-tooling-and-packages.md](docs/design/drift-tooling-and-packages.md) — module/package inputs, build targets, repositories, and deterministic offline builds.
-- Borrowing/reference model revision: [docs/design/drift_borrowing_and_reference_model_revision.md](docs/design/drift_borrowing_and_reference_model_revision.md)
-- Drift concurrency: [docs/design/drift-concurrency.md](docs/design/drift-concurrency.md)
-- Runtime liveness interrogator (diagnosing a stuck process via `kill -USR2`): [docs/liveness.md](docs/liveness.md)
-- Virtual threads/concurrency spec change: [docs/design/spec-change-requests/virtual_threads_concurrency_spec.md](docs/design/spec-change-requests/virtual_threads_concurrency_spec.md) — proposal for lightweight threads, schedulers, and structured scopes.
-- Module merge/artifact generation: [docs/design/spec-change-requests/module_merge_and_artifact_generation.md](docs/design/spec-change-requests/module_merge_and_artifact_generation.md) — design for merging multi-file modules, enforcing duplicate rules, and emitting executables vs signed modules.
-- Iteration model: [docs/design/drift-loops-and-iterators.md](docs/design/drift-loops-and-iterators.md)
-- String runtime plan: [docs/design/drift-string-impl.md](docs/design/drift-string-impl.md)
-- Tuple destructuring notes: [docs/design/drift-tuple-destructuring.md](docs/design/drift-tuple-destructuring.md)
-- Driver/runtime notes: [docs/articles/driver-notes.md](docs/articles/driver-notes.md)
-- Compiler architecture overview: [docs/articles/drift-compiler-architecture.md](docs/articles/drift-compiler-architecture.md)
-- Development history: [docs/history.md](docs/history.md)
+- Error handling comparison for Rustaceans: [doc/articles/drift_vs_rust_error_handling.md](doc/articles/drift_vs_rust_error_handling.md)
+- Effective Drift: [doc/effective-drift.md](doc/effective-drift.md)
+- Build/package quickstart workflow: [doc/toolchain-build-workflow.md](doc/toolchain-build-workflow.md)
+- Tooling/build/package ecosystem: [doc/design/drift-tooling-and-packages.md](doc/design/drift-tooling-and-packages.md) — compiler and tooling responsibilities, offline builds, package distribution, and trust model.
+- DMIR/SSA design: [doc/articles/design-first-afm-then-ssa.md](doc/articles/design-first-afm-then-ssa.md)
+- DMIR specification: [doc/design/dmir-spec.md](doc/design/dmir-spec.md)
+- Tooling, build system, and packages: [doc/design/drift-tooling-and-packages.md](doc/design/drift-tooling-and-packages.md) — module/package inputs, build targets, repositories, and deterministic offline builds.
+- Borrowing/reference model revision: [doc/design/drift_borrowing_and_reference_model_revision.md](doc/design/drift_borrowing_and_reference_model_revision.md)
+- Drift concurrency: [doc/design/drift-concurrency.md](doc/design/drift-concurrency.md)
+- Runtime liveness interrogator (diagnosing a stuck process via `kill -USR2`): [doc/liveness.md](doc/liveness.md)
+- Virtual threads/concurrency spec change: [doc/design/spec-change-requests/virtual_threads_concurrency_spec.md](doc/design/spec-change-requests/virtual_threads_concurrency_spec.md) — proposal for lightweight threads, schedulers, and structured scopes.
+- Module merge/artifact generation: [doc/design/spec-change-requests/module_merge_and_artifact_generation.md](doc/design/spec-change-requests/module_merge_and_artifact_generation.md) — design for merging multi-file modules, enforcing duplicate rules, and emitting executables vs signed modules.
+- Iteration model: [doc/design/drift-loops-and-iterators.md](doc/design/drift-loops-and-iterators.md)
+- String runtime plan: [doc/design/drift-string-impl.md](doc/design/drift-string-impl.md)
+- Tuple destructuring notes: [doc/design/drift-tuple-destructuring.md](doc/design/drift-tuple-destructuring.md)
+- Driver/runtime notes: [doc/articles/driver-notes.md](doc/articles/driver-notes.md)
+- Compiler architecture overview: [doc/articles/drift-compiler-architecture.md](doc/articles/drift-compiler-architecture.md)
+- Development history: [doc/history.md](doc/history.md)
 - Project TODO/roadmap: [TODO.md](TODO.md)
 - Toolchain:
   - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM).
@@ -134,4 +134,4 @@ Build/test requirements (Linux):
 
 After installing those, create the venv and run `just deps-check` to verify the machine is fully wired for the current runtime/test flow.
 
-See the full language specification in [docs/design/drift-lang-spec.md](docs/design/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [docs/design/drift-lang-grammar.md](docs/design/drift-lang-grammar.md).
+See the full language specification in [doc/design/drift-lang-spec.md](doc/design/drift-lang-spec.md) for semantics and examples. The full formal grammar lives in [doc/design/drift-lang-grammar.md](doc/design/drift-lang-grammar.md).

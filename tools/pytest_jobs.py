@@ -13,7 +13,7 @@ Override order (highest to lowest):
 Why full cores, not half: a half-default leaves half the box idle on
 every run to hedge against a scenario that proper coordination already
 prevents. Concurrency between lanes is bounded by `flocker` (see
-docs/flocker.md), the host-local slot cap — lanes wrapped under a shared
+doc/flocker.md), the host-local slot cap — lanes wrapped under a shared
 flocker key run one-at-a-time, so a second lane cannot start while the
 first holds the slot. The dev-loop (`just test`) runs lanes sequentially
 anyway. The only way two lanes oversubscribe is an orchestrator fanning

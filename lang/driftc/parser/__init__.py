@@ -2500,7 +2500,7 @@ def parse_drift_workspace_to_hir(
 	# tallied only for files that successfully parse -- failed files
 	# contribute their bytes/files but not tokens, since
 	# `_PARSER.parse(...)` raised before producing a tree.  See
-	# `docs/timing.md`.
+	# `doc/timing.md`.
 	#
 	# Cheap-disabled-path contract: the per-file `path.resolve()` /
 	# `source.encode("utf-8")` / per-class accumulation cost is paid

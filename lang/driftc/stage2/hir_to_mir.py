@@ -10181,7 +10181,7 @@ class HIRToMIR:
 		# INTRINSIC(ARC_CLONE|ARC_GET|ARC_DESTROY).  Here we route
 		# each kind to its private `_arc_*_impl<T>` helper
 		# (stdlib/std/concurrent/concurrent.drift).  The helper
-		# carries the concrete-T implementation (see `docs/history.md`
+		# carries the concrete-T implementation (see `doc/history.md`
 		# 2026-04-18, fat `Arc<Interface>` 0.28.0/ABI 10).
 		#
 		# ARC_AS_INTERFACE is intentionally NOT redirected here —

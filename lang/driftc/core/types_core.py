@@ -288,7 +288,7 @@ class TypeProvenanceEntry:
 # three pieces are all coupled to the layout shape).  Keeping this
 # False preserves the thin `{buf}` shape for every `Arc<I>`
 # instance — identical to pre-Stage-3 behaviour.  See
-# `docs/history.md` 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10)
+# `doc/history.md` 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10)
 # for the cutover details.
 STAGE3_FAT_ARC_ACTIVE: bool = True
 
@@ -1232,7 +1232,7 @@ class TypeTable:
 	#
 	# Design rationale, contract, and the reasons we do NOT derive the
 	# data pointer from `ctrl + sizeof(ArcHeader)` are in the language
-	# spec under § 6.16 (Arc interface views); see also `docs/history.md`
+	# spec under § 6.16 (Arc interface views); see also `doc/history.md`
 	# 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10).  ABI contract:
 	# `DRIFT_RT_ABI_VERSION` is bumped alongside any change to either
 	# shape here.
@@ -1337,7 +1337,7 @@ class TypeTable:
 		# `buf: RawBuffer<ArcBox<T>>` field valid only for concrete T.
 		# When T is an interface, swap in the fat
 		# `{ctrl, data, vtable}` layout from
-		# `_arc_interface_view_layout`.  See `docs/history.md`
+		# `_arc_interface_view_layout`.  See `doc/history.md`
 		# 2026-04-18 (fat `Arc<Interface>` 0.28.0/ABI 10) for the
 		# representation and soundness argument.
 		#

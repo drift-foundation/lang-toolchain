@@ -78,7 +78,7 @@
   - `lang/tests/driver/test_try_trait_visibility.py` rewritten around the new contract: `test_throws_inferred_local_auto_unwraps` (eager unwrap on `val r = fallible();`), `test_throws_annotated_result_preserves_result` (opt-out via `val r: Result<T, E> = ...`), `test_throws_annotated_non_result_auto_unwraps`, `test_try_block_auto_try_without_use_trait`, `test_explicit_or_throw_works_without_use_trait`, `test_into_try_rejected` (negative, pins removal).
   - `lang/tests/driver/test_try_block_autounwrap.py`: inverted from "Result discarded in try-block → error without Try import" to "try-block expression-statement Result auto-propagates via or_throw() with no trait import."
   - `lang/tests/driver/test_external_consumer.py::test_ext_cross_package_or_throw` (K28 regression): the `local_binding` form now annotates `val r: core.Result<Int, thrower.ProducerError> = …` (eager auto-try requires the annotation as opt-out); the fixture imports `std.core` and the `require_no_std_core` assertion is relaxed for this label only.  The `chained` form still enforces the "no `import std.core`" bug surface.  Coverage caveat documented inline: the "bound-local form with NO `import std.core`" surface is no longer expressible because unqualified `Result<...>` in annotation position currently resolves to a FORWARD_NOMINAL that doesn't equate with the package-linked instantiation (separate type-linker limitation).
-- **Docs**: `docs/effective-drift.md` updated — "auto-try is compiler-owned, no trait import required" replaces the old `Try::into_try` descriptions.  `tools/drift_doc/test_drift_doc.py` assertion swapped from `"core.Try"` to `"compiler-owned"` to match.
+- **Docs**: `doc/effective-drift.md` updated — "auto-try is compiler-owned, no trait import required" replaces the old `Try::into_try` descriptions.  `tools/drift_doc/test_drift_doc.py` assertion swapped from `"core.Try"` to `"compiler-owned"` to match.
 - **Coverage**: auto-try contract 10/10 pass; K28 external consumer pass; throws signature phase1 15/15 pass; throws/try round-trip and typed-catch suites clean; pkgb ownership matrix 7/7 including the new fixture; throws-related e2e (`std_net_tcp_stress_connections_with_try`, `try_expr_immediate_lambda_capture`, `byte_cast_buffer_write_try`, three std_json tests, `return_void_expr_side_effect_*`, `void_throw`) all pass.
 - **Versioning**.
   - `DRIFTC_VERSION` bumps from 0.27.198 to 0.27.199.
@@ -290,7 +290,7 @@
   - `std.json.JsonErrorData` implements `Throw` by throwing the typed `JsonError` exception.
   - Stdlib error types without a dedicated domain exception currently implement `Throw` by throwing `ResultError` with a diagnostic payload. This is a stable generic fallback, not a temporary migration path.
 - **Docs**.
-  - `docs/effective-drift.md` now documents the two `throws` forms, terminal calls as local terminators, typed `Result.or_throw()` through `Throw`, implementing `Throw` for application/framework errors, and the owned-only `.or_throw()` contract.
+  - `doc/effective-drift.md` now documents the two `throws` forms, terminal calls as local terminators, typed `Result.or_throw()` through `Throw`, implementing `Throw` for application/framework errors, and the owned-only `.or_throw()` contract.
   - Certified toolchain distributions now ship the checked-in official docs under `doc/`, including `effective-drift.md`, `history.md`, `toolchain-build-workflow.md`, `doc/design/`, and `doc/articles/`, alongside generated `doc/stdlib/` API reference.
 - **Test coverage / justfile**.
   - `just test` now includes `lang/tests/packages` and `lang/tests/traits`, closing the stale coverage gap where those suites were not part of the canonical test target.
@@ -393,7 +393,7 @@
     - **Positive (in-memory flag plumbing)**: plain `fn f() -> Int` (neither flag), `fn f() nothrow -> Int` (nothrow flag, neither throws flag), `fn f() throws -> Int` (declared_throws=True), bare `fn f() throws` (declared_terminal_throws=True), `pub fn f() throws { ... }`, `implement Foo { pub fn bust(self: &Foo) throws { ... } }`, `implement Foo { pub fn bust(self: &Foo) throws -> Int { ... } }` (both flags pinned for impl-block methods — covers the v2 reviewer's `_FrontendDecl` flag-drop fix for both flags), trait methods in both forms, interface methods in both forms (including a pin that the schema's `return_type` is `None` for the terminal form, no Void synthesis).
     - **Negative (structural rejection)**: `fn f() nothrow throws`, `fn f() nothrow throws -> Int`, `@intrinsic fn boom() throws;`, `extern "C" fn raise_signal() throws;`.
     - Each positive test introspects the lowered FnSignature (or InterfaceMethodSchema) via `parse_drift_workspace_to_hir`, retrieves the signature by name, and asserts the right flag combination. Asserting only `rc == 0` would hide flag-drop bugs like the impl-block regression caught in v2 review.
-  - **Source scrubs from v2 are reverted**. The 14 `.drift` files + 4 `.py` test files + `docs/effective-drift.md` instances of `fn ... throws -> Int { ... }` are all RESTORED to their original form. The auto-try semantic is preserved and the existing source code continues to compile and behave identically.
+  - **Source scrubs from v2 are reverted**. The 14 `.drift` files + 4 `.py` test files + `doc/effective-drift.md` instances of `fn ... throws -> Int { ... }` are all RESTORED to their original form. The auto-try semantic is preserved and the existing source code continues to compile and behave identically.
   - **Validated** (compilation, parsing, in-memory plumbing only — runtime auto-try semantic was NOT independently re-verified by this patch):
     - 15 new Phase 1 v3 unit tests pass. Each positive test introspects the lowered FnSignature/InterfaceMethodSchema directly to assert the right flag combination.
     - Full unfiltered `lang/tests/driver/`, `lang/tests/checker/`, `lang/tests/parser/`, `lang/tests/stage1/`, `lang/tests/stage2/` slices pass.
@@ -523,7 +523,7 @@
     - `lang/drift/doctor.py`: `DoctorOptions.sources_path` and `lock_path` defaults
     - `lang/drift/cli.py`: `drift fetch`/`doctor`/`vendor` subcommand argparse defaults + help text
   - Test code touched: `lang/tests/driver/test_drift_doctor.py`, `lang/tests/driver/test_drift_publish_fetch_vendor.py` (~28 path-construction sites + parent-mkdir injection at write sites)
-  - Docs/TODO: `TODO.md` (corrected reference to build lockfile name), `docs/design/drift-tooling-and-packages.md`, `dist/README.md`
+  - Docs/TODO: `TODO.md` (corrected reference to build lockfile name), `doc/design/drift-tooling-and-packages.md`, `dist/README.md`
   - Guardrails verified for this follow-up:
     - signing/provenance code paths untouched (fetch/vendor/doctor reference signature *metadata* on lockfile entries as readers, not as modifiers; no edits to sign.py/keygen.py/author_profile.py/trust.py/envelope.py/crypto.py)
     - `drift/manifest.json` consumers not modified (`tools/drift_deploy/build_cmd.py`, `drift_build.py`, `drift_deploy.py`, `drift_prepare.py`, `manifest.py` are byte-identical to the 0.27.179 state; `project_root_for` contract, asset resolution, and author-profile resolution all unchanged)
@@ -1271,7 +1271,7 @@
   - sub-second truncation behavior,
   - pre-1970 negative epoch conversion (`-1500ms -> -1s`),
   - exact epoch boundary (`0`).
-  - `docs/design/drift-lang-spec.md` updated for:
+  - `doc/design/drift-lang-spec.md` updated for:
     - cast semantics scope (runtime now; const-cast semantics noted as forward-looking),
     - fixed-width reservation exception for `Uint64`,
     - `u`-suffix semantics as general expression form (not declaration-only).
@@ -1326,7 +1326,7 @@
   - positive: int/uint/byte/bool/float/string, unary negative, nested block scope, bitwise usage, module-shadowing, and multi-use `String` const.
   - negative: non-literal initializer, call initializer, var-ref initializer, type mismatch, byte out-of-range, not-exported local const, and mut-borrow rejection.
 - Spec/TODO tracking:
-  - local const support and semantics reflected in `docs/design/drift-lang-spec.md`.
+  - local const support and semantics reflected in `doc/design/drift-lang-spec.md`.
   - post-MVP composite const follow-up captured in `TODO.md` (`[Const]` composite const values).
 
 ## 2026-02-23 - Void bindability fix for generic `T=Void` instantiation paths
@@ -1448,7 +1448,7 @@
 - Regression coverage extended in `lang/tests/stage1/test_non_retaining_function_params.py`:
   - pre-seeded LOCAL downgraded to retaining,
   - IMMEDIATE treated non-retaining and preserved when analysis confirms.
-- Documentation updated in `docs/design/drift-lang-spec.md`:
+- Documentation updated in `doc/design/drift-lang-spec.md`:
   - closure borrowed-capture boundary rules now describe escape-level semantics (`IMMEDIATE/LOCAL/SCOPED/THREAD/STATIC`),
   - explicit MVP limitations noted for generic `Fn1` coercion and conservative SCOPED proof.
 
@@ -2050,12 +2050,12 @@
     - `array_push`
     - `object_set`
 - Updated docs:
-  - `docs/effective-drift.md` JSON section now explicitly states shape mutation is wrapper-only.
+  - `doc/effective-drift.md` JSON section now explicitly states shape mutation is wrapper-only.
 - Validation:
   - JSON regression driver subset passes with `DRIFT_ASAN=1` and `DRIFT_ALLOC_TRACK=1`.
   - JSON examples compile and run clean under `DRIFT_ASAN=1` + `DRIFT_ALLOC_TRACK=1` (`live_blocks=0`, `live_bytes=0`).
 
-## 2026-02-12 – Lock-free foundations wrap-up (docs/spec + naming cleanup)
+## 2026-02-12 – Lock-free foundations wrap-up (doc/spec + naming cleanup)
 - Closed remaining lock-free branch wrap-up items before branch closure:
   - Completed spec/doc sync for current `std.sync` API:
     - observed-CAS signatures (`compare_exchange_observed`) across scalar atomics,
@@ -2191,7 +2191,7 @@
     - `use trait iter.SinglePassIterator;`
   - valgrind memcheck for this case is clean.
 - Documentation updates:
-  - `docs/effective-drift.md` updated for final `std.json` API/error-tag contract
+  - `doc/effective-drift.md` updated for final `std.json` API/error-tag contract
   - added explicit guidance that preferred JSON array iteration is `for val item : users`, while manual `iter()/next()` form requires trait imports.
 
 ## 2026-02-08 – Logger interface baseline, JSON emission, and deterministic masking
@@ -2232,7 +2232,7 @@
   - Moved legacy pre-refactor tree to `lang-obsolete/`.
   - Rewired repository references, tooling, tests, and runners to `lang.*` paths/modules (including `justfile`, e2e runners, and docs links), and removed temporary compatibility symlink after validation.
 - TODO source-of-truth cleanup:
-  - Removed stale `docs/TODO.md` and updated references to root `TODO.md`.
+  - Removed stale `doc/TODO.md` and updated references to root `TODO.md`.
 - Concurrency timeout/parking hardening:
   - Added e2e regression `concurrent_sleep_task_join_timeout_regression` to capture timeout behavior when a spawned task sleeps and caller uses `join_timeout`.
   - Fixed `std.concurrent.sleep` VT path to park until an absolute deadline (`now_ms + duration`) after timer registration.
@@ -2262,9 +2262,9 @@
   - Fixed call-resolution recursion by threading known receiver type into mutability checks (`_receiver_can_mut_borrow(..., recv_ty_hint)`), avoiding recursive re-typechecking loops.
   - Reverted temporary API workaround and verified by-ref fluent builder chains remain stable.
   - Added additional timeout anti-regression for rvalue mut-receiver chain termination (`test_autoborrow_mut_rvalue_chain_terminates_without_resolver_recursion`).
-- Updated docs/spec for current surface:
-  - `docs/design/drift-lang-spec.md` IO/console sections aligned to builder/configured APIs, flat error model, `read_line` semantics, and console wrapper behavior.
-  - `docs/effective-drift.md` file IO examples updated to current `file_builder` API; matching examples added under `lang/examples/file_io/read_file.drift` and `lang/examples/file_io/write_file.drift`.
+- Updated doc/spec for current surface:
+  - `doc/design/drift-lang-spec.md` IO/console sections aligned to builder/configured APIs, flat error model, `read_line` semantics, and console wrapper behavior.
+  - `doc/effective-drift.md` file IO examples updated to current `file_builder` API; matching examples added under `lang/examples/file_io/read_file.drift` and `lang/examples/file_io/write_file.drift`.
 
 ## 2025-12-29 – Core trust enforcement (reserved namespaces)
 - Made the core trust store mandatory for reserved namespaces; removed fallback to project/user trust for `lang.*`, `std.*`, and `drift.*`.
@@ -2327,7 +2327,7 @@
 - Fixed LLVM backend to type arguments using function signatures (Int → i64, String → %DriftString) and emit typed call sites; function headers now preload param types into value_types.
 - Moved array runtime helper declarations to module scope (emit once per module), preventing invalid IR from function-local declares.
 - Added LLVM IR tests for typed params: Int+Int headers/calls and mixed Int/String param plus String return; added String literal pass-through call test.
-- Updated docs/comments: compile_to_llvm_ir_for_tests now mentions Int/String/FnResult returns; string work-progress reflects param support; TODO trimmed.
+- Updated doc/comments: compile_to_llvm_ir_for_tests now mentions Int/String/FnResult returns; string work-progress reflects param support; TODO trimmed.
 - All tests green (PYTHONPATH=.. ../.venv/bin/pytest).
 ## 2025-12-08 – String ops in LLVM
 - Added String-aware binary op lowering: `==` calls `drift_string_eq`, `+` calls `drift_string_concat`, and String `len` reuses ArrayLen lowering to extract the length field.
@@ -2728,8 +2728,8 @@
   - `lang/tests/driver/test_exception_string_generic_throw_regression.py`.
 - Added e2e coverage for registry expect success + miss-tag behavior:
   - `lang/tests/codegen/e2e/std_runtime_global_registry_expect_tag`.
-- Added runtime registry docs/examples:
-  - `docs/effective-drift.md` registry section
+- Added runtime registry doc/examples:
+  - `doc/effective-drift.md` registry section
   - `examples/runtime_registry/global_singleton.drift`
   - `examples/runtime_registry/per_thread_slots.drift`.
 - Validation:
@@ -2794,7 +2794,7 @@
   - e2e: `std_log_*`, `macro_log_app_logging_context`
   - driver: `test_std_log_api_smoke.py`, `test_macro_basic_diagnostics.py`, `test_map_literal_move_canonicalization.py`
   - examples: `examples/logging/basic_events.drift`, `examples/logging/debuggable_document.drift`, `examples/logging/pluggable_formatter.drift`
-  - docs snippet updated in `docs/effective-drift.md`.
+  - docs snippet updated in `doc/effective-drift.md`.
 - LANGUAGE_BUG fixed (regression-first) discovered during this change:
   - symptom: shadowed lets with same source name could generate invalid drop-glue IR type mismatch.
   - regressions:
@@ -2838,7 +2838,7 @@
   - `AGENTS.md` now requires positive+negative boundary regressions and stale-contract cleanup whenever stage-boundary support changes.
 - Aligned FnResult ok-payload contract for arrays end-to-end:
   - codegen support includes `TypeKind.ARRAY` in FnResult ok mapping (`lang/codegen/llvm/llvm_codegen.py`).
-  - updated stale docs/comments in LLVM codegen header/docs to include `Array<T>` support.
+  - updated stale doc/comments in LLVM codegen header/docs to include `Array<T>` support.
   - added positive e2e regression: `lang/tests/codegen/e2e/fnresult_ok_array_byte`.
   - updated negative LLVM unit to keep unsupported-shape guardrail via interface payload:
     - `lang/codegen/llvm/tests/test_llvm_codegen_negative.py::test_can_throw_fnresult_with_unsupported_interface_ok_type_is_rejected`.
@@ -2994,8 +2994,8 @@
 - Added driver coverage for wrapper env behavior:
   - `lang/tests/driver/test_driftc_wrapper_env_modes.py`.
 - Tooling docs updated:
-  - `docs/toolchain-build-workflow.md`
-  - `docs/design/drift-tooling-and-packages.md`.
+  - `doc/toolchain-build-workflow.md`
+  - `doc/design/drift-tooling-and-packages.md`.
 
 ## 2026-02-16 – Import diagnostic UX + task cleanup
 - Improved import diagnostics for entry-module/module resolution edge case:
