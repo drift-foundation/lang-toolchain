@@ -394,9 +394,23 @@ def run_phase(
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 
+def _find_toolchain_root(script_dir: Path) -> Path:
+	"""Locate the root that holds `bin/` (driftc/drift/flocker).
+
+	Works in both layouts this script ships in:
+	  - source tree:     <repo>/tools/drift_test_run.py        → <repo>
+	  - deployed bundle: <dist>/lib/tools/drift_test_run.py    → <dist>
+	by walking up to the nearest ancestor that contains a `bin/` directory.
+	"""
+	for cand in (script_dir, *script_dir.parents):
+		if (cand / "bin").is_dir():
+			return cand
+	return script_dir.parent
+
+
 def main(argv: list[str] | None = None) -> int:
 	script_dir = Path(__file__).resolve().parent
-	repo_root = script_dir.parent
+	repo_root = _find_toolchain_root(script_dir)
 
 	p = argparse.ArgumentParser(
 		prog="drift_test_run.py",
@@ -443,7 +457,12 @@ def main(argv: list[str] | None = None) -> int:
 	else:
 		try:
 			sys.path.insert(0, str(script_dir))
-			from pytest_jobs import recommended_workers
+			try:
+				# Deployed bundle: lib/tools/drift_pytest_jobs.py
+				from drift_pytest_jobs import recommended_workers
+			except ImportError:
+				# Source tree: tools/pytest_jobs.py
+				from pytest_jobs import recommended_workers
 			jobs_n = recommended_workers()
 		except Exception:
 			jobs_n = max(1, (os.cpu_count() or 2) // 2)

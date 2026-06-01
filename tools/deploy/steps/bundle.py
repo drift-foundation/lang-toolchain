@@ -41,6 +41,47 @@ def install_flocker(repo_root: Path, dist: Path) -> None:
 	print(f"[deploy] installed: {out}", flush=True)
 
 
+# CI scripts shipped under `lib/tools/` in the distribution.  Unlike `bin/`
+# artifacts (the PEX `driftc`/`drift` compiler, the host-general bash `flocker`),
+# these are NOT on PATH and NOT peers of the compiler — they are a library of
+# reusable CI components and require a host `python3`.  `lib/tools/` keeps them
+# out of the public `bin/` surface and the top-level layout
+# (bin/lib/doc/examples) unchanged.  Each entry maps a source path to its
+# `drift_`-prefixed dest name under `lib/tools/`.
+DEV_TOOLS = (
+	("tools/drift_test_run.py", "drift_test_run.py"),
+	# Budget protocol that drift_test_run.py sibling-imports
+	# (DRIFT_TEST_JOBS / ceil(nproc/2)).  Renamed with the drift_ prefix in the
+	# bundle; the runner imports `drift_pytest_jobs` first, falling back to the
+	# source-tree name `pytest_jobs`.  Both land in lib/tools/ together.
+	("tools/pytest_jobs.py", "drift_pytest_jobs.py"),
+)
+
+
+def bundle_dev_tools(repo_root: Path, dist: Path) -> None:
+	"""Copy CI scripts into dist/lib/tools with drift_ names.
+
+	Ships the shared test-runner (`drift_test_run.py`) and its budget helper
+	(`drift_pytest_jobs.py`) so teams can consume the runner from a staged
+	toolchain at the `lib/tools/` path `doc/test-run.md` references.  These are
+	CI machinery, not installed user-facing binaries — kept out of `bin/` and
+	off PATH, and (unlike the PEX/bash artifacts in `bin/`) they require a host
+	`python3`.  `drift_test_run.py` finds the `bin/` siblings
+	(`flocker`/`driftc`/`drift`) by walking up to the distribution root, so this
+	`lib/tools/` placement resolves at runtime.
+	"""
+	out_dir = dist / "lib" / "tools"
+	out_dir.mkdir(parents=True, exist_ok=True)
+	for rel, dest_name in DEV_TOOLS:
+		src = repo_root / rel
+		if not src.exists():
+			raise RuntimeError(f"{src} not found in source tree")
+		out = out_dir / dest_name
+		shutil.copy2(str(src), str(out))
+		out.chmod(0o755)
+		print(f"[deploy] installed: {out}", flush=True)
+
+
 def bundle_compiler(repo_root: Path, dist: Path) -> None:
 	"""Copy compiler Python sources and non-Python assets into dist."""
 	compiler_lib = dist / "lib" / "compiler"
@@ -290,7 +331,8 @@ provenance metadata, and certification records.
 `deploy.py` orchestrates the build in Python step modules:
 
 1. `steps/pex.py` — build PEX --scie eager executables (bin/driftc, bin/drift)
-2. `steps/bundle.py` — copy compiler sources, runtime archives, docs into staged tree
+2. `steps/bundle.py` — copy compiler sources, runtime archives, CI tools
+   (lib/tools/), and docs into staged tree
 3. `steps/stdlib.py` — build, sign, and install stdlib package + core trust store
 4. `steps/smoke.py` — compile and run smoke test using only deployed paths
 5. `steps/publish.py` — atomically publish staged tree to destination
@@ -314,6 +356,9 @@ runs reuse the cache.  Override the cache location with `SCIE_BASE`.
 - `doc/articles/` — architecture notes and deeper design articles.
 - `doc/toolchain-build-workflow.md` — certified toolchain build and
   deployment workflow.
+- `doc/test-run.md` — the shared parallel job executor for test/perf/stress
+  gates.  The tool itself ships under `lib/tools/` (CI machinery, host-`python3`,
+  not on PATH): `python3 lib/tools/drift_test_run.py …`.
 - `doc/history.md` — development history for this toolchain.
 - `doc/stdlib/index.md` — generated stdlib API reference.
 - `doc/stdlib/authoring.md` — how to write `///` doc comments that

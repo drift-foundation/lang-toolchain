@@ -1,5 +1,30 @@
 # Drift development history
 
+## 2026-05-31 (0.33.15: ship the `drift_test_run` CI runner in the bundle at `lib/tools/`)
+- **Bundle fix:** 0.33.14 shipped `doc/test-run.md` but NOT the tool it documents
+  — `drift_test_run.py` and its budget helper `pytest_jobs.py` were source-only,
+  absent from the deployed tree, so teams couldn't consume the runner from a
+  staged toolchain.  Added a `bundle_dev_tools` deploy step that installs both
+  into **`lib/tools/`** as `drift_test_run.py` + `drift_pytest_jobs.py`.
+- **Placement rationale:** these are **CI tools, not user-facing binaries** — not
+  peers of the PEX `driftc`/`drift` compiler or the host-general bash `flocker`
+  (which live in `bin/` and go on PATH).  They are a library of reusable CI
+  components and require a host `python3`, so they ship under `lib/tools/`
+  (`drift_`-prefixed for provenance).  Top-level distribution layout is unchanged
+  (`bin/lib/doc/examples`); nothing executable lands in `doc/`/`examples/`.
+- **Runtime resolution:** `drift_test_run.py` now finds `bin/{flocker,driftc,drift}`
+  by walking up to the nearest ancestor containing `bin/` (works from both the
+  source-tree `tools/` and the bundle `lib/tools/`), and imports its budget helper
+  as `drift_pytest_jobs` with a fallback to the source-tree name `pytest_jobs`.
+  Verified end-to-end against a simulated bundle layout (resolves bin/ siblings +
+  `DRIFT_TEST_JOBS` budget from `lib/tools/`).
+- Regression `tools/deploy/test_bundle_dev_tools.py`: both scripts land in
+  `lib/tools/` executable, do NOT leak into `bin/`, and the runner's root-finder
+  resolves the dist root from the `lib/tools/` layout.  Docs: `doc/test-run.md`
+  (where-it-lives table + host-`python3` note), bundle README (`lib/tools/` in the
+  layout + See-also).  Pure deploy/tooling change — ABI 15 unchanged; DRIFTC
+  0.33.14 → **0.33.15**.
+
 ## 2026-05-31 (CORE_BUG fix 0.33.14: interface-impl + inherent same-name overload now survives the publish boundary)
 - **Symptom (mariadb-rpc deploy blocker):** a concrete type with a same-name
   method overload split across `implement Interface for T` (canonical, e.g.

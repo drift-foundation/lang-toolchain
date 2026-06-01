@@ -34,6 +34,7 @@ from pathlib import Path
 from tools.deploy.steps.bundle import (
 	RUNTIME_VARIANTS,
 	bundle_compiler,
+	bundle_dev_tools,
 	bundle_docs_and_examples,
 	bundle_runtime_archives,
 	install_flocker,
@@ -148,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 		# ── Step 2: Bundle ───────────────────────────────────────────
 		bundle_compiler(repo_root, dist)
 		bundle_runtime_archives(repo_root, dist)
+		bundle_dev_tools(repo_root, dist)
 		bundle_docs_and_examples(dist)
 
 		# ── Step 3: Stdlib ───────────────────────────────────────────

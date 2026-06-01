@@ -1,7 +1,7 @@
-# `drift_test_run.py` — shared parallel job executor
+# `drift_test_run` — shared parallel job executor
 
-`tools/drift_test_run.py` is the scenario-agnostic job executor that package
-teams compose to run test / perf / stress gates, instead of each maintaining a
+`drift_test_run.py` is the scenario-agnostic job executor that package teams
+compose to run test / perf / stress gates, instead of each maintaining a
 ~500–700 line shell fork of the same parallel-compile / phased-run plumbing.
 
 It implements **mechanism, never scenario policy**: it executes a project-
@@ -9,9 +9,24 @@ supplied *plan* of jobs and knows nothing about databases, servers, queues,
 lanes, sanitizers, or what any gate means. Those live entirely in the plan
 content and in the team's own harness that brackets execution.
 
+## Where it lives
+
+It is a **CI tool, not an installed user-facing binary** — it is not on `PATH`
+and (unlike the PEX `driftc`/`drift` and the bash `flocker` in `bin/`) it
+requires a host `python3`.
+
+| Context | Path |
+|---|---|
+| Source checkout | `tools/drift_test_run.py` (budget helper: `tools/pytest_jobs.py`) |
+| Deployed toolchain | `lib/tools/drift_test_run.py` (budget helper: `lib/tools/drift_pytest_jobs.py`) |
+
+Run it with the host interpreter, e.g. `python3 <root>/lib/tools/drift_test_run.py …`.
+From either location it locates `bin/{flocker,driftc,drift}` by walking up to the
+toolchain/distribution root, so no path flags are needed in the common case.
+
 See also: `docs/flocker.md` (the concurrency primitive), `docs/certifiable-test-gates.md`
-(the methodology this implements), and `tools/pytest_jobs.py` (the host
-concurrency-budget contract).
+(the methodology this implements), and the budget helper above (the host
+concurrency-budget contract: `DRIFT_TEST_JOBS`, else `ceil(nproc/2)`).
 
 ## Model
 
@@ -28,7 +43,7 @@ concurrency-budget contract).
 
 ## Concurrency budget (load-bearing)
 
-The parallel pool size `N` is sourced from the **`pytest_jobs.py` protocol**
+The parallel pool size `N` is sourced from the **budget-helper protocol**
 (`DRIFT_TEST_JOBS`, else `ceil(nproc/2)`) — never hardcoded in a plan. Every job
 is wrapped in `flocker --key <pool> -j N`, so several concurrent runs or lanes on
 one host stay bounded by the *single* host-global flocker semaphore rather than
@@ -38,9 +53,9 @@ choice.
 ## Usage
 
 ```
-tools/drift_test_run.py --plan PATH --work-dir DIR [options]
+drift_test_run.py --plan PATH --work-dir DIR [options]
 
-  --jobs N           Parallel pool size (default: pytest_jobs.py protocol).
+  --jobs N           Parallel pool size (default: budget-helper protocol).
   --driftc PATH      Path for the {driftc} placeholder (default: bin/driftc | PATH).
   --drift PATH       Path for the {drift} placeholder.
   --flocker PATH     Path to flocker (default: bin/flocker | PATH).
