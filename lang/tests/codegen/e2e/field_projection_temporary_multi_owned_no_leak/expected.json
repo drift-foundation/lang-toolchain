@@ -1,0 +1,4 @@
+{
+  "description": "Companion to field_projection_temporary_no_leak (drift 0.33.19): pins the multi-owned-field path where a non-bitcopy selected field aliases the materialized temp and is deep-copied at consumption WHILE a different owned field is released by the temp's scope drop (move_owned_selected: select .x, drop .y; copy_selected_two_owned: select Copy .n, drop both .x and .y). Also covers nested/chained projection (make_outer(n).inner.k drops Inner.s) and struct-literal rvalue subjects (Pair(...).a drops .b). Memcheck-gated; exit 0 asserts value AND leak-freedom. See _visit_expr_HField in lang/driftc/stage2/hir_to_mir.py.",
+  "exit_code": 0
+}

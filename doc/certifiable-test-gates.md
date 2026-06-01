@@ -107,12 +107,55 @@ flags (e.g. `driftc --sanitize=address`, which also selects the matching
 instrumented runtime). Reserve an explicit per-job env overlay only for a tool
 that offers no flag — and treat that as a defect to push upstream, not a pattern.
 
+This rule governs **build-affecting** variation — anything that changes compile
+inputs. A per-job `env` overlay that selects a **run-time fixture namespace**
+(see *Fixture isolation for stateful backends*) does not influence the build and
+is a separate, sanctioned use, not the defect this rule warns against.
+
 ## Recipe isolation
 
 Each top-level gate target is **idempotent and isolated**: it gets its own work
 directory and does **not** reuse another gate's compiled artifacts. This is what
 lets a certification orchestrator **machine-split** gates across hosts, and what
 makes a single gate safe to re-run. Never share a binary cache *between* gates.
+
+## Fixture isolation for stateful backends
+
+Serialization (`-j 1 --key <resource>`) orders *access* to a shared resource; it
+does not isolate *state*. When a gate runs the same logic under several lanes
+(base / sanitizer / run-time checker) against a **stateful** backend — especially
+an append-only or immutable-record store with no delete path — serializing the
+lanes is not enough: lane 2 inherits whatever state lane 1 left behind, and a
+re-run inherits the previous run's. A claim→complete→reclaim test that passes in
+isolation then fails on lanes 2–3 ("already done") within a single gate run.
+
+Isolate the *fixture*; do not drop the lane. The sanctioned idiom is an
+**emitter-minted per-job `env` namespace**:
+
+- The **emitter** (the policy layer) mints a namespace and injects it as a
+  per-run-job `env` overlay — e.g. `<GATE>_FIXTURE=<gate>-<nonce>-<lane>`. The
+  test reads it and scopes all its keys/records under that namespace, so every
+  lane runs on virgin space.
+- The nonce is **per-invocation** (minted at emit time), so a *re-run* also gets
+  fresh space — essential when the backend has no delete API. The `<lane>`
+  component keeps base / sanitizer / checker from colliding within one run.
+- **Keep every lane.** Do not retreat to "only base hits the backend;
+  sanitizer/checker run on backend-free units" — that discards memory-safety
+  coverage of the exact backend round-trip (connection, buffer, and
+  record-object lifetimes), which is the highest-value checker target a
+  backend-backed gate has.
+- No teardown is needed when the namespace is unique per run. (A *mutable*
+  backend may instead prefer a teardown step in the gate harness; a fresh
+  namespace is simpler and re-run-safe.)
+
+This is **orthogonal** to the serial-resource key: the key prevents resource
+contention on the backend; the namespace prevents state contamination across
+lanes. A shared, stateful backend usually needs **both**.
+
+The rule is general, not backend-specific: any append-only / immutable-record /
+no-cleanup backend — event stores, ledgers, lease- or idempotency-coordinators —
+hits it the moment more than one lane runs against it, and serializing the
+resource silently does not fix it.
 
 ## Satisfying a stdout-inactivity watchdog
 
@@ -196,5 +239,6 @@ RFC); the methodology does not depend on it.
 - [ ] Identical binaries are built once; run-time-only instrumentation reuses the base binary.
 - [ ] Build variation is in explicit flags, not ambient env.
 - [ ] Runs are parallel unless an isolation constraint applies; serialization is expressed as `-j 1 --key <resource>`, not as a serial *phase*.
+- [ ] A stateful shared backend gets **disjoint fixtures** across lanes and re-runs via an emitter-minted per-job `env` namespace (per-invocation nonce + per-lane) — not a serial phase, and not by dropping instrumentation lanes.
 - [ ] Each top-level gate is isolated (own work dir) and machine-split-safe.
 - [ ] The stdout-inactivity watchdog is fed by a single `flocker --heartbeat` monitor, not a bespoke loop.

@@ -1,0 +1,4 @@
+{
+  "description": "Pins the field-projection-off-temporary leak fix (drift 0.33.19). Projecting a field off a struct rvalue/temp — `make(n).a` where Pair owns a heap String in `.b` — must drop the temporary's un-projected owned fields. Pre-fix `.b` leaked one block per call while the program still returned the correct value; memcheck-clean exit 0 asserts both. Covers: Copy field selected + owned sibling dropped (leak_form), bind-first control (bind_form), owned field moved without double-free (move_form). See `_visit_expr_HField` in lang/driftc/stage2/hir_to_mir.py.",
+  "exit_code": 0
+}

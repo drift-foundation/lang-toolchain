@@ -1,0 +1,49 @@
+// LANGUAGE_BUG regression (bookkeeper team, drift 0.33.18): projecting
+// a field off a struct *temporary* never dropped the temporary's other
+// owned fields, leaking once per call.
+//
+// Shape: `make(n).a` where `make()` returns a by-value struct with a
+// Copy field `a` and an owned field `b: String`.  Reading `.a` extracts
+// the Int but the temporary `Pair` was never registered for drop, so
+// the heap `String` in `.b` leaked (valgrind: "definitely lost, one
+// block per call").  Binding the whole value first — `val p = make(n);
+// p.a` — was always clean, because the bound local IS drop-registered.
+//
+// Fix: `_visit_expr_HField` in `lang/driftc/stage2/hir_to_mir.py` now
+// materializes an owned struct *rvalue* subject into a drop-registered
+// slot (exactly what the bind-first form does by hand), so scope exit
+// releases the un-projected fields.  The selected field aliases that
+// slot and is deep-copied at consumption, so a *moved* owned field does
+// not double-free.  Ordinary execution returns the right value while
+// leaking, so this is gated by memcheck — `expected.json` exit_code 0
+// run under DRIFT_MEMCHECK asserts both the value AND leak-freedom.
+module repro;
+
+struct Pair { a: Int, b: String }
+
+fn make(n: Int) nothrow -> Pair {
+	var s = "heap";
+	var i = 0;
+	while i < n { s = s + "-x"; i = i + 1; }   // heap String lands in `b`
+	return Pair(a = 1, b = s);
+}
+
+// Positive repro: project the Copy field off the temporary; `.b` must drop.
+fn leak_form(n: Int) nothrow -> Int { return make(n).a; }
+
+// Control: bind first, then project — always was leak-clean.
+fn bind_form(n: Int) nothrow -> Int { val p = make(n); return p.a; }
+
+// Move the OWNED field off the temporary; the temporary still drops, and
+// the moved `.b` must not double-free.
+fn move_form(n: Int) nothrow -> Int { val b = make(n).b; return b.len - b.len; }
+
+fn main() nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < 5 {
+		acc = acc + leak_form(8) + bind_form(8) + move_form(8);
+		i = i + 1;
+	}
+	return acc - 10;   // (1 + 1 + 0) * 5 - 10 == 0
+}

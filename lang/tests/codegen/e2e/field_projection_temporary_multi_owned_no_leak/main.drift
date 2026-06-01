@@ -1,0 +1,60 @@
+// Companion regression to field_projection_temporary_no_leak: pins the
+// broader shapes of the field-projection-off-temporary drop fix
+// (drift 0.33.19) that the single-owned-field fixture does not cover.
+//
+// Risky path this fixture targets: a struct temporary with MORE THAN ONE
+// owned field, where the selected field is itself non-bitcopy.  The
+// selected field aliases the materialized temp and must be deep-copied
+// at consumption, WHILE a *different* owned field is released by the
+// temp's scope-exit drop.  Get either half wrong and you leak (sibling
+// not dropped) or double-free (selected field dropped via both the
+// consumer's copy and the temp).  Also covers nested/chained projection
+// and struct-literal (non-call) rvalue subjects.
+//
+// Memcheck-gated: ordinary execution returns the right value while
+// leaking, so expected.json exit_code 0 only proves correctness under
+// DRIFT_MEMCHECK.  See `_visit_expr_HField` in
+// lang/driftc/stage2/hir_to_mir.py.
+module repro;
+
+struct Two { x: String, y: String, n: Int }
+struct Inner { s: String, k: Int }
+struct Outer { inner: Inner, tag: Int }
+struct Pair { a: Int, b: String }
+
+fn mk(n: Int) nothrow -> String {
+	var s = "h";
+	var i = 0;
+	while i < n { s = s + "q"; i = i + 1; }
+	return s;
+}
+
+fn make_two(n: Int) nothrow -> Two { return Two(x = mk(n), y = mk(n + 1), n = 2); }
+fn make_outer(n: Int) nothrow -> Outer { return Outer(inner = Inner(s = mk(n), k = 3), tag = 9); }
+
+// Selected owned field survives (deep-copied at the `val` bind); the OTHER
+// owned field `y` must still be released by the temp's scope drop.
+fn move_owned_selected(n: Int) nothrow -> Int { val x = make_two(n).x; return x.len - x.len; }
+
+// Copy field selected; BOTH owned fields `x` and `y` must drop.
+fn copy_selected_two_owned(n: Int) nothrow -> Int { return make_two(n).n; }
+
+// Nested/chained projection off a temporary: the un-projected `Inner.s`
+// String (and the `Outer`/`Inner` temporaries) must drop.
+fn chained(n: Int) nothrow -> Int { return make_outer(n).inner.k; }
+
+// Struct-literal (non-call) rvalue subject: the `b` String must drop.
+fn lit_proj(n: Int) nothrow -> Int { return Pair(a = 7, b = mk(n)).a; }
+
+fn main() nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < 5 {
+		acc = acc + move_owned_selected(6)   // 0
+		          + copy_selected_two_owned(6) // 2
+		          + chained(6)                 // 3
+		          + lit_proj(6);               // 7
+		i = i + 1;
+	}
+	return acc - 60;   // (0 + 2 + 3 + 7) * 5 - 60 == 0
+}

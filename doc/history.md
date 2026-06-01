@@ -1,5 +1,38 @@
 # Drift development history
 
+## 2026-06-01 (0.33.19: fix field-projection-off-temporary leak — un-projected owned fields now drop)
+- **LANGUAGE_BUG (bookkeeper team).** Projecting a single field off a struct
+  *temporary* — `make(n).a` where `make()` returns a by-value struct — never
+  dropped the temporary's *other* owned fields. Any owned sibling (e.g. a heap
+  `String` in `.b`) leaked once per call, with no diagnostic; only valgrind/ASAN
+  caught it. The bind-first form `val p = make(n); p.a` was always clean (the
+  bound local is drop-registered). Triggered on the very common shape `f().field`.
+- **Root cause** in `_visit_expr_HField` (`lang/driftc/stage2/hir_to_mir.py`):
+  a field read off a freshly-produced owned struct *rvalue* (call result, struct
+  literal, …) never registered that temporary for scope drop. The existing
+  alias-marking only fired when the *extracted* field was non-bitcopy, so
+  projecting a Copy field (`.a`) off a struct with owned siblings (`.b`) skipped
+  drop entirely.
+- **Fix:** when the projection subject is an owned struct rvalue (not a
+  place/param we already drop, not a `&T` deref, not an already-tracked
+  field-alias temp) and the struct owns droppable state, materialize it into a
+  drop-registered slot via `_materialize_owned_temp` — exactly what the
+  bind-first form does by hand. `StoreLocal` is a bitcopy (no refcount bump), so
+  the slot and the SSA subject alias the same field allocations and the slot's
+  scope-exit drop releases them once. A *moved* non-Copy selected field is marked
+  an alias and deep-copied at consumption, so it does not double-free; a Copy
+  field is read directly while the owned siblings drop; binding the whole temp
+  first still drops exactly once. Generalizes beyond calls (struct literals,
+  nested/chained projection all covered).
+- No runtime/drop ABI shape change (**ABI stays 15**); behavior-changing compiler
+  fix so DRIFTC 0.33.18 → **0.33.19**. Regression (memcheck-gated, since ordinary
+  execution returns the right value while leaking):
+  `lang/tests/codegen/e2e/field_projection_temporary_no_leak/` (Copy/owned
+  single-field + bind-first control) and
+  `field_projection_temporary_multi_owned_no_leak/` (two owned fields:
+  owned-selected-sibling-dropped and Copy-selected-both-dropped; nested/chained;
+  struct-literal rvalue subject).
+
 ## 2026-06-01 (0.33.18: keyless `drift author verify` — read-only stale-claim check)
 - **New read-only subcommand `drift author verify`.** Recomputes the artifact
   `source_content_id` from `drift/manifest.json` + the working-tree source (via

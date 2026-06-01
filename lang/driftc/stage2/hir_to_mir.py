@@ -3217,6 +3217,41 @@ class HIRToMIR:
 				f"module={getattr(_sd, 'module_id', None)!r} known_fields={_field_list} fn={_fn_name!r}"
 			)
 		field_idx, field_ty = info
+		# Projecting a field off a freshly-produced OWNED struct rvalue —
+		# a call result, struct literal, etc. (NOT a place/param we already
+		# drop, NOT a &T deref, NOT an already-tracked field-alias temp) —
+		# leaves nothing to drop the temporary.  Reading one field would
+		# then silently leak the struct's *other* owned fields: `make().a`
+		# extracts the Int but never drops the String in `.b` (one block
+		# per call).  Materialize the temporary into a drop-registered slot
+		# — exactly what `val p = make(); p.f` does by hand — so scope exit
+		# releases the un-projected fields.  StoreLocal is a bitcopy (no
+		# refcount bump), so the slot and the SSA `subject` alias the same
+		# field allocations and the slot's drop releases them exactly once.
+		#
+		# This is independent of the *extracted* field's drop policy: the
+		# leak lives in the source's un-read fields.  For
+		# `Pair { a: Int, b: String }`, `make().a` selects the bitcopy
+		# field yet leaks the owned sibling `b`.  The mirror risk is the
+		# moved-field shape — `make_two().x` on `Two { x, y: String, .. }`
+		# — where selecting owned `x` must still drop the un-read owned
+		# sibling `y` (and `x` is deep-copied at consumption, below, so the
+		# slot's drop of its own `x` does not double-free).
+		source_is_owned_rvalue = (
+			not loaded_from_ref
+			and subject not in self._ref_field_temps
+			and not isinstance(expr.subject, H.HVar)
+			and not (
+				hasattr(H, "HPlaceExpr")
+				and isinstance(expr.subject, getattr(H, "HPlaceExpr"))
+				and not expr.subject.projections
+			)
+			and (self._needs_runtime_drop(subj_ty) or self._type_is_destructible(subj_ty))
+		)
+		if source_is_owned_rvalue:
+			self._materialize_owned_temp(
+				name_prefix="__field_src_", ty=subj_ty, value=subject,
+			)
 		dest = self.b.new_temp()
 		self.b.emit(
 			M.StructGetField(
@@ -3230,16 +3265,17 @@ class HIRToMIR:
 		# StructGetField (LLVM extractvalue) produces an aliased bitcopy of
 		# the source's data.  For non-bitcopy fields this means the result
 		# shares the backing allocation with the source.  If the source
-		# will be dropped (it's a local/param, a &T deref, or itself an
-		# aliased temp), the extracted value is a dangerous alias that must
-		# be deep-copied before any ownership transfer.
+		# will be dropped (it's a local/param, a &T deref, an aliased temp,
+		# or the owned rvalue we just materialized above), the extracted
+		# value is a dangerous alias that must be deep-copied before any
+		# ownership transfer.
 		#
 		# We mark the temp here so that consumption sites (struct/variant
 		# construction, return, variable binding, call args) emit a copy.
 		# Transient uses (chained .len, comparisons) are safe without a
 		# copy and would otherwise leak the intermediate allocation.
 		if not self._drop_policy(field_ty).is_bitcopy:
-			subject_is_alias = loaded_from_ref or subject in self._ref_field_temps
+			subject_is_alias = loaded_from_ref or subject in self._ref_field_temps or source_is_owned_rvalue
 			if not subject_is_alias:
 				# Check if the subject was loaded from a local/param that
 				# will be dropped at scope exit (owned struct field read).
