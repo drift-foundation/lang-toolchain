@@ -13152,7 +13152,17 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# was unattributed.
 	with _events.timed("write_ir"):
 		args.output.parent.mkdir(parents=True, exist_ok=True)
-		ir_path = args.output.with_suffix(".ll")
+		# Derive scratch paths by APPENDING the extension, not
+		# `Path.with_suffix` (which REPLACES the last dot-segment).  An
+		# `-o` value that itself contains dots — e.g.
+		# `web-jwt.unit.claims_test#plain` — would otherwise collapse
+		# under `with_suffix(".ll")` to a shared `web-jwt.unit.ll`, so
+		# multiple distinct `-o` targets sharing a `a.b.*` prefix write the
+		# SAME scratch IR/obj file.  Concurrent compiles (parallel
+		# test/build runners) then clobber each other's IR → intermittent
+		# corrupt-IR link failures.  Appending keeps every distinct `-o`
+		# mapped to a distinct scratch file.
+		ir_path = Path(str(args.output) + ".ll")
 		ir_path.write_text(ir)
 
 	runtime_sources = [str(p) for p in get_runtime_sources(ROOT)]
@@ -13265,7 +13275,10 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	runtime_archive = str(archive_path)
 
 	if debug_enabled:
-		ir_obj = args.output.with_suffix(".ir.o")
+		# Append (not with_suffix) for the same parallel-safety reason as
+		# ir_path above: a dotted `-o` must not collapse the scratch object
+		# path and let concurrent compiles clobber each other.
+		ir_obj = Path(str(args.output) + ".ir.o")
 		ir_compile_cmd = [
 			clang,
 			*linker_flags,

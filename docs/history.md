@@ -1,5 +1,31 @@
 # Drift development history
 
+## 2026-05-31 (0.33.16: driftc scratch IR/obj paths — parallel-build corrupt-IR fix for dotted `-o`)
+- **Bug:** driftc derived its scratch LLVM IR (`.ll`) and intermediate object
+  (`.ir.o`) paths from `-o` via `Path.with_suffix`, which REPLACES the last
+  dot-segment.  An `-o` value containing dots collapsed: e.g.
+  `web-jwt.unit.claims_test#plain` and `...claims_test#asan` both mapped to the
+  scratch path `web-jwt.unit.ll`.  Two distinct `-o` targets sharing a dotted
+  prefix therefore wrote the SAME scratch IR file, and under a parallel
+  test/build runner the concurrent compiles clobbered each other → intermittent
+  corrupt-IR link failures.  Reported by drift-web (3 such failures on first
+  adoption of the shared runner); bites any parallel `-o` build with dotted
+  names, not just runner users.
+- **Fix (driftc.py ~13155 `.ll`, ~13268 `.ir.o`):** derive scratch paths by
+  APPENDING the extension (`Path(str(output) + ".ll")`) instead of
+  `with_suffix`, so every distinct `-o` maps to a distinct scratch file.
+  Dot-free output names are unchanged (append == with_suffix there), so callers
+  that reconstruct `<out>.with_suffix(".ll")` still match.
+- Regression `test_dotted_output_scratch_paths.py`: two dotted outputs sharing a
+  prefix get distinct scratch `.ll` and both build; dot-free output scratch path
+  unchanged.  Validated: 2 passed; test_fat_arc_interface_views (reconstructs
+  `<out>.with_suffix(".ll")` on dot-free names) 11 passed, unaffected.  Codegen
+  scratch-path only — ABI 15 unchanged; DRIFTC 0.33.15 → **0.33.16**.
+- Companion plan-authoring note in `doc/test-run.md`: cross-root same-name tests
+  (e.g. `middleware_test` in two roots) must namespace job `id`/`out` by
+  artifact-leaf; a colliding `out` mis-dedups (the runner dedups on the resolved
+  `out` path by design, so its uniqueness is the plan author's responsibility).
+
 ## 2026-05-31 (0.33.15: ship the `drift_test_run` CI runner in the bundle at `lib/tools/`)
 - **Bundle fix:** 0.33.14 shipped `doc/test-run.md` but NOT the tool it documents
   — `drift_test_run.py` and its budget helper `pytest_jobs.py` were source-only,

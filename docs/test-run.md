@@ -140,6 +140,27 @@ failed job's log is printed in the summary.
 - `out` — output path for **dedup**: two jobs with the same resolved `out` are
   compiled once (the first runs, later ones are skipped).
 
+### Naming `id` and `out` — namespace by artifact, not bare filename
+The runner dedups on the resolved `out` path *by design*, so making `out` (and
+`id`) unique is the **plan author's** responsibility. The common footgun:
+the same test leaf-name living in two roots — e.g. `middleware_test` or
+`error_tags_test` under both `web-jwt` and `web-rest`. If you key `id`/`out` on
+the bare filename, the two collide, and a colliding `out` **mis-dedups**: one is
+compiled and the other is silently skipped (you run the same binary twice and
+think you covered both). Namespace by the owning artifact-leaf:
+
+```
+web-jwt.middleware_test#plain      web-rest.middleware_test#plain      ✓ distinct
+middleware_test#plain              middleware_test#plain               ✗ collide → mis-dedup
+```
+
+Use **dashes, not dots, inside the namespacing if you target old toolchains**:
+driftc < 0.33.16 derived its scratch IR path from `-o` by replacing the last
+dot-segment, so `a.b.x#plain` and `a.b.x#asan` collapsed to a shared `a.b.ll`
+and concurrent compiles clobbered each other (corrupt-IR). Fixed in 0.33.16
+(scratch paths now append, not replace), so dots in `out` are safe on current
+toolchains — but dashes remain a portable habit.
+
 ### Sanitizer env defaults
 Run jobs get `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1` and
 `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1` unless the job's `env` (or the
