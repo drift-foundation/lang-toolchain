@@ -27,11 +27,11 @@ git-reset BRANCH:
 # `ownership-matrix-check` is listed here (and on test-shard-2) as a
 # direct top-level dep so the generator-freshness guard runs on the
 # full suite even though no top-level target calls a shard target.
-test: review-cleanup ownership-matrix-check lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
+test: review-cleanup ownership-matrix-check lang-uniform-pytest lang-llvm-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
 	@echo "lang tests: Success."
 
 # Shard 1: everything test runs except codegen.
-test-shard-1: review-cleanup lang-stage1-test lang-stage2-test lang-stage3-test lang-stage4-test lang-parser-test lang-core-test lang-llvm-test lang-borrow-test lang-type-checker-test lang-method-registry-test lang-packages-test lang-traits-test lang-driver-test lang-gdb-test
+test-shard-1: review-cleanup lang-uniform-pytest lang-llvm-test lang-driver-test lang-gdb-test
 	@echo "lang test-shard-1: Success."
 
 # Shard 2: codegen e2e only.
@@ -106,131 +106,23 @@ test-shard-3: drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-
 # claim).
 build: runtime-libs
 
-lang-stage1-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/stage1; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage1; \
-	fi
-
-lang-stage2-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/stage2; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage2; \
-	fi
-
-lang-stage3-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/stage3; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage3; \
-	fi
-
-lang-stage4-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/stage4; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/stage4; \
-	fi
-
-# Parser tests (lang parser copy + adapter).
-lang-parser-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/parser; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/parser; \
-	fi
-
-# Core TypeEnv/TypeTable tests.
-lang-core-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/core; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/core; \
-	fi
-
-# Package linker/consumer unit tests.
-lang-packages-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/packages; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/packages; \
-	fi
-
-# Trait resolution/overload tests.
-lang-traits-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/traits; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/traits; \
-	fi
-
-# Type checker tests (typed HIR + resolution).
-lang-type-checker-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/type_checker; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/type_checker; \
-	fi
-
-# Method registry/resolver tests.
-lang-method-registry-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/method_registry; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/method_registry; \
-	fi
+# Uniform pytest lanes, consolidated through the shared job executor.
+# Replaces 12 byte-identical `lang-<suite>-test` recipes (each with a
+# duplicated pytest/xdist preamble) with one data-driven emitter
+# (tools/emit_test_plan.py) + one drift_test_run invocation.  Each lane is a
+# `mode: serial` job on a shared flocker key (one pytest lane at a time
+# host-wide; pytest is a black box that fans out internally), with internal
+# xdist width from the drift_test_run budget (DRIFT_TEST_JOBS / default).
+# The non-uniform shard-1 lanes (driver: DRIVER_JOBS override; gdb:
+# single-process, env-gated) stay as their own recipes below.  See
+# doc/test-run.md.
+lang-uniform-pytest:
+	PYTHONPATH=. ./.venv/bin/python3 tools/emit_test_plan.py \
+	  --plan-out build/test-run/uniform.plan.json
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_test_run.py \
+	  --plan build/test-run/uniform.plan.json \
+	  --work-dir build/test-run/uniform \
+	  --report build/test-run/uniform.report.json
 
 # Driver/integration tests (driftc pipeline, try sugar, declared events).
 lang-driver-test:
@@ -311,19 +203,6 @@ lang-gdb-test:
 # Lang2 e2e runner (lang.driftc: json + run modes against tests/e2e)
 lang-e2e CASES="":
 	PYTHONPATH=. ./.venv/bin/python3 lang/codegen/codegen_runner.py {{CASES}}
-
-# Borrow checker scaffolding tests.
-lang-borrow-test:
-	# Ensure pytest is available in the venv
-	if ! ./.venv/bin/python3 -m pytest --version >/dev/null 2>&1; then \
-	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
-	  exit 1; \
-	fi
-	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" --dist=worksteal -v lang/tests/borrow_checker; \
-	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/borrow_checker; \
-	fi
 
 # Stdlib-as-package memcheck: builds stdlib as a signed .dmp and runs
 # consumer programs under Valgrind against the package path (not --stdlib-root).

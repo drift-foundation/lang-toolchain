@@ -6,21 +6,27 @@ Override order (highest to lowest):
      Set this to control concurrency across every test runner the just
      recipes invoke (pytest-managed suites, codegen e2e runner, package
      consumer runner, pex e2e runner). Accepts a positive integer.
-  2. Protocol default: `ceil(nproc / 2)` — each test lane self-limits to
-     half the host's cores. `nproc` is the physical core count from
-     /proc/cpuinfo (logical `os.cpu_count()` as fallback).
+  2. Protocol default: the host's **physical core count** (from
+     /proc/cpuinfo, logical `os.cpu_count()` as fallback). A lane uses the
+     whole box by default.
 
-Why half, not all: lanes do not run in isolation. The cross-lane /
-cross-process budget is enforced by `flocker` (see docs/flocker.md), a
-host-local slot cap keyed per resource. With each lane at ceil(nproc/2)
-and flocker capping the shared pool, several lanes (plain / ASAN /
-valgrind) can run concurrently without their per-lane counts multiplying
-past the host's RAM. A lane that claimed all cores would oversubscribe
-the moment a second lane started.
+Why full cores, not half: a half-default leaves half the box idle on
+every run to hedge against a scenario that proper coordination already
+prevents. Concurrency between lanes is bounded by `flocker` (see
+docs/flocker.md), the host-local slot cap — lanes wrapped under a shared
+flocker key run one-at-a-time, so a second lane cannot start while the
+first holds the slot. The dev-loop (`just test`) runs lanes sequentially
+anyway. The only way two lanes oversubscribe is an orchestrator fanning
+them out **without** a shared flocker key; that caller owns the fix —
+trim via `DRIFT_TEST_JOBS`, or `flocker`-wrap the lanes under one key.
+Likewise a lane that OOMs at full cores (e.g. RAM-heavy valgrind on a
+small host) is that lane's responsibility: mark it `mode: serial` in its
+plan, or set `DRIFT_TEST_JOBS`. We do not tax every box with a half
+default to protect those cases.
 
 The justfile pipes this script's output into `pytest -n` for every
 parallel pytest recipe, so a single env var change here propagates to
-all 12 pytest invocations without per-recipe edits.
+all the pytest invocations without per-recipe edits.
 
 The standalone runners (`lang/tests/codegen/e2e/runner.py`,
 `pex_e2e_runner.py`, `pkg_consumer_runner.py`,
@@ -30,7 +36,6 @@ controls them too.
 """
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 
@@ -71,11 +76,13 @@ def recommended_workers() -> int:
 				return n
 		except ValueError:
 			pass
-	# 2. Protocol default: ceil(nproc / 2).  Physical core count when we can
-	#    read it, logical count otherwise.  flocker enforces the cross-lane
-	#    cap, so each lane self-limits to half the cores.
+	# 2. Protocol default: the host's physical core count (logical count as
+	#    fallback).  A lane uses the whole box; flocker bounds *concurrency*
+	#    between lanes (shared key → one at a time), and an un-coordinated
+	#    orchestrator or a RAM-heavy lane trims via DRIFT_TEST_JOBS / serial
+	#    mode.  See the module docstring for why full, not half.
 	nproc = _physical_cpu_count_linux() or os.cpu_count() or 1
-	return max(1, math.ceil(nproc / 2))
+	return max(1, nproc)
 
 
 def main() -> int:

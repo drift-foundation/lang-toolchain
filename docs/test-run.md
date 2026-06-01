@@ -9,6 +9,13 @@ supplied *plan* of jobs and knows nothing about databases, servers, queues,
 lanes, sanitizers, or what any gate means. Those live entirely in the plan
 content and in the team's own harness that brackets execution.
 
+**The toolchain dogfoods this runner.** Its own uniform pytest lanes run through
+`drift_test_run` via `just lang-uniform-pytest`, driven by the reference plan
+emitter `tools/emit_test_plan.py` — the worked example to copy when writing a
+plan emitter for your own gate (each lane is a `mode: serial` job, internal
+xdist width from `{jobs}`). That emitter is the answer to "the plan emitter is
+the real adoption cost": start from it rather than hand-writing `cmd` argv.
+
 ## Where it lives
 
 It is a **CI tool, not an installed user-facing binary** — it is not on `PATH`

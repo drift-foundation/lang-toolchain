@@ -1,5 +1,54 @@
 # Drift development history
 
+## 2026-05-31 (0.33.17: test-concurrency default → full physical cores)
+- **`drift_pytest_jobs` / `pytest_jobs.py` default changed from `ceil(physical/2)`
+  to the full physical core count.**  The half-default left half the box idle on
+  every run to hedge against un-coordinated concurrent lanes — a scenario
+  `flocker` already prevents (lanes wrapped under a shared key run one at a time)
+  and that the dev-loop `just test` never hits (lanes run sequentially).
+- **Burden moves to the caller that actually breaks the assumption:** an
+  orchestrator fanning lanes out *without* a shared flocker key, or a RAM-heavy
+  lane that OOMs at full cores, trims via `DRIFT_TEST_JOBS` or marks the lane
+  `mode: serial` in its plan.  We no longer tax every box with a half default to
+  protect those cases.  `DRIFT_TEST_JOBS` still overrides and always wins.
+- Impact: on a 16-physical / 32-logical box the default `pytest -n` width goes
+  8 → 16.  Bundled artifact (`lib/tools/drift_pytest_jobs.py`), so consumers pick
+  this up from the release — hence the version bump.  No compiler/ABI change
+  (ABI 15); DRIFTC 0.33.16 → **0.33.17**.  Pairs with the same-day runner
+  consolidation pilot (below): the toolchain's own lanes are now flocker-managed,
+  which is what makes full-cores safe by construction.
+
+## 2026-05-31 (test tooling: toolchain dogfoods drift_test_run for its uniform pytest lanes — pilot)
+- **No compiler/ABI/version change** — justfile + test-tooling only.
+- **What:** the 11 uniform `lang-<suite>-test` justfile recipes (stage1–4, parser,
+  core, borrow_checker, type_checker, method_registry, packages, traits) — each a
+  byte-identical pytest/xdist preamble differing only by test dir — are replaced
+  by one data-driven emitter (`tools/emit_test_plan.py`) + one `drift_test_run`
+  invocation (`just lang-uniform-pytest`).  justfile shrank **121 lines**
+  (673→552).  This is the toolchain dogfooding its own shared runner — the
+  mechanism-not-policy proof drift-web's reference-migration report asked for,
+  and the consolidation of "too many ways to slice tests."
+- **Model:** each lane is a `mode: serial` job on a shared flocker key, so one
+  pytest lane runs at a time host-wide (pytest is a black box that fans out
+  internally — flocker counts the lane, not its xdist children); the lane's
+  internal `-n` width comes from `{jobs}` (the drift_test_run budget,
+  DRIFT_TEST_JOBS / `pytest_jobs.py` default).  Same treatment a daemon-like or
+  internally-parallel compiler job gets.
+- **Deferred as recipes (this pilot):** `lang-driver-test` (own DRIVER_JOBS
+  override), `lang-gdb-test` (single-process, env-gated), `lang-codegen-test`
+  (owns the `lang/codegen/llvm/tests` pytest dir), `lang-llvm-test` (a llvmlite
+  smoke *script*, not pytest).  e2e / ownership-matrix / memcheck lanes are
+  phase 2.
+- **Migration catch worth recording:** the first cut mis-mapped an `llvm` job to
+  `lang/codegen/llvm/tests` (which `lang-codegen-test` owns) and would have
+  silently dropped the `lang-llvm-test` smoke script — the 12-lane gate went
+  green but tested the wrong thing.  Caught by a recipe-body audit (a kept recipe
+  not lining up), not by the passing tests.  Corrected to 11 real pytest dirs with
+  llvm-smoke + codegen kept as recipes and restored to their original dep lists.
+  Reference emitter: `tools/emit_test_plan.py`; runner: `doc/test-run.md`.
+- **Parity validated:** `just lang-uniform-pytest` → 11 ok / 0 failed through the
+  runner; `lang-llvm-test` smoke green; dep lists match HEAD coverage.
+
 ## 2026-05-31 (0.33.16: driftc scratch IR/obj paths — parallel-build corrupt-IR fix for dotted `-o`)
 - **Bug:** driftc derived its scratch LLVM IR (`.ll`) and intermediate object
   (`.ir.o`) paths from `-o` via `Path.with_suffix`, which REPLACES the last
