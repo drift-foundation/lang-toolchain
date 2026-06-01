@@ -1,5 +1,29 @@
 # Drift development history
 
+## 2026-06-01 (0.33.18: keyless `drift author verify` — read-only stale-claim check)
+- **New read-only subcommand `drift author verify`.** Recomputes the artifact
+  `source_content_id` from `drift/manifest.json` + the working-tree source (via
+  the shared `compute_artifact_sci` helper that `publish` and `deploy` already
+  use) and compares it — and the declared version — against the committed
+  `<pkg>.author-claim`. Exits **0** when in sync, **1** when the claim is stale
+  or missing. Reuses the staleness diagnostics `drift deploy` prints at stage time.
+- **Keyless and side-effect-free by contract.** No signing key is loaded, nothing
+  is built/deployed, no file is written (regression-pinned). Until now the only
+  way to learn a claim was stale was a full `drift deploy` (compile + sign +
+  stage) — so a stale claim surfaced only after an upstream repo ran its whole
+  gate. `verify` gives the same verdict at t≈0 without touching author-key
+  material, so an orchestrator preflight or a pre-commit / CI hook can catch it
+  up front. The author-key-out-of-orch import boundary is unchanged (verify
+  imports only the neutral `lang.driftc.packages.*` helpers, never
+  `tools.drift_deploy.*`).
+- Honors `--artifact` (multi-library manifests), `--sidecar-dir`, and `--json`
+  (machine-readable verdict: `status` ∈ {ok, stale, missing_claim}, `mismatch`
+  list, computed-vs-claim SCI/version). The bare `drift author` (mint) surface is
+  unchanged; `verify` is the only inner verb.
+- No compiler/ABI change (ABI stays 15); DRIFTC 0.33.17 → **0.33.18** so the
+  orchestrator can floor on the feature. Regression:
+  `lang/tests/packages/test_drift_author_verify.py`.
+
 ## 2026-05-31 (0.33.17: test-concurrency default → full physical cores)
 - **`drift_pytest_jobs` / `pytest_jobs.py` default changed from `ceil(physical/2)`
   to the full physical core count.**  The half-default left half the box idle on

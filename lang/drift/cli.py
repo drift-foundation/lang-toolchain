@@ -686,7 +686,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	doc.add_argument("source", type=_UserPath, help="A .drift file or directory of .drift files to document")
 	doc.add_argument("-o", "--output", type=_UserPath, default=Path("doc"), help="Output directory for generated Markdown (default: doc/)")
 
-	sub.add_parser("author", help="Mint or refresh this package's author claim from drift/manifest.json (see: drift author --help)")
+	sub.add_parser("author", help="Mint/refresh this package's author claim, or `drift author verify` to check (keyless) if a committed claim is stale (see: drift author --help)")
 	sub.add_parser("build", help="Build Drift artifacts from drift/manifest.json (see: drift build --help)")
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")

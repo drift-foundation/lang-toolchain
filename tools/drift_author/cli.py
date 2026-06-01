@@ -51,6 +51,7 @@ from typing import Optional
 from lang.driftc.packages.author_claim_v1 import (
 	AuthorClaimBody,
 	RequiredDep,
+	load_author_claim_json,
 )
 from tools.drift_author.author_publish import (
 	SignAuthorClaimOptions,
@@ -102,6 +103,39 @@ def _parse_required_dep(spec: str) -> RequiredDep:
 			f"non-empty; got {spec!r}"
 		)
 	return RequiredDep(name=name, version_range=version_range)
+
+
+def _select_library_artifact(manifest, manifest_path: Path, artifact_name: Optional[str], *, action: str):
+	"""Pick the manifest's library artifact, honoring ``--artifact``.
+
+	Only library artifacts carry an SCI / author claim (apps aren't
+	verified through the consumer closure path), so we filter to those
+	first.  Shared by ``publish`` (mint) and ``verify`` (check) so the
+	two surfaces resolve the *same* artifact from the same manifest;
+	`action` only tailors the no-library diagnostic ("nothing to
+	publish" vs "nothing to verify").
+	"""
+	libs = [a for a in manifest.artifacts if a.kind == "library"]
+	if not libs:
+		raise SystemExit(
+			f"drift-author: manifest at {manifest_path} declares no "
+			f"library artifacts; nothing to {action}"
+		)
+	if artifact_name:
+		matches = [a for a in libs if a.name == artifact_name]
+		if not matches:
+			raise SystemExit(
+				f"drift-author: --artifact {artifact_name!r} not found in "
+				f"manifest; available library artifacts: "
+				f"{[a.name for a in libs]!r}"
+			)
+		return matches[0]
+	if len(libs) == 1:
+		return libs[0]
+	raise SystemExit(
+		f"drift-author: manifest declares multiple library artifacts "
+		f"({[a.name for a in libs]!r}); pass --artifact <name> to pick one"
+	)
 
 
 def _build_body(args: argparse.Namespace) -> AuthorClaimBody:
@@ -192,30 +226,9 @@ def _cmd_publish(args: argparse.Namespace) -> int:
 		raise SystemExit(f"drift-author: {e}")
 	manifest_dir = manifest_path.parent
 
-	# Pick the artifact.  Only library artifacts carry SCI (apps don't
-	# get verified through the package closure path); filter to those.
-	libs = [a for a in manifest.artifacts if a.kind == "library"]
-	if not libs:
-		raise SystemExit(
-			f"drift-author: manifest at {manifest_path} declares no "
-			f"library artifacts; nothing to publish"
-		)
-	if args.artifact:
-		matches = [a for a in libs if a.name == args.artifact]
-		if not matches:
-			raise SystemExit(
-				f"drift-author: --artifact {args.artifact!r} not found in "
-				f"manifest; available library artifacts: "
-				f"{[a.name for a in libs]!r}"
-			)
-		art = matches[0]
-	elif len(libs) == 1:
-		art = libs[0]
-	else:
-		raise SystemExit(
-			f"drift-author: manifest declares multiple library artifacts "
-			f"({[a.name for a in libs]!r}); pass --artifact <name> to pick one"
-		)
+	# Pick the artifact (shared with `verify`; only library artifacts
+	# carry an SCI / author claim).
+	art = _select_library_artifact(manifest, manifest_path, args.artifact, action="publish")
 
 	try:
 		sci = compute_artifact_sci(art, manifest_dir=manifest_dir)
@@ -303,6 +316,156 @@ def _cmd_cosign(args: argparse.Namespace) -> int:
 	else:
 		print(f"appended signature to {written}")
 	return 0
+
+
+def _verify_report(
+	args: argparse.Namespace,
+	*,
+	status: str,
+	package_id: str,
+	manifest_path: Path,
+	claim_path: Optional[Path],
+	manifest_version: str,
+	claim_version: Optional[str],
+	computed_sci: str,
+	claim_sci: Optional[str],
+	mismatch: list[str],
+	message: Optional[str],
+) -> int:
+	"""Emit the verify result and return its exit code (0 in sync, 1 stale/missing)."""
+	rc = 0 if status == "ok" else 1
+	if args.json:
+		print(json.dumps({
+			"status": status,                      # "ok" | "stale" | "missing_claim"
+			"package_id": package_id,
+			"manifest": str(manifest_path),
+			"claim": str(claim_path) if claim_path else None,
+			"version": {"manifest": manifest_version, "claim": claim_version},
+			"source_content_id": {"computed": computed_sci, "claim": claim_sci},
+			"mismatch": mismatch,                  # [] when in sync
+		}))
+	elif status == "ok":
+		print(f"author claim for {package_id!r} is in sync")
+		print(f"  version:           {manifest_version}")
+		print(f"  source_content_id: {computed_sci}")
+	else:
+		print(f"drift-author: {message}", file=sys.stderr)
+	return rc
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+	"""`drift author verify` — read-only "is my committed claim stale?" check.
+
+	Recomputes the SCI from `drift/manifest.json` + the working-tree
+	source (via the same `compute_artifact_sci` helper `publish` and
+	`deploy` use) and compares it — and the declared version — against
+	the committed `<pkg>.author-claim`.  Exits 0 when in sync, 1 when
+	the claim is stale or missing.
+
+	Hard contract: **keyless and side-effect-free.**  No signing key is
+	loaded, nothing is built or deployed, and no file is written.  This
+	is what lets an orchestrator preflight (or a pre-commit / CI hook)
+	learn a claim is stale at t≈0 — before any staging — without ever
+	touching author-key material.  The staleness check itself otherwise
+	only surfaces from the full `drift deploy` staging path; this gives
+	the same verdict (and the same diagnostic) up front and key-free.
+	"""
+	manifest_path = args.manifest.expanduser().resolve()
+	if not manifest_path.is_file():
+		raise SystemExit(f"drift-author: manifest not found: {manifest_path}")
+	# Neutral-home imports only (no tools.drift_deploy.*): keeps the
+	# author tree clear of the orch surface per the boundary check.
+	from lang.driftc.packages.manifest import (
+		ManifestError, compute_artifact_sci, load_manifest,
+	)
+	try:
+		manifest = load_manifest(manifest_path)
+	except ManifestError as e:
+		raise SystemExit(f"drift-author: {e}")
+	manifest_dir = manifest_path.parent
+
+	art = _select_library_artifact(manifest, manifest_path, args.artifact, action="verify")
+
+	try:
+		computed_sci = compute_artifact_sci(art, manifest_dir=manifest_dir)
+	except (FileNotFoundError, ValueError) as e:
+		raise SystemExit(
+			f"drift-author: SCI computation failed for "
+			f"'{art.name}@{art.version}': {e}"
+		)
+
+	sidecar_dir = args.sidecar_dir if args.sidecar_dir else manifest_dir
+	claim_path = find_existing_author_claim(sidecar_dir, package_id=art.name)
+	if claim_path is None:
+		return _verify_report(
+			args, status="missing_claim", package_id=art.name,
+			manifest_path=manifest_path, claim_path=None,
+			manifest_version=art.version, claim_version=None,
+			computed_sci=computed_sci, claim_sci=None,
+			mismatch=["missing_claim"],
+			message=(
+				f"no author claim for {art.name!r} found in {sidecar_dir}.  "
+				f"Run `drift author` to mint one before deploying."
+			),
+		)
+
+	try:
+		claim = load_author_claim_json(claim_path.read_text(encoding="utf-8"))
+	except (ValueError, OSError) as e:
+		raise SystemExit(
+			f"drift-author: author claim at {claim_path} will not load: {e}"
+		)
+	body = claim.body
+
+	# Mirror the two staleness checks `drift deploy` runs at stage time
+	# (drift_deploy.py stage_packages): version intent + source identity.
+	mismatch: list[str] = []
+	msgs: list[str] = []
+	if body.version != art.version:
+		mismatch.append("version")
+		msgs.append(
+			f"author claim at {claim_path} binds version {body.version!r}, "
+			f"but the manifest declares {art.version!r}.  Bump the manifest's "
+			f"artifact version or re-run `drift author --overwrite` to refresh "
+			f"the claim."
+		)
+	if body.source_content_id != computed_sci:
+		mismatch.append("source_content_id")
+		msgs.append(
+			f"author claim at {claim_path} binds source_content_id "
+			f"{body.source_content_id!r}, but this build's source hashed to "
+			f"{computed_sci!r}.  The source tree has changed since the author "
+			f"signed; re-run `drift author --overwrite` with the current "
+			f"source to refresh the claim."
+		)
+
+	return _verify_report(
+		args, status=("ok" if not mismatch else "stale"), package_id=art.name,
+		manifest_path=manifest_path, claim_path=claim_path,
+		manifest_version=art.version, claim_version=body.version,
+		computed_sci=computed_sci, claim_sci=body.source_content_id,
+		mismatch=mismatch, message=("; ".join(msgs) if msgs else None),
+	)
+
+
+def _add_verify_args(p: argparse.ArgumentParser) -> None:
+	"""Argument set for the read-only `verify` check.
+
+	No key args by design — verify is keyless.  Shared by the public
+	`drift author verify` surface and the internal
+	`python -m tools.drift_author verify` subparser.
+	"""
+	p.add_argument("--manifest", type=Path, default=Path("drift") / "manifest.json",
+		help="Path to drift/manifest.json (the file, not the directory). "
+		     "Default: ./drift/manifest.json.")
+	p.add_argument("--artifact", type=str, default=None,
+		help="Pick a specific library artifact by name when the manifest "
+		     "declares more than one.  Required in the multi-library case.")
+	p.add_argument("--sidecar-dir", type=Path, default=None,
+		help="Directory holding the .author-claim. Default: the manifest's "
+		     "own directory (where `drift deploy` looks for it).")
+	p.add_argument("--json", action="store_true",
+		help="Emit machine-readable JSON to stdout")
 
 
 def _add_key_args(p: argparse.ArgumentParser) -> None:
@@ -402,6 +565,17 @@ def _build_parser() -> argparse.ArgumentParser:
 	_add_key_args(raw)
 	raw.set_defaults(func=_cmd_publish_raw)
 
+	ver = sub.add_parser(
+		"verify",
+		help=(
+			"Read-only staleness check: recompute SCI from the manifest + "
+			"working-tree source and compare against the committed claim.  "
+			"Keyless, no build, no writes.  Exit 0 in sync, 1 stale/missing."
+		),
+	)
+	_add_verify_args(ver)
+	ver.set_defaults(func=_cmd_verify)
+
 	cos = sub.add_parser(
 		"cosign",
 		help="Append a co-author signature to an existing sidecar",
@@ -448,7 +622,10 @@ def _build_author_subcommand_parser() -> argparse.ArgumentParser:
 			"shared manifest helper, signs, and writes "
 			"`drift/<pkg>.author-claim` (plus `drift/<pkg>.author-pubkey.b64`).  "
 			"Does NOT build artifacts, does NOT deploy, does NOT emit "
-			"cert claims, does NOT write package roots."
+			"cert claims, does NOT write package roots.  "
+			"To check (read-only, keyless) whether a committed claim has gone "
+			"stale versus the working tree without minting, use "
+			"`drift author verify`."
 		),
 	)
 	p.add_argument("--manifest", type=Path,
@@ -486,16 +663,43 @@ def _build_author_subcommand_parser() -> argparse.ArgumentParser:
 	return p
 
 
+def _build_author_verify_parser() -> argparse.ArgumentParser:
+	"""Parser for `drift author verify` — the keyless staleness check."""
+	p = argparse.ArgumentParser(
+		prog="drift author verify",
+		description=(
+			"Read-only check: is this package's committed author claim stale "
+			"versus the working tree?  Recomputes source_content_id from "
+			"`drift/manifest.json` + the source and compares it (and the "
+			"declared version) against the committed `<pkg>.author-claim`.  "
+			"Exits 0 when in sync, non-zero when stale or missing.  KEYLESS "
+			"and side-effect-free: no signing key, no build, no deploy, no "
+			"file writes -- safe for an orchestrator preflight or a "
+			"pre-commit / CI hook."
+		),
+	)
+	_add_verify_args(p)
+	return p
+
+
 def run_author_subcommand(argv: list[str]) -> int:
 	"""Entry point for `drift author …`.
 
 	Wired from `lang/drift/cli.py` (intercept-before-argparse, next to
-	`build`/`prepare`/`deploy`).  Thin wrapper that builds the flat
-	parser above and dispatches to the same `_cmd_publish` handler the
-	internal `python -m tools.drift_author publish` entry point uses,
-	so the manifest-driven mint behaviour is bit-identical between the
-	two surfaces.
+	`build`/`prepare`/`deploy`).
+
+	  drift author            →  mint / refresh the claim (`_cmd_publish`)
+	  drift author verify ...  →  keyless staleness check (`_cmd_verify`)
+
+	The bare (subcommand-less) form stays the manifest-driven mint so
+	the historical surface is unchanged; `verify` is the only inner
+	verb, dispatched to the same `_cmd_verify` the internal
+	`python -m tools.drift_author verify` entry point uses.
 	"""
+	if argv and argv[0] == "verify":
+		parser = _build_author_verify_parser()
+		args = parser.parse_args(argv[1:])
+		return _cmd_verify(args)
 	parser = _build_author_subcommand_parser()
 	args = parser.parse_args(argv)
 	return _cmd_publish(args)
