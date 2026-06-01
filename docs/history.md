@@ -1,5 +1,83 @@
 # Drift development history
 
+## 2026-05-31 (CORE_BUG fix 0.33.14: interface-impl + inherent same-name overload now survives the publish boundary)
+- **Symptom (mariadb-rpc deploy blocker):** a concrete type with a same-name
+  method overload split across `implement Interface for T` (canonical, e.g.
+  `acquire(self, wait)`) and `implement T` (no-arg sugar `acquire(self)` whose
+  body calls the canonical) compiled + ran in a whole-source build (`just test`
+  green) but FAILED when a consumer compiled against the published `.dmp`
+  (`drift deploy` baseline smoke): `no matching method 'acquire' for receiver
+  Pool` / `...Ref<Pool>`.  This is exactly the `effective-drift.md` idiom
+  ("Interfaces can't overload — canonical method plus concrete-type sugar"),
+  previously only verified in whole-source.
+- **Root cause (`call_resolver.resolve_method_call`):** on the CONSUME side the
+  interface-impl method's `fn_id` is tagged by `trait_impl_index`
+  (`trait_key_for_fn_id` → `TraitKey(Source)`), so the resolver routed it into
+  the segregated `trait_candidates` bucket; the inherent-wins selection
+  (`if inherent_candidates: candidates = inherent_candidates`) then DISCARDED it,
+  leaving only the no-arg inherent overload — so the 2-arg call could not
+  resolve.  In a WHOLE-source compile the same method is not trait-tagged, stays
+  inherent, and both overloads coexist.  That asymmetry was the whole bug.
+  (Verified by registration + lookup tracing: consume tagged 3 `acquire`
+  candidates as trait, whole-source tagged 0.)
+- **Fix:** route `_is_interface_trait` candidates into a new `iface_candidates`
+  peer list and union it with `inherent_candidates` in the final selection
+  (`candidates = inherent_candidates + iface_candidates`), so inherent +
+  interface-impl methods of the same name on a concrete type form ONE overload
+  set — whole-source parity.  `pub trait` candidates keep their existing
+  use-trait scoping fallback (consulted only when no inherent/interface method
+  matches).  ~24 lines, pure resolver logic.
+- **No ABI change** (ABI stays 15): the package already carried both methods;
+  nothing in serialization/layout/boundary shape changed — this is consume-side
+  resolution only.  DRIFTC_VERSION 0.33.13 → **0.33.14** per the defect policy
+  (compiler defect, fix-and-keep).
+- **Regression:** `lang/tests/driver/test_pkg_iface_inherent_overload_merge.py`
+  — the iface idiom AND a plain same-block-overload control each emit-package →
+  consume-against-published → link → **run to exit 23** (proves the *correct*
+  overload resolves, not just that compilation stopped erroring).
+- **Validated:** regression 2 passed; type_checker suite 147 passed;
+  interface/trait dispatch no-regression batch 27 passed, 0 leaks
+  (cross-pkg interface metadata, borrowed-interface dispatch, trait-impl target
+  type, cross-package method param, require-interface-impl, arc-interface
+  get-dispatch) — confirms dynamic dispatch and `pub trait` scoping intact.
+
+## 2026-05-31 (`drift_test_run.py`: shared scenario-agnostic parallel job executor)
+- **`tools/drift_test_run.py`** lands the shared "runner plumbing" that package
+  teams (drift-web, mariadb-client, net-*) were each re-rolling as a ~500–700
+  line shell fork (`tools/drift_test_parallel_runner.sh`) — the N-way drift that
+  left mariadb's fork behind on `--sanitize` / `flocker --heartbeat` / run-phase
+  capping.  Per the shared-test-runner RFC it implements **mechanism, never
+  scenario policy**: it executes a project-supplied JSON *plan* of jobs and knows
+  nothing about databases, servers, queues, lanes, sanitizers, or gate meaning —
+  those stay in the plan content and the team's own harness that brackets
+  execution.
+- **Model:** a plan is ordered **phases** (barrier between them) of **jobs**;
+  within a phase, `parallel` jobs run concurrently and `serial` jobs run
+  one-at-a-time per named `group` in `order`.  Cross-phase ordering via phase
+  placement; `needs` is validated against earlier phases.  Job fields: `cmd`
+  (full argv with `{work}`/`{driftc}`/`{drift}`/`{jobs}` placeholders), `mode`,
+  `group`/`order`, `needs`, `env`, `wrap`, `out`.
+- **Budget (load-bearing):** the parallel pool size N is sourced from the
+  `pytest_jobs.py` protocol (`DRIFT_TEST_JOBS`, else `ceil(nproc/2)`), never
+  hardcoded, and every job is wrapped in `flocker --key <pool> -j N` so
+  concurrent runs/lanes stay bounded by the single host-global semaphore.  Built
+  *over* flocker as a thin scheduler — not a new concurrency mechanism.
+- **Owned policy (consolidated from the forks):** `wrap: memcheck|massif`
+  expands to the canonical valgrind incantation (`--error-exitcode=97`,
+  `--leak-check=full`, `--fair-sched=yes`); `out`-based build dedup; sanitizer
+  `ASAN_OPTIONS`/`UBSAN_OPTIONS` defaults; an executor-owned `--heartbeat` that
+  feeds a stdout-inactivity watchdog with real run state.  `--dry-run` prints the
+  resolved flocker argv per job; `--report` writes a per-job JSON result record.
+- Tests: `tools/drift_test_run_test.sh` (10 hermetic cases — happy path + dedup,
+  failure/stop + `--keep-going`, serial ordering, dry-run, valgrind expansion,
+  budget sourcing + override, plan validation, JSON report, env overlay +
+  sanitizer defaults) plus a real driftc compile-and-run smoke.  Pure dev/CI
+  tooling — no toolchain version/ABI impact.  Placement is `tools/` (a dev/CI
+  tool, not a project-build op); a `drift test-run` subcommand wrapper can follow
+  if wanted.  Docs: `docs/test-run.md`.  First reduction target per the RFC: the
+  standalone e2e runners under `lang/tests/`; teams migrate off their forks one
+  at a time against the stable plan-format contract.
+
 ## 2026-05-31 (`flocker --heartbeat`: opt-in liveness heartbeat for orchestration — flocker 0.2.0)
 - **`flocker --heartbeat <secs>`** (default OFF) emits a periodic `[flocker]`
   status line to stdout while the wrapped command runs, so a long silent job (an

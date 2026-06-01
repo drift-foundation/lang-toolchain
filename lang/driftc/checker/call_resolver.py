@@ -2668,6 +2668,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					candidates = fallback_candidates
 			trait_candidates: list[CallableDecl] = []
 			inherent_candidates: list[CallableDecl] = []
+			iface_candidates: list[CallableDecl] = []
 			traits_in_scope_set = set(traits_in_scope()) if traits_in_scope is not None else set()
 			trait_impl_fn_id_to_trait: dict[FunctionId, TraitKey] = {}
 			trait_impl_fn_id_to_require: dict[FunctionId, object] = {}
@@ -2720,7 +2721,22 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					# modules are in the visible set).  Compiler-generated calls
 					# bypass since the defining module may be internal to the package.
 					if ignore_visibility or _candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module) or _is_prelude_type_method(cand, ctx.type_table):
-						trait_candidates.append(cand)
+						if _is_interface_trait:
+							# Interface methods are the structural API of the
+							# concrete type -- they participate in overload
+							# resolution as peers of inherent methods (matching
+							# whole-source, where the interface-impl method is not
+							# trait-tagged and so stays inherent).  Routing them to
+							# a segregated bucket that the inherent-wins selection
+							# below discards was the publish-boundary overload-merge
+							# bug: a same-name inherent overload (e.g. a no-arg
+							# convenience form) would hide the interface overload
+							# once the type was consumed from a published package
+							# (where trait_impl_index tags the interface-impl
+							# fn_id, unlike a whole-source compile).
+							iface_candidates.append(cand)
+						else:
+							trait_candidates.append(cand)
 					continue
 				is_visible = True if ignore_visibility else (_candidate_visible(cand, visible_modules_set=visible_modules_set, current_module_id=ctx.current_module) or _is_prelude_type_method(cand, ctx.type_table))
 				if cand.kind is CallableKind.METHOD_INHERENT:
@@ -2730,8 +2746,13 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					if traits_in_scope_set and cand.kind is CallableKind.METHOD_TRAIT:
 						if is_visible:
 							trait_candidates.append(cand)
-			if inherent_candidates:
-				candidates = inherent_candidates
+			if inherent_candidates or iface_candidates:
+				# Inherent and interface-impl methods of the same name on the
+				# concrete type form ONE overload set (whole-source parity).
+				# `pub trait` candidates remain a fallback, consulted only when no
+				# inherent/interface method matches -- preserving the existing
+				# use-trait scoping semantics.
+				candidates = inherent_candidates + iface_candidates
 			elif trait_candidates:
 				candidates = trait_candidates
 			else:
