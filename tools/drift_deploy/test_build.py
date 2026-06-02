@@ -148,6 +148,129 @@ class TestBuildSourceArgs:
 		assert result == ["/proj/src/lib.drift"]
 
 
+class TestModulesDirectoryEntries:
+	"""v2 `modules[]` entries may be directories (scanned recursively for
+	`.drift`) as well as explicit files.  The expansion is shared between
+	the compile path (`build_source_args`) and the SCI path
+	(`compute_artifact_sci`), so a directory listing and the equivalent
+	file listing over the same tree compile the same sources AND sign the
+	same `source_content_id`."""
+
+	def _tree(self, tmp_path: Path):
+		root = tmp_path / "proj"
+		(root / "src" / "handlers").mkdir(parents=True)
+		(root / "src" / "app.drift").write_text("module myapp;\n", encoding="utf-8")
+		(root / "src" / "util.drift").write_text("module myapp.util;\n", encoding="utf-8")
+		(root / "src" / "handlers" / "h.drift").write_text(
+			"module myapp.handlers.h;\n", encoding="utf-8")
+		(root / "src" / "notes.txt").write_text("not drift\n", encoding="utf-8")  # ignored
+		return root
+
+	def test_directory_entry_expands_recursively_sorted(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files
+		root = self._tree(tmp_path)
+		got = resolve_module_files(["src/"], source_root=root)
+		assert got == [
+			"src/app.drift",
+			"src/handlers/h.drift",
+			"src/util.drift",
+		]  # recursive, sorted, .txt ignored
+
+	def test_build_source_args_expands_directory(self, tmp_path: Path):
+		root = self._tree(tmp_path)
+		art = _make_artifact(entry_module="src/app.drift", modules=["src/"])
+		result = build_source_args(art, root / "drift")  # manifest_dir → project root is `root`
+		# entry_module first, every .drift under src/ present, no dup of app.drift.
+		assert result[0] == str(root / "src" / "app.drift")
+		assert str(root / "src" / "util.drift") in result
+		assert str(root / "src" / "handlers" / "h.drift") in result
+		assert result.count(str(root / "src" / "app.drift")) == 1
+
+	def test_file_and_directory_listings_yield_same_sci(self, tmp_path: Path):
+		"""Signing-compat: switching `["src/.."]` files ↔ `["src/"]` over the
+		same tree must NOT change the author-claim SCI (trust-v1 §3.5)."""
+		from lang.driftc.packages.manifest import compute_artifact_sci
+		root = self._tree(tmp_path)
+		mdir = root / "drift"
+		art_dir = _make_artifact(entry_module="src/app.drift", modules=["src/"])
+		art_files = _make_artifact(
+			entry_module="src/app.drift",
+			modules=["src/app.drift", "src/util.drift", "src/handlers/h.drift"],
+		)
+		assert compute_artifact_sci(art_dir, manifest_dir=mdir) == \
+			compute_artifact_sci(art_files, manifest_dir=mdir)
+
+	def test_mixed_file_and_directory_dedups(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files
+		root = self._tree(tmp_path)
+		got = resolve_module_files(["src/app.drift", "src/"], source_root=root)
+		assert got.count("src/app.drift") == 1
+		assert "src/handlers/h.drift" in got
+
+	def test_empty_directory_is_clean_error(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files, ManifestError
+		root = tmp_path / "proj"
+		(root / "empty").mkdir(parents=True)
+		with pytest.raises(ManifestError, match="contains no `.drift`"):
+			resolve_module_files(["empty/"], source_root=root)
+
+	def test_nonexistent_path_passes_through(self, tmp_path: Path):
+		# Preserves the downstream missing-source diagnostic instead of a
+		# raw IsADirectoryError / silent drop.
+		from lang.driftc.packages.manifest import resolve_module_files
+		root = tmp_path / "proj"; root.mkdir()
+		assert resolve_module_files(["src/gone.drift"], source_root=root) == ["src/gone.drift"]
+
+	# ── source-root containment (same threat the SCI path guards) ──
+
+	def test_parent_directory_entry_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files, ManifestError
+		root = self._tree(tmp_path)
+		(tmp_path / "outside").mkdir()
+		(tmp_path / "outside" / "evil.drift").write_text("module evil;\n", encoding="utf-8")
+		with pytest.raises(ManifestError, match="escape the tree"):
+			resolve_module_files(["../outside/"], source_root=root)
+
+	def test_symlinked_directory_escaping_root_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files, ManifestError
+		root = self._tree(tmp_path)
+		outside = tmp_path / "outside"; outside.mkdir()
+		(outside / "evil.drift").write_text("module evil;\n", encoding="utf-8")
+		link = root / "src" / "link-to-outside"
+		try:
+			link.symlink_to(outside, target_is_directory=True)
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		with pytest.raises(ManifestError, match="escape the tree"):
+			resolve_module_files(["src/link-to-outside/"], source_root=root)
+
+	def test_symlinked_file_under_dir_escaping_root_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_module_files, ManifestError
+		root = self._tree(tmp_path)
+		outside = tmp_path / "outside"; outside.mkdir()
+		(outside / "evil.drift").write_text("module evil;\n", encoding="utf-8")
+		link = root / "src" / "aliased.drift"
+		try:
+			link.symlink_to(outside / "evil.drift")
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		with pytest.raises(ManifestError, match="escape the tree"):
+			resolve_module_files(["src/"], source_root=root)
+
+	def test_in_tree_symlink_to_in_tree_file_allowed(self, tmp_path: Path):
+		# Consistent with SCI policy: a symlink whose target stays under the
+		# root is permitted; the LOGICAL (symlink) path is what's recorded.
+		from lang.driftc.packages.manifest import resolve_module_files
+		root = self._tree(tmp_path)
+		link = root / "src" / "alias.drift"
+		try:
+			link.symlink_to(root / "src" / "util.drift")
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		got = resolve_module_files(["src/"], source_root=root)
+		assert "src/alias.drift" in got  # logical path kept, target is in-tree
+
+
 # ── build_package_cmd tests ──────────────────────────────────────────
 
 

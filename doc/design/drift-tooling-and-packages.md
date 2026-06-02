@@ -194,6 +194,13 @@ Terminology: this spec uses **repository** (not registry).
 
 ## 5. Target files (`drift-target.json`)
 
+> **Historical (v1).** `drift-target.json` and its source-root *scanning* model
+> below describe the original v1 target format. The current toolchain builds from
+> a `schema_version: 2` `drift/manifest.json`, whose `artifacts[].modules[]` is an
+> **explicit authored compile-input set** (see §5.2 for the current contract).
+> This section is retained for historical context only; new projects do not use
+> `drift-target.json` or source-root scanning.
+
 Each directory containing `drift-target.json` declares itself as a build target.
 
 The filename is a **marker**, not an identifier.
@@ -205,23 +212,42 @@ The filename is a **marker**, not an identifier.
 - `uses` – dependency keys from project file (no URLs/versions here)
 - `depends_on` – other local targets (typically packages)
 
-### 5.2 Source module discovery
+### 5.2 The compile-input set (`modules[]`)
 
-`driftc` discovers source modules by scanning source roots for `.drift` files:
+In a `schema_version: 2` `drift/manifest.json`, an artifact's `modules[]` is the
+**authored compile-input set** — the exact sources `drift build` compiles and
+`drift deploy` signs. Paths are project-root-relative (the project root is the
+directory containing `drift/`; see `project_root_for`). There is no implicit
+source-root scan: what is built is what `modules[]` resolves to, and nothing else.
 
-- A module is a **single** `.drift` source file containing `module <id>`.
-- `driftc` builds a map `module_id -> source file`.
-- If two files declare the same module id, the build **fails**.
-- Module ids come from the `module <id>` declaration; no filesystem layout is
-  required for semantic identity.
-- **Workspace rule:** module ids are globally unique within a build, across both
-  source modules and package-provided modules. The resolver must reject any
-  configuration where multiple packages (or package + source) provide the same
-  module id.
+Each `modules[]` entry is one of two forms, and the two may be mixed:
 
-For `drift-target.json`, the `"modules": [...]` list refers to **module ids**.
-Each module id must resolve to exactly one source file under the target’s source
-roots.
+- **A `.drift` file** — e.g. `"src/app.drift"`. Pinned: the build set is exactly
+  the files you list. Adding a new source file means **adding it to `modules[]`
+  by hand**. Use this when you want an exact, auditable, signed build set and
+  intend to control it explicitly.
+- **A directory** — e.g. `"src/"` or `"src/handlers/"`. Scanned **recursively**
+  for `*.drift` files, all of which join the build set. Use this when you want
+  **automatic inclusion** of every Drift source under a tree, so adding a file
+  needs no manifest edit. A directory entry that contains no `.drift` files is a
+  manifest error.
+
+The two forms are interchangeable over a given tree: listing the directory that
+contains a set of files produces the **same** compile set — and the **same**
+`source_content_id` (author claim) — as listing those files explicitly. Choose
+per artifact based on whether you want auto-inclusion (directory) or exact
+per-file control (files).
+
+`entry_module` is always a single `.drift` file (the program/library entry); it
+is compiled whether or not it also appears in `modules[]`.
+
+**Module identity and uniqueness (independent of the above):**
+
+- A module is a single `.drift` source file containing `module <id>`; the module
+  id comes from that declaration, not from the file's path or name.
+- Module ids are globally unique within a build, across both source modules and
+  package-provided modules. Two sources declaring the same module id — or a
+  source colliding with a package-provided module id — fail the build.
 
 ### Package target example
 ```json

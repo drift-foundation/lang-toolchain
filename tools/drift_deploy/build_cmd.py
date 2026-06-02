@@ -216,6 +216,7 @@ def resolve_driftc(explicit: Path | None = None) -> Path | None:
 from lang.driftc.packages.manifest import (
 	compute_artifact_sci,
 	project_root_for,
+	resolve_module_files,
 )
 
 
@@ -225,13 +226,16 @@ def build_source_args(art: Artifact, manifest_dir: Path) -> list[str]:
 	modules, deduplicated.
 
 	Paths in the manifest are project-root-relative.  See ``project_root_for``
-	for the resolution rule.
+	for the resolution rule.  A ``modules[]`` entry that names a directory is
+	expanded (recursively) to its ``.drift`` files via ``resolve_module_files``
+	— the SAME expansion ``compute_artifact_sci`` uses, so the compiled set and
+	the signed source identity stay in lock-step.
 	"""
 	root = project_root_for(manifest_dir)
 	args: list[str] = []
 	entry = str(root / art.entry_module)
 	args.append(entry)
-	for mod_path in art.modules:
+	for mod_path in resolve_module_files(art.modules, source_root=root):
 		resolved_mod = str(root / mod_path)
 		if resolved_mod != entry:
 			args.append(resolved_mod)

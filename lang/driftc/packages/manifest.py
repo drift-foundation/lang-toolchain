@@ -412,6 +412,113 @@ def project_root_for(manifest_dir: Path) -> Path:
 	return manifest_dir
 
 
+def resolve_module_files(modules: list[str], *, source_root: Path) -> list[str]:
+	"""Expand authored ``modules[]`` entries to the concrete compile set.
+
+	A v2 ``artifacts[].modules[]`` entry is the *authored compile input
+	set*.  Each entry may be either:
+
+	- a **.drift file** path — kept verbatim (the pinned, must-be-listed
+	  contract: adding a file means editing the manifest); or
+	- a **directory** path (e.g. ``"src/"`` or ``"src/handlers/"``) —
+	  scanned **recursively** for ``*.drift`` files, so new sources under
+	  the tree are picked up automatically.
+
+	Returns project-relative POSIX path strings, **deduplicated** and with
+	each directory's contents **sorted** (a file matched by both a
+	directory entry and an explicit entry appears once).
+
+	This is the single expansion used by BOTH the compile path
+	(`build_source_args`) and the SCI path (`compute_artifact_sci`), so
+	the bytes that get compiled and the file set that gets signed into the
+	author claim are derived identically — switching a listing from
+	explicit files to the directory that contains them yields the *same*
+	`source_content_id` over the same tree.
+
+	`source_root` is the project root the entries are relative to
+	(see `project_root_for`).  An entry that is neither an existing file
+	nor directory is passed through unchanged, so the existing
+	missing-source diagnostics (`FileNotFoundError` in the SCI path, the
+	compiler's own error on the build path) still fire.
+
+	**Source-root containment (same threat the SCI path guards):** a
+	directory or file entry — and every `.drift` file discovered under a
+	directory entry — must resolve (following symlinks) to a real path
+	*inside* `source_root`.  An entry like ``"../outside/"`` or a symlink
+	that escapes the project tree is rejected with a `ManifestError`,
+	before any walk.  Without this the build path (which does not call the
+	SCI path's `_resolve_source_path`) would compile bytes from outside the
+	tree, and an out-of-tree symlink target could change what is built
+	without touching the project.  In-tree symlinks (target stays under
+	`source_root`) are permitted, matching the SCI policy in
+	`source_content_id._resolve_source_path`.
+	"""
+	# Non-strict resolve: canonicalizes the existing prefix without
+	# raising for a not-yet-existent root (unit tests pass a synthetic
+	# root; all such entries are non-existent passthroughs below).
+	root_resolved = source_root.resolve()
+
+	def _inside_root(p: Path) -> bool:
+		"""True iff p's real (symlink-followed) path lives under source_root."""
+		try:
+			p.resolve(strict=True).relative_to(root_resolved)
+			return True
+		except (OSError, RuntimeError, ValueError):
+			return False
+
+	out: list[str] = []
+	seen: set[str] = set()
+
+	def _add(rel: str) -> None:
+		if rel not in seen:
+			seen.add(rel)
+			out.append(rel)
+
+	def _escape_error(entry: str, *, what: str) -> "ManifestError":
+		return ManifestError(
+			f"modules entry {entry!r} {what} outside the project source root "
+			f"({source_root}); paths that escape the tree — including through "
+			f"`..` or symlinks — are not allowed (a build must compile, and an "
+			f"author claim must sign, only bytes under the project root). "
+			f"Materialize the source inside the project, or restructure the "
+			f"root to include it."
+		)
+
+	for entry in modules:
+		full = source_root / entry
+		if full.is_dir():
+			# Validate the directory resolves inside the root BEFORE walking,
+			# so `../outside/` or a symlinked-out directory can't be scanned.
+			if not _inside_root(full):
+				raise _escape_error(entry, what="is a directory resolving")
+			found: list[str] = []
+			for p in full.rglob("*.drift"):
+				if not p.is_file():
+					continue
+				# A discovered file may itself be a symlink escaping the root.
+				if not _inside_root(p):
+					rel_disp = p.relative_to(source_root).as_posix() if str(p).startswith(str(source_root)) else str(p)
+					raise _escape_error(rel_disp, what="(found under a directory entry) resolves")
+				found.append(p.relative_to(source_root).as_posix())
+			if not found:
+				raise ManifestError(
+					f"modules entry {entry!r} is a directory but contains no "
+					f"`.drift` source files (recursively); list the files "
+					f"explicitly or remove the entry"
+				)
+			for rel in sorted(found):
+				_add(rel)
+		else:
+			# File path, or a non-existent path.  An *existing* file entry is
+			# held to the same containment rule; a non-existent path passes
+			# through so the downstream missing-source error (not a raw
+			# IsADirectoryError) is what surfaces.
+			if full.is_file() and not _inside_root(full):
+				raise _escape_error(entry, what="resolves")
+			_add(Path(entry).as_posix())
+	return out
+
+
 def compute_artifact_sci(
 	art: Artifact,
 	*,
@@ -442,16 +549,20 @@ def compute_artifact_sci(
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,
 	)
+	source_root = project_root_for(manifest_dir)
 	return compute_artifact_source_content_id(
 		kind="library",
 		package_id=art.name,
 		version=art.version,
 		module_namespace=art.module_namespace,
 		entry_module=art.entry_module,
-		module_paths=list(art.modules),
+		# Expand directory entries to their .drift files — identically to
+		# the compile path (`build_source_args`) — so the signed source
+		# identity matches what is compiled.
+		module_paths=resolve_module_files(list(art.modules), source_root=source_root),
 		package_deps=[(d.name, d.version) for d in art.package_deps],
 		native_deps=[d.lib for d in art.native_deps],
 		unsafe=art.unsafe,
 		asset_paths=list(art.assets),
-		source_root=project_root_for(manifest_dir),
+		source_root=source_root,
 	)

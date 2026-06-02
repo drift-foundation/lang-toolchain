@@ -1,5 +1,42 @@
 # Drift development history
 
+## 2026-06-02 (0.33.20: v2 manifest `modules[]` accepts directory entries)
+- **`schema_version: 2` `artifacts[].modules[]` entries may now be directories,
+  not just `.drift` files.** A directory entry (e.g. `"src/"`, `"src/handlers/"`)
+  is scanned **recursively** for `*.drift` files; a file entry stays pinned
+  (adding a file means editing the manifest). The two are mixable.
+- **Why:** an app team hit a silent footgun — adding a source file under an
+  existing dir without listing it in `modules[]` failed `drift build` late, with
+  no sync tooling. Directory entries give auto-inclusion under a tree; file
+  entries give exact, auditable per-file control. Before this, a directory entry
+  did not error cleanly — it crashed the build with a raw `IsADirectoryError`.
+- **Implementation:** one shared expansion (`resolve_module_files` in
+  `lang/driftc/packages/manifest.py`) used by BOTH the compile path
+  (`build_cmd.build_source_args`) and the SCI path (`manifest.compute_artifact_sci`),
+  so the compiled file set and the signed `source_content_id` are derived
+  identically. Expansion is deterministic (sorted, recursive) and deduplicated
+  (a file matched by both a directory entry and an explicit entry appears once).
+- **Signing-compatible (trust-v1 §3.5):** listing a directory yields the *same*
+  SCI as listing its files explicitly over the same tree, so switching
+  representation does not invalidate an author claim. Verified by regression.
+  Non-existent entries pass through unchanged so the existing missing-source
+  diagnostic still fires; an empty directory entry is a clean `ManifestError`.
+- **Source-root containment:** a directory or file entry — and every `.drift`
+  discovered under a directory — must resolve (following symlinks) to a real path
+  *inside* the project root, enforced in `resolve_module_files` BEFORE any walk.
+  `"../outside/"`, a symlinked-out directory, or an out-of-tree symlinked source
+  are rejected with a `ManifestError`; in-tree symlinks are permitted, matching
+  the SCI policy in `source_content_id._resolve_source_path`. This closes the
+  build path (which never called `_resolve_source_path`) compiling/serving bytes
+  from outside the tree.
+- No runtime/artifact-format/ABI change (**ABI stays 15**); manifest `modules[]`
+  gains a backward-compatible entry form (file-only manifests are byte-identical
+  in behavior), so `schema_version` stays 2. Behavior-changing compiler/tooling
+  feature, so DRIFTC 0.33.19 → **0.33.20** (the floor teams pin to for directory
+  entries). Docs: `doc/design/drift-tooling-and-packages.md §5.2` rewritten to the
+  v2-only model (v1 source-root scanning demoted to historical). Regression:
+  `tools/drift_deploy/test_build.py::TestModulesDirectoryEntries`.
+
 ## 2026-06-01 (0.33.19: fix field-projection-off-temporary leak — un-projected owned fields now drop)
 - **LANGUAGE_BUG (bookkeeper team).** Projecting a single field off a struct
   *temporary* — `make(n).a` where `make()` returns a by-value struct — never
