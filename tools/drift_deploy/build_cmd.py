@@ -312,6 +312,11 @@ def build_package_cmd(
 	if extra_flags:
 		cmd.extend(extra_flags)
 
+	# Project root for relativizing emitted debug-location source paths, so the
+	# .dmp (and thus artifact_sha256) is byte-identical regardless of the
+	# absolute checkout/build path.  Same root the source inputs are anchored to.
+	cmd.extend(["--package-source-root", str(project_root_for(manifest_dir))])
+
 	# Source inputs.
 	cmd.extend(build_source_args(art, manifest_dir))
 

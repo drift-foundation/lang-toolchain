@@ -15,11 +15,13 @@ Goals:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import dataclasses
 import os
 import struct
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId, function_id_to_obj, function_symbol, parse_function_symbol
@@ -39,6 +41,57 @@ def _float64_bits_hex(value: float) -> str:
 	return f"0x{bits:016x}"
 
 
+# Project source root for the package-emission boundary.  When set, absolute
+# `file` paths in serialized Span/Located debug locations are rewritten to
+# this-root-relative POSIX paths, so the emitted package is byte-identical
+# regardless of the absolute checkout/build path — i.e. `artifact_sha256` is
+# reproducible across machines / cert-pool rebuilds at different paths.  The
+# in-memory Spans keep absolute paths (local diagnostics stay useful); ONLY the
+# serialized payload is normalized.  Dataclasses named "Span"/"Located" are the
+# only path-bearing nodes the reflective serializer emits.
+_EMIT_SOURCE_ROOT: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+	"_dmir_emit_source_root", default=None,
+)
+
+_LOC_FILE_DATACLASSES = ("Span", "Located")
+
+
+@contextlib.contextmanager
+def emit_source_root(root: "str | os.PathLike[str] | None"):
+	"""Scope a project source root for package emission.
+
+	Inside the block, `_to_jsonable` rewrites absolute Span/Located `file`
+	paths to `root`-relative POSIX paths.  Outside any block (root None), an
+	absolute path is reduced to its basename so a build path never leaks.
+	"""
+	token = _EMIT_SOURCE_ROOT.set(os.fspath(root) if root is not None else None)
+	try:
+		yield
+	finally:
+		_EMIT_SOURCE_ROOT.reset(token)
+
+
+def _normalize_emitted_loc_file(file_val: Any) -> Any:
+	"""Rewrite an absolute Span/Located `file` to a project-relative POSIX path
+	at the emission boundary.  Relative paths and non-strings pass through.
+	Outside the root (or with no root context) falls back to the basename, so
+	an absolute build path never reaches the serialized payload."""
+	if not isinstance(file_val, str) or not os.path.isabs(file_val):
+		return file_val
+	root = _EMIT_SOURCE_ROOT.get()
+	if root is not None:
+		try:
+			rel = os.path.relpath(file_val, root)
+		except ValueError:
+			rel = None
+		# A path that stays under the root relativizes cleanly; one that
+		# escapes (`..`) would re-introduce environment-specific parent names,
+		# so fall through to the basename for those.
+		if rel is not None and rel != ".." and not rel.startswith(".." + os.sep):
+			return rel.replace(os.sep, "/")
+	return os.path.basename(file_val)
+
+
 def _to_jsonable(obj: Any) -> Any:
 	"""
 	Convert an arbitrary compiler object into JSONable structures.
@@ -48,6 +101,8 @@ def _to_jsonable(obj: Any) -> Any:
 	- Enums are encoded by `name`,
 	- floats are encoded by their IEEE754 bits (hex string),
 	- dict keys are converted to strings (and callers must sort when serializing).
+	- Span/Located `file` paths are normalized to project-relative at the
+	  emission boundary (see `_EMIT_SOURCE_ROOT`).
 	"""
 	if obj is None or isinstance(obj, (bool, int, str)):
 		return obj
@@ -56,9 +111,15 @@ def _to_jsonable(obj: Any) -> Any:
 	if isinstance(obj, Enum):
 		return {"_enum": type(obj).__name__, "name": obj.name}
 	if dataclasses.is_dataclass(obj):
-		out: dict[str, Any] = {"_type": type(obj).__name__}
+		type_name = type(obj).__name__
+		out: dict[str, Any] = {"_type": type_name}
+		normalize_file = type_name in _LOC_FILE_DATACLASSES
 		for f in dataclasses.fields(obj):
-			out[f.name] = _to_jsonable(getattr(obj, f.name))
+			val = getattr(obj, f.name)
+			if normalize_file and f.name == "file":
+				out[f.name] = _normalize_emitted_loc_file(val)
+			else:
+				out[f.name] = _to_jsonable(val)
 		return out
 	if isinstance(obj, (list, tuple)):
 		return [_to_jsonable(x) for x in obj]

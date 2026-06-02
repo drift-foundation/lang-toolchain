@@ -1,5 +1,40 @@
 # Drift development history
 
+## 2026-06-02 (0.33.21: relativize emitted debug-location source paths — reproducible package SHA across build paths)
+- **Emitted package payloads no longer embed absolute source paths.** The
+  serialized HIR carried Span/Located `loc.file` as the *absolute* compile path
+  (e.g. `/home/sl/.../src/lib.drift`, ~8× per small module). That made a
+  package's `.dmp` — and therefore `artifact_sha256` — depend on the absolute
+  checkout/build path: the same source built at `/home/x/...` vs `/build/...`
+  produced different artifact SHAs while `source_content_id` stayed identical.
+  For a cert pool rebuilt at a different path each toolchain release, this
+  churned dependency artifact SHAs and forced downstream cert-claim re-anchoring
+  (relock + re-cert) on every bump, even with unchanged source. (Confirmed by an
+  app-team lock diff: `mariadb-rpc` artifact_sha256 changed with identical SCI.)
+- **Fix:** at the package-emission boundary, `Span`/`Located` `file` is rewritten
+  to a path relative to the new `driftc --package-source-root` (the project root,
+  passed by `drift build`/`deploy` via `build_package_cmd`). With no root it falls
+  back to the basename, so an absolute build path can never reach the payload.
+  In-memory Spans keep absolute paths — **local compile diagnostics are
+  unaffected**; only the serialized package is normalized (one special-case in
+  `provisional_dmir_v0._to_jsonable`, scoped by an `emit_source_root` boundary).
+- **Result:** identical source under two different absolute roots now emits a
+  **byte-identical `.dmp`** (verified). `source_content_id` was already
+  location-independent; now `artifact_sha256` is too. Package debug locations
+  read as project-relative paths (`src/dao/store.drift`) — more meaningful, not
+  less.
+- **Not a trust/format change.** SCI and the signing chain are unchanged; the
+  package format is unchanged (`payload_version` stays 2 — `file` is still a
+  string field, only its *value* is now relative; decoders read it as-is, old
+  packages still load). **ABI stays 15.** Behavior-changing payload content, so
+  DRIFTC 0.33.20 → **0.33.21**.
+- **One-time re-anchor on adoption:** republishing a package on 0.33.21 changes
+  its `artifact_sha256` once (absolute → relative path representation); after that
+  the SHA is stable across rebuilds at any path. Downstream cert claims re-anchor
+  once on this bump, then the per-bump churn stops. Regression:
+  `lang/tests/packages/test_emit_loc_path_canonicalization.py` (incl. end-to-end
+  byte-identical `.dmp` across two absolute roots).
+
 ## 2026-06-02 (0.33.20: v2 manifest `modules[]` accepts directory entries)
 - **`schema_version: 2` `artifacts[].modules[]` entries may now be directories,
   not just `.drift` files.** A directory entry (e.g. `"src/"`, `"src/handlers/"`)

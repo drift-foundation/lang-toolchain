@@ -244,6 +244,7 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	decode_type_expr,
 	compute_template_decl_fingerprint,
 	compute_template_decl_fingerprint_debug,
+	emit_source_root,
 	encode_generic_templates,
 	encode_hir_funcs,
 	encode_module_payload_v0,
@@ -8484,6 +8485,16 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	parser.add_argument("--package-version", type=str, help="Package version (SemVer; required with --emit-package)")
 	parser.add_argument("--package-target", type=str, help="Target triple (required with --emit-package)")
 	parser.add_argument(
+		"--package-source-root", type=Path, default=None,
+		help=(
+			"Project root that emitted source paths are made relative to in the "
+			"package's serialized debug locations (--emit-package only).  Makes "
+			"the .dmp byte-identical regardless of the absolute build/checkout "
+			"path, so artifact_sha256 is reproducible across machines.  Defaults "
+			"to stripping absolute source paths to their basename."
+		),
+	)
+	parser.add_argument(
 		"--source-content-id",
 		type=str,
 		default=None,
@@ -12392,35 +12403,45 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				for _tk in _raw_trait_scope:
 					_trait_scope_dicts.append({"package_id": getattr(_tk, "package_id", None), "module": getattr(_tk, "module", None), "name": getattr(_tk, "name", str(_tk))})
 			_module_hir_blocks = per_module_hir.get(mid, {})
-			payload_obj = encode_module_payload_v0(
-				package_id=package_id,
-				module_id=mid,
-				type_table=_pkg_emit_tt,
-				canonical_keys=_pkg_canonical_keys,
-				reachable_tids=_pkg_reachable_tids,
-				signatures=sig_env,
-				generic_templates=encode_generic_templates(
+			# Normalize absolute source paths in serialized debug locations to
+			# project-relative at the emission boundary, so artifact_sha256 is
+			# reproducible across build/checkout paths.  The parser resolves
+			# source paths, so resolve the root too for a clean relpath.
+			_pkg_emit_root = (
+				args.package_source_root.resolve()
+				if getattr(args, "package_source_root", None) is not None
+				else None
+			)
+			with emit_source_root(_pkg_emit_root):
+				payload_obj = encode_module_payload_v0(
 					package_id=package_id,
 					module_id=mid,
+					type_table=_pkg_emit_tt,
+					canonical_keys=_pkg_canonical_keys,
+					reachable_tids=_pkg_reachable_tids,
 					signatures=sig_env,
-					hir_blocks=_module_hir_blocks,
-					requires_by_symbol=requires_by_symbol,
-					module_packages=getattr(checked_pkg.type_table or type_table, "module_packages", None),
-				),
-				hir_funcs=encode_hir_funcs(
-					module_id=mid,
-					signatures=sig_env,
-					hir_blocks=_module_hir_blocks,
-				),
-				exported_values=exported_values,
-				exported_types=exported_types,
-				exported_traits=exported_traits,
-				exported_consts=exported_consts,
-				reexports=reexports_obj,
-				trait_metadata=trait_metadata,
-				impl_headers=impl_headers,
-				trait_scope=_trait_scope_dicts,
-			)
+					generic_templates=encode_generic_templates(
+						package_id=package_id,
+						module_id=mid,
+						signatures=sig_env,
+						hir_blocks=_module_hir_blocks,
+						requires_by_symbol=requires_by_symbol,
+						module_packages=getattr(checked_pkg.type_table or type_table, "module_packages", None),
+					),
+					hir_funcs=encode_hir_funcs(
+						module_id=mid,
+						signatures=sig_env,
+						hir_blocks=_module_hir_blocks,
+					),
+					exported_values=exported_values,
+					exported_types=exported_types,
+					exported_traits=exported_traits,
+					exported_consts=exported_consts,
+					reexports=reexports_obj,
+					trait_metadata=trait_metadata,
+					impl_headers=impl_headers,
+					trait_scope=_trait_scope_dicts,
+				)
 
 			# Module interface (package interface table v0).
 			#
