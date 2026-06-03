@@ -524,37 +524,38 @@ pub fn main() nothrow -> Int {
 	)
 
 
-def test_envelope_variance_same_sci_resolves_via_argv_precedence(
+def test_envelope_divergence_same_sci_different_artifact_fails_hard(
 	tmp_path: Path,
 ) -> None:
-	"""Same `(package_id, version, source_content_id)` under two
-	`--package-root` dirs but with DIFFERENT `artifact_sha256` (envelope
-	variance from independent sign/build runs over the same source) is
-	NOT a hard conflict.  The prepass must:
+	"""NEGATIVE regression — envelope-divergence policy (0.33.22).
 
-	  1. accept the compile (envelope variance is the steady state for
-	     two-lane staging vs certified consumption, re-deploys, and
-	     consumer-side gate tests that pass both a tmp build root and
-	     `$DRIFT_PKG_ROOT`);
-	  2. select the artifact from the argv-first `--package-root` and
-	     drop the others from the candidate set BEFORE the verify loop,
-	     so a lower-precedence same-SCI loser cannot break the selected
-	     winner (its trust-gate result is never consulted because it
-	     never reaches the verify loop -- no fallback in either
-	     direction: if the argv-first winner fails verification, the
-	     compile fails);
-	  3. emit an operator-visible diagnostic naming the chosen path and
-	     the dropped path(s).
+	Two visible package candidates with the SAME
+	`(package_id, version, source_content_id)` but DIFFERENT
+	`artifact_sha256` is a HARD FAILURE.  The prepass MUST:
 
-	Swapping argv order must flip the chosen winner -- pinning that
-	selection is argv-precedence, not sort-by-path.
+	  1. fail closed (non-zero exit) — it must NOT silently select one
+	     by `--package-root` argv precedence;
+	  2. fail regardless of argv order (it's not a precedence question);
+	  3. emit an actionable `envelope divergence` diagnostic naming the
+	     package id/version, the source_content_id, and EACH candidate's
+	     path + artifact_sha256, with likely-causes and suggested-fixes.
 
-	Pins the web-team-reported bug
-	(drift-web `tools/run-consumer-tests.sh` consumer-check):
-	the same `web-client@0.4.1` was present in both
-	`/home/.../certified/...` and a `/tmp/...` build root with the same
-	SCI but different artifact_sha256, and the prepass refused the
-	compile.
+	Rationale: after path canonicalization (0.33.21) made
+	`artifact_sha256` build-path-independent, same-SCI/different-artifact
+	is no longer benign rebuild/path noise.  In the non-malicious case it
+	signals a producer/toolchain/package-emitter change, a package-format
+	migration, a target/platform mismatch, stale/mixed roots, or a
+	remaining nondeterminism bug; in the malicious case it is exactly the
+	shape to notice — the same source-identity claim attached to different
+	produced bytes.  Silent root-precedence selection is the wrong default
+	for that threat, so the toolchain refuses and surfaces every candidate.
+
+	This is the deliberate counterpart to the byte-identical duplicate-root
+	case (`test_duplicate_package_root_does_not_drop_resolved_closure`),
+	which still resolves by path dedup.  This test previously asserted the
+	*opposite* (accept + argv precedence); the variance it relied on was an
+	absolute-path artifact difference that 0.33.21 canonicalized away, which
+	is what surfaced this policy decision.
 	"""
 	stdlib = stdlib_root()
 	if stdlib is None:
@@ -591,17 +592,31 @@ def test_envelope_variance_same_sci_resolves_via_argv_precedence(
 		"revoked": [],
 	}))
 
-	# Build child@0.0.0 twice with the SAME `--source-content-id`
-	# sentinel but from two source trees that differ in a way driftc's
-	# emit captures into the artifact bytes (varying source body via a
-	# trailing comment changes parsed spans, which the emitted dmir
-	# reflects).  This produces:
-	#   - identical manifest `source_content_id` (we stamp it via the
-	#     CLI flag, per the existing fixture's note at line 393);
-	#   - different `.dmp` bytes => different `artifact_sha256`;
-	# which is exactly the envelope-variance shape.  No hand-mutation
-	# of .dmp internals -- both artifacts go through the public driftc
-	# emit + drift-deploy sign path.
+	# This test intentionally CONSTRUCTS the envelope-divergence shape:
+	# the same trusted source-identity stamp (`--source-content-id`
+	# sentinel) attached to two packages whose payload bytes differ —
+	# the shape a cross-toolchain / cert-pool rollover would produce (the
+	# same source re-emitted by a different compiler build yields a
+	# different `.dmp`, same SCI).  It is NOT a *natural* source of
+	# variance; it exists to pin that the prepass now FAILS HARD on
+	# same-SCI / different-artifact_sha256 (policy 0.33.22), rather than
+	# silently selecting one by `--package-root` precedence.
+	#
+	# Variant B differs by an EXPLICIT, INTENTIONAL emitted-content
+	# delta: an extra exported function.  That is captured in the
+	# serialized package (exports + signatures + hir_funcs), so the two
+	# `.dmp` files genuinely differ in bytes, while the stamped SCI
+	# stays uniform (stamped via the CLI flag, per the fixture note at
+	# line 393).  Do NOT manufacture the difference with a trailing
+	# comment or by building under different directories: comments are
+	# not a reliable emitted-payload difference, and 0.33.21 canonicalized
+	# absolute `loc.file` paths to project-relative, so path differences
+	# no longer change the artifact bytes (which is correct — that change
+	# is what makes artifact_sha256 reproducible across build paths, and
+	# is exactly why unexplained divergence is now treated as a hard error).
+	#
+	# Both variants export `hello` so the consumer *would* compile against
+	# either; the point is that the prepass refuses to choose at all.
 	def _build_variant(src_text: str, variant_name: str) -> Path:
 		src_dir = tmp_path / f"child_src_{variant_name}"
 		src_dir.mkdir()
@@ -623,22 +638,31 @@ def test_envelope_variance_same_sci_resolves_via_argv_precedence(
 		)
 		return dmp
 
-	dmp_a = _build_variant(CHILD_SRC, "a")
-	dmp_b = _build_variant(
-		CHILD_SRC + "\n// envelope-variance-marker: variant-b\n",
-		"b",
+	# Variant B adds an extra exported, never-imported function so the
+	# emitted package payload genuinely differs while the stamped SCI
+	# stays uniform.
+	child_src_variant_b = (
+		"module child;\n\n"
+		"export { hello, envelope_variant_b };\n\n"
+		"pub fn hello() nothrow -> Int {\n\treturn 42;\n}\n\n"
+		"pub fn envelope_variant_b() nothrow -> Int {\n\treturn 7;\n}\n"
 	)
+	dmp_a = _build_variant(CHILD_SRC, "a")
+	dmp_b = _build_variant(child_src_variant_b, "b")
 
-	# Test premise: two artifact files for the same authored identity.
+	# Test premise: two artifact files for the same authored identity
+	# (same SCI) but different bytes (different artifact_sha256).
 	a_bytes = dmp_a.read_bytes()
 	b_bytes = dmp_b.read_bytes()
 	assert sha256(a_bytes).hexdigest() != sha256(b_bytes).hexdigest(), (
 		"test premise broken: the two child.dmp artifact files hash "
-		"identically; this test needs envelope variance (different "
-		"artifact_sha256 under uniform source_content_id).  If driftc "
-		"changed to not capture the comment into the emitted dmir, "
-		"adjust the variant input to vary something the emit DOES "
-		"capture (e.g. an additional pub fn that's never imported)."
+		"identically; this test needs envelope divergence (different "
+		"artifact_sha256 under uniform source_content_id).  Variant B "
+		"must differ by an emitted-content delta (it adds an exported "
+		"function); if a future change stops capturing that into the "
+		"dmir, vary another field the emit DOES capture.  Do NOT fall "
+		"back to a trailing comment or a different build directory — "
+		"neither changes the artifact bytes on current toolchains."
 	)
 
 	# Manifest SCI uniformity check (independent of the prepass under
@@ -693,86 +717,62 @@ pub fn main() nothrow -> Int {
 		)
 		# Stdout under `--json` must be a single parseable JSON object
 		# (or empty if the driver chose not to emit a terminal payload).
-		# The envelope-variance info diagnostic is operator-facing and
-		# is emitted to stderr to avoid producing concatenated JSON
-		# objects on stdout, which would break parsers.
+		# On envelope divergence the prepass fails closed, emitting the
+		# error as the terminal JSON payload on stdout (exit_code 1 +
+		# diagnostics); the human path prints the same error to stderr.
+		# `_diag_text` below reads from whichever channel carried it.
 		stdout = res.stdout.strip()
 		stdout_diag: dict | None = None
 		if stdout:
 			stdout_diag = json.loads(stdout)  # raises if not valid JSON
 		return res.returncode, stdout_diag, res.stderr
 
-	winner_path_a = libs_a / "child" / "0.0.0" / "child.dmp"
-	loser_path_b = libs_b / "child" / "0.0.0" / "child.dmp"
+	path_a = libs_a / "child" / "0.0.0" / "child.dmp"
+	path_b = libs_b / "child" / "0.0.0" / "child.dmp"
+	sha_a = sha256(a_bytes).hexdigest()
+	sha_b = sha256(b_bytes).hexdigest()
 
-	# Round 1: libs_a first.  argv-first artifact (libs_a copy) should win.
-	rc1, stdout_diag1, stderr1 = _compile_with_roots(libs_a, libs_b)
-	assert rc1 == 0, (
-		f"envelope variance compile (libs_a first) failed; rc={rc1}; "
-		f"stdout_diag: {stdout_diag1!r}; stderr: {stderr1!r}"
-	)
-	# JSON stdout payload must be present and report success cleanly
-	# -- no errors leaked into it, and no `info` packets either (the
-	# variance info goes to stderr).
-	assert stdout_diag1 is not None and stdout_diag1.get("exit_code") == 0, (
-		f"expected clean success JSON payload; got: {stdout_diag1!r}"
-	)
-	assert not stdout_diag1.get("diagnostics"), (
-		f"unexpected JSON diagnostics in success payload "
-		f"(variance info should be on stderr): {stdout_diag1!r}"
-	)
-	# Operator-visible info diagnostic must be in stderr, naming chosen + dropped.
-	assert "envelope variance" in stderr1, (
-		f"expected envelope-variance info diagnostic on stderr; "
-		f"stderr was: {stderr1!r}"
-	)
-	assert "argv precedence" in stderr1
-	import re as _re
-	_chosen1 = _re.search(r"chosen:\s*(\S+)", stderr1)
-	_dropped1 = _re.search(r"dropped:\s*\n\s*-\s*(\S+)", stderr1)
-	assert _chosen1 is not None and _dropped1 is not None, (
-		f"variance info diagnostic shape unexpected; stderr: {stderr1!r}"
-	)
-	assert _chosen1.group(1) == str(winner_path_a), (
-		f"expected libs_a path as chosen in argv-first round; "
-		f"got chosen={_chosen1.group(1)!r}; stderr: {stderr1!r}"
-	)
-	assert _dropped1.group(1) == str(loser_path_b), (
-		f"expected libs_b path as dropped in argv-first round; "
-		f"got dropped={_dropped1.group(1)!r}; stderr: {stderr1!r}"
-	)
+	def _diag_text(stdout_diag: dict | None, stderr: str) -> str:
+		"""Combined diagnostic text from the JSON stdout payload + stderr."""
+		parts = [stderr]
+		if stdout_diag:
+			for d in stdout_diag.get("diagnostics", []) or []:
+				parts.append(str(d.get("message", "")))
+		return "\n".join(parts)
 
-	# Round 2: argv order swapped.  libs_b wins now.
-	rc2, stdout_diag2, stderr2 = _compile_with_roots(libs_b, libs_a)
-	assert rc2 == 0, (
-		f"envelope variance compile (libs_b first) failed; rc={rc2}; "
-		f"stdout_diag: {stdout_diag2!r}; stderr: {stderr2!r}"
-	)
-	assert stdout_diag2 is not None and stdout_diag2.get("exit_code") == 0, (
-		f"expected clean success JSON payload (swapped order); "
-		f"got: {stdout_diag2!r}"
-	)
-	assert not stdout_diag2.get("diagnostics"), (
-		f"unexpected JSON diagnostics in success payload "
-		f"(swapped order): {stdout_diag2!r}"
-	)
-	assert "envelope variance" in stderr2, (
-		f"expected envelope-variance info diagnostic on stderr "
-		f"(swapped order); stderr was: {stderr2!r}"
-	)
-	# Selection must be argv-order, not sort-by-path: libs_b is now the chosen winner.
-	# Locate the chosen/dropped lines explicitly to avoid the trivial
-	# "both paths appear somewhere in the message" false-positive.
-	_chosen_match = _re.search(r"chosen:\s*(\S+)", stderr2)
-	_dropped_match = _re.search(r"dropped:\s*\n\s*-\s*(\S+)", stderr2)
-	assert _chosen_match is not None and _dropped_match is not None, (
-		f"variance info diagnostic shape unexpected; stderr: {stderr2!r}"
-	)
-	assert _chosen_match.group(1) == str(loser_path_b), (
-		f"expected libs_b path as chosen in swapped round; "
-		f"got chosen={_chosen_match.group(1)!r}; stderr: {stderr2!r}"
-	)
-	assert _dropped_match.group(1) == str(winner_path_a), (
-		f"expected libs_a path as dropped in swapped round; "
-		f"got dropped={_dropped_match.group(1)!r}; stderr: {stderr2!r}"
-	)
+	def _assert_envelope_divergence_failure(roots: tuple[Path, ...]) -> None:
+		rc, stdout_diag, stderr = _compile_with_roots(*roots)
+		order = " ".join(p.name for p in roots)
+		# 1. fail closed — no silent selection.
+		assert rc != 0, (
+			f"envelope divergence MUST fail closed (roots: {order}); "
+			f"got rc={rc}; stdout_diag={stdout_diag!r}; stderr={stderr!r}"
+		)
+		text = _diag_text(stdout_diag, stderr)
+		# 3. actionable diagnostic naming the policy + every candidate.
+		assert "envelope divergence" in text, (
+			f"missing envelope-divergence diagnostic (roots: {order}); got: {text!r}"
+		)
+		# package id/version + SCI
+		assert "child" in text and "0.0.0" in text, f"missing pkg id/version; got: {text!r}"
+		assert _TEST_SCI in text, f"missing source_content_id; got: {text!r}"
+		# BOTH candidate paths named
+		assert str(path_a) in text and str(path_b) in text, (
+			f"both candidate paths must be named; got: {text!r}"
+		)
+		# BOTH artifact SHAs named
+		assert sha_a in text and sha_b in text, (
+			f"both artifact_sha256 values must be named; got: {text!r}"
+		)
+		# causes + fixes present (actionable)
+		assert "likely causes" in text and "suggested fixes" in text, (
+			f"diagnostic must list likely causes + suggested fixes; got: {text!r}"
+		)
+		# It must NOT have silently picked a winner by precedence.
+		assert "argv precedence" not in text and "Selecting by" not in text, (
+			f"must not select by precedence on divergence; got: {text!r}"
+		)
+
+	# 2. Fails regardless of argv order — it is not a precedence question.
+	_assert_envelope_divergence_failure((libs_a, libs_b))
+	_assert_envelope_divergence_failure((libs_b, libs_a))

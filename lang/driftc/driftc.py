@@ -8953,12 +8953,13 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 
 		# (package_id, version) -> (LoadedPackage, bytes, ResolvedDep|None)
 		# Used by the closure walker to resolve transitive deps by
-		# identity.  First-occurrence wins on duplicate keys; the
-		# envelope-variance resolution below may re-stamp this entry
-		# with the argv-precedence winner when two `--package-root`
-		# dirs both ship same-SCI / different-artifact-bytes copies
-		# of the same (pkg, version).  Genuine content conflict (same
-		# label, different SCI) fail-closes upstream of the re-stamp.
+		# identity.  First-occurrence wins on duplicate keys.  Duplicates
+		# that disagree fail closed before this entry is ever consulted:
+		# different SCI under one label is a content conflict, and same
+		# SCI / different artifact_sha256 is envelope divergence (policy
+		# 0.33.22) -- both return non-zero in the post-loop gates below.
+		# Only byte-identical mirrors survive to here, so first-write-wins
+		# is unambiguous (all surviving entries carry the same bytes).
 		_prepass: dict[tuple[str, str], tuple[object, bytes, "_ResolvedDep | None"]] = {}
 		# Path -> (LoadedPackage, bytes, ResolvedDep|None)
 		# Used by the verify pass below so EVERY candidate path -- even
@@ -8973,19 +8974,17 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		# (package_id, version) -> set of distinct source_content_id
 		# values observed for that key.  >1 entry means two files under
 		# the same `(pkg, version)` label claim DIFFERENT source
-		# identities -- the only kind of duplicate that's genuinely
-		# unsafe to attest (the underlying authored source bytes
-		# disagree).  Same-SCI / different-artifact_sha256 duplicates
-		# are envelope variance (re-signed deploys, two-lane staging
-		# vs certified consumption, etc.) and resolve via argv
-		# precedence below, NOT a hard error.
+		# identities -- a content conflict (the underlying authored
+		# source bytes disagree), hard-failed by the SCI gate below.
+		# Same-SCI / different-artifact_sha256 duplicates are a separate
+		# failure (envelope divergence), hard-failed by the gate after it.
 		_prepass_scis_by_key: dict[tuple[str, str], set[str]] = {}
 		# (package_id, version) -> ordered list of (pkg_path,
 		# artifact_sha256, source_content_id) for every envelope seen
 		# under that label.  Discovery order (matches `_candidate_files`).
-		# Used by the envelope-variance resolution to detect when one
-		# label maps to >1 distinct artifact_sha256 under a uniform
-		# SCI, and to pick the argv-precedence winner.
+		# Used by the envelope-divergence gate to detect when one label
+		# maps to >1 distinct artifact_sha256 under a uniform SCI and
+		# FAIL CLOSED, naming every candidate (policy 0.33.22).
 		_prepass_variants_by_key: dict[tuple[str, str], list[tuple[Path, str, str]]] = {}
 		# (package_id, version) -> list of paths seen, for the conflict
 		# diagnostic.  Populated alongside `_prepass_by_path`.
@@ -9045,15 +9044,15 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				)
 			else:
 				_pre_rd = None
-			# `_prepass` (by id+version) is first-write-wins for now;
-			# the envelope-variance resolution below may re-stamp it
-			# with the argv-precedence winner when one label maps to
-			# multiple envelope bytes under a uniform SCI.
+			# `_prepass` (by id+version) is first-write-wins; surviving
+			# duplicates are byte-identical mirrors (the disagreeing cases
+			# fail closed below), so the choice is unambiguous.
 			# `_prepass_by_path` always records every candidate file so
 			# the verify pass below can reach its closure for duplicates
 			# too.  `_prepass_scis_by_key` + `_prepass_variants_by_key`
-			# feed the two-tier post-loop check: hard error on SCI
-			# divergence, argv-precedence selection on envelope variance.
+			# feed the two post-loop gates, BOTH hard errors: content
+			# conflict on SCI divergence, and envelope divergence on
+			# same-SCI / different-artifact_sha256.
 			_prepass.setdefault((_pre_pid, _pre_ver), (_pre_pkg, _pre_data, _pre_rd))
 			_prepass_by_path[pkg_path] = (_pre_pkg, _pre_data, _pre_rd)
 			_prepass_paths_for_key.setdefault((_pre_pid, _pre_ver), []).append(pkg_path)
@@ -9067,15 +9066,14 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 
 		# Fail closed on content conflict: two files under the same
 		# `(pkg, version)` label whose manifests stamp DIFFERENT
-		# `source_content_id` values.  That is the only case where
-		# duplicates genuinely claim incompatible source identities;
-		# the closure walker can't safely pick one because the
-		# underlying authored bytes disagree.  Mirrored duplicates
-		# (same .zdmp copied across two `--package-root` dirs) hit a
-		# single SCI and this guard is a no-op; envelope variance
-		# (same SCI, different `artifact_sha256` from a re-sign or a
-		# different deploy run) is resolved by argv precedence below,
-		# NOT here.
+		# `source_content_id` values -- duplicates that claim
+		# incompatible source identities; the closure walker can't
+		# safely pick one because the underlying authored bytes
+		# disagree.  Mirrored duplicates (same .zdmp copied across two
+		# `--package-root` dirs) hit a single SCI and this guard is a
+		# no-op.  Same SCI / different `artifact_sha256` is a DIFFERENT
+		# failure (envelope divergence) handled by the next gate below,
+		# not here.
 		for _conflict_key, _scis in _prepass_scis_by_key.items():
 			if len(_scis) > 1:
 				_variants_for_key = _prepass_variants_by_key.get(_conflict_key, [])
@@ -9116,116 +9114,81 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 					print(f"{_package_label()}:?:?: error: {_conflict_msg}", file=sys.stderr)
 				return 1
 
-		# Envelope-variance resolution: same `(pkg, version)`, uniform
-		# `source_content_id`, but >1 distinct `artifact_sha256`.  This
-		# is the legitimate steady state when (a) a consumer compiles
-		# against both a certified lane and a freshly-deployed local
-		# lane, (b) the same source was deployed twice (signatures
-		# differ per run), or (c) a tmp build root sits alongside
-		# `$DRIFT_PKG_ROOT`.  Pick one envelope by argv precedence and
-		# drop the others from the candidate set BEFORE the verify
-		# loop, so that:
-		#   1. only the chosen envelope's cert-claim is enforced (a
-		#      lower-precedence same-SCI loser cannot break the
-		#      selected winner -- its trust-gate result is never
-		#      consulted because it never reaches the verify loop);
-		#      and
-		#   2. the existing dedup at the bottom of this section sees
-		#      exactly one path per `(pkg_id, version)` -- its existing
-		#      sort-by-path contract is unchanged because the variance
-		#      winnow happens upstream.
-		# No fallback: if the argv-first candidate fails verification,
-		# the compile fails.  Lower-precedence same-SCI candidates are
-		# NOT retried.  Callers control outcomes by argv order.
-		# Parent cert-claims' `dep_graph` rows still attest specific
-		# `artifact_sha256` values -- a parent whose dep_graph pinned
-		# the dropped envelope's bytes will fail at parent-verify time.
-		# That is a separate design question (SCI-bound vs artifact-
-		# bound dep_graph identity); this site does not move that gate.
-		def _argv_precedence_for(_p: Path) -> int:
-			# Lowest argv index of a `--package-root` that contains `_p`.
-			# `args.package_roots` is the appended list (CLI order
-			# preserved).  Fall back to `len(roots)` (last) when no root
-			# is an ancestor -- shouldn't happen via `discover_package_files`
-			# (which only walks the provided roots) but keeps this total.
-			_roots = list(args.package_roots or [])
-			_best: int = len(_roots)
-			for _i, _root in enumerate(_roots):
-				try:
-					_root_resolved = Path(_root).resolve()
-					_p_resolved = _p.resolve()
-				except OSError:
-					_root_resolved = Path(_root)
-					_p_resolved = _p
-				if _p_resolved == _root_resolved:
-					if _i < _best:
-						_best = _i
-					continue
-				try:
-					_p_resolved.relative_to(_root_resolved)
-				except ValueError:
-					continue
-				if _i < _best:
-					_best = _i
-			return _best
-
-		_variance_dropped: set[Path] = set()
+		# Envelope-divergence policy (0.33.22): two visible candidates with
+		# the SAME (package_id, version, source_content_id) but DIFFERENT
+		# artifact_sha256 is a HARD FAILURE.  After path canonicalization
+		# (0.33.21) made artifact_sha256 build-path-independent, this state
+		# is no longer benign rebuild/path noise: it means a genuine
+		# producer difference (toolchain/package-emitter upgrade, package-
+		# format migration, target/platform mismatch, stale/mixed roots,
+		# build nondeterminism) or — the threat shape — the same source
+		# identity claim attached to different produced bytes.  Silent
+		# selection by `--package-root` argv precedence is the wrong default
+		# for that, so we fail closed and surface every candidate instead.
+		# Byte-identical duplicates (one SHA) are still fine and dedup by
+		# path below; this gate is a no-op for them.  (Distinct from the
+		# different-SCI conflict gate above, which fires when the *source*
+		# identities disagree.)
 		for _v_key, _variants in _prepass_variants_by_key.items():
 			# `_variants` already filtered to entries with non-None
 			# `_pre_rd`; SCI uniformity guaranteed by the gate above.
 			_distinct_shas = {_sha for (_p, _sha, _sci) in _variants}
 			if len(_distinct_shas) <= 1:
 				continue
-			# Variance: pick winner by (argv_idx, discovery_idx).  Discovery
-			# index is the position in `_variants`, which mirrors
-			# `_candidate_files` order (globally sorted by path).
-			_indexed = [
-				(_argv_precedence_for(_p), _disc_idx, _p, _sha, _sci)
-				for _disc_idx, (_p, _sha, _sci) in enumerate(_variants)
-			]
-			_indexed.sort(key=lambda t: (t[0], t[1]))
-			_winner_path = _indexed[0][2]
-			_loser_paths = [t[2] for t in _indexed[1:]]
-			# Re-stamp `_prepass[(pid, ver)]` with the winner so the
-			# closure walker sees the chosen identity (the loop above
-			# was first-write-wins by discovery order, which may not
-			# match argv order).
-			_winner_entry = _prepass_by_path.get(_winner_path)
-			if _winner_entry is not None:
-				_prepass[_v_key] = _winner_entry
-			# Drop losers from the verify candidate set + the
-			# path-keyed prepass so the verify loop below only runs on
-			# the winner.
-			for _lp in _loser_paths:
-				_variance_dropped.add(_lp)
-				_prepass_by_path.pop(_lp, None)
-			# Info-level operator diagnostic: name the chosen path and
-			# every dropped loser so the operator can see which
-			# envelope was picked.  Always emitted to stderr -- even
-			# under `--json` -- because stdout under `--json` carries
-			# at most one terminal payload (the success/failure
-			# envelope at end of compile); spraying an extra JSON
-			# object here would produce concatenated objects on stdout
-			# and break parsers.  Info diagnostics don't affect rc, so
-			# stderr is the right channel for both human operators and
-			# JSON consumers that pipe stderr separately.
 			_pid, _ver = _v_key
-			_dropped_list = "\n    - ".join(str(_lp) for _lp in _loser_paths)
-			_variance_msg = (
-				f"package '{_pid}'@'{_ver}' observed under multiple "
-				f"`--package-root` directories with the same "
-				f"source_content_id but different artifact_sha256 "
-				f"values (envelope variance from independent sign/build "
-				f"runs over the same source).  Selecting by "
-				f"`--package-root` argv precedence.\n"
-				f"  chosen: {_winner_path}\n"
-				f"  dropped:\n    - {_dropped_list}"
+			_sci_for_key = next((_sci for (_p, _sha, _sci) in _variants), "?")
+			_cand_list = "\n    - ".join(
+				f"{_p}\n        artifact_sha256={_sha}"
+				for (_p, _sha, _sci) in sorted(_variants, key=lambda t: str(t[0]))
 			)
-			print(f"{_package_label()}:?:?: info: {_variance_msg}", file=sys.stderr)
-		if _variance_dropped:
-			_candidate_files = [
-				_p for _p in _candidate_files if _p not in _variance_dropped
-			]
+			_divergence_msg = (
+				f"envelope divergence: package '{_pid}'@'{_ver}' appears in "
+				f"multiple `--package-root` directories with the SAME "
+				f"source_content_id but DIFFERENT artifact_sha256.  After "
+				f"path canonicalization the artifact hash is reproducible "
+				f"across build paths, so the same source identity producing "
+				f"different bytes is not accepted automatically — the "
+				f"toolchain will NOT silently pick one by root precedence.\n"
+				f"  package:           {_pid}@{_ver}\n"
+				f"  source_content_id: {_sci_for_key}\n"
+				f"  candidates (path + artifact_sha256):\n    - {_cand_list}\n"
+				f"  likely causes:\n"
+				f"    - the candidates were built by different toolchain / "
+				f"package-emitter versions\n"
+				f"    - a package-format migration between the two builds\n"
+				f"    - a target / platform mismatch\n"
+				f"    - stale or mixed package roots (an old artifact left "
+				f"behind)\n"
+				f"    - build nondeterminism\n"
+				f"    - a compromised or incorrect producer (same source "
+				f"identity claim, different bytes)\n"
+				f"  suggested fixes:\n"
+				f"    - pass only ONE `--package-root` that contains the "
+				f"intended artifact\n"
+				f"    - relock / re-certify against the intended pool\n"
+				f"    - remove the stale candidate artifact\n"
+				f"    - if reproducibility is expected, rebuild both "
+				f"candidates with the same trusted toolchain and compare"
+			)
+			if args.json:
+				_emit_compile_json(
+						{
+							"exit_code": 1,
+							"diagnostics": [
+								{
+									"phase": "package",
+									"message": _divergence_msg,
+									"severity": "error",
+									"file": "<package>",
+									"line": None,
+									"column": None,
+								}
+							],
+						}
+					)
+			else:
+				print(f"{_package_label()}:?:?: error: {_divergence_msg}", file=sys.stderr)
+			return 1
 		_events.phase_end("trust_pre_pass")
 
 		def _build_closure_for(start_pkg: object) -> list[_ResolvedDep]:
@@ -9520,11 +9483,11 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		# root, one copy is kept and the rest are dropped.  Selection order
 		# is determined by discover_package_files (globally sorted by path),
 		# not by --package-root CLI order.
-		# (Envelope variance -- same SCI, different artifact_sha256 across
-		# roots -- was already winnowed down to a single argv-precedence
-		# winner by the variance-resolution step above; the argv-order
-		# contract for variance lives there, not here.  This dedup only
-		# handles the byte-identical mirror case.)
+		# (Same SCI / different artifact_sha256 across roots -- envelope
+		# divergence -- was already REJECTED (hard fail) by the gate
+		# above, so it never reaches here.  This dedup only handles the
+		# byte-identical mirror case, where every surviving copy carries
+		# identical bytes and the kept-vs-dropped choice is immaterial.)
 		pkg_id_map: dict[str, tuple[str, str]] = {}  # package_id -> (version, target)
 		_deduped_pkgs: list = []
 		for pkg in loaded_pkgs:

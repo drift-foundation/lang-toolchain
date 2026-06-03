@@ -1,5 +1,38 @@
 # Drift development history
 
+## 2026-06-02 (0.33.22: envelope divergence is a hard failure — same SCI + different artifact SHA fails closed)
+- **Policy:** when two visible `--package-root` candidates have the same
+  `(package_id, version, source_content_id)` but **different `artifact_sha256`**,
+  the prepass now **fails closed** with an actionable diagnostic. It no longer
+  silently selects one by argv precedence. Byte-identical duplicates (one SHA)
+  are unaffected — they still resolve by path dedup.
+- **Why now:** the 0.33.21 path-canonicalization fix made `artifact_sha256`
+  build-path-independent, so same-SCI/different-artifact is no longer benign
+  rebuild/path noise. In the non-malicious case it signals a producer change
+  (toolchain / package-emitter upgrade, package-format migration, target/platform
+  mismatch, stale/mixed roots, or a remaining nondeterminism bug); in the
+  malicious case it is exactly the shape to catch — the same source-identity
+  claim attached to different produced bytes. Silent root-precedence selection is
+  the wrong default for that threat, so the toolchain refuses and surfaces every
+  candidate. (Deliberately distinct from the 0.33.21 path fix: the path fix makes
+  the SHA deterministic; this policy says that once path noise is gone, unexplained
+  divergence is not accepted.)
+- **Diagnostic** names: package id/version, the source_content_id, and **each
+  candidate's path + `artifact_sha256`**, plus likely causes (toolchain/emitter
+  upgrade, format migration, target mismatch, stale roots, nondeterminism,
+  compromised producer) and suggested fixes (use one root, relock/re-certify,
+  remove the stale candidate, rebuild both with the same trusted toolchain).
+- If this bites a legitimate staged/cert/local rollover, that surfaces a concrete
+  case to refine with provenance-aware allow/warn rules — preferred over keeping a
+  silent loophole.
+- No runtime/ABI/format change (**ABI stays 15**); behavior-changing resolver
+  policy, so DRIFTC 0.33.21 → **0.33.22**. The prior
+  accept-and-argv-precedence regression is reframed as a **negative** regression:
+  `test_pkg_v1_duplicate_roots_resolved_closure.py::test_envelope_divergence_same_sci_different_artifact_fails_hard`
+  (asserts hard fail + diagnostic, both argv orders); byte-identical duplicate-root
+  argv/dedup coverage retained in
+  `test_duplicate_package_root_does_not_drop_resolved_closure`.
+
 ## 2026-06-02 (0.33.21: relativize emitted debug-location source paths — reproducible package SHA across build paths)
 - **Emitted package payloads no longer embed absolute source paths.** The
   serialized HIR carried Span/Located `loc.file` as the *absolute* compile path
