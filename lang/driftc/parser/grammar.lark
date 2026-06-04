@@ -611,17 +611,31 @@ map_literal: "{" map_entries "}"
 map_entries: map_entry (COMMA map_entry)* COMMA?
 map_entry: expr COLON expr
 
-// Exception constructor call syntax (used only in `throw`).
+// Exception `throw` operand syntax (used only in `throw`).
 //
 // Design choice:
-// - Exceptions are thrown using constructor syntax `throw E(...)` (parens required),
-//   not brace initializers. This matches user expectations and keeps `{...}` for
+// - Inline constructors use call syntax `throw E(...)` (parens required), not
+//   brace initializers. This matches user expectations and keeps `{...}` for
 //   struct initializers and map literals.
 // - Positional args are allowed and map to declared exception fields by
 //   declaration order. Keyword args use `=` and follow the same rule as normal calls:
 //   positional arguments must precede keyword arguments.
-exception_ctor: event_fqn "(" [call_args] ")"
-              | NAME "(" [call_args] ")"
+// - The constructor name may be module-qualified two ways: a declared-events
+//   FQN `mod.path:Name(...)` (single-colon `event_fqn`) or an ordinary dotted
+//   path `mod.Type(...)` (`module_path`).  An unqualified `Name(...)` is just a
+//   single-segment `module_path`.
+// - A bare value `throw e` throws a previously-constructed exception value
+//   held by a local (implicit move/consume, enforced in the checker).  Parens-
+//   vs-no-parens distinguishes a zero-arg constructor `throw E()` from a bare
+//   value `throw e`, so the two alternatives carry distinct rule aliases.
+//   NOTE: the bare-value alternative is `module_path`, which also *parses*
+//   dotted forms like `throw self.cached`; those are REJECTED in the checker
+//   ("throw of a projected place is not supported in v1") because moving a
+//   value out of an aggregate (partial move) is not a v1 feature.  Only a bare
+//   local is accepted; bind first (`val e = obj.field; throw e`).
+exception_ctor: event_fqn "(" [call_args] ")"     -> exc_ctor_event
+              | module_path "(" [call_args] ")"   -> exc_ctor_path
+              | module_path                        -> exc_bare_value
 
 call_args: call_arg (COMMA call_arg)*
 call_arg: NAME EQUAL expr -> kwarg

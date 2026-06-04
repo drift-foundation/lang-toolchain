@@ -334,6 +334,22 @@ class TypeChecker:
 		# validated) but NOT full toolchain trust (no rawbuffer intrinsics).
 		self._pkg_unsafe_modules = set(pkg_unsafe_modules or [])
 
+	def _is_pub_error_struct_type(self, ty: "TypeId | None") -> bool:
+		"""True when `ty` is the Path-A struct co-registered for a declared
+		`error` / `pub error` type — i.e. a value that may be `throw`n directly.
+
+		The exception schema table is keyed by event FQN `"<module>:<name>"`;
+		a struct whose (module_id, name) is present there is an exception
+		value.  Used to accept `val e = E(...); throw e;` (bare-value throws).
+		"""
+		if ty is None:
+			return False
+		td = self.type_table.get(ty)
+		if getattr(td, "kind", None) is not TypeKind.STRUCT or not getattr(td, "module_id", None):
+			return False
+		schemas = getattr(self.type_table, "exception_schemas", {}) or {}
+		return f"{td.module_id}:{td.name}" in schemas
+
 	def _canonical_pub_error_fqn(self, event_fqn: str | None) -> str | None:
 		"""Resolve a typed-catch arm's event FQN through any
 		`pub type Alias = inner.PubError` chain to the underlying
@@ -11309,14 +11325,59 @@ class TypeChecker:
 					type_expr(stmt.value)
 				else:
 					val_ty = type_expr(stmt.value, allow_exception_init=True)
+					# Accepted throw payloads:
+					#   - an inline constructor `throw E(...)` (HExceptionInit);
+					#   - an existing Error-envelope value (e.g. unwrap_err sugar);
+					#   - a previously-constructed `pub error` value held by a
+					#     BARE LOCAL, e.g. `val e = E(...); throw e;` — stage1
+					#     wraps the local read in `HMove`, and the borrow checker
+					#     enforces the consume.
 					if not isinstance(stmt.value, H.HExceptionInit) and val_ty != self._error:
-						diagnostics.append(
-							_tc_diag(
-								message="throw payload must be an exception constructor",
-								severity="error",
-								span=getattr(stmt, "loc", Span()),
+						if self._is_pub_error_struct_type(val_ty):
+							# Bare-value throw of a declared error value.  Only a
+							# bare local (now `HMove(HVar)`) is supported in v1.  A
+							# projected place — `obj.field`, `arr[i]` — would
+							# require moving a value OUT of an aggregate (partial
+							# move), which v1 deliberately does not support (same
+							# limitation as `move obj.field`).  Reject it clearly
+							# instead of silently copying or routing it through the
+							# unsupported projected-move path.
+							# A bare local read is `HMove(HVar)`, which
+							# `place_canonicalize` rewrites to
+							# `HMove(HPlaceExpr(base=HVar, projections=[]))`.
+							# Anything with projections (`obj.field`, `arr[i]`) is a
+							# projected place and is rejected.
+							_mv_subject = getattr(stmt.value, "subject", None) if isinstance(stmt.value, H.HMove) else None
+							is_bare_local_move = False
+							if isinstance(_mv_subject, H.HVar):
+								is_bare_local_move = True
+							elif isinstance(_mv_subject, getattr(H, "HPlaceExpr", ())):
+								is_bare_local_move = not getattr(_mv_subject, "projections", None)
+							if not is_bare_local_move:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											"throw of a projected place is not supported in v1; "
+											"bind the exception value to a local first "
+											"(`val e = <expr>; throw e`) or throw an inline "
+											"constructor `throw E(...)`"
+										),
+										severity="error",
+										span=getattr(stmt, "loc", Span()),
+									)
+								)
+						else:
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										"throw payload must be an exception value: an inline "
+										"constructor `throw E(...)`, or a bare local of a "
+										"declared `error`/`pub error` type"
+									),
+									severity="error",
+									span=getattr(stmt, "loc", Span()),
+								)
 							)
-						)
 			elif isinstance(stmt, H.HRethrow):
 				# Valid only inside a catch; outside catches it is reported here.
 				if catch_depth == 0:

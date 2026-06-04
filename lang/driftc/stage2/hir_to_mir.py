@@ -7016,6 +7016,42 @@ class HIRToMIR:
 		"""
 		return self._construct_error_from_exception_init(expr)
 
+	def _maybe_construct_error_from_struct_value(self, value_expr: "H.HExpr") -> "M.ValueId | None":
+		"""Bare-value throw (`throw e`): if `value_expr` has a declared
+		`pub error` Path-A struct type, lower it to a struct value and encode
+		that value into the Error envelope (project params JSON via the type's
+		`to_json_text(&E)` Diagnostic impl), exactly like the inline-constructor
+		path but starting from an already-built struct.  Returns the Error
+		ValueId, or None when `value_expr` is not a pub-error struct (the caller
+		then treats it as an existing Error-envelope value)."""
+		val_ty = self._infer_expr_type(value_expr)
+		if val_ty is None:
+			return None
+		td = self._type_table.get(val_ty)
+		if getattr(td, "kind", None) is not TypeKind.STRUCT or not getattr(td, "module_id", None):
+			return None
+		event_fqn = f"{td.module_id}:{td.name}"
+		if event_fqn not in self._exception_schemas:
+			return None
+		# Lower (and thereby move/consume) the struct value.
+		struct_val = self.lower_expr(value_expr)
+		err_val = self.b.new_temp()
+		self._local_types[err_val] = self._type_table.ensure_error()
+		code_val = self.b.new_temp()
+		self.b.emit(M.ConstUint64(dest=code_val, value=self._lookup_error_code(event_fqn=event_fqn)))
+		self._local_types[code_val] = self._uint64_type
+		event_fqn_val = self.b.new_temp()
+		self.b.emit(M.ConstString(dest=event_fqn_val, value=event_fqn))
+		return self._emit_diagnostic_owning_throw(
+			err_val=err_val,
+			code_val=code_val,
+			event_fqn_val=event_fqn_val,
+			event_fqn=event_fqn,
+			struct_ty=val_ty,
+			field_mir_vals=None,
+			struct_val=struct_val,
+		)
+
 	def _construct_error_from_exception_init(self, expr: H.HExceptionInit) -> M.ValueId:
 		from lang.driftc.core.exception_ctor_args import KwArg as _KwArg, resolve_exception_ctor_args
 
@@ -7205,16 +7241,20 @@ class HIRToMIR:
 		event_fqn_val: M.ValueId,
 		event_fqn: str,
 		struct_ty: TypeId,
-		field_mir_vals: list[M.ValueId],
+		field_mir_vals: "list[M.ValueId] | None",
+		struct_val: "M.ValueId | None" = None,
 	) -> M.ValueId:
 		"""Slice 7b shared post-lowering owning-throw emission.
 
-		Given pre-lowered MIR values for the Path-A struct's fields (in
-		declaration order), construct the struct, call its
-		`to_json_text(&E)` Diagnostic impl, and emit ConstructError +
-		ExcSetParamsJson.  Used by both the user-source `throw E(...)`
-		path (`_construct_error_via_diagnostic`) and compiler-synthesized
-		inline throws (e.g. the array bounds-check IndexError site).
+		Given either pre-lowered MIR values for the Path-A struct's fields
+		(`field_mir_vals`, in declaration order — the struct is constructed
+		here) OR an already-built struct value (`struct_val` — the bare-value
+		`throw e` path), call the type's `to_json_text(&E)` Diagnostic impl and
+		emit ConstructError + ExcSetParamsJson.  Used by the user-source
+		`throw E(...)` path (`_construct_error_via_diagnostic`),
+		compiler-synthesized inline throws (e.g. the array bounds-check
+		IndexError site), and bare-value throws
+		(`_maybe_construct_error_from_struct_value`).
 		"""
 		# Locate the `to_json_text` method on this struct type.  Slice 7b
 		# invariant: every reachable `pub error E` has either a manual or
@@ -7227,13 +7267,16 @@ class HIRToMIR:
 				f"its `to_json_text` impl method is missing from signatures "
 				f"(manual or synthesized)"
 			)
-		struct_val = self.b.new_temp()
-		self._local_types[struct_val] = struct_ty
-		self.b.emit(M.ConstructStruct(
-			dest=struct_val,
-			struct_ty=struct_ty,
-			args=field_mir_vals,
-		))
+		if struct_val is None:
+			if field_mir_vals is None:
+				raise AssertionError("_emit_diagnostic_owning_throw needs field_mir_vals or struct_val")
+			struct_val = self.b.new_temp()
+			self._local_types[struct_val] = struct_ty
+			self.b.emit(M.ConstructStruct(
+				dest=struct_val,
+				struct_ty=struct_ty,
+				args=field_mir_vals,
+			))
 		# Materialize the struct in a named local so we can take its
 		# address (`AddrOfLocal` requires a named local, not a temp).
 		# materialize-audit: allow consumed
@@ -8672,8 +8715,11 @@ class HIRToMIR:
 		if isinstance(stmt.value, H.HExceptionInit):
 			err_val = self._construct_error_from_exception_init(stmt.value)
 		else:
-			# Throwing an existing Error value (e.g., from try-result sugar unwrap_err).
-			err_val = self.lower_expr(stmt.value)
+			err_val = self._maybe_construct_error_from_struct_value(stmt.value)
+			if err_val is None:
+				# Throwing an existing Error-envelope value (e.g., from
+				# try-result sugar unwrap_err).
+				err_val = self.lower_expr(stmt.value)
 
 		# Phase 4 site-1 patch 6b-B: when throwing a new error from
 		# inside a catch arm, the currently-caught error needs release

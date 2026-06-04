@@ -2668,6 +2668,22 @@ def _build_rethrow_stmt(tree: Tree) -> RethrowStmt:
 	return RethrowStmt(loc=loc)
 
 
+def _module_path_to_value_expr(tree: Tree) -> Expr:
+    """Build a value expression (Name / Attr chain) from a `module_path` tree.
+
+    Used for bare-value throws (`throw e` -> Name('e');
+    `throw self.cached` -> Attr(Name('self'), 'cached')).  Segments are the
+    bare path tokens; DOT tokens are dropped (see `_PATH_SEG_TOKENS`).
+    """
+    segs = [c for c in tree.children if isinstance(c, Token) and c.type in _PATH_SEG_TOKENS]
+    if not segs:
+        raise ValueError("module_path has no segments")
+    expr: Expr = Name(loc=_loc_from_token(segs[0]), ident=segs[0].value)
+    for seg in segs[1:]:
+        expr = Attr(loc=_loc_from_token(seg), value=expr, attr=seg.value)
+    return expr
+
+
 def _build_raise_stmt(tree: Tree) -> RaiseStmt:
     loc = _loc(tree)
     children = [
@@ -2681,8 +2697,21 @@ def _build_raise_stmt(tree: Tree) -> RaiseStmt:
         domain = children[idx].children[0].value
         idx += 1
     value_node = children[idx]
-    if isinstance(value_node, Tree) and _name(value_node) == "exception_ctor":
+    node_name = _name(value_node) if isinstance(value_node, Tree) else None
+    if node_name in ("exc_ctor_event", "exc_ctor_path", "exception_ctor"):
+        # Inline constructor: `throw E(...)`, `throw mod.Type(...)`, or the
+        # declared-events FQN form `throw mod.path:Name(...)`.
         value = _build_exception_ctor(value_node)
+    elif node_name == "exc_bare_value":
+        # Bare value: `throw e` / `throw self.cached` — throw a
+        # previously-constructed exception value (move/consume in the checker).
+        mp = next(
+            (c for c in value_node.children if isinstance(c, Tree) and _name(c) == "module_path"),
+            None,
+        )
+        if mp is None:
+            raise ValueError("exc_bare_value missing module_path")
+        value = _module_path_to_value_expr(mp)
     else:
         value = _build_expr(value_node)
     return RaiseStmt(loc=loc, value=value, domain=domain)
@@ -3079,8 +3108,13 @@ def _build_expr(node) -> Expr:
         type_node = next(child for child in node.children if isinstance(child, Tree) and _name(child) == "type_expr")
         expr_node = next(child for child in node.children if isinstance(child, Tree) and _name(child) != "type_expr")
         return Cast(loc=_loc(node), target_type=_build_type_expr(type_node), expr=_build_expr(expr_node))
-    if name == "exception_ctor":
+    if name in ("exception_ctor", "exc_ctor_event", "exc_ctor_path"):
         return _build_exception_ctor(node)
+    if name == "exc_bare_value":
+        mp = next((c for c in node.children if isinstance(c, Tree) and _name(c) == "module_path"), None)
+        if mp is None:
+            raise ValueError("exc_bare_value missing module_path")
+        return _module_path_to_value_expr(mp)
     if name == "logic_and":
         return _fold_chain(node, "logic_and_tail")
     if name == "bit_or":
@@ -3671,10 +3705,15 @@ def _build_exception_ctor(tree: Tree) -> ExceptionCtor:
 	"""
 	name_tok = next((c for c in tree.children if isinstance(c, Token) and c.type == "NAME"), None)
 	event_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "event_fqn"), None)
-	if name_tok is None and event_node is None:
+	path_node = next((c for c in tree.children if isinstance(c, Tree) and _name(c) == "module_path"), None)
+	if name_tok is None and event_node is None and path_node is None:
 		raise ValueError("exception_ctor missing name")
 	if event_node is not None:
+		# Declared-events FQN: `mod.path:Name` (single-colon).
 		name = _fqn_from_tree(event_node)
+	elif path_node is not None:
+		# Ordinary path: unqualified `Name` or dotted `mod.Type`.
+		name = _fqn_from_tree(path_node)
 	else:
 		name = name_tok.value
 

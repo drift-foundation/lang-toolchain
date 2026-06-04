@@ -869,15 +869,28 @@ class AstToHIR:
 		return self.lower_expr(expr.value)
 
 	def _resolve_event_fqn(self, name: str) -> str:
-		if ":" not in name:
-			if not self._module_name:
-				raise NotImplementedError("exception/catch lowering requires a module name to build an event FQN")
-			return f"{self._module_name}:{name}"
-		mod, event = name.split(":", 1)
-		alias = self._module_aliases.get(mod)
-		if alias:
-			return f"{alias}:{event}"
-		return name
+		if ":" in name:
+			# Declared-events FQN form `mod.path:Name`.
+			mod, event = name.split(":", 1)
+			alias = self._module_aliases.get(mod)
+			if alias:
+				return f"{alias}:{event}"
+			return name
+		if "." in name:
+			# Dotted module-qualified constructor `mod.Type` (or `a.b.Type`):
+			# the segment(s) before the last `.` name a module (an import
+			# alias or a module path); the final segment is the event/type
+			# name.  Resolve the module part through import aliases so a
+			# cross-module `other.ModException(...)` maps to the real module's
+			# event FQN, and a same-module `repro.MyExc(...)` yields the same
+			# FQN as the unqualified `MyExc(...)`.
+			mod, _, event = name.rpartition(".")
+			alias = self._module_aliases.get(mod)
+			resolved_mod = alias if alias else mod
+			return f"{resolved_mod}:{event}"
+		if not self._module_name:
+			raise NotImplementedError("exception/catch lowering requires a module name to build an event FQN")
+		return f"{self._module_name}:{name}"
 
 	def _visit_expr_TryCatchExpr(self, expr: ast.TryCatchExpr) -> H.HExpr:
 		return self._lower_try_expr(expr, value_context=True)
@@ -1659,6 +1672,16 @@ class AstToHIR:
 	def _visit_stmt_ThrowStmt(self, stmt: ast.ThrowStmt) -> H.HStmt:
 		"""Lower throw statement to HThrow; semantics are implemented in later stages."""
 		value_h = self.lower_expr(stmt.value)
+		# `throw e` consumes the thrown value.  A bare local read is an
+		# IMPLICIT MOVE (matching `return e` / by-value-argument consume
+		# semantics), so the user does not have to write `throw move e`.
+		# Wrapping in HMove makes the move real in the HIR — value-position
+		# Copy checks see a move (not a copy), the borrow checker marks the
+		# local consumed, and lowering emits a move-out (zero-back) so the
+		# value is dropped exactly once.  Inline constructors (HExceptionInit)
+		# and other rvalues are already owned and need no wrapper.
+		if isinstance(value_h, H.HVar):
+			value_h = H.HMove(subject=value_h, loc=getattr(stmt, "loc", None) or Span())
 		return H.HThrow(value=value_h)
 
 	def _visit_stmt_RaiseStmt(self, stmt: ast.RaiseStmt) -> H.HStmt:
