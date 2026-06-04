@@ -967,6 +967,34 @@ fn handle(r: Result<Int, ServiceDown>) -> Int {
 
 `nothrow` is mutually exclusive with both `throws` forms.
 
+## Expression-form `try`: single expression, or an immediate lambda
+
+`try <expr> catch { ... }` is an **expression** whose attempt is a single
+expression — typically a call:
+
+```drift
+val x = try run() catch { 0 };
+```
+
+The attempt is intentionally **not** a statement block in v1: there is no
+`try { stmt; stmt; value } catch { ... }` expression form. When the throwing
+work needs several statements (locals, intermediate steps) and still has to
+produce a value in expression position, wrap it in an **immediately-invoked
+lambda** — captures, the success value, and the caught-failure value all work:
+
+```drift
+val x = try (|| => {
+    val a = work();      // may throw
+    a + 1                // trailing value (or `return a + 1;`)
+})() catch {
+    0
+};
+```
+
+This keeps the language surface small (no statement-scoped try attempt) while
+giving app code the full capability. Statement-form `try { ... } catch { ... }`
+(no value) is unchanged and still takes a block.
+
 ## Result to throwing flow
 
 `Result<T, E>` is a value-level error type. Throwing flow is better when the

@@ -3868,7 +3868,16 @@ class TypeChecker:
 				if isinstance(stmt, H.HLoop):
 					return block_can_throw(stmt.body)
 				if isinstance(stmt, H.HTry):
-					if block_can_throw(stmt.body):
+					# A catch-all arm (`catch _`/`catch unexpected`/bare `catch`,
+					# i.e. event_fqn is None) swallows any throw from the try body,
+					# so the body's throws do NOT propagate.  Only the catch arms'
+					# own bodies can still throw.  Without this, statement-form
+					# `try { f() } catch unexpected { }` was treated as may-throw
+					# while the equivalent expression-form `try f() catch { 0 }`
+					# (HTryExpr, above) was correctly cleared — the inconsistency
+					# bug that surfaced inside nothrow lambdas.
+					catch_all = any(arm.event_fqn is None for arm in stmt.catches)
+					if not catch_all and block_can_throw(stmt.body):
 						return True
 					return any(block_can_throw(arm.block) for arm in stmt.catches)
 				return False

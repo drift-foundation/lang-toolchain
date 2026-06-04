@@ -4419,7 +4419,11 @@ class HIRToMIR:
 			if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
 				return block_can_throw(stmt.block)
 			if isinstance(stmt, H.HTry):
-				if block_can_throw(stmt.body):
+				# A catch-all arm (event_fqn is None) swallows the try body's
+				# throws; only the catch arms' own bodies still throw.  Mirrors
+				# the HTryExpr handling above and the checker's _lambda_can_throw.
+				catch_all = any(arm.event_fqn is None for arm in stmt.catches)
+				if not catch_all and block_can_throw(stmt.body):
 					return True
 				return any(block_can_throw(arm.block) for arm in stmt.catches)
 			return False
