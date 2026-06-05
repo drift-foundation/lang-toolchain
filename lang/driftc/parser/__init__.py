@@ -1199,7 +1199,16 @@ def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 		line = getattr(err, "line", None)
 		col = getattr(err, "column", None)
 		loc = f" (line {line}, column {col})" if line is not None else ""
-		return f"expected ';' after statement{loc}; top-level statements like import, export, and const require a trailing semicolon (e.g. export {{ ... }};)"
+		return (
+			f"expected ';' after statement{loc}. Every statement ends with ';'. "
+			"Drift v1 has no implicit return: a bare tail expression — e.g. a "
+			"`match` at the end of a function body — is NOT a function return. To "
+			"return its value, write `return <expr>;` (e.g. `return match e { ... };`); "
+			"to use it, bind it with `val x = <expr>;`. A `match`/`try` expression "
+			"combined with operators needs parentheses or a binding "
+			"(e.g. `(match e { ... }) - 7`). (Top-level `import`/`export`/`const` "
+			"also need a trailing ';'.)"
+		)
 	return raw
 
 
