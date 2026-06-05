@@ -50,9 +50,36 @@
   (`return` is steered to `return match e { ... }`; `break`/`continue`/`rethrow`
   get the "use a statement-form `match`" remedy without the misleading
   `return match` suggestion). `return match e { ... }` and statement-form `match`
-  whose arms `return` keep working; `throw` is not control flow here and is not
-  banned. Regressions `test_match_expr_control_flow.py` +
+  whose arms `return` keep working. Regressions `test_match_expr_control_flow.py` +
   `test_match_expr_return_disallowed.py`.
+- **#6a expression-arm purity: inline `throw`/`rethrow` also banned.** Refining
+  #6 to the full v1 contract — a value-producing `match` arm computes a value; it
+  may not route control flow out via an inline `return`/`break`/`continue`/`throw`/
+  `rethrow` statement. Inline `throw`/`rethrow` are now flagged by the same
+  `_arm_control_flow_escape` scan (`E-MATCHEXPR-CONTROLFLOW`, or
+  `E_EXPR_BLOCK_MISSING_VALUE` when the statement leaves no trailing value).
+  Crucially, a **call that may throw** used *as* the arm's value stays allowed —
+  it is an ordinary expression with a declared throw effect (`HCall`), not an
+  inline `HThrow` statement — so normal can-throw analysis on calls is preserved.
+  The teachable rule: expression `match` computes a value (incl. throwing calls);
+  statement `match` performs control flow. Documented in `drift-lang-spec.md`
+  §10.4 and `effective-drift.md`; regressions added to
+  `test_match_expr_control_flow.py` (inline throw rejected, inline rethrow
+  rejected, throwing-call-as-arm-value allowed + exercises both arms at runtime).
+- **Stored lambda in a value-producing `match`-arm result typed `Unknown`**
+  (separate LANGUAGE_BUG, not part of the #1–#7 batch). A lambda bound to a local
+  inside an arm and called as the arm's trailing-result (`{ val g = || -> Int =>
+  { 7 }; g() }`) was typed `Unknown`, surfacing as a misleading `E-COPY-UNKNOWN`;
+  the same binding worked at top level / in an `if` / in an inner `val` / as an
+  IIFE. Cause: the callee `HVar` reached deferred-lambda resolution with
+  `binding_id=None` (only the trailing-result position is typed off the
+  bid-linked statement path), so the pending lambda was never resolved. Fix
+  (checker-only): resolve an unqualified, unbound callee variable by name through
+  the active lexical scopes before the pending-lambda lookup, matching the HVar
+  value path and preserving lexical shadowing / free-call behavior. Non-capturing
+  stored lambdas now compile and run in arms; capturing ones report the clear
+  "capturing lambdas cannot be coerced to function pointers" at parity with
+  top-level. Regression `test_stored_lambda_in_match_arm.py`.
 - **#7 a bare tail `match` is not an implicit function return.** Drift v1 has no
   implicit return: a bare tail expression at the end of a function body is a parse
   error. The old `E_EXPECTED_SEMICOLON` text led with "top-level statements like
