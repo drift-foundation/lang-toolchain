@@ -8549,6 +8549,22 @@ class TypeChecker:
 								)
 							expr._share_expr_diagnosed = True
 							return record_expr(expr, self._unknown)
+				if (
+					isinstance(expr.fn, H.HVar)
+					and expr.fn.binding_id is None
+					and getattr(expr.fn, "module_id", None) is None
+				):
+					# An arm trailing-result `g()` can reach here with its callee
+					# HVar not yet bid-linked to its lexical binding (the
+					# `val g = <lambda>` in the same arm), so the deferred-lambda
+					# resolution below would be skipped and the binding would stay
+					# typed `Unknown`.  Resolve by name from the active lexical
+					# scopes — the same lookup the HVar value-path uses.
+					for _scope in reversed(scope_bindings):
+						_cand = _scope.get(expr.fn.name)
+						if _cand is not None and binding_names.get(_cand) in (None, expr.fn.name):
+							expr.fn.binding_id = _cand
+							break
 				if isinstance(expr.fn, H.HVar) and expr.fn.binding_id is not None:
 					pending = pending_lambda_by_binding.get(expr.fn.binding_id)
 					if pending is not None:
