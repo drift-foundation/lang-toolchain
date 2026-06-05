@@ -19,12 +19,17 @@ Deliberately still rejected (clear diagnostics, not silent):
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+
+def _env_true(name: str) -> bool:
+	return os.environ.get(name, "").lower() in ("1", "true", "yes")
 
 from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 from lang.driftc.parser import stdlib_root
@@ -106,7 +111,22 @@ def test_bare_local_value_heap_field_leak_free(tmp_path: Path) -> None:
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="bare")
 	assert r.returncode == 0, r.stderr
 	binary = tmp_path / "bare"
+	# The plain run (under ASan in the sanitizer lanes) already pins
+	# leak-freeness via ASan's own exit-time leak check.
 	assert subprocess.run([str(binary)]).returncode == 0
+	# A sanitizer-instrumented binary CANNOT run under valgrind: ASan's
+	# shadow-memory range interleaves with valgrind's mappings and the
+	# process aborts at startup ("Shadow memory range interleaves with an
+	# existing memory mapping. ASan cannot proceed correctly. ABORTING."),
+	# returning non-zero before `main`.  The valgrind leak check below is for
+	# the normal / DRIFT_MEMCHECK lanes; the sanitizer lanes cover the same
+	# claim directly on the instrumented binary above.
+	if _env_true("DRIFT_ASAN") or _env_true("DRIFT_UBSAN"):
+		pytest.skip(
+			"sanitizer-instrumented binary cannot run under valgrind "
+			"(ASan shadow-memory interleave aborts at startup); the "
+			"normal / memcheck lanes pin leak-freeness via valgrind"
+		)
 	if shutil.which("valgrind") is None:
 		pytest.skip("valgrind not available")
 	vg = subprocess.run(
