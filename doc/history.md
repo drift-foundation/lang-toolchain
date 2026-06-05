@@ -1,5 +1,69 @@
 # Drift development history
 
+## 2026-06-04 (0.33.23: bookkeeper batch — throw value forms, stmt-form try effects, named variant construction, expression-arm control-flow, no-implicit-return diagnostics)
+- A batch of seven defects reported by the bookkeeper app team, worked
+  sequentially. No compiler/runtime boundary change in any of them — **ABI stays
+  15**; DRIFTC 0.33.22 → **0.33.23** (parser/checker/lowering + diagnostics only).
+- **#1 `throw` value forms.** `throw mod.Type(...)` (cross-module *qualified*
+  constructor) and `throw e;` (a bare local pub-error value, consumed by implicit
+  move) now compile; previously only the single unqualified-constructor form was
+  accepted. The grammar keeps the single-colon `event_fqn` form and adds aliased
+  alternatives for qualified-path and bare-value throws; a bare local is wrapped
+  in `HMove` at lowering. Throwing a *projected place* (`throw obj.field`) is
+  rejected with a clear "bind the exception value to a local first" diagnostic
+  (detection is robust to `place_canonicalize` rewriting `HVar`→`HPlaceExpr`)
+  rather than silently mis-lowering. Parser + checker + stage2, with a
+  cross-module e2e and a heap/valgrind regression on the bare-local path
+  (`test_throw_value_forms.py`).
+- **#2 expression-form `try { block } catch`** — classified **not supported in
+  v1**, not a deferred feature. The supported idiom is an immediate lambda:
+  `val x = try (|| => { ... })() catch { 0 };`. The partial block-form `try`
+  implementation was reverted/parked (its blast radius spanned both checker
+  modules, every stage1 pass, and stage2). Documented in `effective-drift.md`;
+  the idiom is pinned by `test_try_expr_immediate_lambda.py`.
+- **#3 nothrow lambda + statement-form `try`.** `try { f() } catch unexpected {}`
+  inside a nothrow lambda now correctly clears the throw-effect in *statement*
+  form (previously only the single-expression try form did), so the lambda type-
+  checks as nothrow. Fixed in both effect-analysis paths — `type_checker`'s
+  `_lambda_can_throw` and stage2's fallback — by treating a catch-all `HTry`
+  whose body's throws are all caught as non-throwing. Regression in the
+  `conc.spawn`/callback shape (`test_nothrow_lambda_stmt_try_effect.py`).
+- **#4 named variant construction.** `Variant::Ctor(field = value)` is now
+  supported additively, mirroring struct construction rules: named labels bind by
+  name (out-of-order allowed), each field exactly once, no duplicates, no mixing
+  positional and named. Positional construction is unchanged. Added the
+  previously-missing payload-field diagnostic (`E-QMEM-MISSING-FIELD`). The
+  orthogonal `E-CTOR-EXPECTED-TYPE` rule (an unqualified constructor needs
+  expected-type context) is unchanged and applies to positional too — a separate
+  intentional v1 limitation. Regression `test_named_variant_construction.py`.
+- **#5 `move row.field`** (move out of a projected place) — confirmed an
+  **intentional v1 limitation**; the existing diagnostic is retained, no code
+  change.
+- **#6 control flow in expression-`match` arms.** An arm with a trailing value
+  *and* an escaping `return`/`rethrow`/`break`/`continue` (e.g. `{ return v; 0 }`)
+  used to ICE at MIR lowering ("value-producing match arm … block terminates");
+  it is now rejected by the checker with the intentional `E-MATCHEXPR-CONTROLFLOW`.
+  The scan is recursive (catches a `return` nested in an `if` inside the arm) and
+  loop-target-aware: a `break`/`continue` inside the arm's *own* inner loop is
+  allowed, one targeting a loop enclosing the match is not; it also descends into
+  a nested statement-form match in the arm prelude. The message is form-specific
+  (`return` is steered to `return match e { ... }`; `break`/`continue`/`rethrow`
+  get the "use a statement-form `match`" remedy without the misleading
+  `return match` suggestion). `return match e { ... }` and statement-form `match`
+  whose arms `return` keep working; `throw` is not control flow here and is not
+  banned. Regressions `test_match_expr_control_flow.py` +
+  `test_match_expr_return_disallowed.py`.
+- **#7 a bare tail `match` is not an implicit function return.** Drift v1 has no
+  implicit return: a bare tail expression at the end of a function body is a parse
+  error. The old `E_EXPECTED_SEMICOLON` text led with "top-level statements like
+  import, export, const require a trailing semicolon", which mis-described the
+  common case (a tail `match`). The diagnostic now names the real rule — no
+  implicit return; a bare tail `match` is **not** a function return — and the
+  remedies: `return <expr>;`, `val x = <expr>;`, and parentheses-or-binding for a
+  `match`/`try` combined with operators (`(match e { ... }) - 7`). Diagnostic-only
+  change; `return match`, bind-then-return, and statement-form return arms all
+  compile and run. Regression `test_bare_tail_match_not_implicit_return.py`.
+
 ## 2026-06-02 (0.33.22: envelope divergence is a hard failure — same SCI + different artifact SHA fails closed)
 - **Policy:** when two visible `--package-root` candidates have the same
   `(package_id, version, source_content_id)` but **different `artifact_sha256`**,
