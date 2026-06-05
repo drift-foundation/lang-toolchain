@@ -47,4 +47,10 @@ fn main() nothrow -> Int { return 0; }
 	assert rc != 0
 	diags = payload.get("diagnostics", []) if isinstance(payload, dict) else []
 	assert any(d.get("code") == "E_EXPR_BLOCK_MISSING_VALUE" for d in diags), diags
-	assert any("return is not allowed in expression-form blocks" in str(d.get("message", "")) for d in diags), diags
+	# The message must clearly attribute the failure to a disallowed `return`
+	# in an expression-form block and point at the statement-form remedy.
+	assert any(
+		"is not allowed in an expression-form block" in str(d.get("message", ""))
+		and "statement form" in str(d.get("message", ""))
+		for d in diags
+	), diags

@@ -350,6 +350,75 @@ class TypeChecker:
 		schemas = getattr(self.type_table, "exception_schemas", {}) or {}
 		return f"{td.module_id}:{td.name}" in schemas
 
+	def _arm_control_flow_escape(self, block: "object", *, in_inner_loop: bool):
+		"""Find control flow in an expression-form match-arm prelude that would
+		reroute OUT of the value expression.  Returns ``(kind, span)`` for the
+		first offending statement, else ``None``.
+
+		`return` / `rethrow` exit the function / catch regardless of nesting, so
+		they are reported anywhere inside the arm (including inside an inner
+		`if` / `try` / block / loop).  `break` / `continue` target the nearest
+		enclosing loop, so they are reported only when NOT inside an inner loop
+		within the arm — a `break` inside an inner loop legitimately targets that
+		loop, not the enclosing context.
+		"""
+		if block is None:
+			return None
+		for s in getattr(block, "statements", []) or []:
+			if isinstance(s, H.HReturn):
+				return ("return", getattr(s, "loc", None))
+			if isinstance(s, H.HRethrow):
+				return ("rethrow", getattr(s, "loc", None))
+			if not in_inner_loop and isinstance(s, H.HBreak):
+				return ("break", getattr(s, "loc", None))
+			if not in_inner_loop and isinstance(s, H.HContinue):
+				return ("continue", getattr(s, "loc", None))
+			if isinstance(s, H.HIf):
+				r = self._arm_control_flow_escape(s.then_block, in_inner_loop=in_inner_loop)
+				if r is not None:
+					return r
+				r = self._arm_control_flow_escape(getattr(s, "else_block", None), in_inner_loop=in_inner_loop)
+				if r is not None:
+					return r
+			elif isinstance(s, H.HLoop):
+				# break/continue inside this loop target it — only return/rethrow escape.
+				r = self._arm_control_flow_escape(s.body, in_inner_loop=True)
+				if r is not None:
+					return r
+			elif isinstance(s, H.HBlock):
+				r = self._arm_control_flow_escape(s, in_inner_loop=in_inner_loop)
+				if r is not None:
+					return r
+			elif hasattr(H, "HUnsafeBlock") and isinstance(s, getattr(H, "HUnsafeBlock")):
+				r = self._arm_control_flow_escape(getattr(s, "block", None), in_inner_loop=in_inner_loop)
+				if r is not None:
+					return r
+			elif isinstance(s, H.HTry):
+				r = self._arm_control_flow_escape(s.body, in_inner_loop=in_inner_loop)
+				if r is not None:
+					return r
+				for _carm in getattr(s, "catches", []) or []:
+					r = self._arm_control_flow_escape(getattr(_carm, "block", None), in_inner_loop=in_inner_loop)
+					if r is not None:
+						return r
+			elif (
+				isinstance(s, H.HExprStmt)
+				and hasattr(H, "HMatchExpr")
+				and isinstance(getattr(s, "expr", None), getattr(H, "HMatchExpr"))
+			):
+				# A nested STATEMENT-form match (its value discarded) whose arm
+				# blocks may `return`/`rethrow` out of the enclosing function —
+				# that escapes the outer value arm just like an `if`.  A nested
+				# match is not a loop, so break/continue target-awareness is
+				# unchanged (same in_inner_loop).  Value-producing nested matches
+				# in `HLet`/the trailing result are checked as their own
+				# HMatchExpr; only the discarded-statement form is reachable here.
+				for _marm in getattr(s.expr, "arms", []) or []:
+					r = self._arm_control_flow_escape(getattr(_marm, "block", None), in_inner_loop=in_inner_loop)
+					if r is not None:
+						return r
+		return None
+
 	def _canonical_pub_error_fqn(self, event_fqn: str | None) -> str | None:
 		"""Resolve a typed-catch arm's event FQN through any
 		`pub type Alias = inner.PubError` chain to the underlying
@@ -7476,6 +7545,49 @@ class TypeChecker:
 				result_ty: TypeId | None = None
 
 				for idx, arm in enumerate(expr.arms):
+					# A value-producing match arm must not ALSO reroute control flow
+					# out of the value expression.  The contradiction "arm has a
+					# trailing value expression AND control flow that escapes the
+					# arm" is exactly the shape that ICE'd at MIR lowering
+					# ("value-producing match arm has a result expression but its
+					# block terminates").  Reject it here with a clear, intentional
+					# diagnostic.  Scan the WHOLE prelude recursively (not just the
+					# top level) so `{ if cond { return v; } 0 }` and nested
+					# try/if/block forms are caught too; `break`/`continue` inside an
+					# inner loop are excluded (they target that loop).  An arm that
+					# terminates without a trailing value (`arm.result is None`) is a
+					# legitimate statement-form arm (e.g. a bare-tail `match` whose
+					# arms each `return`) and is left alone.  `throw` is NOT control
+					# flow here: throwing from an arm is a legal terminating expr.
+					if getattr(arm, "result", None) is not None:
+						_escape = self._arm_control_flow_escape(getattr(arm, "block", None), in_inner_loop=False)
+						if _escape is not None:
+							_cf_kind, _cf_span = _escape
+							if _cf_kind == "return":
+								# `return match e { ... }` is a meaningful remedy only
+								# for `return`.
+								_cf_msg = (
+									"`return` is not allowed inside an expression-form `match` "
+									"arm (arms must produce a value); use a statement-form `match` "
+									"where each arm returns, or return the whole match "
+									"(`return match e { ... }`)"
+								)
+							else:
+								# rethrow / break / continue: name the form; the remedy is
+								# the statement-form match (not `return match`).
+								_cf_msg = (
+									f"`{_cf_kind}` is not allowed inside an expression-form `match` "
+									"arm — it would reroute control flow out of the value expression; "
+									"use a statement-form `match`"
+								)
+							diagnostics.append(
+								_tc_diag(
+									message=_cf_msg,
+									severity="error",
+									span=_cf_span if _cf_span is not None else getattr(arm, "loc", Span()),
+									code="E-MATCHEXPR-CONTROLFLOW",
+								)
+							)
 					if arm.ctor is None:
 						# default arm
 						if seen_default:

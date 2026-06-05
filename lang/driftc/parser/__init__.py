@@ -1172,7 +1172,13 @@ def _parse_error_message(err: UnexpectedInput, code: str | None) -> str:
 	if code == "E-TRAIT-PROP-VALUE-POS":
 		return "trait propositions are only allowed in require clauses or if guards"
 	if code == "E_EXPR_BLOCK_MISSING_VALUE":
-		return "expression block must end with a value expression; return is not allowed in expression-form blocks"
+		return (
+			"expression block must end with a value expression; `return` (and other "
+			"control flow) is not allowed in an expression-form block such as a "
+			"`match`/`try` arm or a lambda value body. Make the block's last line the "
+			"value, or use the statement form (e.g. statement-form `match` whose arms "
+			"`return`, or `return match e { ... }`)."
+		)
 	if code == "E_IF_NOT_AN_EXPRESSION":
 		return (
 			"`if` is a statement in Drift v1, not an expression — it cannot appear as "
