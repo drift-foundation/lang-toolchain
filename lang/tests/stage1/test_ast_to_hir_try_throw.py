@@ -7,7 +7,7 @@ AST→HIR lowering tests for try/throw.
 import pytest
 
 from lang.driftc.stage0 import ast
-from lang.driftc.stage1 import AstToHIR, HThrow, HTry, HBlock, HExprStmt, HVar, HCatchArm
+from lang.driftc.stage1 import AstToHIR, HThrow, HTry, HBlock, HExprStmt, HMove, HVar, HCatchArm
 
 
 def test_throw_stmt_to_hthrow():
@@ -15,8 +15,11 @@ def test_throw_stmt_to_hthrow():
 	stmt = ast.ThrowStmt(value=ast.Name("err"))
 	hir = l.lower_stmt(stmt)
 	assert isinstance(hir, HThrow)
-	assert isinstance(hir.value, HVar)
-	assert hir.value.name == "err"
+	# A bare-local throw (`throw err;`) consumes the value by implicit move:
+	# the lowered subject is wrapped in HMove(HVar), not a bare HVar.
+	assert isinstance(hir.value, HMove)
+	assert isinstance(hir.value.subject, HVar)
+	assert hir.value.subject.name == "err"
 
 
 def test_try_stmt_to_htry():
