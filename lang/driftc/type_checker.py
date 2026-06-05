@@ -355,18 +355,26 @@ class TypeChecker:
 		reroute OUT of the value expression.  Returns ``(kind, span)`` for the
 		first offending statement, else ``None``.
 
-		`return` / `rethrow` exit the function / catch regardless of nesting, so
-		they are reported anywhere inside the arm (including inside an inner
-		`if` / `try` / block / loop).  `break` / `continue` target the nearest
-		enclosing loop, so they are reported only when NOT inside an inner loop
-		within the arm — a `break` inside an inner loop legitimately targets that
-		loop, not the enclosing context.
+		`return` / `throw` / `rethrow` exit the function / catch regardless of
+		nesting, so they are reported anywhere inside the arm (including inside an
+		inner `if` / `try` / block / loop).  `break` / `continue` target the
+		nearest enclosing loop, so they are reported only when NOT inside an inner
+		loop within the arm — a `break` inside an inner loop legitimately targets
+		that loop, not the enclosing context.
+
+		Note this flags inline `throw` / `rethrow` STATEMENT nodes (`H.HThrow` /
+		`H.HRethrow`) only.  A call that merely *may* throw is an ordinary
+		expression with a declared throw effect; when it is the arm's value (or a
+		prelude expression statement) it is NOT an `H.HThrow` node and is left
+		alone, so normal can-throw analysis on calls is preserved.
 		"""
 		if block is None:
 			return None
 		for s in getattr(block, "statements", []) or []:
 			if isinstance(s, H.HReturn):
 				return ("return", getattr(s, "loc", None))
+			if isinstance(s, H.HThrow):
+				return ("throw", getattr(s, "loc", None))
 			if isinstance(s, H.HRethrow):
 				return ("rethrow", getattr(s, "loc", None))
 			if not in_inner_loop and isinstance(s, H.HBreak):
@@ -7557,8 +7565,10 @@ class TypeChecker:
 					# inner loop are excluded (they target that loop).  An arm that
 					# terminates without a trailing value (`arm.result is None`) is a
 					# legitimate statement-form arm (e.g. a bare-tail `match` whose
-					# arms each `return`) and is left alone.  `throw` is NOT control
-					# flow here: throwing from an arm is a legal terminating expr.
+					# arms each `return`) and is left alone.  Inline `throw`/`rethrow`
+					# STATEMENTS are control flow here and are banned; a throwing
+					# *call* used as the arm value is an ordinary expression (declared
+					# throw effect) and is NOT flagged — see _arm_control_flow_escape.
 					if getattr(arm, "result", None) is not None:
 						_escape = self._arm_control_flow_escape(getattr(arm, "block", None), in_inner_loop=False)
 						if _escape is not None:
@@ -7572,9 +7582,22 @@ class TypeChecker:
 									"where each arm returns, or return the whole match "
 									"(`return match e { ... }`)"
 								)
+							elif _cf_kind in ("throw", "rethrow"):
+								# An inline `throw`/`rethrow` statement reroutes out of the
+								# value expression.  A throwing *call* used as the arm's
+								# value is still fine (its throw effect propagates), so name
+								# that carve-out alongside the statement-form remedy.
+								_cf_msg = (
+									f"an inline `{_cf_kind}` statement is not allowed inside an "
+									"expression-form `match` arm (arms must produce a value); use "
+									"a statement-form `match`, or make the arm's value a call that "
+									"throws (e.g. `Err(e) => { fail(e) }`) — a throwing call is a "
+									"normal expression, but a bare `throw`/`rethrow` reroutes out "
+									"of the value expression"
+								)
 							else:
-								# rethrow / break / continue: name the form; the remedy is
-								# the statement-form match (not `return match`).
+								# break / continue: name the form; the remedy is the
+								# statement-form match (not `return match`).
 								_cf_msg = (
 									f"`{_cf_kind}` is not allowed inside an expression-form `match` "
 									"arm — it would reroute control flow out of the value expression; "

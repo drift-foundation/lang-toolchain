@@ -2676,6 +2676,63 @@ val s = match result {
 - **Expression form:** arm bodies are value blocks (a block with a final expression) and the match result is that final value.
 - **Statement form:** arm bodies are blocks only (no value); statement-form matches must not yield a value.
 
+**Control flow in expression-form arms.** A value-producing `match` is an
+expression, and each arm must *produce a value*: the arm block may contain
+ordinary setup statements, but its **final expression is the produced value**.
+An expression-form arm therefore may **not** reroute control flow out of the
+match with an inline `return`, `break`, `continue`, `throw`, or `rethrow`
+statement — doing so is a compile-time error (`E-MATCHEXPR-CONTROLFLOW`, or
+`E_EXPR_BLOCK_MISSING_VALUE` when the diverting statement leaves the block with
+no trailing value), because the arm would fail to yield the value the
+surrounding expression requires. This includes `throw`/`rethrow`: an inline
+`throw` is a *statement* that exits through the exception path, not a value, so
+it belongs in a statement context.
+
+Note the distinction for exceptions: a **call that may throw**, used *as* the
+arm's value, is perfectly fine — it is an ordinary expression with a declared
+throw effect, and its value type satisfies the arm. What is rejected is an
+inline `throw`/`rethrow` **statement**. (Throwing flow is tracked as an effect
+on expressions, not as a value-producing construct.)
+
+If an arm genuinely needs to `return`/`break`/`continue`/`throw`/`rethrow`, use
+the **statement form** of `match` (arm bodies are statement blocks that yield no
+value and may reroute freely). If the *whole* match value should be returned,
+write `return match e { ... }` — the `return` applies to the match expression as
+a whole, not from inside an arm.
+
+```drift
+// REJECTED — inline `return` reroutes out of a value-producing arm:
+val n = match r {
+    Ok(v)  => { if bad(v) { return 1; } 7 },   // E-MATCHEXPR-CONTROLFLOW
+    Err(_) => { 0 },
+};
+
+// REJECTED — inline `throw` is a statement, not a value:
+val n = match r {
+    Ok(v)  => { v },
+    Err(e) => { throw e; },                    // E_EXPR_BLOCK_MISSING_VALUE
+};                                             //   (E-MATCHEXPR-CONTROLFLOW if a
+                                               //   trailing value follows the throw)
+
+// OK — a throwing CALL is the arm's value (declared throw effect, propagates):
+val n = match r {
+    Ok(v)  => { v },
+    Err(e) => { fail(e) },                     // fail(e): Int throws
+};
+
+// OK — return the whole match:
+return match r {
+    Ok(v)  => { 7 },
+    Err(_) => { 0 },
+};
+
+// OK — statement form: arms reroute freely, match yields no value:
+match r {
+    Ok(v)  => { if bad(v) { return 1; } return 7; }
+    Err(e) => { throw e; }
+}
+```
+
 **Default arm**:
 
 - Non-exhaustive matches are allowed **only** if a `default` arm is present.

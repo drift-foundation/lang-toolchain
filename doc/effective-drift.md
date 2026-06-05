@@ -995,6 +995,80 @@ This keeps the language surface small (no statement-scoped try attempt) while
 giving app code the full capability. Statement-form `try { ... } catch { ... }`
 (no value) is unchanged and still takes a block.
 
+## Expression-form `match`: arms produce values, they don't reroute
+
+A value-producing `match` (`val x = match e { ... }`, or any `match` used in
+expression position) is an **expression**: every arm must produce a value, and
+that value is the arm block's trailing expression. An arm block may run ordinary
+setup statements first, but it may **not** `return`, `break`, `continue`,
+`throw`, or `rethrow` out of the match — the compiler rejects an inline
+control-flow statement (`E-MATCHEXPR-CONTROLFLOW`, or `E_EXPR_BLOCK_MISSING_VALUE`
+when the statement leaves the arm with no trailing value), because the arm would
+not yield the value the expression needs.
+
+The teachable rule: **expression `match` computes a value; statement `match`
+performs control flow.** Said differently — *value-producing expressions stay
+value-producing; statement control flow belongs in statement-form `match`.*
+
+The intuition is already visible in a plain binding, before `match` is even
+involved:
+
+```drift
+val x = may_throw();   // OK: the call has a success value to bind, even though it may throw
+val x = throw e;       // invalid: an inline `throw` has no value to bind
+```
+
+A `match` arm in expression position is exactly a binding site for that arm's
+value, so the same rule applies. Inline `throw`/`rethrow` are statements with no
+value — but a **call that may throw** is an *expression* with a declared throw
+effect, so using it *as* an arm's value is fine:
+
+```drift
+// OK — a throwing call is the arm's value (its throw effect propagates):
+val x = match r {
+    Ok(v)  => { may_throw(v) },   // expression with a throw effect — allowed
+    Err(_) => { fallback() },
+};
+
+// REJECTED — an inline `throw` STATEMENT does not produce a value:
+val x = match r {
+    Ok(v)  => { v },
+    Err(e) => { throw e; },       // rejected: arm has no value to contribute
+};
+```
+
+When an arm needs to reroute, pick the form that matches your intent:
+
+```drift
+// Return the whole match value — `return` wraps the expression:
+return match status {
+    Ok(v)  => { v },
+    Err(_) => { 0 },
+};
+
+// Need per-arm return/break/continue/throw? Use statement-form match (no value):
+match status {
+    Ok(v)  => { if invalid(v) { return 1; } sink(v); }
+    Err(e) => { throw e; }
+}
+```
+
+A common shape that trips the rule is an early-exit *assertion* inside a
+value-producing arm. Don't `return` from the arm — record a status into a local
+and act on it after the match, so the arm still produces its value:
+
+```drift
+var arm_status = 0;
+val n = match r {
+    Payload(v) => {
+        if not_yet_ready(v) { arm_status = 1; }   // not `return 1;`
+        7                                          // arm still yields a value
+    },
+    default => { 0 },
+};
+if arm_status != 0 { return arm_status; }
+```
+
 ## Result to throwing flow
 
 `Result<T, E>` is a value-level error type. Throwing flow is better when the

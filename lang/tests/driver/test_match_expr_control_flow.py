@@ -11,7 +11,13 @@ Two layers:
     rejected by the checker with the intentional E-MATCHEXPR-CONTROLFLOW.
 
 Must keep working: `return match e { ... }`, and statement-form `match` whose
-arms `return`.  `throw` is NOT control flow here and is not banned by the check.
+arms `return`.
+
+An inline `throw` / `rethrow` STATEMENT in a value-producing arm is also banned
+(it reroutes out of the value expression, same as `return`).  A call that merely
+*may* throw, used AS the arm's value, is an ordinary expression with a declared
+throw effect and is NOT banned — that distinction (HThrow statement vs. throwing
+call expression) is the whole point of the rule.
 """
 
 from __future__ import annotations
@@ -154,3 +160,64 @@ def test_nested_statement_match_without_escape_compiles(tmp_path: Path) -> None:
 	r = _compile(tmp_path, src, out="nestok")
 	assert r.returncode == 0, r.stderr
 	assert subprocess.run([str(tmp_path / "nestok")]).returncode == 0
+
+
+def test_inline_throw_statement_in_value_arm_rejected(tmp_path: Path) -> None:
+	# An inline `throw` STATEMENT (with a trailing value, so the arm is
+	# value-producing) reroutes out of the value expression — banned, same as
+	# `return`.  The message names `throw` and must NOT suggest `return match`.
+	src = _HDR + (
+		"pub error Bad { code: Int }\n"
+		"fn f(e: E) -> Int {\n"
+		"\tval x = match e { E::A(v) => { throw Bad(code = v); 0 }, E::B(v) => { v } };\n"
+		"\treturn x;\n}\n"
+		"fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
+	)
+	r = _compile(tmp_path, src, out="ithrow")
+	assert r.returncode != 0
+	assert "E-MATCHEXPR-CONTROLFLOW" in r.stderr and "throw" in r.stderr, r.stderr
+	assert "return match" not in r.stderr, "throw message must not suggest `return match`"
+
+
+def test_inline_rethrow_statement_in_value_arm_rejected(tmp_path: Path) -> None:
+	# Inline `rethrow` in a value-producing arm is likewise banned.  `rethrow`
+	# is only valid inside a catch handler, so the value-producing match sits in
+	# a (single-expression) `try ... catch` arm.
+	src = _HDR + (
+		"pub error Bad { code: Int }\n"
+		"fn risky() -> Int { throw Bad(code = 1); }\n"
+		"fn f(e: E) -> Int {\n"
+		"\tval x = try risky() catch { match e { E::A(v) => { rethrow; 0 }, E::B(v) => { v } } };\n"
+		"\treturn x;\n}\n"
+		"fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
+	)
+	r = _compile(tmp_path, src, out="irethrow")
+	assert r.returncode != 0
+	assert "E-MATCHEXPR-CONTROLFLOW" in r.stderr and "rethrow" in r.stderr, r.stderr
+
+
+def test_throwing_call_as_arm_value_allowed(tmp_path: Path) -> None:
+	# A call that may throw, used AS the arm's value, is a normal expression
+	# with a declared throw effect — NOT banned.  (Contrast with an inline
+	# `throw` statement above.)  Exercise BOTH arms at runtime so we actually
+	# prove the carve-out: the throwing arm's effect propagates out of the
+	# value-producing match and is caught by the caller, while the non-throwing
+	# arm produces its value normally.
+	src = _HDR + (
+		"pub error Bad { code: Int }\n"
+		"fn fail(e: Int) -> Int { throw Bad(code = e); }\n"
+		"fn f(e: E) -> Int { val x = match e { E::A(v) => { fail(v) }, E::B(v) => { v } }; return x; }\n"
+		"fn main() nothrow -> Int {\n"
+		# A-arm: fail(7) throws -> the throw propagates out of the match and out
+		# of f -> caught here as 100.  If the arm did NOT throw/propagate, `thrown`
+		# would be 7 and the test fails (rc=1).
+		"\tval thrown = try f(E::A(7)) catch { 100 };\n"
+		# B-arm: non-throwing arm yields its value (9), catch not taken.
+		"\tval normal = try f(E::B(9)) catch { 200 };\n"
+		"\tif thrown != 100 { return 1; }\n"
+		"\tif normal != 9 { return 2; }\n"
+		"\treturn 0;\n}\n"
+	)
+	r = _compile(tmp_path, src, out="tcall")
+	assert r.returncode == 0, r.stderr
+	assert subprocess.run([str(tmp_path / "tcall")]).returncode == 0

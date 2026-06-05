@@ -2039,6 +2039,18 @@ class Checker:
 								)
 							return expected_ret if expected_ret is not None else body_ty
 					if expected_ret is not None:
+						# NOTE: a throw-only lambda body (`|| -> T => { throw e; }`)
+						# cannot fall through and ought to satisfy the explicit return
+						# type, the same way a named `fn f() -> T { throw e; }` does.
+						# The checker side is a ~4-line reuse of `Checker._is_terminal_block`
+						# here, BUT codegen does not lower divergent lambda bodies
+						# uniformly: only a flat direct-trailing-throw lowers correctly;
+						# an `if` in the body produces a malformed value type and a
+						# nested-block throw mislowers to a runtime abort.  Closing this
+						# requires lambda-lowering work, so it is tracked as a follow-up
+						# rather than admitting bodies codegen would miscompile (a
+						# checker-only change here turns a clean rejection into a compile
+						# error or a runtime abort for the non-flat shapes).
 						self._append_diag(
 							_chk_diag(
 								message="lambda with explicit return type must return a value",

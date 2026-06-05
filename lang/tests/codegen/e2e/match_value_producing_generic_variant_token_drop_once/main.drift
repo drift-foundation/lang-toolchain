@@ -42,13 +42,20 @@ fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
 		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));
+		// `match` is value-producing here, so its arms may not route
+		// control flow out of the function (post-#6 / E-MATCHEXPR-CONTROLFLOW).
+		// Record the in-arm liveness check into a non-escaping status flag and
+		// report it AFTER the match — the check still runs inside the arm
+		// (before the binder `v` drops), preserving the timing this pins.
+		var arm_status: Int = 0;
 		val n: Int = match r {
 			core.Result::Ok(v) => {
-				if sess.drops != 0 { return 1; }
+				if sess.drops != 0 { arm_status = 1; }
 				7
 			},
 			core.Result::Err(_) => { 0 },
 		};
+		if arm_status != 0 { return arm_status; }
 		if n != 7 { return 2; }
 		// Arm binder `v` dropped at arm end → sess.drops == 1.
 		if sess.drops != 1 { return 3; }
