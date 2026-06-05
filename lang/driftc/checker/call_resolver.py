@@ -1403,6 +1403,21 @@ def resolve_variant_ctor(
 					)
 				)
 				return None
+			if issue.code == "E_CTOR_MISSING_FIELDS":
+				# Mirror the struct-ctor missing-field diagnostic so a named
+				# variant construction missing a payload reports the payload
+				# name(s) clearly, instead of falling through to the internal
+				# "CallInfo param layout mismatch (checker bug)" guard.
+				_missing_names = [n.removeprefix("field=") for n in issue.notes]
+				_first_kw = kw_pairs[0] if kw_pairs else None
+				ctx.diagnostics.append(
+					ctx.tc_diag(
+						message=f"E-QMEM-MISSING-FIELD: missing payload field(s) for '{qm.member}': {', '.join(_missing_names)}",
+						severity="error",
+						span=getattr(_first_kw, "loc", Span()) if _first_kw else getattr(qm, "loc", Span()),
+					)
+				)
+				return None
 		field_indices = {f.name: idx for idx, f in enumerate(arm_schema.fields)}
 		ordered_args: list[object] = []
 		for kw in kw_pairs:
