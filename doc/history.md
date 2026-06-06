@@ -1,5 +1,43 @@
 # Drift development history
 
+## 2026-06-05 (0.33.24: fix ICE on `throw` of an inline qualified ctor with a nested cross-package qualified ctor)
+- **Bug (app-team report, 0.33.23):** across a package boundary,
+  `throw a.E(kind = a.K::Bad(detail = "x"))` ICE'd with
+  `internal: missing CallInfo for callsite_id ...`.  The bare-local path
+  (`val e = a.E(...); throw e;`) and the same-program (whole-workspace) compile
+  both worked; only the inline-constructor-in-`throw` shape, consumed across a
+  published-package boundary, failed.
+- **Root cause — a parallel-AST-node walker omission.** Source `throw ...`
+  parses to `parser_ast.RaiseStmt` (the live parser node); the separate
+  `parser_ast.ThrowStmt` parser node is **not** produced for this syntax
+  (`_convert_raise` later lowers `RaiseStmt` to the *stage0* node `s0.ThrowStmt`).
+  The workspace alias walker `_resolve_types_in_block` dispatched only the
+  unused `parser_ast.ThrowStmt`, so a `throw` operand was never traversed for
+  import-alias canonicalization.  A nested qualified
+  constructor in the operand (e.g. `a.K::Bad(...)`) therefore reached HIR with
+  the **raw import alias** on its `base_type_expr` (`module_id=None`,
+  `module_alias='a'`).  Cross-package `resolve_qualified_member_call` then
+  resolved the base via the alias `a` (not the real module `a_pkg`), got a
+  `FORWARD_NOMINAL` (not `VARIANT`), returned `None`, and so never recorded a
+  `CallInfo` for the (valid) `callsite_id` — which the strict post-typecheck
+  validator correctly flagged as an internal error.  (`callsite_id=0` is a valid
+  id, not a sentinel; the defect was the missing `CallInfo`, not the id.)
+- **Fix (one branch, parser only).** `_resolve_types_in_block` now traverses
+  `RaiseStmt.value` through `_resolve_types_in_expr`, adjacent to the existing
+  `ThrowStmt` handling.  The existing `ExceptionCtor → kw.value → Call →
+  QualifiedMember` recursion then canonicalizes `a.K` → `module_id='a_pkg'`
+  before HIR lowering, so the nested ctor resolves and records its `CallInfo`
+  like any other expression slot.  **No changes** to call_resolver, type_checker,
+  lowering, or the validator — the validator stays strict.
+- **Not variant-ctor-specific:** a nested *normal* function call in a throw field
+  (`tag = a.make_tag()`) is canonicalized by the same fix.
+- No ABI/format change (**ABI stays 15**); parser-walker fix, DRIFTC
+  0.33.23 → **0.33.24**.  Regressions: `test_throw_inline_ctor_nested_call_pkg.py`
+  (package emit→consume: inline nested qualified ctor, nested normal fn call,
+  bind-first control) and `test_throw_raise_stmt_alias_canonicalization.py` (a
+  fast, signing-free workspace pin asserting the `RaiseStmt`-operand qualified
+  type is alias-canonicalized — fails if the walker branch is removed).
+
 ## 2026-06-04 (0.33.23: bookkeeper batch — throw value forms, stmt-form try effects, named variant construction, expression-arm control-flow, no-implicit-return diagnostics)
 - A batch of seven defects reported by the bookkeeper app team, worked
   sequentially. No compiler/runtime boundary change in any of them — **ABI stays

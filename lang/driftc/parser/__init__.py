@@ -4049,6 +4049,16 @@ def parse_drift_workspace_to_hir(
 					_resolve_types_in_expr(st.step.target)
 					_resolve_types_in_expr(st.step.value)
 				_resolve_types_in_block(path, file_aliases, st.body)
+			if isinstance(st, parser_ast.RaiseStmt):
+				# Source `throw ...` parses to a `parser_ast.RaiseStmt`; the
+				# separate `parser_ast.ThrowStmt` node is not produced for this
+				# syntax (`_convert_raise` later lowers RaiseStmt to the stage0
+				# `s0.ThrowStmt`).  Without this branch the throw operand never gets
+				# alias-canonicalized, so a nested qualified type inside it (e.g.
+				# `throw E(kind = a.K::Bad(...))`) reaches HIR with the import alias
+				# un-resolved on its base_type_expr, and cross-package constructor
+				# resolution fails (missing-CallInfo ICE).
+				_resolve_types_in_expr(st.value)
 			if isinstance(st, parser_ast.ThrowStmt):
 				_resolve_types_in_expr(st.expr)
 
