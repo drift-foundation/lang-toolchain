@@ -74,7 +74,7 @@ fn run_bench() -> Int {
 		cs.read(&mut rbuf, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-32)); });
 		mi = mi + 1;
 	}
-	val elapsed = time.elapsed_ms(&t0);
+	val elapsed = time.elapsed_micros(&t0) / 1000;
 	console.eprintln("[bench] vt_loopback " + format.format_int(ITERS) + " iters " + format.format_int(elapsed) + " ms");
 	val _ = cs.close(io_t);
 	val sr = server.join().on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(51)); });

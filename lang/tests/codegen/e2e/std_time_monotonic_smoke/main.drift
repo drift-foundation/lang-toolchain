@@ -4,13 +4,13 @@ import std.time as time;
 
 fn run() -> Int {
 	val start = time.now_monotonic();
-	val dt = time.elapsed_ms(&start);
+	val dt = time.elapsed_micros(&start);
 	if dt < 0 {
 		return 1;
 	}
 	val t0 = time.now_utc();
 	val t1 = time.now_utc();
-	val d = time.duration_ms_between(&t0, &t1);
+	val d = time.duration_micros_between(&t0, &t1);
 	if d < 0 {
 		return 2;
 	}

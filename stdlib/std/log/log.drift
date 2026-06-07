@@ -97,8 +97,9 @@ pub struct StdErrSink {
 
 /// Formatter selection for the logger's output encoding.
 ///
-/// `JsonIso8601` — line-delimited JSON with ISO-8601 timestamps; the
-/// default and the only fully-supported format today.  `Custom(name)`
+/// `JsonIso8601` — line-delimited JSON with ISO-8601 UTC timestamps
+/// carrying exactly six fractional digits; the default and the only
+/// fully-supported format today.  `Custom(name)`
 /// — reserved for future pluggable formatters; `name` identifies the
 /// implementation by tag.
 ///
@@ -171,7 +172,8 @@ pub trait Formatter {
 /// Single log record handed to a `Sink` (and optionally a
 /// `Formatter`).
 ///
-/// `tm` is the ISO-8601 timestamp; `ev` is the event name; `level`
+/// `tm` is the ISO-8601 UTC timestamp with six fractional digits;
+/// `ev` is the event name; `level`
 /// is the severity; `logger` is the logger's name; `vtid` and `tid`
 /// are virtual-thread and OS-thread identifiers; `attrs_count`
 /// reports the number of attribute key/value pairs in the record's

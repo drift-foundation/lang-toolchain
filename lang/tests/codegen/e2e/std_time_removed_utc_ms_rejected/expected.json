@@ -1,0 +1,11 @@
+{
+  "description": "ABI 16: removed millisecond UTC intrinsic is rejected",
+  "diagnostics": [
+    {
+      "message_contains": "now_utc_ms",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

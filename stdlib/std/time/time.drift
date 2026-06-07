@@ -4,6 +4,11 @@ import std.core as core;
 import std.format as format;
 import lang.thread as thread;
 
+/// Microsecond timestamps and durations require a 64-bit target.
+///
+/// `UtcTimestamp` stores signed Unix-epoch microseconds in `Int`; the
+/// compiler rejects `std.time` on 32-bit targets rather than silently
+/// truncating the representation.
 export {
 	Instant,
 	UtcTimestamp,
@@ -11,8 +16,8 @@ export {
 	TimeParseError,
 	now_monotonic,
 	now_utc,
-	elapsed_ms,
-	duration_ms_between,
+	elapsed_micros,
+	duration_micros_between,
 	format_iso8601_utc,
 	parse_iso8601_utc,
 	is_leap_year,
@@ -22,31 +27,32 @@ export {
 	parse_iso8601_date,
 	utc_unix_seconds,
 	utc_unix_seconds_now,
-	utc_unix_millis
+	utc_unix_micros,
+	utc_from_unix_micros
 };
 
 /// Opaque monotonic point in time, suitable for measuring durations.
 ///
 /// `Instant` values are not comparable to wall-clock time; use them
-/// only to measure elapsed time between two points (`elapsed_ms`).
+/// only to measure elapsed time between two points (`elapsed_micros`).
 /// Construct via `now_monotonic()`.
 ///
-/// **See also:** `now_monotonic`, `elapsed_ms`, `UtcTimestamp`.
+/// **See also:** `now_monotonic`, `elapsed_micros`, `UtcTimestamp`.
 pub struct Instant {
-	ticks_ms: Int
+	ticks_us: Int
 }
 
-/// Wall-clock UTC timestamp expressed as Unix-epoch milliseconds.
+/// Wall-clock UTC timestamp expressed as Unix-epoch microseconds.
 ///
 /// Construct via `now_utc()` or `parse_iso8601_utc(s)`.  Project to
-/// seconds with `utc_unix_seconds(ts)`, to milliseconds with
-/// `utc_unix_millis(ts)`, or to ISO-8601 string form with
+/// seconds with `utc_unix_seconds(ts)`, to microseconds with
+/// `utc_unix_micros(ts)`, or to ISO-8601 string form with
 /// `format_iso8601_utc(ts)`.
 ///
 /// **See also:** `now_utc`, `format_iso8601_utc`, `parse_iso8601_utc`,
 /// `Instant`.
 pub struct UtcTimestamp {
-	epoch_ms: Int
+	epoch_us: Int
 }
 
 /// Calendar date (year/month/day in proleptic Gregorian).
@@ -84,93 +90,98 @@ pub error TimeParseError {
 /// Returns an `Instant` capturing the current monotonic clock
 /// reading.
 ///
-/// Suitable for `elapsed_ms` measurements.  The returned value has
+/// Suitable for `elapsed_micros` measurements.  The returned value has
 /// no relationship to wall-clock time.
 ///
-/// **See also:** `elapsed_ms`, `now_utc`.
+/// **See also:** `elapsed_micros`, `now_utc`.
 pub fn now_monotonic() nothrow -> Instant {
-	return Instant(ticks_ms = thread.now_ms());
+	return Instant(ticks_us = thread.now_us());
 }
 
-/// Returns the number of milliseconds elapsed since `start`.
+/// Returns the number of microseconds elapsed since `start`.
 ///
 /// Clamps to `0` if the monotonic clock appears to have gone
 /// backward (which should not happen but is defended against).
 ///
 /// **See also:** `now_monotonic`.
-pub fn elapsed_ms(start: &Instant) nothrow -> Int {
-	val now = thread.now_ms();
-	if now < start.ticks_ms {
+pub fn elapsed_micros(start: &Instant) nothrow -> Int {
+	val now = thread.now_us();
+	if now < start.ticks_us {
 		return 0;
 	}
-	return now - start.ticks_ms;
+	return now - start.ticks_us;
 }
 
 /// Returns the current wall-clock UTC time.
 ///
 /// Subject to system-clock adjustments; do not use for elapsed
-/// measurements (use `now_monotonic` + `elapsed_ms` instead).
+/// measurements (use `now_monotonic` + `elapsed_micros` instead).
 ///
 /// **See also:** `UtcTimestamp`, `format_iso8601_utc`,
 /// `now_monotonic`.
 pub fn now_utc() nothrow -> UtcTimestamp {
-	return UtcTimestamp(epoch_ms = thread.now_utc_ms());
+	return UtcTimestamp(epoch_us = thread.now_utc_us());
 }
 
-/// Returns `b - a` in milliseconds.
+/// Returns `b - a` in microseconds.
 ///
 /// Negative when `b` precedes `a`.  Wraps on overflow per `Int`
 /// semantics.
-pub fn duration_ms_between(a: &UtcTimestamp, b: &UtcTimestamp) nothrow -> Int {
-	return b.epoch_ms - a.epoch_ms;
+pub fn duration_micros_between(a: &UtcTimestamp, b: &UtcTimestamp) nothrow -> Int {
+	return b.epoch_us - a.epoch_us;
 }
 
 /// Returns the timestamp's Unix-epoch seconds (truncating
-/// milliseconds).
+/// microseconds).
 pub fn utc_unix_seconds(ts: &UtcTimestamp) nothrow -> Int {
-	return ts.epoch_ms / 1000;
+	return ts.epoch_us / 1000000;
 }
 
 /// Convenience for `utc_unix_seconds(now_utc())` — current Unix-epoch
 /// seconds.
 pub fn utc_unix_seconds_now() nothrow -> Int {
-	return thread.now_utc_ms() / 1000;
+	return thread.now_utc_us() / 1000000;
 }
 
-/// Returns the timestamp's Unix-epoch milliseconds.
-pub fn utc_unix_millis(ts: &UtcTimestamp) nothrow -> Int {
-	return ts.epoch_ms;
+/// Returns the timestamp's signed Unix-epoch microseconds.
+pub fn utc_unix_micros(ts: &UtcTimestamp) nothrow -> Int {
+	return ts.epoch_us;
 }
 
-/// Formats `ts` as an ISO-8601 UTC string with millisecond
-/// precision, e.g. `"2026-04-16T12:34:56.789Z"`.
+/// Constructs a timestamp from signed Unix-epoch microseconds.
+pub fn utc_from_unix_micros(micros: Int) nothrow -> UtcTimestamp {
+	return UtcTimestamp(epoch_us = micros);
+}
+
+/// Formats `ts` as an ISO-8601 UTC string with microsecond
+/// precision, e.g. `"2026-04-16T12:34:56.123456Z"`.
 ///
-/// Invariant inverse with `parse_iso8601_utc` for any timestamp
-/// representable in `Int`-millisecond range.
+/// Invariant inverse with `parse_iso8601_utc` when the UTC year is
+/// representable by the parser's four-digit year form.
 ///
 /// **See also:** `parse_iso8601_utc`, `format_iso8601_date`.
 pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
-	val day_ms = 86400000;
-	val sec_ms = 1000;
-	var days = _floor_div(ts.epoch_ms, day_ms);
-	var rem_ms = _floor_mod(ts.epoch_ms, day_ms);
-	if rem_ms < 0 {
+	val day_us = 86400000000;
+	val sec_us = 1000000;
+	var days = _floor_div(ts.epoch_us, day_us);
+	var rem_us = _floor_mod(ts.epoch_us, day_us);
+	if rem_us < 0 {
 		days = days - 1;
-		rem_ms = rem_ms + day_ms;
+		rem_us = rem_us + day_us;
 	}
-	val sec_of_day = rem_ms / sec_ms;
-	val millis = rem_ms % sec_ms;
+	val sec_of_day = rem_us / sec_us;
+	val micros = rem_us % sec_us;
 	val hour = sec_of_day / 3600;
 	val minute = (sec_of_day % 3600) / 60;
 	val second = sec_of_day % 60;
 	val date = _civil_from_days(days);
-	return _pad4(date.year) + "-" + _pad2(date.month) + "-" + _pad2(date.day) + "T" + _pad2(hour) + ":" + _pad2(minute) + ":" + _pad2(second) + "." + _pad3(millis) + "Z";
+	return _pad4(date.year) + "-" + _pad2(date.month) + "-" + _pad2(date.day) + "T" + _pad2(hour) + ":" + _pad2(minute) + ":" + _pad2(second) + "." + _pad6(micros) + "Z";
 }
 
 /// Parses an ISO-8601 UTC string into a `UtcTimestamp`.
 ///
 /// Accepts shapes like `"2026-04-16T12:34:56Z"` or
-/// `"2026-04-16T12:34:56.789Z"`.  Rejects non-UTC offsets, mixed
+/// `"2026-04-16T12:34:56.123456Z"`.  Rejects non-UTC offsets, mixed
 /// timezone designators, and out-of-range fields.
 ///
 /// **Returns:** `Ok(UtcTimestamp)` on a valid input;
@@ -191,7 +202,7 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 			return _err("unsupported-offset", n - 5);
 		}
 	}
-	if n != 20 and n != 24 {
+	if n != 20 and n != 27 {
 		return _err("invalid-syntax", 0);
 	}
 	if core.string_byte_at(&s, 4) != cast<Byte>(45) { return _err("invalid-syntax", 4); }
@@ -200,17 +211,17 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 	if core.string_byte_at(&s, 13) != cast<Byte>(58) { return _err("invalid-syntax", 13); }
 	if core.string_byte_at(&s, 16) != cast<Byte>(58) { return _err("invalid-syntax", 16); }
 	var tz_idx = 19;
-	var millis = 0;
-	if n == 24 {
+	var micros = 0;
+	if n == 27 {
 		if core.string_byte_at(&s, 19) != cast<Byte>(46) {
 			return _err("invalid-syntax", 19);
 		}
-		val ms_v = _parse_fixed_digits(&s, 20, 3);
-		if ms_v < 0 {
+		val us_v = _parse_fixed_digits(&s, 20, 6);
+		if us_v < 0 {
 			return _err("invalid-syntax", 20);
 		}
-		millis = ms_v;
-		tz_idx = 23;
+		micros = us_v;
+		tz_idx = 26;
 	}
 	if tz_idx >= n {
 		return _err("invalid-utc-designator", -1);
@@ -252,8 +263,8 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 	}
 	val days = _days_from_civil(year, month, day);
 	val sec_of_day = hour * 3600 + minute * 60 + second;
-	val epoch_ms = days * 86400000 + sec_of_day * 1000 + millis;
-	return core.Result::Ok(UtcTimestamp(epoch_ms = epoch_ms));
+	val epoch_us = days * 86400000000 + sec_of_day * 1000000 + micros;
+	return core.Result::Ok(UtcTimestamp(epoch_us = epoch_us));
 }
 
 /// Returns `true` if `year` is a leap year in the proleptic
@@ -454,13 +465,12 @@ fn _pad2(v: Int) nothrow -> String {
 	return format.format_int(v);
 }
 
-fn _pad3(v: Int) nothrow -> String {
-	if v < 10 {
-		return "00" + format.format_int(v);
-	}
-	if v < 100 {
-		return "0" + format.format_int(v);
-	}
+fn _pad6(v: Int) nothrow -> String {
+	if v < 10 { return "00000" + format.format_int(v); }
+	if v < 100 { return "0000" + format.format_int(v); }
+	if v < 1000 { return "000" + format.format_int(v); }
+	if v < 10000 { return "00" + format.format_int(v); }
+	if v < 100000 { return "0" + format.format_int(v); }
 	return format.format_int(v);
 }
 

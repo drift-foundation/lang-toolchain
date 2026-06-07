@@ -9,9 +9,11 @@ Verify that:
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from lang.driftc.driftc_versions import DRIFT_RT_ABI_VERSION
@@ -237,6 +239,170 @@ def test_ir_declares_env_runtime_helpers(tmp_path: Path) -> None:
 	assert ir
 	assert "declare %DriftString @drift_env_get(%DriftString)" in ir, "drift_env_get runtime helper declaration missing from IR"
 	assert "declare i64 @drift_env_has(%DriftString)" in ir, "drift_env_has runtime helper declaration missing from IR"
+
+
+def test_ir_declares_microsecond_time_runtime_helpers(tmp_path: Path) -> None:
+	"""ABI 16 exposes true microsecond monotonic and UTC clock helpers."""
+	(tmp_path / "main.drift").write_text(
+		"module std.time.test_microsecond_ir;\n\n"
+		"import lang.thread as thread;\n\n"
+		"fn main() nothrow -> Int {\n"
+		"\tval mono = thread.now_us();\n"
+		"\tval utc = thread.now_utc_us();\n"
+		"\tif mono < 0 or utc < 0 { return 1; }\n"
+		"\treturn 0;\n"
+		"}\n"
+	)
+	module_packages: dict = {}
+	mk_module(module_packages, "std.time.test_microsecond_ir", "std")
+	modules, type_table, exception_catalog, module_exports, module_deps, diags = parse_drift_workspace_to_hir(
+		[tmp_path / "main.drift"],
+		module_paths=[tmp_path],
+		external_module_packages=module_packages,
+		package_id="std",
+		stdlib_root=stdlib_root(),
+		test_build_only=True,
+	)
+	assert not diags
+	func_hirs, signatures, _fn_ids_by_name = flatten_modules(modules)
+	from lang.driftc.core.function_id import function_symbol
+	main_ids = [fn_id for fn_id in signatures if fn_id.name == "main" and not signatures[fn_id].is_method]
+	assert main_ids
+	ir, checked = compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exception_catalog,
+		entry=function_symbol(main_ids[0]),
+		type_table=type_table,
+		module_exports=module_exports,
+		module_deps=module_deps,
+		enforce_entrypoint=True,
+	)
+	assert not checked.diagnostics, checked.diagnostics
+	assert "declare i64 @drift_time_now_us()" in ir
+	assert "declare i64 @drift_time_now_utc_us()" in ir
+	assert "call i64 @drift_time_now_us()" in ir
+	assert "call i64 @drift_time_now_utc_us()" in ir
+	assert "call void @__drift_rt_abi_version_16()" in ir
+
+
+def test_std_time_rejected_on_32_bit_target(tmp_path: Path) -> None:
+	"""std.time's signed epoch-microsecond representation requires a 64-bit Int."""
+	source = tmp_path / "main.drift"
+	source.write_text(
+		"module main;\n\n"
+		"import std.time as time;\n\n"
+		"fn main() nothrow -> Int {\n"
+		"\tval ts = time.utc_from_unix_micros(123456);\n"
+		"\treturn time.utc_unix_micros(&ts);\n"
+		"}\n"
+	)
+	ir_path = tmp_path / "main.ll"
+	res = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"lang.driftc.driftc",
+			str(source),
+			"--stdlib-root",
+			str(stdlib_root()),
+			"--target-word-bits",
+			"32",
+			"--emit-ir",
+			str(ir_path),
+			"--json",
+		],
+		cwd=ROOT,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert res.returncode == 1, res.stderr
+	payload = json.loads(res.stdout)
+	assert payload["exit_code"] == 1
+	assert any(
+		d.get("phase") == "typecheck"
+		and "std.time requires a 64-bit target" in d.get("message", "")
+		for d in payload.get("diagnostics", [])
+	), payload
+	assert not ir_path.exists()
+
+
+def test_direct_microsecond_clock_intrinsic_rejected_on_32_bit_target(tmp_path: Path) -> None:
+	"""Direct lang.thread clock calls must fail before reaching LLVM lowering."""
+	source = tmp_path / "main.drift"
+	source.write_text(
+		"module main;\n\n"
+		"import lang.thread as thread;\n\n"
+		"fn main() nothrow -> Int {\n"
+		"\treturn thread.now_us() + thread.now_utc_us();\n"
+		"}\n"
+	)
+	ir_path = tmp_path / "main.ll"
+	res = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"lang.driftc.driftc",
+			str(source),
+			"--stdlib-root",
+			str(stdlib_root()),
+			"--target-word-bits",
+			"32",
+			"--emit-ir",
+			str(ir_path),
+			"--json",
+		],
+		cwd=ROOT,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert res.returncode == 1, res.stderr
+	payload = json.loads(res.stdout)
+	assert payload["exit_code"] == 1
+	diagnostics = payload.get("diagnostics", [])
+	assert any(
+		d.get("phase") == "typecheck"
+		and "lang.thread.now_us requires a 64-bit target" in d.get("message", "")
+		for d in diagnostics
+	), diagnostics
+	assert any(
+		d.get("phase") == "typecheck"
+		and "lang.thread.now_utc_us requires a 64-bit target" in d.get("message", "")
+		for d in diagnostics
+	), diagnostics
+	assert not any("internal:" in d.get("message", "") for d in diagnostics)
+	assert not ir_path.exists()
+
+
+def test_non_time_program_still_compiles_for_32_bit_target(tmp_path: Path) -> None:
+	"""The std.time restriction must not disable unrelated 32-bit compilation."""
+	source = tmp_path / "main.drift"
+	source.write_text("module main;\n\nfn main() nothrow -> Int { return 7; }\n")
+	ir_path = tmp_path / "main.ll"
+	res = subprocess.run(
+		[
+			sys.executable,
+			"-m",
+			"lang.driftc.driftc",
+			str(source),
+			"--stdlib-root",
+			str(stdlib_root()),
+			"--target-word-bits",
+			"32",
+			"--emit-ir",
+			str(ir_path),
+			"--json",
+		],
+		cwd=ROOT,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	assert res.returncode == 0, res.stderr or res.stdout
+	assert json.loads(res.stdout)["exit_code"] == 0
+	assert ir_path.exists()
 
 
 def test_abi_stamp_absent_without_wrapper(tmp_path: Path) -> None:

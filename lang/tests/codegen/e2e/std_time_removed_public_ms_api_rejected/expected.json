@@ -1,0 +1,11 @@
+{
+  "description": "ABI 16: removed public millisecond time API is rejected",
+  "diagnostics": [
+    {
+      "message_contains": "elapsed_ms",
+      "phase": "parser"
+    }
+  ],
+  "exit_code": 1,
+  "phase": "parser"
+}

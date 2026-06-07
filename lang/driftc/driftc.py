@@ -1091,7 +1091,7 @@ def _intrinsic_contract_diag(
 	)
 
 
-def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> list[Diagnostic]:
+def _validate_intrinsic_callinfo(typed_fn: "TypedFn", *, word_bits: int | None = None) -> list[Diagnostic]:
 	diags: list[Diagnostic] = []
 
 	def _emit(
@@ -1120,6 +1120,23 @@ def _validate_intrinsic_callinfo(typed_fn: "TypedFn") -> list[Diagnostic]:
 		if isinstance(csid, int):
 			callsite_to_nodes.setdefault(csid, []).append(node_id)
 	for key, info in call_info.items():
+		if (
+			word_bits is not None
+			and word_bits != 64
+			and info.target.kind is CallTargetKind.DIRECT
+			and info.target.symbol is not None
+			and info.target.symbol.module == "lang.thread"
+			and info.target.symbol.name in {"now_us", "now_utc_us"}
+		):
+			node_ids = callsite_to_nodes.get(key) or []
+			call = call_nodes.get(node_ids[0]) if node_ids else None
+			_emit(
+				code="E_TIME_INTRINSIC_REQUIRES_64_BIT",
+				message=f"lang.thread.{info.target.symbol.name} requires a 64-bit target because it returns signed microseconds in Int",
+				call=call,
+				notes=["Compile with --target-word-bits 64; microsecond clock intrinsics are not supported on 32-bit targets."],
+			)
+			continue
 		if info.target.kind is not CallTargetKind.INTRINSIC:
 			continue
 		kind = info.target.intrinsic
@@ -9888,6 +9905,35 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
+	_input_source_paths = {path.resolve() for path in source_paths}
+	_input_module_ids = {
+		mid
+		for mid, mod in modules.items()
+		if getattr(mod, "source_path", None) is not None and mod.source_path.resolve() in _input_source_paths
+	}
+	_reachable_source_modules = set(_input_module_ids)
+	_pending_source_modules = list(_input_module_ids)
+	while _pending_source_modules:
+		_mid = _pending_source_modules.pop()
+		for _dep in module_deps.get(_mid, set()):
+			if _dep not in _reachable_source_modules:
+				_reachable_source_modules.add(_dep)
+				_pending_source_modules.append(_dep)
+	if _target_word_bits(args.target_word_bits) != 64 and "std.time" in _reachable_source_modules:
+		diag = Diagnostic(
+			message="std.time requires a 64-bit target because its signed Unix-epoch microsecond representation uses Int",
+			code="E_STD_TIME_REQUIRES_64_BIT",
+			phase="typecheck",
+			severity="error",
+			span=Span(file=str(source_path), line=1, column=1),
+			notes=["Compile with --target-word-bits 64; std.time is not supported on 32-bit targets."],
+		)
+		if args.json:
+			_emit_compile_json({"exit_code": 1, "diagnostics": [_diag_to_json(diag, "typecheck", source_path)]})
+		else:
+			print(f"{_source_label()}:1:1: error: {diag.message} [{diag.code}]", file=sys.stderr)
+		return 1
+
 	_required_modules_main: set[str] = {m for m in modules.keys() if isinstance(m, str)}
 	if module_deps:
 		_required_modules_main.update({m for m in module_deps.keys() if isinstance(m, str)})
@@ -11908,8 +11954,9 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		return 1
 
 	intrinsic_diags: list[Diagnostic] = []
-	for typed_fn in typed_fns.values():
-		intrinsic_diags.extend(_validate_intrinsic_callinfo(typed_fn))
+	for fn_id, typed_fn in typed_fns.items():
+		_call_target_word_bits = type_table.word_bits if fn_id.module in _reachable_source_modules else None
+		intrinsic_diags.extend(_validate_intrinsic_callinfo(typed_fn, word_bits=_call_target_word_bits))
 	if intrinsic_diags:
 		_assert_all_phased(intrinsic_diags, context="typecheck")
 		if args.json:

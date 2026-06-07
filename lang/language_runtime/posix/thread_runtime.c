@@ -2186,16 +2186,20 @@ uint64_t drift_time_now_ms(void) {
 	return (uint64_t)now;
 }
 
-uint64_t drift_time_now_utc_ms(void) {
+int64_t drift_time_now_us(void) {
+	struct timespec ts;
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+		return 0;
+	}
+	return (int64_t)ts.tv_sec * 1000000LL + (int64_t)ts.tv_nsec / 1000LL;
+}
+
+int64_t drift_time_now_utc_us(void) {
 	struct timespec ts;
 	if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
 		return 0;
 	}
-	int64_t out = (int64_t)(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL);
-	if (out < 0) {
-		return 0;
-	}
-	return (uint64_t)out;
+	return (int64_t)ts.tv_sec * 1000000LL + (int64_t)ts.tv_nsec / 1000LL;
 }
 
 void drift_exec_submit_test_override(int64_t code) {

@@ -49,7 +49,7 @@ pub fn main() nothrow -> Int {
 		// Post-fix: park_token == 0.
 		val t0 = time.now_monotonic();
 		thread.vt_park_until(thread.now_ms() + 100);
-		val elapsed = time.elapsed_ms(&t0);
+		val elapsed = time.elapsed_micros(&t0) / 1000;
 		return elapsed;
 	}));
 	var res = t.join();

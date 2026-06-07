@@ -47,7 +47,7 @@ fn main() nothrow -> Int {
 		Ok(_) => { },
 		Err(e) => { cons.eprintln("main 550ms sleep err"); return 1; }
 	}
-	val main_elapsed = time.elapsed_ms(&t);
+	val main_elapsed = time.elapsed_micros(&t) / 1000;
 	val ticks = counter.get().load(_seq_cst());
 
 	vt.cancel();

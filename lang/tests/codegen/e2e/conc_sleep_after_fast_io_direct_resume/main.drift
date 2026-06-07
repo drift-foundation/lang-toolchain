@@ -62,7 +62,7 @@ pub fn main() nothrow -> Int {
 		// Sleep 100ms and report elapsed.
 		val t0 = time.now_monotonic();
 		thread.vt_park_until(thread.now_ms() + 100);
-		val elapsed = time.elapsed_ms(&t0);
+		val elapsed = time.elapsed_micros(&t0) / 1000;
 		return elapsed;
 	}));
 	// Give the slave VT time to register and park.  10ms is comfortable;

@@ -505,8 +505,8 @@ fn run_main() throws -> Int {
 
 Prefer event names plus key-value attrs over prose strings. Keep payloads
 machine-friendly and use explicit source metadata when you need it.
-Default formatter is JSON and includes `tm` as ISO-8601 UTC
-(`YYYY-MM-DDTHH:mm:ss.sssZ`).
+Default formatter is JSON and includes `tm` as ISO-8601 UTC with exactly six
+fractional digits (`YYYY-MM-DDTHH:mm:ss.ffffffZ`).
 
 ```drift
 import std.log as log;

@@ -95,7 +95,7 @@ fn _run() nothrow -> Int {
 				Ok(_) => { },
 				Err(e) => { cons.eprintln("sleep err"); return 3; }
 			}
-			val elapsed = time.elapsed_ms(&t0);
+			val elapsed = time.elapsed_micros(&t0) / 1000;
 			if elapsed < 80 {
 				cons.eprintln("FAIL: post-timeout sleep was " + fmt.format_int(elapsed) + "ms, expected >=80ms (stale park_token consumed it)");
 				return 10;

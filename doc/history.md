@@ -1,5 +1,35 @@
 # Drift development history
 
+## 2026-06-07 (0.33.25: `std.time` microsecond precision, runtime ABI 16)
+- **Intentional breaking precision upgrade:** `std.time.Instant` and
+  `UtcTimestamp` are now backed by microseconds (`ticks_us` / `epoch_us`), not
+  milliseconds.  The public elapsed/difference/accessor surface is
+  `elapsed_micros`, `duration_micros_between`, `utc_unix_micros`, and
+  `utc_from_unix_micros`; the former millisecond-named APIs are removed.
+- `now_monotonic()` and `now_utc()` use new runtime helpers
+  `drift_time_now_us()` / `drift_time_now_utc_us()` backed directly by
+  `clock_gettime(CLOCK_MONOTONIC/CLOCK_REALTIME)` nanoseconds.  They do not
+  multiply a truncated millisecond value.  The unused UTC-millisecond
+  intrinsic/helper is removed; scheduler deadline APIs retain their deliberate
+  millisecond clock.
+- ISO-8601 UTC formatting always emits exactly six fractional digits.
+  Parsing accepts either whole-second `...SSZ` input or exactly six
+  fractional digits, preserves microseconds, and retains strict rejection of
+  malformed fractions, offsets, and invalid calendar fields.
+- **Boundary change:** new `lang.thread` intrinsics `now_us` and `now_utc_us`
+  cross the compiler/runtime boundary as signed `int64_t` / LLVM `i64`, so
+  DRIFT_RT_ABI_VERSION is bumped **15 → 16** and DRIFTC is bumped
+  **0.33.24 → 0.33.25**.  Because Drift v1 has no public signed 64-bit scalar
+  distinct from pointer-sized `Int`, `std.time` is explicitly 64-bit-target-only
+  and produces a clean diagnostic on 32-bit targets rather than truncating
+  epoch microseconds or mismatching the runtime ABI.  Direct calls to the
+  exported `lang.thread.now_us()` / `now_utc_us()` boundary are rejected by the
+  same pre-lowering target-width contract.
+- Regressions include full compile/run coverage for `.123456Z`, zero and
+  negative epoch boundaries, Unix-microsecond constructor/accessor identity,
+  strict parser failures, live UTC, monotonic elapsed microseconds, the
+  32-bit-target rejection, and removal of the public millisecond API.
+
 ## 2026-06-05 (0.33.24: fix ICE on `throw` of an inline qualified ctor with a nested cross-package qualified ctor)
 - **Bug (app-team report, 0.33.23):** across a package boundary,
   `throw a.E(kind = a.K::Bad(detail = "x"))` ICE'd with

@@ -3,16 +3,15 @@ import std.time as time;
 import std.core as core;
 
 pub fn main() nothrow -> Int {
-	// 1. Known fixed timestamp: 2024-01-01T00:00:00.000Z = 1704067200000 ms
-	val ts_str = "2024-01-01T00:00:00.000Z";
+	// 1. Known fixed timestamp: 2024-01-01T00:00:00.000000Z = 1704067200000000 us
+	val ts_str = "2024-01-01T00:00:00.000000Z";
 	match time.parse_iso8601_utc(ts_str) {
 		core.Result::Ok(ts) => {
 			val secs = time.utc_unix_seconds(&ts);
 			if secs != 1704067200 { return 10; }
-			val ms = time.utc_unix_millis(&ts);
-			if ms != 1704067200000 { return 11; }
-			// millis/seconds relationship: ms / 1000 == secs
-			if ms / 1000 != secs { return 12; }
+			val micros = time.utc_unix_micros(&ts);
+			if micros != 1704067200000000 { return 11; }
+			if micros / 1000000 != secs { return 12; }
 		},
 		core.Result::Err(_) => { return 1; }
 	}
@@ -21,52 +20,52 @@ pub fn main() nothrow -> Int {
 	val now_s = time.utc_unix_seconds_now();
 	if now_s < 1735689600 { return 20; }
 
-	// 3. Sub-second timestamp: 2024-01-01T00:00:00.999Z
-	val ts_sub_str = "2024-01-01T00:00:00.999Z";
+	// 3. Sub-second timestamp: 2024-01-01T00:00:00.999000Z
+	val ts_sub_str = "2024-01-01T00:00:00.999000Z";
 	match time.parse_iso8601_utc(ts_sub_str) {
 		core.Result::Ok(ts2) => {
 			val secs2 = time.utc_unix_seconds(&ts2);
 			// 999ms truncates to same second
 			if secs2 != 1704067200 { return 30; }
-			val ms2 = time.utc_unix_millis(&ts2);
-			if ms2 != 1704067200999 { return 31; }
+			val micros2 = time.utc_unix_micros(&ts2);
+			if micros2 != 1704067200999000 { return 31; }
 		},
 		core.Result::Err(_) => { return 2; }
 	}
 
-	// 4. Pre-1970 truncation toward zero: 1969-12-31T23:59:58.500Z
-	//    epoch_ms = -1500, seconds = -1500 / 1000 = -1 (toward zero, not -2)
-	val ts_pre_str = "1969-12-31T23:59:58.500Z";
+	// 4. Pre-1970 truncation toward zero: 1969-12-31T23:59:58.500000Z
+	//    epoch_us = -1500000, seconds = -1500000 / 1000000 = -1
+	val ts_pre_str = "1969-12-31T23:59:58.500000Z";
 	match time.parse_iso8601_utc(ts_pre_str) {
 		core.Result::Ok(ts3) => {
-			val ms3 = time.utc_unix_millis(&ts3);
-			if ms3 != -1500 { return 40; }
+			val micros3 = time.utc_unix_micros(&ts3);
+			if micros3 != -1500000 { return 40; }
 			val secs3 = time.utc_unix_seconds(&ts3);
 			if secs3 != -1 { return 41; }
 		},
 		core.Result::Err(_) => { return 3; }
 	}
 
-	// 5. Exact epoch boundary: 1970-01-01T00:00:00.000Z
-	val ts_epoch_str = "1970-01-01T00:00:00.000Z";
+	// 5. Exact epoch boundary: 1970-01-01T00:00:00.000000Z
+	val ts_epoch_str = "1970-01-01T00:00:00.000000Z";
 	match time.parse_iso8601_utc(ts_epoch_str) {
 		core.Result::Ok(ts4) => {
 			if time.utc_unix_seconds(&ts4) != 0 { return 50; }
-			if time.utc_unix_millis(&ts4) != 0 { return 51; }
+			if time.utc_unix_micros(&ts4) != 0 { return 51; }
 		},
 		core.Result::Err(_) => { return 4; }
 	}
 
-	// 6. Large timestamp sanity: 9999-12-31T23:59:59.999Z
-	//    epoch_ms = 253402300799999, seconds = 253402300799
-	val ts_far_str = "9999-12-31T23:59:59.999Z";
+	// 6. Large timestamp sanity: 9999-12-31T23:59:59.999000Z
+	//    epoch_us = 253402300799999000, seconds = 253402300799
+	val ts_far_str = "9999-12-31T23:59:59.999000Z";
 	match time.parse_iso8601_utc(ts_far_str) {
 		core.Result::Ok(ts5) => {
-			val ms5 = time.utc_unix_millis(&ts5);
-			if ms5 != 253402300799999 { return 60; }
+			val micros5 = time.utc_unix_micros(&ts5);
+			if micros5 != 253402300799999000 { return 60; }
 			val secs5 = time.utc_unix_seconds(&ts5);
 			if secs5 != 253402300799 { return 61; }
-			if ms5 / 1000 != secs5 { return 62; }
+			if micros5 / 1000000 != secs5 { return 62; }
 		},
 		core.Result::Err(_) => { return 5; }
 	}

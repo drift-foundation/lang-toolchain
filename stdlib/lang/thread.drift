@@ -21,7 +21,8 @@ export {
 	vt_unpark,
 	vt_yield,
 	now_ms,
-	now_utc_ms,
+	now_us,
+	now_utc_us,
 	exec_default_get,
 	exec_default_set,
 	exec_create,
@@ -145,8 +146,13 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_set_wait(kind: Int, id: Int) nothrow -> Void;
 @intrinsic pub fn vt_unpark(vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn vt_yield() nothrow -> Void;
+/// Monotonic scheduler clock in milliseconds.  Internal deadline APIs use
+/// this unit deliberately; wall-clock and measurement APIs use microseconds.
 @intrinsic pub fn now_ms() nothrow -> Int;
-@intrinsic pub fn now_utc_ms() nothrow -> Int;
+/// Monotonic clock in microseconds for `std.time.Instant`.
+@intrinsic pub fn now_us() nothrow -> Int;
+/// UTC Unix-epoch clock in microseconds for `std.time.UtcTimestamp`.
+@intrinsic pub fn now_utc_us() nothrow -> Int;
 
 @intrinsic pub fn exec_default_get() nothrow -> ExecutorHandle;
 @intrinsic pub fn exec_default_set(exec: ExecutorHandle) nothrow -> Void;

@@ -1502,7 +1502,8 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from({self._llty(DRIFT_INT_TYPE)}, ptr, {self._llty(DRIFT_INT_TYPE)}, ptr, ptr)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_recv_from_v6({self._llty(DRIFT_INT_TYPE)}, ptr, {self._llty(DRIFT_INT_TYPE)}, ptr, ptr)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()",
-					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()",
+					"declare i64 @drift_time_now_us()",
+					"declare i64 @drift_time_now_utc_us()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_eventfd_create()",
 					f"declare void @drift_test_eventfd_write({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_test_timerfd_create()",
@@ -4269,18 +4270,34 @@ class _FuncBuilder:
 					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
-			if instr.fn_id.name == "now_utc_ms":
+			if instr.fn_id.name == "now_us":
 				self.module.needs_thread_runtime = True
+				assert self.module.word_bits == 64, "now_us requires a 64-bit target"
 				if len(instr.args) != 0:
-					raise NotImplementedError(f"LLVM codegen v1: now_utc_ms expects 0 args, got {len(instr.args)}")
+					raise NotImplementedError(f"LLVM codegen v1: now_us expects 0 args, got {len(instr.args)}")
 				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
+					raise NotImplementedError("LLVM codegen v1: now_us result must be captured")
 				if instr.can_throw:
-					raw_utc = self._fresh("nutc_raw")
-					self.lines.append(f"  {raw_utc} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
-					self._wrap_ok_fnresult(raw_utc, DRIFT_INT_TYPE, dest, hint="nutc_ok")
+					raw_us = self._fresh("nus_raw")
+					self.lines.append(f"  {raw_us} = call i64 @drift_time_now_us()")
+					self._wrap_ok_fnresult(raw_us, DRIFT_INT_TYPE, dest, hint="nus_ok")
 				else:
-					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self.lines.append(f"  {dest} = call i64 @drift_time_now_us()")
+					self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "now_utc_us":
+				self.module.needs_thread_runtime = True
+				assert self.module.word_bits == 64, "now_utc_us requires a 64-bit target"
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: now_utc_us expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: now_utc_us result must be captured")
+				if instr.can_throw:
+					raw_utc_us = self._fresh("nutcus_raw")
+					self.lines.append(f"  {raw_utc_us} = call i64 @drift_time_now_utc_us()")
+					self._wrap_ok_fnresult(raw_utc_us, DRIFT_INT_TYPE, dest, hint="nutcus_ok")
+				else:
+					self.lines.append(f"  {dest} = call i64 @drift_time_now_utc_us()")
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "exec_default_get":
@@ -5519,18 +5536,34 @@ class _FuncBuilder:
 					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_ms()")
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
-			if instr.fn_id.name == "now_utc_ms":
+			if instr.fn_id.name == "now_us":
+				assert self.module.word_bits == 64, "now_us requires a 64-bit target"
 				if len(instr.args) != 0:
-					raise NotImplementedError(f"LLVM codegen v1: now_utc_ms expects 0 args, got {len(instr.args)}")
+					raise NotImplementedError(f"LLVM codegen v1: now_us expects 0 args, got {len(instr.args)}")
 				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: now_utc_ms result must be captured")
+					raise NotImplementedError("LLVM codegen v1: now_us result must be captured")
 				self.module.needs_thread_runtime = True
 				if instr.can_throw:
-					raw_utc = self._fresh("nutc_raw")
-					self.lines.append(f"  {raw_utc} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
-					self._wrap_ok_fnresult(raw_utc, DRIFT_INT_TYPE, dest, hint="nutc_ok")
+					raw_us = self._fresh("nus_raw")
+					self.lines.append(f"  {raw_us} = call i64 @drift_time_now_us()")
+					self._wrap_ok_fnresult(raw_us, DRIFT_INT_TYPE, dest, hint="nus_ok")
 				else:
-					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_time_now_utc_ms()")
+					self.lines.append(f"  {dest} = call i64 @drift_time_now_us()")
+					self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "now_utc_us":
+				assert self.module.word_bits == 64, "now_utc_us requires a 64-bit target"
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: now_utc_us expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: now_utc_us result must be captured")
+				self.module.needs_thread_runtime = True
+				if instr.can_throw:
+					raw_utc_us = self._fresh("nutcus_raw")
+					self.lines.append(f"  {raw_utc_us} = call i64 @drift_time_now_utc_us()")
+					self._wrap_ok_fnresult(raw_utc_us, DRIFT_INT_TYPE, dest, hint="nutcus_ok")
+				else:
+					self.lines.append(f"  {dest} = call i64 @drift_time_now_utc_us()")
 					self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "test_eventfd_create":
