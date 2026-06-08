@@ -1,5 +1,18 @@
 # Drift development history
 
+## 2026-06-08 (0.33.26: restore `std.time.elapsed_ms`)
+- Restored `std.time.elapsed_ms(start)` as a UX-friendly convenience API.
+  `Instant` remains microsecond-backed; the function returns the lossy
+  projection `elapsed_micros(start) / 1000`, truncating fractional
+  milliseconds.
+- Millisecond-oriented stdlib tests and benchmarks use `elapsed_ms()` instead
+  of repeating `/ 1000`.  `elapsed_micros()` remains the precise API.
+- This adds no runtime helper or compiler/runtime boundary change.  The removed
+  UTC-millisecond intrinsic remains removed; runtime ABI stays **16**.
+- A full compile/run regression uses a test-build-only deterministic projection
+  seam to pin API availability and
+  `123456us → 123ms` truncation without timing assumptions.
+
 ## 2026-06-07 (0.33.25: `std.time` microsecond precision, runtime ABI 16)
 - **Intentional breaking precision upgrade:** `std.time.Instant` and
   `UtcTimestamp` are now backed by microseconds (`ticks_us` / `epoch_us`), not

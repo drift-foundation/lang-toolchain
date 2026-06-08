@@ -1,0 +1,13 @@
+module main;
+
+import std.time as time;
+
+fn main() nothrow -> Int {
+	if time.__test_micros_to_millis(123456) != 123 { return 1; }
+	if time.__test_micros_to_millis(999) != 0 { return 2; }
+	if time.__test_micros_to_millis(1000) != 1 { return 3; }
+
+	val start = time.now_monotonic();
+	if time.elapsed_ms(&start) < 0 { return 4; }
+	return 0;
+}

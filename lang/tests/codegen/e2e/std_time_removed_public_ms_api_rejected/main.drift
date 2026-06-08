@@ -1,8 +1,0 @@
-module main;
-
-import std.time as time;
-
-fn main() nothrow -> Int {
-	val start = time.now_monotonic();
-	return time.elapsed_ms(&start);
-}

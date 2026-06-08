@@ -43,22 +43,22 @@ fn _check(label: &String, elapsed: Int, code: Int) nothrow -> Int {
 fn main() nothrow -> Int {
 	val t1 = time.now_monotonic();
 	val _r1 = conc.sleep(conc.Duration(millis = 100));
-	val r1 = _check(&"sleep#1", time.elapsed_micros(&t1) / 1000, 1);
+	val r1 = _check(&"sleep#1", time.elapsed_ms(&t1), 1);
 	if r1 != 0 { return r1; }
 
 	val t2 = time.now_monotonic();
 	val _r2 = conc.sleep(conc.Duration(millis = 100));
-	val r2 = _check(&"sleep#2", time.elapsed_micros(&t2) / 1000, 2);
+	val r2 = _check(&"sleep#2", time.elapsed_ms(&t2), 2);
 	if r2 != 0 { return r2; }
 
 	val t3 = time.now_monotonic();
 	val _r3 = conc.sleep(conc.Duration(millis = 100));
-	val r3 = _check(&"sleep#3", time.elapsed_micros(&t3) / 1000, 3);
+	val r3 = _check(&"sleep#3", time.elapsed_ms(&t3), 3);
 	if r3 != 0 { return r3; }
 
 	val t4 = time.now_monotonic();
 	val _r4 = conc.sleep(conc.Duration(millis = 100));
-	val r4 = _check(&"sleep#4", time.elapsed_micros(&t4) / 1000, 4);
+	val r4 = _check(&"sleep#4", time.elapsed_ms(&t4), 4);
 	if r4 != 0 { return r4; }
 
 	cons.println("ok");

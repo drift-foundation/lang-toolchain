@@ -17,6 +17,8 @@ export {
 	now_monotonic,
 	now_utc,
 	elapsed_micros,
+	elapsed_ms,
+	__test_micros_to_millis,
 	duration_micros_between,
 	format_iso8601_utc,
 	parse_iso8601_utc,
@@ -34,10 +36,12 @@ export {
 /// Opaque monotonic point in time, suitable for measuring durations.
 ///
 /// `Instant` values are not comparable to wall-clock time; use them
-/// only to measure elapsed time between two points (`elapsed_micros`).
+/// only to measure elapsed time between two points (`elapsed_micros`
+/// or the lossy `elapsed_ms` convenience).
 /// Construct via `now_monotonic()`.
 ///
-/// **See also:** `now_monotonic`, `elapsed_micros`, `UtcTimestamp`.
+/// **See also:** `now_monotonic`, `elapsed_micros`, `elapsed_ms`,
+/// `UtcTimestamp`.
 pub struct Instant {
 	ticks_us: Int
 }
@@ -90,10 +94,10 @@ pub error TimeParseError {
 /// Returns an `Instant` capturing the current monotonic clock
 /// reading.
 ///
-/// Suitable for `elapsed_micros` measurements.  The returned value has
-/// no relationship to wall-clock time.
+/// Suitable for `elapsed_micros` or `elapsed_ms` measurements.  The
+/// returned value has no relationship to wall-clock time.
 ///
-/// **See also:** `elapsed_micros`, `now_utc`.
+/// **See also:** `elapsed_micros`, `elapsed_ms`, `now_utc`.
 pub fn now_monotonic() nothrow -> Instant {
 	return Instant(ticks_us = thread.now_us());
 }
@@ -103,7 +107,7 @@ pub fn now_monotonic() nothrow -> Instant {
 /// Clamps to `0` if the monotonic clock appears to have gone
 /// backward (which should not happen but is defended against).
 ///
-/// **See also:** `now_monotonic`.
+/// **See also:** `now_monotonic`, `elapsed_ms`.
 pub fn elapsed_micros(start: &Instant) nothrow -> Int {
 	val now = thread.now_us();
 	if now < start.ticks_us {
@@ -112,10 +116,28 @@ pub fn elapsed_micros(start: &Instant) nothrow -> Int {
 	return now - start.ticks_us;
 }
 
+/// Returns the number of whole milliseconds elapsed since `start`.
+///
+/// `Instant` remains microsecond-backed.  This convenience is a lossy
+/// projection equivalent to `elapsed_micros(start) / 1000`; fractional
+/// milliseconds are truncated.
+///
+/// **See also:** `now_monotonic`, `elapsed_micros`.
+pub fn elapsed_ms(start: &Instant) nothrow -> Int {
+	return _micros_to_millis(elapsed_micros(start));
+}
+
+/// Test-only deterministic seam for elapsed-time projection.
+@test_build_only
+pub fn __test_micros_to_millis(micros: Int) nothrow -> Int {
+	return _micros_to_millis(micros);
+}
+
 /// Returns the current wall-clock UTC time.
 ///
 /// Subject to system-clock adjustments; do not use for elapsed
-/// measurements (use `now_monotonic` + `elapsed_micros` instead).
+/// measurements (use `now_monotonic` with `elapsed_micros` or
+/// `elapsed_ms` instead).
 ///
 /// **See also:** `UtcTimestamp`, `format_iso8601_utc`,
 /// `now_monotonic`.
@@ -463,6 +485,10 @@ fn _pad2(v: Int) nothrow -> String {
 		return "0" + format.format_int(v);
 	}
 	return format.format_int(v);
+}
+
+fn _micros_to_millis(micros: Int) nothrow -> Int {
+	return micros / 1000;
 }
 
 fn _pad6(v: Int) nothrow -> String {
