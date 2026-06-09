@@ -1399,6 +1399,158 @@ import boundary statically: nothing under `tools/deploy/` or
 nothing in the orch tree may name an author-seed file path.  The
 contract is part of the test matrix, not a convention.
 
+### 7.6 Verifying a deployed package (`drift trust verify-package`)
+
+`drift trust verify-package` is a read-only operator/CI verb that
+runs the §4 consumer verification against an already-deployed
+package, without standing up a throwaway consumer project.  It is
+additive over the §4 verifier: it changes no acceptance semantics,
+only surfaces them as a command.
+
+#### 7.6.1 Input: the deployed directory, never a bare artifact
+
+The verb accepts the deployed package **directory** — the
+`drift deploy` output layout:
+
+```
+<dir>/
+    <pkg>.zdmp                      # compressed artifact
+    <pkg>.author-claim              # author-claim sidecar
+    <pkg>.cert-claim.<kid>.json     # one per certifier
+    <pkg>.author-pubkey.b64         # author pubkey companion
+    provenance.zst                  # evidence bundle
+    assets/
+```
+
+The directory is the verification unit.  A standalone `.zdmp`
+carries none of its sidecars or provenance and cannot be verified
+in isolation, so the verb accepts only the directory; pointing it
+at a `.zdmp` file (or any non-directory) is an invocation error,
+not a verification failure.  The directory must contain exactly one
+`*.zdmp` (the standard `lib/<pkg>/<version>/` layout does); zero or
+many is an invocation error.
+
+#### 7.6.2 Verification scope
+
+For every module in the package, the verb runs the same
+`compose_verify` gate a consumer runs (§4): author- and cert-claim
+signatures against the resolved key material with kid↔pubkey
+binding, the three-way `source_content_id` equality (manifest =
+author = cert, §3.5), `artifact_sha256` against the artifact (the
+`artifact_sha256` is the sha256 of the **decompressed `.dmp`
+payload**, not the compressed `.zdmp` bytes, matching the
+consumer-load gate), role routing, and the provenance binding
+(§7.6.4).  Optional `--expect-version <v>` / `--expect-sci
+sha256:...` assert the package's recorded version / SCI equal an
+operator-supplied value.
+
+**Explicit standalone non-goal — consumer dep-graph closure.**
+The cert claim's `dep_graph` cover check (`check_dep_graph_covers`,
+§3.5) compares against *a specific consumer's* resolved closure.
+Standalone there is no consumer to resolve against, so
+`verify-package` does **not** check dep-graph closure.  This is by
+design, not a gap: per-dep trust is still enforced whenever a real
+consumer loads each dep through its own `compose_verify`.
+`verify-package` proves artifact integrity, signatures, key
+binding, SCI/version consistency, roles, and provenance binding —
+not closure.
+
+#### 7.6.3 Trust source
+
+Exactly one of four mutually-exclusive trust sources must be
+supplied; supplying none is an invocation error (exit 2), never
+silent self-trust, and supplying more than one is an invocation
+error:
+
+- `--trust-store <path>` — verify against an operator-provided
+  role-tagged trust store (the CI form, with a known store).
+- `--author-pubkey-b64 <b64>` — verify against a single supplied
+  Ed25519 author pubkey.
+- `--author-profile <path>` — verify against the author pubkey and
+  namespace grants carried in an `.author-profile` file (the
+  pubkey + its declared namespaces are read from the profile).
+- `--allow-bundled-pubkey` — verify against the
+  `<pkg>.author-pubkey.b64` companion **shipped inside the package
+  itself**.  This proves the package's sidecars are internally
+  **self-consistent** (the bytes, claims, and bundled key agree);
+  it does **not** prove any third party trusts that key.  It is an
+  opt-in self-consistency check, not third-party trust.
+
+**Reserved namespaces always route through core trust.**  Modules
+under `std.*` / `lang.*` / `drift.*` are verified against the
+toolchain's `core_trust_v1.json` regardless of the supplied trust
+source (§3.4).  A bundled or synthetic non-Foundation key therefore
+cannot bless a reserved-namespace module.
+
+#### 7.6.4 Provenance binding
+
+The on-disk `provenance.zst` bytes must hash (`sha256`) to the
+signed `evidence_sha256` of **every** accepted cert claim, not just
+one.  This is the authoritative binding (§3.6): because deploy signs
+`evidence_sha256` over the as-shipped compressed bundle bytes, a
+hostile mirror that swaps the unsigned `provenance.zst` for
+attacker-chosen contents is caught even when the swap preserves the
+bundle's inner `artifact_sha256` field.  In a multi-module package
+whose modules verify through different cert claims, the binding is
+required for each accepted certifier's claim independently.
+
+#### 7.6.5 Exit-code contract
+
+- **`0`** — verified.
+- **`1`** — the package is invalid or incomplete: corrupt artifact,
+  bad/missing/malformed sidecar, trust rejection, SCI/version
+  mismatch, a failed `--expect-*` assertion, missing bundled pubkey,
+  or a provenance-binding mismatch.  Always accompanied by a
+  structured `ok=false` report — rendered as machine-readable JSON
+  only under `--json` (otherwise a human-readable summary).  Invalid
+  **package contents** are verification outcomes (exit 1 + report),
+  never exit 2.
+- **`2`** — invocation misuse only: not a directory / a bare
+  `.zdmp`, zero or multiple `.zdmp`, no or conflicting trust source,
+  or an unreadable/invalid CLI trust input.  Trust-source and
+  trust-input validity are invocation properties, checked before the
+  artifact is read, so a corrupt package never masks a misuse as
+  exit 1.  A usage error does **not** emit a JSON report, even under
+  `--json`.
+
+#### 7.6.6 Stable JSON report (`--json`)
+
+`--json` renders the verification report as one machine-readable
+object with a stable key set for CI.  Every report the verb
+produces — success, verification failure (exit 1), and the
+unexpected-error backstop — carries the **same** keys (the schema
+is built from a single `new_report()` source, so even an
+early-return failure such as `malformed-artifact` or the backstop
+has the full key set).  A usage error (exit 2) emits no report.
+
+| field                  | meaning                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `ok`                   | `true` iff verified                                               |
+| `package_dir`          | the verified directory path                                       |
+| `package_id`           | package id read from the manifest                                 |
+| `version`              | package version                                                   |
+| `source_content_id`    | the verified SCI                                                  |
+| `artifact_sha256`      | `sha256:` of the **decompressed `.dmp` payload** (not the compressed `.zdmp`) |
+| `trust_source`         | which trust source resolved (`trust-store:<path>`, `author-pubkey-b64`, `author-profile`, `bundled-pubkey:<file>`) |
+| `mode`                 | verification mode (`certifier-shortcut`)                          |
+| `author_kid`           | accepted author kid (`null` until a module verifies)              |
+| `certifier_kid`        | the last accepted module's certifier kid (`null` until a module verifies) |
+| `certifier_kids`       | every accepted certifier kid (deduped; `[]` until/unless modules verify) |
+| `provenance_ok`        | `true` iff the provenance binding held for every accepted cert; `null` if no provenance present |
+| `no_evidence_sentinel` | `true` iff an accepted cert used the suite no-evidence sentinel   |
+| `modules`              | per-module `{module_id, ok, mode, reserved, author_kid, certifier_kid, reason}` |
+| `warnings`             | non-fatal advisories (e.g. bundled-pubkey is not third-party trust, no-evidence sentinel) |
+| `errors`               | list of `{code, message}` (a provenance-binding error also carries `certifier_kid`) |
+
+The complete stable error `code` set:
+`verify-failed`, `malformed-artifact`, `malformed-sidecar`,
+`no-modules`, `expect-version`, `expect-sci`,
+`bundled-pubkey-missing`, `bundled-pubkey-ambiguous`,
+`bundled-pubkey-malformed`, `provenance-missing`,
+`provenance-unreadable`, `provenance-artifact-mismatch`,
+`provenance-evidence-mismatch`, and `verify-error` (the
+unexpected-error backstop).
+
 ---
 
 ## 8. Module map
@@ -1416,6 +1568,7 @@ in sync if you rename or split a module.
 | Sidecar filename rules           | [`lang/driftc/packages/sidecar_naming.py`](../../lang/driftc/packages/sidecar_naming.py)        |
 | SCI computation                  | [`lang/driftc/packages/source_content_id.py`](../../lang/driftc/packages/source_content_id.py)  |
 | Consumer-side load               | [`lang/driftc/packages/provider_v1.py`](../../lang/driftc/packages/provider_v1.py)              |
+| Deployed-package verify facade   | [`lang/driftc/packages/verify_deployed_v1.py`](../../lang/driftc/packages/verify_deployed_v1.py) (`drift trust verify-package`, §7.6) |
 | Format-level shape validators    | [`lang/driftc/packages/package_validate.py`](../../lang/driftc/packages/package_validate.py)    |
 | `drift author` (+ internal cosign) | [`tools/drift_author/`](../../tools/drift_author/) (+ [`lang/drift/cli.py`](../../lang/drift/cli.py) dispatch) |
 | `drift-deploy` cert-claim emit   | [`tools/drift_deploy/cert_emit.py`](../../tools/drift_deploy/cert_emit.py)                      |

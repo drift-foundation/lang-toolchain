@@ -72,7 +72,7 @@ def new_report(package_dir: Path | str) -> dict[str, Any]:
 		"package_id": None, "version": None,
 		"source_content_id": None, "artifact_sha256": None,
 		"trust_source": None, "mode": None,
-		"author_kid": None, "certifier_kid": None,
+		"author_kid": None, "certifier_kid": None, "certifier_kids": [],
 		"provenance_ok": None, "no_evidence_sentinel": False,
 		"modules": [], "warnings": [], "errors": [],
 	}
@@ -185,10 +185,12 @@ def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
 
 	    {
 	      "ok": bool,
+	      "package_dir": str,
 	      "package_id"/"version"/"source_content_id"/"artifact_sha256": str,
 	      "trust_source": str,            # how key material was resolved
 	      "mode": str|None,               # certifier-shortcut / self-verify
 	      "author_kid"/"certifier_kid": str|None,
+	      "certifier_kids": [str],        # every accepted certifier kid (deduped)
 	      "provenance_ok": bool|None,     # None = no provenance present
 	      "no_evidence_sentinel": bool,   # dev/no-evidence cert accepted
 	      "modules": [{module_id, ok, mode, author_kid, certifier_kid, reason}],

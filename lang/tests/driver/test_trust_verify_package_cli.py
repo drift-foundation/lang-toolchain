@@ -9,7 +9,7 @@ targeted on-disk mutation per test and asserts the verb fails on the
 expected gate.  This is the guard that proves the CLI actually validates
 the package/sidecar/provenance set rather than merely parsing it.
 
-Mutations covered (per work/trust-verify-package/plan.md §6 + review):
+Mutations covered:
   - `.zdmp` byte tamper (artifact bytes no longer match the claims)
   - cert-claim `artifact_sha256` tamper
   - author/cert `source_content_id` mismatch
@@ -251,10 +251,10 @@ def test_json_report_shape(tmp_path: Path) -> None:
 	deployed, _a, _e = _build_good_dir(tmp_path)
 	_rc, report = _run(deployed, "--allow-bundled-pubkey")
 	for key in (
-		"ok", "package_id", "version", "source_content_id",
+		"ok", "package_dir", "package_id", "version", "source_content_id",
 		"artifact_sha256", "trust_source", "mode", "author_kid",
-		"certifier_kid", "provenance_ok", "no_evidence_sentinel",
-		"modules", "warnings", "errors",
+		"certifier_kid", "certifier_kids", "provenance_ok",
+		"no_evidence_sentinel", "modules", "warnings", "errors",
 	):
 		assert key in report, f"missing key {key!r} in JSON report"
 
@@ -562,10 +562,10 @@ def test_backstop_error_report_has_full_schema(tmp_path: Path) -> None:
 	from lang.driftc.packages.verify_deployed_v1 import error_report, new_report
 	rep = error_report(tmp_path, code="verify-error", message="boom")
 	for key in (
-		"ok", "package_id", "version", "source_content_id",
+		"ok", "package_dir", "package_id", "version", "source_content_id",
 		"artifact_sha256", "trust_source", "mode", "author_kid",
-		"certifier_kid", "provenance_ok", "no_evidence_sentinel",
-		"modules", "warnings", "errors",
+		"certifier_kid", "certifier_kids", "provenance_ok",
+		"no_evidence_sentinel", "modules", "warnings", "errors",
 	):
 		assert key in rep, f"backstop report missing key {key!r}"
 	assert rep["ok"] is False
@@ -659,10 +659,10 @@ def test_json_backstop_emits_full_schema_on_unexpected_error(tmp_path: Path, mon
 	assert rc == 1
 	report = json.loads(buf.getvalue())
 	for key in (
-		"ok", "package_id", "version", "source_content_id",
+		"ok", "package_dir", "package_id", "version", "source_content_id",
 		"artifact_sha256", "trust_source", "mode", "author_kid",
-		"certifier_kid", "provenance_ok", "no_evidence_sentinel",
-		"modules", "warnings", "errors",
+		"certifier_kid", "certifier_kids", "provenance_ok",
+		"no_evidence_sentinel", "modules", "warnings", "errors",
 	):
 		assert key in report, f"backstop --json report missing key {key!r}"
 	assert report["ok"] is False
