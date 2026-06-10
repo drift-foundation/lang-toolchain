@@ -1,0 +1,4 @@
+{
+  "description": "std.source slicing: valid byte slice, out-of-range + inverted rejection, mid-scalar char-boundary rejection, cross-source span rejection, same-source slice_span success",
+  "exit_code": 0
+}

@@ -1,0 +1,468 @@
+module std.source;
+
+import std.core as core;
+import std.text as text;
+import std.io as io;
+
+export {
+	SourcePos,
+	SourceSpan,
+	SourceError,
+	SourceCursor,
+	source_cursor,
+	source_cursor_from_string,
+	pos_zero,
+	span_byte_len,
+	span_is_empty
+};
+
+/// A point in a source.  `byte_offset` is authoritative for slicing and
+/// hashing; `line` and `column` are 1-based diagnostic coordinates only
+/// (`column` counts Unicode scalar values, never bytes).
+pub struct SourcePos {
+	pub byte_offset: Int,
+	pub line: Int,
+	pub column: Int,
+}
+
+/// A half-open byte range `[start, end)` within a logical source.
+///
+/// `source_id` is logical/configured (never an absolute build path) and
+/// may be persisted into IR; spans from the same bytes + same
+/// `source_id` are byte-identical across machines and reloads.
+pub struct SourceSpan {
+	pub source_id: String,
+	pub start: SourcePos,
+	pub end: SourcePos,
+}
+
+/// Error produced while constructing or slicing source text.
+///
+/// `code` is a stable, kebab-case, machine-readable identifier
+/// (`"invalid-utf8"`, `"invalid-slice-range"`,
+/// `"slice-not-char-boundary"`, `"span-source-mismatch"`).  `span` is a
+/// zero-width point span at the offending byte.
+pub struct SourceError {
+	pub code: String,
+	pub span: SourceSpan,
+}
+
+/// A forward, UTF-8-validated scalar cursor over one logical source.
+///
+/// Construct with `source_cursor` (validates raw bytes eagerly) or
+/// `source_cursor_from_string` (an already-valid Drift `String`).  After
+/// construction every byte offset the cursor yields sits on a scalar
+/// boundary, so `peek`/`advance` are infallible (they return `-1` only
+/// at end of input).  `line`/`column` are tracked incrementally — O(1)
+/// at any point.
+pub struct SourceCursor {
+	src: String,
+	id: String,
+	len: Int,
+	offset: Int,
+	line: Int,
+	column: Int,
+}
+
+implement core.Copy for SourcePos {
+}
+
+implement core.Copy for SourceSpan {
+}
+
+/// The canonical start position `{byte_offset = 0, line = 1, column = 1}`.
+/// Takes no `source_id` — `SourcePos` carries no source identity.
+pub fn pos_zero() nothrow -> SourcePos {
+	return SourcePos(byte_offset = 0, line = 1, column = 1);
+}
+
+/// The byte length of a span: `end.byte_offset - start.byte_offset`.
+pub fn span_byte_len(span: &SourceSpan) nothrow -> Int {
+	return span.end.byte_offset - span.start.byte_offset;
+}
+
+/// True when a span covers zero bytes (a point span).
+pub fn span_is_empty(span: &SourceSpan) nothrow -> Bool {
+	return span.start.byte_offset == span.end.byte_offset;
+}
+
+fn _byte_value(b: Byte) nothrow -> Int {
+	var value = cast<Int>(b);
+	if value < 0 {
+		value = value + 256;
+	}
+	return value;
+}
+
+fn _is_continuation(value: Int) nothrow -> Bool {
+	return value >= 128 and value <= 191;
+}
+
+fn _point_span(source_id: String, byte_offset: Int, line: Int, column: Int) nothrow -> SourceSpan {
+	val pos = SourcePos(byte_offset = byte_offset, line = line, column = column);
+	return SourceSpan(source_id = source_id, start = pos, end = pos);
+}
+
+fn _source_error(code: String, source_id: String, byte_offset: Int, line: Int, column: Int) nothrow -> SourceError {
+	return SourceError(code = code, span = _point_span(source_id, byte_offset, line, column));
+}
+
+/// Eager, single-pass UTF-8 validation following the RFC-3629 class
+/// boundaries (over-long and surrogate exclusions enforced per leading
+/// byte).  On the first invalid byte returns a `SourceError` whose span
+/// is a zero-width point at the offending byte, with line/column counted
+/// up to that point.
+fn _validate_utf8(bytes: &Array<Byte>, source_id: String) nothrow -> core.Result<Void, SourceError> {
+	val len = bytes.len;
+	var offset = 0;
+	var line = 1;
+	var column = 1;
+	while offset < len {
+		val b0 = _byte_value(bytes[offset]);
+		var width = 1;
+		if b0 <= 127 {
+			width = 1;
+		} else {
+			if b0 >= 194 and b0 <= 223 {
+				width = 2;
+				if offset + width > len {
+					return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+				}
+				if not _is_continuation(_byte_value(bytes[offset + 1])) {
+					return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+				}
+			} else {
+				if b0 == 224 {
+					width = 3;
+					if offset + width > len {
+						return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+					}
+					val b1 = _byte_value(bytes[offset + 1]);
+					if b1 < 160 or b1 > 191 {
+						return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+					}
+					if not _is_continuation(_byte_value(bytes[offset + 2])) {
+						return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+					}
+				} else {
+					if b0 >= 225 and b0 <= 236 {
+						width = 3;
+						if offset + width > len {
+							return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+						}
+						if not _is_continuation(_byte_value(bytes[offset + 1])) {
+							return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+						}
+						if not _is_continuation(_byte_value(bytes[offset + 2])) {
+							return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+						}
+					} else {
+						if b0 == 237 {
+							width = 3;
+							if offset + width > len {
+								return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+							}
+							val b1 = _byte_value(bytes[offset + 1]);
+							if b1 < 128 or b1 > 159 {
+								return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+							}
+							if not _is_continuation(_byte_value(bytes[offset + 2])) {
+								return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+							}
+						} else {
+							if b0 >= 238 and b0 <= 239 {
+								width = 3;
+								if offset + width > len {
+									return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+								}
+								if not _is_continuation(_byte_value(bytes[offset + 1])) {
+									return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+								}
+								if not _is_continuation(_byte_value(bytes[offset + 2])) {
+									return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+								}
+							} else {
+								if b0 == 240 {
+									width = 4;
+									if offset + width > len {
+										return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+									}
+									val b1 = _byte_value(bytes[offset + 1]);
+									if b1 < 144 or b1 > 191 {
+										return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+									}
+									if not _is_continuation(_byte_value(bytes[offset + 2])) {
+										return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+									}
+									if not _is_continuation(_byte_value(bytes[offset + 3])) {
+										return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 3, line, column));
+									}
+								} else {
+									if b0 >= 241 and b0 <= 243 {
+										width = 4;
+										if offset + width > len {
+											return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+										}
+										if not _is_continuation(_byte_value(bytes[offset + 1])) {
+											return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+										}
+										if not _is_continuation(_byte_value(bytes[offset + 2])) {
+											return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+										}
+										if not _is_continuation(_byte_value(bytes[offset + 3])) {
+											return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 3, line, column));
+										}
+									} else {
+										if b0 == 244 {
+											width = 4;
+											if offset + width > len {
+												return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+											}
+											val b1 = _byte_value(bytes[offset + 1]);
+											if b1 < 128 or b1 > 143 {
+												return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 1, line, column));
+											}
+											if not _is_continuation(_byte_value(bytes[offset + 2])) {
+												return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 2, line, column));
+											}
+											if not _is_continuation(_byte_value(bytes[offset + 3])) {
+												return core.Result::Err(_source_error("invalid-utf8", source_id, offset + 3, line, column));
+											}
+										} else {
+											return core.Result::Err(_source_error("invalid-utf8", source_id, offset, line, column));
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if b0 == 10 {
+			line = line + 1;
+			column = 1;
+		} else {
+			column = column + 1;
+		}
+		offset = offset + width;
+	}
+	return core.Result::Ok(core.void_value());
+}
+
+fn _decode_at(src: &String, offset: Int) nothrow -> Int {
+	val b0 = _byte_value(core.string_byte_at(src, offset));
+	if b0 <= 127 {
+		return b0;
+	}
+	if b0 <= 223 {
+		val b1 = _byte_value(core.string_byte_at(src, offset + 1));
+		return (b0 - 192) * 64 + (b1 - 128);
+	}
+	if b0 <= 239 {
+		val b1 = _byte_value(core.string_byte_at(src, offset + 1));
+		val b2 = _byte_value(core.string_byte_at(src, offset + 2));
+		return (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128);
+	}
+	val b1 = _byte_value(core.string_byte_at(src, offset + 1));
+	val b2 = _byte_value(core.string_byte_at(src, offset + 2));
+	val b3 = _byte_value(core.string_byte_at(src, offset + 3));
+	return (b0 - 240) * 262144 + (b1 - 128) * 4096 + (b2 - 128) * 64 + (b3 - 128);
+}
+
+fn _scalar_width(src: &String, offset: Int) nothrow -> Int {
+	val b0 = _byte_value(core.string_byte_at(src, offset));
+	if b0 <= 127 { return 1; }
+	if b0 <= 223 { return 2; }
+	if b0 <= 239 { return 3; }
+	return 4;
+}
+
+/// The position of byte offset `target`, clamped into `[0, len]`.
+///
+/// Walks whole scalars from the start, advancing line/column.  If
+/// `target` falls *inside* a multibyte scalar, it stops before that
+/// scalar and reports the line/column of the scalar that contains
+/// `target` (it never advances column past the containing scalar).  The
+/// returned `byte_offset` is the clamped target, so byte_offset and
+/// line/column are always mutually consistent.
+fn _position_at(src: &String, target: Int) nothrow -> SourcePos {
+	val len = src.byte_length();
+	var clamped = target;
+	if clamped < 0 {
+		clamped = 0;
+	}
+	if clamped > len {
+		clamped = len;
+	}
+	var offset = 0;
+	var line = 1;
+	var column = 1;
+	while offset < clamped {
+		val width = _scalar_width(src, offset);
+		if offset + width > clamped {
+			// `clamped` is inside this scalar — stop without advancing
+			// past it; line/column name the containing scalar.
+			break;
+		}
+		val scalar = _decode_at(src, offset);
+		offset = offset + width;
+		if scalar == 10 {
+			line = line + 1;
+			column = 1;
+		} else {
+			column = column + 1;
+		}
+	}
+	return SourcePos(byte_offset = clamped, line = line, column = column);
+}
+
+/// A `SourceError` whose span is a zero-width point at the (clamped,
+/// boundary-coherent) position of byte offset `at`.
+fn _err_at(code: String, source_id: String, src: &String, at: Int) nothrow -> SourceError {
+	val pos = _position_at(src, at);
+	return SourceError(code = code, span = SourceSpan(source_id = source_id, start = pos, end = pos));
+}
+
+/// Builds a `String` from already-validated UTF-8 bytes WITHOUT a second
+/// validation pass (`source_cursor` has already validated them).
+fn _string_from_validated_bytes(bytes: &Array<Byte>) nothrow -> String {
+	val n = bytes.len;
+	if n <= 0 {
+		return "";
+	}
+	var b = io.buffer(n);
+	var i = 0;
+	while i < n {
+		io.buffer_write(&mut b, i, bytes[i]);
+		i = i + 1;
+	}
+	return core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
+}
+
+/// Constructs a cursor from raw loaded bytes, validating UTF-8 eagerly.
+///
+/// On the first invalid byte returns `Err(SourceError{code =
+/// "invalid-utf8", ...})` with a zero-width span at that byte.  On
+/// success every offset the cursor produces is guaranteed to sit on a
+/// scalar boundary.
+pub fn source_cursor(bytes: &Array<Byte>, source_id: String) nothrow -> core.Result<SourceCursor, SourceError> {
+	match _validate_utf8(bytes, source_id) {
+		core.Result::Err(err) => { return core.Result::Err(err); },
+		core.Result::Ok(_) => { }
+	}
+	// Single validation pass: `_validate_utf8` already proved the bytes
+	// are well-formed UTF-8, so construct the String without re-validating.
+	val src = _string_from_validated_bytes(bytes);
+	return core.Result::Ok(source_cursor_from_string(src, source_id));
+}
+
+/// Constructs a cursor from an already-valid Drift `String` (no
+/// re-validation: a Drift `String` is already valid UTF-8).
+pub fn source_cursor_from_string(src: String, source_id: String) nothrow -> SourceCursor {
+	val len = src.byte_length();
+	return SourceCursor(src = src, id = source_id, len = len, offset = 0, line = 1, column = 1);
+}
+
+implement SourceCursor {
+	/// The current position `{offset, line, column}`.
+	pub fn position(self: &SourceCursor) nothrow -> SourcePos {
+		return SourcePos(byte_offset = self.offset, line = self.line, column = self.column);
+	}
+
+	/// True when the cursor has consumed every scalar.
+	pub fn at_end(self: &SourceCursor) nothrow -> Bool {
+		return self.offset >= self.len;
+	}
+
+	/// Returns the current Unicode scalar value WITHOUT advancing, or
+	/// `-1` at end of input.
+	pub fn peek(self: &SourceCursor) nothrow -> Int {
+		if self.at_end() {
+			return -1;
+		}
+		return _decode_at(&self.src, self.offset);
+	}
+
+	/// Decodes and consumes the current Unicode scalar value, or `-1` at
+	/// end of input (no movement).  Only `LF` (`0x0A`) advances the line;
+	/// `CR` (`0x0D`) is an ordinary scalar — so `CRLF` is two `advance`
+	/// calls and the line advances exactly once, on the `LF`.
+	pub fn advance(self: &mut SourceCursor) nothrow -> Int {
+		if self.at_end() {
+			return -1;
+		}
+		val scalar = _decode_at(&self.src, self.offset);
+		self.offset = self.offset + _scalar_width(&self.src, self.offset);
+		if scalar == 10 {
+			self.line = self.line + 1;
+			self.column = 1;
+		} else {
+			self.column = self.column + 1;
+		}
+		return scalar;
+	}
+
+	/// Snapshot the current position for later span construction.
+	pub fn mark(self: &SourceCursor) nothrow -> SourcePos {
+		return self.position();
+	}
+
+	/// Build a span from a prior `mark` to the current position.
+	pub fn span_from(self: &SourceCursor, start: SourcePos) nothrow -> SourceSpan {
+		return SourceSpan(source_id = self.id, start = start, end = self.position());
+	}
+
+	/// A zero-width span at the current position (EOF / point diagnostics).
+	pub fn span_here(self: &SourceCursor) nothrow -> SourceSpan {
+		val pos = self.position();
+		return SourceSpan(source_id = self.id, start = pos, end = pos);
+	}
+
+	/// The cursor's logical `source_id`.
+	pub fn source_id(self: &SourceCursor) nothrow -> String {
+		return self.id;
+	}
+
+	/// The total byte length of the source.
+	pub fn byte_length(self: &SourceCursor) nothrow -> Int {
+		return self.len;
+	}
+
+	/// Slice the source by authoritative byte offsets `[start, end)`.
+	///
+	/// Rejects out-of-range / inverted ranges (`"invalid-slice-range"`)
+	/// and offsets that fall inside a multibyte scalar
+	/// (`"slice-not-char-boundary"`); a continuation byte (0x80–0xBF) at
+	/// `start` or `end` means the offset splits a scalar.
+	pub fn slice(self: &SourceCursor, start: Int, end: Int) nothrow -> core.Result<String, SourceError> {
+		if start < 0 or end < start or end > self.len {
+			val at = (start < 0 or start > self.len) ? start : end;
+			return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, at));
+		}
+		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, end)))) {
+			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) ? start : end;
+			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, &self.src, at));
+		}
+		match text.substring(&self.src, start, end - start) {
+			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, start)); },
+			core.Result::Ok(value) => { return core.Result::Ok(value); }
+		}
+	}
+
+	/// Slice the source covered by a span.  In addition to `slice`'s
+	/// range + boundary checks, rejects a span whose `source_id` differs
+	/// from this cursor's (`"span-source-mismatch"`) — a span from a
+	/// different source must never slice this one.
+	pub fn slice_span(self: &SourceCursor, span: &SourceSpan) nothrow -> core.Result<String, SourceError> {
+		if span.source_id != self.id {
+			// Honor the SourceError zero-width contract: collapse the
+			// foreign span to a point at its start (keeping the foreign
+			// source_id, so the error still names where the bad span
+			// came from).
+			val p = span.start;
+			return core.Result::Err(SourceError(code = "span-source-mismatch", span = SourceSpan(source_id = span.source_id, start = p, end = p)));
+		}
+		return self.slice(span.start.byte_offset, span.end.byte_offset);
+	}
+}

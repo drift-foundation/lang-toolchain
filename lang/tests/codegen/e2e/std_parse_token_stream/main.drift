@@ -1,0 +1,215 @@
+module m;
+
+import std.parse as parse;
+import std.source as source;
+import std.core as core;
+import std.core.cmp as cmp;
+import std.text as text;
+
+// A concrete token kind: proves the TokenKind trait (Equatable + describe)
+// and drives TokenStream peek/current/advance/at_end/expect, including the
+// expected/found diagnostic paths, plus a leak-clean drop with tokens
+// still buffered.
+
+pub variant Kind {
+	Ident,
+	Comma,
+	Eq,
+}
+
+implement cmp.Equatable for Kind {
+	pub fn eq(self: &Kind, other: &Kind) nothrow -> Bool {
+		match *self {
+			Kind::Ident => { match *other { Kind::Ident => { return true; }, default => { return false; } } },
+			Kind::Comma => { match *other { Kind::Comma => { return true; }, default => { return false; } } },
+			Kind::Eq    => { match *other { Kind::Eq    => { return true; }, default => { return false; } } }
+		}
+	}
+}
+
+implement parse.TokenKind for Kind {
+	pub fn describe(self: &Kind) nothrow -> String {
+		match *self {
+			Kind::Ident => { return "identifier"; },
+			Kind::Comma => { return "','"; },
+			Kind::Eq    => { return "'='"; }
+		}
+	}
+}
+
+fn span_at(off: Int) nothrow -> source.SourceSpan {
+	val p = source.SourcePos(byte_offset = off, line = 1, column = off + 1);
+	return source.SourceSpan(source_id = "t", start = p, end = p);
+}
+
+fn tok(k: Kind, off: Int) nothrow -> parse.Token<Kind> {
+	return parse.Token<type Kind>(kind = k, span = span_at(off));
+}
+
+// A token kind that OWNS a heap-allocated String, so that dropping a
+// buffered Token<WKind> must actually free something — turning the
+// buffered-drop test into a real memcheck leak gate (a `Kind`/`SourceSpan`
+// token owns no trackable heap payload and would mask a missed destroy).
+pub variant WKind {
+	Word(s: String),
+	End,
+}
+
+implement cmp.Equatable for WKind {
+	pub fn eq(self: &WKind, other: &WKind) nothrow -> Bool {
+		// rank-compare without binding the String payload (no move out of
+		// the borrow); the leak test does not depend on word equality.
+		return self._rank() == other._rank();
+	}
+}
+
+implement WKind {
+	fn _rank(self: &WKind) nothrow -> Int {
+		match *self {
+			WKind::Word(_) => { return 0; },
+			WKind::End     => { return 1; }
+		}
+	}
+}
+
+implement parse.TokenKind for WKind {
+	pub fn describe(self: &WKind) nothrow -> String {
+		match *self {
+			WKind::Word(_) => { return "word"; },
+			WKind::End     => { return "end"; }
+		}
+	}
+}
+
+// Build a genuinely heap-allocated String (StringBuilder finalizes into a
+// fresh allocation, not a static literal).
+fn heap_word(base: String) nothrow -> String {
+	var sb = text.string_builder(8);
+	text.sb_append_string(&mut sb, &base);
+	text.sb_append_string(&mut sb, &"-tok");
+	return text.sb_build(&mut sb);
+}
+
+fn wtok(var k: WKind, off: Int) nothrow -> parse.Token<WKind> {
+	return parse.Token<type WKind>(kind = move k, span = span_at(off));
+}
+
+fn main() nothrow -> Int {
+	// Tokens: Ident Eq Ident Comma   (e.g. `a = b ,`)
+	var toks: Array<parse.Token<Kind>> = [];
+	toks.push(tok(Kind::Ident(), 0));
+	toks.push(tok(Kind::Eq(), 2));
+	toks.push(tok(Kind::Ident(), 4));
+	toks.push(tok(Kind::Comma(), 6));
+
+	val eof = span_at(7);
+	var ts = parse.token_stream<type Kind>(move toks, eof);
+
+	// peek / lookahead (borrows, idempotent, order preserved)
+	match ts.peek(0) {
+		Some(t) => { if t.span.start.byte_offset != 0 { return 31; } },
+		None => { return 32; }
+	}
+	match ts.peek(1) {
+		Some(t) => { if t.span.start.byte_offset != 2 { return 33; } },
+		None => { return 34; }
+	}
+	// peek is idempotent
+	match ts.peek(0) {
+		Some(t) => { if t.span.start.byte_offset != 0 { return 35; } },
+		None => { return 36; }
+	}
+	if ts.at_end() { return 37; }
+
+	// expect Ident (Ok path, consumes)
+	val want_ident = Kind::Ident();
+	match ts.expect(&want_ident, "identifier") {
+		core.Result::Ok(t) => { if t.span.start.byte_offset != 0 { return 41; } },
+		core.Result::Err(_) => { return 42; }
+	}
+
+	// next is Eq; expect Comma -> Err unexpected-token, no consume
+	val want_comma = Kind::Comma();
+	match ts.expect(&want_comma, "','") {
+		core.Result::Ok(_) => { return 43; },
+		core.Result::Err(d) => {
+			if d.code != "unexpected-token" { return 44; }
+			if d.span.start.byte_offset != 2 { return 45; }   // the Eq token at offset 2
+			match d.found {
+				Some(f) => { if f != "'='" { return 46; } },
+				None => { return 47; }
+			}
+			if d.expected.len != 1 { return 48; }
+		}
+	}
+
+	// the failed expect did NOT consume: next is still Eq
+	val want_eq = Kind::Eq();
+	match ts.expect(&want_eq, "'='") {
+		core.Result::Ok(t) => { if t.span.start.byte_offset != 2 { return 51; } },
+		core.Result::Err(_) => { return 52; }
+	}
+
+	// consume the remaining Ident via advance
+	match ts.advance() {
+		Some(t) => { if t.span.start.byte_offset != 4 { return 53; } },
+		None => { return 54; }
+	}
+
+	// current() borrows the next token to consume (the Comma at offset 6)
+	match ts.current() {
+		Some(t) => { if t.span.start.byte_offset != 6 { return 55; } },
+		None => { return 56; }
+	}
+	if ts.at_end() { return 57; }
+
+	// drain the final Comma; now at EOF
+	match ts.advance() {
+		Some(t) => { if t.span.start.byte_offset != 6 { return 58; } },
+		None => { return 59; }
+	}
+	if not ts.at_end() { return 60; }
+
+	// at EOF: current() is None, advance() is None
+	match ts.current() {
+		Some(_) => { return 61; },
+		None => { }
+	}
+	match ts.advance() {
+		Some(_) => { return 62; },
+		None => { }
+	}
+
+	// expect() at EOF -> unexpected-eof, span == eof_span (offset 7),
+	// found == None (the structured EOF encoding).
+	val want_any = Kind::Ident();
+	match ts.expect(&want_any, "identifier") {
+		core.Result::Ok(_) => { return 63; },
+		core.Result::Err(d) => {
+			if d.code != "unexpected-eof" { return 64; }
+			if d.span.start.byte_offset != 7 { return 65; }   // eof_span
+			if d.expected.len != 1 { return 66; }
+			match d.found {
+				Some(_) => { return 67; },   // must be None at EOF
+				None => { }
+			}
+		}
+	}
+
+	// Separately exercise the Destructible drop path with HEAP-OWNING
+	// tokens still buffered: each WKind::Word owns a freshly-allocated
+	// String, so a missed buffered-token destroy is a real memcheck leak.
+	var toks2: Array<parse.Token<WKind>> = [];
+	toks2.push(wtok(WKind::Word(heap_word("alpha")), 0));
+	toks2.push(wtok(WKind::Word(heap_word("beta")), 4));
+	toks2.push(wtok(WKind::Word(heap_word("gamma")), 8));
+	var ts2 = parse.token_stream<type WKind>(move toks2, span_at(12));
+	match ts2.advance() {
+		Some(_) => { },   // consume + drop one Word (its String freed here)
+		None => { return 68; }
+	}
+	if ts2.at_end() { return 69; }   // two heap Words still buffered
+	// ts2 drops here owning two unconsumed WKind::Word tokens; their
+	// Strings must be freed by the Destructible chain -> memcheck leak gate.
+	return 0;
+}

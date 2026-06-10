@@ -1,6 +1,9 @@
 module std.parse;
 
 import std.core as core;
+import std.core.cmp as cmp;
+import std.containers as containers;
+import std.source as source;
 
 export {
 	ParseError,
@@ -9,8 +12,156 @@ export {
 	parse_uint,
 	parse_float,
 	parse_int_bytes,
-	parse_uint_bytes
+	parse_uint_bytes,
+	TokenKind,
+	Token,
+	TokenStream,
+	ParseDiagnostic,
+	token_stream,
+	parse_diagnostic
 };
+
+// ── Frontend toolkit ────────────────────────────────────────────────
+//
+// A pull-style token stream and structured diagnostic for hand-written
+// recursive-descent parsers.  Source positions, spans, and the cursor
+// live in `std.source`; this surface builds tokens and a lookahead
+// stream on top of `std.source.SourceSpan`.  The existing scalar
+// parsers below (`parse_int`, …) are unchanged.
+
+/// A token-kind type usable with `TokenStream.expect`.
+///
+/// `Equatable` lets the stream compare a token's kind against an
+/// expected kind; `describe` supplies the human-facing descriptor that
+/// appears in a diagnostic's `found` / `expected` lists (descriptor
+/// prose is not part of the stable contract — see `ParseDiagnostic`).
+pub trait TokenKind require Self is cmp.Equatable {
+	fn describe(self: &Self) nothrow -> String;
+}
+
+/// A lexed token: a user kind `K` paired with its durable source span.
+pub struct Token<K> {
+	pub kind: K,
+	pub span: source.SourceSpan,
+}
+
+/// Stable, structured parser diagnostic.
+///
+/// `code` is a machine-readable, kebab-case identifier whose set is part
+/// of the public contract (`"unexpected-token"`, `"unexpected-eof"`, …);
+/// `span.source_id` is logical and safe to persist.  `expected` is a
+/// (possibly empty) set of descriptors the parser wanted; `found` is the
+/// descriptor of what was seen, or `None` at end of input — `None` is
+/// the structured EOF encoding, never a magic prose value.  Descriptor
+/// prose inside `expected`/`found` is human-facing and may change between
+/// versions; tests assert `code` + span + `found.is_none()`, never prose.
+pub struct ParseDiagnostic {
+	pub code: String,
+	pub span: source.SourceSpan,
+	pub expected: Array<String>,
+	pub found: Optional<String>,
+}
+
+/// An owned token stream over a fully pre-lexed sequence.
+///
+/// Owns its tokens (a `containers.Deque<Token<K>>`); `peek(n)` borrows
+/// the n-th remaining token (lookahead is limited only by how many
+/// tokens remain — there is no fixed capacity), `advance` consumes the
+/// front by move, and `expect` consumes-or-diagnoses.  Dropping the
+/// stream drops every unconsumed token.
+pub struct TokenStream<K> require K is TokenKind {
+	tokens: containers.Deque<Token<K>>,
+	eof_span: source.SourceSpan,
+}
+
+/// Constructs a structured diagnostic.  `found = None` encodes
+/// end-of-input.
+pub fn parse_diagnostic(code: String, span: source.SourceSpan, expected: Array<String>, found: Optional<String>) nothrow -> ParseDiagnostic {
+	return ParseDiagnostic(code = code, span = span, expected = move expected, found = found);
+}
+
+/// Constructs a stream by moving `tokens` into the lookahead buffer in
+/// their original order.  `eof_span` is the zero-width span reported for
+/// `"unexpected-eof"` diagnostics (typically `cursor.span_here()` at end
+/// of input).
+pub fn token_stream<K>(var tokens: Array<Token<K>>, eof_span: source.SourceSpan) nothrow -> TokenStream<K> require K is TokenKind {
+	var queue = containers.deque<type Token<K>>();
+	while true {
+		match tokens.pop() {
+			Some(token) => { queue.push_front(move token); },
+			None => { break; }
+		}
+	}
+	return TokenStream<type K>(tokens = move queue, eof_span = eof_span);
+}
+
+implement<K> TokenStream<K> require K is TokenKind {
+	/// Borrow the token `n` positions ahead (0 = the next token to be
+	/// consumed), or `None` at/after end of input.
+	pub fn peek(self: &TokenStream<K>, n: Int) nothrow -> Optional<&Token<K>> {
+		return self.tokens.get(n);
+	}
+
+	/// Borrow the next token to be consumed, or `None` at end of input.
+	pub fn current(self: &TokenStream<K>) nothrow -> Optional<&Token<K>> {
+		return self.peek(0);
+	}
+
+	/// Consume and return the next token by move, or `None` at end of
+	/// input.
+	pub fn advance(self: &mut TokenStream<K>) nothrow -> Optional<Token<K>> {
+		return self.tokens.pop_front();
+	}
+
+	/// True once every token has been consumed.
+	pub fn at_end(self: &TokenStream<K>) nothrow -> Bool {
+		return self.tokens.len() == 0;
+	}
+
+	/// Consume the next token if its kind equals `expected_kind`;
+	/// otherwise return a diagnostic without consuming.  At end of input
+	/// returns `"unexpected-eof"` (span = `eof_span`); on a kind mismatch
+	/// returns `"unexpected-token"` (span = the offending token's span,
+	/// `found` = the token's descriptor).  `expected_name` is the
+	/// descriptor recorded in `expected`.
+	pub fn expect(self: &mut TokenStream<K>, expected_kind: &K, expected_name: String) nothrow -> core.Result<Token<K>, ParseDiagnostic> {
+		var matched = false;
+		var found_desc = "";
+		var mismatch_span = self.eof_span;
+		match self.tokens.get(0) {
+			Some(token) => {
+				matched = cmp.Equatable::eq(&token.kind, expected_kind);
+				found_desc = TokenKind::describe(&token.kind);
+				mismatch_span = token.span;
+			},
+			None => {
+				var expected: Array<String> = [];
+				expected.push(expected_name);
+				return core.Result::Err(parse_diagnostic("unexpected-eof", self.eof_span, move expected, Optional<String>::None()));
+			}
+		}
+		if matched {
+			match self.tokens.pop_front() {
+				Some(value) => { return core.Result::Ok(value); },
+				None => { }
+			}
+		}
+		var expected: Array<String> = [];
+		expected.push(expected_name);
+		return core.Result::Err(parse_diagnostic("unexpected-token", mismatch_span, move expected, Optional<String>::Some(found_desc)));
+	}
+}
+
+implement<K> core.Destructible for TokenStream<K> require K is TokenKind {
+	pub fn destroy(var self: TokenStream<K>) nothrow -> Void {
+		while true {
+			match self.tokens.pop_front() {
+				Some(_) => { },
+				None => { break; }
+			}
+		}
+	}
+}
 
 /// Error returned by failable string-to-number parsers.
 ///

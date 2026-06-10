@@ -583,3 +583,100 @@ Rules:
 - `maybe_write` transfers ownership of `v` into the slot; for non-Copy `T`, `v` is moved-out at the call site.
 - `maybe_assume_init_read` moves the value out and zeroes the slot's bytes; the slot is uninitialized again after the call.
 - The compiler does not perform path-sensitive read-before-write detection or leak-on-drop hinting on `MaybeUninit<T>` locals.  `MaybeUninit<T>` itself has no destructor — abandoning a written-but-never-read slot leaks the inner value silently.  Tracking initialization state is the caller's contract under `unsafe`.
+
+## std.source
+
+Source-location primitives and a UTF-8 scalar cursor for hand-written
+frontends (lexers, recursive-descent parsers).  Byte offsets are
+authoritative for slicing and hashing; line/column are diagnostic
+coordinates only.  `source_id` is logical/configured (never an absolute
+build path) and may be persisted into IR.  Same bytes + same `source_id`
+produce byte-identical spans, slices, and diagnostics across machines and
+reloads.
+
+Types:
+- `SourcePos { byte_offset: Int, line: Int, column: Int }` — `Copy`.
+  `byte_offset` is 0-based and authoritative; `line`/`column` are 1-based,
+  and `column` counts **Unicode scalar values**, not bytes.
+- `SourceSpan { source_id: String, start: SourcePos, end: SourcePos }` —
+  `Copy`; a half-open byte range `[start, end)`.
+- `SourceError { code: String, span: SourcePos-bearing SourceSpan }` —
+  construction/slicing failure.  `code` is one of `"invalid-utf8"`,
+  `"invalid-slice-range"`, `"slice-not-char-boundary"`,
+  `"span-source-mismatch"` (stable, kebab-case).
+- `SourceCursor` — a forward, eagerly-validated scalar cursor (owns the
+  source as an Arc-backed `String`).
+
+Free functions:
+- `pos_zero() -> SourcePos` — the canonical start `{0, 1, 1}` (no
+  `source_id`; `SourcePos` carries no source identity).
+- `span_byte_len(&SourceSpan) -> Int`, `span_is_empty(&SourceSpan) -> Bool`.
+- `source_cursor(&Array<Byte>, source_id) -> Result<SourceCursor, SourceError>`
+  — validates UTF-8 in one O(n) pass; on the first invalid byte returns
+  `Err` with a zero-width span at that byte.  After success every offset
+  the cursor yields sits on a scalar boundary, so decode is infallible.
+- `source_cursor_from_string(String, source_id) -> SourceCursor` — no
+  re-validation (a Drift `String` is already valid UTF-8).
+
+Cursor methods (all `nothrow`): `position()`, `at_end()`, `peek() -> Int`
+(scalar value, `-1` at EOF), `advance() -> Int` (decode+consume, `-1` at
+EOF), `mark()`, `span_from(start)`, `span_here()`, `source_id()`,
+`byte_length()`, `slice(start, end) -> Result<String, SourceError>`,
+`slice_span(&SourceSpan) -> Result<String, SourceError>`.
+
+LF / CRLF and column semantics (frozen):
+- Only `LF` (`0x0A`) advances the line (`line += 1`, `column = 1`).
+- `CR` (`0x0D`) is an ordinary scalar (`column += 1`, line unchanged).
+- `CRLF` is therefore **two** `advance` calls — the `\r` and `\n` are each
+  individually observable, and the line advances exactly once, on the
+  `\n`.  The cursor never hides a byte; a lexer that wants `\r\n` as one
+  logical newline consumes the `\r` then the `\n` explicitly.
+- A 4-byte scalar advances `column` by 1 and `byte_offset` by 4.
+
+Slicing rejects (with `SourceError`): out-of-range / inverted ranges
+(`invalid-slice-range`), offsets that split a multibyte scalar — a
+continuation byte `0x80–0xBF` at `start` or `end` (`slice-not-char-boundary`),
+and `slice_span` of a span whose `source_id` differs from the cursor's
+(`span-source-mismatch`).
+
+## std.parse (frontend toolkit)
+
+Builds a pull-style token stream and a structured diagnostic on top of
+`std.source`.  The existing scalar parsers (`parse_int`, `parse_uint`,
+`parse_float`, `parse_bool`, `*_bytes`, and `ParseError`) are unchanged and
+re-exported as before; the frontend surface below is purely additive.  No
+parser combinators or generator — a foundation for hand-written
+recursive-descent parsing only.
+
+- `trait TokenKind require Self is cmp.Equatable { fn describe(&Self) -> String }`
+  — a user token-kind type.  `Equatable` lets `expect` compare kinds;
+  `describe` supplies the human-facing descriptor used in diagnostics.
+- `Token<K> { kind: K, span: source.SourceSpan }`.
+- `ParseDiagnostic { code: String, span: source.SourceSpan,
+  expected: Array<String>, found: Optional<String> }` — `code` is stable,
+  kebab-case (toolkit base set: `"unexpected-token"`, `"unexpected-eof"`);
+  `found = None` is the structured end-of-input encoding (never a magic
+  prose value).  Descriptor prose inside `expected`/`found` is human-facing
+  and **not** part of the stable contract — pin `code` + span +
+  `found.is_none()`, not prose.
+- `TokenStream<K> require K is TokenKind` — owns its tokens
+  (`containers.Deque<Token<K>>`); `Destructible` (dropping it drops every
+  unconsumed token).
+
+Free functions:
+- `parse_diagnostic(code, span, expected, found) -> ParseDiagnostic`.
+- `token_stream<K>(var tokens: Array<Token<K>>, eof_span: SourceSpan) -> TokenStream<K>`
+  — moves `tokens` into the lookahead buffer in order; `eof_span` is the
+  zero-width span reported for `unexpected-eof`.
+
+`TokenStream<K>` methods (all `nothrow`):
+- `peek(n) -> Optional<&Token<K>>` — borrow the n-th lookahead token
+  (0 = next to consume); `None` at/after end of input.
+- `current() -> Optional<&Token<K>>` — `peek(0)`.
+- `advance() -> Optional<Token<K>>` — consume the front by move.
+- `at_end() -> Bool`.
+- `expect(&K, expected_name: String) -> Result<Token<K>, ParseDiagnostic>`
+  — consume the next token if its kind equals the expected kind; otherwise
+  return a diagnostic **without consuming** (`unexpected-eof` at end of
+  input, else `unexpected-token` with the offending token's span and its
+  `describe()` as `found`).

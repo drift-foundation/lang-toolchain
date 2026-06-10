@@ -645,6 +645,21 @@ implement<T> Deque<T> {
 		unsafe { return mem.ptr_at_ref<type T>(&self.buf, phys); }
 	}
 
+	/// Returns a shared reference to logical index `i`, or `None` when
+	/// `i` is out of range.  Nothrow counterpart to `at` — the
+	/// bounds-checked, borrow-returning accessor for callers that must
+	/// not throw (e.g. lookahead in a parser token stream).
+	///
+	/// **See also:** `Deque.at`, `Deque.at_mut`.
+	pub fn get(self: &Deque<T>, i: Int) nothrow -> Optional<&T> {
+		if i < 0 or i >= self.len {
+			return Optional<&T>::None();
+		}
+		val cap = self.cap();
+		val phys = (self.head + i) % cap;
+		unsafe { return Optional::Some(mem.ptr_at_ref<type T>(&self.buf, phys)); }
+	}
+
 	/// Returns a mutable reference to the element at logical index
 	/// `i`.
 	///

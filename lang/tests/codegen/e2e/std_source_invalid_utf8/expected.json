@@ -1,0 +1,4 @@
+{
+  "description": "std.source eager UTF-8 validation: rejects bad continuation at exact byte offset with line/col; accepts valid multibyte",
+  "exit_code": 0
+}

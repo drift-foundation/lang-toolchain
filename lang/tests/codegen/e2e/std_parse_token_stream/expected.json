@@ -1,0 +1,4 @@
+{
+  "description": "std.parse TokenStream: lookahead/peek idempotency, advance, at_end, expect Ok/Err (expected-found diagnostic), leak-clean drop with token buffered",
+  "exit_code": 0
+}

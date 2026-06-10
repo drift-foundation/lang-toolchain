@@ -1,0 +1,70 @@
+module m;
+
+import std.source as source;
+import std.core as core;
+
+// Exercises SourceCursor construction, scalar walk, position tracking,
+// and EOF. Returns 0 on success; a distinct nonzero code per failed
+// check so a regression points at the exact invariant.
+
+fn check_ascii() nothrow -> Int {
+	// "abc\n d"  — bytes: a b c \n SP d
+	var cur = source.source_cursor_from_string("abc\n d", "ascii");
+	// start at 0,1,1
+	val p0 = cur.position();
+	if p0.byte_offset != 0 or p0.line != 1 or p0.column != 1 { return 11; }
+	if cur.advance() != 97 { return 12; }   // 'a'
+	if cur.advance() != 98 { return 13; }   // 'b'
+	if cur.advance() != 99 { return 14; }   // 'c'
+	val pc = cur.position();
+	if pc.byte_offset != 3 or pc.line != 1 or pc.column != 4 { return 15; }
+	if cur.advance() != 10 { return 16; }    // '\n' advances line
+	val pn = cur.position();
+	if pn.byte_offset != 4 or pn.line != 2 or pn.column != 1 { return 17; }
+	if cur.advance() != 32 { return 18; }    // ' '
+	if cur.advance() != 100 { return 19; }   // 'd'
+	if not cur.at_end() { return 20; }
+	if cur.advance() != -1 { return 21; }    // EOF, no movement
+	if cur.advance() != -1 { return 22; }
+	return 0;
+}
+
+fn check_multibyte() nothrow -> Int {
+	// "a€b" — 'a'(1) '€'(U+20AC, 3 bytes) 'b'(1). Column counts scalars.
+	var cur = source.source_cursor_from_string("a€b", "mb");
+	if cur.advance() != 97 { return 31; }       // 'a', offset->1, col->2
+	val p1 = cur.position();
+	if p1.byte_offset != 1 or p1.column != 2 { return 32; }
+	if cur.advance() != 8364 { return 33; }     // '€' U+20AC, offset += 3
+	val p2 = cur.position();
+	if p2.byte_offset != 4 or p2.column != 3 { return 34; }   // column +1, not +3
+	if cur.advance() != 98 { return 35; }       // 'b'
+	val p3 = cur.position();
+	if p3.byte_offset != 5 or p3.column != 4 { return 36; }
+	if not cur.at_end() { return 37; }
+	return 0;
+}
+
+fn check_crlf() nothrow -> Int {
+	// "a\r\nb" — \r is an ordinary scalar (no line advance), \n advances.
+	var cur = source.source_cursor_from_string("a\r\nb", "crlf");
+	if cur.advance() != 97 { return 41; }    // 'a' -> line 1, col 2
+	if cur.advance() != 13 { return 42; }    // '\r' observed as a scalar
+	val pcr = cur.position();
+	if pcr.line != 1 or pcr.column != 3 { return 43; }   // CR did NOT advance line
+	if cur.advance() != 10 { return 44; }    // '\n' -> line advances once
+	val plf = cur.position();
+	if plf.line != 2 or plf.column != 1 { return 45; }
+	if cur.advance() != 98 { return 46; }    // 'b' on line 2
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	val a = check_ascii();
+	if a != 0 { return a; }
+	val m = check_multibyte();
+	if m != 0 { return m; }
+	val c = check_crlf();
+	if c != 0 { return c; }
+	return 0;
+}

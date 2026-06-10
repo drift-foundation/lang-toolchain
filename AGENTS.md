@@ -8,6 +8,9 @@
 - **Do not** wrap long lines (calls with many arguments, long expressions) for readability; avoid indentation churn, specially if code is deeply nested.
 - **Do not** edit exisit tests without a clear confirmation it's OK. No bending around tests to patch compiler/infra deficiencies.
 
+## Announcements
+- Read and publish cross-team announcements from/to /tmp/drift-announce/<iso-utc-datetime>-<repo>-release-notes.md
+
 ## Compiler/Runtime Bug Policy (strict)
 
   - If behavior indicates a language/toolchain defect (parser, checker, lowering, codegen, runtime semantics), classify it immediately as LANGUAGE_BUG.

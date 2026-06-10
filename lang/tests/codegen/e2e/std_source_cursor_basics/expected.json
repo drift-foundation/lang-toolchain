@@ -1,0 +1,4 @@
+{
+  "description": "std.source SourceCursor: ASCII walk, multibyte scalar columns, two-step CRLF line advance, EOF",
+  "exit_code": 0
+}

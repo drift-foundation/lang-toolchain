@@ -1,0 +1,49 @@
+module m;
+
+import std.source as source;
+import std.core as core;
+
+// Eager UTF-8 validation rejects malformed input at the exact offending
+// byte, with a zero-width span carrying line/column up to that point.
+
+fn main() nothrow -> Int {
+	// "a\n" then 0xE2 0x28 0x62 — 0xE2 starts a 3-byte sequence whose
+	// first continuation (offset 3, '(' = 0x28) is invalid. Trailing
+	// 'b' (offset 4) keeps the sequence in-range so the continuation
+	// check fires (rather than a truncation at the leader).
+	// Bytes: a=0, \n=1, 0xE2=2, 0x28=3 (bad), b=4.
+	var bytes: Array<Byte> = [];
+	bytes.push(cast<Byte>(97));    // 'a'   offset 0
+	bytes.push(cast<Byte>(10));    // '\n'  offset 1
+	bytes.push(cast<Byte>(226));   // 0xE2  offset 2 (3-byte leader)
+	bytes.push(cast<Byte>(40));    // '('   offset 3 (invalid continuation)
+	bytes.push(cast<Byte>(98));    // 'b'   offset 4
+
+	match source.source_cursor(&bytes, "bad") {
+		core.Result::Ok(_) => { return 1; },   // must NOT succeed
+		core.Result::Err(e) => {
+			if e.code != "invalid-utf8" { return 2; }
+			// span is zero-width at the offending byte (the bad
+			// continuation at offset 3).
+			if e.span.start.byte_offset != 3 { return 3; }
+			if e.span.end.byte_offset != 3 { return 4; }
+			// line/column reflect the start of the offending sequence,
+			// which is on line 2 (after the '\n'), column 1.
+			if e.span.start.line != 2 { return 5; }
+			if e.span.start.column != 1 { return 6; }
+			if e.span.source_id != "bad" { return 7; }
+		}
+	}
+
+	// A valid sequence (a, U+20AC '€', b) must succeed.
+	var ok: Array<Byte> = [];
+	ok.push(cast<Byte>(97));
+	ok.push(cast<Byte>(226));
+	ok.push(cast<Byte>(130));
+	ok.push(cast<Byte>(172));
+	ok.push(cast<Byte>(98));
+	match source.source_cursor(&ok, "ok") {
+		core.Result::Ok(_) => { return 0; },
+		core.Result::Err(_) => { return 8; }
+	}
+}

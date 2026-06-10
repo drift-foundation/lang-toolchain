@@ -1,0 +1,95 @@
+module m;
+
+import std.source as source;
+import std.core as core;
+
+// Byte-offset slicing: success, out-of-range rejection, mid-scalar
+// (char-boundary) rejection, and cross-source span rejection.
+
+fn main() nothrow -> Int {
+	// "héllo": h(0,1B) é=U+00E9(1..3, 2B) l(3) l(4) o(5). len = 6.
+	var cur = source.source_cursor_from_string("héllo", "a");
+
+	// valid slice [0,1) == "h"
+	match cur.slice(0, 1) {
+		core.Result::Ok(s) => { if s != "h" { return 1; } },
+		core.Result::Err(_) => { return 2; }
+	}
+	// valid slice spanning the 2-byte é: [1,3) == "é"
+	match cur.slice(1, 3) {
+		core.Result::Ok(s) => { if s != "é" { return 3; } },
+		core.Result::Err(_) => { return 4; }
+	}
+
+	// out-of-range end
+	match cur.slice(0, 99) {
+		core.Result::Ok(_) => { return 5; },
+		core.Result::Err(e) => { if e.code != "invalid-slice-range" { return 6; } }
+	}
+	// inverted range
+	match cur.slice(3, 1) {
+		core.Result::Ok(_) => { return 7; },
+		core.Result::Err(e) => { if e.code != "invalid-slice-range" { return 8; } }
+	}
+
+	// mid-scalar: end at offset 2 falls inside é (continuation byte)
+	match cur.slice(0, 2) {
+		core.Result::Ok(_) => { return 9; },
+		core.Result::Err(e) => {
+			if e.code != "slice-not-char-boundary" { return 10; }
+			if e.span.start.byte_offset != 2 { return 11; }
+			// the bad offset (2) is INSIDE é, which begins at column 2;
+			// the reported column must name the containing scalar, not
+			// overshoot to column 3.
+			if e.span.start.column != 2 { return 18; }
+			if e.span.start.line != 1 { return 19; }
+			// SourceError span is a zero-width point.
+			if e.span.end.byte_offset != 2 { return 20; }
+		}
+	}
+	// mid-scalar: start at offset 2 (inside é)
+	match cur.slice(2, 3) {
+		core.Result::Ok(_) => { return 12; },
+		core.Result::Err(e) => { if e.code != "slice-not-char-boundary" { return 13; } }
+	}
+
+	// out-of-range end: the error span is clamped and coherent — its
+	// byte_offset is the source length (6), not the raw 99, and its
+	// line/column match that clamped offset.
+	match cur.slice(0, 99) {
+		core.Result::Ok(_) => { return 21; },
+		core.Result::Err(e) => {
+			if e.code != "invalid-slice-range" { return 22; }
+			if e.span.start.byte_offset != 6 { return 23; }   // clamped to len
+			if e.span.start.byte_offset != e.span.end.byte_offset { return 24; }
+		}
+	}
+
+	// cross-source: a span from cursor B must not slice cursor A. Use a
+	// NON-empty span on B so the zero-width contract is actually tested
+	// (a point span would mask a violation).
+	var other = source.source_cursor_from_string("héllo", "b");
+	other.advance();   // 'h'
+	other.advance();   // 'é' -> offset 3, so span_from(pos_zero) is [0,3)
+	val span_b = other.span_from(source.pos_zero());   // source_id = "b", non-empty
+	if source.span_byte_len(&span_b) == 0 { return 25; }   // guard: span IS non-empty
+	match cur.slice_span(&span_b) {
+		core.Result::Ok(_) => { return 14; },
+		core.Result::Err(e) => {
+			if e.code != "span-source-mismatch" { return 15; }
+			// SourceError span must be zero-width even though the input
+			// span covered 3 bytes.
+			if e.span.start.byte_offset != e.span.end.byte_offset { return 26; }
+		}
+	}
+
+	// same-source slice_span succeeds: build a span on A covering [0,1)
+	var cur2 = source.source_cursor_from_string("héllo", "a");
+	cur2.advance();   // consume 'h' -> offset 1
+	val span_a = cur2.span_from(source.pos_zero());   // [0,1) on "a"
+	match cur.slice_span(&span_a) {
+		core.Result::Ok(s) => { if s != "h" { return 16; } },
+		core.Result::Err(_) => { return 17; }
+	}
+	return 0;
+}
