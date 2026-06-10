@@ -33,7 +33,27 @@ export {
 	encode_with_config,
 	encode_compact_with_config,
 	parse,
-	share
+	share,
+	DuplicateKeyPolicy,
+	TopLevelPolicy,
+	JsonNumberPolicy,
+	JsonLimits,
+	JsonParseConfig,
+	JsonParseConfigBuilder,
+	permissive,
+	strict,
+	signed_ir,
+	parse_config_builder,
+	parse_config_builder_from,
+	parse_with_config,
+	parse_strict,
+	parse_located,
+	JsonDoc,
+	LocatedCursor,
+	JsonByteSpan,
+	_SpanTree,
+	_KeyOccurrence,
+	encode_canonical
 };
 
 pub error JsonError {
@@ -151,6 +171,187 @@ implement JsonConfigBuilder {
 	}
 }
 
+// ── Parser policy (Slice 2) ─────────────────────────────────────────
+//
+// Orthogonal policies that select standard JSON or a stricter subset (never a
+// superset, never a value reinterpretation — sole exception: duplicate-key
+// resolution).  Distinct from `JsonConfig` (encode).  See
+// `doc/design/drift-stdlib-spec.md` and the stable error-code contract.
+
+/// How `parse_with_config` resolves a repeated object key.  The single explicit
+/// interpretation policy: `KeepFirst`/`KeepLast` accept the same input but yield
+/// different nodes by definition.
+pub variant DuplicateKeyPolicy {
+	Reject,
+	KeepFirst,
+	KeepLast
+}
+
+/// What the document's root value may be.
+pub variant TopLevelPolicy {
+	AnyValue,
+	ObjectOrArray,
+	ObjectOnly
+}
+
+/// Independent numeric subset toggles (each turns a *valid-JSON* number shape off
+/// — never extends JSON).  There is no public leading-zeros toggle: leading zeros
+/// are invalid JSON and rejected by every public config.
+pub struct JsonNumberPolicy {
+	pub allow_fractions: Bool,
+	pub allow_exponents: Bool,
+	pub allow_negative_zero: Bool
+}
+
+/// Optional resource limits.  `None` = unlimited.  A negative `Some(n)` is an
+/// invalid config (rejected with `"invalid-config"` before parsing), not silently
+/// treated as unlimited.
+pub struct JsonLimits {
+	pub max_document_bytes: Optional<Int>,
+	pub max_depth: Optional<Int>,
+	pub max_string_bytes: Optional<Int>,
+	pub max_number_bytes: Optional<Int>,
+	pub max_array_items: Optional<Int>,
+	pub max_object_fields: Optional<Int>
+}
+
+/// The orthogonal parser-policy bundle.  A profile is just a preset of these
+/// fields; every combination is valid.
+pub struct JsonParseConfig {
+	pub duplicate_keys: DuplicateKeyPolicy,
+	pub top_level: TopLevelPolicy,
+	pub numbers: JsonNumberPolicy,
+	pub limits: JsonLimits
+}
+
+implement core.Copy for DuplicateKeyPolicy {
+}
+
+implement core.Copy for TopLevelPolicy {
+}
+
+implement core.Copy for JsonNumberPolicy {
+}
+
+implement core.Copy for JsonLimits {
+}
+
+implement core.Copy for JsonParseConfig {
+}
+
+fn _no_limits() nothrow -> JsonLimits {
+	return JsonLimits(
+		max_document_bytes = Optional<Int>::None(),
+		max_depth = Optional<Int>::None(),
+		max_string_bytes = Optional<Int>::None(),
+		max_number_bytes = Optional<Int>::None(),
+		max_array_items = Optional<Int>::None(),
+		max_object_fields = Optional<Int>::None()
+	);
+}
+
+/// Most lenient *standard* JSON: keep-last duplicate keys, any root, all RFC-valid
+/// number forms (incl. `-0`), no limits.  Rejects leading zeros (invalid JSON).
+pub fn permissive() nothrow -> JsonParseConfig {
+	return JsonParseConfig(
+		duplicate_keys = DuplicateKeyPolicy::KeepLast(),
+		top_level = TopLevelPolicy::AnyValue(),
+		numbers = JsonNumberPolicy(allow_fractions = true, allow_exponents = true, allow_negative_zero = true),
+		limits = _no_limits()
+	);
+}
+
+/// Standard JSON, but reject duplicate keys (`-0` still allowed; RFC-valid).
+pub fn strict() nothrow -> JsonParseConfig {
+	return JsonParseConfig(
+		duplicate_keys = DuplicateKeyPolicy::Reject(),
+		top_level = TopLevelPolicy::AnyValue(),
+		numbers = JsonNumberPolicy(allow_fractions = true, allow_exponents = true, allow_negative_zero = true),
+		limits = _no_limits()
+	);
+}
+
+/// Deterministic integer profile: integers only (`0 | -?[1-9][0-9]*` — no
+/// fractions/exponents/`-0`/leading zeros), reject duplicate keys.  No bundled
+/// limits or top-level restriction (those are orthogonal deployment policies).
+pub fn signed_ir() nothrow -> JsonParseConfig {
+	return JsonParseConfig(
+		duplicate_keys = DuplicateKeyPolicy::Reject(),
+		top_level = TopLevelPolicy::AnyValue(),
+		numbers = JsonNumberPolicy(allow_fractions = false, allow_exponents = false, allow_negative_zero = false),
+		limits = _no_limits()
+	);
+}
+
+pub struct JsonParseConfigBuilder {
+	cfg: JsonParseConfig
+}
+
+/// A builder seeded from `permissive()`.  Override fields, then `build()`.
+pub fn parse_config_builder() nothrow -> JsonParseConfigBuilder {
+	return JsonParseConfigBuilder(cfg = permissive());
+}
+
+/// A builder seeded from an explicit profile.
+pub fn parse_config_builder_from(base: JsonParseConfig) nothrow -> JsonParseConfigBuilder {
+	return JsonParseConfigBuilder(cfg = base);
+}
+
+implement JsonParseConfigBuilder {
+	pub fn duplicate_keys(self: &mut JsonParseConfigBuilder, var v: DuplicateKeyPolicy) nothrow -> &mut JsonParseConfigBuilder {
+		self.cfg.duplicate_keys = move v;
+		return self;
+	}
+
+	pub fn top_level(self: &mut JsonParseConfigBuilder, var v: TopLevelPolicy) nothrow -> &mut JsonParseConfigBuilder {
+		self.cfg.top_level = move v;
+		return self;
+	}
+
+	pub fn numbers(self: &mut JsonParseConfigBuilder, var v: JsonNumberPolicy) nothrow -> &mut JsonParseConfigBuilder {
+		self.cfg.numbers = move v;
+		return self;
+	}
+
+	pub fn limits(self: &mut JsonParseConfigBuilder, var v: JsonLimits) nothrow -> &mut JsonParseConfigBuilder {
+		self.cfg.limits = move v;
+		return self;
+	}
+
+	/// Validate and produce the config.  Returns `Err("invalid-config")` (with the
+	/// offending limit name in `key`) for a negative limit; `Ok(cfg)` otherwise.
+	pub fn build(self: &JsonParseConfigBuilder) nothrow -> core.Result<JsonParseConfig, JsonErrorData> {
+		match _validate_limits(&self.cfg.limits) {
+			Optional::Some(e) => { return core.Result::Err(e); },
+			Optional::None() => { return core.Result::Ok(self.cfg); }
+		}
+	}
+}
+
+/// Returns `Some(invalid-config error)` if any limit is `Some(n < 0)`, else
+/// `None`.  Used by `build()` and the parse entry points so a struct-literal
+/// config is validated too.
+fn _validate_limits(lim: &JsonLimits) nothrow -> Optional<JsonErrorData> {
+	match _neg_limit(&lim.max_document_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-document-bytes")); }, None => { } }
+	match _neg_limit(&lim.max_depth) { Some(_) => { return Optional::Some(_err_invalid_config("max-depth")); }, None => { } }
+	match _neg_limit(&lim.max_string_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-string-bytes")); }, None => { } }
+	match _neg_limit(&lim.max_number_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-number-bytes")); }, None => { } }
+	match _neg_limit(&lim.max_array_items) { Some(_) => { return Optional::Some(_err_invalid_config("max-array-items")); }, None => { } }
+	match _neg_limit(&lim.max_object_fields) { Some(_) => { return Optional::Some(_err_invalid_config("max-object-fields")); }, None => { } }
+	return Optional<JsonErrorData>::None();
+}
+
+fn _neg_limit(v: &Optional<Int>) nothrow -> Optional<Int> {
+	match *v {
+		Some(n) => { if n < 0 { return Optional::Some(n); } return Optional<Int>::None(); },
+		None => { return Optional<Int>::None(); }
+	}
+}
+
+fn _err_invalid_config(which: String) nothrow -> JsonErrorData {
+	return JsonErrorData(tag = "invalid-config", offset = -1, line = -1, col = -1, path = "", key = which);
+}
+
 fn _err_data(tag: String, path: String, key: String) nothrow -> JsonErrorData {
 	return JsonErrorData(tag = tag, offset = -1, line = -1, col = -1, path = path, key = key);
 }
@@ -175,17 +376,482 @@ pub fn encode_compact_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> 
 	return _encode_node(node, cfg);
 }
 
+/// Parses `text` as a single JSON value (legacy/permissive behavior, preserved
+/// exactly).  Equivalent to the unified parser under the private legacy profile —
+/// keep-last duplicate keys, any root, lenient numbers INCLUDING leading zeros.
 pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val ctx = _ParseCtx(cfg = permissive(), legacy = true, locate = false);
+	var sp: Optional<_SpanTree> = Optional::None();
+	return _parse_document(text, &ctx, &mut sp);
+}
+
+/// Parses `text` under an explicit parser policy (§ std.json parser policy).
+/// Validates `cfg` first (negative limit ⇒ `Err("invalid-config")`).
+pub fn parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	match _validate_limits(&cfg.limits) {
+		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::None() => { }
+	}
+	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
+	var sp: Optional<_SpanTree> = Optional::None();
+	return _parse_document(text, &ctx, &mut sp);
+}
+
+/// `parse_with_config(text, strict())` — standard JSON, reject duplicate keys.
+pub fn parse_strict(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	val s = strict();
+	return parse_with_config(text, &s);
+}
+
+/// Parses `text` under `cfg` AND retains a source-span sidecar, yielding a
+/// `JsonDoc` whose `cursor()` drives the location-aware object-contract helpers
+/// (require / forbid_unknown / discriminant / typed getters).  Same policy
+/// outcome as `parse_with_config` (the sidecar never changes parsing).
+pub fn parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonDoc, JsonErrorData> {
+	match _validate_limits(&cfg.limits) {
+		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::None() => { }
+	}
+	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
+	var sp: Optional<_SpanTree> = Optional::None();
+	match _parse_document(text, &ctx, &mut sp) {
+		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Ok(node) => {
+			match sp {
+				Some(tree) => { return core.Result::Ok(JsonDoc(root = move node, spans = move tree, text = *text)); },
+				None => { return core.Result::Err(_err_parse(text, "internal-error", 0)); }
+			}
+		}
+	}
+}
+
+fn _parse_document(text: &String, ctx: &_ParseCtx, root_sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	if _over_limit(&ctx.cfg.limits.max_document_bytes, text.byte_length()) {
+		return core.Result::Err(_err_parse(text, "limit-document-bytes", 0));
+	}
 	var idx = 0;
 	_skip_ws(text, &mut idx);
-	match _parse_value(text, &mut idx) {
+	val root_start = idx;
+	match _parse_value(text, &mut idx, ctx, 1, root_sp) {
 		core.Result::Err(e) => { return core.Result::Err(e); },
 		core.Result::Ok(v) => {
 			_skip_ws(text, &mut idx);
 			if idx != text.byte_length() {
 				return core.Result::Err(_err_parse(text, "invalid-syntax", idx));
 			}
-			return core.Result::Ok(v);
+			match _check_top_level(&v, ctx, root_start, text) {
+				Optional::Some(e) => { return core.Result::Err(e); },
+				Optional::None() => { }
+			}
+			return core.Result::Ok(move v);
+		}
+	}
+}
+
+fn _check_top_level(node: &JsonNode, ctx: &_ParseCtx, root_start: Int, text: &String) nothrow -> Optional<JsonErrorData> {
+	match ctx.cfg.top_level {
+		TopLevelPolicy::AnyValue() => { return Optional<JsonErrorData>::None(); },
+		TopLevelPolicy::ObjectOrArray() => {
+			val ok = match node {
+				JsonNode::Object(_) => { true },
+				JsonNode::Array(_) => { true },
+				default => { false }
+			};
+			if ok { return Optional<JsonErrorData>::None(); }
+			return Optional::Some(_err_parse(text, "top-level-not-object-or-array", root_start));
+		},
+		TopLevelPolicy::ObjectOnly() => {
+			val ok = match node {
+				JsonNode::Object(_) => { true },
+				default => { false }
+			};
+			if ok { return Optional<JsonErrorData>::None(); }
+			return Optional::Some(_err_parse(text, "top-level-not-object", root_start));
+		}
+	}
+}
+
+// ── Slice-2 located decoder surface: cursor + helpers ───────────────
+
+fn _span_of(tree: &_SpanTree) nothrow -> JsonByteSpan {
+	match tree {
+		_SpanTree::Leaf(s) => { return *s; },
+		_SpanTree::Arr(s, _items) => { return *s; },
+		_SpanTree::Obj(s, _occ, _vals) => { return *s; },
+		default => { return JsonByteSpan(start = -1, end = -1); }
+	}
+}
+
+fn _located_err(text: &String, tag: String, span: JsonByteSpan, pointer: String, key: String) nothrow -> JsonErrorData {
+	var line = -1;
+	var col = -1;
+	_err_parse_line_col(text, span.start, &mut line, &mut col);
+	return JsonErrorData(tag = tag, offset = span.start, line = line, col = col, path = pointer, key = key);
+}
+
+fn _invalid_pointer(ptr: &String) nothrow -> JsonErrorData {
+	return JsonErrorData(tag = "invalid-pointer", offset = -1, line = -1, col = -1, path = ptr.clone(), key = "");
+}
+
+fn _digit_char(d: Int) nothrow -> String {
+	return _byte_to_string(cast<Byte>(48 + d));
+}
+
+fn _int_to_string(v: Int) nothrow -> String {
+	if v == 0 { return "0"; }
+	val neg = v < 0;
+	// Accumulate digits from the NON-positive side so `Int::MIN` (which has no
+	// positive negation) is handled without overflow.  `% 10` truncates toward
+	// zero, so for n <= 0 the remainder is <= 0 and `-(n % 10)` is the digit.
+	var n = v;
+	if n > 0 {
+		n = 0 - n;
+	}
+	var digits = "";
+	while n < 0 {
+		val d = 0 - (n % 10);
+		digits = _digit_char(d) + digits;
+		n = n / 10;
+	}
+	if neg {
+		return "-" + digits;
+	}
+	return digits;
+}
+
+fn _jp_escape(key: &String) nothrow -> String {
+	val n = key.byte_length();
+	var out = "";
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(key, i);
+		if b == cast<Byte>(126) {
+			out = out + "~0";
+		} else {
+			if b == cast<Byte>(47) {
+				out = out + "~1";
+			} else {
+				out = out + _byte_to_string(b);
+			}
+		}
+		i = i + 1;
+	}
+	return out;
+}
+
+/// Un-escapes one RFC-6901 reference token: `~1` → `/`, `~0` → `~`.  Returns
+/// `None` if a `~` is not followed by `0`/`1` (including a trailing `~`) — a
+/// malformed pointer.
+fn _jp_unescape(s: &String) nothrow -> Optional<String> {
+	val n = s.byte_length();
+	var out = "";
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(s, i);
+		if b == cast<Byte>(126) {
+			if i + 1 >= n {
+				return Optional<String>::None();
+			}
+			val nb = core.string_byte_at(s, i + 1);
+			if nb == cast<Byte>(49) {
+				out = out + "/";
+				i = i + 2;
+				continue;
+			}
+			if nb == cast<Byte>(48) {
+				out = out + "~";
+				i = i + 2;
+				continue;
+			}
+			return Optional<String>::None();
+		}
+		out = out + _byte_to_string(b);
+		i = i + 1;
+	}
+	return Optional::Some(out);
+}
+
+fn _jp_append(base: &String, key: &String) nothrow -> String {
+	return *base + "/" + _jp_escape(key);
+}
+
+fn _jp_append_index(base: &String, i: Int) nothrow -> String {
+	return *base + "/" + _int_to_string(i);
+}
+
+fn _str_in_array(s: &String, arr: &Array<String>) nothrow -> Bool {
+	var i = 0;
+	while i < arr.len {
+		if *s == arr[i] { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+/// Validate `s` against the RFC-6901 array-index grammar `0 | [1-9][0-9]*` and
+/// parse it.  `None` on bad grammar (leading zero, sign, `-`, non-numeric) or
+/// `Int` overflow.
+fn _parse_array_index(s: &String) nothrow -> Optional<Int> {
+	val n = s.byte_length();
+	if n == 0 {
+		return Optional<Int>::None();
+	}
+	if n == 1 and core.string_byte_at(s, 0) == cast<Byte>(48) {
+		return Optional::Some(0);
+	}
+	val first = core.string_byte_at(s, 0);
+	if first < cast<Byte>(49) or first > cast<Byte>(57) {
+		return Optional<Int>::None();
+	}
+	var i = 1;
+	while i < n {
+		if not _is_digit(core.string_byte_at(s, i)) {
+			return Optional<Int>::None();
+		}
+		i = i + 1;
+	}
+	match parse_std.parse_int(*s) {
+		core.Result::Ok(v) => { return Optional::Some(v); },
+		default => { return Optional<Int>::None(); }
+	}
+}
+
+/// A located position over a `JsonDoc` (borrows the node + parallel span node +
+/// retained text), plus the JSON Pointer to here.
+pub struct LocatedCursor {
+	node: &JsonNode,
+	span: &_SpanTree,
+	text: &String,
+	pointer: String
+}
+
+implement JsonDoc {
+	pub fn root(self: &JsonDoc) nothrow -> &JsonNode {
+		return &self.root;
+	}
+
+	pub fn cursor(self: &JsonDoc) nothrow -> LocatedCursor {
+		return LocatedCursor(node = &self.root, span = &self.spans, text = &self.text, pointer = "");
+	}
+
+	/// Resolve an ABSOLUTE JSON Pointer (RFC 6901) from the document root.
+	pub fn at_pointer(self: &JsonDoc, ptr: &String) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+		val n = ptr.byte_length();
+		if n == 0 {
+			return core.Result::Ok(self.cursor());
+		}
+		if core.string_byte_at(ptr, 0) != cast<Byte>(47) {
+			return core.Result::Err(_invalid_pointer(ptr));
+		}
+		var cur = self.cursor();
+		var i = 1;
+		while i <= n {
+			var raw_seg = "";
+			while i < n and core.string_byte_at(ptr, i) != cast<Byte>(47) {
+				raw_seg = raw_seg + _byte_to_string(core.string_byte_at(ptr, i));
+				i = i + 1;
+			}
+			match _jp_unescape(&raw_seg) {
+				Optional::None() => { return core.Result::Err(_invalid_pointer(ptr)); },
+				Optional::Some(seg) => {
+					match _navigate_segment(&cur, &seg, &raw_seg) {
+						core.Result::Err(e) => { return core.Result::Err(e); },
+						core.Result::Ok(next) => { cur = move next; }
+					}
+				}
+			}
+			i = i + 1;
+		}
+		return core.Result::Ok(move cur);
+	}
+}
+
+fn _navigate_segment(cur: &LocatedCursor, seg: &String, raw_seg: &String) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+	match cur.node {
+		JsonNode::Array(_vals) => {
+			match _parse_array_index(raw_seg) {
+				Optional::Some(ix) => { return cur.index(ix); },
+				Optional::None() => {
+					return core.Result::Err(_located_err(cur.text, "invalid-array-index", _span_of(cur.span), cur.pointer.clone(), raw_seg.clone()));
+				}
+			}
+		},
+		default => {
+			return cur.child(seg);
+		}
+	}
+}
+
+implement LocatedCursor {
+	pub fn span(self: &LocatedCursor) nothrow -> JsonByteSpan {
+		return _span_of(self.span);
+	}
+
+	pub fn pointer(self: &LocatedCursor) nothrow -> String {
+		return self.pointer.clone();
+	}
+
+	pub fn child(self: &LocatedCursor, key: &String) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+		match self.node {
+			JsonNode::Object(fields) => {
+				match self.span {
+					_SpanTree::Obj(_osp, _occ, vspans) => {
+						match fields.get(key) {
+							Some(child_node) => {
+								match vspans.get(key) {
+									Some(child_span) => {
+										return core.Result::Ok(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(&self.pointer, key)));
+									},
+									None => {
+										return core.Result::Err(_err_data("internal-error", self.pointer.clone(), ""));
+									}
+								}
+							},
+							None => {
+								return core.Result::Err(_located_err(self.text, "missing-field", _span_of(self.span), self.pointer.clone(), key.clone()));
+							}
+						}
+					},
+					default => {
+						return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), ""));
+					}
+				}
+			},
+			default => {
+				return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), ""));
+			}
+		}
+	}
+
+	pub fn require_field(self: &LocatedCursor, key: &String) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+		return self.child(key);
+	}
+
+	pub fn index(self: &LocatedCursor, ix: Int) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+		match self.node {
+			JsonNode::Array(values) => {
+				match self.span {
+					_SpanTree::Arr(_asp, items) => {
+						if ix < 0 or ix >= values.len {
+							return core.Result::Err(_located_err(self.text, "index-out-of-range", _span_of(self.span), self.pointer.clone(), _int_to_string(ix)));
+						}
+						return core.Result::Ok(LocatedCursor(node = &values[ix], span = &items[ix], text = self.text, pointer = _jp_append_index(&self.pointer, ix)));
+					},
+					default => {
+						return core.Result::Err(_located_err(self.text, "type-mismatch-array", _span_of(self.span), self.pointer.clone(), ""));
+					}
+				}
+			},
+			default => {
+				return core.Result::Err(_located_err(self.text, "type-mismatch-array", _span_of(self.span), self.pointer.clone(), ""));
+			}
+		}
+	}
+
+	pub fn as_string(self: &LocatedCursor) nothrow -> core.Result<String, JsonErrorData> {
+		match self.node {
+			JsonNode::String(v) => { return core.Result::Ok(v.clone()); },
+			default => { return core.Result::Err(_located_err(self.text, "type-mismatch-string", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_bool(self: &LocatedCursor) nothrow -> core.Result<Bool, JsonErrorData> {
+		match self.node {
+			JsonNode::Bool(b) => { return core.Result::Ok(*b); },
+			default => { return core.Result::Err(_located_err(self.text, "type-mismatch-bool", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_int(self: &LocatedCursor) nothrow -> core.Result<Int, JsonErrorData> {
+		match self.node.as_int() {
+			Some(v) => { return core.Result::Ok(v); },
+			None => { return core.Result::Err(_located_err(self.text, "type-mismatch-int", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_uint(self: &LocatedCursor) nothrow -> core.Result<Uint, JsonErrorData> {
+		match self.node.as_uint() {
+			Some(v) => { return core.Result::Ok(v); },
+			None => { return core.Result::Err(_located_err(self.text, "type-mismatch-uint", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_float(self: &LocatedCursor) nothrow -> core.Result<Float, JsonErrorData> {
+		match self.node.as_float() {
+			Some(v) => { return core.Result::Ok(v); },
+			None => { return core.Result::Err(_located_err(self.text, "type-mismatch-float", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_array_len(self: &LocatedCursor) nothrow -> core.Result<Int, JsonErrorData> {
+		match self.node {
+			JsonNode::Array(values) => { return core.Result::Ok(values.len); },
+			default => { return core.Result::Err(_located_err(self.text, "type-mismatch-array", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn as_object(self: &LocatedCursor) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
+		match self.node {
+			JsonNode::Object(_f) => { return core.Result::Ok(LocatedCursor(node = self.node, span = self.span, text = self.text, pointer = self.pointer.clone())); },
+			default => { return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), "")); }
+		}
+	}
+
+	pub fn optional(self: &LocatedCursor, key: &String) nothrow -> core.Result<Optional<LocatedCursor>, JsonErrorData> {
+		match self.node {
+			JsonNode::Object(fields) => {
+				match self.span {
+					_SpanTree::Obj(_osp, _occ, vspans) => {
+						match fields.get(key) {
+							Some(child_node) => {
+								match vspans.get(key) {
+									Some(child_span) => {
+										return core.Result::Ok(Optional::Some(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(&self.pointer, key))));
+									},
+									None => {
+										return core.Result::Err(_err_data("internal-error", self.pointer.clone(), ""));
+									}
+								}
+							},
+							None => {
+								return core.Result::Ok(Optional<LocatedCursor>::None());
+							}
+						}
+					},
+					default => {
+						return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), ""));
+					}
+				}
+			},
+			default => {
+				return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), ""));
+			}
+		}
+	}
+
+	pub fn forbid_unknown(self: &LocatedCursor, allowed: &Array<String>) nothrow -> core.Result<Void, JsonErrorData> {
+		match self.span {
+			_SpanTree::Obj(_osp, occurrences, _vals) => {
+				var i = 0;
+				while i < occurrences.len {
+					val occ = &occurrences[i];
+					if not _str_in_array(&occ.key, allowed) {
+						return core.Result::Err(_located_err(self.text, "unknown-field", occ.key_span, _jp_append(&self.pointer, &occ.key), occ.key.clone()));
+					}
+					i = i + 1;
+				}
+				return core.Result::Ok(core.void_value());
+			},
+			default => {
+				return core.Result::Err(_located_err(self.text, "type-mismatch-object", _span_of(self.span), self.pointer.clone(), ""));
+			}
+		}
+	}
+
+	pub fn discriminant(self: &LocatedCursor, key: &String) nothrow -> core.Result<String, JsonErrorData> {
+		match self.require_field(key) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(c) => { return c.as_string(); }
 		}
 	}
 }
@@ -990,14 +1656,188 @@ fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) not
 	return core.Result::Ok(move node);
 }
 
-fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, JsonErrorData> {
+// ── Slice-2 located decoder surface: span types ─────────────────────
+
+/// Half-open byte extent `[start, end)` of a value or key in the source.
+pub struct JsonByteSpan {
+	pub start: Int,
+	pub end: Int
+}
+
+implement core.Copy for JsonByteSpan {
+}
+
+/// One key occurrence in an object, in source order (duplicates included).
+pub struct _KeyOccurrence {
+	key: String,
+	key_span: JsonByteSpan
+}
+
+/// Source-span sidecar, mirroring a `JsonNode`.  Built only by `parse_located`.
+pub variant _SpanTree {
+	Leaf(span: JsonByteSpan),
+	Arr(span: JsonByteSpan, items: Array<_SpanTree>),
+	Obj(span: JsonByteSpan, occurrences: Array<_KeyOccurrence>, values: containers.HashMap<String, _SpanTree>),
+	@tombstone Tombstone
+}
+
+/// A parsed document plus its source-span sidecar and the retained source text
+/// (for on-demand line/column).  Produced by `parse_located`; navigate it via
+/// `cursor()` / `at_pointer()`.
+pub struct JsonDoc {
+	root: JsonNode,
+	spans: _SpanTree,
+	text: String
+}
+
+// ── Slice-2 parser context + policy helpers ─────────────────────────
+
+struct _ParseCtx {
+	cfg: JsonParseConfig,
+	legacy: Bool,    // legacy parse() mode: accept leading zeros, reject \u, allow unescaped controls. Never a public toggle.
+	locate: Bool  // build the _SpanTree sidecar (parse_located only)
+}
+
+fn _over_limit(lim: &Optional<Int>, count: Int) nothrow -> Bool {
+	match *lim {
+		Some(m) => { return count > m; },
+		None => { return false; }
+	}
+}
+
+fn _set_leaf(ctx: &_ParseCtx, sp: &mut Optional<_SpanTree>, start: Int, end: Int) nothrow -> Void {
+	if ctx.locate {
+		*sp = Optional::Some(_SpanTree::Leaf(JsonByteSpan(start = start, end = end)));
+	}
+}
+
+fn _err_parse_key(text: &String, tag: String, offset: Int, key: String) nothrow -> JsonErrorData {
+	var line = -1;
+	var col = -1;
+	_err_parse_line_col(text, offset, &mut line, &mut col);
+	return JsonErrorData(tag = tag, offset = offset, line = line, col = col, path = "", key = key);
+}
+
+fn _num_has_fraction(raw: &String) nothrow -> Bool {
+	val n = raw.byte_length();
+	var i = 0;
+	while i < n {
+		if core.string_byte_at(raw, i) == cast<Byte>(46) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _num_has_exponent(raw: &String) nothrow -> Bool {
+	val n = raw.byte_length();
+	var i = 0;
+	while i < n {
+		val b = core.string_byte_at(raw, i);
+		if b == cast<Byte>(101) or b == cast<Byte>(69) { return true; }
+		i = i + 1;
+	}
+	return false;
+}
+
+fn _num_has_leading_zero(raw: &String) nothrow -> Bool {
+	val n = raw.byte_length();
+	var i = 0;
+	if i < n and core.string_byte_at(raw, i) == cast<Byte>(45) { i = i + 1; }
+	if i < n and core.string_byte_at(raw, i) == cast<Byte>(48) {
+		val j = i + 1;
+		if j < n and _is_digit(core.string_byte_at(raw, j)) { return true; }
+	}
+	return false;
+}
+
+fn _num_is_negative_zero(raw: &String) nothrow -> Bool {
+	val n = raw.byte_length();
+	if n == 0 or core.string_byte_at(raw, 0) != cast<Byte>(45) { return false; }
+	var i = 1;
+	var saw_digit = false;
+	while i < n {
+		val b = core.string_byte_at(raw, i);
+		if b == cast<Byte>(101) or b == cast<Byte>(69) { break; }
+		if _is_digit(b) {
+			saw_digit = true;
+			if b != cast<Byte>(48) { return false; }
+		}
+		i = i + 1;
+	}
+	return saw_digit;
+}
+
+/// Numeric subset policy applied to the verbatim lexeme.  Precedence:
+/// leading-zero → negative-zero → fraction → exponent.
+fn _check_number_policy(text: &String, raw: &String, start: Int, ctx: &_ParseCtx) nothrow -> Optional<JsonErrorData> {
+	if _num_has_leading_zero(raw) and not ctx.legacy {
+		return Optional::Some(_err_parse(text, "number-leading-zero", start));
+	}
+	if _num_is_negative_zero(raw) and not ctx.cfg.numbers.allow_negative_zero {
+		return Optional::Some(_err_parse(text, "number-negative-zero", start));
+	}
+	if _num_has_fraction(raw) and not ctx.cfg.numbers.allow_fractions {
+		return Optional::Some(_err_parse(text, "number-fraction", start));
+	}
+	if _num_has_exponent(raw) and not ctx.cfg.numbers.allow_exponents {
+		return Optional::Some(_err_parse(text, "number-exponent", start));
+	}
+	return Optional<JsonErrorData>::None();
+}
+
+fn _hex_val(b: Byte) nothrow -> Int {
+	val c = cast<Int>(b);
+	if c >= 48 and c <= 57 { return c - 48; }
+	if c >= 97 and c <= 102 { return c - 87; }
+	if c >= 65 and c <= 70 { return c - 55; }
+	return -1;
+}
+
+fn _parse_hex4(text: &String, pos: Int, n: Int) nothrow -> Optional<Int> {
+	if pos + 4 > n {
+		return Optional<Int>::None();
+	}
+	var v = 0;
+	var i = 0;
+	while i < 4 {
+		val h = _hex_val(core.string_byte_at(text, pos + i));
+		if h < 0 {
+			return Optional<Int>::None();
+		}
+		v = v * 16 + h;
+		i = i + 1;
+	}
+	return Optional::Some(v);
+}
+
+/// Appends the UTF-8 encoding of Unicode scalar value `cp` to `out`.
+fn _append_utf8(out: String, cp: Int) nothrow -> String {
+	if cp < 128 {
+		return out + _byte_to_string(cast<Byte>(cp));
+	}
+	if cp < 2048 {
+		return out + _byte_to_string(cast<Byte>(192 + (cp / 64))) + _byte_to_string(cast<Byte>(128 + (cp % 64)));
+	}
+	if cp < 65536 {
+		return out + _byte_to_string(cast<Byte>(224 + (cp / 4096))) + _byte_to_string(cast<Byte>(128 + ((cp / 64) % 64))) + _byte_to_string(cast<Byte>(128 + (cp % 64)));
+	}
+	return out + _byte_to_string(cast<Byte>(240 + (cp / 262144))) + _byte_to_string(cast<Byte>(128 + ((cp / 4096) % 64))) + _byte_to_string(cast<Byte>(128 + ((cp / 64) % 64))) + _byte_to_string(cast<Byte>(128 + (cp % 64)));
+}
+
+fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.Result<String, JsonErrorData> {
 	val n = text.byte_length();
+	val str_start = *idx;
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(34) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
 	*idx = *idx + 1;
 	var out = "";
 	while *idx < n {
+		// Incremental string-byte limit: reject as soon as the decoded length
+		// exceeds the cap (do not consume the remainder of the string).
+		if _over_limit(&ctx.cfg.limits.max_string_bytes, out.byte_length()) {
+			return core.Result::Err(_err_parse(text, "limit-string-bytes", str_start));
+		}
 		val b = core.string_byte_at(text, *idx);
 		if b == cast<Byte>(34) {
 			*idx = *idx + 1;
@@ -1009,41 +1849,63 @@ fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, Js
 				return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
 			}
 			val e = core.string_byte_at(text, *idx);
-			if e == cast<Byte>(34) {
-				out = out + "\"";
-			} else {
-				if e == cast<Byte>(92) {
-					out = out + "\\";
-				} else {
-					if e == cast<Byte>(47) {
-						out = out + "/";
-					} else {
-						if e == cast<Byte>(98) {
-							out = out + "\b";
-						} else {
-							if e == cast<Byte>(102) {
-								out = out + "\f";
-							} else {
-								if e == cast<Byte>(110) {
-									out = out + "\n";
-								} else {
-									if e == cast<Byte>(114) {
-										out = out + "\r";
-									} else {
-										if e == cast<Byte>(116) {
-											out = out + "\t";
-										} else {
-											return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
-										}
+			if e == cast<Byte>(34) { out = out + "\""; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(92) { out = out + "\\"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(47) { out = out + "/"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(98) { out = out + "\b"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(102) { out = out + "\f"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(110) { out = out + "\n"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(114) { out = out + "\r"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(116) { out = out + "\t"; *idx = *idx + 1; continue; }
+			if e == cast<Byte>(117) {
+				// `\uXXXX` — RFC string escape (public configs).  Legacy parse()
+				// is bug-compatible and does NOT support it.
+				if ctx.legacy {
+					return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
+				}
+				match _parse_hex4(text, *idx + 1, n) {
+					Optional::None() => { return core.Result::Err(_err_parse(text, "invalid-escape", *idx)); },
+					Optional::Some(cp1) => {
+						*idx = *idx + 5;
+						if cp1 >= 55296 and cp1 <= 56319 {
+							// high surrogate → require a following \uXXXX low surrogate
+							if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(92) {
+								return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
+							}
+							if *idx + 1 >= n or core.string_byte_at(text, *idx + 1) != cast<Byte>(117) {
+								return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
+							}
+							match _parse_hex4(text, *idx + 2, n) {
+								Optional::None() => { return core.Result::Err(_err_parse(text, "invalid-escape", *idx)); },
+								Optional::Some(cp2) => {
+									if cp2 < 56320 or cp2 > 57343 {
+										return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
 									}
+									*idx = *idx + 6;
+									val cp = 65536 + (cp1 - 55296) * 1024 + (cp2 - 56320);
+									out = _append_utf8(out, cp);
+									continue;
 								}
 							}
 						}
+						if cp1 >= 56320 and cp1 <= 57343 {
+							return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
+						}
+						out = _append_utf8(out, cp1);
+						continue;
 					}
 				}
 			}
-			*idx = *idx + 1;
-			continue;
+			return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
+		}
+		// Unescaped control bytes U+0000–U+001F are forbidden by RFC 8259; legacy
+		// parse() tolerates them.
+		var ub = cast<Int>(b);
+		if ub < 0 {
+			ub = ub + 256;
+		}
+		if not ctx.legacy and ub < 32 {
+			return core.Result::Err(_err_parse(text, "unescaped-control", *idx));
 		}
 		out = out + _byte_to_string(b);
 		*idx = *idx + 1;
@@ -1051,7 +1913,7 @@ fn _parse_string(text: &String, idx: &mut Int) nothrow -> core.Result<String, Js
 	return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 }
 
-fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+fn _parse_number(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val n = text.byte_length();
 	val start = *idx;
 	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(45) {
@@ -1062,6 +1924,9 @@ fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, 
 	}
 	while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 		*idx = *idx + 1;
+		if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+			return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
+		}
 	}
 	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(46) {
 		*idx = *idx + 1;
@@ -1070,6 +1935,9 @@ fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, 
 		}
 		while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 			*idx = *idx + 1;
+			if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+				return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
+			}
 		}
 	}
 	if *idx < n {
@@ -1087,29 +1955,56 @@ fn _parse_number(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, 
 			}
 			while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 				*idx = *idx + 1;
+				if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+					return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
+				}
 			}
 		}
 	}
 	val raw = _slice_string(text, start, *idx);
+	match _check_number_policy(text, &raw, start, ctx) {
+		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::None() => { }
+	}
 	return core.Result::Ok(JsonNode::Number(raw));
 }
 
-fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+fn _parse_array(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val n = text.byte_length();
+	val arr_start = *idx;
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(91) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
+	}
+	if _over_limit(&ctx.cfg.limits.max_depth, depth) {
+		return core.Result::Err(_err_parse(text, "limit-depth", arr_start));
 	}
 	*idx = *idx + 1;
 	_skip_ws(text, idx);
 	var values: Array<JsonNode> = [];
+	var items: Array<_SpanTree> = [];
 	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(93) {
 		*idx = *idx + 1;
+		if ctx.locate {
+			*sp = Optional::Some(_SpanTree::Arr(span = JsonByteSpan(start = arr_start, end = *idx), items = move items));
+		}
 		return core.Result::Ok(JsonNode::Array(move values));
 	}
 	while true {
-		match _parse_value(text, idx) {
+		val elem_start = *idx;
+		// Enforce the item limit BEFORE consuming the (max+1)th element.
+		if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+			return core.Result::Err(_err_parse(text, "limit-array-items", elem_start));
+		}
+		var child_sp: Optional<_SpanTree> = Optional::None();
+		match _parse_value(text, idx, ctx, depth + 1, &mut child_sp) {
 			core.Result::Err(e) => { return core.Result::Err(e); },
 			core.Result::Ok(v) => { values.push(move v); }
+		}
+		if ctx.locate {
+			match child_sp {
+				Some(c) => { items.push(move c); },
+				None => { }
+			}
 		}
 		_skip_ws(text, idx);
 		if *idx >= n {
@@ -1123,6 +2018,9 @@ fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, J
 		}
 		if b == cast<Byte>(93) {
 			*idx = *idx + 1;
+			if ctx.locate {
+				*sp = Optional::Some(_SpanTree::Arr(span = JsonByteSpan(start = arr_start, end = *idx), items = move items));
+			}
 			return core.Result::Ok(JsonNode::Array(move values));
 		}
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
@@ -1130,23 +2028,57 @@ fn _parse_array(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, J
 	return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 }
 
-fn _parse_object_throwing(text: &String, idx: &mut Int) -> core.Result<JsonNode, JsonErrorData> {
+fn _parse_object_throwing(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) -> core.Result<JsonNode, JsonErrorData> {
 	val n = text.byte_length();
+	val obj_start = *idx;
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(123) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
+	}
+	if _over_limit(&ctx.cfg.limits.max_depth, depth) {
+		return core.Result::Err(_err_parse(text, "limit-depth", obj_start));
 	}
 	*idx = *idx + 1;
 	_skip_ws(text, idx);
 	var fields = containers.hash_map<type String, std.json.JsonNode>();
+	// `max_object_fields` counts member OCCURRENCES (incl. duplicates), not the
+	// unique map size — so a flood of repeated keys can't bypass the limit.
+	var member_count = 0;
+	// Located sidecar (populated only when ctx.locate): every key occurrence in
+	// source order, plus the surviving value span per key (mirrors `fields`).
+	var occurrences: Array<_KeyOccurrence> = [];
+	var vspans = containers.hash_map<type String, _SpanTree>();
 	if *idx < n and core.string_byte_at(text, *idx) == cast<Byte>(125) {
 		*idx = *idx + 1;
+		if ctx.locate {
+			*sp = Optional::Some(_SpanTree::Obj(span = JsonByteSpan(start = obj_start, end = *idx), occurrences = move occurrences, values = move vspans));
+		}
 		return core.Result::Ok(JsonNode::Object(move fields));
 	}
 	while true {
+		val key_start = *idx;
 		var key = "";
-		match _parse_string(text, idx) {
+		match _parse_string(text, idx, ctx) {
 			core.Result::Err(e) => { return core.Result::Err(e); },
 			core.Result::Ok(v) => { key = v; }
+		}
+		val key_end = *idx;
+		if ctx.locate {
+			occurrences.push(_KeyOccurrence(key = key.clone(), key_span = JsonByteSpan(start = key_start, end = key_end)));
+		}
+		// Reject: fail at the SECOND occurrence of a key, before its value is
+		// parsed (one contains_key probe; immediate failure at `key_start`).
+		match ctx.cfg.duplicate_keys {
+			DuplicateKeyPolicy::Reject() => {
+				if fields.contains_key(&key) {
+					return core.Result::Err(_err_parse_key(text, "duplicate-key", key_start, move key));
+				}
+			},
+			default => { }
+		}
+		// Enforce the field-occurrence limit BEFORE consuming this member's value.
+		member_count = member_count + 1;
+		if _over_limit(&ctx.cfg.limits.max_object_fields, member_count) {
+			return core.Result::Err(_err_parse(text, "limit-object-fields", key_start));
 		}
 		_skip_ws(text, idx);
 		if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(58) {
@@ -1154,12 +2086,36 @@ fn _parse_object_throwing(text: &String, idx: &mut Int) -> core.Result<JsonNode,
 		}
 		*idx = *idx + 1;
 		_skip_ws(text, idx);
-			match _parse_value(text, idx) {
-				core.Result::Err(e) => { return core.Result::Err(e); },
-				core.Result::Ok(v) => {
-					fields.insert(move key, move v);
+		var child_sp: Optional<_SpanTree> = Optional::None();
+		match _parse_value(text, idx, ctx, depth + 1, &mut child_sp) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(v) => {
+				match ctx.cfg.duplicate_keys {
+					DuplicateKeyPolicy::KeepFirst() => {
+						// one probe: stores when absent, drops key+value when present.
+						// The value-span map mirrors `fields` under the same policy.
+						if ctx.locate {
+							match child_sp {
+								Some(c) => { vspans.insert_if_absent(key.clone(), move c); },
+								None => { }
+							}
+						}
+						fields.insert_if_absent(move key, move v);
+					},
+					default => {
+						// Reject (unique here) and KeepLast both insert; KeepLast's
+						// overwrite IS keep-last (the returned old value is dropped).
+						if ctx.locate {
+							match child_sp {
+								Some(c) => { vspans.insert(key.clone(), move c); },
+								None => { }
+							}
+						}
+						fields.insert(move key, move v);
+					}
 				}
 			}
+		}
 		_skip_ws(text, idx);
 		if *idx >= n {
 			return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
@@ -1170,48 +2126,64 @@ fn _parse_object_throwing(text: &String, idx: &mut Int) -> core.Result<JsonNode,
 			_skip_ws(text, idx);
 			continue;
 		}
-			if b == cast<Byte>(125) {
-				*idx = *idx + 1;
-				return core.Result::Ok(JsonNode::Object(move fields));
+		if b == cast<Byte>(125) {
+			*idx = *idx + 1;
+			if ctx.locate {
+				*sp = Optional::Some(_SpanTree::Obj(span = JsonByteSpan(start = obj_start, end = *idx), occurrences = move occurrences, values = move vspans));
 			}
+			return core.Result::Ok(JsonNode::Object(move fields));
+		}
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
 	return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 }
 
-fn _parse_object(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	return try _parse_object_throwing(text, idx) catch { core.Result::Err(_err_parse(text, "internal-error", *idx)) };
+fn _parse_object(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	return try _parse_object_throwing(text, idx, ctx, depth, sp) catch { core.Result::Err(_err_parse(text, "internal-error", *idx)) };
 }
 
-fn _parse_value(text: &String, idx: &mut Int) nothrow -> core.Result<JsonNode, JsonErrorData> {
+fn _parse_value(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val n = text.byte_length();
 	if *idx >= n {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
+	val start = *idx;
 	val b = core.string_byte_at(text, *idx);
 	if b == cast<Byte>(110) {
-		return _parse_literal(text, idx, "null", JsonNode::Null());
+		match _parse_literal(text, idx, "null", JsonNode::Null()) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
+		}
 	}
 	if b == cast<Byte>(116) {
-		return _parse_literal(text, idx, "true", JsonNode::Bool(true));
+		match _parse_literal(text, idx, "true", JsonNode::Bool(true)) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
+		}
 	}
 	if b == cast<Byte>(102) {
-		return _parse_literal(text, idx, "false", JsonNode::Bool(false));
+		match _parse_literal(text, idx, "false", JsonNode::Bool(false)) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
+		}
 	}
 	if b == cast<Byte>(34) {
-		match _parse_string(text, idx) {
+		match _parse_string(text, idx, ctx) {
 			core.Result::Err(e) => { return core.Result::Err(e); },
-			core.Result::Ok(v) => { return core.Result::Ok(JsonNode::String(move v)); }
+			core.Result::Ok(v) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(JsonNode::String(move v)); }
 		}
 	}
 	if b == cast<Byte>(91) {
-		return _parse_array(text, idx);
+		return _parse_array(text, idx, ctx, depth, sp);
 	}
 	if b == cast<Byte>(123) {
-		return _parse_object(text, idx);
+		return _parse_object(text, idx, ctx, depth, sp);
 	}
 	if b == cast<Byte>(45) or _is_digit(b) {
-		return _parse_number(text, idx);
+		match _parse_number(text, idx, ctx) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
+		}
 	}
 	return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 }
@@ -1455,6 +2427,135 @@ fn _encode_node(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
 
 fn _encode_node(node: JsonNode, cfg: &JsonConfig) nothrow -> String {
 	return _encode_node(&node, cfg);
+}
+
+// ── Slice-2 canonical encoding (result-propagating; signed-IR) ──────
+//
+// A SEPARATE encoder from `_encode_node` — it must NOT inherit the object
+// path's failure-swallowing (`"{}"`) behavior.  Fixed canonical form: UTF-8,
+// no insignificant whitespace, object keys recursively sorted by UTF-8 byte
+// order, the frozen `_encode_string` escape table for keys and values, and the
+// signed-IR integer grammar `0 | -?[1-9][0-9]*` on numbers (rejecting `-0`,
+// leading zeros, fractions, exponents — never silently normalized).  Error
+// selection is deterministic: array elements in index order, object members in
+// UTF-8-sorted key order, first error returned.  Caller hashes the bytes.
+
+/// Canonically encodes `node`.  `Err` (with a stable `canonical-*` tag, a JSON
+/// Pointer `path`, and `offset = -1`) on a non-integer `Number` or an
+/// unsupported node — never a fallback representation.
+pub fn encode_canonical(node: &JsonNode) nothrow -> core.Result<String, JsonErrorData> {
+	return _enc_canon(node, "");
+}
+
+fn _canon_err(tag: String, pointer: &String, raw: &String) nothrow -> JsonErrorData {
+	return JsonErrorData(tag = tag, offset = -1, line = -1, col = -1, path = pointer.clone(), key = raw.clone());
+}
+
+fn _is_canonical_integer(raw: &String) nothrow -> Bool {
+	val n = raw.byte_length();
+	if n == 0 { return false; }
+	var i = 0;
+	if core.string_byte_at(raw, 0) == cast<Byte>(45) { i = 1; }
+	if i >= n { return false; }
+	while i < n {
+		if not _is_digit(core.string_byte_at(raw, i)) { return false; }
+		i = i + 1;
+	}
+	return true;
+}
+
+fn _canon_number(raw: &String, pointer: &String) nothrow -> Optional<JsonErrorData> {
+	if _num_has_leading_zero(raw) { return Optional::Some(_canon_err("canonical-number-leading-zero", pointer, raw)); }
+	if _num_is_negative_zero(raw) { return Optional::Some(_canon_err("canonical-number-negative-zero", pointer, raw)); }
+	if _num_has_fraction(raw) { return Optional::Some(_canon_err("canonical-number-fraction", pointer, raw)); }
+	if _num_has_exponent(raw) { return Optional::Some(_canon_err("canonical-number-exponent", pointer, raw)); }
+	if not _is_canonical_integer(raw) { return Optional::Some(_canon_err("canonical-number-invalid", pointer, raw)); }
+	return Optional<JsonErrorData>::None();
+}
+
+fn _enc_canon(node: &JsonNode, pointer: String) nothrow -> core.Result<String, JsonErrorData> {
+	match node {
+		Null => { return core.Result::Ok("null"); },
+		Bool(v) => { return core.Result::Ok(_bool_to_json(*v)); },
+		String(v) => { return core.Result::Ok(_encode_string(*v)); },
+		Number(raw) => {
+			match _canon_number(raw, &pointer) {
+				Optional::Some(e) => { return core.Result::Err(e); },
+				Optional::None() => { return core.Result::Ok(*raw); }
+			}
+		},
+		Array(values) => { return _enc_canon_array(values, pointer); },
+		Object(fields) => { return _enc_canon_object(fields, pointer); },
+		default => {
+			return core.Result::Err(JsonErrorData(tag = "canonical-invalid-node", offset = -1, line = -1, col = -1, path = pointer.clone(), key = ""));
+		}
+	}
+}
+
+fn _enc_canon_array(values: &Array<JsonNode>, pointer: String) nothrow -> core.Result<String, JsonErrorData> {
+	var out = "[";
+	var i = 0;
+	while i < values.len {
+		if i > 0 {
+			out = out + ",";
+		}
+		val child_ptr = pointer + "/" + _int_to_string(i);
+		match _enc_canon(&values[i], child_ptr) {
+			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Ok(s) => { out = out + s; }
+		}
+		i = i + 1;
+	}
+	return core.Result::Ok(out + "]");
+}
+
+fn _enc_canon_object(fields: &containers.HashMap<String, std.json.JsonNode>, pointer: String) nothrow -> core.Result<String, JsonErrorData> {
+	var out = "{";
+	val total = fields.len();
+	var emitted = 0;
+	var has_prev = false;
+	var prev = "";
+	while emitted < total {
+		var found = false;
+		var best = "";
+		var it = fields.iter();
+		while true {
+			match it.next() {
+				Some(item) => {
+					val k = item.key;
+					if has_prev and _string_lex_cmp(k, &prev) <= 0 {
+						continue;
+					}
+					if not found or _string_lex_cmp(k, &best) < 0 {
+						best = *k;
+						found = true;
+					}
+				},
+				None => { break; }
+			}
+		}
+		if not found {
+			break;
+		}
+		if emitted > 0 {
+			out = out + ",";
+		}
+		val child_ptr = pointer + "/" + _jp_escape(&best);
+		match fields.get(&best) {
+			Some(v) => {
+				out = out + _encode_string(best) + ":";
+				match _enc_canon(v, child_ptr) {
+					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Ok(s) => { out = out + s; }
+				}
+			},
+			None => { }
+		}
+		prev = best;
+		has_prev = true;
+		emitted = emitted + 1;
+	}
+	return core.Result::Ok(out + "}");
 }
 
 // ── JsonHandle: shared, read-only, Arc-backed JSON tree ──────────────

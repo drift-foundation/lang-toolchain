@@ -1,0 +1,1 @@
+{ "description": "HashMap.insert_if_absent: true+store when absent, false+no-mutation (keep existing) when present", "exit_code": 0 }

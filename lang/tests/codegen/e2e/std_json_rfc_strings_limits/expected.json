@@ -1,0 +1,1 @@
+{ "description": "std.json: RFC \\u escapes + surrogate pairs (public configs), legacy \\u rejection, occurrence-counted max_object_fields, pre-consumption array limit offset, JSON Pointer bad-escape rejection, Int::MIN index formatting", "exit_code": 0 }

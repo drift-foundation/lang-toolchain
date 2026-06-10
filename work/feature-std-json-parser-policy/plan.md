@@ -1,8 +1,13 @@
 # Slice 2 — `std.json` Parser Policy + Located Decoder Surface
 
-**Status:** DRAFT v2 — revised per static review. Do **not** implement until approved.
-**Module:** `std.json` (`stdlib/std/json/json.drift`), additive.
-**Target:** driftc patch bump (TBD at impl); **ABI unchanged** (pure-Drift stdlib).
+**Status:** LANDED (as-built) — implemented and verified after several static-review rounds.
+**Module:** `std.json` (`stdlib/std/json/json.drift`), additive (+ `HashMap.insert_if_absent` in `std.containers`).
+**Target:** driftc **0.33.28** (patch); **ABI 16 unchanged** (pure-Drift stdlib).
+
+> This plan was the design record; the implementation matches it except for the
+> deviations noted inline (e.g. `require` → `require_field` — reserved keyword;
+> public-but-opaque span types; RFC string rules + `unescaped-control` added per
+> review). See `history.md` (0.33.28) for the as-built summary and the test list.
 
 > Two deliverables, kept distinct:
 > 1. **Parser policy** — orthogonal policies that select **standard JSON or a
@@ -155,15 +160,26 @@ so it is called out as the single explicit exception to no-reinterpretation
 
 - Capture `key_start = *idx` **before** `_parse_string` (span = the key's opening
   `"`).
-- On a key already present:
-  - **Reject** → `Err(tag="duplicate-key", offset=key_start, key=<the key>)`. The
-    offset is the **second** occurrence's exact start (requirement); line/col
-    derived. (Reports the first duplicate, then stops.)
-  - **KeepFirst** → discard (drop) the new value; keep the existing.
-  - **KeepLast** → overwrite (today's behavior).
 
-Cost: one `HashMap` membership probe per field (skip-able for KeepLast's fast
-path).
+**Probe strategy (≈one probe per field, by policy):**
+
+| Policy | Probe | Behavior |
+|---|---|---|
+| **KeepLast** | `insert()` directly (1 probe) | overwrite; the returned old value is dropped. Today's behavior, no `contains_key`. |
+| **Reject** | `contains_key()` **after the key, before the value** (1 probe) | on a hit, fail **immediately** at the second key: `Err(tag="duplicate-key", offset=key_start, key=<the key>)` — the value is **not** parsed. Reports the first duplicate, then stops. |
+| **KeepFirst** | `insert_if_absent()` (1 probe; 2 only when growth rehashes) | the value **is** parsed (to advance the cursor), then inserted iff absent; on a present key the supplied key+value are dropped, the existing entry kept. |
+
+`insert_if_absent` (`HashMapCore`) is the KeepFirst primitive: inserts + returns
+`true` when absent, else drops the supplied key/value and returns `false`.  It
+probes **presence first** (no `ensure_capacity`, hence no mutation/rehash, when the
+key is present — preserving any outstanding iterator's generation); on the absent
+path it grows only if needed and reuses the presence-probe slot unless the
+capacity changed (a rehash), re-probing only then.  So it is one `find_slot` for a
+present key and for the common absent-without-growth case, and two only when growth
+rehashes.  An entry-API that holds a slot across recursive value parsing was
+rejected for ownership/invalidation complexity.  Numbers in offset references above
+are illustrative
+(pre-implementation line numbers).
 
 ---
 

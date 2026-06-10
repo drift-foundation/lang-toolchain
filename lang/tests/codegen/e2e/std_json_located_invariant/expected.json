@@ -1,0 +1,1 @@
+{ "description": "Invariant: parse_located(x,cfg).root encodes identically to parse_with_config(x,cfg) for every public config (sidecar is value-neutral; duplicate resolution preserved)", "exit_code": 0 }

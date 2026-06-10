@@ -680,3 +680,87 @@ Free functions:
   return a diagnostic **without consuming** (`unexpected-eof` at end of
   input, else `unexpected-token` with the offending token's span and its
   `describe()` as `found`).
+
+## std.json (parser policy + located decoder + canonical encoding)
+
+Slice 2 makes "strict JSON" an orthogonal parser-policy surface and adds a
+source-location-preserving decoder and a canonical encoder. The legacy `parse()`
+behavior is preserved exactly; everything below is additive. Policies select
+**standard JSON or a stricter subset** — never a superset, never a value
+reinterpretation (sole exception: duplicate-key resolution).
+
+### Parser policy
+
+- `JsonParseConfig { duplicate_keys, top_level, numbers, limits }` (all `Copy`):
+  - `DuplicateKeyPolicy` = `Reject | KeepFirst | KeepLast`.
+  - `TopLevelPolicy` = `AnyValue | ObjectOrArray | ObjectOnly`.
+  - `JsonNumberPolicy { allow_fractions, allow_exponents, allow_negative_zero }`
+    — independent toggles; each disables a *valid-JSON* number shape. There is
+    **no** public leading-zeros toggle (leading zeros are invalid JSON, rejected
+    by every public config; only legacy `parse()` accepts them).
+  - `JsonLimits { max_document_bytes, max_depth, max_string_bytes,
+    max_number_bytes, max_array_items, max_object_fields }` — each
+    `Optional<Int>`; `None` = unlimited; a negative `Some(n)` ⇒ `"invalid-config"`.
+- Profiles: `permissive()` (most lenient standard JSON, keep-last), `strict()`
+  (reject dups; `-0` allowed), `signed_ir()` (integer-only `0 | -?[1-9][0-9]*`,
+  reject dups; no bundled limits/top-level). `JsonParseConfigBuilder` with frozen
+  `build() -> Result<JsonParseConfig, JsonErrorData>` (validates limits).
+- Entry points: `parse_with_config(&String, &JsonParseConfig)`,
+  `parse_strict(&String)` (== `strict()`); `parse(&String)` unchanged.
+- Numeric policy inspects the verbatim `JsonNode::Number(raw)` lexeme before any
+  conversion; per-number precedence: leading-zero → negative-zero → fraction →
+  exponent. Duplicate-key `Reject` reports the **second** key's opening-quote
+  offset.
+- **String rules**: public configs follow RFC 8259 — `\uXXXX` (incl. surrogate
+  pairs) decodes to UTF-8, and unescaped control bytes `U+0000–U+001F` are
+  rejected (`unescaped-control`). Legacy `parse()` is bug-compatible: no `\u`
+  support (`invalid-escape`), tolerates unescaped controls.
+- **Limits are pre-consumption**: array-item / object-field limits reject the
+  offending element/key before parsing its value; `max_string_bytes` /
+  `max_number_bytes` are enforced incrementally; `max_object_fields` counts member
+  occurrences (duplicates included), not unique keys.
+
+### Located decoder surface
+
+- `parse_located(&String, &JsonParseConfig) -> Result<JsonDoc, JsonErrorData>` —
+  parses under the policy AND retains a source-span sidecar. Same node as
+  `parse_with_config` (sidecar is value-neutral).
+- `JsonDoc.cursor() -> LocatedCursor`; `JsonDoc.at_pointer(&String)` resolves an
+  **absolute** RFC-6901 JSON Pointer (`~0`/`~1` escaping; array-index grammar
+  `0 | [1-9][0-9]*`).
+- `LocatedCursor` (all `nothrow`, `Result`-returning): `child` / `index` /
+  `require_field` (the contract `require`; `require` is a reserved keyword) /
+  `optional` (`Result<Optional<LocatedCursor>, …>` — `Ok(None)` only for an absent
+  key, `Err(type-mismatch-object)` on a non-object) / `forbid_unknown` (reports
+  the earliest unknown key in source order) / `discriminant` / `as_string` /
+  `as_int` / `as_uint` / `as_float` / `as_bool` / `as_object` / `as_array_len` /
+  `span() -> JsonByteSpan` / `pointer() -> String`.
+
+### Canonical encoding
+
+- `encode_canonical(&JsonNode) -> Result<String, JsonErrorData>` — a separate
+  result-propagating encoder (does **not** reuse the failure-swallowing
+  `_encode_node` object path). Fixed form: UTF-8, no insignificant whitespace,
+  object keys recursively sorted by UTF-8 bytes, the frozen escape table for keys
+  and values (short forms `\b\f\n\r\t`; other controls lowercase `\u00xx`; `/`
+  and non-ASCII verbatim). Signed-IR integer grammar on emit — rejects `-0`,
+  leading zeros, fractions, exponents. Deterministic first-error in canonical
+  emit order. Hashing is caller-side over the emitted bytes.
+
+### Stable error codes (`JsonErrorData.tag`)
+
+Parse policy: `duplicate-key`, `top-level-not-object`,
+`top-level-not-object-or-array`, `number-leading-zero`, `number-negative-zero`,
+`number-fraction`, `number-exponent`, `limit-document-bytes`, `limit-depth`,
+`limit-string-bytes`, `limit-number-bytes`, `limit-array-items`,
+`limit-object-fields`, `invalid-config`, `unescaped-control` (+ `invalid-escape`
+for malformed string escapes). Located decoder: `missing-field`,
+`unknown-field`, `type-mismatch-{string,int,uint,float,bool,object,array}`,
+`invalid-pointer`, `invalid-array-index`, `index-out-of-range`. Canonical encode:
+`canonical-number-{leading-zero,negative-zero,fraction,exponent,invalid}`,
+`canonical-invalid-node`. (Existing `invalid-syntax` / `internal-error`
+unchanged.)
+
+Value-semantic decoders users layer on top (ISO dates, flexible booleans, numeric
+ranges, domain rules) are out of scope — built with the located surface +
+`std.parse` scalar parsers.

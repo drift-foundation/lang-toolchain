@@ -1,0 +1,45 @@
+module main;
+import std.containers as containers;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+fn main() nothrow -> Int {
+	var m = containers.hash_map<type String, Int>();
+	if not m.insert_if_absent("a", 1) { return 1; }   // absent -> true
+	if m.len() != 1 { return 2; }
+	if m.insert_if_absent("a", 2) { return 3; }        // present -> false (no change)
+	if m.len() != 1 { return 4; }
+	match m.get(&"a") { Some(v) => { if *v != 1 { return 5; } }, None => { return 6; } }  // kept first
+	if not m.insert_if_absent("b", 9) { return 7; }    // absent -> true
+	if m.len() != 2 { return 8; }
+	// A present-key insert must not perturb the map: returns false, no new entry.
+	if m.insert_if_absent("a", 100) { return 9; }
+	if m.len() != 2 { return 10; }
+
+	// The map is intact and iterable after the no-op insert (a fresh iterator
+	// sees exactly the two entries with their kept-first values).
+	//
+	// NOTE: holding an iterator ACROSS insert_if_absent is statically forbidden —
+	// `HashMapIter` borrows `&HashMapCore`, so the borrow checker rejects any
+	// `&mut` call while an iterator is live.  Iterator invalidation by this API is
+	// therefore unreachable in safe code; here we verify post-call integrity.
+	var it = m.iter();
+	var seen = 0;
+	var saw_a = false;
+	var saw_b = false;
+	while true {
+		match it.next() {
+			Some(item) => {
+				seen = seen + 1;
+				if *item.key == "a" { saw_a = true; if *item.value != 1 { return 11; } }
+				if *item.key == "b" { saw_b = true; if *item.value != 9 { return 12; } }
+			},
+			None => { break; }
+		}
+	}
+	if seen != 2 { return 13; }
+	if not saw_a { return 14; }
+	if not saw_b { return 15; }
+	return 0;
+}

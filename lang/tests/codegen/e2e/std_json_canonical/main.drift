@@ -1,0 +1,51 @@
+module main;
+import std.json as json;
+import std.core as core;
+
+fn enc(src: String) nothrow -> String {
+	match json.parse(&src) {
+		core.Result::Ok(node) => {
+			match json.encode_canonical(&node) {
+				core.Result::Ok(s) => { return s; },
+				core.Result::Err(e) => { return "ERR:" + e.tag; }
+			}
+		},
+		core.Result::Err(_) => { return "PARSE-ERR"; }
+	}
+}
+
+fn enc_err(src: String) nothrow -> String {
+	match json.parse(&src) {
+		core.Result::Ok(node) => {
+			match json.encode_canonical(&node) {
+				core.Result::Ok(_) => { return "<ok>"; },
+				core.Result::Err(e) => { return e.tag + "@" + e.path; }
+			}
+		},
+		core.Result::Err(_) => { return "PARSE-ERR"; }
+	}
+}
+
+fn main() nothrow -> Int {
+	// canonical: sorted keys, no whitespace, integers ok
+	if enc("{\"b\":1,\"a\":2}") != "{\"a\":2,\"b\":1}" { return 1; }
+	if enc("[3,-7,0]") != "[3,-7,0]" { return 2; }
+	if enc("  {  \"x\" : [ 1 , 2 ] }  ") != "{\"x\":[1,2]}" { return 3; }
+	// nested sort
+	if enc("{\"z\":{\"y\":1,\"x\":2}}") != "{\"z\":{\"x\":2,\"y\":1}}" { return 4; }
+	// string escaping preserved (solidus unescaped, quote escaped)
+	if enc("{\"a\":\"x/y\\\"z\"}") != "{\"a\":\"x/y\\\"z\"}" { return 5; }
+
+	// rejections with canonical-number-* tags + JSON Pointer path
+	if enc_err("{\"a\":1.5}") != "canonical-number-fraction@/a" { return 10; }
+	if enc_err("[0,1e3]") != "canonical-number-exponent@/1" { return 11; }
+	if enc_err("{\"a\":-0}") != "canonical-number-negative-zero@/a" { return 12; }
+	// leading zero: parse() accepts 01, canonical rejects
+	if enc_err("{\"a\":01}") != "canonical-number-leading-zero@/a" { return 13; }
+
+	// deterministic first-error: two offenders, canonically-first key wins.
+	// keys "b":1.5 and "a":2e9 — sorted order a before b, so /a (exponent) first.
+	if enc_err("{\"b\":1.5,\"a\":2e9}") != "canonical-number-exponent@/a" { return 14; }
+
+	return 0;
+}
