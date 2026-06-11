@@ -40,7 +40,34 @@ fn run() -> Int {
 		None => {}
 	}
 
+	// empty object -> iterator yields nothing
+	match json.parse(&"{}") {
+		core.Result::Ok(eo) => {
+			var ite = eo.entries();
+			match ite.next() {
+				Some(_) => { return 30; },
+				None => {}
+			}
+		},
+		core.Result::Err(_) => { return 31; }
+	}
+
+	// leak-clean EARLY iterator drop: take one entry, abandon the rest; the
+	// iterator drops (in early_drop's scope) while `node` is still alive.
+	if early_drop(&node) != 0 { return 40; }
+
 	return 0;
+}
+
+// Creates an entries() iterator over a borrowed object, advances once, and
+// returns — dropping the iterator mid-iteration.  Memcheck pins that the early
+// drop (with the still-live borrowed object) leaks nothing.
+fn early_drop(node: &json.JsonNode) nothrow -> Int {
+	var it = node.entries();
+	match it.next() {
+		Some(item) => { if item.key.byte_length() <= 0 { return 1; } return 0; },
+		None => { return 2; }
+	}
 }
 
 fn main() nothrow -> Int {

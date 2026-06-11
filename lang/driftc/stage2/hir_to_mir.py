@@ -1758,7 +1758,15 @@ class HIRToMIR:
 								break
 						if (not scrut_is_ref) and arm.binders and need_addr_binders:
 							_ensure_arm_scrut_ptr()
-						for bname, fidx in zip(arm.binders, field_indices):
+						_arm_binder_ids = list(getattr(arm, "binder_ids", None) or [])
+						for _bi, (bname, fidx) in enumerate(zip(arm.binders, field_indices)):
+							# Canonicalize the binder's DESTINATION local so the pattern store uses
+							# the same binding-id-canonical name that binder reads use elsewhere
+							# (_canonical_local).  Without this, a second loop reusing a binder NAME
+							# stores `x` but reads `x__b<id>`, producing SSA 'load before store'.
+							# Legacy HIR without binder_ids falls back to the raw name (id=None).
+							_binder_id = _arm_binder_ids[_bi] if _bi < len(_arm_binder_ids) else None
+							binder_local = self._canonical_local(_binder_id, bname)
 							if fidx < 0 or fidx >= len(arm_def.field_types):
 								raise AssertionError("match binder field index out of range (checker bug)")
 							bty = arm_def.field_types[fidx]
@@ -1785,9 +1793,9 @@ class HIRToMIR:
 								# binder_ty is Ref<bty> at line 1741);
 								# Ref locals are not droppable so no
 								# scope cleanup needed.
-								self.b.ensure_local(bname)
-								self._local_types[bname] = binder_ty
-								self.b.emit(M.StoreLocal(local=bname, value=field_val))
+								self.b.ensure_local(binder_local)
+								self._local_types[binder_local] = binder_ty
+								self.b.emit(M.StoreLocal(local=binder_local, value=field_val))
 							else:
 								if arm_scrut_ptr is not None:
 									self.b.emit(
@@ -1857,8 +1865,8 @@ class HIRToMIR:
 									)
 									self._local_types[field_val] = bty
 									field_moved = field_val
-								self.b.ensure_local(bname)
-								self._local_types[bname] = binder_ty
+								self.b.ensure_local(binder_local)
+								self._local_types[binder_local] = binder_ty
 								binder_def = self._type_table.get(binder_ty)
 								if binder_def.kind is not TypeKind.REF and self._needs_runtime_drop(binder_ty):
 									# Phase 4 site-1 patch 6a: arm-end binder
@@ -1867,8 +1875,8 @@ class HIRToMIR:
 									# `arm_drop_locals` mirror retired.  The
 									# scope-stack registration alone makes
 									# the binder a CleanupHook candidate.
-									self._register_drop_local(bname, binder_ty)
-								self.b.emit(M.StoreLocal(local=bname, value=field_moved))
+									self._register_drop_local(binder_local, binder_ty)
+								self.b.emit(M.StoreLocal(local=binder_local, value=field_moved))
 
 				# Consume and drop by-value scrutinee before arm body so cleanup runs
 				# even when the arm terminates early (e.g., return/throw).

@@ -1,0 +1,1 @@
+{ "description": "std.json JsonEntriesIter Iterable: for-in over object entries (borrowed key/value), empty/non-object zero iterations, manual next() with trait, leak-clean early loop exit", "exit_code": 0 }

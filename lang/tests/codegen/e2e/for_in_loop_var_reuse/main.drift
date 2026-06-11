@@ -1,0 +1,33 @@
+module main;
+import std.iter as iter;
+use trait iter.SinglePassIterator;
+
+// Regression: reusing a for-in loop-variable NAME across sibling loops.  The
+// match-binder MIR lowering must store the binder under the same binding-id
+// canonical local that reads use; otherwise SSA reports "load before store".
+
+fn mkstr() nothrow -> Array<String> { var a: Array<String> = []; a.push("p"); a.push("q"); return move a; }
+
+fn main() nothrow -> Int {
+	var ai: Array<Int> = []; ai.push(1); ai.push(2); ai.push(3);
+
+	// Copy payload (&Int), name `x` reused.
+	var s = 0;
+	for x in ai { s = s + *x; }
+	for x in ai { s = s + *x; }
+	if s != 12 { return 1; }
+
+	// Non-Copy payload (Array<String> elements), name `x` reused — leak-clean drop.
+	var c = 0;
+	for x in mkstr() { if x.byte_length() > 0 { c = c + 1; } }
+	for x in mkstr() { if x.byte_length() > 0 { c = c + 1; } }
+	if c != 4 { return 2; }
+
+	// Early break / continue with the reused name.
+	var b = 0;
+	for x in ai { if *x == 2 { break; } b = b + *x; }      // 1
+	for x in ai { if *x == 1 { continue; } b = b + *x; }   // 2+3
+	if b != 6 { return 3; }
+
+	return 0;
+}

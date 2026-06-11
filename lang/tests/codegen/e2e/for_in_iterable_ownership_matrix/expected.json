@@ -1,0 +1,1 @@
+{ "description": "for-in by-value Iterable ownership matrix: Copy variant rvalue (iterate), Copy local iterated TWICE (not consumed), NON-Copy variant rvalue (moved + leak-clean String drop), `for x in move v`, generic by-value Iterable. Move-vs-borrow follows the selected impl; only the compiler-owned temp is moved.", "exit_code": 0 }

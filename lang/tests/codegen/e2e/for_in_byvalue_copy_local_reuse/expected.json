@@ -1,0 +1,1 @@
+{ "description": "for-in over a Copy by-value Iterable bound to a LOCAL, iterated TWICE: central &T->T coercion reads the binding by value (implicit copy, non-consuming), so the local is not consumed and iterates again. Sums 6+6.", "exit_code": 12 }

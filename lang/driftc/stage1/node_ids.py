@@ -137,6 +137,42 @@ def assign_callsite_ids(root: H.HNode, *, start: int = 0) -> int:
 	return next_id
 
 
+def assign_missing_callsite_ids(root: H.HNode) -> int:
+	"""
+	Assign CallSiteIds ONLY to call nodes that lack one, leaving every already-
+	assigned id untouched.  New ids are allocated above the current high-water
+	mark so they never collide with existing ids.
+
+	Unlike `assign_callsite_ids` (which renumbers ALL calls densely from a
+	start), this deliberately does NOT overwrite or repair existing ids.  It is
+	for consumers that trust the unique ids already produced upstream
+	(`assign_callsite_ids` + `validate_callsite_ids`) and only need to cover
+	freshly-synthesized nodes.  Crucially, it does not silently renumber
+	DUPLICATE existing ids: a duplicate is an upstream uniqueness-invariant
+	violation that downstream side-table recorders surface as a hard error,
+	rather than being masked by a blanket renumber here.
+
+	Returns the next available CallSiteId after traversal.
+	"""
+	highest = -1
+	missing: list[object] = []
+	for obj in _iter_hir_walk(root):
+		if isinstance(obj, (H.HCall, H.HMethodCall, H.HInvoke)):
+			cid = getattr(obj, "callsite_id", None)
+			if isinstance(cid, int):
+				highest = max(highest, cid)
+			else:
+				missing.append(obj)
+	next_id = highest + 1
+	for obj in missing:
+		if is_dataclass(obj) and getattr(obj, "__dataclass_params__", None) and obj.__dataclass_params__.frozen:
+			object.__setattr__(obj, "callsite_id", next_id)
+		else:
+			obj.callsite_id = next_id
+		next_id += 1
+	return next_id
+
+
 def validate_callsite_ids(root: H.HNode) -> None:
 	"""
 	Validate CallSiteIds for all call nodes reachable from `root`.
@@ -158,4 +194,4 @@ def validate_callsite_ids(root: H.HNode) -> None:
 		raise AssertionError("callsite_id range is not dense")
 
 
-__all__ = ["assign_node_ids", "assign_callsite_ids", "validate_callsite_ids"]
+__all__ = ["assign_node_ids", "assign_callsite_ids", "assign_missing_callsite_ids", "validate_callsite_ids"]

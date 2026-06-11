@@ -1,0 +1,33 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+// A self-iterating VARIANT (Src == Iter == V), mirroring JsonEntriesIter.
+pub variant V { Done, Count(n: Int) }
+
+implement iter.SinglePassIterator<Int> for V {
+	pub fn next(self: &mut V) nothrow -> Optional<Int> {
+		match self {
+			V::Count(n) => {
+				if *n <= 0 { return Optional<Int>::None(); }
+				val cur = *n;
+				*n = *n - 1;
+				return Optional::Some(cur);
+			},
+			default => { return Optional<Int>::None(); }
+		}
+	}
+}
+
+implement iter.Iterable<V, Int, V> for V {
+	pub fn iter(var self: V) nothrow -> V { return move self; }
+}
+
+fn make() nothrow -> V { return V::Count(3); }
+
+fn main() nothrow -> Int {
+	var sum = 0;
+	for x in make() { sum = sum + x; }
+	return sum;   // expect 3+2+1 = 6
+}

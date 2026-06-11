@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Mapping, Sequence, Set, Tuple
 from lang.driftc import stage1 as H
 from lang.driftc import debug as drift_debug
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
-from lang.driftc.stage1.node_ids import assign_node_ids
+from lang.driftc.stage1.node_ids import assign_node_ids, assign_missing_callsite_ids, iter_hir_walk
 from lang.driftc.stage1.capture_discovery import discover_captures
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang.driftc.checker import FnSignature, TypeParam, user_facing_binding_name
@@ -1919,99 +1919,51 @@ class TypeChecker:
 			if self._next_binding_id <= max_preseed:
 				self._next_binding_id = max_preseed + 1
 		if callable_registry is not None:
-			has_call = False
-
-			def _scan_expr(expr: H.HExpr) -> None:
-				nonlocal has_call
-				if isinstance(expr, (H.HCall, H.HMethodCall, H.HInvoke)):
-					has_call = True
-				if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HLambda):
-					lam = expr.fn
-					if getattr(lam, "body_expr", None) is not None:
-						_scan_expr(lam.body_expr)
-					if getattr(lam, "body_block", None) is not None:
-						_scan_block(lam.body_block)
-				for child in getattr(expr, "__dict__", {}).values():
-					if isinstance(child, H.HExpr):
-						_scan_expr(child)
-					elif isinstance(child, H.HBlock):
-						_scan_block(child)
-					elif isinstance(child, list):
-						for it in child:
-							if isinstance(it, H.HExpr):
-								_scan_expr(it)
-							elif isinstance(it, H.HBlock):
-								_scan_block(it)
-							elif isinstance(it, H.HNode):
-								_scan_expr(it)
-
-			def _scan_block(block: H.HBlock) -> None:
-				for st in block.statements:
-					if isinstance(st, H.HExprStmt):
-						_scan_expr(st.expr)
-					elif isinstance(st, H.HReturn) and st.value is not None:
-						_scan_expr(st.value)
-					else:
-						for child in getattr(st, "__dict__", {}).values():
-							if isinstance(child, H.HExpr):
-								_scan_expr(child)
-							elif isinstance(child, H.HBlock):
-								_scan_block(child)
-							elif isinstance(child, list):
-								for it in child:
-									if isinstance(it, H.HExpr):
-										_scan_expr(it)
-									elif isinstance(it, H.HBlock):
-										_scan_block(it)
-
-			_scan_block(body)
-			if has_call:
-				H.assign_callsite_ids(body)
+			# Fill ONLY missing callsite ids; trust the unique ids already
+			# assigned upstream (parse / normalize via assign_callsite_ids +
+			# validate_callsite_ids).  Previously this blanket-renumbered every
+			# call (H.assign_callsite_ids), which silently renumbered any
+			# duplicate ids away — masking upstream uniqueness failures.  With
+			# fill-missing, a duplicate that survives to the side-table recorder
+			# (_record_call_info) is surfaced as a hard invariant failure instead
+			# of being repaired in place.  For real bodies (already dense+unique)
+			# this is a no-op; freshly-synthesized nodes still get ids allocated
+			# above the high-water mark.
+			#
+			# Called UNCONDITIONALLY (not gated by a hand-rolled "has any call"
+			# scan): `assign_missing_callsite_ids` walks the body with the
+			# canonical `iter_hir_walk`, so it covers calls in every position —
+			# including nested-block statement children that the previous
+			# `_scan_*` gate did not descend into.  A gate built on that
+			# incomplete walker could report "no calls" for a body whose calls
+			# all live in nested blocks, skip the fill, and let a synthesized
+			# generic call reach `record_instantiation` with `callsite_id=None`
+			# (losing the monomorphization request).  The full-walk fill is
+			# itself a no-op when there are no missing ids, so the gate bought
+			# nothing.
+			assign_missing_callsite_ids(body)
 
 		next_callsite_id: int | None = None
 
 		def _max_callsite_id(block: H.HBlock) -> int:
+			# Must use the SAME complete HIR traversal as
+			# `node_ids.assign_callsite_ids` (which seeds the parse-time
+			# ids) so the high-water mark covers every call node — the
+			# previous hand-rolled `__dict__` walker skipped statement
+			# children of nested blocks (`HLet`/`HLoop` inside a for-in
+			# desugaring), so a body whose calls all live inside for-in
+			# blocks reported -1.  `_alloc_callsite_id` then started at 0,
+			# colliding with existing ids and triggering a cascade of
+			# `_record_call_info` reassignments that desynced node
+			# callsite_ids from the instantiation / call-info maps (the
+			# generic for-in `iter()` inheriting the following `next()`
+			# monomorphization).  Reuse the canonical iterative walker.
 			highest = -1
-
-			def _walk_expr(expr: H.HExpr) -> None:
-				nonlocal highest
-				csid = getattr(expr, "callsite_id", None)
-				if isinstance(csid, int):
-					highest = max(highest, csid)
-				for child in getattr(expr, "__dict__", {}).values():
-					if isinstance(child, H.HExpr):
-						_walk_expr(child)
-					elif isinstance(child, H.HBlock):
-						_walk_block(child)
-					elif isinstance(child, list):
-						for it in child:
-							if isinstance(it, H.HExpr):
-								_walk_expr(it)
-							elif isinstance(it, H.HBlock):
-								_walk_block(it)
-							elif isinstance(it, H.HNode):
-								_walk_expr(it)
-
-			def _walk_block(b: H.HBlock) -> None:
-				for st in b.statements:
-					if isinstance(st, H.HExprStmt):
-						_walk_expr(st.expr)
-					elif isinstance(st, H.HReturn) and st.value is not None:
-						_walk_expr(st.value)
-					else:
-						for child in getattr(st, "__dict__", {}).values():
-							if isinstance(child, H.HExpr):
-								_walk_expr(child)
-							elif isinstance(child, H.HBlock):
-								_walk_block(child)
-							elif isinstance(child, list):
-								for it in child:
-									if isinstance(it, H.HExpr):
-										_walk_expr(it)
-									elif isinstance(it, H.HBlock):
-										_walk_block(it)
-
-			_walk_block(block)
+			for obj in iter_hir_walk(block):
+				if isinstance(obj, (H.HCall, H.HMethodCall, H.HInvoke)):
+					csid = getattr(obj, "callsite_id", None)
+					if isinstance(csid, int):
+						highest = max(highest, csid)
 			return highest
 
 		def _alloc_callsite_id() -> int:
@@ -2101,24 +2053,40 @@ class TypeChecker:
 				csid = _alloc_callsite_id()
 				expr.callsite_id = csid
 			node_id = getattr(expr, "node_id", None)
+			node_key = int(node_id) if isinstance(node_id, int) else -1
 			owner = callsite_owner_node_id.get(csid)
-			existing = call_info_by_callsite_id.get(csid)
-			if owner is None and existing is None:
+			if owner is None:
+				# First call node to claim this callsite_id.
 				call_info_by_callsite_id[csid] = info
-				callsite_owner_node_id[csid] = int(node_id) if isinstance(node_id, int) else -1
+				callsite_owner_node_id[csid] = node_key
 				return csid
-			if owner is not None and isinstance(node_id, int) and owner == node_id:
+			if owner == node_key:
+				# The SAME node re-recording — a later resolution pass refining
+				# this call's CallInfo.  Update in place; the id is unchanged.
 				call_info_by_callsite_id[csid] = info
 				return csid
-			if existing == info:
-				if owner is None:
-					callsite_owner_node_id[csid] = int(node_id) if isinstance(node_id, int) else -1
-				return csid
-			new_csid = _alloc_callsite_id()
-			expr.callsite_id = new_csid
-			call_info_by_callsite_id[new_csid] = info
-			callsite_owner_node_id[new_csid] = int(node_id) if isinstance(node_id, int) else -1
-			return new_csid
+			# A DIFFERENT node claims a callsite_id already owned by another
+			# node.  Collision identity is the OWNER node, never CallInfo
+			# equality: two distinct calls sharing an id is illegal even if
+			# their CallInfo happens to match.  callsite_ids are assigned
+			# uniquely and densely upstream (node_ids.assign_callsite_ids +
+			# validate_callsite_ids), and the in-function fill only covers
+			# MISSING ids above the high-water mark — so a collision here means
+			# an upstream uniqueness invariant failed.  It is NOT recoverable:
+			# the owner may already have written into the per-callsite side
+			# tables (call_info_by_callsite_id, instantiations_by_callsite_id)
+			# during its own resolution, and there is no reliable way to tell
+			# which node a recorded instantiation belongs to.  Reassigning or
+			# tolerating the collision can cross-attach those entries (the LB-8
+			# generic-for-in mistargeting).  Fail at the first broken invariant.
+			raise AssertionError(
+				f"internal: duplicate callsite_id {csid} in "
+				f"'{function_symbol(fn_id)}' claimed by two distinct call nodes "
+				f"(owner node_id={owner}, conflicting node_id={node_key}); "
+				"callsite_ids must be unique per node — this indicates an "
+				"upstream normalization invariant failure, not a recoverable "
+				"collision"
+			)
 
 		module_ids_by_name: dict[str, ModuleId] = {}
 		for mod_id, chain in visibility_provenance.items():
@@ -5914,12 +5882,11 @@ class TypeChecker:
 				)
 			csid = getattr(expr, "callsite_id", None)
 			if isinstance(csid, int):
-				prev_csid = csid
+				# _record_call_info no longer reassigns callsite_ids (a
+				# different-owner collision now fails loudly), so the returned
+				# csid always equals expr.callsite_id — the obsolete
+				# `prev_csid != csid` instantiation-migration is gone.
 				csid = _record_call_info(expr, info)
-				if prev_csid != csid:
-					inst_prev = instantiations_by_callsite_id.pop(prev_csid, None)
-					if inst_prev is not None:
-						instantiations_by_callsite_id[csid] = inst_prev
 				inst = instantiations_by_callsite_id.get(csid)
 				if inst is None and isinstance(expr, H.HCall):
 					callee_expr = getattr(expr, "fn", None)

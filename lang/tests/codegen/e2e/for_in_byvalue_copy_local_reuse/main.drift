@@ -1,0 +1,19 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+pub variant V { Done, Count(n: Int) }
+implement iter.SinglePassIterator<Int> for V {
+	pub fn next(self: &mut V) nothrow -> Optional<Int> {
+		match self { V::Count(n) => { if *n <= 0 { return Optional<Int>::None(); } val c = *n; *n = *n - 1; return Optional::Some(c); }, default => { return Optional<Int>::None(); } }
+	}
+}
+implement iter.Iterable<V, Int, V> for V { pub fn iter(var self: V) nothrow -> V { return move self; } }
+fn main() nothrow -> Int {
+	val v = V::Count(3);          // Copy by-value Iterable, bound local
+	var s1 = 0;
+	for x in v { s1 = s1 + x; }   // implicit copy of v (non-consuming)
+	var s2 = 0;
+	for y in v { s2 = s2 + y; }   // v still usable -> copied again
+	return s1 + s2;                // 6 + 6 = 12
+}

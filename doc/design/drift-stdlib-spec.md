@@ -736,6 +736,31 @@ reinterpretation (sole exception: duplicate-key resolution).
   `as_int` / `as_uint` / `as_float` / `as_bool` / `as_object` / `as_array_len` /
   `span() -> JsonByteSpan` / `pointer() -> String`.
 
+### Object entry enumeration
+
+`JsonNode.entries(&self) nothrow -> JsonEntriesIter` enumerates an object's
+`(key, value)` pairs **by borrow** (no key/value cloning). `JsonEntriesIter` is
+both `Iterable` and a `SinglePassIterator` over
+`containers.HashMapItemRef<String, JsonNode>`; each `item` exposes
+`item.key: &String` and `item.value: &JsonNode`.
+
+```drift
+for entry in node.entries() {          // for-in works directly (no extra imports)
+    // entry.key: &String, entry.value: &JsonNode
+}
+```
+To drive it manually with `.next()`, bring the trait into scope:
+`import std.iter as iter; use trait iter.SinglePassIterator;`.
+
+- A **non-object** node (and an empty object) yields **no** entries — there is no
+  separate "not an object" signal (the two are indistinguishable through this
+  API).
+- **Iteration order is unspecified** (backing-`HashMap` order) and must **not** be
+  relied upon — it is not canonical; use `encode_canonical` for byte-stable
+  output.
+- Standard `HashMap` borrowing / iterator-invalidation rules apply: the source
+  cannot be mutated while an iterator is live.
+
 ### Canonical encoding
 
 - `encode_canonical(&JsonNode) -> Result<String, JsonErrorData>` — a separate

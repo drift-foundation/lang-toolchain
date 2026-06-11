@@ -632,6 +632,12 @@ class MethodResolverContext:
 	record_instantiation: Callable[[int | None, FunctionId | None, tuple[TypeId, ...], tuple[TypeId, ...]], None] | None = None
 	alloc_callsite_id: Callable[[], int] | None = None
 	alloc_node_id: Callable[[object], None] | None = None
+	# Hard trait constraint for candidate selection.  When set, ONLY candidates
+	# implementing this exact trait are eligible — inherent and unrelated-trait
+	# methods of the same name are excluded during normal resolution.  Used by
+	# the for-in (`for_iter`/`for_next`) desugaring to require std.iter.Iterable /
+	# SinglePassIterator.  `traits_in_scope` alone does not exclude inherent.
+	required_trait_key: TraitKey | None = None
 
 
 @dataclass(frozen=True)
@@ -804,9 +810,9 @@ def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext
 	return ResolverContext(**base)
 
 
-def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None) -> MethodResolverContext:
+def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None, required_trait_key: TraitKey | None = None) -> MethodResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id, required_trait_key=required_trait_key)
 
 
 def make_call_ctx(**kwargs) -> CallResolverContext:
@@ -2708,6 +2714,24 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 							if getattr(_tkey, "name", None) == trait_name:
 								trait_key_for_cand = _tkey
 								break
+				# Hard required-trait constraint (for-in for_iter/for_next): exclude any
+				# candidate that is not an impl of the required trait — inherent methods
+				# (trait_key_for_cand is None) and unrelated-trait `iter`/`next` methods.
+				if ctx.required_trait_key is not None:
+					_rtk = ctx.required_trait_key
+					# Compare full canonical TraitKey identity (package_id + module +
+					# name), not just module/name — a same-named trait from a
+					# different package must not satisfy the constraint.
+					if trait_key_for_cand is None or (
+						getattr(trait_key_for_cand, "package_id", None),
+						getattr(trait_key_for_cand, "module", None),
+						getattr(trait_key_for_cand, "name", None),
+					) != (
+						getattr(_rtk, "package_id", None),
+						getattr(_rtk, "module", None),
+						getattr(_rtk, "name", None),
+					):
+						continue
 				if trait_key_for_cand is not None and ctx.trait_index is not None and ctx.trait_index.is_missing(trait_key_for_cand):
 					raise ResolutionError(f"missing trait metadata for '{_trait_label(trait_key_for_cand)}'", span=getattr(expr, "loc", Span()))
 				if trait_key_for_cand is not None:
@@ -3138,6 +3162,42 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 						for _i in range(len(arg_types))
 					)
 				receiver_candidates.append((cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, pref, impl_subst, exact_param_match, method_has_own_type_params))
+			# Secondary receiver coercion: `&T -> T` for a by-value `self`, consulted
+			# only when NO exact/borrow-compatible candidate matched.  Convert ONLY:
+			#  - a for-in IMPLICIT borrow (`for x in v`, provenance flag) -> by value;
+			#  - or an ordinary ref-valued receiver expression.
+			# An explicit `for x in &v` (HBorrow without provenance) is NEVER converted,
+			# so it stays borrow-mode and never falls back to `Iterable<V>`.
+			secondary_recv_conv = None
+			_recv_expr = getattr(expr, "receiver", None)
+			_recv_implicit_borrow = isinstance(_recv_expr, H.HBorrow) and getattr(_recv_expr, "for_iter_implicit_borrow", False)
+			_recv_explicit_borrow = isinstance(_recv_expr, H.HBorrow) and not getattr(_recv_expr, "for_iter_implicit_borrow", False)
+			if not receiver_candidates and not _recv_explicit_borrow and ctx.ref_to_value_coerce_applies is not None:
+				for cand, sig, param_type_ids, impl_subst in param_types_for_receiver:
+					if not param_type_ids or len(param_type_ids) != len(arg_types) + 1:
+						continue
+					self_mode = _self_mode_from_sig(sig)
+					if self_mode is None or self_mode is not SelfMode.SELF_BY_VALUE:
+						continue
+					_T = param_type_ids[0]
+					if not ctx.ref_to_value_coerce_applies(recv_ty, _T):
+						continue
+					if _recv_implicit_borrow:
+						conv = "copy" if (ctx.type_table.copy_status(_T) is True) else "constshare"
+					else:
+						conv = "ref_to_value"
+					pref = _receiver_preference(self_mode, receiver_is_lvalue=receiver_is_lvalue, receiver_can_mut_borrow=receiver_can_mut_borrow, autoborrow=None)
+					if pref is None:
+						continue
+					exact_param_match = all((param_type_ids[1 + _i] == arg_types[_i] or ctx.unwrap_ref_type(param_type_ids[1 + _i]) == arg_types[_i]) for _i in range(len(arg_types)))
+					_fn_sig_sc = ctx.signatures_by_id.get(cand.fn_id) if (cand.fn_id is not None and ctx.signatures_by_id is not None) else None
+					if _fn_sig_sc is None:
+						_fn_sig_sc = _sig_from_decl_template(ctx, cand, current_module_name)
+					_mhtp = bool(_fn_sig_sc is not None and (getattr(_fn_sig_sc, "type_params", None) or []))
+					if _mhtp:
+						exact_param_match = True
+					receiver_candidates.append((cand, sig, param_type_ids, None, False, pref, impl_subst, exact_param_match, _mhtp))
+					secondary_recv_conv = conv
 			if not receiver_candidates:
 				if getattr(expr, "origin", None) == "for_iter" and ctx.signatures_by_id is not None:
 					array_base_id = ctx.type_table.array_base_id()
@@ -3411,6 +3471,57 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					diagnostics.append(_tc_diag(message=msg, severity="error", span=getattr(expr, "loc", Span()), notes=notes))
 					return MethodCallResult(ctx.unknown_ty, None)
 			cand, sig, param_type_ids, needs_autoborrow, wants_mut_ref, _pref, impl_subst, _exact_match, _method_tps = pref_candidates[0]
+			if secondary_recv_conv is not None and _recv_expr is not None:
+				_loc = getattr(_recv_expr, "loc", Span())
+				if needs_autoborrow is not None:
+					raise AssertionError("for-in secondary by-value candidate must not require autoborrow (inconsistent candidate metadata)")
+				# The recorded HIR receiver changes from `&T` to a by-value `T` read.  Each
+				# conversion is typed EXACTLY ONCE and that type becomes the candidate-local
+				# effective receiver type used throughout the continuation (infer / instantiate
+				# / autoborrow / args match).  const_share is resolved immediately (its callsite
+				# + CallInfo must exist for lowering); it must NOT be re-typed below (a second
+				# resolution would duplicate callsite/CallInfo state).
+				converted_recv_ty = None
+				if secondary_recv_conv in ("copy", "constshare"):
+					# Undo the compiler-synthesized implicit borrow by reading the underlying
+					# binding by value (NOT an HCopy / source-level copy, never a deref).  The
+					# desugar guarantees a projection-free local: any non-HVar iterable is first
+					# stored in `__for_iterable`.
+					_subj = getattr(_recv_expr, "subject", None)
+					_base = getattr(_subj, "base", None)
+					if not (isinstance(_recv_expr, H.HBorrow) and getattr(_recv_expr, "for_iter_implicit_borrow", False) and isinstance(_subj, H.HPlaceExpr) and not getattr(_subj, "projections", None) and isinstance(_base, H.HVar)):
+						raise AssertionError("for-in implicit-borrow receiver is not a projection-free local binding read (violated for-in HIR invariant)")
+					_fresh = H.HVar(name=_base.name, binding_id=_base.binding_id, module_id=getattr(_base, "module_id", None), loc=getattr(_base, "loc", _loc))
+					if ctx.alloc_node_id is not None:
+						ctx.alloc_node_id(_fresh)
+					if secondary_recv_conv == "copy":
+						# Bare Copy binding to a by-value parameter: defined implicit-copy semantics.
+						if ctx.type_expr is not None:
+							converted_recv_ty = ctx.type_expr(_fresh, expected_type=param_type_ids[0])
+						expr.receiver = _fresh
+					else:
+						# ConstShare-only: synthesize const_share from the VALUE; the resolver
+						# auto-borrows it for const_share(self: &T).  Type the WRAP once (its
+						# receiver is used as a borrow, so no value-position implicit-CS mark).
+						_cs = H.HMethodCall(receiver=_fresh, method_name="const_share", args=[], kwargs=[], origin="implicit_const_share", loc=_loc)
+						if ctx.alloc_callsite_id is not None:
+							_cs.callsite_id = ctx.alloc_callsite_id()
+						if ctx.alloc_node_id is not None:
+							ctx.alloc_node_id(_cs)
+						if ctx.type_expr is not None:
+							converted_recv_ty = ctx.type_expr(_cs)
+						expr.receiver = _cs
+				elif secondary_recv_conv == "ref_to_value" and ctx.rewrite_ref_to_value is not None:
+					# Ordinary ref-valued receiver: rewrite_ref_to_value already types the node
+					# as the inner value type, so no extra type_expr is needed.
+					_rw = ctx.rewrite_ref_to_value(_recv_expr, param_type_ids[0])
+					if _rw is not None:
+						expr.receiver = _rw
+						converted_recv_ty = param_type_ids[0]
+				if converted_recv_ty is not None:
+					if converted_recv_ty != param_type_ids[0]:
+						raise AssertionError("for-in secondary receiver conversion did not produce the by-value receiver type T (violated for-in HIR invariant)")
+					recv_ty = converted_recv_ty
 			ret_id = sig.result_type or ctx.unknown_ty
 			fn_sig = ctx.signatures_by_id.get(cand.fn_id) if cand.fn_id is not None and ctx.signatures_by_id is not None else None
 			if fn_sig is None:
@@ -3985,78 +4096,48 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 		tmp_expr.receiver_type_id = adjusted_recv_arg_type
 	if arg_type_ids is not None:
 		tmp_expr.arg_type_ids = list(arg_type_ids[1:])
-	tmp_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=lambda: [trait_key], trait_key=trait_key)
+	# for-in resolves strictly through the required trait (Iterable / SinglePassIterator):
+	# a hard required_trait_key on the central resolver excludes inherent and
+	# unrelated `iter`/`next` methods while preserving its compatibility checks,
+	# requirements, ambiguity handling, generic substitution, auto-deref and the
+	# selected declaration.  No custom candidate scan.
+	_req_trait = trait_key if call_origin in ("for_iter", "for_next") else None
+	tmp_ctx = _make_method_ctx(ctx, diagnostics=diagnostics, traits_in_scope=lambda: [trait_key], trait_key=trait_key, required_trait_key=_req_trait)
 	if call_origin in ("for_iter", "for_next") and ctx.module_ids_by_name:
 		tmp_ctx = replace(tmp_ctx, visible_modules=tuple(ctx.module_ids_by_name.values()))
 	diag_len_before = len(diagnostics)
 	method_res = resolve_method_call(tmp_ctx, tmp_expr, expected_type=expected_type)
-	if (
-		call_origin == "for_iter"
-		and method_res.call_info is not None
-		and isinstance(getattr(method_res.call_info, "target", None), CallTarget)
-		and method_res.call_info.target.kind is CallTargetKind.TRAIT
-	):
-		method_res = MethodCallResult(method_res.return_type, None, method_res.resolution)
-	if method_res.call_info is None and call_origin == "for_iter" and ctx.signatures_by_id is not None:
-		recv_ty = recv_arg_type if recv_arg_type is not None else ctx.type_expr(expr.args[0], used_as_value=False)
-		recv_nominal = ctx.unwrap_ref_type(recv_ty)
-		recv_def = ctx.type_table.get(recv_nominal)
-		receiver_base = None
-		receiver_args = None
-		if recv_def.kind is TypeKind.ARRAY and recv_def.param_types:
-			receiver_base = ctx.type_table.array_base_id()
-			receiver_args = list(recv_def.param_types)
-		else:
-			recv_struct = ctx.type_table.get_struct_instance(recv_nominal)
-			if recv_struct is not None:
-				receiver_base = recv_struct.base_id
-				receiver_args = list(recv_struct.type_args)
-			else:
-				recv_variant = ctx.type_table.get_variant_instance(recv_nominal)
-				if recv_variant is not None:
-					receiver_base = recv_variant.base_id
-					receiver_args = list(recv_variant.type_args)
-		if receiver_base is not None and receiver_args is not None:
-			for fn_id, sig in ctx.signatures_by_id.items():
-				if not getattr(sig, "is_method", False):
-					continue
-				if (sig.method_name or sig.name) != qm.member:
-					continue
-				impl_tid = sig.impl_target_type_id
-				if impl_tid is None:
-					continue
-				impl_def = ctx.type_table.get(impl_tid)
-				if impl_def.kind is TypeKind.REF and impl_def.param_types:
-					impl_tid = impl_def.param_types[0]
-					impl_def = ctx.type_table.get(impl_tid)
-				if impl_def.kind is TypeKind.ARRAY:
-					impl_tid = ctx.type_table.array_base_id()
-				if impl_tid != receiver_base:
-					continue
-				if sig is None or sig.param_type_ids is None or sig.return_type_id is None:
-					continue
-				param_type_ids = list(sig.param_type_ids)
-				ret_id = sig.return_type_id
-				impl_args = list(getattr(sig, "impl_target_type_args", None) or [])
-				impl_type_params = list(getattr(sig, "impl_type_params", None) or [])
-				impl_subst = None
-				if impl_args and impl_type_params:
-					impl_subst = ctx.match_impl_type_args(template_args=impl_args, recv_args=list(receiver_args), impl_type_params=impl_type_params)
-				if impl_subst is not None:
-					param_type_ids = [apply_subst(p, impl_subst, ctx.type_table) for p in param_type_ids]
-					ret_id = apply_subst(ret_id, impl_subst, ctx.type_table)
-				can_throw = True
-				if sig.declared_can_throw is not None:
-					can_throw = bool(sig.declared_can_throw)
-				info = CallInfo(target=CallTarget.direct(fn_id), sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=can_throw, declared_terminal_throws=bool(getattr(sig, "declared_terminal_throws", False))))
-				if ctx.record_instantiation is not None and receiver_args is not None:
-					impl_args = tuple(receiver_args)
-					if impl_args and not any(ctx.type_table.has_typevar(t) for t in impl_args):
-						csid = getattr(expr, "callsite_id", None)
-						ctx.record_instantiation(callsite_id=csid, target_fn_id=fn_id, impl_args=impl_args, fn_args=tuple())
-				if len(diagnostics) > diag_len_before:
-					del diagnostics[diag_len_before:]
-				return MethodCallResult(ret_id, info)
+	# Propagate any receiver rewrite the resolver made (auto-deref / ref->value)
+	# back into the actual for-in call argument.
+	if call_origin in ("for_iter", "for_next"):
+		expr.args[0] = tmp_expr.receiver
+	# Owned-temp move fallback: a non-Copy by-value Iterable cannot bind a shared
+	# borrow.  If resolution failed and the source is the compiler-owned rvalue
+	# temp, retry with it MOVED into iter() so the by-value impl matches (only the
+	# marked temp is moved — never a user's bound local).
+	if call_origin == "for_iter" and method_res.call_info is None:
+		_a0 = expr.args[0]
+		if isinstance(_a0, H.HBorrow) and getattr(_a0, "for_iter_owned_temp", False):
+			_moved = H.HMove(subject=_a0.subject, loc=getattr(expr, "loc", None) or Span(), is_implicit=True)
+			if ctx.alloc_node_id is not None:
+				ctx.alloc_node_id(_moved)
+			tmp_expr.receiver = _moved
+			tmp_expr.receiver_type_id = None
+			if len(diagnostics) > diag_len_before:
+				del diagnostics[diag_len_before:]
+			method_res = resolve_method_call(tmp_ctx, tmp_expr, expected_type=expected_type)
+			expr.args[0] = tmp_expr.receiver
+	# Concrete for-in calls require a DIRECT MIR target.  Retarget ONLY the call
+	# target to the resolved concrete impl fn_id (keep the signature).  A MIR-bound
+	# result with no concrete implementation is a resolver contract failure.
+	if call_origin in ("for_iter", "for_next") and method_res.call_info is not None:
+		_tgt = getattr(method_res.call_info, "target", None)
+		if isinstance(_tgt, CallTarget) and _tgt.kind is CallTargetKind.TRAIT:
+			_decl = getattr(method_res.resolution, "decl", None) if method_res.resolution is not None else None
+			_fnid = getattr(_decl, "fn_id", None)
+			if _fnid is None:
+				raise AssertionError(f"for-in '{qm.member}' resolved to a trait method with no concrete impl fn_id (resolver contract failure)")
+			method_res = MethodCallResult(method_res.return_type, replace(method_res.call_info, target=CallTarget.direct(_fnid)), method_res.resolution)
 	if call_origin == "for_iter" and method_res.call_info is None:
 		diagnostics.append(_tc_diag(message="type is not iterable", code="E-NOT-ITERABLE", severity="error", span=getattr(expr, "loc", Span())))
 		return MethodCallResult(ctx.unknown_ty, None)

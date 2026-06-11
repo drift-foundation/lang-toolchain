@@ -720,7 +720,11 @@ Notes:
 - parse duplicate keys: keep-last
 - shape mutation is wrapper-only:
 `json.new_array()/json.new_object()` with `JsonArray.push(...)` and `JsonObject.set(...)`
-- navigation: `get(&key)`, `get_path(&Array<String>)`, `entries()`
+- navigation: `get(&key)`, `get_path(&Array<String>)`
+- object enumeration: `entries(&self) -> JsonEntriesIter` — borrowed `(key, value)` pairs
+  (`item.key: &String`, `item.value: &JsonNode`; no cloning) via `SinglePassIterator`
+  (`use trait std.iter.SinglePassIterator;` to call `.next()`). A non-object (or empty
+  object) yields nothing; **order is unspecified** — not canonical (use `encode_canonical`)
 - extractors:
 `as_bool/as_int/as_uint/as_float/as_string/as_number_raw/as_array/as_object` return `Optional`
 `expect_*` throws `std.json:JsonError` with machine fields (`tag`, `offset`, `line`, `col`, `path`, `key`)

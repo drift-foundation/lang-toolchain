@@ -1346,3 +1346,118 @@ def register_synthesized_const_share_impl(
 			is_generic=is_generic_method,
 		)
 		next_callable_id_box[0] = next_id + 1
+
+
+def resolve_const_share_trait_key(linked_world) -> Optional[TraitKey]:
+	"""The canonical `std.core.shareable.ConstShare` TraitKey in this linked world,
+	or None if the trait is not in scope (consumer never imported shareable, so no
+	ConstShare impls exist to hydrate)."""
+	if linked_world is None:
+		return None
+	gw = getattr(linked_world, "global_world", None)
+	if gw is None:
+		return None
+	return _resolve_trait_key(gw, module=_CONST_SHARE_TRAIT_MODULE, name=_CONST_SHARE_TRAIT_NAME)
+
+
+def hydrate_const_share_registry(
+	*,
+	module_exports,
+	signatures_by_id,
+	callable_registry,
+	module_ids,
+	next_callable_id_box,
+	const_share_trait_key,
+) -> int:
+	"""Register synthesized ConstShare `const_share` methods that already exist in
+	`module_exports` (semantic synthesis ran) but are MISSING from
+	`callable_registry`.
+
+	`const_share_trait_key` is the RESOLVED canonical `std.core.shareable.ConstShare`
+	TraitKey (see `resolve_const_share_trait_key`); impls are matched by full
+	TraitKey equality against it, so a same-named trait from another module/package
+	is never hydrated.
+
+	This is the registry-only counterpart of `synthesize_const_share_phase1`: it
+	does NOT re-derive impls or re-append semantic state (the synthesizer excludes
+	already-covered targets, so re-running it would register nothing).  It exists
+	so a PREPARED TypeTable reused with a FRESH pipeline-owned registry still gets
+	its synthesized methods registered — the method-resolution dispatch consults
+	the registry, so without this the synthesized `const_share` would resolve to
+	Unknown.  Returns the number of methods hydrated.
+	"""
+	if callable_registry is None or not module_exports:
+		return 0
+	if const_share_trait_key is None:
+		# ConstShare trait not in scope → no synthesized impls exist to hydrate.
+		return 0
+	from lang.driftc.method_registry import (
+		CallableSignature,
+		CallableTemplateSignature,
+		SelfMode,
+		Visibility,
+	)
+	hydrated = 0
+	for mod_name, exp in module_exports.items():
+		if not isinstance(exp, dict):
+			continue
+		for impl in (exp.get("impls") or []):
+			tk = getattr(impl, "trait_key", None)
+			# Full canonical identity: match the resolved ConstShare TraitKey by
+			# equality (package + module + name) — a same-named trait from another
+			# module/package must NOT be hydrated as ConstShare.
+			if tk is None or tk != const_share_trait_key:
+				continue
+			impl_tps = list(getattr(impl, "impl_type_params", []) or [])
+			target_tid = getattr(impl, "target_type_id", None)
+			def_module = getattr(impl, "def_module", mod_name)
+			for m in (getattr(impl, "methods", []) or []):
+				if getattr(m, "name", None) != "const_share":
+					continue
+				fn_id = getattr(m, "fn_id", None)
+				if fn_id is None:
+					continue
+				if callable_registry.get_by_fn_id(fn_id) is not None:
+					continue  # already registered (hand-written or already hydrated)
+				sig = signatures_by_id.get(fn_id)
+				if sig is None or sig.param_type_ids is None or sig.return_type_id is None:
+					# A synthesized ConstShare method with no usable signature is an
+					# internal invariant violation (synthesis registers the signature
+					# alongside the impl) — never silently mark the registry hydrated
+					# while skipping it.
+					raise AssertionError(
+						f"ConstShare registry hydration invariant: synthesized const_share method {fn_id} "
+						f"has no usable signature in signatures_by_id (sig={sig!r})"
+					)
+				next_id = next_callable_id_box[0]
+				mod_id = module_ids.setdefault(def_module, len(module_ids))
+				is_generic = bool(impl_tps)
+				tmpl = (
+					CallableTemplateSignature(
+						param_types=tuple(sig.param_type_ids),
+						result_type=sig.return_type_id,
+					)
+					if is_generic
+					else None
+				)
+				callable_registry.register_inherent_method(
+					callable_id=next_id,
+					name="const_share",
+					module_id=mod_id,
+					visibility=Visibility.public(),
+					signature=CallableSignature(
+						param_types=tuple(sig.param_type_ids),
+						result_type=sig.return_type_id,
+					),
+					template_signature=tmpl,
+					template_type_params=(),
+					template_impl_type_params=tuple(impl_tps),
+					fn_id=fn_id,
+					impl_id=next_id,
+					impl_target_type_id=target_tid,
+					self_mode=SelfMode.SELF_BY_REF,
+					is_generic=is_generic,
+				)
+				next_callable_id_box[0] = next_id + 1
+				hydrated += 1
+	return hydrated

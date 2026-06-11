@@ -1,0 +1,34 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+pub variant NC { Done, R(tag: String, n: Int) }
+implement iter.SinglePassIterator<Int> for NC {
+	pub fn next(self: &mut NC) nothrow -> Optional<Int> {
+		match self { NC::R(t, n) => { if *n <= 0 { return Optional<Int>::None(); } val c = *n; *n = *n - 1; return Optional::Some(c); }, default => { return Optional<Int>::None(); } }
+	}
+}
+implement iter.Iterable<NC, Int, NC> for NC { pub fn iter(var self: NC) nothrow -> NC { return move self; } }
+fn mknc() nothrow -> NC { return NC::R("tag", 4); }
+
+pub variant Box<T> { Empty, One(v: T) }
+implement<T> iter.SinglePassIterator<T> for Box<T> require T is core.Copy {
+	pub fn next(self: &mut Box<T>) nothrow -> Optional<T> {
+		match self { Box::One(x) => { val r = *x; *self = Box<T>::Empty(); return Optional::Some(r); }, default => { return Optional<T>::None(); } }
+	}
+}
+implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy {
+	pub fn iter(var self: Box<T>) nothrow -> Box<T> { return move self; }
+}
+fn mkbox() nothrow -> Box<Int> { return Box::One(9); }
+
+fn main() nothrow -> Int {
+	var n = 0;
+	for xn in mknc() { n = n + xn; }
+	if n != 10 { return 3; }
+	var g = 0;
+	for xg in mkbox() { g = g + xg; }
+	if g != 9 { return 5; }
+	return 0;
+}

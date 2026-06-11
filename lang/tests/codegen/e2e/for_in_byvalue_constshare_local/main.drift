@@ -1,0 +1,24 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+// ConstShare-ONLY (has a ConstArc field → not Copy; structurally derives ConstShare).
+pub struct CS { data: core.ConstArc<Int>, n: Int }
+implement iter.SinglePassIterator<Int> for CS {
+	pub fn next(self: &mut CS) nothrow -> Optional<Int> {
+		if self.n <= 0 { return Optional<Int>::None(); }
+		val c = self.n;
+		self.n = self.n - 1;
+		return Optional::Some(c);
+	}
+}
+implement iter.Iterable<CS, Int, CS> for CS { pub fn iter(var self: CS) nothrow -> CS { return move self; } }
+fn mk() nothrow -> CS { return CS(data = core.const_arc(0), n = 3); }
+fn main() nothrow -> Int {
+	val v = mk();                   // ConstShare-only local
+	var s1 = 0;
+	for x in v { s1 = s1 + x; }     // implicit const_share(v) → independent owner
+	var s2 = 0;
+	for y in v { s2 = s2 + y; }     // v still usable → another independent share
+	return s1 + s2;                  // 6 + 6 = 12
+}

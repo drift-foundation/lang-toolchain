@@ -2922,6 +2922,200 @@ def _with_compile_recursion_headroom(fn):
 	return wrapper
 
 
+def _run_post_link_const_share_synthesis(
+	*,
+	linked_world,
+	type_table,
+	module_exports,
+	signatures_by_id,
+	normalized_hirs_by_id,
+	func_hirs_by_id,
+	fn_ids_by_name,
+	module_ids,
+	visible_module_names_by_name,
+	package_id,
+	module_packages,
+	callable_registry,
+	next_callable_id,
+	source_modules,
+) -> int:
+	"""Shared post-link ConstShare structural synthesis (Phase 1).
+
+	Pipeline-convergence: BOTH the CLI driver and the test-helper pipeline
+	(`compile_stubbed_funcs`, used by `compile_to_llvm_ir_for_tests`) must run
+	this BEFORE typechecking, so user types whose ConstShare impl is structurally
+	derived (composition rule) prove `ConstShare` identically in both worlds.
+
+	Idempotence has TWO independent axes:
+	  - **semantic synthesis** (TypeTable + module_exports impls) is run-once per
+	    TypeTable — the synthesizer itself skips types already covered (via
+	    `_existing_const_share_targets`), so re-running never duplicates impls;
+	  - **registry population** is per-registry — every pipeline-owned callable
+	    registry must be hydrated with the synthesized methods, even when a
+	    PREPARED TypeTable is reused with a FRESH registry.
+
+	So when the TypeTable was already synthesized, a fresh registry is populated by
+	`hydrate_const_share_registry` (registry-only: it re-registers the existing
+	synthesized methods from `module_exports`) — NOT by re-running the synthesizer,
+	which excludes already-covered targets and would register nothing.  The first
+	time (TypeTable not yet synthesized) the full synthesizer runs and registers
+	into the supplied registry.  The registry's `_const_share_hydrated` flag gates
+	re-entry.
+
+	Returns the (possibly advanced) `next_callable_id`.
+	"""
+	if linked_world is None or type_table is None:
+		return next_callable_id
+	# Per-registry gate: a registry already hydrated is left untouched.
+	if callable_registry is not None and getattr(callable_registry, "_const_share_hydrated", False):
+		return next_callable_id
+	# Semantic synthesis already done on this TypeTable, but THIS (fresh) registry
+	# needs the synthesized methods.  Hydrate the registry DIRECTLY from the
+	# existing synthesized impls — do NOT re-run semantic synthesis (the
+	# synthesizer excludes already-covered targets and would register nothing).
+	if getattr(type_table, "_const_share_synthesized", False):
+		if callable_registry is not None:
+			from lang.driftc.const_share_synth import (
+				hydrate_const_share_registry,
+				resolve_const_share_trait_key,
+			)
+			_hbox = [next_callable_id]
+			_was_frozen = getattr(callable_registry, "_frozen", None)
+			if _was_frozen:
+				callable_registry._frozen = False
+			try:
+				hydrate_const_share_registry(
+					module_exports=module_exports,
+					signatures_by_id=signatures_by_id,
+					callable_registry=callable_registry,
+					module_ids=module_ids,
+					next_callable_id_box=_hbox,
+					const_share_trait_key=resolve_const_share_trait_key(linked_world),
+				)
+			finally:
+				if _was_frozen:
+					callable_registry._frozen = True
+			try:
+				callable_registry._const_share_hydrated = True
+			except Exception:
+				pass
+			return _hbox[0]
+		return next_callable_id
+	from lang.driftc.const_share_synth import synthesize_const_share_phase1
+	_box = [next_callable_id]
+	# The synthesizer registers inherent const_share methods into the callable
+	# registry.  In the test-helper pipeline the registry arrives FROZEN (the CLI
+	# runs synthesis while it is still mutable); unfreeze for the duration of this
+	# (idempotent, run-once) synthesis, then restore the prior state.
+	_was_frozen = getattr(callable_registry, "_frozen", None) if callable_registry is not None else None
+	if callable_registry is not None and _was_frozen:
+		callable_registry._frozen = False
+	try:
+		synthesize_const_share_phase1(
+			linked_world=linked_world,
+			type_table=type_table,
+			module_exports=module_exports,
+			signatures_by_id=signatures_by_id,
+			normalized_hirs_by_id=normalized_hirs_by_id,
+			func_hirs_by_id=func_hirs_by_id,
+			fn_ids_by_name=fn_ids_by_name,
+			module_ids=module_ids,
+			visible_module_names_by_name=visible_module_names_by_name,
+			package_id=package_id,
+			module_packages=module_packages,
+			callable_registry=callable_registry,
+			next_callable_id_box=_box,
+			source_modules=source_modules,
+		)
+	finally:
+		if callable_registry is not None and _was_frozen:
+			callable_registry._frozen = True
+	try:
+		type_table._const_share_synthesized = True
+	except Exception:
+		pass
+	if callable_registry is not None:
+		try:
+			callable_registry._const_share_hydrated = True
+		except Exception:
+			pass
+	return _box[0]
+
+
+def _build_test_visible_module_names_by_name(*, prelude_enabled, signatures_by_id, module_exports, module_deps):
+	"""Shared visibility builder for the test-helper pipeline.
+
+	Each module sees itself + prelude modules + its DIRECT imports + transitively
+	RE-EXPORTED modules (NOT transitive private imports).  One implementation,
+	used by BOTH the pre-typecheck ConstShare synthesis and the typechecker, so a
+	derivation accepted here matches what the import/re-export graph allows.
+	"""
+	visible_module_names_by_name: dict[str, set[str]] = {}
+	prelude_modules: set[str] = set()
+	if prelude_enabled:
+		for fn_id in signatures_by_id.keys():
+			if fn_id.module == "lang.core":
+				prelude_modules.add("lang.core")
+				break
+		if isinstance(module_exports, dict):
+			for std_mod in ("std.iter", "std.containers"):
+				if std_mod in module_exports:
+					prelude_modules.add(std_mod)
+	if module_deps is None:
+		return visible_module_names_by_name
+
+	def _collect_reexport_targets(mod: str) -> set[str]:
+		exp = module_exports.get(mod) if isinstance(module_exports, dict) else None
+		if not isinstance(exp, dict):
+			return set()
+		reexp = exp.get("reexports")
+		if not isinstance(reexp, dict):
+			return set()
+		targets: set[str] = set()
+		type_reexp = reexp.get("types") if isinstance(reexp.get("types"), dict) else {}
+		for kind in ("structs", "variants", "exceptions", "interfaces", "aliases"):
+			entries = type_reexp.get(kind) if isinstance(type_reexp, dict) else None
+			if not isinstance(entries, dict):
+				continue
+			for info in entries.values():
+				if isinstance(info, dict) and isinstance(info.get("module"), str):
+					targets.add(info["module"])
+		for key in ("consts", "traits", "values"):
+			sub = reexp.get(key) if isinstance(reexp.get(key), dict) else {}
+			if isinstance(sub, dict):
+				for info in sub.values():
+					if isinstance(info, dict) and isinstance(info.get("module"), str):
+						targets.add(info["module"])
+		return targets
+
+	all_module_names: set[str] | None = None
+	for mod_name in module_deps.keys():
+		imports = set(module_deps.get(mod_name, set()))
+		visible = {mod_name}
+		if prelude_modules:
+			visible |= prelude_modules
+		queue = [mod_name]
+		while queue:
+			cur = queue.pop(0)
+			neighbors = set(_collect_reexport_targets(cur))
+			if cur == mod_name:
+				neighbors |= imports
+			for tgt in sorted(neighbors):
+				if tgt in visible:
+					continue
+				visible.add(tgt)
+				queue.append(tgt)
+		visible_module_names_by_name[mod_name] = visible
+	# K25 fallback: external package modules absent from module_deps get broad visibility.
+	if isinstance(module_exports, dict):
+		for mod_name in module_exports:
+			if mod_name not in visible_module_names_by_name:
+				if all_module_names is None:
+					all_module_names = set(module_exports.keys()) | set(module_deps.keys())
+				visible_module_names_by_name[mod_name] = set(all_module_names)
+	return visible_module_names_by_name
+
+
 @_with_compile_recursion_headroom
 def compile_stubbed_funcs(
 	func_hirs: Mapping[FunctionId | str, H.HBlock],
@@ -3718,6 +3912,36 @@ def compile_stubbed_funcs(
 		trait_impl_index = None
 		trait_scope_by_module: dict[str, list] | None = None
 		if module_exports is not None:
+			# Pipeline-convergence: run the SAME post-link ConstShare structural
+			# synthesis the CLI runs (so user types deriving ConstShare prove it
+			# here too), BEFORE building the impl/trait-impl indexes — so synthesized
+			# impls appended to `module_exports` are picked up below.  Idempotent on a
+			# prepared TypeTable.
+			# Real visibility map (direct imports + re-export edges, NOT all-to-all
+			# and NOT transitive private imports) via the ONE shared builder also used
+			# for typechecking below — derivation matches the import/re-export graph.
+			_csf_vmn = _build_test_visible_module_names_by_name(
+				prelude_enabled=prelude_enabled,
+				signatures_by_id=signatures_by_id,
+				module_exports=module_exports,
+				module_deps=module_deps,
+			)
+			next_callable_id = _run_post_link_const_share_synthesis(
+				linked_world=linked_world,
+				type_table=shared_type_table,
+				module_exports=module_exports,
+				signatures_by_id=signatures_by_id,
+				normalized_hirs_by_id=normalized_hirs_by_id,
+				func_hirs_by_id=func_hirs_by_id,
+				fn_ids_by_name=fn_ids_by_name,
+				module_ids=module_ids,
+				visible_module_names_by_name=_csf_vmn,
+				package_id=package_id,
+				module_packages=getattr(shared_type_table, "module_packages", None) or {},
+				callable_registry=callable_registry,
+				next_callable_id=next_callable_id,
+				source_modules=_source_mods,
+			)
 			impl_index = GlobalImplIndex.from_module_exports(
 				module_exports=dict(module_exports),
 				type_table=shared_type_table,
@@ -3805,90 +4029,7 @@ def compile_stubbed_funcs(
 	def _has_error(diags: list[Diagnostic]) -> bool:
 		return any(getattr(d, "severity", None) == "error" for d in diags)
 	if pass1_state is None:
-		visible_module_names_by_name: dict[str, set[str]] = {}
-		prelude_modules: set[str] = set()
-		if prelude_enabled:
-			for fn_id in signatures_by_id.keys():
-				if fn_id.module == "lang.core":
-					prelude_modules.add("lang.core")
-					break
-			if isinstance(module_exports, dict):
-				for std_mod in ("std.iter", "std.containers"):
-					if std_mod in module_exports:
-						prelude_modules.add(std_mod)
-	if pass1_state is None and module_deps is not None:
-		def _collect_reexport_targets(mod: str) -> set[str]:
-			exp = module_exports.get(mod) if isinstance(module_exports, dict) else None
-			if not isinstance(exp, dict):
-				return set()
-			reexp = exp.get("reexports")
-			if not isinstance(reexp, dict):
-				return set()
-			targets: set[str] = set()
-			type_reexp = reexp.get("types") if isinstance(reexp.get("types"), dict) else {}
-			for kind in ("structs", "variants", "exceptions", "interfaces", "aliases"):
-				entries = type_reexp.get(kind) if isinstance(type_reexp, dict) else None
-				if not isinstance(entries, dict):
-					continue
-				for info in entries.values():
-					if isinstance(info, dict):
-						tgt = info.get("module")
-						if isinstance(tgt, str):
-							targets.add(tgt)
-			const_reexp = reexp.get("consts") if isinstance(reexp.get("consts"), dict) else {}
-			if isinstance(const_reexp, dict):
-				for info in const_reexp.values():
-					if isinstance(info, dict):
-						tgt = info.get("module")
-						if isinstance(tgt, str):
-							targets.add(tgt)
-			trait_reexp = reexp.get("traits") if isinstance(reexp.get("traits"), dict) else {}
-			if isinstance(trait_reexp, dict):
-				for info in trait_reexp.values():
-					if isinstance(info, dict):
-						tgt = info.get("module")
-						if isinstance(tgt, str):
-							targets.add(tgt)
-			value_reexp = reexp.get("values") if isinstance(reexp.get("values"), dict) else {}
-			if isinstance(value_reexp, dict):
-				for info in value_reexp.values():
-					if isinstance(info, dict):
-						tgt = info.get("module")
-						if isinstance(tgt, str):
-							targets.add(tgt)
-			return targets
-
-		all_module_names: set[str] | None = None
-		for mod_name in module_deps.keys():
-			imports = set(module_deps.get(mod_name, set()))
-			visible = {mod_name}
-			if prelude_modules:
-				visible |= prelude_modules
-			queue = [mod_name]
-			while queue:
-				cur = queue.pop(0)
-				neighbors = set(_collect_reexport_targets(cur))
-				if cur == mod_name:
-					neighbors |= imports
-				for tgt in sorted(neighbors):
-					if tgt in visible:
-						continue
-					visible.add(tgt)
-					queue.append(tgt)
-			visible_module_names_by_name[mod_name] = visible
-		# K25 TEMPORARY FALLBACK — remove when DMIR serializes module import graph.
-		# External package modules are absent from module_deps (their
-		# import graph is not available in DMIR).  Give them visibility to
-		# all modules — their dependencies were validated at package build
-		# time.
-		# Removal target: DMIR v1 freeze (serialize per-module import graph
-		# in package metadata; reconstruct exact visible_module_names on load).
-		if isinstance(module_exports, dict):
-			for mod_name in module_exports:
-				if mod_name not in visible_module_names_by_name:
-					if all_module_names is None:
-						all_module_names = set(module_exports.keys()) | set(module_deps.keys())
-					visible_module_names_by_name[mod_name] = set(all_module_names)
+		visible_module_names_by_name = _build_test_visible_module_names_by_name(prelude_enabled=prelude_enabled, signatures_by_id=signatures_by_id, module_exports=module_exports, module_deps=module_deps)
 	def _typecheck_fn(fn_id: FunctionId, hir_norm: H.HBlock) -> None:
 		sig = signatures_by_id.get(fn_id)
 		param_types: dict[str, "TypeId"] = {}
@@ -11472,9 +11613,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# See `work/constshare-substrate/post-link-mandatory-design.md`
 	# for the full design.
 	if linked_world is not None:
-		from lang.driftc.const_share_synth import synthesize_const_share_phase1
-		_const_share_next_id_box = [next_callable_id]
-		synthesize_const_share_phase1(
+		next_callable_id = _run_post_link_const_share_synthesis(
 			linked_world=linked_world,
 			type_table=semantic_world.type_table,
 			module_exports=module_exports,
@@ -11487,10 +11626,9 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			package_id=package_id,
 			module_packages=getattr(semantic_world.type_table, "module_packages", None) or {},
 			callable_registry=callable_registry,
-			next_callable_id_box=_const_share_next_id_box,
+			next_callable_id=next_callable_id,
 			source_modules=_source_mods_main,
 		)
-		next_callable_id = _const_share_next_id_box[0]
 
 	# Snapshot normalized HIR (post-synthesis, pre-typecheck) for
 	# package emission.  The type checker mutates HIR in place

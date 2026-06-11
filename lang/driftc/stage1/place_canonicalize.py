@@ -36,7 +36,7 @@ errors before lowering.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Tuple
 
 from lang.driftc.core.span import Span
@@ -142,7 +142,9 @@ class PlaceCanonicalizeRewriter:
 			place = place_expr_from_lvalue_expr(subj)
 			if place is not None:
 				subj = place
-			return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
+			# replace() preserves flags (allow_rvalue, for_iter_owned_temp) — a
+			# manual rebuild would silently drop them.
+			return pfx, replace(expr, subject=subj)
 		if isinstance(expr, getattr(H, "HMove", ())):
 			pfx, subj = self._rewrite_expr(expr.subject)
 			place = place_expr_from_lvalue_expr(subj)

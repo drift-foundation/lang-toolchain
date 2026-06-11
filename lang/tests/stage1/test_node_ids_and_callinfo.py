@@ -1,6 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 from __future__ import annotations
 
+import pytest
+
 from pathlib import Path
 
 from lang.driftc import stage1 as H
@@ -10,7 +12,7 @@ from lang.driftc.core.types_core import TypeTable, TypeKind
 from lang.driftc.method_registry import CallableRegistry, CallableSignature, Visibility
 from lang.driftc.parser import parse_drift_to_hir
 from lang.driftc.stage1.call_info import CallTargetKind, call_abi_ret_type
-from lang.driftc.stage1.node_ids import assign_node_ids, assign_callsite_ids, validate_callsite_ids
+from lang.driftc.stage1.node_ids import assign_node_ids, assign_callsite_ids, assign_missing_callsite_ids, validate_callsite_ids
 from lang.driftc.type_checker import TypeChecker
 
 
@@ -189,6 +191,43 @@ def test_callsite_ids_assigned_and_dense() -> None:
 	validate_callsite_ids(block)
 
 
+def test_assign_missing_callsite_ids_preserves_existing_and_fills_nested() -> None:
+	# Existing ids must be left exactly as-is (here, deliberately non-dense:
+	# 5 and 2) — assign_missing_callsite_ids must NOT renumber/repair them.
+	top_a = H.HCall(fn=H.HVar("a"), args=[], callsite_id=5)
+	top_b = H.HCall(fn=H.HVar("b"), args=[], callsite_id=2)
+	# Calls WITHOUT ids living in NESTED-block statement positions — exactly the
+	# shape the deleted `_scan_*` "has any call" gate failed to descend into
+	# (a loop body block, and a bare nested HBlock used as a statement).  The
+	# canonical iter_hir_walk inside assign_missing_callsite_ids must reach them.
+	nested_in_loop = H.HCall(fn=H.HVar("c"), args=[])
+	loop = H.HLoop(body=H.HBlock(statements=[H.HExprStmt(expr=nested_in_loop)]))
+	nested_in_block = H.HMethodCall(receiver=H.HVar("x"), method_name="m", args=[])
+	inner_block = H.HBlock(statements=[H.HExprStmt(expr=nested_in_block)])
+	block = H.HBlock(statements=[
+		H.HExprStmt(expr=top_a),
+		H.HExprStmt(expr=top_b),
+		loop,
+		inner_block,
+	])
+
+	next_id = assign_missing_callsite_ids(block)
+
+	# Existing ids untouched.
+	assert top_a.callsite_id == 5
+	assert top_b.callsite_id == 2
+	# Missing ids filled ABOVE the high-water mark (max existing == 5).
+	assert isinstance(nested_in_loop.callsite_id, int) and nested_in_loop.callsite_id > 5
+	assert isinstance(nested_in_block.callsite_id, int) and nested_in_block.callsite_id > 5
+	# Every id unique, and the returned next id is one past the max assigned.
+	all_ids = [top_a.callsite_id, top_b.callsite_id, nested_in_loop.callsite_id, nested_in_block.callsite_id]
+	assert len(set(all_ids)) == 4
+	assert next_id == max(all_ids) + 1
+	# Idempotent: a second call assigns nothing new (no missing ids remain).
+	assert assign_missing_callsite_ids(block) == next_id
+	assert [top_a.callsite_id, top_b.callsite_id, nested_in_loop.callsite_id, nested_in_block.callsite_id] == all_ids
+
+
 def test_node_ids_deterministic(tmp_path: Path) -> None:
 	path = tmp_path / "main.drift"
 	_write_file(
@@ -316,7 +355,22 @@ def test_call_info_emitted_for_direct_calls() -> None:
 		assert info.target.symbol == expected_ids.get(call.fn.name)
 
 
-def test_call_info_duplicate_callsite_ids_are_reassigned_per_call_node() -> None:
+def _assert_callsite_id_collision_message(msg: str, csid: int) -> None:
+	# The invariant-failure message must name the conflicting callsite_id and
+	# report BOTH the owning node and the conflicting node (so the producer can
+	# be located), per the duplicate-callsite-id contract.
+	assert f"duplicate callsite_id {csid}" in msg, msg
+	assert "owner node_id=" in msg, msg
+	assert "conflicting node_id=" in msg, msg
+
+
+def test_duplicate_callsite_id_different_callinfo_is_invariant_failure() -> None:
+	# Two DISTINCT call nodes carrying the SAME callsite_id with DIFFERENT
+	# CallInfo (foo/1-arg vs bar/3-arg).  callsite_ids are assigned uniquely
+	# upstream and check_function only fills MISSING ids, so a duplicate here
+	# is an upstream uniqueness-invariant failure.  The side-table recorder
+	# must fail loudly rather than silently reassign or cross-attach — recovery
+	# cannot reliably tell which already-recorded entry belongs to which node.
 	table = TypeTable()
 	tc = TypeChecker(table)
 	int_ty = table.ensure_int()
@@ -333,16 +387,32 @@ def test_call_info_duplicate_callsite_ids_are_reassigned_per_call_node() -> None
 	registry = CallableRegistry()
 	registry.register_free_function(callable_id=1, name="foo", module_id=0, visibility=Visibility.public(), signature=CallableSignature(param_types=(int_ty,), result_type=int_ty), fn_id=fn_id_foo)
 	registry.register_free_function(callable_id=2, name="bar", module_id=0, visibility=Visibility.public(), signature=CallableSignature(param_types=(int_ty, int_ty, int_ty), result_type=int_ty), fn_id=fn_id_bar)
-	res = tc.check_function(fn_id, block, callable_registry=registry, signatures_by_id=signatures_by_id, visible_modules=(0,))
-	assert not any(d.severity == "error" for d in res.diagnostics), [d.message for d in res.diagnostics]
-	calls = _collect_direct_calls(block)
-	assert len(calls) == 2
-	callsite_ids = [int(getattr(c, "callsite_id", -1)) for c in calls]
-	assert len(set(callsite_ids)) == 2
-	for call in calls:
-		info = res.typed_fn.call_info_by_callsite_id.get(call.callsite_id)
-		assert info is not None
-		assert len(info.sig.param_types) == len(call.args)
+	with pytest.raises(AssertionError) as exc:
+		tc.check_function(fn_id, block, callable_registry=registry, signatures_by_id=signatures_by_id, visible_modules=(0,))
+	_assert_callsite_id_collision_message(str(exc.value), 15)
+
+
+def test_duplicate_callsite_id_identical_callinfo_is_invariant_failure() -> None:
+	# Two DISTINCT call nodes carrying the SAME callsite_id whose CallInfo is
+	# IDENTICAL (both call foo with the same single arg).  Collision identity is
+	# the OWNER node, not CallInfo equality: even matching CallInfo must fail,
+	# because two distinct calls sharing an id is itself the broken invariant.
+	table = TypeTable()
+	tc = TypeChecker(table)
+	int_ty = table.ensure_int()
+	call_a = H.HCall(fn=H.HVar("foo"), args=[H.HLiteralInt(1)], callsite_id=15)
+	call_b = H.HCall(fn=H.HVar("foo"), args=[H.HLiteralInt(1)], callsite_id=15)
+	block = H.HBlock(statements=[H.HExprStmt(expr=call_a), H.HExprStmt(expr=call_b)])
+	fn_id = FunctionId(module="main", name="main", ordinal=0)
+	fn_id_foo = FunctionId(module="main", name="foo", ordinal=0)
+	signatures_by_id = {
+		fn_id_foo: FnSignature(name="foo", param_type_ids=[int_ty], return_type_id=int_ty, declared_can_throw=False),
+	}
+	registry = CallableRegistry()
+	registry.register_free_function(callable_id=1, name="foo", module_id=0, visibility=Visibility.public(), signature=CallableSignature(param_types=(int_ty,), result_type=int_ty), fn_id=fn_id_foo)
+	with pytest.raises(AssertionError) as exc:
+		tc.check_function(fn_id, block, callable_registry=registry, signatures_by_id=signatures_by_id, visible_modules=(0,))
+	_assert_callsite_id_collision_message(str(exc.value), 15)
 
 
 def test_call_info_emitted_for_invoke() -> None:

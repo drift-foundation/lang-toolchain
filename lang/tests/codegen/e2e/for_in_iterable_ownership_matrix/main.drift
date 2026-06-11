@@ -1,0 +1,69 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+// Copy self-iterating variant (all-Int payload).
+pub variant CC { Done, N(n: Int) }
+implement iter.SinglePassIterator<Int> for CC {
+	pub fn next(self: &mut CC) nothrow -> Optional<Int> {
+		match self { CC::N(n) => { if *n <= 0 { return Optional<Int>::None(); } val c = *n; *n = *n - 1; return Optional::Some(c); }, default => { return Optional<Int>::None(); } }
+	}
+}
+implement iter.Iterable<CC, Int, CC> for CC { pub fn iter(var self: CC) nothrow -> CC { return move self; } }
+fn mkcc() nothrow -> CC { return CC::N(3); }
+
+// NON-Copy self-iterating variant (owns a String → not Copy); move path + leak-clean.
+pub variant NC { Done, R(tag: String, n: Int) }
+implement iter.SinglePassIterator<Int> for NC {
+	pub fn next(self: &mut NC) nothrow -> Optional<Int> {
+		match self { NC::R(t, n) => { if *n <= 0 { return Optional<Int>::None(); } val c = *n; *n = *n - 1; return Optional::Some(c); }, default => { return Optional<Int>::None(); } }
+	}
+}
+implement iter.Iterable<NC, Int, NC> for NC { pub fn iter(var self: NC) nothrow -> NC { return move self; } }
+fn mknc() nothrow -> NC { return NC::R("tag", 4); }
+
+// Generic by-value Iterable.
+pub variant Box<T> { Empty, One(v: T) }
+implement<T> iter.SinglePassIterator<T> for Box<T> require T is core.Copy {
+	pub fn next(self: &mut Box<T>) nothrow -> Optional<T> {
+		match self { Box::One(x) => { val r = *x; *self = Box<T>::Empty(); return Optional::Some(r); }, default => { return Optional<T>::None(); } }
+	}
+}
+implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy {
+	pub fn iter(var self: Box<T>) nothrow -> Box<T> { return move self; }
+}
+fn mkbox() nothrow -> Box<Int> { return Box::One(9); }
+
+fn main() nothrow -> Int {
+	// 1) Copy variant rvalue temp.
+	var a = 0;
+	for xa in mkcc() { a = a + xa; }
+	if a != 6 { return 1; }
+
+	// 2) Copy variant bound local iterated TWICE — must NOT be consumed.
+	val cc = mkcc();
+	var b1 = 0;
+	for xb in cc { b1 = b1 + xb; }
+	var b2 = 0;
+	for yb in cc { b2 = b2 + yb; }
+	if b1 != 6 or b2 != 6 { return 2; }
+
+	// 3) NON-Copy variant rvalue temp — moved into iter(); leak-clean drop of the String.
+	var n = 0;
+	for xn in mknc() { n = n + xn; }
+	if n != 10 { return 3; }
+
+	// 4) `for x in move v` over a var.
+	var v = mkcc();
+	var m = 0;
+	for xm in move v { m = m + xm; }
+	if m != 6 { return 4; }
+
+	// 5) Generic by-value Iterable.
+	var g = 0;
+	for xg in mkbox() { g = g + xg; }
+	if g != 9 { return 5; }
+
+	return 0;
+}

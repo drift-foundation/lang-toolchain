@@ -1,0 +1,13 @@
+module main;
+fn make() nothrow -> Array<String> {
+	var a: Array<String> = [];
+	a.push("x"); a.push("y"); a.push("z");
+	return move a;
+}
+fn main() nothrow -> Int {
+	var c = 0;
+	for item in make() {          // non-Copy String elems: borrow-iterate (item: &String)
+		if item.byte_length() > 0 { c = c + 1; }
+	}
+	return c;   // expect 3
+}

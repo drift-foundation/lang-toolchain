@@ -28,7 +28,7 @@ MVP rules:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import List, Tuple
 
 from lang.driftc.core.span import Span
@@ -397,7 +397,7 @@ class BorrowMaterializeRewriter:
 			# explicit `move`. The typed checker is responsible for rejecting these
 			# with a targeted diagnostic.
 			if self._contains_move(subj):
-				return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
+				return pfx, replace(expr, subject=subj)
 			# Lift the deepest rvalue base of any HField/HIndex/HUnary(DEREF) chain
 			# into a hidden temp, keeping the projections as part of the borrow's
 			# place expression.  This avoids the legacy whole-expression
@@ -408,9 +408,9 @@ class BorrowMaterializeRewriter:
 			# produced for those inputs).
 			split = self._split_lift_place_chain(subj, is_mut=expr.is_mut)
 			if split is None:
-				return pfx, H.HBorrow(subject=subj, is_mut=expr.is_mut)
+				return pfx, replace(expr, subject=subj)
 			lift_pfx, place = split
-			return pfx + lift_pfx, H.HBorrow(subject=place, is_mut=expr.is_mut)
+			return pfx + lift_pfx, replace(expr, subject=place)
 		if isinstance(expr, getattr(H, "HMove", ())):
 			pfx, subj = self._rewrite_expr(expr.subject)
 			return pfx, H.HMove(

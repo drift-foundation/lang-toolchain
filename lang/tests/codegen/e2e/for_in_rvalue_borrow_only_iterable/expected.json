@@ -1,0 +1,1 @@
+{ "description": "for-in over an OWNED RVALUE TEMP whose element type is non-Copy (Array<String>) — only borrowed iteration is supported (ArrayMoveIter requires Copy). The for-in must borrow-iterate (Iterable<&Array<String>,&String,_>), NOT move; regression guarding that move-vs-borrow follows the selected Iterable impl, not syntax. Counts 3 entries.", "exit_code": 3 }

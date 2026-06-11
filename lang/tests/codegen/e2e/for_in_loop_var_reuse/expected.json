@@ -1,0 +1,1 @@
+{ "description": "for-in loop-variable NAME reuse across sibling loops: match-binder store/read must use the same binding-id canonical local (LANGUAGE_BUG fix; previously SSA 'load before store'). Copy + non-Copy (leak-clean) payloads + early break/continue.", "exit_code": 0 }

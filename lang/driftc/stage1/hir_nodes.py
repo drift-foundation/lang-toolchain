@@ -663,6 +663,20 @@ class HBorrow(HExpr):
 	# Compiler-synthesized escape hatch for Phase 1 fluent receiver chaining:
 	# permit shared borrow of rvalues only when this flag is set.
 	allow_rvalue: bool = False
+	# Set by the for-in desugar ONLY on the borrow of a freshly-bound,
+	# compiler-owned iterable temporary (the rvalue case, e.g. `for x in make()`).
+	# Authorizes the `for_iter` resolver to rewrite this borrow into a MOVE when
+	# the selected `Iterable` impl takes its receiver by value and the type is not
+	# Copy/ConstShare — it is never set for a user's bound local.
+	for_iter_owned_temp: bool = False
+	# Provenance: set ONLY by the for-in desugar's DEFAULT (implicit) borrow
+	# synthesis (`for x in v`), never for a source-written `for x in &v`.  Only an
+	# implicit borrow may be converted to by-value iteration in central receiver
+	# selection by reading the underlying binding by value: Copy -> the bare
+	# fresh binding read (defined implicit-copy semantics); ConstShare-only ->
+	# an implicit const_share() on that fresh read.  (Never an HCopy / deref.)
+	# an explicit `&v` must stay borrow-mode and never fall back to `Iterable<V>`.
+	for_iter_implicit_borrow: bool = False
 
 
 @dataclass

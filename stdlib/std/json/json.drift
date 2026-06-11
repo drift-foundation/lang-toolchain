@@ -1033,6 +1033,44 @@ implement JsonNode {
 		}
 	}
 
+	/// Borrowed enumeration of an object's `(key, value)` entries.
+	///
+	/// Returns a `JsonEntriesIter` — a `SinglePassIterator` over
+	/// `containers.HashMapItemRef<String, JsonNode>`.  Each yielded `item`
+	/// exposes `item.key` (`&String`) and `item.value` (`&JsonNode`): both are
+	/// **borrowed** from this node — keys and values are never cloned.
+	///
+	/// For a **non-object** node — or an empty object — the iterator simply
+	/// yields nothing; there is no distinct "not an object" signal (a non-object
+	/// and an empty object are indistinguishable through this API).
+	///
+	/// **Iteration order is unspecified** (it follows the backing `HashMap`'s
+	/// order) and MUST NOT be relied upon — in particular it is **not** canonical
+	/// and must not be used for canonical/byte-stable output; use
+	/// `encode_canonical` for that.
+	///
+	/// The iterator borrows the object, so the usual `HashMap` borrowing and
+	/// iterator-invalidation rules apply: the borrow checker rejects mutating the
+	/// source while an iterator is live, and a generation change otherwise trips
+	/// the invalidation check.
+	///
+	/// **Consume with for-in** (no extra imports — `JsonEntriesIter` is
+	/// `Iterable`):
+	/// ```
+	/// for entry in node.entries() {
+	///     // entry: containers.HashMapItemRef<String, JsonNode>
+	///     // entry.key: &String, entry.value: &JsonNode
+	/// }
+	/// ```
+	/// Or drive it manually with `.next()`, which needs the trait in scope:
+	/// ```
+	/// import std.iter as iter;
+	/// use trait iter.SinglePassIterator;
+	/// var it = node.entries();
+	/// match it.next() { Some(entry) => { ... }, None => { } }
+	/// ```
+	///
+	/// **See also:** `JsonEntriesIter`, `encode_canonical` (deterministic output).
 	pub fn entries(self: &JsonNode) nothrow -> JsonEntriesIter {
 		match self {
 			Object(fields) => {
@@ -1494,6 +1532,17 @@ implement iter.SinglePassIterator<containers.HashMapItemRef<String, JsonNode>> f
 			},
 			default => { return Optional<containers.HashMapItemRef<String, JsonNode>>::None(); }
 		}
+	}
+}
+
+// `JsonEntriesIter` is its own iterator: `iter()` returns it unchanged, so
+// `for entry in node.entries() { ... }` works directly (no explicit
+// `use trait` needed for the for-in form).  `entry` is a borrowed
+// `containers.HashMapItemRef<String, JsonNode>` (`entry.key: &String`,
+// `entry.value: &JsonNode`).
+implement iter.Iterable<JsonEntriesIter, containers.HashMapItemRef<String, JsonNode>, JsonEntriesIter> for JsonEntriesIter {
+	pub fn iter(var self: JsonEntriesIter) nothrow -> JsonEntriesIter {
+		return move self;
 	}
 }
 

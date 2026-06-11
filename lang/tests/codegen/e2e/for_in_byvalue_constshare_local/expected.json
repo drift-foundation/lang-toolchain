@@ -1,0 +1,1 @@
+{ "description": "for-in over a ConstShare-only (non-Copy) by-value Iterable bound to a LOCAL: central receiver coercion reads the binding and synthesizes implicit const_share() -> independent owners; the local stays usable and iterates again. Leak-clean. Sums 6+6.", "exit_code": 12 }

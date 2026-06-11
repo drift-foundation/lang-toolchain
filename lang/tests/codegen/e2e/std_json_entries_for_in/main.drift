@@ -1,0 +1,56 @@
+module main;
+import std.json as json;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+// for-in over entries(): `e` is a borrowed HashMapItemRef<String, JsonNode>.
+fn count_for_in(n: &json.JsonNode) nothrow -> Int {
+	var c = 0;
+	for e in n.entries() {
+		// borrowed access — e.key: &String, e.value: &JsonNode (no cloning)
+		if e.key.byte_length() > 0 { c = c + 1; }
+		match e.value.as_int() { Some(_) => { }, None => { } }
+	}
+	return c;
+}
+
+// leak-clean early loop exit: break out after the first entry; the iterator
+// (which borrows the still-live object) drops mid-iteration.
+fn early_exit(n: &json.JsonNode) nothrow -> Int {
+	for e in n.entries() {
+		if e.key.byte_length() >= 0 { return 1; }
+	}
+	return 0;
+}
+
+fn main() nothrow -> Int {
+	match json.parse(&"{\"a\":1,\"b\":2,\"c\":3}") {
+		core.Result::Ok(n) => {
+			if count_for_in(&n) != 3 { return 1; }       // for-in, non-empty
+			if early_exit(&n) != 1 { return 2; }          // early exit (broke after first)
+			// manual next() with the trait import
+			var it = n.entries();
+			var m = 0;
+			while true {
+				match it.next() {
+					Some(e) => { if e.key.byte_length() > 0 { m = m + 1; } },
+					None => { break; }
+				}
+			}
+			if m != 3 { return 3; }
+		},
+		core.Result::Err(_) => { return 4; }
+	}
+	// empty object -> zero iterations
+	match json.parse(&"{}") {
+		core.Result::Ok(eo) => { if count_for_in(&eo) != 0 { return 5; } },
+		core.Result::Err(_) => { return 6; }
+	}
+	// non-object nodes -> zero iterations
+	val num = json.JsonNode::Number("7");
+	if count_for_in(&num) != 0 { return 7; }
+	val nul = json.JsonNode::Null();
+	if count_for_in(&nul) != 0 { return 8; }
+	return 0;
+}

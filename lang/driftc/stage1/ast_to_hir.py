@@ -22,6 +22,7 @@ Entry points (stage API):
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import List, Optional
 
 # Import stage0 AST via package API to keep stage layering explicit.
@@ -1011,7 +1012,7 @@ class AstToHIR:
 			if isinstance(e, H.HIndex):
 				return H.HIndex(subject=_rename_expr(e.subject, mapping), index=_rename_expr(e.index, mapping))
 			if isinstance(e, H.HBorrow):
-				return H.HBorrow(subject=_rename_expr(e.subject, mapping), is_mut=e.is_mut)
+				return replace(e, subject=_rename_expr(e.subject, mapping))
 			if hasattr(H, "HMove") and isinstance(e, getattr(H, "HMove")):
 				return H.HMove(subject=_rename_expr(e.subject, mapping), loc=e.loc)
 			if hasattr(H, "HCopy") and isinstance(e, getattr(H, "HCopy")):
@@ -1496,7 +1497,10 @@ class AstToHIR:
 		else:
 			iterable_name = self._fresh_temp("__for_iterable")
 			iterable_bid = self._alloc_binding(iterable_name)
-			iterable_let = H.HLet(name=iterable_name, value=base_expr, binding_id=iterable_bid)
+			# Mutable so the for_iter resolver may move this compiler-owned temp
+			# into `iter()` for a non-Copy by-value `Iterable` (the borrow path
+			# ignores mutability).
+			iterable_let = H.HLet(name=iterable_name, value=base_expr, binding_id=iterable_bid, is_mutable=True)
 
 		# 2) Build iterator: __for_iter = std.iter.Iterable.iter(__for_iterable)
 		iter_name = self._fresh_temp("__for_iter")
@@ -1512,7 +1516,17 @@ class AstToHIR:
 		elif iterable_is_borrow:
 			iter_arg = H.HBorrow(subject=iter_arg, is_mut=iterable_borrow_mut)
 		else:
-			iter_arg = H.HBorrow(subject=iter_arg, is_mut=False)
+			# Default: shared IMPLICIT borrow (`for x in v`).  Correct for
+			# borrow-iteration (`Iterable for &Src`); `for_iter_implicit_borrow`
+			# authorizes central receiver selection to convert it to by-value by
+			# reading the underlying binding (Copy -> bare fresh read, ConstShare ->
+			# implicit const_share on that read) when only a by-value `Iterable for
+			# Src` matches.  `for_iter_owned_temp` (set only
+			# for a freshly-bound rvalue source) additionally authorizes a MOVE for a
+			# NON-Copy by-value `Iterable` — never consuming a user's bound local.
+			# A source-written `for x in &v` takes the `iterable_is_borrow` branch
+			# above and carries NEITHER flag, so it stays borrow-mode.
+			iter_arg = H.HBorrow(subject=iter_arg, is_mut=False, for_iter_owned_temp=(iterable_let is not None), for_iter_implicit_borrow=True)
 		iter_call = H.HCall(
 			fn=H.HQualifiedMember(base_type_expr=iter_trait, member="iter"),
 			args=[iter_arg],

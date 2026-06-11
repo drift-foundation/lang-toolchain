@@ -1,0 +1,56 @@
+module main;
+import std.iter as iter;
+import std.core as core;
+use trait iter.SinglePassIterator;
+
+// One generic base, iterated at TWO distinct type args (Box<Int>, Box<Bool>).
+// Each for-in callsite must keep its OWN monomorphization: cross-attaching the
+// Box<Int> `iter`/`next` instance to the Box<Bool> callsite (or vice versa)
+// would be an outright type error (Optional<Int> vs Optional<Bool>).
+pub variant Box<T> { Empty, One(v: T) }
+implement<T> iter.SinglePassIterator<T> for Box<T> require T is core.Copy {
+	pub fn next(self: &mut Box<T>) nothrow -> Optional<T> {
+		match self { Box::One(x) => { val r = *x; *self = Box<T>::Empty(); return Optional::Some(r); }, default => { return Optional<T>::None(); } }
+	}
+}
+implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy {
+	pub fn iter(var self: Box<T>) nothrow -> Box<T> { return move self; }
+}
+fn mkbox_int() nothrow -> Box<Int> { return Box::One(5); }
+fn mkbox_bool() nothrow -> Box<Bool> { return Box::One(true); }
+
+// Non-Copy (String-owning) self-iterating variant: its for-in goes through the
+// implicit-const_share move path, which (pre-LB-8-fix) inserted a const_share
+// node at callsite_id 0 and cascaded callsite_id reassignments across the
+// surrounding non-generic calls.  It sits BETWEEN the two DISTINCT generic
+// loops so a stolen/cross-attached generic monomorphization would surface.
+pub variant NC { Done, R(tag: String, n: Int) }
+implement iter.SinglePassIterator<Int> for NC {
+	pub fn next(self: &mut NC) nothrow -> Optional<Int> {
+		match self { NC::R(t, n) => { if *n <= 0 { return Optional<Int>::None(); } val c = *n; *n = *n - 1; return Optional::Some(c); }, default => { return Optional<Int>::None(); } }
+	}
+}
+implement iter.Iterable<NC, Int, NC> for NC { pub fn iter(var self: NC) nothrow -> NC { return move self; } }
+fn mknc() nothrow -> NC { return NC::R("tag", 4); }
+
+fn main() nothrow -> Int {
+	// Generic instantiation A — Box<Int> yields 5.
+	var a = 0;
+	for xa in mkbox_int() { a = a + xa; }
+	if a != 5 { return 1; }
+
+	// Non-Copy const_share loop — reassigns surrounding non-generic callsite_ids
+	// in the buggy world.
+	var n = 0;
+	for xn in mknc() { n = n + xn; }
+	if n != 10 { return 2; }
+
+	// Generic instantiation B — Box<Bool> yields true; counts to 1.  Its
+	// monomorphization (Optional<Bool> next) MUST stay attached to its own
+	// callsite, distinct from the Box<Int> instance above.
+	var b = 0;
+	for xb in mkbox_bool() { if xb { b = b + 1; } }
+	if b != 1 { return 3; }
+
+	return 0;
+}

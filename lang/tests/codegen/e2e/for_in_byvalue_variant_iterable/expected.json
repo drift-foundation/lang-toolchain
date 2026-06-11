@@ -1,0 +1,1 @@
+{ "description": "for-in over a by-value variant implementing iter.Iterable (Src==Iter==variant): regression for the codegen bug where the iterable was passed as ptr to iter() expecting the variant by value (LANGUAGE_BUG fix). Sums 3+2+1.", "exit_code": 6 }
