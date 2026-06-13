@@ -86,3 +86,23 @@ def sanitizer_timeout(base: int) -> int:
 		# parallel load. Compose multiplicatively with sanitizer mode.
 		multiplier *= 4
 	return base * multiplier
+
+
+def asan_active() -> bool:
+	"""True when the lane compiles the test binary with AddressSanitizer.
+
+	ASan reserves a fixed shadow-memory range that collides with valgrind's, so an
+	ASan-instrumented binary aborts at startup under valgrind ("Shadow memory range
+	interleaves with an existing memory mapping").  Tests that invoke ``valgrind``
+	directly must therefore skip when ASan is active — ASan itself provides the
+	equivalent leak/UAF coverage when the same program is run directly (which the
+	lane already does for the non-valgrind variants of the same scenarios).
+
+	This is ASan-specific.  UBSan (``DRIFT_UBSAN``) does NOT reserve ASan shadow
+	memory and is compatible with valgrind, so a UBSan-only lane should still run
+	the explicit-valgrind tests; a combined ASan+UBSan lane skips because ASan is
+	present.  ``DRIFT_MEMCHECK`` is likewise excluded — that lane runs an
+	uninstrumented binary under valgrind externally, compatible with an explicit
+	valgrind invocation.
+	"""
+	return os.environ.get("DRIFT_ASAN") in ("1", "true", "True")

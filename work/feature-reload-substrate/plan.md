@@ -896,6 +896,24 @@ e2e sweep green on the rewritten park/unpark/sleep protocol.
    untouched). main emits a `ready` marker (the SIGUSR1 mask + signalfd are installed
    before any carrier runs, so this is a sufficient gate) — all timing sleeps removed.
 
+**Review round 11 follow-up (ASan-lane valgrind incompatibility):** The seven
+explicit-`valgrind` tests in `test_std_fs_read_dir.py` aborted under the ASan lane —
+an ASan-instrumented binary cannot run under valgrind (shadow-memory collision).
+Fixed with a shared `_VALGRIND_SKIP` marker; the non-valgrind sibling runs the
+instrumented binary directly so ASan retains the leak/UAF coverage.
+
+Two corrections after the first pass:
+1. **Skip on ASan only, not UBSan.** UBSan does not reserve ASan shadow memory and
+   is valgrind-compatible, so a UBSan-only lane must still run these tests. The helper
+   is now `asan_active()` (`DRIFT_ASAN` only; combined ASan+UBSan still skips via the
+   ASan term). Verified: runs+passes under `DRIFT_UBSAN=1`, skips under `DRIFT_ASAN=1`.
+2. **Assert the app exit code, not just `rc != 99`.** `--error-exitcode=99` only
+   catches valgrind's own errors; a startup crash/abort (rc=1) sailed through the bare
+   `rc != 99` check (the masking that hid the ASan aborts). Every valgrind test now
+   asserts its expected exit (`== 0`, or `== 1` for the intentional-ENOENT binary in
+   `test_read_dir_memcheck`) plus stdout, with stdout/stderr in the message, and routes
+   through the `valgrind_cmd()` helper (centralized `--fair-sched=yes`).
+
 ## Explicitly rejected / deferred
 
 - Streaming `DirIterator` holding a live `DIR*` (`Destructible`) — deferred; the

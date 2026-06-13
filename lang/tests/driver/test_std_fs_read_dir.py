@@ -23,7 +23,17 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import sanitizer_timeout, asan_active, valgrind_cmd
+
+# A direct `valgrind` invocation needs a non-ASan binary; under the ASan lane the
+# binary's shadow memory collides with valgrind's and it aborts at startup.  Skip
+# these variants there — ASan covers the same leak/UAF surface when the non-valgrind
+# sibling test runs the program directly in that lane.  (UBSan-only does NOT conflict
+# with valgrind, so it still runs; a combined ASan+UBSan lane skips via the ASan term.)
+_VALGRIND_SKIP = pytest.mark.skipif(
+	shutil.which("valgrind") is None or asan_active(),
+	reason="valgrind requires a non-ASan binary (ASan shadow memory collides)",
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -356,18 +366,22 @@ def test_read_dir_cancel_abandon(tmp_path: Path, fixture_dir: Path) -> None:
 	assert res.stdout == "2\n", res.stdout  # 2 == cancelled kind
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_read_dir_cancel_abandon_memcheck(tmp_path: Path, fixture_dir: Path) -> None:
 	"""The cancel/abandon path is leak-clean: the cancelled VT abandons its job
 	and the stalled worker frees the abandoned snapshot exactly once."""
 	binary = _cancel_binary(tmp_path, fixture_dir, "cancel_mc")
 	res = subprocess.run(
-		["valgrind", "--error-exitcode=99", "--leak-check=full",
-		 "--errors-for-leak-kinds=definite", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "--leak-check=full",
+		             "--errors-for-leak-kinds=definite", "-q", str(binary)),
 		capture_output=True, text=True, timeout=120,
 		env={**os.environ, "DRIFT_FS_TEST_STALL_MS": "500"},
 	)
 	assert res.returncode != 99, f"valgrind found leaks/errors:\n{res.stderr[:800]}"
+	# The program itself must exit cleanly (the cancelled kind printed) — a startup
+	# crash or abort must not pass as "no valgrind error".
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
+	assert res.stdout == "2\n", res.stdout  # 2 == cancelled kind
 
 
 def test_cancel_resumes_blocking_parked_vt_promptly(tmp_path: Path, fixture_dir: Path) -> None:
@@ -452,7 +466,7 @@ pub fn main() nothrow -> Int {
 	assert elapsed < 8.0, f"process exit blocked on the abandoned worker: {elapsed:.1f}s"
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_read_dir_timeout_abandon_memcheck(tmp_path: Path, fixture_dir: Path) -> None:
 	"""The timeout/abandon path is leak-clean: the VT abandons at the deadline,
 	and the stalled worker frees the abandoned snapshot at shutdown."""
@@ -464,12 +478,14 @@ def test_read_dir_timeout_abandon_memcheck(tmp_path: Path, fixture_dir: Path) ->
 	)
 	binary = _outcome_binary(tmp_path, fixture_dir, 200, body, "timeout_mc")
 	res = subprocess.run(
-		["valgrind", "--error-exitcode=99", "--leak-check=full",
-		 "--errors-for-leak-kinds=definite", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "--leak-check=full",
+		             "--errors-for-leak-kinds=definite", "-q", str(binary)),
 		capture_output=True, text=True, timeout=120,
 		env={**os.environ, "DRIFT_FS_TEST_STALL_MS": "500"},
 	)
 	assert res.returncode != 99, f"valgrind found leaks/errors:\n{res.stderr[:800]}"
+	# The program joins the timed-out VT and exits cleanly; a crash must not pass.
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
 
 
 def test_read_dir_saturation(tmp_path: Path, fixture_dir: Path) -> None:
@@ -547,20 +563,26 @@ pub fn main() nothrow -> Int {
 	assert res.stdout == "saturated:12\n", res.stdout
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_read_dir_memcheck(tmp_path: Path, fixture_dir: Path) -> None:
 	"""Leak-clean across success (from a VT) and error paths under valgrind."""
 	# Success path from a VT (offload + result table + refcount free).
 	vt_bin = _compile(tmp_path, _VT_SOURCE.replace("__PATH__", str(fixture_dir)), "vt_bin")
 	# Error path (ENOENT) on the inline path.
 	err_bin = _compile(tmp_path, _list_source(tmp_path / "nope_xyz"), "err_bin")
-	for binary in (vt_bin, err_bin):
+	# The success binary exits 0; the intentional-ENOENT binary exits 1.  Asserting
+	# the expected app exit code (not just != 99) means a startup crash/abort cannot
+	# pass silently as "no valgrind error".
+	for binary, expected_rc in ((vt_bin, 0), (err_bin, 1)):
 		res = subprocess.run(
-			["valgrind", "--error-exitcode=99", "--leak-check=full",
-			 "--errors-for-leak-kinds=definite", "-q", str(binary)],
+			valgrind_cmd("--error-exitcode=99", "--leak-check=full",
+			             "--errors-for-leak-kinds=definite", "-q", str(binary)),
 			capture_output=True, text=True, timeout=120,
 		)
-		assert res.returncode != 99, f"valgrind found leaks/errors:\n{res.stderr[:800]}"
+		assert res.returncode != 99, f"valgrind found leaks/errors in {binary.name}:\n{res.stderr[:800]}"
+		assert res.returncode == expected_rc, (
+			f"{binary.name}: unexpected exit rc={res.returncode} (want {expected_rc}) "
+			f"stdout={res.stdout!r} stderr={res.stderr[:300]}")
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +646,7 @@ pub fn main() nothrow -> Int {
 	assert res.stdout == "bad=0\n", res.stdout
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_cancel_timer_worker_storm_no_uaf(tmp_path: Path, fixture_dir: Path) -> None:
 	"""Cancel + deadline timer + worker completion all race to resume the same
 	parked VT, repeatedly.  A double-enqueue (the VT run twice) or UAF would crash
@@ -657,12 +679,13 @@ pub fn main() nothrow -> Int {
 """.replace("__PATH__", str(fixture_dir))
 	binary = _compile(tmp_path, source, "storm_bin")
 	res = subprocess.run(
-		["valgrind", "--error-exitcode=99", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "-q", str(binary)),
 		capture_output=True, text=True, timeout=300,
 		env={**os.environ, "DRIFT_FS_TEST_STALL_MS": "10"},
 	)
 	assert res.returncode != 99, f"valgrind found a UAF/error in the resume storm:\n{res.stderr[:800]}"
-	assert "ok:250" in res.stdout, res.stdout
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
+	assert res.stdout == "ok:250\n", res.stdout
 
 
 def test_process_exit_with_active_blocking_job(tmp_path: Path, fixture_dir: Path) -> None:
@@ -756,7 +779,7 @@ pub fn main() nothrow -> Int {
 	assert res.stdout == "done:480\n", res.stdout
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_multicarrier_no_reentrant_execution_memcheck(tmp_path: Path, fixture_dir: Path) -> None:
 	"""The same multi-carrier re-entrancy window under valgrind — a swap into an
 	unsaved/aliased context would trip the memory checker."""
@@ -794,11 +817,13 @@ pub fn main() nothrow -> Int {
 """
 	binary = _compile(tmp_path, source, "reentr_mc")
 	res = subprocess.run(
-		["valgrind", "--error-exitcode=99", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "-q", str(binary)),
 		capture_output=True, text=True, timeout=300,
 		env={**os.environ, "DRIFT_TEST_PARK_PAUSE_US": "2000"},
 	)
 	assert res.returncode != 99, f"valgrind found a re-entrancy/UAF:\n{res.stderr[:800]}"
+	# All 24 VTs must complete (done==144 -> rc 0); a crash/abort must not pass.
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
 
 
 def test_shutdown_drains_inflight_unpark(tmp_path: Path, fixture_dir: Path) -> None:
@@ -888,7 +913,7 @@ pub fn main() nothrow -> Int {
 	assert int(m.group(1)) >= 250, f"resumed too early (not via the paused worker): {res.stdout!r}"
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_timer_cancel_single_claim_race(tmp_path: Path, fixture_dir: Path) -> None:
 	"""Finding 2: every resume path CASes the PARKED transition so exactly one
 	claims a parked VT.  Here the reactor deadline-timer wake and the cancellation
@@ -937,12 +962,14 @@ pub fn main() nothrow -> Int {
 """
 	binary = _compile(tmp_path, source, "reactor_race")
 	res = subprocess.run(
-		["valgrind", "--error-exitcode=99", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "-q", str(binary)),
 		capture_output=True, text=True, timeout=300,
 		env={**os.environ, "DRIFT_TEST_PARK_PAUSE_US": "1500"},
 	)
 	assert res.returncode != 99, f"valgrind found a duplicate-claim/UAF:\n{res.stderr[:800]}"
-	assert "ok" in res.stdout, res.stdout
+	# Every VT must complete and main exit cleanly; a crash/abort must not pass.
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
+	assert res.stdout == "ok\n", res.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -1130,7 +1157,7 @@ def test_reactor_fd_event_vs_cancel_direct_resume(tmp_path: Path, fixture_dir: P
 	assert res.stdout == "done:12\n", res.stdout
 
 
-@pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not available")
+@_VALGRIND_SKIP
 def test_reactor_fd_event_vs_cancel_direct_resume_memcheck(tmp_path: Path, fixture_dir: Path) -> None:
 	"""The reactor-claim-wins-vs-cancel window is UAF-clean: a duplicate enqueue
 	(cancel re-running an already-claimed VT) or a stale token would surface as a
@@ -1138,15 +1165,16 @@ def test_reactor_fd_event_vs_cancel_direct_resume_memcheck(tmp_path: Path, fixtu
 	source = (_FDRACE_SOURCE.replace("__ITERS__", "4")
 	          .replace("__SETTLE__", "800").replace("__DEADLINE__", "20000"))
 	binary = _compile_test_build(tmp_path, source, "fdrace_mc")
-	# --fair-sched=yes: main's busy-spin (kept hot so its carrier never polls) would
-	# otherwise monopolize valgrind's serial scheduler and starve the reader's worker
-	# thread, which must run to poll the fd and direct-resume.
+	# valgrind_cmd() supplies --fair-sched=yes: main's busy-spin (kept hot so its
+	# carrier never polls) would otherwise monopolize valgrind's serial scheduler and
+	# starve the reader's worker thread, which must run to poll the fd and direct-resume.
 	res = subprocess.run(
-		["valgrind", "--fair-sched=yes", "--error-exitcode=99", "--leak-check=full",
-		 "--errors-for-leak-kinds=definite", "-q", str(binary)],
+		valgrind_cmd("--error-exitcode=99", "--leak-check=full",
+		             "--errors-for-leak-kinds=definite", "-q", str(binary)),
 		capture_output=True, text=True, timeout=300,
 		env={**os.environ, "DRIFT_TEST_DIRECT_RESUME_PAUSE_MS": "120",
 		     "DRIFT_TEST_NO_REACTOR_THREAD": "1"},
 	)
 	assert res.returncode != 99, f"valgrind found leaks/errors:\n{res.stderr[:800]}"
-	assert res.returncode == 0, f"rc={res.returncode} stderr={res.stderr[:300]}"
+	assert res.returncode == 0, f"unexpected exit: rc={res.returncode} stdout={res.stdout!r} stderr={res.stderr[:300]}"
+	assert res.stdout == "done:4\n", res.stdout
