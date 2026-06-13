@@ -1480,6 +1480,15 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, ptr, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_read_dir({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_status({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_errno({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_count({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {DRIFT_STRING_TYPE} @drift_fs_result_name({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_kind({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_free({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_test_walk_entries()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_vt_test_direct_resume_claims()",
 					f"declare ptr @drift_runtime_global_registry_ptr()",
 					f"declare ptr @drift_runtime_thread_registry_ptr()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_runtime_registry_set(i64, ptr, ptr byval({DRIFT_IFACE_TYPE}) align {self.word_bits // 8})",
@@ -5121,6 +5130,69 @@ class _FuncBuilder:
 				self.module.needs_thread_runtime = True
 				self.lines.append(
 					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_env_has({DRIFT_STRING_TYPE} {name_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "fs_read_dir":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: fs_read_dir expects 2 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: fs_read_dir result must be captured")
+				path_val = self._map_value(instr.args[0])
+				deadline_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_fs_read_dir({DRIFT_STRING_TYPE} {path_val}, {self._llty(DRIFT_INT_TYPE)} {deadline_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "fs_test_walk_entries":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: fs_test_walk_entries result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_fs_test_walk_entries()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "vt_test_direct_resume_claims":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: vt_test_direct_resume_claims result must be captured")
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_vt_test_direct_resume_claims()"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name in ("fs_result_status", "fs_result_errno", "fs_result_count", "fs_result_free"):
+				if dest is None:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} result must be captured")
+				h_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_{instr.fn_id.name}({self._llty(DRIFT_INT_TYPE)} {h_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "fs_result_name":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: fs_result_name result must be captured")
+				h_val = self._map_value(instr.args[0])
+				idx_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {DRIFT_STRING_TYPE} @drift_fs_result_name({self._llty(DRIFT_INT_TYPE)} {h_val}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
+				)
+				self.value_types[dest] = DRIFT_STRING_TYPE
+				return
+			if instr.fn_id.name == "fs_result_kind":
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: fs_result_kind result must be captured")
+				h_val = self._map_value(instr.args[0])
+				idx_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_kind({self._llty(DRIFT_INT_TYPE)} {h_val}, {self._llty(DRIFT_INT_TYPE)} {idx_val})"
 				)
 				self.value_types[dest] = DRIFT_INT_TYPE
 				return

@@ -13,6 +13,58 @@ collections, algorithms, and error events referenced by language lowering.
 - `std.err`: standard error/exception events used by stdlib APIs.
 - `std.mem`: unsafe pointer primitives and trusted raw storage helpers.
 - `std.sync`: atomics and memory ordering primitives.
+- `std.io`: files, streams, buffers (regular-file and socket I/O).
+- `std.net`: TCP/UDP sockets and connect-by-hostname.
+- `std.fs`: filesystem queries (`read_dir`).
+
+## Stdlib IO contract (applies to `std.io`, `std.net`, `std.fs`)
+
+All public IO in these modules MUST satisfy the following contract. It is the
+source of truth for how blocking, deadlines, cancellation, saturation, and error
+classification behave across the IO surface. The mechanisms that implement it are
+specified in [drift-concurrency.md](drift-concurrency.md) ("Internal blocking
+boundary": pollable-descriptor retry vs. bounded blocking-pool offload).
+
+1. **No carrier blocking.** Public IO must **never block a virtual-thread carrier
+   thread.** An operation that can wait either (a) does a nonblocking syscall and
+   parks the VT on reactor readiness (pollable fds), or (b) is offloaded as one job
+   to the bounded blocking-syscall pool while the VT parks (non-pollable syscalls
+   such as filesystem operations and `getaddrinfo`).
+2. **Explicit deadline.** Every potentially-waiting operation must support an
+   explicit deadline (timeout). No unbounded implicit waits.
+3. **Prompt resumption.** Deadline expiry or cancellation must resume the caller
+   **promptly** — it must not wait for the underlying operation to finish.
+4. **Best-effort physical cancellation.** Physically cancelling an in-flight kernel
+   operation is best-effort and often impossible; **logical** cancellation may
+   *abandon* the operation. The abandoned operation runs to completion in the
+   background and its eventual result is discarded.
+5. **Bounded admission + backpressure.** Work admission and queues must be bounded.
+   Saturation must surface as an explicit **backpressure error** (e.g. `EAGAIN`),
+   never an unbounded queue or unbounded thread growth.
+6. **Independent job ownership.** A job must own its arguments and results
+   **independently** of any caller-side value, so that an abandoned operation stays
+   memory-safe and its eventual result is freed exactly once regardless of which
+   side (caller or worker) finishes last.
+7. **Distinguish the failure modes.** APIs must let callers distinguish
+   **timeout**, **cancellation**, **saturation**, and **underlying IO errors**
+   (errno). They are not collapsed into a single opaque failure.
+
+**Conformance status.**
+- `std.fs.read_dir(path, timeout)` (Slice 3) — **conforms**: offloaded to the
+  bounded blocking pool; takes an explicit `timeout` (clause 2) and abandons
+  promptly on expiry (clause 3); abandon-safe via a refcounted job that owns its
+  path + snapshot independently (clauses 4, 6); saturation surfaces as a distinct
+  `"saturated"` kind (clause 5); and the failure modes are distinct `IoError.kind`s
+  — `"timeout"`, `"cancelled"`, `"saturated"`, `"errno"`, `"invalid-utf8"` (clause 7).
+- `std.net` (TCP/UDP, connect-by-hostname) — **conforms** for the socket retry
+  path and the DNS offload path.
+- `std.io` **regular-file** APIs (`open`/`read`/`write`) — **non-conforming today**
+  (a pre-existing condition): they run the syscall inline on the carrier. A regular
+  file fd is not made nonblocking by epoll, so a stalling filesystem can block the
+  carrier. **Follow-up audit (tracked):** route blocking regular-file syscalls
+  through the same bounded blocking pool, or document an explicit, justified
+  exception. Until then these APIs do not meet clause 1 for slow/networked
+  filesystems.
 
 ## std.iter
 

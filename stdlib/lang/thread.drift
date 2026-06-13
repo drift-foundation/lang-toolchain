@@ -45,6 +45,15 @@ export {
 	io_write,
 	io_errno,
 	io_set_nonblocking,
+	fs_read_dir,
+	fs_result_status,
+	fs_result_errno,
+	fs_result_count,
+	fs_result_name,
+	fs_result_kind,
+	fs_result_free,
+	fs_test_walk_entries,
+	vt_test_direct_resume_claims,
 	console_write,
 	console_writeln,
 	console_eprint,
@@ -177,6 +186,28 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn io_write(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn io_errno() nothrow -> Int;
 @intrinsic pub fn io_set_nonblocking(fd: Int) nothrow -> Int;
+// std.fs.read_dir, offloaded to the shared blocking-syscall pool so the
+// directory walk never blocks a VT carrier.  `fs_read_dir` submits one job and
+// parks the VT; `deadline_ms` is an ABSOLUTE monotonic-ms deadline (0 = none).
+// It returns a result handle >= 1, or a negative sentinel: -1 ENOMEM, -2
+// saturation (backpressure), -4 timed-out, -5 cancelled.  The `fs_result_*`
+// accessors are pure in-memory reads of the materialized snapshot
+// (carrier-safe).  See lang/language_runtime/posix/fs_runtime.h.
+@intrinsic pub fn fs_read_dir(path: String, deadline_ms: Int) nothrow -> Int;
+@intrinsic pub fn fs_result_status(handle: Int) nothrow -> Int;
+@intrinsic pub fn fs_result_errno(handle: Int) nothrow -> Int;
+@intrinsic pub fn fs_result_count(handle: Int) nothrow -> Int;
+@intrinsic pub fn fs_result_name(handle: Int, idx: Int) nothrow -> String;
+@intrinsic pub fn fs_result_kind(handle: Int, idx: Int) nothrow -> Int;
+@intrinsic pub fn fs_result_free(handle: Int) nothrow -> Int;
+// Test-only: count of directory walks that have entered a pool worker (a
+// worker-entry barrier for the saturation regression).
+@intrinsic pub fn fs_test_walk_entries() nothrow -> Int;
+// Test-only: count of reactor DIRECT-resume claims won (PARKED→READY taken by
+// the poller, not a competing unpark/cancel).  Lets a race test wait until the
+// reactor has actually won the claim before cancelling into the READY→RUNNING
+// window.
+@intrinsic pub fn vt_test_direct_resume_claims() nothrow -> Int;
 @intrinsic pub fn console_write(text: String) nothrow -> Void;
 @intrinsic pub fn console_writeln(text: String) nothrow -> Void;
 @intrinsic pub fn console_eprint(text: String) nothrow -> Void;

@@ -242,7 +242,7 @@ def test_ir_declares_env_runtime_helpers(tmp_path: Path) -> None:
 
 
 def test_ir_declares_microsecond_time_runtime_helpers(tmp_path: Path) -> None:
-	"""ABI 16 exposes true microsecond monotonic and UTC clock helpers."""
+	"""The microsecond monotonic and UTC clock helpers are exposed (ABI 16+)."""
 	(tmp_path / "main.drift").write_text(
 		"module std.time.test_microsecond_ir;\n\n"
 		"import lang.thread as thread;\n\n"
@@ -283,7 +283,7 @@ def test_ir_declares_microsecond_time_runtime_helpers(tmp_path: Path) -> None:
 	assert "declare i64 @drift_time_now_utc_us()" in ir
 	assert "call i64 @drift_time_now_us()" in ir
 	assert "call i64 @drift_time_now_utc_us()" in ir
-	assert "call void @__drift_rt_abi_version_16()" in ir
+	assert f"call void @__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}()" in ir
 
 
 def test_std_time_rejected_on_32_bit_target(tmp_path: Path) -> None:

@@ -1,0 +1,183 @@
+module std.fs;
+
+import std.core as core;
+import std.io as io;
+import std.concurrent as conc;
+import lang.thread as thread;
+
+export {
+	FileKind,
+	DirEntry,
+	read_dir
+};
+
+/// The type of a directory entry, reflecting the **entry itself** and
+/// never a symlink's target.
+///
+/// `read_dir` classifies every entry with
+/// `fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)`, so a symlink is always
+/// reported as `Symlink` (never resolved).  `Unknown` means the type
+/// could not be determined (the per-entry `fstatat` failed) — it does
+/// **not** mean the entry is absent, and such an entry does not fail the
+/// listing.
+///
+/// **Platform:** POSIX.
+pub variant FileKind {
+	File,
+	Dir,
+	Symlink,
+	Other,
+	Unknown,
+}
+
+/// A single directory entry: its `name` (owned, valid UTF-8) and its
+/// `kind`.  `.` and `..` are never present.  `name` is a `String`, which
+/// self-releases — `DirEntry` needs no explicit `Destructible`.
+pub struct DirEntry {
+	pub name: String,
+	pub kind: FileKind,
+}
+
+// FileKind codes returned by `thread.fs_result_kind` — must match the
+// DRIFT_FK_* constants in lang/language_runtime/posix/fs_runtime.c.
+const FK_FILE: Int = 0;
+const FK_DIR: Int = 1;
+const FK_SYMLINK: Int = 2;
+const FK_OTHER: Int = 3;
+
+// Result status codes from `thread.fs_result_status` (C-side, with close-error
+// precedence already resolved): 0 ok / 1 errno / 2 invalid-utf8.
+const STATUS_ERRNO: Int = 1;
+const STATUS_UTF8: Int = 2;
+
+// Negative sentinels from `thread.fs_read_dir` (no result handle).
+const RC_ENOMEM: Int = -1;
+const RC_SATURATED: Int = -2;
+const RC_TIMEDOUT: Int = -4;
+const RC_CANCELLED: Int = -5;
+
+// Linux errno labels carried in the IoError.code for interop.
+const ERRNO_ENOMEM: Int = 12;
+const ERRNO_EAGAIN: Int = 11;
+const ERRNO_ETIMEDOUT: Int = 110;
+const ERRNO_ECANCELED: Int = 125;
+
+fn _kind_of(code: Int) nothrow -> FileKind {
+	if code == FK_FILE {
+		return FileKind::File();
+	}
+	if code == FK_DIR {
+		return FileKind::Dir();
+	}
+	if code == FK_SYMLINK {
+		return FileKind::Symlink();
+	}
+	if code == FK_OTHER {
+		return FileKind::Other();
+	}
+	return FileKind::Unknown();
+}
+
+// Deterministic, locale-independent sort by name using Drift's built-in String
+// ordering (unsigned-byte lexicographic via StringCmp).  Insertion sort:
+// directory listings are small (config/plugin dirs) and entry names are unique,
+// so a simple in-place pass is sufficient.
+fn _sort_by_name(entries: &mut Array<DirEntry>) nothrow -> Void {
+	val n = entries.len;
+	var i = 1;
+	while i < n {
+		var j = i;
+		while j > 0 {
+			if entries[j].name < entries[j - 1].name {
+				entries.swap(j - 1, j);
+				j = j - 1;
+			} else {
+				j = 0; // ordered prefix reached — stop the inner pass
+			}
+		}
+		i = i + 1;
+	}
+}
+
+/// Lists `path` within `timeout`, returning an owned, name-sorted snapshot.
+///
+/// **Explicit deadline (required by the stdlib IO contract).** `timeout` bounds
+/// the wait; on expiry the call returns a `timeout` error promptly without
+/// waiting for the underlying syscall to finish. A non-positive `timeout`
+/// (`Duration(millis = 0)`) is an explicit "no deadline" — the VT parks until
+/// the walk completes.
+///
+/// **VT-safe:** the entire directory walk (`open`, enumerate, UTF-8 validate,
+/// `fstatat`, `close`) runs on **one** job on the runtime's shared
+/// blocking-syscall pool while the calling virtual thread is **parked**, so a
+/// stalling NFS/FUSE/autofs directory never blocks a carrier thread. The
+/// snapshot is decoded and sorted in-memory after wakeup (no further syscalls).
+///
+/// **Determinism:** entries are sorted by name with the built-in `String`
+/// ordering (deterministic unsigned-byte lexicographic, locale-independent).
+/// `.` and `..` are excluded.
+///
+/// **Symlinks:** `DirEntry.kind` reflects the entry itself; a symlink is
+/// `FileKind::Symlink`, never its target.
+///
+/// **Distinct error modes (`IoError.kind`):**
+///   - `"errno"` — `opendir`/`readdir`/`closedir` failure (`code` = errno).
+///   - `"invalid-utf8"` — an entry name was not valid UTF-8 (`code` = EILSEQ).
+///   - `"timeout"` — the deadline expired before completion (`code` = ETIMEDOUT).
+///   - `"cancelled"` — the calling VT was cancelled (`code` = ECANCELED).
+///   - `"saturated"` — the blocking pool was full; runtime backpressure, retry
+///     later (`code` = EAGAIN).
+/// No partial listing is ever returned. A per-entry `fstatat` failure is **not**
+/// a whole-call failure — it degrades that entry to `FileKind::Unknown`.
+///
+/// **Platform:** POSIX.
+pub fn read_dir(path: String, timeout: conc.Duration) nothrow -> core.Result<Array<DirEntry>, io.IoError> {
+	// Absolute monotonic-ms deadline (0 = no deadline).
+	var deadline = 0;
+	if timeout.millis > 0 {
+		deadline = thread.now_ms() + timeout.millis;
+	}
+	val h = thread.fs_read_dir(path, deadline);
+
+	// Negative sentinels carry no result handle — each a distinct failure mode.
+	if h == RC_ENOMEM {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = ERRNO_ENOMEM));
+	}
+	if h == RC_SATURATED {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_SATURATED, code = ERRNO_EAGAIN));
+	}
+	if h == RC_TIMEDOUT {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_TIMEOUT, code = ERRNO_ETIMEDOUT));
+	}
+	if h == RC_CANCELLED {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_CANCELLED, code = ERRNO_ECANCELED));
+	}
+
+	// h >= 1: a result object (snapshot or resolved error). Always free it.
+	val status = thread.fs_result_status(h);
+	if status == STATUS_ERRNO {
+		val e = thread.fs_result_errno(h);
+		val _ = thread.fs_result_free(h);
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = e));
+	}
+	if status == STATUS_UTF8 {
+		val e = thread.fs_result_errno(h);
+		val _ = thread.fs_result_free(h);
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_UTF8, code = e));
+	}
+
+	// status ok: decode the snapshot (pure in-memory accessor reads).
+	var entries: Array<DirEntry> = [];
+	val n = thread.fs_result_count(h);
+	var i = 0;
+	while i < n {
+		val name = thread.fs_result_name(h, i);
+		val kind = _kind_of(thread.fs_result_kind(h, i));
+		entries.push(DirEntry(name = move name, kind = move kind));
+		i = i + 1;
+	}
+	val _ = thread.fs_result_free(h);
+
+	_sort_by_name(&mut entries);
+	return core.Result::Ok(move entries);
+}

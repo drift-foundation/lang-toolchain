@@ -375,14 +375,63 @@ Intrinsics:
 
 ### Internal blocking boundary
 
-`std.concurrent.block_on_io(fd, interest, deadline_ms)` is an internal helper used by stdlib I/O:
+Public stdlib I/O must never block a VT carrier thread (see the **Stdlib IO
+contract** in [drift-stdlib-spec.md](drift-stdlib-spec.md)). Two distinct
+mechanisms achieve this, chosen by whether the underlying descriptor/operation is
+*pollable* (made ready-observable via the reactor) or *non-pollable* (a syscall
+that can block in-kernel and is not reliably nonblocking):
 
-- stdlib I/O performs a non‑blocking syscall
-- on `EAGAIN`/`EWOULDBLOCK`, it calls `block_on_io` and retries until the timeout elapses
-- `block_on_io` registers interest with the reactor and parks the current VT
-- the reactor unparks the VT when the fd is ready (or deadline elapses)
+#### 1. Pollable descriptors — nonblocking syscall + reactor readiness + retry
 
-User code calls std.io/std.net methods with an explicit timeout. Those methods may park the current VT and return `WouldBlock` on timeout. The boundary helper keeps the implementation VT‑friendly while preserving a synchronous API surface.
+For sockets and other epoll-pollable fds, `std.concurrent.block_on_io(fd,
+interest, deadline_ms)` is the internal helper:
+
+- stdlib I/O performs a **non‑blocking** syscall;
+- on `EAGAIN`/`EWOULDBLOCK`, it calls `block_on_io` and retries until ready or the
+  deadline elapses;
+- `block_on_io` registers interest with the reactor and **parks** the current VT;
+- the reactor **unparks** the VT when the fd is ready (or the deadline elapses).
+
+This keeps the implementation VT‑friendly while preserving a synchronous API
+surface. Used by `std.net` (TCP/UDP) and the socket paths of `std.io`.
+
+#### 2. Non-pollable operations — bounded blocking-pool job + parked VT
+
+Some operations cannot be made nonblocking and are not reactor-pollable:
+filesystem syscalls (`opendir`/`readdir`/`fstatat`/`closedir`, `open`/`read`/
+`write` on regular files) and name resolution (`getaddrinfo`). A regular file or
+directory fd is **not** made nonblocking by epoll, and NFS/FUSE/autofs can block
+unpredictably inside the syscall. Running these inline on a carrier would stall
+that carrier and every VT it hosts. They are therefore **offloaded** to a shared,
+bounded **blocking-syscall worker pool**:
+
+- the operation is packaged as **one job** and submitted to the pool
+  (`drift_blocking_submit`); the pool has a **fixed** number of workers (4) and a
+  **bounded** FIFO queue (64), so admission is bounded — submission past the bound
+  returns a **saturation** error (surfaced as `EAGAIN` backpressure), never an
+  unbounded queue or unbounded thread growth;
+- the calling VT **parks** (optionally after registering a deadline timer);
+- a pool worker runs the blocking syscall(s) off any carrier, builds the result or
+  resolves a single error, then **unparks** the VT (or, if the VT abandoned the
+  job, frees the result);
+- on wake the VT consumes the result with **non-blocking, in-memory** accessors
+  (no further syscalls), so result decode is carrier-safe.
+
+**Deadline / cancellation.** A deadline timer or a cancellation unparks the VT,
+which then **abandons** the job (logical cancellation): it drops its stake and
+returns a timeout/cancellation error promptly. Physical cancellation of the
+in-flight kernel syscall is **not** portably possible — the worker stays blocked
+until the kernel returns, then discards the result. Job ownership is structured so
+that an abandoned operation is memory-safe: the job owns its arguments and result
+**independently** of any Drift value, and a reference count (VT stake + worker
+stake; last release frees) guarantees no use-after-free or double-free in the
+narrow window where the worker completes exactly as the deadline fires.
+
+The two consumers of this pool today are `getaddrinfo` (DNS resolve, behind
+`std.net` connect-by-hostname) and `std.fs.read_dir`. They share one pool; per-
+category fairness is a known limitation (a directory stall can delay DNS and vice
+versa) tracked for a future slice. User code calls the synchronous-looking API
+with an explicit deadline; the boundary keeps it VT-safe.
 
 ## Runtime target boundary
 

@@ -11,6 +11,10 @@ export {
 	IoError,
 	IO_ERROR_KIND_ERRNO,
 	IO_ERROR_KIND_REQUIRES_VTHREAD,
+	IO_ERROR_KIND_INVALID_UTF8,
+	IO_ERROR_KIND_TIMEOUT,
+	IO_ERROR_KIND_SATURATED,
+	IO_ERROR_KIND_CANCELLED,
 	File,
 	FileBuilder,
 	ConfiguredFile,
@@ -103,6 +107,21 @@ pub const IO_ERROR_KIND_ERRNO: String = "errno";
 
 /// `IoError.kind` discriminator: call requires a virtual thread.
 pub const IO_ERROR_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
+
+/// `IoError.kind` discriminator: a filesystem entry name was not valid
+/// UTF-8 (e.g. surfaced by `std.fs.read_dir`).  `code` is `EILSEQ`.
+pub const IO_ERROR_KIND_INVALID_UTF8: String = "invalid-utf8";
+
+/// `IoError.kind` discriminators for the IO contract's distinct failure
+/// modes (see doc/design/drift-stdlib-spec.md): a deadline expired
+/// (`timeout`), runtime work-admission backpressure / queue saturation
+/// (`saturated`), or the operation was cancelled (`cancelled`).  These are
+/// kept distinct from `errno` so callers never confuse runtime conditions
+/// with an underlying filesystem error.  `code` carries the conventional
+/// errno (`ETIMEDOUT` / `EAGAIN` / `ECANCELED`) for interop.
+pub const IO_ERROR_KIND_TIMEOUT: String = "timeout";
+pub const IO_ERROR_KIND_SATURATED: String = "saturated";
+pub const IO_ERROR_KIND_CANCELLED: String = "cancelled";
 
 /// An open file descriptor with a tracking `closed` cell.
 ///

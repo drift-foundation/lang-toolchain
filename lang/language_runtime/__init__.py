@@ -33,6 +33,7 @@ def get_runtime_sources(root: Path) -> List[Path]:
 		base / "console_runtime.c",
 		base / "posix" / "atomic_runtime.c",
 		base / "posix" / "io_runtime.c",
+		base / "posix" / "fs_runtime.c",
 		base / "posix" / "thread_runtime.c",
 		base / "posix" / "liveness_runtime.c",
 		base / "posix" / "drift_context.S",

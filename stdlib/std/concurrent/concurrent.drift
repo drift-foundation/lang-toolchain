@@ -239,12 +239,17 @@ pub error InvalidDuration {
 /// Process signal types delivered by `await_signal`.  Linux only.
 ///
 /// `Interrupt` is `SIGINT` (typically `Ctrl-C`).  `Terminate` is
-/// `SIGTERM`.  No other signals are observable through this API.
+/// `SIGTERM`.  `User1` is `SIGUSR1` — an application-controlled signal
+/// (e.g. a configuration/plugin reload trigger); it shares the same
+/// single-waiter signalfd path and does not collide with the liveness
+/// interrogator's `SIGUSR2`.  No other signals are observable through
+/// this API.
 ///
 /// **See also:** `await_signal`.
 pub variant ProcessSignal {
 	Interrupt,
 	Terminate,
+	User1,
 }
 
 /// Policy controlling what an executor does when its task queue is
@@ -2242,24 +2247,29 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 		thread.vt_park_until(d.millis);
 		return core.Result::Ok(core.void_value());
 	}
-	// `vt_park_until` registers the wake-timer with the reactor itself
-	// (see `drift_thread_park_until` in lang/language_runtime/posix/
-	// thread_runtime.c) and then swaps to the scheduler. Calling
-	// `reactor_register_timer` here as well would register the SAME
-	// wake twice — both fire, both unpark the VT, and the second
-	// unpark hits a VT that's already READY → falls through to the
-	// fallback path which bumps `park_token`. The next `sleep` call
-	// then early-returns by consuming the stale token, producing the
-	// alternating-instant-sleep pattern the bookkeeper team reported.
-	// Liveness: label this park as a timer wait (cleared on resume).
-	thread.vt_set_wait(WAIT_KIND_TIMER, 0);
-	thread.vt_park_until(deadline);
+	// Spurious-wakeup-tolerant timed wait (the correct condition-recheck
+	// discipline): register the wake timer ONCE, then loop on a PLAIN park,
+	// re-checking the clock each time.  A spurious wake — e.g. a stale wake
+	// left by some prior operation's late-firing deadline timer — just causes
+	// a re-park for the remaining time instead of returning early.  Using a
+	// plain `vt_park` (not `vt_park_until`) inside the loop avoids registering
+	// a fresh timer per iteration, so no extra timers accumulate to fire late
+	// (the alternating-instant-sleep pattern).  A cancelled VT breaks out
+	// promptly (a cancelled `vt_park` returns immediately).
+	thread.reactor_register_timer(deadline, vt);
+	while thread.now_ms() < deadline {
+		if thread.vt_is_cancelled() != 0 {
+			break;
+		}
+		thread.vt_set_wait(WAIT_KIND_TIMER, 0);
+		thread.vt_park(0);
+	}
 	return core.Result::Ok(core.void_value());
 }
 
 /// Blocks the calling virtual thread until a supported process
-/// signal (`SIGINT` or `SIGTERM`) is delivered, then returns which
-/// one.
+/// signal (`SIGINT`, `SIGTERM`, or `SIGUSR1`) is delivered, then
+/// returns which one.
 ///
 /// **Platform:** Linux only.  Behavior off Linux is unsupported.
 ///
@@ -2274,19 +2284,39 @@ pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 /// **Throw contract:** `nothrow`.  Misuse aborts; success returns a
 /// `ProcessSignal`.
 ///
-/// **Delivery semantics:** the call blocks until exactly one
-/// supported signal is delivered, then returns.  Subsequent signals
-/// are not coalesced or queued — call `await_signal` again to react
-/// to another signal.
+/// **Delivery semantics:** the call blocks until a supported signal is
+/// delivered, then returns.  Standard (non-realtime) signals **coalesce**
+/// in the kernel: several rapid deliveries of the *same* signal while no
+/// waiter is parked may surface as a **single** return.  Treat a signal
+/// as an idempotent "an event of this kind happened, rescan current
+/// state" edge, **not** a per-delivery counter.  Call `await_signal`
+/// again to react to the next edge.
 ///
 /// **Returns:** `ProcessSignal::Interrupt` for `SIGINT`,
-/// `ProcessSignal::Terminate` for `SIGTERM`.
+/// `ProcessSignal::Terminate` for `SIGTERM`,
+/// `ProcessSignal::User1` for `SIGUSR1`.
 ///
 /// **See also:** `ProcessSignal`.
 pub fn await_signal() nothrow -> ProcessSignal {
+	// Linux signal numbers; named to mirror the `SIGTERM == 15` house
+	// style and document the magic constants.
+	val SIGNO_SIGTERM: Int = 15;
+	val SIGNO_SIGUSR1: Int = 10;
 	val signo = thread.signal_await();
-	if signo == 15 {
+	// The runtime returns -1 for any misuse / unsupported case: off-VT,
+	// no signalfd, a second concurrent waiter, or non-Linux.  Per the
+	// single-waiter contract above this is a hard program error, not a
+	// recoverable signal — abort with a diagnostic rather than
+	// fabricating an `Interrupt`.
+	assert(signo != -1,
+		"await_signal: signal infrastructure unavailable or a second "
+		+ "concurrent waiter was detected (single-waiter contract "
+		+ "violation); see ProcessSignal docs. Linux only.");
+	if signo == SIGNO_SIGTERM {
 		return ProcessSignal::Terminate();
+	}
+	if signo == SIGNO_SIGUSR1 {
+		return ProcessSignal::User1();
 	}
 	return ProcessSignal::Interrupt();
 }

@@ -644,7 +644,8 @@ work, drain in-flight work, flush logs, and exit with a deterministic status.
 stdlib reference; the rules that matter for app code are:
 
 - Linux only.
-- Only `SIGINT` and `SIGTERM` are observable.
+- Only `SIGINT`, `SIGTERM`, and `SIGUSR1` are observable (`SIGUSR1` is an
+  application-controlled signal, e.g. a reload trigger).
 - **Exactly one** virtual thread may be blocked in `await_signal()` at a time.
   Treat it as the shutdown coordinator and call it from a single place — almost
   always near `main()`.
@@ -674,7 +675,7 @@ pub fn main() nothrow -> Int {
 
     logger.info("svc-started", {});
 
-    // Single shutdown coordinator: blocks until SIGINT or SIGTERM.
+    // Single shutdown coordinator: blocks until SIGINT/SIGTERM/SIGUSR1.
     val sig = conc.await_signal();
     match sig {
         conc.ProcessSignal::Interrupt => {
@@ -682,6 +683,9 @@ pub fn main() nothrow -> Int {
         }
         conc.ProcessSignal::Terminate => {
             logger.info("shutdown-signal", {"signal": "SIGTERM"});
+        }
+        conc.ProcessSignal::User1 => {
+            logger.info("shutdown-signal", {"signal": "SIGUSR1"});
         }
     }
 

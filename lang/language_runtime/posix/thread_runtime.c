@@ -39,6 +39,7 @@
 
 #include "string_runtime.h"
 #include "posix/liveness_runtime.h"
+#include "posix/blocking_pool.h"
 #ifdef __linux__
 #include "posix/drift_context.h"
 #include <sys/syscall.h>
@@ -110,7 +111,12 @@ typedef struct DriftVt {
 	struct DriftExec *exec;
 	pthread_mutex_t mu;
 	pthread_cond_t cv;
-	int park_token;
+	/* Wake latch for the park/unpark handshake.  Binary: a resumer deposits 1,
+	 * a park consumes by atomic_exchange(...,0).  Accessed with seq_cst so the
+	 * park "set PARKED then re-check token" and unpark "set token then re-check
+	 * state" double-handshake has no lost-wake window.  See drift_thread_park /
+	 * drift_thread_unpark. */
+	atomic_int park_token;
 	struct DriftVt *reg_prev;
 	struct DriftVt *reg_next;
 	struct DriftRuntimeRegistryEntry *thread_registry_head;
@@ -330,7 +336,7 @@ typedef struct ReactorWatch {
 typedef struct Reactor {
 	int epoll_fd;
 	int wake_fd;
-	int signal_fd;  /* signalfd for SIGINT/SIGTERM, -1 if not registered */
+	int signal_fd;  /* signalfd for SIGINT/SIGTERM/SIGUSR1, -1 if not registered */
 	pthread_mutex_t mu;
 	pthread_cond_t cv;
 	ReactorTimer *timers;
@@ -347,8 +353,8 @@ static void drift_reactor_shutdown_default_atexit(void);
 
 /* Process-global signal handling state (Linux only).
  * signal_fd is created at runtime init (drift_run_main_on_vt) before any
- * worker threads are spawned.  SIGINT/SIGTERM are blocked process-wide
- * so signalfd is the sole consumer. */
+ * worker threads are spawned.  SIGINT/SIGTERM/SIGUSR1 are blocked
+ * process-wide so signalfd is the sole consumer. */
 static int drift_signal_fd = -1;
 static atomic_uintptr_t drift_signal_waiter_vt = 0;
 static atomic_int drift_signal_delivered_signo = 0;
@@ -442,8 +448,10 @@ static void drift_vt_fiber_entry(uintptr_t arg);
 #endif
 void drift_thread_unpark(uint64_t vt);
 void drift_thread_park(uint64_t reason);
+void drift_blocking_pool_quiesce(void);  /* defined below; called in teardown (Finding 1) */
 void drift_reactor_register_timer(uint64_t deadline_ms, uint64_t vt);
-static void drift_reactor_cancel_vt_timers(uint64_t vt_id);
+/* drift_reactor_cancel_vt_timers is declared in posix/blocking_pool.h (shared
+ * with fs_runtime.c, the second blocking-pool consumer). */
 uint64_t drift_exec_default_get(void);
 uint64_t drift_reactor_default_get(void);
 uint64_t drift_exec_submit(uint64_t exec, uint64_t vt);
@@ -554,6 +562,61 @@ static inline void drift_vt_set_ready(DriftVt *vt) {
 	atomic_store(&vt->state, DRIFT_VT_READY);
 }
 
+/* Single-claim resume primitive (Findings 2 & the round-10 deadlock fix): EVERY
+ * path that resumes a parked VT — reactor IO event, deadline timer, cancellation,
+ * worker completion — claims it by CAS PARKED→READY, so exactly one wins.  A
+ * plain load-PARKED-then-store let two resumers both fire (a duplicate resume).
+ *
+ * The claim target is always READY, never RUNNING — even for the reactor's
+ * direct (in-place) resume.  While the VT is READY, other unparks recognize the
+ * wake is already claimed and DO NOT deposit a park_token.  If a direct resumer
+ * claimed RUNNING instead, a concurrent unpark would see RUNNING, deposit a
+ * token, the parking VT would consume it and return WITHOUT suspending, and the
+ * direct resumer's carrier_tid==0 guard would wait forever (deadlock).  The
+ * direct-resume path flips READY→RUNNING itself, only after the VT has suspended
+ * (carrier_tid==0), immediately before the swapcontext.
+ * Returns 1 if this caller won the claim (and must perform the resume). */
+static inline int drift_vt_claim_for_resume(DriftVt *vt) {
+	int expected = DRIFT_VT_PARKED;
+	if (atomic_compare_exchange_strong(&vt->state, &expected, DRIFT_VT_READY)) {
+		lv_set_t(&vt->state_since_ms, drift_now_ms());
+		return 1;
+	}
+	return 0;
+}
+
+/* Test-only (Finding 1, round 11): counts the reactor's successful DIRECT-resume
+ * claims — i.e. the poller (not a competing unpark/cancel) won PARKED→READY and
+ * is about to resume the VT in place.  A test waits until this advances to be
+ * SURE the reactor won the claim, then races a cancellation against the
+ * READY→RUNNING window below.  Without this, on a single-worker executor the
+ * cancel always claims first and the direct-resume CAS never executes, so the
+ * race the test means to cover never runs. */
+static atomic_long drift_test_direct_resume_claims = 0;
+int64_t drift_vt_test_direct_resume_claims(void) {
+	return (int64_t)atomic_load(&drift_test_direct_resume_claims);
+}
+
+/* Test-only (Finding 1, round 11): pause the reactor in the direct-resume path
+ * AFTER it has claimed the VT (READY) and the VT has suspended (carrier_tid==0),
+ * but BEFORE the READY→RUNNING flip + swapcontext.  Widens the window in which a
+ * racing cancellation must be a no-op because the reactor already owns the
+ * resume. */
+static int drift_test_direct_resume_pause_ms = -1;
+static pthread_once_t drift_test_direct_resume_pause_once = PTHREAD_ONCE_INIT;
+static void drift_test_direct_resume_pause_init(void) {
+	const char *e = getenv("DRIFT_TEST_DIRECT_RESUME_PAUSE_MS");
+	drift_test_direct_resume_pause_ms = (e && *e) ? atoi(e) : 0;
+}
+static void drift_test_direct_resume_pause(void) {
+	pthread_once(&drift_test_direct_resume_pause_once, drift_test_direct_resume_pause_init);
+	int ms = drift_test_direct_resume_pause_ms;
+	if (ms > 0) {
+		struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L };
+		nanosleep(&ts, NULL);
+	}
+}
+
 static void drift_vt_tls_init_once(void) {
 	pthread_key_create(&drift_vt_tls_key, NULL);
 }
@@ -604,7 +667,7 @@ static void drift_worker_vt_finish(DriftVt *vt) {
 	lv_bump(&drift_completed_counter);
 	lv_bump(&drift_progress_counter);
 	int dropped_after_finish = atomic_load(&vt->dropped);
-	vt->park_token++;
+	atomic_store(&vt->park_token, 1);
 	uint64_t waiter = vt->join_waiter;
 	vt->join_waiter = 0;
 	pthread_cond_broadcast(&vt->cv);
@@ -720,11 +783,20 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 				DriftVt *direct_vt = NULL;
 				DriftVt *enqueue_vt = NULL;
 				if (w) {
-					/* Resolve read direction. */
+					/* Resolve read direction.  drift_vt_claim_for_* CAS the
+					 * PARKED transition so a concurrent timer/cancellation cannot
+					 * also claim this VT (Finding 2): if the CAS loses, that other
+					 * resumer already owns the wake and we do nothing here.
+					 *
+					 * FAST-I/O direct-resume: the swapcontext below IS the wake —
+					 * no park_token is bumped (an unconsumed token would
+					 * short-circuit the VT's next park; see the maria-team
+					 * "sleep(550ms) elapsed=0" reduction, doc/history.md
+					 * 2026-05-16). */
 					if ((ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) && w->read_vt) {
 						DriftVt *rv = (DriftVt *)w->read_vt;
 						w->read_vt = 0;
-						if (atomic_load(&rv->state) == DRIFT_VT_PARKED) {
+						if (drift_vt_claim_for_resume(rv)) {
 							ReactorTimer *tp = NULL;
 							ReactorTimer *tc = r->timers;
 							while (tc) {
@@ -735,40 +807,6 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 								} else { tp = tc; }
 								tc = tn;
 							}
-							/* FAST-I/O direct-resume: the swapcontext below
-							 * IS the wake — do NOT also bump park_token, or
-							 * the unconsumed token short-circuits the VT's
-							 * next park_until call (customer-visible
-							 * "sleep(550ms) elapsed=0" after a single
-							 * wire.query+drain; see doc/history.md
-							 * 2026-05-16 and the maria-team reduction
-							 * fixture
-							 * `packages/mariadb-rpc/tests/spike/reduce_l2q_only_test.drift`
-							 * in drift-mariadb-client which deterministically
-							 * reproduces 5/5).
-							 *
-							 * Where park_token *is* the wake mechanism: the
-							 * `drift_thread_unpark` fallback (~line 1944)
-							 * when state != PARKED — no swapcontext-resume
-							 * possible, the next park consumes the token —
-							 * and defensive cv-signal bumps in shutdown /
-							 * cancel paths (`drift_worker_vt_finish`,
-							 * `drift_thread_drop`, `drift_thread_cancel`).
-							 * The enqueue dispatch path (~line 1108) does
-							 * NOT mint a token; it sets state=READY and
-							 * enqueues the VT for the worker to dequeue,
-							 * which then swapcontext-resumes — wake is
-							 * delivered by the dequeue+swapcontext, no
-							 * token needed.
-							 *
-							 * Race-window protection (another unpark fires
-							 * between state=RUNNING below and the
-							 * swapcontext) is unchanged: the racing unpark
-							 * sees state != PARKED, takes the
-							 * drift_thread_unpark fallback which bumps
-							 * park_token, and the VT's next park consumes
-							 * that token. */
-							atomic_store(&rv->state, DRIFT_VT_RUNNING);
 							direct_vt = rv;
 						}
 					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
@@ -778,7 +816,19 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 					if ((ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) && w->write_vt) {
 						DriftVt *wv = (DriftVt *)w->write_vt;
 						w->write_vt = 0;
-						if (atomic_load(&wv->state) == DRIFT_VT_PARKED) {
+						int claimed = 0;
+						if (!direct_vt) {
+							if (drift_vt_claim_for_resume(wv)) {
+								direct_vt = wv;
+								claimed = 1;
+							}
+						} else if (wv != direct_vt) {
+							if (drift_vt_claim_for_resume(wv)) {
+								enqueue_vt = wv;
+								claimed = 1;
+							}
+						}
+						if (claimed) {
 							ReactorTimer *tp = NULL;
 							ReactorTimer *tc = r->timers;
 							while (tc) {
@@ -788,15 +838,6 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 									free(tc);
 								} else { tp = tc; }
 								tc = tn;
-							}
-							if (!direct_vt) {
-								/* FAST-I/O direct-resume — see read-side
-								 * comment above; no park_token bump. */
-								atomic_store(&wv->state, DRIFT_VT_RUNNING);
-								direct_vt = wv;
-							} else if (wv != direct_vt) {
-								drift_vt_set_ready(wv);
-								enqueue_vt = wv;
 							}
 						}
 					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
@@ -812,6 +853,29 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 				}
 				pthread_mutex_unlock(&r->mu);
 				if (!direct_vt) continue;
+				/* Test-only (round 11): the reactor has now WON the PARKED→READY
+				 * claim for direct resume.  Publish that so a racing test can wait
+				 * for it before cancelling into the READY→RUNNING window. */
+				atomic_fetch_add(&drift_test_direct_resume_claims, 1);
+				/* Re-entrancy guard (Finding 1): the same premature-suspension
+				 * window as the carrier loop — do not swap into direct_vt until
+				 * the carrier that parked it has finished saving its context
+				 * (carrier_tid == 0).  No-op when the poller is the very carrier
+				 * that parked it. */
+				while (atomic_load(&direct_vt->carrier_tid) != 0) {
+					sched_yield();
+				}
+				/* Test-only (round 11): hold the VT in READY here so a concurrent
+				 * cancellation must observe READY ("already claimed") and be a
+				 * no-op — proving the direct-resume claim wins and the cancel does
+				 * not double-enqueue or strand a token. */
+				drift_test_direct_resume_pause();
+				/* The VT (claimed as READY) has now suspended; flip READY->RUNNING
+				 * immediately before resuming it in place.  Round-10 deadlock fix:
+				 * claiming RUNNING at claim time would let a racing unpark see RUNNING,
+				 * deposit a token the VT consumes instead of suspending, hanging the
+				 * carrier_tid guard above. */
+				atomic_store(&direct_vt->state, DRIFT_VT_RUNNING);
 				/* Resume VT directly. */
 				drift_vt_tls_set(direct_vt);
 				if (drift_valgrind_mode)
@@ -919,7 +983,7 @@ static void *drift_exec_worker(void *arg) {
 			if (!atomic_exchange(&vt->completed, 1)) {
 				drift_drop_callback(&vt->cb);
 			}
-			vt->park_token++;
+			atomic_store(&vt->park_token, 1);
 			uint64_t w1 = vt->join_waiter;
 			vt->join_waiter = 0;
 			pthread_cond_broadcast(&vt->cv);
@@ -949,7 +1013,7 @@ static void *drift_exec_worker(void *arg) {
 			if (!atomic_exchange(&vt->completed, 1)) {
 				drift_drop_callback(&vt->cb);
 			}
-			vt->park_token++;
+			atomic_store(&vt->park_token, 1);
 			uint64_t w2 = vt->join_waiter;
 			vt->join_waiter = 0;
 			pthread_cond_broadcast(&vt->cv);
@@ -957,6 +1021,17 @@ static void *drift_exec_worker(void *arg) {
 			if (w2 != 0) drift_thread_unpark(w2);
 			atomic_fetch_sub(&exec->running, 1);
 			continue;
+		}
+		/* Re-entrancy guard (multi-carrier safety, Finding 1): a parked VT can be
+		 * unpark-CAS'd to READY and enqueued while its previous carrier is still
+		 * between publishing PARKED and the swapcontext that SAVES its fiber
+		 * context.  Running it now — on this carrier — would swap into an unsaved
+		 * context while the other carrier still executes the same fiber.  The
+		 * previous carrier clears carrier_tid (via drift_vt_tls_set(NULL)) only
+		 * AFTER that swapcontext returns, so wait until it is 0 before running.
+		 * No-op in the common case (single carrier, or a cleanly-suspended VT). */
+		while (atomic_load(&vt->carrier_tid) != 0) {
+			sched_yield();
 		}
 		atomic_store(&vt->state, DRIFT_VT_RUNNING);
 #ifdef __linux__
@@ -1013,7 +1088,7 @@ static void *drift_exec_worker(void *arg) {
 			pthread_mutex_lock(&vt->mu);
 			atomic_store(&vt->completed, 1);
 			int dropped_after_finish = atomic_load(&vt->dropped);
-			vt->park_token++;
+			atomic_store(&vt->park_token, 1);
 			pthread_cond_broadcast(&vt->cv);
 			pthread_mutex_unlock(&vt->mu);
 			if (dropped_after_finish) {
@@ -1239,8 +1314,10 @@ static void *drift_reactor_thread_entry(void *arg) {
 							} else { tp = tc; }
 							tc = tn;
 						}
-						if (atomic_load(&rv->state) == DRIFT_VT_PARKED) {
-							drift_vt_set_ready(rv);
+						/* CAS-claim PARKED->READY (Finding 2): if a timer/cancel
+						 * already claimed it, the CAS loses and we skip — no
+						 * duplicate enqueue. */
+						if (drift_vt_claim_for_resume(rv)) {
 							read_io_vt = rv;
 						}
 					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
@@ -1261,8 +1338,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 							} else { tp = tc; }
 							tc = tn;
 						}
-						if (atomic_load(&wv->state) == DRIFT_VT_PARKED) {
-							drift_vt_set_ready(wv);
+						if (drift_vt_claim_for_resume(wv)) {
 							write_io_vt = wv;
 						}
 					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
@@ -1340,8 +1416,20 @@ static Reactor *drift_reactor_create(void) {
 		sev.data.fd = drift_signal_fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, drift_signal_fd, &sev);
 	}
-	if (pthread_create(&r->thread, NULL, drift_reactor_thread_entry, r) == 0) {
-		r->thread_started = 1;
+	/* Test-only (round 11): suppress the dedicated reactor thread so a
+	 * single-worker executor's worker is forced to be the sole reactor poller.
+	 * This makes the worker-inline direct-resume claim path (drift_worker_poll)
+	 * deterministically reachable for an fd event — otherwise the always-on
+	 * reactor thread races and usually services the event via the QUEUED claim
+	 * path instead, leaving the direct-resume window untested.  Only safe for
+	 * programs whose IO runs on single-worker executors (the worker polls). */
+	{
+		const char *no_rt = getenv("DRIFT_TEST_NO_REACTOR_THREAD");
+		if (!(no_rt && no_rt[0] == '1')) {
+			if (pthread_create(&r->thread, NULL, drift_reactor_thread_entry, r) == 0) {
+				r->thread_started = 1;
+			}
+		}
 	}
 #endif
 	return r;
@@ -1510,7 +1598,7 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 				if (!atomic_exchange(&vt->completed, 1)) {
 					drift_drop_callback(&vt->cb);
 				}
-				vt->park_token++;
+				atomic_store(&vt->park_token, 1);
 				pthread_cond_broadcast(&vt->cv);
 				pthread_mutex_unlock(&vt->mu);
 			}
@@ -1899,6 +1987,14 @@ uint64_t drift_thread_vtid(void) {
 	return 0;
 }
 
+/* Current VT *handle* (the pointer-as-uint64 that park/unpark/timer use),
+ * 0 if off-VT.  Distinct from drift_thread_vtid (the logical id); the
+ * blocking-pool consumers need this handle for drift_thread_unpark and the
+ * reactor timer registration.  Exposed via posix/blocking_pool.h. */
+uint64_t drift_thread_current_vt_handle(void) {
+	return (uint64_t)drift_vt_tls_get();
+}
+
 /* Return the OS kernel thread id (gettid()) of the calling carrier thread —
  * the same value liveness reports as carrier_tid, and the id that
  * top/ps/proc/perf/strace use.  This is what std.log emits as `tid`. */
@@ -1932,6 +2028,33 @@ static inline void drift_vt_resume_clear(DriftVt *vt) {
 	lv_set_t(&vt->state_since_ms, drift_now_ms());
 }
 
+/* Test-only: busy-spin (DRIFT_TEST_PARK_PAUSE_US microseconds) immediately after
+ * a fiber publishes DRIFT_VT_PARKED but BEFORE the swapcontext that saves its
+ * context — deterministically widening the premature-suspension window so a
+ * concurrent unpark+other-carrier reliably exercises the re-entrancy guard
+ * (Finding 1).  The cache is initialized once via pthread_once (no data race
+ * across carriers) so the common (env-unset) path is a plain read. */
+static int drift_test_park_pause_us = 0;
+static pthread_once_t drift_test_park_pause_once = PTHREAD_ONCE_INIT;
+static void drift_test_park_pause_init(void) {
+	const char *e = getenv("DRIFT_TEST_PARK_PAUSE_US");
+	drift_test_park_pause_us = (e && *e) ? atoi(e) : 0;
+}
+static void drift_test_park_pause(void) {
+	pthread_once(&drift_test_park_pause_once, drift_test_park_pause_init);
+	int us = drift_test_park_pause_us;
+	if (us > 0) {
+		struct timespec t0, now;
+		clock_gettime(CLOCK_MONOTONIC, &t0);
+		for (;;) {
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed = (now.tv_sec - t0.tv_sec) * 1000000L +
+			               (now.tv_nsec - t0.tv_nsec) / 1000L;
+			if (elapsed >= us) break;
+		}
+	}
+}
+
 void drift_thread_park(uint64_t reason) {
 	(void)reason;
 	DriftVt *vt = drift_vt_tls_get();
@@ -1945,16 +2068,19 @@ void drift_thread_park(uint64_t reason) {
 	}
 #ifdef __linux__
 	if (drift_sched_ctx) {
-		if (vt->park_token > 0) {
-			vt->park_token--;
+		/* Fast path: a wake is already latched. */
+		if (atomic_exchange(&vt->park_token, 0)) {
 			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
 		}
 		lv_set_t(&vt->state_since_ms, drift_now_ms());
 		atomic_store(&vt->state, DRIFT_VT_PARKED);
-		if (vt->park_token > 0) {
-			vt->park_token--;
+		drift_test_park_pause();  /* test-only window widener (Finding 1) */
+		/* Handshake re-check: if a resumer latched a token while we were still
+		 * RUNNING (before we published PARKED), claim it now and do not park.
+		 * Paired with unpark's "set token then re-check state == PARKED". */
+		if (atomic_exchange(&vt->park_token, 0)) {
 			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
@@ -1971,12 +2097,10 @@ void drift_thread_park(uint64_t reason) {
 	pthread_mutex_lock(&vt->mu);
 	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_PARKED);
-	while (vt->park_token == 0 && !atomic_load(&vt->cancelled)) {
+	while (atomic_load(&vt->park_token) == 0 && !atomic_load(&vt->cancelled)) {
 		pthread_cond_wait(&vt->cv, &vt->mu);
 	}
-	if (vt->park_token > 0) {
-		vt->park_token--;
-	}
+	atomic_store(&vt->park_token, 0);
 	vt->io_bytes_since_yield = 0;
 	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
 	lv_set_u(&vt->wait_id, 0);
@@ -2034,8 +2158,8 @@ void drift_thread_park_until(int64_t deadline_ms) {
 	}
 #ifdef __linux__
 	if (drift_sched_ctx) {
-		if (vt->park_token > 0) {
-			vt->park_token--;
+		/* Fast path: a wake is already latched. */
+		if (atomic_exchange(&vt->park_token, 0)) {
 			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
@@ -2043,8 +2167,10 @@ void drift_thread_park_until(int64_t deadline_ms) {
 		lv_set_t(&vt->state_since_ms, drift_now_ms());
 		atomic_store(&vt->state, DRIFT_VT_PARKED);
 		drift_reactor_register_timer((uint64_t)deadline_ms, (uint64_t)vt);
-		if (vt->park_token > 0) {
-			vt->park_token--;
+		drift_test_park_pause();  /* test-only window widener (Finding 1) */
+		/* Handshake re-check (see drift_thread_park): claim a token latched
+		 * during the RUNNING->PARKED transition or the timer registration. */
+		if (atomic_exchange(&vt->park_token, 0)) {
 			drift_vt_resume_clear(vt);
 			atomic_store(&vt->state, DRIFT_VT_RUNNING);
 			return;
@@ -2073,15 +2199,13 @@ void drift_thread_park_until(int64_t deadline_ms) {
 	pthread_mutex_lock(&vt->mu);
 	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	atomic_store(&vt->state, DRIFT_VT_PARKED);
-	while (vt->park_token == 0 && !atomic_load(&vt->cancelled)) {
+	while (atomic_load(&vt->park_token) == 0 && !atomic_load(&vt->cancelled)) {
 		int rc = pthread_cond_timedwait(&vt->cv, &vt->mu, &ts);
 		if (rc == ETIMEDOUT) {
 			break;
 		}
 	}
-	if (vt->park_token > 0) {
-		vt->park_token--;
-	}
+	atomic_store(&vt->park_token, 0);
 	vt->io_bytes_since_yield = 0;
 	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
 	lv_set_u(&vt->wait_id, 0);
@@ -2098,19 +2222,57 @@ void drift_thread_unpark(uint64_t vt) {
 	if (atomic_load(&h->completed)) {
 		return;
 	}
-	if (atomic_load(&h->state) == DRIFT_VT_PARKED && h->exec) {
-		drift_vt_set_ready(h);
-		pthread_mutex_lock(&h->exec->mu);
-		drift_exec_enqueue(h->exec, h);
-		pthread_mutex_unlock(&h->exec->mu);
-		/* Wake worker if it is in poll mode (epoll_wait instead of condvar). */
-		Reactor *r = drift_default_reactor_ptr;
-		if (r) drift_reactor_wake(r);
+	if (h->exec) {
+		/* Coherent park/unpark handshake (no lost wake, no stale token):
+		 *
+		 *  (1) Try to claim a PARKED fiber for the run queue.  The CAS makes the
+		 *      PARKED->READY transition atomic so concurrent resumers (worker
+		 *      completion, deadline timer, cancellation) enqueue the VT EXACTLY
+		 *      ONCE — drift_exec_enqueue does not dedup. */
+		int expected = DRIFT_VT_PARKED;
+		if (atomic_compare_exchange_strong(&h->state, &expected, DRIFT_VT_READY)) {
+			lv_set_t(&h->state_since_ms, drift_now_ms());
+			pthread_mutex_lock(&h->exec->mu);
+			drift_exec_enqueue(h->exec, h);
+			pthread_mutex_unlock(&h->exec->mu);
+			/* Wake worker if it is in poll mode (epoll_wait instead of condvar). */
+			Reactor *r = drift_default_reactor_ptr;
+			if (r) drift_reactor_wake(r);
+			return;
+		}
+		/*  (2) READY: the VT is already being resumed (another resumer claimed the
+		 *      wake and enqueued it).  Do NOT deposit a token — a stale token would
+		 *      make the VT's next, unrelated park return immediately. */
+		if (expected == DRIFT_VT_READY) {
+			return;
+		}
+		/*  (3) RUNNING / NEW (about to park): latch a single wake token, then
+		 *      RE-CHECK state.  Paired with park's "set PARKED then re-check
+		 *      token", this closes the RUNNING->PARKED lost-wake race: if the VT
+		 *      published PARKED after our CAS but before our token store, our
+		 *      re-check claims it for the run queue here. */
+		atomic_store(&h->park_token, 1);
+		expected = DRIFT_VT_PARKED;
+		if (atomic_compare_exchange_strong(&h->state, &expected, DRIFT_VT_READY)) {
+			/* The VT parked after we latched the token; it may have missed it.
+			 * Resume it via the run queue and drop the token we just set (the
+			 * enqueue is the wake now). */
+			atomic_store(&h->park_token, 0);
+			lv_set_t(&h->state_since_ms, drift_now_ms());
+			pthread_mutex_lock(&h->exec->mu);
+			drift_exec_enqueue(h->exec, h);
+			pthread_mutex_unlock(&h->exec->mu);
+			Reactor *r = drift_default_reactor_ptr;
+			if (r) drift_reactor_wake(r);
+			return;
+		}
+		/* Still RUNNING (the VT will consume the token at its park re-check) or
+		 * already READY (claimed elsewhere): nothing more to do. */
 		return;
 	}
-	drift_vt_set_ready(h);
+	/* OS-thread fallback VT (no executor): latch the token and signal its cv. */
 	pthread_mutex_lock(&h->mu);
-	h->park_token++;
+	atomic_store(&h->park_token, 1);
 	pthread_cond_signal(&h->cv);
 	pthread_mutex_unlock(&h->mu);
 }
@@ -2225,7 +2387,7 @@ void drift_thread_drop(uint64_t vt) {
 	int is_started = atomic_load(&h->started);
 	if (!is_completed) {
 		atomic_store(&h->cancelled, 1);
-		h->park_token++;
+		atomic_store(&h->park_token, 1);
 		pthread_cond_broadcast(&h->cv);
 	}
 	pthread_mutex_unlock(&h->mu);
@@ -2251,27 +2413,39 @@ uint64_t drift_thread_cancel(uint64_t vt) {
 		return 1;
 	}
 	atomic_store(&h->cancelled, 1);
-	pthread_mutex_lock(&h->mu);
-	h->park_token++;
-	pthread_cond_broadcast(&h->cv);
-	pthread_mutex_unlock(&h->mu);
-	if (!atomic_load(&h->started)) {
-		atomic_store(&h->state, DRIFT_VT_CANCELLED);
-		if (h->exec == NULL) {
-			pthread_mutex_lock(&h->mu);
-			if (!atomic_exchange(&h->completed, 1)) {
-				drift_drop_callback(&h->cb);
-			}
-			h->park_token++;
-			uint64_t waiter = h->join_waiter;
-			h->join_waiter = 0;
-			pthread_cond_broadcast(&h->cv);
-			pthread_mutex_unlock(&h->mu);
-			if (waiter != 0) {
-				drift_thread_unpark(waiter);
-			}
-		}
+	if (atomic_load(&h->started)) {
+		/* A STARTED VT must be resumed PROMPTLY so it observes the cancellation
+		 * at its park site and unwinds, instead of waiting for a deadline timer
+		 * or IO event to fire.  drift_thread_unpark picks the right resume path
+		 * for the VT's current state: it CAS-claims the PARKED->READY transition
+		 * and enqueues a fiber-parked VT exactly once (race-safe against a
+		 * concurrent worker/timer unpark), or bumps the park token for a VT
+		 * about to park / on the OS-thread fallback. */
+		drift_thread_unpark(vt);
+		return 0;
 	}
+	/* Unstarted: mark cancelled; if it has no executor, complete it now and wake
+	 * any joiner (the executor-backed case is finished when the worker picks it
+	 * up and sees the cancelled flag). */
+	atomic_store(&h->state, DRIFT_VT_CANCELLED);
+	pthread_mutex_lock(&h->mu);
+	atomic_store(&h->park_token, 1);
+	pthread_cond_broadcast(&h->cv);
+	if (h->exec == NULL) {
+		if (!atomic_exchange(&h->completed, 1)) {
+			drift_drop_callback(&h->cb);
+		}
+		atomic_store(&h->park_token, 1);
+		uint64_t waiter = h->join_waiter;
+		h->join_waiter = 0;
+		pthread_cond_broadcast(&h->cv);
+		pthread_mutex_unlock(&h->mu);
+		if (waiter != 0) {
+			drift_thread_unpark(waiter);
+		}
+		return 0;
+	}
+	pthread_mutex_unlock(&h->mu);
 	return 0;
 }
 
@@ -2290,10 +2464,10 @@ static DriftCallbackVTable drift_root_vt_vtable = {
 	.call = (void *)drift_root_vt_call,
 };
 
-/* Process signal await — blocks the calling VT until SIGINT or SIGTERM
- * is delivered.  Returns the signal number (SIGINT=2, SIGTERM=15) or -1
- * if a second waiter attempts to register (hard contract violation).
- * Linux only.  The signalfd and signal mask are set up in
+/* Process signal await — blocks the calling VT until SIGINT, SIGTERM, or
+ * SIGUSR1 is delivered.  Returns the signal number (SIGINT=2, SIGTERM=15,
+ * SIGUSR1=10) or -1 if a second waiter attempts to register (hard contract
+ * violation).  Linux only.  The signalfd and signal mask are set up in
  * drift_run_main_on_vt before any worker threads are created. */
 int64_t drift_signal_await(void) {
 #ifdef __linux__
@@ -2486,9 +2660,13 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	 * Python, Node.js all do this at startup). */
 	signal(SIGPIPE, SIG_IGN);
 
-	/* Block SIGINT/SIGTERM in the main thread.  All subsequently created
-	 * threads (executor workers, reactor, blocking pool) inherit this mask.
-	 * signalfd becomes the sole consumer of these signals.
+	/* Block SIGINT/SIGTERM/SIGUSR1 in the main thread.  All subsequently
+	 * created threads (executor workers, reactor, blocking pool) inherit this
+	 * mask.  signalfd becomes the sole consumer of these signals.  SIGUSR1 is
+	 * an application-controlled signal (e.g. reload trigger) surfaced through
+	 * the same generic ssi_signo dispatch as SIGINT/SIGTERM; it does NOT
+	 * collide with SIGUSR2 (the liveness interrogator, consumed by a separate
+	 * sigwait thread, never via signalfd).
 	 *
 	 * SIGUSR2 is also blocked here, BEFORE any carrier/reactor/app thread is
 	 * created, so no thread ever carries the default SIGUSR2 disposition
@@ -2502,6 +2680,7 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 		sigemptyset(&mask);
 		sigaddset(&mask, SIGINT);
 		sigaddset(&mask, SIGTERM);
+		sigaddset(&mask, SIGUSR1);
 		sigprocmask(SIG_BLOCK, &mask, NULL);
 		drift_signal_fd = signalfd(-1, &mask, SFD_NONBLOCK);
 
@@ -2580,6 +2759,11 @@ int64_t drift_run_main_on_vt(int64_t (*user_main)(void)) {
 	 * exchange flag); the registry-cleanup atexit handler runs second
 	 * and no-ops. */
 	drift_runtime_registry_cleanup_now();
+	/* Quiesce the blocking pool BEFORE the reactor/executor are torn down, so any
+	 * authorized worker unpark lands on a still-live executor/VT (Finding 1).  The
+	 * atexit handler — which runs AFTER this teardown — would otherwise be too late.
+	 * Idempotent: the atexit fallback no-ops. */
+	drift_blocking_pool_quiesce();
 	drift_reactor_shutdown_default_atexit();
 	drift_exec_shutdown_default_atexit();
 
@@ -3022,7 +3206,7 @@ void *drift_runtime_thread_registry_get(uint64_t type_tag) {
 /* Remove all reactor timers for a given VT.  Called on the happy path
  * of blocking-job completion so stale deadline timers do not fire
  * spurious unparks later. */
-static void drift_reactor_cancel_vt_timers(uint64_t vt_id) {
+void drift_reactor_cancel_vt_timers(uint64_t vt_id) {
 #ifdef __linux__
 	Reactor *r = (Reactor *)atomic_load(&drift_default_reactor);
 	if (!r) return;
@@ -3049,15 +3233,8 @@ static void drift_reactor_cancel_vt_timers(uint64_t vt_id) {
  * Generic blocking-job offload pool
  * ================================================================ */
 
-typedef struct DriftBlockingJob {
-	void (*job_fn)(struct DriftBlockingJob *job);
-	void (*destroy_fn)(struct DriftBlockingJob *job);
-	uint64_t vt;
-	atomic_int completed;
-	atomic_int expired;
-	int error;
-	struct DriftBlockingJob *next;
-} DriftBlockingJob;
+/* DriftBlockingJob is defined in posix/blocking_pool.h (shared with the
+ * fs_runtime.c read_dir consumer). */
 
 typedef struct DriftBlockingPool {
 	pthread_mutex_t mu;
@@ -3066,7 +3243,14 @@ typedef struct DriftBlockingPool {
 	DriftBlockingJob *queue_tail;
 	int queue_len;
 	int queue_limit;
-	int stopping;
+	atomic_int stopping;  /* set at shutdown; gates post-shutdown worker unparks */
+	/* Number of worker unparks currently authorized/in-flight.  A worker takes a
+	 * stake (under mu, only if !stopping) before calling drift_thread_unpark and
+	 * drops it after; shutdown waits (on drain_cv) until this reaches 0 before
+	 * tearing anything down, so an authorized notification can never race VT
+	 * teardown.  A second atomic stopping check alone is insufficient. */
+	int inflight_unparks;
+	pthread_cond_t drain_cv;
 	int worker_count;
 	pthread_t *workers;
 } DriftBlockingPool;
@@ -3081,10 +3265,10 @@ static void *drift_blocking_worker(void *arg) {
 	DriftBlockingPool *pool = (DriftBlockingPool *)arg;
 	while (1) {
 		pthread_mutex_lock(&pool->mu);
-		while (!pool->stopping && pool->queue_head == NULL) {
+		while (!atomic_load(&pool->stopping) && pool->queue_head == NULL) {
 			pthread_cond_wait(&pool->cv, &pool->mu);
 		}
-		if (pool->stopping && pool->queue_head == NULL) {
+		if (atomic_load(&pool->stopping) && pool->queue_head == NULL) {
 			pthread_mutex_unlock(&pool->mu);
 			return NULL;
 		}
@@ -3100,26 +3284,126 @@ static void *drift_blocking_worker(void *arg) {
 		job->job_fn(job);
 		atomic_store(&job->completed, 1);
 
-		if (atomic_load(&job->expired)) {
-			job->destroy_fn(job);
-		} else {
-			drift_thread_unpark(job->vt);
+		/* Refcount protocol (see posix/blocking_pool.h): unpark the VT unless
+		 * it has abandoned the job or already resumed itself, then drop the
+		 * worker's stake.  job->vt / job->expired are read BEFORE the release,
+		 * so the job memory is still alive here even if the VT's release races
+		 * us — the last release frees.
+		 *
+		 * The unpark is authorized under pool->mu and gated on !stopping, and an
+		 * in-flight stake is held across it: shutdown sets stopping and then
+		 * WAITS for inflight_unparks to drain before any teardown, so an
+		 * authorized unpark can never race VT/executor destruction.  (A bare
+		 * atomic stopping check would still let an unpark that already passed the
+		 * check fire after teardown began.) */
+		if (!atomic_load(&job->expired)) {
+			int authorized = 0;
+			pthread_mutex_lock(&pool->mu);
+			if (!atomic_load(&pool->stopping)) {
+				pool->inflight_unparks++;
+				authorized = 1;
+			}
+			pthread_mutex_unlock(&pool->mu);
+			if (authorized) {
+				/* Test-only: pause AFTER taking the in-flight stake but BEFORE the
+				 * unpark, so a regression can initiate shutdown during this window
+				 * and prove shutdown drains the stake before teardown (Finding 2). */
+				const char *wp = getenv("DRIFT_TEST_WORKER_UNPARK_PAUSE_MS");
+				if (wp && *wp) {
+					long ms = atol(wp);
+					if (ms > 0) {
+						struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+						nanosleep(&ts, NULL);
+					}
+				}
+				if (atomic_exchange(&job->vt_resumed, 1) == 0) {
+					drift_thread_unpark(job->vt);
+				}
+				pthread_mutex_lock(&pool->mu);
+				pool->inflight_unparks--;
+				if (pool->inflight_unparks == 0) {
+					pthread_cond_broadcast(&pool->drain_cv);
+				}
+				pthread_mutex_unlock(&pool->mu);
+			}
 		}
+		drift_blocking_job_release(job);
 	}
 	return NULL;
 }
 
-static void drift_blocking_pool_shutdown(void) {
+void drift_blocking_job_release(DriftBlockingJob *job) {
+	if (atomic_fetch_sub(&job->refcount, 1) == 1) {
+		job->destroy_fn(job);
+	}
+}
+
+/* Total wall-clock budget for joining blocking workers at shutdown.  Workers
+ * that finish their current job within this window are joined cleanly (so an
+ * abandoned job's snapshot is freed by the worker); a worker still stuck in an
+ * uninterruptible filesystem syscall (e.g. a hung NFS mount) is NOT waited on —
+ * the process exits promptly and the OS reaps the thread.  An abandoned NFS
+ * operation must never block process exit indefinitely. */
+#define DRIFT_BLOCKING_SHUTDOWN_BUDGET_MS 2000
+
+static atomic_int drift_blocking_pool_quiesced;
+
+/* Stop + drain the blocking pool: set stopping, WAIT for any authorized in-flight
+ * unpark to finish, then bounded-join the workers.  Idempotent (runs once).
+ *
+ * This MUST be called synchronously during runtime teardown — after the registry
+ * cleanup but BEFORE the reactor/executor are shut down (drift_run_main_on_vt) —
+ * so that a worker's drift_thread_unpark(job->vt) lands on a STILL-LIVE executor.
+ * The libc atexit handler is only a fallback; by the time it runs, the executor
+ * and reactor are already gone. */
+void drift_blocking_pool_quiesce(void) {
+	if (atomic_exchange(&drift_blocking_pool_quiesced, 1)) {
+		return;  /* already quiesced (e.g. explicit teardown ran; atexit no-ops) */
+	}
 	DriftBlockingPool *pool = drift_blocking_pool_ptr;
 	if (!pool) return;
+	/* No new submissions can race shutdown: any concurrent drift_blocking_submit
+	 * sees `stopping` and is rejected. */
 	pthread_mutex_lock(&pool->mu);
-	pool->stopping = 1;
+	atomic_store(&pool->stopping, 1);
 	pthread_cond_broadcast(&pool->cv);
-	pthread_mutex_unlock(&pool->mu);
-	for (int i = 0; i < pool->worker_count; i++) {
-		pthread_join(pool->workers[i], NULL);
+	/* Wait for any unpark authorized before `stopping` was set to finish, so no
+	 * worker is mid-drift_thread_unpark when later atexit handlers destroy VTs. */
+	while (pool->inflight_unparks > 0) {
+		pthread_cond_wait(&pool->drain_cv, &pool->mu);
 	}
-	/* Drain remaining jobs. */
+	pthread_mutex_unlock(&pool->mu);
+
+	/* Bounded join: absolute CLOCK_REALTIME deadline shared across all workers,
+	 * so total shutdown wait is <= the budget, not budget * worker_count. */
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += DRIFT_BLOCKING_SHUTDOWN_BUDGET_MS / 1000;
+	deadline.tv_nsec += (long)(DRIFT_BLOCKING_SHUTDOWN_BUDGET_MS % 1000) * 1000000L;
+	if (deadline.tv_nsec >= 1000000000L) {
+		deadline.tv_sec += 1;
+		deadline.tv_nsec -= 1000000000L;
+	}
+	int all_joined = 1;
+	for (int i = 0; i < pool->worker_count; i++) {
+		if (pthread_timedjoin_np(pool->workers[i], NULL, &deadline) != 0) {
+			/* This worker (and, conservatively, any after it) is stuck in a
+			 * syscall past the budget — stop waiting and let the process exit. */
+			all_joined = 0;
+			break;
+		}
+	}
+
+	if (!all_joined) {
+		/* A worker is still running and may still touch pool->mu / its job, so it
+		 * is NOT safe to free the pool here.  Leak the pool struct + workers
+		 * (the process is exiting; the OS reclaims everything).  A late-waking
+		 * worker safely finishes, frees its job, and exits via the stopping
+		 * flag against the still-valid pool. */
+		return;
+	}
+
+	/* All workers joined: drain any remaining queued jobs and free the pool. */
 	DriftBlockingJob *j = pool->queue_head;
 	while (j) {
 		DriftBlockingJob *next = j->next;
@@ -3129,8 +3413,17 @@ static void drift_blocking_pool_shutdown(void) {
 	free(pool->workers);
 	pthread_mutex_destroy(&pool->mu);
 	pthread_cond_destroy(&pool->cv);
+	pthread_cond_destroy(&pool->drain_cv);
 	free(pool);
 	drift_blocking_pool_ptr = NULL;
+}
+
+/* atexit fallback: idempotent via drift_blocking_pool_quiesce's once-flag.  In a
+ * normal shutdown the explicit drift_blocking_pool_quiesce() in
+ * drift_run_main_on_vt has already drained the pool while the executor/reactor
+ * were still alive, so this no-ops. */
+static void drift_blocking_pool_shutdown(void) {
+	drift_blocking_pool_quiesce();
 }
 
 static void drift_blocking_pool_init(void) {
@@ -3138,6 +3431,7 @@ static void drift_blocking_pool_init(void) {
 	if (!pool) return;
 	pthread_mutex_init(&pool->mu, NULL);
 	pthread_cond_init(&pool->cv, NULL);
+	pthread_cond_init(&pool->drain_cv, NULL);
 	pool->queue_limit = DRIFT_BLOCKING_POOL_QUEUE_LIMIT;
 	pool->worker_count = DRIFT_BLOCKING_POOL_WORKERS;
 	pool->workers = calloc((size_t)pool->worker_count, sizeof(pthread_t));
@@ -3148,12 +3442,12 @@ static void drift_blocking_pool_init(void) {
 	atexit(drift_blocking_pool_shutdown);
 }
 
-static int64_t drift_blocking_submit(DriftBlockingJob *job) {
+int64_t drift_blocking_submit(DriftBlockingJob *job) {
 	pthread_once(&drift_blocking_pool_once, drift_blocking_pool_init);
 	DriftBlockingPool *pool = drift_blocking_pool_ptr;
 	if (!pool) return -1;
 	pthread_mutex_lock(&pool->mu);
-	if (pool->queue_len >= pool->queue_limit || pool->stopping) {
+	if (pool->queue_len >= pool->queue_limit || atomic_load(&pool->stopping)) {
 		pthread_mutex_unlock(&pool->mu);
 		return -1;
 	}
@@ -3283,11 +3577,13 @@ int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms) {
 	rj->base.job_fn = drift_resolve_job_fn;
 	rj->base.destroy_fn = drift_resolve_job_destroy;
 	rj->base.vt = (uint64_t)vt;
+	atomic_store(&rj->base.refcount, 2);  /* VT stake + worker stake */
 	rj->hostname = host;  /* ownership transferred */
 	rj->port = (int)port;
 
 	int64_t submit_rc = drift_blocking_submit(&rj->base);
 	if (submit_rc != 0) {
+		/* Not submitted: no worker stake exists, free directly. */
 		free(rj->hostname);
 		free(rj);
 		errno = EAGAIN;
@@ -3299,6 +3595,8 @@ int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms) {
 		drift_reactor_register_timer((uint64_t)deadline_ms, (uint64_t)vt);
 	}
 	drift_thread_park(0);
+	/* Claim this VT's single wakeup so a late worker does not unpark us. */
+	atomic_exchange(&rj->base.vt_resumed, 1);
 
 	/* Resumed — check result. */
 	if (atomic_load(&rj->base.completed)) {
@@ -3308,18 +3606,20 @@ int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms) {
 			drift_reactor_cancel_vt_timers((uint64_t)vt);
 		}
 		if (rj->base.error != 0) {
-			rj->base.destroy_fn(&rj->base);
+			drift_blocking_job_release(&rj->base);
 			errno = EINVAL;
 			return -1;
 		}
 		struct sockaddr_storage addr;
 		memcpy(&addr, &rj->addr, rj->addrlen);
 		socklen_t addrlen = rj->addrlen;
-		rj->base.destroy_fn(&rj->base);
+		drift_blocking_job_release(&rj->base);
 		return drift_connect_to_addr(&addr, addrlen);
 	}
-	/* Timed out — transfer ownership to worker. */
+	/* Timed out / abandoned — drop the VT stake; the worker frees the job
+	 * when its in-flight getaddrinfo finally returns. */
 	atomic_store(&rj->base.expired, 1);
+	drift_blocking_job_release(&rj->base);
 	errno = EAGAIN;
 	return -1;
 }

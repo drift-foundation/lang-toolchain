@@ -1,5 +1,167 @@
 # Drift development history
 
+## 2026-06-11 (0.33.32: reload substrate — SIGUSR1, VT-safe `std.fs.read_dir`, runtime ABI 17)
+- **`ProcessSignal::User1` (SIGUSR1).** `SIGUSR1` is added to the existing
+  signalfd mask, so a Drift program can `conc.await_signal()` on it
+  (application-controlled, e.g. a reload trigger). Reuses the `ssi_signo`-generic
+  reactor dispatch and the single-waiter `drift_signal_await` boundary unchanged;
+  no per-signal branching added. No collision with the liveness interrogator's
+  `SIGUSR2` (consumed by a separate `sigwait` thread, never signalfd).
+- **`await_signal()` honors its abort contract.** It previously mapped the
+  runtime's `-1` (off-VT / no signalfd / second concurrent waiter / non-Linux) to a
+  fabricated `Interrupt`. It now **aborts with a diagnostic** (`assert`), matching
+  the documented "single-waiter; misuse aborts" contract. Behavior change covered
+  by a second-waiter driver regression.
+- **`std.fs.read_dir(path, timeout)` — VT-safe directory listing (new `std.fs`
+  module).** Returns an owned, name-sorted snapshot of `Array<DirEntry>`
+  (`FileKind`: File/Dir/Symlink/Other/Unknown). Deterministic unsigned-byte sort;
+  `.`/`..` excluded; symlinks reported as `Symlink` (never resolved) via per-entry
+  `fstatat(dirfd, name, AT_SYMLINK_NOFOLLOW)`; filenames validated as UTF-8. Takes
+  an explicit `timeout: conc.Duration` (IO-contract clause: no implicit unbounded
+  waits); on expiry it abandons and returns promptly.
+- **Distinct IO-contract failure modes.** `read_dir` surfaces distinct
+  `IoError.kind`s so callers never confuse a runtime condition with a filesystem
+  error: `"timeout"` (deadline expired, `ETIMEDOUT`), `"cancelled"` (VT cancelled,
+  `ECANCELED`), `"saturated"` (blocking-pool backpressure, `EAGAIN`), `"errno"`
+  (the underlying syscall), and `"invalid-utf8"` (`EILSEQ`). New
+  `IO_ERROR_KIND_TIMEOUT`/`_CANCELLED`/`_SATURATED` constants in `std.io`. The C
+  boundary returns disjoint sentinels (`-1` ENOMEM / `-2` saturated / `-4` timeout
+  / `-5` cancelled) and distinguishes cancel from timeout via
+  `drift_thread_is_cancelled()` at the abandon point.
+- **No carrier blocking (the load-bearing design point).** The entire walk
+  (`opendir` → enumerate → UTF-8 validate → `fstatat` → `closedir`) runs as **one
+  job on the existing bounded blocking-syscall pool** while the calling VT is
+  parked, so a stalling NFS/FUSE/autofs directory never blocks a VT carrier. The
+  parked VT resumes with a C-owned snapshot or one resolved error (close-error
+  precedence settled C-side); decode/sort is pure in-memory work. The pool is
+  *reused* (no second pool): `DriftBlockingJob`/`drift_blocking_submit` are factored
+  into `posix/blocking_pool.h`, shared with the DNS-resolve consumer.
+- **Multi-carrier re-entrancy guard (VT enqueued before it suspended).** A park
+  publishes `PARKED` before the swapcontext that *saves* its fiber context; an
+  unpark could then enqueue it and a second carrier swap into the unsaved context
+  while the first carrier still executes the fiber. Fixed centrally: before running
+  a dequeued VT (carrier loop) and before the reactor's direct-resume swapcontext,
+  the scheduler waits until the parking carrier has finished suspending it
+  (`carrier_tid == 0`, cleared only after swapcontext returns). No-op for
+  single-carrier executors / cleanly-suspended VTs.
+- **Blocking pool quiesced synchronously before reactor/executor teardown.** The
+  pool drained only via its libc atexit handler — which runs *after*
+  `drift_run_main_on_vt` already shut down the reactor and executor — so an
+  authorized worker unpark could still land on a destroyed executor/VT. The pool is
+  now quiesced (`drift_blocking_pool_quiesce`) **synchronously in the teardown**,
+  after the registry cleanup and BEFORE the reactor/executor shutdown; the atexit
+  handler is an idempotent fallback. Combined with an in-flight-unpark count
+  (a worker takes a stake under `pool->mu`, only if `!stopping`, across its unpark;
+  shutdown waits on `drain_cv` for it to reach 0), an authorized notification can
+  never race VT/executor destruction.
+- **Reactor resume paths are single-claim.** Every path that resumes a parked VT —
+  reactor IO event, deadline timer, cancellation, worker completion — now CASes the
+  PARKED transition via `drift_vt_claim_for_resume` (PARKED→READY), matching
+  `drift_thread_unpark`. The former load-PARKED-then-store let a reactor event and a
+  timer/cancel both claim the same VT (direct-resume *and* enqueue, or a double
+  enqueue); the CAS makes exactly one win.  The claim target is **always READY** —
+  even for the reactor's in-place direct resume, which flips READY→RUNNING itself
+  only after the VT has suspended (carrier_tid==0).  Claiming RUNNING at claim time
+  would let a racing unpark see RUNNING, deposit a token the VT consumes instead of
+  suspending, and hang the direct-resume's suspension guard.
+- **Park/unpark wake protocol hardened (lost-wake + stale-token races).** The
+  fiber park/unpark handshake had two races, both now closed: (1) a **lost wake**
+  when an unpark observed the VT `RUNNING` and deposited a token just as the VT
+  transitioned to `PARKED` (the token landed after the VT swapped out); (2) a
+  **stale token** when a duplicate resumer hit a VT already `READY` and bumped the
+  token anyway, making the VT's next unrelated park return immediately. Fix:
+  `park_token` is now an atomic latch; park publishes `PARKED` then re-checks the
+  token, and unpark deposits the token then re-checks `state == PARKED` (a lock-free
+  double-handshake with no lost-wake window), and `READY` is treated as
+  "wake already claimed" (no token). `drift_thread_unpark` also CAS-claims the
+  `PARKED→READY` transition so concurrent resumers (cancel + deadline timer + worker
+  completion) enqueue the VT exactly once. Durable regression races all three then
+  does a second timed park and asserts it neither returns immediately nor hangs.
+- **Timed waits tolerate spurious wakes (`conc.sleep`).** A late-firing deadline
+  timer for one park could deposit a wake consumed by a *later* park (the bookkeeper
+  team's "alternating-instant-sleep"). `conc.sleep` now registers its wake timer
+  once and loops on a plain park, re-checking the clock — the standard
+  condition-recheck discipline — so any spurious wake just re-parks for the
+  remaining time. `read_dir` also cancels its deadline timer on every abandon path.
+- **Central VT cancellation now resumes a blocking-parked VT promptly
+  (LANGUAGE_BUG fix).** `drift_thread_cancel` previously set the `cancelled` flag and
+  bumped the park token but did **not** re-enqueue a *started* VT suspended on the
+  fiber scheduler (swapcontext) — so a VT parked on a blocking-pool job only observed
+  cancellation when its deadline later fired. Fixed in the runtime (not std.fs): a
+  started, fiber-parked VT with an executor is re-enqueued on cancel (mirroring
+  `drift_thread_unpark`'s parked+exec path), so it resumes within ~ms and observes
+  `drift_thread_is_cancelled()` at its park site. Regression: cancel a VT parked on a
+  30s-deadline `read_dir` and require resume < 500ms.
+- **Bounded blocking-pool shutdown (abandoned syscalls can't hang exit).** At
+  `atexit` the pool previously `pthread_join`ed every worker unconditionally, so an
+  abandoned, uninterruptible NFS syscall could block process exit indefinitely. Now
+  shutdown uses a bounded `pthread_timedjoin_np` against a shared 2s deadline: workers
+  that finish their current job within the budget are joined cleanly (the abandoned
+  job's snapshot is freed); a worker still stuck past the budget is **not** waited on
+  — the process exits promptly and the OS reaps the thread (the pool struct is
+  intentionally leaked in that case so a late-waking worker stays safe). The worker
+  loop also **suppresses unparks once the pool is stopping**, so a worker that
+  finishes an *active* (non-timed-out) job during atexit teardown cannot unpark a
+  VT that later atexit handlers are destroying. Regressions: a timed-out `read_dir`
+  whose worker is stuck in a 30s stall lets the process exit in ~2s (not 30s), and
+  the same with an *active* (non-timed-out) parked job.
+- **Pool ownership hardened (UAF-safe abandon).** The shared blocking-job protocol
+  now uses an atomic refcount (VT stake + worker stake; last release frees) plus an
+  unpark-suppression flag, closing the narrow "worker completes exactly as the
+  deadline fires" double-free/spurious-unpark window for **both** consumers (DNS and
+  `read_dir`). A timed-out/cancelled `read_dir` abandons the job memory-safely; the
+  worker discards the eventual result. Saturation surfaces as `"saturated"`/`EAGAIN`
+  backpressure (bounded 64-deep queue, 4 workers). Lifecycle regressions pin the
+  timeout, cancellation/abandon, and saturation paths (timeout/cancel abandon under
+  memcheck), and a single-carrier `join_timeout` test proves the compute VT completes
+  *during* a 2s read_dir stall (the carrier is not blocked).
+- **Stdlib IO contract formalized.** `doc/design/drift-stdlib-spec.md` gains a
+  top-level IO contract (no carrier blocking; explicit deadline; prompt
+  resumption; best-effort physical cancellation; bounded admission/backpressure;
+  independent job ownership; distinct timeout/cancel/saturation/errno failure
+  modes) applying to `std.io`/`std.net`/`std.fs`.
+  `doc/design/drift-concurrency.md` expands the blocking boundary into two
+  mechanisms (pollable-descriptor retry vs. bounded blocking-pool offload).
+  `doc/design/reload-substrate.md` documents the signal→channel→stage/verify/swap
+  coordinator protocol.
+- **Follow-up audit recorded:** `std.io` regular-file APIs (`open`/`read`/`write`)
+  still run inline on the carrier and do not yet meet the no-carrier-blocking rule
+  for slow/networked filesystems — to be routed through the blocking pool (or given
+  a documented exception) in a later slice.
+- **Boundary change → ABI 17.** New `lang.thread` intrinsics
+  `fs_read_dir` + `fs_result_{status,errno,count,name,kind,free}` cross the
+  compiler/runtime boundary, so `DRIFT_RT_ABI_VERSION` is bumped **16 → 17** and
+  DRIFTC **0.33.31 → 0.33.32**. The SIGUSR1 mask change and the `ProcessSignal::User1`
+  variant ride the same bump. One additional **test-only** boundary symbol,
+  `fs_test_walk_entries` → `drift_fs_test_walk_entries` (a pool-worker walk-entry
+  counter used as a deterministic barrier in the saturation regression), is part of
+  the ABI 17 surface; it follows the existing `test_eventfd_create` /
+  `test_timerfd_create` convention of plainly-exported `test_*`-prefixed intrinsics
+  and carries no production semantics. (A second test-only symbol,
+  `vt_test_direct_resume_claims` → `drift_vt_test_direct_resume_claims`, a reactor
+  direct-resume-claim counter, joins the same ABI 17 surface under the same
+  convention — see the direct-resume-vs-cancel regression below.)
+- **Deterministic direct-resume-vs-cancel regression (test quality).** The
+  reactor's worker-inline direct-resume claim (the path with the READY→RUNNING
+  window) is only reachable when a single-worker executor's worker is the sole
+  reactor poller — the always-on dedicated reactor thread otherwise services fd
+  events via the queued claim+enqueue path. A test-only `DRIFT_TEST_NO_REACTOR_THREAD`
+  knob suppresses the reactor thread so the reader's dedicated single-worker executor
+  polls and direct-resumes; a new `vt_test_direct_resume_claims()` counter advances
+  when the reactor WINS the PARKED→READY claim (the test waits on it to PROVE the win
+  before racing a cancel); and `DRIFT_TEST_DIRECT_RESUME_PAUSE_MS` holds the VT in the
+  READY window so the cancel reliably lands there and must be a no-op. The driver
+  busy-spins (never parks) so its carrier never steals poll ownership, and the
+  memcheck variant runs `valgrind --fair-sched=yes` so the hot spin doesn't starve the
+  reader's worker on valgrind's serial scheduler. All three are test-only and gated;
+  none carry production semantics.
+- **Sleep-free coordinator reload ordering (test quality).** The sequential-reload
+  coordinator regression now observes each reload's outcome instead of sleeping
+  between mutations: the worker emits a per-reload `ack:<count>` on (unbuffered)
+  stderr and the test reads each ack via `select` — confirming reload 1 read exactly
+  two entries before the third file is added, reload 2 read three, and reload 3's
+  read failed with the published state left untouched.
+
 ## 2026-06-08 (0.33.26: restore `std.time.elapsed_ms`)
 - Restored `std.time.elapsed_ms(start)` as a UX-friendly convenience API.
   `Instant` remains microsecond-backed; the function returns the lossy
