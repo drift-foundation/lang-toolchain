@@ -116,6 +116,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -135,13 +137,16 @@ def _compile_and_run(
 		str(src_path),
 		"-o", str(out_bin),
 	]
+	# Scale the compile/run budgets so they survive xdist parallelism and the
+	# sanitizer lanes (a ~30s solo compile can exceed a hardcoded 60s under high
+	# parallel load); sanitizer_timeout is the canonical scaler for such subprocesses.
 	cc = subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	if cc.returncode != 0 or not out_bin.exists():
 		return cc.returncode, cc.stderr, -1, ""
 	run = subprocess.run(
-		[str(out_bin)], capture_output=True, text=True, timeout=10,
+		[str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	return cc.returncode, cc.stderr, run.returncode, run.stderr
 
