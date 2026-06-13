@@ -1,19 +1,21 @@
 # Reload Substrate — Slice 3 Implementation Plan
 
-**Status:** IMPLEMENTED + TESTED — 2026-06-12 (5 review rounds folded in; see the
-static-review section). Toolchain bumped to DRIFTC_VERSION 0.33.32 /
-DRIFT_RT_ABI_VERSION 17. On branch `feature/reload-substrate`, uncommitted.
+**Status:** IMPLEMENTED + TESTED — 2026-06-13 (11 review rounds + 2 round-11
+follow-ups folded in; see the static-review section). Toolchain bumped to
+DRIFTC_VERSION 0.33.32 / DRIFT_RT_ABI_VERSION 17. Committed on branch
+`feature/reload-substrate` (working tree clean).
 **Toolchain at plan time:** DRIFTC_VERSION 0.33.31, DRIFT_RT_ABI_VERSION 16.
 
 **Progress (all parts done, validated):**
 - Part 1 (SIGUSR1 + `await_signal` abort): `test_signal_await.py` 6/6.
 - Part 2 (`std.fs.read_dir(path, timeout)`, offloaded, distinct error kinds):
-  `test_std_fs_read_dir.py` 11/11 (incl. timeout/cancel/saturation lifecycle +
-  carrier-liveness + memcheck), leak-clean.
+  `test_std_fs_read_dir.py` 28/28 (incl. timeout/cancel/saturation lifecycle +
+  carrier-liveness + reactor direct-resume-vs-cancel race + fs error semantics +
+  UTF-8 ordering + memcheck variants), leak-clean.
 - Part 3 (reload coordinator): `doc/design/reload-substrate.md` +
-  `test_reload_coordinator.py` 1/1.
+  `test_reload_coordinator.py` 2/2 (signal→swap + sequential-reloads/failure).
 - Part 4 (ABI 16→17, DRIFTC 0.33.31→0.33.32): `test_abi_version_stamp.py` 21/21.
-- Regression: DNS + net/concurrency e2e 110/110 (shared blocking-pool refcount).
+- Regression: concurrency + net + io e2e 133/133 (shared blocking-pool refcount).
 - Docs: stdlib IO contract (`drift-stdlib-spec.md`) + two mechanisms
   (`drift-concurrency.md`) + `std.io` regular-file follow-up audit recorded.
 - There is no separate progress file; this plan is the single work doc.
