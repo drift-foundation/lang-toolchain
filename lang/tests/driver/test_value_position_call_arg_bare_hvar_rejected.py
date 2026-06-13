@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -42,7 +44,7 @@ def _compile_json(tmp_path: Path, source: str, *, stem: str) -> tuple[int, dict]
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out),
 		 "--json"],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	payload = json.loads(res.stdout) if res.stdout.strip() else {}
 	return res.returncode, payload

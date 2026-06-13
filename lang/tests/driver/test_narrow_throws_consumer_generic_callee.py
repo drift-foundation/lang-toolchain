@@ -21,6 +21,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -54,7 +56,7 @@ def _build_and_sign_pkg(
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, f"build of {pkg_id} failed:\n{res.stderr[-1500:]}"
 
 	from lang.tests.driver.pkg_test_helpers import sign_v1_pkg_into_root
@@ -129,7 +131,7 @@ pub fn main() nothrow -> Int {
 		str(src),
 		"-o", str(out_bin),
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode != 0, (
 		"consumer compile must fail: typed `catch main:E(e)` cannot "
 		"cover a call to `dep_pkg.g()` (generic-throws). Generic-throws "
@@ -185,7 +187,7 @@ pub fn main() nothrow -> Int {
 		str(src),
 		"-o", str(out_bin),
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, (
 		f"positive control: catch-all must cover the generic call.\n\n"
 		f"{res.stderr[-1500:]}"

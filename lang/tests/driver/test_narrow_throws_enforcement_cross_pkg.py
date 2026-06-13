@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -67,7 +69,7 @@ def _build_and_sign_pkg(
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	if not expect_success:
 		return tmp_path / "pkg_root", trust_path_existing or (tmp_path / "trust.json"), res
 

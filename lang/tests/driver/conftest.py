@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import host_word_bits
+from lang.codegen.llvm.test_utils import host_word_bits, sanitizer_timeout
 from lang.driftc import driftc
 
 
@@ -122,7 +122,7 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 		"--test-build-only",
 	]
 	res = subprocess.run(cmd, env=env, cwd=str(repo_root),
-		capture_output=True, text=True, timeout=120)
+		capture_output=True, text=True, timeout=sanitizer_timeout(120))
 	assert res.returncode == 0, f"stdlib package build failed: {res.stderr[:500]}"
 	assert dmp_path.exists(), "stdlib .dmp not produced"
 

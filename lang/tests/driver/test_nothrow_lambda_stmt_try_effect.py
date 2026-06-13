@@ -24,6 +24,8 @@ from pathlib import Path
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 _PRELUDE = (
@@ -47,7 +49,7 @@ def _compile(tmp_path: Path, src: str, *, out: str, extra_imports: str = "") -> 
 	stdlib = stdlib_root()
 	if stdlib is not None:
 		cmd.extend(["--stdlib-root", str(stdlib)])
-	return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=180)
+	return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180))
 
 
 def _cb_main(body: str) -> str:

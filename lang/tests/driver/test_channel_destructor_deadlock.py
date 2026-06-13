@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -106,7 +108,7 @@ def _compile(tmp_path: Path) -> Path:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		f"compile failed: rc={res.returncode}\n"
@@ -126,7 +128,7 @@ def test_receiver_destroy_must_not_hold_lock_during_payload_destruction(tmp_path
 		res = subprocess.run(
 			[str(binary)],
 			capture_output=True, text=True,
-			timeout=10,
+			timeout=sanitizer_timeout(10),
 		)
 	except subprocess.TimeoutExpired as ex:
 		stderr_seen = (ex.stderr or b"").decode("utf-8", errors="replace") if isinstance(ex.stderr, bytes) else (ex.stderr or "")

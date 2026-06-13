@@ -47,6 +47,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -84,7 +86,7 @@ def _compile_two_modules(
 		cmd,
 		capture_output=True, text=True, cwd=str(ROOT),
 		env={**os.environ, "PYTHONPATH": str(ROOT)},
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 	if not rc.stdout.strip():
 		return rc.returncode, [{"message": rc.stderr[:2000], "code": "STDERR"}]
@@ -495,7 +497,7 @@ fn main() nothrow -> Int {
 		],
 		capture_output=True, text=True, cwd=str(ROOT),
 		env={**os.environ, "PYTHONPATH": str(ROOT)},
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 	if not rc.stdout.strip():
 		pytest.fail(

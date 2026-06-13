@@ -37,6 +37,8 @@ import pytest
 
 from lang.driftc import _events as events
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -230,7 +232,7 @@ def _run_driftc(args: list[str]) -> subprocess.CompletedProcess:
 	return subprocess.run(
 		[sys.executable, "-m", "lang.driftc.driftc", *args],
 		capture_output=True, text=True, cwd=ROOT,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 
 

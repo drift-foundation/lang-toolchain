@@ -26,6 +26,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -47,12 +49,12 @@ def _compile_and_run(tmp_path: Path, source: str, *, entry: str = "m::main") -> 
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 		env=env,
 	)
 	if build.returncode != 0:
 		return (build, None)
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	return (build, run)
 
 

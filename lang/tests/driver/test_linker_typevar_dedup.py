@@ -19,6 +19,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -62,7 +64,7 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 		 "--package-target", "test-target",
 		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(std_pkg), "--test-build-only"],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	assert res.returncode == 0, f"std build: {res.stderr[:300]}"
 
@@ -119,7 +121,7 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 		 "--package-target", "test-target",
 		 "--source-content-id", _TEST_SCI,
 		 "--emit-package", str(lib_pkg), "--test-build-only"],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	assert res.returncode == 0, f"mylib build: {res.stderr[:300]}"
 
@@ -168,7 +170,7 @@ def test_cross_package_typevar_dedup_for_copy_proof(tmp_path: Path) -> None:
 		 "--target-word-bits", "64",
 		 "--entry", "main::main",
 		 "--emit-ir", str(tmp_path / "out.ll")],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	assert res.returncode == 0, (
 		f"consumer compilation failed — Copy proof for Handle<Byte> likely broken "

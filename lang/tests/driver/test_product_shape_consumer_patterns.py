@@ -63,6 +63,8 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -767,7 +769,7 @@ def test_callback3_through_signed_stdlib(
 		"--json",
 	]
 	rc = subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=180,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(180),
 		env={**os.environ, "PYTHONPATH": str(ROOT)},
 	)
 	if not rc.stdout.strip():

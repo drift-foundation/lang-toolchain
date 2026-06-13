@@ -43,6 +43,8 @@ import pytest
 
 from lang.driftc.driftc import main as driftc_main
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -418,11 +420,11 @@ def _compile_and_run(tmp_path: Path, source: str, *, name: str = "share_eval_ord
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out_bin)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, f"compile failed:\n{res.stderr[:1500]}"
 	assert out_bin.exists()
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=60)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	return run.returncode
 
 

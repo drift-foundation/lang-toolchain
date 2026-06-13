@@ -51,6 +51,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _PROBE_SOURCE = """\
 module main;
@@ -151,7 +153,7 @@ def test_array_len_method_call_matches_field_access(tmp_path: Path) -> None:
 		cwd=Path(__file__).parents[3],
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		"compile should succeed (Bug 1 was fixed by routing "
@@ -163,7 +165,7 @@ def test_array_len_method_call_matches_field_access(tmp_path: Path) -> None:
 		[str(out_bin)],
 		capture_output=True,
 		text=True,
-		timeout=30,
+		timeout=sanitizer_timeout(30),
 	)
 	assert run.returncode == 42, (
 		f"binary should return 42 on success; got {run.returncode}.\n"

@@ -32,6 +32,8 @@ from lang.driftc.packages.provisional_dmir_v0 import (
 	decode_declared_throws_event_fqns,
 )
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -73,7 +75,7 @@ pub fn f() throws E -> Int { throw E(tag = "x"); }
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, f"build of producer_pkg failed:\n{res.stderr[-1500:]}"
 	return dmp
 

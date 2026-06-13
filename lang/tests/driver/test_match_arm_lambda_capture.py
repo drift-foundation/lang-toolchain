@@ -57,6 +57,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -95,7 +97,7 @@ def _compile(tmp_path: Path) -> tuple[int, str]:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	return res.returncode, res.stderr
 
@@ -108,7 +110,7 @@ def _compile_source(tmp_path: Path, source: str, *, stem: str = "main") -> tuple
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	return res.returncode, res.stderr, out
 
@@ -125,7 +127,7 @@ def test_match_arm_binder_capturable_by_inner_lambda(tmp_path: Path) -> None:
 	)
 	out = tmp_path / "repro"
 	assert out.exists()
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 7, (
 		f"binary returned {run.returncode}, expected 7 (the captured "
 		f"Box.v value).\nstderr: {run.stderr[-400:]}"
@@ -169,7 +171,7 @@ def test_match_arm_binder_share_capture(tmp_path: Path) -> None:
 	the same binding identity that arm-body HVars see."""
 	rc, stderr, out = _compile_source(tmp_path, _SHARE_CAPTURE_SOURCE, stem="share")
 	assert rc == 0, f"share-capture compile failed: rc={rc}\n{stderr[:800]}"
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 11, (
 		f"share-capture binary returned {run.returncode}, expected 11."
 	)
@@ -202,7 +204,7 @@ def test_for_binder_capturable_by_inner_lambda(tmp_path: Path) -> None:
 	discipline as user-written match arms."""
 	rc, stderr, out = _compile_source(tmp_path, _FOR_BINDER_CAPTURE_SOURCE, stem="for_capture")
 	assert rc == 0, f"for-binder-capture compile failed: rc={rc}\n{stderr[:800]}"
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 12, (
 		f"for-binder-capture returned {run.returncode}, expected 12 (3+4+5)."
 	)
@@ -239,7 +241,7 @@ def test_typed_for_binder_capturable_by_inner_lambda(tmp_path: Path) -> None:
 	identity wiring."""
 	rc, stderr, out = _compile_source(tmp_path, _FOR_TYPED_BINDER_CAPTURE_SOURCE, stem="for_typed_capture")
 	assert rc == 0, f"typed-for-binder-capture compile failed: rc={rc}\n{stderr[:800]}"
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 12, (
 		f"typed-for-binder-capture returned {run.returncode}, expected 12 (3+4+5)."
 	)
@@ -274,7 +276,7 @@ def test_lambda_param_shadows_match_arm_binder(tmp_path: Path) -> None:
 	Result: 1 + 100 = 101."""
 	rc, stderr, out = _compile_source(tmp_path, _LAMBDA_PARAM_SHADOW_SOURCE, stem="param_shadow")
 	assert rc == 0, f"param-shadow compile failed: rc={rc}\n{stderr[:800]}"
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 101, (
 		f"param-shadow returned {run.returncode}, expected 101."
 	)
@@ -305,7 +307,7 @@ def test_arm_body_local_shadows_arm_binder(tmp_path: Path) -> None:
 	later same-name redeclarations inside the arm scope."""
 	rc, stderr, out = _compile_source(tmp_path, _LOCAL_SHADOW_SOURCE, stem="local_shadow")
 	assert rc == 0, f"local-shadow compile failed: rc={rc}\n{stderr[:800]}"
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 99, (
 		f"local-shadow returned {run.returncode}, expected 99."
 	)

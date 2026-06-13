@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -54,10 +56,10 @@ def _compile_and_run(
 			"-o", str(out_bin),
 		]
 
-	res = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=180)
+	res = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180))
 	if res.returncode != 0:
 		return -1, "", res.stderr[:500]
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return run.returncode, run.stdout, run.stderr
 
 

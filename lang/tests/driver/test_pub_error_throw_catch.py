@@ -54,6 +54,8 @@ import pytest
 
 from lang.driftc.driftc import main as driftc_main
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _SLICE_5_PENDING = pytest.mark.xfail(
 	strict=True,
@@ -535,7 +537,7 @@ fn main() nothrow -> Int {
 	])
 	out = capsys.readouterr().out
 	assert rc == 0, f"compile failed: rc={rc} out={out[:300]}"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"non-pub `error E` field 'msg' was silently dropped from params "
 		f"(exit {run.returncode}); expected 0 = `{{\"msg\":\"boom\"}}` round-trip"

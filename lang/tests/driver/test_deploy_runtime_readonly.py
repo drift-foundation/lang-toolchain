@@ -14,6 +14,8 @@ from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples,
 from tools.deploy.steps.pex import build_drift_pex, build_driftc_pex
 from tools.deploy.steps.stdlib import build_and_install_stdlib
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 _skip_no_pex = pytest.mark.skipif(
@@ -216,7 +218,7 @@ fn main() nothrow -> Int {
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out.exists()
@@ -327,7 +329,7 @@ def test_deployed_wrapper_explicit_env_override_respected(
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out.exists()

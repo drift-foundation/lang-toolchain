@@ -96,6 +96,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -120,7 +122,7 @@ def _compile_via_subprocess(
 	if extra_args:
 		cmd.extend(extra_args)
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 
@@ -382,7 +384,7 @@ def test_v3_crosspkg_field_borrow_compiles(tmp_path: Path) -> None:
 			str(src),
 			"-o", str(out_bin),
 		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 	assert "E-AUTO-69eb9f81" not in res.stderr, (
@@ -473,7 +475,7 @@ def test_v4_repeated_and_two_field_borrow(tmp_path: Path) -> None:
 	out_bin = tmp_path / "v4_repeated_bin"
 	assert out_bin.exists(), "V4 binary not produced"
 	run = subprocess.run(
-		[str(out_bin)], capture_output=True, text=True, timeout=10,
+		[str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	assert run.returncode == 0, (
 		f"V4 binary exited {run.returncode}, expected 0.  Three "

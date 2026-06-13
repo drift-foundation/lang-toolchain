@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -65,14 +67,14 @@ pub fn main() nothrow -> Int {
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 		env=env,
 	)
 	assert build.returncode == 0, (
 		"generic impl associated factory call should type-check and lower:\n"
 		f"--- stdout ---\n{build.stdout}\n--- stderr ---\n{build.stderr}"
 	)
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	assert run.returncode == 0, (
 		f"program exit {run.returncode} indicates clone_via_factory semantic failure:\n"
 		f"--- stdout ---\n{run.stdout}\n--- stderr ---\n{run.stderr}"

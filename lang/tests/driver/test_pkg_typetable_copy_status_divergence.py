@@ -50,6 +50,8 @@ import pytest
 
 from lang.tests.driver.pkg_test_helpers import _build_signed_stdlib, STD_VERSION, ROOT
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _CONSUMER = """\
 module {module_name};
@@ -88,7 +90,7 @@ def _parse_type_queries(stderr: str) -> list[dict]:
 def _run_compile_with_dump(cmd: list[str]) -> list[dict]:
 	env = os.environ.copy()
 	env["DRIFT_DUMP_TYPE_QUERIES"] = "1"
-	res = subprocess.run(cmd, capture_output=True, text=True, timeout=180, env=env, cwd=ROOT)
+	res = subprocess.run(cmd, capture_output=True, text=True, timeout=sanitizer_timeout(180), env=env, cwd=ROOT)
 	assert res.returncode == 0, f"compile failed: {res.stderr[-500:]}"
 	return _parse_type_queries(res.stderr)
 

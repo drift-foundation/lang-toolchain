@@ -94,6 +94,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -150,7 +152,7 @@ def _build_and_sign_pkg(
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, f"build of {pkg_id} failed:\n{res.stderr[-1500:]}"
 
 	if priv_key_bytes is None:
@@ -247,7 +249,7 @@ def _compile_consumer(
 		"-o", str(out_bin),
 	]
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 
@@ -330,7 +332,7 @@ def test_v1_minimal_interface_dispatch_across_packages(tmp_path: Path) -> None:
 	)
 	out_bin = tmp_path / "main_bin"
 	assert out_bin.exists(), "V1 binary not produced"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V1 binary exited {run.returncode}, expected 0 "
 		f"(should return 0 when t.do_thing() returns 42)"
@@ -429,7 +431,7 @@ def test_v2_interface_method_with_nonscalar_signature(tmp_path: Path) -> None:
 		f"V2 compile failed:\n{res.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V2 binary exited {run.returncode}, expected 0 "
 		f"(should return 0 when t.handle(&Req{{path='abcd'}}) "

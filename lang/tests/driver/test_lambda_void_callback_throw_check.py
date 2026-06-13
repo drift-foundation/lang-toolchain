@@ -110,6 +110,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -144,7 +146,7 @@ def _compile_via_subprocess(
 		"-o", str(out_bin),
 	]
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=120,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 
 

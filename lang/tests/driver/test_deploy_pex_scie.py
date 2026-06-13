@@ -43,7 +43,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from lang.codegen.llvm.test_utils import host_word_bits
+from lang.codegen.llvm.test_utils import host_word_bits, sanitizer_timeout
 from lang.driftc.driftc import main as driftc_main
 from lang.drift.crypto import compute_ed25519_kid
 from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
@@ -300,7 +300,7 @@ def test_pex_deployed_self_sufficient_no_ambient_python(
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out_ir.exists()
@@ -328,7 +328,7 @@ def test_pex_deployed_drift_author_subcommand_is_bundled(
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert "drift author" in result.stdout
@@ -386,7 +386,7 @@ fn main() nothrow -> Int {
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out.exists()
@@ -419,7 +419,7 @@ def test_pex_deployed_signed_stdlib_package_verification(
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out_ir.exists()
@@ -464,13 +464,13 @@ fn main() nothrow -> Int {
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out.exists()
 
 	# Run the compiled binary and verify exit code.
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	assert run.returncode == 7
 
 
@@ -514,7 +514,7 @@ fn main() nothrow -> Int {
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out_ir.exists()

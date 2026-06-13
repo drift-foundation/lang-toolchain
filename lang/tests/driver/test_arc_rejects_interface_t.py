@@ -34,6 +34,8 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 def _write_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +65,7 @@ def _compile_capture(tmp_path: Path, source: str) -> tuple[int, str]:
 	import os
 	env.update(os.environ)
 	env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3])
-	res = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+	res = subprocess.run(cmd, capture_output=True, text=True, timeout=sanitizer_timeout(60), env=env)
 	return res.returncode, (res.stderr or "")
 
 

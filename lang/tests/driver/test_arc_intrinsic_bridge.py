@@ -39,6 +39,8 @@ from lang.driftc.driftc import compile_to_llvm_ir_for_tests, main as driftc_main
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _ARC_CONCRETE_PROGRAM = """
 module main;
@@ -151,7 +153,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> int:
 		args += ["--stdlib-root", str(root)]
 	rc = driftc_main(args)
 	assert rc == 0, f"driftc failed with rc={rc}"
-	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
+	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return result.returncode
 
 

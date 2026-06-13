@@ -57,6 +57,8 @@ from pathlib import Path
 
 from lang.tests.driver.pkg_test_helpers import ROOT
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _CONSUMER = """\
 module main;
@@ -95,7 +97,7 @@ def _run_compile(tmp_path: Path) -> list[dict]:
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main",
 		 "-o", str(out_bin)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120, env=env,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120), env=env,
 	)
 	assert res.returncode == 0, f"compile failed: {res.stderr[:500]}"
 	out: list[dict] = []

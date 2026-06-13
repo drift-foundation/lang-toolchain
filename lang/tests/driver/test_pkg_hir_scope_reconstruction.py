@@ -14,6 +14,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 STDLIB_DIR = ROOT / "stdlib"
 
@@ -41,7 +43,7 @@ def _build_and_compile_consumer(tmp_path: Path, consumer_source: str) -> tuple[i
 		 "--target-word-bits", "64",
 		 "--entry", "consumer::main",
 		 "-o", str(out_bin)],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 		env=run_env,
 	)
 	return res.returncode, res.stderr

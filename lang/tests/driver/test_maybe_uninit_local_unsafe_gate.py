@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _ROOT = Path(__file__).resolve().parents[3]
 _STDLIB = _ROOT / "stdlib"
@@ -88,7 +90,7 @@ def _compile(tmp_path: Path, *, allow_unsafe: bool) -> subprocess.CompletedProce
 	# and fail with `invalid linker name in argument '-fuse-ld=gold'`.
 	return subprocess.run(
 		cmd, capture_output=True, text=True, cwd=str(_ROOT),
-		env={**os.environ, "PYTHONPATH": "."}, timeout=120,
+		env={**os.environ, "PYTHONPATH": "."}, timeout=sanitizer_timeout(120),
 	)
 
 
@@ -105,7 +107,7 @@ def test_maybe_uninit_local_compiles_under_unsafe(tmp_path: Path) -> None:
 	)
 	out_bin = tmp_path / "bin"
 	assert out_bin.exists()
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	assert run.returncode == 0, (
 		f"compiled binary did not exit 0: rc={run.returncode}, "
 		f"stderr={run.stderr[:300]!r}"

@@ -52,6 +52,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _REPRO_SOURCE = """\
 module main;
@@ -111,7 +113,7 @@ def test_conditional_move_from_array_remove_compiles_and_runs(tmp_path: Path) ->
 		cwd=Path(__file__).parents[3],
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		"Bug 2 architecture flip should make this compile cleanly.\n"
@@ -121,7 +123,7 @@ def test_conditional_move_from_array_remove_compiles_and_runs(tmp_path: Path) ->
 		[str(out_bin)],
 		capture_output=True,
 		text=True,
-		timeout=30,
+		timeout=sanitizer_timeout(30),
 	)
 	assert run.returncode == 2, (
 		f"binary should return 2 (count of `raw > 0` items kept by drain); "

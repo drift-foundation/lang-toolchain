@@ -47,6 +47,8 @@ from lang.driftc.driftc import main as driftc_main, compile_to_llvm_ir_for_tests
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 def _write_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +154,7 @@ def test_call_method_on_borrowed_interface_value(
 	diagnostics = payload.get("diagnostics", [])
 	assert rc == 0, f"compile failed: rc={rc} diags={diagnostics}"
 	assert diagnostics == [], f"unexpected diagnostics: {diagnostics}"
-	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
+	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert result.returncode == 42, (
 		f"borrowed iface dispatch returned {result.returncode}, expected 42 "
 		f"(stdout={result.stdout!r} stderr={result.stderr!r})"
@@ -169,7 +171,7 @@ def test_call_method_through_arc_get(
 	diagnostics = payload.get("diagnostics", [])
 	assert rc == 0, f"compile failed: rc={rc} diags={diagnostics}"
 	assert diagnostics == [], f"unexpected diagnostics: {diagnostics}"
-	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
+	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert result.returncode == 42, (
 		f"arc.get().value() dispatch returned {result.returncode}, expected 42 "
 		f"(stdout={result.stdout!r} stderr={result.stderr!r})"

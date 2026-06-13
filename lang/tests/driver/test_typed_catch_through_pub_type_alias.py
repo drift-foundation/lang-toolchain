@@ -82,6 +82,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -101,7 +103,7 @@ def _compile_source(tmp_path: Path, source: str) -> subprocess.CompletedProcess[
 		"-o", str(out_bin),
 	]
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 
@@ -146,7 +148,7 @@ def _build_and_sign_pkg(
 		"--emit-package", str(dmp),
 		"--test-build-only",
 	]
-	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+	res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60))
 	assert res.returncode == 0, f"build of {pkg_id} failed:\n{res.stderr[-1500:]}"
 
 	if priv_key_bytes is None:
@@ -241,7 +243,7 @@ def _compile_consumer(
 		"-o", str(out_bin),
 	]
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 
@@ -282,7 +284,7 @@ def test_v1_control_direct_pub_error_catch(tmp_path: Path) -> None:
 		f"alias-specific.\n\n{res.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, f"V1 binary exited {run.returncode}; expected 0"
 
 
@@ -334,7 +336,7 @@ def test_v2_same_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 		f"{res.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V2 binary exited {run.returncode}; expected 0 (tag should "
 		f"match 'hit')"
@@ -398,7 +400,7 @@ def test_v0_cross_package_catch_no_alias(tmp_path: Path) -> None:
 		f"{res.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, f"V0 binary exited {run.returncode}; expected 0"
 
 
@@ -474,7 +476,7 @@ def test_v3_cross_package_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	)
 	assert res.returncode == 0, f"V3 compile failed:\n{res.stderr[-1500:]}"
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, f"V3 binary exited {run.returncode}; expected 0"
 
 
@@ -561,5 +563,5 @@ def test_v4_facade_module_catch_via_pub_type_alias(tmp_path: Path) -> None:
 	)
 	assert res.returncode == 0, f"V4 compile failed:\n{res.stderr[-1500:]}"
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, f"V4 binary exited {run.returncode}; expected 0"

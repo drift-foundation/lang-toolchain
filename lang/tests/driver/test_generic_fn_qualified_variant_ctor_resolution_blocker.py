@@ -71,6 +71,8 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _REPRO = """\
 module m;
@@ -124,7 +126,7 @@ def _compile_subprocess(src_text: str, tmp_path: Path) -> subprocess.CompletedPr
 		cwd=Path(__file__).parents[3],
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 	)
 
 
@@ -181,7 +183,7 @@ def test_qualified_variant_ctor_resolves_in_generic_function(tmp_path: Path) -> 
 		# `out` may have an extension stripped by driftc; locate it.
 		out_bins = list(tmp_path.glob("out*"))
 		out_bin = next((p for p in out_bins if p.is_file() and p.stat().st_mode & 0o111), out_bin)
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	assert run.returncode == 0, (
 		f"binary should exit 0 (both call sites return false); got {run.returncode}\n"
 		f"stdout: {run.stdout}\nstderr: {run.stderr}"

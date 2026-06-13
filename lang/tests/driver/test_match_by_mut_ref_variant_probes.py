@@ -57,6 +57,8 @@ import pytest
 
 from lang.driftc.driftc import main as driftc_main
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 _ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -87,14 +89,14 @@ def _compile_and_run(tmp_path: Path, source: str, *, expected_rc: int) -> None:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(_ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out_bin)],
-		cwd=str(_ROOT), capture_output=True, text=True, timeout=120,
+		cwd=str(_ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert cp.returncode == 0, (
 		f"full compile failed:\nstdout:\n{cp.stdout[:1500]}\n"
 		f"stderr:\n{cp.stderr[:1500]}"
 	)
 	assert out_bin.exists(), "binary not produced"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	assert run.returncode == expected_rc, (
 		f"binary exited rc={run.returncode}, expected {expected_rc}"
 	)

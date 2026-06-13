@@ -37,6 +37,8 @@ from lang.drift.crypto import compute_ed25519_kid
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -768,7 +770,7 @@ def test_ext_package_consumer_e2e(
 
 	# ── Stage 3: Run ─────────────────────────────────────────────────
 	run_res = subprocess.run(
-		[str(bin_path)], capture_output=True, text=True, timeout=10,
+		[str(bin_path)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	# Counter(0) → 3 increments → get()=3 → Blue(3) → describe_color=3
 	# → Outcome::Ok(3) → match=3 → exit code 3
@@ -923,7 +925,7 @@ fn main() nothrow -> Int {
 	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
 
 	run_res = subprocess.run(
-		[str(bin_path)], capture_output=True, text=True, timeout=10,
+		[str(bin_path)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	assert run_res.returncode == 5, (
 		f"expected exit code 5, got {run_res.returncode}"
@@ -2041,7 +2043,7 @@ pub fn main() nothrow -> Int {
 	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
 
 	run_res = subprocess.run(
-		[str(bin_path)], capture_output=True, text=True, timeout=10,
+		[str(bin_path)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	# throw_self → throws → caught → exit 42
 	assert run_res.returncode == 42, (

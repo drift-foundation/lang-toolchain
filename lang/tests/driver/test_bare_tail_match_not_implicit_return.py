@@ -25,6 +25,8 @@ from pathlib import Path
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 _HDR = "module repro;\nvariant Opt { Some(v: Int), None }\n"
 _MAIN = "fn main() nothrow -> Int { val o = Opt::Some(5); return f(o) - 5; }\n"
@@ -41,7 +43,7 @@ def _compile(tmp_path: Path, fn_src: str, *, out: str) -> subprocess.CompletedPr
 	stdlib = stdlib_root()
 	if stdlib is not None:
 		cmd.extend(["--stdlib-root", str(stdlib)])
-	return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=180)
+	return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180))
 
 
 def test_bare_tail_match_rejected_with_clear_diagnostic(tmp_path: Path) -> None:

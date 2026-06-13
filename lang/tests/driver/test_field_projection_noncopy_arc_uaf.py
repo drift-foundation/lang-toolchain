@@ -27,6 +27,8 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 def _write_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +59,7 @@ def _compile_and_run(
 	capsys.readouterr()
 	if rc != 0:
 		return rc, -1
-	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
+	result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return 0, result.returncode
 
 

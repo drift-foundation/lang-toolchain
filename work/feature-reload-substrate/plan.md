@@ -914,6 +914,17 @@ Two corrections after the first pass:
    `test_read_dir_memcheck`) plus stdout, with stdout/stderr in the message, and routes
    through the `valgrind_cmd()` helper (centralized `--fair-sched=yes`).
 
+**Review round 11 follow-up (suite-wide compile-timeout fragility):** Two unrelated
+driver tests (`test_tmp_borrow_callback_collision.py`,
+`test_match_by_ref_result_err_binder.py`) failed with `subprocess.TimeoutExpired` —
+a hardcoded `timeout=60` on a ~30s `driftc` compile that overruns under xdist
+parallelism. Pre-existing suite-wide debt (64 driver files), surfaced by the slice's
+heavy-parallel runs, not caused by it. Per user direction, swept all 64: AST-based
+insertion/extension of the `test_utils` import + regex-wrapped every subprocess
+`timeout=<int>` in `sanitizer_timeout(...)` (4× xdist, 3×/sanitizer, monotonic so
+never destabilizing). Verified: 0 raw timeouts remain, 0 double-wraps, all 1782
+driver tests still collect. Recorded as [[feedback_driver_test_compile_timeout_scaling]].
+
 ## Explicitly rejected / deferred
 
 - Streaming `DirIterator` holding a live `DIR*` (`Destructible`) — deferred; the

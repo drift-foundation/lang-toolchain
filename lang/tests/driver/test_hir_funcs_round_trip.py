@@ -18,6 +18,8 @@ import pytest
 from lang.driftc.parser import stdlib_root
 from lang.driftc.packages.provisional_dmir_v0 import decode_hir_funcs
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 STDLIB_DIR = ROOT / "stdlib"
 
@@ -39,7 +41,7 @@ def _build_stdlib_package(tmp_path: Path) -> Path:
 		 "--package-target", "test-target",
 		 "--emit-package", str(pkg_path),
 		 "--test-build-only"],
-		cwd=ROOT, capture_output=True, text=True, timeout=180,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(180),
 	)
 	assert res.returncode == 0, f"stdlib build failed: {res.stderr[:500]}"
 	return pkg_path

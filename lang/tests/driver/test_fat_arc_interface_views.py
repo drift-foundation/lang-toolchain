@@ -29,6 +29,8 @@ import pytest
 from lang.driftc.driftc import main as driftc_main
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 def _write_file(path: Path, text: str) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +60,7 @@ def _compile_and_run(tmp_path: Path, source: str) -> tuple[int, str, str]:
 		args += ["--stdlib-root", str(root)]
 	rc = driftc_main(args)
 	assert rc == 0, "driftc compile failed — see captured stderr for diagnostics"
-	res = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+	res = subprocess.run([str(exe)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	return res.returncode, res.stdout, res.stderr
 
 
@@ -937,7 +939,7 @@ def test_pkg_fat_arc_as_interface_helper_body_pulled_in(stdlib_package, tmp_path
 	)
 
 	res = subprocess.run(
-		cmd, cwd=str(repo_root), capture_output=True, text=True, timeout=120,
+		cmd, cwd=str(repo_root), capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode == 0, (
 		f"package-consumer compile + link failed -- if stderr says "

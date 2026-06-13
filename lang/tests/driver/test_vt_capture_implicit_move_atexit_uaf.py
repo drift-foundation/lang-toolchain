@@ -66,7 +66,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from lang.codegen.llvm.test_utils import valgrind_cmd
+from lang.codegen.llvm.test_utils import valgrind_cmd, sanitizer_timeout
 
 
 def _env_true(name: str) -> bool:
@@ -142,7 +142,7 @@ def _compile(tmp_path: Path) -> tuple[int, str, Path]:
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	return res.returncode, res.stderr, out
 
@@ -191,7 +191,7 @@ def test_vt_capture_explicit_move_no_atexit_uaf(tmp_path: Path) -> None:
 	res = subprocess.run(
 		valgrind_cmd("--error-exitcode=97", "--leak-check=full",
 			"--errors-for-leak-kinds=all", str(out)),
-		capture_output=True, text=True, timeout=60,
+		capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	if res.returncode == 97:
 		raise AssertionError(
@@ -273,7 +273,7 @@ def test_bare_hvar_at_callback_capture_call_arg_is_rejected(tmp_path: Path) -> N
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	assert res.returncode != 0, (
 		"bare HVar at callback-capture by-value call arg was "

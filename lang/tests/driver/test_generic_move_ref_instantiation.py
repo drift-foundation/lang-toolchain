@@ -95,6 +95,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -114,7 +116,7 @@ def _compile(tmp_path: Path, source: str, with_entry: bool) -> subprocess.Comple
 	else:
 		cmd += ["--dev", str(src)]
 	return subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 
 
@@ -184,7 +186,7 @@ def test_v1_generic_move_on_ref_instantiation(tmp_path: Path) -> None:
 		f"{res_entry.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 42, (
 		f"V1 binary exited {run.returncode}; expected 42 (x.n after move-then-drop)"
 	)
@@ -257,7 +259,7 @@ def test_v2_app_shape_result_or_throw_with_ref_t(tmp_path: Path) -> None:
 		f"{res.stderr[-1500:]}"
 	)
 	out_bin = tmp_path / "main_bin"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V2 binary exited {run.returncode}; expected 0"
 	)

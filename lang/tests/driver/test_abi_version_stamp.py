@@ -23,6 +23,8 @@ from lang.driftc.module_lowered import flatten_modules
 from lang.language_runtime import build_runtime_archive, runtime_archive_variant
 from lang.tests.support.module_packages import mk_module
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -315,7 +317,7 @@ def test_std_time_rejected_on_32_bit_target(tmp_path: Path) -> None:
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=60,
+		timeout=sanitizer_timeout(60),
 	)
 	assert res.returncode == 1, res.stderr
 	payload = json.loads(res.stdout)
@@ -356,7 +358,7 @@ def test_direct_microsecond_clock_intrinsic_rejected_on_32_bit_target(tmp_path: 
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=60,
+		timeout=sanitizer_timeout(60),
 	)
 	assert res.returncode == 1, res.stderr
 	payload = json.loads(res.stdout)
@@ -398,7 +400,7 @@ def test_non_time_program_still_compiles_for_32_bit_target(tmp_path: Path) -> No
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=60,
+		timeout=sanitizer_timeout(60),
 	)
 	assert res.returncode == 0, res.stderr or res.stdout
 	assert json.loads(res.stdout)["exit_code"] == 0
@@ -710,7 +712,7 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 	assert strings_bin, "strings(1) not available"
 	strings_result = subprocess.run(
 		[strings_bin, str(bin_path)],
-		capture_output=True, text=True, timeout=10,
+		capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	assert strings_result.returncode == 0
 	found = [line for line in strings_result.stdout.splitlines() if f"driftc {DRIFTC_VERSION}" in line]
@@ -813,7 +815,7 @@ fn main() nothrow -> Int {
 	}
 	nm_out = subprocess.run(
 		[nm_bin, str(out_bin)],
-		capture_output=True, text=True, timeout=10,
+		capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	assert nm_out.returncode == 0, f"nm failed: {nm_out.stderr}"
 	hits = []

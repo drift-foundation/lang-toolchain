@@ -45,6 +45,8 @@ from pathlib import Path
 
 from lang.driftc.driftc import main as driftc_main
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 def _run(argv: list[str]) -> tuple[int, str]:
 	buf = io.StringIO()
@@ -88,7 +90,7 @@ def _emit_consume_run(tmp_path: Path, name: str, lib_src: str, app_src: str) -> 
 	])
 	assert rc == 0, f"consumer compile against published package failed:\n{out}"
 	assert out_bin.exists(), f"no consumer binary produced:\n{out}"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=30)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
 	return run.returncode
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from lang.codegen.llvm.test_utils import host_word_bits
+from lang.codegen.llvm.test_utils import host_word_bits, sanitizer_timeout
 from lang.driftc.driftc import main as driftc_main
 from lang.drift.crypto import compute_ed25519_kid
 from tools.deploy.steps.bundle import bundle_compiler, bundle_docs_and_examples, bundle_runtime_archives
@@ -230,7 +230,7 @@ def test_deployed_wrapper_uses_bundled_python_dependencies_only(
 		capture_output=True,
 		env=run_env,
 		cwd=tmp_path,
-		timeout=180,
+		timeout=sanitizer_timeout(180),
 	)
 	assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
 	assert out_ir.exists()

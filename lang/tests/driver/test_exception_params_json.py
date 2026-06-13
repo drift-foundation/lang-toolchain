@@ -54,6 +54,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -81,7 +83,7 @@ def _build_run(tmp_path: Path, source: str) -> tuple[int, str, str]:
 		cwd=ROOT,
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 		env=env,
 	)
 	if build.returncode != 0:
@@ -90,7 +92,7 @@ def _build_run(tmp_path: Path, source: str) -> tuple[int, str, str]:
 		[str(out_bin)],
 		capture_output=True,
 		text=True,
-		timeout=30,
+		timeout=sanitizer_timeout(30),
 	)
 	return (run.returncode, run.stdout, run.stderr)
 

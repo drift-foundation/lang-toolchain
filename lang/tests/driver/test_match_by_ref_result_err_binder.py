@@ -68,6 +68,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -91,12 +93,12 @@ def _compile_and_run(
 	if extra_args:
 		cmd.extend(extra_args)
 	cc = subprocess.run(
-		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	if cc.returncode != 0 or not out_bin.exists():
 		return cc.returncode, cc.stderr, -1, ""
 	run = subprocess.run(
-		[str(out_bin)], capture_output=True, text=True, timeout=10,
+		[str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10),
 	)
 	return cc.returncode, cc.stderr, run.returncode, run.stderr
 
@@ -284,7 +286,7 @@ pub fn open(host: String) nothrow -> core.Result<Int, inner.MyError> {
 			"--source-content-id", _TEST_SCI,
 			"--emit-package", str(dmp), "--test-build-only",
 		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	assert res.returncode == 0, f"producer build failed:\n{res.stderr[-1500:]}"
 
@@ -351,12 +353,12 @@ def test_v4_cross_pkg_result_err_binder_field_projection(tmp_path: Path) -> None
 			str(src),
 			"-o", str(out_bin),
 		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	assert cc.returncode == 0, (
 		f"V4 cross-pkg compile failed:\n{cc.stderr[-1500:]}"
 	)
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V4 cross-pkg run returned {run.returncode}, expected 0"
 	)
@@ -413,12 +415,12 @@ def test_v5_cross_pkg_binder_passed_by_borrow_to_fn(tmp_path: Path) -> None:
 			str(src),
 			"-o", str(out_bin),
 		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=60,
+		cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(60),
 	)
 	assert cc.returncode == 0, (
 		f"V5 cross-pkg compile failed:\n{cc.stderr[-1500:]}"
 	)
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	assert run.returncode == 0, (
 		f"V5 cross-pkg run returned {run.returncode}, expected 0"
 	)

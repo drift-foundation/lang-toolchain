@@ -50,6 +50,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -97,11 +99,11 @@ def _compile_and_run(tmp_path: Path, source: str, *, stem: str) -> tuple[int, st
 		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
 		 "--stdlib-root", str(ROOT / "stdlib"),
 		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=120,
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	if res.returncode != 0:
 		return res.returncode, res.stderr, None
-	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=10)
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return res.returncode, res.stderr, run.returncode
 
 

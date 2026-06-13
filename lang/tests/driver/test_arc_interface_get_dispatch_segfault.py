@@ -94,6 +94,8 @@ from pathlib import Path
 
 import pytest
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -124,14 +126,14 @@ def _compile_and_run(
 			str(src_path),
 			"-o", str(out_bin),
 		],
-		cwd=str(ROOT), capture_output=True, text=True, timeout=120,
+		cwd=str(ROOT), capture_output=True, text=True, timeout=sanitizer_timeout(120),
 	)
 	if cc.returncode != 0 or not out_bin.exists():
 		return cc.returncode, cc.stderr, "", -1
 
 	run = subprocess.run(
 		[str(out_bin)],
-		capture_output=True, text=True, timeout=30,
+		capture_output=True, text=True, timeout=sanitizer_timeout(30),
 	)
 	return cc.returncode, cc.stderr, run.stderr, run.returncode
 

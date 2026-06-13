@@ -81,6 +81,8 @@ import pytest
 
 from lang.driftc.parser import stdlib_root
 
+from lang.codegen.llvm.test_utils import sanitizer_timeout
+
 
 _INLINE_REPRO = """\
 module m;
@@ -138,10 +140,10 @@ def _compile_and_run(src_text: str, tmp_path: Path) -> tuple[subprocess.Complete
 	if root:
 		cmd.insert(-2, "--stdlib-root")
 		cmd.insert(-2, str(root))
-	cres = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=120)
+	cres = subprocess.run(cmd, cwd=Path(__file__).parents[3], capture_output=True, text=True, timeout=sanitizer_timeout(120))
 	if cres.returncode != 0:
 		return cres, None
-	rres = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=10)
+	rres = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
 	return cres, rres
 
 

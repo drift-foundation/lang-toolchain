@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import host_word_bits
+from lang.codegen.llvm.test_utils import host_word_bits, sanitizer_timeout
 from lang.driftc.driftc import main as driftc_main
 from lang.drift.crypto import compute_ed25519_kid
 
@@ -260,7 +260,7 @@ def _run_driftc_subprocess(
 		[sys.executable, str(runner), str(core_trust_path)] + extra_argv,
 		capture_output=True,
 		text=True,
-		timeout=120,
+		timeout=sanitizer_timeout(120),
 		env=env,
 	)
 
