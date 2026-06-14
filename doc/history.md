@@ -1,5 +1,48 @@
 # Drift development history
 
+## 2026-06-13 (0.33.33: recursive value-type validation on the package/consumer path; ABI stays 17)
+- **Recursive value-type validation was skipped on the normal CLI/package build
+  path (LANGUAGE_BUG).** A directly-recursive value type with no indirection
+  (`pub variant IrType { ... TArray(elem: IrType) ... }`) was accepted on the
+  normal CLI path, and a consumer that loaded a package *and* embedded the type by
+  value crashed with a raw Python `RecursionError` in the stage-2 drop analysis —
+  no source location, indistinguishable from a compiler bug. Root cause: the
+  normal CLI pass-1 block ran `validate_interface_schemas()` but **not**
+  `validate_no_recursive_value_types()`, and `compile_stubbed_funcs()` skips that
+  validator whenever `pass1_state` is supplied — which is exactly the two-pass path
+  taken once any package is loaded (`if loaded_pkgs:`). So the single-file `--dev`
+  and `--emit-package` paths (helper path, `pass1_state is None`) caught it while
+  the package-consumer path silently skipped it. **No auto-boxing was added —
+  explicit indirection remains the v1 contract.**
+- **Fix (validation):** pass-1 now calls `validate_no_recursive_value_types()`
+  immediately after `validate_interface_schemas()`. It runs once, after nominal
+  instances are linked; the existing `if type_diags:` error gate aborts the build
+  before the emit/consumer branches, so it never double-runs with the still-present
+  helper-path call (preserved for the test entrypoint).
+- **Fix (defense-in-depth):** the stage-2 `string_arc` pass had two recursive
+  type-graph traversals — `_type_needs_drop` and `_is_nullsafe_drop` — that
+  memoized results but had **no in-progress cycle guard** (the cache is written
+  only after recursion returns, so it cannot break a self-loop). Both now carry an
+  in-progress set so a malformed/legacy package metadata carrying a recursive type
+  cannot blow the Python stack; the back-edge returns the correct least-fixpoint
+  seed (`False` for the drop-need OR, `True` for the nullsafe AND) so a cycle that
+  contains a `String` is still classified droppable. The second site
+  (`_is_nullsafe_drop`) was surfaced by the focused stage-2 regression below.
+- **Regressions:** `lang/tests/driver/test_recursive_value_type_package_path.py`
+  pins the app's true cross-module shape (`ir` defines the variant, `main` imports
+  and embeds `ir.IrType` by value) on the loaded-package two-pass path: rejection
+  with a structured `E_RECURSIVE_VALUE_TYPE` diagnostic (code/phase/severity/
+  positive line+column asserted via `--json`); a construct-and-match variant that
+  forces the drop traversal must reject without any `RecursionError`/Traceback;
+  emit rejected with no `.dmp`; and an `Array<Self>` indirection control compiles.
+  `lang/tests/stage2/test_string_arc_recursive_type_guard.py` hand-builds a
+  malformed self-looping `TypeTable`, runs `insert_string_arc()` directly, and
+  asserts no `RecursionError` plus the String-in-cycle droppability fixpoint.
+- **Versioning:** behavior-changing compiler fix → `DRIFTC_VERSION` 0.33.32 →
+  **0.33.33**. **No runtime/ABI change — `DRIFT_RT_ABI_VERSION` stays 17** (no
+  boundary symbol, layout, or calling-convention change; no runtime-archive
+  rebuild).
+
 ## 2026-06-11 (0.33.32: reload substrate — SIGUSR1, VT-safe `std.fs.read_dir`, runtime ABI 17)
 - **`ProcessSignal::User1` (SIGUSR1).** `SIGUSR1` is added to the existing
   signalfd mask, so a Drift program can `conc.await_signal()` on it

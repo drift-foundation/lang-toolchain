@@ -96,6 +96,13 @@ def insert_string_arc(
 			if isinstance(_ins, M.AddrOfLocal):
 				addr_taken_locals.add(_ins.local)
 	_type_needs_drop_cache: Dict[TypeId, bool] = {}
+	# Cycle guard for _type_needs_drop: tids whose by-value field closure is
+	# still being computed up the call stack. A directly-recursive value type is
+	# rejected earlier by validate_no_recursive_value_types, but malformed/legacy
+	# package metadata could still present one here; this prevents a raw Python
+	# RecursionError on the back-edge (the result cache is written only AFTER the
+	# recursion returns, so it cannot break the cycle on its own).
+	_type_needs_drop_active: Set[TypeId] = set()
 	block_order = sorted(func.blocks.keys())
 
 	used_ids: Set[str] = set(local_types.keys())
@@ -117,45 +124,57 @@ def insert_string_arc(
 		cached = _type_needs_drop_cache.get(tid)
 		if cached is not None:
 			return cached
-		td = type_table.get(tid)
-		if hasattr(type_table, "is_destructible"):
-			try:
-				if bool(type_table.is_destructible(tid)):
-					_type_needs_drop_cache[tid] = True
-					return True
-			except Exception:
-				pass
-		if td.kind is TypeKind.SCALAR:
-			needs = td.name == "String"
-			_type_needs_drop_cache[tid] = needs
-			return needs
-		if td.kind is TypeKind.REF:
+		if tid in _type_needs_drop_active:
+			# Cycle back-edge: a directly-recursive value type should have been
+			# rejected by validate_no_recursive_value_types; break the edge as
+			# False (the correct least-fixpoint seed for the OR-of-fields below)
+			# instead of recursing forever into a Python RecursionError. Do NOT
+			# cache this provisional False — the outer in-progress call computes
+			# and caches the real result.
+			return False
+		_type_needs_drop_active.add(tid)
+		try:
+			td = type_table.get(tid)
+			if hasattr(type_table, "is_destructible"):
+				try:
+					if bool(type_table.is_destructible(tid)):
+						_type_needs_drop_cache[tid] = True
+						return True
+				except Exception:
+					pass
+			if td.kind is TypeKind.SCALAR:
+				needs = td.name == "String"
+				_type_needs_drop_cache[tid] = needs
+				return needs
+			if td.kind is TypeKind.REF:
+				_type_needs_drop_cache[tid] = False
+				return False
+			if td.kind is TypeKind.ERROR:
+				_type_needs_drop_cache[tid] = True
+				return True
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				_type_needs_drop_cache[tid] = True
+				return True
+			if td.kind is TypeKind.STRUCT:
+				inst = type_table.get_struct_instance(tid)
+				if inst is not None:
+					needs = any(_type_needs_drop(fty) for fty in inst.field_types)
+					_type_needs_drop_cache[tid] = needs
+					return needs
+			if td.kind is TypeKind.VARIANT:
+				inst = type_table.get_variant_instance(tid)
+				if inst is not None:
+					needs = any(_type_needs_drop(fty) for arm in inst.arms for fty in arm.field_types)
+					_type_needs_drop_cache[tid] = needs
+					return needs
+			if td.param_types:
+				needs = any(_type_needs_drop(pt) for pt in td.param_types)
+				_type_needs_drop_cache[tid] = needs
+				return needs
 			_type_needs_drop_cache[tid] = False
 			return False
-		if td.kind is TypeKind.ERROR:
-			_type_needs_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.ARRAY and td.param_types:
-			_type_needs_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.STRUCT:
-			inst = type_table.get_struct_instance(tid)
-			if inst is not None:
-				needs = any(_type_needs_drop(fty) for fty in inst.field_types)
-				_type_needs_drop_cache[tid] = needs
-				return needs
-		if td.kind is TypeKind.VARIANT:
-			inst = type_table.get_variant_instance(tid)
-			if inst is not None:
-				needs = any(_type_needs_drop(fty) for arm in inst.arms for fty in arm.field_types)
-				_type_needs_drop_cache[tid] = needs
-				return needs
-		if td.param_types:
-			needs = any(_type_needs_drop(pt) for pt in td.param_types)
-			_type_needs_drop_cache[tid] = needs
-			return needs
-		_type_needs_drop_cache[tid] = False
-		return False
+		finally:
+			_type_needs_drop_active.discard(tid)
 
 	# __borrow_tmp: Stage 1 (borrow_materialize.py) normally materialises rvalue
 	# borrows into __tmp_borrow* locals that get scope-based drops.  This Stage 2
@@ -180,11 +199,29 @@ def insert_string_arc(
 
 	_dtor_fns = getattr(type_table, "destructor_fns", None) or {}
 	_nullsafe_drop_cache: Dict[TypeId, bool] = {}
+	# Cycle guard for _is_nullsafe_drop, mirroring _type_needs_drop_active: the
+	# result cache is written only after recursion returns, so it cannot break a
+	# self-loop in a malformed/legacy recursive value type on its own.
+	_nullsafe_drop_active: Set[TypeId] = set()
 
 	def _is_nullsafe_drop(tid: TypeId) -> bool:
 		cached = _nullsafe_drop_cache.get(tid)
 		if cached is not None:
 			return cached
+		if tid in _nullsafe_drop_active:
+			# Cycle back-edge: a directly-recursive value type should have been
+			# rejected before stage 2. True is the identity for the `all()`
+			# aggregation below, so the back-edge does not alter the real
+			# (non-cyclic) verdict; recurse no further (avoids RecursionError).
+			# Not cached — the outer in-progress call caches the real result.
+			return True
+		_nullsafe_drop_active.add(tid)
+		try:
+			return _is_nullsafe_drop_body(tid)
+		finally:
+			_nullsafe_drop_active.discard(tid)
+
+	def _is_nullsafe_drop_body(tid: TypeId) -> bool:
 		if tid in _dtor_fns:
 			_nullsafe_drop_cache[tid] = False
 			return False

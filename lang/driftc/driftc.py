@@ -11296,6 +11296,16 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	type_diags: list[Diagnostic] = []
 	if type_table is not None:
 		type_checker.validate_interface_schemas(diagnostics=type_diags)
+		# Recursive value-type cycle detector on the NORMAL CLI pass-1 path. The
+		# helper path in compile_stubbed_funcs only runs this when pass1_state is
+		# None (the test entrypoint); the two-pass CLI path supplies pass1_state,
+		# so without this call a directly-recursive value type (e.g.
+		# `variant T { A(x: T) }`) was accepted on package/consumer builds and a
+		# downstream by-value layout/drop traversal blew the Python stack with a
+		# raw RecursionError. Runs once here, after nominal instances are linked
+		# and before the emit/consumer branches; errors below abort the build
+		# (the `if type_diags:` gate) so it never double-runs with the helper path.
+		type_checker.validate_no_recursive_value_types(diagnostics=type_diags)
 	module_ids: dict[object, int] = {None: 0}
 	signatures_by_id_all: Mapping[FunctionId, FnSignature] = ChainMap(
 		external_signatures_by_id,
