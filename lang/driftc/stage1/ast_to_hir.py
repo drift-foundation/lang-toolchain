@@ -1059,7 +1059,13 @@ class AstToHIR:
 			if isinstance(e, H.HTryExpr):
 				renamed_arms: list[H.HTryExprArm] = []
 				for arm in e.arms:
-					renamed_block, after_map = _rename_block(arm.block, mapping)
+					# A catch binder that shadows the match-arm binder name takes
+					# precedence inside its handler — drop it from the rename map so
+					# its uses are NOT rewritten toward the match binder.
+					arm_map = mapping
+					if arm.binder is not None and arm.binder in mapping:
+						arm_map = {k: v for k, v in mapping.items() if k != arm.binder}
+					renamed_block, after_map = _rename_block(arm.block, arm_map)
 					renamed_result = _rename_expr(arm.result, after_map) if arm.result is not None else None
 					renamed_arms.append(
 						H.HTryExprArm(
@@ -1200,6 +1206,40 @@ class AstToHIR:
 			if isinstance(st, H.HLoop):
 				body_block, _ = _rename_block(st.body, mapping)
 				return (H.HLoop(body=body_block), mapping)
+			if isinstance(st, H.HTry):
+				# Statement-form try/catch introduces nested scopes; rename binder
+				# uses in the try body AND each catch handler.  A catch binder that
+				# shadows the match-arm binder name takes precedence inside that
+				# handler (drop it from the mapping there).  Lets inside do not leak
+				# to following siblings, so the outer mapping is returned unchanged.
+				new_body, _ = _rename_block(st.body, mapping)
+				new_catches = []
+				for c in st.catches:
+					c_map = mapping
+					if c.binder is not None and c.binder in mapping:
+						c_map = {k: v for k, v in mapping.items() if k != c.binder}
+					new_block, _ = _rename_block(c.block, c_map)
+					new_catches.append(replace(c, block=new_block))
+				return (replace(st, body=new_body, catches=new_catches), mapping)
+			if isinstance(st, H.HBlock):
+				# Bare `{ … }` block introduces a nested scope; rename binder uses
+				# inside.  Lets inside do not leak to following siblings.
+				new_block, _ = _rename_block(st, mapping)
+				return (new_block, mapping)
+			if hasattr(H, "HUnsafeBlock") and isinstance(st, getattr(H, "HUnsafeBlock")):
+				new_inner, _ = _rename_block(st.block, mapping)
+				return (replace(st, block=new_inner), mapping)
+			if isinstance(st, H.HAssert):
+				# `assert(cond, msg)` — both operands are expressions that may
+				# reference the arm binder.
+				return (
+					replace(
+						st,
+						cond=_rename_expr(st.cond, mapping),
+						msg=_rename_expr(st.msg, mapping) if st.msg is not None else None,
+					),
+					mapping,
+				)
 			return (st, mapping)
 
 		def _rename_block(block: H.HBlock, mapping: dict[str, str]) -> tuple[H.HBlock, dict[str, str]]:
