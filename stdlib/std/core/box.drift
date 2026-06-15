@@ -1,0 +1,132 @@
+// vim: set noexpandtab: -*- indent-tabs-mode: t -*-
+module std.core.box;
+
+// Implementation file for `Box<T>` — the unique-ownership, single
+// heap-allocation value indirection.  User-facing access is
+// `core.Box<T>` / `core.box(value)` via the `std.core` re-export in
+// `core.drift`; do not import `std.core.box` directly from user code.
+//
+// **Semantic contract: unique ownership.**  Exactly one owner holds
+// one heap-owned `T`.  Access is EXPLICIT only — `get` / `get_mut` /
+// `take`.  There is no auto-deref, no implicit unboxing, and no
+// `Box<T> -> T` coercion.  `Box<T>` is move-only: it is not `Copy`,
+// not `Share`, not `ConstShare`, not `Frozen`.  Dropping a `Box<T>`
+// runs `T`'s destructor (if any) exactly once, then frees the cell.
+//
+// **Primary use:** breaking recursive value-type layout cycles when
+// shared ownership is not wanted (`Arc<T>` is the shared-ownership
+// sibling).  The cycle break is STRUCTURAL: `RawBuffer<T>` stores a
+// type-erased `Ptr<Byte>` with `T` only as a phantom parameter, so a
+// `variant V { ... A(x: Box<V>) ... }` has no by-value self-edge.
+//
+// **Frozen v1 layout (16 bytes).**  `Box<T>` is one `RawBuffer<T>`
+// (`{ ptr, cap }`, cap always 1).  This layout is committed: a future
+// change (e.g. to a bare 8-byte pointer) is a package/ABI review item,
+// not a silent internal tweak, because a package that embeds `Box<T>`
+// by value bakes this layout into its emitted metadata.
+//
+// This module is dependency-light by design: it imports only
+// `std.mem` (for the backing `RawBuffer` and the raw memory ops).  It
+// deliberately does NOT import `std.core` — `std.core` re-exports this
+// submodule and the `Destructible` impl lives there, so an import in
+// this direction would close a cycle.
+//
+// `Box.buf` is private (no `pub` field): the factory and accessors all
+// live in this module and access it directly, so user code can never
+// forge a `Box<T>` from an arbitrary buffer.
+export {
+	Box,
+	box
+};
+
+import std.mem as mem;
+
+/// Unique-ownership owner of exactly one heap-allocated `T`.
+///
+/// Construct via `box(value)`.  Access the owned value explicitly with
+/// `get` (`&T`), `get_mut` (`&mut T`), or `take` (move the `T` out,
+/// consuming the box).  Move-only; dropping runs `T`'s destructor and
+/// frees the cell.
+///
+/// **See also:** `box`, `Box.get`, `Box.get_mut`, `Box.take`,
+/// `core.Arc` (the shared-ownership sibling).
+pub struct Box<T> {
+	buf: mem.RawBuffer<T>
+}
+
+/// Constructs a fresh `Box<T>` owning `value` in a new heap cell.
+///
+/// **Parameters:**
+/// - `value` — the owned value to box.
+///
+/// **Returns:** a `Box<T>` wrapping a new single-element allocation.
+///
+/// **Allocation failure:** the backing allocator (`drift_alloc_array`)
+/// aborts the process on out-of-memory, so `box` never returns a null
+/// or invalid `Box<T>` — same policy as `core.arc`.
+///
+/// **See also:** `Box`, `Box.take`.
+pub fn box<T>(var value: T) nothrow -> Box<T> {
+	unsafe {
+		var buf = mem.alloc_uninit<type T>(1);
+		mem.write<type T>(&mut buf, 0, move value);
+		return Box<type T>(buf = move buf);
+	}
+}
+
+implement<T> Box<T> {
+	/// Borrow the owned value.  The returned `&T` is tied to the borrow
+	/// of `self`; there is no implicit deref — access is always explicit.
+	pub fn get(self: &Box<T>) nothrow -> &T {
+		unsafe {
+			return mem.ptr_at_ref<type T>(&self.buf, 0);
+		}
+	}
+
+	/// Mutably borrow the owned value.  The returned `&mut T` is tied to
+	/// the exclusive borrow of `self`.
+	pub fn get_mut(self: &mut Box<T>) nothrow -> &mut T {
+		unsafe {
+			return mem.ptr_at_mut<type T>(&mut self.buf, 0);
+		}
+	}
+
+	/// Consume the box, moving the owned `T` out and freeing the cell.
+	///
+	/// Uses the canonical `mem.replace`-with-`rawbuffer_empty` drain so
+	/// the consumed `self`'s scope-exit destructor sees a null cell and
+	/// is a no-op (no double free, no double drop of `T`).
+	pub fn take(var self: Box<T>) nothrow -> T {
+		unsafe {
+			var old = mem.replace<type mem.RawBuffer<T>>(&mut self.buf, mem.rawbuffer_empty<type T>());
+			var v = mem.read<type T>(&mut old, 0);
+			mem.dealloc<type T>(move old);
+			return move v;
+		}
+	}
+
+}
+
+/// Internal helper — NOT part of the public `core.Box` API surface.
+///
+/// True iff this box has already been drained.  Read-only — it cannot mutate or
+/// destroy anything, so even if reached it is harmless (it returns `false` for
+/// any box user code can hold: `take` consumes its receiver, so a drained box is
+/// never user-observable).
+///
+/// Visibility note: Drift v1 has only `pub` (visible to every importer; the
+/// `export` list controls only re-export) and module-private (not callable from
+/// a sibling module).  This helper MUST be `pub` so `Destructible::destroy` in
+/// core.drift can call it (a non-intrinsic generic destructor needs the private
+/// `Box.buf`, and a `box → std.core` import to host the impl locally is a
+/// rejected re-export cycle).  It is deliberately kept OUT of the `export` block,
+/// so it is absent from `core.*` — `core.Box`'s supported API is exactly
+/// `box`/`get`/`get_mut`/`take`/`destroy`.  (It remains reachable only by
+/// deliberately importing the internal `std.core.box` submodule — the same
+/// backdoor that exists for any stdlib submodule's `pub` symbols; harmless here
+/// because the helper is read-only.)
+pub fn _box_is_drained<T>(self: &Box<T>) nothrow -> Bool {
+	unsafe {
+		return mem.ptr_is_null<type Byte>(mem.rawbuffer_ptr<type T>(&self.buf));
+	}
+}

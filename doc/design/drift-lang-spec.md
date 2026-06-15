@@ -1326,6 +1326,26 @@ not abuse `share`.
   (e.g., `Arc<Mutex<Array<T>>>` for cross-thread mutation) and
   share the `Arc`.
 
+#### Unique-ownership indirection: `core.Box<T>`
+
+`core.Box<T>` is the **unique-ownership** heap indirection — the
+value-semantic sibling of the shared `Arc<T>`. It owns exactly one
+heap-allocated `T`; it is **move-only** (not `Copy`, not `Share`, not
+`ConstShare`, not `Frozen`). Access is **explicit only** — `box.get()`
+(`&T`), `box.get_mut()` (`&mut T`), `box.take()` (consume the box and
+move the `T` out) — there is no auto-deref, no implicit unboxing, and
+no `Box<T> → T` coercion. Dropping a `Box<T>` runs `T`'s destructor (if
+any) exactly once, then frees the cell.
+
+`Box<T>` is the sanctioned way to **break a recursive value-type layout
+cycle** when shared ownership is not wanted: `variant Tree { Leaf,
+Node(child: Box<Tree>) }` has finite size because the heap pointer is an
+indirection, whereas `Node(child: Tree)` is rejected
+(`E_RECURSIVE_VALUE_TYPE`). The recursive-value diagnostic suggests
+`Box<Self>` as the primary fix (`Arc<Self>` for the shared case). Reach
+for `Arc<T>` instead only when you need *aliasing* — multiple owners of
+the same value.
+
 ### 5.11. RAII and the `Destructible` trait
 
 Destruction is expressed as a trait:

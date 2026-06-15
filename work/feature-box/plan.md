@@ -1,10 +1,50 @@
-# Box<T> — Initial Public Design — Implementation Plan
+# Box<T> — Public Design — AS-BUILT record
 
-**Status:** DRAFT — for static review. No implementation, no git operations performed.
-**Author context:** drafted against driftc 0.33.32 / runtime ABI 17.
+**Status:** AS-BUILT — implemented and validated in driftc **0.33.34 / runtime ABI 17**
+(no ABI change). All four prior review findings incorporated.
 **Motivation:** give users a first-class, value-semantic heap indirection that breaks
 recursive value-type layout cycles (the `E_RECURSIVE_VALUE_TYPE` case) without the
 `Array<T>`-of-one workaround, and without sharing semantics (unlike `Arc<T>`).
+
+**What shipped:** `core.Box<T>` (`stdlib/std/core/box.drift`), `core.box(value)`,
+`get`/`get_mut`/`take`; plain generic `Destructible` (no intrinsic); `Box<Self>`
+recursive-diagnostic suggestion; full regression suite `lang/tests/driver/test_box.py`
+(19 tests) + the stage-2 guard + the updated recursive-value diagnostic test. **19/19
+Box tests pass, leaks=0** (incl. two memchecks: a local `Box<String>`/nested and a
+cross-package `Box<String>` destruction).
+
+> **AS-BUILT deviations from the draft (see §2/§3.4/§4/§12):**
+> 1. The `Destructible` impl lives in `core.drift` (where the trait is declared; a
+>    `box → std.core` import to host it locally is a **rejected re-export cycle**
+>    `std.core → std.core.box → std.core`). It implements destruction via the public
+>    consuming **`take`** path: `if box_mod._box_is_drained(&self) return; val v =
+>    self.take(); drop_value(v)`. `take` drains its consumed `self` via `mem.replace`
+>    and the runtime re-drops that drained box at `take`'s scope exit, re-entering
+>    `destroy`; the `_box_is_drained` guard short-circuits that re-drop so `take` is
+>    never called on a null cell. (A bare `take`+`drop_value` destroy — without the
+>    guard — **aborts**: empirically confirmed `rc=134`, the drained re-drop reads a
+>    null buffer. The recursion is an artifact of destroying *through another consuming
+>    method*, not a language bug; dropping a consumed `var self` at scope exit is
+>    normal RAII.)
+> 2. `box.drift` imports **only `std.mem`** (as the draft intended). `drop_value` is
+>    called from `core.drift` (which already imports `arc`), not from `box.drift`.
+> 3. **Supported public surface is exactly `box`/`get`/`get_mut`/`take`/`destroy`.**
+>    The destructor needs one helper, `_box_is_drained<T>(&Box<T>) → Bool` — a
+>    `pub`, **read-only**, free function in `box.drift` that is **NOT in the `export`
+>    block**, so it is absent from `core.*`. Drift v1 has only two visibility levels:
+>    `pub` (visible to every importer; the `export` list gates only *re-export*) and
+>    module-private (NOT callable from a sibling module — empirically a non-`pub`
+>    helper fails to compile from `core.drift`). So a sibling-only "visible to
+>    core.drift but not user code" **cannot be expressed**; per review finding 2
+>    resolution #2, the helper is an explicit non-exported internal: not on the
+>    `core.Box` API surface (`core._box_is_drained` does not resolve — negative
+>    regression `test_box_internal_drained_helper_not_in_public_surface`), read-only
+>    so harmless even via the `std.core.box` direct-import backdoor (which exists for
+>    any stdlib submodule's `pub` symbols). The earlier `_drop_in_place(&mut self)`
+>    helper — which *mutated* and left a half-dead box (a real footgun) — was REMOVED.
+>    A future `pub(module)`/friend visibility would let `_box_is_drained` be hidden.
+> 4. Q1 (receiver) resolved: the consuming receiver spelling is `var self`. Q3 (OOM)
+>    resolved: `drift_alloc_array` aborts on OOM, so `box` aborts (no `Result`).
 
 ---
 
@@ -241,13 +281,11 @@ trait is introduced — access is exclusively through `get`/`get_mut`/`take`.
   `Box<SomethingDestructible>` drops the inner value before freeing the cell. A
   `Box<Box<U>>` drops the inner box (which drops `U` and frees) before freeing the
   outer cell — recursion terminates because each layer is a distinct allocation.
-- **Allocation failure:** `box<T>` returns `Box<T>` (not `Result`), so it must follow
-  the same OOM policy as `arc<T>` / `mem.alloc_uninit`. **Open question Q3:** confirm
-  `mem.alloc_uninit`'s failure mode (abort-on-OOM vs null return). If `alloc_uninit`
-  aborts on OOM, `box` inherits abort (consistent with `arc`). If it can return a
-  null buffer, either (a) `box` aborts explicitly on null for v1 (documented), or
-  (b) a separate `try_box<T>(value) -> Result<Box<T>, AllocError>` is added later
-  (non-breaking). Recommend (a) for v1 to match `arc` and keep the signature clean.
+- **Allocation failure (RESOLVED):** `box<T>` returns `Box<T>` (not `Result`).
+  `mem.alloc_uninit` lowers to `drift_alloc_array`, which **aborts the process on
+  OOM** (`array_runtime.c:67-70`), so `box` aborts on allocation failure (consistent
+  with `arc`) and never returns an invalid `Box`. A `try_box<T>(value) -> Result<...>`
+  could be added later (non-breaking) but is out of scope for v1.
 
 ---
 
@@ -488,10 +526,13 @@ Allocation-failure (per Q3 resolution):
   intrinsic**. The speculative `BOX_DESTROY` fallback is removed; the prior "primary
   scope risk" no longer stands. (Only revisit if a regression proves a generic-
   destructor compiler defect — a separate bug, not Box scope.)
-- **Q3 — OOM policy:** `mem.alloc_uninit` failure mode (abort vs null). Drives whether
-  `box` aborts (recommended v1, matches `arc`) or a `try_box -> Result` is offered.
-- **Q4 — suggestion wording:** `Box<Self>` vs `Arc<Self>` vs both in
-  `_suggest_indirection`. Recommend `Box<Self>` primary.
+- **Q3 — RESOLVED:** `mem.alloc_uninit` lowers to `drift_alloc_array`, which
+  **aborts on OOM** (`array_runtime.c:67-70`). So `box` aborts on allocation failure
+  (matches `arc`); no `try_box -> Result` in v1, and the `box<T>(value) -> Box<T>`
+  signature stands (no `Result` wrapper).
+- **Q4 — RESOLVED:** `_suggest_indirection` recommends `Box<Self>` primary
+  (`Optional<Box<Self>>` for the Optional case); the message lists
+  `(Box, Arc, &, Array, RawPtr)`.
 - **Q5 — `take` ergonomics:** is `take` sufficient, or is an in-place
   `replace(&mut Box<T>, T) -> T` also wanted in v1? Recommend deferring (non-breaking
   later add).

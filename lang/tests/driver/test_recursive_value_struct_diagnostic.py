@@ -16,9 +16,10 @@ shape (or its absence).
 Diagnostic contract (per the spec on the issue dir):
 - error code: `E_RECURSIVE_VALUE_TYPE`
 - the message names the offending struct/variant
+- the primary indirection suggestion is `Box<Self>` — the unique-ownership
+  value indirection (`core.Box`); `Arc<Self>` is the shared-ownership alternative
 - when the offending field is `Optional<Self>`, the suggestion preserves
-  the `Optional` wrapper: `Optional<Arc<Self>>`, not bare `Arc<Self>`
-- otherwise the primary suggestion is `Arc<...>`
+  the `Optional` wrapper: `Optional<Box<Self>>`, not bare `Box<Self>`
 """
 from __future__ import annotations
 
@@ -198,12 +199,15 @@ def test_self_recursive_variant_rejected(tmp_path: Path) -> None:
 	assert _diag_has_real_span(res.stderr)
 
 
-def test_optional_recursive_field_rejected_and_suggests_optional_arc(tmp_path: Path) -> None:
+def test_optional_recursive_field_rejected_and_suggests_optional_box(tmp_path: Path) -> None:
 	"""`struct Node(next: Optional<Node>, value: Int)` must be rejected,
 	and the suggestion must preserve the user's Optional wrapper:
-	`Optional<Arc<Node>>` rather than bare `Arc<Node>`.
+	`Optional<Box<Node>>` rather than bare `Box<Node>`.
 
-	Pins one diagnostic, the Optional<Arc<...>> suggestion, and a real
+	The primary indirection suggestion is `Box<Self>` — the unique-ownership
+	value indirection (`core.Box`) — not `Arc<Self>` (shared ownership).
+
+	Pins one diagnostic, the Optional<Box<...>> suggestion, and a real
 	source span.
 	"""
 	src = (
@@ -215,10 +219,14 @@ def test_optional_recursive_field_rejected_and_suggests_optional_arc(tmp_path: P
 	assert res.returncode != 0
 	assert "Traceback" not in res.stderr
 	assert _has_recursive_value_type_error(res.stderr)
-	# Diagnostic suggestion must mention Optional<Arc<...>>, preserving
-	# the user's Optional wrapper around the Arc indirection.
-	assert "Optional<Arc<" in res.stderr, (
-		f"expected diagnostic to suggest Optional<Arc<...>>, got:\n{res.stderr[-1200:]}"
+	# Diagnostic suggestion must mention Optional<Box<...>>, preserving
+	# the user's Optional wrapper around the Box indirection (Box primary,
+	# not Arc).
+	assert "Optional<Box<" in res.stderr, (
+		f"expected diagnostic to suggest Optional<Box<...>>, got:\n{res.stderr[-1200:]}"
+	)
+	assert "Optional<Arc<" not in res.stderr, (
+		f"suggestion should be Box, not Arc, for value recursion:\n{res.stderr[-1200:]}"
 	)
 	assert _recursive_value_type_diag_count(res.stderr) == 1
 	assert _diag_has_real_span(res.stderr)

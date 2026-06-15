@@ -686,6 +686,7 @@ class ResolverContext:
 	format_infer_failure: Callable[..., tuple[str, list[str]]]
 	lambda_can_throw: Callable[..., bool]
 	record_iface_coercion: Callable[[object, TypeId], None] | None
+	record_ptr_to_ref_coercion: Callable[[object, TypeId], None] | None
 	iface_assignable: Callable[[TypeId, TypeId], bool] | None
 	allow_unsafe: bool
 	unsafe_context: bool
@@ -786,6 +787,7 @@ class CallResolverContext:
 	format_infer_failure: Callable[..., tuple[str, list[str]]]
 	lambda_can_throw: Callable[..., bool]
 	record_iface_coercion: Callable[[object, TypeId], None] | None
+	record_ptr_to_ref_coercion: Callable[[object, TypeId], None] | None
 	iface_assignable: Callable[[TypeId, TypeId], bool] | None
 	allow_unsafe: bool
 	unsafe_context: bool
@@ -795,6 +797,13 @@ class CallResolverContext:
 	record_instantiation: Callable[[int | None, FunctionId | None, tuple[TypeId, ...], tuple[TypeId, ...]], None] | None = None
 	alloc_callsite_id: Callable[[], int] | None = None
 	alloc_node_id: Callable[[object], None] | None = None
+	# Binding ids of the CURRENT function's typed-catch binders (`catch E(e)`),
+	# snapshotted at ctx-construction time.  Used ONLY to provenance-specialize
+	# the variant-payload type-mismatch diagnostic (E_TYPED_CATCH_BINDER_NOT_VALUE)
+	# at the constructor boundary; never affects acceptance.  Function-scoped on
+	# the checker side (reset at check_function entry) so binding-id reuse across
+	# functions cannot leak catch provenance.
+	typed_catch_binder_ids: frozenset[int] | None = None
 
 
 def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
@@ -805,7 +814,7 @@ def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
 
 def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
+	base = dict(type_table=ctx.type_table, diagnostics=ctx.diagnostics, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, signatures_by_id=ctx.signatures_by_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, uint64_ty=ctx.uint64_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, tc_diag=ctx.tc_diag, fixed_width_allowed=ctx.fixed_width_allowed, reject_zst_array=ctx.reject_zst_array, pretty_type_name=ctx.pretty_type_name, format_ctor_signature_list=ctx.format_ctor_signature_list, instantiate_sig=ctx.instantiate_sig, enforce_struct_requires=ctx.enforce_struct_requires, ensure_field_visible=ctx.ensure_field_visible, visible_modules_for_free_call=ctx.visible_modules_for_free_call, struct_base_and_args=ctx.struct_base_and_args, receiver_compat=ctx.receiver_compat, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, module_ids_by_name=ctx.module_ids_by_name, visibility_provenance=ctx.visibility_provenance, infer=ctx.infer, format_infer_failure=ctx.format_infer_failure, lambda_can_throw=ctx.lambda_can_throw, record_iface_coercion=ctx.record_iface_coercion, record_ptr_to_ref_coercion=ctx.record_ptr_to_ref_coercion, iface_assignable=ctx.iface_assignable, allow_unsafe=ctx.allow_unsafe, unsafe_context=ctx.unsafe_context, allow_unsafe_without_block=ctx.allow_unsafe_without_block, allow_rawbuffer=ctx.allow_rawbuffer, type_expr=ctx.type_expr, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id)
 	base.update(overrides)
 	return ResolverContext(**base)
 
@@ -1162,8 +1171,20 @@ def resolve_variant_ctor(
 				return ctx.unknown_ty
 			return ctx.type_table.new_array(elem)
 		origin_mod = expr.module_id or schema.module_id
+		_name_qualified = getattr(expr, "module_id", None) is not None
 		alias_def = ctx.type_table.lookup_type_alias(module_id=origin_mod, name=name)
-		if alias_def is None:
+		if alias_def is None and not _name_qualified and origin_mod is not None and not (
+			ctx.type_table.get_struct_base(module_id=origin_mod, name=str(name))
+			or ctx.type_table.get_variant_base(module_id=origin_mod, name=str(name))
+			or ctx.type_table.get_interface_base(module_id=origin_mod, name=str(name))
+		):
+			# Bare-name precedence: a module-local nominal of this name outranks a
+			# UNIQUE cross-module re-export alias (e.g. a user `struct Box` must not
+			# be hijacked by `std.core`'s re-exported `core.Box`).  The unique-alias
+			# fallback fires ONLY when the name was unqualified AND origin_mod
+			# declares neither an exact alias nor an exact struct/variant/interface
+			# nominal of this name.  Explicitly-qualified names already resolved
+			# through their qualifier's `lookup_type_alias` above.
 			unique_alias = ctx.type_table.find_unique_type_alias_by_name(name=name)
 			if unique_alias is not None:
 				origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias
@@ -1245,6 +1266,18 @@ def resolve_variant_ctor(
 						)
 					return type_cache[key]
 				return ctx.type_table.ensure_instantiated(base_id, arg_ids)
+			# Symmetric struct path: a generic STRUCT field type (e.g.
+			# `Pair<Int, String>`) must be INSTANTIATED with its supplied args,
+			# not returned as the bare generic base.  Without this the arm field
+			# type collapsed to `Pair<Unknown, Unknown>` (the base's unbound
+			# typevars), which the strict constructor boundary then (correctly)
+			# saw as a mismatch against the concrete argument.  Template form when
+			# an arg still carries a typevar (the field references the enclosing
+			# variant's own type params), else a concrete instantiation.
+			if base_id in ctx.type_table.struct_bases:
+				if any(ctx.type_table.has_typevar(a) for a in arg_ids):
+					return ctx.type_table.ensure_struct_template(base_id, arg_ids)
+				return ctx.type_table.ensure_struct_instantiated(base_id, arg_ids)
 		return base_id
 
 	param_type_ids: list[TypeId] = []
@@ -1436,6 +1469,129 @@ def resolve_variant_ctor(
 	return VariantCtorResolveResult(inst_return, list(inst_res.inst_params), ctor_arg_field_indices, ctor_args)
 
 
+def _ctor_dealias_zero_param(type_table, ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
+	"""Canonical constructor-argument dealiasing (file-level; shared by the
+	struct and variant constructor boundaries).  Strips zero-parameter type
+	aliases and recurses structurally through refs / arrays / struct & variant
+	instantiations so a `_ctor_same_type` comparison sees the underlying nominal
+	identity rather than an alias spelling.  Lifted verbatim out of the struct
+	constructor's former local closure so the variant boundary can reuse the
+	exact same equivalence semantics (LANGUAGE_BUG: typed-catch `Error` binder
+	accepted where a native error struct field is required)."""
+	seen = _seen if _seen is not None else set()
+	td = type_table.get(ty)
+	if td.kind is TypeKind.REF and td.param_types:
+		inner = _ctor_dealias_zero_param(type_table, td.param_types[0], _seen=seen)
+		return type_table.ensure_ref_mut(inner) if td.ref_mut else type_table.ensure_ref(inner)
+	if td.kind is TypeKind.ARRAY and td.param_types:
+		elem = _ctor_dealias_zero_param(type_table, td.param_types[0], _seen=seen)
+		return type_table.new_array(elem)
+	inst = type_table.get_struct_instance(ty)
+	if inst is not None and inst.type_args:
+		new_args = [_ctor_dealias_zero_param(type_table, arg, _seen=seen) for arg in inst.type_args]
+		return type_table.ensure_struct_template(inst.base_id, new_args) if any(type_table.has_typevar(arg) for arg in new_args) else type_table.ensure_struct_instantiated(inst.base_id, new_args)
+	vinst = type_table.get_variant_instance(ty)
+	if vinst is not None and vinst.type_args:
+		new_args = [_ctor_dealias_zero_param(type_table, arg, _seen=seen) for arg in vinst.type_args]
+		return type_table.ensure_variant_template(vinst.base_id, new_args) if any(type_table.has_typevar(arg) for arg in new_args) else type_table.ensure_variant_instantiated(vinst.base_id, new_args)
+	mod = td.module_id
+	name = td.name
+	alias_def = type_table.lookup_type_alias(module_id=mod, name=name)
+	if alias_def is None:
+		return ty
+	alias_params, alias_target, _loc = alias_def
+	if alias_params:
+		return ty
+	alias_key = (mod, name)
+	if alias_key in seen:
+		return ty
+	resolved = resolve_opaque_type(alias_target, type_table, module_id=mod, type_params=None, allow_generic_base=True)
+	return _ctor_dealias_zero_param(type_table, resolved, _seen=seen | {alias_key})
+
+
+def _ctor_same_type(type_table, a: TypeId, b: TypeId, *, current_module_name: str, default_package: Optional[str], module_packages: dict) -> bool:
+	"""Canonical constructor-argument type equivalence (file-level; shared by
+	the struct and variant constructor boundaries).  Compares two TypeIds after
+	zero-parameter alias dealiasing, package-normalizing the type keys, with the
+	same typevar-name and nothrow->throwing-fn subtyping carve-outs the struct
+	constructor has always used.  Reused at the variant payload boundary so a
+	type the inferencer unified loosely (e.g. a typed-catch `Error` projection
+	view) but that is NOT the field type is rejected instead of miscompiled."""
+	a = _ctor_dealias_zero_param(type_table, a)
+	b = _ctor_dealias_zero_param(type_table, b)
+	if a == b:
+		return True
+	key_a = normalize_type_key(
+		type_key_from_typeid(type_table, a),
+		module_name=current_module_name,
+		default_package=default_package,
+		module_packages=module_packages,
+	)
+	key_b = normalize_type_key(
+		type_key_from_typeid(type_table, b),
+		module_name=current_module_name,
+		default_package=default_package,
+		module_packages=module_packages,
+	)
+	if type_table.has_typevar(a) or type_table.has_typevar(b):
+		if key_a.name == key_b.name and len(key_a.args) == len(key_b.args):
+			return True
+	if key_a == key_b:
+		return True
+	# nothrow fn is assignable to throwing fn type (subtyping):
+	# Fn(...) nothrow -> R  ⊆  Fn(...) -> R
+	if key_a.name == "fn" and key_b.name == "fn" and key_a.args == key_b.args and key_a.fn_throws is False and key_b.fn_throws is True:
+		return True
+	return False
+
+
+def _ctor_canonical_identity(type_table, a: TypeId, b: TypeId, *, current_module_name: str, default_package: Optional[str], module_packages: dict) -> bool:
+	"""Strict canonical type IDENTITY: zero-parameter alias dealiasing, exact
+	TypeId match, and normalized TypeKey equality — and NOTHING else.
+
+	Unlike `_ctor_same_type` this deliberately omits the same-named-typevar and
+	nothrow->throwing-fn subtyping carve-outs: those are valid *assignment*
+	relaxations for ordinary constructor arguments, but unsafe where pointee
+	IDENTITY is required (the unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T`
+	coercion — a `Ptr<fn() nothrow>` is NOT the same referent as a `&fn()`, and
+	`&mut` aliasing must not be widened by a subtype relation)."""
+	a = _ctor_dealias_zero_param(type_table, a)
+	b = _ctor_dealias_zero_param(type_table, b)
+	if a == b:
+		return True
+	key_a = normalize_type_key(
+		type_key_from_typeid(type_table, a),
+		module_name=current_module_name,
+		default_package=default_package,
+		module_packages=module_packages,
+	)
+	key_b = normalize_type_key(
+		type_key_from_typeid(type_table, b),
+		module_name=current_module_name,
+		default_package=default_package,
+		module_packages=module_packages,
+	)
+	return key_a == key_b
+
+
+def _ctor_whole_binder_binding_id(arg: object) -> int | None:
+	"""Return the binding id of `arg` when it is a *whole-binder* use of a
+	local — a bare var, a projection-free place, or a `move` of one — and None
+	otherwise (a field projection like `e.msg` is NOT a whole-binder use).
+	Used only to provenance-specialize the variant-payload mismatch diagnostic
+	for typed-catch binders; never affects acceptance."""
+	node = arg
+	if isinstance(node, H.HMove):
+		node = node.subject
+	if isinstance(node, H.HPlaceExpr):
+		if node.projections:
+			return None
+		node = node.base
+	if isinstance(node, H.HVar):
+		return node.binding_id
+	return None
+
+
 def resolve_struct_ctor(
 	ctx: ResolverContext,
 	*,
@@ -1526,62 +1682,9 @@ def resolve_struct_ctor(
 		ctx.diagnostics.append(ctx.tc_diag(message=f"internal: struct '{struct_name}' schema/type mismatch", severity="error", span=span))
 		return StructCtorResolveResult(struct_id, field_types, [], list(arg_exprs))
 	def _dealias_zero_param(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
-		seen = _seen if _seen is not None else set()
-		td = ctx.type_table.get(ty)
-		if td.kind is TypeKind.REF and td.param_types:
-			inner = _dealias_zero_param(td.param_types[0], _seen=seen)
-			return ctx.type_table.ensure_ref_mut(inner) if td.ref_mut else ctx.type_table.ensure_ref(inner)
-		if td.kind is TypeKind.ARRAY and td.param_types:
-			elem = _dealias_zero_param(td.param_types[0], _seen=seen)
-			return ctx.type_table.new_array(elem)
-		inst = ctx.type_table.get_struct_instance(ty)
-		if inst is not None and inst.type_args:
-			new_args = [_dealias_zero_param(arg, _seen=seen) for arg in inst.type_args]
-			return ctx.type_table.ensure_struct_template(inst.base_id, new_args) if any(ctx.type_table.has_typevar(arg) for arg in new_args) else ctx.type_table.ensure_struct_instantiated(inst.base_id, new_args)
-		vinst = ctx.type_table.get_variant_instance(ty)
-		if vinst is not None and vinst.type_args:
-			new_args = [_dealias_zero_param(arg, _seen=seen) for arg in vinst.type_args]
-			return ctx.type_table.ensure_variant_template(vinst.base_id, new_args) if any(ctx.type_table.has_typevar(arg) for arg in new_args) else ctx.type_table.ensure_variant_instantiated(vinst.base_id, new_args)
-		mod = td.module_id
-		name = td.name
-		alias_def = ctx.type_table.lookup_type_alias(module_id=mod, name=name)
-		if alias_def is None:
-			return ty
-		alias_params, alias_target, _loc = alias_def
-		if alias_params:
-			return ty
-		alias_key = (mod, name)
-		if alias_key in seen:
-			return ty
-		resolved = resolve_opaque_type(alias_target, ctx.type_table, module_id=mod, type_params=None, allow_generic_base=True)
-		return _dealias_zero_param(resolved, _seen=seen | {alias_key})
+		return _ctor_dealias_zero_param(ctx.type_table, ty, _seen=_seen)
 	def _same_type(a: TypeId, b: TypeId) -> bool:
-		a = _dealias_zero_param(a)
-		b = _dealias_zero_param(b)
-		if a == b:
-			return True
-		key_a = normalize_type_key(
-			type_key_from_typeid(ctx.type_table, a),
-			module_name=ctx.current_module_name,
-			default_package=ctx.default_package,
-			module_packages=ctx.module_packages,
-		)
-		key_b = normalize_type_key(
-			type_key_from_typeid(ctx.type_table, b),
-			module_name=ctx.current_module_name,
-			default_package=ctx.default_package,
-			module_packages=ctx.module_packages,
-		)
-		if ctx.type_table.has_typevar(a) or ctx.type_table.has_typevar(b):
-			if key_a.name == key_b.name and len(key_a.args) == len(key_b.args):
-				return True
-		if key_a == key_b:
-			return True
-		# nothrow fn is assignable to throwing fn type (subtyping):
-		# Fn(...) nothrow -> R  ⊆  Fn(...) -> R
-		if key_a.name == "fn" and key_b.name == "fn" and key_a.args == key_b.args and key_a.fn_throws is False and key_b.fn_throws is True:
-			return True
-		return False
+		return _ctor_same_type(ctx.type_table, a, b, current_module_name=ctx.current_module_name, default_package=ctx.default_package, module_packages=ctx.module_packages)
 	_struct_field_spec = CtorFieldSpec(field_names=tuple(field_names))
 	_struct_pre = ctor_call_issues(len(arg_exprs), tuple(kw.name for kw in kw_pairs), _struct_field_spec, ctor_label="struct", span=span)
 	_struct_pre_codes = {i.code for i in _struct_pre}
@@ -5385,6 +5488,107 @@ def resolve_call_expr(
 						expr.args[_idx] = _rewritten
 						if _idx < len(arg_types):
 							arg_types[_idx] = _field_ty
+			# Strict post-instantiation validation of every variant payload
+			# against its INSTANTIATED field type.  `resolve_variant_ctor`
+			# only checks arity/field-shape and accepts whatever
+			# `instantiate_sig` unified; the `&T → T` rewrite above is the
+			# sole coercion applied here.  So any argument whose (rewritten)
+			# type is not the field type — but which the inferencer accepted
+			# loosely — must be rejected now, before `record_call_info`,
+			# rather than miscompiled downstream.  The motivating defect: a
+			# typed-catch binder `e` has canonical type `Error` (a read-only
+			# projection view over the in-flight error), but
+			# `Result<T,E>::Err(e)` expects the native struct `E`; the checker
+			# accepted the `Error → E` mismatch and LLVM's ConstructVariant
+			# pointer autoload masked it into a double `drift_string_release`
+			# (SIGSEGV on unwind).  Uses the SAME canonical equivalence helper
+			# as the struct constructor's per-field gate, without duplicating
+			# its callback-wrap / interface-boxing fallbacks (neither is
+			# reachable-and-recorded for variant payloads in v1): a concrete
+			# value requiring interface boxing is rejected until variant
+			# interface coercion is implemented with recorded HIR metadata,
+			# while an exact interface-typed value still matches by type and is
+			# accepted.
+			_tcb_ids = ctx.typed_catch_binder_ids
+			for _vidx, _varg in enumerate(expr.args):
+				if _vidx >= len(expr.ctor_arg_field_indices):
+					break
+				_vfield_idx = expr.ctor_arg_field_indices[_vidx]
+				if _vfield_idx < 0 or _vfield_idx >= len(inst_params):
+					continue
+				_vfield_ty = inst_params[_vfield_idx]
+				_varg_ty = arg_types[_vidx] if _vidx < len(arg_types) else None
+				if _varg_ty is None:
+					continue
+				if _varg_ty == ctx.unknown_ty or _vfield_ty == ctx.unknown_ty:
+					continue
+				if ctx.type_table.has_typevar(_varg_ty) or ctx.type_table.has_typevar(_vfield_ty):
+					continue
+				if _ctor_same_type(ctx.type_table, _varg_ty, _vfield_ty, current_module_name=current_module_name, default_package=default_package, module_packages=module_packages):
+					continue
+				# Narrow, explicit, unsafe-only raw-pointer -> reference coercion:
+				# a `Ptr<T>` may initialize a `&T` / `&mut T` payload slot ONLY
+				# when the canonical POINTEES are identical AND we are in an unsafe
+				# context (the `mem.ptr_*` intrinsics return raw pointers used to
+				# seed reference fields, e.g. `Optional<&T>::Some(mem.ptr_at_ref(
+				# ...))`).  Recorded as an explicit, audited coercion — NOT a
+				# Ptr/Ref type equivalence; both are `ptr` values so lowering
+				# needs no transform.  This rejects `&T -> &mut T` (have is REF,
+				# not RAW_PTR), `Ptr<A> -> &B` (pointees differ), and unrelated
+				# refs (fall through to the mismatch diagnostic below).
+				_have_def = ctx.type_table.get(_varg_ty)
+				_want_def = ctx.type_table.get(_vfield_ty)
+				if (
+					_have_def.kind is TypeKind.RAW_PTR
+					and _want_def.kind is TypeKind.REF
+					and _have_def.param_types
+					and _want_def.param_types
+					and ctx.unsafe_context
+					and ctx.record_ptr_to_ref_coercion is not None
+					and _ctor_canonical_identity(ctx.type_table, _have_def.param_types[0], _want_def.param_types[0], current_module_name=current_module_name, default_package=default_package, module_packages=module_packages)
+				):
+					ctx.record_ptr_to_ref_coercion(_varg, _vfield_ty)
+					continue
+				# Provenance-specialize ONLY when the argument is a whole-value
+				# use (no field projection) of a CURRENT-function typed-catch
+				# binder whose type is the `Error` projection view: such a
+				# binder can never be the native error struct, so the remedy is
+				# to reconstruct from its fields.  Any other mismatch gets the
+				# ordinary variant-payload diagnostic.
+				_binder_bid = _ctor_whole_binder_binding_id(_varg)
+				_is_catch_binder = (
+					_tcb_ids is not None
+					and _binder_bid is not None
+					and _binder_bid in _tcb_ids
+					and ctx.type_table.get(_varg_ty).kind is TypeKind.ERROR
+				)
+				if _is_catch_binder:
+					_binder_name = _varg.name if isinstance(_varg, H.HVar) else (_varg.subject.base.name if isinstance(_varg, H.HMove) and isinstance(_varg.subject, H.HPlaceExpr) else (_varg.base.name if isinstance(_varg, H.HPlaceExpr) else "e"))
+					diagnostics.append(_tc_diag(
+						message=(
+							f"a typed-catch binder cannot be used as a `{ctx.type_table.get(_vfield_ty).name}` value: "
+							f"the binder is a read-only view over the in-flight error, not the error struct itself "
+							f"— reconstruct it from its fields (e.g. `{qm.member}(field = {_binder_name}.field)`)"
+						),
+						severity="error",
+						span=getattr(_varg, "loc", Span()),
+						code="E_TYPED_CATCH_BINDER_NOT_VALUE",
+					))
+				else:
+					diagnostics.append(_tc_diag(
+						message=(
+							f"variant '{qm.member}' payload type mismatch "
+							f"(have {ctx.type_table.get(_varg_ty).name}, expected {ctx.type_table.get(_vfield_ty).name})"
+						),
+						severity="error",
+						span=getattr(_varg, "loc", Span()),
+						code="E_VARIANT_CTOR_ARG_TYPE",
+					))
+				# Record the variant type so downstream sees a sane result type
+				# (the error diagnostic already aborts the compile); returning
+				# None here would cascade into unrelated free-fn / method
+				# resolution noise.
+				return record_expr(expr, inst_return)
 			ctor_mod = getattr(qm.base_type_expr, "module_id", None) or getattr(qm.base_type_expr, "module_alias", None) or current_module_name
 			# Pre-2026-05-15: this site rewrote `expr.fn` to
 			# `H.HVar(name=qm.member, module_id=ctor_mod)` "to satisfy

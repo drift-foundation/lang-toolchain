@@ -1953,7 +1953,16 @@ class TypeTable:
 		# Expand aliases here so instantiations do not degrade to Unknown.
 		origin_mod = expr.module_id or module_id
 		alias_def = self.lookup_type_alias(module_id=origin_mod, name=name)
-		if alias_def is None and expr.module_id is None:
+		if alias_def is None and expr.module_id is None and origin_mod is not None and not (
+			self.get_struct_base(module_id=origin_mod, name=str(name))
+			or self.get_variant_base(module_id=origin_mod, name=str(name))
+			or self.get_interface_base(module_id=origin_mod, name=str(name))
+		):
+			# Bare-name precedence: a module-local nominal outranks a UNIQUE
+			# cross-module re-export alias (a user-declared `Box` must not be
+			# hijacked by `std.core`'s re-exported `core.Box`).  Consult the
+			# unique-alias fallback ONLY when the name was unqualified AND
+			# origin_mod declares neither an exact alias nor an exact nominal.
 			unique_alias = self.find_unique_type_alias_by_name(name=name)
 			if unique_alias is not None:
 				origin_mod, alias_params_u, alias_target_u, alias_loc_u = unique_alias

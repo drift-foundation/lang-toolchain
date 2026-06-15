@@ -4,6 +4,7 @@ import std.core.hash as hash;
 import std.core.copy as copy_mod;
 import std.core.shareable as shareable;
 import std.core.arc as arc_mod;
+import std.core.box as box_mod;
 import std.core.const_arc as const_arc_mod;
 import std.mem as mem;
 import lang.atomic as atomic;
@@ -96,6 +97,7 @@ export {
 export { std.core.copy.* };
 export { std.core.shareable.* };
 export { std.core.arc.* };
+export { std.core.box.* };
 export { std.core.const_arc.* };
 
 // Note: `Copy` is now defined in `stdlib/std/core/copy.drift`
@@ -772,6 +774,32 @@ implement<T> Destructible for arc_mod.Arc<T> {
 implement<T> shareable.Share for arc_mod.Arc<T> {
 	pub fn share(self: &arc_mod.Arc<T>) nothrow -> arc_mod.Arc<T> {
 		return self.clone();
+	}
+}
+
+/// `Box<T>` is the unique-ownership single-allocation value indirection
+/// (the non-shared sibling of `Arc<T>`).  An ORDINARY generic
+/// `Destructible` impl — a plain method, NOT an `@intrinsic` (no
+/// `BOX_DESTROY`).  Destruction goes through the public consuming `take`
+/// path; the read-only `Box._is_drained` guard short-circuits the
+/// re-drop of the box that `take` leaves drained (the ownership ledger
+/// suppresses re-dropping a destructor's own `self`, which `take` has
+/// consumed, at the Return).
+implement<T> Destructible for box_mod.Box<T> {
+	pub fn destroy(var self: box_mod.Box<T>) nothrow -> Void {
+		// Destruction goes through the public consuming `take` path: it moves the
+		// owned `T` out and frees the cell via `mem.replace`-with-`rawbuffer_empty`
+		// (never a partial move of `self.buf`).  `take` leaves its consumed `self`
+		// drained, which the runtime re-drops at `take`'s scope exit and re-enters
+		// this destructor; the `_is_drained` guard short-circuits that re-drop so we
+		// never call `take` on a null cell.  `self` is consumed by `take`, so the
+		// ownership ledger does not re-drop the destructor's own `self`.
+		if box_mod._box_is_drained<type T>(&self) {
+			return;
+		}
+		val value = self.take();
+		arc_mod.drop_value<type T>(move value);
+		return;
 	}
 }
 

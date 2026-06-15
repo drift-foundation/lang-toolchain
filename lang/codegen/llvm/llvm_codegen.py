@@ -1734,6 +1734,15 @@ class _FuncBuilder:
 	param_value_types: Dict[str, str] = field(default_factory=dict)
 	const_values: Dict[str, int] = field(default_factory=dict)
 	aliases: Dict[str, str] = field(default_factory=dict)
+	# Resolved SSA names (post `_map_value`) produced by `VariantGetFieldAddr`
+	# in THIS function.  The `ConstructVariant` payload autoload (which loads a
+	# struct value out of a pointer argument when the LLVM types mismatch) is
+	# permitted ONLY for these provenance-proven field addresses — the
+	# borrowed-match reconstruction `match v { V::N(n) => V::N(n) }`.  An
+	# arbitrary pointer arriving where a struct value is expected is a broken
+	# lowering contract (it previously masked the typed-catch `Error`-into-
+	# native-field defect into a double free), so it raises instead.
+	variant_field_addr_ptrs: set[str] = field(default_factory=set)
 	# Locals whose address is taken via AddrOfLocal. These locals must be
 	# represented as real storage (alloca + load/store) because references
 	# require stable pointer identity.
@@ -3377,6 +3386,23 @@ class _FuncBuilder:
 						# i1→i8 conversion.  Pinned by
 						# `lang/tests/codegen/test_variant_borrowed_match_construct_int_payload.py`.
 						if _is_ptr_type(have):
+							# Narrow lowering contract: the autoload is authorized
+							# ONLY for a pointer proven to originate from a
+							# VariantGetFieldAddr (the borrowed-match reconstruct
+							# `match v { V::N(n) => V::N(n) }`).  An arbitrary
+							# address-producing value reaching here where a struct
+							# value is expected is the masked-bug signature (a
+							# typed-catch `Error` projection view fed into a native
+							# struct field); the checker now rejects that, so any
+							# residual occurrence is a broken contract, not source.
+							if arg_val not in self.variant_field_addr_ptrs:
+								raise AssertionError(
+									f"LLVM codegen v1: internal lowering-contract failure: "
+									f"ConstructVariant field {idx} received pointer {arg_val} "
+									f"(have {have}, expected {want_llty}) that is not a "
+									f"VariantGetFieldAddr result; refusing to autoload an "
+									f"unprovenanced address as a struct value"
+								)
 							loaded = self._fresh("autoload")
 							self.lines.append(f"  {loaded} = load {store_llty}, ptr {arg_val}")
 							self.value_map[arg] = loaded
@@ -3531,6 +3557,10 @@ class _FuncBuilder:
 			self.aliases[instr.dest] = raw
 			dest = self._map_value(instr.dest)
 			self.value_types[dest] = "ptr"
+			# Record provenance: this resolved pointer originates from a
+			# VariantGetFieldAddr, so it is an authorized source for the
+			# ConstructVariant payload autoload (borrowed-match reconstruct).
+			self.variant_field_addr_ptrs.add(dest)
 		elif isinstance(instr, StructGetField):
 			if self.type_table is None:
 				raise NotImplementedError("LLVM codegen v1: StructGetField requires a TypeTable")

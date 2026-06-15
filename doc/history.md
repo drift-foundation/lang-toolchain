@@ -1,5 +1,53 @@
 # Drift development history
 
+## 2026-06-13 (0.33.34: `core.Box<T>` — unique-ownership value indirection; ABI stays 17)
+- **`core.Box<T>` (new `std.core.box`).** A unique-ownership, single
+  heap-allocation value indirection — the non-shared sibling of `Arc<T>`. Public
+  API is exactly `Box<T>`, `box(value)`, and the explicit accessors `get` (`&T`),
+  `get_mut` (`&mut T`), `take` (consume the box, move the `T` out). **Explicit
+  access only:** no auto-deref, no implicit unboxing, no `Box<T> → T` coercion.
+- **Move-only.** `Box<T>` is not `Copy` (it has a `Destructible` impl), and has no
+  `Share`/`ConstShare`/`Frozen` impl — so it cannot be copied, shared, or const-
+  shared. (A `Box<T>` field also keeps its container out of the `Frozen`/`ConstShare`
+  world.)
+- **Breaks recursive value-type layout cycles.** `variant V { ... A(x: Box<V>) ... }`
+  is accepted while the direct `A(x: V)` is still rejected — *structurally*: `Box<T>`
+  is one `mem.RawBuffer<T>`, which stores a type-erased `Ptr<Byte>` with `T` only as a
+  phantom parameter, so the recursive-value detector's by-value walk never reaches
+  `T`. No name allowlist, no detector logic change.
+- **Implementation: pure stdlib, no new runtime boundary, ABI stays 17.** Built
+  entirely from existing `std.mem` intrinsics (`alloc_uninit`/`write`/`read`/
+  `ptr_at_ref`/`ptr_at_mut`/`replace`/`rawbuffer_empty`/`dealloc`) — no `drift_*`
+  symbol added. The backing allocator (`drift_alloc_array`) aborts the process on
+  OOM, so `box` never returns an invalid `Box` (same policy as `arc`). `box` and
+  `take` and the destructor all use the **`mem.replace`-with-`rawbuffer_empty`**
+  drain before read/drop/dealloc — never a partial move of `self.buf` out of `self`.
+- **Destructor: a plain generic `Destructible` method, no `BOX_DESTROY` intrinsic.**
+  The `Destructible::destroy` impl lives in `core.drift` (where the trait is declared;
+  a `box → std.core` import to host it locally is a rejected re-export cycle) and
+  destroys via the public consuming `take` path: `if box._box_is_drained(&self)
+  return; val v = self.take(); drop_value(v)`. `take` drains its consumed `self`; the
+  runtime re-drops that drained box at `take`'s scope exit and re-enters `destroy`, so
+  the read-only `_box_is_drained` guard short-circuits the re-drop (a bare
+  `take`+`drop_value` destroy aborts — the drained re-drop reads a null cell). The
+  supported public surface is exactly `box`/`get`/`get_mut`/`take`/`destroy`:
+  `_box_is_drained` is a read-only helper that is `pub` (Drift v1 has no sibling-only
+  visibility) but **non-exported**, so it is absent from `core.*` and harmless. The
+  earlier `_drop_in_place(&mut self)` helper — which mutated and left a half-dead box
+  — was removed.
+- **Diagnostics now recommend `Box<Self>` primarily.** The recursive-value-type
+  diagnostic lists `(Box, Arc, &, Array, RawPtr)` as indirections and suggests
+  `Box<Self>` (preserving `Optional<Box<Self>>` for the `Optional` case) — Box is the
+  value-semantic fix; `Arc<Self>` remains the shared-ownership alternative.
+- **Regressions:** `lang/tests/driver/test_box.py` — construct/get/get_mut/take/run;
+  move-only (use-after-move, copy-by-assignment); not Share/Frozen/ConstShare;
+  use-after-take rejected; nested-droppable drop-counter (exactly once); valgrind
+  leak/UAF clean (construct/drop, take, nested); `Box<Self>` recursive variant
+  accepted + direct still rejected; structural-not-by-name; no auto-deref/coercion;
+  and package emit→consume round-trip (by-value field + recursive-broken variant).
+- **Versioning:** new stdlib surface → `DRIFTC_VERSION` 0.33.33 → **0.33.34**. **No
+  ABI change — `DRIFT_RT_ABI_VERSION` stays 17.**
+
 ## 2026-06-13 (0.33.33: recursive value-type validation on the package/consumer path; ABI stays 17)
 - **Recursive value-type validation was skipped on the normal CLI/package build
   path (LANGUAGE_BUG).** A directly-recursive value type with no indirection

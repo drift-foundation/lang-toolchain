@@ -51,6 +51,7 @@ from lang.driftc.call_contract import intrinsic_call_issues, CtorFieldSpec, ctor
 # new arity is a one-line change in `call_resolver._CALLBACK_ARITY_MAX`
 # plus the matching `IntrinsicKind` enum rows.
 from lang.driftc.checker.call_resolver import _CALLBACK_ARITIES as _CB_ARITIES  # noqa: E402
+from lang.driftc.checker.call_resolver import _ctor_canonical_identity as _ctor_canonical_identity  # noqa: E402
 _CALLBACK_INTRINSIC_KINDS = frozenset(
 	getattr(IntrinsicKind, f"CALLBACK{n}") for n in _CB_ARITIES
 ) | frozenset(
@@ -339,6 +340,7 @@ class HIRToMIR:
 		param_types: Mapping[str, TypeId] | None = None,
 		expr_types: Mapping[int, TypeId] | None = None,
 		iface_coercions: Mapping[int, TypeId] | None = None,
+		ptr_to_ref_coercions: Mapping[int, TypeId] | None = None,
 		signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
 		current_fn_id: FunctionId | None = None,
 		type_param_subst: Mapping[str, TypeId] | None = None,
@@ -423,6 +425,12 @@ class HIRToMIR:
 						self._type_param_subst[name] = arg
 		self._expr_types: dict[int, TypeId] = dict(expr_types) if expr_types else {}
 		self._iface_coercions: dict[int, TypeId] = dict(iface_coercions) if iface_coercions else {}
+		# Explicit, unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T` constructor-arg
+		# conversions recorded by the checker (node_id -> target ref TypeId).
+		# Consumed in `lower_expr`: the source pointer is lowered, the contract is
+		# re-asserted, and the value is re-bound (AssignSSA) as a reference-typed
+		# SSA value — explicit downstream, no representation change.
+		self._ptr_to_ref_coercions: dict[int, TypeId] = dict(ptr_to_ref_coercions) if ptr_to_ref_coercions else {}
 		self._call_info_by_callsite_id: dict[int, CallInfo] = (
 			dict(call_info_by_callsite_id) if call_info_by_callsite_id else {}
 		)
@@ -2209,6 +2217,61 @@ class HIRToMIR:
 					)
 				)
 				self._local_types[dest] = target_iface
+				return dest
+			if getattr(expr, "node_id", None) in self._ptr_to_ref_coercions:
+				# Explicit, unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T` conversion
+				# recorded at the variant-constructor boundary.  Lower the source
+				# pointer, re-assert the contract (RAW_PTR source, REF target,
+				# identical canonical pointees), then re-bind the value as a
+				# reference-typed SSA value.  `Ptr<T>` and `&T` share the same
+				# machine representation, so this is a pure re-typing — AssignSSA
+				# carries the value through unchanged while making the reference
+				# identity explicit to downstream passes (no IfaceUpcast-style
+				# transform).
+				target_ref = self._ptr_to_ref_coercions[expr.node_id]
+				value = self._lower_expr_raw(expr, expected_type=expected_type)
+				value_ty = self._infer_expr_type(expr)
+				if value_ty is None:
+					raise AssertionError("ptr->ref coercion missing source type (checker bug)")
+				src_def = self._type_table.get(value_ty)
+				tgt_def = self._type_table.get(target_ref)
+				if src_def.kind is not TypeKind.RAW_PTR:
+					raise AssertionError(
+						f"malformed ptr->ref coercion: source kind {src_def.kind} is not RAW_PTR (checker bug)"
+					)
+				if tgt_def.kind is not TypeKind.REF:
+					raise AssertionError(
+						f"malformed ptr->ref coercion: target kind {tgt_def.kind} is not REF (checker bug)"
+					)
+				# Use the SAME strict canonical IDENTITY the checker used to accept
+				# the coercion (`_ctor_canonical_identity`: zero-param alias
+				# dealiasing + exact TypeId match + normalized TypeKey equality),
+				# NOT raw TypeId equality (which would spuriously assert on an
+				# alias/normalization case that legitimately type-checks) and NOT
+				# the broader `_ctor_same_type` (whose typevar / nothrow->throwing
+				# subtyping carve-outs are unsafe for pointer identity).  The
+				# package context is derived from the type table exactly as the
+				# checker derives it.
+				_dp = getattr(self._type_table, "package_id", None)
+				_mp = getattr(self._type_table, "module_packages", None) or {}
+				if (
+					not src_def.param_types
+					or not tgt_def.param_types
+					or not _ctor_canonical_identity(
+						self._type_table,
+						src_def.param_types[0],
+						tgt_def.param_types[0],
+						current_module_name=self._current_module_name(),
+						default_package=_dp,
+						module_packages=_mp,
+					)
+				):
+					raise AssertionError(
+						"malformed ptr->ref coercion: pointee types differ (checker bug)"
+					)
+				dest = self.b.new_temp()
+				self.b.emit(M.AssignSSA(dest=dest, src=value))
+				self._local_types[dest] = target_ref
 				return dest
 			return self._lower_expr_raw(expr, expected_type=expected_type)
 		finally:
