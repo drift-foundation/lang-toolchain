@@ -6212,9 +6212,16 @@ class HIRToMIR:
 			_arr_issues = array_method_arity_issues("pop", len(expr.args), span=getattr(expr, "loc", None))
 			if _arr_issues:
 				raise AssertionError(_arr_issues[0].message)
-			if not want_value:
-				return True, None
-			opt_ty = self._optional_variant_type(elem_ty)
+			# `pop` MUTATES the array: when the returned Optional<T> is
+			# DISCARDED (`a.pop();` in statement position, want_value=
+			# False) the element MUST still be removed.  Pre-0.33.38 this
+			# branch was `if not want_value: return True, None` -- a
+			# silent no-op that dropped the mutation entirely (the
+			# app-team "pop erroneously accepted as a no-op" CORE_BUG).
+			# Only the Optional<T> result staging is skipped on discard;
+			# the moved-out element is dropped instead of wrapped, so its
+			# destructor still runs (no leak).
+			opt_ty = self._optional_variant_type(elem_ty) if want_value else None
 			# Same shape as `__array_get_res` above: conditional
 			# stores across empty / non-empty branches, final
 			# `LoadLocal` at the join transfers the popped Optional<T>
@@ -6224,10 +6231,12 @@ class HIRToMIR:
 			# (scope cleanup AND the consumer both freed the popped
 			# element's inner refcounted content).  Bare ensure_local
 			# + StoreLocal is intentional; do not register.
-			# materialize-audit: allow result-staging Optional<T> loaded out via LoadLocal at the join
-			res_local = f"__array_pop_res{self.b.new_temp()}"
-			self.b.ensure_local(res_local)
-			self._local_types[res_local] = opt_ty
+			res_local = None
+			if want_value:
+				# materialize-audit: allow result-staging Optional<T> loaded out via LoadLocal at the join
+				res_local = f"__array_pop_res{self.b.new_temp()}"
+				self.b.ensure_local(res_local)
+				self._local_types[res_local] = opt_ty
 
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
@@ -6242,8 +6251,9 @@ class HIRToMIR:
 			)
 
 			self.b.set_block(empty_block)
-			none_val = self._emit_optional_none(opt_ty)
-			self.b.emit(M.StoreLocal(local=res_local, value=none_val))
+			if want_value:
+				none_val = self._emit_optional_none(opt_ty)
+				self.b.emit(M.StoreLocal(local=res_local, value=none_val))
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 			self.b.set_block(ok_block)
@@ -6258,11 +6268,18 @@ class HIRToMIR:
 			next_gen = _next_gen(array_val)
 			new_arr_gen = _set_gen(new_arr, next_gen)
 			self.b.emit(M.StoreRef(ptr=recv_ptr, value=new_arr_gen, inner_ty=array_ty))
-			some_val = self._emit_optional_some(opt_ty, val)
-			self.b.emit(M.StoreLocal(local=res_local, value=some_val))
+			if want_value:
+				some_val = self._emit_optional_some(opt_ty, val)
+				self.b.emit(M.StoreLocal(local=res_local, value=some_val))
+			elif self._needs_runtime_drop(elem_ty) or self._type_is_destructible(elem_ty):
+				# Discarded result: the moved-out element is no longer
+				# owned by the array; drop it so its destructor runs.
+				self.b.emit(M.DropValue(value=val, ty=elem_ty))
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
 			self.b.set_block(join_block)
+			if not want_value:
+				return True, None
 			out = self.b.new_temp()
 			self.b.emit(M.LoadLocal(dest=out, local=res_local))
 			return True, out
@@ -6524,8 +6541,12 @@ class HIRToMIR:
 			_arr_issues = array_method_arity_issues(name, len(expr.args), span=getattr(expr, "loc", None))
 			if _arr_issues:
 				raise AssertionError(_arr_issues[0].message)
-			if not want_value:
-				return True, None
+			# `remove`/`swap_remove` MUTATE the array.  The element-shift
+			# / swap and the StoreRef below must run even when the
+			# returned element is DISCARDED (want_value=False) -- the
+			# pre-0.33.38 `if not want_value: return True, None` was a
+			# silent no-op (same CORE_BUG class as `pop`).  On discard the
+			# moved-out element is dropped at the end instead of returned.
 			idx_val = self.lower_expr(expr.args[0], expected_type=self._int_type)
 			len_val = self.b.new_temp()
 			self.b.emit(M.ArrayLen(dest=len_val, array=array_val))
@@ -6588,6 +6609,12 @@ class HIRToMIR:
 			self.b.emit(M.ArraySetLen(dest=new_arr, array=array_val, length=new_len))
 			new_arr_gen = _set_gen(new_arr, next_gen)
 			self.b.emit(M.StoreRef(ptr=recv_ptr, value=new_arr_gen, inner_ty=array_ty))
+			if not want_value:
+				# Discarded result: drop the removed element so its
+				# destructor runs; the mutation above already happened.
+				if self._needs_runtime_drop(elem_ty) or self._type_is_destructible(elem_ty):
+					self.b.emit(M.DropValue(value=val, ty=elem_ty))
+				return True, None
 			return True, val
 
 		if name == "swap":
