@@ -10,8 +10,11 @@ internal Python traceback during codegen:
 
 The integer-binop lowering only recognised `Int`/`Uint`/`Uint64`/`Byte`
 operands, not `i32` (`Int32`/`Uint32`).  Comparisons of two same-width narrow
-ints now lower to an `icmp` producing `Bool`.  (Equality is signedness-agnostic;
-ordering uses signed semantics — narrow-int *arithmetic* remains out of scope.)
+ints now lower to an `icmp` producing `Bool`, with CORRECT signedness: `Uint32`
+ordering emits unsigned `icmp u*` and `Int32` ordering signed `icmp s*`
+(equality is signedness-agnostic).  The LLVM `i32` type does not encode
+signedness, so `BinaryOpInstr.signed` (set by HIR→MIR from the operand type)
+carries it to codegen.  Narrow-int *arithmetic* remains out of scope.
 """
 from __future__ import annotations
 
@@ -76,8 +79,8 @@ fn main() nothrow -> Int {
 
 
 def test_int32_ordering_signed(tmp_path: Path) -> None:
-	"""Same-width narrow-int ordering compiles and uses signed semantics for
-	`Int32` (no codegen crash)."""
+	"""`Int32` ordering uses SIGNED semantics: a negative value is less than a
+	positive one (`icmp s*`)."""
 	src = """\
 module main;
 fn main() nothrow -> Int {
@@ -87,7 +90,46 @@ fn main() nothrow -> Int {
 	if a < b { r = r + 1; }
 	if b > a { r = r + 10; }
 	if a <= a { r = r + 100; }
+	if a > b { r = r + 1000; }
 	return r;
 }
 """
+	# -1 < 2, 2 > -1, -1 <= -1, NOT(-1 > 2) -> 111
 	assert _compile_and_run(tmp_path, src).returncode == 111
+
+
+def test_uint32_ordering_unsigned_high_bit(tmp_path: Path) -> None:
+	"""`Uint32` ordering uses UNSIGNED semantics: a high-bit value
+	(`4294967295` = 0xFFFFFFFF) is GREATER than `1` (`icmp u*`).  Under the
+	previous signed-best-effort lowering this was silently wrong (0xFFFFFFFF as
+	signed i32 is -1, so `-1 > 1` would be false)."""
+	src = """\
+module main;
+fn main() nothrow -> Int {
+	val big = cast<Uint32>(4294967295u);
+	val one = cast<Uint32>(1u);
+	var r = 0;
+	if big > one { r = r + 1; }
+	if one < big { r = r + 10; }
+	if big >= one { r = r + 100; }
+	if big < one { r = r + 1000; }
+	return r;
+}
+"""
+	# unsigned: big > one, one < big, big >= one, NOT(big < one) -> 111
+	assert _compile_and_run(tmp_path, src).returncode == 111
+
+
+def test_uint32_high_bit_inverse_less_than(tmp_path: Path) -> None:
+	"""Inverse `<` high-bit case: `1 < 4294967295` is true under unsigned
+	semantics."""
+	src = """\
+module main;
+fn main() nothrow -> Int {
+	val big = cast<Uint32>(4294967295u);
+	val one = cast<Uint32>(1u);
+	if one < big { return 7; }
+	return 0;
+}
+"""
+	assert _compile_and_run(tmp_path, src).returncode == 7

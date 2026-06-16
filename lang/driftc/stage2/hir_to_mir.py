@@ -3108,7 +3108,18 @@ class HIRToMIR:
 				self.b.emit(M.ConstInt(dest=zero, value=0))
 				self.b.emit(M.BinaryOpInstr(dest=dest, op=expr.op, left=cmp_tmp, right=zero))
 				return dest
-		self.b.emit(M.BinaryOpInstr(dest=dest, op=expr.op, left=left, right=right))
+		# Narrow fixed-width integer operands (`Int32`/`Uint32`) lower to LLVM
+		# `i32`, which does not encode signedness; record it on the instruction so
+		# codegen selects signed vs unsigned ordering comparisons correctly.
+		op_signed: bool | None = None
+		for _ty in (left_ty, right_ty):
+			if _ty is None:
+				continue
+			_td = self._type_table.get(_ty)
+			if _td.kind is TypeKind.SCALAR and _td.name in ("Int32", "Uint32"):
+				op_signed = _td.name == "Int32"
+				break
+		self.b.emit(M.BinaryOpInstr(dest=dest, op=expr.op, left=left, right=right, signed=op_signed))
 		return dest
 
 	def _visit_expr_HField(self, expr: H.HField) -> M.ValueId:

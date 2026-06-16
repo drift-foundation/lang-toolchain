@@ -1418,11 +1418,19 @@ class UnaryOpInstr(MInstr):
 
 @dataclass
 class BinaryOpInstr(MInstr):
-	"""dest = left op right (binary numeric/logical/bit ops)."""
+	"""dest = left op right (binary numeric/logical/bit ops).
+
+	`signed` records operand signedness for narrow fixed-width integer operands
+	(`Int32` = True, `Uint32` = False) whose LLVM type (`i32`) does not by itself
+	encode signedness — codegen needs it to select signed (`icmp s*`) vs unsigned
+	(`icmp u*`) ordering comparisons.  `None` means "not provided / not a narrow
+	int" (the `i64` Int/Uint path encodes signedness in its own value-type tag,
+	and equality comparisons are signedness-agnostic)."""
 	dest: ValueId
 	op: BinaryOp
 	left: ValueId
 	right: ValueId
+	signed: Optional[bool] = None
 
 
 @dataclass

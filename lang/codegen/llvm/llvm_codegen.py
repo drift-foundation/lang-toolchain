@@ -8709,13 +8709,15 @@ class _FuncBuilder:
 			and instr.op in {BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE}
 		):
 			# Same-width narrow-int (`Int32`/`Uint32`) COMPARISON → `Bool`.
-			# `value_types` collapses both to "i32", so signedness is not
-			# recoverable here: EQ/NE are signedness-agnostic (always correct),
-			# and ordering uses signed semantics (`icmp s…`).  Narrow-int
-			# arithmetic stays unsupported (out of scope) — the `int_ty is None`
-			# raise below still rejects `i32` add/sub/etc.
+			# `value_types` collapses both to "i32" (no signedness), so the
+			# operand signedness is carried on the instruction (`instr.signed`,
+			# set by HIR→MIR from the operand type): `Uint32` (signed=False)
+			# emits unsigned `icmp u…`, `Int32` (signed=True) signed `icmp s…`.
+			# EQ/NE are signedness-agnostic regardless.  Narrow-int arithmetic
+			# stays unsupported (the `int_ty is None` raise below rejects `i32`
+			# add/sub/etc.).
 			int_ty = "i32"
-			unsigned = False
+			unsigned = getattr(instr, "signed", None) is False
 		if int_ty is None:
 			raise NotImplementedError(
 				f"LLVM codegen v1: integer binop requires matching Int/Uint operands (have {left_ty}, {right_ty})"
