@@ -319,6 +319,19 @@ class PlaceCanonicalizeRewriter:
 			_, result = self._rewrite_expr(expr.result)
 			return [], H.HUnsafeExpr(body=body, result=result, loc=expr.loc)
 
+		if isinstance(expr, H.HCast):
+			# Recurse into the cast operand so a borrow nested inside a cast
+			# (`cast<T>(f(&x))`) still has its subject canonicalized to an
+			# `HPlaceExpr`.  Without this the borrow keeps a bare `HVar` subject,
+			# falls into the HIR→MIR rvalue-borrow fallback, and the named local
+			# is materialized into a `__borrow_tmp` AND dropped a second time at
+			# scope exit (double-free).
+			_, val = self._rewrite_expr(expr.value)
+			return [], replace(expr, value=val)
+		if isinstance(expr, getattr(H, "HResultOk", ())):
+			_, val = self._rewrite_expr(expr.value)
+			return [], replace(expr, value=val)
+
 		# Default: leave unchanged.
 		return [], expr
 

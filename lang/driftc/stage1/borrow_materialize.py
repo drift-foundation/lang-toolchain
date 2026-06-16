@@ -519,5 +519,13 @@ class BorrowMaterializeRewriter:
 			if rpfx:
 				body = H.HBlock(statements=body.statements + rpfx)
 			return [], H.HUnsafeExpr(body=body, result=result, loc=expr.loc)
+		if isinstance(expr, H.HCast):
+			# Recurse into the cast operand so an rvalue borrow nested inside a
+			# cast (`cast<T>(f(&rvalue))`) is still materialized.
+			pfx, val = self._rewrite_expr(expr.value)
+			return pfx, replace(expr, value=val)
+		if isinstance(expr, getattr(H, "HResultOk", ())):
+			pfx, val = self._rewrite_expr(expr.value)
+			return pfx, replace(expr, value=val)
 		# Leave other expressions unchanged (or handled by other normalizers).
 		return [], expr

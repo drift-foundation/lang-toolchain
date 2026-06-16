@@ -8703,6 +8703,19 @@ class _FuncBuilder:
 		elif left_ty == "i8" and right_ty == "i8":
 			int_ty = "i8"
 			unsigned = True
+		elif (
+			left_ty == "i32"
+			and right_ty == "i32"
+			and instr.op in {BinaryOp.EQ, BinaryOp.NE, BinaryOp.LT, BinaryOp.LE, BinaryOp.GT, BinaryOp.GE}
+		):
+			# Same-width narrow-int (`Int32`/`Uint32`) COMPARISON → `Bool`.
+			# `value_types` collapses both to "i32", so signedness is not
+			# recoverable here: EQ/NE are signedness-agnostic (always correct),
+			# and ordering uses signed semantics (`icmp s…`).  Narrow-int
+			# arithmetic stays unsupported (out of scope) — the `int_ty is None`
+			# raise below still rejects `i32` add/sub/etc.
+			int_ty = "i32"
+			unsigned = False
 		if int_ty is None:
 			raise NotImplementedError(
 				f"LLVM codegen v1: integer binop requires matching Int/Uint operands (have {left_ty}, {right_ty})"
