@@ -2050,8 +2050,31 @@ class HIRToMIR:
 					self.b.emit(M.CleanupHook(scope_id=scope_id, candidates=[(arm_scrut_local, scrut_ty)]))
 					arm_scrut_local = None
 
-				# Lower the arm body statements regardless of pattern kind.
-				self.lower_block(arm.block)
+				# Lower the arm body statements DIRECTLY into the arm scope
+				# (pushed at the top of this arm), NOT via `lower_block`'s own
+				# nested scope.  A value-producing arm
+				# `pattern => { stmts; result }` is a single block expression:
+				# the trailing `arm.result` (lowered below) shares the arm
+				# body's lexical scope and may CONSUME a local declared in
+				# `arm.block` — e.g. `Ok(t) => { val out = f(); move out }`.
+				# Routing through `lower_block` pushes a nested scope and emits
+				# its scope-cleanup `CleanupHook` BEFORE `arm.result` is lowered,
+				# so `cleanup_authoring`'s ledger sees the block local as still
+				# LIVE at that hook and authors a drop — running the destructor
+				# AND zeroing the storage that the trailing `move` then reads
+				# (observed as the moved variant's discriminant zeroed to
+				# `None`, plus a use-after-free of the dropped payload).  By
+				# lowering the statements into the arm scope, cleanup defers to
+				# the arm-end hook below, which runs AFTER the result's
+				# `MoveOut`, so the ledger correctly skips the consumed local.
+				# (For a match arm the nested block scope is coextensive with
+				# the arm scope, so block-local lifetimes are unchanged; nested
+				# blocks/ifs/loops inside the body still get their own scopes via
+				# `lower_stmt`.)
+				for _arm_stmt in arm.block.statements:
+					if self.b.block.terminator is not None:
+						break
+					self.lower_stmt(_arm_stmt)
 
 				# In statement position, still evaluate any arm result expression and
 				# discard its value (side effects must run).
