@@ -638,6 +638,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 				binder_fields=list(arm.binder_fields) if getattr(arm, "binder_fields", None) is not None else None,
 				binder_is_mutable=list(arm.binder_is_mutable) if getattr(arm, "binder_is_mutable", None) is not None else None,
 				block=_convert_block(arm.block),
+				scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
+				scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
 				loc=Span.from_loc(getattr(arm, "loc", None)),
 			)
 			for arm in expr.arms

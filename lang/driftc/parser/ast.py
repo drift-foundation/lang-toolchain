@@ -971,6 +971,15 @@ class MatchArm:
 	ctor_base: Optional[TypeExpr] = None
 	# Mutability flags for binders, parallel to `binders`.
 	binder_is_mutable: Optional[List[bool]] = None
+	# RAW scalar-literal-pattern data (parser-owned).  Set for integer-literal
+	# arms (`0 => ...`, `42u => ...`, `-5 => ...`).  `scalar_literal_kind` is one
+	# of "INT" / "UINT_LIT" / "UINT64_LIT" / "NEG_INT"; `scalar_literal_magnitude`
+	# is the UNSIGNED magnitude as written (the sign lives in the kind).  These
+	# carry no type judgment — the parser does not know the scrutinee type.  The
+	# checker is the sole owner of the validated `scalar_value` (see HMatchArm);
+	# stage2 must never reinterpret these raw fields.
+	scalar_literal_kind: Optional[str] = None
+	scalar_literal_magnitude: Optional[int] = None
 
 
 @dataclass

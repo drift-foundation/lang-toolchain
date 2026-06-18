@@ -1,0 +1,13 @@
+// Regression: an integer-literal arm (`0 => ...`) has ctor=None, just like
+// a default arm.  Against a Bool scrutinee it must be REJECTED, not silently
+// treated as the default arm.
+module m;
+pub fn main() nothrow -> Int {
+	val flag = true;
+	val r = match flag {
+		0 => { 1 },
+		true => { 2 },
+		false => { 3 },
+	};
+	return r;
+}

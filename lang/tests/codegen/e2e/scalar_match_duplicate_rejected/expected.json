@@ -1,0 +1,1 @@
+{"description":"Duplicate scalar literal arm is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal 0"}]}

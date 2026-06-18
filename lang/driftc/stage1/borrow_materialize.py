@@ -475,6 +475,9 @@ class BorrowMaterializeRewriter:
 						binder_ids=list(getattr(arm, "binder_ids", []) or []),
 						block=arm_block,
 						result=arm_result,
+						scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
+						scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+						scalar_value=getattr(arm, "scalar_value", None),
 						loc=arm.loc,
 					)
 				)

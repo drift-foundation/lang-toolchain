@@ -1,0 +1,1 @@
+{"description":"Negative literal -1 against unsigned Uint scrutinee is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-SIGNEDNESS: negative literal"}]}

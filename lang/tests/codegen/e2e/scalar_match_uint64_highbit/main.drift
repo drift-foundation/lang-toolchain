@@ -1,0 +1,14 @@
+// Uint64 high-bit case with u64-suffixed literals.
+module m;
+pub fn pick(x: Uint64) nothrow -> Int {
+	val r = match x {
+		18446744073709551615u64 => { 7 },
+		0u64 => { 2 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// pick(2^64-1)=7, pick(0)=2, pick(3)=9 → 7+2+9=18; 18-13=5
+	return pick(18446744073709551615u64) + pick(0u64) + pick(3u64) - 13;
+}

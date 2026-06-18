@@ -1,0 +1,10 @@
+// A negative literal cannot match an unsigned Uint scrutinee.
+module m;
+pub fn pick(x: Uint) nothrow -> Int {
+	val r = match x {
+		-1 => { 1 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int { return pick(0u); }

@@ -1,0 +1,1 @@
+{"description":"Constructor pattern in a scalar match is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CTOR: 'Foo' is not a valid pattern for a scalar (integer) match"}]}

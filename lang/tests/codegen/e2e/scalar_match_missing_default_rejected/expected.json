@@ -1,0 +1,1 @@
+{"description":"Scalar match missing default is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"scalar (integer) match must include a `default` arm"}]}

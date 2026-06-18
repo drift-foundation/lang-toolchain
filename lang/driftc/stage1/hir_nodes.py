@@ -544,6 +544,21 @@ class HMatchArm(HNode):
 	# `lower_match` (those paths should set `binder_ids` parallel to
 	# `binders` if they want first-class scope semantics).
 	binder_ids: list[BindingId] = field(default_factory=list)
+	# RAW scalar-literal-pattern data (parser-owned, copied verbatim from the AST
+	# MatchArm).  `scalar_literal_kind` ∈ {"INT","UINT_LIT","UINT64_LIT","NEG_INT"}
+	# for integer-literal arms (else None); `scalar_literal_magnitude` is the
+	# unsigned magnitude as written.  These carry NO type judgment.
+	scalar_literal_kind: Optional[str] = None
+	scalar_literal_magnitude: Optional[int] = None
+	# CHECKED scalar-literal value (checker-owned).  Populated by the type
+	# checker / stub match-validator ONLY after the literal has been validated for
+	# signedness and representability against the concrete scrutinee type; it is
+	# the canonical SIGNED Python int the arm matches.  `None` for default /
+	# non-scalar arms, or when validation failed (a diagnostic was emitted).
+	# Stage2's `_lower_scalar_match` consumes ONLY this field — never the raw
+	# `scalar_literal_*` data — so unvalidated parser syntax can never reach
+	# codegen.
+	scalar_value: Optional[int] = None
 	loc: Span = field(default_factory=Span)
 
 

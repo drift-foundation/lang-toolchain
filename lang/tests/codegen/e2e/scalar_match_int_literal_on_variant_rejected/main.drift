@@ -1,0 +1,12 @@
+// Regression: an integer-literal arm against a variant scrutinee must be
+// REJECTED, not silently treated as the default arm.
+module m;
+variant V { A, B(x: Int) }
+pub fn main() nothrow -> Int {
+	val v = V::B(x = 5);
+	val r = match v {
+		0 => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

@@ -1,0 +1,14 @@
+// Uint scalar match with `u`-suffixed literal arms + default.
+module m;
+pub fn pick(x: Uint) nothrow -> Int {
+	val r = match x {
+		0u => { 3 },
+		5u => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// pick(0u)=3, pick(5u)=4, pick(7u)=9 → 3+4+9=16; 16-11=5
+	return pick(0u) + pick(5u) + pick(7u) - 11;
+}

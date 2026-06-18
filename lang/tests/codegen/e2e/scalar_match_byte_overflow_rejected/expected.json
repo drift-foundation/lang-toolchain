@@ -1,0 +1,1 @@
+{"description":"Out-of-range literal 256 for Byte scrutinee is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-RANGE: literal 256 is not representable by scrutinee type Byte"}]}

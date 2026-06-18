@@ -1,0 +1,1 @@
+{"description":"Integer literal arm against a Bool scrutinee is rejected (not misread as default).","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-SCRUTINEE: integer literal pattern is only valid"}]}

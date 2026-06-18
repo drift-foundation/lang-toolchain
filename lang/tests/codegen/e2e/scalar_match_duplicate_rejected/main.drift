@@ -1,0 +1,11 @@
+// Two arms for the same literal value must be rejected.
+module m;
+pub fn main() nothrow -> Int {
+	val n = 1;
+	val r = match n {
+		0 => { 1 },
+		0 => { 2 },
+		default => { 9 },
+	};
+	return r;
+}

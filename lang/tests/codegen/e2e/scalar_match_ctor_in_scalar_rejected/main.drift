@@ -1,0 +1,10 @@
+// A constructor pattern is not valid for an integer scrutinee.
+module m;
+pub fn main() nothrow -> Int {
+	val n = 1;
+	val r = match n {
+		Foo => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

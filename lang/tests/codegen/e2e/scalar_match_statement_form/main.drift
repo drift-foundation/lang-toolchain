@@ -1,0 +1,17 @@
+// Statement-position scalar match (no value), side effects only.
+module m;
+pub fn main() nothrow -> Int {
+	var acc = 0;
+	val n = 2;
+	match n {
+		1 => { acc = acc + 100; },
+		2 => { acc = acc + 5; },
+		default => { acc = acc + 50; },
+	}
+	val m2 = 99;
+	match m2 {
+		0 => { acc = acc + 100; },
+		default => { acc = acc + 0; },
+	}
+	return acc;
+}

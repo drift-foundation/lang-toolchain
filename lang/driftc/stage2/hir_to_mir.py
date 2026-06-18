@@ -70,6 +70,7 @@ from lang.driftc.core.types_core import (
 	TypeId,
 	VariantArmSchema,
 	VariantFieldSchema,
+	scalar_match_type_name,
 )
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
@@ -1380,6 +1381,8 @@ class HIRToMIR:
 				_pre_inner = _pre_def.param_types[0]
 			if _pre_inner == self._bool_type:
 				return self._lower_bool_match(expr, want_value=want_value)
+			if scalar_match_type_name(self._type_table, _pre_inner) is not None:
+				return self._lower_scalar_match(expr, want_value=want_value)
 
 		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
 		scrut_val = self.lower_expr(expr.scrutinee)
@@ -1502,7 +1505,11 @@ class HIRToMIR:
 		default_block: M.BasicBlock | None = None
 		event_arms: list[tuple[H.HMatchArm, M.BasicBlock]] = []
 		for arm, bb in arm_blocks:
-			if arm.ctor is None:
+			# Default detection requires BOTH `ctor is None` and no scalar literal:
+			# an integer-literal arm (`0 => ...`) also has `ctor is None` and must
+			# not be misread as `default`.  The checker rejects scalar arms in a
+			# variant match, so this only guards against a checker-contract breach.
+			if arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
 				default_block = bb
 			else:
 				event_arms.append((arm, bb))
@@ -2260,7 +2267,10 @@ class HIRToMIR:
 				true_block = bb
 			elif arm.ctor == "false":
 				false_block = bb
-			elif arm.ctor is None:
+			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
+				# Default arm — but NOT an integer-literal arm (`0 => ...`), which
+				# also has `ctor is None`.  The checker rejects scalar arms in a Bool
+				# match; this only guards against a checker-contract breach.
 				default_block = bb
 		true_target = true_block if true_block is not None else default_block
 		false_target = false_block if false_block is not None else default_block
@@ -2342,6 +2352,187 @@ class HIRToMIR:
 			if _bb.terminator is None:
 				# A default arm can be unreachable when both `true` and `false` are
 				# also given explicitly; terminate it so the CFG stays well-formed.
+				self.b.set_block(_bb)
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+		self.b.set_block(join_block)
+		if not want_value:
+			if not join_reachable and self.b.block.terminator is None:
+				self.b.set_terminator(M.Unreachable())
+			return None
+		assert result_local is not None
+		dest = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		return dest
+
+
+	def _scalar_match_const(self, value: int, scrut_ty: "TypeId", type_name: str) -> M.ValueId:
+		"""Emit a constant of the scrutinee's scalar type holding `value`.
+
+		`Int`/`Uint`/`Uint64`/`Byte` map to their native `Const*` instruction.
+		The narrow widths `Int32`/`Uint32` have no dedicated wide-less constant, so
+		build the value in the corresponding 64-bit base type and narrow it with a
+		`CastScalar` to the scrutinee type (the checker has already proven the value
+		is representable, so the narrowing is exact)."""
+		dest = self.b.new_temp()
+		if type_name == "Byte":
+			self.b.emit(M.ConstByte(dest=dest, value=value))
+			self._local_types[dest] = self._byte_type
+			return dest
+		if type_name == "Uint64":
+			self.b.emit(M.ConstUint64(dest=dest, value=value))
+			self._local_types[dest] = self._uint64_type
+			return dest
+		if type_name == "Uint":
+			self.b.emit(M.ConstUint(dest=dest, value=value))
+			self._local_types[dest] = self._uint_type
+			return dest
+		if type_name == "Int":
+			self.b.emit(M.ConstInt(dest=dest, value=value))
+			self._local_types[dest] = self._int_type
+			return dest
+		# Int32 / Uint32: wide base const narrowed to the i32 scrutinee type.
+		wide = self.b.new_temp()
+		if type_name == "Uint32":
+			self.b.emit(M.ConstUint(dest=wide, value=value))
+			self._local_types[wide] = self._uint_type
+			self.b.emit(M.CastScalar(dest=dest, value=wide, src_ty=self._uint_type, dst_ty=scrut_ty))
+		else:  # Int32
+			self.b.emit(M.ConstInt(dest=wide, value=value))
+			self._local_types[wide] = self._int_type
+			self.b.emit(M.CastScalar(dest=dest, value=wide, src_ty=self._int_type, dst_ty=scrut_ty))
+		self._local_types[dest] = scrut_ty
+		return dest
+
+	def _lower_scalar_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
+		"""Lower `match` over an integer scalar scrutinee as a switch-like chain of
+		equality tests, falling through to the (mandatory) `default` arm.
+
+		Each literal arm carries a checker-validated `scalar_value` (the canonical
+		signed int); this lowerer consumes ONLY that field and the scrutinee type —
+		never the raw `scalar_literal_*` parser syntax.  The checker guarantees a
+		`default` arm exists, so the final else target always resolves; its absence
+		is a checker-contract violation (asserted), never silently invented."""
+		scrut_val = self.lower_expr(expr.scrutinee)
+		scrut_ty = self._infer_expr_type(expr.scrutinee)
+		if scrut_ty is not None:
+			scrut_def = self._type_table.get(scrut_ty)
+			if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+				inner_ty = scrut_def.param_types[0]
+				loaded = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=loaded, ptr=scrut_val, inner_ty=inner_ty))
+				self._local_types[loaded] = inner_ty
+				scrut_val = loaded
+				scrut_ty = inner_ty
+		type_name = scalar_match_type_name(self._type_table, scrut_ty) if scrut_ty is not None else None
+		if type_name is None or scrut_ty is None:
+			raise AssertionError("scalar match scrutinee is not a scalar integer type (checker bug)")
+		self._local_types[scrut_val] = scrut_ty
+
+		# Optional hidden result local (mirrors the variant/bool paths).
+		result_local: str | None = None
+		if want_value:
+			result_local = f"__match_scalar_tmp{self.b.new_temp()}"
+			self.b.ensure_local(result_local)
+			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
+			if want_ty is not None:
+				self._local_types[result_local] = want_ty
+			else:
+				arm_ty: TypeId | None = None
+				for arm in expr.arms:
+					if arm.result is None:
+						continue
+					arm_ty = self._infer_expr_type(arm.result)
+					if arm_ty is not None:
+						break
+				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
+
+		join_block = self.b.new_block("match_scalar_join")
+		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
+			(arm, self.b.new_block(f"match_scalar_arm_{idx}")) for idx, arm in enumerate(expr.arms)
+		]
+
+		# Partition arms: literal arms (checker-set scalar_value) vs the default.
+		default_block: M.BasicBlock | None = None
+		literal_arms: list[tuple[int, M.BasicBlock]] = []
+		for arm, bb in arm_blocks:
+			sval = getattr(arm, "scalar_value", None)
+			if sval is not None:
+				literal_arms.append((int(sval), bb))
+			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
+				default_block = bb
+		if default_block is None:
+			raise AssertionError("scalar match missing default arm reached MIR lowering (checker bug)")
+
+		# Equality-test chain in source order; final else -> default.
+		current_block = self.b.block
+		for sval, bb in literal_arms:
+			self.b.set_block(current_block)
+			const_val = self._scalar_match_const(sval, scrut_ty, type_name)
+			cmp_tmp = self.b.new_temp()
+			signed = None
+			if type_name in ("Int32", "Uint32"):
+				signed = type_name == "Int32"
+			self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=scrut_val, right=const_val, signed=signed))
+			self._local_types[cmp_tmp] = self._bool_type
+			next_block = self.b.new_block("match_scalar_next")
+			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=bb.name, else_target=next_block.name))
+			current_block = next_block
+		self.b.set_block(current_block)
+		self.b.set_terminator(M.Goto(target=default_block.name))
+
+		# Lower each arm body (no binders, no scrutinee drop — scalars are POD).
+		join_reachable = False
+		for arm, bb in arm_blocks:
+			self.b.set_block(bb)
+			self._push_scope(include_params=False)
+			try:
+				for _arm_stmt in arm.block.statements:
+					if self.b.block.terminator is not None:
+						break
+					self.lower_stmt(_arm_stmt)
+
+				if not want_value and arm.result is not None:
+					if self.b.block.terminator is None:
+						self.lower_stmt(H.HExprStmt(expr=arm.result))
+
+				did_store_result = False
+				if want_value and result_local is not None:
+					if arm.result is None:
+						if self.b.block.terminator is None:
+							raise AssertionError(
+								"value-producing scalar match arm must yield a value or terminate (checker bug)"
+							)
+					else:
+						if self.b.block.terminator is not None:
+							raise AssertionError(
+								"value-producing scalar match arm has a result expression but its block terminates (checker bug)"
+							)
+						if self._local_types.get(result_local) is self._unknown_type:
+							arm_ty2 = self._infer_expr_type(arm.result)
+							if arm_ty2 is not None:
+								self._local_types[result_local] = arm_ty2
+						val = self._lower_owning_consume(arm.result, self._local_types.get(result_local))
+						if self._local_types.get(result_local) is self._unknown_type:
+							val_ty = self._local_types.get(val)
+							if val_ty is not None:
+								self._local_types[result_local] = val_ty
+						self.b.emit(M.StoreLocal(local=result_local, value=val))
+						did_store_result = True
+
+				if self.b.block.terminator is None:
+					self._emit_scope_cleanup_hook(scope_index=len(self._scope_stack) - 1)
+					if want_value and result_local is not None and not did_store_result:
+						raise AssertionError(
+							"value-producing scalar match arm falls through without storing result (lowering bug)"
+						)
+					self.b.set_terminator(M.Goto(target=join_block.name))
+					join_reachable = True
+			finally:
+				self._pop_scope()
+
+		for _arm, _bb in arm_blocks:
+			if _bb.terminator is None:
 				self.b.set_block(_bb)
 				self.b.set_terminator(M.Goto(target=join_block.name))
 

@@ -3502,6 +3502,10 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 				"match_bool_false",
 				"match_bool_true_args",
 				"match_bool_false_args",
+				"match_int_lit",
+				"match_uint_lit",
+				"match_uint64_lit",
+				"match_neg_int_lit",
 				"match_ctor",
 				"match_ctor0",
 				"match_ctor_named",
@@ -3542,6 +3546,8 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 		binder_is_mutable: list[bool] = []
 		binder_fields: list[str] | None = None
 		pattern_arg_form = "positional"
+		scalar_literal_kind: Optional[str] = None
+		scalar_literal_magnitude: Optional[int] = None
 		def _parse_qualified_ctor(pat_node: Tree) -> tuple[str, TypeExpr]:
 			qnode = next((c for c in pat_node.children if isinstance(c, Tree) and _name(c) == "qualified_member"), None)
 			if qnode is None:
@@ -3583,6 +3589,32 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 						binders.append(c.value)
 						binder_is_mutable.append(False)
 			pattern_arg_form = "positional" if binders else "paren"
+		elif pat_kind in ("match_int_lit", "match_uint_lit", "match_uint64_lit", "match_neg_int_lit"):
+			# Integer-literal pattern (`0 => ..`, `42u => ..`, `-5 => ..`).  Store
+			# ONLY raw, syntactic data: the literal kind and its unsigned magnitude.
+			# The parser does not know the scrutinee type, so it makes no signedness
+			# or range judgment — the checker validates and owns the canonical
+			# `scalar_value`.  A scalar arm keeps `ctor = None` and is distinguished
+			# from a `default` arm by a non-None `scalar_literal_kind`.
+			int_tok = next(
+				c for c in pat.children
+				if isinstance(c, Token) and c.type in ("INT", "UINT_LIT", "UINT64_LIT")
+			)
+			raw = int_tok.value
+			if int_tok.type == "UINT64_LIT":
+				digits = raw[:-3]
+				scalar_literal_kind = "UINT64_LIT"
+			elif int_tok.type == "UINT_LIT":
+				digits = raw[:-1]
+				scalar_literal_kind = "UINT_LIT"
+			else:
+				digits = raw
+				scalar_literal_kind = "INT"
+			scalar_literal_magnitude = int(digits, 16 if digits[:2] in ("0x", "0X") else 10)
+			if pat_kind == "match_neg_int_lit":
+				scalar_literal_kind = "NEG_INT"
+			ctor = None
+			pattern_arg_form = "bare"
 		elif pat_kind == "match_ctor_qualified":
 			ctor, ctor_base = _parse_qualified_ctor(pat)
 			binders_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_binders"), None)
@@ -3711,6 +3743,8 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 				binder_is_mutable=binder_is_mutable if binder_is_mutable else None,
 				binder_fields=binder_fields,
 				block=block,
+				scalar_literal_kind=scalar_literal_kind,
+				scalar_literal_magnitude=scalar_literal_magnitude,
 			)
 		)
 

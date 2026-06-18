@@ -1,0 +1,20 @@
+// Integer scalar match in value position over Int with multiple literal
+// arms + mandatory default — the canonical switch-like construct.
+module m;
+
+pub fn classify(n: Int) nothrow -> Int {
+	val r = match n {
+		0 => { 100 },
+		1 => { 200 },
+		7 => { 700 },
+		default => { 999 },
+	};
+	return r;
+}
+
+pub fn main() nothrow -> Int {
+	// classify(0)=100, classify(1)=200, classify(7)=700, classify(3)=999
+	// 100 + 200 + 700 + 999 = 1999; return 1999 - 1994 = 5
+	val s = classify(0) + classify(1) + classify(7) + classify(3);
+	return s - 1994;
+}

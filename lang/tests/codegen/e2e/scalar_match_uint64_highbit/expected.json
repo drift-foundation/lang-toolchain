@@ -1,0 +1,1 @@
+{"description":"Uint64 high-bit literal 2^64-1 dispatches correctly; returns 5.","exit_code":5}

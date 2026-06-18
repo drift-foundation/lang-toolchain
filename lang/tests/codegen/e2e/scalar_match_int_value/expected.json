@@ -1,0 +1,4 @@
+{
+  "description": "Int scalar match in value position dispatches across literal arms + default. classify(0)+classify(1)+classify(7)+classify(3) = 100+200+700+999 = 1999; returns 5.",
+  "exit_code": 5
+}

@@ -1,0 +1,10 @@
+// 256 is out of range for a Byte scrutinee.
+module m;
+pub fn pick(b: Byte) nothrow -> Int {
+	val r = match b {
+		256 => { 1 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int { return pick(cast<Byte>(0)); }

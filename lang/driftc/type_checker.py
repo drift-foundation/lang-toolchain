@@ -118,6 +118,8 @@ from lang.driftc.core.types_core import (
 	TypeParamId,
 	VariantArmSchema,
 	VariantFieldSchema,
+	scalar_match_type_name,
+	scalar_pattern_value,
 )
 from lang.driftc.core.function_id import (
 	FunctionId,
@@ -7522,6 +7524,13 @@ class TypeChecker:
 				# small Bool-specific path, and lowering branches on the bool value
 				# directly via `_lower_bool_match`.
 				is_bool_match = False
+				# Integer scalar scrutinees (`match n { 0 => ..., default => ... }`).
+				# Like Bool, NOT modeled as a variant; arms carry a checker-validated
+				# `scalar_value` and lowering dispatches via an EQ chain in
+				# `_lower_scalar_match`.  `scalar_scrut_ty` is the unwrapped scalar
+				# TypeId used for per-arm signedness/range validation.
+				is_scalar_match = False
+				scalar_scrut_ty: TypeId | None = None
 				scrut_ref_mut: bool | None = None
 				if scrut_ty is not None:
 					try:
@@ -7542,6 +7551,10 @@ class TypeChecker:
 							# the bool through the ref (Bool is Copy/POD, so the raw
 							# load is sound); arms bind nothing.
 							is_bool_match = True
+						elif scalar_match_type_name(self.type_table, inner) is not None:
+							# `match &n { 0 => ..., default => ... }` — scalar-int ref.
+							is_scalar_match = True
+							scalar_scrut_ty = inner
 						else:
 							diagnostics.append(
 								_tc_diag(
@@ -7552,6 +7565,9 @@ class TypeChecker:
 							)
 					elif scrut_ty == self._bool:
 						is_bool_match = True
+					elif scalar_match_type_name(self.type_table, scrut_ty) is not None:
+						is_scalar_match = True
+						scalar_scrut_ty = scrut_ty
 					elif td_scrut is not None and td_scrut.kind is not TypeKind.VARIANT:
 						diagnostics.append(
 							_tc_diag(
@@ -7566,6 +7582,7 @@ class TypeChecker:
 				seen_default = False
 				seen_default_span: Span | None = None
 				seen_ctors: set[str] = set()
+				seen_scalar_values: set[int] = set()
 				result_ty: TypeId | None = None
 
 				for idx, arm in enumerate(expr.arms):
@@ -7627,7 +7644,74 @@ class TypeChecker:
 									code="E-MATCHEXPR-CONTROLFLOW",
 								)
 							)
-					if arm.ctor is None:
+					_scalar_kind = getattr(arm, "scalar_literal_kind", None)
+					if is_scalar_match and _scalar_kind is not None:
+						# Integer-literal arm.  Validate signedness + representability
+						# against the scrutinee type (single source: scalar_pattern_value),
+						# record the canonical `scalar_value` for stage2, and detect
+						# duplicate literals by VALUE (not by ctor name).
+						if seen_default:
+							diagnostics.append(
+								_tc_diag(
+									message="match arms after default are unreachable",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						sok, sval, serr = scalar_pattern_value(
+							self.type_table,
+							scalar_scrut_ty,
+							_scalar_kind,
+							int(getattr(arm, "scalar_literal_magnitude", 0) or 0),
+						)
+						if not sok:
+							diagnostics.append(
+								_tc_diag(
+									message=serr,
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						else:
+							if sval in seen_scalar_values:
+								diagnostics.append(
+									_tc_diag(
+										message=f"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal {sval}",
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							seen_scalar_values.add(sval)
+							arm.scalar_value = sval
+					elif is_scalar_match and arm.ctor is not None:
+						# A constructor pattern against an integer scrutinee is not a
+						# valid scalar arm.
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									f"E-MATCH-SCALAR-CTOR: '{arm.ctor}' is not a valid pattern for a "
+									"scalar (integer) match; use integer literals or `default`"
+								),
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+							)
+						)
+					elif _scalar_kind is not None:
+						# An integer-literal arm (`0 => ...`) whose scrutinee is NOT an
+						# integer scalar (the is_scalar_match+_scalar_kind branch above did
+						# not fire).  A scalar literal arm has `ctor is None`, so without
+						# this guard it would be silently misread as a `default` arm below.
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"E-MATCH-SCALAR-SCRUTINEE: integer literal pattern is only valid "
+									"when matching an integer scalar (Int/Uint/Int32/Uint32/Uint64/Byte)"
+								),
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+							)
+						)
+					elif arm.ctor is None:
 						# default arm
 						if seen_default:
 							diagnostics.append(
@@ -8023,6 +8107,23 @@ class TypeChecker:
 								span=getattr(expr, "loc", Span()) if seen_default_span is None else seen_default_span,
 							)
 						)
+
+				# Scalar (integer) exhaustiveness: the domain is large (and even
+				# Byte's 256 values are impractical to enumerate), so v1 ALWAYS
+				# requires a `default` arm — no finite-domain exception.  Enforced
+				# here AND in the stub Checker so lowering can rely on a default
+				# existing (it never invents fallback behavior).
+				if is_scalar_match and not seen_default:
+					diagnostics.append(
+						_tc_diag(
+							message=(
+								"E-MATCH-NONEXHAUSTIVE: scalar (integer) match must include a "
+								"`default` arm"
+							),
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
 
 				if not used_as_value:
 					return record_expr(expr, self._void)

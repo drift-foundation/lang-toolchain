@@ -1,0 +1,14 @@
+// Int32 scalar match including a NEGATIVE literal arm (signed type).
+module m;
+pub fn pick(x: Int32) nothrow -> Int {
+	val r = match x {
+		-5 => { 2 },
+		0 => { 3 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// pick(-5)=2, pick(0)=3, pick(7)=9 → 2+3+9=14; 14-9=5
+	return pick(cast<Int32>(-5)) + pick(cast<Int32>(0)) + pick(cast<Int32>(7)) - 9;
+}

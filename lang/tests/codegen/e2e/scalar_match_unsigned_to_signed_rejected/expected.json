@@ -1,0 +1,1 @@
+{"description":"Unsigned literal 42u against signed Int scrutinee is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-SIGNEDNESS: unsigned literal"}]}

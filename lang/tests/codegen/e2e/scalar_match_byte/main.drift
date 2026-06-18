@@ -1,0 +1,14 @@
+// Byte scalar match (values built via cast<Byte>).
+module m;
+pub fn pick(b: Byte) nothrow -> Int {
+	val r = match b {
+		0 => { 1 },
+		255 => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// pick(0)=1, pick(255)=4 (high Byte), pick(10)=9 → 1+4+9=14; 14-9=5
+	return pick(cast<Byte>(0)) + pick(cast<Byte>(255)) + pick(cast<Byte>(10)) - 9;
+}

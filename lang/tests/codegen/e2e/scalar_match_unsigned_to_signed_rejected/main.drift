@@ -1,0 +1,10 @@
+// An unsigned-suffixed literal cannot match a signed Int scrutinee.
+module m;
+pub fn main() nothrow -> Int {
+	val n = 1;
+	val r = match n {
+		42u => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

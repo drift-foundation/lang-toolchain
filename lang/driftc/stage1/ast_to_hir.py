@@ -1098,6 +1098,9 @@ class AstToHIR:
 							binder_ids=list(getattr(arm, "binder_ids", []) or []),
 							block=renamed_block,
 							result=renamed_result,
+							scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
+							scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+							scalar_value=getattr(arm, "scalar_value", None),
 							loc=arm.loc,
 						)
 					)
@@ -1317,6 +1320,10 @@ class AstToHIR:
 					binder_ids=binder_ids,
 					block=arm_block,
 					result=arm_result,
+					# Raw scalar-literal pattern data flows through verbatim; the
+					# checker validates it and sets `scalar_value`.
+					scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
+					scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
 					loc=Span.from_loc(arm.loc),
 				)
 			)

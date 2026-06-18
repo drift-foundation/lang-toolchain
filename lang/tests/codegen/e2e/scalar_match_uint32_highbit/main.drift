@@ -1,0 +1,15 @@
+// Uint32 high-bit case: 0xFFFFFFFF must dispatch correctly (no sign-
+// extension confusion with -1).
+module m;
+pub fn pick(x: Uint32) nothrow -> Int {
+	val r = match x {
+		4294967295u => { 7 },
+		0u => { 2 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// pick(0xFFFFFFFF)=7, pick(0)=2 → would be 9 for others; 7+2=9; pick(1u)=9 → 9+9=18; 18-13=5
+	return pick(cast<Uint32>(4294967295)) + pick(cast<Uint32>(0)) + pick(cast<Uint32>(1)) - 13;
+}

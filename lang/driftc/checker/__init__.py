@@ -84,6 +84,7 @@ if TYPE_CHECKING:
 
 
 from lang.driftc.core.types_core import UintConst as _UintConst, Uint64Const as _Uint64Const, validate_const_value as _validate_const
+from lang.driftc.core.types_core import scalar_match_type_name as _scalar_match_type_name, scalar_pattern_value as _scalar_pattern_value
 
 def _eval_hir_const_value(expr: "H.HExpr") -> object | None:
 	"""Extract a compile-time literal value from an HIR expression, or None.
@@ -3583,6 +3584,71 @@ class Checker:
 			scrut_ty = scrut_def.param_types[0]
 			scrut_def = ctx.table.get(scrut_ty)
 		if scrut_def.kind is not TypeKind.VARIANT:
+			# Scalar (integer) scrutinee (`match n { 0 => ..., default => ... }`).
+			# Validate each literal arm's signedness/representability against the
+			# scrutinee type (single source: scalar_pattern_value), record the
+			# canonical `scalar_value` for stage2, detect duplicate literals by
+			# value, and REQUIRE a default arm.  This default-required check is
+			# enforced here too (not only in the typed checker) so lowering can rely
+			# on a default existing — the scalar lowerer never invents fallback
+			# behavior, unlike the closed-domain Bool path.
+			_scalar_name = _scalar_match_type_name(ctx.table, scrut_ty)
+			if _scalar_name is not None:
+				scalar_seen: set[int] = set()
+				scalar_default = False
+				for arm in getattr(expr, "arms", []) or []:
+					arm.binder_field_indices = []
+					kind = getattr(arm, "scalar_literal_kind", None)
+					if kind is None:
+						if arm.ctor is None:
+							scalar_default = True
+							continue
+						ctx._append_diag(
+							_chk_diag(
+								message=(
+									f"E-MATCH-SCALAR-CTOR: '{arm.ctor}' is not a valid pattern for a "
+									"scalar (integer) match; use integer literals or `default`"
+								),
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+						continue
+					if scalar_default:
+						ctx._append_diag(
+							_chk_diag(
+								message="match arm after default is unreachable",
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					sok, sval, serr = _scalar_pattern_value(
+						ctx.table, scrut_ty, kind, int(getattr(arm, "scalar_literal_magnitude", 0) or 0)
+					)
+					if not sok:
+						ctx._append_diag(
+							_chk_diag(message=serr, severity="error", span=getattr(arm, "loc", getattr(expr, "loc", Span())))
+						)
+						continue
+					if sval in scalar_seen:
+						ctx._append_diag(
+							_chk_diag(
+								message=f"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal {sval}",
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					scalar_seen.add(sval)
+					arm.scalar_value = sval
+				if not scalar_default:
+					ctx._append_diag(
+						_chk_diag(
+							message="E-MATCH-NONEXHAUSTIVE: scalar (integer) match must include a `default` arm",
+							severity="error",
+							span=getattr(expr, "loc", Span()),
+						)
+					)
+				return
 			# Bool scrutinee (`match cond { true => ..., false => ... }`): Bool is a
 			# Copy scalar, NOT a variant — there is no variant instance to fabricate
 			# (which would risk leaking into layout/package paths).  Validate the
@@ -3594,6 +3660,21 @@ class Checker:
 				bool_default = False
 				for arm in getattr(expr, "arms", []) or []:
 					arm.binder_field_indices = []
+					if getattr(arm, "scalar_literal_kind", None) is not None:
+						# Integer-literal arm against a Bool scrutinee.  A scalar literal
+						# arm has `ctor is None`, so reject it explicitly rather than
+						# letting it be misread as a `default` arm below.
+						ctx._append_diag(
+							_chk_diag(
+								message=(
+									"E-MATCH-SCALAR-SCRUTINEE: integer literal pattern is only valid "
+									"when matching an integer scalar (Int/Uint/Int32/Uint32/Uint64/Byte)"
+								),
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+						continue
 					if arm.ctor is None:
 						bool_default = True
 						continue
@@ -3657,6 +3738,21 @@ class Checker:
 		seen_ctors: set[str] = set()
 		default_seen = False
 		for arm in getattr(expr, "arms", []) or []:
+			# Integer-literal arm against a variant scrutinee.  A scalar literal arm
+			# has `ctor is None`, so reject it explicitly rather than letting it be
+			# misread as a `default` arm below.
+			if getattr(arm, "scalar_literal_kind", None) is not None:
+				ctx._append_diag(
+					_chk_diag(
+						message=(
+							"E-MATCH-SCALAR-SCRUTINEE: integer literal pattern is only valid "
+							"when matching an integer scalar (Int/Uint/Int32/Uint32/Uint64/Byte)"
+						),
+						severity="error",
+						span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+					)
+				)
+				continue
 			# Default arm.
 			if arm.ctor is None:
 				default_seen = True

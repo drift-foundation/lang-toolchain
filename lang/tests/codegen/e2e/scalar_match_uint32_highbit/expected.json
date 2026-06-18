@@ -1,0 +1,1 @@
+{"description":"Uint32 high-bit literal 0xFFFFFFFF dispatches correctly; returns 5.","exit_code":5}

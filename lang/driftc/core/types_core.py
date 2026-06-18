@@ -3249,3 +3249,99 @@ def validate_const_value(tt: "TypeTable", name: str, decl_ty: TypeId, val: objec
 	if not ok:
 		return (False, val, f"const '{name}' declared type does not match initializer value")
 	return (True, val, None)
+
+
+# Integer scalar types accepted as `match` scrutinees, with their signedness.
+_SCALAR_MATCH_SIGNED: dict[str, bool] = {
+	"Int": True,
+	"Int32": True,
+	"Uint": False,
+	"Uint32": False,
+	"Uint64": False,
+	"Byte": False,
+}
+
+
+def scalar_match_type_name(tt: "TypeTable", ty: TypeId) -> "str | None":
+	"""Return the scalar-int type name (`Int`/`Uint`/`Int32`/`Uint32`/`Uint64`/
+	`Byte`) if *ty* is a supported integer scrutinee for scalar `match`, else
+	None.  Bool is deliberately excluded — it has its own match lowering."""
+	try:
+		td = tt.get(ty)
+	except Exception:
+		return None
+	if td.kind is not TypeKind.SCALAR:
+		return None
+	return td.name if td.name in _SCALAR_MATCH_SIGNED else None
+
+
+def scalar_match_range(tt: "TypeTable", type_name: str) -> "tuple[int, int]":
+	"""Inclusive [min, max] representable range for a scalar-int scrutinee type.
+	`Int`/`Uint` use the target word size (`tt.word_bits`)."""
+	wb = tt.word_bits
+	if type_name == "Byte":
+		return (0, 255)
+	if type_name == "Int32":
+		return (-(1 << 31), (1 << 31) - 1)
+	if type_name == "Uint32":
+		return (0, (1 << 32) - 1)
+	if type_name == "Uint64":
+		return (0, (1 << 64) - 1)
+	if type_name == "Uint":
+		return (0, (1 << wb) - 1)
+	# Int (signed, target word size)
+	return (-(1 << (wb - 1)), (1 << (wb - 1)) - 1)
+
+
+def scalar_pattern_value(
+	tt: "TypeTable",
+	scrut_ty: TypeId,
+	literal_kind: str,
+	magnitude: int,
+):
+	"""Validate an integer-literal `match` pattern against the scrutinee type and
+	return its canonical SIGNED value.
+
+	`literal_kind` ∈ {"INT","UINT_LIT","UINT64_LIT","NEG_INT"} and `magnitude` is
+	the unsigned magnitude as written by the parser.  Enforces (1) signedness
+	agreement — unsigned-suffixed (`u`/`u64`) literals may not match a signed
+	scrutinee, and negative literals may not match an unsigned scrutinee — and
+	(2) representability within the scrutinee type's range.
+
+	Returns ``(True, signed_value, None)`` on success or
+	``(False, None, error_msg)`` on failure.  This is the SINGLE source of truth
+	shared by both checker frontends; stage2 consumes only the returned value
+	(recorded on the arm) and never re-derives it from raw syntax."""
+	type_name = scalar_match_type_name(tt, scrut_ty)
+	if type_name is None:
+		return (False, None, "match scrutinee is not a scalar integer type")
+	signed = _SCALAR_MATCH_SIGNED[type_name]
+	value = -magnitude if literal_kind == "NEG_INT" else magnitude
+
+	# Signedness agreement (no silent coercion).
+	if literal_kind in ("UINT_LIT", "UINT64_LIT") and signed:
+		suffix = "u64" if literal_kind == "UINT64_LIT" else "u"
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-SIGNEDNESS: unsigned literal '{magnitude}{suffix}' cannot match "
+			f"signed scrutinee type {type_name}",
+		)
+	if literal_kind == "NEG_INT" and not signed:
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-SIGNEDNESS: negative literal '-{magnitude}' cannot match "
+			f"unsigned scrutinee type {type_name}",
+		)
+
+	# Representability within the scrutinee type's range.
+	lo, hi = scalar_match_range(tt, type_name)
+	if value < lo or value > hi:
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-RANGE: literal {value} is not representable by scrutinee "
+			f"type {type_name} (range [{lo}, {hi}])",
+		)
+	return (True, value, None)

@@ -452,6 +452,10 @@ match_pat: DEFAULT              -> match_default
          | "false" "(" ")"      -> match_bool_false_args
          | "true" "(" match_binders ")"   -> match_bool_true_args
          | "false" "(" match_binders ")"  -> match_bool_false_args
+         | INT                  -> match_int_lit
+         | UINT_LIT             -> match_uint_lit
+         | UINT64_LIT           -> match_uint64_lit
+         | "-" INT              -> match_neg_int_lit
          | qualified_member "(" ")"         -> match_ctor_paren_qualified
          | qualified_member "(" match_named_binders ")"  -> match_ctor_named_qualified
          | qualified_member "(" match_binders ")"  -> match_ctor_qualified

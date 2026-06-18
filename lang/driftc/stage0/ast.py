@@ -416,6 +416,12 @@ class MatchArm:
 	ctor_base: Optional[TypeExpr] = None
 	# Mutability flags for binders, parallel to `binders`.
 	binder_is_mutable: Optional[List[bool]] = None
+	# RAW scalar-literal pattern data (parser-owned), carried through to HIR for
+	# the checker to validate.  `scalar_literal_kind` ∈ {"INT","UINT_LIT",
+	# "UINT64_LIT","NEG_INT"} for integer-literal arms (else None);
+	# `scalar_literal_magnitude` is the unsigned magnitude as written.
+	scalar_literal_kind: Optional[str] = None
+	scalar_literal_magnitude: Optional[int] = None
 	loc: Span = field(default_factory=Span)
 
 
