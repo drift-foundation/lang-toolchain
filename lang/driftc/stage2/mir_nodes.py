@@ -37,8 +37,34 @@ class MInstr(MNode):
 
 
 class MTerminator(MNode):
-	"""Base class for MIR terminators (end of a basic block)."""
-	pass
+	"""Base class for MIR terminators (end of a basic block).
+
+	Every terminator defines the CFG-successor contract below.  This is the
+	single authoritative answer to "which basic blocks may this terminator branch
+	to" — all CFG users (drop/liveness dataflow, cleanup authoring, SSA, dominance)
+	must consult it rather than hand-rolling `isinstance` dispatch, so that adding
+	or changing a terminator updates successor semantics in exactly one place.
+
+	The base raises `NotImplementedError` on purpose: a new terminator that forgets
+	to implement `successors()` fails LOUDLY here instead of silently reporting no
+	successors (which would make dataflow/cleanup/SSA treat reachable code as dead —
+	a class of silent miscompile this contract exists to prevent).
+	"""
+
+	def successors(self) -> "list[str]":
+		"""Block names this terminator may branch to, in a stable order."""
+		raise NotImplementedError(
+			f"{type(self).__name__} must implement successors() (MIR CFG-successor contract)"
+		)
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		"""`(target_block, edge_label)` pairs, in the same order as `successors()`.
+
+		Edge labels let edge-sensitive passes (e.g. cleanup edge-splitting)
+		distinguish *which* outgoing edge reaches a block.  Default derives
+		anonymous labels from `successors()`; terminators with meaningful edge
+		identity (e.g. if-then/if-else) override this."""
+		return [(t, "succ") for t in self.successors()]
 
 
 # Locals and values
@@ -1476,6 +1502,12 @@ class Goto(MTerminator):
 	"""Unconditional branch to another basic block."""
 	target: str
 
+	def successors(self) -> "list[str]":
+		return [self.target]
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		return [(self.target, "goto")]
+
 
 @dataclass
 class IfTerminator(MTerminator):
@@ -1484,11 +1516,23 @@ class IfTerminator(MTerminator):
 	then_target: str
 	else_target: str
 
+	def successors(self) -> "list[str]":
+		return [self.then_target, self.else_target]
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		return [(self.then_target, "if_then"), (self.else_target, "if_else")]
+
 
 @dataclass
 class Return(MTerminator):
 	"""Function return with optional value."""
 	value: Optional[ValueId]
+
+	def successors(self) -> "list[str]":
+		return []
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		return []
 
 
 @dataclass
@@ -1501,6 +1545,12 @@ class Unreachable(MTerminator):
 	function"). Lowering should not crash the compiler in these cases; instead
 	we encode the invariant into MIR and let LLVM emit `unreachable`.
 	"""
+
+	def successors(self) -> "list[str]":
+		return []
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		return []
 
 
 

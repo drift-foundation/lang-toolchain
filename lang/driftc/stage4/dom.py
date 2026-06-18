@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Set, Optional
 
 from lang.driftc.stage2 import MirFunc, Goto, IfTerminator, MTerminator
+from lang.driftc.stage2 import cfg as _cfg
 
 
 @dataclass
@@ -60,13 +61,9 @@ class DominatorAnalysis:
 		# 1. Build predecessor map.
 		preds: Dict[str, Set[str]] = {b: set() for b in blocks}
 		for bname, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, Goto):
-				preds[term.target].add(bname)
-			elif isinstance(term, IfTerminator):
-				preds[term.then_target].add(bname)
-				preds[term.else_target].add(bname)
-			# Other terminators (Return, etc.) do not add outgoing edges.
+			# Central MIR CFG-successor contract (stage2/cfg.py).
+			for succ_name in _cfg.terminator_successors(block.terminator):
+				preds[succ_name].add(bname)
 
 		# 2. Initialize dom sets.
 		dom: Dict[str, Set[str]] = {b: set(blocks) for b in blocks}
@@ -131,15 +128,10 @@ class DominanceFrontierAnalysis:
 		preds: Dict[str, Set[str]] = {b: set() for b in blocks}
 		succ: Dict[str, Set[str]] = {b: set() for b in blocks}
 		for bname, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, Goto):
-				preds[term.target].add(bname)
-				succ[bname].add(term.target)
-			elif isinstance(term, IfTerminator):
-				preds[term.then_target].add(bname)
-				preds[term.else_target].add(bname)
-				succ[bname].add(term.then_target)
-				succ[bname].add(term.else_target)
+			# Central MIR CFG-successor contract (stage2/cfg.py).
+			for succ_name in _cfg.terminator_successors(block.terminator):
+				preds[succ_name].add(bname)
+				succ[bname].add(succ_name)
 
 		idom = dom_info.idom
 

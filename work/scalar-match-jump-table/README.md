@@ -103,8 +103,15 @@ case here causes a silent miscompile/leak/UAF, not just a cosmetic issue.
 | 10 | SSA post-order targets | `stage4/ssa.py:566–568` | block ordering DFS | **correctness** |
 | 11 | dom preds | `stage4/dom.py:65–68` | dominator predecessors | **correctness** |
 | 12 | dom preds+succs | `stage4/dom.py:136–142` | dominator/CFG build | **correctness** |
-| 13 | terminator emission | `lang/codegen/llvm/llvm_codegen.py:7479–7525` | `Goto→br`, `If→br i1`, `Return`, `Unreachable` | trivial (last consumer) |
-| 14 | MIR structural invariants | `stage2/hir_to_mir.py` "missing terminator" asserts | block-terminator presence | low |
+| 13 | iface-init CFG validator | `lang/driftc/mir_validate.py:851–860` (`validate_mir_iface_init_invariants`) | builds succ/pred for MIR dataflow validation | **correctness** |
+| 14 | terminator emission | `lang/codegen/llvm/llvm_codegen.py:7479–7525` | `Goto→br`, `If→br i1`, `Return`, `Unreachable` | trivial (last consumer) |
+| 15 | MIR structural invariants | `stage2/hir_to_mir.py` "missing terminator" asserts | block-terminator presence | low |
+
+> Row 13 (`mir_validate.py`) was **found in review after the first audit** — it
+> lives outside `stage2/`/`stage4/` so the original `grep` scope missed it. A real
+> CFG dataflow validator: if `SwitchTerminator` landed with this site unmigrated it
+> would treat switch blocks as having no outgoing edges. Lesson: the audit grep must
+> span all of `lang/driftc` + `lang/codegen`, not just the MIR stage dirs.
 
 > Existing terminators (`stage2/mir_nodes.py`): `Goto` (1475), `IfTerminator`
 > (1481), `Return` (1489), `Unreachable` (1495). No multi-target/switch terminator

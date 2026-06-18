@@ -32,6 +32,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
 
 from . import mir_nodes as M
+from . import cfg as _cfg
 from lang.driftc.core.types_core import TypeId
 
 if TYPE_CHECKING:
@@ -397,13 +398,9 @@ def _compute_predecessors(func: M.MirFunc) -> Dict[str, List[str]]:
 
 
 def _successors(term: Optional[M.MTerminator]) -> List[str]:
-	if term is None:
-		return []
-	if isinstance(term, M.Goto):
-		return [term.target]
-	if isinstance(term, M.IfTerminator):
-		return [term.then_target, term.else_target]
-	return []
+	# Delegates to the central MIR CFG-successor contract (stage2/cfg.py →
+	# MTerminator.successors()) so terminator dispatch lives in exactly one place.
+	return _cfg.terminator_successors(term)
 
 
 def _join_dicts(

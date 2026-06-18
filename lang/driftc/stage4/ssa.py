@@ -33,6 +33,7 @@ from lang.driftc.stage2 import (
 	IfTerminator,
 	MoveFromRef,
 )
+from lang.driftc.stage2 import cfg as _cfg
 from lang.driftc.stage4.dom import DominatorAnalysis, DominanceFrontierAnalysis
 
 
@@ -194,12 +195,9 @@ class MirToSSA:
 		# Predecessor map for incoming edges.
 		preds: Dict[str, set[str]] = {b: set() for b in func.blocks}
 		for bname, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, Goto):
-				preds[term.target].add(bname)
-			elif isinstance(term, IfTerminator):
-				preds[term.then_target].add(bname)
-				preds[term.else_target].add(bname)
+			# Central MIR CFG-successor contract (stage2/cfg.py).
+			for succ_name in _cfg.terminator_successors(block.terminator):
+				preds[succ_name].add(bname)
 
 		# Definition sites and values per local.
 		def_sites: Dict[str, set[str]] = {}
@@ -243,12 +241,9 @@ class MirToSSA:
 		"""Detect backedges (cycles) via DFS; used to reject loops for now."""
 		succs: Dict[str, set[str]] = {b: set() for b in func.blocks}
 		for bname, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, Goto):
-				succs[bname].add(term.target)
-			elif isinstance(term, IfTerminator):
-				succs[bname].add(term.then_target)
-				succs[bname].add(term.else_target)
+			# Central MIR CFG-successor contract (stage2/cfg.py).
+			for succ_name in _cfg.terminator_successors(block.terminator):
+				succs[bname].add(succ_name)
 
 		# Iterative DFS with an explicit work stack. The recursive form here
 		# (`def dfs(node)` with `dfs(s)` inside) overflowed Python's
@@ -301,12 +296,8 @@ class MirToSSA:
 		def _reachable(entry: str) -> set[str]:
 			succs: Dict[str, list[str]] = {}
 			for name, block in func.blocks.items():
-				targets: list[str] = []
-				if isinstance(block.terminator, Goto):
-					targets.append(block.terminator.target)
-				elif isinstance(block.terminator, IfTerminator):
-					targets.extend([block.terminator.then_target, block.terminator.else_target])
-				succs[name] = targets
+				# Central MIR CFG-successor contract (stage2/cfg.py); order preserved.
+				succs[name] = list(_cfg.terminator_successors(block.terminator))
 			seen: set[str] = set()
 			stack: list[str] = [entry]
 			while stack:
@@ -341,15 +332,10 @@ class MirToSSA:
 		preds: Dict[str, set[str]] = {b: set() for b in func.blocks}
 		succs: Dict[str, set[str]] = {b: set() for b in func.blocks}
 		for bname, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, Goto):
-				preds[term.target].add(bname)
-				succs[bname].add(term.target)
-			elif isinstance(term, IfTerminator):
-				preds[term.then_target].add(bname)
-				preds[term.else_target].add(bname)
-				succs[bname].add(term.then_target)
-				succs[bname].add(term.else_target)
+			# Central MIR CFG-successor contract (stage2/cfg.py).
+			for succ_name in _cfg.terminator_successors(block.terminator):
+				preds[succ_name].add(bname)
+				succs[bname].add(succ_name)
 
 		# Definition sites and values per local.
 		def_sites: Dict[str, set[str]] = {}
@@ -561,12 +547,8 @@ class MirToSSA:
 		"""
 		succs: Dict[str, list[str]] = {}
 		for name, block in func.blocks.items():
-			targets: list[str] = []
-			if isinstance(block.terminator, Goto):
-				targets.append(block.terminator.target)
-			elif isinstance(block.terminator, IfTerminator):
-				targets.extend([block.terminator.then_target, block.terminator.else_target])
-			succs[name] = targets
+			# Central MIR CFG-successor contract (stage2/cfg.py); order preserved.
+			succs[name] = list(_cfg.terminator_successors(block.terminator))
 
 		# Iterative post-order DFS.  Recursive form overflowed Python's
 		# recursion limit on deep linear CFGs (huge match shapes).

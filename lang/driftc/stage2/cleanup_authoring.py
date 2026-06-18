@@ -109,6 +109,7 @@ from typing import List, Optional
 from lang.driftc.core.types_core import TypeId, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
+from . import cfg as _cfg
 from . import ownership_ledger_events as _ledger_events
 from .ledger_cache import (
 	build_and_attach_ledger,
@@ -166,24 +167,23 @@ def _build_predecessor_map(func: M.MirFunc) -> dict:
 	"""
 	pred_map: dict = {}
 	for blk_name, blk in func.blocks.items():
-		term = blk.terminator
-		if isinstance(term, M.Goto):
-			pred_map.setdefault(term.target, []).append((blk_name, "goto"))
-		elif isinstance(term, M.IfTerminator):
-			pred_map.setdefault(term.then_target, []).append((blk_name, "if_then"))
-			pred_map.setdefault(term.else_target, []).append((blk_name, "if_else"))
+		# Edge kinds come from the central MIR CFG-successor contract
+		# (`MTerminator.successor_edges()` via stage2/cfg.py): Goto → "goto",
+		# IfTerminator → "if_then"/"if_else".  `IfTerminator(cond, X, X)` yields
+		# two edges to X (once per label), matching the prior behavior.
+		for target, edge_kind in _cfg.terminator_successor_edges(blk.terminator):
+			pred_map.setdefault(target, []).append((blk_name, edge_kind))
 	return pred_map
 
 
 def _is_multi_successor(blk: M.BasicBlock) -> bool:
-	"""True iff the block's terminator has 2 DISTINCT outgoing
-	targets.  `Goto` is always single-successor.  `IfTerminator(cond,
-	X, X)` is treated as single-successor (in-place insertion before
-	the terminator covers both edges identically)."""
-	term = blk.terminator
-	if isinstance(term, M.IfTerminator) and term.then_target != term.else_target:
-		return True
-	return False
+	"""True iff the block's terminator has 2+ DISTINCT outgoing targets.
+	`Goto`/`Return`/`Unreachable` are single-or-no-successor.  `IfTerminator(cond,
+	X, X)` is treated as single-successor (in-place insertion before the terminator
+	covers both edges identically).  Generalizes to any terminator via the central
+	successor contract (a future multi-way terminator with ≥2 distinct targets is
+	multi-successor)."""
+	return len(set(_cfg.terminator_successors(blk.terminator))) >= 2
 
 
 def _state_post_at_block_end(ledger: LiveStateMap, pred_name: str, pred_blk: M.BasicBlock, local: str) -> LiveState:

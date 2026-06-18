@@ -11,6 +11,7 @@ from lang.driftc.core.span import Span
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang.driftc.stage2 import mir_nodes as M
+from lang.driftc.stage2 import cfg as _cfg
 
 
 class UserFacingMirDiagnostic(Exception):
@@ -848,16 +849,11 @@ def validate_mir_iface_init_invariants(
 				if ty_id is not None and _is_iface(ty_id):
 					value_iface_type[dest] = True
 
-		# Build CFG.
+		# Build CFG via the central MIR CFG-successor contract (stage2/cfg.py)
+		# so this validator stays correct as terminators are added/changed.
 		succs: dict[str, list[str]] = {}
 		for name, block in func.blocks.items():
-			term = block.terminator
-			if isinstance(term, M.Goto):
-				succs[name] = [term.target]
-			elif isinstance(term, M.IfTerminator):
-				succs[name] = [term.then_target, term.else_target]
-			else:
-				succs[name] = []
+			succs[name] = list(_cfg.terminator_successors(block.terminator))
 		preds: dict[str, list[str]] = {name: [] for name in func.blocks.keys()}
 		for name, targets in succs.items():
 			for tgt in targets:

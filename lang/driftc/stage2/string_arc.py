@@ -17,6 +17,7 @@ from lang.driftc.core.function_id import function_symbol
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
+from . import cfg as _cfg
 from . import ownership_ledger_events as _ledger_events
 from . import ownership_ledger_reporter as _ledger_reporter
 from .ledger_cache import mark_ledger_dirty, maybe_fresh_ledger
@@ -605,13 +606,8 @@ def insert_string_arc(
 					continue
 
 	def _block_succs(term: M.MTerminator | None) -> list[str]:
-		if term is None:
-			return []
-		if isinstance(term, M.Goto):
-			return [term.target]
-		if isinstance(term, M.IfTerminator):
-			return [term.then_target, term.else_target]
-		return []
+		# Central MIR CFG-successor contract (stage2/cfg.py).
+		return _cfg.terminator_successors(term)
 
 	def _block_preds() -> Dict[str, Set[str]]:
 		preds: Dict[str, Set[str]] = {name: set() for name in block_order}
