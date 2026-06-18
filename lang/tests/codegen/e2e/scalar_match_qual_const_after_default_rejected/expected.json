@@ -1,0 +1,1 @@
+{"description":"A qualified const scalar-match arm after `default` is rejected as unreachable.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"match arms after default are unreachable"}]}

@@ -1,0 +1,14 @@
+// Duplicate scalar VALUE detected across sources: literal `3` and qualified const
+// `tok.A` (=3) collide.  Dedup is value-based and shares one set across literal,
+// local-const, module-const, and qualified-const arms.
+module main;
+import codes as tok;
+pub fn main() nothrow -> Int {
+	val k = 0;
+	val r = match k {
+		3 => { 1 },
+		tok.A => { 2 },
+		default => { 9 },
+	};
+	return r;
+}

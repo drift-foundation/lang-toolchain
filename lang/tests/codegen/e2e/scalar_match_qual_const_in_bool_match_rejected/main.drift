@@ -1,0 +1,13 @@
+// A qualified const ref against a Bool scrutinee is rejected: qualified const refs
+// are only valid in integer scalar matches (pins the bool-scrutinee path, not just
+// the variant path).
+module main;
+import codes as tok;
+pub fn main() nothrow -> Int {
+	val b = true;
+	val r = match b {
+		tok.A => { 1 },
+		false => { 0 },
+	};
+	return r;
+}

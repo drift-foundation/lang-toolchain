@@ -18,6 +18,55 @@ Baseline: `699b6733` (named-const patterns committed). ABI 17, target unchanged.
 
 ## Log
 
+### 2026-06-18 — version bump + history entry
+- `DRIFTC_VERSION` 0.33.41 → **0.33.42** (`lang/versions.py`); ABI stays **17**.
+- Added `doc/history.md` top entry (2026-06-18, 0.33.42) covering: named/local
+  scalar-const fixes, qualified scalar-const patterns (strict `NAME.NAME`), alias
+  + re-export support, scalar/integer-only validation, the stub-checker default-arm
+  fix, and the added regressions.
+- No test hardcodes the version string (the 3 driver version tests import
+  `DRIFTC_VERSION` dynamically). `test_abi_version_stamp.py` re-verified.
+  Nothing committed.
+
+### 2026-06-18 — review verification green
+- After F1 fix + 4 new regressions: **38/38** scalar-match e2e; **362 passed**
+  pytest (checker/type_checker/parser). ABI 17 unchanged. `DRIFTC_VERSION` bump to
+  0.33.42 still OUTSTANDING (pre-cert action). Nothing committed.
+
+### 2026-06-18 — whole-branch static review (pre-cert)
+- **Finding F1 (Low, latent — FIXED): stub checker miscounts a qual-const arm as
+  the default arm in bool/variant matches.** `checker/__init__.py:3682` (bool) and
+  `:3761` (variant) guarded `scalar_literal_kind` but not `scalar_const_qual_name`,
+  so a `tok.X` arm (ctor=None) was treated as `default`. Masked (never a false
+  accept) because the typed checker runs first and aborts on its
+  `E-MATCH-SCALAR-CONST` rejection (type_checker.py:7893) before the stub runs —
+  but it violates the documented "every `arm.ctor is None` default check must also
+  exclude scalar/qual-const arms" rule and breaks stub self-consistency. Fixed by
+  deferring qual-const arms (`continue`) before the default check in both stub
+  paths, mirroring the scalar stub path. Corroborated by 2 audit agents +
+  empirical probes.
+- **Verified OK (no bug):** threading complete across all 3 AST defs + 6
+  construction sites (no old/new asymmetry; synthetic arms at const_share_synth /
+  for-desugar correctly omit both); `match_qual_const` in both parser pattern-kind
+  lists (parser.py:3517 membership + :3669 dispatch); all stage2 + typed-checker
+  default classifiers carry the full triple guard; alias/re-export resolution
+  goes through the value-expr `file_aliases` path; qual resolution never consults
+  lexical/current-module; stage2 fails loud (assert) on an unresolved qual-const
+  arm; signedness via `scalar_const_pattern_value`; value-dedup shares one set.
+- **Coverage gaps (MISSING regressions) — all ADDED:** qual const after default
+  (`scalar_match_qual_const_after_default_rejected`), duplicate-by-value
+  literal-vs-qual (`scalar_match_qual_const_duplicate_rejected`), qual const in a
+  Bool match (`scalar_match_qual_const_in_bool_match_rejected`), qual const
+  resolving to non-integer/String (`scalar_match_qual_const_non_integer_rejected`).
+  All 4 green.
+- **Item 8 (version):** ABI 17 unchanged is CORRECT — no compiler/runtime boundary
+  symbol, layout, calling-convention, or intrinsic changed. BUT `DRIFTC_VERSION`
+  is still 0.33.41 (last bumped for the base scalar-match feature, `8b75fe48`);
+  this branch adds user-visible syntax (named/local + qualified const patterns)
+  and per house style must bump `DRIFTC_VERSION` → 0.33.42 + add a `history.md`
+  entry BEFORE cert. Not yet done on the branch — flagged, not applied (release
+  prose is the user's to own).
+
 ### 2026-06-18 — review asks addressed + full suite green
 - **Negative pin (Medium):** added e2e
   `scalar_match_qual_const_in_variant_match_rejected` — a qualified const ref

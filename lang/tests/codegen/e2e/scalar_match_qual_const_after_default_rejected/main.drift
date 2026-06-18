@@ -1,0 +1,12 @@
+// A qualified const arm placed after `default` is unreachable — same ordering
+// rule as literal and unqualified-const arms.
+module main;
+import codes as tok;
+pub fn main() nothrow -> Int {
+	val k = 0;
+	val r = match k {
+		default => { 9 },
+		tok.A => { 1 },
+	};
+	return r;
+}

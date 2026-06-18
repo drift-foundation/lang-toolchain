@@ -1,0 +1,1 @@
+{"description":"A qualified const that resolves to a non-integer (String) is rejected with E-MATCH-SCALAR-CONST: is not an integer scalar.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"is not an integer scalar"}]}

@@ -1,5 +1,53 @@
 # Drift development history
 
+## 2026-06-18 (0.33.42: scalar `match` const patterns — named/local fixes + module-qualified refs; ABI stays 17)
+- **Named/local scalar-const pattern fixes.** A name arm in an integer scalar
+  `match` (`const TOK_EOF: Int = 0; match n { TOK_EOF => ... }`) now resolves
+  through normal lexical const scoping: a block-scope `const` **shadows** a
+  module const of the same name, exactly as the expression `TOK_EOF` would. A
+  local that binds but is not a compile-time const (a `val`) is rejected with
+  `E-MATCH-SCALAR-CONST`. Local unsigned consts (`const U: Uint = 1u`) are
+  coerced (via `validate_const_value`) before scalar-pattern validation, so they
+  are usable as patterns. A named-const arm placed after `default` is reported as
+  unreachable, matching the literal and variant rules.
+- **Qualified scalar-const patterns (new syntax).** Integer scalar matches accept
+  **module-qualified** const references — `import tokens as tok; match k {
+  tok.TOK_EOF => ..., default => ... }`. Resolution follows the same module/export
+  path as value expressions: import **aliases** and **re-exported** consts
+  (materialized into the exporting module's const table) both resolve. Resolution
+  is through the named module **only** — a qualified ref never consults lexical
+  scope or a same-name current-module const.
+- **Strict `NAME.NAME` syntax; distinct from variant ctors.** The qualified-const
+  pattern is exactly `alias.CONST` (one dot, two names). A dotted module path
+  (`acme.tokens.TOK`) does not parse as this pattern and requires an `as` alias.
+  The parser/checker preserve the distinction: `tok.CONST` (DOT) is a qualified
+  **const** reference, while `Type::Ctor` / `mod.Type::Ctor` (DCOLON) remains a
+  **variant constructor** pattern (LALR disambiguation, no grammar conflict).
+- **Scalar/integer-only validation.** A qualified const ref is rejected outside an
+  integer scalar match (bool or variant scrutinee) with a stable
+  `E-MATCH-SCALAR-CONST` diagnostic; a qualified name that does not resolve, or
+  resolves to a non-integer const, is also rejected. Signedness/range go through
+  the single `scalar_const_pattern_value` source; duplicate scalar **values** are
+  detected across literals, local consts, module consts, and qualified consts
+  (one shared value set). Stage2 lowering consumes only the checker-set
+  `scalar_value` — no name or qualified ref reaches lowering.
+- **Stub-checker default-arm fix.** The stub checker's bool- and variant-match
+  paths classified any `ctor is None` arm as the `default` arm, which would
+  miscount a qualified-const arm (also `ctor is None`) as the default. (Masked in
+  practice — the typed checker runs first and rejects the arm — but a contract
+  gap.) Both stub paths now defer qualified-const arms to the typed checker before
+  the default check, matching the scalar path and stage2's classification.
+- **Regressions.** New e2e under `lang/tests/codegen/e2e/scalar_match_const_*`
+  (local value, local unsigned value, local-shadows-module, val-local rejected,
+  after-default rejected) and `scalar_match_qual_const_*` (cross-module value via
+  `as` alias, re-export, current-module shadowing does not win, vs-variant-ctor
+  distinction, after-default, duplicate-by-value, signedness mismatch, unknown
+  name, non-integer, in-variant-match rejected, in-bool-match rejected).
+- **Versioning:** user-visible syntax addition → `DRIFTC_VERSION` 0.33.41 →
+  **0.33.42**. **No ABI change — `DRIFT_RT_ABI_VERSION` stays 17** (grammar /
+  checker / lowering surface only; no runtime boundary, layout, calling
+  convention, or intrinsic changed).
+
 ## 2026-06-13 (0.33.34: `core.Box<T>` — unique-ownership value indirection; ABI stays 17)
 - **`core.Box<T>` (new `std.core.box`).** A unique-ownership, single
   heap-allocation value indirection — the non-shared sibling of `Arc<T>`. Public

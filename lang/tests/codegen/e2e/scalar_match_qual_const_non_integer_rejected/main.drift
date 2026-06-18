@@ -1,0 +1,12 @@
+// A qualified name that RESOLVES but to a non-integer const (String) is rejected —
+// distinct from the unresolved case (scalar_match_qual_const_unknown_rejected).
+module main;
+import codes as tok;
+pub fn main() nothrow -> Int {
+	val k = 0;
+	val r = match k {
+		tok.NAME => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

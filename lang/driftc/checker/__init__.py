@@ -3679,6 +3679,13 @@ class Checker:
 							)
 						)
 						continue
+					if getattr(arm, "scalar_const_qual_name", None) is not None:
+						# Qualified const pattern (`mod.X`) against a Bool scrutinee.  It
+						# has `ctor is None`, so this MUST precede the default check below
+						# or it would be miscounted as the `default` arm.  DEFER to the
+						# typed checker, which owns qual-const resolution and rejects it
+						# as "only valid in an integer scalar match".
+						continue
 					if arm.ctor is None:
 						bool_default = True
 						continue
@@ -3756,6 +3763,13 @@ class Checker:
 						span=getattr(arm, "loc", getattr(expr, "loc", Span())),
 					)
 				)
+				continue
+			if getattr(arm, "scalar_const_qual_name", None) is not None:
+				# Qualified const pattern (`mod.X`) against a variant scrutinee.  It
+				# has `ctor is None`, so this MUST precede the default check below or
+				# it would be miscounted as the `default` arm.  DEFER to the typed
+				# checker, which owns qual-const resolution and rejects it as "only
+				# valid in an integer scalar match".
 				continue
 			# Default arm.
 			if arm.ctor is None:

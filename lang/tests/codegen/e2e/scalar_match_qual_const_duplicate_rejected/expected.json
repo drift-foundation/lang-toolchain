@@ -1,0 +1,1 @@
+{"description":"A qualified const (tok.A=3) duplicating a literal arm (3) is rejected with E-MATCH-SCALAR-DUPLICATE.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-DUPLICATE"}]}
