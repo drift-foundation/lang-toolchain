@@ -1,0 +1,4 @@
+{
+  "description": "match over &Bool loads the bool through the ref; a default arm substitutes for the false arm. classify(&t)=1, classify(&f)=0 → returns 15.",
+  "exit_code": 15
+}

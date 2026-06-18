@@ -1,0 +1,4 @@
+{
+  "description": "Value-position Bool match producing owning heap Strings: the selected arm's String transfers into the match result and is released by scope-exit (memcheck-clean). label(true)=\"yes!\" (len 4), label(false)=\"no!\" (len 3) → returns 7.",
+  "exit_code": 7
+}

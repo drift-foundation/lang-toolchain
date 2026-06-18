@@ -1,0 +1,7 @@
+{
+  "description": "Duplicate `true` arm in a Bool match is rejected.",
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "typecheck", "message_contains": "duplicate match arm for constructor 'true'" }
+  ]
+}

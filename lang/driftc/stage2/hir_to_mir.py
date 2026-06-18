@@ -1368,6 +1368,19 @@ class HIRToMIR:
 		  - `Ctor(a,b,...)` binds fields positionally (exact arity).
 		  - `Ctor(x=a,...)` binds a subset by name (normalized by the typed checker).
 		"""
+		# Bool scrutinees (`match cond { true => ..., false => ... }`) are not
+		# variants; they lower through a dedicated branch-on-bool path that never
+		# touches the variant-tag dispatch below.  Detect them up front (covering
+		# both `Bool` and `&Bool`) before any variant-specific work runs.
+		_pre_scrut_ty = self._infer_expr_type(expr.scrutinee)
+		if _pre_scrut_ty is not None:
+			_pre_def = self._type_table.get(_pre_scrut_ty)
+			_pre_inner = _pre_scrut_ty
+			if _pre_def.kind is TypeKind.REF and _pre_def.param_types:
+				_pre_inner = _pre_def.param_types[0]
+			if _pre_inner == self._bool_type:
+				return self._lower_bool_match(expr, want_value=want_value)
+
 		# Evaluate scrutinee once in the current block; it dominates the dispatch/arms.
 		scrut_val = self.lower_expr(expr.scrutinee)
 		scrut_ref_val: M.ValueId | None = None
@@ -2189,6 +2202,159 @@ class HIRToMIR:
 		dest = self.b.new_temp()
 		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
 		return dest
+
+	def _lower_bool_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
+		"""
+		Lower `match` over a `Bool` (or `&Bool`) scrutinee as a single branch on the
+		bool value, bypassing the variant-tag dispatch entirely.
+
+		Bool is a Copy/POD scalar: arms bind nothing, the scrutinee needs no
+		tombstoning or per-arm drop, so this path is much smaller than the variant
+		one.  The checker (`is_bool_match`) has already validated that arm ctors are
+		exactly `true`/`false`/default, that arms bind no fields, and that the set is
+		exhaustive (both values covered or a default present).
+		"""
+		# Evaluate the scrutinee once; load through the ref for `&Bool`.
+		scrut_val = self.lower_expr(expr.scrutinee)
+		scrut_ty = self._infer_expr_type(expr.scrutinee)
+		if scrut_ty is not None:
+			scrut_def = self._type_table.get(scrut_ty)
+			if scrut_def.kind is TypeKind.REF and scrut_def.param_types:
+				loaded = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=loaded, ptr=scrut_val, inner_ty=self._bool_type))
+				self._local_types[loaded] = self._bool_type
+				scrut_val = loaded
+		self._local_types[scrut_val] = self._bool_type
+
+		# Optional hidden result local (mirrors the variant path).
+		result_local: str | None = None
+		if want_value:
+			result_local = f"__match_bool_tmp{self.b.new_temp()}"
+			self.b.ensure_local(result_local)
+			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
+			if want_ty is not None:
+				self._local_types[result_local] = want_ty
+			else:
+				arm_ty: TypeId | None = None
+				for arm in expr.arms:
+					if arm.result is None:
+						continue
+					arm_ty = self._infer_expr_type(arm.result)
+					if arm_ty is not None:
+						break
+				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
+
+		join_block = self.b.new_block("match_bool_join")
+		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
+			(arm, self.b.new_block(f"match_bool_arm_{idx}")) for idx, arm in enumerate(expr.arms)
+		]
+
+		# Resolve true/false targets, preferring an explicit arm and falling back
+		# to the default arm.
+		entry_block = self.b.block
+		true_block: M.BasicBlock | None = None
+		false_block: M.BasicBlock | None = None
+		default_block: M.BasicBlock | None = None
+		for arm, bb in arm_blocks:
+			if arm.ctor == "true":
+				true_block = bb
+			elif arm.ctor == "false":
+				false_block = bb
+			elif arm.ctor is None:
+				default_block = bb
+		true_target = true_block if true_block is not None else default_block
+		false_target = false_block if false_block is not None else default_block
+		if true_target is None or false_target is None:
+			# A boolean value with no covering arm only reaches here if no checker
+			# rejected the non-exhaustive match (the main TypeChecker emits
+			# E-MATCH-NONEXHAUSTIVE; the legacy stub Checker normalizes Bool arms
+			# without an exhaustiveness pass).  Mirror the variant lowerer's
+			# missing-default handling — route the uncovered value to an
+			# `Unreachable` block — so lowering stays total and never depends on a
+			# guarantee only one checker path provides.  This matches how a variant
+			# match with missing constructors and no default lowers (see the final
+			# `else` path in `_lower_match`).
+			unreached = self.b.new_block("match_bool_unreached")
+			self.b.set_block(unreached)
+			self.b.set_terminator(M.Unreachable())
+			if true_target is None:
+				true_target = unreached
+			if false_target is None:
+				false_target = unreached
+			self.b.set_block(entry_block)
+
+		self.b.set_terminator(
+			M.IfTerminator(cond=scrut_val, then_target=true_target.name, else_target=false_target.name)
+		)
+
+		# Lower each arm body.  No binders, no scrutinee drop — just statements, an
+		# optional result store, scope cleanup, and a jump to the join.
+		join_reachable = False
+		for arm, bb in arm_blocks:
+			self.b.set_block(bb)
+			self._push_scope(include_params=False)
+			try:
+				for _arm_stmt in arm.block.statements:
+					if self.b.block.terminator is not None:
+						break
+					self.lower_stmt(_arm_stmt)
+
+				if not want_value and arm.result is not None:
+					if self.b.block.terminator is None:
+						self.lower_stmt(H.HExprStmt(expr=arm.result))
+
+				did_store_result = False
+				if want_value and result_local is not None:
+					if arm.result is None:
+						if self.b.block.terminator is None:
+							raise AssertionError(
+								"value-producing Bool match arm must yield a value or terminate (checker bug)"
+							)
+					else:
+						if self.b.block.terminator is not None:
+							raise AssertionError(
+								"value-producing Bool match arm has a result expression but its block terminates (checker bug)"
+							)
+						if self._local_types.get(result_local) is self._unknown_type:
+							arm_ty2 = self._infer_expr_type(arm.result)
+							if arm_ty2 is not None:
+								self._local_types[result_local] = arm_ty2
+						val = self._lower_owning_consume(arm.result, self._local_types.get(result_local))
+						if self._local_types.get(result_local) is self._unknown_type:
+							val_ty = self._local_types.get(val)
+							if val_ty is not None:
+								self._local_types[result_local] = val_ty
+						self.b.emit(M.StoreLocal(local=result_local, value=val))
+						did_store_result = True
+
+				if self.b.block.terminator is None:
+					self._emit_scope_cleanup_hook(scope_index=len(self._scope_stack) - 1)
+					if want_value and result_local is not None and not did_store_result:
+						raise AssertionError(
+							"value-producing Bool match arm falls through without storing result (lowering bug)"
+						)
+					self.b.set_terminator(M.Goto(target=join_block.name))
+					join_reachable = True
+			finally:
+				self._pop_scope()
+
+		for _arm, _bb in arm_blocks:
+			if _bb.terminator is None:
+				# A default arm can be unreachable when both `true` and `false` are
+				# also given explicitly; terminate it so the CFG stays well-formed.
+				self.b.set_block(_bb)
+				self.b.set_terminator(M.Goto(target=join_block.name))
+
+		self.b.set_block(join_block)
+		if not want_value:
+			if not join_reachable and self.b.block.terminator is None:
+				self.b.set_terminator(M.Unreachable())
+			return None
+		assert result_local is not None
+		dest = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		return dest
+
 
 	def _lower_expr_raw(self, expr: H.HExpr, *, expected_type: TypeId | None = None) -> M.ValueId:
 		"""

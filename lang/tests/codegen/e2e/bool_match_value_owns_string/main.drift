@@ -1,0 +1,21 @@
+// Value-position Bool match whose arms produce an OWNING heap String.
+// Exercises the ownership-consume + scope-cleanup path in
+// `_lower_bool_match` (the arm value transfers into the hidden match
+// result local; the non-selected arm's value is never materialized).
+// Memcheck-clean asserts no leak of the selected String.
+module m;
+
+pub fn label(flag: Bool) nothrow -> String {
+	val s = match flag {
+		true => { "yes" + "!" },
+		false => { "no" + "!" },
+	};
+	return s;
+}
+
+pub fn main() nothrow -> Int {
+	val a = label(true);
+	val b = label(false);
+	// a == "yes!" (4), b == "no!" (3) → 7
+	return a.byte_length() + b.byte_length();
+}

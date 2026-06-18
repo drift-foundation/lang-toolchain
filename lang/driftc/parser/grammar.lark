@@ -446,6 +446,12 @@ match_expr_arm: match_pat FATARROW match_expr_arm_body
 ?match_stmt_arms: match_stmt_arm (COMMA match_stmt_arm)* COMMA?
 match_stmt_arm: match_pat FATARROW match_stmt_arm_body
 match_pat: DEFAULT              -> match_default
+         | "true"               -> match_bool_true
+         | "false"              -> match_bool_false
+         | "true" "(" ")"       -> match_bool_true_args
+         | "false" "(" ")"      -> match_bool_false_args
+         | "true" "(" match_binders ")"   -> match_bool_true_args
+         | "false" "(" match_binders ")"  -> match_bool_false_args
          | qualified_member "(" ")"         -> match_ctor_paren_qualified
          | qualified_member "(" match_named_binders ")"  -> match_ctor_named_qualified
          | qualified_member "(" match_binders ")"  -> match_ctor_qualified

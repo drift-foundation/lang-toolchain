@@ -1,0 +1,19 @@
+// `match &b` (ref-to-Bool scrutinee) loads the bool through the ref,
+// and a `default` arm covers the false case in place of an explicit
+// `false` arm.
+module m;
+
+pub fn classify(b: &Bool) nothrow -> Int {
+	val r = match b {
+		true => { 1 },
+		default => { 0 },
+	};
+	return r;
+}
+
+pub fn main() nothrow -> Int {
+	val t = true;
+	val f = false;
+	// classify(&t)=1, classify(&f)=0 → 1*10 + 0 + 5 == 15
+	return classify(&t) * 10 + classify(&f) + 5;
+}

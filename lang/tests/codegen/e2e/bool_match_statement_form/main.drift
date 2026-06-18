@@ -1,0 +1,19 @@
+// Bool `match` in statement position: each arm runs for side effects
+// and the match yields no value.  Exercises the `not want_value` path
+// in `_lower_bool_match`.
+module m;
+
+pub fn main() nothrow -> Int {
+	var acc = 0;
+	val flag = true;
+	match flag {
+		true => { acc = acc + 4; },
+		false => { acc = acc + 100; },
+	}
+	val other = false;
+	match other {
+		true => { acc = acc + 100; },
+		false => { acc = acc + 1; },
+	}
+	return acc;
+}

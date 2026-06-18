@@ -7514,6 +7514,14 @@ class TypeChecker:
 			if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 				scrut_ty = type_expr(expr.scrutinee, used_as_value=False)
 				inst = None
+				# Bool scrutinees (`match cond { true => ..., false => ... }`) are
+				# NOT modeled as a variant: Bool is a Copy scalar, and fabricating a
+				# fake VariantInstance for it risks leaking into the layout/package
+				# paths (variant memory layout, tombstones, interface schemas).
+				# Instead this flag steers the arm loop and exhaustiveness check to a
+				# small Bool-specific path, and lowering branches on the bool value
+				# directly via `_lower_bool_match`.
+				is_bool_match = False
 				scrut_ref_mut: bool | None = None
 				if scrut_ty is not None:
 					try:
@@ -7529,6 +7537,11 @@ class TypeChecker:
 						if td_inner is not None and td_inner.kind is TypeKind.VARIANT:
 							inst = self.type_table.get_variant_instance(inner)
 							scrut_ref_mut = bool(td_scrut.ref_mut)
+						elif inner == self._bool:
+							# `match &b { true => ..., false => ... }`.  Lowering loads
+							# the bool through the ref (Bool is Copy/POD, so the raw
+							# load is sound); arms bind nothing.
+							is_bool_match = True
 						else:
 							diagnostics.append(
 								_tc_diag(
@@ -7537,6 +7550,8 @@ class TypeChecker:
 									span=getattr(expr, "loc", Span()),
 								)
 							)
+					elif scrut_ty == self._bool:
+						is_bool_match = True
 					elif td_scrut is not None and td_scrut.kind is not TypeKind.VARIANT:
 						diagnostics.append(
 							_tc_diag(
@@ -7864,6 +7879,34 @@ class TypeChecker:
 									if _is_copy_arm_binder:
 										copy_arm_binder_ids.add(bid)
 
+						elif arm.ctor is not None and is_bool_match:
+							# Bool arm: the only valid constructors are `true` and
+							# `false`, and neither carries fields.  Reuse the generic
+							# duplicate/default/exhaustiveness machinery (driven by
+							# `seen_ctors`); only the constructor-name and binder
+							# checks are Bool-specific here.
+							if arm.ctor not in ("true", "false"):
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-MATCH-BOOL-CTOR: '{arm.ctor}' is not a Bool pattern; "
+											"match a Bool with `true` and `false`"
+										),
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							elif arm.binders or getattr(arm, "pattern_arg_form", "bare") != "bare":
+								diagnostics.append(
+									_tc_diag(
+										message=f"E-MATCH-BOOL-BINDER: Bool match arm `{arm.ctor}` takes no fields",
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							if hasattr(arm, "binder_field_indices"):
+								arm.binder_field_indices = []
+
 						type_block_in_scope(arm.block)
 
 						# G3: rewrite a bare `HVar` arm result that refers
@@ -7960,6 +8003,22 @@ class TypeChecker:
 						diagnostics.append(
 							_tc_diag(
 								message=f"E-MATCH-NONEXHAUSTIVE: non-exhaustive match must include default arm (missing: {', '.join(sorted(missing))})",
+								severity="error",
+								span=getattr(expr, "loc", Span()) if seen_default_span is None else seen_default_span,
+							)
+						)
+
+				# Bool exhaustiveness: both `true` and `false` must be covered,
+				# unless a `default` arm is present.
+				if is_bool_match and not seen_default:
+					missing = {"true", "false"} - seen_ctors
+					if missing:
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									"E-MATCH-NONEXHAUSTIVE: non-exhaustive Bool match must cover "
+									f"`true` and `false` or include a default arm (missing: {', '.join(sorted(missing))})"
+								),
 								severity="error",
 								span=getattr(expr, "loc", Span()) if seen_default_span is None else seen_default_span,
 							)

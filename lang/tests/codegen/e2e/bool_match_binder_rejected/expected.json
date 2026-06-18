@@ -1,0 +1,7 @@
+{
+  "description": "A binder on a Bool match arm (`true(x)`) is rejected with E-MATCH-BOOL-BINDER.",
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "typecheck", "message_contains": "E-MATCH-BOOL-BINDER" }
+  ]
+}

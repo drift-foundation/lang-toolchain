@@ -1,0 +1,11 @@
+// Two `true` arms is a duplicate match arm and must be rejected.
+module m;
+pub fn main() nothrow -> Int {
+	val flag = true;
+	val r = match flag {
+		true => { 1 },
+		true => { 2 },
+		false => { 3 },
+	};
+	return r;
+}

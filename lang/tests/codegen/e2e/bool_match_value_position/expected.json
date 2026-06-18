@@ -1,0 +1,4 @@
+{
+  "description": "Bool match in value position compiles and runs: `val r = match flag { true => { 7 }, false => { 9 } }`. This is the exact idiom the E_IF_NOT_AN_EXPRESSION diagnostic recommends; it must compile. pick(true)=7, pick(false)=9, so main returns 7-9+7=5.",
+  "exit_code": 5
+}

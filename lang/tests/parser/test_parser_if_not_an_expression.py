@@ -170,3 +170,31 @@ def test_predicate_does_not_fire_on_unrelated_unexpected_if() -> None:
 	# Permissive: accept either the new code or a legacy code (None
 	# is the unmapped raw-message fallback).
 	assert code in (None, "E_IF_NOT_AN_EXPRESSION"), f"unexpected code {code!r}"
+
+
+def test_e_if_not_an_expression_suggested_match_idiom_parses() -> None:
+	"""Round-trip: the `match cond { true => { a }, false => { b } }`
+	idiom that the E_IF_NOT_AN_EXPRESSION message recommends must itself
+	parse cleanly.  Before Bool-match support landed, the suggested fix
+	was a dead end (`match` rejected Bool scrutinees), so the compiler's
+	own diagnostic pointed at code that did not compile.  This test pins
+	the message and the feature together: if either the wording or the
+	Bool-match grammar drifts, this fails.
+
+	(Full end-to-end compilation of the idiom is pinned by the
+	`bool_match_value_position` codegen e2e fixture.)
+	"""
+	# Extract the literal snippet the diagnostic shows the user.
+	message = _parse_error_message(None, "E_IF_NOT_AN_EXPRESSION")
+	assert "match cond { true => { a }, false => { b } }" in message
+
+	# The recommended idiom parses with no UnexpectedInput.
+	source = """
+fn main() -> Int {
+	val cond = true;
+	val n = match cond { true => { 1 }, false => { 0 } };
+	return n;
+}
+"""
+	prog = p.parse_program(source)
+	assert prog is not None

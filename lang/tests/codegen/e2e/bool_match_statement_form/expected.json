@@ -1,0 +1,4 @@
+{
+  "description": "Statement-form Bool match runs arms for side effects (no value). flag=true adds 4, other=false adds 1, so main returns 5.",
+  "exit_code": 5
+}

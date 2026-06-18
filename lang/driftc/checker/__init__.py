@@ -3583,6 +3583,57 @@ class Checker:
 			scrut_ty = scrut_def.param_types[0]
 			scrut_def = ctx.table.get(scrut_ty)
 		if scrut_def.kind is not TypeKind.VARIANT:
+			# Bool scrutinee (`match cond { true => ..., false => ... }`): Bool is a
+			# Copy scalar, NOT a variant — there is no variant instance to fabricate
+			# (which would risk leaking into layout/package paths).  Validate the
+			# true/false arm set directly and normalize each arm's (empty)
+			# binder_field_indices for stage2.  Exhaustiveness is enforced by the
+			# typed checker's `is_bool_match` path.
+			if scrut_ty == ctx.table.ensure_bool():
+				bool_seen: set[str] = set()
+				bool_default = False
+				for arm in getattr(expr, "arms", []) or []:
+					arm.binder_field_indices = []
+					if arm.ctor is None:
+						bool_default = True
+						continue
+					if bool_default:
+						ctx._append_diag(
+							_chk_diag(
+								message="match arm after default is unreachable",
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					if arm.ctor not in ("true", "false"):
+						ctx._append_diag(
+							_chk_diag(
+								message=(
+									f"E-MATCH-BOOL-CTOR: '{arm.ctor}' is not a Bool pattern; "
+									"match a Bool with `true` and `false`"
+								),
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					elif arm.binders or getattr(arm, "pattern_arg_form", "bare") != "bare":
+						ctx._append_diag(
+							_chk_diag(
+								message=f"E-MATCH-BOOL-BINDER: Bool match arm `{arm.ctor}` takes no fields",
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					if arm.ctor in bool_seen:
+						ctx._append_diag(
+							_chk_diag(
+								message=f"duplicate match arm for constructor '{arm.ctor}'",
+								severity="error",
+								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
+							)
+						)
+					bool_seen.add(arm.ctor)
+				return
 			ctx._append_diag(
 				_chk_diag(
 					message="match scrutinee must have a variant type",

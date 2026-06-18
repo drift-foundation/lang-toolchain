@@ -1,0 +1,10 @@
+// A Bool match that omits `false` and has no default is non-exhaustive
+// and must be rejected (parity with variant exhaustiveness).
+module m;
+pub fn main() nothrow -> Int {
+	val flag = true;
+	val r = match flag {
+		true => { 1 },
+	};
+	return r;
+}

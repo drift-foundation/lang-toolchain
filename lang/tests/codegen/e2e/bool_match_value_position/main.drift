@@ -1,0 +1,21 @@
+// Bool `match` in value position (the exact idiom the
+// E_IF_NOT_AN_EXPRESSION diagnostic suggests).  `match cond { true =>
+// { a }, false => { b } }` is an expression and may initialise a val.
+// Returns 7 when the flag is true, exercising both the value store and
+// the bool branch in `_lower_bool_match`.
+module m;
+
+pub fn pick(flag: Bool) nothrow -> Int {
+	val r = match flag {
+		true => { 7 },
+		false => { 9 },
+	};
+	return r;
+}
+
+pub fn main() nothrow -> Int {
+	val a = pick(true);
+	val b = pick(false);
+	// a == 7, b == 9 → return a - b + 7 == 5
+	return a - b + 7;
+}

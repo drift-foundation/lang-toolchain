@@ -3498,6 +3498,10 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 			# `match_ctor_paren`) rather than a `match_pat` wrapper.
 			if child_name in (
 				"match_default",
+				"match_bool_true",
+				"match_bool_false",
+				"match_bool_true_args",
+				"match_bool_false_args",
 				"match_ctor",
 				"match_ctor0",
 				"match_ctor_named",
@@ -3549,6 +3553,36 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 		if pat_kind == "match_default":
 			ctor = None
 			pattern_arg_form = "bare"
+		elif pat_kind == "match_bool_true":
+			# Bool match arm: `true => { ... }`.  Modeled as a zero-field
+			# "constructor" named "true"; the checker recognises a Bool
+			# scrutinee and validates the true/false arm set directly (no
+			# variant instance is fabricated).  Lowering branches on the
+			# bool value via `_lower_bool_match`.
+			ctor = "true"
+			pattern_arg_form = "bare"
+		elif pat_kind == "match_bool_false":
+			ctor = "false"
+			pattern_arg_form = "bare"
+		elif pat_kind in ("match_bool_true_args", "match_bool_false_args"):
+			# `true(...)` / `false(...)`: Bool patterns bind no fields.  Parse them
+			# so the checker can reject with an explicit E-MATCH-BOOL-BINDER instead
+			# of a bare "unexpected `(`" parse error; carry any binders through as a
+			# non-bare form so the checker's binder guard fires.
+			ctor = "true" if pat_kind == "match_bool_true_args" else "false"
+			binders = []
+			binder_is_mutable = []
+			binders_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_binders"), None)
+			if binders_node is not None:
+				for c in binders_node.children:
+					if isinstance(c, Tree) and _name(c) == "match_binder":
+						bname, is_mut = _parse_match_binder(c)
+						binders.append(bname)
+						binder_is_mutable.append(is_mut)
+					elif isinstance(c, Token) and c.type == "NAME":
+						binders.append(c.value)
+						binder_is_mutable.append(False)
+			pattern_arg_form = "positional" if binders else "paren"
 		elif pat_kind == "match_ctor_qualified":
 			ctor, ctor_base = _parse_qualified_ctor(pat)
 			binders_node = next((c for c in pat.children if isinstance(c, Tree) and _name(c) == "match_binders"), None)

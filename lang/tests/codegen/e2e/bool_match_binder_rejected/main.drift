@@ -1,0 +1,11 @@
+// Bool arms carry no payload; `true(x)` must be rejected with an
+// explicit binder error rather than a bare parse error.
+module m;
+pub fn main() nothrow -> Int {
+	val flag = true;
+	val r = match flag {
+		true(x) => { 1 },
+		false => { 0 },
+	};
+	return r;
+}

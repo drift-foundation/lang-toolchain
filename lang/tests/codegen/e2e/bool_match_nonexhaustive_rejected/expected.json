@@ -1,0 +1,7 @@
+{
+  "description": "Non-exhaustive Bool match (missing `false`, no default) is rejected with E-MATCH-NONEXHAUSTIVE.",
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "typecheck", "message_contains": "non-exhaustive Bool match must cover `true` and `false`" }
+  ]
+}
