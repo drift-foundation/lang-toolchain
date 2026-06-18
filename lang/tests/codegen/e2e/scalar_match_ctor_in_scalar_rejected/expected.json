@@ -1,1 +1,7 @@
-{"description":"Constructor pattern in a scalar match is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CTOR: 'Foo' is not a valid pattern for a scalar (integer) match"}]}
+{
+  "description": "A bare name in a scalar match that is not an integer scalar const (here `Foo`) is rejected with E-MATCH-SCALAR-CONST, not treated as a constructor pattern.",
+  "exit_code": 1,
+  "diagnostics": [
+    { "phase": "typecheck", "message_contains": "E-MATCH-SCALAR-CONST: 'Foo' does not resolve to an integer scalar constant" }
+  ]
+}

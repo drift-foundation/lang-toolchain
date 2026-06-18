@@ -1,0 +1,19 @@
+// A local UNSIGNED const (`const U: Uint = 1u`) is a valid scalar-match pattern.
+// _eval_hir_const_value wraps `1u` as a UintConst; the local-const path must
+// coerce it (validate_const_value) to a plain int just like module consts, or
+// the pattern would be wrongly rejected as "not an integer constant".
+module m;
+pub fn classify(n: Uint) nothrow -> Int {
+	const U: Uint = 1u;
+	const V: Uint = 2u;
+	val r = match n {
+		U => { 3 },
+		V => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// classify(1u)=3, classify(2u)=4, classify(5u)=9 → 3+4+9=16; 16-11=5
+	return classify(1u) + classify(2u) + classify(5u) - 11;
+}

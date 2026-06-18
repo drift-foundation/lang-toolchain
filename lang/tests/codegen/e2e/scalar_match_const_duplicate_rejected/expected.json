@@ -1,0 +1,1 @@
+{"description":"Literal 0 and const TOK_EOF=0 are duplicate arms (detected on evaluated value).","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal 0"}]}

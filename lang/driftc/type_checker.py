@@ -120,6 +120,8 @@ from lang.driftc.core.types_core import (
 	VariantFieldSchema,
 	scalar_match_type_name,
 	scalar_pattern_value,
+	scalar_const_pattern_value,
+	validate_const_value,
 )
 from lang.driftc.core.function_id import (
 	FunctionId,
@@ -2184,6 +2186,10 @@ class TypeChecker:
 		# Block-scope const binding ids: these re-materialize at each use site,
 		# so the Copy check is skipped (non-Copy types like String are allowed).
 		local_const_binding_ids: Set[int] = set()
+		# Block-scope const VALUES (binding_id → (declared TypeId, evaluated value)),
+		# so a const used as a scalar-match pattern resolves to the same value its
+		# expression form would — and lexical (local) consts shadow module consts.
+		local_const_values: dict[int, tuple] = {}
 		# Track whether a binding was declared as &mut T (param-only for now).
 		binding_param_ref_mut: Dict[int, bool] = {}
 		if preseed_binding_place_kind:
@@ -7684,18 +7690,124 @@ class TypeChecker:
 							seen_scalar_values.add(sval)
 							arm.scalar_value = sval
 					elif is_scalar_match and arm.ctor is not None:
-						# A constructor pattern against an integer scrutinee is not a
-						# valid scalar arm.
-						diagnostics.append(
-							_tc_diag(
-								message=(
-									f"E-MATCH-SCALAR-CTOR: '{arm.ctor}' is not a valid pattern for a "
-									"scalar (integer) match; use integer literals or `default`"
-								),
-								severity="error",
-								span=getattr(arm, "loc", Span()),
+						# A NAME in a scalar-match arm must resolve to a compile-time INTEGER
+						# SCALAR constant.  Resolution follows normal lexical const scoping: a
+						# local (block-scope) const SHADOWS a module const of the same name,
+						# exactly as the expression `X` would resolve.  `val`/runtime locals are
+						# NOT consts and are rejected.  The parser recorded only the raw name;
+						# the checker evaluates the const and reuses the scalar pipeline.
+						# Signedness is driven by the const's DECLARED type
+						# (scalar_const_pattern_value), so an unsigned const can't match a signed
+						# scrutinee and vice-versa.  Stage2 never sees the name.
+						# Arms after `default` are unreachable — same rule as the literal and
+						# variant branches (a named-const arm is no exception, else
+						# `default => …, A => …` would lower to a switch where `A` is live).
+						if seen_default:
+							diagnostics.append(
+								_tc_diag(
+									message="match arms after default are unreachable",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
 							)
-						)
+						_const_ty = None
+						_const_val = None
+						_resolved = False
+						# 1) Lexical scope first: an unqualified name binding locally wins.
+						if getattr(arm, "ctor_base", None) is None:
+							# Inline lexical lookup (innermost scope first) — same rule as
+							# the HVar resolver's `_scope_lookup_binding_id`, which is not in
+							# scope from this branch.
+							_lex_bid = None
+							for _sc in reversed(scope_bindings):
+								if arm.ctor in _sc:
+									_cand = _sc[arm.ctor]
+									_cn = binding_names.get(_cand)
+									if _cn is not None and _cn != arm.ctor:
+										continue
+									_lex_bid = _cand
+									break
+							if _lex_bid is not None:
+								_resolved = True  # binds locally; never fall through to module
+								_lc = local_const_values.get(int(_lex_bid))
+								if _lc is not None:
+									_const_ty, _const_val = _lc
+								else:
+									diagnostics.append(
+										_tc_diag(
+											message=(
+												f"E-MATCH-SCALAR-CONST: '{arm.ctor}' is a local binding, not a "
+												"compile-time integer constant; scalar (integer) match arms must be "
+												"integer literals, integer scalar constants, or `default`"
+											),
+											severity="error",
+											span=getattr(arm, "loc", Span()),
+										)
+									)
+						# 2) Module const (only if the name did not bind lexically).
+						if not _resolved:
+							# A QUALIFIED pattern (`a.X`) resolves ONLY in its named base
+							# module — a current-module const of the same name must not
+							# shadow it.  An unqualified name resolves in the current module
+							# (lexical scope was already tried above).
+							_cand_mods: list[str] = []
+							_abase = getattr(arm, "ctor_base", None)
+							if _abase is not None:
+								_abm = getattr(_abase, "module_id", None) or getattr(_abase, "name", None)
+								if isinstance(_abm, str) and _abm:
+									_cand_mods.append(_abm)
+							elif current_module_name is not None:
+								_cand_mods.append(current_module_name)
+							for _m in _cand_mods:
+								_cv = self.type_table.lookup_const(f"{_m}::{arm.ctor}")
+								if _cv is not None:
+									_const_ty, _const_val = _cv
+									_resolved = True
+									break
+							if not _resolved:
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-MATCH-SCALAR-CONST: '{arm.ctor}' does not resolve to an "
+											"integer scalar constant; scalar (integer) match arms must be "
+											"integer literals, integer scalar constants, or `default`"
+										),
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+						# 3) Validate the resolved const against the scrutinee and record it.
+						if _const_val is not None:
+							if not (isinstance(_const_val, int) and not isinstance(_const_val, bool)):
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-MATCH-SCALAR-CONST: constant '{arm.ctor}' is not an integer "
+											"scalar; scalar (integer) match arms require an integer constant"
+										),
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							else:
+								csok, csval, cserr = scalar_const_pattern_value(
+									self.type_table, scalar_scrut_ty, _const_ty, _const_val,
+								)
+								if not csok:
+									diagnostics.append(
+										_tc_diag(message=cserr, severity="error", span=getattr(arm, "loc", Span()))
+									)
+								else:
+									if csval in seen_scalar_values:
+										diagnostics.append(
+											_tc_diag(
+												message=f"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal {csval}",
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+									seen_scalar_values.add(csval)
+									arm.scalar_value = csval
 					elif _scalar_kind is not None:
 						# An integer-literal arm (`0 => ...`) whose scrutinee is NOT an
 						# integer scalar (the is_scalar_match+_scalar_kind branch above did
@@ -7743,8 +7855,10 @@ class TypeChecker:
 						seen_ctors.add(arm.ctor)
 
 					# If the pattern uses a qualified constructor base, validate it.
+					# (Skipped for scalar matches — a name there is a const reference,
+					# resolved in the scalar arm branch above, not a variant ctor base.)
 					arm_ctor_base = getattr(arm, "ctor_base", None)
-					if arm.ctor is not None and arm_ctor_base is not None:
+					if arm.ctor is not None and arm_ctor_base is not None and not is_scalar_match:
 						base_tid = resolve_opaque_type(
 							arm_ctor_base,
 							self.type_table,
@@ -10814,6 +10928,25 @@ class TypeChecker:
 					binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
 					# Mark as local const so use sites skip the Copy check.
 					local_const_binding_ids.add(int(stmt.binding_id))
+					# Record the evaluated value so a local const used as a scalar
+					# match pattern resolves to the same value its expression form
+					# would (and shadows any module const of the same name).
+					try:
+						from lang.driftc.checker import _eval_hir_const_value as _eval_const
+						_lc_val = _eval_const(stmt.value)
+					except Exception:
+						_lc_val = None
+					if _lc_val is not None:
+						# Coerce against the declared type exactly as module consts are
+						# (parser/checker run validate_const_value before define_const).
+						# This unwraps UintConst/Uint64Const to a plain int, so an
+						# unsigned local const (`const U: Uint = 1u`) is usable as a
+						# scalar-match pattern — the pattern path requires a plain int.
+						_vok, _vval, _ = validate_const_value(
+							self.type_table, stmt.name, declared_ty, _lc_val
+						)
+						if _vok:
+							local_const_values[int(stmt.binding_id)] = (declared_ty, _vval)
 				return
 			if isinstance(stmt, H.HLet):
 				if stmt.binding_id is None:

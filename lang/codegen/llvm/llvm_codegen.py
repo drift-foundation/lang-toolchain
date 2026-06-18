@@ -177,6 +177,7 @@ from lang.driftc.stage2 import (
 	Phi,
 	Return,
 	Unreachable,
+	SwitchTerminator,
 	StringConcat,
 	StringEq,
 	StringCmp,
@@ -7524,6 +7525,27 @@ class _FuncBuilder:
 
 		if isinstance(term, Unreachable):
 			self.lines.append("  unreachable")
+			return
+
+		if isinstance(term, SwitchTerminator):
+			# Scalar `match` dispatch: one LLVM `switch` on the scrutinee; LLVM's
+			# backend chooses jump-table / bit-test / compare-tree.  Width comes
+			# from the scrutinee's value type (i8 Byte, i32 Int32/Uint32, i64
+			# Int/Uint/Uint64); exact-equality cases are signedness-agnostic.
+			scrut = self._map_value(term.scrutinee)
+			# Resolve the Drift value-type tag (e.g. "drift.int") to its LLVM
+			# integer type ("i64"/"i32"/"i8"); already-LLVM tags pass through.
+			scrut_llty = self._llty(self.value_types.get(scrut, ""))
+			if not scrut_llty.startswith("i") or not scrut_llty[1:].isdigit():
+				raise NotImplementedError(
+					f"LLVM codegen: switch scrutinee must be an integer type, got {scrut_llty!r}"
+				)
+			case_specs = " ".join(
+				f"{scrut_llty} {int(v)}, label %{self._bb(t)}" for (v, t) in term.cases
+			)
+			self.lines.append(
+				f"  switch {scrut_llty} {scrut}, label %{self._bb(term.default_target)} [ {case_specs} ]"
+			)
 			return
 
 		raise NotImplementedError(f"LLVM codegen v1: unsupported terminator {type(term).__name__}")

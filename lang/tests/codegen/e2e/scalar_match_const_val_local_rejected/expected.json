@@ -1,0 +1,1 @@
+{"description":"A val local used as a scalar-match pattern is rejected (not a compile-time constant).","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CONST: 'x' is a local binding, not a compile-time"}]}

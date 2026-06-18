@@ -2366,44 +2366,6 @@ class HIRToMIR:
 		return dest
 
 
-	def _scalar_match_const(self, value: int, scrut_ty: "TypeId", type_name: str) -> M.ValueId:
-		"""Emit a constant of the scrutinee's scalar type holding `value`.
-
-		`Int`/`Uint`/`Uint64`/`Byte` map to their native `Const*` instruction.
-		The narrow widths `Int32`/`Uint32` have no dedicated wide-less constant, so
-		build the value in the corresponding 64-bit base type and narrow it with a
-		`CastScalar` to the scrutinee type (the checker has already proven the value
-		is representable, so the narrowing is exact)."""
-		dest = self.b.new_temp()
-		if type_name == "Byte":
-			self.b.emit(M.ConstByte(dest=dest, value=value))
-			self._local_types[dest] = self._byte_type
-			return dest
-		if type_name == "Uint64":
-			self.b.emit(M.ConstUint64(dest=dest, value=value))
-			self._local_types[dest] = self._uint64_type
-			return dest
-		if type_name == "Uint":
-			self.b.emit(M.ConstUint(dest=dest, value=value))
-			self._local_types[dest] = self._uint_type
-			return dest
-		if type_name == "Int":
-			self.b.emit(M.ConstInt(dest=dest, value=value))
-			self._local_types[dest] = self._int_type
-			return dest
-		# Int32 / Uint32: wide base const narrowed to the i32 scrutinee type.
-		wide = self.b.new_temp()
-		if type_name == "Uint32":
-			self.b.emit(M.ConstUint(dest=wide, value=value))
-			self._local_types[wide] = self._uint_type
-			self.b.emit(M.CastScalar(dest=dest, value=wide, src_ty=self._uint_type, dst_ty=scrut_ty))
-		else:  # Int32
-			self.b.emit(M.ConstInt(dest=wide, value=value))
-			self._local_types[wide] = self._int_type
-			self.b.emit(M.CastScalar(dest=dest, value=wide, src_ty=self._int_type, dst_ty=scrut_ty))
-		self._local_types[dest] = scrut_ty
-		return dest
-
 	def _lower_scalar_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
 		"""Lower `match` over an integer scalar scrutinee as a switch-like chain of
 		equality tests, falling through to the (mandatory) `default` arm.
@@ -2461,25 +2423,31 @@ class HIRToMIR:
 				literal_arms.append((int(sval), bb))
 			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
 				default_block = bb
+			else:
+				# A literal or const/name arm reached lowering without a resolved
+				# `scalar_value`.  The checker either sets it or rejects the arm, so
+				# this is a checker-contract breach (e.g. a const pattern that no
+				# checker frontend resolved) — fail loudly rather than silently
+				# dropping the arm (which would make a reachable arm dead code).
+				raise AssertionError(
+					"scalar match arm reached MIR lowering without a resolved scalar_value (checker bug)"
+				)
 		if default_block is None:
 			raise AssertionError("scalar match missing default arm reached MIR lowering (checker bug)")
 
-		# Equality-test chain in source order; final else -> default.
-		current_block = self.b.block
-		for sval, bb in literal_arms:
-			self.b.set_block(current_block)
-			const_val = self._scalar_match_const(sval, scrut_ty, type_name)
-			cmp_tmp = self.b.new_temp()
-			signed = None
-			if type_name in ("Int32", "Uint32"):
-				signed = type_name == "Int32"
-			self.b.emit(M.BinaryOpInstr(dest=cmp_tmp, op=M.BinaryOp.EQ, left=scrut_val, right=const_val, signed=signed))
-			self._local_types[cmp_tmp] = self._bool_type
-			next_block = self.b.new_block("match_scalar_next")
-			self.b.set_terminator(M.IfTerminator(cond=cmp_tmp, then_target=bb.name, else_target=next_block.name))
-			current_block = next_block
-		self.b.set_block(current_block)
-		self.b.set_terminator(M.Goto(target=default_block.name))
+		# Single multi-way dispatch: one SwitchTerminator on the scrutinee, cases
+		# in source order, falling through to the (mandatory) default.  Lowering
+		# emits an LLVM `switch`; the backend picks jump-table / bit-test /
+		# compare-tree.  Exact-equality cases are signedness-agnostic (the case
+		# constants are the checker's canonical signed `scalar_value`s, matched by
+		# bit pattern at the scrutinee width).
+		self.b.set_terminator(
+			M.SwitchTerminator(
+				scrutinee=scrut_val,
+				cases=[(sval, bb.name) for (sval, bb) in literal_arms],
+				default_target=default_block.name,
+			)
+		)
 
 		# Lower each arm body (no binders, no scrutinee drop — scalars are POD).
 		join_reachable = False

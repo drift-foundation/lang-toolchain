@@ -1,0 +1,12 @@
+// A name that is not a compile-time integer const is rejected (val locals and
+// unknown names do not resolve as const patterns).
+module m;
+pub fn main() nothrow -> Int {
+	val notaconst = 3;
+	val tok = 0;
+	val r = match tok {
+		notaconst => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

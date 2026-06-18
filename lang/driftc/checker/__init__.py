@@ -3603,16 +3603,13 @@ class Checker:
 						if arm.ctor is None:
 							scalar_default = True
 							continue
-						ctx._append_diag(
-							_chk_diag(
-								message=(
-									f"E-MATCH-SCALAR-CTOR: '{arm.ctor}' is not a valid pattern for a "
-									"scalar (integer) match; use integer literals or `default`"
-								),
-								severity="error",
-								span=getattr(arm, "loc", getattr(expr, "loc", Span())),
-							)
-						)
+						# Name arm (a const-pattern reference): DEFER entirely to the
+						# typed checker, which has lexical scope and is the sole owner of
+						# const resolution (local consts shadow module consts; signedness
+						# from the const's declared type).  This stub validator lacks
+						# lexical scope, so resolving here could pick the wrong (module)
+						# const when a local shadows it — instead we stay silent and let
+						# the typed checker set `scalar_value` / emit E-MATCH-SCALAR-CONST.
 						continue
 					if scalar_default:
 						ctx._append_diag(

@@ -1,0 +1,4 @@
+{
+  "description": "Value-position scalar match (SwitchTerminator) with owning-String arm results; memcheck-clean (no leak/UAF on any switch edge). Returns 5.",
+  "exit_code": 5
+}

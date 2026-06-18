@@ -123,6 +123,7 @@ from .mir_nodes import (
 	IfTerminator,
 	Return,
 	Unreachable,
+	SwitchTerminator,
 	BasicBlock,
 	MirFunc,
 )
@@ -236,6 +237,7 @@ __all__ = [
 	"IfTerminator",
 	"Return",
 	"Unreachable",
+	"SwitchTerminator",
 	"BasicBlock",
 	"MirFunc",
 	"MirBuilder",

@@ -1,0 +1,1 @@
+{"description":"Signed const (Int) against an unsigned Uint scrutinee is rejected on declared-type signedness.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-SIGNEDNESS"}]}

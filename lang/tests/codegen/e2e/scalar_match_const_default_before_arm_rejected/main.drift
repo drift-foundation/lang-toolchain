@@ -1,0 +1,13 @@
+// A named-const arm after `default` is unreachable — same ordering rule that
+// applies to integer-literal and variant arms.  `default => …, A => …` must be
+// rejected, not silently lowered to a switch where `A` is live.
+module m;
+const A: Int = 1;
+pub fn main() nothrow -> Int {
+	val n = 1;
+	val r = match n {
+		default => { 9 },
+		A => { 3 },
+	};
+	return r;
+}

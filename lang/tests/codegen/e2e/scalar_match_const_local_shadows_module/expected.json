@@ -1,0 +1,1 @@
+{"description":"Local const shadows module const in a scalar match pattern (lexical scope wins). n=7 matches local X=7 → returns 5 (not 9, which would mean the module X=0 was wrongly used).","exit_code":5}

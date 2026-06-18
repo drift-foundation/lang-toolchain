@@ -1,0 +1,1 @@
+{"description":"A val local / unknown name is not a const pattern and is rejected.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CONST"}]}

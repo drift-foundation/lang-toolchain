@@ -1,0 +1,1 @@
+{"description":"A non-integer (String) const is rejected as a scalar pattern.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CONST"}]}

@@ -88,15 +88,17 @@ def test_scalar_match_lowering_consumes_only_checked_value(tmp_path: Path) -> No
 	end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("}"))
 	pick_ir = "\n".join(lines[start : end + 1])
 
-	# The dispatch chain compares against each canonical (signed) scalar_value.
+	# Scalar match lowers to a single LLVM `switch` whose case values ARE the
+	# checker's canonical signed `scalar_value`s.
+	switch_lines = [l for l in pick_ir.splitlines() if l.strip().startswith("switch i")]
+	assert len(switch_lines) == 1, f"expected one switch in pick(), got {switch_lines}"
+	switch_ir = switch_lines[0]
 	for v in (0, -5, 7):
-		assert f"add i64 0, {v}" in pick_ir, f"missing scalar dispatch constant {v} in pick()"
+		assert f"i64 {v}," in switch_ir, f"missing switch case constant {v} in pick(): {switch_ir}"
 
-	# Decisive contract check: the NEGATIVE arm dispatches on the checked signed
-	# value -5, NOT the raw magnitude +5.  A `add i64 0, 5` constant in pick()
-	# would mean stage2 re-derived the value from raw parser syntax instead of
-	# consuming `scalar_value`.  (pick's arm bodies return 10/20/30/99, so no
-	# stray +5 constant exists in this function.)
-	assert "add i64 0, 5," not in pick_ir, (
-		"scalar dispatch emitted the raw magnitude (+5) instead of the checked value (-5)"
+	# Decisive contract check: the NEGATIVE arm's case is the checked signed value
+	# -5, NOT the raw magnitude +5.  An `i64 5,` case would mean stage2 re-derived
+	# the value from raw parser syntax instead of consuming `scalar_value`.
+	assert "i64 5," not in switch_ir, (
+		"switch emitted the raw magnitude (+5) instead of the checked value (-5)"
 	)

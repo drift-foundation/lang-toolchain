@@ -43,6 +43,85 @@ def test_unreachable_has_no_successors():
 	assert t.successor_edges() == []
 
 
+def test_switch_terminator_successors_order():
+	# Case targets in source order, then the default last.
+	t = M.SwitchTerminator(scrutinee="%n", cases=[(0, "b0"), (5, "b5"), (-3, "bneg")], default_target="bd")
+	assert t.successors() == ["b0", "b5", "bneg", "bd"]
+	# Edge labels are INDEX-based, not value-based (unambiguous even if two cases
+	# shared a value).
+	assert t.successor_edges() == [
+		("b0", "switch_case:0"),
+		("b5", "switch_case:1"),
+		("bneg", "switch_case:2"),
+		("bd", "switch_default"),
+	]
+
+
+def test_switch_terminator_value_use_is_scrutinee_not_targets():
+	t = M.SwitchTerminator(scrutinee="%n", cases=[(0, "b0"), (1, "b1")], default_target="bd")
+	# The scrutinee is a value use; case/default block names are NOT values.
+	assert t.value_uses() == ["%n"]
+	assert "b0" not in t.value_uses() and "bd" not in t.value_uses()
+
+
+def test_value_uses_per_terminator():
+	assert M.Goto(target="x").value_uses() == []
+	assert M.IfTerminator(cond="%c", then_target="t", else_target="e").value_uses() == ["%c"]
+	assert M.Return(value="%r").value_uses() == ["%r"]
+	assert M.Return(value=None).value_uses() == []
+	assert M.Unreachable().value_uses() == []
+
+
+def test_switch_remap_targets():
+	t = M.SwitchTerminator(scrutinee="%n", cases=[(0, "b0"), (1, "b1")], default_target="bd")
+	t.remap_targets({"b0": "B0", "bd": "BD"})
+	assert t.cases == [(0, "B0"), (1, "b1")]
+	assert t.default_target == "BD"
+	assert t.scrutinee == "%n"  # value untouched
+
+
+def test_switch_redirect_edge():
+	t = M.SwitchTerminator(scrutinee="%n", cases=[(0, "b0"), (5, "b5")], default_target="bd")
+	t.redirect_edge("switch_case:1", "edge_blk")  # index-based: case at index 1
+	assert t.cases == [(0, "b0"), (5, "edge_blk")]
+	t.redirect_edge("switch_default", "edge_d")
+	assert t.default_target == "edge_d"
+	import pytest as _pytest
+	with _pytest.raises((AssertionError, IndexError)):
+		t.redirect_edge("switch_case:9", "x")  # no such case index
+
+
+def test_if_redirect_edge_and_remap():
+	t = M.IfTerminator(cond="%c", then_target="t", else_target="e")
+	t.redirect_edge("if_then", "T2")
+	assert t.then_target == "T2"
+	t.remap_targets({"e": "E2"})
+	assert t.else_target == "E2"
+
+
+def test_cfg_terminator_value_uses_helper():
+	assert cfg.terminator_value_uses(None) == []
+	assert cfg.terminator_value_uses(M.SwitchTerminator(scrutinee="%s", cases=[(1, "a")], default_target="d")) == ["%s"]
+
+
+def test_switch_in_cfg_successor_helpers():
+	sw = M.BasicBlock(name="entry", instructions=[], terminator=M.SwitchTerminator(scrutinee="%n", cases=[(0, "a"), (1, "b")], default_target="d"))
+	a = M.BasicBlock(name="a", instructions=[], terminator=M.Goto(target="join"))
+	b = M.BasicBlock(name="b", instructions=[], terminator=M.Goto(target="join"))
+	d = M.BasicBlock(name="d", instructions=[], terminator=M.Goto(target="join"))
+	join = M.BasicBlock(name="join", instructions=[], terminator=M.Return(value=None))
+
+	class _F:
+		pass
+
+	f = _F()
+	f.blocks = {"entry": sw, "a": a, "b": b, "d": d, "join": join}
+	assert cfg.compute_successors(f)["entry"] == ["a", "b", "d"]
+	preds = cfg.compute_predecessors(f)
+	assert sorted(preds["a"]) == ["entry"] and sorted(preds["d"]) == ["entry"]
+	assert sorted(preds["join"]) == ["a", "b", "d"]
+
+
 def test_base_terminator_raises_loudly():
 	# The base intentionally raises so a future terminator that forgets to
 	# implement the contract fails loudly instead of silently reporting no

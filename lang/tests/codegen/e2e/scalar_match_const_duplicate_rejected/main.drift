@@ -1,0 +1,12 @@
+// A literal and a const with the same value collide (duplicate by VALUE).
+module m;
+const TOK_EOF: Int = 0;
+pub fn main() nothrow -> Int {
+	val tok = 0;
+	val r = match tok {
+		0 => { 1 },
+		TOK_EOF => { 2 },
+		default => { 9 },
+	};
+	return r;
+}

@@ -547,10 +547,11 @@ def insert_string_arc(
 			setattr(dst, "span", getattr(src, "span"))
 
 	def _iter_term_used(term: M.MTerminator) -> Iterable[str]:
-		if isinstance(term, M.Return) and term.value is not None:
-			yield term.value
-		elif isinstance(term, M.IfTerminator):
-			yield term.cond
+		# Central MIR terminator value-use contract (stage2/cfg.py →
+		# MTerminator.value_uses()): Return→value, IfTerminator→cond,
+		# SwitchTerminator→scrutinee.  Keeping this central means a value consumed
+		# only by a (new) terminator stays live without editing this scanner.
+		yield from _cfg.terminator_value_uses(term)
 
 	def _seed_dest_types() -> None:
 		"""Pre-seed missing destination types before ARC liveness/use analysis."""

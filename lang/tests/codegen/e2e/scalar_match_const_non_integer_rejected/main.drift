@@ -1,0 +1,11 @@
+// A non-integer const cannot be a scalar-match pattern.
+module m;
+const NAME: String = "hi";
+pub fn main() nothrow -> Int {
+	val tok = 0;
+	val r = match tok {
+		NAME => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

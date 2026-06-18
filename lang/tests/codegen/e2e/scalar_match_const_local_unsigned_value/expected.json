@@ -1,0 +1,1 @@
+{"description":"A local unsigned const (Uint, 1u) resolves and dispatches as a scalar-match pattern; returns 5.","exit_code":5}

@@ -11,10 +11,11 @@ full audit. Baseline commit at creation: `0b060f27`.
 |-------|-------------|-------|
 | A1 | Central `successors()` API + unit test | ✅ done (`mir_nodes` + `stage2/cfg.py`; `test_cfg_successor_contract.py`, 10 tests) |
 | A2 | Migrate all CFG users (read sites) | ✅ done — 12 read/validator sites migrated; 429 stage1/2/checker + contract + CFG-heavy e2e green. Write path (edge-split) deferred to B. |
-| B3 | `SwitchTerminator` MIR node + `successors()` | ☐ not started |
-| B4 | `_lower_scalar_match` → `SwitchTerminator` | ☐ not started |
-| B5 | Codegen `switch iN` emission | ☐ not started |
-| B6 | Regression + destructible-arm memcheck | ☐ not started |
+| B3 | `SwitchTerminator` MIR node + `successors()`/`value_uses()`/`remap_targets()`/`redirect_edge()` | ✅ done (18-test contract suite) |
+| B4 | `_lower_scalar_match` → `SwitchTerminator` | ✅ done (EQ chain removed; `_scalar_match_const` deleted) |
+| B5 | Codegen `switch iN` emission | ✅ done (width via `_llty`; i8/i32/i64) |
+| B6 | Regression + destructible-arm memcheck | ✅ 15 scalar e2e + owning-String memcheck-clean; switch IR confirmed |
+| B7 | Named-constant patterns (`TOK_EOF => …`) | ✅ done (checker-only; const→value→existing scalar pipeline; both frontends; 4 e2e) |
 
 Primary deliverable = **A1 + A2** (valuable regardless of B). B is the motivating
 optimization.
@@ -41,7 +42,7 @@ verified byte-identical to baseline.
 | 11 | `dom.py:65–68` preds | ✅ | ◑ | — | set-based; delegates |
 | 12 | `dom.py:136–142` preds+succs | ✅ | ◑ | — | set-based; delegates |
 | 13 | `mir_validate.py:851` iface-init CFG | ✅ | ◑ | — | **found in review** (outside stage2/4 grep scope); list order preserved |
-| 14 | `llvm_codegen.py:7479–7525` emit | ☐ | — | n/a | last consumer; only touched in B5 |
+| 14 | `llvm_codegen.py:7479–7525` emit | ✅ | ◑ | — | B5: added `SwitchTerminator → switch iN` case (width via `_llty`) |
 
 Legend: ✅ migrated · ◑ covered by contract test + CFG-heavy e2e (broad regression
 running) · ☐ not yet. Row 5 (edge-split *write* path) intentionally stays as-is
@@ -59,9 +60,10 @@ contract doesn't replace write paths.
 
 - **Surface is larger than first estimated.** SSA (`stage4/ssa.py`) alone holds 5
   independent successor/predecessor walkers; `dom.py` 2; plus ownership_ledger,
-  string_arc, cleanup_authoring. **~12 successor/predecessor read-or-decision sites
-  + 1 target-write path (cleanup edge-split)** across 6 files. This is the strongest
-  argument for the central contract. (`ownership_ledger.py:673` was initially
+  string_arc, cleanup_authoring, and `mir_validate` (found in review). Final count:
+  **12 read/validator successor sites + 1 target-write path (cleanup edge-split)**
+  across 7 files. This is the strongest argument for the central contract.
+  (`ownership_ledger.py:673` was initially
   miscounted as a remap write path — it is actually a value-use scanner that
   *excludes* terminator block-name fields; see the migration-table note and Open
   question 5.)
@@ -120,12 +122,89 @@ contract doesn't replace write paths.
 
 ## Log
 
+### 2026-06-18 — review round 2: 3 named-const findings (checker-only)
+- **F1 (High): named-const arm after `default` bypassed unreachable validation.**
+  The literal and variant branches checked `seen_default`; the named-const branch
+  did not, so `default => …, A => …` would compile and lower to a switch where `A`
+  is live. Fix: emit "match arms after default are unreachable" at the start of the
+  named-const branch (`type_checker.py:~7700`), mirroring the sibling branches.
+  e2e `scalar_match_const_default_before_arm_rejected`.
+- **F2 (High/Med): local UNSIGNED consts were wrongly rejected.**
+  `_eval_hir_const_value` returns `UintConst`/`Uint64Const` wrappers; module consts
+  are coerced to a plain int by `validate_const_value` before `define_const`, but
+  `local_const_values` stored the raw wrapper → the pattern path's `isinstance(int)`
+  gate rejected `const U: Uint = 1u`. Fix: run `validate_const_value` when populating
+  `local_const_values` (HLocalConst handler, `type_checker.py:~10925`) and store the
+  coerced value (skip storage if validation fails). e2e
+  `scalar_match_const_local_unsigned_value`.
+- **F3 (Med): qualified base could be shadowed by current module.**
+  The module fallback put `current_module_name` in `_cand_mods` even when
+  `ctor_base` was present. Fix: if `ctor_base` is present resolve ONLY that base;
+  else the current module (`type_checker.py:~7745`). **No e2e:** the grammar
+  (`qualified_member: NAME … DCOLON NAME`) requires `::`, so a module-qualified
+  const pattern (`mod.X =>`) is not expressible — qualified forms are always
+  `Base::Ctor` variant patterns. The fix is defensive hardening of an
+  unreachable-for-consts path; a cross-module fixture was prototyped, confirmed the
+  syntax is rejected at the parser, and removed.
+- **Verified:** 27/27 scalar-match e2e green (incl. the 2 new fixtures); contract +
+  lowering suites 19 passed; `lang/tests/checker` + `lang/tests/type_checker`
+  regression 191 passed. ABI 17 unchanged; nothing committed.
+
+### 2026-06-18 — review fix: named-const patterns use lexical const resolution
+- **Finding (High):** the const-pattern resolver only consulted module consts via
+  `lookup_const`, ignoring block-scope `const`. Lexical scope must win: a local
+  `const X` shadowing a module `const X` must resolve `X =>` to the local value,
+  exactly as the expression `X` would.
+- **Fix (checker-only):**
+  - `type_checker.py` resolves an unqualified name arm **lexically first** —
+    innermost `scope_bindings` wins; a name that binds locally never falls through
+    to the module table. A local `const` resolves via `local_const_values` (its
+    evaluated value + declared type, populated at `HLocalConst` typing through
+    `_eval_hir_const_value`). A local that binds but isn't a const (a `val`) →
+    `E-MATCH-SCALAR-CONST` ("local binding, not a compile-time integer constant").
+    Module const is the fallback only when nothing binds lexically.
+  - `checker/__init__.py` stub frontend now **defers entirely** to the typed
+    checker for name arms (it lacks lexical scope, so resolving there could pick
+    the module const when a local shadows it).
+- **Tests:** 3 new e2e — `scalar_match_const_local_value` (local consts dispatch),
+  `scalar_match_const_local_shadows_module` (lexical wins: n=7 → local X=7 → 5, not
+  module X=0 → 9), `scalar_match_const_val_local_rejected` (`val` rejected). All 9
+  const-pattern e2e green; contract + lowering suites 19 passed. ABI 17 unchanged.
+
+### 2026-06-18 — Part B + const patterns regression green
+- Full `stage1 + stage2 + checker + parser` regression: **608 passed, 0 failed**
+  with switch lowering + named-const patterns + the CFG-successor migration. Plus
+  27 scalar/bool/const e2e, contract suite (19), owning-String memcheck-clean.
+  **Branch review-ready.** ABI 17 unchanged; nothing committed.
+
+### 2026-06-18 — Part B landed: switch lowering + named-const patterns
+- **SwitchTerminator** added with the full contract (successors/edges/value_uses/
+  remap_targets/redirect_edge). Visible to: CFG successors (inherits contract),
+  value-use scanning (`string_arc._iter_term_used` → `value_uses()`), target remap
+  (cleanup edge-split now terminator-agnostic via `redirect_edge`). Gate satisfied
+  before lowering switched over.
+- **Codegen** emits `switch iN` (width via `_llty`; i8/i32/i64). `_lower_scalar_match`
+  emits `SwitchTerminator` (EQ chain + `_scalar_match_const` removed).
+- **Named-const patterns** (`const TOK_EOF: Int = 0; … TOK_EOF => …`): checker-only.
+  Parser records the raw name; both checker frontends resolve it via
+  `lookup_const("{module}::{name}")`, evaluate to int, then reuse the scalar
+  pipeline (`scalar_pattern_value` → `scalar_value`, value-based dedup so `0` and
+  `TOK_EOF=0` collide). Stage2 stays name-free (switch IR uses integer cases). A
+  name that isn't an integer scalar const → `E-MATCH-SCALAR-CONST` (renamed from
+  the old `E-MATCH-SCALAR-CTOR`). `val` locals don't resolve (not in const table).
+- Tests: contract suite **19** (incl. SwitchTerminator + value-use/remap/redirect);
+  **27** scalar/bool/const e2e green; owning-String **memcheck-clean**; switch IR
+  confirmed. Updated the lowering-contract test (now asserts the `switch` case
+  constants) and the ctor-in-scalar fixture (now `E-MATCH-SCALAR-CONST`).
+- Broad `stage1/2/checker/parser` regression running. Remaining doc: row 14 codegen
+  marked done in the migration tracker. ABI 17 unchanged; nothing committed.
+
 ### 2026-06-18 — Part A regression green
 - Broad `stage1 + stage2 + checker` regression: **429 passed, 0 failed** with all
-  13 successor sites migrated. Plus contract test (10), iface-init invariants (2),
-  CFG-heavy e2e (6). Migration confirmed behavior-preserving. **Part A complete**
-  (read sites). Remaining: row 5 edge-split write path (with B) and row 14 codegen
-  (B5). Ready to start Part B (`SwitchTerminator`).
+  **12 read/validator sites** migrated (row 5 write path + row 14 codegen deferred).
+  Plus contract test (10), iface-init invariants (2), CFG-heavy e2e (6). Migration
+  confirmed behavior-preserving. **Part A complete** (read sites). Ready to start
+  Part B (`SwitchTerminator`).
 
 ### 2026-06-18 — review: migrated missed CFG validator
 - Reviewer found a real successor walker the first audit missed:

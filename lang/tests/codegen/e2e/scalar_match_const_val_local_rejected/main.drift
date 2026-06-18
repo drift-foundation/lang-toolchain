@@ -1,0 +1,11 @@
+// A `val` local is not a compile-time const and cannot be a scalar pattern.
+module m;
+pub fn main() nothrow -> Int {
+	val x = 3;
+	val n = 0;
+	val r = match n {
+		x => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

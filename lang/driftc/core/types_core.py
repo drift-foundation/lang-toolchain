@@ -3345,3 +3345,55 @@ def scalar_pattern_value(
 			f"type {type_name} (range [{lo}, {hi}])",
 		)
 	return (True, value, None)
+
+
+def scalar_const_pattern_value(
+	tt: "TypeTable",
+	scrut_ty: TypeId,
+	const_ty: TypeId,
+	value: int,
+):
+	"""Validate a NAMED-CONSTANT `match` pattern against the scrutinee type.
+
+	Unlike `scalar_pattern_value` (which infers signedness from literal syntax), a
+	const carries an explicit DECLARED type, so signedness is driven by that type —
+	not by the sign of its current value.  This makes `const U: Uint = 1` behave
+	like the literal `1u` (rejected against a signed scrutinee), and `const I: Int
+	= 1` behave like a signed literal (rejected against an unsigned scrutinee).
+	Enforces (1) the const's declared signedness must match the scrutinee's, and
+	(2) representability of the value in the scrutinee's range.  Returns
+	``(True, value, None)`` or ``(False, None, error_msg)``."""
+	scrut_name = scalar_match_type_name(tt, scrut_ty)
+	if scrut_name is None:
+		return (False, None, "match scrutinee is not a scalar integer type")
+	const_name = scalar_match_type_name(tt, const_ty)
+	if const_name is None:
+		try:
+			_cn = tt.get(const_ty).name
+		except Exception:
+			_cn = "?"
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-CONST: constant of type {_cn} is not an integer scalar; "
+			"scalar (integer) match arms require an integer constant",
+		)
+	scrut_signed = _SCALAR_MATCH_SIGNED[scrut_name]
+	const_signed = _SCALAR_MATCH_SIGNED[const_name]
+	if scrut_signed != const_signed:
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-SIGNEDNESS: {'signed' if const_signed else 'unsigned'} constant "
+			f"(type {const_name}) cannot match {'signed' if scrut_signed else 'unsigned'} "
+			f"scrutinee type {scrut_name}",
+		)
+	lo, hi = scalar_match_range(tt, scrut_name)
+	if value < lo or value > hi:
+		return (
+			False,
+			None,
+			f"E-MATCH-SCALAR-RANGE: constant value {value} is not representable by scrutinee "
+			f"type {scrut_name} (range [{lo}, {hi}])",
+		)
+	return (True, value, None)

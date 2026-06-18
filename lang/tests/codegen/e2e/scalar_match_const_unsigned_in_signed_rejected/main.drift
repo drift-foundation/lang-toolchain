@@ -1,0 +1,11 @@
+// An unsigned-typed const cannot match a signed scrutinee (like literal 1u).
+module m;
+const U: Uint = 1u;
+pub fn main() nothrow -> Int {
+	val n = 0;
+	val r = match n {
+		U => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

@@ -43,6 +43,17 @@ def terminator_successor_edges(term: Optional[M.MTerminator]) -> list[tuple[str,
 	return term.successor_edges()
 
 
+def terminator_value_uses(term: Optional[M.MTerminator]) -> list[str]:
+	"""ValueIds *term* reads (if-cond, switch-scrutinee, return-value). `None` → `[]`.
+
+	Liveness/use scanners call this so a value consumed only by a terminator stays
+	live to the block end — and so block-name targets are never mistaken for
+	values."""
+	if term is None:
+		return []
+	return term.value_uses()
+
+
 def block_successors(block: "M.BasicBlock") -> list[str]:
 	"""Successor block names of *block* (via its terminator)."""
 	return terminator_successors(getattr(block, "terminator", None))

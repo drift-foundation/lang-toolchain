@@ -668,6 +668,11 @@ def _iter_value_uses(ins: M.MInstr) -> List[str]:
 				"variant_ty", "inner_ty", "ctor", "field_index",
 				"is_mut", "fn_id", "method_name", "kind",
 				"then_target", "else_target", "target", "ordinal",
+				# Block-name target fields are NOT values (block names, not
+				# value-ids).  `cases` is a list of (int, block-name) tuples; a
+				# SwitchTerminator's `scrutinee` is intentionally NOT excluded (it
+				# IS a value use).
+				"default_target", "cases",
 				"span", "loc"):
 			continue
 		val = getattr(ins, f.name, None)

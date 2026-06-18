@@ -66,6 +66,35 @@ class MTerminator(MNode):
 		identity (e.g. if-then/if-else) override this."""
 		return [(t, "succ") for t in self.successors()]
 
+	def value_uses(self) -> "list[str]":
+		"""ValueIds this terminator READS (e.g. an `if`'s condition, a `switch`'s
+		scrutinee, a `return`'s value).  Block-name targets are NOT values and are
+		excluded.  Liveness/use analyses consult this so a value consumed only by a
+		terminator stays live to the block end.  Base raises so a new terminator
+		can't silently drop its value uses (which would let that value be freed
+		early — a UAF)."""
+		raise NotImplementedError(
+			f"{type(self).__name__} must implement value_uses() (MIR terminator value-use contract)"
+		)
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		"""Rewrite every target block name in place through *mapping* (absent keys
+		unchanged).  The single owner of "this terminator's target fields"; callers
+		that rename/redirect blocks use this instead of poking `then_target` etc.
+		directly.  Base raises so a new terminator's targets can't be silently
+		missed by a block-rename pass."""
+		raise NotImplementedError(
+			f"{type(self).__name__} must implement remap_targets() (MIR terminator target contract)"
+		)
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		"""Redirect the single outgoing edge identified by *edge_label* (a label
+		from `successor_edges()`) to *new_target*, in place.  Used by cleanup
+		edge-splitting to insert a block on one specific edge.  Base raises."""
+		raise NotImplementedError(
+			f"{type(self).__name__} must implement redirect_edge() (MIR terminator target contract)"
+		)
+
 
 # Locals and values
 
@@ -1508,6 +1537,17 @@ class Goto(MTerminator):
 	def successor_edges(self) -> "list[tuple[str, str]]":
 		return [(self.target, "goto")]
 
+	def value_uses(self) -> "list[str]":
+		return []
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		self.target = mapping.get(self.target, self.target)
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		if edge_label != "goto":
+			raise AssertionError(f"Goto has no edge {edge_label!r}")
+		self.target = new_target
+
 
 @dataclass
 class IfTerminator(MTerminator):
@@ -1522,6 +1562,21 @@ class IfTerminator(MTerminator):
 	def successor_edges(self) -> "list[tuple[str, str]]":
 		return [(self.then_target, "if_then"), (self.else_target, "if_else")]
 
+	def value_uses(self) -> "list[str]":
+		return [self.cond]
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		self.then_target = mapping.get(self.then_target, self.then_target)
+		self.else_target = mapping.get(self.else_target, self.else_target)
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		if edge_label == "if_then":
+			self.then_target = new_target
+		elif edge_label == "if_else":
+			self.else_target = new_target
+		else:
+			raise AssertionError(f"IfTerminator has no edge {edge_label!r}")
+
 
 @dataclass
 class Return(MTerminator):
@@ -1533,6 +1588,15 @@ class Return(MTerminator):
 
 	def successor_edges(self) -> "list[tuple[str, str]]":
 		return []
+
+	def value_uses(self) -> "list[str]":
+		return [self.value] if self.value is not None else []
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		return None
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		raise AssertionError(f"Return has no edge {edge_label!r}")
 
 
 @dataclass
@@ -1551,6 +1615,59 @@ class Unreachable(MTerminator):
 
 	def successor_edges(self) -> "list[tuple[str, str]]":
 		return []
+
+	def value_uses(self) -> "list[str]":
+		return []
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		return None
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		raise AssertionError(f"Unreachable has no edge {edge_label!r}")
+
+
+@dataclass
+class SwitchTerminator(MTerminator):
+	"""Multi-way branch on an integer scrutinee (scalar `match` lowering).
+
+	Compares `scrutinee` against each case value (exact equality, by bit pattern —
+	signedness does not matter; `cases` values are the checker-validated canonical
+	signed ints) and branches to the matching case block, or to `default_target`
+	if none match.  `cases` is in source order.  Lowers to an LLVM `switch`.
+	"""
+	scrutinee: ValueId
+	cases: List[tuple]  # list[tuple[int case_value, str target_block]], source order
+	default_target: str
+
+	def successors(self) -> "list[str]":
+		# Case targets in source order, then the default.
+		return [t for (_v, t) in self.cases] + [self.default_target]
+
+	def successor_edges(self) -> "list[tuple[str, str]]":
+		# Labels are INDEX-based (`switch_case:<i>`), not value-based, so each
+		# outgoing edge has a unique identity even if two cases shared a value or a
+		# target (malformed / future MIR).  Index order matches `successors()`.
+		return [(t, f"switch_case:{i}") for i, (_v, t) in enumerate(self.cases)] + [
+			(self.default_target, "switch_default")
+		]
+
+	def value_uses(self) -> "list[str]":
+		return [self.scrutinee]
+
+	def remap_targets(self, mapping: "dict[str, str]") -> None:
+		self.cases = [(v, mapping.get(t, t)) for (v, t) in self.cases]
+		self.default_target = mapping.get(self.default_target, self.default_target)
+
+	def redirect_edge(self, edge_label: str, new_target: str) -> None:
+		if edge_label == "switch_default":
+			self.default_target = new_target
+			return
+		if edge_label.startswith("switch_case:"):
+			idx = int(edge_label[len("switch_case:"):])
+			v, _t = self.cases[idx]
+			self.cases[idx] = (v, new_target)
+			return
+		raise AssertionError(f"SwitchTerminator has no edge {edge_label!r}")
 
 
 

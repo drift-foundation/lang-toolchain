@@ -1,0 +1,19 @@
+// Named integer-constant patterns in a scalar match (the lexer-token idiom).
+// Consts resolve to their values during checking; stage2 sees only integers.
+module m;
+const TOK_EOF: Int = 0;
+const TOK_IDENT: Int = 1;
+const TOK_NUM: Int = 7;
+pub fn classify(tok: Int) nothrow -> Int {
+	val r = match tok {
+		TOK_EOF => { 2 },
+		TOK_IDENT => { 3 },
+		TOK_NUM => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// classify(0)=2, classify(1)=3, classify(7)=4, classify(5)=9 → 2+3+4+9=18; 18-13=5
+	return classify(TOK_EOF) + classify(TOK_IDENT) + classify(TOK_NUM) + classify(5) - 13;
+}

@@ -163,8 +163,9 @@ mandatory**. No dense/sparse heuristic in Drift — emit the `switch`, let LLVM
 decide.
 
 **Risk, post-contract.** Low. Once Part A exists, `SwitchTerminator` implements
-`successors()` once and all 13 dataflow sites inherit it. Without Part A, the same
-change touches every site by hand — the exact silent-failure surface we're removing.
+`successors()` once and all 12 read/validator dataflow sites inherit it. Without
+Part A, the same change touches every site by hand — the exact silent-failure
+surface we're removing.
 
 ---
 

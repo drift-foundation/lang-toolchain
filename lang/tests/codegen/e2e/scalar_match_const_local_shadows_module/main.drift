@@ -1,0 +1,14 @@
+// A local (block-scope) const shadows a module const of the same name in a
+// scalar match pattern, exactly as an expression reference would.  Module X=0,
+// local X=7; matching 7 must take the X arm (local value), returning 5.
+module m;
+const X: Int = 0;
+pub fn main() nothrow -> Int {
+	const X: Int = 7;
+	val n = 7;
+	val r = match n {
+		X => { 5 },
+		default => { 9 },
+	};
+	return r;
+}

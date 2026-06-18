@@ -752,19 +752,16 @@ def _try_per_arm_elaboration(
 		new_blocks.append(edge_blk)
 
 		term = pred_blk.terminator
-		assert isinstance(term, M.IfTerminator), (
-			f"multi-successor pred {pred_name} expected IfTerminator, "
-			f"got {type(term).__name__}"
-		)
-		if edge_kind == "if_then":
-			term.then_target = edge_blk_name
-		elif edge_kind == "if_else":
-			term.else_target = edge_blk_name
-		else:
+		# Redirect THIS specific edge via the central terminator target contract
+		# (`MTerminator.redirect_edge`), so edge-splitting works for any
+		# multi-successor terminator (IfTerminator's if_then/if_else, and a future
+		# SwitchTerminator's switch_case/switch_default) without an ad-hoc per-type
+		# field poke here.
+		if term is None:
 			raise AssertionError(
-				f"unexpected edge_kind={edge_kind!r} for multi-successor "
-				f"pred {pred_name}"
+				f"multi-successor pred {pred_name} has no terminator"
 			)
+		term.redirect_edge(edge_kind, edge_blk_name)
 
 	return resolved, set(), new_blocks, emitted_pairs
 

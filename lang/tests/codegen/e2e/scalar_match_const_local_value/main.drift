@@ -1,0 +1,16 @@
+// Block-scope consts as scalar-match patterns.
+module m;
+pub fn classify(n: Int) nothrow -> Int {
+	const A: Int = 1;
+	const B: Int = 2;
+	val r = match n {
+		A => { 3 },
+		B => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// classify(1)=3, classify(2)=4, classify(5)=9 → 3+4+9=16; 16-11=5
+	return classify(1) + classify(2) + classify(5) - 11;
+}
