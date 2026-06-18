@@ -1,0 +1,1 @@
+{"description":"Module-qualified const patterns (via `import ... as tok`) dispatch correctly across a module boundary; returns 5.","exit_code":5,"module_paths":["."]}

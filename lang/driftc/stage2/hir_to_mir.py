@@ -1509,7 +1509,7 @@ class HIRToMIR:
 			# an integer-literal arm (`0 => ...`) also has `ctor is None` and must
 			# not be misread as `default`.  The checker rejects scalar arms in a
 			# variant match, so this only guards against a checker-contract breach.
-			if arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
+			if arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None and getattr(arm, "scalar_const_qual_name", None) is None:
 				default_block = bb
 			else:
 				event_arms.append((arm, bb))
@@ -2267,7 +2267,7 @@ class HIRToMIR:
 				true_block = bb
 			elif arm.ctor == "false":
 				false_block = bb
-			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
+			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None and getattr(arm, "scalar_const_qual_name", None) is None:
 				# Default arm — but NOT an integer-literal arm (`0 => ...`), which
 				# also has `ctor is None`.  The checker rejects scalar arms in a Bool
 				# match; this only guards against a checker-contract breach.
@@ -2421,7 +2421,7 @@ class HIRToMIR:
 			sval = getattr(arm, "scalar_value", None)
 			if sval is not None:
 				literal_arms.append((int(sval), bb))
-			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None:
+			elif arm.ctor is None and getattr(arm, "scalar_literal_kind", None) is None and getattr(arm, "scalar_const_qual_name", None) is None:
 				default_block = bb
 			else:
 				# A literal or const/name arm reached lowering without a resolved

@@ -460,6 +460,7 @@ match_pat: DEFAULT              -> match_default
          | qualified_member "(" match_named_binders ")"  -> match_ctor_named_qualified
          | qualified_member "(" match_binders ")"  -> match_ctor_qualified
          | qualified_member                  -> match_ctor0_qualified
+         | NAME DOT NAME                     -> match_qual_const
          | NAME "(" ")"         -> match_ctor_paren
          | NAME "(" match_named_binders ")"  -> match_ctor_named
          | NAME "(" match_binders ")"  -> match_ctor

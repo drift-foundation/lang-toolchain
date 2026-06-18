@@ -1100,6 +1100,8 @@ class AstToHIR:
 							result=renamed_result,
 							scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
 							scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+							scalar_const_qual_base=getattr(arm, "scalar_const_qual_base", None),
+							scalar_const_qual_name=getattr(arm, "scalar_const_qual_name", None),
 							scalar_value=getattr(arm, "scalar_value", None),
 							loc=arm.loc,
 						)
@@ -1324,6 +1326,10 @@ class AstToHIR:
 					# checker validates it and sets `scalar_value`.
 					scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
 					scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+					# Raw qualified-scalar-const pattern data (`tokens.X`); the checker
+					# resolves it through the module path and sets `scalar_value`.
+					scalar_const_qual_base=getattr(arm, "scalar_const_qual_base", None),
+					scalar_const_qual_name=getattr(arm, "scalar_const_qual_name", None),
 					loc=Span.from_loc(arm.loc),
 				)
 			)

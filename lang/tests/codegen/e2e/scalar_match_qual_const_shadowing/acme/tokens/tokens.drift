@@ -1,0 +1,5 @@
+module acme.tokens;
+
+export { TOK_EOF };
+
+pub const TOK_EOF: Int = 0;

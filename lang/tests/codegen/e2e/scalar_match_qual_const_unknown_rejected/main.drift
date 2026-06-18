@@ -1,0 +1,12 @@
+// A qualified name that does not resolve to an integer scalar const in the named
+// module is rejected with E-MATCH-SCALAR-CONST.
+module main;
+import acme.tokens as tok;
+pub fn main() nothrow -> Int {
+	val k = 0;
+	val r = match k {
+		tok.NOT_A_CONST => { 2 },
+		default => { 9 },
+	};
+	return r;
+}

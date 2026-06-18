@@ -550,6 +550,15 @@ class HMatchArm(HNode):
 	# unsigned magnitude as written.  These carry NO type judgment.
 	scalar_literal_kind: Optional[str] = None
 	scalar_literal_magnitude: Optional[int] = None
+	# RAW qualified-scalar-const pattern data (parser-owned).  Set for
+	# module-qualified const arms (`tokens.TOK_EOF => ...`).  `scalar_const_qual_base`
+	# is the resolved module id (rewritten from the alias by the per-file
+	# resolution pass); `scalar_const_qual_name` is the const name.  These carry
+	# NO type judgment — the checker resolves the const through the module path
+	# ONLY (never lexical scope / current module), validates, and sets
+	# `scalar_value`.  Distinct from `ctor` + `ctor_base` (variant `Base::Ctor`).
+	scalar_const_qual_base: Optional[str] = None
+	scalar_const_qual_name: Optional[str] = None
 	# CHECKED scalar-literal value (checker-owned).  Populated by the type
 	# checker / stub match-validator ONLY after the literal has been validated for
 	# signedness and representability against the concrete scrutinee type; it is

@@ -1,0 +1,1 @@
+{"description":"A qualified name not resolving to an integer scalar const is rejected with E-MATCH-SCALAR-CONST.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CONST"}]}

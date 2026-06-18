@@ -7689,6 +7689,73 @@ class TypeChecker:
 								)
 							seen_scalar_values.add(sval)
 							arm.scalar_value = sval
+					elif is_scalar_match and getattr(arm, "scalar_const_qual_name", None) is not None:
+						# A QUALIFIED const reference (`tokens.TOK_EOF`) used as a scalar
+						# match pattern.  DISTINCT from a variant `Base::Ctor` pattern
+						# (which keeps `arm.ctor` set).  Resolution is through the named
+						# module/export path ONLY — never lexical scope, never the current
+						# module (that is the whole point of qualifying).  The parser pass
+						# already mapped the alias to a module id in
+						# `scalar_const_qual_base`; re-exports materialized into that
+						# module's const table resolve through the same `lookup_const`.
+						# Signedness/range validated by `scalar_const_pattern_value`;
+						# value-dedup with literals and named consts.
+						if seen_default:
+							diagnostics.append(
+								_tc_diag(
+									message="match arms after default are unreachable",
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						_qmod = getattr(arm, "scalar_const_qual_base", None)
+						_qname = getattr(arm, "scalar_const_qual_name", None)
+						_qdisp = f"{_qmod}.{_qname}" if _qmod else str(_qname)
+						_qcv = self.type_table.lookup_const(f"{_qmod}::{_qname}") if _qmod else None
+						if _qcv is None:
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										f"E-MATCH-SCALAR-CONST: '{_qdisp}' does not resolve to an "
+										"integer scalar constant; scalar (integer) match arms must be "
+										"integer literals, integer scalar constants, or `default`"
+									),
+									severity="error",
+									span=getattr(arm, "loc", Span()),
+								)
+							)
+						else:
+							_qty, _qval = _qcv
+							if not (isinstance(_qval, int) and not isinstance(_qval, bool)):
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"E-MATCH-SCALAR-CONST: constant '{_qdisp}' is not an integer "
+											"scalar; scalar (integer) match arms require an integer constant"
+										),
+										severity="error",
+										span=getattr(arm, "loc", Span()),
+									)
+								)
+							else:
+								qsok, qsval, qserr = scalar_const_pattern_value(
+									self.type_table, scalar_scrut_ty, _qty, _qval,
+								)
+								if not qsok:
+									diagnostics.append(
+										_tc_diag(message=qserr, severity="error", span=getattr(arm, "loc", Span()))
+									)
+								else:
+									if qsval in seen_scalar_values:
+										diagnostics.append(
+											_tc_diag(
+												message=f"E-MATCH-SCALAR-DUPLICATE: duplicate match arm for literal {qsval}",
+												severity="error",
+												span=getattr(arm, "loc", Span()),
+											)
+										)
+									seen_scalar_values.add(qsval)
+									arm.scalar_value = qsval
 					elif is_scalar_match and arm.ctor is not None:
 						# A NAME in a scalar-match arm must resolve to a compile-time INTEGER
 						# SCALAR constant.  Resolution follows normal lexical const scoping: a
@@ -7818,6 +7885,25 @@ class TypeChecker:
 								message=(
 									"E-MATCH-SCALAR-SCRUTINEE: integer literal pattern is only valid "
 									"when matching an integer scalar (Int/Uint/Int32/Uint32/Uint64/Byte)"
+								),
+								severity="error",
+								span=getattr(arm, "loc", Span()),
+							)
+						)
+					elif getattr(arm, "scalar_const_qual_name", None) is not None:
+						# A qualified const pattern (`mod.X`) whose scrutinee is NOT an
+						# integer scalar.  Qualified const refs are only valid in integer
+						# scalar matches.  Without this guard `ctor is None` would make the
+						# arm be misread as `default` below.
+						_nqmod = getattr(arm, "scalar_const_qual_base", None)
+						_nqname = getattr(arm, "scalar_const_qual_name", None)
+						_nqdisp = f"{_nqmod}.{_nqname}" if _nqmod else str(_nqname)
+						diagnostics.append(
+							_tc_diag(
+								message=(
+									f"E-MATCH-SCALAR-CONST: qualified const pattern '{_nqdisp}' is only "
+									"valid when matching an integer scalar (Int/Uint/Int32/Uint32/"
+									"Uint64/Byte)"
 								),
 								severity="error",
 								span=getattr(arm, "loc", Span()),

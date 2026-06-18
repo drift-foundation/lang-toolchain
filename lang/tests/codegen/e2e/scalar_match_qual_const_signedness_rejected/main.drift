@@ -1,0 +1,12 @@
+// A qualified UNSIGNED const cannot match a SIGNED scrutinee (and vice-versa) —
+// signedness is driven by the const's declared type via scalar_const_pattern_value.
+module main;
+import acme.tokens as tok;
+pub fn main() nothrow -> Int {
+	val k: Int = 1;
+	val r = match k {
+		tok.U => { 2 },
+		default => { 9 },
+	};
+	return r;
+}

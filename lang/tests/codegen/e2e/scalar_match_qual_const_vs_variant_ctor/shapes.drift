@@ -1,0 +1,8 @@
+module shapes;
+
+export { Shape, make_circle, make_square };
+
+pub variant Shape { Circle, Square }
+
+pub fn make_circle() nothrow -> Shape { return Shape::Circle(); }
+pub fn make_square() nothrow -> Shape { return Shape::Square(); }

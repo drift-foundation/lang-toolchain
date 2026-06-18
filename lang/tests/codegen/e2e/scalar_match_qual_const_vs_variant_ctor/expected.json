@@ -1,0 +1,1 @@
+{"description":"Qualified variant-ctor patterns (sh.Shape::Circle) and qualified const patterns (tok.A) coexist and dispatch correctly; the DOT-vs-DCOLON distinction holds. Returns 5.","exit_code":5}

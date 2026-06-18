@@ -1,0 +1,6 @@
+module codes;
+
+export { A, B };
+
+pub const A: Int = 3;
+pub const B: Int = 4;

@@ -3514,6 +3514,7 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 				"match_ctor0_qualified",
 				"match_ctor_named_qualified",
 				"match_ctor_paren_qualified",
+				"match_qual_const",
 			):
 				pat = child
 				break
@@ -3548,6 +3549,8 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 		pattern_arg_form = "positional"
 		scalar_literal_kind: Optional[str] = None
 		scalar_literal_magnitude: Optional[int] = None
+		scalar_const_qual_base: Optional[str] = None
+		scalar_const_qual_name: Optional[str] = None
 		def _parse_qualified_ctor(pat_node: Tree) -> tuple[str, TypeExpr]:
 			qnode = next((c for c in pat_node.children if isinstance(c, Tree) and _name(c) == "qualified_member"), None)
 			if qnode is None:
@@ -3663,6 +3666,20 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 		elif pat_kind == "match_ctor0_qualified":
 			ctor, ctor_base = _parse_qualified_ctor(pat)
 			pattern_arg_form = "bare"
+		elif pat_kind == "match_qual_const":
+			# A module-qualified const reference used as a scalar-match pattern
+			# (`tokens.TOK_EOF => ...`).  DISTINCT from `Base::Ctor` (DCOLON) —
+			# this is `NAME DOT NAME`.  The parser records the raw alias + name;
+			# the per-file resolution pass maps the alias to a module id and the
+			# checker resolves the const through the module path only (never
+			# lexical scope / current module).  `ctor` stays None so this is not
+			# mistaken for a variant/inherent ctor arm.
+			name_toks = [c for c in pat.children if isinstance(c, Token) and c.type == "NAME"]
+			if len(name_toks) != 2:
+				raise ValueError("match_qual_const expects two NAME tokens (module.CONST)")
+			scalar_const_qual_base = name_toks[0].value
+			scalar_const_qual_name = name_toks[1].value
+			pattern_arg_form = "bare"
 		elif pat_kind == "match_ctor":
 			name_tok = next(c for c in pat.children if isinstance(c, Token) and c.type == "NAME")
 			ctor = name_tok.value
@@ -3745,6 +3762,8 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 				block=block,
 				scalar_literal_kind=scalar_literal_kind,
 				scalar_literal_magnitude=scalar_literal_magnitude,
+				scalar_const_qual_base=scalar_const_qual_base,
+				scalar_const_qual_name=scalar_const_qual_name,
 			)
 		)
 

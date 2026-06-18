@@ -1,0 +1,17 @@
+// A qualified const pattern resolves a const that is RE-EXPORTED by the imported
+// module (`pubtok` re-exports `acme_tokens.*`).  `tok.TOK_EOF` resolves through
+// `pubtok`'s const table, where the re-export was materialized.
+module main;
+import pubtok as tok;
+pub fn classify(k: Int) nothrow -> Int {
+	val r = match k {
+		tok.TOK_EOF => { 2 },
+		tok.TOK_NUM => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// classify(0)=2, classify(7)=4, classify(5)=9 → 15; 15-10=5
+	return classify(0) + classify(7) + classify(5) - 10;
+}

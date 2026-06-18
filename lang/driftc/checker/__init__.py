@@ -3600,6 +3600,13 @@ class Checker:
 					arm.binder_field_indices = []
 					kind = getattr(arm, "scalar_literal_kind", None)
 					if kind is None:
+						if getattr(arm, "scalar_const_qual_name", None) is not None:
+							# Qualified const pattern (`tokens.X`): DEFER to the typed
+							# checker (sole owner of module/export const resolution).  It
+							# has `ctor is None`, so this MUST come before the default
+							# check below — otherwise a qualified-const arm would be
+							# miscounted as the `default` arm.
+							continue
 						if arm.ctor is None:
 							scalar_default = True
 							continue

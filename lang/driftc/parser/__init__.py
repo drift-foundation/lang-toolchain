@@ -640,6 +640,8 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 				block=_convert_block(arm.block),
 				scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
 				scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+				scalar_const_qual_base=getattr(arm, "scalar_const_qual_base", None),
+				scalar_const_qual_name=getattr(arm, "scalar_const_qual_name", None),
 				loc=Span.from_loc(getattr(arm, "loc", None)),
 			)
 			for arm in expr.arms
@@ -3962,6 +3964,35 @@ def parse_drift_workspace_to_hir(
 					_resolve_types_in_expr(expr.scrutinee)
 					for arm in getattr(expr, "arms", []) or []:
 						_resolve_type_expr_in_file(path, file_aliases, getattr(arm, "ctor_base", None), allow_traits=True)
+						# A qualified scalar-const pattern (`tokens.X => ...`) resolves
+						# its module alias EXACTLY like a value-expression reference:
+						# alias → module id via `file_aliases`.
+						#
+						# SOURCE SYNTAX IS ONLY `NAME.NAME` (one dot, two names) — the
+						# `match_qual_const` grammar rule.  So `base` is always a single
+						# segment: either an import alias (`import my.tokens as tok` →
+						# `tok.X`) or a single-segment module spelled outright.  A
+						# DOTTED module path (`acme.tokens.TOK`, three+ names) does NOT
+						# parse as this pattern and requires an `as` alias — there is no
+						# longer qualified value-path pattern form in v1.
+						#
+						# The "direct-module-path fallback" below only covers the case
+						# where that single `base` segment IS itself a known module name
+						# (no `as` alias needed because alias == module id).  The base is
+						# rewritten in place to the resolved module id; the checker then
+						# resolves the const through that module's table only (re-exports
+						# already materialized there resolve too).  An unresolvable base
+						# is left as-written and the checker reports E-MATCH-SCALAR-CONST.
+						_qbase = getattr(arm, "scalar_const_qual_base", None)
+						if _qbase is not None:
+							_qmod = file_aliases.get(_qbase)
+							if _qmod is None and (
+								_qbase in merged_programs
+								or (external_module_exports is not None and _qbase in external_module_exports)
+							):
+								_qmod = _qbase
+							if _qmod is not None:
+								arm.scalar_const_qual_base = _qmod
 						_resolve_types_in_block(path, file_aliases, arm.block)
 					return
 				if isinstance(expr, parser_ast.ExceptionCtor):

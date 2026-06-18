@@ -422,6 +422,12 @@ class MatchArm:
 	# `scalar_literal_magnitude` is the unsigned magnitude as written.
 	scalar_literal_kind: Optional[str] = None
 	scalar_literal_magnitude: Optional[int] = None
+	# RAW qualified-scalar-const pattern data (`tokens.TOK_EOF => ...`), carried
+	# through to HIR for the checker.  `scalar_const_qual_base` is the resolved
+	# module id (rewritten in place from the alias by the per-file resolution
+	# pass); `scalar_const_qual_name` is the const name.
+	scalar_const_qual_base: Optional[str] = None
+	scalar_const_qual_name: Optional[str] = None
 	loc: Span = field(default_factory=Span)
 
 

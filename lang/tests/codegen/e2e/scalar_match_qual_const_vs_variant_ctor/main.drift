@@ -1,0 +1,30 @@
+// Pins the parser/checker DISTINCTION: `sh.Shape::Circle` (DCOLON) stays a
+// qualified VARIANT-CONSTRUCTOR pattern, while `tok.A` (DOT, no DCOLON) is a
+// qualified CONST pattern — both share the `alias.Name` prefix.  A regression in
+// the grammar disambiguation (LALR lookahead FATARROW vs DCOLON) would break one.
+module main;
+import shapes as sh;
+import codes as tok;
+pub fn area_code(s: sh.Shape) nothrow -> Int {
+	val r = match s {
+		sh.Shape::Circle => { 1 },
+		sh.Shape::Square => { 2 },
+	};
+	return r;
+}
+pub fn classify(c: Int) nothrow -> Int {
+	val r = match c {
+		tok.A => { 10 },
+		tok.B => { 20 },
+		default => { 0 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// area_code(Circle)=1, area_code(Square)=2 → 3
+	// classify(3)=10, classify(4)=20, classify(9)=0 → 30
+	// 3 + 30 = 33; 33 - 28 = 5
+	val a = area_code(sh.make_circle()) + area_code(sh.make_square());
+	val b = classify(3) + classify(4) + classify(9);
+	return a + b - 28;
+}

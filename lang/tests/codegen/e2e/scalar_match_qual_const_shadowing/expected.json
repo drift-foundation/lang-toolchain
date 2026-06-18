@@ -1,0 +1,1 @@
+{"description":"Qualified const ref resolves in its module (acme.tokens::TOK_EOF=0), not the shadowing current-module const (main::TOK_EOF=99); k=0 matches → returns 5 (9 would mean the wrong const was used).","exit_code":5,"module_paths":["."]}

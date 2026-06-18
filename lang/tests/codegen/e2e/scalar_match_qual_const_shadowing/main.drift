@@ -1,0 +1,15 @@
+// A qualified const ref resolves ONLY through the named module — a current-module
+// const of the same name must not shadow it.  main::TOK_EOF=99, acme.tokens::TOK_EOF=0.
+// Matching 0 via `tok.TOK_EOF` must take that arm (→5).  If the current module
+// were consulted, `tok.TOK_EOF` would bind 99 and 0 would fall to default (→9).
+module main;
+import acme.tokens as tok;
+const TOK_EOF: Int = 99;
+pub fn main() nothrow -> Int {
+	val k = 0;
+	val r = match k {
+		tok.TOK_EOF => { 5 },
+		default => { 9 },
+	};
+	return r;
+}

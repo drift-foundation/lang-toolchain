@@ -1,0 +1,1 @@
+{"description":"A qualified const pattern resolves a const re-exported by the imported module (pubtok re-exports acme_tokens.*); returns 5.","exit_code":5}

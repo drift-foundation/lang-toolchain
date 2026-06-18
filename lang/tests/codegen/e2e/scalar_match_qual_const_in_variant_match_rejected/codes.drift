@@ -1,0 +1,5 @@
+module codes;
+
+export { A };
+
+pub const A: Int = 3;

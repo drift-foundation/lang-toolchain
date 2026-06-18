@@ -1,0 +1,17 @@
+// Module-qualified const references as scalar-match patterns, resolved through
+// an `as` import alias — the lexer-token idiom across a module boundary.
+module main;
+import acme.tokens as tok;
+pub fn classify(k: Int) nothrow -> Int {
+	val r = match k {
+		tok.TOK_EOF => { 2 },
+		tok.TOK_IDENT => { 3 },
+		tok.TOK_NUM => { 4 },
+		default => { 9 },
+	};
+	return r;
+}
+pub fn main() nothrow -> Int {
+	// classify(0)=2, classify(1)=3, classify(7)=4, classify(5)=9 → 18; 18-13=5
+	return classify(0) + classify(1) + classify(7) + classify(5) - 13;
+}

@@ -1,0 +1,1 @@
+{"description":"A qualified const pattern (tok.A) used against a variant (non-scalar) scrutinee is rejected: qualified const refs are only valid in integer scalar matches.","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR-CONST"}]}

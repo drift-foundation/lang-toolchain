@@ -477,6 +477,8 @@ class BorrowMaterializeRewriter:
 						result=arm_result,
 						scalar_literal_kind=getattr(arm, "scalar_literal_kind", None),
 						scalar_literal_magnitude=getattr(arm, "scalar_literal_magnitude", None),
+						scalar_const_qual_base=getattr(arm, "scalar_const_qual_base", None),
+						scalar_const_qual_name=getattr(arm, "scalar_const_qual_name", None),
 						scalar_value=getattr(arm, "scalar_value", None),
 						loc=arm.loc,
 					)

@@ -1,0 +1,5 @@
+module acme.tokens;
+
+export { U };
+
+pub const U: Uint = 1u;

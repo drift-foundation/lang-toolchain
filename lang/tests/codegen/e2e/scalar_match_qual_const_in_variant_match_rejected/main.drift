@@ -1,0 +1,15 @@
+// A qualified const ref is ONLY valid in an integer scalar match.  Used as a
+// pattern against a VARIANT scrutinee it must be rejected with E-MATCH-SCALAR-CONST
+// (not silently misread as a default/binder arm).
+module main;
+import codes as tok;
+variant Color { Red, Green }
+fn make_red() nothrow -> Color { return Color::Red(); }
+pub fn main() nothrow -> Int {
+	val c = make_red();
+	val r = match c {
+		tok.A => { 1 },
+		default => { 9 },
+	};
+	return r;
+}

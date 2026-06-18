@@ -980,6 +980,15 @@ class MatchArm:
 	# stage2 must never reinterpret these raw fields.
 	scalar_literal_kind: Optional[str] = None
 	scalar_literal_magnitude: Optional[int] = None
+	# RAW qualified-scalar-const pattern data (parser-owned).  Set for
+	# module-qualified const arms (`tokens.TOK_EOF => ...`).  `scalar_const_qual_base`
+	# is the module alias as written; the per-file resolution pass rewrites it
+	# in place to the resolved module id (mirrors `TypeExpr.module_id`).
+	# `scalar_const_qual_name` is the const name.  These carry no type judgment —
+	# the checker resolves the const through the module path ONLY, validates
+	# signedness/range, and sets `scalar_value`; stage2 never reinterprets them.
+	scalar_const_qual_base: Optional[str] = None
+	scalar_const_qual_name: Optional[str] = None
 
 
 @dataclass

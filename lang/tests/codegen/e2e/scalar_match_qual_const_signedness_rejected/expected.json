@@ -1,0 +1,1 @@
+{"description":"A qualified unsigned const (Uint) used against a signed Int scrutinee is rejected (signedness mismatch).","exit_code":1,"diagnostics":[{"phase":"typecheck","message_contains":"E-MATCH-SCALAR"}]}
