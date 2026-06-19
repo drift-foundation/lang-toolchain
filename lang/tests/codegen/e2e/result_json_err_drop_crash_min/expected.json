@@ -1,1 +1,5 @@
-{"exit_code":0}
+{
+  "description": "result_json_err_drop_crash_min: Err-drop ownership leak proof (Batch JSON-A upgrade; guards the a32fa743 keepalive double-free class - exit-only repro upgraded to alloc-track)",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}

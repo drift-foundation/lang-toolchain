@@ -508,3 +508,111 @@ Per change: (a) confirm the named survivor pins the same contract at ≥ the sam
 - Core-language domain was **sampled, not exhaustive** — generics, structs, casts/narrow-int, closures, and the full trait/packages dirs were not fully read and likely hold more (B)-pattern clusters. A focused follow-up sampling pass is warranted before a core-language sweep.
 - The JSON `*_local_*` and exceptions "Err twice" findings **overlap** — reconcile as a single drop-path-ladder decision.
 - No numbers here are commitments; this is a candidate list for review. Nothing has been edited or deleted.
+
+---
+
+## JSON crash-min root-cause pass (2026-06-18) — read-only
+
+Resolves the HELD §5a cluster **and** the overlapping Exceptions §2 "Err twice"
+rows as ONE decision. Read-only; no test files changed.
+
+### Provenance (single source)
+
+All 29 in-scope fixtures were introduced by **one commit, `a32fa743`** ("per work
+progress"), whose *compiler* changes were `llvm_codegen.py` + `stage2/hir_to_mir.py`
++ `stage1/hir_nodes.py` — **NOT the JSON parser**. That commit fixed three lowering
+defects:
+- **(A) keepalive by-value store double-owned refcounted values** (`llvm_codegen.py`
+  `_FuncBuilder` keepalive: stored String/struct/variant/interface without
+  retain/release balancing → **double-free**; fix restricts keepalive to scalar POD).
+- **(B) array-grow join `LoadLocal`→`MoveOut`** (`hir_to_mir.py:3457`) — move-out/drop
+  correctness for an array local.
+- **(C) `&&`/`||` short-circuit lowering** (`hir_to_mir.py:1339`) — control-flow;
+  **not exercised by this JSON/Err cluster** (no fixture here uses `&&`/`||`).
+
+So every fixture below pins **(A)** (and the L-group also cleanup-authoring of a live
+local on the early-return Err edge; one array-local fixture also (B)). The contract is
+**ownership/drop + control-flow cleanup**, NOT parse semantics — the parse error is
+just the vehicle that produces a refcounted `Result::Err` payload to drop.
+
+### Critical coverage gap
+
+No fixture **anywhere** exercises the `Result<…,…>::Err` payload drop with leak
+tracking. The `std_json_leak_*parse*` loops parse **valid** JSON and drop on the **Ok**
+branch (verified) — they prove Ok-path `JsonNode` drop is leak-free, not the Err path.
+So this cluster is the **sole** Err-drop coverage, and it carries **crash-detection
+only** (`exit_code:0`) for a **double-free** defect class. ⇒ the right move is to ADD
+the missing leak proof (upgrade), not to delete.
+
+### Mapping (by drop-shape group; all `a32fa743`, all `exit_code:0`, all alloc_track=0)
+
+| group | fixtures | exact root cause it pins | subsystem | LANGUAGE_BUG? | primarily proves | same/stronger-boundary survivor? | leak/valgrind survivor? | recommendation |
+|---|---|---|---|---|---|---|---|---|
+| **J1** parse-Err drop, no/limited access | `json_err_twice_no_access`, `json_err_twice_same_input`, `json_err_once_object`, `json_parse_truncated_object_crash_min`, `parse_err_twice_min`, `json_two_error_parses_with_newlines_min` | (A) double-free of refcounted `JsonErrorData` Err payload on drop (no field access) | codegen keepalive + stage2 cleanup | yes (ownership/double-free class) | drop/ownership safety | NO (parse-semantics survivors are a different boundary) | NO | **keep; upgrade 1 rep w/ alloc_track** |
+| **J2** parse-Err drop + field access | `json_err_twice_tag`, `json_err_line_access_crash_min`, `json_err_second_case_only_min`, `json_err_second_case_tag_only_min`, `json_parse_array_err_tag_only_no_crash`, `json_err_with_newline_crash_min`, `json_like_key_err_path_min` | (A) same, but Err `String` fields materialized via `.tag/.line/.col` access before drop | codegen keepalive + stage2 | yes | drop/ownership safety (offsets/tag are incidental) | NO | NO | **keep; upgrade 1 rep** |
+| **R1** manual `Result::Err(refcounted)` drop | `result_json_err_drop_crash_min`, `result_jsonnode_err_twice_min`, `result_err_struct_with_strings_twice_min`, `result_err_large_struct_twice`, `string_struct_err_twice_min`, `string_local_then_err_twice`, `ref_plus_string_param_return_struct_twice_min`, `try_wrap_result_err_twice_min` | (A) double-free constructing+dropping `Result::Err(struct/JsonErrorData with String fields)` | codegen keepalive + stage2 | yes | drop/ownership safety | NO | NO | **keep; upgrade 1–2 reps** |
+| **R2** Err forward/convert | `result_err_convert_okshape_crash_min`, `result_err_forward_same_type_min`, `canthrow_result_err_forward_crash_min` | (A) + control-flow: Err value forwarded/type-converted across a return edge | stage2 cleanup + codegen | yes | control-flow cleanup + drop | NO | NO | **keep; upgrade 1 rep** |
+| **L** early-return Err past LIVE local | `loop_err_return_with_json_local_crash_min`, `cleanup_err_with_jsonnode_local_min`, `cleanup_err_with_noncopy_local_min`, `result_err_convert_with_json_local_crash_min`, `result_err_after_array_local_with_linecol_min` (also **(B)**), `try_wrapper_json_result_crash_min` | drop-on-early-return cleanup of a live `HashMap<String,JsonNode>` / array / non-Copy local + Err payload (cleanup authoring) | stage2 cleanup_authoring (+ (B) array-grow) | yes | control-flow cleanup (highest-value) | NO | NO | **keep; upgrade ≥1 rep** (the `__borrow_tmp`/scope-drop class) |
+| **outlier** | `hashmap_jsonnode_empty_twice_min` | trivial: empty `HashMap<String,JsonNode>` `len()==0` twice — no Err, no drop of populated value | containers | weak/no | smoke only | n/a | n/a | defer to JSON-behavior pass (not an Err fixture) |
+
+LANGUAGE_BUG note: none carry a bug-id (commit msg is "per work progress"), but they
+guard a genuine codegen **double-free** fixed in `a32fa743`. Per constraint #1 they are
+**LANGUAGE_BUG-adjacent**: do not delete without a survivor pinning the same root cause
+at the same/stronger boundary **with leak coverage** — which does not exist today.
+
+### Batch JSON-A — ✅ EXECUTED 2026-06-18 (UPGRADES ONLY, zero deletions)
+
+**Done:** added `"alloc_track_leak": true` (+ a provenance note in `description`) to the
+7 representative fixtures below — `expected.json` only, no source touched, nothing
+deleted/merged. **Validation:** all **7/7 pass under the alloc-track lane** (forced
+leak-check every run, runner.py:~824) → exit 0 + **no leak**. So the `a32fa743`
+keepalive double-free class now has genuine leak/double-free coverage (previously
+crash-only); no remaining LANGUAGE_BUG surfaced.
+
+Upgraded: `json_err_twice_no_access`, `json_err_twice_tag`, `result_json_err_drop_crash_min`,
+`result_err_struct_with_strings_twice_min`, `result_err_convert_okshape_crash_min`,
+`loop_err_return_with_json_local_crash_min`, `result_err_after_array_local_with_linecol_min`.
+
+**Key rule recorded:** parse-semantics tests (`std_json_parse_error_position` / `_tag`
+/ `_policy`) are **NOT valid survivors** for the Err-drop ownership contract — they hit
+the parser boundary and never construct+drop a `Result::Err`. Err-drop coverage lives
+only in this cluster (now leak-proofed at the representatives above).
+
+**JSON crash-min deletion: still DEFERRED** to Batch JSON-B. The leak proofs are now
+green, which *unblocks* JSON-B, but deletion is out of scope for this upgrade-only pass
+and must be evaluated per-fixture (a sibling may only be retired if it pins no distinct
+control-flow shape beyond an upgraded representative).
+
+git: ` M` on the 7 `expected.json` files only. Staging left to the user.
+
+---
+
+#### (original proposal, for reference)
+
+Rationale: the defect class is a double-free with **zero** current leak coverage;
+strengthen first. Add `"alloc_track_leak": true` to one representative per drop-shape
+so the Err-drop path gains leak/double-free proof on every run (the runner forces
+leak-checking on alloc_track fixtures):
+
+- J1 → `json_err_twice_no_access`
+- J2 → `json_err_twice_tag`
+- R1 → `result_json_err_drop_crash_min` **and** `result_err_struct_with_strings_twice_min`
+- R2 → `result_err_convert_okshape_crash_min`
+- L  → `loop_err_return_with_json_local_crash_min` **and** `result_err_after_array_local_with_linecol_min` (covers (B) too)
+
+**No deletions in JSON-A.** **Risk:** low — adding `alloc_track_leak` only strengthens;
+the worst case is it *surfaces a latent leak* the crash-only test missed (a desirable
+finding to investigate, not mask). **Validation when executed:** run each upgraded
+fixture (alloc-track lane runs leak-check every run) → expect exit 0 + 0 leaks; any
+leak is a real defect to file, not to paper over.
+
+### Deferred Batch JSON-B (after JSON-A lands & is green)
+
+Only once each shape has a leak-proof representative, evaluate **merges/deletions** of
+the redundant same-shape siblings — decisive only when a sibling pins no distinct
+control-flow shape beyond an upgraded representative. Expected candidates: the J1/J2
+"twice" duplicates (incl. the Exceptions §2 rows `json_err_twice_same_input`,
+`result_err_large_struct_twice`, `json_parse_array_err_tag_only_no_crash`) and the
+trivial `hashmap_jsonnode_empty_twice_min`. **This supersedes the earlier Exceptions §2
+"merge" recommendation** — those rows are Err-drop ownership fixtures, not JSON/exception
+*behavior* dupes, so they follow the JSON-A/B sequence, not a behavior merge.
