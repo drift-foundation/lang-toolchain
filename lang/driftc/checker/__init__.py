@@ -1933,7 +1933,23 @@ class Checker:
 							return checker._len_cap_result_type(cur_ty)
 						else:
 							return None
+					elif isinstance(proj, H.HPlaceIndex):
+						# Index projection `[i]` on an array place yields the element
+						# type. The leading-REF unwrap above already peeled `&Array<T>`
+						# down to `Array<T>`. This is a *place* projection (borrow of the
+						# element), so unlike the value-context HIndex branch it must not
+						# emit a Copy diagnostic for non-Copy element types.
+						if cur_def.kind is TypeKind.ARRAY and cur_def.param_types:
+							cur_ty = cur_def.param_types[0]
+						else:
+							return None
 					else:
+						# Other projections (e.g. explicit `HPlaceDeref`) are not yet
+						# typed by this shallow walker. The unconditional leading-REF
+						# unwrap above is correct for field/index projections but would
+						# mis-handle an explicit deref (double-peel for `&&T`), so we
+						# conservatively bail rather than guess — matching pre-existing
+						# behavior for non-field/index projections.
 						return None
 				return cur_ty
 
