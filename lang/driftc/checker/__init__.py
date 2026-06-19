@@ -1917,39 +1917,54 @@ class Checker:
 				if base_ty is None:
 					return None
 				cur_ty = base_ty
+				def _peel_ref_once(t: TypeId) -> TypeId:
+					# Single-level reference unwrap. The HIR place convention leaves
+					# the ref hop at a field/index projection IMPLICIT (only an
+					# explicit unary deref `*`/`->` produces an `HPlaceDeref`), so a
+					# field or index projection auto-derefs at most one level to reach
+					# the struct/array host. The language's auto-deref is single-level,
+					# so this is `if`, not a loop.
+					d = self.table.get(t)
+					if d.kind is TypeKind.REF and d.param_types:
+						return d.param_types[0]
+					return t
+
 				for proj in expr.projections:
-					cur_def = self.table.get(cur_ty)
-					if cur_def.kind is TypeKind.REF and cur_def.param_types:
-						cur_ty = cur_def.param_types[0]
-						cur_def = self.table.get(cur_ty)
 					if isinstance(proj, H.HPlaceField):
-						if cur_def.kind is TypeKind.STRUCT:
-							info = self.table.struct_field(cur_ty, proj.name)
+						host_ty = _peel_ref_once(cur_ty)
+						host_def = self.table.get(host_ty)
+						if host_def.kind is TypeKind.STRUCT:
+							info = self.table.struct_field(host_ty, proj.name)
 							if info is not None:
 								_, cur_ty = info
 							else:
 								return None
 						elif proj.name in ("len", "cap", "capacity"):
-							return checker._len_cap_result_type(cur_ty)
+							return checker._len_cap_result_type(host_ty)
 						else:
 							return None
 					elif isinstance(proj, H.HPlaceIndex):
 						# Index projection `[i]` on an array place yields the element
-						# type. The leading-REF unwrap above already peeled `&Array<T>`
-						# down to `Array<T>`. This is a *place* projection (borrow of the
-						# element), so unlike the value-context HIndex branch it must not
-						# emit a Copy diagnostic for non-Copy element types.
-						if cur_def.kind is TypeKind.ARRAY and cur_def.param_types:
-							cur_ty = cur_def.param_types[0]
+						# type, auto-derefing one ref level (`&Array<T>` -> `Array<T>`).
+						# This is a *place* projection (borrow of the element), so unlike
+						# the value-context HIndex branch it must not emit a Copy
+						# diagnostic for non-Copy element types.
+						host_ty = _peel_ref_once(cur_ty)
+						host_def = self.table.get(host_ty)
+						if host_def.kind is TypeKind.ARRAY and host_def.param_types:
+							cur_ty = host_def.param_types[0]
+						else:
+							return None
+					elif hasattr(H, "HPlaceDeref") and isinstance(proj, getattr(H, "HPlaceDeref")):
+						# Explicit deref `*p` / `p->…`: peel EXACTLY one reference level,
+						# with no implicit pre-unwrap, so `*p` on `&T` -> `T` and on
+						# `&&T` -> `&T` (not `T`).
+						d = self.table.get(cur_ty)
+						if d.kind is TypeKind.REF and d.param_types:
+							cur_ty = d.param_types[0]
 						else:
 							return None
 					else:
-						# Other projections (e.g. explicit `HPlaceDeref`) are not yet
-						# typed by this shallow walker. The unconditional leading-REF
-						# unwrap above is correct for field/index projections but would
-						# mis-handle an explicit deref (double-peel for `&&T`), so we
-						# conservatively bail rather than guess — matching pre-existing
-						# behavior for non-field/index projections.
 						return None
 				return cur_ty
 

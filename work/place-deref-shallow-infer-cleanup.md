@@ -1,6 +1,8 @@
 # Explicit `HPlaceDeref` shallow-inference cleanup — design & research
 
-**Status:** deferred, non-blocking. No code change proposed for 0.33.43.
+**Status:** IMPLEMENTED (checker-only, ABI unchanged). Restructure landed in
+`Checker._TypingContext._infer_expr_type`; regressions added (see §7). Original
+research below kept for context.
 **Author:** research follow-up to the 0.33.43 borrowed-array-child fix.
 **Scope:** `lang/driftc/checker/__init__.py` — `Checker._TypingContext._infer_expr_type`, the `HPlaceExpr` branch (~line 1915).
 **Related:** the 0.33.43 LANGUAGE_BUG fix (`HPlaceIndex` arm) in `history.md`.
@@ -181,3 +183,38 @@ wants a `&&T`), so impact is low. **No current program is blocked.**
   so forced cross-layer unification would be incorrect.
 - If a *third HIR-level* place walker ever appears, the right mitigation is a
   shared **HIR-only** place-typing helper, not cross-layer consolidation.
+
+---
+
+## 7. Implementation outcome
+
+Landed exactly as designed in §3: removed the unconditional leading-REF unwrap;
+implicit single-level unwrap now lives inside the `HPlaceField`/`HPlaceIndex` arms
+(`_peel_ref_once`); `HPlaceDeref` peels exactly one level with no pre-unwrap.
+Checker-only — no MIR/lowering/runtime/ABI change.
+
+**Correction to §5's impact estimate:** the user-visible gap turned out *easier*
+to trigger than predicted — a single-ref **bare deref reborrow** `&(*p)`
+(`p: &T`) already normalizes to place `[Deref]` and reproduces the cascade; it
+does not require a `&&T`. Verified by emulating the pre-fix deref bail
+(`return None`) and recompiling: `&(*p)` and `&(*p).children[0]` borrows both fail
+with `E-AUTO-f6706407` at the second concat pre-fix, and compile+run clean
+post-fix. (Plain value reads `p->text`/`(*p).text` were and remain fine — they
+never enter the `HPlaceExpr` walker.) Still non-blocking — no shipped program is
+known to use this shape — but the surface is a touch wider than first thought.
+
+**Tests added:**
+- `lang/tests/checker/test_place_deref_shallow_inference.py` (9) — pins inferred
+  `TypeId`s directly via `_TypingContext.infer`: `*p`(&T)→T, `*pm`(&mut T)→T,
+  `*pp`(&&T)→&T (exact one-level peel, the case the old leading-unwrap got wrong),
+  `(*p).text`→String, `(*pp).text`→String, `(*p).children[0]`→Node, ref-array
+  index, ref-struct field, and a non-Copy-payload case asserting **no diagnostic**
+  (no Copy-check false accept/reject).
+- `lang/tests/driver/test_borrowed_local_deref_field_string_copy.py` (3) —
+  compile+run+leak-clean for `&(*p)`, `&(*p).children[0]`, and the `->` sugar
+  `&p->children[0]`; the borrowed local's String field is reused in a second
+  string op (the cascade that mis-fired pre-fix).
+
+**Regression sweep:** checker+stage1+type_checker (287) and the
+string/array/borrow/field/index/place/deref driver set all green; original
+0.33.43 `test_borrowed_local_field_string_copy.py` still green.
