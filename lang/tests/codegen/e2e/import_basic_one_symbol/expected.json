@@ -1,5 +1,5 @@
 {
-  "description": "e2e: import basic one symbol",
+  "description": "e2e: import a single symbol and call it; covers `import lib as lib` alias syntax (absorbed import_alias)",
   "exit_code": 42,
   "stderr": "",
   "stdout": ""

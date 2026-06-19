@@ -418,6 +418,29 @@ only `exit_code:7`, no stdout/stderr/diagnostics). Decisive functional duplicate
 
 **Still held:** `import_alias/` (Batch 1b), all JSON crash-min (separate root-cause pass).
 
+### 2026-06-18 — Batch 1b: import_alias merge (survivor-confirmed)
+**Evidence (read-only check):** `import_alias/` vs `import_basic_one_symbol/` —
+`main.drift` **byte-identical** (both `module main; import lib as lib;` …
+`lib.add(40, 2)`); `lib.drift` whitespace-only diff (identical `add` logic);
+`expected.json` assertions **identical** (`exit_code:42`, `stdout:""`, `stderr:""`),
+only `description` differed. **Survivor confirmation: `import_basic_one_symbol`
+explicitly uses `as` (`import lib as lib;`)** → it covers the alias-import syntax
+path identically; the default-to-keep guard ("if survivor lacks `as`") was NOT
+triggered. Neither fixture exercises a non-trivial alias (alias == module name);
+that path lives in other fixtures (`const_module_alias_access` `as x`, qualified-
+const `as tok`), so removal loses no alias coverage. No stricter assertions either
+way.
+
+**Changes made:**
+- **Edited** `import_basic_one_symbol/expected.json` — description now explicitly
+  states it covers `import lib as lib` alias syntax (absorbed `import_alias`).
+- **Removed (working tree, `rm`)** `import_alias/` (`main.drift`, `lib.drift`,
+  `expected.json`). `git status`: ` D` three files + ` M` survivor's expected.json.
+
+**Validation:** `import_basic_one_symbol` → **1/1 passed** (exit 42).
+
+**Still held:** all JSON crash-min (separate root-cause pass).
+
 ### DO NOT TOUCH (hard exclusions)
 
 1. **Every `*_memcheck.py` (38) and every `alloc_track_*` e2e (36)** — sole leak/UAF/double-free proofs; a functional twin is not a substitute. Never delete a memcheck file "because there's an e2e," never strip `alloc_track_*` keys.

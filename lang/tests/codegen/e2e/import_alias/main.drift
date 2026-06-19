@@ -1,7 +1,0 @@
-module main;
-import lib as lib;
-
-
-fn main() nothrow -> Int{
-	return try lib.add(40, 2) catch { 0 };
-}
