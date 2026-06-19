@@ -825,3 +825,78 @@ the reps are green; `parse_err_twice_min` is NOT a JSON-C candidate (kept as sur
 - **G:** `result_err_forward_same_type_min` ↔ `canthrow_result_err_forward_crash_min`
 - **H:** `cleanup_err_with_jsonnode_local_min` ↔ `cleanup_err_with_noncopy_local_min` ↔ `result_err_convert_with_json_local_crash_min` (runtime-equiv)
 - **F/J:** `try_wrap_result_err_twice_min` ↔ `try_wrapper_json_result_crash_min`
+
+---
+
+## Batch JSON-C — ✅ EXECUTED 2026-06-18 (3 decisive removals)
+
+**Done:** removed the 3 decisive JSON-C candidates (working-tree `rm`, no git ops):
+`canthrow_result_err_forward_crash_min` (G+A), `cleanup_err_with_noncopy_local_min`
+(H near-dupe), `hashmap_jsonnode_empty_twice_min` (container test).
+
+**Held back (NOT removed — medium-risk combos, still eligible for a follow-on):**
+`result_err_convert_with_json_local_crash_min`, `try_wrapper_json_result_crash_min`.
+
+**Excluded (NOT a JSON-C candidate):** `parse_err_twice_min` (std.parse API surface;
+ownership covered by the J1 rep) — confirmed present, untouched.
+
+**Validation:** survivors/proofs `result_err_forward_same_type_min`,
+`json_parse_truncated_object_crash_min`, `cleanup_err_with_jsonnode_local_min`,
+`hashmap_basic`, `hashmap_scope_exit_no_leak` → **5/5 passed**; the four alloc-track
+ones are **leak-clean**. git: ` D` on 6 removed files (3 dirs); staging is the user's.
+
+**Cluster tally (actual):** JSON-A(7)+JSON-A2(7)=14 leak-proof reps; removed JSON-B(10)
++ JSON-C(3) = **−13 fixtures**. 2 medium combos still held; all Err-drop/cleanup shapes
+leak-proofed; parse-semantics + std.parse surface retained.
+
+---
+
+#### (original static confirmation, for reference)
+
+## Batch JSON-C — static confirmation (2026-06-18) — read-only, NOTHING deleted
+
+Confirms which of the 5 JSON-C candidates are now redundant given the JSON-A/A2
+leak-proof reps. Ownership survivors only (no parse-semantics tests). A combo fixture
+is removable ONLY if every constituent shape has a leak-proof rep AND no unique
+compile/checker/runtime/API path remains.
+
+Leak-proof reps in play: **G** `result_err_forward_same_type_min` · **H** (straight-line)
+`cleanup_err_with_jsonnode_local_min` · **A** (whole-Result discard) + **Ok-path
+move-into-Object** + early-return-past-HashMap all in `loop_err_return_with_json_local_crash_min`
+and `json_parse_truncated_object_crash_min` (A) · **F** (try/catch) `try_wrap_result_err_twice_min`.
+Container survivors: `hashmap_basic` (fresh `len()==0`) · `hashmap_scope_exit_no_leak`
+(alloc-track HashMap scope drop).
+
+### Confirmation table
+
+| candidate | shape(s) | leak-proof rep(s) covering it | unique compile/checker/runtime/API path? | rec | risk | validation if removed |
+|---|---|---|---|---|---|---|
+| `canthrow_result_err_forward_crash_min` | G (Err forward via match-rebind) + A (`val _r=` whole-Result discard) | G `result_err_forward_same_type_min` (also has a non-nothrow forwarder → can-throw adds no checker delta) + A `json_parse_truncated_object_crash_min`/`loop_err_return` | **none** — sequential G then A; both leak-proofed | **remove** | low | run `result_err_forward_same_type_min` + `json_parse_truncated_object_crash_min` |
+| `cleanup_err_with_noncopy_local_min` | H (straight-line early-return past **empty** HashMap), value `E` (custom struct) vs `JsonNode` | H `cleanup_err_with_jsonnode_local_min` | **none** — map is empty at the Err return ⇒ value type never drops; HashMap-with-droppable-value drop glue covered by the JsonNode rep | **remove** | low | run `cleanup_err_with_jsonnode_local_min` |
+| `hashmap_jsonnode_empty_twice_min` | not Err-drop: empty `HashMap<String,JsonNode>` + `len()==0` ×2 | drop: `hashmap_scope_exit_no_leak` (alloc-track) + Err reps build/drop `HashMap<String,JsonNode>`; API: `hashmap_basic` asserts fresh `len()==0` | **none** — `len()==0` is value-type-agnostic; json-valued empty-map drop leak-proofed elsewhere | **remove** | low | run `hashmap_basic` + `hashmap_scope_exit_no_leak` |
+| `result_err_convert_with_json_local_crash_min` | H (straight-line early-return past HashMap) + A (`_r`) + **Ok-path `move fields`→Object** (dead at runtime — Err taken) | H `cleanup_err_with_jsonnode_local_min`; A + Ok-move-into-Object both in `loop_err_return_with_json_local_crash_min` (leak-proof) | none that lacks a leak-proof rep — BUT the straight-line+Ok-move COMBINATION is split across two reps, not one | **remove (medium)** — eligible per rule; not in the smallest-safe batch | med | run `cleanup_err_with_jsonnode_local_min` + `loop_err_return_with_json_local_crash_min` + `json_parse_truncated_object_crash_min` |
+| `try_wrapper_json_result_crash_min` | J = F (try/catch) + H (early-return past HashMap in `f_throwing`) + A (`_r`) + Ok-move | F `try_wrap_result_err_twice_min`; H `cleanup_err_with_jsonnode_local_min`; A + Ok-move `loop_err_return_with_json_local_crash_min` | none that lacks a leak-proof rep — but it's the most-combined fixture (F+H+A) split across three reps | **remove (medium)** — eligible per rule; not in the smallest-safe batch | med | run `try_wrap_result_err_twice_min` + `cleanup_err_with_jsonnode_local_min` + `loop_err_return_with_json_local_crash_min` |
+
+`parse_err_twice_min` remains OUT of JSON-C (std.parse API surface; ownership already covered by J1 rep) — confirmed, no separate reason to include it.
+
+### Smallest safe deletion batch (JSON-C) — 3 decisive (single-shape / container)
+
+1. `canthrow_result_err_forward_crash_min` — G+A, both leak-proof, no unique path
+2. `cleanup_err_with_noncopy_local_min` — H near-dupe, empty-map ⇒ value type irrelevant
+3. `hashmap_jsonnode_empty_twice_min` — container test; `len()==0` via `hashmap_basic`, drop via `hashmap_scope_exit_no_leak`
+
+**Risk: low.** **Validation when executed:** run the survivors named per row above, expect green (incl. alloc-track leak-clean for the leak-proof reps).
+
+### Held back from the smallest-safe batch (medium-risk combos — eligible, separate step)
+
+`result_err_convert_with_json_local_crash_min` and `try_wrapper_json_result_crash_min`:
+every constituent shape (H, A, Ok-move, F) has a leak-proof rep and no unique path
+remains, so they ARE removable per the rule — but each fixture's specific *combination*
+lives across 2–3 reps rather than one, so they're flagged **medium-risk** and held for an
+explicit follow-on rather than the smallest-safe batch. If removed, validate against the
+multi-rep set named in their rows.
+
+**Cluster tally (projected after this 3-fixture batch):** JSON-A(7)+JSON-A2(7)=14
+leak-proof reps; JSON-B(−10) + JSON-C smallest(−3) = **−13 fixtures**; +2 medium combos
+still eligible. All Err-drop/cleanup shapes remain leak-proofed; parse-semantics + std.parse
+surface retained.
