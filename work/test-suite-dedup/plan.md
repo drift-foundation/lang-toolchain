@@ -1,6 +1,15 @@
 # Test-suite dedup — static audit plan
 
-**Status: STATIC AUDIT ONLY. No tests edited or deleted.** Baseline commit: `f46c9eb7`.
+**Status (2026-06-19): AUDIT COMPLETE + low-risk batches EXECUTED & MERGED to `main`.**
+Baseline commit: `f46c9eb7`. The audit below was static; the JSON cluster + small-fixture
+batches were then executed in 6 commits (`88b6029e` Batch 1 · `98d4db2c` JSON-A ·
+`d91b2a45` JSON-B · `27d106e4` JSON-A2 · `6b5872fc` JSON-C · `c8ef2607` JSON-C2). Net
+**−20 e2e fixtures** (21 removed, 1 added: `env_get_present_and_unset`) + **14 JSON
+Err-drop reps strengthened with `alloc_track_leak`**. Each EXECUTED section below carries
+its own ✅ note + validation result. **Remaining candidates (match-family, core-language
+sampled, trait consolidation, exceptions `_rejected` converts) were NOT done in this
+branch** — deferred to a future `test-dedup-phase-2` (the per-batch "Proposed/static
+review" subsections below are retained as historical reference, NOT pending work).
 
 **Rev 2 (post-review):** incorporated 4 review findings — (1) JSON crash-min cluster
 re-traced to an ownership/drop lowering defect (`a32fa743`), reclassified from
@@ -10,7 +19,8 @@ re-traced to an ownership/drop lowering defect (`a32fa743`), reclassified from
 not module-const; (4) core-language scope held to byte-identical + survivor-confirmed.
 
 Goal: reduce duplicate/overlapping coverage WITHOUT weakening regression protection.
-This document is the audit output; implementation (if approved) is a separate slice.
+This document is the audit output; the low-risk implementation has shipped (see Status
+above), and the higher-risk remainder is deferred to a separate phase-2 branch.
 
 ## Suite size (why this is fan-out work)
 
