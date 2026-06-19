@@ -622,8 +622,10 @@ trivial `hashmap_jsonnode_empty_twice_min`. **This supersedes the earlier Except
 ## Batch JSON-B — ✅ EXECUTED 2026-06-18 (10 decisive same-shape removals)
 
 **Done:** removed the 10 decisive same-shape siblings (working-tree `rm`, no git ops).
-The 11 held-back distinct-path fixtures and `hashmap_jsonnode_empty_twice_min` were
-**not touched**; every group retains its JSON-A leak-proof rep.
+The **12** held-back distinct-path fixtures and `hashmap_jsonnode_empty_twice_min` were
+**not touched**; every group retains its JSON-A leak-proof rep. (Count correction: an
+earlier note said "11 held-back" — that was an arithmetic slip; the enumerated list is
+**12**, matching the JSON-A2 scope. See JSON-A2 below.)
 
 **Removed (10):** `json_err_twice_same_input`, `json_err_once_object`,
 `json_err_with_newline_crash_min`, `json_two_error_parses_with_newlines_min`,
@@ -715,7 +717,8 @@ leak-proof rep(s) for each group PLUS `std_json_parse_error_position` +
 
 ### NOT deleted — distinct paths held for a future JSON-A2 upgrade pass
 
-11 fixtures cover a distinct cleanup/control-flow shape with **no** leak-proof rep yet:
+**12** fixtures cover a distinct cleanup/control-flow shape with **no** leak-proof rep yet
+(corrected count — was mis-stated as "11"):
 the whole-Result discard (`json_parse_truncated_object_crash_min`), non-json error type
 (`parse_err_twice_min`), struct-local-no-Result (`string_struct_err_twice_min`),
 live-String-local-on-Err-return (`string_local_then_err_twice`), return-value+param
@@ -727,3 +730,98 @@ keepalive (`ref_plus_string_param_return_struct_twice_min`), try/catch-produced 
 (`try_wrapper_json_result_crash_min`). Per the rules, these are **upgrade-before-delete**
 candidates, NOT deletions. `hashmap_jsonnode_empty_twice_min` is deferred to the JSON
 behavior pass (not an Err fixture).
+
+---
+
+## Batch JSON-A2 — ✅ EXECUTED 2026-06-18 (7 upgrades, upgrade-only)
+
+**Done:** added `"alloc_track_leak": true` (+ provenance note) to the 7 representatives
+below — `expected.json` only; no source, no deletions, no merges. The 5 do-not-upgrade
+fixtures (`parse_err_twice_min`, `canthrow_result_err_forward_crash_min`,
+`cleanup_err_with_noncopy_local_min`, `result_err_convert_with_json_local_crash_min`,
+`try_wrapper_json_result_crash_min`) were left at `alloc_track=0` (verified before & after).
+
+**Upgraded (7):** `json_parse_truncated_object_crash_min` (A), `string_struct_err_twice_min`
+(C), `string_local_then_err_twice` (D), `ref_plus_string_param_return_struct_twice_min`
+(E), `try_wrap_result_err_twice_min` (F), `result_err_forward_same_type_min` (G),
+`cleanup_err_with_jsonnode_local_min` (H).
+
+**Validation:** all **7/7 pass under the alloc-track lane** → exit 0 + **0 leaks**. No
+LANGUAGE_BUG surfaced. Each distinct Err-drop/cleanup shape (A,C,D,E,F,G,H) now has a
+leak-proof representative. git: ` M` on the 7 `expected.json`; staging is the user's.
+
+**JSON-C (deletions/merges) — still DEFERRED** (now unblocked, out of scope here).
+Candidates: `canthrow_result_err_forward_crash_min` (→G), `cleanup_err_with_noncopy_local_min`
+(→H), `result_err_convert_with_json_local_crash_min` (→H), `try_wrapper_json_result_crash_min`
+(→F+H), + `hashmap_jsonnode_empty_twice_min` (JSON-behavior pass). `parse_err_twice_min`
+is NOT a JSON-C candidate (kept as std.parse surface test; ownership covered by the J1 rep).
+
+**Cluster tally:** JSON-A (7) + JSON-A2 (7) = **14 leak-proof reps**; JSON-B removed 10 →
+net **−10 fixtures**, all Err-drop/cleanup shapes leak-proofed, parse-semantics retained.
+
+---
+
+#### (original static review, for reference)
+
+## Batch JSON-A2 — static review (2026-06-18) — read-only, NOTHING edited
+
+**Count discrepancy resolved:** the user's list is **12** fixtures; the JSON-B prose
+said "11 held-back" — that was an arithmetic slip. Correct held-back distinct-path
+count = **12** (enumerated below). `hashmap_jsonnode_empty_twice_min` is separate
+(deferred outlier), not in the 12.
+
+Goal: smallest upgrade batch — add `alloc_track_leak` only to the representatives
+needed to leak-proof each **distinct runtime drop/cleanup shape**. None of the 12 has a
+leak-proof survivor today (all are `exit_code:0` crash-only). Grouped by runtime shape,
+several collapse to one rep (the others become JSON-C merge candidates *after* the rep
+is leak-proof). Verified facts: `ParseError` is `{tag: String, offset: Int}` (String =
+droppable); `try … catch` on a returned `Result::Err` triggers or_throw→catch at runtime.
+
+### Mapping (12 fixtures → 7 distinct shapes)
+
+| fixture | distinct shape | leak-proof survivor today? | near-dupe of | recommendation |
+|---|---|---|---|---|
+| `json_parse_truncated_object_crash_min` | **A** drop whole *un-matched* `Result` (`val _r = parse()`) via value-drop glue | no | — | **UPGRADE** (rep for A) |
+| `string_struct_err_twice_min` | **C** struct-with-`String` LOCAL drop ×2, no `Result`/match | no | — | **UPGRADE** (rep for C) |
+| `string_local_then_err_twice` | **D** early-return Err past a live `String` local | no | — | **UPGRADE** (rep for D) |
+| `ref_plus_string_param_return_struct_twice_min` | **E** struct return-by-value + by-value `String` param consumed (keepalive on return value) | no | — | **UPGRADE** (rep for E) |
+| `try_wrap_result_err_twice_min` | **F** Err via `try/catch` (or_throw unwind + catch-constructed Err) | no | `try_wrapper_json_result_crash_min` (F+H combo) | **UPGRADE** (rep for F) |
+| `result_err_forward_same_type_min` | **G** Err forwarded via match-rebind (`Err(e)=>return Err(e)`) | no | `canthrow_result_err_forward_crash_min` | **UPGRADE** (rep for G) |
+| `cleanup_err_with_jsonnode_local_min` | **H** straight-line early-return Err past live `HashMap<String,JsonNode>` | no | `cleanup_err_with_noncopy_local_min`, `result_err_convert_with_json_local_crash_min` | **UPGRADE** (rep for H) |
+| `canthrow_result_err_forward_crash_min` | G + can-throw fn + whole-`Result` discard | no (G rep covers after upgrade) | `result_err_forward_same_type_min` | keep → **JSON-C** merge after G rep leak-proof |
+| `cleanup_err_with_noncopy_local_min` | H with `HashMap<String,E>` (empty-map drop; value type irrelevant when empty) | no (H rep covers after upgrade) | `cleanup_err_with_jsonnode_local_min` | keep → **JSON-C** merge |
+| `result_err_convert_with_json_local_crash_min` | H + Ok-path `move fields` (NOT executed when Err taken → runtime-equiv to H) + whole-`Result` discard | no (H rep covers runtime; Ok-move is compile-only delta) | `cleanup_err_with_jsonnode_local_min` | keep → **JSON-C** (note Ok-move compile coverage) |
+| `try_wrapper_json_result_crash_min` | J = F + H (try/catch wrapping straight-line early-return-past-HashMap) | no (F+H reps cover jointly after upgrade) | `try_wrap_result_err_twice_min` | keep → **JSON-C** merge |
+| `parse_err_twice_min` | drop `Result<Int, ParseError>::Err` ×2 — `ParseError` is String-bearing ⇒ **ownership-equivalent to J1 rep** `json_err_twice_no_access` (already leak-proof). Unique value = `std.parse` API surface, NOT a distinct drop shape | **YES** (J1 rep covers the drop; this is a parse-API surface test) | — | **KEEP** as `std.parse` surface test; **no upgrade needed** |
+
+### Proposed JSON-A2 upgrade batch (smallest — 7 reps, one per distinct shape)
+
+Add `"alloc_track_leak": true` (+ provenance note) to:
+1. `json_parse_truncated_object_crash_min` — shape A (whole un-matched Result drop)
+2. `string_struct_err_twice_min` — shape C (struct-with-String local drop, no Result)
+3. `string_local_then_err_twice` — shape D (live String local on Err-return)
+4. `ref_plus_string_param_return_struct_twice_min` — shape E (return-value keepalive + param consume)
+5. `try_wrap_result_err_twice_min` — shape F (Err via try/catch)
+6. `result_err_forward_same_type_min` — shape G (Err forward via match-rebind)
+7. `cleanup_err_with_jsonnode_local_min` — shape H (straight-line early-return past live HashMap)
+
+**No deletions in JSON-A2.** **Risk:** low — upgrade only strengthens; a surfaced leak
+is a real LANGUAGE_BUG to file, not mask. **Validation when executed:** run each of the
+7 under the alloc-track lane → expect exit 0 + 0 leaks; any leak → stop & report.
+
+`parse_err_twice_min` stays as-is (surface test; ownership already covered by J1 rep).
+
+### Deferred JSON-C (deletions/merges — only AFTER the 7 reps are leak-proof & green)
+
+Candidates, each now covered at runtime by an upgraded rep above:
+`canthrow_result_err_forward_crash_min` (→ G), `cleanup_err_with_noncopy_local_min` (→ H),
+`result_err_convert_with_json_local_crash_min` (→ H; weigh the Ok-path-move compile
+delta), `try_wrapper_json_result_crash_min` (→ F+H). Plus the deferred
+`hashmap_jsonnode_empty_twice_min` (JSON-behavior pass). Decisive only per-fixture once
+the reps are green; `parse_err_twice_min` is NOT a JSON-C candidate (kept as surface test).
+
+### Near-dupe pairings (for JSON-C)
+
+- **G:** `result_err_forward_same_type_min` ↔ `canthrow_result_err_forward_crash_min`
+- **H:** `cleanup_err_with_jsonnode_local_min` ↔ `cleanup_err_with_noncopy_local_min` ↔ `result_err_convert_with_json_local_crash_min` (runtime-equiv)
+- **F/J:** `try_wrap_result_err_twice_min` ↔ `try_wrapper_json_result_crash_min`

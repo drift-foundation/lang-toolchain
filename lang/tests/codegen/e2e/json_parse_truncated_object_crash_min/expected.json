@@ -1,1 +1,5 @@
-{"exit_code":0}
+{
+  "description": "json_parse_truncated_object_crash_min: Err-drop ownership leak proof (Batch JSON-A2 upgrade; distinct cleanup shape - exit-only repro upgraded to alloc-track)",
+  "exit_code": 0,
+  "alloc_track_leak": true
+}
