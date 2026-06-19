@@ -1,0 +1,28 @@
+module main;
+
+import std.env as env;
+
+// Combined coverage of std.env.get's two arms (merged from env_get_set +
+// env_get_unset):
+//   - a known-present var (HOME on Linux) returns Some(non-empty),
+//   - a deliberately-unset var returns None.
+fn main() nothrow -> Int {
+	match env.get("HOME") {
+		Optional::Some(v) => {
+			if v.byte_length() == 0 {
+				return 1;
+			}
+		},
+		Optional::None() => {
+			return 2;
+		}
+	}
+	match env.get("DRIFT_E2E_TEST_UNSET_VAR_XYZ_99") {
+		Optional::Some(_v) => {
+			return 3;
+		},
+		Optional::None() => {
+		}
+	}
+	return 0;
+}

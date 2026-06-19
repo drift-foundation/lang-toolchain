@@ -1,0 +1,1 @@
+{"description":"std.env.get both arms: present var (HOME) -> Some(non-empty); unset var -> None (merged from env_get_set + env_get_unset)","exit_code":0}

@@ -441,6 +441,49 @@ way.
 
 **Still held:** all JSON crash-min (separate root-cause pass).
 
+### 2026-06-18 — IO/env candidates (#1 remove, #2 merge; #3 kept)
+**Evidence (read-only checks):**
+- `std_io_file_read_write/` vs `std_io_file_builder_read_write_api/` — same public API
+  (`file_builder().read().write().create().truncate().mode(FILE_MODE_DEFAULT).timeout().build()`
+  + `buffer`/`buffer_write`/`buffer_read` + `FileWriter/Reader.write/read/close`).
+  Survivor is **strictly stronger**: it verifies read-back **byte values**
+  (`buffer_read==65/66/67`), the candidate only checks the byte **count**. Candidate's
+  `expected.json` also used a typo key `"exit"` (runner reads `exit_code`, defaults 0
+  — runner.py:401), so its exit assertion was only the default. No unique coverage lost.
+- `env_get_set/` (HOME→`Some(non-empty)`) vs `env_get_unset/` (unset→`None`) —
+  **complementary arms** of `std.env.get`, not subsets; identical `{"exit_code":0}`.
+  → genuine 2→1 merge (both arms must survive).
+- `std_io_configured_read_line_api_shape/` vs `std_io_stdin_line_edge_matrix/` —
+  the matrix builds its stream via `configured_input_from_file(&f, …)` and **does NOT
+  reference `stdin_builder`** (grep-confirmed). api_shape is the **sole** coverage that
+  `io.stdin_builder().max_line_bytes(256).timeout(...).build().read_line()` compiles
+  (called under `if false`). Per the "runtime stdin alone is not enough" guard → **KEEP**.
+
+**Changes made:**
+- **Removed (working tree, `rm`)** `std_io_file_read_write/` — survivor
+  `std_io_file_builder_read_write_api/` covers the identical builder/file/buffer API
+  shape with stronger byte-value assertions.
+- **Added** `env_get_present_and_unset/` (`main.drift` + `expected.json`) — one fixture
+  asserting BOTH arms: HOME→`Some(non-empty)` and unset→`None`. New name chosen because
+  neither old single-arm name stayed accurate.
+- **Removed (working tree, `rm`)** `env_get_set/` and `env_get_unset/` — only AFTER the
+  combined fixture passed.
+- **KEPT** `std_io_configured_read_line_api_shape/` — sole coverage for the
+  `stdin_builder().max_line_bytes().timeout().build().read_line()` API shape; the matrix
+  uses a different constructor and does not compile that surface.
+
+**Validation:** `std_io_file_builder_read_write_api` → pass; `env_get_present_and_unset`
+→ pass (created, ran green BEFORE the singles were removed, and again after). 2/2.
+
+`git status`: ` D` on the 6 removed files (3 dirs), `??` on `env_get_present_and_unset/`,
+no survivor edits needed. Staging left to the user (no git ops).
+
+**Net Batch-1 tally so far:** **6 fixtures removed** —
+`concurrent_cancel_before_start_race_stress_diagnostic`, `concurrent_spawn_infers`,
+`import_alias`, `std_io_file_read_write`, `env_get_set`, `env_get_unset` — **1 added**
+(`env_get_present_and_unset`) → **net −5 fixtures**, all survivors validated green.
+**Still held:** all JSON crash-min (separate root-cause pass).
+
 ### DO NOT TOUCH (hard exclusions)
 
 1. **Every `*_memcheck.py` (38) and every `alloc_track_*` e2e (36)** — sole leak/UAF/double-free proofs; a functional twin is not a substitute. Never delete a memcheck file "because there's an e2e," never strip `alloc_track_*` keys.
