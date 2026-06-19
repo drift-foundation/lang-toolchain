@@ -1,3 +1,6 @@
 {
-  "exit_code": 0
+  "description": "cancel-before-start race-stress under load (absorbed the _diagnostic companion's stdout/stderr-clean assertions)",
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
 }

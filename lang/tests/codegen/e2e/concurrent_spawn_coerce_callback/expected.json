@@ -1,3 +1,4 @@
 {
+  "description": "spawn a zero-arg lambda: pins both lambda-to-callback coercion and VirtualThread<Int> result-type inference from the lambda return (absorbed concurrent_spawn_infers); join + match yields 7",
   "exit_code": 7
 }
