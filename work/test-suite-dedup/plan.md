@@ -900,3 +900,104 @@ multi-rep set named in their rows.
 leak-proof reps; JSON-B(−10) + JSON-C smallest(−3) = **−13 fixtures**; +2 medium combos
 still eligible. All Err-drop/cleanup shapes remain leak-proofed; parse-semantics + std.parse
 surface retained.
+
+---
+
+## Batch JSON-C2 — ✅ EXECUTED 2026-06-18 (2 combo removals)
+
+**Done:** removed both held combo fixtures (working-tree `rm`, no git ops):
+`result_err_convert_with_json_local_crash_min`, `try_wrapper_json_result_crash_min`.
+Both are pure sequential compositions of already-leak-proofed paths with no unique
+interaction/lowering (see final review below) — removal does not weaken coverage below
+the leak-proof reps.
+
+**Validation:** multi-rep survivor set `cleanup_err_with_jsonnode_local_min`,
+`loop_err_return_with_json_local_crash_min`, `json_parse_truncated_object_crash_min`,
+`try_wrap_result_err_twice_min` → **4/4 passed**; all four carry `alloc_track_leak` ⇒
+**leak-clean**. git: ` D` on 4 removed files (2 dirs); staging is the user's.
+
+**`parse_err_twice_min` — RETAINED** as the `std.parse` API-surface fixture (ownership
+already covered by the J1 rep `json_err_twice_no_access`); never a JSON-C/-C2 candidate.
+
+**Cluster tally (ACTUAL):** 14 leak-proof reps; removed JSON-B(10) + JSON-C(3) +
+JSON-C2(2) = **−15 fixtures**. Every Err-drop/cleanup shape leak-proofed; parse-semantics
+(`std_json_parse_error_position`/`_invalid_syntax_tag`) + `std.parse` surface retained.
+JSON crash-min dedup **complete**.
+
+---
+
+#### (original final combo review, for reference)
+
+## Batch JSON-C2 — final combo review (2026-06-18) — read-only, NOTHING changed
+
+Final read-only assessment of the 2 held medium-risk combos. Decision bias: unique
+interaction ⇒ keep; pure sequential composition of leak-proofed paths with no unique
+lowering ⇒ remove.
+
+### `result_err_convert_with_json_local_crash_min`
+- **Combined path:** `f()` builds `HashMap<String,JsonNode> fields`; `match h()` →
+  `Err(e) => return Err(e)` (early-return past live empty `fields`); `Ok(v) =>
+  fields.insert("k", JsonNode::String(v))`; then `return Ok(JsonNode::Object(move
+  fields))`. `run()` does `val _r = f()` (whole-Result discard). At runtime h() returns
+  Err ⇒ only the Err early-return + whole-Result discard execute; the Ok arm + final
+  `move fields` are **dead** (compile-only).
+- **Leak-proof reps per constituent:** straight-line early-return Err past live HashMap →
+  `cleanup_err_with_jsonnode_local_min` (H); whole-Result discard (A) +
+  `JsonNode::Object(move fields)` + fields-mutated-then-conditionally-moved/dropped →
+  `loop_err_return_with_json_local_crash_min` (same f() drop-flag shape, leak-proof) +
+  `json_parse_truncated_object_crash_min` (A).
+- **Interaction beyond separate reps?** No. Runtime is sequential (f returns Err → run
+  drops it); the Ok-path is dead. No interleaving of cleanups.
+- **Compile-only shape not otherwise covered?** No. `JsonNode::String(v)` is ubiquitous
+  in json fixtures; `JsonNode::Object(move fields)` + the mutate-then-move/drop drop-flag
+  shape are compiled by `loop_err_return` (leak-proof).
+- **Recommendation: REMOVE.** **Risk: low–med** (only "novelty" is dead compile code
+  already compiled by `loop_err_return`).
+- **Validation if removed:** `cleanup_err_with_jsonnode_local_min` +
+  `loop_err_return_with_json_local_crash_min` + `json_parse_truncated_object_crash_min`
+  → green + alloc-track leak-clean.
+
+### `try_wrapper_json_result_crash_min`
+- **Combined path:** `f_throwing()` is byte-for-byte the same body as convert's `f()`
+  (HashMap early-return Err / Ok-insert / `Ok(Object(move fields))`). `f()` =
+  `return try f_throwing() catch { Result::Err(JsonErrorData(internal)) }`. `run()` does
+  `val _r = f()`. At runtime: f_throwing returns Err via a **normal return** (its
+  `fields` is dropped at that scope exit, in f_throwing's frame); `try` in f() then
+  or_throw's that Err → throw → catch constructs a new Err → returned; run drops it.
+- **Leak-proof reps per constituent:** straight-line early-return past HashMap →
+  `cleanup_err_with_jsonnode_local_min` (H); try/catch on a returned Err →
+  `try_wrap_result_err_twice_min` (F, identical `try <call> catch { Result::Err(...) }`
+  shape); Ok-move + A → `loop_err_return` + `json_parse_truncated_object_crash_min`.
+- **Interaction beyond separate reps?** **No — and this is the crux:** the `HashMap` is
+  dropped in **f_throwing's frame on its normal `return`, BEFORE** any unwind. The throw
+  originates in **f()** (via or_throw on the already-returned Err), and f() holds **no
+  live droppable locals**. So there is **no "live HashMap across a throw/catch unwind"**
+  interaction — the cleanup and the unwind are in different frames, strictly sequential.
+- **Compile-only shape not otherwise covered?** No. f()'s `try <call> catch {Result::Err}`
+  lowering is identical to `try_wrap_result_err_twice_min` (the callee's internals are a
+  separate compile unit); f_throwing's internals are covered as in convert.
+- **Recommendation: REMOVE.** **Risk: med** (most-composed F+H+A, but each piece
+  leak-proofed and no cross-frame interaction).
+- **Validation if removed:** `try_wrap_result_err_twice_min` +
+  `cleanup_err_with_jsonnode_local_min` + `loop_err_return_with_json_local_crash_min`
+  → green + alloc-track leak-clean.
+
+### Final decision table
+
+| fixture | combined path | unique interaction? | unique compile-only shape? | rec | risk |
+|---|---|---|---|---|---|
+| `result_err_convert_with_json_local_crash_min` | H early-return + dead Ok-move-into-Object + A discard | no (sequential; Ok-path dead) | no (move-into-Object in `loop_err_return`) | **remove** | low–med |
+| `try_wrapper_json_result_crash_min` | F try/catch over H-early-return fn + A discard | no (HashMap dropped in callee frame before the caller-frame unwind) | no (try/catch lowering = `try_wrap`; callee internals covered) | **remove** | med |
+
+### Smallest safe deletion batch (JSON-C2) — both, with thorough multi-rep validation
+
+Remove `result_err_convert_with_json_local_crash_min` and `try_wrapper_json_result_crash_min`.
+Both are pure sequential compositions of already-leak-proofed paths with no unique
+interaction and no unique lowering/codegen shape ⇒ removal does not weaken coverage
+below the leak-proof reps. Validate with the per-fixture rep sets above (run together;
+confirm alloc-track leak-clean) BEFORE finalizing.
+
+**Cluster tally (projected after JSON-C2):** 14 leak-proof reps; removed JSON-B(10) +
+JSON-C(3) + JSON-C2(2) = **−15 fixtures**; every Err-drop/cleanup shape still
+leak-proofed; parse-semantics + std.parse surface retained. `parse_err_twice_min`
+remains the only intentionally-kept non-leak-proof member (distinct std.parse surface).
