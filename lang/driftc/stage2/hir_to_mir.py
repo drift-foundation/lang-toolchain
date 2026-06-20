@@ -116,9 +116,32 @@ class MirBuilder:
 		self.current_span: Span | None = None
 
 	def new_temp(self) -> M.ValueId:
-		"""Allocate a fresh temporary ValueId for intermediate results."""
+		"""Allocate a fresh temporary ValueId for intermediate results.
+
+		The leading ``.`` makes the name **impossible to produce from source**:
+		the grammar's identifier rule (`NAME`, `lang/driftc/parser/grammar.lark`)
+		only accepts characters in ``[A-Za-z0-9_]``, so no user variable,
+		parameter, or binder can ever equal ``.t<N>`` — nor any string that
+		embeds it (several call sites build addr-taken local names like
+		``__replace_old_<new_temp()>``). ``.`` is a valid LLVM identifier
+		character (emitted as ``%.t<N>``), so it survives codegen unchanged.
+
+		Why not a ``__`` prefix: double-underscore is *documented* as
+		compiler-reserved, but the grammar does NOT actually reserve it — a
+		source ``var __t1 = ...`` parses today (and stdlib exports `__test_*`
+		hooks), so ``__t<N>`` would merely move the collision to user ``__t<N>``
+		rather than eliminate it.
+
+		Background: bare ``t<N>`` (the historical form) overlapped the user
+		identifier namespace. A source variable literally named ``t1``/``t2``/
+		``t68`` shared its base name with a compiler temp, so
+		``func.local_types[name]`` was written by both and the temp's (often
+		ref/ptr) type clobbered the user variable's type — surfacing downstream
+		as a codegen abort ("phi with mixed incoming types {ptr, drift.int}")
+		once the mis-typed user local reached an SSA join.
+		"""
 		self._temp_counter += 1
-		return f"t{self._temp_counter}"
+		return f".t{self._temp_counter}"
 
 	def emit(self, instr: M.MInstr) -> M.ValueId | None:
 		"""

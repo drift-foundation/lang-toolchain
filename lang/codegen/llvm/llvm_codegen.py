@@ -2286,8 +2286,19 @@ class _FuncBuilder:
 
 		We keep it separate from the local name to avoid collisions with SSA
 		versioned locals (e.g. `x_1`) and to make IR easier to read.
+
+		We preserve every character that is legal in an unquoted LLVM identifier
+		(`[A-Za-z0-9_$.]`). This is a no-op for all source-originated names (the
+		grammar restricts identifiers to `[A-Za-z0-9_]`), but it is load-bearing
+		for compiler temporaries: those are minted with a `.` marker
+		(`MirBuilder.new_temp` → `.t<N>`) precisely so they cannot collide with a
+		user local. Collapsing the `.` to `_` here would map a temp like `.t5`
+		onto `_t5`, re-introducing exactly the collision the `.` namespace was
+		chosen to prevent (a user `var _t5` that is also addr-taken would share
+		this alloca name). Only characters outside the LLVM identifier set are
+		escaped.
 		"""
-		safe = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in local)
+		safe = "".join(ch if (ch.isalnum() or ch in "_$.") else "_" for ch in local)
 		return f"{safe}__addr"
 
 	def _ensure_entry_insertion_point(self) -> None:
@@ -8503,11 +8514,22 @@ class _FuncBuilder:
 	def _bb(block_name: str) -> str:
 		"""Map a MIR block name to a compiler-reserved LLVM label.
 
-		Block labels and SSA value names share one namespace in LLVM IR.
-		Prefixing with ``__bb_`` guarantees block labels cannot collide
-		with user-originated parameter or local names.
+		Block labels and SSA value names share one namespace in LLVM IR, so a
+		block label must not be a string any source identifier could equal. The
+		``.bb.`` prefix uses ``.`` — a character outside the grammar's `NAME`
+		set ``[A-Za-z0-9_]`` — so no user parameter/local can collide with a
+		block label (the same non-source-namespace discipline as
+		`MirBuilder.new_temp`'s ``.t<N>`` value temporaries).
+
+		(The earlier ``__bb_`` prefix did NOT guarantee this: ``__bb_entry`` is a
+		legal source identifier, so a user local named after a block label could
+		collide. Codegen-internal SSA names minted by ``_fresh`` — including the
+		sub-block labels it produces — remain in the source-collidable
+		``[A-Za-z0-9_]`` space; that is a separate, lower-severity latent issue,
+		since it requires an exact accidental name match and fails loudly as an
+		LLVM verifier duplicate-name error rather than miscompiling.)
 		"""
-		return f"__bb_{block_name}"
+		return f".bb.{block_name}"
 
 	def _map_value(self, mir_id: str) -> str:
 		# Resolve aliases (AssignSSA) before mapping to an LLVM name.
