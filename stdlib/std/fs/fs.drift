@@ -2,13 +2,16 @@ module std.fs;
 
 import std.core as core;
 import std.io as io;
+import std.text as text;
 import std.concurrent as conc;
 import lang.thread as thread;
 
 export {
 	FileKind,
 	DirEntry,
-	read_dir
+	read_dir,
+	read_to_bytes,
+	read_to_string
 };
 
 /// The type of a directory entry, reflecting the **entry itself** and
@@ -61,6 +64,12 @@ const ERRNO_ENOMEM: Int = 12;
 const ERRNO_EAGAIN: Int = 11;
 const ERRNO_ETIMEDOUT: Int = 110;
 const ERRNO_ECANCELED: Int = 125;
+const ERRNO_EINVAL: Int = 22;
+const ERRNO_EFBIG: Int = 27;
+const ERRNO_EILSEQ: Int = 84;
+
+// Whole-file read chunk size (bytes). One pooled blocking read per chunk.
+const READ_CHUNK_BYTES: Int = 65536;
 
 fn _kind_of(code: Int) nothrow -> FileKind {
 	if code == FK_FILE {
@@ -180,4 +189,156 @@ pub fn read_dir(path: String, timeout: conc.Duration) nothrow -> core.Result<Arr
 
 	_sort_by_name(&mut entries);
 	return core.Result::Ok(move entries);
+}
+
+// Read the whole file into an owned `Array<Byte>`, never exceeding `max_bytes`.
+// One pooled blocking read per chunk; the running total is checked against the
+// cap BEFORE each chunk is appended, so a file that grows past `max_bytes`
+// during the read fails with a distinct `too-large` error rather than being
+// silently truncated or over-allocating.  Does NOT close the file — the caller
+// owns close-error precedence.  `max_bytes` is assumed already validated (>= 0).
+fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> io.Result<Array<Byte>> {
+	var acc: Array<Byte> = [];
+	var total = 0;
+	var buf = io.buffer(READ_CHUNK_BYTES);
+	var more = true;
+	while more {
+		io.buffer_set_len(&mut buf, 0);
+		val rr = f.read(&mut buf);
+		match rr {
+			core.Result::Ok(n) => {
+				if n <= 0 {
+					more = false;
+				} else {
+					// Cap check BEFORE appending (and before growing `acc`): a
+					// breach — including a file that grew past the cap mid-read —
+					// is a distinct `too-large`, never a truncated success.
+					// Written in the non-overflowing form `n > max_bytes - total`
+					// (NOT `total + n > max_bytes`, which could overflow on a
+					// pathological stream): `max_bytes >= 0` and `total` only
+					// advanced past previous successful cap checks, so
+					// `max_bytes - total >= 0` and the subtraction never wraps.
+					if n > max_bytes - total {
+						return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_TOO_LARGE, code = ERRNO_EFBIG));
+					}
+					var k = 0;
+					while k < n {
+						acc.push(io.buffer_read(&mut buf, k));
+						k = k + 1;
+					}
+					total = total + n;
+				}
+			},
+			core.Result::Err(e) => {
+				return core.Result::Err(move e);
+			}
+		}
+	}
+	return core.Result::Ok(move acc);
+}
+
+/// Reads the entire file at `path` into an owned `Array<Byte>`, bounded by
+/// `max_bytes` and `timeout`.
+///
+/// **Cap (`max_bytes`, mandatory, in bytes).**
+///   - `max_bytes < 0` → `Err(IoError(kind = "invalid-argument"))` (`EINVAL`);
+///     no file is opened.
+///   - `max_bytes == 0` accepts ONLY an empty file; any content yields
+///     `Err(kind = "too-large")`.
+///   - If the file's content exceeds `max_bytes` — including a file that GROWS
+///     past the cap while being read — the call fails with
+///     `Err(kind = "too-large")` (`EFBIG`) instead of truncating.  (A
+///     stat-based "fail before opening" fast path is not available without a new
+///     runtime boundary; the cap is enforced per chunk during the read, so the
+///     accumulator never exceeds `max_bytes`.)
+///
+/// **Deadline (`timeout`, required by the stdlib IO contract).** Bounds the
+/// wait; there is no implicit unbounded wait.  Timeout / cancellation / pool
+/// saturation surface as the underlying `io` read's `IoError` (`timeout` /
+/// `cancelled` / `saturated` where the runtime distinguishes them, otherwise the
+/// translated `errno`), consistent with `read_dir`.
+///
+/// **Error precedence.** A read or too-large failure WINS over a close failure
+/// (the close result is discarded in that case).  If the read completes but the
+/// final `close` fails, the close `IoError` is returned.
+///
+/// **VT-safe:** each chunk read parks the calling virtual thread on the shared
+/// blocking pool.  Must be called from a virtual thread.
+///
+/// **Path-based whole-file helper;** opened-handle / streaming reads remain in
+/// `std.io` (`file_builder`, `ConfiguredFile.read`).
+///
+/// **Platform:** POSIX.
+pub fn read_to_bytes(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> io.Result<Array<Byte>> {
+	if max_bytes < 0 {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_ARGUMENT, code = ERRNO_EINVAL));
+	}
+	val br = io.file_builder(path).read(true).write(false).timeout(timeout).build();
+	return match br {
+		core.Result::Ok(f) => {
+			val rr = _read_all_capped(&f, max_bytes);
+			val cr = f.close();
+			match rr {
+				core.Result::Ok(bytes) => {
+					// Read OK: a close failure now wins (nothing higher-priority).
+					match cr {
+						core.Result::Ok(_v) => { core.Result::Ok(move bytes) },
+						core.Result::Err(ce) => { core.Result::Err(move ce) }
+					}
+				},
+				// Read / too-large failure wins over any close error.
+				core.Result::Err(re) => { core.Result::Err(move re) }
+			}
+		},
+		core.Result::Err(e) => { core.Result::Err(move e) }
+	};
+}
+
+/// Reads the entire file at `path` into an owned, UTF-8-validated `String`,
+/// bounded by `max_bytes` (in bytes) and `timeout`.
+///
+/// Same cap, deadline, and VT-safety semantics as `read_to_bytes`.  After the
+/// bytes are read, they are validated as UTF-8: invalid UTF-8 yields
+/// `Err(IoError(kind = "invalid-utf8"))` (`EILSEQ`).  The returned `String` is
+/// owned (self-releasing); it does not alias any IO buffer.
+///
+/// **Error precedence.** Read, too-large, and UTF-8 **decode** failures all win
+/// over a close failure.  A close failure is returned only when the read AND
+/// decode both succeeded.
+///
+/// **Platform:** POSIX.
+pub fn read_to_string(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> io.Result<String> {
+	if max_bytes < 0 {
+		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_ARGUMENT, code = ERRNO_EINVAL));
+	}
+	val br = io.file_builder(path).read(true).write(false).timeout(timeout).build();
+	return match br {
+		core.Result::Ok(f) => {
+			val rr = _read_all_capped(&f, max_bytes);
+			match rr {
+				core.Result::Err(re) => {
+					// Read / too-large failure wins; close result discarded.
+					val _c1 = f.close();
+					core.Result::Err(move re)
+				},
+				core.Result::Ok(bytes) => {
+					match text.utf8_from_bytes(&bytes) {
+						core.Result::Ok(s) => {
+							// Read + decode OK: a close failure now wins.
+							match f.close() {
+								core.Result::Ok(_v) => { core.Result::Ok(move s) },
+								core.Result::Err(ce) => { core.Result::Err(move ce) }
+							}
+						},
+						// Decode failure wins over any close error.
+						core.Result::Err(_ue) => {
+							val _c2 = f.close();
+							core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_UTF8, code = ERRNO_EILSEQ))
+						}
+					}
+				}
+			}
+		},
+		core.Result::Err(e) => { core.Result::Err(move e) }
+	};
 }

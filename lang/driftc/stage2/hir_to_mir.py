@@ -4023,18 +4023,28 @@ class HIRToMIR:
 					#   dropping it would UAF on the next store into
 					#   that local (the drift-net-tls Array<String>
 					#   regression family).
-					# - Everything else (HCall, HPlaceExpr with
+					# - A CAN-THROW call result → a shared view of the
+					#   hidden `__call_ok` holder local (see
+					#   `_expr_is_can_throw_call`); dropping it
+					#   double-frees against the holder's own release.
+					#   Shared with the push/insert/set classifier so the
+					#   rule lives in ONE place.
+					# - Everything else (nothrow HCall, HPlaceExpr with
 					#   projections after `_copy_if_ref_alias` upgraded
 					#   them to owned temps, …) → owned rvalue temp;
 					#   the paired DropValue releases its own ref so
 					#   the cloned `copy_dest` is the lone owner.
 					HPlaceExpr = getattr(H, "HPlaceExpr", None)
-					is_place = isinstance(elem_expr, H.HVar) or (
-						HPlaceExpr is not None
-						and isinstance(elem_expr, HPlaceExpr)
-						and not getattr(elem_expr, "projections", None)
+					is_shared_view = (
+						isinstance(elem_expr, H.HVar)
+						or (
+							HPlaceExpr is not None
+							and isinstance(elem_expr, HPlaceExpr)
+							and not getattr(elem_expr, "projections", None)
+						)
+						or self._expr_is_can_throw_call(elem_expr)
 					)
-					if not is_place:
+					if not is_shared_view:
 						self.b.emit(M.DropValue(value=val, ty=val_ty))
 					val = copy_dest
 			idx_val = self.b.new_temp()
@@ -6237,6 +6247,35 @@ class HIRToMIR:
 	# helper deleted along with the DV-intrinsic dispatch path that
 	# was its only caller.
 
+	def _expr_is_can_throw_call(self, expr: H.HExpr) -> bool:
+		"""True if `expr` is a CAN-THROW call (HCall / HMethodCall / HInvoke).
+
+		The Ok payload of a can-throw call is materialized into a hidden
+		`__call_ok` holder LOCAL by `_lower_can_throw_call_value` (a `StoreLocal`
+		of the unwrapped Ok value).  The value such an expression yields at a use
+		site is therefore a LOAD from that holder — a shared view whose stake
+		stays owned by the holder local, which the holder's own release machinery
+		drops at EVERY scope/exception exit.
+
+		It is NOT a free owned temp.  Any container transfer that clones the
+		element into storage and then RELEASES the source (array `push`/`insert`/
+		`set` via `_ensure_array_elem_copy`, AND the array-literal element store)
+		must treat it as a shared view (retain its own stake, do NOT drop the
+		view); otherwise the container slot and the holder both reference a buffer
+		the holder frees at exit — a double free.  Same UAF shape as
+		`Array<String>.push(local_string)` (drift-net-tls v0.3.14), reached
+		through the can-throw holder.  Centralized here so the push/insert/set
+		classifier (`_call_arg_yields_owned_temp`) and the array-literal element
+		classifier share one rule.
+		"""
+		is_call = isinstance(expr, (H.HCall, H.HMethodCall)) or (
+			hasattr(H, "HInvoke") and isinstance(expr, getattr(H, "HInvoke"))
+		)
+		if not is_call:
+			return False
+		info = self._call_info_for_expr_optional(expr)
+		return info is not None and bool(getattr(info.sig, "can_throw", False))
+
 	def _call_arg_yields_owned_temp(self, arg: H.HExpr, param_ty: TypeId | None) -> bool:
 		"""Mirror of `_lower_call_arg`'s ownership decision for use by
 		`_lower_array_intrinsic_method` at push/insert/set sites.
@@ -6263,6 +6302,12 @@ class HIRToMIR:
 		in `Array<String>.push(name)` where `name` is a local String
 		reporter: drift-net-tls v0.3.14 certification).
 		"""
+		# A can-throw call's Ok payload is a shared view of the hidden
+		# `__call_ok` holder local, not a free owned temp (see
+		# `_expr_is_can_throw_call`).  Dropping it (drop_source=True) would
+		# double-free against the holder's own release.
+		if self._expr_is_can_throw_call(arg):
+			return False
 		is_place = isinstance(arg, H.HVar) or (hasattr(H, "HPlaceExpr") and isinstance(arg, getattr(H, "HPlaceExpr")))
 		if not is_place:
 			return True  # rvalue expressions lower to owned temps.

@@ -15,6 +15,9 @@ export {
 	IO_ERROR_KIND_TIMEOUT,
 	IO_ERROR_KIND_SATURATED,
 	IO_ERROR_KIND_CANCELLED,
+	IO_ERROR_KIND_INVALID_ARGUMENT,
+	IO_ERROR_KIND_TOO_LARGE,
+	Result,
 	File,
 	FileBuilder,
 	ConfiguredFile,
@@ -122,6 +125,21 @@ pub const IO_ERROR_KIND_INVALID_UTF8: String = "invalid-utf8";
 pub const IO_ERROR_KIND_TIMEOUT: String = "timeout";
 pub const IO_ERROR_KIND_SATURATED: String = "saturated";
 pub const IO_ERROR_KIND_CANCELLED: String = "cancelled";
+
+/// `IoError.kind` discriminator: a caller-supplied argument was invalid
+/// (e.g. a negative byte cap).  `code` carries `EINVAL`.
+pub const IO_ERROR_KIND_INVALID_ARGUMENT: String = "invalid-argument";
+
+/// `IoError.kind` discriminator: the data exceeded a caller-supplied size
+/// cap (e.g. a whole-file read past `max_bytes`, including a file that grew
+/// during the read).  `code` carries `EFBIG`.  Kept distinct from `errno`
+/// so a cap breach is never confused with an underlying filesystem error.
+pub const IO_ERROR_KIND_TOO_LARGE: String = "too-large";
+
+/// `core.Result<T, IoError>` — the canonical result of an `std.io` /
+/// `std.fs` operation.  Provided as a one-parameter alias so call sites
+/// read `io.Result<Array<Byte>>` instead of spelling the error type.
+pub type Result<T> = core.Result<T, IoError>;
 
 /// An open file descriptor with a tracking `closed` cell.
 ///

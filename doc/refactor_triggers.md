@@ -540,3 +540,73 @@ opportunistic uplifts)" for the full rule.
 
 - **Scope when triggered:** ~1 day standalone, or absorbed into the
   consolidation refactor.
+
+## String ownership-authoring conformance matrix
+
+- **Improvement:** the String/Arc ownership-authoring subsystem
+  (`lang/driftc/stage2/string_arc.py`, `cleanup_authoring.py`,
+  `match_cleanup_authoring.py`, `ownership_ledger.py`, and the
+  exception-edge cleanup emitted around `Goto`/landing-pad blocks)
+  decides, per local/temp, whether a `String` (and other
+  `_type_needs_drop` value) is retained / released / dropped / moved
+  at every producer, consumer, and exit. It is ~3.5k lines across
+  several passes that each re-derive ownership locally, and it has
+  failed one path at a time repeatedly (see the recurring-defect list
+  below). Build a **representative conformance matrix** that pins the
+  ownership contract across the producer × consumer × exit space, and
+  centralize the consumed/tombstoned classification so that every exit
+  path (normal scope drop, throwing-edge unwind, move-return) reads the
+  SAME droppable-set state rather than re-deriving it. The matrix — not
+  a full rewrite — is the deliverable; the centralization is whatever
+  the matrix's failing cells force.
+
+- **Why deferred (2026-06-20):** the subsystem is correct on the
+  common paths and each historical defect has been a *specific*
+  uncovered cell (a producer/consumer/exit combination), fixable in
+  isolation. A full ownership-model rewrite is high-risk surgery on the
+  one part of codegen that, when wrong, silently double-frees. The
+  matrix bounds the work: fix the reported root cause, then assert a
+  representative grid leak/double-free-clean under valgrind, and only
+  centralize the state the failing cells actually require.
+
+- **Triggers** — fire this entry (escalate from one-path patch to
+  root-cause-fix + conformance-matrix) on ANY of:
+
+  - A `String`/Arc **leak, double-free, or use-after-free** whose root
+    cause is in `string_arc.py`, cleanup authoring (incl.
+    `match_cleanup_authoring.py`), the ownership ledger, exception-edge
+    cleanup, **container transfer** (array `push`/`insert`/set,
+    struct/variant field store), or **move-return teardown**.
+  - A defect where a value **consumed by a container/field store**
+    (retain-into-storage + release-original, or MoveOut) is still
+    visible to a later cleanup site (normal or exception edge) — i.e. a
+    stale entry in the droppable set.
+  - Any fix that would otherwise be "patch this one emitted
+    release/retain instruction" when an exception-edge or move-return
+    cleanup can still see the same stale temp.
+
+  **This bug fires it immediately (2026-06-20):**
+  `arr.push(throwing_call_returning_heap_String())` repeated ≥2×
+  double-frees at teardown. The push consumes the arg temp (`retain →
+  store in array; release original`) but the original temp is left in
+  the droppable cleanup set, so cleanup/exception-edge blocks emit a
+  second `drift_string_release` on a buffer the array already owns.
+  Masked for inline literals only because static-string release is a
+  no-op. Reported by DriftQuery (M3 file-read → env build).
+
+- **Scope when triggered:** root-cause fix in the owning pass +
+  a **bounded** conformance matrix (NOT an open-ended rewrite, NOT a
+  full Cartesian product):
+  - Producers: heap concat, `string_from_utf8_bytes`, static literal
+    (mask-control only).
+  - Consumers: array `push`, struct/variant field, local
+    assignment/reassignment.
+  - Exits: normal scope drop, throwing-edge unwind, move-return
+    teardown.
+  - Include nested `Array<Struct{String}>` if cheap (matches the
+    reported env shape).
+  - Each accepted row asserted leak/double-free-clean under valgrind or
+    alloc-track; static-literal rows are CONTROLS, not ownership proofs.
+  - If the matrix exposes further defects, fix root causes in the same
+    subsystem rather than narrowing the tests around them — that is the
+    point of firing the trigger.
