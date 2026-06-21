@@ -77,16 +77,20 @@ Full design & proof pass: **`F3-multifd-plan.md`**. Summary:
 - Optionally migrate `_block_on_io` (both copies) onto the same primitive so every socket op shares
   one wait implementation (risk split in `F3-multifd-plan.md` §6).
 
-### F4 — multi-worker reactor / fair scheduling   [scheduler work · ABI TBD]
+### F4 — scheduler fairness   [scheduler work · NO ABI bump · NEXT after F3]
 Stop freshly-spawned/woken VTs starving behind already-ready I/O fibers on the default single
-worker (report §4.A; deterministic FAIL under valgrind). Either FIFO-fair ready-queue dispatch
-by ready-age (runtime already stamps `state_since_ms`) or >1 reactor-integrated worker. Reopens
-one-fiber-per-connection. Design separately.
+worker (report §4.A; deterministic FAIL under valgrind). **Implementation-ready design:
+`F4-fairness-plan.md`.** Root cause is the reactor's direct-resume (swapcontext) bypassing the
+already-FIFO ready queue; fix = gate direct-resume on an empty ready queue (else enqueue at tail).
+~30–50 LOC in two edge-delivery sites + a `ready_count`; **no ABI bump**; rollback = revert the
+gate. Recommended over multi-worker (smaller, fixes the actual starvation).
 
-### F5 — custom executor lifecycle + reactor integration   [runtime · ABI BUMP · largest]
-`Executor.shutdown(self, timeout) -> Result<Void, ConcurrencyError>` (drain+join; today none →
-thread leaks) AND custom-executor VTs must service async socket I/O via the same reactor as the
-default (today unreliable). New runtime exports → ABI bump. Sequence last.
+### F5 — custom executor lifecycle + reactor integration   [runtime · ABI BUMP · separate branch]
+`Executor.shutdown(mode, timeout)` (drain/cancel + join; today none → thread leaks) AND
+custom-executor VTs must service async socket I/O via the global reactor (today the poller is
+tied to the default worker). **Implementation-ready design: `F5-executor-lifecycle-plan.md`.**
+Two slices: (1) shutdown+join (fixes the leak, no reactor change); (2) reactor poller decoupling
+(fixes off-default I/O, ABI bump). Independent of F4; sequence after it.
 
 ---
 

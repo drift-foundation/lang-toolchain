@@ -12,10 +12,37 @@ prioritized design (F1…F5).
 | F1b single-fd `io.poll()` | — | **PULLED — not shipped** (direction change 2026-06-20) | n/a | built+tested, then removed before release (wrong server pattern). Design folded into F3. |
 | F2 `Duration(0)` ops yield | 2 | **DEFERRED** (team asked not to change `Duration(0)` in first cut) | 17 | hold unless requested |
 | F3 unified wait-set / `poll_many` | **IMPLEMENTED** | runtime+stdlib+`_block_on_io` migration DONE; full Gate A e2e + Gate B valgrind pending | **18** | `io.poll_many` shipping; both `_block_on_io` copies migrated to the wait-set; Gate B **10/10** functional + net/io & concurrency regression green |
-| F4 fair / multi-worker scheduling | 4 | **NOT STARTED** | TBD | report §4.A starvation |
-| F5 executor lifecycle + reactor | 5 | **NOT STARTED** | **bump** | `Executor.shutdown` + custom-executor reactor I/O |
+| F4 scheduler fairness | 4 | **DESIGN READY** (`F4-fairness-plan.md`) | **none** | direct-resume bypasses FIFO queue; gate it. ~30-50 LOC, no ABI bump |
+| F5 executor lifecycle + reactor | 5 | **DESIGN READY** (`F5-executor-lifecycle-plan.md`) | **bump** | `Executor.shutdown` + reactor poller decoupling; 2 slices; after F4 |
 
 ## Log
+
+### 2026-06-21 — F4 + F5 design prep (design-only, no code) — actionable once F3 lands
+Per request: produced two implementation-ready plans while F3 goes through cert.
+- **`F4-fairness-plan.md`** — root-causes the §4.A starvation to the reactor's
+  direct-resume (swapcontext) bypassing the already-FIFO ready queue. Recommends
+  ready-age FIFO fairness (gate direct-resume on `ready_count==0`, else enqueue) over
+  multi-worker. Spells out invariants, the 7 affected wake paths (only edge-delivery
+  changes), deterministic tests incl. a fail-today/pass-after reproducer + probes,
+  **no ABI bump**, smallest slice (~30-50 LOC, 2 edge-delivery sites + counter),
+  env-flag rollback.
+- **`F5-executor-lifecycle-plan.md`** — `Executor.shutdown(Drain/Cancel, timeout)` +
+  reactor poller decoupling (root cause: poll ownership gated to the default single
+  worker via `threads_count != 1`). Public API, lifecycle states × VT states, who
+  polls/owns wakeups, shutdown semantics (drain vs cancel, timeout, parked-I/O,
+  blocking-pool, teardown ordering), ABI bump (new exec intrinsics), 7 leak/UAF/
+  valgrind gates, 2 slices (shutdown+join; then reactor decoupling). Separate branch,
+  after F4.
+- Both kept design/read-only; F4/F5 NOT started on the F3 branch.
+- **Review refinements applied (same day):** F4 — reuse existing `DriftExec.queue_len`
+  (confirmed = ready-queue length under `exec->mu`; no duplicate `ready_count`); made
+  the direct-resume gate's locking explicit (§2.1a: decide under target `exec->mu`,
+  nested in `r->mu`); fixed the core repro so the hot fiber actually PARKS each
+  iteration (eventfd drain→register→peer-rearm) to exercise direct-resume. F5 — DECIDED
+  v1 Destructible = explicit-mandatory shutdown, no blocking destructor (best-effort
+  non-blocking cancel only); reinforced firm sequencing F3 cert→F4→F5.1→F5.2 and "not
+  one broad patch"; clarified the ABI bump lands at F5 Slice 1 (`exec_shutdown`
+  intrinsic).
 
 ### 2026-06-21 — F3 review round 3: cancel self-reclaim stale park_token (fixed)
 - **High (stale token):** `reactor_wait_park`'s cancel self-reclaim (PARKED→RUNNING →
