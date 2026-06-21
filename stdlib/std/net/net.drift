@@ -2,6 +2,7 @@ module std.net;
 
 import std.core as core;
 import std.io as io;
+import std.mem as mem;
 import std.concurrent as conc;
 import lang.thread as thread;
 
@@ -12,6 +13,7 @@ export {
 	NET_ERROR_KIND_ERRNO,
 	NET_ERROR_KIND_WOULD_BLOCK,
 	NET_ERROR_KIND_REQUIRES_VTHREAD,
+	NET_ERROR_KIND_INVALID_ARGUMENT,
 	TcpStream,
 	TcpListener,
 	UdpSocket,
@@ -82,6 +84,10 @@ pub const NET_ERROR_KIND_WOULD_BLOCK: String = "would_block";
 
 /// `NetError.kind` discriminator: call requires a virtual thread.
 pub const NET_ERROR_KIND_REQUIRES_VTHREAD: String = "requires_vthread";
+
+/// `NetError.kind` discriminator: a bad argument (e.g. an out-of-range
+/// `write_bytes` offset/length).
+pub const NET_ERROR_KIND_INVALID_ARGUMENT: String = "invalid-argument";
 
 /// Connected TCP stream backed by a non-blocking file descriptor.
 ///
@@ -492,6 +498,58 @@ implement TcpStream {
 		}
 		val ptr = io.buffer_ptr(buf);
 		val len = io.buffer_len(buf);
+		val deadline = _deadline_from_timeout(timeout);
+		while true {
+			val n = thread.io_write(self.fd, ptr, len);
+			if n >= 0 {
+				thread.reactor_io_charge(self.fd, 4, n);
+				return core.Result::Ok(n);
+			}
+			val err = thread.io_errno();
+			if err == NET_EINTR {
+				continue;
+			}
+			if err == NET_EAGAIN {
+				if deadline <= 0 {
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
+				}
+				val remaining = _remaining_ms(deadline);
+				if remaining <= 0 {
+					return core.Result::Err(NetError(kind = NET_ERROR_KIND_WOULD_BLOCK, code = 0));
+				}
+				_block_on_io(self.fd, 4, deadline);
+				continue;
+			}
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
+		}
+		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = -1));
+	}
+
+	/// Writes up to `len` bytes from the range `src[off .. off+len)` directly,
+	/// without copying through an `io.Buffer`.  Same blocking/timeout/return
+	/// contract as `write`.
+	///
+	/// `src` is taken `&mut` only because the sole `Array<Byte>`→pointer accessor
+	/// is mutable; the bytes are **not** modified.
+	///
+	/// **Returns:** `Ok(n)` bytes written; `Err(WOULD_BLOCK)` on timeout;
+	/// `Err(INVALID_ARGUMENT)` if `off`/`len` fall outside `src`;
+	/// `Err(ERRNO)` on syscall failure.
+	pub fn write_bytes(self: &TcpStream, src: &mut Array<Byte>, off: Int, len: Int, timeout: conc.Duration) nothrow -> core.Result<Int, NetError> {
+		if thread.vt_current() == 0 {
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_REQUIRES_VTHREAD, code = 0));
+		}
+		// Overflow-safe range check (avoid off + len): off and len each within src,
+		// and len fits in the bytes remaining after off.
+		if off < 0 or len < 0 or off > src.len or len > src.len - off {
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_INVALID_ARGUMENT, code = 0));
+		}
+		if len == 0 {
+			return core.Result::Ok(0);
+		}
+		val ptr = unsafe {
+			mem.ptr_offset<type Byte>(thread.array_byte_as_mut_ptr(src), off)
+		};
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
 			val n = thread.io_write(self.fd, ptr, len);

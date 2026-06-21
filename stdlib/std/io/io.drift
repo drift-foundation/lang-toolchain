@@ -35,6 +35,7 @@ export {
 	buffer_len,
 	buffer_len_mut,
 	buffer_set_len,
+	buffer_reset,
 	buffer_write,
 	buffer_write_bytes,
 	buffer_write_string,
@@ -812,18 +813,26 @@ fn _poll_bit(m: Int, place: Int) nothrow -> Bool {
 	return (m / place) % 2 == 1;
 }
 
-/// One fd + requested directions for `poll_many`.
+/// One fd + requested directions for `poll_many`.  `token` is an opaque
+/// caller value (e.g. a connection id/index) carried through to the matching
+/// `PollReady`, so the caller can associate readiness with its own object
+/// without an fd→object map.  Duplicate entries for the same fd coalesce ONLY
+/// if their `token` matches; the same fd with two different tokens is an
+/// `invalid-argument` error.
 pub struct PollEntry {
 	pub fd: Int,
+	pub token: Int,
 	pub want_read: Bool,
 	pub want_write: Bool
 }
 
-/// The readiness reported for one fd by `poll_many`.  `hangup`/`error` are
-/// surfaced regardless of the requested directions; a fd closed underneath the
-/// waiter is reported as `hangup`.
+/// The readiness reported for one fd by `poll_many`.  `token` is the value from
+/// the matching `PollEntry`.  `hangup`/`error` are surfaced regardless of the
+/// requested directions; a fd closed underneath the waiter is reported as
+/// `hangup`.
 pub struct PollReady {
 	pub fd: Int,
+	pub token: Int,
 	pub readable: Bool,
 	pub writable: Bool,
 	pub hangup: Bool,
@@ -841,13 +850,34 @@ pub struct PollReady {
 ///
 /// **Returns:**
 /// - `Ok(Array<PollReady>)` — one `PollReady` per fd that is ready (only ready
-///   fds are included). Always follow with the actual non-blocking op; a
-///   `WOULD_BLOCK` from it means "spurious — call `poll_many` again".
+///   fds are included).
 /// - `Err(kind = "timeout")` when `timeout` elapsed first.
-/// - `Err(kind = "invalid-argument")` for an empty list or an unregistrable fd
-///   (closed/invalid); registration failure is terminal, never a hang.
+/// - `Err(kind = "invalid-argument")` for an empty list, a zero-interest entry, an
+///   unregistrable fd (closed/invalid), or the same fd appearing with two different
+///   `token`s. Registration failure is terminal, never a hang.
 /// - `Err(kind = "requires_vthread")` off the VT runtime.
 /// - `Err(kind = "cancelled")` if the VT was cancelled while waiting.
+///
+/// **Operational contract — readiness is EDGE-backed (edge-triggered epoll), not a
+/// level signal. You MUST drain each ready direction fully or you may not be woken
+/// again for the data already buffered:**
+/// - On `readable`: **read repeatedly until `WOULD_BLOCK`** (or EOF, or error). Data
+///   larger than one read buffer arrives across **multiple reads on a SINGLE readiness
+///   event** — a partial read does NOT get a second wake for the bytes still sitting
+///   in the socket buffer (the edge already fired). If you stop early for an
+///   application fairness cap (N bytes / M reads) **before** `WOULD_BLOCK`, you MUST
+///   record the fd as still-ready in your OWN state and resume draining it on a later
+///   service pass. **Do NOT re-`poll_many` expecting a fresh wake for the
+///   already-buffered bytes** — it will not come.
+/// - On `writable`: **write repeatedly until `WOULD_BLOCK`** or your output is empty.
+///   A partial write does not get another `writable` wake for the remainder; if you
+///   stop early for a fairness cap, keep the fd in your OWN writable queue and resume
+///   on a later pass rather than waiting for `poll_many`.
+/// - `WOULD_BLOCK` from the actual op after a readiness report is normal (a
+///   conservative/edge replay) — just re-`poll_many`.
+/// - `hangup`/`err` are **sticky terminal fd conditions**: once reported they remain
+///   reported on every subsequent `poll_many` for that fd until you close it. Stop
+///   reading/writing and close the fd.
 ///
 /// **Precedence:** cancellation > readiness > timeout.
 /// **Platform:** POSIX (epoll).
@@ -860,9 +890,10 @@ pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> 
 	if n == 0 {
 		return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = -1));
 	}
-	// Coalesce per fd into parallel fds/interests arrays.
+	// Coalesce per fd into parallel fds/interests/tokens arrays.
 	var fds: Array<Int> = [];
 	var ints: Array<Int> = [];
+	var toks: Array<Int> = [];
 	var i = 0;
 	while i < n {
 		var iv = 0;
@@ -875,6 +906,7 @@ pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> 
 			return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = -1));
 		}
 		val fd = entries[i].fd;
+		val tok = entries[i].token;
 		var found = 0 - 1;
 		var k = 0;
 		val fc = fds.len();
@@ -883,10 +915,16 @@ pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> 
 			k = k + 1;
 		}
 		if found >= 0 {
+			// Same fd may coalesce only if the token matches; conflicting tokens
+			// for one fd are ambiguous (which token does its PollReady carry?).
+			if toks[found] != tok {
+				return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = -1));
+			}
 			ints[found] = _poll_ior(ints[found], iv);
 		} else {
 			fds.push(fd);
 			ints.push(iv);
+			toks.push(tok);
 		}
 		i = i + 1;
 	}
@@ -919,6 +957,7 @@ pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> 
 				if m != 0 {
 					ready.push(PollReady(
 						fd = fds[j],
+						token = toks[j],
 						readable = _poll_bit(m, 1),
 						writable = _poll_bit(m, 2),
 						hangup = _poll_bit(m, 4) or _poll_bit(m, 16),
@@ -1004,6 +1043,13 @@ pub fn buffer_len(self: &Buffer) nothrow -> Int {
 /// receiver-type compatibility.
 pub fn buffer_len_mut(self: &mut Buffer) nothrow -> Int {
 	return self.len;
+}
+
+/// Resets the buffer's logical length to 0 (capacity unchanged) so it can be
+/// refilled from the start.  Equivalent to `buffer_set_len(buf, 0)`; provided as
+/// a clear name for the read/drain-then-reuse loop.
+pub fn buffer_reset(self: &mut Buffer) nothrow -> Void {
+	self.len = 0;
 }
 
 /// Sets the buffer's length to `len`, zero-filling any newly-exposed

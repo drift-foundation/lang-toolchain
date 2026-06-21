@@ -17,6 +17,27 @@ prioritized design (F1…F5).
 
 ## Log
 
+### 2026-06-21 — Pre-cert poll_many API improvements from the web trial (stdlib-only, ABI 18 unchanged)
+1. **Token-carrying readiness:** `PollEntry`/`PollReady` gain `token: Int` (opaque
+   caller value, carried through). Coalesce: duplicate fd entries merge ONLY if token
+   matches; same fd with different tokens → `invalid-argument`. Pure stdlib (token
+   lives in the parallel arrays; runtime untouched). Tests: token round-trip
+   (readiness) + token-conflict.
+2. **Strengthened docs:** explicit edge-backed operational contract — drain reads to
+   WOULD_BLOCK/EOF/error (or app fairness cap); write to WOULD_BLOCK/empty; a partial
+   read/write may not get a second wake for already-buffered readiness; HUP/ERR sticky.
+3. **Partial-drain regression** (`test_partial_drain_single_wake`): 16 KiB drained
+   across repeated 4 KiB reads after ONE poll_many wake (also exercises write_bytes).
+4. **`io.buffer_reset`** (= set_len 0, no boundary) + **`TcpStream.write_bytes(&mut
+   Array<Byte>, off, len, timeout)`** — zero-copy range write over EXISTING intrinsics
+   (`array_byte_as_mut_ptr` + `mem.ptr_offset`), **no new runtime/compiler boundary**.
+   WART flagged: takes `&mut src` because the only Array<Byte>→ptr intrinsic is mutable
+   (bytes not modified); a clean `&Array` version would need a new `array_byte_as_ptr`
+   intrinsic = boundary, deferred. New `NET_ERROR_KIND_INVALID_ARGUMENT`.
+- **Validated:** Gate B `test_poll_many.py` **12/12 functional** (incl. token ×2 +
+  partial-drain); net/io regression **13 passed**. ABI stays 18 (no runtime change).
+- Did NOT start io_uring / fused-read / accept_many (post-cert design, per instruction).
+
 ### 2026-06-21 — F4 + F5 design prep (design-only, no code) — actionable once F3 lands
 Per request: produced two implementation-ready plans while F3 goes through cert.
 - **`F4-fairness-plan.md`** — root-causes the §4.A starvation to the reactor's

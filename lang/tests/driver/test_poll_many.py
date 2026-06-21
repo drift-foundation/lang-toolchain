@@ -61,7 +61,7 @@ import lang.thread as thr;
 
 pub fn main() nothrow -> Int {{
 	var es: Array<io.PollEntry> = [];
-	es.push(io.PollEntry(fd = 1000003, want_read = true, want_write = false));
+	es.push(io.PollEntry(fd = 1000003, token = 0, want_read = true, want_write = false));
 	val start = thr.now_ms();
 	val res = io.poll_many(&es, conc.Duration(millis = {to}));
 	val el = thr.now_ms() - start;
@@ -171,15 +171,16 @@ def _tcp(conn: str, body: str) -> str:
 
 
 def test_poll_many_readiness_one_fd(tmp_path: Path) -> None:
+	# Also pins token round-trip: the PollReady carries the PollEntry's token (77).
 	body = """\
 					var es: Array<io.PollEntry> = [];
-					es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es.push(io.PollEntry(fd = fd, token = 77, want_read = true, want_write = false));
 					match io.poll_many(&es, conc.Duration(millis = 3000)) {
-						core.Result::Ok(rd) => { r = (rd.len() == 1 and rd[0].readable and rd[0].fd == fd) ? 0 : 7; },
+						core.Result::Ok(rd) => { r = (rd.len() == 1 and rd[0].readable and rd[0].fd == fd and rd[0].token == 77) ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
 					}"""
 	rc, _ = _run(_compile(tmp_path, _tcp(_CONN_WRITE_DELAYED, body), "rd"))
-	assert rc == 0, f"readiness (rc={rc}; 5=Err,7=wrong-set)"
+	assert rc == 0, f"readiness (rc={rc}; 5=Err,7=wrong-set-or-token)"
 
 
 def test_poll_many_timeout_leaves_no_token(tmp_path: Path) -> None:
@@ -187,7 +188,7 @@ def test_poll_many_timeout_leaves_no_token(tmp_path: Path) -> None:
 	# token would make the sleep return early). r=0 only if both hold.
 	body = """\
 					var es: Array<io.PollEntry> = [];
-					es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var ok = false;
 					match io.poll_many(&es, conc.Duration(millis = 200)) {
 						core.Result::Ok(rd) => { ok = false; },
@@ -204,7 +205,7 @@ def test_poll_many_timeout_leaves_no_token(tmp_path: Path) -> None:
 def test_poll_many_peer_close_hangup(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];
-					es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					match io.poll_many(&es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { r = (rd.len() == 1 and (rd[0].hangup or rd[0].readable)) ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
@@ -224,7 +225,7 @@ import std.io as io;
 import std.concurrent as conc;
 pub fn main() nothrow -> Int {{
 	var es: Array<io.PollEntry> = [];
-	es.push(io.PollEntry(fd = 0, want_read = false, want_write = false));
+	es.push(io.PollEntry(fd = 0, token = 0, want_read = false, want_write = false));
 	match io.poll_many(&es, conc.Duration(millis = {to})) {{
 		core.Result::Ok(rd) => {{ return 2; }},
 		core.Result::Err(e) => {{ return (e.kind + "") == "invalid-argument" ? 0 : 3; }}
@@ -271,7 +272,7 @@ def test_poll_many_hup_non_consuming(tmp_path: Path) -> None:
 	# impl would lose it and time out instead).
 	body = """\
 					var es: Array<io.PollEntry> = [];
-					es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var h1 = false;
 					match io.poll_many(&es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { h1 = rd.len() == 1 and (rd[0].hangup or rd[0].readable); },
@@ -281,7 +282,7 @@ def test_poll_many_hup_non_consuming(tmp_path: Path) -> None:
 					var db = io.buffer(16);
 					val _d = ss.read(&mut db, conc.Duration(millis = 50));
 					var es2: Array<io.PollEntry> = [];
-					es2.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es2.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var h2 = false;
 					match io.poll_many(&es2, conc.Duration(millis = 500)) {
 						core.Result::Ok(rd) => { h2 = rd.len() == 1 and (rd[0].hangup or rd[0].readable); },
@@ -307,7 +308,7 @@ import std.concurrent as conc;
 
 fn waiter(fd: Int) nothrow -> Int {
 	var es: Array<io.PollEntry> = [];
-	es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+	es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 	match io.poll_many(&es, conc.Duration(millis = 0)) {   // no deadline = park until ready
 		core.Result::Ok(rd) => { return 1; },
 		core.Result::Err(e) => { return 0; }
@@ -351,11 +352,81 @@ pub fn main() nothrow -> Int {
 # test_poll_many_cancel_no_hang.
 
 
+def test_poll_many_token_conflict(tmp_path: Path) -> None:
+	# Same fd with two different tokens is ambiguous -> invalid-argument.
+	src = """\
+module main;
+import std.core as core;
+import std.io as io;
+import std.concurrent as conc;
+pub fn main() nothrow -> Int {
+	var es: Array<io.PollEntry> = [];
+	es.push(io.PollEntry(fd = 5, token = 1, want_read = true, want_write = false));
+	es.push(io.PollEntry(fd = 5, token = 2, want_read = false, want_write = true));
+	match io.poll_many(&es, conc.Duration(millis = 1000)) {
+		core.Result::Ok(rd) => { return 2; },
+		core.Result::Err(e) => { return (e.kind + "") == "invalid-argument" ? 0 : 3; }
+	}
+}
+"""
+	rc, _ = _run(_compile(tmp_path, src, "tokc"))
+	assert rc == 0, f"token conflict (rc={rc}; 2=Ok,3=wrong-kind)"
+
+
+def test_partial_drain_single_wake(tmp_path: Path) -> None:
+	# Doc-example + regression for the partial-drain trap: data larger than one read
+	# buffer must be drained across REPEATED reads after a SINGLE readiness event
+	# (edge-triggered) — not by waiting for a second wake.  Connector sends 16 KiB
+	# via TcpStream.write_bytes (also exercises the new range write); server polls
+	# ONCE, then reads in 4 KiB non-blocking chunks until WOULD_BLOCK and asserts the
+	# full 16 KiB drained.
+	conn = (
+		"\t\t\tvar arr: Array<Byte> = [];\n"
+		"\t\t\tvar bi = 0;\n"
+		"\t\t\twhile bi < 16384 { arr.push(cast<Byte>(65)); bi = bi + 1; }\n"
+		"\t\t\tvar off = 0;\n"
+		"\t\t\twhile off < 16384 {\n"
+		"\t\t\t\tmatch cs.write_bytes(&mut arr, off, 16384 - off, t) {\n"
+		"\t\t\t\t\tcore.Result::Ok(nn) => { off = off + nn; },\n"
+		"\t\t\t\t\tcore.Result::Err(e) => { off = 16384; }\n"
+		"\t\t\t\t}\n"
+		"\t\t\t}\n"
+		"\t\t\tval _s = conc.sleep(conc.Duration(millis = 600));\n"
+		"\t\t\tval _c = cs.close(t);"
+	)
+	body = """\
+					val _w = conc.sleep(conc.Duration(millis = 200));   // let all 16 KiB buffer
+					var es: Array<io.PollEntry> = [];
+					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
+					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+						core.Result::Ok(rd) => {
+							var total = 0;
+							var draining = true;
+							while draining {
+								var rb = io.buffer(4096);
+								match ss.read(&mut rb, conc.Duration(millis = 0)) {
+									core.Result::Ok(nn) => { if nn == 0 { draining = false; } else { total = total + nn; } },
+									core.Result::Err(e) => {
+										// Drain ends ONLY on WOULD_BLOCK (the contract);
+										// any other error is a real failure.
+										draining = false;
+										if (e.kind + "") != "would_block" { total = 0 - 1; }
+									}
+								}
+							}
+							r = (total == 16384) ? 0 : 8;
+						},
+						core.Result::Err(e) => { r = 5; }
+					}"""
+	rc, _ = _run(_compile(tmp_path, _tcp(conn, body), "drain"))
+	assert rc == 0, f"partial-drain single-wake (rc={rc}; 8=did-not-drain-all,5=poll-Err)"
+
+
 @_VALGRIND_SKIP
 def test_poll_many_readiness_memcheck(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];
-					es.push(io.PollEntry(fd = fd, want_read = true, want_write = false));
+					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					match io.poll_many(&es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { r = rd.len() == 1 ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
