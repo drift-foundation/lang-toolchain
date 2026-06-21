@@ -616,6 +616,16 @@ implement TcpListener {
 		return thread.net_listener_port(self.fd);
 	}
 
+	/// Returns the raw listening socket file descriptor.
+	///
+	/// Intended for readiness waits — pass it to `io.poll(fd,
+	/// io.IoInterest::Read, ...)` to block until the listener has a pending
+	/// connection to `accept`.  Borrow only: the `TcpListener` retains
+	/// ownership and closes the fd on drop.
+	pub fn raw_fd(self: &TcpListener) nothrow -> Int {
+		return self.fd;
+	}
+
 	/// Test-only helper that writes `value` to the underlying eventfd.
 	///
 	/// Used by tests to wake a listener backed by a

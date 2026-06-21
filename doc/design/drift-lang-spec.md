@@ -2314,8 +2314,10 @@ if cond {
 ```
 
 - `if <cond> { ... } else { ... }` selects a branch based on a `Bool` condition.
-- The condition must type-check as `Bool`; the two branches need not return the same type unless used as an expression (e.g., in a ternary).
+- The condition must type-check as `Bool`; the two branches need not return the same type.
 - Each branch has its own scope for locals; names inside a branch shadow outer names.
+
+Statement-form `if` is not a value in v1. For expression-level conditionals, use the ternary operator for simple two-way choices and expression `match` for state or variant dispatch. A future block-valued `if` would be a separate language feature with its own branch typing, ownership, and lowering rules; it is intentionally not implied by statement-form `if`.
 
 ### 8.2. While loops
 

@@ -2300,3 +2300,8 @@ The mental model: expression `match` is a *value* (like a ternary,
 or a `let … in` in expression-oriented languages); statement
 `match` is a control-flow construct. Don't try to make one play
 the other's role.
+
+For expression-level conditionals, prefer ternary for simple two-way choices
+and expression `match` for state or variant dispatch. Drift v1 does not have
+block-valued `if`; statement-form `if` is for control flow, not for producing
+a value.

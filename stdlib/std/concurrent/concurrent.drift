@@ -60,6 +60,7 @@ export {
 	future_group,
 	scope,
 	sleep,
+	yield_now,
 	default_executor,
 	set_default_executor,
 	ProcessSignal,
@@ -2215,6 +2216,28 @@ pub fn scope<F>(f: F) -> core.Result<Void, ConcurrencyError> require F is core.F
 	var s = Scope();
 	f.call(move s);
 	return core.Result::Ok(core.void_value());
+}
+
+/// Cooperatively relinquishes the current virtual thread to the
+/// scheduler's ready queue, resuming on the next scheduler turn.
+///
+/// This is the cheap cooperative scheduling point: no timer, no
+/// allocation, no minimum delay — unlike `sleep`, which has a 1 ms
+/// floor (and `sleep(Duration(0))`, which returns an immediate
+/// `Err(Timeout)` rather than yielding).  Use it to hand the worker to
+/// another ready VT between non-blocking sweeps of an event loop.
+///
+/// **On a VT:** re-enqueues the caller as READY behind the other
+/// ready VTs and switches to the scheduler, so a co-located peer VT
+/// makes progress before this one resumes.
+///
+/// **Off the VT runtime** (e.g. the main thread before any VT exists):
+/// behaves as whatever `lang.thread.vt_yield` does there — an OS-level
+/// `sched_yield()`.
+///
+/// **See also:** `sleep`, `spawn`.
+pub fn yield_now() nothrow -> Void {
+	thread.vt_yield();
 }
 
 /// Suspends the calling virtual thread for `d`.

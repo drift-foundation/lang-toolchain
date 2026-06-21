@@ -59,6 +59,7 @@ export {
 	configured_input_from_file,
 	configure_file,
 	file_builder,
+	poll,
 	IO_ERR_WOULD_BLOCK,
 	IO_ERR_EOF,
 	IO_ERR_LINE_TOO_LONG,
@@ -763,6 +764,118 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	thread.reactor_register_io(fd, interest, vt, deadline_ms);
 	thread.vt_park_until(deadline_ms);
 	return;
+}
+
+// ETIMEDOUT errno carried in IoError.code on the `poll` timeout path (interop).
+const ERRNO_ETIMEDOUT: Int = 110;
+
+// `IoInterest` -> reactor epoll direction bit: Read = EPOLLIN (1), Write = EPOLLOUT (4).
+fn _interest_code(interest: &IoInterest) nothrow -> Int {
+	match interest {
+		IoInterest::Read() => { return 1; },
+		IoInterest::Write() => { return 4; }
+	}
+}
+
+fn _interest_of(code: Int) nothrow -> IoInterest {
+	if code == 1 {
+		return IoInterest::Read();
+	}
+	return IoInterest::Write();
+}
+
+/// Waits until `fd` is ready for `interest` (read OR write), or `timeout`
+/// elapses, parking the calling virtual thread on the runtime reactor.
+///
+/// This is the cheap readiness wait an event loop needs: it blocks
+/// efficiently on the reactor instead of busy-polling or `sleep`-ing.
+/// Obtain `fd` from `TcpStream.raw_fd()` / `TcpListener.raw_fd()`.
+///
+/// **Parameters:**
+/// - `fd` — the file descriptor to wait on.
+/// - `interest` — `IoInterest::Read` (readable / acceptable) or
+///   `IoInterest::Write` (writable).  Maps to `EPOLLIN` / `EPOLLOUT`.
+/// - `timeout` — `millis > 0` bounds the wait; `millis <= 0` means "no
+///   deadline — park until ready" (there is no busy-spin either way).
+///
+/// **Returns:**
+/// - `Ok(interest)` when the fd is (or may be) ready for the requested
+///   direction.
+/// - `Err(IoError(kind = "timeout"))` when `timeout` elapsed first.
+/// - `Err(IoError(kind = "requires_vthread"))` if called off the VT runtime.
+///
+/// **NOT a multi-fd poll.** This waits on exactly one fd and one direction.
+/// A select/epoll-style wait over many fds is a future addition that needs
+/// reactor changes; it is intentionally not provided here.
+///
+/// **NOT a readiness *guarantee*.** Edge-triggered wakes and conservative
+/// reporting mean `Ok` is a "very likely ready" signal, not a promise: ALWAYS
+/// follow `poll` with the actual non-blocking `read`/`write`/`accept`, and treat
+/// a `WOULD_BLOCK` from that op as "spurious — call `poll` again".  `poll` does
+/// not perform or replace the I/O.
+///
+/// **One waiter per fd/direction (current reactor limitation).** The reactor
+/// tracks a single waiting VT per `(fd, direction)`.  Two VTs polling the SAME
+/// fd for the SAME direction concurrently is **unsupported**: the second
+/// registration overwrites the first, so the first VT misses its wake (it
+/// blocks until its own `timeout`).  This phase cannot reject the duplicate
+/// cleanly without new runtime state; do not concurrently `poll` the same
+/// fd/direction from more than one VT.  (Polling different fds, or the same fd
+/// for different directions, from different VTs is fine.)
+///
+/// **Platform:** POSIX (epoll).
+pub fn poll(fd: Int, interest: IoInterest, timeout: conc.Duration) nothrow -> core.Result<IoInterest, IoError> {
+	val vt = thread.vt_current();
+	if vt == 0 {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
+	}
+	val code = _interest_code(&interest);
+	// Edge-trigger replay: an edge that arrived with no waiter set a pending
+	// flag — consume it and report ready without parking.
+	if thread.reactor_check_pending(fd, code) != 0 {
+		return core.Result::Ok(_interest_of(code));
+	}
+	var deadline_ms = 0;
+	if timeout.millis > 0 {
+		deadline_ms = thread.now_ms() + timeout.millis;
+	}
+	thread.reactor_register_io(fd, code, vt, deadline_ms);
+	// An edge that arrived between the check above and this registration set the
+	// pending flag with no waiter registered.  Catch it BEFORE parking: an
+	// edge-triggered event will not re-fire, so a `vt_park(0)` (no-deadline) park
+	// would otherwise miss it and block forever.
+	if thread.reactor_check_pending(fd, code) != 0 {
+		thread.reactor_register_io(fd, code, 0, 0);   // clear our just-set waiter
+		return core.Result::Ok(_interest_of(code));
+	}
+	// `deadline_ms == 0` means "no deadline — park until ready": `vt_park_until(0)`
+	// returns immediately, so park with `vt_park(0)` instead (matching
+	// `conc.block_on_io`).  A positive deadline uses the timed park.
+	if deadline_ms == 0 {
+		thread.vt_park(0);
+	} else {
+		thread.vt_park_until(deadline_ms);
+	}
+	// Clear our `(fd, direction)` waiter on EVERY wake, before deciding the
+	// result.  A readiness wake already cleared it in the reactor; a timeout or
+	// spurious wake did NOT — leaving a stale back-pointer that a later edge on
+	// this fd could use to wrongly wake this VT during an unrelated wait
+	// (the stale-wake class).  `register_io` with `vt = 0` clears the direction
+	// with no new runtime surface.
+	thread.reactor_register_io(fd, code, 0, 0);
+	// Woke: readiness, timeout, or a spurious wake.
+	if thread.reactor_check_pending(fd, code) != 0 {
+		return core.Result::Ok(_interest_of(code));
+	}
+	if deadline_ms != 0 and thread.now_ms() >= deadline_ms {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_TIMEOUT, code = ERRNO_ETIMEDOUT));
+	}
+	// A readiness wake clears the watch's waiter WITHOUT setting `pending`, so
+	// `check_pending` is clear here on the common ready path.  Report ready and
+	// let the caller's non-blocking op confirm (a false-ready just yields
+	// WOULD_BLOCK -> re-poll).  We must NOT re-park: the edge is already
+	// consumed, so a fresh park could miss it and hang.
+	return core.Result::Ok(_interest_of(code));
 }
 
 fn _park_main_thread_io(remaining: Int) nothrow -> Void {
