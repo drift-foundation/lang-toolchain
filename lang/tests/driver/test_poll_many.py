@@ -423,6 +423,103 @@ def test_partial_drain_single_wake(tmp_path: Path) -> None:
 
 
 @_VALGRIND_SKIP
+def test_poll_many_fd_reuse_churn_stress_memcheck(tmp_path: Path) -> None:
+	# Stress companion to the deterministic resolver unit test (the generation guard is
+	# pinned in lang/tests/runtime/reactor_stale_fd_event_test.c): a keepalive-style loop
+	# aggregate-poll_many's a set of HEALTHY IDLE loopback conns while churning one
+	# (real readiness via peer-close, then close + reopen reusing the fd number) — the
+	# pool's watch→close→reopen shape. Any readiness on a known-idle conn is a
+	# fabricated event. Under memcheck this validates the cert/MariaDB signature shape
+	# (no Valgrind errors required; fail on semantic false-positive readiness). It is
+	# NOT the primary pin (the race rarely fires single-process); that is the C whitebox
+	# unit test lang/tests/runtime/reactor_stale_fd_event_test.c
+	# (test_reactor_stale_fd_event_generation_guard).
+	src = """\
+module main;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+
+struct Conn { cli: net.TcpStream, srv: net.TcpStream, token: Int }
+
+fn open_pair(lis: &net.TcpListener, port: Int, token: Int) nothrow -> core.Result<Conn, Int> {
+	val t = conc.Duration(millis = 4000);
+	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+		core.Result::Err(e) => { return core.Result::Err(1); },
+		core.Result::Ok(c) => {
+			match net.accept(lis, t) {
+				core.Result::Err(e) => { val _ = c.close(t); return core.Result::Err(2); },
+				core.Result::Ok(s) => { return core.Result::Ok(Conn(cli = move c, srv = move s, token = token)); }
+			}
+		}
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+		core.Result::Err(e) => { return 100; },
+		core.Result::Ok(lis) => {
+			val port = lis.local_port();
+			var tokctr = 0;
+			var conns: Array<Conn> = [];
+			var k = 0;
+			while k < 3 {
+				tokctr = tokctr + 1;
+				match open_pair(&lis, port, tokctr) {
+					core.Result::Err(c) => { return 50; },
+					core.Result::Ok(cn) => { conns.push(move cn); }
+				}
+				k = k + 1;
+			}
+			var spurious = 0;
+			var round = 0;
+			while round < 120 {
+				var es: Array<io.PollEntry> = [];
+				var i = 0;
+				while i < conns.len() {
+					es.push(io.PollEntry(fd = conns[i].cli.raw_fd(), token = conns[i].token, want_read = true, want_write = false));
+					i = i + 1;
+				}
+				match io.poll_many(&es, conc.Duration(millis = 5)) {
+					core.Result::Ok(rd) => {
+						var j = 0;
+						while j < rd.len() {
+							if rd[j].readable or rd[j].hangup or rd[j].err { spurious = spurious + 1; }
+							j = j + 1;
+						}
+					},
+					core.Result::Err(e) => { }
+				}
+				val _c0 = conns[0].cli.close(t);
+				val _s0 = conns[0].srv.close(t);
+				tokctr = tokctr + 1;
+				match open_pair(&lis, port, tokctr) {
+					core.Result::Err(c) => { return 51; },
+					core.Result::Ok(cn) => { conns[0] = move cn; }
+				}
+				round = round + 1;
+			}
+			var z = 0;
+			while z < conns.len() { val _a = conns[z].cli.close(t); val _b = conns[z].srv.close(t); z = z + 1; }
+			return spurious;
+		}
+	}
+}
+"""
+	binary = _compile(tmp_path, src, "churn")
+	res = subprocess.run(
+		valgrind_cmd("--error-exitcode=99", "--fair-sched=yes", str(binary)),
+		capture_output=True, text=True, timeout=sanitizer_timeout(180))
+	assert res.returncode != 99, f"valgrind errors:\n{res.stderr[:800]}"
+	assert res.returncode == 0, (
+		f"churn produced {res.returncode} spurious readiness event(s) on healthy idle "
+		f"conns (stale-fd-event regression)"
+	)
+
+
+@_VALGRIND_SKIP
 def test_poll_many_readiness_memcheck(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];

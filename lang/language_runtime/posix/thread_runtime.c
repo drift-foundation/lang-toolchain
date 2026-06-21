@@ -338,6 +338,9 @@ typedef struct ReactorTimer {
 
 typedef struct ReactorWatch {
 	int fd;
+	uint32_t generation;      /* per-incarnation id; stamped into epoll ev.data so a
+	                           * stale event for a closed-then-reused fd number is
+	                           * dropped instead of re-attached to the new watch. */
 	uint32_t events;          /* kernel interest mask (set once on EPOLL_CTL_ADD) */
 	uint64_t read_vt;         /* VT parked for EPOLLIN, or 0 */
 	uint64_t write_vt;        /* VT parked for EPOLLOUT, or 0 */
@@ -636,6 +639,9 @@ static atomic_long drift_reactor_close_unparks = 0;
  * (vs returning early from its peek).  Lets a test prove a wait genuinely parked
  * rather than spinning on a stale pending bit. */
 static atomic_long drift_reactor_park_blocks = 0;
+/* Counts epoll events dropped by the generation guard (stale event for a
+ * closed-then-reused fd number).  Deterministic-test probe. */
+static atomic_long drift_reactor_stale_fd_event_drops = 0;
 int64_t drift_reactor_stale_epoch_drops_get(void) {
 	return (int64_t)atomic_load(&drift_reactor_stale_epoch_drops);
 }
@@ -699,6 +705,35 @@ static DriftVt *drift_vt_tls_get(void) {
 
 #ifdef __linux__
 static ReactorWatch *drift_reactor_find_watch(Reactor *r, int fd);
+/* Monotonic per-watch generation.  Stamped into each watch at creation and packed
+ * into the epoll event payload (data.u64 = gen<<32 | fd) so a stale event for a
+ * closed-then-reused fd number can be dropped on dispatch (its gen no longer
+ * matches the current watch). */
+static atomic_uint drift_reactor_watch_gen = 0;
+static inline uint32_t drift_reactor_next_gen(void) {
+	/* Never return 0 — 0 is reserved for wake_fd/signal_fd (registered via
+	 * ev.data.fd, i.e. gen field 0), which are matched by fd before any watch. */
+	uint32_t g = atomic_fetch_add(&drift_reactor_watch_gen, 1) + 1;
+	return g ? g : (atomic_fetch_add(&drift_reactor_watch_gen, 1) + 1);
+}
+/* Resolve the watch an epoll event targets, applying the generation guard.  A
+ * stale event for a closed-then-reused fd number (gen mismatch) returns NULL so
+ * the caller drops it — no pending bits set, no VT woken.  `*out_fd` gets the
+ * decoded fd (wake_fd/signal_fd use gen 0 and are matched by fd BEFORE this).
+ * Used by BOTH the worker-owned and reactor-thread dispatch loops, and by the
+ * test inject hook, so the identity check is single-sourced.  Caller holds r->mu. */
+static ReactorWatch *drift_reactor_watch_for_event(Reactor *r, uint64_t ev_data, int *out_fd) {
+	int fd = (int)(uint32_t)(ev_data & 0xFFFFFFFFu);
+	uint32_t gen = (uint32_t)(ev_data >> 32);
+	if (out_fd) *out_fd = fd;
+	ReactorWatch *w = drift_reactor_find_watch(r, fd);
+	if (w && gen != 0 && w->generation != gen) {
+		atomic_fetch_add(&drift_reactor_stale_fd_event_drops, 1);
+		return NULL;   /* stale event from a prior incarnation of this fd number */
+	}
+	return w;
+}
+
 static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTimer **out);
 static void drift_reactor_remove_vt_timers(Reactor *r, uint64_t vt);
 static void drift_reactor_fire_timer(Reactor *r, ReactorTimer *t);
@@ -807,7 +842,8 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 		/* W7: process events. */
 		if (n > 0) {
 			for (int i = 0; i < n; i++) {
-				int fd = events[i].data.fd;
+				uint64_t ev_data = events[i].data.u64;
+				int fd = (int)(uint32_t)(ev_data & 0xFFFFFFFFu);
 				if (fd == r->wake_fd) {
 					uint64_t buf;
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
@@ -830,7 +866,8 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 				/* T4b: ET per-direction resolution under r->mu. */
 				uint32_t ev = events[i].events;
 				pthread_mutex_lock(&r->mu);
-				ReactorWatch *w = drift_reactor_find_watch(r, fd);
+				/* Generation guard: drop a stale event for a reused fd number. */
+				ReactorWatch *w = drift_reactor_watch_for_event(r, ev_data, NULL);
 				DriftVt *direct_vt = NULL;
 				DriftVt *enqueue_vt = NULL;
 				if (w) {
@@ -1348,7 +1385,8 @@ static void *drift_reactor_thread_entry(void *arg) {
 		}
 		if (n > 0) {
 			for (int i = 0; i < n; i++) {
-				int fd = events[i].data.fd;
+				uint64_t ev_data = events[i].data.u64;
+				int fd = (int)(uint32_t)(ev_data & 0xFFFFFFFFu);
 				if (fd == r->wake_fd) {
 					uint64_t buf;
 					while (read(r->wake_fd, &buf, sizeof(buf)) > 0) { }
@@ -1380,7 +1418,8 @@ static void *drift_reactor_thread_entry(void *arg) {
 				/* T4a: ET per-direction resolution under r->mu. */
 				uint32_t ev = events[i].events;
 				pthread_mutex_lock(&r->mu);
-				ReactorWatch *w = drift_reactor_find_watch(r, fd);
+				/* Generation guard: drop a stale event for a reused fd number. */
+				ReactorWatch *w = drift_reactor_watch_for_event(r, ev_data, NULL);
 				DriftVt *read_io_vt = NULL;
 				DriftVt *write_io_vt = NULL;
 				if (w) {
@@ -1479,7 +1518,10 @@ static Reactor *drift_reactor_create(void) {
 	if (r->epoll_fd >= 0 && r->wake_fd >= 0) {
 		struct epoll_event ev;
 		ev.events = EPOLLIN;
-		ev.data.fd = r->wake_fd;
+		/* Generation 0 (high 32 bits) marks an internal fd: dispatch decodes the
+		 * fd from the low 32 bits and special-cases wake/signal BEFORE the watch
+		 * resolver, which skips the generation check when gen == 0. */
+		ev.data.u64 = (uint32_t)r->wake_fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, r->wake_fd, &ev);
 	}
 	/* Register the process-global signalfd on this reactor's epoll set.
@@ -1489,7 +1531,7 @@ static Reactor *drift_reactor_create(void) {
 		r->signal_fd = drift_signal_fd;
 		struct epoll_event sev;
 		sev.events = EPOLLIN;
-		sev.data.fd = drift_signal_fd;
+		sev.data.u64 = (uint32_t)drift_signal_fd;   /* generation 0: internal fd (see wake_fd) */
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, drift_signal_fd, &sev);
 	}
 	/* Test-only (round 11): suppress the dedicated reactor thread so a
@@ -2413,14 +2455,15 @@ int64_t drift_reactor_wait_register(uint64_t fd, uint64_t interest,
 	if (!w) {
 		w = (ReactorWatch *)malloc(sizeof(ReactorWatch));
 		if (!w) { pthread_mutex_unlock(&r->mu); return ENOMEM; }
-		w->fd = (int)fd; w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+		w->fd = (int)fd; w->generation = drift_reactor_next_gen();
+		w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		w->read_vt = 0; w->write_vt = 0; w->read_epoch = 0; w->write_epoch = 0;
 		w->pending_read = 0; w->pending_write = 0; w->pending_hup = 0; w->pending_err = 0;
 		w->next = r->watches; r->watches = w; created = 1;
 		if (r->epoll_fd >= 0) {
 			struct epoll_event ev;
 			ev.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-			ev.data.fd = (int)fd;
+			ev.data.u64 = ((uint64_t)w->generation << 32) | (uint32_t)(int)fd;
 			if (epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) {
 				int e = errno ? errno : EBADF;
 				r->watches = w->next; free(w);   /* rollback: no partial watch */
@@ -3170,6 +3213,7 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 			return;
 		}
 		w->fd = (int)fd;
+		w->generation = drift_reactor_next_gen();
 		w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		w->read_vt = 0;
 		w->write_vt = 0;
@@ -3181,7 +3225,19 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		w->pending_err = 0;
 		w->next = r->watches;
 		r->watches = w;
+		/* Persistent ET: EPOLL_CTL_ADD once, on first registration.
+		 * Done UNDER r->mu (not after unlock) so the registration's generation
+		 * cannot be installed against a fd number that is concurrently closed
+		 * and reused — which would drop legitimate events for the new watch as
+		 * stale.  Same lifecycle rigor as reactor_wait_register. */
+		if (r->epoll_fd >= 0) {
+			struct epoll_event ev;
+			ev.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+			ev.data.u64 = ((uint64_t)w->generation << 32) | (uint32_t)(int)fd;
+			epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
+		}
 	}
+	(void)existed;
 	/* Set the waiter for the requested direction. */
 	if ((uint32_t)interest & EPOLLIN) {
 		w->read_vt = vt;
@@ -3189,14 +3245,6 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		w->write_vt = vt;
 	}
 	pthread_mutex_unlock(&r->mu);
-	/* Persistent ET: EPOLL_CTL_ADD once on first registration.
-	 * No hot-path epoll_ctl on subsequent calls. */
-	if (!existed && r->epoll_fd >= 0) {
-		struct epoll_event ev;
-		ev.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
-		ev.data.fd = (int)fd;
-		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
-	}
 	/* `deadline_ms` is intentionally NOT used here to register a wake
 	 * timer: that responsibility belongs to the caller's
 	 * `vt_park_until(deadline_ms)` call which is the single timer-
