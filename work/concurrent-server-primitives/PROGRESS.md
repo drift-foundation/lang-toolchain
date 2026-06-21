@@ -8,14 +8,35 @@ prioritized design (F1…F5).
 
 | Feature | Priority | State | ABI | Notes |
 |---|---|---|---|---|
-| F1a `conc.yield_now()` | 1 | **DONE** (0.33.47) | 17 | wraps `vt_yield`; validated two-VT handoff + not-sleep |
-| F1b single-fd `io.poll()` | 1 | **DONE** (0.33.47) | 17 | readiness + timeout + pending-replay validated (TCP loopback) |
+| F1a `conc.yield_now()` | 1 | **DONE / SHIPPING** (0.33.47) | 17 | wraps `vt_yield`; validated two-VT handoff + not-sleep. The only public Phase-1 API. |
+| F1b single-fd `io.poll()` | — | **PULLED — not shipped** (direction change 2026-06-20) | n/a | built+tested, then removed before release (wrong server pattern). Design folded into F3. |
 | F2 `Duration(0)` ops yield | 2 | **DEFERRED** (team asked not to change `Duration(0)` in first cut) | 17 | hold unless requested |
-| F3 multi-fd `poll()` | 3 | **BLOCKED on reactor refactor** | **bump** | reactor lacks per-VT multi-wait cleanup (forget_vt only at vt_destroy) → stale wakes |
+| F3 unified wait-set / `poll_many` | **NEXT** | **DESIGN for review** (`F3-multifd-plan.md`) | **18** | canonical wait-set primitive; single-fd routes through it as N=1; FIRST public readiness API |
 | F4 fair / multi-worker scheduling | 4 | **NOT STARTED** | TBD | report §4.A starvation |
 | F5 executor lifecycle + reactor | 5 | **NOT STARTED** | **bump** | `Executor.shutdown` + custom-executor reactor I/O |
 
 ## Log
+
+### 2026-06-20 — DIRECTION CHANGE: pull public single-fd `io.poll`; F3 wait-set is the first public readiness API
+- Rationale (from product): a public single-fd poll teaches the wrong server pattern
+  (one fd at a time). Nothing is certified/released and users are internal, so we
+  change course now. Phase 1's shipping surface is **`conc.yield_now()` only**.
+- Done:
+  - Kept `conc.yield_now()` (unchanged) + its tests.
+  - **Removed** `std.io.poll` (export + function + `_interest_code`/`_interest_of`/
+    `ERRNO_ETIMEDOUT` helpers) from `stdlib/std/io/io.drift`. Pre-existing error-kind
+    constants left intact. No private stepping-stone kept — the design is preserved
+    in `F3-multifd-plan.md` + git history and re-authored fresh as the wait-set
+    primitive (avoids dead/divergent code).
+  - Removed `test_concurrent_yield_poll.py`; added `test_concurrent_yield_now.py`
+    (yield_now functional + valgrind only). **PASS** (io.drift recompiles clean).
+  - **Kept `TcpListener.raw_fd()`** — the wait-set `PollEntry` is raw-fd based and
+    listener accept-readiness is a core use case; updated its docstring to reference
+    the forthcoming wait-set API instead of the removed `io.poll`.
+- Next phase: **F3 unified wait-set / `poll_many`** as the first public readiness
+  API (design `F3-multifd-plan.md`, ABI 18, review before any runtime code).
+- ABI: still **17** (yield_now only). DRIFTC_VERSION stays 0.33.47 (yield_now is the
+  shipped change).
 
 ### 2026-06-20 — review findings 1/2/3 addressed (still 0.33.47, ABI 17)
 - **F1 (high): `poll(timeout <= 0)` returned immediately instead of parking.**

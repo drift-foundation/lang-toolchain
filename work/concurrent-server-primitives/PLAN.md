@@ -37,65 +37,45 @@ N fds → stale-wake bugs. **Multi-fd is a reactor refactor (F3), not a wrapper.
 
 ## Prioritized features
 
-### F1 — `conc.yield_now()` + single-fd `io.poll()`   [READY NOW · ABI 17 · highest]
-Both over **existing intrinsics only → no new runtime symbols → ABI 17, version bump only.**
-This alone unblocks the team's perf gate.
-
-**F1a `std.concurrent.yield_now() nothrow -> Void`**
+### F1 — `conc.yield_now()`   [SHIPPED · 0.33.47 · ABI 17 · the only public Phase-1 API]
+Over the existing `thread.vt_yield` intrinsic → no new runtime symbols → ABI 17, version bump only.
+This alone unblocks the team's perf gate (replaces the `sleep(1ms)` yield floor).
 ```drift
 pub fn yield_now() nothrow -> Void { thread.vt_yield(); }
 ```
-Off-VT: `vt_yield` already degrades to `sched_yield()`. Export from `std.concurrent`.
+Off-VT: `vt_yield` already degrades to `sched_yield()`. Exported from `std.concurrent`.
+Test: `test_concurrent_yield_now.py` — two-VT handoff + not-1ms-sleep assertion (functional +
+valgrind `--fair-sched=yes`).
 
-**F1b `std.io.poll(fd: Int, interest: IoInterest, timeout: conc.Duration) nothrow -> core.Result<IoInterest, IoError>`**
-Single fd, single direction. Mirrors `_block_on_io`; distinguishes readiness vs timeout:
-- Requires a VT (off-VT → `Err(kind=requires_vthread)`). `interest`→code (Read=1, Write=4).
-  `deadline = millis>0 ? now+millis : 0` (0 = park until ready, no timer).
-- ET replay: `reactor_check_pending(fd,code)!=0` → `Ok(interest)` immediately (before register).
-- Else `reactor_register_io(fd,code,vt,deadline)`, **then re-check `check_pending`**: an edge that
-  arrived in the register window set the pending flag with no waiter; on hit, clear the just-set
-  waiter (`reactor_register_io(fd,code,0,0)`) and return `Ok`. This guard is required because the
-  ET edge won't re-fire — without it a `vt_park(0)` (no-deadline) park would block forever.
-- Park: **positive deadline → `vt_park_until(deadline)`; no deadline (`deadline==0`) → `vt_park(0)`.**
-  (`vt_park_until(0)` returns immediately, so it CANNOT be used for "park until ready".)
-- **After every wake, clear the waiter** (`reactor_register_io(fd,code,0,0)`) before deciding the
-  result — a readiness wake already cleared `read_vt` in the reactor, but a timeout/spurious wake
-  did NOT, and the leftover back-pointer can wrongly wake this VT during a later unrelated wait.
-- Result: `check_pending!=0` → `Ok`; else `deadline!=0 && now>=deadline` → `Err(kind=timeout)`;
-  else (readiness wake — waiter path clears `read_vt`, sets no pending) → `Ok(interest)`.
-  **Conservative-ready is correct** (caller's non-blocking I/O confirms; false-ready → WOULD_BLOCK
-  → re-poll). Must NOT re-park (ET edge already consumed → would hang).
-- **Stale timeout registration is NOT self-healing — it is explicitly cleared** (the post-wake
-  `reactor_register_io(fd,code,0,0)` above). `drift_vt_claim_for_resume` is a bare PARKED→READY CAS
-  with no `wait_id` guard, so a stale `read_vt` can claim a VT parked elsewhere; the explicit clear
-  closes that gap and future-proofs F4 multi-worker. Multi-fd needs per-VT wait-set cleanup → F3.
-
-**F1 tests** (`test_concurrent_yield_poll.py`, TCP loopback; 9 passing): yield_now two-VT
-progress + not-1ms-sleep assertion; poll readiness, timeout (distinct kind), pending-edge replay,
-**no-deadline `Duration(0)` parks-until-ready**, **stale-waiter cleanup harness**, **listener
-accept-readiness** (`TcpListener.raw_fd()` → `poll` → `accept`); memcheck-clean (`--fair-sched=yes`)
-yield_now + poll-readiness. off-VT `requires_vthread` is by-inspection (user code can't run off-VT).
+**Single-fd `io.poll` — PROTOTYPED, NOT SHIPPED (direction change 2026-06-20).** A public
+single-fd `io.poll(fd, interest, timeout)` was built and fully tested on this branch, then **pulled
+before release**: a single-fd readiness call teaches the wrong server pattern (one fd at a time). The
+**first public readiness API will be the unified wait-set / multi-fd `poll_many`** (F3); single-fd
+behavior, if ever exposed, will be a thin wrapper over that one primitive. The single-fd design work
+(ET-replay, `vt_park(0)` for no-deadline, post-wake waiter clear, the epoch/stale-wake analysis) is
+preserved in `F3-multifd-plan.md` and git history, and feeds directly into F3. `TcpListener.raw_fd()`
+is **kept** (wait-set entries are raw-fd based; listener readiness is a core use case).
 
 ### F2 — `Duration(0)` accept/read/write yield on `WOULD_BLOCK`   [OPTIONAL · ABI 17 · low]
 Non-blocking ops that find nothing ready call `vt_yield()` before returning `WOULD_BLOCK`.
 Lower value once F1 lands; the team asked NOT to change `Duration(0)` in the first cut → HOLD
 unless requested. Codegen/stdlib only, ABI 17.
 
-### F3 — multi-fd `poll(entries, timeout)`   [reactor refactor · ABI BUMP · the durable answer]
-`poll(&Array<PollEntry{fd,want_read,want_write}>, timeout) -> Result<Array<PollReady{fd,readable,writable,hangup}>, NetError>`.
-Required runtime work (this is the stale-wake-prone part):
-1. **Per-VT registration set** (intrusive list on `DriftVt`, or per-park epoch token).
-2. **Cleanup on EVERY resume** (any-fd / timeout / cancel), not just destroy — generalize
-   `drift_reactor_forget_vt` to "forget this VT's current wait-set", called from the resume
-   path under `r->mu`.
-3. **Generation/epoch guard**: a delivered unpark checks the VT's current epoch == registration
-   epoch; drop late edges from a prior park episode. Robust defense even if (2) races.
-4. New intrinsics + runtime exports (wait-set register / `reactor_forget_wait_set`) → **ABI bump**.
-5. `PollEntry`/`PollReady` types in `std.io`/`std.net`; `hangup` from `EPOLLERR|EPOLLHUP`.
-
-**F3 tests (must prove cleanup):** N-fd wait → wake on one → immediately wait on a DISJOINT fd →
-old set's later readiness must NOT spuriously wake; timeout with partial readiness; cancel
-mid-multi-wait leaves no stale back-pointer (valgrind + stale-wake assertion). Gate before merge.
+### F3 — unified wait-set / multi-fd `poll_many`   [NEXT · the FIRST public readiness API · ABI 18]
+**This is now the next phase and the first public readiness API** (single-fd poll was pulled — see F1).
+Full design & proof pass: **`F3-multifd-plan.md`**. Summary:
+- Make the **wait-set the canonical runtime wait primitive**; single-fd is N=1 routed through it
+  (no duplicated semantics). Public `poll_many(entries, timeout) -> Result<Array<PollReady>, IoError>`
+  in `std.io` (`PollEntry{fd,want_read,want_write}` / `PollReady{fd,readable,writable,hangup,error}`).
+- Runtime: per-VT wait-set (`io_regs` list) + **per-registration epoch guard** on `DriftVt`;
+  epoch-stamped watch slots; epoch check in BOTH edge-delivery loops drops stale old-episode edges.
+- **Cleanup on EVERY resume path** (readiness / timeout / cancel / spurious via the shared post-park
+  `reactor_wait_clear`; fd-close unparks slot waiters; VT-destroy frees `io_regs`).
+- New intrinsics (`reactor_wait_register`, `vt_wait_epoch_begin`, `reactor_wait_clear`) → **ABI 18**.
+- Gate A compatibility (Phase-1 + net/io e2e unchanged) before/with the refactor; Gate B multi-fd
+  matrix with `@test_build_only` stale-edge-drop / slot-occupancy probes for deterministic race tests.
+- Optionally migrate `_block_on_io` (both copies) onto the same primitive so every socket op shares
+  one wait implementation (risk split in `F3-multifd-plan.md` §6).
 
 ### F4 — multi-worker reactor / fair scheduling   [scheduler work · ABI TBD]
 Stop freshly-spawned/woken VTs starving behind already-ready I/O fibers on the default single
@@ -114,15 +94,16 @@ default (today unreliable). New runtime exports → ABI bump. Sequence last.
 
 | Feature | Surface | New runtime symbols | ABI |
 |---|---|---|---|
-| F1 yield_now + single-fd poll | stdlib over existing intrinsics | no | **17** (version bump only) |
+| F1 yield_now (SHIPPED) | stdlib over existing intrinsic | no | **17** (version bump only) |
 | F2 Duration(0) yields | codegen/stdlib | no | 17 |
-| F3 multi-fd poll | reactor refactor + intrinsics | **yes** | **bump** |
+| F3 unified wait-set / `poll_many` | reactor refactor + intrinsics | **yes** | **18** |
 | F4 fair/multi-worker sched | scheduler | maybe | TBD |
 | F5 executor lifecycle + reactor | runtime | **yes** | **bump** |
 
-If F3/F5 land in the same release as F1, the **release ABI bumps once** (artifacts rebuild
-through cert); F1 alone is ABI 17. Decide the cut line before tagging.
+F1 is ABI 17 (shipped). F3 and F5 each bump the ABI; if they land in the same release the
+**release ABI bumps once** (artifacts rebuild through cert) — prefer bundling F3+F5 to amortize.
 
-**Recommendation:** ship F1 now (unblocks perf gate, ABI 17, low risk); schedule F3 next as a
-focused reactor slice with the stale-wake matrix as its gate; F2/F4/F5 as capacity allows,
-folded into the same release if their ABI bump is acceptable.
+**Recommendation:** F1 (`yield_now`) is done at ABI 17 and unblocks the perf gate now. Next is F3 —
+the unified wait-set as the **first public readiness API** (design in `F3-multifd-plan.md`, ABI 18,
+reviewed before any runtime code). F2/F4/F5 as capacity allows; bundle the ABI-18 work to amortize
+the rebuild.

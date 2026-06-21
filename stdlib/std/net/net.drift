@@ -618,10 +618,10 @@ implement TcpListener {
 
 	/// Returns the raw listening socket file descriptor.
 	///
-	/// Intended for readiness waits — pass it to `io.poll(fd,
-	/// io.IoInterest::Read, ...)` to block until the listener has a pending
-	/// connection to `accept`.  Borrow only: the `TcpListener` retains
-	/// ownership and closes the fd on drop.
+	/// Intended as a wait-set entry for the (forthcoming) multi-fd readiness
+	/// API, so a server event loop can wait for the listener to have a pending
+	/// connection to `accept` alongside its other connection fds.  Borrow only:
+	/// the `TcpListener` retains ownership and closes the fd on drop.
 	pub fn raw_fd(self: &TcpListener) nothrow -> Int {
 		return self.fd;
 	}
