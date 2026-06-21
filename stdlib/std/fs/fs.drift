@@ -197,7 +197,7 @@ pub fn read_dir(path: String, timeout: conc.Duration) nothrow -> core.Result<Arr
 // during the read fails with a distinct `too-large` error rather than being
 // silently truncated or over-allocating.  Does NOT close the file — the caller
 // owns close-error precedence.  `max_bytes` is assumed already validated (>= 0).
-fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> io.Result<Array<Byte>> {
+fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> core.Result<Array<Byte>, io.IoError> {
 	var acc: Array<Byte> = [];
 	var total = 0;
 	var buf = io.buffer(READ_CHUNK_BYTES);
@@ -269,7 +269,7 @@ fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> io.Result<
 /// `std.io` (`file_builder`, `ConfiguredFile.read`).
 ///
 /// **Platform:** POSIX.
-pub fn read_to_bytes(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> io.Result<Array<Byte>> {
+pub fn read_to_bytes(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> core.Result<Array<Byte>, io.IoError> {
 	if max_bytes < 0 {
 		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_ARGUMENT, code = ERRNO_EINVAL));
 	}
@@ -307,7 +307,7 @@ pub fn read_to_bytes(path: String, max_bytes: Int, timeout: conc.Duration) nothr
 /// decode both succeeded.
 ///
 /// **Platform:** POSIX.
-pub fn read_to_string(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> io.Result<String> {
+pub fn read_to_string(path: String, max_bytes: Int, timeout: conc.Duration) nothrow -> core.Result<String, io.IoError> {
 	if max_bytes < 0 {
 		return core.Result::Err(io.IoError(kind = io.IO_ERROR_KIND_INVALID_ARGUMENT, code = ERRNO_EINVAL));
 	}
