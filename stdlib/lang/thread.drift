@@ -35,6 +35,14 @@ export {
 	reactor_register_timer,
 	reactor_check_pending,
 	reactor_io_charge,
+	vt_wait_epoch_begin,
+	reactor_wait_register,
+	reactor_wait_clear,
+	reactor_wait_collect_pending,
+	reactor_wait_park,
+	reactor_stale_epoch_drops,
+	reactor_close_unparks,
+	reactor_park_blocks,
 	test_eventfd_create,
 	test_eventfd_write,
 	test_timerfd_create,
@@ -176,6 +184,28 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn reactor_register_timer(deadline_ms: Int, vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn reactor_check_pending(fd: Int, direction: Int) nothrow -> Int;
 @intrinsic pub fn reactor_io_charge(fd: Int, direction: Int, bytes: Int) nothrow -> Int;
+
+/// F3 wait-set primitives (back `std.io.poll_many` / `_wait_set`).
+/// `vt_wait_epoch_begin` snapshots the VT's wait epoch to stamp the next
+/// wait-set's registrations.  `reactor_wait_register` registers one
+/// `(fd, interest)` under that epoch, returning 0 or an errno (rolling back its
+/// own partial state on failure).  `reactor_wait_clear` ends the episode (bump
+/// epoch, clear slots/timer, free the per-VT list).
+/// `reactor_wait_collect_pending` returns a readiness mask
+/// (1=read 2=write 4=hangup 8=error 16=closed).  Read/write bits are CONSUMED
+/// (cleared on read); hangup/error are STICKY/non-consuming — they are terminal
+/// fd-level conditions that must remain visible to a second waiter on the same fd
+/// (do not reintroduce consuming HUP/ERR).  `reactor_wait_park` parks until
+/// ready/timeout/cancel with NO generic park token (0=woken 1=timeout
+/// 2=cancelled).  The `reactor_*` counters are deterministic test probes.
+@intrinsic pub fn vt_wait_epoch_begin(vt: VtHandle) nothrow -> Int;
+@intrinsic pub fn reactor_wait_register(fd: Int, interest: Int, vt: VtHandle, epoch: Int) nothrow -> Int;
+@intrinsic pub fn reactor_wait_clear(vt: VtHandle) nothrow -> Void;
+@intrinsic pub fn reactor_wait_collect_pending(vt: VtHandle, fd: Int, interest: Int) nothrow -> Int;
+@intrinsic pub fn reactor_wait_park(vt: VtHandle, deadline_ms: Int) nothrow -> Int;
+@intrinsic pub fn reactor_stale_epoch_drops() nothrow -> Int;
+@intrinsic pub fn reactor_close_unparks() nothrow -> Int;
+@intrinsic pub fn reactor_park_blocks() nothrow -> Int;
 @intrinsic pub fn test_eventfd_create() nothrow -> Int;
 @intrinsic pub fn test_eventfd_write(fd: Int, value: Int) nothrow -> Void;
 @intrinsic pub fn test_timerfd_create() nothrow -> Int;

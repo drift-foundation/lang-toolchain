@@ -87,6 +87,16 @@ typedef struct DriftCallbackVTable {
 
 struct DriftRuntimeRegistryEntry;
 
+/* F3 wait-set: one node per (fd, direction) a VT is currently registered on for a
+ * `poll_many`/`_wait_set` episode.  Owned by the VT; mutated only by the VT
+ * (register/clear) except `forget_fd`, which sets `closed` under r->mu. */
+typedef struct DriftIoReg {
+	int fd;
+	uint8_t dir;        /* EPOLLIN / EPOLLOUT bit(s) requested for this fd */
+	uint8_t closed;     /* set by forget_fd: the fd was closed underneath the waiter */
+	struct DriftIoReg *next;
+} DriftIoReg;
+
 typedef struct DriftVt {
 	DriftIface cb;
 	pthread_t thread;
@@ -131,6 +141,13 @@ typedef struct DriftVt {
 	atomic_int_fast64_t state_since_ms; /* monotonic ms at last RUNNING/PARKED transition */
 	atomic_uint_fast64_t carrier_tid;   /* OS tid currently running this VT, 0 if none */
 	atomic_uint_fast64_t last_progress; /* progress counter snapshot at last resume */
+	/* F3 wait-set state.  `wait_epoch` is bumped at the end of every wait episode
+	 * (reactor_wait_clear); each reactor slot/timer is stamped with the epoch it was
+	 * registered under, so a late edge/timer from a prior episode is dropped at the
+	 * claim (it never wakes a VT that has moved on).  `io_regs` is this episode's
+	 * (fd,dir) registration list (NULL when not in a wait-set wait). */
+	atomic_uint_fast64_t wait_epoch;
+	DriftIoReg *io_regs;
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -309,6 +326,8 @@ static void drift_vt_registry_register_cleanup_ctor(void) {
 typedef struct ReactorTimer {
 	int64_t deadline_ms;
 	uint64_t vt;
+	uint64_t epoch;      /* F3: wait_epoch when registered; 0 + wait_set=0 for legacy (sleep/condvar) timers */
+	uint8_t  wait_set;   /* F3: 1 = a poll_many/_wait_set deadline timer (claim-path expiry, no token) */
 	struct ReactorTimer *next;
 } ReactorTimer;
 
@@ -322,8 +341,12 @@ typedef struct ReactorWatch {
 	uint32_t events;          /* kernel interest mask (set once on EPOLL_CTL_ADD) */
 	uint64_t read_vt;         /* VT parked for EPOLLIN, or 0 */
 	uint64_t write_vt;        /* VT parked for EPOLLOUT, or 0 */
+	uint64_t read_epoch;      /* F3: wait_epoch of read_vt at registration (claim gate) */
+	uint64_t write_epoch;     /* F3: wait_epoch of write_vt at registration (claim gate) */
 	uint8_t  pending_read;    /* 1 = fd readable, edge not yet consumed to EAGAIN */
 	uint8_t  pending_write;   /* 1 = fd writable, edge not yet consumed to EAGAIN */
+	uint8_t  pending_hup;     /* F3: EPOLLHUP seen (durable readiness record, I1) */
+	uint8_t  pending_err;     /* F3: EPOLLERR seen */
 	struct ReactorWatch *next;
 } ReactorWatch;
 
@@ -421,15 +444,22 @@ static void drift_reactor_forget_vt(DriftVt *vt) {
 	}
 	ReactorWatch *wc = r->watches;
 	while (wc) {
+		/* Clear only the waiter slot, NOT pending_* (I1: pending is the durable
+		 * edge record and must survive episode/VT death for ET replay by a later
+		 * registration of this fd — matches reactor_wait_clear). */
 		if (wc->read_vt == (uint64_t)vt) {
 			wc->read_vt = 0;
-			wc->pending_read = 0;
 		}
 		if (wc->write_vt == (uint64_t)vt) {
 			wc->write_vt = 0;
-			wc->pending_write = 0;
 		}
 		wc = wc->next;
+	}
+	/* F3: free the VT's wait-set registration list (kill-without-resume backstop). */
+	{
+		DriftIoReg *n = vt->io_regs;
+		while (n) { DriftIoReg *nx = n->next; free(n); n = nx; }
+		vt->io_regs = NULL;
 	}
 	pthread_mutex_unlock(&r->mu);
 #else
@@ -597,6 +627,25 @@ int64_t drift_vt_test_direct_resume_claims(void) {
 	return (int64_t)atomic_load(&drift_test_direct_resume_claims);
 }
 
+/* F3 deterministic-test probes (best-effort counters; exported as intrinsics).
+ * reactor_stale_epoch_drops: edge/timer claims suppressed by the epoch guard (I2).
+ * reactor_close_unparks:     waiters claim+enqueued by forget_fd on fd close. */
+static atomic_long drift_reactor_stale_epoch_drops = 0;
+static atomic_long drift_reactor_close_unparks = 0;
+/* Counts how many times reactor_wait_park actually published PARKED and blocked
+ * (vs returning early from its peek).  Lets a test prove a wait genuinely parked
+ * rather than spinning on a stale pending bit. */
+static atomic_long drift_reactor_park_blocks = 0;
+int64_t drift_reactor_stale_epoch_drops_get(void) {
+	return (int64_t)atomic_load(&drift_reactor_stale_epoch_drops);
+}
+int64_t drift_reactor_close_unparks_get(void) {
+	return (int64_t)atomic_load(&drift_reactor_close_unparks);
+}
+int64_t drift_reactor_park_blocks_get(void) {
+	return (int64_t)atomic_load(&drift_reactor_park_blocks);
+}
+
 /* Test-only (Finding 1, round 11): pause the reactor in the direct-resume path
  * AFTER it has claimed the VT (READY) and the VT has suspended (carrier_tid==0),
  * but BEFORE the READY→RUNNING flip + swapcontext.  Widens the window in which a
@@ -651,6 +700,8 @@ static DriftVt *drift_vt_tls_get(void) {
 #ifdef __linux__
 static ReactorWatch *drift_reactor_find_watch(Reactor *r, int fd);
 static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTimer **out);
+static void drift_reactor_remove_vt_timers(Reactor *r, uint64_t vt);
+static void drift_reactor_fire_timer(Reactor *r, ReactorTimer *t);
 static int64_t drift_now_ms(void);
 #endif
 
@@ -793,55 +844,54 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 					 * short-circuit the VT's next park; see the maria-team
 					 * "sleep(550ms) elapsed=0" reduction, doc/history.md
 					 * 2026-05-16). */
-					if ((ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) && w->read_vt) {
-						DriftVt *rv = (DriftVt *)w->read_vt;
-						w->read_vt = 0;
-						if (drift_vt_claim_for_resume(rv)) {
-							ReactorTimer *tp = NULL;
-							ReactorTimer *tc = r->timers;
-							while (tc) {
-								ReactorTimer *tn = tc->next;
-								if (tc->vt == (uint64_t)rv) {
-									if (tp) tp->next = tn; else r->timers = tn;
-									free(tc);
-								} else { tp = tc; }
-								tc = tn;
+					/* F3: hangup/error are durable, direction-independent (I1). */
+					if (ev & (EPOLLHUP | EPOLLRDHUP)) w->pending_hup = 1;
+					if (ev & EPOLLERR) w->pending_err = 1;
+					if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
+						w->pending_read = 1;   /* I1: durable record, set whether or not we wake */
+						if (w->read_vt) {
+							DriftVt *rv = (DriftVt *)w->read_vt;
+							if (atomic_load(&rv->wait_epoch) == w->read_epoch) {
+								w->read_vt = 0;
+								if (drift_vt_claim_for_resume(rv)) {
+									drift_reactor_remove_vt_timers(r, (uint64_t)rv);
+									direct_vt = rv;
+								}
+							} else {
+								/* I2: stale prior-episode registration — drop the wake,
+								 * keep pending for the next registration of this fd. */
+								w->read_vt = 0;
+								atomic_fetch_add(&drift_reactor_stale_epoch_drops, 1);
 							}
-							direct_vt = rv;
 						}
-					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
-						w->pending_read = 1;
 					}
 					/* Resolve write direction. */
-					if ((ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) && w->write_vt) {
-						DriftVt *wv = (DriftVt *)w->write_vt;
-						w->write_vt = 0;
-						int claimed = 0;
-						if (!direct_vt) {
-							if (drift_vt_claim_for_resume(wv)) {
-								direct_vt = wv;
-								claimed = 1;
-							}
-						} else if (wv != direct_vt) {
-							if (drift_vt_claim_for_resume(wv)) {
-								enqueue_vt = wv;
-								claimed = 1;
+					if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
+						w->pending_write = 1;   /* I1 */
+						if (w->write_vt) {
+							DriftVt *wv = (DriftVt *)w->write_vt;
+							if (atomic_load(&wv->wait_epoch) == w->write_epoch) {
+								w->write_vt = 0;
+								int claimed = 0;
+								if (!direct_vt) {
+									if (drift_vt_claim_for_resume(wv)) {
+										direct_vt = wv;
+										claimed = 1;
+									}
+								} else if (wv != direct_vt) {
+									if (drift_vt_claim_for_resume(wv)) {
+										enqueue_vt = wv;
+										claimed = 1;
+									}
+								}
+								if (claimed) {
+									drift_reactor_remove_vt_timers(r, (uint64_t)wv);
+								}
+							} else {
+								w->write_vt = 0;
+								atomic_fetch_add(&drift_reactor_stale_epoch_drops, 1);
 							}
 						}
-						if (claimed) {
-							ReactorTimer *tp = NULL;
-							ReactorTimer *tc = r->timers;
-							while (tc) {
-								ReactorTimer *tn = tc->next;
-								if (tc->vt == (uint64_t)wv) {
-									if (tp) tp->next = tn; else r->timers = tn;
-									free(tc);
-								} else { tp = tc; }
-								tc = tn;
-							}
-						}
-					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
-						w->pending_write = 1;
 					}
 				}
 				/* Enqueue under r->mu so drift_reactor_forget_vt cannot
@@ -900,9 +950,7 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 		drift_reactor_collect_timers(r, drift_now_ms(), &ready);
 		while (ready) {
 			ReactorTimer *next = ready->next;
-			if (ready->vt != 0) {
-				drift_thread_unpark(ready->vt);
-			}
+			drift_reactor_fire_timer(r, ready);
 			free(ready);
 			ready = next;
 		}
@@ -1156,8 +1204,45 @@ static void drift_reactor_add_timer(Reactor *r, int64_t deadline_ms, uint64_t vt
 	}
 	t->deadline_ms = deadline_ms;
 	t->vt = vt;
+	t->epoch = 0;
+	t->wait_set = 0;
 	t->next = r->timers;
 	r->timers = t;
+}
+
+/* F3: a wait-set deadline timer, stamped with the VT's wait epoch so a late
+ * expiry from a prior episode is dropped, and flagged so expiry uses the
+ * no-token claim path instead of drift_thread_unpark.  Caller holds r->mu. */
+static void drift_reactor_add_wait_timer(Reactor *r, int64_t deadline_ms,
+                                         uint64_t vt, uint64_t epoch) {
+	ReactorTimer *t = (ReactorTimer *)malloc(sizeof(ReactorTimer));
+	if (!t) {
+		return;
+	}
+	t->deadline_ms = deadline_ms;
+	t->vt = vt;
+	t->epoch = epoch;
+	t->wait_set = 1;
+	t->next = r->timers;
+	r->timers = t;
+}
+
+/* Remove (and free) every timer registered for `vt`.  Caller holds r->mu.
+ * Used when a VT is resumed by IO/close so a stale deadline cannot fire into
+ * its next wait episode. */
+static void drift_reactor_remove_vt_timers(Reactor *r, uint64_t vt) {
+	ReactorTimer *tp = NULL;
+	ReactorTimer *tc = r->timers;
+	while (tc) {
+		ReactorTimer *tn = tc->next;
+		if (tc->vt == vt) {
+			if (tp) tp->next = tn; else r->timers = tn;
+			free(tc);
+		} else {
+			tp = tc;
+		}
+		tc = tn;
+	}
 }
 
 static void drift_reactor_collect_timers(Reactor *r, int64_t now_ms, ReactorTimer **out) {
@@ -1299,50 +1384,43 @@ static void *drift_reactor_thread_entry(void *arg) {
 				DriftVt *read_io_vt = NULL;
 				DriftVt *write_io_vt = NULL;
 				if (w) {
+					/* F3: hangup/error are durable, direction-independent (I1). */
+					if (ev & (EPOLLHUP | EPOLLRDHUP)) w->pending_hup = 1;
+					if (ev & EPOLLERR) w->pending_err = 1;
 					/* Resolve read direction. */
-					if ((ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) && w->read_vt) {
-						DriftVt *rv = (DriftVt *)w->read_vt;
-						w->read_vt = 0;
-						uint64_t rv_id = (uint64_t)rv;
-						ReactorTimer *tp = NULL;
-						ReactorTimer *tc = r->timers;
-						while (tc) {
-							ReactorTimer *tn = tc->next;
-							if (tc->vt == rv_id) {
-								if (tp) tp->next = tn; else r->timers = tn;
-								free(tc);
-							} else { tp = tc; }
-							tc = tn;
+					if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
+						w->pending_read = 1;   /* I1: durable record, always set */
+						if (w->read_vt) {
+							DriftVt *rv = (DriftVt *)w->read_vt;
+							if (atomic_load(&rv->wait_epoch) == w->read_epoch) {
+								w->read_vt = 0;
+								drift_reactor_remove_vt_timers(r, (uint64_t)rv);
+								if (drift_vt_claim_for_resume(rv)) {
+									read_io_vt = rv;
+								}
+							} else {
+								/* I2: stale prior-episode reg: drop wake, keep pending. */
+								w->read_vt = 0;
+								atomic_fetch_add(&drift_reactor_stale_epoch_drops, 1);
+							}
 						}
-						/* CAS-claim PARKED->READY (Finding 2): if a timer/cancel
-						 * already claimed it, the CAS loses and we skip — no
-						 * duplicate enqueue. */
-						if (drift_vt_claim_for_resume(rv)) {
-							read_io_vt = rv;
-						}
-					} else if (ev & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
-						w->pending_read = 1;
 					}
 					/* Resolve write direction. */
-					if ((ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) && w->write_vt) {
-						DriftVt *wv = (DriftVt *)w->write_vt;
-						w->write_vt = 0;
-						uint64_t wv_id = (uint64_t)wv;
-						ReactorTimer *tp = NULL;
-						ReactorTimer *tc = r->timers;
-						while (tc) {
-							ReactorTimer *tn = tc->next;
-							if (tc->vt == wv_id) {
-								if (tp) tp->next = tn; else r->timers = tn;
-								free(tc);
-							} else { tp = tc; }
-							tc = tn;
+					if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
+						w->pending_write = 1;   /* I1 */
+						if (w->write_vt) {
+							DriftVt *wv = (DriftVt *)w->write_vt;
+							if (atomic_load(&wv->wait_epoch) == w->write_epoch) {
+								w->write_vt = 0;
+								drift_reactor_remove_vt_timers(r, (uint64_t)wv);
+								if (drift_vt_claim_for_resume(wv)) {
+									write_io_vt = wv;
+								}
+							} else {
+								w->write_vt = 0;
+								atomic_fetch_add(&drift_reactor_stale_epoch_drops, 1);
+							}
 						}
-						if (drift_vt_claim_for_resume(wv)) {
-							write_io_vt = wv;
-						}
-					} else if (ev & (EPOLLOUT | EPOLLERR | EPOLLHUP)) {
-						w->pending_write = 1;
 					}
 				}
 				/* Enqueue resolved VTs under r->mu so drift_reactor_forget_vt
@@ -1375,9 +1453,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 		drift_reactor_collect_timers(r, drift_now_ms(), &ready);
 		while (ready) {
 			ReactorTimer *next = ready->next;
-			if (ready->vt != 0) {
-				drift_thread_unpark(ready->vt);
-			}
+			drift_reactor_fire_timer(r, ready);
 			free(ready);
 			ready = next;
 		}
@@ -1809,6 +1885,8 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	lv_set_u(&vt->carrier_tid, 0);
 	lv_set_u(&vt->last_progress, 0);
+	atomic_store(&vt->wait_epoch, 0);
+	vt->io_regs = NULL;
 	drift_vt_registry_add(vt);
 	return (uint64_t)vt;
 }
@@ -2275,6 +2353,234 @@ void drift_thread_unpark(uint64_t vt) {
 	atomic_store(&h->park_token, 1);
 	pthread_cond_signal(&h->cv);
 	pthread_mutex_unlock(&h->mu);
+}
+
+/* ===== F3 wait-set intrinsics (poll_many / _wait_set) ============================
+ * Readiness mask bits returned by drift_reactor_wait_collect_pending:
+ *   1=READABLE 2=WRITABLE 4=HANGUP 8=ERROR 16=CLOSED(no watch / closed-underneath).
+ * Reason codes returned by drift_reactor_wait_park: 0=WOKEN 1=TIMEOUT 2=CANCELLED. */
+
+/* Snapshot the VT's current wait epoch to stamp the next wait-set's registrations.
+ * Does NOT bump (the bump is in reactor_wait_clear at episode end). */
+uint64_t drift_vt_wait_epoch_begin(uint64_t vt) {
+	if (vt == 0) return 0;
+	return (uint64_t)atomic_load(&((DriftVt *)vt)->wait_epoch);
+}
+
+/* Fire one expired timer.  Caller holds r->mu.  A wait-set timer uses the no-token
+ * claim path (state CAS + enqueue) and is dropped if its episode has moved on
+ * (epoch mismatch); a legacy timer uses the generic unpark. */
+static void drift_reactor_fire_timer(Reactor *r, ReactorTimer *t) {
+	if (t->vt == 0) return;
+	if (!t->wait_set) {
+		drift_thread_unpark(t->vt);
+		return;
+	}
+#ifdef __linux__
+	DriftVt *h = (DriftVt *)t->vt;
+	if ((uint64_t)atomic_load(&h->wait_epoch) != t->epoch) return;   /* stale episode */
+	int expected = DRIFT_VT_PARKED;
+	if (atomic_compare_exchange_strong(&h->state, &expected, DRIFT_VT_READY)) {
+		lv_set_t(&h->state_since_ms, drift_now_ms());
+		if (h->exec) {
+			pthread_mutex_lock(&h->exec->mu);
+			drift_exec_enqueue(h->exec, h);
+			pthread_mutex_unlock(&h->exec->mu);
+		}
+	}
+	/* not PARKED: the VT will re-derive TIMEOUT itself; deposit no token. */
+	(void)r;
+#else
+	(void)r;
+#endif
+}
+
+/* Register one (fd, interest) for an epoch.  Returns 0 on success, else errno.
+ * Rolls back its own partial watch/node on epoll_ctl(ADD) / OOM failure so a
+ * failed register leaves the reactor exactly as before. */
+int64_t drift_reactor_wait_register(uint64_t fd, uint64_t interest,
+                                    uint64_t vt, uint64_t epoch) {
+#ifdef __linux__
+	if (vt == 0) return EINVAL;
+	DriftVt *h = (DriftVt *)vt;
+	int st = atomic_load(&h->state);
+	if (st == DRIFT_VT_FINISHED || st == DRIFT_VT_CANCELLED) return ECANCELED;
+	Reactor *r = (Reactor *)drift_reactor_default_get();
+	if (!r) return EINVAL;
+	pthread_mutex_lock(&r->mu);
+	ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
+	int created = 0;
+	if (!w) {
+		w = (ReactorWatch *)malloc(sizeof(ReactorWatch));
+		if (!w) { pthread_mutex_unlock(&r->mu); return ENOMEM; }
+		w->fd = (int)fd; w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+		w->read_vt = 0; w->write_vt = 0; w->read_epoch = 0; w->write_epoch = 0;
+		w->pending_read = 0; w->pending_write = 0; w->pending_hup = 0; w->pending_err = 0;
+		w->next = r->watches; r->watches = w; created = 1;
+		if (r->epoll_fd >= 0) {
+			struct epoll_event ev;
+			ev.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+			ev.data.fd = (int)fd;
+			if (epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) {
+				int e = errno ? errno : EBADF;
+				r->watches = w->next; free(w);   /* rollback: no partial watch */
+				pthread_mutex_unlock(&r->mu);
+				return e;
+			}
+		}
+	}
+	DriftIoReg *node = (DriftIoReg *)malloc(sizeof(DriftIoReg));
+	if (!node) {
+		if (created) {
+			if (r->epoll_fd >= 0) epoll_ctl(r->epoll_fd, EPOLL_CTL_DEL, (int)fd, NULL);
+			r->watches = w->next; free(w);
+		}
+		pthread_mutex_unlock(&r->mu);
+		return ENOMEM;
+	}
+	if ((uint32_t)interest & EPOLLIN)  { w->read_vt = vt;  w->read_epoch = epoch; }
+	if ((uint32_t)interest & EPOLLOUT) { w->write_vt = vt; w->write_epoch = epoch; }
+	node->fd = (int)fd; node->dir = (uint8_t)interest; node->closed = 0;
+	node->next = h->io_regs; h->io_regs = node;
+	pthread_mutex_unlock(&r->mu);
+	return 0;
+#else
+	(void)fd; (void)interest; (void)vt; (void)epoch; return EINVAL;
+#endif
+}
+
+/* End-of-episode cleanup: bump epoch (invalidates all current slots/timers), then
+ * under r->mu remove the VT's wait-set timer, clear its watch slots, free io_regs. */
+void drift_reactor_wait_clear(uint64_t vt) {
+	if (vt == 0) return;
+	DriftVt *h = (DriftVt *)vt;
+	atomic_fetch_add(&h->wait_epoch, 1);
+#ifdef __linux__
+	Reactor *r = (Reactor *)drift_reactor_default_get();
+	if (r) {
+		pthread_mutex_lock(&r->mu);
+		drift_reactor_remove_vt_timers(r, vt);
+		for (ReactorWatch *w = r->watches; w; w = w->next) {
+			if (w->read_vt == vt)  w->read_vt = 0;
+			if (w->write_vt == vt) w->write_vt = 0;
+		}
+		DriftIoReg *n = h->io_regs;
+		while (n) { DriftIoReg *nx = n->next; free(n); n = nx; }
+		h->io_regs = NULL;
+		pthread_mutex_unlock(&r->mu);
+		return;
+	}
+#endif
+	{ DriftIoReg *n = h->io_regs; while (n) { DriftIoReg *nx = n->next; free(n); n = nx; } h->io_regs = NULL; }
+}
+
+/* Consume and return the readiness mask for fd (see bit legend above).  Trusts the
+ * calling VT's own io_regs node: a closed-underneath fd is terminal regardless of a
+ * watch a reused fd-number may now carry. */
+int64_t drift_reactor_wait_collect_pending(uint64_t vt, uint64_t fd, uint64_t interest) {
+#ifdef __linux__
+	Reactor *r = (Reactor *)drift_reactor_default_get();
+	if (!r) return 16;
+	int mask = 0;
+	pthread_mutex_lock(&r->mu);
+	if (vt) {
+		for (DriftIoReg *n = ((DriftVt *)vt)->io_regs; n; n = n->next) {
+			if (n->fd == (int)fd) { if (n->closed) { pthread_mutex_unlock(&r->mu); return 4 | 16; } break; }
+		}
+	}
+	ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
+	if (!w) { pthread_mutex_unlock(&r->mu); return 16; }
+	if (((uint32_t)interest & EPOLLIN) && w->pending_read)   { mask |= 1; w->pending_read = 0; }
+	if (((uint32_t)interest & EPOLLOUT) && w->pending_write) { mask |= 2; w->pending_write = 0; }
+	/* HUP/ERR are terminal, fd-level conditions — report NON-consumingly so a
+	 * second waiter (e.g. the write-side VT on the same fd) cannot miss them.
+	 * They are sticky until the fd is closed (forget_fd frees the watch). */
+	if (w->pending_hup) { mask |= 4; }
+	if (w->pending_err) { mask |= 8; }
+	pthread_mutex_unlock(&r->mu);
+	return mask;
+#else
+	(void)vt; (void)fd; (void)interest; return 16;
+#endif
+}
+
+#ifdef __linux__
+/* Peek (non-consuming) whether any of the VT's registrations are ready/closed.
+ * Caller holds r->mu. */
+static int drift_wait_any_ready(Reactor *r, DriftVt *h) {
+	for (DriftIoReg *n = h->io_regs; n; n = n->next) {
+		if (n->closed) return 1;
+		ReactorWatch *w = drift_reactor_find_watch(r, n->fd);
+		if (w && (((n->dir & EPOLLIN) && w->pending_read) ||
+		          ((n->dir & EPOLLOUT) && w->pending_write) ||
+		          w->pending_hup || w->pending_err))
+			return 1;
+	}
+	return 0;
+}
+#endif
+
+/* Park the VT until any registration is ready, the deadline passes, or it is
+ * cancelled — with NO generic park_token (issue 1).  Owns the deadline timer.
+ * Returns 0=WOKEN 1=TIMEOUT 2=CANCELLED. */
+int64_t drift_reactor_wait_park(uint64_t vt, int64_t deadline_ms) {
+#ifdef __linux__
+	DriftVt *h = (DriftVt *)vt;
+	if (!h) return 0;
+	Reactor *r = (Reactor *)drift_reactor_default_get();
+	if (!r || !drift_sched_ctx) return 0;   /* no cooperative scheduler: treat as WOKEN */
+	pthread_mutex_lock(&r->mu);
+	if (drift_wait_any_ready(r, h))                 { pthread_mutex_unlock(&r->mu); return 0; }
+	if (atomic_load(&h->cancelled))                 { pthread_mutex_unlock(&r->mu); return 2; }
+	if (deadline_ms > 0 && drift_now_ms() >= deadline_ms) { pthread_mutex_unlock(&r->mu); return 1; }
+	if (deadline_ms > 0)
+		drift_reactor_add_wait_timer(r, deadline_ms, vt, (uint64_t)atomic_load(&h->wait_epoch));
+	lv_set_i(&h->wait_kind, DRIFT_WAIT_IO);
+	lv_set_t(&h->state_since_ms, drift_now_ms());
+	atomic_store(&h->state, DRIFT_VT_PARKED);       /* publish PARKED under r->mu */
+	pthread_mutex_unlock(&r->mu);
+	/* Cancel race (no-token park): drift_thread_cancel sets cancelled=1 THEN
+	 * unparks; if that landed while we were RUNNING (between the under-mu cancelled
+	 * check and this PARKED publish) it may have only set a park_token, which the
+	 * wait-set path ignores.  Re-check cancelled and reclaim our own PARKED state
+	 * so we return CANCELLED instead of sleeping.  If the CAS loses, a resumer
+	 * already claimed us (READY + enqueued) -> fall through; the swapcontext
+	 * returns immediately and we re-derive CANCELLED below. */
+	if (atomic_load(&h->cancelled)) {
+		int ce = DRIFT_VT_PARKED;
+		if (atomic_compare_exchange_strong(&h->state, &ce, DRIFT_VT_RUNNING)) {
+			pthread_mutex_lock(&r->mu);
+			drift_reactor_remove_vt_timers(r, vt);
+			pthread_mutex_unlock(&r->mu);
+			/* The cancelling unpark may have latched a park_token (RUNNING-window
+			 * path).  Clear it so it cannot short-circuit this VT's next generic
+			 * park — same discipline as drift_thread_unpark when it enqueues. */
+			atomic_store(&h->park_token, 0);
+			lv_set_i(&h->wait_kind, DRIFT_WAIT_NONE);
+			return 2;   /* CANCELLED */
+		}
+	}
+	atomic_fetch_add(&drift_reactor_park_blocks, 1); /* proof we actually parked (test probe) */
+	drift_reactor_wake(r);                           /* let the poller pick up the new deadline */
+	if (drift_valgrind_mode)
+		swapcontext(&h->ctx_uc, drift_sched_ctx_uc);
+	else
+		drift_swapcontext(&h->ctx, drift_sched_ctx);
+	atomic_store(&h->state, DRIFT_VT_RUNNING);
+	h->io_bytes_since_yield = 0;
+	lv_set_i(&h->wait_kind, DRIFT_WAIT_NONE);
+	int64_t reason;
+	pthread_mutex_lock(&r->mu);
+	drift_reactor_remove_vt_timers(r, vt);
+	if (atomic_load(&h->cancelled))            reason = 2;
+	else if (drift_wait_any_ready(r, h))       reason = 0;
+	else if (deadline_ms > 0 && drift_now_ms() >= deadline_ms) reason = 1;
+	else                                       reason = 0;   /* spurious -> WOKEN, loop re-collects */
+	pthread_mutex_unlock(&r->mu);
+	return reason;
+#else
+	(void)vt; (void)deadline_ms; return 0;
+#endif
 }
 
 uint64_t drift_exec_default_get(void) {
@@ -2798,6 +3104,28 @@ void drift_reactor_forget_fd(int fd) {
 	ReactorWatch *cur = r->watches;
 	while (cur) {
 		if (cur->fd == fd) {
+			/* F3: wake any waiter on this fd WHILE HOLDING r->mu (the lifetime
+			 * barrier — drift_vt_destroy->forget_vt also takes r->mu, so the VT
+			 * cannot be freed under us).  Mark the waiter's own io_regs node
+			 * `closed` (terminal, reuse-safe) and claim+enqueue it — no token. */
+			uint64_t waiters[2]; int nw = 0;
+			if (cur->read_vt) waiters[nw++] = cur->read_vt;
+			if (cur->write_vt && cur->write_vt != cur->read_vt) waiters[nw++] = cur->write_vt;
+			for (int i = 0; i < nw; i++) {
+				DriftVt *v = (DriftVt *)waiters[i];
+				for (DriftIoReg *n = v->io_regs; n; n = n->next)
+					if (n->fd == fd) { n->closed = 1; break; }
+				int expected = DRIFT_VT_PARKED;
+				if (atomic_compare_exchange_strong(&v->state, &expected, DRIFT_VT_READY)) {
+					lv_set_t(&v->state_since_ms, drift_now_ms());
+					if (v->exec) {
+						pthread_mutex_lock(&v->exec->mu);
+						drift_exec_enqueue(v->exec, v);
+						pthread_mutex_unlock(&v->exec->mu);
+					}
+				}
+				atomic_fetch_add(&drift_reactor_close_unparks, 1);
+			}
 			if (prev) prev->next = cur->next;
 			else r->watches = cur->next;
 			/* Clear all per-direction state before free. */
@@ -2812,6 +3140,7 @@ void drift_reactor_forget_fd(int fd) {
 		cur = cur->next;
 	}
 	pthread_mutex_unlock(&r->mu);
+	drift_reactor_wake(r);
 }
 
 void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint64_t deadline_ms) {
@@ -2841,11 +3170,15 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 			return;
 		}
 		w->fd = (int)fd;
-		w->events = EPOLLET | EPOLLIN | EPOLLOUT;
+		w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		w->read_vt = 0;
 		w->write_vt = 0;
+		w->read_epoch = 0;
+		w->write_epoch = 0;
 		w->pending_read = 0;
 		w->pending_write = 0;
+		w->pending_hup = 0;
+		w->pending_err = 0;
 		w->next = r->watches;
 		r->watches = w;
 	}
@@ -2860,7 +3193,7 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 	 * No hot-path epoll_ctl on subsequent calls. */
 	if (!existed && r->epoll_fd >= 0) {
 		struct epoll_event ev;
-		ev.events = EPOLLET | EPOLLIN | EPOLLOUT;
+		ev.events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		ev.data.fd = (int)fd;
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, (int)fd, &ev);
 	}

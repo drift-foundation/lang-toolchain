@@ -158,13 +158,34 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	if vt == 0 {
 		return;
 	}
-	// ET replay: if an edge is pending for this direction (budget yield
-	// or spurious event while no waiter), skip park and retry IO.
-	if thread.reactor_check_pending(fd, interest) != 0 {
+	// F3: one-entry wait-set, SAME loop shape as poll_many (N=1, result
+	// discarded).  Collect (CONSUMING the pending bit) before/after each park so a
+	// caller that drains to EAGAIN and re-enters cannot spin on a stale pending
+	// bit.  reactor_wait_park peeks pending under r->mu before publishing PARKED,
+	// closing the register->park lost-wake window.  Caller retries the I/O.
+	val epoch = thread.vt_wait_epoch_begin(vt);
+	val st = thread.reactor_wait_register(fd, interest, vt, epoch);
+	if st != 0 {
+		thread.reactor_wait_clear(vt);
 		return;
 	}
-	thread.reactor_register_io(fd, interest, vt, deadline_ms);
-	thread.vt_park_until(deadline_ms);
+	var done = false;
+	while not done {
+		val mask = thread.reactor_wait_collect_pending(vt, fd, interest);
+		if mask != 0 {
+			done = true;
+		} else if thread.now_ms() >= deadline_ms {
+			done = true;
+		} else if thread.vt_is_cancelled() != 0 {
+			done = true;
+		} else {
+			val rc = thread.reactor_wait_park(vt, deadline_ms);
+			if rc == 2 {
+				done = true;
+			}
+		}
+	}
+	thread.reactor_wait_clear(vt);
 	return;
 }
 

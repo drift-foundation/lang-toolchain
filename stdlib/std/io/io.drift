@@ -59,6 +59,9 @@ export {
 	configured_input_from_file,
 	configure_file,
 	file_builder,
+	PollEntry,
+	PollReady,
+	poll_many,
 	IO_ERR_WOULD_BLOCK,
 	IO_ERR_EOF,
 	IO_ERR_LINE_TOO_LONG,
@@ -755,14 +758,194 @@ fn _block_on_io(fd: Int, interest: Int, deadline_ms: Int) nothrow -> Void {
 	if vt == 0 {
 		return;
 	}
-	// ET replay: if an edge is pending for this direction (budget yield
-	// or spurious event while no waiter), skip park and retry IO.
-	if thread.reactor_check_pending(fd, interest) != 0 {
+	// F3: one-entry wait-set, SAME loop shape as poll_many (N=1, result
+	// discarded).  We collect (CONSUMING the pending bit) before/after each park
+	// so a caller that drains to EAGAIN and re-enters cannot see a stale pending
+	// bit and spin.  reactor_wait_park peeks pending under r->mu before publishing
+	// PARKED, closing the register->park lost-wake window the no-token edge path
+	// would otherwise leave.  The caller retries the actual I/O on return.
+	val epoch = thread.vt_wait_epoch_begin(vt);
+	val st = thread.reactor_wait_register(fd, interest, vt, epoch);
+	if st != 0 {
+		thread.reactor_wait_clear(vt);
 		return;
 	}
-	thread.reactor_register_io(fd, interest, vt, deadline_ms);
-	thread.vt_park_until(deadline_ms);
+	var done = false;
+	while not done {
+		val mask = thread.reactor_wait_collect_pending(vt, fd, interest);
+		if mask != 0 {
+			done = true;
+		} else if thread.now_ms() >= deadline_ms {
+			done = true;
+		} else if thread.vt_is_cancelled() != 0 {
+			done = true;
+		} else {
+			val rc = thread.reactor_wait_park(vt, deadline_ms);
+			if rc == 2 {
+				done = true;
+			}
+		}
+	}
+	thread.reactor_wait_clear(vt);
 	return;
+}
+
+// ===== F3 multi-fd readiness: poll_many / wait-set =============================
+
+// ETIMEDOUT errno carried in IoError.code on the poll_many timeout path.
+const _POLL_ETIMEDOUT: Int = 110;
+// Reactor direction codes (EPOLLIN / EPOLLOUT) and readiness-mask bits.
+const _POLL_IN: Int = 1;
+const _POLL_OUT: Int = 4;
+
+// Combine two reactor interest values (each in {0,1,4,5}) without bitwise ops
+// (Drift bitwise requires Uint; these are small Int direction codes).
+fn _poll_ior(a: Int, b: Int) nothrow -> Int {
+	var v = 0;
+	if (a % 2 == 1) or (b % 2 == 1) { v = v + _POLL_IN; }
+	if (a >= _POLL_OUT) or (b >= _POLL_OUT) { v = v + _POLL_OUT; }
+	return v;
+}
+
+// Is `place`'s bit set in readiness mask `m`? (place in {1,2,4,8,16}.)
+fn _poll_bit(m: Int, place: Int) nothrow -> Bool {
+	return (m / place) % 2 == 1;
+}
+
+/// One fd + requested directions for `poll_many`.
+pub struct PollEntry {
+	pub fd: Int,
+	pub want_read: Bool,
+	pub want_write: Bool
+}
+
+/// The readiness reported for one fd by `poll_many`.  `hangup`/`error` are
+/// surfaced regardless of the requested directions; a fd closed underneath the
+/// waiter is reported as `hangup`.
+pub struct PollReady {
+	pub fd: Int,
+	pub readable: Bool,
+	pub writable: Bool,
+	pub hangup: Bool,
+	pub err: Bool
+}
+
+/// Waits until at least one of `entries`' fds is ready (for its requested
+/// direction), `timeout` elapses, or the calling virtual thread is cancelled.
+/// The canonical multi-fd readiness primitive for event-loop servers.
+///
+/// **Parameters:**
+/// - `entries` — fds to wait on; duplicates (same fd) are coalesced. Obtain fds
+///   from `TcpStream.raw_fd()` / `TcpListener.raw_fd()`.
+/// - `timeout` — `millis > 0` bounds the wait; `millis <= 0` parks until ready.
+///
+/// **Returns:**
+/// - `Ok(Array<PollReady>)` — one `PollReady` per fd that is ready (only ready
+///   fds are included). Always follow with the actual non-blocking op; a
+///   `WOULD_BLOCK` from it means "spurious — call `poll_many` again".
+/// - `Err(kind = "timeout")` when `timeout` elapsed first.
+/// - `Err(kind = "invalid-argument")` for an empty list or an unregistrable fd
+///   (closed/invalid); registration failure is terminal, never a hang.
+/// - `Err(kind = "requires_vthread")` off the VT runtime.
+/// - `Err(kind = "cancelled")` if the VT was cancelled while waiting.
+///
+/// **Precedence:** cancellation > readiness > timeout.
+/// **Platform:** POSIX (epoll).
+pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> core.Result<Array<PollReady>, IoError> {
+	val vt = thread.vt_current();
+	if vt == 0 {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
+	}
+	val n = entries.len();
+	if n == 0 {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = -1));
+	}
+	// Coalesce per fd into parallel fds/interests arrays.
+	var fds: Array<Int> = [];
+	var ints: Array<Int> = [];
+	var i = 0;
+	while i < n {
+		var iv = 0;
+		if entries[i].want_read { iv = iv + _POLL_IN; }
+		if entries[i].want_write { iv = iv + _POLL_OUT; }
+		// A zero-interest entry (neither read nor write) has no useful contract —
+		// it would wait only for hangup/error or timeout and can hang with no
+		// deadline.  Reject the whole call before registering anything.
+		if iv == 0 {
+			return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = -1));
+		}
+		val fd = entries[i].fd;
+		var found = 0 - 1;
+		var k = 0;
+		val fc = fds.len();
+		while k < fc {
+			if fds[k] == fd { found = k; }
+			k = k + 1;
+		}
+		if found >= 0 {
+			ints[found] = _poll_ior(ints[found], iv);
+		} else {
+			fds.push(fd);
+			ints.push(iv);
+		}
+		i = i + 1;
+	}
+	val cnt = fds.len();
+	val epoch = thread.vt_wait_epoch_begin(vt);
+	// Register each fd; on failure roll back all prior registrations and fail.
+	var r = 0;
+	while r < cnt {
+		val st = thread.reactor_wait_register(fds[r], ints[r], vt, epoch);
+		if st != 0 {
+			thread.reactor_wait_clear(vt);
+			return core.Result::Err(IoError(kind = IO_ERROR_KIND_INVALID_ARGUMENT, code = st));
+		}
+		r = r + 1;
+	}
+	var deadline_ms = 0;
+	if timeout.millis > 0 {
+		deadline_ms = thread.now_ms() + timeout.millis;
+	}
+	var ready: Array<PollReady> = [];
+	var outcome = 0 - 1;   // -1 = loop, 0 = ready, 1 = timeout, 2 = cancelled
+	while outcome < 0 {
+		if thread.vt_is_cancelled() != 0 {
+			outcome = 2;
+		} else {
+			var any = false;
+			var j = 0;
+			while j < cnt {
+				val m = thread.reactor_wait_collect_pending(vt, fds[j], ints[j]);
+				if m != 0 {
+					ready.push(PollReady(
+						fd = fds[j],
+						readable = _poll_bit(m, 1),
+						writable = _poll_bit(m, 2),
+						hangup = _poll_bit(m, 4) or _poll_bit(m, 16),
+						err = _poll_bit(m, 8)
+					));
+					any = true;
+				}
+				j = j + 1;
+			}
+			if any {
+				outcome = 0;
+			} else if deadline_ms != 0 and thread.now_ms() >= deadline_ms {
+				outcome = 1;
+			} else {
+				val rc = thread.reactor_wait_park(vt, deadline_ms);
+				if rc == 2 { outcome = 2; }
+			}
+		}
+	}
+	thread.reactor_wait_clear(vt);
+	if outcome == 2 {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_CANCELLED, code = -3));
+	}
+	if outcome == 1 {
+		return core.Result::Err(IoError(kind = IO_ERROR_KIND_TIMEOUT, code = _POLL_ETIMEDOUT));
+	}
+	return core.Result::Ok(move ready);
 }
 
 fn _park_main_thread_io(remaining: Int) nothrow -> Void {

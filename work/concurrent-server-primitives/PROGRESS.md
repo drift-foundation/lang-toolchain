@@ -11,11 +11,195 @@ prioritized design (F1…F5).
 | F1a `conc.yield_now()` | 1 | **DONE / SHIPPING** (0.33.47) | 17 | wraps `vt_yield`; validated two-VT handoff + not-sleep. The only public Phase-1 API. |
 | F1b single-fd `io.poll()` | — | **PULLED — not shipped** (direction change 2026-06-20) | n/a | built+tested, then removed before release (wrong server pattern). Design folded into F3. |
 | F2 `Duration(0)` ops yield | 2 | **DEFERRED** (team asked not to change `Duration(0)` in first cut) | 17 | hold unless requested |
-| F3 unified wait-set / `poll_many` | **NEXT** | **DESIGN for review** (`F3-multifd-plan.md`) | **18** | canonical wait-set primitive; single-fd routes through it as N=1; FIRST public readiness API |
+| F3 unified wait-set / `poll_many` | **IMPLEMENTED** | runtime+stdlib+`_block_on_io` migration DONE; full Gate A e2e + Gate B valgrind pending | **18** | `io.poll_many` shipping; both `_block_on_io` copies migrated to the wait-set; Gate B **10/10** functional + net/io & concurrency regression green |
 | F4 fair / multi-worker scheduling | 4 | **NOT STARTED** | TBD | report §4.A starvation |
 | F5 executor lifecycle + reactor | 5 | **NOT STARTED** | **bump** | `Executor.shutdown` + custom-executor reactor I/O |
 
 ## Log
+
+### 2026-06-21 — F3 review round 3: cancel self-reclaim stale park_token (fixed)
+- **High (stale token):** `reactor_wait_park`'s cancel self-reclaim (PARKED→RUNNING →
+  return CANCELLED) didn't clear `park_token` that the cancelling unpark may have
+  latched in the RUNNING window. **Fixed:** `atomic_store(&h->park_token, 0)` in the
+  self-reclaim branch (same discipline as `drift_thread_unpark` when it enqueues).
+- **Test note:** the fix is correct hygiene but NOT behaviorally observable via Drift
+  APIs — a cancelled VT's `cancelled` flag already short-circuits every subsequent
+  park (its `conc.sleep` aborts via cancellation; `join()` returns Err so the
+  duration isn't retrievable). Empirically confirmed (join→Err). The requested
+  "cancel-then-sleep, assert not early" test conflicts with cancellation semantics
+  (a cancelled sleep SHOULD abort), so no discriminating regression is constructible;
+  fix verified by inspection. Cancel correctness (no hang) stays covered by
+  `test_poll_many_cancel_no_hang`. Gate B **10/10**.
+
+### 2026-06-21 — F3 review round 2: cancel lost-wake + forget_vt pending + doc (fixed + validated)
+- **High (cancel lost-wake):** `drift_thread_cancel` sets cancelled=1 then
+  `drift_thread_unpark`, which can only set a park_token (ignored by the no-token
+  wait-set park) if the VT is RUNNING in the cancelled-check→PARKED-publish window →
+  VT could sleep to timeout. **Fixed:** `reactor_wait_park` re-checks `cancelled`
+  AFTER publishing PARKED and reclaims its own PARKED→RUNNING (returns CANCELLED) or,
+  if a resumer already claimed it, falls through to an immediate resume. Test
+  `test_poll_many_cancel_no_hang` — 20× spawn/cancel/join on a no-deadline poll
+  (half racing the park), asserts no hang. **PASS.**
+- **Medium (forget_vt pending):** `forget_vt` no longer clears `pending_read/_write`
+  when removing a VT's slots — pending is durable (I1) and must survive VT/episode
+  death for ET replay, matching `reactor_wait_clear`.
+- **Low (doc):** `reactor_wait_collect_pending` intrinsic doc now states read/write
+  are consumed but HUP/ERR are sticky/non-consuming (don't reintroduce consuming).
+- **Validated:** `test_poll_many.py` **10/10 functional** (incl. cancel); cancel/
+  vt-destroy/registry/conc/net regression **48 passed, 1 skipped**.
+
+### 2026-06-21 — F3 `_block_on_io` migration + 2 review corrections (done + validated)
+Migrated BOTH `_block_on_io` copies (io.drift, net.drift) to the shared wait-set;
+fixed 2 review blockers; added EPOLLRDHUP.
+- **Migration:** `_block_on_io` now uses the poll_many loop shape (N=1, result
+  discarded): register → loop{ collect_pending (CONSUMING) → break if ready/timeout/
+  cancel → reactor_wait_park } → clear. Closes the register→park lost-wake window the
+  no-token edge path introduced.
+- **Correction 1 (busy-spin):** the first migration only peeked (reactor_wait_park
+  doesn't consume) → a drained-to-EAGAIN retry could spin on stale pending. Fixed by
+  consuming via `reactor_wait_collect_pending` in the loop. New probe
+  `reactor_park_blocks` + test `test_block_on_io_no_stale_pending_spin` (asserts the
+  2nd read actually PARKED, not spun) — deterministic.
+- **Correction 2 (HUP/ERR consumption):** made `pending_hup`/`pending_err`
+  **non-consuming/sticky** in collect (terminal fd conditions; a 2nd same-fd waiter
+  can't miss them). Added **EPOLLRDHUP** to watch masks + edge delivery so peer
+  half-close surfaces as hangup. Test `test_poll_many_hup_non_consuming` (sticky
+  across two polls).
+- **Zero-interest rejection:** poll_many rejects an entry with neither read nor write
+  → `Err(invalid-argument)` before registering (no hang). Test (finite + no-deadline).
+- **Validated:** `test_poll_many.py` **9/9 functional pass**; full net/io +
+  concurrency/VT/reactor regression through the migrated `_block_on_io` **57 passed,
+  1 skipped**.
+- **Remaining:** Gate B valgrind; full Gate A e2e suite (~1h); optional cancel +
+  stale-epoch-probe tests. Perf note: migrated `_block_on_io` does 1 malloc (io_regs
+  node) per IO wait — flagged for the hot path.
+
+### 2026-06-20 — F3 IMPLEMENTATION (code) — runtime + stdlib + Gate B working; migration/Gate-A pending
+Design cleared; implemented per guardrails. ABI 17→18, DRIFTC_VERSION 0.33.47→0.33.48.
+- **Runtime C** (`posix/thread_runtime.c`): DriftIoReg + DriftVt.{wait_epoch,io_regs};
+  ReactorWatch.{read_epoch,write_epoch,pending_hup,pending_err}; ReactorTimer.{epoch,
+  wait_set}. Both edge-delivery loops: always-set-pending (I1) + epoch-gated claim (I2)
+  + timer removal on wake + stale-epoch-drop probe. W7 timer-expiry uses no-token claim
+  path for wait-set timers (`fire_timer`). `forget_fd`: claim+enqueue waiters UNDER
+  r->mu + set io_regs.closed (lifetime-safe, reuse-safe). `forget_vt`: free io_regs.
+  5 intrinsics: vt_wait_epoch_begin, reactor_wait_register (status+rollback),
+  reactor_wait_clear, reactor_wait_collect_pending (mask), reactor_wait_park
+  (peek+timer+publish-PARKED, no token, re-derive reason). Probes:
+  reactor_stale_epoch_drops, reactor_close_unparks. Compiles clean.
+- **Codegen** (`llvm_codegen.py`): declares + lowering for all 7. **thread.drift**:
+  @intrinsic decls + exports.
+- **stdlib** (`std.io`): PollEntry/PollReady (pub fields), `poll_many` driver loop
+  (coalesce, register+rollback→Err, collect mask, precedence cancel>ready>timeout,
+  reactor_wait_clear on every exit). Exported. (No bitwise on Int — arithmetic helpers.)
+- **Verified end-to-end:** intrinsic smoke (rc=0); `poll_many` TCP readiness (rc=0);
+  Gate B `test_poll_many.py` — **6/6 functional PASS**: invalid-fd finite-timeout (fast
+  Err, not timeout), invalid-fd no-deadline (no hang), empty-list, multi-fd readiness
+  (only ready fd), **timeout-leaves-no-token** (sleep after timeout takes full time),
+  peer-close→hangup.
+- **Regression validated:** Gate A net/io driver subset **16 passed**; concurrency/VT/
+  reactor/timer/cancel/executor/futures core **41 passed, 1 skipped** — the
+  edge-delivery (always-set-pending) + W7-timer + park-core changes did NOT break
+  existing IO or the scheduler. `PollReady.err` named `err` (`error` is reserved).
+- **PENDING (final phase):** `_block_on_io` migration to 1-entry `_wait_set` (guardrail
+  step 4 — primitive tests now pass); full Gate A e2e suite (~1h); Gate B valgrind +
+  cancel + stale-epoch-probe tests.
+
+### 2026-06-20 — F3 design refinement #4 (no code) — registration-failure path + minor, awaiting re-review
+Re-review accepted the park protocol / timer ownership / cancel precedence / forget_fd
+redesign; flagged one High registration-path gap + 2 minor. Fixed in `F3-multifd-plan.md`:
+- **High (invalid-fd silent hang) — FIXED.** `reactor_wait_register` now **returns a
+  status** (0 / `epoll_ctl(ADD)` errno) and **rolls back its own partial watch/node on
+  failure** — no orphan watch with no epoll registration (§1.3). `_wait_set` checks the
+  status per entry: on failure it **`reactor_wait_clear`s all already-registered entries
+  and returns `Err(invalid_argument)` BEFORE any park** (§1.4), so
+  `poll_many([bad_fd], no_deadline)` returns immediately instead of hanging. Policy
+  (§2): registration failure = terminal Err for the whole call (rejected per-fd hangup —
+  kept distinct from the "closed-while-waiting ⇒ hangup" path of §3.1). Gate-B tests
+  added: #9 invalid-fd+finite-timeout → Err immediately (not timeout), #10 invalid-fd+
+  no-deadline → no hang, #11 mixed one-bad-fd → all rolled back (`vt_io_reg_count==0`,
+  `reactor_active_slots==0`); old stress test renumbered #12.
+- **Minor — FIXED.** §1.3 `reactor_wait_clear` bullet now states it removes the wait-set
+  timer (matches the §1.4 loop comment); removed a redundant duplicate bullet.
+  `reactor_close_unparks` wording already "claim/enqueue under r->mu" (kept).
+- ABI 18 list updated (`reactor_wait_register` returns status). Still no runtime code.
+
+### 2026-06-20 — F3 design refinement #3 (no code) — 2 park-protocol gaps + medium, awaiting re-review
+Re-review confirmed the prior 3 fixes; flagged 2 High park-protocol gaps + 1 medium.
+All addressed in `F3-multifd-plan.md` (design-only):
+- **Gap 1 (timeout token) — FIXED.** `reactor_wait_park` now **owns the deadline
+  timer**: peek pending/closed/cancelled + register epoch-stamped timer + publish
+  `state=PARKED` all in ONE `r->mu` critical section. **Timer expiry uses the same
+  wait-set claim path** (state CAS on a PARKED VT, no `drift_thread_unpark`, no token),
+  and every wake (IO/cancel/spurious/timeout) removes the timer so no late timer wakes
+  the next episode (timer also epoch-stamped as belt-and-braces). `reactor_wait_register`
+  no longer takes/registers a deadline — single timer authority (§1.3/§1.6).
+- **Gap 2 (ignored park reason) — FIXED.** `_wait_set` loop now handles
+  `reactor_wait_park`'s `rc` explicitly with documented **precedence
+  cancellation > readiness > timeout**: cancel tested first each iteration +
+  `rc==CANCELLED` breaks immediately (no post-collect); `rc==TIMEOUT` does one final
+  collect (readiness racing the deadline wins); `rc==WOKEN` loops (§1.4). Added Gate-B
+  tests 3 (2nd park after timeout must not return early — proves no token), 3b
+  (readiness-at-deadline wins), 4b (cancel beats readiness).
+- **Medium — FIXED.** `reactor_close_unparks` reworded to "claimed+enqueued under
+  `r->mu`" (not token); removed the duplicate Gate-B test #1.
+- Still no runtime code; ABI projected 18.
+
+### 2026-06-20 — F3 design refinement #2 (no code) — 3 review blockers fixed, awaiting re-review
+Reviewer found 2 blocking + 1 medium issue in the refined plan; all addressed in
+`F3-multifd-plan.md` (still design-only):
+- **Issue 1 (stale wake-token) — REDESIGNED, no token.** The "deposit a generic
+  `park_token` on claim-fail" was unsafe (a terminal-READY collect can leave the
+  token to short-circuit the next unrelated park — the exact class the runtime warns
+  about). Replaced with a **no-token peek-park protocol** (`reactor_wait_park`, §1.6):
+  under `r->mu` it peeks `pending`/`cancelled`, else publishes `state=PARKED` *inside
+  the same `r->mu` hold*; edge delivery claims ONLY an already-PARKED VT. Full
+  no-lost-wake / no-stale-token proof (the mutex=`r->mu`, condition=`pending`,
+  futureword=`state` handshake).
+- **Issue 2 (forget_fd VT lifetime) — REDESIGNED.** Old draft captured the waiter
+  under `r->mu`, freed the watch, unlocked, then unparked — losing the lifetime
+  barrier (`forget_vt` could free the VT after the slot is gone). Now `forget_fd`
+  **claims+enqueues the waiter UNDER `r->mu`** (the existing dispatch barrier;
+  `forget_vt` is blocked on `r->mu`, can't free), sets the VT's `io_regs` node
+  `closed` (durable terminal signal that also defeats fd-number reuse), then frees the
+  watch. Nothing dereferences a VT after unlock (§3.1).
+- **Medium (collection shape) — PINNED.** New intrinsic
+  `reactor_wait_collect_pending(fd, interest) -> Int` mask
+  (READABLE/WRITABLE/HANGUP/ERROR/CLOSED), consuming, under `r->mu` (§1.4a); replaces
+  boolean `reactor_check_pending` on the wait-set path.
+- Side effects: added `io_regs.closed` field (§1.1); cancellation must wake a
+  wait-set-parked VT via the reactor claim path (not the generic token) to interop
+  with `reactor_wait_park` (§3); ABI-18 intrinsic list updated (+`reactor_wait_park`,
+  +`reactor_wait_collect_pending`); 2 new reviewer questions (new park intrinsic;
+  cancel-via-claim obligation). Swept the doc for stale token/`vt_park*` references.
+- Still no runtime code; ABI projected 18.
+
+### 2026-06-20 — F3 design refinement pass (no code) — areas 1–6 tightened, awaiting review
+Refined `F3-multifd-plan.md` per reviewer's 6 asks; runtime code still NOT started.
+- **Ready handoff (area 2) — decided: pending flags (I1).** The crux: edge delivery
+  today zeroes `read_vt` and direct-resumes WITHOUT setting pending, so a readiness
+  *reporter* (which doesn't drain the fd) can't tell which fd fired. Fix: **two
+  invariants** — I1 pending is the durable, epoch-INDEPENDENT readiness record (edge
+  delivery ALWAYS sets it, even on the wake path); I2 the epoch gates only the WAKE
+  (claim), never the data. Rejected per-VT ready buffer (dup of pending) and
+  conservative-ready (can't say which fd for N>1).
+- **Ordering proof (area 1):** 5-window state machine (before/during park, after-wake-
+  before-collect, during collect, during/after clear) — proven no legitimate event is
+  lost (deferred to next wait via ET-replay at worst), no spurious wake delivered.
+  Key fixes vs the prior draft: **collect BEFORE clear** (so `io_regs` still populated)
+  and **collect-before-park loop** with **token-on-claim-fail** to close the
+  collect/park lost-wake gap. Replaces the now-wrong "clear then check_pending".
+- **Cleanup (area 3):** timeout/spurious/cancel all clean via the post-loop
+  `reactor_wait_clear`; **cancellation backstop** = extended `forget_vt` frees
+  `io_regs` for the scheduler's kill-at-dispatch (no post-park code) case.
+- **fd close (area 4):** `forget_fd` token-unparks slot waiters (deferred, never
+  direct-resume); waiter's collect sees "registered fd with no watch ⇒ `hangup`";
+  reuse-safe via DEL+free; UAF-free via `r->mu` serialization (full argument in §3.1).
+- **Migration (area 5) — decided: one slice.** Ready handoff is solved, so both
+  `_block_on_io` copies migrate to 1-entry `_wait_set` in the same slice; full net/io
+  e2e is the equivalence gate. Step-1/Step-2 split kept only as a fallback.
+- **Determinism probes (area 6):** `reactor_stale_epoch_drops`, `reactor_active_slots`,
+  `vt_io_reg_count`, `reactor_close_unparks` (`@test_build_only`) + a C-level epoch unit.
+- ABI still projected **18**; no runtime code until this is reviewed.
 
 ### 2026-06-20 — DIRECTION CHANGE: pull public single-fd `io.poll`; F3 wait-set is the first public readiness API
 - Rationale (from product): a public single-fd poll teaches the wrong server pattern

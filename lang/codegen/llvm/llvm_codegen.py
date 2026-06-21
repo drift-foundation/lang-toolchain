@@ -1475,6 +1475,14 @@ class LlvmModuleBuilder:
 					f"declare void @drift_reactor_register_timer({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_check_pending({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_vt_wait_epoch_begin({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_wait_register({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_reactor_wait_clear({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_wait_collect_pending({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_wait_park({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_stale_epoch_drops_get()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_close_unparks_get()",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_park_blocks_get()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_open({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_close({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_read({self._llty(DRIFT_INT_TYPE)}, ptr, {self._llty(DRIFT_INT_TYPE)})",
@@ -4531,6 +4539,45 @@ class _FuncBuilder:
 				else:
 					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_reactor_io_charge({self._llty(DRIFT_INT_TYPE)} {fd_val}, {self._llty(DRIFT_INT_TYPE)} {dir_val}, {self._llty(DRIFT_INT_TYPE)} {bytes_val})")
 					self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			# F3 wait-set intrinsics.
+			_f3_int_intrinsics = {
+				"vt_wait_epoch_begin": ("drift_vt_wait_epoch_begin", 1, "vweb"),
+				"reactor_wait_register": ("drift_reactor_wait_register", 4, "rwr"),
+				"reactor_wait_collect_pending": ("drift_reactor_wait_collect_pending", 3, "rwcp"),
+				"reactor_wait_park": ("drift_reactor_wait_park", 2, "rwp"),
+				"reactor_stale_epoch_drops": ("drift_reactor_stale_epoch_drops_get", 0, "rsed"),
+				"reactor_close_unparks": ("drift_reactor_close_unparks_get", 0, "rcu"),
+				"reactor_park_blocks": ("drift_reactor_park_blocks_get", 0, "rpb"),
+			}
+			if instr.fn_id.name in _f3_int_intrinsics:
+				sym, argc, hint = _f3_int_intrinsics[instr.fn_id.name]
+				if len(instr.args) != argc:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} expects {argc} args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} result must be captured")
+				self.module.needs_thread_runtime = True
+				it = self._llty(DRIFT_INT_TYPE)
+				argvals = [self._map_value(a) for a in instr.args]
+				arglist = ", ".join(f"{it} {v}" for v in argvals)
+				if instr.can_throw:
+					raw = self._fresh(f"{hint}_raw")
+					self.lines.append(f"  {raw} = call {it} @{sym}({arglist})")
+					self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint=f"{hint}_ok")
+				else:
+					self.lines.append(f"  {dest} = call {it} @{sym}({arglist})")
+					self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "reactor_wait_clear":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: reactor_wait_clear expects 1 arg, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_reactor_wait_clear({self._llty(DRIFT_INT_TYPE)} {vt_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="rwc_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: reactor_wait_clear returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "test_eventfd_create":
 				if len(instr.args) != 0:
