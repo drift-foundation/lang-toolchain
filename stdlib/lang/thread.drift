@@ -53,6 +53,7 @@ export {
 	io_write,
 	io_errno,
 	io_set_nonblocking,
+	net_peek_readable,
 	fs_read_dir,
 	fs_result_status,
 	fs_result_errno,
@@ -216,6 +217,11 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn io_write(fd: Int, buf: mem.Ptr<Byte>, len: Int) nothrow -> Int;
 @intrinsic pub fn io_errno() nothrow -> Int;
 @intrinsic pub fn io_set_nonblocking(fd: Int) nothrow -> Int;
+/// Non-consuming readability confirmation (recv MSG_PEEK): 1 = data available,
+/// 0 = EOF/peer shutdown, -1 = WOULD_BLOCK (stale/replayed read hint), -2 = not a
+/// peekable connected socket (listener/pipe) or error — caller must trust the hint.
+/// Used by io.poll_many to suppress stale readable without breaking accept().
+@intrinsic pub fn net_peek_readable(fd: Int) nothrow -> Int;
 // std.fs.read_dir, offloaded to the shared blocking-syscall pool so the
 // directory walk never blocks a VT carrier.  `fs_read_dir` submits one job and
 // parks the VT; `deadline_ms` is an ABSOLUTE monotonic-ms deadline (0 = none).

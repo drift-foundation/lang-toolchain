@@ -20,6 +20,105 @@ Power-loss recovery point. Newest on top. See `PLAN.md`.
 
 ## Log
 
+### 2026-06-22 (cont.) — review fixes on the peek-confirm RC
+1. **Surface honesty — DECIDED (reviewer):** keep `net_peek_readable` as a `lang.thread`
+   internal intrinsic; do NOT move the peek into `reactor_wait_collect_pending` (that
+   would put a socket syscall under the reactor mutex and broaden it to internal wait
+   paths — wrong trade for a non-app-facing surface). `lang.thread` is already
+   toolchain plumbing (`io_read`/`io_write`/`reactor_wait_*`). Documented honestly as
+   NEW toolchain-plumbing surface — NOT "no new public API." (No app-facing `std.*` API
+   shape change; `poll_many` stays one API.)
+2. **Exact-length gate now actually exact:** `test_poll_many_exact_length_read_no_stale
+   _readable` uses `io.buffer(8)` and asserts `n == 8` (was buffer(64)/any n>0), so the
+   socket is provably drained before the not-readable assertion.
+3. **Docs reworded** to the peek-confirm behavior: `readable` is CONFIRMED at return
+   (kernel peek) → a read will make progress / EOF / error, not WOULD_BLOCK (absent a
+   race). Sharpened the apparent contradiction: a hint is CONSUMED when surfaced (drain
+   after a surfaced readable; partial-read + re-poll won't re-surface the remainder),
+   but buffered data behind an UN-surfaced latched hint (framed exact-length read) IS
+   reported (peek confirms) — which is why more_buffered_than_read holds. Removed the
+   reverted reconcile-guarantee wording.
+- All 3 gate/control tests green after the fixes.
+
+### 2026-06-22 (cont.) — source-side fix REJECTED; surface peek-confirm is the fix (0.33.52)
+- **MariaDB team's catch (correct):** exact-length framed reads are the DOMINANT
+  pattern (read header, read exactly payload_len, STOP — never EAGAIN). User-space
+  byte accounting CANNOT tell "drained to empty" from "more still buffered" — only the
+  kernel can. So the source-side `io_charge` clear:
+  - PASSES the exact-length-drained gate, but
+  - **FAILS the dual** (read N, M still buffered → poll_many must stay readable) →
+    silent hang, STRICTLY WORSE than the loud recycle. **Empirically confirmed:** with
+    the io_charge clear, test 1 passed, `test_poll_many_more_buffered_than_read_still
+    _readable` FAILED rc=3.
+- **REVERTED** the `io_charge` reconcile (back to set-on-overflow only) and removed the
+  `io_reconcile_pending` helper + C-test Part B.
+- **FIX = surface-time kernel re-confirmation.** `poll_many`, before surfacing a
+  `readable` hint, calls the new `drift_net_peek_readable` (recv `MSG_PEEK |
+  MSG_DONTWAIT`): `-1` EAGAIN → suppress (stale/replayed); `>=0` data/EOF → keep;
+  `-2` not-a-peekable-socket (listener/pipe) → trust the hint (preserves accept()).
+  Durable pending stays; the kernel is the source of truth. New intrinsic
+  `net_peek_readable` (runtime + thread.drift + codegen via `_f3_int_intrinsics`).
+- **Both RC gates now pass:** `test_poll_many_exact_length_read_no_stale_readable`
+  (drained → not readable) AND `test_poll_many_more_buffered_than_read_still_readable`
+  (remainder → readable + recoverable). Positive controls added
+  (`test_poll_many_peek_confirm_positive_controls`: listener accept via the -2
+  carve-out; peer-close → readable + EOF).
+- Contract reworded earlier (no-stale-latch + confirm-with-op) stands; `_block_on_io`
+  needs no peek (its own `io_read` is the confirmation). DRIFTC_VERSION → **0.33.52**.
+- **Mishap + recovery:** a stray `git checkout llvm_codegen.py` (in a debug one-liner)
+  reverted that file to HEAD (8cece373), discarding the uncommitted net_peek codegen
+  only (all other files intact). Re-added net_peek via the proven `_f3_int_intrinsics`
+  table; verified end-to-end (minimal compile + both gates green).
+
+### 2026-06-22 — 0.33.50 RC FAILED at MariaDB; corrected root cause + real fix (0.33.51)
+- **0.33.50 RC did NOT fix the incident.** MariaDB rerun: same ~7–10% phase-2
+  spurious recycle, byte-identical signature (`[KA] ready tok=4 r=1 h=0 e=0` then
+  3× single-fd reprobe TIMEOUT). **The generation guard was necessary-but-insufficient
+  — NOT the fix for this incident.** 0.33.50 is a failed RC; do not certify.
+- **Corrected root cause (the team's lead, confirmed in code):** a **latched
+  `pending_read` bit**. During a conn's lease the response edge sets `pending_read=1`
+  (I1, durable); the protocol read drains the socket via direct `io_read` but, because
+  it reads an exact length and never observes EAGAIN, never routes through
+  `_block_on_io`'s `check_pending`/`collect` — so the cached bit is never cleared.
+  The conn returns to `available` idle with `pending_read=1` stuck on its watch; the
+  keepalive's aggregate `poll_many` `collect` surfaces it → false-positive readable →
+  recycle. (The single-fd reprobe TIMEOUTs because the aggregate `collect` already
+  consumed the stale bit.) Generation/fd-reuse was a red herring for THIS incident.
+- **Missing invariant (per direction #4):** readiness consumed by direct I/O must not
+  later be reported as fresh wait-set readiness.
+- **Fix:** `drift_reactor_io_charge` (called after every successful `io_read`/
+  `io_write`) now reconciles the cached pending bit via
+  `drift_reactor_io_reconcile_pending`: normal/under-budget → **CLEAR** the
+  direction's bit (reader caught up; a genuine later edge re-sets it; the active
+  reader never relies on the bit — it reads the socket buffer directly); over-budget
+  fairness path → still SET (the yielding reader must re-poll to finish draining).
+  Runtime-only, ABI 18, DRIFTC_VERSION **0.33.50→0.33.51**.
+- **Regression (direction #3):** C whitebox Part B in `reactor_stale_fd_event_test.c`
+  — latch `pending_read`, run the reconcile (drain), assert `collect_pending` reports
+  NOT-ready; over-budget re-arms; write direction independent. **Discrimination
+  verified** (force never-clear → assertion aborts).
+- **Generation guard kept** (independent latent-bug fix; Part A C test; no regressions)
+  but explicitly no longer billed as the incident fix.
+- Full net/io/conc regression after the io_charge fix: **62 passed, 1 skipped**.
+- **Contract clarified (intentional).** The current `poll_many` doc already PERMITS a
+  transient spurious `readable` (`io.drift`: "WOULD_BLOCK after a readiness report is
+  normal — just re-poll"). So two distinct issues:
+  (1) **Consumer:** the pool recycling on a bare `r=1 h=0 e=0` without a confirming
+      non-blocking read is too strict under that contract — a MariaDB-client fix.
+  (2) **Runtime quality:** an *indefinite* stale-`readable` latch on a drained idle fd
+      is beyond "conservative edge replay" — the defect the io_charge fix removes.
+  Tightened the contract with an explicit **no-stale-latch reconciliation guarantee**
+  (no *persistent* re-report of already-consumed readiness; transient edge-replay
+  still permitted, confirm-with-the-op still required). This makes the runtime-quality
+  invariant intentional and gateable.
+- **Gate:** the C whitebox Part B (`reactor_stale_fd_event_test.c`) IS the deterministic
+  gate for the no-stale-latch guarantee (drain → reconcile → collect reports NOT-ready;
+  discrimination verified). The forthcoming DB-free repro's hard-fail criterion should
+  be "a fully-read idle fd reports NOT readable" (valid under the tightened contract),
+  NOT "aggregate-readable + reprobe-timeout" alone (which the base contract permits).
+- PENDING: wire the MariaDB toolchain-parametric repro into the gate when delivered;
+  MariaDB-client confirming-read fix (issue 1) tracked on their side.
+
 ### 2026-06-21 — review round 3 follow-ups (hygiene)
 - Fixed stale comment in `test_poll_many.py` (stress companion now points to the C
   whitebox pin `reactor_stale_fd_event_test.c`, not the removed Drift test).

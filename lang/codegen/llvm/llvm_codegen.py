@@ -1489,6 +1489,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_write({self._llty(DRIFT_INT_TYPE)}, ptr, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_errno()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_io_set_nonblocking({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_peek_readable({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_read_dir({DRIFT_STRING_TYPE}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_status({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_fs_result_errno({self._llty(DRIFT_INT_TYPE)})",
@@ -4549,6 +4550,7 @@ class _FuncBuilder:
 				"reactor_stale_epoch_drops": ("drift_reactor_stale_epoch_drops_get", 0, "rsed"),
 				"reactor_close_unparks": ("drift_reactor_close_unparks_get", 0, "rcu"),
 				"reactor_park_blocks": ("drift_reactor_park_blocks_get", 0, "rpb"),
+				"net_peek_readable": ("drift_net_peek_readable", 1, "npk"),
 			}
 			if instr.fn_id.name in _f3_int_intrinsics:
 				sym, argc, hint = _f3_int_intrinsics[instr.fn_id.name]

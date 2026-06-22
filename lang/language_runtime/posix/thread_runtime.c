@@ -3302,7 +3302,13 @@ int64_t drift_reactor_check_pending(int64_t fd, int64_t direction) {
  * If the budget is exceeded, sets pending-ready on the watch,
  * re-enqueues the VT, and yields to the scheduler (swapcontext).
  * Returns 1 if a yield occurred, 0 otherwise.
- * Called from stdlib after each successful io_read/io_write. */
+ * Called from stdlib after each successful io_read/io_write.
+ *
+ * NOTE: this does NOT clear pending on a normal read.  User-space byte accounting
+ * cannot tell "drained to empty" from "more still buffered" — only the kernel can —
+ * so clearing here would strand a framed reader's buffered remainder (silent hang).
+ * Stale-readable suppression is done at poll_many surface time via a non-consuming
+ * kernel re-confirmation (see io.poll_many). */
 int64_t drift_reactor_io_charge(int64_t fd, int64_t direction, int64_t bytes) {
 #ifdef __linux__
 	DriftVt *vt = drift_vt_tls_get();
@@ -3923,6 +3929,34 @@ static int64_t drift_connect_to_addr(struct sockaddr_storage *sa, socklen_t addr
 		return -1;
 	}
 	return fd;
+}
+
+/* Non-consuming readability confirmation for a stream socket
+ * (recv MSG_PEEK | MSG_DONTWAIT).  Lets poll_many distinguish a real read hint from
+ * a stale/replayed one WITHOUT consuming bytes, and WITHOUT the user-space
+ * accounting ambiguity (it asks the kernel directly).  Returns:
+ *    1  = data is available to read now (peeked, not consumed)
+ *    0  = orderly peer shutdown observable now (EOF)
+ *   -1  = no data right now (EAGAIN/EWOULDBLOCK) — a stale/replayed read hint
+ *   -2  = not a peekable connected socket (listener/pipe/eventfd) or socket error;
+ *         caller MUST trust the original hint (do not suppress) so accept()-style
+ *         readiness is preserved.
+ * EINTR is retried. */
+int64_t drift_net_peek_readable(int64_t fd) {
+#ifdef __linux__
+	char b;
+	for (;;) {
+		ssize_t n = recv((int)fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+		if (n > 0) return 1;
+		if (n == 0) return 0;
+		int e = errno;
+		if (e == EINTR) continue;
+		if (e == EAGAIN || e == EWOULDBLOCK) return -1;
+		return -2;   /* ENOTCONN/ENOTSOCK/EINVAL (listener, pipe, ...) or real error */
+	}
+#else
+	(void)fd; return -2;
+#endif
 }
 
 int64_t drift_net_connect(DriftString *ip, int64_t port, int64_t deadline_ms) {

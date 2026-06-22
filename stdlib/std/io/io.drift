@@ -858,23 +858,32 @@ pub struct PollReady {
 /// - `Err(kind = "requires_vthread")` off the VT runtime.
 /// - `Err(kind = "cancelled")` if the VT was cancelled while waiting.
 ///
-/// **Operational contract — readiness is EDGE-backed (edge-triggered epoll), not a
-/// level signal. You MUST drain each ready direction fully or you may not be woken
-/// again for the data already buffered:**
-/// - On `readable`: **read repeatedly until `WOULD_BLOCK`** (or EOF, or error). Data
-///   larger than one read buffer arrives across **multiple reads on a SINGLE readiness
-///   event** — a partial read does NOT get a second wake for the bytes still sitting
-///   in the socket buffer (the edge already fired). If you stop early for an
-///   application fairness cap (N bytes / M reads) **before** `WOULD_BLOCK`, you MUST
-///   record the fd as still-ready in your OWN state and resume draining it on a later
-///   service pass. **Do NOT re-`poll_many` expecting a fresh wake for the
-///   already-buffered bytes** — it will not come.
-/// - On `writable`: **write repeatedly until `WOULD_BLOCK`** or your output is empty.
-///   A partial write does not get another `writable` wake for the remainder; if you
-///   stop early for a fairness cap, keep the fd in your OWN writable queue and resume
-///   on a later pass rather than waiting for `poll_many`.
-/// - `WOULD_BLOCK` from the actual op after a readiness report is normal (a
-///   conservative/edge replay) — just re-`poll_many`.
+/// **Operational contract.** A `readable` report is **CONFIRMED at return time**:
+/// before surfacing a cached read hint, `poll_many` re-checks the socket with a
+/// non-consuming kernel peek. So `readable == true` means a non-blocking read
+/// attempted now will **make progress** — return data, return EOF (`0`), or return a
+/// real error — it will NOT return `WOULD_BLOCK`. (A `WOULD_BLOCK` is still possible
+/// only if another owner drained the fd between this return and your read: a rare
+/// race, not an ordinary replay you must design around. A drained, healthy, idle fd
+/// is reported NOT `readable` — the peek suppresses a stale read hint with no data.)
+///
+/// Readiness is EDGE-backed underneath, and a cached hint is **consumed when
+/// `poll_many` surfaces it**.  Two consequences that look contradictory but are not:
+/// - **After a surfaced `readable`, drain to `WOULD_BLOCK`.** Data larger than one
+///   read buffer arrives across multiple reads on a SINGLE surfaced event. Once
+///   `poll_many` has reported `readable` for an fd, a partial read followed by an
+///   immediate re-`poll_many` will NOT re-surface the still-buffered remainder until a
+///   NEW edge (more bytes / EOF / close): that hint was spent. Drain fully, or record
+///   the fd as still-ready in your OWN state and resume on a later pass.
+/// - **Buffered data behind an UN-surfaced hint IS reported.** If you did direct I/O
+///   while a read hint was latched but not yet surfaced by a `poll_many` `readable`
+///   (e.g. a framed reader that read exactly `payload_len` and stopped without hitting
+///   `WOULD_BLOCK`), and bytes remain buffered, the next `poll_many` reports
+///   `readable` — the peek confirms the buffered bytes. (This is why reading exactly N
+///   of N+M leaves the fd `readable` for the remaining M.)
+/// - On `writable`: **write until `WOULD_BLOCK`** or your output is empty; same
+///   one-shot-per-edge semantics for the remainder. (Writability is not peek-confirmed
+///   — confirm it by attempting the write.)
 /// - `hangup`/`err` are **sticky terminal fd conditions**: once reported they remain
 ///   reported on every subsequent `poll_many` for that fd until you close it. Stop
 ///   reading/writing and close the fd.
@@ -955,15 +964,32 @@ pub fn poll_many(entries: &Array<PollEntry>, timeout: conc.Duration) nothrow -> 
 			while j < cnt {
 				val m = thread.reactor_wait_collect_pending(vt, fds[j], ints[j]);
 				if m != 0 {
-					ready.push(PollReady(
-						fd = fds[j],
-						token = toks[j],
-						readable = _poll_bit(m, 1),
-						writable = _poll_bit(m, 2),
-						hangup = _poll_bit(m, 4) or _poll_bit(m, 16),
-						err = _poll_bit(m, 8)
-					));
-					any = true;
+					var rdbl = _poll_bit(m, 1);
+					// Confirm a `readable` hint against the kernel with a non-consuming peek
+					// before surfacing it.  User-space byte accounting cannot tell "drained to
+					// empty" from "more still buffered" — only the kernel can — so a framed
+					// reader that read exactly payload_len leaves a latched read hint we must
+					// re-confirm.  -1 = WOULD_BLOCK (stale/replayed -> suppress); >= 0 = real
+					// data or EOF (keep); -2 = not a peekable socket, e.g. a listener (trust
+					// the hint so accept() readiness is preserved).
+					if rdbl {
+						val pk = thread.net_peek_readable(fds[j]);
+						if pk == (0 - 1) { rdbl = false; }
+					}
+					val wrbl = _poll_bit(m, 2);
+					val hup = _poll_bit(m, 4) or _poll_bit(m, 16);
+					val er = _poll_bit(m, 8);
+					if rdbl or wrbl or hup or er {
+						ready.push(PollReady(
+							fd = fds[j],
+							token = toks[j],
+							readable = rdbl,
+							writable = wrbl,
+							hangup = hup,
+							err = er
+						));
+						any = true;
+					}
 				}
 				j = j + 1;
 			}

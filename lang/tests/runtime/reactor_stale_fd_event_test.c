@@ -5,10 +5,14 @@
  * is compiled into the packaged/certified toolchain, and the runtime exposes NO
  * Drift-visible test hooks — the production surface is `poll_many` behaviour only.
  *
- * It pins the core of the fix: an epoll event payload `data.u64 = (gen<<32)|fd` is
- * resolved to the current watch ONLY when the generation matches; a stale event for
- * a closed-then-reused fd number (generation mismatch) is dropped, so no pending
- * bits are ever set and no VT is woken for it.
+ * Pins the generation guard: an epoll event payload `data.u64 = (gen<<32)|fd`
+ * resolves to the current watch ONLY when the generation matches; a stale event for
+ * a closed-then-reused fd number is dropped (no pending set, no VT woken).
+ *
+ * (The MariaDB keepalive incident — a latched read hint surviving an exact-length
+ * read — is gated separately, end-to-end, by the std.net driver tests
+ * test_poll_many_exact_length_read_no_stale_readable and
+ * test_poll_many_more_buffered_than_read_still_readable.)
  *
  * Built and run by lang/tests/driver/test_reactor_stale_fd_event.py.
  */

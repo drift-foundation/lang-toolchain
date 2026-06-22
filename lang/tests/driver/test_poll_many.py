@@ -422,6 +422,257 @@ def test_partial_drain_single_wake(tmp_path: Path) -> None:
 	assert rc == 0, f"partial-drain single-wake (rc={rc}; 8=did-not-drain-all,5=poll-Err)"
 
 
+def test_poll_many_exact_length_read_no_stale_readable(tmp_path: Path) -> None:
+	# THE INCIDENT GATE (DB-free, std.net only). Reproduces the residual-pending_read
+	# latch deterministically: register the fd in the reactor, let an edge latch
+	# pending_read, then read EXACTLY the bytes (no EAGAIN drain) — the protocol-exact
+	# read that left the bit stuck. A healthy, drained, idle fd must then report
+	# NOT readable. Pre-fix (io_charge does not reconcile on a direct read) -> stale
+	# readable -> FAIL. Exit: 0 ok, 1 setup, 2 read did not deliver the bytes,
+	# 3 STALE readable on a drained idle fd (the bug).
+	src = """\
+module main;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+
+fn connector(port: Int) nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(cs) => {
+			val _w = conc.sleep(conc.Duration(millis = 60));   // send AFTER main registers the fd
+			var b = io.buffer(8); io.buffer_write_string(&mut b, &"ABCDEFGH"); io.buffer_set_len(&mut b, 8);
+			val _s = cs.write(&b, t);
+			val _h = conc.sleep(conc.Duration(millis = 2000));  // stay open + silent
+			val _c = cs.close(t); return 0;
+		}
+	}
+}
+
+fn readable1(fd: Int, ms: Int) nothrow -> Bool {
+	var es: Array<io.PollEntry> = [];
+	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
+	match io.poll_many(&es, conc.Duration(millis = ms)) {
+		core.Result::Ok(rd) => { return rd.len() >= 1 and rd[0].readable; },
+		core.Result::Err(e) => { return false; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(lis) => {
+			val port = lis.local_port();
+			var cvt = conc.spawn(| | captures(move port) => { return connector(port); });
+			var rc = 1;
+			match net.accept(&lis, t) {
+				core.Result::Err(e) => { rc = 1; },
+				core.Result::Ok(ss) => {
+					val fd = ss.raw_fd();
+					// 1. Register fd in the reactor (epoll ADD) with no data yet -> times out.
+					val _r0 = readable1(fd, 40);
+					// 2. Let the connector's 8 bytes arrive + the reactor latch pending_read
+					//    (no waiter parked -> durable pending set).
+					val _s = conc.sleep(conc.Duration(millis = 250));
+					// 3. Read EXACTLY the 8 bytes (8-byte buffer) directly (data buffered ->
+					//    no EAGAIN, no _block_on_io drain path).  Require n == 8 so the socket
+					//    is provably drained — a short read would leave bytes buffered and a
+					//    later readable would be legitimate, not the bug.
+					var rb = io.buffer(8);
+					match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+						core.Result::Err(e) => { rc = 2; },
+						core.Result::Ok(n) => {
+							if n != 8 { rc = 2; }
+							else {
+								// 4. THE GATE: drained, healthy, idle fd must NOT report readable.
+								rc = readable1(fd, 60) ? 3 : 0;
+							}
+						}
+					}
+					val _cl = ss.close(t);
+				}
+			}
+			val _j = cvt.join();
+			return rc;
+		}
+	}
+}
+"""
+	rc, _ = _run(_compile(tmp_path, src, "exactlatch"), timeout_s=15)
+	assert rc == 0, (
+		f"exact-length read left stale readable (rc={rc}; 3=drained idle fd still "
+		f"reports readable = THE BUG, 2=read did not deliver bytes)"
+	)
+
+
+def test_poll_many_more_buffered_than_read_still_readable(tmp_path: Path) -> None:
+	# THE DUAL of the latch gate — and the dangerous one (failure = silent hang, worse
+	# than a loud recycle). Framed protocols read exactly payload_len and STOP without
+	# draining to EAGAIN; if more bytes are already buffered, poll_many MUST still
+	# report readable or those bytes are stranded. Catches an over-eager suppression
+	# (clear-pending-on-any-read, or a peek that races the remainder).
+	# Exit: 0 ok, 1 setup, 2 first read wrong, 3 buffered remainder NOT reported
+	# readable (the silent-hang bug), 4 follow-up read could not recover the remainder.
+	src = """\
+module main;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+
+fn connector(port: Int) nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(cs) => {
+			val _w = conc.sleep(conc.Duration(millis = 60));
+			var b = io.buffer(16); io.buffer_write_string(&mut b, &"0123456789ABCDEF"); io.buffer_set_len(&mut b, 16);
+			val _s = cs.write(&b, t);   // send 16 bytes at once
+			val _h = conc.sleep(conc.Duration(millis = 2000));
+			val _c = cs.close(t); return 0;
+		}
+	}
+}
+
+fn readable1(fd: Int, ms: Int) nothrow -> Bool {
+	var es: Array<io.PollEntry> = [];
+	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
+	match io.poll_many(&es, conc.Duration(millis = ms)) {
+		core.Result::Ok(rd) => { return rd.len() >= 1 and rd[0].readable; },
+		core.Result::Err(e) => { return false; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(lis) => {
+			val port = lis.local_port();
+			var cvt = conc.spawn(| | captures(move port) => { return connector(port); });
+			var rc = 1;
+			match net.accept(&lis, t) {
+				core.Result::Err(e) => { rc = 1; },
+				core.Result::Ok(ss) => {
+					val fd = ss.raw_fd();
+					val _r0 = readable1(fd, 40);                       // register
+					val _s = conc.sleep(conc.Duration(millis = 250));  // all 16 bytes arrive + latch
+					// read EXACTLY 8 (buffer capacity 8) and STOP — 8 bytes remain buffered.
+					var rb = io.buffer(8);
+					match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+						core.Result::Err(e) => { rc = 2; },
+						core.Result::Ok(n) => {
+							if n != 8 { rc = 2; }
+							else {
+								// poll_many MUST still report readable — 8 bytes are buffered.
+								if not readable1(fd, 60) { rc = 3; }
+								else {
+									// and the remainder must be recoverable (readable => progress).
+									var rb2 = io.buffer(8);
+									match ss.read(&mut rb2, conc.Duration(millis = 1000)) {
+										core.Result::Ok(n2) => { rc = (n2 == 8) ? 0 : 4; },
+										core.Result::Err(e) => { rc = 4; }
+									}
+								}
+							}
+						}
+					}
+					val _cl = ss.close(t);
+				}
+			}
+			val _j = cvt.join();
+			return rc;
+		}
+	}
+}
+"""
+	rc, _ = _run(_compile(tmp_path, src, "morebuf"), timeout_s=15)
+	assert rc == 0, (
+		f"buffered remainder not reported readable (rc={rc}; 3=poll_many did NOT report "
+		f"readable with 8 bytes buffered = SILENT-HANG bug, 4=remainder unrecoverable)"
+	)
+
+
+def test_poll_many_peek_confirm_positive_controls(tmp_path: Path) -> None:
+	# Positive controls — the peek-confirm must NOT over-suppress.
+	#  (a) LISTENER readiness: a listening socket is not a peekable connected socket
+	#      (peek -> -2); poll_many must still report it readable and accept() must
+	#      succeed.  Guards the non-socket carve-out.
+	#  (b) PEER CLOSE: peer closes; poll_many must report readable, and the read must
+	#      observe EOF (n == 0).  Guards that peek(0)=EOF is surfaced, not suppressed.
+	# Exit: 0 ok, 1 setup, 2 listener not reported readable, 3 accept failed,
+	# 4 peer-close not reported readable, 5 read after close did not see EOF.
+	src = """\
+module main;
+import std.core as core;
+import std.io as io;
+import std.net as net;
+import std.concurrent as conc;
+
+fn readable1(fd: Int, ms: Int) nothrow -> Bool {
+	var es: Array<io.PollEntry> = [];
+	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
+	match io.poll_many(&es, conc.Duration(millis = ms)) {
+		core.Result::Ok(rd) => { return rd.len() >= 1 and (rd[0].readable or rd[0].hangup); },
+		core.Result::Err(e) => { return false; }
+	}
+}
+
+fn closer(port: Int) nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(cs) => {
+			val _w = conc.sleep(conc.Duration(millis = 120));
+			val _c = cs.close(t);   // close to trigger EOF/hangup on the server side
+			return 0;
+		}
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val t = conc.Duration(millis = 4000);
+	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+		core.Result::Err(e) => { return 1; },
+		core.Result::Ok(lis) => {
+			val port = lis.local_port();
+			var cvt = conc.spawn(| | captures(move port) => { return closer(port); });
+			// (a) LISTENER must be reported readable once a peer connects, and accept works.
+			val lfd = lis.raw_fd();
+			if not readable1(lfd, 2000) { val _j = cvt.join(); return 2; }
+			var rc = 0;
+			match net.accept(&lis, t) {
+				core.Result::Err(e) => { rc = 3; },
+				core.Result::Ok(ss) => {
+					val fd = ss.raw_fd();
+					// (b) PEER CLOSE: closer closes ~120ms after connect.
+					if not readable1(fd, 2000) { rc = 4; }
+					else {
+						var rb = io.buffer(16);
+						match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+							core.Result::Ok(n) => { rc = (n == 0) ? 0 : 5; },   // EOF
+							core.Result::Err(e) => { rc = 5; }
+						}
+					}
+					val _cl = ss.close(t);
+				}
+			}
+			val _j = cvt.join();
+			return rc;
+		}
+	}
+}
+"""
+	rc, _ = _run(_compile(tmp_path, src, "peekpos"), timeout_s=15)
+	assert rc == 0, (
+		f"peek-confirm over-suppressed (rc={rc}; 2=listener not readable [accept path "
+		f"broken], 3=accept failed, 4=peer-close not readable, 5=EOF not observed)"
+	)
+
+
 @_VALGRIND_SKIP
 def test_poll_many_fd_reuse_churn_stress_memcheck(tmp_path: Path) -> None:
 	# Stress companion to the deterministic resolver unit test (the generation guard is
