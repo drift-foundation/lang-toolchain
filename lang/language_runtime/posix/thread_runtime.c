@@ -341,6 +341,10 @@ typedef struct ReactorWatch {
 	uint32_t generation;      /* per-incarnation id; stamped into epoll ev.data so a
 	                           * stale event for a closed-then-reused fd number is
 	                           * dropped instead of re-attached to the new watch. */
+	uint8_t needs_read_confirm; /* 1 = connected stream socket → poll_many confirms a
+	                           * readable hint with a non-consuming peek; 0 = listener /
+	                           * non-socket → trust the hint (no per-ready syscall).
+	                           * Classified ONCE at watch creation (cached). */
 	uint32_t events;          /* kernel interest mask (set once on EPOLL_CTL_ADD) */
 	uint64_t read_vt;         /* VT parked for EPOLLIN, or 0 */
 	uint64_t write_vt;        /* VT parked for EPOLLOUT, or 0 */
@@ -715,6 +719,24 @@ static inline uint32_t drift_reactor_next_gen(void) {
 	 * ev.data.fd, i.e. gen field 0), which are matched by fd before any watch. */
 	uint32_t g = atomic_fetch_add(&drift_reactor_watch_gen, 1) + 1;
 	return g ? g : (atomic_fetch_add(&drift_reactor_watch_gen, 1) + 1);
+}
+/* Classify an fd ONCE at watch creation: 1 = connected stream socket (poll_many
+ * should confirm a readable hint with a non-consuming peek), 0 = listening socket
+ * or non-socket (trust the hint, never peek).  Cached on the watch so the hot poll
+ * path issues NO per-ready syscall for listeners. */
+static uint8_t drift_reactor_classify_confirm(int fd) {
+#ifdef __linux__
+	int acceptconn = 0;
+	socklen_t alen = (socklen_t)sizeof(acceptconn);
+	if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &acceptconn, &alen) != 0) return 0; /* non-socket → trust */
+	if (acceptconn != 0) return 0;                                                    /* listener → trust */
+	int stype = 0;
+	socklen_t tlen = (socklen_t)sizeof(stype);
+	if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &stype, &tlen) != 0) return 0;            /* unknown → trust */
+	return stype == SOCK_STREAM ? 1 : 0;                                             /* connected stream → confirm */
+#else
+	(void)fd; return 0;
+#endif
 }
 /* Resolve the watch an epoll event targets, applying the generation guard.  A
  * stale event for a closed-then-reused fd number (gen mismatch) returns NULL so
@@ -2456,6 +2478,7 @@ int64_t drift_reactor_wait_register(uint64_t fd, uint64_t interest,
 		w = (ReactorWatch *)malloc(sizeof(ReactorWatch));
 		if (!w) { pthread_mutex_unlock(&r->mu); return ENOMEM; }
 		w->fd = (int)fd; w->generation = drift_reactor_next_gen();
+		w->needs_read_confirm = drift_reactor_classify_confirm((int)fd);
 		w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		w->read_vt = 0; w->write_vt = 0; w->read_epoch = 0; w->write_epoch = 0;
 		w->pending_read = 0; w->pending_write = 0; w->pending_hup = 0; w->pending_err = 0;
@@ -3214,6 +3237,7 @@ void drift_reactor_register_io(uint64_t fd, uint64_t interest, uint64_t vt, uint
 		}
 		w->fd = (int)fd;
 		w->generation = drift_reactor_next_gen();
+		w->needs_read_confirm = drift_reactor_classify_confirm((int)fd);
 		w->events = EPOLLET | EPOLLIN | EPOLLOUT | EPOLLRDHUP;
 		w->read_vt = 0;
 		w->write_vt = 0;
@@ -3944,6 +3968,23 @@ static int64_t drift_connect_to_addr(struct sockaddr_storage *sa, socklen_t addr
  * EINTR is retried. */
 int64_t drift_net_peek_readable(int64_t fd) {
 #ifdef __linux__
+	/* fd-kind aware: NEVER peek a listening socket.  recv() is meaningless on a
+	 * listener — its "readable" means a pending connection, confirmed by accept(),
+	 * not by recv() — so report -2 = "trust the original epoll hint, do not suppress"
+	 * and skip a pointless syscall on the listener hot path.  The classification is
+	 * CACHED on the watch at creation, so this reads a flag (a brief mutex hold), not
+	 * a per-ready syscall; only connected stream sockets are actually peeked. */
+	Reactor *r = drift_default_reactor_ptr;
+	uint8_t confirm = 0;
+	if (r) {
+		pthread_mutex_lock(&r->mu);
+		ReactorWatch *w = drift_reactor_find_watch(r, (int)fd);
+		if (w) confirm = w->needs_read_confirm;
+		pthread_mutex_unlock(&r->mu);
+	}
+	if (!confirm) {
+		return -2;   /* listener / non-socket / unknown → trust the hint, no peek */
+	}
 	char b;
 	for (;;) {
 		ssize_t n = recv((int)fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
@@ -3952,7 +3993,7 @@ int64_t drift_net_peek_readable(int64_t fd) {
 		int e = errno;
 		if (e == EINTR) continue;
 		if (e == EAGAIN || e == EWOULDBLOCK) return -1;
-		return -2;   /* ENOTCONN/ENOTSOCK/EINVAL (listener, pipe, ...) or real error */
+		return -2;   /* unexpected error → trust */
 	}
 #else
 	(void)fd; return -2;
