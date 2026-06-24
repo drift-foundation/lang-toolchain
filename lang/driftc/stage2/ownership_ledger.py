@@ -27,6 +27,7 @@ non-`Live` state at a join.
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
@@ -324,10 +325,25 @@ def build_ledger(
 	is_destructor = "std.core.Destructible::destroy" in getattr(func.fn_id, "name", "")
 	destructor_self_local: Optional[str] = "self" if (is_destructor and "self" in tracked) else None
 	preds = _compute_predecessors(func)
-	worklist: List[str] = [func.entry]
-	seen: Set[str] = {func.entry}
-	while worklist:
-		block_name = worklist.pop(0)
+	# RPO-ordered worklist: a min-heap keyed by reverse-postorder index always
+	# dequeues the earliest-in-RPO dirty block, so a forward dataflow converges in
+	# far fewer block re-processings than FIFO/BFS (the join volume — not per-join
+	# size — was the whole-compile hot path).  An `in_worklist` set gives O(1)
+	# membership instead of the old O(n) `succ not in worklist` list scan.
+	rpo = _reverse_postorder(func)
+	rpo_index: Dict[str, int] = {name: i for i, name in enumerate(rpo)}
+	_fallback_idx = len(rpo)  # blocks unreachable in the RPO walk sort last
+	heap: List[Tuple[int, str]] = [(rpo_index.get(func.entry, _fallback_idx), func.entry)]
+	in_worklist: Set[str] = {func.entry}
+
+	def _enqueue(name: str) -> None:
+		if name not in in_worklist:
+			in_worklist.add(name)
+			heapq.heappush(heap, (rpo_index.get(name, _fallback_idx), name))
+
+	while heap:
+		block_name = heapq.heappop(heap)[1]
+		in_worklist.discard(block_name)
 		block = func.blocks.get(block_name)
 		if block is None:
 			continue
@@ -365,8 +381,7 @@ def build_ledger(
 			if incoming is None:
 				ledger.block_in[succ] = dict(out_state)
 				ledger.field_block_in[succ] = dict(field_out_state)
-				worklist.append(succ)
-				seen.add(succ)
+				_enqueue(succ)
 				continue
 			merged = _join_dicts(incoming, out_state, tracked)
 			# Field state join: simple intersection-style — a field
@@ -384,9 +399,37 @@ def build_ledger(
 			if changed:
 				ledger.block_in[succ] = merged
 				ledger.field_block_in[succ] = merged_field
-				if succ not in worklist:
-					worklist.append(succ)
+				_enqueue(succ)
 	return ledger
+
+
+def _reverse_postorder(func: M.MirFunc) -> List[str]:
+	"""Reverse-postorder of the CFG reachable from `func.entry`.
+
+	The dataflow in `build_ledger` is a forward analysis; visiting blocks in RPO
+	means a block is (re)processed only after its predecessors, so the fixpoint
+	converges in ~(loop-nesting-depth + 1) sweeps instead of the O(#blocks) sweeps
+	a FIFO/BFS order can take on chained control flow.  Iterative postorder DFS
+	(no recursion → no stack-depth limit on large generated functions)."""
+	order: List[str] = []
+	visited: Set[str] = set()
+	stack: List[Tuple[str, bool]] = [(func.entry, False)]
+	while stack:
+		name, expanded = stack.pop()
+		if expanded:
+			order.append(name)
+			continue
+		if name in visited:
+			continue
+		visited.add(name)
+		stack.append((name, True))
+		blk = func.blocks.get(name)
+		if blk is not None:
+			for succ in _successors(blk.terminator):
+				if succ not in visited:
+					stack.append((succ, False))
+	order.reverse()
+	return order
 
 
 def _compute_predecessors(func: M.MirFunc) -> Dict[str, List[str]]:

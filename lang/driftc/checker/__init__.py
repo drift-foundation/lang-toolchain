@@ -361,6 +361,16 @@ class Checker:
 			raise AssertionError("call_info_by_callsite_id is required for Checker")
 		self._declared_by_id = {fn_id: bool(val) for fn_id, val in declared_by_id.items()}
 		self._signatures_by_id = {fn_id: sig for fn_id, sig in signatures.items()}
+		# Precomputed set of every function's bare name AND full symbol, for an O(1)
+		# "does this bare name denote a function symbol?" check during expression type
+		# inference (the HVar case in _infer_expr_type).  Scanning + reformatting all
+		# signatures per HVar was O(signatures) per inference and, amplified by the
+		# expression re-walk, produced multi-minute / multi-GB compiles on call-heavy
+		# modules.
+		self._fn_name_or_symbol: set[str] = set()
+		for _fn_id in self._signatures_by_id.keys():
+			self._fn_name_or_symbol.add(_fn_id.name)
+			self._fn_name_or_symbol.add(function_symbol(_fn_id))
 		self._hir_blocks_by_id = {fn_id: block for fn_id, block in hir_blocks.items()}
 		self._call_info_by_callsite_id = {
 			fn_id: dict(call_info)
@@ -1870,9 +1880,11 @@ class Checker:
 					return self.locals[expr.name]
 				# Bare names can also denote function symbols (e.g. function-value
 				# positions like `return g;`). Those are not local-variable errors.
-				for fn_id in checker._signatures_by_id.keys():
-					if expr.name == fn_id.name or expr.name == function_symbol(fn_id):
-						return None
+				# O(1) lookup against the precomputed name/symbol set (built once at
+				# checker init); the prior per-HVar scan over all signatures was the
+				# dominant cost in pathological call-heavy compiles.
+				if expr.name in checker._fn_name_or_symbol:
+					return None
 				# Emit unknown-name diagnostics only for user-style local identifiers.
 				# We intentionally skip toolchain modules and constructor/type-like
 				# symbols until checker name resolution is fully generalized.
@@ -2782,6 +2794,31 @@ class Checker:
 		"""
 		from lang.driftc import stage1 as H
 
+		# ONE typing context for the whole walk of this function, so its per-id
+		# memo cache (_TypingContext.cache) persists across the many expression
+		# inferences below.  Previously each `_infer_hir_expr_type` call built a
+		# FRESH context with an empty cache, so an argument subtree was re-inferred
+		# from scratch at every nesting level (walk infers the arg, then recurses
+		# walk_expr into the same arg and infers it again) — O(N^2)+ on deeply
+		# nested call/expression trees, which produced multi-minute / multi-GB
+		# compiles.  Sharing the cache makes each node inferred once (and also stops
+		# re-emitting the same node's diagnostics).
+		_vc_ctx = self._TypingContext(
+			checker=self,
+			table=self._type_table,
+			fn_infos=fn_infos,
+			current_fn=current_fn,
+			call_info_by_callsite_id=(
+				self._call_info_by_callsite_id.get(current_fn.fn_id) if current_fn else None
+			),
+			locals={},
+			diagnostics=diagnostics,
+			report_unknown_names=False,
+		)
+
+		def _vc_infer(e: "H.HExpr") -> Optional[TypeId]:
+			return _vc_ctx.infer(e)
+
 		def walk_expr(expr: H.HExpr) -> None:
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HLambda):
 				lam = expr.fn
@@ -2803,7 +2840,7 @@ class Checker:
 							span=getattr(expr, "loc", None),
 						)
 					)
-				self._infer_hir_expr_type(expr, fn_infos, current_fn, diagnostics)
+				_vc_infer(expr)
 				for arg in expr.args:
 					walk_expr(arg)
 				for kw in getattr(expr, "kwargs", []) or []:
@@ -2864,9 +2901,7 @@ class Checker:
 				kwargs = getattr(expr, "kwargs", []) or []
 				skip_type_check = bool(kwargs)
 				arg_exprs = call_arg_exprs_for_param_layout(expr, info)
-				arg_type_ids = [
-					self._infer_hir_expr_type(a, fn_infos, current_fn, diagnostics) for a in arg_exprs
-				]
+				arg_type_ids = [_vc_infer(a) for a in arg_exprs]
 				uses_forced = False
 				for idx, arg_expr in enumerate(arg_exprs):
 					forced = getattr(arg_expr, "force_inferred_type", None)
