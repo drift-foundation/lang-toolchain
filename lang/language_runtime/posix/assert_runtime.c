@@ -121,10 +121,20 @@ static void drift_debug_print_stacktrace(void) {
  * `assert(cond, msg)` is a language built-in; its Drift IR call site
  * does NOT pre-retain before the extern call (unlike the normal
  * function-call extern pattern used by env.get / io.file_builder /
- * cons.println).  The caller releases its own stake AFTER the call.
- * If this function also released, it would double-free the stake and
- * UAF on heap-allocated msg.  Verified by /tmp/probe_assert_heap.drift
- * regression during the DRIFT_OWNED_STRING slice (2026-05-16). */
+ * cons.println), so this function must NOT release file/expr/msg --
+ * doing so would double-free the stake and UAF on a heap-allocated msg.
+ *
+ * As of 0.33.55 `_visit_stmt_HAssert` lowers the assertion so the
+ * message is only built on the FAILING branch and AssertLoc is emitted
+ * there immediately before an `Unreachable` terminator (the passing
+ * branch never constructs the message -- fixing the await_signal
+ * heap-message leak).  Consequently this function is only ever reached
+ * with cond==false and always aborts; the early `if (cond) return;` is
+ * now defensive-only, there is no post-call path, and the unreleased
+ * msg stake is reclaimed by process death.  Verified by
+ * lang/tests/memcheck/test_assert_message_pass_memcheck.py (and, for the
+ * historical fail-path double-free, the DRIFT_OWNED_STRING slice
+ * 2026-05-16). */
 void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString expr, DriftString msg) {
 	if (cond) {
 		return;

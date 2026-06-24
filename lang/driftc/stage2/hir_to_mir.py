@@ -8524,6 +8524,21 @@ class HIRToMIR:
 		cond_val = self.lower_expr(stmt.cond)
 		span = getattr(stmt, "loc", Span())
 		cond_span = Span.from_loc(getattr(stmt.cond, "loc", None))
+		# Build the diagnostic (file/line/expr/`msg`) ONLY on the failing
+		# branch.  A heap-built `msg` (e.g. `"a" + "b"`) is an owned temp
+		# that `drift_assert_loc` does not consume; lowering it eagerly
+		# before the check leaked it on every passing assert (the
+		# std.concurrent.await_signal single-waiter diagnostic was the
+		# reported cert-lane offender -- see
+		# lang/tests/memcheck/test_assert_message_pass_memcheck.py).
+		# Emitting the message inside `fail_block` (which terminates in
+		# Unreachable right after AssertLoc) means the passing path never
+		# constructs it, so there is nothing to drop and no leak; the
+		# failing path aborts, so its unreleased stake is moot.
+		pass_block = self.b.new_block("assert_pass")
+		fail_block = self.b.new_block("assert_fail")
+		self.b.set_terminator(M.IfTerminator(cond=cond_val, then_target=pass_block.name, else_target=fail_block.name))
+		self.b.set_block(fail_block)
 		file_str = span.file or "<unknown>"
 		if file_str != "<unknown>" and self._current_fn_id is not None:
 			base_name = os.path.basename(file_str)
@@ -8549,6 +8564,8 @@ class HIRToMIR:
 		instr = M.AssertLoc(cond=cond_val, file=file_val, line=line_val, expr=expr_val, msg=msg_val)
 		instr.span = span
 		self.b.emit(instr)
+		self.b.set_terminator(M.Unreachable())
+		self.b.set_block(pass_block)
 
 	def _emit_local_const(self, bid: int) -> M.ValueId:
 		"""Emit a fresh MIR literal for a block-scope constant."""
