@@ -88,7 +88,7 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 	assert sources, "no .drift files found under stdlib/"
 	module_paths_rel = sorted(str(p.relative_to(repo_root)) for p in sources)
 	sci = compute_artifact_source_content_id(
-		kind="library",
+		kind="package",
 		package_id="std",
 		version=version,
 		module_namespace="std",

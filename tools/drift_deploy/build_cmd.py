@@ -41,7 +41,7 @@ def env_true(name: str) -> bool:
 # flag presence:
 #
 #   stage    — orch certification staging phase.  Producer role.
-#              Build/deploy a package into the run's `lib/`.  No run
+#              Build/deploy a package into the run's `pkg/`.  No run
 #              snapshot required (the snapshot does not exist yet;
 #              staging is what produces it).  Behaviourally
 #              equivalent to "unset" today; exists so orch can

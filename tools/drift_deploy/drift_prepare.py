@@ -70,9 +70,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--manifest", type=UserPath, default=Path("drift") / "manifest.json",
 		help="Path to drift/manifest.json (default: ./drift/manifest.json)")
 	p.add_argument("--dest", type=UserPath, default=None,
-		help="Package library root (used as default --package-root)")
+		help="Package root (used as default --package-root)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
-		help="Library root for resolving package_deps (repeatable; default: --dest)")
+		help="Package root for resolving package_deps (repeatable; default: --dest)")
 	p.add_argument("--check", action="store_true",
 		help="Verify-only mode: exit 0 iff re-resolution produces the "
 		     "exact existing drift/lock.json; non-zero if the lock would "
@@ -259,10 +259,10 @@ def _run_impl(args: argparse.Namespace) -> int:
 			raise PrepareError(f"run snapshot load failed: {e}")
 	# Compute co-artifact names up front so they can be passed as
 	# `snapshot_exempt_ids` under stage-mode source-rebuild (the
-	# intra-manifest library-artifact peers are producer outputs of
+	# intra-manifest package-artifact peers are producer outputs of
 	# the stage deploy; they must not be gated against the snapshot
 	# here either, for consistency with `drift_deploy._run_impl`).
-	_early_co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
+	_early_co_artifact_names = {a.name for a in artifacts if a.kind == "package"}
 	_prepare_exempt_ids: set[str] | None = (
 		set(_early_co_artifact_names)
 		if _prepare_run_snap is not None and _producer_output_exemption_active()
@@ -283,7 +283,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# can satisfy each other's package_deps without being published.
 	co_artifact_names: set[str] = set()
 	for art in artifacts:
-		if art.kind == "library":
+		if art.kind == "package":
 			co_artifact_names.add(art.name)
 			pkg_deps = [(dep.name, dep.version) for dep in art.package_deps]
 			entry = PackageEntry(

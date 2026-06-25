@@ -22,7 +22,7 @@ from lang.driftc.packages.source_content_id import (
 
 def _example_inputs(**overrides) -> SourceContentInputs:
 	defaults = dict(
-		kind="library",
+		kind="package",
 		package_id="pkg",
 		version="0.1.0",
 		module_namespace="pkg",
@@ -42,6 +42,24 @@ def test_compute_sci_baseline() -> None:
 	sci = compute_source_content_id(_example_inputs())
 	assert sci.startswith("sha256:")
 	assert len(sci) == len("sha256:") + 64
+
+
+def test_compute_sci_rejects_legacy_library_kind() -> None:
+	"""v2: the signed-identity layer must REFUSE the legacy `library` kind.
+	`library` is canonicalized to `package` ONLY at the manifest boundary;
+	a stray `library` must never reach the SCI hash."""
+	with pytest.raises(ValueError, match="canonical 'package' or 'app'"):
+		compute_source_content_id(_example_inputs(kind="library"))
+
+
+def test_compute_sci_rejects_unknown_kind() -> None:
+	with pytest.raises(ValueError, match="canonical 'package' or 'app'"):
+		compute_source_content_id(_example_inputs(kind="doc"))
+
+
+def test_compute_sci_accepts_app_kind() -> None:
+	sci = compute_source_content_id(_example_inputs(kind="app"))
+	assert sci.startswith("sha256:")
 
 
 def test_reject_duplicate_module_path() -> None:
@@ -117,7 +135,7 @@ def test_sci_rejects_module_symlink_outside_source_root(tmp_path):
 
 	with pytest.raises(ValueError, match="resolves outside the declared source_root"):
 		compute_artifact_source_content_id(
-			kind="library",
+			kind="package",
 			package_id="proj",
 			version="0.0.0",
 			module_namespace="proj",
@@ -149,7 +167,7 @@ def test_sci_accepts_symlink_inside_source_root(tmp_path):
 	(proj / "src" / "helper.drift").symlink_to(proj / "shared" / "helper.drift")
 
 	sci = compute_artifact_source_content_id(
-		kind="library",
+		kind="package",
 		package_id="proj",
 		version="0.0.0",
 		module_namespace="proj",
@@ -195,7 +213,7 @@ def test_sci_symlink_alias_matches_direct_file_with_same_bytes(tmp_path):
 	(proj_b / "src" / "helper.drift").symlink_to(proj_b / "shared" / "helper.drift")
 
 	args = dict(
-		kind="library", package_id="proj", version="0.0.0",
+		kind="package", package_id="proj", version="0.0.0",
 		module_namespace="proj", entry_module="proj",
 		module_paths=["src/helper.drift"],
 		package_deps=[], native_deps=[], unsafe=False,

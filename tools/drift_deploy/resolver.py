@@ -317,7 +317,7 @@ def build_package_index(
 	**(2) Trust-store (producer / staging)**: `trust_store=...`.
 	Per-package cryptographic verification against orch's own
 	trust store via `verify_v1.verify_package_from_sidecars`.
-	Used by ORCH when staging packages into the run `lib/` root.
+	Used by ORCH when staging packages into the run `pkg/` root.
 	Failure is a HARD ERROR (`ResolutionError`) -- the package is
 	not silently pruned, because fallback to an older trusted
 	in-range version would mask the exact package orch staged for

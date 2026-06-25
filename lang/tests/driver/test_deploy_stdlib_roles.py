@@ -97,7 +97,7 @@ def _pre_publish_author_claim(
 	stdlib_files = sorted(STDLIB_DIR.rglob("*.drift"))
 	module_paths_rel = sorted(str(p.relative_to(ROOT)) for p in stdlib_files)
 	sci = compute_artifact_source_content_id(
-		kind="library", package_id="std", version=version,
+		kind="package", package_id="std", version=version,
 		module_namespace="std", entry_module="std",
 		module_paths=module_paths_rel,
 		package_deps=[], native_deps=[], unsafe=False, asset_paths=[],

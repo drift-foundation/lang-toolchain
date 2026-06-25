@@ -61,7 +61,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	# Compute SCI before driftc emits so the manifest carries the stamp.
 	module_paths_rel = sorted(str(p.relative_to(ROOT)) for p in stdlib_files)
 	sci = compute_artifact_source_content_id(
-		kind="library",
+		kind="package",
 		package_id="std",
 		version=STD_VERSION,
 		module_namespace="std",

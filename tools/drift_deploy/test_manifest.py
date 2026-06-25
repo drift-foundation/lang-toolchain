@@ -60,7 +60,7 @@ class TestManifestValid:
 			assert m.project.author_profile is None
 			assert len(m.artifacts) == 1
 			art = m.artifacts[0]
-			assert art.kind == "library"
+			assert art.kind == "package"
 			assert art.name == "test.pkg"
 			assert art.version == "1.0.0"
 			assert art.license == "MIT"  # inherited
@@ -87,26 +87,28 @@ class TestManifestValid:
 			with pytest.raises(ManifestError, match="author_profile"):
 				load_manifest(path)
 
-	def test_kind_package_deprecated_to_library(self, capsys) -> None:
-		"""Legacy 'kind: package' is accepted, normalized to library, and warns."""
-		manifest = _minimal_manifest()
-		assert manifest["artifacts"][0]["kind"] == "package"
-		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
-			path = _write_manifest(Path(tmpdir), manifest)
-			m = load_manifest(path)
-			assert m.artifacts[0].kind == "library"
-			captured = capsys.readouterr()
-			assert "deprecated" in captured.err
-			assert "library" in captured.err
-
-	def test_kind_library_accepted_directly(self) -> None:
-		"""kind: library is accepted without deprecation warning."""
+	def test_kind_library_deprecated_to_package(self, capsys) -> None:
+		"""Legacy 'kind: library' is accepted, normalized to package, and warns (v2)."""
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["kind"] = "library"
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
-			assert m.artifacts[0].kind == "library"
+			assert m.artifacts[0].kind == "package"
+			captured = capsys.readouterr()
+			assert "deprecated" in captured.err
+			assert "package" in captured.err
+
+	def test_kind_package_accepted_directly(self, capsys) -> None:
+		"""Canonical kind: package is accepted without a deprecation warning (v2)."""
+		manifest = _minimal_manifest()
+		assert manifest["artifacts"][0]["kind"] == "package"
+		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
+			path = _write_manifest(Path(tmpdir), manifest)
+			m = load_manifest(path)
+			assert m.artifacts[0].kind == "package"
+			captured = capsys.readouterr()
+			assert "deprecated" not in captured.err
 
 	def test_full_artifact(self) -> None:
 		manifest = _minimal_manifest()
@@ -167,7 +169,7 @@ class TestManifestValid:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert len(m.artifacts) == 2
-			assert m.artifacts[0].kind == "library"
+			assert m.artifacts[0].kind == "package"
 			assert m.artifacts[1].kind == "app"
 
 	def test_app_entry_point(self) -> None:

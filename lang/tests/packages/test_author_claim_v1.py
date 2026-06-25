@@ -2,7 +2,7 @@
 """Tests for `lang.driftc.packages.author_claim_v1`.
 
 Covers: dataclass round-trip, canonical signing bytes determinism,
-multi-signature composition, strict v1-only loader, JSON round-trip,
+multi-signature composition, strict loader (format v1, body schema v2), JSON round-trip,
 signature verification, full namespace+role composition
 (`verify_author_claim_for_module`), and failure modes (untrusted
 kid, sci mismatch, namespace mismatch, mangled body, etc.).
@@ -88,6 +88,7 @@ def _example_body(
 	*,
 	package_id: str = "singular",
 	version: str = "0.3.0",
+	artifact_kind: str = "package",
 	namespaces: tuple[str, ...] = ("singular", "singular.*"),
 	source_content_id: str = "sha256:" + ("a" * 64),
 	required_deps: tuple[RequiredDep, ...] = (
@@ -96,9 +97,10 @@ def _example_body(
 	release_utc: str = "2026-05-18T12:00:00Z",
 ) -> AuthorClaimBody:
 	return AuthorClaimBody(
-		schema_version=1,
+		schema_version=2,
 		package_id=package_id,
 		version=version,
+		artifact_kind=artifact_kind,
 		namespaces=namespaces,
 		source_content_id=source_content_id,
 		required_deps=required_deps,
@@ -234,7 +236,54 @@ def test_load_round_trip_recovers_signing_bytes_for_reverify() -> None:
 	assert body_signing_bytes(reloaded.body) == body_signing_bytes(claim.body)
 
 
-# ── Strict v1-only loader ──────────────────────────────────────────
+# ── artifact_kind (v2 body) ────────────────────────────────────────
+
+
+def test_signing_bytes_change_with_artifact_kind() -> None:
+	"""`artifact_kind` is part of signed source identity (canonical body)."""
+	b_pkg = _example_body(artifact_kind="package")
+	b_app = _example_body(artifact_kind="app")
+	assert body_signing_bytes(b_pkg) != body_signing_bytes(b_app)
+
+
+def test_artifact_kind_round_trips() -> None:
+	seed = _seed("author")
+	claim = make_author_claim(_example_body(artifact_kind="app"), seed)
+	rt = load_author_claim_json(dump_author_claim_json(claim))
+	assert rt.body.artifact_kind == "app"
+	assert rt.body.schema_version == 2
+
+
+def test_reject_missing_artifact_kind() -> None:
+	"""A v2 body without artifact_kind is malformed."""
+	body_dict = {
+		"schema_version": 2,
+		"package_id": "x",
+		"version": "0.1.0",
+		"namespaces": ["x"],
+		"source_content_id": "sha256:" + ("a" * 64),
+		"required_deps": [],
+		"release_utc": "2026-05-18T00:00:00Z",
+	}
+	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
+	with pytest.raises(ValueError, match="artifact_kind"):
+		load_author_claim_json(_wrap_envelope(body=body_dict, signatures=sigs))
+
+
+def test_reject_legacy_library_artifact_kind() -> None:
+	"""Signed claims must never carry the legacy `library` kind (v2 clean break)."""
+	body_dict = {
+		"schema_version": 2, "artifact_kind": "library",
+		"package_id": "x", "version": "0.1.0", "namespaces": ["x"],
+		"source_content_id": "sha256:" + ("a" * 64),
+		"required_deps": [], "release_utc": "2026-05-18T00:00:00Z",
+	}
+	sigs = [{"algo": "ed25519", "kid": "ed25519:k", "sig": b64_encode(b"\x00" * 64)}]
+	with pytest.raises(ValueError, match="artifact_kind"):
+		load_author_claim_json(_wrap_envelope(body=body_dict, signatures=sigs))
+
+
+# ── Strict loader (format v1, body schema v2) ──────────────────────
 
 
 def _wrap_envelope(*, format: str = "drift-author-claim", version: int = 1, body=None, signatures=None) -> str:
@@ -260,7 +309,7 @@ def test_reject_empty_signatures() -> None:
 	"""An author claim with no signatures is malformed."""
 	seed = _seed("author")
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -291,7 +340,7 @@ def test_reject_bad_body_schema_version() -> None:
 
 def test_reject_bad_sci_shape() -> None:
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -307,7 +356,7 @@ def test_reject_bad_sci_shape() -> None:
 
 def test_reject_empty_namespaces() -> None:
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": [],
@@ -324,7 +373,7 @@ def test_reject_empty_namespaces() -> None:
 def test_reject_wrong_sig_length() -> None:
 	"""Ed25519 signatures are exactly 64 bytes; otherwise reject."""
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -340,7 +389,7 @@ def test_reject_wrong_sig_length() -> None:
 
 def test_reject_non_ed25519_algo() -> None:
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -356,7 +405,7 @@ def test_reject_non_ed25519_algo() -> None:
 
 def test_reject_required_deps_with_missing_version_range() -> None:
 	body_dict = {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -594,7 +643,7 @@ def test_verify_for_module_exact_namespace_match() -> None:
 def _valid_body_dict() -> dict:
 	"""A valid body dict — base for unknown-key injection tests."""
 	return {
-		"schema_version": 1,
+		"schema_version": 2, "artifact_kind": "package",
 		"package_id": "x",
 		"version": "0.1.0",
 		"namespaces": ["x"],
@@ -795,12 +844,12 @@ def test_verify_rejects_version_mismatch() -> None:
 
 
 def test_sign_rejects_invalid_schema_version() -> None:
-	"""Hand-built dataclass with schema_version != 1 fails at sign
+	"""Hand-built dataclass with schema_version != 2 fails at sign
 	time (caller cannot smuggle a malformed body past the
 	signature)."""
 	bad_body = AuthorClaimBody(
 		schema_version=0,  # invalid
-		package_id="x", version="0.1.0", namespaces=("x",),
+		package_id="x", version="0.1.0", artifact_kind="package", namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
 		release_utc="2026-05-18T00:00:00Z",
@@ -811,7 +860,7 @@ def test_sign_rejects_invalid_schema_version() -> None:
 
 def test_sign_rejects_empty_package_id() -> None:
 	bad_body = AuthorClaimBody(
-		schema_version=1, package_id="",  # empty
+		schema_version=2, artifact_kind="package", package_id="",  # empty
 		version="0.1.0", namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
@@ -823,7 +872,7 @@ def test_sign_rejects_empty_package_id() -> None:
 
 def test_sign_rejects_bad_sci_shape() -> None:
 	bad_body = AuthorClaimBody(
-		schema_version=1, package_id="x", version="0.1.0",
+		schema_version=2, artifact_kind="package", package_id="x", version="0.1.0",
 		namespaces=("x",),
 		source_content_id="not-a-sha",   # malformed
 		required_deps=(),
@@ -835,7 +884,7 @@ def test_sign_rejects_bad_sci_shape() -> None:
 
 def test_sign_rejects_empty_namespaces() -> None:
 	bad_body = AuthorClaimBody(
-		schema_version=1, package_id="x", version="0.1.0",
+		schema_version=2, artifact_kind="package", package_id="x", version="0.1.0",
 		namespaces=(),   # empty
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(),
@@ -847,7 +896,7 @@ def test_sign_rejects_empty_namespaces() -> None:
 
 def test_sign_rejects_empty_dep_version_range() -> None:
 	bad_body = AuthorClaimBody(
-		schema_version=1, package_id="x", version="0.1.0",
+		schema_version=2, artifact_kind="package", package_id="x", version="0.1.0",
 		namespaces=("x",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(RequiredDep(name="foo", version_range=""),),

@@ -263,8 +263,8 @@ drift trust add --namespace acme.crypto.* \
     --pubkey-b64 <base64> --kid <kid> --role both
 drift trust import <pkg>.author-claim    # bulk-import kids from a v1 sidecar
 drift trust revoke --kid <kid> --reason "compromised CI host"
-drift prepare --manifest drift/manifest.json --dest ~/opt/drift/lib
-drift deploy --manifest drift/manifest.json --dest ~/opt/drift/lib --driftc driftc
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/pkg
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/pkg --driftc driftc
 ```
 
 The compiler sources, runtime archives, and signed stdlib package live in

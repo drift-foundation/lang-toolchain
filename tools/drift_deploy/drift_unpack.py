@@ -31,7 +31,7 @@ logical path is exactly what the producer declared (project-relative) and
 what `source_content_id` committed to.  Authors that declare assets under
 `assets/...` get `<dest>/assets/...` — e.g.
 
-    drift unpack "$DRIFT_PKG_ROOT/singular/0.5.0" --dest "$t"
+    drift unpack "$DRIFT_PACKAGE_ROOT/singular/0.5.0" --dest "$t"
     mariachi --schema-template "$t/assets/singular/db" apply --schema singular_5 …
 """
 

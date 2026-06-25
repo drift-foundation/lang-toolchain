@@ -106,34 +106,34 @@ def _parse_required_dep(spec: str) -> RequiredDep:
 
 
 def _select_library_artifact(manifest, manifest_path: Path, artifact_name: Optional[str], *, action: str):
-	"""Pick the manifest's library artifact, honoring ``--artifact``.
+	"""Pick the manifest's package artifact, honoring ``--artifact``.
 
-	Only library artifacts carry an SCI / author claim (apps aren't
+	Only package artifacts carry an SCI / author claim (apps aren't
 	verified through the consumer closure path), so we filter to those
 	first.  Shared by ``publish`` (mint) and ``verify`` (check) so the
 	two surfaces resolve the *same* artifact from the same manifest;
 	`action` only tailors the no-library diagnostic ("nothing to
 	publish" vs "nothing to verify").
 	"""
-	libs = [a for a in manifest.artifacts if a.kind == "library"]
+	libs = [a for a in manifest.artifacts if a.kind == "package"]
 	if not libs:
 		raise SystemExit(
 			f"drift-author: manifest at {manifest_path} declares no "
-			f"library artifacts; nothing to {action}"
+			f"package artifacts; nothing to {action}"
 		)
 	if artifact_name:
 		matches = [a for a in libs if a.name == artifact_name]
 		if not matches:
 			raise SystemExit(
 				f"drift-author: --artifact {artifact_name!r} not found in "
-				f"manifest; available library artifacts: "
+				f"manifest; available package artifacts: "
 				f"{[a.name for a in libs]!r}"
 			)
 		return matches[0]
 	if len(libs) == 1:
 		return libs[0]
 	raise SystemExit(
-		f"drift-author: manifest declares multiple library artifacts "
+		f"drift-author: manifest declares multiple package artifacts "
 		f"({[a.name for a in libs]!r}); pass --artifact <name> to pick one"
 	)
 
@@ -198,7 +198,7 @@ def _cmd_publish(args: argparse.Namespace) -> int:
 
 	Defaults are tuned for the common case (single-library manifest,
 	publish into the manifest dir):
-	  - `--artifact`   defaults to the sole library artifact; required
+	  - `--artifact`   defaults to the sole package artifact; required
 	                   when the manifest declares multiple.
 	  - `--sidecar-dir` defaults to the manifest's own directory
 	                   (`<repo>/drift/`), which is where
@@ -226,7 +226,7 @@ def _cmd_publish(args: argparse.Namespace) -> int:
 		raise SystemExit(f"drift-author: {e}")
 	manifest_dir = manifest_path.parent
 
-	# Pick the artifact (shared with `verify`; only library artifacts
+	# Pick the artifact (shared with `verify`; only package artifacts
 	# carry an SCI / author claim).
 	art = _select_library_artifact(manifest, manifest_path, args.artifact, action="publish")
 
@@ -459,7 +459,7 @@ def _add_verify_args(p: argparse.ArgumentParser) -> None:
 		help="Path to drift/manifest.json (the file, not the directory). "
 		     "Default: ./drift/manifest.json.")
 	p.add_argument("--artifact", type=str, default=None,
-		help="Pick a specific library artifact by name when the manifest "
+		help="Pick a specific package artifact by name when the manifest "
 		     "declares more than one.  Required in the multi-library case.")
 	p.add_argument("--sidecar-dir", type=Path, default=None,
 		help="Directory holding the .author-claim. Default: the manifest's "
@@ -500,7 +500,7 @@ def _build_parser() -> argparse.ArgumentParser:
 		help="Path to drift/manifest.json (the file, not the directory)")
 	pub.add_argument("--artifact", type=str, default=None,
 		help=(
-			"Pick a specific library artifact by name when the manifest "
+			"Pick a specific package artifact by name when the manifest "
 			"declares more than one.  Required in the multi-library case."
 		))
 	pub.add_argument(
@@ -638,7 +638,7 @@ def _build_author_subcommand_parser() -> argparse.ArgumentParser:
 		))
 	p.add_argument("--artifact", type=str, default=None,
 		help=(
-			"Pick a specific library artifact by name when the manifest "
+			"Pick a specific package artifact by name when the manifest "
 			"declares more than one.  Required in the multi-library case."
 		))
 	p.add_argument(

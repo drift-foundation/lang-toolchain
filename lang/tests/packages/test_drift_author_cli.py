@@ -335,7 +335,7 @@ class TestPublishFromManifest:
 		(drift / "manifest.json").write_text(json.dumps(mf), encoding="utf-8")
 		seed = self._seed_file(tmp_path)
 		# No --artifact: must error.
-		with pytest.raises(SystemExit, match="multiple library artifacts"):
+		with pytest.raises(SystemExit, match="multiple package artifacts"):
 			author_cli_main([
 				"publish",
 				"--manifest", str(drift / "manifest.json"),

@@ -102,10 +102,30 @@ class PackageDep:
 	version: str  # semver constraint string
 
 
+# Canonical v2 artifact kinds.  `package` = importable Drift package (modules +
+# declared assets — docs/SQL/templates/migrations/static files ride as ASSETS,
+# never a separate kind); `app` = runnable binary/service artifact.  `library`
+# is a DEPRECATED authoring alias normalized to `package`.  Signed v2 claims
+# carry only `package`/`app` — never `library`.
+ARTIFACT_KIND_PACKAGE = "package"
+ARTIFACT_KIND_APP = "app"
+_LEGACY_KIND_ALIASES = {"library": ARTIFACT_KIND_PACKAGE}
+
+
+def normalize_artifact_kind(kind: str) -> str:
+	"""Map a possibly-legacy authored kind to its canonical v2 form."""
+	return _LEGACY_KIND_ALIASES.get(kind, kind)
+
+
+def is_importable_kind(kind: str) -> bool:
+	"""True for the importable/distributable package kind (canonical or alias)."""
+	return normalize_artifact_kind(kind) == ARTIFACT_KIND_PACKAGE
+
+
 @dataclass(frozen=True)
 class Artifact:
 	"""A single artifact definition from the manifest."""
-	kind: str  # "library" or "app" (legacy "package" normalized to "library")
+	kind: str  # canonical "package" or "app" (legacy "library" normalized to "package")
 	name: str
 	version: str
 	description: str
@@ -121,8 +141,9 @@ class Artifact:
 	entry_point: str = ""  # app-only: "module::fn" entry point (e.g. "pushcoin.bookkeeper::main")
 
 	def __post_init__(self) -> None:
-		if self.kind == "package":
-			object.__setattr__(self, "kind", "library")
+		canon = normalize_artifact_kind(self.kind)
+		if canon != self.kind:
+			object.__setattr__(self, "kind", canon)
 
 
 @dataclass(frozen=True)
@@ -208,14 +229,14 @@ def load_manifest(path: Path) -> Manifest:
 		seen_names.add(art.name)
 		artifacts.append(art)
 
-	# Validation: libraries cannot depend on apps.
-	app_names = {a.name for a in artifacts if a.kind == "app"}
+	# Validation: packages cannot depend on apps.
+	app_names = {a.name for a in artifacts if a.kind == ARTIFACT_KIND_APP}
 	for art in artifacts:
-		if art.kind == "library":
+		if art.kind == ARTIFACT_KIND_PACKAGE:
 			for dep in art.package_deps:
 				if dep.name in app_names:
 					raise ManifestError(
-						f"library artifact '{art.name}' cannot depend on app artifact '{dep.name}'"
+						f"package artifact '{art.name}' cannot depend on app artifact '{dep.name}'"
 					)
 
 	return Manifest(schema_version=sv, project=project, artifacts=artifacts)
@@ -232,11 +253,11 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 	ctx = f"artifact[{idx}]"
 
 	kind = _require_str(obj, "kind", ctx)
-	if kind == "package":
+	if kind == "library":
 		import sys
-		print(f"warning: {ctx}: 'kind: package' is deprecated; use 'kind: library'", file=sys.stderr)
-	if kind not in ("library", "package", "app"):
-		raise ManifestError(f"{ctx}: 'kind' must be 'library' or 'app', got '{kind}'")
+		print(f"warning: {ctx}: 'kind: library' is deprecated; use 'kind: package'", file=sys.stderr)
+	if kind not in ("package", "app", "library"):
+		raise ManifestError(f"{ctx}: 'kind' must be 'package' or 'app', got '{kind}'")
 
 	name = _require_str(obj, "name", ctx)
 	version = _require_str(obj, "version", ctx)
@@ -673,18 +694,22 @@ def compute_artifact_sci(
 	same source release therefore produces the same SCI regardless
 	of which target it is built for.
 
-	Caller contract: gate on ``art.kind == "library"`` before calling.
+	Caller contract: gate on ``art.kind == "package"`` before calling.
 	Apps don't carry SCI (no consumer closure walk).  Surfacing the
 	graceful-fallback policy (warn-and-skip when the source tree is
 	partially mocked / missing) is left to callers, which already
 	wrap the call in ``try / except (FileNotFoundError, ValueError)``.
+
+	v2 source-identity note: the canonical kind is ``"package"`` (the
+	``library``→``package`` flip).  ``kind`` is hashed into the SCI, so
+	this value participates in the v2 source-identity break (pool re-cert).
 	"""
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,
 	)
 	source_root = project_root_for(manifest_dir)
 	return compute_artifact_source_content_id(
-		kind="library",
+		kind=ARTIFACT_KIND_PACKAGE,
 		package_id=art.name,
 		version=art.version,
 		module_namespace=art.module_namespace,

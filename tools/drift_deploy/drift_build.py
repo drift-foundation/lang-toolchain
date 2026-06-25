@@ -94,7 +94,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--manifest", "-m", type=UserPath, default=Path("drift") / "manifest.json",
 		help="Path to drift/manifest.json (default: ./drift/manifest.json)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
-		help="Library root for resolving package deps (repeatable)")
+		help="Package root for resolving package deps (repeatable)")
 	p.add_argument("--native-lib-path", type=UserPath, action="append", default=None,
 		help="Native library search path for linker (repeatable)")
 	p.add_argument("--target", type=str, default=None,
@@ -392,7 +392,7 @@ def _resolve_deps(
 	# M.N.P, matching sha256, matching author_key.  Any deviation is a
 	# `drift prepare` problem.
 	#
-	# `co_artifact_names` names the manifest's library artifacts —
+	# `co_artifact_names` names the manifest's package artifacts —
 	# only those IDs may legitimately carry `dep_type: "co-artifact"`
 	# in the lock (bypassing sha/signer re-check because they are
 	# built in this same run).  Anything else claiming co-artifact
@@ -475,7 +475,7 @@ def _resolve_deps(
 
 
 def _default_output_path(art: Artifact, build_dir: Path) -> Path:
-	if art.kind == "library":
+	if art.kind == "package":
 		return build_dir / f"{art.name}.dmp"
 	return build_dir / art.name
 
@@ -536,11 +536,11 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# Package roots (resolved before deps — needed for lock compatibility check).
 	package_roots = _resolve_package_roots(args.package_root, manifest_dir)
 
-	# Collect the set of library artifact names declared in THIS
+	# Collect the set of package artifact names declared in THIS
 	# manifest — those are the IDs that may legitimately appear in
 	# the lock with `dep_type: "co-artifact"`.  Every other pkg_id
 	# claiming co-artifact status is rejected at lock-verify time.
-	co_artifact_names = {a.name for a in manifest.artifacts if a.kind == "library"}
+	co_artifact_names = {a.name for a in manifest.artifacts if a.kind == "package"}
 
 	# Resolve deps.  Source-rebuild lane selector is centralised in
 	# `_source_rebuild_enabled` (CLI flag OR env var).  Under that
@@ -567,7 +567,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 		except (ValueError, OSError) as e:
 			raise BuildError(f"run snapshot load failed: {e}")
 	# Stage-mode producer-output exemption: intra-manifest
-	# library-artifact peers skip the snapshot gate while still
+	# package-artifact peers skip the snapshot gate while still
 	# being indexed.  Certify / manual --source-rebuild: None.
 	exempt_ids = (
 		set(co_artifact_names)
@@ -613,12 +613,12 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 				file=sys.stderr,
 			)
 			return 1
-	elif art.kind == "library":
+	elif art.kind == "package":
 		if args.target is None:
 			args.target = "drift-dev"
 
-	# v1 requires every library's manifest to carry `source_content_id`.
-	# Compute it from declared sources here so library builds via
+	# v1 requires every package's manifest to carry `source_content_id`.
+	# Compute it from declared sources here so package builds via
 	# `drift build` (not just `drift deploy`) emit a stamped .dmp the
 	# v1 verifier can consume.  Apps don't need SCI (no closure walk).
 	#
@@ -629,7 +629,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 	# need it -- callers that rely on v1 verification will see the
 	# missing stamp surfaced as a consumer-side error.
 	sci: str | None = None
-	if art.kind == "library":
+	if art.kind == "package":
 		from tools.drift_deploy.build_cmd import compute_artifact_sci
 		try:
 			sci = compute_artifact_sci(art, manifest_dir=manifest_dir)
@@ -679,7 +679,7 @@ def _run_impl(args: argparse.Namespace, extra_flags: list[str]) -> int:
 		combined_extra.extend(["--timing-out", str(timing_out_path)])
 
 	# Build command.
-	if art.kind == "library":
+	if art.kind == "package":
 		cmd = build_package_cmd(
 			art,
 			driftc=driftc,

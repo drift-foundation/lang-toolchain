@@ -391,7 +391,7 @@ def _read_author_pubkey(sidecar_dir: Path, package_id: str) -> str:
 
 
 def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
-	"""Walk the manifest's library artifacts and produce one grant
+	"""Walk the manifest's package artifacts and produce one grant
 	record per `(artifact, namespace, kid)` triple.
 
 	Returned record shape (CLI-friendly):
@@ -420,7 +420,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 
 	plans: list[dict[str, Any]] = []
 	for art in manifest.artifacts:
-		if art.kind != "library":
+		if art.kind != "package":
 			continue  # app artifacts don't carry SCI / author claims
 		claim_path = manifest_dir / author_claim_filename(art.name)
 		if not claim_path.is_file():
@@ -470,7 +470,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 		})
 	if not plans:
 		raise ValueError(
-			f"manifest at {manifest_path} declares no library artifacts; "
+			f"manifest at {manifest_path} declares no package artifacts; "
 			f"nothing to bootstrap"
 		)
 	return plans
@@ -660,12 +660,12 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 	expected_certifier_kid = _resolve_certifier_kid(opts)
 
 	# 3. Per-artifact checks.
-	libs = [a for a in manifest.artifacts if a.kind == "library"]
+	libs = [a for a in manifest.artifacts if a.kind == "package"]
 	if not libs:
 		# Apps don't carry SCI / author claims; nothing to verify.
 		# Surface a warning so the operator knows nothing is checked.
 		warnings.append({"artifact": None, "code": "no_libraries",
-			"message": "manifest declares no library artifacts; nothing to verify"})
+			"message": "manifest declares no package artifacts; nothing to verify"})
 
 	for art in libs:
 		report: dict[str, Any] = {"artifact": art.name, "ok": True}
@@ -815,7 +815,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 
 		checked.append(report)
 
-	# 4. Multi-claim invariant: one author-claim per library artifact.
+	# 4. Multi-claim invariant: one author-claim per package artifact.
 	#    Iterate every `<X>.author-claim` in the manifest dir and flag
 	#    files that don't correspond to a declared artifact.
 	declared_claim_names = {author_claim_filename(a.name) for a in libs}
@@ -824,7 +824,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 			warnings.append({"artifact": None, "code": "orphan_author_claim",
 				"message": (
 					f"stray author claim {p.name} in {manifest_dir} does "
-					f"not match any library artifact in the manifest; "
+					f"not match any package artifact in the manifest; "
 					f"safe to delete unless you are mid-migration."
 				)})
 

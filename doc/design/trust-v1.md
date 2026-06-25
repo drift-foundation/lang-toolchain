@@ -542,7 +542,7 @@ the diagnostic is "package manifest missing source_content_id".
 Drift built-in tooling stamps SCI automatically:
 
 - `drift deploy` computes SCI from declared source/asset bytes.
-- `drift build` (library mode) does the same with a graceful
+- `drift build` (package mode) does the same with a graceful
   fallback to `None` when the source tree is not fully resolvable
   (test mocks, partial trees), which lets non-verifying builds keep
   working but produces a `.dmp` that the v1 verifier will reject
@@ -1089,7 +1089,7 @@ helper, derives `package_id` / `version` / `required_deps` /
 `namespaces` from the artifact entry, captures `release_utc` as
 now, and signs into `<repo>/drift/<pkg>.author-claim` (the
 location `drift deploy` will look for it).  Operators with
-multiple library artifacts in one manifest pass `--artifact
+multiple package artifacts in one manifest pass `--artifact
 <name>` to disambiguate; operators owning additional namespace
 patterns (e.g. namespace federations) pass `--namespace <glob>`
 repeatedly.
@@ -1218,7 +1218,7 @@ grant a reserved namespace).
 it only needs the trust store + the claim's signer kid.  It
 validates:
 
-  - every library artifact has `drift/<pkg>.author-claim`;
+  - every package artifact has `drift/<pkg>.author-claim`;
   - claim package_id / version / required_deps / source_content_id
     match the manifest;
   - the claim's signer kid is granted `authors` for at least one
@@ -1427,7 +1427,7 @@ carries none of its sidecars or provenance and cannot be verified
 in isolation, so the verb accepts only the directory; pointing it
 at a `.zdmp` file (or any non-directory) is an invocation error,
 not a verification failure.  The directory must contain exactly one
-`*.zdmp` (the standard `lib/<pkg>/<version>/` layout does); zero or
+`*.zdmp` (the standard `pkg/<pkg>/<version>/` layout does); zero or
 many is an invocation error.
 
 #### 7.6.2 Verification scope

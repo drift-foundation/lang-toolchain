@@ -66,7 +66,7 @@ def _stdlib_sci(repo_root: Path, version: str) -> str:
 		for p in stdlib_dir.rglob("*.drift")
 	)
 	return compute_artifact_source_content_id(
-		kind="library",
+		kind="package",
 		package_id="std",
 		version=version,
 		module_namespace="std",

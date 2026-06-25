@@ -31,7 +31,9 @@ What's OUT (non-canonical):
 - absolute paths, file mtimes
 - compiler-produced payload bytes
 - signatures
-- **target / build class** (e.g. `drift-dev`, `library`, `app`).
+- **target / build class** (e.g. `drift-dev`, `drift-linux-x86_64`).
+  (NB: `kind` — `package`/`app` — IS in source identity; do not confuse
+  the artifact kind with the build target.)
   Target is a CERTIFIER concern (which build environment produced
   the artifact bytes) and lives on `cert_claim.body.target`, not
   on source identity.  One author claim can therefore cover the
@@ -163,7 +165,7 @@ class SourceContentInputs:
 	**No `target_class`.**  Target/build environment is certifier
 	metadata (`cert_claim.body.target`), not source identity.
 	"""
-	kind: str  # "library" or "app"
+	kind: str  # canonical "package" or "app" (never legacy "library" — v2)
 	package_id: str
 	version: str
 	module_namespace: str
@@ -217,7 +219,22 @@ def compute_source_content_id(inputs: SourceContentInputs) -> str:
 	rejects absolute paths, `..` segments, and empty entries.  This
 	guarantees the signed identity references project-local source
 	only.
+
+	v2 canonical-kind enforcement: `kind` is hashed into the signed
+	identity, so it must be a CANONICAL v2 kind (`"package"` or
+	`"app"`).  The legacy alias `"library"` is rejected HERE — this is
+	the signed-identity boundary, and `manifest.normalize_artifact_kind`
+	is the ONE place legacy `library` is canonicalized to `package`.
+	Callers must normalize before computing source identity; a stray
+	`library` must never reach the hash.
 	"""
+	if inputs.kind not in ("package", "app"):
+		raise ValueError(
+			f"source_content_id kind must be canonical 'package' or 'app', got "
+			f"{inputs.kind!r}; legacy 'library' is normalized to 'package' at the "
+			f"manifest boundary (manifest.normalize_artifact_kind) — a non-canonical "
+			f"kind must never reach the signed source identity"
+		)
 	_reject_duplicates(list(inputs.modules), field="modules", key_label="path")
 	_reject_duplicates(list(inputs.assets), field="assets", key_label="path")
 	_reject_duplicates(list(inputs.package_deps), field="package_deps", key_label="name")

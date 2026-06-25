@@ -237,7 +237,7 @@ All paths must be absolute.
 ### 2.3 Selective overlay (staging → certified)
 
 Short-term migration overlap — for example, an app team consuming
-`certified/current/lib` while another team has shipped a patch to
+`certified/current/pkg` while another team has shipped a patch to
 `staging/` that the app team needs to integrate against before the next
 certification cycle — is the supported overlay use case. Order
 `DRIFT_PACKAGE_ROOT` (or the equivalent config / CLI layer) so the
@@ -245,7 +245,7 @@ staging root precedes the certified root, then regenerate the lock:
 
 ```bash
 # 1. Set ordered roots (staging first, certified second).
-export DRIFT_PACKAGE_ROOT=/abs/path/to/staging/lib:/abs/path/to/certified/current/lib
+export DRIFT_PACKAGE_ROOT=/abs/path/to/staging/pkg:/abs/path/to/certified/current/pkg
 
 # 2. Regenerate the lock against the overlayed roots.  drift-web (or
 #    whichever package staging publishes) pins to staging's exact
@@ -364,7 +364,7 @@ The release workflow separates state preparation from publishing:
 ### 4.1 Prepare (resolve dependencies, write lock)
 
 ```bash
-drift prepare --manifest drift/manifest.json --dest ~/opt/drift/lib
+drift prepare --manifest drift/manifest.json --dest ~/opt/drift/pkg
 ```
 
 This resolves all package dependencies and writes `drift/lock.json`.
@@ -382,7 +382,7 @@ file does not exist.
 ### 4.2a Author-publish + project trust bootstrap (one-time)
 
 `drift deploy` consumes — it does not produce — the project's
-author claims and trust store.  Each library artifact needs two
+author claims and trust store.  Each package artifact needs two
 committed files in `drift/`:
 
 ```text
@@ -465,7 +465,7 @@ failure modes.
 ### 4.3 Deploy (build, sign, smoke, publish)
 
 ```bash
-drift deploy --manifest drift/manifest.json --dest ~/opt/drift/lib --driftc driftc
+drift deploy --manifest drift/manifest.json --dest ~/opt/drift/pkg --driftc driftc
 ```
 
 Deploy consumes the committed lock state. It builds, signs, smoke-tests,
@@ -477,7 +477,7 @@ rewrite `drift/lock.json` or other repo-managed metadata.
 Published layout for a package (trust-v1):
 
 ```text
-~/opt/drift/lib/net-tls/0.3.4/
+~/opt/drift/pkg/net-tls/0.3.4/
 ├── assets/
 ├── net-tls.author-profile
 ├── net-tls.author-claim                 # author claim (drift author)
@@ -504,7 +504,7 @@ rewrite the tracked project profile file after commit.
 The consumer obtains the publisher's deployed author profile and trusts it:
 
 ```bash
-$DRIFT_TOOL trust ~/opt/drift/lib/acme-math/0.1.0/acme-math.author-profile --trust-store drift/trust.json
+$DRIFT_TOOL trust ~/opt/drift/pkg/acme-math/0.1.0/acme-math.author-profile --trust-store drift/trust.json
 ```
 
 This displays the author's identity, key fingerprint, and namespace claims,
@@ -597,7 +597,7 @@ drift author                                          \
 This produces `sandbox/libmath/drift/acme.math.author-claim` (next
 to the manifest, which is also where `drift deploy` looks for it).
 Optional flags: `--artifact <name>` when the manifest declares
-multiple library artifacts; `--namespace <glob>` (repeatable) to
+multiple package artifacts; `--namespace <glob>` (repeatable) to
 override the default `<art.module_namespace>.*`; `--release-utc
 <iso>` to pin the timestamp (default: now); `--sidecar-dir <dir>`
 to override the output location; `--overwrite` to replace.

@@ -86,7 +86,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	p.add_argument("--app-dest", type=UserPath, default=None,
 		help="Publish destination root for app artifacts (required if manifest has apps)")
 	p.add_argument("--package-root", type=UserPath, action="append", default=None,
-		help="Library root for resolving package_deps (repeatable; default: --dest)")
+		help="Package root for resolving package_deps (repeatable; default: --dest)")
 	p.add_argument("--artifact", action="append", default=None,
 		help="Build only this artifact (repeatable; default: all)")
 	p.add_argument("--driftc", type=UserPath, default=None,
@@ -621,14 +621,14 @@ def _resolve_artifact_deps(
 	Deploy is read-only with respect to drift/lock.json.  If the lock
 	is missing or stale, the user must run ``drift prepare`` first.
 
-	`co_artifact_names` names the library artifacts declared in the
+	`co_artifact_names` names the package artifacts declared in the
 	current manifest.  Only those IDs may legitimately appear in the
 	lock with `dep_type: "co-artifact"` — anything else claiming
 	co-artifact status is treated as lock corruption and rejected.
 
 	`snapshot_exempt_ids` is threaded into the run-snapshot-gated
 	`build_package_index` call under source-rebuild.  Populated by
-	the caller (`_run_impl`) with the manifest's library-artifact
+	the caller (`_run_impl`) with the manifest's package-artifact
 	names when `DRIFT_CERT_MODE=stage` — intra-manifest co-artifacts
 	published earlier in this same deploy invocation skip the
 	snapshot gate because they are producer outputs of THIS run, not
@@ -2001,7 +2001,7 @@ def _deploy_artifact_impl(
 	dry_run: bool,
 	compiler_info: CompilerInfo,
 	staged_pkg_root: Path,
-	# Required for library artifacts (cert claim emission); None
+	# Required for package artifacts (cert claim emission); None
 	# permitted for app-only deploys (no cert claim is signed).
 	cert_suite_options: CertSuiteOptions | None,
 	native_lib_paths: list[Path] | None = None,
@@ -2047,7 +2047,7 @@ def _deploy_artifact_impl(
 			link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
 
 	source_content_id: str | None = None
-	if art.kind == "library":
+	if art.kind == "package":
 		from tools.drift_deploy.build_cmd import compute_artifact_sci
 		# Shared SCI helper (see `build_cmd.compute_artifact_sci`):
 		# the same Artifact + manifest_dir + target MUST produce the
@@ -2099,7 +2099,7 @@ def _deploy_artifact_impl(
 	sig_path: Path | None = None
 	staged_profile: Path | None = None
 
-	if art.kind == "library":
+	if art.kind == "package":
 		if sign_key is None:
 			raise DeployError(
 				f"artifact '{art.name}': signing key required for package artifacts; "
@@ -2184,10 +2184,10 @@ def _deploy_artifact_impl(
 		# `has_packages` is True; reaching this branch with no options
 		# would be an internal contract bug, not a user-facing error.
 		assert cert_suite_options is not None, (
-			"library artifact reached cert-claim emission without "
+			"package artifact reached cert-claim emission without "
 			"resolved cert_suite_options -- `_run_impl` must call "
 			"`_resolve_cert_suite_options` whenever the manifest has "
-			"a library artifact"
+			"a package artifact"
 		)
 		with _events.timed("cert_emit"):
 			cert_claim_path = _emit_cert_claim_for_artifact(
@@ -2280,10 +2280,10 @@ def _deploy_artifact_impl(
 		# happen at consumer-load time, so the smoke is honest.
 
 	# ── Step 3: Assets ──
-	# Library packages now carry their declared assets INSIDE the verified
+	# Package artifacts now carry their declared assets INSIDE the verified
 	# .dmp/.zdmp (content-addressed blobs covered by the cert claim's
 	# artifact_sha256 + the SCI), materialized only through the verify-gated
-	# `drift unpack`.  So a library no longer publishes a loose, unverified
+	# `drift unpack`.  So a package no longer publishes a loose, unverified
 	# `assets/` folder — that ambiguous trust path is removed deliberately.
 	# Apps have no signed container to carry assets, so they keep the loose
 	# staging (app asset trust is out of scope for the in-package design).
@@ -2349,7 +2349,7 @@ def _deploy_artifact_impl(
 	# used for both baseline and custom smoke (via DRIFT_STAGED_PKG_ROOT).
 	smoke_pkg_root = stage_dir / f"_smoke_pkgroot_{art.name}"
 	smoke_pkg_root.mkdir(parents=True, exist_ok=True)
-	if art.kind == "library":
+	if art.kind == "package":
 		art_in_staged = staged_pkg_root / art.name
 		if art_in_staged.exists():
 			smoke_art_link = smoke_pkg_root / art.name
@@ -2369,7 +2369,7 @@ def _deploy_artifact_impl(
 	if skip_smoke:
 		print(f"  warning: --skip-smoke: smoke skipped for '{art.name}'", file=sys.stderr)
 	else:
-		if art.kind == "library":
+		if art.kind == "package":
 			# v1: smoke uses the project's normal trust store
 			# (`baseline_trust`).  No overlay -- the cert + author
 			# sidecars travel with the artifact and are discovered
@@ -2399,7 +2399,7 @@ def _deploy_artifact_impl(
 			"DRIFT_ARTIFACT_VERSION": art.version,
 			"DRIFT_ARTIFACT_KIND": art.kind,
 		})
-		if art.kind == "library":
+		if art.kind == "package":
 			smoke_env["DRIFT_STAGED_PKG"] = str(zdmp_path)
 			# `DRIFT_STAGED_SIG` is preserved for backward-compat
 			# with smoke scripts that look for an artifact-signature
@@ -2420,7 +2420,7 @@ def _deploy_artifact_impl(
 		return
 
 	with _events.timed("publish"):
-		if art.kind == "library":
+		if art.kind == "package":
 			if dest is None:
 				raise DeployError("--dest required for package artifacts")
 			pub = _publish_package(art, staged_install=staged_install, dest=dest)
@@ -2473,7 +2473,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 		artifacts = list(manifest.artifacts)
 
 	# Validate dest requirements.
-	has_packages = any(a.kind == "library" for a in artifacts)
+	has_packages = any(a.kind == "package" for a in artifacts)
 	has_apps = any(a.kind == "app" for a in artifacts)
 
 	if has_packages and not args.dest:
@@ -2558,7 +2558,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 
 	# Build mapping from package name → module_namespace for co-deployed deps.
 	dep_namespace_map: dict[str, str] = {
-		a.name: a.module_namespace for a in artifacts if a.kind == "library"
+		a.name: a.module_namespace for a in artifacts if a.kind == "package"
 	}
 
 	# ── Resolution / lock (per-artifact, read-only) ──
@@ -2578,12 +2578,12 @@ def _run_impl(args: argparse.Namespace) -> int:
 		except ValueError as e:
 			raise DeployError(f"failed to read {lock_path}: {e}")
 
-	# Library artifacts in this manifest are the ONLY packages whose
+	# Package artifacts in this manifest are the ONLY packages whose
 	# lock entries may legitimately carry `dep_type: "co-artifact"`
 	# (bypassing the sha/signer re-check because they are built in
 	# this same deploy run).  Anything else claiming co-artifact
 	# status in the lock is rejected at verify time.
-	co_artifact_names = {a.name for a in artifacts if a.kind == "library"}
+	co_artifact_names = {a.name for a in artifacts if a.kind == "package"}
 
 	# Source-rebuild lane selector + orch run snapshot.  Deploy
 	# enters source-rebuild mode under `DRIFT_CERT_MODE=stage`,
@@ -2592,7 +2592,7 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# publishing).  Under source-rebuild the snapshot is REQUIRED.
 	#
 	# The stage vs certify split is expressed as `snapshot_exempt_ids`:
-	# under stage, the manifest's library-artifact names are exempt
+	# under stage, the manifest's package-artifact names are exempt
 	# from the snapshot gate (they are PRODUCER OUTPUTS of this
 	# deploy invocation, not consumed deps — and orch hasn't
 	# refreshed the snapshot mid-deploy to include them).  Under

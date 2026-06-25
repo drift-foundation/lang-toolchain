@@ -18,17 +18,22 @@ Role invariant:
     concrete artifact?"  Same actor MAY hold both roles, but the
     claims stay separate.
 
-Body schema (signed-over):
+Body schema (signed-over), v2:
 
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "package_id": "<str>",
       "version": "<str>",
+      "artifact_kind": "package" | "app",
       "namespaces": ["<pattern>", ...],
       "source_content_id": "sha256:<hex>",
       "required_deps": [{"name": "<str>", "version_range": "<str>"}, ...],
       "release_utc": "<ISO 8601>"
     }
+
+v2 (clean break): `artifact_kind` is REQUIRED and the loader rejects body
+`schema_version` 1 outright — no legacy reader; existing artifacts re-issue
+v2 claims.  The envelope `format`/`version` stays `drift-author-claim` v1.
 
 Sidecar schema (envelope around the body):
 
@@ -75,10 +80,14 @@ from lang.driftc.packages.trust_v1 import TrustStore
 
 _FORMAT_TAG = "drift-author-claim"
 _FORMAT_VERSION = 1
-_BODY_SCHEMA_VERSION = 1
+# v2 body: adds REQUIRED `artifact_kind` ("package"|"app").  Clean break —
+# the loader rejects body schema_version 1 outright (no legacy reader);
+# existing artifacts re-issue v2 claims (pool re-cert).
+_BODY_SCHEMA_VERSION = 2
+_CANONICAL_ARTIFACT_KINDS = frozenset({"package", "app"})
 
 
-# Exact key sets accepted at each nesting level.  Strict v1 rejects
+# Exact key sets accepted at each nesting level.  The strict loader rejects
 # unknown keys so an attacker cannot smuggle unsigned-but-visible data
 # (e.g. `body.artifact_sha256`) past a signature that was computed
 # from the same JSON.  Per O6, author claims MUST NOT bind artifact
@@ -89,6 +98,7 @@ _BODY_KEYS = frozenset({
 	"schema_version",
 	"package_id",
 	"version",
+	"artifact_kind",
 	"namespaces",
 	"source_content_id",
 	"required_deps",
@@ -104,7 +114,7 @@ def _reject_unknown_keys(obj: dict, allowed: frozenset[str], *, context: str) ->
 	Centralized so every nesting level in the author-claim loader
 	rejects unknown keys with the same diagnostic shape.  Critical
 	for security: an injected `body.artifact_sha256` (or any other
-	field not in the v1 schema) MUST NOT be silently dropped — the
+	field not in the v2 body schema) MUST NOT be silently dropped — the
 	loader would then recompute signing bytes from only the known
 	fields, the existing signature would still verify, and a
 	downstream consumer who naively reads the JSON dict could be
@@ -114,8 +124,8 @@ def _reject_unknown_keys(obj: dict, allowed: frozenset[str], *, context: str) ->
 	if unknown:
 		raise ValueError(
 			f"{context}: unknown field(s) {sorted(unknown)!r}; "
-			f"v1 accepts exactly {sorted(allowed)!r}.  Strict-v1 "
-			f"rejects unknown keys to prevent unsigned data from "
+			f"this claim schema accepts exactly {sorted(allowed)!r}.  The strict "
+			f"loader rejects unknown keys to prevent unsigned data from "
 			f"riding inside a signed-looking claim."
 		)
 
@@ -144,10 +154,16 @@ class AuthorClaimBody:
 	metadata (`cert_claim.body.target`), not source identity.  One
 	author claim can therefore cover the same source release across
 	multiple build targets; each target gets its own cert claim.
+
+	`artifact_kind` ("package"|"app", v2): the author attests source
+	identity for a runnable app or an importable package; the kind is
+	explicit so policy/diagnostics don't infer it.  Must equal the cert
+	claim's kind (verify cross-checks).
 	"""
-	schema_version: int  # always 1
+	schema_version: int  # always 2 (v2)
 	package_id: str
 	version: str
+	artifact_kind: str  # "package" | "app"
 	namespaces: tuple[str, ...]
 	source_content_id: str  # "sha256:<hex>"
 	required_deps: tuple[RequiredDep, ...]
@@ -178,7 +194,7 @@ def validate_body_shape(body: AuthorClaimBody) -> None:
 	The JSON loader (`_parse_body`) runs equivalent checks when
 	parsing an untrusted document.  Without this function a
 	hand-built dataclass with malformed values (empty strings,
-	bad SCI shape, schema_version != 1) would sign canonical
+	bad SCI shape, schema_version != 2) would sign canonical
 	bytes that the loader would later refuse.  Called from
 	`body_signing_bytes` and `_body_to_canonical_dict` so emit and
 	load enforce the same contract.
@@ -192,6 +208,12 @@ def validate_body_shape(body: AuthorClaimBody) -> None:
 		raise ValueError("author claim body.package_id must be a non-empty string")
 	if not isinstance(body.version, str) or not body.version:
 		raise ValueError("author claim body.version must be a non-empty string")
+	if body.artifact_kind not in _CANONICAL_ARTIFACT_KINDS:
+		raise ValueError(
+			f"author claim body.artifact_kind must be one of "
+			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r} (v2); got {body.artifact_kind!r} "
+			f"(legacy 'library' is not a valid signed kind)"
+		)
 	if not body.namespaces:
 		raise ValueError("author claim body.namespaces must be a non-empty list")
 	for idx, ns in enumerate(body.namespaces):
@@ -244,6 +266,7 @@ def _body_to_canonical_dict(body: AuthorClaimBody) -> dict[str, Any]:
 		"schema_version": int(body.schema_version),
 		"package_id": body.package_id,
 		"version": body.version,
+		"artifact_kind": body.artifact_kind,
 		"namespaces": sorted(body.namespaces),
 		"source_content_id": body.source_content_id,
 		"required_deps": deps_dicts,
@@ -325,7 +348,7 @@ def dump_author_claim_json(claim: AuthorClaim) -> str:
 def load_author_claim_json(text: str) -> AuthorClaim:
 	"""Parse and shape-validate an author-claim sidecar.
 
-	Strict v1 only.  Any deviation (wrong format tag, wrong version,
+	Strict loader (format v1, body schema v2).  Any deviation (wrong format tag, wrong version,
 	missing fields, wrong types) raises `ValueError` with a
 	descriptive message.
 
@@ -369,7 +392,7 @@ def _parse_body(obj: dict) -> AuthorClaimBody:
 	"""Strict body parse.  Every field type-checked.  Unknown keys
 	are REJECTED — see `_reject_unknown_keys` for the rationale.
 	Specifically: an injected `artifact_sha256` (or any other field
-	outside the v1 schema) MUST cause load to fail, otherwise an
+	outside the v2 body schema) MUST cause load to fail, otherwise an
 	attacker could smuggle a fake artifact binding past a valid
 	author signature.  Per O6, author claims never bind artifact
 	bytes; the loader enforces this at the field-name level."""
@@ -386,6 +409,12 @@ def _parse_body(obj: dict) -> AuthorClaimBody:
 	version_str = obj.get("version")
 	if not isinstance(version_str, str) or not version_str:
 		raise ValueError("author claim body.version must be a non-empty string")
+	artifact_kind = obj.get("artifact_kind")
+	if artifact_kind not in _CANONICAL_ARTIFACT_KINDS:
+		raise ValueError(
+			f"author claim body.artifact_kind must be one of "
+			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r} (v2); got {artifact_kind!r}"
+		)
 	namespaces_raw = obj.get("namespaces")
 	if not isinstance(namespaces_raw, list) or not namespaces_raw:
 		raise ValueError("author claim body.namespaces must be a non-empty list of strings")
@@ -441,6 +470,7 @@ def _parse_body(obj: dict) -> AuthorClaimBody:
 		schema_version=schema_ver,
 		package_id=package_id,
 		version=version_str,
+		artifact_kind=artifact_kind,
 		namespaces=tuple(namespaces),
 		source_content_id=sci,
 		required_deps=tuple(required_deps),
