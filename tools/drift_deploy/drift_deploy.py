@@ -2280,7 +2280,15 @@ def _deploy_artifact_impl(
 		# happen at consumer-load time, so the smoke is honest.
 
 	# ── Step 3: Assets ──
-	_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
+	# Library packages now carry their declared assets INSIDE the verified
+	# .dmp/.zdmp (content-addressed blobs covered by the cert claim's
+	# artifact_sha256 + the SCI), materialized only through the verify-gated
+	# `drift unpack`.  So a library no longer publishes a loose, unverified
+	# `assets/` folder — that ambiguous trust path is removed deliberately.
+	# Apps have no signed container to carry assets, so they keep the loose
+	# staging (app asset trust is out of scope for the in-package design).
+	if art.kind == "app":
+		_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
 	# Author profile was staged in step 2 (before signing) for envelope binding.
 
 	# ── Step 4: Provenance + sign (app) ──

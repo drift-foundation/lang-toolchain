@@ -519,6 +519,139 @@ def resolve_module_files(modules: list[str], *, source_root: Path) -> list[str]:
 	return out
 
 
+def resolve_asset_files(assets: list[str], *, source_root: Path) -> list[str]:
+	"""Expand authored ``artifacts[].assets[]`` entries to the concrete file set.
+
+	The asset analog of `resolve_module_files`.  Each entry may be either:
+
+	- a **file** path — kept verbatim; or
+	- a **directory** path (e.g. ``"assets/singular/db/"``) — scanned
+	  **recursively** for ALL regular files (any extension, not just
+	  ``*.drift``), so a naturally directory-shaped asset tree (a folder of
+	  SQL migrations, doc assets, …) can be declared as one entry.
+
+	Returns project-relative POSIX path strings, **deduplicated** and with
+	each directory's contents **sorted**, so the packed asset set and the
+	signed `source_content_id` are derived identically — this MUST be used by
+	BOTH `compute_artifact_sci` (the SCI path) and `build_package_cmd` (the
+	packing path), exactly as `resolve_module_files` is shared, or the two
+	would disagree and the package would fail consumer-side SCI verification.
+
+	Symlink policy (deliberate; matches source-input handling, and the
+	container carries BYTES not filesystem topology — `drift unpack` never
+	creates symlinks):
+
+	- A symlink to a regular file INSIDE the root is OK: the target bytes are
+	  packed under the symlink's logical path (a regular file materializes on
+	  unpack).
+	- A symlink whose resolved target ESCAPES the root is REJECTED (not
+	  silently skipped).
+	- A DANGLING symlink is REJECTED.
+	- A symlink to a DIRECTORY is REJECTED for v1 (avoids loops and
+	  "what-got-signed" ambiguity) — declare the real directory instead.
+
+	The directory walk therefore walks regular files only and does NOT recurse
+	into symlinked directories.  A non-existent file entry passes through
+	unchanged so the downstream missing-asset diagnostic
+	(`FileNotFoundError` in the SCI path) fires.
+	"""
+	root_resolved = source_root.resolve()
+
+	def _inside_root(p: Path) -> bool:
+		try:
+			p.resolve(strict=True).relative_to(root_resolved)
+			return True
+		except (OSError, RuntimeError, ValueError):
+			return False
+
+	out: list[str] = []
+	seen: set[str] = set()
+
+	def _add(rel: str) -> None:
+		if rel not in seen:
+			seen.add(rel)
+			out.append(rel)
+
+	def _escape_error(entry: str, *, what: str) -> "ManifestError":
+		return ManifestError(
+			f"assets entry {entry!r} {what} outside the project source root "
+			f"({source_root}); asset paths that escape the tree — including "
+			f"through `..` or symlinks — are not allowed (an author claim must "
+			f"sign, and `drift unpack` must materialize, only bytes under the "
+			f"project root). Materialize the asset inside the project, or "
+			f"restructure the root to include it."
+		)
+
+	def _disp(p: Path) -> str:
+		try:
+			return p.relative_to(source_root).as_posix()
+		except ValueError:
+			return str(p)
+
+	def _classify_symlink(p: Path) -> None:
+		"""Reject a symlink that is not an in-root regular-file symlink.
+		Returns normally only for the allowed case (in-root file)."""
+		try:
+			target = p.resolve(strict=True)
+		except (OSError, RuntimeError):
+			raise ManifestError(
+				f"assets entry contains a dangling symlink {_disp(p)!r} "
+				f"(target does not resolve); remove it or point it at a real "
+				f"in-project file."
+			)
+		if target.is_dir():
+			raise ManifestError(
+				f"assets entry contains a symlink to a directory {_disp(p)!r}; "
+				f"symlinked directories are not allowed in v1 (avoids loops and "
+				f"signing ambiguity) — declare the real directory, or "
+				f"materialize the tree under the project root."
+			)
+		try:
+			target.relative_to(root_resolved)
+		except ValueError:
+			raise _escape_error(_disp(p), what="(a symlink found under a directory entry) resolves")
+
+	for entry in assets:
+		full = source_root / entry
+		# A declared directory entry that is itself a symlink → reject (v1).
+		if full.is_symlink() and full.is_dir():
+			raise ManifestError(
+				f"assets entry {entry!r} is a symlink to a directory; symlinked "
+				f"directories are not allowed in v1 — declare the real directory."
+			)
+		if full.is_dir():
+			if not _inside_root(full):
+				raise _escape_error(entry, what="is a directory resolving")
+			found: list[str] = []
+			# `rglob` does not recurse into symlinked directories (no loops);
+			# each yielded symlink is classified explicitly below rather than
+			# silently skipped.
+			for p in full.rglob("*"):
+				if p.is_symlink():
+					_classify_symlink(p)  # raises unless in-root file symlink
+					found.append(p.relative_to(source_root).as_posix())
+				elif p.is_file():
+					# Real regular file physically under `full` (inside root).
+					found.append(p.relative_to(source_root).as_posix())
+				# else: real directory → walked into by rglob; nothing to add.
+			if not found:
+				raise ManifestError(
+					f"assets entry {entry!r} is a directory but contains no "
+					f"files (recursively); list the files explicitly or remove "
+					f"the entry"
+				)
+			for rel in sorted(found):
+				_add(rel)
+		else:
+			# File path (possibly a symlink) or a non-existent passthrough.
+			if full.is_symlink():
+				_classify_symlink(full)  # raises unless in-root file symlink
+			elif full.is_file() and not _inside_root(full):
+				raise _escape_error(entry, what="resolves")
+			_add(Path(entry).as_posix())
+	return out
+
+
 def compute_artifact_sci(
 	art: Artifact,
 	*,
@@ -563,6 +696,9 @@ def compute_artifact_sci(
 		package_deps=[(d.name, d.version) for d in art.package_deps],
 		native_deps=[d.lib for d in art.native_deps],
 		unsafe=art.unsafe,
-		asset_paths=list(art.assets),
+		# Expand directory asset entries to their files — identically to the
+		# packing path (`build_package_cmd`) — so the signed source identity
+		# matches the set of asset blobs actually packed into the .dmp.
+		asset_paths=resolve_asset_files(list(art.assets), source_root=source_root),
 		source_root=source_root,
 	)

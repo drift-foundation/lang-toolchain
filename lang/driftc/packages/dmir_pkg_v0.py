@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
@@ -25,6 +25,17 @@ MAGIC = b"DMIRPKG\0"
 VERSION = 0
 TOC_ENTRY_SIZE_V0 = 80
 HEADER_RESERVED_LEN = 64
+
+# Blob type tags carried in each TOC entry's `type` u16.  Historically
+# only DMIR payload (1) and module-interface/exports (2) existed and were
+# written as bare literals in `lang/driftc/driftc.py`.  ASSET (3) was
+# added for non-code files that travel inside the verified container (see
+# `manifest.assets` + `drift unpack`).  The loader does NOT reject unknown
+# type tags — a forward type is tolerated as an opaque content-addressed
+# blob — so this enum is additive and does not gate `format_version`.
+BLOB_TYPE_DMIR = 1
+BLOB_TYPE_EXPORTS = 2
+BLOB_TYPE_ASSET = 3
 
 # Header layout:
 # magic(8), version(u16), flags(u16), header_size(u32), manifest_len(u64),
@@ -249,6 +260,108 @@ def _parse_required_deps(manifest: dict[str, Any]) -> list[RequiredDepEntry]:
 
 
 @dataclass(frozen=True)
+class AssetEntry:
+	"""A non-code file packed inside the container.
+
+	`path` is the logical, project-relative destination path (the same
+	normalized form the producer's `source_content_id` commits to);
+	`sha256` is the bare-hex content hash (also the blob's TOC key) and
+	`length` the byte count.  The bytes live in `LoadedPackage.blobs_by_sha256`
+	under `sha256`.
+	"""
+	path: str
+	sha256: str
+	length: int
+
+
+def _normalize_asset_path(p: Any) -> str:
+	"""Normalize + validate a `manifest.assets[].path` for safe extraction.
+
+	Mirrors `source_content_id._normalize_canonical_path` (the same rule
+	the producer's SCI commitment uses) so the in-container logical path
+	matches the signed source identity, and so `drift unpack` can never be
+	steered outside its `--dest` (no absolute paths, no `.`/`..` segments,
+	no leading `./`, no trailing slash, no empty path).  Imported lazily to
+	keep this container module dependency-light and cycle-free.
+	"""
+	from lang.driftc.packages.source_content_id import _normalize_canonical_path
+	if not isinstance(p, str):
+		raise PackageMetadataError("assets[].path must be a string")
+	try:
+		return _normalize_canonical_path(p)
+	except ValueError as e:
+		raise PackageMetadataError(f"assets[].path is not a safe project-relative path: {e}")
+
+
+def _parse_assets(
+	manifest: dict[str, Any],
+	blobs_by_sha: dict[str, bytes],
+	toc_type_by_sha: dict[str, int],
+	module_blob_shas: frozenset[str],
+) -> list[AssetEntry]:
+	"""Extract + validate `assets` from a `.dmp` manifest.
+
+	Returns `[]` when the key is absent (a code-only package — the common
+	case, and the backward-compatible path: a pre-asset package loads
+	unchanged).  Raises `PackageMetadataError` on any malformed entry,
+	missing/duplicate path, a blob reference not present in the verified
+	blob set, a length that disagrees with the actual blob bytes, or a blob
+	whose physical TOC type is not `BLOB_TYPE_ASSET` (an asset entry must
+	not alias a DMIR/interface blob — that would let a malformed signed
+	package have `drift unpack` write a code blob to disk).  The blob bytes
+	themselves are already sha256-verified by the container loader before
+	this runs.
+	"""
+	raw = manifest.get("assets")
+	if raw is None:
+		return []
+	if not isinstance(raw, list):
+		raise PackageMetadataError("manifest 'assets' must be an array")
+	out: list[AssetEntry] = []
+	seen_paths: set[str] = set()
+	for i, entry in enumerate(raw):
+		if not isinstance(entry, dict):
+			raise PackageMetadataError(f"assets[{i}] must be an object")
+		norm_path = _normalize_asset_path(entry.get("path"))
+		if norm_path in seen_paths:
+			raise PackageMetadataError(f"assets[{i}] duplicate path: {norm_path!r}")
+		seen_paths.add(norm_path)
+		blob_ref = entry.get("blob")
+		if not isinstance(blob_ref, str) or not blob_ref.startswith("sha256:"):
+			raise PackageMetadataError(f"assets[{i}] ('{norm_path}') missing 'blob' sha256 reference")
+		sha = blob_ref.split("sha256:", 1)[1]
+		data = blobs_by_sha.get(sha)
+		if data is None:
+			raise PackageMetadataError(f"assets[{i}] ('{norm_path}') references missing blob {blob_ref}")
+		blob_type = toc_type_by_sha.get(sha)
+		if blob_type != BLOB_TYPE_ASSET:
+			raise PackageMetadataError(
+				f"assets[{i}] ('{norm_path}') references blob {blob_ref} whose TOC type "
+				f"is {blob_type} (expected BLOB_TYPE_ASSET={BLOB_TYPE_ASSET}); an asset "
+				f"entry may not alias a DMIR/interface blob"
+			)
+		# Defense in depth against a content-addressing SHA collision: even if
+		# the TOC type tag says ASSET, the same blob bytes must not ALSO be a
+		# module's interface/payload blob (which decode it as code).  A blob
+		# can be code or asset, never both.
+		if sha in module_blob_shas:
+			raise PackageMetadataError(
+				f"assets[{i}] ('{norm_path}') references blob {blob_ref} that is also a "
+				f"module interface/payload blob (sha256 collision); a blob may be code "
+				f"or asset, not both"
+			)
+		length = entry.get("len")
+		if not isinstance(length, int) or length < 0:
+			raise PackageMetadataError(f"assets[{i}] ('{norm_path}') 'len' must be a non-negative integer")
+		if length != len(data):
+			raise PackageMetadataError(
+				f"assets[{i}] ('{norm_path}') declared len {length} != actual blob length {len(data)}"
+			)
+		out.append(AssetEntry(path=norm_path, sha256=sha, length=length))
+	return out
+
+
+@dataclass(frozen=True)
 class LoadedPackage:
 	"""A fully verified, decoded package container.
 
@@ -258,6 +371,9 @@ class LoadedPackage:
 
 	- `manifest.py::Artifact.package_deps` — owner-authored source.
 	- lock `deps` — exact resolved graph for an artifact.
+
+	`assets` lists the non-code files packed inside the container (empty
+	for a code-only package).  Their bytes live in `blobs_by_sha256`.
 	"""
 
 	path: Path
@@ -267,6 +383,7 @@ class LoadedPackage:
 	blobs_by_sha256: dict[str, bytes]
 	native_deps: list[NativeDepEntry]
 	required_deps: list[RequiredDepEntry]
+	assets: list[AssetEntry] = field(default_factory=list)
 
 
 def _encode_name_prefix(name: str) -> tuple[int, bytes]:
@@ -444,6 +561,7 @@ def _load_dmir_pkg_v0_impl(f, file_size: int, source_path: Path) -> LoadedPackag
 
 	# Decode modules.
 	modules_by_id: dict[str, PackageModule] = {}
+	module_blob_shas: set[str] = set()
 	mod_list = manifest_obj.get("modules")
 	if not isinstance(mod_list, list):
 		raise ValueError("manifest missing 'modules' list")
@@ -461,6 +579,8 @@ def _load_dmir_pkg_v0_impl(f, file_size: int, source_path: Path) -> LoadedPackag
 			raise ValueError(f"module '{mid}' missing payload_blob reference")
 		iface_sha = iface_ref.split("sha256:", 1)[1]
 		payload_sha = payload_ref.split("sha256:", 1)[1]
+		module_blob_shas.add(iface_sha)
+		module_blob_shas.add(payload_sha)
 		iface_bytes = blobs_by_sha.get(iface_sha)
 		payload_bytes = blobs_by_sha.get(payload_sha)
 		if iface_bytes is None or payload_bytes is None:
@@ -479,6 +599,11 @@ def _load_dmir_pkg_v0_impl(f, file_size: int, source_path: Path) -> LoadedPackag
 		blobs_by_sha256=blobs_by_sha,
 		native_deps=_parse_native_deps(manifest_obj),
 		required_deps=_parse_required_deps(manifest_obj),
+		assets=_parse_assets(
+			manifest_obj, blobs_by_sha,
+			{e.sha256: e.type for e in entries},
+			frozenset(module_blob_shas),
+		),
 	)
 
 

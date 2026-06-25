@@ -216,6 +216,7 @@ def resolve_driftc(explicit: Path | None = None) -> Path | None:
 from lang.driftc.packages.manifest import (
 	compute_artifact_sci,
 	project_root_for,
+	resolve_asset_files,
 	resolve_module_files,
 )
 
@@ -281,6 +282,17 @@ def build_package_cmd(
 	# Native deps.
 	for nd in art.native_deps:
 		cmd.extend(["--native-link-lib", nd.lib])
+
+	# Declared assets: pack each into the .dmp as a content-addressed blob
+	# under its project-relative logical path.  driftc reads the file bytes
+	# and stamps `manifest.assets`; the consumer materializes them via
+	# `drift unpack`.  Directory entries are expanded recursively to their
+	# files via the SAME `resolve_asset_files` the SCI path uses, so the
+	# packed asset blobs and the signed source identity stay in lock-step
+	# (anchored at the project root, the SAME anchor as `compute_artifact_sci`).
+	asset_root = project_root_for(manifest_dir)
+	for asset_rel in resolve_asset_files(list(art.assets), source_root=asset_root):
+		cmd.extend(["--asset", asset_rel, str(asset_root / asset_rel)])
 
 	# Package dep declarations: only DIRECT deps (from manifest), and
 	# they carry the **manifest's owner-declared range**, NOT the

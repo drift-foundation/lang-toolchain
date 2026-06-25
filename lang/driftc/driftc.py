@@ -8766,6 +8766,10 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		help="Declare native library dependency in emitted package (repeatable; --emit-package only)")
 	parser.add_argument("--package-dep", action="append", default=[], metavar="NAME=VERSION",
 		help="Declare Drift package dependency in emitted package (repeatable; --emit-package only)")
+	parser.add_argument("--asset", action="append", nargs=2, default=[], metavar=("RELPATH", "FILE"),
+		help="Pack a declared asset FILE into the emitted package under logical RELPATH "
+			"(content-addressed blob; repeatable; --emit-package only). RELPATH is the "
+			"project-relative path the consumer's `drift unpack` will materialize.")
 	parser.add_argument("--no-package-native-deps", action="store_true",
 		help="Suppress auto-linking of native deps declared by consumed packages")
 	parser.add_argument("--dep", action="append", default=[], metavar="PKG@VERSION",
@@ -12723,6 +12727,80 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				}
 			)
 	
+		# Build the assets manifest section from --asset flags.  Each asset
+		# file's exact bytes become a content-addressed blob (type ASSET) in
+		# the SAME blobs map / TOC as module/interface blobs, referenced by
+		# `manifest.assets[].blob`.  This puts assets under the cert claim's
+		# `artifact_sha256` (it hashes the whole .dmp) in addition to the
+		# `source_content_id` commitment the producer already computes from
+		# the same files — so a tampered asset breaks both the per-blob sha
+		# (load) and the signed artifact hash (verify).  Logical paths are
+		# normalized with the SAME validator the SCI uses, so the in-container
+		# path matches the signed source identity and can never escape the
+		# consumer's `drift unpack --dest`.
+		_assets_list: list[dict[str, object]] | None = None
+		if getattr(args, "asset", []):
+			from lang.driftc.packages.dmir_pkg_v0 import BLOB_TYPE_ASSET
+			from lang.driftc.packages.source_content_id import _normalize_canonical_path
+			_assets_list = []
+			_seen_asset_paths: set[str] = set()
+			for _rel_raw, _file_raw in args.asset:
+				try:
+					_rel = _normalize_canonical_path(str(_rel_raw))
+				except ValueError as _e:
+					msg = f"--asset relpath {_rel_raw!r} is not a safe project-relative path: {_e}"
+					if args.json:
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				if _rel in _seen_asset_paths:
+					msg = f"--asset relpath {_rel!r} declared more than once"
+					if args.json:
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				_seen_asset_paths.add(_rel)
+				_asset_file = Path(_file_raw)
+				if not _asset_file.is_file():
+					msg = f"--asset file for {_rel!r} is not a regular file: {_asset_file}"
+					if args.json:
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				_asset_bytes = _asset_file.read_bytes()
+				_asset_sha = sha256_hex(_asset_bytes)
+				# Content addressing means identical bytes share one TOC row.
+				# If an asset's bytes collide with an already-emitted code
+				# (DMIR/interface) blob, packing it would overwrite that row's
+				# type to ASSET and make the asset alias a code blob — the
+				# exact contract `_parse_assets` forbids.  Module blobs are all
+				# emitted before this loop, so a prior non-ASSET type here is a
+				# genuine cross-role collision: reject rather than produce an
+				# ambiguous package.
+				_existing_type = blob_types.get(_asset_sha)
+				if _existing_type is not None and _existing_type != BLOB_TYPE_ASSET:
+					msg = (
+						f"--asset {_rel!r} has content identical to a non-asset "
+						f"(code) blob (sha256 collision: {_asset_sha}); cannot pack "
+						f"it as an asset without aliasing a code blob"
+					)
+					if args.json:
+						_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "emit-package", "message": msg, "severity": "error", "file": "<cli>", "line": None, "column": None}]})
+					else:
+						print(f"error: {msg}", file=sys.stderr)
+					return 1
+				blobs_by_sha[_asset_sha] = _asset_bytes
+				blob_types[_asset_sha] = BLOB_TYPE_ASSET
+				blob_names[_asset_sha] = f"asset:{_rel}"
+				manifest_blobs[f"sha256:{_asset_sha}"] = {"type": "asset", "length": len(_asset_bytes)}
+				_assets_list.append({"path": _rel, "blob": f"sha256:{_asset_sha}", "len": len(_asset_bytes)})
+			# Deterministic ordering by logical path (manifest bytes must be
+			# stable for artifact_sha256 reproducibility).
+			_assets_list.sort(key=lambda a: a["path"])
+
 		# Build native_deps manifest section from --native-link-lib flags.
 		_native_deps_section: dict[str, object] | None = None
 		if getattr(args, "native_link_lib", []):
@@ -12801,6 +12879,8 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			manifest_obj["native_deps"] = _native_deps_section
 		if _required_deps_list is not None:
 			manifest_obj["required_deps"] = _required_deps_list
+		if _assets_list:
+			manifest_obj["assets"] = _assets_list
 		if args.source_content_id is not None:
 			scid = str(args.source_content_id)
 			# Strict shape validation: literal `sha256:` + exactly

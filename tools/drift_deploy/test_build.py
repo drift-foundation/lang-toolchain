@@ -271,6 +271,109 @@ class TestModulesDirectoryEntries:
 		assert "src/alias.drift" in got  # logical path kept, target is in-tree
 
 
+# ── asset directory + symlink expansion (resolve_asset_files) ────────
+
+
+class TestAssetDirectoryEntries:
+	"""`resolve_asset_files` mirrors `resolve_module_files` but matches ALL
+	files (any extension) and applies the explicit asset symlink policy."""
+
+	def _tree(self, tmp_path: Path) -> Path:
+		root = tmp_path / "proj"
+		(root / "assets" / "db").mkdir(parents=True)
+		(root / "assets" / "db" / "0001_init.sql").write_text("CREATE TABLE t();\n")
+		(root / "assets" / "db" / "0002_add.sql").write_text("ALTER TABLE t;\n")
+		(root / "assets" / "README.md").write_text("# assets\n")
+		return root
+
+	def test_directory_expands_recursively_all_extensions(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files
+		root = self._tree(tmp_path)
+		got = resolve_asset_files(["assets/"], source_root=root)
+		assert got == [
+			"assets/README.md",
+			"assets/db/0001_init.sql",
+			"assets/db/0002_add.sql",
+		]  # recursive, sorted, ALL extensions (not just .drift)
+
+	def test_file_and_directory_listings_yield_same_sci(self, tmp_path: Path):
+		"""Switching a directory entry ↔ its explicit files must NOT change the
+		SCI — the packing path and the signed identity stay in lock-step."""
+		from lang.driftc.packages.manifest import compute_artifact_sci
+		root = self._tree(tmp_path)
+		# A module is required for a library SCI; reuse the asset tree's root.
+		(root / "src").mkdir()
+		(root / "src" / "lib.drift").write_text("module p;\n")
+		mdir = root / "drift"
+		art_dir = _make_artifact(
+			entry_module="src/lib.drift", modules=["src/lib.drift"], assets=["assets/"])
+		art_files = _make_artifact(
+			entry_module="src/lib.drift", modules=["src/lib.drift"],
+			assets=["assets/README.md", "assets/db/0001_init.sql", "assets/db/0002_add.sql"])
+		assert compute_artifact_sci(art_dir, manifest_dir=mdir) == \
+			compute_artifact_sci(art_files, manifest_dir=mdir)
+
+	def test_empty_directory_is_clean_error(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files, ManifestError
+		root = tmp_path / "proj"
+		(root / "assets").mkdir(parents=True)
+		with pytest.raises(ManifestError, match="contains no files"):
+			resolve_asset_files(["assets/"], source_root=root)
+
+	def test_in_tree_file_symlink_allowed(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files
+		root = self._tree(tmp_path)
+		link = root / "assets" / "db" / "alias.sql"
+		try:
+			link.symlink_to(root / "assets" / "db" / "0001_init.sql")
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		got = resolve_asset_files(["assets/"], source_root=root)
+		assert "assets/db/alias.sql" in got  # logical (symlink) path kept
+
+	def test_escaping_file_symlink_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files, ManifestError
+		root = self._tree(tmp_path)
+		outside = tmp_path / "outside"; outside.mkdir()
+		(outside / "evil.sql").write_text("DROP TABLE users;\n")
+		link = root / "assets" / "db" / "evil.sql"
+		try:
+			link.symlink_to(outside / "evil.sql")
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		with pytest.raises(ManifestError, match="escape the tree"):
+			resolve_asset_files(["assets/"], source_root=root)
+
+	def test_dangling_symlink_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files, ManifestError
+		root = self._tree(tmp_path)
+		link = root / "assets" / "db" / "gone.sql"
+		try:
+			link.symlink_to(root / "assets" / "db" / "does-not-exist.sql")
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		with pytest.raises(ManifestError, match="dangling symlink"):
+			resolve_asset_files(["assets/"], source_root=root)
+
+	def test_symlink_to_directory_rejected(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files, ManifestError
+		root = self._tree(tmp_path)
+		(root / "real_extra").mkdir()
+		(root / "real_extra" / "x.sql").write_text("SELECT 1;\n")
+		link = root / "assets" / "linkdir"
+		try:
+			link.symlink_to(root / "real_extra", target_is_directory=True)
+		except (OSError, NotImplementedError):
+			pytest.skip("symlinks not supported on this platform")
+		with pytest.raises(ManifestError, match="symlink to a directory"):
+			resolve_asset_files(["assets/"], source_root=root)
+
+	def test_nonexistent_file_passes_through(self, tmp_path: Path):
+		from lang.driftc.packages.manifest import resolve_asset_files
+		root = tmp_path / "proj"; root.mkdir()
+		assert resolve_asset_files(["assets/x.sql"], source_root=root) == ["assets/x.sql"]
+
+
 # ── build_package_cmd tests ──────────────────────────────────────────
 
 
