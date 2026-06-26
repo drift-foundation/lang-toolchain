@@ -189,7 +189,7 @@ def _publish_library_package(
 	assert res.returncode == 0, (
 		f"library '{package_id}' --emit-package failed:\n{res.stderr[:1500]}"
 	)
-	# Sign the library package with v1 author + cert claims and
+	# Sign the library package with trust-v1 author + cert claim and
 	# place it next to stdlib in a unified pkg_root.
 	priv = Ed25519PrivateKey.generate()
 	pub = priv.public_key().public_bytes(
@@ -248,7 +248,7 @@ def _publish_library_package(
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{package_id}.zdmp",
+			artifact_kind="package", artifact_path=f"{package_id}.dmp",
 			package_id=package_id,
 			version=package_version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),

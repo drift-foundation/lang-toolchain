@@ -189,7 +189,7 @@ def _build_and_sign_pkg(
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version="0.1.0",
+			artifact_kind="package", artifact_path=f"{pkg_id}.dmp", package_id=pkg_id, version="0.1.0",
 			artifact_sha256="sha256:" + hashlib.sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="drift-dev",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

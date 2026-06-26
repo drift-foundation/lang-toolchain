@@ -389,7 +389,7 @@ pub struct Inner {
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path="producer-lib.zdmp", package_id="producer-lib", version="1.0.0",
+			artifact_kind="package", artifact_path="producer-lib.dmp", package_id="producer-lib", version="1.0.0",
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="drift-dev",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

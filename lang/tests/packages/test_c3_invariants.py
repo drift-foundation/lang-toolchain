@@ -148,7 +148,7 @@ def _publish_dep_sidecars(
 	target: str = "linux-x86_64",
 ) -> tuple[str, str]:
 	"""Stamp an external/co-artifact dep into `staged_pkg_root` with
-	BOTH a v1 author claim and a v1 cert claim, mimicking what a
+	BOTH a trust-v1 author claim and a trust-v1 cert claim, mimicking what a
 	previous deploy would have produced for this dep.  Returns
 	`(author_kid, cert_kid)`.
 	"""
@@ -262,7 +262,7 @@ def _emit_app_cert_claim(
 			provenance_bytes = b"synthetic-provenance-bundle-bytes"
 		provenance_path.write_bytes(provenance_bytes)
 
-	# v1 cert claims do not accept a synthetic default in the suite
+	# trust-v1 cert claim do not accept a synthetic default in the suite
 	# evidence digest.  Tests must supply a real-shape sha256 for the
 	# *suite's own* evidence artifact (separate from the provenance
 	# bundle pinned via `evidence_sha256`).  Use a stable hash so the
@@ -733,7 +733,7 @@ def test_mariadb_shape_sibling_plus_external_dep(tmp_path: Path) -> None:
 	this run, which depends on an external library (`net.tls`)
 	already published upstream.
 
-	The v1 cert claim for the app must contain dep_graph entries
+	The trust-v1 cert claim for the app must contain dep_graph entries
 	for BOTH:
 	  - the SIBLING (identity comes from the just-emitted sibling
 	    sidecars in staged_pkg_root -- the K HIGH #8 fix);

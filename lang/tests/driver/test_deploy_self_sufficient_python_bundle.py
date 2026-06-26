@@ -103,7 +103,7 @@ def _emit_v1_sidecars(
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{package_id}.zdmp", package_id=package_id, version=package_version,
+			artifact_kind="package", artifact_path=f"{package_id}.dmp", package_id=package_id, version=package_version,
 			artifact_sha256=artifact_sha256, source_content_id=_TEST_SCI,
 			target=target,
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

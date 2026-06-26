@@ -162,7 +162,7 @@ def _write_v1_sidecars(
 	))
 	cert_path = sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{package_id}.zdmp",
+			artifact_kind="package", artifact_path=f"{package_id}.dmp",
 			package_id=package_id,
 			version=version,
 			artifact_sha256="sha256:" + _sha256_hex(pkg_bytes),
@@ -197,7 +197,7 @@ def _write_sig_sidecar(
 	version: str = "0.0.0",
 ) -> Path:
 	"""v1 migration shim.  Call sites still spell `_write_sig_sidecar`
-	but get v1 author + cert claim sidecars instead.
+	but get trust-v1 author + cert claim sidecars instead.
 
 	Call-site contract: must pass `priv=keys.priv`.  `package_id`
 	defaults to `pkg_path.stem` (the filename without `.dmp`),
@@ -212,7 +212,7 @@ def _write_sig_sidecar(
 	assert priv is not None, (
 		"v1 migration: _write_sig_sidecar now requires `priv` (the "
 		"Ed25519PrivateKey that built the v0 signature) so it can "
-		"emit v1 author + cert claims.  Pass priv=keys.priv at the "
+		"emit trust-v1 author + cert claim.  Pass priv=keys.priv at the "
 		"call site."
 	)
 	if package_id is None:

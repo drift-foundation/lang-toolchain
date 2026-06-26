@@ -23,11 +23,13 @@ STD_VERSION = "0.0.0-test"
 
 
 def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
-	"""Build a v1-signed stdlib package.
+	"""Build a trust-v1-signed stdlib package.
 
 	Returns (pkg_root, trust_path, core_trust_path, empty_stdlib).
 
-	v1 layout per the trust-v1 audit:
+	("trust-v1" is the trust MODEL / envelope; the author + cert claim
+	BODIES are schema v2 — they carry `artifact_kind` and the cert body's
+	signed `artifact_path`.)  Deployed layout:
 	  - `std.dmp` with `source_content_id` stamped into the manifest;
 	  - `std.author-claim` (source identity attestation);
 	  - `std.cert-claim.<kid>.json` (artifact + cert_suite attestation);
@@ -112,7 +114,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	pkg_bytes = (std_dest / "std.dmp").read_bytes()
 	artifact_sha256 = "sha256:" + sha256(pkg_bytes).hexdigest()
 
-	# v1 author claim (source-identity attestation).
+	# trust-v1 author claim (v2 body; source-identity attestation).
 	sign_and_write_author_claim(SignAuthorClaimOptions(
 		body=make_author_claim_body(
 			package_id="std",
@@ -127,7 +129,7 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		sidecar_dir=std_dest,
 	))
 
-	# v2 cert claim (artifact + cert_suite attestation).
+	# trust-v1 cert claim (v2 body; artifact + cert_suite attestation).
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
 			package_id="std",
@@ -205,11 +207,11 @@ def publish_v1_pkg(
 	stdlib_root_override: Path | None = None,
 	priv_seed: bytes | None = None,
 ) -> dict:
-	"""Build + sign a library package end-to-end with v1 trust artifacts.
+	"""Build + sign a package end-to-end with trust-v1 sidecars (v2 claim bodies).
 
 	This is the SEMANTIC migration target K asked for: the helper
 	stamps a real `source_content_id` into the package's manifest,
-	emits BOTH the v1 author claim and the v1 cert claim sidecars
+	emits BOTH the trust-v1 author claim and the trust-v1 cert claim sidecars
 	alongside the `.dmp`, copies all three (the .dmp + two
 	sidecars) into the dest pkg_root at the canonical
 	`<root>/<pkg>/<version>/` layout, and writes a v1 role-tagged
@@ -467,7 +469,7 @@ def sign_v1_pkg_into_root(
 	required_deps: tuple = (),
 	dep_graph_entries: tuple = (),
 ) -> dict:
-	"""Sign an already-built `.dmp` with v1 author + cert claim
+	"""Sign an already-built `.dmp` with trust-v1 author + cert claim
 	sidecars, write a v1 trust JSON, and copy all three into the
 	canonical pkg-root layout.
 
@@ -509,7 +511,7 @@ def sign_v1_pkg_into_root(
 	from lang.drift.crypto import compute_ed25519_kid
 	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody, CertSuite, DepGraphEntry, Toolchain,
+		CertClaimBody, CertSuite, DepGraphEntry, Toolchain, make_cert_claim_body,
 	)
 	from lang.driftc.packages.sidecar_naming import (
 		author_claim_filename, cert_claim_filename,
@@ -569,7 +571,7 @@ def sign_v1_pkg_into_root(
 	# Author claim namespaces include the primary `namespace_glob`
 	# plus any `extra_namespaces` the caller passes (e.g. stdlib
 	# packages cover `std.*`, `lang.*`, `drift.*` together).  The
-	# v1 author-claim verifier requires the claim to cover every
+	# trust-v1 author-claim verifier requires the claim to cover every
 	# module the package exposes -- a `std.dmp` whose claim only
 	# names `std.*` fails when the consumer loads `lang.atomic`.
 	primary_ns = (namespace_glob,) if namespace_glob.endswith(".*") else (

@@ -78,7 +78,7 @@ def _sign_into_root(
 	priv_seed: bytes, kid: str, dep_graph_entries: tuple = (),
 ) -> None:
 	"""Sign + place a pre-built `.dmp` (with sentinel SCI) under
-	`<pkg_root>/<pkg_id>/<version>/` with v1 author + cert claim
+	`<pkg_root>/<pkg_id>/<version>/` with trust-v1 author + cert claim
 	sidecars.  `dep_graph_entries` is `((pkg_id, version), ...)`
 	naming each dep the cert claim should attest; the helper builds
 	`DepGraphEntry` rows from the same kid + sentinel SCI.
@@ -139,7 +139,7 @@ def _sign_into_root(
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version=version,
+			artifact_kind="package", artifact_path=f"{pkg_id}.dmp", package_id=pkg_id, version=version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="test-target",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
@@ -416,9 +416,9 @@ def test_conflicting_duplicate_package_root_fails_closed(
 		dest.mkdir(parents=True, exist_ok=True)
 		shutil.copy2(str(dmp), str(dest / "child.dmp"))
 		pkg_bytes = dmp.read_bytes()
-		from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+		from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 		from lang.driftc.packages.cert_claim_v1 import (
-			CertClaimBody, CertSuite, Toolchain,
+			CertClaimBody, CertSuite, Toolchain, make_cert_claim_body,
 		)
 		from tools.drift_author.author_publish import (
 			SignAuthorClaimOptions, sign_and_write_author_claim,
@@ -438,7 +438,7 @@ def test_conflicting_duplicate_package_root_fails_closed(
 		))
 		sign_and_write_cert_claim(SignCertClaimOptions(
 			body=make_cert_claim_body(
-				artifact_kind="package", artifact_path="child.zdmp", package_id="child", version="0.0.0",
+				artifact_kind="package", artifact_path="child.dmp", package_id="child", version="0.0.0",
 				artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 				source_content_id=variant_sci, target="test-target",
 				toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

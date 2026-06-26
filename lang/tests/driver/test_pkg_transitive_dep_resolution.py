@@ -156,7 +156,7 @@ def _sign_package(pkg_path: Path, pkg_root: Path, pkg_id: str, version: str,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version=version,
+			artifact_kind="package", artifact_path=f"{pkg_id}.dmp", package_id=pkg_id, version=version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="test-target",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

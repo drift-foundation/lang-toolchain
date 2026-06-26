@@ -118,7 +118,7 @@ def _emit_v1_sidecars(
 	))
 	cert = sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{package_id}.zdmp", package_id=package_id, version=package_version,
+			artifact_kind="package", artifact_path=f"{package_id}.dmp", package_id=package_id, version=package_version,
 			artifact_sha256=artifact_sha256,
 			source_content_id=_TEST_SCI,
 			target=target,

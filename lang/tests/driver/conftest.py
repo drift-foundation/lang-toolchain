@@ -60,9 +60,9 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 	v1 trust layout produced here:
 	  - `std/<version>/std.dmp` with `source_content_id` stamped into
 	    its manifest;
-	  - `std/<version>/std.author-claim` -- v1 author claim binding
+	  - `std/<version>/std.author-claim` -- trust-v1 author claim binding
 	    source identity;
-	  - `std/<version>/std.cert-claim.<kid>.json` -- v1 cert claim
+	  - `std/<version>/std.cert-claim.<kid>.json` -- trust-v1 cert claim
 	    binding artifact bytes + dep_graph + cert_suite;
 	  - `trust.json` (v1 shape) trusting the same kid as both
 	    author and certifier for `std.*` and `lang.*` (Foundation
@@ -153,7 +153,7 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 	import shutil
 	shutil.copy2(str(dmp_path), str(dest / "std.dmp"))
 
-	# v1 author claim -- attests source identity for the release.
+	# trust-v1 author claim -- attests source identity for the release.
 	from tools.drift_author.author_publish import (
 		SignAuthorClaimOptions,
 		sign_and_write_author_claim,

@@ -61,6 +61,26 @@ version bump + ONE toolchain publish at the end.
 
 ## Log
 
+### 2026-06-26 — Full-suite fallout round 2: local-import gaps + stale `.zdmp` locators
+- Full driver suite surfaced 9 fail + 5 error, all my Phase 0/1 fixture migration:
+  - **NameError (factory not imported in local block):** `pkg_test_helpers.py`
+    `sign_v1_pkg_into_root` local cert import omitted `make_cert_claim_body` (broad — drove
+    product_shape / pkg_cross_package_method_param / narrow_throws_* / match_by_ref /
+    linker_typevar_dedup); `test_pkg_v1_duplicate_roots…` inner `_build_and_sign` omitted both
+    factories. Fixed. Scan confirmed no other whole-file gaps; the 9 production "hits" were
+    false positives (resolver makes no factory calls; drift_deploy/stdlib import in the same
+    multi-line block as the call).
+  - **Stale signed `artifact_path` (`.zdmp` but fixture stages `.dmp`):** my migration
+    uniformly signed `<pkg>.zdmp`, but consumer-load fixtures stage uncompressed `<pkg>.dmp`.
+    Classified by whether each file actually writes a `.zdmp`: **3 deploy `.zdmp`** (unpack,
+    trust_verify_package_cli, driftc_package_v0's other tests → locator correct, kept) vs
+    **14 stage `.dmp`** (locator → `.dmp`): the 2 the reviewer named (duplicate_roots ×2,
+    phase2) + 11 more const_share/transitive/cross_pkg/consumer/deploy fixtures +
+    driftc_package_v0:642 (its cert helper stages `lib.dmp`). Harmless at compile (consumer
+    load doesn't cross-check the locator) but now accurate.
+- Re-running the named cluster + phase2 at -n16. NOT a verifier/codebug regression; DriftQuery
+  CORE_BUG (0.33.58) is a separate landed slice.
+
 ### 2026-06-25 (cont.) — Durable-docs pass (pkg/ + canonical kinds + artifact_path + deploy=stage)
 - `doc/toolchain-build-workflow.md`: package-pool `lib/` → `pkg/` (+ `app/`); added canonical-
   kinds callout (package=`.zdmp`+sidecars / app=binary+sidecars; `library` = legacy alias only;

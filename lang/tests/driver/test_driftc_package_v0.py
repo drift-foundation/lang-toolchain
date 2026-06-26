@@ -639,7 +639,7 @@ def _write_sig_sidecar(
 	))
 	cert_path = sign_and_write_cert_claim(SignCertClaimOptions(
 		body=make_cert_claim_body(
-			artifact_kind="package", artifact_path=f"{package_id}.zdmp",
+			artifact_kind="package", artifact_path=f"{package_id}.dmp",
 			package_id=package_id,
 			version=version,
 			artifact_sha256="sha256:" + _sha256_hex(pkg_bytes),
