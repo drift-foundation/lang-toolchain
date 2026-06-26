@@ -49,7 +49,8 @@ Power-loss recovery point. Newest on top. See `PLAN.md`.
 | Phase 1 regressions (positive/negative/back-compat/boundary) | not started |
 | `drift run` / verify-then-exec | **OUT OF SCOPE** (review) — Phase 1 ends at `drift verify-app`; app exec is the orchestrator's job, no placeholder |
 | verified app assets | not part of this slice (revisit separately) |
-| Version bump (DRIFTC; ABI 18 unchanged) | not started |
+| Version bump (DRIFTC 0.33.56 → 0.33.57; ABI 18 unchanged) | **DONE** — single bump for Phase 0+1 |
+| history.md entry (0.33.57) | **DONE** |
 
 ## Release-sequencing constraint (user, 2026-06-25)
 Phase 0 may be a SEPARATE COMMIT, but **do NOT release / cert-pool-cut Phase 0 alone.** The
