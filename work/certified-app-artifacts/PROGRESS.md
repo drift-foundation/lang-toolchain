@@ -61,6 +61,18 @@ version bump + ONE toolchain publish at the end.
 
 ## Log
 
+### 2026-06-26 — Phase 0 deploy fallout: justfile recipe hard-coded `kind="library"`
+- `just deploy` (toolchain, outside cert) failed at `deploy-prepublish-stdlib-author`:
+  `justfile:486` inline python passed `kind="library"` to `compute_artifact_source_content_id`,
+  which my Phase 0 SCI hardening now REJECTS (non-canonical kind must never reach signed
+  identity). My earlier sweeps covered docs / `tools/*.py` / tests but NOT the justfile's
+  inline python. Fixed → `kind="package"` (stdlib is an importable package).
+- Consistency confirmed: the deploy CERT step (`tools/deploy/steps/stdlib.py:68`) already uses
+  `kind="package"`, and `publish-raw` defaults `artifact_kind="package"` + consumes the passed
+  `--source-content-id`, so author-claim SCI == cert-claim SCI. `manifest.py:709` passes the
+  already-normalized `art.kind`. No other production `kind="library"` producers remain.
+- Verified: stdlib SCI computes clean (`0.33.58` → `sha256:75fe…`).
+
 ### 2026-06-26 — Full-suite fallout round 2: local-import gaps + stale `.zdmp` locators
 - Full driver suite surfaced 9 fail + 5 error, all my Phase 0/1 fixture migration:
   - **NameError (factory not imported in local block):** `pkg_test_helpers.py`

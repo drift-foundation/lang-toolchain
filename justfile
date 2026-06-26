@@ -483,7 +483,7 @@ deploy-prepublish-stdlib-author:
 	stdlib = root / "stdlib"
 	module_paths_rel = sorted(str(p.relative_to(root)) for p in stdlib.rglob("*.drift"))
 	sci = compute_artifact_source_content_id(
-		kind="library", package_id="std", version=DRIFTC_VERSION,
+		kind="package", package_id="std", version=DRIFTC_VERSION,
 		module_namespace="std", entry_module="std",
 		module_paths=module_paths_rel,
 		package_deps=[], native_deps=[], unsafe=False, asset_paths=[],
