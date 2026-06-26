@@ -249,8 +249,7 @@ def validate_body_shape(body: AuthorClaimBody) -> None:
 	if body.artifact_kind not in _CANONICAL_ARTIFACT_KINDS:
 		raise ValueError(
 			f"author claim body.artifact_kind must be one of "
-			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r} (v2); got {body.artifact_kind!r} "
-			f"(legacy 'library' is not a valid signed kind)"
+			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r}; got {body.artifact_kind!r}"
 		)
 	if not body.namespaces:
 		raise ValueError("author claim body.namespaces must be a non-empty list")

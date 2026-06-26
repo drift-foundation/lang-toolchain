@@ -45,8 +45,13 @@ def _write_seed(path: Path, seed_b64: str) -> Path:
 	return path
 
 
-def _layout(tmp_path: Path, *, artifact_name: str = "net-tls") -> tuple[Path, Path]:
+def _layout(tmp_path: Path, *, artifact_name: str = "net-tls",
+		kind: str = "package") -> tuple[Path, Path]:
 	"""Build a minimal `<repo>/drift/manifest.json` + sources.
+
+	`kind` selects the artifact kind ("package" or "app"); both carry an SCI
+	and an author claim, so the bootstrap/check preflight must treat them
+	identically.
 
 	Returns `(manifest_dir, manifest_path)`.
 	"""
@@ -59,18 +64,21 @@ def _layout(tmp_path: Path, *, artifact_name: str = "net-tls") -> tuple[Path, Pa
 	)
 	(project_root / "assets").mkdir()
 	(project_root / "assets" / "ca.pem").write_text("(stub)\n", encoding="utf-8")
+	artifact = {
+		"kind": kind, "name": artifact_name, "version": "0.5.0",
+		"description": "demo",
+		"entry_module": "src/lib.drift",
+		"modules": ["src/lib.drift"],
+		"assets": ["assets/ca.pem"],
+		"native_deps": [{"lib": ":libssl.so.3"}],
+		"package_deps": [{"name": "std", "version": "0"}],
+	}
+	if kind == "app":
+		artifact["entry_point"] = f"{artifact_name.replace('-', '_')}::main"
 	mf = {
 		"schema_version": 2,
 		"project": {"name": artifact_name, "license": "MIT"},
-		"artifacts": [{
-			"kind": "library", "name": artifact_name, "version": "0.5.0",
-			"description": "demo",
-			"entry_module": "src/lib.drift",
-			"modules": ["src/lib.drift"],
-			"assets": ["assets/ca.pem"],
-			"native_deps": [{"lib": ":libssl.so.3"}],
-			"package_deps": [{"name": "std", "version": "0"}],
-		}],
+		"artifacts": [artifact],
 	}
 	(drift / "manifest.json").write_text(json.dumps(mf), encoding="utf-8")
 	return drift, drift / "manifest.json"
@@ -411,6 +419,88 @@ class TestCheck:
 			certifier_kid=other_kid,
 		))
 		assert report["ok"], f"errors: {report['errors']}"
+
+
+# ── app artifacts ──────────────────────────────────────────────────
+#
+# Regression for the 0.33.60 verifier-completeness fix: `drift author`
+# was relaxed to mint app author-claims (0.33.59), but `drift trust`
+# (bootstrap + check) still filtered to package-only artifacts, so an
+# app got ZERO trust validation at preflight — and its valid author
+# claim was mis-reported as an orphan ("safe to delete").  These pin
+# that an `app` artifact is validated exactly like a `package`.
+
+
+class TestAppArtifacts:
+	def test_bootstrap_and_check_validate_app_artifact(self, tmp_path: Path) -> None:
+		"""Happy path: an `app` artifact bootstraps (its author kid is
+		granted) and passes `check` — and its author claim is NOT flagged
+		as an orphan.
+		"""
+		drift, mf = _layout(tmp_path, artifact_name="uflowsd", kind="app")
+		seed = _write_seed(tmp_path / "k.seed", _seed_b64())
+		_publish(mf, seed)
+		trust_path = drift / "trust.json"
+		# Bootstrap must grant the app's author kid (not skip the app).
+		bootstrap_trust_from_manifest(TrustBootstrapOptions(
+			manifest_path=mf, trust_store_path=trust_path,
+		))
+		ts = json.loads(trust_path.read_text(encoding="utf-8"))
+		assert "uflowsd.*" in ts["namespaces"], (
+			"bootstrap skipped the app artifact — no author grant minted"
+		)
+		assert len(ts["namespaces"]["uflowsd.*"]["authors"]) == 1
+		# Check must validate the app (and not report its claim as orphan).
+		report = check_trust_for_manifest(TrustCheckOptions(
+			manifest_path=mf, trust_store_path=trust_path,
+		))
+		assert report["ok"], f"errors: {report['errors']}"
+		assert any(c["artifact"] == "uflowsd" for c in report["checked"]), (
+			"check did not validate the app artifact at all"
+		)
+		assert not any(
+			w["code"] == "orphan_author_claim" for w in report["warnings"]
+		), f"app author claim mis-reported as orphan: {report['warnings']}"
+
+	def test_check_flags_missing_author_claim_for_app(self, tmp_path: Path) -> None:
+		"""**Blind-skip pin.**  An app with NO author claim must produce
+		`author_claim_missing` — proving `check` actually iterates the app
+		rather than silently skipping it.  Without this, a happy-path-only
+		test plus a pre-seeded trust store could pass while apps are
+		re-skipped by a future regression.
+		"""
+		drift, mf = _layout(tmp_path, artifact_name="uflowsd", kind="app")
+		# Skip publish: the app's author claim is missing.
+		report = check_trust_for_manifest(TrustCheckOptions(
+			manifest_path=mf, trust_store_path=drift / "trust.json",
+		))
+		assert report["ok"] is False
+		codes = {e["code"] for e in report["errors"]}
+		assert "author_claim_missing" in codes, (
+			f"app artifact was skipped instead of validated; errors: {report['errors']}"
+		)
+
+	def test_check_flags_stale_app_claim_after_version_bump(self, tmp_path: Path) -> None:
+		"""**Blind-skip pin.**  A stale app claim (manifest version bumped,
+		not re-published) must fire `version_mismatch` AND `sci_mismatch`,
+		confirming the per-artifact version + SCI checks run for apps.
+		"""
+		drift, mf = _layout(tmp_path, artifact_name="uflowsd", kind="app")
+		seed = _write_seed(tmp_path / "k.seed", _seed_b64())
+		_publish(mf, seed)
+		bootstrap_trust_from_manifest(TrustBootstrapOptions(
+			manifest_path=mf, trust_store_path=drift / "trust.json",
+		))
+		mf_obj = json.loads(mf.read_text(encoding="utf-8"))
+		mf_obj["artifacts"][0]["version"] = "0.5.1"
+		mf.write_text(json.dumps(mf_obj), encoding="utf-8")
+		report = check_trust_for_manifest(TrustCheckOptions(
+			manifest_path=mf, trust_store_path=drift / "trust.json",
+		))
+		assert report["ok"] is False
+		codes = {e["code"] for e in report["errors"]}
+		assert "version_mismatch" in codes
+		assert "sci_mismatch" in codes
 
 
 # ── unit-level guards ──────────────────────────────────────────────

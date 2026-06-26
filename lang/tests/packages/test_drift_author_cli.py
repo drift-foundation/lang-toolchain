@@ -181,7 +181,7 @@ class TestPublishFromManifest:
 			"schema_version": 2,
 			"project": {"name": name, "license": "MIT"},
 			"artifacts": [{
-				"kind": "library",
+				"kind": "package",
 				"name": name,
 				"version": "0.1.0",
 				"description": "demo",
@@ -392,7 +392,7 @@ class TestDriftAuthorSubcommandSurface:
 			"schema_version": 2,
 			"project": {"name": "myrepo", "license": "MIT"},
 			"artifacts": [{
-				"kind": "library",
+				"kind": "package",
 				"name": "myrepo",
 				"version": "0.1.0",
 				"description": "demo",

@@ -49,7 +49,7 @@ def _layout(tmp_path: Path, *, name: str = "myrepo", version: str = "0.1.0") -> 
 		"schema_version": 2,
 		"project": {"name": name, "license": "MIT"},
 		"artifacts": [{
-			"kind": "library",
+			"kind": "package",
 			"name": name,
 			"version": version,
 			"description": "demo",

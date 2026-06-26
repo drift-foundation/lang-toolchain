@@ -270,8 +270,8 @@ def test_reject_missing_artifact_kind() -> None:
 		load_author_claim_json(_wrap_envelope(body=body_dict, signatures=sigs))
 
 
-def test_reject_legacy_library_artifact_kind() -> None:
-	"""Signed claims must never carry the legacy `library` kind (v2 clean break)."""
+def test_reject_library_artifact_kind() -> None:
+	"""Signed claims accept only `package`/`app`; `library` is rejected."""
 	body_dict = {
 		"schema_version": 2, "artifact_kind": "library",
 		"package_id": "x", "version": "0.1.0", "namespaces": ["x"],

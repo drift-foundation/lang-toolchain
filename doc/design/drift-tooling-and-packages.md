@@ -213,7 +213,7 @@ The filename is a **marker**, not an identifier.
 
 ### 5.1 Common fields
 - `name` – unique target name
-- `kind` – `"package"` (importable Drift package) or `"app"` (Drift-built runnable binary). `"library"` is a deprecated alias normalized to `"package"` at the manifest boundary; signed v2 claims carry only `package`/`app`
+- `kind` – `"package"` (importable Drift package) or `"app"` (Drift-built runnable binary). These are the only two accepted kinds; signed claims carry only `package`/`app`
 - `version` – semantic version (packages only; used for compatibility)
 - `uses` – dependency keys from project file (no URLs/versions here)
 - `depends_on` – other local targets (typically packages)

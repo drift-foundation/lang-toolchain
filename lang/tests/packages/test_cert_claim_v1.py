@@ -271,7 +271,7 @@ def test_reject_missing_artifact_path() -> None:
 		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
 
 
-def test_reject_legacy_library_artifact_kind() -> None:
+def test_reject_library_artifact_kind() -> None:
 	body = _valid_body_dict()
 	body["artifact_kind"] = "library"
 	with pytest.raises(ValueError, match="artifact_kind"):

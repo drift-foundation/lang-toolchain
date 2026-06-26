@@ -1,3 +1,41 @@
+## 2026-06-26 - 0.33.60: `drift trust` bootstrap/check were blind to app artifacts + `library` kind removed (FIX)
+### FIX: the verifier side of the app author-claim was still package-only (0.33.59 was incomplete)
+- **Reported by** the drift-workflows team: 0.33.59 fixed the author *tool* but not the *verifier* of its
+  output. The identical stale `kind == "package"` assumption survived in `lang/drift/trust.py` (backing
+  `drift trust bootstrap` + `drift trust check`, the orchestrator's pre-cert preflight). An app got ZERO trust
+  validation at preflight — the author leg the three-leg agreement rests on was never checked — and the team
+  was right to hold `deploy` until the preflight could attest the app.
+- **Root cause (two sites, same assumption):**
+  - `check_trust_for_manifest` filtered `libs = [a … if a.kind == "package"]`, so every per-artifact check
+    (author-claim presence, id/version, deps, SCI recompute, namespace trust, co-artifact ranges) skipped apps.
+    The orphan-claim scan (built from `libs`) then mis-reported the valid app author-claim as
+    `orphan_author_claim` — *"safe to delete"* — actively mis-advising deletion of the app's author leg.
+  - `plan_trust_bootstrap` skipped apps with the comment *"app artifacts don't carry SCI / author claims"* —
+    exactly the assumption 0.33.59 declared false. Both sites had to move together: fixing only `check` would
+    surface `author_not_trusted` for apps because bootstrap never granted their author kid.
+  - The per-artifact bodies were already app-ready (`compute_artifact_sci` accepts `package`/`app`; no `.zdmp`
+    dependency) — the filters were the whole gap.
+- **Fix:** centralize the canonical authorable set as `AUTHORABLE_ARTIFACT_KINDS = (ARTIFACT_KIND_PACKAGE,
+  ARTIFACT_KIND_APP)` in `manifest.py` and route ALL decision points through it — both `trust.py` sites and
+  `tools/drift_author/cli.py` (superseding 0.33.59's local `_AUTHORABLE_KINDS`). One source of truth so a new
+  authorable kind is added in one place; this duplicated assumption is exactly what made 0.33.59 miss the
+  verifier. Comparison is against canonical kinds only (no normalization anywhere — the manifest parser
+  validates that `kind` is `package`/`app` and rejects everything else).
+- **Folded in — `library` kind hard-removed (clean v2 break):** the deprecated `library` manifest alias is gone.
+  `_LEGACY_KIND_ALIASES` + `normalize_artifact_kind()` deleted; the manifest parser now rejects `library` like
+  any other invalid kind (`'kind' must be 'package' or 'app', got 'library'`) — no deprecation warning, no
+  silent normalization. Active code, comments, diagnostics, and current design docs no longer mention or teach
+  the alias. **Input compat break:** any manifest still declaring `kind: library` now hard-errors at load
+  (manually change it to `package`). Source identity is unaffected — SCI already rejected non-canonical kinds.
+- **Tests:** new app coverage in `test_drift_trust_bootstrap_check.py` — happy path (app bootstraps + checks,
+  author claim not flagged orphan) plus TWO blind-skip pins (app with missing claim → `author_claim_missing`;
+  stale app claim → `version_mismatch` + `sci_mismatch`), so a future re-skip can't hide behind a pre-seeded
+  store. `test_manifest.py` deprecated-alias test inverted to a rejection test; incidental `library` fixtures
+  flipped to `package`; claim/SCI-layer library-rejection tests neutralized (no "legacy" framing). 291 across
+  the affected suites green.
+- **Version:** DRIFTC 0.33.59 → **0.33.60**; **ABI stays 18** (author/trust tooling + manifest vocabulary; no
+  runtime/contract/schema change). No pool re-cert (SCI unchanged).
+
 ## 2026-06-26 - 0.33.59: `drift author` refused `kind: app` artifacts — completes certified app artifacts (FIX)
 ### FIX: app author-claims unblocked (stale `package`-only filter in the author tool)
 - **Reported by** the drift-workflows team: `uflowsd` (an `app` artifact) could not be authored. Their

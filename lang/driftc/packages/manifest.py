@@ -102,30 +102,28 @@ class PackageDep:
 	version: str  # semver constraint string
 
 
-# Canonical v2 artifact kinds.  `package` = importable Drift package (modules +
+# Canonical artifact kinds.  `package` = importable Drift package (modules +
 # declared assets — docs/SQL/templates/migrations/static files ride as ASSETS,
-# never a separate kind); `app` = runnable binary/service artifact.  `library`
-# is a DEPRECATED authoring alias normalized to `package`.  Signed v2 claims
-# carry only `package`/`app` — never `library`.
+# never a separate kind); `app` = runnable binary/service artifact.  These are
+# the only two accepted kinds.
 ARTIFACT_KIND_PACKAGE = "package"
 ARTIFACT_KIND_APP = "app"
-_LEGACY_KIND_ALIASES = {"library": ARTIFACT_KIND_PACKAGE}
-
-
-def normalize_artifact_kind(kind: str) -> str:
-	"""Map a possibly-legacy authored kind to its canonical v2 form."""
-	return _LEGACY_KIND_ALIASES.get(kind, kind)
+# Canonical kinds that carry an SCI and an author claim (and therefore
+# participate in the author/cert/provenance trust agreement).  Single source
+# of truth: `drift author` (mint/verify) and `drift trust` (bootstrap/check)
+# both filter through this, so a new authorable kind is added in ONE place.
+AUTHORABLE_ARTIFACT_KINDS = (ARTIFACT_KIND_PACKAGE, ARTIFACT_KIND_APP)
 
 
 def is_importable_kind(kind: str) -> bool:
-	"""True for the importable/distributable package kind (canonical or alias)."""
-	return normalize_artifact_kind(kind) == ARTIFACT_KIND_PACKAGE
+	"""True for the importable/distributable package kind."""
+	return kind == ARTIFACT_KIND_PACKAGE
 
 
 @dataclass(frozen=True)
 class Artifact:
 	"""A single artifact definition from the manifest."""
-	kind: str  # canonical "package" or "app" (legacy "library" normalized to "package")
+	kind: str  # canonical "package" or "app" (v2 — no legacy aliases)
 	name: str
 	version: str
 	description: str
@@ -139,11 +137,6 @@ class Artifact:
 	unsafe: bool = False
 	module_namespace: str = ""  # set during parsing; defaults to name with hyphens → underscores
 	entry_point: str = ""  # app-only: "module::fn" entry point (e.g. "pushcoin.bookkeeper::main")
-
-	def __post_init__(self) -> None:
-		canon = normalize_artifact_kind(self.kind)
-		if canon != self.kind:
-			object.__setattr__(self, "kind", canon)
 
 
 @dataclass(frozen=True)
@@ -253,10 +246,7 @@ def _parse_artifact(obj: dict, idx: int, project_license: str) -> Artifact:
 	ctx = f"artifact[{idx}]"
 
 	kind = _require_str(obj, "kind", ctx)
-	if kind == "library":
-		import sys
-		print(f"warning: {ctx}: 'kind: library' is deprecated; use 'kind: package'", file=sys.stderr)
-	if kind not in ("package", "app", "library"):
+	if kind not in ("package", "app"):
 		raise ManifestError(f"{ctx}: 'kind' must be 'package' or 'app', got '{kind}'")
 
 	name = _require_str(obj, "name", ctx)
@@ -701,9 +691,9 @@ def compute_artifact_sci(
 	missing) is left to callers, which already wrap the call in
 	``try / except (FileNotFoundError, ValueError)``.
 
-	v2 source-identity note: ``kind`` is canonical (``"package"`` | ``"app"``,
-	the ``library``→``package`` flip) and is hashed into the SCI, so this
-	value participates in the v2 source-identity break (pool re-cert).
+	v2 source-identity note: ``kind`` is canonical (``"package"`` | ``"app"``)
+	and is hashed into the SCI, so this value participates in the v2
+	source-identity break (pool re-cert).
 	"""
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,

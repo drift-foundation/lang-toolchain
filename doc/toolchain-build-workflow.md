@@ -23,9 +23,7 @@
 >   plus the same signed sidecars + provenance.  Verified with
 >   `drift verify-app`.
 >
-> `library` is a deprecated parser alias for `package`, normalized at
-> the manifest boundary only; never use "signed library" terminology
-> except when explicitly describing that legacy aliasing.
+> The only two artifact kinds are `package` and `app`.
 >
 > **"Deploy" means publish/stage, not host install.**  `drift deploy`
 > assembles a *staged certified output directory* of build outputs +
@@ -227,7 +225,7 @@ configuration. Both `drift build` and `drift deploy` read it.
 
 Key fields:
 
-- **`kind`**: `"package"` (importable Drift package; `.zdmp` container) or `"app"` (Drift-built runnable binary).  `"library"` is accepted as a deprecated alias and normalized to `"package"` at the manifest boundary.
+- **`kind`**: `"package"` (importable Drift package; `.zdmp` container) or `"app"` (Drift-built runnable binary).  These are the only two accepted kinds.
 - **`entry_module`**: the primary source file, always compiled first.
 - **`modules`**: all source files for the artifact (entry module may appear here too — it is deduplicated).
 - **`package_deps`**: dependencies on other Drift packages (semver constraints).

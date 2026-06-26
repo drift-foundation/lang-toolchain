@@ -2583,7 +2583,7 @@ class TestCLIDispatch:
 			"schema_version": 1,
 			"project": {"name": "p", "license": "MIT"},
 			"artifacts": [{
-				"kind": "library", "name": "p", "version": "1.0.0",
+				"kind": "package", "name": "p", "version": "1.0.0",
 				"description": "p", "entry_module": "p.drift",
 				"modules": ["p/"],
 				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],

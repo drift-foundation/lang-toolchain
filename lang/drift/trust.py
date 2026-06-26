@@ -409,7 +409,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 	the caller decides whether `allow_reserved` suppresses the guard.
 	"""
 	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
-	from lang.driftc.packages.manifest import load_manifest
+	from lang.driftc.packages.manifest import AUTHORABLE_ARTIFACT_KINDS, load_manifest
 	from lang.driftc.packages.sidecar_naming import author_claim_filename
 
 	manifest_path = opts.manifest_path
@@ -420,8 +420,8 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 
 	plans: list[dict[str, Any]] = []
 	for art in manifest.artifacts:
-		if art.kind != "package":
-			continue  # app artifacts don't carry SCI / author claims
+		if art.kind not in AUTHORABLE_ARTIFACT_KINDS:
+			continue  # only package/app artifacts carry SCI + author claims
 		claim_path = manifest_dir / author_claim_filename(art.name)
 		if not claim_path.is_file():
 			raise ValueError(
@@ -470,7 +470,7 @@ def plan_trust_bootstrap(opts: TrustBootstrapOptions) -> list[dict[str, Any]]:
 		})
 	if not plans:
 		raise ValueError(
-			f"manifest at {manifest_path} declares no package artifacts; "
+			f"manifest at {manifest_path} declares no package/app artifacts; "
 			f"nothing to bootstrap"
 		)
 	return plans
@@ -593,7 +593,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 	"""
 	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
 	from lang.driftc.packages.manifest import (
-		compute_artifact_sci, load_manifest,
+		AUTHORABLE_ARTIFACT_KINDS, compute_artifact_sci, load_manifest,
 	)
 	from lang.driftc.packages.sidecar_naming import (
 		author_claim_filename, cert_claim_filename_prefix,
@@ -660,12 +660,12 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 	expected_certifier_kid = _resolve_certifier_kid(opts)
 
 	# 3. Per-artifact checks.
-	libs = [a for a in manifest.artifacts if a.kind == "package"]
+	libs = [a for a in manifest.artifacts if a.kind in AUTHORABLE_ARTIFACT_KINDS]
 	if not libs:
-		# Apps don't carry SCI / author claims; nothing to verify.
-		# Surface a warning so the operator knows nothing is checked.
+		# Only package/app artifacts carry SCI + author claims; nothing to
+		# verify.  Surface a warning so the operator knows nothing is checked.
 		warnings.append({"artifact": None, "code": "no_libraries",
-			"message": "manifest declares no package artifacts; nothing to verify"})
+			"message": "manifest declares no package/app artifacts; nothing to verify"})
 
 	for art in libs:
 		report: dict[str, Any] = {"artifact": art.name, "ok": True}
@@ -815,7 +815,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 
 		checked.append(report)
 
-	# 4. Multi-claim invariant: one author-claim per package artifact.
+	# 4. Multi-claim invariant: one author-claim per package/app artifact.
 	#    Iterate every `<X>.author-claim` in the manifest dir and flag
 	#    files that don't correspond to a declared artifact.
 	declared_claim_names = {author_claim_filename(a.name) for a in libs}
@@ -824,7 +824,7 @@ def check_trust_for_manifest(opts: TrustCheckOptions) -> dict[str, Any]:
 			warnings.append({"artifact": None, "code": "orphan_author_claim",
 				"message": (
 					f"stray author claim {p.name} in {manifest_dir} does "
-					f"not match any package artifact in the manifest; "
+					f"not match any package/app artifact in the manifest; "
 					f"safe to delete unless you are mid-migration."
 				)})
 

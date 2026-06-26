@@ -554,9 +554,8 @@ appends additional signatures to the *same* `<pkg>.author-claim`
 file rather than emitting parallel sidecars.
 
 > **Artifact kind scope.**  The signed claims carry an
-> `artifact_kind` of `"package"` or `"app"` (the only two canonical
-> kinds; `library` is a deprecated manifest-boundary alias for
-> `package`).  Sections 3.1–3.6, §4 (runtime enforcement) and §7.6
+> `artifact_kind` of `"package"` or `"app"` (the only two kinds).
+> Sections 3.1–3.6, §4 (runtime enforcement) and §7.6
 > describe the **`package`** artifact (`.dmp`/`.zdmp` container).  The
 > **`app`** artifact (a runnable binary) has the same trust model but
 > a different on-disk shape and a thin verifier adapter — its shape is
@@ -589,7 +588,7 @@ Body fields:
 | `schema_version`      | always `2`                                                       |
 | `package_id`          | e.g. `"net.tls"`                                                 |
 | `version`             | e.g. `"0.3.0"`                                                   |
-| `artifact_kind`       | canonical kind: `"package"` or `"app"` (never `library`)         |
+| `artifact_kind`       | canonical kind: `"package"` or `"app"`                           |
 | `namespaces`          | list of module-id glob patterns the artifact claims to own       |
 | `source_content_id`   | `"sha256:<hex>"` of canonical source/asset bytes                 |
 | `required_deps`       | list of `{"name", "version_range"}`                              |

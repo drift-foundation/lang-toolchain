@@ -87,28 +87,23 @@ class TestManifestValid:
 			with pytest.raises(ManifestError, match="author_profile"):
 				load_manifest(path)
 
-	def test_kind_library_deprecated_to_package(self, capsys) -> None:
-		"""Legacy 'kind: library' is accepted, normalized to package, and warns (v2)."""
+	def test_kind_library_rejected(self) -> None:
+		"""'library' is not a valid kind; only 'package' and 'app' are accepted."""
 		manifest = _minimal_manifest()
 		manifest["artifacts"][0]["kind"] = "library"
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
-			m = load_manifest(path)
-			assert m.artifacts[0].kind == "package"
-			captured = capsys.readouterr()
-			assert "deprecated" in captured.err
-			assert "package" in captured.err
+			with pytest.raises(ManifestError, match="kind"):
+				load_manifest(path)
 
-	def test_kind_package_accepted_directly(self, capsys) -> None:
-		"""Canonical kind: package is accepted without a deprecation warning (v2)."""
+	def test_kind_package_accepted_directly(self) -> None:
+		"""Canonical kind: package is accepted."""
 		manifest = _minimal_manifest()
 		assert manifest["artifacts"][0]["kind"] == "package"
 		with tempfile.TemporaryDirectory(dir=str(session_root())) as tmpdir:
 			path = _write_manifest(Path(tmpdir), manifest)
 			m = load_manifest(path)
 			assert m.artifacts[0].kind == "package"
-			captured = capsys.readouterr()
-			assert "deprecated" not in captured.err
 
 	def test_full_artifact(self) -> None:
 		manifest = _minimal_manifest()
@@ -479,7 +474,7 @@ class TestManifestMigrate:
 
 	def _art(self, name: str, *, deps: list[dict] | None = None) -> dict:
 		out = {
-			"kind": "library", "name": name, "version": "1.0.0",
+			"kind": "package", "name": name, "version": "1.0.0",
 			"description": name, "entry_module": f"{name}.drift",
 			"modules": [f"{name}/"],
 		}
@@ -523,7 +518,7 @@ class TestManifestMigrate:
 		`load_manifest` silently accepting exact pins."""
 		path = _write_manifest(tmp_path, _minimal_manifest(artifacts=[
 			{
-				"kind": "library", "name": "p", "version": "1.0.0",
+				"kind": "package", "name": "p", "version": "1.0.0",
 				"description": "p", "entry_module": "p.drift",
 				"modules": ["p/"],
 				"package_deps": [{"name": "dep-a", "version": "0.3.14"}],
@@ -653,13 +648,13 @@ class TestManifestMigrate:
 				# scrambling the second artifact's "0.5.7" into the
 				# first's "0.3.14" slot, or vice versa.
 				{
-					"kind": "library", "name": "twin", "version": "1.0.0",
+					"kind": "package", "name": "twin", "version": "1.0.0",
 					"description": "a", "entry_module": "a.drift",
 					"modules": ["a/"],
 					"package_deps": [{"name": "dep", "version": "0.3.14"}],
 				},
 				{
-					"kind": "library", "name": "twin", "version": "2.0.0",
+					"kind": "package", "name": "twin", "version": "2.0.0",
 					"description": "b", "entry_module": "b.drift",
 					"modules": ["b/"],
 					"package_deps": [{"name": "dep", "version": "0.5.7"}],
@@ -684,7 +679,7 @@ class TestManifestMigrate:
 			"project": {"name": "my-proj", "license": "Apache-2.0",
 				"author_profile": "profiles/me.author-profile"},
 			"artifacts": [{
-				"kind": "library", "name": "lib", "version": "1.2.3",
+				"kind": "package", "name": "lib", "version": "1.2.3",
 				"description": "a thing", "entry_module": "lib.drift",
 				"modules": ["lib/", "lib/util/"],
 				"unsafe": False,

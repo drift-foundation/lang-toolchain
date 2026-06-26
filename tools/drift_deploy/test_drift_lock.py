@@ -69,7 +69,7 @@ def _write_lock(tmp_path: Path, artifacts_resolved: dict[str, dict[str, dict]]) 
 
 def _library_artifact(name: str, version: str, deps: list[tuple[str, str]]) -> dict:
 	return {
-		"kind": "library", "name": name, "version": version,
+		"kind": "package", "name": name, "version": version,
 		"description": "test", "license": "MIT",
 		"entry_module": "src/lib.drift", "modules": ["src/lib.drift"],
 		"module_namespace": name.replace("-", "_"),

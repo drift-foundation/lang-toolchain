@@ -44,16 +44,15 @@ def test_compute_sci_baseline() -> None:
 	assert len(sci) == len("sha256:") + 64
 
 
-def test_compute_sci_rejects_legacy_library_kind() -> None:
-	"""v2: the signed-identity layer must REFUSE the legacy `library` kind.
-	`library` is canonicalized to `package` ONLY at the manifest boundary;
-	a stray `library` must never reach the SCI hash."""
-	with pytest.raises(ValueError, match="canonical 'package' or 'app'"):
+def test_compute_sci_rejects_library_kind() -> None:
+	"""The signed-identity layer accepts only `package`/`app`; `library` is
+	rejected like any other non-canonical kind."""
+	with pytest.raises(ValueError, match="'package' or 'app'"):
 		compute_source_content_id(_example_inputs(kind="library"))
 
 
 def test_compute_sci_rejects_unknown_kind() -> None:
-	with pytest.raises(ValueError, match="canonical 'package' or 'app'"):
+	with pytest.raises(ValueError, match="'package' or 'app'"):
 		compute_source_content_id(_example_inputs(kind="doc"))
 
 
