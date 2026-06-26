@@ -30,8 +30,8 @@ Living log. Newest entries on top. Status only: **RESEARCH/PLAN** (no code chang
 ---
 
 ## Links
-- Orchestrator proposal: `/tmp/drift-announce/20260626T173735Z-build-orchestrator-stdlib-split-note.md`
-- 0.33.61 app-cert release note: `/tmp/drift-announce/20260626T161311Z-drift-lang-release-notes.md`
+- Orchestrator proposal (preserved): `work/stdlib-bootstrap-split/orchestrator-note-2026-06-26.md`
+- 0.33.61 app-cert context: `history.md` (2026-06-26, 0.33.61 entry)
 - Trust governance code: `lang/driftc/packages/trust_v1.py`, `lang/drift/trust.py`,
   `lang/driftc/packages/core_trust_v1.json`
 - Cert/SCI machinery (for re-cert cost analysis): `lang/driftc/packages/source_content_id.py`,

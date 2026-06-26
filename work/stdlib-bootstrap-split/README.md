@@ -2,9 +2,9 @@
 
 **Status:** RESEARCH + PLAN ONLY. No compiler, stdlib, or orchestrator code changes.
 **Opened:** 2026-06-26
-**Origin:** build-orchestrator design note —
-`/tmp/drift-announce/20260626T173735Z-build-orchestrator-stdlib-split-note.md`
-(observation + proposal from the orchestrator/consumer vantage; explicitly "not a request").
+**Origin:** build-orchestrator design note (2026-06-26), preserved here as
+`orchestrator-note-2026-06-26.md` — observation + proposal from the orchestrator/consumer
+vantage; explicitly "not a request".
 
 ## The feature in one sentence
 
@@ -80,9 +80,8 @@ Each item is tracked in `PROGRESS.md` with findings. Order is roughly dependency
   separate implementation slice with its own plan.
 
 ## Pointers
-- Orchestrator note: `/tmp/drift-announce/20260626T173735Z-build-orchestrator-stdlib-split-note.md`
-- 0.33.61 app-cert release note (context for why this came up):
-  `/tmp/drift-announce/20260626T161311Z-drift-lang-release-notes.md`
+- Orchestrator note (preserved): `work/stdlib-bootstrap-split/orchestrator-note-2026-06-26.md`
+- 0.33.61 app-cert context (why this came up): `history.md` (2026-06-26, 0.33.61 entry)
 - Reserved-namespace governance: `lang/driftc/packages/trust_v1.py::load_core_trust_store`,
   `lang/drift/trust.py::_namespace_is_reserved`, `lang/driftc/packages/core_trust_v1.json`
 - stdlib tree: `stdlib/std/`, `stdlib/std/core/`, `stdlib/lang/`
