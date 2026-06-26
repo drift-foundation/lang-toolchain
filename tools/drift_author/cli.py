@@ -107,35 +107,39 @@ def _parse_required_dep(spec: str) -> RequiredDep:
 	return RequiredDep(name=name, version_range=version_range)
 
 
-def _select_library_artifact(manifest, manifest_path: Path, artifact_name: Optional[str], *, action: str):
-	"""Pick the manifest's package artifact, honoring ``--artifact``.
+_AUTHORABLE_KINDS = ("package", "app")
 
-	Only package artifacts carry an SCI / author claim (apps aren't
-	verified through the consumer closure path), so we filter to those
-	first.  Shared by ``publish`` (mint) and ``verify`` (check) so the
-	two surfaces resolve the *same* artifact from the same manifest;
-	`action` only tailors the no-library diagnostic ("nothing to
-	publish" vs "nothing to verify").
+
+def _select_library_artifact(manifest, manifest_path: Path, artifact_name: Optional[str], *, action: str):
+	"""Pick the manifest's authorable artifact, honoring ``--artifact``.
+
+	Both package and app artifacts carry an SCI and an author claim (the
+	author leg is the publisher's pre-deploy claim, signed with the author
+	key, for either kind; ``drift deploy`` later emits the cert/provenance
+	legs).  Shared by ``publish`` (mint) and ``verify`` (check) so the two
+	surfaces resolve the *same* artifact from the same manifest; `action`
+	only tailors the no-artifact diagnostic ("nothing to publish" vs
+	"nothing to verify").
 	"""
-	libs = [a for a in manifest.artifacts if a.kind == "package"]
+	libs = [a for a in manifest.artifacts if a.kind in _AUTHORABLE_KINDS]
 	if not libs:
 		raise SystemExit(
 			f"drift-author: manifest at {manifest_path} declares no "
-			f"package artifacts; nothing to {action}"
+			f"package/app artifacts; nothing to {action}"
 		)
 	if artifact_name:
 		matches = [a for a in libs if a.name == artifact_name]
 		if not matches:
 			raise SystemExit(
 				f"drift-author: --artifact {artifact_name!r} not found in "
-				f"manifest; available package artifacts: "
+				f"manifest; available package/app artifacts: "
 				f"{[a.name for a in libs]!r}"
 			)
 		return matches[0]
 	if len(libs) == 1:
 		return libs[0]
 	raise SystemExit(
-		f"drift-author: manifest declares multiple package artifacts "
+		f"drift-author: manifest declares multiple package/app artifacts "
 		f"({[a.name for a in libs]!r}); pass --artifact <name> to pick one"
 	)
 

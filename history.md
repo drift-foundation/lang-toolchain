@@ -1,3 +1,25 @@
+## 2026-06-26 - 0.33.59: `drift author` refused `kind: app` artifacts — completes certified app artifacts (FIX)
+### FIX: app author-claims unblocked (stale `package`-only filter in the author tool)
+- **Reported by** the drift-workflows team: `uflowsd` (an `app` artifact) could not be authored. Their
+  singular/microflows packages authored/verified clean; only the app was blocked. This was our bug, not theirs.
+- **Root cause (author tool only):** `tools/drift_author/cli.py::_select_library_artifact` — shared by
+  `publish` (mint) and `verify` (check) — filtered manifest artifacts to `kind == "package"`, a stale guard
+  predating the 0.33.57 app-cert work (its docstring still claimed "apps aren't verified through the consumer
+  closure path"). With the filter refusing apps, no app could mint its author-claim, so no app could close the
+  three-leg agreement → the 0.33.57/0.33.58 "certified runnable app artifacts" feature shipped functionally
+  incomplete (verify-app worked, but you couldn't author an app). The rest of the author path already handles
+  apps: `compute_artifact_sci` accepts `kind="app"` (apps carry SCI since 0.33.57), namespaces derive from
+  `module_namespace`, `required_deps` from `package_deps`, and `make_author_claim_body` stamps
+  `artifact_kind: "app"`.
+- **Fix:** relax the filter to `kind in ("package", "app")` (new `_AUTHORABLE_KINDS` constant); correct the
+  docstring rationale (the author leg is the publisher's pre-deploy claim for either kind — `drift deploy` emits
+  the cert/provenance legs) and reword the three no-artifact/not-found/multiple diagnostics
+  "package artifacts" → "package/app artifacts".
+- **Tests:** `lang/tests/packages/test_drift_author_cli.py` multiple-artifact diagnostic regex updated to the new
+  wording; author cli/verify/emit/key-boundary/claim-v1 suites green (105 passed).
+- **Version:** DRIFTC 0.33.58 → **0.33.59**; **ABI stays 18** (author tool only — no runtime/contract/schema
+  change). No pool re-cert (SCI unchanged).
+
 ## 2026-06-25 - 0.33.58: heap `String` double-free via `arrayElem.struct.stringField` fed to `+` — CORE_BUG (LANGUAGE_BUG RESOLVED)
 ### CORE_BUG: nested-struct-array String projection + concat freed the live array buffer
 - **Reported by** drift-query (DriftQuery), 3rd toolchain CORE_BUG from that effort. On

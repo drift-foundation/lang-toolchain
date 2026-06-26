@@ -1497,13 +1497,19 @@ def _emit_cert_claim_for_artifact(
 	# The visible warning lives here, alongside the actual emission,
 	# so it can't be silently elided by a future refactor.
 	if cert_suite_options.no_evidence_sentinel:
+		# Softer, operator-facing wording: name the artifact, say what the
+		# consequence is, and DON'T surface the raw empty-hash sentinel on the
+		# normal deploy path.  The actual `result_evidence_sha256` (the
+		# empty-bytes sentinel) is still recorded in the signed claim below and
+		# remains visible in structured/verbose output and at verify time — it
+		# just doesn't clutter the normal stderr warning.
 		print(
-			f"warning: cert suite '{cert_suite_options.id}' is being "
-			f"signed with the empty-evidence sentinel "
-			f"({_EMPTY_EVIDENCE_SHA}).  The cert claim will record "
-			f"'suite chose no suite evidence' -- inspectors will see "
-			f"the zero hash in `cert_suite.result_evidence_sha256`.  "
-			f"Document this choice in the release runbook.",
+			f"warning: cert suite '{cert_suite_options.id}' did not attach a "
+			f"test-report artifact for {artifact_kind} '{package_id}'.\n"
+			f"The staged cert claim is still signed, but downstream "
+			f"verification will show that no report was attached. For "
+			f"release/cert-pool artifacts, attach the report or document the "
+			f"exception.",
 			file=sys.stderr,
 		)
 	cert_suite = CertSuite(
