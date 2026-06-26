@@ -2,7 +2,7 @@
 """Tests for `lang.driftc.packages.cert_claim_v1`.
 
 Covers: dataclass round-trip, canonical signing bytes determinism,
-strict v1-only loader (unknown-key rejection at every nesting level),
+strict loader (format v1, body schema v2; unknown-key rejection at every nesting level),
 JSON round-trip, signature verification, dep_graph closure check
 (O3), full composition `verify_cert_claim_for_module` with all gates
 (artifact_sha256, source_content_id, cert_suite.result, dep_graph
@@ -110,6 +110,8 @@ def _example_body(
 	*,
 	package_id: str = "singular",
 	version: str = "0.3.0",
+	artifact_kind: str = "package",
+	artifact_path: str = "singular.zdmp",
 	artifact_sha256: str = "sha256:" + ("d" * 64),
 	source_content_id: str = "sha256:" + ("a" * 64),
 	target: str = "drift-linux-x86_64",
@@ -120,9 +122,11 @@ def _example_body(
 	evidence_sha256: str = "sha256:" + ("f" * 64),
 ) -> CertClaimBody:
 	return CertClaimBody(
-		schema_version=1,
+		schema_version=2,
 		package_id=package_id,
 		version=version,
+		artifact_kind=artifact_kind,
+		artifact_path=artifact_path,
 		artifact_sha256=artifact_sha256,
 		source_content_id=source_content_id,
 		target=target,
@@ -231,6 +235,74 @@ def test_emit_rejects_duplicate_dep_graph_entries() -> None:
 		body_signing_bytes(body)
 
 
+# ── artifact_kind + artifact_path (v2 body) ────────────────────────
+
+
+def test_signing_bytes_change_with_artifact_kind() -> None:
+	assert body_signing_bytes(_example_body(artifact_kind="package")) \
+		!= body_signing_bytes(_example_body(artifact_kind="app"))
+
+
+def test_signing_bytes_change_with_artifact_path() -> None:
+	assert body_signing_bytes(_example_body(artifact_path="a.zdmp")) \
+		!= body_signing_bytes(_example_body(artifact_path="b"))
+
+
+def test_artifact_kind_path_round_trip() -> None:
+	seed = _seed("certifier")
+	claim = make_cert_claim(_example_body(artifact_kind="app", artifact_path="uflowsd"), seed)
+	rt = load_cert_claim_json(dump_cert_claim_json(claim))
+	assert rt.body.artifact_kind == "app"
+	assert rt.body.artifact_path == "uflowsd"
+	assert rt.body.schema_version == 2
+
+
+def test_reject_missing_artifact_kind() -> None:
+	body = _valid_body_dict()
+	del body["artifact_kind"]
+	with pytest.raises(ValueError, match="artifact_kind"):
+		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
+
+
+def test_reject_missing_artifact_path() -> None:
+	body = _valid_body_dict()
+	del body["artifact_path"]
+	with pytest.raises(ValueError, match="artifact_path"):
+		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
+
+
+def test_reject_legacy_library_artifact_kind() -> None:
+	body = _valid_body_dict()
+	body["artifact_kind"] = "library"
+	with pytest.raises(ValueError, match="artifact_kind"):
+		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
+
+
+def test_reject_unsafe_artifact_path() -> None:
+	body = _valid_body_dict()
+	body["artifact_path"] = "../escape"
+	with pytest.raises(ValueError, match="artifact_path"):
+		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
+
+
+@pytest.mark.parametrize("bad_path", ["./uflowsd", "uflowsd/", "a\\b", "sub/../x"])
+def test_reject_non_canonical_artifact_path(bad_path: str) -> None:
+	"""A signed locator must have exactly one spelling — non-canonical forms
+	are rejected, not silently normalized (the raw string is what's signed)."""
+	body = _valid_body_dict()
+	body["artifact_path"] = bad_path
+	with pytest.raises(ValueError, match="artifact_path"):
+		load_cert_claim_json(_wrap(body=body, signatures=[_valid_sig_record()]))
+
+
+@pytest.mark.parametrize("good_path", ["uflowsd", "x.zdmp", "assets/singular/db/0001.sql"])
+def test_accepts_canonical_artifact_path(good_path: str) -> None:
+	seed = _seed("certifier")
+	claim = make_cert_claim(_example_body(artifact_path=good_path), seed)
+	rt = load_cert_claim_json(dump_cert_claim_json(claim))
+	assert rt.body.artifact_path == good_path
+
+
 # ── Sign + make + add_signature ────────────────────────────────────
 
 
@@ -290,14 +362,16 @@ def test_load_round_trip_recovers_signing_bytes() -> None:
 	assert body_signing_bytes(reloaded.body) == body_signing_bytes(claim.body)
 
 
-# ── Strict v1: unknown-key rejection at every nesting level ─────────
+# ── Strict loader (format v1, body schema v2): unknown-key rejection ──
 
 
 def _valid_body_dict() -> dict:
 	return {
-		"schema_version": 1,
+		"schema_version": 2,
 		"package_id": "x",
 		"version": "0.1.0",
+		"artifact_kind": "package",
+		"artifact_path": "x.zdmp",
 		"artifact_sha256": "sha256:" + ("d" * 64),
 		"source_content_id": "sha256:" + ("a" * 64),
 		"target": "drift-linux-x86_64",
@@ -388,7 +462,7 @@ def test_strict_v1_rejects_unknown_signature_key() -> None:
 		load_cert_claim_json(_wrap(signatures=[sig]))
 
 
-# ── Strict v1: shape/value rejections ──────────────────────────────
+# ── Strict loader: shape/value rejections ──────────────────────────
 
 
 def test_reject_wrong_format() -> None:
@@ -949,7 +1023,8 @@ def test_sign_rejects_bad_sci_shape() -> None:
 def test_sign_rejects_non_int_drift_rt_abi() -> None:
 	bad_tc = Toolchain(driftc_version="0.31.108", drift_rt_abi="14", driftc_commit="abc")  # type: ignore[arg-type]
 	body = CertClaimBody(
-		schema_version=1, package_id="x", version="0.1.0",
+		schema_version=2, package_id="x", version="0.1.0",
+		artifact_kind="package", artifact_path="x.zdmp",
 		artifact_sha256="sha256:" + ("d" * 64),
 		source_content_id="sha256:" + ("a" * 64),
 		target="t", toolchain=bad_tc, dep_graph=(),

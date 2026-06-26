@@ -84,6 +84,11 @@ _FORMAT_VERSION = 1
 # the loader rejects body schema_version 1 outright (no legacy reader);
 # existing artifacts re-issue v2 claims (pool re-cert).
 _BODY_SCHEMA_VERSION = 2
+# Public alias — the ONE source of truth for the author-claim body schema
+# version.  Emitters (drift-author CLI, deploy) MUST import this rather than
+# define a local constant, so a stale local copy can never sign a wrong-version
+# body.  See lang/tests/packages/test_no_v1_claim_constructors.py.
+BODY_SCHEMA_VERSION = _BODY_SCHEMA_VERSION
 _CANONICAL_ARTIFACT_KINDS = frozenset({"package", "app"})
 
 
@@ -183,6 +188,39 @@ class AuthorClaim:
 	"""Full author claim — body plus one or more signatures."""
 	body: AuthorClaimBody
 	signatures: tuple[AuthorSignature, ...]
+
+
+# ── Body factory (the ONLY supported emit path) ────────────────────
+
+
+def make_author_claim_body(
+	*,
+	package_id: str,
+	version: str,
+	artifact_kind: str,
+	namespaces: tuple[str, ...],
+	source_content_id: str,
+	release_utc: str,
+	required_deps: tuple[RequiredDep, ...] = (),
+) -> AuthorClaimBody:
+	"""Construct a CURRENT-schema author claim body.
+
+	`schema_version` is set internally (`_BODY_SCHEMA_VERSION`), so callers
+	never pass it.  ALL production emitters MUST use this factory instead of
+	`AuthorClaimBody(schema_version=..., ...)` — that eliminates the
+	stale-local-constant drift class entirely (an emitter cannot accidentally
+	sign a v1 body).
+	"""
+	return AuthorClaimBody(
+		schema_version=_BODY_SCHEMA_VERSION,
+		package_id=package_id,
+		version=version,
+		artifact_kind=artifact_kind,
+		namespaces=namespaces,
+		source_content_id=source_content_id,
+		required_deps=required_deps,
+		release_utc=release_utc,
+	)
 
 
 # ── Body canonicalization (signed bytes) ───────────────────────────

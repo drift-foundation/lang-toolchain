@@ -33,6 +33,7 @@ from lang.driftc.packages.cert_claim_v1 import (
 	CertSuite,
 	DepGraphEntry,
 	Toolchain,
+	make_cert_claim_body,
 )
 from tools.drift_deploy.cert_emit import (
 	SignCertClaimOptions,
@@ -43,7 +44,8 @@ from tools.drift_deploy.cert_emit import (
 )
 
 
-_BODY_SCHEMA_VERSION = 1
+# No local schema-version constant: bodies are built via
+# `make_cert_claim_body`, which stamps the canonical version internally.
 
 
 def _load_seed_from_args(args: argparse.Namespace) -> bytes:
@@ -102,10 +104,11 @@ def _build_body(args: argparse.Namespace) -> CertClaimBody:
 		result_evidence_sha256=args.cert_suite_evidence_sha256,
 	)
 	dep_graph = tuple(_parse_dep_entry(s) for s in (args.dep or []))
-	return CertClaimBody(
-		schema_version=_BODY_SCHEMA_VERSION,
+	return make_cert_claim_body(
 		package_id=args.package_id,
 		version=args.version,
+		artifact_kind=args.artifact_kind,
+		artifact_path=args.artifact_path,
 		artifact_sha256=args.artifact_sha256,
 		source_content_id=args.source_content_id,
 		target=args.target,
@@ -163,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
 	pub.add_argument("--sidecar-dir", type=Path, required=True)
 	pub.add_argument("--package-id", type=str, required=True)
 	pub.add_argument("--version", type=str, required=True)
+	pub.add_argument(
+		"--artifact-kind", type=str, required=True, choices=("package", "app"),
+		help="Canonical artifact kind for the v2 cert body",
+	)
+	pub.add_argument(
+		"--artifact-path", type=str, required=True,
+		help="Signed deploy-relative locator (e.g. <pkg>.zdmp or the app binary name)",
+	)
 	pub.add_argument("--artifact-sha256", type=str, required=True)
 	pub.add_argument("--source-content-id", type=str, required=True)
 	pub.add_argument("--target", type=str, required=True)

@@ -24,6 +24,7 @@ from lang.drift.crypto import (
 	ed25519_sign_from_seed,
 )
 from lang.driftc.packages.author_claim_v1 import (
+	make_author_claim_body,
 	AuthorClaim,
 	AuthorClaimBody,
 	RequiredDep,
@@ -31,6 +32,7 @@ from lang.driftc.packages.author_claim_v1 import (
 	make_author_claim,
 )
 from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 	CertClaim,
 	CertClaimBody,
 	CertSuite,
@@ -130,10 +132,10 @@ def _author_body(
 	source_content_id: str = _SCI,
 	namespaces: tuple[str, ...] = (_NAMESPACE,),
 ) -> AuthorClaimBody:
-	return AuthorClaimBody(
-		schema_version=1,
+	return make_author_claim_body(
 		package_id=package_id,
 		version=version,
+		artifact_kind="package",
 		namespaces=namespaces,
 		source_content_id=source_content_id,
 		required_deps=(),
@@ -151,10 +153,11 @@ def _cert_body(
 	cert_suite_id: str = "drift.foundation/default",
 	cert_suite_result: str = "pass",
 ) -> CertClaimBody:
-	return CertClaimBody(
-		schema_version=1,
+	return make_cert_claim_body(
 		package_id=package_id,
 		version=version,
+		artifact_kind="package",
+		artifact_path=f"{package_id}.zdmp",
 		artifact_sha256=artifact_sha256,
 		source_content_id=source_content_id,
 		target=_TARGET,

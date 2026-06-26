@@ -661,10 +661,10 @@ def test_strict_v1_rejects_artifact_sha256_in_author_body() -> None:
 	"""HIGH SECURITY PIN (O6): author claims must never bind artifact
 	bytes.  An attacker who appends `body.artifact_sha256` to a valid
 	author-claim JSON would, under permissive parsing, see the field
-	silently dropped, signing-bytes recomputed from only the v1 fields,
-	and the signature still verify — making the appended field
-	deceptively present in the on-disk JSON.  Strict v1 rejects the
-	unknown field outright."""
+	silently dropped, signing-bytes recomputed from only the schema
+	fields, and the signature still verify — making the appended field
+	deceptively present in the on-disk JSON.  The strict loader rejects
+	the unknown field outright."""
 	body = _valid_body_dict()
 	body["artifact_sha256"] = "sha256:" + ("c" * 64)
 	text = _wrap_envelope(body=body, signatures=[_valid_sig_record()])
@@ -781,12 +781,14 @@ def test_make_author_claim_rejects_duplicate_dep_names_at_emit() -> None:
 		body_signing_bytes(body)
 
 
-# ── Strict-v1: schema-rev-bump doesn't accept v2-style envelopes ──
+# ── Envelope format-version rejection (envelope `version` stays 1) ──
 
 
-def test_strict_v1_rejects_v2_envelope() -> None:
-	"""A v2-shaped envelope is rejected today — when v2 ships the
-	dispatcher will route to a v2 loader, but today only v1 exists."""
+def test_rejects_unknown_envelope_version() -> None:
+	"""The envelope `format`/`version` axis is independent of the body
+	schema: the envelope `version` is still 1 (`drift-author-claim` v1)
+	even though the BODY schema is now v2.  An envelope with `version: 2`
+	is rejected — only envelope version 1 exists."""
 	body = _valid_body_dict()
 	envelope = {
 		"format": "drift-author-claim",

@@ -1285,6 +1285,7 @@ def _emit_cert_claim_for_artifact(
 	cert_key: Path,
 	package_id: str,
 	package_version: str,
+	artifact_kind: str,
 	target: str,
 	compiler_info: "CompilerInfo",
 	source_content_id: str,
@@ -1343,10 +1344,10 @@ def _emit_cert_claim_for_artifact(
 	import uuid as _uuid
 
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody,
 		CertSuite,
 		DepGraphEntry,
 		Toolchain,
+		make_cert_claim_body,
 	)
 	from tools.drift_deploy.cert_emit import (
 		SignCertClaimOptions,
@@ -1538,10 +1539,13 @@ def _emit_cert_claim_for_artifact(
 		)
 	evidence_sha = "sha256:" + _hl.sha256(provenance_path.read_bytes()).hexdigest()
 
-	body = CertClaimBody(
-		schema_version=1,
+	body = make_cert_claim_body(
 		package_id=package_id,
 		version=package_version,
+		artifact_kind=artifact_kind,
+		# v2 signed locator: a deployed package is materialized as the
+		# `<package_id>.zdmp` beside the sidecars.
+		artifact_path=f"{package_id}.zdmp",
 		artifact_sha256=artifact_sha256,
 		source_content_id=source_content_id,
 		target=target,
@@ -2047,22 +2051,27 @@ def _deploy_artifact_impl(
 			link.symlink_to(entry.resolve() if entry.is_symlink() else entry)
 
 	source_content_id: str | None = None
-	if art.kind == "package":
+	# v2: BOTH package and app artifacts carry SCI — it is the provenance
+	# (and author/cert) leg of the three-way source-identity equality.
+	# `compute_artifact_sci` passes the canonical `art.kind` through, so
+	# the same Artifact + manifest_dir produces the same digest here and in
+	# `drift_build`; a divergence would fail the consumer-side three-way
+	# SCI check (trust-v1.md §3.5).
+	if art.kind in ("package", "app"):
 		from tools.drift_deploy.build_cmd import compute_artifact_sci
-		# Shared SCI helper (see `build_cmd.compute_artifact_sci`):
-		# the same Artifact + manifest_dir + target MUST produce the
-		# same digest here and in `drift_build`, otherwise the three-
-		# way SCI equality check at consumer verify time
-		# (`package_manifest.sci == author_claim.body.sci ==
-		# cert_claim.body.sci`, trust-v1.md §3.5) rejects the package.
 		try:
 			source_content_id = compute_artifact_sci(art, manifest_dir=manifest_dir)
 		except (FileNotFoundError, ValueError) as e:
-			print(
-				f"warning: source attestation skipped for '{art.name}': {e}",
-				file=sys.stderr,
+			# v2/v4: source_content_id is the signed leg of provenance AND
+			# the author/cert claims.  A certified package/app cannot be
+			# emitted without it — fail HARD here, before any provenance is
+			# built, rather than the v0 "warn and skip" path.
+			raise DeployError(
+				f"artifact '{art.name}': could not compute source_content_id "
+				f"({e}); v2 certified package/app deploys require a resolvable "
+				f"source tree to attest source identity."
 			)
-			source_content_id = None
+	if art.kind == "package":
 		dmp_path = _build_package(
 			art,
 			driftc=driftc,
@@ -2136,6 +2145,7 @@ def _deploy_artifact_impl(
 			artifact_version=art.version,
 			artifact_kind=art.kind,
 			artifact_sha256=dmp_sha256,
+			source_content_id=source_content_id,
 			target=target,
 			compiler=compiler_info,
 			resolved_deps=resolved_deps_for_provenance,
@@ -2195,6 +2205,7 @@ def _deploy_artifact_impl(
 				cert_key=sign_key,
 				package_id=art.name,
 				package_version=art.version,
+				artifact_kind=art.kind,
 				target=target,
 				compiler_info=compiler_info,
 				source_content_id=source_content_id,
@@ -2314,6 +2325,7 @@ def _deploy_artifact_impl(
 			artifact_version=art.version,
 			artifact_kind=art.kind,
 			artifact_sha256=app_sha256,
+			source_content_id=source_content_id,
 			target=target,
 			compiler=compiler_info,
 			resolved_deps=resolved_deps_for_provenance,

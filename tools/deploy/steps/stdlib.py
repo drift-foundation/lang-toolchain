@@ -170,6 +170,16 @@ def _validate_external_stdlib_author_claim(
 			f"stdlib author claim at {author_claim_path}: body.package_id is "
 			f"{claim.body.package_id!r}, expected 'std'"
 		)
+	# The stdlib is an importable package; the external author claim's kind
+	# MUST agree with the cert claim we are about to emit ("package").  Catch
+	# an author/cert kind mismatch here at the producer rather than leaving it
+	# for consumer verify.
+	if claim.body.artifact_kind != "package":
+		raise RuntimeError(
+			f"stdlib author claim at {author_claim_path}: body.artifact_kind is "
+			f"{claim.body.artifact_kind!r}, expected 'package' (the stdlib cert "
+			f"claim is emitted as a package)"
+		)
 	if claim.body.version != expected_version:
 		raise RuntimeError(
 			f"stdlib author claim at {author_claim_path}: body.version is "
@@ -293,7 +303,7 @@ def emit_stdlib_cert_claim(
 	from hashlib import sha256
 	from lang.drift.crypto import compute_ed25519_kid, ed25519_sign_from_seed
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody, CertSuite, Toolchain,
+		CertSuite, Toolchain, make_cert_claim_body,
 	)
 	from tools.drift_deploy.cert_emit import (
 		SignCertClaimOptions, load_cert_seed32, sign_and_write_cert_claim,
@@ -340,8 +350,9 @@ def emit_stdlib_cert_claim(
 	evidence_sha = "sha256:" + sha256(manifest_bytes).hexdigest()
 
 	cert_sidecar = sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id="std", version=version,
+		body=make_cert_claim_body(
+			package_id="std", version=version,
+			artifact_kind="package", artifact_path="std.dmp",
 			artifact_sha256=artifact_sha256, source_content_id=sci,
 			target="drift-dev",
 			toolchain=Toolchain(
@@ -609,5 +620,5 @@ def build_and_install_stdlib(
 		if not f.exists():
 			raise RuntimeError(f"expected output not found: {f}")
 
-	print("[deploy] stdlib package installed with v1 author + cert claims", flush=True)
+	print("[deploy] stdlib package installed with author + cert claims", flush=True)
 	return dmp, author, cert

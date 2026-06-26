@@ -37,6 +37,7 @@ from lang.driftc.packages.cert_claim_v1 import (
 	Toolchain,
 	body_signing_bytes,
 	load_cert_claim_json,
+	make_cert_claim_body,
 )
 from lang.driftc.packages.sidecar_naming import cert_claim_filename
 from tools.drift_deploy.cert_emit import (
@@ -60,10 +61,11 @@ def _seed_b() -> bytes:
 
 
 def _sample_body(package_id: str = "demo.lib", version: str = "1.0.0") -> CertClaimBody:
-	return CertClaimBody(
-		schema_version=1,
+	return make_cert_claim_body(
 		package_id=package_id,
 		version=version,
+		artifact_kind="package",
+		artifact_path=f"{package_id}.zdmp",
 		artifact_sha256="sha256:" + ("c" * 64),
 		source_content_id="sha256:" + ("a" * 64),
 		target="linux-x86_64",

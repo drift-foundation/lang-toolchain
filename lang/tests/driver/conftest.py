@@ -158,17 +158,17 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 		SignAuthorClaimOptions,
 		sign_and_write_author_claim,
 	)
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body
 	# Author claim binds every module namespace the stdlib package
 	# exposes; the verifier checks that each module under load is
 	# covered by the claim's `namespaces` list.  Pin both `std.*`
 	# (the stdlib's own modules) and `lang.*` (toolchain-shipped
 	# helpers also under the stdlib package).
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
 			package_id="std",
 			version=version,
+			artifact_kind="package",
 			namespaces=("std.*", "lang.*"),
 			source_content_id=sci,
 			required_deps=(),
@@ -178,22 +178,23 @@ def stdlib_package(tmp_path_factory: pytest.TempPathFactory) -> StdlibPackage:
 		sidecar_dir=dest,
 	))
 
-	# v1 cert claim -- attests artifact bytes + (empty) dep_graph +
+	# v2 cert claim -- attests artifact bytes + (empty) dep_graph +
 	# cert_suite result.  Same kid for the bootstrap.
 	from tools.drift_deploy.cert_emit import (
 		SignCertClaimOptions,
 		sign_and_write_cert_claim,
 	)
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody,
 		CertSuite,
 		Toolchain,
+		make_cert_claim_body,
 	)
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1,
+		body=make_cert_claim_body(
 			package_id="std",
 			version=version,
+			artifact_kind="package",
+			artifact_path="std.dmp",
 			artifact_sha256=artifact_sha256,
 			source_content_id=sci,
 			target="drift-dev",

@@ -86,15 +86,16 @@ identical compressed bytes.
 
 ## Main Provenance Schema
 
-The provenance document inside the bundle uses schema version 3:
+The provenance document inside the bundle uses schema version 4:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "artifact_name": "web-rest",
   "artifact_version": "0.2.5",
   "artifact_kind": "package",
   "artifact_sha256": "sha256:<hex>",
+  "source_content_id": "sha256:<hex>",
   "target": "drift-dev",
   "compiler_version": "0.27.92",
   "compiler_commit": "abc1234",
@@ -118,11 +119,12 @@ The provenance document inside the bundle uses schema version 3:
 
 | Field | Type | Description |
 |---|---|---|
-| `schema_version` | int | Always `3` for the current schema. |
+| `schema_version` | int | Always `4` for the current schema (v4 added the required `source_content_id` leg). |
 | `artifact_name` | string | Package or app name. |
 | `artifact_version` | string | Semver version string. |
-| `artifact_kind` | string | `"package"` or `"app"`. |
+| `artifact_kind` | string | `"package"` or `"app"` (canonical — never `library`). |
 | `artifact_sha256` | string | `"sha256:<hex>"` -- digest of the primary artifact bytes (uncompressed `.dmp` for packages, compiled binary for apps). |
+| `source_content_id` | string | `"sha256:<hex>"` -- **v4 required.** The provenance leg of the three-way SCI equality (author == cert == provenance); cross-checked against both signed claims at verify time. |
 | `target` | string | Target triple used for the build. |
 | `compiler_version` | string | Drift compiler version. |
 | `compiler_commit` | string | Git commit of the compiler (or `"unknown"`). |

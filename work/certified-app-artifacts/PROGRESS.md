@@ -28,19 +28,26 @@ Power-loss recovery point. Newest on top. See `PLAN.md`.
 | Phase 0 cosmetic: ~30 test `tmp_path/"lib"` dirs → `"pkg"` | DEFERRED (layout-agnostic; tests pass either way) — batch at end |
 | **Phase 1** (app claims + verify-app) | **IN PROGRESS** |
 | P1: author_claim_v1 → v2 (required `artifact_kind`, reject v1) | **DONE + unit green** — `test_author_claim_v1.py` 56 pass (moved to v2 + 4 new artifact_kind tests); stale "v1-only" prose fixed in module + test |
-| P1: cert_claim_v1 → v2 (`artifact_kind` + signed `artifact_path`, reject v1) | TODO |
-| P1: provenance → v4 (required `source_content_id`) | TODO |
+| P1: cert_claim_v1 → v2 (`artifact_kind` + signed `artifact_path`, reject v1) | **DONE + unit green** — `test_cert_claim_v1.py` 75 pass (+7 kind/path tests); prose fixed |
+| P1: provenance → v4 (required `source_content_id`) | **DONE (schema)** — `build_provenance` requires SCI@v4; both deploy callers wired; `compute_artifact_sci` now passes `art.kind` (apps carry SCI); deploy computes SCI for app+package |
+| **Security-schema + producer-emit unit (author/cert v2, provenance v4, SCI, emit APIs)** | **DONE + GREEN** — **241 pass**: author 56 / cert 82 / provenance 18 / sci 12 / manifest 41 / no-v1-ctor static 3 / drift_author_emit / drift_cert_emit |
+| P1: deploy EMISSION passes artifact_kind/artifact_path (all 5 production constructors) | **DONE** — stdlib cert, drift_author publish+publish-raw, cert_cli, drift_deploy `_emit_cert_claim_for_artifact`; static regression pins no v1 ctors |
+| P1: SCI fail-hard before provenance (package + app); no warn/skip | **DONE** |
+| P1: update verify harnesses to v2/v4 (test_trust_verify_package_cli, test_unpack_cli build claims+provenance inline) | TODO |
 | P1: deploy app-claim emission (author+cert+signed provenance) | TODO |
 | P1: verify adapter + `verify_deployed_package` app branch | TODO |
 | P1: `drift verify-app` CLI | TODO |
-| P1: update claim-constructing test harnesses to v2 (+ artifact_kind) | TODO — known: test_trust_verify_package_cli, test_unpack_cli |
+| P1 step 1: migrate verify fixtures/harnesses to v2/v4 (factories) | **DONE** — pkg_test_helpers (4), conftest (2), test_verify_v1, test_v1_adversarial, test_trust_verify_package_cli, test_unpack_cli; provenance v3→v4 + SCI in both CLI harnesses |
+| P1 step 2: PACKAGE verify cross-checks (kind/path/provenance match; no two-way) | TODO |
+| P1 step 3: app verify adapter (synthetic subject; all-three say app) | TODO |
+| P1 step 4: verify regression (v1 fail / v2 verify / mismatch diagnostics / app agreement) | TODO |
 | P1: regression set (positive/negative/migration/boundary) | TODO |
 | Phase 1: app author+cert claims + signed provenance | not started (gated on review) |
 | Phase 1: `verify_deployed_package` app branch (reuse compose_verify) | not started |
 | Phase 1: `drift verify-app` CLI | not started |
 | Phase 1 regressions (positive/negative/back-compat/boundary) | not started |
-| Phase 2: `drift run` (verify-then-exec verified copy) | deferred (designed, not built) |
-| Phase 2: verified app assets (fold into SCI; drop loose app staging) | deferred |
+| `drift run` / verify-then-exec | **OUT OF SCOPE** (review) — Phase 1 ends at `drift verify-app`; app exec is the orchestrator's job, no placeholder |
+| verified app assets | not part of this slice (revisit separately) |
 | Version bump (DRIFTC; ABI 18 unchanged) | not started |
 
 ## Release-sequencing constraint (user, 2026-06-25)
@@ -51,6 +58,115 @@ SCI but old v1 claims. Implement Phase 0 then Phase 1 on the **same branch/slice
 version bump + ONE toolchain publish at the end.
 
 ## Log
+
+### 2026-06-25 (cont.) — SCOPE: `drift run` removed; Phase 1 ends at `drift verify-app`
+- Review decision: **no `drift run` / verify-then-exec, no future placeholder.** App execution
+  is the orchestrator/service-manager's job after it independently verifies. Removed all
+  `drift run`/exec references from PLAN.md + PROGRESS.md; PLAN "Explicitly NOT in scope" now
+  states this. Verified-app-assets dropped from this slice.
+- Phase 1 verify-integration order locked (consumer side): (1) migrate verify fixtures→v2/v4,
+  (2) PACKAGE cross-checks (author==cert kind, cert path==deployed filename, provenance
+  kind/sha/sci/name/version all match; no two-way fallback), (3) app verify adapter (synthetic
+  `module_namespace` subject; all-three say app; cert path → binary; verify only), (4) regression.
+- **Step 1 DONE — verify fixtures migrated to v2/v4 (factories):** pkg_test_helpers (4 claim
+  blocks, artifact_path=`pkg_path.name`/`std.dmp`), conftest (2), test_verify_v1 + test_v1_adversarial
+  (`_author_body`/`_cert_body` helpers), test_trust_verify_package_cli + test_unpack_cli (incl.
+  provenance bundle bumped to schema v4 + `source_content_id`). All via `make_author_claim_body`/
+  `make_cert_claim_body`. Green: verify_v1+adversarial **65**, verify-package+unpack CLI **31**.
+  (Driver tests that compile via conftest/pkg_test_helpers now emit v2 claims; their consumer
+  compile path doesn't check the new fields, so they load fine — full-suite run is the user's.)
+- **NEXT: step 2 — package verify cross-checks** (author kind==cert kind=="package"; cert
+  `artifact_path` == deployed filename; provenance kind/sha/sci/name/version all match claims +
+  artifact; no two-way fallback on missing provenance SCI).
+
+### 2026-06-25 (cont.) — producer-emit unit tests migrated to v2 (review)
+- `test_drift_author_emit.py` + `test_drift_cert_emit.py` (the core `sign_and_write_*` emit-API
+  unit tests) had v1 `_sample_body()` helpers → migrated to `make_author_claim_body` /
+  `make_cert_claim_body` (artifact_kind=package, cert artifact_path=`<pkg>.zdmp`). These are
+  producer-side, so they move WITH the factory change (not deferred to verify).
+- **Count corrected (honest):** the producer/schema set INCLUDING the emit-API tests is
+  **241 pass** (prior "212" excluded the two emit files, which were red — 194/15 in the
+  reviewer's run). The 241 figure now explicitly includes them.
+
+### 2026-06-25 (cont.) — body factories kill the schema-drift class (review batch, 5)
+- **Root cause of two High bugs:** `drift_author/cli.py` and `cert_cli.py` each defined a LOCAL
+  `_BODY_SCHEMA_VERSION = 1` shadowing the canonical → they signed v1 bodies despite passing
+  artifact_kind. Fixed by the user's preferred design:
+- **NEW factories** `make_author_claim_body(...)` / `make_cert_claim_body(...)` in the schema
+  modules stamp `schema_version` internally; callers never pass it. Public `BODY_SCHEMA_VERSION`
+  alias added to both modules.
+- **All 5 emitters migrated to factories**; local `_BODY_SCHEMA_VERSION=1` constants removed
+  from both CLIs (stdlib, drift_author publish+raw, cert_cli, drift_deploy `_emit_cert_claim_for_artifact`).
+- **Static regression strengthened** (review #3): now also asserts (a) no production module
+  outside the two schema modules defines `_BODY_SCHEMA_VERSION`, and (b) no production claim-body
+  ctor passes `schema_version=` (must use the factory). Canonical pinned == 2.
+- **stdlib (review #4):** `_validate_external_stdlib_author_claim` now requires the external
+  author claim's `artifact_kind == "package"` (catch author/cert kind mismatch at producer).
+- **stdlib (review #5):** "installed with v1 author + cert claims" → "author + cert claims".
+- Green: schema set **212 pass**; edited emitters import clean.
+- KNOWN (next step): the verify/integration harnesses (test_verify_v1, test_v1_adversarial,
+  test_drift_author_emit, test_pkg_consumer_e2e, test_co_artifact_identity_binding, …) still build
+  v1 claims inline → migrate to v2 (factories + artifact_kind/path) as part of the verify adapter
+  + regression step.
+
+### 2026-06-25 (cont.) — deploy EMISSION moved to v2 + review batch (6 findings)
+- **High — all 5 production claim constructors → v2** (the missed stdlib included):
+  `tools/deploy/steps/stdlib.py` (cert: kind=package, path=`std.dmp` — stdlib ships uncompressed
+  `.dmp`), `drift_author/cli.py` publish (`art.kind`) + publish-raw (new `--artifact-kind`,
+  default package), `cert_cli.py` (new required `--artifact-kind`/`--artifact-path`),
+  `drift_deploy.py::_emit_cert_claim_for_artifact` (new `artifact_kind` param; signed locator
+  `<pkg>.zdmp`). **Static regression** `test_no_v1_claim_constructors.py` scans production tree —
+  no v1 Author/Cert claim ctor remains.
+- **High — SCI fail-hard:** deploy now raises `DeployError` if SCI can't be computed for a
+  package OR app, BEFORE any `build_provenance`; removed the v0 warn/skip path.
+- **provenance canonical fields:** (done earlier this session) kind+sha+sci all validated.
+- **doc + prose:** `provenance-bundle.md` → schema v4 + `source_content_id` row; `cert_claim_v1`
+  module docstring now says artifact = package|app, envelope-v1/body-v2, signed `artifact_path`.
+- **PROGRESS counts reconciled** (review #6): **authoritative security-schema tally = 211 pass**
+  — author 56 / cert 82 / provenance 18 / sci 12 / manifest 41 / no-v1-ctor static 2. (Reviewer's
+  156 = author+cert+provenance subset; the old 147/184 figures were stale and are removed.)
+- **NOTE for step 4 (verify adapter, review #3):** `verify_deployed_package` must enforce the
+  full three-leg cross-check — provenance inner `artifact_kind` / `artifact_sha256` /
+  `source_content_id` (and ideally `artifact_name`/`version`) MUST match the author+cert claims
+  and the deployed artifact; no two-way fallback. Producer is strict now; consumer enforcement
+  is the remaining gap.
+
+### 2026-06-25 (cont.) — security-schema review fixes (3)
+- **provenance SCI shape:** `build_provenance` now uses full `validate_sci` (sha256:+64 lc hex),
+  not loose `startswith`. New `tools/drift_deploy/test_provenance.py` (7): schema_version==4,
+  SCI/kind/sha present, missing/None rejected, malformed SCI (non-hex/len/upper/no-prefix/empty)
+  rejected.
+- **cert artifact_path canonical spelling:** signed locator must EQUAL its normalized form —
+  reject `./x`, `x/`, backslashes, `sub/../x` (no silent rewrite of signed content). Tests:
+  4 reject + 3 accept (parametrized).
+- **author test wording:** `test_strict_v1_rejects_v2_envelope` → `test_rejects_unknown_envelope_version`;
+  clarified envelope `version` (still 1) is a separate axis from body schema (v2).
+- Suites green at this step: cert + author + provenance (counts superseded by the
+  authoritative tally below — see the deploy-emission log entry).
+
+### 2026-06-25 (cont.) — provenance canonical policy on all signed fields (review)
+- `build_provenance` now also enforces `artifact_kind ∈ {package,app}` + `validate_sci(artifact_sha256)`
+  (all three signed/cross-checked fields held to claim-grade policy, fail early at producer).
+  `test_provenance.py` 7→**18** (added bad-kind ×4, malformed-artifact-sha ×5; renamed the
+  missing-SCI test to mark it a required-kwarg TypeError, distinct from the validator ValueError path).
+
+### 2026-06-25 (cont.) — cert_claim_v1 v2 + provenance v4 (security-schema unit complete)
+- **cert_claim_v1 → v2:** required `artifact_kind` + signed `artifact_path` (safe relative path
+  via `_validate_artifact_path`/`_normalize_canonical_path`); body schema_version 1→2; reject
+  v1 + `library` + missing/unsafe path; canonical-dict + load/dump thread the fields; stale
+  "strict v1" prose fixed. `test_cert_claim_v1.py` moved to v2 + 7 new tests → **75 pass**.
+- **provenance → v4:** `build_provenance` requires `source_content_id` (raises on missing),
+  schema_version 3→4; both deploy callers wired; `compute_artifact_sci` now passes canonical
+  `art.kind` so **apps carry SCI**; deploy computes SCI for app+package.
+- **Security-schema unit GREEN** (authoritative tally recorded in the later deploy-emission entry).
+- REMAINING (integration, steps 3-5): deploy EMISSION must pass artifact_kind/artifact_path
+  (cert_cli `CertClaimBody(...)` + author publish `AuthorClaimBody(...)`); verify adapter +
+  `verify_deployed_package` app branch (match kind/path/sha/SCI across claims+provenance, no
+  two-way fallback); update verify harnesses (test_trust_verify_package_cli, test_unpack_cli
+  build v1 claims + v3 provenance inline → v2/v4) + asset-slice; regression pass. NO CLI yet.
+- **Known transient:** the asset-slice + deploy-emission harnesses build v1 claims / v3
+  provenance and will fail to construct until the emission + harness updates land (expected;
+  the schema layer is intentionally strict-break).
 
 ### 2026-06-25 (cont.) — author_claim_v1 v2: unit suite + prose moved with the schema (review)
 - `test_author_claim_v1.py` moved to v2: `_example_body` + all 7 inline loader-bodies + 5 direct
@@ -189,8 +305,9 @@ version bump + ONE toolchain publish at the end.
   `artifact_sha256` but no `source_content_id`; SCI is computable with `kind="app"`.
 - Decided shape **A-lite** over B (binary-as-asset rejected — "disguise"): binary is the
   primary certified artifact; sidecars bind its exact hash; no `.zdmp`. Phase 1 = certify +
-  `drift verify-app` (no exec), which alone unblocks pushcoin (verify-then-run themselves).
-  Phase 2 = `drift run` + verified app assets.
+  `drift verify-app` (no exec), which unblocks pushcoin: they verify, then the orchestrator
+  runs the binary itself. [SUPERSEDED: `drift run`/verify-then-exec is OUT of scope — Phase 1
+  ends at `drift verify-app`; app execution stays the orchestrator's job.]
 - Wrote `PLAN.md` with the agreed trust model, the 6 consumer checks (mapped to
   `compose_verify` reuse), and open decisions **D-1..D-4** to lock in review.
 - **No code changed** — planning only. ABI expected to stay **18** (tooling + claim schema +

@@ -14,7 +14,8 @@ a toolchain/Foundation blocker, not a workflows ownership issue.
 A runnable app binary that is a **first-class certified artifact**: its exact executable
 bytes + source identity/provenance are cryptographically bound by author + cert claims and
 checkable by a consumer, **without embedding the binary in a `.zdmp`** (sidecars bind its
-exact hash). Phase 1 delivers *verify*; Phase 2 delivers *run* + verified app assets.
+exact hash). Phase 1 delivers *verify* and ENDS at `drift verify-app` — there is no exec
+command; app execution is the orchestrator's job after it independently verifies.
 
 ## Established facts (code-grounded, 2026-06-25)
 1. **Apps deploy but aren't certified.** `_deploy_artifact_impl`: author claim + v1 trust
@@ -210,14 +211,19 @@ exact hash). Phase 1 delivers *verify*; Phase 2 delivers *run* + verified app as
      deployed_package` gains a kind-gated branch: read signed `artifact_kind`+`artifact_path`,
      locate + hash the binary, verify. Package/importable path untouched.
   4. `drift verify-app <app-dir>` CLI — pure verify, mirrors `drift trust verify-package`
-     (same trust-source flags, JSON, exit codes). NO execution.
-- **Phase 2 (later):**
-  5. `drift run <app-dir> -- <args>` — verify-then-exec the VERIFIED copy (materialize to a
-     verified path, re-hash-before-exec; same TOCTOU discipline `drift unpack` uses). Explicit
-     exec-trust decision required.
-  6. Verified app assets — fold app asset `(path, sha)` into the app SCI / a signed asset
-     list so a daemon's deployment manifest stops being loose+unverified; stop loose
-     `_stage_assets` for apps once covered. (Auxiliary to the app artifact, not a disguise.)
+     (same trust-source flags, JSON, exit codes). NO execution. **Phase 1 ENDS here.**
+
+  Consumer verify-integration order (the body of Phase 1's verify work, per review):
+  (a) migrate verify fixtures/harnesses to v2/v4 (via the `make_*_claim_body` factories);
+  (b) PACKAGE verify cross-checks first (author kind == cert kind == "package"; cert
+  `artifact_path` matches the deployed filename; provenance `artifact_kind`/`artifact_sha256`/
+  `source_content_id`/`artifact_name`/`artifact_version` all match the claims + deployed
+  artifact; NO two-way fallback when provenance SCI is missing);
+  (c) THEN the app verify adapter (synthetic subject from `module_namespace`; author/cert/
+  provenance all `artifact_kind="app"`; cert `artifact_path` points to the verified binary;
+  verify only);
+  (d) regression (v1 fails clean; reissued v2 package verifies; mismatched kind/path/sha/SCI/
+  name/version fail with explicit diagnostics; app verifies only on full agreement).
 
 ## Explicitly NOT in scope
 - The `microflows-daemon` source, its `/v1/workflows` HTTP surface, the participant
@@ -225,7 +231,13 @@ exact hash). Phase 1 delivers *verify*; Phase 2 delivers *run* + verified app as
   404-vs-indeterminate) — drift-workflows owns these (pushcoin's Q2/Q3).
 - Embedding the binary in a `.zdmp` (rejected: "binary disguised as an asset" — trust
   statements must be about the real artifact).
-- Phase 2 (`drift run`, verified app assets) — designed here, built after Phase 1 lands.
+- **`drift run` / any verify-then-exec command — explicitly OUT of scope (review decision).
+  Phase 1 ends at `drift verify-app`; there is NO exec command and NO future `drift run`
+  placeholder unless explicitly reopened.** App execution remains the orchestrator/service-
+  manager's job, AFTER it has independently called verification (or consumed a verified
+  result). The toolchain attests + verifies; it does not run binaries.
+- Verified app assets (folding app config/assets into the signed identity) — not part of this
+  slice; revisit separately if needed.
 
 ## Versioning / blast radius
 - `DRIFTC_VERSION` bumps (new behavior). **`DRIFT_RT_ABI` unchanged** — deploy tooling +

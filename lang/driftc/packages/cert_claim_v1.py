@@ -3,7 +3,8 @@
 Certifier / distributor claim — `drift-cert-claim` v1.
 
 The cert claim binds a CERTIFIER (or distributor) to a specific
-BUILD of a package: artifact bytes, toolchain identity, full
+BUILD of an ARTIFACT — a `package` (importable `.dmp`/`.zdmp`) or an
+`app` (runnable binary): artifact bytes, toolchain identity, full
 resolved dep graph, and certification-suite result.  Together with
 a trusted `.author-claim` (sharing the same `source_content_id`),
 a cert claim is one of two artifact-acceptance paths the consumer
@@ -31,11 +32,14 @@ Per O1 sign-off: per-certifier sidecar filename
 collision risk).  Multiple sidecars coexist when multiple
 certifiers attest the same release.
 
-Per the v1 product-boundary directive: this module accepts
-EXACTLY `format: "drift-cert-claim"` with `version: 1`.  No v0
-fallback.  Unknown keys at any nesting level are rejected so
-unsigned-but-visible data cannot ride inside a signed-looking
-claim.
+Envelope vs body version: the envelope `format`/`version` stays
+`drift-cert-claim` v1, but the signed BODY schema is now **v2** —
+it adds a REQUIRED `artifact_kind` ("package"|"app") and a signed
+`artifact_path` (the deploy-relative locator the verifier resolves
+the artifact bytes by: `<pkg>.zdmp` for a package, the binary for an
+app).  Clean break: the loader rejects body `schema_version` 1.
+Unknown keys at any nesting level are rejected so unsigned-but-visible
+data cannot ride inside a signed-looking claim.
 """
 
 from __future__ import annotations
@@ -63,10 +67,19 @@ from lang.driftc.packages.trust_v1 import TrustStore
 
 _FORMAT_TAG = "drift-cert-claim"
 _FORMAT_VERSION = 1
-_BODY_SCHEMA_VERSION = 1
+# v2 body: adds REQUIRED `artifact_kind` ("package"|"app") and a signed
+# `artifact_path` (the locator the verifier resolves the artifact by — the
+# binary for an app, the `.zdmp` for a package).  Clean break: the loader
+# rejects body schema_version 1 outright (no legacy reader).
+_BODY_SCHEMA_VERSION = 2
+# Public alias — ONE source of truth for the cert-claim body schema version.
+# Emitters use the `make_cert_claim_body` factory (below) and never pass
+# schema_version, so a stale local constant can't sign a wrong-version body.
+BODY_SCHEMA_VERSION = _BODY_SCHEMA_VERSION
+_CANONICAL_ARTIFACT_KINDS = frozenset({"package", "app"})
 
 
-# ── Strict v1 key sets ─────────────────────────────────────────────
+# ── Strict key sets (format v1 envelope, body schema v2) ───────────
 
 
 _ENVELOPE_KEYS = frozenset({"format", "version", "body", "signatures"})
@@ -74,6 +87,8 @@ _BODY_KEYS = frozenset({
 	"schema_version",
 	"package_id",
 	"version",
+	"artifact_kind",
+	"artifact_path",
 	"artifact_sha256",
 	"source_content_id",
 	"target",
@@ -113,7 +128,7 @@ _CERT_RESULTS = frozenset({"pass", "fail"})
 def _reject_unknown_keys(obj: dict, allowed: frozenset[str], *, context: str) -> None:
 	"""Raise ValueError naming any key in `obj` not in `allowed`.
 
-	Strict v1 rejects unknown keys at every nesting level to
+	The strict loader rejects unknown keys at every nesting level to
 	prevent unsigned data from riding inside a signed-looking
 	claim.  Centralized for diagnostic consistency with
 	`author_claim_v1`.
@@ -122,7 +137,7 @@ def _reject_unknown_keys(obj: dict, allowed: frozenset[str], *, context: str) ->
 	if unknown:
 		raise ValueError(
 			f"{context}: unknown field(s) {sorted(unknown)!r}; "
-			f"v1 accepts exactly {sorted(allowed)!r}.  Strict-v1 "
+			f"this claim schema accepts exactly {sorted(allowed)!r}.  The strict loader "
 			f"rejects unknown keys to prevent unsigned data from "
 			f"riding inside a signed-looking claim."
 		)
@@ -191,10 +206,22 @@ class CertSuite:
 
 @dataclass(frozen=True)
 class CertClaimBody:
-	"""Signed payload of a cert claim."""
-	schema_version: int          # always 1
+	"""Signed payload of a cert claim.
+
+	`artifact_kind` ("package"|"app", v2): what the certifier attests the
+	bytes ARE — execute (app) vs link (package).  Must equal the author
+	claim's kind (verify cross-checks).
+
+	`artifact_path` (v2): the deploy-dir-relative locator the verifier
+	resolves the artifact bytes by (the binary for an app, the `.zdmp` for
+	a package).  Signed so an attacker cannot redirect verification to a
+	different file.  Must be a safe relative path (no abs, no `..`).
+	"""
+	schema_version: int          # always 2 (v2)
 	package_id: str
 	version: str
+	artifact_kind: str           # "package" | "app"
+	artifact_path: str           # deploy-relative locator (signed)
 	artifact_sha256: str         # "sha256:<hex>"
 	source_content_id: str       # "sha256:<hex>"
 	target: str
@@ -259,8 +286,75 @@ def _dep_entry_to_canonical_dict(e: DepGraphEntry) -> dict[str, Any]:
 	}
 
 
+def make_cert_claim_body(
+	*,
+	package_id: str,
+	version: str,
+	artifact_kind: str,
+	artifact_path: str,
+	artifact_sha256: str,
+	source_content_id: str,
+	target: str,
+	toolchain: Toolchain,
+	cert_suite: CertSuite,
+	run_id: str,
+	run_started_utc: str,
+	evidence_sha256: str,
+	dep_graph: tuple[DepGraphEntry, ...] = (),
+) -> CertClaimBody:
+	"""Construct a CURRENT-schema cert claim body.
+
+	`schema_version` is set internally (`_BODY_SCHEMA_VERSION`), so callers
+	never pass it.  ALL production emitters MUST use this factory instead of
+	`CertClaimBody(schema_version=..., ...)` — eliminating the
+	stale-local-constant drift class (an emitter cannot sign a v1 body).
+	"""
+	return CertClaimBody(
+		schema_version=_BODY_SCHEMA_VERSION,
+		package_id=package_id,
+		version=version,
+		artifact_kind=artifact_kind,
+		artifact_path=artifact_path,
+		artifact_sha256=artifact_sha256,
+		source_content_id=source_content_id,
+		target=target,
+		toolchain=toolchain,
+		dep_graph=dep_graph,
+		cert_suite=cert_suite,
+		run_id=run_id,
+		run_started_utc=run_started_utc,
+		evidence_sha256=evidence_sha256,
+	)
+
+
+def _validate_artifact_path(path: Any) -> None:
+	"""Validate the signed `artifact_path` is a safe, CANONICAL deploy-relative
+	locator.
+
+	Reuses the SCI path normalizer (no absolute, no `..`, no empty segments)
+	so a signed locator can never steer the verifier outside the deploy dir.
+	Because the path is signed verbatim, it must ALSO already be in canonical
+	spelling — we REJECT (not silently rewrite) non-canonical forms like
+	`./uflowsd`, `uflowsd/`, or backslash separators, so one artifact has
+	exactly one signed locator string.
+	"""
+	if not isinstance(path, str) or not path:
+		raise ValueError("cert claim body.artifact_path must be a non-empty string")
+	from lang.driftc.packages.source_content_id import _normalize_canonical_path
+	try:
+		normalized = _normalize_canonical_path(path)
+	except ValueError as e:
+		raise ValueError(f"cert claim body.artifact_path is not a safe relative path: {e}")
+	if path != normalized:
+		raise ValueError(
+			f"cert claim body.artifact_path must be canonical spelling "
+			f"{normalized!r}; got {path!r} (a signed locator must have exactly one "
+			f"spelling — no leading './', trailing '/', or backslashes)"
+		)
+
+
 def validate_body_shape(body: CertClaimBody) -> None:
-	"""Enforce v1 value-shape rules on a dataclass-constructed body.
+	"""Enforce v2 value-shape rules on a dataclass-constructed body.
 
 	The JSON loader (`_parse_body` + friends) runs equivalent checks
 	when parsing an untrusted document.  But hand-built dataclasses
@@ -286,6 +380,13 @@ def validate_body_shape(body: CertClaimBody) -> None:
 		raise ValueError("cert claim body.package_id must be a non-empty string")
 	if not isinstance(body.version, str) or not body.version:
 		raise ValueError("cert claim body.version must be a non-empty string")
+	if body.artifact_kind not in _CANONICAL_ARTIFACT_KINDS:
+		raise ValueError(
+			f"cert claim body.artifact_kind must be one of "
+			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r} (v2); got {body.artifact_kind!r} "
+			f"(legacy 'library' is not a valid signed kind)"
+		)
+	_validate_artifact_path(body.artifact_path)
 	if not isinstance(body.target, str) or not body.target:
 		raise ValueError("cert claim body.target must be a non-empty string")
 	if not isinstance(body.run_id, str) or not body.run_id:
@@ -383,6 +484,8 @@ def _body_to_canonical_dict(body: CertClaimBody) -> dict[str, Any]:
 		"schema_version": int(body.schema_version),
 		"package_id": body.package_id,
 		"version": body.version,
+		"artifact_kind": body.artifact_kind,
+		"artifact_path": body.artifact_path,
 		"artifact_sha256": body.artifact_sha256,
 		"source_content_id": body.source_content_id,
 		"target": body.target,
@@ -460,7 +563,7 @@ def dump_cert_claim_json(claim: CertClaim) -> str:
 def load_cert_claim_json(text: str) -> CertClaim:
 	"""Parse and shape-validate a cert-claim sidecar.
 
-	Strict v1 only.  Any deviation raises `ValueError` with
+	Strict loader (format v1, body schema v2).  Any deviation raises `ValueError` with
 	context.  Unknown keys at any level are rejected (per
 	`_reject_unknown_keys`).
 
@@ -609,6 +712,15 @@ def _parse_body(obj: dict) -> CertClaimBody:
 	if not isinstance(version_str, str) or not version_str:
 		raise ValueError("cert claim body.version must be a non-empty string")
 
+	artifact_kind = obj.get("artifact_kind")
+	if artifact_kind not in _CANONICAL_ARTIFACT_KINDS:
+		raise ValueError(
+			f"cert claim body.artifact_kind must be one of "
+			f"{sorted(_CANONICAL_ARTIFACT_KINDS)!r} (v2); got {artifact_kind!r}"
+		)
+	artifact_path = obj.get("artifact_path")
+	_validate_artifact_path(artifact_path)
+
 	validate_sci(obj.get("artifact_sha256"), field="cert claim body.artifact_sha256")
 	validate_sci(obj.get("source_content_id"), field="cert claim body.source_content_id")
 
@@ -649,6 +761,8 @@ def _parse_body(obj: dict) -> CertClaimBody:
 		schema_version=schema_ver,
 		package_id=package_id,
 		version=version_str,
+		artifact_kind=artifact_kind,
+		artifact_path=artifact_path,
 		artifact_sha256=obj["artifact_sha256"],
 		source_content_id=obj["source_content_id"],
 		target=target,

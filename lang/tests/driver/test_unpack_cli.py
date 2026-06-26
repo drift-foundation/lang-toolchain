@@ -35,11 +35,13 @@ from lang.drift.crypto import (
 	ed25519_sign_from_seed,
 )
 from lang.driftc.packages.author_claim_v1 import (
+	make_author_claim_body,
 	AuthorClaimBody,
 	dump_author_claim_json,
 	make_author_claim,
 )
 from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 	CertClaimBody,
 	CertSuite,
 	Toolchain,
@@ -145,8 +147,8 @@ def _write_sidecars(deployed: Path, raw: bytes) -> None:
 	artifact_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
 	(deployed / f"{_PKG}.zdmp").write_bytes(compress_to_zdmp(raw))
 	# Author claim.
-	abody = AuthorClaimBody(
-		schema_version=1, package_id=_PKG, version=_VERSION,
+	abody = make_author_claim_body(
+		package_id=_PKG, version=_VERSION, artifact_kind="package",
 		namespaces=(_NS,), source_content_id=_SCI,
 		required_deps=(), release_utc="2026-06-24T12:00:00Z",
 	)
@@ -157,12 +159,13 @@ def _write_sidecars(deployed: Path, raw: bytes) -> None:
 	(deployed / f"{_PKG}.author-pubkey.b64").write_text(
 		base64.b64encode(_pubkey_raw(_SEED)).decode("ascii")
 	)
-	# Provenance bundle (binds artifact_sha256).
+	# Provenance bundle (v4: binds artifact_sha256 + source_content_id).
 	bundle = {
 		"format": "drift-provenance-bundle", "version": 0,
 		"provenance": {
-			"schema_version": 3, "artifact_name": _PKG, "artifact_version": _VERSION,
+			"schema_version": 4, "artifact_name": _PKG, "artifact_version": _VERSION,
 			"artifact_kind": "package", "artifact_sha256": artifact_sha,
+			"source_content_id": _SCI,
 		},
 		"dep_provenance": {}, "dep_keys": {},
 	}
@@ -173,8 +176,9 @@ def _write_sidecars(deployed: Path, raw: bytes) -> None:
 	evidence_sha = "sha256:" + hashlib.sha256(compressed).hexdigest()
 	# Cert claim (binds artifact_sha256 + evidence_sha256).
 	kid = compute_ed25519_kid(_pubkey_raw(_SEED))
-	cbody = CertClaimBody(
-		schema_version=1, package_id=_PKG, version=_VERSION,
+	cbody = make_cert_claim_body(
+		package_id=_PKG, version=_VERSION,
+		artifact_kind="package", artifact_path=f"{_PKG}.zdmp",
 		artifact_sha256=artifact_sha, source_content_id=_SCI,
 		target="drift-linux-x86_64",
 		toolchain=Toolchain(driftc_version="0.33.55", drift_rt_abi=18, driftc_commit="test"),

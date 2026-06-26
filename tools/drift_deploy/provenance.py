@@ -93,12 +93,13 @@ def build_provenance(
 	artifact_version: str,
 	artifact_kind: str,  # "package" or "app"
 	artifact_sha256: str,  # "sha256:<hex>" — digest of the artifact bytes
+	source_content_id: str,  # "sha256:<hex>" — v4: REQUIRED, the third SCI leg
 	target: str,
 	compiler: CompilerInfo,
 	resolved_deps: dict[str, dict[str, str]],  # {pkg_id: {"version": str, "sha256": str}}
 	source: SourceIdentity | None = None,
 ) -> bytes:
-	"""Build canonical deterministic provenance JSON bytes.
+	"""Build canonical deterministic provenance JSON bytes (schema v4).
 
 	Returns the exact bytes to write to disk and hash for signing.
 	Uses json.dumps(sort_keys=True, separators=(",",":")) for determinism.
@@ -106,13 +107,34 @@ def build_provenance(
 	artifact_sha256 is the sha256 of the primary artifact bytes:
 	  - For packages: sha256 of the uncompressed .dmp bytes.
 	  - For apps: sha256 of the compiled binary bytes.
+
+	v4 (clean break): `source_content_id` is REQUIRED — it is the provenance
+	leg of the three-way SCI equality (author == cert == provenance) that
+	replaces the manifest leg for apps and reinforces it for packages.
+	`artifact_kind` / `artifact_sha256` / `source_content_id` are
+	cross-checked against the signed author + cert claims at verify time
+	(no two-way fallback).
 	"""
+	# Provenance is now a SIGNED record whose `artifact_kind` /
+	# `artifact_sha256` / `source_content_id` are cross-checked against the
+	# author/cert claims at verify time.  Hold all three to the SAME canonical
+	# policy the claims use, and fail early at the producer rather than emit a
+	# signed-but-malformed bundle.
+	from lang.driftc.packages.source_content_id import validate_sci
+	if artifact_kind not in ("package", "app"):
+		raise ValueError(
+			f"build_provenance: artifact_kind must be 'package' or 'app' (v2); "
+			f"got {artifact_kind!r}"
+		)
+	validate_sci(artifact_sha256, field="build_provenance artifact_sha256")
+	validate_sci(source_content_id, field="build_provenance source_content_id")
 	obj: dict[str, Any] = {
-		"schema_version": 3,
+		"schema_version": 4,
 		"artifact_name": artifact_name,
 		"artifact_version": artifact_version,
 		"artifact_kind": artifact_kind,
 		"artifact_sha256": artifact_sha256,
+		"source_content_id": source_content_id,
 		"target": target,
 		"compiler_version": compiler.version,
 		"compiler_commit": compiler.commit,

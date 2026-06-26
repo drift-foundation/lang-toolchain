@@ -34,11 +34,13 @@ import zstandard
 from lang.drift.cli import main
 from lang.drift.crypto import compute_ed25519_kid, ed25519_sign_from_seed
 from lang.driftc.packages.author_claim_v1 import (
+	make_author_claim_body,
 	AuthorClaimBody,
 	dump_author_claim_json,
 	make_author_claim,
 )
 from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 	CertClaimBody,
 	CertSuite,
 	Toolchain,
@@ -120,8 +122,8 @@ def _write_zdmp(deployed: Path, raw_bytes: bytes, *, pkg_id: str) -> str:
 
 
 def _write_author_sidecar(deployed: Path, *, pkg_id: str, namespace: str, sci: str = _SCI) -> None:
-	body = AuthorClaimBody(
-		schema_version=1, package_id=pkg_id, version=_VERSION,
+	body = make_author_claim_body(
+		package_id=pkg_id, version=_VERSION, artifact_kind="package",
 		namespaces=(namespace,), source_content_id=sci,
 		required_deps=(), release_utc="2026-05-29T12:00:00Z",
 	)
@@ -135,8 +137,9 @@ def _write_cert_sidecar(
 	sci: str = _SCI, no_evidence: bool = False,
 ) -> None:
 	kid = compute_ed25519_kid(_pubkey_raw(_SEED))
-	body = CertClaimBody(
-		schema_version=1, package_id=pkg_id, version=_VERSION,
+	body = make_cert_claim_body(
+		package_id=pkg_id, version=_VERSION,
+		artifact_kind="package", artifact_path=f"{pkg_id}.zdmp",
 		artifact_sha256=artifact_sha, source_content_id=sci,
 		target="drift-linux-x86_64",
 		toolchain=Toolchain(driftc_version="0.33.9", drift_rt_abi=14, driftc_commit="test"),
@@ -159,17 +162,18 @@ def _write_pubkey(deployed: Path, *, pkg_id: str) -> None:
 	(deployed / f"{pkg_id}.author-pubkey.b64").write_text(pub_b64)
 
 
-def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, extra: dict | None = None) -> str:
+def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, sci: str = _SCI, extra: dict | None = None) -> str:
 	"""Write `provenance.zst`; return its evidence digest
 	("sha256:<hex>" of the compressed bytes), i.e. what the cert claim
 	must sign. `extra` injects fields to make the bytes differ while the
 	inner `artifact_sha256` stays the same (provenance-tamper case)."""
 	prov = {
-		"schema_version": 3,
+		"schema_version": 4,
 		"artifact_name": pkg_id,
 		"artifact_version": _VERSION,
 		"artifact_kind": "package",
 		"artifact_sha256": artifact_sha,
+		"source_content_id": sci,
 	}
 	if extra:
 		prov.update(extra)
@@ -398,8 +402,9 @@ def _emit_multi_module_dmp(tmp_path: Path, *, pkg_id: str, modules: list[str]) -
 def _cert_claim_text(*, pkg_id: str, seed: bytes, artifact_sha: str, evidence_sha: str) -> tuple[str, str]:
 	"""Return (filename, json_text) for a cert claim signed by `seed`."""
 	kid = compute_ed25519_kid(_pubkey_raw(seed))
-	body = CertClaimBody(
-		schema_version=1, package_id=pkg_id, version=_VERSION,
+	body = make_cert_claim_body(
+		package_id=pkg_id, version=_VERSION,
+		artifact_kind="package", artifact_path=f"{pkg_id}.zdmp",
 		artifact_sha256=artifact_sha, source_content_id=_SCI,
 		target="drift-linux-x86_64",
 		toolchain=Toolchain(driftc_version="0.33.9", drift_rt_abi=14, driftc_commit="t"),
@@ -434,8 +439,8 @@ def test_provenance_binding_holds_for_every_accepted_cert(tmp_path: Path) -> Non
 	evidence_sha = _write_provenance(deployed, pkg_id=pkg, artifact_sha=artifact_sha)
 
 	# Author claim covers both namespaces, signed by A.
-	abody = AuthorClaimBody(
-		schema_version=1, package_id=pkg, version=_VERSION,
+	abody = make_author_claim_body(
+		package_id=pkg, version=_VERSION, artifact_kind="package",
 		namespaces=("alpha.*", "beta.*"), source_content_id=_SCI,
 		required_deps=(), release_utc="2026-05-29T12:00:00Z",
 	)

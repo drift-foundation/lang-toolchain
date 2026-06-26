@@ -694,22 +694,23 @@ def compute_artifact_sci(
 	same source release therefore produces the same SCI regardless
 	of which target it is built for.
 
-	Caller contract: gate on ``art.kind == "package"`` before calling.
-	Apps don't carry SCI (no consumer closure walk).  Surfacing the
-	graceful-fallback policy (warn-and-skip when the source tree is
-	partially mocked / missing) is left to callers, which already
-	wrap the call in ``try / except (FileNotFoundError, ValueError)``.
+	Works for both ``package`` and ``app`` artifacts — the canonical
+	``art.kind`` is passed through (v2: apps now carry SCI too, the
+	provenance/author/cert three-way leg).  Surfacing the graceful-fallback
+	policy (warn-and-skip when the source tree is partially mocked /
+	missing) is left to callers, which already wrap the call in
+	``try / except (FileNotFoundError, ValueError)``.
 
-	v2 source-identity note: the canonical kind is ``"package"`` (the
-	``library``→``package`` flip).  ``kind`` is hashed into the SCI, so
-	this value participates in the v2 source-identity break (pool re-cert).
+	v2 source-identity note: ``kind`` is canonical (``"package"`` | ``"app"``,
+	the ``library``→``package`` flip) and is hashed into the SCI, so this
+	value participates in the v2 source-identity break (pool re-cert).
 	"""
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,
 	)
 	source_root = project_root_for(manifest_dir)
 	return compute_artifact_source_content_id(
-		kind=ARTIFACT_KIND_PACKAGE,
+		kind=art.kind,
 		package_id=art.name,
 		version=art.version,
 		module_namespace=art.module_namespace,

@@ -52,6 +52,7 @@ from lang.driftc.packages.author_claim_v1 import (
 	AuthorClaimBody,
 	RequiredDep,
 	load_author_claim_json,
+	make_author_claim_body,
 )
 from tools.drift_author.author_publish import (
 	SignAuthorClaimOptions,
@@ -65,7 +66,8 @@ from tools.drift_author.key_loader import (
 )
 
 
-_BODY_SCHEMA_VERSION = 1
+# No local schema-version constant: bodies are built via
+# `make_author_claim_body`, which stamps the canonical version internally.
 
 
 def _load_seed_from_args(args: argparse.Namespace) -> bytes:
@@ -144,10 +146,10 @@ def _build_body(args: argparse.Namespace) -> AuthorClaimBody:
 	if not namespaces:
 		raise SystemExit("drift-author: at least one --namespace is required")
 	required = tuple(_parse_required_dep(s) for s in (args.required_dep or []))
-	return AuthorClaimBody(
-		schema_version=_BODY_SCHEMA_VERSION,
+	return make_author_claim_body(
 		package_id=args.package_id,
 		version=args.version,
+		artifact_kind=args.artifact_kind,
 		namespaces=namespaces,
 		source_content_id=args.source_content_id,
 		required_deps=required,
@@ -260,10 +262,10 @@ def _cmd_publish(args: argparse.Namespace) -> int:
 			"%Y-%m-%dT%H:%M:%SZ"
 		)
 
-	body = AuthorClaimBody(
-		schema_version=_BODY_SCHEMA_VERSION,
+	body = make_author_claim_body(
 		package_id=art.name,
 		version=art.version,
+		artifact_kind=art.kind,
 		namespaces=namespaces,
 		source_content_id=sci,
 		required_deps=required_deps,
@@ -546,6 +548,10 @@ def _build_parser() -> argparse.ArgumentParser:
 	raw.add_argument("--sidecar-dir", type=Path, required=True)
 	raw.add_argument("--package-id", type=str, required=True)
 	raw.add_argument("--version", type=str, required=True)
+	raw.add_argument(
+		"--artifact-kind", type=str, default="package", choices=("package", "app"),
+		help="Canonical artifact kind for the v2 claim body (default: package)",
+	)
 	raw.add_argument(
 		"--namespace", type=str, action="append",
 		help="Module-id namespace covered by this claim (repeatable)",

@@ -37,6 +37,7 @@ from lang.driftc.packages.author_claim_v1 import (
 	RequiredDep,
 	body_signing_bytes,
 	load_author_claim_json,
+	make_author_claim_body,
 )
 from lang.driftc.packages.sidecar_naming import author_claim_filename
 from tools.drift_author import (
@@ -61,10 +62,10 @@ def _fresh_seed() -> bytes:
 
 
 def _sample_body(package_id: str = "demo.lib", version: str = "1.0.0") -> AuthorClaimBody:
-	return AuthorClaimBody(
-		schema_version=1,
+	return make_author_claim_body(
 		package_id=package_id,
 		version=version,
+		artifact_kind="package",
 		namespaces=("demo.lib",),
 		source_content_id="sha256:" + ("a" * 64),
 		required_deps=(RequiredDep(name="std", version_range="^1"),),

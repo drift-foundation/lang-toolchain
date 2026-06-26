@@ -36,9 +36,9 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.drift.crypto import compute_ed25519_kid
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody, CertSuite, Toolchain,
+		CertClaimBody, CertSuite, Toolchain, make_cert_claim_body,
 	)
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,
@@ -114,10 +114,10 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 
 	# v1 author claim (source-identity attestation).
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
 			package_id="std",
 			version=STD_VERSION,
+			artifact_kind="package",
 			namespaces=("std.*", "lang.*", "drift.*"),
 			source_content_id=sci,
 			required_deps=(),
@@ -127,12 +127,13 @@ def _build_signed_stdlib(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
 		sidecar_dir=std_dest,
 	))
 
-	# v1 cert claim (artifact + cert_suite attestation).
+	# v2 cert claim (artifact + cert_suite attestation).
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1,
+		body=make_cert_claim_body(
 			package_id="std",
 			version=STD_VERSION,
+			artifact_kind="package",
+			artifact_path="std.dmp",
 			artifact_sha256=artifact_sha256,
 			source_content_id=sci,
 			target="test-target",
@@ -258,9 +259,9 @@ def publish_v1_pkg(
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.drift.crypto import compute_ed25519_kid
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody, CertSuite, Toolchain,
+		CertClaimBody, CertSuite, Toolchain, make_cert_claim_body,
 	)
 	from lang.driftc.packages.sidecar_naming import (
 		author_claim_filename, cert_claim_filename,
@@ -353,10 +354,10 @@ def publish_v1_pkg(
 
 	# Emit author + cert sidecars next to the .dmp in lib_dir.
 	author_sidecar = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
 			package_id=package_id,
 			version=package_version,
+			artifact_kind="package",
 			namespaces=(namespace_glob,) if namespace_glob.endswith(".*") else (
 				namespace_glob, f"{namespace_glob}.*",
 			),
@@ -368,10 +369,11 @@ def publish_v1_pkg(
 		sidecar_dir=lib_dir,
 	))
 	cert_sidecar = sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1,
+		body=make_cert_claim_body(
 			package_id=package_id,
 			version=package_version,
+			artifact_kind="package",
+			artifact_path=pkg_path.name,
 			artifact_sha256=artifact_sha256,
 			source_content_id=sci,
 			target=target,
@@ -505,7 +507,7 @@ def sign_v1_pkg_into_root(
 	from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 	from cryptography.hazmat.primitives import serialization
 	from lang.drift.crypto import compute_ed25519_kid
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 	from lang.driftc.packages.cert_claim_v1 import (
 		CertClaimBody, CertSuite, DepGraphEntry, Toolchain,
 	)
@@ -575,8 +577,9 @@ def sign_v1_pkg_into_root(
 	)
 	all_namespaces = tuple(primary_ns) + tuple(extra_namespaces)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_author_claim_body(
+			package_id=package_id, version=package_version,
+			artifact_kind="package",
 			namespaces=all_namespaces,
 			source_content_id=sci,
 			required_deps=required_deps, 			release_utc="2026-05-19T00:00:00Z",
@@ -585,8 +588,9 @@ def sign_v1_pkg_into_root(
 		sidecar_dir=pkg_path.parent,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_cert_claim_body(
+			package_id=package_id, version=package_version,
+			artifact_kind="package", artifact_path=pkg_path.name,
 			artifact_sha256=artifact_sha256, source_content_id=sci,
 			target=target,
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
@@ -721,9 +725,9 @@ def emit_v1_sidecars_inline(
 	"""
 	from hashlib import sha256
 	from cryptography.hazmat.primitives import serialization
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody, make_author_claim_body
 	from lang.driftc.packages.cert_claim_v1 import (
-		CertClaimBody, CertSuite, Toolchain,
+		CertClaimBody, CertSuite, Toolchain, make_cert_claim_body,
 	)
 	from tools.drift_author.author_publish import (
 		SignAuthorClaimOptions, sign_and_write_author_claim,
@@ -740,8 +744,9 @@ def emit_v1_sidecars_inline(
 	artifact_sha256 = "sha256:" + sha256(pkg_path.read_bytes()).hexdigest()
 
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_author_claim_body(
+			package_id=package_id, version=package_version,
+			artifact_kind="package",
 			namespaces=tuple(namespaces),
 			source_content_id=sci,
 			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
@@ -750,8 +755,9 @@ def emit_v1_sidecars_inline(
 		sidecar_dir=pkg_path.parent,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_cert_claim_body(
+			package_id=package_id, version=package_version,
+			artifact_kind="package", artifact_path=pkg_path.name,
 			artifact_sha256=artifact_sha256, source_content_id=sci,
 			target=target,
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
