@@ -1,3 +1,37 @@
+## 2026-06-25 - 0.33.58: heap `String` double-free via `arrayElem.struct.stringField` fed to `+` — CORE_BUG (LANGUAGE_BUG RESOLVED)
+### CORE_BUG: nested-struct-array String projection + concat freed the live array buffer
+- **Reported by** drift-query (DriftQuery), 3rd toolchain CORE_BUG from that effort. On
+  certified 0.33.56: `fields[j].value.s + ""` where `fields: Array<Field>`,
+  `Field.value: Value`, `Value.s: String` (heap strings) silently corrupted values across
+  reads, then aborted with `malloc(): unaligned tcache chunk detected`. Plain, safe,
+  immutable source — no `unsafe`/`move`/aliasing. Blocked DriftQuery M6 engine bridge.
+- **Root cause (lowering only):** `stage2/hir_to_mir.py::_visit_expr_HField` — the
+  `HField(HIndex)` fast path borrows an array element's field via
+  AddrOfArrayElem+AddrOfField+LoadRef. For a Copy field (`String`) it deep-copies
+  (CopyValue) — fine, which is why the **one-hop** `arr[i].s + ""` worked. For a NON-Copy
+  struct field (`Value`) it returned the raw LoadRef WITHOUT flagging it in
+  `_ref_field_temps`. A subsequent projection (`.s`) off that unflagged intermediate then
+  hit `source_is_owned_rvalue` and emitted a spurious drop of the struct's `String` — but
+  that `String` is a shallow `extractvalue` of the LIVE array element, so the drop freed
+  the array's buffer (double free / UAF). The GENERAL field path already flags non-bitcopy
+  reads as aliases; the fast path omitted it (parallel-projection-path omission class, same
+  family as the prior place-walker/projection double-free fixes).
+- **Fix:** in the fast path's non-Copy return, flag the borrowed field read as a ref-field
+  alias when not bitcopy (`if not _drop_policy(field_ty).is_bitcopy:
+  _ref_field_temps.add(dest)`). The downstream projection then treats the intermediate as a
+  borrowed alias (no owned-drop), and `drift_string_concat` borrows the leaf — no spurious
+  free, no extra copy. Triggered the *String ownership-authoring conformance matrix*
+  refactor entry → shipped with a bounded matrix, not a one-projection patch.
+- **Diagnosis:** IR diff of a minimal 2-hop vs 1-hop probe showed the failing case had one
+  unbalanced `drift_string_release` (the `drop_field` of the intermediate) with no matching
+  retain. valgrind memcheck confirms the fix (rc 0, no UAF/leak).
+- **Tests:** `lang/tests/driver/test_string_concat_nested_struct_array_field.py` — bounded
+  ownership matrix (7 shapes: the bug + one-hop + 3-hop + plain-local-nested +
+  borrow-penultimate + literal-producer control + no-concat control, each multi-pass) plus a
+  valgrind-memcheck assertion on the failing shape. `work/string-concat-nested-struct-array-field/`.
+- **Version:** DRIFTC 0.33.57 → **0.33.58**; **ABI stays 18** (lowering/codegen only, no
+  runtime boundary). Separate slice from the 0.33.57 package/app trust work.
+
 ## 2026-06-25 - 0.33.57: v2 package vocabulary/layout break + certified runnable app artifacts (`drift verify-app`) (FEATURE — pool re-cert)
 ### FEATURE: `package`/`app` canonical artifact kinds, `pkg/`+`app/` layout, and a verify-gated app trust path
 - **Motivation:** drift-workflows needs a certified-path runnable `microflows-daemon` (not just the certified microflows library + DB-schema asset). The blocker was the toolchain: `kind: app` artifacts could be built/deployed but **not certified or verify-consumed** (no author/cert claim, no consumer verify). This slice makes the app binary a first-class certified artifact and, in the same break, fixes the now-misleading `library`/`lib/` vocabulary.

@@ -576,7 +576,11 @@ opportunistic uplifts)" for the full rule.
     cause is in `string_arc.py`, cleanup authoring (incl.
     `match_cleanup_authoring.py`), the ownership ledger, exception-edge
     cleanup, **container transfer** (array `push`/`insert`/set,
-    struct/variant field store), or **move-return teardown**.
+    struct/variant field store), **move-return teardown**, or
+    **field/array-element projection lowering**
+    (`hir_to_mir.py::_visit_expr_HField`/`_visit_expr_HIndex` — the
+    `_ref_field_temps` aliasing classification of a borrowed non-Copy
+    field/element read).
   - A defect where a value **consumed by a container/field store**
     (retain-into-storage + release-original, or MoveOut) is still
     visible to a later cleanup site (normal or exception edge) — i.e. a
@@ -593,6 +597,26 @@ opportunistic uplifts)" for the full rule.
   second `drift_string_release` on a buffer the array already owns.
   Masked for inline literals only because static-string release is a
   no-op. Reported by DriftQuery (M3 file-read → env build).
+
+  **Fired again (2026-06-25) — COVERED, RESOLVED 0.33.58:**
+  `fields[j].value.s + ""` (`Array<Field>` → by-value struct `Field.value`
+  → `Value.s: String`) double-freed the live array buffer.  NEW recurrence
+  class = **parallel field-projection lowering paths**: the
+  `HField(HIndex)` fast path in `_visit_expr_HField` borrowed a NON-Copy
+  struct field but, unlike the general `StructGetField` path, did NOT add
+  the result to `_ref_field_temps`; the next `.s` projection then treated
+  the intermediate as an owned rvalue and emitted a spurious drop of a
+  shallow `String` view = double free.  (One-hop `arr[i].s` was safe — a
+  Copy `String` field returns earlier via the `_should_copy_value`
+  CopyValue branch.)  Fix: flag borrowed non-bitcopy field reads as
+  ref-aliases in the fast path (mirror the general path).  Lowering-only,
+  ABI 18.  Bounded matrix shipped:
+  `lang/tests/driver/test_string_concat_nested_struct_array_field.py`
+  (7 shapes: bug + 1/3-hop + plain-local + borrow-penultimate + literal &
+  no-concat controls, each multi-pass) + a valgrind-memcheck row on the
+  failing shape.  Reported by DriftQuery (M6 engine bridge).  Standing
+  lesson: any two lowering paths that read a field/element must apply the
+  SAME `_ref_field_temps` aliasing rule.
 
 - **Scope when triggered:** root-cause fix in the owning pass +
   a **bounded** conformance matrix (NOT an open-ended rewrite, NOT a

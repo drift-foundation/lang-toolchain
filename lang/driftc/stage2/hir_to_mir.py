@@ -3538,6 +3538,23 @@ class HIRToMIR:
 								self._local_types[copy_dest] = field_ty
 								return copy_dest
 							self._local_types[dest] = field_ty
+							# We reach here only for a NON-Copy field (a Copy field —
+							# incl. a direct `String` field, the one-hop case — already
+							# returned via the `_should_copy_value` CopyValue branch
+							# above).  For a non-bitcopy field (a move-only struct
+							# carrying refcounted data, e.g. `Value { s: String }`),
+							# `dest` is a SHALLOW LoadRef view that aliases the live
+							# element's backing.  Flag it as a ref-field alias so a
+							# *downstream* projection/consumption deep-copies the leaf
+							# and does NOT mis-classify it as an owned rvalue to drop.
+							# Without this, `arr[i].inner.s + ""` reads `inner` here
+							# (unflagged), then the `.s` read treats `inner` as an owned
+							# rvalue and emits a spurious drop of its String that frees
+							# the live element (heap String double-free — the
+							# nested-struct-array case).  Mirrors the general field
+							# path's `_ref_field_temps` add.
+							if not self._drop_policy(field_ty).is_bitcopy:
+								self._ref_field_temps.add(dest)
 							return dest
 		subject = self.lower_expr(expr.subject)
 		subj_ty = self._infer_expr_type(expr.subject)
