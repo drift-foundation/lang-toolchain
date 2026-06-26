@@ -123,8 +123,9 @@ def _write_v1_sidecars(
 	package's actual module namespace differs (e.g. hyphenated
 	package ids whose modules use the underscored form).
 	"""
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, Toolchain,
 	)
 	from tools.drift_author.author_publish import (
@@ -147,8 +148,8 @@ def _write_v1_sidecars(
 	)
 
 	author_path = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
+			artifact_kind="package",
 			package_id=package_id,
 			version=version,
 			namespaces=ns,
@@ -160,8 +161,8 @@ def _write_v1_sidecars(
 		sidecar_dir=sidecar_dir,
 	))
 	cert_path = sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{package_id}.zdmp",
 			package_id=package_id,
 			version=version,
 			artifact_sha256="sha256:" + _sha256_hex(pkg_bytes),

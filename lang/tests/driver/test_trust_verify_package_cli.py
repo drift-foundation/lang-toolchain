@@ -1,5 +1,5 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""CLI regression self-check for `drift trust verify-package`.
+"""CLI regression self-check for `drift verify-package`.
 
 Builds a known-good *deployed package directory* from primitives (a real
 `.zdmp` + signed author/cert sidecars + author-pubkey companion + a
@@ -229,13 +229,13 @@ def _build_good_dir(
 
 
 def _run(deployed: Path, *flags: str) -> tuple[int, dict | None]:
-	"""Invoke `drift trust verify-package <dir> --json [flags...]`.
+	"""Invoke `drift verify-package <dir> --json [flags...]`.
 	Returns (exit_code, parsed_report) — report is None for a usage
 	error (argparse `p.error` raises SystemExit before printing JSON)."""
 	buf = io.StringIO()
 	try:
 		with contextlib.redirect_stdout(buf):
-			rc = main(["trust", "verify-package", str(deployed), "--json", *flags])
+			rc = main(["verify-package", str(deployed), "--json", *flags])
 	except SystemExit as ex:
 		return int(ex.code if ex.code is not None else 0), None
 	return rc, json.loads(buf.getvalue())
@@ -714,7 +714,7 @@ def test_not_a_directory_is_usage_error(tmp_path: Path) -> None:
 	buf = io.StringIO()
 	try:
 		with contextlib.redirect_stdout(buf):
-			rc = main(["trust", "verify-package", str(zdmp), "--json", "--allow-bundled-pubkey"])
+			rc = main(["verify-package", str(zdmp), "--json", "--allow-bundled-pubkey"])
 	except SystemExit as ex:
 		rc = int(ex.code if ex.code is not None else 0)
 	assert rc == 2
@@ -754,19 +754,20 @@ def test_invalid_base64_author_pubkey_is_usage_error(tmp_path: Path) -> None:
 
 def test_json_backstop_emits_full_schema_on_unexpected_error(tmp_path: Path, monkeypatch) -> None:
 	"""Fault-inject an unexpected verifier exception and assert the CLI's
-	--json backstop (cli.py) emits ONE full-schema ok=false report and
-	exit 1 -- pinning the real CLI path, not just the helper."""
-	import lang.drift.cli as climod
+	--json backstop (tools/drift_deploy/verify_package_cli.py) emits ONE
+	full-schema ok=false report and exit 1 -- pinning the real top-level
+	`drift verify-package` path, not just the helper."""
+	import tools.drift_deploy.verify_package_cli as vpcli
 	deployed, _a, _e = _build_good_dir(tmp_path)
 
 	def _boom(_opts):
 		raise RuntimeError("kaboom inside the verifier")
 
-	monkeypatch.setattr(climod, "verify_deployed_package", _boom)
+	monkeypatch.setattr(vpcli, "verify_deployed_package", _boom)
 	buf = io.StringIO()
 	try:
 		with contextlib.redirect_stdout(buf):
-			rc = main(["trust", "verify-package", str(deployed), "--json", "--allow-bundled-pubkey"])
+			rc = main(["verify-package", str(deployed), "--json", "--allow-bundled-pubkey"])
 	except SystemExit as ex:
 		rc = int(ex.code if ex.code is not None else 0)
 	assert rc == 1

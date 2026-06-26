@@ -39,7 +39,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from lang.drift.crypto import compute_ed25519_kid
-from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
 from lang.driftc.packages.sidecar_naming import cert_claim_filename
 from lang.driftc.packages.source_content_id import (
@@ -106,8 +106,8 @@ def _pre_publish_author_claim(
 	sidecar_dir = scratch / "foundation_author_signing"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
 	path = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="std", version=version,
+		body=make_author_claim_body(
+			artifact_kind="package", package_id="std", version=version,
 			namespaces=("std.*", "lang.*", "drift.*"),
 			source_content_id=sci, required_deps=(),
 			release_utc="2026-05-19T00:00:00Z",

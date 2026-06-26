@@ -89,8 +89,8 @@ def _emit_v1_sidecars(
 	helper; the v1 trust gate verifies these instead of the gone
 	`.sig` envelope.
 	"""
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
-	from lang.driftc.packages.cert_claim_v1 import CertClaimBody, CertSuite, Toolchain
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
+	from lang.driftc.packages.cert_claim_v1 import make_cert_claim_body, CertClaimBody, CertSuite, Toolchain
 	from tools.drift_author.author_publish import (
 		SignAuthorClaimOptions, sign_and_write_author_claim,
 	)
@@ -106,8 +106,8 @@ def _emit_v1_sidecars(
 	artifact_sha256 = "sha256:" + _sha256_hex(pkg_path.read_bytes())
 
 	author = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_author_claim_body(
+			artifact_kind="package", package_id=package_id, version=package_version,
 			namespaces=tuple(namespaces),
 			source_content_id=_TEST_SCI,
 			required_deps=(),
@@ -117,8 +117,8 @@ def _emit_v1_sidecars(
 		sidecar_dir=pkg_path.parent,
 	))
 	cert = sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{package_id}.zdmp", package_id=package_id, version=package_version,
 			artifact_sha256=artifact_sha256,
 			source_content_id=_TEST_SCI,
 			target=target,

@@ -32,12 +32,14 @@ import pytest
 from lang.driftc.packages.author_claim_v1 import (
 	AuthorClaimBody,
 	RequiredDep,
+	make_author_claim_body,
 )
 from lang.driftc.packages.cert_claim_v1 import (
 	CertClaimBody,
 	CertSuite,
 	DepGraphEntry,
 	Toolchain,
+	make_cert_claim_body,
 )
 from lang.driftc.packages.sidecar_naming import (
 	author_claim_filename,
@@ -93,10 +95,10 @@ def _make_sibling(
 	cert_version_body = cert_version if cert_version is not None else disk_version
 
 	dep_dir.mkdir(parents=True, exist_ok=True)
-	author_body = AuthorClaimBody(
-		schema_version=1,
+	author_body = make_author_claim_body(
 		package_id=author_pkg_id_body,
 		version=author_version_body,
+		artifact_kind="package",
 		namespaces=(author_pkg_id_body,),
 		source_content_id=author_sci,
 		required_deps=(),
@@ -113,10 +115,11 @@ def _make_sibling(
 	if written != target_author:
 		written.rename(target_author)
 
-	cert_body = CertClaimBody(
-		schema_version=1,
+	cert_body = make_cert_claim_body(
 		package_id=cert_pkg_id_body,
 		version=cert_version_body,
+		artifact_kind="package",
+		artifact_path=f"{cert_pkg_id_body}.zdmp",
 		artifact_sha256="sha256:" + ("c" * 64),
 		source_content_id=cert_sci,
 		target="linux-x86_64",
@@ -175,8 +178,9 @@ def test_missing_author_claim_returns_none(tmp_path: Path) -> None:
 	dep_dir = staged_pkg_root / "shared" / "1.0.0"
 	dep_dir.mkdir(parents=True)
 	# Write only the cert claim; no author claim.
-	cert_body = CertClaimBody(
-		schema_version=1, package_id="shared", version="1.0.0",
+	cert_body = make_cert_claim_body(
+		package_id="shared", version="1.0.0",
+		artifact_kind="package", artifact_path="shared.zdmp",
 		artifact_sha256="sha256:" + ("c" * 64),
 		source_content_id="sha256:" + ("a" * 64),
 		target="linux-x86_64",

@@ -29,12 +29,6 @@ from lang.drift.trust import (
 	plan_trust_import,
 	revoke_kid_in_trust_store,
 )
-from lang.driftc.packages.verify_deployed_v1 import (
-	VerifyPackageOptions,
-	VerifyPackageUsageError,
-	error_report as make_verify_error_report,
-	verify_deployed_package,
-)
 from lang.drift.keygen import KeygenOptions, keygen_ed25519_seed
 
 
@@ -596,61 +590,9 @@ def _build_parser() -> argparse.ArgumentParser:
 	)
 	trust_check.add_argument("--json", action="store_true", help="Emit machine-readable JSON report")
 
-	trust_verify_pkg = trust_sub.add_parser(
-		"verify-package",
-		help=(
-			"Read-only: verify a DEPLOYED package directory end to end — "
-			"author/cert signatures + key binding, SCI equality, artifact "
-			"hash, version, provenance, and trust-store roles."
-		),
-	)
-	trust_verify_pkg.add_argument(
-		"package_dir",
-		type=_UserPath,
-		help=(
-			"Deployed package directory (the `drift deploy` output layout: "
-			"<pkg>.zdmp + sidecars + provenance.zst). Pass the directory, "
-			"not the .zdmp."
-		),
-	)
-	_vp_trust = trust_verify_pkg.add_mutually_exclusive_group()
-	_vp_trust.add_argument(
-		"--trust-store", type=_UserPath, default=None,
-		help="Verify signers against this v1 trust store.",
-	)
-	_vp_trust.add_argument(
-		"--author-pubkey-b64", type=str, default=None,
-		help=(
-			"Verify against this base64 Ed25519 author pubkey (kid derived; "
-			"granted author+certifier for the package's modules)."
-		),
-	)
-	_vp_trust.add_argument(
-		"--author-profile", type=_UserPath, default=None,
-		help="Verify against the key + namespaces in this .author-profile.",
-	)
-	_vp_trust.add_argument(
-		"--allow-bundled-pubkey", action="store_true",
-		help=(
-			"Self-consistency only: verify against the package's OWN "
-			"bundled <pkg>.author-pubkey.b64. Proves integrity + "
-			"self-signature, NOT third-party trust. Without a trust flag "
-			"the command is a usage error, so a CI gate can't mistake "
-			"'no key supplied' for 'trusted'."
-		),
-	)
-	trust_verify_pkg.add_argument(
-		"--expect-version", type=str, default=None,
-		help="Assert the package version equals this value.",
-	)
-	trust_verify_pkg.add_argument(
-		"--expect-sci", type=str, default=None,
-		help="Assert source_content_id equals this value (e.g. sha256:...).",
-	)
-	trust_verify_pkg.add_argument(
-		"--json", action="store_true",
-		help="Emit one machine-readable JSON result object.",
-	)
+	# NOTE: package verification is NOT a `trust` subcommand — it is the
+	# top-level `drift verify-package` (peer of `drift verify-app`).  `drift
+	# trust` is for trust management/preflight, not artifact verification.
 
 	doctor = sub.add_parser("doctor", help="Sanity checks for sources/index/trust/lock configuration")
 	doctor.add_argument("--sources", type=_UserPath, default=Path("drift") / "sources.json", help="Path to drift/sources.json")
@@ -691,6 +633,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	sub.add_parser("unpack", help="Verify a deployed package and materialize its packed assets to --dest (see: drift unpack --help)")
+	sub.add_parser("verify-package", help="Canonical read-only verifier for a deployed package artifact (.zdmp + sidecars) (see: drift verify-package --help)")
 	sub.add_parser("verify-app", help="Verify a deployed app artifact (binary + sidecars); read-only, never executes (see: drift verify-app --help)")
 	sub.add_parser("manifest", help="Manifest maintenance helpers: `drift manifest migrate` converts v1 → v2 (see: drift manifest --help)")
 	sub.add_parser("lock", help="Lock inspection helpers: `drift lock emit` emits --dep flags for an artifact's resolved graph (see: drift lock --help)")
@@ -763,6 +706,10 @@ def main(argv: list[str] | None = None) -> int:
 	if effective_argv and effective_argv[0] == "unpack":
 		from tools.drift_deploy.drift_unpack import run as unpack_run
 		return unpack_run(effective_argv[1:])
+
+	if effective_argv and effective_argv[0] == "verify-package":
+		from tools.drift_deploy.verify_package_cli import run as verify_package_run
+		return verify_package_run(effective_argv[1:])
 
 	if effective_argv and effective_argv[0] == "verify-app":
 		from tools.drift_deploy.verify_app_cli import run as verify_app_run
@@ -1034,95 +981,8 @@ def main(argv: list[str] | None = None) -> int:
 						print(f"  {loc}{e['code']}: {e['message']}")
 			return 0 if report["ok"] else 1
 
-		if args.trust_cmd == "verify-package":
-			author_pubkey_b64 = args.author_pubkey_b64
-			author_namespaces = None
-			try:
-				if args.author_profile is not None:
-					# Translate the profile into the pubkey form here (the
-					# profile loader is a CLI-layer concern); the facade
-					# only deals in pubkey + namespaces.
-					from lang.drift.author_profile import load_author_profile
-					prof = load_author_profile(args.author_profile)
-					author_pubkey_b64 = prof.pubkey_b64
-					author_namespaces = list(prof.namespaces)
-				opts = VerifyPackageOptions(
-					package_dir=args.package_dir,
-					trust_store_path=args.trust_store,
-					author_pubkey_b64=author_pubkey_b64,
-					author_namespaces=author_namespaces,
-					allow_bundled_pubkey=args.allow_bundled_pubkey,
-					expect_version=args.expect_version,
-					expect_sci=args.expect_sci,
-				)
-			except Exception as err:
-				# Bad CLI inputs (unreadable/malformed --author-profile,
-				# conflicting flags): genuine misuse -> argparse usage (exit 2).
-				p.error(str(err))
-				return 2
-			try:
-				report = verify_deployed_package(opts)
-			except VerifyPackageUsageError as err:
-				# Command was INVOKED wrong (not a directory, zero/many
-				# .zdmp, no/conflicting trust source, an unreadable CLI trust
-				# input).  Only this is an argparse usage error (exit 2).
-				p.error(str(err))
-				return 2
-			except Exception as err:  # noqa: BLE001 — see below
-				# A problem with the PACKAGE that surfaced as an unexpected
-				# exception rather than a report error.  It is a verification
-				# outcome, not CLI misuse, so we DON'T route it through
-				# p.error: convert it to a structured ok=false verdict
-				# (honouring --json) and exit 1, so a CI gate always gets a
-				# result body.  The facade folds the problems it anticipates
-				# (corrupt artifact, bad/missing sidecars, trust rejection,
-				# provenance mismatch) into the report itself; this catch is
-				# the backstop for anything it didn't.  Use the facade's
-				# report builder so the backstop emits the SAME full schema a
-				# normal failure does -- CI sees one stable set of keys.
-				err_report = make_verify_error_report(
-					args.package_dir, code="verify-error", message=str(err),
-				)
-				if args.json:
-					print(json.dumps(err_report, sort_keys=True, separators=(",", ":")))
-				else:
-					print(f"FAIL: {args.package_dir} did not verify")
-					print(f"  verify-error: {err}")
-				return 1
-			if args.json:
-				print(json.dumps(report, sort_keys=True, separators=(",", ":")))
-			else:
-				verdict = "OK" if report["ok"] else "FAIL"
-				if report.get("package_id"):
-					print(
-						f"{verdict}: {report['package_id']}@{report['version']} "
-						f"({report['trust_source']})"
-					)
-				else:
-					# Identity unknown (e.g. a corrupt artifact we could not
-					# parse): name the directory instead of "None@None".
-					print(f"{verdict}: {report.get('package_dir')}")
-				for m in report["modules"]:
-					mark = "✓" if m["ok"] else "✗"
-					detail = m["mode"] if m["ok"] else m["reason"]
-					print(f"  {mark} {m['module_id']}: {detail}")
-				prov = report["provenance_ok"]
-				prov_str = (
-					"✓ matches" if prov is True
-					else "✗ mismatch" if prov is False
-					else "— not present"
-				)
-				print(f"  provenance: {prov_str}")
-				if report["warnings"]:
-					print("\nwarnings:")
-					for w in report["warnings"]:
-						print(f"  {w}")
-				if report["errors"]:
-					print("\nerrors:")
-					for e in report["errors"]:
-						loc = f"[{e['module_id']}] " if e.get("module_id") else ""
-						print(f"  {loc}{e['code']}: {e['message']}")
-			return 0 if report["ok"] else 1
+		# Package verification is NOT a `trust` subcommand — it moved to the
+		# top-level `drift verify-package` (peer of `drift verify-app`).
 
 		raise AssertionError("unreachable")
 

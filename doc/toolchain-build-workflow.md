@@ -8,13 +8,32 @@
 > `.sig` sidecars, and the v0 envelope are gone.
 >
 > **Package-pool directory convention.**  The pool directory is
-> `lib/` (matching the standard `bin/lib` split), NOT `libs/`.
-> Earlier examples and certified pools may still use the plural
-> form; that path keeps working because `drift prepare --package-root`
-> is path-agnostic, but all new docs / scripts / orchestration
-> should use `lib/`.  Pool operators wanting to roll over an
-> existing `libs/` layout can publish to both for a transition
-> window or symlink `lib → libs`.
+> `pkg/` (importable certified packages), beside `app/` for
+> certified runnable apps.  Earlier examples and certified pools may
+> still use `lib/`; that path keeps working because
+> `drift prepare --package-root` is path-agnostic, but all new docs /
+> scripts / orchestration should use `pkg/`.  Pool operators rolling
+> over a `lib/` layout can publish to both for a transition window.
+>
+> **Canonical verifiable artifact kinds.**  Exactly two:
+> - **`package`** — an importable Drift package: a `.zdmp` container
+>   plus its signed sidecars (`.author-claim`, `.cert-claim.<kid>.json`)
+>   and `provenance.zst`.  Verified with `drift verify-package`.
+> - **`app`** — a Drift-built runnable output: the primary binary
+>   plus the same signed sidecars + provenance.  Verified with
+>   `drift verify-app`.
+>
+> `library` is a deprecated parser alias for `package`, normalized at
+> the manifest boundary only; never use "signed library" terminology
+> except when explicitly describing that legacy aliasing.
+>
+> **"Deploy" means publish/stage, not host install.**  `drift deploy`
+> assembles a *staged certified output directory* of build outputs +
+> sidecars for downstream consumption/repackaging.  It does not
+> install onto a host.  The downstream flow is:
+> `drift deploy` → staged output → `drift verify-package` /
+> `drift verify-app` → rpm / apt / container / internal repo, with
+> install and run happening outside Drift.
 
 This guide is a practical, end-to-end workflow for new developers:
 
@@ -176,7 +195,7 @@ configuration. Both `drift build` and `drift deploy` read it.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project": {
     "name": "acme-libs",
     "license": "MIT",
@@ -208,7 +227,7 @@ configuration. Both `drift build` and `drift deploy` read it.
 
 Key fields:
 
-- **`kind`**: `"package"` (library `.dmp`) or `"app"` (executable binary).
+- **`kind`**: `"package"` (importable Drift package; `.zdmp` container) or `"app"` (Drift-built runnable binary).  `"library"` is accepted as a deprecated alias and normalized to `"package"` at the manifest boundary.
 - **`entry_module`**: the primary source file, always compiled first.
 - **`modules`**: all source files for the artifact (entry module may appear here too — it is deduplicated).
 - **`package_deps`**: dependencies on other Drift packages (semver constraints).
@@ -359,7 +378,15 @@ embedded in the published metadata.
 
 ## 4. Prepare and deploy
 
-The release workflow separates state preparation from publishing:
+The release workflow separates state preparation from publishing.
+
+> **Deploy publishes/stages — it does not install.**  `drift deploy`
+> builds, signs, smoke-tests, and writes a *staged certified output
+> directory* (the `--dest` pool) for downstream consumption or
+> repackaging.  It never installs onto a host: downstream takes the
+> staged output, runs `drift verify-package` / `drift verify-app`,
+> then repackages into rpm / apt / container / an internal repo, with
+> install and run happening outside Drift.
 
 ### 4.1 Prepare (resolve dependencies, write lock)
 
@@ -478,12 +505,40 @@ Published layout for a package (trust-v1):
 
 ```text
 ~/opt/drift/pkg/net-tls/0.3.4/
-├── assets/
 ├── net-tls.author-profile
 ├── net-tls.author-claim                 # author claim (drift author)
 ├── net-tls.cert-claim.<kid>.json        # cert claim (emitted by `drift deploy`)
-└── net-tls.zdmp
+├── provenance.zst                       # signed provenance bundle
+└── net-tls.zdmp                          # certified container (declared assets travel INSIDE it)
 ```
+
+Declared assets are content-addressed blobs packed *inside* the
+container (extracted only via the verify-gated `drift unpack`), not
+loose published siblings.  The cert claim's `artifact_path` locates
+the `.zdmp`; verification decompresses it and checks
+`cert.artifact_sha256` against the **decompressed `.dmp` payload**
+(not the compressed `.zdmp` bytes — see trust-v1 §3.3).
+
+Published layout for an app (trust-v1) — same sidecars, but the
+certified artifact is the runnable binary, staged under `app/`:
+
+```text
+~/opt/drift/app/uflowsd/0.2.0/
+├── uflowsd                              # the certified runnable binary
+├── uflowsd.author-profile
+├── uflowsd.author-claim                 # author claim (drift author)
+├── uflowsd.cert-claim.<kid>.json        # cert claim (emitted by `drift deploy`)
+└── provenance.zst
+```
+
+The cert claim's signed `artifact_path` names the certified build
+output relative to this staged directory (`net-tls.zdmp` for the
+package above, `uflowsd` for the app).  It is a *content locator for
+verification only* — the path of the bytes that were certified — not
+an install path: it carries no `/usr/bin`, ownership, permission,
+service, upgrade, or runtime semantics.  `drift verify-app` resolves
+it to a regular (non-symlink) file inside the staged directory and
+checks `sha256(file)` against the cert + provenance.
 
 The deployed author profile is a published copy. `drift deploy` does not
 rewrite the tracked project profile file after commit.

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 from lang.driftc.packages.author_claim_v1 import AuthorClaimBody as _V1_AuthorClaimBody
+from lang.driftc.packages.author_claim_v1 import make_author_claim_body
+from lang.driftc.packages.cert_claim_v1 import make_cert_claim_body
 from lang.driftc.packages.cert_claim_v1 import (
 	CertClaimBody as _V1_CertClaimBody,
 	CertSuite as _V1_CertSuite,
@@ -151,16 +153,16 @@ def _publish_signed_pkg(
 	pkg_bytes = pkg_path.read_bytes()
 	_TEST_SCI = "sha256:" + ("0" * 64)
 	_v1_sign_and_write_author_claim(_V1_SignAuthorClaimOptions(
-		body=_V1_AuthorClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_author_claim_body(
+			artifact_kind="package", package_id=package_id, version=package_version,
 			namespaces=(package_id, f"{package_id}.*"),
 			source_content_id=_TEST_SCI, required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed, sidecar_dir=lib_dir,
 	))
 	_v1_sign_and_write_cert_claim(_V1_SignCertClaimOptions(
-		body=_V1_CertClaimBody(
-			schema_version=1, package_id=package_id, version=package_version,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{package_id}.zdmp", package_id=package_id, version=package_version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="drift-dev",
 			toolchain=_V1_Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

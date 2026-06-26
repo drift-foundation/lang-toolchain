@@ -53,7 +53,7 @@ def _pre_publish_stdlib_author_claim(
 	from lang.driftc.packages.source_content_id import (
 		compute_artifact_source_content_id,
 	)
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from tools.drift_author.author_publish import (
 		SignAuthorClaimOptions, sign_and_write_author_claim,
 	)
@@ -91,8 +91,8 @@ def _pre_publish_stdlib_author_claim(
 	sidecar_dir = scratch_dir / "foundation_author_signing"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
 	author_claim_path = sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
+			artifact_kind="package",
 			package_id="std",
 			version=version,
 			namespaces=("std.*", "lang.*", "drift.*"),

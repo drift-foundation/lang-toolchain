@@ -13,7 +13,7 @@ Fail-closed contract:
     entirely `verify_deployed_package`'s (author + cert signatures, SCI
     three-way equality, artifact hash, provenance cross-check).  A
     tampered, unsigned, or untrusted package can never materialize a byte.
-  - NO silent trust fallback.  Exactly as `drift trust verify-package`, a
+  - NO silent trust fallback.  Exactly as `drift verify-package`, a
     trust source MUST be supplied; with none, the verify facade raises a
     usage error.  `--allow-bundled-pubkey` is self-consistency only (proves
     integrity + self-signature, NOT third-party trust) and must be opted
@@ -87,7 +87,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 		"--dest", type=UserPath, required=True,
 		help="Destination directory for extracted assets.  MUST NOT exist yet.",
 	)
-	# Trust source — mirrors `drift trust verify-package` exactly so the
+	# Trust source — mirrors `drift verify-package` exactly so the
 	# verify path is identical.  Mutually exclusive; one is REQUIRED (the
 	# verify facade rejects "no trust source" — there is no silent fallback).
 	_trust = p.add_mutually_exclusive_group()
@@ -225,7 +225,7 @@ def run(argv: list[str] | None = None) -> int:
 		return 2
 
 	# Translate --author-profile into the pubkey form (CLI-layer concern),
-	# exactly as `drift trust verify-package` does.
+	# exactly as `drift verify-package` does.
 	author_pubkey_b64 = args.author_pubkey_b64
 	author_namespaces = None
 	try:

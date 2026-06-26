@@ -51,6 +51,7 @@ from lang.drift.crypto import (
 from lang.driftc.packages.author_claim_v1 import (
 	AuthorClaimBody,
 	RequiredDep,
+	make_author_claim_body,
 )
 from lang.driftc.packages.cert_claim_v1 import (
 	CertClaimBody,
@@ -59,6 +60,7 @@ from lang.driftc.packages.cert_claim_v1 import (
 	ResolvedDep as CertResolvedDep,
 	Toolchain,
 	load_cert_claim_json,
+	make_cert_claim_body,
 )
 from lang.driftc.packages.sidecar_naming import (
 	author_claim_filename,
@@ -152,10 +154,10 @@ def _publish_dep_sidecars(
 	"""
 	dep_dir = staged_pkg_root / pkg_id / version
 	dep_dir.mkdir(parents=True, exist_ok=True)
-	author_body = AuthorClaimBody(
-		schema_version=1,
+	author_body = make_author_claim_body(
 		package_id=pkg_id,
 		version=version,
+		artifact_kind="package",
 		namespaces=(pkg_id,),
 		source_content_id=sci,
 		required_deps=(),
@@ -164,10 +166,11 @@ def _publish_dep_sidecars(
 	sign_and_write_author_claim(SignAuthorClaimOptions(
 		body=author_body, seed32=author_seed, sidecar_dir=dep_dir,
 	))
-	cert_body = CertClaimBody(
-		schema_version=1,
+	cert_body = make_cert_claim_body(
 		package_id=pkg_id,
 		version=version,
+		artifact_kind="package",
+		artifact_path=f"{pkg_id}.zdmp",
 		artifact_sha256=artifact_sha,
 		source_content_id=sci,
 		target=target,
@@ -197,7 +200,9 @@ class _Artifact:
 
 	@property
 	def kind(self) -> str:
-		return "library"
+		# Canonical v2 kind: this fixture stages a `.dmp` package CONTAINER
+		# (importable), not a runnable app binary — so "package", not "app".
+		return "package"
 
 
 @dataclass(frozen=True)
@@ -282,6 +287,7 @@ def _emit_app_cert_claim(
 		artifact_path,
 		cert_key=cert_key_path,
 		package_id=app_name,
+		artifact_kind="package",  # `.dmp` container fixture → package kind
 		package_version=app_version,
 		target=app_target,
 		compiler_info=CompilerInfo(version="0.31.0", abi=1, commit="test"),
@@ -410,8 +416,8 @@ def test_full_transitive_dep_graph_covers_consumer_closure(tmp_path: Path) -> No
 	sidecar_dir = tmp_path / "staged_install"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="app", version="1.0.0",
+		body=make_author_claim_body(
+			package_id="app", version="1.0.0", artifact_kind="package",
 			namespaces=("app",), source_content_id=app_sci,
 			required_deps=(
 				RequiredDep(name="net.tls", version_range="^0.5"),
@@ -518,9 +524,9 @@ def test_cert_claim_missing_a_transitive_entry_is_rejected_by_verifier() -> None
 	)
 	from lang.driftc.packages.cert_claim_v1 import make_cert_claim
 	from lang.driftc.packages.author_claim_v1 import make_author_claim
-	cert_body = CertClaimBody(
-		schema_version=1,
+	cert_body = make_cert_claim_body(
 		package_id="app", version="1.0.0",
+		artifact_kind="package", artifact_path="app.zdmp",
 		artifact_sha256=app_artifact, source_content_id=app_sci,
 		target="linux-x86_64",
 		toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit=""),
@@ -533,8 +539,8 @@ def test_cert_claim_missing_a_transitive_entry_is_rejected_by_verifier() -> None
 		evidence_sha256="sha256:" + ("0" * 64),
 	)
 	cert_claim = make_cert_claim(cert_body, cert_seed)
-	author_body = AuthorClaimBody(
-		schema_version=1, package_id="app", version="1.0.0",
+	author_body = make_author_claim_body(
+		package_id="app", version="1.0.0", artifact_kind="package",
 		namespaces=("app",), source_content_id=app_sci,
 		required_deps=(), 		release_utc="2026-05-19T00:00:00Z",
 	)
@@ -610,8 +616,8 @@ def _emit_and_verify_app(
 	sidecar_dir = tmp_path / "staged_install"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="app", version="1.0.0",
+		body=make_author_claim_body(
+			package_id="app", version="1.0.0", artifact_kind="package",
 			namespaces=("app",), source_content_id=app_sci,
 			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
@@ -784,8 +790,8 @@ def test_mariadb_shape_sibling_plus_external_dep(tmp_path: Path) -> None:
 	sidecar_dir = tmp_path / "staged_install"
 	sidecar_dir.mkdir(parents=True, exist_ok=True)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="app", version="1.0.0",
+		body=make_author_claim_body(
+			package_id="app", version="1.0.0", artifact_kind="package",
 			namespaces=("app",), source_content_id=app_sci,
 			required_deps=(
 				RequiredDep(name="mariadb.rpc.managed", version_range="^2"),

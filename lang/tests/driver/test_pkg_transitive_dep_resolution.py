@@ -110,8 +110,9 @@ def _sign_package(pkg_path: Path, pkg_root: Path, pkg_id: str, version: str,
 	resolved closure contains a dep that's not in dep_graph -- so
 	tests that publish a dependent package MUST populate this.
 	"""
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, DepGraphEntry, Toolchain,
 	)
 	from tools.drift_author.author_publish import (
@@ -144,8 +145,8 @@ def _sign_package(pkg_path: Path, pkg_root: Path, pkg_id: str, version: str,
 		))
 
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=pkg_id, version=version,
+		body=make_author_claim_body(
+			artifact_kind="package", package_id=pkg_id, version=version,
 			namespaces=(f"{pkg_id}.*",),
 			source_content_id=_TEST_SCI,
 			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
@@ -154,8 +155,8 @@ def _sign_package(pkg_path: Path, pkg_root: Path, pkg_id: str, version: str,
 		sidecar_dir=dest,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=pkg_id, version=version,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version=version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="test-target",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

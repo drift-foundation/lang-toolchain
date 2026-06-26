@@ -88,8 +88,9 @@ def _sign_into_root(
 	the duplicate-root regression doesn't need to drag in the
 	deps-on-disk reading logic indirectly.
 	"""
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, DepGraphEntry, Toolchain,
 	)
 	from tools.drift_author.author_publish import (
@@ -127,8 +128,8 @@ def _sign_into_root(
 		for d_id, d_ver in dep_graph_entries
 	)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=pkg_id, version=version,
+		body=make_author_claim_body(
+			artifact_kind="package", package_id=pkg_id, version=version,
 			namespaces=(f"{pkg_id}.*",),
 			source_content_id=_TEST_SCI,
 			required_deps=required_deps_tuple,
@@ -137,8 +138,8 @@ def _sign_into_root(
 		seed32=priv_seed, sidecar_dir=dest,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=pkg_id, version=version,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version=version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="test-target",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
@@ -426,8 +427,8 @@ def test_conflicting_duplicate_package_root_fails_closed(
 			SignCertClaimOptions, sign_and_write_cert_claim,
 		)
 		sign_and_write_author_claim(SignAuthorClaimOptions(
-			body=AuthorClaimBody(
-				schema_version=1, package_id="child", version="0.0.0",
+			body=make_author_claim_body(
+				artifact_kind="package", package_id="child", version="0.0.0",
 				namespaces=("child.*",),
 				source_content_id=variant_sci,
 				required_deps=(),
@@ -436,8 +437,8 @@ def test_conflicting_duplicate_package_root_fails_closed(
 			seed32=priv_seed, sidecar_dir=dest,
 		))
 		sign_and_write_cert_claim(SignCertClaimOptions(
-			body=CertClaimBody(
-				schema_version=1, package_id="child", version="0.0.0",
+			body=make_cert_claim_body(
+				artifact_kind="package", artifact_path="child.zdmp", package_id="child", version="0.0.0",
 				artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 				source_content_id=variant_sci, target="test-target",
 				toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

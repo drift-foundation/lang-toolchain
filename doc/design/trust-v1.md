@@ -515,15 +515,36 @@ Caught by
 
 ## 3. Artifacts and on-disk shape
 
-A published v1 package consists of exactly three files in the
-package's directory under a package root:
+Two layouts are in play; keep them distinct:
+
+**Core package payload** — the verifiable unit a claim binds: the
+compiled container plus its trust sidecars.  The cert claim's
+`artifact_sha256` is computed over the **decompressed `.dmp`
+payload** (§3.1, §3.3), whether it is stored as a raw `.dmp` or a
+compressed `.zdmp`.
 
 ```
-<pkg_root>/<package_id>/<version>/
-    <package_id>.dmp
+<package_id>.dmp | <package_id>.zdmp        # the certified container
+<package_id>.author-claim
+<package_id>.cert-claim.<certifier-kid>.json
+```
+
+**Deployed verify-package directory** — what `drift deploy` stages
+and `drift verify-package` consumes: the container as a `.zdmp`, the
+sidecars, and the signed `provenance.zst` whose bytes the cert claim
+pins via `evidence_sha256` (§3.6).  This is the §7.6 layout:
+
+```
+<pkg_root>/pkg/<package_id>/<version>/
+    <package_id>.zdmp
     <package_id>.author-claim
     <package_id>.cert-claim.<certifier-kid>.json
+    provenance.zst
 ```
+
+Declared assets are content-addressed blobs *inside* the `.zdmp`
+(extracted only by the verify-gated `drift unpack`), never loose
+published siblings.
 
 Multiple cert-claim sidecars MAY coexist (one per certifier) — the
 filename template lives in
@@ -531,6 +552,15 @@ filename template lives in
 Author-claim sidecars are per-package: O8 (multi-author releases)
 appends additional signatures to the *same* `<pkg>.author-claim`
 file rather than emitting parallel sidecars.
+
+> **Artifact kind scope.**  The signed claims carry an
+> `artifact_kind` of `"package"` or `"app"` (the only two canonical
+> kinds; `library` is a deprecated manifest-boundary alias for
+> `package`).  Sections 3.1–3.6, §4 (runtime enforcement) and §7.6
+> describe the **`package`** artifact (`.dmp`/`.zdmp` container).  The
+> **`app`** artifact (a runnable binary) has the same trust model but
+> a different on-disk shape and a thin verifier adapter — its shape is
+> §3.7 and its verify flow is §7.7.
 
 ### 3.1 `.dmp` (compiled package)
 
@@ -556,10 +586,11 @@ Body fields:
 
 | field                 | meaning                                                          |
 | --------------------- | ---------------------------------------------------------------- |
-| `schema_version`      | always `1`                                                       |
+| `schema_version`      | always `2`                                                       |
 | `package_id`          | e.g. `"net.tls"`                                                 |
 | `version`             | e.g. `"0.3.0"`                                                   |
-| `namespaces`          | list of module-id glob patterns the package claims to own        |
+| `artifact_kind`       | canonical kind: `"package"` or `"app"` (never `library`)         |
+| `namespaces`          | list of module-id glob patterns the artifact claims to own       |
 | `source_content_id`   | `"sha256:<hex>"` of canonical source/asset bytes                 |
 | `required_deps`       | list of `{"name", "version_range"}`                              |
 | `release_utc`         | ISO-8601 release timestamp                                       |
@@ -597,10 +628,12 @@ Body fields:
 
 | field                       | meaning                                                                  |
 | --------------------------- | ------------------------------------------------------------------------ |
-| `schema_version`            | always `1`                                                               |
-| `package_id`                | must match the package's manifest                                        |
-| `version`                   | must match the package's manifest                                        |
-| `artifact_sha256`           | `"sha256:<hex>"` of the `.dmp` bytes the cert claim covers               |
+| `schema_version`            | always `2`                                                               |
+| `package_id`                | for a package: must match the container manifest; for an app: must match the author-claim identity (apps have no container manifest, §3.7) |
+| `version`                   | for a package: must match the container manifest; for an app: must match the author-claim identity (§3.7) |
+| `artifact_kind`             | canonical kind: `"package"` or `"app"`; must equal the author claim's    |
+| `artifact_path`             | signed content locator: canonical relative path, inside the staged certified output dir, naming the build output whose bytes were certified (`<pkg>.zdmp` for a package, the binary for an app). NOT an install path — no `/usr/bin`, ownership, permission, service, upgrade, or runtime semantics. |
+| `artifact_sha256`           | `"sha256:<hex>"` of the certified bytes — the decompressed `.dmp` payload for a package, the binary for an app |
 | `source_content_id`         | must equal the author claim's `source_content_id`                        |
 | `target`                    | e.g. `"drift-dev"` — **signed audit metadata, not enforced.** See note below. |
 | `toolchain`                 | `{driftc_version, drift_rt_abi, driftc_commit}`                          |
@@ -743,8 +776,9 @@ The behavior is pinned by three tests in
 ### 3.6 Evidence bundle and the cert-claim binding
 
 Every deploy run that emits a cert claim also produces a
-`<pkg>.provenance.zst` evidence bundle next to the `.dmp` and
-sidecars.  The bundle is:
+`provenance.zst` evidence bundle next to the certified artifact and
+its sidecars (the `.zdmp` for a package, the binary for an app).  The
+bundle is:
 
 - a zstd-compressed JSON envelope recording the certifier's
   observation of the build (compiler info, declared dep table,
@@ -846,9 +880,41 @@ The two fields are independent: the provenance-bundle binding is
 on every cert claim and cannot be turned off; the suite-evidence
 sentinel only governs `result_evidence_sha256`.
 
+### 3.7 App artifacts (`kind: app`) on-disk shape
+
+An app artifact uses the SAME claim/provenance schema and trust
+model as a package; only the certified bytes and the layout differ.
+The certified bytes are the **runnable binary** (not a `.dmp`/`.zdmp`
+container), staged under `app/`:
+
+```
+<pkg_root>/app/<app_id>/<version>/
+    <app_id>                                 # the certified runnable binary
+    <app_id>.author-claim                    # artifact_kind = "app"
+    <app_id>.cert-claim.<certifier-kid>.json # artifact_kind = "app"; artifact_path = "<app_id>"
+    provenance.zst                           # artifact_kind = "app"
+```
+
+Differences from a package:
+
+- There is no container manifest, so the app's identity
+  (`package_id` = app id, `version`, `source_content_id`) is taken
+  from the **author claim**, not from a `.dmp` stamp.  All three legs
+  (author == cert == provenance) must still agree on `source_content_id`.
+- `cert.body.artifact_path` names the binary (a staging-relative
+  verification locator, not an install path); `artifact_sha256` is the
+  sha256 of the binary bytes.
+- The app declares a trust **namespace** (`module_namespace`) in its
+  author claim; the verifier derives a single synthetic trust subject
+  from it (§7.7).
+
 ---
 
 ## 4. Runtime enforcement: how the consumer verifies
+
+> Sections 4.1–4.4 describe the **package** load/verify path.  The
+> app verifier (`drift verify-app`) reuses the same `compose_verify`
+> engine over a single synthetic subject — see §7.7.
 
 This is the heart of v1: the actual checks `driftc` runs before
 any bytes from a dep get linked into the consumer's build.  The
@@ -1399,13 +1465,16 @@ import boundary statically: nothing under `tools/deploy/` or
 nothing in the orch tree may name an author-seed file path.  The
 contract is part of the test matrix, not a convention.
 
-### 7.6 Verifying a deployed package (`drift trust verify-package`)
+### 7.6 Verifying a deployed package (`drift verify-package`)
 
-`drift trust verify-package` is a read-only operator/CI verb that
-runs the §4 consumer verification against an already-deployed
-package, without standing up a throwaway consumer project.  It is
-additive over the §4 verifier: it changes no acceptance semantics,
-only surfaces them as a command.
+`drift verify-package` is a read-only operator/CI verb that runs the
+§4 consumer verification against an already-deployed package, without
+standing up a throwaway consumer project.  It is additive over the §4
+verifier: it changes no acceptance semantics, only surfaces them as a
+command.  It is the package peer of `drift verify-app` (§7.7).
+Artifact verification lives at the top level (`drift verify-package` /
+`drift verify-app`); `drift trust` is reserved for trust
+management/preflight, not artifact verification.
 
 #### 7.6.1 Input: the deployed directory, never a bare artifact
 
@@ -1414,13 +1483,18 @@ The verb accepts the deployed package **directory** — the
 
 ```
 <dir>/
-    <pkg>.zdmp                      # compressed artifact
+    <pkg>.zdmp                      # compressed artifact (declared assets packed inside)
     <pkg>.author-claim              # author-claim sidecar
     <pkg>.cert-claim.<kid>.json     # one per certifier
     <pkg>.author-pubkey.b64         # author pubkey companion
     provenance.zst                  # evidence bundle
-    assets/
 ```
+
+Declared assets are NOT loose published siblings: they travel inside
+the `.zdmp` as content-addressed blobs and are materialized only by
+the verify-gated `drift unpack` (§7.6 covers verification of the
+container + sidecars; `drift unpack` is the separate verify-then-
+extract step).
 
 The directory is the verification unit.  A standalone `.zdmp`
 carries none of its sidecars or provenance and cannot be verified
@@ -1551,6 +1625,44 @@ The complete stable error `code` set:
 `provenance-evidence-mismatch`, and `verify-error` (the
 unexpected-error backstop).
 
+### 7.7 Verifying a deployed app (`drift verify-app`)
+
+The app analog of §7.6.  Same trust engine (`compose_verify`), same
+sidecars + provenance, same exit-code contract (0 verified / 1 failed
+/ 2 usage).  It is **read-only — it never executes the binary**; app
+execution is the orchestrator/service-manager's job *after* it
+independently verifies.  There is deliberately no `drift run` /
+verify-then-exec surface.
+
+What differs from verify-package, because an app has no container
+manifest:
+
+1. **Identity from the author claim.**  The app id / version /
+   `source_content_id` / `artifact_kind` come from the author-claim
+   sidecar (there is no `.dmp` stamp to read).  A `.zdmp`/`.dmp` in
+   the directory is a usage error ("this is a package — use
+   verify-package").
+2. **Synthetic trust subject.**  The author claim declares the app's
+   namespace; the verifier derives one concrete subject = the
+   namespace prefix (`microflows.*` → `microflows`), which is both
+   covered by the claim's namespaces and grantable by the trust store
+   under the identical longest-prefix rule (`module_id == pfx`).
+   `compose_verify` then runs once over that subject.
+3. **Binary located by the signed `artifact_path`.**  The locator is
+   resolved relative to the staged directory and MUST be a regular
+   non-symlink file; its sha256 is bound to `cert.artifact_sha256`
+   and `provenance.artifact_sha256`.
+4. **Three-leg `app` agreement.**  `author == cert == provenance`
+   on `artifact_kind == "app"`, on `source_content_id` (no two-way
+   fallback — a missing/malformed provenance SCI is a hard failure),
+   and the provenance `artifact_name`/`artifact_version`/
+   `schema_version == 4` must match the verified identity.
+
+The facade is
+[`verify_deployed_v1.verify_deployed_app`](../../lang/driftc/packages/verify_deployed_v1.py);
+the CLI is
+[`tools/drift_deploy/verify_app_cli.py`](../../tools/drift_deploy/verify_app_cli.py).
+
 ---
 
 ## 8. Module map
@@ -1568,7 +1680,7 @@ in sync if you rename or split a module.
 | Sidecar filename rules           | [`lang/driftc/packages/sidecar_naming.py`](../../lang/driftc/packages/sidecar_naming.py)        |
 | SCI computation                  | [`lang/driftc/packages/source_content_id.py`](../../lang/driftc/packages/source_content_id.py)  |
 | Consumer-side load               | [`lang/driftc/packages/provider_v1.py`](../../lang/driftc/packages/provider_v1.py)              |
-| Deployed-package verify facade   | [`lang/driftc/packages/verify_deployed_v1.py`](../../lang/driftc/packages/verify_deployed_v1.py) (`drift trust verify-package`, §7.6) |
+| Deployed-package/app verify facade | [`lang/driftc/packages/verify_deployed_v1.py`](../../lang/driftc/packages/verify_deployed_v1.py) (`drift verify-package` §7.6 / `drift verify-app` §7.7) |
 | Format-level shape validators    | [`lang/driftc/packages/package_validate.py`](../../lang/driftc/packages/package_validate.py)    |
 | `drift author` (+ internal cosign) | [`tools/drift_author/`](../../tools/drift_author/) (+ [`lang/drift/cli.py`](../../lang/drift/cli.py) dispatch) |
 | `drift-deploy` cert-claim emit   | [`tools/drift_deploy/cert_emit.py`](../../tools/drift_deploy/cert_emit.py)                      |

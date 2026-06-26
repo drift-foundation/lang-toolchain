@@ -364,8 +364,9 @@ pub struct Inner {
 		format=_v1_serialization.PrivateFormat.Raw,
 		encryption_algorithm=_v1_serialization.NoEncryption(),
 	)
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, Toolchain,
 	)
 	from lang.driftc.packages.sidecar_naming import (
@@ -379,16 +380,16 @@ pub struct Inner {
 	)
 
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id="producer-lib", version="1.0.0",
+		body=make_author_claim_body(
+			artifact_kind="package", package_id="producer-lib", version="1.0.0",
 			namespaces=("producer.*",), source_content_id=_TEST_SCI,
 			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
 		),
 		seed32=priv_seed, sidecar_dir=lib_dir,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id="producer-lib", version="1.0.0",
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path="producer-lib.zdmp", package_id="producer-lib", version="1.0.0",
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="drift-dev",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

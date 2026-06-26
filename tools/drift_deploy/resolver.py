@@ -418,7 +418,7 @@ def build_package_index(
 			verification.  It runs the SHARED verification harness
 			(`verify_harness_v1`) with `resolved_closure=[]`, the same
 			engine + trust routing the consumer load gate and the
-			`drift trust verify-package` CLI use, so the index-time
+			`drift verify-package` CLI use, so the index-time
 			gate cannot drift from how packages are actually trusted.
 			With `resolved_closure=[]` the cert claim's dep_graph cover
 			check passes vacuously: index time has no view of the

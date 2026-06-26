@@ -166,8 +166,9 @@ def _build_and_sign_pkg(
 	pkg_bytes = dmp.read_bytes()
 
 	# v1 sidecars: replace `.sig` envelope with author + cert claims.
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, Toolchain,
 	)
 	from tools.drift_author.author_publish import (
@@ -177,8 +178,8 @@ def _build_and_sign_pkg(
 		SignCertClaimOptions, sign_and_write_cert_claim,
 	)
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1, package_id=pkg_id, version="0.1.0",
+		body=make_author_claim_body(
+			artifact_kind="package", package_id=pkg_id, version="0.1.0",
 			namespaces=(f"{pkg_id}.*",),
 			source_content_id=_TEST_SCI,
 			required_deps=(), 			release_utc="2026-05-19T00:00:00Z",
@@ -187,8 +188,8 @@ def _build_and_sign_pkg(
 		sidecar_dir=pkg_root_dir,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1, package_id=pkg_id, version="0.1.0",
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{pkg_id}.zdmp", package_id=pkg_id, version="0.1.0",
 			artifact_sha256="sha256:" + hashlib.sha256(pkg_bytes).hexdigest(),
 			source_content_id=_TEST_SCI, target="drift-dev",
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),

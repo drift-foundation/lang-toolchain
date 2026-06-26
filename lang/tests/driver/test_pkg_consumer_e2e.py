@@ -216,8 +216,9 @@ def _publish_library_package(
 	shutil.copy2(str(out_dmp), str(lib_dest / f"{package_id}.dmp"))
 
 	# v1 sidecars: author claim + cert claim alongside the .dmp.
-	from lang.driftc.packages.author_claim_v1 import AuthorClaimBody
+	from lang.driftc.packages.author_claim_v1 import make_author_claim_body, AuthorClaimBody
 	from lang.driftc.packages.cert_claim_v1 import (
+	make_cert_claim_body,
 		CertClaimBody, CertSuite, Toolchain,
 	)
 	from tools.drift_author.author_publish import (
@@ -233,8 +234,8 @@ def _publish_library_package(
 	# id (e.g. `net-tls` package → `net_tls.*` modules).
 	ns = module_namespace if module_namespace else package_id
 	sign_and_write_author_claim(SignAuthorClaimOptions(
-		body=AuthorClaimBody(
-			schema_version=1,
+		body=make_author_claim_body(
+			artifact_kind="package",
 			package_id=package_id,
 			version=package_version,
 			namespaces=(ns, f"{ns}.*"),
@@ -246,8 +247,8 @@ def _publish_library_package(
 		sidecar_dir=lib_dest,
 	))
 	sign_and_write_cert_claim(SignCertClaimOptions(
-		body=CertClaimBody(
-			schema_version=1,
+		body=make_cert_claim_body(
+			artifact_kind="package", artifact_path=f"{package_id}.zdmp",
 			package_id=package_id,
 			version=package_version,
 			artifact_sha256="sha256:" + sha256(pkg_bytes).hexdigest(),

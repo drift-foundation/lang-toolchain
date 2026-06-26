@@ -88,7 +88,13 @@ Default flow:
 
 1. Publisher signs packages/toolchain artifacts.
 2. User verifies those signatures (and hashes) before use.
-3. Deploy/install tooling assembles local runnable bundles for convenience.
+3. `drift deploy` publishes/stages certified build outputs (a staged
+   output directory of `package` `.zdmp`s and/or `app` binaries, each
+   with sidecars + provenance) for downstream consumption/repackaging.
+   It does NOT install onto a host: downstream verifies the staged
+   output (`drift verify-package` / `drift verify-app`) then repackages
+   into rpm / apt / container / an internal repo, with install and run
+   happening outside Drift.
 
 Teams that need stricter internal controls may add deploy-time attestation as an
 extra layer, but it is optional relative to the baseline publisher-signature model.
@@ -207,7 +213,7 @@ The filename is a **marker**, not an identifier.
 
 ### 5.1 Common fields
 - `name` – unique target name
-- `kind` – `"package"` or `"exec"`
+- `kind` – `"package"` (importable Drift package) or `"app"` (Drift-built runnable binary). `"library"` is a deprecated alias normalized to `"package"` at the manifest boundary; signed v2 claims carry only `package`/`app`
 - `version` – semantic version (packages only; used for compatibility)
 - `uses` – dependency keys from project file (no URLs/versions here)
 - `depends_on` – other local targets (typically packages)
@@ -261,11 +267,11 @@ is compiled whether or not it also appears in `modules[]`.
 }
 ```
 
-### Executable target example
+### App (runnable) target example
 ```json
 {
   "format": 1,
-  "kind": "exec",
+  "kind": "app",
   "name": "cli",
   "entry": "example.cli.main",
   "uses": ["std"],

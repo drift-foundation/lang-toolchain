@@ -61,6 +61,49 @@ version bump + ONE toolchain publish at the end.
 
 ## Log
 
+### 2026-06-25 (cont.) — Durable-docs pass (pkg/ + canonical kinds + artifact_path + deploy=stage)
+- `doc/toolchain-build-workflow.md`: package-pool `lib/` → `pkg/` (+ `app/`); added canonical-
+  kinds callout (package=`.zdmp`+sidecars / app=binary+sidecars; `library` = legacy alias only;
+  no "signed library"); "deploy = publish/stage, not host install" callout + downstream flow
+  (deploy → staged output → verify-package/verify-app → rpm/apt/container/repo, install/run
+  outside Drift); `kind` field clarified; added the **app** published-layout tree + a precise
+  `artifact_path` definition (content locator for verification, NOT an install path).
+- `doc/design/trust-v1.md`: author + cert claim body tables → `schema_version` **2**; added
+  `artifact_kind` (both) and `artifact_path` (cert, with the not-an-install-path definition);
+  `artifact_sha256` reworded to cover package `.dmp` payload OR app binary.
+- `doc/design/drift-tooling-and-packages.md`: deploy/install conflation split (deploy stages,
+  install/run is downstream/outside Drift); manifest `kind` `"exec"` → `"app"` (+ `library`
+  alias note). Left the `drift install` consumer-dependency sections (distinct from host install).
+- `doc/design/provenance-bundle.md`: already v4/canonical (schema 4, required SCI, package/app) —
+  no change; historical `.sig` sections deliberately untouched.
+- PLAN/PROGRESS remain working notes, not the durable contract. DriftQuery CORE_BUG still parked.
+- **Docs-pass review fixes (3):** (1) package published-layout tree now includes `provenance.zst`
+  and drops the loose `assets/` sibling (+ note: declared assets live INSIDE the `.zdmp`,
+  extracted via verify-gated `drift unpack`); (2) trust-v1 completed for apps — added §3.7 (app
+  on-disk shape: binary + sidecars + provenance; identity from author claim; `artifact_path`
+  names the binary) and §7.7 (verify-app flow: synthetic namespace-prefix subject, signed-locator
+  binary resolve w/ symlink reject, three-leg `app` agreement, read-only/no-exec) + a package-scope
+  note on §§3.1–3.6/4/7.6; (3) `drift-tooling-and-packages.md` executable example `kind:"exec"` →
+  `"app"`.
+
+### 2026-06-25 (cont.) — Full-suite fallout: migrate ALL remaining v1-claim test fixtures
+- The user's full-suite run failed only the `packages` lane (24 failed / 443 passed) — all MY
+  Phase 0+1 schema break (v2 `artifact_kind` now required → every v1 `AuthorClaimBody`/
+  `CertClaimBody(schema_version=1,…)` ctor raises TypeError). Earlier "276 green" was
+  targeted-only and missed these. NOT a verifier regression — stale fixtures, per review.
+- Migrated (factories + `artifact_kind="package"` + cert `artifact_path`; `.dmp` container
+  fixtures are packages, "app" was just an id):
+  - `test_drift_cert_cli.py` (`_publish_argv` gained `--artifact-kind package`
+    `--artifact-path demo.lib.zdmp`); `test_c3_invariants.py` (7 ctors + `_Artifact.kind`
+    library→package + emit-call `artifact_kind`); `test_co_artifact_identity_binding.py` (3).
+    → **lang/tests/packages 467 passed (was 443/24)**.
+  - Broader driver/build blast radius (scripted, both plain + `_V1_`-aliased ctor forms):
+    18 `lang/tests/driver/test_*` + `tools/drift_deploy/test_build.py` (~40 ctor sites).
+    No leftover `schema_version=1`; py_compile clean; representative regular + aliased +
+    stdlib-literal tests spot-run.
+- Production validation NOT weakened — only fixtures moved to the v2/v4 signed schema.
+- DriftQuery CORE_BUG kept SEPARATE (parked; repro confirmed in scratchpad only).
+
 ### 2026-06-25 (cont.) — Step 3 review fixes (3)
 - **Provenance schema_version enforced:** `_cross_check_provenance` now rejects
   `schema_version != 4` centrally (`provenance-schema-version`) — a v3 bundle carrying v4

@@ -2955,6 +2955,7 @@ class TestAttachAuthorClaimLookupPath:
 		from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 		from cryptography.hazmat.primitives import serialization
 		from lang.driftc.packages.author_claim_v1 import (
+	make_author_claim_body,
 			AuthorClaimBody, dump_author_claim_json, make_author_claim,
 		)
 		priv = Ed25519PrivateKey.generate()
@@ -2963,8 +2964,8 @@ class TestAttachAuthorClaimLookupPath:
 			format=serialization.PrivateFormat.Raw,
 			encryption_algorithm=serialization.NoEncryption(),
 		)
-		body = AuthorClaimBody(
-			schema_version=1, package_id=package_id, version=version,
+		body = make_author_claim_body(
+			artifact_kind="package", package_id=package_id, version=version,
 			namespaces=(package_id.replace("-", "_") + ".*",),
 			source_content_id=sci, required_deps=(),
 			release_utc="2026-05-20T21:00:00Z",

@@ -44,6 +44,10 @@ def _publish_argv(tmp_path: Path, key_text: str) -> list[str]:
 		"--sidecar-dir", str(tmp_path),
 		"--package-id", "demo.lib",
 		"--version", "1.0.0",
+		# demo.lib is an importable package (the `.lib` is just a name suffix);
+		# v2 cert bodies require the canonical kind + the signed deploy locator.
+		"--artifact-kind", "package",
+		"--artifact-path", "demo.lib.zdmp",
 		"--artifact-sha256", "sha256:" + ("c" * 64),
 		"--source-content-id", "sha256:" + ("a" * 64),
 		"--target", "linux-x86_64",
