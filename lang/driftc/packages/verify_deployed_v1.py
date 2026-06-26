@@ -205,6 +205,13 @@ def _cross_check_provenance(
 		ok = False
 		report["errors"].append({"code": code, "message": msg})
 
+	# v4 clean break: a certified artifact's provenance MUST be schema v4.
+	# A legacy v3 bundle is rejected even if it happens to carry the new
+	# fields (no quiet acceptance of pre-v4 provenance).
+	psv = prov.get("schema_version")
+	if psv != 4:
+		_fail("provenance-schema-version",
+			f"provenance schema_version {psv!r} != 4 (v4 is required)")
 	pk = prov.get("artifact_kind")
 	if pk != expected_kind:
 		_fail("provenance-kind-mismatch",
@@ -766,6 +773,356 @@ def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
 			f"(cert_suite.result_evidence_sha256 == sha256('')): {sentinel_kids}; "
 			"signatures + integrity verified, but the cert suite attests NO "
 			"evidence"
+		)
+
+	report["ok"] = overall_ok
+	return report
+
+
+def verify_deployed_app(opts: VerifyPackageOptions) -> dict[str, Any]:
+	"""Verify a deployed APP artifact directory (verify only — NO exec).
+
+	Same trust model as `verify_deployed_package`, but the artifact is the
+	runnable BINARY (located by the cert claim's SIGNED `artifact_path`), there
+	is no container / manifest / modules, and the trust subject is a single
+	synthetic id derived from the author claim's declared namespace (D-3/D-5).
+
+	Enforces (app three-leg agreement):
+	  - author/cert/provenance artifact_kind all == "app";
+	  - cert artifact_path names the on-disk binary exactly;
+	  - sha256(binary) == cert.artifact_sha256 == provenance.artifact_sha256;
+	  - author.sci == cert.sci == provenance.sci (no two-way fallback);
+	  - provenance artifact_name/version == the verified app identity;
+	  - author + cert signatures verify against trusted kids for the namespace.
+
+	Raises `VerifyPackageUsageError` only for invocation problems (not a
+	directory, a package dir passed by mistake, no/conflicting trust source).
+	Package-content problems are folded into the report as `ok=false`.
+	"""
+	from hashlib import sha256 as _sha256
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.cert_claim_v1 import load_cert_claim_json
+	from lang.driftc.packages.verify_v1 import (
+		PackageIdentity, compose_verify, discover_author_claim_path,
+		discover_cert_claim_paths,
+	)
+	from lang.driftc.packages.verify_harness_v1 import module_is_reserved
+
+	report = new_report(opts.package_dir)
+	report["artifact_kind"] = "app"
+	d = opts.package_dir
+	_EXPECTED_KIND = "app"
+
+	# 1. Layout / invocation.
+	if d.is_file():
+		raise VerifyPackageUsageError(f"{d} is a file; pass the app DIRECTORY")
+	if not d.is_dir():
+		raise VerifyPackageUsageError(f"not a directory: {d}")
+	if sorted(d.glob("*.zdmp")) or sorted(d.glob("*.dmp")):
+		raise VerifyPackageUsageError(
+			f"{d} contains a .zdmp/.dmp container; this is a package directory — "
+			f"use verify-package, not verify-app"
+		)
+
+	# 1b. Trust SOURCE is an INVOCATION property — validate it BEFORE reading
+	#     the artifact/sidecars, so a malformed/missing author claim cannot
+	#     mask a bad invocation (no trust source, unreadable --trust-store,
+	#     malformed --author-pubkey-b64) as a verification failure.  Only the
+	#     namespace-defaulted store CONSTRUCTION (which needs the author
+	#     claim's namespaces) is deferred to step 3.
+	_selected = [
+		name for name, on in (
+			("trust_store_path", opts.trust_store_path is not None),
+			("author_pubkey_b64", opts.author_pubkey_b64 is not None),
+			("allow_bundled_pubkey", opts.allow_bundled_pubkey),
+		) if on
+	]
+	if len(_selected) > 1:
+		raise VerifyPackageUsageError(
+			f"exactly one trust source may be given, but multiple were: {_selected}"
+		)
+	store = None
+	if opts.trust_store_path is not None:
+		from lang.driftc.packages.trust_v1 import load_trust_store_json
+		try:
+			store = load_trust_store_json(opts.trust_store_path)
+		except Exception as err:
+			raise VerifyPackageUsageError(
+				f"--trust-store {opts.trust_store_path} could not be loaded: {err}"
+			) from err
+		report["trust_source"] = f"trust-store:{opts.trust_store_path}"
+	elif opts.author_pubkey_b64 is not None:
+		try:
+			_decode_ed25519_pubkey(opts.author_pubkey_b64)
+		except (ValueError, OSError) as err:
+			raise VerifyPackageUsageError(
+				f"author pubkey supplied on the command line is invalid: {err}"
+			) from err
+		# store built in step 3 (namespaces default to the author claim's).
+	elif not opts.allow_bundled_pubkey:
+		raise VerifyPackageUsageError(
+			"no trust source given; pass --trust-store / --author-pubkey-b64 / "
+			"--author-profile (or --allow-bundled-pubkey for a self-consistency check)"
+		)
+
+	# 2. Author claim (the per-release singleton) — carries the app id /
+	#    version / SCI / namespace and the artifact_kind.
+	acs = sorted(d.glob("*.author-claim")) + sorted(d.glob("*.author-claim.json"))
+	if not acs:
+		report["errors"].append({
+			"code": "author-claim-missing",
+			"message": f"no *.author-claim sidecar in {d}",
+		})
+		return report
+	if len(acs) > 1:
+		raise VerifyPackageUsageError(
+			f"multiple *.author-claim sidecars in {d}: {[p.name for p in acs]}"
+		)
+	try:
+		author_claim = load_author_claim_json(acs[0].read_text(encoding="utf-8"))
+	except (ValueError, OSError) as err:
+		report["errors"].append({"code": "malformed-sidecar", "message": f"author claim: {err}"})
+		return report
+	abody = author_claim.body
+	app_id = abody.package_id
+	version = abody.version
+	sci = abody.source_content_id
+	report.update(package_id=app_id, version=version, source_content_id=sci)
+	overall_ok = True
+	if abody.artifact_kind != _EXPECTED_KIND:
+		overall_ok = False
+		report["errors"].append({
+			"code": "artifact-kind-mismatch",
+			"message": (
+				f"author claim artifact_kind {abody.artifact_kind!r} != {_EXPECTED_KIND!r} "
+				f"(verify-app expects an app; packages use verify-package)"
+			),
+		})
+	if not abody.namespaces:
+		report["errors"].append({
+			"code": "author-namespace-missing",
+			"message": "author claim declares no namespace for the app trust subject",
+		})
+		return report
+	# Synthetic trust subject: the declared namespace prefix (covered by the
+	# claim's namespace AND grantable by the trust store under the same rule).
+	_ns0 = abody.namespaces[0]
+	subject = _ns0[:-2] if _ns0.endswith(".*") else _ns0
+
+	# 3. BUILD the namespace-defaulted store (author-pubkey / bundled) — the
+	#    invocation was already validated in step 1b; here we only need the
+	#    author claim's namespaces.
+	if opts.trust_store_path is not None:
+		pass  # already loaded in 1b
+	elif opts.author_pubkey_b64 is not None:
+		ns = opts.author_namespaces if opts.author_namespaces is not None else list(abody.namespaces)
+		store, _kid = _synth_single_key_trust_store(pubkey_b64=opts.author_pubkey_b64, namespaces=ns)
+		report["trust_source"] = (
+			"author-profile" if opts.author_namespaces is not None else "author-pubkey-b64"
+		)
+	elif opts.allow_bundled_pubkey:
+		pubs = sorted(d.glob("*.author-pubkey.b64"))
+		if len(pubs) != 1:
+			report["errors"].append({
+				"code": "bundled-pubkey-missing" if not pubs else "bundled-pubkey-ambiguous",
+				"message": f"expected exactly one *.author-pubkey.b64 in {d}, found {len(pubs)}",
+			})
+			return report
+		try:
+			store, _kid = _synth_single_key_trust_store(
+				pubkey_b64=pubs[0].read_text(encoding="utf-8"), namespaces=list(abody.namespaces),
+			)
+		except (ValueError, OSError) as err:
+			report["errors"].append({"code": "bundled-pubkey-malformed", "message": f"{pubs[0].name}: {err}"})
+			return report
+		report["trust_source"] = f"bundled-pubkey:{pubs[0].name}"
+		report["warnings"].append(
+			"verified against the app's OWN bundled author pubkey (self-consistency, "
+			"NOT third-party trust)"
+		)
+
+	# 4. Cert claims (per-certifier).  All must agree on the signed locator.
+	cert_paths = discover_cert_claim_paths(d, package_id=app_id)
+	try:
+		cert_claims = [load_cert_claim_json(p.read_text(encoding="utf-8")) for p in cert_paths]
+	except (ValueError, OSError) as err:
+		report["errors"].append({"code": "malformed-sidecar", "message": f"cert claim: {err}"})
+		return report
+	if not cert_claims:
+		report["errors"].append({
+			"code": "cert-claim-missing",
+			"message": f"no cert-claim sidecar for app {app_id!r} in {d}",
+		})
+		return report
+	locator_set = {cc.body.artifact_path for cc in cert_claims}
+	if len(locator_set) != 1:
+		overall_ok = False
+		report["errors"].append({
+			"code": "artifact-path-disagreement",
+			"message": f"cert claims name different artifact_path values: {sorted(locator_set)}",
+		})
+	bin_rel = cert_claims[0].body.artifact_path
+
+	# 5. Locate + hash the binary by the SIGNED locator.  The verified locator
+	#    MUST resolve to a REGULAR, non-symlink file inside the app dir — this
+	#    report is meant to let orchestration run that exact artifact, so a
+	#    symlink (which could point at bytes outside the dir / change after
+	#    verify) is rejected outright.
+	bin_path = d / bin_rel
+	if bin_path.is_symlink():
+		overall_ok = False
+		report["errors"].append({
+			"code": "artifact-symlink",
+			"message": (
+				f"cert artifact_path {bin_rel!r} is a symlink; the verified app "
+				f"binary must be a regular file (no symlinks)"
+			),
+		})
+		report["ok"] = False
+		return report
+	if not bin_path.is_file():
+		overall_ok = False
+		report["errors"].append({
+			"code": "artifact-missing",
+			"message": f"cert artifact_path {bin_rel!r} does not name a file in {d}",
+		})
+		report["ok"] = False
+		return report
+	binary_sha = "sha256:" + _sha256(bin_path.read_bytes()).hexdigest()
+	report["artifact_sha256"] = binary_sha
+	identity = PackageIdentity(
+		package_id=app_id, version=version, source_content_id=sci, artifact_sha256=binary_sha,
+	)
+
+	# 6. Trust routing (reserved namespaces -> core trust, same as packages;
+	#    apps should not be reserved, but route defensively).
+	if module_is_reserved(subject):
+		from lang.driftc.packages.trust_v1 import load_core_trust_store
+		trust_for_verify = load_core_trust_store()
+	else:
+		trust_for_verify = store
+
+	# 7. Crypto via compose_verify with the synthetic subject.
+	res = compose_verify(
+		author_claim=author_claim, cert_claims=cert_claims,
+		package_identity=identity, module_id=subject,
+		trust=trust_for_verify, resolved_closure=[],
+	)
+	report["modules"].append({
+		"module_id": subject, "ok": res.ok, "mode": res.mode, "reserved": module_is_reserved(subject),
+		"author_kid": res.author_kid, "certifier_kid": res.certifier_kid, "reason": res.reason,
+	})
+	accepted_certs: list[tuple[str, Any]] = []
+	if res.ok:
+		report["author_kid"] = res.author_kid
+		report["certifier_kid"] = res.certifier_kid
+		report["mode"] = res.mode
+		if res.accepted_cert_claim is not None and res.certifier_kid:
+			accepted_certs.append((res.certifier_kid, res.accepted_cert_claim))
+	else:
+		overall_ok = False
+		report["errors"].append({"code": "verify-failed", "module_id": subject, "message": res.reason})
+	report["certifier_kids"] = [kid for kid, _cc in accepted_certs]
+
+	# 8. App cross-checks on every accepted cert (kind/path/sha/sci).
+	for kid, cc in accepted_certs:
+		b = cc.body
+		if b.artifact_kind != _EXPECTED_KIND:
+			overall_ok = False
+			report["errors"].append({
+				"code": "artifact-kind-mismatch", "certifier_kid": kid,
+				"message": f"cert artifact_kind {b.artifact_kind!r} != {_EXPECTED_KIND!r} (certifier {kid})",
+			})
+		elif b.artifact_kind != abody.artifact_kind:
+			overall_ok = False
+			report["errors"].append({
+				"code": "artifact-kind-disagreement", "certifier_kid": kid,
+				"message": f"author kind {abody.artifact_kind!r} != cert kind {b.artifact_kind!r}",
+			})
+		if b.artifact_path != bin_path.name:
+			overall_ok = False
+			report["errors"].append({
+				"code": "artifact-path-mismatch", "certifier_kid": kid,
+				"message": f"cert artifact_path {b.artifact_path!r} != app binary filename {bin_path.name!r}",
+			})
+		if b.artifact_sha256 != binary_sha:
+			overall_ok = False
+			report["errors"].append({
+				"code": "artifact-sha-mismatch", "certifier_kid": kid,
+				"message": f"cert artifact_sha256 {b.artifact_sha256} != sha256(binary) {binary_sha}",
+			})
+		if b.source_content_id != sci:
+			overall_ok = False
+			report["errors"].append({
+				"code": "source-content-id-mismatch", "certifier_kid": kid,
+				"message": f"cert source_content_id {b.source_content_id} != author SCI {sci}",
+			})
+
+	# 9. Provenance binding + v4 three-leg cross-check (app).
+	prov_candidates = [p for p in sorted(d.glob("*.zst")) if "provenance" in p.name]
+	prov_path = prov_candidates[0] if prov_candidates else None
+	if accepted_certs:
+		if prov_path is None:
+			overall_ok = False
+			report["provenance_ok"] = False
+			report["errors"].append({
+				"code": "provenance-missing",
+				"message": "accepted cert binds a provenance bundle, but none is present",
+			})
+		else:
+			actual_digest = "sha256:" + hashlib.sha256(prov_path.read_bytes()).hexdigest()
+			mismatched = [(kid, cc.body.evidence_sha256) for kid, cc in accepted_certs
+				if cc.body.evidence_sha256 != actual_digest]
+			if mismatched:
+				overall_ok = False
+				report["provenance_ok"] = False
+				for kid, signed in mismatched:
+					report["errors"].append({
+						"code": "provenance-evidence-mismatch", "certifier_kid": kid,
+						"message": (
+							f"sha256({prov_path.name}) {actual_digest} != cert evidence_sha256 "
+							f"{signed} (certifier {kid})"
+						),
+					})
+			else:
+				report["provenance_ok"] = True
+				try:
+					prov = _load_provenance_fields(prov_path)
+				except Exception as err:
+					overall_ok = False
+					report["provenance_ok"] = False
+					report["errors"].append({"code": "provenance-unreadable", "message": f"{prov_path.name}: {err}"})
+				else:
+					if not _cross_check_provenance(
+						prov, report, expected_kind=_EXPECTED_KIND,
+						artifact_sha=binary_sha, sci=sci, pkg_id=app_id, pkg_ver=version,
+					):
+						overall_ok = False
+						report["provenance_ok"] = False
+	elif prov_path is None:
+		report["provenance_ok"] = None
+		report["warnings"].append("no provenance bundle (*.zst) found; provenance check skipped")
+
+	# 10. --expect-* assertions.
+	if opts.expect_version is not None and version != opts.expect_version:
+		overall_ok = False
+		report["errors"].append({
+			"code": "expect-version",
+			"message": f"version {version!r} != --expect-version {opts.expect_version!r}",
+		})
+	if opts.expect_sci is not None and sci != opts.expect_sci:
+		overall_ok = False
+		report["errors"].append({
+			"code": "expect-sci",
+			"message": f"source_content_id {sci!r} != --expect-sci {opts.expect_sci!r}",
+		})
+
+	sentinel_kids = [kid for kid, cc in accepted_certs
+		if cc.body.cert_suite.result_evidence_sha256 == _EMPTY_EVIDENCE_SHA]
+	if sentinel_kids:
+		report["no_evidence_sentinel"] = True
+		report["warnings"].append(
+			f"accepted cert claim(s) are dev/no-evidence sentinels: {sentinel_kids}"
 		)
 
 	report["ok"] = overall_ok

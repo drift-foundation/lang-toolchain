@@ -39,8 +39,9 @@ Power-loss recovery point. Newest on top. See `PLAN.md`.
 | P1: `drift verify-app` CLI | TODO |
 | P1 step 1: migrate verify fixtures/harnesses to v2/v4 (factories) | **DONE** — pkg_test_helpers (4), conftest (2), test_verify_v1, test_v1_adversarial, test_trust_verify_package_cli, test_unpack_cli; provenance v3→v4 + SCI in both CLI harnesses |
 | P1 step 2: PACKAGE verify cross-checks (kind/path/provenance match; no two-way) | **DONE** — `verify_deployed_v1` step 4b + `_cross_check_provenance`; 8 negative regressions + positive green |
-| P1 step 3: app verify adapter (synthetic subject; all-three say app) | TODO |
-| P1 step 4: verify regression (v1 fail / v2 verify / mismatch diagnostics / app agreement) | TODO |
+| P1 step 3: app verify adapter (synthetic subject; all-three say app) | **DONE** — `verify_deployed_app` + `drift verify-app` CLI (verify-only); 12 tests |
+| P1 step 4: verify regression (v1 fail / v2 verify / mismatch diagnostics / app agreement) | **DONE** — package 8 negatives + app 11 negatives + positives; v1/v3 reject |
+| **`drift verify-app` CLI (Phase 1 endpoint; verify-only, no exec)** | **DONE** |
 | P1: regression set (positive/negative/migration/boundary) | TODO |
 | Phase 1: app author+cert claims + signed provenance | not started (gated on review) |
 | Phase 1: `verify_deployed_package` app branch (reuse compose_verify) | not started |
@@ -58,6 +59,40 @@ SCI but old v1 claims. Implement Phase 0 then Phase 1 on the **same branch/slice
 version bump + ONE toolchain publish at the end.
 
 ## Log
+
+### 2026-06-25 (cont.) — Step 3 review fixes (3)
+- **Provenance schema_version enforced:** `_cross_check_provenance` now rejects
+  `schema_version != 4` centrally (`provenance-schema-version`) — a v3 bundle carrying v4
+  fields no longer passes (package + app). Regressions added both paths.
+- **App binary symlink rejected:** `verify_deployed_app` fails `bin_path.is_symlink()` before
+  hashing (`artifact-symlink`) — the verified locator must be a regular file so orchestration
+  runs the exact verified bytes. Regression added.
+- **Trust-source validated before content IO:** `verify_deployed_app` restructured to a
+  step-1b invocation check (exclusivity / no-source / `--trust-store` load / `--author-pubkey-b64`
+  shape) BEFORE reading the author claim; namespace-defaulted store build deferred to step 3
+  (mirrors verify-package). Regression: no-trust + missing author claim → usage error.
+- Green: verify suites **121**.
+
+### 2026-06-25 (cont.) — Step 3 DONE: app verify adapter + `drift verify-app` (Phase 1 endpoint)
+- `verify_deployed_v1.verify_deployed_app(opts)`: app consumer path (binary + sidecars, NO
+  `.zdmp`). Reads the author claim FIRST (app id/version/sci/namespace/kind); derives the
+  **synthetic trust subject** = the namespace prefix (`microflows.*` → `microflows`, covered by
+  both the claim's `_namespace_covers` and the trust store's `_allowed_for_role` via the
+  `module_id == pfx` rule). Locates the binary by the cert's SIGNED `artifact_path`, hashes it,
+  builds a `PackageIdentity`, runs `compose_verify` with the subject, then the app three-leg
+  cross-checks: author==cert==provenance kind=="app"; cert path==binary filename; sha(binary)==
+  cert==provenance; SCI agreement (no two-way fallback); provenance name/version match;
+  evidence binding. Rejects a `.zdmp`-bearing dir as a usage error (use verify-package).
+- **`drift verify-app <app-dir>` CLI** (`tools/drift_deploy/verify_app_cli.py` + cli.py dispatch
+  + help stub): mirrors `verify-package` trust flags / JSON / exit codes. **Read-only — never
+  executes the binary** (app exec stays the orchestrator's job). No `drift run`.
+- Tests `test_verify_app.py` (12): happy + author/cert kind!=app + cert path!=binary + binary
+  tamper + provenance kind/sci-missing/name mismatch + untrusted namespace + zdmp-present usage
+  error + v1 cert reject + CLI end-to-end (ok=0/fail=1/no-trust=2).
+- Green: full verify+schema set **276** (no regression to verify-package/unpack/verify_v1).
+- **Phase 1 is feature-complete** (schema v2/v4 + emission + package & app verify integration +
+  `drift verify-app`). Remaining before ship: full-suite run (user) + version bump (Phase 0+1
+  together) + history/release note.
 
 ### 2026-06-25 (cont.) — Step 2 fix: author-kind check was DEAD (review)
 - Bug: `discover_author_claim_path(d)` was called WITHOUT the required

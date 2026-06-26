@@ -691,6 +691,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub.add_parser("prepare", help="Resolve dependencies and write drift/lock.json (see: drift prepare --help)")
 	sub.add_parser("deploy", help="Build, sign, smoke-test, and publish Drift artifacts (see: drift deploy --help)")
 	sub.add_parser("unpack", help="Verify a deployed package and materialize its packed assets to --dest (see: drift unpack --help)")
+	sub.add_parser("verify-app", help="Verify a deployed app artifact (binary + sidecars); read-only, never executes (see: drift verify-app --help)")
 	sub.add_parser("manifest", help="Manifest maintenance helpers: `drift manifest migrate` converts v1 → v2 (see: drift manifest --help)")
 	sub.add_parser("lock", help="Lock inspection helpers: `drift lock emit` emits --dep flags for an artifact's resolved graph (see: drift lock --help)")
 	return p
@@ -762,6 +763,10 @@ def main(argv: list[str] | None = None) -> int:
 	if effective_argv and effective_argv[0] == "unpack":
 		from tools.drift_deploy.drift_unpack import run as unpack_run
 		return unpack_run(effective_argv[1:])
+
+	if effective_argv and effective_argv[0] == "verify-app":
+		from tools.drift_deploy.verify_app_cli import run as verify_app_run
+		return verify_app_run(effective_argv[1:])
 
 	# `drift manifest <subcmd>` — authored manifest maintenance.
 	# Current subcommands: `migrate` (v1 → v2).  Nothing here reads

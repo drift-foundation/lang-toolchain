@@ -422,6 +422,15 @@ def test_provenance_version_mismatch_fails(tmp_path: Path) -> None:
 	assert any(e["code"] == "provenance-version-mismatch" for e in report["errors"]), report
 
 
+def test_provenance_schema_version_3_with_sci_fails(tmp_path: Path) -> None:
+	"""v4 clean break: a schema_version 3 bundle is rejected even when it
+	carries the new source_content_id field (no quiet pre-v4 acceptance)."""
+	deployed, _a, _e = _build_good_dir(tmp_path, prov_extra={"schema_version": 3})
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-schema-version" for e in report["errors"]), report
+
+
 def test_v1_cert_claim_rejected_cleanly(tmp_path: Path) -> None:
 	"""An old v1 cert claim (body schema_version 1, no artifact_kind/path) is
 	rejected at load — clean ok=false, not a crash."""
