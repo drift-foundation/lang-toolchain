@@ -1545,13 +1545,19 @@ def _emit_cert_claim_for_artifact(
 		)
 	evidence_sha = "sha256:" + _hl.sha256(provenance_path.read_bytes()).hexdigest()
 
+	# v2 signed locator: a deployed package is materialized as the
+	# `<package_id>.zdmp` beside the sidecars; a deployed app is the
+	# runnable binary itself (`artifact_path` here is that on-disk binary,
+	# so its filename is the canonical locator `verify_deployed_app`
+	# matches against).
+	signed_locator = (
+		artifact_path.name if artifact_kind == "app" else f"{package_id}.zdmp"
+	)
 	body = make_cert_claim_body(
 		package_id=package_id,
 		version=package_version,
 		artifact_kind=artifact_kind,
-		# v2 signed locator: a deployed package is materialized as the
-		# `<package_id>.zdmp` beside the sidecars.
-		artifact_path=f"{package_id}.zdmp",
+		artifact_path=signed_locator,
 		artifact_sha256=artifact_sha256,
 		source_content_id=source_content_id,
 		target=target,
@@ -2306,14 +2312,30 @@ def _deploy_artifact_impl(
 	# staging (app asset trust is out of scope for the in-package design).
 	if art.kind == "app":
 		_stage_assets(art, manifest_dir=manifest_dir, staged_install=staged_install)
-	# Author profile was staged in step 2 (before signing) for envelope binding.
 
-	# ── Step 4: Provenance + sign (app) ──
-	# App provenance records the build environment and dependency graph.
-	# When a signing key is available, the app binary and provenance
-	# bundle are authenticated with the same v2 envelope as packages.
+	# ── Step 4: Provenance + author/cert legs (app) ──
+	# An app is a first-class certified artifact: it carries the SAME
+	# three-leg agreement as a package (author claim + cert claim +
+	# provenance), differing only in that the certified bytes are the
+	# runnable BINARY (not a `.zdmp` container) and there is no smoke
+	# package root.  The cert claim's signed `artifact_path` names the
+	# binary, which is what `verify_deployed_app` matches against.
 	if art.kind == "app":
 		import hashlib as _hl
+		if sign_key is None:
+			raise DeployError(
+				f"artifact '{art.name}': signing key required for app artifacts; "
+				f"pass --sign-key-file or set $DRIFT_SIGN_KEY_FILE"
+			)
+		# Stage the author profile (informational sidecar; carried for
+		# parity with package deploys and downstream inspection tooling).
+		if author_profile_path:
+			from lang.drift.author_profile import load_author_profile, write_author_profile
+			from dataclasses import replace as _dc_replace
+			src_profile = load_author_profile(author_profile_path)
+			bound_profile = _dc_replace(src_profile, package=art.name)
+			staged_profile = staged_install / f"{art.name}.author-profile"
+			write_author_profile(bound_profile, staged_profile)
 		app_bin_path = staged_install / art.name
 		app_bytes_for_hash = app_bin_path.read_bytes()
 		app_sha256 = f"sha256:{_hl.sha256(app_bytes_for_hash).hexdigest()}"
@@ -2349,15 +2371,53 @@ def _deploy_artifact_impl(
 		provenance_path = staged_install / f"{art.name}.provenance.zst"
 		write_provenance_bundle(provenance_path, bundle_compressed)
 
-		# v1: app artifacts do not currently produce a cert claim.
-		# Package artifacts get the full v1 trust-v1 sidecar pair
-		# (author + cert claim); app artifacts are out of scope for
-		# the trust-v1 slice -- if/when binary signing for
-		# distributable apps is added, it will be a separate
-		# subsystem, not the v0 `drift sign` envelope (gone).  The
-		# unsigned provenance bundle is still emitted so app
-		# inspection tooling continues to work.
-		pass
+		# Author + cert legs (same pre-signed-author / deploy-signs-cert
+		# split as packages).  The author published `<app>.author-claim`
+		# via `drift author` before this run; deploy locates it, validates
+		# it binds this exact release (id/version/SCI), and stages it next
+		# to the binary, then emits a fresh cert claim binding the binary's
+		# sha256 + SCI + dep_graph + cert_suite + provenance evidence.
+		if source_content_id is None:
+			raise DeployError(
+				f"artifact '{art.name}': source_content_id was not computed "
+				f"for this build; v1 cert claims require the SCI to attest "
+				f"source identity.  Re-run with the source tree available."
+			)
+		with _events.timed("attach_author_claim"):
+			author_claim_path = _attach_author_claim_to_artifact(
+				package_id=art.name,
+				package_version=art.version,
+				source_content_id=source_content_id,
+				manifest_dir=manifest_dir,
+				staged_install=staged_install,
+			)
+		assert cert_suite_options is not None, (
+			"app artifact reached cert-claim emission without resolved "
+			"cert_suite_options -- `_run_impl` must call "
+			"`_resolve_cert_suite_options` whenever the manifest has a "
+			"package or app artifact"
+		)
+		with _events.timed("cert_emit"):
+			cert_claim_path = _emit_cert_claim_for_artifact(
+				app_bin_path,
+				cert_key=sign_key,
+				package_id=art.name,
+				package_version=art.version,
+				artifact_kind=art.kind,
+				target=target,
+				compiler_info=compiler_info,
+				source_content_id=source_content_id,
+				artifact_sha256=app_sha256,
+				resolved_deps=resolved,
+				direct_dep_ids={d.name for d in art.package_deps},
+				staged_pkg_root=staged_pkg_root,
+				provenance_path=provenance_path,
+				cert_suite_options=cert_suite_options,
+			)
+		# Wire the cert claim into `sig_path` for the app smoke env
+		# (DRIFT_STAGED_SIG), mirroring the package path.  Both sidecars
+		# travel into the published app dir via `_publish_app`'s copytree.
+		sig_path = cert_claim_path
 
 	# ── Step 5: Smoke ──
 	# Build a filtered smoke package root containing only the artifact
@@ -2525,11 +2585,11 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# Resolve cert-suite identity + evidence (CLI > env > error).  We
 	# resolve it once up front -- before any artifact build -- so a
 	# missing/conflicting CLI+env config fails the run fast, not
-	# halfway through the build.  Skip the resolution when there are
-	# no package artifacts to certify: app-only deploys do not emit
-	# cert claims, so the evidence digest is unused.
+	# halfway through the build.  BOTH package and app artifacts emit a
+	# cert claim (the cert leg of the three-leg agreement), so the
+	# evidence digest is needed whenever the manifest declares either.
 	cert_suite_options: CertSuiteOptions | None = None
-	if has_packages:
+	if has_packages or has_apps:
 		cert_suite_options = _resolve_cert_suite_options(args)
 
 	# Package roots: default to --dest.
@@ -2538,10 +2598,11 @@ def _run_impl(args: argparse.Namespace) -> int:
 	# Native library search paths (env + config + CLI).
 	native_lib_paths = _resolve_native_lib_paths(args, manifest_dir)
 
-	# Signing key required for package artifacts.
-	if has_packages and sign_key is None:
+	# Signing key required for any certified artifact (package or app):
+	# both emit a cert claim, which the certifier signs.
+	if (has_packages or has_apps) and sign_key is None:
 		raise DeployError(
-			"signing key required for package artifacts; "
+			"signing key required for package/app artifacts; "
 			"pass --sign-key-file or set $DRIFT_SIGN_KEY_FILE"
 		)
 

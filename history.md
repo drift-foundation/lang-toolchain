@@ -1,3 +1,38 @@
+## 2026-06-26 - 0.33.61: `drift deploy` never emitted the author/cert legs for app artifacts (FIX)
+### FIX: the producer side of app cert — `drift deploy`'s app path was package-gated
+- **Reported by** the drift-workflows team (`verify-app` failing on `uflowsd` with `author-claim-missing`).
+  App-cert shipped surface-by-surface, each release relaxing one stale `kind == "package"` guard: `verify-app`
+  (0.33.57/58, consumer), `drift author` (0.33.59, mints the app author-claim), `drift trust` bootstrap/check
+  (0.33.60, validates the app author leg). **The producer was never updated** — `drift deploy`'s publish path
+  stayed package-gated, so a deployed app dir had `uflowsd` + `uflowsd.ll` + `uflowsd.provenance.zst` but NO
+  author-claim and NO cert-claim. The three-leg agreement (author == cert == provenance) verify-app enforces
+  was unsatisfiable for apps — a missing subsystem, not a missing file. (Contradicted the 0.33.59 note's claim
+  that "drift deploy emits the cert/provenance legs" for apps — it emitted provenance only.)
+- **Root cause (`tools/drift_deploy/drift_deploy.py`):**
+  - `_deploy_artifact_impl` — author-profile staging, `_attach_author_claim_to_artifact`, and
+    `_emit_cert_claim_for_artifact` all lived inside `if art.kind == "package"`; the `if art.kind == "app"`
+    branch built the provenance bundle and then `pass`ed (comment: "app artifacts are out of scope for the
+    trust-v1 slice").
+  - `_emit_cert_claim_for_artifact` hard-coded the signed `artifact_path = f"{package_id}.zdmp"` — but
+    `verify_deployed_app` requires the cert's signed `artifact_path` to name the on-disk BINARY.
+  - `_run_impl` resolved `cert_suite_options` and enforced the `sign_key`-required check under `if has_packages`
+    only (`has_apps` was already computed but unused for these).
+- **Fix:** the app branch now runs the SAME author/cert emission as packages — require `sign_key`, stage the
+  author-profile, attach the pre-signed `<app>.author-claim` (validated against id/version/SCI), and emit a
+  fresh cert claim binding the binary's `artifact_sha256` + SCI + dep_graph + cert_suite + provenance evidence.
+  The cert emitter derives a kind-aware locator (`artifact_path.name` for an app — the binary; `<id>.zdmp` for
+  a package). `_run_impl` gating widened to `has_packages or has_apps` for both cert-suite resolution and the
+  signing-key requirement. `_publish_app` already `copytree`s the staged dir, so the new sidecars reach the
+  deployed app dir with no publish-path change.
+- **Contract change:** an app deploy now hard-requires `--sign-key-file` + a cert suite, exactly like a package
+  (an app is a certified artifact, not an unsigned binary). App-only manifests that previously deployed unsigned
+  must now supply a key + `--cert-suite-*`. No silent best-effort path — an unsigned cert leg is worse than none.
+- **Tests:** `lang/tests/packages/test_deploy_app_cert_leg.py` — the deploy cert emitter binds the binary as the
+  app's signed `artifact_path` (not `<id>.zdmp`) with `artifact_kind: "app"` + the binary sha, and packages keep
+  the `.zdmp` locator. 336 across the cert/verify/deploy-unit/trust suites green.
+- **Version:** DRIFTC 0.33.60 → **0.33.61**; **ABI stays 18** (deploy tooling only — no runtime/contract/schema
+  change). No pool re-cert (SCI unchanged).
+
 ## 2026-06-26 - 0.33.60: `drift trust` bootstrap/check were blind to app artifacts + `library` kind removed (FIX)
 ### FIX: the verifier side of the app author-claim was still package-only (0.33.59 was incomplete)
 - **Reported by** the drift-workflows team: 0.33.59 fixed the author *tool* but not the *verifier* of its
