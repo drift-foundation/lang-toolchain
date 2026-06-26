@@ -38,7 +38,7 @@ Power-loss recovery point. Newest on top. See `PLAN.md`.
 | P1: verify adapter + `verify_deployed_package` app branch | TODO |
 | P1: `drift verify-app` CLI | TODO |
 | P1 step 1: migrate verify fixtures/harnesses to v2/v4 (factories) | **DONE** — pkg_test_helpers (4), conftest (2), test_verify_v1, test_v1_adversarial, test_trust_verify_package_cli, test_unpack_cli; provenance v3→v4 + SCI in both CLI harnesses |
-| P1 step 2: PACKAGE verify cross-checks (kind/path/provenance match; no two-way) | TODO |
+| P1 step 2: PACKAGE verify cross-checks (kind/path/provenance match; no two-way) | **DONE** — `verify_deployed_v1` step 4b + `_cross_check_provenance`; 8 negative regressions + positive green |
 | P1 step 3: app verify adapter (synthetic subject; all-three say app) | TODO |
 | P1 step 4: verify regression (v1 fail / v2 verify / mismatch diagnostics / app agreement) | TODO |
 | P1: regression set (positive/negative/migration/boundary) | TODO |
@@ -58,6 +58,35 @@ SCI but old v1 claims. Implement Phase 0 then Phase 1 on the **same branch/slice
 version bump + ONE toolchain publish at the end.
 
 ## Log
+
+### 2026-06-25 (cont.) — Step 2 fix: author-kind check was DEAD (review)
+- Bug: `discover_author_claim_path(d)` was called WITHOUT the required
+  `package_id=` kwarg → TypeError → swallowed by a broad `except Exception` →
+  `author_kind=None` → the author-kind cross-check never ran (a signed author
+  claim with `artifact_kind="app"` could pass verify-package).
+- Fix: call `discover_author_claim_path(d, package_id=pkg_id)`; removed the broad
+  except — only EXPECTED `(ValueError, OSError)` load/parse failures fold into the
+  report (`malformed-sidecar`); a missing author claim under accepted certs is now a
+  hard `author-claim-missing`; programmer errors surface instead of being swallowed.
+- Regression added: `test_author_artifact_kind_mismatch_fails` (re-signs author claim
+  with `artifact_kind="app"` → expects `artifact-kind-mismatch`). verify-package+unpack
+  now **40**. (Reviewer's 263-suite → 264 with this test.) **Step 3 unblocked.**
+
+### 2026-06-25 (cont.) — Step 2 DONE: package verify cross-checks
+- `verify_deployed_v1.py` consumer enforcement (package path):
+  - **step 4b:** author.artifact_kind == cert.artifact_kind == "package"; cert `artifact_path`
+    == deployed `.zdmp` filename exactly; cert artifact_sha256 == deployed; cert SCI == identity
+    SCI (re-asserted on top of compose_verify).
+  - **step 5 `_cross_check_provenance`:** provenance inner artifact_kind=="package",
+    artifact_sha256==deployed, source_content_id present+valid+==identity (NO two-way fallback —
+    missing/malformed SCI is a hard `provenance-sci-invalid`), artifact_name==pkg_id,
+    artifact_version==version. New helper `_load_provenance_fields`.
+- Regressions in `test_trust_verify_package_cli.py` (parameterized `_build_good_dir` /
+  `_write_cert_sidecar` / `_write_provenance` to inject ONE mismatch with signatures+evidence
+  still valid): cert kind, cert path, provenance kind/sci/name/version mismatch, provenance
+  SCI-missing (no fallback), v1 cert claim rejected cleanly. **8 negatives + positive.**
+- Green: verify-package+unpack CLI **39**; in-memory verify + schema **221**. Package-only;
+  app adapter is step 3. No exec surface.
 
 ### 2026-06-25 (cont.) — SCOPE: `drift run` removed; Phase 1 ends at `drift verify-app`
 - Review decision: **no `drift run` / verify-then-exec, no future placeholder.** App execution

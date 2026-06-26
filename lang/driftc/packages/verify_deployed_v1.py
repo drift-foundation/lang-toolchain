@@ -163,9 +163,9 @@ def _synth_single_key_trust_store(*, pubkey_b64: str, namespaces: list[str]):
 		revoked_kids=frozenset()), kid
 
 
-def _provenance_artifact_sha256(prov_path: Path) -> str:
-	"""Extract `provenance.artifact_sha256` from a compressed provenance
-	bundle (zstd + JSON)."""
+def _load_provenance_fields(prov_path: Path) -> dict[str, Any]:
+	"""Extract the inner `provenance` object (schema v4) from a compressed
+	bundle (zstd + JSON).  Raises ValueError if the bundle is malformed."""
 	import zstandard
 	raw = zstandard.ZstdDecompressor().decompress(prov_path.read_bytes())
 	bundle = json.loads(raw)
@@ -174,10 +174,65 @@ def _provenance_artifact_sha256(prov_path: Path) -> str:
 	prov = bundle.get("provenance")
 	if not isinstance(prov, dict):
 		raise ValueError("provenance bundle missing 'provenance' object")
+	return prov
+
+
+def _provenance_artifact_sha256(prov_path: Path) -> str:
+	"""Extract `provenance.artifact_sha256` from a compressed provenance
+	bundle (zstd + JSON)."""
+	prov = _load_provenance_fields(prov_path)
 	sha = prov.get("artifact_sha256")
 	if not isinstance(sha, str) or not sha.startswith("sha256:"):
 		raise ValueError("provenance 'artifact_sha256' missing or malformed")
 	return sha
+
+
+def _cross_check_provenance(
+	prov: dict[str, Any], report: dict[str, Any], *,
+	expected_kind: str, artifact_sha: str, sci: str,
+	pkg_id: str, pkg_ver: str,
+) -> bool:
+	"""Enforce the v4 provenance inner fields agree with the package identity
+	+ claims (artifact_kind, artifact_sha256, source_content_id, artifact_name,
+	artifact_version).  Appends one report error per failure; returns True iff
+	all pass.  NO two-way fallback: a missing/malformed provenance
+	source_content_id is a hard failure (provenance is the third SCI leg)."""
+	from lang.driftc.packages.source_content_id import validate_sci
+	ok = True
+
+	def _fail(code: str, msg: str) -> None:
+		nonlocal ok
+		ok = False
+		report["errors"].append({"code": code, "message": msg})
+
+	pk = prov.get("artifact_kind")
+	if pk != expected_kind:
+		_fail("provenance-kind-mismatch",
+			f"provenance artifact_kind {pk!r} != {expected_kind!r}")
+	psha = prov.get("artifact_sha256")
+	if psha != artifact_sha:
+		_fail("provenance-artifact-mismatch",
+			f"provenance artifact_sha256 {psha!r} != on-disk artifact {artifact_sha}")
+	psci = prov.get("source_content_id")
+	sci_shape_ok = True
+	try:
+		validate_sci(psci, field="provenance source_content_id")
+	except Exception as e:
+		sci_shape_ok = False
+		_fail("provenance-sci-invalid",
+			f"provenance source_content_id missing or malformed: {e}")
+	if sci_shape_ok and psci != sci:
+		_fail("provenance-sci-mismatch",
+			f"provenance source_content_id {psci} != package identity SCI {sci}")
+	pname = prov.get("artifact_name")
+	if pname != pkg_id:
+		_fail("provenance-name-mismatch",
+			f"provenance artifact_name {pname!r} != package id {pkg_id!r}")
+	pver = prov.get("artifact_version")
+	if pver != pkg_ver:
+		_fail("provenance-version-mismatch",
+			f"provenance artifact_version {pver!r} != package version {pkg_ver!r}")
+	return ok
 
 
 def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
@@ -484,6 +539,102 @@ def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
 
 	report["certifier_kids"] = [kid for kid, _cc in accepted_certs]
 
+	# 4b. v2 cross-checks (PACKAGE).  The schema loaders already guarantee
+	#     each field is present + canonical; here we enforce AGREEMENT across
+	#     the author claim, every accepted cert claim, and the deployed
+	#     artifact.  This facade verifies PACKAGE artifacts (it located a
+	#     `.zdmp`), so the attested kind MUST be "package"; an app artifact
+	#     goes through the separate `verify-app` adapter.
+	_EXPECTED_KIND = "package"
+	# Author claim's artifact_kind (the per-release singleton sidecar).
+	# compose_verify already verified its signature + SCI; we re-read it only
+	# for the kind.  Only EXPECTED load/parse failures are folded into the
+	# report (a programmer error — e.g. a bad call — must surface, not be
+	# silently swallowed into a skipped check).
+	from lang.driftc.packages.author_claim_v1 import load_author_claim_json
+	from lang.driftc.packages.verify_v1 import discover_author_claim_path
+	author_kind: Optional[str] = None
+	if accepted_certs:
+		_acp = discover_author_claim_path(d, package_id=pkg_id)
+		if _acp is None:
+			# An accepted cert implies a verified author claim existed in step 4;
+			# its absence here is a package inconsistency, not a skip.
+			overall_ok = False
+			report["errors"].append({
+				"code": "author-claim-missing",
+				"message": "no author-claim sidecar found for the verified package",
+			})
+		else:
+			try:
+				author_kind = load_author_claim_json(
+					_acp.read_text(encoding="utf-8")).body.artifact_kind
+			except (ValueError, OSError) as err:
+				overall_ok = False
+				report["errors"].append({
+					"code": "malformed-sidecar",
+					"message": f"author claim {_acp.name}: {err}",
+				})
+		if author_kind is not None and author_kind != _EXPECTED_KIND:
+			overall_ok = False
+			report["errors"].append({
+				"code": "artifact-kind-mismatch",
+				"message": (
+					f"author claim artifact_kind {author_kind!r} != {_EXPECTED_KIND!r} "
+					f"(this is a deployed package; apps use `verify-app`)"
+				),
+			})
+		for kid, cc in accepted_certs:
+			b = cc.body
+			if b.artifact_kind != _EXPECTED_KIND:
+				overall_ok = False
+				report["errors"].append({
+					"code": "artifact-kind-mismatch", "certifier_kid": kid,
+					"message": (
+						f"cert claim artifact_kind {b.artifact_kind!r} != {_EXPECTED_KIND!r} "
+						f"(certifier {kid})"
+					),
+				})
+			elif author_kind is not None and b.artifact_kind != author_kind:
+				overall_ok = False
+				report["errors"].append({
+					"code": "artifact-kind-disagreement", "certifier_kid": kid,
+					"message": (
+						f"author artifact_kind {author_kind!r} != cert artifact_kind "
+						f"{b.artifact_kind!r} (certifier {kid})"
+					),
+				})
+			# Signed locator must name the on-disk artifact exactly.
+			if b.artifact_path != zdmp_path.name:
+				overall_ok = False
+				report["errors"].append({
+					"code": "artifact-path-mismatch", "certifier_kid": kid,
+					"message": (
+						f"cert artifact_path {b.artifact_path!r} != deployed artifact "
+						f"filename {zdmp_path.name!r} (certifier {kid})"
+					),
+				})
+			# Artifact hash + SCI agreement (compose_verify already binds these
+			# to the manifest identity; re-assert so a future loosening there is
+			# caught here too).
+			if b.artifact_sha256 != artifact_sha:
+				overall_ok = False
+				report["errors"].append({
+					"code": "artifact-sha-mismatch", "certifier_kid": kid,
+					"message": (
+						f"cert artifact_sha256 {b.artifact_sha256} != deployed "
+						f"artifact {artifact_sha} (certifier {kid})"
+					),
+				})
+			if b.source_content_id != sci:
+				overall_ok = False
+				report["errors"].append({
+					"code": "source-content-id-mismatch", "certifier_kid": kid,
+					"message": (
+						f"cert source_content_id {b.source_content_id} != package "
+						f"identity SCI {sci} (certifier {kid})"
+					),
+				})
+
 	# 5. Provenance binding (check 4).  The authoritative pin is the SIGNED
 	#    `cert.body.evidence_sha256`, set by deploy to sha256(<on-disk
 	#    .provenance.zst bytes>) (drift_deploy.py:1539).  EVERY accepted
@@ -533,10 +684,12 @@ def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
 					})
 			else:
 				report["provenance_ok"] = True
-				# Secondary, non-authoritative: the bundle's inner artifact
-				# field should also name this artifact.
+				# v4 three-leg cross-check: the provenance bundle's signed-bound
+				# inner fields MUST agree with the package identity + claims.
+				# No two-way fallback — a missing/malformed provenance SCI is a
+				# HARD failure (provenance is the third SCI leg).
 				try:
-					inner = _provenance_artifact_sha256(prov_path)
+					prov = _load_provenance_fields(prov_path)
 				except Exception as err:
 					overall_ok = False
 					report["provenance_ok"] = False
@@ -545,16 +698,14 @@ def verify_deployed_package(opts: VerifyPackageOptions) -> dict[str, Any]:
 						"message": f"{prov_path.name}: {err}",
 					})
 				else:
-					if inner != artifact_sha:
+					if not _cross_check_provenance(
+						prov, report,
+						expected_kind=_EXPECTED_KIND,
+						artifact_sha=artifact_sha, sci=sci,
+						pkg_id=pkg_id, pkg_ver=pkg_ver,
+					):
 						overall_ok = False
 						report["provenance_ok"] = False
-						report["errors"].append({
-							"code": "provenance-artifact-mismatch",
-							"message": (
-								f"provenance inner artifact_sha256 {inner} != "
-								f"on-disk artifact {artifact_sha}"
-							),
-						})
 	elif prov_path is not None:
 		# No cert-accepted module to bind against (self-verify / rejected),
 		# but a bundle is present: only the inner artifact field is

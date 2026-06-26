@@ -121,9 +121,10 @@ def _write_zdmp(deployed: Path, raw_bytes: bytes, *, pkg_id: str) -> str:
 	return "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
 
 
-def _write_author_sidecar(deployed: Path, *, pkg_id: str, namespace: str, sci: str = _SCI) -> None:
+def _write_author_sidecar(deployed: Path, *, pkg_id: str, namespace: str, sci: str = _SCI,
+		artifact_kind: str = "package") -> None:
 	body = make_author_claim_body(
-		package_id=pkg_id, version=_VERSION, artifact_kind="package",
+		package_id=pkg_id, version=_VERSION, artifact_kind=artifact_kind,
 		namespaces=(namespace,), source_content_id=sci,
 		required_deps=(), release_utc="2026-05-29T12:00:00Z",
 	)
@@ -135,11 +136,13 @@ def _write_author_sidecar(deployed: Path, *, pkg_id: str, namespace: str, sci: s
 def _write_cert_sidecar(
 	deployed: Path, *, pkg_id: str, artifact_sha: str, evidence_sha: str,
 	sci: str = _SCI, no_evidence: bool = False,
+	artifact_kind: str = "package", artifact_path: str | None = None,
 ) -> None:
 	kid = compute_ed25519_kid(_pubkey_raw(_SEED))
 	body = make_cert_claim_body(
 		package_id=pkg_id, version=_VERSION,
-		artifact_kind="package", artifact_path=f"{pkg_id}.zdmp",
+		artifact_kind=artifact_kind,
+		artifact_path=artifact_path if artifact_path is not None else f"{pkg_id}.zdmp",
 		artifact_sha256=artifact_sha, source_content_id=sci,
 		target="drift-linux-x86_64",
 		toolchain=Toolchain(driftc_version="0.33.9", drift_rt_abi=14, driftc_commit="test"),
@@ -162,11 +165,12 @@ def _write_pubkey(deployed: Path, *, pkg_id: str) -> None:
 	(deployed / f"{pkg_id}.author-pubkey.b64").write_text(pub_b64)
 
 
-def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, sci: str = _SCI, extra: dict | None = None) -> str:
+def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, sci: str = _SCI,
+		extra: dict | None = None, omit_sci: bool = False) -> str:
 	"""Write `provenance.zst`; return its evidence digest
 	("sha256:<hex>" of the compressed bytes), i.e. what the cert claim
-	must sign. `extra` injects fields to make the bytes differ while the
-	inner `artifact_sha256` stays the same (provenance-tamper case)."""
+	must sign. `extra` injects/overrides inner fields; `omit_sci` drops
+	source_content_id (simulates a legacy v3 bundle)."""
 	prov = {
 		"schema_version": 4,
 		"artifact_name": pkg_id,
@@ -175,6 +179,9 @@ def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, sci: st
 		"artifact_sha256": artifact_sha,
 		"source_content_id": sci,
 	}
+	if omit_sci:
+		prov["schema_version"] = 3
+		del prov["source_content_id"]
 	if extra:
 		prov.update(extra)
 	bundle = {
@@ -193,9 +200,15 @@ def _write_provenance(deployed: Path, *, pkg_id: str, artifact_sha: str, sci: st
 def _build_good_dir(
 	tmp_path: Path, *, no_evidence: bool = False,
 	pkg_id: str = _PKG, module_id: str = _MODULE, namespace: str = _NS,
+	prov_extra: dict | None = None, prov_omit_sci: bool = False,
+	cert_kind: str = "package", cert_path: str | None = None,
 ) -> tuple[Path, str, str]:
 	"""Materialize a known-good deployed package directory.
-	Returns (deployed_dir, artifact_sha256, evidence_sha256)."""
+	Returns (deployed_dir, artifact_sha256, evidence_sha256).
+	The `prov_*`/`cert_*` knobs inject ONE v2/v4 cross-check mismatch while
+	keeping signatures + the provenance evidence-binding valid (the cert
+	signs sha256(<the mutated bundle bytes>)), so the cross-check — not a
+	signature/evidence failure — is what the negative tests exercise."""
 	deployed = tmp_path / "lib" / pkg_id / _VERSION
 	deployed.mkdir(parents=True, exist_ok=True)
 	raw = _emit_dmp_bytes(tmp_path, payload_marker="good", pkg_id=pkg_id, module_id=module_id)
@@ -203,10 +216,14 @@ def _build_good_dir(
 	_write_author_sidecar(deployed, pkg_id=pkg_id, namespace=namespace)
 	_write_pubkey(deployed, pkg_id=pkg_id)
 	# Provenance first; the cert signs sha256(provenance.zst bytes).
-	evidence_sha = _write_provenance(deployed, pkg_id=pkg_id, artifact_sha=artifact_sha)
+	evidence_sha = _write_provenance(
+		deployed, pkg_id=pkg_id, artifact_sha=artifact_sha,
+		extra=prov_extra, omit_sci=prov_omit_sci,
+	)
 	_write_cert_sidecar(
 		deployed, pkg_id=pkg_id, artifact_sha=artifact_sha,
 		evidence_sha=evidence_sha, no_evidence=no_evidence,
+		artifact_kind=cert_kind, artifact_path=cert_path,
 	)
 	return deployed, artifact_sha, evidence_sha
 
@@ -337,6 +354,88 @@ def test_provenance_content_tamper_preserving_artifact_sha_fails(tmp_path: Path)
 	# Confirm the inner field is unchanged, i.e. the OLD check would NOT
 	# have caught this — the byte-binding is what does.
 	assert "provenance-artifact-mismatch" not in codes
+
+
+# ── Step 2: v2/v4 package cross-check regressions ──────────────────
+
+
+def test_author_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
+	"""A validly-signed author claim with artifact_kind='app' must be caught
+	by the author-kind cross-check in verify-package (regression for the
+	dead-check bug where discover_author_claim_path was mis-called)."""
+	deployed, _a, _e = _build_good_dir(tmp_path)
+	_write_author_sidecar(deployed, pkg_id=_PKG, namespace=_NS, artifact_kind="app")
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "artifact-kind-mismatch" for e in report["errors"]), report
+
+
+def test_cert_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(tmp_path, cert_kind="app")
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "artifact-kind-mismatch" for e in report["errors"]), report
+
+
+def test_cert_artifact_path_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(tmp_path, cert_path="wrong-name.zdmp")
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "artifact-path-mismatch" for e in report["errors"]), report
+
+
+def test_provenance_kind_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(tmp_path, prov_extra={"artifact_kind": "app"})
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-kind-mismatch" for e in report["errors"]), report
+
+
+def test_provenance_sci_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(
+		tmp_path, prov_extra={"source_content_id": "sha256:" + "9" * 64})
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-sci-mismatch" for e in report["errors"]), report
+
+
+def test_provenance_sci_missing_fails_no_fallback(tmp_path: Path) -> None:
+	"""No two-way fallback: a legacy v3 bundle (no source_content_id) is a
+	HARD verify failure, not a silent skip."""
+	deployed, _a, _e = _build_good_dir(tmp_path, prov_omit_sci=True)
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-sci-invalid" for e in report["errors"]), report
+
+
+def test_provenance_name_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(tmp_path, prov_extra={"artifact_name": "not-the-pkg"})
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-name-mismatch" for e in report["errors"]), report
+
+
+def test_provenance_version_mismatch_fails(tmp_path: Path) -> None:
+	deployed, _a, _e = _build_good_dir(tmp_path, prov_extra={"artifact_version": "9.9.9"})
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "provenance-version-mismatch" for e in report["errors"]), report
+
+
+def test_v1_cert_claim_rejected_cleanly(tmp_path: Path) -> None:
+	"""An old v1 cert claim (body schema_version 1, no artifact_kind/path) is
+	rejected at load — clean ok=false, not a crash."""
+	deployed, _a, _e = _build_good_dir(tmp_path)
+	cert_files = sorted(deployed.glob("*.cert-claim.*.json"))
+	assert cert_files
+	v1 = json.loads(cert_files[0].read_text())
+	v1["body"]["schema_version"] = 1
+	v1["body"].pop("artifact_kind", None)
+	v1["body"].pop("artifact_path", None)
+	cert_files[0].write_text(json.dumps(v1))
+	rc, report = _run(deployed, "--allow-bundled-pubkey")
+	assert rc == 1 and report["ok"] is False
+	assert any(e["code"] == "malformed-sidecar" for e in report["errors"]), report
 
 
 def test_reserved_namespace_module_routes_to_core_trust(tmp_path: Path) -> None:
