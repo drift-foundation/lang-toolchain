@@ -1,3 +1,39 @@
+## 2026-06-27 - 0.33.62: generic destructor in an interface-dispatched impl method not emitted in package mode — CORE_BUG
+### CORE_BUG: `MutexGuard<T>::destroy` dropped inside an `implement Iface for S` method link-failed in package-consumer mode
+- **Reported by** drift-query (M7.1b, `dqc.storage` LMDB substrate). On certified `driftc 0.33.61` a program
+  consuming the signed `std.dmp` failed at clang link with `use of undefined value
+  @"std.concurrent::MutexGuard<T>::std.core.Destructible::destroy__inst__<hash>"` — the destructor
+  monomorphization was `call`ed but never `define`d. 12 undefined refs, all inside
+  `MemStorage::Storage::*` interface-impl methods freeing the storage's interior `Mutex<MemState>`. Source-mode
+  builds masked it (the whole stdlib is monomorphized), so the team's source greens didn't catch it; only the
+  package-consumer (certified) path fails. NOT the `stdlib-bootstrap-split` commits (docs-only) the report first
+  suspected.
+- **Root cause (`lang/driftc/driftc.py`, package-consumer reachability):** the consumer codegen seeds destroyer
+  fns for every `DropValue` in the reachable set (`_seed_destroy_type_graph`), then SEPARATELY seeds interface-
+  impl methods for `ConstructIfaceValue` / `ArcAsInterface` boxing (impl bodies are reached via the vtable, not a
+  call edge). The destroyer-seeding pass ran BEFORE the interface-impl seeding, so a generic destructor dropped
+  inside an impl method that only became reachable via interface dispatch was never queued for emission →
+  referenced-but-not-defined. A destructor dropped at a call-edge-reachable site (direct call, closure invoked
+  directly, consumer-defined generic dispatch) was always fine — which is why the simple `Arc<Mutex<T>>` control
+  links; the trigger is specifically interface-dispatched impl methods.
+- **Fix (codegen reachability only):** extracted the DropValue→destroyer seeding into
+  `_seed_drop_destructors_from_reachable`, then made the consumer reachability closure an **idempotent
+  fixpoint**: interface-impl/ArcAsInterface seeding, wrapper synthesis, fat-Arc destructor synthesis, and
+  destroyer seeding each only ADD to the reachable set but can create work for one another (a newly-reachable
+  wrapper target drops a generic → its destructor must be seeded; a seeded destructor drops a fat `Arc<I>` → its
+  wrapper must be synthesized), so the loop iterates until the reachable set is stable (capped at 16 with a loud
+  non-convergence assertion). A single post-impl pass fixed the reported case but left the same gap behind the
+  wrapper/fat-Arc synthesis steps that run afterward. The destructor MIR body already exists in the consumer unit
+  (the direct-call control emits it); the bug was purely reachability/emission ordering.
+- **Tests:** `lang/tests/driver/test_pkg_iface_impl_drop_destructor.py` — package-consumer build of a synthetic
+  consumer (no FFI/LMDB, no external-repo dep): an `implement Store for Mem` method frees a `Mutex<MemState>`
+  field; reached via interface dispatch (`m: Store = new_mem(); m.bump()`) it must link+run (the regression),
+  and via direct call (control) it must still link+run. Reduced from the drift-query M7.1b repro (used as triage
+  evidence only — not landed as a dependency). Pre-fix the dispatch case link-fails `use of undefined value`;
+  post-fix both emit the destructor (`define`) and run.
+- **Version:** DRIFTC 0.33.61 → **0.33.62**; **ABI stays 18** (consumer codegen reachability only — no
+  format/layout/boundary change). No pool re-cert (SCI unchanged); re-stage the toolchain to pick up the fix.
+
 ## 2026-06-26 - 0.33.61: `drift deploy` never emitted the author/cert legs for app artifacts (FIX)
 ### FIX: the producer side of app cert — `drift deploy`'s app path was package-gated
 - **Reported by** the drift-workflows team (`verify-app` failing on `uflowsd` with `author-claim-missing`).

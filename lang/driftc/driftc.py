@@ -1997,6 +1997,158 @@ def _seed_destroy_type_graph(
 							type_queue.append(instr.ty)
 
 
+def _seed_drop_destructors_from_reachable(
+	*,
+	reachable: set[FunctionId],
+	mir_pool: dict[FunctionId, M.MirFunc],
+	type_table: TypeTable,
+	fn_infos: Mapping[FunctionId, FnInfo],
+) -> None:
+	"""Seed destroyer fns for every `DropValue` in the reachable set, then
+	close over the transitive type + destroyer graph via
+	`_seed_destroy_type_graph`.
+
+	MUST be re-run after every step that GROWS `reachable` (call-edge BFS,
+	interface-impl seeding, ArcAsInterface seeding).  A destructor dropped
+	inside a function that only becomes reachable via interface dispatch --
+	e.g. a `Mutex<T>` field freed in an `implement Iface for S` method whose
+	body is seeded from a `ConstructIfaceValue`/`ArcAsInterface`, NOT from a
+	call edge -- is invisible to a destroyer pass that ran BEFORE the impl
+	method entered the set, and would be referenced-but-never-emitted →
+	clang `use of undefined value` at link in package-consumer mode.
+
+	Idempotent: only ADDS to `reachable`, so calling it more than once is safe.
+	"""
+	destructor_fns = getattr(type_table, "destructor_fns", None) or {}
+	dropped_types: set[int] = set()
+	phase1_destroyers: set[FunctionId] = set()
+	for fid in list(reachable):
+		fn = mir_pool.get(fid)
+		if fn is None:
+			continue
+		for blk in fn.blocks.values():
+			for instr in blk.instructions:
+				if isinstance(instr, M.DropValue):
+					dropped_types.add(instr.ty)
+					dfn = destructor_fns.get(instr.ty)
+					if dfn is not None and dfn in mir_pool and dfn not in reachable:
+						reachable.add(dfn)
+						phase1_destroyers.add(dfn)
+	_seed_destroy_type_graph(
+		initial_dropped_types=dropped_types,
+		destructor_fns=destructor_fns,
+		mir_pool=mir_pool,
+		needed=reachable,
+		type_table=type_table,
+		fn_infos=fn_infos,
+		pre_seeded_destroyers=phase1_destroyers,
+	)
+
+
+def _seed_iface_dispatch_targets(
+	*,
+	reachable: set[FunctionId],
+	mir_pool: dict[FunctionId, M.MirFunc],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	signatures_by_id: Mapping[FunctionId, FnSignature],
+	external_signatures_by_id: Mapping[FunctionId, FnSignature],
+) -> None:
+	"""Seed interface-impl methods + the fat-Arc bump helper that codegen
+	references IMPLICITLY from `ConstructIfaceValue` / `ArcAsInterface` ops.
+
+	Both ops carry a concrete T and emit a T-as-I vtable at codegen time that
+	references `impl I for T` methods (K29), and `ArcAsInterface` emits a direct
+	LLVM call to the non-generic `_arc_fat_bump_strong_via_ctrl` helper (Stage
+	3) — NEITHER has a MIR `M.Call`, so call-edge BFS never reaches them; in
+	package-consumer mode that leaves `declare`-only symbols → `undefined
+	reference` at link.
+
+	Idempotent (only ADDS).  MUST run inside the reachability-closure fixpoint:
+	a wrapper target / synthesized wrapper / destructor body added by a later
+	fixpoint step may itself contain a `ConstructIfaceValue`/`ArcAsInterface`,
+	whose vtable + bump-helper symbols would otherwise never be seeded.
+	"""
+	iface_value_tys: set[int] = set()
+	for fid in list(reachable):
+		fn = mir_pool.get(fid)
+		if fn is None:
+			continue
+		for blk in fn.blocks.values():
+			for instr in blk.instructions:
+				if isinstance(instr, M.ConstructIfaceValue):
+					iface_value_tys.add(instr.value_ty)
+				elif isinstance(instr, M.ArcAsInterface):
+					iface_value_tys.add(instr.concrete_ty)
+	if iface_value_tys:
+		for impl_fn_id, impl_info in fn_infos.items():
+			impl_sig = impl_info.signature
+			if impl_sig is None or not impl_sig.is_method:
+				continue
+			if (impl_sig.impl_target_type_id in iface_value_tys
+					and impl_fn_id in mir_pool and impl_fn_id not in reachable):
+				reachable.add(impl_fn_id)
+				bfs = [impl_fn_id]
+				while bfs:
+					cur = bfs.pop()
+					cur_fn = mir_pool.get(cur)
+					if cur_fn is None:
+						continue
+					for callee in _called_funcs_in_mir(cur_fn):
+						if callee in mir_pool and callee not in reachable:
+							reachable.add(callee)
+							bfs.append(callee)
+	# Fat-Arc bump helper: ArcAsInterface emits a direct LLVM call to
+	# `_arc_fat_bump_strong_via_ctrl` (no MIR M.Call).  Seed it if any
+	# reachable body now contains an ArcAsInterface.
+	needs_fat_bump = False
+	for fid in reachable:
+		fn = mir_pool.get(fid)
+		if fn is None:
+			continue
+		for blk in fn.blocks.values():
+			for instr in blk.instructions:
+				if isinstance(instr, M.ArcAsInterface):
+					needs_fat_bump = True
+					break
+			if needs_fat_bump:
+				break
+		if needs_fat_bump:
+			break
+	if not needs_fat_bump:
+		return
+	fat_bump_fn_id: FunctionId | None = None
+	for fid, sig in signatures_by_id.items():
+		if (fid.module == "std.core.arc" and fid.name == "_arc_fat_bump_strong_via_ctrl"
+				and not bool(getattr(sig, "is_method", False))):
+			fat_bump_fn_id = fid
+			break
+	if fat_bump_fn_id is None:
+		for fid, sig in external_signatures_by_id.items():
+			if (fid.module == "std.core.arc" and fid.name == "_arc_fat_bump_strong_via_ctrl"
+					and not bool(getattr(sig, "is_method", False))):
+				fat_bump_fn_id = fid
+				break
+	if fat_bump_fn_id is None:
+		raise AssertionError(
+			"ArcAsInterface lowering reached but stdlib helper "
+			"`std.core.arc._arc_fat_bump_strong_via_ctrl` is missing from both "
+			"local and external signature tables — the Stage 3 fat-Arc "
+			"primitive is missing or mis-declared"
+		)
+	if fat_bump_fn_id not in reachable:
+		reachable.add(fat_bump_fn_id)
+		bfs = [fat_bump_fn_id]
+		while bfs:
+			cur = bfs.pop()
+			cur_fn = mir_pool.get(cur)
+			if cur_fn is None:
+				continue
+			for callee in _called_funcs_in_mir(cur_fn):
+				if callee in mir_pool and callee not in reachable:
+					reachable.add(callee)
+					bfs.append(callee)
+
+
 def _sig_declared_can_throw(sig: FnSignature) -> bool:
 	"""Normalize declared throw-mode for downstream ABI decisions."""
 	return True if sig.declared_can_throw is None else bool(sig.declared_can_throw)
@@ -13073,157 +13225,38 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 						_reachable.add(_callee)
 						_bfs_queue.append(_callee)
 			# Seed destroyers via type-graph walk (K39): codegen emits
-			# destroy calls that aren't in MIR instructions.  Use the
-			# shared _seed_destroy_type_graph to handle the full
-			# transitive closure (struct fields, variant arms, etc.).
-			_dropped_types: set[int] = set()
-			_phase1_destroyers: set[FunctionId] = set()
-			destructor_fns = getattr(type_table, "destructor_fns", None) or {}
-			for _fid in list(_reachable):
-				_fn = src_mir.get(_fid)
-				if _fn is None:
-					continue
-				for _blk in _fn.blocks.values():
-					for _instr in _blk.instructions:
-						if isinstance(_instr, M.DropValue):
-							_dropped_types.add(_instr.ty)
-							_dfn = destructor_fns.get(_instr.ty)
-							if _dfn is not None and _dfn in src_mir and _dfn not in _reachable:
-								_reachable.add(_dfn)
-								_phase1_destroyers.add(_dfn)
-			_seed_destroy_type_graph(
-				initial_dropped_types=_dropped_types,
-				destructor_fns=destructor_fns,
+			# destroy calls that aren't in MIR instructions.  This is the
+			# call-edge-reachable seed; the reachability-closure fixpoint below
+			# (after interface-impl / ArcAsInterface / wrapper / fat-Arc seeding)
+			# re-runs it so destructors reached only via those later steps are
+			# also emitted.
+			_seed_drop_destructors_from_reachable(
+				reachable=_reachable,
 				mir_pool=src_mir,
-				needed=_reachable,
 				type_table=type_table,
 				fn_infos=checked_src.fn_infos_by_id,
-				pre_seeded_destroyers=_phase1_destroyers,
 			)
-		# Seed interface impl methods for ConstructIfaceValue boxing (K29)
-		# and ArcAsInterface fat-handle construction (Stage 3).  Both ops
-		# carry a concrete T and emit a T-as-I vtable at codegen time
-		# that references `impl I for T` methods — the impl fns have no
-		# MIR call instruction, so BFS from the caller never reaches
-		# them.  Seed them here so the vtable symbols resolve at link.
-		#
-		# ArcAsInterface additionally emits a direct LLVM call to the
-		# non-generic `_arc_fat_bump_strong_via_ctrl` helper at codegen
-		# time (`llvm_codegen.py::_emit_arc_as_interface`, step 2).  That
-		# call also has no MIR `M.Call` instruction, so the helper's
-		# body is invisible to BFS too — in package-consumer mode that
-		# leaves the IR with a `declare` and no `define`, producing
-		# `undefined reference` at link time.  Seed the bump helper
-		# below, mirroring the existing drop-helper seed inside
-		# `_synthesize_fat_arc_destructor_wrappers`.  The seed scan
-		# runs AFTER impl-method seeding so a newly-seeded impl method
-		# whose body itself contains `M.ArcAsInterface` is honored too
-		# (the impl BFS may pull in additional functions; the "any
-		# ArcAsInterface in the final reachable set" question can only
-		# be answered after that BFS completes).
-		_iface_value_tys: set[int] = set()
-		for _fid in list(_reachable):
-			_fn = src_mir.get(_fid)
-			if _fn is None:
-				continue
-			for _blk in _fn.blocks.values():
-				for _instr in _blk.instructions:
-					if isinstance(_instr, M.ConstructIfaceValue):
-						_iface_value_tys.add(_instr.value_ty)
-					elif isinstance(_instr, M.ArcAsInterface):
-						_iface_value_tys.add(_instr.concrete_ty)
-		if _iface_value_tys and checked_src:
-			for _impl_fn_id, _impl_info in checked_src.fn_infos_by_id.items():
-				_impl_sig = _impl_info.signature
-				if _impl_sig is None or not _impl_sig.is_method:
-					continue
-				if _impl_sig.impl_target_type_id in _iface_value_tys and _impl_fn_id in src_mir and _impl_fn_id not in _reachable:
-					_reachable.add(_impl_fn_id)
-					_bfs_queue = [_impl_fn_id]
-					while _bfs_queue:
-						_cur = _bfs_queue.pop()
-						_cur_fn = src_mir.get(_cur)
-						if _cur_fn is None:
-							continue
-						for _callee in _called_funcs_in_mir(_cur_fn):
-							if _callee in src_mir and _callee not in _reachable:
-								_reachable.add(_callee)
-								_bfs_queue.append(_callee)
-		# Now rescan the (post-impl-seeding) reachable set for any
-		# `M.ArcAsInterface`.  Doing the rescan here -- not in the
-		# original scan above -- closes the gap where a newly seeded
-		# impl method's body itself contains an ArcAsInterface op: that
-		# op would have been invisible to the pre-impl-seeding scan and
-		# the bump-helper seed would have skipped, regressing to the
-		# original `declare`-only / `undefined reference` shape.
-		_needs_fat_bump_helper = False
-		for _fid in _reachable:
-			_fn = src_mir.get(_fid)
-			if _fn is None:
-				continue
-			for _blk in _fn.blocks.values():
-				for _instr in _blk.instructions:
-					if isinstance(_instr, M.ArcAsInterface):
-						_needs_fat_bump_helper = True
-						break
-				if _needs_fat_bump_helper:
-					break
-			if _needs_fat_bump_helper:
-				break
-		if _needs_fat_bump_helper:
-			# Look up the non-generic ctrl-bump helper.  Same shape as
-			# the drop-helper lookup in
-			# `_synthesize_fat_arc_destructor_wrappers`: try the local
-			# sig table first (dev / source build), fall back to the
-			# external table (package-consumer build).
-			_fat_bump_fn_id: FunctionId | None = None
-			for _fid, _sig in signatures_by_id_all.items():
-				if (
-					_fid.module == "std.core.arc"
-					and _fid.name == "_arc_fat_bump_strong_via_ctrl"
-					and not bool(getattr(_sig, "is_method", False))
-				):
-					_fat_bump_fn_id = _fid
-					break
-			if _fat_bump_fn_id is None:
-				for _fid, _sig in external_signatures_by_id.items():
-					if (
-						_fid.module == "std.core.arc"
-						and _fid.name == "_arc_fat_bump_strong_via_ctrl"
-						and not bool(getattr(_sig, "is_method", False))
-					):
-						_fat_bump_fn_id = _fid
-						break
-			if _fat_bump_fn_id is None:
-				raise AssertionError(
-					"ArcAsInterface lowering reached but stdlib helper "
-					"`std.core.arc._arc_fat_bump_strong_via_ctrl` is "
-					"missing from both local and external signature "
-					"tables — the Stage 3 fat-Arc primitive is "
-					"missing or mis-declared"
-				)
-			if _fat_bump_fn_id not in _reachable:
-				_reachable.add(_fat_bump_fn_id)
-				# BFS from the helper to pull in any transitive
-				# callees that aren't reachable through other paths.
-				# The helper's body uses mostly intrinsics
-				# (`mem.rawbuffer_from_parts`, `atomic.*`) which lower
-				# directly to LLVM ops with no MIR-level call, but
-				# walking the call graph here keeps us defensive
-				# against future helper-body changes that introduce a
-				# real `M.Call`.
-				_bfs_queue = [_fat_bump_fn_id]
-				while _bfs_queue:
-					_cur = _bfs_queue.pop()
-					_cur_fn = src_mir.get(_cur)
-					if _cur_fn is None:
-						continue
-					for _callee in _called_funcs_in_mir(_cur_fn):
-						if _callee in src_mir and _callee not in _reachable:
-							_reachable.add(_callee)
-							_bfs_queue.append(_callee)
-		# Discover and synthesize missing wrappers using the shared helper
-		# (same logic as _build_package_consumer_unit).
+		# Interface-impl vtable + fat-Arc bump-helper seeding (K29 / Stage 3) is
+		# folded into the reachability-closure fixpoint below (via
+		# _seed_iface_dispatch_targets) so a ConstructIfaceValue/ArcAsInterface in
+		# a body added by a LATER fixpoint step (wrapper target, synthesized
+		# wrapper, or destructor) still gets its implicit codegen symbols seeded.
+		# Reachability closure (idempotent fixpoint).  Interface-impl /
+		# ArcAsInterface seeding above grew _reachable; the three steps below
+		# each grow it further AND can create work for one another:
+		#   - wrapper synthesis pulls in wrapper TARGETS via call-edge BFS,
+		#     whose bodies may drop generics needing destructors;
+		#   - fat-Arc<I> destructor synthesis adds per-I destroy wrappers for
+		#     `Arc<I>` values dropped in reachable MIR;
+		#   - destroyer seeding emits the destroy fn for every reachable
+		#     `DropValue` (incl. destructors dropped inside interface-dispatched
+		#     impl methods — the M7.1b CORE_BUG).
+		# Each step only ADDS / synthesizes-if-missing, so iterate to a fixpoint
+		# (reachable-set size stable).  Running the destroyer seed only ONCE here
+		# would miss a destructor dropped by a body that a LATER step added →
+		# referenced but never emitted → clang `use of undefined value` in
+		# package-consumer mode.  Build the wrapper maps once (signature-derived,
+		# loop-invariant) before iterating.
 		_wrapper_target_map: dict[FunctionId, FunctionId] = {}
 		_wrapper_sigs_map: dict[FunctionId, FnSignature] = {}
 		for _wfid, _winfo in checked_src.fn_infos_by_id.items():
@@ -13235,29 +13268,56 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			if getattr(_wsig, "is_wrapper", False) and getattr(_wsig, "wraps_target_fn_id", None) and _wfid not in _wrapper_target_map:
 				_wrapper_target_map[_wfid] = _wsig.wraps_target_fn_id
 				_wrapper_sigs_map[_wfid] = _wsig
-		_discover_and_synthesize_wrappers(
-			reachable=_reachable,
-			mir_pool=src_mir,
-			ssa_pool=ssa_src,
-			wrapper_target_by_id=_wrapper_target_map,
-			wrapper_sigs=_wrapper_sigs_map,
-			fn_infos=checked_src.fn_infos_by_id,
-			signatures_by_id=signatures_by_id_all,
-			type_table=type_table,
-		)
-		# Synthesize per-I fat Arc destructor wrappers (ABI 10).
-		# Scoped to fat `Arc<I>` instances that actually appear as
-		# `DropValue.ty` in reachable MIR — see the filter inside
-		# the helper.
-		_synthesize_fat_arc_destructor_wrappers(
-			type_table=type_table,
-			mir_pool=src_mir,
-			ssa_pool=ssa_src,
-			fn_infos=checked_src.fn_infos_by_id,
-			signatures_by_id=signatures_by_id_all,
-			external_signatures_by_id=external_signatures_by_id,
-			reachable=_reachable,
-		)
+		for _reach_iter in range(16):
+			_reach_before = len(_reachable)
+			# Seed interface-impl methods + fat-Arc bump helper referenced
+			# implicitly (no MIR call edge) from ConstructIfaceValue /
+			# ArcAsInterface ops (K29 / Stage 3).
+			_seed_iface_dispatch_targets(
+				reachable=_reachable,
+				mir_pool=src_mir,
+				fn_infos=checked_src.fn_infos_by_id,
+				signatures_by_id=signatures_by_id_all,
+				external_signatures_by_id=external_signatures_by_id,
+			)
+			# Discover + synthesize missing wrappers (shared helper; same logic
+			# as _build_package_consumer_unit).
+			_discover_and_synthesize_wrappers(
+				reachable=_reachable,
+				mir_pool=src_mir,
+				ssa_pool=ssa_src,
+				wrapper_target_by_id=_wrapper_target_map,
+				wrapper_sigs=_wrapper_sigs_map,
+				fn_infos=checked_src.fn_infos_by_id,
+				signatures_by_id=signatures_by_id_all,
+				type_table=type_table,
+			)
+			# Per-I fat Arc destructor wrappers (ABI 10), scoped to fat `Arc<I>`
+			# instances appearing as `DropValue.ty` in reachable MIR.
+			_synthesize_fat_arc_destructor_wrappers(
+				type_table=type_table,
+				mir_pool=src_mir,
+				ssa_pool=ssa_src,
+				fn_infos=checked_src.fn_infos_by_id,
+				signatures_by_id=signatures_by_id_all,
+				external_signatures_by_id=external_signatures_by_id,
+				reachable=_reachable,
+			)
+			# Seed destroyers for every reachable DropValue (the M7.1b fix).
+			_seed_drop_destructors_from_reachable(
+				reachable=_reachable,
+				mir_pool=src_mir,
+				type_table=type_table,
+				fn_infos=checked_src.fn_infos_by_id,
+			)
+			if len(_reachable) == _reach_before:
+				break
+		else:
+			raise AssertionError(
+				"package-consumer reachability closure did not converge in 16 "
+				"iterations (wrapper / fat-Arc / destroyer seeding may be "
+				"cycling — investigate before raising the cap)"
+			)
 		_reachable_mir = {fid: fn for fid, fn in src_mir.items() if fid in _reachable}
 		_reachable_ssa = {fid: fn for fid, fn in ssa_src.items() if fid in _reachable}
 		_all_fn_infos: dict[FunctionId, FnInfo] = {}
