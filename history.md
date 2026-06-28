@@ -1,3 +1,35 @@
+## 2026-06-28 - 0.33.63: indexing a closure-captured array read the skipped capture local → SIGABRT — CORE_BUG
+### CORE_BUG: `captured[i]...` in a callback body addressed the uninitialized capture local instead of the env slot
+- **Reported by** drift-query (M7.1c). Moving an `Array<T>` into a callback and reading `captured[i]...` in the
+  body aborted at runtime (`SIGABRT`, exit 134). The report attributed it to a closure-env destructor
+  double-free over `Array<struct with ≥2 owning fields>`; **both framings were wrong** — valgrind showed the
+  abort is `drift_bounds_check_fail` during the body (heap: 25 allocs / 3 frees, no double-free), BEFORE any
+  teardown, and it reproduces with one owning field and with `Array<Array<Byte>>` too. The real trigger is
+  **indexing (any non-field projection on) a captured array**; field count and the destructor are red herrings.
+  Source-level codegen bug (reproduces from-source and on certified 0.33.62).
+- **Root cause (`stage2/hir_to_mir.py::_lower_addr_of_place`):** a callback MOVE/SHARE capture materializes NO
+  local (`_emit_lambda_capture_prologue` skips it; reads route through the env). `_lower_addr_of_place` redirects
+  a place to the env only when `_capture_key_for_expr` matches, and that helper returns None for any place whose
+  projections aren't ALL fields. So `captured.len()` (field-only) → env (correct), but `captured[i].field`
+  (index projection) → fell through to `AddrOfLocal` on the empty capture local → zero array header (len 0) →
+  the body's bounds check fired and aborted. (The loop condition `i < captured.len()` read the real env length,
+  so the first iteration entered the body and then aborted on `captured[0]`.)
+- **Fix (lowering only):** in `_lower_addr_of_place`, match the LONGEST field-only prefix of the place against a
+  capture slot (root capture matches at prefix length 0), seed `addr`/`cur_ty` from that env field (reusing the
+  existing env `AddrOfField` / REF-capture handling), and run the existing projection loop over the REMAINING
+  projections. An actual `_lambda_capture_slots` hit is authoritative — the fix only seeds on a real slot match,
+  so true locals are untouched; it also subsumes the prior field-only early-return and fixes the sibling
+  `captured.a[i]` (root-captured field-prefix) case. Semantically identical to the local path (both yield a
+  pointer-to-header; same projection loop) — only the base-pointer SOURCE changes from the stale local to the
+  env field.
+- **Tests:** `lang/tests/driver/test_closure_captured_array_indexed_place.py` — source-mode compile+run; each
+  `main` returns its computed value as the exit code (pre-fix abort 134 ≠ expected): captured `Array<struct>`
+  `[i].field` (2-field and 1-field), captured `Array<Array<Byte>>` `[i]`, captured-struct field-prefix
+  `h.a[i]`, mutation `captured[i].field = v`, and a non-capture indexed-place control. Reduced from the
+  drift-query repro (triage evidence only; not a landed dependency).
+- **Version:** DRIFTC 0.33.62 → **0.33.63**; **ABI stays 18** (HIR→MIR lowering only — no format/layout/boundary
+  change). No pool re-cert (SCI unchanged); re-stage to ship.
+
 ## 2026-06-27 - 0.33.62: generic destructor in an interface-dispatched impl method not emitted in package mode — CORE_BUG
 ### CORE_BUG: `MutexGuard<T>::destroy` dropped inside an `implement Iface for S` method link-failed in package-consumer mode
 - **Reported by** drift-query (M7.1b, `dqc.storage` LMDB substrate). On certified `driftc 0.33.61` a program

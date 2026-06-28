@@ -11829,35 +11829,74 @@ class HIRToMIR:
 		  - The checker (plus stage1 temporary materialization) ensures `expr` is a
 		    real place. If we see an rvalue here, it's a pipeline bug.
 		"""
-		if self._lambda_capture_slots is not None:
-			key = self._capture_key_for_expr(expr)
-			if key is not None and self._lambda_env_field_types is not None and key in self._lambda_capture_slots:
-				slot = self._lambda_capture_slots[key]
+		# Capture-rooted place: the base address must come from the lambda ENV,
+		# not a local.  For a MOVE/SHARE callback capture the prologue materializes
+		# NO local (reads route through the env), so an AddrOfLocal on the capture
+		# local reads an uninitialized/zero value.  `_capture_key_for_expr` only
+		# matches a place whose projections are ALL fields, so a captured place
+		# with an index/deref projection (e.g. `captured[i].field`) used to fall
+		# through to AddrOfLocal on that empty local -> out-of-bounds abort.
+		# Fix: match the LONGEST field-only prefix of the place against a capture
+		# slot (root capture matches at prefix length 0), seed addr/cur_ty from
+		# that env field, and let the projection loop below apply the remaining
+		# (index/field/deref) projections.  An actual slot match is authoritative —
+		# we never INVENT a capture: we only seed on a real `_lambda_capture_slots`
+		# hit, so a true local (not in the slot map) is unaffected.
+		_cap_seeded = False
+		_proj_list = list(expr.projections)
+		if (
+			self._lambda_capture_slots is not None
+			and self._lambda_env_field_types is not None
+			and isinstance(expr.base, H.HVar)
+			and getattr(expr.base, "binding_id", None) is not None
+		):
+			_root = int(expr.base.binding_id)
+			_lead_fields: list[str] = []
+			for _proj in expr.projections:
+				if isinstance(_proj, H.HPlaceField):
+					_lead_fields.append(_proj.name)
+				else:
+					break
+			_matched_slot = None
+			_consumed = 0
+			for _n in range(len(_lead_fields), -1, -1):
+				_cand = C.HCaptureKey(
+					root_local=_root,
+					proj=tuple(C.HCaptureProj(field=_f) for _f in _lead_fields[:_n]),
+				)
+				if _cand in self._lambda_capture_slots:
+					_matched_slot = self._lambda_capture_slots[_cand]
+					_consumed = _n
+					break
+			if _matched_slot is not None:
+				slot = _matched_slot
 				field_ty = self._lambda_env_field_types[slot]
 				kind = None
 				if self._lambda_capture_kinds is not None and slot < len(self._lambda_capture_kinds):
 					kind = self._lambda_capture_kinds[slot]
 				if kind in (C.HCaptureKind.REF, C.HCaptureKind.REF_MUT):
-					ptr_val = self._load_capture_slot_value(slot)
-					td = self._type_table.get(field_ty)
-					inner_ty = field_ty
-					if td.kind is TypeKind.REF and td.param_types:
-						inner_ty = td.param_types[0]
-					return ptr_val, inner_ty
-				env_ptr = self.b.new_temp()
-				self.b.emit(M.LoadLocal(dest=env_ptr, local=self._lambda_env_local))
-				addr = self.b.new_temp()
-				self.b.emit(
+					addr = self._load_capture_slot_value(slot)
+					_td = self._type_table.get(field_ty)
+					cur_ty = field_ty
+					if _td.kind is TypeKind.REF and _td.param_types:
+						cur_ty = _td.param_types[0]
+				else:
+					env_ptr = self.b.new_temp()
+					self.b.emit(M.LoadLocal(dest=env_ptr, local=self._lambda_env_local))
+					addr = self.b.new_temp()
+					self.b.emit(
 						M.AddrOfField(
 							dest=addr,
 							base_ptr=env_ptr,
-						struct_ty=self._lambda_env_ty,
-						field_index=slot,
-						field_ty=field_ty,
+							struct_ty=self._lambda_env_ty,
+							field_index=slot,
+							field_ty=field_ty,
 							is_mut=is_mut,
 						)
 					)
-				return addr, field_ty
+					cur_ty = field_ty
+				_proj_list = list(expr.projections[_consumed:])
+				_cap_seeded = True
 		if isinstance(expr.base, H.HVar) and expr.base.binding_id is None:
 			const_mod = getattr(expr.base, "module_id", None) or self._current_module_name()
 			const_val = self._type_table.lookup_const(f"{const_mod}::{expr.base.name}")
@@ -11893,26 +11932,28 @@ class HIRToMIR:
 				addr = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
 				return addr, const_ty
-		# Canonical place expression (stage1→stage2 boundary).
-		if self._typed_mode == "strict" and isinstance(expr.base, H.HVar) and expr.base.binding_id is None and expr.base.module_id is None:
-			raise AssertionError("typed_mode strict: missing binding_id for place base (checker bug)")
-		base_name = self._canonical_local(getattr(expr.base, "binding_id", None), expr.base.name)
-		self.b.ensure_local(base_name)
-		cur_ty = self._infer_expr_type(expr.base)
-		if cur_ty is None and isinstance(expr.base, H.HVar) and expr.base.binding_id is not None:
-			bid_ty = self._binding_types.get(int(expr.base.binding_id))
-			if bid_ty is not None:
-				cur_ty = bid_ty
-		if cur_ty is None and not expr.projections:
-			cur_ty = self._type_table.ensure_unknown()
-		if cur_ty is None:
-			raise AssertionError("address-of place base type unknown in MIR lowering (checker bug)")
-		addr = self.b.new_temp()
-		self.b.emit(M.AddrOfLocal(dest=addr, local=base_name, is_mut=is_mut))
+		# Canonical place expression (stage1→stage2 boundary).  Skipped when the
+		# capture block above already seeded addr/cur_ty from the env.
+		if not _cap_seeded:
+			if self._typed_mode == "strict" and isinstance(expr.base, H.HVar) and expr.base.binding_id is None and expr.base.module_id is None:
+				raise AssertionError("typed_mode strict: missing binding_id for place base (checker bug)")
+			base_name = self._canonical_local(getattr(expr.base, "binding_id", None), expr.base.name)
+			self.b.ensure_local(base_name)
+			cur_ty = self._infer_expr_type(expr.base)
+			if cur_ty is None and isinstance(expr.base, H.HVar) and expr.base.binding_id is not None:
+				bid_ty = self._binding_types.get(int(expr.base.binding_id))
+				if bid_ty is not None:
+					cur_ty = bid_ty
+			if cur_ty is None and not expr.projections:
+				cur_ty = self._type_table.ensure_unknown()
+			if cur_ty is None:
+				raise AssertionError("address-of place base type unknown in MIR lowering (checker bug)")
+			addr = self.b.new_temp()
+			self.b.emit(M.AddrOfLocal(dest=addr, local=base_name, is_mut=is_mut))
 
 		# Apply projections left-to-right, maintaining the invariant:
 		#   `addr` is a pointer to a value of type `cur_ty`.
-		for proj in expr.projections:
+		for proj in _proj_list:
 			# Deref projection: load a reference value (pointer) from storage and
 			# treat it as the new address.
 			if isinstance(proj, H.HPlaceDeref):
