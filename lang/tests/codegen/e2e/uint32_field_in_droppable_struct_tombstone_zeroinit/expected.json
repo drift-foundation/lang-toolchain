@@ -1,0 +1,1 @@
+{"description":"Tombstoning a droppable struct with a Uint32 field (array-grow copy body on push tombstones moved-from old element slots; ArrayElemTake on pop) must zero-materialize the i32 field. Returns the popped id, 35.","exit_code":35}

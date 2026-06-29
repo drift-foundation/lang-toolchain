@@ -8346,9 +8346,17 @@ class _FuncBuilder:
 			self.lines.append(f"  {dest} = add i8 0, 0")
 			self.value_types[dest] = "i8"
 			return
-		if llty == "double":
-			self.lines.append(f"  {dest} = fadd double 0.0, 0.0")
-			self.value_types[dest] = "double"
+		# Remaining fixed-width integer scalars (i16/i32, e.g. Int32/Uint32).
+		# i1/i8 and the i64-backed tag types are handled above; everything
+		# else of the form i<N> takes the same `add <ty> 0, 0` form.
+		if llty.startswith("i") and llty[1:].isdigit():
+			self.lines.append(f"  {dest} = add {llty} 0, 0")
+			self.value_types[dest] = llty
+			return
+		# Float scalars: `double` (64-bit) or `float` (32-bit, when float_bits==32).
+		if llty in ("double", "float"):
+			self.lines.append(f"  {dest} = fadd {llty} 0.0, 0.0")
+			self.value_types[dest] = llty
 			return
 		if td.kind is TypeKind.VOID:
 			self.lines.append(f"  {dest} = add i8 0, 0")

@@ -1,0 +1,31 @@
+// Regression: zero-materializing a 32-bit scalar (i32 / Uint32 / Int32) aborted codegen.
+//
+// `_emit_zero_value` enumerated scalar LLVM types by literal (the i64-backed tag types,
+// i1, i8, double) and then `raise`d on anything else; i32 had no case, so:
+//   NotImplementedError: cannot materialize zero value for type TypeKind.SCALAR (i32)
+//
+// Trigger: tombstoning a DROPPABLE struct that contains a Uint32 (i32) field. Neutralizing
+// a struct slot routes through the struct tombstone path (`_emit_tombstone_value` ->
+// `_emit_zero_value` on each field), which zero-fills `B.id` (i32). `B` must be droppable
+// (the `String` field) for that path to run at all; a struct of `Uint32` alone never reaches
+// it. Two distinct sites hit it here:
+//   * `push` emits an array-grow copy body that moves existing elements to the reallocated
+//     buffer and tombstones the moved-from (old) slots. Codegen emits this block whenever a
+//     growable array of droppable structs grows, so the i32-zero is materialized at compile
+//     time even on the first push (the copy loop runs zero times at runtime). [.bb.array_copy_body]
+//   * `pop()` emits a direct ArrayElemTake that tombstones the popped element slot. [.bb.array_pop_ok]
+// NOTE: an array-index field *read* (`bs[i].id`) is a plain `load i32` and does NOT exercise
+// this path; that named shape from the original report was a red herring.
+module main;
+
+pub struct B { name: String, id: Uint32 }
+
+fn main() nothrow -> Int {
+	var bs: Array<B> = [];
+	bs.push(B(name = "x", id = cast<Uint32>(35)));   // grows array -> .bb.array_copy_body tombstones old slots' i32
+	val first = bs.pop();                             // ArrayElemTake -> struct tombstone, second i32-zero site
+	return match first {
+		Some(b) => { cast<Int>(b.id) },               // 35
+		None => { -1 },
+	};
+}

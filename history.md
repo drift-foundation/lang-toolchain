@@ -1,3 +1,45 @@
+## 2026-06-29 - 0.33.64: zero-materialization aborted on a 32-bit scalar (i32 / Uint32 / Int32) — CORE_BUG
+### CORE_BUG: codegen "cannot materialize zero value for type TypeKind.SCALAR (i32)" when tombstoning a droppable struct with a Uint32 field
+- **Reported by** drift-query (`dqc.conformance_util.LmdbSource.rows_for`, a `table_id: Uint32` resolved from a
+  `bindings` array). On certified `driftc 0.33.63` (and from-source) the repro aborted at compile time with
+  `NotImplementedError: LLVM codegen v1: cannot materialize zero value for type TypeKind.SCALAR (i32)`.
+  No FFI / storage / unsafe / Result. The drift-query team's `Int` (i64) carry for the id was a workaround.
+- **Diagnosis correction (vs. the report and an earlier draft of this entry):** the trigger is NOT the named
+  "`Uint32` loop-carried local reassigned from `bs[i].id`". MIR/IR evidence: that field read lowers via the
+  non-Copy field-projection path (`stage2/hir_to_mir.py` `AddrOfArrayElem`/`AddrOfField`/`LoadRef`) to a plain
+  `load i32` — and the loop var's zero-init is `trunc i64 0 to i32`, neither of which touches `_emit_zero_value`.
+  Bisecting the repro (fix reverted): pushing a **droppable** struct `B { name: String, id: Uint32 }` into an
+  array, with **no loop and no field read**, already crashes; `B { id: Uint32 }` (non-droppable) compiles; the
+  loop field read alone (empty array, no push) compiles; `pop()` of the droppable struct also crashes. So the
+  real path is `_emit_tombstone_value → _emit_zero_value`: neutralizing a droppable-struct slot (the `String`
+  field makes `B` droppable → tombstone path runs) zero-fills its `Uint32` (`i32`) field. The two tombstone
+  sites differ (confirmed by enclosing-block in the emitted IR): **`push`** emits an array-grow copy body
+  (`.bb.array_copy_body`) that moves existing elements into the reallocated buffer and tombstones the moved-from
+  *old* slots — codegen emits this block whenever a growable array of droppable structs grows, so the i32-zero
+  is materialized at compile time even on the first push (the copy loop runs zero times at runtime); **`pop`/
+  `remove`** emit a direct `ArrayElemTake` (`.bb.array_pop_ok`) tombstoning the popped slot. (Not the freshly-
+  built `B` source slot, as an earlier draft of this entry claimed.)
+- **Root cause (`codegen/llvm/llvm_codegen.py::_emit_zero_value`):** the scalar fast-paths enumerated LLVM types
+  by literal — the i64-backed tag types, `i1`, `i8`, `double` — and any other scalar fell through to a strict
+  `raise NotImplementedError`. `Int32`/`Uint32` lower to `i32` and had **no case**, so zeroing one aborted. `Int`
+  (i64) went through the tag case and was unaffected, exactly matching the boundary table in the report. The same
+  enumeration also lacked `float` (32-bit `Float`, reachable when `float_bits == 32`).
+- **Fix (codegen only):** in `_emit_zero_value`, after the `i1`/`i8` cases, handle any fixed-width integer
+  generically (`llty` of the form `i<N>` → `add <ty> 0, 0`), covering `i16`/`i32` and future widths; and accept
+  `float` alongside `double` for float zeros (`fadd <ty> 0.0, 0.0`). The struct-field zero path already handled
+  arbitrary `i<N>` — this brings the scalar path to parity. Audited the sibling zero/tombstone helpers
+  (`_zero_value_for_ok`, `_zero_operand_for_typeid`, the struct-field initializer): each already falls through to
+  a `zeroinitializer` constant, which LLVM accepts for scalar and float types (verified with clang), so they emit
+  valid, correctly-zeroed IR and need no change.
+- **Tests:** `lang/tests/codegen/e2e/uint32_field_in_droppable_struct_tombstone_zeroinit/` — the actual root
+  cause: push a droppable `B { name: String, id: Uint32 }` (the array-grow `.bb.array_copy_body` tombstones
+  moved-from old element slots' i32 field) then `pop()` it (the direct `.bb.array_pop_ok` / `ArrayElemTake`
+  tombstone), returning the popped `id` as the exit code (35) so it asserts the materialized value. Both
+  i32-zero sites confirmed present in the emitted IR (one per enclosing block). Reduced from the drift-query repro (triage
+  evidence only; not a landed dependency).
+- **Version:** DRIFTC 0.33.63 → **0.33.64**; **ABI stays 18** (LLVM codegen only — no format/layout/boundary
+  change). No pool re-cert (SCI unchanged); re-stage to ship.
+
 ## 2026-06-28 - 0.33.63: indexing a closure-captured array read the skipped capture local → SIGABRT — CORE_BUG
 ### CORE_BUG: `captured[i]...` in a callback body addressed the uninitialized capture local instead of the env slot
 - **Reported by** drift-query (M7.1c). Moving an `Array<T>` into a callback and reading `captured[i]...` in the
