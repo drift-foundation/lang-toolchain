@@ -2,7 +2,7 @@ module main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var f = conc.spawn_future(| | => {
 		val _ = conc.sleep(conc.Duration(millis = 500));
 		return 7;

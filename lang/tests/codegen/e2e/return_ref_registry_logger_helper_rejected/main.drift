@@ -19,7 +19,7 @@ fn security(reg: &rt.GlobalRegistry) nothrow -> &log.Logger {
 	return &st.security;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if not install() {
 		return 1;
 	}

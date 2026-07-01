@@ -692,7 +692,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -758,7 +758,7 @@ module main;
 import acme.liba as liba;
 import acme.optb as optb;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val x = liba.add(40, 2);
 		val y: optb.Maybe<Int> = optb.foo();
@@ -834,7 +834,7 @@ module main;
 import acme.liba as liba;
 import acme.optb as optb;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val x = liba.add(40, 2);
 		val y: optb.Maybe<Int> = optb.foo();
@@ -909,7 +909,7 @@ import acme.geom as g;
 import acme.liba as liba;
 import acme.opt as opt;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val p: g.Point = g.make();
 		val o: opt.Maybe<g.Point> = Some(p);
@@ -968,7 +968,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -1210,7 +1210,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -1275,7 +1275,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val s: lib.S = lib.make();
 		return s.x;
@@ -1310,7 +1310,7 @@ def test_driftc_rejects_dependency_main_entrypoint(tmp_path: Path, capsys: pytes
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -1343,7 +1343,7 @@ def test_driftc_allows_dependency_method_named_main(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -1409,7 +1409,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {{
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -1450,7 +1450,7 @@ def test_driftc_rejects_unsigned_reserved_namespace_package(
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -1527,7 +1527,7 @@ def test_driftc_dev_core_trust_requires_dev_flag(
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -1590,7 +1590,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -1733,7 +1733,7 @@ module main;
 
 import web.jwt as jwt;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val e = jwt.make_error();
 	return e.code;
 }
@@ -1791,7 +1791,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -1819,7 +1819,7 @@ def test_driftc_missing_explicit_trust_store_is_reported_as_diagnostic(tmp_path:
 		"""
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """.lstrip(),
@@ -1857,7 +1857,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try lib.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -1897,7 +1897,7 @@ module main;
 
 import acme.opt as opt;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val x: opt.Maybe<Int> = opt.foo();
 		val y = match x {
@@ -1949,7 +1949,7 @@ variant Maybe<T> {
 	Extra
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """.lstrip(),
@@ -1988,7 +1988,7 @@ def test_driftc_rejects_variant_schema_collision_between_packages(tmp_path: Path
 		"""
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """.lstrip(),
@@ -2029,7 +2029,7 @@ module main;
 
 import acme.hidden as hidden;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return hidden.hidden();
 }
 """.lstrip(),
@@ -2067,7 +2067,7 @@ module main;
 
 import acme.hiddenpub as hidden;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return hidden.hidden();
 }
 """.lstrip(),
@@ -2106,7 +2106,7 @@ module main;
 
 import acme.api as api;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try api.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -2141,7 +2141,7 @@ module main;
 
 import acme.consts as consts;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return consts.ANSWER;
 }
 """.lstrip(),
@@ -2181,7 +2181,7 @@ module main;
 
 import acme.point as point;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p: point.Point = point.make();
 	return p.x;
 }
@@ -2222,7 +2222,7 @@ module main;
 import a.geom as ag;
 import b.geom as bg;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		val p1: ag.Point = ag.make();
 		val p2: bg.Point = bg.make();
@@ -2326,7 +2326,7 @@ module main;
 
 import acme.badiface as badiface;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try badiface.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -2412,7 +2412,7 @@ module main;
 
 import acme.badiface2 as badiface2;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try badiface2.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -2503,7 +2503,7 @@ module main;
 
 import acme.badiface3 as badiface3;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try badiface3.add(40, 2) catch { 0 };
 }
 """.lstrip(),
@@ -2587,7 +2587,7 @@ module main;
 
 import acme.badexc as badexc;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """.lstrip(),
@@ -2670,7 +2670,7 @@ module main;
 
 import acme.badvar as badvar;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val o: badvar.Maybe<Int> = None;
 	return 0;
 }
@@ -2814,7 +2814,7 @@ fn dummy() nothrow -> Int { return 0; }
 		"""
 module main;
 
-fn main() nothrow -> Int{ return 0 }
+pub fn main() nothrow -> Int{ return 0 }
 """.lstrip(),
 	)
 	rc, payload = _run_driftc_json(
@@ -2878,7 +2878,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _r = lib.wrapper(cast<Int32>(42));
 	return 0;
 }
@@ -2951,7 +2951,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = lib.identity32(cast<Int32>(37));
 	val u = lib.identityu32(cast<Uint32>(13));
 	return cast<Int>(r) + cast<Int>(u);
@@ -3016,7 +3016,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val u = lib.identity_u64(cast<Uint64>(42));
 	val b = lib.identity_byte(cast<Byte>(7));
 	return cast<Int>(u) + cast<Int>(b);
@@ -3138,7 +3138,7 @@ module main;
 import pkg_a.lib as a;
 import pkg_b.lib as b;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return a.make_a() + b.make_b();
 }
 """.lstrip(),
@@ -3213,7 +3213,7 @@ module main;
 import std.core as core;
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return 0;
 }
 """.lstrip(),
@@ -3280,7 +3280,7 @@ module main;
 import std.core as core;
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return lib.string_len("hello");
 }
 """.lstrip(),
@@ -3354,7 +3354,7 @@ module main;
 import std.core as core;
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return 0;
 }
 """.lstrip(),
@@ -3432,7 +3432,7 @@ module main;
 import std.core as core;
 import lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return 0;
 }
 """.lstrip(),
@@ -3606,7 +3606,7 @@ def _run_consumer_link(
 
 	_write_file(
 		work / "main.drift",
-		"module main;\n\nimport acme.lib as lib;\n\nfn main() nothrow -> Int {\n\treturn lib.add(1, 2);\n}\n",
+		"module main;\n\nimport acme.lib as lib;\n\npub fn main() nothrow -> Int {\n\treturn lib.add(1, 2);\n}\n",
 	)
 
 	bin_path = work / "a.out"
@@ -3787,7 +3787,7 @@ def test_package_version_pin_selects(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -3818,7 +3818,7 @@ def test_package_version_missing_fails(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -3849,7 +3849,7 @@ def test_package_version_ambiguous_without_dep_fails(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -3876,7 +3876,7 @@ def test_package_version_single_with_dep(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -3907,7 +3907,7 @@ def test_dep_malformed_rejected(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -3936,7 +3936,7 @@ def test_dep_duplicate_rejected(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -3991,7 +3991,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try lib.add(1, 2) catch { 0 };
 }
 """.lstrip(),
@@ -4053,7 +4053,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try lib.add(1, 2) catch { 0 };
 }
 """.lstrip(),
@@ -4117,7 +4117,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try lib.add(1, 2) catch { 0 };
 }
 """.lstrip(),
@@ -4199,7 +4199,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try lib.add(1, 2) catch { 0 };
 }
 """.lstrip(),
@@ -4306,7 +4306,7 @@ def test_dep_allowlist_ignores_unrelated_packages(tmp_path: Path) -> None:
 	)
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport web.client.cookie as cookie;\n\nfn main() nothrow -> Int {\n\treturn cookie.wrap(5);\n}\n",
+		"module main;\n\nimport web.client.cookie as cookie;\n\npub fn main() nothrow -> Int {\n\treturn cookie.wrap(5);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4401,7 +4401,7 @@ def test_dep_allowlist_multi_version_still_pins(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4432,7 +4432,7 @@ def test_package_root_without_dep_is_rejected(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4480,7 +4480,7 @@ def test_dep_allowlist_malformed_unrelated_dmp_ignored(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4527,7 +4527,7 @@ def test_unrelated_corrupt_zdmp_fails_loudly(tmp_path: Path, capsys) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	rc = driftc_main(
 		[
@@ -4628,7 +4628,7 @@ def test_same_package_version_across_multiple_roots_deduplicates(tmp_path: Path)
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport web.client.cookie as cookie;\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn cookie.add(1, tls.add(2, 3));\n}\n",
+		"module main;\n\nimport web.client.cookie as cookie;\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn cookie.add(1, tls.add(2, 3));\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4742,7 +4742,7 @@ def test_different_target_across_multiple_roots_errors(tmp_path: Path) -> None:
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main(
@@ -4813,7 +4813,7 @@ def test_different_target_across_roots_reports_conflict(tmp_path: Path, capsys) 
 	consumer_src = tmp_path / "consumer"
 	_write_file(
 		consumer_src / "main.drift",
-		"module main;\n\nimport net.tls as tls;\n\nfn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
+		"module main;\n\nimport net.tls as tls;\n\npub fn main() nothrow -> Int {\n\treturn tls.add(1, 2);\n}\n",
 	)
 	ir_out = tmp_path / "out.ll"
 	rc = driftc_main([
@@ -4981,7 +4981,7 @@ def test_driftc_rejects_missing_dep_pin_for_required_dep(tmp_path: Path) -> None
 
 	# Consumer compile: pin ONLY dep.a, not dep.b.
 	main_src = tmp_path / "main.drift"
-	_write_file(main_src, "module main;\n\nfn main() nothrow -> Int { return 0; }\n")
+	_write_file(main_src, "module main;\n\npub fn main() nothrow -> Int { return 0; }\n")
 	ir_out = tmp_path / "main.ll"
 	rc = driftc_main([
 		"-M", str(tmp_path), str(main_src),

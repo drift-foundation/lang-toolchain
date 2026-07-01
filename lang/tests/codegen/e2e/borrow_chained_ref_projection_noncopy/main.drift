@@ -58,7 +58,7 @@ fn _peek_inner(i: &Inner) nothrow -> Int { return i.handle.raw; }
 // from the temp.
 fn _build() nothrow -> Inner { return Inner(handle = Handle(raw = 99)); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var handles: Array<Handle> = [];
 	handles.push(Handle(raw = 10));
 	handles.push(Handle(raw = 20));

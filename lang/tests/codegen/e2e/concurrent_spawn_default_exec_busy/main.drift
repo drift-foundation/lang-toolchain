@@ -4,7 +4,7 @@ import std.concurrent as conc;
 import std.core as core;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	thread.exec_submit_test_override(1);
 	var t = conc.spawn(| | => { return 7; });
 	var res = t.join();

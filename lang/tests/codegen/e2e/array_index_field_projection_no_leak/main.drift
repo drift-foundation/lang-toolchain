@@ -5,7 +5,7 @@ struct Entry {
 	pub value: String
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var entries: Array<Entry> = [];
 	entries.push(Entry(name = "a", value = "b"));
 

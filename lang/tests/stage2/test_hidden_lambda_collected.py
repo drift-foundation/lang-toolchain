@@ -13,7 +13,7 @@ def test_hidden_lambda_is_collected_into_mir_funcs(tmp_path: Path) -> None:
 	src = tmp_path / "main.drift"
 	src.write_text(
 		"""
-fn main() -> Int {
+pub fn main() -> Int {
     val a: Int = 10;
     val r: Int = (|x| => { return a + x; })(2);
     return r;

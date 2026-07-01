@@ -6,7 +6,7 @@ fn generic_tid<T>() nothrow -> Uint64 {
 	return core.type_id<type T>();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = generic_tid<type Int>();
 	val b = core.type_id<type Int>();
 	if a != b {

@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var one: Uint64 = 1u64;
 	var high: Uint64 = one << 40u64;
 

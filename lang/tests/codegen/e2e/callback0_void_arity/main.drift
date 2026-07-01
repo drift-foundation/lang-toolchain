@@ -2,7 +2,7 @@ module main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb: core.Callback0<Void> = core.callback0(| | => { return; });
 	cb.call();
 	return 0;

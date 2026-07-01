@@ -1009,7 +1009,7 @@ class TestDriftcWorkloadCli:
 		# `_emit_codegen` / `module.render()` -- the sites that record
 		# codegen + IR workload.
 		src.write_text(
-			"module main;\n\nfn main() nothrow -> Int {\n\treturn 0;\n}\n",
+			"module main;\n\npub fn main() nothrow -> Int {\n\treturn 0;\n}\n",
 			encoding="utf-8",
 		)
 		ir_out = tmp_path / "out.ll"

@@ -42,7 +42,7 @@ fn make() nothrow -> core.Result<Payload, Int> {
 	return core.Result::Ok(Payload(msg = "hello"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match make() {
 		core.Result::Ok(v) => {
 			if v.msg != "hello" { return 1; }

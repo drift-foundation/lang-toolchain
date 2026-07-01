@@ -45,7 +45,7 @@ module mod_b;
 
 import mod_a as A;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 \tval fp: Fn(Int) -> Int = A.id;
 \treturn 0;
 }
@@ -129,7 +129,7 @@ module mod_b;
 
 import mod_a as A;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 \tval fp: Fn(Int) -> Int = A.id;
 \treturn 0;
 }

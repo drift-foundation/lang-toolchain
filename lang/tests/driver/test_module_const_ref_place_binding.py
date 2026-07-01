@@ -19,7 +19,7 @@ fn f(s: &String) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return f(&S);
 }
 """
@@ -69,7 +69,7 @@ fn mk(h: &Hello) nothrow -> Req {
 	return Req(user = USER, plugin = h.plugin);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Hello(plugin = "mysql_native_password");
 	val r = mk(&h);
 	if r.user == "root" and r.plugin == "mysql_native_password" {
@@ -115,7 +115,7 @@ fn touch(s: &mut String) nothrow -> Int {
 	return s.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return touch(&mut S);
 }
 """

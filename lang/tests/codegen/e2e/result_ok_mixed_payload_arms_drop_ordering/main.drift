@@ -60,7 +60,7 @@ fn check(copy_arm: Bool) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = check(true);
 	if a != 0 {
 		return a;

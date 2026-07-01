@@ -7,7 +7,7 @@ extern "C" fn get_alpn_selected(
     out_len: RawPtr<Uint32>
 ) nothrow -> Void;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     // Verify RawPtr<RawPtr<Byte> >, RawPtr<Int32>, RawPtr<Uint32>
     // compile in extern C signatures. Actual calls require valid
     // pointers from std.mem — tested separately by TLS team.

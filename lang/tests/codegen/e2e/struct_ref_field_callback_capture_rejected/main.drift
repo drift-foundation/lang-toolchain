@@ -7,7 +7,7 @@ struct Statement(session: &mut Session);
 
 fn run(var cb: core.Callback0<Int>) nothrow -> Int { return cb.call(); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val n = run(core.callback0(| | captures(move st) => { return 1; }));

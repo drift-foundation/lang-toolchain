@@ -12,7 +12,7 @@ fn handle(var s: Stream) -> Int {
 	return s.v;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = Stream(v = -4);
 	var cb: core.Callback0<Int> = core.callback0(| | captures(move s) => {
 		if s.v < 0 {

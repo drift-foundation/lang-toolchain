@@ -81,7 +81,7 @@ def test_conc_spawn_nothrow_lambda_with_result_returning_call_compiles(
 module m;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar t = conc.spawn(| | => {
 \t\tval _ = conc.sleep(conc.Duration(millis = 1));
 \t\treturn 1;
@@ -105,7 +105,7 @@ module m;
 import std.core as core;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar t = conc.spawn(| | => {
 \t\tvar cr = conc.sleep(conc.Duration(millis = 1));
 \t\tval n = match cr {
@@ -154,7 +154,7 @@ fn outer() throws -> Int {
 \t});
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, "throws-callback generic auto-try should unwrap r → Int → match rejects"
 	assert any("variant" in m for m in errs), (

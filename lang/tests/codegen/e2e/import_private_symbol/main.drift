@@ -2,5 +2,5 @@ module main;
 import lib as lib;
 
 
-fn main() nothrow -> Int{ return lib.hidden(); }
+pub fn main() nothrow -> Int{ return lib.hidden(); }
 

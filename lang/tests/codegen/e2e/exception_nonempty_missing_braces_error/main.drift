@@ -1,6 +1,6 @@
 module m;
 
 error InvalidOrder { code: String }
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     throw InvalidOrder();
 }

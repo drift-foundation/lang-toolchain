@@ -23,7 +23,7 @@ implement m_a.TA for m_b.SB {
 	pub fn f(self: m_b.SB) -> Int { return 0; }
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """,
 	}
 	mod_root = tmp_path / "mods"

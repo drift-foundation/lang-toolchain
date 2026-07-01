@@ -51,7 +51,7 @@ fn take(w: &Wrapper) nothrow -> Payload {
 	return w.p;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
@@ -83,7 +83,7 @@ fn take(w: &Wrapper) nothrow -> Int {
 	return w.inner.n;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w = Wrapper(inner = Inner(n = 41));
 	return take(&w) + 1;
 }
@@ -114,7 +114,7 @@ fn take(var w: Wrapper) nothrow -> Payload {
 	return mem.replace(&mut w.p, Payload(xs = move empty));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
@@ -150,7 +150,7 @@ fn take(w: &Wrapper) nothrow -> Int {
 	return ys.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
@@ -183,7 +183,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
@@ -220,7 +220,7 @@ fn take(var w: Wrapper) nothrow -> Int {
 	return ys.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
@@ -251,7 +251,7 @@ fn take(w: &Wrapper) nothrow -> Int {
 	return p.xs.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	var ps: Array<Payload> = [];
@@ -274,7 +274,7 @@ def test_move_non_place_operand_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = move (1 + 2);
 	return x;
 }
@@ -297,7 +297,7 @@ fn f(a: &mut Array<Int>, b: &Array<Int>) nothrow -> Int {
 	return b.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	return f(&mut xs, &xs);
 }
@@ -316,7 +316,7 @@ def test_move_from_reference_type_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val r = &xs;
 	val y = move r;
@@ -337,7 +337,7 @@ def test_copy_non_place_operand_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = copy (1 + 2);
 	return x;
 }
@@ -357,7 +357,7 @@ def test_borrow_mut_immutable_binding_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs: Array<Int> = [];
 	val r = &mut xs;
 	return 0;
@@ -377,7 +377,7 @@ def test_borrow_mut_through_shared_ref_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val p = &xs;
 	val r = &mut *p;

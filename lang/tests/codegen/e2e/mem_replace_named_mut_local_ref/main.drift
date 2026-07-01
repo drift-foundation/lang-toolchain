@@ -33,7 +33,7 @@ fn _none_resource() nothrow -> Optional<Resource> {
 	return Optional<Resource>::None();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = Box(x = Optional<Resource>::Some(Resource(id = 33)));
 
 	// The headline customer case: bind &mut b.x to a local first,

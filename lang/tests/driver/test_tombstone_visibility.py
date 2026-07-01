@@ -44,7 +44,7 @@ variant Maybe<T> {
 	Some(value: T),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _v = Maybe::Tombstone();
 	return 0;
 }
@@ -63,7 +63,7 @@ variant Maybe<T> {
 	Some(value: T),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = Maybe::Some(1);
 	return match v {
 		Tombstone => { 1 },

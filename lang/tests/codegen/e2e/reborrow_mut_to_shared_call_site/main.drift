@@ -29,7 +29,7 @@ fn identity_ref(f: &Foo) nothrow -> &Foo {
 	return f;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var f = Foo(x = 10);
 
 	// 1 - basic: pass &mut where & is expected.

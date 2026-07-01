@@ -49,7 +49,7 @@ module m_main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { return 1; });
 	val _ = t.join_timeout(conc.Duration(millis = 0));
 	return 0;

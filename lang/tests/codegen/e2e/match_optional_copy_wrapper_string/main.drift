@@ -55,7 +55,7 @@ fn _make() nothrow -> Optional<Wrapper> {
 	return Optional::Some(Wrapper(inner = "hello"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w = _make();
 	match w {
 		Optional::Some(x) => {

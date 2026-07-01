@@ -77,7 +77,7 @@ module m_main;
 import m_a;
 import m_impl_c;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """,
@@ -137,7 +137,7 @@ import m_types;
 
 use trait m_api.Show;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: m_types.Box = m_types.Box(value = 1);
 	try {
 		return b.show();

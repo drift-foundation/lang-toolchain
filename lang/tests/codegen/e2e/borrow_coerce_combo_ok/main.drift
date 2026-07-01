@@ -47,7 +47,7 @@ fn read(p: &Int) nothrow -> Int {
 	return *p;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var both = Both(a = 1, b = 2);
 	inc(both);
 	val res = read(both);

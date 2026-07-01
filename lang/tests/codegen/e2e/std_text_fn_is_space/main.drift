@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if !text.is_space(cast<Byte>(32)) { return 1; }   // space
 	if !text.is_space(cast<Byte>(9)) { return 2; }    // tab
 	if !text.is_space(cast<Byte>(10)) { return 3; }   // newline

@@ -4,7 +4,7 @@ module main;
 // importing std.iter or std.containers explicitly. These are prelude modules
 // and their methods on builtin types must always be in scope.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val arr = [10, 20, 30];
 	if arr.len != 3 {
 		return 1;

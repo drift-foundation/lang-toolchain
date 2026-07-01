@@ -76,7 +76,7 @@ fn case_variant_named_local() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = case_result_ok_named_local();
 	if a != 0 { return 100 + a; }
 	val b = case_variant_named_local();

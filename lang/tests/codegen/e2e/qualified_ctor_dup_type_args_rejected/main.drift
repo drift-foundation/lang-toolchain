@@ -5,7 +5,7 @@ variant Maybe<T> {
 	None,
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 val x: Maybe<Int> = Maybe<Int>::Some<type Int>(1);
 	return 0;
 }

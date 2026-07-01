@@ -57,7 +57,7 @@ _HDR = (
 def test_named_args_bind_by_label_out_of_order(tmp_path: Path) -> None:
 	# Reversed-order named args must bind a=1, b=2 (102), not positionally (201).
 	src = _HDR + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval p = P::Pair(b = 2, a = 1);\n"
 		"\treturn extract(p) - 102;\n}\n"
 	)
@@ -68,7 +68,7 @@ def test_named_args_bind_by_label_out_of_order(tmp_path: Path) -> None:
 
 def test_positional_construction_still_works(tmp_path: Path) -> None:
 	src = _HDR + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval p = P::Pair(1, 2);\n"
 		"\treturn extract(p) - 102;\n}\n"
 	)
@@ -78,7 +78,7 @@ def test_positional_construction_still_works(tmp_path: Path) -> None:
 
 
 def test_unknown_label_rejected(tmp_path: Path) -> None:
-	src = _HDR + "fn main() nothrow -> Int { val p = P::Pair(a = 1, c = 2); return 0; }\n"
+	src = _HDR + "pub fn main() nothrow -> Int { val p = P::Pair(a = 1, c = 2); return 0; }\n"
 	r = _compile(tmp_path, src, out="u")
 	assert r.returncode != 0
 	assert "E-QMEM-NO-FIELD" in r.stderr and "'c'" in r.stderr, r.stderr
@@ -87,7 +87,7 @@ def test_unknown_label_rejected(tmp_path: Path) -> None:
 def test_missing_payload_clear_diagnostic(tmp_path: Path) -> None:
 	# The fix: a clear missing-payload message, not "CallInfo param layout
 	# mismatch (checker bug)".
-	src = _HDR + "fn main() nothrow -> Int { val p = P::Pair(a = 1); return 0; }\n"
+	src = _HDR + "pub fn main() nothrow -> Int { val p = P::Pair(a = 1); return 0; }\n"
 	r = _compile(tmp_path, src, out="m")
 	assert r.returncode != 0
 	assert "E-QMEM-MISSING-FIELD" in r.stderr and "b" in r.stderr, r.stderr
@@ -95,14 +95,14 @@ def test_missing_payload_clear_diagnostic(tmp_path: Path) -> None:
 
 
 def test_duplicate_label_rejected(tmp_path: Path) -> None:
-	src = _HDR + "fn main() nothrow -> Int { val p = P::Pair(a = 1, a = 2); return 0; }\n"
+	src = _HDR + "pub fn main() nothrow -> Int { val p = P::Pair(a = 1, a = 2); return 0; }\n"
 	r = _compile(tmp_path, src, out="d")
 	assert r.returncode != 0
 	assert "E-QMEM-DUP-FIELD" in r.stderr, r.stderr
 
 
 def test_mixed_positional_and_named_rejected(tmp_path: Path) -> None:
-	src = _HDR + "fn main() nothrow -> Int { val p = P::Pair(1, b = 2); return 0; }\n"
+	src = _HDR + "pub fn main() nothrow -> Int { val p = P::Pair(1, b = 2); return 0; }\n"
 	r = _compile(tmp_path, src, out="x")
 	assert r.returncode != 0
 	assert "E-QMEM-MIXED-ARGS" in r.stderr, r.stderr

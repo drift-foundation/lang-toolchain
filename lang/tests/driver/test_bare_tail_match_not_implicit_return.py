@@ -29,7 +29,7 @@ from lang.codegen.llvm.test_utils import sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
 _HDR = "module repro;\nvariant Opt { Some(v: Int), None }\n"
-_MAIN = "fn main() nothrow -> Int { val o = Opt::Some(5); return f(o) - 5; }\n"
+_MAIN = "pub fn main() nothrow -> Int { val o = Opt::Some(5); return f(o) - 5; }\n"
 _ARMS = "{ Opt::Some(v) => { v }, Opt::None => { 0 } }"
 
 

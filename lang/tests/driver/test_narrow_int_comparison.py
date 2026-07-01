@@ -46,7 +46,7 @@ def test_uint32_equality_produces_bool(tmp_path: Path) -> None:
 	"""`Uint32 == Uint32` compiles and evaluates to the right `Bool`."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = cast<Uint32>(5);
 	val b = cast<Uint32>(5);
 	val c = cast<Uint32>(6);
@@ -65,7 +65,7 @@ def test_int32_equality_produces_bool(tmp_path: Path) -> None:
 	"""`Int32 == Int32` compiles and evaluates correctly."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = cast<Int32>(-3);
 	val b = cast<Int32>(-3);
 	val c = cast<Int32>(4);
@@ -83,7 +83,7 @@ def test_int32_ordering_signed(tmp_path: Path) -> None:
 	positive one (`icmp s*`)."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = cast<Int32>(-1);
 	val b = cast<Int32>(2);
 	var r = 0;
@@ -105,7 +105,7 @@ def test_uint32_ordering_unsigned_high_bit(tmp_path: Path) -> None:
 	signed i32 is -1, so `-1 > 1` would be false)."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val big = cast<Uint32>(4294967295u);
 	val one = cast<Uint32>(1u);
 	var r = 0;
@@ -125,7 +125,7 @@ def test_uint32_high_bit_inverse_less_than(tmp_path: Path) -> None:
 	semantics."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val big = cast<Uint32>(4294967295u);
 	val one = cast<Uint32>(1u);
 	if one < big { return 7; }

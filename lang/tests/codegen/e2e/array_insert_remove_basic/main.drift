@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs = [1, 3];
 	xs.insert(1, 2);
 	val v = xs.remove(0);

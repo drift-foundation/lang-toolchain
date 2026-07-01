@@ -20,7 +20,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w: core.Result<Int, Int> = core.Result::Ok(1);
 	match w {
 		Ok(v) => {
@@ -56,7 +56,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w: core.Result<Int, Int> = core.Result::Ok(1);
 	match w {
 		Ok(v) => {
@@ -90,7 +90,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w: core.Result<Int, Int> = core.Result::Ok(1);
 	match w {
 		Ok(v) => {
@@ -124,7 +124,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w: core.Result<Int, Int> = core.Result::Ok(1);
 	match w {
 		Ok(v) => {

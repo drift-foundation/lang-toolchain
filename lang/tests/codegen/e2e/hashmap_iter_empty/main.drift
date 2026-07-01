@@ -17,6 +17,6 @@ fn run() -> Int {
 	return next_once(&mut it);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 99 };
 }

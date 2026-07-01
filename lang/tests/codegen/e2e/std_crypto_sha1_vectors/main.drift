@@ -24,7 +24,7 @@ fn _check_sha1_ascii(s: String, expected_hex: String, code: Int) nothrow -> Int 
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r0 = _check_sha1_ascii("", "da39a3ee5e6b4b0d3255bfef95601890afd80709", 1);
 	if r0 != 0 { return r0; }
 	val r1 = _check_sha1_ascii("abc", "a9993e364706816aba3e25717850c26c9cd0d89d", 2);

@@ -2,4 +2,4 @@ module main;
 import a as a;
 
 
-fn main() nothrow -> Int{ return try a.add(40, 2) catch { 0 }; }
+pub fn main() nothrow -> Int{ return try a.add(40, 2) catch { 0 }; }

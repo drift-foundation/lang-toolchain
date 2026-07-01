@@ -39,7 +39,7 @@ fn check(op: err.IteratorOpId, expected: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if check(err.IteratorOpId::Next(), 0) != 0 { return 20; }
 	if check(err.IteratorOpId::Prev(), 1) != 0 { return 21; }
 	if check(err.IteratorOpId::Len(), 2) != 0 { return 22; }

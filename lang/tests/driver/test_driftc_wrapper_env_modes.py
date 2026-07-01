@@ -72,7 +72,7 @@ def test_driftc_wrapper_asan_adds_sanitize_flags(tmp_path: Path) -> None:
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"\treturn 0;",
 				"}",
 				"",
@@ -98,7 +98,7 @@ def test_driftc_wrapper_runtime_archive_mode_links_static_runtime(tmp_path: Path
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"	return 0;",
 				"}",
 				"",
@@ -125,7 +125,7 @@ def test_driftc_wrapper_runtime_archive_mode_respects_custom_cache_dir(tmp_path:
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"	return 0;",
 				"}",
 				"",
@@ -172,7 +172,7 @@ def test_driftc_wrapper_relative_output_from_non_repo_cwd(tmp_path: Path) -> Non
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"	return 0;",
 				"}",
 				"",
@@ -191,7 +191,7 @@ _TINY_MAIN = "\n".join(
 	[
 		"module main;",
 		"import std.core;",
-		"fn main() nothrow -> Int {",
+		"pub fn main() nothrow -> Int {",
 		"\treturn 0;",
 		"}",
 		"",
@@ -488,7 +488,7 @@ def _write_min_main(tmp_path: Path) -> Path:
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"\treturn 0;",
 				"}",
 				"",

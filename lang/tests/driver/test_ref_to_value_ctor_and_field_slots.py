@@ -93,7 +93,7 @@ fn wrap(s: &String) nothrow -> Node {
 	return Node::Tagged(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = fmt.format_int(7700);
 	var sum: Int = 0;
 	var i: Int = 0;
@@ -140,7 +140,7 @@ fn produce() nothrow -> Node {
 	return Node::Tagged(&src);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val n = produce();
 	match n {
 		Node::Tagged(t) => { return t.byte_length(); },
@@ -181,7 +181,7 @@ fn set_status(e: &mut Entry, s: &String) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var e = Entry(status = "init");
 	val s: String = "FINISHED";
 	set_status(&mut e, &s);
@@ -210,7 +210,7 @@ fn set_value(c: &mut Cell, n: &Int) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var c = Cell(value = 0);
 	val v: Int = 42;
 	set_value(&mut c, &v);
@@ -253,7 +253,7 @@ fn wrap(r: &Resource) nothrow -> Holder {
 	return Holder::Just(r);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -289,7 +289,7 @@ fn wrap(s: &String) nothrow -> Box {
 	return Box(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "ok";
 	val b = wrap(&src);
 	return b.tag.byte_length();
@@ -314,7 +314,7 @@ fn wrap(s: &String) nothrow -> Box {
 	return Box(tag = s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "ok";
 	val b = wrap(&src);
 	return b.tag.byte_length();
@@ -340,7 +340,7 @@ fn update(s: &String) nothrow -> Int {
 	return x.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "after";
 	return update(&src);
 }
@@ -364,7 +364,7 @@ fn update_at(arr: &mut Array<String>, s: &String) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr: Array<String> = ["a", "b", "c"];
 	val src: String = "REPLACED";
 	update_at(&mut arr, &src);
@@ -402,7 +402,7 @@ fn wrap(r: &Resource) nothrow -> Holder {
 	return Holder(r);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -446,7 +446,7 @@ fn wrap(r: &Resource) nothrow -> Holder {
 	return Holder(item = r);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -491,7 +491,7 @@ fn set_item(h: &mut Holder, r: &Resource) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),

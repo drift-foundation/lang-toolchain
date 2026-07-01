@@ -48,7 +48,7 @@ def test_noncapturing_stored_lambda_trailing_result_compiles_and_runs(tmp_path: 
 		"fn f(r: R) -> Int {\n"
 		"\tval x = match r { R::Ok(v) => { v }, R::Err(e) => { val g = || -> Int => { 7 }; g() } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { return f(R::Err(4)) - 7; }\n"
+		"pub fn main() nothrow -> Int { return f(R::Err(4)) - 7; }\n"
 	)
 	r = _compile(tmp_path, src, out="trail")
 	assert r.returncode == 0, r.stderr
@@ -68,7 +68,7 @@ def test_capturing_stored_lambda_in_arm_reports_clear_diagnostic(tmp_path: Path)
 		"\tval k = 4;\n"
 		"\tval x = match r { R::Ok(v) => { v }, R::Err(e) => { val g = || -> Int => { k + 1 }; g() } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { return f(R::Err(9)); }\n"
+		"pub fn main() nothrow -> Int { return f(R::Err(9)); }\n"
 	)
 	r = _compile(tmp_path, src, out="cap")
 	assert r.returncode != 0
@@ -81,7 +81,7 @@ def test_iife_lambda_in_arm_still_works(tmp_path: Path) -> None:
 		"fn f(r: R) -> Int {\n"
 		"\tval x = match r { R::Ok(v) => { v }, R::Err(e) => { (|| -> Int => { 7 })() } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { return f(R::Err(4)) - 7; }\n"
+		"pub fn main() nothrow -> Int { return f(R::Err(4)) - 7; }\n"
 	)
 	r = _compile(tmp_path, src, out="iife")
 	assert r.returncode == 0, r.stderr

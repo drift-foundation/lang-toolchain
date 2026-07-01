@@ -10,7 +10,7 @@ fn decode_wrap(bytes: &Array<Byte>, start: Int, end: Int, label: String) nothrow
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var bytes: Array<Byte> = [];
 	bytes.push(cast<Byte>(65));
 	bytes.push(cast<Byte>(66));

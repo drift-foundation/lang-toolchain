@@ -2,7 +2,7 @@ module m;
 
 import std.console as console;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	console.println("hello, Drift");
 	return 0;
 }

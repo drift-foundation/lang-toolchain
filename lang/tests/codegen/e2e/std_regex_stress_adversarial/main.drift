@@ -53,7 +53,7 @@ fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: 
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// =================================================================

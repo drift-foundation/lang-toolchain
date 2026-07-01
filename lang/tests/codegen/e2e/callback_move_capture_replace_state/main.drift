@@ -23,7 +23,7 @@ implement Holder {
 	pub fn replace(self: &mut Holder, var cb: core.Callback0<Int>) nothrow -> Void { self.cb = move cb; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var root = conc.arc(conc.mutex(Counter(v = 1)));
 	var captured = root.clone();
 	var cb: core.Callback0<Int> = core.callback0(| | captures(move captured) => {

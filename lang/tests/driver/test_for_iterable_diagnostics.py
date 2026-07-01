@@ -46,7 +46,7 @@ def test_for_on_non_iterable_reports_error(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in 1 { x; }
 	return 0;
 }
@@ -63,7 +63,7 @@ module m_main;
 
 import std.iter as iter;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 1;
 	iter.SinglePassIterator::next(&mut x);
 	return 0;
@@ -81,7 +81,7 @@ module m_main;
 
 import std.iter as iter;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	iter.Iterable::iter(1);
 	return 0;
 }
@@ -97,7 +97,7 @@ def test_for_without_stdlib_root_is_not_iterable(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
 	for x in move xs { x; }
 	return 0;
@@ -123,7 +123,7 @@ implement iter.Iterable<Dummy, Int, NotIter> for Dummy {
 	pub fn iter(self: Dummy) -> NotIter { return NotIter(x = 0); }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val d = Dummy(x = 1);
 	for x in d { x; }
 	return 0;
@@ -142,7 +142,7 @@ module m_main;
 trait Iterable<T> { fn iter(self: &Self) -> Int; }
 trait SinglePassIterator<T> { fn next(self: &mut Self) -> Int; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
 	for x in xs { x; }
 	return 0;
@@ -161,7 +161,7 @@ module m_main;
 
 fn make() nothrow -> Array<Int> { return [1, 2, 3]; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in make() { x; }
 	return 0;
 }
@@ -178,7 +178,7 @@ module m_main;
 
 fn make() nothrow -> Array<Int> { return [1, 2, 3]; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in &make() { x; }
 	return 0;
 }
@@ -194,7 +194,7 @@ def test_for_over_owned_array_compiles(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
 	for x in xs { x; }
 	return 0;
@@ -210,7 +210,7 @@ def test_for_over_borrowed_array_compiles(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
 	for x in &xs { x; }
 	return 0;
@@ -226,7 +226,7 @@ def test_for_over_owned_array_consumes_non_copy(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = [1, 2, 3];
 	for x in move a { x; }
 	a.push(4);
@@ -244,7 +244,7 @@ def test_for_over_borrowed_array_does_not_consume(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	for x in &arr { x; }
 	arr.push(2);
@@ -269,7 +269,7 @@ implement Box {
 	pub fn set(self: &mut Box, v: Int) nothrow -> Void { self.value = v; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = Box(value = 1);
 	val a = b.get();
 	b.set(2);
@@ -287,7 +287,7 @@ def test_array_borrow_then_write_same_index_rejected(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	val r = &arr[0];
 	arr[0] = 4;
@@ -305,7 +305,7 @@ def test_array_borrow_then_write_disjoint_index_ok(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	val r = &arr[0];
 	arr[1] = 4;
@@ -325,7 +325,7 @@ module m_main;
 
 fn consume(xs: Array<Int>) nothrow -> Int { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	consume(move arr);
 	arr.push(2);
@@ -348,7 +348,7 @@ fn consume(xs: Array<Array<Int>>) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -362,7 +362,7 @@ def test_for_mut_array_is_iterable(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs = [1, 2, 3];
 	for x in &mut xs { x; }
 	xs.push(4);
@@ -383,7 +383,7 @@ module m_main;
 import std.iter as iter;
 import std.containers as containers;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var xs = [1, 2];
 	var it: containers.ArrayBorrowMutIter<Int> = iter.Iterable::iter(&mut xs);
 	val a: Optional<&mut Int> = iter.SinglePassIterator::next(&mut it);
@@ -414,7 +414,7 @@ fn take_one(it: &mut containers.ArrayBorrowMutIter<Int>) -> Int {
 	return 0;
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var xs = [1, 2];
 	var it: containers.ArrayBorrowMutIter<Int> = iter.Iterable::iter(&mut xs);
 	take_one(&mut it);
@@ -432,7 +432,7 @@ def test_borrowed_array_elem_same_index_write_rejected(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var xs = [1, 2];
 	val r = &xs[0];
 	xs[0] = 4;

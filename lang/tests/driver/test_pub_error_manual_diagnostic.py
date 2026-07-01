@@ -106,7 +106,7 @@ implement core.Diagnostic for SecretError {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval e: SecretError = SecretError(user_id = 42, secret_token = "shhh");
 \tval s: String = e.to_json_text();
 \treturn 0;
@@ -138,7 +138,7 @@ fn risky() throws SecretError -> Int {
 \tthrow SecretError(user_id = 42, secret_token = "shhh");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch SecretError {
@@ -174,7 +174,7 @@ fn risky() throws SecretError -> Int {
 \tthrow SecretError(user_id = 42, secret_token = "shhh");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch SecretError(e) {
@@ -216,7 +216,7 @@ fn risky() throws SecretError -> Int {
 \tthrow SecretError(user_id = 42, secret_token = "shhh");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval x = try risky() catch SecretError(e) {
 \t\te.user_id
 \t} catch {

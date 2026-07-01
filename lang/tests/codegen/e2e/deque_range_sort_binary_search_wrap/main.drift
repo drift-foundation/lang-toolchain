@@ -43,4 +43,4 @@ var dq = containers.deque<type Int>();
 	return (got == 3) ? 0 : 1;
 }
 
-fn main() nothrow -> Int { return try run() catch { 99 }; }
+pub fn main() nothrow -> Int { return try run() catch { 99 }; }

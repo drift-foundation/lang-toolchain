@@ -52,7 +52,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return core.Result::Ok(Statement(session = s));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	match query(&mut sess) {
 		core.Result::Ok(st) => {
@@ -89,7 +89,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return move out;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	match query(&mut sess) {
 		core.Result::Ok(st) => {
@@ -118,7 +118,7 @@ module m;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var xs: Array<Statement> = [];
@@ -148,7 +148,7 @@ fn bad() nothrow -> Statement {
 	return st;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = bad();
 	return 0;
 }
@@ -173,7 +173,7 @@ struct Statement(session: &mut Session);
 
 fn run(var cb: core.Callback0<Int>) nothrow -> Int { return cb.call(); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val n = run(core.callback0(| | captures(move st) => { return 1; }));
@@ -201,7 +201,7 @@ import std.containers as containers;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var m = containers.hash_map<type Int, Statement>();
@@ -227,7 +227,7 @@ import std.containers as containers;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var m = containers.tree_map<type Int, Statement>();
@@ -272,7 +272,7 @@ fn run() -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 99 };
 }
 """,

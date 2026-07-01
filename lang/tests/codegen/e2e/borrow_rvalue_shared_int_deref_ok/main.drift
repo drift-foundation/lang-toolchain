@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = &(1 + 2);
 	return *p;
 }

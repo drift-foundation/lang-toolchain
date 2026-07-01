@@ -103,7 +103,7 @@ module main;
 import std.core as core;
 import routes as routes;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = core.callback1(routes.my_fn);
 	return cb.call(41);
 }
@@ -132,7 +132,7 @@ module main;
 import std.core as core;
 import routes as routes;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = core.callback2(routes.my_fn);
 	return cb.call(20, 22);
 }
@@ -161,7 +161,7 @@ module main;
 import std.core as core;
 import routes as routes;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = core.callback3(routes.my_fn);
 	return cb.call(10, 12, 20);
 }
@@ -223,7 +223,7 @@ fn install(cb: core.Callback3<&Int, &mut Int, core.Callback2<&Int, &mut Int, cor
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	install(core.callback3(routes.auth_middleware));
 	return 0;
 }
@@ -299,7 +299,7 @@ fn terminal(a: Int, b: Int) nothrow -> core.Result<Int, routes.E> {
 	return core.Result<Int, routes.E>::Err(routes.E(tag = "should-not-reach"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb1 = core.callback3(routes.mw1);
 	val cb2 = core.callback3(routes.mw2);
 	val cb_term = core.callback2(terminal);
@@ -360,7 +360,7 @@ module main;
 import std.core as core;
 import routes as routes;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = core.callback3(routes.throwing_fn);
 	return 0;
 }

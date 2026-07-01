@@ -129,7 +129,7 @@ module b;
 
 import a;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val r1: Int = a.f(1);
     val r2: Int = a.f("hi");
     return r1 + r2;

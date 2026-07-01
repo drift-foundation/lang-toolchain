@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val a = "Solidarność";
     val b = "Solidarno\xC5\x9B\xC4\x87";
     if a == b {

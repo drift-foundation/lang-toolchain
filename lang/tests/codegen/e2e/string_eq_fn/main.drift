@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     if string_eq("a", "a") and not string_eq("a", "b") {
         return 0;
     }

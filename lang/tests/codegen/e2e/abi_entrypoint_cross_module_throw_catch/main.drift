@@ -2,7 +2,7 @@ module main;
 import acme.boom as boom;
 
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try boom.boom() catch {
 		return 0;
 	}

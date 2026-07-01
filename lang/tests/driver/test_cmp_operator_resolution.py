@@ -55,7 +55,7 @@ implement cmp.Equatable for Foo {
 implement core.Copy for Foo {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = Foo(x = 1);
 	val b = Foo(x = 1);
 	if a == b { return 1; }

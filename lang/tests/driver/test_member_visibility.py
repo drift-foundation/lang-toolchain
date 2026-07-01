@@ -60,7 +60,7 @@ module m_main;
 
 import m_lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = lib.make();
 	val ok = p.y;
 	val bad = p.x;
@@ -99,7 +99,7 @@ fn read_x(p: &lib.Point) nothrow -> Int {
 	return p.x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = lib.make();
 	return read_x(&p);
 }
@@ -132,7 +132,7 @@ module m_main;
 
 import m_lib as lib;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val p = lib.make();
 	return p.x + p.y;
 }
@@ -161,7 +161,7 @@ module m_main;
 
 import m_lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = lib.Point(x = 1, y = 2);
 	return p.y;
 }
@@ -191,7 +191,7 @@ module m_main;
 
 import m_lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _h = lib.make();
 	return 0;
 }

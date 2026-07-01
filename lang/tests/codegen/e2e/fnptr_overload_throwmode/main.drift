@@ -17,7 +17,7 @@ fn boom(x: Int) -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = pick(cast<Fn(Int) nothrow -> Int>(add1));
 	val b = pick(cast<Fn(Int) -> Int>(boom));
 	return a + b;

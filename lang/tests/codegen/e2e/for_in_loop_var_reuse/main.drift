@@ -8,7 +8,7 @@ use trait iter.SinglePassIterator;
 
 fn mkstr() nothrow -> Array<String> { var a: Array<String> = []; a.push("p"); a.push("q"); return move a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var ai: Array<Int> = []; ai.push(1); ai.push(2); ai.push(3);
 
 	// Copy payload (&Int), name `x` reused.

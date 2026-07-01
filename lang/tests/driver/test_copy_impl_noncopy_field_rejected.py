@@ -65,7 +65,7 @@ pub struct Holder {
 implement core.Copy for Holder {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -107,7 +107,7 @@ pub struct Box<T> {
 implement<T> core.Copy for Box<T> {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -147,7 +147,7 @@ pub struct Pair<T> {
 implement<T> core.Copy for Pair<T> require T is core.Copy {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -190,7 +190,7 @@ pub struct Outer<T> {
 implement<T> core.Copy for Outer<T> require T is core.Copy {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -238,7 +238,7 @@ pub struct Outer<T> {
 implement<T> core.Copy for Outer<T> {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -284,7 +284,7 @@ pub struct Box<T> {
 implement<T> core.Copy for Box<T> require T is Copy {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()
@@ -330,7 +330,7 @@ pub struct Handle<T> {
 implement<T> core.Copy for Handle<T> {
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip()

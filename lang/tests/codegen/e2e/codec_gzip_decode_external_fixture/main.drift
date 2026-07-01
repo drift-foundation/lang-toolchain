@@ -60,7 +60,7 @@ fn _expected_bytes() nothrow -> Array<Byte> {
 	return move b;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val gz = _fixture();
 	match codec.gzip_decode(&gz) {
 		Ok(decoded) => {

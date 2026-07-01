@@ -46,7 +46,7 @@ fn chained(n: Int) nothrow -> Int { return make_outer(n).inner.k; }
 // Struct-literal (non-call) rvalue subject: the `b` String must drop.
 fn lit_proj(n: Int) nothrow -> Int { return Pair(a = 7, b = mk(n)).a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var acc = 0;
 	var i = 0;
 	while i < 5 {

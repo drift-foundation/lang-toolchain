@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if !text.is_lowercase("hello") { return 1; }
 	if text.is_lowercase("Hello") { return 2; }
 	if text.is_lowercase("HELLO") { return 3; }

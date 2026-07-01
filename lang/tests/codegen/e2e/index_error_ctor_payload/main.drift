@@ -3,7 +3,7 @@ module main;
 import std.err;
 
 // Constructor-only test: does not exercise bounds-check plumbing.
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		throw std.err:IndexError(container_id = "std.containers:Array", index = 7);
 	} catch std.err:IndexError(e) {

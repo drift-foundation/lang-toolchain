@@ -42,7 +42,7 @@ pub variant NoIter { A, B(n: Int) }
 
 fn mk() nothrow -> NoIter { return NoIter::B(1); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in mk() { return 1; }
 	return 0;
 }
@@ -69,7 +69,7 @@ implement iter.SinglePassIterator<Int> for OnlyNext {
 
 fn mk() nothrow -> OnlyNext { return OnlyNext::N(2); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in mk() { return 1; }
 	return 0;
 }

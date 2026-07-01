@@ -94,7 +94,7 @@ import sharedlib as lib;
 
 use trait shareable.ConstShare;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval h = lib.make_holder("hello");
 \tval h2 = h.const_share();
 \treturn 0;

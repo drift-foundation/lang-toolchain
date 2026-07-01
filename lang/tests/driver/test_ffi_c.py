@@ -111,7 +111,7 @@ class TestFFIPositive:
 			drift_source="""\
 extern "C" fn abs(x: Int) nothrow -> Int;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return unsafe { abs(-42) };
 }
 """,
@@ -124,7 +124,7 @@ fn main() nothrow -> Int {
 			drift_source="""\
 extern "C" fn add_ints(a: Int, b: Int) nothrow -> Int;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return unsafe { add_ints(30, 7) };
 }
 """,
@@ -142,7 +142,7 @@ intptr_t add_ints(intptr_t a, intptr_t b) { return a + b; }
 extern "C" fn set_global(x: Int) nothrow -> Void;
 extern "C" fn get_global() nothrow -> Int;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     unsafe { set_global(19) };
     return unsafe { get_global() };
 }
@@ -165,7 +165,7 @@ extern "C" {
     fn helper_b(x: Int) nothrow -> Int;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return unsafe { helper_b(helper_a()) };
 }
 """,
@@ -185,7 +185,7 @@ extern "C" fn alloc_byte(b: Byte) nothrow -> RawPtr<Byte>;
 extern "C" fn read_byte(ptr: RawPtr<Byte>) nothrow -> Int;
 extern "C" fn free_byte(ptr: RawPtr<Byte>) nothrow -> Void;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val ptr: RawPtr<Byte> = unsafe { alloc_byte(cast<Byte>(23u)) };
     val result: Int = unsafe { read_byte(ptr) };
     unsafe { free_byte(ptr) };
@@ -209,7 +209,7 @@ void free_byte(char* ptr) { free(ptr); }
 			drift_source="""\
 extern "C" fn abs(x: Int) nothrow -> Int;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return unsafe { abs(-7) };
 }
 """,
@@ -225,7 +225,7 @@ class TestFFINegative:
 		"""String is not FFI-safe."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn bad(s: String) nothrow -> Int;\nfn main() nothrow -> Int { return 0; }\n',
+			source='extern "C" fn bad(s: String) nothrow -> Int;\npub fn main() nothrow -> Int { return 0; }\n',
 			expect_fail=True,
 		)
 		assert res.returncode != 0
@@ -235,7 +235,7 @@ class TestFFINegative:
 		"""Extern C functions cannot throw."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn bad(x: Int) throws -> Int;\nfn main() nothrow -> Int { return 0; }\n',
+			source='extern "C" fn bad(x: Int) throws -> Int;\npub fn main() nothrow -> Int { return 0; }\n',
 			expect_fail=True,
 		)
 		assert res.returncode != 0
@@ -244,7 +244,7 @@ class TestFFINegative:
 		"""Extern C functions must declare nothrow."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn bad(x: Int) -> Int;\nfn main() nothrow -> Int { return 0; }\n',
+			source='extern "C" fn bad(x: Int) -> Int;\npub fn main() nothrow -> Int { return 0; }\n',
 			expect_fail=True,
 		)
 		assert res.returncode != 0
@@ -253,7 +253,7 @@ class TestFFINegative:
 		"""Calling extern C without unsafe block is rejected."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn abs(x: Int) nothrow -> Int;\nfn main() nothrow -> Int { return abs(-1); }\n',
+			source='extern "C" fn abs(x: Int) nothrow -> Int;\npub fn main() nothrow -> Int { return abs(-1); }\n',
 			expect_fail=True,
 			allow_unsafe=False,
 		)
@@ -264,7 +264,7 @@ class TestFFINegative:
 		"""Void is not valid as a parameter type."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn bad(x: Void) nothrow -> Int;\nfn main() nothrow -> Int { return 0; }\n',
+			source='extern "C" fn bad(x: Void) nothrow -> Int;\npub fn main() nothrow -> Int { return 0; }\n',
 			expect_fail=True,
 		)
 		assert res.returncode != 0
@@ -275,7 +275,7 @@ class TestFFINegative:
 		"""Extern C call inside unsafe block without --allow-unsafe gives one clear diagnostic."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "C" fn abs(x: Int) nothrow -> Int;\nfn main() nothrow -> Int { return unsafe { abs(-1) }; }\n',
+			source='extern "C" fn abs(x: Int) nothrow -> Int;\npub fn main() nothrow -> Int { return unsafe { abs(-1) }; }\n',
 			expect_fail=True,
 			allow_unsafe=False,
 		)
@@ -288,7 +288,7 @@ class TestFFINegative:
 		"""Only ABI "C" is accepted."""
 		BUILD_ROOT.mkdir(parents=True, exist_ok=True)
 		res = _driftc(
-			source='extern "Java" fn bad() nothrow -> Int;\nfn main() nothrow -> Int { return 0; }\n',
+			source='extern "Java" fn bad() nothrow -> Int;\npub fn main() nothrow -> Int { return 0; }\n',
 			expect_fail=True,
 		)
 		assert res.returncode != 0

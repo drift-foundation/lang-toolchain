@@ -158,7 +158,7 @@ module main;
 import m;
 use trait m.Hashable;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: m.Box<String> = m.Box<type String>("s");
 	return b.hash();
 }

@@ -60,7 +60,7 @@ fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     try {
         ok();
         return 0;
@@ -94,7 +94,7 @@ fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
     try {
         ok();
         return 0;
@@ -124,7 +124,7 @@ fn ok() -> core.Result<Int, MyErr> {
     return core.Result::Ok(1);
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
     try {
         ok();
         return 0;

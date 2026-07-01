@@ -117,7 +117,7 @@ fn fail() -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -141,7 +141,7 @@ fn quiet() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return quiet();
 }
 """
@@ -174,7 +174,7 @@ fn fail() throws -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try fail() catch { 1 };
 }
 """
@@ -204,7 +204,7 @@ fn fail() throws {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -237,7 +237,7 @@ pub fn fail() throws {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -270,7 +270,7 @@ implement Foo {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -304,7 +304,7 @@ implement Foo {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try Foo(v = 1).bust() catch { 1 };
 }
 """
@@ -330,7 +330,7 @@ pub trait Boomable {
 	fn boom(self: &Self) throws;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -363,7 +363,7 @@ pub trait Boomable {
 	fn boom(self: &Self) throws -> Int;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -398,7 +398,7 @@ pub interface Boomer {
 	fn boom(self: &Self) throws;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -443,7 +443,7 @@ pub interface Boomer {
 	fn boom(self: &Self) throws -> Int;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -485,7 +485,7 @@ fn fail() nothrow throws {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -504,7 +504,7 @@ fn fail() nothrow throws -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -526,7 +526,7 @@ module m;
 
 @intrinsic fn boom() throws;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -549,7 +549,7 @@ module m;
 
 extern "C" fn raise_signal() throws;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """

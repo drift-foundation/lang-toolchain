@@ -73,7 +73,7 @@ fn do_work() throws -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try do_work() catch { 99 };
 }
 """,
@@ -115,7 +115,7 @@ fn do_work() throws -> Int {
 	return take_int(r);           // passes Int to a fn expecting Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try do_work() catch { 99 };
 }
 """
@@ -154,7 +154,7 @@ fn do_work() throws -> Int {
 	return (move r).or_throw();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try do_work() catch { 99 };
 }
 """
@@ -188,7 +188,7 @@ fn do_work() throws -> Int {
 	return x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try do_work() catch { 99 };
 }
 """
@@ -219,7 +219,7 @@ fn fallible() -> core.Result<Int, MyErr> {
 	return core.Result::Ok(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var out = 0;
 	try {
 		fallible();      // discarded Result auto-propagates via or_throw
@@ -258,7 +258,7 @@ pub error MyErr {
 	code: Int,
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r: core.Result<Int, MyErr> = core.Result::Ok(42);
 	val v = r.or_throw();
 	return v;
@@ -287,7 +287,7 @@ module main;
 import std.core as core;
 import std.err as err;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r: core.Result<Int, err.IndexError> = core.Result::Ok(0);
 	val _v = r.or_throw();
 	return 0;
@@ -313,7 +313,7 @@ module main;
 
 import std.core as core;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r: core.Result<Int, Int> = core.Result::Ok(1);
 	val v = r.into_try();
 	return v;
@@ -350,7 +350,7 @@ pub error MyErr {
 	code: Int,
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = (&r).or_throw();
 	return v;
@@ -401,7 +401,7 @@ pub variant MyErr {
 		}
 	}
 
-	fn main() -> Int {
+	pub fn main() -> Int {
 	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = r.or_throw();
 	return v;

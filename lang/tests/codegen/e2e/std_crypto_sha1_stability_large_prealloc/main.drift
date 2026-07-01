@@ -16,7 +16,7 @@ fn _eq_bytes(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var payload = Array<type Byte>::with_capacity(200000);
 	var i = 0;
 	while i < 200000 {

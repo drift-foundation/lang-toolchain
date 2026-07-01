@@ -2,7 +2,7 @@ module main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var count = core.cell(0);
 	var count2 = 0;
 	(| | captures(&count) => {

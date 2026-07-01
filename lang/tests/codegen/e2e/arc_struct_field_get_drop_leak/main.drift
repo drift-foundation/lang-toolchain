@@ -93,7 +93,7 @@ fn scenario_struct_get() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = scenario_no_get();
 	if a != 0 { return a; }
 	val b = scenario_bare_arc();

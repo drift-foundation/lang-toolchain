@@ -97,7 +97,7 @@ fn _merge_into(target: &mut json.JsonObject, source: json.JsonObject) nothrow ->
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var obj = json.new_object();
 	val handler_obj = json.new_object();
 	_merge_into(&mut obj, handler_obj);
@@ -133,7 +133,7 @@ fn maybe_object() nothrow -> Optional<json.JsonObject> {
 	return Optional<json.JsonObject>::Some(json.new_object());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var obj = json.new_object();
 	match maybe_object() {
 		Some(handler_obj) => {
@@ -172,7 +172,7 @@ fn _merge_into(target: &mut json.JsonObject, source: json.JsonObject) nothrow ->
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var obj = json.new_object();
 	val handler_obj = json.new_object();
 	_merge_into(&mut obj, move handler_obj);

@@ -14,7 +14,7 @@ fn build_and_drop_pending() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if build_and_drop_pending() != 0 { return 10; }
 	return 0;
 }

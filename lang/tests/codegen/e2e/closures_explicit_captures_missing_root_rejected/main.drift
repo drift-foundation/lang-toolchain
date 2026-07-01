@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x = 1;
 	val y = 2;
 	return (| | captures(copy x) => { return y; })();

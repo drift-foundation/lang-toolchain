@@ -169,7 +169,7 @@ fn session_state(session: &WireSession) nothrow -> WireSessionState {
 	return session.state;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match connect() {
 		core.Result::Err(_) => { return 10; },
 		core.Result::Ok(v) => {

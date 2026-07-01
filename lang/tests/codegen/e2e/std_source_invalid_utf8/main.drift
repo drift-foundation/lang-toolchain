@@ -6,7 +6,7 @@ import std.core as core;
 // Eager UTF-8 validation rejects malformed input at the exact offending
 // byte, with a zero-width span carrying line/column up to that point.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// "a\n" then 0xE2 0x28 0x62 — 0xE2 starts a 3-byte sequence whose
 	// first continuation (offset 3, '(' = 0x28) is invalid. Trailing
 	// 'b' (offset 4) keeps the sequence in-range so the continuation

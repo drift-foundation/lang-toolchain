@@ -19,7 +19,7 @@ struct Box {
 	x: String
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = Box(x = "1");
 	var b = Box(x = "2");
 	val _ = mem.replace<type Box>(&mut a, b);

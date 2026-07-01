@@ -11,7 +11,7 @@ fn classify(x: Int) nothrow -> Int {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if classify(200) != 4 { return 1; }
 	if classify(50) != 3 { return 2; }
 	if classify(5) != 2 { return 3; }

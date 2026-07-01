@@ -34,7 +34,7 @@ fn throw_two_heap() -> Int {
 	throw Info(s1, s2);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// One heap field, one literal — exercises the mixed retain path.
 	val r1 = try throw_one_heap("static-detail") catch { 1 };
 	if r1 != 1 { return 1; }

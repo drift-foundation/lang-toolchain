@@ -38,7 +38,7 @@ variant Maybe<T> {
 	None
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Maybe<String>> = [];
 	val _ = xs.pop();
 	return 0;

@@ -79,7 +79,7 @@ fn outer(app: Int) nothrow -> Int {
 \t\t}
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"compile failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"
@@ -100,7 +100,7 @@ fn outer() nothrow -> Int {
 \t\treturn 0;
 \t}
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"non-lambda control failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"
@@ -123,7 +123,7 @@ fn outer(app: Int, other: Int) nothrow -> Int {
 \t\t}
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, "outer 'other' (not in captures) inside catch arm should still error"
 	assert any("captures" in m.lower() for m in errs), (
@@ -149,7 +149,7 @@ fn outer(app: Int) nothrow -> Int {
 \t\t}
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"nested-lambda catch-binder shape failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"

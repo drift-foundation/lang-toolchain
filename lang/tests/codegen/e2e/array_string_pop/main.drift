@@ -2,7 +2,7 @@ module m;
 
 import std.console as console;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var xs = ["a", "b"];
 	val popped = xs.pop();
 	val _ = match popped {

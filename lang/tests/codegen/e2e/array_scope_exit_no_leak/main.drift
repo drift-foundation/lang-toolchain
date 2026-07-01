@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var xs: Array<Int> = [];
     xs.push(1);
     xs.push(2);

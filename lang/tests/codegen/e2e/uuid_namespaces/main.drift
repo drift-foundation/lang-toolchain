@@ -13,7 +13,7 @@ fn _check(actual: &uuid.Uuid, expected: &String, code: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Nil UUID — RFC 4122 §4.1.7.
 	val n = uuid.nil();
 	val nil_expected: String = "00000000-0000-0000-0000-000000000000";

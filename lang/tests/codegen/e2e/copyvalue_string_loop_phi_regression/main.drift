@@ -9,7 +9,7 @@ fn next_value(i: Int) nothrow -> core.Result<String, Int> {
         return core.Result::Err(0);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
         var i = 0;
         var last = "";
         while i < 3 {

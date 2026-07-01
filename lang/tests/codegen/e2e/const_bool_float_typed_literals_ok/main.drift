@@ -3,7 +3,7 @@ module main;
 const TB: Bool = true;
 const TF: Float = 1.25;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if not TB {
 		return 1;
 	}

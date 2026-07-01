@@ -12,7 +12,7 @@ implement iter.RandomAccessPermutable<Int> for Range {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var r = Range(data = [1, 2, 3]);
 	iter.RandomAccessPermutable::swap(&mut r, 0, 2);
 	iter.RandomAccessPermutable::swap(&mut r, 0, 2);

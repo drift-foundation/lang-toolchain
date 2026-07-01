@@ -52,7 +52,7 @@ implement core.Destructible for Statement {
 	}
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """,
 	)
 	assert any(
@@ -80,7 +80,7 @@ struct BadCopy { v: Array<Int> }
 implement core.Copy for BadCopy {
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """,
 	)
 	assert any(
@@ -104,7 +104,7 @@ struct Pair {
 implement core.Copy for Pair {
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """,
 	)
 	assert diagnostics == [], diagnostics

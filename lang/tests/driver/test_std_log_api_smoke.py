@@ -38,7 +38,7 @@ module main;
 import std.log as log;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cfg_builder = log.config_builder();
 	cfg_builder.min_level(log.Level::Debug());
 	cfg_builder.queue_capacity(2048);
@@ -79,7 +79,7 @@ module main;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val lg = log.create_logger("main", b.build());
 	lg.info("auth-failed", {"attempts": 3, "status": 401});
@@ -113,7 +113,7 @@ implement log.Debuggable for User {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val lg = log.create_logger("main", b.build());
 	lg.info("user-created", {"user": User(id = 7)});

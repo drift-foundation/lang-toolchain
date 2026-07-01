@@ -5,7 +5,7 @@ variant Maybe<T> {
 	None,
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 val x = Maybe::Some<type Int>(2);
 	val y = match x{
 	Some(v) => { v },

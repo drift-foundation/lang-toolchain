@@ -16,7 +16,7 @@ implement Bag {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Bag(v = 0);
 	val x = b.tag("x");
 	return x;

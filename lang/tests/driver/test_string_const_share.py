@@ -80,7 +80,7 @@ def test_string_proves_const_share(tmp_path, capsys):
 	flipped from strict-xfail to live when the direct impl
 	landed."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type String>();
 \treturn 0;
 }
@@ -93,7 +93,7 @@ def test_string_proves_frozen(tmp_path, capsys):
 	included alongside the ConstShare probe so a regression on
 	either is easy to localize)."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type String>();
 \treturn 0;
 }
@@ -109,7 +109,7 @@ def test_string_implicit_duplication_let_binding(tmp_path, capsys):
 	independently-usable values — pins the implicit-duplication
 	contract for String at value-flow sites."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a: String = "hello";
 \tval b = a;
 \tval la: Int = a.byte_length();
@@ -129,7 +129,7 @@ fn use_str(s: String) nothrow -> Int {
 \treturn s.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a: String = "world";
 \tval n1 = use_str(a);
 \tval n2 = use_str(a);
@@ -151,7 +151,7 @@ struct Carrier {
 \tname: String,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Carrier>();
 \treturn 0;
 }
@@ -168,7 +168,7 @@ struct Carrier {
 \tname: String,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a: Carrier = Carrier(name = "Alice");
 \tval b = a;
 \tval la: Int = a.name.byte_length();

@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 41;
 	val p = &mut x;
 	val q = &mut *p;

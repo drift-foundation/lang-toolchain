@@ -47,7 +47,7 @@ module main;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var buf = mem.alloc_uninit<type Int>(4);
 	mem.dealloc<type Int>(buf);
 	return 0;

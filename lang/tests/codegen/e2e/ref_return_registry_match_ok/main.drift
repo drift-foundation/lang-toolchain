@@ -17,7 +17,7 @@ fn get_v(reg: &rt.GlobalRegistry) nothrow -> Optional<&Int> {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val reg = rt.global_registry();
 	var s = State(v = 7);
 	val ok = reg.set<type State>(move s);

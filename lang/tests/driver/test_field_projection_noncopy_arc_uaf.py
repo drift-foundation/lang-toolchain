@@ -98,7 +98,7 @@ fn dispatch_direct(h: &Holder) nothrow -> Int {
 	return h.arc.get().v();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val original = conc.arc(S(n = 7)).as_interface<type I>();
 	val h = Holder(arc = move original);
 	val cloned = clone_direct(&h);

@@ -1658,7 +1658,7 @@ def _run_baseline_smoke_package(
 		f'\n'
 		f'import {art.module_namespace};\n'
 		f'\n'
-		f'fn main() nothrow -> Int {{\n'
+		f'pub fn main() nothrow -> Int {{\n'
 		f'\treturn 0;\n'
 		f'}}\n',
 		encoding="utf-8",

@@ -42,7 +42,7 @@ def test_arith_mismatch_int_byte_reports_diag(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = cast<Byte>(2);
 	val _ = 1 + b;
 	return 0;

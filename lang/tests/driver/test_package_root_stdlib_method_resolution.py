@@ -61,7 +61,7 @@ module main;
 
 import std.containers as containers;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var d = containers.deque<type Int>();
 	d.push_back(1);
 	val _ = d.len();

@@ -38,7 +38,7 @@ fn make_token(sess: &mut Session) nothrow -> Token {
 	return Token(session = sess);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
 		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));

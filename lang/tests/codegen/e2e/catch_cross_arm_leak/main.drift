@@ -6,7 +6,7 @@ fn fail() -> Int {
 	throw EvA();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var result = 0;
 	try fail() catch EvA {
 		val arm1_val = 10;

@@ -124,7 +124,7 @@ fn _peek_depth() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val reg = rt.thread_registry();
 	if not reg.set<type RequestContextState>(request_context_state()) {
 		return 10;

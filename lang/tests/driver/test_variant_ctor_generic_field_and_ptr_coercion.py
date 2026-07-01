@@ -77,7 +77,7 @@ def test_generic_struct_field_matches_concrete_arg(tmp_path: Path) -> None:
 	let it through)."""
 	src = _PAIR_PRELUDE + """\
 fn mk(p: Pair<Int, String>) -> Holder { return Holder::Has(move p); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	res = _compile(tmp_path, src)
 	assert res.returncode == 0, f"generic struct field should compile:\n{res.stderr[-800:]}"
@@ -90,7 +90,7 @@ def test_generic_struct_field_rejects_mismatched_concrete_arg(tmp_path: Path) ->
 	match anything)."""
 	src = _PAIR_PRELUDE + """\
 fn mk(p: Pair<Int, Bool>) -> Holder { return Holder::Has(move p); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	codes = _error_codes(tmp_path, src)
 	assert "E_VARIANT_CTOR_ARG_TYPE" in codes, codes
@@ -114,7 +114,7 @@ struct S { x: Int }
 fn wrap(r: &S) nothrow -> Optional<&S> {
 	unsafe { val p = mem.ptr_from_ref<type S>(r); return Optional<&S>::Some(p); }
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = S(x = 7);
 	val o = wrap(&v);
 	var r = 1;
@@ -137,7 +137,7 @@ import std.mem as mem;
 struct S { x: Int }
 variant H { Has(r: &S), Nil }
 fn mk(p: mem.Ptr<S>) -> H { return H::Has(p); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	codes = _error_codes(tmp_path, src, allow_unsafe=True)
 	assert "E_VARIANT_CTOR_ARG_TYPE" in codes, codes
@@ -151,7 +151,7 @@ module main;
 import std.mem as mem;
 variant H { Has(r: &String), Nil }
 fn mk(h: Uint) nothrow -> H { unsafe { val p = cast<mem.Ptr<Int> >(h); return H::Has(p); } }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	codes = _error_codes(tmp_path, src, allow_unsafe=True)
 	assert "E_VARIANT_CTOR_ARG_TYPE" in codes, codes
@@ -163,7 +163,7 @@ def test_ref_to_ref_pointee_mismatch_rejected(tmp_path: Path) -> None:
 module main;
 variant H { Has(r: &String), Nil }
 fn mk(i: &Int) -> H { return H::Has(i); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	codes = _error_codes(tmp_path, src)
 	assert "E_VARIANT_CTOR_ARG_TYPE" in codes, codes
@@ -177,7 +177,7 @@ module main;
 struct S { x: Int }
 variant H { Has(r: &mut S), Nil }
 fn mk(s: &S) -> H { return H::Has(s); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	codes = _error_codes(tmp_path, src)
 	assert "E_VARIANT_CTOR_ARG_TYPE" in codes, codes

@@ -2,7 +2,7 @@ module main;
 
 const X: Int = 100;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	const X: Int = 7;
 	return X;
 }

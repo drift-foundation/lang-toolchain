@@ -69,7 +69,7 @@ def test_arc_via_std_core_construct_clone_get(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, """
 module main;
 import std.core as core;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = core.arc<type Int>(42);
 \tvar b = a.clone();
 \tval v: Int = *a.get();
@@ -87,7 +87,7 @@ def test_arc_via_std_core_with_string(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, """
 module main;
 import std.core as core;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = core.arc<type String>("hello");
 \tvar b = a.clone();
 \tval r = a.get();
@@ -110,7 +110,7 @@ def test_arc_via_std_concurrent_compat(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, """
 module main;
 import std.concurrent as conc;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = conc.arc<type Int>(42);
 \tvar b = a.clone();
 \tval v: Int = *a.get();
@@ -131,7 +131,7 @@ def test_arc_old_and_new_spelling_share_type_identity(tmp_path, capsys):
 module main;
 import std.core as core;
 import std.concurrent as conc;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval new_form: core.Arc<Int> = core.arc<type Int>(1);
 \tval old_form: conc.Arc<Int> = conc.arc<type Int>(2);
 \tval cross_a: conc.Arc<Int> = core.arc<type Int>(3);
@@ -155,7 +155,7 @@ def test_log_resolver_uses_arc(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, """
 module main;
 import std.log as log;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval cfg = log.config_builder();
 \treturn 0;
 }

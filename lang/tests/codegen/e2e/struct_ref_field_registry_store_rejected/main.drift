@@ -5,7 +5,7 @@ import std.runtime as rt;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val reg = rt.global_registry();

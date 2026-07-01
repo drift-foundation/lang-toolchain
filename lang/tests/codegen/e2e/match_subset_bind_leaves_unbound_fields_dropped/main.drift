@@ -74,7 +74,7 @@ fn case_named_subset_bind() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = case_named_subset_bind();
 	if a != 0 { return 100 + a; }
 	return 0;

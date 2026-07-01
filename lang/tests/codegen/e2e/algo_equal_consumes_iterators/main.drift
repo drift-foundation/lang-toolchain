@@ -64,7 +64,7 @@ fn run() -> Int {
 	return score;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val score = try run() catch { 0 };
 	return score;
 }

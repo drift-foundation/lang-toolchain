@@ -2,7 +2,7 @@ module m;
 
 import lang.atomic as atomic;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	atomic.thread_fence(atomic.MemoryOrder::AcqRel());
 	atomic.signal_fence(atomic.MemoryOrder::Acquire());
 	return 0;

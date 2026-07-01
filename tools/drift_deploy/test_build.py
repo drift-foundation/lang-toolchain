@@ -3090,7 +3090,7 @@ pub fn add(a: Int, b: Int) nothrow -> Int {
 """
 
 _APP_SRC = """\
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 42;
 }
 """

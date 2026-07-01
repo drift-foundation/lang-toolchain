@@ -72,7 +72,7 @@ fn wtok(k: WKind) nothrow -> parse.Token<WKind> {{
 	return parse.Token<type WKind>(kind = {expr}, span = span0());
 }}
 
-fn main() nothrow -> Int {{ val t = wtok({make}); return 0; }}
+pub fn main() nothrow -> Int {{ val t = wtok({make}); return 0; }}
 """.lstrip()
 
 _CORE = "import std.core as core;\n"

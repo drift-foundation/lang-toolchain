@@ -329,7 +329,7 @@ module main;
 
 fn id<T>(var x: T) nothrow -> T { return move x; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return id<type Int>(1);
 }
 """.lstrip(),
@@ -366,7 +366,7 @@ module main;
 
 import acme.gen as gen;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try gen.id<type Int>(1) catch { 0 };
 }
 """.lstrip(),
@@ -406,7 +406,7 @@ import acme.req as req;
 
 struct Bad { value: Int }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	try {
 		req.id<type Bad>(Bad(1));
 		return 0;
@@ -544,7 +544,7 @@ module main;
 import acme.a as a;
 import acme.b as b;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return try (a.a() + b.b()) catch { 0 };
 }
 """.lstrip(),

@@ -50,7 +50,7 @@ fn checked(x: Int) -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Heap-string exception UAF
 	val r1 = try throw_heap_string() catch { 99 };
 	if r1 != 99 { return 1; }

@@ -26,7 +26,7 @@ def test_match_ref_variant_binder_deref_infers_payload_types(tmp_path: Path) -> 
 			}
 		}
 
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			val a = Arg::Int(7);
 			val s = enc(&a);
 			if s == "i" { return 0; }
@@ -70,7 +70,7 @@ def test_match_value_variant_binder_deref_reports_user_error_not_internal(tmp_pa
 			}
 		}
 
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			val a = Arg::Int(7);
 			return enc(a);
 		}

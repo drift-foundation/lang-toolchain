@@ -8,7 +8,7 @@ fn fail() -> Int {
 	throw A();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     try fail() catch A(e) {
         console.print("a");
     } catch {

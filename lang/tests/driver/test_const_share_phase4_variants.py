@@ -64,7 +64,7 @@ pub variant Color {
 \tBlue
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Color>();
 \tval c = Color::Red();
 \tval c2 = c.const_share();
@@ -85,7 +85,7 @@ pub variant Tagged {
 \tPair(a: Int, b: Int)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Tagged>();
 \tval t = Tagged::Pair(1, 2);
 \tval t2 = t.const_share();
@@ -107,7 +107,7 @@ pub variant Carrier {
 \tWrap(handle: core.ConstArc<String>)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Carrier>();
 \tval inner = core.const_arc<type String>("hi");
 \tval c = Carrier::Wrap(inner);
@@ -133,7 +133,7 @@ pub variant Multi {
 \tPair(a: Int, b: Int)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Multi>();
 \tval m1 = Multi::Empty();
 \tval m1_2 = m1.const_share();
@@ -179,7 +179,7 @@ pub variant V {
 \tB(handle: core.Arc<String>)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type V>();
 \treturn 0;
 }
@@ -195,7 +195,7 @@ pub variant V {
 \tB(items: Array<Int>)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type V>();
 \treturn 0;
 }
@@ -212,7 +212,7 @@ pub variant V {
 \tB(r: &Int)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type V>();
 \treturn 0;
 }

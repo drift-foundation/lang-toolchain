@@ -12,7 +12,7 @@ implement Config {
     }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var protos: Array<String> = [];
     protos.push("alpha");
     protos.push("beta");

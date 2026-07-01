@@ -2,7 +2,7 @@ module m;
 
 import std.core as core;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val s = "abc";
     val n = s.byte_length();
     if n == 3 {

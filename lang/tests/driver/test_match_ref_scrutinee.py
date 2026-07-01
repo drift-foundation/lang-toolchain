@@ -16,7 +16,7 @@ def test_match_ref_scrutinee_ok(tmp_path: Path, capsys) -> None:
 	source = """
 module m_main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val o = Optional::Some(1);
 	val r = match &o {
 		Some(v) => { *v },

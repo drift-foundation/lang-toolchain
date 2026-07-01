@@ -15,7 +15,7 @@ fn _string_bytes(s: &String) nothrow -> Array<Byte> {
 	return move b;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Pinned vector from the bookkeeper/singular ask:
 	//   v3_from_bytes("bookkeeper-test-01".utf8) == 0655ee6e-92dd-3c59-af2d-b002138e7409
 	// (java.util.UUID.nameUUIDFromBytes compat — MD5 raw input bytes,

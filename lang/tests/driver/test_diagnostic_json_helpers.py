@@ -80,7 +80,7 @@ def test_all_six_helpers_callable(tmp_path, capsys):
 	"""All six `diagnostic_json_*` helpers exist in std.core with
 	the documented signatures and return `String`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval s1: String = "x";
 \tval _a: String = core.diagnostic_json_string(&s1);
 \tval _b: String = core.diagnostic_json_null();
@@ -103,7 +103,7 @@ def test_string_helper_accepts_edge_inputs(tmp_path, capsys):
 	empty / quote / backslash / control whitespace (newline, CR,
 	tab, backspace, formfeed) / ordinary UTF-8."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval empty: String = "";
 \tval quote: String = "\\"";
 \tval bs: String = "\\\\";
@@ -137,7 +137,7 @@ def test_number_helpers_accept_finite_values(tmp_path, capsys):
 	applicable), and a normal finite Float (1.5).  NaN/Inf are
 	explicitly OUT OF SCOPE — see file docstring."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval _a: String = core.diagnostic_json_int(0);
 \tval _b: String = core.diagnostic_json_int(-1);
 \tval _c: String = core.diagnostic_json_int(2147483647);

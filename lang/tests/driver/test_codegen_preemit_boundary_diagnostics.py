@@ -16,7 +16,7 @@ def test_codegen_preemit_contract_failure_is_diagnostic_not_assert(tmp_path: Pat
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """

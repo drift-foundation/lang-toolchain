@@ -39,7 +39,7 @@ module m;
 
 fn f(x: &mut Int) nothrow -> Int { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return f(1 + 2);
 }
 """,
@@ -66,7 +66,7 @@ implement S {
 
 fn mk() nothrow -> S { return S(v = 1); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return mk().bump();
 }
 """,

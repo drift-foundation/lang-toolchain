@@ -32,7 +32,7 @@ fn _append_byte(b: &mut Array<Byte>, v: Int) nothrow -> Void {
 	b.push(cast<Byte>(v));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val input = _make_input();
 	val valid = codec.gzip_encode(&input);
 

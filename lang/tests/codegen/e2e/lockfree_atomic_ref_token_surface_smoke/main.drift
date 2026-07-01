@@ -6,7 +6,7 @@ struct Node {
 	v: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var ar = sync.atomic_ref<type Node>(sync.null_ref_token<type Node>());
 	val t0 = ar.load(sync.MemoryOrder::Acquire());
 	if not t0.is_null() { return 1; }

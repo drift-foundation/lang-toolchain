@@ -113,7 +113,7 @@ fn register2(slot: &mut Array<core.Callback2<Req, Req, Int>>,
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback2<Req, Req, Int>> = [];
     register2(&mut slot, |a, b| => {
         return a.n + b.n;
@@ -139,7 +139,7 @@ fn register3(slot: &mut Array<core.Callback3<Req, Req, Req, Int>>,
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Req, Req, Int>> = [];
     register3(&mut slot, |a, b, c| => {
         return a.n + b.n + c.n;
@@ -169,7 +169,7 @@ fn register_mw(slot: &mut Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
     register_mw(&mut slot, |a, b, next| => {
         val inner = next.call(a, b);
@@ -199,7 +199,7 @@ fn register_mw_ref(slot: &mut Array<core.Callback3<&Req, &mut Ctx, core.Callback
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<&Req, &mut Ctx, core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
     register_mw_ref(&mut slot, |req, ctx, next| => {
         val inner = next.call(req, ctx);
@@ -323,7 +323,7 @@ module app;
 
 import mw;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var a = mw.new_app();
     mw.add_middleware(&mut a, |req, ctx, next| => {
         val inner = next.call(req, ctx);
@@ -394,7 +394,7 @@ fn register_mw(slot: &mut Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
     // `maybe_resp(req.n)` returns `Result<Resp, AppErr>`; binding via
     // `val r = ...` (no annotation) triggers eager auto-unwrap which
@@ -451,7 +451,7 @@ fn register_mw(slot: &mut Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
     val bias = 7;
     register_mw(&mut slot, |req, ctx, next| captures(copy bias) => {

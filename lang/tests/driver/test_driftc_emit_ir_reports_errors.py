@@ -28,7 +28,7 @@ def test_emit_ir_reports_errors(tmp_path: Path, capsys: pytest.CaptureFixture[st
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return "bad";
 }
 """.lstrip(),

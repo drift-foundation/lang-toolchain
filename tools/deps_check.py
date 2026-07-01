@@ -85,7 +85,7 @@ def main() -> int:
 		runtime_cache = tmp_dir / "runtime_cache"
 		runtime_cache.mkdir(parents=True, exist_ok=True)
 		src.write_text(
-			"fn main() nothrow -> Int {\n\tassert(1 == 2, \"deps\");\n\treturn 0;\n}\n"
+			"pub fn main() nothrow -> Int {\n\tassert(1 == 2, \"deps\");\n\treturn 0;\n}\n"
 		)
 		cmd = [
 			sys.executable,

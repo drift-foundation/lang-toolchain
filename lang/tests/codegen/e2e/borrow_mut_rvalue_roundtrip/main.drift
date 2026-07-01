@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = &mut (1 + 2);
 	*p = *p + 1;
 	val v = *p;

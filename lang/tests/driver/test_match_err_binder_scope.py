@@ -18,7 +18,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r: core.Result<Int, Int> = core.Result::Err(7);
 	match r {
 		Ok(v) => { return v; },

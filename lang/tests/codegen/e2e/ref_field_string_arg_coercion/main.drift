@@ -16,7 +16,7 @@ fn take(k: String) nothrow -> Int {
 	return k.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s: String = "abc";
 	val e = ItemRef(key = &s);
 	return take(e.key);

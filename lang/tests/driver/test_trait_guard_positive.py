@@ -84,7 +84,7 @@ fn f<T>(x: T) -> Int {
 	}
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return f<type Int>(1);
 }
 """.lstrip(),

@@ -194,7 +194,7 @@ def _write_consumer_manifest(consumer_dir: Path) -> Path:
 			[
 				"module main;",
 				"import std.core;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"\treturn 0;",
 				"}",
 				"",

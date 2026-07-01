@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// ASCII digits
 	if !text.is_digit(cast<Byte>(48)) { return 1; }   // '0'
 	if !text.is_digit(cast<Byte>(57)) { return 2; }   // '9'

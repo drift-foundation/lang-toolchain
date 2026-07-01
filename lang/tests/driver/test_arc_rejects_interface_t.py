@@ -88,7 +88,7 @@ implement Speaker for Dog {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Construct a concrete Arc<Dog>, then coerce ONCE to Arc<Speaker>.
 	// Downstream code then tries to re-wrap the interface view in
 	// another `conc.arc(...)` — this is the shape Stage 3 rejects.
@@ -108,7 +108,7 @@ pub struct Payload {
 	pub n: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Plain Arc<Concrete> — the common case.  Must keep compiling.
 	val p = conc.arc(Payload(n = 42));
 	return p.get().n - 42;
@@ -125,7 +125,7 @@ pub struct Inner {
 	pub v: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// `Arc<Arc<Inner>>` — Inner is concrete, outer T is
 	// `conc.Arc<Inner>` which is a STRUCT, not an interface.
 	// Must still compile — the rejection is only for T=interface.

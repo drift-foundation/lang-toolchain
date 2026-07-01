@@ -24,7 +24,7 @@ fn clone_from_borrow(s: &String) nothrow -> String {
 	return s.clone();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val original = "hello world";
 
 	// Clone from borrow produces equal string

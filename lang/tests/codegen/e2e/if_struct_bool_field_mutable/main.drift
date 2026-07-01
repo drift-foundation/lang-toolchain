@@ -29,7 +29,7 @@ fn check_ref_field(p: &Parsed) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// val-from-mut: true path
 	val t1 = Parsed(value = 1, flag = true);
 	if check_val_from_mut(move t1) != 1 { return 1; }

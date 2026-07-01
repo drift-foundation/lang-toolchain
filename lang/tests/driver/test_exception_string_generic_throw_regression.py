@@ -44,7 +44,7 @@ fn run() -> Int {
 	return try fail<type Int>("x") catch E(_e) { 0 };
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 1 };
 }
 """.lstrip(),
@@ -82,7 +82,7 @@ fn run() -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 2 };
 }
 """.lstrip(),

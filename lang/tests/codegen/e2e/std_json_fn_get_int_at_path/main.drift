@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.json as json;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val text = "{\"cfg\":{\"count\":42,\"name\":\"x\",\"ratio\":1.5}}";
 
 	match json.parse(&text) {

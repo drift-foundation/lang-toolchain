@@ -75,7 +75,7 @@ import std.console as console;
 import std.format as fmt;
 struct Value { s: String }
 struct Field { value: Value }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var fields: Array<Field> = [];
 	var r = 0;
 	while r < 2 { fields.push(Field(value = Value(s = "p" + fmt.format_int(r)))); r = r + 1; }
@@ -95,7 +95,7 @@ module m;
 import std.console as console;
 import std.format as fmt;
 struct Flat { s: String }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var fs: Array<Flat> = [];
 	var r = 0;
 	while r < 2 { fs.push(Flat(s = "p" + fmt.format_int(r))); r = r + 1; }
@@ -117,7 +117,7 @@ import std.format as fmt;
 struct Inner { s: String }
 struct Mid { inner: Inner }
 struct Outer { mid: Mid }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Outer> = [];
 	var r = 0;
 	while r < 2 { xs.push(Outer(mid = Mid(inner = Inner(s = "p" + fmt.format_int(r))))); r = r + 1; }
@@ -137,7 +137,7 @@ module m;
 import std.console as console;
 struct Value { s: String }
 struct Field { value: Value }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f0 = Field(value = Value(s = "p0"));
 	val f1 = Field(value = Value(s = "p1"));
 	var pass = 0;
@@ -157,7 +157,7 @@ import std.console as console;
 import std.format as fmt;
 struct Value { s: String }
 struct Field { value: Value }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var fields: Array<Field> = [];
 	var r = 0;
 	while r < 2 { fields.push(Field(value = Value(s = "p" + fmt.format_int(r)))); r = r + 1; }
@@ -177,7 +177,7 @@ module m;
 import std.console as console;
 struct Value { s: String }
 struct Field { value: Value }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var fields: Array<Field> = [];
 	fields.push(Field(value = Value(s = "p0")));
 	fields.push(Field(value = Value(s = "p1")));
@@ -198,7 +198,7 @@ import std.console as console;
 import std.format as fmt;
 struct Value { s: String }
 struct Field { value: Value }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var fields: Array<Field> = [];
 	var r = 0;
 	while r < 2 { fields.push(Field(value = Value(s = "p" + fmt.format_int(r)))); r = r + 1; }

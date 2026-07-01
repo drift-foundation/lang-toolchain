@@ -3,7 +3,7 @@ module main;
 import std.concurrent as conc;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var f = conc.spawn_future(| | => { thread.vt_park_until(10); return 7; });
 	var res = f.join_timeout(conc.Duration(millis = 200));
 	match res {

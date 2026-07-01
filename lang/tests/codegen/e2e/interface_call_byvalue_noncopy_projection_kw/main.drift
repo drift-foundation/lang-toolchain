@@ -20,7 +20,7 @@ implement Take for Impl {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = Impl();
 	var t: Take = x;
 	var w = Wrap(p = Blob(xs = [1]));

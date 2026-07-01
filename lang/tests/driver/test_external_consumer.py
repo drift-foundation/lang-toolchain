@@ -425,7 +425,7 @@ module runner;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(7);
 	return c.value;
 }
@@ -461,7 +461,7 @@ fn get_err() nothrow -> util.Outcome<Int, Int> {
 	return util.Outcome::Err(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o: util.Outcome<Int, Int> = get_ok();
 	return 0;
 }
@@ -496,7 +496,7 @@ fn check(o: util.Outcome<Int, Int>) nothrow -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o: util.Outcome<Int, Int> = util.Outcome::Ok(42);
 	return check(move o);
 }
@@ -525,7 +525,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(42);
 	return c.value;
 }
@@ -553,7 +553,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var c = util.Counter(value = 0);
 	c.increment();
 	c.increment();
@@ -583,7 +583,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c1 = util.Counter(value = 1);
 	val c2 = util.Counter(value = c1.value + 1);
 	return c2.value;
@@ -612,7 +612,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return util.describe_color(util.Color::Blue(99));
 }
 """,
@@ -645,7 +645,7 @@ module runner;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var c = util.Counter(value = 0);
 	c.increment();
 	c.increment();
@@ -852,7 +852,7 @@ module runner;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(5);
 	return c.value;
 }
@@ -976,7 +976,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return util.make_counter(1).value;
 }
 """,
@@ -1012,7 +1012,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -1074,7 +1074,7 @@ module main;
 
 import std.testlib as testlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return testlib.ANSWER;
 }
 """,
@@ -1126,7 +1126,7 @@ module main;
 
 import std.testlib as testlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return testlib.ANSWER;
 }
 """,
@@ -1243,7 +1243,7 @@ module main;
 
 import acme.vis as vis;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w = vis.wrap_and_show(42);
 	return w.get();
 }
@@ -1271,7 +1271,7 @@ module main;
 
 import acme.vis as vis;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w = vis.wrap_and_show(42);
 	return w._private_helper();
 }
@@ -1311,7 +1311,7 @@ module runner;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(7);
 	return c.value;
 }
@@ -1407,7 +1407,7 @@ module main;
 
 import acme.generic as gen;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val w = gen.make_wrapper(42);
 	return gen.try_unwrap(move w);
 }
@@ -1518,7 +1518,7 @@ module main;
 import acme.util as util;
 import acme.other as other;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(other.helper());
 	return c.value;
 }
@@ -1588,7 +1588,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return util.make_counter(0).value;
 }
 """)
@@ -1702,7 +1702,7 @@ module main;
 import acme.local as local;
 import acme.other as other;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return local.local_fn() + other.helper();
 }
 """)
@@ -1770,7 +1770,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return util.make_counter(0).value;
 }
 """)

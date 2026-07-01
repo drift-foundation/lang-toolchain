@@ -8,7 +8,7 @@ fn h(v: Uint) nothrow -> sync.Handle<Node> {
 	return sync.handle<type Node>(v);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var q = sync.mpsc_queue<type Node>(2);
 	match q.pop() {
 		Some(_) => { return 1; },

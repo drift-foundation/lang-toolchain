@@ -58,7 +58,7 @@ fn _expect_ok_round_trip_at_level(level: Int) nothrow -> Bool {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Invalid levels — only -1 and 0..9 are valid.
 	if not _expect_err_invalid_level(-2) {
 		cons.eprintln("FAIL: -2 should be invalid");

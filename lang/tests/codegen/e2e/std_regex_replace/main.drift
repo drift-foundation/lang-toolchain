@@ -47,7 +47,7 @@ fn repeat_string(s: &String, n: Int) nothrow -> String {
 	return out;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// ===================================================================

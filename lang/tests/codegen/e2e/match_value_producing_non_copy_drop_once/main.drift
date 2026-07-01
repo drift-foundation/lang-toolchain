@@ -53,7 +53,7 @@ pub variant UserMsg {
 	Other(n: Int),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
 		val r: UserMsg = UserMsg::Payload(t = make_token(&mut sess));

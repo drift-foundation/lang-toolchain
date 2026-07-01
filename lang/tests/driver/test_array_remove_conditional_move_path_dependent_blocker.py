@@ -79,7 +79,7 @@ fn drain(arr: &mut Array<Holder>) nothrow -> Array<Holder> {
 	return move out;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a: Array<Holder> = [];
 	a.push(Holder(raw = 1));
 	a.push(Holder(raw = 0));

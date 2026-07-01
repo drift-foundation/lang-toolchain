@@ -214,7 +214,7 @@ module m_main;
 
 import m_lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f = m_lib.make();
 	return f.test_inc();
 }

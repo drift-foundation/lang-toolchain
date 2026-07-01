@@ -41,7 +41,7 @@ fn head<T>(xs: Array<T>) nothrow -> T {
 	return xs[0];
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -64,7 +64,7 @@ fn head_nested<T>(xss: Array<Array<T>>) nothrow -> Array<T> {
 	return xss[0];
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,

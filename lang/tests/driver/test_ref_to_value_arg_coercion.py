@@ -67,7 +67,7 @@ fn caller(s_ref: &String) nothrow -> Int {
 	return take_s(s_ref);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s: String = "hello";
 	return caller(&s);
 }
@@ -90,7 +90,7 @@ fn caller(n_ref: &Int) nothrow -> Int {
 	return take_i(n_ref);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val n: Int = 41;
 	return caller(&n);
 }
@@ -115,7 +115,7 @@ fn caller(s_mref: &mut String) nothrow -> Int {
 	return take_s(s_mref);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s: String = "abc";
 	return caller(&mut s);
 }
@@ -142,7 +142,7 @@ fn caller(s_mref: &mut String) nothrow -> Int {
 	return n1 + n2;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s: String = "xy";
 	val total = caller(&mut s);
 	return total + s.byte_length();
@@ -171,7 +171,7 @@ fn caller(s_ref: &String) nothrow -> Int {
 	return take_var(s_ref);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s: String = "original";
 	return caller(&s);
 }
@@ -204,7 +204,7 @@ fn caller(r_ref: &Resource) nothrow -> Int {
 	return take(r_ref);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -250,7 +250,7 @@ module main;
 fn pick(s: &String) nothrow -> Int { return s.byte_length(); }
 fn pick(s: String) nothrow -> Int { return s.byte_length() + 100; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s: String = "hello";
 	return pick(&s);
 }
@@ -300,7 +300,7 @@ implement Box {
 	pub fn pick(self: &Box, s: String) nothrow -> Int { return self.v + s.byte_length() + 100; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(v = 10);
 	val s: String = "hello";
 	return b.pick(&s);

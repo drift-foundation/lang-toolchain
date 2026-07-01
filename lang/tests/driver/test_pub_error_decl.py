@@ -81,7 +81,7 @@ pub error ParseError {
 \toffset: Int,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -96,7 +96,7 @@ def test_pub_error_decl_empty_payload_parses(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error ConnectionLost {}
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -113,7 +113,7 @@ pub error CodecError(0x4543) {
 \tkind: String,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -133,7 +133,7 @@ pub error ParseError {
 \toffset: Int,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval e: ParseError = ParseError(message = "bad", offset = 12);
 \treturn 0;
 }
@@ -154,7 +154,7 @@ pub error ParseError {
 \toffset: Int,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval e: ParseError = ParseError(message = "bad", offset = 12);
 \treturn e.offset;
 }
@@ -179,7 +179,7 @@ fn use_err(e: ParseError) nothrow -> Int {
 \treturn e.offset;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval e: ParseError = ParseError(message = "bad", offset = 12);
 \treturn use_err(e);
 }
@@ -206,7 +206,7 @@ fn try_parse(s: String) nothrow -> core.Result<Int, ParseError> {
 \treturn core.Result::Err(ParseError(message = "bad", offset = 0));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = try_parse("hello");
 \treturn 0;
 }

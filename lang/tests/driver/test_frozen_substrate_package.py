@@ -57,7 +57,7 @@ use trait shareable.Frozen;
 
 fn assert_frozen<T>() nothrow -> Void require T is shareable.Frozen { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type lib.Config>();
 \treturn 0;
 }
@@ -201,7 +201,7 @@ pub struct Evil {
 
 implement shareable.Frozen for Evil { }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 
 

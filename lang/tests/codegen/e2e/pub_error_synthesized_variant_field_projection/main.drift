@@ -49,7 +49,7 @@ fn trigger() throws Alarm -> Int {
 	throw Alarm(severity = Severity::High(), tag = "fire");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return trigger();
 	} catch Alarm(e) {

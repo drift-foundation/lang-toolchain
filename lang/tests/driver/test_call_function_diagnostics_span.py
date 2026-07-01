@@ -39,7 +39,7 @@ module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return f();
 }
 """,
@@ -59,7 +59,7 @@ module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return f(true);
 }
 """,
@@ -85,7 +85,7 @@ implement S {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s = S();
 	return s.f(x = 1);
 }

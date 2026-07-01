@@ -1,5 +1,5 @@
 module main;
 
-fn main() nothrow -> Bool {
+pub fn main() nothrow -> Bool {
 	return true;
 }

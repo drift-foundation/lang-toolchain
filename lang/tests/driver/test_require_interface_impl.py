@@ -79,7 +79,7 @@ fn f<T>(x: T) nothrow -> Int require T is Speaker {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val d = Dog(n = 7);
 	return f<type Dog>(d);
 }
@@ -119,7 +119,7 @@ fn f<T>(x: T) nothrow -> Int require T is Speaker {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = Cat(n = 7);
 	return f<type Cat>(c);
 }
@@ -189,7 +189,7 @@ fn needs_listener<T>(x: T) nothrow -> Int require T is Listener {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val d = Dog(n = 7);
 	return needs_listener<type Dog>(d);
 }
@@ -295,7 +295,7 @@ fn f<T>(x: T) nothrow -> Int require T is iface.Speaker {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val d = Dog(n = 7);
 	return f<type Dog>(d);
 }
@@ -334,7 +334,7 @@ fn f<T>(x: T) nothrow -> Int require T is Carrier {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = Box<type String>(v = "hi");
 	return f<type Box<String>>(s);
 }
@@ -394,7 +394,7 @@ fn f<T>(x: T) nothrow -> Int require T is Carrier {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = Box<type Int>(v = 42);
 	return f<type Box<Int>>(s);
 }
@@ -462,7 +462,7 @@ fn f<T>(x: T) nothrow -> Int require T is Carrier {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = Box<type Int>(v = 42);
 	return f<type Box<Int>>(s);
 }
@@ -530,7 +530,7 @@ fn f<T>(x: T) nothrow -> Int require T is iface.Speaker {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = Cat(n = 7);
 	return f<type Cat>(c);
 }

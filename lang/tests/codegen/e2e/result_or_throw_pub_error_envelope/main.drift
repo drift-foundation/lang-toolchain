@@ -24,7 +24,7 @@ fn risky() throws ParseError -> Int {
 	return (move r).or_throw();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return risky();
 	} catch ParseError(e) {

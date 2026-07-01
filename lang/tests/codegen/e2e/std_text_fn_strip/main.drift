@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = text.strip("##hello##", "#");
 	val e = "hello";
 	if !str_eq(&r, &e) { return 1; }

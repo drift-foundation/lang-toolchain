@@ -6,4 +6,4 @@ pub fn X() -> Int { return 2; }
 
 export { X };
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }

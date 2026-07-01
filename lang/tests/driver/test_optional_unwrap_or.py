@@ -66,7 +66,7 @@ def test_optional_unwrap_or_covers_both_branches(tmp_path: Path) -> None:
 	source = """
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval s: Optional<Int> = Optional::Some(41);
 \tval n: Optional<Int> = Optional::None();
 \treturn s.unwrap_or(1) + n.unwrap_or(1);

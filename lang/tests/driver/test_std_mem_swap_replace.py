@@ -45,7 +45,7 @@ def test_swap_requires_import(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 1;
 	var y: Int = 2;
 	swap(x, y);
@@ -70,7 +70,7 @@ module std.mem.test;
 
 import std.mem as mem;
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		var x: Int = 1;
 		var y: Int = 2;
 		val r = &x;

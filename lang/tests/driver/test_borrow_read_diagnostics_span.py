@@ -45,7 +45,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val _ = consume(move xs);
 	return xs.len;
@@ -65,7 +65,7 @@ def test_use_of_uninitialized_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 0;
 	val _ = move x;
 	return x;
@@ -89,7 +89,7 @@ fn read(r: &Int) nothrow -> Int {
 	return r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 0;
 	val m = &mut x;
 	return read(&x);
@@ -113,7 +113,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val r = &xs;
 	val y = move xs;
@@ -138,7 +138,7 @@ fn consume(xs: Array<Int>) nothrow -> Int {
 	return xs.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	val _ = consume(move xs);
 	val r = &xs;
@@ -159,7 +159,7 @@ def test_cannot_read_while_mutably_borrowed_without_reborrow_reports_span(tmp_pa
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 0;
 	val m = &mut x;
 	return x;

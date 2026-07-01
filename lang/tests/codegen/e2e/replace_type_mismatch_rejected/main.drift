@@ -1,7 +1,7 @@
 module std.mem.test;
 
 import std.mem as mem;
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var a = 1;
 	val old = mem.replace(&mut a, "x");
 	return old;

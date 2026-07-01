@@ -24,7 +24,7 @@ fn _check_md5(s: String, expected_hex: String, code: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// RFC 1321 test vectors
 	val r0 = _check_md5("", "d41d8cd98f00b204e9800998ecf8427e", 1);
 	if r0 != 0 { return r0; }

@@ -32,7 +32,7 @@ def _compile_simple_program(tmp_path: Path, *, enforce_entrypoint: bool = False)
 	"""Compile a trivial main program and return LLVM IR text."""
 	(tmp_path / "app").mkdir(parents=True, exist_ok=True)
 	(tmp_path / "app" / "main.drift").write_text(
-		"module main;\n\nfn main() nothrow -> Int {\n\treturn 0;\n}\n"
+		"module main;\n\npub fn main() nothrow -> Int {\n\treturn 0;\n}\n"
 	)
 	module_packages: dict = {}
 	mk_module(module_packages, "main", "app")
@@ -75,7 +75,7 @@ def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 		"module std.random.test_fill_ir;\n\n"
 		"import std.mem as mem;\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tvar buf = unsafe { thread.array_byte_alloc_uninit(1) };\n"
 		"\tval ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };\n"
 		"\tval rc = unsafe { thread.random_fill(ptr, 1) };\n"
@@ -118,7 +118,7 @@ def test_ir_declares_nodelay_runtime_helpers(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"module std.net.test_nodelay_ir;\n\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval r = thread.net_set_nodelay(3, 1);\n"
 		"\tval g = thread.net_get_nodelay(3);\n"
 		"\treturn r + g;\n"
@@ -161,7 +161,7 @@ def test_ir_declares_reactor_et_helpers(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"module std.net.test_reactor_et_ir;\n\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval p = thread.reactor_check_pending(3, 1);\n"
 		"\tval c = thread.reactor_io_charge(3, 1, 64);\n"
 		"\treturn p + c;\n"
@@ -204,7 +204,7 @@ def test_ir_declares_env_runtime_helpers(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"module std.env.test_env_ir;\n\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval name = \"HOME\";\n"
 		"\tval raw = thread.env_get_raw(name);\n"
 		"\tval h = thread.env_has_raw(\"HOME\");\n"
@@ -248,7 +248,7 @@ def test_ir_declares_microsecond_time_runtime_helpers(tmp_path: Path) -> None:
 	(tmp_path / "main.drift").write_text(
 		"module std.time.test_microsecond_ir;\n\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval mono = thread.now_us();\n"
 		"\tval utc = thread.now_utc_us();\n"
 		"\tif mono < 0 or utc < 0 { return 1; }\n"
@@ -294,7 +294,7 @@ def test_std_time_rejected_on_32_bit_target(tmp_path: Path) -> None:
 	source.write_text(
 		"module main;\n\n"
 		"import std.time as time;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval ts = time.utc_from_unix_micros(123456);\n"
 		"\treturn time.utc_unix_micros(&ts);\n"
 		"}\n"
@@ -336,7 +336,7 @@ def test_direct_microsecond_clock_intrinsic_rejected_on_32_bit_target(tmp_path: 
 	source.write_text(
 		"module main;\n\n"
 		"import lang.thread as thread;\n\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\treturn thread.now_us() + thread.now_utc_us();\n"
 		"}\n"
 	)
@@ -381,7 +381,7 @@ def test_direct_microsecond_clock_intrinsic_rejected_on_32_bit_target(tmp_path: 
 def test_non_time_program_still_compiles_for_32_bit_target(tmp_path: Path) -> None:
 	"""The std.time restriction must not disable unrelated 32-bit compilation."""
 	source = tmp_path / "main.drift"
-	source.write_text("module main;\n\nfn main() nothrow -> Int { return 7; }\n")
+	source.write_text("module main;\n\npub fn main() nothrow -> Int { return 7; }\n")
 	ir_path = tmp_path / "main.ll"
 	res = subprocess.run(
 		[
@@ -769,7 +769,7 @@ fn boom() -> Int {
 \tthrow E(msg = "oops", count = 7);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn boom();
 \t} catch E(e) {

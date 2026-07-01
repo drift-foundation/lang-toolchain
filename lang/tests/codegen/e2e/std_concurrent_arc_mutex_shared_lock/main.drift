@@ -17,7 +17,7 @@ fn bump(handle: &conc.Mutex<Counter>, v: Int) nothrow -> Void {
 	g.get_mut().add(v);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var m = conc.mutex(Counter(n = 30));
 	var a = conc.arc(m);
 	var b = a.clone();

@@ -2,7 +2,7 @@ module main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 42;
 	conc.spawn(| | captures(&x) => { });
 	return 0;

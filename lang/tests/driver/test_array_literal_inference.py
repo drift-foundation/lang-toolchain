@@ -17,7 +17,7 @@ def test_empty_array_literal_requires_type_annotation(tmp_path: Path) -> None:
 	src = """
 module main;
 
-fn main() -> Int {
+pub fn main() -> Int {
     val xs = [];
     return 0;
 }

@@ -111,7 +111,7 @@ pub fn make_pool(v: Int) nothrow -> Pool { return Pool(v = v); }
 _PLAIN_APP = """
 module main;
 import plov as plov;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = plov.make_pool(10);
 	return p.acquire() + p.acquire(plov.Wait::Forever());
 }
@@ -137,7 +137,7 @@ pub fn make_pool(v: Int) nothrow -> Pool { return Pool(v = v); }
 _IFACE_APP = """
 module main;
 import ifov as ifov;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = ifov.make_pool(10);
 	return p.acquire() + p.acquire(ifov.Wait::Forever());
 }

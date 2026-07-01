@@ -2,7 +2,7 @@ module m;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var b = conc.executor_policy_builder();
 	b.min_threads(1)
 		.max_threads(2)

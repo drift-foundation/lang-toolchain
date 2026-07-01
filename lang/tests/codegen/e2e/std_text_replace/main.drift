@@ -15,7 +15,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// ── replace ─────────────────────────────────────────────────
 	val r1 = text.replace("hello world", "world", "there");
 	val e1 = "hello there";

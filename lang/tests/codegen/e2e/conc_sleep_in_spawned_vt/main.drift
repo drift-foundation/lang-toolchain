@@ -25,7 +25,7 @@ fn _seq_cst() nothrow -> sync.MemoryOrder {
 	return sync.MemoryOrder::SeqCst();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val counter: core.Arc<sync.AtomicInt> = core.arc<type sync.AtomicInt>(sync.atomic_int(0));
 	val counter_for_vt = counter.clone();
 

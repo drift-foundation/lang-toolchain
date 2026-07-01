@@ -9,7 +9,7 @@ implement iter.SinglePassIterator<Int> for V {
 	}
 }
 implement iter.Iterable<V, Int, V> for V { pub fn iter(var self: V) nothrow -> V { return move self; } }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = V::Count(3);          // Copy by-value Iterable, bound local
 	var s1 = 0;
 	for x in v { s1 = s1 + x; }   // implicit copy of v (non-consuming)

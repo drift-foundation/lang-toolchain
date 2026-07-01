@@ -63,7 +63,7 @@ fn run() throws -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 2 };
 }
 """.lstrip(),

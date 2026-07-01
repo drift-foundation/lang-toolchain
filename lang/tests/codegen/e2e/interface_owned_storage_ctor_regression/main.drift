@@ -21,7 +21,7 @@ fn build() nothrow -> Holder {
 	return Holder(sink = StdErrSink());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = build();
 	if h.sink.write() != 7 {
 		return 1;

@@ -72,7 +72,7 @@ fn run() -> Int {
 	return (move r).or_throw();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val result = try run() catch ServiceError(e) {
 		10
 	} catch err:ResultError(e) {
@@ -106,7 +106,7 @@ fn parse_number() -> core.Result<Int, String> {
 	return core.Result::Err("bad input");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = parse_number();
 	return (move r).or_throw();
 }

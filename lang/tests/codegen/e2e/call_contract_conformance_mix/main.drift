@@ -26,7 +26,7 @@ fn inc(v: Int) nothrow -> Int {
 	return v + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = Box();
 	var impl = Impl(base = 30);
 	var f = inc;

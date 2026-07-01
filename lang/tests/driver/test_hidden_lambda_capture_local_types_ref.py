@@ -15,7 +15,7 @@ def test_hidden_lambda_ref_capture_local_type_is_ref(tmp_path: Path) -> None:
 
 		import std.core as core;
 
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			var count = core.cell(0);
 			(| | captures(&count) => {
 				count.set(count.get() + 1);

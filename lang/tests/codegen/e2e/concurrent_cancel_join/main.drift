@@ -3,7 +3,7 @@ module main;
 import std.concurrent as conc;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var t = conc.spawn(| | => {
 		thread.vt_park_until(50);
 		return 7;

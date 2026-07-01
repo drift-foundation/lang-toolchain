@@ -18,7 +18,7 @@ def test_workspace_parse_smoke(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """.lstrip(),
 	)
 	paths = sorted(tmp_path.rglob("*.drift"))

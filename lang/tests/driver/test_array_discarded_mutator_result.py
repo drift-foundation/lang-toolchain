@@ -46,7 +46,7 @@ def test_discarded_pop_mutates(tmp_path: Path) -> None:
 	"""`a.pop();` with the result discarded still removes the last element."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = [10, 20, 30];
 	a.pop();
 	return a.len();
@@ -59,7 +59,7 @@ def test_discarded_remove_mutates(tmp_path: Path) -> None:
 	"""`a.remove(0);` with the result discarded still removes the element."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = [10, 20, 30];
 	a.remove(0);
 	return a.len();
@@ -72,7 +72,7 @@ def test_discarded_swap_remove_mutates(tmp_path: Path) -> None:
 	"""`a.swap_remove(0);` with the result discarded still removes the element."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = [10, 20, 30];
 	a.swap_remove(0);
 	return a.len();
@@ -85,7 +85,7 @@ def test_discarded_pop_repeated_drains(tmp_path: Path) -> None:
 	"""Repeated discarded pops drain the array to empty."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = [1, 2, 3, 4, 5];
 	a.pop();
 	a.pop();
@@ -101,7 +101,7 @@ def test_discarded_pop_drops_string_element(tmp_path: Path) -> None:
 	program exits cleanly — the moved-out element is dropped, not leaked."""
 	src = """\
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = ["alpha", "beta", "gamma"];
 	a.pop();
 	return a.len();

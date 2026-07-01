@@ -2,7 +2,7 @@ module m;
 
 import std.core as core;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val s0 = "ążć";
     val s1 = "żół";
     val n = s0.byte_length();

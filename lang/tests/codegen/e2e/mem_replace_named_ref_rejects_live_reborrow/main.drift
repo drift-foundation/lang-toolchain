@@ -51,7 +51,7 @@ fn _peek(opt: &Optional<Resource>) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = Box(x = Optional<Resource>::Some(Resource(id = 99)));
 	val slot: &mut Optional<Resource> = &mut b.x;
 	val r: &Optional<Resource> = &*slot;

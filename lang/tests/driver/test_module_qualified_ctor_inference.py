@@ -43,7 +43,7 @@ import std.concurrent as conc;
 import std.err as err;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val e = conc.SaturationPolicy::Block();
 	return 0;
 }
@@ -59,7 +59,7 @@ module main;
 import std.core as core;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = core.Result::Err(conc.SaturationPolicy::Block());
 	return 0;
 }
@@ -75,7 +75,7 @@ module main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = core.Result::Ok<type Int, Int>(1);
 	return 0;
 }

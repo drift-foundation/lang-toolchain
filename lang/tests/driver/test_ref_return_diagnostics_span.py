@@ -42,7 +42,7 @@ fn bad() nothrow -> &Int {
 	return &x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = bad();
 	return 0;
 }
@@ -65,7 +65,7 @@ fn bad(x: &Int) nothrow -> &mut Int {
 	return x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = 1;
 	val _ = bad(&x);
 	return 0;

@@ -46,7 +46,7 @@ fn produce() nothrow -> Optional<Int> {
 	return Optional::Some(7);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder(f = produce);
 	val fp = h.f;
 	val r = fp();

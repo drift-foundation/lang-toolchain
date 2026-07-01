@@ -5,7 +5,7 @@ variant Maybe<T> {
 	None,
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x: Maybe<Int> = None();
 	// Non-exhaustive match without `default` is rejected in v1.
 	val y = match x{

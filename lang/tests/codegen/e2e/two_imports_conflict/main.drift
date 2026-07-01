@@ -3,4 +3,4 @@ import lib as m;
 import other as m;
 
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }

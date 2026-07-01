@@ -12,7 +12,7 @@ module m_main;
 @test_build_only
 fn __test_helper() -> Int { return 1; }
 
-fn main() -> Int { return 0; }
+pub fn main() -> Int { return 0; }
 """
 	)
 	modules, _type_table, _exc, _exports, _deps, diags = parse_drift_workspace_to_hir(

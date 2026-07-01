@@ -2,7 +2,7 @@ fn inc(p: &mut Int) nothrow -> Void {
 	*p = *p + 1;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 41;
 	inc(&mut x);
 	return x;

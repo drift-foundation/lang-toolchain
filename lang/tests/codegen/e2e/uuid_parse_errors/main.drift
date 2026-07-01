@@ -20,7 +20,7 @@ fn _expect_err(s: &String, expected_tag: &String, code: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val len_tag: String = "uuid-bad-length";
 	val fmt_tag: String = "uuid-bad-format";
 	val hex_tag: String = "uuid-bad-hex";

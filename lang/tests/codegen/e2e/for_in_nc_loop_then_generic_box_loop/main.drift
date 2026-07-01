@@ -23,7 +23,7 @@ implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy 
 }
 fn mkbox() nothrow -> Box<Int> { return Box::One(9); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var n = 0;
 	for xn in mknc() { n = n + xn; }
 	if n != 10 { return 3; }

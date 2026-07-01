@@ -4,7 +4,7 @@ import std.core as core;
 import std.codec as codec;
 import std.console as cons;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Encode empty input — gzip produces ~20 bytes (header + empty
 	// deflate block + CRC32(empty) + ISIZE=0). At minimum a valid
 	// gzip frame, must round-trip to zero-length output.

@@ -70,7 +70,7 @@ fn run() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 99 };
 }
 """.lstrip()

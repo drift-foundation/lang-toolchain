@@ -27,7 +27,7 @@ fn make_empty_via_branch(empty_path: Bool) nothrow -> String {
 	return "fallback";
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// `t2` is named to deliberately collide with the compiler's MIR temp
 	// counter scheme (t1, t2, t3, ...).  When the call result for
 	// `make_owned_string()` is assigned the SSA temp name `t2` and the

@@ -3,7 +3,7 @@ module std.random.test;
 import std.core as core;
 import std.random as random;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = random.random_secure_bytes(-1);
 	match r {
 		core.Result::Ok(_) => { return 1; },

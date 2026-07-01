@@ -89,7 +89,7 @@ fn register_handlers(bus: &mut EventBus) nothrow -> conc.Arc<conc.Mutex<StateMac
 	return move sm;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var bus = event_bus();
 	var sm = register_handlers(&mut bus);
 	var ex = Event(v = 5);

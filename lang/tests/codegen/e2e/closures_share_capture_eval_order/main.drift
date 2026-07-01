@@ -90,7 +90,7 @@ fn read_int(c: &Counter) nothrow -> Int {
 	return c.v.get();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val order = conc.arc(Counter(v = core.cell(0)));
 	val share_slot = conc.arc(Counter(v = core.cell(-1)));
 	val tr = Tracker(

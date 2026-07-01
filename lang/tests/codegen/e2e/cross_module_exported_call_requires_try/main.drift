@@ -1,7 +1,7 @@
 module main;
 import a as a;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val y = a.id(1);
 	return y;
 }

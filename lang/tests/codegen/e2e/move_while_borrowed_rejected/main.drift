@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 1;
 	val r = &x;
 	val y = move x;

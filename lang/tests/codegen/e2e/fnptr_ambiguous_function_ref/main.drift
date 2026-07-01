@@ -11,7 +11,7 @@ fn abs(x: Float) nothrow -> Float {
 	return x;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val fp = abs;
 	return 0;
 }

@@ -17,7 +17,7 @@ fn use_value(s: &S) -> Int {
 	return Boom::boom_value(s);
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val s = S(1);
 	val r = &s;
 	val x = try use_value(r) catch { 3 };

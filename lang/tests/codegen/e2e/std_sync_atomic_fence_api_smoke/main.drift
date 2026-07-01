@@ -2,7 +2,7 @@ module m;
 
 import std.sync as sync;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = sync.atomic_uint(cast<Uint>(0));
 	x.store(cast<Uint>(1), sync.MemoryOrder::Relaxed());
 	sync.thread_fence(sync.MemoryOrder::Release());

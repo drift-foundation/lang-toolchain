@@ -18,7 +18,7 @@ fn run(t: Thrower) -> Int {
 	return t.blow(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b: Thrower = Bomb();
 	return try run(b) catch { 99 };
 }

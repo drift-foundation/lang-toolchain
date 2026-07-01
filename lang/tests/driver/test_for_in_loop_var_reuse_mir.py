@@ -35,7 +35,7 @@ module main;
 import std.iter as iter;
 use trait iter.SinglePassIterator;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a: Array<Int> = [];
 	a.push(1); a.push(2); a.push(3);
 	var s = 0;

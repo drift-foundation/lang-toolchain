@@ -57,7 +57,7 @@ fn dangling() nothrow -> Int {
 	val x = 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return dangling();
 }
 """
@@ -84,7 +84,7 @@ fn maybe_one(b: Bool) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return maybe_one(true);
 }
 """
@@ -111,7 +111,7 @@ fn pick(c: Choice) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return pick(Choice::A());
 }
 """
@@ -137,7 +137,7 @@ fn pick(b: Bool) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return pick(true);
 }
 """
@@ -159,7 +159,7 @@ fn pick(c: Choice) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return pick(Choice::A());
 }
 """
@@ -176,7 +176,7 @@ fn do_nothing() nothrow -> Void {
 	val x = 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	do_nothing();
 	return 0;
 }
@@ -204,7 +204,7 @@ fn pick(flag: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return pick(1);
 }
 """
@@ -224,7 +224,7 @@ fn always_one() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return always_one();
 }
 """
@@ -247,7 +247,7 @@ fn maybe(flag: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return maybe(1);
 }
 """
@@ -274,7 +274,7 @@ fn looping(flag: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return looping(0);
 }
 """
@@ -300,7 +300,7 @@ fn always_fail() -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		always_fail();
 	} catch {

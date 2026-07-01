@@ -6,7 +6,7 @@ struct Op {
 
 fn concat(a: String, b: String) nothrow -> String { return a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val op = Op(apply = concat);
 	return 0;
 }

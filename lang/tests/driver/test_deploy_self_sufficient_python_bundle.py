@@ -169,7 +169,7 @@ def _write_consumer(tmp_path: Path) -> Path:
 
 import std.testlib as testlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return testlib.ANSWER;
 }
 """,

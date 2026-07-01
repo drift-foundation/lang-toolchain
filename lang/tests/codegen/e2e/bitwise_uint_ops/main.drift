@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	// Uint can be introduced via a type annotation; the literal initializer is
 	// accepted in v1 to make Uint usable without casts.
 	var x: Uint = 6;

@@ -68,7 +68,7 @@ fn drive() nothrow -> core.Result<Optional<Array<Byte> >, Int> {
 		Ok(t) => { val _ = t; val out = get(0); move out }
 	};
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match drive() {
 		Err(e) => { return 1; },
 		Ok(opt) => {
@@ -102,7 +102,7 @@ fn drive() nothrow -> Optional<String> {
 		Ok(t) => { val _ = t; val out = pick(0); move out }
 	};
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match drive() {
 		Some(s) => { return s.byte_length(); },
 		None => { return 99; }
@@ -132,7 +132,7 @@ fn drive() nothrow -> core.Result<Optional<Array<Byte> >, Int> {
 		Ok(t) => { val _ = t; get(0) }
 	};
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match drive() {
 		Err(e) => { return 1; },
 		Ok(opt) => { match opt { Some(v) => { return cast<Int>(v[0]); }, None => { return 2; } } }

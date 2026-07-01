@@ -2,7 +2,7 @@ fn bad() -> Void {
 	return 1;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	bad();
 	return 0;
 }

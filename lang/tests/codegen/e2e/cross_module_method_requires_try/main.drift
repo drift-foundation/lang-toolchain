@@ -2,7 +2,7 @@ module main;
 
 import a as a;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var p = a.Point(x = 1);
 	p.bump(1);
 	return p.x;

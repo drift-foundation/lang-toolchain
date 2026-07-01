@@ -5,4 +5,4 @@ export { add };
 
 pub fn add() -> Int { return 1; }
 
-fn main() nothrow -> Int{ return add(); }
+pub fn main() nothrow -> Int{ return add(); }

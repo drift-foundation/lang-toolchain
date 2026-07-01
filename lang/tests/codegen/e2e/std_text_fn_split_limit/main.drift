@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var p = text.split_limit("a,b,c,d", ",", 2);
 	if p.len != 3 { return 1; }
 	val ea = "a"; val eb = "b"; val ecd = "c,d";

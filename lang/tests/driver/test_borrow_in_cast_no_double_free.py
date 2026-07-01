@@ -52,7 +52,7 @@ def test_cast_of_borrow_bearing_call_no_double_free(tmp_path: Path) -> None:
 module main;
 import std.io as io;
 import std.mem as mem;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	unsafe {
 		var b = io.buffer(8);
 		val p = cast<mem.Ptr<Uint> >(io.buffer_ptr(&b));
@@ -75,7 +75,7 @@ import std.io as io;
 import std.mem as mem;
 import std.console as console;
 fn create(p: mem.Ptr<Byte>) nothrow -> Int { return 0; }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	unsafe {
 		var env_slot = io.buffer(8);
 		val rc1 = create(io.buffer_ptr(&env_slot));
@@ -100,7 +100,7 @@ def test_borrow_directly_bound_still_ok(tmp_path: Path) -> None:
 module main;
 import std.io as io;
 import std.mem as mem;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	unsafe {
 		var b = io.buffer(8);
 		val sp = io.buffer_ptr(&b);

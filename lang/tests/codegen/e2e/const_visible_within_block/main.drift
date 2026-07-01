@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	const N: Int = 15;
 	return N;
 }

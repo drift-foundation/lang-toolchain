@@ -20,7 +20,7 @@ module main;
 
 import lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),

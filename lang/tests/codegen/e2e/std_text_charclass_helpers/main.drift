@@ -2,7 +2,7 @@ module main;
 
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// --- is_digit positive: '0' (48) through '9' (57) ---
 	if !text.is_digit(cast<Byte>(48)) { return 1; }
 	if !text.is_digit(cast<Byte>(53)) { return 2; }

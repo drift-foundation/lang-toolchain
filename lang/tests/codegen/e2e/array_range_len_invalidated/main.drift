@@ -3,7 +3,7 @@ module main;
 import std.err;
 import std.iter as iter;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2];
 	var r = arr.range();
 	arr.push(3);

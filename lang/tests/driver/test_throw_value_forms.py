@@ -65,7 +65,7 @@ def test_control_unqualified_inline_ctor_runs(tmp_path: Path) -> None:
 		"pub error MyExc { kind: Int }\n"
 		"fn boom(n: Int) -> Int { throw MyExc(kind = n); }\n"
 		"fn run(n: Int) nothrow -> Int { val x = try boom(n) catch { 7 }; return x; }\n"
-		"fn main() nothrow -> Int { return run(3) - 7; }\n"
+		"pub fn main() nothrow -> Int { return run(3) - 7; }\n"
 	)
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="ctrl")
 	assert r.returncode == 0, r.stderr
@@ -78,7 +78,7 @@ def test_same_module_qualified_ctor_runs(tmp_path: Path) -> None:
 		"pub error MyExc { kind: Int }\n"
 		"fn boom(n: Int) -> Int { throw repro.MyExc(kind = n); }\n"
 		"fn run(n: Int) nothrow -> Int { val x = try boom(n) catch { 7 }; return x; }\n"
-		"fn main() nothrow -> Int { return run(3) - 7; }\n"
+		"pub fn main() nothrow -> Int { return run(3) - 7; }\n"
 	)
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="q")
 	assert r.returncode == 0, r.stderr
@@ -92,7 +92,7 @@ def test_cross_module_alias_qualified_ctor_runs(tmp_path: Path) -> None:
 		"import errs as e;\n"
 		"fn boom(n: Int) -> Int { throw e.NetError(code = n, detail = \"down\"); }\n"
 		"fn run(n: Int) nothrow -> Int { val x = try boom(n) catch { 7 }; return x; }\n"
-		"fn main() nothrow -> Int { return run(3) - 7; }\n"
+		"pub fn main() nothrow -> Int { return run(3) - 7; }\n"
 	)
 	r = _compile(tmp_path, [("errs.drift", errs), ("app.drift", app)], entry="app::main", out="x")
 	assert r.returncode == 0, r.stderr
@@ -106,7 +106,7 @@ def test_bare_local_value_heap_field_leak_free(tmp_path: Path) -> None:
 		"module repro;\n" + _HEAP_ERR +
 		"fn boom(n: Int) -> Int { val e = MyExc(kind = n, msg = \"boom\"); throw e; }\n"
 		"fn safe(n: Int) nothrow -> Int { val x = try boom(n) catch { 99 }; return x; }\n"
-		"fn main() nothrow -> Int { var i = 0; var acc = 0; while i < 3 { acc = acc + safe(i); i = i + 1; } return acc - 297; }\n"
+		"pub fn main() nothrow -> Int { var i = 0; var acc = 0; while i < 3 { acc = acc + safe(i); i = i + 1; } return acc - 297; }\n"
 	)
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="bare")
 	assert r.returncode == 0, r.stderr
@@ -140,7 +140,7 @@ def test_negative_non_error_payload_rejected(tmp_path: Path) -> None:
 	src = (
 		"module repro;\n"
 		"fn boom() -> Int { val x = 5; throw x; }\n"
-		"fn main() nothrow -> Int { return 0; }\n"
+		"pub fn main() nothrow -> Int { return 0; }\n"
 	)
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="ne")
 	assert r.returncode != 0
@@ -152,7 +152,7 @@ def test_negative_projected_place_throw_rejected(tmp_path: Path) -> None:
 		"module repro;\n" + _HEAP_ERR +
 		"struct Holder { cached: MyExc }\n"
 		"fn boom(h: Holder) -> Int { throw h.cached; }\n"
-		"fn main() nothrow -> Int { return 0; }\n"
+		"pub fn main() nothrow -> Int { return 0; }\n"
 	)
 	r = _compile(tmp_path, [("main.drift", src)], entry="repro::main", out="pp")
 	assert r.returncode != 0

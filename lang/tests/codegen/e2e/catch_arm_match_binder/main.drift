@@ -7,7 +7,7 @@ fn might_fail() -> Int {
 	throw AppError(status = "FAILED", tag = "test", field = "x", reason = "bad");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var result_state = "OK";
 	var err_tag = "";
 	var err_field = "";

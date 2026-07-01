@@ -89,7 +89,7 @@ pub error PrimitiveError {
 \tflag: Bool,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_diag<type PrimitiveError>();
 \treturn 0;
 }
@@ -107,7 +107,7 @@ def test_synthesizes_diagnostic_for_empty_payload(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub error EmptyError {}
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_diag<type EmptyError>();
 \treturn 0;
 }
@@ -132,7 +132,7 @@ pub error OuterError {
 \tcause: InnerError,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_diag<type InnerError>();
 \tassert_diag<type OuterError>();
 \treturn 0;

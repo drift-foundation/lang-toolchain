@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	assert(1 == 2);
 	return 0;
 }

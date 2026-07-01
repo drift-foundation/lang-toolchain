@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if !text.equals_ignore_case("hello", "HELLO") { return 1; }
 	if !text.equals_ignore_case("Hello", "hELLO") { return 2; }
 	if text.equals_ignore_case("hello", "world") { return 3; }

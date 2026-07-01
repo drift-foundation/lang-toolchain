@@ -8,7 +8,7 @@ fn _string_eq(a: &String, b: &String) nothrow -> Bool {
 	return *a == *b;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Parse → to_string round-trip for a known canonical value.
 	val canonical: String = "550e8400-e29b-41d4-a716-446655440000";
 	match uuid.parse(&canonical) {

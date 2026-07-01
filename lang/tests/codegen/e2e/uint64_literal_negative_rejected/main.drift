@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Uint64 = -1u64;
 	return 0;
 }

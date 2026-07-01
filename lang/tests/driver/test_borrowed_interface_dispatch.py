@@ -103,7 +103,7 @@ fn read_via_borrow(c: &Counter) nothrow -> Int {
 	return c.value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var owner: Counter = Cell(n = 42);
 	return read_via_borrow(&owner);
 }
@@ -137,7 +137,7 @@ fn read_via_arc(h: &Holder) nothrow -> Int {
 	return h.arc.get().value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val arc = conc.arc(Cell(n = 42)).as_interface<type Counter>();
 	val h = Holder(arc = move arc);
 	return read_via_arc(&h);

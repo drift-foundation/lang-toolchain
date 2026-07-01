@@ -91,7 +91,7 @@ class TestDepVersionPrefilter:
 		mod_root = tmp_path / "mods"
 		(mod_root / "main").mkdir(parents=True)
 		(mod_root / "main" / "main.drift").write_text(
-			"module main;\nfn main() nothrow -> Int { return 0; }\n"
+			"module main;\npub fn main() nothrow -> Int { return 0; }\n"
 		)
 		ir_path = tmp_path / "out.ll"
 
@@ -135,7 +135,7 @@ class TestDepVersionPrefilter:
 		mod_root = tmp_path / "mods"
 		(mod_root / "main").mkdir(parents=True)
 		(mod_root / "main" / "main.drift").write_text(
-			"module main;\nfn main() nothrow -> Int { return 0; }\n"
+			"module main;\npub fn main() nothrow -> Int { return 0; }\n"
 		)
 
 		argv = [
@@ -174,7 +174,7 @@ class TestDepVersionPrefilter:
 		mod_root = tmp_path / "mods"
 		(mod_root / "main").mkdir(parents=True)
 		(mod_root / "main" / "main.drift").write_text(
-			"module main;\nfn main() nothrow -> Int { return 0; }\n"
+			"module main;\npub fn main() nothrow -> Int { return 0; }\n"
 		)
 
 		argv = [

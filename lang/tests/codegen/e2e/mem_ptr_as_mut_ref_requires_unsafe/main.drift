@@ -2,7 +2,7 @@ module main;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 10;
 	val p = unsafe { mem.ptr_from_ref<type Int>(&x) };
 	val r = mem.ptr_as_mut_ref<type Int>(p);

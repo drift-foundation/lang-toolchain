@@ -1,6 +1,6 @@
 module m;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 84;
 	x /= 2;
 	return x;

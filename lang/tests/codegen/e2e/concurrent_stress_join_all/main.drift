@@ -4,7 +4,7 @@ import std.concurrent as conc;
 import std.core as core;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 var g = conc.future_group<type Int>();
 	var i = 0;
 	while i < 32 {

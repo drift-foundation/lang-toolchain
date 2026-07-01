@@ -37,7 +37,7 @@ fn _none_resource() nothrow -> Optional<Resource> {
 	return Optional<Resource>::None();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cell = Cell(value = Optional<Resource>::Some(Resource(id = 11)));
 
 	// The customer-reported shape: method call returning &mut T,

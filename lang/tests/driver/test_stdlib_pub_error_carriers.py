@@ -65,7 +65,7 @@ fn read_int(s: String) throws -> Int {
 	return parse.parse_int(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return read_int("123");
 	} catch {
@@ -97,7 +97,7 @@ fn open_conn() throws -> net.TcpStream {
 	return net.connect(&addr, timeout);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		val _s = open_conn();
 		return 0;
@@ -128,7 +128,7 @@ fn read_some(stdin: &io.InputStream, buf: &mut io.Buffer) throws -> Int {
 	return io.input_read(stdin, buf, timeout);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """)
@@ -151,7 +151,7 @@ fn decode(bytes: &Array<Byte>) throws -> String {
 	return text.utf8_from_bytes(bytes);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var bytes: Array<Byte> = [];
 	try {
 		val _s = decode(&bytes);
@@ -180,7 +180,7 @@ fn decode_hex(s: &String) throws -> Array<Byte> {
 	return codec.hex_decode(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "abcd";
 	try {
 		val _b = decode_hex(&s);
@@ -209,7 +209,7 @@ fn parse_ts(s: String) throws -> time.UtcTimestamp {
 	return time.parse_iso8601_utc(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		val _t = parse_ts("2026-01-01T00:00:00Z");
 		return 0;
@@ -237,7 +237,7 @@ fn parse_json(s: &String) throws -> json.JsonNode {
 	return json.parse(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "{}";
 	try {
 		val _n = parse_json(&s);

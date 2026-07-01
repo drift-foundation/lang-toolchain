@@ -34,7 +34,7 @@ fn fail() -> Int {
 	throw E(code = 1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try fail() catch E(_e) { 0 } catch { 1 };
 }
 """

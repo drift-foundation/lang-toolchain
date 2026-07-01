@@ -13672,6 +13672,7 @@ def validate_entrypoint(
 	*,
 	entry_module: str,
 	entry_name: str,
+	require_pub: bool = True,
 ) -> None:
 	entry_defs: list[tuple[FunctionId, FnSignature]] = []
 	for fn_id, sig in signatures_by_id.items():
@@ -13730,6 +13731,17 @@ def validate_entrypoint(
 	int_id = type_table.ensure_int()
 	string_id = type_table.ensure_string()
 
+	if require_pub and not bool(getattr(sig, "is_pub", False)):
+		diagnostics.append(
+			_tc_diag(
+				message=f"entrypoint {entry_name} must be declared pub",
+				severity="error",
+				phase="typecheck",
+				span=_span_for_sig(sig),
+				notes=["declare the app entrypoint as 'pub fn main'"],
+			)
+		)
+
 	ret_id = sig.return_type_id
 	if ret_id is None and sig.return_type is not None:
 		ret_id = resolve_opaque_type(sig.return_type, type_table, module_id=sig.module)
@@ -13783,6 +13795,8 @@ def validate_entrypoint_main(
 	signatures_by_id: Mapping[FunctionId, FnSignature],
 	type_table: TypeTable,
 	diagnostics: list[Diagnostic],
+	*,
+	require_pub: bool = True,
 ) -> None:
 	validate_entrypoint(
 		signatures_by_id,
@@ -13790,4 +13804,5 @@ def validate_entrypoint_main(
 		diagnostics,
 		entry_module="main",
 		entry_name="main",
+		require_pub=require_pub,
 	)

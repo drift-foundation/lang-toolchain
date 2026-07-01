@@ -1,6 +1,6 @@
 fn id(s: String) nothrow -> String { return s; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     if id("x") == id("x") {
         if id("x") == id("y") {
             return 1;

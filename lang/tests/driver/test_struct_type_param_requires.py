@@ -148,7 +148,7 @@ implement Show for Int {
 
 pub struct Box<T> require T is Show { value: T }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box<Int> = Box<type Int>(1);
 	return 0;
 }
@@ -171,7 +171,7 @@ implement Show for Int {
 
 pub struct Box<T> require T is Show { value: T }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box<String> = Box<type String>("s");
 	return 0;
 }
@@ -191,7 +191,7 @@ trait Destructible { fn destroy(self: Self) -> Void }
 
 pub struct File require Self is Destructible { fd: Int }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val f: File = File(fd = 1);
 	return 0;
 }
@@ -213,7 +213,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 0; } }
 
 pub struct Box<T> require T is Show { value: T }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box = Box<type Int>(1);
 	return 0;
 }
@@ -237,7 +237,7 @@ implement Debug for Int { pub fn debug(self: Int) -> Int { return 0; } }
 
 fn id<T>(var x: T) -> T require (T is Show and T is Debug) { return move x; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x: Int = id(1);
 	return x;
 }
@@ -259,7 +259,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 0; } }
 
 fn id<T>(var x: T) -> T require (T is Show and T is Debug) { return move x; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x: Int = id(1);
 	return x;
 }
@@ -283,7 +283,7 @@ implement Debug for Int { pub fn debug(self: Int) -> Int { return 0; } }
 
 pub struct Box<T> require (T is Show and T is Debug) { value: T }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box<Int> = Box<type Int>(1);
 	return b.value;
 }
@@ -305,7 +305,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 0; } }
 
 pub struct Box<T> require (T is Show and T is Debug) { value: T }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box<Int> = Box<type Int>(1);
 	return b.value;
 }
@@ -333,7 +333,7 @@ implement<T> Hashable for Box<T> require T is Hashable {
 	pub fn hash(self: Box<T>) -> Int { return 1; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box<String> = Box<type String>("s");
 	return Hashable::hash(b);
 }
@@ -355,7 +355,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 1; } }
 
 fn id<T>(var x: T) -> T require (T is Show or T is Debug) { return move x; }
 
-fn main() nothrow -> Int{ return id<type Int>(1); }
+pub fn main() nothrow -> Int{ return id<type Int>(1); }
 """
 	diags = _typecheck_main(src, tmp_path)
 	assert diags == []
@@ -370,7 +370,7 @@ trait Debug { fn debug(self: Self) -> Int }
 
 fn id<T>(var x: T) -> T require (T is Show or T is Debug) { return move x; }
 
-fn main() nothrow -> Int{ return id<type Int>(1); }
+pub fn main() nothrow -> Int{ return id<type Int>(1); }
 """
 	diags = _typecheck_main(src, tmp_path)
 	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" for d in diags)
@@ -386,7 +386,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 1; } }
 
 fn id<T>(var x: T) -> T require not (T is Show) { return move x; }
 
-fn main() nothrow -> Int{ return id<type Int>(1); }
+pub fn main() nothrow -> Int{ return id<type Int>(1); }
 """
 	diags = _typecheck_main(src, tmp_path)
 	assert any(d.code == "E_REQUIREMENT_NOT_SATISFIED" for d in diags)

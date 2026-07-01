@@ -28,7 +28,7 @@ def test_loop_init_name_out_of_scope_reports_unknown_name(tmp_path: Path, capsys
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for var i = 0; i < 2; i += 1 {
 		i;
 	}

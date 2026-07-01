@@ -5,4 +5,4 @@ fn run() -> Int {
   val _r = json.parse(&a);
   return 0;
 }
-fn main() nothrow -> Int { return try run() catch { 99 }; }
+pub fn main() nothrow -> Int { return try run() catch { 99 }; }

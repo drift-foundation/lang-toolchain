@@ -38,7 +38,7 @@ fn bind_form(n: Int) nothrow -> Int { val p = make(n); return p.a; }
 // the moved `.b` must not double-free.
 fn move_form(n: Int) nothrow -> Int { val b = make(n).b; return b.len - b.len; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var acc = 0;
 	var i = 0;
 	while i < 5 {

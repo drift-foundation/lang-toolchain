@@ -3,7 +3,7 @@ module main;
 import std.json as json;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Use array to get deterministic encode order.
 	val text = "[1,true,\"hi\",null]";
 	match json.parse(&text) {

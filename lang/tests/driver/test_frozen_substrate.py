@@ -60,7 +60,7 @@ fn assert_frozen<T>() nothrow -> Void require T is shareable.Frozen { }
 
 def test_int_is_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Int>();
 \treturn 0;
 }
@@ -71,7 +71,7 @@ fn main() nothrow -> Int {
 
 def test_string_is_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type String>();
 \treturn 0;
 }
@@ -86,7 +86,7 @@ def test_bool_float_byte_uint_void_dv_are_frozen(tmp_path, capsys):
 	# Frozen impl on it is now compiler-internal only.  This probe
 	# pins Frozen for the remaining primitives.
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Bool>();
 \tassert_frozen<type Float>();
 \tassert_frozen<type Byte>();
@@ -105,7 +105,7 @@ fn main() nothrow -> Int {
 
 def test_optional_int_is_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Optional<Int>>();
 \treturn 0;
 }
@@ -116,7 +116,7 @@ fn main() nothrow -> Int {
 
 def test_result_int_string_is_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type core.Result<Int, String>>();
 \treturn 0;
 }
@@ -128,7 +128,7 @@ fn main() nothrow -> Int {
 def test_optional_array_is_not_frozen(tmp_path, capsys):
 	"""Array<Int> is NOT Frozen → Optional<Array<Int>> NOT Frozen."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Optional<Array<Int>>>();
 \treturn 0;
 }
@@ -148,7 +148,7 @@ struct Config {
 \tpub enabled: Bool
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Config>();
 \treturn 0;
 }
@@ -165,7 +165,7 @@ pub variant Status {
 \tDone(msg: String)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Status>();
 \treturn 0;
 }
@@ -187,7 +187,7 @@ struct Server {
 \tpub backup_count: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Endpoint>();
 \tassert_frozen<type Server>();
 \treturn 0;
@@ -202,7 +202,7 @@ fn main() nothrow -> Int {
 
 def test_array_int_is_not_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Array<Int>>();
 \treturn 0;
 }
@@ -213,7 +213,7 @@ fn main() nothrow -> Int {
 
 def test_hashmap_is_not_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type containers.HashMap<String, Int>>();
 \treturn 0;
 }
@@ -224,7 +224,7 @@ fn main() nothrow -> Int {
 
 def test_mutex_int_is_not_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type conc.Mutex<Int>>();
 \treturn 0;
 }
@@ -235,7 +235,7 @@ fn main() nothrow -> Int {
 
 def test_arc_int_is_not_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type conc.Arc<Int>>();
 \treturn 0;
 }
@@ -248,7 +248,7 @@ def test_ref_int_is_not_frozen(tmp_path, capsys):
 	"""References hold to potentially-mutable referents.  Per the
 	revised disposition (§3a), `&T` is NOT Frozen by default in v1."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type &Int>();
 \treturn 0;
 }
@@ -259,7 +259,7 @@ fn main() nothrow -> Int {
 
 def test_ref_mut_int_is_not_frozen(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type &mut Int>();
 \treturn 0;
 }
@@ -278,7 +278,7 @@ struct WithArray {
 \tpub values: Array<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type WithArray>();
 \treturn 0;
 }
@@ -294,7 +294,7 @@ struct WithMutex {
 \tpub state: conc.Mutex<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type WithMutex>();
 \treturn 0;
 }
@@ -310,7 +310,7 @@ struct WithArc {
 \tpub shared: conc.Arc<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type WithArc>();
 \treturn 0;
 }
@@ -326,7 +326,7 @@ struct WithRef {
 \tpub r: &Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type WithRef>();
 \treturn 0;
 }
@@ -342,7 +342,7 @@ pub variant Mixed {
 \tWithArray(arr: Array<Int>)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_frozen<type Mixed>();
 \treturn 0;
 }
@@ -366,7 +366,7 @@ struct MyType {
 
 implement shareable.Frozen for MyType { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

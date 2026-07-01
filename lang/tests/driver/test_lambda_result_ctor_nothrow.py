@@ -105,7 +105,7 @@ fn register(slot: &mut Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
     register(&mut slot, |a: Int, b: Int| => {
         return core.Result::Ok(Resp(status = a + b));
@@ -129,7 +129,7 @@ fn register(slot: &mut Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
     register(&mut slot, |a: Int, b: Int| nothrow => {
         return core.Result::Err(AppErr(code = a + b));
@@ -153,7 +153,7 @@ fn register3(slot: &mut Array<core.Callback3<Int, Int, Int, core.Result<Resp, Ap
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Int, Int, Int, core.Result<Resp, AppErr>>> = [];
     register3(&mut slot, |a: Int, b: Int, c: Int| => {
         return core.Result::Ok(Resp(status = a + b + c));
@@ -181,7 +181,7 @@ fn register(slot: &mut Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>
     return core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var slot: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
     register(&mut slot, core.callback2(handler));
     return 0;

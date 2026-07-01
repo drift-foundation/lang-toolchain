@@ -56,7 +56,7 @@ implement text.TokenConsumer<String, Int> for S {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s = S(count = 0);
 	val c: text.TokenConsumer<String, Int> = s;
 	val sp = text.TokenSpan(start = 0, end = 1);

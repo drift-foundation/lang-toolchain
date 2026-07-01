@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var result = 0;
 	{
 		val x = 22;

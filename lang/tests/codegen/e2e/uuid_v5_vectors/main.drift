@@ -4,7 +4,7 @@ import std.core as core;
 import std.uuid as uuid;
 import std.console as cons;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Cross-checked against CPython's uuid.uuid5 (SHA-1):
 	//   v5(NS_DNS, "python.org") == 886313e1-3b8a-5372-9b90-0c9aee199e5d
 	val u1 = uuid.v5(&uuid.namespace_dns(), &("python.org"));

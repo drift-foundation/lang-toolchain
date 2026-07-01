@@ -46,7 +46,7 @@ fn pick(flag: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return pick(1);
 }
 """,

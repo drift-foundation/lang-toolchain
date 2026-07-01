@@ -100,7 +100,7 @@ fn register(slot: &mut Array<core.Callback3<&Req, &mut Ctx,
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&Req, &mut Ctx,
 \t    core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>,
 \t    core.Result<Resp, AppErr>>> = [];

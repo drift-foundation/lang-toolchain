@@ -14,7 +14,7 @@ def test_uint64_bitnot_compiles_and_emits_i64(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Uint64 = cast<Uint64>(1);
 	x = ~x;
 	if x == cast<Uint64>(0) {

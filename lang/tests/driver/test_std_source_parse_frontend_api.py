@@ -83,7 +83,7 @@ implement parse.TokenKind for Kind {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// SourcePos / SourceSpan / pos_zero / span helpers
 	val p: source.SourcePos = source.pos_zero();
 	val sp: source.SourceSpan = source.SourceSpan(source_id = "m", start = p, end = p);
@@ -158,7 +158,7 @@ implement parse.TokenKind for K {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = source.pos_zero();
 	val sp = source.SourceSpan(source_id = "m", start = p, end = p);
 	var toks: Array<parse.Token<K>> = [];

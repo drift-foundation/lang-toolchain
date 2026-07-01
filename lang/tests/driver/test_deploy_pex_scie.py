@@ -239,7 +239,7 @@ def _write_consumer(tmp_path: Path) -> Path:
 
 import std.testlib as testlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return testlib.ANSWER;
 }
 """,
@@ -357,7 +357,7 @@ def test_pex_deployed_readonly_install_tree(
 		src,
 		"""module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -444,7 +444,7 @@ def test_pex_deployed_runtime_archive_link(
 		src,
 		"""module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 7;
 }
 """,
@@ -492,7 +492,7 @@ def test_pex_entry_resolves_deploy_root_through_symlink(
 		src,
 		"""module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,

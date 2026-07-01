@@ -53,7 +53,7 @@ def _compile(tmp_path: Path, src: str, *, out: str, extra_imports: str = "") -> 
 
 
 def _cb_main(body: str) -> str:
-	return f"fn main() nothrow -> Int {{\n\treturn run_cb(|| => {{ {body} }});\n}}\n"
+	return f"pub fn main() nothrow -> Int {{\n\treturn run_cb(|| => {{ {body} }});\n}}\n"
 
 
 def test_stmt_form_try_catch_unexpected_clears_effect(tmp_path: Path) -> None:
@@ -96,7 +96,7 @@ def test_conc_spawn_nothrow_closure_stmt_try_compiles_and_runs(tmp_path: Path) -
 	# The app team's exact shape: stmt-form try/catch unexpected inside a
 	# conc.spawn nothrow closure must compile (effect cleared) and run.
 	main = (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tvar vt = conc.spawn(|| => { try { risky(); } catch unexpected { } return 7; });\n"
 		"\tval r = match vt.join() {\n"
 		"\t\tcore.Result::Ok(v) => { v },\n"

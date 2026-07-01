@@ -47,7 +47,7 @@ fn tag_as_int(t: Tagged) nothrow -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = Shape::Circle(radius = 7);
 	val r = Shape::Rect(w = 3, h = 4);
 

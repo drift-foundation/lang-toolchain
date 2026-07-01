@@ -77,7 +77,7 @@ import std.err;
 import std.console as console;
 import std.format as format;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval xs = [1, 2, 3];
 \ttry {
 \t\tval _v = xs[3];
@@ -117,7 +117,7 @@ module main;
 import std.err;
 import std.json as json;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval xs = [1, 2, 3];
 \ttry {
 \t\tval _v = xs[3];

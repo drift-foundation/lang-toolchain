@@ -61,7 +61,7 @@ implement iter.MultiPassIterator<Int> for BadIter {
 
 struct Box<T> require T is iter.MultiPassIterator<Int> { value: T }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val it = BadIter(data = [1], idx = 0);
 	val _b = Box<type BadIter>(value = it);
 	return 0;

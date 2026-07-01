@@ -2,7 +2,7 @@ module main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var f = conc.spawn_future(| | => { return 1; });
 	f.cancel();
 	var res = f.join_timeout(conc.Duration(millis = 0));

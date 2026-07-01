@@ -13,7 +13,7 @@ fn _check(actual: &uuid.Uuid, expected: &String, code: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Pinned vector from the bookkeeper/singular ask:
 	//   v3(NS_DNS, "www.python.org") == 7ffc9d67-9009-37fc-827f-5d088dabcca2
 	val u1 = uuid.v3(&uuid.namespace_dns(), &("www.python.org"));

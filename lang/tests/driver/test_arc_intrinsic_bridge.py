@@ -51,7 +51,7 @@ pub struct Payload {
 	pub n: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = conc.arc(Payload(n = 42));
 	val b = a.clone();
 	return b.get().n;
@@ -77,7 +77,7 @@ pub struct Payload {
 	pub n: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = conc.arc(Payload(n = 42));
 	return a.clone().get().n;
 }
@@ -102,7 +102,7 @@ fn make_and_drop() nothrow -> Int {
 	// drop_thunk.
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = make_and_drop();
 	val y = make_and_drop();
 	return x + y;

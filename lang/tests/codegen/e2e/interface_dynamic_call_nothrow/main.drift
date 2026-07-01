@@ -14,7 +14,7 @@ implement Adder for Box {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = Box(base = 40);
 	return a.add(2);
 }

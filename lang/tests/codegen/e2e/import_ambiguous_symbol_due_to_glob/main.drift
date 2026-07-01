@@ -2,4 +2,4 @@ module main;
 import a as m;
 import b as m;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }

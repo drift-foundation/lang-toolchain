@@ -40,7 +40,7 @@ fn first(xs: &Array<Int>) nothrow -> Int {
 	return xs[0];
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(7);
 	return first(&xs);

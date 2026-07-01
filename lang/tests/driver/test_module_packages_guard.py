@@ -26,7 +26,7 @@ def test_driftc_guard_accepts_workspace_module_packages(tmp_path: Path, capsys: 
 		"\n".join(
 			[
 				"module main;",
-				"fn main() nothrow -> Int {",
+				"pub fn main() nothrow -> Int {",
 				"	return 1;",
 				"}",
 				"",

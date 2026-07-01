@@ -3,7 +3,7 @@ module std.mem.test;
 import std.mem as mem;
 struct Point(x: Int, y: Int);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var p = Point(1, 2);
 	val r = &p.x;
 	mem.replace(&mut p.x, 3);

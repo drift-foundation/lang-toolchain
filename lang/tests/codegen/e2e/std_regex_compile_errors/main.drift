@@ -26,7 +26,7 @@ fn expect_err(pattern: &String, expected_tag: &String, expected_offset: Int, fai
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- unclosed-group: "(" → offset 1 (at EOF) ---

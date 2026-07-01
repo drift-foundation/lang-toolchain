@@ -87,7 +87,7 @@ def test_closure_tail_void_free_call_compiles_and_runs(tmp_path: Path) -> None:
 fn make_b() nothrow -> core.Callback1<Int, Void> {
 	return core.callback1(|ev: Int| => { disp(ev); });
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = make_b();
 	cb.call(7);
 	return 0;
@@ -112,7 +112,7 @@ fn make_a() nothrow -> core.Callback1<Int, Void> {
 		}
 	});
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = make_a();
 	cb.call(7);
 	cb.call(-1);
@@ -135,7 +135,7 @@ fn handle(ev: Int) nothrow -> Void {
 		Optional::None => {}
 	}
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	handle(7);
 	handle(-1);
 	return 0;
@@ -158,7 +158,7 @@ fn make_m() nothrow -> core.Callback1<Int, Void> {
 	val inner = core.callback1(|x: Int| => { disp(x); });
 	return core.callback1(|ev: Int| captures(move inner) => { inner.call(ev); });
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = make_m();
 	cb.call(7);
 	return 0;
@@ -182,7 +182,7 @@ def test_captureless_fnptr_tail_void_free_call_compiles_and_runs(tmp_path: Path)
 	_compile_and_run(
 		tmp_path,
 		_PREAMBLE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f: Fn(Int) nothrow -> Void = |x: Int| => { disp(x); };
 	f(7);
 	return 0;
@@ -203,7 +203,7 @@ def test_captureless_fnptr_tail_match_void_arm_compiles_and_runs(tmp_path: Path)
 	_compile_and_run(
 		tmp_path,
 		_PREAMBLE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f: Fn(Int) nothrow -> Void = |ev: Int| => {
 		match classify(ev) {
 			Optional::Some(v) => { use_it(v); },

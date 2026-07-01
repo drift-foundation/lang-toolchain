@@ -71,7 +71,7 @@ module main;
 import lib;
 import types;
 {import_impls_line}
-fn main() nothrow -> Int {{
+pub fn main() nothrow -> Int {{
 	try lib.id(types.Bad(x = 1)) catch {{
 		val _ = types.Bad(x = 0);
 	}}

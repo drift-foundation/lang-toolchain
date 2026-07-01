@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.cli as cli;
 
-fn main(argv: Array<String>) nothrow -> Int {
+pub fn main(argv: Array<String>) nothrow -> Int {
 	var p = cli.parser("tool", "0.1.0", "cli smoke");
 	val _ = p.positional("target", "target", true, false);
 	val _ = p.positional("mode", "mode", true, false);

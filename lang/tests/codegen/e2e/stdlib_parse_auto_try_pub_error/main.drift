@@ -19,7 +19,7 @@ import std.console as console;
 //   * Exit 42 = e.offset on the failing parse.  Stdout = e.tag
 //     ("invalid-digit" — the parser stops at the 'x' at offset 2).
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return parse.parse_int("12x").or_throw();
 	} catch parse:ParseError(e) {

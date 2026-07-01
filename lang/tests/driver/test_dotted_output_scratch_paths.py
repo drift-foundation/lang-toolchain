@@ -27,7 +27,7 @@ from lang.driftc.parser import stdlib_root
 
 _SRC = """
 module main;
-fn main() nothrow -> Int { return %d; }
+pub fn main() nothrow -> Int { return %d; }
 """
 
 

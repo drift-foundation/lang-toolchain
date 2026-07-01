@@ -66,7 +66,7 @@ module main;
 import std.core as core;
 import wire as wire;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match wire.mk() {
 		core.Result::Ok(v) => {
 			if v.flag { return 1; }

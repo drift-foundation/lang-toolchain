@@ -7,7 +7,7 @@ struct Payload {
 	count: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = Payload(name = "job-1", count = 9);
 	var cb: core.Callback0<Int> = core.callback0(| | captures(move p) => {
 		val q = move p;

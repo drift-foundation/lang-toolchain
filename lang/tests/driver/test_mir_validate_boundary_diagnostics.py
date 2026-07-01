@@ -18,7 +18,7 @@ def test_mir_validate_boundary_failure_is_diagnostic_not_assert(tmp_path: Path, 
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -70,7 +70,7 @@ fn add1(v: Int) nothrow -> Int {
 	return v + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return add1(1);
 }
 """

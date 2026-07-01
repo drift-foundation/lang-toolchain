@@ -36,7 +36,7 @@ def test_deref_requires_reference_value(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = 1;
 	val y = *x;
 	return y;
@@ -61,7 +61,7 @@ fn take(b: &Box) nothrow -> Box {
 	return *b;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val b = Box(xs = move xs);

@@ -89,7 +89,7 @@ fn outer_throws() throws -> Int {
 \t\treturn n;
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"compile failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"
@@ -112,7 +112,7 @@ fn outer_nothrow() nothrow -> Int {
 \t\treturn n;
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"control compile failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"
@@ -142,7 +142,7 @@ fn outer_throws() throws -> Int {
 \t\treturn n;
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, "throws-lambda (via CallbackThrow0 expected-type) auto-try should still unwrap r → Int → match rejects"
 	assert any("variant" in m for m in errs), (
@@ -197,7 +197,7 @@ fn outer_throws_with_try() throws -> Int {
 \t\treturn 0;
 \t}
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"try-block lambda-boundary leak — compile failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"
@@ -223,7 +223,7 @@ fn outer_throws() throws -> Int {
 \t\treturn n;
 \t});
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"explicit Result annotation in nested lambda failed: rc={rc}, errs={errs}"
 	assert not errs, f"unexpected diagnostics: {errs}"

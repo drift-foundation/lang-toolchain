@@ -62,7 +62,7 @@ struct Wrapper {
 	plain: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var w = Wrapper(arc_field = conc.arc(sync.atomic_bool(false)), plain = 0);
 	return 0;
 }

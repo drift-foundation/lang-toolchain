@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     if "a" == "a" {
         if "a" == "b" {
             return 1;

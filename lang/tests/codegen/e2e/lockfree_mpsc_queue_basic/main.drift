@@ -8,7 +8,7 @@ fn pack(n: Uint) nothrow -> sync.Handle<Node> {
 	return sync.handle<type Node>(n);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var q = sync.mpsc_queue<type Node>(4);
 	if not q.push(pack(cast<Uint>(11))) { return 1; }
 	if not q.push(pack(cast<Uint>(22))) { return 2; }

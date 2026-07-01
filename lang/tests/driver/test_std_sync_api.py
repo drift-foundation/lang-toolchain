@@ -37,7 +37,7 @@ module main;
 
 import std.sync as sync;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = sync.atomic_bool(false);
 	val _ = a.fetch_sub(true, sync.MemoryOrder::Relaxed());
 	return 0;

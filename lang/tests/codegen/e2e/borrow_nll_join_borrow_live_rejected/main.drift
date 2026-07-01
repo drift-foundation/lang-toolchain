@@ -2,7 +2,7 @@ module main;
 
 struct S(a: Int, b: Int);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var s = S(0, 0);
 	var r: &Int = &s.a;
 	if true {

@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var parts: Array<String> = [];
 	parts.push("a");
 	parts.push("b");

@@ -23,7 +23,7 @@ fn check(src: String, cfg: &json.JsonParseConfig) nothrow -> Bool {
 	return a_enc == b_enc;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val perm = json.permissive();   // KeepLast
 	val st = json.strict();          // Reject dups
 	// KeepFirst cfg

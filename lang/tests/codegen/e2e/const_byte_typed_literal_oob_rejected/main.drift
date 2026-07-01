@@ -2,6 +2,6 @@ module main;
 
 const A: Byte = 256;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }

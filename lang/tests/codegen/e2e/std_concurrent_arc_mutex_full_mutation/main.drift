@@ -35,7 +35,7 @@ fn on_x(e: &mut Event) nothrow -> Void {
 	e.v = g.get_mut().state;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var m = conc.mutex(StateMachine(state = 0));
 	var sm = conc.arc(m);
 	var bus = EventBus(on_x = core.callback1(on_x));

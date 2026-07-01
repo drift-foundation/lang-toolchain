@@ -82,7 +82,7 @@ fn _require_err_b32(s: String, tag: String, off: Int, code: Int) nothrow -> Int 
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var src: Array<Byte> = [];
 	src.push(cast<Byte>(0));
 	src.push(cast<Byte>(10));

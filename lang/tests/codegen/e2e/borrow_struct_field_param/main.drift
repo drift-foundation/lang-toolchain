@@ -7,7 +7,7 @@ fn inc_x(p: &mut Point) nothrow -> Void {
 	*rx = *rx + 1;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var p = Point(41, 0);
 	inc_x(&mut p);
 	return p.x;

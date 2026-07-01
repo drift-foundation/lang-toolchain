@@ -3,7 +3,7 @@ module main;
 struct Inner(arr: Array<Int>);
 struct Wrap(inner: Inner);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var w = Wrap(Inner([1, 2]));
 	val p = &w.inner.arr[0];
 	w.inner.arr[1] = 3;

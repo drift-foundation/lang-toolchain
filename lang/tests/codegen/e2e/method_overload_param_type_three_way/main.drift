@@ -18,7 +18,7 @@ implement Bag {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Bag(v = 7);
 
 	if b.tag("hello") != 8 { return 1; }

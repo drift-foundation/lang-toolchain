@@ -5,7 +5,7 @@ import m_trait;
 
 use trait m_trait.Show;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b = try m_box.make_box(8) catch { m_box.Box(value = 0) };
 	return b.show();
 }

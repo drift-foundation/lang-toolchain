@@ -23,7 +23,7 @@ module m_main;
 import std.core as core;
 import std.err as err;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		throw err:ResultError(diag_json = core.diagnostic_json_int(5));
 	} catch err:ResultError(_) {

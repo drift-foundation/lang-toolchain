@@ -36,7 +36,7 @@ fn connect(flag: &mut Bool, drops: &mut Int) nothrow -> core.Result<Conn, Int> {
 	return core.Result::Ok(move conn);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var alive = false;
 	var drops = 0;
 	match connect(&mut alive, &mut drops) {

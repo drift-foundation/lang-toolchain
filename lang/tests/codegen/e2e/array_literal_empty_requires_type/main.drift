@@ -1,6 +1,6 @@
 module m;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val xs = [];
 	return 0;
 }

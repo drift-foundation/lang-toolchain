@@ -73,7 +73,7 @@ def test_captured_array_of_struct_indexed_field(tmp_path: Path) -> None:
 	"""`captured[i].field` on a captured `Array<struct{2 owning fields}>`."""
 	src = _PREAMBLE + """
 pub struct KVB { key: Array<Byte>, value: Array<Byte> }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar pairs: Array<KVB> = [];
 \tpairs.push(KVB(key = b1(1), value = b1(11)));
 \tpairs.push(KVB(key = b1(2), value = b1(22)));
@@ -91,7 +91,7 @@ def test_captured_array_of_struct_one_field(tmp_path: Path) -> None:
 	"""Same shape with ONE owning field — pins 'not field-count dependent'."""
 	src = _PREAMBLE + """
 pub struct K1 { key: Array<Byte> }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar pairs: Array<K1> = [];
 \tpairs.push(K1(key = b1(1)));
 \tpairs.push(K1(key = b1(2)));
@@ -108,7 +108,7 @@ fn main() nothrow -> Int {
 def test_captured_array_of_array_indexed(tmp_path: Path) -> None:
 	"""`captured[i]` on a captured `Array<Array<Byte>>` — also pins not-field-count."""
 	src = _PREAMBLE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar pairs: Array<Array<Byte> > = [];
 \tpairs.push(b1(1)); pairs.push(b1(2)); pairs.push(b1(3));
 \treturn drive(core.callback1(| z: Int | captures(move pairs) => {
@@ -125,7 +125,7 @@ def test_captured_struct_field_prefix_index(tmp_path: Path) -> None:
 	"""`captured.a[i]` — the capture slot matches a FIELD PREFIX of the place."""
 	src = _PREAMBLE + """
 pub struct Holder { a: Array<Byte> }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar h: Holder = Holder(a = b1(5));
 \treturn drive(core.callback1(| z: Int | captures(move h) => {
 \t\tvar s = 0; var i = 0;
@@ -141,7 +141,7 @@ def test_captured_array_indexed_place_mutation(tmp_path: Path) -> None:
 	"""`captured[i].field = v` — a MUTABLE indexed place on a captured array."""
 	src = _PREAMBLE + """
 pub struct KVB { key: Array<Byte>, value: Array<Byte> }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar pairs: Array<KVB> = [];
 \tpairs.push(KVB(key = b1(1), value = b1(2)));
 \treturn drive(core.callback1(| z: Int | captures(move pairs) => {
@@ -159,7 +159,7 @@ def test_noncapture_indexed_place_control(tmp_path: Path) -> None:
 	unaffected by the fix."""
 	src = _PREAMBLE + """
 pub struct KVB { key: Array<Byte>, value: Array<Byte> }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar pairs: Array<KVB> = [];
 \tpairs.push(KVB(key = b1(1), value = b1(2)));
 \tpairs.push(KVB(key = b1(3), value = b1(4)));

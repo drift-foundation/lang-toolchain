@@ -62,7 +62,7 @@ def test_const_arc_int_construct_clone_get(tmp_path, capsys):
 	"""Smallest end-to-end: `Int` is Frozen, so construction +
 	clone + get all type-check; no rejection diagnostic fires."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = ca.const_arc<type Int>(42);
 \tvar b = a.clone();
 \tval v: Int = *a.get();
@@ -77,7 +77,7 @@ def test_const_arc_string_construct(tmp_path, capsys):
 	"""`String` is heap-bearing-but-Frozen; refcount handle on a
 	heap String is the canonical use case."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = ca.const_arc<type String>("hello");
 \tvar b = a.clone();
 \treturn 0;
@@ -97,7 +97,7 @@ pub struct Config {
 \tpub enabled: Bool
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = ca.const_arc<type Config>(Config(name = "n", port = 1, enabled = true));
 \tvar b = a.clone();
 \treturn 0;
@@ -129,7 +129,7 @@ def _assert_rejected_const_arc_ctor(errs: list[dict], payload_label: str) -> Non
 
 def test_const_arc_rejects_mutex_payload(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar m = conc.mutex<type Int>(0);
 \tvar x = ca.const_arc<type conc.Mutex<Int>>(move m);
 \treturn 0;
@@ -144,7 +144,7 @@ def test_const_arc_rejects_arc_payload(tmp_path, capsys):
 	expose mutation through `BorrowMut`.  The composition is what
 	keeps Frozen sound."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar inner = conc.arc<type Int>(7);
 \tvar x = ca.const_arc<type conc.Arc<Int>>(move inner);
 \treturn 0;
@@ -158,7 +158,7 @@ def test_const_arc_rejects_array_payload(tmp_path, capsys):
 	"""`Array<T>` exposes mutating methods through `&mut`, so it is
 	not Frozen."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar arr: Array<Int> = [1, 2, 3];
 \tvar x = ca.const_arc<type Array<Int>>(move arr);
 \treturn 0;
@@ -172,7 +172,7 @@ def test_const_arc_rejects_hashmap_payload(tmp_path, capsys):
 	"""`HashMap<K, V>` exposes mutating methods through `&mut`, so it
 	is not Frozen — even when both K and V are Frozen."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar m = containers.hash_map<type String, Int>();
 \tvar x = ca.const_arc(move m);
 \treturn 0;
@@ -191,7 +191,7 @@ def test_const_arc_rejects_immutable_ref_payload(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 fn make_ref<T>(self: &T) nothrow -> &T require T is shareable.Frozen { return self; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar n: Int = 7;
 \tval r: &Int = &n;
 \tvar x = ca.const_arc<type &Int>(r);
@@ -206,7 +206,7 @@ def test_const_arc_rejects_mutable_ref_payload(tmp_path, capsys):
 	"""`&mut T` is even more clearly not Frozen — the referent is
 	mutable through this very reference."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar n: Int = 7;
 \tval r: &mut Int = &mut n;
 \tvar x = ca.const_arc<type &mut Int>(r);
@@ -227,7 +227,7 @@ pub struct Bad {
 \tpub lock: conc.Mutex<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval b = Bad(name = "x", lock = conc.mutex<type Int>(0));
 \tvar x = ca.const_arc<type Bad>(move b);
 \treturn 0;
@@ -254,7 +254,7 @@ fn dummy() nothrow -> Void {
 \treturn;
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0
 	rejected = any(
@@ -304,7 +304,7 @@ module main;
 
 import std.core.const_arc as ca;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = ca.const_arc<type Int>(42);
 \tvar b = ca.const_arc<type String>("hi");
 \tvar c = a.clone();
@@ -342,7 +342,7 @@ module main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type Int>(42);
 \tval b = a.clone();
 \tval h: core.ConstArc<Int> = a.clone();
@@ -373,7 +373,7 @@ def test_const_arc_has_no_get_mut(tmp_path, capsys):
 	become possible.  Calling a non-existent method must produce a
 	method-resolution error."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = ca.const_arc<type Int>(42);
 \tval r = a.get_mut();
 \treturn 0;

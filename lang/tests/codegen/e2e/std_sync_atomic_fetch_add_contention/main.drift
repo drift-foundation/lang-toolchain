@@ -56,6 +56,6 @@ fn run() -> Int {
 	return 4;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run() catch { 99 };
 }

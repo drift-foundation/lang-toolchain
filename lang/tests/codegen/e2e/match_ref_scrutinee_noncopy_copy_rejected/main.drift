@@ -13,7 +13,7 @@ fn mk() nothrow -> R {
 	return R::Ok(v = S(text = "x"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = mk();
 	match &r {
 		R::Ok(v) => {

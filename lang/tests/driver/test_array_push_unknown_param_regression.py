@@ -22,7 +22,7 @@ def test_array_push_cross_module_variant_arg_does_not_require_unknown_param(tmp_
 		"""
 		module main;
 		import mariadb.rpc as rpc;
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			var args: Array<rpc.RpcArg> = [];
 			args.push(rpc.arg_int(1));
 			args.push(rpc.arg_int(2));

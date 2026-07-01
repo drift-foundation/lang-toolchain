@@ -31,7 +31,7 @@ fn leaf_tag(w: &Wrapper) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Build a Branch(children=[Leaf(10), Leaf(20)]).
 	val node = make_branch(10, 20);
 

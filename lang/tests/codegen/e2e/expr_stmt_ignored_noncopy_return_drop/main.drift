@@ -7,7 +7,7 @@ fn mk() nothrow -> Optional<String> {
 	return Optional<String>::Some(s);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	mk();
 	return 0;
 }

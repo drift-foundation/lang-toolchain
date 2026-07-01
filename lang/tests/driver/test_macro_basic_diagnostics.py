@@ -38,7 +38,7 @@ module m_main;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val logger = log.create_logger("main", b.build());
 	val _ = log.warn!(logger, "ev", {:});
@@ -56,7 +56,7 @@ module m_main;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val logger = log.create_logger("main", b.build());
 	log.info!(logger);
@@ -74,7 +74,7 @@ module m_main;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val logger = log.create_logger("main", b.build());
 	log.info!(logger, "ev", attrs = {:});

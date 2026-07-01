@@ -2,7 +2,7 @@ module main;
 import lib as lib;
 
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = try lib.make() catch { lib.Point(x = 0, y = 0) };
 	return 0;
 }

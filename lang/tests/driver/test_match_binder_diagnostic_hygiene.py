@@ -110,7 +110,7 @@ fn make() nothrow -> core.Result<Resp, AppErr> {
 \treturn core.Result::Ok(Resp(status = 0));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval result = make();
 \tval status: Int = match &result {
 \t\tcore.Result::Ok(resp) => { resp.status },
@@ -138,7 +138,7 @@ fn make() nothrow -> core.Result<Resp, AppErr> {
 \treturn core.Result::Ok(Resp(status = 0));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval result = make();
 \tval status: Int = match move result {
 \t\tcore.Result::Ok(resp) => { undefined_name_here },
@@ -164,7 +164,7 @@ import std.core as core;
 struct Resp { pub status: Int }
 struct AppErr { pub code: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval n: Int = 5;
 \tval s: Int = match n {
 \t\tcore.Result::Ok(resp) => { resp.status },

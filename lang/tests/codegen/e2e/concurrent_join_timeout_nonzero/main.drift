@@ -4,7 +4,7 @@ import std.concurrent as conc;
 import std.core as core;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var t = conc.spawn(| | => { thread.vt_park_until(thread.now_ms() + 50); return 1; });
 	var res = t.join_timeout(conc.Duration(millis = 1));
 		match res {

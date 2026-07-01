@@ -10,7 +10,7 @@ implement Point {
 	}
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var p = Point(1);
 	p.bump();
 	return p.x;

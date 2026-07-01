@@ -34,7 +34,7 @@ fn ok_a(text: String, cfg: &json.JsonParseConfig) nothrow -> String {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val perm = json.permissive();
 	val st = json.strict();
 	val si = json.signed_ir();

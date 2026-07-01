@@ -46,7 +46,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback0(| | => {
 		val r: Optional<Int> = Optional::Some(7);
 		match r {

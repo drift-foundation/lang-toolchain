@@ -11,7 +11,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return move out;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	match query(&mut sess) {
 		core.Result::Ok(st) => {

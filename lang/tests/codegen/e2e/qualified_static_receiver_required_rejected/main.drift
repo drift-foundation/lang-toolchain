@@ -10,7 +10,7 @@ implement Point {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = Point::bump(1);
 	return x;
 }

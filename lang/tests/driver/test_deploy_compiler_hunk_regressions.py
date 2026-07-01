@@ -110,7 +110,7 @@ module main;
 
 import acme.chain as chain;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return chain.entry(41);
 }
 """,
@@ -187,7 +187,7 @@ module main;
 
 import acme.genlib as genlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return genlib.identity<Int>(42);
 }
 """,
@@ -251,7 +251,7 @@ implement Foo {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -496,7 +496,7 @@ module main;
 
 import acme.genlib as genlib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return genlib.identity<Int>(42);
 }
 """,
@@ -622,7 +622,7 @@ def test_k4_soft_skip_unknown_ir_kind(
 		"""\
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -885,7 +885,7 @@ module main;
 
 import std.containers as containers;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s = containers.HashSet<Int>.new();
 	s.insert(1);
 	return 0;
@@ -957,7 +957,7 @@ module main;
 
 import acme.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val d1 = conc.Duration(millis = 1);
 	val d2 = conc.Duration(millis = d1.millis + 1);
 	return d2.millis;
@@ -1055,7 +1055,7 @@ fn check(o: result.Outcome<Int, Int>) nothrow -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o: result.Outcome<Int, Int> = result.Outcome::Ok(42);
 	return check(move o);
 }
@@ -1125,7 +1125,7 @@ fn get_err() nothrow -> result.Outcome<Int, Int> {
 	return result.Outcome::Err(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val ok = get_ok();
 	val err = get_err();
 	val v1 = match ok {
@@ -1289,7 +1289,7 @@ fn get_err() nothrow -> result.Outcome<Int, Int> {
 	return result.Outcome::Err(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o: result.Outcome<Int, Int> = get_ok();
 	return 0;
 }
@@ -1340,7 +1340,7 @@ fn get() nothrow -> result.Widget<Int> {
 	return result.Widget::Make(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -1436,7 +1436,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var c = util.make_counter(0);
 	c.increment();
 	return c.get();
@@ -1486,7 +1486,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(42);
 	return c.value;
 }
@@ -1535,7 +1535,7 @@ module main;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var c = util.Counter(value = 0);
 	c.increment();
 	c.increment();
@@ -1587,7 +1587,7 @@ module runner;
 
 import acme.util as util;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = util.make_counter(7);
 	return c.value;
 }

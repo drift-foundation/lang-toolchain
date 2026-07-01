@@ -48,7 +48,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return core.Result::Ok(Statement(session = s));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	match query(&mut sess) {
 		core.Result::Ok(_) => { return 0; },
@@ -79,7 +79,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return move out;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	match query(&mut sess) {
 		core.Result::Ok(_) => { return 0; },
@@ -106,7 +106,7 @@ fn bad() nothrow -> Statement {
 	return Statement(session = &mut sess);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = bad();
 	return 0;
 }
@@ -132,7 +132,7 @@ fn bad() nothrow -> Statement {
 	return st;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = bad();
 	return 0;
 }
@@ -155,7 +155,7 @@ fn bad(a: &Int, b: &Int) nothrow -> PairRefs {
 	return PairRefs(a = a, b = b);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = 1;
 	val y = 2;
 	val _ = bad(&x, &y);
@@ -181,7 +181,7 @@ fn id<T>(x: T) nothrow -> T {
 	return x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val _ = id<type Statement>(st);
@@ -203,7 +203,7 @@ module m;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var xs: Array<Statement> = [];
@@ -230,7 +230,7 @@ fn inspect(s: &Statement) nothrow -> Int {
 	return s.session.id;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val n = inspect(st);
@@ -258,7 +258,7 @@ struct Statement(session: &mut Session);
 
 fn run(var cb: core.Callback0<Int>) nothrow -> Int { return cb.call(); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val n = run(core.callback0(| | captures(move st) => { return 1; }));
@@ -285,7 +285,7 @@ import std.runtime as rt;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	val reg = rt.global_registry();

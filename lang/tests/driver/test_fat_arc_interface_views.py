@@ -93,7 +93,7 @@ implement Counter for AppService {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val svc = conc.arc(AppService(n = 40));
 	val g = svc.as_interface<type Greeter>();
 	val c = svc.as_interface<type Counter>();
@@ -124,7 +124,7 @@ implement Face for App {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(n = 42));
 	// Chained rvalue receiver: `.as_interface<type Face>()` returns
 	// a fresh `Arc<Face>` rvalue that is IMMEDIATELY the receiver
@@ -157,7 +157,7 @@ implement Face for App {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(n = 42));
 	// Chained rvalue: `.as_interface<type Face>()` returns a fresh
 	// `Arc<Face>` rvalue, `.get()` on that returns a borrowed
@@ -201,7 +201,7 @@ implement Reader for Cell {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = conc.arc(Cell(v = atomic.atomic_int(10)));
 	val inc_view = c.as_interface<type Incrementer>();
 	val read_view = c.as_interface<type Reader>();
@@ -303,7 +303,7 @@ fn run_permutation_last_face_is_interface(counter: &conc.Arc<atomic.AtomicInt>) 
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val counter = conc.arc(atomic.atomic_int(0));
 
 	run_permutation_arc_v1_v2(&counter);
@@ -340,7 +340,7 @@ pub struct Foo {
 // Foo does NOT implement Unrelated — the `require T is I` clause
 // on `Arc<T>.as_interface<I>()` must reject this at typecheck.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f = conc.arc(Foo(n = 1));
 	val bad = f.as_interface<type Unrelated>();
 	return 0;
@@ -367,7 +367,7 @@ implement Ping for Node {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val arc = conc.arc(Node(n = 5));
 	val v1 = arc.as_interface<type Ping>();
 	val v2 = v1.clone();
@@ -523,7 +523,7 @@ implement log.ContextResolver for MyResolver {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = conc.arc(MyResolver(tag = 7));
 	val view = r.as_interface<type log.ContextResolver>();
 	var b = log.config_builder();
@@ -719,7 +719,7 @@ module main;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = log.config_builder();
 	val _ = b.build();
 	return 0;

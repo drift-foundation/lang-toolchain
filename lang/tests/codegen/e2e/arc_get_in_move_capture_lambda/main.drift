@@ -31,7 +31,7 @@ implement App {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(v = 42));
 	val captured = app.clone();
 	val cb: core.Callback0<Int> = core.callback0(| | captures(move captured) => {

@@ -39,7 +39,7 @@ module m;
 
 struct S { a: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = S(z = 1);
 	return s.a;
 }
@@ -60,7 +60,7 @@ module m;
 
 struct S { a: Int, b: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = S(a = 1);
 	return s.a;
 }
@@ -81,7 +81,7 @@ module m;
 
 fn f(a: Int) nothrow -> Int { return a; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return f(a = 1);
 }
 """,
@@ -101,7 +101,7 @@ module m;
 
 struct S { a: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = S(a = 1, a = 2);
 	return s.a;
 }
@@ -122,7 +122,7 @@ module m;
 
 struct S { a: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = S(1, a = 2);
 	return s.a;
 }
@@ -145,7 +145,7 @@ variant V {
 	A(x: Int),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v: V = A(y = 1);
 	match v {
 		A(x) => { return x; }
@@ -170,7 +170,7 @@ variant V {
 	A(x: Int, y: Int),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v: V = A(x = 1);
 	match v {
 		A(x, y) => { return x + y; }

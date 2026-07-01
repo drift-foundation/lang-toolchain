@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 1;
 	val f = | | captures(move x) => { return x; };
 	return x;

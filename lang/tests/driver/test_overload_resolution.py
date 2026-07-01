@@ -123,7 +123,7 @@ module main;
 
 import m as m;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val a: Int = m.f(1);
 	val b: Int = m.f("hi");
 	return a + b;

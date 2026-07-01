@@ -123,7 +123,7 @@ fn handle(reusable: Bool, result: PooledResult, conn: DestrThing) nothrow -> Int
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val empty: Array<Byte> = [];
 	val r = PooledResult(response = "", remainder = move empty, reusable = true);
 	return handle(true, move r, DestrThing(tag = "", closed = false));

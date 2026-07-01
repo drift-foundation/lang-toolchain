@@ -155,7 +155,7 @@ module main;
 import std.core as core;
 import mwlib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn lib.run_mw3(|req, ctx, next| => {
 \t\tval inner = next.call(req, ctx);
 \t\treturn lib.ok(req.n + ctx.k);
@@ -171,7 +171,7 @@ module main;
 import std.core as core;
 import mwlib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn lib.run_mw3_ref(|req, ctx, next| => {
 \t\tval inner = next.call(req, ctx);
 \t\treturn lib.ok(req.n + ctx.k);
@@ -354,7 +354,7 @@ module main;
 import std.core as core;
 import mwlib_multi as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn lib.run_mw3_ref(|req, ctx, next| => {
 \t\tval inner = next.call(req, ctx);
 \t\treturn lib.ok(req.n + ctx.k);
@@ -422,7 +422,7 @@ fn install() throws -> Int {
 \t});
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 
 

@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs = [1, 2, 3];
 	val v = xs.swap_remove(0);
 	return v + xs[0] + xs[1];

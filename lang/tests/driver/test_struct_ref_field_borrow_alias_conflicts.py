@@ -58,7 +58,7 @@ implement Statement {
 
 fn read(r: &Int) nothrow -> Int { return r; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	var st = Statement(session = &mut sess);
 	val r = &st.session.id;
@@ -88,7 +88,7 @@ implement Statement {
 
 fn read(r: &Int) nothrow -> Int { return r; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	var st = Statement(session = &mut sess);
 	val r = &st.session.id;
@@ -121,7 +121,7 @@ implement Statement {
 
 fn read(r: &Int) nothrow -> Int { return r; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	var st = Statement(session = &mut sess);
 	val r = &st.session.id;
@@ -154,7 +154,7 @@ implement Statement {
 
 fn read(r: &Int) nothrow -> Int { return r; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	var st = Statement(session = &mut sess);
 	val r = &st.session.id;

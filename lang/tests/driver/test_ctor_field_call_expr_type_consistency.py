@@ -48,7 +48,7 @@ fn build<T>(h: Handle<T>) nothrow -> Holder<T> {{
 	return Holder<type T>(inner = make(h.raw));
 }}
 
-fn main() nothrow -> Int {{
+pub fn main() nothrow -> Int {{
 	val h = Handle<type Int>(raw = cast<Uint>(1));
 	val _ = build<type Int>(h);
 	return 0;
@@ -83,7 +83,7 @@ fn build<T>(h: Handle<T>) nothrow -> Holder<T> {
 	return Holder<type T>(inner = x);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Handle<type Int>(raw = cast<Uint>(1));
 	val _ = build<type Int>(h);
 	return 0;

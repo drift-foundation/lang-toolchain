@@ -3,7 +3,7 @@ module main;
 import lang.thread as thread;
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Alloc cap 8, write 3 bytes, commit len 3.
 	var buf = unsafe { thread.array_byte_alloc_uninit(8) };
 	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };

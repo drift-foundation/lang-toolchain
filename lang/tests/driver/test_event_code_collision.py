@@ -89,7 +89,7 @@ def test_explicit_duplicate_event_code_rejected(tmp_path, capsys):
 pub error A(0x1234) {}
 pub error B(0x1234) {}
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -108,7 +108,7 @@ def test_distinct_explicit_event_codes_compile(tmp_path, capsys):
 pub error A(0x1234) {}
 pub error B(0x5678) {}
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

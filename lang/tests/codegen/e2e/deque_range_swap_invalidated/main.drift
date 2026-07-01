@@ -5,7 +5,7 @@ import std.iter as iter;
 import std.containers as containers;
 use trait iter.RandomAccessPermutable;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 var dq = containers.deque<type Int>();
 	dq.push_back(1);
 	dq.push_back(2);

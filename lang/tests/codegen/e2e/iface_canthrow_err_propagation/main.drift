@@ -60,7 +60,7 @@ fn run() -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = try run() catch { 99 };
 	if r != 0 { return r; }
 	return 0;

@@ -40,7 +40,7 @@ def test_assert_condition_requires_bool(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	assert(1);
 	return 0;
 }
@@ -56,7 +56,7 @@ def test_assert_message_requires_string(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	assert(true, 123);
 	return 0;
 }

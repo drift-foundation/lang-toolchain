@@ -14,7 +14,7 @@ implement iter.SinglePassIterator<Int> for CS {
 }
 implement iter.Iterable<CS, Int, CS> for CS { pub fn iter(var self: CS) nothrow -> CS { return move self; } }
 fn mk() nothrow -> CS { return CS(data = core.const_arc(0), n = 3); }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = mk();                   // ConstShare-only local
 	var s1 = 0;
 	for x in v { s1 = s1 + x; }     // implicit const_share(v) → independent owner

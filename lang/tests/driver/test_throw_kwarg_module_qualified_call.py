@@ -41,7 +41,7 @@ def test_throw_constructor_kw_value_resolves_module_qualified_call(tmp_path: Pat
 			}
 		}
 
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			return 0;
 		}
 		"""

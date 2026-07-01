@@ -3,7 +3,7 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback0(| | => { throw std.err:IndexError(container_id = "x", index = 0); });
 	var _t = conc.spawn(cb);
 	return 0;

@@ -4,7 +4,7 @@ fn g(x: Int) nothrow -> Int { return x; }
 
 fn make() -> Fn(Int) -> Int { return g; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val fp = try make() catch { g };
 	val v = try fp(3) catch { 0 };
 	return v;

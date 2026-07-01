@@ -65,7 +65,7 @@ fn cnt(n: &json.JsonNode) nothrow -> Int {
 	return c;
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """.lstrip()
 
 
@@ -139,7 +139,7 @@ implement Bag {
 	pub fn iter(self: &Bag) nothrow -> Array<Int> { return [1, 2]; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Bag(items = [1, 2]);
 	for x in b { return 1; }
 	return 0;
@@ -160,7 +160,7 @@ fn cnt(n: &json.JsonNode) nothrow -> Int {
 	return c;
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """.lstrip()
 
 
@@ -195,7 +195,7 @@ implement Faux for V {
 
 fn mk() nothrow -> V { return V::B(1); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	for x in mk() { return 1; }
 	return 0;
 }

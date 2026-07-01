@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val cond = true;
     var s = "x";
     if cond {

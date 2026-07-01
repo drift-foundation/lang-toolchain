@@ -8,7 +8,7 @@ variant B {
 	None,
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val a = A::Some(10);
 	val b = B::Some(20);
 	val ax = match a{

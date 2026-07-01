@@ -5,7 +5,7 @@ import std.containers as containers;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var m = containers.tree_map<type Int, Statement>();

@@ -32,7 +32,7 @@ fn _connect_like() nothrow -> core.Result<FakeConnection, Int> {
 	return core.Result::Ok(move conn);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match _connect_like() {
 		core.Result::Err(code) => { return code; },
 		core.Result::Ok(v) => {

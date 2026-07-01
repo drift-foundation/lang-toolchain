@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if text.index_of("hello world", "world") != 6 { return 1; }
 	if text.index_of("hello", "hello") != 0 { return 2; }
 	if text.index_of("hello", "xyz") != 0 - 1 { return 3; }

@@ -3,7 +3,7 @@ module m;
 import std.io as io;
 import std.runtime as runtime;
 
-fn main(argv: Array<String>) nothrow -> Int {
+pub fn main(argv: Array<String>) nothrow -> Int {
 	val _ = argv.len;
 	val reg = runtime.global_registry();
 	if not runtime.contains<type io.ProcessStdinCapability>(reg) {

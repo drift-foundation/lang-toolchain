@@ -2,7 +2,7 @@ module main;
 
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var buf = unsafe { thread.array_byte_alloc_uninit(0) };
 	if buf.len != 0 { return 1; }
 	unsafe { thread.array_byte_commit_init_len(&mut buf, 0); }

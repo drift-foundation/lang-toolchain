@@ -132,7 +132,7 @@ fn add1(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback1(add1);
 	return cb.call(41);
 }
@@ -195,7 +195,7 @@ fn might_throw(x: Int) -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback1(might_throw);
 	return cb.call(0);
 }
@@ -233,7 +233,7 @@ fn one_arg(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback2(one_arg);
 	return cb.call(1, 2);
 }
@@ -267,7 +267,7 @@ module m_main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback1(123);
 	return cb.call(0);
 }
@@ -305,7 +305,7 @@ fn zero() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback0<type Int>(zero);
 	return cb.call();
 }
@@ -344,7 +344,7 @@ fn add1(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback1(add1);
 	return cb.call(1);
 }
@@ -382,7 +382,7 @@ fn add1(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb = core.callback1(add1);
 	return cb.call(v = 1);
 }
@@ -421,7 +421,7 @@ fn add1(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cb: core.Callback1<Int, Bool> = core.callback1(add1);
 	return 0;
 }

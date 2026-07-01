@@ -13,7 +13,7 @@ implement Config {
     }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var arr: Array<S1> = [];
     arr.push(S1(S2(S3(S4("abc")))));
     arr.push(S1(S2(S3(S4("def")))));

@@ -5,7 +5,7 @@ fn fail() -> Int {
 	throw EvTest();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		val _ = fail();
 	} catch EvTest(e) {

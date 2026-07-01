@@ -25,7 +25,7 @@ fn is_failed_int(res: core.Result<Int, conc.ConcurrencyError>) nothrow -> Bool {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sd = conc.sleep(conc.Duration(millis = -1));
 	var ok_sleep = is_failed_void(move sd);
 

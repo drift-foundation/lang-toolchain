@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sb = text.string_builder(8);
 	// Builder starts empty
 	if text.sb_len(&sb) != 0 { return 1; }

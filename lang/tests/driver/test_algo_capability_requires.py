@@ -55,7 +55,7 @@ implement cmp.Comparable for Foo {
 
 fn needs_cmp<T>(x: T) nothrow -> Int require T is cmp.Comparable { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _x = Foo(x = 1);
 	val _y = needs_cmp(_x);
 	return 0;
@@ -91,7 +91,7 @@ fn binary_search<R, T>(r: &R, key: &T) nothrow -> Optional<Int>
 	return Optional::None();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
 	val _i = binary_search<type Range, Key>(&r, &k);
@@ -158,7 +158,7 @@ struct Need<R, T> require (R is BinarySearchable<T> and R is RandomAccessReadabl
 	t: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
 	val _n = Need<type Range, Key>(r = r, t = k);
@@ -199,7 +199,7 @@ fn binary_search<R, T>(r: &R, key: &T) nothrow -> Optional<Int>
 	return Optional::None();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
 	val _i = binary_search<type Range, Key>(&r, &k);
@@ -233,7 +233,7 @@ struct NeedCmp<T> require T is cmp.Comparable {
 	t: T
 }
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		val r = Range(n = 0);
 		val k = Key(x = 1);
 		val _n1 = NeedCap<type Range, Key>(r = r);
@@ -269,7 +269,7 @@ fn sort_in_place<R, T>(r: &mut R) nothrow -> Void
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var r = Range(n = 0);
 	val _ = sort_in_place<type Range, Key>(&mut r);
 	return 0;
@@ -293,7 +293,7 @@ struct Key { x: Int }
 fn min_val<T>(a: T, b: T) nothrow -> T require T is cmp.Comparable { return a; }
 fn max_val<T>(a: T, b: T) nothrow -> T require T is cmp.Comparable { return b; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val k1 = Key(x = 1);
 	val k2 = Key(x = 2);
 	val _a = min_val<type Key>(k1, k2);
@@ -336,7 +336,7 @@ struct Need<R, T> require (R is Permutable<T> and R is RandomAccessReadable<T>) 
 	r: R
 }
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		var r = Range(n = 0);
 		val _n = Need<type Range, NonCopy>(r = move r);
 		return 0;
@@ -367,7 +367,7 @@ struct NeedCmp<T> require T is cmp.Comparable {
 	t: T
 }
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		var r = Range(n = 0);
 		val _n1 = NeedPerm<type Range, Key>(r = r);
 		val _n2 = NeedCmp<type Key>(t = Key(x = 1));
@@ -393,7 +393,7 @@ struct Foo { x: Int }
 
 struct Need<T> require T is cmp.Comparable { value: T }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = Foo(x = 1);
 	val b = Foo(x = 2);
 	val _m1 = Need<type Foo>(value = a);
@@ -420,7 +420,7 @@ struct Need<R, T> require (R is BinarySearchable<T> and T is cmp.Comparable) {
 	t: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val xs = [1, 2, 3];
 	val key = 2;
 	val _n = Need<type Array<Int>, Int>(r = xs, t = key);
@@ -445,7 +445,7 @@ struct Need<R, T> require (R is Permutable<T> and T is cmp.Comparable) {
 	r: R
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs = [3, 1, 2];
 	val _n = Need<type Array<Int>, Int>(r = xs);
 	return 0;

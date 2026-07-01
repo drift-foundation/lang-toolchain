@@ -48,7 +48,7 @@ fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, f
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// =================================================================

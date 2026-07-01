@@ -115,7 +115,7 @@ import std.core as core;
 import std.console as console;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \t/* Force every exec_submit to fail with code 1.  This drives
 \t * spawn() down the submit-error branch
 \t * (stdlib/std/concurrent/concurrent.drift:1136-1144): the buffer
@@ -149,7 +149,7 @@ import std.concurrent as conc;
 import std.core as core;
 import std.console as console;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \t/* The cb returns a heap-allocated String (produced via concat —
 \t * literal `.clone()` would be a static refcount no-op and leak
 \t * nothing).  After spawn, we wait long enough for the cb to
@@ -200,7 +200,7 @@ pub struct Signal {
 \tpub started: conc.AtomicBool
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval signal: arc.Arc<Signal> = arc.arc(Signal(
 \t\tstarted = conc.atomic_bool(false)
 \t));
@@ -279,7 +279,7 @@ pub struct Signal {
 \tpub started: conc.AtomicBool
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval signal: arc.Arc<Signal> = arc.arc(Signal(
 \t\tstarted = conc.atomic_bool(false)
 \t));
@@ -352,7 +352,7 @@ import std.concurrent as conc;
 import std.console as console;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar g = conc.future_group<type String>();
 
 \t/* f1 returns first (short park, heap String via concat). */
@@ -427,7 +427,7 @@ pub struct Sigs {
 \tpub blocker_timed_out: conc.AtomicBool
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \t/* One-carrier executor with room to queue more than one task. */
 \tvar policy_b = conc.executor_policy_builder();
 \tpolicy_b.min_threads(1);
@@ -569,7 +569,7 @@ import std.concurrent as conc;
 import std.console as console;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \t/* Force every exec_submit to fail so the spawned future
 \t * carries submit_error != 0 with handle == 0. */
 \tthread.exec_submit_test_override(1);

@@ -34,7 +34,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return lib.add(40, 2);
 }
 """.lstrip(),
@@ -77,7 +77,7 @@ def test_manifest_reports_iface_inline_bytes(tmp_path: Path) -> None:
 		"""
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }
 """.lstrip(),

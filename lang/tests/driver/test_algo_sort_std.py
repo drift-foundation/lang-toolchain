@@ -58,7 +58,7 @@ implement iter.RandomAccessPermutable<Key> for Range {
 	pub fn swap(self: &mut Range, i: Int, j: Int) -> Void { return; }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var r = Range(n = 0);
 	algo.sort_in_place<type Range, Key>(&mut r);
 	return 0;
@@ -85,7 +85,7 @@ implement iter.RandomAccessReadable<Key> for Range {
 	pub fn compare_at(self: &Range, i: Int, j: Int) -> Int { return 0; }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var r = Range(n = 0);
 	algo.sort_in_place<type Range, Key>(&mut r);
 	return 0;

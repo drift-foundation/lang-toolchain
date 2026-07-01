@@ -1,2 +1,2 @@
 module foo__bar;
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }

@@ -22,7 +22,7 @@ def test_array_literal_forward_nominal_copy_allowed(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		val pairs = [Pair(a = 1, b = 2), Pair(a = 3, b = 4)];
 		val points = [Point(x = 1, y = 2), Point(x = 3, y = 4)];
 		val variants = [Choice::PointVal(Point(x = 5, y = 6)), Choice::PairVal(Pair(a = 7, b = 8))];
@@ -66,7 +66,7 @@ def test_array_literal_forward_nominal_non_copy_rejected(tmp_path: Path) -> None
 		"""
 module m_main;
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		val files = [File(data = [1, 2]), File(data = [3, 4])];
 		return 0;
 	}
@@ -107,7 +107,7 @@ module m_main;
 		return xs.len;
 	}
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		return mk(1);
 	}
 """,
@@ -150,7 +150,7 @@ module m_main;
 
 	struct Pair { a: Int, b: Int }
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		return mk(Pair(a = 1, b = 2));
 	}
 """,

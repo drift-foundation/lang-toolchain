@@ -8,7 +8,7 @@ fn build(builder: Builder) nothrow -> Config {
     return Config(move ap);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     var i = 0;
     while i < 100 {
         var protos: Array<String> = [];

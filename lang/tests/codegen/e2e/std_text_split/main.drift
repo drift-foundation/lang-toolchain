@@ -15,7 +15,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// ── split basic ─────────────────────────────────────────────
 	var parts = text.split("a,b,c", ",");
 	if parts.len != 3 { return 1; }

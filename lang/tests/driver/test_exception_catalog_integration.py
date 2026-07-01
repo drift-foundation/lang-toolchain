@@ -32,7 +32,7 @@ fn boom() -> Int {
     throw Boom();
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
     try {
         boom();
     } catch Unknown(e) {
@@ -56,7 +56,7 @@ fn boom() -> Int {
     throw Boom(msg = "boom");
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
     try {
         boom();
     } catch Boom(e) {

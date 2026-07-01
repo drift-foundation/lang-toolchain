@@ -2,7 +2,7 @@ module m;
 
 import std.sync as sync;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = sync.atomic_int(0);
 	var i = 0;
 	while i < 200000 {

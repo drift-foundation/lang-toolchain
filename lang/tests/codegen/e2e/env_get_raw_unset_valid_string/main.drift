@@ -4,7 +4,7 @@ import lang.thread as thread;
 
 // Guard regression: env_get_raw on an unset variable must return a valid
 // empty String (byte_length >= 0), not a negative-length sentinel.
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val raw = thread.env_get_raw("DRIFT_E2E_TEST_UNSET_VAR_XYZ_99");
 	// Must be a valid String with non-negative length.
 	if raw.byte_length() < 0 {

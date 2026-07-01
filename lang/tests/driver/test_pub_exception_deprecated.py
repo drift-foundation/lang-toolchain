@@ -87,7 +87,7 @@ pub exception ParseError {
 \toffset: Int,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -106,7 +106,7 @@ def test_pub_exception_paren_form_rejected_with_migration_diag(tmp_path, capsys)
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub exception ParseError(message: String, offset: Int);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

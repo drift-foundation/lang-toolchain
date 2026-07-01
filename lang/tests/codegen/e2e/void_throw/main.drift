@@ -10,7 +10,7 @@ fn maybe_fail(flag: Int) -> Void {
 	throw Boom();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	// Success path.
 	try {
 		maybe_fail(0);

@@ -30,7 +30,7 @@ fn producer_try_advance_tail(q: &MpscTagged, expected: sync.Handle<Node>, next: 
 	return q.tail.compare_exchange_observed(expected, next, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var q = MpscTagged(
 		head = sync.atomic_handle(pack_handle(cast<Uint>(0), cast<Uint>(0))),
 		tail = sync.atomic_handle(pack_handle(cast<Uint>(0), cast<Uint>(0)))

@@ -73,7 +73,7 @@ module main;
 import std.core as core;
 pub struct Box { pub n: Int }
 variant Either { Some(b: Box), None }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val e: Either = Either::Some(Box(n = 1));
 	match e { Either::Some(b) => { return b.n; }, Either::None() => { return 0; } }
 }
@@ -102,7 +102,7 @@ implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy 
 	pub fn iter(var self: Box<T>) nothrow -> Box<T> { return move self; }
 }
 fn mkbox() nothrow -> Box<Int> { return Box::One(5); }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = 0;
 	for x in mkbox() { a = a + x; }
 	return a;
@@ -120,7 +120,7 @@ module main;
 import std.core as core;
 pub variant Box { A, B(n: Int) }
 variant Holder { Has(b: Box), Nil }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h: Holder = Holder::Has(Box::B(3));
 	match h { Holder::Has(b) => { match b { Box::B(n) => { return n; }, Box::A() => { return 0; } } }, Holder::Nil() => { return 9; } }
 }
@@ -141,7 +141,7 @@ struct Sq { side: Int }
 implement Box for Sq { pub fn area(self: &Sq) nothrow -> Int { return self.side * self.side; } }
 variant Holder { Has(b: Box), Nil }
 fn wrap(b: Box) -> Holder { return Holder::Has(move b); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	res = _compile(tmp_path, src)
 	assert res.returncode == 0, f"local interface Box should win:\n{res.stderr[-800:]}"
@@ -155,7 +155,7 @@ module main;
 import std.core as core;
 type Box = Int;
 variant Holder { Has(b: Box), Nil }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h: Holder = Holder::Has(7);
 	match h { Holder::Has(n) => { return n; }, Holder::Nil() => { return 0; } }
 }
@@ -172,7 +172,7 @@ def test_explicit_qualified_core_box_resolves_to_stdlib(tmp_path: Path) -> None:
 module main;
 import std.core as core;
 pub struct Box { pub n: Int }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b: core.Box<Int> = core.box<type Int>(7);
 	return b.take();
 }
@@ -195,7 +195,7 @@ def test_bare_box_without_local_resolves_via_reexport_fallback(tmp_path: Path) -
 module main;
 import std.core as core;
 variant Holder { Has(b: Box<Int>), Nil }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h: Holder = Holder::Has(core.box<type Int>(4));
 	return 0;
 }

@@ -4,7 +4,7 @@ import std.core as core;
 import std.uuid as uuid;
 import std.console as cons;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Generate a v4 — must succeed under normal OS RNG conditions.
 	match uuid.v4() {
 		Ok(u) => {

@@ -5,7 +5,7 @@ variant Color {
 	Blue,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c: Color = Color::Red();
 	val _ = match c {
 		Red => {

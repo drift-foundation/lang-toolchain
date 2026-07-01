@@ -6,7 +6,7 @@ struct User {
 	id: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = log.config_builder();
 	val lg = log.create_logger("main", b.build());
 	lg.info("user-created", {"user": User(id = 7)});

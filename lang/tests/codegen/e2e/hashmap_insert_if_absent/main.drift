@@ -4,7 +4,7 @@ import std.iter as iter;
 import std.core as core;
 use trait iter.SinglePassIterator;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var m = containers.hash_map<type String, Int>();
 	if not m.insert_if_absent("a", 1) { return 1; }   // absent -> true
 	if m.len() != 1 { return 2; }

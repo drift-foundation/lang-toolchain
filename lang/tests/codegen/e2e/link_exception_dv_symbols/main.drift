@@ -7,7 +7,7 @@ fn fail() -> Int {
 	throw E(n = 1, s = "x", b = false);
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     try fail() catch err {
         console.print("ok");
     }

@@ -2,7 +2,7 @@ module m;
 
 import std.sync as sync;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var ai = sync.atomic_int(7);
 	val o1 = ai.compare_exchange_observed(7, 9, sync.MemoryOrder::SeqCst(), sync.MemoryOrder::Acquire());
 	if o1 != 7 { return 1; }

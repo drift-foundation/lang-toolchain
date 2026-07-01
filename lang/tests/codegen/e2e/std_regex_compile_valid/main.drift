@@ -22,7 +22,7 @@ fn expect_ok(pattern: &String, fail_code: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- Literals ---

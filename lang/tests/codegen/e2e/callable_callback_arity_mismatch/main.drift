@@ -4,7 +4,7 @@ import std.core as core;
 
 fn zero() nothrow -> Int { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = core.callback1(zero);
 	return 0;
 }

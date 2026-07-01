@@ -6,7 +6,7 @@ struct Op {
 
 fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val op = Op(apply = add);
 	return 0;
 }

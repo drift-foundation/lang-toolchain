@@ -14,7 +14,7 @@ implement<T> Box<T> {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box<type Int>::make(9);
 	if b.value != 9 {
 		return 1;

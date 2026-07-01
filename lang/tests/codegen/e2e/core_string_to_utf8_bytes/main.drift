@@ -29,7 +29,7 @@ fn _string_from_array(bytes: &Array<Byte>) nothrow -> String {
 	return core.string_from_utf8_bytes(ptr, bytes.len);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// 1. ASCII round-trip — pinned bookkeeper input.
 	val ascii: String = "bookkeeper-test-01";
 	val a_bytes = core.string_to_utf8_bytes(&ascii);

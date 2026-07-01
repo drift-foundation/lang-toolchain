@@ -33,7 +33,7 @@ def test_fixed_width_rejected_in_user_module(tmp_path: Path) -> None:
 		Path("main.drift"): """
 module main;
 
-	fn main() nothrow -> Int{
+	pub fn main() nothrow -> Int{
 		val x: Uint8 = cast<Uint8>(1);
 		return 0;
 	}
@@ -73,7 +73,7 @@ def test_byte_allowed_in_user_module(tmp_path: Path) -> None:
 		Path("main.drift"): """
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Byte = 0;
 	return 0;
 }

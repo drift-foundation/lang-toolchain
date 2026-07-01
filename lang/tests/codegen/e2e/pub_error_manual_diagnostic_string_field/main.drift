@@ -85,7 +85,7 @@ fn _check_one(tag: String, count: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Run the throw/catch round trip multiple times to surface any
 	// refcount drift or use-after-free under the new lowering.
 	var i: Int = 0;

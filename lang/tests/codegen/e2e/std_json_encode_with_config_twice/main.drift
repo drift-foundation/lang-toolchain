@@ -14,4 +14,4 @@ fn run() -> Int {
 	if s2 != "{\"a\":1}" { return 2; }
 	return 0;
 }
-fn main() nothrow -> Int { return try run() catch { 99 }; }
+pub fn main() nothrow -> Int { return try run() catch { 99 }; }

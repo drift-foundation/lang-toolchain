@@ -258,7 +258,7 @@ fn register_mw(slot: &mut Array<core.Callback3<&Req, &mut Ctx,
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&Req, &mut Ctx,
 \t    core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>,
 \t    core.Result<Resp, AppErr>>> = [];
@@ -319,7 +319,7 @@ fn build_chain(app_arc: conc.Arc<App>, mw_idx: Int,
 \treturn run(move composed);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = conc.arc<type App>(App(name = "test"));
 \t// Typed binding gives `core.callback2(...)` the full Callback2
 \t// instantiation so the lambda's `Result::Ok(Resp(...))` body has a
@@ -367,7 +367,7 @@ fn register(slot: &mut Array<core.Callback2<&Req, &mut Ctx, core.Result<Resp, Ap
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>> = [];
 \tregister(&mut slot, |req, ctx| => {
 \t\tif req.n < 0 {
@@ -417,7 +417,7 @@ fn run(handler: core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>) nothr
 \treturn 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \t// Bare `val r = maybe(...);` would auto-try and inject or_throw.
 \t// Explicit Result annotation opts out and keeps the lambda nothrow.
 \tval h = core.callback2(|req: &Req, ctx: &mut Ctx| nothrow => {
@@ -506,7 +506,7 @@ import myapp.ctx as ctx;
 import myapp.types as types;
 import myapp.api as api;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&req.Req, &mut ctx.Ctx,
 \t    core.Callback2<&req.Req, &mut ctx.Ctx, core.Result<types.Resp, types.AppErr>>,
 \t    core.Result<types.Resp, types.AppErr>>> = [];
@@ -627,7 +627,7 @@ module main;
 import std.core as core;
 import mwpkg as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&lib.Req, &mut lib.Ctx,
 \t    core.Callback2<&lib.Req, &mut lib.Ctx, core.Result<lib.Resp, lib.AppErr>>,
 \t    core.Result<lib.Resp, lib.AppErr>>> = [];
@@ -676,7 +676,7 @@ fn build(app_arc: conc.Arc<AppState>, mw_idx: Int,
 \t});
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = conc.arc<type AppState>(AppState(name = "x"));
 \tval base = core.callback2(|r: &lib.Req, c: &mut lib.Ctx| nothrow => {
 \t\treturn lib.ok_resp(r.method.byte_length() + c.idx);
@@ -728,7 +728,7 @@ fn register(slot: &mut Array<core.Callback3<&Req, &mut Ctx,
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&Req, &mut Ctx,
 \t    core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>,
 \t    core.Result<Resp, AppErr>>> = [];

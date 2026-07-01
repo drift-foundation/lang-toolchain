@@ -40,7 +40,7 @@ fn _check(label: &String, elapsed: Int, code: Int) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val t1 = time.now_monotonic();
 	val _r1 = conc.sleep(conc.Duration(millis = 100));
 	val r1 = _check(&"sleep#1", time.elapsed_ms(&t1), 1);

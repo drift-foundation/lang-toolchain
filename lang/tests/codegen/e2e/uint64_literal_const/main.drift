@@ -4,7 +4,7 @@ const SHIFT_AMT: Uint64 = 8u64;
 const MASK_BYTE: Uint64 = 255u64;
 const VALS: Array<Uint64> = [1u64, 2u64, 4u64];
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Use const in expression
 	var x: Uint64 = 1u64 << SHIFT_AMT;
 	if x != 256u64 { return 1; }

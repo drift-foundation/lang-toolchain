@@ -59,7 +59,7 @@ implement algo.BinarySearchable<Key> for Range {
 	pub fn compare_key(self: &Range, i: Int, key: &Key) -> Int { return 0; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
 	val _i = algo.binary_search<type Range, Key>(&r, &k);
@@ -78,7 +78,7 @@ module m_main;
 
 import std.algo as algo;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	var r = arr.range();
 	val _i = algo.binary_search(&r, &"nope");

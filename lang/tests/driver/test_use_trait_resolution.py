@@ -43,7 +43,7 @@ import m_traits as t;
 
 use trait t.Show;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }
 """,
 	}
 	_func_hirs, _sigs, _fn_ids_by_name, _type_table, _exc_catalog, module_exports, _deps, diagnostics = _parse_workspace(
@@ -70,7 +70,7 @@ import m_traits;
 
 use trait m_traits.Missing;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }
 """,
 	}
 	*_rest, diagnostics = _parse_workspace(tmp_path, files)
@@ -93,7 +93,7 @@ import m_traits;
 
 use trait m_traits.Show;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }
 """,
 	}
 	*_rest, diagnostics = _parse_workspace(tmp_path, files)
@@ -118,7 +118,7 @@ module m_main;
 
 use trait missing.Show;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }
 """,
 	}
 	*_rest, diagnostics = _parse_workspace(tmp_path, files)
@@ -140,7 +140,7 @@ import m_traits;
 
 use trait m_traits.Show;
 
-fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 0; }
 """,
 	)
 	_write_file(

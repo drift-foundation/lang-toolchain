@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if !text.is_alpha(cast<Byte>(65)) { return 1; }   // 'A'
 	if !text.is_alpha(cast<Byte>(90)) { return 2; }   // 'Z'
 	if !text.is_alpha(cast<Byte>(97)) { return 3; }   // 'a'

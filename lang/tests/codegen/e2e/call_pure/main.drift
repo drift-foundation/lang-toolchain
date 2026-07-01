@@ -2,7 +2,7 @@ fn add_one(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val r = add_one(41);
 	return r;
 }

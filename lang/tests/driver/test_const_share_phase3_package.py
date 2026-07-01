@@ -118,7 +118,7 @@ use trait shareable.ConstShare;
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval inner = core.const_arc<type String>("hi");
 \tval b = lib.make_box<type core.ConstArc<String>>(move inner);
 \tassert_cs<type lib.Box<core.ConstArc<String>>>();

@@ -3,7 +3,7 @@ module main;
 import a.geom as ag;
 import b.geom as bg;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 val p1 = try ag.make() catch { ag.Point(x = 0, y = 0) };
 val p2 = try bg.make() catch { bg.Point(x = 0, y = 0) };
 	return p1.x + p2.x;

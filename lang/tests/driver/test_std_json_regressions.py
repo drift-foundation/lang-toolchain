@@ -38,7 +38,7 @@ module main;
 import std.json as json;
 import std.containers as containers;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var m = containers.hash_map<type String, json.JsonNode>();
 	m.insert("a", json.JsonNode::Number("1"));
 	val n = json.JsonNode::Object(move m);
@@ -69,7 +69,7 @@ module main;
 
 import std.json as json;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var arr = json.JsonNode::new_array();
 	arr.array_push(json.JsonNode::Number("1"));
 	var obj = json.JsonNode::new_object();

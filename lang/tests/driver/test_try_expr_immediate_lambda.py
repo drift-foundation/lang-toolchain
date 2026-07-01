@@ -57,7 +57,7 @@ _PRELUDE = (
 def test_immediate_lambda_value_block_body_runs(tmp_path: Path) -> None:
 	# Trailing-value (value-block) lambda body, caught failure: risky(1) throws → 0.
 	src = _PRELUDE + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval x = try (|| => { val a = risky(1); a + 1 })() catch { 0 };\n"
 		"\treturn x;\n}\n"
 	)
@@ -69,7 +69,7 @@ def test_immediate_lambda_value_block_body_runs(tmp_path: Path) -> None:
 def test_immediate_lambda_return_body_with_capture_runs(tmp_path: Path) -> None:
 	# Explicit-return body capturing an outer local; caught failure path.
 	src = _PRELUDE + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval base = 10;\n"
 		"\tval x = try (|| => { val a = risky(base); return a + base; })() catch { -1 };\n"
 		"\treturn x + 1;\n}\n"  # risky(10) throws → x = -1 → 0
@@ -82,7 +82,7 @@ def test_immediate_lambda_return_body_with_capture_runs(tmp_path: Path) -> None:
 def test_immediate_lambda_success_value_flows(tmp_path: Path) -> None:
 	# Success path: no throw, the lambda's value flows out of the try.
 	src = _PRELUDE + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval x = try (|| => { val a = risky(0); return a * 2 + 10; })() catch { 0 };\n"
 		"\treturn x - 10;\n}\n"  # risky(0)=0 → 0*2+10 = 10 → 0
 	)
@@ -94,7 +94,7 @@ def test_immediate_lambda_success_value_flows(tmp_path: Path) -> None:
 def test_native_block_form_try_expr_is_unsupported(tmp_path: Path) -> None:
 	# The native block form stays a parse error in v1 (use the immediate lambda).
 	src = _PRELUDE + (
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval x = try { val a = risky(1); a + 1 } catch { 0 };\n"
 		"\treturn x;\n}\n"
 	)

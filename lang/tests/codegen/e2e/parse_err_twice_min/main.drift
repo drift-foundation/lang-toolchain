@@ -6,4 +6,4 @@ fn run() -> Int {
   match p.parse_int("y") { core.Result::Ok(_) => { return 2; }, core.Result::Err(_e2) => { } }
   return 0;
 }
-fn main() nothrow -> Int { return try run() catch { 99 }; }
+pub fn main() nothrow -> Int { return try run() catch { 99 }; }

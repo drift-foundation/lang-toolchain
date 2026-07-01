@@ -4,7 +4,7 @@ import std.core as core;
 import std.uuid as uuid;
 import std.console as cons;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Nil UUID — version nibble is 0.
 	val n = uuid.nil();
 	if uuid.version(&n) != 0 {

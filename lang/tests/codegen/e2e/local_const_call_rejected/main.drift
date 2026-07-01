@@ -4,7 +4,7 @@ fn foo() nothrow -> Int {
 	return 42;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	const X: Int = foo();
 	return X;
 }

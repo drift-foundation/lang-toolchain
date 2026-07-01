@@ -26,7 +26,7 @@ def test_hidden_lambda_local_types_for_try_temps(tmp_path: Path) -> None:
 			return s.v;
 		}
 
-		fn main() nothrow -> Int {
+		pub fn main() nothrow -> Int {
 			while true {
 				val s = accept();
 				val _ = conc.spawn_cb(| | captures(move s) => {

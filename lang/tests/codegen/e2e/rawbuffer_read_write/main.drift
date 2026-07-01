@@ -2,7 +2,7 @@ module std.mem.test;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var buf = unsafe { mem.alloc_uninit<type Int>(2) };
 	unsafe { mem.write<type Int>(&mut buf, 1, 123); }
 	val x = unsafe { mem.read<type Int>(&mut buf, 1) };

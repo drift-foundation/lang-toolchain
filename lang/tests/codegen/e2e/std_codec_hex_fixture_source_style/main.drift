@@ -3,7 +3,7 @@ module m;
 import std.codec as codec;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val fixture = "0xDE AD BE EF\n01 02";
 	var d = codec.hex_decoder();
 	d.allow_whitespace(true);

@@ -3,7 +3,7 @@ module m;
 import std.codec as codec;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var h = codec.hex_decoder();
 	h.allow_whitespace(true);
 	h.allow_prefix_0x(true);

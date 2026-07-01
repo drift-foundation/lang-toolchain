@@ -41,7 +41,7 @@ fn g<T>() nothrow -> core.Result<Int, conc.SaturationPolicy> {
 	return core.Result::Err(conc.SaturationPolicy::Block());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = g<type Int>();
 	return 0;
 }

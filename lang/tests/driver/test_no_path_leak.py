@@ -23,7 +23,7 @@ def _has_abs_path(text: str) -> bool:
 
 def test_driftc_no_path_leak_in_trust_store_error(tmp_path: Path, capsys) -> None:
 	src = tmp_path / "main.drift"
-	src.write_text("module main;\nfn main() nothrow -> Int { return 0; }\n", encoding="utf-8")
+	src.write_text("module main;\npub fn main() nothrow -> Int { return 0; }\n", encoding="utf-8")
 	missing_trust = tmp_path / "missing-trust.json"
 	pkg_root = tmp_path / "pkgs"
 	pkg_root.mkdir()

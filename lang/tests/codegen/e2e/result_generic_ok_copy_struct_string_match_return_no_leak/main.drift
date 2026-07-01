@@ -10,7 +10,7 @@ fn wrap<T>(v: T) nothrow -> core.Result<T, Int> {
 	return core.Result::Ok(move v);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match wrap<type Payload>(Payload(msg = "generic")) {
 		core.Result::Ok(v) => {
 			if v.msg == "generic" {

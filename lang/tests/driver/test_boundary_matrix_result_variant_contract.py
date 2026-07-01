@@ -68,7 +68,7 @@ fn mk_nested() nothrow -> core.Result<core.Result<NonCopy, Int>, Int> {
 	return core.Result::Ok(move inner);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match mk_i() { core.Result::Ok(v) => { if v != 7 { return 1; } }, core.Result::Err(_) => { return 2; } }
 	match mk_s() { core.Result::Ok(v) => { if v != "ok" { return 3; } }, core.Result::Err(_) => { return 4; } }
 	match mk_a() { core.Result::Ok(v) => { if v.len != 3 { return 5; } }, core.Result::Err(_) => { return 6; } }
@@ -98,7 +98,7 @@ struct Statement(session: &mut Session);
 fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return core.Result::Ok(Statement(session = s));
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 41);
 	match query(&mut sess) {
 		core.Result::Ok(st) => {
@@ -117,7 +117,7 @@ fn main() nothrow -> Int {
 module m;
 struct Session(id: Int);
 struct Statement(session: &mut Session);
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
 	val st = Statement(session = &mut sess);
 	var xs: Array<Statement> = [];
@@ -138,7 +138,7 @@ fn bad() nothrow -> Statement {
 	val st = Statement(session = &mut sess);
 	return st;
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = bad();
 	return 0;
 }

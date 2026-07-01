@@ -47,7 +47,7 @@ implement R {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = R();
 	return r.keep<type Box>(Box(s = "x"));
 }

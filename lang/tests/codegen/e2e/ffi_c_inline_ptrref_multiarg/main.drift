@@ -8,7 +8,7 @@ fn _null_ptr() nothrow -> RawPtr<Byte> {
     return cast<RawPtr<Byte> >(cast<Uint>(0));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     unsafe {
         var arr: Array<Byte> = [];
         arr.push(cast<Byte>(104));

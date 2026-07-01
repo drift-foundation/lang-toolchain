@@ -51,7 +51,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// =================================================================

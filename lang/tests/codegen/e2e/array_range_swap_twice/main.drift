@@ -3,7 +3,7 @@ module main;
 import std.iter as iter;
 use trait iter.RandomAccessPermutable;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [1, 2, 3];
 	var r = arr.range_mut();
 	try {

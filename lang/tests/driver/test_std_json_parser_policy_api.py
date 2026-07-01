@@ -36,7 +36,7 @@ module main;
 import std.json as json;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// profiles + builder
 	val _p: json.JsonParseConfig = json.permissive();
 	val _s: json.JsonParseConfig = json.strict();
@@ -81,7 +81,7 @@ module main;
 import std.json as json;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src = "{\\"a\\":1}";
 	match json.parse(&src) {
 		core.Result::Ok(node) => {

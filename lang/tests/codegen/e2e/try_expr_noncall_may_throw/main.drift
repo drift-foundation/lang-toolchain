@@ -5,7 +5,7 @@ fn may_fail(x: Int) -> Int {
 	throw MyErr();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val v = try (may_fail(1) + 2) catch { 0 };
 	return v;
 }

@@ -2,7 +2,7 @@ module m;
 
 import std.sync as sync;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var d = sync.epoch_domain();
 	var p1 = sync.epoch_participant();
 	var p2 = sync.epoch_participant();

@@ -14,7 +14,7 @@ fn run(x: Optional<Int>) nothrow -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o = Optional::Some(7);
 	return run(o) - 7;
 }

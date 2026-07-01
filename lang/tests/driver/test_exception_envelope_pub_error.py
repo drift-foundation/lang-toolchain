@@ -80,7 +80,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -108,7 +108,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -151,7 +151,7 @@ pub error PE { offset: Int }
 
 fn risky() throws PE -> Int { throw PE(offset = 12); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return risky();
 	} catch PE(e) {
@@ -175,7 +175,7 @@ pub error PE { offset: Int }
 
 fn risky() throws PE -> Int { throw PE(offset = 12); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return risky();
 	} catch PE(e) {
@@ -209,7 +209,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {

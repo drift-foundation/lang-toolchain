@@ -39,7 +39,7 @@ fn _assert_no_dotdot(s: String, tag: String) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Set a stable DRIFT_TMP_ROOT for assertions below.  The e2e
 	// runner sets it via the harness — we read whatever's there.
 	val root_opt = env.get("DRIFT_TMP_ROOT");

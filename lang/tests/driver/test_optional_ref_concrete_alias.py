@@ -40,7 +40,7 @@ fn as_ref(b: &Box) nothrow -> Opt<&Box> {
 	return Opt::Some(b);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(value = 7);
 	val got = as_ref(&b);
 	match got {
@@ -86,7 +86,7 @@ implement Holder {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder::Item(Pair(a = 1, b = 2));
 	match h.as_item() {
 		Opt::Some(v) => {

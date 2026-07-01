@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var arr = [1, 2];
 	val p = &mut arr[0];
 	*p = *p + 1;

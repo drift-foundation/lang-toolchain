@@ -43,7 +43,7 @@ fn make<T>() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return make<type Int>();
 }
 """.lstrip(),

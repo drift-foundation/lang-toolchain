@@ -47,7 +47,7 @@ import std.mem as mem;
 
 fn needs_copy<T>() nothrow -> Int require T is core.Copy { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = needs_copy<type mem.RawBuffer<Int>>();
 	return 0;
 }

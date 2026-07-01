@@ -16,7 +16,7 @@ implement Box {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(v = 10);
 
 	// String overload — explicit & form.

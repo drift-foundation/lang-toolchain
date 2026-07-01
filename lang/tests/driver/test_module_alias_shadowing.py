@@ -37,7 +37,7 @@ module main;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var mem: Int = 1;
 	return mem;
 }

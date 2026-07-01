@@ -45,7 +45,7 @@ fn handle(var s: Stream) -> Int {
 	return s.v;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	while true {
 		val s = accept();
 		val _ = conc.spawn_cb(| | captures(move s) => {
@@ -81,7 +81,7 @@ fn consume(_b: Box) nothrow -> Int {
 	return 7;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(s = "hi");
 	val _ = conc.spawn_cb(| | captures(move b) => {
 		return consume(move b);

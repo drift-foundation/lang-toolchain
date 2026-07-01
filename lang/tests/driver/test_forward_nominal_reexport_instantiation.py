@@ -62,7 +62,7 @@ def test_pub_type_alias_in_throwing_function_resolves(tmp_path: Path) -> None:
 		"module main;\n"
 		"import svc.api as api;\n"
 		"fn _call() -> api.Response { return api.handle(\"/health\"); }\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		"\tval r = try _call() catch { api.Response(code = -1) };\n"
 		"\treturn r.code;\n"
 		"}\n",

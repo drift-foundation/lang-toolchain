@@ -5,7 +5,7 @@ import std.core as core;
 fn double(x: Int) nothrow -> Int { return x * 2; }
 fn add1(x: Int) nothrow -> Int { return x + 1; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb_double = core.callback1(double);
 	val cb_add1 = core.callback1(add1);
 	var composed: core.Callback1<Int, Int> = core.callback1(|x: Int| captures(move cb_double, move cb_add1) nothrow => {

@@ -92,7 +92,7 @@ fn consume(a: conc.Arc<App>) nothrow -> Int {
 	return r.tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(tag = 7));
 	val first = consume(share app);
 	val r = app.get();
@@ -128,7 +128,7 @@ fn _serve(a: conc.Arc<App>, port: Int) -> Int {
 	throw Boom(message = "startup failed");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(tag = 7));
 	val port = 8080;
 	try {
@@ -179,7 +179,7 @@ fn take(first: Int, a: conc.Arc<App>, third: Int) nothrow -> Int {
 	return first + r.tag + third;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(tag = 5));
 	val total = take(side_effect_a(), share app, side_effect_c());
 	if total != 115 { return -1; }
@@ -231,7 +231,7 @@ fn _serve(a: conc.Arc<App>, port: Int) -> Int {
 	throw Boom(message = "startup failed");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(tag = 42));
 	val port = 8080;
 	val app_ref = app.get();
@@ -280,7 +280,7 @@ fn consume(s: String) nothrow -> Int {
 	return s.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "hello";
 	return consume(share s);
 }
@@ -320,7 +320,7 @@ fn consume(n: Int) nothrow -> Int {
 	return n + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val i: Int = 5;
 	return consume(share i);
 }
@@ -371,7 +371,7 @@ fn consume(a: conc.Arc<App>) nothrow -> Int {
 	return a.get().tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return consume(share make_app());
 }
 """

@@ -53,7 +53,7 @@ def test_uint_shift_result_inferred_for_bitwise(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var u: Uint = cast<Uint>(255);
 	val r = u >> cast<Uint>(4);
 	val l = u << cast<Uint>(4);
@@ -76,7 +76,7 @@ def test_uint_xor_result_inferred(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(170);
 	var b: Uint = cast<Uint>(85);
 	var c: Uint = cast<Uint>(255);
@@ -101,7 +101,7 @@ def test_uint_add_sub_result_inferred(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(100);
 	var b: Uint = cast<Uint>(50);
 	val sum = a + b;
@@ -126,7 +126,7 @@ def test_uint_mul_div_mod_result_inferred(tmp_path: Path) -> None:
 		"""
 module m_main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a: Uint = cast<Uint>(200);
 	var b: Uint = cast<Uint>(3);
 	val p = a * b;

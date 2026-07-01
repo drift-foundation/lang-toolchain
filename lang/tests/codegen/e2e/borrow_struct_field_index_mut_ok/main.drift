@@ -2,7 +2,7 @@ module main;
 
 struct Wrap(arr: Array<Int>);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var w = Wrap([41, 0]);
 	val p = &mut w.arr[0];
 	*p = *p + 1;

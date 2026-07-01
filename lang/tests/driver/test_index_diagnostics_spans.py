@@ -36,7 +36,7 @@ def test_array_index_requires_int_has_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val n = xs["0"];
@@ -56,7 +56,7 @@ def test_indexing_requires_array_value_has_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x = 1;
 	val y = x[0];
 	return y;

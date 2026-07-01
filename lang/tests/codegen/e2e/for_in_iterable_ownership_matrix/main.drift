@@ -35,7 +35,7 @@ implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy 
 }
 fn mkbox() nothrow -> Box<Int> { return Box::One(9); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// 1) Copy variant rvalue temp.
 	var a = 0;
 	for xa in mkcc() { a = a + xa; }

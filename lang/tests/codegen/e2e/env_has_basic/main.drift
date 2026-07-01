@@ -2,7 +2,7 @@ module main;
 
 import std.env as env;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// HOME is always set.
 	if !env.has("HOME") {
 		return 1;

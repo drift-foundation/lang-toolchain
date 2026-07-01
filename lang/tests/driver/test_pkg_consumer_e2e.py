@@ -318,7 +318,7 @@ module m;
 
 import std.containers as c;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar tm: c.TreeMap<Int, Int> = c.tree_map();
 \ttm.__test_validate();
 \treturn 0;
@@ -358,7 +358,7 @@ import std.iter as iter;
 use trait iter.Iterable;
 use trait iter.SinglePassIterator;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar map: c.HashMap<String, Int> = {"a": 1, "b": 2};
 
 \tmatch map.remove("a") {
@@ -407,7 +407,7 @@ module m;
 
 import std.env as env;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tmatch env.get("HOME") {
 \t\tOptional::Some(v) => {
 \t\t\tif v.byte_length() == 0 {
@@ -457,7 +457,7 @@ module m;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar cfg_builder = log.config_builder();
 \tcfg_builder.min_level(log.Level::Debug());
 \tcfg_builder.sink(log.stderr_sink());
@@ -498,7 +498,7 @@ module m;
 
 import std.log as log;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar cfg_builder = log.config_builder();
 \tcfg_builder.min_level(log.Level::Debug());
 \tcfg_builder.sink(log.stderr_sink());
@@ -551,7 +551,7 @@ implement App {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval app = conc.arc(App(v = 42));
 
 \tval direct = (| | captures(share app) => {
@@ -645,7 +645,7 @@ fn build_chain(state_arc: conc.Arc<State>) nothrow -> core.Callback2<Int, Int, c
 \treturn move next;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar cbs: Array<core.Callback2<Int, Int, core.Result<Resp, AppErr>>> = [];
 \tcbs.push(core.callback2(_term));
 \tval state = State(callbacks = move cbs);
@@ -704,7 +704,7 @@ implement Box {
 
 fn run(_cb: core.Callback0<Int>) nothrow -> Int { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval b = Box(v = 42);
 \treturn run(|| captures(share b) => { return b.v; });
 }
@@ -829,7 +829,7 @@ import std.core as core;
 import std.concurrent as conc;
 import web.repro as repro;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval state = repro.empty_state();
 \tval state_arc = conc.arc(move state);
 \tval chain = repro.build_chain(move state_arc);
@@ -950,7 +950,7 @@ module consumer;
 import std.core as core;
 import web.cb_wrap_repro as cb;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval cb1 = core.callback1(cb.passthrough1);
 \tval r1 = cb1.call(41);
 \tif r1 != 42 { return 1; }
@@ -1042,7 +1042,7 @@ module consumer;
 
 import web.thunk_repro as t;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = t.add_one(40);
 \tif a != 41 { return 1; }
 \tval b = t.mul_two(a);

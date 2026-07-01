@@ -1,5 +1,5 @@
 module main;
 
-fn main(x: Int) nothrow -> Int {
+pub fn main(x: Int) nothrow -> Int {
 	return x;
 }

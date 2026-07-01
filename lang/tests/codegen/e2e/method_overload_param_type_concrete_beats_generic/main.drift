@@ -16,7 +16,7 @@ implement Box {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(v = 10);
 
 	// Concrete-typed argument (String literal) — must dispatch to the

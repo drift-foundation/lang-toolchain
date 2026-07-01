@@ -49,7 +49,7 @@ implement Action for Impl {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a: Action = Impl();
 	return a.run(41);
 }
@@ -82,7 +82,7 @@ implement Action for Impl {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var v = Impl();
 	return Action::run(&mut v, 41);
 }

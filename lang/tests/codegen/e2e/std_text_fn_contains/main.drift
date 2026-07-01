@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if !text.contains("hello world", "world") { return 1; }
 	if !text.contains("hello", "hello") { return 2; }
 	if text.contains("hello", "xyz") { return 3; }

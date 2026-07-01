@@ -85,7 +85,7 @@ fn try_parse() nothrow -> core.Result<Int, ParseError> {
 \treturn core.Result::Err(ParseError(offset = 7));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn try_parse().or_throw();
 \t} catch ParseError(e) {
@@ -111,7 +111,7 @@ fn try_parse() nothrow -> core.Result<Int, ParseError> {
 \treturn core.Result::Ok(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn try_parse().or_throw();
 \t} catch ParseError(e) {
@@ -130,7 +130,7 @@ def test_or_throw_rejects_non_error_err_type(tmp_path, capsys):
 	strict enforcement requires the Err type to be a `pub error`.
 	Diagnostic: `E_OR_THROW_NOT_ERROR_TYPE`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r: core.Result<Int, Int> = core.Result::Err(42);
 \ttry {
 \t\treturn r.or_throw();

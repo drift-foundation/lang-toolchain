@@ -3,7 +3,7 @@ import acme.lib as lib;
 
 fn fallback(x: Int) nothrow -> Int { return x; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val fp: Fn(Int) nothrow -> Int = try lib.make() catch { fallback };
 	return fp(1);
 }

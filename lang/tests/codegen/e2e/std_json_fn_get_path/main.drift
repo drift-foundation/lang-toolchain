@@ -3,7 +3,7 @@ module main;
 import std.core as core;
 import std.json as json;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Object-only path through nested objects.
 	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"code\":42},\"flag\":true},\"items\":[1,2,3]}";
 

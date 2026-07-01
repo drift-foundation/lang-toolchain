@@ -2,7 +2,7 @@ module main;
 
 import acme.lib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = lib.make_bag(10);
 
 	// String overload (auto-borrow form)

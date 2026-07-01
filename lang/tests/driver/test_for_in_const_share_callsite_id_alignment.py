@@ -62,7 +62,7 @@ implement<T> iter.Iterable<Box<T>, T, Box<T>> for Box<T> require T is core.Copy 
 }
 fn mkbox() nothrow -> Box<Int> { return Box::One(9); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var n = 0;
 	for xn in mknc() { n = n + xn; }
 	if n != 10 { return 3; }
@@ -157,7 +157,7 @@ implement iter.SinglePassIterator<Int> for NC {
 implement iter.Iterable<NC, Int, NC> for NC { pub fn iter(var self: NC) nothrow -> NC { return move self; } }
 fn mknc() nothrow -> NC { return NC::R("tag", 4); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = 0;
 	for xa in mkbox_int() { a = a + xa; }
 	if a != 5 { return 1; }

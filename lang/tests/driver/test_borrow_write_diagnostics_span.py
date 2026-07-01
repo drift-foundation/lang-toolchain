@@ -41,7 +41,7 @@ fn read(r: &Int) nothrow -> Int {
 	return r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 0;
 	val r = &x;
 	x = 1;
@@ -66,7 +66,7 @@ fn read(r: &Int) nothrow -> Int {
 	return r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 0;
 	val r = &x;
 	x += 1;

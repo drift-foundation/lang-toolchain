@@ -158,7 +158,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return lib.add(40, 2);
 }
 """.lstrip(),
@@ -206,7 +206,7 @@ module main;
 
 import lib as lib;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x = lib.f();
 	return 0;
 }
@@ -277,7 +277,7 @@ module main;
 import lib1 as lib1;
 import lib2 as lib2;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return lib1.add(20, 1) + lib2.add(20, 1);
 }
 """.lstrip(),

@@ -5,7 +5,7 @@ fn boom(x: Int) -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val fp: Fn(Int) nothrow -> Int = boom;
 	return 0;
 }

@@ -1,6 +1,6 @@
 fn id(s: String) nothrow -> String { return s; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val s = id("a") + id("b");
     return s.len;
 }

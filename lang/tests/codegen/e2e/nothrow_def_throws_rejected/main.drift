@@ -5,6 +5,6 @@ fn bad() nothrow -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }

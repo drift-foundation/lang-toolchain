@@ -2,7 +2,7 @@ module main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var f = conc.spawn_future(| | => { return 4; });
 	var res1 = f.join();
 	match res1 {

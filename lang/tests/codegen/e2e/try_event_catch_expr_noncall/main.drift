@@ -1,7 +1,7 @@
 module m;
 
 error MyErr {}
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	// A try-expression attempt that cannot throw is rejected.
 	val x = try 1 + 2 catch MyErr(e) { 0 };
 	return x;

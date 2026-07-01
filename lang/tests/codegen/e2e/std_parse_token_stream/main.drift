@@ -94,7 +94,7 @@ fn wtok(var k: WKind, off: Int) nothrow -> parse.Token<WKind> {
 	return parse.Token<type WKind>(kind = move k, span = span_at(off));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Tokens: Ident Eq Ident Comma   (e.g. `a = b ,`)
 	var toks: Array<parse.Token<Kind>> = [];
 	toks.push(tok(Kind::Ident(), 0));

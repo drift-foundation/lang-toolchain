@@ -2,7 +2,7 @@ module m;
 
 import std.console as console;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	// MVP currently supports only empty `:spec`.
 	console.println(f"{10:03}");
 	return 0;

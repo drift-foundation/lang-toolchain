@@ -2,7 +2,7 @@ module main;
 import b as b;
 
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = try b.make() catch { b.Point(x = 0, y = 0) };
 	return p.x + p.y;
 }

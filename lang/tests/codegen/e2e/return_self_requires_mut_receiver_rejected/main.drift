@@ -8,7 +8,7 @@ implement B {
 	}
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var b = B(x = 1);
 	var _r = b.bad();
 	return 0;

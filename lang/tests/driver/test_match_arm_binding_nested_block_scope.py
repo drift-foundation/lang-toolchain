@@ -65,7 +65,7 @@ fn f() -> Int {
 		}
 	}
 }
-fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
+pub fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
 """
 	# boom() throws; catch Me handles it; use_s(&s) = byte_length("aa") = 2.
 	assert _compile_and_run(tmp_path, src).returncode == 2
@@ -80,7 +80,7 @@ fn f() nothrow -> Int {
 		core.Result::Ok(s) => { { return use_s(&s); } }
 	}
 }
-fn main() nothrow -> Int { return f(); }
+pub fn main() nothrow -> Int { return f(); }
 """
 	assert _compile_and_run(tmp_path, src).returncode == 2
 
@@ -99,7 +99,7 @@ fn f() -> Int {
 		}
 	}
 }
-fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
+pub fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
 """
 	assert _compile_and_run(tmp_path, src).returncode == 2
 
@@ -118,7 +118,7 @@ fn f() nothrow -> Int {
 		}
 	}
 }
-fn main() nothrow -> Int { return f(); }
+pub fn main() nothrow -> Int { return f(); }
 """
 	assert _compile_and_run(tmp_path, src).returncode == 2
 
@@ -139,7 +139,7 @@ fn f() -> Int {
 		}
 	}
 }
-fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
+pub fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
 """
 	# boom() throws; catch runs; the shadowing `s` is the Me binder, so
 	# `s.tag` = "x" and use_s(&t) = byte_length("x") = 1.
@@ -157,7 +157,7 @@ fn f() nothrow -> Int {
 		core.Result::Ok(s) => { assert(s.byte_length() == 2, s); return s.byte_length(); }
 	}
 }
-fn main() nothrow -> Int { return f(); }
+pub fn main() nothrow -> Int { return f(); }
 """
 	assert _compile_and_run(tmp_path, src).returncode == 2
 
@@ -174,7 +174,7 @@ fn f() -> Int {
 		core.Result::Ok(s) => { return try boom() catch Me(s) { s.tag.byte_length() }; }
 	}
 }
-fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
+pub fn main() nothrow -> Int { try { return f(); } catch { return 99; } }
 """
 	# boom() throws; the catch arm yields `s.tag.byte_length()` where `s` is the
 	# Me catch binder; tag = "x" → byte_length = 1.

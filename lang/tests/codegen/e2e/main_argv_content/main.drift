@@ -1,5 +1,5 @@
 
-fn main(argv: Array<String>) nothrow -> Int{
+pub fn main(argv: Array<String>) nothrow -> Int{
     if argv.len < 3 { return 1; }
     if !(argv[1] == "foo") { return 2; }
     if !(argv[2] == "bar") { return 3; }

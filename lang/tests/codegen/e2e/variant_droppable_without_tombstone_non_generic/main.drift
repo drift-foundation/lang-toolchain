@@ -12,7 +12,7 @@ variant Choice {
 	PointVal(p: Point),
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = 5;
 	val p = Point(x = 7, y = a * 3, label = "pt");
 	val v1 = Choice::IntVal(a);

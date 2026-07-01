@@ -4,7 +4,7 @@ extern "C" fn add_i32(a: Int32, b: Int32) nothrow -> Int32;
 extern "C" fn mul_u32(x: Uint32, factor: Uint32) nothrow -> Uint32;
 extern "C" fn negate_i32(x: Int32) nothrow -> Int32;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val sum: Int32 = unsafe { add_i32(cast<Int32>(10), cast<Int32>(3)) };
     if cast<Int>(sum) != 13 { return 97; }
 

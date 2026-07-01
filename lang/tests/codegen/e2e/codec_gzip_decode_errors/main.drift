@@ -29,7 +29,7 @@ fn _check_err_tag(result: core.Result<Array<Byte>, codec.CodecError>, expected: 
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// 1. Bad magic — random non-gzip bytes -> gzip-bad-data
 	var bad_magic: Array<Byte> = [];
 	bad_magic.push(cast<Byte>(0));

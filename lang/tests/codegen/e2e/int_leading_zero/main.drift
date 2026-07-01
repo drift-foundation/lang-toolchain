@@ -1,5 +1,5 @@
 module main;
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val a = 010;
     val b = 007;
     val c = 00;

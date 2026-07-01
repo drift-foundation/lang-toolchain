@@ -6,7 +6,7 @@ import std.env as env;
 // env_get_unset):
 //   - a known-present var (HOME on Linux) returns Some(non-empty),
 //   - a deliberately-unset var returns None.
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match env.get("HOME") {
 		Optional::Some(v) => {
 			if v.byte_length() == 0 {

@@ -31,7 +31,7 @@ fn check_none(pattern: &String, input: &String, fail_code: Int) nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- §7: no match → None ---

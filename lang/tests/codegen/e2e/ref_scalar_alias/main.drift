@@ -10,7 +10,7 @@ fn bump_if(cond: Bool, x: &mut Int) nothrow -> Void {
 	}
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var c = 0;
 
 	// Unconditional bumps should both be visible through the same slot.

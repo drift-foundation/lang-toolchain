@@ -21,7 +21,7 @@ fn push_from_nested_clone(var root: conc.Arc<sync.MpscQueue<Node>>, v: Uint) not
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var root = conc.arc(sync.mpsc_queue<type Node>(8));
 	var root1 = root.clone();
 	if not push_from_nested_clone(move root1, cast<Uint>(11)) { return 1; }

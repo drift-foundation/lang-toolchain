@@ -4,7 +4,7 @@ fn len(s: String) nothrow -> Int {
 	return s.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	const S: String = "hi";
 	val a = len(S);
 	val b = len(S);

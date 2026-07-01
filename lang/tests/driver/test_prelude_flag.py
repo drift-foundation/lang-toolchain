@@ -28,7 +28,7 @@ def test_default_rejects_unqualified_println(tmp_path: Path, capsys: pytest.Capt
 	source = """
 module m_main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	println("ok");
 	return 0;
 }
@@ -46,7 +46,7 @@ def test_no_prelude_also_rejects_unqualified_println(tmp_path: Path, capsys: pyt
 	source = """
 module m_main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	println("ok");
 	return 0;
 }
@@ -66,7 +66,7 @@ module m_main;
 
 import std.console as console;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	console.println("ok");
 	return 0;
 }
@@ -84,7 +84,7 @@ module m_main;
 
 import std.console as console;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	console.eprint("x");
 	console.eprintln("y");
 	return 0;
@@ -103,7 +103,7 @@ module m_main;
 
 import std.io as io;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val out = io.stdout();
 	val out2 = out;
 	val err = io.stderr();
@@ -126,7 +126,7 @@ module m_main;
 import std.io as io;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val out = io.stdout_builder().timeout(conc.Duration(millis = 25)).build();
 	var b = io.buffer(1);
 	io.buffer_write(&mut b, 0, cast<Byte>(65));
@@ -148,7 +148,7 @@ module m_main;
 import std.core as core;
 import std.io as io;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var b = io.buffer(3);
 	io.buffer_write(&mut b, 0, cast<Byte>(97));
 	io.buffer_write(&mut b, 1, cast<Byte>(98));
@@ -173,7 +173,7 @@ module m_main;
 
 import std.io as io;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val i = io.stdin_builder().build();
 	val _ = i.read_line();
 	return 0;
@@ -193,7 +193,7 @@ module m_main;
 import std.io as io;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val opened = io.file_builder("tmp.bin").write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(conc.Duration(millis = 10)).build();
 	match opened {
 		Ok(f) => {
@@ -219,7 +219,7 @@ module m_main;
 import std.io as io;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val out = io.stdout_builder().timeout(conc.Duration(millis = 25)).build();
 	var b = io.buffer(1);
 	io.buffer_write(&mut b, 0, cast<Byte>(65));
@@ -248,7 +248,7 @@ module m_main;
 
 import std.io as io;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val e = io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = io.IO_ERR_EOF);
 	if io.is_eof_error(e) { return 0; }
 	return 1;

@@ -34,7 +34,7 @@ implement I for Box {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var b = Box(value = 40);
 	return b.call(2);
 }

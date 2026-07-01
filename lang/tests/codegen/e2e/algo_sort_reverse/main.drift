@@ -3,7 +3,7 @@ module main;
 import std.algo as algo;
 import std.containers as containers;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [5, 4, 3, 2, 1];
 	var r = arr.range_mut();
 	try {

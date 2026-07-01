@@ -69,7 +69,7 @@ def _make_case_dir(tmp: Path, name: str = "fake_case", timeout_s: int | None = N
 	if timeout_s is not None:
 		expected["timeout_s"] = timeout_s
 	(d / "expected.json").write_text(json.dumps(expected), encoding="utf-8")
-	(d / "main.drift").write_text("module main;\nfn main() nothrow -> Int { return 0; }\n", encoding="utf-8")
+	(d / "main.drift").write_text("module main;\npub fn main() nothrow -> Int { return 0; }\n", encoding="utf-8")
 	return d
 
 

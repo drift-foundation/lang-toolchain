@@ -2,7 +2,7 @@ module std.mem.test_unsafe_expr;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var buf = unsafe { mem.alloc_uninit<type Int>(2) };
 	unsafe { mem.write<type Int>(&mut buf, 0, 42); }
 	val x = unsafe { mem.read<type Int>(&mut buf, 0) };

@@ -47,7 +47,7 @@ fn id<T>(x: T) nothrow -> T {
 	return x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val m1: containers.HashMap<Int, Int> = {1: 2};
 	val f = id<type Int>;
 	val y = close(1);

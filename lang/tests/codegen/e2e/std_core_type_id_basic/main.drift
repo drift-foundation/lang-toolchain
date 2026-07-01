@@ -10,7 +10,7 @@ struct B {
 	v: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a0 = core.type_id<type A>();
 	val a1 = core.type_id<type A>();
 	val b0 = core.type_id<type B>();

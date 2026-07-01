@@ -35,7 +35,7 @@ module main;
 
 import std.net as net;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _a = net.socket_addr("127.0.0.1", 5555);
 	return 0;
 }

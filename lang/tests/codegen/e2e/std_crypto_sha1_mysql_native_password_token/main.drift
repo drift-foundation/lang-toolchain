@@ -41,7 +41,7 @@ fn _hex_to_bytes(s: String) nothrow -> Array<Byte> {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val password = _ascii_bytes("password");
 	val scramble = _hex_to_bytes("0102030405060708090a0b0c0d0e0f1011121314");
 	if scramble.len != 20 { return 1; }

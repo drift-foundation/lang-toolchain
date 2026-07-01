@@ -88,7 +88,7 @@ def test_diagnostic_value_user_code_rejected(tmp_path, capsys):
 	"""`core.DiagnosticValue::Int(...)` from user code fails
 	compile with `E_DV_PUBLIC_REMOVED`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval _dv = core.DiagnosticValue::Int(42);
 \treturn 0;
 }
@@ -111,7 +111,7 @@ fn make_one() nothrow -> core.DiagnosticEntry {
 \treturn core.diagnostic_entry("k", core.DiagnosticValue::Null());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -137,7 +137,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -170,7 +170,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -199,7 +199,7 @@ def test_unqualified_diagnostic_value_variant_ctor_rejected(tmp_path, capsys):
 	compile with `E_DV_PUBLIC_REMOVED`.  Closes the path through
 	`stage1/normalize.py:_rewrite_expr` HDVInit lowering."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval _dv = DiagnosticValue::Int(42);
 \treturn 0;
 }
@@ -221,7 +221,7 @@ pub error DvErr {
 \tpayload: DiagnosticValue,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -241,7 +241,7 @@ def test_qualified_diagnostic_entry_value_call_rejected(tmp_path, capsys):
 	not export symbol 'diagnostic_entry'", which doesn't point at
 	the migration."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval _ = core.diagnostic_entry("k", core.diagnostic_json_null());
 \treturn 0;
 }
@@ -268,7 +268,7 @@ fn diagnostic_entry(key: String, value: Int) nothrow -> Int {
 \treturn value;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn diagnostic_entry("k", 42);
 }
 """)
@@ -286,7 +286,7 @@ fn make_one() nothrow -> DiagnosticEntry {
 \treturn diagnostic_entry("k", DiagnosticValue::Null());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -315,7 +315,7 @@ implement core.Diagnostic for UserId {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

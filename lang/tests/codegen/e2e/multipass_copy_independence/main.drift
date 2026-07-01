@@ -30,7 +30,7 @@ implement iter.Iterable<CounterIter, Int, CounterIter> for CounterIter {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var it0 = CounterIter(idx = 0);
 	var it1 = it0;
 	var ax = -1;

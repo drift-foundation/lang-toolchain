@@ -2,7 +2,7 @@ module main;
 
 import m_box;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 val a = m_box.Box<type Int>(41);
 val b = m_box.Box<type String>("x");
 	val x = a.get();

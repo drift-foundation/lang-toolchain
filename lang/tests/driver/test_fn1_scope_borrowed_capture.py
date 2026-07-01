@@ -63,7 +63,7 @@ fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
 	f.call(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 10;
 	apply(|_a| captures(&x) => {});
 	return 0;
@@ -90,7 +90,7 @@ fn apply<F>(f: F) nothrow -> Void require F is Marker {
 	f.mark();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 10;
 	apply(|_a| captures(&x) => {});
 	return 0;
@@ -117,7 +117,7 @@ fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
 	f.call(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb: core.Callback1<Int, Void> = core.callback1(|_a: Int| nothrow => {});
 	apply(move cb);
 	return 0;
@@ -145,7 +145,7 @@ fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
 	f.call(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x: Int = 10;
 	apply(|_a| captures(copy x) nothrow => {});
 	return 0;
@@ -176,7 +176,7 @@ fn apply<F>(f: F) nothrow -> Void require F is core.Fn1<Int, Void> {
 	f.call(42);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x: Int = 10;
 	apply(|_a| captures(&x) nothrow => {});
 	return 0;

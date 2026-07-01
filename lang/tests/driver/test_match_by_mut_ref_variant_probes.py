@@ -126,7 +126,7 @@ def test_g1_mut_then_shared(
 	HEAD rejects: "cannot take shared borrow while mutable borrow
 	active on 'r'"."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { x.status = 99; 0 },
@@ -151,7 +151,7 @@ def test_g1_mut_then_mut(
 	when neither escapes a binder.  Pre-fix HEAD rejects: "cannot
 	take mutable borrow while borrow active on 'r'"."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { x.status = 1; 0 },
@@ -176,7 +176,7 @@ def test_g1_shared_then_mut(
 	"""G1.  After `match &r { ... }` finishes, taking `&mut r` must
 	be allowed when no binder escaped from the shared match."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &r {
 \t\tcore.Result::Ok(x) => { x.status },
@@ -210,7 +210,7 @@ fn read_status(r: &core.Result<Resp, AppErr>) nothrow -> Int {
 \t};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { x.status = 7; 0 },
@@ -239,7 +239,7 @@ fn take_result(r: core.Result<Resp, AppErr>) nothrow -> Int {
 \t};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { x.status = 11; 0 },
@@ -261,7 +261,7 @@ def test_g1_mutation_visible_after_match(tmp_path: Path) -> None:
 	the borrow lifetime ends correctly (compile succeeds) AND that
 	the mutation actually lands (binary exits with the new value)."""
 	_compile_and_run(tmp_path, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { x.status = 42; 0 },
@@ -288,7 +288,7 @@ def test_g2_mut_binder_escape_to_optional_must_reject(
 	Pre-fix HEAD currently *accepts* this, which is the soundness
 	gap G2 names."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
@@ -313,7 +313,7 @@ def test_g2_direct_let_mut_binder_escape_must_reject(
 	this shape, but pin it as a regression so a future change
 	doesn't loosen it."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: &mut Resp = match &mut r {
 \t\tcore.Result::Ok(x) => { x },
@@ -357,7 +357,7 @@ fn store(slot: &mut Optional<&mut Resp>, p: &mut Resp) nothrow -> Void {
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
@@ -398,7 +398,7 @@ fn store(slot: &mut Optional<&mut Resp>, p: &mut Resp) nothrow -> Void {
 \treturn core.void_value();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
@@ -446,7 +446,7 @@ implement Resp {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tval _ = match &mut r {
 \t\tcore.Result::Ok(x) => { helper(x) },
@@ -492,7 +492,7 @@ implement State {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar s: State = State::Counting(c = Counter(n = 0));
 \treturn s.tick();
 }
@@ -512,7 +512,7 @@ def test_g2_direct_container_wrap_escape_rejects(
 	is the canonical direct-wrap shape — the user explicitly stores
 	the `&mut` arm binder past the arm scope."""
 	rc, errs = _check_only(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
@@ -541,7 +541,7 @@ fn make_err() nothrow -> core.Result<Resp, AppErr> {
 \treturn core.Result::Err(AppErr(code = 2, tag = "err"));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
@@ -587,7 +587,7 @@ implement State {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar s: State = State::Active(p = Pair(a = 1, b = 2));
 \treturn s.step();
 }
@@ -618,7 +618,7 @@ implement State {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar s: State = State::Active(p = Pair(a = 5, b = 0));
 \treturn s.step();
 }
@@ -643,7 +643,7 @@ import std.core as core;
 
 variant State { Active(n: Int) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar s: State = State::Active(n = 42);
 \treturn match &mut s {
 \t\tState::Active(n) => { *n }
@@ -662,7 +662,7 @@ import std.core as core;
 
 variant State { Active(n: Int) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar s: State = State::Active(n = 1);
 \tval _ = match &mut s {
 \t\tState::Active(n) => { *n = 99; 0 }

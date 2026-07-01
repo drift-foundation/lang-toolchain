@@ -3,6 +3,6 @@ module main;
 import m_impl;
 import m_trait;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return m_impl.use_show<type Int>(7);
 }

@@ -45,7 +45,7 @@ implement App {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(v = 42));
 
 	// Path 1 — immediate-lambda call.

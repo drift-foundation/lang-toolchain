@@ -1,1 +1,1 @@
-fn main(argv: Array<String>) nothrow -> Int{ return argv.len; }
+pub fn main(argv: Array<String>) nothrow -> Int{ return argv.len; }

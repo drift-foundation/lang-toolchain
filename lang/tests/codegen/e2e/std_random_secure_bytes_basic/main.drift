@@ -3,7 +3,7 @@ module std.random.test;
 import std.core as core;
 import std.random as random;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Test 1: n=0 returns Ok with empty array
 	val r0 = random.random_secure_bytes(0);
 	match r0 {

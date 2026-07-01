@@ -2,7 +2,7 @@ module main;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var buf = unsafe { mem.alloc_uninit<type Int>(1) };
 	return 0;
 }

@@ -54,7 +54,7 @@ def test_return_with_trailing_value_arm_rejected_not_ice(tmp_path: Path) -> None
 		"fn f(e: E) nothrow -> Int {\n"
 		"\tval x = match e { E::A(v) => { return v; 0 }, E::B(v) => { v } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::A(5); return f(e); }\n"
+		"pub fn main() nothrow -> Int { val e = E::A(5); return f(e); }\n"
 	)
 	r = _compile(tmp_path, src, out="ice")
 	assert r.returncode != 0
@@ -65,7 +65,7 @@ def test_return_with_trailing_value_arm_rejected_not_ice(tmp_path: Path) -> None
 def test_return_the_whole_match_runs(tmp_path: Path) -> None:
 	src = _HDR + (
 		"fn f(e: E) nothrow -> Int { return match e { E::A(v) => { v }, E::B(v) => { v + 10 } }; }\n"
-		"fn main() nothrow -> Int { val e = E::A(5); return f(e) - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::A(5); return f(e) - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="ret")
 	assert r.returncode == 0, r.stderr
@@ -76,7 +76,7 @@ def test_statement_form_match_return_arms_runs(tmp_path: Path) -> None:
 	# Statement-form match whose arms `return` must keep working.
 	src = _HDR + (
 		"fn f(e: E) nothrow -> Int { match e { E::A(v) => { return v; }, E::B(v) => { return v + 10; } } }\n"
-		"fn main() nothrow -> Int { val e = E::A(5); return f(e) - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::A(5); return f(e) - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="stmt")
 	assert r.returncode == 0, r.stderr
@@ -90,7 +90,7 @@ def test_return_nested_in_if_is_caught(tmp_path: Path) -> None:
 		"fn f(e: E) nothrow -> Int {\n"
 		"\tval x = match e { E::A(v) => { if v > 0 { return v; } 0 }, E::B(v) => { v } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); return f(e) - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); return f(e) - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="nif")
 	assert r.returncode != 0
@@ -104,7 +104,7 @@ def test_break_inside_inner_loop_in_arm_is_allowed(tmp_path: Path) -> None:
 		"fn f(e: E) nothrow -> Int {\n"
 		"\tval x = match e { E::A(v) => { var i = 0; while i < v { if i > 2 { break; } i = i + 1; } i }, E::B(v) => { v } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); return f(e) - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); return f(e) - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="inb")
 	assert r.returncode == 0, r.stderr
@@ -122,7 +122,7 @@ def test_break_at_arm_level_reports_break_specific_message(tmp_path: Path) -> No
 		"\t\tt = t + x; i = i + 1;\n"
 		"\t}\n"
 		"\treturn t;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); return f(e); }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); return f(e); }\n"
 	)
 	r = _compile(tmp_path, src, out="brk")
 	assert r.returncode != 0
@@ -141,7 +141,7 @@ def test_return_in_nested_statement_match_is_caught(tmp_path: Path) -> None:
 		"\t\tE::B(v) => { v }\n"
 		"\t};\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); return f(e, e); }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); return f(e, e); }\n"
 	)
 	r = _compile(tmp_path, src, out="nestret")
 	assert r.returncode != 0
@@ -157,7 +157,7 @@ def test_nested_statement_match_without_escape_compiles(tmp_path: Path) -> None:
 		"\t\tE::B(v) => { v }\n"
 		"\t};\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); return f(e, e) - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); return f(e, e) - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="nestok")
 	assert r.returncode == 0, r.stderr
@@ -173,7 +173,7 @@ def test_inline_throw_statement_in_value_arm_rejected(tmp_path: Path) -> None:
 		"fn f(e: E) -> Int {\n"
 		"\tval x = match e { E::A(v) => { throw Bad(code = v); 0 }, E::B(v) => { v } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="ithrow")
 	assert r.returncode != 0
@@ -191,7 +191,7 @@ def test_inline_rethrow_statement_in_value_arm_rejected(tmp_path: Path) -> None:
 		"fn f(e: E) -> Int {\n"
 		"\tval x = try risky() catch { match e { E::A(v) => { rethrow; 0 }, E::B(v) => { v } } };\n"
 		"\treturn x;\n}\n"
-		"fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
+		"pub fn main() nothrow -> Int { val e = E::B(5); val r = try f(e) catch { 0 }; return r - 5; }\n"
 	)
 	r = _compile(tmp_path, src, out="irethrow")
 	assert r.returncode != 0
@@ -209,7 +209,7 @@ def test_throwing_call_as_arm_value_allowed(tmp_path: Path) -> None:
 		"pub error Bad { code: Int }\n"
 		"fn fail(e: Int) -> Int { throw Bad(code = e); }\n"
 		"fn f(e: E) -> Int { val x = match e { E::A(v) => { fail(v) }, E::B(v) => { v } }; return x; }\n"
-		"fn main() nothrow -> Int {\n"
+		"pub fn main() nothrow -> Int {\n"
 		# A-arm: fail(7) throws -> the throw propagates out of the match and out
 		# of f -> caught here as 100.  If the arm did NOT throw/propagate, `thrown`
 		# would be 7 and the test fails (rc=1).

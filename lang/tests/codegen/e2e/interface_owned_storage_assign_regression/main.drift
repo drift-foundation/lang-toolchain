@@ -24,7 +24,7 @@ implement Holder {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var h = Holder(sink = StdErrSink());
 	h.set_sink(StdErrSink());
 	if h.sink.write() != 9 {

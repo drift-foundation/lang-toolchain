@@ -2,7 +2,7 @@ module main;
 
 import acme.point as ap;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = try ap.make_point() catch { ap.Point(x = 0, y = 0) };
 	return p.x + p.y;
 }

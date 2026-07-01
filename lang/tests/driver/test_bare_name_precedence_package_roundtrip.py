@@ -96,7 +96,7 @@ module main;
 import std.core as core;
 import boxlib as lib;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c: lib.Crate = lib.Crate::Holds(lib.Box<Int>::One(7));
 	match c {
 		lib.Crate::Holds(b) => {

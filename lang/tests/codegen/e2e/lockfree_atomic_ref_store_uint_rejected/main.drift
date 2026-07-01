@@ -4,7 +4,7 @@ import std.sync as sync;
 
 struct A { v: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var ar = sync.atomic_ref<type A>(sync.null_ref_token<type A>());
 	ar.store(cast<Uint>(1), sync.MemoryOrder::Release());
 	return 0;

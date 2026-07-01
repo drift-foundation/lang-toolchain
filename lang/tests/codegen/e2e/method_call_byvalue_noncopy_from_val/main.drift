@@ -12,7 +12,7 @@ implement Sink {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s = Sink();
 	val b = Blob(xs = [1]);
 	return s.take(move b);

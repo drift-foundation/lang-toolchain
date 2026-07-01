@@ -128,7 +128,7 @@ use trait shareable.ConstShare;
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type lib.Multi>();
 \tval m_empty = lib.make_multi_empty();
 \tval m_empty2 = m_empty.const_share();

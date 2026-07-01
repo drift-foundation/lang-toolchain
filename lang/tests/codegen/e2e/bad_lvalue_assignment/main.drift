@@ -4,7 +4,7 @@ fn foo() -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	foo() = 1;
 	return 0;
 }

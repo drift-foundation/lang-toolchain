@@ -37,7 +37,7 @@ module main;
 
 import std.containers as containers;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	m.insert(1, 2);
 	val k: Int = 1;
@@ -64,7 +64,7 @@ module main;
 
 import std.containers as containers;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var m = containers.hash_map<type String, Int>();
 	m.insert("a", 7);
 	val k: String = "a";

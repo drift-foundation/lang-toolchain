@@ -49,7 +49,7 @@ fn takes_fn<F>(f: F) nothrow -> Int require F is core.Fn1<Int, Int> {
 	return f.call(1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = takes_fn(|e| => { throw MyError(e); });
 	return 0;
 }

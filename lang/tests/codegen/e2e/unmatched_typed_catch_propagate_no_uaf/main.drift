@@ -39,6 +39,6 @@ fn inner() -> Int {
 	try { throw A(); } catch B(e) { return 999; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try inner() catch { 0 };
 }

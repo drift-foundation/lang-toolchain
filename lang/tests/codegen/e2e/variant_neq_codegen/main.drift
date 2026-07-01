@@ -6,7 +6,7 @@ variant Level {
 	Error
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = Level::Info();
 	val b = Level::Error();
 	if a != b {

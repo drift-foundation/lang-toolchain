@@ -24,7 +24,7 @@ fn early_exit(n: &json.JsonNode) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match json.parse(&"{\"a\":1,\"b\":2,\"c\":3}") {
 		core.Result::Ok(n) => {
 			if count_for_in(&n) != 3 { return 1; }       // for-in, non-empty

@@ -1,2 +1,2 @@
-fn main() nothrow -> Int{ return 0; }
-fn main() nothrow -> Int{ return 1; }
+pub fn main() nothrow -> Int{ return 0; }
+pub fn main() nothrow -> Int{ return 1; }

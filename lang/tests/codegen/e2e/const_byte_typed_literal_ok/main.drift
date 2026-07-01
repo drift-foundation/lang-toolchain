@@ -2,7 +2,7 @@ module main;
 
 const A: Byte = 12;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if cast<Int>(A) != 12 {
 		return 1;
 	}

@@ -20,7 +20,7 @@ fn cas_set(ar: &sync.AtomicRef<Node>, var expected: sync.RefToken<Node>, var des
 	return 2;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var ar = sync.atomic_ref<type Node>(sync.null_ref_token<type Node>());
 	val t1 = sync.ref_token<type Node>(cast<Uint>(11));
 	val t2 = sync.ref_token<type Node>(cast<Uint>(22));

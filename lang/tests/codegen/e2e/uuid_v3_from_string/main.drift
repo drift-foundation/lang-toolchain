@@ -27,7 +27,7 @@ fn _uuid_bytes_eq(a: &uuid.Uuid, b: &uuid.Uuid) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Pinned vector: v3_from_string("bookkeeper-test-01") matches the
 	// bookkeeper ask vector — i.e. it's identical to v3_from_bytes of
 	// the same string's UTF-8 bytes (the Java

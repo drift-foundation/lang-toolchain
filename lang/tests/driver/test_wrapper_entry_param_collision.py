@@ -43,7 +43,7 @@ pub fn put(entry: Item) nothrow -> Int {
 	return entry.value;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val item = Item(value = 42);
 	return put(item) - 42;
 }
@@ -85,7 +85,7 @@ pub fn process(entry: String) -> Int {
 	return entry.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = try process("hello") catch { -1 };
 	return r - 5;
 }
@@ -109,7 +109,7 @@ pub fn process(loop: Pair, body: Int) nothrow -> Int {
 	return loop.a + loop.b + body;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r1 = compute(1, 2, 3, 4);
 	val p = Pair(a = 5, b = 6);
 	val r2 = process(p, 7);
@@ -126,7 +126,7 @@ pub fn danger(entry: String, ok: Int) -> Int {
 	return entry.byte_length() + ok;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val r = try danger("hi", 10) catch { -1 };
 	return r - 12;
 }

@@ -124,7 +124,7 @@ fn make_dangling() nothrow -> View<Int> {
 \tvar c = Container<type Int>(x = 99);
 \treturn c.view();
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, (
 		f"method-call auto-borrow of local receiver returning a "
@@ -151,7 +151,7 @@ def test_method_call_returns_view_of_ref_param_accepts(
 fn ok_through_ref_param(c: &Container<Int>) nothrow -> View<Int> {
 \treturn c.view();
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc == 0, f"method-call on ref-param receiver must accept; errs={errs}"
 	assert not errs, f"unexpected diagnostics on positive control: {errs}"
@@ -173,7 +173,7 @@ fn make_dangling_via_free_fn() nothrow -> View<Int> {
 \tvar c = Container<type Int>(x = 99);
 \treturn view_of(&c);
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, "MVP escape rule must reject return of explicit-borrow-of-local"
 	assert any("borrowed aggregate return" in m or "MVP escape rule" in m for m in errs), (
@@ -192,7 +192,7 @@ fn make_dangling_via_field_init() nothrow -> View<Int> {
 \tvar c = Container<type Int>(x = 99);
 \treturn View<type Int>(source = &c);
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, "MVP escape rule must reject direct field-init of borrowed-aggregate from local"
 	assert any("borrowed aggregate return" in m or "MVP escape rule" in m for m in errs), (
@@ -218,7 +218,7 @@ fn dangling_mut() nothrow -> ViewMut<Int> {
 \tvar c = Container<type Int>(x = 99);
 \treturn c.view_mut();
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, (
 		f"`&mut` method-call auto-borrow of local receiver returning "
@@ -252,7 +252,7 @@ fn dangling_chain() nothrow -> View<Int> {
 \tvar a = Holder<type Int>(inner = Container<type Int>(x = 99));
 \treturn a.inner_ref().view();
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0, (
 		f"chained method receiver tracing to local must be rejected; "

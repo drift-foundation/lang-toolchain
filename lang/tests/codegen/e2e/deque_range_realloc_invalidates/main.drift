@@ -4,7 +4,7 @@ import std.err;
 import std.iter as iter;
 import std.containers as containers;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 var dq = containers.deque<type Int>();
 	dq.push_back(1);
 	var r = dq.range();

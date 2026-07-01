@@ -85,7 +85,7 @@ fn call_greet(app: &App, req: &lib.Request) nothrow -> Int {
 \treturn app.greet(req);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar app = App(name = "test");
 \tval req = lib.make_request("/health");
 
@@ -119,7 +119,7 @@ implement App {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar app = App(name = "test");
 
 \t// Explicit callback2 wrapper with untyped lambda params.
@@ -156,7 +156,7 @@ fn try_make(path: String) -> core.Result<lib.Request, String> {
 \treturn core.Result::Ok(lib.make_request(path));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tmatch try try_make("/test") catch { core.Result::Err("failed") } {
 \t\tcore.Result::Ok(r) => {
 \t\t\tif r.path.byte_length() > 0 { return 0; }

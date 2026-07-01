@@ -2,7 +2,7 @@ module std.mem.test;
 
 import std.mem as mem;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var a = 1;
 	var b = 2;
 	mem.swap(&mut a, &mut b);

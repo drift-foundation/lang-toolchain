@@ -83,7 +83,7 @@ fn f<T>(e: T) throws require T is Throw {
 	Throw::throw_self(move e);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -119,7 +119,7 @@ fn handle<T>(c: Choice, e: T) throws require T is Throw {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -150,7 +150,7 @@ fn fail_with(e: MyError) throws {
 	Throw::throw_self(move e);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -187,7 +187,7 @@ fn f<T>(e: T) throws require T is Converter {
 	Converter::convert(move e);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -222,7 +222,7 @@ implement Throw for E {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -253,7 +253,7 @@ implement Converter for E {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -283,7 +283,7 @@ implement Throw for E {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """

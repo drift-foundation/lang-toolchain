@@ -5,7 +5,7 @@ import std.log as log;
 import std.runtime as runtime;
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val reg = runtime.global_registry();
 	if not runtime.contains<type io.ProcessStderrCapability>(reg) {
 		return 1;

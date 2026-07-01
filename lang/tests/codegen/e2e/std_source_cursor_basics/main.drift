@@ -59,7 +59,7 @@ fn check_crlf() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val a = check_ascii();
 	if a != 0 { return a; }
 	val m = check_multibyte();

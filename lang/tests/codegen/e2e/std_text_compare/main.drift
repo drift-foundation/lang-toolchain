@@ -2,7 +2,7 @@ module main;
 
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// ── equals_ignore_case ──────────────────────────────────────
 	if !text.equals_ignore_case("hello", "HELLO") { return 1; }
 	if !text.equals_ignore_case("Hello", "hELLO") { return 2; }

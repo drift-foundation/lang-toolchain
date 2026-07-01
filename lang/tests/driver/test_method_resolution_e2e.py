@@ -307,7 +307,7 @@ implement Point {
     fn m(self: &Point) -> Int { return 1; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val x = 1;
     return x.m(); // no such method on Int;
 }
@@ -358,7 +358,7 @@ import m_trait as t;
 
 use trait t.Show;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: m_box.Box = m_box.Box(value = 1);
 	try {
 		return b.show();
@@ -409,7 +409,7 @@ module m_main;
 import m_box;
 import m_trait;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: m_box.Box = m_box.Box(value = 1);
 	return try m_trait.Show::show(b) catch { 0 };
 }
@@ -433,7 +433,7 @@ implement Box {
 	pub fn f(self: &mut Box) -> Int { return 2; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var b: Box = Box(value = 1);
 	return b.f();
 }
@@ -459,7 +459,7 @@ implement Box {
 	pub fn g(self: Box) -> Int { return 2; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var b: Box = Box(value = 1);
 	return b.g();
 }
@@ -487,7 +487,7 @@ implement Box {
 	pub fn h(self: Box) -> Int { return 2; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return make().h();
 }
 """.lstrip(),
@@ -522,7 +522,7 @@ implement Box {
 	pub fn f<T>(self: Box, x: T) -> Int require T is Printable { return 2; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box = Box(value = 1);
 	val it: Item = Item(value = 1);
 	return b.f(it);
@@ -564,7 +564,7 @@ implement Box {
 	pub fn f<T>(self: Box, x: T) -> Int require T is B { return 2; }
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: Box = Box(value = 1);
 	val it: Item = Item(value = 1);
 	return b.f(it);
@@ -631,7 +631,7 @@ import m_impl_b;
 
 use trait m_lib.Show;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val it: m_lib.Item = m_lib.Item(value = 1);
 	val b: m_lib.Box<m_lib.Item> = m_lib.Box(value = it);
 	return b.show();

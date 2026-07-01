@@ -32,7 +32,7 @@ implement Holder {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var root = conc.arc(conc.mutex(Counter(v = 0)));
 	var captured = root.clone();
 	var cb: core.Callback0<Int> = core.callback0(| | captures(move captured) => {

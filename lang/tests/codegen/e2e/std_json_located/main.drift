@@ -57,7 +57,7 @@ fn run(doc: &json.JsonDoc) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cfg = json.strict();
 	val src = "{\"name\":\"x\",\"age\":30,\"tags\":[\"a\",\"b\"]}";
 	match json.parse_located(&src, &cfg) {

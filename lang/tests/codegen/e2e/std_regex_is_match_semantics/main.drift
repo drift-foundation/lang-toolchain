@@ -14,7 +14,7 @@ fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothr
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- §1: empty pattern matches everything ---

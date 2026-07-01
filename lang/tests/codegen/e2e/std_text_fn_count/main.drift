@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if text.count("aabaaab", "aa") != 2 { return 1; }
 	if text.count("hello", "l") != 2 { return 2; }
 	if text.count("hello", "xyz") != 0 { return 3; }

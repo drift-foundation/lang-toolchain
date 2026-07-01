@@ -7,7 +7,7 @@ fn log() nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	log();
 	return 7;
 }

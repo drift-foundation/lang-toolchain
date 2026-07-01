@@ -38,7 +38,7 @@ module main;
 import std.concurrent as conc;
 import lang.thread as thread;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var g = conc.future_group<type Int>();
 	g.add(conc.spawn_future(| | => { thread.vt_park_until(thread.now_ms() + 1); return 1; }));
 	val _res = g.join_all();

@@ -37,7 +37,7 @@ fn sink<T>(x: Int) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = core.callback1(sink<type Int>);
 	cb.call(7);
 	return 0;

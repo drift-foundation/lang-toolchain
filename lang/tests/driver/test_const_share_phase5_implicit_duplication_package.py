@@ -99,7 +99,7 @@ fn dup(h: lib.Holder) nothrow -> lib.Holder {
 \treturn h;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = lib.make_holder("hi");
 \tval b = a;
 \tval n = takes_owned(a);

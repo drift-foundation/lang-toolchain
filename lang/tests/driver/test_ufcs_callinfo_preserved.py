@@ -49,7 +49,7 @@ pub error MyErr {
 	code: Int,
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r: core.Result<Int, MyErr> = core.Result::Ok(1);
 	val v = r.or_throw();
 	return v;

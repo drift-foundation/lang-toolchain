@@ -57,7 +57,7 @@ require R is iter.RandomAccessReadable<Int> {
 	return r.len();
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r = Range(n = 3);
 	return total(&r);
 }
@@ -88,7 +88,7 @@ require R is iter.RandomAccessReadable<Int> {
 	return r.len();
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val r = Range(n = 3);
 	return total(&r);
 }

@@ -21,7 +21,7 @@ fn byte_of(t: Token) nothrow -> Int {
 	};
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val t = Token::Char(b = cast<Byte>(65));
 	val v = byte_of(t);
 	if v != 65 { return 1; }

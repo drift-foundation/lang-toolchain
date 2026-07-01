@@ -81,7 +81,7 @@ fn capture(s: &String) nothrow -> Int {
 	return owned.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "hello";
 	return capture(&src);
 }
@@ -105,7 +105,7 @@ fn capture(n: &Int) nothrow -> Int {
 	return v + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 41;
 	return capture(&src);
 }
@@ -134,7 +134,7 @@ fn extract(s: &String) nothrow -> String {
 	return s;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "ok";
 	val out = extract(&src);
 	return out.byte_length();
@@ -155,7 +155,7 @@ fn extract(n: &Int) nothrow -> Int {
 	return n;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 7;
 	return extract(&src);
 }
@@ -191,7 +191,7 @@ fn match_lit(s: &String) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "hello";
 	return match_lit(&src);
 }
@@ -215,7 +215,7 @@ fn match_lit(s: &String) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "world";
 	return match_lit(&src);
 }
@@ -240,7 +240,7 @@ fn differs(s: &String) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "different";
 	return differs(&src);
 }
@@ -264,7 +264,7 @@ fn under_limit(n: &Int) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 42;
 	return under_limit(&src);
 }
@@ -289,7 +289,7 @@ fn under_limit(n: &Int) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 42;
 	return under_limit(&src);
 }
@@ -313,7 +313,7 @@ fn at_or_below(n: &Int) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 42;
 	return at_or_below(&src);
 }
@@ -338,7 +338,7 @@ fn ceiling_ok(n: &Int) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: Int = 42;
 	return ceiling_ok(&src);
 }
@@ -364,7 +364,7 @@ fn match_lit(s: &String) nothrow -> Int {
 	return tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val src: String = "different";
 	return match_lit(&src);
 }
@@ -402,7 +402,7 @@ fn capture(r: &Resource) nothrow -> Int {
 	return owned.tag;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -460,7 +460,7 @@ fn extract(r: &Resource) nothrow -> Resource {
 	return r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """.lstrip(),

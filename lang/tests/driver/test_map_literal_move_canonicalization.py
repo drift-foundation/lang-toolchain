@@ -47,7 +47,7 @@ implement log.Debuggable for Document {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var cfgb = log.config_builder();
 	cfgb.sink(log.stderr_sink());
 	cfgb.min_level(log.Level::Debug());

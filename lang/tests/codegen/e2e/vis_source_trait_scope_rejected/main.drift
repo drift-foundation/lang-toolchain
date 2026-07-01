@@ -2,7 +2,7 @@ module m;
 
 import std.iter as iter;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr = [10, 20, 30];
 	var it = arr.iter();
 	return 0;

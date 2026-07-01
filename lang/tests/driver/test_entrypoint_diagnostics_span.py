@@ -49,11 +49,11 @@ def test_duplicate_entrypoint_reports_span(tmp_path: Path) -> None:
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 
-fn main(x: Int) nothrow -> Int {
+pub fn main(x: Int) nothrow -> Int {
 	return x;
 }
 """

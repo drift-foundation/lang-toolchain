@@ -14,7 +14,7 @@ implement Bag {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Bag(v = 0);
 	// Neither overload matches Float — this should fail with "no matching
 	// method", not "ambiguous method".

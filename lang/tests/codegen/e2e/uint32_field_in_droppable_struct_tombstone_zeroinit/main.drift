@@ -20,7 +20,7 @@ module main;
 
 pub struct B { name: String, id: Uint32 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var bs: Array<B> = [];
 	bs.push(B(name = "x", id = cast<Uint32>(35)));   // grows array -> .bb.array_copy_body tombstones old slots' i32
 	val first = bs.pop();                             // ArrayElemTake -> struct tombstone, second i32-zero site

@@ -37,7 +37,7 @@ CONSUMER = """\
 module consumer;
 import a_pkg as a;
 fn trigger() throws a.E -> Int { throw a.E(kind = a.K::Bad(detail = "x"), tag = "t"); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 
 

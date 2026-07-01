@@ -50,7 +50,7 @@ pub fn handle(x: Int) nothrow -> Int {
 module main;
 import mylib.api as api;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return api.handle(21);
 }
 """.lstrip(),
@@ -104,7 +104,7 @@ pub fn process(x: Int) -> Int {
 module main;
 import mylib.svc as svc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try svc.process(21) catch { -1 };
 }
 """.lstrip(),
@@ -189,7 +189,7 @@ pub fn process(x: Int) -> Int {
 module main;
 import mylib.api as api;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try api.process(21) catch { -1 };
 }
 """.lstrip(),

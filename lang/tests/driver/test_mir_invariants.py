@@ -28,7 +28,7 @@ fn take(x: Box) nothrow -> Int {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var s = Box(s = "hi");
 	var n = take(move s);
 	return n;

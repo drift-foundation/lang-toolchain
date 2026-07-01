@@ -69,7 +69,7 @@ fn fail() throws {
 	throw Boom();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -94,7 +94,7 @@ fn outer() throws {
 	inner();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -118,7 +118,7 @@ fn fail(flag: Bool) throws {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -144,7 +144,7 @@ fn fail(c: Choice) throws {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -167,7 +167,7 @@ fn fail() throws {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -188,7 +188,7 @@ fn fail() throws {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -205,7 +205,7 @@ fn fail() throws {
 	val x = 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -229,7 +229,7 @@ fn fail(c: Bool) throws {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -253,7 +253,7 @@ fn fail(c: Choice) throws {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """
@@ -296,7 +296,7 @@ fn pick(c: Choice) -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try pick(Choice::A()) catch { 99 };
 }
 """
@@ -327,7 +327,7 @@ fn pick(b: Bool) -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try pick(true) catch { 99 };
 }
 """
@@ -546,7 +546,7 @@ fn outer() throws {
 	plain_call();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """

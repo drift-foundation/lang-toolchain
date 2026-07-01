@@ -50,7 +50,7 @@ fn make() -> Wrap {
 	return Wrap(inner = Inner(value = 1));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return make().inner.get();
 }
 """.lstrip(),
@@ -97,7 +97,7 @@ implement Outer {
 	pub fn node(self: &Outer) nothrow -> &Inner { return &self.inner; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val o = Outer(inner = Inner(value = 42));
 	return o.node().get();
 }
@@ -132,7 +132,7 @@ fn make() nothrow -> Builder {
 	return Builder(x = 0);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val _ = make().step().step().finish();
 	return 0;
 }

@@ -147,7 +147,7 @@ implement Box {
 \tpub fn read(self: &Box) nothrow -> Int { return self.v; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval app = conc.arc(Box(v = 11));
 \tval opt = Optional<type conc.Arc<Box>>::Some(move app);
 \tmatch opt {

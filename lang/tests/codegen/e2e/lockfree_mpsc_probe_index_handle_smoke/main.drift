@@ -11,7 +11,7 @@ fn producer_claim_tail(q: &MpscHeadTail, expect: Uint, next: Uint) nothrow -> Ui
 	return q.tail.compare_exchange_observed(expect, next, sync.MemoryOrder::AcqRel(), sync.MemoryOrder::Acquire());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var q = MpscHeadTail(
 		head = sync.atomic_uint(cast<Uint>(0)),
 		tail = sync.atomic_uint(cast<Uint>(0))

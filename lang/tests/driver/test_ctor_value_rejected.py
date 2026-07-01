@@ -18,7 +18,7 @@ module main;
 
 import std.concurrent as conc;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f = conc.SaturationPolicy::Block;
 	return 0;
 }

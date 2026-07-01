@@ -10,7 +10,7 @@ fn foo() nothrow -> Maybe<Int> {
 	return Some(41);
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x: Maybe<Int> = foo();
 	val y = match x{
 	Some(v) => { v + 1 },

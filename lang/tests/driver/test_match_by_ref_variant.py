@@ -133,7 +133,7 @@ def test_f1_field_write_through_shared_binder_rejected_cleanly(
 	lowering contract failure (... checker bug)`.  Post-fix: a
 	user-facing diagnostic that mentions the mutability mismatch."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval _ = match &r {
 \t\tcore.Result::Ok(x) => { x.status = 99; 0 },
@@ -169,7 +169,7 @@ def test_f2_optional_some_escape_no_uaf_path(
 	Either the escape itself or the use-after-mutation must be
 	rejected — the program must not compile."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&Resp> = Optional<&Resp>::None();
 \tval _ = match &r {
@@ -205,7 +205,7 @@ def test_f2_simple_escape_no_mutation_compiles_under_owner_extension(
 	mutation of the scrutinee invalidates this borrow at compile
 	time."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tvar leaked: Optional<&Resp> = Optional<&Resp>::None();
 \tval _ = match &r {
@@ -236,7 +236,7 @@ def test_f3_nested_match_on_inner_ref_variant(
 	`match inner` must accept it.  Pre-fix: rejects with `match
 	scrutinee must have a variant type`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval o: Optional<core.Result<Resp, AppErr>> = Optional::Some(make_ok());
 \treturn match &o {
 \t\tOptional::Some(inner) => {
@@ -262,7 +262,7 @@ def test_f3_factored_ref_variant_via_let(
 	must work, demonstrating the scrutinee check accepts a value of
 	type `&Variant` regardless of how it got there."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval ref_r: &core.Result<Resp, AppErr> = &r;
 \treturn match ref_r {
@@ -288,7 +288,7 @@ fn pick<'a>(r: &'a core.Result<Resp, AppErr>) nothrow -> &'a core.Result<Resp, A
 \treturn r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \treturn match pick(&r) {
 \t\tcore.Result::Ok(x) => { x.status },
@@ -303,7 +303,7 @@ fn main() nothrow -> Int {
 	if rc != 0:
 		# Try fallback without explicit lifetime syntax.
 		rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval ref_r: &core.Result<Resp, AppErr> = &r;
 \treturn match ref_r {
@@ -337,7 +337,7 @@ def test_cert_basic_app_shape(
 fn log_status(s: Int) nothrow -> Void { return core.void_value(); }
 fn log_error(s: Int) nothrow -> Void { return core.void_value(); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval result = make_ok();
 \tval _ = match &result {
 \t\tcore.Result::Ok(resp) => { log_status(resp.status); 0 },
@@ -361,7 +361,7 @@ def test_cert_repeated_match_on_same_scrutinee(
 ) -> None:
 	"""Positive — repeated `match &x` on the same value must work."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval a = match &r { core.Result::Ok(x) => { x.status }, core.Result::Err(_) => { 0 } };
 \tval b = match &r { core.Result::Ok(x) => { x.status + 1 }, core.Result::Err(_) => { 0 } };
@@ -377,7 +377,7 @@ def test_cert_drop_bearing_payload_field_read(
 	"""Positive — payload field of non-Copy type (String) read via
 	`.clone()` through the shared binder."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval s: String = match &r {
 \t\tcore.Result::Ok(x) => { x.msg.clone() },
@@ -397,7 +397,7 @@ def test_neg_move_payload_field_through_shared_binder_rejected(
 ) -> None:
 	"""Negative — `move x.msg` through `&` binder must be rejected."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \tval s: String = match &r {
 \t\tcore.Result::Ok(x) => { move x.msg },
@@ -417,7 +417,7 @@ def test_neg_move_whole_binder_rejected(
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 fn take_resp(r: Resp) nothrow -> Int { return r.status; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \treturn match &r {
 \t\tcore.Result::Ok(x) => { take_resp(move x) },
@@ -456,7 +456,7 @@ import std.core as core;
 
 variant State { Active(n: Int) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval s: State = State::Active(n = 5);
 \treturn match &s {
 \t\tState::Active(n) => { n + 1 }
@@ -476,7 +476,7 @@ import std.core as core;
 
 variant State { Active(n: Int) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval s: State = State::Active(n = 42);
 \tval extracted: Int = match &s {
 \t\tState::Active(n) => { n }
@@ -494,7 +494,7 @@ import std.core as core;
 
 variant State { Active(n: Int) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval s: State = State::Active(n = 7);
 \treturn match &s {
 \t\tState::Active(n) => { n > 0 ? 1 : 0 }
@@ -511,7 +511,7 @@ import std.core as core;
 
 variant Flag { On(b: Bool) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval f: Flag = Flag::On(b = true);
 \treturn match &f {
 \t\tFlag::On(b) => { b ? 1 : 0 }
@@ -532,7 +532,7 @@ def test_g3_scope_only_match_arm_binders_not_arbitrary_refs(tmp_path: Path) -> N
 module main;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval n: Int = 5;
 \tval r: &Int = &n;
 \treturn r + 1;
@@ -577,7 +577,7 @@ import std.core as core;
 
 variant V { A(n: Int, b: Bool) }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval v: V = V::A(n = 1, b = true);
 \treturn match &v {
 \t\tV::A(n, b) => { n + b }
@@ -607,7 +607,7 @@ variant V { A(big: Big) }
 
 fn take_big(b: Big) nothrow -> Int { return b.data.len; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval v: V = V::A(big = Big(data = [1, 2, 3]));
 \treturn match &v {
 \t\tV::A(big) => { take_big(big) }
@@ -643,7 +643,7 @@ def test_a2_hygiene_no_match_binder_leak_in_by_ref_diagnostics(
 	territory may contain `__match_binder_`.  Force a body error
 	inside an arm and assert the cascade stays clean."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval r = make_ok();
 \treturn match &r {
 \t\tcore.Result::Ok(x) => { undefined_name_here },

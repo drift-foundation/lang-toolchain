@@ -101,7 +101,7 @@ pub error PtrError {
 \tp: RawPtr<Byte>,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -121,7 +121,7 @@ pub error ArrayError {
 \ttags: Array<String>,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -140,7 +140,7 @@ pub error OptError {
 \thint: Optional<String>,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -160,7 +160,7 @@ pub error MapError {
 \tmeta: Map<String, Int>,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -185,7 +185,7 @@ pub error WithStructField {
 \tdata: PlainData,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -215,7 +215,7 @@ pub error WithStructField {
 \tdata: PlainData,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -255,7 +255,7 @@ pub error WrapsOpId {
 \top_id: err.IteratorOpId,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -283,7 +283,7 @@ pub error PubOuter {
 \tinner: PrivateInner,
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -316,7 +316,7 @@ implement core.Diagnostic for PtrError {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

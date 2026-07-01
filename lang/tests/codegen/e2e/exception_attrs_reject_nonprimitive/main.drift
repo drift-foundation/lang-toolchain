@@ -3,6 +3,6 @@ module m;
 error E { code: Int }
 struct S { x: Int }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     throw E(code = S(x = 5));
 }

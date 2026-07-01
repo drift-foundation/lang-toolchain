@@ -44,7 +44,7 @@ def test_optional_ctor_expected_type_and_explicit_ok(tmp_path: Path, capsys: pyt
 		"""
 module main;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val a: Optional<Int> = Optional::None();
 	val b = Optional::None<type Int>();
 	val c = Optional<Int>::None();
@@ -99,7 +99,7 @@ def test_generic_impl_array_literal_fuzz_fixed_seed(tmp_path: Path, capsys: pyte
 				"",
 				*uses,
 				"",
-				"fn main() -> Int {",
+				"pub fn main() -> Int {",
 				"\tval a = use_0();",
 				"\tval b = use_1();",
 				"\tval c = use_2();",
@@ -121,7 +121,7 @@ def test_optional_ctor_without_expected_type_errors(tmp_path: Path, capsys: pyte
 		"""
 module main;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val x = Optional::None();
 	return 0;
 }
@@ -142,7 +142,7 @@ module main;
 type Maybe<T> = Optional<T>;
 type MaybeInt = Maybe<Int>;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val a: MaybeInt = Optional::None();
 	val b = Optional::None<type MaybeInt>();
 	val c = Optional::Some<type Int>(1);
@@ -167,7 +167,7 @@ module main;
 
 import std.iter as iter;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val s: String = "ab";
 	var it = s.bytes();
 	val a: Optional<Byte> = iter.SinglePassIterator::next(&mut it);
@@ -198,7 +198,7 @@ fn run_cb<T>(cb: core.Callback0<T>) nothrow -> core.Result<T, Int> {
 	return core.Result::Ok(move v);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb: core.Callback0<Void> = core.callback0(| | => { return; });
 	match run_cb(move cb) {
 		core.Result::Ok(_) => { return 0; },
@@ -223,7 +223,7 @@ fn v() nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x: Int = v();
 	return x;
 }
@@ -268,7 +268,7 @@ def test_alias_resolution_fuzz_fixed_seed(tmp_path: Path, capsys: pytest.Capture
 				"",
 				*aliases,
 				"",
-				"fn main() -> Int {",
+				"pub fn main() -> Int {",
 				*uses,
 				"return 0;",
 				"}",
@@ -288,7 +288,7 @@ def test_generic_impl_indexing_has_no_instantiation_errors(tmp_path: Path, capsy
 		"""
 module main;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	return 0;
 }
 """.lstrip(),
@@ -311,7 +311,7 @@ fn needs_copy<T>(x: T) -> Int require T is Copy {
 	return 0;
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	val b = Box(x = 1);
 	return needs_copy(b);
 }
@@ -332,7 +332,7 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var a = conc.arc(1);
 	core.drop_value(a);
 	return 0;
@@ -354,7 +354,7 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var m = conc.mutex(1);
 	var g = conc.lock(&m);
 	core.drop_value(g);
@@ -377,7 +377,7 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var a = conc.arc(1);
 	val _ = core.drop_value(a);
 	return 0;

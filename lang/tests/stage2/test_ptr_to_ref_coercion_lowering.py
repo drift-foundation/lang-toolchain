@@ -43,7 +43,7 @@ struct S { x: Int }
 fn wrap(r: &S) nothrow -> Optional<&S> {
 	unsafe { val p = mem.ptr_from_ref<type S>(r); return Optional<&S>::Some(p); }
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = S(x = 7);
 	val o = wrap(&v);
 	var r = 1;

@@ -71,7 +71,7 @@ def test_const_arc_int_const_share_call(tmp_path, capsys):
 	`ConstArc<Int>` sharing the same allocation.  Body delegates
 	to `Arc::clone`."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type Int>(42);
 \tval b = a.const_share();
 \treturn *a.get() + *b.get();
@@ -84,7 +84,7 @@ def test_const_arc_string_const_share_call(tmp_path, capsys):
 	"""Heap-bearing payload (String, Frozen) — exercises
 	const_share on a refcounted inner type."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hello");
 \tval b = a.const_share();
 \tval s: &String = b.get();
@@ -98,7 +98,7 @@ def test_const_arc_proves_const_share_bound(tmp_path, capsys):
 	"""The bound `T: ConstShare` is provable for `ConstArc<T:Frozen>`
 	via the direct stdlib impl."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type core.ConstArc<Int>>();
 \tassert_cs<type core.ConstArc<String>>();
 \treturn 0;
@@ -125,7 +125,7 @@ pub struct Holder {
 \tpub handle: core.ConstArc<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Holder>();
 \treturn 0;
 }
@@ -155,7 +155,7 @@ implement shareable.ConstShare for Wrap {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

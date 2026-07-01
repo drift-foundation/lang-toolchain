@@ -174,7 +174,7 @@ def test_deployed_wrapper_links_directly_from_dist_tree_lib_runtime(
 		src,
 		"""module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -301,7 +301,7 @@ def test_deployed_wrapper_explicit_env_override_respected(
 			os.environ["DRIFT_SIGN_KEY_FILE"] = old_sign_key
 
 	src = tmp_path / "main.drift"
-	_write_file(src, "module main;\n\nfn main() nothrow -> Int { return 0; }\n")
+	_write_file(src, "module main;\n\npub fn main() nothrow -> Int { return 0; }\n")
 	out = tmp_path / "a.out"
 
 	# Operator override: point at a test-local scratch directory.

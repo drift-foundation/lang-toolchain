@@ -109,7 +109,7 @@ fn _run() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val rc = _run();
 	if rc == 0 {
 		cons.println("ok");

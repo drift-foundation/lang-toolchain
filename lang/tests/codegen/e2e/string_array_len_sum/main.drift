@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     val xs = ["a", "bb", "ccc"];
     // len(a)=1, len(bb)=2, len(ccc)=3 -> 6
     return xs[0].len + xs[1].len + xs[2].len;

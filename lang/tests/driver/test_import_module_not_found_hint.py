@@ -15,7 +15,7 @@ module main;
 
 import b as b;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return b.answer();
 }
 """.lstrip(),

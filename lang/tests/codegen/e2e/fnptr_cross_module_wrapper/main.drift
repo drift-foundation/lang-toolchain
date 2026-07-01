@@ -1,7 +1,7 @@
 module main;
 import a as a;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val fp = a.id;
 	val y = try fp(1) catch { 0 };
 	return y;

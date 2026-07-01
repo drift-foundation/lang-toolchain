@@ -2,4 +2,4 @@ module main;
 import b as b;
 
 
-fn main() nothrow -> Int{ return b.foo(); }
+pub fn main() nothrow -> Int{ return b.foo(); }

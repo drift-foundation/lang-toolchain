@@ -90,7 +90,7 @@ def test_debuggable_method_callable_on_primitive(tmp_path, capsys):
 	primitives (Int).  Pins that the migrated trait shape exists
 	in std.log."""
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval n: Int = 42;
 \tval _s: String = n.to_debug_json_text();
 \treturn 0;
@@ -124,7 +124,7 @@ implement log.Debuggable for UserId {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval u: UserId = UserId(value = 7);
 \tval _s: String = u.to_debug_json_text();
 \treturn 0;
@@ -162,7 +162,7 @@ implement log.Debuggable for UserId {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

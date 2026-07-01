@@ -128,7 +128,7 @@ fn _run() -> Int {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try _run() catch { 99 };
 }
 """
@@ -248,7 +248,7 @@ fn _run() -> Int {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try _run() catch { 99 };
 }
 """

@@ -21,7 +21,7 @@ import std.core as core;
 import std.concurrent as conc;
 import std.env as env;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 1000);
 	var w = io.file_builder(env.drift_tmp_path("drift_test_match_stmt_missing_return_repro.bin")).read(false).write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(t).build();
 	match w {

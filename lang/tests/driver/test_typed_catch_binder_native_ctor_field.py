@@ -84,7 +84,7 @@ fn try_typed() -> core.Result<Int, E> {
 	try { val t = boom(); return core.Result<Int, E>::Ok(t); }
 	catch E(e) { return core.Result<Int, E>::Err(move e); }
 }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var code = 2;
 	try { match try_typed() {
 		core.Result::Ok(_) => { code = 1; },
@@ -149,7 +149,7 @@ def test_ref_string_variant_payload_accepted(tmp_path: Path) -> None:
 module main;
 variant Node { Tagged(s: String), Empty }
 fn mk(s: &String) -> Node { return Node::Tagged(s); }
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val owned = "hi";
 	val n = mk(&owned);
 	var r = 1;
@@ -171,7 +171,7 @@ struct Sq { side: Int }
 implement Shape for Sq { fn area(self: &Sq) nothrow -> Int { return self.side * self.side; } }
 variant Holder { Has(s: Shape), Nothing }
 fn wrap(s: Shape) -> Holder { return Holder::Has(move s); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	res = _compile(tmp_path, src)
 	assert res.returncode == 0, f"exact interface payload should compile:\n{res.stderr[-800:]}"
@@ -188,7 +188,7 @@ struct Sq { side: Int }
 implement Shape for Sq { fn area(self: &Sq) nothrow -> Int { return self.side * self.side; } }
 variant Holder { Has(s: Shape), Nothing }
 fn wrap(sq: Sq) -> Holder { return Holder::Has(sq); }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	diags = _error_diags(tmp_path, src)
 	codes = [d.get("code") for d in diags]
@@ -217,7 +217,7 @@ fn other() -> Box {
 	val s = "hello";
 	return Box::Hold(s);
 }
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """
 	diags = _error_diags(tmp_path, src)
 	codes = [d.get("code") for d in diags]

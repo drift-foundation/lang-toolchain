@@ -144,7 +144,7 @@ pub struct Outer {
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval i = b.Inner(handle = core.const_arc<type String>("hi"));
 \tval o = Outer(inner = i, tag = 1);
 \tassert_cs<type Outer>();
@@ -197,7 +197,7 @@ pub struct UseTwo {
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval w1 = b.Wrapped(h = core.const_arc<type Int>(1));
 \tval w2 = b.Wrapped(h = core.const_arc<type Int>(2));
 \tval u = UseTwo(one = w1, two = w2);
@@ -264,7 +264,7 @@ pub struct Outer {
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Outer>();
 \treturn 0;
 }
@@ -471,7 +471,7 @@ pub struct Outer {
 
 fn assert_cs<T>() nothrow -> Void require T is shareable.ConstShare { }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval i = producer_inner.Inner(handle = core.const_arc<type String>("hi"));
 \tval o = Outer(inner = i, tag = 1);
 \tassert_cs<type Outer>();

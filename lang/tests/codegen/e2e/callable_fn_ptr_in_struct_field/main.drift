@@ -7,7 +7,7 @@ struct MathOp {
 fn add(a: Int, b: Int) nothrow -> Int { return a + b; }
 fn mul(a: Int, b: Int) nothrow -> Int { return a * b; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val op_add = MathOp(apply = add);
 	val op_mul = MathOp(apply = mul);
 	val f1 = op_add.apply;

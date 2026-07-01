@@ -102,7 +102,7 @@ implement<T> Box<T> require T is shareable.ConstShare {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)

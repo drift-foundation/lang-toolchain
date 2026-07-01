@@ -8,7 +8,7 @@ struct Handler {
 
 fn double(x: Int) nothrow -> Int { return x * 2; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var h = Handler(on_event = core.callback1(double));
 	val result = h.on_event.call(21);
 	if result != 42 { return 1; }

@@ -4,7 +4,7 @@ import std.sync as sync;
 
 struct Node { v: Int }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var q = sync.mpsc_queue<type Node>(3);
 	var round = 0;
 	while round < 200 {

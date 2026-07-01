@@ -3,7 +3,7 @@ module main;
 import std.concurrent as conc;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var exec = conc.default_executor();
 	var res = conc.spawn_on(exec, | | => { return 7; });
 	return match res {

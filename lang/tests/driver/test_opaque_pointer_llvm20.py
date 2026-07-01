@@ -63,7 +63,7 @@ class TestOpaquePointerIR:
 		ir = _emit_ir(tmp_path, """
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "hello";
 	val x = s.byte_length();
 	return x;
@@ -124,7 +124,7 @@ fn main() nothrow -> Int {
 		ir = _emit_ir(tmp_path, """
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "hello world";
 	val x = s.byte_length();
 	return x;
@@ -153,7 +153,7 @@ fn main() nothrow -> Int {
 		ir = _emit_ir(tmp_path, """
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 42;
 }
 """.lstrip())
@@ -234,7 +234,7 @@ fn rawptr_write_back() nothrow -> Int {
 	return z;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val p = make_pair(3, 4);
 	val n = Nested(inner = p, label = "hello");
 	val s = nested_sum(&n);
@@ -325,7 +325,7 @@ fn apply(f: core.Callback1<Int, Int>, x: Int) nothrow -> Int {
 	return f.call(x);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var h = Handler(on_event = core.callback1(double));
 	val r1 = h.on_event.call(21);
 	if r1 != 42 { return 1; }

@@ -91,7 +91,7 @@ module main;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
 \tval b = a;
 \tval r1: &String = a.get();
@@ -115,7 +115,7 @@ fn takes_owned(x: core.ConstArc<String>) nothrow -> Int {
 \treturn r.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
 \tval n1 = takes_owned(a);
 \tval n2 = takes_owned(a);
@@ -138,7 +138,7 @@ fn dup(a: core.ConstArc<String>) nothrow -> core.ConstArc<String> {
 \treturn a;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
 \tval b = dup(a);
 \tval r1: &String = a.get();
@@ -162,7 +162,7 @@ pub struct Holder {
 \tpub handle: core.ConstArc<String>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = Holder(handle = core.const_arc<type String>("hi"));
 \tval b = a;
 \tval r1: &String = a.handle.get();
@@ -185,7 +185,7 @@ pub variant Carrier {
 \tWrap(handle: core.ConstArc<String>)
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = Carrier::Wrap(core.const_arc<type String>("hi"));
 \tval b = a;
 \treturn 0;
@@ -210,7 +210,7 @@ pub struct Box<T> require T is shareable.ConstShare {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval inner = core.const_arc<type String>("hi");
 \tval a = Box<type core.ConstArc<String>>(value = inner);
 \tval b = a;
@@ -237,7 +237,7 @@ fn takes_owned(x: core.ConstArc<String>) nothrow -> Int {
 \treturn 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar a = core.const_arc<type String>("hi");
 \tval n = takes_owned(move a);
 \tval r: &String = a.get();
@@ -258,7 +258,7 @@ pub struct OwnedToken {
 \tpub fd: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = OwnedToken(fd = 7);
 \tval b = a;
 \treturn 0;
@@ -280,7 +280,7 @@ pub struct OwnedBag {
 \tpub items: Array<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = OwnedBag(items = [1, 2, 3]);
 \tval b = a;
 \treturn 0;
@@ -309,7 +309,7 @@ fn pick(cond: Bool, a: core.ConstArc<String>, b: core.ConstArc<String>) nothrow 
 \treturn r;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -349,7 +349,7 @@ fn make_ok(a: core.ConstArc<String>) throws -> core.ConstArc<String> {
 \treturn Ok(a);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -369,7 +369,7 @@ fn read_ref(r: &core.ConstArc<String>) nothrow -> Int {
 \treturn inner.byte_length();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
 \tval n = read_ref(&a);
 \tval r: &String = a.get();

@@ -19,7 +19,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val pairs = meta.compiler_info_pairs();
 
 	// Must have at least 4 tags.

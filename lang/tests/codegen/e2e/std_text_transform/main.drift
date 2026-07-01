@@ -15,7 +15,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 	return true;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// ── repeat ──────────────────────────────────────────────────
 	val rp1 = text.repeat("ab", 3);
 	val e1 = "ababab";

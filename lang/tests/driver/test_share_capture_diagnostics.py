@@ -54,7 +54,7 @@ def test_share_capture_of_copy_type_suggests_copy(
 	source = """
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val x: Int = 5;
 	return (| | captures(share x) => { return x; })();
 }
@@ -88,7 +88,7 @@ implement core.Destructible for Token {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val tok = Token(v = 42);
 	return (| | captures(share tok) => { return 0; })();
 }
@@ -137,7 +137,7 @@ implement Counter {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val c = Counter(v = 42);
 	return (| | captures(share c) => { return 0; })();
 }

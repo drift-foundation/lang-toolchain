@@ -6,6 +6,6 @@ fn helper() nothrow -> Int{
 
 const T: Array<Int> = [helper(), 2];
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return 0;
 }

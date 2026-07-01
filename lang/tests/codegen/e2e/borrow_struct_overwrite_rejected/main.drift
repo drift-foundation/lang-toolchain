@@ -2,7 +2,7 @@ module main;
 
 struct Point(x: Int, y: Int);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var p = Point(0, 0);
 	val rx = &p.x;
 	p = Point(1, 2);

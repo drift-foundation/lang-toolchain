@@ -62,7 +62,7 @@ pub struct Holder {
 \tpub handle: core.ConstArc<String>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hello");
 \tval h = Holder(handle = a);
 \tassert_cs<type Holder>();
@@ -83,7 +83,7 @@ pub struct Mixed {
 \tpub label: String
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
 \tval m = Mixed(handle = a, tag = 7, label = "x");
 \tassert_cs<type Mixed>();
@@ -109,7 +109,7 @@ pub struct Outer {
 \tpub tag: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval i = Inner(a = core.const_arc<type Int>(7));
 \tval o = Outer(inner = i, tag = 1);
 \tassert_cs<type Inner>();
@@ -137,7 +137,7 @@ fn dup<T>(x: &T) nothrow -> T require T is shareable.ConstShare {
 \treturn x.const_share();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval h = Holder(handle = core.const_arc<type Int>(42));
 \tval h2 = dup<type Holder>(&h);
 \treturn 0;
@@ -175,7 +175,7 @@ pub struct Bad {
 \tpub handle: core.Arc<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -191,7 +191,7 @@ pub struct Bad {
 \tpub lock: conc.Mutex<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -207,7 +207,7 @@ pub struct Bad {
 \tpub items: Array<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -223,7 +223,7 @@ pub struct Bad {
 \tpub m: HashMap<String, Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -239,7 +239,7 @@ pub struct Bad {
 \tpub borrowed: &Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -255,7 +255,7 @@ pub struct Bad {
 \tpub borrowed: &mut Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Bad>();
 \treturn 0;
 }
@@ -282,7 +282,7 @@ implement shareable.ConstShare for Wrap {
 \t}
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """)
 	assert rc != 0
 	assert any(

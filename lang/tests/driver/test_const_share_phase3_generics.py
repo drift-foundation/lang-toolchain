@@ -71,7 +71,7 @@ pub struct Box<T> require T is shareable.ConstShare {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval inner = core.const_arc<type String>("hi");
 \tval b = Box<type core.ConstArc<String>>(value = inner);
 \tassert_cs<type Box<core.ConstArc<String>>>();
@@ -94,7 +94,7 @@ pub struct Box<T> require T is core.Copy, T is shareable.Frozen {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval b = Box<type Int>(value = 42);
 \tassert_cs<type Box<Int>>();
 \tval b2 = b.const_share();
@@ -134,7 +134,7 @@ pub struct Box<T> {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Box<Int>>();
 \treturn 0;
 }
@@ -151,7 +151,7 @@ pub struct Box<T> require T is shareable.Frozen {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Box<Int>>();
 \treturn 0;
 }
@@ -167,7 +167,7 @@ pub struct Box<T> require T is core.Copy {
 \tpub value: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tassert_cs<type Box<Int>>();
 \treturn 0;
 }

@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	const F: Float = 2.0;
 	if F > 1.0 {
 		return 1;

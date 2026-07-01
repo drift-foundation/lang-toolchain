@@ -6,7 +6,7 @@ fn double(x: Int) nothrow -> Int { return x * 2; }
 fn triple(x: Int) nothrow -> Int { return x * 3; }
 fn add10(x: Int) nothrow -> Int { return x + 10; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var arr: Array<core.Callback1<Int, Int>> = [];
 	var cb1 = core.callback1(double);
 	var cb2 = core.callback1(triple);

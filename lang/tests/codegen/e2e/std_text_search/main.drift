@@ -2,7 +2,7 @@ module main;
 
 import std.text as text;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = "hello world";
 	val empty = "";
 

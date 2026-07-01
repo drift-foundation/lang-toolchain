@@ -28,7 +28,7 @@ fn first_data_len(items: &Array<Nested>) nothrow -> Int {
 	return items[0].data.len;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Test 1: find_by_name — Copy field from non-Copy element
 	var entries: Array<Entry> = [];
 	entries.push(Entry(name = "alice", value = "one"));

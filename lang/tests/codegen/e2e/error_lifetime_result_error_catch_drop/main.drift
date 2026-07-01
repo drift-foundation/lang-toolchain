@@ -7,7 +7,7 @@ fn fail() -> Int {
 	throw err:ResultError(diag_json = core.diagnostic_json_int(7));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val v = try fail() catch err:ResultError(_e) { 0 } catch { 3 };
 	return v;
 }

@@ -20,7 +20,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 	return core.Result::Ok(Statement(session = s));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sess = Session(drops = 0);
 	match query(&mut sess) {
 		core.Result::Ok(st) => {

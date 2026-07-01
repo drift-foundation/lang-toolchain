@@ -2,7 +2,7 @@ fn id(p: &Int) nothrow -> &Int {
 	return p;
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 7;
 	return *id(&x);
 }

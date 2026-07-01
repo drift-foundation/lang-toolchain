@@ -1,6 +1,6 @@
 module m;
 
 error Timeout {}
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
     throw Timeout(x = 1);
 }

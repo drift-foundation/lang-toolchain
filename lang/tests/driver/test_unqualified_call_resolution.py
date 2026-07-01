@@ -44,7 +44,7 @@ implement Foo {
 	fn f(self: &Foo) -> Int { return write(); }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var foo = Foo();
 	return foo.f();
 }
@@ -70,7 +70,7 @@ implement Foo {
 	fn f(self: &Foo) -> Int { return write(self); }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var foo = Foo();
 	return foo.f();
 }
@@ -101,7 +101,7 @@ implement Foo {
 	}
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var foo = Foo();
 	return foo.f();
 }

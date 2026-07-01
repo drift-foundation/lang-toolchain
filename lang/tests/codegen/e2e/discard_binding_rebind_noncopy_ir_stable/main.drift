@@ -12,7 +12,7 @@ implement S {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val s = S(a = "left");
 	val t = S(a = "right");
 	if not s.check(move t) {

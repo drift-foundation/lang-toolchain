@@ -61,7 +61,7 @@ fn _str_contains(haystack: &String, needle: &String) nothrow -> Bool {
 	return false;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// Catch-all `catch e { ... }` binds the Error envelope.  Typed
 	// binder `catch Audit(e)` is rejected at compile time for
 	// manual-Diagnostic pub errors (Slice 6 boundary —

@@ -8,6 +8,6 @@ fn outer() nothrow -> Int {
 	return inner();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return outer();
 }

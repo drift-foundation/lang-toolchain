@@ -34,7 +34,7 @@ module main;
 import std.containers as containers;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
 }
 

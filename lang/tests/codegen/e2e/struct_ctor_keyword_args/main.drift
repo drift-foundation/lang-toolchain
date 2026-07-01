@@ -2,7 +2,7 @@ module main;
 
 struct Point(x: Int, y: Int);
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val p = Point(y = 2, x = 40);
 	return p.x + p.y;
 }

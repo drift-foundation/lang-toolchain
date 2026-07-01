@@ -9,7 +9,7 @@ fn foo(flag: Int) -> Int {
 	throw Other();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 val x = try foo(1) catch MyErr(e) { 10 } catch { 20 };
 val y = try foo(2) catch MyErr(e) { 10 } catch { 20 };
 	return x + y;

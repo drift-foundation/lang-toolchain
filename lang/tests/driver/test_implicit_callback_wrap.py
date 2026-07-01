@@ -87,7 +87,7 @@ implement S {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return S::take_cb(|x: Int| nothrow => x + 1);
 }
 """,
@@ -122,7 +122,7 @@ struct Holder {
 	cb: core.Callback1<Int, Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder(cb = |x: Int| nothrow => x + 1);
 	return h.cb.call(41);
 }
@@ -145,7 +145,7 @@ struct Holder {
 	cb: core.Callback1<Int, Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder(|x: Int| nothrow => x + 1);
 	return h.cb.call(41);
 }
@@ -170,7 +170,7 @@ struct Holder {
 
 fn add1(x: Int) nothrow -> Int { return x + 1; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder(cb = core.callback1(add1));
 	return h.cb.call(41);
 }
@@ -194,7 +194,7 @@ struct Holder {
 	cb: core.Callback1<Int, Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val bias = 7;
 	val h = Holder(cb = |x: Int| captures(copy bias) nothrow => x + bias);
 	return h.cb.call(34);
@@ -219,7 +219,7 @@ module m;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb: core.Callback1<Int, Int> = |x: Int| nothrow => x + 1;
 	return cb.call(41);
 }
@@ -240,7 +240,7 @@ import std.core as core;
 
 fn add1(x: Int) nothrow -> Int { return x + 1; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb: core.Callback1<Int, Int> = core.callback1(add1);
 	return cb.call(41);
 }
@@ -267,7 +267,7 @@ fn make_cb() nothrow -> core.Callback1<Int, Int> {
 	return |x: Int| nothrow => x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = make_cb();
 	return cb.call(41);
 }
@@ -292,7 +292,7 @@ fn make_cb() nothrow -> core.Callback1<Int, Int> {
 	return core.callback1(add1);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val cb = make_cb();
 	return cb.call(41);
 }
@@ -361,7 +361,7 @@ import std.core as core;
 
 struct Holder { cb: core.Callback0<Int> }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 1;
 	val h = Holder(cb = | | captures(&x) nothrow => x);
 	return 0;
@@ -399,7 +399,7 @@ import std.core as core;
 
 struct Holder { cb: core.Callback0<Int> }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 1;
 	val h = Holder(| | captures(&x) nothrow => x);
 	return 0;
@@ -429,7 +429,7 @@ module m;
 
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var x = 1;
 	val cb: core.Callback0<Int> = | | captures(&x) nothrow => x;
 	return 0;
@@ -456,7 +456,7 @@ fn make_cb() nothrow -> core.Callback0<Int> {
 	return | | captures(&y) nothrow => y;
 }
 
-fn main() nothrow -> Int { val _ = make_cb(); return 0; }
+pub fn main() nothrow -> Int { val _ = make_cb(); return 0; }
 """,
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
@@ -479,7 +479,7 @@ struct Holder {
 	cb: core.CallbackThrow1<Int, Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder(cb = |x: Int| => x + 1);
 	return try h.cb.call(41) catch { 0 };
 }
@@ -532,7 +532,7 @@ fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow 
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return add_throws_route(|req, ctx| => {
 		return handle(req, ctx);
 	});
@@ -576,7 +576,7 @@ fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow 
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val app = conc.arc(App(tag = 7));
 	return add_throws_route(|req, ctx| captures(share app) => {
 		val a = app.get();
@@ -619,7 +619,7 @@ fn add_throws_route(handler: core.CallbackThrow2<&Req, &mut Int, Resp>) nothrow 
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return add_throws_route(core.callback_throw2(make_handler));
 }
 """,
@@ -658,7 +658,7 @@ fn add_route(handler: core.Callback2<&Req, &mut Int, Int>) nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return add_route(|req: &Req, ctx: &mut Int| nothrow => 0);
 }
 """,
@@ -711,7 +711,7 @@ fn take_cb(handler: core.CallbackThrow2<&ReqB, &mut CtxB, RespB>) nothrow -> Int
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return take_cb(|req, ctx| => {
 		throw Boom(message = "x");
 	});
@@ -768,7 +768,7 @@ implement S {
 
 fn add1(x: Int) nothrow -> Int { return x + 1; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return S::take_cb(core.callback1(add1));
 }
 """,
@@ -819,7 +819,7 @@ import std.core as core;
 \treturn 0;
 }}
 
-fn main() nothrow -> Int {{
+pub fn main() nothrow -> Int {{
 \treturn take_cb(|{lambda_params}| {nothrow_kw}=> {body_block});
 }}
 """
@@ -903,7 +903,7 @@ fn use_cb(cb: core.Callback3<Int, Int, Int, Int>) nothrow -> Int {
 \treturn cb.call(1, 2, 3);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn use_cb(core.callback3(handle));
 }
 """,
@@ -931,7 +931,7 @@ fn use_cb(cb: core.Callback6<Int, Int, Int, Int, Int, Int, Int>) nothrow -> Int 
 \treturn cb.call(1, 2, 3, 4, 5, 6);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn use_cb(core.callback6(handle));
 }
 """,

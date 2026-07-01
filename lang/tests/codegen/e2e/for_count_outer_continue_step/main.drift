@@ -1,4 +1,4 @@
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var sum = 0;
 	for var i = 0; i < 5; i += 1 {
 		if i == 2 {

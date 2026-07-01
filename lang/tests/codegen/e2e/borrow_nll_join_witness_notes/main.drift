@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 0;
 	val r = &x;
 	if 1 == 1 { } else { }

@@ -41,7 +41,7 @@ struct Cell {
 	xs: Array<Int>
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Cell> = [];
 	var inner: Array<Int> = [];
 	inner.push(1);
@@ -65,7 +65,7 @@ def test_noncopy_array_index_read_nested_array_reports_user_diag_with_span(tmp_p
 		"""
 module m;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var xs: Array<Array<Int>> = [];
 	var inner: Array<Int> = [];
 	inner.push(1);

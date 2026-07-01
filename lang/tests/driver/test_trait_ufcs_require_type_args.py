@@ -50,7 +50,7 @@ fn use_compare<R, T>(r: &R, key: &T) -> Int require R is algo.BinarySearchable<T
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return 0;
 }
 """,
@@ -79,7 +79,7 @@ implement Uses<Bar> for Foo {
 	fn f(self: &Foo) -> Int { return 7; }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var foo = Foo();
 	return Uses<Bar>::f(&foo);
 }
@@ -110,7 +110,7 @@ implement Uses<Bar> for Foo {
 	fn f(self: &Foo) -> Int { return 7; }
 }
 
-fn main() -> Int {
+pub fn main() -> Int {
 	var foo = Foo();
 	return Uses<Baz>::f(&foo);
 }

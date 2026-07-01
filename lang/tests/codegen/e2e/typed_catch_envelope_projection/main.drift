@@ -25,7 +25,7 @@ fn risky() throws ParseError -> Int {
 	throw ParseError(offset = 42, message = "bad input");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	try {
 		return risky();
 	} catch ParseError(e) {

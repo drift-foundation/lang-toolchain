@@ -56,7 +56,7 @@ fn build() nothrow -> Holder {
 	return Holder(sink = StdErrSink());
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = build();
 	return h.sink.write();
 }
@@ -99,7 +99,7 @@ implement Holder {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var h = Holder(sink = StdErrSink());
 	h.set_sink(StdErrSink());
 	return h.sink.write();

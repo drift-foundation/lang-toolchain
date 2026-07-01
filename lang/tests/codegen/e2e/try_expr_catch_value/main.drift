@@ -5,7 +5,7 @@ fn foo() -> Int {
 	throw Boom();
 }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val k = try foo() catch { 0 };
 	return k;
 }

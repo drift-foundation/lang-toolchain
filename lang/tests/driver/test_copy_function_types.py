@@ -45,7 +45,7 @@ module m_main;
 
 fn foo() nothrow -> Int { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val f: Fn() nothrow -> Int = foo;
 	val g = f;
 	return g();

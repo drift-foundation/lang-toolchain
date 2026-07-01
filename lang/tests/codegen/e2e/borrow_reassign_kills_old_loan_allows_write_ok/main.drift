@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	var x = 0;
 	var y = 0;
 	var r = &mut x;

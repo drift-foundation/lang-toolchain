@@ -26,7 +26,7 @@ fn enc_err(src: String) nothrow -> String {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// canonical: sorted keys, no whitespace, integers ok
 	if enc("{\"b\":1,\"a\":2}") != "{\"a\":2,\"b\":1}" { return 1; }
 	if enc("[3,-7,0]") != "[3,-7,0]" { return 2; }

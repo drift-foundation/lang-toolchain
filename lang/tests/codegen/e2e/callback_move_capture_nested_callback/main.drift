@@ -7,7 +7,7 @@ struct State {
 	v: Int
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var m = conc.mutex(State(v = 5));
 	var sm = conc.arc(m);
 	var sm2 = sm.clone();

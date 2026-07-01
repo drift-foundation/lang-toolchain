@@ -83,7 +83,7 @@ fn consume(g: arc.Arc<Gateway>) nothrow -> Int {
 \treturn 42;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval x = arc.arc(Gateway(name = "t"));
 \t// VALUE-POSITION: result bound by `val r = ...`.
 \t// `x` is a named non-Copy owner.  Per spec §1.3, bare `x`
@@ -113,7 +113,7 @@ fn wrap(n: Int) nothrow -> Int {
 \treturn n + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval x = arc.arc(Gateway(name = "t"));
 \t// VALUE-POSITION nested in a larger expression.  Same
 \t// rule: bare `x` at by-value call arg is rejected.
@@ -193,7 +193,7 @@ implement Sink {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval sink = Sink(tag = 5);
 \tval x = arc.arc(Gateway(name = "t"));
 \t// Method call, POSITIONAL by-value non-Copy arg — bare HVar
@@ -244,7 +244,7 @@ fn absorb(g: arc.Arc<Gateway>) nothrow -> Int {
 \treturn 7;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tval f: Fn(arc.Arc<Gateway>) nothrow -> Int = absorb;
 \tval x = arc.arc(Gateway(name = "t"));
 \t// HInvoke: call through a function VALUE `f`.  A bare non-Copy
@@ -306,7 +306,7 @@ implement Sink for Impl {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar imp = Impl();
 \tvar t: Sink = imp;
 \tval x = arc.arc(Gateway(name = "t"));
@@ -349,7 +349,7 @@ module main;
 
 struct Config(protocols: Array<String>);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar ap: Array<String> = [];
 \tap.push("h2");
 \t// Struct constructor, POSITIONAL by-value non-Copy field arg.
@@ -367,7 +367,7 @@ module main;
 
 struct Config(protocols: Array<String>);
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar ap: Array<String> = [];
 \tap.push("h2");
 \t// Struct constructor, KEYWORD/field by-value non-Copy arg — same
@@ -386,7 +386,7 @@ variant Box {
 \tEmpty
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \tvar ap: Array<String> = [];
 \tap.push("h2");
 \t// Variant constructor, POSITIONAL by-value non-Copy arg — routes

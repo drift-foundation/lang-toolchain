@@ -6,7 +6,7 @@ import std.core as core;
 // Byte-offset slicing: success, out-of-range rejection, mid-scalar
 // (char-boundary) rejection, and cross-source span rejection.
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// "héllo": h(0,1B) é=U+00E9(1..3, 2B) l(3) l(4) o(5). len = 6.
 	var cur = source.source_cursor_from_string("héllo", "a");
 

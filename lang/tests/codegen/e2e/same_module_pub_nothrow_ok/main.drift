@@ -4,6 +4,6 @@ pub fn add(x: Int) nothrow -> Int {
 	return x + 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return add(2);
 }

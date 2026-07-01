@@ -16,7 +16,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 }
 
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match text.char_at("hello", 0) {
 		core.Result::Ok(v) => {
 			val e = "h";

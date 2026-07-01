@@ -3293,6 +3293,7 @@ def compile_stubbed_funcs(
 	prelude_enabled: bool = True,
 	emit_instantiation_index: Path | None = None,
 	enforce_entrypoint: bool = False,
+	require_public_entrypoint: bool = False,
 	entry_module: str = "main",
 	entry_name: str = "main",
 	allow_unsafe: bool = True,
@@ -3340,7 +3341,8 @@ def compile_stubbed_funcs(
 	  emit_instantiation_index: optional path for a deterministic JSON dump of
 	    instantiation keys/symbols/ABI flags produced in this run.
 	  enforce_entrypoint: when True, validate entrypoint main() semantics after
-	    type checking (Int return, nothrow, correct argv shape).
+	    type checking (Int return, nothrow, correct argv shape). Set
+	    require_public_entrypoint for app-build parity.
 	  # TODO: drop declared_can_throw once all callers provide signatures/parsing.
 
 	Returns:
@@ -5772,6 +5774,7 @@ def compile_stubbed_funcs(
 			checked.diagnostics,
 			entry_module=entry_module,
 			entry_name=entry_name,
+			require_pub=require_public_entrypoint,
 		)
 	if type_diags:
 		checked.diagnostics.extend(type_diags)
@@ -8147,6 +8150,7 @@ def compile_to_llvm_ir_for_tests(
 	prelude_enabled: bool = True,
 	emit_instantiation_index: Path | None = None,
 	enforce_entrypoint: bool = False,
+	require_public_entrypoint: bool = False,
 	reserved_namespace_policy: ReservedNamespacePolicy = ReservedNamespacePolicy.ALLOW_DEV,
 	debug_enabled: bool = True,
 	root_vt: bool = True,
@@ -8209,6 +8213,7 @@ def compile_to_llvm_ir_for_tests(
 		prelude_enabled=prelude_enabled,
 		emit_instantiation_index=emit_instantiation_index,
 		enforce_entrypoint=enforce_entrypoint,
+		require_public_entrypoint=require_public_entrypoint,
 		entry_module=entry_module,
 		entry_name=entry_name,
 		run_borrow_check=True,
@@ -12384,6 +12389,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			template_keys_by_fn_id=external_template_keys_by_fn_id,
 			emit_instantiation_index=args.emit_instantiation_index,
 			enforce_entrypoint=bool(args.output or args.emit_ir),
+			require_public_entrypoint=bool(args.output or args.emit_ir),
 			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
 			semantic_world=semantic_world,
 		)
@@ -13153,6 +13159,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			external_missing_traits=external_missing_traits,
 			external_missing_impl_modules=external_missing_impl_modules,
 			enforce_entrypoint=True,
+			require_public_entrypoint=True,
 			entry_module=entry_module,
 			entry_name=entry_name,
 			allow_unsafe=bool(getattr(args, "allow_unsafe", False)),
@@ -13390,6 +13397,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			origin_by_fn_id=origin_by_fn_id,
 			prelude_enabled=bool(args.prelude),
 			enforce_entrypoint=True,
+			require_public_entrypoint=True,
 			emit_instantiation_index=args.emit_instantiation_index,
 			debug_enabled=debug_enabled,
 		)
@@ -13418,6 +13426,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				prelude_enabled=bool(args.prelude),
 				emit_instantiation_index=args.emit_instantiation_index,
 				enforce_entrypoint=True,
+				require_public_entrypoint=True,
 				entry_module=entry_module,
 				entry_name=entry_name,
 			)

@@ -191,7 +191,7 @@ module main;
 
 trait Show { fn show(self: Self) -> Int }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	if Int is Show { return 1; } else { return 0; }
 }
 """,
@@ -305,7 +305,7 @@ import m_b;
 use trait m_a.Show;
 use trait m_b.Show;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b: m_box.Box<Int> = m_box.Box<type Int>(1);
 	return b.show();
 }

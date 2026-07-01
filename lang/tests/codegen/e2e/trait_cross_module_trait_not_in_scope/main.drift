@@ -4,7 +4,7 @@ import m_box;
 import m_impl;
 import m_trait;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val b = try m_box.make_box(2) catch { m_box.Box(value = 0) };
 	return b.show();
 }

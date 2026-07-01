@@ -1,6 +1,6 @@
 module main;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val k = 1;
 	val fp: Fn(Int) nothrow -> Int = |x| => x + k;
 	return 0;

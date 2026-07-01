@@ -34,7 +34,7 @@ fn contains(haystack: &String, needle: &String) nothrow -> Bool {
 	return false;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val info = meta.compiler_info();
 	val k_driftc = "driftc";
 	if !contains(&info, &k_driftc) {

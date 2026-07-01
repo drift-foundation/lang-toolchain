@@ -4,7 +4,7 @@ import std.containers as containers;
 import std.iter as iter;
 use trait iter.SinglePassIterator;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	m.insert(1, 1);
 	var it = m.iter();

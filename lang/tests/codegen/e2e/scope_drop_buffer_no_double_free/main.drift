@@ -2,7 +2,7 @@ module m;
 
 import std.io as io;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if true {
 		var buf = io.buffer(1);
 		io.buffer_write(&mut buf, 0, cast<Byte>(65));

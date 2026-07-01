@@ -3,7 +3,7 @@ module main;
 import std.json as json;
 import std.core as core;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val text = "{\"items\":[10,20,30]}";
 	match json.parse(&text) {
 		core.Result::Ok(node) => {

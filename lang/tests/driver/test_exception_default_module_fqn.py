@@ -10,7 +10,7 @@ def test_exception_default_module_fqn_is_main(tmp_path: Path) -> None:
 	path.write_text(
 		"""
 error Boom {}
-fn main() -> Int {
+pub fn main() -> Int {
     try {
         throw Boom();
     } catch Boom(e) {

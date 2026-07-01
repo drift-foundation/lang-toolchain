@@ -122,7 +122,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(message = "bad", offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -156,7 +156,7 @@ fn risky(which: Int) throws ParseError, CodecError -> Int {
 \tthrow CodecError(kind = "utf8");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky(0);
 \t} catch ParseError(e) {
@@ -188,7 +188,7 @@ fn risky() throws OtherError -> Int {
 \tthrow OtherError();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -234,7 +234,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -265,7 +265,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -291,7 +291,7 @@ fn risky() throws Int -> Int {
 \treturn 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -315,7 +315,7 @@ pub fn f() throws PrivateE -> Int {
 \tthrow PrivateE();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """)
@@ -347,7 +347,7 @@ fn risky() throws Bad -> Int {
 \tthrow Bad(xs = []);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch Bad(e) {
@@ -381,7 +381,7 @@ fn risky() throws ParseError -> Int {
 \tthrow ParseError(offset = 12);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry {
 \t\treturn risky();
 \t} catch ParseError(e) {
@@ -420,7 +420,7 @@ fn boom() -> Int {
 \tthrow Bad(x = "not-int");
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry { return boom(); } catch { return 0; }
 }
 """)
@@ -458,7 +458,7 @@ fn boom() -> Int {
 \tthrow Bad(x = &n);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \ttry { return boom(); } catch { return 0; }
 }
 """)
@@ -526,7 +526,7 @@ fn _run() nothrow -> Int {
 \treturn 4;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn _run();
 }
 """, encoding="utf-8")

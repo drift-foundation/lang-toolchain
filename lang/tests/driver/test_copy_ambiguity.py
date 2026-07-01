@@ -54,7 +54,7 @@ implement core.Copy for Box<Int> {
 
 fn need<T>(x: T) nothrow -> Int require T is core.Copy { return 0; }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box<type Int>(1);
 	val _ = need<type Box<Int>>(b);
 	return 0;

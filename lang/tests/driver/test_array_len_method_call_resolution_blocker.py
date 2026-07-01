@@ -111,7 +111,7 @@ fn _val_receiver() nothrow -> Int {
 	return 0;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val owned = _owned();
 	if owned != 3 { return owned; }
 	var a: Array<Int> = [];

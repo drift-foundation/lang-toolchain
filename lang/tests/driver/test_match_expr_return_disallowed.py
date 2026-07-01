@@ -40,7 +40,7 @@ fn f(r: core.Result<Int, Int>) -> core.Result<Int, Int> {
 	return core.Result::Ok(x);
 }
 
-fn main() nothrow -> Int { return 0; }
+pub fn main() nothrow -> Int { return 0; }
 """.lstrip(),
 	)
 	rc, payload = _run_driftc_json(["-M", str(tmp_path), str(src)], capsys)

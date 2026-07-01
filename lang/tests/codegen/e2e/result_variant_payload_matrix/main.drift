@@ -14,7 +14,7 @@ fn mk_a() nothrow -> core.Result<Array<Byte>, Int> { return core.Result::Ok([cas
 fn mk_c() nothrow -> core.Result<CopyPair, Int> { return core.Result::Ok(CopyPair(a = 9, b = 11)); }
 fn mk_n() nothrow -> core.Result<NonCopy, Int> { return core.Result::Ok(NonCopy(msg = "payload")); }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	match mk_i() { core.Result::Ok(v) => { if v != 7 { return 1; } }, core.Result::Err(_) => { return 2; } }
 	match mk_s() { core.Result::Ok(v) => { if v != "ok" { return 3; } }, core.Result::Err(_) => { return 4; } }
 	match mk_a() { core.Result::Ok(v) => { if v.len != 3 { return 5; } }, core.Result::Err(_) => { return 6; } }

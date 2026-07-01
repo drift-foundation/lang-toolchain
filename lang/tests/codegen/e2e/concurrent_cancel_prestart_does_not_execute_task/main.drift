@@ -3,7 +3,7 @@ module main;
 	import std.concurrent as conc;
 	import std.core as core;
 
-	fn main() nothrow -> Int {
+	pub fn main() nothrow -> Int {
 		var counter = core.cell(0);
 		var t = conc.spawn(| | => { return; });
 		counter.set(0);

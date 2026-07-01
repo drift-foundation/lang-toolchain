@@ -92,7 +92,7 @@ implement<T> Holder<T> {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder<type Thing>(v = Thing(n = 7));
 	return h.check<type Face>();
 }
@@ -150,7 +150,7 @@ implement<T> Holder<T> {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder<type Thing>(v = Thing(n = 7));
 	return h.check<type OtherFace>();
 }
@@ -179,7 +179,7 @@ fn check<T, I>(x: T) nothrow -> Int require T is I {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val t = Thing(n = 7);
 	return check<type Thing, Face>(t);
 }
@@ -232,7 +232,7 @@ fn check<T, I>(x: T) nothrow -> Int require T is I {
 	return 1;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val t = Thing(n = 7);
 	return check<type Thing, OtherFace>(t);
 }
@@ -260,7 +260,7 @@ pub struct Holder<T, I> require T is I {
 	pub v: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder<type Thing, Face>(v = Thing(n = 7));
 	val _ = h;
 	return 0;
@@ -312,7 +312,7 @@ pub struct Holder<T, I> require T is I {
 	pub v: T
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val h = Holder<type Thing, OtherFace>(v = Thing(n = 7));
 	val _ = h;
 	return 0;

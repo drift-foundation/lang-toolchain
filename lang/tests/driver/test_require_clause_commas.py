@@ -134,7 +134,7 @@ implement Show for Int { pub fn show(self: Int) -> Int { return 0; } }
 
 fn id<T>(var x: T) -> T require T is Show, T is Debug { return move x; }
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val x: Int = id(1);
 	return x;
 }

@@ -47,7 +47,7 @@ fn make() -> Wrap {
 	return Wrap(inner = Inner(value = 1));
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	return make().inner.get();
 }
 """.lstrip(),

@@ -35,7 +35,7 @@ def test_global_byte_length_is_rejected_outside_std(tmp_path: Path, capsys: pyte
 		"""
 module main;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val n = byte_length("abc");
 	return n;
 }

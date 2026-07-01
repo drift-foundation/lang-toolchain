@@ -47,7 +47,7 @@ fn dispatch4(cb: core.Callback2<&Foo, Int, Int>) nothrow -> Int {
 	return cb.call(&mut f, 100);
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	// 1 - basic Callback2: &mut Foo where &Foo expected.
 	val r1 = dispatch1(core.callback2(handler1));
 	if r1 != 15 { return 1; }

@@ -4,6 +4,6 @@ import lib as lib;
 
 const ANSWER: Int = 0;
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	return lib.ANSWER;
 }

@@ -39,7 +39,7 @@ fn sort_in_place(r: &mut Range) nothrow -> Void {
 	return;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	var r = Range(data = [3, 1, 2]);
 	sort_in_place(&mut r);
 	return r.data[0] * 100 + r.data[1] * 10 + r.data[2];

@@ -2,7 +2,7 @@ module main;
 import acme.lib as lib;
 
 
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	val v = try lib.answer() catch { 0 };
 	return v;
 }

@@ -22,7 +22,7 @@ implement B for Box {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val b = Box(base = 10);
 	return b.a() + b.b();
 }

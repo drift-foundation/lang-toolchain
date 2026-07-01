@@ -1,4 +1,4 @@
-fn main() nothrow -> Int{
+pub fn main() nothrow -> Int{
 	// UTF-8 bytewise (and thus Unicode scalar) ordering:
 	// "a" (0x61) < "ą" (0xC4 0x85)
 	if "a" < "ą" {
