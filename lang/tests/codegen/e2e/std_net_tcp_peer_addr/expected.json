@@ -1,0 +1,7 @@
+{
+  "description": "e2e: std net tcp stream peer_addr",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": "",
+  "sandbox_blocks": true
+}

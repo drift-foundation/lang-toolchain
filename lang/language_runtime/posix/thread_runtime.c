@@ -2757,17 +2757,18 @@ void drift_thread_drop(uint64_t vt) {
 	atomic_store(&h->dropped, 1);
 	int is_completed = atomic_load(&h->completed);
 	int is_started = atomic_load(&h->started);
-	if (!is_completed) {
-		atomic_store(&h->cancelled, 1);
-		atomic_store(&h->park_token, 1);
-		pthread_cond_broadcast(&h->cv);
-	}
+	int has_executor = h->exec != NULL;
 	pthread_mutex_unlock(&h->mu);
 	if (is_completed) {
 		drift_vt_destroy(h);
 		return;
 	}
-	if (!is_started && h->exec == NULL) {
+	/* Dropping a submitted VT handle abandons the result, not the task.
+	 * The worker still runs queued work and destroys the VT record after
+	 * completion when it observes dropped=1.  The no-executor branch is
+	 * reserved for cleanup of a VT that was created but never submitted
+	 * because exec_submit failed. */
+	if (!is_started && !has_executor) {
 		if (!atomic_exchange(&h->completed, 1)) {
 			drift_drop_callback(&h->cb);
 		}

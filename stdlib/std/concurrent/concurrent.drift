@@ -394,6 +394,12 @@ implement<T> core.Destructible for ResultState<T> {
 /// ownership family on `VirtualThread<T>`; R6-R8 are the adjacent
 /// `FutureGroup.join_any` cluster).
 ///
+/// Dropping a `VirtualThread<T>` handle detaches from the result: the
+/// task is still allowed to run to completion, and any produced `T` is
+/// dropped locally instead of being published to a joined handle.  Use
+/// `.cancel()` for cooperative cancellation; handle drop is not
+/// cancellation, including for queued tasks that have not started yet.
+///
 /// **See also:** `spawn`, `Future`, `VirtualThread.join`,
 /// `VirtualThread.join_timeout`, `VirtualThread.cancel`.
 pub struct VirtualThread<T> {

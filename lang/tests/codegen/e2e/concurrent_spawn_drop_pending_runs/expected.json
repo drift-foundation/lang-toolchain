@@ -1,0 +1,6 @@
+{
+  "description": "e2e: dropping a queued VirtualThread handle abandons only the result, not the task",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

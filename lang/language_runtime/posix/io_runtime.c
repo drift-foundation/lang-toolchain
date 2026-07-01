@@ -139,6 +139,22 @@ int64_t drift_net_listener_port(int64_t fd) {
 	return (int64_t)ntohs(addr.sin_port);
 }
 
+int64_t drift_net_peer_addr(int64_t fd, DriftString *out_ip, int64_t *out_port) {
+	struct sockaddr_in addr;
+	socklen_t len = sizeof(addr);
+	if (getpeername((int)fd, (struct sockaddr *)&addr, &len) < 0) {
+		return -1;
+	}
+	char ip_buf[INET_ADDRSTRLEN];
+	const char *ip_str = inet_ntop(AF_INET, &addr.sin_addr, ip_buf, sizeof(ip_buf));
+	if (ip_str == NULL) {
+		return -1;
+	}
+	*out_ip = drift_string_from_cstr(ip_str);
+	*out_port = (int64_t)ntohs(addr.sin_port);
+	return 0;
+}
+
 int64_t drift_net_udp_local_port(int64_t fd) {
 	struct sockaddr_in addr;
 	socklen_t len = sizeof(addr);

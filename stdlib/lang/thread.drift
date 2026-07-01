@@ -71,6 +71,7 @@ export {
 	net_accept,
 	net_connect,
 	net_listener_port,
+	net_peer_addr,
 	net_udp_local_port,
 	net_udp_bind,
 	net_udp_bind_v6,
@@ -120,6 +121,11 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn vt_join_timeout(vt: VtHandle, timeout_ms: Int) nothrow -> Int;
 @intrinsic pub fn vt_is_completed(vt: VtHandle) nothrow -> Int;
 @intrinsic pub fn vt_cancel(vt: VtHandle) nothrow -> Int;
+/// Drops the raw runtime handle.  For submitted work this marks the
+/// handle as abandoned so the worker reclaims the VT record after the
+/// task completes; it does not request cancellation.  A not-yet-
+/// submitted handle is completed immediately and its callback is
+/// dropped.
 @intrinsic pub fn vt_drop(vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn vt_current() nothrow -> VtHandle;
 
@@ -252,6 +258,10 @@ pub type ReactorHandle = Int;
 @intrinsic pub fn net_accept(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_connect(ip: &String, port: Int, deadline_ms: Int) nothrow -> Int;
 @intrinsic pub fn net_listener_port(fd: Int) nothrow -> Int;
+/// Resolves `fd`'s remote (peer) IPv4 address via `getpeername()`.
+/// Returns `0` and writes `out_ip`/`out_port` on success, `-1` on
+/// failure (query `io_errno()` for the errno).
+@intrinsic pub fn net_peer_addr(fd: Int, out_ip: &mut String, out_port: &mut Int) nothrow -> Int;
 @intrinsic pub fn net_set_nodelay(fd: Int, enabled: Int) nothrow -> Int;
 @intrinsic pub fn net_get_nodelay(fd: Int) nothrow -> Int;
 @intrinsic pub fn net_udp_local_port(fd: Int) nothrow -> Int;

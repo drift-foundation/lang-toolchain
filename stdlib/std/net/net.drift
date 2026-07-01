@@ -97,7 +97,7 @@ pub const NET_ERROR_KIND_INVALID_ARGUMENT: String = "invalid-argument";
 /// configured timeout elapses before the kernel can satisfy the call.
 ///
 /// **See also:** `connect`, `accept`, `TcpStream.read`,
-/// `TcpStream.write`, `TcpStream.close`.
+/// `TcpStream.write`, `TcpStream.close`, `TcpStream.peer_addr`.
 pub struct TcpStream {
 	fd: Int
 }
@@ -668,6 +668,30 @@ implement TcpStream {
 			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
 		}
 		return core.Result::Ok(r != 0);
+	}
+
+	/// Returns the stream's remote (peer) IPv4 address.
+	///
+	/// Useful for connection logging, access auditing, or per-client
+	/// diagnostics on the accept side of a server (`accept()`'s
+	/// returned `TcpStream` does not carry the peer address inline —
+	/// query it here).
+	///
+	/// **Returns:** `Ok(SocketAddr)` with the peer's IP and port.
+	/// `Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = code))` if the
+	/// underlying `getpeername` call fails (e.g. the socket has
+	/// already been closed).
+	///
+	/// **See also:** `TcpListener.accept`, `SocketAddr`.
+	pub fn peer_addr(self: &TcpStream) nothrow -> core.Result<SocketAddr, NetError> {
+		var ip: String = "";
+		var port: Int = 0;
+		val r = thread.net_peer_addr(self.fd, &mut ip, &mut port);
+		if r < 0 {
+			val err = thread.io_errno();
+			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
+		}
+		return core.Result::Ok(SocketAddr(ip = move ip, port = port));
 	}
 
 	/// Test-only helper that writes `value` to the underlying eventfd.

@@ -1511,6 +1511,7 @@ class LlvmModuleBuilder:
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_accept({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_connect(ptr, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)})",
+					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_peer_addr({self._llty(DRIFT_INT_TYPE)}, ptr, ptr)",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_set_nodelay({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_get_nodelay({self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_net_udp_local_port({self._llty(DRIFT_INT_TYPE)})",
@@ -4967,6 +4968,20 @@ class _FuncBuilder:
 				else:
 					self.lines.append(f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_listener_port({self._llty(DRIFT_INT_TYPE)} {fd_val})")
 					self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "net_peer_addr":
+				if len(instr.args) != 3:
+					raise NotImplementedError(f"LLVM codegen v1: net_peer_addr expects 3 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: net_peer_addr result must be captured")
+				fd_val = self._map_value(instr.args[0])
+				out_ip = self._map_value(instr.args[1])
+				out_port = self._map_value(instr.args[2])
+				self.module.needs_thread_runtime = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_net_peer_addr({self._llty(DRIFT_INT_TYPE)} {fd_val}, ptr {out_ip}, ptr {out_port})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
 				return
 			if instr.fn_id.name == "net_set_nodelay":
 				if len(instr.args) != 2:

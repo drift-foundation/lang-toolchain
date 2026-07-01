@@ -169,9 +169,10 @@ themselves.
   otherwise `mem.write` to the buffer and set `initialized = true`.
 - `VirtualThread::destroy`: take state lock; set `abandoned = true`;
   if `initialized`, `mem.read` the published `T` and let it drop;
-  then `thread.vt_drop(handle)`.  The buffer survives until the
-  cb thunk also drops its `Arc` clone and `ResultState::destroy`
-  fires.
+  then `thread.vt_drop(handle)`.  Dropping the handle detaches from
+  the result; it does not cancel submitted work.  The buffer survives
+  until the cb thunk also drops its `Arc` clone and
+  `ResultState::destroy` fires.
 - `join` (and `join_timeout`) success path: `vt_join`, take lock,
   `mem.read` out the published `T`, set `initialized = false`,
   return `Ok(v)`.  Buffer dealloc happens when both Arcs go.
@@ -248,6 +249,9 @@ tracks the lifecycle to support scheduling, parking, and cancellation.
 
 ### Notes
 
+- `vt_drop` is not a cancellation transition for submitted work.  It
+  marks the raw handle as abandoned so the worker can reclaim the VT
+  record after the task finishes; queued tasks still run.
 - `CANCELLED` is terminal and implies `join`/`join_timeout` return `Err(Cancelled)`
   unless the task already finished.
 - Phase 1 uses OS threads for execution; the state machine is still valid and is
