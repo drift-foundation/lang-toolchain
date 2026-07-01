@@ -412,7 +412,7 @@ consume typed values.
 import std.cli as cli;
 import std.core as core;
 
-fn main(argv: Array<String>) nothrow -> Int {
+pub fn main(argv: Array<String>) nothrow -> Int {
     var p = cli.parser("backup-tool", "0.1.0", "Create backups.");
     val _ = p.flag("verbose", "v", "verbose mode");
     val _ = p.option_int("port", "p", "PORT", "control plane port", true);
@@ -738,7 +738,7 @@ import std.console as console;
 import std.core as core;
 import std.json as json;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     return try run() catch { 99 };
 }
 
@@ -1184,7 +1184,7 @@ fn call_service() throws -> Response {
     return internal_rpc().or_throw();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val resp = try call_service() catch ServiceDown(e) {
         return 1;
     };
@@ -1472,7 +1472,7 @@ fn extract_status(payload: &String) -> String {
         .string();
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val payload = "{\"meta\":{\"callback\":{\"status\":\"ok\"}}}";
 
     val status = try extract_status(&payload) catch json:JsonErrorData(e) {
@@ -1534,7 +1534,7 @@ fn parse_required(payload: &String, request_id: String) -> json.JsonNode {
     });
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val payload = "{...}";
 
     val root = try parse_required(&payload, "req-123") catch ParseFailed(e) {
@@ -1621,7 +1621,7 @@ fn producer(q: conc.Arc<sync.MpscQueue<Event>>, n: Int) nothrow -> Int {
     return n;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val total = 100;
     var q = conc.arc(sync.mpsc_queue<type Event>(64));
     var qp = q.clone();
@@ -1952,7 +1952,7 @@ implement Box {
     }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val b = Box(v = 10);
     val a = b.pick("hello");           // → 110 (String overload)
     val segs: Array<String> = ["x", "y"];

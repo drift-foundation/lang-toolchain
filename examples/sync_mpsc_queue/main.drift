@@ -17,7 +17,7 @@ fn producer(q: conc.Arc<sync.MpscQueue<Event>>, n: Int) nothrow -> Int {
 	return n;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	val total = 100;
 	var q = conc.arc(sync.mpsc_queue<type Event>(64));
 	var qp = q.clone();

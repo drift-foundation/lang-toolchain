@@ -1,5 +1,29 @@
 # Drift development history
 
+## 2026-06-30 (0.33.65: require `pub fn main` for app entrypoints; ABI stays 18)
+- **App entrypoints must be `pub`.** A real app build (`driftc -o <bin>` /
+  `--emit-ir`, and `drift build`/`drift run` underneath) now rejects a private
+  (non-`pub`) `main` with a typecheck error: `entrypoint main must be declared
+  pub` (note: `declare the app entrypoint as 'pub fn main'`). The full
+  entrypoint shape is otherwise unchanged: `pub fn main() nothrow -> Int` or
+  `pub fn main(argv: Array<String>) nothrow -> Int`, in module `main`.
+- **Why.** `main` is the one function the runtime calls across the
+  compiler/app boundary; leaving it non-`pub` was accepted inconsistently and
+  didn't match the "entrypoints are part of the public surface" convention
+  used everywhere else (packages, certified artifacts). Enforcing `pub`
+  closes that gap before app certification depends on it.
+- **Scope.** Enforcement is gated on `require_public_entrypoint`, wired to the
+  same condition as the existing `enforce_entrypoint` check (i.e. any compile
+  that actually produces a binary or emits IR). Package/library compiles and
+  ad-hoc `--entry`-style test compiles with no bound app entrypoint are
+  unaffected.
+- **Action required for existing sources.** Any `fn main(...)` in an
+  application's root package must become `pub fn main(...)`. This is a
+  one-line, mechanical fix; no other signature or behavior changes.
+- **Versioning:** `DRIFTC_VERSION` 0.33.64 → **0.33.65**. **No ABI change —
+  `DRIFT_RT_ABI_VERSION` stays 18** (typecheck-only diagnostic; no runtime
+  boundary, layout, calling convention, or intrinsic changed).
+
 ## 2026-06-18 (0.33.42: scalar `match` const patterns — named/local fixes + module-qualified refs; ABI stays 17)
 - **Named/local scalar-const pattern fixes.** A name arm in an integer scalar
   `match` (`const TOK_EOF: Int = 0; match n { TOK_EOF => ... }`) now resolves

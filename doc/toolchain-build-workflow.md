@@ -707,6 +707,7 @@ full author / certifier workflow.
 ## 8. Common pitfalls
 
 - `module main` is required for default executable entrypoint (`main::main`).
+- The entrypoint must be `pub fn main(...) nothrow -> Int` — a private (non-`pub`) `main` is rejected at typecheck (`entrypoint main must be declared pub`) for any real app build (`-o`/`--emit-ir`).
 - Imported module ids must match what the package exports.
 - Author-profile namespace claims follow imported Drift module namespaces, not package ids (for example `net_tls.*`, not `net-tls.*`).
 - If consuming unsigned local packages with direct driftc, pass `--skip-package-signatures` (and optionally `--allow-unsigned-from <dir>`).

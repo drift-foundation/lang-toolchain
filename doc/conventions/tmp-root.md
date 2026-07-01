@@ -71,7 +71,7 @@ scratch storage must derive the path from `$DRIFT_TMP_ROOT` itself:
 import std.env as env;
 import std.io as io;
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
     val path = env.drift_tmp_path("my_test_output.bin");
     val w = io.file_builder(path).read(false).write(true)...
     ...

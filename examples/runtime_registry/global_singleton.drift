@@ -29,7 +29,7 @@ fn read_config() nothrow -> Int {
 	}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 	if not init_config() {
 		return 10;
 	}

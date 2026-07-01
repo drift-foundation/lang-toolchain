@@ -61,7 +61,7 @@ Drift is a systems programming language focused on deterministic resource manage
 ### Hello Drift
 
 ```drift
-fn main() -> Int {
+pub fn main() nothrow -> Int {
     println("hello, drift")
     return 0
 }
@@ -101,12 +101,13 @@ fn numbers() -> Array<Int> {
 ```drift
 import std.concurrent as conc
 
-fn main() -> Void {
+pub fn main() nothrow -> Int {
     conc.scope(Fn(scope: conc.Scope) -> Void {
         val user = scope.spawn(Fn() -> User { load_user(42) })
         val data = scope.spawn(Fn() -> Data { fetch_data() })
         render(user.join(), data.join())
     })
+    return 0
 }
 ```
 
