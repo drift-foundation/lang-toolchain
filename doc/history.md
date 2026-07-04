@@ -1,5 +1,56 @@
 # Drift development history
 
+## 2026-07-03 (0.33.68: signalfd busy-spin on SIGINT/SIGTERM/SIGUSR1 with no waiter — LANGUAGE_BUG; ABI stays 19)
+- **CORE_BUG: reactor busy-spun forever, pegging a core, on any of
+  SIGINT/SIGTERM/SIGUSR1 if no `conc.await_signal()` waiter was registered.**
+  Reported from `drift-mariadb-client` (`mariadb-failpoint-proxy`, a
+  long-running daemon with no signal handling of its own) via a 6-line
+  `conc.sleep`-only repro — not specific to sockets, spawn, or proxy code.
+- **Root cause.** `lang/language_runtime/posix/thread_runtime.c` blocks
+  SIGINT/SIGTERM/SIGUSR1 process-wide and multiplexes them through a
+  `signalfd` registered in each reactor's epoll set. Both reactor poll loops
+  only `read()`d that fd when `drift_signal_waiter_vt` was non-null
+  (i.e. a `conc.await_signal()` call was parked); with no waiter, they
+  `continue`d and left the fd unread. `signalfd` is level-triggered, so once
+  a watched signal is pending, `epoll_wait` returns immediately on every
+  call forever — `SIGKILL` was the only way to stop an affected process.
+- **Fix.** Centralized signal-fd handling into one
+  `drift_reactor_drain_signal_fd()` helper (replacing the duplicated logic in
+  both poll loops), which always drains the fd to `EAGAIN` on every readable
+  event. If a waiter is registered, the signal is delivered directly
+  (unchanged fast path). With no waiter, the signal is OR'd into a new
+  `drift_signal_pending_mask` bitmask (one bit per SIGINT/SIGTERM/SIGUSR1)
+  instead of being left in the kernel buffer — a bitmask rather than a single
+  scalar so two *distinct* signal kinds arriving before a waiter both
+  survive, each returned by its own later `await_signal()` call (repeated
+  deliveries of the *same* signal still coalesce to "at least one," matching
+  the documented contract). `drift_signal_await()` now takes one pending bit
+  *before* publishing itself as the waiter — checking only after registering
+  left a window where a concurrently-drained new signal could see this VT as
+  "the waiter," delivering directly (and unparking a VT that hadn't parked
+  yet, a stale token), only for the stale pending check to then clobber that
+  delivery — so the order was inverted, with one more pending check
+  immediately after registering to close the residual gap before parking.
+- **Scope note — NOT a behavior change to what happens after a signal
+  arrives with no waiter.** The process still keeps running (the signal is
+  stashed for a future `await_signal()`, matching the existing "you must
+  opt in to observe process signals" design) — this patch only removes the
+  busy-spin. It does **not** add POSIX-default terminate-on-SIGTERM behavior
+  for programs that never call `await_signal()`; whether Drift should adopt
+  that default is an open product question, tracked separately, not decided
+  by this fix.
+- **Regression.** `lang/tests/driver/test_signal_await.py` gains
+  `test_sigterm_no_waiter_does_not_busy_spin` (asserts near-zero CPU time
+  over a bounded wall-clock window after SIGTERM with no waiter, and that the
+  process is still alive/killable, not exited) and
+  `test_signal_before_await_delivered_to_later_waiter` (pin 6: SIGTERM sent
+  before the VT ever calls `await_signal()` is still observed, promptly, once
+  it does).
+- **Versioning:** `DRIFTC_VERSION` 0.33.67 → **0.33.68**. **No ABI change —
+  `DRIFT_RT_ABI_VERSION` stays 19** (internal reactor/lowering-adjacent
+  runtime behavior only; no exported helper signature, layout, or calling
+  convention changed).
+
 ## 2026-06-30 (0.33.65: require `pub fn main` for app entrypoints; ABI stays 18)
 - **App entrypoints must be `pub`.** A real app build (`driftc -o <bin>` /
   `--emit-ir`, and `drift build`/`drift run` underneath) now rejects a private

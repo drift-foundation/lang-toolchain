@@ -388,6 +388,54 @@ static void drift_reactor_shutdown_default_atexit(void);
 static int drift_signal_fd = -1;
 static atomic_uintptr_t drift_signal_waiter_vt = 0;
 static atomic_int drift_signal_delivered_signo = 0;
+/* Bitmask of DISTINCT signal kinds that arrived with no waiter registered.
+ * One bit per watched signal (SIGINT/SIGTERM/SIGUSR1) — repeated deliveries
+ * of the SAME signal still coalesce to "at least one" (matches the
+ * documented await_signal() contract: call it again for the next edge), but
+ * two DIFFERENT signals arriving before a waiter must both survive, each
+ * returned by its own drift_signal_await() call.  A later call consumes one
+ * bit at a time instead of parking, so no pre-waiter signal is lost. */
+static atomic_int drift_signal_pending_mask = 0;
+#define DRIFT_SIG_BIT_INT  (1 << 0)
+#define DRIFT_SIG_BIT_TERM (1 << 1)
+#define DRIFT_SIG_BIT_USR1 (1 << 2)
+
+/* Maps a delivered signo to its pending-mask bit; 0 (no bit) for anything
+ * else (defensive — signalfd is configured for exactly these three). */
+static int drift_signal_bit_for_signo(int signo) {
+	switch (signo) {
+	case SIGINT:  return DRIFT_SIG_BIT_INT;
+	case SIGTERM: return DRIFT_SIG_BIT_TERM;
+	case SIGUSR1: return DRIFT_SIG_BIT_USR1;
+	default: return 0;
+	}
+}
+
+static int drift_signal_signo_for_bit(int bit) {
+	switch (bit) {
+	case DRIFT_SIG_BIT_INT:  return SIGINT;
+	case DRIFT_SIG_BIT_TERM: return SIGTERM;
+	case DRIFT_SIG_BIT_USR1: return SIGUSR1;
+	default: return 0;
+	}
+}
+
+/* Atomically takes ONE pending signal (lowest set bit) out of
+ * drift_signal_pending_mask, if any are set.  Returns the signo, or 0 if
+ * nothing was pending.  Any other bits already set are left in the mask for
+ * a subsequent call — each distinct pre-waiter signal is returned by its own
+ * drift_signal_await() call, never silently dropped or merged. */
+static int drift_signal_take_one_pending(void) {
+	int mask = atomic_load(&drift_signal_pending_mask);
+	while (mask != 0) {
+		int bit = mask & (-mask);
+		if (atomic_compare_exchange_weak(&drift_signal_pending_mask, &mask, mask & ~bit)) {
+			return drift_signal_signo_for_bit(bit);
+		}
+		/* CAS failure refreshed `mask` to the current value; retry. */
+	}
+	return 0;
+}
 
 /* Process-global VT id counter.  Starts at 1; 0 is the sentinel
  * for "not running on a VT". */
@@ -493,6 +541,41 @@ uint64_t drift_exec_default_get(void);
 uint64_t drift_reactor_default_get(void);
 uint64_t drift_exec_submit(uint64_t exec, uint64_t vt);
 uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec);
+
+#ifdef __linux__
+/* Drains signal_fd on a readable event, fully — signalfd is level-triggered,
+ * so ANY unread signalfd_siginfo left in the kernel buffer makes epoll_wait
+ * return immediately forever (busy-spin, one core pegged, process never
+ * exits on SIGINT/SIGTERM/SIGUSR1).  Reads until EAGAIN so "readable" always
+ * means "handled", even if more than one of the three watched signals
+ * arrived before this event was processed.  If a waiter is registered,
+ * deliver the first read directly (matches the pre-existing fast path) and
+ * fall through to stashing any further reads in the pending mask (which can
+ * only happen if a second distinct signal number arrived in the same
+ * batch).  With no waiter, every read ORs its bit into
+ * drift_signal_pending_mask so the next drift_signal_await() call picks it
+ * up instead of parking — distinct signal kinds each get their own bit, so
+ * e.g. SIGUSR1 arriving before SIGTERM is not overwritten/lost. */
+static void drift_reactor_drain_signal_fd(int fd) {
+	struct signalfd_siginfo si;
+	for (;;) {
+		ssize_t sn = read(fd, &si, sizeof(si));
+		if (sn != (ssize_t)sizeof(si)) {
+			return;  /* EAGAIN (fully drained) or a real error either way */
+		}
+		DriftVt *waiter = (DriftVt *)atomic_exchange(&drift_signal_waiter_vt, 0);
+		if (waiter) {
+			atomic_store(&drift_signal_delivered_signo, (int)si.ssi_signo);
+			drift_thread_unpark((uint64_t)waiter);
+		} else {
+			int bit = drift_signal_bit_for_signo((int)si.ssi_signo);
+			if (bit) {
+				atomic_fetch_or(&drift_signal_pending_mask, bit);
+			}
+		}
+	}
+}
+#endif
 
 typedef struct ExecNode {
 	DriftVt *vt;
@@ -872,17 +955,7 @@ static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
 					continue;
 				}
 				if (fd == r->signal_fd && r->signal_fd >= 0) {
-					DriftVt *waiter = (DriftVt *)atomic_load(&drift_signal_waiter_vt);
-					if (!waiter) {
-						continue;  /* no waiter — leave signal in kernel buffer */
-					}
-					struct signalfd_siginfo si;
-					ssize_t sn = read(r->signal_fd, &si, sizeof(si));
-					if (sn == (ssize_t)sizeof(si)) {
-						atomic_store(&drift_signal_delivered_signo, (int)si.ssi_signo);
-						atomic_store(&drift_signal_waiter_vt, 0);
-						drift_thread_unpark((uint64_t)waiter);
-					}
+					drift_reactor_drain_signal_fd(r->signal_fd);
 					continue;
 				}
 				/* T4b: ET per-direction resolution under r->mu. */
@@ -1424,17 +1497,7 @@ static void *drift_reactor_thread_entry(void *arg) {
 					continue;
 				}
 				if (fd == r->signal_fd && r->signal_fd >= 0) {
-					DriftVt *waiter = (DriftVt *)atomic_load(&drift_signal_waiter_vt);
-					if (!waiter) {
-						continue;
-					}
-					struct signalfd_siginfo si;
-					ssize_t sn = read(r->signal_fd, &si, sizeof(si));
-					if (sn == (ssize_t)sizeof(si)) {
-						atomic_store(&drift_signal_delivered_signo, (int)si.ssi_signo);
-						atomic_store(&drift_signal_waiter_vt, 0);
-						drift_thread_unpark((uint64_t)waiter);
-					}
+					drift_reactor_drain_signal_fd(r->signal_fd);
 					continue;
 				}
 				/* T4a: ET per-direction resolution under r->mu. */
@@ -1547,8 +1610,9 @@ static Reactor *drift_reactor_create(void) {
 		epoll_ctl(r->epoll_fd, EPOLL_CTL_ADD, r->wake_fd, &ev);
 	}
 	/* Register the process-global signalfd on this reactor's epoll set.
-	 * The reactor only reads from signalfd when a waiter is registered;
-	 * otherwise the signal stays queued in the kernel buffer. */
+	 * The reactor always drains signalfd on every readable event, waiter or
+	 * not (drift_reactor_drain_signal_fd) — signalfd is level-triggered, so
+	 * leaving it unread would make epoll_wait return immediately forever. */
 	if (r->epoll_fd >= 0 && drift_signal_fd >= 0) {
 		r->signal_fd = drift_signal_fd;
 		struct epoll_event sev;
@@ -2847,19 +2911,41 @@ int64_t drift_signal_await(void) {
 	if (drift_signal_fd < 0) {
 		return -1;  /* signal infrastructure not initialized */
 	}
-	/* Enforce single waiter: CAS NULL → current VT. */
 	DriftVt *self = (DriftVt *)pthread_getspecific(drift_vt_tls_key);
 	if (!self) {
 		return -1;  /* not running on a VT */
 	}
+	/* Consume any already-pending signal BEFORE ever publishing ourselves as
+	 * the waiter.  Checking pending only AFTER registering would let a
+	 * concurrent drift_reactor_drain_signal_fd() see us as "the waiter" for
+	 * a signal that arrives in that gap, deliver it directly (setting
+	 * drift_signal_delivered_signo + unparking a VT that hasn't parked yet —
+	 * a stale token consumed by some later, unrelated park()), only for us
+	 * to then return a STALE pending value and clobber/lose that direct
+	 * delivery entirely. */
+	int signo = drift_signal_take_one_pending();
+	if (signo != 0) {
+		return (int64_t)signo;
+	}
+	/* Enforce single waiter: CAS NULL → current VT. */
 	uintptr_t expected = 0;
 	if (!atomic_compare_exchange_strong(&drift_signal_waiter_vt, &expected, (uintptr_t)self)) {
 		return -1;  /* another waiter already registered */
 	}
+	/* Close the gap between the pending-check above and becoming visible as
+	 * the waiter: drift_reactor_drain_signal_fd only stashes into the
+	 * pending mask when it sees no waiter, so a signal landing in that
+	 * narrow window is still there, not delivered directly. Re-check once
+	 * more before parking. */
+	signo = drift_signal_take_one_pending();
+	if (signo != 0) {
+		atomic_store(&drift_signal_waiter_vt, 0);
+		return (int64_t)signo;
+	}
 	/* Ensure the reactor is initialized so it can deliver the signal. */
 	drift_reactor_default_get();
-	/* Wake the reactor so it re-enters epoll_wait and can dispatch a
-	 * pending signal that arrived before this call. */
+	/* Wake the reactor in case it's parked in epoll_wait so it re-checks
+	 * promptly once this waiter is visible. */
 	drift_reactor_wake(drift_default_reactor_ptr);
 	/* Park this VT until the reactor delivers the signal. */
 	drift_thread_park(0);

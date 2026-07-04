@@ -9,10 +9,15 @@ Pins:
 5. No regression in normal startup/shutdown (no await_signal used)
 6. Signal before await — delivered immediately from kernel buffer
 7. Second concurrent waiter aborts with the single-waiter diagnostic
+8. Signal delivered with NO waiter ever registered does not busy-spin
+   (signalfd is level-triggered; the reactor must drain it even with no
+   waiter, or epoll_wait returns immediately forever — see
+   drift_reactor_drain_signal_fd in thread_runtime.c)
 """
 from __future__ import annotations
 
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -79,6 +84,80 @@ pub fn main() nothrow -> Int {
 \treturn 0;
 }
 """
+
+# No await_signal() call anywhere in the program — nothing ever registers as
+# the signal waiter.  A signal delivered here must not make the reactor spin.
+# Prints "ready" to stderr (unbuffered in the runtime) BEFORE the long sleep,
+# so the parent can observe true readiness instead of guessing with a sleep.
+_NO_WAITER_SOURCE = """\
+module main;
+import std.core as core;
+import std.console as console;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+\tconsole.eprintln("ready");
+\tconc.sleep(conc.Duration(millis = 60000));
+\treturn 0;
+}
+"""
+
+# Signal is sent before this VT ever calls await_signal(); the 300ms sleep
+# gives the sender a comfortable window to deliver before the call runs. The
+# "ready" marker (see _NO_WAITER_SOURCE) proves the runtime has already
+# blocked SIGINT/SIGTERM/SIGUSR1 (drift_run_main_on_vt does this before
+# main() runs), so the parent's SIGTERM cannot race the runtime's own
+# startup and hit the pre-block default disposition instead.
+_DELAYED_AWAIT_SOURCE = """\
+module main;
+import std.core as core;
+import std.console as console;
+import std.concurrent as conc;
+
+pub fn main() nothrow -> Int {
+\tconsole.eprintln("ready");
+\tconc.sleep(conc.Duration(millis = 300));
+\tmatch conc.await_signal() {
+\t\tconc.ProcessSignal::Interrupt() => { return 42; },
+\t\tconc.ProcessSignal::Terminate() => { return 43; },
+\t\tconc.ProcessSignal::User1() => { return 44; }
+\t}
+}
+"""
+
+
+def _read_line(stream, timeout_s: float) -> str:
+	"""Read one newline-terminated line from `stream` within `timeout_s`.
+
+	stderr is unbuffered in the runtime, so the "ready" marker arrives as
+	soon as it's written. Using select (not a fixed sleep) makes readiness an
+	observed fact, not a timing assumption — and a stuck child fails the test
+	with a clear timeout instead of hanging or racing."""
+	deadline = time.monotonic() + timeout_s
+	buf = b""
+	fd = stream.fileno()
+	while True:
+		remaining = deadline - time.monotonic()
+		if remaining <= 0:
+			raise AssertionError(f"timed out after {timeout_s}s waiting for a line; partial={buf!r}")
+		r, _, _ = select.select([fd], [], [], remaining)
+		if not r:
+			continue
+		chunk = os.read(fd, 1)
+		if not chunk:
+			raise AssertionError(f"stream closed before newline; partial={buf!r}")
+		if chunk == b"\n":
+			return buf.decode()
+		buf += chunk
+
+
+def _cpu_ticks(pid: int) -> int:
+	"""utime+stime (clock ticks) for pid, from /proc/<pid>/stat.  comm may
+	contain spaces/parens, so split on the LAST ')' per proc(5)."""
+	with open(f"/proc/{pid}/stat") as f:
+		fields = f.read().rsplit(")", 1)[1].split()
+	# fields[0] is state (proc field 3); utime/stime are proc fields 14/15.
+	return int(fields[11]) + int(fields[12])
 
 
 def _compile(tmp_path: Path, source: str, name: str = "test_bin") -> Path:
@@ -182,3 +261,70 @@ def test_normal_startup_shutdown_no_regression(tmp_path: Path) -> None:
 	binary = _compile(tmp_path, _NORMAL_SOURCE)
 	res = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5)
 	assert res.returncode == 0, f"normal program should exit 0, got {res.returncode}"
+
+
+@pytest.mark.skipif(
+	not hasattr(signal, "SIGTERM") or sys.platform != "linux",
+	reason="Linux-only (reads /proc/<pid>/stat, which only exists there)",
+)
+def test_sigterm_no_waiter_does_not_busy_spin(tmp_path: Path) -> None:
+	"""A program that never calls await_signal() must not busy-spin when
+	SIGTERM arrives.  signalfd is level-triggered: pre-fix, the reactor left
+	an unread signal readable on the fd whenever there was no waiter, so
+	epoll_wait returned immediately forever (one core pegged, ~100k+
+	epoll_wait/sec, process never exits on SIGTERM/SIGINT).  This measures
+	process CPU time (utime+stime from /proc/<pid>/stat) across a wall-clock
+	window after delivery: a busy-spin consumes ~the whole window in CPU
+	time, a correctly-blocked reactor consumes ~none of it."""
+	binary = _compile(tmp_path, _NO_WAITER_SOURCE)
+	proc = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	try:
+		assert _read_line(proc.stderr, 15) == "ready"
+		ticks_before = _cpu_ticks(proc.pid)
+		os.kill(proc.pid, signal.SIGTERM)
+		time.sleep(0.8)
+		assert proc.poll() is None, "process exited unexpectedly during the spin-check window"
+		ticks_after = _cpu_ticks(proc.pid)
+		clk_tck = os.sysconf("SC_CLK_TCK")
+		cpu_seconds = (ticks_after - ticks_before) / clk_tck
+		assert cpu_seconds < 0.3, (
+			f"process burned {cpu_seconds:.3f}s of CPU over a 0.8s window after "
+			f"SIGTERM with no await_signal() waiter — looks like the signalfd "
+			f"busy-spin regression (epoll_wait returning immediately forever)"
+		)
+	finally:
+		proc.kill()
+		proc.communicate(timeout=5)
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGTERM"), reason="Linux-only")
+def test_signal_before_await_delivered_to_later_waiter(tmp_path: Path) -> None:
+	"""Pin 6: SIGTERM sent before the VT ever calls await_signal() (during
+	its initial 300ms sleep) must still be observed once await_signal() runs
+	— the pending signal is stashed, not lost, and not re-requested from the
+	kernel (non-realtime signals don't queue)."""
+	binary = _compile(tmp_path, _DELAYED_AWAIT_SOURCE)
+	proc = subprocess.Popen([str(binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	# Wait for the "ready" marker (printed before the 300ms sleep) instead of
+	# guessing with a fixed delay — proves the runtime has already blocked
+	# SIGINT/SIGTERM/SIGUSR1 before we deliver, so this can't race the
+	# runtime's own startup and hit the pre-block default disposition.
+	assert _read_line(proc.stderr, 15) == "ready"
+	start = time.monotonic()
+	os.kill(proc.pid, signal.SIGTERM)  # delivered well before the 300ms sleep elapses
+	stdout, stderr = proc.communicate(timeout=5)
+	elapsed = time.monotonic() - start
+	assert proc.returncode == 43, (
+		f"expected exit 43 (Terminate) from the stashed pre-await signal, got {proc.returncode}\n"
+		f"stderr: {stderr.decode()[:200]}"
+	)
+	# The program's own sleep is 300ms; await_signal() must return the
+	# stashed signal immediately once it runs, not wait for a NEW signal
+	# (which would never come — non-realtime signals don't queue) or an
+	# extra reactor cycle. Generous bound for compile/startup + sanitizer
+	# jitter, but well short of the 5s communicate() timeout.
+	assert elapsed < 2.0, (
+		f"expected prompt delivery of the pre-await signal (~0.3s sleep), "
+		f"took {elapsed:.2f}s — await_signal() may not be checking the "
+		f"pending-signal stash immediately"
+	)
