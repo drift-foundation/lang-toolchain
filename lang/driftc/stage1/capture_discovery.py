@@ -431,14 +431,6 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 	captures: list[C.HCapture] = []
 	capture_as_move = bool(getattr(lambda_expr, "capture_as_move", False))
 	for key, use in usage.items():
-		if use.move and key.proj:
-			diags.append(
-				_cap_diag(
-					message="lambda move captures of projections are not supported yet",
-					severity="error",
-					span=use.span,
-				)
-			)
 		if use.move and (use.borrow_shared or use.borrow_mut or use.write):
 			diags.append(
 				_cap_diag(
@@ -464,6 +456,42 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		elif use.read:
 			kind = C.HCaptureKind.MOVE if capture_as_move else C.HCaptureKind.REF
 		else:
+			continue
+		# A MOVE-kind capture of a PROJECTED place (a struct field, not a
+		# whole local) is not supported: MIR lowering's projected-capture
+		# branch (hir_to_mir.py `cap.key.proj`) only knows how to COPY-READ
+		# the projection into the env, not move-and-zero-back the source
+		# field. Silently accepting one lets the source struct's own drop
+		# later re-drop the same (already captured) field -> UAF. This must
+		# be checked against the FINAL decided `kind`, not just `use.move` —
+		# `capture_as_move` (escaping/boxed-callback lambdas default plain
+		# reads to MOVE, see the `elif use.read` branch above) can produce a
+		# MOVE-kind projected capture with no explicit `move` keyword at all
+		# (e.g. passing `p.field` by value to a callee inside a
+		# `core.callback0(...)`-boxed lambda, with no `captures(...)`
+		# clause) — checking only `use.move` here missed that path.
+		#
+		# SCOPE DECISION (intentional, deferred — not an oversight): this
+		# rejects EVERY MOVE+projected capture unconditionally, including a
+		# Copy-typed field (e.g. `p.count: Int`) where the underlying copy-
+		# read would actually be safe (no ownership to zero-back). Making
+		# that case work requires more than a Copy check here: the lambda-
+		# body prologue (hir_to_mir.py `_emit_lambda_capture_prologue`)
+		# binds captures purely by ROOT LOCAL NAME and has no support at
+		# all for a field-projection capture as a distinct body-visible
+		# binding — teaching it that is a real lowering feature, not a
+		# checker-side enum flip, and is deliberately NOT bundled into this
+		# UAF fix. `hir_to_mir.py`'s `cap.key.proj` branches assert if a
+		# MOVE+projected capture ever reaches them, as a defense-in-depth
+		# backstop for this rejection.
+		if kind is C.HCaptureKind.MOVE and key.proj:
+			diags.append(
+				_cap_diag(
+					message="lambda move captures of projections are not supported yet",
+					severity="error",
+					span=use.span,
+				)
+			)
 			continue
 		captures.append(C.HCapture(kind=kind, key=key, span=use.span))
 

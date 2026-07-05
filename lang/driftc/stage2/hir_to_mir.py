@@ -5002,9 +5002,19 @@ class HIRToMIR:
 				elif cap.kind is C.HCaptureKind.MOVE:
 					place = self._place_from_capture_key(cap.key)
 					if cap.key.proj:
-						env_val = self.lower_expr(expr)
-						env_vals.append(env_val)
-						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+						# A MOVE-kind capture of a PROJECTED place (a struct
+						# field, not a whole local) must be rejected before
+						# lowering ever reaches here — capture_discovery.py
+						# rejects it unconditionally (checker/lowering
+						# boundary contract; see the UAF that a silent
+						# `lower_expr` copy-read here produced when this
+						# reached codegen unrejected). This is a defense-in-
+						# depth backstop, not the primary enforcement point.
+						raise AssertionError(
+							"MOVE capture of a projected place reached MIR lowering "
+							"unrejected (compiler bug) — capture_discovery.py must "
+							"reject this before it gets here"
+						)
 					else:
 						cb_moved = self._move_from_callback_capture_slot(cap.key)
 						if cb_moved is not None:
@@ -5224,9 +5234,19 @@ class HIRToMIR:
 				elif cap.kind is C.HCaptureKind.MOVE:
 					place = self._place_from_capture_key(cap.key)
 					if cap.key.proj:
-						env_val = self.lower_expr(expr)
-						env_vals.append(env_val)
-						env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+						# A MOVE-kind capture of a PROJECTED place (a struct
+						# field, not a whole local) must be rejected before
+						# lowering ever reaches here — capture_discovery.py
+						# rejects it unconditionally (checker/lowering
+						# boundary contract; see the UAF that a silent
+						# `lower_expr` copy-read here produced when this
+						# reached codegen unrejected). This is a defense-in-
+						# depth backstop, not the primary enforcement point.
+						raise AssertionError(
+							"MOVE capture of a projected place reached MIR lowering "
+							"unrejected (compiler bug) — capture_discovery.py must "
+							"reject this before it gets here"
+						)
 					else:
 						cb_moved = self._move_from_callback_capture_slot(cap.key)
 						if cb_moved is not None:

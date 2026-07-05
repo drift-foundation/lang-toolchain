@@ -1,5 +1,100 @@
 # Drift development history
 
+## 2026-07-05 (0.33.69: implicit projected move-capture into a boxed callback — LANGUAGE_BUG; ABI stays 19)
+- **CORE_BUG: a struct field passed by value to a callee inside a boxed-callback
+  lambda body, with no explicit `captures(...)` clause naming it, silently
+  compiled into a use-after-free.** Reported from bookkeeper (PushCoin) against
+  certified `driftc 0.33.68/abi19` as a move-capturing closure UAF when built
+  inside another boxed callback's body and later moved across `conc.spawn`.
+- **Root cause.** `lang/driftc/stage1/capture_discovery.py`'s implicit-capture
+  inference defaults a plain field READ to a MOVE-kind capture for boxed-
+  callback lambdas (`capture_as_move`, set when wrapping a lambda as
+  `core.callbackN`/`callback_throwN` — an escaping closure can't safely
+  borrow). The existing "lambda move captures of projections are not
+  supported yet" rejection only checked `use.move` (True only for an
+  explicit `move` expression), never the FINAL decided `kind` — so a
+  MOVE-kind capture of a *projected* place (a struct field, e.g. `p.execute`,
+  not a whole local) produced this way sailed through unrejected. MIR
+  lowering's projected-capture branch (`hir_to_mir.py`, the `cap.key.proj`
+  case) has no real handling for a projected MOVE — it just copy-reads the
+  expression into the closure env without zeroing the source field, so the
+  source struct's own later drop re-drops the same field. Confirmed via
+  `--sanitize=address,undefined`: heap-use-after-free in
+  `drift_string_release`, freed by an inner closure's env-drop thunk, then
+  re-read by the outer struct's own drop chain.
+- **NOT the same as an explicit `move p.execute`** (a struct field
+  projection) — that's already rejected elsewhere ("move of a projected
+  place is not supported in v1"; no partial moves is documented project
+  policy). This bug was specifically the *implicit*, no-`captures(...)`-
+  clause-at-all path bypassing that existing protection.
+- **Fix.** Move the projected+MOVE rejection check to run after `kind` is
+  finally decided, covering both the explicit-`move`-keyword path and the
+  `capture_as_move`-defaulted-read path. Turns the silent miscompile into a
+  compile-time diagnostic, consistent with "no partial moves." The
+  documented-safe alternative — extract the field via `std.mem.replace` into
+  a standalone local first, then `captures(move <local>)` — continues to
+  compile and run correctly (verified, no regression).
+- **Scope decision (intentional, not an oversight):** the check rejects
+  EVERY MOVE+projected capture reached via `capture_as_move`, including a
+  Copy-typed field (e.g. `p.count: Int`) where the underlying copy-read
+  would actually be safe. `capture_discovery.py`'s `discover_captures()` has
+  no `TypeTable` available — it's called from both pre-type-check
+  (`lambda_validate.py`, `non_retaining_analysis.py`) and post-type-check
+  (`borrow_checker_pass.py`, `hir_to_mir.py`) sites — so there's no single
+  reliable point to thread Copy-ness through without a broader refactor
+  across all 8 call sites. Chose conservative-reject over risking a false
+  negative in a pre-type-check caller. Narrowing this to spare Copy-typed
+  projected reads is a real, separate follow-up if it turns out to matter in
+  practice, not folded into this fix.
+- **Investigated and ruled out as a separate cause:** a hypothesis that
+  `ownership_ledger.py::_identify_return_consumed_loads`'s return-source
+  tracing misses `ConstructIface` (unlike `ConstructStruct`/`ConstructVariant`/
+  `ConstructResultOk`/`ConstructIfaceValue`). Explicit whole-value
+  `captures(move p)`/`captures(move execute)` shapes returning a boxed
+  callback (bare or struct-wrapped) from another boxed callback's body,
+  through `conc.spawn`, compiled and ran clean under ASAN — no UAF observed.
+  The bug is specifically the implicit/projected-capture path above, not
+  return-source tracing.
+- **Secondary finding not reproduced:** reference-typed callback generic args
+  (`CallbackThrow2<&T, &String, R>`) were reported as possibly unsound across
+  the boxed-call boundary. A ref-args repro (struct-return shape, ref params
+  consumed immediately inside the boxed call) compiled and ran clean, plain
+  and under ASAN. Left open — no confirmed failing case yet, not claimed
+  fixed or ruled out.
+- **Defense-in-depth.** `hir_to_mir.py`'s two `cap.key.proj` MOVE-capture
+  lowering branches (`_lower_lambda_immediate_call`,
+  `_lower_lambda_callback`) now `raise AssertionError` instead of silently
+  copy-reading, in case a MOVE+projected capture ever reaches lowering
+  unrejected in the future (checker/lowering boundary contract) — fails
+  loud at compile time instead of miscompiling.
+- **Regression.** `lang/tests/stage1/test_lambda_capture_discovery.py` gains
+  `test_capture_discovery_rejects_implicit_projected_move_for_boxed_callback`
+  (unit-level: `capture_as_move=True` + bare field-read body must be
+  rejected, not silently accepted). New driver e2e file
+  `lang/tests/driver/test_boxed_callback_projected_move_capture_rejected.py`:
+  the confirmed-bad shape must fail to compile with the exact diagnostic,
+  the `mem.replace`-based safe control must still compile and run (exit 0),
+  and a Copy-typed projected field (`p.count: Int`) is confirmed to ALSO
+  currently be rejected — locking in the conservative scope decision above
+  so it can't silently regress. Confirmed regression-first: the rejection
+  tests fail against the pre-fix source, pass against the fix.
+- **Follow-up tracked separately** (not part of this fix):
+  `work/callback-env-uaf-ref-args/projected-copy-captures-followup.md` —
+  supporting Copy-typed projected captures requires the lambda-body
+  prologue to bind a projected capture key as a distinct body-visible
+  binding (it currently binds purely by root local id/name), plus proving
+  the root local itself stays unusable as a stand-in for the whole struct
+  when only one field was captured. A type-aware checker-only downgrade
+  (MOVE→COPY when the field is Copy) was prototyped and reverted: it made
+  env construction correct but crashed codegen, because the lambda body's
+  own `p.count` expression still resolves against the OUTER struct type
+  once the prologue (wrongly) binds the projected env slot to a local
+  named after the root (`p`).
+- **Versioning:** `DRIFTC_VERSION` 0.33.68 → **0.33.69**. **No ABI change —
+  `DRIFT_RT_ABI_VERSION` stays 19** (front-end diagnostic plus a defense-in-
+  depth lowering guard; no runtime
+  boundary, layout, or calling convention changed).
+
 ## 2026-07-03 (0.33.68: signalfd busy-spin on SIGINT/SIGTERM/SIGUSR1 with no waiter — LANGUAGE_BUG; ABI stays 19)
 - **CORE_BUG: reactor busy-spun forever, pegging a core, on any of
   SIGINT/SIGTERM/SIGUSR1 if no `conc.await_signal()` waiter was registered.**
