@@ -138,5 +138,7 @@ def test_fnptr_param_headers():
         type_table=table, word_bits=word_bits)
     ir = mod.render()
 
+    # ABI 20 (uniform fat): nothrow Fn params stay thin `ptr`; throwing Fn
+    # params are the fat %DriftFatFnPtr {adapter, env} pair.
     assert f"define {word_ty} @apply(ptr %f, {word_ty} %x)" in ir
-    assert f"define {word_ty} @apply_ct(ptr %f, {word_ty} %x)" in ir
+    assert f"define {word_ty} @apply_ct(%DriftFatFnPtr %f, {word_ty} %x)" in ir
