@@ -9,6 +9,29 @@ default: deps-check test
 deps-check:
 	PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py
 
+# Bootstrap the local Python venv (`./.venv`) that every other recipe
+# assumes exists.  Run once after a fresh clone, before `just test`.
+# Idempotent: with a healthy existing venv this is just a cheap
+# deps-check; a broken/incomplete venv gets requirements (re)installed;
+# a missing venv is created from scratch.  Normal test targets do NOT
+# depend on this recipe and never reinstall dependencies themselves.
+venv:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [[ ! -x .venv/bin/python3 ]]; then
+		echo "[venv] creating ./.venv ..."
+		python3 -m venv .venv
+	elif PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py >/dev/null 2>&1; then
+		echo "[venv] ./.venv OK (deps-check passed)."
+		exit 0
+	else
+		echo "[venv] ./.venv exists but deps-check failed; (re)installing requirements ..."
+	fi
+	./.venv/bin/python3 -m pip install --upgrade pip
+	./.venv/bin/python3 -m pip install -r requirements.txt
+	PYTHONPATH=. ./.venv/bin/python3 tools/deps_check.py
+	echo "[venv] ready."
+
 review-cleanup:
 	rm -f combined_*
 
