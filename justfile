@@ -1,7 +1,12 @@
 set shell := ["bash", "-lc"]
 set quiet
 CLANG_BIN := "clang"
-PYTEST_AUTO_JOBS := `PYTHONPATH=. ./.venv/bin/python3 tools/pytest_jobs.py`
+# Evaluated at justfile PARSE time, i.e. on EVERY `just` invocation —
+# including `just venv` on a fresh clone where ./.venv does not exist
+# yet.  tools/pytest_jobs.py is stdlib-only, so fall back to the system
+# python3 (same answer), then to 0 (xdist: no workers) so the justfile
+# always parses and the venv bootstrap recipe can run.
+PYTEST_AUTO_JOBS := `PYTHONPATH=. ./.venv/bin/python3 tools/pytest_jobs.py 2>/dev/null || PYTHONPATH=. python3 tools/pytest_jobs.py 2>/dev/null || echo 0`
 
 # Default task: run deps check then full staged compiler tests.
 default: deps-check test
